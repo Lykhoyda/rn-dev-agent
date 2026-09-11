@@ -3728,6 +3728,18 @@ function withDevMenuOnboardingDisabled(url) {
   }
   return parsed.toString();
 }
+function autoHideDevMenuOnSimulators() {
+  let setting;
+  try {
+    setting = JSON.parse(fs.readFileSync(path.join(process.cwd(), '.rn-agent', 'config.json'), 'utf8')).autoHideDevMenu;
+  } catch {
+    return true;
+  }
+  if (typeof setting === 'boolean') return setting;
+  const valid = setting !== null && typeof setting === 'object' && !Array.isArray(setting)
+    && [setting.simulators, setting.devices].every((flag) => flag === undefined || typeof flag === 'boolean');
+  return !valid || setting.simulators !== false;
+}
 function managedMetroProxyUrl(binding) {
   if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
   if (/^emulator-\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
@@ -3903,7 +3915,20 @@ function managedMetroProxyUrl(binding) {
     if (installed.error || installed.status !== 0 || !String(installed.stdout).trim()) {
       failBuild(2, 'DEV_CLIENT_STARTUP_UNCONFIRMED: exact simulator app installation could not be proven');
     }
-    const launchUrl = withDevMenuOnboardingDisabled(expoProxyUrl);
+    const hideDevMenu = autoHideDevMenuOnSimulators();
+    const launchUrl = hideDevMenu ? withDevMenuOnboardingDisabled(expoProxyUrl) : expoProxyUrl;
+    for (const [key, value] of hideDevMenu ? [['EXDevMenuShowsAtLaunch', 'NO'], ['EXDevMenuIsOnboardingFinished', 'YES']] : []) {
+      const written = spawnSync('xcrun', ['simctl', 'spawn', session.deviceId, 'defaults', 'write', session.appId, key, '-bool', value], {
+        cwd: process.cwd(),
+        env: authorityEnvironment,
+        encoding: 'utf8',
+        timeout: 30_000,
+      });
+      if (written.error || written.status !== 0) {
+        const detail = written.error?.message || String(written.stderr).trim() || 'defaults write failed';
+        failBuild(2, 'DEV_CLIENT_STARTUP_UNCONFIRMED: dev-menu defaults for ' + key + ' could not be written: ' + detail);
+      }
+    }
     process.stdout.write(
       'rn-session-adapter: starting ' + session.appId + ' on simulator ' + session.deviceId +
       ' with --initialUrl ' + launchUrl + '\n'

@@ -58,7 +58,23 @@ test('Expo iOS launches through its exact managed Metro proxy without starting a
     RN_DEV_AGENT_SESSION_ID: 'session-ios',
     EXPO_PACKAGER_PROXY_URL: 'http://127.0.0.1:8341',
   });
+  const defaultsWrite = (key: string, value: string) => [
+    'xcrun',
+    'simctl',
+    'spawn',
+    iosSession.deviceId,
+    'defaults',
+    'write',
+    iosSession.appId,
+    key,
+    '-bool',
+    value,
+  ];
   assert.deepEqual(plan.postInstall, {
+    before: [
+      defaultsWrite('EXDevMenuShowsAtLaunch', 'NO'),
+      defaultsWrite('EXDevMenuIsOnboardingFinished', 'YES'),
+    ],
     command: [
       'xcrun',
       'simctl',
@@ -71,6 +87,18 @@ test('Expo iOS launches through its exact managed Metro proxy without starting a
     ],
     timeoutMs: 30_000,
   });
+});
+
+test('autoHideDevMenu off for simulators launches the plain proxy URL without defaults writes', () => {
+  const plan = createBuildLaunchPlan({
+    platform: 'ios',
+    command: ['npx', 'expo', 'run:ios'],
+    session: iosSession,
+    autoHideDevMenu: { simulators: false, devices: true },
+  });
+
+  assert.deepEqual(plan.postInstall?.before, []);
+  assert.deepEqual(plan.postInstall?.command.slice(-2), ['--initialUrl', 'http://127.0.0.1:8341']);
 });
 
 test('recorded integrated Expo Android command pins launch, wait, and connect to the allocated port', () => {

@@ -3895,7 +3895,7 @@ test('copied adapter accepts build identity only from the package-local session 
     const fakeXcrun = join(binRoot, 'xcrun');
     writeFileSync(
       fakeXcrun,
-      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='simctl'&&args[1]==='get_app_container'){process.stdout.write('/tmp/exact.app\\n');process.exit(0);}if(args[0]==='simctl'&&args[1]==='launch'){if(process.env.ADAPTER_STARTUP_FAIL==='1'){process.stderr.write('launch refused\\n');process.exit(4);}fs.writeFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args));process.stdout.write('dev.example: 123\\n');process.exit(0);}process.exit(12);\n",
+      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='simctl'&&args[1]==='get_app_container'){process.stdout.write('/tmp/exact.app\\n');process.exit(0);}if(args[0]==='simctl'&&(args[1]==='spawn'||args[1]==='launch')){fs.appendFileSync(process.env.ADAPTER_STARTUP+'.calls',JSON.stringify(args.slice(1,4))+'\\n');}if(args[0]==='simctl'&&args[1]==='spawn'&&args[3]==='defaults'){process.exit(0);}if(args[0]==='simctl'&&args[1]==='launch'){if(process.env.ADAPTER_STARTUP_FAIL==='1'){process.stderr.write('launch refused\\n');process.exit(4);}fs.writeFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args));process.stdout.write('dev.example: 123\\n');process.exit(0);}process.exit(12);\n",
     );
     chmodSync(fakeXcrun, 0o755);
     writeFileSync(
@@ -3960,6 +3960,46 @@ test('copied adapter accepts build identity only from the package-local session 
     ]);
     assert.match(result.stdout, /"receipt":true/);
     assert.equal(existsSync(abortPath), false);
+    const startupCalls = () => {
+      const calls = readFileSync(`${startupPath}.calls`, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      rmSync(`${startupPath}.calls`);
+      return calls;
+    };
+    assert.deepEqual(startupCalls(), [
+      ['spawn', 'session-ios-device', 'defaults'],
+      ['spawn', 'session-ios-device', 'defaults'],
+      ['launch', '--terminate-running-process', 'session-ios-device'],
+    ]);
+
+    writeFileSync(
+      join(root, '.rn-agent', 'config.json'),
+      JSON.stringify({ autoHideDevMenu: { simulators: false } }),
+    );
+    const shownDevMenu = spawnSync(process.execPath, [adapterPath, 'ios'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binRoot}:${process.env.PATH}`,
+        ADAPTER_RECORD: outputPath,
+        ADAPTER_COMPLETION: completionPath,
+        ADAPTER_STARTUP: startupPath,
+        ADAPTER_ABORT: abortPath,
+        ADAPTER_PREPARE: preparePath,
+      },
+    });
+    assert.equal(shownDevMenu.status, 0, shownDevMenu.stderr);
+    assert.deepEqual(startupCalls(), [
+      ['launch', '--terminate-running-process', 'session-ios-device'],
+    ]);
+    assert.deepEqual(JSON.parse(readFileSync(startupPath, 'utf8')).slice(-2), [
+      '--initialUrl',
+      'http://127.0.0.1:8341',
+    ]);
+    rmSync(join(root, '.rn-agent', 'config.json'));
 
     rmSync(completionPath);
     const failedStartup = spawnSync(process.execPath, [adapterPath, 'ios'], {
@@ -4061,7 +4101,7 @@ test('copied adapter aborts pending build authority on every pre-completion fail
     chmodSync(join(binRoot, 'npx'), 0o755);
     writeFileSync(
       join(binRoot, 'xcrun'),
-      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='simctl'&&args[1]==='get_app_container'){process.stdout.write('/tmp/exact.app\\n');process.exit(0);}if(args[0]==='simctl'&&args[1]==='launch'){fs.writeFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args));process.stdout.write('dev.example: 123\\n');process.exit(0);}process.exit(12);\n",
+      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='simctl'&&args[1]==='get_app_container'){process.stdout.write('/tmp/exact.app\\n');process.exit(0);}if(args[0]==='simctl'&&args[1]==='spawn'&&args[3]==='defaults'){process.exit(0);}if(args[0]==='simctl'&&args[1]==='launch'){fs.writeFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args));process.stdout.write('dev.example: 123\\n');process.exit(0);}process.exit(12);\n",
     );
     chmodSync(join(binRoot, 'xcrun'), 0o755);
     writeFileSync(
@@ -4200,7 +4240,7 @@ test('copied adapter arms interruption recovery before build preparation', () =>
     chmodSync(join(binRoot, 'npx'), 0o755);
     writeFileSync(
       join(binRoot, 'xcrun'),
-      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='simctl'&&args[1]==='get_app_container'){process.stdout.write('/tmp/exact.app\\n');process.exit(0);}if(args[0]==='simctl'&&args[1]==='launch'){fs.writeFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args));process.stdout.write('dev.example: 123\\n');process.exit(0);}process.exit(12);\n",
+      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='simctl'&&args[1]==='get_app_container'){process.stdout.write('/tmp/exact.app\\n');process.exit(0);}if(args[0]==='simctl'&&args[1]==='spawn'&&args[3]==='defaults'){process.exit(0);}if(args[0]==='simctl'&&args[1]==='launch'){fs.writeFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args));process.stdout.write('dev.example: 123\\n');process.exit(0);}process.exit(12);\n",
     );
     chmodSync(join(binRoot, 'xcrun'), 0o755);
     writeFileSync(

@@ -58,7 +58,9 @@ import {
 import { releaseDeviceLockForSession } from './tools/device-session.js';
 import { createSessionRuntimeAbsenceProbe } from './session/session-runtime-absence.js';
 import {
+  autoHidesDevMenu,
   DEV_MENU_NO_AUTO_LAUNCH_EXTRAS,
+  iosSimulatorDevMenuDefaultsArgs,
   withDevMenuOnboardingDisabled,
 } from './session/dev-client-onboarding.js';
 import {
@@ -186,7 +188,13 @@ import {
 import { buildStateRead } from './observability/state-read.js';
 import { autostartObserve } from './observability/autostart.js';
 import { removeObserveState } from './observability/observe-state.js';
-import { resolveObserveAutostart, resolveMirrorConfig } from './project-config.js';
+import {
+  readRnAgentConfig,
+  resolveAutoHideDevMenu,
+  resolveObserveAutostart,
+  resolveMirrorConfig,
+  type AutoHideDevMenuResolution,
+} from './project-config.js';
 import { MirrorManager } from './observability/mirror/manager.js';
 import { buildMirrorTargetResolver } from './observability/mirror/target.js';
 import {
@@ -928,15 +936,22 @@ async function pinSessionDevClient(
         runtimeKind,
         ...(devClientUrl ? { devClientUrl } : {}),
         signerCapability: secret.signerCapability,
+        autoHideDevMenu: sessionAutoHideDevMenu(status),
       },
       {
-        openUrl: async (platform, deviceId, url) => {
+        openUrl: async (platform, deviceId, url, appId, hideDevMenu) => {
           if (platform === 'ios') {
+            if (hideDevMenu) await writeIosSimulatorDevMenuDefaults(deviceId, appId);
             await execFileP('xcrun', ['simctl', 'openurl', deviceId, url]);
           } else {
             await execFileP(
               'adb',
-              androidDeeplinkCommandArgs(url, undefined, deviceId, DEV_MENU_NO_AUTO_LAUNCH_EXTRAS),
+              androidDeeplinkCommandArgs(
+                url,
+                undefined,
+                deviceId,
+                hideDevMenu ? DEV_MENU_NO_AUTO_LAUNCH_EXTRAS : [],
+              ),
             );
           }
         },
@@ -959,7 +974,8 @@ async function pinSessionDevClient(
             ]);
           }
         },
-        launchExactAppWithInitialUrl: async (deviceId, appId, initialUrl) => {
+        launchExactAppWithInitialUrl: async (deviceId, appId, initialUrl, hideDevMenu) => {
+          if (hideDevMenu) await writeIosSimulatorDevMenuDefaults(deviceId, appId);
           await execFileP('xcrun', [
             'simctl',
             'launch',
@@ -1193,6 +1209,18 @@ const isSessionRuntimeAbsent = createSessionRuntimeAbsenceProbe({
   execute: (file, args, options) => execFileP(file, args, options),
 });
 
+function sessionAutoHideDevMenu(status: SessionStatus): AutoHideDevMenuResolution {
+  return resolveAutoHideDevMenu({
+    readConfig: () => readRnAgentConfig(String(status.source.appRoot)),
+  });
+}
+
+async function writeIosSimulatorDevMenuDefaults(deviceId: string, appId: string): Promise<void> {
+  for (const args of iosSimulatorDevMenuDefaultsArgs(deviceId, appId)) {
+    await execFileP('xcrun', args);
+  }
+}
+
 async function relaunchSessionRuntime(
   status: SessionStatus,
   stopApp = true,
@@ -1204,10 +1232,13 @@ async function relaunchSessionRuntime(
     metroPort,
     devClientUrl: boundDevClientUrl,
   } = resolveManagedRuntimeLaunchBinding(status);
+  const hideDevMenu = autoHidesDevMenu(platform, deviceId, sessionAutoHideDevMenu(status));
+  const launchUrl = (url: string) => (hideDevMenu ? withDevMenuOnboardingDisabled(url) : url);
   if (platform === 'ios') {
     const current = getClient();
     await current.disconnect();
     setClient(createClient(metroPort));
+    if (hideDevMenu) await writeIosSimulatorDevMenuDefaults(deviceId, appId);
     await execFileP('xcrun', [
       'simctl',
       'launch',
@@ -1215,7 +1246,7 @@ async function relaunchSessionRuntime(
       deviceId,
       appId,
       '--initialUrl',
-      withDevMenuOnboardingDisabled(`http://127.0.0.1:${String(metroPort)}`),
+      launchUrl(`http://127.0.0.1:${String(metroPort)}`),
     ]);
     await connectExactSessionTarget(
       { metroPort, platform, appId, deviceId },
@@ -1231,10 +1262,10 @@ async function relaunchSessionRuntime(
   }
   await execFileP('adb', [
     ...androidDeeplinkCommandArgs(
-      withDevMenuOnboardingDisabled(boundDevClientUrl),
+      launchUrl(boundDevClientUrl),
       undefined,
       deviceId,
-      DEV_MENU_NO_AUTO_LAUNCH_EXTRAS,
+      hideDevMenu ? DEV_MENU_NO_AUTO_LAUNCH_EXTRAS : [],
     ),
     '-p',
     appId,
@@ -2119,7 +2150,7 @@ trackedTool(
 
 trackedTool(
   'cdp_dev_settings',
-  'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu calls ExpoDevMenu hideMenu or closeMenu over CDP on iOS or Android, with at most one retry and a five-second bound per attempt; it verifies the foreground surface and returns hidden, no_menu_present, DEV_MENU_HIDE_FAILED when no close call was sent, or DEV_MENU_HIDE_UNVERIFIED when a sent call is not proven clean. Managed launches and relaunches disable the Expo dev-menu onboarding tutorial by construction, so hideDevMenu is for gesture-opened menus and the one-time shows-at-launch menu. For reload with auto-reconnect, use cdp_reload instead.',
+  'Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu calls ExpoDevMenu hideMenu or closeMenu over CDP on iOS or Android, with at most one retry and a five-second bound per attempt; it verifies the foreground surface and returns hidden, no_menu_present, DEV_MENU_HIDE_FAILED when no close call was sent, or DEV_MENU_HIDE_UNVERIFIED when a sent call is not proven clean. With autoHideDevMenu on (default in .rn-agent/config.json), managed launches and relaunches suppress the Expo dev-menu onboarding tutorial and launch-time menu sheet, so hideDevMenu is for gesture-opened menus. For reload with auto-reconnect, use cdp_reload instead.',
   {
     action: z
       .enum([

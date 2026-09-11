@@ -6,6 +6,24 @@ export const DEV_MENU_NO_AUTO_LAUNCH_EXTRAS: readonly string[] = [
   'true',
 ];
 
+export function autoHidesDevMenu(
+  platform: 'ios' | 'android',
+  deviceId: string,
+  setting: { simulators: boolean; devices: boolean } = { simulators: true, devices: true },
+): boolean {
+  return platform === 'ios' || /^emulator-\d+$/.test(deviceId) ? setting.simulators : setting.devices;
+}
+
+// Persistent app domain, unlike launch arguments, so bare relaunches stay popup-free too.
+export function iosSimulatorDevMenuDefaultsArgs(deviceId: string, appId: string): string[][] {
+  return (
+    [
+      ['EXDevMenuShowsAtLaunch', 'NO'],
+      ['EXDevMenuIsOnboardingFinished', 'YES'],
+    ] as const
+  ).map(([key, value]) => ['simctl', 'spawn', deviceId, 'defaults', 'write', appId, key, '-bool', value]);
+}
+
 export function withDevMenuOnboardingDisabled(url: string): string {
   let parsed: URL;
   try {

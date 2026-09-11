@@ -3,4 +3,4 @@
 "rn-dev-agent-core": patch
 ---
 
-Append `disableOnboarding=1` to every managed dev-client launch and relaunch URL, and pass the Android dev-launcher no-auto-launch intent extra on managed `am start` launches, so the Expo dev menu never auto-opens over a native segment or after a reload on a fresh install (GH #1004).
+Managed dev-client launches and relaunches now keep the Expo dev-menu onboarding tutorial and launch-time sheet from auto-opening over a native segment or after a reload on a fresh install, on by default and configurable per target class with `autoHideDevMenu` in `.rn-agent/config.json` (GH #1004).

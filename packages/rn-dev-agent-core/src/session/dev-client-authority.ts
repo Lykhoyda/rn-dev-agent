@@ -1,5 +1,5 @@
 import { managedMetroProxyUrl } from './build-adapter.js';
-import { withDevMenuOnboardingDisabled } from './dev-client-onboarding.js';
+import { autoHidesDevMenu, withDevMenuOnboardingDisabled } from './dev-client-onboarding.js';
 import type { MetroAuthorityBinding, MetroAuthorityMarker } from './metro-authority.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
 import type { SessionStatus } from './registry.js';
@@ -12,6 +12,7 @@ interface PinDevClientInput extends MetroAuthorityBinding {
   devClientUrl?: string;
   runtimeKind: 'bare-react-native' | 'expo-dev-client';
   signerCapability: string;
+  autoHideDevMenu?: { simulators: boolean; devices: boolean };
 }
 
 type ExactConnectionSummary = Pick<
@@ -20,9 +21,20 @@ type ExactConnectionSummary = Pick<
 >;
 
 interface PinDevClientDependencies {
-  openUrl(platform: 'ios' | 'android', deviceId: string, url: string, appId: string): Promise<void>;
+  openUrl(
+    platform: 'ios' | 'android',
+    deviceId: string,
+    url: string,
+    appId: string,
+    hideDevMenu: boolean,
+  ): Promise<void>;
   launchExactApp(platform: 'ios' | 'android', deviceId: string, appId: string): Promise<void>;
-  launchExactAppWithInitialUrl(deviceId: string, appId: string, initialUrl: string): Promise<void>;
+  launchExactAppWithInitialUrl(
+    deviceId: string,
+    appId: string,
+    initialUrl: string,
+    hideDevMenu: boolean,
+  ): Promise<void>;
   acceptIosOpenDialog(deviceId: string): Promise<void>;
   connectExact(input: {
     metroPort: number;
@@ -182,9 +194,11 @@ export async function pinExactDevClient(
   if (!Number.isSafeInteger(input.metroPort) || input.metroPort < 1 || input.metroPort > 65_535) {
     throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: authority-bound Metro port is unavailable');
   }
+  const hideDevMenu = autoHidesDevMenu(input.platform, input.deviceId, input.autoHideDevMenu);
+  const launchUrl = (url: string) => (hideDevMenu ? withDevMenuOnboardingDisabled(url) : url);
   const derivedIosExpoLaunchTarget =
     input.platform === 'ios' && input.runtimeKind === 'expo-dev-client'
-      ? withDevMenuOnboardingDisabled(managedMetroProxyUrl(input))
+      ? launchUrl(managedMetroProxyUrl(input))
       : undefined;
   if (input.runtimeKind === 'bare-react-native' && input.devClientUrl) {
     throw new Error(
@@ -195,8 +209,9 @@ export async function pinExactDevClient(
     await dependencies.openUrl(
       input.platform,
       input.deviceId,
-      withDevMenuOnboardingDisabled(input.devClientUrl),
+      launchUrl(input.devClientUrl),
       input.appId,
+      hideDevMenu,
     );
     if (input.platform === 'ios') await dependencies.acceptIosOpenDialog(input.deviceId);
   } else if (derivedIosExpoLaunchTarget) {
@@ -204,6 +219,7 @@ export async function pinExactDevClient(
       input.deviceId,
       input.appId,
       derivedIosExpoLaunchTarget,
+      hideDevMenu,
     );
   } else {
     await dependencies.launchExactApp(input.platform, input.deviceId, input.appId);

@@ -195,7 +195,9 @@ alive for such callers.
   `postInstall`, the embedded `rn-session-adapter.cjs` copy in
   `package-integration.ts`, `pinExactDevClient`, `relaunchSessionRuntime`) goes
   through `withDevMenuOnboardingDisabled` (`src/session/dev-client-onboarding.ts`),
-  and managed Android `am start` launches add `DEV_MENU_NO_AUTO_LAUNCH_EXTRAS`.
+  managed Android `am start` launches add `DEV_MENU_NO_AUTO_LAUNCH_EXTRAS`, and
+  managed iOS simulator launches first run `iosSimulatorDevMenuDefaultsArgs`; all
+  three are gated per target class by `resolveAutoHideDevMenu` (`autoHideDevMenu`).
   `EXPO_PACKAGER_PROXY_URL` and `managedMetroProxyUrl` stay unflagged: Expo CLI
   derives the manifest `hostUri` from them and a query there corrupts bundle URLs.
 - `managedMetroExitAttribution` (`src/session/managed-metro.ts`) runs in a later

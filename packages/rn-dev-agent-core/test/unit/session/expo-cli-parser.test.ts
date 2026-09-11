@@ -145,7 +145,7 @@ test('generated adapter argv passes the shipped Expo CLI resolution end to end',
     chmodSync(join(binRoot, 'npx'), 0o755);
     writeFileSync(
       join(binRoot, 'xcrun'),
-      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='simctl'&&args[1]==='get_app_container'){process.stdout.write('/tmp/exact.app\\n');process.exit(0);}if(args[0]==='simctl'&&args[1]==='launch'){fs.writeFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args));process.exit(0);}process.exit(12);\n",
+      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='simctl'&&args[1]==='get_app_container'){process.stdout.write('/tmp/exact.app\\n');process.exit(0);}if(args[0]==='simctl'&&args[1]==='spawn'&&args[3]==='defaults'){process.exit(0);}if(args[0]==='simctl'&&args[1]==='launch'){fs.writeFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args));process.exit(0);}process.exit(12);\n",
     );
     chmodSync(join(binRoot, 'xcrun'), 0o755);
     writeFileSync(

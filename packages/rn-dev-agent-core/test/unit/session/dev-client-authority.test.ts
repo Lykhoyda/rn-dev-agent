@@ -284,6 +284,58 @@ test('receipted iOS Expo pin launches through the authority-bound Metro without 
   assert.equal(binding.launchMethod, 'app');
 });
 
+async function recordPinLaunch(input: Record<string, unknown>) {
+  const calls = [];
+  await assert.rejects(
+    pinExactDevClient(
+      { ...expected, metroPort: 8341, signerCapability: 'signer', ...input },
+      {
+        openUrl: async (_platform, deviceId, url, _appId, hideDevMenu) =>
+          calls.push(['open', deviceId, url, hideDevMenu]),
+        launchExactApp: async () => assert.fail('Expo pin must not use a bare app launch'),
+        launchExactAppWithInitialUrl: async (deviceId, _appId, url, hideDevMenu) =>
+          calls.push(['launch-with-initial-url', deviceId, url, hideDevMenu]),
+        acceptIosOpenDialog: async () => {},
+        connectExact: async () => {
+          throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: launch recorded');
+        },
+        readMarker: async () => null,
+      },
+    ),
+    /BUNDLE_HANDSHAKE_UNAVAILABLE/,
+  );
+  return calls;
+}
+
+test('autoHideDevMenu off for simulators launches the iOS Expo pin with the plain Metro URL', async () => {
+  const ios = { deviceId: 'IOS-UUID', runtimeKind: 'expo-dev-client' };
+  assert.deepEqual(await recordPinLaunch(ios), [
+    ['launch-with-initial-url', 'IOS-UUID', 'http://127.0.0.1:8341/?disableOnboarding=1', true],
+  ]);
+  assert.deepEqual(
+    await recordPinLaunch({ ...ios, autoHideDevMenu: { simulators: false, devices: true } }),
+    [['launch-with-initial-url', 'IOS-UUID', 'http://127.0.0.1:8341', false]],
+  );
+});
+
+test('autoHideDevMenu per-target object hides the Android dev menu only on its target class', async () => {
+  const devClientUrl = 'example://expo-development-client/?url=http%3A%2F%2F10.0.2.2%3A8341';
+  const flaggedUrl =
+    'example://expo-development-client/?url=http%3A%2F%2F10.0.2.2%3A8341%2F%3FdisableOnboarding%3D1';
+  const android = {
+    platform: 'android',
+    devClientUrl,
+    runtimeKind: 'expo-dev-client',
+    autoHideDevMenu: { simulators: true, devices: false },
+  };
+  assert.deepEqual(await recordPinLaunch({ ...android, deviceId: 'emulator-5554' }), [
+    ['open', 'emulator-5554', flaggedUrl, true],
+  ]);
+  assert.deepEqual(await recordPinLaunch({ ...android, deviceId: 'R5CT1234ABC' }), [
+    ['open', 'R5CT1234ABC', devClientUrl, false],
+  ]);
+});
+
 test('iOS Expo pin refuses when no authority-bound Metro port exists', async () => {
   await assert.rejects(
     pinExactDevClient(
