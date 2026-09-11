@@ -129,6 +129,22 @@ const DENIED_COMMANDS = new Set<string>([
   'stopRecording',
 ]);
 
+export function containsClearState(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  return value.some((command: unknown) => {
+    if (command === 'clearState') return true;
+    if (!command || typeof command !== 'object' || Array.isArray(command)) return false;
+    if ('clearState' in command && command.clearState !== false) return true;
+    if ('launchApp' in command) {
+      const launch = command.launchApp;
+      if (launch && typeof launch === 'object' && 'clearState' in launch) {
+        return launch.clearState !== false;
+      }
+    }
+    return containsClearState(asRunFlow(command)?.commands);
+  });
+}
+
 // ── Builder ─────────────────────────────────────────────────────────
 
 export interface MaestroFlowOptions {

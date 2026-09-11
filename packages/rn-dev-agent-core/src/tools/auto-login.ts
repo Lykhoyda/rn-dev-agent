@@ -8,6 +8,7 @@ import { findProjectRoot } from '../nav-graph/storage.js';
 import { readAppId } from '../project-config.js';
 import {
   buildMaestroFlow,
+  containsClearState,
   parseAndValidateFlow,
   isValidBundleId,
   MaestroValidationError,
@@ -67,36 +68,67 @@ function matchesAuthPattern(routeName: string): boolean {
 
 interface SimplifiedNavState {
   routeName?: string;
+  params?: { screen?: unknown };
   stack?: string[];
   nested?: SimplifiedNavState;
   error?: string;
 }
 
-function getDeepestRouteName(state: SimplifiedNavState): string | null {
-  if (state.nested) return getDeepestRouteName(state.nested);
-  return state.routeName ?? null;
+interface RouteLevel {
+  name: string;
+  hasChild: boolean;
 }
 
-export async function isOnAuthScreen(client: CDPClient): Promise<boolean> {
-  if (!client.isConnected || !client.helpersInjected) return false;
+// Mounted children supersede stale params.screen navigation hints.
+function routeLevels(state: SimplifiedNavState): RouteLevel[] {
+  const levels: RouteLevel[] = [];
+  let cursor: SimplifiedNavState | undefined = state;
+  while (cursor) {
+    const hasChild = Boolean(cursor.nested);
+    if (typeof cursor.routeName === 'string' && cursor.routeName) {
+      levels.push({ name: cursor.routeName, hasChild });
+    }
+    const screen: unknown = cursor.params?.screen;
+    if (!hasChild && typeof screen === 'string' && screen) {
+      levels.push({ name: screen, hasChild: false });
+    }
+    cursor = cursor.nested;
+  }
+  return levels;
+}
+
+// Only mounted ancestors require whole-name matching; leaves retain substring matching.
+function isAuthRouteLevels(levels: readonly RouteLevel[]): boolean {
+  return levels.some((level) =>
+    level.hasChild
+      ? AUTH_ROUTE_PATTERNS.includes(level.name.toLowerCase())
+      : matchesAuthPattern(level.name),
+  );
+}
+
+async function readRouteLevels(client: CDPClient): Promise<RouteLevel[] | null> {
+  if (!client.isConnected || !client.helpersInjected) return null;
 
   try {
     const expr = client.bridgeDetected
       ? '__RN_DEV_BRIDGE__.getNavState()'
       : '__RN_AGENT.getNavState()';
     const result = await client.evaluate(expr);
-    if (result.error || typeof result.value !== 'string') return false;
+    if (result.error || typeof result.value !== 'string') return null;
 
     const state = JSON.parse(result.value) as SimplifiedNavState;
-    if (state.error) return false;
+    if (state.error) return null;
 
-    const route = getDeepestRouteName(state);
-    if (!route) return false;
-
-    return matchesAuthPattern(route);
+    const levels = routeLevels(state);
+    return levels.length > 0 ? levels : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export async function isOnAuthScreen(client: CDPClient): Promise<boolean> {
+  const levels = await readRouteLevels(client);
+  return levels !== null && isAuthRouteLevels(levels);
 }
 
 function findLoginFlow(projectRoot: string): string | null {
@@ -146,15 +178,6 @@ function assertLegacyLoginFlow(projectRoot: string, flowPath: string): string {
   return resolvedFlow;
 }
 
-function containsClearState(value: unknown): boolean {
-  if (value === 'clearState') return true;
-  if (Array.isArray(value)) return value.some(containsClearState);
-  if (!value || typeof value !== 'object') return false;
-  return Object.entries(value).some(
-    ([key, nested]) => key === 'clearState' || containsClearState(nested),
-  );
-}
-
 interface AutoLoginDeps {
   boundProjectRoot?: () => string | null;
   projectRoot?: () => string | null;
@@ -198,9 +221,10 @@ export async function handleAutoLogin(
 ): Promise<AutoLoginResult | null> {
   if (!client.isConnected || !client.helpersInjected) return null;
 
-  const onAuth = await isOnAuthScreen(client);
-  if (!onAuth) {
-    return { loggedIn: false, reason: 'App is not on an auth screen' };
+  const levels = await readRouteLevels(client);
+  if (levels === null || !isAuthRouteLevels(levels)) {
+    const observed = levels === null ? 'unavailable' : levels.map((l) => l.name).join(' › ');
+    return { loggedIn: false, reason: `App is not on an auth screen (route: ${observed})` };
   }
 
   const session = (deps.getSession ?? getActiveSession)();

@@ -787,10 +787,10 @@ var require_directives = __commonJS({
     };
     var escapeTagName = (tn) => tn.replace(/[!,[\]{}]/g, (ch) => escapeChars[ch]);
     var Directives = class _Directives {
-      constructor(yaml2, tags) {
+      constructor(yaml3, tags) {
         this.docStart = null;
         this.docEnd = false;
-        this.yaml = Object.assign({}, _Directives.defaultYaml, yaml2);
+        this.yaml = Object.assign({}, _Directives.defaultYaml, yaml3);
         this.tags = Object.assign({}, _Directives.defaultTags, tags);
       }
       clone() {
@@ -7908,6 +7908,25 @@ function isSafeMaestroScalar(s) {
     return false;
   return true;
 }
+function containsClearState(value) {
+  if (!Array.isArray(value))
+    return false;
+  return value.some((command) => {
+    if (command === "clearState")
+      return true;
+    if (!command || typeof command !== "object" || Array.isArray(command))
+      return false;
+    if ("clearState" in command && command.clearState !== false)
+      return true;
+    if ("launchApp" in command) {
+      const launch = command.launchApp;
+      if (launch && typeof launch === "object" && "clearState" in launch) {
+        return launch.clearState !== false;
+      }
+    }
+    return containsClearState(asRunFlow(command)?.commands);
+  });
+}
 function buildMaestroFlow(opts, commands) {
   if (opts.appId !== void 0) {
     assertValidBundleId(opts.appId, "appId header");
@@ -9885,12 +9904,17 @@ var init_target_device_authority = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/metro-origin.js
+function isProvenMetroOriginMismatch(error) {
+  return error instanceof SessionAuthorityError && error.code === "METRO_ORIGIN_MISMATCH" && error.getSupplementalMeta()[PROVEN_METRO_ORIGIN_META_KEY] !== void 0;
+}
+var PROVEN_METRO_ORIGIN_META_KEY;
 var init_metro_origin = __esm({
   "packages/rn-dev-agent-core/dist/session/metro-origin.js"() {
     "use strict";
     init_discovery();
     init_registry();
     init_target_device_authority();
+    PROVEN_METRO_ORIGIN_META_KEY = "metroOriginPinning";
   }
 });
 
@@ -13524,7 +13548,7 @@ function planResource(layout, resource) {
       regime,
       state: "LINK_FOREIGN",
       action: "none",
-      remediation: "Destination is a symlink to something else; /rn-dev-agent:setup can re-point it after explicit confirmation."
+      remediation: foreignLinkRemediation(sourceState2, base.destination)
     };
   }
   if (destinationState === "LINK_STALE") {
@@ -13575,6 +13599,18 @@ function planResource(layout, resource) {
   return { ...base, regime, state: "DEST_MISSING", action: "link" };
 }
 var LOCAL_CONTENT = "Local real content is present; it is never overwritten and is not shared.";
+function foreignLinkRemediation(sourceState2, destination) {
+  const target = `<primary worktree>/${destination}`;
+  if (sourceState2 === "AVAILABLE") {
+    return `Destination is a symlink to something other than the only accepted target ${target}; /rn-dev-agent:setup can re-point it there after explicit confirmation.`;
+  }
+  const parent = destination.slice(0, destination.lastIndexOf("/"));
+  const realShape = `a real directory under a real <primary worktree>/${parent}`;
+  const wrongType = sourceState2 === "WRONG_TYPE";
+  const problem = wrongType ? "is not a usable real directory (a path component may be a symlink, not a directory, or unstable while being inspected)" : "does not exist";
+  const remedy = wrongType ? `make ${target} ${realShape}` : `create the corpus at ${target}`;
+  return `Destination is a symlink, but the only accepted target ${target} ${problem}, so there is nothing to re-point it to. Supported shapes: stop the session's Metro first (rn_session stop_metro), then replace the link with a real actions directory in this worktree, or ${remedy} and re-run /rn-dev-agent:setup.`;
+}
 function ignoreRemediation(destination) {
   return `Git would see this path. Add the file-form rule "/${destination}" (no trailing slash) to your own local ignore policy, then re-run.`;
 }
@@ -13999,12 +14035,15 @@ function replayCompatibilityPreflight(opts) {
     if (pin)
       return pin;
   }
+  const selectors = regexSelectorCapabilityRefusal(opts.commands);
+  if (selectors)
+    return selectors;
   if (opts.requireEnginePin) {
     const format = actionEnginePinRefusal(opts.enginePin);
     if (format)
       return format;
   }
-  return regexSelectorCapabilityRefusal(opts.commands);
+  return null;
 }
 function isLearnedActionPath(path) {
   return classifyLearnedActionPath(path) === "action";
@@ -14735,12 +14774,18 @@ function chooseMaestroDispatch(inputs) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
+var import_yaml3 = __toESM(require_dist(), 1);
+init_maestro_validator();
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync15, cpSync as cpSync2, rmSync as rmSync3, mkdirSync as mkdirSync10, readdirSync as readdirSync7, statSync as statSync6 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join22, basename as basename7 } from "node:path";
 function flowUsesClearState(flowText) {
-  return /clearState:\s*true\b/.test(flowText) || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
+  return import_yaml3.default.parseAllDocuments(flowText).some((doc) => {
+    if (doc.errors.length > 0)
+      throw doc.errors[0];
+    return containsClearState(doc.toJS());
+  });
 }
 function defaultSnapshotApp(appPath) {
   try {
@@ -15569,6 +15614,7 @@ function classifyTrailingVerification(ledger) {
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 init_authority_gate();
 init_registry();
+init_metro_origin();
 import { randomUUID } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/domain/cdp-flow-replay.js
@@ -16436,6 +16482,51 @@ function nestedLifecycleCommandOrSelf(command) {
   const name = commandName2(command);
   return name !== null && lifecycleCommands.has(name) || nestedLifecycleCommand(command);
 }
+function flowRelaunchFacts(command) {
+  if (commandName2(command) !== "launchApp")
+    return null;
+  const options = command && typeof command === "object" && !Array.isArray(command) ? command.launchApp : void 0;
+  const launch = options && typeof options === "object" && !Array.isArray(options) ? options : {};
+  return { stopApp: typeof launch.stopApp === "boolean" ? launch.stopApp : true };
+}
+function createFlowRelaunchTracker(devClientReplay) {
+  let unclaimed = null;
+  return {
+    launched(launch) {
+      if (devClientReplay && launch.stopApp)
+        unclaimed = launch;
+    },
+    claimed() {
+      unclaimed = null;
+    },
+    attribute(error) {
+      return unclaimed ? attributeOriginFailureToFlowRelaunch(error, unclaimed) : error;
+    }
+  };
+}
+var FLOW_RELAUNCH_NEXT_ACTION = "Do not relaunch a dev-client app from inside a learned action: start the action from the attached app with launchApp stopApp: false, and reset state with device_reset_state before cdp_run_action or cdp_login_prologue.";
+function attributeOriginFailureToFlowRelaunch(error, relaunch) {
+  if (!(error instanceof SessionAuthorityError) || error.code !== "METRO_ORIGIN_MISMATCH") {
+    return error;
+  }
+  if (isProvenMetroOriginMismatch(error))
+    return error;
+  const meta = error.getSupplementalMeta();
+  if ("flowRelaunch" in meta)
+    return error;
+  const cause = `The flow's own launchApp relaunched the app and it did not re-register on the authority-bound Metro within the readiness window; the axis is reporting that relaunch, not a broken binding.`;
+  const prefix = `${error.code}: `;
+  const detail = error.message.startsWith(prefix) ? error.message.slice(prefix.length) : error.message;
+  const attributed = new SessionAuthorityError(error.code, `${detail} ${cause} ${FLOW_RELAUNCH_NEXT_ACTION}`, error.holder, error.details);
+  attributed.attachMeta({
+    ...meta,
+    flowRelaunch: {
+      command: "launchApp",
+      stopApp: relaunch.stopApp
+    }
+  });
+  return attributed;
+}
 function planMaestroAuthorityStages(commands) {
   const stages = [];
   let pending = [];
@@ -16467,23 +16558,31 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
   const results = [];
   let pendingOriginError;
   let originClaimed = options.firstOriginClaimed === true;
+  const relaunches = options.relaunches ?? createFlowRelaunchTracker(false);
   for (const stage of plan.stages) {
     if (stage.requiresOrigin && pendingOriginError === void 0) {
-      if (!originClaimed)
-        await claimOrigin();
+      if (!originClaimed) {
+        try {
+          await claimOrigin();
+        } catch (error) {
+          throw relaunches.attribute(error);
+        }
+        relaunches.claimed();
+      }
       originClaimed = false;
     }
     try {
       results.push(await executeStage(stage.commands));
-      if (stage.commands.length === 1 && commandName2(stage.commands[0]) === "launchApp") {
+      const launch = stage.commands.length === 1 ? flowRelaunchFacts(stage.commands[0]) : null;
+      if (launch) {
+        relaunches.launched(launch);
         try {
-          const launch = stage.commands[0];
-          const launchOptions = launch.launchApp && typeof launch.launchApp === "object" && !Array.isArray(launch.launchApp) ? launch.launchApp : void 0;
-          await relaunchManagedApp(typeof launchOptions?.stopApp === "boolean" ? launchOptions.stopApp : true);
+          await relaunchManagedApp(launch.stopApp);
           pendingOriginError = void 0;
         } catch (error) {
-          if (!reproveManagedOrigin || error instanceof SessionAuthorityError)
+          if (!reproveManagedOrigin || error instanceof SessionAuthorityError) {
             throw error;
+          }
           pendingOriginError = error;
         }
       }
@@ -16499,8 +16598,13 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
       await completeOrigin(false, options.signal);
       throw new MaestroStageExecutionError(results, pendingOriginError);
     }
+    relaunches.claimed();
   }
-  await completeOrigin(plan.targetExpected, options.signal);
+  try {
+    await completeOrigin(plan.targetExpected, options.signal);
+  } catch (error) {
+    throw relaunches.attribute(error);
+  }
   return results;
 }
 function resolveMaestroFlowAppId(boundAppId, parsedAppId) {
@@ -16769,6 +16873,12 @@ function createMaestroRunHandler(deps = {}) {
       const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
       const completeRunnerPark = args.completeRunnerPark ?? managedAuthority.completeRunnerPark;
       const reissueInstallReceipt2 = args.reissueInstallReceipt ?? deps.reissueInstallReceipt ?? managedAuthority.reissueInstallReceipt;
+      const flowRelaunches = createFlowRelaunchTracker(args.devClientReplay === true);
+      const completeClaimedOrigin = async (targetExpected, signal) => {
+        await completeOrigin(targetExpected, signal);
+        if (targetExpected)
+          flowRelaunches.claimed();
+      };
       const combinedSteps = [];
       const proofDomains = [];
       let nativeTransportVersion = null;
@@ -16789,11 +16899,12 @@ function createMaestroRunHandler(deps = {}) {
               inlineYaml: buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, segment.commands),
               timeoutMs: Math.max(1, deadline - now()),
               claimNativeOrigin: claimOrigin,
-              completeNativeOrigin: completeOrigin,
+              completeNativeOrigin: completeClaimedOrigin,
               relaunchManagedApp,
               reproveManagedOrigin,
               completeRunnerPark,
-              reissueInstallReceipt: reissueInstallReceipt2
+              reissueInstallReceipt: reissueInstallReceipt2,
+              flowRelaunches
             });
             const env = readToolEnvelope(nested);
             if (env.ok !== true || env.data?.passed !== true) {
@@ -16871,7 +16982,7 @@ function createMaestroRunHandler(deps = {}) {
             if (replay.finalFocusId === null)
               reactFocusId = null;
             return { replay, sourceIndices };
-          }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin, { signal: controller.signal });
+          }, claimOrigin, completeClaimedOrigin, relaunchManagedApp, reproveManagedOrigin, { signal: controller.signal, relaunches: flowRelaunches });
           retainedReactFocusId = reactFocusId;
           for (const { replay, sourceIndices } of stageResults) {
             for (const step of replay.steps) {
@@ -17151,8 +17262,14 @@ function createMaestroRunHandler(deps = {}) {
       const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? managedAuthority.completeNativeOrigin;
       const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
       const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
+      const flowRelaunches = args.flowRelaunches ?? createFlowRelaunchTracker(args.devClientReplay === true);
       if (platform === "ios" && authorityPlan.stages[0]?.requiresOrigin) {
-        await claimOrigin();
+        try {
+          await claimOrigin();
+        } catch (error) {
+          throw flowRelaunches.attribute(error);
+        }
+        flowRelaunches.claimed();
         nativeOriginPreclaimed = true;
       }
       const completeTrackedOrigin = async (targetExpected, signal) => {
@@ -17299,7 +17416,11 @@ function createMaestroRunHandler(deps = {}) {
           captureStageInvocation(failedInvocationTermination ?? stageTerminationFromError(stageInvocationError));
           throw stageInvocationError;
         }
-      }, claimOrigin, completeTrackedOrigin, relaunchManagedApp, reproveManagedOrigin, { firstOriginClaimed: nativeOriginPreclaimed, signal: flowAbort.signal }), {
+      }, claimOrigin, completeTrackedOrigin, relaunchManagedApp, reproveManagedOrigin, {
+        firstOriginClaimed: nativeOriginPreclaimed,
+        signal: flowAbort.signal,
+        relaunches: flowRelaunches
+      }), {
         platform,
         deviceId: requestedDeviceId,
         releaseAndroidSlot,
@@ -17309,13 +17430,19 @@ function createMaestroRunHandler(deps = {}) {
         signal: flowAbort.signal
       });
       if (deferredNativeOriginTarget) {
-        if (nativeOriginPreclaimed && (args.reproveManagedOrigin || deps.reproveManagedOrigin || replayFactory && hasManagedNativeOriginAuthority(args))) {
-          await reproveManagedOrigin({
-            signal: flowAbort.signal,
-            readinessTimeoutMs: Math.max(1, flowDeadline - now())
-          });
+        try {
+          if (nativeOriginPreclaimed && (args.reproveManagedOrigin || deps.reproveManagedOrigin || replayFactory && hasManagedNativeOriginAuthority(args))) {
+            await reproveManagedOrigin({
+              signal: flowAbort.signal,
+              readinessTimeoutMs: Math.max(1, flowDeadline - now())
+            });
+            flowRelaunches.claimed();
+          }
+          await completeOrigin(true, flowAbort.signal);
+        } catch (error) {
+          throw flowRelaunches.attribute(error);
         }
-        await completeOrigin(true, flowAbort.signal);
+        flowRelaunches.claimed();
         nativeOriginPreclaimed = false;
       }
       await commitReinstalledInstall();

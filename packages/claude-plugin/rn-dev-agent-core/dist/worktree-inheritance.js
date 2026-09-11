@@ -472,7 +472,7 @@ function planResource(layout, resource) {
       regime,
       state: "LINK_FOREIGN",
       action: "none",
-      remediation: "Destination is a symlink to something else; /rn-dev-agent:setup can re-point it after explicit confirmation."
+      remediation: foreignLinkRemediation(sourceState, base.destination)
     };
   }
   if (destinationState === "LINK_STALE") {
@@ -523,6 +523,18 @@ function planResource(layout, resource) {
   return { ...base, regime, state: "DEST_MISSING", action: "link" };
 }
 var LOCAL_CONTENT = "Local real content is present; it is never overwritten and is not shared.";
+function foreignLinkRemediation(sourceState, destination) {
+  const target = `<primary worktree>/${destination}`;
+  if (sourceState === "AVAILABLE") {
+    return `Destination is a symlink to something other than the only accepted target ${target}; /rn-dev-agent:setup can re-point it there after explicit confirmation.`;
+  }
+  const parent = destination.slice(0, destination.lastIndexOf("/"));
+  const realShape = `a real directory under a real <primary worktree>/${parent}`;
+  const wrongType = sourceState === "WRONG_TYPE";
+  const problem = wrongType ? "is not a usable real directory (a path component may be a symlink, not a directory, or unstable while being inspected)" : "does not exist";
+  const remedy = wrongType ? `make ${target} ${realShape}` : `create the corpus at ${target}`;
+  return `Destination is a symlink, but the only accepted target ${target} ${problem}, so there is nothing to re-point it to. Supported shapes: stop the session's Metro first (rn_session stop_metro), then replace the link with a real actions directory in this worktree, or ${remedy} and re-run /rn-dev-agent:setup.`;
+}
 function ignoreRemediation(destination) {
   return `Git would see this path. Add the file-form rule "/${destination}" (no trailing slash) to your own local ignore policy, then re-run.`;
 }

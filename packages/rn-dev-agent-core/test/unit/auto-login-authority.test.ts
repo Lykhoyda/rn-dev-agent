@@ -195,6 +195,30 @@ test('cdp_auto_login refuses ambient project discovery outside session authority
   assert.equal(replayed, false);
 });
 
+test('cdp_auto_login does not treat launchApp clearState: false as clearing state', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-auto-login-clear-state-false-'));
+  const flowDir = join(root, '.maestro', 'subflows');
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(join(flowDir, 'login.yaml'), '- launchApp:\n    clearState: false\n', 'utf8');
+  let replayed = false;
+
+  const result = await handleAutoLogin(
+    authClient(),
+    { platform: 'ios', deviceId: 'SIM-BOUND' },
+    {
+      projectRoot: () => root,
+      boundProjectRoot: () => root,
+      maestroRun: async () => {
+        replayed = true;
+        return { content: [{ type: 'text', text: '{"ok":true}' }] };
+      },
+    },
+  );
+
+  assert.doesNotMatch(String(result?.reason ?? ''), /refuses clearState/);
+  assert.equal(replayed, true, 'the flow is replayed instead of refused');
+});
+
 test('cdp_auto_login refuses expanded nested clearState commands', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-auto-login-clear-state-'));
   const flowDir = join(root, '.maestro', 'subflows');

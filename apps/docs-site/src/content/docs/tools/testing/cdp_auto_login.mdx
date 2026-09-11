@@ -19,3 +19,5 @@ Explicit legacy navigation helper that detects an auth screen and runs one proje
 ```
 cdp_auto_login()
 ```
+
+A mounted navigator only counts when its whole name is an auth pattern, so a mounted `AuthStack › Intro` is reported as not an auth screen (route chain in the reason); leaves still match by substring, and `AuthStack › Home` / `AuthenticatedStack › Home` stay negative.

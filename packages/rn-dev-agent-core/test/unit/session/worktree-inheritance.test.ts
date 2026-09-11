@@ -230,6 +230,104 @@ test('action inventory authenticates inherited corpus to real primary directorie
   }
 });
 
+// GH #993 defect (1): a pooled worktree whose actions link points at a corpus in
+// a different clone is LINK_FOREIGN in both regimes, but the remediation must
+// depend on whether the one accepted target (the primary corpus) exists.
+test('GH#993: LINK_FOREIGN remediation names the accepted target per regime', () => {
+  const fixture = makeFixture();
+  try {
+    const worktree = addWorktree(fixture);
+    const foreignCorpus = join(fixture.root, 'other-clone', '.rn-agent', 'actions');
+    mkdirSync(foreignCorpus, { recursive: true });
+    writeFileSync(join(foreignCorpus, 'user-login.yaml'), '# id: user-login\n# intent: x\n');
+    mkdirSync(join(worktree, '.rn-agent'));
+    symlinkSync(foreignCorpus, join(worktree, '.rn-agent', 'actions'), 'dir');
+
+    // S1 (reported): the primary has no corpus, so there is nothing to re-point to.
+    const noSource = planInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' })
+      .resources[0]!;
+    assert.equal(noSource.state, 'LINK_FOREIGN');
+    assert.equal(noSource.regime, 'NO_SOURCE');
+    assert.match(noSource.remediation ?? '', /<primary worktree>\/\.rn-agent\/actions/);
+    assert.match(noSource.remediation ?? '', /does not exist/);
+    assert.match(noSource.remediation ?? '', /real actions directory in this worktree/);
+    assert.match(noSource.remediation ?? '', /create the corpus at/);
+    assert.doesNotMatch(noSource.remediation ?? '', /can re-point it/);
+
+    // S1b: the primary's actions path is occupied by a file, so it is not
+    // "missing" and cannot be "created"; it has to be replaced.
+    mkdirSync(join(fixture.primary, '.rn-agent'), { recursive: true });
+    writeFileSync(join(fixture.primary, '.rn-agent', 'actions'), 'not a directory\n');
+    const wrongType = planInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' })
+      .resources[0]!;
+    assert.equal(wrongType.state, 'LINK_FOREIGN');
+    assert.equal(wrongType.sourceState, 'WRONG_TYPE');
+    assert.match(wrongType.remediation ?? '', /is not a usable real directory/);
+    assert.match(
+      wrongType.remediation ?? '',
+      /make <primary worktree>\/\.rn-agent\/actions a real directory under a real <primary worktree>\/\.rn-agent/,
+    );
+    assert.doesNotMatch(wrongType.remediation ?? '', /does not exist/);
+    assert.doesNotMatch(wrongType.remediation ?? '', /create the corpus at/);
+    rmSync(join(fixture.primary, '.rn-agent', 'actions'));
+
+    // S2: the primary now owns a corpus, so re-pointing is a real remedy.
+    seedPrivateCorpus(fixture);
+    const withSource = planInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' })
+      .resources[0]!;
+    assert.equal(withSource.state, 'LINK_FOREIGN');
+    assert.equal(withSource.regime, 'PRIVATE_SOURCE_AVAILABLE');
+    assert.match(withSource.remediation ?? '', /<primary worktree>\/\.rn-agent\/actions/);
+    assert.match(withSource.remediation ?? '', /re-point it there after explicit confirmation/);
+    assert.doesNotMatch(withSource.remediation ?? '', /does not exist/);
+
+    // The CLI still never prints an absolute private path for either regime.
+    const result = cli(worktree, ['plan', '--host', 'claude', '--app-root', worktree, '--json']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(
+      result.stdout,
+      new RegExp(fixture.root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    );
+    assert.match(result.stdout, /only accepted target/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// GH#993 review: WRONG_TYPE is also returned when a parent component of the
+// primary corpus path is a symlink (the legacy whole-`.rn-agent` layout). The
+// remediation must not claim the actions path itself exists as a non-directory,
+// and must name the real parent the operator actually has to fix.
+test('GH#993: a symlinked .rn-agent parent gets a remediation that names the parent', () => {
+  const fixture = makeFixture();
+  try {
+    const worktree = addWorktree(fixture);
+    const foreignCorpus = join(fixture.root, 'other-clone', '.rn-agent', 'actions');
+    mkdirSync(foreignCorpus, { recursive: true });
+    mkdirSync(join(worktree, '.rn-agent'));
+    symlinkSync(foreignCorpus, join(worktree, '.rn-agent', 'actions'), 'dir');
+
+    // The primary carries `.rn-agent` as a symlink, so the actions path under it
+    // never exists as a file — only its parent is wrong.
+    const relocated = join(fixture.root, 'relocated-agent');
+    mkdirSync(join(relocated, 'actions'), { recursive: true });
+    symlinkSync(relocated, join(fixture.primary, '.rn-agent'), 'dir');
+
+    const plan = planInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' })
+      .resources[0]!;
+    assert.equal(plan.state, 'LINK_FOREIGN');
+    assert.equal(plan.sourceState, 'WRONG_TYPE');
+    assert.match(plan.remediation ?? '', /is not a usable real directory/);
+    assert.match(
+      plan.remediation ?? '',
+      /make <primary worktree>\/\.rn-agent\/actions a real directory under a real <primary worktree>\/\.rn-agent/,
+    );
+    assert.doesNotMatch(plan.remediation ?? '', /does not exist/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('non-linked projects keep their real integration and local state unchanged', () => {
   const fixture = makeFixture();
   try {
