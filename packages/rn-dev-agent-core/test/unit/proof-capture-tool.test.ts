@@ -1636,6 +1636,38 @@ test('recorded evidence timestamps begin when the recorder is ready', async (t) 
   assert.equal(evidence[0]!.timestampMs, 1_000);
 });
 
+test('stop_recording reports a proof video above the GitHub attachment limit', async (t) => {
+  for (const [sizeBytes, expectWarning] of [
+    [14_680_064, true],
+    [10 * 1024 * 1024, false],
+  ] as Array<[number, boolean]>) {
+    const harness = createHarness(t);
+    await cleanRehearsal(harness);
+    await arm(harness);
+    harness.setRecord(async (args) => {
+      if (args.action === 'status') return okResult({ active: [] });
+      if (args.action === 'start') {
+        return okResult({ deviceId: 'SIM-1', output: beginArgs().videoPath });
+      }
+      return okResult({ saved: [{ path: beginArgs().videoPath, sizeBytes }] });
+    });
+
+    const recordingStart = await startRecording(harness);
+    recordEvidence(harness, recordingStart);
+    const parsed = envelope(await harness.handler({ action: 'stop_recording' }));
+
+    assert.equal(parsed.ok, true);
+    assert.equal((parsed.data as { stage: string }).stage, 'validating');
+    const warning = (parsed.meta as { warning?: string } | undefined)?.warning;
+    if (!expectWarning) {
+      assert.equal(warning, undefined);
+      continue;
+    }
+    assert.match(String(warning), /14680064 bytes/);
+    assert.match(String(warning), /10485760/);
+  }
+});
+
 test('trace repair, reload, failed tools, and wrong order fail closed', async (t) => {
   const cases = [
     {

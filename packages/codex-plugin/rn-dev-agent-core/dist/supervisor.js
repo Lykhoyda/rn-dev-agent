@@ -91541,16 +91541,19 @@ function createProofCaptureHandler(deps) {
       if (savedPath !== active.context.videoPath) {
         return rejectCapture(active, ["RECORDING_PATH_MISMATCH"]);
       }
+      const savedSize = saved[0].sizeBytes;
+      const oversizeWarning = typeof savedSize === "number" ? oversizeProofWarning([{ path: active.context.videoPath, sizeBytes: savedSize }]) : null;
       const derived = deriveEvidence(active);
       active.evidenceDraft = derived.evidence;
       active.stage = "validating";
       active.invalidationReasons = [];
-      return okResult({
+      const stopped = {
         stage: active.stage,
         videoPath: savedPath,
         evidenceDraft: derived.evidence,
         evidenceReasons: derived.reasons
-      });
+      };
+      return oversizeWarning ? warnResult(stopped, oversizeWarning) : okResult(stopped);
     }
     if (args.action === "validate") {
       if (active.stage !== "validating" || !active.baseline || !active.recordingStartedAt || active.rehearsalDurationMs === null || !active.rehearsalFinishedAt) {
@@ -91746,6 +91749,7 @@ var init_proof_capture2 = __esm({
     init_action_store();
     init_proof_capture();
     init_proof_receipt();
+    init_device_record();
     init_utils();
     init_startup_integrity();
     absolutePathSchema = external_exports.string().min(1).refine(isAbsolute15, "path must be absolute");
