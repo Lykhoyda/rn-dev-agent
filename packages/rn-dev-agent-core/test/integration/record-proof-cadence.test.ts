@@ -139,7 +139,18 @@ async function probeSize(path: string) {
 
 async function normalizedFrameSize(root: string, source: string) {
   const frame = join(root, `normalized-${basename(source)}.png`);
-  await run('ffmpeg', ['-v', 'error', '-y', '-i', source, '-frames:v', '1', '-vf', 'scale=800:-2', frame]);
+  await run('ffmpeg', [
+    '-v',
+    'error',
+    '-y',
+    '-i',
+    source,
+    '-frames:v',
+    '1',
+    '-vf',
+    'scale=800:-2',
+    frame,
+  ]);
   return probeSize(frame);
 }
 

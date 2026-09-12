@@ -404,9 +404,7 @@ export async function stopBoundRunner(
 
 export function recorderStopTimeoutMs(startedAt: unknown, now = Date.now()): number {
   const recordedMs =
-    typeof startedAt === 'number' && Number.isFinite(startedAt)
-      ? Math.max(0, now - startedAt)
-      : 0;
+    typeof startedAt === 'number' && Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : 0;
   return Math.min(
     RECORDER_STOP_BASE_TIMEOUT_MS + RECORDER_STOP_MS_PER_RECORDED_MS * recordedMs,
     RECORDER_STOP_MAX_TIMEOUT_MS,
