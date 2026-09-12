@@ -55963,7 +55963,7 @@ var INJECTED_HELPERS = `
 
   // React return chains may thread through either half of a fiber/alternate pair.
   function sameFiber(a, b) {
-    return a === b || (!!b && a === b.alternate);
+    return !!a && !!b && (a === b || a.alternate === b || b.alternate === a);
   }
 
   function isTestIdFrontmost(testID) {
