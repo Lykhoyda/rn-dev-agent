@@ -283,5 +283,7 @@ Show the user:
 
 - iOS Simulator or Android Emulator running with the app loaded
 - Ready fenced session with the integrated Metro and signed app target
-- ffmpeg required for GIF conversion and video labeling (`brew install ffmpeg`)
+- ffmpeg required for 30 fps cadence normalization, GIF conversion, and video
+  labeling (`brew install ffmpeg`); without it the capture is kept at its native
+  sparse frame timing as a `.mov` and may play as a slideshow
 - Pillow auto-installed in a venv for label rendering (no manual setup needed)

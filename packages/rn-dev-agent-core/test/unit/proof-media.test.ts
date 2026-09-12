@@ -317,10 +317,7 @@ test('validateMedia accepts a slideshow-cadence proof video and reports its fram
 
   assert.equal(result.ok, true);
   assert.ok(result.ok && result.avgFrameRate !== null && result.avgFrameRate < 1);
-  assert.match(
-    String(sparseCadenceWarning(result.ok ? result.avgFrameRate : null)),
-    /0\.22 fps/,
-  );
+  assert.match(String(sparseCadenceWarning(result.ok ? result.avgFrameRate : null)), /0\.22 fps/);
   assert.match(
     String(sparseCadenceWarning(result.ok ? result.avgFrameRate : null)),
     /smoothing was skipped/,
