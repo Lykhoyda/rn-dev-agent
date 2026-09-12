@@ -200,34 +200,54 @@ test('#951 saved replay dispatches a wrapped navigator press through its native-
   assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
 });
 
-test('#951 replay refuses nested host controls including a shared callback and an outer host without ID', async (t) => {
-  for (const shared of [false, true]) {
-    for (const outerHasId of [false, true]) {
-      await t.test(`shared=${shared}, outer host ID=${outerHasId}`, async () => {
-        const fixture = tabFixture();
-        fixture.outerHost.memoizedProps.onResponderGrant = () => {};
-        fixture.outerHost.memoizedProps.accessible = true;
-        if (outerHasId) fixture.outerHost.memoizedProps.testID = 'tab-home';
-        if (shared) fixture.outer.memoizedProps.onPress = fixture.animated.memoizedProps.onPress;
-        const result = await runCdpReplayCommands(
-          [{ tapOn: { id: 'tab-home' } }],
-          {},
-          buildDeps(createAgent(fixture.root)),
-        );
-        assert.equal(result.passed, false);
-        assert.equal(result.failedStepIndex, 0);
-        assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
-        assert.deepEqual(result.failureMeta, {
-          hint: 'Multiple distinct pressable fibers resolve from this testID. Pass the testID of the exact pressable component instead.',
-          count: 2,
-          candidates: [
-            { component: 'BottomTabItem', testID: 'tab-home' },
-            { component: 'Animated(Pressable)', testID: 'tab-home' },
-          ],
-        });
-        assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+test('#951 replay refuses nested host controls with distinct callbacks', async (t) => {
+  for (const outerHasId of [false, true]) {
+    await t.test(`outer host ID=${outerHasId}`, async () => {
+      const fixture = tabFixture();
+      fixture.outerHost.memoizedProps.onResponderGrant = () => {};
+      fixture.outerHost.memoizedProps.accessible = true;
+      if (outerHasId) fixture.outerHost.memoizedProps.testID = 'tab-home';
+      const result = await runCdpReplayCommands(
+        [{ tapOn: { id: 'tab-home' } }],
+        {},
+        buildDeps(createAgent(fixture.root)),
+      );
+      assert.equal(result.passed, false);
+      assert.equal(result.failedStepIndex, 0);
+      assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+      assert.deepEqual(result.failureMeta, {
+        hint: 'Multiple distinct pressable fibers resolve from this testID. Pass the testID of the exact pressable component instead.',
+        count: 2,
+        candidates: [
+          { component: 'BottomTabItem', testID: 'tab-home' },
+          { component: 'Animated(Pressable)', testID: 'tab-home' },
+        ],
       });
-    }
+      assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+    });
+  }
+});
+
+test('#951 replay dispatches one shared callback across nested hosts exactly once', async (t) => {
+  for (const outerHasId of [false, true]) {
+    await t.test(`outer host ID=${outerHasId}`, async () => {
+      const fixture = tabFixture();
+      fixture.outerHost.memoizedProps.onResponderGrant = () => {};
+      fixture.outerHost.memoizedProps.accessible = true;
+      if (outerHasId) fixture.outerHost.memoizedProps.testID = 'tab-home';
+      fixture.outer.memoizedProps.onPress = fixture.animated.memoizedProps.onPress;
+      const result = await runCdpReplayCommands(
+        [{ tapOn: { id: 'tab-home' } }],
+        {},
+        buildDeps(createAgent(fixture.root)),
+      );
+      assert.equal(result.passed, true, JSON.stringify(result));
+      assert.deepEqual(
+        result.steps.map((step) => ({ t: step.t, target: step.target, ok: step.ok })),
+        [{ t: 'tap', target: 'tab-home', ok: true }],
+      );
+      assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+    });
   }
 });
 

@@ -273,19 +273,33 @@ test('#951 the single-host witness selects only within the existing eight-hop bo
   }
 });
 
-test('#951 distinct and shared callbacks cannot collapse separate nested host controls', async (t) => {
-  for (const shared of [false, true]) {
-    for (const outerHasId of [false, true]) {
-      await t.test(`shared=${shared}, outer host ID=${outerHasId}`, () => {
-        const fixture = forwardedPressTree();
-        fixture.outerHost.memoizedProps.onResponderGrant = () => {};
-        fixture.outerHost.memoizedProps.accessible = true;
-        if (outerHasId) fixture.outerHost.memoizedProps.testID = 'tab-home';
-        if (shared) fixture.root.memoizedProps.onPress = fixture.animated.memoizedProps.onPress;
-        assertTabAmbiguity(pressFixture(fixture));
-        assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
-      });
-    }
+test('#951 distinct callbacks cannot collapse separate nested host controls', async (t) => {
+  for (const outerHasId of [false, true]) {
+    await t.test(`outer host ID=${outerHasId}`, () => {
+      const fixture = forwardedPressTree();
+      fixture.outerHost.memoizedProps.onResponderGrant = () => {};
+      fixture.outerHost.memoizedProps.accessible = true;
+      if (outerHasId) fixture.outerHost.memoizedProps.testID = 'tab-home';
+      assertTabAmbiguity(pressFixture(fixture));
+      assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+    });
+  }
+});
+
+test('#951 one callback shared across nested hosts keeps collapsing to a single dispatch', async (t) => {
+  for (const outerHasId of [false, true]) {
+    await t.test(`outer host ID=${outerHasId}`, () => {
+      const fixture = forwardedPressTree();
+      fixture.outerHost.memoizedProps.onResponderGrant = () => {};
+      fixture.outerHost.memoizedProps.accessible = true;
+      if (outerHasId) fixture.outerHost.memoizedProps.testID = 'tab-home';
+      fixture.root.memoizedProps.onPress = fixture.animated.memoizedProps.onPress;
+      const result = pressFixture(fixture);
+      assert.equal(result.success, true, JSON.stringify(result));
+      assert.equal(result.component, 'BottomTabItem');
+      assert.equal(result.walkUpLevels, undefined);
+      assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+    });
   }
 });
 
@@ -320,17 +334,23 @@ test('#951 siblings remain ambiguous with distinct or shared callbacks and host 
   }
 });
 
-test('#951 stale return pointers cannot hide a mounted independent responder host', async (t) => {
-  for (const shared of [false, true]) {
-    await t.test(`shared=${shared}`, () => {
-      const fixture = forwardedPressTree();
-      fixture.outerHost.memoizedProps.onResponderGrant = () => {};
-      fixture.animated.return = fixture.root;
-      if (shared) fixture.root.memoizedProps.onPress = fixture.animated.memoizedProps.onPress;
-      assertTabAmbiguity(pressFixture(fixture));
-      assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
-    });
-  }
+test('#951 stale return pointers cannot hide a mounted independent responder host', () => {
+  const fixture = forwardedPressTree();
+  fixture.outerHost.memoizedProps.onResponderGrant = () => {};
+  fixture.animated.return = fixture.root;
+  assertTabAmbiguity(pressFixture(fixture));
+  assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+});
+
+test('#951 a stale return pointer with one shared callback still dispatches once', () => {
+  const fixture = forwardedPressTree();
+  fixture.outerHost.memoizedProps.onResponderGrant = () => {};
+  fixture.animated.return = fixture.root;
+  fixture.root.memoizedProps.onPress = fixture.animated.memoizedProps.onPress;
+  const result = pressFixture(fixture);
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.component, 'BottomTabItem');
+  assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
 });
 
 test('#951 unproven host semantics and incomplete ancestry preserve ambiguity metadata', async (t) => {

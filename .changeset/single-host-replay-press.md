@@ -3,4 +3,4 @@
 'rn-dev-agent-plugin': patch
 ---
 
-Fix saved-action presses through forwarding wrappers around one native host while preserving ambiguity refusal for separate controls.
+Fix saved-action presses that forward one testID through wrappers around a single native host, while separate controls with distinct handlers still refuse as ambiguous.

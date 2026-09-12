@@ -54586,21 +54586,7 @@ var INJECTED_HELPERS = `
           if (!ap || !bp) return false;
           if (ap[matchField] !== selector || bp[matchField] !== selector) return false;
           if (ap.onPress !== bp.onPress) return false;
-          var outer = walkAncestorOf(a, b) ? a : (walkAncestorOf(b, a) ? b : null);
-          if (!outer) return false;
-          var child = outer === a ? b : a;
-          var node = child.return;
-          var seen = new WeakSet();
-          for (var steps = 0; node && steps < 1000; steps++) {
-            if (seen.has(node)) return false;
-            seen.add(node);
-            if (!walkChildOf(node, child)) return false;
-            if (node.tag === 5 && !walkInertView(node)) return false;
-            if (node === outer) return true;
-            child = node;
-            node = node.return;
-          }
-          return false;
+          return walkAncestorOf(a, b) || walkAncestorOf(b, a);
         };
         var walkSources = walkUpMatches.length > 0 ? walkUpMatches : [found];
         var walkCandidates = [];
