@@ -203,9 +203,12 @@ that the next step does not consume fails the replay. A `tapOn` whose exact targ
 such an input and carries no `onPress` walks up to the nearest pressable ancestor within
 eight fibers and presses it, refusing when no ancestor exists, when several distinct
 pressables resolve, or when the walked-to pressable or any exact-ID fiber is disabled, hidden,
-or blocked by `pointerEvents` on its host view. Native WDA blindness is reported as
-`NATIVE_SURFACE_BLIND` only when a bounded same-screen native snapshot saw the selector WDA
-missed; runtime version alone is never proof, and ordinary selector misses stay ordinary.
+or blocked by `pointerEvents` on its host view. Wrappers that forward one `testID` around a
+single native host through inert views — a bottom-tab button, for example — are one control
+rather than an ambiguity: the press resolves to the nearest `onPress` above that host.
+Native WDA blindness is reported as `NATIVE_SURFACE_BLIND` only when a bounded same-screen
+native snapshot saw the selector WDA missed; runtime version alone is never proof, and
+ordinary selector misses stay ordinary.
 
 ## What actions are NOT
 
