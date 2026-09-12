@@ -285,5 +285,5 @@ Show the user:
 - Ready fenced session with the integrated Metro and signed app target
 - ffmpeg required for 30 fps cadence normalization, GIF conversion, and video
   labeling (`brew install ffmpeg`); without it the capture is kept at its native
-  sparse frame timing as a `.mov` and may play as a slideshow
+  sparse frame timing (`.mov` on iOS, `.mp4` on Android) and may play as a slideshow
 - Pillow auto-installed in a venv for label rendering (no manual setup needed)

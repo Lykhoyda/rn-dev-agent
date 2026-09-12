@@ -429,6 +429,59 @@ test('Android finalized output retries failed remote deletion without repulling'
   }
 });
 
+test('Android cleanup retries retain every skipped-normalization outcome without re-encoding', () => {
+  for (const skipped of [
+    'ffmpeg unavailable',
+    'capture duration unreadable',
+    '30 fps H.264 re-encode failed',
+  ]) {
+    const state = fixture();
+    try {
+      if (skipped === 'ffmpeg unavailable') {
+        writeFileSync(
+          state.script,
+          readFileSync(state.script, 'utf8').replaceAll(
+            'if command -v ffmpeg >/dev/null 2>&1; then',
+            'if false; then',
+          ),
+        );
+      } else if (skipped === 'capture duration unreadable') {
+        writeFileSync(join(state.root, 'ffprobe'), '#!/usr/bin/env bash\nexit 1\n');
+      }
+      const output = join(state.root, 'proof.mp4');
+      seedLocalBinding(state.prefix);
+      writeFileSync(`${state.prefix}-${scope}.path`, output);
+      writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
+      const env = {
+        ...process.env,
+        PATH: `${state.root}:${process.env.PATH}`,
+        FAKE_PULL_MARKER: state.pullMarker,
+        FAKE_CONVERSION_MARKER: state.conversionMarker,
+        FAKE_STAT: '',
+      };
+      const first = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+        encoding: 'utf8',
+        env: { ...env, FAKE_REMOTE_DELETE_FAIL: '1' },
+      });
+      assert.notEqual(first.status, 0);
+      assert.ok(first.stdout.includes(`Cadence normalization skipped: ${skipped}`), first.stdout);
+      const finalized = readFileSync(`${state.prefix}-${scope}.finalized-path`, 'utf8').trim();
+      assert.equal(finalized.endsWith('.mp4'), skipped === 'ffmpeg unavailable');
+      const second = spawnSync('bash', [state.script, 'stop', scope, '999999', 'local-birth'], {
+        encoding: 'utf8',
+        env: { ...env, FAKE_PULL_FAIL: '1', FAKE_FFMPEG_SUCCESS: '1' },
+      });
+      assert.equal(second.status, 0, second.stderr);
+      assert.match(second.stdout, /^Saved: /m);
+      assert.ok(second.stdout.includes(`Cadence normalization skipped: ${skipped}`), second.stdout);
+      assert.equal(existsSync(state.conversionMarker), false);
+      assert.equal(existsSync(`${state.prefix}-${scope}.normalization-skipped`), false);
+    } finally {
+      state.cleanup();
+    }
+  }
+});
+
 test('Android migrates pending path-only finalization through a fresh pull', () => {
   const state = fixture();
   try {
@@ -686,9 +739,10 @@ test('Android cleanup remains resumable after the process marker is removed', ()
     const cleanupReceipt = readFileSync(`${state.prefix}-${scope}.cleanup-pending`, 'utf8').split(
       '\n',
     );
-    assert.equal(cleanupReceipt[0], 'v2');
-    assert.equal(cleanupReceipt[6], '1');
-    const retainedCapture = cleanupReceipt[7];
+    assert.equal(cleanupReceipt[0], 'v3');
+    assert.match(cleanupReceipt[6], /re-encode failed/);
+    assert.equal(cleanupReceipt[7], '1');
+    const retainedCapture = cleanupReceipt[8];
     assert.equal(existsSync(retainedCapture), true);
 
     const status = spawnSync('bash', [state.script, 'status', scope], {
@@ -715,6 +769,7 @@ test('Android cleanup remains resumable after the process marker is removed', ()
     });
     assert.equal(retry.status, 0, retry.stderr);
     assert.match(retry.stdout, /^Saved: /m);
+    assert.match(retry.stdout, /Cadence normalization skipped: 30 fps H.264 re-encode failed/);
     assert.equal(existsSync(retainedCapture), false);
     assert.equal(existsSync(`${state.prefix}-${scope}.cleanup-pending`), false);
   } finally {

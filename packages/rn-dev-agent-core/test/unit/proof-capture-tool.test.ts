@@ -1724,6 +1724,128 @@ test('stop_recording reports a proof video above the GitHub video attachment lim
   }
 });
 
+test('strict proof carries the documented iOS MOV fallback through validation and finalization', async (t) => {
+  const harness = createHarness(t);
+  const args = beginArgs();
+  const fallback = args.videoPath.replace(/\.mp4$/, '.mov');
+  await cleanRehearsal(harness);
+  await arm(harness);
+  const start = await startRecording(harness);
+  recordEvidence(harness, start);
+  harness.setRecord(async (args) =>
+    args.action === 'status'
+      ? okResult({ active: [] })
+      : okResult({
+          saved: [{ path: fallback, sizeBytes: 4096 }],
+          normalizationSkipped: 'ffmpeg unavailable',
+        }),
+  );
+  const stopped = envelope(await harness.handler({ action: 'stop_recording' }));
+  assert.equal(stopped.ok, true);
+  assert.equal((stopped.data as { videoPath: string }).videoPath, fallback);
+  assert.match(String((stopped.meta as { warning: string }).warning), /ffmpeg unavailable/);
+  markProofOutputs(harness, { ...args, videoPath: fallback });
+  harness.setMedia(successfulMedia({ ...args, videoPath: fallback }));
+  const validated = envelope(await harness.handler({ action: 'validate' }));
+  assert.equal(validated.ok, true, JSON.stringify(validated));
+  assert.equal(harness.mediaCalls.at(-1)?.input.videoPath, fallback);
+  const finalized = envelope(
+    await harness.handler({
+      action: 'finalize',
+      evidenceReview: validReview({
+        evidenceSha256: (validated.data as { reviewTargetSha256: string }).reviewTargetSha256,
+      }),
+    }),
+  );
+  assert.equal(finalized.ok, true, JSON.stringify(finalized));
+  assert.equal(harness.written[0]?.video.path, fallback);
+  assert.match(String((finalized.meta as { warning: string }).warning), /ffmpeg unavailable/);
+});
+
+test('strict proof rejects unrelated paths and an undocumented MOV fallback', async (t) => {
+  for (const scenario of [
+    { path: '/tmp/outside.mov', skipped: 'ffmpeg unavailable' },
+    {
+      path: beginArgs().videoPath.replace('proof.mp4', 'other.mov'),
+      skipped: 'ffmpeg unavailable',
+    },
+    { path: beginArgs().videoPath.replace(/\.mp4$/, '.mov'), skipped: undefined },
+    {
+      path: beginArgs().videoPath.replace(/\.mp4$/, '.mov'),
+      skipped: 'ffmpeg unavailable',
+      android: true,
+    },
+  ]) {
+    const harness = createHarness(t);
+    if (scenario.android) harness.readiness.device.platform = 'android';
+    await cleanRehearsal(harness);
+    await arm(harness);
+    const start = await startRecording(harness);
+    recordEvidence(harness, start);
+    harness.setRecord(async (args) =>
+      args.action === 'status'
+        ? okResult({ active: [] })
+        : okResult({
+            saved: [{ path: scenario.path, sizeBytes: 4096 }],
+            normalizationSkipped: scenario.skipped,
+          }),
+    );
+    const result = await harness.handler({ action: 'stop_recording' });
+    assert.ok(reasons(result).includes('RECORDING_PATH_MISMATCH'), result.content[0]!.text);
+  }
+});
+
+test('strict proof cleans up the accepted MOV artifact when later validation rejects it', async (t) => {
+  const harness = createHarness(t);
+  const fallback = beginArgs().videoPath.replace(/\.mp4$/, '.mov');
+  await cleanRehearsal(harness);
+  await arm(harness);
+  const start = await startRecording(harness);
+  recordEvidence(harness, start);
+  harness.setRecord(async (args) =>
+    args.action === 'status'
+      ? okResult({ active: [] })
+      : okResult({
+          saved: [{ path: fallback, sizeBytes: 4096 }],
+          normalizationSkipped: 'ffmpeg unavailable',
+        }),
+  );
+  assert.equal(envelope(await harness.handler({ action: 'stop_recording' })).ok, true);
+  harness.setMedia({ ok: false, reasons: ['VIDEO_UNREADABLE'] });
+  assert.equal(envelope(await harness.handler({ action: 'validate' })).ok, false);
+  assert.ok(harness.removed.includes(fallback));
+});
+
+test('strict proof refuses a symlink swap of the accepted MOV fallback before media IO', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'proof-mov-drift-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const harness = createHarness(t, root);
+  const args = beginArgs(root);
+  const fallback = args.videoPath.replace(/\.mp4$/, '.mov');
+  await cleanRehearsal(harness, false, args);
+  await arm(harness, args);
+  const start = await startRecording(harness, args);
+  recordEvidence(harness, start, {}, args);
+  harness.setRecord(async (args) =>
+    args.action === 'status'
+      ? okResult({ active: [] })
+      : okResult({
+          saved: [{ path: fallback, sizeBytes: 4096 }],
+          normalizationSkipped: 'ffmpeg unavailable',
+        }),
+  );
+  assert.equal(envelope(await harness.handler({ action: 'stop_recording' })).ok, true);
+  const victim = join(root, 'victim');
+  await mkdir(dirname(fallback), { recursive: true });
+  await writeFile(victim, 'unchanged');
+  await symlink(victim, fallback);
+  const removedCount = harness.removed.length;
+  assert.ok(reasons(await harness.handler({ action: 'validate' })).includes('PROOF_PATH_DRIFT'));
+  assert.equal(harness.mediaCalls.length, 0);
+  assert.equal(harness.removed.length, removedCount);
+  assert.equal(await readFile(victim, 'utf8'), 'unchanged');
+});
+
 test('trace repair, reload, failed tools, and wrong order fail closed', async (t) => {
   const cases = [
     {

@@ -273,6 +273,7 @@ interface Session {
   armedObservationCount: number | null;
   freshStartAssertion: ProofObservation | null;
   mayOwnRecorder: boolean;
+  recordedVideoPath: string | null;
   baseline: ProofReadiness | null;
   mechanicalReceipt: MechanicallyAcceptedProofReceipt | null;
   cadenceWarning: string | null;
@@ -1020,7 +1021,11 @@ export function createProofCaptureHandler(
 
   const contextIsCurrent = (active: Session): boolean => {
     try {
-      return validCaptureContext(active.context, deps.projectRoot());
+      return (
+        validCaptureContext(active.context, deps.projectRoot()) &&
+        (!active.recordedVideoPath ||
+          !hasExistingSymlink(active.context.projectRoot, active.recordedVideoPath))
+      );
     } catch {
       return false;
     }
@@ -1057,6 +1062,9 @@ export function createProofCaptureHandler(
   const artifactPaths = (active: Session): string[] => [
     active.context.receiptPath,
     active.context.videoPath,
+    ...(active.recordedVideoPath && active.recordedVideoPath !== active.context.videoPath
+      ? [active.recordedVideoPath]
+      : []),
     active.context.contactSheetPath,
     ...active.context.storyboard.steps.map((step) => step.screenshotPath),
   ];
@@ -1125,8 +1133,10 @@ export function createProofCaptureHandler(
     active.armedObservationCount = null;
     active.freshStartAssertion = null;
     active.mayOwnRecorder = false;
+    active.recordedVideoPath = null;
     active.baseline = null;
     active.mechanicalReceipt = null;
+    active.cadenceWarning = null;
     deps.monitor.begin(active.context.runId);
   };
 
@@ -1217,7 +1227,7 @@ export function createProofCaptureHandler(
     phase: 'setup' | 'clean' | 'validation' | 'finalized',
   ): string[] => {
     const proofOutputs = [
-      active.context.videoPath,
+      active.recordedVideoPath ?? active.context.videoPath,
       active.context.contactSheetPath,
       ...active.context.storyboard.steps.map((step) => step.screenshotPath),
     ].map((path) => repositoryPath(active, path));
@@ -1468,6 +1478,7 @@ export function createProofCaptureHandler(
         armedObservationCount: null,
         freshStartAssertion: null,
         mayOwnRecorder: false,
+        recordedVideoPath: null,
         baseline: null,
         mechanicalReceipt: null,
         cadenceWarning: null,
@@ -1716,17 +1727,29 @@ export function createProofCaptureHandler(
       if (!Array.isArray(saved)) return rejectCapture(active, ['RECORDING_STOP_FAILED']);
       if (saved.length !== 1) return rejectCapture(active, ['RECORDING_AMBIGUOUS']);
       const savedPath = (saved[0] as { path?: unknown }).path;
-      if (savedPath !== active.context.videoPath) {
+      const cadenceSkipped = shutdown.stopData?.normalizationSkipped;
+      const hasSkippedNormalization =
+        typeof cadenceSkipped === 'string' && cadenceSkipped.length > 0;
+      const isNativeFallback =
+        active.baseline?.device.platform === 'ios' &&
+        hasSkippedNormalization &&
+        savedPath === `${active.context.videoPath.slice(0, -4)}.mov`;
+      if (
+        typeof savedPath !== 'string' ||
+        (savedPath !== active.context.videoPath && !isNativeFallback)
+      ) {
         return rejectCapture(active, ['RECORDING_PATH_MISMATCH']);
       }
+      active.recordedVideoPath = savedPath;
+      if (!contextIsCurrent(active)) return rejectPathDrift(active);
+      active.cadenceWarning = hasSkippedNormalization
+        ? normalizationSkippedWarning(cadenceSkipped)
+        : null;
       const savedSize = (saved[0] as { sizeBytes?: unknown }).sizeBytes;
-      const cadenceSkipped = shutdown.stopData?.normalizationSkipped;
       const stopWarnings = [
-        typeof cadenceSkipped === 'string' && cadenceSkipped.length > 0
-          ? normalizationSkippedWarning(cadenceSkipped)
-          : null,
+        hasSkippedNormalization ? normalizationSkippedWarning(cadenceSkipped) : null,
         typeof savedSize === 'number'
-          ? oversizeProofWarning([{ path: active.context.videoPath, sizeBytes: savedSize }])
+          ? oversizeProofWarning([{ path: savedPath, sizeBytes: savedSize }])
           : null,
       ].filter((warning): warning is string => warning !== null);
       const derived = deriveEvidence(active);
@@ -1769,7 +1792,7 @@ export function createProofCaptureHandler(
       if (!derived.evidence) evidenceReasons.push('STEP_EVIDENCE_MISSING');
 
       const mediaInput: MediaValidationInput = {
-        videoPath: active.context.videoPath,
+        videoPath: active.recordedVideoPath ?? active.context.videoPath,
         rehearsalDurationMs: active.rehearsalDurationMs,
         screenshots: evidence.map((item) => ({
           stepId: item.stepId,
@@ -1876,7 +1899,10 @@ export function createProofCaptureHandler(
       active.mechanicalReceipt = receipt;
       active.stage = 'mechanically_accepted';
       active.invalidationReasons = [];
-      active.cadenceWarning = media.ok ? sparseCadenceWarning(media.avgFrameRate) : null;
+      active.cadenceWarning =
+        [active.cadenceWarning, sparseCadenceWarning(media.avgFrameRate)]
+          .filter(Boolean)
+          .join(' ') || null;
       const validated = {
         stage: active.stage,
         receipt,
