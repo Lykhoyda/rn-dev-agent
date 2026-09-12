@@ -1636,10 +1636,10 @@ test('recorded evidence timestamps begin when the recorder is ready', async (t) 
   assert.equal(evidence[0]!.timestampMs, 1_000);
 });
 
-test('stop_recording reports a proof video above the GitHub attachment limit', async (t) => {
+test('stop_recording reports a proof video above the GitHub video attachment limit', async (t) => {
   for (const [sizeBytes, expectWarning] of [
-    [14_680_064, true],
-    [10 * 1024 * 1024, false],
+    [125_829_120, true],
+    [100 * 1024 * 1024, false],
   ] as Array<[number, boolean]>) {
     const harness = createHarness(t);
     await cleanRehearsal(harness);
@@ -1663,8 +1663,8 @@ test('stop_recording reports a proof video above the GitHub attachment limit', a
       assert.equal(warning, undefined);
       continue;
     }
-    assert.match(String(warning), /14680064 bytes/);
-    assert.match(String(warning), /10485760/);
+    assert.match(String(warning), /125829120 bytes/);
+    assert.match(String(warning), /104857600/);
   }
 });
 
