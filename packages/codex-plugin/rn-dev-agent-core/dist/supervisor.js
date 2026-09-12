@@ -64483,7 +64483,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 62;
+    HELPERS_VERSION = 63;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -67365,10 +67365,8 @@ var init_injected_helpers = __esm({
 
     try {
       if (action === 'press' && opts.walkUp === true) {
-        // GH #525 \u2014 nearest self-or-ancestor onPress within 8 fiber levels (one JSX wrapper is ~3 fibers under NativeWind CssInterop);
-        // candidates collapse only when they are the exact same fiber.
+        // 8 levels covers ~2 JSX wrappers: one wrapper is ~3 fibers under NativeWind CssInterop.
         var WALK_UP_MAX = 8;
-        // Host fibers carry a string type (e.g. 'RCTView') \u2014 same extraction as the ladder press path.
         var walkFiberName = function(f) {
           return (f && f.type && (typeof f.type === 'string'
             ? f.type
@@ -67389,8 +67387,18 @@ var init_injected_helpers = __esm({
           }
           return false;
         };
-        // RN forwards testID and onPress down one element's composite/host stack; those fibers are
-        // the same logical target, so they collapse onto the outermost the way a direct press fires it.
+        var walkInertView = function(f) {
+          if (f.type !== 'RCTView') return false;
+          var p = f.memoizedProps || {};
+          if (p.accessible === true || p.focusable === true || (p.accessibilityRole && p.accessibilityRole !== 'none')
+            || (p.role && p.role !== 'none' && p.role !== 'presentation')) return false;
+          var keys = Object.keys(p);
+          for (var ki = 0; ki < keys.length; ki++) {
+            if (/^on(Press|LongPress|Click|DoubleClick|Touch|Responder|.*ShouldSetResponder|Pointer|Key|Accessibility|MagicTap)/.test(keys[ki])
+              && p[keys[ki]] != null) return false;
+          }
+          return true;
+        };
         var walkForwarded = function(a, b) {
           var ap = a.memoizedProps, bp = b.memoizedProps;
           if (!ap || !bp) return false;
@@ -67400,6 +67408,7 @@ var init_injected_helpers = __esm({
         };
         var walkSources = walkUpMatches.length > 0 ? walkUpMatches : [found];
         var walkCandidates = [];
+        var walkOriginalCandidates = [];
         for (var wi = 0; wi < walkSources.length; wi++) {
           var walkNode = walkSources[wi];
           var walkHops = 0;
@@ -67410,6 +67419,7 @@ var init_injected_helpers = __esm({
             walkHops++;
           }
           if (!walkNode || walkHops > WALK_UP_MAX) continue;
+          walkOriginalCandidates.push({ fiber: walkNode, hops: walkHops, source: walkSources[wi] });
           var existing = null;
           for (var wj = 0; wj < walkCandidates.length; wj++) {
             if (walkCandidates[wj].fiber === walkNode || walkForwarded(walkCandidates[wj].fiber, walkNode)) {
@@ -67426,6 +67436,52 @@ var init_injected_helpers = __esm({
         }
         if (walkCandidates.length === 0) {
           return JSON.stringify({ error: 'Component has no onPress handler', component: walkFiberName(found), testID: selector, walkUpSearched: WALK_UP_MAX });
+        }
+        var walkSingleHostTarget = function() {
+          if (!opts.testID || findCycleDetected) return null;
+          var hosts = new Set();
+          for (var si = 0; si < walkSources.length; si++) {
+            if (walkSources[si].tag === 5) hosts.add(walkSources[si]);
+          }
+          if (hosts.size !== 1) return null;
+          var host = hosts.values().next().value;
+          var lineage = [];
+          var seen = new WeakSet();
+          var node = host;
+          while (node && lineage.length < 1000) {
+            if (seen.has(node)) return null;
+            seen.add(node);
+            lineage.push(node);
+            node = node.return;
+          }
+          if (node) return null;
+          var lineageIndex = function(f) {
+            for (var li = 0; li < lineage.length; li++) {
+              if (sameFiber(f, lineage[li])) return li;
+            }
+            return -1;
+          };
+          for (var si = 0; si < walkSources.length; si++) {
+            if (lineageIndex(walkSources[si]) < 0) return null;
+          }
+          var hostTarget = null;
+          var outermost = 0;
+          for (var ci = 0; ci < walkOriginalCandidates.length; ci++) {
+            var candidate = walkOriginalCandidates[ci];
+            var candidateIndex = lineageIndex(candidate.fiber);
+            if (candidateIndex < 0 || candidate.fiber.memoizedProps.testID !== selector) return null;
+            outermost = Math.max(outermost, candidateIndex);
+            if (candidate.source === host) hostTarget = candidate;
+          }
+          if (!hostTarget) return null;
+          for (var li = 1; li <= outermost; li++) {
+            if (lineage[li].tag === 5 && !walkInertView(lineage[li])) return null;
+          }
+          return hostTarget;
+        };
+        if (walkCandidates.length > 1) {
+          var witnessedTarget = walkSingleHostTarget();
+          if (witnessedTarget) walkCandidates = [witnessedTarget];
         }
         if (walkCandidates.length > 1) {
           var walkDescriptors = [];
@@ -68730,6 +68786,11 @@ var init_injected_helpers = __esm({
     return { eligible: true };
   }
 
+  // React return chains may thread through either half of a fiber/alternate pair.
+  function sameFiber(a, b) {
+    return !!a && !!b && (a === b || a.alternate === b || b.alternate === a);
+  }
+
   function isTestIdFrontmost(testID) {
     if (typeof testID !== 'string' || !testID) {
       return JSON.stringify({ visible: false, reason: 'testID is required' });
@@ -68773,12 +68834,10 @@ var init_injected_helpers = __esm({
       });
     }
     function containsFiber(ancestor, candidate) {
-      // React return chains may thread through either half of a fiber/alternate pair.
-      var ancestorAlternate = ancestor.alternate || null;
       var current = candidate;
       var guard = 0;
       while (current && guard++ < 1000) {
-        if (current === ancestor || current === ancestorAlternate) return true;
+        if (sameFiber(current, ancestor)) return true;
         current = current.return;
       }
       return false;
