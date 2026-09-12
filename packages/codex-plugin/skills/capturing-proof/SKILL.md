@@ -231,7 +231,9 @@ Create `docs/proof/<slug>/PROOF.md` with the standard format:
 - Date, device info, method
 - Flow table with step/screenshot/action/verification columns
 - Key state snapshots
-- Deviations section
+- Deviations section — record any `proof_step` warning here, including a
+  proof video's measured fps when 30 fps cadence smoothing was skipped;
+  `rn-generate-pr-body` copies this section into PR-BODY.md
 
 ### Step 8: Generate PR body
 

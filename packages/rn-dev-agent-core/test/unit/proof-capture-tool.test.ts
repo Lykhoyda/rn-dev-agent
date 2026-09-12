@@ -407,6 +407,7 @@ function successfulMedia(args = beginArgs()): Extract<MediaValidationResult, { o
   const timestamps = [1_000, 5_000, 9_000, 13_000];
   return {
     ok: true,
+    avgFrameRate: 30,
     video: {
       path: args.videoPath,
       sha256: HASH('video'),
@@ -1634,6 +1635,34 @@ test('recorded evidence timestamps begin when the recorder is ready', async (t) 
     .evidenceDraft;
 
   assert.equal(evidence[0]!.timestampMs, 1_000);
+});
+
+test('a sparse-cadence proof is accepted with a warning and keeps every artifact', async (t) => {
+  const harness = createHarness(t);
+  harness.setMedia({ ...successfulMedia(), avgFrameRate: 27 / 125 });
+  await stoppedCapture(harness);
+  const removedBeforeValidate = harness.removed.length;
+
+  const result = await harness.handler({ action: 'validate' });
+  const parsed = envelope(result);
+
+  assert.equal(parsed.ok, true, result.content[0]!.text);
+  assert.equal((parsed.data as { stage: string }).stage, 'mechanically_accepted');
+  assert.equal(harness.removed.length, removedBeforeValidate);
+  const warning = (parsed.meta as { warning?: string } | undefined)?.warning;
+  assert.match(String(warning), /0\.22 fps/);
+  assert.match(String(warning), /smoothing was skipped/);
+  assert.match(String(warning), /kept/);
+});
+
+test('a normal-cadence proof validates without a cadence warning', async (t) => {
+  const harness = createHarness(t);
+  await stoppedCapture(harness);
+
+  const parsed = envelope(await harness.handler({ action: 'validate' }));
+
+  assert.equal(parsed.ok, true);
+  assert.equal((parsed.meta as { warning?: string } | undefined)?.warning, undefined);
 });
 
 test('stop_recording reports a recording whose cadence could not be normalized', async (t) => {

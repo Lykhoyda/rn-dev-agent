@@ -24,7 +24,6 @@ export const mediaReasonCodes = [
   'VIDEO_METADATA_INVALID',
   'VIDEO_TOO_SHORT',
   'VIDEO_TOO_LONG',
-  'VIDEO_CADENCE_TOO_SPARSE',
   'SCREENSHOT_MISSING',
   'SCREENSHOT_EMPTY',
   'FRAME_PROCESS_FAILED',
@@ -39,6 +38,11 @@ export const mediaReasonCodes = [
 export type MediaReasonCode = (typeof mediaReasonCodes)[number];
 
 export const MINIMUM_PROOF_FRAME_RATE = 10;
+
+export function sparseCadenceWarning(avgFrameRate: number | null): string | null {
+  if (avgFrameRate === null || avgFrameRate >= MINIMUM_PROOF_FRAME_RATE) return null;
+  return `Proof video averages ${avgFrameRate.toFixed(2)} fps, below the ${MINIMUM_PROOF_FRAME_RATE} fps expected of smooth playback: 30 fps cadence smoothing was skipped, so it may play as a slideshow. The capture is kept — record this under Deviations in PROOF.md.`;
+}
 
 export interface MediaMilestoneScreenshot {
   stepId: string;
@@ -59,6 +63,7 @@ export type MediaValidationResult =
   | {
       ok: true;
       video: ProofVideo;
+      avgFrameRate: number | null;
       screenshots: ProofScreenshot[];
       frameMatches: ProofFrameMatch[];
       contactSheet: ProofContactSheet;
@@ -458,9 +463,6 @@ export async function validateMedia(
     const bounds = durationBounds(input.rehearsalDurationMs);
     if (probedVideo.durationMs < bounds.minimumMs) fail('VIDEO_TOO_SHORT');
     if (probedVideo.durationMs > bounds.hardMaximumMs) fail('VIDEO_TOO_LONG');
-    if (avgFrameRate !== null && avgFrameRate < MINIMUM_PROOF_FRAME_RATE) {
-      fail('VIDEO_CADENCE_TOO_SPARSE');
-    }
 
     const scratchRoot = input.scratchRoot ?? tmpdir();
     try {
@@ -502,7 +504,7 @@ export async function validateMedia(
       ...probedVideo,
       durationToleranceUsed: probedVideo.durationMs > bounds.targetMaximumMs,
     };
-    return { ok: true, video, screenshots, frameMatches, contactSheet };
+    return { ok: true, video, avgFrameRate, screenshots, frameMatches, contactSheet };
   } catch (error) {
     const reason = error instanceof MediaFailure ? error.reason : 'MEDIA_IO_FAILED';
     return { ok: false, reasons: [reason] };
