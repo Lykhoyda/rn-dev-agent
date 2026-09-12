@@ -13866,6 +13866,54 @@ var init_expo_android_device = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/dev-client-onboarding.js
+function autoHidesDevMenu(platform, deviceId, setting = { simulators: true, devices: true }) {
+  return platform === "ios" || /^emulator-\d+$/.test(deviceId) ? setting.simulators : setting.devices;
+}
+function iosSimulatorDevMenuDefaultsArgs(deviceId, appId) {
+  return [
+    ["EXDevMenuShowsAtLaunch", "NO"],
+    ["EXDevMenuIsOnboardingFinished", "YES"]
+  ].map(([key, value]) => [
+    "simctl",
+    "spawn",
+    deviceId,
+    "defaults",
+    "write",
+    appId,
+    key,
+    "-bool",
+    value
+  ]);
+}
+function withDevMenuOnboardingDisabled(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  const inner = parsed.host === DEV_CLIENT_HOST ? parsed.searchParams.get("url") : null;
+  if (inner !== null) {
+    parsed.searchParams.set("url", withDevMenuOnboardingDisabled(inner));
+  } else {
+    parsed.searchParams.set("disableOnboarding", "1");
+  }
+  return parsed.toString();
+}
+var DEV_CLIENT_HOST, DEV_MENU_NO_AUTO_LAUNCH_EXTRAS;
+var init_dev_client_onboarding = __esm({
+  "packages/rn-dev-agent-core/dist/session/dev-client-onboarding.js"() {
+    "use strict";
+    DEV_CLIENT_HOST = "expo-development-client";
+    DEV_MENU_NO_AUTO_LAUNCH_EXTRAS = [
+      "--ez",
+      "EXDevMenuDisableAutoLaunch",
+      "true"
+    ];
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/build-adapter.js
 function conflict(flag) {
   throw new Error(`SESSION_BUILD_IDENTITY_CONFLICT: ${flag} contradicts the active session`);
@@ -13962,6 +14010,23 @@ function commandKind(command) {
     return "bare-android";
   return null;
 }
+function simulatorPostInstall(session2, appId, hideDevMenu) {
+  const proxyUrl = managedMetroProxyUrl(session2);
+  return {
+    before: hideDevMenu ? iosSimulatorDevMenuDefaultsArgs(session2.deviceId, appId).map((args) => ["xcrun", ...args]) : [],
+    command: [
+      "xcrun",
+      "simctl",
+      "launch",
+      "--terminate-running-process",
+      session2.deviceId,
+      appId,
+      "--initialUrl",
+      hideDevMenu ? withDevMenuOnboardingDisabled(proxyUrl) : proxyUrl
+    ],
+    timeoutMs: 3e4
+  };
+}
 function createBuildLaunchPlan(input) {
   const command = [...input.command];
   if (!input.session)
@@ -14007,19 +14072,7 @@ function createBuildLaunchPlan(input) {
     ...kind === "expo" && input.platform === "android" ? { ANDROID_SERIAL: input.session.deviceId } : {},
     ...kind === "expo" ? { EXPO_PACKAGER_PROXY_URL: managedMetroProxyUrl(input.session) } : {}
   };
-  const postInstall = kind === "expo" && input.platform === "ios" && input.session.simulator === true ? {
-    command: [
-      "xcrun",
-      "simctl",
-      "launch",
-      "--terminate-running-process",
-      input.session.deviceId,
-      input.session.appId ?? conflict("appId is required for simulator Dev Client startup"),
-      "--initialUrl",
-      managedMetroProxyUrl(input.session)
-    ],
-    timeoutMs: 3e4
-  } : void 0;
+  const postInstall = kind === "expo" && input.platform === "ios" && input.session.simulator === true ? simulatorPostInstall(input.session, input.session.appId ?? conflict("appId is required for simulator Dev Client startup"), autoHidesDevMenu("ios", input.session.deviceId, input.autoHideDevMenu)) : void 0;
   return {
     mode: "session",
     command,
@@ -14031,6 +14084,7 @@ var init_build_adapter = __esm({
   "packages/rn-dev-agent-core/dist/session/build-adapter.js"() {
     "use strict";
     init_expo_android_device();
+    init_dev_client_onboarding();
   }
 });
 
@@ -16325,6 +16379,23 @@ function resolveAutoConnect(deps = {}) {
   }
   return { enabled: true, source: "default" };
 }
+function resolveAutoHideDevMenu(deps = {}) {
+  const raw = (deps.readConfig ?? readRnAgentConfig)()?.autoHideDevMenu;
+  if (typeof raw === "boolean")
+    return { simulators: raw, devices: raw, source: "config" };
+  if (isPlainConfigObject(raw) && [raw.simulators, raw.devices].every((flag) => flag === void 0 || typeof flag === "boolean")) {
+    return {
+      simulators: raw.simulators !== false,
+      devices: raw.devices !== false,
+      source: "config"
+    };
+  }
+  if (raw !== void 0 && !warnedBadAutoHideDevMenu) {
+    warnedBadAutoHideDevMenu = true;
+    logger.warn("CONFIG", `.rn-agent/config.json autoHideDevMenu must be a boolean or { simulators, devices } booleans (got ${JSON.stringify(raw)}) \u2014 using the default (hidden)`);
+  }
+  return { simulators: true, devices: true, source: "default" };
+}
 function parsePort(raw) {
   if (!raw)
     return void 0;
@@ -16376,7 +16447,10 @@ function resolveMirrorConfig(deps = {}) {
     return { enabled: cfgEnabled, fps, firstFrameTimeoutMs, source: "config" };
   return { enabled: true, fps, firstFrameTimeoutMs, source: "default" };
 }
-var warnedBadConfig, DEFAULT_OBSERVE_PORT, DEFAULT_MIRROR_FPS, MIRROR_FPS_MIN, MIRROR_FPS_MAX, MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS, SESSION_CLI_TIMEOUT_MS;
+function isPlainConfigObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+var warnedBadConfig, warnedBadAutoHideDevMenu, DEFAULT_OBSERVE_PORT, DEFAULT_MIRROR_FPS, MIRROR_FPS_MIN, MIRROR_FPS_MAX, MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS, SESSION_CLI_TIMEOUT_MS;
 var init_project_config = __esm({
   "packages/rn-dev-agent-core/dist/project-config.js"() {
     "use strict";
@@ -16384,6 +16458,7 @@ var init_project_config = __esm({
     init_logger();
     init_sources();
     warnedBadConfig = false;
+    warnedBadAutoHideDevMenu = false;
     DEFAULT_OBSERVE_PORT = 7333;
     DEFAULT_MIRROR_FPS = 20;
     MIRROR_FPS_MIN = 5;
@@ -20021,6 +20096,33 @@ function authorityBoundReverseTunnel(binding) {
     && reverse.local === exact
     && reverse.remote === exact;
 }
+function withDevMenuOnboardingDisabled(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  const inner = parsed.host === 'expo-development-client' ? parsed.searchParams.get('url') : null;
+  if (inner !== null) {
+    parsed.searchParams.set('url', withDevMenuOnboardingDisabled(inner));
+  } else {
+    parsed.searchParams.set('disableOnboarding', '1');
+  }
+  return parsed.toString();
+}
+function autoHideDevMenuOnSimulators() {
+  let setting;
+  try {
+    setting = JSON.parse(fs.readFileSync(path.join(process.cwd(), '.rn-agent', 'config.json'), 'utf8')).autoHideDevMenu;
+  } catch {
+    return true;
+  }
+  if (typeof setting === 'boolean') return setting;
+  const valid = setting !== null && typeof setting === 'object' && !Array.isArray(setting)
+    && [setting.simulators, setting.devices].every((flag) => flag === undefined || typeof flag === 'boolean');
+  return !valid || setting.simulators !== false;
+}
 function managedMetroProxyUrl(binding) {
   if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
   if (/^emulator-\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
@@ -20196,9 +20298,23 @@ function managedMetroProxyUrl(binding) {
     if (installed.error || installed.status !== 0 || !String(installed.stdout).trim()) {
       failBuild(2, 'DEV_CLIENT_STARTUP_UNCONFIRMED: exact simulator app installation could not be proven');
     }
+    const hideDevMenu = autoHideDevMenuOnSimulators();
+    const launchUrl = hideDevMenu ? withDevMenuOnboardingDisabled(expoProxyUrl) : expoProxyUrl;
+    for (const [key, value] of hideDevMenu ? [['EXDevMenuShowsAtLaunch', 'NO'], ['EXDevMenuIsOnboardingFinished', 'YES']] : []) {
+      const written = spawnSync('xcrun', ['simctl', 'spawn', session.deviceId, 'defaults', 'write', session.appId, key, '-bool', value], {
+        cwd: process.cwd(),
+        env: authorityEnvironment,
+        encoding: 'utf8',
+        timeout: 30_000,
+      });
+      if (written.error || written.status !== 0) {
+        const detail = written.error?.message || String(written.stderr).trim() || 'defaults write failed';
+        failBuild(2, 'DEV_CLIENT_STARTUP_UNCONFIRMED: dev-menu defaults for ' + key + ' could not be written: ' + detail);
+      }
+    }
     process.stdout.write(
       'rn-session-adapter: starting ' + session.appId + ' on simulator ' + session.deviceId +
-      ' with --initialUrl ' + expoProxyUrl + '\n'
+      ' with --initialUrl ' + launchUrl + '\n'
     );
     const startup = spawnSync('xcrun', [
       'simctl',
@@ -20207,7 +20323,7 @@ function managedMetroProxyUrl(binding) {
       session.deviceId,
       session.appId,
       '--initialUrl',
-      expoProxyUrl,
+      launchUrl,
     ], {
       cwd: process.cwd(),
       env: authorityEnvironment,
@@ -89248,7 +89364,7 @@ async function openIosDeeplink(url, deviceId) {
 function posixSingleQuote2(s) {
   return `'${s.replace(/'/g, "'\\''")}'`;
 }
-function androidDeeplinkCommandArgs(url, packageName, deviceId) {
+function androidDeeplinkCommandArgs(url, packageName, deviceId, extras = []) {
   if (!deviceId)
     throw new Error("DEVICE_AUTHORITY_MISMATCH: exact Android deviceId is required");
   const serial = ["-s", deviceId];
@@ -89261,7 +89377,8 @@ function androidDeeplinkCommandArgs(url, packageName, deviceId) {
     "-a",
     "android.intent.action.VIEW",
     "-d",
-    quotedUrl
+    quotedUrl,
+    ...extras
   ];
   if (packageName)
     args.push("-n", packageName);
@@ -97649,16 +97766,18 @@ async function pinExactDevClient(input, dependencies) {
   if (!Number.isSafeInteger(input.metroPort) || input.metroPort < 1 || input.metroPort > 65535) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: authority-bound Metro port is unavailable");
   }
-  const derivedIosExpoLaunchTarget = input.platform === "ios" && input.runtimeKind === "expo-dev-client" ? managedMetroProxyUrl(input) : void 0;
+  const hideDevMenu = autoHidesDevMenu(input.platform, input.deviceId, input.autoHideDevMenu);
+  const launchUrl = (url) => hideDevMenu ? withDevMenuOnboardingDisabled(url) : url;
+  const derivedIosExpoLaunchTarget = input.platform === "ios" && input.runtimeKind === "expo-dev-client" ? launchUrl(managedMetroProxyUrl(input)) : void 0;
   if (input.runtimeKind === "bare-react-native" && input.devClientUrl) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: launch kind contradicts the signed build provenance");
   }
   if (input.devClientUrl) {
-    await dependencies.openUrl(input.platform, input.deviceId, input.devClientUrl, input.appId);
+    await dependencies.openUrl(input.platform, input.deviceId, launchUrl(input.devClientUrl), input.appId, hideDevMenu);
     if (input.platform === "ios")
       await dependencies.acceptIosOpenDialog(input.deviceId);
   } else if (derivedIosExpoLaunchTarget) {
-    await dependencies.launchExactAppWithInitialUrl(input.deviceId, input.appId, derivedIosExpoLaunchTarget);
+    await dependencies.launchExactAppWithInitialUrl(input.deviceId, input.appId, derivedIosExpoLaunchTarget, hideDevMenu);
   } else {
     await dependencies.launchExactApp(input.platform, input.deviceId, input.appId);
   }
@@ -97728,6 +97847,7 @@ var init_dev_client_authority = __esm({
   "packages/rn-dev-agent-core/dist/session/dev-client-authority.js"() {
     "use strict";
     init_build_adapter();
+    init_dev_client_onboarding();
     init_metro_authority();
   }
 });
@@ -98196,13 +98316,16 @@ async function pinSessionDevClient(status, options, commitBundle) {
       metroPort: metro.port,
       runtimeKind,
       ...devClientUrl ? { devClientUrl } : {},
-      signerCapability: secret.signerCapability
+      signerCapability: secret.signerCapability,
+      autoHideDevMenu: sessionAutoHideDevMenu(status)
     }, {
-      openUrl: async (platform, deviceId, url) => {
+      openUrl: async (platform, deviceId, url, appId, hideDevMenu) => {
         if (platform === "ios") {
+          if (hideDevMenu)
+            await writeIosSimulatorDevMenuDefaults(deviceId, appId);
           await execFileP("xcrun", ["simctl", "openurl", deviceId, url]);
         } else {
-          await execFileP("adb", androidDeeplinkCommandArgs(url, void 0, deviceId));
+          await execFileP("adb", androidDeeplinkCommandArgs(url, void 0, deviceId, hideDevMenu ? DEV_MENU_NO_AUTO_LAUNCH_EXTRAS : []));
         }
       },
       launchExactApp: async (platform, deviceId, appId) => {
@@ -98224,7 +98347,9 @@ async function pinSessionDevClient(status, options, commitBundle) {
           ]);
         }
       },
-      launchExactAppWithInitialUrl: async (deviceId, appId, initialUrl) => {
+      launchExactAppWithInitialUrl: async (deviceId, appId, initialUrl, hideDevMenu) => {
+        if (hideDevMenu)
+          await writeIosSimulatorDevMenuDefaults(deviceId, appId);
         await execFileP("xcrun", [
           "simctl",
           "launch",
@@ -98363,12 +98488,26 @@ async function reconnectSessionRuntime(status, options) {
   const connection = await awaitWithSignal2(connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, readinessTimeoutMs));
   return stageAndroidRuntimeConnection(connection);
 }
+function sessionAutoHideDevMenu(status) {
+  return resolveAutoHideDevMenu({
+    readConfig: () => readRnAgentConfig(String(status.source.appRoot))
+  });
+}
+async function writeIosSimulatorDevMenuDefaults(deviceId, appId) {
+  for (const args of iosSimulatorDevMenuDefaultsArgs(deviceId, appId)) {
+    await execFileP("xcrun", args);
+  }
+}
 async function relaunchSessionRuntime(status, stopApp = true) {
   const { platform, deviceId, appId, metroPort, devClientUrl: boundDevClientUrl } = resolveManagedRuntimeLaunchBinding(status);
+  const hideDevMenu = autoHidesDevMenu(platform, deviceId, sessionAutoHideDevMenu(status));
+  const launchUrl = (url) => hideDevMenu ? withDevMenuOnboardingDisabled(url) : url;
   if (platform === "ios") {
     const current = getClient();
     await current.disconnect();
     setClient(createClient(metroPort));
+    if (hideDevMenu)
+      await writeIosSimulatorDevMenuDefaults(deviceId, appId);
     await execFileP("xcrun", [
       "simctl",
       "launch",
@@ -98376,7 +98515,7 @@ async function relaunchSessionRuntime(status, stopApp = true) {
       deviceId,
       appId,
       "--initialUrl",
-      `http://127.0.0.1:${String(metroPort)}`
+      launchUrl(`http://127.0.0.1:${String(metroPort)}`)
     ]);
     await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
     return;
@@ -98385,7 +98524,7 @@ async function relaunchSessionRuntime(status, stopApp = true) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL");
   }
   await execFileP("adb", [
-    ...androidDeeplinkCommandArgs(boundDevClientUrl, void 0, deviceId),
+    ...androidDeeplinkCommandArgs(launchUrl(boundDevClientUrl), void 0, deviceId, hideDevMenu ? DEV_MENU_NO_AUTO_LAUNCH_EXTRAS : []),
     "-p",
     appId
   ]);
@@ -98663,6 +98802,7 @@ var init_index = __esm({
     init_device_session();
     init_device_session();
     init_session_runtime_absence();
+    init_dev_client_onboarding();
     init_device_interact();
     init_ios_runtime();
     init_ios_proof_router();
@@ -99455,7 +99595,7 @@ var init_index = __esm({
       type: external_exports.enum(["string", "number", "boolean"]).optional().describe("Value type for get/set (default: string)"),
       instanceId: external_exports.string().optional().describe('MMKV instance id (default: "mmkv.default")')
     }, createMmkvHandler(getClient));
-    trackedTool("cdp_dev_settings", "Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu calls ExpoDevMenu hideMenu or closeMenu over CDP on iOS or Android, with at most one retry and a five-second bound per attempt; it verifies the foreground surface and returns hidden, no_menu_present, DEV_MENU_HIDE_FAILED when no close call was sent, or DEV_MENU_HIDE_UNVERIFIED when a sent call is not proven clean. For reload with auto-reconnect, use cdp_reload instead.", {
+    trackedTool("cdp_dev_settings", "Control React Native dev settings programmatically (no visual dev menu needed). dismissRedBox clears LogBox overlays and RedBox errors via a 4-tier fallback chain. disableDevMenu suppresses the React Native core dev menu gesture. hideDevMenu calls ExpoDevMenu hideMenu or closeMenu over CDP on iOS or Android, with at most one retry and a five-second bound per attempt; it verifies the foreground surface and returns hidden, no_menu_present, DEV_MENU_HIDE_FAILED when no close call was sent, or DEV_MENU_HIDE_UNVERIFIED when a sent call is not proven clean. With autoHideDevMenu on (default in .rn-agent/config.json), managed launches and relaunches suppress the Expo dev-menu onboarding tutorial and launch-time menu sheet, so hideDevMenu is for gesture-opened menus. For reload with auto-reconnect, use cdp_reload instead.", {
       action: external_exports.enum([
         "reload",
         "toggleInspector",

@@ -78,7 +78,7 @@ test('repaired build plan passes the shipped Expo CLI resolution with managed au
     assert.equal(plan.env.EXPO_PACKAGER_PROXY_URL, 'http://127.0.0.1:8248');
     assert.deepEqual(plan.postInstall?.command.slice(-2), [
       '--initialUrl',
-      'http://127.0.0.1:8248',
+      'http://127.0.0.1:8248/?disableOnboarding=1',
     ]);
   }
 });
@@ -145,7 +145,7 @@ test('generated adapter argv passes the shipped Expo CLI resolution end to end',
     chmodSync(join(binRoot, 'npx'), 0o755);
     writeFileSync(
       join(binRoot, 'xcrun'),
-      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='simctl'&&args[1]==='get_app_container'){process.stdout.write('/tmp/exact.app\\n');process.exit(0);}if(args[0]==='simctl'&&args[1]==='launch'){fs.writeFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args));process.exit(0);}process.exit(12);\n",
+      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='simctl'&&args[1]==='get_app_container'){process.stdout.write('/tmp/exact.app\\n');process.exit(0);}if(args[0]==='simctl'&&args[1]==='spawn'&&args[3]==='defaults'){process.exit(0);}if(args[0]==='simctl'&&args[1]==='launch'){fs.writeFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args));process.exit(0);}process.exit(12);\n",
     );
     chmodSync(join(binRoot, 'xcrun'), 0o755);
     writeFileSync(
@@ -176,7 +176,7 @@ test('generated adapter argv passes the shipped Expo CLI resolution end to end',
       'F66756F3-A867-47EB-97E1-2B85D1902D4E',
       'com.rndevagent.testapp',
       '--initialUrl',
-      'http://127.0.0.1:8248',
+      'http://127.0.0.1:8248/?disableOnboarding=1',
     ]);
   } finally {
     rmSync(root, { force: true, recursive: true });

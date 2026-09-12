@@ -25,6 +25,29 @@ test('device_deeplink command builders honor an explicit target', () => {
     '-d',
     "'proof://fixture'",
   ]);
+  assert.deepEqual(
+    androidDeeplinkCommandArgs('proof://fixture', 'dev.example', 'emulator-5556', [
+      '--ez',
+      'EXDevMenuDisableAutoLaunch',
+      'true',
+    ]),
+    [
+      '-s',
+      'emulator-5556',
+      'shell',
+      'am',
+      'start',
+      '-a',
+      'android.intent.action.VIEW',
+      '-d',
+      "'proof://fixture'",
+      '--ez',
+      'EXDevMenuDisableAutoLaunch',
+      'true',
+      '-n',
+      'dev.example',
+    ],
+  );
 });
 
 test('device_deeplink exposes explicit simulator or device selection through MCP', async () => {

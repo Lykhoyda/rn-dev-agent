@@ -630,7 +630,7 @@ async function writeMarker(buildGeneration) {
       assert.match(
         nativeOutput,
         new RegExp(
-          `starting ${appId} on simulator ${simulatorId} with --initialUrl http://127\\.0\\.0\\.1:${port}`,
+          `starting ${appId} on simulator ${simulatorId} with --initialUrl http://127\\.0\\.0\\.1:${port}/\\?disableOnboarding=1`,
         ),
       );
 

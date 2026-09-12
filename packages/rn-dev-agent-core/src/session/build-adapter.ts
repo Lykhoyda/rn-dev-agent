@@ -4,6 +4,11 @@ import {
   resolveExpoAndroidDevice,
   type ExpoAndroidDeviceBinding,
 } from './expo-android-device.js';
+import {
+  autoHidesDevMenu,
+  iosSimulatorDevMenuDefaultsArgs,
+  withDevMenuOnboardingDisabled,
+} from './dev-client-onboarding.js';
 
 export interface SessionBuildBinding {
   platform: 'ios' | 'android';
@@ -20,6 +25,7 @@ interface BuildLaunchPlan {
   command: string[];
   env: Record<string, string>;
   postInstall?: {
+    before: string[][];
     command: string[];
     timeoutMs: number;
   };
@@ -133,11 +139,36 @@ function commandKind(command: readonly string[]): 'expo' | 'bare-ios' | 'bare-an
   return null;
 }
 
+function simulatorPostInstall(
+  session: SessionBuildBinding,
+  appId: string,
+  hideDevMenu: boolean,
+): NonNullable<BuildLaunchPlan['postInstall']> {
+  const proxyUrl = managedMetroProxyUrl(session);
+  return {
+    before: hideDevMenu
+      ? iosSimulatorDevMenuDefaultsArgs(session.deviceId, appId).map((args) => ['xcrun', ...args])
+      : [],
+    command: [
+      'xcrun',
+      'simctl',
+      'launch',
+      '--terminate-running-process',
+      session.deviceId,
+      appId,
+      '--initialUrl',
+      hideDevMenu ? withDevMenuOnboardingDisabled(proxyUrl) : proxyUrl,
+    ],
+    timeoutMs: 30_000,
+  };
+}
+
 export function createBuildLaunchPlan(input: {
   platform: 'ios' | 'android';
   command: readonly string[];
   session: SessionBuildBinding | null;
   resolveExpoAndroidDevice?: (serial: string) => ExpoAndroidDeviceBinding;
+  autoHideDevMenu?: { simulators: boolean; devices: boolean };
 }): BuildLaunchPlan {
   const command = [...input.command];
   if (!input.session) return { mode: 'passthrough', command, env: {} };
@@ -193,19 +224,11 @@ export function createBuildLaunchPlan(input: {
   };
   const postInstall =
     kind === 'expo' && input.platform === 'ios' && input.session.simulator === true
-      ? {
-          command: [
-            'xcrun',
-            'simctl',
-            'launch',
-            '--terminate-running-process',
-            input.session.deviceId,
-            input.session.appId ?? conflict('appId is required for simulator Dev Client startup'),
-            '--initialUrl',
-            managedMetroProxyUrl(input.session),
-          ],
-          timeoutMs: 30_000,
-        }
+      ? simulatorPostInstall(
+          input.session,
+          input.session.appId ?? conflict('appId is required for simulator Dev Client startup'),
+          autoHidesDevMenu('ios', input.session.deviceId, input.autoHideDevMenu),
+        )
       : undefined;
 
   return {

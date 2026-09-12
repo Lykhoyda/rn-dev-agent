@@ -93,6 +93,7 @@ export function readExpoSlug(): string | null {
 }
 
 export interface RnAgentConfig {
+  autoHideDevMenu?: boolean | { simulators?: boolean; devices?: boolean };
   cdp?: { autoConnect?: boolean };
   observe?: {
     autoStart?: boolean;
@@ -144,6 +145,39 @@ export function resolveAutoConnect(
     return { enabled: cfg.cdp.autoConnect, source: 'config' };
   }
   return { enabled: true, source: 'default' };
+}
+
+export interface AutoHideDevMenuResolution {
+  simulators: boolean;
+  devices: boolean;
+  source: 'config' | 'default';
+}
+
+let warnedBadAutoHideDevMenu = false;
+
+export function resolveAutoHideDevMenu(
+  deps: { readConfig?: () => RnAgentConfig | null } = {},
+): AutoHideDevMenuResolution {
+  const raw: unknown = (deps.readConfig ?? readRnAgentConfig)()?.autoHideDevMenu;
+  if (typeof raw === 'boolean') return { simulators: raw, devices: raw, source: 'config' };
+  if (
+    isPlainConfigObject(raw) &&
+    [raw.simulators, raw.devices].every((flag) => flag === undefined || typeof flag === 'boolean')
+  ) {
+    return {
+      simulators: raw.simulators !== false,
+      devices: raw.devices !== false,
+      source: 'config',
+    };
+  }
+  if (raw !== undefined && !warnedBadAutoHideDevMenu) {
+    warnedBadAutoHideDevMenu = true;
+    logger.warn(
+      'CONFIG',
+      `.rn-agent/config.json autoHideDevMenu must be a boolean or { simulators, devices } booleans (got ${JSON.stringify(raw)}) — using the default (hidden)`,
+    );
+  }
+  return { simulators: true, devices: true, source: 'default' };
 }
 
 /**

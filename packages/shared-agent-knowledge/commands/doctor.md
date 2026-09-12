@@ -36,6 +36,8 @@ because mirroring has a screenshot fallback.
 For runner provenance, inspect the runner artifact/state metadata documented by
 `rn-setup`. For helpers, use a narrow gated CDP read. For CDP auto-reconnect,
 resolve `RN_CDP_AUTOCONNECT` over `.rn-agent/config.json`, then the default.
+In the same row, print the resolved `autoHideDevMenu` (`simulators`, `devices`,
+source `config` or `default`, default hidden on both), read-only.
 
 For plugin-version or Vercel-rule drift, report the documented command but do
 not execute it. Offline version checks do not fail the plugin.

@@ -417,11 +417,15 @@ Use `cdp_reload` — triggers a full reload with automatic reconnect and target 
 navigation, take a fresh `device_snapshot`. If it reports
 `meta.foregroundSurface: "expo_dev_menu"`, call
 `cdp_dev_settings({ action: "hideDevMenu" })`, then take another fresh snapshot
-and require the app surface. This remedy is only for the Expo Developer Menu,
-not the React Native core dev menu, Expo `Development servers` picker, system
-dialogs, or app-owned native overlays. Follow `/rn-dev-agent:check-env` for
-their separate routes; never substitute coordinates, screen-wide label search,
-raw shell UI, or a generic native-window action.
+and require the app surface. With `autoHideDevMenu` on (the default in
+`.rn-agent/config.json`), every managed launch and relaunch already suppresses
+the Expo dev-menu onboarding tutorial and the launch-time menu sheet, so
+`hideDevMenu` is for gesture-opened menus. This remedy
+is only for the Expo Developer Menu, not the React Native core dev menu, Expo
+`Development servers` picker, system dialogs, or app-owned native overlays.
+Follow `/rn-dev-agent:check-env` for their separate routes; never substitute
+coordinates, screen-wide label search, raw shell UI, or a generic
+native-window action.
 
 #### "I need to manage device permissions"
 - **Query:** `device_permission(action="query", permission="notifications")`
@@ -604,6 +608,7 @@ the runner's settle engine.
 | Verifying against stale code with Metro running | `rn_session(action="status")`, then `cdp_status` | Session Metro or signed bundle does not match the worktree | Restart through the integrated package script and re-pin with `cdp_connect` |
 | `cdp_interact accessibilityLabel="..."` fails (label matching is fuzzy) | Prefer testID-keyed calls: `cdp_interact(testID="...")` or `device_batch` with `testID=` field. Fall back to `device_snapshot` + `device_press(ref="@eN")` only when no testID exists. | Label matching unreliable; testID matching is exact and fiber-tree-resolved | — |
 | "Disconnected due to opening a second DevTools window" / React Native DevTools keeps getting kicked | `RN_CDP_AUTOCONNECT` and `.rn-agent/config.json` | RN allows one debugger frontend per app; bridge auto-reconnects by default (agent-first) | Set `RN_CDP_AUTOCONNECT=0` or `.rn-agent/config.json` → `{ "cdp": { "autoConnect": false } }`. `cdp_status` stays passive; `cdp_connect` and gated CDP tools reclaim the authority-bound seat when needed. |
+| Expo dev-menu sheet or onboarding tutorial covers the app after a managed launch | `.rn-agent/config.json` → `autoHideDevMenu` | The setting is off for that target class (`simulators`: iOS simulators and Android emulators; `devices`: physical Android, a no-op on iPhones because no managed iOS device launch exists) | Remove the key or set `{ "autoHideDevMenu": true }` (or a per-target object such as `{ "autoHideDevMenu": { "simulators": true, "devices": false } }`), then relaunch through the managed path. `cdp_dev_settings(action="hideDevMenu")` closes a menu that is already open. |
 
 ### Authentication & Permission Pre-flight
 

@@ -42,6 +42,10 @@ Close React Native DevTools, Flipper, or Chrome DevTools — only one debugger c
 
 The bridge auto-reconnects by default and evicts the visual React Native DevTools from the single debugger seat. Set `RN_CDP_AUTOCONNECT=0` (or `.rn-agent/config.json` → `{ "cdp": { "autoConnect": false } }`) to let DevTools hold the seat — the bridge then connects only when a CDP tool runs. Full guide: [React Native DevTools coexistence](/rn-dev-agent/guides/devtools-coexistence/).
 
+### Expo dev-menu sheet or onboarding tutorial covers the app after a managed launch
+
+`autoHideDevMenu` in `.rn-agent/config.json` is off for that target class. It defaults to hidden on every target: managed launches add `disableOnboarding=1` to the launch URL, pass the Android `EXDevMenuDisableAutoLaunch` intent extra, and on iOS simulators persist `EXDevMenuShowsAtLaunch=NO` and `EXDevMenuIsOnboardingFinished=YES` before launching. Remove the key or set `{ "autoHideDevMenu": true }`, or a per-target object such as `{ "autoHideDevMenu": { "simulators": true, "devices": false } }` (`simulators`: iOS simulators and Android emulators; `devices`: physical Android, a no-op on iPhones). `cdp_dev_settings` with `hideDevMenu` closes a menu that is already open.
+
 ### CDP connection lost after reload
 
 This is normal. `cdp_reload` reconnects the authority-bound target within 15
