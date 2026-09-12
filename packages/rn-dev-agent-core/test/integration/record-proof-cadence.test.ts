@@ -211,16 +211,24 @@ test('a capture still becomes mp4 when cadence normalization cannot run', async 
   const realFfmpeg = (await run('bash', ['-c', 'command -v ffmpeg'])).stdout.trim();
 
   const scenarios = {
-    'no-ffprobe': await shimDir(join(root, 'no-ffprobe'), { ffprobe: 'exit 127' }),
-    'no-libx264': await shimDir(join(root, 'no-libx264'), {
-      ffmpeg: `for arg in "$@"; do [ "$arg" = libx264 ] && exit 1; done\nexec ${realFfmpeg} "$@"`,
-    }),
+    'no-ffprobe': {
+      dir: await shimDir(join(root, 'no-ffprobe'), { ffprobe: 'exit 127' }),
+      reason: /duration unreadable/,
+    },
+    'no-libx264': {
+      dir: await shimDir(join(root, 'no-libx264'), {
+        ffmpeg: `for arg in "$@"; do [ "$arg" = libx264 ] && exit 1; done\nexec ${realFfmpeg} "$@"`,
+      }),
+      reason: /re-encode failed/,
+    },
   };
 
-  for (const [name, dir] of Object.entries(scenarios)) {
+  for (const [name, { dir, reason }] of Object.entries(scenarios)) {
     const output = join(root, `proof-${name}.mp4`);
-    const { stderr } = await finalize(input, output, dir);
+    const { stdout, stderr } = await finalize(input, output, dir);
 
+    assert.match(stdout, /^Cadence normalization skipped: .+$/m);
+    assert.match(stdout, reason);
     assert.match(stderr, /cadence normalization unavailable/);
     const remuxed = await probe(output);
     assert.equal(remuxed.codec_name, 'h264');

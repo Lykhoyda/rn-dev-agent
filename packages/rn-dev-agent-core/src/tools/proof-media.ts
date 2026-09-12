@@ -24,6 +24,7 @@ export const mediaReasonCodes = [
   'VIDEO_METADATA_INVALID',
   'VIDEO_TOO_SHORT',
   'VIDEO_TOO_LONG',
+  'VIDEO_CADENCE_TOO_SPARSE',
   'SCREENSHOT_MISSING',
   'SCREENSHOT_EMPTY',
   'FRAME_PROCESS_FAILED',
@@ -36,6 +37,8 @@ export const mediaReasonCodes = [
 ] as const;
 
 export type MediaReasonCode = (typeof mediaReasonCodes)[number];
+
+export const MINIMUM_PROOF_FRAME_RATE = 10;
 
 export interface MediaMilestoneScreenshot {
   stepId: string;
@@ -137,6 +140,7 @@ function readVideoMetadata(metadata: unknown): {
   codec: string;
   width: number;
   height: number;
+  avgFrameRate: number | null;
 } {
   if (!metadata || typeof metadata !== 'object') fail('VIDEO_METADATA_INVALID');
   const format = 'format' in metadata ? metadata.format : null;
@@ -174,10 +178,23 @@ function readVideoMetadata(metadata: unknown): {
     codec: String(videoStream.codec_name),
     width: Number(videoStream.width),
     height: Number(videoStream.height),
+    avgFrameRate: readFrameRate(videoStream),
   };
 }
 
-export async function probeVideo(process: MediaProcess, videoPath: string): Promise<ProbedVideo> {
+function readFrameRate(stream: object): number | null {
+  const raw = 'avg_frame_rate' in stream ? stream.avg_frame_rate : undefined;
+  if (typeof raw !== 'string') return null;
+  const [numerator, denominator] = raw.split('/').map(Number);
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) return null;
+  const rate = numerator / denominator;
+  return rate > 0 ? rate : null;
+}
+
+export async function probeVideo(
+  process: MediaProcess,
+  videoPath: string,
+): Promise<ProbedVideo & { avgFrameRate: number | null }> {
   const file = await requireNonEmptyFile(videoPath, 'VIDEO_MISSING', 'VIDEO_EMPTY');
   let stdout: string;
   try {
@@ -185,7 +202,7 @@ export async function probeVideo(process: MediaProcess, videoPath: string): Prom
       '-v',
       'error',
       '-show_entries',
-      'format=duration,size:stream=codec_name,width,height',
+      'format=duration,size:stream=codec_name,width,height,avg_frame_rate',
       '-of',
       'json',
       videoPath,
@@ -210,6 +227,7 @@ export async function probeVideo(process: MediaProcess, videoPath: string): Prom
     codec: decoded.codec,
     width: decoded.width,
     height: decoded.height,
+    avgFrameRate: decoded.avgFrameRate,
   };
 }
 
@@ -436,10 +454,13 @@ export async function validateMedia(
   try {
     const threshold = input.threshold ?? 0.9;
     validateInput(input, threshold);
-    const probedVideo = await probeVideo(process, input.videoPath);
+    const { avgFrameRate, ...probedVideo } = await probeVideo(process, input.videoPath);
     const bounds = durationBounds(input.rehearsalDurationMs);
     if (probedVideo.durationMs < bounds.minimumMs) fail('VIDEO_TOO_SHORT');
     if (probedVideo.durationMs > bounds.hardMaximumMs) fail('VIDEO_TOO_LONG');
+    if (avgFrameRate !== null && avgFrameRate < MINIMUM_PROOF_FRAME_RATE) {
+      fail('VIDEO_CADENCE_TOO_SPARSE');
+    }
 
     const scratchRoot = input.scratchRoot ?? tmpdir();
     try {

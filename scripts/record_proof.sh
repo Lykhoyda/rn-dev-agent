@@ -1530,12 +1530,16 @@ normalize_capture_video() {
   duration="$(ffprobe -v error -select_streams v:0 -show_entries stream=duration \
     -of default=noprint_wrappers=1:nokey=1 "$input")" || duration=""
   [[ "$duration" =~ ^[0-9]+(\.[0-9]+)?$ && "$duration" =~ [1-9] ]] || duration=""
+  local skipped=""
+  [[ -n "$duration" ]] || skipped="capture duration unreadable (ffprobe missing or unparsable)"
   # Native idle frames are irregular; retain their timing and the final frame's duration.
   local scale="scale='if(gt(iw,ih),-2,trunc(min(720,iw)/2)*2)':'if(gt(iw,ih),trunc(min(720,ih)/2)*2,-2)'"
-  if [[ -z "$duration" ]] || ! ffmpeg -v error -y -i "$input" \
+  if [[ -n "$skipped" ]] || ! ffmpeg -v error -y -i "$input" \
     -vf "${scale},fps=30,tpad=stop_mode=clone:stop=-1" \
     -t "$duration" -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
     -movflags +faststart -f mp4 "$output"; then
+    [[ -n "$skipped" ]] || skipped="30 fps H.264 re-encode failed (encoder unavailable)"
+    echo "Cadence normalization skipped: $skipped"
     echo "Warning: cadence normalization unavailable; remuxing the native capture to mp4" >&2
     ffmpeg -v error -y -i "$input" -c copy -movflags +faststart -f mp4 "$output" || return 1
   fi

@@ -1636,6 +1636,33 @@ test('recorded evidence timestamps begin when the recorder is ready', async (t) 
   assert.equal(evidence[0]!.timestampMs, 1_000);
 });
 
+test('stop_recording reports a recording whose cadence could not be normalized', async (t) => {
+  const harness = createHarness(t);
+  await cleanRehearsal(harness);
+  await arm(harness);
+  harness.setRecord(async (args) => {
+    if (args.action === 'status') return okResult({ active: [] });
+    if (args.action === 'start') {
+      return okResult({ deviceId: 'SIM-1', output: beginArgs().videoPath });
+    }
+    return okResult({
+      saved: [{ path: beginArgs().videoPath, sizeBytes: 4_096 }],
+      normalizationSkipped: '30 fps H.264 re-encode failed (encoder unavailable)',
+    });
+  });
+
+  const recordingStart = await startRecording(harness);
+  recordEvidence(harness, recordingStart);
+  const parsed = envelope(await harness.handler({ action: 'stop_recording' }));
+
+  assert.equal(parsed.ok, true);
+  assert.equal((parsed.data as { stage: string }).stage, 'validating');
+  const warning = (parsed.meta as { warning?: string } | undefined)?.warning;
+  assert.match(String(warning), /not normalized to 30 fps/);
+  assert.match(String(warning), /encoder unavailable/);
+  assert.match(String(warning), /slideshow/);
+});
+
 test('stop_recording reports a proof video above the GitHub video attachment limit', async (t) => {
   for (const [sizeBytes, expectWarning] of [
     [125_829_120, true],
