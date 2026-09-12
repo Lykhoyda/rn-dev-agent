@@ -1,0 +1,76 @@
+import assert from 'node:assert/strict';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { createDeviceRecordHandler } from '../../dist/tools/device-record.js';
+
+const SCOPE = 'a'.repeat(64);
+
+async function fakeRecorder(root: string, savedBytes: number) {
+  const script = join(root, 'record_proof.sh');
+  await writeFile(
+    script,
+    [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      'case "$1" in',
+      `  stop) echo "Saved: ${join(root, 'proof.mp4')} (${savedBytes} bytes)" ;;`,
+      '  status) echo "No active recordings" ;;',
+      '  *) exit 1 ;;',
+      'esac',
+      '',
+    ].join('\n'),
+  );
+  await chmod(script, 0o755);
+  return script;
+}
+
+async function stopWithSavedSize(root: string, savedBytes: number) {
+  const script = await fakeRecorder(root, savedBytes);
+  const runtime = {
+    requireAvailable: () => ({ registry: { updateBindings: () => {} }, session: {} }),
+    status: () => ({
+      available: true,
+      sessionId: 'session-a',
+      claimEpoch: 1,
+      bindings: {
+        device: { platform: 'ios', deviceId: 'device-a' },
+        recorder: {
+          script,
+          scope: SCOPE,
+          pid: 4321,
+          processBirth: 'birth-token',
+          claimKey: 'recorder-a',
+        },
+      },
+    }),
+  };
+  const handler = createDeviceRecordHandler({ runtime: runtime as never });
+  const result = await handler({ action: 'stop' });
+  return JSON.parse(result.content[0].text);
+}
+
+test('a stop result reports a proof video that exceeds the GitHub attachment limit', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'record-oversize-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const envelope = await stopWithSavedSize(root, 14_680_064);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.saved[0].sizeBytes, 14_680_064);
+  assert.match(envelope.meta.warning, /14680064 bytes/);
+  assert.match(envelope.meta.warning, /10485760/);
+  assert.match(envelope.meta.warning, /kept/);
+});
+
+test('a stop result for an attachable proof video carries no size warning', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'record-attachable-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const envelope = await stopWithSavedSize(root, 10 * 1024 * 1024);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.saved[0].sizeBytes, 10 * 1024 * 1024);
+  assert.equal(envelope.meta, undefined);
+});
