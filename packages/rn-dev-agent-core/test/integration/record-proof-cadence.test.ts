@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,15 +35,12 @@ async function probe(path: string) {
   return { ...data.streams[0], size: Number(data.format.size) };
 }
 
-async function finalize(input: string, output: string) {
-  await run('bash', [
-    '-c',
-    'source "$1"; normalize_capture_video "$2" "$3"',
-    '_',
-    script,
-    input,
-    output,
-  ]);
+async function finalize(input: string, output: string, pathPrefix?: string) {
+  return run(
+    'bash',
+    ['-c', 'source "$1"; normalize_capture_video "$2" "$3"', '_', script, input, output],
+    pathPrefix ? { env: { ...process.env, PATH: `${pathPrefix}:${process.env.PATH}` } } : undefined,
+  );
 }
 
 test('native sparse timestamps become bounded 30 fps video without losing motion or duration', async (t) => {
@@ -170,6 +167,65 @@ test('proof re-encode caps the short edge at 720 px and never upscales', async (
     assert.equal(scaled.width % 2, 0);
     assert.equal(scaled.height % 2, 0);
     assert.ok(Math.abs(scaled.width / scaled.height - width / height) < 0.01);
+  }
+});
+
+async function shimDir(root: string, shims: Record<string, string>) {
+  const dir = join(root, 'shims');
+  await mkdir(dir, { recursive: true });
+  for (const [name, body] of Object.entries(shims)) {
+    const file = join(dir, name);
+    await writeFile(file, `#!/usr/bin/env bash\n${body}\n`);
+    await chmod(file, 0o755);
+  }
+  return dir;
+}
+
+async function sparseCapture(path: string) {
+  await run('ffmpeg', [
+    '-v',
+    'error',
+    '-y',
+    '-f',
+    'lavfi',
+    '-i',
+    'testsrc2=size=160x320:rate=30:duration=4',
+    '-vf',
+    "select='eq(n,0)+eq(n,60)+eq(n,119)'",
+    '-fps_mode',
+    'vfr',
+    '-c:v',
+    'libx264',
+    '-bf',
+    '0',
+    path,
+  ]);
+}
+
+test('a capture still becomes mp4 when cadence normalization cannot run', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'record-cadence-fallback-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const input = join(root, 'native.mp4');
+  await sparseCapture(input);
+  const native = await probe(input);
+  const realFfmpeg = (await run('bash', ['-c', 'command -v ffmpeg'])).stdout.trim();
+
+  const scenarios = {
+    'no-ffprobe': await shimDir(join(root, 'no-ffprobe'), { ffprobe: 'exit 127' }),
+    'no-libx264': await shimDir(join(root, 'no-libx264'), {
+      ffmpeg: `for arg in "$@"; do [ "$arg" = libx264 ] && exit 1; done\nexec ${realFfmpeg} "$@"`,
+    }),
+  };
+
+  for (const [name, dir] of Object.entries(scenarios)) {
+    const output = join(root, `proof-${name}.mp4`);
+    const { stderr } = await finalize(input, output, dir);
+
+    assert.match(stderr, /cadence normalization unavailable/);
+    const remuxed = await probe(output);
+    assert.equal(remuxed.codec_name, 'h264');
+    assert.equal(Number(remuxed.nb_read_frames), Number(native.nb_read_frames));
+    assert.ok(Math.abs(Number(remuxed.duration) - Number(native.duration)) < 0.1);
   }
 });
 

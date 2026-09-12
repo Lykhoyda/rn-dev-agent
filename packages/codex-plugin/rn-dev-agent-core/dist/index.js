@@ -87361,13 +87361,13 @@ function parseStopOutput(stdout) {
   }
   return saved;
 }
-var GITHUB_ATTACHMENT_LIMIT_BYTES = 10 * 1024 * 1024;
+var GITHUB_VIDEO_ATTACHMENT_LIMIT_BYTES = 100 * 1024 * 1024;
 function oversizeProofWarning(saved) {
-  const oversize = saved.filter((rec) => rec.sizeBytes > GITHUB_ATTACHMENT_LIMIT_BYTES);
+  const oversize = saved.filter((rec) => rec.sizeBytes > GITHUB_VIDEO_ATTACHMENT_LIMIT_BYTES);
   if (oversize.length === 0)
     return null;
   const measured = oversize.map((rec) => `${rec.path} (${rec.sizeBytes} bytes)`).join(", ");
-  return `Recording exceeds GitHub's ${GITHUB_ATTACHMENT_LIMIT_BYTES}-byte (10 MB) attachment limit: ${measured}. The file is kept \u2014 shorten the journey or compress it before attaching to a PR or issue.`;
+  return `Proof video exceeds GitHub's ${GITHUB_VIDEO_ATTACHMENT_LIMIT_BYTES}-byte (100 MB) video attachment limit: ${measured}. The file is kept \u2014 shorten the journey before attaching it to a PR or issue.`;
 }
 function parseRecorderFailure(stdout) {
   return stdout.match(/^Recorder failed:\s*(.+)$/m)?.[1]?.trim() ?? null;

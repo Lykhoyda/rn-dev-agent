@@ -51,16 +51,17 @@ async function stopWithSavedSize(root: string, savedBytes: number) {
   return JSON.parse(result.content[0].text);
 }
 
-test('a stop result reports a proof video that exceeds the GitHub attachment limit', async (t) => {
+test('a stop result reports a proof video that exceeds the GitHub video attachment limit', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'record-oversize-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  const envelope = await stopWithSavedSize(root, 14_680_064);
+  const envelope = await stopWithSavedSize(root, 125_829_120);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.saved[0].sizeBytes, 14_680_064);
-  assert.match(envelope.meta.warning, /14680064 bytes/);
-  assert.match(envelope.meta.warning, /10485760/);
+  assert.equal(envelope.data.saved[0].sizeBytes, 125_829_120);
+  assert.match(envelope.meta.warning, /125829120 bytes/);
+  assert.match(envelope.meta.warning, /104857600/);
+  assert.match(envelope.meta.warning, /video attachment limit/);
   assert.match(envelope.meta.warning, /kept/);
 });
 
@@ -68,9 +69,9 @@ test('a stop result for an attachable proof video carries no size warning', asyn
   const root = await mkdtemp(join(tmpdir(), 'record-attachable-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  const envelope = await stopWithSavedSize(root, 10 * 1024 * 1024);
+  const envelope = await stopWithSavedSize(root, 100 * 1024 * 1024);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.saved[0].sizeBytes, 10 * 1024 * 1024);
+  assert.equal(envelope.data.saved[0].sizeBytes, 100 * 1024 * 1024);
   assert.equal(envelope.meta, undefined);
 });
