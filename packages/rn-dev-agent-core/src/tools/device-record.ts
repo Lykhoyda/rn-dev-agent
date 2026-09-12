@@ -232,6 +232,15 @@ export function parseStopOutput(stdout: string): SavedRecording[] {
   return saved;
 }
 
+export const GITHUB_ATTACHMENT_LIMIT_BYTES = 10 * 1024 * 1024;
+
+export function oversizeProofWarning(saved: SavedRecording[]): string | null {
+  const oversize = saved.filter((rec) => rec.sizeBytes > GITHUB_ATTACHMENT_LIMIT_BYTES);
+  if (oversize.length === 0) return null;
+  const measured = oversize.map((rec) => `${rec.path} (${rec.sizeBytes} bytes)`).join(', ');
+  return `Recording exceeds GitHub's ${GITHUB_ATTACHMENT_LIMIT_BYTES}-byte (10 MB) attachment limit: ${measured}. The file is kept — shorten the journey or compress it before attaching to a PR or issue.`;
+}
+
 export function parseRecorderFailure(stdout: string): string | null {
   return stdout.match(/^Recorder failed:\s*(.+)$/m)?.[1]?.trim() ?? null;
 }
@@ -518,8 +527,11 @@ async function runStop(
     );
   }
 
+  const oversizeWarning = oversizeProofWarning(saved);
+
   if (!args.gif) {
-    return okResult({ action: 'stop', saved });
+    const data = { action: 'stop', saved };
+    return oversizeWarning ? warnResult(data, oversizeWarning) : okResult(data);
   }
 
   // Guard against the multi-platform clobber: a single user-supplied gifPath
@@ -561,15 +573,21 @@ async function runStop(
   if (gifs.length === 0 && gifWarnings.length > 0) {
     return warnResult(
       { action: 'stop', saved, gifs: [] },
-      `Saved ${saved.length} recording(s) but all GIF conversions failed. ${gifWarnings.join(' ')}`,
+      [
+        `Saved ${saved.length} recording(s) but all GIF conversions failed. ${gifWarnings.join(' ')}`,
+        oversizeWarning,
+      ]
+        .filter(Boolean)
+        .join(' '),
     );
   }
-  return okResult({
+  const data = {
     action: 'stop',
     saved,
     gifs,
     ...(gifWarnings.length > 0 ? { gifWarnings } : {}),
-  });
+  };
+  return oversizeWarning ? warnResult(data, oversizeWarning) : okResult(data);
 }
 
 async function readScopedStatus(script: string, scope: string): Promise<ActiveRecording[]> {

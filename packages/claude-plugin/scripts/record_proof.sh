@@ -1535,11 +1535,6 @@ normalize_capture_video() {
   ffmpeg -v error -y -i "$input" -vf "${scale},fps=30,tpad=stop_mode=clone:stop=-1" \
     -t "$duration" -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
     -movflags +faststart -f mp4 "$output" || return 1
-  local size
-  size="$(wc -c < "$output" | tr -d ' ')"
-  if [[ "$size" =~ ^[0-9]+$ ]] && (( size > 10485760 )); then
-    echo "Warning: proof video is $size bytes, over GitHub's 10 MB attachment limit" >&2
-  fi
 }
 
 cmd_start() {
