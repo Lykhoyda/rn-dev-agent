@@ -87361,6 +87361,14 @@ function parseStopOutput(stdout) {
   }
   return saved;
 }
+var GITHUB_ATTACHMENT_LIMIT_BYTES = 10 * 1024 * 1024;
+function oversizeProofWarning(saved) {
+  const oversize = saved.filter((rec) => rec.sizeBytes > GITHUB_ATTACHMENT_LIMIT_BYTES);
+  if (oversize.length === 0)
+    return null;
+  const measured = oversize.map((rec) => `${rec.path} (${rec.sizeBytes} bytes)`).join(", ");
+  return `Recording exceeds GitHub's ${GITHUB_ATTACHMENT_LIMIT_BYTES}-byte (10 MB) attachment limit: ${measured}. The file is kept \u2014 shorten the journey or compress it before attaching to a PR or issue.`;
+}
 function parseRecorderFailure(stdout) {
   return stdout.match(/^Recorder failed:\s*(.+)$/m)?.[1]?.trim() ?? null;
 }
@@ -87579,8 +87587,10 @@ async function runStop(args, runtime) {
     }
     return warnResult({ saved: [] }, `Stop ran but no saved file detected. Raw: ${stopOutput.trim().slice(0, 400)}`);
   }
+  const oversizeWarning = oversizeProofWarning(saved);
   if (!args.gif) {
-    return okResult({ action: "stop", saved });
+    const data2 = { action: "stop", saved };
+    return oversizeWarning ? warnResult(data2, oversizeWarning) : okResult(data2);
   }
   if (args.gifPath && saved.length > 1) {
     return failResult(`gifPath cannot be combined with ${saved.length} active recordings \u2014 each recording would write to the same file. Omit gifPath to auto-derive per-recording GIF paths, or stop one platform at a time.`, { code: "GIFPATH_AMBIGUOUS" });
@@ -87603,14 +87613,18 @@ async function runStop(args, runtime) {
     }
   }
   if (gifs.length === 0 && gifWarnings.length > 0) {
-    return warnResult({ action: "stop", saved, gifs: [] }, `Saved ${saved.length} recording(s) but all GIF conversions failed. ${gifWarnings.join(" ")}`);
+    return warnResult({ action: "stop", saved, gifs: [] }, [
+      `Saved ${saved.length} recording(s) but all GIF conversions failed. ${gifWarnings.join(" ")}`,
+      oversizeWarning
+    ].filter(Boolean).join(" "));
   }
-  return okResult({
+  const data = {
     action: "stop",
     saved,
     gifs,
     ...gifWarnings.length > 0 ? { gifWarnings } : {}
-  });
+  };
+  return oversizeWarning ? warnResult(data, oversizeWarning) : okResult(data);
 }
 async function readScopedStatus(script, scope) {
   const { stdout } = await runRecordProofScript(script, ["status", scope], STATUS_TIMEOUT_MS);
