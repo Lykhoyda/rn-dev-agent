@@ -172,9 +172,18 @@ test('a long capture gets a stop budget scaled to its recorded length', async ()
   });
 
   await stopBoundRecorder(binding(Date.now() - 125_000), probe, runRecorder);
+  await stopBoundRecorder(binding(Date.now() - 180_000), probe, runRecorder);
   await stopBoundRecorder(binding(), probe, runRecorder);
+  await stopBoundRecorder(binding(Date.now() - 2 * 60 * 60_000), probe, runRecorder);
+  await stopBoundRecorder(binding(Date.now() - 10 * 24 * 60 * 60_000), probe, runRecorder);
 
-  assert.ok(budgets[0]! >= 60_000 + 3 * 125_000, `long capture budget was ${budgets[0]}`);
-  assert.ok(budgets[0]! < 60_000 + 3 * 130_000, `long capture budget was ${budgets[0]}`);
-  assert.equal(budgets[1], 60_000);
+  assert.ok(budgets[0]! >= 60_000 + 3 * 125_000, `125 s capture budget was ${budgets[0]}`);
+  assert.ok(budgets[0]! < 60_000 + 3 * 130_000, `125 s capture budget was ${budgets[0]}`);
+  assert.ok(budgets[1]! >= 60_000 + 3 * 180_000, `180 s capture budget was ${budgets[1]}`);
+  assert.equal(budgets[2], 60_000);
+
+  for (const stale of [budgets[3]!, budgets[4]!]) {
+    assert.equal(stale, 15 * 60_000);
+    assert.ok(stale <= 2_147_483_647, `stale budget ${stale} would overflow setTimeout`);
+  }
 });

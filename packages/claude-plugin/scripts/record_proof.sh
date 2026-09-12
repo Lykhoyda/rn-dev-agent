@@ -2188,6 +2188,9 @@ cmd_stop() {
           PENDING_STAGE_FILE=""
           output_path="${output_path%.mp4}.mov"
         fi
+      else
+        echo "Cadence normalization skipped: ffmpeg unavailable"
+        echo "Warning: ffmpeg unavailable; preserving the native capture" >&2
       fi
       validate_file_identity "$staged_output" "$staged_identity" || {
         echo "Error: staged recording output identity changed" >&2
@@ -2257,6 +2260,8 @@ cmd_stop() {
           rm -f "$tmp_mp4"
         fi
       else
+        echo "Cadence normalization skipped: ffmpeg unavailable"
+        echo "Warning: ffmpeg unavailable; preserving the native capture" >&2
         mv "$raw_file" "${output_path%.mp4}.mov"
         output_path="${output_path%.mp4}.mov"
       fi

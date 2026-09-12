@@ -18,6 +18,7 @@ const execFile = promisify(execFileCb);
 const RECORDER_POST_KILL_CONFIRM_MS = 2_000;
 const RECORDER_STOP_BASE_TIMEOUT_MS = 60_000;
 const RECORDER_STOP_MS_PER_RECORDED_MS = 3;
+const RECORDER_STOP_MAX_TIMEOUT_MS = 15 * 60_000;
 
 interface RecorderExecutionOptions {
   timeout: number;
@@ -406,7 +407,10 @@ export function recorderStopTimeoutMs(startedAt: unknown, now = Date.now()): num
     typeof startedAt === 'number' && Number.isFinite(startedAt)
       ? Math.max(0, now - startedAt)
       : 0;
-  return RECORDER_STOP_BASE_TIMEOUT_MS + RECORDER_STOP_MS_PER_RECORDED_MS * recordedMs;
+  return Math.min(
+    RECORDER_STOP_BASE_TIMEOUT_MS + RECORDER_STOP_MS_PER_RECORDED_MS * recordedMs,
+    RECORDER_STOP_MAX_TIMEOUT_MS,
+  );
 }
 
 export async function stopBoundRecorder(

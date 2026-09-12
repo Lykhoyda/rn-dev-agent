@@ -16168,6 +16168,7 @@ var execFile13 = promisify13(execFileCb10);
 var RECORDER_POST_KILL_CONFIRM_MS = 2e3;
 var RECORDER_STOP_BASE_TIMEOUT_MS = 6e4;
 var RECORDER_STOP_MS_PER_RECORDED_MS = 3;
+var RECORDER_STOP_MAX_TIMEOUT_MS = 15 * 6e4;
 function executeRecorderScript(script, args, options) {
   return new Promise((resolve4, reject) => {
     const child = spawn5(script, args, {
@@ -16453,7 +16454,7 @@ ${instrumentation.stderr}`;
 }
 function recorderStopTimeoutMs(startedAt, now = Date.now()) {
   const recordedMs = typeof startedAt === "number" && Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : 0;
-  return RECORDER_STOP_BASE_TIMEOUT_MS + RECORDER_STOP_MS_PER_RECORDED_MS * recordedMs;
+  return Math.min(RECORDER_STOP_BASE_TIMEOUT_MS + RECORDER_STOP_MS_PER_RECORDED_MS * recordedMs, RECORDER_STOP_MAX_TIMEOUT_MS);
 }
 async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, runRecorder = async (script, args, timeoutMs) => runRecordProofScript(script, args, timeoutMs)) {
   const script = String(binding.script ?? "");

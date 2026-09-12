@@ -76,8 +76,15 @@ deviations="$(awk '
   capture { print }
 ' "$PROOF_DIR/PROOF.md" | sed -e '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;};/\n$/ba')"
 
-deviations_summary="$(printf '%s' "$deviations" | tr '\n' ' ' | sed 's/^[[:space:]*-]*//' | tr '[:upper:]' '[:lower:]')"
 none_form='^(none|no deviations|n/a)([^a-z0-9]|$)'
+deviations_reportable=""
+while IFS= read -r line; do
+  normalized="$(printf '%s' "$line" | sed 's/^[[:space:]*-]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
+  [[ -z "$normalized" ]] && continue
+  [[ "$normalized" =~ $none_form ]] && continue
+  deviations_reportable="yes"
+  break
+done <<< "$deviations"
 
 diff_stat=""
 if git rev-parse --git-dir >/dev/null 2>&1; then
@@ -151,7 +158,7 @@ fi
     echo ""
   fi
 
-  if [[ -n "$deviations" && ! "$deviations_summary" =~ $none_form ]]; then
+  if [[ -n "$deviations_reportable" ]]; then
     echo "### Recording Notes"
     echo ""
     echo "$deviations"
