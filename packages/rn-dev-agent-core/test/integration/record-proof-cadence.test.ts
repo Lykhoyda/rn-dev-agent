@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
@@ -137,11 +137,19 @@ async function probeSize(path: string) {
   return { width, height };
 }
 
-test('proof re-encode caps the short edge at 720 px and never upscales', async (t) => {
+async function normalizedFrameSize(root: string, source: string) {
+  const frame = join(root, `normalized-${basename(source)}.png`);
+  await run('ffmpeg', ['-v', 'error', '-y', '-i', source, '-frames:v', '1', '-vf', 'scale=800:-2', frame]);
+  return probeSize(frame);
+}
+
+test('proof re-encode keeps the capture resolution so screenshot matching stays aligned', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'record-cadence-scale-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 
   for (const [width, height] of [
+    [1284, 2778],
+    [1668, 2388],
     [1179, 2556],
     [2556, 1179],
     [160, 320],
@@ -161,12 +169,12 @@ test('proof re-encode caps the short edge at 720 px and never upscales', async (
       input,
     ]);
     await finalize(input, output);
-    const scaled = await probeSize(output);
-    const shortEdge = Math.min(scaled.width, scaled.height);
-    assert.equal(shortEdge, Math.min(720, Math.min(width, height)));
-    assert.equal(scaled.width % 2, 0);
-    assert.equal(scaled.height % 2, 0);
-    assert.ok(Math.abs(scaled.width / scaled.height - width / height) < 0.01);
+
+    assert.deepEqual(await probeSize(output), await probeSize(input));
+    assert.deepEqual(
+      await normalizedFrameSize(root, output),
+      await normalizedFrameSize(root, input),
+    );
   }
 });
 
