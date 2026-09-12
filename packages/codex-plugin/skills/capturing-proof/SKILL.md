@@ -233,12 +233,12 @@ Create `docs/proof/<slug>/PROOF.md` with the standard format:
 - Key state snapshots
 - Deviations section — record any `proof_step` warning here, including a
   proof video's measured fps when 30 fps cadence smoothing was skipped;
-  `rn-generate-pr-body` copies this section into PR-BODY.md
+  Step 8 copies this section into PR-BODY.md
 
 ### Step 8: Generate PR body
 
 ```bash
-rn-generate-pr-body docs/proof/<slug>/
+bash "<package-root>/scripts/generate_pr_body.sh" docs/proof/<slug>/
 ```
 
 ### Step 9: Present results
