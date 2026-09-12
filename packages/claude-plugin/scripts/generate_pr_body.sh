@@ -16,11 +16,6 @@ fi
 
 OUTPUT="$PROOF_DIR/PR-BODY.md"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "Error: python3 is required to publish the PR body safely" >&2
-  exit 1
-fi
-
 title="$(grep -m1 '^# ' "$PROOF_DIR/PROOF.md" | sed 's/^# //')"
 [[ -z "$title" ]] && title="Feature Implementation"
 
@@ -96,7 +91,7 @@ if git rev-parse --git-dir >/dev/null 2>&1; then
   diff_stat="$(git diff --stat "${BASE_BRANCH}...HEAD" 2>/dev/null || echo '(no diff available)')"
 fi
 
-body="$(set -e
+{
   echo "## Summary"
   echo ""
   if [[ -n "$summary" ]]; then
@@ -176,52 +171,6 @@ body="$(set -e
   echo ""
   echo "---"
   echo "_Generated with [rn-dev-agent](https://github.com/Lykhoyda/rn-dev-agent)_"
-)"
-
-python3 - "$PROOF_DIR" 3<<< "$body" <<'PY'
-import os
-import secrets
-import stat
-import sys
-
-directory = sys.argv[1]
-directory_fd = None
-temporary = None
-try:
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    directory_fd = os.open('/' if os.path.isabs(directory) else '.', flags)
-    for component in directory.split('/'):
-        if component in ('', '.'):
-            continue
-        child_fd = os.open(component, flags, dir_fd=directory_fd)
-        os.close(directory_fd)
-        directory_fd = child_fd
-
-    try:
-        destination = os.stat('PR-BODY.md', dir_fd=directory_fd, follow_symlinks=False)
-    except FileNotFoundError:
-        destination = None
-    if destination is not None and not stat.S_ISREG(destination.st_mode):
-        raise ValueError('PR-BODY.md must be a regular file, not a symlink')
-
-    temporary = '.pr-body-' + secrets.token_hex(16)
-    temporary_fd = os.open(
-        temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600, dir_fd=directory_fd,
-    )
-    with os.fdopen(temporary_fd, 'wb') as output, os.fdopen(3, 'rb') as body:
-        output.write(body.read())
-        output.flush()
-        os.fsync(output.fileno())
-    os.replace(temporary, 'PR-BODY.md', src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
-    temporary = None
-except (OSError, ValueError) as error:
-    sys.exit(f'Error: cannot safely publish PR body: {error}')
-finally:
-    if temporary is not None and directory_fd is not None:
-        os.unlink(temporary, dir_fd=directory_fd)
-    if directory_fd is not None:
-        os.close(directory_fd)
-PY
+} > "$OUTPUT"
 
 echo "PR body generated: $OUTPUT"
