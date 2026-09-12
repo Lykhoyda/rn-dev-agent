@@ -13,7 +13,6 @@ SIDECAR_TEMP_DIR="${RUNTIME_DIR}/tmp"
 PENDING_PULL_FILE=""
 PENDING_PULL_MANIFEST=""
 PENDING_STAGE_FILE=""
-NORMALIZATION_SKIPPED=""
 
 usage() {
   cat <<'EOF'
@@ -209,7 +208,7 @@ PY
 scope_has_private_sidecars() {
   local scope="$1"
   local suffix
-  for suffix in pid path platform birth raw-path raw-identity pull-manifest log serial remote-pid remote-birth remote-command remote-args device-path finalized-path finalized-identity normalization-skipped cleanup-pending incarnation; do
+  for suffix in pid path platform birth raw-path raw-identity pull-manifest log serial remote-pid remote-birth remote-command remote-args device-path finalized-path finalized-identity cleanup-pending incarnation; do
     sidecar_exists "${PID_PREFIX}-${scope}.${suffix}" && return 0
   done
   return 1
@@ -219,7 +218,7 @@ scope_has_sidecars_at_prefix() {
   local prefix="$1"
   local scope="$2"
   local suffix
-  for suffix in pid path platform birth raw-path raw-identity pull-manifest log serial remote-pid remote-birth remote-command remote-args device-path finalized-path finalized-identity normalization-skipped cleanup-pending incarnation; do
+  for suffix in pid path platform birth raw-path raw-identity pull-manifest log serial remote-pid remote-birth remote-command remote-args device-path finalized-path finalized-identity cleanup-pending incarnation; do
     sidecar_exists "${prefix}-${scope}.${suffix}" && return 0
   done
   return 1
@@ -250,7 +249,7 @@ validate_private_scope() {
   local suffix
   local path
   local incarnation=""
-  for suffix in pid path platform birth raw-path raw-identity pull-manifest log serial remote-pid remote-birth remote-command remote-args device-path finalized-path finalized-identity normalization-skipped cleanup-pending incarnation; do
+  for suffix in pid path platform birth raw-path raw-identity pull-manifest log serial remote-pid remote-birth remote-command remote-args device-path finalized-path finalized-identity cleanup-pending incarnation; do
     path="${prefix}-${scope}.${suffix}"
     if sidecar_exists "$path"; then
       validate_legacy_sidecar "$path"
@@ -286,7 +285,7 @@ validate_legacy_scope() {
   LEGACY_SCOPE_PRESENT="false"
   local suffix
   local legacy_path
-  for suffix in pid path platform birth raw-path raw-identity pull-manifest log serial remote-pid remote-birth remote-command remote-args device-path finalized-path finalized-identity normalization-skipped cleanup-pending incarnation; do
+  for suffix in pid path platform birth raw-path raw-identity pull-manifest log serial remote-pid remote-birth remote-command remote-args device-path finalized-path finalized-identity cleanup-pending incarnation; do
     legacy_path="$(legacy_sidecar_file "$scope" "$suffix")"
     if sidecar_exists "$legacy_path"; then
       LEGACY_SCOPE_PRESENT="true"
@@ -603,10 +602,9 @@ write_cleanup_receipt() {
   local output="$4"
   local output_identity="$5"
   local size="$6"
-  local normalization_skipped="$7"
-  shift 7
+  shift 6
   local artifact_count=$(($# / 2))
-  local receipt=$'v3\n'"$pid"$'\n'"$birth"$'\n'"$output"$'\n'"$output_identity"$'\n'"$size"$'\n'"$normalization_skipped"$'\n'"$artifact_count"
+  local receipt=$'v2\n'"$pid"$'\n'"$birth"$'\n'"$output"$'\n'"$output_identity"$'\n'"$size"$'\n'"$artifact_count"
   while [[ $# -gt 0 ]]; do
     receipt+=$'\n'"$1"$'\n'"$2"
     shift 2
@@ -626,7 +624,6 @@ load_cleanup_receipt() {
   CLEANUP_SIZE="$(sed -n '6p' "$path")"
   CLEANUP_ARTIFACT_PATHS=()
   CLEANUP_ARTIFACT_IDENTITIES=()
-  CLEANUP_NORMALIZATION_SKIPPED=""
   [[
     "$CLEANUP_PID" == "$expected_pid" &&
       "$CLEANUP_BIRTH" == "$expected_birth" &&
@@ -637,19 +634,13 @@ load_cleanup_receipt() {
   if [[ "$CLEANUP_VERSION" == "v1" ]]; then
     return 0
   fi
-  local count_line=7
-  if [[ "$CLEANUP_VERSION" == "v3" ]]; then
-    CLEANUP_NORMALIZATION_SKIPPED="$(sed -n '7p' "$path")"
-    count_line=8
-  else
-    [[ "$CLEANUP_VERSION" == "v2" ]] || return 1
-  fi
+  [[ "$CLEANUP_VERSION" == "v2" ]] || return 1
   local artifact_count
-  artifact_count="$(sed -n "${count_line}p" "$path")"
+  artifact_count="$(sed -n '7p' "$path")"
   [[ "$artifact_count" =~ ^[0-2]$ ]] || return 1
   local index
   for ((index = 0; index < artifact_count; index++)); do
-    local path_line=$((count_line + 1 + index * 2))
+    local path_line=$((8 + index * 2))
     local identity_line=$((path_line + 1))
     CLEANUP_ARTIFACT_PATHS+=("$(sed -n "${path_line}p" "$path")")
     CLEANUP_ARTIFACT_IDENTITIES+=("$(sed -n "${identity_line}p" "$path")")
@@ -718,9 +709,8 @@ migrate_v1_cleanup_receipt() {
     "$CLEANUP_OUTPUT" \
     "$CLEANUP_OUTPUT_IDENTITY" \
     "$CLEANUP_SIZE" \
-    "$CLEANUP_NORMALIZATION_SKIPPED" \
     "${artifacts[@]}"
-  CLEANUP_VERSION="v3"
+  CLEANUP_VERSION="v2"
 }
 
 complete_cleanup_receipt() {
@@ -773,7 +763,6 @@ complete_cleanup_receipt() {
       "$CLEANUP_OUTPUT" \
       "$CLEANUP_OUTPUT_IDENTITY" \
       "$CLEANUP_SIZE" \
-      "$CLEANUP_NORMALIZATION_SKIPPED" \
       "${artifacts[@]}"
   fi
   for ((index = 0; index < ${#CLEANUP_ARTIFACT_PATHS[@]}; index++)); do
@@ -803,7 +792,6 @@ complete_cleanup_receipt() {
       "$CLEANUP_OUTPUT" \
       "$CLEANUP_OUTPUT_IDENTITY" \
       "$CLEANUP_SIZE" \
-      "$CLEANUP_NORMALIZATION_SKIPPED" \
       "$recovery_artifact" \
       "$recovery_identity"
   fi
@@ -811,9 +799,6 @@ complete_cleanup_receipt() {
     remove_owned_state_path "$recovery_artifact"
   fi
   release_cleanup_claim "$scope"
-  if [[ -n "$CLEANUP_NORMALIZATION_SKIPPED" ]]; then
-    echo "Cadence normalization skipped: $CLEANUP_NORMALIZATION_SKIPPED"
-  fi
   echo "Saved: $CLEANUP_OUTPUT ($CLEANUP_SIZE bytes)"
 }
 
@@ -895,7 +880,7 @@ remove_recording_sidecars() {
   local incarnation="${2:-}"
   local preserve_cleanup="${3:-false}"
   local path
-  for path in "${PID_PREFIX}-${scope}".{path,platform,raw-path,raw-identity,pull-manifest,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path,finalized-path,finalized-identity,normalization-skipped}; do
+  for path in "${PID_PREFIX}-${scope}".{path,platform,raw-path,raw-identity,pull-manifest,log,serial,remote-pid,remote-birth,remote-command,remote-args,device-path,finalized-path,finalized-identity}; do
     remove_owned_state_path "$path"
   done
   local cleanup_path
@@ -1545,7 +1530,6 @@ normalize_capture_video() {
   duration="$(ffprobe -v error -select_streams v:0 -show_entries stream=duration \
     -of default=noprint_wrappers=1:nokey=1 "$input")" || duration=""
   [[ "$duration" =~ ^[0-9]+(\.[0-9]+)?$ && "$duration" =~ [1-9] ]] || duration=""
-  NORMALIZATION_SKIPPED=""
   local skipped=""
   [[ -n "$duration" ]] || skipped="capture duration unreadable (ffprobe missing or unparsable)"
   # Native idle frames are irregular; retain their timing and the final frame's duration.
@@ -1554,7 +1538,6 @@ normalize_capture_video() {
     -t "$duration" -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
     -movflags +faststart -f mp4 "$output"; then
     [[ -n "$skipped" ]] || skipped="30 fps H.264 re-encode failed (encoder unavailable)"
-    NORMALIZATION_SKIPPED="$skipped"
     echo "Cadence normalization skipped: $skipped"
     echo "Warning: cadence normalization unavailable; remuxing the native capture to mp4" >&2
     ffmpeg -v error -y -i "$input" -c copy -movflags +faststart -f mp4 "$output" || return 1
@@ -1889,7 +1872,6 @@ cmd_stop() {
   finalized_pathf="$(finalized_path_file "$scope")"
   local finalized_identityf
   finalized_identityf="$(finalized_identity_file "$scope")"
-  local normalization_skippedf="${PID_PREFIX}-${scope}.normalization-skipped"
   local finalized_output=""
   local finalized_identity=""
   if [[ "$platform" == "android" && -s "$finalized_pathf" ]]; then
@@ -1899,9 +1881,6 @@ cmd_stop() {
       finalized_identity="$(cat "$finalized_identityf")"
       if validate_file_identity "$finalized_output" "$finalized_identity"; then
         output_path="$finalized_output"
-        if [[ -f "$normalization_skippedf" ]]; then
-          NORMALIZATION_SKIPPED="$(cat "$normalization_skippedf")"
-        fi
       else
         finalized_output=""
         finalized_identity=""
@@ -2184,7 +2163,6 @@ cmd_stop() {
 
   if [[ "$platform" == "android" ]]; then
     if [[ -z "$finalized_output" ]]; then
-      NORMALIZATION_SKIPPED=""
       output_path="${output_path%.*}.mp4"
       mkdir -p "$(dirname "$output_path")" || true
       [[ -n "$raw_file" && -n "$raw_identity" ]] &&
@@ -2211,8 +2189,7 @@ cmd_stop() {
           output_path="${output_path%.mp4}.mov"
         fi
       else
-        NORMALIZATION_SKIPPED="ffmpeg unavailable"
-        echo "Cadence normalization skipped: $NORMALIZATION_SKIPPED"
+        echo "Cadence normalization skipped: ffmpeg unavailable"
         echo "Warning: ffmpeg unavailable; preserving the native capture" >&2
       fi
       validate_file_identity "$staged_output" "$staged_identity" || {
@@ -2224,7 +2201,6 @@ cmd_stop() {
         echo "Error: finalized recording output identity is unsafe" >&2
         return 1
       }
-      secure_write_sidecar "$normalization_skippedf" "$NORMALIZATION_SKIPPED"
       secure_write_sidecar "$finalized_identityf" "$finalized_identity"
       secure_write_sidecar "$finalized_pathf" "$output_path"
       finalized_output="$output_path"
@@ -2260,7 +2236,6 @@ cmd_stop() {
       "$output_path" \
       "$finalized_identity" \
       "$size" \
-      "$NORMALIZATION_SKIPPED" \
       "${cleanup_artifacts[@]+"${cleanup_artifacts[@]}"}"
     load_cleanup_receipt "$cleanup_path" "$pid" "$birth" || {
       echo "Error: pending recorder cleanup identity is invalid" >&2
@@ -2285,8 +2260,7 @@ cmd_stop() {
           rm -f "$tmp_mp4"
         fi
       else
-        NORMALIZATION_SKIPPED="ffmpeg unavailable"
-        echo "Cadence normalization skipped: $NORMALIZATION_SKIPPED"
+        echo "Cadence normalization skipped: ffmpeg unavailable"
         echo "Warning: ffmpeg unavailable; preserving the native capture" >&2
         mv "$raw_file" "${output_path%.mp4}.mov"
         output_path="${output_path%.mp4}.mov"

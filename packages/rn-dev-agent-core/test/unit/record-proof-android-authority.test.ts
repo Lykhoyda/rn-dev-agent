@@ -429,7 +429,7 @@ test('Android finalized output retries failed remote deletion without repulling'
   }
 });
 
-test('Android cleanup retries retain every skipped-normalization outcome without re-encoding', () => {
+test('Android cleanup retries resume a skipped-normalization capture without re-encoding', () => {
   for (const skipped of [
     'ffmpeg unavailable',
     'capture duration unreadable',
@@ -473,9 +473,7 @@ test('Android cleanup retries retain every skipped-normalization outcome without
       });
       assert.equal(second.status, 0, second.stderr);
       assert.match(second.stdout, /^Saved: /m);
-      assert.ok(second.stdout.includes(`Cadence normalization skipped: ${skipped}`), second.stdout);
       assert.equal(existsSync(state.conversionMarker), false);
-      assert.equal(existsSync(`${state.prefix}-${scope}.normalization-skipped`), false);
     } finally {
       state.cleanup();
     }
@@ -739,10 +737,9 @@ test('Android cleanup remains resumable after the process marker is removed', ()
     const cleanupReceipt = readFileSync(`${state.prefix}-${scope}.cleanup-pending`, 'utf8').split(
       '\n',
     );
-    assert.equal(cleanupReceipt[0], 'v3');
-    assert.match(cleanupReceipt[6], /re-encode failed/);
-    assert.equal(cleanupReceipt[7], '1');
-    const retainedCapture = cleanupReceipt[8];
+    assert.equal(cleanupReceipt[0], 'v2');
+    assert.equal(cleanupReceipt[6], '1');
+    const retainedCapture = cleanupReceipt[7];
     assert.equal(existsSync(retainedCapture), true);
 
     const status = spawnSync('bash', [state.script, 'status', scope], {
@@ -769,7 +766,6 @@ test('Android cleanup remains resumable after the process marker is removed', ()
     });
     assert.equal(retry.status, 0, retry.stderr);
     assert.match(retry.stdout, /^Saved: /m);
-    assert.match(retry.stdout, /Cadence normalization skipped: 30 fps H.264 re-encode failed/);
     assert.equal(existsSync(retainedCapture), false);
     assert.equal(existsSync(`${state.prefix}-${scope}.cleanup-pending`), false);
   } finally {

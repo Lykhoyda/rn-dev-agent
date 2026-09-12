@@ -71,6 +71,18 @@ test('a none line followed by a real warning still emits Recording Notes', async
   assert.match(await readFile(output, 'utf8'), /### Recording Notes\n\n- None\n- Proof video/);
 });
 
+test('a none line carrying a real warning still emits Recording Notes', async (t) => {
+  const { output, generate } = await fixture(
+    t,
+    'None for the flow itself; the proof video averages 0.22 fps and may play as a slideshow.',
+  );
+  await generate();
+  assert.match(
+    await readFile(output, 'utf8'),
+    /### Recording Notes\n\nNone for the flow itself; the proof video averages 0\.22 fps/,
+  );
+});
+
 test('PR body generation failure leaves the existing output intact', async (t) => {
   const { bin, output, generate } = await fixture(t, '- None');
   await writeFile(output, 'old output');

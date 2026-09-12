@@ -76,7 +76,7 @@ deviations="$(awk '
   capture { print }
 ' "$PROOF_DIR/PROOF.md" | sed -e '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;};/\n$/ba')"
 
-none_form='^(none|no deviations|n/a)([^a-z0-9]|$)'
+none_form='^(none|no deviations|n/a)[[:space:][:punct:]]*$'
 deviations_reportable=""
 while IFS= read -r line; do
   normalized="$(printf '%s' "$line" | sed 's/^[[:space:]*-]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
