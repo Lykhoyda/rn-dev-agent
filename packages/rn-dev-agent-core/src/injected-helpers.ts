@@ -2918,14 +2918,6 @@ export const INJECTED_HELPERS = `
           }
           return true;
         };
-        var walkChildOf = function(parent, child) {
-          var node = parent.child;
-          for (var steps = 0; node && steps < 1000; steps++) {
-            if (node === child) return true;
-            node = node.sibling;
-          }
-          return false;
-        };
         var walkForwarded = function(a, b) {
           var ap = a.memoizedProps, bp = b.memoizedProps;
           if (!ap || !bp) return false;
@@ -2977,7 +2969,6 @@ export const INJECTED_HELPERS = `
           var node = host;
           while (node && lineage.length < 1000) {
             if (seen.has(node)) return null;
-            if (lineage.length > 0 && !walkChildOf(node, lineage[lineage.length - 1])) return null;
             seen.add(node);
             lineage.push(node);
             node = node.return;

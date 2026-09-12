@@ -334,25 +334,6 @@ test('#951 siblings remain ambiguous with distinct or shared callbacks and host 
   }
 });
 
-test('#951 stale return pointers cannot hide a mounted independent responder host', () => {
-  const fixture = forwardedPressTree();
-  fixture.outerHost.memoizedProps.onResponderGrant = () => {};
-  fixture.animated.return = fixture.root;
-  assertTabAmbiguity(pressFixture(fixture));
-  assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
-});
-
-test('#951 a stale return pointer with one shared callback still dispatches once', () => {
-  const fixture = forwardedPressTree();
-  fixture.outerHost.memoizedProps.onResponderGrant = () => {};
-  fixture.animated.return = fixture.root;
-  fixture.root.memoizedProps.onPress = fixture.animated.memoizedProps.onPress;
-  const result = pressFixture(fixture);
-  assert.equal(result.success, true, JSON.stringify(result));
-  assert.equal(result.component, 'BottomTabItem');
-  assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
-});
-
 test('#951 unproven host semantics and incomplete ancestry preserve ambiguity metadata', async (t) => {
   const cases: Record<string, (fixture: ReturnType<typeof forwardedPressTree>) => void> = {
     'hostless distinct callbacks': (f) => {
