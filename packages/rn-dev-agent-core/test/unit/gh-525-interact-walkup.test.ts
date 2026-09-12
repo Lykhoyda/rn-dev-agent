@@ -29,6 +29,7 @@ interface SandboxFiber {
   return: SandboxFiber | null;
   child: SandboxFiber | null;
   sibling: SandboxFiber | null;
+  alternate: SandboxFiber | null;
   stateNode: null;
 }
 
@@ -81,6 +82,7 @@ function buildFiber(spec: FiberSpec, parent: SandboxFiber | null = null): Sandbo
     return: parent,
     child: null,
     sibling: null,
+    alternate: null,
     stateNode: null,
   };
   if (spec.children && spec.children.length > 0) {
@@ -219,6 +221,18 @@ function assertTabAmbiguity(result: Record<string, unknown>, innerName = 'Animat
     hint: 'Multiple distinct pressable fibers resolve from this testID. Pass the testID of the exact pressable component instead.',
   });
 }
+
+test('#951 a bailout boundary inside the forwarding chain still resolves the host', () => {
+  const fixture = forwardedPressTree();
+  const animatedOld: SandboxFiber = { ...fixture.animated, alternate: fixture.animated };
+  fixture.animated.alternate = animatedOld;
+  fixture.pressable.return = animatedOld;
+  const result = pressFixture(fixture);
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.component, 'Pressable');
+  assert.equal(result.walkUpLevels, 2);
+  assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+});
 
 test('#951 repeated observations of the same mounted host still dispatch once', () => {
   const fixture = forwardedPressTree();

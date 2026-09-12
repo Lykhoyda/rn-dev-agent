@@ -67365,6 +67365,7 @@ var init_injected_helpers = __esm({
 
     try {
       if (action === 'press' && opts.walkUp === true) {
+        // 8 levels covers ~2 JSX wrappers: one wrapper is ~3 fibers under NativeWind CssInterop.
         var WALK_UP_MAX = 8;
         var walkFiberName = function(f) {
           return (f && f.type && (typeof f.type === 'string'
@@ -67418,7 +67419,7 @@ var init_injected_helpers = __esm({
             walkHops++;
           }
           if (!walkNode || walkHops > WALK_UP_MAX) continue;
-          walkOriginalCandidates.push(walkNode);
+          walkOriginalCandidates.push({ fiber: walkNode, hops: walkHops, source: walkSources[wi] });
           var existing = null;
           for (var wj = 0; wj < walkCandidates.length; wj++) {
             if (walkCandidates[wj].fiber === walkNode || walkForwarded(walkCandidates[wj].fiber, walkNode)) {
@@ -67454,25 +67455,29 @@ var init_injected_helpers = __esm({
             node = node.return;
           }
           if (node) return null;
+          var lineageIndex = function(f) {
+            for (var li = 0; li < lineage.length; li++) {
+              if (sameFiber(f, lineage[li])) return li;
+            }
+            return -1;
+          };
           for (var si = 0; si < walkSources.length; si++) {
-            if (!seen.has(walkSources[si])) return null;
+            if (lineageIndex(walkSources[si]) < 0) return null;
           }
+          var hostTarget = null;
           var outermost = 0;
           for (var ci = 0; ci < walkOriginalCandidates.length; ci++) {
             var candidate = walkOriginalCandidates[ci];
-            if (!seen.has(candidate) || candidate.memoizedProps.testID !== selector) return null;
-            outermost = Math.max(outermost, lineage.indexOf(candidate));
+            var candidateIndex = lineageIndex(candidate.fiber);
+            if (candidateIndex < 0 || candidate.fiber.memoizedProps.testID !== selector) return null;
+            outermost = Math.max(outermost, candidateIndex);
+            if (candidate.source === host) hostTarget = candidate;
           }
+          if (!hostTarget) return null;
           for (var li = 1; li <= outermost; li++) {
             if (lineage[li].tag === 5 && !walkInertView(lineage[li])) return null;
           }
-          for (var hops = 0; hops < lineage.length && hops <= WALK_UP_MAX; hops++) {
-            var p = lineage[hops].memoizedProps;
-            if (p && typeof p.onPress === 'function') {
-              return { fiber: lineage[hops], hops: hops, source: host };
-            }
-          }
-          return null;
+          return hostTarget;
         };
         if (walkCandidates.length > 1) {
           var witnessedTarget = walkSingleHostTarget();
@@ -68781,6 +68786,11 @@ var init_injected_helpers = __esm({
     return { eligible: true };
   }
 
+  // React return chains may thread through either half of a fiber/alternate pair.
+  function sameFiber(a, b) {
+    return a === b || (!!b && a === b.alternate);
+  }
+
   function isTestIdFrontmost(testID) {
     if (typeof testID !== 'string' || !testID) {
       return JSON.stringify({ visible: false, reason: 'testID is required' });
@@ -68824,12 +68834,10 @@ var init_injected_helpers = __esm({
       });
     }
     function containsFiber(ancestor, candidate) {
-      // React return chains may thread through either half of a fiber/alternate pair.
-      var ancestorAlternate = ancestor.alternate || null;
       var current = candidate;
       var guard = 0;
       while (current && guard++ < 1000) {
-        if (current === ancestor || current === ancestorAlternate) return true;
+        if (sameFiber(current, ancestor)) return true;
         current = current.return;
       }
       return false;
