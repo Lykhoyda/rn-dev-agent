@@ -89344,16 +89344,19 @@ function createProofCaptureHandler(deps) {
       if (savedPath !== active.context.videoPath) {
         return rejectCapture(active, ["RECORDING_PATH_MISMATCH"]);
       }
+      const savedSize = saved[0].sizeBytes;
+      const oversizeWarning = typeof savedSize === "number" ? oversizeProofWarning([{ path: active.context.videoPath, sizeBytes: savedSize }]) : null;
       const derived = deriveEvidence(active);
       active.evidenceDraft = derived.evidence;
       active.stage = "validating";
       active.invalidationReasons = [];
-      return okResult({
+      const stopped = {
         stage: active.stage,
         videoPath: savedPath,
         evidenceDraft: derived.evidence,
         evidenceReasons: derived.reasons
-      });
+      };
+      return oversizeWarning ? warnResult(stopped, oversizeWarning) : okResult(stopped);
     }
     if (args.action === "validate") {
       if (active.stage !== "validating" || !active.baseline || !active.recordingStartedAt || active.rehearsalDurationMs === null || !active.rehearsalFinishedAt) {
