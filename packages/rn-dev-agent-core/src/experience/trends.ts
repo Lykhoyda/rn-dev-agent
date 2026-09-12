@@ -1,5 +1,13 @@
 import { join } from 'node:path';
 import {
+  authorityRefusalFacts,
+  authorityRefusalFamily,
+  authorityRefusalSystemicKey,
+  type AuthorityAxis,
+  type AuthorityRefusalCause,
+  type AuthorityRefusalCode,
+} from './authority-refusal.js';
+import {
   EXPERIENCE_DIRECTORY,
   EXPERIENCE_STORE_NAME,
   readExperienceStore,
@@ -21,12 +29,32 @@ export interface RecurringTrend {
   lastSeen: string;
 }
 
+export interface SystemicRefusalTrend {
+  systemicKey: string;
+  classification: string;
+  code: AuthorityRefusalCode;
+  axis: AuthorityAxis | null;
+  cause: AuthorityRefusalCause | null;
+  platform: string | null;
+  count: number;
+  tools: string[];
+  memberSignatures: string[];
+  firstSeen: string;
+  lastSeen: string;
+  recurring: boolean;
+  recoveryEvidence: 'not-verified';
+  currentAuthorityState: 'unknown';
+  scope: 'retained-local-history';
+  provenance: Array<'recorded' | 'legacy-derived'>;
+}
+
 export interface ExperienceTrendReport {
   generatedAt: string;
   since: string;
   families: FamilyTrend[];
   newSincePreviousReport: RecurringTrend[];
   recurring: RecurringTrend[];
+  systemicRefusals: SystemicRefusalTrend[];
 }
 
 export function buildExperienceTrendReport(
@@ -69,7 +97,70 @@ export function buildExperienceTrendReport(
       .filter((record) => record.count > 1)
       .map(project)
       .sort(sortPatterns),
+    systemicRefusals: buildSystemicRefusalTrends(records),
   };
+}
+
+function buildSystemicRefusalTrends(records: ExperienceRecord[]): SystemicRefusalTrend[] {
+  const groups = new Map<string, SystemicRefusalTrend>();
+  for (const record of records) {
+    const extension: unknown = record.authorityRefusal;
+    if (
+      !extension ||
+      typeof extension !== 'object' ||
+      Array.isArray(extension) ||
+      !('code' in extension)
+    )
+      continue;
+    const facts = authorityRefusalFacts(
+      extension.code,
+      'axis' in extension ? extension.axis : null,
+      'cause' in extension ? extension.cause : null,
+    );
+    if (!facts) continue;
+    const platform =
+      typeof record.platform === 'string' && record.platform.length > 0 ? record.platform : null;
+    const systemicKey = authorityRefusalSystemicKey(facts, platform);
+    const aggregate = groups.get(systemicKey);
+    if (aggregate) {
+      aggregate.count += record.count;
+      aggregate.tools.push(record.tool);
+      aggregate.memberSignatures.push(record.signature);
+      if (compareTimestamps(record.firstSeen, aggregate.firstSeen) < 0)
+        aggregate.firstSeen = record.firstSeen;
+      if (compareTimestamps(record.lastSeen, aggregate.lastSeen) > 0)
+        aggregate.lastSeen = record.lastSeen;
+    } else {
+      groups.set(systemicKey, {
+        systemicKey,
+        classification: authorityRefusalFamily(facts.code),
+        ...facts,
+        platform,
+        count: record.count,
+        tools: [record.tool],
+        memberSignatures: [record.signature],
+        firstSeen: record.firstSeen,
+        lastSeen: record.lastSeen,
+        recurring: false,
+        recoveryEvidence: 'not-verified',
+        currentAuthorityState: 'unknown',
+        scope: 'retained-local-history',
+        provenance: ['recorded'],
+      });
+    }
+  }
+  return [...groups.values()]
+    .map((aggregate) => ({
+      ...aggregate,
+      tools: [...new Set(aggregate.tools)].sort(),
+      memberSignatures: [...new Set(aggregate.memberSignatures)].sort(),
+      recurring: aggregate.count > 1,
+    }))
+    .sort((a, b) => b.count - a.count || a.systemicKey.localeCompare(b.systemicKey));
+}
+
+function compareTimestamps(a: string, b: string): number {
+  return Date.parse(a) - Date.parse(b) || a.localeCompare(b);
 }
 
 export function readExperienceTrendReport(options: {

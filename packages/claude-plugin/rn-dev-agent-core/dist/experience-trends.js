@@ -4,12 +4,8 @@ import { createRequire as __rnCreateRequire } from "node:module"; const require 
 // packages/rn-dev-agent-core/dist/experience/trends.js
 import { join as join2 } from "node:path";
 
-// packages/rn-dev-agent-core/dist/experience/evidence.js
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir, platform as hostPlatform, release } from "node:os";
-import { dirname, join } from "node:path";
-
 // packages/rn-dev-agent-core/dist/experience/authority-refusal.js
+import { createHash } from "node:crypto";
 var AUTHORITY_REFUSAL_CODES = [
   "SESSION_AUTHORITY_REQUIRED",
   "METRO_ORIGIN_MISMATCH",
@@ -18,9 +14,44 @@ var AUTHORITY_REFUSAL_CODES = [
   "NON_GIT_MANIFEST_REQUIRED",
   "BUNDLE_HANDSHAKE_UNAVAILABLE"
 ];
+var AUTHORITY_AXES = ["C", "S", "I", "M", "A", "B", "D", "R", "P"];
+var REFUSAL_CAUSES = {
+  SESSION_AUTHORITY_REQUIRED: [],
+  METRO_ORIGIN_MISMATCH: [],
+  RUNNER_OWNERSHIP_MISMATCH: [],
+  HANDOFF_NOT_AUTHORIZED: [],
+  NON_GIT_MANIFEST_REQUIRED: [],
+  BUNDLE_HANDSHAKE_UNAVAILABLE: []
+};
+function isAuthorityRefusalCode(value) {
+  return AUTHORITY_REFUSAL_CODES.some((code) => code === value);
+}
 function authorityRefusalFamily(code) {
   return `FF_${code}`;
 }
+function authorityRefusalFacts(code, axis, cause) {
+  if (!isAuthorityRefusalCode(code))
+    return null;
+  return {
+    code,
+    axis: AUTHORITY_AXES.find((candidate) => candidate === axis) ?? null,
+    cause: REFUSAL_CAUSES[code].find((candidate) => candidate === cause) ?? null
+  };
+}
+function authorityRefusalSystemicKey(facts, platform) {
+  return createHash("sha256").update(JSON.stringify([
+    "rn-dev-agent/authority-refusal/1",
+    facts.code,
+    facts.axis,
+    facts.cause,
+    platform
+  ])).digest("hex");
+}
+
+// packages/rn-dev-agent-core/dist/experience/evidence.js
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir, platform as hostPlatform, release } from "node:os";
+import { dirname, join } from "node:path";
 
 // packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -119,8 +150,58 @@ function buildExperienceTrendReport(records, since2, now = /* @__PURE__ */ new D
     since: since2.toISOString(),
     families: [...families.entries()].map(([classification, value]) => ({ classification, ...value })).sort((a, b) => b.count - a.count || a.classification.localeCompare(b.classification)),
     newSincePreviousReport: records.filter((record) => Date.parse(record.firstSeen) >= since2.getTime()).map(project).sort(sortPatterns),
-    recurring: records.filter((record) => record.count > 1).map(project).sort(sortPatterns)
+    recurring: records.filter((record) => record.count > 1).map(project).sort(sortPatterns),
+    systemicRefusals: buildSystemicRefusalTrends(records)
   };
+}
+function buildSystemicRefusalTrends(records) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const record of records) {
+    const extension = record.authorityRefusal;
+    if (!extension || typeof extension !== "object" || Array.isArray(extension) || !("code" in extension))
+      continue;
+    const facts = authorityRefusalFacts(extension.code, "axis" in extension ? extension.axis : null, "cause" in extension ? extension.cause : null);
+    if (!facts)
+      continue;
+    const platform = typeof record.platform === "string" && record.platform.length > 0 ? record.platform : null;
+    const systemicKey = authorityRefusalSystemicKey(facts, platform);
+    const aggregate = groups.get(systemicKey);
+    if (aggregate) {
+      aggregate.count += record.count;
+      aggregate.tools.push(record.tool);
+      aggregate.memberSignatures.push(record.signature);
+      if (compareTimestamps(record.firstSeen, aggregate.firstSeen) < 0)
+        aggregate.firstSeen = record.firstSeen;
+      if (compareTimestamps(record.lastSeen, aggregate.lastSeen) > 0)
+        aggregate.lastSeen = record.lastSeen;
+    } else {
+      groups.set(systemicKey, {
+        systemicKey,
+        classification: authorityRefusalFamily(facts.code),
+        ...facts,
+        platform,
+        count: record.count,
+        tools: [record.tool],
+        memberSignatures: [record.signature],
+        firstSeen: record.firstSeen,
+        lastSeen: record.lastSeen,
+        recurring: false,
+        recoveryEvidence: "not-verified",
+        currentAuthorityState: "unknown",
+        scope: "retained-local-history",
+        provenance: ["recorded"]
+      });
+    }
+  }
+  return [...groups.values()].map((aggregate) => ({
+    ...aggregate,
+    tools: [...new Set(aggregate.tools)].sort(),
+    memberSignatures: [...new Set(aggregate.memberSignatures)].sort(),
+    recurring: aggregate.count > 1
+  })).sort((a, b) => b.count - a.count || a.systemicKey.localeCompare(b.systemicKey));
+}
+function compareTimestamps(a, b) {
+  return Date.parse(a) - Date.parse(b) || a.localeCompare(b);
 }
 function readExperienceTrendReport(options) {
   const directory = options.directory ?? process.env.RN_DEV_AGENT_EXPERIENCE_DIR ?? EXPERIENCE_DIRECTORY;
@@ -129,7 +210,7 @@ function readExperienceTrendReport(options) {
 
 // packages/rn-dev-agent-core/dist/experience-trends.js
 function usage() {
-  process.stderr.write("Usage: rn-experience-trends [--since <ISO timestamp>] [--json]\n  --since is the generated-at timestamp printed by the previous report (default: 24 hours ago).\n  This command only reads ~/.claude/rn-agent/experience/patterns.jsonl.\n");
+  process.stderr.write("Usage: rn-experience-trends [--since <ISO timestamp>] [--json]\n  --since is the generated-at timestamp printed by the previous report (default: 24 hours ago).\n  --since affects only new-pattern selection.\n  Systemic, family, and recurring totals cover retained local history, not exact time-window counts.\n  Current authority state is unknown; historical observations do not establish a currently blocked session.\n  This command only reads patterns.jsonl in RN_DEV_AGENT_EXPERIENCE_DIR (default: ~/.claude/rn-agent/experience).\n");
   process.exit(2);
 }
 var since = new Date(Date.now() - 24 * 60 * 60 * 1e3);
@@ -160,6 +241,7 @@ try {
 `);
     process.stdout.write(`Report generated at ${report.generatedAt}; pass this value to --since next time.
 `);
+    process.stdout.write("Systemic, family, and recurring totals cover retained local history, not exact time-window counts.\n--since affects only new-pattern selection.\n");
     process.stdout.write("\nFamilies by frequency\n");
     if (report.families.length === 0)
       process.stdout.write("  none\n");
@@ -179,6 +261,16 @@ try {
       process.stdout.write("  none\n");
     for (const item of report.recurring) {
       process.stdout.write(`  ${item.classification} ${item.tool}: ${item.count} (${item.signature.slice(0, 12)})
+`);
+    }
+    process.stdout.write("\nSystemic authority refusals (retained local history)\n");
+    process.stdout.write("  Current authority state: unknown; historical observations do not establish a currently blocked session.\n");
+    if (report.systemicRefusals.length === 0)
+      process.stdout.write("  none\n");
+    for (const item of report.systemicRefusals) {
+      process.stdout.write(`  ${item.code} | axis: ${item.axis ?? "unknown"} | cause: ${item.cause ?? "unknown"} | platform: ${item.platform ?? "unknown"}
+    ${item.count} occurrence(s) | tools: ${item.tools.join(", ")} | recurring: ${item.recurring ? "yes" : "no"} | recovery not verified
+    first seen: ${item.firstSeen} | last seen: ${item.lastSeen}
 `);
     }
   }

@@ -5,7 +5,10 @@ function usage(): never {
   process.stderr.write(
     'Usage: rn-experience-trends [--since <ISO timestamp>] [--json]\n' +
       '  --since is the generated-at timestamp printed by the previous report (default: 24 hours ago).\n' +
-      '  This command only reads ~/.claude/rn-agent/experience/patterns.jsonl.\n',
+      '  --since affects only new-pattern selection.\n' +
+      '  Systemic, family, and recurring totals cover retained local history, not exact time-window counts.\n' +
+      '  Current authority state is unknown; historical observations do not establish a currently blocked session.\n' +
+      '  This command only reads patterns.jsonl in RN_DEV_AGENT_EXPERIENCE_DIR (default: ~/.claude/rn-agent/experience).\n',
   );
   process.exit(2);
 }
@@ -37,6 +40,10 @@ try {
     process.stdout.write(
       `Report generated at ${report.generatedAt}; pass this value to --since next time.\n`,
     );
+    process.stdout.write(
+      'Systemic, family, and recurring totals cover retained local history, not exact time-window counts.\n' +
+        '--since affects only new-pattern selection.\n',
+    );
     process.stdout.write('\nFamilies by frequency\n');
     if (report.families.length === 0) process.stdout.write('  none\n');
     for (const family of report.families) {
@@ -56,6 +63,18 @@ try {
     for (const item of report.recurring) {
       process.stdout.write(
         `  ${item.classification} ${item.tool}: ${item.count} (${item.signature.slice(0, 12)})\n`,
+      );
+    }
+    process.stdout.write('\nSystemic authority refusals (retained local history)\n');
+    process.stdout.write(
+      '  Current authority state: unknown; historical observations do not establish a currently blocked session.\n',
+    );
+    if (report.systemicRefusals.length === 0) process.stdout.write('  none\n');
+    for (const item of report.systemicRefusals) {
+      process.stdout.write(
+        `  ${item.code} | axis: ${item.axis ?? 'unknown'} | cause: ${item.cause ?? 'unknown'} | platform: ${item.platform ?? 'unknown'}\n` +
+          `    ${item.count} occurrence(s) | tools: ${item.tools.join(', ')} | recurring: ${item.recurring ? 'yes' : 'no'} | recovery not verified\n` +
+          `    first seen: ${item.firstSeen} | last seen: ${item.lastSeen}\n`,
       );
     }
   }
