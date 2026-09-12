@@ -1523,6 +1523,19 @@ probe_android_process() {
   ANDROID_PROCESS_ARGS="$args"
 }
 
+normalize_capture_video() {
+  local input="$1"
+  local output="$2"
+  local duration
+  duration="$(ffprobe -v error -select_streams v:0 -show_entries stream=duration \
+    -of default=noprint_wrappers=1:nokey=1 "$input")" || return 1
+  [[ "$duration" =~ ^[0-9]+(\.[0-9]+)?$ && "$duration" =~ [1-9] ]] || return 1
+  # Native idle frames are irregular; retain their timing and the final frame's duration.
+  ffmpeg -y -i "$input" -vf 'fps=30,tpad=stop_mode=clone:stop=-1' \
+    -t "$duration" -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
+    -movflags +faststart -f mp4 "$output"
+}
+
 cmd_start() {
   local platform="${1:-}"
   local output_path="${2:-}"
@@ -2150,19 +2163,14 @@ cmd_stop() {
         local staged_mp4
         staged_mp4="$(create_private_capture_file)"
         PENDING_STAGE_FILE="$staged_mp4"
-        if ffmpeg \
-          -y \
-          -i "$raw_file" \
-          -c copy \
-          -movflags +faststart \
-          -f mp4 \
-          "$staged_mp4" 2>/dev/null; then
+        if normalize_capture_video "$raw_file" "$staged_mp4" 2>/dev/null; then
           staged_output="$staged_mp4"
           staged_identity="$(capture_file_identity "$staged_output")" || {
             echo "Error: converted recording output is unstable" >&2
             return 1
           }
         else
+          echo "Warning: Could not normalize recording cadence; preserving native capture" >&2
           rm -f "$staged_mp4"
           PENDING_STAGE_FILE=""
           output_path="${output_path%.mp4}.mov"
@@ -2227,9 +2235,10 @@ cmd_stop() {
     if [[ -n "$raw_file" && -f "$raw_file" ]]; then
       if command -v ffmpeg >/dev/null 2>&1; then
         local tmp_mp4="/tmp/rn-dev-agent-convert-$$.mp4"
-        if ffmpeg -y -i "$raw_file" -c copy -movflags +faststart "$tmp_mp4" 2>/dev/null; then
+        if normalize_capture_video "$raw_file" "$tmp_mp4" 2>/dev/null; then
           mv "$tmp_mp4" "$output_path"
         else
+          echo "Warning: Could not normalize recording cadence; preserving native capture" >&2
           mv "$raw_file" "${output_path%.mp4}.mov"
           output_path="${output_path%.mp4}.mov"
           rm -f "$tmp_mp4"
