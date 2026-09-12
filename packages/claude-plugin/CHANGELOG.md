@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 1.0.9
+
+### Patch Changes
+
+- c3fc818: Managed dev-client launches and relaunches now keep the Expo dev-menu onboarding tutorial and launch-time sheet from auto-opening over a native segment or after a reload on a fresh install, on by default and configurable per target class with `autoHideDevMenu` in `.rn-agent/config.json` (GH #1004).
+- Updated dependencies [c3fc818]
+  - rn-dev-agent-core@1.0.9
+
 ## 1.0.8
 
 ### Patch Changes
