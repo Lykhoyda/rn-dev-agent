@@ -87369,6 +87369,12 @@ function oversizeProofWarning(saved) {
   const measured = oversize.map((rec) => `${rec.path} (${rec.sizeBytes} bytes)`).join(", ");
   return `Proof video exceeds GitHub's ${GITHUB_VIDEO_ATTACHMENT_LIMIT_BYTES}-byte (100 MB) video attachment limit: ${measured}. The file is kept \u2014 shorten the journey before attaching it to a PR or issue.`;
 }
+function parseNormalizationSkipped(stdout) {
+  return stdout.match(/^Cadence normalization skipped: (.+)$/m)?.[1]?.trim() ?? null;
+}
+function normalizationSkippedWarning(reason) {
+  return `Recording cadence was not normalized to 30 fps (${reason}); the saved video keeps the sparse native frame timing and may play as a slideshow rather than smooth video.`;
+}
 function parseRecorderFailure(stdout) {
   return stdout.match(/^Recorder failed:\s*(.+)$/m)?.[1]?.trim() ?? null;
 }
@@ -87587,10 +87593,15 @@ async function runStop(args, runtime) {
     }
     return warnResult({ saved: [] }, `Stop ran but no saved file detected. Raw: ${stopOutput.trim().slice(0, 400)}`);
   }
-  const oversizeWarning = oversizeProofWarning(saved);
+  const normalizationSkipped = parseNormalizationSkipped(stopOutput);
+  const stopWarnings = [
+    normalizationSkipped ? normalizationSkippedWarning(normalizationSkipped) : null,
+    oversizeProofWarning(saved)
+  ].filter((warning) => warning !== null);
+  const cadence = normalizationSkipped ? { normalizationSkipped } : {};
   if (!args.gif) {
-    const data2 = { action: "stop", saved };
-    return oversizeWarning ? warnResult(data2, oversizeWarning) : okResult(data2);
+    const data2 = { action: "stop", saved, ...cadence };
+    return stopWarnings.length > 0 ? warnResult(data2, stopWarnings.join(" ")) : okResult(data2);
   }
   if (args.gifPath && saved.length > 1) {
     return failResult(`gifPath cannot be combined with ${saved.length} active recordings \u2014 each recording would write to the same file. Omit gifPath to auto-derive per-recording GIF paths, or stop one platform at a time.`, { code: "GIFPATH_AMBIGUOUS" });
@@ -87613,18 +87624,19 @@ async function runStop(args, runtime) {
     }
   }
   if (gifs.length === 0 && gifWarnings.length > 0) {
-    return warnResult({ action: "stop", saved, gifs: [] }, [
+    return warnResult({ action: "stop", saved, gifs: [], ...cadence }, [
       `Saved ${saved.length} recording(s) but all GIF conversions failed. ${gifWarnings.join(" ")}`,
-      oversizeWarning
-    ].filter(Boolean).join(" "));
+      ...stopWarnings
+    ].join(" "));
   }
   const data = {
     action: "stop",
     saved,
     gifs,
+    ...cadence,
     ...gifWarnings.length > 0 ? { gifWarnings } : {}
   };
-  return oversizeWarning ? warnResult(data, oversizeWarning) : okResult(data);
+  return stopWarnings.length > 0 ? warnResult(data, stopWarnings.join(" ")) : okResult(data);
 }
 async function readScopedStatus(script, scope) {
   const { stdout } = await runRecordProofScript(script, ["status", scope], STATUS_TIMEOUT_MS);
@@ -89345,7 +89357,11 @@ function createProofCaptureHandler(deps) {
         return rejectCapture(active, ["RECORDING_PATH_MISMATCH"]);
       }
       const savedSize = saved[0].sizeBytes;
-      const oversizeWarning = typeof savedSize === "number" ? oversizeProofWarning([{ path: active.context.videoPath, sizeBytes: savedSize }]) : null;
+      const cadenceSkipped = shutdown2.stopData?.normalizationSkipped;
+      const stopWarnings = [
+        typeof cadenceSkipped === "string" && cadenceSkipped.length > 0 ? normalizationSkippedWarning(cadenceSkipped) : null,
+        typeof savedSize === "number" ? oversizeProofWarning([{ path: active.context.videoPath, sizeBytes: savedSize }]) : null
+      ].filter((warning) => warning !== null);
       const derived = deriveEvidence(active);
       active.evidenceDraft = derived.evidence;
       active.stage = "validating";
@@ -89356,7 +89372,7 @@ function createProofCaptureHandler(deps) {
         evidenceDraft: derived.evidence,
         evidenceReasons: derived.reasons
       };
-      return oversizeWarning ? warnResult(stopped, oversizeWarning) : okResult(stopped);
+      return stopWarnings.length > 0 ? warnResult(stopped, stopWarnings.join(" ")) : okResult(stopped);
     }
     if (args.action === "validate") {
       if (active.stage !== "validating" || !active.baseline || !active.recordingStartedAt || active.rehearsalDurationMs === null || !active.rehearsalFinishedAt) {
@@ -89551,6 +89567,7 @@ import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir11 } from "node:os";
 import { dirname as dirname25, join as join49 } from "node:path";
+var MINIMUM_PROOF_FRAME_RATE = 10;
 var MediaFailure = class extends Error {
   reason;
   constructor(reason) {
@@ -89613,8 +89630,19 @@ function readVideoMetadata(metadata) {
     durationMs: Math.round(durationSeconds * 1e3),
     codec: String(videoStream.codec_name),
     width: Number(videoStream.width),
-    height: Number(videoStream.height)
+    height: Number(videoStream.height),
+    avgFrameRate: readFrameRate(videoStream)
   };
+}
+function readFrameRate(stream) {
+  const raw = "avg_frame_rate" in stream ? stream.avg_frame_rate : void 0;
+  if (typeof raw !== "string")
+    return null;
+  const [numerator, denominator] = raw.split("/").map(Number);
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0)
+    return null;
+  const rate = numerator / denominator;
+  return rate > 0 ? rate : null;
 }
 async function probeVideo(process3, videoPath) {
   const file = await requireNonEmptyFile(videoPath, "VIDEO_MISSING", "VIDEO_EMPTY");
@@ -89624,7 +89652,7 @@ async function probeVideo(process3, videoPath) {
       "-v",
       "error",
       "-show_entries",
-      "format=duration,size:stream=codec_name,width,height",
+      "format=duration,size:stream=codec_name,width,height,avg_frame_rate",
       "-of",
       "json",
       videoPath
@@ -89646,7 +89674,8 @@ async function probeVideo(process3, videoPath) {
     sizeBytes: file.size,
     codec: decoded.codec,
     width: decoded.width,
-    height: decoded.height
+    height: decoded.height,
+    avgFrameRate: decoded.avgFrameRate
   };
 }
 function validateThreshold(threshold) {
@@ -89827,12 +89856,15 @@ async function validateMedia(process3, input) {
   try {
     const threshold = input.threshold ?? 0.9;
     validateInput(input, threshold);
-    const probedVideo = await probeVideo(process3, input.videoPath);
+    const { avgFrameRate, ...probedVideo } = await probeVideo(process3, input.videoPath);
     const bounds = durationBounds(input.rehearsalDurationMs);
     if (probedVideo.durationMs < bounds.minimumMs)
       fail2("VIDEO_TOO_SHORT");
     if (probedVideo.durationMs > bounds.hardMaximumMs)
       fail2("VIDEO_TOO_LONG");
+    if (avgFrameRate !== null && avgFrameRate < MINIMUM_PROOF_FRAME_RATE) {
+      fail2("VIDEO_CADENCE_TOO_SPARSE");
+    }
     const scratchRoot = input.scratchRoot ?? tmpdir11();
     try {
       await mkdir2(scratchRoot, { recursive: true });

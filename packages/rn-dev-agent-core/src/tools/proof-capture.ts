@@ -50,7 +50,11 @@ import {
   type ProofStage,
   type Storyboard,
 } from '../domain/proof-receipt.js';
-import { oversizeProofWarning, type DeviceRecordArgs } from './device-record.js';
+import {
+  normalizationSkippedWarning,
+  oversizeProofWarning,
+  type DeviceRecordArgs,
+} from './device-record.js';
 import { validateMedia, type MediaProcess, type MediaValidationInput } from './proof-media.js';
 import { failResult, okResult, warnResult, type ToolResult } from '../utils.js';
 import {
@@ -1709,10 +1713,15 @@ export function createProofCaptureHandler(
         return rejectCapture(active, ['RECORDING_PATH_MISMATCH']);
       }
       const savedSize = (saved[0] as { sizeBytes?: unknown }).sizeBytes;
-      const oversizeWarning =
+      const cadenceSkipped = shutdown.stopData?.normalizationSkipped;
+      const stopWarnings = [
+        typeof cadenceSkipped === 'string' && cadenceSkipped.length > 0
+          ? normalizationSkippedWarning(cadenceSkipped)
+          : null,
         typeof savedSize === 'number'
           ? oversizeProofWarning([{ path: active.context.videoPath, sizeBytes: savedSize }])
-          : null;
+          : null,
+      ].filter((warning): warning is string => warning !== null);
       const derived = deriveEvidence(active);
       active.evidenceDraft = derived.evidence;
       active.stage = 'validating';
@@ -1723,7 +1732,9 @@ export function createProofCaptureHandler(
         evidenceDraft: derived.evidence,
         evidenceReasons: derived.reasons,
       };
-      return oversizeWarning ? warnResult(stopped, oversizeWarning) : okResult(stopped);
+      return stopWarnings.length > 0
+        ? warnResult(stopped, stopWarnings.join(' '))
+        : okResult(stopped);
     }
 
     if (args.action === 'validate') {

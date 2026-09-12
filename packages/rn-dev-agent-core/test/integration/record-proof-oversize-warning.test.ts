@@ -7,15 +7,19 @@ import { createDeviceRecordHandler } from '../../dist/tools/device-record.js';
 
 const SCOPE = 'a'.repeat(64);
 
-async function fakeRecorder(root: string, savedBytes: number) {
+async function fakeRecorder(root: string, savedBytes: number, cadenceReason?: string) {
   const script = join(root, 'record_proof.sh');
+  const stopLines = [
+    ...(cadenceReason ? [`echo "Cadence normalization skipped: ${cadenceReason}"`] : []),
+    `echo "Saved: ${join(root, 'proof.mp4')} (${savedBytes} bytes)"`,
+  ].join('; ');
   await writeFile(
     script,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       'case "$1" in',
-      `  stop) echo "Saved: ${join(root, 'proof.mp4')} (${savedBytes} bytes)" ;;`,
+      `  stop) ${stopLines} ;;`,
       '  status) echo "No active recordings" ;;',
       '  *) exit 1 ;;',
       'esac',
@@ -26,8 +30,8 @@ async function fakeRecorder(root: string, savedBytes: number) {
   return script;
 }
 
-async function stopWithSavedSize(root: string, savedBytes: number) {
-  const script = await fakeRecorder(root, savedBytes);
+async function stopWithSavedSize(root: string, savedBytes: number, cadenceReason?: string) {
+  const script = await fakeRecorder(root, savedBytes, cadenceReason);
   const runtime = {
     requireAvailable: () => ({ registry: { updateBindings: () => {} }, session: {} }),
     status: () => ({
@@ -74,4 +78,18 @@ test('a stop result for an attachable proof video carries no size warning', asyn
   assert.equal(envelope.ok, true);
   assert.equal(envelope.data.saved[0].sizeBytes, 100 * 1024 * 1024);
   assert.equal(envelope.meta, undefined);
+});
+
+test('a stop result reports a recording whose cadence could not be normalized', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'record-cadence-skipped-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const envelope = await stopWithSavedSize(root, 4_096, 'capture duration unreadable');
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.saved[0].sizeBytes, 4_096);
+  assert.equal(envelope.data.normalizationSkipped, 'capture duration unreadable');
+  assert.match(envelope.meta.warning, /not normalized to 30 fps/);
+  assert.match(envelope.meta.warning, /capture duration unreadable/);
+  assert.match(envelope.meta.warning, /slideshow/);
 });

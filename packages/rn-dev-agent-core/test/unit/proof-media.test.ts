@@ -48,7 +48,7 @@ class FakeMediaProcess implements MediaProcess {
           duration: String(this.options.durationSeconds ?? 20),
           size: '999999',
         },
-        streams: [{ codec_name: 'h264', width: 1080, height: 1920 }],
+        streams: [{ codec_name: 'h264', width: 1080, height: 1920, avg_frame_rate: '30/1' }],
       };
       return { stdout: JSON.stringify(metadata), stderr: '' };
     }
@@ -140,6 +140,7 @@ test('probeVideo trusts decoded semantics but records the actual file size and h
     codec: 'h264',
     width: 1080,
     height: 1920,
+    avgFrameRate: 30,
   });
   assert.deepEqual(process.calls[0], {
     command: 'ffprobe',
@@ -147,7 +148,7 @@ test('probeVideo trusts decoded semantics but records the actual file size and h
       '-v',
       'error',
       '-show_entries',
-      'format=duration,size:stream=codec_name,width,height',
+      'format=duration,size:stream=codec_name,width,height,avg_frame_rate',
       '-of',
       'json',
       fixture.videoPath,
@@ -297,6 +298,40 @@ test('validateMedia rejects video below 80 percent of rehearsal duration', async
   );
 
   assertFailure(result, 'VIDEO_TOO_SHORT');
+});
+
+test('validateMedia rejects a slideshow-cadence proof video', async (t) => {
+  const fixture = await createFixture(t);
+  const slideshow = new FakeMediaProcess({
+    metadata: {
+      format: { duration: '125', size: '999999' },
+      streams: [{ codec_name: 'h264', width: 1080, height: 1920, avg_frame_rate: '27/125' }],
+    },
+  });
+
+  const result = await validateMedia(slideshow, {
+    ...inputFor(fixture),
+    rehearsalDurationMs: 125_000,
+  });
+
+  assertFailure(result, 'VIDEO_CADENCE_TOO_SPARSE');
+});
+
+test('validateMedia accepts a normalized 30 fps proof video of the same length', async (t) => {
+  const fixture = await createFixture(t);
+  const normalized = new FakeMediaProcess({
+    metadata: {
+      format: { duration: '125', size: '999999' },
+      streams: [{ codec_name: 'h264', width: 1080, height: 1920, avg_frame_rate: '30/1' }],
+    },
+  });
+
+  const result = await validateMedia(normalized, {
+    ...inputFor(fixture),
+    rehearsalDurationMs: 125_000,
+  });
+
+  assert.equal(result.ok, true);
 });
 
 test('validateMedia accepts the adaptive target boundary without tolerance', async (t) => {
