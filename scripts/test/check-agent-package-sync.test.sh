@@ -61,6 +61,7 @@ write_valid_repo() {
   mkdir -p "$tmp/scripts"
   printf '%s\n' '#!/usr/bin/env bash' 'echo proof fixture' > "$tmp/scripts/record_proof.sh"
   printf '%s\n' '#!/usr/bin/env bash' 'echo feedback fixture' > "$tmp/scripts/collect-feedback.sh"
+  printf '%s\n' '#!/usr/bin/env bash' 'echo pr body fixture' > "$tmp/scripts/generate_pr_body.sh"
   for helper in expo_ensure_running.sh eas_resolve_artifact.sh snapshot_state.sh; do
     printf '%s\n' '#!/usr/bin/env bash' "echo $helper fixture" > "$tmp/scripts/$helper"
   done
@@ -98,6 +99,7 @@ write_valid_repo() {
   /bin/cp "$tmp/CLAUDE-MD-TEMPLATE.md" "$tmp/packages/claude-plugin/CLAUDE-MD-TEMPLATE.md"
   /bin/cp "$tmp/scripts/record_proof.sh" "$tmp/packages/claude-plugin/scripts/record_proof.sh"
   /bin/cp "$tmp/scripts/collect-feedback.sh" "$tmp/packages/claude-plugin/scripts/collect-feedback.sh"
+  /bin/cp "$tmp/scripts/generate_pr_body.sh" "$tmp/packages/claude-plugin/scripts/generate_pr_body.sh"
   printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":{"cdp":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"]}}}' > "$tmp/packages/claude-plugin/plugin.json"
   printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":{"cdp":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"]}}}' > "$tmp/packages/claude-plugin/.claude-plugin/plugin.json"
   printf '%s\n' '{"plugins":[{"name":"rn-dev-agent","version":"1.2.3","source":"./packages/claude-plugin"}]}' > "$tmp/.claude-plugin/marketplace.json"
@@ -110,6 +112,7 @@ write_valid_repo() {
   /bin/cp "$tmp/CLAUDE-MD-TEMPLATE.md" "$tmp/packages/codex-plugin/CLAUDE-MD-TEMPLATE.md"
   /bin/cp "$tmp/scripts/record_proof.sh" "$tmp/packages/codex-plugin/scripts/record_proof.sh"
   /bin/cp "$tmp/scripts/collect-feedback.sh" "$tmp/packages/codex-plugin/scripts/collect-feedback.sh"
+  /bin/cp "$tmp/scripts/generate_pr_body.sh" "$tmp/packages/codex-plugin/scripts/generate_pr_body.sh"
   for helper in expo_ensure_running.sh eas_resolve_artifact.sh check-vercel-rules.mjs snapshot_state.sh; do
     /bin/cp "$tmp/scripts/$helper" "$tmp/packages/codex-plugin/scripts/$helper"
     /bin/cp "$tmp/scripts/$helper" "$tmp/packages/claude-plugin/scripts/$helper"
