@@ -1531,9 +1531,15 @@ normalize_capture_video() {
     -of default=noprint_wrappers=1:nokey=1 "$input")" || return 1
   [[ "$duration" =~ ^[0-9]+(\.[0-9]+)?$ && "$duration" =~ [1-9] ]] || return 1
   # Native idle frames are irregular; retain their timing and the final frame's duration.
-  ffmpeg -y -i "$input" -vf 'fps=30,tpad=stop_mode=clone:stop=-1' \
+  local scale="scale='if(gt(iw,ih),-2,trunc(min(720,iw)/2)*2)':'if(gt(iw,ih),trunc(min(720,ih)/2)*2,-2)'"
+  ffmpeg -v error -y -i "$input" -vf "${scale},fps=30,tpad=stop_mode=clone:stop=-1" \
     -t "$duration" -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
-    -movflags +faststart -f mp4 "$output"
+    -movflags +faststart -f mp4 "$output" || return 1
+  local size
+  size="$(wc -c < "$output" | tr -d ' ')"
+  if [[ "$size" =~ ^[0-9]+$ ]] && (( size > 10485760 )); then
+    echo "Warning: proof video is $size bytes, over GitHub's 10 MB attachment limit" >&2
+  fi
 }
 
 cmd_start() {
@@ -2163,7 +2169,7 @@ cmd_stop() {
         local staged_mp4
         staged_mp4="$(create_private_capture_file)"
         PENDING_STAGE_FILE="$staged_mp4"
-        if normalize_capture_video "$raw_file" "$staged_mp4" 2>/dev/null; then
+        if normalize_capture_video "$raw_file" "$staged_mp4"; then
           staged_output="$staged_mp4"
           staged_identity="$(capture_file_identity "$staged_output")" || {
             echo "Error: converted recording output is unstable" >&2
@@ -2235,7 +2241,7 @@ cmd_stop() {
     if [[ -n "$raw_file" && -f "$raw_file" ]]; then
       if command -v ffmpeg >/dev/null 2>&1; then
         local tmp_mp4="/tmp/rn-dev-agent-convert-$$.mp4"
-        if normalize_capture_video "$raw_file" "$tmp_mp4" 2>/dev/null; then
+        if normalize_capture_video "$raw_file" "$tmp_mp4"; then
           mv "$tmp_mp4" "$output_path"
         else
           echo "Warning: Could not normalize recording cadence; preserving native capture" >&2
