@@ -37,6 +37,7 @@ function fixture() {
   const script = join(root, 'record_proof.sh');
   const adb = join(root, 'adb');
   const ffmpeg = join(root, 'ffmpeg');
+  const ffprobe = join(root, 'ffprobe');
   const killMarker = join(root, 'kill-marker');
   const pullMarker = join(root, 'pull-marker');
   const remoteDeleteMarker = join(root, 'remote-delete-marker');
@@ -115,6 +116,8 @@ exit 1
   );
   chmodSync(adb, 0o755);
   chmodSync(ffmpeg, 0o755);
+  writeFileSync(ffprobe, '#!/usr/bin/env bash\nprintf "5.0\\n"\n');
+  chmodSync(ffprobe, 0o755);
   mkdirSync(runtimeDirectory, { mode: 0o700 });
   return {
     root,
