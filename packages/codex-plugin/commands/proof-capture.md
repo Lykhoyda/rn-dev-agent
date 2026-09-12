@@ -83,7 +83,8 @@ When stage is uncertain, call `status`. On rejection, print the stable reason
 code exactly, call `discard`, restore the clean start state, and begin a fresh
 session with fresh destinations. Strict output contains only the accepted
 receipt path, screenshot paths, local video path and SHA-256, contact-sheet
-path, action and storyboard hashes, or the exact invalidation reason.
+path, action and storyboard hashes, any cadence or attachment-size warning
+`proof_capture` returned, or the exact invalidation reason.
 
 ## Interactive workflow
 
