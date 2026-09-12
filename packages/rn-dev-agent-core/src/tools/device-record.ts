@@ -426,6 +426,7 @@ async function runStart(
           phase: 'recording',
           platform,
           deviceId: resolution.deviceId,
+          startedAt: Date.now(),
           output: parsed.output,
           scope,
           pid: parsed.pid,
