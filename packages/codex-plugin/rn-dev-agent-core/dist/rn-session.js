@@ -18441,6 +18441,8 @@ init_process_birth();
 init_registry();
 var execFile13 = promisify13(execFileCb10);
 var RECORDER_POST_KILL_CONFIRM_MS = 2e3;
+var RECORDER_STOP_BASE_TIMEOUT_MS = 6e4;
+var RECORDER_STOP_MS_PER_RECORDED_MS = 3;
 function executeRecorderScript(script, args, options) {
   return new Promise((resolve6, reject) => {
     const child = spawn5(script, args, {
@@ -18561,7 +18563,7 @@ function executeRecorderScript(script, args, options) {
     }, options.timeout);
   });
 }
-async function runRecordProofScript(script, args, timeout = 6e4, dependencies = {}) {
+async function runRecordProofScript(script, args, timeout = RECORDER_STOP_BASE_TIMEOUT_MS, dependencies = {}) {
   const execute2 = dependencies.execute ?? executeRecorderScript;
   if ((dependencies.platform ?? process.platform) !== "darwin") {
     return execute2(script, args, { timeout, env: { ...process.env } });
@@ -18724,7 +18726,11 @@ ${instrumentation.stderr}`;
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `Android device-side runner termination is unproven: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
-async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, runRecorder = async (script, args) => runRecordProofScript(script, args)) {
+function recorderStopTimeoutMs(startedAt, now = Date.now()) {
+  const recordedMs = typeof startedAt === "number" && Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : 0;
+  return RECORDER_STOP_BASE_TIMEOUT_MS + RECORDER_STOP_MS_PER_RECORDED_MS * recordedMs;
+}
+async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, runRecorder = async (script, args, timeoutMs) => runRecordProofScript(script, args, timeoutMs)) {
   const script = String(binding.script ?? "");
   const scope = String(binding.scope ?? "");
   if (!hasCompleteRecorderCleanupIdentity(binding)) {
@@ -18753,7 +18759,7 @@ async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, run
   const pid = binding.pid;
   const expectedBirth = String(binding.processBirth ?? "");
   try {
-    const stopped = await runRecorder(script, ["stop", scope, String(pid), expectedBirth]);
+    const stopped = await runRecorder(script, ["stop", scope, String(pid), expectedBirth], recorderStopTimeoutMs(binding.startedAt));
     const status = await runRecorder(script, ["status", scope]);
     if (!/^No active recordings/m.test(status.stdout)) {
       throw new Error("recorder state remains active after cleanup");
