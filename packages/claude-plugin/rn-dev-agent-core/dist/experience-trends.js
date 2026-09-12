@@ -9,6 +9,19 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync
 import { homedir, platform as hostPlatform, release } from "node:os";
 import { dirname, join } from "node:path";
 
+// packages/rn-dev-agent-core/dist/experience/authority-refusal.js
+var AUTHORITY_REFUSAL_CODES = [
+  "SESSION_AUTHORITY_REQUIRED",
+  "METRO_ORIGIN_MISMATCH",
+  "RUNNER_OWNERSHIP_MISMATCH",
+  "HANDOFF_NOT_AUTHORIZED",
+  "NON_GIT_MANIFEST_REQUIRED",
+  "BUNDLE_HANDSHAKE_UNAVAILABLE"
+];
+function authorityRefusalFamily(code) {
+  return `FF_${code}`;
+}
+
 // packages/rn-dev-agent-core/dist/experience/runner-diagnostics.js
 import { AsyncLocalStorage } from "node:async_hooks";
 var storage = new AsyncLocalStorage();
@@ -16,6 +29,7 @@ var storage = new AsyncLocalStorage();
 // packages/rn-dev-agent-core/dist/experience/evidence.js
 var EXPERIENCE_DIRECTORY = join(homedir(), ".claude", "rn-agent", "experience");
 var EXPERIENCE_STORE_NAME = "patterns.jsonl";
+var MAX_AUTHORITY_ENVELOPE_BYTES = 16 * 1024;
 var RUNNER_DIAGNOSTICS_MAX_BYTES = 256 * 1024;
 var DAY_MS = 24 * 60 * 60 * 1e3;
 function readExperienceStore(path) {
@@ -77,7 +91,10 @@ var CLASSIFICATION_RULES = [
   ["PQ_ANDROID_BOOT_DELAY", /sys\.boot_completed|emulator.*grpc.*ready/],
   ["PQ_ANDROID_PLAY_PROTECT", /play protect.*(?:block|apk|install)/]
 ];
-var EXPERIENCE_FAMILY_IDS = CLASSIFICATION_RULES.map(([id]) => id);
+var EXPERIENCE_FAMILY_IDS = [
+  ...CLASSIFICATION_RULES.map(([id]) => id),
+  ...AUTHORITY_REFUSAL_CODES.map(authorityRefusalFamily)
+];
 
 // packages/rn-dev-agent-core/dist/experience/trends.js
 function buildExperienceTrendReport(records, since2, now = /* @__PURE__ */ new Date()) {

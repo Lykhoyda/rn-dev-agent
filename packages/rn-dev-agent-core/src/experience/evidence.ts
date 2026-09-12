@@ -16,6 +16,14 @@ import { fileURLToPath } from 'node:url';
 import { isValidActionId } from '../domain/path-safety.js';
 import type { ToolObserverInput } from '../observability/instrumentation.js';
 import {
+  AUTHORITY_REFUSAL_CODES,
+  authorityRefusalFacts,
+  authorityRefusalFamily,
+  authorityRefusalSystemicKey,
+  mergeAuthorityRefusalFacts,
+  type AuthorityRefusalFacts,
+} from './authority-refusal.js';
+import {
   retainRunnerDiagnosticEvents,
   type RunnerDiagnosticEvent,
   type RunnerDiagnosticsSnapshot,
@@ -28,6 +36,7 @@ export const MAX_EVIDENCE_POINTERS = 3;
 export const EXPERIENCE_DIRECTORY = join(homedir(), '.claude', 'rn-agent', 'experience');
 export const EXPERIENCE_STORE_NAME = 'patterns.jsonl';
 export const MAX_SYMPTOM_LENGTH = 2048;
+export const MAX_AUTHORITY_ENVELOPE_BYTES = 16 * 1024;
 export const RUNNER_DIAGNOSTICS_MAX_BYTES = 256 * 1024;
 export const RUNNER_DIAGNOSTICS_RETENTION = 5;
 export const RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS = 1024;
@@ -193,6 +202,8 @@ export interface ExperienceRecord {
   lastRecoveredAt: string | null;
   unknownReasons: Record<string, string>;
   redactionVersion: number;
+  authorityRefusal?: AuthorityRefusalFacts;
+  systemicKey?: string;
 }
 
 export interface ExperienceStoreOptions {
@@ -299,12 +310,15 @@ export class ExperienceRecorder {
       return;
     }
 
+    this.previousFailure = null;
     this.persistRunnerDiagnostics(event);
 
     const record = this.buildFailureRecord(event);
     this.persistFailure(record);
     this.previousFailure =
-      event.status === 'FAIL' ? { tool: event.tool, signature: record.signature } : null;
+      event.status === 'FAIL' && !record.authorityRefusal
+        ? { tool: event.tool, signature: record.signature }
+        : null;
   }
 
   private persistRunnerDiagnostics(event: ToolObserverInput): void {
@@ -325,15 +339,22 @@ export class ExperienceRecorder {
   }
 
   private buildFailureRecord(event: ToolObserverInput): ExperienceRecord {
+    const authorityRefusal = decodeAuthorityRefusal(event);
     const now = this.now().toISOString();
     const tool = sanitizeString(event.tool);
-    const symptom = sanitizeString(boundSymptom(extractSymptom(event)));
+    const symptom = sanitizeString(
+      boundSymptom(
+        authorityRefusal ? authorityRefusalSymptom(event, authorityRefusal) : extractSymptom(event),
+      ),
+    );
     const platform = sanitizeNullable(extractScalar(event, ['platform']));
     const deviceName = extractScalar(event, ['deviceName', 'deviceModel', 'model']);
     const hasDeviceId = extractScalar(event, ['deviceId', 'udid']) !== null;
     const device = sanitizeNullable(deviceName ?? (hasDeviceId ? 'identified-device' : null));
     const runtime = sanitizeNullable(extractScalar(event, ['runtime', 'engine']));
-    const classification = classifyExperience(symptom, tool, platform);
+    const classification = authorityRefusal
+      ? authorityRefusalFamily(authorityRefusal.code)
+      : classifyExperience(symptom, tool, platform);
     const normalizedSymptomShape = normalizeSymptomShape(symptom);
     const signature = experienceSignature({
       classification,
@@ -351,7 +372,9 @@ export class ExperienceRecorder {
       unknownReasons.device = 'tool event did not expose a device name or identifier';
     if (runtime === null) unknownReasons.runtime = 'tool event did not expose a runtime';
     unknownReasons.maskingCondition = 'not derivable from a single tool event';
-    unknownReasons.recovery = 'no immediate successful retry has been observed';
+    unknownReasons.recovery = authorityRefusal
+      ? 'recovery not verified'
+      : 'no immediate successful retry has been observed';
     unknownReasons.cleanup = 'tool events do not report cleanup actions';
 
     const raw: ExperienceRecord = {
@@ -379,6 +402,12 @@ export class ExperienceRecorder {
       lastRecoveredAt: null,
       unknownReasons,
       redactionVersion: REDACTION_RULES_VERSION,
+      ...(authorityRefusal
+        ? {
+            authorityRefusal,
+            systemicKey: authorityRefusalSystemicKey(authorityRefusal, platform),
+          }
+        : {}),
     };
     return sanitizeForEvidence(raw) as ExperienceRecord;
   }
@@ -398,6 +427,17 @@ export class ExperienceRecorder {
       existing.environment = incoming.environment;
       adoptLateFact(existing, incoming, 'device');
       adoptLateFact(existing, incoming, 'runtime');
+      if (incoming.authorityRefusal) {
+        existing.authorityRefusal = mergeAuthorityRefusalFacts(
+          existing.authorityRefusal,
+          incoming.authorityRefusal,
+        );
+        existing.systemicKey = authorityRefusalSystemicKey(
+          existing.authorityRefusal,
+          existing.platform,
+        );
+        existing.unknownReasons.recovery = 'recovery not verified';
+      }
       existing.evidencePointers = boundedPointers(
         existing.evidencePointers,
         incoming.evidencePointers,
@@ -581,7 +621,10 @@ const CLASSIFICATION_RULES: ReadonlyArray<[string, RegExp]> = [
   ['PQ_ANDROID_PLAY_PROTECT', /play protect.*(?:block|apk|install)/],
 ];
 
-export const EXPERIENCE_FAMILY_IDS: readonly string[] = CLASSIFICATION_RULES.map(([id]) => id);
+export const EXPERIENCE_FAMILY_IDS: readonly string[] = [
+  ...CLASSIFICATION_RULES.map(([id]) => id),
+  ...AUTHORITY_REFUSAL_CODES.map(authorityRefusalFamily),
+];
 
 export function classifyExperience(symptom: string, tool: string, platform: string | null): string {
   const haystack = `${tool} ${platform ?? ''} ${symptom}`.toLowerCase();
@@ -589,6 +632,53 @@ export function classifyExperience(symptom: string, tool: string, platform: stri
     CLASSIFICATION_RULES.find(([, pattern]) => pattern.test(haystack))?.[0] ??
     UNKNOWN_CLASSIFICATION
   );
+}
+
+function envelopeObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function authorityResultEnvelope(result: unknown): Record<string, unknown> | null {
+  const envelope = envelopeObject(result);
+  if (!envelope || Object.hasOwn(envelope, 'code')) return envelope;
+  if (!Array.isArray(envelope.content)) return null;
+  const text = envelopeObject(envelope.content[0])?.text;
+  if (
+    typeof text !== 'string' ||
+    text.length > MAX_AUTHORITY_ENVELOPE_BYTES ||
+    Buffer.byteLength(text, 'utf8') > MAX_AUTHORITY_ENVELOPE_BYTES
+  )
+    return null;
+  try {
+    return envelopeObject(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
+export function decodeAuthorityRefusal(event: ToolObserverInput): AuthorityRefusalFacts | null {
+  if (event.status !== 'FAIL' && event.status !== 'ERROR') return null;
+  const envelope = authorityResultEnvelope(event.result);
+  if (envelope && Object.hasOwn(envelope, 'code')) {
+    const meta = envelopeObject(envelope.meta);
+    return authorityRefusalFacts(envelope.code, meta?.axis, meta?.cause);
+  }
+  if (event.status !== 'ERROR' || typeof event.error !== 'string') return null;
+  const code = AUTHORITY_REFUSAL_CODES.find((candidate) =>
+    event.error?.startsWith(`${candidate}:`),
+  );
+  return authorityRefusalFacts(code, null, null);
+}
+
+function authorityRefusalSymptom(event: ToolObserverInput, facts: AuthorityRefusalFacts): string {
+  const envelope = authorityResultEnvelope(event.result);
+  if (typeof envelope?.error === 'string') return envelope.error;
+  const content = envelopeObject(event.result)?.content;
+  const firstText = Array.isArray(content) ? envelopeObject(content[0])?.text : undefined;
+  if (event.error && event.error !== firstText) return event.error;
+  return `${facts.code}: refusal observed`;
 }
 
 function extractSymptom(event: ToolObserverInput): string {
