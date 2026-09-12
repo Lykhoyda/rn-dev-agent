@@ -124,6 +124,55 @@ test('native sparse timestamps become bounded 30 fps video without losing motion
   assert.equal(Number(reprobed.duration), Number(finalized.duration));
 });
 
+async function probeSize(path: string) {
+  const { stdout } = await run('ffprobe', [
+    '-v',
+    'error',
+    '-select_streams',
+    'v:0',
+    '-show_entries',
+    'stream=width,height',
+    '-of',
+    'csv=p=0',
+    path,
+  ]);
+  const [width, height] = stdout.trim().split(',').map(Number);
+  return { width, height };
+}
+
+test('proof re-encode caps the short edge at 720 px and never upscales', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'record-cadence-scale-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  for (const [width, height] of [
+    [1179, 2556],
+    [2556, 1179],
+    [160, 320],
+  ]) {
+    const input = join(root, `native-${width}x${height}.mp4`);
+    const output = join(root, `proof-${width}x${height}.mp4`);
+    await run('ffmpeg', [
+      '-v',
+      'error',
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      `testsrc2=size=${width}x${height}:rate=30:duration=1`,
+      '-c:v',
+      'libx264',
+      input,
+    ]);
+    await finalize(input, output);
+    const scaled = await probeSize(output);
+    const shortEdge = Math.min(scaled.width, scaled.height);
+    assert.equal(shortEdge, Math.min(720, Math.min(width, height)));
+    assert.equal(scaled.width % 2, 0);
+    assert.equal(scaled.height % 2, 0);
+    assert.ok(Math.abs(scaled.width / scaled.height - width / height) < 0.01);
+  }
+});
+
 test('invalid native video refuses cadence normalization', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'record-cadence-invalid-'));
   t.after(() => rm(root, { recursive: true, force: true }));
