@@ -2885,10 +2885,7 @@ export const INJECTED_HELPERS = `
 
     try {
       if (action === 'press' && opts.walkUp === true) {
-        // GH #525 — nearest self-or-ancestor onPress within 8 fiber levels (one JSX wrapper is ~3 fibers under NativeWind CssInterop);
-        // candidates collapse only when they are the exact same fiber.
         var WALK_UP_MAX = 8;
-        // Host fibers carry a string type (e.g. 'RCTView') — same extraction as the ladder press path.
         var walkFiberName = function(f) {
           return (f && f.type && (typeof f.type === 'string'
             ? f.type
@@ -2909,17 +2906,50 @@ export const INJECTED_HELPERS = `
           }
           return false;
         };
-        // RN forwards testID and onPress down one element's composite/host stack; those fibers are
-        // the same logical target, so they collapse onto the outermost the way a direct press fires it.
+        var walkInertView = function(f) {
+          if (f.type !== 'RCTView') return false;
+          var p = f.memoizedProps || {};
+          if (p.accessible === true || p.focusable === true || (p.accessibilityRole && p.accessibilityRole !== 'none')
+            || (p.role && p.role !== 'none' && p.role !== 'presentation')) return false;
+          var keys = Object.keys(p);
+          for (var ki = 0; ki < keys.length; ki++) {
+            if (/^on(Press|LongPress|Click|DoubleClick|Touch|Responder|.*ShouldSetResponder|Pointer|Key|Accessibility|MagicTap)/.test(keys[ki])
+              && p[keys[ki]] != null) return false;
+          }
+          return true;
+        };
+        var walkChildOf = function(parent, child) {
+          var node = parent.child;
+          for (var steps = 0; node && steps < 1000; steps++) {
+            if (node === child) return true;
+            node = node.sibling;
+          }
+          return false;
+        };
         var walkForwarded = function(a, b) {
           var ap = a.memoizedProps, bp = b.memoizedProps;
           if (!ap || !bp) return false;
           if (ap[matchField] !== selector || bp[matchField] !== selector) return false;
           if (ap.onPress !== bp.onPress) return false;
-          return walkAncestorOf(a, b) || walkAncestorOf(b, a);
+          var outer = walkAncestorOf(a, b) ? a : (walkAncestorOf(b, a) ? b : null);
+          if (!outer) return false;
+          var child = outer === a ? b : a;
+          var node = child.return;
+          var seen = new WeakSet();
+          for (var steps = 0; node && steps < 1000; steps++) {
+            if (seen.has(node)) return false;
+            seen.add(node);
+            if (!walkChildOf(node, child)) return false;
+            if (node.tag === 5 && !walkInertView(node)) return false;
+            if (node === outer) return true;
+            child = node;
+            node = node.return;
+          }
+          return false;
         };
         var walkSources = walkUpMatches.length > 0 ? walkUpMatches : [found];
         var walkCandidates = [];
+        var walkOriginalCandidates = [];
         for (var wi = 0; wi < walkSources.length; wi++) {
           var walkNode = walkSources[wi];
           var walkHops = 0;
@@ -2930,6 +2960,7 @@ export const INJECTED_HELPERS = `
             walkHops++;
           }
           if (!walkNode || walkHops > WALK_UP_MAX) continue;
+          walkOriginalCandidates.push(walkNode);
           var existing = null;
           for (var wj = 0; wj < walkCandidates.length; wj++) {
             if (walkCandidates[wj].fiber === walkNode || walkForwarded(walkCandidates[wj].fiber, walkNode)) {
@@ -2946,6 +2977,49 @@ export const INJECTED_HELPERS = `
         }
         if (walkCandidates.length === 0) {
           return JSON.stringify({ error: 'Component has no onPress handler', component: walkFiberName(found), testID: selector, walkUpSearched: WALK_UP_MAX });
+        }
+        var walkSingleHostTarget = function() {
+          if (!opts.testID || findCycleDetected) return null;
+          var hosts = new Set();
+          for (var si = 0; si < walkSources.length; si++) {
+            if (walkSources[si].tag === 5) hosts.add(walkSources[si]);
+          }
+          if (hosts.size !== 1) return null;
+          var host = hosts.values().next().value;
+          var lineage = [];
+          var seen = new WeakSet();
+          var node = host;
+          while (node && lineage.length < 1000) {
+            if (seen.has(node)) return null;
+            if (lineage.length > 0 && !walkChildOf(node, lineage[lineage.length - 1])) return null;
+            seen.add(node);
+            lineage.push(node);
+            node = node.return;
+          }
+          if (node) return null;
+          for (var si = 0; si < walkSources.length; si++) {
+            if (!seen.has(walkSources[si])) return null;
+          }
+          var outermost = 0;
+          for (var ci = 0; ci < walkOriginalCandidates.length; ci++) {
+            var candidate = walkOriginalCandidates[ci];
+            if (!seen.has(candidate) || candidate.memoizedProps.testID !== selector) return null;
+            outermost = Math.max(outermost, lineage.indexOf(candidate));
+          }
+          for (var li = 1; li <= outermost; li++) {
+            if (lineage[li].tag === 5 && !walkInertView(lineage[li])) return null;
+          }
+          for (var hops = 0; hops < lineage.length && hops <= WALK_UP_MAX; hops++) {
+            var p = lineage[hops].memoizedProps;
+            if (p && typeof p.onPress === 'function') {
+              return { fiber: lineage[hops], hops: hops, source: host };
+            }
+          }
+          return null;
+        };
+        if (walkCandidates.length > 1) {
+          var witnessedTarget = walkSingleHostTarget();
+          if (witnessedTarget) walkCandidates = [witnessedTarget];
         }
         if (walkCandidates.length > 1) {
           var walkDescriptors = [];

@@ -134,6 +134,271 @@ function otpFixture() {
   return { root, app, pressable, pressableHost, inputComposite, calls, inputHost };
 }
 
+function tabFixture() {
+  const calls = { wrapper: 0, navigation: 0 };
+  const root = makeFiber('Root');
+  const navigate = () => calls.navigation++;
+  const handlePress = () => {
+    calls.wrapper++;
+    navigate();
+  };
+  const outer = appendChild(
+    root,
+    makeFiber(
+      { displayName: 'BottomTabItem' },
+      {
+        testID: 'tab-home',
+        onPress: navigate,
+      },
+    ),
+  );
+  const outerHost = appendChild(outer, makeFiber('RCTView'));
+  const animated = appendChild(
+    outerHost,
+    makeFiber(
+      { displayName: 'Animated(Pressable)' },
+      {
+        testID: 'tab-home',
+        onPress: handlePress,
+      },
+    ),
+  );
+  const pressable = appendChild(
+    animated,
+    makeFiber(
+      { displayName: 'Pressable' },
+      {
+        testID: 'tab-home',
+        onPress: handlePress,
+      },
+    ),
+  );
+  const host = appendChild(
+    pressable,
+    makeFiber('RCTView', {
+      testID: 'tab-home',
+      accessible: true,
+      accessibilityRole: 'button',
+      onResponderGrant: () => {},
+    }),
+  );
+  return { root, outer, outerHost, animated, pressable, host, calls };
+}
+
+test('#951 saved replay dispatches a wrapped navigator press through its native-path callback', async () => {
+  const fixture = tabFixture();
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'tab-home' } }],
+    {},
+    buildDeps(createAgent(fixture.root)),
+  );
+  assert.equal(result.passed, true, JSON.stringify(result));
+  assert.deepEqual(
+    result.steps.map(({ t, target, ok }) => ({ t, target, ok })),
+    [{ t: 'tap', target: 'tab-home', ok: true }],
+  );
+  assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+});
+
+test('#951 replay refuses nested host controls including a shared callback and an outer host without ID', async (t) => {
+  for (const shared of [false, true]) {
+    for (const outerHasId of [false, true]) {
+      await t.test(`shared=${shared}, outer host ID=${outerHasId}`, async () => {
+        const fixture = tabFixture();
+        fixture.outerHost.memoizedProps.onResponderGrant = () => {};
+        fixture.outerHost.memoizedProps.accessible = true;
+        if (outerHasId) fixture.outerHost.memoizedProps.testID = 'tab-home';
+        if (shared) fixture.outer.memoizedProps.onPress = fixture.animated.memoizedProps.onPress;
+        const result = await runCdpReplayCommands(
+          [{ tapOn: { id: 'tab-home' } }],
+          {},
+          buildDeps(createAgent(fixture.root)),
+        );
+        assert.equal(result.passed, false);
+        assert.equal(result.failedStepIndex, 0);
+        assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+        assert.deepEqual(result.failureMeta, {
+          hint: 'Multiple distinct pressable fibers resolve from this testID. Pass the testID of the exact pressable component instead.',
+          count: 2,
+          candidates: [
+            { component: 'BottomTabItem', testID: 'tab-home' },
+            { component: 'Animated(Pressable)', testID: 'tab-home' },
+          ],
+        });
+        assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+      });
+    }
+  }
+});
+
+test('#951 replay preserves frontmost ambiguity for sibling hosts with distinct or shared callbacks', async (t) => {
+  for (const shared of [false, true]) {
+    await t.test(`shared=${shared}`, async () => {
+      const fixture = tabFixture();
+      const sibling = appendChild(
+        fixture.root,
+        makeFiber(
+          { displayName: 'OtherButton' },
+          {
+            testID: 'tab-home',
+            onPress: shared
+              ? fixture.animated.memoizedProps.onPress
+              : () => fixture.calls.navigation++,
+          },
+        ),
+      );
+      appendChild(sibling, makeFiber('RCTView', { testID: 'tab-home' }));
+      const result = await runCdpReplayCommands(
+        [{ tapOn: { id: 'tab-home' } }],
+        {},
+        buildDeps(createAgent(fixture.root)),
+      );
+      assert.equal(result.passed, false);
+      assert.equal(result.failedStepIndex, 0);
+      assert.equal(result.failureCode, 'AMBIGUOUS_TESTID');
+      assert.deepEqual(result.failureMeta, { matchCount: 2 });
+      assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+    });
+  }
+});
+
+test('#951 live eligibility rechecks every source after the replay proof', async (t) => {
+  const cases: Array<{
+    label: string;
+    mutate: (fixture: ReturnType<typeof tabFixture>) => void;
+    reason: string;
+  }> = [
+    {
+      label: 'disabled outer source',
+      mutate: (f) => {
+        f.outer.memoizedProps.disabled = true;
+      },
+      reason: 'disabled exact-ID fiber',
+    },
+    {
+      label: 'disabled host',
+      mutate: (f) => {
+        f.host.memoizedProps.disabled = true;
+      },
+      reason: 'disabled exact-ID fiber',
+    },
+    {
+      label: 'disabled ancestor target',
+      mutate: (f) => {
+        f.pressable.memoizedProps.disabled = true;
+      },
+      reason: 'disabled walk target',
+    },
+    {
+      label: 'pointer-blocked host',
+      mutate: (f) => {
+        f.host.memoizedProps.pointerEvents = 'none';
+      },
+      reason: 'exact-ID fiber has pointerEvents="none"',
+    },
+    {
+      label: 'pointer-blocked parent',
+      mutate: (f) => {
+        f.outerHost.memoizedProps.pointerEvents = 'box-only';
+      },
+      reason: 'exact-ID fiber is beneath pointerEvents="box-only"',
+    },
+    {
+      label: 'hidden host',
+      mutate: (f) => {
+        f.host.memoizedProps.style = { display: 'none' };
+      },
+      reason: 'hidden exact-ID subtree',
+    },
+  ];
+  for (const { label, mutate, reason } of cases) {
+    await t.test(label, async () => {
+      const fixture = tabFixture();
+      const agent = createAgent(fixture.root, (expression) => {
+        if (expression.startsWith('__RN_AGENT.interact(')) mutate(fixture);
+      });
+      const result = await runCdpReplayCommands(
+        [{ tapOn: { id: 'tab-home' } }],
+        {},
+        buildDeps(agent),
+      );
+      assert.equal(result.passed, false);
+      assert.equal(result.failedStepIndex, 0);
+      assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+      assert.deepEqual(result.failureMeta, { reason });
+      assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+    });
+  }
+});
+
+test('#951 the existing modal gate refuses an occluded tab before dispatch', async () => {
+  const fixture = tabFixture();
+  const modal = appendChild(fixture.root, makeFiber('RCTView', { accessibilityViewIsModal: true }));
+  appendChild(modal, makeFiber('RCTText', { children: 'Blocking sheet' }));
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'tab-home' } }],
+    {},
+    buildDeps(createAgent(fixture.root)),
+  );
+  assert.equal(result.passed, false);
+  assert.equal(result.failedStepIndex, 0);
+  assert.equal(result.failureCode, 'ASSERTION_FAILED');
+  assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+});
+
+test('#951 a throwing forwarding handler preserves replay execution metadata', async () => {
+  const fixture = tabFixture();
+  const throwOnPress = () => {
+    fixture.calls.wrapper++;
+    throw new Error('forwarding failure');
+  };
+  fixture.animated.memoizedProps.onPress = throwOnPress;
+  fixture.pressable.memoizedProps.onPress = throwOnPress;
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'tab-home' } }],
+    {},
+    buildDeps(createAgent(fixture.root)),
+  );
+  assert.equal(result.passed, false);
+  assert.equal(result.failedStepIndex, 0);
+  assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+  assert.deepEqual(result.failureMeta, {
+    actionExecuted: true,
+    handlerError: 'forwarding failure',
+    hint: 'The app handler raised an exception — the screen may be in an error state. Check cdp_error_log before continuing.',
+  });
+  assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 0 });
+});
+
+test('#951 replay preserves absence and bounded-search metadata', async (t) => {
+  await t.test('absent target', async () => {
+    const fixture = tabFixture();
+    const result = await runCdpReplayCommands(
+      [{ tapOn: { id: 'missing-tab' } }],
+      {},
+      buildDeps(createAgent(fixture.root)),
+    );
+    assert.equal(result.passed, false);
+    assert.equal(result.failureCode, 'TESTID_NOT_FOUND');
+    assert.deepEqual(result.failureMeta, { failedSelector: 'missing-tab' });
+    assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+  });
+  await t.test('no handler', async () => {
+    const fixture = tabFixture();
+    for (const fiber of [fixture.outer, fixture.animated, fixture.pressable])
+      delete fiber.memoizedProps.onPress;
+    const result = await runCdpReplayCommands(
+      [{ tapOn: { id: 'tab-home' } }],
+      {},
+      buildDeps(createAgent(fixture.root)),
+    );
+    assert.equal(result.passed, false);
+    assert.equal(result.failureCode, 'INTERACTION_NOT_ACTUATED');
+    assert.deepEqual(result.failureMeta, { walkUpSearched: 8 });
+    assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+  });
+});
+
 test('#869 replay designates the Pressable-wrapped input by its exact testID, then types on that same input', async () => {
   const fixture = otpFixture();
   const deps = buildDeps(createAgent(fixture.root));
