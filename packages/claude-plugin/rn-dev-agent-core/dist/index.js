@@ -70862,6 +70862,9 @@ init_process_birth();
 init_registry();
 var execFile14 = promisify14(execFileCb11);
 var RECORDER_POST_KILL_CONFIRM_MS = 2e3;
+var RECORDER_STOP_BASE_TIMEOUT_MS = 6e4;
+var RECORDER_STOP_MS_PER_RECORDED_MS = 3;
+var RECORDER_STOP_MAX_TIMEOUT_MS = 15 * 6e4;
 function executeRecorderScript(script, args, options) {
   return new Promise((resolve21, reject) => {
     const child = spawn7(script, args, {
@@ -70982,7 +70985,7 @@ function executeRecorderScript(script, args, options) {
     }, options.timeout);
   });
 }
-async function runRecordProofScript(script, args, timeout = 6e4, dependencies = {}) {
+async function runRecordProofScript(script, args, timeout = RECORDER_STOP_BASE_TIMEOUT_MS, dependencies = {}) {
   const execute2 = dependencies.execute ?? executeRecorderScript;
   if ((dependencies.platform ?? process.platform) !== "darwin") {
     return execute2(script, args, { timeout, env: { ...process.env } });
@@ -71145,7 +71148,11 @@ ${instrumentation.stderr}`;
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `Android device-side runner termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
   }
 }
-async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, runRecorder = async (script, args) => runRecordProofScript(script, args)) {
+function recorderStopTimeoutMs(startedAt, now = Date.now()) {
+  const recordedMs = typeof startedAt === "number" && Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : 0;
+  return Math.min(RECORDER_STOP_BASE_TIMEOUT_MS + RECORDER_STOP_MS_PER_RECORDED_MS * recordedMs, RECORDER_STOP_MAX_TIMEOUT_MS);
+}
+async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, runRecorder = async (script, args, timeoutMs) => runRecordProofScript(script, args, timeoutMs)) {
   const script = String(binding.script ?? "");
   const scope = String(binding.scope ?? "");
   if (!hasCompleteRecorderCleanupIdentity(binding)) {
@@ -71174,7 +71181,7 @@ async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, run
   const pid = binding.pid;
   const expectedBirth = String(binding.processBirth ?? "");
   try {
-    const stopped = await runRecorder(script, ["stop", scope, String(pid), expectedBirth]);
+    const stopped = await runRecorder(script, ["stop", scope, String(pid), expectedBirth], recorderStopTimeoutMs(binding.startedAt));
     const status = await runRecorder(script, ["status", scope]);
     if (!/^No active recordings/m.test(status.stdout)) {
       throw new Error("recorder state remains active after cleanup");
@@ -87361,6 +87368,20 @@ function parseStopOutput(stdout) {
   }
   return saved;
 }
+var GITHUB_VIDEO_ATTACHMENT_LIMIT_BYTES = 100 * 1024 * 1024;
+function oversizeProofWarning(saved) {
+  const oversize = saved.filter((rec) => rec.sizeBytes > GITHUB_VIDEO_ATTACHMENT_LIMIT_BYTES);
+  if (oversize.length === 0)
+    return null;
+  const measured = oversize.map((rec) => `${rec.path} (${rec.sizeBytes} bytes)`).join(", ");
+  return `Proof video exceeds GitHub's ${GITHUB_VIDEO_ATTACHMENT_LIMIT_BYTES}-byte (100 MB) video attachment limit: ${measured}. The file is kept \u2014 shorten the journey before attaching it to a PR or issue.`;
+}
+function parseNormalizationSkipped(stdout) {
+  return stdout.match(/^Cadence normalization skipped: (.+)$/m)?.[1]?.trim() ?? null;
+}
+function normalizationSkippedWarning(reason) {
+  return `Recording cadence was not normalized to 30 fps (${reason}); the saved video keeps the sparse native frame timing and may play as a slideshow rather than smooth video.`;
+}
 function parseRecorderFailure(stdout) {
   return stdout.match(/^Recorder failed:\s*(.+)$/m)?.[1]?.trim() ?? null;
 }
@@ -87481,6 +87502,7 @@ ${list}`, { code: "DEVICE_AMBIGUOUS", platform, candidates: resolution.candidate
           phase: "recording",
           platform,
           deviceId: resolution.deviceId,
+          startedAt: Date.now(),
           output: parsed.output,
           scope,
           pid: parsed.pid,
@@ -87579,8 +87601,15 @@ async function runStop(args, runtime) {
     }
     return warnResult({ saved: [] }, `Stop ran but no saved file detected. Raw: ${stopOutput.trim().slice(0, 400)}`);
   }
+  const normalizationSkipped = parseNormalizationSkipped(stopOutput);
+  const stopWarnings = [
+    normalizationSkipped ? normalizationSkippedWarning(normalizationSkipped) : null,
+    oversizeProofWarning(saved)
+  ].filter((warning) => warning !== null);
+  const cadence = normalizationSkipped ? { normalizationSkipped } : {};
   if (!args.gif) {
-    return okResult({ action: "stop", saved });
+    const data2 = { action: "stop", saved, ...cadence };
+    return stopWarnings.length > 0 ? warnResult(data2, stopWarnings.join(" ")) : okResult(data2);
   }
   if (args.gifPath && saved.length > 1) {
     return failResult(`gifPath cannot be combined with ${saved.length} active recordings \u2014 each recording would write to the same file. Omit gifPath to auto-derive per-recording GIF paths, or stop one platform at a time.`, { code: "GIFPATH_AMBIGUOUS" });
@@ -87603,14 +87632,19 @@ async function runStop(args, runtime) {
     }
   }
   if (gifs.length === 0 && gifWarnings.length > 0) {
-    return warnResult({ action: "stop", saved, gifs: [] }, `Saved ${saved.length} recording(s) but all GIF conversions failed. ${gifWarnings.join(" ")}`);
+    return warnResult({ action: "stop", saved, gifs: [], ...cadence }, [
+      `Saved ${saved.length} recording(s) but all GIF conversions failed. ${gifWarnings.join(" ")}`,
+      ...stopWarnings
+    ].join(" "));
   }
-  return okResult({
+  const data = {
     action: "stop",
     saved,
     gifs,
+    ...cadence,
     ...gifWarnings.length > 0 ? { gifWarnings } : {}
-  });
+  };
+  return stopWarnings.length > 0 ? warnResult(data, stopWarnings.join(" ")) : okResult(data);
 }
 async function readScopedStatus(script, scope) {
   const { stdout } = await runRecordProofScript(script, ["status", scope], STATUS_TIMEOUT_MS);
@@ -87651,10 +87685,10 @@ function createDeviceRecordHandler(deps = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash19, randomUUID as randomUUID11 } from "node:crypto";
+import { createHash as createHash20, randomUUID as randomUUID11 } from "node:crypto";
 import { execFileSync as execFileSync15 } from "node:child_process";
 import { chmodSync as chmodSync8, closeSync as closeSync12, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync19, mkdirSync as mkdirSync20, openSync as openSync12, readFileSync as readFileSync32, realpathSync as realpathSync16, renameSync as renameSync10, unlinkSync as unlinkSync15, writeFileSync as writeFileSync17 } from "node:fs";
-import { basename as basename12, dirname as dirname24, extname, isAbsolute as isAbsolute15, join as join48, relative as relative9, resolve as resolve17, sep as sep11 } from "node:path";
+import { basename as basename12, dirname as dirname25, extname, isAbsolute as isAbsolute15, join as join49, relative as relative9, resolve as resolve17, sep as sep11 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
@@ -88166,6 +88200,356 @@ var finalProofReceiptSchema = external_exports.object({
   verdict: external_exports.literal("accepted")
 }).strict();
 
+// packages/rn-dev-agent-core/dist/tools/proof-media.js
+import { createHash as createHash19 } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir as tmpdir11 } from "node:os";
+import { dirname as dirname24, join as join48 } from "node:path";
+var MINIMUM_PROOF_FRAME_RATE = 10;
+function sparseCadenceWarning(avgFrameRate) {
+  if (avgFrameRate === null || avgFrameRate >= MINIMUM_PROOF_FRAME_RATE)
+    return null;
+  return `Proof video averages ${avgFrameRate.toFixed(2)} fps, below the ${MINIMUM_PROOF_FRAME_RATE} fps expected of smooth playback: 30 fps cadence smoothing was skipped, so it may play as a slideshow. The capture is kept \u2014 record this under Deviations in PROOF.md.`;
+}
+var MediaFailure = class extends Error {
+  reason;
+  constructor(reason) {
+    super(reason);
+    this.name = "MediaFailure";
+    this.reason = reason;
+  }
+};
+function fail2(reason) {
+  throw new MediaFailure(reason);
+}
+function isNodeError(error2) {
+  return error2 instanceof Error && "code" in error2;
+}
+async function requireNonEmptyFile(path, missingReason, emptyReason) {
+  try {
+    const details = await stat(path);
+    if (!details.isFile())
+      fail2(missingReason);
+    if (details.size <= 0)
+      fail2(emptyReason);
+    return { size: details.size };
+  } catch (error2) {
+    if (error2 instanceof MediaFailure)
+      throw error2;
+    if (isNodeError(error2) && error2.code === "ENOENT")
+      fail2(missingReason);
+    fail2("MEDIA_IO_FAILED");
+  }
+}
+async function hashAcceptedFile(path) {
+  try {
+    return await sha256File2(path);
+  } catch {
+    fail2("HASH_FAILED");
+  }
+}
+async function sha256File2(path) {
+  const hash = createHash19("sha256");
+  const stream = createReadStream(path);
+  for await (const chunk of stream)
+    hash.update(chunk);
+  return hash.digest("hex");
+}
+function readVideoMetadata(metadata) {
+  if (!metadata || typeof metadata !== "object")
+    fail2("VIDEO_METADATA_INVALID");
+  const format = "format" in metadata ? metadata.format : null;
+  const streams = "streams" in metadata ? metadata.streams : null;
+  if (!format || typeof format !== "object" || !Array.isArray(streams)) {
+    fail2("VIDEO_METADATA_INVALID");
+  }
+  const rawDuration = "duration" in format ? format.duration : void 0;
+  const durationSeconds = typeof rawDuration === "string" || typeof rawDuration === "number" ? Number(rawDuration) : Number.NaN;
+  const videoStream = streams.find((stream) => stream !== null && typeof stream === "object" && "codec_name" in stream && typeof stream.codec_name === "string" && stream.codec_name.length > 0 && "width" in stream && Number.isInteger(stream.width) && Number(stream.width) > 0 && "height" in stream && Number.isInteger(stream.height) && Number(stream.height) > 0);
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0 || !videoStream) {
+    fail2("VIDEO_METADATA_INVALID");
+  }
+  return {
+    durationMs: Math.round(durationSeconds * 1e3),
+    codec: String(videoStream.codec_name),
+    width: Number(videoStream.width),
+    height: Number(videoStream.height),
+    avgFrameRate: readFrameRate(videoStream)
+  };
+}
+function readFrameRate(stream) {
+  const raw = "avg_frame_rate" in stream ? stream.avg_frame_rate : void 0;
+  if (typeof raw !== "string")
+    return null;
+  const [numerator, denominator] = raw.split("/").map(Number);
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0)
+    return null;
+  const rate = numerator / denominator;
+  return rate > 0 ? rate : null;
+}
+async function probeVideo(process3, videoPath) {
+  const file = await requireNonEmptyFile(videoPath, "VIDEO_MISSING", "VIDEO_EMPTY");
+  let stdout;
+  try {
+    ({ stdout } = await process3.run("ffprobe", [
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration,size:stream=codec_name,width,height,avg_frame_rate",
+      "-of",
+      "json",
+      videoPath
+    ]));
+  } catch {
+    fail2("VIDEO_PROBE_FAILED");
+  }
+  let metadata;
+  try {
+    metadata = JSON.parse(stdout);
+  } catch {
+    fail2("VIDEO_METADATA_INVALID");
+  }
+  const decoded = readVideoMetadata(metadata);
+  return {
+    path: videoPath,
+    sha256: await hashAcceptedFile(videoPath),
+    durationMs: decoded.durationMs,
+    sizeBytes: file.size,
+    codec: decoded.codec,
+    width: decoded.width,
+    height: decoded.height,
+    avgFrameRate: decoded.avgFrameRate
+  };
+}
+function validateThreshold(threshold) {
+  if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+    fail2("INVALID_MEDIA_INPUT");
+  }
+}
+async function runFrameProcess(process3, args) {
+  try {
+    return await process3.run("ffmpeg", args);
+  } catch {
+    fail2("FRAME_PROCESS_FAILED");
+  }
+}
+function parseSsim(output) {
+  const tokens = [...output.matchAll(/\bAll:([^\s]+)/g)];
+  const token2 = tokens.at(-1)?.[1];
+  if (!token2 || !/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/.test(token2))
+    fail2("FRAME_MISMATCH");
+  return Number(token2);
+}
+async function matchScreenshotAt(process3, input) {
+  const threshold = input.threshold ?? 0.9;
+  validateThreshold(threshold);
+  await requireNonEmptyFile(input.screenshot.path, "SCREENSHOT_MISSING", "SCREENSHOT_EMPTY");
+  try {
+    await mkdir2(input.scratchDir, { recursive: true });
+  } catch {
+    fail2("MEDIA_IO_FAILED");
+  }
+  const index = input.index ?? 0;
+  if (!Number.isInteger(index) || index < 0)
+    fail2("INVALID_MEDIA_INPUT");
+  const sampleRadiusMs = input.sampleRadiusMs ?? 500;
+  if (!Number.isInteger(sampleRadiusMs) || sampleRadiusMs < 0 || sampleRadiusMs > 500) {
+    fail2("INVALID_MEDIA_INPUT");
+  }
+  if (input.videoDurationMs !== void 0 && (!Number.isFinite(input.videoDurationMs) || input.videoDurationMs <= 0)) {
+    fail2("INVALID_MEDIA_INPUT");
+  }
+  const normalizedScreenshotPath = join48(input.scratchDir, `screenshot-${index}.png`);
+  await rm(normalizedScreenshotPath, { force: true });
+  await runFrameProcess(process3, [
+    "-y",
+    "-i",
+    input.screenshot.path,
+    "-vf",
+    "scale=800:-2:flags=lanczos",
+    "-frames:v",
+    "1",
+    normalizedScreenshotPath
+  ]);
+  await requireNonEmptyFile(normalizedScreenshotPath, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
+  const requestedSampleTimestamps = sampleRadiusMs === 0 ? [input.screenshot.timestampMs] : [
+    Math.max(0, input.screenshot.timestampMs - sampleRadiusMs),
+    input.screenshot.timestampMs,
+    input.screenshot.timestampMs + sampleRadiusMs
+  ];
+  const maximumTimestamp = input.videoDurationMs === void 0 ? Number.POSITIVE_INFINITY : Math.max(0, input.videoDurationMs - 1);
+  const sampleTimestamps = [
+    ...new Set(requestedSampleTimestamps.map((timestamp) => Math.min(timestamp, maximumTimestamp)))
+  ];
+  let best = null;
+  let decodedFrameCount = 0;
+  for (const [sampleIndex, timestampMs] of sampleTimestamps.entries()) {
+    const framePath = join48(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
+    await rm(framePath, { force: true });
+    try {
+      await runFrameProcess(process3, [
+        "-y",
+        "-ss",
+        (timestampMs / 1e3).toFixed(3),
+        "-i",
+        input.videoPath,
+        "-frames:v",
+        "1",
+        "-vf",
+        "scale=800:-2:flags=lanczos",
+        "-q:v",
+        "2",
+        framePath
+      ]);
+      await requireNonEmptyFile(framePath, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
+      decodedFrameCount += 1;
+    } catch (error2) {
+      if (error2 instanceof MediaFailure && error2.reason === "FRAME_PROCESS_FAILED")
+        continue;
+      throw error2;
+    }
+    const comparison = await runFrameProcess(process3, [
+      "-i",
+      normalizedScreenshotPath,
+      "-i",
+      framePath,
+      "-lavfi",
+      "[0:v][1:v]ssim",
+      "-f",
+      "null",
+      "-"
+    ]);
+    const score = parseSsim(`${comparison.stdout}
+${comparison.stderr}`);
+    if (!best || score > best.score)
+      best = { score, timestampMs, framePath };
+  }
+  if (decodedFrameCount === 0)
+    fail2("FRAME_PROCESS_FAILED");
+  if (!best || best.score < threshold)
+    fail2("FRAME_MISMATCH");
+  return {
+    frameMatch: {
+      stepId: input.screenshot.stepId,
+      screenshotSha256: input.screenshot.sha256,
+      videoTimestampMs: best.timestampMs,
+      score: best.score
+    },
+    selectedFramePath: best.framePath
+  };
+}
+function contactSheetLayout(frameCount) {
+  const columns = Math.ceil(Math.sqrt(frameCount));
+  return Array.from({ length: frameCount }, (_, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const x = column === 0 ? "0" : Array.from({ length: column }, (_2, i) => `w${i}`).join("+");
+    const y = row === 0 ? "0" : Array.from({ length: row }, (_2, i) => `h${i * columns}`).join("+");
+    return `${x}_${y}`;
+  }).join("|");
+}
+async function buildContactSheet(process3, selectedFramePaths, contactSheetPath) {
+  if (selectedFramePaths.length === 0 || contactSheetPath.length === 0) {
+    fail2("INVALID_MEDIA_INPUT");
+  }
+  for (const path of selectedFramePaths) {
+    await requireNonEmptyFile(path, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
+  }
+  try {
+    await mkdir2(dirname24(contactSheetPath), { recursive: true });
+    await rm(contactSheetPath, { force: true });
+  } catch {
+    fail2("MEDIA_IO_FAILED");
+  }
+  const inputs = selectedFramePaths.flatMap((path) => ["-i", path]);
+  const labels = selectedFramePaths.map((_, index) => `[${index}:v]`).join("");
+  const filter = `${labels}xstack=inputs=${selectedFramePaths.length}:layout=${contactSheetLayout(selectedFramePaths.length)}:fill=black[out]`;
+  try {
+    await process3.run("ffmpeg", [
+      "-y",
+      ...inputs,
+      "-filter_complex",
+      filter,
+      "-map",
+      "[out]",
+      "-frames:v",
+      "1",
+      "-c:v",
+      "mjpeg",
+      "-q:v",
+      "2",
+      contactSheetPath
+    ]);
+  } catch {
+    fail2("CONTACT_SHEET_PROCESS_FAILED");
+  }
+  await requireNonEmptyFile(contactSheetPath, "CONTACT_SHEET_MISSING", "CONTACT_SHEET_EMPTY");
+  return { path: contactSheetPath, sha256: await hashAcceptedFile(contactSheetPath) };
+}
+function validateInput(input, threshold) {
+  validateThreshold(threshold);
+  if (input.videoPath.length === 0 || input.contactSheetPath.length === 0 || !Number.isFinite(input.rehearsalDurationMs) || input.rehearsalDurationMs < 0 || input.screenshots.some((screenshot) => screenshot.stepId.length === 0 || screenshot.path.length === 0 || !Number.isFinite(screenshot.timestampMs) || screenshot.timestampMs < 0)) {
+    fail2("INVALID_MEDIA_INPUT");
+  }
+  if (input.screenshots.length < 3)
+    fail2("INSUFFICIENT_SCREENSHOTS");
+}
+async function validateMedia(process3, input) {
+  let scratchDir = null;
+  try {
+    const threshold = input.threshold ?? 0.9;
+    validateInput(input, threshold);
+    const { avgFrameRate, ...probedVideo } = await probeVideo(process3, input.videoPath);
+    const bounds = durationBounds(input.rehearsalDurationMs);
+    if (probedVideo.durationMs < bounds.minimumMs)
+      fail2("VIDEO_TOO_SHORT");
+    if (probedVideo.durationMs > bounds.hardMaximumMs)
+      fail2("VIDEO_TOO_LONG");
+    const scratchRoot = input.scratchRoot ?? tmpdir11();
+    try {
+      await mkdir2(scratchRoot, { recursive: true });
+      scratchDir = await mkdtemp(join48(scratchRoot, "proof-media-"));
+    } catch {
+      fail2("MEDIA_IO_FAILED");
+    }
+    const screenshots = [];
+    const frameMatches = [];
+    const selectedFramePaths = [];
+    for (const [index, milestone] of input.screenshots.entries()) {
+      await requireNonEmptyFile(milestone.path, "SCREENSHOT_MISSING", "SCREENSHOT_EMPTY");
+      const screenshot = {
+        ...milestone,
+        sha256: await hashAcceptedFile(milestone.path)
+      };
+      const match = await matchScreenshotAt(process3, {
+        videoPath: input.videoPath,
+        videoDurationMs: probedVideo.durationMs,
+        screenshot: index === 0 ? { ...screenshot, timestampMs: 0 } : screenshot,
+        threshold,
+        scratchDir,
+        index,
+        sampleRadiusMs: index === 0 ? 0 : 500
+      });
+      screenshots.push(screenshot);
+      frameMatches.push(match.frameMatch);
+      selectedFramePaths.push(match.selectedFramePath);
+    }
+    const contactSheet = await buildContactSheet(process3, selectedFramePaths, input.contactSheetPath);
+    const video = {
+      ...probedVideo,
+      durationToleranceUsed: probedVideo.durationMs > bounds.targetMaximumMs
+    };
+    return { ok: true, video, avgFrameRate, screenshots, frameMatches, contactSheet };
+  } catch (error2) {
+    const reason = error2 instanceof MediaFailure ? error2.reason : "MEDIA_IO_FAILED";
+    return { ok: false, reasons: [reason] };
+  } finally {
+    if (scratchDir)
+      await rm(scratchDir, { recursive: true, force: true }).catch(() => void 0);
+  }
+}
+
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 init_utils();
 
@@ -88301,7 +88685,7 @@ var readinessSchema = external_exports.object({
   runtime: proofRuntimeSchema
 }).strict();
 function hashBytes(bytes) {
-  return createHash19("sha256").update(bytes).digest("hex");
+  return createHash20("sha256").update(bytes).digest("hex");
 }
 function captureProofWorkerStartup(argv = process.argv, attestation = readStartupIntegrityAttestation()) {
   let executedEntrypointPath = null;
@@ -88355,9 +88739,9 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
     return null;
   }
   for (const host of ["claude-plugin", "codex-plugin"]) {
-    const hostRoot = join48(root, "packages", host);
-    const coreIndex = realpathOrSelf(join48(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
-    const coreSupervisor = realpathOrSelf(join48(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
+    const hostRoot = join49(root, "packages", host);
+    const coreIndex = realpathOrSelf(join49(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
+    const coreSupervisor = realpathOrSelf(join49(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
     if (arg === coreIndex) {
       return {
         host,
@@ -88376,7 +88760,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
         kind: "core-supervisor"
       };
     }
-    if (host === "codex-plugin" && arg === realpathOrSelf(join48(hostRoot, "bin", "cdp-supervisor.js"))) {
+    if (host === "codex-plugin" && arg === realpathOrSelf(join49(hostRoot, "bin", "cdp-supervisor.js"))) {
       if (!existsSync32(coreIndex) || !existsSync32(coreSupervisor))
         return null;
       return {
@@ -88411,7 +88795,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   }
   if (supervisorOverride && supervisorOverride !== entrypoint.coreSupervisor)
     return false;
-  if (coreRootOverride && join48(coreRootOverride, "dist", "supervisor.js") !== entrypoint.coreSupervisor) {
+  if (coreRootOverride && join49(coreRootOverride, "dist", "supervisor.js") !== entrypoint.coreSupervisor) {
     return false;
   }
   if (workerOverride && workerOverride !== entrypoint.coreBundle)
@@ -88469,7 +88853,7 @@ function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) 
     throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
   }
   const { host, coreBundle } = entrypoint;
-  const runnerManifest = join48(root, "packages", host, "runner-manifest.json");
+  const runnerManifest = join49(root, "packages", host, "runner-manifest.json");
   const artifacts = readProofCandidateHeadArtifacts(root, [coreBundle, runnerManifest]);
   if (!artifacts) {
     throw new Error("CANDIDATE_CHECKOUT_NOT_CLEAN");
@@ -88527,7 +88911,7 @@ function readProofActionIdentity(appProjectRoot, actionId, dependencies = {}) {
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash19("sha256").update(action.yamlText).digest("hex")
+      sha256: createHash20("sha256").update(action.yamlText).digest("hex")
     };
   } catch {
     return null;
@@ -88564,7 +88948,7 @@ function validCaptureContext(args, expectedRoot) {
   ];
   if (proofTools.some((tool) => normalizeTool(tool) === "cdp_auto_login"))
     return false;
-  const proofRoot = join48(expectedRoot, "docs", "proof", args.runId);
+  const proofRoot = join49(expectedRoot, "docs", "proof", args.runId);
   const screenshots = args.storyboard.steps.map((step) => step.screenshotPath);
   const destinations = [args.receiptPath, args.videoPath, args.contactSheetPath, ...screenshots];
   if (destinations.some((path) => !isNormalizedDescendant(proofRoot, path) || hasExistingSymlink(expectedRoot, path)) || new Set(destinations).size !== destinations.length) {
@@ -88578,7 +88962,7 @@ function validCaptureContext(args, expectedRoot) {
   }));
 }
 function proofRootExists(args) {
-  const proofRoot = join48(args.projectRoot, "docs", "proof", args.runId);
+  const proofRoot = join49(args.projectRoot, "docs", "proof", args.runId);
   try {
     lstatSync19(proofRoot);
     return true;
@@ -88711,7 +89095,7 @@ function traceFor(storyboard, events) {
   return validateTrace([...required3, ...allowedExtras], events);
 }
 function readProofContractAt(moduleUrl = import.meta.url) {
-  const moduleDir = dirname24(fileURLToPath5(moduleUrl));
+  const moduleDir = dirname25(fileURLToPath5(moduleUrl));
   const candidates = [
     resolve17(moduleDir, "../../schemas/proof-receipt.schema.json"),
     resolve17(moduleDir, "../schemas/proof-receipt.schema.json")
@@ -88726,7 +89110,7 @@ function readProofContractAt(moduleUrl = import.meta.url) {
   throw new Error("PROOF_CONTRACT_MISSING");
 }
 function writeProofReceiptAtomic(path, receipt2) {
-  const directory = dirname24(path);
+  const directory = dirname25(path);
   mkdirSync20(directory, { recursive: true, mode: 448 });
   const temporary = resolve17(directory, `.${randomUUID11()}.proof-receipt.tmp`);
   let descriptor = null;
@@ -89063,7 +89447,7 @@ function createProofCaptureHandler(deps) {
         return proofFailure(["PROOF_ACTION_IDENTITY_MISMATCH"], "idle");
       }
       try {
-        const proofRoot = join48(args.projectRoot, "docs", "proof", args.runId);
+        const proofRoot = join49(args.projectRoot, "docs", "proof", args.runId);
         if (deps.proofRootTracked(args.projectRoot, proofRoot)) {
           return proofFailure(["PROOF_ROOT_TRACKED"], "idle");
         }
@@ -89112,7 +89496,8 @@ function createProofCaptureHandler(deps) {
         freshStartAssertion: null,
         mayOwnRecorder: false,
         baseline: null,
-        mechanicalReceipt: null
+        mechanicalReceipt: null,
+        cadenceWarning: null
       };
       deps.monitor.begin(args.runId);
       return okResult({ stage: session2.stage, runId: args.runId });
@@ -89330,16 +89715,23 @@ function createProofCaptureHandler(deps) {
       if (savedPath !== active.context.videoPath) {
         return rejectCapture(active, ["RECORDING_PATH_MISMATCH"]);
       }
+      const savedSize = saved[0].sizeBytes;
+      const cadenceSkipped = shutdown2.stopData?.normalizationSkipped;
+      const stopWarnings = [
+        typeof cadenceSkipped === "string" && cadenceSkipped.length > 0 ? normalizationSkippedWarning(cadenceSkipped) : null,
+        typeof savedSize === "number" ? oversizeProofWarning([{ path: active.context.videoPath, sizeBytes: savedSize }]) : null
+      ].filter((warning) => warning !== null);
       const derived = deriveEvidence(active);
       active.evidenceDraft = derived.evidence;
       active.stage = "validating";
       active.invalidationReasons = [];
-      return okResult({
+      const stopped = {
         stage: active.stage,
         videoPath: savedPath,
         evidenceDraft: derived.evidence,
         evidenceReasons: derived.reasons
-      });
+      };
+      return stopWarnings.length > 0 ? warnResult(stopped, stopWarnings.join(" ")) : okResult(stopped);
     }
     if (args.action === "validate") {
       if (active.stage !== "validating" || !active.baseline || !active.recordingStartedAt || active.rehearsalDurationMs === null || !active.rehearsalFinishedAt) {
@@ -89455,11 +89847,13 @@ function createProofCaptureHandler(deps) {
       active.mechanicalReceipt = receipt2;
       active.stage = "mechanically_accepted";
       active.invalidationReasons = [];
-      return okResult({
+      active.cadenceWarning = media.ok ? sparseCadenceWarning(media.avgFrameRate) : null;
+      const validated = {
         stage: active.stage,
         receipt: receipt2,
         reviewTargetSha256: hashProofValue(receipt2)
-      });
+      };
+      return active.cadenceWarning ? warnResult(validated, active.cadenceWarning) : okResult(validated);
     }
     if (args.action === "finalize") {
       if (active.stage !== "mechanically_accepted" || !active.mechanicalReceipt) {
@@ -89518,346 +89912,15 @@ function createProofCaptureHandler(deps) {
         return rejectCapture(active, finalizedGitReasons);
       }
       active.stage = "accepted";
-      return okResult({
+      const accepted = {
         stage: active.stage,
         receiptPath: active.context.receiptPath,
         receipt: finalReceipt
-      });
+      };
+      return active.cadenceWarning ? warnResult(accepted, active.cadenceWarning) : okResult(accepted);
     }
     return proofFailure(["INVALID_PROOF_STAGE"], active.stage);
   };
-}
-
-// packages/rn-dev-agent-core/dist/tools/proof-media.js
-import { createHash as createHash20 } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
-import { tmpdir as tmpdir11 } from "node:os";
-import { dirname as dirname25, join as join49 } from "node:path";
-var MediaFailure = class extends Error {
-  reason;
-  constructor(reason) {
-    super(reason);
-    this.name = "MediaFailure";
-    this.reason = reason;
-  }
-};
-function fail2(reason) {
-  throw new MediaFailure(reason);
-}
-function isNodeError(error2) {
-  return error2 instanceof Error && "code" in error2;
-}
-async function requireNonEmptyFile(path, missingReason, emptyReason) {
-  try {
-    const details = await stat(path);
-    if (!details.isFile())
-      fail2(missingReason);
-    if (details.size <= 0)
-      fail2(emptyReason);
-    return { size: details.size };
-  } catch (error2) {
-    if (error2 instanceof MediaFailure)
-      throw error2;
-    if (isNodeError(error2) && error2.code === "ENOENT")
-      fail2(missingReason);
-    fail2("MEDIA_IO_FAILED");
-  }
-}
-async function hashAcceptedFile(path) {
-  try {
-    return await sha256File2(path);
-  } catch {
-    fail2("HASH_FAILED");
-  }
-}
-async function sha256File2(path) {
-  const hash = createHash20("sha256");
-  const stream = createReadStream(path);
-  for await (const chunk of stream)
-    hash.update(chunk);
-  return hash.digest("hex");
-}
-function readVideoMetadata(metadata) {
-  if (!metadata || typeof metadata !== "object")
-    fail2("VIDEO_METADATA_INVALID");
-  const format = "format" in metadata ? metadata.format : null;
-  const streams = "streams" in metadata ? metadata.streams : null;
-  if (!format || typeof format !== "object" || !Array.isArray(streams)) {
-    fail2("VIDEO_METADATA_INVALID");
-  }
-  const rawDuration = "duration" in format ? format.duration : void 0;
-  const durationSeconds = typeof rawDuration === "string" || typeof rawDuration === "number" ? Number(rawDuration) : Number.NaN;
-  const videoStream = streams.find((stream) => stream !== null && typeof stream === "object" && "codec_name" in stream && typeof stream.codec_name === "string" && stream.codec_name.length > 0 && "width" in stream && Number.isInteger(stream.width) && Number(stream.width) > 0 && "height" in stream && Number.isInteger(stream.height) && Number(stream.height) > 0);
-  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0 || !videoStream) {
-    fail2("VIDEO_METADATA_INVALID");
-  }
-  return {
-    durationMs: Math.round(durationSeconds * 1e3),
-    codec: String(videoStream.codec_name),
-    width: Number(videoStream.width),
-    height: Number(videoStream.height)
-  };
-}
-async function probeVideo(process3, videoPath) {
-  const file = await requireNonEmptyFile(videoPath, "VIDEO_MISSING", "VIDEO_EMPTY");
-  let stdout;
-  try {
-    ({ stdout } = await process3.run("ffprobe", [
-      "-v",
-      "error",
-      "-show_entries",
-      "format=duration,size:stream=codec_name,width,height",
-      "-of",
-      "json",
-      videoPath
-    ]));
-  } catch {
-    fail2("VIDEO_PROBE_FAILED");
-  }
-  let metadata;
-  try {
-    metadata = JSON.parse(stdout);
-  } catch {
-    fail2("VIDEO_METADATA_INVALID");
-  }
-  const decoded = readVideoMetadata(metadata);
-  return {
-    path: videoPath,
-    sha256: await hashAcceptedFile(videoPath),
-    durationMs: decoded.durationMs,
-    sizeBytes: file.size,
-    codec: decoded.codec,
-    width: decoded.width,
-    height: decoded.height
-  };
-}
-function validateThreshold(threshold) {
-  if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
-    fail2("INVALID_MEDIA_INPUT");
-  }
-}
-async function runFrameProcess(process3, args) {
-  try {
-    return await process3.run("ffmpeg", args);
-  } catch {
-    fail2("FRAME_PROCESS_FAILED");
-  }
-}
-function parseSsim(output) {
-  const tokens = [...output.matchAll(/\bAll:([^\s]+)/g)];
-  const token2 = tokens.at(-1)?.[1];
-  if (!token2 || !/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/.test(token2))
-    fail2("FRAME_MISMATCH");
-  return Number(token2);
-}
-async function matchScreenshotAt(process3, input) {
-  const threshold = input.threshold ?? 0.9;
-  validateThreshold(threshold);
-  await requireNonEmptyFile(input.screenshot.path, "SCREENSHOT_MISSING", "SCREENSHOT_EMPTY");
-  try {
-    await mkdir2(input.scratchDir, { recursive: true });
-  } catch {
-    fail2("MEDIA_IO_FAILED");
-  }
-  const index = input.index ?? 0;
-  if (!Number.isInteger(index) || index < 0)
-    fail2("INVALID_MEDIA_INPUT");
-  const sampleRadiusMs = input.sampleRadiusMs ?? 500;
-  if (!Number.isInteger(sampleRadiusMs) || sampleRadiusMs < 0 || sampleRadiusMs > 500) {
-    fail2("INVALID_MEDIA_INPUT");
-  }
-  if (input.videoDurationMs !== void 0 && (!Number.isFinite(input.videoDurationMs) || input.videoDurationMs <= 0)) {
-    fail2("INVALID_MEDIA_INPUT");
-  }
-  const normalizedScreenshotPath = join49(input.scratchDir, `screenshot-${index}.png`);
-  await rm(normalizedScreenshotPath, { force: true });
-  await runFrameProcess(process3, [
-    "-y",
-    "-i",
-    input.screenshot.path,
-    "-vf",
-    "scale=800:-2:flags=lanczos",
-    "-frames:v",
-    "1",
-    normalizedScreenshotPath
-  ]);
-  await requireNonEmptyFile(normalizedScreenshotPath, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
-  const requestedSampleTimestamps = sampleRadiusMs === 0 ? [input.screenshot.timestampMs] : [
-    Math.max(0, input.screenshot.timestampMs - sampleRadiusMs),
-    input.screenshot.timestampMs,
-    input.screenshot.timestampMs + sampleRadiusMs
-  ];
-  const maximumTimestamp = input.videoDurationMs === void 0 ? Number.POSITIVE_INFINITY : Math.max(0, input.videoDurationMs - 1);
-  const sampleTimestamps = [
-    ...new Set(requestedSampleTimestamps.map((timestamp) => Math.min(timestamp, maximumTimestamp)))
-  ];
-  let best = null;
-  let decodedFrameCount = 0;
-  for (const [sampleIndex, timestampMs] of sampleTimestamps.entries()) {
-    const framePath = join49(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
-    await rm(framePath, { force: true });
-    try {
-      await runFrameProcess(process3, [
-        "-y",
-        "-ss",
-        (timestampMs / 1e3).toFixed(3),
-        "-i",
-        input.videoPath,
-        "-frames:v",
-        "1",
-        "-vf",
-        "scale=800:-2:flags=lanczos",
-        "-q:v",
-        "2",
-        framePath
-      ]);
-      await requireNonEmptyFile(framePath, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
-      decodedFrameCount += 1;
-    } catch (error2) {
-      if (error2 instanceof MediaFailure && error2.reason === "FRAME_PROCESS_FAILED")
-        continue;
-      throw error2;
-    }
-    const comparison = await runFrameProcess(process3, [
-      "-i",
-      normalizedScreenshotPath,
-      "-i",
-      framePath,
-      "-lavfi",
-      "[0:v][1:v]ssim",
-      "-f",
-      "null",
-      "-"
-    ]);
-    const score = parseSsim(`${comparison.stdout}
-${comparison.stderr}`);
-    if (!best || score > best.score)
-      best = { score, timestampMs, framePath };
-  }
-  if (decodedFrameCount === 0)
-    fail2("FRAME_PROCESS_FAILED");
-  if (!best || best.score < threshold)
-    fail2("FRAME_MISMATCH");
-  return {
-    frameMatch: {
-      stepId: input.screenshot.stepId,
-      screenshotSha256: input.screenshot.sha256,
-      videoTimestampMs: best.timestampMs,
-      score: best.score
-    },
-    selectedFramePath: best.framePath
-  };
-}
-function contactSheetLayout(frameCount) {
-  const columns = Math.ceil(Math.sqrt(frameCount));
-  return Array.from({ length: frameCount }, (_, index) => {
-    const column = index % columns;
-    const row = Math.floor(index / columns);
-    const x = column === 0 ? "0" : Array.from({ length: column }, (_2, i) => `w${i}`).join("+");
-    const y = row === 0 ? "0" : Array.from({ length: row }, (_2, i) => `h${i * columns}`).join("+");
-    return `${x}_${y}`;
-  }).join("|");
-}
-async function buildContactSheet(process3, selectedFramePaths, contactSheetPath) {
-  if (selectedFramePaths.length === 0 || contactSheetPath.length === 0) {
-    fail2("INVALID_MEDIA_INPUT");
-  }
-  for (const path of selectedFramePaths) {
-    await requireNonEmptyFile(path, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
-  }
-  try {
-    await mkdir2(dirname25(contactSheetPath), { recursive: true });
-    await rm(contactSheetPath, { force: true });
-  } catch {
-    fail2("MEDIA_IO_FAILED");
-  }
-  const inputs = selectedFramePaths.flatMap((path) => ["-i", path]);
-  const labels = selectedFramePaths.map((_, index) => `[${index}:v]`).join("");
-  const filter = `${labels}xstack=inputs=${selectedFramePaths.length}:layout=${contactSheetLayout(selectedFramePaths.length)}:fill=black[out]`;
-  try {
-    await process3.run("ffmpeg", [
-      "-y",
-      ...inputs,
-      "-filter_complex",
-      filter,
-      "-map",
-      "[out]",
-      "-frames:v",
-      "1",
-      "-c:v",
-      "mjpeg",
-      "-q:v",
-      "2",
-      contactSheetPath
-    ]);
-  } catch {
-    fail2("CONTACT_SHEET_PROCESS_FAILED");
-  }
-  await requireNonEmptyFile(contactSheetPath, "CONTACT_SHEET_MISSING", "CONTACT_SHEET_EMPTY");
-  return { path: contactSheetPath, sha256: await hashAcceptedFile(contactSheetPath) };
-}
-function validateInput(input, threshold) {
-  validateThreshold(threshold);
-  if (input.videoPath.length === 0 || input.contactSheetPath.length === 0 || !Number.isFinite(input.rehearsalDurationMs) || input.rehearsalDurationMs < 0 || input.screenshots.some((screenshot) => screenshot.stepId.length === 0 || screenshot.path.length === 0 || !Number.isFinite(screenshot.timestampMs) || screenshot.timestampMs < 0)) {
-    fail2("INVALID_MEDIA_INPUT");
-  }
-  if (input.screenshots.length < 3)
-    fail2("INSUFFICIENT_SCREENSHOTS");
-}
-async function validateMedia(process3, input) {
-  let scratchDir = null;
-  try {
-    const threshold = input.threshold ?? 0.9;
-    validateInput(input, threshold);
-    const probedVideo = await probeVideo(process3, input.videoPath);
-    const bounds = durationBounds(input.rehearsalDurationMs);
-    if (probedVideo.durationMs < bounds.minimumMs)
-      fail2("VIDEO_TOO_SHORT");
-    if (probedVideo.durationMs > bounds.hardMaximumMs)
-      fail2("VIDEO_TOO_LONG");
-    const scratchRoot = input.scratchRoot ?? tmpdir11();
-    try {
-      await mkdir2(scratchRoot, { recursive: true });
-      scratchDir = await mkdtemp(join49(scratchRoot, "proof-media-"));
-    } catch {
-      fail2("MEDIA_IO_FAILED");
-    }
-    const screenshots = [];
-    const frameMatches = [];
-    const selectedFramePaths = [];
-    for (const [index, milestone] of input.screenshots.entries()) {
-      await requireNonEmptyFile(milestone.path, "SCREENSHOT_MISSING", "SCREENSHOT_EMPTY");
-      const screenshot = {
-        ...milestone,
-        sha256: await hashAcceptedFile(milestone.path)
-      };
-      const match = await matchScreenshotAt(process3, {
-        videoPath: input.videoPath,
-        videoDurationMs: probedVideo.durationMs,
-        screenshot: index === 0 ? { ...screenshot, timestampMs: 0 } : screenshot,
-        threshold,
-        scratchDir,
-        index,
-        sampleRadiusMs: index === 0 ? 0 : 500
-      });
-      screenshots.push(screenshot);
-      frameMatches.push(match.frameMatch);
-      selectedFramePaths.push(match.selectedFramePath);
-    }
-    const contactSheet = await buildContactSheet(process3, selectedFramePaths, input.contactSheetPath);
-    const video = {
-      ...probedVideo,
-      durationToleranceUsed: probedVideo.durationMs > bounds.targetMaximumMs
-    };
-    return { ok: true, video, screenshots, frameMatches, contactSheet };
-  } catch (error2) {
-    const reason = error2 instanceof MediaFailure ? error2.reason : "MEDIA_IO_FAILED";
-    return { ok: false, reasons: [reason] };
-  } finally {
-    if (scratchDir)
-      await rm(scratchDir, { recursive: true, force: true }).catch(() => void 0);
-  }
 }
 
 // packages/rn-dev-agent-core/dist/tools/device-picker.js

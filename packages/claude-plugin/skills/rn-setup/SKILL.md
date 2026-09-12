@@ -174,7 +174,7 @@ If it returns `HELPERS_NOT_INJECTED`:
 ```bash
 command -v ffmpeg && ffmpeg -version 2>&1 | head -1
 ```
-If missing: `brew install ffmpeg` (not critical — videos work without it, GIF conversion doesn't)
+If missing: `brew install ffmpeg` (recordings still save, but keep their native sparse frame timing as a `.mov` instead of a 30 fps `.mp4`, and GIF conversion doesn't work)
 
 ### 10. idb (optional — fast screen mirroring)
 ```bash

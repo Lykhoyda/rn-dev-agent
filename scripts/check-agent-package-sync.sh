@@ -229,6 +229,7 @@ for path in \
   packages/claude-plugin/hooks/hooks.json \
   packages/claude-plugin/scripts/record_proof.sh \
   packages/claude-plugin/scripts/collect-feedback.sh \
+  packages/claude-plugin/scripts/generate_pr_body.sh \
   packages/claude-plugin/runner-manifest.json \
   packages/claude-plugin/rn-dev-agent-core/package.json \
   packages/claude-plugin/rn-dev-agent-core/dist/index.js \
@@ -254,6 +255,7 @@ for path in \
   packages/codex-plugin/runner-manifest.json \
   packages/codex-plugin/scripts/record_proof.sh \
   packages/codex-plugin/scripts/collect-feedback.sh \
+  packages/codex-plugin/scripts/generate_pr_body.sh \
   packages/codex-plugin/scripts/expo_ensure_running.sh \
   packages/codex-plugin/scripts/eas_resolve_artifact.sh \
   packages/codex-plugin/scripts/check-vercel-rules.mjs \
@@ -370,6 +372,12 @@ if ! cmp -s "$ROOT/scripts/collect-feedback.sh" "$ROOT/packages/claude-plugin/sc
 fi
 if ! cmp -s "$ROOT/scripts/collect-feedback.sh" "$ROOT/packages/codex-plugin/scripts/collect-feedback.sh"; then
   fail "Codex package collect-feedback.sh must match scripts/collect-feedback.sh"
+fi
+if ! cmp -s "$ROOT/scripts/generate_pr_body.sh" "$ROOT/packages/claude-plugin/scripts/generate_pr_body.sh"; then
+  fail "Claude package generate_pr_body.sh must match scripts/generate_pr_body.sh"
+fi
+if ! cmp -s "$ROOT/scripts/generate_pr_body.sh" "$ROOT/packages/codex-plugin/scripts/generate_pr_body.sh"; then
+  fail "Codex package generate_pr_body.sh must match scripts/generate_pr_body.sh"
 fi
 for helper in expo_ensure_running.sh eas_resolve_artifact.sh check-vercel-rules.mjs snapshot_state.sh; do
   if ! cmp -s "$ROOT/scripts/$helper" "$ROOT/packages/codex-plugin/scripts/$helper"; then

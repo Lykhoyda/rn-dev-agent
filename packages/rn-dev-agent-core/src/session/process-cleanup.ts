@@ -16,6 +16,9 @@ import { SessionAuthorityError } from './registry.js';
 
 const execFile = promisify(execFileCb);
 const RECORDER_POST_KILL_CONFIRM_MS = 2_000;
+const RECORDER_STOP_BASE_TIMEOUT_MS = 60_000;
+const RECORDER_STOP_MS_PER_RECORDED_MS = 3;
+const RECORDER_STOP_MAX_TIMEOUT_MS = 15 * 60_000;
 
 interface RecorderExecutionOptions {
   timeout: number;
@@ -156,7 +159,7 @@ function executeRecorderScript(
 export async function runRecordProofScript(
   script: string,
   args: string[],
-  timeout = 60_000,
+  timeout = RECORDER_STOP_BASE_TIMEOUT_MS,
   dependencies: RecordProofScriptDependencies = {},
 ): Promise<{ stdout: string; stderr: string }> {
   const execute = dependencies.execute ?? executeRecorderScript;
@@ -399,14 +402,24 @@ export async function stopBoundRunner(
   }
 }
 
+export function recorderStopTimeoutMs(startedAt: unknown, now = Date.now()): number {
+  const recordedMs =
+    typeof startedAt === 'number' && Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : 0;
+  return Math.min(
+    RECORDER_STOP_BASE_TIMEOUT_MS + RECORDER_STOP_MS_PER_RECORDED_MS * recordedMs,
+    RECORDER_STOP_MAX_TIMEOUT_MS,
+  );
+}
+
 export async function stopBoundRecorder(
   binding: Record<string, unknown>,
   _processProbe: (pid: number) => ProcessBirthProbe = probeProcessBirth,
   runRecorder: (
     script: string,
     args: string[],
-  ) => Promise<{ stdout: string; stderr: string }> = async (script, args) =>
-    runRecordProofScript(script, args),
+    timeoutMs?: number,
+  ) => Promise<{ stdout: string; stderr: string }> = async (script, args, timeoutMs) =>
+    runRecordProofScript(script, args, timeoutMs),
 ): Promise<string> {
   const script = String(binding.script ?? '');
   const scope = String(binding.scope ?? '');
@@ -446,7 +459,11 @@ export async function stopBoundRecorder(
   const pid = binding.pid as number;
   const expectedBirth = String(binding.processBirth ?? '');
   try {
-    const stopped = await runRecorder(script, ['stop', scope, String(pid), expectedBirth]);
+    const stopped = await runRecorder(
+      script,
+      ['stop', scope, String(pid), expectedBirth],
+      recorderStopTimeoutMs(binding.startedAt),
+    );
     const status = await runRecorder(script, ['status', scope]);
     if (!/^No active recordings/m.test(status.stdout)) {
       throw new Error('recorder state remains active after cleanup');

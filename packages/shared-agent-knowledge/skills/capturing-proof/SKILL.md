@@ -231,12 +231,16 @@ Create `docs/proof/<slug>/PROOF.md` with the standard format:
 - Date, device info, method
 - Flow table with step/screenshot/action/verification columns
 - Key state snapshots
-- Deviations section
+- A `## Deviations` section — use exactly that level-2 heading, since Step 8
+  matches it to copy the section into PR-BODY.md. Record any warning returned
+  by `proof_capture` (`stop_recording`, `validate`, `finalize`) or
+  `device_record` `stop` here, including a proof video's measured fps when
+  30 fps cadence smoothing was skipped.
 
 ### Step 8: Generate PR body
 
 ```bash
-rn-generate-pr-body docs/proof/<slug>/
+bash "$CLAUDE_PLUGIN_ROOT/scripts/generate_pr_body.sh" docs/proof/<slug>/
 ```
 
 ### Step 9: Present results
@@ -279,5 +283,7 @@ Show the user:
 
 - iOS Simulator or Android Emulator running with the app loaded
 - Ready fenced session with the integrated Metro and signed app target
-- ffmpeg required for GIF conversion and video labeling (`brew install ffmpeg`)
+- ffmpeg required for 30 fps cadence normalization, GIF conversion, and video
+  labeling (`brew install ffmpeg`); without it the capture is kept at its native
+  sparse frame timing as a `.mov` and may play as a slideshow
 - Pillow auto-installed in a venv for label rendering (no manual setup needed)

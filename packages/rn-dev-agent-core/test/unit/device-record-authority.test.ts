@@ -149,3 +149,41 @@ test('synthetic staged deadlines remain timeouts in action failure parsing', () 
     },
   );
 });
+
+test('a long capture gets a stop budget scaled to its recorded length', async () => {
+  const budgets: Array<number | undefined> = [];
+  const runRecorder = async (_script: string, args: string[], timeoutMs?: number) => {
+    if (args[0] === 'stop') budgets.push(timeoutMs);
+    return {
+      stdout: args[0] === 'status' ? 'No active recordings\n' : 'Saved: proof.mp4 (42 bytes)\n',
+      stderr: '',
+    };
+  };
+  const binding = (startedAt?: number) => ({
+    script: '/workspace/record_proof.sh',
+    scope: 'c'.repeat(64),
+    pid: 321,
+    processBirth: 'birth-token',
+    ...(startedAt === undefined ? {} : { startedAt }),
+  });
+  const probe = () => ({
+    status: 'present' as const,
+    birth: { pid: 321, token: 'replacement-birth', source: 'linux-proc' as const },
+  });
+
+  await stopBoundRecorder(binding(Date.now() - 125_000), probe, runRecorder);
+  await stopBoundRecorder(binding(Date.now() - 180_000), probe, runRecorder);
+  await stopBoundRecorder(binding(), probe, runRecorder);
+  await stopBoundRecorder(binding(Date.now() - 2 * 60 * 60_000), probe, runRecorder);
+  await stopBoundRecorder(binding(Date.now() - 10 * 24 * 60 * 60_000), probe, runRecorder);
+
+  assert.ok(budgets[0]! >= 60_000 + 3 * 125_000, `125 s capture budget was ${budgets[0]}`);
+  assert.ok(budgets[0]! < 60_000 + 3 * 130_000, `125 s capture budget was ${budgets[0]}`);
+  assert.ok(budgets[1]! >= 60_000 + 3 * 180_000, `180 s capture budget was ${budgets[1]}`);
+  assert.equal(budgets[2], 60_000);
+
+  for (const stale of [budgets[3]!, budgets[4]!]) {
+    assert.equal(stale, 15 * 60_000);
+    assert.ok(stale <= 2_147_483_647, `stale budget ${stale} would overflow setTimeout`);
+  }
+});
