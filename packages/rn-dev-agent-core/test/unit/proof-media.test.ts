@@ -9,6 +9,7 @@ import {
   buildContactSheet,
   matchScreenshotAt,
   probeVideo,
+  sparseCadenceWarning,
   sha256File,
   validateMedia,
   type MediaProcess,
@@ -300,7 +301,7 @@ test('validateMedia rejects video below 80 percent of rehearsal duration', async
   assertFailure(result, 'VIDEO_TOO_SHORT');
 });
 
-test('validateMedia rejects a slideshow-cadence proof video', async (t) => {
+test('validateMedia accepts a slideshow-cadence proof video and reports its frame rate', async (t) => {
   const fixture = await createFixture(t);
   const slideshow = new FakeMediaProcess({
     metadata: {
@@ -314,7 +315,16 @@ test('validateMedia rejects a slideshow-cadence proof video', async (t) => {
     rehearsalDurationMs: 125_000,
   });
 
-  assertFailure(result, 'VIDEO_CADENCE_TOO_SPARSE');
+  assert.equal(result.ok, true);
+  assert.ok(result.ok && result.avgFrameRate !== null && result.avgFrameRate < 1);
+  assert.match(
+    String(sparseCadenceWarning(result.ok ? result.avgFrameRate : null)),
+    /0\.22 fps/,
+  );
+  assert.match(
+    String(sparseCadenceWarning(result.ok ? result.avgFrameRate : null)),
+    /smoothing was skipped/,
+  );
 });
 
 test('validateMedia accepts a normalized 30 fps proof video of the same length', async (t) => {
@@ -332,6 +342,7 @@ test('validateMedia accepts a normalized 30 fps proof video of the same length',
   });
 
   assert.equal(result.ok, true);
+  assert.equal(result.ok && sparseCadenceWarning(result.avgFrameRate), null);
 });
 
 test('validateMedia accepts the adaptive target boundary without tolerance', async (t) => {

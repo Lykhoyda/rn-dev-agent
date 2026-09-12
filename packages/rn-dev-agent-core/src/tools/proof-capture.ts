@@ -55,7 +55,12 @@ import {
   oversizeProofWarning,
   type DeviceRecordArgs,
 } from './device-record.js';
-import { validateMedia, type MediaProcess, type MediaValidationInput } from './proof-media.js';
+import {
+  sparseCadenceWarning,
+  validateMedia,
+  type MediaProcess,
+  type MediaValidationInput,
+} from './proof-media.js';
 import { failResult, okResult, warnResult, type ToolResult } from '../utils.js';
 import {
   readStartupIntegrityAttestation,
@@ -270,6 +275,7 @@ interface Session {
   mayOwnRecorder: boolean;
   baseline: ProofReadiness | null;
   mechanicalReceipt: MechanicallyAcceptedProofReceipt | null;
+  cadenceWarning: string | null;
 }
 
 interface DerivedEvidence {
@@ -1464,6 +1470,7 @@ export function createProofCaptureHandler(
         mayOwnRecorder: false,
         baseline: null,
         mechanicalReceipt: null,
+        cadenceWarning: null,
       };
       deps.monitor.begin(args.runId);
       return okResult({ stage: session.stage, runId: args.runId });
@@ -1869,11 +1876,15 @@ export function createProofCaptureHandler(
       active.mechanicalReceipt = receipt;
       active.stage = 'mechanically_accepted';
       active.invalidationReasons = [];
-      return okResult({
+      active.cadenceWarning = media.ok ? sparseCadenceWarning(media.avgFrameRate) : null;
+      const validated = {
         stage: active.stage,
         receipt,
         reviewTargetSha256: hashProofValue(receipt),
-      });
+      };
+      return active.cadenceWarning
+        ? warnResult(validated, active.cadenceWarning)
+        : okResult(validated);
     }
 
     if (args.action === 'finalize') {
@@ -1940,11 +1951,14 @@ export function createProofCaptureHandler(
         return rejectCapture(active, finalizedGitReasons);
       }
       active.stage = 'accepted';
-      return okResult({
+      const accepted = {
         stage: active.stage,
         receiptPath: active.context.receiptPath,
         receipt: finalReceipt,
-      });
+      };
+      return active.cadenceWarning
+        ? warnResult(accepted, active.cadenceWarning)
+        : okResult(accepted);
     }
 
     return proofFailure(['INVALID_PROOF_STAGE'], active.stage);

@@ -70,6 +70,12 @@ while IFS= read -r -d '' f; do
   videos+=("$(basename "$f")")
 done < <(find "$PROOF_DIR" -maxdepth 1 \( -name "*.mov" -o -name "*.mp4" -o -name "*.gif" \) -print0 2>/dev/null | sort -z)
 
+deviations="$(awk '
+  /^## +Deviations/ { capture = 1; next }
+  capture && /^## / { exit }
+  capture { print }
+' "$PROOF_DIR/PROOF.md" | sed -e '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;};/\n$/ba')"
+
 diff_stat=""
 if git rev-parse --git-dir >/dev/null 2>&1; then
   diff_stat="$(git diff --stat "${BASE_BRANCH}...HEAD" 2>/dev/null || echo '(no diff available)')"
@@ -139,6 +145,13 @@ fi
     echo '```'
     echo "$diff_stat"
     echo '```'
+    echo ""
+  fi
+
+  if [[ -n "$deviations" ]]; then
+    echo "### Recording Notes"
+    echo ""
+    echo "$deviations"
     echo ""
   fi
 
