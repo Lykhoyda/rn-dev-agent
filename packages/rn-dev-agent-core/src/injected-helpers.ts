@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 66;
+export const HELPERS_VERSION = 67;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -2966,11 +2966,8 @@ export const INJECTED_HELPERS = `
           if (hosts.size !== 1) return null;
           var host = hosts.values().next().value;
           var lineage = [];
-          var seen = new WeakSet();
           var node = host;
           while (node && lineage.length < 1000) {
-            if (seen.has(node)) return null;
-            seen.add(node);
             lineage.push(node);
             node = node.return;
           }

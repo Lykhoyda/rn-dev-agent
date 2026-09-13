@@ -64483,7 +64483,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 66;
+    HELPERS_VERSION = 67;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -67446,11 +67446,8 @@ var init_injected_helpers = __esm({
           if (hosts.size !== 1) return null;
           var host = hosts.values().next().value;
           var lineage = [];
-          var seen = new WeakSet();
           var node = host;
           while (node && lineage.length < 1000) {
-            if (seen.has(node)) return null;
-            seen.add(node);
             lineage.push(node);
             node = node.return;
           }

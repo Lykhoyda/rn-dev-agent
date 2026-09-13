@@ -51658,7 +51658,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 66;
+var HELPERS_VERSION = 67;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -54621,11 +54621,8 @@ var INJECTED_HELPERS = `
           if (hosts.size !== 1) return null;
           var host = hosts.values().next().value;
           var lineage = [];
-          var seen = new WeakSet();
           var node = host;
           while (node && lineage.length < 1000) {
-            if (seen.has(node)) return null;
-            seen.add(node);
             lineage.push(node);
             node = node.return;
           }
