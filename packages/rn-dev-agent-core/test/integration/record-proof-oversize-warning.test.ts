@@ -93,3 +93,13 @@ test('a stop result reports a recording whose cadence could not be normalized', 
   assert.match(envelope.meta.warning, /capture duration unreadable/);
   assert.match(envelope.meta.warning, /slideshow/);
 });
+
+test('device_record exposes unavailable capture timing without claiming complete coverage', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'record-timing-skipped-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const reason = 'capture timing unavailable (recorder exited before normal stop)';
+  const envelope = await stopWithSavedSize(root, 4096, reason);
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.normalizationSkipped, reason);
+  assert.match(envelope.meta.warning, /recorder exited before normal stop/);
+});

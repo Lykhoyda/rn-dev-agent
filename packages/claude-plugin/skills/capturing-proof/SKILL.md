@@ -235,7 +235,10 @@ Create `docs/proof/<slug>/PROOF.md` with the standard format:
   matches it to copy the section into PR-BODY.md. Record any warning returned
   by `proof_capture` (`stop_recording`, `validate`, `finalize`) or
   `device_record` `stop` here, including a proof video's measured fps when
-  30 fps cadence smoothing was skipped.
+  30 fps cadence smoothing was skipped. Unavailable capture timing means the
+  native fallback may omit terminal idle; do not claim full coverage from fps
+  or container duration alone. Check visible events against one monotonic
+  capture origin and include the final idle window in playback review.
 
 ### Step 8: Generate PR body
 

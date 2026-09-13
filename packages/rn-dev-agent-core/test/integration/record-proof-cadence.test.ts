@@ -35,13 +35,99 @@ async function probe(path: string) {
   return { ...data.streams[0], size: Number(data.format.size) };
 }
 
-async function finalize(input: string, output: string, pathPrefix?: string) {
+async function finalize(input: string, output: string, pathPrefix?: string, duration = 120) {
   return run(
     'bash',
-    ['-c', 'source "$1"; normalize_capture_video "$2" "$3"', '_', script, input, output],
+    [
+      '-c',
+      'source "$1"; normalize_capture_video "$2" "$3" "$4"',
+      '_',
+      script,
+      input,
+      output,
+      String(duration),
+    ],
     pathPrefix ? { env: { ...process.env, PATH: `${pathPrefix}:${process.env.PATH}` } } : undefined,
   );
 }
+
+test('terminal idle reaches the frozen capture end even when the last native sample is earlier', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'record-terminal-idle-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const input = join(root, 'native.mp4');
+  const output = join(root, 'proof.mp4');
+  await run('ffmpeg', [
+    '-v',
+    'error',
+    '-y',
+    '-f',
+    'lavfi',
+    '-i',
+    'testsrc2=size=160x320:rate=30:duration=120',
+    '-vf',
+    "select='eq(n,0)+between(n,600,629)+between(n,1650,1679)+between(n,2670,2699)'",
+    '-fps_mode',
+    'vfr',
+    '-c:v',
+    'libx264',
+    '-bf',
+    '0',
+    input,
+  ]);
+  assert.equal(Number((await probe(input)).duration), 90);
+  await run('bash', [
+    '-c',
+    'source "$1"; normalize_capture_video "$2" "$3" 120',
+    '_',
+    script,
+    input,
+    output,
+  ]);
+  const saved = await probe(output);
+  assert.equal(Number(saved.duration), 120);
+  assert.equal(Number(saved.nb_read_frames), 3600);
+  const { stdout } = await run('ffmpeg', [
+    '-v',
+    'error',
+    '-ss',
+    '110',
+    '-i',
+    output,
+    '-t',
+    '10',
+    '-f',
+    'framemd5',
+    '-',
+  ]);
+  const frames = stdout.split('\n').filter((line) => line && !line.startsWith('#'));
+  assert.equal(frames.length, 300);
+  assert.equal(new Set(frames.map((line) => line.split(',').at(-1)?.trim())).size, 1);
+  for (const start of ['20', '55', '89']) {
+    const { stdout } = await run('ffmpeg', [
+      '-v',
+      'error',
+      '-ss',
+      start,
+      '-i',
+      output,
+      '-t',
+      '1',
+      '-f',
+      'framemd5',
+      '-',
+    ]);
+    const motion = stdout.split('\n').filter((line) => line && !line.startsWith('#'));
+    assert.equal(motion.length, 30);
+    assert.ok(new Set(motion.map((line) => line.split(',').at(-1)?.trim())).size >= 25);
+  }
+  const refused = join(root, 'inconsistent-clock.mp4');
+  const { stdout: warning } = await finalize(input, refused, undefined, 60);
+  assert.match(warning, /timestamps unreadable or exceed the capture interval/);
+  const native = await probe(input);
+  const retained = await probe(refused);
+  assert.equal(retained.duration, native.duration);
+  assert.equal(retained.nb_read_frames, native.nb_read_frames);
+});
 
 test('native sparse timestamps become bounded 30 fps video without losing motion or duration', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'record-cadence-'));
@@ -179,7 +265,7 @@ test('proof re-encode keeps the capture resolution so screenshot matching stays 
       'libx264',
       input,
     ]);
-    await finalize(input, output);
+    await finalize(input, output, undefined, 1);
 
     assert.deepEqual(await probeSize(output), await probeSize(input));
     assert.deepEqual(
@@ -232,7 +318,7 @@ test('a capture still becomes mp4 when cadence normalization cannot run', async 
   const scenarios = {
     'no-ffprobe': {
       dir: await shimDir(join(root, 'no-ffprobe'), { ffprobe: 'exit 127' }),
-      reason: /duration unreadable/,
+      reason: /frame timestamps unreadable/,
     },
     'no-libx264': {
       dir: await shimDir(join(root, 'no-libx264'), {
@@ -244,7 +330,7 @@ test('a capture still becomes mp4 when cadence normalization cannot run', async 
 
   for (const [name, { dir, reason }] of Object.entries(scenarios)) {
     const output = join(root, `proof-${name}.mp4`);
-    const { stdout, stderr } = await finalize(input, output, dir);
+    const { stdout, stderr } = await finalize(input, output, dir, 4);
 
     assert.match(stdout, /^Cadence normalization skipped: .+$/m);
     assert.match(stdout, reason);

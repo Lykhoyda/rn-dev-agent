@@ -16,6 +16,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { darwinProcessBirthRequirement } from '../../dist/session/process-birth.js';
+import { parseStartOutput } from '../../dist/tools/device-record.js';
 
 const sourceScript = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -140,11 +142,175 @@ function seedLocalBinding(prefix: string) {
   writeFileSync(`${prefix}-${scope}.path`, '/tmp/proof.mp4');
 }
 
+function seedCaptureTiming(prefix: string) {
+  const now = Number(
+    spawnSync('python3', ['-c', 'import time; print(time.monotonic())'], { encoding: 'utf8' })
+      .stdout,
+  );
+  const incarnation = 'f'.repeat(32);
+  writeFileSync(`${prefix}-${scope}.incarnation`, incarnation);
+  writeFileSync(`${prefix}-${scope}-${incarnation}.child-pid`, '777');
+  writeFileSync(
+    `${prefix}-${scope}-${incarnation}.supervisor-state`,
+    `exited 0\n${JSON.stringify({
+      scope,
+      incarnation,
+      pid: 777,
+      launch: now - 125,
+      ready: now - 124.9,
+      stop: now - 5,
+      signal: now - 4.99,
+      exit: now - 4,
+      disposition: 'normal',
+      remote_state: 'present',
+      remote_start: now - 5.1,
+      remote_end: now - 5.01,
+    })}\n`,
+  );
+}
+
 function captureIdentity(path: string): string {
   const metadata = lstatSync(path, { bigint: true });
   const digest = createHash('sha256').update(readFileSync(path)).digest('hex');
   return `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeNs}:${metadata.ctimeNs}:${digest}`;
 }
+
+test('Android witnesses remote identity before transport shutdown and retains the first interval for retry', (t) => {
+  for (const remoteState of ['present', 'absent', 'reused', 'unknown']) {
+    const state = fixture();
+    const marker = join(state.root, 'host-stopped');
+    const remoteGone = join(state.root, 'remote-gone');
+    const events = join(state.root, 'events');
+    const output = join(state.root, 'proof.mp4');
+    const adb = join(state.root, 'adb');
+    const ffmpeg = join(state.root, 'ffmpeg');
+    writeFileSync(
+      adb,
+      `#!/usr/bin/env python3
+import os, pathlib, signal, sys, time
+args = sys.argv[1:]
+joined = " ".join(args)
+events = pathlib.Path(os.environ["EVENTS"])
+gone = pathlib.Path(os.environ["REMOTE_GONE"])
+mode = os.environ.get("REMOTE_STATE", "present")
+def event(value):
+    with events.open("a") as f: f.write(value + "\\n")
+if args == ["devices"]:
+    print("emulator-5554\\tdevice")
+elif args == ["get-state"]:
+    print("device")
+elif "pidof screenrecord" in joined:
+    print("777" if pathlib.Path(os.environ["REMOTE_PATH"]).exists() and not gone.exists() else "")
+elif args[:2] == ["shell", "screenrecord"]:
+    pathlib.Path(os.environ["REMOTE_PATH"]).write_text(args[-1])
+    def stop(signum, frame):
+        event("host-stop")
+        pathlib.Path(os.environ["HOST_STOPPED"]).touch()
+        sys.exit(0)
+    signal.signal(signal.SIGINT, stop)
+    while True: time.sleep(0.02)
+elif "cat /proc/777/stat" in joined:
+    event("probe:" + mode)
+    if mode in ("absent", "unknown") or gone.exists(): sys.exit(1)
+    print("777 (screenrecord) S " + "0 " * 18 + ("999" if mode == "reused" else "123"))
+elif "cat /proc/sys/kernel/random/boot_id" in joined:
+    print("${bootId}")
+elif "readlink /proc/777/exe" in joined:
+    print("/system/bin/screenrecord")
+elif "cat /proc/777/cmdline" in joined:
+    print("/system/bin/screenrecord " + pathlib.Path(os.environ["REMOTE_PATH"]).read_text())
+elif "test ! -e /proc/777" in joined:
+    sys.exit(0 if mode == "absent" or gone.exists() else 1)
+elif "kill -2 777" in joined:
+    gone.touch()
+elif args[0] == "pull":
+    pathlib.Path(args[-1]).write_text("native capture")
+elif "shell rm -f" in joined or "shell test ! -e" in joined:
+    sys.exit(44 if os.environ.get("DELETE_FAIL") == "1" else 0)
+else:
+    sys.exit(2)
+`,
+    );
+    writeFileSync(
+      ffmpeg,
+      `#!/usr/bin/env python3
+import json, os, pathlib, sys
+with open(os.environ["ENCODER_ARGS"], "a") as f: f.write(json.dumps(sys.argv[1:]) + "\\n")
+pathlib.Path(sys.argv[-1]).write_text("converted")
+`,
+    );
+    writeFileSync(
+      join(state.root, 'ffprobe'),
+      '#!/usr/bin/env bash\necho \'{"frames":[{"best_effort_timestamp_time":"0"}]}\'\n',
+    );
+    const env = {
+      ...process.env,
+      PATH: `${state.root}:${process.env.PATH}`,
+      RN_DEV_AGENT_PROCESS_BIRTH_HELPER: join(
+        dirname(sourceScript),
+        '../packages/rn-dev-agent-core/native/darwin-process-birth',
+      ),
+      RN_DEV_AGENT_PROCESS_BIRTH_REQUIREMENT: darwinProcessBirthRequirement(),
+      EVENTS: events,
+      REMOTE_GONE: remoteGone,
+      HOST_STOPPED: marker,
+      REMOTE_PATH: join(state.root, 'remote-path'),
+      ENCODER_ARGS: join(state.root, 'encoder-args'),
+    };
+    t.after(() => {
+      spawnSync('bash', [state.script, 'abort', scope], { env, timeout: 10_000 });
+      state.cleanup();
+    });
+    const start = spawnSync('bash', [state.script, 'start', 'android', output, '--scope', scope], {
+      env,
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    assert.equal(start.status, 0, start.stderr);
+    const binding = parseStartOutput(start.stdout);
+    assert.ok(binding);
+    const incarnation = readFileSync(`${state.prefix}-${scope}.incarnation`, 'utf8').trim();
+    const statePath = `${state.prefix}-${scope}-${incarnation}.supervisor-state`;
+    writeFileSync(events, '');
+    const args = [state.script, 'stop', scope, String(binding.pid), binding.processBirth];
+    const first = spawnSync('bash', args, {
+      env: { ...env, REMOTE_STATE: remoteState, DELETE_FAIL: '1' },
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    assert.notEqual(first.status, 0);
+    const observed = readFileSync(events, 'utf8').trim().split('\n');
+    const timing = JSON.parse(readFileSync(statePath, 'utf8').split('\n')[1]);
+    if (remoteState === 'unknown') {
+      assert.equal(observed.includes('host-stop'), false);
+      assert.equal(timing.stop, null);
+      assert.equal(existsSync(env.ENCODER_ARGS), false);
+      continue;
+    }
+    assert.ok(
+      observed.indexOf(`probe:${remoteState}`) < observed.indexOf('host-stop'),
+      observed.join(','),
+    );
+    const encodes = readFileSync(env.ENCODER_ARGS, 'utf8');
+    const encodingArgs: string[] = JSON.parse(encodes.trim());
+    if (remoteState === 'present') {
+      assert.doesNotMatch(first.stdout, /normalization skipped/);
+      const duration = Number(encodingArgs[encodingArgs.indexOf('-t') + 1]);
+      assert.ok(Math.abs(duration - (timing.stop - timing.ready)) <= 1 / 60);
+    } else {
+      assert.match(first.stdout, /device recorder was not live at normal stop/);
+      assert.equal(encodingArgs.includes('-t'), false);
+    }
+    const retry = spawnSync('bash', args, {
+      env: { ...env, REMOTE_STATE: remoteState },
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    assert.equal(retry.status, 0, retry.stderr);
+    assert.match(retry.stdout, /^Saved: /m);
+    assert.equal(readFileSync(env.ENCODER_ARGS, 'utf8'), encodes);
+  }
+});
 
 test('Android abort retains authority when the exact device is unreachable', () => {
   const state = fixture();
@@ -432,8 +598,9 @@ test('Android finalized output retries failed remote deletion without repulling'
 test('Android cleanup retries resume a skipped-normalization capture without re-encoding', () => {
   for (const skipped of [
     'ffmpeg unavailable',
-    'capture duration unreadable',
+    'native frame timestamps unreadable',
     '30 fps H.264 re-encode failed',
+    'capture timing unavailable',
   ]) {
     const state = fixture();
     try {
@@ -445,11 +612,17 @@ test('Android cleanup retries resume a skipped-normalization capture without re-
             'if false; then',
           ),
         );
-      } else if (skipped === 'capture duration unreadable') {
+      } else if (skipped === 'native frame timestamps unreadable') {
         writeFileSync(join(state.root, 'ffprobe'), '#!/usr/bin/env bash\nexit 1\n');
+      } else {
+        writeFileSync(
+          join(state.root, 'ffprobe'),
+          '#!/usr/bin/env bash\necho \'{"frames":[{"best_effort_timestamp_time":"0"}]}\'\n',
+        );
       }
       const output = join(state.root, 'proof.mp4');
       seedLocalBinding(state.prefix);
+      if (skipped !== 'capture timing unavailable') seedCaptureTiming(state.prefix);
       writeFileSync(`${state.prefix}-${scope}.path`, output);
       writeFileSync(`${state.prefix}-${scope}.device-path`, '/sdcard/proof.mp4');
       const env = {

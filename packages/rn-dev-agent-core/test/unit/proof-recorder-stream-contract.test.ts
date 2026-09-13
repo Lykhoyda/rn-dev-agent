@@ -49,7 +49,6 @@ test('the recorder supervisor releases start streams and owns child output', asy
   assert.match(script, /mktemp "\$\{SIDECAR_TEMP_DIR\}\/sidecar\.XXXXXX"/);
   assert.match(script, /tempfile\.mkstemp\(prefix="sidecar\.", dir=temp_dir, text=True\)/);
   assert.doesNotMatch(script, /temporary = f"\{path\}\.\{os\.getpid\(\)\}\.tmp"/);
-  assert.match(script, /else f"failed \{return_code\}\\n"/);
   assert.match(script, /if \[\[ "\$supervisor_terminal" == "true" \]\]; then\n\s+:/);
   assert.match(
     script,

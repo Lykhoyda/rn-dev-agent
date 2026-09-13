@@ -1692,6 +1692,52 @@ test('stop_recording reports a recording whose cadence could not be normalized',
   assert.match(String(warning), /slideshow/);
 });
 
+test('stop_recording preserves unavailable capture timing through validation', async (t) => {
+  const harness = createHarness(t);
+  await cleanRehearsal(harness);
+  await arm(harness);
+  harness.setRecord(async (args) => {
+    if (args.action === 'status') return okResult({ active: [] });
+    if (args.action === 'start') {
+      return okResult({ deviceId: 'SIM-1', output: beginArgs().videoPath });
+    }
+    return okResult({
+      saved: [{ path: beginArgs().videoPath, sizeBytes: 4_096 }],
+      normalizationSkipped: 'capture timing unavailable (recorder exited before normal stop)',
+    });
+  });
+
+  const recordingStart = await startRecording(harness);
+  recordEvidence(harness, recordingStart);
+  const parsed = envelope(await harness.handler({ action: 'stop_recording' }));
+
+  assert.equal(parsed.ok, true);
+  assert.equal((parsed.data as { stage: string }).stage, 'validating');
+  const warning = (parsed.meta as { warning?: string } | undefined)?.warning;
+  assert.match(String(warning), /not normalized to 30 fps/);
+  assert.match(String(warning), /recorder exited before normal stop/);
+  markProofOutputs(harness);
+  const validation = await harness.handler({ action: 'validate' });
+  const validated = envelope(validation);
+  assert.equal(validated.ok, true);
+  assert.match(
+    String((validated.meta as { warning?: string } | undefined)?.warning),
+    /recorder exited before normal stop/,
+  );
+  const finalized = envelope(
+    await harness.handler({
+      action: 'finalize',
+      evidenceReview: validReview({ evidenceSha256: reviewTarget(validation) }),
+    }),
+  );
+  assert.equal(finalized.ok, true);
+  assert.match(
+    String((finalized.meta as { warning?: string } | undefined)?.warning),
+    /recorder exited before normal stop/,
+  );
+  assert.match(String(warning), /slideshow/);
+});
+
 test('stop_recording reports a proof video above the GitHub video attachment limit', async (t) => {
   for (const [sizeBytes, expectWarning] of [
     [125_829_120, true],
