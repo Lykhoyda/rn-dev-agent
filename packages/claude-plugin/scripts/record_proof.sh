@@ -1331,8 +1331,6 @@ try:
                     if action == "INT" and timing["stop"] is None:
                         timing["stop"] = time.monotonic()
                         timing["disposition"] = "normal"
-                        if len(parts) == 4:
-                            timing["remote_state"] = parts[3]
                         write_state("running")
                     elif action in {"KILL", "ABORT"}:
                         if android_stop is not None and android_stop["result"] == "pending":
@@ -1670,11 +1668,10 @@ try:
     launch, ready, stop, signaled, exited = values
     if not 0 < launch <= ready <= stop <= signaled <= exited <= time.monotonic():
         unavailable("invalid monotonic interval")
-    if signaled - stop > 1:
-        unavailable("capture clock uncertainty exceeds one second")
     if sys.argv[5] == "android" and timing["remote_state"] != "present":
         unavailable("device recorder was not live at normal stop")
-    frames = math.floor((stop - ready) * 30 + 0.5)
+    capture_end = signaled if sys.argv[5] == "android" else stop
+    frames = math.floor((capture_end - ready) * 30 + 0.5)
     if frames < 1:
         unavailable("capture interval is empty")
     print(f"{frames / 30:.9f}")
@@ -2183,9 +2180,7 @@ cmd_stop() {
       echo "Error: recorder process identity changed before stop" >&2
       exit 1
     }
-    local stop_witness=""
     if [[ "$platform" == "android" ]]; then
-      probe_bound_android_recorder "$scope"
       request_supervisor_signal "$scope" "ANDROID_STOP_BEGIN" "$incarnation"
       if [[ "$SUPERVISOR_RESPONSE" == "ready" ]]; then
         local begin_nonce="$SUPERVISOR_REQUEST_NONCE"
@@ -2193,7 +2188,7 @@ cmd_stop() {
         request_supervisor_signal "$scope" "ANDROID_STOP_RESULT" "$incarnation" "$begin_nonce:$ANDROID_SIGNAL_OUTCOME"
       fi
     else
-      request_supervisor_signal "$scope" "INT" "$incarnation" "$stop_witness"
+      request_supervisor_signal "$scope" "INT" "$incarnation"
     fi
     local waited=0
     local recorder_stopped="false"

@@ -220,6 +220,7 @@ elif "cat /proc/777/cmdline" in joined:
 elif "test ! -e /proc/777" in joined:
   sys.exit(0 if mode == "absent" or gone.exists() else 1)
 elif "kill -2 777" in joined:
+  time.sleep(float(os.environ.get("REMOTE_LATENCY", "0")))
   event("remote-int")
   if mode == "signal-failed": sys.exit(1)
   if mode == "remote-still-live":
@@ -314,7 +315,9 @@ test('Android witnesses remote identity before transport shutdown and retains th
     const timing = JSON.parse(readFileSync(statePath, 'utf8').split('\n')[1]);
     if (remoteState === 'unknown') {
       assert.equal(observed.includes('host-stop'), false);
-      assert.equal(timing.stop, null);
+      assert.equal(observed.includes('remote-int'), false);
+      assert.equal(timing.disposition, 'uncertain');
+      assert.equal(timing.signal, null);
       assert.equal(existsSync(env.ENCODER_ARGS), false);
       continue;
     }
@@ -334,7 +337,7 @@ test('Android witnesses remote identity before transport shutdown and retains th
       assert.ok(timing.signal <= timing.exit);
       assert.doesNotMatch(first.stdout, /normalization skipped/);
       const duration = Number(encodingArgs[encodingArgs.indexOf('-t') + 1]);
-      assert.ok(Math.abs(duration - (timing.stop - timing.ready)) <= 1 / 60);
+      assert.ok(Math.abs(duration - (timing.signal - timing.ready)) <= 1 / 60);
     } else {
       assert.match(first.stdout, /normalization skipped/);
       assert.notEqual(timing.disposition, 'normal');
@@ -439,10 +442,14 @@ test('Android defers a fast transport exit for its result and never repairs an e
       assert.ok(capture.timing().signal <= capture.timing().exit);
       if (delay > 1_000) {
         const clock = capture.control(
-          'read_capture_timing "$scope" "$incarnation" android; printf "%s" "$CAPTURE_TIMING_UNAVAILABLE"',
+          'read_capture_timing "$scope" "$incarnation" android; printf "%s|%s" "$CAPTURE_DURATION" "$CAPTURE_TIMING_UNAVAILABLE"',
         );
         assert.equal(clock.status, 0, clock.stderr);
-        assert.match(clock.stdout, /capture clock uncertainty exceeds one second/);
+        const [duration, unavailable] = clock.stdout.split('|');
+        assert.equal(unavailable, '');
+        const settled = capture.timing();
+        assert.ok(settled.signal - settled.stop >= 1);
+        assert.ok(Math.abs(Number(duration) - (settled.signal - settled.ready)) <= 1 / 60);
       }
     } else {
       const expired = capture.timing();
@@ -457,6 +464,33 @@ test('Android defers a fast transport exit for its result and never repairs an e
     }
     assert.equal(capture.timing().stop, first.stop);
   }
+});
+
+test('Android normalizes at 30 fps when the device stop handshake outlasts one second', (t) => {
+  const capture = androidCaptureFixture(t, { REMOTE_LATENCY: '1.1' });
+  const first = spawnSync('bash', capture.args, {
+    env: { ...capture.env, DELETE_FAIL: '1' },
+    encoding: 'utf8',
+    timeout: 60_000,
+  });
+  assert.notEqual(first.status, 0);
+  assert.doesNotMatch(first.stdout, /normalization skipped/);
+  const timing = capture.timing();
+  assert.equal(timing.disposition, 'normal');
+  assert.ok(timing.signal - timing.stop >= 1);
+  const encodingArgs: string[] = JSON.parse(
+    readFileSync(capture.env.ENCODER_ARGS, 'utf8').trim().split('\n')[0],
+  );
+  assert.ok(encodingArgs.includes('fps=30,tpad=stop_mode=clone:stop=-1'));
+  const duration = Number(encodingArgs[encodingArgs.indexOf('-t') + 1]);
+  assert.ok(Math.abs(duration - (timing.signal - timing.ready)) <= 1 / 60);
+  const retry = spawnSync('bash', capture.args, {
+    env: capture.env,
+    encoding: 'utf8',
+    timeout: 60_000,
+  });
+  assert.equal(retry.status, 0, retry.stderr);
+  assert.match(retry.stdout, /^Saved: /m);
 });
 
 test('Android resumes expired attempts as cleanup and retains force after a checked remote signal', async (t) => {
