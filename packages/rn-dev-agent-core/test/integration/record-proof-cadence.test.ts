@@ -86,22 +86,22 @@ test('terminal idle reaches the frozen capture end even when the last native sam
   const saved = await probe(output);
   assert.equal(Number(saved.duration), 120);
   assert.equal(Number(saved.nb_read_frames), 3600);
-  const { stdout } = await run('ffmpeg', [
-    '-v',
-    'error',
-    '-ss',
-    '110',
+  const { stderr } = await run('ffmpeg', [
+    '-hide_banner',
     '-i',
     output,
-    '-t',
-    '10',
+    '-vf',
+    'freezedetect=n=0.01:d=5',
+    '-map',
+    '0:v',
     '-f',
-    'framemd5',
+    'null',
     '-',
   ]);
-  const frames = stdout.split('\n').filter((line) => line && !line.startsWith('#'));
-  assert.equal(frames.length, 300);
-  assert.equal(new Set(frames.map((line) => line.split(',').at(-1)?.trim())).size, 1);
+  const freezes = [...stderr.matchAll(/freeze_(start|end): ([\d.]+)/g)];
+  const terminal = freezes.at(-1);
+  assert.equal(terminal?.[1], 'start');
+  assert.ok(Math.abs(Number(terminal?.[2]) - 90) < 0.1, `terminal idle began at ${terminal?.[2]}`);
   for (const start of ['20', '55', '89']) {
     const { stdout } = await run('ffmpeg', [
       '-v',
