@@ -64483,7 +64483,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 65;
+    HELPERS_VERSION = 66;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -68999,10 +68999,14 @@ var init_injected_helpers = __esm({
     function readBoundRoute(navigation, route) {
       if (
         !navigation || typeof navigation !== 'object'
-        || typeof navigation.getState !== 'function'
         || typeof navigation.isFocused !== 'function'
       ) throw new Error('invalid navigator');
-      var state = navigation.getState();
+      // dangerouslyGetState is the pre-v6 spelling of getState.
+      var readState = typeof navigation.getState === 'function'
+        ? navigation.getState
+        : navigation.dangerouslyGetState;
+      if (typeof readState !== 'function') throw new Error('invalid navigator');
+      var state = readState.call(navigation);
       if (
         !state || typeof state !== 'object' || Array.isArray(state)
         || !Array.isArray(state.routes) || state.routes.length === 0
@@ -69053,11 +69057,8 @@ var init_injected_helpers = __esm({
     var controlWitness = false;
     var current = target;
     var depth = 0;
-    var ownerSeen = new WeakSet();
     try {
       while (current && depth++ < 1000) {
-        if (ownerSeen.has(current)) throw new Error('cyclic route ancestry');
-        ownerSeen.add(current);
         var ownerProps = current.memoizedProps;
         if (ownerProps && typeof ownerProps === 'object') {
           if (readControlWitness(ownerProps)) controlWitness = true;

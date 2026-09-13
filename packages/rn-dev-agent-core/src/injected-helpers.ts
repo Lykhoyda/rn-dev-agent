@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 65;
+export const HELPERS_VERSION = 66;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -4519,10 +4519,14 @@ export const INJECTED_HELPERS = `
     function readBoundRoute(navigation, route) {
       if (
         !navigation || typeof navigation !== 'object'
-        || typeof navigation.getState !== 'function'
         || typeof navigation.isFocused !== 'function'
       ) throw new Error('invalid navigator');
-      var state = navigation.getState();
+      // dangerouslyGetState is the pre-v6 spelling of getState.
+      var readState = typeof navigation.getState === 'function'
+        ? navigation.getState
+        : navigation.dangerouslyGetState;
+      if (typeof readState !== 'function') throw new Error('invalid navigator');
+      var state = readState.call(navigation);
       if (
         !state || typeof state !== 'object' || Array.isArray(state)
         || !Array.isArray(state.routes) || state.routes.length === 0
@@ -4573,11 +4577,8 @@ export const INJECTED_HELPERS = `
     var controlWitness = false;
     var current = target;
     var depth = 0;
-    var ownerSeen = new WeakSet();
     try {
       while (current && depth++ < 1000) {
-        if (ownerSeen.has(current)) throw new Error('cyclic route ancestry');
-        ownerSeen.add(current);
         var ownerProps = current.memoizedProps;
         if (ownerProps && typeof ownerProps === 'object') {
           if (readControlWitness(ownerProps)) controlWitness = true;

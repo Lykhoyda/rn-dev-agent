@@ -189,10 +189,20 @@ function tabFixture() {
   return { root, outer, outerHost, animated, pressable, host, calls };
 }
 
+type RouteState = { index: number; routes: { key: string; name: string }[] };
+
+// React Navigation renamed dangerouslyGetState to getState in v6.
+function scopedNavigation(state: RouteState, isFocused: () => boolean, legacy: boolean) {
+  return legacy
+    ? { dangerouslyGetState: () => state, isFocused }
+    : { getState: () => state, isFocused };
+}
+
 function sceneProps(
   route: { key: string; name: string },
-  state: { index: number; routes: { key: string; name: string }[] },
+  state: RouteState,
   isFocused = () => state.routes[state.index]?.key === route.key,
+  legacy = false,
 ) {
   const neverInvoke = () => assert.fail('scene callbacks and renderers must not be invoked');
   return {
@@ -201,20 +211,14 @@ function sceneProps(
     getState: neverInvoke,
     setState: neverInvoke,
     clearOptions: neverInvoke,
-    navigation: { getState: () => state, isFocused },
+    navigation: scopedNavigation(state, isFocused, legacy),
   };
 }
 
-function tabDescriptor(
-  route: { key: string; name: string },
-  state: { index: number; routes: { key: string; name: string }[] },
-) {
+function tabDescriptor(route: { key: string; name: string }, state: RouteState, legacy = false) {
   return {
     route,
-    navigation: {
-      getState: () => state,
-      isFocused: () => state.routes[state.index]?.key === route.key,
-    },
+    navigation: scopedNavigation(state, () => state.routes[state.index]?.key === route.key, legacy),
     options: {},
     render: () => assert.fail('descriptor renderers must not be invoked'),
   };
@@ -222,7 +226,7 @@ function tabDescriptor(
 
 // @react-navigation/bottom-tabs renders the bar as a sibling of the scenes and
 // hands each item the descriptor of the route it navigates to.
-function routedTabFixture({ nested = true, selected = 1 } = {}) {
+function routedTabFixture({ nested = true, selected = 1, legacy = false } = {}) {
   const fixture = tabFixture();
   const home = { key: 'home-tab', name: 'HomeTab' };
   const tasks = { key: 'tasks-tab', name: 'TasksTab' };
@@ -231,7 +235,10 @@ function routedTabFixture({ nested = true, selected = 1 } = {}) {
   const root = makeFiber('Root');
   const state = nested ? { index: 0, routes: [tabs] } : tabState;
   const owner = nested
-    ? appendChild(root, makeFiber({ displayName: 'MinifiedScene' }, sceneProps(tabs, state)))
+    ? appendChild(
+        root,
+        makeFiber({ displayName: 'MinifiedScene' }, sceneProps(tabs, state, undefined, legacy)),
+      )
     : root;
   const bar = appendChild(
     owner,
@@ -246,7 +253,7 @@ function routedTabFixture({ nested = true, selected = 1 } = {}) {
   appendChild(bar, fixture.outer);
   Object.assign(fixture.outer.memoizedProps, {
     route: home,
-    descriptor: tabDescriptor(home, tabState),
+    descriptor: tabDescriptor(home, tabState, legacy),
     focused: selected === 0,
   });
   return { ...fixture, root, owner, bar, state, home, tasks, tabState };
@@ -263,6 +270,29 @@ function expoRootState(selected: number) {
     ],
   };
 }
+
+test('#951 a navigator exposing only dangerouslyGetState still proves tab ownership', async (t) => {
+  for (const active of [true, false]) {
+    await t.test(active ? 'active scene' : 'inactive scene', async () => {
+      const fixture = routedTabFixture({ legacy: true });
+      if (!active) {
+        fixture.owner.memoizedProps = sceneProps(fixture.home, fixture.tabState, undefined, true);
+      }
+      const result = await runCdpReplayCommands(
+        [{ tapOn: { id: 'tab-home' } }],
+        {},
+        buildDeps(createAgent(fixture.root, undefined, fixture.state)),
+      );
+      assert.equal(result.passed, active, JSON.stringify(result));
+      if (!active) {
+        assert.equal(result.failedStepIndex, 0);
+        assert.equal(result.failureCode, 'ASSERTION_FAILED');
+      }
+      const expected = active ? 1 : 0;
+      assert.deepEqual(fixture.calls, { wrapper: expected, navigation: expected });
+    });
+  }
+});
 
 test('#951 a root tab navigator presses its own items without a scene ancestor', async (t) => {
   const layouts = [
