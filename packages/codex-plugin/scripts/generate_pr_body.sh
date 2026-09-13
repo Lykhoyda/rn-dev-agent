@@ -165,7 +165,7 @@ trap 'rm -f -- "$temporary"' EXIT
     echo ""
     for v in "${videos[@]}"; do
       if [[ "$v" == *.gif ]]; then
-        echo "![Demo]($v)"
+        echo "<img src=\"${v//\"/%22}\" width=\"400\" alt=\"Demo\">"
       else
         echo "<!-- Drag $v here to upload the demo video -->"
         echo "_Video: \`$v\` — upload via GitHub drag-and-drop_"
