@@ -1310,6 +1310,86 @@ test('malformed nearer route scopes fail closed instead of borrowing an active a
   }
 });
 
+test('route ownership normalizes descriptor and paired-context shells without hiding readable content', async (t) => {
+  for (const shell of ['direct', 'descriptor', 'scene descriptor', 'paired contexts']) {
+    for (const selected of [0, 1]) {
+      await t.test(`${shell}: selected ${selected}`, async () => {
+        const home = { key: 'home-key', name: 'Home' };
+        const state = { index: selected, routes: [home, { key: 'other-home', name: 'Home' }] };
+        const root = routeTree('coverage', 'Home', state);
+        const owner = root.child;
+        const props = sceneProps(home, state);
+        const descriptor = { route: home, navigation: props.navigation };
+        if (shell === 'direct') owner.memoizedProps = props;
+        if (shell === 'descriptor') owner.memoizedProps = { descriptor };
+        if (shell === 'scene descriptor') owner.memoizedProps = { scene: { descriptor } };
+        if (shell === 'paired contexts') {
+          owner.tag = 10;
+          owner.memoizedProps = { value: home, children: null };
+          const target = owner.child;
+          owner.child = {
+            tag: 10,
+            type: {},
+            memoizedProps: { value: props.navigation, children: target },
+            return: owner,
+            child: target,
+            sibling: null,
+          };
+          target.return = owner.child;
+        }
+        const sandbox = makeFrontmostSandbox(root, state);
+        const tree = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: 'coverage' }));
+        assert.ok(JSON.stringify(tree).includes('coverage'));
+        const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+        assert.equal(verdict.visible, selected === 0);
+        assert.equal(verdict.matchCount, 1);
+        let presses = 0;
+        const result = await runCdpReplayCommands(
+          [{ tapOn: { id: 'coverage' } }],
+          {},
+          {
+            treeFor: async () => tree,
+            frontmostFor: async () => verdict,
+            pressByTestId: async () => {
+              presses++;
+            },
+            typeByTestId: async () => {},
+            launchApp: async () => {},
+            settle: async () => {},
+          },
+        );
+        assert.equal(result.passed, selected === 0);
+        assert.equal(presses, selected === 0 ? 1 : 0);
+        if (selected === 1) {
+          assert.equal(result.failureCode, 'ASSERTION_FAILED');
+          assert.equal(result.failedStepIndex, 0);
+        }
+      });
+    }
+  }
+});
+
+test('an invalid present modern scope getter cannot borrow a valid legacy getter', () => {
+  for (const getter of [
+    null,
+    undefined,
+    0,
+    () => {
+      throw new Error('unreadable');
+    },
+  ]) {
+    const root = routeTree('coverage', 'home');
+    const navigation = root.child.memoizedProps.navigation;
+    navigation.dangerouslyGetState = navigation.getState;
+    navigation.getState = getter;
+    const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'home' }] });
+    const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+    assert.equal(verdict.visible, false);
+    assert.equal(verdict.code, 'ASSERTION_FAILED');
+    assert.equal(verdict.matchCount, 1);
+  }
+});
+
 test('ownerless multi-route content cannot borrow ownership from ordinary route props', () => {
   const root = routeTree('coverage', 'home');
   root.child.memoizedProps = { screen: 'home', route: { key: 'home-key', name: 'home' } };

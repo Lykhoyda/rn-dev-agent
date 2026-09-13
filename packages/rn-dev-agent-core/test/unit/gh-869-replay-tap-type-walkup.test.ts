@@ -189,7 +189,7 @@ function tabFixture() {
   return { root, outer, outerHost, animated, pressable, host, calls };
 }
 
-type RouteState = { index: number; routes: { key: string; name: string }[] };
+type RouteState = { key?: string; index: number; routes: { key: string; name: string }[] };
 
 // React Navigation renamed dangerouslyGetState to getState in v6.
 function scopedNavigation(state: RouteState, isFocused: () => boolean, legacy: boolean) {
@@ -230,10 +230,14 @@ function routedTabFixture({ nested = true, selected = 1, legacy = false } = {}) 
   const fixture = tabFixture();
   const home = { key: 'home-tab', name: 'HomeTab' };
   const tasks = { key: 'tasks-tab', name: 'TasksTab' };
-  const tabState = { index: selected, routes: [home, tasks] };
+  const tabState = { key: 'tabs-state', index: selected, routes: [home, tasks] };
+  const descriptors = {
+    [home.key]: tabDescriptor(home, tabState, legacy),
+    [tasks.key]: tabDescriptor(tasks, tabState, legacy),
+  };
   const tabs = { key: 'root-tabs', name: 'Tabs', state: tabState };
   const root = makeFiber('Root');
-  const state = nested ? { index: 0, routes: [tabs] } : tabState;
+  const state = nested ? { key: 'root-state', index: 0, routes: [tabs] } : tabState;
   const owner = nested
     ? appendChild(
         root,
@@ -246,17 +250,70 @@ function routedTabFixture({ nested = true, selected = 1, legacy = false } = {}) 
       { displayName: 'BottomTabBar' },
       {
         state: tabState,
+        descriptors,
         navigation: { getState: () => tabState, isFocused: () => true },
       },
     ),
   );
-  appendChild(bar, fixture.outer);
+  const provider = appendChild(
+    bar,
+    makeFiber(
+      { displayName: 'NavigationProvider' },
+      {
+        route: home,
+        navigation: descriptors[home.key].navigation,
+        children: fixture.outer,
+      },
+    ),
+  );
+  const routeContext = appendChild(
+    provider,
+    makeFiber({}, { value: home, children: fixture.outer }),
+  );
+  routeContext.tag = 10;
+  const navigationContext = appendChild(
+    routeContext,
+    makeFiber(
+      {},
+      {
+        value: descriptors[home.key].navigation,
+        children: fixture.outer,
+      },
+    ),
+  );
+  navigationContext.tag = 10;
+  const focusContext = appendChild(
+    navigationContext,
+    makeFiber(
+      {},
+      {
+        value: selected === 0,
+        children: fixture.outer,
+      },
+    ),
+  );
+  focusContext.tag = 10;
+  appendChild(focusContext, fixture.outer);
   Object.assign(fixture.outer.memoizedProps, {
     route: home,
-    descriptor: tabDescriptor(home, tabState, legacy),
+    descriptor: descriptors[home.key],
     focused: selected === 0,
   });
-  return { ...fixture, root, owner, bar, state, home, tasks, tabState };
+  return {
+    ...fixture,
+    root,
+    owner,
+    bar,
+    provider,
+    routeContext,
+    navigationContext,
+    focusContext,
+    descriptors,
+    state,
+    home,
+    tasks,
+    tabState,
+  };
 }
 
 function expoRootState(selected: number) {
@@ -394,6 +451,330 @@ test('#951 visibility assertions, waits and conditional flows share scene owners
         assert.deepEqual(fixture.calls, { wrapper: expected, navigation: expected });
       });
     }
+  }
+});
+
+function insertScope(parent: Fiber, props: Record<string, any>) {
+  const child = parent.child!;
+  parent.child = null;
+  const scope = appendChild(parent, makeFiber({ displayName: 'OpaqueScope' }, props));
+  appendChild(scope, child);
+  return scope;
+}
+
+test('#951 destination providers cannot hide a real inactive ownership edge', async (t) => {
+  const cases: [string, (fixture: ReturnType<typeof routedTabFixture>) => void][] = [
+    [
+      'inactive navigator with locally selected descriptor',
+      (f) => {
+        f.bar.memoizedProps.navigation.isFocused = () => false;
+        for (const descriptor of Object.values(f.descriptors)) {
+          descriptor.navigation.isFocused = () => false;
+        }
+      },
+    ],
+    [
+      'inactive outer owner',
+      (f) => {
+        f.owner.memoizedProps = sceneProps(f.home, f.tabState);
+      },
+    ],
+    [
+      'owner below the item',
+      (f) => {
+        insertScope(f.outer, sceneProps(f.home, f.tabState));
+      },
+    ],
+    [
+      'transparent scope below the item',
+      (f) => {
+        insertScope(f.outer, { ...f.provider.memoizedProps });
+      },
+    ],
+    [
+      'richer scene between item and navigator',
+      (f) => {
+        Object.assign(f.provider.memoizedProps, sceneProps(f.home, f.tabState));
+      },
+    ],
+    [
+      'singular descriptor owner',
+      (f) => {
+        insertScope(f.provider, { descriptor: f.descriptors[f.home.key] });
+      },
+    ],
+    [
+      'scene descriptor owner',
+      (f) => {
+        insertScope(f.provider, { scene: { descriptor: f.descriptors[f.home.key] } });
+      },
+    ],
+    [
+      'paired contexts below the item',
+      (f) => {
+        const route = insertScope(f.outer, { value: f.home, children: null });
+        route.tag = 10;
+        const nav = insertScope(route, {
+          value: f.descriptors[f.home.key].navigation,
+          children: null,
+        });
+        nav.tag = 10;
+      },
+    ],
+    [
+      'richer paired context',
+      (f) => {
+        f.routeContext.memoizedProps.screen = {};
+      },
+    ],
+    [
+      'control-shaped content under an inactive screen',
+      (f) => {
+        insertScope(f.bar, sceneProps(f.home, f.tabState));
+      },
+    ],
+  ];
+  for (const [name, change] of cases) {
+    await t.test(name, async () => {
+      const fixture = routedTabFixture();
+      change(fixture);
+      const agent = createAgent(fixture.root, undefined, fixture.state);
+      const verdict = JSON.parse(
+        String((await agent.evaluate('__RN_AGENT.isTestIdFrontmost("tab-home")')).value),
+      );
+      assert.equal(verdict.visible, false);
+      assert.equal(verdict.matchCount, 1);
+      const result = await runCdpReplayCommands(
+        [{ tapOn: { id: 'tab-home' } }],
+        {},
+        buildDeps(agent),
+      );
+      assert.equal(result.passed, false);
+      assert.equal(result.failureCode, 'ASSERTION_FAILED');
+      assert.equal(result.failedStepIndex, 0);
+      assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+    });
+  }
+});
+
+test('#951 destination binding refuses malformed and cross-navigator associations', async (t) => {
+  const cases: [string, (fixture: ReturnType<typeof routedTabFixture>) => void][] = [
+    [
+      'copied destination descriptor',
+      (f) => {
+        f.outer.memoizedProps.descriptor = { ...f.descriptors[f.home.key] };
+      },
+    ],
+    [
+      'missing descriptor map',
+      (f) => {
+        delete f.bar.memoizedProps.descriptors;
+      },
+    ],
+    [
+      'missing navigator state',
+      (f) => {
+        delete f.bar.memoizedProps.state;
+      },
+    ],
+    [
+      'missing selected descriptor',
+      (f) => {
+        delete f.bar.memoizedProps.descriptors[f.tasks.key];
+      },
+    ],
+    [
+      'selected descriptor route mismatch',
+      (f) => {
+        f.descriptors[f.tasks.key].route = f.home;
+      },
+    ],
+    [
+      'missing selected flag',
+      (f) => {
+        delete f.outer.memoizedProps.focused;
+      },
+    ],
+    [
+      'invalid selected flag',
+      (f) => {
+        f.outer.memoizedProps.focused = 'false';
+      },
+    ],
+    [
+      'selected flag contradicts state',
+      (f) => {
+        f.outer.memoizedProps.focused = true;
+      },
+    ],
+    [
+      'invalid press handler',
+      (f) => {
+        f.outer.memoizedProps.onPress = null;
+      },
+    ],
+    [
+      'own malformed navigation',
+      (f) => {
+        f.outer.memoizedProps.navigation = null;
+      },
+    ],
+    [
+      'navigator focus disagrees',
+      (f) => {
+        f.bar.memoizedProps.navigation.isFocused = () => false;
+      },
+    ],
+    [
+      'selected descriptor is unfocused',
+      (f) => {
+        f.descriptors[f.tasks.key].navigation.isFocused = () => false;
+      },
+    ],
+    [
+      'different destination navigation',
+      (f) => {
+        f.provider.memoizedProps.navigation = scopedNavigation(f.tabState, () => true, false);
+      },
+    ],
+    [
+      'conflicting paired navigation',
+      (f) => {
+        f.navigationContext.memoizedProps.value = scopedNavigation(f.tabState, () => true, false);
+      },
+    ],
+    [
+      'same keys and names from another navigator state',
+      (f) => {
+        f.descriptors[f.tasks.key].navigation.getState = () => ({
+          ...f.tabState,
+          key: 'foreign-tabs',
+        });
+      },
+    ],
+    [
+      'same state key but different route membership',
+      (f) => {
+        f.descriptors[f.tasks.key].navigation.getState = () => ({
+          ...f.tabState,
+          routes: [f.tasks],
+          index: 0,
+        });
+      },
+    ],
+    [
+      'duplicate destination membership',
+      (f) => {
+        f.tabState.routes.push(f.home);
+      },
+    ],
+    [
+      'invalid modern getter with valid legacy',
+      (f) => {
+        const nav = f.descriptors[f.home.key].navigation as Record<string, any>;
+        nav.dangerouslyGetState = () => f.tabState;
+        nav.getState = null;
+      },
+    ],
+    [
+      'throwing modern getter with valid legacy',
+      (f) => {
+        const nav = f.descriptors[f.home.key].navigation as Record<string, any>;
+        nav.dangerouslyGetState = () => f.tabState;
+        nav.getState = () => {
+          throw new Error('unreadable');
+        };
+      },
+    ],
+    [
+      'malformed route context',
+      (f) => {
+        f.routeContext.memoizedProps.value = { key: f.home.key };
+      },
+    ],
+    [
+      'truncated scope ancestry',
+      (f) => {
+        let parent = makeFiber({});
+        for (let index = 0; index < 1000; index++) {
+          parent = appendChild(parent, makeFiber({}));
+        }
+        f.root.return = parent;
+      },
+    ],
+  ];
+  for (const [name, change] of cases) {
+    await t.test(name, async () => {
+      const fixture = routedTabFixture();
+      change(fixture);
+      const agent = createAgent(fixture.root, undefined, fixture.state);
+      const verdict = JSON.parse(
+        String((await agent.evaluate('__RN_AGENT.isTestIdFrontmost("tab-home")')).value),
+      );
+      assert.equal(verdict.visible, false);
+      assert.equal(verdict.code, 'ASSERTION_FAILED');
+      assert.equal(verdict.matchCount, 1);
+      const result = await runCdpReplayCommands(
+        [{ tapOn: { id: 'tab-home' } }],
+        {},
+        buildDeps(agent),
+      );
+      assert.equal(result.passed, false);
+      assert.equal(result.failureCode, 'ASSERTION_FAILED');
+      assert.equal(result.failedStepIndex, 0);
+      assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+    });
+  }
+});
+
+test('#951 destination binding uses local descriptors across repeated names and legacy parent getters', async (t) => {
+  for (const legacy of [false, true]) {
+    for (const selected of [0, 1]) {
+      await t.test(`${legacy ? 'early v5' : 'modern'} selected ${selected}`, async () => {
+        const fixture = routedTabFixture({ legacy, selected });
+        fixture.tasks.name = fixture.home.name;
+        const outerRoute = { key: fixture.home.key, name: fixture.home.name };
+        const parentState = { key: 'parent-state', index: 0, routes: [outerRoute] };
+        fixture.owner.memoizedProps = sceneProps(outerRoute, parentState, () => true, legacy);
+        // Early-v5 navigator helpers can inherit a parent getter; the descriptor owns the local one.
+        fixture.bar.memoizedProps.navigation = scopedNavigation(parentState, () => true, legacy);
+        const result = await runCdpReplayCommands(
+          [{ tapOn: { id: 'tab-home' } }],
+          {},
+          buildDeps(createAgent(fixture.root, undefined, fixture.state)),
+        );
+        assert.equal(result.passed, true, JSON.stringify(result));
+        assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+      });
+    }
+  }
+});
+
+test('#951 the ownership walk follows an alternate outer scene without losing its veto', async (t) => {
+  for (const active of [true, false]) {
+    await t.test(active ? 'active alternate' : 'inactive alternate', async () => {
+      const fixture = routedTabFixture();
+      const alternate = makeFiber(
+        {},
+        sceneProps(fixture.home, fixture.tabState, () => false),
+      );
+      if (active) alternate.memoizedProps = fixture.owner.memoizedProps;
+      Object.assign(fixture.owner, { alternate });
+      Object.assign(alternate, { alternate: fixture.owner });
+      alternate.return = fixture.root;
+      fixture.bar.return = alternate;
+      const result = await runCdpReplayCommands(
+        [{ tapOn: { id: 'tab-home' } }],
+        {},
+        buildDeps(createAgent(fixture.root, undefined, fixture.state)),
+      );
+      assert.equal(result.passed, active);
+      if (!active) {
+        assert.equal(result.failureCode, 'ASSERTION_FAILED');
+        assert.equal(result.failedStepIndex, 0);
+      }
+      assert.deepEqual(fixture.calls, { wrapper: active ? 1 : 0, navigation: active ? 1 : 0 });
+    });
   }
 });
 

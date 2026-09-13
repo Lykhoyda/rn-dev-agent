@@ -51658,7 +51658,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 67;
+var HELPERS_VERSION = 68;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -56173,12 +56173,20 @@ var INJECTED_HELPERS = `
         !navigation || typeof navigation !== 'object'
         || typeof navigation.isFocused !== 'function'
       ) throw new Error('invalid navigator');
-      // dangerouslyGetState is the pre-v6 spelling of getState.
-      var readState = typeof navigation.getState === 'function'
+      var readState = 'getState' in navigation
         ? navigation.getState
         : navigation.dangerouslyGetState;
       if (typeof readState !== 'function') throw new Error('invalid navigator');
       var state = readState.call(navigation);
+      validateRouteMembership(state, route);
+      var focused = navigation.isFocused();
+      if (
+        typeof focused !== 'boolean'
+        || (focused && state.routes[state.index].key !== route.key)
+      ) throw new Error('invalid route focus');
+      return { state: state, focused: focused };
+    }
+    function validateRouteMembership(state, route) {
       if (
         !state || typeof state !== 'object' || Array.isArray(state)
         || !Array.isArray(state.routes) || state.routes.length === 0
@@ -56195,56 +56203,148 @@ var INJECTED_HELPERS = `
         }
       }
       if (matches !== 1) throw new Error('ambiguous navigator membership');
-      var focused = navigation.isFocused();
-      // A focused route is always its navigator's selected one, so disagreement proves the navigation is not this route's own.
-      if (
-        typeof focused !== 'boolean'
-        || (focused && state.routes[state.index].key !== route.key)
-      ) throw new Error('invalid route focus');
-      return focused;
     }
-    // Navigator chrome carries the descriptor of the route it navigates to, never its own, so it is witnessed rather than owned.
-    function readControlWitness(props) {
-      var record = readRouteRecord(props.route);
-      var descriptor = props.descriptor;
-      if (!record || !descriptor || typeof descriptor !== 'object') return false;
-      var destination = readRouteRecord(descriptor.route);
-      if (!destination || destination.key !== record.key) return false;
-      readBoundRoute(descriptor.navigation, record);
+    function sameRoute(left, right) {
+      return !!readRouteRecord(left) && !!readRouteRecord(right)
+        && left.key === right.key && left.name === right.name;
+    }
+    function sameRouteState(left, right) {
+      if (
+        typeof left.key !== 'string' || !left.key || left.key !== right.key
+        || left.index !== right.index || left.routes.length !== right.routes.length
+      ) return false;
+      for (var index = 0; index < left.routes.length; index++) {
+        if (!sameRoute(left.routes[index], right.routes[index])) return false;
+      }
       return true;
     }
-    function readRouteScope(props) {
-      var route = props.route;
-      var navigation = props.navigation;
-      if (
-        !route || typeof route !== 'object'
-        || !navigation || typeof navigation !== 'object'
-      ) return null;
+    function hasOnlyProps(props, keys) {
+      var ownKeys = Object.keys(props);
+      return ownKeys.length === keys.length && keys.every(function(key) {
+        return Object.prototype.hasOwnProperty.call(props, key);
+      });
+    }
+    function routeScope(route, navigation, start, end, transparent) {
       var record = readRouteRecord(route);
       if (!record) throw new Error('invalid scope route');
-      return { name: record.name, focused: readBoundRoute(navigation, record) };
+      return { route: record, navigation: navigation, start: start, end: end, transparent: transparent };
     }
     var routeOwner = null;
     var inactiveOwner = false;
-    var controlWitness = false;
-    var current = target;
-    var depth = 0;
+    var boundControls = [];
     try {
-      while (current && depth++ < 1000) {
-        var ownerProps = current.memoizedProps;
-        if (ownerProps && typeof ownerProps === 'object') {
-          if (readControlWitness(ownerProps)) controlWitness = true;
-          else {
-            var scope = readRouteScope(ownerProps);
-            if (scope) {
-              if (!routeOwner) routeOwner = scope.name;
-              if (!scope.focused) inactiveOwner = true;
-            }
-          }
-        }
+      var exactHosts = matches.filter(function(fiber) { return fiber.tag === 5; });
+      var ownershipTarget = exactHosts.length === 1 ? exactHosts[0] : target;
+      var ancestry = [];
+      var current = ownershipTarget;
+      while (current && ancestry.length < 1000) {
+        ancestry.push(current);
         current = current.return;
       }
       if (current) throw new Error('incomplete route ancestry');
+      var scopes = [];
+      for (var ownerIndex = 0; ownerIndex < ancestry.length; ownerIndex++) {
+        var ownerFiber = ancestry[ownerIndex];
+        var ownerProps = ownerFiber.memoizedProps;
+        if (!ownerProps || typeof ownerProps !== 'object') continue;
+        var isDestination = 'route' in ownerProps && 'descriptor' in ownerProps
+          && ('focused' in ownerProps || 'onPress' in ownerProps) && !('navigation' in ownerProps);
+        if (isDestination) {
+          var destination = readRouteRecord(ownerProps.route);
+          var descriptor = ownerProps.descriptor;
+          if (
+            exactHosts.length !== 1 || !destination
+            || typeof ownerProps.focused !== 'boolean' || typeof ownerProps.onPress !== 'function'
+            || !descriptor || !sameRoute(descriptor.route, destination)
+          ) throw new Error('invalid destination control');
+          var navigatorIndex = ownerIndex + 1;
+          while (navigatorIndex < ancestry.length) {
+            var possibleNavigator = ancestry[navigatorIndex].memoizedProps;
+            if (possibleNavigator && typeof possibleNavigator === 'object' && 'descriptors' in possibleNavigator) break;
+            navigatorIndex++;
+          }
+          if (navigatorIndex === ancestry.length) throw new Error('unbound destination control');
+          var navigatorProps = ancestry[navigatorIndex].memoizedProps;
+          var descriptors = navigatorProps.descriptors;
+          var localState = navigatorProps.state;
+          validateRouteMembership(localState, destination);
+          if (
+            !descriptors || typeof descriptors !== 'object' || Array.isArray(descriptors)
+            || descriptors[destination.key] !== descriptor
+          ) throw new Error('unbound destination descriptor');
+          var selectedRoute = localState.routes[localState.index];
+          var selectedDescriptor = descriptors[selectedRoute.key];
+          if (!selectedDescriptor || !sameRoute(selectedDescriptor.route, selectedRoute)) {
+            throw new Error('invalid selected descriptor');
+          }
+          var selectedScope = readBoundRoute(selectedDescriptor.navigation, selectedRoute);
+          var destinationScope = readBoundRoute(descriptor.navigation, destination);
+          var navigatorNavigation = navigatorProps.navigation;
+          if (!navigatorNavigation || typeof navigatorNavigation.isFocused !== 'function') {
+            throw new Error('invalid navigator focus');
+          }
+          var navigatorFocused = navigatorNavigation.isFocused();
+          if (
+            typeof navigatorFocused !== 'boolean'
+            || !sameRouteState(localState, selectedScope.state)
+            || !sameRouteState(localState, destinationScope.state)
+            || selectedScope.focused !== navigatorFocused
+            || ownerProps.focused !== (destination.key === selectedRoute.key)
+            || destinationScope.focused !== (ownerProps.focused && navigatorFocused)
+          ) throw new Error('inconsistent destination binding');
+          boundControls.push({ start: ownerIndex, end: navigatorIndex, route: destination, navigation: descriptor.navigation });
+          if (!navigatorFocused) inactiveOwner = true;
+        }
+        if ('route' in ownerProps && 'navigation' in ownerProps) {
+          scopes.push(routeScope(ownerProps.route, ownerProps.navigation, ownerIndex, ownerIndex,
+            hasOnlyProps(ownerProps, ['route', 'navigation', 'children'])));
+        }
+        if ('descriptor' in ownerProps && !isDestination) {
+          var ownedDescriptor = ownerProps.descriptor;
+          if (!ownedDescriptor || typeof ownedDescriptor !== 'object') throw new Error('invalid owned descriptor');
+          scopes.push(routeScope(ownedDescriptor.route, ownedDescriptor.navigation, ownerIndex, ownerIndex, false));
+        }
+        if (ownerProps.scene && typeof ownerProps.scene === 'object' && 'descriptor' in ownerProps.scene) {
+          var sceneDescriptor = ownerProps.scene.descriptor;
+          if (!sceneDescriptor || typeof sceneDescriptor !== 'object') throw new Error('invalid scene descriptor');
+          scopes.push(routeScope(sceneDescriptor.route, sceneDescriptor.navigation, ownerIndex, ownerIndex, false));
+        }
+        if (ownerFiber.tag === 10 && ownerProps.value && typeof ownerProps.value === 'object'
+          && ('key' in ownerProps.value || 'name' in ownerProps.value)) {
+          var contextNavigation = null;
+          var contextNavigationIndex = -1;
+          for (var contextIndex = ownerIndex - 1; contextIndex >= 0 && ancestry[contextIndex].tag === 10; contextIndex--) {
+            var contextValue = ancestry[contextIndex].memoizedProps.value;
+            if (contextValue && typeof contextValue === 'object'
+              && ('isFocused' in contextValue || 'getState' in contextValue || 'dangerouslyGetState' in contextValue)) {
+              if (contextNavigation) throw new Error('ambiguous route context');
+              contextNavigation = contextValue;
+              contextNavigationIndex = contextIndex;
+            }
+          }
+          if (!contextNavigation) throw new Error('unpaired route context');
+          scopes.push(routeScope(ownerProps.value, contextNavigation, contextNavigationIndex, ownerIndex,
+            hasOnlyProps(ownerProps, ['value', 'children'])
+              && hasOnlyProps(ancestry[contextNavigationIndex].memoizedProps, ['value', 'children'])));
+        }
+      }
+      for (var scopeIndex = 0; scopeIndex < scopes.length; scopeIndex++) {
+        var scope = scopes[scopeIndex];
+        var destinationProvider = false;
+        for (var controlIndex = 0; controlIndex < boundControls.length; controlIndex++) {
+          var control = boundControls[controlIndex];
+          if (scope.transparent && scope.start > control.start && scope.end < control.end) {
+            if (!sameRoute(scope.route, control.route) || scope.navigation !== control.navigation) {
+              throw new Error('conflicting destination provider');
+            }
+            destinationProvider = true;
+          }
+        }
+        if (destinationProvider) continue;
+        var focused = readBoundRoute(scope.navigation, scope.route).focused;
+        if (!routeOwner) routeOwner = scope.route.name;
+        if (!focused) inactiveOwner = true;
+      }
     } catch (_) {
       return JSON.stringify({
         visible: false,
@@ -56263,7 +56363,7 @@ var INJECTED_HELPERS = `
         matchCount: 1
       });
     }
-    if (!routeOwner && !controlWitness) {
+    if (!routeOwner && boundControls.length === 0) {
       var cursor = nav;
       var stacked = false;
       while (cursor) {
