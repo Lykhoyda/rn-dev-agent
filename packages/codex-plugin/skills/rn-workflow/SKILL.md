@@ -60,13 +60,16 @@ live; a live owner is never released". Two agents cannot run journeys from one
 copy, even against different devices and different ports. Parallel work needs
 a copy per agent.
 
-**One device target per session.** Adding a second platform target to a live
-session is refused. With the runner active: `DEVICE_AUTHORITY_MISMATCH` (axis
-D), "device rebinding requires runner or proof authority to be released
-first". After closing the runner: `DEVICE_RECEIPT_INCOMPATIBLE` (axis D),
-"cannot replace exact-device authority while an incompatible install receipt
-is bound". The existing target is retained. A session holds one target and
-replaces it; it does not hold iOS and Android at once.
+**One device target per session.** A session holds one target and replaces it;
+it does not hold iOS and Android at once. `bind_device` to another platform
+is refused while runner or proof authority is still bound:
+`DEVICE_AUTHORITY_MISMATCH` (axis D), "device rebinding requires runner or
+proof authority to be released first". After those are released, an
+incompatible install receipt still refuses: `DEVICE_RECEIPT_INCOMPATIBLE`
+(axis D), "cannot replace exact-device authority while an incompatible
+install receipt is bound". Those refusals keep the existing target.
+Same-session replace succeeds when runner and proof are released and no
+incompatible install receipt is bound.
 
 **`cross_platform_verify` does not change those bounds.** It compares
 accessibility snapshots cached in this MCP process and validated against this
@@ -181,11 +184,10 @@ Rules, non-negotiable:
 ### Step 3 — One exact device, exclusivity proven
 
 `rn_session(action="bind_device", platform, deviceId, appId)` for exactly one
-device. A second platform target on this live session is refused (see Authority
-bounds above) and the existing target is retained — do not bind iOS and Android
-here. If `device_list` shows multiple booted candidates and the user did not
-name one, stop and ask — never pick the first available device, never shut
-down ambient or foreign devices. Refusals pass through verbatim with their
+device. This step binds one target (see Authority bounds above) — do not try
+to hold iOS and Android here. If `device_list` shows multiple booted candidates
+and the user did not name one, stop and ask — never pick the first available
+device, never shut down ambient or foreign devices. Refusals pass through verbatim with their
 typed alternatives: `DEVICE_CLAIM_CONFLICT` → hand off explicitly, adopt a
 proven-stale owner, or bind a different free simulator — never force-steal;
 `BUSY_FOREIGN_FLOW` → wait for its owner.
@@ -282,7 +284,7 @@ got:
 | `PACKAGE_MANAGER_CONFLICT` / `_UNDECLARED` | Ambiguous install authority | Report both facts; user resolves |
 | `attach` (live/unknown owner) | Another session owns the worktree | Close it or use another worktree |
 | `RESOURCE_CLAIM_CONFLICT` ("the same-root owner is live; a live owner is never released") | A second session on this copy (axis S) | Use another copy; a live owner is never released |
-| `DEVICE_AUTHORITY_MISMATCH` / `DEVICE_RECEIPT_INCOMPATIBLE` (second platform target) | This session already holds a device target (axis D) | Keep it. Do not start a second session to feed `cross_platform_verify` |
+| `DEVICE_AUTHORITY_MISMATCH` / `DEVICE_RECEIPT_INCOMPATIBLE` (rebinding another platform) | Runner or proof still bound, or an incompatible install receipt is bound (axis D) | Keep the existing target. Do not start a second session to feed `cross_platform_verify` |
 | Non-convergent `transport-restart` / `unrecoverable-in-band` | Startup cleanup is refusing | Report the manual remedy facts per the recovery table above; `unrecoverable-in-band` has no restart or repair remedy |
 | Multiple booted devices, none named | Ambient ambiguity | Ask the user to name one |
 | `AUTOMATION_CLEANUP_UNPROVEN` | Process-group absence unproven | Run the returned manual command, retry once |
@@ -292,8 +294,8 @@ got:
 - Runs raw `expo start` / `xcodebuild` / `adb install` / `xcrun simctl` for
   anything a plugin tool or the integrated package script owns.
 - Kills, adopts, or waits out an owner that is live or unprovable.
-- Starts a second session on the same project root, or binds a second
-  platform onto a live session.
+- Starts a second session on the same project root, or tries to hold two
+  device targets on one session.
 - Treats a second session or copy as input to `cross_platform_verify`.
 - Treats a listed action, an exit code, or prose as authority or success.
 - Mirrors or caches session state — every decision re-reads `status`.
