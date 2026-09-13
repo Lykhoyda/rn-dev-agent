@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, test } from 'node:test';
+import { after, afterEach, before, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   projectRunningProductVersion,
@@ -15,6 +15,27 @@ import { createSessionHandler } from '../../../dist/tools/session.js';
 import { createPassiveStatusHandler } from '../../../dist/tools/status.js';
 
 const fixtures: string[] = [];
+const LAUNCH_HOST_ENV = [
+  'RN_DEV_AGENT_CODEX_PLUGIN_ROOT',
+  'CODEX_PLUGIN_ROOT',
+  'CLAUDE_PLUGIN_ROOT',
+] as const;
+const savedLaunchHostEnv: Record<(typeof LAUNCH_HOST_ENV)[number], string | undefined> = {
+  RN_DEV_AGENT_CODEX_PLUGIN_ROOT: process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT,
+  CODEX_PLUGIN_ROOT: process.env.CODEX_PLUGIN_ROOT,
+  CLAUDE_PLUGIN_ROOT: process.env.CLAUDE_PLUGIN_ROOT,
+};
+
+before(() => {
+  for (const key of LAUNCH_HOST_ENV) delete process.env[key];
+});
+
+after(() => {
+  for (const key of LAUNCH_HOST_ENV) {
+    if (savedLaunchHostEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = savedLaunchHostEnv[key];
+  }
+});
 
 afterEach(() => {
   for (const root of fixtures.splice(0)) rmSync(root, { force: true, recursive: true });
@@ -43,11 +64,30 @@ function writeCorePackage(root: string, version: string): void {
   writeJson(join(root, 'rn-dev-agent-core', 'package.json'), {
     name: 'rn-dev-agent-core',
     version,
+    type: 'module',
   });
 }
 
 function writeHostRuntime(root: string, name: string, version: string): void {
   writeJson(join(root, 'rn-dev-agent-core', 'package.json'), { name, version, type: 'module' });
+}
+
+function withLaunchHostEnv(vars: Record<string, string | undefined>, run: () => void): void {
+  const previous: Record<string, string | undefined> = {};
+  for (const key of Object.keys(vars)) {
+    previous[key] = process.env[key];
+    const next = vars[key];
+    if (next === undefined) delete process.env[key];
+    else process.env[key] = next;
+  }
+  try {
+    run();
+  } finally {
+    for (const key of Object.keys(vars)) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+  }
 }
 
 test('projectRunningProductVersion always names the executing core version', () => {
@@ -181,6 +221,50 @@ test('readRunningProductVersion captures the executing module at load, not first
   writeHostRuntime(root, 'rn-dev-agent-core-claude-runtime', '9.9.9');
   writeJson(join(root, '.claude-plugin', 'plugin.json'), { version: '9.9.9' });
   assert.deepEqual(loaded.readRunningProductVersion(), { coreVersion: '1.0.8' });
+});
+
+test('readRunningProductVersion reads pluginVersion from the Codex launching host when core is overridden', () => {
+  const root = fixtureRoot();
+  writeCorePackage(root, '0.71.7');
+  writeJson(join(root, 'claude-plugin', '.claude-plugin', 'plugin.json'), { version: '9.9.9' });
+  const host = join(root, 'installed-plugin');
+  writeJson(join(host, '.codex-plugin', 'plugin.json'), { version: '1.0.8' });
+
+  withLaunchHostEnv({ RN_DEV_AGENT_CODEX_PLUGIN_ROOT: host }, () => {
+    assert.deepEqual(readRunningProductVersion(moduleUrl(root)), {
+      coreVersion: '0.71.7',
+      pluginVersion: '1.0.8',
+    });
+  });
+});
+
+test('readRunningProductVersion snapshots the Codex launching host at module load', async () => {
+  const root = fixtureRoot();
+  writeCorePackage(root, '0.71.7');
+  const host = join(root, 'installed-plugin');
+  writeJson(join(host, '.codex-plugin', 'plugin.json'), { version: '1.0.8' });
+  const destDir = join(root, 'rn-dev-agent-core', 'dist', 'session');
+  mkdirSync(destDir, { recursive: true });
+  const dest = join(destDir, 'product-version.js');
+  copyFileSync(
+    fileURLToPath(new URL('../../../dist/session/product-version.js', import.meta.url)),
+    dest,
+  );
+
+  process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT = host;
+  try {
+    const loaded = (await import(pathToFileURL(dest).href)) as {
+      readRunningProductVersion: () => { coreVersion: string; pluginVersion?: string } | null;
+    };
+    writeJson(join(host, '.codex-plugin', 'plugin.json'), { version: '9.9.9' });
+    delete process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+    assert.deepEqual(loaded.readRunningProductVersion(), {
+      coreVersion: '0.71.7',
+      pluginVersion: '1.0.8',
+    });
+  } finally {
+    delete process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
+  }
 });
 
 test('readRunningProductVersion reports product for the committed Claude host bundle', () => {

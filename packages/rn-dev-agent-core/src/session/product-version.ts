@@ -60,6 +60,21 @@ function findExecutingCorePackage(
   return null;
 }
 
+function envPluginRoot(name: string): string | undefined {
+  const value = process.env[name];
+  return value && value.length > 0 ? value : undefined;
+}
+
+function launchingHostManifestCandidates(): string[] {
+  const candidates: string[] = [];
+  const codex =
+    envPluginRoot('RN_DEV_AGENT_CODEX_PLUGIN_ROOT') ?? envPluginRoot('CODEX_PLUGIN_ROOT');
+  const claude = envPluginRoot('CLAUDE_PLUGIN_ROOT');
+  if (codex) candidates.push(join(codex, '.codex-plugin', 'plugin.json'));
+  if (claude) candidates.push(join(claude, '.claude-plugin', 'plugin.json'));
+  return candidates;
+}
+
 function pluginManifestCandidates(packageDir: string, packageName: string): string[] {
   const hostRoot = join(packageDir, '..');
   const claudeHost = join(hostRoot, '.claude-plugin', 'plugin.json');
@@ -76,7 +91,10 @@ function pluginManifestCandidates(packageDir: string, packageName: string): stri
 }
 
 function readPluginManifestVersion(packageDir: string, packageName: string): string | null {
-  for (const candidate of pluginManifestCandidates(packageDir, packageName)) {
+  for (const candidate of [
+    ...launchingHostManifestCandidates(),
+    ...pluginManifestCandidates(packageDir, packageName),
+  ]) {
     const parsed = readPackageNameVersion(candidate);
     if (typeof parsed?.version === 'string' && parsed.version) return parsed.version;
   }
