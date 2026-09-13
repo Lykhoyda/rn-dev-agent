@@ -54,11 +54,13 @@ plugin-root environment variable, marketplace source path, or cache scan.
 This section is the canonical planning contract for these two refusals.
 Other surfaces point here instead of restating it.
 
-**One live source owner per app copy.** A second session on the same project
-root is refused: `RESOURCE_CLAIM_CONFLICT` (axis S), "the same-root owner is
-live; a live owner is never released". Two agents cannot run journeys from one
-copy, even against different devices and different ports. Parallel work needs
-a copy per agent.
+**One live source owner per worktree.** Source ownership is the
+worktree/checkout, not only the app package root. A second session on the
+same checkout is refused: `RESOURCE_CLAIM_CONFLICT` (axis S), "the same-root
+owner is live; a live owner is never released". A sibling app root in the
+same checkout is also blocked. Two agents cannot run journeys from one copy,
+even against different packages, devices, and ports. Parallel work needs a
+copy per agent. Separate linked worktrees are independent copies.
 
 **One exact device target per session.** A session holds one
 `(platform, deviceId, appId)` target at a time and replaces it; it does not
@@ -294,7 +296,7 @@ got:
 | `PROJECT_MANIFEST_INVALID` / `PACKAGE_MANAGER_UNSUPPORTED` | Manifest cannot grant package-manager authority | Repair `package.json`; never infer from lockfiles |
 | `PACKAGE_MANAGER_CONFLICT` / `_UNDECLARED` | Ambiguous install authority | Report both facts; user resolves |
 | `attach` (live/unknown owner) | Another session owns the worktree | Close it or use another worktree |
-| `RESOURCE_CLAIM_CONFLICT` ("the same-root owner is live; a live owner is never released") | A second session on this copy (axis S) | Use another copy; a live owner is never released |
+| `RESOURCE_CLAIM_CONFLICT` ("the same-root owner is live; a live owner is never released") | A second session on this worktree/checkout, including a sibling app root (axis S) | Use another copy (a separate linked worktree); a live owner is never released |
 | `DEVICE_AUTHORITY_MISMATCH` / `DEVICE_RECEIPT_INCOMPATIBLE` (rebinding a different exact target) | Runner, proof, or an explicitly started Observe still bound, or an incompatible install receipt is bound (axis D) | Keep the existing target. For explicit Observe, `observe action="stop"` then retry. For an active recorder, `device_record action="stop"` before replace. Do not use `cross_platform_verify` as a cross-target comparison |
 | Non-convergent `transport-restart` / `unrecoverable-in-band` | Startup cleanup is refusing | Report the manual remedy facts per the recovery table above; `unrecoverable-in-band` has no restart or repair remedy |
 | Multiple booted devices, none named | Ambient ambiguity | Ask the user to name one |
@@ -305,7 +307,7 @@ got:
 - Runs raw `expo start` / `xcodebuild` / `adb install` / `xcrun simctl` for
   anything a plugin tool or the integrated package script owns.
 - Kills, adopts, or waits out an owner that is live or unprovable.
-- Starts a second session on the same project root, or tries to hold two
+- Starts a second session on the same worktree/checkout, or tries to hold two
   exact device targets on one session.
 - Treats `cross_platform_verify` as an authoritative cross-target comparison
   (same session, second session, or second copy).
