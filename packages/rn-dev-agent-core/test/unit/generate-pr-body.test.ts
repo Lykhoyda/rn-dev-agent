@@ -147,3 +147,12 @@ test('PR body publication refuses symlink destinations and preserves normal path
   assert.deepEqual((await readdir(proof)).sort(), ['PR-BODY.md', 'PROOF.md']);
   assert.deepEqual((await readdir(external)).sort(), ['PR-BODY.md', 'PROOF.md', 'alias', 'child']);
 });
+
+test('screenshots embed at a 400 px render width instead of full container width', async (t) => {
+  const { proof, output, generate } = await fixture(t, '- None');
+  await writeFile(join(proof, '01-login_screen.png'), 'screenshot');
+  await generate();
+  const body = await readFile(output, 'utf8');
+  assert.match(body, /<img src="01-login_screen\.png" width="400" alt="01 login screen">/);
+  assert.doesNotMatch(body, /!\[/);
+});

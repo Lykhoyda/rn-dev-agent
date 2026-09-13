@@ -2250,7 +2250,9 @@ cmd_stop() {
     mkdir -p "$(dirname "$output_path")" || true
     if [[ -n "$raw_file" && -f "$raw_file" ]]; then
       if command -v ffmpeg >/dev/null 2>&1; then
-        local tmp_mp4="/tmp/rn-dev-agent-convert-$$.mp4"
+        local tmp_mp4
+        tmp_mp4="$(create_private_capture_file)"
+        PENDING_STAGE_FILE="$tmp_mp4"
         if normalize_capture_video "$raw_file" "$tmp_mp4"; then
           mv "$tmp_mp4" "$output_path"
         else
@@ -2259,6 +2261,7 @@ cmd_stop() {
           output_path="${output_path%.mp4}.mov"
           rm -f "$tmp_mp4"
         fi
+        PENDING_STAGE_FILE=""
       else
         echo "Cadence normalization skipped: ffmpeg unavailable"
         echo "Warning: ffmpeg unavailable; preserving the native capture" >&2

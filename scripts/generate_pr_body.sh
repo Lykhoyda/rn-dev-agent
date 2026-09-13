@@ -145,15 +145,15 @@ trap 'rm -f -- "$temporary"' EXIT
     echo "### Screenshots"
     echo ""
     for s in "${screenshots[@]}"; do
-      _desc="$(echo "$s" | sed 's/\.[^.]*$//' | tr '-' ' ' | tr '_' ' ' | tr '|' ' ')"
+      _desc="$(echo "$s" | sed 's/\.[^.]*$//' | tr '-' ' ' | tr '_' ' ' | tr '|"' '  ')"
       echo "| $_desc |"
     done | (echo "| Preview |"; echo "|---------|"; cat)
     echo ""
     for s in "${screenshots[@]}"; do
-      _desc="$(echo "$s" | sed 's/\.[^.]*$//' | tr '-' ' ' | tr '_' ' ' | tr '|' ' ')"
+      _desc="$(echo "$s" | sed 's/\.[^.]*$//' | tr '-' ' ' | tr '_' ' ' | tr '|"' '  ')"
       echo "<details><summary>$_desc</summary>"
       echo ""
-      echo "![$_desc]($s)"
+      echo "<img src=\"${s//\"/%22}\" width=\"400\" alt=\"$_desc\">"
       echo ""
       echo "</details>"
       echo ""
