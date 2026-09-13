@@ -3,9 +3,11 @@ import {
   authorityRefusalFacts,
   authorityRefusalFamily,
   authorityRefusalSystemicKey,
+  decodeLegacyAuthorityRefusal,
   type AuthorityAxis,
   type AuthorityRefusalCause,
   type AuthorityRefusalCode,
+  type AuthorityRefusalFacts,
 } from './authority-refusal.js';
 import {
   EXPERIENCE_DIRECTORY,
@@ -104,19 +106,11 @@ export function buildExperienceTrendReport(
 function buildSystemicRefusalTrends(records: ExperienceRecord[]): SystemicRefusalTrend[] {
   const groups = new Map<string, SystemicRefusalTrend>();
   for (const record of records) {
-    const extension: unknown = record.authorityRefusal;
-    if (
-      !extension ||
-      typeof extension !== 'object' ||
-      Array.isArray(extension) ||
-      !('code' in extension)
-    )
-      continue;
-    const facts = authorityRefusalFacts(
-      extension.code,
-      'axis' in extension ? extension.axis : null,
-      'cause' in extension ? extension.cause : null,
-    );
+    const provenance = Object.hasOwn(record, 'authorityRefusal') ? 'recorded' : 'legacy-derived';
+    const facts =
+      provenance === 'recorded'
+        ? recordedRefusalFacts(record.authorityRefusal)
+        : decodeLegacyAuthorityRefusal(record.symptom);
     if (!facts) continue;
     const platform =
       typeof record.platform === 'string' && record.platform.length > 0 ? record.platform : null;
@@ -126,6 +120,7 @@ function buildSystemicRefusalTrends(records: ExperienceRecord[]): SystemicRefusa
       aggregate.count += record.count;
       aggregate.tools.push(record.tool);
       aggregate.memberSignatures.push(record.signature);
+      aggregate.provenance.push(provenance);
       if (compareTimestamps(record.firstSeen, aggregate.firstSeen) < 0)
         aggregate.firstSeen = record.firstSeen;
       if (compareTimestamps(record.lastSeen, aggregate.lastSeen) > 0)
@@ -145,7 +140,7 @@ function buildSystemicRefusalTrends(records: ExperienceRecord[]): SystemicRefusa
         recoveryEvidence: 'not-verified',
         currentAuthorityState: 'unknown',
         scope: 'retained-local-history',
-        provenance: ['recorded'],
+        provenance: [provenance],
       });
     }
   }
@@ -154,9 +149,25 @@ function buildSystemicRefusalTrends(records: ExperienceRecord[]): SystemicRefusa
       ...aggregate,
       tools: [...new Set(aggregate.tools)].sort(),
       memberSignatures: [...new Set(aggregate.memberSignatures)].sort(),
+      provenance: [...new Set(aggregate.provenance)].sort(),
       recurring: aggregate.count > 1,
     }))
     .sort((a, b) => b.count - a.count || a.systemicKey.localeCompare(b.systemicKey));
+}
+
+function recordedRefusalFacts(extension: unknown): AuthorityRefusalFacts | null {
+  if (
+    !extension ||
+    typeof extension !== 'object' ||
+    Array.isArray(extension) ||
+    !('code' in extension)
+  )
+    return null;
+  return authorityRefusalFacts(
+    extension.code,
+    'axis' in extension ? extension.axis : null,
+    'cause' in extension ? extension.cause : null,
+  );
 }
 
 function compareTimestamps(a: string, b: string): number {

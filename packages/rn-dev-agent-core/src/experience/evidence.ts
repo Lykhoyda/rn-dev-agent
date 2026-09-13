@@ -17,9 +17,10 @@ import { isValidActionId } from '../domain/path-safety.js';
 import type { ToolObserverInput } from '../observability/instrumentation.js';
 import {
   AUTHORITY_REFUSAL_CODES,
-  authorityRefusalFacts,
   authorityRefusalFamily,
   authorityRefusalSystemicKey,
+  authorityResultEnvelope,
+  decodeAuthorityRefusalPayload,
   mergeAuthorityRefusalFacts,
   type AuthorityRefusalFacts,
 } from './authority-refusal.js';
@@ -36,7 +37,7 @@ export const MAX_EVIDENCE_POINTERS = 3;
 export const EXPERIENCE_DIRECTORY = join(homedir(), '.claude', 'rn-agent', 'experience');
 export const EXPERIENCE_STORE_NAME = 'patterns.jsonl';
 export const MAX_SYMPTOM_LENGTH = 2048;
-export const MAX_AUTHORITY_ENVELOPE_BYTES = 16 * 1024;
+export { MAX_AUTHORITY_ENVELOPE_BYTES } from './authority-refusal.js';
 export const RUNNER_DIAGNOSTICS_MAX_BYTES = 256 * 1024;
 export const RUNNER_DIAGNOSTICS_RETENTION = 5;
 export const RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS = 1024;
@@ -640,36 +641,12 @@ function envelopeObject(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function authorityResultEnvelope(result: unknown): Record<string, unknown> | null {
-  const envelope = envelopeObject(result);
-  if (!envelope || Object.hasOwn(envelope, 'code')) return envelope;
-  if (!Array.isArray(envelope.content)) return null;
-  const text = envelopeObject(envelope.content[0])?.text;
-  if (
-    typeof text !== 'string' ||
-    text.length > MAX_AUTHORITY_ENVELOPE_BYTES ||
-    Buffer.byteLength(text, 'utf8') > MAX_AUTHORITY_ENVELOPE_BYTES
-  )
-    return null;
-  try {
-    return envelopeObject(JSON.parse(text));
-  } catch {
-    return null;
-  }
-}
-
 export function decodeAuthorityRefusal(event: ToolObserverInput): AuthorityRefusalFacts | null {
   if (event.status !== 'FAIL' && event.status !== 'ERROR') return null;
-  const envelope = authorityResultEnvelope(event.result);
-  if (envelope && Object.hasOwn(envelope, 'code')) {
-    const meta = envelopeObject(envelope.meta);
-    return authorityRefusalFacts(envelope.code, meta?.axis, meta?.cause);
-  }
-  if (event.status !== 'ERROR' || typeof event.error !== 'string') return null;
-  const code = AUTHORITY_REFUSAL_CODES.find((candidate) =>
-    event.error?.startsWith(`${candidate}:`),
+  return decodeAuthorityRefusalPayload(
+    event.result,
+    event.status === 'ERROR' ? event.error : undefined,
   );
-  return authorityRefusalFacts(code, null, null);
 }
 
 function authorityRefusalSymptom(event: ToolObserverInput, facts: AuthorityRefusalFacts): string {

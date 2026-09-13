@@ -31,6 +31,57 @@ export interface AuthorityRefusalFacts {
   cause: AuthorityRefusalCause | null;
 }
 
+export const MAX_AUTHORITY_ENVELOPE_BYTES = 16 * 1024;
+
+function envelopeObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function isBoundedEnvelopeText(text: unknown): text is string {
+  return (
+    typeof text === 'string' &&
+    text.length <= MAX_AUTHORITY_ENVELOPE_BYTES &&
+    Buffer.byteLength(text, 'utf8') <= MAX_AUTHORITY_ENVELOPE_BYTES
+  );
+}
+
+function parseAuthorityEnvelope(text: unknown): Record<string, unknown> | null {
+  if (!isBoundedEnvelopeText(text)) return null;
+  try {
+    return envelopeObject(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
+export function authorityResultEnvelope(result: unknown): Record<string, unknown> | null {
+  const envelope = envelopeObject(result);
+  if (!envelope || Object.hasOwn(envelope, 'code')) return envelope;
+  if (!Array.isArray(envelope.content)) return null;
+  return parseAuthorityEnvelope(envelopeObject(envelope.content[0])?.text);
+}
+
+export function decodeAuthorityRefusalPayload(
+  result: unknown,
+  thrownError?: unknown,
+): AuthorityRefusalFacts | null {
+  const envelope = authorityResultEnvelope(result);
+  if (envelope && Object.hasOwn(envelope, 'code')) {
+    const meta = envelopeObject(envelope.meta);
+    return authorityRefusalFacts(envelope.code, meta?.axis, meta?.cause);
+  }
+  if (typeof thrownError !== 'string') return null;
+  const code = AUTHORITY_REFUSAL_CODES.find((candidate) => thrownError.startsWith(`${candidate}:`));
+  return authorityRefusalFacts(code, null, null);
+}
+
+export function decodeLegacyAuthorityRefusal(symptom: unknown): AuthorityRefusalFacts | null {
+  if (!isBoundedEnvelopeText(symptom)) return null;
+  return decodeAuthorityRefusalPayload(parseAuthorityEnvelope(symptom), symptom);
+}
+
 export function isAuthorityRefusalCode(value: unknown): value is AuthorityRefusalCode {
   return AUTHORITY_REFUSAL_CODES.some((code) => code === value);
 }

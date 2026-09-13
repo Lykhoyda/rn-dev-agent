@@ -23,6 +23,46 @@ var REFUSAL_CAUSES = {
   NON_GIT_MANIFEST_REQUIRED: [],
   BUNDLE_HANDSHAKE_UNAVAILABLE: []
 };
+var MAX_AUTHORITY_ENVELOPE_BYTES = 16 * 1024;
+function envelopeObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function isBoundedEnvelopeText(text) {
+  return typeof text === "string" && text.length <= MAX_AUTHORITY_ENVELOPE_BYTES && Buffer.byteLength(text, "utf8") <= MAX_AUTHORITY_ENVELOPE_BYTES;
+}
+function parseAuthorityEnvelope(text) {
+  if (!isBoundedEnvelopeText(text))
+    return null;
+  try {
+    return envelopeObject(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+function authorityResultEnvelope(result) {
+  const envelope = envelopeObject(result);
+  if (!envelope || Object.hasOwn(envelope, "code"))
+    return envelope;
+  if (!Array.isArray(envelope.content))
+    return null;
+  return parseAuthorityEnvelope(envelopeObject(envelope.content[0])?.text);
+}
+function decodeAuthorityRefusalPayload(result, thrownError) {
+  const envelope = authorityResultEnvelope(result);
+  if (envelope && Object.hasOwn(envelope, "code")) {
+    const meta = envelopeObject(envelope.meta);
+    return authorityRefusalFacts(envelope.code, meta?.axis, meta?.cause);
+  }
+  if (typeof thrownError !== "string")
+    return null;
+  const code = AUTHORITY_REFUSAL_CODES.find((candidate) => thrownError.startsWith(`${candidate}:`));
+  return authorityRefusalFacts(code, null, null);
+}
+function decodeLegacyAuthorityRefusal(symptom) {
+  if (!isBoundedEnvelopeText(symptom))
+    return null;
+  return decodeAuthorityRefusalPayload(parseAuthorityEnvelope(symptom), symptom);
+}
 function isAuthorityRefusalCode(value) {
   return AUTHORITY_REFUSAL_CODES.some((code) => code === value);
 }
@@ -60,7 +100,6 @@ var storage = new AsyncLocalStorage();
 // packages/rn-dev-agent-core/dist/experience/evidence.js
 var EXPERIENCE_DIRECTORY = join(homedir(), ".claude", "rn-agent", "experience");
 var EXPERIENCE_STORE_NAME = "patterns.jsonl";
-var MAX_AUTHORITY_ENVELOPE_BYTES = 16 * 1024;
 var RUNNER_DIAGNOSTICS_MAX_BYTES = 256 * 1024;
 var DAY_MS = 24 * 60 * 60 * 1e3;
 function readExperienceStore(path) {
@@ -157,10 +196,8 @@ function buildExperienceTrendReport(records, since2, now = /* @__PURE__ */ new D
 function buildSystemicRefusalTrends(records) {
   const groups = /* @__PURE__ */ new Map();
   for (const record of records) {
-    const extension = record.authorityRefusal;
-    if (!extension || typeof extension !== "object" || Array.isArray(extension) || !("code" in extension))
-      continue;
-    const facts = authorityRefusalFacts(extension.code, "axis" in extension ? extension.axis : null, "cause" in extension ? extension.cause : null);
+    const provenance = Object.hasOwn(record, "authorityRefusal") ? "recorded" : "legacy-derived";
+    const facts = provenance === "recorded" ? recordedRefusalFacts(record.authorityRefusal) : decodeLegacyAuthorityRefusal(record.symptom);
     if (!facts)
       continue;
     const platform = typeof record.platform === "string" && record.platform.length > 0 ? record.platform : null;
@@ -170,6 +207,7 @@ function buildSystemicRefusalTrends(records) {
       aggregate.count += record.count;
       aggregate.tools.push(record.tool);
       aggregate.memberSignatures.push(record.signature);
+      aggregate.provenance.push(provenance);
       if (compareTimestamps(record.firstSeen, aggregate.firstSeen) < 0)
         aggregate.firstSeen = record.firstSeen;
       if (compareTimestamps(record.lastSeen, aggregate.lastSeen) > 0)
@@ -189,7 +227,7 @@ function buildSystemicRefusalTrends(records) {
         recoveryEvidence: "not-verified",
         currentAuthorityState: "unknown",
         scope: "retained-local-history",
-        provenance: ["recorded"]
+        provenance: [provenance]
       });
     }
   }
@@ -197,8 +235,14 @@ function buildSystemicRefusalTrends(records) {
     ...aggregate,
     tools: [...new Set(aggregate.tools)].sort(),
     memberSignatures: [...new Set(aggregate.memberSignatures)].sort(),
+    provenance: [...new Set(aggregate.provenance)].sort(),
     recurring: aggregate.count > 1
   })).sort((a, b) => b.count - a.count || a.systemicKey.localeCompare(b.systemicKey));
+}
+function recordedRefusalFacts(extension) {
+  if (!extension || typeof extension !== "object" || Array.isArray(extension) || !("code" in extension))
+    return null;
+  return authorityRefusalFacts(extension.code, "axis" in extension ? extension.axis : null, "cause" in extension ? extension.cause : null);
 }
 function compareTimestamps(a, b) {
   return Date.parse(a) - Date.parse(b) || a.localeCompare(b);
