@@ -79,12 +79,13 @@ and any explicitly started Observe are released and no incompatible install
 receipt is bound, including a cross-platform replacement before install is
 bound.
 
-**`cross_platform_verify` does not change those bounds.** It compares
-accessibility snapshots cached in this MCP process and validated against this
-operational session. That cache does not follow a second copy or a second
-session; after either, this call reports a missing platform instead of
-comparing. Do not plan a second session or a second copy as the way to feed
-it both platforms.
+**`cross_platform_verify` does not change those bounds.** Authoritative
+cross-target comparison is currently unsupported. Capturing the first
+snapshot binds a runner; retargeting requires releasing it
+(`device_snapshot action=close`); `validateCachedSnapshotEvidenceAuthority`
+then requires each cached snapshot's runner to remain live, so the first
+platform is dropped. A second session or copy cannot supply the other
+platform either. Do not plan this call as a comparison across targets.
 
 ### Step 0 — Read the authoritative local instructions
 
@@ -292,7 +293,7 @@ got:
 | `PACKAGE_MANAGER_CONFLICT` / `_UNDECLARED` | Ambiguous install authority | Report both facts; user resolves |
 | `attach` (live/unknown owner) | Another session owns the worktree | Close it or use another worktree |
 | `RESOURCE_CLAIM_CONFLICT` ("the same-root owner is live; a live owner is never released") | A second session on this copy (axis S) | Use another copy; a live owner is never released |
-| `DEVICE_AUTHORITY_MISMATCH` / `DEVICE_RECEIPT_INCOMPATIBLE` (rebinding a different exact target) | Runner, proof, or an explicitly started Observe still bound, or an incompatible install receipt is bound (axis D) | Keep the existing target. For explicit Observe, `observe action="stop"` then retry. Do not start a second session to feed `cross_platform_verify` |
+| `DEVICE_AUTHORITY_MISMATCH` / `DEVICE_RECEIPT_INCOMPATIBLE` (rebinding a different exact target) | Runner, proof, or an explicitly started Observe still bound, or an incompatible install receipt is bound (axis D) | Keep the existing target. For explicit Observe, `observe action="stop"` then retry. Do not use `cross_platform_verify` as a cross-target comparison |
 | Non-convergent `transport-restart` / `unrecoverable-in-band` | Startup cleanup is refusing | Report the manual remedy facts per the recovery table above; `unrecoverable-in-band` has no restart or repair remedy |
 | Multiple booted devices, none named | Ambient ambiguity | Ask the user to name one |
 | `AUTOMATION_CLEANUP_UNPROVEN` | Process-group absence unproven | Run the returned manual command, retry once |
@@ -304,7 +305,8 @@ got:
 - Kills, adopts, or waits out an owner that is live or unprovable.
 - Starts a second session on the same project root, or tries to hold two
   exact device targets on one session.
-- Treats a second session or copy as input to `cross_platform_verify`.
+- Treats `cross_platform_verify` as an authoritative cross-target comparison
+  (same session, second session, or second copy).
 - Treats a listed action, an exit code, or prose as authority or success.
 - Mirrors or caches session state — every decision re-reads `status`.
 - Develops app features — route feature work to the `rn-feature-dev` playbook
@@ -314,8 +316,8 @@ got:
 
 - [ ] Every step's readback (not its command exit) confirmed the step
 - [ ] The proof that ran is exactly what the journey requested
-- [ ] If `cross_platform_verify` ran, both snapshots came from this live
-      session (it cannot import another session or copy)
+- [ ] Did not treat `cross_platform_verify` as an authoritative cross-target
+      comparison (currently unsupported)
 - [ ] Evidence is labeled device-free vs native, shortcuts stated
 - [ ] Postflight checker reports `pass` with `cleanupProven: true` (a
       `pass-unproven` verdict is residue-only evidence, and a stop was

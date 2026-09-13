@@ -38,8 +38,8 @@ exclusive device, managed Metro, proof, reverse cleanup — in one contract.
 
 One live source owner per app copy, and one device target per session: see the
 `rn-workflow` skill § "Authority bounds — one copy, one target" (loaded by
-`/rn-dev-agent:run-workflow`). `cross_platform_verify` does not import another
-session's snapshots and does not let one session hold two targets.
+`/rn-dev-agent:run-workflow`). Authoritative cross-target comparison via
+`cross_platform_verify` is currently unsupported.
 
 Run this 3-step checklist at the start of every UI-touching task. This is the
 single highest-leverage rule in the plugin — it prevents the most common
@@ -581,7 +581,7 @@ the runner's settle engine.
 10. **Dispatching Redux actions when the feature should be triggered via UI**
 11. Relying on a remembered testID without a fresh `device_snapshot` after screen change
 12. Declaring a verification "passed" when the network log doesn't show the mutation real users trigger
-13. Two sessions on one project root, or two device targets on one session — `rn-workflow` skill § "Authority bounds — one copy, one target" (`cross_platform_verify` cannot import another session's snapshots)
+13. Two sessions on one project root, or two device targets on one session — `rn-workflow` skill § "Authority bounds — one copy, one target" (authoritative `cross_platform_verify` across targets is currently unsupported)
 
 ### Error Recovery Patterns
 
@@ -601,7 +601,7 @@ the runner's settle engine.
 | `BUSY_FLOW_ACTIVE` refusal | `rn_session(action="status")` | This bridge has an active whole-device or dynamically escalated inline Maestro flow | Wait for it to finish; do not clear the arbiter while work is live |
 | `AUTOMATION_CLEANUP_UNPROVEN` | Inline Maestro tool response | Plugin-owned process-group absence could not be confirmed | Run the returned manual `kill -TERM -<pgid>` command, then retry in the same bridge process |
 | `DEVICE_BUSY` / `DEVICE_CLAIM_CONFLICT` | `rn_session(action="status")` | A fresh live device-lock holder / another live worktree owns the exact device | For `DEVICE_BUSY`, use its bounded holder diagnostics: close with `device_snapshot action=close` from the holder worktree, or bind/build a dedicated simulator and open its exact ID with `attachOnly=true` when already running. The device lock self-heals on its own: a dead holder is reclaimed at the next open attempt, and a live holder once its heartbeat is stale beyond the 90s recovery window. `DEVICE_CLAIM_CONFLICT` is authority-store ownership, not a lease — only a *proven-dead* owner is released there, and heartbeat age or lease expiry never is. Never force-steal |
-| `RESOURCE_CLAIM_CONFLICT` / `DEVICE_AUTHORITY_MISMATCH` / `DEVICE_RECEIPT_INCOMPATIBLE` | `rn_session(action="status")` | A second session on this copy, or a refused exact-target retarget on this session | `rn-workflow` skill § "Authority bounds — one copy, one target". Do not feed `cross_platform_verify` from another session or copy |
+| `RESOURCE_CLAIM_CONFLICT` / `DEVICE_AUTHORITY_MISMATCH` / `DEVICE_RECEIPT_INCOMPATIBLE` | `rn_session(action="status")` | A second session on this copy, or a refused exact-target retarget on this session | `rn-workflow` skill § "Authority bounds — one copy, one target". Do not treat `cross_platform_verify` as an authoritative cross-target comparison |
 | `RUNNER_ADOPTION_REQUIRED` in `startupCleanupBlocked` | `rn_session(action="status")` | Startup cleanup proved the prior owner dead but could not prove its runner stopped, so the source root stays blocked | Run the packaged headless recovery from the app root: `node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js" repair`. Interactive clients can reconnect with `/mcp` instead — both run the same proven-dead cleanup. Read the wedge first with `... session-doctor.js report` |
 | `SESSION_AUTHORITY_REQUIRED` ("status is the only available action") | `rn_session(action="status")` | This transport is a blocked contender: another session owns the worktree | Same two commands as above, unless status reports `recoveryRequirement: unrecoverable-in-band` — then preserve the authority state and report `startupCleanupBlocked`; no restart or repair can discharge it. If the report says `sameRootOwner: live`, close that session — a live owner is never released |
 | `HANDOFF_NOT_AUTHORIZED` from `adopt_stale` | `rn_session(action="status")` | Grouped sessions mint no adoption handles; a proven-dead owner is released by startup cleanup instead | Do not retry `adopt_stale`. Run `... session-doctor.js repair` (headless) or reconnect with `/mcp` |
