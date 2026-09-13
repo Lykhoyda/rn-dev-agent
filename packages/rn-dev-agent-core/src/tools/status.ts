@@ -32,6 +32,7 @@ import type { HermesTarget } from '../types.js';
 import type { WorkerAuthorityRuntime } from '../session/runtime.js';
 import { inspectInstallIdentity } from '../session/install-identity-inspection.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
+import { withRunningProduct } from '../session/product-version.js';
 import { reconcileManagedMetroStatus, type ManagedMetroStatusDependencies } from './session.js';
 
 export function sessionConnectFilters(
@@ -83,28 +84,30 @@ export function createPassiveStatusHandler(
           authority.bindings.install as Record<string, unknown> | null | undefined,
         )
       : null;
-    return okResult({
-      authoritative: false,
-      authority: projectPublicAuthorityStatus(authority, { installIdentity }),
-      metro: {
-        port: client.metroPort,
-        requestedPort: args.metroPort ?? null,
-        connected: client.isConnected,
-      },
-      cdp: {
-        connected: client.isConnected,
-        target: target
-          ? {
-              platform: target.platform ?? null,
-              appBound: Boolean(targetBundleIdentity(target)),
-            }
-          : null,
-        requestedPlatform: args.platform ?? null,
-      },
-      nextAction: client.isConnected
-        ? 'Use rn_session status to inspect bindings before authoritative tools.'
-        : 'Use rn_session bind_metro and cdp_connect with the claimed exact port.',
-    });
+    return okResult(
+      withRunningProduct({
+        authoritative: false,
+        authority: projectPublicAuthorityStatus(authority, { installIdentity }),
+        metro: {
+          port: client.metroPort,
+          requestedPort: args.metroPort ?? null,
+          connected: client.isConnected,
+        },
+        cdp: {
+          connected: client.isConnected,
+          target: target
+            ? {
+                platform: target.platform ?? null,
+                appBound: Boolean(targetBundleIdentity(target)),
+              }
+            : null,
+          requestedPlatform: args.platform ?? null,
+        },
+        nextAction: client.isConnected
+          ? 'Use rn_session status to inspect bindings before authoritative tools.'
+          : 'Use rn_session bind_metro and cdp_connect with the claimed exact port.',
+      }),
+    );
   };
 }
 
