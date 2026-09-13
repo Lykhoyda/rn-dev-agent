@@ -214,6 +214,69 @@ the playbook inline instead — see the Host Surface Map above.)
 | `rn-code-architect` | fable | Design blueprint with proof flow | `Task(subagent_type='rn-dev-agent:rn-code-architect', ...)` — typically × 1-2 during `/rn-feature-dev` Phase 4 |
 | `rn-code-reviewer` | opus | Review for bugs + RN convention violations | `Task(subagent_type='rn-dev-agent:rn-code-reviewer', ...)` — typically × 2-3 in parallel during `/rn-feature-dev` Phase 6 |
 
+**Implementation dispatch:** when spawning `rn-code-architect` or when the
+parent implements (Phase 5), require Ponytail planning at **full** intensity
+before any write. After implementation, run Ponytail-review (report only),
+then spawn `rn-code-reviewer`. See § Ponytail — planning and post-implementation review.
+
+---
+
+## Ponytail — planning and post-implementation review
+
+**Canonical wording lives here.** Other skills and agents point at this
+section instead of restating it.
+
+[Ponytail](https://github.com/DietrichGebert/ponytail) (MIT) is the planning
+and over-engineering-review contract. Marketplace installs are offline — do
+not fetch GitHub mid-session. Follow this in-repo contract; the upstream repo
+has the full skill text.
+
+### When it applies
+
+Whenever a parent session dispatches **implementation work**:
+
+- Phase 4 `rn-code-architect` spawn (the dispatch prompt must require it)
+- Parent Phase 5 implementation (the parent is the implementer)
+- Any other dispatched write that is not a one-line mechanical edit
+
+Two passes:
+
+1. **Planning at full intensity before any write.** Trace the code the change
+   touches, then climb the ladder. Two rungs work → take the higher one.
+2. **Ponytail-review after implementation.** Over-engineering only; report;
+   do not apply cuts unless the user asks. This does **not** replace
+   `rn-code-reviewer` correctness review.
+
+### Planning ladder (full)
+
+Stop at the first rung that holds:
+
+1. **Does this need to exist at all?** Speculative need = skip it. (YAGNI)
+2. **Already in this codebase?** Reuse a helper, util, type, or pattern
+   that already lives here.
+3. **Stdlib does it?** Use it.
+4. **Native platform feature covers it?**
+5. **Already-installed dependency solves it?** Use it. Never add a new one.
+6. **Can it be one line?** One line.
+7. **Only then:** the minimum code that works.
+
+Rules: no unrequested abstractions or boilerplate "for later"; deletion over
+addition; never simplify away input validation at trust boundaries, error
+handling that prevents data loss, security, or anything explicitly requested.
+Bug fix = root cause, not symptom. Trace every file the change touches first.
+
+### Ponytail-review (after implementation, report only)
+
+Review diffs for unnecessary complexity. One line per finding: location,
+what to cut, what replaces it.
+
+Tags: `delete:` / `stdlib:` / `native:` / `yagni:` / `shrink:`
+
+End with `net: -N lines possible.` or `Lean already. Ship.`
+
+Scope: over-engineering only. Prefer writing lean rather than writing fat
+then cutting. Do not apply reported cuts unless the user asks.
+
 ---
 
 ## Common Rationalizations
@@ -227,6 +290,7 @@ Agents skip this skill at the start of conversations. Don't.
 | "The user said 'fix the bug' — I'll just edit the file directly" | Route to `$rn-dev-agent:debug-screen` which runs the rn-debugger protocol inline in the parent session. Enforces reproduce → diagnose → fix → verify. Never spawn `rn-debugger` via Task tool — MCP tools won't work (GH #31). |
 | "I'll spawn `rn-tester` via Task to verify while I work on something else" | You can't — MCP stdio doesn't propagate to Task-spawned subagents (GH #31). rn-tester, rn-pr-qa, and rn-debugger are parent-session-only protocol playbooks. Only `rn-code-explorer`, `rn-code-architect`, `rn-code-reviewer` are safe to spawn (they're read-only, no MCP). |
 | "This is a trivial change — I'll skip Phase 5.5 verification" | Trivial changes are where verification gates matter most. They're the ones you tell yourself don't need testing. They do. |
+| "This is a small feature — skip Ponytail" | Planning is cheaper than a fat diff. Full intensity before writes; Ponytail-review after. See § Ponytail — planning and post-implementation review. |
 | "I got `HELPERS_NOT_INJECTED` — let me retry `cdp_status`" | Retrying `cdp_status` does NOT re-run helper injection if the bridge thinks it's connected; it just returns status. The plugin auto-retries injection internally on every gated call (see "Recovering from HELPERS_NOT_INJECTED" in the rn-debugging skill). If the auto-retry exhausted, switch to `device_*` tools (XCTest path — no helpers required) or call `cdp_reload`. Don't spin on `cdp_status`. |
 
 ---
@@ -241,6 +305,7 @@ If you notice yourself doing any of these at the start of an RN task, stop:
 - Skipping `$rn-dev-agent:setup` because "tools probably work"
 - Starting feature development without `$rn-dev-agent:rn-feature-dev`
 - Spawning `rn-tester`, `rn-pr-qa`, or `rn-debugger` via Task tool — their protocols need MCP tools that don't propagate to subagents (GH #31). Run `$rn-dev-agent:test-feature`, `$rn-dev-agent:qa-pr`, or `$rn-dev-agent:debug-screen` instead; the protocol executes inline in the parent session.
+- Dispatching `rn-code-architect` or Phase 5 implementation without Ponytail at full intensity
 - Spawning an agent without the matching skill loaded in context
 - Answering "is this broken?" without running `cdp_status` first
 

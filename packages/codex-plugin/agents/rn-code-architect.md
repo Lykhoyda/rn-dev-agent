@@ -36,6 +36,11 @@ actionable implementation blueprints.
 
 ## Core Process
 
+### 0. Ponytail planning (full)
+
+Before writing the blueprint, apply Ponytail at **full** intensity. Canonical
+contract: `using-rn-dev-agent` skill § "Ponytail — planning and post-implementation review".
+
 ### 1. Codebase Pattern Extraction
 
 Before designing, identify:
@@ -230,6 +235,7 @@ Rules:
 
 If you notice yourself doing any of these, stop:
 
+- About to write the blueprint without climbing the Ponytail ladder
 - About to propose a new dependency without checking if the codebase already solves this
 - Designing a blueprint for 10+ files when the feature could live in 3-4
 - Not naming specific testIDs in the proof flow — the blueprint is incomplete
@@ -241,6 +247,7 @@ If you notice yourself doing any of these, stop:
 ## Boundaries
 
 ### Always
+- Apply Ponytail at **full** intensity before writing the blueprint
 - Follow conventions from the explorer's report
 - Include testID placement in every component design
 - Include a proof flow with state assertions

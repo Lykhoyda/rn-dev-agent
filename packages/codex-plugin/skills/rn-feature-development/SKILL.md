@@ -111,8 +111,11 @@ and get explicit confirmation.
 
 **Actions**:
 1. Launch 1–2 `rn-code-architect` agents with the feature spec, explorer
-   findings, and user answers. Ask for a complete blueprint including the
-   mandatory **Verification Parameters** and **E2E Proof Flow** sections.
+   findings, and user answers. The dispatch prompt MUST require Ponytail
+   planning at **full** intensity before writing (`using-rn-dev-agent` skill
+   § "Ponytail — planning and post-implementation review"). Ask for a
+   complete blueprint including the mandatory **Verification Parameters**
+   and **E2E Proof Flow** sections.
 2. Review the blueprint and form your opinion on fit
 3. **Verify the E2E Proof Flow** section exists and has:
    - At least 3 steps with specific testIDs/CDP expressions
@@ -147,7 +150,9 @@ and get explicit confirmation.
 **Goal**: Build the feature.
 
 **Actions**:
-1. Follow the architect's Build Sequence exactly. Typical order:
+1. Before any write, apply Ponytail at **full** intensity
+   (`using-rn-dev-agent` skill § "Ponytail — planning and post-implementation review").
+   Then follow the architect's Build Sequence exactly. Typical order:
    - Store slice / action creators first (if any)
    - API / service layer second (if any)
    - Components — add testIDs to every interactive element
@@ -370,7 +375,12 @@ a PASS.
 **Goal**: Ensure code is clean, correct, and follows RN conventions.
 
 **Actions**:
-1. Launch 2–3 `rn-code-reviewer` agents in parallel:
+1. **Ponytail-review** the implementation diff (over-engineering only). Follow
+   `using-rn-dev-agent` skill § "Ponytail — planning and post-implementation review".
+   Present the report (`Lean already. Ship.` or tagged lines + `net: -N`).
+   Do not apply cuts unless the user asks. This does **not** replace the
+   `rn-code-reviewer` passes below.
+2. Launch 2–3 `rn-code-reviewer` agents in parallel:
    - "Review the implementation for correctness: logic errors, null safety,
      async error handling, memory leaks. Scope: [list of files changed]"
    - "Review the implementation for React Native conventions: testID coverage
@@ -378,7 +388,7 @@ a PASS.
      exposure, selector memoization. Scope: [list of files changed]"
    - "Review the implementation for project conventions: file naming, folder
      structure, import patterns, AGENTS.md rules. Scope: [list of files changed]"
-2. **Run Vercel rule audit** (added v0.45+ per https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/superpowers/specs/2026-05-07-vercel-skills-integration-design.md):
+3. **Run Vercel rule audit** (added v0.45+ per https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/superpowers/specs/2026-05-07-vercel-skills-integration-design.md):
    ```bash
    node <package-root>/scripts/check-vercel-rules.mjs --changed --format hook -- <changed file paths>
    ```
@@ -387,14 +397,15 @@ a PASS.
      standalone check is faster (~50ms) and catches the 3 deterministic rules
      even when the reviewer agent skips Pass 4.
    - For full-project audit (CI mode): `node <package-root>/scripts/check-vercel-rules.mjs --ci`.
-3. Consolidate findings — only issues with confidence >= 80. Vercel-rule
-   violations from step 2 carry confidence 95 (deterministic match).
-4. If no high-confidence issues found: confirm the code meets standards and
+4. Consolidate findings — only issues with confidence >= 80. Vercel-rule
+   violations from step 3 carry confidence 95 (deterministic match). Ponytail-review
+   findings are separate (over-engineering; report only unless the user asks).
+5. If no high-confidence issues found: confirm the code meets standards and
    proceed directly to Phase 7
-5. If issues found: **present findings grouped by severity (Critical, then
+6. If issues found: **present findings grouped by severity (Critical, then
    Important)** and **ask: "Which findings should I fix?"**
-6. Apply approved fixes
-7. If fixes were applied, re-run Phase 5.5 verification to confirm nothing broke
+7. Apply approved fixes
+8. If fixes were applied, re-run Phase 5.5 verification to confirm nothing broke
 
 ---
 
@@ -408,7 +419,7 @@ a PASS.
    - **Files created/modified** (table with file path + change type)
    - **Key decisions made** (context, choice, rejected alternatives, and durable lesson)
    - **Verification results** (the Phase 5.5 table)
-   - **Review findings** (count fixed / count deferred)
+   - **Review findings** (Ponytail-review result; count fixed / count deferred)
 
 ---
 
@@ -516,12 +527,15 @@ Each phase has shortcuts agents reach for. Don't.
 | "Phase 5.5 verification is slow — skip it and trust the review" | Code review ≠ runtime verification. A component can look correct and render wrong. `cdp_component_tree` + `cdp_store_state` takes 10 seconds. |
 | "I tested iOS — Android works the same" | Platforms differ. Authoritative cross-target comparison is currently unsupported — `rn-workflow` skill § "Authority bounds — one copy, one target". |
 | "Phase 6 found 1 issue — ship it" | Review agents already filter by confidence. If ONE flags an issue, read it fully. |
+| "Small feature — skip Ponytail" | Full-intensity planning before Phase 5 writes; Ponytail-review after implementation. See `using-rn-dev-agent` skill § "Ponytail — planning and post-implementation review". |
 | "Phase 8 (E2E Proof) is just for PR theater" | Proof flows become the permanent Maestro test file. Skip them and you pay in manual testing every sprint. |
 | "I'll record while I figure out the flow — saves a pass" | The video then shows you stuck on a wrong testID for 90 seconds. The rehearsal pass is the cheap one; re-recording is the expensive one. Discovery happens off camera, replay happens on camera. |
 
 ## Red Flags — Stop and Reconsider
 
 - About to enter Phase 5 without user approval on the architecture
+- About to write Phase 5 code without Ponytail at full intensity
+- About to skip Ponytail-review after implementation
 - About to mark Phase 5.5 complete with a PASS row that has empty Evidence
 - About to commit without running `cdp_error_log` to confirm zero new errors
 - About to skip a phase "because the feature is small"
@@ -540,6 +554,7 @@ Each phase has shortcuts agents reach for. Don't.
 - Use MCP tools (cdp_*, device_*) for app state reads
 - Present the Phase 5.5 verification table with concrete Evidence
 - Gate Phase 5 on user approval of the architecture
+- Apply Ponytail at **full** intensity before Phase 5 writes; run Ponytail-review in Phase 6 (`using-rn-dev-agent` skill § "Ponytail — planning and post-implementation review")
 - Run the Phase 8 rehearsal pass and confirm the persisted flow replays cleanly (`cdp_run_action`) BEFORE starting any video recording
 
 ### Ask First
@@ -567,6 +582,7 @@ Each phase has shortcuts agents reach for. Don't.
 - [ ] `cdp_error_log` shows 0 new errors at end of Phase 8
 - [ ] At least 3 numbered screenshots saved to `docs/proof/<feature>/`
 - [ ] `PROOF.md` written with the architect's steps and actual results
+- [ ] Phase 6 Ponytail-review reported (`Lean already. Ship.` or tagged findings)
 - [ ] Phase 6 review agents all reported (or "no high-confidence issues")
 - [ ] Other platform checked as its own journey if in scope, or single-platform noted in Phase 7 summary (`rn-workflow` skill § "Authority bounds — one copy, one target")
 - [ ] Phase 7 summary lists: files modified, decisions logged, verification results
