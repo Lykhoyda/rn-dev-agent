@@ -1197,6 +1197,8 @@ def write_atomic(path, value):
 child = None
 terminal_state_written = False
 stop_requested = False
+android_stop = None
+android_stop_deadline = None
 timing = dict(scope=scope, incarnation=incarnation, pid=None, launch=None, ready=None,
               stop=None, signal=None, exit=None, disposition="starting",
               remote_state=None)
@@ -1262,6 +1264,9 @@ try:
                 if first_frame:
                     timing["ready"] = time.monotonic()
                     write_state("running")
+            if android_stop is not None and android_stop["result"] == "pending" and time.monotonic() >= android_stop_deadline:
+                android_stop["result"] = "expired"
+                write_state("running")
             try:
                 with open(request_path, encoding="utf-8") as handle:
                     parts = handle.read().split()
@@ -1271,7 +1276,52 @@ try:
             if len(parts) in {3, 4} and parts[0] == token and parts[1] != last_nonce:
                 nonce, action = parts[1], parts[2]
                 last_nonce = nonce
-                if action not in {"INT", "KILL", "ABORT"}:
+                if platform == "android" and action == "ANDROID_STOP_BEGIN" and len(parts) == 3:
+                    if android_stop is not None:
+                        if nonce == android_stop["nonce"]:
+                            result = "ready"
+                        elif android_stop["result"] in {"pending", "signaled"}:
+                            result = "pending"
+                        else:
+                            result = "cleanup"
+                    elif (return_code := child.poll()) is not None:
+                        result = "gone"
+                        write_terminal(return_code)
+                        terminal_state_written = True
+                    elif timing["disposition"] != "running":
+                        result = "cleanup"
+                    else:
+                        timing["stop"] = time.monotonic()
+                        timing["disposition"] = "uncertain"
+                        stop_requested = True
+                        android_stop = dict(nonce=nonce, result="pending")
+                        timing["android_stop"] = android_stop
+                        android_stop_deadline = timing["stop"] + 100 * poll_interval
+                        write_state("running")
+                        result = "ready"
+                elif platform == "android" and action == "ANDROID_STOP_RESULT":
+                    witness = parts[3].split(":") if len(parts) == 4 else []
+                    if (len(witness) != 2 or android_stop is None or witness[0] != android_stop["nonce"]
+                            or witness[1] not in {"signaled", "absent", "reused", "failed", "unknown"}):
+                        result = "rejected"
+                    elif android_stop["result"] == "pending":
+                        received = time.monotonic()
+                        if received >= android_stop_deadline:
+                            android_stop["result"] = "expired"
+                            result = "rejected"
+                        else:
+                            result = witness[1]
+                            android_stop["result"] = result
+                            if result == "signaled":
+                                timing["signal"] = received
+                                timing["remote_state"] = "present"
+                                timing["disposition"] = "normal"
+                        write_state("running")
+                    elif android_stop["result"] == witness[1]:
+                        result = android_stop["result"]
+                    else:
+                        result = "rejected"
+                elif action not in {"INT", "KILL", "ABORT"} or (platform == "android" and action == "INT"):
                     result = "rejected"
                 elif (return_code := child.poll()) is not None:
                     result = "gone"
@@ -1285,6 +1335,8 @@ try:
                             timing["remote_state"] = parts[3]
                         write_state("running")
                     elif action in {"KILL", "ABORT"}:
+                        if android_stop is not None and android_stop["result"] == "pending":
+                            android_stop["result"] = "interrupted"
                         timing["disposition"] = "forced" if action == "KILL" else "aborted"
                         write_state("running")
                     try:
@@ -1307,7 +1359,8 @@ try:
                     terminal_state_written = True
 
             return_code = child.poll()
-            if return_code is not None and not terminal_state_written:
+            android_pending = android_stop is not None and android_stop["result"] == "pending"
+            if return_code is not None and not terminal_state_written and not android_pending:
                 write_terminal(return_code)
                 terminal_state_written = True
             time.sleep(poll_interval)
@@ -1400,6 +1453,7 @@ request_supervisor_signal() {
   local nonce
   token="$(cat "$token_path")"
   nonce="$$-${RANDOM}-${RANDOM}"
+  SUPERVISOR_REQUEST_NONCE="$nonce"
   secure_write_sidecar "$request_path" "$token $nonce $action${witness:+ $witness}"
 
   local waited=0
@@ -1409,6 +1463,18 @@ request_supervisor_signal() {
       local response_result
       read -r response_nonce response_result < "$response_path"
       if [[ "$response_nonce" == "$nonce" ]]; then
+        if [[ "$action" == "ANDROID_STOP_BEGIN" || "$action" == "ANDROID_STOP_RESULT" ]]; then
+          case "$action:$response_result" in
+            ANDROID_STOP_BEGIN:ready|ANDROID_STOP_BEGIN:cleanup|ANDROID_STOP_RESULT:signaled|ANDROID_STOP_RESULT:absent|ANDROID_STOP_RESULT:reused|ANDROID_STOP_RESULT:failed|ANDROID_STOP_RESULT:unknown)
+              SUPERVISOR_RESPONSE="$response_result"
+              return 0
+              ;;
+            *)
+              echo "Error: recorder supervisor rejected $action request ($response_result)" >&2
+              return 1
+              ;;
+          esac
+        fi
         [[
           "$response_result" == "signaled" ||
             "$response_result" == "gone" ||
@@ -1421,7 +1487,7 @@ request_supervisor_signal() {
         return 0
       fi
     fi
-    if [[ -s "$state_path" ]]; then
+    if [[ -s "$state_path" && "$action" != "ANDROID_STOP_BEGIN" && "$action" != "ANDROID_STOP_RESULT" ]]; then
       local supervisor_state
       supervisor_state="$(sed -n '1p' "$state_path")"
       if [[ "$supervisor_state" == exited\ * ]]; then
@@ -1867,17 +1933,29 @@ probe_bound_android_recorder() {
 }
 
 stop_android_recorder() {
+  local phase="${2:-signal-and-wait}"
+  ANDROID_SIGNAL_OUTCOME="unknown"
   probe_bound_android_recorder "$1"
-  [[ "$BOUND_ANDROID_STATE" == "present" ]] || return 0
+  if [[ "$BOUND_ANDROID_STATE" != "present" ]]; then
+    ANDROID_SIGNAL_OUTCOME="$BOUND_ANDROID_STATE"
+    return 0
+  fi
   local serial="$BOUND_ANDROID_SERIAL"
   local remote_pid="$BOUND_ANDROID_PID"
   local expected_birth="$ANDROID_PROCESS_BIRTH"
-  android_adb "$serial" shell kill -2 "$remote_pid" >/dev/null 2>&1 || {
-    probe_android_process "$serial" "$remote_pid"
-    [[ "$ANDROID_PROCESS_STATE" == "absent" ]] && return
-    echo "Error: failed to signal device-side screenrecord PID $remote_pid" >&2
-    exit 1
-  }
+  if [[ "$phase" != "wait" ]]; then
+    if android_adb "$serial" shell kill -2 "$remote_pid" >/dev/null 2>&1; then
+      ANDROID_SIGNAL_OUTCOME="signaled"
+    else
+      ANDROID_SIGNAL_OUTCOME="failed"
+      [[ "$phase" == "signal" ]] && return 0
+      probe_android_process "$serial" "$remote_pid"
+      [[ "$ANDROID_PROCESS_STATE" == "absent" ]] && return
+      echo "Error: failed to signal device-side screenrecord PID $remote_pid" >&2
+      exit 1
+    fi
+  fi
+  [[ "$phase" == "signal" ]] && return 0
   local waited=0
   while [[ $waited -lt 20 ]]; do
     sleep 0.5
@@ -2108,9 +2186,15 @@ cmd_stop() {
     local stop_witness=""
     if [[ "$platform" == "android" ]]; then
       probe_bound_android_recorder "$scope"
-      stop_witness="$BOUND_ANDROID_STATE"
+      request_supervisor_signal "$scope" "ANDROID_STOP_BEGIN" "$incarnation"
+      if [[ "$SUPERVISOR_RESPONSE" == "ready" ]]; then
+        local begin_nonce="$SUPERVISOR_REQUEST_NONCE"
+        stop_android_recorder "$scope" "signal"
+        request_supervisor_signal "$scope" "ANDROID_STOP_RESULT" "$incarnation" "$begin_nonce:$ANDROID_SIGNAL_OUTCOME"
+      fi
+    else
+      request_supervisor_signal "$scope" "INT" "$incarnation" "$stop_witness"
     fi
-    request_supervisor_signal "$scope" "INT" "$incarnation" "$stop_witness"
     local waited=0
     local recorder_stopped="false"
     while [[ $waited -lt 10 ]]; do
@@ -2193,7 +2277,22 @@ cmd_stop() {
   if [[ "$platform" == "android" ]]; then
     local serialf="${PID_PREFIX}-${scope}.serial"
     [[ -f "$serialf" ]] && adb_args+=(-s "$(cat "$serialf")")
-    stop_android_recorder "$scope"
+    local remote_stop_phase="signal-and-wait"
+    if supervisor_state_is_authenticated && [[ -s "$(supervisor_state_file "$scope" "$incarnation")" ]]; then
+      remote_stop_phase="$(python3 - "$(supervisor_state_file "$scope" "$incarnation")" "$scope" "$incarnation" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    handle.readline()
+    timing = json.load(handle)
+normal = (timing.get("scope") == sys.argv[2] and timing.get("incarnation") == sys.argv[3]
+          and timing.get("disposition") == "normal"
+          and timing.get("android_stop", {}).get("result") == "signaled")
+print("wait" if normal else "signal-and-wait")
+PY
+)"
+    fi
+    stop_android_recorder "$scope" "$remote_stop_phase"
     local device_pathf="${PID_PREFIX}-${scope}.device-path"
     if [[ -f "$device_pathf" ]]; then
       device_path="$(cat "$device_pathf")"
