@@ -49,7 +49,7 @@ function fixture() {
 set -euo pipefail
 [[ "$*" == *" -f mp4 "* ]] || exit 2
 staged="\${@: -1}"
-printf '%s %s\\n' "$staged" "$(stat -f %Lp "$staged" 2>/dev/null || stat -c %a "$staged")" \\
+printf '%s %s\\n' "$staged" "$(stat -c %a "$staged" 2>/dev/null || stat -f %Lp "$staged")" \\
   > "\${FAKE_STAGE_MARKER}"
 printf converted > "$staged"
 `,
