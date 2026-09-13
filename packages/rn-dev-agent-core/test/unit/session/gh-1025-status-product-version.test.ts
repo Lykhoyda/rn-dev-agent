@@ -2,7 +2,7 @@
 // from the live session process, not a separately inspected on-disk install.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
@@ -47,7 +47,7 @@ function writeCorePackage(root: string, version: string): void {
 }
 
 function writeHostRuntime(root: string, name: string, version: string): void {
-  writeJson(join(root, 'rn-dev-agent-core', 'package.json'), { name, version });
+  writeJson(join(root, 'rn-dev-agent-core', 'package.json'), { name, version, type: 'module' });
 }
 
 test('projectRunningProductVersion always names the executing core version', () => {
@@ -162,6 +162,25 @@ test('readRunningProductVersion reuses the first read for a module URL', () => {
   writeHostRuntime(root, 'rn-dev-agent-core-claude-runtime', '9.9.9');
   writeJson(join(root, '.claude-plugin', 'plugin.json'), { version: '9.9.9' });
   assert.deepEqual(readRunningProductVersion(url), { coreVersion: '1.0.8' });
+});
+
+test('readRunningProductVersion captures the executing module at load, not first status', async () => {
+  const root = fixtureRoot();
+  writeHostRuntime(root, 'rn-dev-agent-core-claude-runtime', '1.0.8');
+  writeJson(join(root, '.claude-plugin', 'plugin.json'), { version: '1.0.8' });
+  const destDir = join(root, 'rn-dev-agent-core', 'dist', 'session');
+  mkdirSync(destDir, { recursive: true });
+  const dest = join(destDir, 'product-version.js');
+  copyFileSync(
+    fileURLToPath(new URL('../../../dist/session/product-version.js', import.meta.url)),
+    dest,
+  );
+  const loaded = (await import(pathToFileURL(dest).href)) as {
+    readRunningProductVersion: () => { coreVersion: string; pluginVersion?: string } | null;
+  };
+  writeHostRuntime(root, 'rn-dev-agent-core-claude-runtime', '9.9.9');
+  writeJson(join(root, '.claude-plugin', 'plugin.json'), { version: '9.9.9' });
+  assert.deepEqual(loaded.readRunningProductVersion(), { coreVersion: '1.0.8' });
 });
 
 test('readRunningProductVersion reports product for the committed Claude host bundle', () => {
