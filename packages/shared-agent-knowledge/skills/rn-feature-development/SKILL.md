@@ -507,7 +507,7 @@ Each phase has shortcuts agents reach for. Don't.
 | "I read the explorer's report — skip reading the actual files" | Explorer reports are summaries. Read 2-3 key files the explorer flagged before designing. |
 | "The blueprint is detailed enough — implement directly, skip questions" | Phase 3 (Questions) catches the 5 assumptions that would waste 2 hours of rework. Ask them. |
 | "Phase 5.5 verification is slow — skip it and trust the review" | Code review ≠ runtime verification. A component can look correct and render wrong. `cdp_component_tree` + `cdp_store_state` takes 10 seconds. |
-| "I tested iOS — Android works the same" | Wrong ~40% of the time. Keyboard, permissions, back button, text input, safe-area all differ. `cross_platform_verify` is mandatory unless explicitly single-platform. |
+| "I tested iOS — Android works the same" | Platforms differ. Authoritative cross-target comparison is currently unsupported — `rn-workflow` skill § "Authority bounds — one copy, one target". |
 | "Phase 6 found 1 issue — ship it" | Review agents already filter by confidence. If ONE flags an issue, read it fully. |
 | "Phase 8 (E2E Proof) is just for PR theater" | Proof flows become the permanent Maestro test file. Skip them and you pay in manual testing every sprint. |
 | "I'll record while I figure out the flow — saves a pass" | The video then shows you stuck on a wrong testID for 90 seconds. The rehearsal pass is the cheap one; re-recording is the expensive one. Discovery happens off camera, replay happens on camera. |
@@ -561,6 +561,6 @@ Each phase has shortcuts agents reach for. Don't.
 - [ ] At least 3 numbered screenshots saved to `docs/proof/<feature>/`
 - [ ] `PROOF.md` written with the architect's steps and actual results
 - [ ] Phase 6 review agents all reported (or "no high-confidence issues")
-- [ ] `cross_platform_verify` run OR single-platform noted in Phase 7 summary
+- [ ] Other platform checked as its own journey if in scope, or single-platform noted in Phase 7 summary (`rn-workflow` skill § "Authority bounds — one copy, one target")
 - [ ] Phase 7 summary lists: files modified, decisions logged, verification results
 - [ ] No adjacent files modified outside the architect's blueprint

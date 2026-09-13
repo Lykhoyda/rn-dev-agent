@@ -3593,7 +3593,7 @@ trackedTool(
 
 trackedTool(
   'cross_platform_verify',
-  'Compare UI elements across iOS and Android. Reads cached accessibility snapshots from both platforms (populated by device_snapshot) and checks which elements are present on each. Workflow: test on iOS → device_snapshot → switch to Android → device_snapshot → cross_platform_verify. Supports auto-discovery of testIDs from source via scanDir. Returns a per-element comparison table with PASS/FAIL verdict.',
+  'Compare cached iOS and Android accessibility snapshots from device_snapshot. Authoritative cross-target comparison is currently unsupported (rn-workflow § "Authority bounds — one copy, one target"). Optional scanDir auto-discovers testIDs. Returns a per-element PASS/FAIL table or missing-snapshot evidence.',
   {
     elements: z
       .array(z.string())

@@ -92680,8 +92680,8 @@ function createCrossPlatformVerifyHandler(dependencies = {}) {
     };
     const [iosSnap, androidSnap] = await Promise.all([evidenceFor("ios"), evidenceFor("android")]);
     if (!iosSnap && !androidSnap) {
-      return failResult("No cached snapshots for either platform. Run device_snapshot on iOS and Android first, then call this tool to compare.", {
-        hint: "Workflow: open iOS session \u2192 device_snapshot \u2192 switch to Android \u2192 device_snapshot \u2192 cross_platform_verify"
+      return failResult("No cached snapshots for either platform. Authoritative cross-target comparison is currently unsupported.", {
+        hint: 'Authoritative cross-target comparison is currently unsupported. See rn-workflow \xA7 "Authority bounds \u2014 one copy, one target".'
       });
     }
     const results = [];
@@ -92718,7 +92718,7 @@ function createCrossPlatformVerifyHandler(dependencies = {}) {
     };
     if (!iosSnap || !androidSnap) {
       const missingPlatform = !iosSnap ? "ios" : "android";
-      return warnResult(summary, `No snapshot cached for ${missingPlatform}. Run device_snapshot on ${missingPlatform} first for a complete comparison.`);
+      return warnResult(summary, `No snapshot cached for ${missingPlatform}. Authoritative cross-target comparison is currently unsupported.`);
     }
     if (!allMatch) {
       const missingLines = missing.map((m) => `  ${m.element}: iOS=${m.ios}, Android=${m.android}`).join("\n");
@@ -97649,7 +97649,7 @@ trackedTool("cdp_restart", "Reset and reconnect the authority-bound Hermes clien
   },
   unbindRunner: () => unbindNativeRunner(authorityRuntime)
 }));
-trackedTool("cross_platform_verify", "Compare UI elements across iOS and Android. Reads cached accessibility snapshots from both platforms (populated by device_snapshot) and checks which elements are present on each. Workflow: test on iOS \u2192 device_snapshot \u2192 switch to Android \u2192 device_snapshot \u2192 cross_platform_verify. Supports auto-discovery of testIDs from source via scanDir. Returns a per-element comparison table with PASS/FAIL verdict.", {
+trackedTool("cross_platform_verify", 'Compare cached iOS and Android accessibility snapshots from device_snapshot. Authoritative cross-target comparison is currently unsupported (rn-workflow \xA7 "Authority bounds \u2014 one copy, one target"). Optional scanDir auto-discovers testIDs. Returns a per-element PASS/FAIL table or missing-snapshot evidence.', {
   elements: external_exports.array(external_exports.string()).optional().describe("List of testIDs or labels to check on both platforms. Optional if scanDir is provided."),
   scanDir: external_exports.string().optional().describe('Directory to scan for testID="..." props in .tsx/.jsx/.ts/.js files. Auto-discovers elements. Merges with elements[] if both provided.'),
   matchBy: external_exports.enum(["testID", "label", "any"]).default("any").describe("Match strategy: testID (exact identifier match), label (substring in accessibility label), any (try both)")

@@ -74,10 +74,12 @@ released, a retained install whose `(platform, deviceId, appId)` does not
 match still refuses: `DEVICE_RECEIPT_INCOMPATIBLE` (axis D), "cannot replace
 exact-device authority while an incompatible install receipt is bound". That
 includes a different simulator or app on the same platform. Those refusals
-keep the existing target. Same-session replace succeeds when runner, proof,
-and any explicitly started Observe are released and no incompatible install
-receipt is bound, including a cross-platform replacement before install is
-bound.
+keep the existing target. An active recorder stays bound to the old device
+after `bind_device` replace — stop it with `device_record action="stop"`
+first. Same-session replace succeeds when runner, proof, any explicitly
+started Observe, and any active recorder are released and no incompatible
+install receipt is bound, including a cross-platform replacement before
+install is bound.
 
 **`cross_platform_verify` does not change those bounds.** Authoritative
 cross-target comparison is currently unsupported. Capturing the first
@@ -293,7 +295,7 @@ got:
 | `PACKAGE_MANAGER_CONFLICT` / `_UNDECLARED` | Ambiguous install authority | Report both facts; user resolves |
 | `attach` (live/unknown owner) | Another session owns the worktree | Close it or use another worktree |
 | `RESOURCE_CLAIM_CONFLICT` ("the same-root owner is live; a live owner is never released") | A second session on this copy (axis S) | Use another copy; a live owner is never released |
-| `DEVICE_AUTHORITY_MISMATCH` / `DEVICE_RECEIPT_INCOMPATIBLE` (rebinding a different exact target) | Runner, proof, or an explicitly started Observe still bound, or an incompatible install receipt is bound (axis D) | Keep the existing target. For explicit Observe, `observe action="stop"` then retry. Do not use `cross_platform_verify` as a cross-target comparison |
+| `DEVICE_AUTHORITY_MISMATCH` / `DEVICE_RECEIPT_INCOMPATIBLE` (rebinding a different exact target) | Runner, proof, or an explicitly started Observe still bound, or an incompatible install receipt is bound (axis D) | Keep the existing target. For explicit Observe, `observe action="stop"` then retry. For an active recorder, `device_record action="stop"` before replace. Do not use `cross_platform_verify` as a cross-target comparison |
 | Non-convergent `transport-restart` / `unrecoverable-in-band` | Startup cleanup is refusing | Report the manual remedy facts per the recovery table above; `unrecoverable-in-band` has no restart or repair remedy |
 | Multiple booted devices, none named | Ambient ambiguity | Ask the user to name one |
 | `AUTOMATION_CLEANUP_UNPROVEN` | Process-group absence unproven | Run the returned manual command, retry once |

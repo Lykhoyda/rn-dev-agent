@@ -99,7 +99,7 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
 - [ ] If `<test-app>/.rn-agent/skeleton.yaml` exists, any new testIDs the flow
       references are added there
 - [ ] `cdp_error_log` shows 0 new errors at end of flow
-- [ ] Cross-platform check via `cross_platform_verify` (or single-platform noted)
+- [ ] Other platform checked as its own journey if in scope, or single-platform noted (`rn-workflow` skill § "Authority bounds — one copy, one target")
 
 ## Examples
 
