@@ -117,10 +117,9 @@ export function createCrossPlatformVerifyHandler(
 
     if (!iosSnap && !androidSnap) {
       return failResult(
-        'No cached snapshots for either platform. Run device_snapshot on iOS and Android first, ' +
-          'then call this tool to compare.',
+        'No cached snapshots for either platform. Authoritative cross-target comparison is currently unsupported.',
         {
-          hint: 'Workflow: open iOS session → device_snapshot → switch to Android → device_snapshot → cross_platform_verify',
+          hint: 'Authoritative cross-target comparison is currently unsupported. See rn-workflow § "Authority bounds — one copy, one target".',
         },
       );
     }
@@ -175,7 +174,7 @@ export function createCrossPlatformVerifyHandler(
       const missingPlatform = !iosSnap ? 'ios' : 'android';
       return warnResult(
         summary,
-        `No snapshot cached for ${missingPlatform}. Run device_snapshot on ${missingPlatform} first for a complete comparison.`,
+        `No snapshot cached for ${missingPlatform}. Authoritative cross-target comparison is currently unsupported.`,
       );
     }
 

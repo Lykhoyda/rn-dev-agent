@@ -215,7 +215,7 @@ If you notice yourself doing any of these, stop and reassess:
 - [ ] `cdp_error_log(clear: true)` → `cdp_error_log()` shows zero new errors
 - [ ] If the bug showed symptoms on screen, `device_screenshot` now shows expected state
 - [ ] If the bug was state-related, `cdp_store_state(path="<slice>")` returns expected shape
-- [ ] Cross-platform: check the same flow on the OTHER platform (`cross_platform_verify`)
+- [ ] Cross-platform: if in scope, check the same flow on the other platform as its own journey (`rn-workflow` skill § "Authority bounds — one copy, one target")
 
 ---
 

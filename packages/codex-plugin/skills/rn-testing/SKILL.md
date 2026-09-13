@@ -468,7 +468,7 @@ Agents routinely skip test steps because "it looks right." Don't.
 
 | Excuse | Reality |
 |--------|---------|
-| "I tested on iOS, Android behaves the same" | False for ~40% of features (Ralph Loop data). Keyboard, permissions, back button, text input quirks, safe-area differ. Run `cross_platform_verify` unless explicitly single-platform. |
+| "I tested on iOS, Android behaves the same" | Platforms differ. Authoritative cross-target comparison is currently unsupported — `rn-workflow` skill § "Authority bounds — one copy, one target". |
 | "The component renders, I don't need to check state" | Rendering with wrong state is how most production bugs ship. `cdp_store_state(path="X")` is one call — take it. |
 | "A screenshot is enough proof" | Screenshots show pixels, not correctness. If the test is "add to cart increments badge", verify the STORE incremented (`cdp_store_state`) — screenshot alone may show stale render. |
 | "Manual testing is faster than writing a Maestro flow" | Manual doesn't persist. Tomorrow's refactor breaks the feature silently. A 15-second Maestro flow saves hours of regression debugging. |

@@ -272,7 +272,7 @@ Things that repeatedly go wrong, cataloged for prevention:
 |---------|-------|-----|
 | Manual `device_*` walk for a flow that already exists as a YAML | Skipped `/rn-dev-agent:list-learned-actions` at session start | Run it BEFORE any UI work; replay matching flows via `cdp_run_action` (recorded, auto-repair-aware) — not raw `maestro_run` |
 | Retrying a replay that keeps refusing with `SESSION_AUTHORITY_REQUIRED` | Treated an ownership refusal as UI drift | Not repairable by retry, repair, or another device — see § Session ownership recovery |
-| Feature ships with broken Android | Skipped `cross_platform_verify` | Always run it in Phase 5.5 unless explicitly scoped |
+| Feature ships with broken Android | Treated `cross_platform_verify` as a comparison | Authoritative cross-target comparison is currently unsupported — `rn-workflow` skill § "Authority bounds — one copy, one target" |
 | "Works on my machine" bug | Claimed done without Phase 5.5 evidence | Every row in the results table must have a concrete Evidence value |
 | Native crash missed entirely | Only checked `cdp_error_log`, not native logs | Use `collect_logs(sources=["js_console","native_ios"])` together |
 | Wasted 10K tokens on component tree | Called `cdp_component_tree()` without filter | Always filter by testID or component name |

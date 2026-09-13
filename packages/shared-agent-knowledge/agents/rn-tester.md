@@ -510,7 +510,7 @@ If you notice yourself doing any of these, stop:
 - About to report PASS on a check without a concrete Evidence value
 - Running `xcrun simctl io booted screenshot` instead of `device_screenshot`
 - Testing only the happy path — no empty state, error state, or loading state
-- Skipping `cross_platform_verify` because "iOS looks good"
+- Treating `cross_platform_verify` as an authoritative cross-target comparison (`rn-workflow` skill § "Authority bounds — one copy, one target")
 - Using text-based selectors (`device_find text="Submit"`) when a testID exists
 - Calling `cdp_component_tree()` without a filter — wastes tokens, drowns signal
 - Adding `sleep` between taps instead of using `assertVisible` before reading state
