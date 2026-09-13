@@ -40,6 +40,26 @@ There is no internal state to track — the only state ever consulted is a fresh
                               6 truthful evidence ─► 7 reverse cleanup + postflight
 ```
 
+### Authority bounds — one copy, one target
+
+Plan **one copy and one session per platform journey**. After those sequential
+runs, `cross_platform_verify` compares cached snapshots. It does not hold iOS
+and Android on one session.
+
+**One live source owner per app copy.** A second session on the same project
+root is refused: `RESOURCE_CLAIM_CONFLICT` (axis S), "the same-root owner is
+live; a live owner is never released". Two agents cannot run journeys from one
+copy, even against different devices and different ports. Parallel work needs
+a copy per agent.
+
+**One device target per session.** Adding a second platform target to a live
+session is refused. With the runner active: `DEVICE_AUTHORITY_MISMATCH` (axis
+D), "device rebinding requires runner or proof authority to be released
+first". After closing the runner: `DEVICE_RECEIPT_INCOMPATIBLE` (axis D),
+"cannot replace exact-device authority while an incompatible install receipt
+is bound". The existing target is retained. A session holds one target and
+replaces it; it does not hold iOS and Android at once.
+
 ### Step 0 — Read the authoritative local instructions
 
 Read the project's injected block in `CLAUDE.md` or `CLAUDE.local.md` (from
@@ -144,7 +164,9 @@ Rules, non-negotiable:
 ### Step 3 — One exact device, exclusivity proven
 
 `rn_session(action="bind_device", platform, deviceId, appId)` for exactly one
-device. If `device_list` shows multiple booted candidates and the user did not
+device. A second platform target on this live session is refused (see Authority
+bounds above) and the existing target is retained — do not bind iOS and Android
+here. If `device_list` shows multiple booted candidates and the user did not
 name one, stop and ask — never pick the first available device, never shut
 down ambient or foreign devices. Refusals pass through verbatim with their
 typed alternatives: `DEVICE_CLAIM_CONFLICT` → hand off explicitly, adopt a
@@ -242,6 +264,8 @@ got:
 | `PROJECT_MANIFEST_INVALID` / `PACKAGE_MANAGER_UNSUPPORTED` | Manifest cannot grant package-manager authority | Repair `package.json`; never infer from lockfiles |
 | `PACKAGE_MANAGER_CONFLICT` / `_UNDECLARED` | Ambiguous install authority | Report both facts; user resolves |
 | `attach` (live/unknown owner) | Another session owns the worktree | Close it or use another worktree |
+| `RESOURCE_CLAIM_CONFLICT` ("the same-root owner is live; a live owner is never released") | A second session on this copy (axis S) | Use another copy; a live owner is never released |
+| `DEVICE_AUTHORITY_MISMATCH` / `DEVICE_RECEIPT_INCOMPATIBLE` (second platform target) | This session already holds a device target (axis D) | Keep it; run the other platform in its own copy and session, then `cross_platform_verify` |
 | Non-convergent `transport-restart` / `unrecoverable-in-band` | Startup cleanup is refusing | Report the manual remedy facts per the recovery table above; `unrecoverable-in-band` has no restart or repair remedy |
 | Multiple booted devices, none named | Ambient ambiguity | Ask the user to name one |
 | `AUTOMATION_CLEANUP_UNPROVEN` | Process-group absence unproven | Run the returned manual command, retry once |
@@ -251,6 +275,8 @@ got:
 - Runs raw `expo start` / `xcodebuild` / `adb install` / `xcrun simctl` for
   anything a plugin tool or the integrated package script owns.
 - Kills, adopts, or waits out an owner that is live or unprovable.
+- Starts a second session on the same project root, or binds a second
+  platform onto a live session.
 - Treats a listed action, an exit code, or prose as authority or success.
 - Mirrors or caches session state — every decision re-reads `status`.
 - Develops app features — route feature work to
@@ -260,6 +286,8 @@ got:
 
 - [ ] Every step's readback (not its command exit) confirmed the step
 - [ ] The proof that ran is exactly what the journey requested
+- [ ] Cross-platform work used one copy and one session per platform, then
+      `cross_platform_verify`
 - [ ] Evidence is labeled device-free vs native, shortcuts stated
 - [ ] Postflight checker reports `pass` with `cleanupProven: true` (a
       `pass-unproven` verdict is residue-only evidence, and a stop was
