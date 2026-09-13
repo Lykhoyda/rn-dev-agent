@@ -39,7 +39,11 @@ function appendChild(parent: Fiber, child: Fiber): Fiber {
   return child;
 }
 
-function createAgent(root: Fiber, beforeEvaluate?: (expression: string) => void) {
+function createAgent(
+  root: Fiber,
+  beforeEvaluate?: (expression: string) => void,
+  navState: Record<string, unknown> = { index: 0, routes: [{ name: 'Home' }] },
+) {
   const sandbox: Record<string, unknown> = {
     Array,
     Object,
@@ -62,7 +66,7 @@ function createAgent(root: Fiber, beforeEvaluate?: (expression: string) => void)
     console: { log() {}, error() {}, warn() {}, info() {}, debug() {} },
   };
   sandbox.globalThis = sandbox;
-  sandbox.__expo_router_state__ = { index: 0, routes: [{ name: 'Home' }] };
+  sandbox.__expo_router_state__ = navState;
   sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
     renderers: new Map([[1, {}]]),
     getFiberRoots: (id: number) => (id === 1 ? new Set([{ current: root }]) : new Set()),
@@ -184,6 +188,201 @@ function tabFixture() {
   );
   return { root, outer, outerHost, animated, pressable, host, calls };
 }
+
+function sceneProps(
+  route: { key: string; name: string },
+  state: { index: number; routes: { key: string; name: string }[] },
+  isFocused = () => state.routes[state.index]?.key === route.key,
+) {
+  const neverInvoke = () => assert.fail('scene callbacks and renderers must not be invoked');
+  return {
+    screen: { name: route.name, component: neverInvoke },
+    route,
+    getState: neverInvoke,
+    setState: neverInvoke,
+    clearOptions: neverInvoke,
+    navigation: { getState: () => state, isFocused },
+  };
+}
+
+function routedTabFixture() {
+  const fixture = tabFixture();
+  const home = { key: 'home-tab', name: 'HomeTab' };
+  const tasks = { key: 'tasks-tab', name: 'TasksTab' };
+  const tabState = { index: 1, routes: [home, tasks] };
+  const tabs = { key: 'root-tabs', name: 'Tabs', state: tabState };
+  const state = { index: 0, routes: [tabs] };
+  const root = makeFiber('Root');
+  const owner = appendChild(
+    root,
+    makeFiber({ displayName: 'MinifiedScene' }, sceneProps(tabs, state)),
+  );
+  const destinationProps = {
+    route: home,
+    navigation: { getState: () => tabState, isFocused: () => false },
+    screen: 'HomeTab',
+  };
+  const destination = appendChild(owner, makeFiber({ displayName: 'Provider' }, destinationProps));
+  appendChild(destination, fixture.outer);
+  Object.assign(fixture.outer.memoizedProps, destinationProps);
+  return { ...fixture, root, owner, destination, state, home, tasks, tabState };
+}
+
+test('#951 saved Home tap from Tasks uses the enclosing Tabs scene, not its destination provider', async () => {
+  const fixture = routedTabFixture();
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'tab-home' } }],
+    {},
+    buildDeps(createAgent(fixture.root, undefined, fixture.state)),
+  );
+  assert.equal(result.passed, true, JSON.stringify(result));
+  assert.deepEqual(
+    result.steps.map(({ t, target, ok }) => ({ t, target, ok })),
+    [{ t: 'tap', target: 'tab-home', ok: true }],
+  );
+  assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+});
+
+test('#951 an active destination provider cannot authorize content in an inactive scene', async () => {
+  const fixture = routedTabFixture();
+  fixture.owner.memoizedProps = sceneProps(fixture.home, fixture.tabState);
+  const destinationProps = {
+    route: fixture.tasks,
+    navigation: { getState: () => fixture.tabState, isFocused: () => true },
+  };
+  Object.assign(fixture.destination.memoizedProps, destinationProps);
+  Object.assign(fixture.outer.memoizedProps, destinationProps);
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'tab-home' } }],
+    {},
+    buildDeps(createAgent(fixture.root, undefined, fixture.state)),
+  );
+  assert.equal(result.passed, false);
+  assert.equal(result.failedStepIndex, 0);
+  assert.equal(result.failureCode, 'ASSERTION_FAILED');
+  assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+});
+
+test('#951 visibility assertions, waits and conditional flows share scene ownership', async (t) => {
+  const consumers = [
+    { name: 'assertVisible', command: { assertVisible: { id: 'tab-home' } }, presses: 0 },
+    {
+      name: 'timed wait',
+      command: { extendedWaitUntil: { visible: { id: 'tab-home' }, timeout: 50 } },
+      presses: 0,
+    },
+    {
+      name: 'conditional flow',
+      command: {
+        runFlow: {
+          when: { visible: { id: 'tab-home' } },
+          commands: [{ tapOn: { id: 'tab-home' } }],
+        },
+      },
+      presses: 1,
+    },
+  ];
+  for (const { name, command, presses } of consumers) {
+    for (const proof of ['focused', 'inactive', 'malformed']) {
+      await t.test(`${name}: ${proof}`, async () => {
+        const fixture = routedTabFixture();
+        if (proof === 'inactive')
+          fixture.owner.memoizedProps = sceneProps(fixture.home, fixture.tabState);
+        if (proof === 'malformed') delete fixture.owner.memoizedProps.clearOptions;
+        const result = await runCdpReplayCommands(
+          [command],
+          {},
+          buildDeps(createAgent(fixture.root, undefined, fixture.state)),
+        );
+        assert.equal(result.passed, proof === 'focused', JSON.stringify(result));
+        if (proof !== 'focused') {
+          assert.equal(result.failureCode, 'ASSERTION_FAILED');
+          assert.equal(result.failedStepIndex, 0);
+        }
+        const expected = proof === 'focused' ? presses : 0;
+        assert.deepEqual(fixture.calls, { wrapper: expected, navigation: expected });
+      });
+    }
+  }
+});
+
+test('#951 an inactive sibling with the same ID remains ambiguous before scene eligibility', async () => {
+  const fixture = routedTabFixture();
+  const inactive = appendChild(
+    fixture.root,
+    makeFiber({ displayName: 'Scene' }, sceneProps(fixture.home, fixture.tabState)),
+  );
+  let inactivePresses = 0;
+  appendChild(
+    inactive,
+    makeFiber('RCTView', {
+      testID: 'tab-home',
+      onPress: () => {
+        inactivePresses++;
+      },
+    }),
+  );
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'tab-home' } }],
+    {},
+    buildDeps(createAgent(fixture.root, undefined, fixture.state)),
+  );
+  assert.equal(result.passed, false);
+  assert.equal(result.failureCode, 'AMBIGUOUS_TESTID');
+  assert.deepEqual(result.failureMeta, { matchCount: 2 });
+  assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+  assert.equal(inactivePresses, 0);
+});
+
+test('#951 replay input and live designation consumption require a focused owning scene', async (t) => {
+  for (const mode of ['focused', 'inactive', 'inactive before type', 'malformed before type']) {
+    await t.test(mode, async () => {
+      const fixture = otpFixture();
+      const home = { key: 'home', name: 'Home' };
+      const state = { index: 0, routes: [home, { key: 'other-home', name: 'Home' }] };
+      let focused = mode !== 'inactive';
+      const owner = makeFiber(
+        { displayName: 'MinifiedScene' },
+        sceneProps(home, state, () => focused),
+      );
+      fixture.root.child = owner;
+      owner.return = fixture.root;
+      appendChild(owner, fixture.app);
+      let changedBeforeType = false;
+      const agent = createAgent(
+        fixture.root,
+        (expression) => {
+          if (!expression.startsWith('__RN_AGENT.interact(')) return;
+          const args = JSON.parse(expression.slice(expression.indexOf('(') + 1, -1));
+          if (!args.requireLiveInputDesignation || !mode.endsWith('before type')) return;
+          changedBeforeType = true;
+          if (mode === 'malformed before type') delete owner.memoizedProps.clearOptions;
+          else focused = false;
+        },
+        state,
+      );
+      const result = await runCdpReplayCommands(
+        [{ tapOn: { id: 'otp_email' } }, { inputText: '0451' }],
+        {},
+        buildDeps(agent),
+      );
+      assert.equal(result.passed, mode === 'focused', JSON.stringify(result));
+      assert.equal(fixture.calls.focus, 0);
+      assert.deepEqual(fixture.calls.typed, mode === 'focused' ? ['0451'] : []);
+      if (mode !== 'focused') {
+        assert.equal(result.failureCode, 'ASSERTION_FAILED');
+        assert.equal(result.failedStepIndex, mode === 'inactive' ? 0 : 1);
+        assert.equal(fixture.inputHost.memoizedProps.value, '');
+      }
+      if (mode.endsWith('before type')) {
+        assert.equal(changedBeforeType, true);
+        assert.equal(result.steps[0].focusOnly, true);
+        assert.equal(result.failureMeta?.mutation, 'none');
+        assert.equal(result.failureMeta?.focusOnly, true);
+      }
+    });
+  }
+});
 
 test('#951 saved replay dispatches a wrapped navigator press through its native-path callback', async () => {
   const fixture = tabFixture();

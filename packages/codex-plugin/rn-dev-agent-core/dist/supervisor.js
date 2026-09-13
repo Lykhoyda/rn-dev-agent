@@ -64483,7 +64483,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 63;
+    HELPERS_VERSION = 64;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -68988,22 +68988,96 @@ var init_injected_helpers = __esm({
         matchCount: 1
       });
     }
+    function readSceneOwner(props) {
+      if (!props || typeof props !== 'object' || !(
+        (props.screen && typeof props.screen === 'object')
+        || 'clearOptions' in props
+        || ('getState' in props && 'setState' in props)
+      )) return null;
+      var screen = props.screen;
+      var route = props.route;
+      var navigation = props.navigation;
+      if (
+        !screen || typeof screen !== 'object' || Array.isArray(screen)
+        || !route || typeof route !== 'object' || Array.isArray(route)
+        || typeof route.key !== 'string' || !route.key
+        || typeof route.name !== 'string' || !route.name
+        || screen.name !== route.name
+        || typeof props.getState !== 'function'
+        || typeof props.setState !== 'function'
+        || typeof props.clearOptions !== 'function'
+        || !navigation || typeof navigation.getState !== 'function'
+        || typeof navigation.isFocused !== 'function'
+      ) throw new Error('invalid scene contract');
+      var component = screen.component;
+      var componentType = component && component.$$typeof;
+      var validComponent = typeof component === 'function'
+        || (typeof component === 'string' && component.length > 0)
+        || (typeof component === 'object' && component !== null && (
+          componentType === Symbol.for('react.memo')
+          || componentType === Symbol.for('react.forward_ref')
+          || componentType === Symbol.for('react.lazy')
+        ));
+      var renderChoices = Number(component !== undefined)
+        + Number(screen.getComponent !== undefined) + Number(screen.children !== undefined);
+      if (renderChoices !== 1 || !(
+        validComponent || typeof screen.getComponent === 'function'
+        || typeof screen.children === 'function'
+      )) throw new Error('invalid scene renderer');
+      // The scene context's getState reads child state; navigation reads the owning navigator.
+      var ownerState = navigation.getState();
+      if (
+        !ownerState || typeof ownerState !== 'object' || Array.isArray(ownerState)
+        || !Array.isArray(ownerState.routes)
+        || ownerState.routes.length === 0 || ownerState.routes.length > 40000
+        || !Number.isInteger(ownerState.index)
+        || ownerState.index < 0 || ownerState.index >= ownerState.routes.length
+      ) throw new Error('invalid scene navigation state');
+      var ownerMatches = 0;
+      for (var ownerIndex = 0; ownerIndex < ownerState.routes.length; ownerIndex++) {
+        var ownerRoute = ownerState.routes[ownerIndex];
+        if (!ownerRoute || typeof ownerRoute.key !== 'string' || !ownerRoute.key
+          || typeof ownerRoute.name !== 'string' || !ownerRoute.name
+        ) throw new Error('invalid scene route');
+        if (ownerRoute.key === route.key) {
+          if (ownerRoute.name !== route.name) throw new Error('inconsistent scene route');
+          ownerMatches++;
+        }
+      }
+      if (ownerMatches !== 1) throw new Error('ambiguous scene membership');
+      var focused = navigation.isFocused();
+      if (typeof focused !== 'boolean'
+        || (focused && ownerState.routes[ownerState.index].key !== route.key)
+      ) throw new Error('invalid scene focus');
+      return { name: route.name, focused: focused };
+    }
     var routeOwner = null;
+    var ownerProof = null;
     var current = target;
     var depth = 0;
-    while (current && depth++ < 1000) {
-      var currentProps = current.memoizedProps;
-      if (
-        currentProps &&
-        currentProps.route &&
-        typeof currentProps.route.name === 'string'
-      ) {
-        routeOwner = currentProps.route.name;
-        break;
+    var ownerSeen = new WeakSet();
+    try {
+      while (current && depth++ < 1000) {
+        if (ownerSeen.has(current)) throw new Error('cyclic scene ancestry');
+        ownerSeen.add(current);
+        ownerProof = readSceneOwner(current.memoizedProps);
+        if (ownerProof) {
+          routeOwner = ownerProof.name;
+          break;
+        }
+        current = current.return;
       }
-      current = current.return;
+      if (current && !ownerProof) throw new Error('incomplete scene ancestry');
+    } catch (_) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'frontmost scene ownership cannot be proven',
+        code: 'ASSERTION_FAILED',
+        activeRoute: activeRoute,
+        matchCount: 1
+      });
     }
-    if (routeOwner && activeRoutes.indexOf(routeOwner) === -1) {
+    if (ownerProof && !ownerProof.focused) {
       return JSON.stringify({
         visible: false,
         reason: 'testID belongs to an inactive mounted route',
