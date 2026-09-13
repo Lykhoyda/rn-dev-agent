@@ -42,9 +42,8 @@ There is no internal state to track — the only state ever consulted is a fresh
 
 ### Authority bounds — one copy, one target
 
-Plan **one copy and one session per platform journey**. After those sequential
-runs, `cross_platform_verify` compares cached snapshots. It does not hold iOS
-and Android on one session.
+This section is the canonical planning contract for these two refusals.
+Other surfaces point here instead of restating it.
 
 **One live source owner per app copy.** A second session on the same project
 root is refused: `RESOURCE_CLAIM_CONFLICT` (axis S), "the same-root owner is
@@ -59,6 +58,13 @@ first". After closing the runner: `DEVICE_RECEIPT_INCOMPATIBLE` (axis D),
 "cannot replace exact-device authority while an incompatible install receipt
 is bound". The existing target is retained. A session holds one target and
 replaces it; it does not hold iOS and Android at once.
+
+**`cross_platform_verify` does not change those bounds.** It compares
+accessibility snapshots cached in this MCP process and validated against this
+operational session. That cache does not follow a second copy or a second
+session; after either, this call reports a missing platform instead of
+comparing. Do not plan a second session or a second copy as the way to feed
+it both platforms.
 
 ### Step 0 — Read the authoritative local instructions
 
@@ -265,7 +271,7 @@ got:
 | `PACKAGE_MANAGER_CONFLICT` / `_UNDECLARED` | Ambiguous install authority | Report both facts; user resolves |
 | `attach` (live/unknown owner) | Another session owns the worktree | Close it or use another worktree |
 | `RESOURCE_CLAIM_CONFLICT` ("the same-root owner is live; a live owner is never released") | A second session on this copy (axis S) | Use another copy; a live owner is never released |
-| `DEVICE_AUTHORITY_MISMATCH` / `DEVICE_RECEIPT_INCOMPATIBLE` (second platform target) | This session already holds a device target (axis D) | Keep it; run the other platform in its own copy and session, then `cross_platform_verify` |
+| `DEVICE_AUTHORITY_MISMATCH` / `DEVICE_RECEIPT_INCOMPATIBLE` (second platform target) | This session already holds a device target (axis D) | Keep it. Do not start a second session to feed `cross_platform_verify` |
 | Non-convergent `transport-restart` / `unrecoverable-in-band` | Startup cleanup is refusing | Report the manual remedy facts per the recovery table above; `unrecoverable-in-band` has no restart or repair remedy |
 | Multiple booted devices, none named | Ambient ambiguity | Ask the user to name one |
 | `AUTOMATION_CLEANUP_UNPROVEN` | Process-group absence unproven | Run the returned manual command, retry once |
@@ -277,6 +283,7 @@ got:
 - Kills, adopts, or waits out an owner that is live or unprovable.
 - Starts a second session on the same project root, or binds a second
   platform onto a live session.
+- Treats a second session or copy as input to `cross_platform_verify`.
 - Treats a listed action, an exit code, or prose as authority or success.
 - Mirrors or caches session state — every decision re-reads `status`.
 - Develops app features — route feature work to
@@ -286,8 +293,8 @@ got:
 
 - [ ] Every step's readback (not its command exit) confirmed the step
 - [ ] The proof that ran is exactly what the journey requested
-- [ ] Cross-platform work used one copy and one session per platform, then
-      `cross_platform_verify`
+- [ ] If `cross_platform_verify` ran, both snapshots came from this live
+      session (it cannot import another session or copy)
 - [ ] Evidence is labeled device-free vs native, shortcuts stated
 - [ ] Postflight checker reports `pass` with `cleanupProven: true` (a
       `pass-unproven` verdict is residue-only evidence, and a stop was
