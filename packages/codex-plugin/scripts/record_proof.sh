@@ -1197,7 +1197,7 @@ terminal_state_written = False
 stop_requested = False
 timing = dict(scope=scope, incarnation=incarnation, pid=None, launch=None, ready=None,
               stop=None, signal=None, exit=None, disposition="starting",
-              remote_state=None, remote_start=None, remote_end=None)
+              remote_state=None)
 
 def write_state(state):
     write_atomic(state_path, state + "\n" + json.dumps(timing, allow_nan=False) + "\n")
@@ -1266,7 +1266,7 @@ try:
             except FileNotFoundError:
                 parts = []
 
-            if len(parts) in {3, 6} and parts[0] == token and parts[1] != last_nonce:
+            if len(parts) in {3, 4} and parts[0] == token and parts[1] != last_nonce:
                 nonce, action = parts[1], parts[2]
                 last_nonce = nonce
                 if action not in {"INT", "KILL", "ABORT"}:
@@ -1279,8 +1279,8 @@ try:
                     if action == "INT" and timing["stop"] is None:
                         timing["stop"] = time.monotonic()
                         timing["disposition"] = "normal"
-                        if len(parts) == 6:
-                            timing["remote_state"], timing["remote_start"], timing["remote_end"] = parts[3:]
+                        if len(parts) == 4:
+                            timing["remote_state"] = parts[3]
                         write_state("running")
                     elif action in {"KILL", "ABORT"}:
                         timing["disposition"] = "forced" if action == "KILL" else "aborted"
@@ -1602,14 +1602,10 @@ try:
     launch, ready, stop, signaled, exited = values
     if not 0 < launch <= ready <= stop <= signaled <= exited <= time.monotonic():
         unavailable("invalid monotonic interval")
-    if ready - launch > 1 or signaled - stop > 1:
+    if signaled - stop > 1:
         unavailable("capture clock uncertainty exceeds one second")
-    if sys.argv[5] == "android":
-        if timing["remote_state"] != "present":
-            unavailable("device recorder was not live at normal stop")
-        remote_start, remote_end = float(timing["remote_start"]), float(timing["remote_end"])
-        if not launch <= remote_start <= remote_end <= stop or signaled - remote_start > 1:
-            unavailable("device stop witness is stale or uncertain")
+    if sys.argv[5] == "android" and timing["remote_state"] != "present":
+        unavailable("device recorder was not live at normal stop")
     frames = math.floor((stop - ready) * 30 + 0.5)
     if frames < 1:
         unavailable("capture interval is empty")
@@ -1869,7 +1865,7 @@ probe_bound_android_recorder() {
 }
 
 stop_android_recorder() {
-  probe_bound_android_recorder "$1"
+  [[ "${2:-false}" == "true" ]] || probe_bound_android_recorder "$1"
   [[ "$BOUND_ANDROID_STATE" == "present" ]] || return 0
   local serial="$BOUND_ANDROID_SERIAL"
   local remote_pid="$BOUND_ANDROID_PID"
@@ -2088,6 +2084,7 @@ cmd_stop() {
   fi
   local supervisor_failed="false"
   [[ "$supervisor_state" == failed\ * ]] && supervisor_failed="true"
+  local android_probed="false"
   local supervisor_terminal="false"
   [[ "$supervisor_state" == exited\ * || "$supervisor_state" == failed\ * ]] && supervisor_terminal="true"
 
@@ -2109,12 +2106,9 @@ cmd_stop() {
     }
     local stop_witness=""
     if [[ "$platform" == "android" ]]; then
-      local remote_start
-      local remote_end
-      remote_start="$(python3 -c 'import time; print(time.monotonic())')"
       probe_bound_android_recorder "$scope"
-      remote_end="$(python3 -c 'import time; print(time.monotonic())')"
-      stop_witness="$BOUND_ANDROID_STATE $remote_start $remote_end"
+      stop_witness="$BOUND_ANDROID_STATE"
+      android_probed="true"
     fi
     request_supervisor_signal "$scope" "INT" "$incarnation" "$stop_witness"
     local waited=0
@@ -2199,7 +2193,7 @@ cmd_stop() {
   if [[ "$platform" == "android" ]]; then
     local serialf="${PID_PREFIX}-${scope}.serial"
     [[ -f "$serialf" ]] && adb_args+=(-s "$(cat "$serialf")")
-    stop_android_recorder "$scope"
+    stop_android_recorder "$scope" "$android_probed"
     local device_pathf="${PID_PREFIX}-${scope}.device-path"
     if [[ -f "$device_pathf" ]]; then
       device_path="$(cat "$device_pathf")"

@@ -608,6 +608,26 @@ test('early zero exit and force stop never authorize a padded tail', async (t) =
   }
 });
 
+test('a cold first-frame latency still yields a normalized capture duration', async (t) => {
+  const capture = await timingFixture(t);
+  await capture.control('INT');
+  await capture.terminal();
+  const original = capture.state();
+  writeFileSync(
+    capture.statePath,
+    `exited 0\n${JSON.stringify({ ...original, launch: original.ready - 1.24 })}\n`,
+  );
+  const cold = await capture.duration();
+  assert.equal(cold.warning, '');
+  assert.ok(cold.value !== null);
+  assert.ok(Math.abs(cold.value - (original.stop - original.ready)) <= 1 / 60);
+  writeFileSync(
+    capture.statePath,
+    `exited 0\n${JSON.stringify({ ...original, launch: original.ready - 1.24, remote_state: 'present' })}\n`,
+  );
+  assert.deepEqual(await capture.duration('android'), cold);
+});
+
 test('malformed, stale and uncertain timing cannot become a capture duration', async (t) => {
   const capture = await timingFixture(t);
   await capture.control('INT');
@@ -618,7 +638,6 @@ test('malformed, stale and uncertain timing cannot become a capture duration', a
     { ...original, launch: 'NaN' },
     { ...original, launch: original.ready + 1 },
     { ...original, stop: original.exit + 100 },
-    { ...original, ready: original.launch + 2 },
     { ...original, signal: original.stop + 2 },
     { ...original, incarnation: '0'.repeat(32) },
     { ...original, scope: '0'.repeat(64) },

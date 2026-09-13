@@ -163,8 +163,6 @@ function seedCaptureTiming(prefix: string) {
       exit: now - 4,
       disposition: 'normal',
       remote_state: 'present',
-      remote_start: now - 5.1,
-      remote_end: now - 5.01,
     })}\n`,
   );
 }
