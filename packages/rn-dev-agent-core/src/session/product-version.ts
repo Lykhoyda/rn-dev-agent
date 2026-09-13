@@ -14,6 +14,7 @@ const EXECUTING_CORE_PACKAGE_NAMES = new Set([
 ]);
 
 const productByModuleUrl = new Map<string, RunningProductVersion | null>();
+const loadedModuleUrl = import.meta.url;
 
 export function projectRunningProductVersion(input: {
   coreVersion: string | null;
@@ -91,13 +92,19 @@ function resolveRunningProductVersion(fromUrl: string): RunningProductVersion | 
   });
 }
 
-export function readRunningProductVersion(
-  fromUrl: string = import.meta.url,
-): RunningProductVersion | null {
+function cachedRunningProductVersion(fromUrl: string): RunningProductVersion | null {
   if (productByModuleUrl.has(fromUrl)) return productByModuleUrl.get(fromUrl) ?? null;
   const product = resolveRunningProductVersion(fromUrl);
   productByModuleUrl.set(fromUrl, product);
   return product;
+}
+
+cachedRunningProductVersion(loadedModuleUrl);
+
+export function readRunningProductVersion(
+  fromUrl: string = loadedModuleUrl,
+): RunningProductVersion | null {
+  return cachedRunningProductVersion(fromUrl);
 }
 
 export function withRunningProduct<T extends Record<string, unknown>>(
