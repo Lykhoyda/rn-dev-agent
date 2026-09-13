@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 64;
+export const HELPERS_VERSION = 65;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -4508,96 +4508,100 @@ export const INJECTED_HELPERS = `
         matchCount: 1
       });
     }
-    function readSceneOwner(props) {
-      if (!props || typeof props !== 'object' || !(
-        (props.screen && typeof props.screen === 'object')
-        || 'clearOptions' in props
-        || ('getState' in props && 'setState' in props)
-      )) return null;
-      var screen = props.screen;
+    function readRouteRecord(route) {
+      if (
+        !route || typeof route !== 'object' || Array.isArray(route)
+        || typeof route.key !== 'string' || !route.key
+        || typeof route.name !== 'string' || !route.name
+      ) return null;
+      return route;
+    }
+    function readBoundRoute(navigation, route) {
+      if (
+        !navigation || typeof navigation !== 'object'
+        || typeof navigation.getState !== 'function'
+        || typeof navigation.isFocused !== 'function'
+      ) throw new Error('invalid navigator');
+      var state = navigation.getState();
+      if (
+        !state || typeof state !== 'object' || Array.isArray(state)
+        || !Array.isArray(state.routes) || state.routes.length === 0
+        || !Number.isInteger(state.index)
+        || state.index < 0 || state.index >= state.routes.length
+      ) throw new Error('invalid navigator state');
+      var matches = 0;
+      for (var routeIndex = 0; routeIndex < state.routes.length; routeIndex++) {
+        var known = readRouteRecord(state.routes[routeIndex]);
+        if (!known) throw new Error('invalid navigator route');
+        if (known.key === route.key) {
+          if (known.name !== route.name) throw new Error('inconsistent navigator route');
+          matches++;
+        }
+      }
+      if (matches !== 1) throw new Error('ambiguous navigator membership');
+      var focused = navigation.isFocused();
+      // A focused route is always its navigator's selected one, so disagreement proves the navigation is not this route's own.
+      if (
+        typeof focused !== 'boolean'
+        || (focused && state.routes[state.index].key !== route.key)
+      ) throw new Error('invalid route focus');
+      return focused;
+    }
+    // Navigator chrome carries the descriptor of the route it navigates to, never its own, so it is witnessed rather than owned.
+    function readControlWitness(props) {
+      var record = readRouteRecord(props.route);
+      var descriptor = props.descriptor;
+      if (!record || !descriptor || typeof descriptor !== 'object') return false;
+      var destination = readRouteRecord(descriptor.route);
+      if (!destination || destination.key !== record.key) return false;
+      readBoundRoute(descriptor.navigation, record);
+      return true;
+    }
+    function readRouteScope(props) {
       var route = props.route;
       var navigation = props.navigation;
       if (
-        !screen || typeof screen !== 'object' || Array.isArray(screen)
-        || !route || typeof route !== 'object' || Array.isArray(route)
-        || typeof route.key !== 'string' || !route.key
-        || typeof route.name !== 'string' || !route.name
-        || screen.name !== route.name
-        || typeof props.getState !== 'function'
-        || typeof props.setState !== 'function'
-        || typeof props.clearOptions !== 'function'
-        || !navigation || typeof navigation.getState !== 'function'
-        || typeof navigation.isFocused !== 'function'
-      ) throw new Error('invalid scene contract');
-      var component = screen.component;
-      var componentType = component && component.$$typeof;
-      var validComponent = typeof component === 'function'
-        || (typeof component === 'string' && component.length > 0)
-        || (typeof component === 'object' && component !== null && (
-          componentType === Symbol.for('react.memo')
-          || componentType === Symbol.for('react.forward_ref')
-          || componentType === Symbol.for('react.lazy')
-        ));
-      var renderChoices = Number(component !== undefined)
-        + Number(screen.getComponent !== undefined) + Number(screen.children !== undefined);
-      if (renderChoices !== 1 || !(
-        validComponent || typeof screen.getComponent === 'function'
-        || typeof screen.children === 'function'
-      )) throw new Error('invalid scene renderer');
-      // The scene context's getState reads child state; navigation reads the owning navigator.
-      var ownerState = navigation.getState();
-      if (
-        !ownerState || typeof ownerState !== 'object' || Array.isArray(ownerState)
-        || !Array.isArray(ownerState.routes)
-        || ownerState.routes.length === 0 || ownerState.routes.length > 40000
-        || !Number.isInteger(ownerState.index)
-        || ownerState.index < 0 || ownerState.index >= ownerState.routes.length
-      ) throw new Error('invalid scene navigation state');
-      var ownerMatches = 0;
-      for (var ownerIndex = 0; ownerIndex < ownerState.routes.length; ownerIndex++) {
-        var ownerRoute = ownerState.routes[ownerIndex];
-        if (!ownerRoute || typeof ownerRoute.key !== 'string' || !ownerRoute.key
-          || typeof ownerRoute.name !== 'string' || !ownerRoute.name
-        ) throw new Error('invalid scene route');
-        if (ownerRoute.key === route.key) {
-          if (ownerRoute.name !== route.name) throw new Error('inconsistent scene route');
-          ownerMatches++;
-        }
-      }
-      if (ownerMatches !== 1) throw new Error('ambiguous scene membership');
-      var focused = navigation.isFocused();
-      if (typeof focused !== 'boolean'
-        || (focused && ownerState.routes[ownerState.index].key !== route.key)
-      ) throw new Error('invalid scene focus');
-      return { name: route.name, focused: focused };
+        !route || typeof route !== 'object'
+        || !navigation || typeof navigation !== 'object'
+      ) return null;
+      var record = readRouteRecord(route);
+      if (!record) throw new Error('invalid scope route');
+      return { name: record.name, focused: readBoundRoute(navigation, record) };
     }
     var routeOwner = null;
-    var ownerProof = null;
+    var inactiveOwner = false;
+    var controlWitness = false;
     var current = target;
     var depth = 0;
     var ownerSeen = new WeakSet();
     try {
       while (current && depth++ < 1000) {
-        if (ownerSeen.has(current)) throw new Error('cyclic scene ancestry');
+        if (ownerSeen.has(current)) throw new Error('cyclic route ancestry');
         ownerSeen.add(current);
-        ownerProof = readSceneOwner(current.memoizedProps);
-        if (ownerProof) {
-          routeOwner = ownerProof.name;
-          break;
+        var ownerProps = current.memoizedProps;
+        if (ownerProps && typeof ownerProps === 'object') {
+          if (readControlWitness(ownerProps)) controlWitness = true;
+          else {
+            var scope = readRouteScope(ownerProps);
+            if (scope) {
+              if (!routeOwner) routeOwner = scope.name;
+              if (!scope.focused) inactiveOwner = true;
+            }
+          }
         }
         current = current.return;
       }
-      if (current && !ownerProof) throw new Error('incomplete scene ancestry');
+      if (current) throw new Error('incomplete route ancestry');
     } catch (_) {
       return JSON.stringify({
         visible: false,
-        reason: 'frontmost scene ownership cannot be proven',
+        reason: 'frontmost route ownership cannot be proven',
         code: 'ASSERTION_FAILED',
         activeRoute: activeRoute,
         matchCount: 1
       });
     }
-    if (ownerProof && !ownerProof.focused) {
+    if (inactiveOwner) {
       return JSON.stringify({
         visible: false,
         reason: 'testID belongs to an inactive mounted route',
@@ -4606,7 +4610,7 @@ export const INJECTED_HELPERS = `
         matchCount: 1
       });
     }
-    if (!routeOwner) {
+    if (!routeOwner && !controlWitness) {
       var cursor = nav;
       var stacked = false;
       while (cursor) {

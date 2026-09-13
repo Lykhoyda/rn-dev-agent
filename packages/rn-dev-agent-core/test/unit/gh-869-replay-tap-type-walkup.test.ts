@@ -205,30 +205,93 @@ function sceneProps(
   };
 }
 
-function routedTabFixture() {
+function tabDescriptor(
+  route: { key: string; name: string },
+  state: { index: number; routes: { key: string; name: string }[] },
+) {
+  return {
+    route,
+    navigation: {
+      getState: () => state,
+      isFocused: () => state.routes[state.index]?.key === route.key,
+    },
+    options: {},
+    render: () => assert.fail('descriptor renderers must not be invoked'),
+  };
+}
+
+// @react-navigation/bottom-tabs renders the bar as a sibling of the scenes and
+// hands each item the descriptor of the route it navigates to.
+function routedTabFixture({ nested = true, selected = 1 } = {}) {
   const fixture = tabFixture();
   const home = { key: 'home-tab', name: 'HomeTab' };
   const tasks = { key: 'tasks-tab', name: 'TasksTab' };
-  const tabState = { index: 1, routes: [home, tasks] };
+  const tabState = { index: selected, routes: [home, tasks] };
   const tabs = { key: 'root-tabs', name: 'Tabs', state: tabState };
-  const state = { index: 0, routes: [tabs] };
   const root = makeFiber('Root');
-  const owner = appendChild(
-    root,
-    makeFiber({ displayName: 'MinifiedScene' }, sceneProps(tabs, state)),
+  const state = nested ? { index: 0, routes: [tabs] } : tabState;
+  const owner = nested
+    ? appendChild(root, makeFiber({ displayName: 'MinifiedScene' }, sceneProps(tabs, state)))
+    : root;
+  const bar = appendChild(
+    owner,
+    makeFiber(
+      { displayName: 'BottomTabBar' },
+      {
+        state: tabState,
+        navigation: { getState: () => tabState, isFocused: () => true },
+      },
+    ),
   );
-  const destinationProps = {
+  appendChild(bar, fixture.outer);
+  Object.assign(fixture.outer.memoizedProps, {
     route: home,
-    navigation: { getState: () => tabState, isFocused: () => false },
-    screen: 'HomeTab',
-  };
-  const destination = appendChild(owner, makeFiber({ displayName: 'Provider' }, destinationProps));
-  appendChild(destination, fixture.outer);
-  Object.assign(fixture.outer.memoizedProps, destinationProps);
-  return { ...fixture, root, owner, destination, state, home, tasks, tabState };
+    descriptor: tabDescriptor(home, tabState),
+    focused: selected === 0,
+  });
+  return { ...fixture, root, owner, bar, state, home, tasks, tabState };
 }
 
-test('#951 saved Home tap from Tasks uses the enclosing Tabs scene, not its destination provider', async () => {
+function expoRootState(selected: number) {
+  return {
+    index: 0,
+    routes: [
+      {
+        name: '(tabs)',
+        state: { index: selected, routes: [{ name: 'HomeTab' }, { name: 'TasksTab' }] },
+      },
+    ],
+  };
+}
+
+test('#951 a root tab navigator presses its own items without a scene ancestor', async (t) => {
+  const layouts = [
+    {
+      name: 'direct root',
+      state: (selected: number) => ({
+        index: selected,
+        routes: [{ name: 'HomeTab' }, { name: 'TasksTab' }],
+      }),
+    },
+    { name: 'expo root', state: expoRootState },
+  ];
+  for (const layout of layouts) {
+    for (const selected of [0, 1]) {
+      await t.test(`${layout.name}: ${selected === 0 ? 'active' : 'inactive'} tab`, async () => {
+        const fixture = routedTabFixture({ nested: false, selected });
+        const result = await runCdpReplayCommands(
+          [{ tapOn: { id: 'tab-home' } }],
+          {},
+          buildDeps(createAgent(fixture.root, undefined, layout.state(selected))),
+        );
+        assert.equal(result.passed, true, JSON.stringify(result));
+        assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+      });
+    }
+  }
+});
+
+test('#951 saved Home tap from Tasks uses the enclosing Tabs scene, not its destination descriptor', async () => {
   const fixture = routedTabFixture();
   const result = await runCdpReplayCommands(
     [{ tapOn: { id: 'tab-home' } }],
@@ -243,15 +306,13 @@ test('#951 saved Home tap from Tasks uses the enclosing Tabs scene, not its dest
   assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
 });
 
-test('#951 an active destination provider cannot authorize content in an inactive scene', async () => {
+test('#951 an active destination descriptor cannot authorize content in an inactive scene', async () => {
   const fixture = routedTabFixture();
   fixture.owner.memoizedProps = sceneProps(fixture.home, fixture.tabState);
-  const destinationProps = {
+  Object.assign(fixture.outer.memoizedProps, {
     route: fixture.tasks,
-    navigation: { getState: () => fixture.tabState, isFocused: () => true },
-  };
-  Object.assign(fixture.destination.memoizedProps, destinationProps);
-  Object.assign(fixture.outer.memoizedProps, destinationProps);
+    descriptor: tabDescriptor(fixture.tasks, fixture.tabState),
+  });
   const result = await runCdpReplayCommands(
     [{ tapOn: { id: 'tab-home' } }],
     {},
@@ -288,7 +349,7 @@ test('#951 visibility assertions, waits and conditional flows share scene owners
         const fixture = routedTabFixture();
         if (proof === 'inactive')
           fixture.owner.memoizedProps = sceneProps(fixture.home, fixture.tabState);
-        if (proof === 'malformed') delete fixture.owner.memoizedProps.clearOptions;
+        if (proof === 'malformed') delete fixture.owner.memoizedProps.navigation.isFocused;
         const result = await runCdpReplayCommands(
           [command],
           {},
@@ -356,7 +417,7 @@ test('#951 replay input and live designation consumption require a focused ownin
           const args = JSON.parse(expression.slice(expression.indexOf('(') + 1, -1));
           if (!args.requireLiveInputDesignation || !mode.endsWith('before type')) return;
           changedBeforeType = true;
-          if (mode === 'malformed before type') delete owner.memoizedProps.clearOptions;
+          if (mode === 'malformed before type') delete owner.memoizedProps.navigation.isFocused;
           else focused = false;
         },
         state,

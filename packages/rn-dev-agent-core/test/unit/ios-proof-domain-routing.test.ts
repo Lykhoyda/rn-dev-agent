@@ -1154,61 +1154,8 @@ test('scene focus includes inactive parents even when names and the local select
   }
 });
 
-test('scene proof accepts each screen render contract without executing it', async (t) => {
-  for (const render of ['component', 'getComponent', 'children']) {
-    await t.test(render, () => {
-      const root = routeTree('coverage', 'home');
-      root.child.memoizedProps.screen = {
-        name: 'home',
-        [render]: () => assert.fail('render must not execute during visibility proof'),
-      };
-      const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'home' }] });
-      const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
-      assert.equal(verdict.visible, true);
-      assert.equal(verdict.route, 'home');
-      assert.equal(verdict.matchCount, 1);
-    });
-  }
-});
-
-test('malformed nearer scenes fail closed instead of borrowing an active ancestor', async (t) => {
+test('malformed nearer route scopes fail closed instead of borrowing an active ancestor', async (t) => {
   const cases: [string, (props: Record<string, any>) => void][] = [
-    [
-      'missing screen',
-      (p) => {
-        delete p.screen;
-      },
-    ],
-    [
-      'screen string',
-      (p) => {
-        p.screen = 'home';
-      },
-    ],
-    [
-      'screen name mismatch',
-      (p) => {
-        p.screen.name = 'other';
-      },
-    ],
-    [
-      'missing renderer',
-      (p) => {
-        delete p.screen.component;
-      },
-    ],
-    [
-      'invalid renderer',
-      (p) => {
-        p.screen.component = 42;
-      },
-    ],
-    [
-      'missing route',
-      (p) => {
-        delete p.route;
-      },
-    ],
     [
       'missing route key',
       (p) => {
@@ -1225,20 +1172,6 @@ test('malformed nearer scenes fail closed instead of borrowing an active ancesto
       'empty route name',
       (p) => {
         p.route.name = '';
-      },
-    ],
-    ...['getState', 'setState', 'clearOptions'].map<[string, (p: Record<string, any>) => void]>(
-      (key) => [
-        `missing scene ${key}`,
-        (p) => {
-          delete p[key];
-        },
-      ],
-    ),
-    [
-      'missing navigation',
-      (p) => {
-        delete p.navigation;
       },
     ],
     [
@@ -1379,20 +1312,47 @@ test('malformed nearer scenes fail closed instead of borrowing an active ancesto
 
 test('ownerless multi-route content cannot borrow ownership from ordinary route props', () => {
   const root = routeTree('coverage', 'home');
-  root.child.memoizedProps = {
-    screen: 'home',
-    route: { key: 'home-key', name: 'home' },
-    navigation: { isFocused: () => true },
-  };
+  root.child.memoizedProps = { screen: 'home', route: { key: 'home-key', name: 'home' } };
   const sandbox = makeFrontmostSandbox(root, {
     index: 1,
     routes: [{ name: 'login' }, { name: 'home' }],
   });
   const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
   assert.equal(verdict.visible, false);
+  assert.match(verdict.reason, /no route owner/);
   assert.equal(verdict.route, undefined);
   assert.equal(verdict.activeRoute, 'home');
   assert.equal(verdict.matchCount, 1);
+});
+
+test('a per-screen header follows the route it renders, not the scene around it', async (t) => {
+  const home = { key: 'home-key', name: 'home' };
+  const detail = { key: 'detail-key', name: 'detail' };
+  for (const covered of [true, false]) {
+    await t.test(covered ? 'covered card' : 'top card', () => {
+      const state = { index: covered ? 1 : 0, routes: [home, detail] };
+      const root = routeTree('coverage', 'home', state);
+      // @react-navigation/stack renders the card header outside SceneView with
+      // the documented header props of the screen it belongs to.
+      root.child.memoizedProps = {
+        route: home,
+        navigation: {
+          getState: () => state,
+          isFocused: () => state.routes[state.index]?.key === home.key,
+        },
+        options: {},
+        layout: { width: 390, height: 844 },
+      };
+      const sandbox = makeFrontmostSandbox(root, {
+        index: covered ? 1 : 0,
+        routes: [{ name: 'home' }, { name: 'detail' }],
+      });
+      const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+      assert.equal(verdict.visible, !covered);
+      assert.equal(verdict.route, 'home');
+      if (covered) assert.match(verdict.reason, /inactive mounted route/);
+    });
+  }
 });
 
 test('cyclic and over-budget ancestry cannot establish absence of a scene owner', async (t) => {

@@ -3,4 +3,4 @@
 'rn-dev-agent-plugin': patch
 ---
 
-Fix saved-action tab presses by resolving wrappers around a single native host and proving visibility from the owning screen scene, while preserving refusals for ambiguous controls and inactive content.
+Fix saved-action tab presses by resolving wrappers around a single native host and proving visibility from the owning route scope with navigator controls witnessed by their descriptors, while preserving refusals for ambiguous controls and inactive content.
