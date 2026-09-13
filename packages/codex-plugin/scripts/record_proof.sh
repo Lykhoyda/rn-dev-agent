@@ -10,6 +10,7 @@ RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"
 RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"
 PID_PREFIX="${RUNTIME_DIR}/record"
 SIDECAR_TEMP_DIR="${RUNTIME_DIR}/tmp"
+RECORDER_POLL_INTERVAL="0.05"
 PENDING_PULL_FILE=""
 PENDING_PULL_MANIFEST=""
 PENDING_STAGE_FILE=""
@@ -1158,7 +1159,7 @@ start_supervised_recorder() {
   assert_current_incarnation "$scope" "$incarnation"
   secure_publish "$recorder_log" ""
 
-  python3 - "$@" 3< <(printf '%s\0' "$token" "$request_path" "$response_path" "$state_path" "$child_path" "$recorder_log" "$SIDECAR_TEMP_DIR" "$scope" "$incarnation" "$platform") >> "$recorder_log" 2>&1 <<'PY' &
+  python3 - "$@" 3< <(printf '%s\0' "$token" "$request_path" "$response_path" "$state_path" "$child_path" "$recorder_log" "$SIDECAR_TEMP_DIR" "$scope" "$incarnation" "$platform" "$RECORDER_POLL_INTERVAL") >> "$recorder_log" 2>&1 <<'PY' &
 import json
 import os
 import signal
@@ -1171,11 +1172,12 @@ with os.fdopen(3, "rb") as config_file:
     config = config_file.read().split(b"\0")
 if config[-1] == b"":
     config.pop()
-if len(config) != 10:
+if len(config) != 11:
     raise RuntimeError("invalid recorder supervisor configuration")
-token, request_path, response_path, state_path, child_path, log_path, temp_dir, scope, incarnation, platform = (
+token, request_path, response_path, state_path, child_path, log_path, temp_dir, scope, incarnation, platform, poll_interval = (
     value.decode("utf-8") for value in config
 )
+poll_interval = float(poll_interval)
 command = sys.argv[1:]
 os.umask(0o077)
 
@@ -1251,7 +1253,7 @@ try:
             if child is None and not terminal_state_written:
                 if time.monotonic() >= startup_deadline:
                     raise TimeoutError("recorder supervisor start was not authorized")
-                time.sleep(0.05)
+                time.sleep(poll_interval)
 
         while child is not None and not terminal_state_written:
             if platform == "ios" and timing["ready"] is None:
@@ -1308,7 +1310,7 @@ try:
             if return_code is not None and not terminal_state_written:
                 write_terminal(return_code)
                 terminal_state_written = True
-            time.sleep(0.05)
+            time.sleep(poll_interval)
 finally:
     if child is not None:
         if child.poll() is None:
@@ -1635,13 +1637,13 @@ normalize_capture_video() {
 import json, math, sys
 try:
     pts = [float(frame["best_effort_timestamp_time"]) for frame in json.load(sys.stdin)["frames"]]
-    target = float(sys.argv[1])
+    target, poll_interval = float(sys.argv[1]), float(sys.argv[2])
     if not pts or not math.isfinite(target) or not all(math.isfinite(value) for value in pts):
         sys.exit(1)
-    sys.exit(0 if max(pts) - min(pts) <= target + 1 / 30 else 1)
+    sys.exit(0 if max(pts) - min(pts) <= target + 1 / 30 + poll_interval else 1)
 except (ValueError, KeyError, TypeError, OverflowError):
     sys.exit(1)
-' "$duration"; then
+' "$duration" "$RECORDER_POLL_INTERVAL"; then
       skipped="native frame timestamps unreadable or exceed the capture interval"
     fi
   fi
@@ -1865,7 +1867,7 @@ probe_bound_android_recorder() {
 }
 
 stop_android_recorder() {
-  [[ "${2:-false}" == "true" ]] || probe_bound_android_recorder "$1"
+  probe_bound_android_recorder "$1"
   [[ "$BOUND_ANDROID_STATE" == "present" ]] || return 0
   local serial="$BOUND_ANDROID_SERIAL"
   local remote_pid="$BOUND_ANDROID_PID"
@@ -2084,7 +2086,6 @@ cmd_stop() {
   fi
   local supervisor_failed="false"
   [[ "$supervisor_state" == failed\ * ]] && supervisor_failed="true"
-  local android_probed="false"
   local supervisor_terminal="false"
   [[ "$supervisor_state" == exited\ * || "$supervisor_state" == failed\ * ]] && supervisor_terminal="true"
 
@@ -2108,7 +2109,6 @@ cmd_stop() {
     if [[ "$platform" == "android" ]]; then
       probe_bound_android_recorder "$scope"
       stop_witness="$BOUND_ANDROID_STATE"
-      android_probed="true"
     fi
     request_supervisor_signal "$scope" "INT" "$incarnation" "$stop_witness"
     local waited=0
@@ -2193,7 +2193,7 @@ cmd_stop() {
   if [[ "$platform" == "android" ]]; then
     local serialf="${PID_PREFIX}-${scope}.serial"
     [[ -f "$serialf" ]] && adb_args+=(-s "$(cat "$serialf")")
-    stop_android_recorder "$scope" "$android_probed"
+    stop_android_recorder "$scope"
     local device_pathf="${PID_PREFIX}-${scope}.device-path"
     if [[ -f "$device_pathf" ]]; then
       device_path="$(cat "$device_pathf")"

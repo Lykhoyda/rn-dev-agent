@@ -240,6 +240,43 @@ async function normalizedFrameSize(root: string, source: string) {
   return probeSize(frame);
 }
 
+test('a last native frame inside the readiness sampling window still normalizes to 30 fps', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'record-cadence-readiness-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const input = join(root, 'native.mp4');
+  const output = join(root, 'proof.mp4');
+  await run('ffmpeg', [
+    '-v',
+    'error',
+    '-y',
+    '-f',
+    'lavfi',
+    '-i',
+    'testsrc2=size=160x320:rate=30:duration=3',
+    '-vf',
+    "select='eq(n,0)+eq(n,30)+eq(n,60)'",
+    '-fps_mode',
+    'vfr',
+    '-c:v',
+    'libx264',
+    '-bf',
+    '0',
+    input,
+  ]);
+  assert.equal(Number((await probe(input)).nb_read_frames), 3);
+
+  const { stdout } = await finalize(input, output, undefined, 1.94);
+  assert.doesNotMatch(stdout, /normalization skipped/);
+  const finalized = await probe(output);
+  assert.equal(finalized.r_frame_rate, '30/1');
+  assert.ok(Math.abs(Number(finalized.nb_read_frames) - 58) <= 1, finalized.nb_read_frames);
+
+  const refused = join(root, 'beyond-window.mp4');
+  const { stdout: warning } = await finalize(input, refused, undefined, 1.9);
+  assert.match(warning, /timestamps unreadable or exceed the capture interval/);
+  assert.equal(Number((await probe(refused)).nb_read_frames), 3);
+});
+
 test('proof re-encode keeps the capture resolution so screenshot matching stays aligned', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'record-cadence-scale-'));
   t.after(() => rm(root, { recursive: true, force: true }));
