@@ -64,14 +64,20 @@ a copy per agent.
 `(platform, deviceId, appId)` target at a time and replaces it; it does not
 hold two. `bind_device` to a different tuple is refused while runner or proof
 authority is still bound: `DEVICE_AUTHORITY_MISMATCH` (axis D), "device
-rebinding requires runner or proof authority to be released first". After
-those are released, a retained install whose `(platform, deviceId, appId)`
-does not match still refuses: `DEVICE_RECEIPT_INCOMPATIBLE` (axis D),
-"cannot replace exact-device authority while an incompatible install receipt
-is bound". That includes a different simulator or app on the same platform.
-Those refusals keep the existing target. Same-session replace succeeds when
-runner and proof are released and no incompatible install receipt is bound,
-including a cross-platform replacement before install is bound.
+rebinding requires runner or proof authority to be released first". An
+Observe started with `observe action="start"` or `"restart"` also refuses
+with `DEVICE_AUTHORITY_MISMATCH`, "device rebinding requires the explicitly
+started Observe authority to be released first" — stop it with
+`observe action="stop"` (the session-autostarted Observe yields the device
+axis on bind and does not need a manual stop). After runner and proof are
+released, a retained install whose `(platform, deviceId, appId)` does not
+match still refuses: `DEVICE_RECEIPT_INCOMPATIBLE` (axis D), "cannot replace
+exact-device authority while an incompatible install receipt is bound". That
+includes a different simulator or app on the same platform. Those refusals
+keep the existing target. Same-session replace succeeds when runner, proof,
+and any explicitly started Observe are released and no incompatible install
+receipt is bound, including a cross-platform replacement before install is
+bound.
 
 **`cross_platform_verify` does not change those bounds.** It compares
 accessibility snapshots cached in this MCP process and validated against this
@@ -286,7 +292,7 @@ got:
 | `PACKAGE_MANAGER_CONFLICT` / `_UNDECLARED` | Ambiguous install authority | Report both facts; user resolves |
 | `attach` (live/unknown owner) | Another session owns the worktree | Close it or use another worktree |
 | `RESOURCE_CLAIM_CONFLICT` ("the same-root owner is live; a live owner is never released") | A second session on this copy (axis S) | Use another copy; a live owner is never released |
-| `DEVICE_AUTHORITY_MISMATCH` / `DEVICE_RECEIPT_INCOMPATIBLE` (rebinding a different exact target) | Runner or proof still bound, or an incompatible install receipt is bound (axis D) | Keep the existing target. Do not start a second session to feed `cross_platform_verify` |
+| `DEVICE_AUTHORITY_MISMATCH` / `DEVICE_RECEIPT_INCOMPATIBLE` (rebinding a different exact target) | Runner, proof, or an explicitly started Observe still bound, or an incompatible install receipt is bound (axis D) | Keep the existing target. For explicit Observe, `observe action="stop"` then retry. Do not start a second session to feed `cross_platform_verify` |
 | Non-convergent `transport-restart` / `unrecoverable-in-band` | Startup cleanup is refusing | Report the manual remedy facts per the recovery table above; `unrecoverable-in-band` has no restart or repair remedy |
 | Multiple booted devices, none named | Ambient ambiguity | Ask the user to name one |
 | `AUTOMATION_CLEANUP_UNPROVEN` | Process-group absence unproven | Run the returned manual command, retry once |
