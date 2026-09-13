@@ -226,7 +226,7 @@ function tabDescriptor(route: { key: string; name: string }, state: RouteState, 
 
 // @react-navigation/bottom-tabs renders the bar as a sibling of the scenes and
 // hands each item the descriptor of the route it navigates to.
-function routedTabFixture({ nested = true, selected = 1, legacy = false } = {}) {
+function routedTabFixture({ nested = true, selected = 1, legacy = false, routeOuter = true } = {}) {
   const fixture = tabFixture();
   const home = { key: 'home-tab', name: 'HomeTab' };
   const tasks = { key: 'tasks-tab', name: 'TasksTab' };
@@ -266,24 +266,24 @@ function routedTabFixture({ nested = true, selected = 1, legacy = false } = {}) 
       },
     ),
   );
-  const routeContext = appendChild(
+  // v7 nests the route context outside the navigation one; v5/v6 nest them the other way round.
+  const [outerValue, innerValue] = routeOuter
+    ? [home, descriptors[home.key].navigation]
+    : [descriptors[home.key].navigation, home];
+  const outerContext = appendChild(
     provider,
-    makeFiber({}, { value: home, children: fixture.outer }),
+    makeFiber({}, { value: outerValue, children: fixture.outer }),
   );
-  routeContext.tag = 10;
-  const navigationContext = appendChild(
-    routeContext,
-    makeFiber(
-      {},
-      {
-        value: descriptors[home.key].navigation,
-        children: fixture.outer,
-      },
-    ),
+  outerContext.tag = 10;
+  const innerContext = appendChild(
+    outerContext,
+    makeFiber({}, { value: innerValue, children: fixture.outer }),
   );
-  navigationContext.tag = 10;
+  innerContext.tag = 10;
+  const routeContext = routeOuter ? outerContext : innerContext;
+  const navigationContext = routeOuter ? innerContext : outerContext;
   const focusContext = appendChild(
-    navigationContext,
+    innerContext,
     makeFiber(
       {},
       {
@@ -687,12 +687,6 @@ test('#951 destination binding refuses malformed and cross-navigator association
       },
     ],
     [
-      'malformed route context',
-      (f) => {
-        f.routeContext.memoizedProps.value = { key: f.home.key };
-      },
-    ],
-    [
       'truncated scope ancestry',
       (f) => {
         let parent = makeFiber({});
@@ -723,6 +717,70 @@ test('#951 destination binding refuses malformed and cross-navigator association
       assert.equal(result.failureCode, 'ASSERTION_FAILED');
       assert.equal(result.failedStepIndex, 0);
       assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+    });
+  }
+});
+
+test('#951 legacy-ordered route contexts still prove tab ownership', async (t) => {
+  for (const selected of [0, 1]) {
+    await t.test(selected === 0 ? 'active tab' : 'inactive tab', async () => {
+      const fixture = routedTabFixture({ routeOuter: false, selected });
+      const agent = createAgent(fixture.root, undefined, fixture.state);
+      const verdict = JSON.parse(
+        String((await agent.evaluate('__RN_AGENT.isTestIdFrontmost("tab-home")')).value),
+      );
+      assert.equal(verdict.visible, true, JSON.stringify(verdict));
+      const result = await runCdpReplayCommands(
+        [{ tapOn: { id: 'tab-home' } }],
+        {},
+        buildDeps(agent),
+      );
+      assert.equal(result.passed, true, JSON.stringify(result));
+      assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+    });
+  }
+});
+
+test('#951 route-shaped contexts without a navigation partner are skipped, not refused', async (t) => {
+  const cases: [string, (fixture: ReturnType<typeof routedTabFixture>) => void][] = [
+    [
+      'expo-router params beside a route node',
+      (f) => {
+        const params = insertScope(f.outer, {
+          value: { key: 'details-key', name: 'Details' },
+          children: null,
+        });
+        params.tag = 10;
+        const routeNode = insertScope(params, {
+          value: { route: 'details', contextKey: './details.tsx' },
+          children: null,
+        });
+        routeNode.tag = 10;
+      },
+    ],
+    [
+      'half-shaped route context',
+      (f) => {
+        f.routeContext.memoizedProps.value = { key: f.home.key };
+      },
+    ],
+  ];
+  for (const [name, change] of cases) {
+    await t.test(name, async () => {
+      const fixture = routedTabFixture();
+      change(fixture);
+      const agent = createAgent(fixture.root, undefined, fixture.state);
+      const verdict = JSON.parse(
+        String((await agent.evaluate('__RN_AGENT.isTestIdFrontmost("tab-home")')).value),
+      );
+      assert.equal(verdict.visible, true, JSON.stringify(verdict));
+      const result = await runCdpReplayCommands(
+        [{ tapOn: { id: 'tab-home' } }],
+        {},
+        buildDeps(agent),
+      );
+      assert.equal(result.passed, true, JSON.stringify(result));
+      assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
     });
   }
 });

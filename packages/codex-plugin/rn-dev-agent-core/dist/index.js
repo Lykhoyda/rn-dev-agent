@@ -51658,7 +51658,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 68;
+var HELPERS_VERSION = 69;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -56224,6 +56224,16 @@ var INJECTED_HELPERS = `
         return Object.prototype.hasOwnProperty.call(props, key);
       });
     }
+    function adjacentNavigationContext(ancestry, from, step) {
+      for (var index = from + step; index >= 0 && index < ancestry.length && ancestry[index].tag === 10; index += step) {
+        var value = ancestry[index].memoizedProps && ancestry[index].memoizedProps.value;
+        if (
+          value && typeof value === 'object' && typeof value.isFocused === 'function'
+          && (typeof value.getState === 'function' || typeof value.dangerouslyGetState === 'function')
+        ) return index;
+      }
+      return -1;
+    }
     function routeScope(route, navigation, start, end, transparent) {
       var record = readRouteRecord(route);
       if (!record) throw new Error('invalid scope route');
@@ -56309,23 +56319,16 @@ var INJECTED_HELPERS = `
           if (!sceneDescriptor || typeof sceneDescriptor !== 'object') throw new Error('invalid scene descriptor');
           scopes.push(routeScope(sceneDescriptor.route, sceneDescriptor.navigation, ownerIndex, ownerIndex, false));
         }
-        if (ownerFiber.tag === 10 && ownerProps.value && typeof ownerProps.value === 'object'
-          && ('key' in ownerProps.value || 'name' in ownerProps.value)) {
-          var contextNavigation = null;
-          var contextNavigationIndex = -1;
-          for (var contextIndex = ownerIndex - 1; contextIndex >= 0 && ancestry[contextIndex].tag === 10; contextIndex--) {
-            var contextValue = ancestry[contextIndex].memoizedProps.value;
-            if (contextValue && typeof contextValue === 'object'
-              && ('isFocused' in contextValue || 'getState' in contextValue || 'dangerouslyGetState' in contextValue)) {
-              if (contextNavigation) throw new Error('ambiguous route context');
-              contextNavigation = contextValue;
-              contextNavigationIndex = contextIndex;
-            }
+        if (ownerFiber.tag === 10 && readRouteRecord(ownerProps.value)) {
+          var pairIndex = adjacentNavigationContext(ancestry, ownerIndex, -1);
+          if (pairIndex < 0) pairIndex = adjacentNavigationContext(ancestry, ownerIndex, 1);
+          if (pairIndex >= 0) {
+            var pairProps = ancestry[pairIndex].memoizedProps;
+            scopes.push(routeScope(ownerProps.value, pairProps.value,
+              Math.min(ownerIndex, pairIndex), Math.max(ownerIndex, pairIndex),
+              hasOnlyProps(ownerProps, ['value', 'children'])
+                && hasOnlyProps(pairProps, ['value', 'children'])));
           }
-          if (!contextNavigation) throw new Error('unpaired route context');
-          scopes.push(routeScope(ownerProps.value, contextNavigation, contextNavigationIndex, ownerIndex,
-            hasOnlyProps(ownerProps, ['value', 'children'])
-              && hasOnlyProps(ancestry[contextNavigationIndex].memoizedProps, ['value', 'children'])));
         }
       }
       for (var scopeIndex = 0; scopeIndex < scopes.length; scopeIndex++) {
