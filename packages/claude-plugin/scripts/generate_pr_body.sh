@@ -16,6 +16,42 @@ fi
 
 OUTPUT="$PROOF_DIR/PR-BODY.md"
 
+project_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
+case "$OUTPUT" in
+  /*) remaining_path="$OUTPUT" ;;
+  *) remaining_path="$PWD/$OUTPUT" ;;
+esac
+checked_path=""
+within_project=false
+while [[ -n "$remaining_path" ]]; do
+  component="${remaining_path%%/*}"
+  if [[ "$remaining_path" == */* ]]; then
+    remaining_path="${remaining_path#*/}"
+  else
+    remaining_path=""
+  fi
+  [[ -z "$component" ]] && continue
+  checked_path="$checked_path/$component"
+  if [[ "$within_project" == true && -L "$checked_path" ]]; then
+    echo "Error: refusing symlinked PR body destination: $OUTPUT" >&2
+    exit 1
+  fi
+  if [[ "$within_project" == false && -d "$checked_path" ]]; then
+    physical_path="$(CDPATH= cd -- "$checked_path" && pwd -P)"
+    case "$physical_path/" in
+      "$project_root/"*) within_project=true ;;
+    esac
+  fi
+done
+if [[ -L "$OUTPUT" ]]; then
+  echo "Error: refusing symlinked PR body destination: $OUTPUT" >&2
+  exit 1
+fi
+if [[ -d "$OUTPUT" ]]; then
+  echo "Error: PR body destination is a directory: $OUTPUT" >&2
+  exit 1
+fi
+
 title="$(grep -m1 '^# ' "$PROOF_DIR/PROOF.md" | sed 's/^# //')"
 [[ -z "$title" ]] && title="Feature Implementation"
 
@@ -90,6 +126,10 @@ diff_stat=""
 if git rev-parse --git-dir >/dev/null 2>&1; then
   diff_stat="$(git diff --stat "${BASE_BRANCH}...HEAD" 2>/dev/null || echo '(no diff available)')"
 fi
+
+destination_dir="$(CDPATH= cd -- "$PROOF_DIR" && pwd -P)"
+temporary="$(mktemp "$destination_dir/.PR-BODY.XXXXXX")"
+trap 'rm -f -- "$temporary"' EXIT
 
 {
   echo "## Summary"
@@ -171,6 +211,7 @@ fi
   echo ""
   echo "---"
   echo "_Generated with [rn-dev-agent](https://github.com/Lykhoyda/rn-dev-agent)_"
-} > "$OUTPUT"
+} > "$temporary"
+mv -f -- "$temporary" "$destination_dir/PR-BODY.md"
 
 echo "PR body generated: $OUTPUT"
