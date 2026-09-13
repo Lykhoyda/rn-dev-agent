@@ -184,7 +184,7 @@ Add timed step labels to the recorded video. Build a JSON array mapping each
 step to a time range, then call the label subcommand:
 
 ```bash
-rn-record-proof label \
+bash "<package-root>/scripts/record_proof.sh" label \
   docs/proof/<slug>/flow-ios.mp4 \
   docs/proof/<slug>/flow-ios-labeled.mp4 \
   '[{"start":0,"end":5,"text":"Step 1: <description>"},{"start":5,"end":12,"text":"Step 2: <description>"}]'
