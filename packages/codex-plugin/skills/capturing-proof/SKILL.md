@@ -26,7 +26,7 @@ reviewer, do not record it.
 3. Starts video recording on the active simulator/emulator
 4. **Replays the rehearsed flow** via `maestro_run` (deterministic, hesitation-free)
 5. Captures numbered screenshots at each step
-6. Stops recording and converts to GIF (if ffmpeg available)
+6. Stops recording — normalizes the video to 30 fps and converts to GIF (if ffmpeg available)
 7. **Labels the video** — adds a text bar below the video with step descriptions (default)
 8. **Validates the recording** — verifies the feature is actually visible
 9. Writes PROOF.md and generates PR-BODY.md
