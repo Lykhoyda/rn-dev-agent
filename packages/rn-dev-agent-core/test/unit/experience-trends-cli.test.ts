@@ -8,6 +8,7 @@ import {
   rmSync,
   statSync,
   utimesSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,6 +19,11 @@ import { ExperienceRecorder, EXPERIENCE_STORE_NAME } from '../../dist/experience
 import type { ExperienceTrendReport } from '../../dist/experience/trends.js';
 
 const CLI = fileURLToPath(new URL('../../dist/experience-trends.js', import.meta.url));
+const HOST_CLIS = ['claude-plugin', 'codex-plugin'].map((host) =>
+  fileURLToPath(
+    new URL(`../../../${host}/rn-dev-agent-core/dist/experience-trends.js`, import.meta.url),
+  ),
+);
 const SINCE = '2026-06-01T00:00:00.000Z';
 const NOW = new Date('2026-06-10T12:00:00.000Z');
 const FUTURE = '2099-01-01T00:00:00.000Z';
@@ -72,8 +78,8 @@ function fixture(t: TestContext) {
   return { directory, path, records: recorder.read() };
 }
 
-function runCli(directory: string, args: string[]) {
-  const result = spawnSync(process.execPath, [CLI, ...args], {
+function runCli(directory: string, args: string[], cli = CLI) {
+  const result = spawnSync(process.execPath, [cli, ...args], {
     cwd: directory,
     env: { ...process.env, RN_DEV_AGENT_EXPERIENCE_DIR: directory, RN_PROJECT_ROOT: directory },
     encoding: 'utf8',
@@ -161,6 +167,125 @@ test('compiled CLI JSON exposes systemic evidence alongside unchanged tool rows 
   assertNoRecoveryOrDeadEndClaim(result.stdout);
   assert.deepEqual(snapshot(directory, path), before);
 });
+
+for (const legacyOnly of [false, true]) {
+  test(`core and both shipped CLIs agree on ${legacyOnly ? 'legacy-only' : 'mixed'} evidence without rewriting history`, (t) => {
+    const { directory, path, records } = fixture(t);
+    const template = records.find((record) => record.classification === 'UNKNOWN');
+    assert.ok(template);
+    const envelope = { ok: false, code: FACTS.code, meta: { axis: 'M', cause: 'private' } };
+    const legacy = [
+      {
+        signature: 'legacy-direct',
+        tool: 'old_direct',
+        count: 3,
+        symptom: JSON.stringify(envelope),
+      },
+      {
+        signature: 'legacy-mcp',
+        tool: 'old_mcp',
+        count: 2,
+        symptom: JSON.stringify({ content: [{ text: JSON.stringify(envelope) }] }),
+      },
+      {
+        signature: 'legacy-prefix',
+        tool: 'old_prefix',
+        count: 1,
+        symptom: `${FACTS.code}: refused`,
+      },
+      {
+        signature: 'legacy-ambiguous',
+        tool: 'old_ambiguous',
+        count: 1,
+        symptom: `nested ${FACTS.code}: refused`,
+      },
+      {
+        signature: 'legacy-malformed',
+        tool: 'old_malformed',
+        count: 1,
+        symptom: JSON.stringify(envelope),
+        authorityRefusal: null,
+      },
+      {
+        signature: 'legacy-truncated',
+        tool: 'old_truncated',
+        count: 1,
+        symptom: `{"code":"${FACTS.code}","meta": [TRUNCATED]`,
+      },
+    ].map((fields) => ({
+      ...template,
+      platform: 'ios',
+      firstSeen: '2026-05-01T00:00:00.000Z',
+      recovery: `PASS immediately followed FAIL for ${fields.tool}`,
+      recoveryCount: 1,
+      lastRecoveredAt: NOW.toISOString(),
+      unknownReasons: {},
+      ...fields,
+    }));
+    const stored = [...(legacyOnly ? [] : records), ...legacy];
+    writeFileSync(path, `${stored.map((record) => JSON.stringify(record)).join('\n')}\n`);
+    utimesSync(path, NOW, NOW);
+    const before = snapshot(directory, path);
+    for (const since of [SINCE, FUTURE]) {
+      let expectedJson: Omit<ExperienceTrendReport, 'generatedAt'> | undefined;
+      let expectedText: string | undefined;
+      for (const cli of [CLI, ...HOST_CLIS]) {
+        const json = runCli(directory, ['--since', since, '--json'], cli);
+        assert.equal(json.status, 0, cli);
+        assert.equal(json.stderr, '', cli);
+        const { generatedAt, ...report }: ExperienceTrendReport = JSON.parse(json.stdout);
+        assert.ok(Number.isFinite(Date.parse(generatedAt)));
+        if (expectedJson) assert.deepEqual(report, expectedJson, cli);
+        else expectedJson = report;
+        const row = report.systemicRefusals[0];
+        assert.equal(row.count, legacyOnly ? 5 : 10);
+        assert.equal(row.code, FACTS.code);
+        assert.equal(row.axis, 'M');
+        assert.equal(row.cause, null);
+        assert.deepEqual(
+          row.provenance,
+          legacyOnly ? ['legacy-derived'] : ['legacy-derived', 'recorded'],
+        );
+        assert.equal(row.firstSeen, legacy[0].firstSeen);
+        assert.equal(row.recoveryEvidence, 'not-verified');
+        assert.equal(row.currentAuthorityState, 'unknown');
+        assert.equal(report.systemicRefusals.length, legacyOnly ? 2 : 3);
+        assert.equal(
+          report.families.find((row) => row.classification === 'UNKNOWN')?.count,
+          legacyOnly ? 9 : 10,
+        );
+        assert.equal(
+          report.recurring.find((row) => row.signature === 'legacy-direct')?.classification,
+          'UNKNOWN',
+        );
+        if (since === FUTURE || legacyOnly) assert.deepEqual(report.newSincePreviousReport, []);
+        assertNoRecoveryOrDeadEndClaim(json.stdout);
+        assert.deepEqual(snapshot(directory, path), before, cli);
+
+        const text = runCli(directory, ['--since', since], cli);
+        assert.equal(text.status, 0, cli);
+        assert.equal(text.stderr, '', cli);
+        assert.match(
+          text.stdout,
+          /^Report generated at [^\n]+; pass this value to --since next time\.$/m,
+        );
+        const normalized = text.stdout.replace(
+          /^Report generated at [^;]+;/m,
+          'Report generated at <timestamp>;',
+        );
+        if (expectedText) assert.equal(normalized, expectedText, cli);
+        else expectedText = normalized;
+        assert.match(text.stdout, /recovery not verified/);
+        assertNoRecoveryOrDeadEndClaim(text.stdout);
+        assert.deepEqual(snapshot(directory, path), before, cli);
+      }
+    }
+    assert.deepEqual(
+      JSON.parse(`[${before.bytes.toString('utf8').trim().split('\n').join(',')}]`),
+      stored,
+    );
+  });
+}
 
 test('compiled CLI text prints occurrences, contributors, observations, unknowns, and evidence limits', (t) => {
   const { directory, path } = fixture(t);

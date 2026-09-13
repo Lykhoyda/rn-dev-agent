@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import {
   AUTHORITY_REFUSAL_CODES,
+  MAX_AUTHORITY_ENVELOPE_BYTES,
   authorityRefusalSystemicKey,
 } from '../../dist/experience/authority-refusal.js';
 import {
@@ -62,6 +63,17 @@ function oldCollections(report: ExperienceTrendReport) {
     recurring: report.recurring,
   };
 }
+
+function legacyFixture(overrides: Partial<ExperienceRecord> = {}): ExperienceRecord {
+  const record = recordFixture({ classification: 'UNKNOWN', ...overrides });
+  delete record.authorityRefusal;
+  delete record.systemicKey;
+  return record;
+}
+
+const contentEnvelope = (value: unknown) => ({
+  content: [{ type: 'text', text: JSON.stringify(value) }],
+});
 
 for (const scenario of [
   {
@@ -241,9 +253,8 @@ test('persisted axis and cause values are revalidated with an explicit unknown c
   assert.doesNotMatch(JSON.stringify(rows), /private remedy|managed-metro-stop-proof-missing/);
 });
 
-test('invalid or absent extensions cannot join via family, symptom, or a stored key', () => {
+test('malformed extensions cannot fall back to legacy symptoms, family, or a stored key', () => {
   const extensions: unknown[] = [
-    undefined,
     null,
     false,
     42,
@@ -267,6 +278,7 @@ test('invalid or absent extensions cannot join via family, symptom, or a stored 
       }),
     ),
   );
+  records.push(recordFixture({ authorityRefusal: undefined, symptom: `${FACTS.code}: refused` }));
   const report = buildExperienceTrendReport(records, SINCE, NOW);
   assert.deepEqual(report.systemicRefusals, []);
   assert.deepEqual(report.families, [
@@ -277,6 +289,221 @@ test('invalid or absent extensions cannot join via family, symptom, or a stored 
     },
   ]);
   assert.equal(report.newSincePreviousReport.length, records.length);
+});
+
+for (const code of AUTHORITY_REFUSAL_CODES) {
+  test(`legacy ${code} joins through direct JSON, first MCP content, and anchored prefixes`, () => {
+    const envelope = { ok: false, code, error: 'refused', meta: { axis: 'M', cause: 'private' } };
+    for (const [index, symptom] of [
+      JSON.stringify(envelope),
+      JSON.stringify(contentEnvelope(envelope)),
+      `${code}: refusal observed`,
+      `${code}: refusal observed [TRUNCATED]`,
+    ].entries()) {
+      const record = legacyFixture({ symptom, status: index % 2 ? 'ERROR' : 'FAIL', count: 3 });
+      const before = structuredClone(record);
+      const report = buildExperienceTrendReport([record], SINCE, NOW);
+      const facts = { code, axis: index < 2 ? ('M' as const) : null, cause: null };
+      assert.deepEqual(report.systemicRefusals, [
+        {
+          systemicKey: authorityRefusalSystemicKey(facts, 'ios'),
+          classification: `FF_${code}`,
+          ...facts,
+          platform: 'ios',
+          count: 3,
+          tools: [record.tool],
+          memberSignatures: [record.signature],
+          firstSeen: record.firstSeen,
+          lastSeen: record.lastSeen,
+          recurring: true,
+          recoveryEvidence: 'not-verified',
+          currentAuthorityState: 'unknown',
+          scope: 'retained-local-history',
+          provenance: ['legacy-derived'],
+        },
+      ]);
+      assert.deepEqual(record, before);
+      assert.deepEqual(report.families, [{ classification: 'UNKNOWN', count: 3, patterns: 1 }]);
+    }
+  });
+}
+
+test('legacy membership rejects ambiguous, incomplete, nested, and conflicting evidence', () => {
+  const code = FACTS.code;
+  const symptoms: unknown[] = [
+    undefined,
+    null,
+    42,
+    {},
+    [],
+    '',
+    'ordinary failure',
+    code,
+    `${code.toLowerCase()}: refused`,
+    `${code}_EXTRA: refused`,
+    `Error: ${code}: refused`,
+    ` ${code}: refused`,
+    `nested ${code}: refused`,
+    `stack\n    at ${code}: refused`,
+    `FUTURE_CODE: ${code}: refused`,
+    `{"code":"${code}","meta": [TRUNCATED]`,
+    JSON.stringify([{ code }]),
+    JSON.stringify(code),
+    'null',
+    '42',
+    JSON.stringify({ error: `${code}: refused`, meta: { code } }),
+    JSON.stringify(contentEnvelope(contentEnvelope({ code }))),
+    JSON.stringify({ content: [{ text: '{}' }, { text: JSON.stringify({ code }) }] }),
+    JSON.stringify({ content: [{ text: '{truncated' }, { text: JSON.stringify({ code }) }] }),
+    JSON.stringify({ content: [{ text: `${code}: refused` }] }),
+    JSON.stringify(contentEnvelope([{ code }])),
+    JSON.stringify(contentEnvelope(`{"code":"${code}"`)),
+  ];
+  for (const unknown of ['FUTURE_CODE', '', null, 42, {}, [code]]) {
+    symptoms.push(
+      JSON.stringify({ code: unknown, ...contentEnvelope({ code }) }),
+      JSON.stringify(contentEnvelope({ code: unknown, error: `${code}: refused` })),
+    );
+  }
+  const records: ExperienceRecord[] = symptoms.map((symptom, index) =>
+    JSON.parse(
+      JSON.stringify({
+        ...legacyFixture({ signature: String(index), classification: `FF_${code}`, tool: code }),
+        symptom,
+        systemicKey: authorityRefusalSystemicKey(FACTS, 'ios'),
+      }),
+    ),
+  );
+  const before = structuredClone(records);
+  assert.deepEqual(buildExperienceTrendReport(records, SINCE, NOW).systemicRefusals, []);
+  assert.deepEqual(records, before);
+});
+
+test('legacy JSON and prefixes are bounded by UTF-8 bytes before parsing', () => {
+  const code = FACTS.code;
+  const base = JSON.stringify({ code, padding: '' });
+  const exact = JSON.stringify({
+    code,
+    padding: ' '.repeat(MAX_AUTHORITY_ENVELOPE_BYTES - Buffer.byteLength(base)),
+  });
+  const prefix = `${code}:`.padEnd(MAX_AUTHORITY_ENVELOPE_BYTES, ' ');
+  for (const symptom of [exact, prefix]) {
+    assert.equal(Buffer.byteLength(symptom), 16 * 1024);
+    assert.equal(
+      buildExperienceTrendReport([legacyFixture({ symptom })], SINCE, NOW).systemicRefusals.length,
+      1,
+    );
+  }
+  for (const symptom of [
+    exact + ' ',
+    prefix + ' ',
+    JSON.stringify({ code, padding: '\u00e9'.repeat(9000) }),
+  ]) {
+    assert.deepEqual(
+      buildExperienceTrendReport([legacyFixture({ symptom })], SINCE, NOW).systemicRefusals,
+      [],
+    );
+  }
+});
+
+test('legacy precedence admits only observed allowlisted metadata and the record platform', () => {
+  const envelope = {
+    code: FACTS.code,
+    error: 'SESSION_AUTHORITY_REQUIRED: redbox',
+    meta: { axis: 'M', cause: 'managed-metro-stop-proof-missing', platform: 'android' },
+    ...contentEnvelope({ code: 'SESSION_AUTHORITY_REQUIRED', meta: { axis: 'S' } }),
+  };
+  const records = [
+    legacyFixture({ signature: 'direct', symptom: JSON.stringify(envelope) }),
+    legacyFixture({ signature: 'mcp', symptom: JSON.stringify(contentEnvelope(envelope)) }),
+  ];
+  const row = buildExperienceTrendReport(records, SINCE, NOW).systemicRefusals[0];
+  assert.equal(row.code, FACTS.code);
+  assert.equal(row.axis, 'M');
+  assert.equal(row.cause, null);
+  assert.equal(row.platform, 'ios');
+  assert.equal(row.count, 2);
+  for (const meta of [undefined, null, [], { axis: 'm' }, { axis: ['M'] }]) {
+    const record = legacyFixture({
+      platform: null,
+      symptom: JSON.stringify({
+        code: FACTS.code,
+        meta,
+        details: { axis: 'M', cause: 'private' },
+        platform: 'ios',
+      }),
+    });
+    const rows = buildExperienceTrendReport([record], SINCE, NOW).systemicRefusals;
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].axis, null);
+    assert.equal(rows[0].cause, null);
+    assert.equal(rows[0].platform, null);
+  }
+});
+
+test('mixed provenance aggregates once without promoting historical recoveries or changing old projections', () => {
+  const records = [
+    recordFixture({
+      signature: 'recorded',
+      count: 2,
+      symptom: 'SESSION_AUTHORITY_REQUIRED: conflict',
+    }),
+    legacyFixture({
+      signature: 'legacy',
+      tool: 'old_tool',
+      count: 3,
+      symptom: JSON.stringify({ code: FACTS.code, meta: { axis: 'M' } }),
+      firstSeen: '2026-05-01T00:00:00.000Z',
+      recovery: 'PASS immediately followed FAIL for old_tool',
+      recoveryCount: 2,
+      lastRecoveredAt: NOW.toISOString(),
+      unknownReasons: {},
+    }),
+    legacyFixture({ signature: 'unknown-axis', symptom: `${FACTS.code}: refused` }),
+    legacyFixture({
+      signature: 'unknown-platform',
+      platform: null,
+      symptom: JSON.stringify({ code: FACTS.code, meta: { axis: 'M' } }),
+    }),
+  ];
+  const before = structuredClone(records);
+  for (const record of records) Object.freeze(record);
+  Object.freeze(records);
+  const report = buildExperienceTrendReport(records, SINCE, NOW);
+  assert.equal(report.systemicRefusals.length, 3);
+  const row = report.systemicRefusals[0];
+  assert.equal(row.count, 5);
+  assert.deepEqual(row.tools, ['old_tool', 'rn_session']);
+  assert.deepEqual(row.memberSignatures, ['legacy', 'recorded']);
+  assert.deepEqual(row.provenance, ['legacy-derived', 'recorded']);
+  assert.equal(row.firstSeen, records[1].firstSeen);
+  assert.equal(row.recoveryEvidence, 'not-verified');
+  assert.equal(row.currentAuthorityState, 'unknown');
+  const withoutEligibleEvidence = records.map((record) => ({
+    ...record,
+    authorityRefusal: undefined,
+    symptom: 'ordinary failure',
+  }));
+  assert.deepEqual(
+    oldCollections(report),
+    oldCollections(buildExperienceTrendReport(withoutEligibleEvidence, SINCE, NOW)),
+  );
+  assert.deepEqual(report.families, [
+    { classification: 'UNKNOWN', count: 5, patterns: 3 },
+    { classification: 'FF_METRO_ORIGIN_MISMATCH', count: 2, patterns: 1 },
+  ]);
+  assert.equal(
+    report.recurring.find((row) => row.signature === 'legacy')?.classification,
+    'UNKNOWN',
+  );
+  for (const input of [
+    records,
+    [...records].reverse(),
+    [records[2], records[0], records[3], records[1]],
+  ]) {
+    assert.deepEqual(buildExperienceTrendReport(input, SINCE, NOW), report);
+  }
+  assert.deepEqual(records, before);
 });
 
 test('tampered, missing, and shared stored keys cannot split or merge validated groups', () => {
