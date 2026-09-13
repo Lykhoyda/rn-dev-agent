@@ -64483,7 +64483,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 69;
+    HELPERS_VERSION = 70;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -69068,8 +69068,11 @@ var init_injected_helpers = __esm({
     var inactiveOwner = false;
     var boundControls = [];
     try {
-      var exactHosts = matches.filter(function(fiber) { return fiber.tag === 5; });
-      var ownershipTarget = exactHosts.length === 1 ? exactHosts[0] : target;
+      var exactHosts = new Set();
+      for (var hostIndex = 0; hostIndex < matches.length; hostIndex++) {
+        if (matches[hostIndex].tag === 5) exactHosts.add(matches[hostIndex]);
+      }
+      var ownershipTarget = exactHosts.size === 1 ? exactHosts.values().next().value : target;
       var ancestry = [];
       var current = ownershipTarget;
       while (current && ancestry.length < 1000) {
@@ -69088,7 +69091,7 @@ var init_injected_helpers = __esm({
           var destination = readRouteRecord(ownerProps.route);
           var descriptor = ownerProps.descriptor;
           if (
-            exactHosts.length !== 1 || !destination
+            exactHosts.size !== 1 || !destination
             || typeof ownerProps.focused !== 'boolean' || typeof ownerProps.onPress !== 'function'
             || !descriptor || !sameRoute(descriptor.route, destination)
           ) throw new Error('invalid destination control');

@@ -43,6 +43,7 @@ function createAgent(
   root: Fiber,
   beforeEvaluate?: (expression: string) => void,
   navState: Record<string, unknown> = { index: 0, routes: [{ name: 'Home' }] },
+  repeatRoot = false,
 ) {
   const sandbox: Record<string, unknown> = {
     Array,
@@ -69,7 +70,10 @@ function createAgent(
   sandbox.__expo_router_state__ = navState;
   sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
     renderers: new Map([[1, {}]]),
-    getFiberRoots: (id: number) => (id === 1 ? new Set([{ current: root }]) : new Set()),
+    getFiberRoots: (id: number) =>
+      id === 1
+        ? new Set(repeatRoot ? [{ current: root }, { current: root }] : [{ current: root }])
+        : new Set(),
   };
   vm.createContext(sandbox);
   vm.runInContext(INJECTED_HELPERS, sandbox);
@@ -783,6 +787,46 @@ test('#951 route-shaped contexts without a navigation partner are skipped, not r
       assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
     });
   }
+});
+
+test('#951 a mounted host observed twice presses once, two distinct hosts still refuse', async (t) => {
+  await t.test('repeated observation of one host', async () => {
+    const fixture = routedTabFixture();
+    const agent = createAgent(fixture.root, undefined, fixture.state, true);
+    const verdict = JSON.parse(
+      String((await agent.evaluate('__RN_AGENT.isTestIdFrontmost("tab-home")')).value),
+    );
+    assert.equal(verdict.visible, true, JSON.stringify(verdict));
+    assert.equal(verdict.matchCount, 1);
+    const result = await runCdpReplayCommands(
+      [{ tapOn: { id: 'tab-home' } }],
+      {},
+      buildDeps(agent),
+    );
+    assert.equal(result.passed, true, JSON.stringify(result));
+    assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+  });
+
+  await t.test('two distinct hosts under the same control', async () => {
+    const fixture = routedTabFixture();
+    fixture.outerHost.memoizedProps.testID = 'tab-home';
+    const agent = createAgent(fixture.root, undefined, fixture.state);
+    const verdict = JSON.parse(
+      String((await agent.evaluate('__RN_AGENT.isTestIdFrontmost("tab-home")')).value),
+    );
+    assert.equal(verdict.visible, false);
+    assert.equal(verdict.code, 'ASSERTION_FAILED');
+    assert.equal(verdict.matchCount, 1);
+    const result = await runCdpReplayCommands(
+      [{ tapOn: { id: 'tab-home' } }],
+      {},
+      buildDeps(agent),
+    );
+    assert.equal(result.passed, false);
+    assert.equal(result.failureCode, 'ASSERTION_FAILED');
+    assert.equal(result.failedStepIndex, 0);
+    assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+  });
 });
 
 test('#951 destination binding uses local descriptors across repeated names and legacy parent getters', async (t) => {

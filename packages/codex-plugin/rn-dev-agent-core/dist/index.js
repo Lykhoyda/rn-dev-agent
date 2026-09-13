@@ -51658,7 +51658,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 69;
+var HELPERS_VERSION = 70;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -56243,8 +56243,11 @@ var INJECTED_HELPERS = `
     var inactiveOwner = false;
     var boundControls = [];
     try {
-      var exactHosts = matches.filter(function(fiber) { return fiber.tag === 5; });
-      var ownershipTarget = exactHosts.length === 1 ? exactHosts[0] : target;
+      var exactHosts = new Set();
+      for (var hostIndex = 0; hostIndex < matches.length; hostIndex++) {
+        if (matches[hostIndex].tag === 5) exactHosts.add(matches[hostIndex]);
+      }
+      var ownershipTarget = exactHosts.size === 1 ? exactHosts.values().next().value : target;
       var ancestry = [];
       var current = ownershipTarget;
       while (current && ancestry.length < 1000) {
@@ -56263,7 +56266,7 @@ var INJECTED_HELPERS = `
           var destination = readRouteRecord(ownerProps.route);
           var descriptor = ownerProps.descriptor;
           if (
-            exactHosts.length !== 1 || !destination
+            exactHosts.size !== 1 || !destination
             || typeof ownerProps.focused !== 'boolean' || typeof ownerProps.onPress !== 'function'
             || !descriptor || !sameRoute(descriptor.route, destination)
           ) throw new Error('invalid destination control');

@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 69;
+export const HELPERS_VERSION = 70;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -4588,8 +4588,11 @@ export const INJECTED_HELPERS = `
     var inactiveOwner = false;
     var boundControls = [];
     try {
-      var exactHosts = matches.filter(function(fiber) { return fiber.tag === 5; });
-      var ownershipTarget = exactHosts.length === 1 ? exactHosts[0] : target;
+      var exactHosts = new Set();
+      for (var hostIndex = 0; hostIndex < matches.length; hostIndex++) {
+        if (matches[hostIndex].tag === 5) exactHosts.add(matches[hostIndex]);
+      }
+      var ownershipTarget = exactHosts.size === 1 ? exactHosts.values().next().value : target;
       var ancestry = [];
       var current = ownershipTarget;
       while (current && ancestry.length < 1000) {
@@ -4608,7 +4611,7 @@ export const INJECTED_HELPERS = `
           var destination = readRouteRecord(ownerProps.route);
           var descriptor = ownerProps.descriptor;
           if (
-            exactHosts.length !== 1 || !destination
+            exactHosts.size !== 1 || !destination
             || typeof ownerProps.focused !== 'boolean' || typeof ownerProps.onPress !== 'function'
             || !descriptor || !sameRoute(descriptor.route, destination)
           ) throw new Error('invalid destination control');
