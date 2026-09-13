@@ -7,6 +7,14 @@ export interface RunningProductVersion {
   pluginVersion?: string;
 }
 
+const EXECUTING_CORE_PACKAGE_NAMES = new Set([
+  'rn-dev-agent-core',
+  'rn-dev-agent-core-claude-runtime',
+  'rn-dev-agent-core-codex-runtime',
+]);
+
+const productByModuleUrl = new Map<string, RunningProductVersion | null>();
+
 export function projectRunningProductVersion(input: {
   coreVersion: string | null;
   pluginVersion: string | null;
@@ -30,12 +38,19 @@ function readPackageNameVersion(path: string): { name?: unknown; version?: unkno
   }
 }
 
-function readNamedPackageVersion(startDir: string, packageName: string): string | null {
+function findExecutingCorePackage(
+  startDir: string,
+): { name: string; version: string; dir: string } | null {
   let cursor = startDir;
   for (let i = 0; i < 8; i++) {
     const parsed = readPackageNameVersion(join(cursor, 'package.json'));
-    if (parsed?.name === packageName && typeof parsed.version === 'string' && parsed.version) {
-      return parsed.version;
+    if (
+      typeof parsed?.name === 'string' &&
+      EXECUTING_CORE_PACKAGE_NAMES.has(parsed.name) &&
+      typeof parsed.version === 'string' &&
+      parsed.version
+    ) {
+      return { name: parsed.name, version: parsed.version, dir: cursor };
     }
     const parent = dirname(cursor);
     if (parent === cursor) break;
@@ -44,28 +59,45 @@ function readNamedPackageVersion(startDir: string, packageName: string): string 
   return null;
 }
 
-function readPluginManifestVersion(startDir: string): string | null {
-  const candidates = [
-    join(startDir, '..', '..', '..', '.claude-plugin', 'plugin.json'),
-    join(startDir, '..', '..', '..', '.codex-plugin', 'plugin.json'),
-    join(startDir, '..', '..', '..', 'claude-plugin', '.claude-plugin', 'plugin.json'),
-    join(startDir, '..', '..', '..', 'codex-plugin', '.codex-plugin', 'plugin.json'),
-  ];
-  for (const candidate of candidates) {
+function pluginManifestCandidates(packageDir: string, packageName: string): string[] {
+  const hostRoot = join(packageDir, '..');
+  const claudeHost = join(hostRoot, '.claude-plugin', 'plugin.json');
+  const codexHost = join(hostRoot, '.codex-plugin', 'plugin.json');
+  const claudeSource = join(hostRoot, 'claude-plugin', '.claude-plugin', 'plugin.json');
+  const codexSource = join(hostRoot, 'codex-plugin', '.codex-plugin', 'plugin.json');
+  if (packageName === 'rn-dev-agent-core-codex-runtime') {
+    return [codexHost, claudeHost, codexSource, claudeSource];
+  }
+  if (packageName === 'rn-dev-agent-core-claude-runtime') {
+    return [claudeHost, codexHost, claudeSource, codexSource];
+  }
+  return [claudeHost, codexHost, claudeSource, codexSource];
+}
+
+function readPluginManifestVersion(packageDir: string, packageName: string): string | null {
+  for (const candidate of pluginManifestCandidates(packageDir, packageName)) {
     const parsed = readPackageNameVersion(candidate);
     if (typeof parsed?.version === 'string' && parsed.version) return parsed.version;
   }
   return null;
 }
 
+function resolveRunningProductVersion(fromUrl: string): RunningProductVersion | null {
+  const executing = findExecutingCorePackage(dirname(fileURLToPath(fromUrl)));
+  if (!executing) return null;
+  return projectRunningProductVersion({
+    coreVersion: executing.version,
+    pluginVersion: readPluginManifestVersion(executing.dir, executing.name),
+  });
+}
+
 export function readRunningProductVersion(
   fromUrl: string = import.meta.url,
 ): RunningProductVersion | null {
-  const startDir = dirname(fileURLToPath(fromUrl));
-  return projectRunningProductVersion({
-    coreVersion: readNamedPackageVersion(startDir, 'rn-dev-agent-core'),
-    pluginVersion: readPluginManifestVersion(startDir),
-  });
+  if (productByModuleUrl.has(fromUrl)) return productByModuleUrl.get(fromUrl) ?? null;
+  const product = resolveRunningProductVersion(fromUrl);
+  productByModuleUrl.set(fromUrl, product);
+  return product;
 }
 
 export function withRunningProduct<T extends Record<string, unknown>>(

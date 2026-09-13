@@ -2,11 +2,11 @@
 // from the live session process, not a separately inspected on-disk install.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   projectRunningProductVersion,
   readRunningProductVersion,
@@ -35,11 +35,19 @@ function moduleUrl(root: string): string {
   return pathToFileURL(join(root, 'rn-dev-agent-core', 'dist', 'session', 'dummy.js')).href;
 }
 
+function hostBundleUrl(root: string, file = 'index.js'): string {
+  return pathToFileURL(join(root, 'rn-dev-agent-core', 'dist', file)).href;
+}
+
 function writeCorePackage(root: string, version: string): void {
   writeJson(join(root, 'rn-dev-agent-core', 'package.json'), {
     name: 'rn-dev-agent-core',
     version,
   });
+}
+
+function writeHostRuntime(root: string, name: string, version: string): void {
+  writeJson(join(root, 'rn-dev-agent-core', 'package.json'), { name, version });
 }
 
 test('projectRunningProductVersion always names the executing core version', () => {
@@ -108,6 +116,65 @@ test('readRunningProductVersion ignores RN_DEV_AGENT_PLUGIN_VERSION', () => {
     if (previous === undefined) delete process.env.RN_DEV_AGENT_PLUGIN_VERSION;
     else process.env.RN_DEV_AGENT_PLUGIN_VERSION = previous;
   }
+});
+
+test('readRunningProductVersion reads a Claude host bundle from dist/index.js', () => {
+  const root = fixtureRoot();
+  writeHostRuntime(root, 'rn-dev-agent-core-claude-runtime', '0.71.7');
+  writeJson(join(root, '.claude-plugin', 'plugin.json'), { version: '0.76.7' });
+
+  assert.deepEqual(readRunningProductVersion(hostBundleUrl(root)), {
+    coreVersion: '0.71.7',
+    pluginVersion: '0.76.7',
+  });
+});
+
+test('readRunningProductVersion reads a Codex host bundle from dist/supervisor.js', () => {
+  const root = fixtureRoot();
+  writeHostRuntime(root, 'rn-dev-agent-core-codex-runtime', '0.90.0');
+  writeJson(join(root, '.codex-plugin', 'plugin.json'), { version: '1.0.8' });
+
+  assert.deepEqual(readRunningProductVersion(hostBundleUrl(root, 'supervisor.js')), {
+    coreVersion: '0.90.0',
+    pluginVersion: '1.0.8',
+  });
+});
+
+test('readRunningProductVersion prefers the Codex host manifest over a sibling Claude checkout', () => {
+  const root = fixtureRoot();
+  writeHostRuntime(join(root, 'codex-plugin'), 'rn-dev-agent-core-codex-runtime', '0.91.0');
+  writeJson(join(root, 'codex-plugin', '.codex-plugin', 'plugin.json'), { version: '1.2.0' });
+  writeJson(join(root, 'claude-plugin', '.claude-plugin', 'plugin.json'), { version: '9.9.9' });
+
+  assert.deepEqual(readRunningProductVersion(hostBundleUrl(join(root, 'codex-plugin'))), {
+    coreVersion: '0.91.0',
+    pluginVersion: '1.2.0',
+  });
+});
+
+test('readRunningProductVersion reuses the first read for a module URL', () => {
+  const root = fixtureRoot();
+  writeHostRuntime(root, 'rn-dev-agent-core-claude-runtime', '1.0.8');
+  writeJson(join(root, '.claude-plugin', 'plugin.json'), { version: '1.0.8' });
+  const url = hostBundleUrl(root);
+
+  assert.deepEqual(readRunningProductVersion(url), { coreVersion: '1.0.8' });
+  writeHostRuntime(root, 'rn-dev-agent-core-claude-runtime', '9.9.9');
+  writeJson(join(root, '.claude-plugin', 'plugin.json'), { version: '9.9.9' });
+  assert.deepEqual(readRunningProductVersion(url), { coreVersion: '1.0.8' });
+});
+
+test('readRunningProductVersion reports product for the committed Claude host bundle', () => {
+  const bundle = fileURLToPath(
+    new URL('../../../../claude-plugin/rn-dev-agent-core/dist/index.js', import.meta.url),
+  );
+  const runtime = JSON.parse(readFileSync(join(bundle, '..', '..', 'package.json'), 'utf8')) as {
+    name: string;
+    version: string;
+  };
+  assert.equal(runtime.name, 'rn-dev-agent-core-claude-runtime');
+  const product = readRunningProductVersion(pathToFileURL(bundle).href);
+  assert.equal(product?.coreVersion, runtime.version);
 });
 
 function readyRuntime() {
