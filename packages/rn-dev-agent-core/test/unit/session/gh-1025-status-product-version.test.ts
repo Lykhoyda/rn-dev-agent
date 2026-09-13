@@ -267,6 +267,50 @@ test('readRunningProductVersion snapshots the Codex launching host at module loa
   }
 });
 
+test('readRunningProductVersion does not report a Codex plugin version from a Claude runtime', () => {
+  const root = fixtureRoot();
+  writeHostRuntime(root, 'rn-dev-agent-core-claude-runtime', '0.71.7');
+  const claudeHost = join(root, 'claude-install');
+  const codexHost = join(root, 'codex-install');
+  writeJson(join(claudeHost, '.claude-plugin', 'plugin.json'), { version: '1.0.8' });
+  writeJson(join(codexHost, '.codex-plugin', 'plugin.json'), { version: '9.9.9' });
+
+  withLaunchHostEnv(
+    {
+      CLAUDE_PLUGIN_ROOT: claudeHost,
+      RN_DEV_AGENT_CODEX_PLUGIN_ROOT: codexHost,
+    },
+    () => {
+      assert.deepEqual(readRunningProductVersion(hostBundleUrl(root)), {
+        coreVersion: '0.71.7',
+        pluginVersion: '1.0.8',
+      });
+    },
+  );
+});
+
+test('readRunningProductVersion does not report a Claude plugin version from a Codex runtime', () => {
+  const root = fixtureRoot();
+  writeHostRuntime(root, 'rn-dev-agent-core-codex-runtime', '0.71.7');
+  const claudeHost = join(root, 'claude-install');
+  const codexHost = join(root, 'codex-install');
+  writeJson(join(claudeHost, '.claude-plugin', 'plugin.json'), { version: '9.9.9' });
+  writeJson(join(codexHost, '.codex-plugin', 'plugin.json'), { version: '1.0.8' });
+
+  withLaunchHostEnv(
+    {
+      CLAUDE_PLUGIN_ROOT: claudeHost,
+      RN_DEV_AGENT_CODEX_PLUGIN_ROOT: codexHost,
+    },
+    () => {
+      assert.deepEqual(readRunningProductVersion(hostBundleUrl(root, 'supervisor.js')), {
+        coreVersion: '0.71.7',
+        pluginVersion: '1.0.8',
+      });
+    },
+  );
+});
+
 test('readRunningProductVersion reports product for the committed Claude host bundle', () => {
   const bundle = fileURLToPath(
     new URL('../../../../claude-plugin/rn-dev-agent-core/dist/index.js', import.meta.url),

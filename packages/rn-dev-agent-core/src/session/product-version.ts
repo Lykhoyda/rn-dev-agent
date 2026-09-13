@@ -65,13 +65,23 @@ function envPluginRoot(name: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
-function launchingHostManifestCandidates(): string[] {
+function launchingHostManifestCandidates(packageName: string): string[] {
   const candidates: string[] = [];
   const codex =
     envPluginRoot('RN_DEV_AGENT_CODEX_PLUGIN_ROOT') ?? envPluginRoot('CODEX_PLUGIN_ROOT');
   const claude = envPluginRoot('CLAUDE_PLUGIN_ROOT');
-  if (codex) candidates.push(join(codex, '.codex-plugin', 'plugin.json'));
-  if (claude) candidates.push(join(claude, '.claude-plugin', 'plugin.json'));
+  const codexManifest = codex ? join(codex, '.codex-plugin', 'plugin.json') : undefined;
+  const claudeManifest = claude ? join(claude, '.claude-plugin', 'plugin.json') : undefined;
+  if (packageName === 'rn-dev-agent-core-claude-runtime') {
+    if (claudeManifest) candidates.push(claudeManifest);
+    return candidates;
+  }
+  if (packageName === 'rn-dev-agent-core-codex-runtime') {
+    if (codexManifest) candidates.push(codexManifest);
+    return candidates;
+  }
+  if (codexManifest) candidates.push(codexManifest);
+  if (claudeManifest) candidates.push(claudeManifest);
   return candidates;
 }
 
@@ -92,7 +102,7 @@ function pluginManifestCandidates(packageDir: string, packageName: string): stri
 
 function readPluginManifestVersion(packageDir: string, packageName: string): string | null {
   for (const candidate of [
-    ...launchingHostManifestCandidates(),
+    ...launchingHostManifestCandidates(packageName),
     ...pluginManifestCandidates(packageDir, packageName),
   ]) {
     const parsed = readPackageNameVersion(candidate);
