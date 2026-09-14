@@ -320,22 +320,6 @@ test('formatLockConflictMessage: renders all fields for human diagnosis', () => 
   assert.doesNotMatch(msg, /home directory/);
 });
 
-test('formatLockConflictMessage: names a home-keyed root without inventing an app', () => {
-  const conflict = {
-    status: 'conflict',
-    lockPath: '/tmp/rn-dev-agent-cdp-501-abcd1234.lock',
-    pid: 54321,
-    projectRoot: '/Users/anton',
-    startedAt: 1_700_000_000_000,
-    ageMs: 5 * 60 * 1000,
-  };
-  const msg = formatLockConflictMessage(conflict, '/Users/anton/');
-  assert.match(msg, /The project root is the home directory/);
-  assert.match(msg, /Start the host\nfrom the app root/);
-  assert.doesNotMatch(msg, /--no-lock/);
-  assert.doesNotMatch(formatLockConflictMessage(conflict, '/Users/other'), /home directory/);
-});
-
 test('formatLockConflictMessage: seconds age rendering for young locks', () => {
   const msg = formatLockConflictMessage({
     status: 'conflict',

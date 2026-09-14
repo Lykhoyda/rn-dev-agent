@@ -92153,7 +92153,7 @@ function buildGracefulShutdown(deps) {
 import { createHash as createHash21 } from "node:crypto";
 import { execFileSync as execFileSync17 } from "node:child_process";
 import { closeSync as closeSync13, existsSync as existsSync33, mkdirSync as mkdirSync21, openSync as openSync13, readFileSync as readFileSync35, statSync as statSync15, unlinkSync as unlinkSync16, writeFileSync as writeFileSync18, writeSync as writeSync3 } from "node:fs";
-import { homedir as homedir10, tmpdir as tmpdir12, userInfo as userInfo2 } from "node:os";
+import { tmpdir as tmpdir12, userInfo as userInfo2 } from "node:os";
 import { join as join52, resolve as resolve19 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
@@ -92414,10 +92414,9 @@ function isValidLockBody(obj) {
   const o = obj;
   return typeof o.pid === "number" && typeof o.projectRoot === "string" && typeof o.startedAt === "number";
 }
-function formatLockConflictMessage(conflict2, home = homedir10()) {
+function formatLockConflictMessage(conflict2) {
   const ageSec = Math.floor(conflict2.ageMs / 1e3);
   const ageStr = ageSec < 60 ? `${ageSec}s ago` : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago` : `${Math.floor(ageSec / 3600)}h ${Math.floor(ageSec % 3600 / 60)}m ago`;
-  const homeKeyed = resolve19(conflict2.projectRoot) === resolve19(home);
   return [
     `Another rn-dev-agent MCP already owns this project root.`,
     `  PID:      ${conflict2.pid}`,
@@ -92429,12 +92428,6 @@ function formatLockConflictMessage(conflict2, home = homedir10()) {
     `  1. Use the session that already owns this project root, OR`,
     `  2. Quit that session's editor window or MCP client. The lock is released on exit`,
     `     and reclaimed automatically once the owning process is gone.`,
-    ...homeKeyed ? [
-      ``,
-      `The project root is the home directory: this MCP was started outside an app`,
-      `checkout, so every session launched this way shares one lock. Start the host`,
-      `from the app root instead (see Getting Started for your host).`
-    ] : [],
     ``,
     `Running two MCPs in the same project causes missed events and state flicker.`
   ].join("\n");

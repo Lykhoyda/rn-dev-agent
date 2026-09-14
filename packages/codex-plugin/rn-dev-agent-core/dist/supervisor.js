@@ -52,7 +52,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 function defaultProjectRoot() {
   return process.env.CLAUDE_USER_CWD ?? process.cwd();
@@ -109,10 +109,9 @@ function isValidLockBody(obj) {
   const o = obj;
   return typeof o.pid === "number" && typeof o.projectRoot === "string" && typeof o.startedAt === "number";
 }
-function formatLockConflictMessage(conflict2, home = homedir()) {
+function formatLockConflictMessage(conflict2) {
   const ageSec = Math.floor(conflict2.ageMs / 1e3);
   const ageStr = ageSec < 60 ? `${ageSec}s ago` : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago` : `${Math.floor(ageSec / 3600)}h ${Math.floor(ageSec % 3600 / 60)}m ago`;
-  const homeKeyed = resolve(conflict2.projectRoot) === resolve(home);
   return [
     `Another rn-dev-agent MCP already owns this project root.`,
     `  PID:      ${conflict2.pid}`,
@@ -124,12 +123,6 @@ function formatLockConflictMessage(conflict2, home = homedir()) {
     `  1. Use the session that already owns this project root, OR`,
     `  2. Quit that session's editor window or MCP client. The lock is released on exit`,
     `     and reclaimed automatically once the owning process is gone.`,
-    ...homeKeyed ? [
-      ``,
-      `The project root is the home directory: this MCP was started outside an app`,
-      `checkout, so every session launched this way shares one lock. Start the host`,
-      `from the app root instead (see Getting Started for your host).`
-    ] : [],
     ``,
     `Running two MCPs in the same project causes missed events and state flicker.`
   ].join("\n");
@@ -348,7 +341,7 @@ var init_lockfile = __esm({
 // packages/rn-dev-agent-core/dist/logger.js
 import { createWriteStream, mkdirSync as mkdirSync2, existsSync as existsSync2 } from "node:fs";
 import { join as join2 } from "node:path";
-import { tmpdir as tmpdir2, homedir as homedir2 } from "node:os";
+import { tmpdir as tmpdir2, homedir } from "node:os";
 function resolveLogPath() {
   if (process.argv.includes("--diagnostic-contract-probe"))
     return null;
@@ -363,7 +356,7 @@ function resolveLogPath() {
     } catch {
     }
   }
-  const fallbackDir = join2(homedir2(), ".claude", "logs");
+  const fallbackDir = join2(homedir(), ".claude", "logs");
   try {
     if (!existsSync2(fallbackDir))
       mkdirSync2(fallbackDir, { recursive: true });
@@ -11639,15 +11632,15 @@ var init_worktree_inheritance = __esm({
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
 import { readFileSync as readFileSync7, writeFileSync as writeFileSync3, unlinkSync as unlinkSync4, mkdirSync as mkdirSync6, renameSync as renameSync3, lstatSync as lstatSync6 } from "node:fs";
 import { join as join8, dirname as dirname6 } from "node:path";
-import { homedir as homedir3 } from "node:os";
+import { homedir as homedir2 } from "node:os";
 function getStateDir() {
   if (process.env.XDG_STATE_HOME) {
     return join8(process.env.XDG_STATE_HOME, "rn-dev-agent");
   }
   if (process.platform === "darwin") {
-    return join8(homedir3(), "Library", "Application Support", "rn-dev-agent");
+    return join8(homedir2(), "Library", "Application Support", "rn-dev-agent");
   }
-  return join8(homedir3(), ".rn-dev-agent");
+  return join8(homedir2(), ".rn-dev-agent");
 }
 function runnerStatePath(key) {
   const safe = key.replace(/[^A-Za-z0-9._:-]/g, "_");
@@ -21582,7 +21575,7 @@ var init_quiescence = __esm({
 import { execFileSync as execFileSync9 } from "node:child_process";
 import { createHash as createHash7 } from "node:crypto";
 import { existsSync as existsSync13, mkdirSync as mkdirSync9, readdirSync as readdirSync3, readFileSync as readFileSync14, rmSync as rmSync5, writeFileSync as writeFileSync7 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { dirname as dirname8, join as join17 } from "node:path";
 function resolveArtifactDecision(input) {
   if (input.envOverride)
@@ -21778,7 +21771,7 @@ function defaultArtifactDeps() {
   return {
     env: process.env,
     readManifest: readCommittedManifest,
-    cacheDir: (version2, platform) => cacheDirFor(homedir4(), process.platform, version2, platform),
+    cacheDir: (version2, platform) => cacheDirFor(homedir3(), process.platform, version2, platform),
     existsSync: existsSync13,
     sha256File,
     listFiles: (dir) => {
@@ -29816,7 +29809,7 @@ var init_discovery = __esm({
 // packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
 import { execFileSync as execFileSync11 } from "node:child_process";
 import { existsSync as existsSync15, readFileSync as readFileSync17, unlinkSync as unlinkSync7 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
+import { homedir as homedir4 } from "node:os";
 import { join as join22 } from "node:path";
 function selectInstalledLegacyApps(installed) {
   return LEGACY_BUNDLE_IDS.filter((id) => installed.has(id));
@@ -29973,8 +29966,8 @@ var init_ensure_single_runner = __esm({
   "packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js"() {
     "use strict";
     init_discovery();
-    DAEMON_JSON = join22(homedir5(), ".agent-device", "daemon.json");
-    DAEMON_LOCK = join22(homedir5(), ".agent-device", "daemon.lock");
+    DAEMON_JSON = join22(homedir4(), ".agent-device", "daemon.json");
+    DAEMON_LOCK = join22(homedir4(), ".agent-device", "daemon.lock");
     DAEMON_FILES = [DAEMON_JSON, DAEMON_LOCK];
     SIGKILL_GRACE_MS = 500;
     LEGACY_BUNDLE_IDS = [
@@ -37025,7 +37018,7 @@ __export(release_android_slot_exports, {
 import { execFile as execFileCb9 } from "node:child_process";
 import { promisify as promisify12 } from "node:util";
 import { existsSync as existsSync18, readFileSync as readFileSync20, unlinkSync as unlinkSync9 } from "node:fs";
-import { homedir as homedir6 } from "node:os";
+import { homedir as homedir5 } from "node:os";
 import { join as join26 } from "node:path";
 function isProtectedPid(pid, selfPid, parentPid) {
   return pid === selfPid || pid === parentPid;
@@ -37173,8 +37166,8 @@ var init_release_android_slot = __esm({
     init_rn_android_runner_client();
     init_agent_device_wrapper();
     execFile13 = promisify12(execFileCb9);
-    DAEMON_JSON2 = join26(homedir6(), ".agent-device", "daemon.json");
-    DAEMON_LOCK2 = join26(homedir6(), ".agent-device", "daemon.lock");
+    DAEMON_JSON2 = join26(homedir5(), ".agent-device", "daemon.json");
+    DAEMON_LOCK2 = join26(homedir5(), ".agent-device", "daemon.lock");
     DAEMON_FILES2 = [DAEMON_JSON2, DAEMON_LOCK2];
     SIGKILL_GRACE_MS2 = 500;
     ADB_TIMEOUT_MS = 5e3;
@@ -72737,7 +72730,7 @@ var init_maestro_runner_pin = __esm({
 import { spawnSync as spawnSync3 } from "node:child_process";
 import { createHash as createHash13 } from "node:crypto";
 import { accessSync, chmodSync as chmodSync5, constants as constants7, copyFileSync as copyFileSync2, cpSync as cpSync2, existsSync as existsSync24, lstatSync as lstatSync13, mkdirSync as mkdirSync17, mkdtempSync as mkdtempSync2, readFileSync as readFileSync25, readdirSync as readdirSync8, readlinkSync as readlinkSync5, realpathSync as realpathSync13, renameSync as renameSync7, rmSync as rmSync10, symlinkSync as symlinkSync4, unlinkSync as unlinkSync11, writeFileSync as writeFileSync13 } from "node:fs";
-import { homedir as homedir7 } from "node:os";
+import { homedir as homedir6 } from "node:os";
 import { basename as basename7, dirname as dirname17, isAbsolute as isAbsolute9, join as join36, relative as relative7, resolve as resolve12, sep as sep6 } from "node:path";
 import { gunzipSync } from "node:zlib";
 function parseActionEnginePinVersion(enginePin) {
@@ -72774,7 +72767,7 @@ function compareVersions(a, b) {
 function meetsMaestroRunnerFloor(version2) {
   return /^\d+(?:\.\d+)*$/.test(version2) && compareVersions(version2, MAESTRO_RUNNER_PIN.version) >= 0;
 }
-function pinCacheRoot(home = homedir7()) {
+function pinCacheRoot(home = homedir6()) {
   const override = process.env.RN_DEV_AGENT_RUNNER_CACHE;
   const base = override && override.length > 0 ? override : join36(home, ".cache", "rn-dev-agent");
   return resolve12(base, "maestro-runner", MAESTRO_RUNNER_PIN.version);
@@ -77123,7 +77116,7 @@ var init_path_safety = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/redact.js
-import { homedir as homedir8 } from "node:os";
+import { homedir as homedir7 } from "node:os";
 function redactString(value) {
   let result = value.replace(HOME_RE, "~");
   KEYED_SECRET_RE.lastIndex = 0;
@@ -77171,7 +77164,7 @@ var HOME, HOME_RE, SECRET_PATTERNS, KEYED_SECRET_RE, PII_PATTERNS, AUTH_PATHS, M
 var init_redact = __esm({
   "packages/rn-dev-agent-core/dist/util/redact.js"() {
     "use strict";
-    HOME = homedir8();
+    HOME = homedir7();
     HOME_RE = new RegExp(HOME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
     SECRET_PATTERNS = [
       /(?:sk|pk|api|key|token|secret|password|auth)[-_]?[A-Za-z0-9_-]{20,}/gi,
@@ -77604,7 +77597,7 @@ import { mkdirSync as mkdirSync18 } from "node:fs";
 import { execFile as execFile17 } from "node:child_process";
 import { promisify as promisify17 } from "node:util";
 import { dirname as dirname20, join as join40, resolve as resolve15 } from "node:path";
-import { homedir as homedir9 } from "node:os";
+import { homedir as homedir8 } from "node:os";
 function parseSimctlDevicesAll(jsonText) {
   try {
     const parsed = JSON.parse(jsonText);
@@ -77647,7 +77640,7 @@ function deriveScreenshotPath(args, now = Date.now, rand = Math.random) {
   }
   if (args.path?.startsWith("~")) {
     if (args.path.startsWith("~/"))
-      return join40(homedir9(), args.path.slice(2));
+      return join40(homedir8(), args.path.slice(2));
     throw new TildeScreenshotPathError(`Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`);
   }
   if (args.path)
@@ -86861,7 +86854,7 @@ var init_dev_settings = __esm({
 // packages/rn-dev-agent-core/dist/experience/evidence.js
 import { createHash as createHash18, randomBytes as randomBytes8, randomUUID as randomUUID11 } from "node:crypto";
 import { chmodSync as chmodSync7, existsSync as existsSync31, mkdirSync as mkdirSync20, readFileSync as readFileSync32, readdirSync as readdirSync12, renameSync as renameSync9, statSync as statSync15, unlinkSync as unlinkSync14, writeFileSync as writeFileSync16 } from "node:fs";
-import { homedir as homedir10, platform as hostPlatform, release } from "node:os";
+import { homedir as homedir9, platform as hostPlatform, release } from "node:os";
 import { dirname as dirname25, join as join48 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function configuredExperienceDirectory() {
@@ -86892,7 +86885,7 @@ function sanitizeForEvidence(value, redact2) {
   return REDACTION_FAILED;
 }
 function applyRedactionRules(value) {
-  let result = value.replaceAll(homedir10(), "~").replace(KEYED_SECRET, "$1[REDACTED_SECRET]");
+  let result = value.replaceAll(homedir9(), "~").replace(KEYED_SECRET, "$1[REDACTED_SECRET]");
   for (const [pattern, replacement] of REDACTION_RULES) {
     pattern.lastIndex = 0;
     result = result.replace(pattern, replacement);
@@ -87315,7 +87308,7 @@ var init_evidence = __esm({
     DEFAULT_MAX_RECORDS = 500;
     DEFAULT_RETENTION_DAYS = 14;
     MAX_EVIDENCE_POINTERS = 3;
-    EXPERIENCE_DIRECTORY = join48(homedir10(), ".claude", "rn-agent", "experience");
+    EXPERIENCE_DIRECTORY = join48(homedir9(), ".claude", "rn-agent", "experience");
     EXPERIENCE_STORE_NAME = "patterns.jsonl";
     MAX_SYMPTOM_LENGTH = 2048;
     RUNNER_DIAGNOSTICS_MAX_BYTES = 256 * 1024;
