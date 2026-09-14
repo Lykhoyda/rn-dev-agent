@@ -1,5 +1,22 @@
 # rn-dev-agent-plugin
 
+## 1.0.9
+
+### Patch Changes
+
+- c3fc818: Managed dev-client launches and relaunches now keep the Expo dev-menu onboarding tutorial and launch-time sheet from auto-opening over a native segment or after a reload on a fresh install, on by default and configurable per target class with `autoHideDevMenu` in `.rn-agent/config.json` (GH #1004).
+- 814337d: Document the one-source-owner-per-worktree and one-exact-device-target-per-session authority bounds in the workflow skill, with pointers from the CLAUDE.md template and other workflow skills (GH #1026). Source ownership is the worktree/checkout, not only the app package root: a sibling app root in the same checkout is also blocked, and separate linked worktrees are independent copies. A session holds one `(platform, deviceId, appId)` target at a time and replaces it after runner, proof, any explicitly started Observe, and any active recorder are released and no incompatible install receipt is bound. Authoritative cross-target `cross_platform_verify` is currently unsupported.
+- d76a9e2: Publish each release's runner zips and bundled runner trust root before the Version Packages merge advertises the plugin version, so a fresh install never verifies against a stale runner-manifest.json.
+- 5c10049: Fix saved-action tab presses by resolving wrappers around a single native host and proving visibility from the owning route scope with navigator controls bound to their enclosing navigator and transparent destination providers, while preserving refusals for ambiguous controls and inactive content (HELPERS_VERSION bumped to 70 so connected sessions re-inject).
+- 7ab6ae4: Normalize native recordings to 30 fps H.264 at their captured resolution through the authenticated stop boundary while preserving captured timing, stage the conversion inside the private runtime directory, refuse symlinked PR-body destinations, and embed proof screenshots and demo GIFs at 400px width in the generated PR body.
+- 2085479: `rn_session` status and `cdp_status` now report the running product on the envelope: `product.coreVersion` is the core package the live session process loaded, and `product.pluginVersion` is included when the host plugin manifest differs (GH #1025).
+- Updated dependencies [c3fc818]
+- Updated dependencies [814337d]
+- Updated dependencies [5c10049]
+- Updated dependencies [7ab6ae4]
+- Updated dependencies [2085479]
+  - rn-dev-agent-core@1.0.9
+
 ## 1.0.8
 
 ### Patch Changes
