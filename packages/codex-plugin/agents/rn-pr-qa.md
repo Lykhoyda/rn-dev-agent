@@ -242,8 +242,13 @@ text follows the same redaction.
 Do not approve, dismiss reviews, edit the branch, or merge from this QA
 report.
 
-Self-check: if the draft has a slash-started absolute path, a `.local`
-host, a UUID, or `/Users/`, redact it, then post. GitHub
+Self-check the rewritten GitHub body after `--attach` rewrites, not
+the pre-upload `qa-pr-report.md`. That file MAY contain slash-started
+local Markdown image/video paths so `--attach` can host them. After
+rewrite, if the body GitHub will display still has a slash-started
+absolute path, a `.local` host, a UUID, or `/Users/`, redact it, then
+`--edit-last`. Hostname, UUID, `/Users/`, and `.local` stay banned in
+the public comment, alt text, PR bodies, and issue text. GitHub
 `user-attachments` URLs may keep their asset ids.
 
 ### Step 9 — Report (GitHub-hosted screenshots and video)
@@ -257,7 +262,8 @@ access on the PR's repository. Stop if either is missing.
 #### 9a. Body file with local paths
 
 Write `qa-pr-report.md` using the **local** file paths (so `--attach`
-can rewrite them). Markdown image refs for screenshots; a video
+can rewrite them). Do **not** redact those paths before `--attach`.
+Markdown image refs for screenshots; a video
 reference must be the only content in its paragraph so GitHub renders
 a player. Do **not** put HTML `<img>` in this first body — `--attach`
 rewrites markdown image references, not HTML `src`.
