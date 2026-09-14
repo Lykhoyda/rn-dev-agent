@@ -456,10 +456,11 @@ test('Android defers a fast transport exit for its result and never repairs an e
       assert.equal(expired.android_stop.result, 'expired');
       assert.equal(expired.disposition, 'uncertain');
       const late = capture.control(
-        'request_supervisor_signal "$scope" ANDROID_STOP_RESULT "$incarnation" "$BEGIN_NONCE:signaled"',
+        'request_supervisor_signal "$scope" ANDROID_STOP_RESULT "$incarnation" "$BEGIN_NONCE:signaled"; printf "%s" "$SUPERVISOR_RESPONSE"',
         { BEGIN_NONCE: begin.stdout },
       );
-      assert.notEqual(late.status, 0);
+      assert.equal(late.status, 0, late.stderr);
+      assert.equal(late.stdout, 'gone');
       assert.deepEqual(capture.timing(), expired);
     }
     assert.equal(capture.timing().stop, first.stop);
@@ -491,6 +492,58 @@ test('Android normalizes at 30 fps when the device stop handshake outlasts one s
   });
   assert.equal(retry.status, 0, retry.stderr);
   assert.match(retry.stdout, /^Saved: /m);
+});
+
+test('Android stop recovers from a terminal supervisor, an expired live bracket and legacy state', async (t) => {
+  const terminal = androidCaptureFixture(t);
+  writeFileSync(join(terminal.state.root, 'transport-done'), '');
+  while (!readFileSync(terminal.events, 'utf8').includes('transport-exit')) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const begin = terminal.control(
+    'request_supervisor_signal "$scope" ANDROID_STOP_BEGIN "$incarnation"; printf "%s" "$SUPERVISOR_RESPONSE"',
+  );
+  assert.equal(begin.status, 0, begin.stderr);
+  assert.equal(begin.stdout, 'gone');
+  assert.equal(terminal.timing().stop, null);
+  assert.equal(terminal.timing().disposition, 'early-exit');
+
+  const stuck = androidCaptureFixture(t, { TRANSPORT_STUCK: '1' });
+  const opened = stuck.control(
+    'request_supervisor_signal "$scope" ANDROID_STOP_BEGIN "$incarnation"; printf "%s" "$SUPERVISOR_REQUEST_NONCE"',
+  );
+  assert.equal(opened.status, 0, opened.stderr);
+  await new Promise((resolve) => setTimeout(resolve, 5_200));
+  const expired = stuck.timing();
+  assert.equal(expired.android_stop.result, 'expired');
+  const late = stuck.control(
+    'request_supervisor_signal "$scope" ANDROID_STOP_RESULT "$incarnation" "$BEGIN_NONCE:signaled"; printf "%s" "$SUPERVISOR_RESPONSE"',
+    { BEGIN_NONCE: opened.stdout },
+  );
+  assert.equal(late.status, 0, late.stderr);
+  assert.equal(late.stdout, 'expired');
+  assert.deepEqual(stuck.timing(), expired);
+  const clock = stuck.control(
+    'read_capture_timing "$scope" "$incarnation" android; printf "%s|%s" "$CAPTURE_DURATION" "$CAPTURE_TIMING_UNAVAILABLE"',
+  );
+  assert.equal(clock.stdout.split('|')[0], '');
+  const forged = stuck.control(
+    'request_supervisor_signal "$scope" ANDROID_STOP_RESULT "$incarnation" "wrong:signaled"',
+  );
+  assert.notEqual(forged.status, 0);
+  assert.deepEqual(stuck.timing(), expired);
+
+  const legacy = androidCaptureFixture(t);
+  writeFileSync(legacy.statePath, 'exited 0\n');
+  const stop = spawnSync('bash', legacy.args, {
+    env: legacy.env,
+    encoding: 'utf8',
+    timeout: 60_000,
+  });
+  assert.equal(stop.status, 0, stop.stderr);
+  assert.match(stop.stdout, /^Saved: /m);
+  assert.match(readFileSync(legacy.events, 'utf8'), /remote-int/);
 });
 
 test('Android resumes expired attempts as cleanup and retains force after a checked remote signal', async (t) => {

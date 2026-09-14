@@ -1273,10 +1273,11 @@ try:
             except FileNotFoundError:
                 parts = []
 
-            if len(parts) in {3, 4} and parts[0] == token and parts[1] != last_nonce:
+            expected_length = 4 if parts[2:3] == ["ANDROID_STOP_RESULT"] else 3
+            if len(parts) == expected_length and parts[0] == token and parts[1] != last_nonce:
                 nonce, action = parts[1], parts[2]
                 last_nonce = nonce
-                if platform == "android" and action == "ANDROID_STOP_BEGIN" and len(parts) == 3:
+                if platform == "android" and action == "ANDROID_STOP_BEGIN":
                     if android_stop is not None:
                         if nonce == android_stop["nonce"]:
                             result = "ready"
@@ -1300,7 +1301,7 @@ try:
                         write_state("running")
                         result = "ready"
                 elif platform == "android" and action == "ANDROID_STOP_RESULT":
-                    witness = parts[3].split(":") if len(parts) == 4 else []
+                    witness = parts[3].split(":")
                     if (len(witness) != 2 or android_stop is None or witness[0] != android_stop["nonce"]
                             or witness[1] not in {"signaled", "absent", "reused", "failed", "unknown"}):
                         result = "rejected"
@@ -1308,7 +1309,7 @@ try:
                         received = time.monotonic()
                         if received >= android_stop_deadline:
                             android_stop["result"] = "expired"
-                            result = "rejected"
+                            result = "expired"
                         else:
                             result = witness[1]
                             android_stop["result"] = result
@@ -1317,6 +1318,8 @@ try:
                                 timing["remote_state"] = "present"
                                 timing["disposition"] = "normal"
                         write_state("running")
+                    elif android_stop["result"] == "expired":
+                        result = "expired"
                     elif android_stop["result"] == witness[1]:
                         result = android_stop["result"]
                     else:
@@ -1463,7 +1466,7 @@ request_supervisor_signal() {
       if [[ "$response_nonce" == "$nonce" ]]; then
         if [[ "$action" == "ANDROID_STOP_BEGIN" || "$action" == "ANDROID_STOP_RESULT" ]]; then
           case "$action:$response_result" in
-            ANDROID_STOP_BEGIN:ready|ANDROID_STOP_BEGIN:cleanup|ANDROID_STOP_RESULT:signaled|ANDROID_STOP_RESULT:absent|ANDROID_STOP_RESULT:reused|ANDROID_STOP_RESULT:failed|ANDROID_STOP_RESULT:unknown)
+            ANDROID_STOP_BEGIN:ready|ANDROID_STOP_BEGIN:cleanup|ANDROID_STOP_BEGIN:gone|ANDROID_STOP_RESULT:signaled|ANDROID_STOP_RESULT:absent|ANDROID_STOP_RESULT:reused|ANDROID_STOP_RESULT:failed|ANDROID_STOP_RESULT:unknown|ANDROID_STOP_RESULT:expired)
               SUPERVISOR_RESPONSE="$response_result"
               return 0
               ;;
@@ -1485,7 +1488,7 @@ request_supervisor_signal() {
         return 0
       fi
     fi
-    if [[ -s "$state_path" && "$action" != "ANDROID_STOP_BEGIN" && "$action" != "ANDROID_STOP_RESULT" ]]; then
+    if [[ -s "$state_path" ]]; then
       local supervisor_state
       supervisor_state="$(sed -n '1p' "$state_path")"
       if [[ "$supervisor_state" == exited\ * ]]; then
@@ -1668,9 +1671,14 @@ try:
     launch, ready, stop, signaled, exited = values
     if not 0 < launch <= ready <= stop <= signaled <= exited <= time.monotonic():
         unavailable("invalid monotonic interval")
-    if sys.argv[5] == "android" and timing["remote_state"] != "present":
-        unavailable("device recorder was not live at normal stop")
-    capture_end = signaled if sys.argv[5] == "android" else stop
+    if sys.argv[5] == "android":
+        if timing["remote_state"] != "present":
+            unavailable("device recorder was not live at normal stop")
+        capture_end = signaled
+    else:
+        if signaled - stop > 1:
+            unavailable("capture clock uncertainty exceeds one second")
+        capture_end = stop
     frames = math.floor((capture_end - ready) * 30 + 0.5)
     if frames < 1:
         unavailable("capture interval is empty")
@@ -2277,12 +2285,15 @@ cmd_stop() {
       remote_stop_phase="$(python3 - "$(supervisor_state_file "$scope" "$incarnation")" "$scope" "$incarnation" <<'PY'
 import json
 import sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    handle.readline()
-    timing = json.load(handle)
-normal = (timing.get("scope") == sys.argv[2] and timing.get("incarnation") == sys.argv[3]
-          and timing.get("disposition") == "normal"
-          and timing.get("android_stop", {}).get("result") == "signaled")
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        handle.readline()
+        timing = json.load(handle)
+    normal = (timing.get("scope") == sys.argv[2] and timing.get("incarnation") == sys.argv[3]
+              and timing.get("disposition") == "normal"
+              and timing.get("android_stop", {}).get("result") == "signaled")
+except (OSError, ValueError, TypeError, AttributeError):
+    normal = False
 print("wait" if normal else "signal-and-wait")
 PY
 )"

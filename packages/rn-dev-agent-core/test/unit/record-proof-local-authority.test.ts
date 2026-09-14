@@ -628,6 +628,33 @@ test('a cold first-frame latency still yields a normalized capture duration', as
   assert.deepEqual(await capture.duration('android'), cold);
 });
 
+test('a wide stop bracket refuses padding on iOS and ends the Android capture at its signal', async (t) => {
+  const capture = await timingFixture(t);
+  await capture.control('INT');
+  await capture.terminal();
+  const original = capture.state();
+  const wide = {
+    ...original,
+    launch: original.exit - 130,
+    ready: original.exit - 129,
+    stop: original.exit - 5,
+    signal: original.exit - 3.5,
+    exit: original.exit,
+  };
+  writeFileSync(capture.statePath, `exited 0\n${JSON.stringify(wide)}\n`);
+  const ios = await capture.duration();
+  assert.equal(ios.value, null);
+  assert.match(ios.warning, /clock uncertainty exceeds one second/);
+  writeFileSync(
+    capture.statePath,
+    `exited 0\n${JSON.stringify({ ...wide, remote_state: 'present' })}\n`,
+  );
+  const android = await capture.duration('android');
+  assert.equal(android.warning, '');
+  assert.ok(android.value !== null);
+  assert.ok(Math.abs(android.value - (wide.signal - wide.ready)) <= 1 / 60);
+});
+
 test('malformed, stale and uncertain timing cannot become a capture duration', async (t) => {
   const capture = await timingFixture(t);
   await capture.control('INT');
