@@ -1,41 +1,36 @@
 #!/usr/bin/env node
-// GH #382 follow-up: decide what .github/workflows/runner-artifacts.yml must
-// publish for a release, and where the in-repo trust root is delivered.
+// Decision seam for the release trust-root transaction (.github/workflows/release.yml).
 //
-// The pre-existing gate keyed only on release-asset presence. Because the
-// manifest asset is uploaded BEFORE the repository commit, a failed commit left
-// the release "complete" and every later run reported success while
-// runner-manifest.json stayed pinned to an old version (v0.75.2 while the plugin
-// shipped v0.76.7 — every client then resolved provenance 'build-local').
-// Publication state therefore has TWO halves, and both are checked here.
+// A release candidate H is a Version Packages commit whose runner-manifest.json
+// already vouches for the runner zips retained from the producer that built it.
+// Every decision here compares mutable state (release assets, drafts, tags)
+// against that immutable candidate, never the other way round: nothing that is
+// already public may become the authority for what gets published.
 //
-// Whether the release's zips still match what vouches for them is deliberately
-// NOT checked: every record available here (the zips, and the manifest asset
-// beside them) is writable by anything holding contents: write, so comparing
-// them proves nothing. A substituted zip is caught where it can be caught — the
-// client's SHA-256 check in packages/rn-dev-agent-core/src/runners/
-// runner-artifacts.ts, which falls back to a local build. Slower, never
-// compromised. Real attestation is separate, authorized work.
+// Stages:
+//   prepared  H is self-consistent and matches the producer handoff (offline).
+//   publish   additionally decides against the release state for vV:
+//             publish | replace-draft | already-public, or refuse.
 //
 // Usage (CI):
-//   node scripts/runner-manifest-publication.mts \
-//     --plugin-version 0.76.7 [--force-version ''] \
-//     --release-assets assets.json \
+//   node scripts/runner-manifest-publication.mts --stage prepared|publish \
+//     --candidate-sha <H> --plugin-version <V> --advertised-version <main V> \
 //     --repo-manifest runner-manifest.json \
-//     --published-manifest published-manifest.json
+//     --claude-manifest packages/claude-plugin/runner-manifest.json \
+//     --codex-manifest packages/codex-plugin/runner-manifest.json \
+//     --ios-sha256 <hex> --ios-bytes <n> --android-sha256 <hex> --android-bytes <n> \
+//     [--release release.json --tag-sha <sha-or-empty> --published-manifest published.json]
 
 import { readFileSync, appendFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-// force_version is operator input that reaches `gh release`, git refs and a
-// branch name. Only exact SemVer releases pass, so a typo fails closed instead of
-// minting a persistent nonsensical tag or branch: `1.2.3-alpha..1`, `1.2.3-alpha.`,
-// `01.2.3` and `1.2.3-01` are all rejected.
 const NUMERIC = '0|[1-9]\\d*';
 const PRERELEASE_ID = `(?:${NUMERIC}|\\d*[a-zA-Z-][0-9a-zA-Z-]*)`;
 const VERSION_RE = new RegExp(
   `^(?:${NUMERIC})\\.(?:${NUMERIC})\\.(?:${NUMERIC})(?:-${PRERELEASE_ID}(?:\\.${PRERELEASE_ID})*)?$`,
 );
+const SHA_RE = /^[0-9a-f]{40}$/;
+const DIGEST_RE = /^[0-9a-f]{64}$/;
 
 export function assertVersion(version) {
   if (typeof version !== 'string' || !VERSION_RE.test(version)) {
@@ -53,8 +48,42 @@ export function expectedRunnerAssets(version) {
   };
 }
 
-export function manifestBranchName(version) {
-  return `chore/runner-manifest-v${assertVersion(version)}`;
+function splitVersion(version) {
+  const dash = version.indexOf('-');
+  const core = dash === -1 ? version : version.slice(0, dash);
+  const pre = dash === -1 ? null : version.slice(dash + 1).split('.');
+  return { core: core.split('.').map(Number), pre };
+}
+
+// Semver precedence: numeric identifiers compare numerically and rank below
+// alphanumeric ones; a shorter prerelease list ranks lower; no prerelease
+// ranks above any prerelease of the same core.
+function comparePrerelease(a, b) {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if (a[i] === undefined) return -1;
+    if (b[i] === undefined) return 1;
+    const an = /^\d+$/.test(a[i]);
+    const bn = /^\d+$/.test(b[i]);
+    if (an && bn) {
+      if (Number(a[i]) !== Number(b[i])) return Number(a[i]) - Number(b[i]);
+    } else if (an !== bn) {
+      return an ? -1 : 1;
+    } else if (a[i] !== b[i]) {
+      return a[i] < b[i] ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+export function isNewerVersion(candidate, advertised) {
+  const c = splitVersion(assertVersion(candidate));
+  const a = splitVersion(assertVersion(advertised));
+  for (let i = 0; i < 3; i++) {
+    if (c.core[i] !== a.core[i]) return c.core[i] > a.core[i];
+  }
+  if (c.pre === null) return a.pre !== null;
+  if (a.pre === null) return false;
+  return comparePrerelease(c.pre, a.pre) > 0;
 }
 
 function parseManifest(text) {
@@ -68,9 +97,8 @@ function parseManifest(text) {
 }
 
 // Key order must not decide publication: two manifests that differ only in
-// property order describe the same trust root, and treating them as different
-// would re-open a PR on every sweep forever.
-function canonical(value) {
+// property order describe the same trust root.
+export function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value && typeof value === 'object') {
     const body = Object.keys(value)
@@ -82,49 +110,144 @@ function canonical(value) {
   return JSON.stringify(value);
 }
 
-export function decideRunnerPublication(input) {
-  const raw = typeof input.forceVersion === 'string' ? input.forceVersion.trim() : '';
-  const forced = raw !== '';
+function refuse(message) {
+  throw new Error(message);
+}
+
+function assertSha(label, value) {
+  if (typeof value !== 'string' || !SHA_RE.test(value)) {
+    refuse(`${label} is not a full commit SHA: ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+function assertDigest(label, value) {
+  if (typeof value !== 'string' || !DIGEST_RE.test(value)) {
+    refuse(`${label} is not a SHA-256 hex digest: ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+function assertBytes(label, value) {
+  const n = typeof value === 'string' ? Number(value) : value;
+  if (!Number.isInteger(n) || n <= 0) refuse(`${label} is not a positive byte count: ${value}`);
+  return n;
+}
+
+// The candidate is only ever accepted as a whole: version, exact asset names,
+// both platforms, identical host copies and the producer's own digests.
+export function assertPreparedCandidate(input) {
+  const candidateSha = assertSha('candidate SHA', input.candidateSha);
   const version = assertVersion(input.pluginVersion);
-  // Every job builds from current source, so a forced HISTORICAL version would
-  // upload today's binaries under an old tag and rewrite the repository trust
-  // root to a version the installed plugin no longer matches — which sends every
-  // client back to the local build. force_version may only re-publish the
-  // current version; it still skips the missing-assets check, which is its point.
-  if (forced && assertVersion(raw) !== version) {
-    throw new Error(
-      `force_version ${raw} does not match the current plugin version ${version}: ` +
-        'runner artifacts are built from current source, so a historical version ' +
-        'would publish binaries that never belonged to that release',
+  if (!isNewerVersion(version, input.advertisedVersion)) {
+    refuse(
+      `candidate v${version} is not newer than the advertised v${input.advertisedVersion}: ` +
+        'a historical or already advertised version can never be re-prepared',
     );
   }
   const expected = expectedRunnerAssets(version);
-  const names = new Set(input.releaseAssets ?? []);
-  const buildRunners = forced || !(names.has(expected.ios) && names.has(expected.android));
+  const manifest = parseManifest(input.repoManifest);
+  if (manifest === null) refuse('the candidate runner-manifest.json is missing or unparseable');
+  if (manifest.version !== version) {
+    refuse(`the candidate trust root is v${manifest.version} while plugin.json is v${version}`);
+  }
+  for (const host of ['claude', 'codex']) {
+    const copy = parseManifest(input.hostManifests?.[host]);
+    if (copy === null || canonical(copy) !== canonical(manifest)) {
+      refuse(`the ${host} runner-manifest.json copy is missing or differs from the candidate root`);
+    }
+  }
+  const producer = input.producer ?? {};
+  for (const platform of ['ios', 'android']) {
+    const assets = manifest.assets?.[platform];
+    if (!Array.isArray(assets) || assets.length !== 1) {
+      refuse(`the candidate trust root must list exactly one ${platform} asset`);
+    }
+    const [asset] = assets;
+    if (asset.name !== expected[platform]) {
+      refuse(`the candidate ${platform} asset is ${asset.name}, expected ${expected[platform]}`);
+    }
+    const handoff = producer[platform];
+    if (!handoff) refuse(`no producer handoff identity for ${platform}`);
+    const sha256 = assertDigest(`producer ${platform} sha256`, handoff.sha256);
+    const bytes = assertBytes(`producer ${platform} bytes`, handoff.bytes);
+    if (asset.sha256 !== sha256 || asset.bytes !== bytes) {
+      refuse(
+        `the candidate ${platform} digest (${asset.sha256}/${asset.bytes}) does not match the ` +
+          `producer handoff (${sha256}/${bytes})`,
+      );
+    }
+  }
+  return { candidateSha, version, expected, manifest };
+}
 
-  const repo = parseManifest(input.repoManifest);
+// Release state for vV as the workflow observed it:
+//   undefined            the API could not be read — never "absent"
+//   null                 GitHub itself reported no release (and no draft)
+//   { isDraft, targetCommitish, assets: [{ name }] }
+function releaseState(input) {
+  if (input.release === undefined) {
+    refuse('the release state could not be determined — refusing to guess');
+  }
+  if (input.release === null) return null;
+  const release = input.release;
+  if (typeof release !== 'object' || !Array.isArray(release.assets)) {
+    refuse('the release record is not a release listing');
+  }
+  return release;
+}
+
+export function decideRunnerPublication(input) {
+  const prepared = assertPreparedCandidate(input);
+  const { candidateSha, version, expected, manifest } = prepared;
+  const release = releaseState(input);
+  const tagSha = input.tagSha ? assertSha(`tag v${version}`, input.tagSha) : null;
+  const names = new Set((release?.assets ?? []).map((asset) => asset.name));
   const published = parseManifest(input.publishedManifest);
 
-  let publishManifest = true;
-  let reason;
-  if (forced) {
-    reason = `forced republication of v${version}`;
-  } else if (buildRunners) {
-    reason = `release v${version} is missing a runner zip`;
-  } else if (repo === null) {
-    reason = 'the in-repo runner-manifest.json is missing or unparseable';
-  } else if (repo.version !== version) {
-    reason = `the in-repo trust root is stale (v${repo.version} != v${version})`;
-  } else if (published === null) {
-    reason = `release v${version} carries no runner-manifest.json asset`;
-  } else if (canonical(repo) !== canonical(published)) {
-    reason = `the in-repo trust root differs from the manifest published for v${version}`;
-  } else {
-    publishManifest = false;
-    reason = `the in-repo trust root already matches v${version}`;
+  if (release === null || release.isDraft) {
+    // A tag bound to another commit can never be reused for this candidate,
+    // whether the release is still to be created or a draft is rebuilt.
+    if (tagSha !== null && tagSha !== candidateSha) {
+      refuse(`tag v${version} already points at ${tagSha}, not the candidate ${candidateSha}`);
+    }
   }
-
-  return { version, buildRunners, publishManifest, reason, branch: manifestBranchName(version) };
+  if (release === null) {
+    return { ...prepared, action: 'publish', reason: `no release v${version} exists yet` };
+  }
+  if (release.isDraft) {
+    return {
+      ...prepared,
+      action: 'replace-draft',
+      reason: `a draft v${version} exists; it is prepublication state and is rebuilt from the retained bytes`,
+    };
+  }
+  const identity = tagSha ?? release.targetCommitish;
+  const divergence =
+    identity !== candidateSha
+      ? `release v${version} is published from ${identity}, not the candidate ${candidateSha}`
+      : !names.has(expected.ios) || !names.has(expected.android)
+        ? `release v${version} is published without both runner zips`
+        : !names.has(expected.manifest)
+          ? `release v${version} is published without its runner-manifest.json`
+          : published === null
+            ? `the published runner-manifest.json for v${version} could not be read`
+            : canonical(published) !== canonical(manifest)
+              ? `the published runner-manifest.json for v${version} differs from the candidate`
+              : null;
+  if (divergence) {
+    refuse(
+      `${divergence}. A published release is never replaced: ` +
+        'v' +
+        version +
+        ' stays published-but-not-advertised; ship changed content as a new version.',
+    );
+  }
+  return {
+    ...prepared,
+    action: 'already-public',
+    reason: `release v${version} is already published from the candidate ${candidateSha}`,
+  };
 }
 
 function readIfPresent(path) {
@@ -145,31 +268,52 @@ function parseArgs(argv) {
   return args;
 }
 
-// The workflow writes this file as `gh release view --json assets` JSON. A
-// listing that cannot be read as an array of assets fails the run rather than
-// degrading to "the release carries nothing", which would silently rebuild.
-function parseReleaseAssets(text) {
-  const trimmed = (text ?? '').trim();
-  if (trimmed === '') return [];
-  const parsed = JSON.parse(trimmed);
-  if (!Array.isArray(parsed)) throw new Error('release asset listing is not a JSON array');
-  return parsed;
+function parseRelease(path) {
+  const text = readIfPresent(path);
+  if (text === null || text.trim() === '') return undefined;
+  const parsed = JSON.parse(text);
+  return parsed === null ? null : parsed;
 }
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const decision = decideRunnerPublication({
+  const input = {
+    candidateSha: args['candidate-sha'],
     pluginVersion: args['plugin-version'],
-    forceVersion: args['force-version'],
-    releaseAssets: parseReleaseAssets(readIfPresent(args['release-assets'])),
+    advertisedVersion: args['advertised-version'],
     repoManifest: readIfPresent(args['repo-manifest']),
-    publishedManifest: readIfPresent(args['published-manifest']),
-  });
+    hostManifests: {
+      claude: readIfPresent(args['claude-manifest']),
+      codex: readIfPresent(args['codex-manifest']),
+    },
+    producer: {
+      ios: { sha256: args['ios-sha256'], bytes: args['ios-bytes'] },
+      android: { sha256: args['android-sha256'], bytes: args['android-bytes'] },
+    },
+  };
+  const stage = args.stage ?? 'prepared';
+  let decision;
+  if (stage === 'prepared') {
+    decision = {
+      ...assertPreparedCandidate(input),
+      action: 'prepared',
+      reason: 'candidate is prepared',
+    };
+  } else if (stage === 'publish') {
+    decision = decideRunnerPublication({
+      ...input,
+      release: parseRelease(args.release),
+      tagSha: args['tag-sha'] || null,
+      publishedManifest: readIfPresent(args['published-manifest']),
+    });
+  } else {
+    throw new Error(`unknown --stage ${stage}`);
+  }
   const lines = [
     `version=${decision.version}`,
-    `build=${decision.buildRunners}`,
-    `publish=${decision.publishManifest}`,
-    `branch=${decision.branch}`,
+    `action=${decision.action}`,
+    `ios=${decision.expected.ios}`,
+    `android=${decision.expected.android}`,
   ];
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, lines.join('\n') + '\n');
   console.log(decision.reason);

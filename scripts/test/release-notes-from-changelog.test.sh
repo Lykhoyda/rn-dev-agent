@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Guard for the release-notes renderer used by runner-artifacts.yml: the
+# Guard for the release-notes renderer used by release.yml's publish job: the
 # CHANGELOG section for a version must become the notes body (hashes and
 # "Updated dependencies" dropped), and a missing section must fall back to the
 # fixed one-liner so a release is never blocked.

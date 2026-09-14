@@ -1,32 +1,46 @@
 name: Release
 
-# Changesets release automation (Version-PR pattern).
+# Changesets release automation (Version-PR pattern) extended into the release
+# trust-root transaction.
 #
-# On every push to main, this opens/updates a "Version Packages" PR that runs
-# `corepack yarn version-packages` (changeset version -> sync-plugin-manifest -> sync-versions --fix),
-# accumulating all pending changesets into one version bump. Merging that PR
-# bumps plugin.json + marketplace.json + rn-dev-agent-core, updates CHANGELOGs, and
-# consumes the changesets — making the new version installable from the marketplace.
+# On every push to main, changesets opens/updates the "Version Packages" PR
+# (`corepack yarn version-packages`: changeset version -> sync-plugin-manifest
+# -> sync-versions --fix -> build:host-runtimes). Merging that PR is what makes
+# the new plugin version installable from the marketplace, so BEFORE it merges
+# the version branch must already carry the runner trust root for that version
+# and the exact runner bytes it vouches for must already be public:
 #
-# No npm publish: the "package" is the plugin manifest the marketplace reads
-# from the repo, so only the version half of changesets/action is used.
+#   version   -> retire any armed auto-merge, create/update the Version PR,
+#                pin the generated candidate P (one commit on top of main B)
+#   prepare   -> build both runner zips at P (runner-artifacts.yml, read-only,
+#                no persisted credential) and retain them with producer digests
+#   finalize  -> generate runner-manifest.json + both host copies from the
+#                retained bytes, commit onto the version branch: candidate H
+#   validate  -> offline source/package validation of H (dist freshness, unit,
+#                integration, version sync, trust root == producer handoff)
+#   publish   -> draft release vV targeting H, attach the retained bytes and
+#                the manifest, read every byte back, then publish
+#   merge     -> require the PR head to still be H, tag vV -> H, the existing
+#                CI "Build & Test" check green on H (its core-tests job asserts
+#                the public assets), then squash-merge H with --match-head-commit
 #
 # GH #292: the Version PR is created with GITHUB_TOKEN, so its ci.yml run parks
-# at action_required until a maintainer approves it (see AGENTS.md) — the PR can
-# sit with no completed checks indefinitely. Pre-merge validation therefore
-# lives HERE:
-#   version  -> creates/updates the Version PR
-#   validate -> checks out changeset-release/main and runs the core CI gates
-#   merge    -> runs only after validate succeeds, and direct-merges only the
-#               exact SHA validate saw (--match-head-commit)
+# at action_required until a maintainer approves it. The merge job waits a
+# bounded time for that check and otherwise fails with the instruction; after
+# "Approve and run" (or `gh run rerun` of a failed run) re-run this workflow's
+# failed jobs — the candidate H, its retained bytes and the published release
+# are unchanged, so the same run resumes. A push to main while a published
+# candidate waits resumes that exact head (nothing is regenerated); a push
+# while an unpublished candidate waits regenerates and rebuilds it.
+#
+# Nothing here ever arms auto-merge: an armed PR would land whatever head its
+# checks pass on. A published release is never rebuilt, clobbered or retagged;
+# if its candidate can no longer land, it stays published-but-not-advertised
+# and changed content ships as a new version.
 #
 # PREREQUISITES (must be enabled in repo settings — cannot be set from this file):
 #   - Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests"
-#   - Settings > General > "Allow auto-merge"
-#   - OPTIONAL: branch protection on main with >=1 required status check. With it,
-#     `gh pr merge --auto` gates the Version PR on those checks. Without it, GitHub
-#     refuses to enable auto-merge ("Protected branch rules not configured") and the
-#     merge step falls back to a direct squash-merge of the validated Version PR.
+#   - Branch protection on main requiring the "Build & Test" status check.
 
 on:
   push:
@@ -45,7 +59,12 @@ jobs:
       contents: write
       pull-requests: write
     outputs:
-      pr-number: ${{ steps.changesets.outputs.pullRequestNumber }}
+      pr-number: ${{ steps.pending.outputs.pr-number || steps.changesets.outputs.pullRequestNumber }}
+      resume: ${{ steps.pending.outputs.resume }}
+      head-sha: ${{ steps.pending.outputs.head-sha }}
+      candidate-sha: ${{ steps.candidate.outputs.sha }}
+      version: ${{ steps.pending.outputs.version || steps.candidate.outputs.version }}
+      advertised-version: ${{ steps.pending.outputs.advertised-version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — same pin as ci.yml
         with:
@@ -58,8 +77,78 @@ jobs:
       - run: corepack enable
       - run: corepack yarn install --immutable
 
+      - id: pending
+        name: Retire armed auto-merge and detect a published candidate awaiting its merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          echo "advertised-version=$(jq -r '.version' packages/claude-plugin/plugin.json)" >> "$GITHUB_OUTPUT"
+          PR=$(gh pr list --head changeset-release/main --base main --state open \
+            --json number,headRefOid,autoMergeRequest --jq '.[0] // empty')
+          if [ -z "$PR" ]; then
+            echo "resume=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          NUMBER=$(jq -r '.number' <<< "$PR")
+          HEAD=$(jq -r '.headRefOid' <<< "$PR")
+          # An armed auto-merge would land whatever head its checks pass on,
+          # prepared or not. Retire it before the branch is touched.
+          if [ -n "$(jq -r '.autoMergeRequest // empty' <<< "$PR")" ]; then
+            gh pr merge --disable-auto "$NUMBER"
+            echo "::warning::retired auto-merge armed on Version Packages PR #$NUMBER"
+          fi
+          git fetch --quiet origin changeset-release/main
+          if [ "$(git rev-parse FETCH_HEAD)" != "$HEAD" ]; then
+            echo "::error::PR #$NUMBER head $HEAD is not the branch head — refusing to guess" >&2
+            exit 1
+          fi
+          V=$(git show "$HEAD:packages/claude-plugin/plugin.json" | jq -r '.version')
+          MV=$(git show "$HEAD:runner-manifest.json" 2>/dev/null | jq -r '.version // empty' || true)
+          # Kept out of the workspace: changesets/action commits everything it
+          # finds there, and a stray file would read as a foreign candidate path.
+          PROBE=$(mktemp)
+          trap 'rm -f "$PROBE"' EXIT
+          # Only GitHub's own 404 may stand for "nothing published": a failed
+          # lookup that read as resume=false would let changesets/action
+          # regenerate a branch whose head is already released.
+          if out=$(gh api "repos/{owner}/{repo}/git/ref/tags/v$V" 2>"$PROBE"); then
+            TAG=$(jq -r '.object.sha' <<< "$out")
+          elif [ "$(jq -r '.status // empty' <<< "$out" 2>/dev/null)" = "404" ]; then
+            TAG=""
+          else
+            cat "$PROBE" >&2
+            echo "$out" >&2
+            echo "::error::could not determine whether tag v$V exists — refusing to guess" >&2
+            exit 1
+          fi
+          # A by-tag lookup never resolves a draft, and a draft belongs to a run
+          # that still holds its retained bytes: it is rebuilt, never resumed.
+          if out=$(gh api "repos/{owner}/{repo}/releases/tags/v$V" 2>"$PROBE"); then
+            DRAFT=$(jq -r '.draft' <<< "$out")
+          elif [ "$(jq -r '.status // empty' <<< "$out" 2>/dev/null)" = "404" ]; then
+            DRAFT=""
+          else
+            cat "$PROBE" >&2
+            echo "$out" >&2
+            echo "::error::could not determine whether release v$V is published — refusing to guess" >&2
+            exit 1
+          fi
+          if [ "$MV" = "$V" ] && [ -n "$TAG" ] && [ "$TAG" = "$HEAD" ] && [ "$DRAFT" = false ]; then
+            echo "release v$V is already published from PR #$NUMBER head $HEAD — resuming its merge"
+            {
+              echo "resume=true"
+              echo "pr-number=$NUMBER"
+              echo "head-sha=$HEAD"
+              echo "version=$V"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "resume=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create or update the Version Packages PR
         id: changesets
+        if: steps.pending.outputs.resume != 'true'
         # Pinned: upstream `v1` is a mutable BRANCH (not a tag); this SHA = tag v1.9.0.
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d
         with:
@@ -69,24 +158,148 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # GH #292: real pre-merge validation of the release commit. Mirrors ci.yml's
-  # gates that a version bump can plausibly break: dist freshness (host-runtime
-  # package.json embeds the core version), the core test suites, and the
-  # version-sync invariant across plugin.json / marketplace.json / lockfile.
-  validate:
+      - id: candidate
+        name: Pin the generated candidate and check its delta against main
+        if: steps.pending.outputs.resume != 'true' && steps.changesets.outputs.pullRequestNumber
+        env:
+          BASE: ${{ github.sha }}
+        run: |
+          git fetch --quiet origin changeset-release/main
+          P=$(git rev-parse FETCH_HEAD)
+          if [ "$(git rev-parse "$P^")" != "$BASE" ]; then
+            echo "::error::candidate $P is not one generated commit on top of main $BASE" >&2
+            exit 1
+          fi
+          # A version bump only ever rewrites changesets, changelogs, package
+          # manifests and the plugin/marketplace manifests. Anything else on the
+          # branch did not come from the generator.
+          FOREIGN=$(git diff --name-only "$BASE" "$P" \
+            | grep -Ev '^(\.changeset/|yarn\.lock$|packages/codex-plugin/\.mcp\.json$|(.*/)?(CHANGELOG\.md|package\.json|package-lock\.json|plugin\.json|marketplace\.json)$)' || true)
+          if [ -n "$FOREIGN" ]; then
+            echo "::error::candidate $P changes paths a version bump never generates: $FOREIGN" >&2
+            exit 1
+          fi
+          for TREE in packages/rn-fast-runner packages/rn-android-runner; do
+            if [ "$(git rev-parse "$P:$TREE")" != "$(git rev-parse "$BASE:$TREE")" ]; then
+              echo "::error::native inputs under $TREE differ between main and the candidate" >&2
+              exit 1
+            fi
+          done
+          V=$(git show "$P:packages/claude-plugin/plugin.json" | jq -r '.version')
+          echo "candidate $P advertises v$V on top of main $BASE"
+          {
+            echo "sha=$P"
+            echo "version=$V"
+          } >> "$GITHUB_OUTPUT"
+
+  # Native builds at the pinned candidate: read-only, no persisted credential,
+  # retained as run artifacts with the producer's own digest and length.
+  prepare:
     needs: version
-    if: needs.version.outputs.pr-number
+    if: needs.version.outputs.pr-number && needs.version.outputs.resume != 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/runner-artifacts.yml
+    with:
+      ref: ${{ needs.version.outputs.candidate-sha }}
+      version: ${{ needs.version.outputs.version }}
+
+  finalize:
+    needs: [version, prepare]
+    if: needs.version.outputs.pr-number && needs.version.outputs.resume != 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
-      head-sha: ${{ steps.head.outputs.sha }}
+      head-sha: ${{ steps.commit.outputs.sha }}
+    env:
+      CANDIDATE: ${{ needs.version.outputs.candidate-sha }}
+      VERSION: ${{ needs.version.outputs.version }}
+      IOS_SHA256: ${{ needs.prepare.outputs.ios-sha256 }}
+      IOS_BYTES: ${{ needs.prepare.outputs.ios-bytes }}
+      ANDROID_SHA256: ${{ needs.prepare.outputs.android-sha256 }}
+      ANDROID_BYTES: ${{ needs.prepare.outputs.android-bytes }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — same pin as ci.yml
         with:
-          ref: changeset-release/main
+          ref: ${{ needs.version.outputs.candidate-sha }}
 
-      - name: Record the validated head SHA
-        id: head
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — same pin as ci.yml
+        with:
+          node-version: 24
+
+      # Exact producer artifact IDs from this run's trusted dependency chain —
+      # never a name lookup that another run could satisfy.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1 — SHA pin
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.ios-artifact-id }},${{ needs.prepare.outputs.android-artifact-id }}
+          path: handoff
+          merge-multiple: true
+
+      - name: Verify the handoff against the producer identity
+        run: |
+          [ "$(git rev-parse HEAD)" = "$CANDIDATE" ] || { echo "::error::checkout is not the candidate $CANDIDATE" >&2; exit 1; }
+          check() {
+            local zip="handoff/$1" sha="$2" bytes="$3" got
+            [ -f "$zip" ] || { echo "::error::retained $1 is missing" >&2; exit 1; }
+            got=$(shasum -a 256 "$zip" | cut -d' ' -f1)
+            [ "$got" = "$sha" ] || { echo "::error::$1: retained sha256 $got != producer $sha" >&2; exit 1; }
+            got=$(wc -c < "$zip" | tr -d ' ')
+            [ "$got" = "$bytes" ] || { echo "::error::$1: retained length $got != producer $bytes" >&2; exit 1; }
+          }
+          check "rn-fast-runner-$VERSION-sim.zip" "$IOS_SHA256" "$IOS_BYTES"
+          check "rn-android-runner-$VERSION.zip" "$ANDROID_SHA256" "$ANDROID_BYTES"
+
+      - name: Generate the trust root and its host copies from the retained bytes
+        run: |
+          node scripts/build-runner-manifest.mts \
+            --version "$VERSION" \
+            --ios "handoff/rn-fast-runner-$VERSION-sim.zip" \
+            --android "handoff/rn-android-runner-$VERSION.zip" \
+            --out runner-manifest.json
+          cp runner-manifest.json packages/claude-plugin/runner-manifest.json
+          cp runner-manifest.json packages/codex-plugin/runner-manifest.json
+          cat runner-manifest.json
+          CHANGED=$(git status --porcelain --untracked-files=no | awk '{print $2}' | sort | tr '\n' ' ')
+          EXPECTED="packages/claude-plugin/runner-manifest.json packages/codex-plugin/runner-manifest.json runner-manifest.json "
+          if [ "$CHANGED" != "$EXPECTED" ]; then
+            echo "::error::generating the trust root changed '$CHANGED', expected exactly the three manifests" >&2
+            exit 1
+          fi
+
+      - id: commit
+        name: Commit the trust root onto the candidate and pin the release head
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add runner-manifest.json packages/claude-plugin/runner-manifest.json packages/codex-plugin/runner-manifest.json
+          git commit --quiet -m "chore(release): runner trust root for v$VERSION"
+          H=$(git rev-parse HEAD)
+          # Lands only if the branch is still the candidate this run built from.
+          git push origin "HEAD:refs/heads/changeset-release/main" \
+            --force-with-lease="refs/heads/changeset-release/main:$CANDIDATE"
+          echo "sha=$H" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Release candidate v$VERSION"
+            echo "- main: $CANDIDATE^ · generated candidate: $CANDIDATE · release head: $H"
+            echo "- iOS zip: $IOS_SHA256 ($IOS_BYTES bytes) · Android zip: $ANDROID_SHA256 ($ANDROID_BYTES bytes)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # GH #292: offline pre-merge validation of the release head H. Mirrors
+  # ci.yml's gates that a version bump can plausibly break (dist freshness,
+  # the core test suites, version sync) and proves the prepared trust root is
+  # exactly the producer handoff. It never needs public release assets: the
+  # required public-readiness check is ci.yml's own run on H, after publication.
+  validate:
+    needs: [version, prepare, finalize]
+    if: needs.version.outputs.pr-number && needs.version.outputs.resume != 'true'
+    runs-on: ubuntu-latest
+    env:
+      HEAD: ${{ needs.finalize.outputs.head-sha }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — same pin as ci.yml
+        with:
+          ref: ${{ needs.finalize.outputs.head-sha }}
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — same pin as ci.yml
         with:
@@ -96,6 +309,29 @@ jobs:
 
       - run: corepack enable
       - run: corepack yarn install --immutable
+
+      - name: Prepared trust root matches the retained bytes and the native inputs
+        env:
+          ADVERTISED: ${{ needs.version.outputs.advertised-version }}
+          IOS_SHA256: ${{ needs.prepare.outputs.ios-sha256 }}
+          IOS_BYTES: ${{ needs.prepare.outputs.ios-bytes }}
+          IOS_TREE: ${{ needs.prepare.outputs.ios-tree }}
+          ANDROID_SHA256: ${{ needs.prepare.outputs.android-sha256 }}
+          ANDROID_BYTES: ${{ needs.prepare.outputs.android-bytes }}
+          ANDROID_TREE: ${{ needs.prepare.outputs.android-tree }}
+        run: |
+          [ "$(git rev-parse HEAD)" = "$HEAD" ] || { echo "::error::checkout is not the release head $HEAD" >&2; exit 1; }
+          [ "$(git rev-parse HEAD:packages/rn-fast-runner)" = "$IOS_TREE" ] || { echo "::error::iOS runner sources differ from what the producer built" >&2; exit 1; }
+          [ "$(git rev-parse HEAD:packages/rn-android-runner)" = "$ANDROID_TREE" ] || { echo "::error::Android runner sources differ from what the producer built" >&2; exit 1; }
+          node scripts/runner-manifest-publication.mts --stage prepared \
+            --candidate-sha "$HEAD" \
+            --plugin-version "$(jq -r '.version' packages/claude-plugin/plugin.json)" \
+            --advertised-version "$ADVERTISED" \
+            --repo-manifest runner-manifest.json \
+            --claude-manifest packages/claude-plugin/runner-manifest.json \
+            --codex-manifest packages/codex-plugin/runner-manifest.json \
+            --ios-sha256 "$IOS_SHA256" --ios-bytes "$IOS_BYTES" \
+            --android-sha256 "$ANDROID_SHA256" --android-bytes "$ANDROID_BYTES"
 
       - name: TypeScript build + host-runtime freshness gate
         run: bash scripts/check-dist-fresh.sh
@@ -115,50 +351,256 @@ jobs:
       - name: Version sync check
         run: bash scripts/sync-versions.sh
 
+  # Publication runs trusted workflow code from main (github.sha) and reads the
+  # candidate's files by SHA; the release is staged as a draft targeting H,
+  # every byte is read back and compared with H's trust root, then published.
+  publish:
+    needs: [version, prepare, finalize, validate]
+    if: >-
+      ${{ !cancelled()
+      && needs.version.result == 'success'
+      && needs.version.outputs.pr-number
+      && (needs.version.outputs.resume == 'true'
+          || (needs.prepare.result == 'success' && needs.finalize.result == 'success' && needs.validate.result == 'success')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      HEAD: ${{ needs.version.outputs.resume == 'true' && needs.version.outputs.head-sha || needs.finalize.outputs.head-sha }}
+      VERSION: ${{ needs.version.outputs.version }}
+      RESUME: ${{ needs.version.outputs.resume }}
+      PR_NUMBER: ${{ needs.version.outputs.pr-number }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — same pin as ci.yml
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — same pin as ci.yml
+        with:
+          node-version: 24
+
+      - name: Read the candidate's files by SHA
+        run: |
+          git fetch --quiet --depth=1 origin "$HEAD"
+          mkdir -p candidate/claude candidate/codex
+          git show "$HEAD:runner-manifest.json" > candidate/runner-manifest.json
+          git show "$HEAD:packages/claude-plugin/runner-manifest.json" > candidate/claude/runner-manifest.json
+          git show "$HEAD:packages/codex-plugin/runner-manifest.json" > candidate/codex/runner-manifest.json
+          git show "$HEAD:packages/claude-plugin/plugin.json" > candidate/plugin.json
+          git show "$HEAD:packages/claude-plugin/CHANGELOG.md" > candidate/CHANGELOG.md
+          [ "$(jq -r '.version' candidate/plugin.json)" = "$VERSION" ] || { echo "::error::candidate $HEAD advertises $(jq -r '.version' candidate/plugin.json), not v$VERSION" >&2; exit 1; }
+
+      - if: needs.version.outputs.resume != 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1 — SHA pin
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.ios-artifact-id }},${{ needs.prepare.outputs.android-artifact-id }}
+          path: handoff
+          merge-multiple: true
+
+      - name: Verify the handoff against the producer identity and the candidate
+        if: needs.version.outputs.resume != 'true'
+        env:
+          IOS_SHA256: ${{ needs.prepare.outputs.ios-sha256 }}
+          IOS_BYTES: ${{ needs.prepare.outputs.ios-bytes }}
+          ANDROID_SHA256: ${{ needs.prepare.outputs.android-sha256 }}
+          ANDROID_BYTES: ${{ needs.prepare.outputs.android-bytes }}
+        run: |
+          check() {
+            local platform="$1" sha="$2" bytes="$3" name zip got
+            name=$(jq -r ".assets.${platform}[0].name" candidate/runner-manifest.json)
+            zip="handoff/$name"
+            [ -f "$zip" ] || { echo "::error::retained $name is missing" >&2; exit 1; }
+            got=$(shasum -a 256 "$zip" | cut -d' ' -f1)
+            [ "$got" = "$sha" ] || { echo "::error::$name: retained sha256 $got != producer $sha" >&2; exit 1; }
+            [ "$got" = "$(jq -r ".assets.${platform}[0].sha256" candidate/runner-manifest.json)" ] || { echo "::error::$name: retained sha256 $got != candidate trust root" >&2; exit 1; }
+            got=$(wc -c < "$zip" | tr -d ' ')
+            [ "$got" = "$bytes" ] || { echo "::error::$name: retained length $got != producer $bytes" >&2; exit 1; }
+            [ "$got" = "$(jq -r ".assets.${platform}[0].bytes" candidate/runner-manifest.json)" ] || { echo "::error::$name: retained length $got != candidate trust root" >&2; exit 1; }
+          }
+          check ios "$IOS_SHA256" "$IOS_BYTES"
+          check android "$ANDROID_SHA256" "$ANDROID_BYTES"
+
+      - id: decide
+        name: Decide against the release state for this version
+        if: needs.version.outputs.resume != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ADVERTISED: ${{ needs.version.outputs.advertised-version }}
+          IOS_SHA256: ${{ needs.prepare.outputs.ios-sha256 }}
+          IOS_BYTES: ${{ needs.prepare.outputs.ios-bytes }}
+          ANDROID_SHA256: ${{ needs.prepare.outputs.android-sha256 }}
+          ANDROID_BYTES: ${{ needs.prepare.outputs.android-bytes }}
+        run: |
+          # `gh release view` resolves drafts too; only GitHub's own 404 on the
+          # tag lookup may then stand for "no release", never a failed listing.
+          if ! gh release view "v$VERSION" --json isDraft,targetCommitish,tagName,assets > release.json 2> release.err; then
+            gh api "repos/{owner}/{repo}/releases/tags/v$VERSION" > release-probe.json 2>/dev/null || :
+            if [ "$(jq -r '.status // "found"' release-probe.json 2>/dev/null)" != "404" ]; then
+              cat release.err >&2
+              echo "::error::could not determine whether release v$VERSION exists — refusing to guess" >&2
+              exit 1
+            fi
+            echo 'null' > release.json
+          fi
+          if out=$(gh api "repos/{owner}/{repo}/git/ref/tags/v$VERSION" 2>tag-probe.err); then
+            TAG=$(jq -r '.object.sha' <<< "$out")
+          elif [ "$(jq -r '.status // empty' <<< "$out" 2>/dev/null)" = "404" ]; then
+            TAG=""
+          else
+            cat tag-probe.err >&2
+            echo "$out" >&2
+            echo "::error::could not determine whether tag v$VERSION exists — refusing to guess" >&2
+            exit 1
+          fi
+          rm -f published-manifest.json
+          if jq -e '. != null and .isDraft == false and any(.assets[]; .name == "runner-manifest.json")' release.json >/dev/null; then
+            gh release download "v$VERSION" --pattern runner-manifest.json --output published-manifest.json
+          fi
+          node scripts/runner-manifest-publication.mts --stage publish \
+            --candidate-sha "$HEAD" \
+            --plugin-version "$VERSION" \
+            --advertised-version "$ADVERTISED" \
+            --repo-manifest candidate/runner-manifest.json \
+            --claude-manifest candidate/claude/runner-manifest.json \
+            --codex-manifest candidate/codex/runner-manifest.json \
+            --ios-sha256 "$IOS_SHA256" --ios-bytes "$IOS_BYTES" \
+            --android-sha256 "$ANDROID_SHA256" --android-bytes "$ANDROID_BYTES" \
+            --release release.json \
+            --tag-sha "$TAG" \
+            --published-manifest published-manifest.json
+
+      - name: Retire the stale draft (prepublication state only)
+        if: steps.decide.outputs.action == 'replace-draft'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete "v$VERSION" --yes
+
+      - name: Stage the draft release from the retained bytes, targeting the candidate
+        if: steps.decide.outputs.action == 'publish' || steps.decide.outputs.action == 'replace-draft'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IOS: ${{ steps.decide.outputs.ios }}
+          ANDROID: ${{ steps.decide.outputs.android }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          bash scripts/release-notes-from-changelog.sh "$VERSION" candidate/CHANGELOG.md > release-notes.md
+          printf '\nRelease source: %s (Version Packages PR #%s, prepared by workflow run %s).\n' "$HEAD" "$PR_NUMBER" "$RUN_ID" >> release-notes.md
+          gh release create "v$VERSION" --draft --target "$HEAD" --title "v$VERSION" --notes-file release-notes.md
+          gh release upload "v$VERSION" "handoff/$IOS" "handoff/$ANDROID" candidate/runner-manifest.json
+
+      # Runs for every path — a freshly staged draft, an already published
+      # release on rerun, and a resumed candidate — so no release byte is ever
+      # taken on trust.
+      - name: Read the release back and compare every byte with the candidate trust root
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IOS=$(jq -r '.assets.ios[0].name' candidate/runner-manifest.json)
+          ANDROID=$(jq -r '.assets.android[0].name' candidate/runner-manifest.json)
+          mkdir -p readback
+          gh release download "v$VERSION" --dir readback --pattern "$IOS" --pattern "$ANDROID" --pattern runner-manifest.json
+          for P in ios android; do
+            NAME=$(jq -r ".assets.${P}[0].name" candidate/runner-manifest.json)
+            SHA=$(jq -r ".assets.${P}[0].sha256" candidate/runner-manifest.json)
+            BYTES=$(jq -r ".assets.${P}[0].bytes" candidate/runner-manifest.json)
+            [ -f "readback/$NAME" ] || { echo "::error::release v$VERSION carries no $NAME" >&2; exit 1; }
+            GOT=$(shasum -a 256 "readback/$NAME" | cut -d' ' -f1)
+            [ "$GOT" = "$SHA" ] || { echo "::error::$NAME: release sha256 $GOT != candidate $SHA" >&2; exit 1; }
+            GOT=$(wc -c < "readback/$NAME" | tr -d ' ')
+            [ "$GOT" = "$BYTES" ] || { echo "::error::$NAME: release length $GOT != candidate $BYTES" >&2; exit 1; }
+          done
+          cmp -s readback/runner-manifest.json candidate/runner-manifest.json \
+            || { echo "::error::the runner-manifest.json asset differs from the candidate" >&2; exit 1; }
+
+      - name: Publish the verified draft
+        if: steps.decide.outputs.action == 'publish' || steps.decide.outputs.action == 'replace-draft'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "v$VERSION" --draft=false
+
+      - name: Confirm the public release is from the exact candidate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          DRAFT=$(gh api "repos/{owner}/{repo}/releases/tags/v$VERSION" --jq '.draft')
+          [ "$DRAFT" = false ] || { echo "::error::release v$VERSION is not published" >&2; exit 1; }
+          TAG=$(gh api "repos/{owner}/{repo}/git/ref/tags/v$VERSION" --jq '.object.sha')
+          [ "$TAG" = "$HEAD" ] || { echo "::error::tag v$VERSION points at $TAG, not the candidate $HEAD" >&2; exit 1; }
+          echo "release v$VERSION is published from $HEAD"
+          echo "- release: v$VERSION published from $HEAD (resume=$RESUME)" >> "$GITHUB_STEP_SUMMARY"
+
+  # Exact-head merge, only after the existing CI check on H — whose core-tests
+  # job asserts the now-public assets — has succeeded. Never auto-merge.
   merge:
-    needs: [version, validate]
-    if: needs.version.outputs.pr-number
+    needs: [version, finalize, publish]
+    if: >-
+      ${{ !cancelled()
+      && needs.version.result == 'success'
+      && needs.version.outputs.pr-number
+      && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      HEAD: ${{ needs.version.outputs.resume == 'true' && needs.version.outputs.head-sha || needs.finalize.outputs.head-sha }}
+      VERSION: ${{ needs.version.outputs.version }}
+      PR_NUMBER: ${{ needs.version.outputs.pr-number }}
     steps:
-      # Prefer auto-merge (it gates on any pending checks). `gh pr merge --auto`
-      # ERRORS only when auto-merge can't be enabled — i.e. there is no gate to
-      # attach to. GitHub reports that benign state with two different messages:
-      #   - "Pull request is in clean status" (PR already mergeable, nothing pending)
-      #   - "Protected branch rules not configured for this branch" (main has no
-      #     branch protection, so auto-merge has no required checks to wait for)
-      # Fall back to a direct merge ONLY for those benign errors — the direct
-      # `gh pr merge` still refuses a conflicted/blocked PR, and (GH #292)
-      # --match-head-commit refuses to land anything but the exact SHA the
-      # validate job tested, so nothing unvalidated can land through the
-      # fallback. Any OTHER auto-merge failure (e.g. "Allow auto-merge"
-      # disabled, missing permission) must fail the job loudly rather than
-      # silently direct-merging — a failing/pending check never lands here,
-      # because --auto succeeds at *enabling* in that case and simply waits.
-      # (--match-head-commit is applied to the direct merge only: the --auto
-      # path is used exactly when branch protection supplies its own gate.)
-      - name: Merge the Version Packages PR (auto-merge, or direct only if nothing to gate on)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.version.outputs.pr-number }}
-          VALIDATED_SHA: ${{ needs.validate.outputs.head-sha }}
+      - name: Require the public release from the exact candidate
         run: |
-          if [ -z "$VALIDATED_SHA" ]; then
-            echo "validate job produced no head SHA — refusing to merge" >&2
+          [ -n "$HEAD" ] || { echo "::error::no release head recorded — refusing to merge" >&2; exit 1; }
+          DRAFT=$(gh release view "v$VERSION" --json isDraft --jq '.isDraft')
+          [ "$DRAFT" = false ] || { echo "::error::release v$VERSION is not published" >&2; exit 1; }
+          TAG=$(gh api "repos/{owner}/{repo}/git/ref/tags/v$VERSION" --jq '.object.sha')
+          [ "$TAG" = "$HEAD" ] || { echo "::error::tag v$VERSION points at $TAG, not the candidate $HEAD" >&2; exit 1; }
+
+      - name: Require the pull request head to still be the candidate
+        run: |
+          PR=$(gh pr view "$PR_NUMBER" --json state,headRefOid)
+          [ "$(jq -r '.state' <<< "$PR")" = OPEN ] || { echo "::error::PR #$PR_NUMBER is not open" >&2; exit 1; }
+          CURRENT=$(jq -r '.headRefOid' <<< "$PR")
+          if [ "$CURRENT" != "$HEAD" ]; then
+            echo "::error::PR #$PR_NUMBER head moved from the published candidate $HEAD to $CURRENT — readiness is void; v$VERSION stays published-but-not-advertised until that exact head lands, and changed content needs a new version" >&2
             exit 1
           fi
-          if out=$(gh pr merge --squash --auto "$PR_NUMBER" 2>&1); then
-            echo "$out"
-          else
-            echo "$out"
-            if printf '%s' "$out" | grep -qe "Pull request is in clean status" -e "Protected branch rules not configured for this branch"; then
-              echo "auto-merge not applicable (no gate to wait on) — merging the validated SHA directly"
-              gh pr merge --squash --match-head-commit "$VALIDATED_SHA" "$PR_NUMBER"
-            else
-              echo "auto-merge failed for an unexpected reason — not falling back" >&2
+
+      - name: Wait for the existing "Build & Test" check on the candidate
+        run: |
+          WAIT_MINUTES=${READINESS_WAIT_MINUTES:-20}
+          DEADLINE=$(( $(date +%s) + WAIT_MINUTES * 60 ))
+          while :; do
+            RUN=$(gh api "repos/{owner}/{repo}/commits/$HEAD/check-runs?check_name=Build%20%26%20Test&filter=latest" \
+              --jq '[.check_runs[] | select(.app.slug == "github-actions")] | first // empty | "\(.status) \(.conclusion) \(.html_url)"')
+            STATUS=${RUN%% *}
+            CONCLUSION=$(cut -d' ' -f2 <<< "$RUN")
+            case "$STATUS:$CONCLUSION" in
+              completed:success)
+                echo "Build & Test succeeded on $HEAD: ${RUN##* }"
+                echo "- readiness: Build & Test success on $HEAD (${RUN##* })" >> "$GITHUB_STEP_SUMMARY"
+                break
+                ;;
+              completed:*)
+                echo "::error::Build & Test on $HEAD concluded $CONCLUSION (${RUN##* }) — fix or rerun that CI run, then re-run this workflow's failed jobs" >&2
+                exit 1
+                ;;
+            esac
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "::error::no successful Build & Test check on $HEAD yet (${RUN:-no check run}). Approve the queued CI run of PR #$PR_NUMBER (\"Approve and run\") or rerun it, then re-run this workflow's failed jobs" >&2
               exit 1
             fi
-          fi
+            sleep "${READINESS_POLL_SECONDS:-60}"
+          done
+
+      - name: Merge exactly the candidate
+        run: |
+          gh pr merge --squash --match-head-commit "$HEAD" "$PR_NUMBER"
+          MERGED=$(gh pr view "$PR_NUMBER" --json state,mergeCommit --jq '"\(.state) \(.mergeCommit.oid // "")"')
+          case "$MERGED" in
+            "MERGED "?*) ;;
+            *) echo "::error::PR #$PR_NUMBER did not merge ($MERGED) — v$VERSION is published but not advertised" >&2; exit 1 ;;
+          esac
+          echo "PR #$PR_NUMBER: $MERGED"
+          echo "- merged: PR #$PR_NUMBER head $HEAD as ${MERGED#* }" >> "$GITHUB_STEP_SUMMARY"

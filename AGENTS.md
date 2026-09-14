@@ -460,10 +460,25 @@ package `bin`, and marketplace consumers use the committed host supervisor.
   push, never a `[skip ci]` commit, which by construction can never produce it.
 - A PR opened by a workflow with `GITHUB_TOKEN` parks its CI run at
   `action_required`; a maintainer must "Approve and run" before the required
-  check registers. Release automation must arm auto-merge and wait, never
-  assume the check appears on its own.
-- Keeping the runner trust root current after a release:
-  [`CONTRIBUTING-VERSIONS.md`](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/CONTRIBUTING-VERSIONS.md).
+  check registers. Release automation waits for that check on the exact head
+  and merges only that head (`--match-head-commit`); it never arms auto-merge,
+  which would land whatever head its checks pass on.
+- The runner trust root ships inside the Version Packages transaction
+  (`.github/workflows/release.yml`, header comment is the contract):
+  `runner-artifacts.yml` is a read-only `workflow_call` producer at the pinned
+  candidate; `finalize` generates `runner-manifest.json` and both host copies
+  from the retained bytes onto the version branch; `publish` stages a draft
+  release targeting that head, reads every byte back, then publishes; `merge`
+  lands after the PR's own `Build & Test` run, whose `core-tests` step
+  `scripts/check-public-runner-assets.sh` asserts the public bytes. After
+  publication approve the PR's queued CI run, then re-run the Release
+  workflow's failed jobs. A published release is never rebuilt, clobbered or
+  retagged; a candidate that can no longer land stays published-but-not-
+  advertised and changed content ships as a new version. Decisions live in
+  `scripts/runner-manifest-publication.mts`; `runner-artifacts-sweep.yml` is the
+  scheduled/dispatchable sweep — it only verifies delivery and re-attaches a
+  missing manifest asset, and lives apart from the callable producer because
+  its `contents: write` would otherwise fail every release run at startup.
 
 ## Maintaining this file
 

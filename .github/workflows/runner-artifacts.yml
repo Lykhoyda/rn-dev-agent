@@ -1,167 +1,76 @@
 name: Runner artifacts
 
-# GH #382 (Story 01): publish prebuilt runner artifacts so the first
-# device_snapshot action=open never pays the multi-minute cold build.
+# Native runner producer for the release trust-root transaction: builds the two
+# runner zips at the supplied, already verified candidate SHA and hands them
+# back as retained run artifacts together with the digest and length the
+# producer itself measured. The caller (trusted release.yml code on main) is the
+# only thing that turns those bytes into a release: nothing here uploads to a
+# release, pushes a branch, or holds a write credential — checkouts do not
+# persist the token and every job runs read-only.
 #
-# The gate is STATE-based, not event-based, and publication state has TWO
-# halves that are checked independently (scripts/runner-manifest-publication.mts):
-#   1. the GitHub Release for the CURRENT plugin.json version carries both
-#      runner zips, and
-#   2. the in-repository runner-manifest.json — the client's offline SHA-256
-#      trust root (packages/rn-dev-agent-core/src/runners/runner-artifacts.ts) —
-#      matches the manifest published for that same version.
-# Keying only on (1) is what let the manifest rot: the manifest asset uploads
-# BEFORE the repository update, so a failed update left the release looking
-# complete and every later run reported success while runner-manifest.json
-# stayed pinned to v0.75.2 through v0.76.7. Checking (2) makes the sweep
-# genuinely self-healing: a manifest that never landed is re-detected and
-# re-delivered on the next run.
-# Whether the release's zips still match what vouches for them is deliberately
-# NOT checked here: the zips and the manifest asset beside them are both writable
-# by anything holding contents: write, so comparing them proves nothing. A
-# substituted archive is caught by the client's SHA-256 check, which falls back to
-# a local build — slower, never compromised. Real attestation is separate work.
-#
-# The trust root reaches main through the SAME protected-branch path releases
-# use — a branch, a pull request, required checks, a gated merge. It is never
-# pushed to main directly and never carries [skip ci]: main requires the
-# "Build & Test" status check, and a commit that skips CI can never produce it.
-#
-# Reruns are idempotent by construction: release uploads use --clobber, the
-# manifest branch name is derived from the version alone, an already-open PR for
-# that branch is reused rather than duplicated, and a manifest PR left over from
-# an earlier version is closed so two of them can never land in either order.
-#
-# Every job checks out main and publishes only the CURRENT plugin.json version.
-# force_version re-publishes that version (skipping the missing-assets check); it
-# cannot name a historical one, because the runners are built from current source
-# and a backfill would both misattribute the binaries and downgrade the trust root.
-#
-# Until the manifest PR lands for a released version, clients resolve to the
-# local build (provenance 'local') — degraded, not broken.
-#
-# PREREQUISITES (repo settings, cannot be set from this file):
-#   - Settings > Actions > General > "Allow GitHub Actions to create and approve
-#     pull requests". The repository-wide default workflow permission stays
-#     read-only; the `permissions:` blocks below grant what this workflow needs —
-#     `contents: write` for the release, plus `pull-requests: write` on the
-#     publish job for the manifest PR.
-#   - Settings > General > "Allow auto-merge".
-#   - A maintainer must approve the manifest PR's queued CI run ("Approve and
-#     run"): a workflow-opened PR authenticated with GITHUB_TOKEN parks its
-#     pull_request run at action_required, so "Build & Test" does not register
-#     on its own. Auto-merge lands the PR as soon as that check goes green.
+# Callable only. Delivery verification and manifest-asset repair live in
+# runner-artifacts-sweep.yml, which needs contents: write — a write-requesting
+# job in this file would be rejected at startup on every release run, because
+# GitHub checks a called workflow's nested-job permissions against the calling
+# job and ignores the nested `if:`.
 
 on:
-  push:
-    branches: [main]
-  schedule:
-    # Sweep for releases the push trigger can't see (GITHUB_TOKEN bot merges,
-    # B258), for partially-failed builds, and for a manifest PR that has not
-    # landed yet. Off-hour minute to dodge load.
-    - cron: '23 */6 * * *'
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      force_version:
-        description: Re-publish artifacts for the CURRENT plugin version, skipping the missing-assets check
-        required: false
-        default: ''
+      ref:
+        description: Full commit SHA of the verified release candidate to build
+        type: string
+        required: true
+      version:
+        description: Plugin version the candidate advertises (names the zips)
+        type: string
+        required: true
+    outputs:
+      ios-sha256:
+        value: ${{ jobs.build-ios.outputs.sha256 }}
+      ios-bytes:
+        value: ${{ jobs.build-ios.outputs.bytes }}
+      ios-artifact-id:
+        value: ${{ jobs.build-ios.outputs.artifact-id }}
+      ios-tree:
+        value: ${{ jobs.build-ios.outputs.tree }}
+      android-sha256:
+        value: ${{ jobs.build-android.outputs.sha256 }}
+      android-bytes:
+        value: ${{ jobs.build-android.outputs.bytes }}
+      android-artifact-id:
+        value: ${{ jobs.build-android.outputs.artifact-id }}
+      android-tree:
+        value: ${{ jobs.build-android.outputs.tree }}
 
-# One repository-wide group: publication targets a single release and a single
-# manifest branch, so runs from different refs must never overlap.
-concurrency: runner-artifacts
-
-# Minimal, explicit permissions (CodeQL actions/missing-workflow-permissions).
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  detect:
-    name: Detect missing runner artifacts
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.v.outputs.version }}
-      build: ${{ steps.v.outputs.build }}
-      publish: ${{ steps.v.outputs.publish }}
-      branch: ${{ steps.v.outputs.branch }}
-    steps:
-      # Always main: workflow_dispatch can be started from any ref, and a manifest
-      # branch cut from a feature branch would carry unrelated commits into an
-      # auto-merging PR.
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
-        with:
-          ref: main
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — SHA pin
-        with:
-          node-version: 24
-      - id: v
-        name: Decide what this run must build and publish
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          FORCE_VERSION: ${{ github.event.inputs.force_version }}
-        run: |
-          # Publication always targets the current plugin version; force_version
-          # only skips the missing-assets check, and the decision script rejects
-          # it outright if it names anything else.
-          CUR=$(jq -r '.version' packages/claude-plugin/plugin.json)
-          if ! gh release view "v$CUR" --json assets \
-               --jq '[.assets[].name]' > release-assets.json 2> release-view.err; then
-            # A failed listing must never read as "the release carries no zips":
-            # that rebuilds binaries the release already serves, and neither
-            # Xcode nor Gradle is byte-reproducible, so the replacements would
-            # drift from the trust root and send every install to a local build.
-            # Only a release GitHub itself reports as absent counts as
-            # unpublished, and that verdict comes from the API's own 404 status
-            # rather than from a CLI message.
-            gh api "repos/{owner}/{repo}/releases/tags/v$CUR" > release-probe.json 2>/dev/null || :
-            if [ "$(jq -r '.status // "found"' release-probe.json 2>/dev/null)" != "404" ]; then
-              cat release-view.err >&2
-              echo "::error::could not determine what release v$CUR carries — refusing to guess" >&2
-              exit 1
-            fi
-            echo '[]' > release-assets.json
-          fi
-          rm -f published-manifest.json
-          if jq -e 'any(.[]; . == "runner-manifest.json")' release-assets.json >/dev/null; then
-            gh release download "v$CUR" --pattern runner-manifest.json --output published-manifest.json \
-              || rm -f published-manifest.json
-          fi
-          node scripts/runner-manifest-publication.mts \
-            --plugin-version "$CUR" \
-            --force-version "$FORCE_VERSION" \
-            --release-assets release-assets.json \
-            --repo-manifest runner-manifest.json \
-            --published-manifest published-manifest.json
-      - name: Create the release for this version (idempotent)
-        if: steps.v.outputs.build == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.v.outputs.version }}
-        run: |
-          if ! gh release view "v$VERSION" >/dev/null 2>&1; then
-            # Notes from this version's CHANGELOG section; falls back to the fixed one-liner.
-            bash scripts/release-notes-from-changelog.sh "$VERSION" > release-notes.md
-            gh release create "v$VERSION" \
-              --title "v$VERSION" \
-              --notes-file release-notes.md
-          fi
-
   build-ios:
     name: Build rn-fast-runner (iOS)
-    needs: detect
-    if: needs.detect.outputs.build == 'true'
     # macos-15 ships Xcode 16.x — required since RnFastRunner.xcodeproj moved to
     # project format 77 (Xcode 15.4 on macos-14 refuses to open it). Same runner
     # choice as native-tests.yml and codeql.yml, which build this project green.
     runs-on: macos-15
+    outputs:
+      sha256: ${{ steps.zip.outputs.sha256 }}
+      bytes: ${{ steps.zip.outputs.bytes }}
+      tree: ${{ steps.zip.outputs.tree }}
+      artifact-id: ${{ steps.retain.outputs.artifact-id }}
     steps:
-      # Always main: workflow_dispatch can be started from any ref, and a manifest
-      # branch cut from a feature branch would carry unrelated commits into an
-      # auto-merging PR.
+      - name: Refuse anything but a full candidate SHA
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          case "$REF" in
+            *[!0-9a-f]* | '') echo "::error::candidate ref must be a full commit SHA, got '$REF'" >&2; exit 1 ;;
+          esac
+          [ "${#REF}" = 40 ] || { echo "::error::candidate ref must be a full commit SHA, got '$REF'" >&2; exit 1; }
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
         with:
-          ref: main
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
       - name: build-for-testing (no code signing, both arches)
         run: |
           xcodebuild build-for-testing \
@@ -170,309 +79,82 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build/dd \
             CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=NO
-      - name: Zip products + xctestrun (preserving Build/Products layout)
+      - id: zip
+        name: Zip products + xctestrun and record the producer identity
         env:
-          VERSION: ${{ needs.detect.outputs.version }}
+          VERSION: ${{ inputs.version }}
+          REF: ${{ inputs.ref }}
         run: |
+          [ "$(git rev-parse HEAD)" = "$REF" ] || { echo "::error::checkout is not the candidate $REF" >&2; exit 1; }
           test -n "$(find build/dd/Build/Products -name '*.xctestrun' -print -quit)" \
             || { echo "no .xctestrun produced — unexpected DerivedData layout"; exit 1; }
-          (cd build/dd && zip -r "$GITHUB_WORKSPACE/rn-fast-runner-$VERSION-sim.zip" Build/Products)
-      - name: Upload to the release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ needs.detect.outputs.version }}
-        run: gh release upload "v$VERSION" "rn-fast-runner-$VERSION-sim.zip" --clobber
+          ZIP="rn-fast-runner-$VERSION-sim.zip"
+          (cd build/dd && zip -r "$GITHUB_WORKSPACE/$ZIP" Build/Products)
+          {
+            echo "sha256=$(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
+            echo "bytes=$(wc -c < "$ZIP" | tr -d ' ')"
+            echo "tree=$(git rev-parse HEAD:packages/rn-fast-runner)"
+          } >> "$GITHUB_OUTPUT"
+      - id: retain
+        name: Retain the zip for the release transaction
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1 — SHA pin
+        with:
+          name: rn-fast-runner-${{ inputs.version }}-sim
+          path: rn-fast-runner-${{ inputs.version }}-sim.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
   build-android:
     name: Build rn-android-runner (Android)
-    needs: detect
-    if: needs.detect.outputs.build == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      sha256: ${{ steps.zip.outputs.sha256 }}
+      bytes: ${{ steps.zip.outputs.bytes }}
+      tree: ${{ steps.zip.outputs.tree }}
+      artifact-id: ${{ steps.retain.outputs.artifact-id }}
     steps:
-      # Always main: workflow_dispatch can be started from any ref, and a manifest
-      # branch cut from a feature branch would carry unrelated commits into an
-      # auto-merging PR.
+      - name: Refuse anything but a full candidate SHA
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          case "$REF" in
+            *[!0-9a-f]* | '') echo "::error::candidate ref must be a full commit SHA, got '$REF'" >&2; exit 1 ;;
+          esac
+          [ "${#REF}" = 40 ] || { echo "::error::candidate ref must be a full commit SHA, got '$REF'" >&2; exit 1; }
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
         with:
-          ref: main
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
       # Ubuntu runners ship a JDK (JAVA_HOME set) and the Android SDK
       # ($ANDROID_HOME). If a future AGP needs a newer JDK, add actions/setup-java.
       - name: assembleDebug + assembleDebugAndroidTest
         working-directory: packages/rn-android-runner
         run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
-      - name: Zip both APKs (flat)
+      - id: zip
+        name: Zip both APKs (flat) and record the producer identity
         env:
-          VERSION: ${{ needs.detect.outputs.version }}
+          VERSION: ${{ inputs.version }}
+          REF: ${{ inputs.ref }}
         run: |
+          [ "$(git rev-parse HEAD)" = "$REF" ] || { echo "::error::checkout is not the candidate $REF" >&2; exit 1; }
           APP=packages/rn-android-runner/app/build/outputs/apk/debug/app-debug.apk
           TEST=packages/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           test -f "$APP" && test -f "$TEST" || { echo "APK(s) missing after gradle build"; exit 1; }
-          zip -j "rn-android-runner-$VERSION.zip" "$APP" "$TEST"
-      - name: Upload to the release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ needs.detect.outputs.version }}
-        run: gh release upload "v$VERSION" "rn-android-runner-$VERSION.zip" --clobber
+          ZIP="rn-android-runner-$VERSION.zip"
+          zip -j "$ZIP" "$APP" "$TEST"
+          {
+            echo "sha256=$(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
+            echo "bytes=$(wc -c < "$ZIP" | tr -d ' ')"
+            echo "tree=$(git rev-parse HEAD:packages/rn-android-runner)"
+          } >> "$GITHUB_OUTPUT"
+      - id: retain
+        name: Retain the zip for the release transaction
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1 — SHA pin
+        with:
+          name: rn-android-runner-${{ inputs.version }}
+          path: rn-android-runner-${{ inputs.version }}.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
-  publish-manifest:
-    name: Publish runner-manifest.json through a protected-branch PR
-    needs: [detect, build-ios, build-android]
-    # Runs whenever the trust root is stale — including when both builds were
-    # skipped because the release already carries its zips, which is exactly the
-    # self-heal case for a manifest update that failed on an earlier run.
-    # `needs.detect.result` is spelled out because a status-check function in an
-    # `if:` drops the implicit success() on needs: without it a detect that wrote
-    # its decision and then failed a later step would still publish, and the
-    # build jobs it asked for would have been skipped.
-    if: >-
-      ${{ !cancelled()
-      && needs.detect.result == 'success'
-      && needs.detect.outputs.publish == 'true'
-      && contains(fromJSON('["success","skipped"]'), needs.build-ios.result)
-      && contains(fromJSON('["success","skipped"]'), needs.build-android.result) }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    env:
-      VERSION: ${{ needs.detect.outputs.version }}
-      BRANCH: ${{ needs.detect.outputs.branch }}
-    steps:
-      # Always main: workflow_dispatch can be started from any ref, and a manifest
-      # branch cut from a feature branch would carry unrelated commits into an
-      # auto-merging PR.
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
-        with:
-          ref: main
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — SHA pin
-        with:
-          node-version: 24
-      - name: Download both runner zips from the release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release download "v$VERSION" \
-            --pattern "rn-fast-runner-$VERSION-sim.zip" \
-            --pattern "rn-android-runner-$VERSION.zip" \
-            --clobber
-      - name: Refuse to deliver a trust root the installed plugin cannot use
-        run: |
-          # Defence in depth behind the same rule in the decision script: the
-          # in-repo manifest is only ever allowed to track plugin.json, because a
-          # client uses a prebuilt runner only when manifest.version equals the
-          # installed plugin version.
-          PLUGIN=$(jq -r '.version' packages/claude-plugin/plugin.json)
-          if [ "$VERSION" != "$PLUGIN" ]; then
-            echo "::error::refusing to publish a v$VERSION trust root while plugin.json is v$PLUGIN" >&2
-            exit 1
-          fi
-      - id: branch
-        name: Reuse or recreate the version-keyed manifest branch
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          # One deterministic branch per version, so a rerun updates the same
-          # branch (and reuses its PR) instead of fanning out duplicates. This is
-          # the ONLY place origin is asked whether that branch exists, and only
-          # exit 2 ("no matching ref") counts as absent: a transport failure must
-          # never be readable as "nothing to deliver".
-          rc=0
-          git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null || rc=$?
-          case "$rc" in
-            0) existed=true ;;
-            2) existed=false ;;
-            *)
-              echo "::error::could not ask origin whether $BRANCH exists (git ls-remote exit $rc)" >&2
-              exit 1
-              ;;
-          esac
-          MAIN=$(git rev-parse HEAD)
-          # The branch is workflow-owned. Its head is kept — and with it the
-          # maintainer's "Approve and run", which is bound to that exact SHA —
-          # while what the PR would DELIVER is still nothing but the trust root:
-          # the comparison against the merge base must name no other path. That is
-          # the invariant that matters, and it does not depend on how many commits
-          # this workflow has already made on the branch, nor on main advancing
-          # underneath it.
-          #
-          # Anything else — a commit someone else pushed onto this unprotected
-          # branch — must not ride into the auto-merging PR, the same hazard
-          # `ref: main` closes above. Such a branch is DISCARDED and cut again
-          # from current main rather than corrected in place: the comparison is
-          # against the merge base, which a correcting commit cannot move, so
-          # patching the tree would leave every later run reporting main's own
-          # files as foreign and rewriting the PR head on every merge to main.
-          # Deleting the branch also closes its PR, so the replacement starts
-          # from a clean base. It is a workflow-owned branch, never main.
-          if [ "$existed" = true ]; then
-            if ! gh api "repos/{owner}/{repo}/compare/main...$BRANCH" > compare.json; then
-              echo "::error::could not compare $BRANCH against main" >&2
-              exit 1
-            fi
-            FOREIGN=$(jq -r --argjson allow '["runner-manifest.json","packages/codex-plugin/runner-manifest.json","packages/claude-plugin/runner-manifest.json"]' \
-              '[.files[].filename] - $allow | join(" ")' compare.json)
-          fi
-          # A branch cut fresh from main delivers nothing until this run commits
-          # to it, and so does one that survived a PR closed without merging.
-          # Both are ahead=0, which is what the PR step needs: `gh pr create`
-          # refuses a head with no commits between it and the base.
-          AHEAD=0
-          if [ "$existed" = true ] && [ -z "$FOREIGN" ]; then
-            echo "reusing $BRANCH: it delivers the trust root and nothing else"
-            AHEAD=$(jq -r '.ahead_by' compare.json)
-            git fetch --depth=1 origin "$BRANCH"
-            git checkout -B "$BRANCH" FETCH_HEAD
-          else
-            if [ "$existed" = true ]; then
-              echo "::warning::discarding $BRANCH and cutting it again from main (unexpected paths: $FOREIGN)"
-              git push origin --delete "$BRANCH"
-              existed=false
-            fi
-            git checkout -B "$BRANCH" "$MAIN"
-          fi
-          case "$AHEAD" in
-            '' | *[!0-9]*)
-              echo "::error::could not read how far $BRANCH is ahead of main (got '$AHEAD')" >&2
-              exit 1
-              ;;
-          esac
-          echo "existed=$existed" >> "$GITHUB_OUTPUT"
-          echo "ahead=$AHEAD" >> "$GITHUB_OUTPUT"
-      - name: Generate the manifest (sha256 + bytes)
-        env:
-          BUILT: ${{ needs.detect.outputs.build }}
-          BRANCH_EXISTED: ${{ steps.branch.outputs.existed }}
-        run: |
-          # Republishing the trust root verbatim instead of re-deriving it from
-          # downloaded zips is only sound while the working tree is main's own:
-          # the branch step cuts a NEW branch from main, but a REUSED one carries
-          # whatever was pushed to it, and that branch is unprotected — the reuse
-          # allowlist admits any diff confined to the three manifest paths, which
-          # cannot distinguish this workflow's commit from anyone else's. On a
-          # reused branch the manifest is therefore always recomputed, so branch
-          # content can never reach the release asset or the PR unexamined.
-          if [ "$BUILT" != true ] && [ "$BRANCH_EXISTED" != true ] \
-             && [ "$(jq -r '.version // empty' runner-manifest.json 2>/dev/null)" = "$VERSION" ]; then
-            echo "runner-manifest.json already vouches for v$VERSION and nothing was rebuilt — republishing it verbatim"
-          else
-            node scripts/build-runner-manifest.mts \
-              --version "$VERSION" \
-              --ios "rn-fast-runner-$VERSION-sim.zip" \
-              --android "rn-android-runner-$VERSION.zip" \
-              --out runner-manifest.json
-          fi
-          cp runner-manifest.json packages/codex-plugin/runner-manifest.json
-          cp runner-manifest.json packages/claude-plugin/runner-manifest.json
-          cat runner-manifest.json
-      - name: Attach the manifest to the release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "v$VERSION" runner-manifest.json --clobber
-      - id: commit
-        name: Commit the manifest to the branch
-        run: |
-          git add runner-manifest.json packages/codex-plugin/runner-manifest.json packages/claude-plugin/runner-manifest.json
-          # No [skip ci]: main requires the "Build & Test" check, and a commit
-          # that skips CI can never produce it.
-          if git diff --cached --quiet; then
-            echo "manifest already current on $BRANCH — nothing to commit"
-            echo "pushed=false" >> "$GITHUB_OUTPUT"
-          else
-            git commit -m "chore(release): runner-manifest for v$VERSION"
-            git push origin "$BRANCH"
-            echo "pushed=true" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Open or reuse the manifest PR and arm auto-merge
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          BRANCH_EXISTED: ${{ steps.branch.outputs.existed }}
-          AHEAD: ${{ steps.branch.outputs.ahead }}
-          PUSHED: ${{ steps.commit.outputs.pushed }}
-        run: |
-          # The runner's default shell is `bash -e`, which does NOT set pipefail:
-          # without this the superseded-PR sweep below would take the exit status
-          # of its trailing `jq` alone and silently close nothing when the listing
-          # failed, leaving an armed PR from an earlier version free to land after
-          # this one. The sweep is fatal by design, so it must fail as a pipeline.
-          set -o pipefail
-          # Whether there is anything to deliver comes from the two steps that
-          # know it authoritatively; origin is never re-asked, because a failed
-          # query would otherwise read as "no branch" and finish this job green
-          # with the trust root pushed but undelivered.
-          case "$BRANCH_EXISTED:$PUSHED" in
-            true:true | true:false | false:true | false:false) ;;
-            *)
-              echo "::error::manifest branch state was not reported (existed='$BRANCH_EXISTED' pushed='$PUSHED')" >&2
-              exit 1
-              ;;
-          esac
-          case "$AHEAD" in
-            '' | *[!0-9]*)
-              echo "::error::manifest branch state was not reported (ahead='$AHEAD')" >&2
-              exit 1
-              ;;
-          esac
-          # A manifest PR left open from an earlier version would race this one:
-          # it may already have auto-merge armed and land AFTER it, restoring a
-          # stale trust root. Exactly one may be open, so closing them is fatal,
-          # not best-effort, and it happens before this PR is armed. It also
-          # happens before the "nothing of our own to deliver" return below: a
-          # superseded PR is armed independently of whether THIS run has a commit
-          # to make, so retiring it may not be conditional on that. Every open PR
-          # is paged through rather than capped at a page size, so the invariant
-          # cannot degrade silently once the repository carries many open PRs. The
-          # branch comparison is done in shell, never in --jq, so a filter that
-          # mismatches can never close the PR we just opened. Head-ref names on
-          # fork PRs are chosen by the contributor and need no repository
-          # permission, so the sweep only ever considers same-repository branches
-          # whose suffix is a release version — otherwise anyone could name a fork
-          # branch `chore/runner-manifest-vX`, have this job close their PR, and
-          # (because that close is fatal) block trust-root delivery outright.
-          STALE=$(gh api --paginate 'repos/{owner}/{repo}/pulls?state=open&per_page=100' --jq '.[]' \
-            | jq -r --arg repo "$GH_REPO" '
-                select(.head.repo.full_name == $repo)
-                | select(.head.ref | test("^chore/runner-manifest-v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"))
-                | "\(.number) \(.head.ref)"')
-          while read -r stale ref; do
-            { [ -n "$stale" ] && [ "$ref" != "$BRANCH" ]; } || continue
-            echo "closing superseded manifest PR #$stale ($ref)"
-            gh pr close "$stale" --comment "Superseded by the runner-manifest PR for v$VERSION."
-            git push origin --delete "$ref" || echo "::warning::could not delete $ref"
-          done <<< "$STALE"
-          # Nothing to deliver is a property of the BRANCH, not of whether it
-          # happened to exist: a branch that survived a PR closed without merging
-          # is still identical to main, and `gh pr create` refuses a head with no
-          # commits between it and the base. Whatever this run had to repair (the
-          # release asset) is already done by the time we get here.
-          if [ "$PUSHED" != true ] && [ "$AHEAD" = 0 ]; then
-            echo "the repository trust root already carries v$VERSION — no PR needed"
-            exit 0
-          fi
-          PR=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')
-          if [ -z "$PR" ]; then
-            PR_URL=$(gh pr create --base main --head "$BRANCH" \
-              --title "chore(release): runner-manifest for v$VERSION" \
-              --body "Refreshes the in-repository runner trust root (\`runner-manifest.json\` and its two host-plugin copies) to the SHA-256 digests published on release v$VERSION. Generated by .github/workflows/runner-artifacts.yml; merges automatically once \"Build & Test\" is approved and green.")
-            PR=${PR_URL##*/}
-          fi
-          case "$PR" in
-            '' | *[!0-9]*)
-              echo "::error::could not determine the manifest PR number for v$VERSION (gh pr create said: ${PR_URL:-<no output>})" >&2
-              exit 1
-              ;;
-          esac
-          # Auto-merge respects branch protection: the PR lands only after the
-          # required check passes. Failure to ARM it is an operator-visible
-          # misconfiguration, so it fails the job rather than leaving the trust
-          # root silently stale.
-          if ! out=$(gh pr merge --squash --auto "$PR" 2>&1); then
-            echo "$out" >&2
-            echo "::error::could not arm auto-merge on PR #$PR — v$VERSION stays undelivered until it lands" >&2
-            exit 1
-          fi
-          echo "$out"
-          echo "::warning::runner-manifest v$VERSION is delivered by PR #$PR; approve its queued CI run so \"Build & Test\" can register and auto-merge can land it"

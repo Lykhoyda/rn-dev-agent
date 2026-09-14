@@ -1,0 +1,47 @@
+name: Runner artifacts sweep
+
+# Delivery sweep for the published trust root: verifies that main's advertised
+# version has its exact bytes public (scripts/check-public-runner-assets.sh) and
+# re-attaches a MISSING runner-manifest.json asset from the trust root. It never
+# builds: after publication no byte is rebuilt, replaced or re-hashed, and a
+# trust root is only ever created on the Version Packages branch before the
+# version becomes visible (see release.yml).
+#
+# Separate from runner-artifacts.yml because this job needs `contents: write`
+# for the repair upload: GitHub validates a called workflow's nested-job
+# permissions against the CALLING job when the run starts and ignores the
+# nested `if:`, so a write-requesting job in the producer file would reject
+# every release run at startup.
+
+on:
+  schedule:
+    # Off-hour minute to dodge load.
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    name: Verify delivery of the advertised trust root
+    # Only main's own copy of this file may hold the repair token: a dispatch
+    # from any other ref would run that ref's workflow code with contents: write.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # The repair upload is the only write; one sweep at a time.
+    concurrency: runner-artifacts-sweep
+    permissions:
+      contents: write
+    steps:
+      # Always main: workflow_dispatch can be started from any ref, and only the
+      # default branch advertises a version.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Public runner assets match main's trust root (repair a missing manifest asset only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/check-public-runner-assets.sh --repair
