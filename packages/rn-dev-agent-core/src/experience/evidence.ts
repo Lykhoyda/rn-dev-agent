@@ -78,6 +78,7 @@ const REDACTION_RULES: ReadonlyArray<[RegExp, string]> = [
   [/~\/[A-Za-z0-9_./-]+/g, '[PATH_REDACTED]'],
   [/\/(Users|home|opt|var|tmp|etc|private|Volumes)\/[A-Za-z0-9_./-]+/g, '[PATH_REDACTED]'],
   [/(com|org|io|dev|net)\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+/g, '[BUNDLE_REDACTED]'],
+  [/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '[ID_REDACTED]'],
 ];
 
 // The shell contract catches keyword-adjacent values. Structured tool errors
@@ -89,7 +90,7 @@ export type RedactString = (value: string) => string;
 
 // Bump whenever a redaction rule changes: stored records stamped with an older
 // version are re-sanitized under the current rules before the next rewrite.
-export const REDACTION_RULES_VERSION = 1;
+export const REDACTION_RULES_VERSION = 2;
 
 export function sanitizeString(value: string, redact: RedactString = applyRedactionRules): string {
   try {
@@ -392,7 +393,7 @@ export class ExperienceRecorder {
       recovery: null,
       cleanup: null,
       classification,
-      evidencePointers: [`event:${randomUUID()}`],
+      evidencePointers: [`event:${randomUUID().replaceAll('-', '')}`],
       tool,
       status: event.status === 'ERROR' ? 'ERROR' : 'FAIL',
       normalizedSymptomShape,
@@ -459,7 +460,7 @@ export class ExperienceRecorder {
     existing.lastRecoveredAt = now;
     delete existing.unknownReasons.recovery;
     existing.evidencePointers = boundedPointers(existing.evidencePointers, [
-      `event:${randomUUID()}`,
+      `event:${randomUUID().replaceAll('-', '')}`,
     ]);
     this.write(pruneExperienceRecords(records, this.now(), this.maxRecords, this.retentionMs));
   }

@@ -690,6 +690,32 @@ test('refusal metadata is discarded and platform sanitized before systemic hashi
   }
 });
 
+test('refusal symptoms drop simulator UDIDs while systemic grouping is unchanged', () => {
+  const directory = tempDirectory();
+  const recorder = synchronousRecorder(directory);
+  const udids = ['A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D', 'ffffffff-0000-4000-8000-123456789abc'];
+  for (const udid of udids) {
+    const envelope = {
+      ok: false,
+      code: 'METRO_ORIGIN_MISMATCH',
+      error: `the bound ios device ${udid} is running com.example.app served by Metro :8082, not this session's Metro :8081`,
+      meta: { axis: 'M' },
+    };
+    recorder.observe({ ...refusal(), result: envelope, error: envelope.error });
+  }
+  const serialized = readFileSync(join(directory, EXPERIENCE_STORE_NAME), 'utf8');
+  for (const udid of udids)
+    assert.equal(serialized.toLowerCase().includes(udid.toLowerCase()), false, udid);
+  const records = recorder.read();
+  assert.equal(records.length, 1);
+  assert.equal(records[0].count, 2);
+  assert.match(records[0].symptom, /device \[ID_REDACTED\] is running/);
+  assert.equal(
+    records[0].systemicKey,
+    authorityRefusalSystemicKey({ code: 'METRO_ORIGIN_MISMATCH', axis: 'M', cause: null }, 'ios'),
+  );
+});
+
 test('refusal decoding is deferred and decoder failures clear earlier recovery candidates', () => {
   const queued: Array<() => void> = [];
   const recorder = synchronousRecorder(tempDirectory(), { schedule: (work) => queued.push(work) });
