@@ -51,6 +51,9 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..',
 const release = loadWorkflow(join(repoRoot, '.github', 'workflows', 'release.yml'));
 const artifacts = loadWorkflow(join(repoRoot, '.github', 'workflows', 'runner-artifacts.yml'));
 const ci = loadWorkflow(join(repoRoot, '.github', 'workflows', 'ci.yml'));
+const sweepWorkflow = loadWorkflow(
+  join(repoRoot, '.github', 'workflows', 'runner-artifacts-sweep.yml'),
+);
 
 const ADVERTISED = '0.76.6';
 const VERSION = '0.76.7';
@@ -1751,7 +1754,7 @@ const SWEEP_STEP =
 
 function runSweep(fixture: Fixture) {
   return runJobSteps({
-    workflow: artifacts,
+    workflow: sweepWorkflow,
     jobId: 'sweep',
     cwd: checkout(fixture, fixture.head!),
     ctx: { 'secrets.GITHUB_TOKEN': 'stub-token', 'github.repository': REPO },
@@ -1852,10 +1855,12 @@ function everyRun(workflow: Workflow): Array<{ jobId: string; step: WorkflowStep
 
 test('the producer is a read-only callable: no release writes, no branch pushes, no persisted credential', () => {
   assert.deepEqual(artifacts.permissions, { contents: 'read' });
-  // The sweep's manifest-asset repair is the only write in the file.
+  // GitHub validates a called workflow's nested-job permissions against the
+  // CALLING job at run startup and ignores the nested `if:`, so any job here
+  // asking for more than the caller's contents: read rejects every release run.
   assert.deepEqual(
     Object.fromEntries(Object.entries(artifacts.jobs).map(([id, job]) => [id, job.permissions])),
-    { 'build-ios': undefined, 'build-android': undefined, sweep: { contents: 'write' } },
+    { 'build-ios': undefined, 'build-android': undefined },
   );
   for (const jobId of ['build-ios', 'build-android']) {
     const job = artifacts.jobs[jobId];
@@ -1871,13 +1876,21 @@ test('the producer is a read-only callable: no release writes, no branch pushes,
     }
   }
   const on = (artifacts as unknown as { on: Record<string, unknown> }).on;
-  assert.ok('workflow_call' in on && 'schedule' in on && 'workflow_dispatch' in on);
-  assert.ok(!('push' in on), 'no mutable-main builds');
-  assert.match(String(artifacts.jobs.sweep.if), /github\.ref == 'refs\/heads\/main'/);
+  assert.deepEqual(Object.keys(on), ['workflow_call'], 'callable only: no mutable-main builds');
+  const sweepOn = (sweepWorkflow as unknown as { on: Record<string, unknown> }).on;
+  assert.deepEqual(Object.keys(sweepOn).sort(), ['schedule', 'workflow_dispatch']);
+  assert.deepEqual(sweepWorkflow.permissions, { contents: 'read' });
+  assert.deepEqual(sweepWorkflow.jobs.sweep.permissions, { contents: 'write' });
+  assert.match(String(sweepWorkflow.jobs.sweep.if), /github\.ref == 'refs\/heads\/main'/);
+  const sweepCheckout = (sweepWorkflow.jobs.sweep.steps ?? []).find((s) =>
+    s.uses?.startsWith('actions/checkout@'),
+  );
+  assert.equal(sweepCheckout?.with?.ref, 'main');
+  assert.equal(String(sweepCheckout?.with?.['persist-credentials']), 'false');
 });
 
 test('no step in either workflow clobbers a release asset, arms auto-merge or pushes main', () => {
-  for (const workflow of [release, artifacts]) {
+  for (const workflow of [release, artifacts, sweepWorkflow]) {
     for (const { jobId, step } of everyRun(workflow)) {
       for (const tokens of shellCommands(step.run!).map(withoutGlobalOptions)) {
         const line = tokens.join(' ');
@@ -1915,6 +1928,14 @@ test('the release transaction is ordered: prepare -> finalize -> validate -> pub
     './.github/workflows/runner-artifacts.yml',
   );
   assert.deepEqual(release.jobs.prepare.permissions, { contents: 'read' });
+  for (const [id, job] of Object.entries(artifacts.jobs)) {
+    for (const [scope, level] of Object.entries(job.permissions ?? {})) {
+      assert.ok(
+        scope === 'contents' && level !== 'write',
+        `nested job "${id}" requests ${scope}: ${level}, exceeding prepare's contents: read`,
+      );
+    }
+  }
   assert.deepEqual(release.jobs.finalize.needs, ['version', 'prepare']);
   assert.deepEqual(release.jobs.validate.needs, ['version', 'prepare', 'finalize']);
   assert.deepEqual(release.jobs.publish.needs, ['version', 'prepare', 'finalize', 'validate']);

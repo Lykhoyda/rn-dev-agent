@@ -475,8 +475,10 @@ package `bin`, and marketplace consumers use the committed host supervisor.
   workflow's failed jobs. A published release is never rebuilt, clobbered or
   retagged; a candidate that can no longer land stays published-but-not-
   advertised and changed content ships as a new version. Decisions live in
-  `scripts/runner-manifest-publication.mts`; the scheduled sweep only verifies
-  delivery and re-attaches a missing manifest asset.
+  `scripts/runner-manifest-publication.mts`; `runner-artifacts-sweep.yml` is the
+  scheduled/dispatchable sweep — it only verifies delivery and re-attaches a
+  missing manifest asset, and lives apart from the callable producer because
+  its `contents: write` would otherwise fail every release run at startup.
 
 ## Maintaining this file
 

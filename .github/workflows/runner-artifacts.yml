@@ -1,22 +1,18 @@
 name: Runner artifacts
 
-# Native runner producer for the release trust-root transaction, plus the
-# delivery sweep.
+# Native runner producer for the release trust-root transaction: builds the two
+# runner zips at the supplied, already verified candidate SHA and hands them
+# back as retained run artifacts together with the digest and length the
+# producer itself measured. The caller (trusted release.yml code on main) is the
+# only thing that turns those bytes into a release: nothing here uploads to a
+# release, pushes a branch, or holds a write credential — checkouts do not
+# persist the token and every job runs read-only.
 #
-# PRODUCER (workflow_call from release.yml): builds the two runner zips at the
-# supplied, already verified candidate SHA and hands them back as retained run
-# artifacts together with the digest and length the producer itself measured.
-# The caller (trusted release.yml code on main) is the only thing that turns
-# those bytes into a release: nothing here uploads to a release, pushes a
-# branch, or holds a write credential — checkouts do not persist the token and
-# the jobs run with read permissions.
-#
-# SWEEP (schedule / workflow_dispatch): verifies that main's advertised version
-# has its exact bytes public (scripts/check-public-runner-assets.sh) and
-# re-attaches a MISSING runner-manifest.json asset from the trust root. It never
-# builds: after publication no byte is rebuilt, replaced or re-hashed, and a
-# trust root is only ever created on the Version Packages branch before the
-# version becomes visible (see release.yml).
+# Callable only. Delivery verification and manifest-asset repair live in
+# runner-artifacts-sweep.yml, which needs contents: write — a write-requesting
+# job in this file would be rejected at startup on every release run, because
+# GitHub checks a called workflow's nested-job permissions against the calling
+# job and ignores the nested `if:`.
 
 on:
   workflow_call:
@@ -46,21 +42,13 @@ on:
         value: ${{ jobs.build-android.outputs.artifact-id }}
       android-tree:
         value: ${{ jobs.build-android.outputs.tree }}
-  schedule:
-    # Off-hour minute to dodge load.
-    - cron: '23 */6 * * *'
-  workflow_dispatch:
 
-# Read-only everywhere; the sweep's repair upload declares its own write.
 permissions:
   contents: read
 
 jobs:
   build-ios:
     name: Build rn-fast-runner (iOS)
-    # Producer calls arrive under the CALLER's event (release.yml runs on push);
-    # an empty ref then fails closed in the first step rather than skipping.
-    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     # macos-15 ships Xcode 16.x — required since RnFastRunner.xcodeproj moved to
     # project format 77 (Xcode 15.4 on macos-14 refuses to open it). Same runner
     # choice as native-tests.yml and codeql.yml, which build this project green.
@@ -119,7 +107,6 @@ jobs:
 
   build-android:
     name: Build rn-android-runner (Android)
-    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       sha256: ${{ steps.zip.outputs.sha256 }}
@@ -171,27 +158,3 @@ jobs:
           compression-level: 0
           retention-days: 7
 
-  sweep:
-    name: Verify delivery of the advertised trust root
-    # Only main's own copy of this file may hold the repair token: a dispatch
-    # from any other ref would run that ref's workflow code with contents: write.
-    if: >-
-      ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-      && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    # The repair upload is the only write; one sweep at a time.
-    concurrency: runner-artifacts-sweep
-    permissions:
-      contents: write
-    steps:
-      # Always main: workflow_dispatch can be started from any ref, and only the
-      # default branch advertises a version.
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
-        with:
-          ref: main
-          persist-credentials: false
-      - name: Public runner assets match main's trust root (repair a missing manifest asset only)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: bash scripts/check-public-runner-assets.sh --repair
