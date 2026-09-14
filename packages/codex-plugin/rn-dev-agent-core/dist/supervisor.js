@@ -87453,10 +87453,11 @@ var init_evidence = __esm({
       [/:([0-9]{2,5})(?=\/|\s|$)/g, ":[PORT_REDACTED]"],
       [/~\/[A-Za-z0-9_./-]+/g, "[PATH_REDACTED]"],
       [/\/(Users|home|opt|var|tmp|etc|private|Volumes)\/[A-Za-z0-9_./-]+/g, "[PATH_REDACTED]"],
-      [/(com|org|io|dev|net)\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+/g, "[BUNDLE_REDACTED]"]
+      [/(com|org|io|dev|net)\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+/g, "[BUNDLE_REDACTED]"],
+      [/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "[ID_REDACTED]"]
     ];
     KEYED_SECRET = /((?:token|secret|password|auth|api[_-]?key)\s*[:=]\s*)[^\s,;}]{6,}/gi;
-    REDACTION_RULES_VERSION = 1;
+    REDACTION_RULES_VERSION = 2;
     appIdentityCache = null;
     ExperienceRecorder = class {
       directory;
@@ -87585,7 +87586,7 @@ var init_evidence = __esm({
           recovery: null,
           cleanup: null,
           classification,
-          evidencePointers: [`event:${randomUUID11()}`],
+          evidencePointers: [`event:${randomUUID11().replaceAll("-", "")}`],
           tool,
           status: event.status === "ERROR" ? "ERROR" : "FAIL",
           normalizedSymptomShape,
@@ -87640,7 +87641,7 @@ var init_evidence = __esm({
         existing.lastRecoveredAt = now;
         delete existing.unknownReasons.recovery;
         existing.evidencePointers = boundedPointers(existing.evidencePointers, [
-          `event:${randomUUID11()}`
+          `event:${randomUUID11().replaceAll("-", "")}`
         ]);
         this.write(pruneExperienceRecords(records, this.now(), this.maxRecords, this.retentionMs));
       }
