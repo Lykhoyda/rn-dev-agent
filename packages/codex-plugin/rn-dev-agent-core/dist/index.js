@@ -9244,7 +9244,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes9, createHash: createHash25 } = __require("crypto");
+    var { randomBytes: randomBytes9, createHash: createHash26 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -9912,7 +9912,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest3 = createHash25("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash26("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest3) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -10281,7 +10281,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash25 } = __require("crypto");
+    var { createHash: createHash26 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -10588,7 +10588,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest3 = createHash25("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash26("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -36399,7 +36399,7 @@ ensureJavaEnv();
 ensureCwd();
 
 // packages/rn-dev-agent-core/dist/index.js
-import { createHash as createHash24, createHmac as createHmac5, randomUUID as randomUUID12 } from "node:crypto";
+import { createHash as createHash25, createHmac as createHmac5, randomUUID as randomUUID12 } from "node:crypto";
 import { readFileSync as readFileSync43, rmSync as rmSync12 } from "node:fs";
 import { execFile as execFile23 } from "node:child_process";
 import { promisify as promisify26 } from "node:util";
@@ -84660,11 +84660,99 @@ import { execFile as execFileCb15, spawn as spawn8 } from "node:child_process";
 import { promisify as promisify19 } from "node:util";
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
-import { createHash as createHash16, randomBytes as randomBytes7, randomUUID as randomUUID10 } from "node:crypto";
+import { createHash as createHash17, randomBytes as randomBytes7, randomUUID as randomUUID10 } from "node:crypto";
 import { chmodSync as chmodSync7, existsSync as existsSync30, mkdirSync as mkdirSync19, readFileSync as readFileSync31, readdirSync as readdirSync12, renameSync as renameSync9, statSync as statSync14, unlinkSync as unlinkSync13, writeFileSync as writeFileSync15 } from "node:fs";
 import { homedir as homedir9, platform as hostPlatform, release } from "node:os";
 import { dirname as dirname23, join as join46 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
+
+// packages/rn-dev-agent-core/dist/experience/authority-refusal.js
+import { createHash as createHash16 } from "node:crypto";
+var AUTHORITY_REFUSAL_CODES = [
+  "SESSION_AUTHORITY_REQUIRED",
+  "METRO_ORIGIN_MISMATCH",
+  "RUNNER_OWNERSHIP_MISMATCH",
+  "HANDOFF_NOT_AUTHORIZED",
+  "NON_GIT_MANIFEST_REQUIRED",
+  "BUNDLE_HANDSHAKE_UNAVAILABLE"
+];
+var AUTHORITY_AXES = ["C", "S", "I", "M", "A", "B", "D", "R", "P"];
+var REFUSAL_CAUSES = {
+  SESSION_AUTHORITY_REQUIRED: [],
+  METRO_ORIGIN_MISMATCH: [],
+  RUNNER_OWNERSHIP_MISMATCH: [],
+  HANDOFF_NOT_AUTHORIZED: [],
+  NON_GIT_MANIFEST_REQUIRED: [],
+  BUNDLE_HANDSHAKE_UNAVAILABLE: []
+};
+var MAX_AUTHORITY_ENVELOPE_BYTES = 16 * 1024;
+function envelopeObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function isBoundedEnvelopeText(text) {
+  return typeof text === "string" && text.length <= MAX_AUTHORITY_ENVELOPE_BYTES && Buffer.byteLength(text, "utf8") <= MAX_AUTHORITY_ENVELOPE_BYTES;
+}
+function parseAuthorityEnvelope(text) {
+  if (!isBoundedEnvelopeText(text))
+    return null;
+  try {
+    return envelopeObject(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+function authorityResultEnvelope(result) {
+  const envelope = envelopeObject(result);
+  if (!envelope || Object.hasOwn(envelope, "code"))
+    return envelope;
+  if (!Array.isArray(envelope.content))
+    return null;
+  return parseAuthorityEnvelope(envelopeObject(envelope.content[0])?.text);
+}
+function decodeAuthorityRefusalPayload(result, thrownError) {
+  const envelope = authorityResultEnvelope(result);
+  if (envelope && Object.hasOwn(envelope, "code")) {
+    const meta = envelopeObject(envelope.meta);
+    return authorityRefusalFacts(envelope.code, meta?.axis, meta?.cause);
+  }
+  if (typeof thrownError !== "string")
+    return null;
+  const code = AUTHORITY_REFUSAL_CODES.find((candidate) => thrownError.startsWith(`${candidate}:`));
+  return authorityRefusalFacts(code, null, null);
+}
+function isAuthorityRefusalCode(value) {
+  return AUTHORITY_REFUSAL_CODES.some((code) => code === value);
+}
+function authorityRefusalFamily(code) {
+  return `FF_${code}`;
+}
+function authorityRefusalFacts(code, axis, cause) {
+  if (!isAuthorityRefusalCode(code))
+    return null;
+  return {
+    code,
+    axis: AUTHORITY_AXES.find((candidate) => candidate === axis) ?? null,
+    cause: REFUSAL_CAUSES[code].find((candidate) => candidate === cause) ?? null
+  };
+}
+function mergeAuthorityRefusalFacts(existing, incoming) {
+  return {
+    code: incoming.code,
+    axis: existing?.code === incoming.code && existing.axis === incoming.axis ? incoming.axis : null,
+    cause: existing?.code === incoming.code && existing.cause === incoming.cause ? incoming.cause : null
+  };
+}
+function authorityRefusalSystemicKey(facts, platform) {
+  return createHash16("sha256").update(JSON.stringify([
+    "rn-dev-agent/authority-refusal/1",
+    facts.code,
+    facts.axis,
+    facts.cause,
+    platform
+  ])).digest("hex");
+}
+
+// packages/rn-dev-agent-core/dist/experience/evidence.js
 var UNKNOWN_CLASSIFICATION = "UNKNOWN";
 var DEFAULT_MAX_RECORDS = 500;
 var DEFAULT_RETENTION_DAYS = 14;
@@ -84830,10 +84918,11 @@ var ExperienceRecorder = class {
       this.previousFailure = null;
       return;
     }
+    this.previousFailure = null;
     this.persistRunnerDiagnostics(event);
     const record3 = this.buildFailureRecord(event);
     this.persistFailure(record3);
-    this.previousFailure = event.status === "FAIL" ? { tool: event.tool, signature: record3.signature } : null;
+    this.previousFailure = event.status === "FAIL" && !record3.authorityRefusal ? { tool: event.tool, signature: record3.signature } : null;
   }
   persistRunnerDiagnostics(event) {
     const trace = event.runnerDiagnostics;
@@ -84854,15 +84943,16 @@ var ExperienceRecorder = class {
     writeRunnerDiagnosticsBundle(this.directory, bundle);
   }
   buildFailureRecord(event) {
+    const authorityRefusal = decodeAuthorityRefusal(event);
     const now = this.now().toISOString();
     const tool = sanitizeString(event.tool);
-    const symptom = sanitizeString(boundSymptom(extractSymptom(event)));
+    const symptom = sanitizeString(boundSymptom(authorityRefusal ? authorityRefusalSymptom(event, authorityRefusal) : extractSymptom(event)));
     const platform = sanitizeNullable(extractScalar(event, ["platform"]));
     const deviceName = extractScalar(event, ["deviceName", "deviceModel", "model"]);
     const hasDeviceId = extractScalar(event, ["deviceId", "udid"]) !== null;
     const device = sanitizeNullable(deviceName ?? (hasDeviceId ? "identified-device" : null));
     const runtime = sanitizeNullable(extractScalar(event, ["runtime", "engine"]));
-    const classification = classifyExperience(symptom, tool, platform);
+    const classification = authorityRefusal ? authorityRefusalFamily(authorityRefusal.code) : classifyExperience(symptom, tool, platform);
     const normalizedSymptomShape = normalizeSymptomShape(symptom);
     const signature = experienceSignature({
       classification,
@@ -84881,7 +84971,7 @@ var ExperienceRecorder = class {
     if (runtime === null)
       unknownReasons.runtime = "tool event did not expose a runtime";
     unknownReasons.maskingCondition = "not derivable from a single tool event";
-    unknownReasons.recovery = "no immediate successful retry has been observed";
+    unknownReasons.recovery = authorityRefusal ? "recovery not verified" : "no immediate successful retry has been observed";
     unknownReasons.cleanup = "tool events do not report cleanup actions";
     const raw = {
       signature,
@@ -84907,7 +84997,11 @@ var ExperienceRecorder = class {
       lastSeen: now,
       lastRecoveredAt: null,
       unknownReasons,
-      redactionVersion: REDACTION_RULES_VERSION
+      redactionVersion: REDACTION_RULES_VERSION,
+      ...authorityRefusal ? {
+        authorityRefusal,
+        systemicKey: authorityRefusalSystemicKey(authorityRefusal, platform)
+      } : {}
     };
     return sanitizeForEvidence(raw);
   }
@@ -84926,6 +85020,11 @@ var ExperienceRecorder = class {
       existing.environment = incoming.environment;
       adoptLateFact(existing, incoming, "device");
       adoptLateFact(existing, incoming, "runtime");
+      if (incoming.authorityRefusal) {
+        existing.authorityRefusal = mergeAuthorityRefusalFacts(existing.authorityRefusal, incoming.authorityRefusal);
+        existing.systemicKey = authorityRefusalSystemicKey(existing.authorityRefusal, existing.platform);
+        existing.unknownReasons.recovery = "recovery not verified";
+      }
       existing.evidencePointers = boundedPointers(existing.evidencePointers, incoming.evidencePointers);
     } else {
       records.push(incoming);
@@ -85021,7 +85120,7 @@ function pruneExperienceRecords(records, now, maxRecords = DEFAULT_MAX_RECORDS, 
   }).sort((a, b) => Date.parse(b.lastSeen) - Date.parse(a.lastSeen) || a.signature.localeCompare(b.signature)).slice(0, Math.max(0, maxRecords)).sort((a, b) => a.signature.localeCompare(b.signature));
 }
 function experienceSignature(input) {
-  return createHash16("sha256").update(JSON.stringify([
+  return createHash17("sha256").update(JSON.stringify([
     input.classification,
     input.tool,
     input.normalizedSymptomShape,
@@ -85070,10 +85169,31 @@ var CLASSIFICATION_RULES = [
   ["PQ_ANDROID_BOOT_DELAY", /sys\.boot_completed|emulator.*grpc.*ready/],
   ["PQ_ANDROID_PLAY_PROTECT", /play protect.*(?:block|apk|install)/]
 ];
-var EXPERIENCE_FAMILY_IDS = CLASSIFICATION_RULES.map(([id]) => id);
+var EXPERIENCE_FAMILY_IDS = [
+  ...CLASSIFICATION_RULES.map(([id]) => id),
+  ...AUTHORITY_REFUSAL_CODES.map(authorityRefusalFamily)
+];
 function classifyExperience(symptom, tool, platform) {
   const haystack = `${tool} ${platform ?? ""} ${symptom}`.toLowerCase();
   return CLASSIFICATION_RULES.find(([, pattern]) => pattern.test(haystack))?.[0] ?? UNKNOWN_CLASSIFICATION;
+}
+function envelopeObject2(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function decodeAuthorityRefusal(event) {
+  if (event.status !== "FAIL" && event.status !== "ERROR")
+    return null;
+  return decodeAuthorityRefusalPayload(event.result, event.status === "ERROR" ? event.error : void 0);
+}
+function authorityRefusalSymptom(event, facts) {
+  const envelope = authorityResultEnvelope(event.result);
+  if (typeof envelope?.error === "string")
+    return envelope.error;
+  const content = envelopeObject2(event.result)?.content;
+  const firstText = Array.isArray(content) ? envelopeObject2(content[0])?.text : void 0;
+  if (event.error && event.error !== firstText)
+    return event.error;
+  return `${facts.code}: refusal observed`;
 }
 function extractSymptom(event) {
   if (typeof event.error === "string" && event.error.length > 0)
@@ -85243,7 +85363,7 @@ function findNumber(value, keys, depth) {
   return null;
 }
 function stableDeviceHash(directory, deviceId) {
-  return createHash16("sha256").update(readOrCreateRunnerDiagnosticsSalt(directory)).update("\0").update(deviceId).digest("hex");
+  return createHash17("sha256").update(readOrCreateRunnerDiagnosticsSalt(directory)).update("\0").update(deviceId).digest("hex");
 }
 function readOrCreateRunnerDiagnosticsSalt(directory) {
   const path = join46(directory, ".runner-diagnostics-salt");
@@ -87592,7 +87712,7 @@ init_dev_client_picker();
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 init_utils();
 import { execFile as execFile22 } from "node:child_process";
-import { createHash as createHash17 } from "node:crypto";
+import { createHash as createHash18 } from "node:crypto";
 import { existsSync as existsSync31 } from "node:fs";
 import { promisify as promisify23 } from "node:util";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
@@ -87759,7 +87879,7 @@ function parseStatusOutput(stdout) {
   return active;
 }
 function recordingScope(args) {
-  return createHash17("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
+  return createHash18("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
 }
 function bindRecorderSession(runtime, args) {
   const available = runtime.requireAvailable();
@@ -88041,14 +88161,14 @@ function createDeviceRecordHandler(deps = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash20, randomUUID as randomUUID11 } from "node:crypto";
+import { createHash as createHash21, randomUUID as randomUUID11 } from "node:crypto";
 import { execFileSync as execFileSync15 } from "node:child_process";
 import { chmodSync as chmodSync8, closeSync as closeSync12, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync19, mkdirSync as mkdirSync20, openSync as openSync12, readFileSync as readFileSync33, realpathSync as realpathSync16, renameSync as renameSync10, unlinkSync as unlinkSync15, writeFileSync as writeFileSync17 } from "node:fs";
 import { basename as basename12, dirname as dirname26, extname, isAbsolute as isAbsolute15, join as join50, relative as relative9, resolve as resolve17, sep as sep11 } from "node:path";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
-import { createHash as createHash18 } from "node:crypto";
+import { createHash as createHash19 } from "node:crypto";
 var StrictProofMonitor = class {
   now;
   events = [];
@@ -88122,14 +88242,14 @@ function hashProofArgs(params) {
   return hashProofValue(redact(params));
 }
 function hashProofValue(value) {
-  return createHash18("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
+  return createHash19("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
 }
 function proofRuntimeAuthorityMarker(input) {
   return hashProofValue(input);
 }
 function hashObservedValue(value) {
   const bytes = JSON.stringify(value) ?? String(value);
-  return createHash18("sha256").update(bytes).digest("hex");
+  return createHash19("sha256").update(bytes).digest("hex");
 }
 function resultEnvelope(result) {
   if (!result || typeof result !== "object")
@@ -88557,7 +88677,7 @@ var finalProofReceiptSchema = external_exports.object({
 }).strict();
 
 // packages/rn-dev-agent-core/dist/tools/proof-media.js
-import { createHash as createHash19 } from "node:crypto";
+import { createHash as createHash20 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir11 } from "node:os";
@@ -88606,7 +88726,7 @@ async function hashAcceptedFile(path) {
   }
 }
 async function sha256File2(path) {
-  const hash = createHash19("sha256");
+  const hash = createHash20("sha256");
   const stream = createReadStream(path);
   for await (const chunk of stream)
     hash.update(chunk);
@@ -89041,7 +89161,7 @@ var readinessSchema = external_exports.object({
   runtime: proofRuntimeSchema
 }).strict();
 function hashBytes(bytes) {
-  return createHash20("sha256").update(bytes).digest("hex");
+  return createHash21("sha256").update(bytes).digest("hex");
 }
 function captureProofWorkerStartup(argv = process.argv, attestation = readStartupIntegrityAttestation()) {
   let executedEntrypointPath = null;
@@ -89267,7 +89387,7 @@ function readProofActionIdentity(appProjectRoot, actionId, dependencies = {}) {
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash20("sha256").update(action.yamlText).digest("hex")
+      sha256: createHash21("sha256").update(action.yamlText).digest("hex")
     };
   } catch {
     return null;
@@ -92150,7 +92270,7 @@ function buildGracefulShutdown(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
-import { createHash as createHash21 } from "node:crypto";
+import { createHash as createHash22 } from "node:crypto";
 import { execFileSync as execFileSync17 } from "node:child_process";
 import { closeSync as closeSync13, existsSync as existsSync33, mkdirSync as mkdirSync21, openSync as openSync13, readFileSync as readFileSync35, statSync as statSync15, unlinkSync as unlinkSync16, writeFileSync as writeFileSync18, writeSync as writeSync3 } from "node:fs";
 import { tmpdir as tmpdir12, userInfo as userInfo2 } from "node:os";
@@ -92203,7 +92323,7 @@ function defaultSelfPpid() {
   return typeof process.ppid === "number" ? process.ppid : 0;
 }
 function hashProjectRoot(projectRoot) {
-  return createHash21("md5").update(resolve19(projectRoot)).digest("hex").slice(0, 8);
+  return createHash22("md5").update(resolve19(projectRoot)).digest("hex").slice(0, 8);
 }
 var Lockfile = class {
   opts;
@@ -94822,7 +94942,7 @@ init_sources();
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname31, join as join59 } from "node:path";
 import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync20, renameSync as renameSync11, readFileSync as readFileSync39, readdirSync as readdirSync17, existsSync as existsSync35 } from "node:fs";
-import { createHash as createHash22 } from "node:crypto";
+import { createHash as createHash23 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
   return join59(projectRoot, ".rn-agent", "e2e");
@@ -94854,7 +94974,7 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash22("sha256").update(s).digest("hex");
+  return createHash23("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
@@ -95574,14 +95694,14 @@ init_discovery();
 init_metro_cwd();
 init_install_authority();
 import { execFileSync as execFileSync19 } from "node:child_process";
-import { createHash as createHash23 } from "node:crypto";
+import { createHash as createHash24 } from "node:crypto";
 init_metro_origin();
 init_metro_binding();
 init_registry();
 init_target_device_authority();
 init_tool_profiles();
 function identity(value) {
-  return createHash23("sha256").update(JSON.stringify(value)).digest("hex");
+  return createHash24("sha256").update(JSON.stringify(value)).digest("hex");
 }
 function objectBinding(status, name) {
   const value = status.bindings[name];
@@ -96538,7 +96658,7 @@ setSnapshotAuthorityProvider({
       runnerInstanceId: runner?.instanceId,
       runnerPid: runner?.pid,
       runnerProcessBirth: runner?.processBirth,
-      runnerCapabilityHash: typeof runner?.capability === "string" ? createHash24("sha256").update(runner.capability).digest("hex") : void 0,
+      runnerCapabilityHash: typeof runner?.capability === "string" ? createHash25("sha256").update(runner.capability).digest("hex") : void 0,
       runnerPort: runner?.port,
       runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key,
       deviceClaim: status.claims.find((claim) => claim.type === "device")?.key
@@ -97790,7 +97910,7 @@ var proofReadiness = async () => {
       connectedAt: current.connectedAt
     }),
     errorCount: errors.length,
-    errorSha256: createHash24("sha256").update(errorBytes).digest("hex"),
+    errorSha256: createHash25("sha256").update(errorBytes).digest("hex"),
     device: identity2.device,
     runtime: identity2.runtime
   };
