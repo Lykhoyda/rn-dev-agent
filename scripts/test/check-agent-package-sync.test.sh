@@ -105,7 +105,7 @@ write_valid_repo() {
   printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":{"cdp":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"]}}}' > "$tmp/packages/claude-plugin/plugin.json"
   printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":{"cdp":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"]}}}' > "$tmp/packages/claude-plugin/.claude-plugin/plugin.json"
   printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":"./mcp.json","hooks":{"hooks":{}}}' > "$tmp/packages/claude-plugin/.cursor-plugin/plugin.json"
-  printf '%s\n' '{"mcpServers":{"cdp":{"command":"node","args":["${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js","--no-lock"]}}}' > "$tmp/packages/claude-plugin/mcp.json"
+  printf '%s\n' '{"mcpServers":{"cdp":{"command":"node","args":["${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"]}}}' > "$tmp/packages/claude-plugin/mcp.json"
   printf '%s\n' '{"plugins":[{"name":"rn-dev-agent","version":"1.2.3","source":"./packages/claude-plugin"}]}' > "$tmp/.claude-plugin/marketplace.json"
   printf '%s\n' '{"name":"rn-dev-agent","plugins":[{"name":"rn-dev-agent","version":"1.2.3","source":"./packages/claude-plugin"}]}' > "$tmp/.cursor-plugin/marketplace.json"
   mkdir -p "$tmp/.agents/plugins"

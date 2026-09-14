@@ -75,6 +75,22 @@ spawns `cdp` with `${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js`.
 Claude SessionStart hooks are not loaded (`No plugin hooks` is expected).
 Requires Node.js >= 24. Reload the window after install if MCP does not appear.
 
+**Limitation: the Cursor Plugin spawn does not bind the exact app.** rn-dev-agent
+binds source identity from the supervisor's working directory and keys its process
+lock on `CLAUDE_USER_CWD` or that directory. Cursor does not document a working
+directory for plugin MCP servers, and the observed spawn starts from the user home,
+so the lock is keyed on the home directory and source authority for the open app
+is unavailable. Consequences:
+
+- One rn-dev-agent server per user across Cursor windows. A second window refuses
+  with exit code 11 and names the owner; use that session or quit it. The lock is
+  not bypassed for Cursor.
+- Device and proof work for an exact app checkout uses the project-rooted host
+  workflow: `claude` or `codex` started in the app root. A project-scoped
+  `.cursor/mcp.json` in the app checkout only helps if Cursor starts that server
+  from the workspace folder, which Cursor does not document and this project has
+  not verified.
+
 ### Codex
 
 Install from the marketplace (recommended):

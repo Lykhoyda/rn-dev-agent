@@ -306,15 +306,34 @@ test('formatLockConflictMessage: renders all fields for human diagnosis', () => 
     ageMs: 5 * 60 * 1000,
   });
 
-  assert.match(msg, /Another rn-dev-agent MCP is running/);
+  assert.match(msg, /Another rn-dev-agent MCP already owns this project root/);
   assert.match(msg, /PID:\s+54321/);
   assert.match(msg, /Project:\s+\/Users\/anton\/GitHub\/my-app/);
   assert.match(msg, /Started:\s+5m ago/);
   assert.match(msg, /Lock:\s+\/tmp\/rn-dev-agent-cdp-501-abcd1234\.lock/);
-  assert.match(msg, /kill 54321/);
-  assert.match(msg, /Close the other session/);
-  assert.doesNotMatch(msg, /Claude Code window/);
-  assert.match(msg, /--no-lock/);
+  assert.match(msg, /Use the session that already owns this project root/);
+  assert.match(msg, /reclaimed automatically once the owning process is gone/);
+  assert.doesNotMatch(msg, /Claude Code/);
+  assert.doesNotMatch(msg, /kill /);
+  assert.doesNotMatch(msg, /rm /);
+  assert.doesNotMatch(msg, /--no-lock/);
+  assert.doesNotMatch(msg, /home directory/);
+});
+
+test('formatLockConflictMessage: names a home-keyed root without inventing an app', () => {
+  const conflict = {
+    status: 'conflict',
+    lockPath: '/tmp/rn-dev-agent-cdp-501-abcd1234.lock',
+    pid: 54321,
+    projectRoot: '/Users/anton',
+    startedAt: 1_700_000_000_000,
+    ageMs: 5 * 60 * 1000,
+  };
+  const msg = formatLockConflictMessage(conflict, '/Users/anton/');
+  assert.match(msg, /The project root is the home directory/);
+  assert.match(msg, /Start the host\nfrom the app root/);
+  assert.doesNotMatch(msg, /--no-lock/);
+  assert.doesNotMatch(formatLockConflictMessage(conflict, '/Users/other'), /home directory/);
 });
 
 test('formatLockConflictMessage: seconds age rendering for young locks', () => {

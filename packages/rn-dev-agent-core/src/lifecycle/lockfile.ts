@@ -11,7 +11,7 @@ import {
   writeFileSync,
   writeSync,
 } from 'node:fs';
-import { tmpdir, userInfo } from 'node:os';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -443,7 +443,10 @@ function isValidLockBody(obj: unknown): obj is LockFileBody {
   );
 }
 
-export function formatLockConflictMessage(conflict: LockConflict): string {
+export function formatLockConflictMessage(
+  conflict: LockConflict,
+  home: string = homedir(),
+): string {
   const ageSec = Math.floor(conflict.ageMs / 1000);
   const ageStr =
     ageSec < 60
@@ -451,20 +454,28 @@ export function formatLockConflictMessage(conflict: LockConflict): string {
       : ageSec < 3600
         ? `${Math.floor(ageSec / 60)}m ago`
         : `${Math.floor(ageSec / 3600)}h ${Math.floor((ageSec % 3600) / 60)}m ago`;
+  const homeKeyed = resolve(conflict.projectRoot) === resolve(home);
 
   return [
-    `Another rn-dev-agent MCP is running in this project.`,
+    `Another rn-dev-agent MCP already owns this project root.`,
     `  PID:      ${conflict.pid}`,
     `  Project:  ${conflict.projectRoot}`,
     `  Started:  ${ageStr}`,
     `  Lock:     ${conflict.lockPath}`,
     ``,
     `To resolve:`,
-    `  1. Close the other session for this project, OR`,
-    `  2. Kill the other process:  kill ${conflict.pid}`,
-    `  3. (If the process is dead) delete the lock file:  rm ${conflict.lockPath}`,
+    `  1. Use the session that already owns this project root, OR`,
+    `  2. Quit that session's editor window or MCP client. The lock is released on exit`,
+    `     and reclaimed automatically once the owning process is gone.`,
+    ...(homeKeyed
+      ? [
+          ``,
+          `The project root is the home directory: this MCP was started outside an app`,
+          `checkout, so every session launched this way shares one lock. Start the host`,
+          `from the app root instead (see Getting Started for your host).`,
+        ]
+      : []),
     ``,
     `Running two MCPs in the same project causes missed events and state flicker.`,
-    `Start with --no-lock to bypass this check (advanced; expect flaky behavior).`,
   ].join('\n');
 }

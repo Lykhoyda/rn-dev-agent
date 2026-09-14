@@ -2998,7 +2998,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve22.call(this, root, ref);
+      let _sch = resolve21.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3025,7 +3025,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve22(root, ref) {
+    function resolve21(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3750,7 +3750,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve22(baseURI, relativeURI, options) {
+    function resolve21(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -4007,7 +4007,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve22,
+      resolve: resolve21,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -11184,7 +11184,7 @@ function keyboardVisibility(result) {
     return null;
   }
 }
-async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promise((resolve22) => setTimeout(resolve22, ms))) {
+async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promise((resolve21) => setTimeout(resolve21, ms))) {
   let last = "unknown";
   for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
     const visible = keyboardVisibility(await refreshSnapshot());
@@ -12792,7 +12792,7 @@ function buildRunnerTestFaultEnv(env) {
   };
 }
 function runXcodebuildToExit(args, timeoutMs) {
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve21, reject) => {
     const child = spawn("xcodebuild", args, { stdio: ["ignore", "ignore", "pipe"] });
     let stderrTail = "";
     const timer = setTimeout(() => {
@@ -12810,7 +12810,7 @@ function runXcodebuildToExit(args, timeoutMs) {
     child.on("exit", (code) => {
       clearTimeout(timer);
       if (code === 0)
-        resolve22();
+        resolve21();
       else
         reject(new Error(`xcodebuild ${args[0]} failed (code ${code})${stderrTail ? `: ${stderrTail.trim()}` : ""}`));
     });
@@ -12851,7 +12851,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
   }
   const launch = plan[plan.length - 1];
   const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve21, reject) => {
     const child = spawn("xcodebuild", launch.args, {
       env: {
         ...process.env,
@@ -12918,7 +12918,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
       } catch {
       }
       cleanupLegacyTmpState();
-      resolve22(state);
+      resolve21(state);
     };
     child.stdout.setEncoding("utf-8");
     child.stdout.on("data", (chunk) => handleChunk(chunk, "stdout"));
@@ -12961,7 +12961,7 @@ async function awaitSpawnedRunnerExit(graceMs = 5e3, expectedLaunchCount) {
 async function awaitChildExit(child, graceMs = 5e3) {
   if (!child || child.exitCode !== null || child.signalCode !== null)
     return true;
-  return new Promise((resolve22) => {
+  return new Promise((resolve21) => {
     const killTimer = setTimeout(() => {
       try {
         child.kill("SIGKILL");
@@ -12970,12 +12970,12 @@ async function awaitChildExit(child, graceMs = 5e3) {
     }, graceMs);
     const backstop = setTimeout(() => {
       child.removeListener("exit", onExit);
-      resolve22(false);
+      resolve21(false);
     }, graceMs + 2e3);
     const onExit = () => {
       clearTimeout(killTimer);
       clearTimeout(backstop);
-      resolve22(true);
+      resolve21(true);
     };
     child.once("exit", onExit);
   });
@@ -13035,10 +13035,10 @@ async function reapDelay(sleep6, ms, signal) {
   }
   if (signal.aborted)
     return;
-  await new Promise((resolve22, reject) => {
+  await new Promise((resolve21, reject) => {
     const finish = () => {
       signal.removeEventListener("abort", finish);
-      resolve22();
+      resolve21();
     };
     signal.addEventListener("abort", finish, { once: true });
     sleep6(ms).then(finish, (error2) => {
@@ -13261,7 +13261,7 @@ async function reapStaleFastRunner(deps = {}) {
     return;
   }
   const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
-  const spawnedExit = spawnedChild ? new Promise((resolve22) => spawnedChild.once("exit", () => resolve22())) : null;
+  const spawnedExit = spawnedChild ? new Promise((resolve21) => spawnedChild.once("exit", () => resolve21())) : null;
   try {
     sendSignal(state.pid, "SIGTERM");
   } catch {
@@ -13490,7 +13490,7 @@ async function verifyTypeResultAfterSettle(args, result, authorityBefore) {
       if (health.liveness === "alive")
         return result;
       if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
-        await new Promise((resolve22) => setTimeout(resolve22, POST_SETTLE_HEALTH_RETRY_MS));
+        await new Promise((resolve21) => setTimeout(resolve21, POST_SETTLE_HEALTH_RETRY_MS));
       }
     }
   }
@@ -13866,7 +13866,7 @@ var init_rn_fast_runner_client = __esm({
 // packages/rn-dev-agent-core/dist/runners/free-port.js
 import { createServer as createServer2 } from "node:net";
 function findFreePort(preferred) {
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve21, reject) => {
     const tryListen = (port, fallbackToAny) => {
       const srv = createServer2();
       srv.once("error", (err) => {
@@ -13882,7 +13882,7 @@ function findFreePort(preferred) {
           srv.close(() => reject(new Error("findFreePort: OS returned port 0")));
           return;
         }
-        srv.close(() => resolve22(chosen));
+        srv.close(() => resolve21(chosen));
       });
     };
     tryListen(preferred, true);
@@ -14101,7 +14101,7 @@ function defaultDeps() {
     kill: (pid, sig) => process.kill(pid, sig),
     fileExists: (p) => existsSync8(p),
     removeFile: (p) => unlinkSync4(p),
-    delay: (ms) => new Promise((resolve22) => setTimeout(resolve22, ms)),
+    delay: (ms) => new Promise((resolve21) => setTimeout(resolve21, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
     now: () => Date.now()
   };
@@ -14886,8 +14886,8 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependen
       if (!refreshAuthority())
         return false;
       if (attempt + 1 < transitionAttempts) {
-        await new Promise((resolve22) => {
-          setTimeout(resolve22, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+        await new Promise((resolve21) => {
+          setTimeout(resolve21, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
         });
       }
     }
@@ -14907,8 +14907,8 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependen
       } catch {
       }
       if (attempt + 1 < transitionAttempts) {
-        await new Promise((resolve22) => {
-          setTimeout(resolve22, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+        await new Promise((resolve21) => {
+          setTimeout(resolve21, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
         });
       }
     }
@@ -15065,7 +15065,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
       signal: opts._rebuildSignal
     });
   }
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve21, reject) => {
     let resolved = false;
     let forwardRemoved = false;
     const removeForward = () => {
@@ -15138,7 +15138,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         }
       }
       cleanupLegacyTmpState();
-      resolve22(state);
+      resolve21(state);
     };
     child.on("error", (err) => {
       removeForward();
@@ -23445,11 +23445,11 @@ function idbDemotionHint(cause) {
   return IDB_STREAM_UNHEALTHY_HINT;
 }
 async function probeIdbClient(execFileFn = execFile4) {
-  return new Promise((resolve22) => {
+  return new Promise((resolve21) => {
     execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => {
       if (!err)
-        return resolve22("ready");
-      resolve22(isEnoent(err) ? "absent" : "broken");
+        return resolve21("ready");
+      resolve21(isEnoent(err) ? "absent" : "broken");
     });
   });
 }
@@ -23458,7 +23458,7 @@ function isEnoent(err) {
 }
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve21, reject) => {
     execFile4(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
@@ -23467,7 +23467,7 @@ function defaultExecJpeg(cmd, args, signal) {
       readFile(outPath).then((buf) => {
         void unlink(outPath).catch(() => {
         });
-        resolve22(buf);
+        resolve21(buf);
       }).catch((readErr) => {
         void unlink(outPath).catch(() => {
         });
@@ -23523,7 +23523,7 @@ var init_sources = __esm({
     DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 3e4;
     IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
     FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
-    sleep2 = (ms) => new Promise((resolve22) => setTimeout(resolve22, ms));
+    sleep2 = (ms) => new Promise((resolve21) => setTimeout(resolve21, ms));
     scheduleAfter = (fn, delayMs) => {
       if (delayMs <= 0)
         setImmediate(fn);
@@ -24584,8 +24584,8 @@ async function probeDev(client2, timeoutMs) {
     });
     const result = await Promise.race([
       evalPromise,
-      new Promise((resolve22) => {
-        timer = setTimeout(() => resolve22({ error: "probe timeout" }), timeoutMs);
+      new Promise((resolve21) => {
+        timer = setTimeout(() => resolve21({ error: "probe timeout" }), timeoutMs);
       })
     ]);
     if (timer)
@@ -24789,7 +24789,7 @@ function defaultDeps2() {
     },
     fileExists: (path) => existsSync12(path),
     removeFile: (path) => unlinkSync5(path),
-    delay: (ms) => new Promise((resolve22) => setTimeout(resolve22, ms)),
+    delay: (ms) => new Promise((resolve21) => setTimeout(resolve21, ms)),
     listApps: (udid) => execFileSync3("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf8",
       timeout: 5e3,
@@ -28397,7 +28397,7 @@ var init_registry = __esm({
             if (Date.now() >= deadline) {
               throw new SessionAuthorityError("AUTHORITY_STORE_BUSY", "authority registry remained contended past the retry deadline");
             }
-            await new Promise((resolve22) => setTimeout(resolve22, retryDelayMs));
+            await new Promise((resolve21) => setTimeout(resolve21, retryDelayMs));
           }
         }
       }
@@ -29194,7 +29194,7 @@ async function hideExpoDevMenu(client2, options = {}) {
       break;
     }
     if (attempt < retries)
-      await new Promise((resolve22) => setTimeout(resolve22, retryDelayMs));
+      await new Promise((resolve21) => setTimeout(resolve21, retryDelayMs));
   }
   return successfulCall ? { ...successfulCall, attempts: outcome.attempts } : outcome;
 }
@@ -30669,7 +30669,7 @@ async function performReactTreeInput(testID, text, client2, signal, options = {}
       break;
     const read = await readInput();
     if (read?.controlled && read.value === expected) {
-      await new Promise((resolve22) => setTimeout(resolve22, 150));
+      await new Promise((resolve21) => setTimeout(resolve21, 150));
       if (signal?.aborted)
         break;
       const confirm = await readInput();
@@ -30684,7 +30684,7 @@ async function performReactTreeInput(testID, text, client2, signal, options = {}
       last = null;
     }
     if (attempt < 5)
-      await new Promise((resolve22) => setTimeout(resolve22, 100));
+      await new Promise((resolve21) => setTimeout(resolve21, 100));
   }
   if (verification !== "exact" && last?.controlled === true && previous?.controlled === true && last.value !== null && last.value === previous.value) {
     verification = "mismatch";
@@ -31960,12 +31960,12 @@ function awaitWithSignal(operation, signal) {
     return operation;
   if (signal.aborted)
     return Promise.reject(new Error("RUNNER_TIMEOUT: replay deadline expired"));
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve21, reject) => {
     const onAbort = () => reject(new Error("RUNNER_TIMEOUT: replay deadline expired"));
     signal.addEventListener("abort", onAbort, { once: true });
     operation.then((value) => {
       signal.removeEventListener("abort", onAbort);
-      resolve22(value);
+      resolve21(value);
     }, (error2) => {
       signal.removeEventListener("abort", onAbort);
       reject(error2);
@@ -34208,7 +34208,7 @@ var init_device_screenshot_raw = __esm({
       stdio: ["ignore", "pipe", "pipe"]
     });
     androidSpawn = defaultAndroidSpawn;
-    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve22) => {
+    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve21) => {
       let settled = false;
       let streamFinished = false;
       let procCode = null;
@@ -34234,7 +34234,7 @@ var init_device_screenshot_raw = __esm({
           return;
         settled = true;
         clearTimeout(timer);
-        resolve22(ok);
+        resolve21(ok);
       };
       const maybeSettle = () => {
         const outcome = resolveCaptureOutcome(streamFinished, procCode);
@@ -48497,7 +48497,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve22) => setTimeout(resolve22, pollInterval));
+        await new Promise((resolve21) => setTimeout(resolve21, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -48514,7 +48514,7 @@ var Protocol = class {
    */
   request(request2, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve22, reject) => {
+    return new Promise((resolve21, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -48592,7 +48592,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve22(parseResult.data);
+            resolve21(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -48853,12 +48853,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve22, reject) => {
+    return new Promise((resolve21, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve22, interval);
+      const timeoutId = setTimeout(resolve21, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -49958,7 +49958,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve22) => setTimeout(resolve22, pollInterval));
+      await new Promise((resolve21) => setTimeout(resolve21, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -50607,12 +50607,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve22) => {
+    return new Promise((resolve21) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve22();
+        resolve21();
       } else {
-        this._stdout.once("drain", resolve22);
+        this._stdout.once("drain", resolve21);
       }
     });
   }
@@ -51171,7 +51171,7 @@ var MetroEventsClient = class {
   async connectOnce() {
     this.state = "connecting";
     const url = `ws://${this.opts.host}:${this.opts.port}/events`;
-    return new Promise((resolve22) => {
+    return new Promise((resolve21) => {
       const ws = new wrapper_default(url, {
         headers: { Origin: metroOrigin(url) }
       });
@@ -51185,7 +51185,7 @@ var MetroEventsClient = class {
         this._connectionEpoch += 1;
         this.reconnectAttempt = 0;
         logger.info(this.opts.logTag, `connected to ${url}`);
-        resolve22();
+        resolve21();
       };
       const onFail = (reason) => {
         if (outcome !== null)
@@ -51193,7 +51193,7 @@ var MetroEventsClient = class {
         outcome = "failed";
         logger.debug(this.opts.logTag, `connect failed: ${reason}`);
         this.scheduleReconnect();
-        resolve22();
+        resolve21();
       };
       ws.once("open", onOpen);
       ws.once("error", (err) => onFail(err instanceof Error ? err.message : String(err)));
@@ -51371,7 +51371,7 @@ var CDPMultiplexer = class {
     logger.info(this.opts.logTag, "multiplexer stopped");
   }
   startConsumerServer() {
-    return new Promise((resolve22, reject) => {
+    return new Promise((resolve21, reject) => {
       this.httpServer = createServer();
       this.wss = new import_websocket_server.default({
         server: this.httpServer,
@@ -51403,12 +51403,12 @@ var CDPMultiplexer = class {
           return;
         }
         this.boundPort = addr.port;
-        resolve22(addr.port);
+        resolve21(addr.port);
       });
     });
   }
   connectHermes() {
-    return new Promise((resolve22, reject) => {
+    return new Promise((resolve21, reject) => {
       const ws = new wrapper_default(this.opts.hermesUrl, {
         headers: { Origin: metroOrigin(this.opts.hermesUrl) }
       });
@@ -51419,7 +51419,7 @@ var CDPMultiplexer = class {
           ws.send(msg3);
         this.hermesBuffer = [];
         logger.info(this.opts.logTag, `connected to upstream Hermes at ${this.opts.hermesUrl}`);
-        resolve22();
+        resolve21();
       };
       const onError = (err) => {
         ws.off("open", onOpen);
@@ -51597,8 +51597,8 @@ var CDPMultiplexer = class {
       this.wss = null;
     }
     if (this.httpServer) {
-      await new Promise((resolve22) => {
-        this.httpServer?.close(() => resolve22());
+      await new Promise((resolve21) => {
+        this.httpServer?.close(() => resolve21());
       });
       this.httpServer = null;
     }
@@ -56900,13 +56900,13 @@ function sendWithTimeout(ws, pending2, nextId, method, params, ms, onDispatched)
   if (!ws || ws.readyState !== wrapper_default.OPEN) {
     return Promise.reject(new Error("WebSocket not connected"));
   }
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve21, reject) => {
     const id = nextId();
     const timer = setTimeout(() => {
       pending2.delete(id);
       reject(new Error(`CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`));
     }, ms);
-    pending2.set(id, { resolve: resolve22, reject, timer });
+    pending2.set(id, { resolve: resolve21, reject, timer });
     try {
       if (!ws || ws.readyState !== wrapper_default.OPEN) {
         throw new Error("WebSocket closed between check and send");
@@ -57353,7 +57353,7 @@ function connectWebSocket(ctx, url, createSocket = (socketUrl) => new wrapper_de
   maxPayload: 100 * 1024 * 1024,
   headers: { Origin: metroOrigin(socketUrl) }
 })) {
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve21, reject) => {
     const ws = createSocket(url);
     let settled = false;
     const guard = setTimeout(() => {
@@ -57379,7 +57379,7 @@ function connectWebSocket(ctx, url, createSocket = (socketUrl) => new wrapper_de
       }
       ctx.setWs(ws);
       ctx.setState("connected");
-      resolve22(ws);
+      resolve21(ws);
     });
     ws.on("error", (err) => {
       if (!settled) {
@@ -65702,7 +65702,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const signalTree = dependencies.signalTree ?? signalProcessTree;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve22) => setTimeout(resolve22, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve21) => setTimeout(resolve21, ms)));
   const inspect = () => {
     const launcher = exactProcessState(input.launcher, probeBirth(input.launcher.pid));
     const listener = input.listener ? exactProcessState(input.listener, probeBirth(input.listener.pid)) : "stopped";
@@ -71222,7 +71222,7 @@ var RECORDER_STOP_BASE_TIMEOUT_MS = 6e4;
 var RECORDER_STOP_MS_PER_RECORDED_MS = 3;
 var RECORDER_STOP_MAX_TIMEOUT_MS = 15 * 6e4;
 function executeRecorderScript(script, args, options) {
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve21, reject) => {
     const child = spawn7(script, args, {
       detached: process.platform !== "win32",
       env: options.env,
@@ -71250,7 +71250,7 @@ function executeRecorderScript(script, args, options) {
       if (error2)
         reject(error2);
       else
-        resolve22(result);
+        resolve21(result);
     };
     const signal = (value) => {
       if (child.pid === void 0)
@@ -71366,7 +71366,7 @@ async function awaitExactStopped(probe, deadlineMs, code, message) {
     }
     if (Date.now() >= deadlineMs)
       return false;
-    await new Promise((resolve22) => setTimeout(resolve22, 25));
+    await new Promise((resolve21) => setTimeout(resolve21, 25));
   }
 }
 async function waitForExactStopped(probe, deadlineMs, code, message) {
@@ -75491,11 +75491,11 @@ function createDeviceBatchHandler(getClient2) {
       const abortController = new AbortController();
       const result = await Promise.race([
         executeStep(step, getClient2, abortController.signal),
-        new Promise((resolve22) => {
+        new Promise((resolve21) => {
           stepTimer = setTimeout(() => {
             stepTimedOut = true;
             abortController.abort();
-            resolve22(step.action === "fill" ? failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; the fill may have mutated the field and no correction or later step will be started`, "TEXT_ENTRY_UNVERIFIED", {
+            resolve21(step.action === "fill" ? failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; the fill may have mutated the field and no correction or later step will be started`, "TEXT_ENTRY_UNVERIFIED", {
               mutation: "possible",
               hint: "Read the field state before any manual retry \u2014 do not blindly re-run the fill."
             }) : failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`));
@@ -80758,7 +80758,7 @@ async function readVisibilityBeforeDeadline(dispatch, id, deadline, signal) {
   const remainingMs = deadline - Date.now();
   if (remainingMs < 0)
     return null;
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve21, reject) => {
     let settled = false;
     let timer;
     const cleanup = () => {
@@ -80771,7 +80771,7 @@ async function readVisibilityBeforeDeadline(dispatch, id, deadline, signal) {
         return;
       settled = true;
       cleanup();
-      resolve22(Date.now() <= deadline ? value : null);
+      resolve21(Date.now() <= deadline ? value : null);
     };
     const fail3 = (error2) => {
       if (settled)
@@ -81039,7 +81039,7 @@ async function replayFlow(steps, dispatch, opts = {}) {
             const remainingMs = deadline - Date.now();
             if (remainingMs <= 0)
               break;
-            await new Promise((resolve22) => setTimeout(resolve22, Math.min(VISIBILITY_POLL_INTERVAL_MS, remainingMs)));
+            await new Promise((resolve21) => setTimeout(resolve21, Math.min(VISIBILITY_POLL_INTERVAL_MS, remainingMs)));
           }
           const waitedMs = Date.now() - startedAt;
           trace.push({
@@ -84371,8 +84371,8 @@ function makeReplayDeps(deps, signal) {
     settle: async (timeoutMs) => {
       if (signal?.aborted)
         throw new ReplayDispatchError("RUNNER_TIMEOUT", "Replay cancelled");
-      await new Promise((resolve22, reject) => {
-        const timer = setTimeout(resolve22, timeoutMs);
+      await new Promise((resolve21, reject) => {
+        const timer = setTimeout(resolve21, timeoutMs);
         signal?.addEventListener("abort", () => {
           clearTimeout(timer);
           reject(new ReplayDispatchError("RUNNER_TIMEOUT", "Replay cancelled"));
@@ -84612,7 +84612,7 @@ function createDevSettingsHandler(getClient2, dependencies = {}) {
       const call = await hideExpoDevMenu(client2, { retries: 1 });
       if (!call.callSent)
         return failedHideResult(call, before);
-      await (dependencies.settleAfterHide?.() ?? new Promise((resolve22) => setTimeout(resolve22, 300)));
+      await (dependencies.settleAfterHide?.() ?? new Promise((resolve21) => setTimeout(resolve21, 300)));
       const after = probe ? await probe().catch(() => "unknown") : "unknown";
       if (before === "expo_dev_menu" && after === "app") {
         return okResult({
@@ -85485,7 +85485,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
     return [];
   const pid = await resolveIosAppPid(deviceId, bundleId, signal);
   onResolvedPid?.(pid);
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve21, reject) => {
     const entries = [];
     let killed = false;
     let killedByUs = false;
@@ -85554,7 +85554,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`xcrun simctl log stream exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve22(entries);
+        resolve21(entries);
       }
     });
     proc.on("error", (err) => {
@@ -85619,7 +85619,7 @@ function buildAndroidLogcatArgs(serial) {
 function collectNativeAndroid(durationMs, signal, serial) {
   if (signal.aborted)
     return Promise.resolve([]);
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve21, reject) => {
     const entries = [];
     const year = (/* @__PURE__ */ new Date()).getFullYear();
     const killMs = durationMs > 0 ? durationMs : 100;
@@ -85687,7 +85687,7 @@ function collectNativeAndroid(durationMs, signal, serial) {
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`adb logcat exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve22(entries);
+        resolve21(entries);
       }
     });
     proc.on("error", (err) => {
@@ -85910,7 +85910,7 @@ async function observeSessionRuntimeAbsent(dependencies) {
   return !await isSessionAppRunning(binding, dependencies);
 }
 function createSessionRuntimeAbsenceProbe(dependencies) {
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve22) => setTimeout(resolve22, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve21) => setTimeout(resolve21, ms)));
   return async () => {
     try {
       if (!await observeSessionRuntimeAbsent(dependencies))
@@ -86808,7 +86808,7 @@ var ABSENCE_CONFIRM_MS = 2e3;
 var POLL_MS = 25;
 var activeCleanupRefusals = /* @__PURE__ */ new Map();
 function sleep5(ms) {
-  return new Promise((resolve22) => setTimeout(resolve22, ms));
+  return new Promise((resolve21) => setTimeout(resolve21, ms));
 }
 function cleanupKey(platform, deviceId) {
   return `${platform}:${deviceId}`;
@@ -86867,7 +86867,7 @@ async function waitForGroupAbsence(pgid, signalGroup, groupLiveness, delay, time
 }
 function observeChildTerminal(child, timeoutMs) {
   let closeResult = null;
-  const result = new Promise((resolve22) => {
+  const result = new Promise((resolve21) => {
     let settled = false;
     let timer;
     const done = (value) => {
@@ -86876,7 +86876,7 @@ function observeChildTerminal(child, timeoutMs) {
       settled = true;
       if (timer)
         clearTimeout(timer);
-      resolve22(value);
+      resolve21(value);
     };
     child.once("error", (error2) => done({ code: null, signal: null, timedOut: false, error: error2.message }));
     child.once("close", (code, signal) => {
@@ -92136,10 +92136,10 @@ function buildGracefulShutdown(deps) {
       }
     })();
     let timeoutHandle = null;
-    const timeout = new Promise((resolve22) => {
+    const timeout = new Promise((resolve21) => {
       timeoutHandle = setTimeout(() => {
         logger.warn("MCP", `shutdown: cleanup timeout after ${timeoutMs}ms, forcing exit`);
-        resolve22();
+        resolve21();
       }, timeoutMs);
     });
     await Promise.race([cleanup, timeout]);
@@ -92149,64 +92149,12 @@ function buildGracefulShutdown(deps) {
   };
 }
 
-// packages/rn-dev-agent-core/dist/lifecycle/host-process-lock.js
-import { homedir as homedir10 } from "node:os";
-import { resolve as resolve19 } from "node:path";
-function firstWorkspaceFolder(value, platform = process.platform) {
-  if (typeof value !== "string")
-    return void 0;
-  const trimmed = value.trim();
-  if (!trimmed)
-    return void 0;
-  let parts;
-  if (trimmed.startsWith("[")) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (!Array.isArray(parsed))
-        return void 0;
-      parts = parsed.filter((entry) => typeof entry === "string");
-    } catch {
-      return void 0;
-    }
-  } else if (platform === "win32") {
-    parts = trimmed.split(";");
-  } else {
-    parts = trimmed.split(":");
-  }
-  return parts.map((part) => part.trim()).find((part) => part.length > 0);
-}
-function isCursorHost(env = process.env) {
-  return Boolean(env.CURSOR_PLUGIN_ROOT?.trim() || firstWorkspaceFolder(env.WORKSPACE_FOLDER_PATHS));
-}
-function isHomeProjectRoot(root, home = homedir10()) {
-  return resolve19(root) === resolve19(home);
-}
-function seedHostProjectRoot(env = process.env, platform = process.platform) {
-  const existing = env.CLAUDE_USER_CWD?.trim();
-  if (existing)
-    return existing;
-  const folder = firstWorkspaceFolder(env.WORKSPACE_FOLDER_PATHS, platform);
-  if (!folder)
-    return void 0;
-  env.CLAUDE_USER_CWD = folder;
-  return folder;
-}
-function shouldAcquireProcessLock(argv = process.argv, env = process.env, cwd = process.cwd(), home = homedir10()) {
-  if (argv.includes("--no-lock") || argv.includes("--diagnostic-contract-probe")) {
-    return false;
-  }
-  if (isCursorHost(env))
-    return false;
-  const root = env.CLAUDE_USER_CWD?.trim() || cwd;
-  return !isHomeProjectRoot(root, home);
-}
-
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
 import { createHash as createHash21 } from "node:crypto";
 import { execFileSync as execFileSync17 } from "node:child_process";
 import { closeSync as closeSync13, existsSync as existsSync33, mkdirSync as mkdirSync21, openSync as openSync13, readFileSync as readFileSync35, statSync as statSync15, unlinkSync as unlinkSync16, writeFileSync as writeFileSync18, writeSync as writeSync3 } from "node:fs";
-import { tmpdir as tmpdir12, userInfo as userInfo2 } from "node:os";
-import { join as join52, resolve as resolve20 } from "node:path";
+import { homedir as homedir10, tmpdir as tmpdir12, userInfo as userInfo2 } from "node:os";
+import { join as join52, resolve as resolve19 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
 var PROCESS_IDENTITY_MARKERS = ["cdp-bridge", "rn-dev-agent", "supervisor.js"];
@@ -92255,7 +92203,7 @@ function defaultSelfPpid() {
   return typeof process.ppid === "number" ? process.ppid : 0;
 }
 function hashProjectRoot(projectRoot) {
-  return createHash21("md5").update(resolve20(projectRoot)).digest("hex").slice(0, 8);
+  return createHash21("md5").update(resolve19(projectRoot)).digest("hex").slice(0, 8);
 }
 var Lockfile = class {
   opts;
@@ -92466,23 +92414,29 @@ function isValidLockBody(obj) {
   const o = obj;
   return typeof o.pid === "number" && typeof o.projectRoot === "string" && typeof o.startedAt === "number";
 }
-function formatLockConflictMessage(conflict2) {
+function formatLockConflictMessage(conflict2, home = homedir10()) {
   const ageSec = Math.floor(conflict2.ageMs / 1e3);
   const ageStr = ageSec < 60 ? `${ageSec}s ago` : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago` : `${Math.floor(ageSec / 3600)}h ${Math.floor(ageSec % 3600 / 60)}m ago`;
+  const homeKeyed = resolve19(conflict2.projectRoot) === resolve19(home);
   return [
-    `Another rn-dev-agent MCP is running in this project.`,
+    `Another rn-dev-agent MCP already owns this project root.`,
     `  PID:      ${conflict2.pid}`,
     `  Project:  ${conflict2.projectRoot}`,
     `  Started:  ${ageStr}`,
     `  Lock:     ${conflict2.lockPath}`,
     ``,
     `To resolve:`,
-    `  1. Close the other session for this project, OR`,
-    `  2. Kill the other process:  kill ${conflict2.pid}`,
-    `  3. (If the process is dead) delete the lock file:  rm ${conflict2.lockPath}`,
+    `  1. Use the session that already owns this project root, OR`,
+    `  2. Quit that session's editor window or MCP client. The lock is released on exit`,
+    `     and reclaimed automatically once the owning process is gone.`,
+    ...homeKeyed ? [
+      ``,
+      `The project root is the home directory: this MCP was started outside an app`,
+      `checkout, so every session launched this way shares one lock. Start the host`,
+      `from the app root instead (see Getting Started for your host).`
+    ] : [],
     ``,
-    `Running two MCPs in the same project causes missed events and state flicker.`,
-    `Start with --no-lock to bypass this check (advanced; expect flaky behavior).`
+    `Running two MCPs in the same project causes missed events and state flicker.`
   ].join("\n");
 }
 
@@ -92653,7 +92607,7 @@ init_storage();
 import { execFile as execFileCb19 } from "node:child_process";
 import { promisify as promisify25 } from "node:util";
 import { existsSync as existsSync34, readdirSync as readdirSync15, readFileSync as readFileSync36, writeFileSync as writeFileSync19 } from "node:fs";
-import { basename as basename14, dirname as dirname29, join as join54, resolve as resolve21 } from "node:path";
+import { basename as basename14, dirname as dirname29, join as join54, resolve as resolve20 } from "node:path";
 import { tmpdir as tmpdir13 } from "node:os";
 init_maestro_validator();
 init_registry();
@@ -92711,7 +92665,7 @@ function createMaestroTestAllHandler(deps = {}) {
     if (!flowDir) {
       return failResult("Cannot determine project root. Pass flowDir explicitly.");
     }
-    const resolvedFlowDir = resolve21(flowDir);
+    const resolvedFlowDir = resolve20(flowDir);
     const flowDirClassification = classifyLearnedActionPath(join54(resolvedFlowDir, "__action__.yaml"));
     if (flowDirClassification === "descendant") {
       return failResult(`Refusing to execute learned-action descendants from ${resolvedFlowDir} as standalone flows.`);
@@ -94003,7 +93957,7 @@ var ObservabilityServer = class {
   }
   // Bounded body read that settles safely while handle() fire-and-forgets async routes.
   readBody(req) {
-    return new Promise((resolve22) => {
+    return new Promise((resolve21) => {
       const decoder = new StringDecoder("utf8");
       let body = "";
       let bytes = 0;
@@ -94014,13 +93968,13 @@ var ObservabilityServer = class {
         bytes += chunk.length;
         if (bytes > 65536) {
           oversized = true;
-          resolve22(null);
+          resolve21(null);
           return;
         }
         body += decoder.write(chunk);
       });
-      req.on("end", () => resolve22(oversized ? null : body + decoder.end()));
-      req.on("error", () => resolve22(null));
+      req.on("end", () => resolve21(oversized ? null : body + decoder.end()));
+      req.on("error", () => resolve21(null));
     });
   }
   json(res, status, obj) {
@@ -94168,7 +94122,7 @@ var ObservabilityServer = class {
   }
 };
 function listen(server3, port) {
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve21, reject) => {
     const onErr = (e) => {
       server3.removeListener("error", onErr);
       reject(e);
@@ -94177,7 +94131,7 @@ function listen(server3, port) {
     server3.listen(port, HOST, () => {
       server3.removeListener("error", onErr);
       const addr = server3.address();
-      resolve22(typeof addr === "object" && addr ? addr.port : port);
+      resolve21(typeof addr === "object" && addr ? addr.port : port);
     });
   });
 }
@@ -95539,15 +95493,15 @@ function preflight(input) {
   return { ok: true };
 }
 function probeMetro(port, timeoutMs = 1500) {
-  return new Promise((resolve22) => {
+  return new Promise((resolve21) => {
     const req = request({ host: "127.0.0.1", port, path: "/status", method: "GET", timeout: timeoutMs }, (res) => {
       res.resume();
-      resolve22((res.statusCode ?? 500) < 500);
+      resolve21((res.statusCode ?? 500) < 500);
     });
-    req.on("error", () => resolve22(false));
+    req.on("error", () => resolve21(false));
     req.on("timeout", () => {
       req.destroy();
-      resolve22(false);
+      resolve21(false);
     });
     req.end();
   });
@@ -96189,7 +96143,7 @@ var AndroidExactTargetDeadlineError = class extends Error {
 };
 async function connectExactAndroidSessionTarget(input, timeoutMs, dependencies) {
   const now = dependencies.now ?? Date.now;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve22) => setTimeout(resolve22, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve21) => setTimeout(resolve21, ms)));
   const setDeadlineTimer = dependencies.setDeadlineTimer ?? ((callback, ms) => setTimeout(callback, ms));
   const clearDeadlineTimer = dependencies.clearDeadlineTimer ?? ((timer) => clearTimeout(timer));
   const deadline = now() + timeoutMs;
@@ -96366,7 +96320,7 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
     return connectExactAndroidSessionTarget(input, timeoutMs, dependencies);
   }
   const now = dependencies.now ?? Date.now;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve22) => setTimeout(resolve22, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve21) => setTimeout(resolve21, ms)));
   let exactClient = dependencies.getClient();
   if (exactClient.metroPort !== input.metroPort) {
     await exactClient.disconnect();
@@ -96454,7 +96408,7 @@ async function recoverAuthoritativeRuntimeConnection(status, client2, dependenci
     return client2;
   }
   const now = dependencies.now ?? Date.now;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve22) => setTimeout(resolve22, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve21) => setTimeout(resolve21, ms)));
   if (client2.reconnectState.active) {
     const deadline = now() + RECONNECT_WAIT_MS;
     while (client2.reconnectState.active && now() < deadline) {
@@ -96488,8 +96442,7 @@ var pkgPath = join63(dirname32(fileURLToPath8(import.meta.url)), "..", "package.
 var pkgVersion = JSON.parse(readFileSync43(pkgPath, "utf8")).version;
 var lockfile = null;
 var diagnosticContractProbe = process.argv.includes("--diagnostic-contract-probe");
-seedHostProjectRoot();
-var noLock = !shouldAcquireProcessLock();
+var noLock = diagnosticContractProbe || process.argv.includes("--no-lock");
 if (!noLock) {
   lockfile = new Lockfile({ version: pkgVersion });
   const lockResult = lockfile.acquire();
@@ -97096,12 +97049,12 @@ async function reconnectSessionRuntime(status, options) {
       return operation;
     if (signal.aborted)
       return Promise.reject(new Error("RUNNER_TIMEOUT: reconnect cancelled"));
-    return new Promise((resolve22, reject) => {
+    return new Promise((resolve21, reject) => {
       const onAbort = () => reject(new Error("RUNNER_TIMEOUT: reconnect cancelled"));
       signal.addEventListener("abort", onAbort, { once: true });
       operation.then((value) => {
         signal.removeEventListener("abort", onAbort);
-        resolve22(value);
+        resolve21(value);
       }, (error2) => {
         signal.removeEventListener("abort", onAbort);
         reject(error2);
@@ -97223,12 +97176,12 @@ async function rebindSessionRuntime(status, awaitWithinBoundary, connectedClient
   }, { getClient, signal });
   if (!signal)
     return operation;
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve21, reject) => {
     const onAbort = () => reject(new Error("RUNNER_TIMEOUT: replay deadline expired"));
     signal.addEventListener("abort", onAbort, { once: true });
     operation.then((value) => {
       signal.removeEventListener("abort", onAbort);
-      resolve22(value);
+      resolve21(value);
     }, (error2) => {
       signal.removeEventListener("abort", onAbort);
       reject(error2);
@@ -97647,7 +97600,7 @@ trackedTool("device_snapshot", 'Manage exact device sessions and capture UI snap
       const probe = await client2.evaluate('typeof globalThis.__RN_AGENT !== "undefined" && globalThis.__RN_AGENT.isReady() === true').catch(() => ({ value: false }));
       if (probe.value === true)
         return true;
-      await new Promise((resolve22) => setTimeout(resolve22, 250));
+      await new Promise((resolve21) => setTimeout(resolve21, 250));
     }
     return false;
   }

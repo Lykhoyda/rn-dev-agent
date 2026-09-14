@@ -454,8 +454,8 @@ expect_jq "packages/claude-plugin/.cursor-plugin/plugin.json" \
   '.mcpServers == "./mcp.json" and .hooks.hooks == {}' \
   "Cursor Plugin manifest must pin package-local mcp.json and skip Claude hooks"
 expect_jq "packages/claude-plugin/mcp.json" \
-  '.mcpServers.cdp.command == "node" and .mcpServers.cdp.args[0] == "${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js" and .mcpServers.cdp.args[1] == "--no-lock" and (.mcpServers.cdp.cwd? | not)' \
-  "Cursor MCP registration must spawn the package-local supervisor without overriding app cwd"
+  '.mcpServers.cdp.command == "node" and .mcpServers.cdp.args == ["${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"] and (.mcpServers.cdp.cwd? | not)' \
+  "Cursor MCP registration must spawn the package-local supervisor with the process lock on and without overriding app cwd"
 expect_jq ".cursor-plugin/marketplace.json" \
   '.plugins[] | select(.name == "rn-dev-agent") | .source == "./packages/claude-plugin"' \
   "root Cursor marketplace must point at the Claude package (Cursor Plugin payload)"

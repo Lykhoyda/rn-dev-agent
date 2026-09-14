@@ -119,7 +119,7 @@ test(
       );
       assert.match(
         contender.stderrText(),
-        /Another rn-dev-agent MCP is running in this project/,
+        /Another rn-dev-agent MCP already owns this project root/,
         'the refusal must be the documented non-destructive conflict message',
       );
       assert.equal(
@@ -269,7 +269,7 @@ test(
         'the successor reports the automatic journaled cleanup it performed',
       );
       assert.equal(
-        /Another rn-dev-agent MCP is running in this project/.test(successor.stderrText()),
+        /Another rn-dev-agent MCP already owns this project root/.test(successor.stderrText()),
         false,
         'a dead owner must never be reported as a live lock conflict',
       );
