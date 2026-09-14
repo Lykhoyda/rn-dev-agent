@@ -748,27 +748,6 @@ test('a published candidate whose tag is the PR head is resumed, never regenerat
   }
 });
 
-test('a tag bound elsewhere refuses at once instead of regenerating a head it can never publish', () => {
-  const fixture = createFixture({
-    prepared: true,
-    prs: [versionPr()],
-    tags: { [TAG]: SHA_B },
-    releases: { [TAG]: { assets: {}, draft: false, target: SHA_B } },
-  });
-  try {
-    const run = runVersionStep(fixture, PENDING_STEP);
-    assert.equal(run.ok, false);
-    assert.match(
-      run.failed!.stderr,
-      new RegExp(`published from ${SHA_B}, not PR #11 head ${fixture.head}`),
-    );
-    assert.match(run.failed!.stderr, /published-but-not-advertised/);
-    assert.equal(run.outputs.pending?.resume, undefined);
-  } finally {
-    fixture.cleanup();
-  }
-});
-
 test('a lookup that cannot be read is never taken as "nothing published"', () => {
   for (const fail of ['api repos/{owner}/{repo}/git/ref', 'api repos/{owner}/{repo}/releases']) {
     const fixture = createFixture({ prepared: true, prs: [versionPr()], tags: { [TAG]: SHA_B } });
@@ -1231,6 +1210,28 @@ test('a release already published from another head refuses before any write', (
     assert.equal(run.failed!.name, DECIDE_STEP);
     assert.match(run.failed!.stderr, /published from b{40}, not the candidate/);
     assert.match(run.failed!.stderr, /published-but-not-advertised/);
+    assert.ok(!ghCalls(fixture).some((c) => /^release (create|upload|edit|delete)/.test(c)));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a tag bound elsewhere regenerates the candidate; publish alone refuses it', () => {
+  const fixture = createFixture({
+    prepared: true,
+    prs: [versionPr()],
+    tags: { [TAG]: SHA_B },
+    releases: { [TAG]: { assets: {}, draft: false, target: SHA_B } },
+  });
+  try {
+    const pending = runVersionStep(fixture, PENDING_STEP);
+    assert.ok(pending.ok, pending.failed?.stderr);
+    assert.equal(pending.outputs.pending.resume, 'false');
+    const publish = runPublish(fixture, PUBLISH_PATH);
+    assert.equal(publish.ok, false);
+    assert.equal(publish.failed!.name, DECIDE_STEP);
+    assert.match(publish.failed!.stderr, /published from b{40}, not the candidate/);
+    assert.match(publish.failed!.stderr, /published-but-not-advertised/);
     assert.ok(!ghCalls(fixture).some((c) => /^release (create|upload|edit|delete)/.test(c)));
   } finally {
     fixture.cleanup();
