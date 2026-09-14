@@ -16,8 +16,7 @@
 //   node scripts/runner-manifest-publication.mts --stage prepared|publish \
 //     --candidate-sha <H> --plugin-version <V> --advertised-version <main V> \
 //     --repo-manifest runner-manifest.json \
-//     --claude-manifest packages/claude-plugin/runner-manifest.json \
-//     --codex-manifest packages/codex-plugin/runner-manifest.json \
+//     --plugin-manifest packages/claude-plugin/runner-manifest.json \
 //     --ios-sha256 <hex> --ios-bytes <n> --android-sha256 <hex> --android-bytes <n> \
 //     [--release release.json --tag-sha <sha-or-empty> --published-manifest published.json]
 
@@ -135,7 +134,7 @@ function assertBytes(label, value) {
 }
 
 // The candidate is only ever accepted as a whole: version, exact asset names,
-// both platforms, identical host copies and the producer's own digests.
+// both platforms, an identical packages/claude-plugin copy and the producer's own digests.
 export function assertPreparedCandidate(input) {
   const candidateSha = assertSha('candidate SHA', input.candidateSha);
   const version = assertVersion(input.pluginVersion);
@@ -151,11 +150,10 @@ export function assertPreparedCandidate(input) {
   if (manifest.version !== version) {
     refuse(`the candidate trust root is v${manifest.version} while plugin.json is v${version}`);
   }
-  for (const host of ['claude', 'codex']) {
-    const copy = parseManifest(input.hostManifests?.[host]);
-    if (copy === null || canonical(copy) !== canonical(manifest)) {
-      refuse(`the ${host} runner-manifest.json copy is missing or differs from the candidate root`);
-    }
+  // packages/claude-plugin is the one directory both marketplaces install (GH #892).
+  const pluginCopy = parseManifest(input.pluginManifest);
+  if (pluginCopy === null || canonical(pluginCopy) !== canonical(manifest)) {
+    refuse('the plugin runner-manifest.json copy is missing or differs from the candidate root');
   }
   const producer = input.producer ?? {};
   for (const platform of ['ios', 'android']) {
@@ -282,10 +280,7 @@ function main() {
     pluginVersion: args['plugin-version'],
     advertisedVersion: args['advertised-version'],
     repoManifest: readIfPresent(args['repo-manifest']),
-    hostManifests: {
-      claude: readIfPresent(args['claude-manifest']),
-      codex: readIfPresent(args['codex-manifest']),
-    },
+    pluginManifest: readIfPresent(args['plugin-manifest']),
     producer: {
       ios: { sha256: args['ios-sha256'], bytes: args['ios-bytes'] },
       android: { sha256: args['android-sha256'], bytes: args['android-bytes'] },

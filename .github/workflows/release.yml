@@ -14,7 +14,7 @@ name: Release
 #                pin the generated candidate P (one commit on top of main B)
 #   prepare   -> build both runner zips at P (runner-artifacts.yml, read-only,
 #                no persisted credential) and retain them with producer digests
-#   finalize  -> generate runner-manifest.json + both host copies from the
+#   finalize  -> generate runner-manifest.json + the packages/claude-plugin copy from the
 #                retained bytes, commit onto the version branch: candidate H
 #   validate  -> offline source/package validation of H (dist freshness, unit,
 #                integration, version sync, trust root == producer handoff)
@@ -174,7 +174,7 @@ jobs:
           # manifests and the plugin/marketplace manifests. Anything else on the
           # branch did not come from the generator.
           FOREIGN=$(git diff --name-only "$BASE" "$P" \
-            | grep -Ev '^(\.changeset/|yarn\.lock$|packages/codex-plugin/\.mcp\.json$|(.*/)?(CHANGELOG\.md|package\.json|package-lock\.json|plugin\.json|marketplace\.json)$)' || true)
+            | grep -Ev '^(\.changeset/|yarn\.lock$|packages/codex-plugin/\.mcp\.json$|packages/claude-plugin/codex\.mcp\.json$|(.*/)?(CHANGELOG\.md|package\.json|package-lock\.json|plugin\.json|marketplace\.json)$)' || true)
           if [ -n "$FOREIGN" ]; then
             echo "::error::candidate $P changes paths a version bump never generates: $FOREIGN" >&2
             exit 1
@@ -250,20 +250,20 @@ jobs:
           check "rn-fast-runner-$VERSION-sim.zip" "$IOS_SHA256" "$IOS_BYTES"
           check "rn-android-runner-$VERSION.zip" "$ANDROID_SHA256" "$ANDROID_BYTES"
 
-      - name: Generate the trust root and its host copies from the retained bytes
+      - name: Generate the trust root and its distributed copy from the retained bytes
         run: |
           node scripts/build-runner-manifest.mts \
             --version "$VERSION" \
             --ios "handoff/rn-fast-runner-$VERSION-sim.zip" \
             --android "handoff/rn-android-runner-$VERSION.zip" \
             --out runner-manifest.json
+          # packages/claude-plugin is the one directory both marketplaces install (GH #892).
           cp runner-manifest.json packages/claude-plugin/runner-manifest.json
-          cp runner-manifest.json packages/codex-plugin/runner-manifest.json
           cat runner-manifest.json
           CHANGED=$(git status --porcelain --untracked-files=no | awk '{print $2}' | sort | tr '\n' ' ')
-          EXPECTED="packages/claude-plugin/runner-manifest.json packages/codex-plugin/runner-manifest.json runner-manifest.json "
+          EXPECTED="packages/claude-plugin/runner-manifest.json runner-manifest.json "
           if [ "$CHANGED" != "$EXPECTED" ]; then
-            echo "::error::generating the trust root changed '$CHANGED', expected exactly the three manifests" >&2
+            echo "::error::generating the trust root changed '$CHANGED', expected exactly the two manifests" >&2
             exit 1
           fi
 
@@ -272,7 +272,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add runner-manifest.json packages/claude-plugin/runner-manifest.json packages/codex-plugin/runner-manifest.json
+          git add runner-manifest.json packages/claude-plugin/runner-manifest.json
           git commit --quiet -m "chore(release): runner trust root for v$VERSION"
           H=$(git rev-parse HEAD)
           # Lands only if the branch is still the candidate this run built from.
@@ -328,8 +328,7 @@ jobs:
             --plugin-version "$(jq -r '.version' packages/claude-plugin/plugin.json)" \
             --advertised-version "$ADVERTISED" \
             --repo-manifest runner-manifest.json \
-            --claude-manifest packages/claude-plugin/runner-manifest.json \
-            --codex-manifest packages/codex-plugin/runner-manifest.json \
+            --plugin-manifest packages/claude-plugin/runner-manifest.json \
             --ios-sha256 "$IOS_SHA256" --ios-bytes "$IOS_BYTES" \
             --android-sha256 "$ANDROID_SHA256" --android-bytes "$ANDROID_BYTES"
 
@@ -380,10 +379,9 @@ jobs:
       - name: Read the candidate's files by SHA
         run: |
           git fetch --quiet --depth=1 origin "$HEAD"
-          mkdir -p candidate/claude candidate/codex
+          mkdir -p candidate/plugin
           git show "$HEAD:runner-manifest.json" > candidate/runner-manifest.json
-          git show "$HEAD:packages/claude-plugin/runner-manifest.json" > candidate/claude/runner-manifest.json
-          git show "$HEAD:packages/codex-plugin/runner-manifest.json" > candidate/codex/runner-manifest.json
+          git show "$HEAD:packages/claude-plugin/runner-manifest.json" > candidate/plugin/runner-manifest.json
           git show "$HEAD:packages/claude-plugin/plugin.json" > candidate/plugin.json
           git show "$HEAD:packages/claude-plugin/CHANGELOG.md" > candidate/CHANGELOG.md
           [ "$(jq -r '.version' candidate/plugin.json)" = "$VERSION" ] || { echo "::error::candidate $HEAD advertises $(jq -r '.version' candidate/plugin.json), not v$VERSION" >&2; exit 1; }
@@ -460,8 +458,7 @@ jobs:
             --plugin-version "$VERSION" \
             --advertised-version "$ADVERTISED" \
             --repo-manifest candidate/runner-manifest.json \
-            --claude-manifest candidate/claude/runner-manifest.json \
-            --codex-manifest candidate/codex/runner-manifest.json \
+            --plugin-manifest candidate/plugin/runner-manifest.json \
             --ios-sha256 "$IOS_SHA256" --ios-bytes "$IOS_BYTES" \
             --android-sha256 "$ANDROID_SHA256" --android-bytes "$ANDROID_BYTES" \
             --release release.json \

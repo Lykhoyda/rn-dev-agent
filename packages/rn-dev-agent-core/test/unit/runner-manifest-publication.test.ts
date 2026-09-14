@@ -110,7 +110,7 @@ function candidate(overrides: Record<string, unknown> = {}) {
     pluginVersion: VERSION,
     advertisedVersion: ADVERTISED,
     repoManifest: manifest,
-    hostManifests: { claude: manifest, codex: manifest },
+    pluginManifest: manifest,
     producer: producer(),
     ...overrides,
   };
@@ -177,7 +177,7 @@ test('the trust root must vouch for exactly the candidate version', () => {
   assert.throws(
     () =>
       assertPreparedCandidate(
-        candidate({ repoManifest: stale, hostManifests: { claude: stale, codex: stale } }),
+        candidate({ repoManifest: stale, pluginManifest: stale }),
       ),
     /trust root is v0\.76\.6 while plugin\.json is v0\.76\.7/,
   );
@@ -187,32 +187,22 @@ test('the trust root must vouch for exactly the candidate version', () => {
   );
 });
 
-test('both host copies must be present and identical to the root', () => {
-  const manifest = manifestFor();
+test('the distributed plugin copy must be present and identical to the root', () => {
+  // GH #892: packages/claude-plugin is the one directory both marketplaces
+  // install, so it carries the single host copy of the trust root.
   assert.throws(
-    () => assertPreparedCandidate(candidate({ hostManifests: { claude: manifest } })),
-    /codex runner-manifest\.json copy is missing/,
+    () => assertPreparedCandidate(candidate({ pluginManifest: manifestFor(VERSION, 'x') })),
+    /plugin runner-manifest\.json copy .* differs/,
   );
   assert.throws(
-    () =>
-      assertPreparedCandidate(
-        candidate({ hostManifests: { claude: manifest, codex: manifestFor(VERSION, 'x') } }),
-      ),
-    /codex runner-manifest\.json copy .* differs/,
-  );
-  assert.throws(
-    () => assertPreparedCandidate(candidate({ hostManifests: undefined })),
-    /claude runner-manifest\.json copy is missing/,
+    () => assertPreparedCandidate(candidate({ pluginManifest: undefined })),
+    /plugin runner-manifest\.json copy is missing/,
   );
 });
 
-test('property order never decides identity of the host copies', () => {
+test('property order never decides identity of the plugin copy', () => {
   const reordered = JSON.stringify({ assets: JSON.parse(manifestFor()).assets, version: VERSION });
-  assert.doesNotThrow(() =>
-    assertPreparedCandidate(
-      candidate({ hostManifests: { claude: reordered, codex: manifestFor() } }),
-    ),
-  );
+  assert.doesNotThrow(() => assertPreparedCandidate(candidate({ pluginManifest: reordered })));
 });
 
 test('the full pair with exact names is required', () => {
@@ -223,7 +213,7 @@ test('the full pair with exact names is required', () => {
       assertPreparedCandidate(
         candidate({
           repoManifest: noAndroid,
-          hostManifests: { claude: noAndroid, codex: noAndroid },
+          pluginManifest: noAndroid,
         }),
       ),
     /exactly one android asset/,
@@ -232,7 +222,7 @@ test('the full pair with exact names is required', () => {
   assert.throws(
     () =>
       assertPreparedCandidate(
-        candidate({ repoManifest: renamed, hostManifests: { claude: renamed, codex: renamed } }),
+        candidate({ repoManifest: renamed, pluginManifest: renamed }),
       ),
     /ios asset is rn-fast-runner-latest-sim\.zip, expected rn-fast-runner-0\.76\.7-sim\.zip/,
   );
@@ -430,11 +420,7 @@ function write(root: string, relative: string, content: string): void {
   writeFileSync(path, content);
 }
 
-const MANIFEST_PATHS = [
-  'runner-manifest.json',
-  'packages/codex-plugin/runner-manifest.json',
-  'packages/claude-plugin/runner-manifest.json',
-];
+const MANIFEST_PATHS = ['runner-manifest.json', 'packages/claude-plugin/runner-manifest.json'];
 
 type FixtureOptions = {
   // Also commit the generated trust root onto the candidate: the release head H.
@@ -853,7 +839,7 @@ function runFinalize(
   };
 }
 
-test('finalize generates root + host copies from the retained bytes and pins H on the version branch', () => {
+test('finalize generates root + plugin copy from the retained bytes and pins H on the version branch', () => {
   const fixture = createFixture();
   try {
     const { run } = runFinalize(fixture);
