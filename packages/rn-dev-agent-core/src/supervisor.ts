@@ -5,6 +5,7 @@ import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { awaitChildErrorOrExit, completeSqliteRelaunch } from './lifecycle/child-error-or-exit.js';
+import { seedHostProjectRoot, shouldAcquireProcessLock } from './lifecycle/host-process-lock.js';
 import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
 import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { LineSplitter } from './lifecycle/stdio-frames.js';
@@ -93,7 +94,8 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
   const workerPath = process.env.RN_BRIDGE_WORKER_PATH
     ? resolve(process.env.RN_BRIDGE_WORKER_PATH)
     : join(here, 'index.js');
-  const noLock = process.argv.includes('--no-lock');
+  seedHostProjectRoot();
+  const noLock = !shouldAcquireProcessLock();
   const diagnosticContractProbe = process.argv.includes('--diagnostic-contract-probe');
 
   let lockfile: Lockfile | null = null;

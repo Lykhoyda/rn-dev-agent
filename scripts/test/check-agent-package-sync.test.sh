@@ -23,11 +23,13 @@ write_valid_repo() {
   find "$tmp" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   mkdir -p \
     "$tmp/.claude-plugin" \
+    "$tmp/.cursor-plugin" \
     "$tmp/.changeset" \
     "$tmp/.yarn/releases" \
     "$tmp/apps/docs-site" \
     "$tmp/packages/rn-dev-agent-core/dist" \
     "$tmp/packages/claude-plugin/.claude-plugin" \
+    "$tmp/packages/claude-plugin/.cursor-plugin" \
     "$tmp/packages/claude-plugin/agents" \
     "$tmp/packages/claude-plugin/commands" \
     "$tmp/packages/claude-plugin/hooks" \
@@ -102,7 +104,10 @@ write_valid_repo() {
   /bin/cp "$tmp/scripts/generate_pr_body.sh" "$tmp/packages/claude-plugin/scripts/generate_pr_body.sh"
   printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":{"cdp":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"]}}}' > "$tmp/packages/claude-plugin/plugin.json"
   printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":{"cdp":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"]}}}' > "$tmp/packages/claude-plugin/.claude-plugin/plugin.json"
+  printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":"./mcp.json","hooks":{"hooks":{}}}' > "$tmp/packages/claude-plugin/.cursor-plugin/plugin.json"
+  printf '%s\n' '{"mcpServers":{"cdp":{"command":"node","args":["${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js","--no-lock"]}}}' > "$tmp/packages/claude-plugin/mcp.json"
   printf '%s\n' '{"plugins":[{"name":"rn-dev-agent","version":"1.2.3","source":"./packages/claude-plugin"}]}' > "$tmp/.claude-plugin/marketplace.json"
+  printf '%s\n' '{"name":"rn-dev-agent","plugins":[{"name":"rn-dev-agent","version":"1.2.3","source":"./packages/claude-plugin"}]}' > "$tmp/.cursor-plugin/marketplace.json"
   mkdir -p "$tmp/.agents/plugins"
   printf '%s\n' '{"name":"rn-dev-agent","plugins":[{"name":"rn-dev-agent","source":{"source":"local","path":"./packages/codex-plugin"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"Engineering"}]}' > "$tmp/.agents/plugins/marketplace.json"
   printf '%s\n' '{"plugins":[{"name":"rn-dev-agent","version":"1.2.3","source":"./"}]}' > "$tmp/packages/claude-plugin/marketplace.json"

@@ -87,6 +87,13 @@ Use `storeType: 'react-query'` explicitly. React Query state is read from the Qu
 `/reload-plugins`. Local development uses
 `claude --plugin-dir /path/to/rn-dev-agent`.
 
+**Cursor:** install from Customize → Plugins. Local development uses
+`/path/to/rn-dev-agent/packages/claude-plugin` (`.cursor-plugin/plugin.json` +
+`mcp.json`), not the repository root. Reload the window after install. Requires
+Node.js >= 24. If MCP reports Connection closed, confirm that Node, then reload
+— do not add `--no-lock` to a user config; the Cursor Plugin spawn already
+skips the Claude process lock.
+
 **Codex:** inspect `codex plugin list --json` and `/mcp verbose`. The latter is
 inventory only, never reconnect. Local development uses
 `/path/to/rn-dev-agent/packages/codex-plugin`. If materialization is absent,
@@ -100,7 +107,7 @@ codex plugin add rn-dev-agent@rn-dev-agent --json
 Codex 0.145.0 is the live-refresh floor. A change made through the same running
 app can affect a subsequent turn; external CLI/manual changes and older hosts
 require exiting and relaunching Codex. Never kill a bridge owned by another
-Claude/Codex process.
+Claude, Cursor, or Codex process.
 
 If the plugin is materialized but this task has no rn-dev-agent skills, invoke
 the package health program by the exact configured cache version:

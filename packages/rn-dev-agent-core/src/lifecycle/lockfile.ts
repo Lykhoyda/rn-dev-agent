@@ -166,7 +166,7 @@ function hashProjectRoot(projectRoot: string): string {
 /**
  * Single-instance gate for the MCP subprocess (M3 / Phase 90 Tier 1).
  *
- * Two Claude Code windows opened in the same project would spawn two MCP subprocesses,
+ * Two sessions opened in the same project would spawn two MCP subprocesses,
  * both racing for the single Hermes CDP slot and producing missed events + state flicker.
  * This module writes a lock file at startup keyed on the user's uid + an 8-char hash of
  * the project root, so:
@@ -460,7 +460,7 @@ export function formatLockConflictMessage(conflict: LockConflict): string {
     `  Lock:     ${conflict.lockPath}`,
     ``,
     `To resolve:`,
-    `  1. Close the other Claude Code window for this project, OR`,
+    `  1. Close the other session for this project, OR`,
     `  2. Kill the other process:  kill ${conflict.pid}`,
     `  3. (If the process is dead) delete the lock file:  rm ${conflict.lockPath}`,
     ``,

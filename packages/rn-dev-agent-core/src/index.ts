@@ -115,6 +115,7 @@ import { createProofStepHandler } from './tools/proof-step.js';
 import { createDisconnectHandler, createTargetsHandler } from './tools/connection.js';
 import { createRestartHandler } from './tools/restart.js';
 import { buildGracefulShutdown } from './lifecycle/graceful-shutdown.js';
+import { seedHostProjectRoot, shouldAcquireProcessLock } from './lifecycle/host-process-lock.js';
 import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
 import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { arbiterWrap, arbiter } from './lifecycle/device-arbiter.js';
@@ -291,7 +292,8 @@ const pkgVersion = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: stri
 // release() it on orphan-exit. null when --no-lock (touch/release become no-ops).
 let lockfile: Lockfile | null = null;
 const diagnosticContractProbe = process.argv.includes('--diagnostic-contract-probe');
-const noLock = diagnosticContractProbe || process.argv.includes('--no-lock');
+seedHostProjectRoot();
+const noLock = !shouldAcquireProcessLock();
 if (!noLock) {
   lockfile = new Lockfile({ version: pkgVersion });
   const lockResult = lockfile.acquire();

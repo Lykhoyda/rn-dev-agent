@@ -1,6 +1,8 @@
 # Claude Plugin Adapter
 
-This package owns the Claude Code host boundary for rn-dev-agent.
+This package owns the Claude Code host boundary for rn-dev-agent. Cursor Plugin
+manifests (`.cursor-plugin/plugin.json`, `mcp.json`) live here as well; the repo
+root `.cursor-plugin/marketplace.json` points at this package.
 
 ## Installation Path
 
@@ -24,7 +26,8 @@ root directly, use `/path/to/rn-dev-agent/packages/claude-plugin`.
 
 Package-owned artifacts:
 
-- `plugin.json`
+- `plugin.json` / `.claude-plugin/plugin.json`
+- `.cursor-plugin/plugin.json` and `mcp.json` (Cursor Plugin launch)
 - `package.json`
 - `marketplace.json`
 - `hooks/`

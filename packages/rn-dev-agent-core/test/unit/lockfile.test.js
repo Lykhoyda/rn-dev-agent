@@ -312,6 +312,8 @@ test('formatLockConflictMessage: renders all fields for human diagnosis', () => 
   assert.match(msg, /Started:\s+5m ago/);
   assert.match(msg, /Lock:\s+\/tmp\/rn-dev-agent-cdp-501-abcd1234\.lock/);
   assert.match(msg, /kill 54321/);
+  assert.match(msg, /Close the other session/);
+  assert.doesNotMatch(msg, /Claude Code window/);
   assert.match(msg, /--no-lock/);
 });
 
