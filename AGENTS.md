@@ -317,25 +317,27 @@ alive for such callers.
   `skills/using-rn-dev-agent/SKILL.md` § "Session ownership recovery".
 - Native runner behavior: edit `packages/rn-fast-runner/` or
   `packages/rn-android-runner/`, then run `corepack yarn build:host-runtimes`
-  so both host packages carry fresh runner sources.
+  so the distributed plugin package carries fresh runner sources.
 - Docs site content/build: edit `apps/docs-site/` or generated docs sources,
   then run `corepack yarn build:docs` for site changes.
 
-`scripts/build-host-runtimes.ts` is the single writer for host package runtime
-artifacts: bundled core runtime entries, observe web assets, runner manifests,
-`CLAUDE-MD-TEMPLATE.md`, native runner copies, `record_proof.sh`, the shared
-host helper scripts listed in `SHARED_HOST_HELPER_SCRIPTS` (copied into both
-host packages), and Claude helper scripts. If those outputs drift, edit the
+`scripts/build-host-runtimes.ts` is the single writer for the distributed
+plugin package's generated artifacts: the one bundled core runtime entry set,
+observe web assets, the runner manifest, `CLAUDE-MD-TEMPLATE.md`,
+`AGENTS-MD-TEMPLATE.md`, native runner copies, the Codex adapters
+(`.codex-plugin/`, `codex.mcp.json`, `bin/`, `codex-*`), `record_proof.sh`, the
+helper scripts listed in `SHARED_HOST_HELPER_SCRIPTS`, and Claude helper
+scripts — all under `packages/claude-plugin/`. If those outputs drift, edit the
 source and rerun:
 
 ```bash
 corepack yarn build:host-runtimes
 ```
 
-A new core CLI entry point ships to host packages only if its compiled name is
-listed in `RUNTIME_ENTRIES` in `scripts/build-host-runtimes.ts`; otherwise it
-exists in a local `packages/rn-dev-agent-core/dist/` build and is silently
-absent from every marketplace install.
+A new core CLI entry point ships to the plugin package only if its compiled
+name is listed in `RUNTIME_ENTRIES` in `scripts/build-host-runtimes.ts`;
+otherwise it exists in a local `packages/rn-dev-agent-core/dist/` build and is
+silently absent from every marketplace install.
 
 ## Validation Commands
 
@@ -404,16 +406,18 @@ corepack yarn build:docs
 
 Core `packages/rn-dev-agent-core/dist/` is a build product, not a git source.
 `scripts/check-core-dist-contract.sh` is the inventory gate: it fails if that
-tree is tracked and if either host plugin runtime is missing from git.
+tree is tracked, if the single committed runtime under
+`packages/claude-plugin/rn-dev-agent-core/dist/` is missing from git, or if a
+second `packages/*/rn-dev-agent-core/dist/` is tracked.
 
 | Consumer | Artifact it runs | When the artifact is produced |
 | --- | --- | --- |
 | Workspace tests (`yarn test`, coverage, integration) | local core `dist/` after `yarn build:test` (tsc + SPA) | CI and developers; not committed |
-| `scripts/build-host-runtimes.ts` | reads core `dist/` then writes host bundles | `yarn build:host-runtimes` |
-| Marketplace Claude / Codex installs | `packages/{claude,codex}-plugin/rn-dev-agent-core/dist/` | committed host bundles; no user compile |
+| `scripts/build-host-runtimes.ts` | reads core `dist/` then writes the one plugin-package bundle | `yarn build:host-runtimes` |
+| Marketplace Claude / Codex installs | `packages/claude-plugin/rn-dev-agent-core/dist/` (one copy, both hosts) | committed host bundle; no user compile |
 | `npm pack` / `yarn npm publish` of `rn-dev-agent-core` | tarball `dist/` via `.npmignore` + `prepack` | pack/publish time |
-| `scripts/verify.sh`, `scripts/collect-feedback.sh` | host bundle first, then local core `dist/` | committed host copies on a clean checkout |
-| Observe SPA (`check-web-bundle.sh`) | host `dist/observability/web-dist/` (and `web-dist/`) compared to a local Vite rebuild | committed host copies |
+| `scripts/verify.sh`, `scripts/collect-feedback.sh` | host bundle first, then local core `dist/` | committed host copy on a clean checkout |
+| Observe SPA (`check-web-bundle.sh`) | host `dist/observability/web-dist/` (and `web-dist/`) compared to a local Vite rebuild | committed host copy |
 | LLM evals | local core `dist/supervisor.js` | `yarn build` before `yarn evals` |
 
 The removed `packages/rn-dev-agent-core/run.sh` source-tree launcher was not
@@ -453,8 +457,8 @@ package `bin`, and marketplace consumers use the committed host supervisor.
   replay a covering saved action through `cdp_run_action` — not raw
   `maestro_run`.
 - If working on installed-plugin behavior, remember that marketplace installs
-  copy only the host package directory. Runtime dependencies, scripts, native
-  runner sources, and templates must exist inside the relevant host package.
+  copy only `packages/claude-plugin/` for both hosts. Runtime dependencies,
+  scripts, native runner sources, and templates must exist inside it.
 
 ## Release Boundaries
 
@@ -480,10 +484,11 @@ package `bin`, and marketplace consumers use the committed host supervisor.
 - The runner trust root ships inside the Version Packages transaction
   (`.github/workflows/release.yml`, header comment is the contract):
   `runner-artifacts.yml` is a read-only `workflow_call` producer at the pinned
-  candidate; `finalize` generates `runner-manifest.json` and both host copies
-  from the retained bytes onto the version branch; `publish` stages a draft
-  release targeting that head, reads every byte back, then publishes; `merge`
-  lands after the PR's own `Build & Test` run, whose `core-tests` step
+  candidate; `finalize` generates `runner-manifest.json` and the single
+  `packages/claude-plugin/` copy from the retained bytes onto the version
+  branch; `publish` stages a draft release targeting that head, reads every
+  byte back, then publishes; `merge` lands after the PR's own `Build & Test`
+  run, whose `core-tests` step
   `scripts/check-public-runner-assets.sh` asserts the public bytes. After
   publication approve the PR's queued CI run, then re-run the Release
   workflow's failed jobs. A published release is never rebuilt, clobbered or

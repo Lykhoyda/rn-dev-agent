@@ -175,10 +175,7 @@ test('version precedence follows semver, including numeric prerelease identifier
 test('the trust root must vouch for exactly the candidate version', () => {
   const stale = manifestFor(ADVERTISED);
   assert.throws(
-    () =>
-      assertPreparedCandidate(
-        candidate({ repoManifest: stale, pluginManifest: stale }),
-      ),
+    () => assertPreparedCandidate(candidate({ repoManifest: stale, pluginManifest: stale })),
     /trust root is v0\.76\.6 while plugin\.json is v0\.76\.7/,
   );
   assert.throws(
@@ -220,10 +217,7 @@ test('the full pair with exact names is required', () => {
   );
   const renamed = manifestFor().replace(IOS_ZIP, 'rn-fast-runner-latest-sim.zip');
   assert.throws(
-    () =>
-      assertPreparedCandidate(
-        candidate({ repoManifest: renamed, pluginManifest: renamed }),
-      ),
+    () => assertPreparedCandidate(candidate({ repoManifest: renamed, pluginManifest: renamed })),
     /ios asset is rn-fast-runner-latest-sim\.zip, expected rn-fast-runner-0\.76\.7-sim\.zip/,
   );
 });

@@ -14,8 +14,9 @@ name: Release
 #                pin the generated candidate P (one commit on top of main B)
 #   prepare   -> build both runner zips at P (runner-artifacts.yml, read-only,
 #                no persisted credential) and retain them with producer digests
-#   finalize  -> generate runner-manifest.json + the packages/claude-plugin copy from the
-#                retained bytes, commit onto the version branch: candidate H
+#   finalize  -> generate runner-manifest.json + its packages/claude-plugin
+#                copy from the retained bytes, commit onto the version branch:
+#                candidate H
 #   validate  -> offline source/package validation of H (dist freshness, unit,
 #                integration, version sync, trust root == producer handoff)
 #   publish   -> draft release vV targeting H, attach the retained bytes and
