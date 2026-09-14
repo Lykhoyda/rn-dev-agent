@@ -105,11 +105,27 @@ jobs:
           fi
           V=$(git show "$HEAD:packages/claude-plugin/plugin.json" | jq -r '.version')
           MV=$(git show "$HEAD:runner-manifest.json" 2>/dev/null | jq -r '.version // empty' || true)
-          TAG=$(gh api "repos/{owner}/{repo}/git/ref/tags/v$V" --jq '.object.sha' 2>/dev/null || true)
-          DRAFT=$(gh release view "v$V" --json isDraft --jq '.isDraft' 2>/dev/null || true)
-          # Only a PUBLISHED release from this exact head is resumed: a draft
-          # belongs to a run that still holds its retained bytes, so it is
-          # rebuilt rather than resumed.
+          # Only GitHub's own 404 may stand for "nothing published": a failed
+          # lookup that read as resume=false would let changesets/action
+          # regenerate a branch whose head is already released.
+          if out=$(gh api "repos/{owner}/{repo}/git/ref/tags/v$V" 2>/dev/null); then
+            TAG=$(jq -r '.object.sha' <<< "$out")
+          elif [ "$(jq -r '.status // empty' <<< "$out" 2>/dev/null)" = "404" ]; then
+            TAG=""
+          else
+            echo "::error::could not determine whether tag v$V exists — refusing to guess" >&2
+            exit 1
+          fi
+          # A by-tag lookup never resolves a draft, and a draft belongs to a run
+          # that still holds its retained bytes: it is rebuilt, never resumed.
+          if out=$(gh api "repos/{owner}/{repo}/releases/tags/v$V" 2>/dev/null); then
+            DRAFT=$(jq -r '.draft' <<< "$out")
+          elif [ "$(jq -r '.status // empty' <<< "$out" 2>/dev/null)" = "404" ]; then
+            DRAFT=""
+          else
+            echo "::error::could not determine whether release v$V is published — refusing to guess" >&2
+            exit 1
+          fi
           if [ "$MV" = "$V" ] && [ -n "$TAG" ] && [ "$TAG" = "$HEAD" ] && [ "$DRAFT" = false ]; then
             echo "release v$V is already published from PR #$NUMBER head $HEAD — resuming its merge"
             {

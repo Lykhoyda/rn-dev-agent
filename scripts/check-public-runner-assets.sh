@@ -5,24 +5,20 @@
 # release or asset, a draft, or any SHA-256 / length difference. Nothing here
 # ever rebuilds, replaces or re-hashes a public byte.
 #
-# Usage: check-public-runner-assets.sh [--always] [--repair]
-#   --always  go online even when the base already carried this exact trust
-#             root (the scheduled sweep); by default a checkout whose version
-#             AND root manifest equal its base (BASE_REF for pull requests,
-#             EVENT_BEFORE for pushes) stays offline because those bytes were
-#             asserted when they landed.
+# A checkout whose version AND root manifest equal its base (BASE_REF for pull
+# requests, EVENT_BEFORE for pushes) stays offline: those bytes were asserted
+# when they landed.
+#
+# Usage: check-public-runner-assets.sh [--repair]
 #   --repair  re-upload a MISSING runner-manifest.json asset from the trust
-#             root (needs contents: write); implies --always. A divergent
-#             asset is never repaired.
+#             root (needs contents: write). A divergent asset is never repaired.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ALWAYS=false
 REPAIR=false
 for arg in "$@"; do
   case "$arg" in
-    --always) ALWAYS=true ;;
-    --repair) REPAIR=true; ALWAYS=true ;;
+    --repair) REPAIR=true ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -39,24 +35,22 @@ for copy in packages/claude-plugin packages/codex-plugin; do
     || fail "$copy/runner-manifest.json differs from the root trust root"
 done
 
-if [ "$ALWAYS" != true ]; then
-  BASE=""
-  if [ -n "${BASE_REF:-}" ]; then
-    git -C "$ROOT" fetch --quiet --depth=1 origin "$BASE_REF"
-    BASE=FETCH_HEAD
-  elif [ -n "${EVENT_BEFORE:-}" ] && [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]; then
-    if git -C "$ROOT" fetch --quiet --depth=1 origin "$EVENT_BEFORE" 2>/dev/null; then
-      BASE=$EVENT_BEFORE
-    fi
+BASE=""
+if [ -n "${BASE_REF:-}" ]; then
+  git -C "$ROOT" fetch --quiet --depth=1 origin "$BASE_REF"
+  BASE=FETCH_HEAD
+elif [ -n "${EVENT_BEFORE:-}" ] && [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+  if git -C "$ROOT" fetch --quiet --depth=1 origin "$EVENT_BEFORE" 2>/dev/null; then
+    BASE=$EVENT_BEFORE
   fi
-  # Offline only when the base already carried this exact version AND root:
-  # a manifest edit without a version bump must still face the public bytes.
-  if [ -n "$BASE" ] \
-     && [ "$(git -C "$ROOT" show "$BASE:packages/claude-plugin/plugin.json" | jq -r '.version')" = "$V" ] \
-     && [ "$(git -C "$ROOT" show "$BASE:runner-manifest.json")" = "$(cat "$MANIFEST")" ]; then
-    echo "the base already carried this exact v$V trust root; its public assets were asserted when it landed — staying offline"
-    exit 0
-  fi
+fi
+# Offline only when the base already carried this exact version AND root:
+# a manifest edit without a version bump must still face the public bytes.
+if [ -n "$BASE" ] \
+   && [ "$(git -C "$ROOT" show "$BASE:packages/claude-plugin/plugin.json" | jq -r '.version')" = "$V" ] \
+   && [ "$(git -C "$ROOT" show "$BASE:runner-manifest.json")" = "$(cat "$MANIFEST")" ]; then
+  echo "the base already carried this exact v$V trust root; its public assets were asserted when it landed — staying offline"
+  exit 0
 fi
 
 TMP=$(mktemp -d)

@@ -764,6 +764,27 @@ test('a tag bound elsewhere never resumes a candidate', () => {
   }
 });
 
+test('a lookup that cannot be read is never taken as "nothing published"', () => {
+  for (const fail of ['api repos/{owner}/{repo}/git/ref', 'api repos/{owner}/{repo}/releases']) {
+    const fixture = createFixture({ prepared: true, prs: [versionPr()], tags: { [TAG]: SHA_B } });
+    try {
+      const run = runJobSteps({
+        workflow: release,
+        jobId: 'version',
+        cwd: fullClone(fixture),
+        ctx: releaseCtx(fixture),
+        env: { ...baseEnv(fixture), GH_STUB_FAIL: fail },
+        only: [PENDING_STEP],
+      });
+      assert.equal(run.ok, false, fail);
+      assert.match(run.failed!.stderr, /refusing to guess/);
+      assert.equal(run.outputs.pending?.resume, undefined);
+    } finally {
+      fixture.cleanup();
+    }
+  }
+});
+
 test('the generated candidate is pinned as one commit on top of main with only generated paths', () => {
   const fixture = createFixture();
   try {
@@ -1028,13 +1049,29 @@ test('validate refuses H when the producer built other native inputs or other by
   }
 });
 
-test('validate is offline with respect to release assets', () => {
+test('validate reaches its verdict offline: no release asset is ever consulted', () => {
+  const fixture = createFixture({ prepared: true });
+  try {
+    const run = runJobSteps({
+      workflow: release,
+      jobId: 'validate',
+      cwd: checkout(fixture, fixture.head!),
+      ctx: releaseCtx(fixture, treeCtx(fixture, fixture.candidate)),
+      env: baseEnv(fixture),
+      only: [PREPARED_STEP],
+    });
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.deepEqual(ghCalls(fixture), []);
+  } finally {
+    fixture.cleanup();
+  }
+  // The remaining steps (dist freshness, unit/integration tests, version sync)
+  // cannot run in the fixture; their commands are checked as commands.
   for (const step of steps(release, 'validate')) {
     if (!step.run) continue;
-    assert.ok(
-      !/gh release|releases\/tags/.test(step.run),
-      `validate step "${step.name}" touches release assets`,
-    );
+    for (const tokens of shellCommands(step.run).map(withoutGlobalOptions)) {
+      assert.notEqual(tokens[0], 'gh', `validate step "${step.name}": ${tokens.join(' ')}`);
+    }
   }
 });
 
