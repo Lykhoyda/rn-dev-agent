@@ -300,11 +300,11 @@ alive for such callers.
 - Cursor Plugin manifests: the same package
   (`.cursor-plugin/plugin.json`, `mcp.json`); root marketplace is
   `.cursor-plugin/marketplace.json`.
-- Process lock (`packages/rn-dev-agent-core/src/lifecycle/lockfile.ts`): every
-  host spawn acquires it; `--no-lock` is for CI and test harnesses, never a
-  host manifest or the conflict message (`scripts/check-agent-package-sync.sh`
-  pins the Cursor spawn). The Codex launcher's existing `--no-lock` is the one
-  documented exception.
+- Process lock (`packages/rn-dev-agent-core/src/lifecycle/lockfile.ts`): Claude
+  and Cursor spawns acquire it; `--no-lock` is for CI and test harnesses, never a
+  Claude or Cursor host manifest or the conflict message
+  (`scripts/check-agent-package-sync.sh` pins the Cursor spawn). The Codex
+  launcher's `--no-lock` stays as-is.
 - Codex-only host behavior: edit `packages/codex-plugin/`.
 - Host-neutral workflow knowledge: edit `packages/shared-agent-knowledge/`,
   mirror/adapt the affected files into both host packages, and run

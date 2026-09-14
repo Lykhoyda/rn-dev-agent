@@ -113,15 +113,15 @@ Claude, Cursor, or Codex process.
 ### Another MCP already owns this project root
 
 The supervisor keeps one process lock per project root (`CLAUDE_USER_CWD`, else
-its working directory). A second server for the same root exits with code 11 and
-prints the owning PID, project, and lock path. This is the same exclusion on every
-host and it is not a stale-lock bug: a dead owner is reclaimed automatically on the
-next start.
+its working directory). A second Claude or Cursor server for the same root exits
+with code 11 and prints the owning PID, project, and lock path. Codex starts the
+supervisor with `--no-lock` and does not acquire this lock. This is not a
+stale-lock bug: a dead owner is reclaimed automatically on the next start.
 
 Use the session that already owns the root, or quit that session's window or MCP
 client so the lock releases on exit. Do not kill the owner, delete the lock file,
-or add `--no-lock` to a host config; each of those lets two servers race for one
-CDP slot.
+or add `--no-lock` to a Claude or Cursor host config; each of those lets two
+servers race for one CDP slot.
 
 `Project:` showing your home directory means the server was started outside an
 app checkout, so every session launched that way shares one lock. The Cursor
