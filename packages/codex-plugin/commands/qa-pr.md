@@ -43,7 +43,12 @@ this package) in this session. Summary:
    flow). Then rewrite screenshot markdown to
    `<img src="…" alt="…" width="720">` via `--edit-last`. In-session,
    print the verdict table and the comment URL. Never leave unhosted
-   `/tmp` paths as the reviewer-visible proof.
+   `/tmp` paths as the reviewer-visible proof. Public comments are public:
+   never write hostname (including `.local`), machine UUID, home
+   directory (`/Users/…`), or other absolute local paths — even in a
+   code fence. Replace with `[HOST]`, `[MACHINE_ID]`, `[HOME]`,
+   `[PATH]`, `[UDID]`, `[UUID]`. Self-check, then post. Follow
+   `agents/rn-pr-qa.md` § Public identity.
 
 ## Examples
 
