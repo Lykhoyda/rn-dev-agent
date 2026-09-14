@@ -1,18 +1,19 @@
-# Security Policy
+# Lykhoyda/rn-dev-agent security
 
-This repository is **rn-dev-agent**, a Claude Code and Codex plugin for local React Native and Expo development (`rn-dev-agent-plugin` / `rn-dev-agent-core`). Operator limits, including `cdp_evaluate` and local-dev-only use, are in [README Security](README.md#security).
+**rn-dev-agent** is the Claude Code and Codex plugin (`rn-dev-agent-plugin` / `rn-dev-agent-core`) for local React Native / Expo development. It is not a hosted SaaS and not a generic Node library.
 
-## Supported Versions
+Install it from the Claude Code or Codex marketplace. It runs on the operator's machine: the MCP supervisor, managed Metro, and packaged iOS/Android runners drive a local simulator, emulator, or a bound physical device.
 
-Security updates ship only on the latest 1.0.x plugin/core version on `main`.
+## Report scope
 
-| Version | Supported          |
-| ------- | ------------------ |
-| Latest 1.0.x on `main` | :white_check_mark: |
-| Earlier 1.0.x and 0.x | :x:                |
+**In scope:** vulnerabilities in this plugin, `rn-dev-agent-core`, the packaged native runners, and the local Observe UI as shipped from this repo.
 
-## Reporting a Vulnerability
+**Out of scope:** a cloud backend (this repo has none) and operator-driven use of these local tools against an app the operator chose. Operator limits such as `cdp_evaluate` are in [README Security](README.md#security).
 
-GitHub private vulnerability reporting is enabled. Submit reports with [private vulnerability reporting](https://github.com/Lykhoyda/rn-dev-agent/security/advisories/new). Do not open a public issue.
+## Support
 
-Accepted reports are fixed in a later 1.0.x version on `main`. Declined reports are closed on the advisory.
+Security updates ship only on the latest 1.0.x plugin/core version advertised on `main`. Published-but-not-advertised GitHub tags, earlier 1.0.x, and all 0.x are unsupported.
+
+## Reporting
+
+Submit with GitHub [private vulnerability reporting](https://github.com/Lykhoyda/rn-dev-agent/security/advisories/new) only. Do not open a public issue.
