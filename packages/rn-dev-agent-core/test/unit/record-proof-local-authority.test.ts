@@ -443,3 +443,239 @@ test('recording stop delegates signals to the authenticated supervisor', () => {
   assert.doesNotMatch(source, /os\.waitid/);
   assert.doesNotMatch(source, /kill -(?:INT|9) "\$pid"/);
 });
+
+async function timingFixture(t: test.TestContext, mode = 'normal') {
+  const root = mkdtempSync(join(tmpdir(), 'record-proof-timing-'));
+  const prefix = join(root, 'record');
+  const script = join(root, 'record_proof.sh');
+  const source = readFileSync(sourceScript, 'utf8')
+    .replace('RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"', `RUNTIME_ROOT="${root}"`)
+    .replaceAll('RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"', `RUNTIME_DIR="${root}"`)
+    .replaceAll('import time\n', 'import time\ntime.time = lambda: float("nan")\n');
+  writeFileSync(script, source);
+  writeFileSync(
+    join(root, 'xcrun'),
+    `#!/usr/bin/env python3
+import os, pathlib, signal, sys, time
+if sys.argv[1:] == ["simctl", "list", "devices", "booted"]:
+    print("Test Device (Booted)")
+    sys.exit(0)
+deadline = None
+def stop(signum, frame):
+    global deadline
+    if deadline is None:
+        deadline = time.monotonic() + 0.8
+signal.signal(signal.SIGINT, signal.SIG_IGN if os.environ["CAPTURE_MODE"] == "forced" else stop)
+if os.environ["CAPTURE_MODE"] != "missing-ready":
+    time.sleep(0.25)
+    print("Recording started", flush=True)
+while deadline is None or time.monotonic() < deadline:
+    if pathlib.Path(os.environ["CAPTURE_EXIT"]).exists():
+        sys.exit(int(os.environ.get("CAPTURE_EXIT_CODE", "0")))
+    time.sleep(0.02)
+`,
+  );
+  chmodSync(join(root, 'xcrun'), 0o755);
+  const env = {
+    ...process.env,
+    PATH: `${root}:${process.env.PATH}`,
+    RN_DEV_AGENT_PROCESS_BIRTH_HELPER: processBirthHelper,
+    RN_DEV_AGENT_PROCESS_BIRTH_REQUIREMENT: darwinProcessBirthRequirement(),
+    CAPTURE_MODE: mode,
+    CAPTURE_EXIT: join(root, 'exit'),
+  };
+  let pid = 0;
+  t.after(async () => {
+    if (pid) {
+      await execFileAsync('bash', [script, 'abort', scope], { env, timeout: 10_000 }).catch(
+        () => {},
+      );
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+  const { stdout } = await execFileAsync(
+    'bash',
+    [script, 'start', 'ios', join(root, 'proof.mp4'), '--scope', scope, '--udid', 'test-device'],
+    { env, timeout: recorderStartTimeoutMs },
+  );
+  const start = parseStartOutput(stdout);
+  assert.ok(start);
+  pid = start.pid;
+  const incarnation = readFileSync(`${prefix}-${scope}.incarnation`, 'utf8').trim();
+  const statePath = `${prefix}-${scope}-${incarnation}.supervisor-state`;
+  const state = () => JSON.parse(readFileSync(statePath, 'utf8').split('\n')[1]);
+  const control = (action: string) =>
+    execFileAsync(
+      'bash',
+      [
+        '-c',
+        'source "$1"; select_scope_state "$2"; request_supervisor_signal "$2" "$3" "$4"',
+        '_',
+        script,
+        scope,
+        action,
+        incarnation,
+      ],
+      { env, timeout: 10_000 },
+    );
+  const terminal = () =>
+    execFileAsync(
+      'bash',
+      [
+        '-c',
+        'source "$1"; select_scope_state "$2"; wait_for_supervisor_terminal "$2" "$3"',
+        '_',
+        script,
+        scope,
+        incarnation,
+      ],
+      { env, timeout: 10_000 },
+    );
+  const duration = async (platform = 'ios') => {
+    const { stdout } = await execFileAsync(
+      'bash',
+      [
+        '-c',
+        'source "$1"; select_scope_state "$2"; read_capture_timing "$2" "$3" "$4"; printf "%s\\n%s\\n" "$CAPTURE_DURATION" "$CAPTURE_TIMING_UNAVAILABLE"',
+        '_',
+        script,
+        scope,
+        incarnation,
+        platform,
+      ],
+      { env, timeout: 10_000 },
+    );
+    const [value, warning] = stdout.split('\n');
+    return { value: value ? Number(value) : null, warning };
+  };
+  return { root, state, statePath, control, terminal, duration };
+}
+
+test('capture readiness waits for the first processed frame instead of child spawn', async (t) => {
+  const capture = await timingFixture(t);
+  const running = capture.state();
+  assert.ok(running.ready - running.launch >= 0.25);
+  await capture.control('INT');
+  await capture.terminal();
+  const ended = capture.state();
+  const duration = await capture.duration();
+  assert.ok(duration.value !== null);
+  assert.ok(Math.abs(duration.value - (ended.stop - ended.ready)) <= 1 / 60);
+});
+
+test('a missing first-frame witness cannot authorize a padded tail', async (t) => {
+  const capture = await timingFixture(t, 'missing-ready');
+  await capture.control('INT');
+  await capture.terminal();
+  const result = await capture.duration();
+  assert.equal(result.value, null);
+  assert.match(result.warning, /first frame unobserved/);
+});
+
+test('normal stop freezes monotonic timing before drain, repeated stop and delayed finalization', async (t) => {
+  const capture = await timingFixture(t);
+  await capture.control('INT');
+  const first = capture.state();
+  await capture.control('INT');
+  await capture.terminal();
+  const ended = capture.state();
+  assert.equal(ended.stop, first.stop);
+  assert.equal(ended.signal, first.signal);
+  assert.ok(ended.exit - ended.stop >= 0.7);
+  const duration = await capture.duration();
+  assert.equal(duration.warning, '');
+  assert.ok(duration.value !== null);
+  assert.ok(Math.abs(duration.value - (ended.stop - ended.ready)) <= 1 / 60);
+  assert.deepEqual(await capture.duration(), duration);
+  assert.equal((await capture.duration('android')).value, null);
+});
+
+test('early zero exit and force stop never authorize a padded tail', async (t) => {
+  for (const mode of ['early', 'forced']) {
+    await t.test(mode, async (t) => {
+      const capture = await timingFixture(t, mode);
+      if (mode === 'early') {
+        writeFileSync(join(capture.root, 'exit'), '');
+      } else {
+        await capture.control('INT');
+        await capture.control('KILL');
+      }
+      await capture.terminal();
+      const result = await capture.duration();
+      assert.equal(result.value, null);
+      assert.match(result.warning, mode === 'early' ? /exited before normal stop/ : /force stop/);
+    });
+  }
+});
+
+test('a cold first-frame latency still yields a normalized capture duration', async (t) => {
+  const capture = await timingFixture(t);
+  await capture.control('INT');
+  await capture.terminal();
+  const original = capture.state();
+  writeFileSync(
+    capture.statePath,
+    `exited 0\n${JSON.stringify({ ...original, launch: original.ready - 1.24 })}\n`,
+  );
+  const cold = await capture.duration();
+  assert.equal(cold.warning, '');
+  assert.ok(cold.value !== null);
+  assert.ok(Math.abs(cold.value - (original.stop - original.ready)) <= 1 / 60);
+  writeFileSync(
+    capture.statePath,
+    `exited 0\n${JSON.stringify({ ...original, launch: original.ready - 1.24, remote_state: 'present' })}\n`,
+  );
+  assert.deepEqual(await capture.duration('android'), cold);
+});
+
+test('a wide stop bracket refuses padding on iOS and ends the Android capture at its signal', async (t) => {
+  const capture = await timingFixture(t);
+  await capture.control('INT');
+  await capture.terminal();
+  const original = capture.state();
+  const wide = {
+    ...original,
+    launch: original.exit - 130,
+    ready: original.exit - 129,
+    stop: original.exit - 5,
+    signal: original.exit - 3.5,
+    exit: original.exit,
+  };
+  writeFileSync(capture.statePath, `exited 0\n${JSON.stringify(wide)}\n`);
+  const ios = await capture.duration();
+  assert.equal(ios.value, null);
+  assert.match(ios.warning, /clock uncertainty exceeds one second/);
+  writeFileSync(
+    capture.statePath,
+    `exited 0\n${JSON.stringify({ ...wide, remote_state: 'present' })}\n`,
+  );
+  const android = await capture.duration('android');
+  assert.equal(android.warning, '');
+  assert.ok(android.value !== null);
+  assert.ok(Math.abs(android.value - (wide.signal - wide.ready)) <= 1 / 60);
+});
+
+test('malformed, stale and uncertain timing cannot become a capture duration', async (t) => {
+  const capture = await timingFixture(t);
+  await capture.control('INT');
+  await capture.terminal();
+  const original = capture.state();
+  const invalid = [
+    { ...original, launch: null },
+    { ...original, launch: 'NaN' },
+    { ...original, launch: original.ready + 1 },
+    { ...original, stop: original.exit + 100 },
+    { ...original, signal: original.stop + 2 },
+    { ...original, incarnation: '0'.repeat(32) },
+    { ...original, scope: '0'.repeat(64) },
+    { ...original, pid: original.pid + 1 },
+  ];
+  for (const timing of invalid) {
+    writeFileSync(capture.statePath, `exited 0\n${JSON.stringify(timing)}\n`);
+    const result = await capture.duration();
+    assert.equal(result.value, null, JSON.stringify(timing));
+    assert.match(result.warning, /capture timing unavailable/);
+  }
+  writeFileSync(capture.statePath, 'exited 0\n');
+  assert.equal((await capture.duration()).value, null);
+});

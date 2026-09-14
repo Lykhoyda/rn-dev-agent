@@ -10,6 +10,10 @@ Produce a permanent proof artifact set for a verified feature:
 `PROOF.md`, `PR-BODY.md`, and the rehearsed flow persisted as a replayable
 action.
 
+When a packaged helper is referenced, resolve `<package-root>` as `../..` from
+this exact `SKILL.md`. Never interpret it as the user's workspace or scan Codex
+caches.
+
 **Core principle.** Discovery happens before the camera rolls. The video is
 the replay of a known-good action — never the LLM working out testIDs or
 navigation paths on screen. If you would not show the rehearsal pass to a
@@ -22,7 +26,7 @@ reviewer, do not record it.
 3. Starts video recording on the active simulator/emulator
 4. **Replays the rehearsed flow** via `maestro_run` (deterministic, hesitation-free)
 5. Captures numbered screenshots at each step
-6. Stops recording and converts to GIF (if ffmpeg available)
+6. Stops recording — normalizes the video to 30 fps and converts to GIF (if ffmpeg available)
 7. **Labels the video** — adds a text bar below the video with step descriptions (default)
 8. **Validates the recording** — verifies the feature is actually visible
 9. Writes PROOF.md and generates PR-BODY.md
@@ -180,7 +184,7 @@ Add timed step labels to the recorded video. Build a JSON array mapping each
 step to a time range, then call the label subcommand:
 
 ```bash
-rn-record-proof label \
+bash "<package-root>/scripts/record_proof.sh" label \
   docs/proof/<slug>/flow-ios.mp4 \
   docs/proof/<slug>/flow-ios-labeled.mp4 \
   '[{"start":0,"end":5,"text":"Step 1: <description>"},{"start":5,"end":12,"text":"Step 2: <description>"}]'
@@ -231,12 +235,19 @@ Create `docs/proof/<slug>/PROOF.md` with the standard format:
 - Date, device info, method
 - Flow table with step/screenshot/action/verification columns
 - Key state snapshots
-- Deviations section
+- A `## Deviations` section — use exactly that level-2 heading, since Step 8
+  matches it to copy the section into PR-BODY.md. Record any warning returned
+  by `proof_capture` (`stop_recording`, `validate`, `finalize`) or
+  `device_record` `stop` here, including a proof video's measured fps when
+  30 fps cadence smoothing was skipped. Unavailable capture timing means the
+  native fallback may omit terminal idle; do not claim full coverage from fps
+  or container duration alone. Check visible events against one monotonic
+  capture origin and include the final idle window in playback review.
 
 ### Step 8: Generate PR body
 
 ```bash
-rn-generate-pr-body docs/proof/<slug>/
+bash "<package-root>/scripts/generate_pr_body.sh" docs/proof/<slug>/
 ```
 
 ### Step 9: Present results
@@ -279,5 +290,8 @@ Show the user:
 
 - iOS Simulator or Android Emulator running with the app loaded
 - Ready fenced session with the integrated Metro and signed app target
-- ffmpeg required for GIF conversion and video labeling (`brew install ffmpeg`)
+- ffmpeg required for 30 fps cadence normalization, GIF conversion, and video
+  labeling (`brew install ffmpeg`); without it an iOS capture stays a native
+  `.mov` and strict proof rejects it, while Android keeps a native `.mp4` whose
+  sparse frame timing may play as a slideshow
 - Pillow auto-installed in a venv for label rendering (no manual setup needed)

@@ -54,7 +54,7 @@ provenance contract.
 2. **Environment check** — confirm app is running, dismiss Dev Client picker if present
 3. **Start recording** — begin video capture on the active simulator
 4. **Execute the flow** — navigate and interact through each step, capture numbered screenshots
-5. **Stop recording** — end video, convert to GIF
+5. **Stop recording** — end video, normalize to 30 fps, convert to GIF
 6. **Label the video** — add timed step descriptions as a text bar
 7. **Validate** — verify recording shows the expected feature, all screenshots exist, no errors
 8. **Write PROOF.md** — date, device info, flow table, state snapshots
@@ -70,4 +70,7 @@ provenance contract.
 
 - iOS Simulator or Android Emulator running with the app loaded
 - Ready fenced session with the integrated Metro and signed app target
-- ffmpeg for GIF conversion and video labeling (`brew install ffmpeg`)
+- ffmpeg for 30 fps cadence normalization, GIF conversion, and video labeling
+  (`brew install ffmpeg`); without it an iOS capture stays a native `.mov` and
+  strict proof rejects it, while Android keeps a native `.mp4` whose sparse
+  frame timing may play as a slideshow

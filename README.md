@@ -302,7 +302,7 @@ recovery diagnosis read-only and prints the exact commands for you to confirm an
 | iOS Simulator / Android Emulator | One platform | No |
 | Session-bound Metro | Yes | Project integration starts or validates it through literal `pnpm ios` / `pnpm android` |
 | CDP connection | Yes | `rn_session` owns the binding; `cdp_status` is passive and `cdp_connect` pins the exact target |
-| ffmpeg | Optional (proof videos) | Yes |
+| ffmpeg | Optional (proof videos; required for strict iOS proof) | Yes |
 | idb + idb-companion | Optional (smooth observe-UI mirroring) | Yes |
 
 Claude automation failures and Codex missing prerequisites are reported with step-by-step manual

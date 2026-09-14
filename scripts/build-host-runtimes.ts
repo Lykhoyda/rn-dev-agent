@@ -115,6 +115,7 @@ const RUNTIME_ENTRIES = [
 // ${CLAUDE_PLUGIN_ROOT}/scripts; a marketplace install has no repo scripts/.
 const SHARED_HOST_HELPER_SCRIPTS = [
   'collect-feedback.sh',
+  'generate_pr_body.sh',
   'expo_ensure_running.sh',
   'eas_resolve_artifact.sh',
   'check-vercel-rules.mjs',

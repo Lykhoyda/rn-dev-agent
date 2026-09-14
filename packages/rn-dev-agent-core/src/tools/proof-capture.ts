@@ -50,9 +50,18 @@ import {
   type ProofStage,
   type Storyboard,
 } from '../domain/proof-receipt.js';
-import type { DeviceRecordArgs } from './device-record.js';
-import { validateMedia, type MediaProcess, type MediaValidationInput } from './proof-media.js';
-import { failResult, okResult, type ToolResult } from '../utils.js';
+import {
+  normalizationSkippedWarning,
+  oversizeProofWarning,
+  type DeviceRecordArgs,
+} from './device-record.js';
+import {
+  sparseCadenceWarning,
+  validateMedia,
+  type MediaProcess,
+  type MediaValidationInput,
+} from './proof-media.js';
+import { failResult, okResult, warnResult, type ToolResult } from '../utils.js';
 import {
   readStartupIntegrityAttestation,
   type StartupIntegrityAttestation,
@@ -266,6 +275,7 @@ interface Session {
   mayOwnRecorder: boolean;
   baseline: ProofReadiness | null;
   mechanicalReceipt: MechanicallyAcceptedProofReceipt | null;
+  cadenceWarning: string | null;
 }
 
 interface DerivedEvidence {
@@ -1117,6 +1127,7 @@ export function createProofCaptureHandler(
     active.mayOwnRecorder = false;
     active.baseline = null;
     active.mechanicalReceipt = null;
+    active.cadenceWarning = null;
     deps.monitor.begin(active.context.runId);
   };
 
@@ -1460,6 +1471,7 @@ export function createProofCaptureHandler(
         mayOwnRecorder: false,
         baseline: null,
         mechanicalReceipt: null,
+        cadenceWarning: null,
       };
       deps.monitor.begin(args.runId);
       return okResult({ stage: session.stage, runId: args.runId });
@@ -1708,16 +1720,31 @@ export function createProofCaptureHandler(
       if (savedPath !== active.context.videoPath) {
         return rejectCapture(active, ['RECORDING_PATH_MISMATCH']);
       }
+      const cadenceSkipped = shutdown.stopData?.normalizationSkipped;
+      active.cadenceWarning =
+        typeof cadenceSkipped === 'string' && cadenceSkipped.length > 0
+          ? normalizationSkippedWarning(cadenceSkipped)
+          : null;
+      const savedSize = (saved[0] as { sizeBytes?: unknown }).sizeBytes;
+      const stopWarnings = [
+        active.cadenceWarning,
+        typeof savedSize === 'number'
+          ? oversizeProofWarning([{ path: active.context.videoPath, sizeBytes: savedSize }])
+          : null,
+      ].filter((warning): warning is string => warning !== null);
       const derived = deriveEvidence(active);
       active.evidenceDraft = derived.evidence;
       active.stage = 'validating';
       active.invalidationReasons = [];
-      return okResult({
+      const stopped = {
         stage: active.stage,
         videoPath: savedPath,
         evidenceDraft: derived.evidence,
         evidenceReasons: derived.reasons,
-      });
+      };
+      return stopWarnings.length > 0
+        ? warnResult(stopped, stopWarnings.join(' '))
+        : okResult(stopped);
     }
 
     if (args.action === 'validate') {
@@ -1852,11 +1879,18 @@ export function createProofCaptureHandler(
       active.mechanicalReceipt = receipt;
       active.stage = 'mechanically_accepted';
       active.invalidationReasons = [];
-      return okResult({
+      active.cadenceWarning =
+        [active.cadenceWarning, sparseCadenceWarning(media.avgFrameRate)]
+          .filter(Boolean)
+          .join(' ') || null;
+      const validated = {
         stage: active.stage,
         receipt,
         reviewTargetSha256: hashProofValue(receipt),
-      });
+      };
+      return active.cadenceWarning
+        ? warnResult(validated, active.cadenceWarning)
+        : okResult(validated);
     }
 
     if (args.action === 'finalize') {
@@ -1923,11 +1957,14 @@ export function createProofCaptureHandler(
         return rejectCapture(active, finalizedGitReasons);
       }
       active.stage = 'accepted';
-      return okResult({
+      const accepted = {
         stage: active.stage,
         receiptPath: active.context.receiptPath,
         receipt: finalReceipt,
-      });
+      };
+      return active.cadenceWarning
+        ? warnResult(accepted, active.cadenceWarning)
+        : okResult(accepted);
     }
 
     return proofFailure(['INVALID_PROOF_STAGE'], active.stage);

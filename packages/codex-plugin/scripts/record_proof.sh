@@ -10,6 +10,7 @@ RUNTIME_ROOT="${XDG_RUNTIME_DIR:-${TMPDIR:-${HOME:-}}}"
 RUNTIME_DIR="${RUNTIME_ROOT%/}/rn-dev-agent-record"
 PID_PREFIX="${RUNTIME_DIR}/record"
 SIDECAR_TEMP_DIR="${RUNTIME_DIR}/tmp"
+RECORDER_POLL_INTERVAL="0.05"
 PENDING_PULL_FILE=""
 PENDING_PULL_MANIFEST=""
 PENDING_STAGE_FILE=""
@@ -1137,7 +1138,8 @@ start_supervised_recorder() {
   local scope="$1"
   local recorder_log="$2"
   local process_marker="$3"
-  shift 3
+  local platform="$4"
+  shift 4
   local token
   local incarnation
   token="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
@@ -1157,7 +1159,8 @@ start_supervised_recorder() {
   assert_current_incarnation "$scope" "$incarnation"
   secure_publish "$recorder_log" ""
 
-  python3 - "$@" 3< <(printf '%s\0' "$token" "$request_path" "$response_path" "$state_path" "$child_path" "$recorder_log" "$SIDECAR_TEMP_DIR") >> "$recorder_log" 2>&1 <<'PY' &
+  python3 - "$@" 3< <(printf '%s\0' "$token" "$request_path" "$response_path" "$state_path" "$child_path" "$recorder_log" "$SIDECAR_TEMP_DIR" "$scope" "$incarnation" "$platform" "$RECORDER_POLL_INTERVAL") >> "$recorder_log" 2>&1 <<'PY' &
+import json
 import os
 import signal
 import subprocess
@@ -1169,11 +1172,12 @@ with os.fdopen(3, "rb") as config_file:
     config = config_file.read().split(b"\0")
 if config[-1] == b"":
     config.pop()
-if len(config) != 7:
+if len(config) != 11:
     raise RuntimeError("invalid recorder supervisor configuration")
-token, request_path, response_path, state_path, child_path, log_path, temp_dir = (
+token, request_path, response_path, state_path, child_path, log_path, temp_dir, scope, incarnation, platform, poll_interval = (
     value.decode("utf-8") for value in config
 )
+poll_interval = float(poll_interval)
 command = sys.argv[1:]
 os.umask(0o077)
 
@@ -1193,9 +1197,25 @@ def write_atomic(path, value):
 child = None
 terminal_state_written = False
 stop_requested = False
+android_stop = None
+android_stop_deadline = None
+timing = dict(scope=scope, incarnation=incarnation, pid=None, launch=None, ready=None,
+              stop=None, signal=None, exit=None, disposition="starting",
+              remote_state=None)
+
+def write_state(state):
+    write_atomic(state_path, state + "\n" + json.dumps(timing, allow_nan=False) + "\n")
+
+def write_terminal(return_code):
+    timing["exit"] = time.monotonic()
+    if not stop_requested:
+        timing["disposition"] = "early-exit"
+    state = "exited" if stop_requested or return_code == 0 else "failed"
+    write_state(f"{state} {return_code}")
+
 try:
     with open(log_path, "ab", buffering=0) as log:
-        write_atomic(state_path, "starting\n")
+        write_state("starting")
         last_nonce = None
         startup_deadline = time.monotonic() + 5
 
@@ -1210,17 +1230,22 @@ try:
                 nonce, action = parts[1], parts[2]
                 last_nonce = nonce
                 if action == "START":
+                    timing["launch"] = time.monotonic()
                     child = subprocess.Popen(
                         command,
                         stdin=subprocess.DEVNULL,
                         stdout=log,
                         stderr=subprocess.STDOUT,
                     )
+                    timing["pid"] = child.pid
+                    timing["ready"] = None if platform == "ios" else time.monotonic()
+                    timing["disposition"] = "running"
                     write_atomic(child_path, f"{child.pid}\n")
-                    write_atomic(state_path, "running\n")
+                    write_state("running")
                     result = "started"
                 elif action == "ABORT":
-                    write_atomic(state_path, "exited 0\n")
+                    timing["disposition"] = "aborted"
+                    write_state("exited 0")
                     terminal_state_written = True
                     result = "gone"
                 else:
@@ -1230,55 +1255,116 @@ try:
             if child is None and not terminal_state_written:
                 if time.monotonic() >= startup_deadline:
                     raise TimeoutError("recorder supervisor start was not authorized")
-                time.sleep(0.05)
+                time.sleep(poll_interval)
 
         while child is not None and not terminal_state_written:
+            if platform == "ios" and timing["ready"] is None:
+                with open(log_path, "rb") as capture_log:
+                    first_frame = b"Recording started" in capture_log.read(65536).splitlines()
+                if first_frame:
+                    timing["ready"] = time.monotonic()
+                    write_state("running")
+            if android_stop is not None and android_stop["result"] == "pending" and time.monotonic() >= android_stop_deadline:
+                android_stop["result"] = "expired"
+                write_state("running")
             try:
                 with open(request_path, encoding="utf-8") as handle:
                     parts = handle.read().split()
             except FileNotFoundError:
                 parts = []
 
-            if len(parts) == 3 and parts[0] == token and parts[1] != last_nonce:
+            expected_length = 4 if parts[2:3] == ["ANDROID_STOP_RESULT"] else 3
+            if len(parts) == expected_length and parts[0] == token and parts[1] != last_nonce:
                 nonce, action = parts[1], parts[2]
                 last_nonce = nonce
-                if action not in {"INT", "KILL", "ABORT"}:
+                if platform == "android" and action == "ANDROID_STOP_BEGIN":
+                    if android_stop is not None:
+                        if nonce == android_stop["nonce"]:
+                            result = "ready"
+                        elif android_stop["result"] in {"pending", "signaled"}:
+                            result = "pending"
+                        else:
+                            result = "cleanup"
+                    elif (return_code := child.poll()) is not None:
+                        result = "gone"
+                        write_terminal(return_code)
+                        terminal_state_written = True
+                    elif timing["disposition"] != "running":
+                        result = "cleanup"
+                    else:
+                        timing["stop"] = time.monotonic()
+                        timing["disposition"] = "uncertain"
+                        stop_requested = True
+                        android_stop = dict(nonce=nonce, result="pending")
+                        timing["android_stop"] = android_stop
+                        android_stop_deadline = timing["stop"] + 100 * poll_interval
+                        write_state("running")
+                        result = "ready"
+                elif platform == "android" and action == "ANDROID_STOP_RESULT":
+                    witness = parts[3].split(":")
+                    if (len(witness) != 2 or android_stop is None or witness[0] != android_stop["nonce"]
+                            or witness[1] not in {"signaled", "absent", "reused", "failed", "unknown"}):
+                        result = "rejected"
+                    elif android_stop["result"] == "pending":
+                        received = time.monotonic()
+                        if received >= android_stop_deadline:
+                            android_stop["result"] = "expired"
+                            result = "expired"
+                        else:
+                            result = witness[1]
+                            android_stop["result"] = result
+                            if result == "signaled":
+                                timing["signal"] = received
+                                timing["remote_state"] = "present"
+                                timing["disposition"] = "normal"
+                        write_state("running")
+                    elif android_stop["result"] == "expired":
+                        result = "expired"
+                    elif android_stop["result"] == witness[1]:
+                        result = android_stop["result"]
+                    else:
+                        result = "rejected"
+                elif action not in {"INT", "KILL", "ABORT"} or (platform == "android" and action == "INT"):
                     result = "rejected"
                 elif (return_code := child.poll()) is not None:
                     result = "gone"
-                    state = (
-                        f"exited {return_code}\n"
-                        if return_code == 0
-                        else f"failed {return_code}\n"
-                    )
-                    write_atomic(state_path, state)
+                    write_terminal(return_code)
                     terminal_state_written = True
                 else:
+                    if action == "INT" and timing["stop"] is None:
+                        timing["stop"] = time.monotonic()
+                        timing["disposition"] = "normal"
+                        write_state("running")
+                    elif action in {"KILL", "ABORT"}:
+                        if android_stop is not None and android_stop["result"] == "pending":
+                            android_stop["result"] = "interrupted"
+                        timing["disposition"] = "forced" if action == "KILL" else "aborted"
+                        write_state("running")
                     try:
                         os.kill(
                             child.pid,
                             signal.SIGINT if action == "INT" else signal.SIGKILL,
                         )
+                        if action == "INT" and timing["signal"] is None:
+                            timing["signal"] = time.monotonic()
                         result = "signaled"
                         stop_requested = True
+                        write_state("running")
                     except ProcessLookupError:
                         result = "gone"
+                        timing["disposition"] = "early-exit"
                 write_atomic(response_path, f"{nonce} {result}\n")
                 if action == "ABORT" and not terminal_state_written:
                     return_code = child.wait()
-                    write_atomic(state_path, f"exited {return_code}\n")
+                    write_terminal(return_code)
                     terminal_state_written = True
 
             return_code = child.poll()
-            if return_code is not None and not terminal_state_written:
-                state = (
-                    f"exited {return_code}\n"
-                    if stop_requested or return_code == 0
-                    else f"failed {return_code}\n"
-                )
-                write_atomic(state_path, state)
+            android_pending = android_stop is not None and android_stop["result"] == "pending"
+            if return_code is not None and not terminal_state_written and not android_pending:
+                write_terminal(return_code)
                 terminal_state_written = True
-            time.sleep(0.05)
+            time.sleep(poll_interval)
 finally:
     if child is not None:
         if child.poll() is None:
@@ -1286,7 +1372,9 @@ finally:
         child.wait()
     if not terminal_state_written:
         try:
-            write_atomic(state_path, "failed supervisor\n")
+            timing["exit"] = time.monotonic()
+            timing["disposition"] = "supervisor-failure"
+            write_state("failed supervisor")
         except OSError:
             pass
 PY
@@ -1307,7 +1395,7 @@ PY
 
   local waited=0
   while [[ $waited -lt 40 ]]; do
-    if [[ -s "$child_path" && -s "$state_path" ]] && [[ "$(cat "$state_path")" == "running" ]]; then
+    if [[ -s "$child_path" && -s "$state_path" ]] && [[ "$(sed -n '1p' "$state_path")" == "running" ]]; then
       return 0
     fi
     is_alive "$SUPERVISOR_PID" || break
@@ -1330,7 +1418,7 @@ wait_for_supervisor_terminal() {
   while [[ $waited -lt 100 ]]; do
     if [[ -s "$state_path" ]]; then
       local state
-      state="$(cat "$state_path")"
+      state="$(sed -n '1p' "$state_path")"
       if [[ "$state" == exited\ * || "$state" == failed\ * ]]; then
         SUPERVISOR_TERMINAL_STATE="$state"
         return 0
@@ -1349,6 +1437,7 @@ request_supervisor_signal() {
   local scope="$1"
   local action="$2"
   local incarnation="${3:-}"
+  local witness="${4:-}"
   local token_path
   local request_path
   local response_path
@@ -1365,7 +1454,8 @@ request_supervisor_signal() {
   local nonce
   token="$(cat "$token_path")"
   nonce="$$-${RANDOM}-${RANDOM}"
-  secure_write_sidecar "$request_path" "$token $nonce $action"
+  SUPERVISOR_REQUEST_NONCE="$nonce"
+  secure_write_sidecar "$request_path" "$token $nonce $action${witness:+ $witness}"
 
   local waited=0
   while [[ $waited -lt 100 ]]; do
@@ -1374,6 +1464,18 @@ request_supervisor_signal() {
       local response_result
       read -r response_nonce response_result < "$response_path"
       if [[ "$response_nonce" == "$nonce" ]]; then
+        if [[ "$action" == "ANDROID_STOP_BEGIN" || "$action" == "ANDROID_STOP_RESULT" ]]; then
+          case "$action:$response_result" in
+            ANDROID_STOP_BEGIN:ready|ANDROID_STOP_BEGIN:cleanup|ANDROID_STOP_BEGIN:gone|ANDROID_STOP_RESULT:signaled|ANDROID_STOP_RESULT:absent|ANDROID_STOP_RESULT:reused|ANDROID_STOP_RESULT:failed|ANDROID_STOP_RESULT:unknown|ANDROID_STOP_RESULT:expired)
+              SUPERVISOR_RESPONSE="$response_result"
+              return 0
+              ;;
+            *)
+              echo "Error: recorder supervisor rejected $action request ($response_result)" >&2
+              return 1
+              ;;
+          esac
+        fi
         [[
           "$response_result" == "signaled" ||
             "$response_result" == "gone" ||
@@ -1388,7 +1490,7 @@ request_supervisor_signal() {
     fi
     if [[ -s "$state_path" ]]; then
       local supervisor_state
-      supervisor_state="$(cat "$state_path")"
+      supervisor_state="$(sed -n '1p' "$state_path")"
       if [[ "$supervisor_state" == exited\ * ]]; then
         SUPERVISOR_RESPONSE="gone"
         return 0
@@ -1523,6 +1625,116 @@ probe_android_process() {
   ANDROID_PROCESS_ARGS="$args"
 }
 
+CAPTURE_DURATION=""
+CAPTURE_TIMING_UNAVAILABLE=""
+
+read_capture_timing() {
+  local scope="$1"
+  local incarnation="$2"
+  local platform="$3"
+  CAPTURE_DURATION=""
+  CAPTURE_TIMING_UNAVAILABLE="capture timing unavailable (legacy supervisor state)"
+  supervisor_state_is_authenticated || return 0
+  local result
+  result="$(python3 - "$(supervisor_state_file "$scope" "$incarnation")" \
+    "$(child_pid_file "$scope" "$incarnation")" "$scope" "$incarnation" "$platform" <<'PY'
+import json
+import math
+import signal
+import sys
+import time
+
+def unavailable(reason):
+    print("\ncapture timing unavailable (" + reason + ")")
+    sys.exit(0)
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        lifecycle = handle.readline().strip()
+        timing = json.loads(handle.read())
+    with open(sys.argv[2], encoding="utf-8") as handle:
+        child_pid = int(handle.read())
+    if timing["scope"] != sys.argv[3] or timing["incarnation"] != sys.argv[4] or timing["pid"] != child_pid:
+        unavailable("stale supervisor identity")
+    disposition = timing["disposition"]
+    if disposition != "normal" or not lifecycle.startswith("exited "):
+        reasons = {"early-exit": "recorder exited before normal stop", "forced": "recorder required force stop",
+                   "aborted": "recording aborted", "supervisor-failure": "supervisor failed"}
+        unavailable(reasons.get(disposition, "normal stop unproven"))
+    if int(lifecycle.split()[1]) not in (0, -signal.SIGINT, 128 + signal.SIGINT):
+        unavailable("recorder failed during normal stop")
+    if timing["ready"] is None:
+        unavailable("native first frame unobserved")
+    values = [timing[key] for key in ("launch", "ready", "stop", "signal", "exit")]
+    if any(type(value) not in (int, float) or not math.isfinite(value) for value in values):
+        unavailable("invalid monotonic interval")
+    launch, ready, stop, signaled, exited = values
+    if not 0 < launch <= ready <= stop <= signaled <= exited <= time.monotonic():
+        unavailable("invalid monotonic interval")
+    if sys.argv[5] == "android":
+        if timing["remote_state"] != "present":
+            unavailable("device recorder was not live at normal stop")
+        capture_end = signaled
+    else:
+        if signaled - stop > 1:
+            unavailable("capture clock uncertainty exceeds one second")
+        capture_end = stop
+    frames = math.floor((capture_end - ready) * 30 + 0.5)
+    if frames < 1:
+        unavailable("capture interval is empty")
+    print(f"{frames / 30:.9f}")
+except (OSError, ValueError, KeyError, TypeError, OverflowError):
+    unavailable("missing or malformed supervisor timing")
+PY
+)" || result=$'\ncapture timing unavailable (supervisor timing unreadable)'
+  CAPTURE_DURATION="$(printf '%s\n' "$result" | sed -n '1p')"
+  CAPTURE_TIMING_UNAVAILABLE="$(printf '%s\n' "$result" | sed -n '2p')"
+}
+
+normalize_capture_video() {
+  local input="$1"
+  local output="$2"
+  local duration="${3:-}"
+  local skipped="${4:-}"
+  if [[ -z "$skipped" ]]; then
+    [[ "$duration" =~ ^[0-9]+(\.[0-9]+)?$ && "$duration" =~ [1-9] ]] ||
+      skipped="capture timing unavailable (no finite capture interval)"
+  fi
+  if [[ -z "$skipped" ]]; then
+    local frames
+    frames="$(ffprobe -v error -select_streams v:0 -show_frames \
+      -show_entries frame=best_effort_timestamp_time -of json "$input")" || frames=""
+    if ! printf '%s' "$frames" | python3 -c '
+import json, math, sys
+try:
+    pts = [float(frame["best_effort_timestamp_time"]) for frame in json.load(sys.stdin)["frames"]]
+    target, poll_interval = float(sys.argv[1]), float(sys.argv[2])
+    if not pts or not math.isfinite(target) or not all(math.isfinite(value) for value in pts):
+        sys.exit(1)
+    sys.exit(0 if max(pts) - min(pts) <= target + 1 / 30 + poll_interval else 1)
+except (ValueError, KeyError, TypeError, OverflowError):
+    sys.exit(1)
+' "$duration" "$RECORDER_POLL_INTERVAL"; then
+      skipped="native frame timestamps unreadable or exceed the capture interval"
+    fi
+  fi
+  # The frozen stop bounds cloned idle frames; encoding time never extends the capture.
+  if [[ -n "$skipped" ]] || ! ffmpeg -v error -y -i "$input" \
+    -vf "fps=30,tpad=stop_mode=clone:stop=-1" \
+    -t "$duration" -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
+    -movflags +faststart -f mp4 "$output"; then
+    [[ -n "$skipped" ]] || skipped="30 fps H.264 re-encode failed (encoder unavailable)"
+    echo "Cadence normalization skipped: $skipped"
+    echo "Warning: cadence normalization unavailable; remuxing the native capture to mp4" >&2
+    ffmpeg -v error -y -i "$input" -c copy -movflags +faststart -f mp4 "$output" || return 1
+  fi
+  local size
+  size="$(wc -c < "$output" | tr -d ' ')"
+  if [[ "$size" =~ ^[0-9]+$ ]] && (( size > 104857600 )); then
+    echo "Warning: proof video is $size bytes, over GitHub's 100 MB video attachment limit" >&2
+  fi
+}
+
 cmd_start() {
   local platform="${1:-}"
   local output_path="${2:-}"
@@ -1624,7 +1836,7 @@ cmd_start() {
 
   local process_marker="$raw_file"
   [[ "$platform" == "android" ]] && process_marker="$device_path"
-  start_supervised_recorder "$scope" "$recorder_log" "$process_marker" "${recorder_command[@]}"
+  start_supervised_recorder "$scope" "$recorder_log" "$process_marker" "$platform" "${recorder_command[@]}"
   rec_pid="$SUPERVISOR_PID"
   local rec_birth="$SUPERVISOR_BIRTH"
   sleep 0.5
@@ -1660,11 +1872,18 @@ cmd_start() {
   echo "Recording started: platform=$platform pid=$rec_pid birth=$rec_birth output=$output_path"
 }
 
-stop_android_recorder() {
+BOUND_ANDROID_STATE="unknown"
+BOUND_ANDROID_PID=""
+BOUND_ANDROID_SERIAL=""
+
+probe_bound_android_recorder() {
   local scope="$1"
+  BOUND_ANDROID_STATE="unknown"
+  BOUND_ANDROID_PID=""
   local serialf="${PID_PREFIX}-${scope}.serial"
   local serial=""
   [[ -f "$serialf" ]] && serial="$(cat "$serialf")"
+  BOUND_ANDROID_SERIAL="$serial"
   local remote_pidf="${PID_PREFIX}-${scope}.remote-pid"
   if [[ ! -f "$remote_pidf" ]]; then
     read_android_screenrecord_pids "$serial"
@@ -1672,10 +1891,12 @@ stop_android_recorder() {
       echo "Error: unbound device-side screenrecord remains active" >&2
       exit 1
     }
+    BOUND_ANDROID_STATE="absent"
     return
   fi
   local remote_pid
   remote_pid="$(cat "$remote_pidf")"
+  BOUND_ANDROID_PID="$remote_pid"
   [[ ! "$remote_pid" =~ ^[0-9]+$ ]] && {
     echo "Error: invalid device-side screenrecord PID" >&2
     exit 1
@@ -1698,8 +1919,14 @@ stop_android_recorder() {
     exit 1
   }
   probe_android_process "$serial" "$remote_pid"
-  [[ "$ANDROID_PROCESS_STATE" == "absent" ]] && return
-  [[ "$ANDROID_PROCESS_BIRTH" != "$expected_birth" ]] && return
+  if [[ "$ANDROID_PROCESS_STATE" == "absent" ]]; then
+    BOUND_ANDROID_STATE="absent"
+    return
+  fi
+  if [[ "$ANDROID_PROCESS_BIRTH" != "$expected_birth" ]]; then
+    BOUND_ANDROID_STATE="reused"
+    return
+  fi
   [[
     "$ANDROID_PROCESS_COMMAND" == "$expected_command" &&
       "$ANDROID_PROCESS_ARGS" == "$expected_args"
@@ -1707,12 +1934,33 @@ stop_android_recorder() {
     echo "Error: device-side screenrecord command identity changed" >&2
     exit 1
   }
-  android_adb "$serial" shell kill -2 "$remote_pid" >/dev/null 2>&1 || {
-    probe_android_process "$serial" "$remote_pid"
-    [[ "$ANDROID_PROCESS_STATE" == "absent" ]] && return
-    echo "Error: failed to signal device-side screenrecord PID $remote_pid" >&2
-    exit 1
-  }
+  BOUND_ANDROID_STATE="present"
+}
+
+stop_android_recorder() {
+  local phase="${2:-signal-and-wait}"
+  ANDROID_SIGNAL_OUTCOME="unknown"
+  probe_bound_android_recorder "$1"
+  if [[ "$BOUND_ANDROID_STATE" != "present" ]]; then
+    ANDROID_SIGNAL_OUTCOME="$BOUND_ANDROID_STATE"
+    return 0
+  fi
+  local serial="$BOUND_ANDROID_SERIAL"
+  local remote_pid="$BOUND_ANDROID_PID"
+  local expected_birth="$ANDROID_PROCESS_BIRTH"
+  if [[ "$phase" != "wait" ]]; then
+    if android_adb "$serial" shell kill -2 "$remote_pid" >/dev/null 2>&1; then
+      ANDROID_SIGNAL_OUTCOME="signaled"
+    else
+      ANDROID_SIGNAL_OUTCOME="failed"
+      [[ "$phase" == "signal" ]] && return 0
+      probe_android_process "$serial" "$remote_pid"
+      [[ "$ANDROID_PROCESS_STATE" == "absent" ]] && return
+      echo "Error: failed to signal device-side screenrecord PID $remote_pid" >&2
+      exit 1
+    fi
+  fi
+  [[ "$phase" == "signal" ]] && return 0
   local waited=0
   while [[ $waited -lt 20 ]]; do
     sleep 0.5
@@ -1740,7 +1988,7 @@ cmd_abort() {
   statef="$(supervisor_state_file "$scope" "$incarnation")"
   local supervisor_state=""
   if supervisor_state_is_authenticated && [[ -s "$statef" ]]; then
-    supervisor_state="$(cat "$statef")"
+    supervisor_state="$(sed -n '1p' "$statef")"
   fi
   if [[ -s "$tokenf" && ( "$supervisor_state" == "starting" || "$supervisor_state" == "running" ) ]]; then
     local abort_failed="false"
@@ -1917,7 +2165,7 @@ cmd_stop() {
   fi
   local supervisor_state=""
   if supervisor_state_is_authenticated && [[ -s "$(supervisor_state_file "$scope" "$incarnation")" ]]; then
-    supervisor_state="$(cat "$(supervisor_state_file "$scope" "$incarnation")")"
+    supervisor_state="$(sed -n '1p' "$(supervisor_state_file "$scope" "$incarnation")")"
   fi
   local supervisor_failed="false"
   [[ "$supervisor_state" == failed\ * ]] && supervisor_failed="true"
@@ -1940,7 +2188,16 @@ cmd_stop() {
       echo "Error: recorder process identity changed before stop" >&2
       exit 1
     }
-    request_supervisor_signal "$scope" "INT" "$incarnation"
+    if [[ "$platform" == "android" ]]; then
+      request_supervisor_signal "$scope" "ANDROID_STOP_BEGIN" "$incarnation"
+      if [[ "$SUPERVISOR_RESPONSE" == "ready" ]]; then
+        local begin_nonce="$SUPERVISOR_REQUEST_NONCE"
+        stop_android_recorder "$scope" "signal"
+        request_supervisor_signal "$scope" "ANDROID_STOP_RESULT" "$incarnation" "$begin_nonce:$ANDROID_SIGNAL_OUTCOME"
+      fi
+    else
+      request_supervisor_signal "$scope" "INT" "$incarnation"
+    fi
     local waited=0
     local recorder_stopped="false"
     while [[ $waited -lt 10 ]]; do
@@ -2012,7 +2269,7 @@ cmd_stop() {
   sleep 1
 
   if supervisor_state_is_authenticated && [[ -s "$(supervisor_state_file "$scope" "$incarnation")" ]]; then
-    supervisor_state="$(cat "$(supervisor_state_file "$scope" "$incarnation")")"
+    supervisor_state="$(sed -n '1p' "$(supervisor_state_file "$scope" "$incarnation")")"
     supervisor_failed="false"
     [[ "$supervisor_state" == failed\ * ]] && supervisor_failed="true"
   fi
@@ -2023,7 +2280,25 @@ cmd_stop() {
   if [[ "$platform" == "android" ]]; then
     local serialf="${PID_PREFIX}-${scope}.serial"
     [[ -f "$serialf" ]] && adb_args+=(-s "$(cat "$serialf")")
-    stop_android_recorder "$scope"
+    local remote_stop_phase="signal-and-wait"
+    if supervisor_state_is_authenticated && [[ -s "$(supervisor_state_file "$scope" "$incarnation")" ]]; then
+      remote_stop_phase="$(python3 - "$(supervisor_state_file "$scope" "$incarnation")" "$scope" "$incarnation" <<'PY'
+import json
+import sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        handle.readline()
+        timing = json.load(handle)
+    normal = (timing.get("scope") == sys.argv[2] and timing.get("incarnation") == sys.argv[3]
+              and timing.get("disposition") == "normal"
+              and timing.get("android_stop", {}).get("result") == "signaled")
+except (OSError, ValueError, TypeError, AttributeError):
+    normal = False
+print("wait" if normal else "signal-and-wait")
+PY
+)"
+    fi
+    stop_android_recorder "$scope" "$remote_stop_phase"
     local device_pathf="${PID_PREFIX}-${scope}.device-path"
     if [[ -f "$device_pathf" ]]; then
       device_path="$(cat "$device_pathf")"
@@ -2135,6 +2410,8 @@ cmd_stop() {
     return 1
   fi
 
+  read_capture_timing "$scope" "$incarnation" "$platform"
+
   if [[ "$platform" == "android" ]]; then
     if [[ -z "$finalized_output" ]]; then
       output_path="${output_path%.*}.mp4"
@@ -2150,23 +2427,21 @@ cmd_stop() {
         local staged_mp4
         staged_mp4="$(create_private_capture_file)"
         PENDING_STAGE_FILE="$staged_mp4"
-        if ffmpeg \
-          -y \
-          -i "$raw_file" \
-          -c copy \
-          -movflags +faststart \
-          -f mp4 \
-          "$staged_mp4" 2>/dev/null; then
+        if normalize_capture_video "$raw_file" "$staged_mp4" "$CAPTURE_DURATION" "$CAPTURE_TIMING_UNAVAILABLE"; then
           staged_output="$staged_mp4"
           staged_identity="$(capture_file_identity "$staged_output")" || {
             echo "Error: converted recording output is unstable" >&2
             return 1
           }
         else
+          echo "Warning: Could not normalize recording cadence; preserving native capture" >&2
           rm -f "$staged_mp4"
           PENDING_STAGE_FILE=""
           output_path="${output_path%.mp4}.mov"
         fi
+      else
+        echo "Cadence normalization skipped: ffmpeg unavailable"
+        echo "Warning: ffmpeg unavailable; preserving the native capture" >&2
       fi
       validate_file_identity "$staged_output" "$staged_identity" || {
         echo "Error: staged recording output identity changed" >&2
@@ -2226,15 +2501,21 @@ cmd_stop() {
     mkdir -p "$(dirname "$output_path")" || true
     if [[ -n "$raw_file" && -f "$raw_file" ]]; then
       if command -v ffmpeg >/dev/null 2>&1; then
-        local tmp_mp4="/tmp/rn-dev-agent-convert-$$.mp4"
-        if ffmpeg -y -i "$raw_file" -c copy -movflags +faststart "$tmp_mp4" 2>/dev/null; then
+        local tmp_mp4
+        tmp_mp4="$(create_private_capture_file)"
+        PENDING_STAGE_FILE="$tmp_mp4"
+        if normalize_capture_video "$raw_file" "$tmp_mp4" "$CAPTURE_DURATION" "$CAPTURE_TIMING_UNAVAILABLE"; then
           mv "$tmp_mp4" "$output_path"
         else
+          echo "Warning: Could not normalize recording cadence; preserving native capture" >&2
           mv "$raw_file" "${output_path%.mp4}.mov"
           output_path="${output_path%.mp4}.mov"
           rm -f "$tmp_mp4"
         fi
+        PENDING_STAGE_FILE=""
       else
+        echo "Cadence normalization skipped: ffmpeg unavailable"
+        echo "Warning: ffmpeg unavailable; preserving the native capture" >&2
         mv "$raw_file" "${output_path%.mp4}.mov"
         output_path="${output_path%.mp4}.mov"
       fi

@@ -232,6 +232,23 @@ export function parseStopOutput(stdout: string): SavedRecording[] {
   return saved;
 }
 
+export const GITHUB_VIDEO_ATTACHMENT_LIMIT_BYTES = 100 * 1024 * 1024;
+
+export function oversizeProofWarning(saved: SavedRecording[]): string | null {
+  const oversize = saved.filter((rec) => rec.sizeBytes > GITHUB_VIDEO_ATTACHMENT_LIMIT_BYTES);
+  if (oversize.length === 0) return null;
+  const measured = oversize.map((rec) => `${rec.path} (${rec.sizeBytes} bytes)`).join(', ');
+  return `Proof video exceeds GitHub's ${GITHUB_VIDEO_ATTACHMENT_LIMIT_BYTES}-byte (100 MB) video attachment limit: ${measured}. The file is kept — shorten the journey before attaching it to a PR or issue.`;
+}
+
+export function parseNormalizationSkipped(stdout: string): string | null {
+  return stdout.match(/^Cadence normalization skipped: (.+)$/m)?.[1]?.trim() ?? null;
+}
+
+export function normalizationSkippedWarning(reason: string): string {
+  return `Recording cadence was not normalized to 30 fps (${reason}); the saved video keeps the sparse native frame timing and may play as a slideshow rather than smooth video.`;
+}
+
 export function parseRecorderFailure(stdout: string): string | null {
   return stdout.match(/^Recorder failed:\s*(.+)$/m)?.[1]?.trim() ?? null;
 }
@@ -409,6 +426,7 @@ async function runStart(
           phase: 'recording',
           platform,
           deviceId: resolution.deviceId,
+          startedAt: Date.now(),
           output: parsed.output,
           scope,
           pid: parsed.pid,
@@ -518,8 +536,16 @@ async function runStop(
     );
   }
 
+  const normalizationSkipped = parseNormalizationSkipped(stopOutput);
+  const stopWarnings = [
+    normalizationSkipped ? normalizationSkippedWarning(normalizationSkipped) : null,
+    oversizeProofWarning(saved),
+  ].filter((warning): warning is string => warning !== null);
+  const cadence = normalizationSkipped ? { normalizationSkipped } : {};
+
   if (!args.gif) {
-    return okResult({ action: 'stop', saved });
+    const data = { action: 'stop', saved, ...cadence };
+    return stopWarnings.length > 0 ? warnResult(data, stopWarnings.join(' ')) : okResult(data);
   }
 
   // Guard against the multi-platform clobber: a single user-supplied gifPath
@@ -560,16 +586,21 @@ async function runStop(
 
   if (gifs.length === 0 && gifWarnings.length > 0) {
     return warnResult(
-      { action: 'stop', saved, gifs: [] },
-      `Saved ${saved.length} recording(s) but all GIF conversions failed. ${gifWarnings.join(' ')}`,
+      { action: 'stop', saved, gifs: [], ...cadence },
+      [
+        `Saved ${saved.length} recording(s) but all GIF conversions failed. ${gifWarnings.join(' ')}`,
+        ...stopWarnings,
+      ].join(' '),
     );
   }
-  return okResult({
+  const data = {
     action: 'stop',
     saved,
     gifs,
+    ...cadence,
     ...(gifWarnings.length > 0 ? { gifWarnings } : {}),
-  });
+  };
+  return stopWarnings.length > 0 ? warnResult(data, stopWarnings.join(' ')) : okResult(data);
 }
 
 async function readScopedStatus(script: string, scope: string): Promise<ActiveRecording[]> {
