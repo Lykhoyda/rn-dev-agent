@@ -54,15 +54,15 @@ If < 24: warn the user to install a supported Node release.
 
 ### 2. CDP bridge runtime
 ```bash
-test -f ${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js && \
-  test -f ${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/index.js && echo OK
+test -f ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/supervisor.js && \
+  test -f ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/index.js && echo OK
 ```
 The packaged runtime is a self-contained esbuild bundle — no npm install step is
 needed at plugin-install time. If either file is missing:
 1. Installed plugin: the install is corrupt — reinstall: `/plugin install rn-dev-agent@rn-dev-agent`
 2. rn-dev-agent repo checkout: `corepack yarn install --immutable && corepack yarn build:host-runtimes`
 
-If SessionStart reported a CDP-deps warning, run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-cdp-deps.sh`
+If SessionStart reported a CDP-deps warning, run `bash ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/ensure-cdp-deps.sh`
 (only dev checkouts running the unbundled core actually need installed deps).
 
 ### 3. rn-fast-runner (iOS — in-tree XCTest rig)
@@ -70,8 +70,8 @@ If SessionStart reported a CDP-deps warning, run `bash ${CLAUDE_PLUGIN_ROOT}/scr
 iOS device automation is owned by the in-tree `rn-fast-runner` XCTest project (see D1219) — the in-tree runner is the sole iOS device backend, there is no external CLI involved. Verify the Xcode project ships with the plugin and the build artifacts are present:
 
 ```bash
-ls ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj 2>/dev/null && \
-  ls ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/build/DerivedData/Build/Products/Debug-iphonesimulator/RnFastRunnerUITests-Runner.app 2>/dev/null
+ls ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj 2>/dev/null && \
+  ls ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/rn-fast-runner/build/DerivedData/Build/Products/Debug-iphonesimulator/RnFastRunnerUITests-Runner.app 2>/dev/null
 ```
 
 - **Both present** → OK (built). The runner spawns lazily on the first `device_snapshot action=open` via the fast `xcodebuild test-without-building` path.
@@ -79,7 +79,7 @@ ls ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodep
 
   To avoid that first-call latency, **offer to run the one-time pre-build now** ("Pre-build the iOS runner now to avoid a slow first call? [y/n]"). If the user accepts, run it with a booted iOS simulator UDID (substitute from `xcrun simctl list devices booted -j`):
   ```bash
-  cd ${CLAUDE_PLUGIN_ROOT}/scripts/rn-fast-runner/RnFastRunner && \
+  cd ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/rn-fast-runner/RnFastRunner && \
     xcodebuild build-for-testing \
       -project RnFastRunner.xcodeproj \
       -scheme RnFastRunner \
@@ -100,12 +100,12 @@ Android device automation is owned by the in-tree `rn-android-runner` Gradle pro
 Verify the project ships with the plugin and its prebuilt APKs are present:
 
 ```bash
-ls ${CLAUDE_PLUGIN_ROOT}/scripts/rn-android-runner/build.gradle.kts 2>/dev/null && \
-  ls ${CLAUDE_PLUGIN_ROOT}/scripts/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk 2>/dev/null
+ls ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/rn-android-runner/build.gradle.kts 2>/dev/null && \
+  ls ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk 2>/dev/null
 ```
 
 - **Both present** → OK. The runner installs its APKs and starts its UiAutomator instrumentation (`dev.lykhoyda.rndevagent.androidrunner`) lazily on the first `device_*` call against a booted emulator. The runner is default-on; opt out with `RN_ANDROID_RUNNER=0` (which now ERRORS with `RUNNER_DISABLED` on a `device_*` call — it does NOT fall back to anything).
-- **build.gradle.kts present, APK MISSING** → NEEDS_BUILD. Build the runner once with a booted emulator: `cd ${CLAUDE_PLUGIN_ROOT}/scripts/rn-android-runner && ./gradlew assembleDebug assembleDebugAndroidTest`. The APKs land under `app/build/outputs/apk/`.
+- **build.gradle.kts present, APK MISSING** → NEEDS_BUILD. Build the runner once with a booted emulator: `cd ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/rn-android-runner && ./gradlew assembleDebug assembleDebugAndroidTest`. The APKs land under `app/build/outputs/apk/`.
 - **build.gradle.kts missing** → the plugin install is corrupt; reinstall via `/plugin install rn-dev-agent@rn-dev-agent`.
 
 Skip this check on systems without `adb` / no Android target. If the user is iOS-only, mark this row N/A (Android-only) and continue. Since #202 the plugin terminates a stale legacy `AgentDeviceRunner` at session-open by default (scoped to the target simulator UDID) and clears orphaned `~/.agent-device/daemon.{json,lock}`; opt out with `RN_DEVICE_KILL_LEGACY=0`.
@@ -115,9 +115,9 @@ Session replay never uses `PATH`, `~/.maestro-runner`, or `brew maestro`. Diagno
 install only the pin-cache binary:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh
-node ${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
+node ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
+bash ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/ensure-maestro-runner.sh
+node ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
 ```
 
 Success requires `status: pinned-ok`, `installedVersion` `>= 1.1.24`, `pin: 1.1.24`,
@@ -135,7 +135,7 @@ incompatible action (regex text selectors, wrong `enginePin`) as terminal — no
 or unowned UI fallback:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root "$APP_ROOT" --json
+node ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root "$APP_ROOT" --json
 ```
 
 ### 5. iOS Simulator (if macOS)
@@ -206,7 +206,7 @@ this section. Both checks are read-only; session authority is the sole writer
 of an exact physical Android Metro reverse:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/check-physical-devices.sh
+bash ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/check-physical-devices.sh
 ```
 
 Expected outputs:
@@ -226,11 +226,11 @@ release. Read-only — never auto-updates. The user runs
 `/plugin update rn-dev-agent` themselves if the row reports BEHIND.
 
 ```bash
-LOCAL=$(jq -r '.version' "${CLAUDE_PLUGIN_ROOT}/plugin.json" 2>/dev/null)
+LOCAL=$(jq -r '.version' "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/plugin.json" 2>/dev/null)
 LATEST=$(curl -fsSL --max-time 3 https://api.github.com/repos/Lykhoyda/rn-dev-agent/releases/latest 2>/dev/null | jq -r '.tag_name // empty' | sed 's/^v//')
 
 if [ -z "$LOCAL" ]; then
-  echo "[?] Plugin version: could not read \${CLAUDE_PLUGIN_ROOT}/plugin.json"
+  echo "[?] Plugin version: could not read \${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/plugin.json"
 elif [ -z "$LATEST" ]; then
   echo "[OFFLINE] Plugin version: installed $LOCAL — couldn't reach GitHub for upstream check"
 else
@@ -268,8 +268,8 @@ Verify the vendored Vercel agent-skills content is present and not stale.
 Read-only check; does NOT auto-sync (user runs the resync command if BEHIND).
 
 ```bash
-[ -f "${CLAUDE_PLUGIN_ROOT}/../../scripts/sync-vercel-skills.mjs" ] && \
-  node "${CLAUDE_PLUGIN_ROOT}/../../scripts/sync-vercel-skills.mjs" --check 2>&1 | head -3 || \
+[ -f "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/../../scripts/sync-vercel-skills.mjs" ] && \
+  node "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/../../scripts/sync-vercel-skills.mjs" --check 2>&1 | head -3 || \
   echo "N/A (installed plugin — vendored rules ship with the package; resync is a repo maintenance task)"
 ```
 
@@ -298,8 +298,8 @@ Present results as a table:
 | Node.js | OK (v24.0.0) | — |
 | CDP bridge | OK | — |
 | rn-fast-runner (iOS) | OK (built) / NEEDS_BUILD / N/A (non-macOS) | NEEDS_BUILD self-builds on first use (slow); offer the one-time `xcodebuild build-for-testing` to skip the wait (see check 3 above) |
-| rn-android-runner (Android) | OK (APKs present) / NEEDS_BUILD / N/A (iOS-only setup) | NEEDS_BUILD: `cd ${CLAUDE_PLUGIN_ROOT}/scripts/rn-android-runner && ./gradlew assembleDebug assembleDebugAndroidTest` — only if targeting Android |
-| maestro-runner | pinned-ok (>= 1.1.24 pin-cache) / FAIL (missing, older, unattested, checksum, unsupported) | `bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh` then re-diagnose. Never PATH, ~/.maestro-runner, or brew maestro. |
+| rn-android-runner (Android) | OK (APKs present) / NEEDS_BUILD / N/A (iOS-only setup) | NEEDS_BUILD: `cd ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/rn-android-runner && ./gradlew assembleDebug assembleDebugAndroidTest` — only if targeting Android |
+| maestro-runner | pinned-ok (>= 1.1.24 pin-cache) / FAIL (missing, older, unattested, checksum, unsupported) | `bash ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/ensure-maestro-runner.sh` then re-diagnose. Never PATH, ~/.maestro-runner, or brew maestro. |
 | iOS Simulator | BOOTED (iPhone 16) | — |
 | Android Emulator | NOT RUNNING | Boot an emulator |
 | Metro | RUNNING (port 8081) | — |

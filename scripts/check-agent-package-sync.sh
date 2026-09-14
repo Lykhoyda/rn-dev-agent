@@ -327,6 +327,19 @@ expect_synced_dir "packages/shared-agent-knowledge/skills" "packages/claude-plug
 expect_synced_dir "packages/shared-agent-knowledge/commands" "packages/claude-plugin/commands" "Claude commands"
 expect_synced_dir "packages/shared-agent-knowledge/agents" "packages/claude-plugin/agents" "Claude agents"
 expect_synced_dir "packages/shared-agent-knowledge/templates" "packages/claude-plugin/templates" "Claude templates"
+# Cursor reuses the Claude command/skill copies and exports CURSOR_PLUGIN_ROOT,
+# not CLAUDE_PLUGIN_ROOT. Claude-only path expansions miss the bundled helpers.
+shared_workflow_roots=(
+  "$ROOT/packages/shared-agent-knowledge/commands"
+  "$ROOT/packages/shared-agent-knowledge/skills"
+  "$ROOT/packages/shared-agent-knowledge/agents"
+)
+if grep -REn --include='*.md' '\$\{CLAUDE_PLUGIN_ROOT\}/' "${shared_workflow_roots[@]}" >/dev/null 2>&1; then
+  fail "shared workflows must use the host-neutral plugin-root fallback (include CURSOR_PLUGIN_ROOT)"
+fi
+if grep -REn --include='*.md' '\$CLAUDE_PLUGIN_ROOT/' "${shared_workflow_roots[@]}" >/dev/null 2>&1; then
+  fail "shared workflows must use the host-neutral plugin-root fallback (include CURSOR_PLUGIN_ROOT)"
+fi
 expect_codex_skill_inventory
 expect_same_file_set "packages/shared-agent-knowledge/commands" "packages/codex-plugin/commands" "Codex commands"
 expect_same_file_set "packages/shared-agent-knowledge/agents" "packages/codex-plugin/agents" "Codex agents"

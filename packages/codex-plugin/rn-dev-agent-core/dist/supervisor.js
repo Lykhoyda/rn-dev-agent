@@ -10798,7 +10798,7 @@ var WORKTREE_REPAIR_ENTRY, HEADLESS_WORKTREE_REPAIR_COMMAND, LEGACY_ROOT_REPAIR_
 var init_worktree_repair_remedy = __esm({
   "packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js"() {
     "use strict";
-    WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
+    WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
     HEADLESS_WORKTREE_REPAIR_COMMAND = `node ${WORKTREE_REPAIR_ENTRY} repair --app-root "$PWD"`;
     LEGACY_ROOT_REPAIR_REQUIRED = "RN_AGENT_LEGACY_ROOT_REPAIR_REQUIRED";
   }
@@ -23561,7 +23561,7 @@ var SESSION_DOCTOR, HEADLESS_SESSION_RECOVERY_COMMAND, HEADLESS_SESSION_REPORT_C
 var init_recovery_remedy = __esm({
   "packages/rn-dev-agent-core/dist/session/recovery-remedy.js"() {
     "use strict";
-    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js"';
+    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/session-doctor.js"';
     HEADLESS_SESSION_RECOVERY_COMMAND = `node ${SESSION_DOCTOR} repair`;
     HEADLESS_SESSION_REPORT_COMMAND = `node ${SESSION_DOCTOR} report`;
     SESSION_RECOVERY_DOCS = 'docs: session-authority "Recovering a wedged source root"';
@@ -73739,7 +73739,7 @@ var init_engine_pin = __esm({
     });
     ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
     ACTION_ENGINE_PIN_RE = /^maestro-runner@(\d+(?:\.\d+)*)$/;
-    HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
+    HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}";
     PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
     PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
     MAESTRO_RUNNER_MIN_ANDROID_API = 26;

@@ -810,16 +810,19 @@ test('GH #792: the headless remedy command resolves under every host that ships 
     return pluginRoot;
   };
   const claude = packaged('claude');
+  const cursor = packaged('cursor');
   const codex = packaged('codex');
+  const hostPluginRootKeys = [
+    'CLAUDE_PLUGIN_ROOT',
+    'CURSOR_PLUGIN_ROOT',
+    'RN_DEV_AGENT_CODEX_PLUGIN_ROOT',
+    'CODEX_PLUGIN_ROOT',
+  ];
   // Run the remedy exactly as an agent would: through a shell, with only the variables
   // that host actually exports.
   const run = (exported: Record<string, string>) => {
     const environment: Record<string, string | undefined> = { ...process.env, ...exported };
-    for (const key of [
-      'CLAUDE_PLUGIN_ROOT',
-      'RN_DEV_AGENT_CODEX_PLUGIN_ROOT',
-      'CODEX_PLUGIN_ROOT',
-    ]) {
+    for (const key of hostPluginRootKeys) {
       if (!(key in exported)) delete environment[key];
     }
     return execFileSync('/bin/sh', ['-c', HEADLESS_SESSION_RECOVERY_COMMAND], {
@@ -828,6 +831,8 @@ test('GH #792: the headless remedy command resolves under every host that ships 
     });
   };
   assert.equal(run({ CLAUDE_PLUGIN_ROOT: claude }), 'claude');
+  // Cursor Plugin sessions export CURSOR_PLUGIN_ROOT only (packages/claude-plugin/mcp.json).
+  assert.equal(run({ CURSOR_PLUGIN_ROOT: cursor }), 'cursor');
   // The Codex launcher only ever exports RN_DEV_AGENT_CODEX_PLUGIN_ROOT
   // (packages/codex-plugin/bin/cdp-supervisor.js), so the remedy must resolve from it.
   assert.equal(run({ RN_DEV_AGENT_CODEX_PLUGIN_ROOT: codex }), 'codex');
@@ -840,7 +845,7 @@ test('GH #792: the headless remedy command resolves under every host that ships 
   // Read outside any host process — a human copying the remedy out of supervisor stderr —
   // the command must name what is missing instead of failing on a path that exists nowhere.
   const bareEnvironment: Record<string, string | undefined> = { ...process.env };
-  for (const key of ['CLAUDE_PLUGIN_ROOT', 'RN_DEV_AGENT_CODEX_PLUGIN_ROOT', 'CODEX_PLUGIN_ROOT']) {
+  for (const key of hostPluginRootKeys) {
     delete bareEnvironment[key];
   }
   const bare = spawnSync('/bin/sh', ['-c', HEADLESS_SESSION_RECOVERY_COMMAND], {

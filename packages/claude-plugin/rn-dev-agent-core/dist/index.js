@@ -25305,7 +25305,7 @@ var SESSION_DOCTOR, HEADLESS_SESSION_RECOVERY_COMMAND, HEADLESS_SESSION_REPORT_C
 var init_recovery_remedy = __esm({
   "packages/rn-dev-agent-core/dist/session/recovery-remedy.js"() {
     "use strict";
-    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js"';
+    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/session-doctor.js"';
     HEADLESS_SESSION_RECOVERY_COMMAND = `node ${SESSION_DOCTOR} repair`;
     HEADLESS_SESSION_REPORT_COMMAND = `node ${SESSION_DOCTOR} report`;
     SESSION_RECOVERY_DOCS = 'docs: session-authority "Recovering a wedged source root"';
@@ -59811,7 +59811,7 @@ function parseActionEnginePinVersion(enginePin) {
   const match = ACTION_ENGINE_PIN_RE.exec(enginePin.trim());
   return match?.[1] ?? null;
 }
-var HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
+var HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}";
 var PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
 var PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
 var MAESTRO_RUNNER_MIN_ANDROID_API = 26;
@@ -76742,7 +76742,7 @@ import { closeSync as closeSync10, constants as constants9, existsSync as exists
 import { dirname as dirname19, isAbsolute as isAbsolute12, join as join39, relative as relative7, resolve as resolve14, sep as sep7 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
-var WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
+var WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
 var HEADLESS_WORKTREE_REPAIR_COMMAND = `node ${WORKTREE_REPAIR_ENTRY} repair --app-root "$PWD"`;
 var LEGACY_ROOT_REPAIR_REQUIRED = "RN_AGENT_LEGACY_ROOT_REPAIR_REQUIRED";
 function legacyRootRepairRemedy(lead) {

@@ -433,7 +433,7 @@ import { closeSync as closeSync2, constants as constants2, existsSync as existsS
 import { dirname as dirname2, isAbsolute as isAbsolute2, join as join3, relative, resolve, sep } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
-var WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
+var WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
 var HEADLESS_WORKTREE_REPAIR_COMMAND = `node ${WORKTREE_REPAIR_ENTRY} repair --app-root "$PWD"`;
 var LEGACY_ROOT_REPAIR_REQUIRED = "RN_AGENT_LEGACY_ROOT_REPAIR_REQUIRED";
 function legacyRootRepairRemedy(lead) {

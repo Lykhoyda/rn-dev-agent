@@ -45,7 +45,7 @@ Run the collection script from the project root to gather sanitized
 environment data:
 
 ```bash
-PLUGIN_ROOT="${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}}"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-}}}}"
 PROJECT_ROOT="${RN_PROJECT_ROOT:-${CLAUDE_USER_CWD:-$PWD}}"
 if [ -z "$PLUGIN_ROOT" ] && [ -f "packages/codex-plugin/.codex-plugin/plugin.json" ]; then
   PLUGIN_ROOT="packages/codex-plugin"
@@ -67,9 +67,9 @@ fi
 ```
 
 Codex marketplace installs do not add global executables to `PATH`; use the
-package-local script. Claude sessions provide `CLAUDE_PLUGIN_ROOT`; installed
-Codex plugins resolve via the plugin-cache scan, which version-sorts the
-cached manifests (Codex stores each version under
+package-local script. Claude sessions provide `CLAUDE_PLUGIN_ROOT`; Cursor sessions
+provide `CURSOR_PLUGIN_ROOT`; installed Codex plugins resolve via the plugin-cache
+scan, which version-sorts the cached manifests (Codex stores each version under
 `plugins/cache/<marketplace>/rn-dev-agent/<version>/`) and picks the newest.
 `RN_DEV_AGENT_CODEX_PLUGIN_ROOT` and `CODEX_PLUGIN_ROOT` are explicit
 overrides only — the Codex launcher exports the former to the MCP supervisor
