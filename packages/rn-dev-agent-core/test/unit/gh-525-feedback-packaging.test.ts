@@ -18,8 +18,14 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..');
 
+// Both marketplaces install packages/claude-plugin; Claude reads commands/ and
+// skills/, Codex reads the generated codex-commands/ and codex-skills/ beside them.
 const CLAUDE_PKG = join(REPO_ROOT, 'packages', 'claude-plugin');
-const CODEX_PKG = join(REPO_ROOT, 'packages', 'codex-plugin');
+const CODEX_PKG = CLAUDE_PKG;
+const HOSTS = [
+  { pkg: CLAUDE_PKG, commands: 'commands', skills: 'skills' },
+  { pkg: CODEX_PKG, commands: 'codex-commands', skills: 'codex-skills' },
+] as const;
 const CANONICAL_SKILLS = join(REPO_ROOT, 'packages', 'shared-agent-knowledge', 'skills');
 
 function walkMarkdown(dir: string): string[] {
@@ -34,7 +40,7 @@ function walkMarkdown(dir: string): string[] {
 }
 
 test('#525 each host package ships an executable scripts/collect-feedback.sh', () => {
-  for (const pkg of [CLAUDE_PKG, CODEX_PKG]) {
+  for (const { pkg } of HOSTS) {
     const script = join(pkg, 'scripts', 'collect-feedback.sh');
     assert.ok(fs.existsSync(script), `${script} must exist`);
     const mode = fs.statSync(script).mode;
@@ -43,8 +49,8 @@ test('#525 each host package ships an executable scripts/collect-feedback.sh', (
 });
 
 test('#525 relative collector references in packaged docs resolve to files in the same package', () => {
-  for (const pkg of [CLAUDE_PKG, CODEX_PKG]) {
-    const docs = [...walkMarkdown(join(pkg, 'commands')), ...walkMarkdown(join(pkg, 'skills'))];
+  for (const { pkg, commands, skills } of HOSTS) {
+    const docs = [...walkMarkdown(join(pkg, commands)), ...walkMarkdown(join(pkg, skills))];
     let sawReference = false;
     for (const doc of docs) {
       const text = fs.readFileSync(doc, 'utf8');
@@ -166,13 +172,13 @@ test('#525 the workflow snippet falls back to rn-collect-feedback only when no p
 });
 
 test('#525 the Codex workflow resolves the collector package-relative, as documented', () => {
-  const command = join(CODEX_PKG, 'commands', 'send-feedback.md');
+  const command = join(CODEX_PKG, 'codex-commands', 'send-feedback.md');
   assert.match(
     fs.readFileSync(command, 'utf8'),
     /<package-root>\/scripts\/collect-feedback\.sh/,
     `${command} must document the package-root collector`,
   );
-  const skill = join(CODEX_PKG, 'skills', 'sending-feedback', 'SKILL.md');
+  const skill = join(CODEX_PKG, 'codex-skills', 'sending-feedback', 'SKILL.md');
   const skillText = fs.readFileSync(skill, 'utf8');
   assert.match(
     skillText,
@@ -182,11 +188,8 @@ test('#525 the Codex workflow resolves the collector package-relative, as docume
 });
 
 test('#525 bare rn-collect-feedback invocations appear only after a command -v guard in the same code block', () => {
-  for (const pkg of [CLAUDE_PKG, CODEX_PKG]) {
-    for (const doc of [
-      ...walkMarkdown(join(pkg, 'commands')),
-      ...walkMarkdown(join(pkg, 'skills')),
-    ]) {
+  for (const { pkg, commands, skills } of HOSTS) {
+    for (const doc of [...walkMarkdown(join(pkg, commands)), ...walkMarkdown(join(pkg, skills))]) {
       const text = fs.readFileSync(doc, 'utf8');
       const blocks = text.match(/```[^\n]*\n[\s\S]*?```/g) ?? [];
       for (const block of blocks) {
@@ -218,8 +221,8 @@ test('#525 bare rn-collect-feedback invocations appear only after a command -v g
 });
 
 test('#525 each packaged sending-feedback skill points at a workflow inside its own package', () => {
-  for (const pkg of [CLAUDE_PKG, CODEX_PKG]) {
-    const skill = join(pkg, 'skills', 'sending-feedback', 'SKILL.md');
+  for (const { pkg, skills } of HOSTS) {
+    const skill = join(pkg, skills, 'sending-feedback', 'SKILL.md');
     const text = fs.readFileSync(skill, 'utf8');
     const refs = text.match(/\.\.[\w$<>{}./-]*send-feedback\.md/g) ?? [];
     assert.ok(refs.length > 0, `${skill} must reference its host workflow`);
@@ -286,7 +289,7 @@ test('#525 the canonical sending-feedback skill stays host-neutral (review r3798
     `${claudeWorkflow} must retain the Claude plugin-root collector guidance`,
   );
 
-  const codexSkill = join(CODEX_PKG, 'skills', 'sending-feedback', 'SKILL.md');
+  const codexSkill = join(CODEX_PKG, 'codex-skills', 'sending-feedback', 'SKILL.md');
   assert.ok(
     !namedHostRoots(codexSkill).includes('CLAUDE_PLUGIN_ROOT'),
     `${codexSkill} must not describe the Claude resolution surface`,

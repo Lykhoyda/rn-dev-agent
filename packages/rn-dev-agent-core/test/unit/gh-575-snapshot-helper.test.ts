@@ -38,7 +38,7 @@ test('GH-575 snapshot guidance uses package-local exact-device invocations', asy
     'utf8',
   );
   const codex = await readFile(
-    repositoryPath('packages/codex-plugin/skills/rn-device-control/SKILL.md'),
+    repositoryPath('packages/claude-plugin/codex-skills/rn-device-control/SKILL.md'),
     'utf8',
   );
   assert.equal(claude, shared);
@@ -168,7 +168,7 @@ fi
       source,
     );
     assert.equal(
-      await readFile(repositoryPath('packages/codex-plugin/scripts/snapshot_state.sh'), 'utf8'),
+      await readFile(repositoryPath('packages/claude-plugin/scripts/snapshot_state.sh'), 'utf8'),
       source,
     );
     assert.doesNotMatch(source, /\bkill\b/);

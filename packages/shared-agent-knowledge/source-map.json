@@ -64,9 +64,17 @@
         "test-feature"
       ],
       "healthSource": "../codex-plugin/src/plugin-health.ts",
-      "healthOutput": "../codex-plugin/bin/plugin-health.js",
+      "healthOutput": "../claude-plugin/bin/plugin-health.js",
       "agentsTemplateSource": "../codex-plugin/src/AGENTS-MD-TEMPLATE.md",
-      "agentsTemplateOutput": "../codex-plugin/AGENTS-MD-TEMPLATE.md"
+      "agentsTemplateOutput": "../claude-plugin/AGENTS-MD-TEMPLATE.md",
+      "authoringRoot": "../codex-plugin",
+      "manifestSource": "../codex-plugin/.codex-plugin/plugin.json",
+      "mcpSource": "../codex-plugin/.mcp.json",
+      "launcherSource": "../codex-plugin/bin/cdp-supervisor.js",
+      "skillsSource": "../codex-plugin/skills",
+      "commandsSource": "../codex-plugin/commands",
+      "agentsSource": "../codex-plugin/agents",
+      "templatesSource": "../codex-plugin/templates/rn-agent"
     }
   },
   "hostOutputs": {
@@ -87,18 +95,20 @@
       "templates": "../claude-plugin/templates/rn-agent"
     },
     "codex": {
-      "manifest": "../codex-plugin/.codex-plugin/plugin.json",
-      "mcp": "../codex-plugin/.mcp.json",
-      "launcher": "../codex-plugin/bin/cdp-supervisor.js",
-      "health": "../codex-plugin/bin/plugin-health.js",
-      "agentsTemplate": "../codex-plugin/AGENTS-MD-TEMPLATE.md",
-      "runtime": "../codex-plugin/rn-dev-agent-core/dist/supervisor.js",
-      "runnerManifest": "../codex-plugin/runner-manifest.json",
-      "nativeRunnerScripts": "../codex-plugin/scripts",
-      "skills": "../codex-plugin/skills",
-      "commands": "../codex-plugin/commands",
-      "agents": "../codex-plugin/agents",
-      "templates": "../codex-plugin/templates/rn-agent"
+      "distributionRoot": "../claude-plugin",
+      "manifest": "../claude-plugin/.codex-plugin/plugin.json",
+      "mcp": "../claude-plugin/codex.mcp.json",
+      "launcher": "../claude-plugin/bin/cdp-supervisor.js",
+      "launcherPackage": "../claude-plugin/bin/package.json",
+      "health": "../claude-plugin/bin/plugin-health.js",
+      "agentsTemplate": "../claude-plugin/AGENTS-MD-TEMPLATE.md",
+      "runtime": "../claude-plugin/rn-dev-agent-core/dist/supervisor.js",
+      "runnerManifest": "../claude-plugin/runner-manifest.json",
+      "nativeRunnerScripts": "../claude-plugin/scripts",
+      "skills": "../claude-plugin/codex-skills",
+      "commands": "../claude-plugin/codex-commands",
+      "agents": "../claude-plugin/codex-agents",
+      "templates": "../claude-plugin/codex-templates/rn-agent"
     }
   },
   "apps": {

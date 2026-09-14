@@ -1,15 +1,19 @@
-# Generated trees — single writer: scripts/build-host-runtimes.ts (host
-# packages) and tsc/vite (core dist). linguist-generated collapses them in
+# Generated trees — single writer: scripts/build-host-runtimes.ts (distributed
+# plugin package) and tsc/vite (core dist). linguist-generated collapses them in
 # GitHub PR diffs and excludes them from language stats; -diff suppresses
 # textual diffs for the large bundles.
 packages/rn-dev-agent-core/dist/** linguist-generated
 packages/rn-dev-agent-core/native/darwin-process-birth binary
-packages/codex-plugin/rn-dev-agent-core/** linguist-generated -diff
 packages/claude-plugin/rn-dev-agent-core/** linguist-generated -diff
-packages/codex-plugin/scripts/** linguist-generated
 packages/claude-plugin/scripts/** linguist-generated
-packages/codex-plugin/runner-manifest.json linguist-generated
+packages/claude-plugin/bin/** linguist-generated
+packages/claude-plugin/.codex-plugin/** linguist-generated
+packages/claude-plugin/codex.mcp.json linguist-generated
+packages/claude-plugin/codex-skills/** linguist-generated
+packages/claude-plugin/codex-commands/** linguist-generated
+packages/claude-plugin/codex-agents/** linguist-generated
+packages/claude-plugin/codex-templates/** linguist-generated
 packages/claude-plugin/runner-manifest.json linguist-generated
-packages/codex-plugin/CLAUDE-MD-TEMPLATE.md linguist-generated
 packages/claude-plugin/CLAUDE-MD-TEMPLATE.md linguist-generated
+packages/claude-plugin/AGENTS-MD-TEMPLATE.md linguist-generated
 .yarn/releases/** linguist-generated -diff

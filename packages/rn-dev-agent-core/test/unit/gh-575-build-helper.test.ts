@@ -59,7 +59,10 @@ test('GH-575 packaged EAS helpers match the canonical source', async () => {
     source,
   );
   assert.equal(
-    await readFile(repositoryPath('packages/codex-plugin/scripts/eas_resolve_artifact.sh'), 'utf8'),
+    await readFile(
+      repositoryPath('packages/claude-plugin/scripts/eas_resolve_artifact.sh'),
+      'utf8',
+    ),
     source,
   );
 });
@@ -81,7 +84,9 @@ test('GH-575 packaged EAS references document immutable app-scoped cache paths',
     source,
   );
   const codex = await readFile(
-    repositoryPath('packages/codex-plugin/skills/rn-device-control/references/expo-eas-builds.md'),
+    repositoryPath(
+      'packages/claude-plugin/codex-skills/rn-device-control/references/expo-eas-builds.md',
+    ),
     'utf8',
   );
   for (const reference of [source, codex]) {

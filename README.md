@@ -266,9 +266,11 @@ codex plugin marketplace add Lykhoyda/rn-dev-agent
 codex plugin add rn-dev-agent@rn-dev-agent
 ```
 
-Local checkout: register the package directory `/path/to/rn-dev-agent/packages/codex-plugin` — not
-the repository root. The Codex package is self-contained (bundled MCP runtime, native runner
-sources, helpers, and runner manifest) and loads the same `cdp` MCP server from its `.mcp.json`.
+Local checkout: register the package directory `/path/to/rn-dev-agent/packages/claude-plugin` — the
+same directory Claude installs, not the repository root. Codex selects its own surface from it
+(`.codex-plugin/plugin.json`, `codex-skills/`, `codex.mcp.json`, `bin/cdp-supervisor.js`) and runs
+the one bundled MCP runtime under `rn-dev-agent-core/dist/`. A registration that still points at
+`packages/codex-plugin` must be re-added: that directory is now authoring material only.
 Codex does not load Claude Code hooks — `No plugin hooks` is expected. Codex 0.145.0 is the
 live-refresh floor; older hosts are restart-only. An external CLI or manual plugin change always
 requires exiting and relaunching Codex.
@@ -451,8 +453,8 @@ This is a Yarn workspace monorepo:
 | Package | What it is |
 |---------|------------|
 | `packages/rn-dev-agent-core` | The MCP server (CDP bridge, device control, actions, testing) — all TypeScript source and tests |
-| `packages/claude-plugin` | Claude Code plugin package — manifest, commands, agents, skills, hooks, MCP registration |
-| `packages/codex-plugin` | Codex plugin package — self-contained with bundled runtime |
+| `packages/claude-plugin` | The one plugin package both marketplaces install — Claude manifest, commands, agents, skills, hooks, generated Codex adapters (`.codex-plugin/`, `codex-*`, `bin/`), one bundled runtime |
+| `packages/codex-plugin` | Codex authoring source (manifest, playbooks, adapted skills, launcher, health) generated into `packages/claude-plugin` |
 | `packages/shared-agent-knowledge` | Source of truth both host packages are generated from |
 | `packages/rn-fast-runner` | In-tree iOS XCTest device runner |
 | `packages/rn-android-runner` | In-tree Android UiAutomator device runner |
@@ -463,11 +465,11 @@ git clone https://github.com/Lykhoyda/rn-dev-agent.git
 cd rn-dev-agent
 corepack enable
 corepack yarn install --immutable
-corepack yarn build:host-runtimes   # builds core + generates both host packages
+corepack yarn build:host-runtimes   # builds core + generates the distributed plugin package
 ```
 
 Run locally: `claude --plugin-dir /path/to/rn-dev-agent` (Claude Code) or register
-`packages/codex-plugin` (Codex).
+`packages/claude-plugin` (Codex).
 
 ```bash
 corepack yarn test          # complete unit-test suite

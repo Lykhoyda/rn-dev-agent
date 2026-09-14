@@ -56,3 +56,27 @@ test('plugin manifest candidates include Claude package and Codex package manife
     ),
   );
 });
+
+test('GH-892 common distribution root resolves Codex and Claude assets from the same package', () => {
+  const base = join('/repo', 'packages', 'claude-plugin', 'rn-dev-agent-core', 'dist');
+
+  assert.ok(
+    candidateNativeRunnerDirs('rn-fast-runner', base).includes(
+      join('/repo', 'packages', 'claude-plugin', 'scripts', 'rn-fast-runner'),
+    ),
+  );
+  assert.ok(
+    candidateRunnerManifestFiles(base).includes(
+      join('/repo', 'packages', 'claude-plugin', 'runner-manifest.json'),
+    ),
+  );
+  const manifests = candidatePluginManifestFiles(base);
+  assert.ok(
+    manifests.includes(join('/repo', 'packages', 'claude-plugin', '.codex-plugin', 'plugin.json')),
+  );
+  assert.ok(
+    manifests.includes(
+      join('/repo', 'packages', 'claude-plugin', 'rn-dev-agent-core', 'package.json'),
+    ),
+  );
+});

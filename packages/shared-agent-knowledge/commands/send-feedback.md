@@ -47,8 +47,8 @@ environment data:
 ```bash
 PLUGIN_ROOT="${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}}"
 PROJECT_ROOT="${RN_PROJECT_ROOT:-${CLAUDE_USER_CWD:-$PWD}}"
-if [ -z "$PLUGIN_ROOT" ] && [ -f "packages/codex-plugin/.codex-plugin/plugin.json" ]; then
-  PLUGIN_ROOT="packages/codex-plugin"
+if [ -z "$PLUGIN_ROOT" ] && [ -f "packages/claude-plugin/.codex-plugin/plugin.json" ]; then
+  PLUGIN_ROOT="packages/claude-plugin"
 fi
 if [ -z "$PLUGIN_ROOT" ]; then
   PLUGIN_MANIFEST="$(find "${CODEX_HOME:-$HOME/.codex}/plugins/cache" -path "*/rn-dev-agent/*/.codex-plugin/plugin.json" 2>/dev/null | sort -V | tail -n 1)"

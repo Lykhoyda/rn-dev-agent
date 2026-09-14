@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 // Post-`changeset version` hook: mirror the synthetic
 // `packages/claude-plugin/package.json` version into the Claude Code plugin
-// manifest (`packages/claude-plugin/plugin.json`), the Codex plugin manifest
+// manifest (`packages/claude-plugin/plugin.json`), the Codex authoring manifest
 // (`packages/codex-plugin/.codex-plugin/plugin.json`), the Codex MCP bootstrap
 // version pin (`packages/codex-plugin/.mcp.json`), and the Claude marketplace
-// listing (`packages/claude-plugin/marketplace.json`).
+// listing (`packages/claude-plugin/marketplace.json`). The distributed Codex
+// copies inside packages/claude-plugin (.codex-plugin/plugin.json,
+// codex.mcp.json) are regenerated from those sources by
+// scripts/build-host-runtimes.ts, which `yarn version-packages` runs last.
 //
 // Why a synthetic package: changesets manages versions of npm packages,
 // but the agent plugin versions live in plugin manifests + marketplace.json,
