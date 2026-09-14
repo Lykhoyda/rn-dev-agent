@@ -1655,6 +1655,23 @@ test('the push of the merged version to main is asserted against the previous he
   }
 });
 
+test('a failed asset transfer fails as itself, never as a missing or divergent public byte', () => {
+  const fixture = publishedFixture();
+  try {
+    const run = runCi(
+      fixture,
+      checkout(fixture, fixture.head!),
+      { 'github.base_ref': 'main' },
+      { GH_STUB_FAIL: 'release download' },
+    );
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /a failed transfer is not divergence/);
+    assert.doesNotMatch(run.failed!.stderr, /carries no|!= trust root/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('a stale root, tampered bytes, a wrong length, a missing zip, a draft or a divergent manifest asset all fail', () => {
   const cases: Array<[string, (f: Fixture) => void, RegExp]> = [
     [

@@ -177,7 +177,7 @@ jobs:
           V=$(jq -r '.version // empty' runner-manifest.json)
           if [ -z "$V" ] || [ "$V" = "null" ]; then
             echo "runner-manifest.json is still the empty seed — the artifact pipeline has never published." >&2
-            echo "Fix: run the Release workflow — it prepares and publishes the trust root before the Version Packages PR merges." >&2
+            echo "Fix: the next push to main runs the Release workflow, whose Version Packages transaction prepares and publishes the trust root; there is no manual trigger, and the runner-artifacts dispatch only verifies and repairs delivery of already published bytes." >&2
             exit 1
           fi
           mkdir -p /tmp/assets && cd /tmp/assets

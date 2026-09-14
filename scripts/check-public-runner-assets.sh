@@ -69,12 +69,20 @@ jq -e '.draft == false' "$TMP/release.json" >/dev/null || fail "release v$V is s
 
 IOS=$(jq -r '.assets.ios[0].name' "$MANIFEST")
 ANDROID=$(jq -r '.assets.android[0].name' "$MANIFEST")
-gh release download "v$V" --dir "$TMP" --pattern "$IOS" --pattern "$ANDROID" || true
+# The listing is the only thing that may say an asset is absent: a transfer
+# that never completed says nothing about the public bytes.
+for NAME in "$IOS" "$ANDROID"; do
+  jq -e --arg name "$NAME" 'any(.assets[]; .name == $name)' "$TMP/release.json" >/dev/null \
+    || fail "release v$V carries no $NAME"
+done
+if ! gh release download "v$V" --dir "$TMP" --pattern "$IOS" --pattern "$ANDROID" 2> "$TMP/download.err"; then
+  cat "$TMP/download.err" >&2
+  fail "could not download the runner assets release v$V lists — a failed transfer is not divergence"
+fi
 for P in ios android; do
   NAME=$(jq -r ".assets.${P}[0].name" "$MANIFEST")
   SHA=$(jq -r ".assets.${P}[0].sha256" "$MANIFEST")
   BYTES=$(jq -r ".assets.${P}[0].bytes" "$MANIFEST")
-  [ -f "$TMP/$NAME" ] || fail "release v$V carries no $NAME"
   ACTUAL_SHA=$(shasum -a 256 "$TMP/$NAME" | cut -d' ' -f1)
   ACTUAL_BYTES=$(wc -c < "$TMP/$NAME" | tr -d ' ')
   [ "$ACTUAL_SHA" = "$SHA" ] || fail "$NAME: public sha256 $ACTUAL_SHA != trust root $SHA"
