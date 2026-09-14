@@ -101,19 +101,17 @@ test('installed host packages declare and execute the authority runtime floor', 
 });
 
 test('Codex ships a discoverable feedback skill and package-local collector', async () => {
-  const [canonicalSkill, codexSkill, canonicalCollector, codexCollector, claudeCollector, command] =
+  const [canonicalSkill, codexSkill, canonicalCollector, packagedCollector, command] =
     await Promise.all([
       text('packages/shared-agent-knowledge/skills/sending-feedback/SKILL.md'),
       text('packages/claude-plugin/codex-skills/sending-feedback/SKILL.md'),
       text('scripts/collect-feedback.sh'),
       text('packages/claude-plugin/scripts/collect-feedback.sh'),
-      text('packages/claude-plugin/scripts/collect-feedback.sh'),
       text('packages/claude-plugin/codex-commands/send-feedback.md'),
     ]);
 
   assert.notEqual(codexSkill, canonicalSkill, 'Codex skill is an intentional host adaptation');
-  assert.equal(codexCollector, canonicalCollector);
-  assert.equal(claudeCollector, canonicalCollector);
+  assert.equal(packagedCollector, canonicalCollector);
   assert.match(codexSkill, /^name: sending-feedback$/m);
   assert.match(codexSkill, /\.\.\/\.\.\/scripts\/collect-feedback\.sh/);
   assert.match(command, /<package-root>\/scripts\/collect-feedback\.sh/);

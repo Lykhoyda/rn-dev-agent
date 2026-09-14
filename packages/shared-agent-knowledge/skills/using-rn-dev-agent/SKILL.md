@@ -24,12 +24,13 @@ This skill is your front door. Before starting any RN work, use the decision tre
   `packages/claude-plugin/`. The Claude package owns slash commands in
   `commands/`, Claude subagents in `agents/`, hooks in `hooks/`, skills in
   `skills/`, and the `cdp` MCP server.
-- **Codex** local development points at
-  `/path/to/rn-dev-agent/packages/codex-plugin`. Codex loads
-  `.codex-plugin/plugin.json`, package-local shared skills in `skills/`, and the
-  same `cdp` MCP server from `.mcp.json`. Claude slash commands, subagents, and
-  hooks are not native Codex surfaces; treat `commands/*.md` and `agents/*.md`
-  as playbooks to execute inline. `No plugin hooks` in Codex is expected.
+- **Codex** local development points at the same installed directory,
+  `/path/to/rn-dev-agent/packages/claude-plugin`. Codex loads
+  `.codex-plugin/plugin.json`, package-local skills in `codex-skills/`, and the
+  same `cdp` MCP server from `codex.mcp.json`. Claude slash commands, subagents,
+  and hooks are not native Codex surfaces; treat `codex-commands/*.md` and
+  `codex-agents/*.md` as playbooks to execute inline. `No plugin hooks` in Codex
+  is expected.
 - Keep the MCP server key named `cdp` in both manifests. Older sessions and
   docs assume this stable key.
 
@@ -41,8 +42,8 @@ directly. For action inventory, the slash command wraps:
 node <plugin-root>/rn-dev-agent-core/dist/learned-actions.js --json --filter "<keyword>"
 ```
 
-(`<plugin-root>` = `${CLAUDE_PLUGIN_ROOT}` on Claude, the Codex package root on
-Codex — the bundled runtime lives INSIDE the installed package.)
+(`<plugin-root>` = `${CLAUDE_PLUGIN_ROOT}` on Claude, the installed package root
+on Codex — the one bundled runtime lives INSIDE the installed package.)
 
 For action replay, prefer the MCP tool `cdp_run_action` after the same
 pre-flight checks documented in `commands/run-action.md`.
