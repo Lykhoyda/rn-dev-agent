@@ -635,10 +635,10 @@ test('a wide stop bracket refuses padding on iOS and ends the Android capture at
   const original = capture.state();
   const wide = {
     ...original,
-    launch: original.exit - 130,
-    ready: original.exit - 129,
-    stop: original.exit - 5,
-    signal: original.exit - 3.5,
+    launch: original.exit - 4,
+    ready: original.exit - 3.5,
+    stop: original.exit - 3,
+    signal: original.exit - 1.5,
     exit: original.exit,
   };
   writeFileSync(capture.statePath, `exited 0\n${JSON.stringify(wide)}\n`);
