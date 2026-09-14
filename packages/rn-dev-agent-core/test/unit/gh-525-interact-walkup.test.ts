@@ -23,15 +23,17 @@ interface FiberSpec {
 }
 
 interface SandboxFiber {
+  tag: number;
   type: { displayName: string } | string | null;
   memoizedProps: Record<string, unknown>;
   return: SandboxFiber | null;
   child: SandboxFiber | null;
   sibling: SandboxFiber | null;
+  alternate: SandboxFiber | null;
   stateNode: null;
 }
 
-function createSandbox(opts: { fiberRoot?: SandboxFiber } = {}) {
+function createSandbox(opts: { fiberRoot?: SandboxFiber; repeatRoot?: boolean } = {}) {
   const sandbox: Record<string, unknown> = {
     Array,
     Object,
@@ -58,7 +60,13 @@ function createSandbox(opts: { fiberRoot?: SandboxFiber } = {}) {
     sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
       renderers: new Map([[1, {}]]),
       getFiberRoots: (id: number) =>
-        id === 1 ? new Set([{ current: opts.fiberRoot }]) : new Set(),
+        id === 1
+          ? new Set(
+              opts.repeatRoot
+                ? [{ current: opts.fiberRoot }, { current: opts.fiberRoot }]
+                : [{ current: opts.fiberRoot }],
+            )
+          : new Set(),
     };
   }
   vm.createContext(sandbox);
@@ -68,11 +76,13 @@ function createSandbox(opts: { fiberRoot?: SandboxFiber } = {}) {
 
 function buildFiber(spec: FiberSpec, parent: SandboxFiber | null = null): SandboxFiber {
   const fiber: SandboxFiber = {
+    tag: spec.host ? 5 : 0,
     type: spec.name ? (spec.host ? spec.name : { displayName: spec.name }) : null,
     memoizedProps: spec.props || {},
     return: parent,
     child: null,
     sibling: null,
+    alternate: null,
     stateNode: null,
   };
   if (spec.children && spec.children.length > 0) {
@@ -115,6 +125,365 @@ test('#525 default (no walkUp): the refusal payload is byte-for-byte unchanged a
     '{"error":"Component has no onPress handler","component":"View","testID":"externalCoverageCard_1"}',
   );
   assert.equal(fired, 0);
+});
+
+function forwardedPressTree() {
+  const calls = { wrapper: 0, navigation: 0 };
+  const navigate = () => calls.navigation++;
+  const handlePress = () => {
+    calls.wrapper++;
+    navigate();
+  };
+  const root = buildFiber({
+    name: 'BottomTabItem',
+    props: { testID: 'tab-home', onPress: navigate },
+    children: [
+      {
+        name: 'RCTView',
+        host: true,
+        children: [
+          {
+            name: 'Animated(Pressable)',
+            props: { testID: 'tab-home', onPress: handlePress },
+            children: [
+              {
+                name: 'Pressable',
+                props: { testID: 'tab-home', onPress: handlePress },
+                children: [
+                  {
+                    name: 'View',
+                    props: { testID: 'tab-home' },
+                    children: [
+                      {
+                        name: 'RCTView',
+                        host: true,
+                        props: {
+                          testID: 'tab-home',
+                          accessible: true,
+                          accessibilityRole: 'button',
+                          onResponderGrant: () => {},
+                        },
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  const outerHost = root.child;
+  const animated = outerHost?.child;
+  const pressable = animated?.child;
+  const view = pressable?.child;
+  const host = view?.child;
+  assert.ok(outerHost && animated && pressable && view && host);
+  return { root, outerHost, animated, pressable, view, host, calls };
+}
+
+test('#951 a single host witnesses distinct forwarding callbacks and dispatches the nearest once', () => {
+  const fixture = forwardedPressTree();
+  const sandbox = createSandbox({ fiberRoot: fixture.root });
+  const result = JSON.parse(
+    sandbox.__RN_AGENT.interact({
+      action: 'press',
+      testID: 'tab-home',
+      walkUp: true,
+    }),
+  );
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.component, 'Pressable');
+  assert.equal(result.walkUpLevels, 2);
+  assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+});
+
+function pressFixture(fixture: ReturnType<typeof forwardedPressTree>, repeatRoot = false) {
+  return JSON.parse(
+    createSandbox({ fiberRoot: fixture.root, repeatRoot }).__RN_AGENT.interact({
+      action: 'press',
+      testID: 'tab-home',
+      walkUp: true,
+    }),
+  );
+}
+
+function assertTabAmbiguity(result: Record<string, unknown>, innerName = 'Animated(Pressable)') {
+  assert.deepEqual(result, {
+    error: 'Ambiguous walkUp press target',
+    testID: 'tab-home',
+    count: 2,
+    candidates: [
+      { component: 'BottomTabItem', testID: 'tab-home' },
+      { component: innerName, testID: 'tab-home' },
+    ],
+    hint: 'Multiple distinct pressable fibers resolve from this testID. Pass the testID of the exact pressable component instead.',
+  });
+}
+
+test('#951 a bailout boundary inside the forwarding chain still resolves the host', () => {
+  const fixture = forwardedPressTree();
+  const animatedOld: SandboxFiber = { ...fixture.animated, alternate: fixture.animated };
+  fixture.animated.alternate = animatedOld;
+  fixture.pressable.return = animatedOld;
+  const result = pressFixture(fixture);
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.component, 'Pressable');
+  assert.equal(result.walkUpLevels, 2);
+  assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+});
+
+test('#951 repeated observations of the same mounted host still dispatch once', () => {
+  const fixture = forwardedPressTree();
+  assert.equal(pressFixture(fixture, true).success, true);
+  assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+});
+
+test('#951 the witness uses fiber and native host facts independently of composite names', () => {
+  const fixture = forwardedPressTree();
+  for (const fiber of [fixture.root, fixture.animated, fixture.pressable, fixture.view])
+    fiber.type = null;
+  fixture.host.memoizedProps.onPress = fixture.pressable.memoizedProps.onPress;
+  const result = pressFixture(fixture);
+  assert.equal(result.success, true);
+  assert.equal(result.component, 'RCTView');
+  assert.equal(result.walkUpLevels, undefined);
+  assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+});
+
+test('#951 existing same-callback forwarding through an inert host keeps its original target', () => {
+  const fixture = forwardedPressTree();
+  fixture.root.memoizedProps.onPress = fixture.animated.memoizedProps.onPress;
+  fixture.outerHost.memoizedProps.testID = 'tab-home';
+  const result = pressFixture(fixture);
+  assert.equal(result.success, true);
+  assert.equal(result.component, 'BottomTabItem');
+  assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+});
+
+test('#951 the single-host witness selects only within the existing eight-hop bound', async (t) => {
+  for (const hops of [8, 9]) {
+    await t.test(`${hops} hops`, () => {
+      const fixture = forwardedPressTree();
+      let parent = fixture.view;
+      for (let index = 0; index < hops - 2; index++) {
+        const wrapper = buildFiber({ name: 'Wrapper' }, parent);
+        parent.child = wrapper;
+        parent = wrapper;
+      }
+      parent.child = fixture.host;
+      fixture.host.return = parent;
+      const result = pressFixture(fixture);
+      if (hops === 8) {
+        assert.equal(result.success, true);
+        assert.equal(result.walkUpLevels, 8);
+        assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+      } else {
+        assertTabAmbiguity(result);
+        assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+      }
+    });
+  }
+});
+
+test('#951 distinct callbacks cannot collapse separate nested host controls', async (t) => {
+  for (const outerHasId of [false, true]) {
+    await t.test(`outer host ID=${outerHasId}`, () => {
+      const fixture = forwardedPressTree();
+      fixture.outerHost.memoizedProps.onResponderGrant = () => {};
+      fixture.outerHost.memoizedProps.accessible = true;
+      if (outerHasId) fixture.outerHost.memoizedProps.testID = 'tab-home';
+      assertTabAmbiguity(pressFixture(fixture));
+      assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+    });
+  }
+});
+
+test('#951 one callback shared across nested hosts keeps collapsing to a single dispatch', async (t) => {
+  for (const outerHasId of [false, true]) {
+    await t.test(`outer host ID=${outerHasId}`, () => {
+      const fixture = forwardedPressTree();
+      fixture.outerHost.memoizedProps.onResponderGrant = () => {};
+      fixture.outerHost.memoizedProps.accessible = true;
+      if (outerHasId) fixture.outerHost.memoizedProps.testID = 'tab-home';
+      fixture.root.memoizedProps.onPress = fixture.animated.memoizedProps.onPress;
+      const result = pressFixture(fixture);
+      assert.equal(result.success, true, JSON.stringify(result));
+      assert.equal(result.component, 'BottomTabItem');
+      assert.equal(result.walkUpLevels, undefined);
+      assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 1 });
+    });
+  }
+});
+
+test('#951 siblings remain ambiguous with distinct or shared callbacks and host IDs', async (t) => {
+  for (const shared of [false, true]) {
+    await t.test(`shared=${shared}`, () => {
+      const fixture = forwardedPressTree();
+      const sibling = buildFiber({
+        name: 'OtherButton',
+        props: {
+          testID: 'tab-home',
+          onPress: shared
+            ? fixture.animated.memoizedProps.onPress
+            : () => fixture.calls.navigation++,
+        },
+        children: [{ name: 'RCTView', host: true, props: { testID: 'tab-home' } }],
+      });
+      fixture.root.sibling = sibling;
+      const result = pressFixture(fixture);
+      assert.equal(result.count, 3);
+      assert.deepEqual(result.candidates, [
+        { component: 'BottomTabItem', testID: 'tab-home' },
+        { component: 'Animated(Pressable)', testID: 'tab-home' },
+        { component: 'OtherButton', testID: 'tab-home' },
+      ]);
+      assert.equal(
+        result.hint,
+        'Multiple distinct pressable fibers resolve from this testID. Pass the testID of the exact pressable component instead.',
+      );
+      assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+    });
+  }
+});
+
+test('#951 unproven host semantics and incomplete ancestry preserve ambiguity metadata', async (t) => {
+  const cases: Record<string, (fixture: ReturnType<typeof forwardedPressTree>) => void> = {
+    'hostless distinct callbacks': (f) => {
+      f.host.tag = 0;
+    },
+    'unknown native host': (f) => {
+      f.outerHost.type = 'CustomNativeControl';
+    },
+    'click handler': (f) => {
+      f.outerHost.memoizedProps.onClick = () => {};
+    },
+    'touch handler': (f) => {
+      f.outerHost.memoizedProps.onTouchStart = () => {};
+    },
+    'responder negotiation': (f) => {
+      f.outerHost.memoizedProps.onStartShouldSetResponder = () => true;
+    },
+    'scroll responder negotiation': (f) => {
+      f.outerHost.memoizedProps.onScrollShouldSetResponder = () => true;
+    },
+    'accessible host': (f) => {
+      f.outerHost.memoizedProps.accessible = true;
+    },
+    'focusable host': (f) => {
+      f.outerHost.memoizedProps.focusable = true;
+    },
+    'host control role': (f) => {
+      f.outerHost.memoizedProps.accessibilityRole = 'button';
+    },
+    'return cycle': (f) => {
+      f.root.return = f.host;
+    },
+    'broken return': (f) => {
+      f.host.return = null;
+    },
+    'cyclic mounted traversal': (f) => {
+      f.host.child = f.animated;
+    },
+    'off-line exact-ID source': (f) => {
+      f.animated.sibling = buildFiber(
+        { name: 'OffLine', props: { testID: 'tab-home' } },
+        f.outerHost,
+      );
+    },
+  };
+  for (const [label, mutate] of Object.entries(cases)) {
+    await t.test(label, () => {
+      const fixture = forwardedPressTree();
+      mutate(fixture);
+      assertTabAmbiguity(pressFixture(fixture), label === 'return cycle' ? 'Pressable' : undefined);
+      assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+    });
+  }
+});
+
+test('#951 incomplete match collection refuses without dispatching the witnessed host', () => {
+  const fixture = forwardedPressTree();
+  let tail = fixture.root;
+  for (let index = 0; index < 8000; index++) {
+    tail.sibling = buildFiber({ name: 'Unrelated' });
+    tail = tail.sibling;
+  }
+  const result = pressFixture(fixture);
+  assert.deepEqual(result, {
+    error: 'Resolution truncated',
+    truncated: true,
+    scanned: 8001,
+    hint: 'increase budget or scope with a container/anchor',
+  });
+  assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+});
+
+test('#951 an ancestor candidate with a different testID cannot join the witness', () => {
+  const fixture = forwardedPressTree();
+  fixture.root.memoizedProps.testID = 'outer-control';
+  const source = buildFiber({ name: 'Wrapper', props: { testID: 'tab-home' } }, fixture.root);
+  fixture.root.child = source;
+  source.child = fixture.outerHost;
+  fixture.outerHost.return = source;
+  const result = pressFixture(fixture);
+  assert.equal(result.count, 2);
+  assert.deepEqual(result.candidates, [
+    { component: 'BottomTabItem', testID: 'outer-control' },
+    { component: 'Animated(Pressable)', testID: 'tab-home' },
+  ]);
+  assert.equal(
+    result.hint,
+    'Multiple distinct pressable fibers resolve from this testID. Pass the testID of the exact pressable component instead.',
+  );
+  assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+});
+
+test('#951 a throwing nearest forwarding handler reports execution without calling navigation', () => {
+  const fixture = forwardedPressTree();
+  const throwOnPress = () => {
+    fixture.calls.wrapper++;
+    throw new Error('forwarding failure');
+  };
+  fixture.animated.memoizedProps.onPress = throwOnPress;
+  fixture.pressable.memoizedProps.onPress = throwOnPress;
+  const result = pressFixture(fixture);
+  assert.equal(result.success, false);
+  assert.equal(result.action_executed, true);
+  assert.equal(result.component, 'Pressable');
+  assert.equal(result.handler_error, 'forwarding failure');
+  assert.deepEqual(fixture.calls, { wrapper: 1, navigation: 0 });
+});
+
+test('#951 eligible sources are never selected by filtering away disabled or hidden duplicates', async (t) => {
+  for (const target of ['root', 'host', 'pressable'] as const) {
+    await t.test(`disabled ${target}`, () => {
+      const fixture = forwardedPressTree();
+      fixture[target].memoizedProps.disabled = true;
+      const result = pressFixture(fixture);
+      assert.equal(result.error, 'Component is disabled');
+      assert.equal(
+        result.reason,
+        target === 'pressable' ? 'disabled walk target' : 'disabled exact-ID fiber',
+      );
+      assert.equal(result.testID, 'tab-home');
+      assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+    });
+  }
+  for (const props of [
+    { disabled: true },
+    { style: { display: 'none' } },
+    { pointerEvents: 'none' },
+  ]) {
+    await t.test(`ambiguous ${JSON.stringify(props)}`, () => {
+      const fixture = forwardedPressTree();
+      Object.assign(fixture.host.memoizedProps, props);
+      fixture.outerHost.memoizedProps.onResponderGrant = () => {};
+      assertTabAmbiguity(pressFixture(fixture));
+      assert.deepEqual(fixture.calls, { wrapper: 0, navigation: 0 });
+    });
+  }
 });
 
 test('#525 default (no walkUp): direct press response stays byte-for-byte unchanged', () => {

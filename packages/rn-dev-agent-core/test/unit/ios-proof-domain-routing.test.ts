@@ -944,7 +944,32 @@ function layoutStateNode(
   };
 }
 
-function routeTree(testID: string, route: string) {
+interface SceneState {
+  index: number;
+  routes: { key: string; name: string }[];
+}
+
+function sceneProps(
+  route: { key: string; name: string },
+  state: SceneState,
+  isFocused = () => state.routes[state.index]?.key === route.key,
+) {
+  const neverInvoke = () => assert.fail('scene callbacks and renderers must not be invoked');
+  return {
+    screen: { name: route.name, component: neverInvoke },
+    route,
+    getState: neverInvoke,
+    setState: neverInvoke,
+    clearOptions: neverInvoke,
+    navigation: { getState: () => state, isFocused },
+  };
+}
+
+function routeTree(
+  testID: string,
+  route: string,
+  state: SceneState = { index: 0, routes: [{ key: `${route}-key`, name: route }] },
+) {
   const root: any = {
     type: { displayName: 'Root' },
     memoizedProps: {},
@@ -954,7 +979,7 @@ function routeTree(testID: string, route: string) {
   };
   const screen: any = {
     type: { displayName: 'Screen' },
-    memoizedProps: { route: { name: route } },
+    memoizedProps: sceneProps({ key: `${route}-key`, name: route }, state),
     return: root,
     child: null,
     sibling: null,
@@ -973,20 +998,28 @@ function routeTree(testID: string, route: string) {
 }
 
 test('mounted prior-route IDs are not frontmost', () => {
-  const sandbox = makeFrontmostSandbox(routeTree('coverage', 'login'), {
+  const state = {
     index: 1,
-    routes: [{ name: 'login' }, { name: 'home' }],
-  });
+    routes: [
+      { key: 'login-key', name: 'login' },
+      { key: 'home-key', name: 'home' },
+    ],
+  };
+  const sandbox = makeFrontmostSandbox(routeTree('coverage', 'login', state), state);
   const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
   assert.equal(verdict.visible, false);
   assert.match(verdict.reason, /inactive mounted route/);
 });
 
 test('current-route ID is frontmost', () => {
-  const sandbox = makeFrontmostSandbox(routeTree('coverage', 'home'), {
+  const state = {
     index: 1,
-    routes: [{ name: 'login' }, { name: 'home' }],
-  });
+    routes: [
+      { key: 'login-key', name: 'login' },
+      { key: 'home-key', name: 'home' },
+    ],
+  };
+  const sandbox = makeFrontmostSandbox(routeTree('coverage', 'home', state), state);
   const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
   assert.equal(verdict.visible, true);
   assert.equal(verdict.activeRoute, 'home');
@@ -1059,20 +1092,369 @@ test('frontmost exact matches refuse incomplete renderer coverage', () => {
 });
 
 test('a target owned by an active ancestor route remains frontmost', () => {
-  const sandbox = makeFrontmostSandbox(routeTree('coverage', 'home'), {
+  const state = {
     index: 1,
     routes: [
-      { name: 'login' },
+      { key: 'login-key', name: 'login' },
       {
+        key: 'home-key',
         name: 'home',
-        state: { index: 0, routes: [{ name: 'feed' }, { name: 'settings' }] },
+        state: {
+          index: 0,
+          routes: [
+            { key: 'feed-key', name: 'feed' },
+            { key: 'settings-key', name: 'settings' },
+          ],
+        },
       },
     ],
-  });
+  };
+  const sandbox = makeFrontmostSandbox(routeTree('coverage', 'home', state), state);
   const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
   assert.equal(verdict.visible, true);
   assert.equal(verdict.route, 'home');
   assert.equal(verdict.activeRoute, 'feed');
+});
+
+test('scene focus includes inactive parents even when names and the local selected key agree', async (t) => {
+  for (const locallySelected of [true, false]) {
+    await t.test(`local owner selected=${locallySelected}`, async () => {
+      const route = { key: 'inactive-home', name: 'home' };
+      const state = {
+        index: locallySelected ? 0 : 1,
+        routes: [route, { key: 'active-home', name: 'home' }],
+      };
+      const root = routeTree('coverage', 'home');
+      root.child.memoizedProps = sceneProps(route, state, () => false);
+      const sandbox = makeFrontmostSandbox(root, state);
+      const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+      assert.equal(verdict.visible, false);
+      assert.equal(verdict.route, 'home');
+      assert.equal(verdict.activeRoute, 'home');
+      assert.equal(verdict.matchCount, 1);
+      let presses = 0;
+      const replay = await runCdpReplayCommands(
+        [{ tapOn: { id: 'coverage' } }],
+        {},
+        {
+          treeFor: async () => ({}),
+          frontmostFor: async () => verdict,
+          pressByTestId: async () => {
+            presses++;
+          },
+          typeByTestId: async () => {},
+          launchApp: async () => {},
+          settle: async () => {},
+        },
+      );
+      assert.equal(replay.failureCode, 'ASSERTION_FAILED');
+      assert.equal(replay.failedStepIndex, 0);
+      assert.equal(presses, 0);
+    });
+  }
+});
+
+test('malformed nearer route scopes fail closed instead of borrowing an active ancestor', async (t) => {
+  const cases: [string, (props: Record<string, any>) => void][] = [
+    [
+      'missing route key',
+      (p) => {
+        delete p.route.key;
+      },
+    ],
+    [
+      'empty route key',
+      (p) => {
+        p.route.key = '';
+      },
+    ],
+    [
+      'empty route name',
+      (p) => {
+        p.route.name = '';
+      },
+    ],
+    [
+      'missing navigation getState',
+      (p) => {
+        delete p.navigation.getState;
+      },
+    ],
+    [
+      'missing navigation isFocused',
+      (p) => {
+        delete p.navigation.isFocused;
+      },
+    ],
+    [
+      'throwing state',
+      (p) => {
+        p.navigation.getState = () => {
+          throw new Error('unreadable');
+        };
+      },
+    ],
+    [
+      'null state',
+      (p) => {
+        p.navigation.getState = () => null;
+      },
+    ],
+    [
+      'missing routes',
+      (p) => {
+        p.navigation.getState = () => ({ index: 0 });
+      },
+    ],
+    [
+      'empty routes',
+      (p) => {
+        p.navigation.getState = () => ({ index: 0, routes: [] });
+      },
+    ],
+    [
+      'missing owner membership',
+      (p) => {
+        p.navigation.getState = () => ({ index: 0, routes: [{ key: 'other', name: 'home' }] });
+      },
+    ],
+    [
+      'duplicate owner membership',
+      (p) => {
+        p.navigation.getState = () => ({ index: 0, routes: [p.route, p.route] });
+      },
+    ],
+    [
+      'membership name mismatch',
+      (p) => {
+        p.navigation.getState = () => ({ index: 0, routes: [{ key: p.route.key, name: 'other' }] });
+      },
+    ],
+    ...[undefined, -1, 1, 0.5, NaN, '0'].map<[string, (p: Record<string, any>) => void]>(
+      (index) => [
+        `invalid index ${String(index)}`,
+        (p) => {
+          p.navigation.getState = () => ({ index, routes: [p.route] });
+        },
+      ],
+    ),
+    [
+      'throwing focus',
+      (p) => {
+        p.navigation.isFocused = () => {
+          throw new Error('unreadable');
+        };
+      },
+    ],
+    ...[undefined, null, 0, 1, 'true', {}, Promise.resolve(true)].map<
+      [string, (p: Record<string, any>) => void]
+    >((value, index) => [
+      `nonboolean focus ${index}`,
+      (p) => {
+        p.navigation.isFocused = () => value;
+      },
+    ]),
+    [
+      'focus contradicts selected key',
+      (p) => {
+        p.navigation.getState = () => ({
+          index: 1,
+          routes: [p.route, { key: 'other', name: 'home' }],
+        });
+      },
+    ],
+  ];
+  for (const [label, mutate] of cases) {
+    await t.test(label, async () => {
+      const root = routeTree('coverage', 'home');
+      const outer = root.child;
+      const target = outer.child;
+      const nearer = {
+        type: { displayName: 'Minified' },
+        memoizedProps: sceneProps(
+          { key: 'home-key', name: 'home' },
+          { index: 0, routes: [{ key: 'home-key', name: 'home' }] },
+        ),
+        return: outer,
+        child: target,
+        sibling: null,
+      };
+      outer.child = nearer;
+      target.return = nearer;
+      mutate(nearer.memoizedProps);
+      const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'home' }] });
+      const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+      assert.equal(verdict.visible, false);
+      assert.equal(verdict.code, 'ASSERTION_FAILED');
+      assert.equal(verdict.matchCount, 1);
+      let presses = 0;
+      const result = await runCdpReplayCommands(
+        [{ tapOn: { id: 'coverage' } }],
+        {},
+        {
+          treeFor: async () => ({}),
+          frontmostFor: async () => verdict,
+          pressByTestId: async () => {
+            presses++;
+          },
+          typeByTestId: async () => {},
+          launchApp: async () => {},
+          settle: async () => {},
+        },
+      );
+      assert.equal(result.passed, false);
+      assert.equal(result.failureCode, 'ASSERTION_FAILED');
+      assert.equal(result.failedStepIndex, 0);
+      assert.equal(presses, 0);
+    });
+  }
+});
+
+test('route ownership normalizes descriptor and paired-context shells without hiding readable content', async (t) => {
+  for (const shell of ['direct', 'descriptor', 'scene descriptor', 'paired contexts']) {
+    for (const selected of [0, 1]) {
+      await t.test(`${shell}: selected ${selected}`, async () => {
+        const home = { key: 'home-key', name: 'Home' };
+        const state = { index: selected, routes: [home, { key: 'other-home', name: 'Home' }] };
+        const root = routeTree('coverage', 'Home', state);
+        const owner = root.child;
+        const props = sceneProps(home, state);
+        const descriptor = { route: home, navigation: props.navigation };
+        if (shell === 'direct') owner.memoizedProps = props;
+        if (shell === 'descriptor') owner.memoizedProps = { descriptor };
+        if (shell === 'scene descriptor') owner.memoizedProps = { scene: { descriptor } };
+        if (shell === 'paired contexts') {
+          owner.tag = 10;
+          owner.memoizedProps = { value: home, children: null };
+          const target = owner.child;
+          owner.child = {
+            tag: 10,
+            type: {},
+            memoizedProps: { value: props.navigation, children: target },
+            return: owner,
+            child: target,
+            sibling: null,
+          };
+          target.return = owner.child;
+        }
+        const sandbox = makeFrontmostSandbox(root, state);
+        const tree = JSON.parse(sandbox.__RN_AGENT.getTree({ filter: 'coverage' }));
+        assert.ok(JSON.stringify(tree).includes('coverage'));
+        const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+        assert.equal(verdict.visible, selected === 0);
+        assert.equal(verdict.matchCount, 1);
+        let presses = 0;
+        const result = await runCdpReplayCommands(
+          [{ tapOn: { id: 'coverage' } }],
+          {},
+          {
+            treeFor: async () => tree,
+            frontmostFor: async () => verdict,
+            pressByTestId: async () => {
+              presses++;
+            },
+            typeByTestId: async () => {},
+            launchApp: async () => {},
+            settle: async () => {},
+          },
+        );
+        assert.equal(result.passed, selected === 0);
+        assert.equal(presses, selected === 0 ? 1 : 0);
+        if (selected === 1) {
+          assert.equal(result.failureCode, 'ASSERTION_FAILED');
+          assert.equal(result.failedStepIndex, 0);
+        }
+      });
+    }
+  }
+});
+
+test('an invalid present modern scope getter cannot borrow a valid legacy getter', () => {
+  for (const getter of [
+    null,
+    undefined,
+    0,
+    () => {
+      throw new Error('unreadable');
+    },
+  ]) {
+    const root = routeTree('coverage', 'home');
+    const navigation = root.child.memoizedProps.navigation;
+    navigation.dangerouslyGetState = navigation.getState;
+    navigation.getState = getter;
+    const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'home' }] });
+    const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+    assert.equal(verdict.visible, false);
+    assert.equal(verdict.code, 'ASSERTION_FAILED');
+    assert.equal(verdict.matchCount, 1);
+  }
+});
+
+test('ownerless multi-route content cannot borrow ownership from ordinary route props', () => {
+  const root = routeTree('coverage', 'home');
+  root.child.memoizedProps = { screen: 'home', route: { key: 'home-key', name: 'home' } };
+  const sandbox = makeFrontmostSandbox(root, {
+    index: 1,
+    routes: [{ name: 'login' }, { name: 'home' }],
+  });
+  const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+  assert.equal(verdict.visible, false);
+  assert.match(verdict.reason, /no route owner/);
+  assert.equal(verdict.route, undefined);
+  assert.equal(verdict.activeRoute, 'home');
+  assert.equal(verdict.matchCount, 1);
+});
+
+test('a per-screen header follows the route it renders, not the scene around it', async (t) => {
+  const home = { key: 'home-key', name: 'home' };
+  const detail = { key: 'detail-key', name: 'detail' };
+  for (const covered of [true, false]) {
+    await t.test(covered ? 'covered card' : 'top card', () => {
+      const state = { index: covered ? 1 : 0, routes: [home, detail] };
+      const root = routeTree('coverage', 'home', state);
+      // @react-navigation/stack renders the card header outside SceneView with
+      // the documented header props of the screen it belongs to.
+      root.child.memoizedProps = {
+        route: home,
+        navigation: {
+          getState: () => state,
+          isFocused: () => state.routes[state.index]?.key === home.key,
+        },
+        options: {},
+        layout: { width: 390, height: 844 },
+      };
+      const sandbox = makeFrontmostSandbox(root, {
+        index: covered ? 1 : 0,
+        routes: [{ name: 'home' }, { name: 'detail' }],
+      });
+      const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+      assert.equal(verdict.visible, !covered);
+      assert.equal(verdict.route, 'home');
+      if (covered) assert.match(verdict.reason, /inactive mounted route/);
+    });
+  }
+});
+
+test('cyclic and over-budget ancestry cannot establish absence of a scene owner', async (t) => {
+  for (const cyclic of [true, false]) {
+    await t.test(cyclic ? 'cycle' : 'budget', () => {
+      const root = routeTree('coverage', 'home');
+      root.child.memoizedProps = {};
+      if (cyclic) root.child.return = root.child;
+      else {
+        let parent = root.child;
+        for (let index = 0; index < 1001; index++) {
+          parent.return = { memoizedProps: {}, return: null };
+          parent = parent.return;
+        }
+      }
+      const sandbox = makeFrontmostSandbox(root, { index: 0, routes: [{ name: 'home' }] });
+      const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
+      assert.equal(verdict.visible, false);
+      assert.equal(verdict.code, 'ASSERTION_FAILED');
+      assert.equal(verdict.matchCount, 1);
+    });
+  }
 });
 
 test('filtered replay proves pointer events from the live fiber ancestor chain', async () => {
@@ -1298,7 +1680,7 @@ test('an ordinary non-modal target is unaffected by ancestor alternates', () => 
   const screen = root.child;
   const screenAlternate: any = {
     type: { displayName: 'Screen' },
-    memoizedProps: { route: { name: 'home' } },
+    memoizedProps: screen.memoizedProps,
     return: root,
     child: null,
     sibling: null,

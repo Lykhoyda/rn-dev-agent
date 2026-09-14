@@ -51658,7 +51658,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 62;
+var HELPERS_VERSION = 70;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -54540,10 +54540,8 @@ var INJECTED_HELPERS = `
 
     try {
       if (action === 'press' && opts.walkUp === true) {
-        // GH #525 \u2014 nearest self-or-ancestor onPress within 8 fiber levels (one JSX wrapper is ~3 fibers under NativeWind CssInterop);
-        // candidates collapse only when they are the exact same fiber.
+        // 8 levels covers ~2 JSX wrappers: one wrapper is ~3 fibers under NativeWind CssInterop.
         var WALK_UP_MAX = 8;
-        // Host fibers carry a string type (e.g. 'RCTView') \u2014 same extraction as the ladder press path.
         var walkFiberName = function(f) {
           return (f && f.type && (typeof f.type === 'string'
             ? f.type
@@ -54564,8 +54562,18 @@ var INJECTED_HELPERS = `
           }
           return false;
         };
-        // RN forwards testID and onPress down one element's composite/host stack; those fibers are
-        // the same logical target, so they collapse onto the outermost the way a direct press fires it.
+        var walkInertView = function(f) {
+          if (f.type !== 'RCTView') return false;
+          var p = f.memoizedProps || {};
+          if (p.accessible === true || p.focusable === true || (p.accessibilityRole && p.accessibilityRole !== 'none')
+            || (p.role && p.role !== 'none' && p.role !== 'presentation')) return false;
+          var keys = Object.keys(p);
+          for (var ki = 0; ki < keys.length; ki++) {
+            if (/^on(Press|LongPress|Click|DoubleClick|Touch|Responder|.*ShouldSetResponder|Pointer|Key|Accessibility|MagicTap)/.test(keys[ki])
+              && p[keys[ki]] != null) return false;
+          }
+          return true;
+        };
         var walkForwarded = function(a, b) {
           var ap = a.memoizedProps, bp = b.memoizedProps;
           if (!ap || !bp) return false;
@@ -54575,6 +54583,7 @@ var INJECTED_HELPERS = `
         };
         var walkSources = walkUpMatches.length > 0 ? walkUpMatches : [found];
         var walkCandidates = [];
+        var walkOriginalCandidates = [];
         for (var wi = 0; wi < walkSources.length; wi++) {
           var walkNode = walkSources[wi];
           var walkHops = 0;
@@ -54585,6 +54594,7 @@ var INJECTED_HELPERS = `
             walkHops++;
           }
           if (!walkNode || walkHops > WALK_UP_MAX) continue;
+          walkOriginalCandidates.push({ fiber: walkNode, hops: walkHops, source: walkSources[wi] });
           var existing = null;
           for (var wj = 0; wj < walkCandidates.length; wj++) {
             if (walkCandidates[wj].fiber === walkNode || walkForwarded(walkCandidates[wj].fiber, walkNode)) {
@@ -54601,6 +54611,49 @@ var INJECTED_HELPERS = `
         }
         if (walkCandidates.length === 0) {
           return JSON.stringify({ error: 'Component has no onPress handler', component: walkFiberName(found), testID: selector, walkUpSearched: WALK_UP_MAX });
+        }
+        var walkSingleHostTarget = function() {
+          if (!opts.testID || findCycleDetected) return null;
+          var hosts = new Set();
+          for (var si = 0; si < walkSources.length; si++) {
+            if (walkSources[si].tag === 5) hosts.add(walkSources[si]);
+          }
+          if (hosts.size !== 1) return null;
+          var host = hosts.values().next().value;
+          var lineage = [];
+          var node = host;
+          while (node && lineage.length < 1000) {
+            lineage.push(node);
+            node = node.return;
+          }
+          if (node) return null;
+          var lineageIndex = function(f) {
+            for (var li = 0; li < lineage.length; li++) {
+              if (sameFiber(f, lineage[li])) return li;
+            }
+            return -1;
+          };
+          for (var si = 0; si < walkSources.length; si++) {
+            if (lineageIndex(walkSources[si]) < 0) return null;
+          }
+          var hostTarget = null;
+          var outermost = 0;
+          for (var ci = 0; ci < walkOriginalCandidates.length; ci++) {
+            var candidate = walkOriginalCandidates[ci];
+            var candidateIndex = lineageIndex(candidate.fiber);
+            if (candidateIndex < 0 || candidate.fiber.memoizedProps.testID !== selector) return null;
+            outermost = Math.max(outermost, candidateIndex);
+            if (candidate.source === host) hostTarget = candidate;
+          }
+          if (!hostTarget) return null;
+          for (var li = 1; li <= outermost; li++) {
+            if (lineage[li].tag === 5 && !walkInertView(lineage[li])) return null;
+          }
+          return hostTarget;
+        };
+        if (walkCandidates.length > 1) {
+          var witnessedTarget = walkSingleHostTarget();
+          if (witnessedTarget) walkCandidates = [witnessedTarget];
         }
         if (walkCandidates.length > 1) {
           var walkDescriptors = [];
@@ -55905,6 +55958,11 @@ var INJECTED_HELPERS = `
     return { eligible: true };
   }
 
+  // React return chains may thread through either half of a fiber/alternate pair.
+  function sameFiber(a, b) {
+    return !!a && !!b && (a === b || a.alternate === b || b.alternate === a);
+  }
+
   function isTestIdFrontmost(testID) {
     if (typeof testID !== 'string' || !testID) {
       return JSON.stringify({ visible: false, reason: 'testID is required' });
@@ -55948,12 +56006,10 @@ var INJECTED_HELPERS = `
       });
     }
     function containsFiber(ancestor, candidate) {
-      // React return chains may thread through either half of a fiber/alternate pair.
-      var ancestorAlternate = ancestor.alternate || null;
       var current = candidate;
       var guard = 0;
       while (current && guard++ < 1000) {
-        if (current === ancestor || current === ancestorAlternate) return true;
+        if (sameFiber(current, ancestor)) return true;
         current = current.return;
       }
       return false;
@@ -56104,22 +56160,207 @@ var INJECTED_HELPERS = `
         matchCount: 1
       });
     }
-    var routeOwner = null;
-    var current = target;
-    var depth = 0;
-    while (current && depth++ < 1000) {
-      var currentProps = current.memoizedProps;
+    function readRouteRecord(route) {
       if (
-        currentProps &&
-        currentProps.route &&
-        typeof currentProps.route.name === 'string'
-      ) {
-        routeOwner = currentProps.route.name;
-        break;
-      }
-      current = current.return;
+        !route || typeof route !== 'object' || Array.isArray(route)
+        || typeof route.key !== 'string' || !route.key
+        || typeof route.name !== 'string' || !route.name
+      ) return null;
+      return route;
     }
-    if (routeOwner && activeRoutes.indexOf(routeOwner) === -1) {
+    function readBoundRoute(navigation, route) {
+      if (
+        !navigation || typeof navigation !== 'object'
+        || typeof navigation.isFocused !== 'function'
+      ) throw new Error('invalid navigator');
+      var readState = 'getState' in navigation
+        ? navigation.getState
+        : navigation.dangerouslyGetState;
+      if (typeof readState !== 'function') throw new Error('invalid navigator');
+      var state = readState.call(navigation);
+      validateRouteMembership(state, route);
+      var focused = navigation.isFocused();
+      if (
+        typeof focused !== 'boolean'
+        || (focused && state.routes[state.index].key !== route.key)
+      ) throw new Error('invalid route focus');
+      return { state: state, focused: focused };
+    }
+    function validateRouteMembership(state, route) {
+      if (
+        !state || typeof state !== 'object' || Array.isArray(state)
+        || !Array.isArray(state.routes) || state.routes.length === 0
+        || !Number.isInteger(state.index)
+        || state.index < 0 || state.index >= state.routes.length
+      ) throw new Error('invalid navigator state');
+      var matches = 0;
+      for (var routeIndex = 0; routeIndex < state.routes.length; routeIndex++) {
+        var known = readRouteRecord(state.routes[routeIndex]);
+        if (!known) throw new Error('invalid navigator route');
+        if (known.key === route.key) {
+          if (known.name !== route.name) throw new Error('inconsistent navigator route');
+          matches++;
+        }
+      }
+      if (matches !== 1) throw new Error('ambiguous navigator membership');
+    }
+    function sameRoute(left, right) {
+      return !!readRouteRecord(left) && !!readRouteRecord(right)
+        && left.key === right.key && left.name === right.name;
+    }
+    function sameRouteState(left, right) {
+      if (
+        typeof left.key !== 'string' || !left.key || left.key !== right.key
+        || left.index !== right.index || left.routes.length !== right.routes.length
+      ) return false;
+      for (var index = 0; index < left.routes.length; index++) {
+        if (!sameRoute(left.routes[index], right.routes[index])) return false;
+      }
+      return true;
+    }
+    function hasOnlyProps(props, keys) {
+      var ownKeys = Object.keys(props);
+      return ownKeys.length === keys.length && keys.every(function(key) {
+        return Object.prototype.hasOwnProperty.call(props, key);
+      });
+    }
+    function adjacentNavigationContext(ancestry, from, step) {
+      for (var index = from + step; index >= 0 && index < ancestry.length && ancestry[index].tag === 10; index += step) {
+        var value = ancestry[index].memoizedProps && ancestry[index].memoizedProps.value;
+        if (
+          value && typeof value === 'object' && typeof value.isFocused === 'function'
+          && (typeof value.getState === 'function' || typeof value.dangerouslyGetState === 'function')
+        ) return index;
+      }
+      return -1;
+    }
+    function routeScope(route, navigation, start, end, transparent) {
+      var record = readRouteRecord(route);
+      if (!record) throw new Error('invalid scope route');
+      return { route: record, navigation: navigation, start: start, end: end, transparent: transparent };
+    }
+    var routeOwner = null;
+    var inactiveOwner = false;
+    var boundControls = [];
+    try {
+      var exactHosts = new Set();
+      for (var hostIndex = 0; hostIndex < matches.length; hostIndex++) {
+        if (matches[hostIndex].tag === 5) exactHosts.add(matches[hostIndex]);
+      }
+      var ownershipTarget = exactHosts.size === 1 ? exactHosts.values().next().value : target;
+      var ancestry = [];
+      var current = ownershipTarget;
+      while (current && ancestry.length < 1000) {
+        ancestry.push(current);
+        current = current.return;
+      }
+      if (current) throw new Error('incomplete route ancestry');
+      var scopes = [];
+      for (var ownerIndex = 0; ownerIndex < ancestry.length; ownerIndex++) {
+        var ownerFiber = ancestry[ownerIndex];
+        var ownerProps = ownerFiber.memoizedProps;
+        if (!ownerProps || typeof ownerProps !== 'object') continue;
+        var isDestination = 'route' in ownerProps && 'descriptor' in ownerProps
+          && ('focused' in ownerProps || 'onPress' in ownerProps) && !('navigation' in ownerProps);
+        if (isDestination) {
+          var destination = readRouteRecord(ownerProps.route);
+          var descriptor = ownerProps.descriptor;
+          if (
+            exactHosts.size !== 1 || !destination
+            || typeof ownerProps.focused !== 'boolean' || typeof ownerProps.onPress !== 'function'
+            || !descriptor || !sameRoute(descriptor.route, destination)
+          ) throw new Error('invalid destination control');
+          var navigatorIndex = ownerIndex + 1;
+          while (navigatorIndex < ancestry.length) {
+            var possibleNavigator = ancestry[navigatorIndex].memoizedProps;
+            if (possibleNavigator && typeof possibleNavigator === 'object' && 'descriptors' in possibleNavigator) break;
+            navigatorIndex++;
+          }
+          if (navigatorIndex === ancestry.length) throw new Error('unbound destination control');
+          var navigatorProps = ancestry[navigatorIndex].memoizedProps;
+          var descriptors = navigatorProps.descriptors;
+          var localState = navigatorProps.state;
+          validateRouteMembership(localState, destination);
+          if (
+            !descriptors || typeof descriptors !== 'object' || Array.isArray(descriptors)
+            || descriptors[destination.key] !== descriptor
+          ) throw new Error('unbound destination descriptor');
+          var selectedRoute = localState.routes[localState.index];
+          var selectedDescriptor = descriptors[selectedRoute.key];
+          if (!selectedDescriptor || !sameRoute(selectedDescriptor.route, selectedRoute)) {
+            throw new Error('invalid selected descriptor');
+          }
+          var selectedScope = readBoundRoute(selectedDescriptor.navigation, selectedRoute);
+          var destinationScope = readBoundRoute(descriptor.navigation, destination);
+          var navigatorNavigation = navigatorProps.navigation;
+          if (!navigatorNavigation || typeof navigatorNavigation.isFocused !== 'function') {
+            throw new Error('invalid navigator focus');
+          }
+          var navigatorFocused = navigatorNavigation.isFocused();
+          if (
+            typeof navigatorFocused !== 'boolean'
+            || !sameRouteState(localState, selectedScope.state)
+            || !sameRouteState(localState, destinationScope.state)
+            || selectedScope.focused !== navigatorFocused
+            || ownerProps.focused !== (destination.key === selectedRoute.key)
+            || destinationScope.focused !== (ownerProps.focused && navigatorFocused)
+          ) throw new Error('inconsistent destination binding');
+          boundControls.push({ start: ownerIndex, end: navigatorIndex, route: destination, navigation: descriptor.navigation });
+          if (!navigatorFocused) inactiveOwner = true;
+        }
+        if ('route' in ownerProps && 'navigation' in ownerProps) {
+          scopes.push(routeScope(ownerProps.route, ownerProps.navigation, ownerIndex, ownerIndex,
+            hasOnlyProps(ownerProps, ['route', 'navigation', 'children'])));
+        }
+        if ('descriptor' in ownerProps && !isDestination) {
+          var ownedDescriptor = ownerProps.descriptor;
+          if (!ownedDescriptor || typeof ownedDescriptor !== 'object') throw new Error('invalid owned descriptor');
+          scopes.push(routeScope(ownedDescriptor.route, ownedDescriptor.navigation, ownerIndex, ownerIndex, false));
+        }
+        if (ownerProps.scene && typeof ownerProps.scene === 'object' && 'descriptor' in ownerProps.scene) {
+          var sceneDescriptor = ownerProps.scene.descriptor;
+          if (!sceneDescriptor || typeof sceneDescriptor !== 'object') throw new Error('invalid scene descriptor');
+          scopes.push(routeScope(sceneDescriptor.route, sceneDescriptor.navigation, ownerIndex, ownerIndex, false));
+        }
+        if (ownerFiber.tag === 10 && readRouteRecord(ownerProps.value)) {
+          var pairIndex = adjacentNavigationContext(ancestry, ownerIndex, -1);
+          if (pairIndex < 0) pairIndex = adjacentNavigationContext(ancestry, ownerIndex, 1);
+          if (pairIndex >= 0) {
+            var pairProps = ancestry[pairIndex].memoizedProps;
+            scopes.push(routeScope(ownerProps.value, pairProps.value,
+              Math.min(ownerIndex, pairIndex), Math.max(ownerIndex, pairIndex),
+              hasOnlyProps(ownerProps, ['value', 'children'])
+                && hasOnlyProps(pairProps, ['value', 'children'])));
+          }
+        }
+      }
+      for (var scopeIndex = 0; scopeIndex < scopes.length; scopeIndex++) {
+        var scope = scopes[scopeIndex];
+        var destinationProvider = false;
+        for (var controlIndex = 0; controlIndex < boundControls.length; controlIndex++) {
+          var control = boundControls[controlIndex];
+          if (scope.transparent && scope.start > control.start && scope.end < control.end) {
+            if (!sameRoute(scope.route, control.route) || scope.navigation !== control.navigation) {
+              throw new Error('conflicting destination provider');
+            }
+            destinationProvider = true;
+          }
+        }
+        if (destinationProvider) continue;
+        var focused = readBoundRoute(scope.navigation, scope.route).focused;
+        if (!routeOwner) routeOwner = scope.route.name;
+        if (!focused) inactiveOwner = true;
+      }
+    } catch (_) {
+      return JSON.stringify({
+        visible: false,
+        reason: 'frontmost route ownership cannot be proven',
+        code: 'ASSERTION_FAILED',
+        activeRoute: activeRoute,
+        matchCount: 1
+      });
+    }
+    if (inactiveOwner) {
       return JSON.stringify({
         visible: false,
         reason: 'testID belongs to an inactive mounted route',
@@ -56128,7 +56369,7 @@ var INJECTED_HELPERS = `
         matchCount: 1
       });
     }
-    if (!routeOwner) {
+    if (!routeOwner && boundControls.length === 0) {
       var cursor = nav;
       var stacked = false;
       while (cursor) {
