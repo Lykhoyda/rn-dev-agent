@@ -134,6 +134,12 @@ jobs:
             echo "::error::could not determine whether release v$V is published — refusing to guess" >&2
             exit 1
           fi
+          # Regenerating here could only ever produce a head the published tag
+          # does not name, so the refusal publish would reach is already decided.
+          if [ -n "$TAG" ] && [ "$DRAFT" = false ] && [ "$TAG" != "$HEAD" ]; then
+            echo "::error::release v$V is published from $TAG, not PR #$NUMBER head $HEAD. A published release is never replaced: v$V stays published-but-not-advertised; ship changed content as a new, unused version." >&2
+            exit 1
+          fi
           if [ "$MV" = "$V" ] && [ -n "$TAG" ] && [ "$TAG" = "$HEAD" ] && [ "$DRAFT" = false ]; then
             echo "release v$V is already published from PR #$NUMBER head $HEAD — resuming its merge"
             {

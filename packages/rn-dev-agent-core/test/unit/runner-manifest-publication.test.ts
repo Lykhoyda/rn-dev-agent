@@ -748,7 +748,7 @@ test('a published candidate whose tag is the PR head is resumed, never regenerat
   }
 });
 
-test('a tag bound elsewhere never resumes a candidate', () => {
+test('a tag bound elsewhere refuses at once instead of regenerating a head it can never publish', () => {
   const fixture = createFixture({
     prepared: true,
     prs: [versionPr()],
@@ -757,8 +757,13 @@ test('a tag bound elsewhere never resumes a candidate', () => {
   });
   try {
     const run = runVersionStep(fixture, PENDING_STEP);
-    assert.ok(run.ok, run.failed?.stderr);
-    assert.equal(run.outputs.pending.resume, 'false');
+    assert.equal(run.ok, false);
+    assert.match(
+      run.failed!.stderr,
+      new RegExp(`published from ${SHA_B}, not PR #11 head ${fixture.head}`),
+    );
+    assert.match(run.failed!.stderr, /published-but-not-advertised/);
+    assert.equal(run.outputs.pending?.resume, undefined);
   } finally {
     fixture.cleanup();
   }
