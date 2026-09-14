@@ -20,7 +20,7 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630">
   <text x="80" y="200" font-family="Menlo, monospace" font-size="30" fill="#38bdf8">❯ rn-dev-agent</text>
   <text x="80" y="290" font-family="Helvetica, Arial, sans-serif" font-size="58" font-weight="700" fill="#e8edf2">Your agent writes the code.</text>
   <text x="80" y="360" font-family="Helvetica, Arial, sans-serif" font-size="58" font-weight="700" fill="#38bdf8">This proves it runs.</text>
-  <text x="80" y="440" font-family="Helvetica, Arial, sans-serif" font-size="26" fill="#8e99a4">React Native development partner for Claude Code and Codex</text>
+  <text x="80" y="440" font-family="Helvetica, Arial, sans-serif" font-size="26" fill="#8e99a4">React Native development partner for Claude Code, Codex, and Cursor</text>
   <text x="80" y="540" font-family="Menlo, monospace" font-size="22" fill="#4ade80">✓ Verified on iPhone 16 Pro · action saved</text>
 </svg>`;
 

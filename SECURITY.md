@@ -1,8 +1,8 @@
 # Lykhoyda/rn-dev-agent security
 
-**rn-dev-agent** is the Claude Code and Codex plugin (`rn-dev-agent-plugin` / `rn-dev-agent-core`) for local React Native / Expo development. It is not a hosted SaaS and not a generic Node library.
+**rn-dev-agent** is the Claude Code, Codex, and Cursor plugin (`rn-dev-agent-plugin` / `rn-dev-agent-core`) for local React Native / Expo development. It is not a hosted SaaS and not a generic Node library.
 
-Install it from the Claude Code or Codex marketplace. It runs on the operator's machine: the MCP supervisor, managed Metro, and packaged iOS/Android runners drive a local simulator, emulator, or a bound physical device.
+Install it from the Claude Code, Codex, or Cursor marketplace. It runs on the operator's machine: the MCP supervisor, managed Metro, and packaged iOS/Android runners drive a local simulator, emulator, or a bound physical device.
 
 ## Report scope
 

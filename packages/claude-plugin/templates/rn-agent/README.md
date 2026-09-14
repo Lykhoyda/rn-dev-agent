@@ -2,7 +2,7 @@
 
 This directory is the **plugin's home in your project**. Files here are
 managed by the [`rn-dev-agent`](https://github.com/Lykhoyda/rn-dev-agent)
-plugin for Claude Code and Codex. One folder, one doctrine — the plugin's
+plugin for Claude Code, Codex, and Cursor. One folder, one doctrine — the plugin's
 entire footprint is `.rn-agent/` and it does not read or write anywhere else in
 your project.
 
