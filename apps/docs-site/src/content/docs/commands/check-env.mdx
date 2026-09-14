@@ -22,6 +22,7 @@ from an ambient port or the first available device.
 |-----------|---------------|--------|
 | Source declaration | Whether a non-Git app root declares its source identity before setup or build | `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS` in the supervisor environment |
 | Session | Ready state, worktree, app, platform, device, Metro, and migration readiness | `rn_session(action="status")` |
+| Product | Running core version, plus plugin manifest version when it differs | `rn_session` / `cdp_status` → `product` |
 | Metro | Allocated and bound port for this session | `rn_session`, then passive `cdp_status` |
 | CDP | Whether the exact authority-bound Hermes target is connected | `rn_session`, then passive `cdp_status` |
 | Device inventory | Available devices for diagnosis only | `device_list` |

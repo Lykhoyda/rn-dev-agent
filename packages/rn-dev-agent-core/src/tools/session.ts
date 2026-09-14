@@ -40,6 +40,7 @@ import {
 } from '../session/startup-cleanup.js';
 import { inspectInstallIdentity } from '../session/install-identity-inspection.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
+import { withRunningProduct } from '../session/product-version.js';
 import { probeProcessBirth, type ProcessBirthProbe } from '../session/process-birth.js';
 import {
   inspectManagedMetroCleanupEvidence,
@@ -894,15 +895,17 @@ export function createSessionHandler(
               projectedAuthority.bindings.install as Record<string, unknown> | null | undefined,
             )
           : null;
-        return okResult({
-          authoritative: false,
-          authority: projectPublicAuthorityStatus(projectedAuthority, {
-            includeSessionId: true,
-            now: dependencies.now,
-            recoveryRequirement: runtime.inspectRecoveryRequirement(),
-            installIdentity,
+        return okResult(
+          withRunningProduct({
+            authoritative: false,
+            authority: projectPublicAuthorityStatus(projectedAuthority, {
+              includeSessionId: true,
+              now: dependencies.now,
+              recoveryRequirement: runtime.inspectRecoveryRequirement(),
+              installIdentity,
+            }),
           }),
-        });
+        );
       } catch (error) {
         return authorityFailure(error);
       }

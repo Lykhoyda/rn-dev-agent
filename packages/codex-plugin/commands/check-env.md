@@ -48,6 +48,7 @@ Check each subsystem and report status as a table:
 |-----------|--------------|--------|
 | Source declaration | Git app roots declare nothing. Before the supervisor starts for a non-Git app root, check `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS` against the [session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves) | `git rev-parse --show-toplevel`, then the two variables in the supervisor environment |
 | Session | Ready state, worktree, app, platform, exact device, Metro binding, and migration readiness | `rn_session(action="status")` |
+| Product | Running core version, plus plugin manifest version when it differs | `rn_session` / `cdp_status` → `product` |
 | Metro | Allocated and bound port for this session | `rn_session`, then `cdp_status` → `metro` |
 | CDP | Exact authority-bound target connected? | `rn_session`, then `cdp_status` → `cdp` |
 | Device inventory | Intended UUID/serial still present? | `device_list`, compared with the session binding |
