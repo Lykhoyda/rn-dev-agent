@@ -2,20 +2,15 @@
 
 ## Supported Versions
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+Security updates ship only on the latest published 1.0.x GitHub release.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+| Latest 1.0.x | :white_check_mark: |
+| Earlier 1.0.x and 0.x | :x:                |
 
 ## Reporting a Vulnerability
 
-Use this section to tell people how to report a vulnerability.
+GitHub private vulnerability reporting is enabled. Submit reports with [private vulnerability reporting](https://github.com/Lykhoyda/rn-dev-agent/security/advisories/new). Do not open a public issue.
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+Accepted reports are fixed in a later 1.0.x release. Declined reports are closed on the advisory.
