@@ -2,11 +2,11 @@
 
 ## Supported Versions
 
-Security updates ship only on the latest published 1.0.x GitHub release.
+Security updates ship only on the latest 1.0.x version on `main`.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| Latest 1.0.x | :white_check_mark: |
+| Latest 1.0.x on `main` | :white_check_mark: |
 | Earlier 1.0.x and 0.x | :x:                |
 
 ## Reporting a Vulnerability
