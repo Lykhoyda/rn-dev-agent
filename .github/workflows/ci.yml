@@ -110,6 +110,19 @@ jobs:
       - name: Agent package split guard unit test
         run: bash scripts/test/check-agent-package-sync.test.sh
 
+      # Postpublication readiness of the release trust root: a checkout that
+      # advertises a plugin version must already have that version's exact
+      # runner bytes public (release.yml publishes them before the Version
+      # Packages PR may merge; this step is what its merge job waits for).
+      # Offline unless the version or root manifest differs from the base.
+      - name: Published runner assets match the trust root
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.base_ref }}
+          EVENT_BEFORE: ${{ github.event.before }}
+        run: bash scripts/check-public-runner-assets.sh
+
       - name: Documentation ownership gate
         run: node scripts/check-document-ownership.ts
 

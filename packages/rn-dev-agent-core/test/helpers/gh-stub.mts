@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-// A gh(1) test double for workflow-step simulations. It keeps release assets and
-// pull requests in a JSON state file, records every invocation, and answers
-// --json/--jq queries by running the REAL jq over the projected records, so a
-// workflow's own filter is exercised rather than re-implemented here.
+// A gh(1) test double for workflow-step simulations. It keeps releases (with
+// draft/target/tag state), pull requests and check runs in a JSON state file,
+// records every invocation, and answers --json/--jq queries by running the REAL
+// jq over the projected records, so a workflow's own filter is exercised rather
+// than re-implemented here.
 //
 // Env:
 //   GH_STUB_STATE            directory holding state.json, calls.jsonl, assets/
 //   GH_STUB_FAIL             comma-separated "<group> <sub>" pairs to fail
-//   GH_STUB_LIST_HEAD_BLIND  `gh pr list --head` answers empty (replica lag)
+//   GH_STUB_GIT_DIR          fixture repository the stub resolves refs against
 
 import { spawnSync } from 'node:child_process';
 import {
@@ -16,6 +17,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -28,7 +30,29 @@ const assetsDir = join(stateDir, 'assets');
 const argv = process.argv.slice(2);
 appendFileSync(join(stateDir, 'calls.jsonl'), JSON.stringify(argv) + '\n');
 
-const positional = argv.filter((a) => !a.startsWith('-'));
+// Operands only: a flag that takes a value consumes it, so `--match-head-commit
+// <sha> <number>` still leaves the PR number as the operand.
+const BOOLEAN_FLAGS = new Set([
+  '--draft',
+  '--yes',
+  '--squash',
+  '--merge',
+  '--rebase',
+  '--auto',
+  '--disable-auto',
+  '--clobber',
+  '--paginate',
+  '--admin',
+  '--latest',
+  '--prerelease',
+  '--verify-tag',
+]);
+const positional = [];
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i];
+  if (!a.startsWith('-')) positional.push(a);
+  else if (!a.includes('=') && !BOOLEAN_FLAGS.has(a)) i++;
+}
 const command = positional.slice(0, 2).join(' ');
 const injected = (process.env.GH_STUB_FAIL ?? '')
   .split(',')
@@ -53,7 +77,9 @@ function writeState(state) {
 
 function flag(name) {
   const i = argv.indexOf(name);
-  return i === -1 ? undefined : argv[i + 1];
+  if (i !== -1) return argv[i + 1];
+  const inline = argv.find((a) => a.startsWith(`${name}=`));
+  return inline === undefined ? undefined : inline.slice(name.length + 1);
 }
 
 function flags(name) {
@@ -61,7 +87,7 @@ function flags(name) {
 }
 
 function has(name) {
-  return argv.includes(name);
+  return argv.includes(name) || argv.some((a) => a.startsWith(`${name}=`));
 }
 
 // The workflow's own --jq filter is applied by real jq; the stub only decides
@@ -79,72 +105,104 @@ function emit(value) {
   process.stdout.write(jq.stdout);
 }
 
-function project(records, fieldSpec) {
+function project(record, fieldSpec) {
   const fields = (fieldSpec ?? '').split(',').filter(Boolean);
-  return records.map((r) => Object.fromEntries(fields.map((f) => [f, r[f]])));
+  return Object.fromEntries(fields.map((f) => [f, record[f]]));
 }
 
 function assetPath(tag, name) {
   return join(assetsDir, tag.replace(/[^\w.-]/g, '_'), name);
 }
 
-const state = readState();
-reconcileDeletedBranches();
-const [group, sub] = argv;
-
-// GitHub closes a pull request the moment its head branch is deleted, and
-// re-pushing the same branch name does not reopen it. The stub never sees the
-// `git push --delete`, so every invocation reconciles same-repository PRs whose
-// branch it has previously observed alive — which is what makes the discard path
-// take `gh pr create` here exactly as it does in production. A PR whose branch
-// the fixture never created is left alone, so a sweep over seeded PRs still sees
-// them.
-function reconcileDeletedBranches() {
-  const gitDir = process.env.GH_STUB_GIT_DIR;
-  if (!gitDir) return;
-  let changed = false;
-  for (const pr of state.prs) {
-    if (pr.state !== 'OPEN' || (pr.headRepo ?? null) !== null) continue;
-    const alive =
-      spawnSync(
-        'git',
-        ['--git-dir', gitDir, 'show-ref', '--verify', '--quiet', `refs/heads/${pr.headRefName}`],
-        { encoding: 'utf8' },
-      ).status === 0;
-    if (alive) {
-      if (!pr.headSeenAlive) {
-        pr.headSeenAlive = true;
-        changed = true;
-      }
-    } else if (pr.headSeenAlive) {
-      pr.state = 'CLOSED';
-      pr.closedByBranchDelete = true;
-      changed = true;
-    }
-  }
-  if (changed) writeState(state);
+function gitDir() {
+  return process.env.GH_STUB_GIT_DIR;
 }
+
+function git(...args) {
+  const result = spawnSync('git', ['--git-dir', gitDir(), ...args], { encoding: 'utf8' });
+  if (result.status !== 0) die(`gh stub: git ${args.join(' ')} failed: ${result.stderr}`);
+  return result.stdout.trim();
+}
+
+function notFound(message) {
+  process.stdout.write(JSON.stringify({ message: 'Not Found', status: '404' }));
+  die(`gh: ${message} (HTTP 404)`);
+}
+
+const state = readState();
+state.tags ??= {};
+state.checks ??= {};
+const [group, sub] = argv;
 
 function releaseAssetRecords(release) {
   return Object.keys(release.assets).map((name) => ({ name }));
 }
 
+function prRecord(pr) {
+  const headRefOid =
+    pr.headRefOid ??
+    (gitDir() && pr.headRepo == null ? git('rev-parse', `refs/heads/${pr.headRefName}`) : null);
+  return {
+    number: pr.number,
+    state: pr.state,
+    headRefName: pr.headRefName,
+    baseRefName: pr.baseRefName,
+    headRefOid,
+    autoMergeRequest: pr.autoMerge ? { mergeMethod: pr.autoMerge.toUpperCase() } : null,
+    mergeCommit: pr.mergeCommit ? { oid: pr.mergeCommit } : null,
+  };
+}
+
+function findPr(ref) {
+  return state.prs.find((p) => String(p.number) === String(ref));
+}
+
 if (group === 'release' && sub === 'view') {
   const tag = positional[2];
   const release = state.releases[tag];
-  // gh(1)'s own wording for an absent release, so a caller cannot tell the
-  // stub's 404 apart from the real one by its message.
+  // gh(1)'s own wording for an absent release; drafts ARE resolved by gh.
   if (!release) die('release not found');
-  if (has('--json')) emit({ assets: releaseAssetRecords(release) });
-  else process.stdout.write(`${tag}\n`);
+  if (has('--json')) {
+    emit(
+      project(
+        {
+          isDraft: release.draft === true,
+          targetCommitish: release.target ?? 'main',
+          tagName: tag,
+          assets: releaseAssetRecords(release),
+        },
+        flag('--json'),
+      ),
+    );
+  } else process.stdout.write(`${tag}\n`);
 } else if (group === 'release' && sub === 'create') {
   const tag = positional[2];
   if (state.releases[tag]) die(`a release with tag ${tag} already exists`);
-  state.releases[tag] = { assets: {} };
+  const draft = has('--draft');
+  const target = flag('--target') ?? 'main';
+  state.releases[tag] = { assets: {}, draft, target };
+  if (!draft && !state.tags[tag]) state.tags[tag] = target;
   writeState(state);
   process.stdout.write(
     `https://github.com/${process.env.GH_REPO ?? 'owner/repo'}/releases/${tag}\n`,
   );
+} else if (group === 'release' && sub === 'edit') {
+  const tag = positional[2];
+  const release = state.releases[tag];
+  if (!release) die('release not found');
+  if (flag('--draft') === 'false') {
+    release.draft = false;
+    // Publishing creates the tag at target_commitish unless it already exists.
+    if (!state.tags[tag]) state.tags[tag] = release.target ?? 'main';
+  }
+  writeState(state);
+} else if (group === 'release' && sub === 'delete') {
+  const tag = positional[2];
+  if (!state.releases[tag]) die('release not found');
+  if (!has('--yes')) die('gh stub: refusing to delete without --yes');
+  delete state.releases[tag];
+  rmSync(join(assetsDir, tag.replace(/[^\w.-]/g, '_')), { recursive: true, force: true });
+  writeState(state);
 } else if (group === 'release' && sub === 'download') {
   const tag = positional[2];
   const release = state.releases[tag];
@@ -153,9 +211,10 @@ if (group === 'release' && sub === 'view') {
   const wanted = patterns.filter((p) => release.assets[p]);
   if (wanted.length === 0) die(`no assets match the given patterns: ${patterns.join(', ')}`);
   const out = flag('--output');
+  const dir = flag('--dir');
   if (out && wanted.length > 1) die('--output can only be used with a single asset');
   for (const name of wanted) {
-    const target = out ?? name;
+    const target = out ?? (dir ? join(dir, name) : name);
     if (existsSync(target) && !has('--clobber') && !out) die(`${target} already exists`);
     copyFileSync(assetPath(tag, name), target);
   }
@@ -181,64 +240,34 @@ if (group === 'release' && sub === 'view') {
     process.env.GH_REPO ?? 'owner/repo',
   );
   const [path, query] = endpoint.split('?');
-  if (/^repos\/[^/]+\/[^/]+\/pulls$/.test(path)) {
-    // Paged the way the REST API pages: without --paginate a caller sees at
-    // most one page.
-    const params = new URLSearchParams(query ?? '');
-    const wantState = (params.get('state') ?? 'open').toUpperCase();
-    const perPage = Number(params.get('per_page') ?? 30);
-    const matching = state.prs.filter((pr) => wantState === 'ALL' || pr.state === wantState);
-    const pages = has('--paginate') ? [matching] : [matching.slice(0, perPage)];
-    for (const page of pages) {
-      emit(
-        page.map((pr) => ({
-          number: pr.number,
-          head: {
-            ref: pr.headRefName,
-            repo: { full_name: pr.headRepo ?? process.env.GH_REPO ?? 'owner/repo' },
-          },
-        })),
-      );
-    }
-  } else if (/^repos\/[^/]+\/[^/]+\/releases\/tags\/.+$/.test(path)) {
-    // An absent release answers 404 the way the REST API does — the error body
-    // goes to stdout, the CLI message to stderr, and gh exits non-zero — so a
-    // caller can read `.status` instead of parsing a CLI message.
+  if (/^repos\/[^/]+\/[^/]+\/releases\/tags\/.+$/.test(path)) {
+    // A by-tag lookup answers 404 the way the REST API does — also for a
+    // draft, which has no tag yet — with the error body on stdout so a caller
+    // reads `.status` instead of parsing a CLI message.
     const tag = path.slice(path.lastIndexOf('/') + 1);
     const release = state.releases[tag];
-    if (!release) {
-      process.stdout.write(
-        JSON.stringify({
-          message: 'Not Found',
-          documentation_url:
-            'https://docs.github.com/rest/releases/releases#get-a-release-by-tag-name',
-          status: '404',
-        }),
-      );
-      die('gh: Not Found (HTTP 404)');
-    }
-    emit({ tag_name: tag, assets: releaseAssetRecords(release) });
-  } else if (/^repos\/[^/]+\/[^/]+\/compare\/.+\.\.\..+$/.test(path)) {
-    // Answered from the fixture's real repository, so ahead_by/behind_by/files
-    // carry the same merge-base semantics the compare endpoint does.
-    const gitDir = process.env.GH_STUB_GIT_DIR;
-    if (!gitDir) die('gh stub: GH_STUB_GIT_DIR is required to answer a compare');
-    const [base, head] = path.slice(path.indexOf('/compare/') + '/compare/'.length).split('...');
-    const git = (...args) => {
-      const result = spawnSync('git', ['--git-dir', gitDir, ...args], { encoding: 'utf8' });
-      if (result.status !== 0) die(`gh stub: git ${args.join(' ')} failed: ${result.stderr}`);
-      return result.stdout.trim();
-    };
-    const mergeBase = git('merge-base', base, head);
+    if (!release || release.draft) notFound('Not Found');
     emit({
-      merge_base_commit: { sha: mergeBase },
-      ahead_by: Number(git('rev-list', '--count', `${mergeBase}..${head}`)),
-      behind_by: Number(git('rev-list', '--count', `${head}..${base}`)),
-      files: git('diff', '--name-only', mergeBase, head)
-        .split('\n')
-        .filter(Boolean)
-        .map((filename) => ({ filename })),
+      tag_name: tag,
+      draft: false,
+      target_commitish: release.target ?? 'main',
+      assets: releaseAssetRecords(release),
     });
+  } else if (/^repos\/[^/]+\/[^/]+\/git\/ref\/tags\/.+$/.test(path)) {
+    const tag = path.slice(path.lastIndexOf('/') + 1);
+    if (!state.tags[tag]) notFound('Not Found');
+    emit({ ref: `refs/tags/${tag}`, object: { sha: state.tags[tag], type: 'commit' } });
+  } else if (/^repos\/[^/]+\/[^/]+\/commits\/[^/]+\/check-runs$/.test(path)) {
+    const sha = path.split('/').at(-2);
+    const params = new URLSearchParams(query ?? '');
+    const name = params.get('check_name');
+    let runs = (state.checks[sha] ?? []).filter((run) => !name || run.name === name);
+    // filter=latest (the API default) keeps only the newest run per name;
+    // seeded arrays are in creation order.
+    if ((params.get('filter') ?? 'latest') === 'latest') {
+      runs = [...new Map(runs.map((run) => [run.name, run])).values()];
+    }
+    emit({ total_count: runs.length, check_runs: runs });
   } else {
     die(`gh stub: unsupported api endpoint: ${endpoint}`);
   }
@@ -246,69 +275,53 @@ if (group === 'release' && sub === 'view') {
   const head = flag('--head');
   const base = flag('--base');
   const wantState = (flag('--state') ?? 'open').toUpperCase();
-  const blind = head && process.env.GH_STUB_LIST_HEAD_BLIND === '1';
-  const matches = blind
-    ? []
-    : state.prs.filter(
-        (pr) =>
-          (!head || pr.headRefName === head) &&
-          (!base || pr.baseRefName === base) &&
-          (wantState === 'ALL' || pr.state === wantState),
-      );
-  emit(project(matches.slice(0, Number(flag('--limit') ?? 30)), flag('--json')));
-} else if (group === 'pr' && sub === 'create') {
-  const head = flag('--head');
-  const base = flag('--base');
-  const existing = state.prs.find((pr) => pr.headRefName === head && pr.state === 'OPEN');
-  if (existing) die(`a pull request for branch "${head}" already exists: #${existing.number}`);
-  // GitHub refuses a head that is not ahead of its base, which a branch left
-  // behind by a PR closed without merging always is.
-  const prGitDir = process.env.GH_STUB_GIT_DIR;
-  if (prGitDir && base) {
-    const ahead = spawnSync(
-      'git',
-      ['--git-dir', prGitDir, 'rev-list', '--count', `${base}..${head}`],
-      { encoding: 'utf8' },
-    );
-    if (ahead.status === 0 && Number(ahead.stdout.trim()) === 0) {
-      die(`GraphQL: No commits between ${base} and ${head} (createPullRequest)`);
-    }
-  }
-  const number = state.nextPr++;
-  state.prs.push({
-    number,
-    headRefName: head,
-    baseRefName: flag('--base'),
-    title: flag('--title'),
-    body: flag('--body'),
-    state: 'OPEN',
-    autoMerge: null,
-    closeComment: null,
-    headSeenAlive: true,
-    closedByBranchDelete: false,
-  });
-  writeState(state);
-  process.stdout.write(
-    `https://github.com/${process.env.GH_REPO ?? 'owner/repo'}/pull/${number}\n`,
+  const matches = state.prs.filter(
+    (pr) =>
+      (!head || pr.headRefName === head) &&
+      (!base || pr.baseRefName === base) &&
+      (wantState === 'ALL' || pr.state === wantState),
   );
-} else if (group === 'pr' && sub === 'close') {
-  const number = Number(positional[2]);
-  const pr = state.prs.find((p) => p.number === number);
-  if (!pr || pr.state !== 'OPEN') die(`no open pull request found for "${positional[2]}"`);
-  pr.state = 'CLOSED';
-  pr.closeComment = flag('--comment') ?? null;
-  writeState(state);
+  emit(
+    matches
+      .slice(0, Number(flag('--limit') ?? 30))
+      .map((pr) => project(prRecord(pr), flag('--json'))),
+  );
+} else if (group === 'pr' && sub === 'view') {
+  const pr = findPr(positional[2]);
+  if (!pr) die(`no pull requests found for "${positional[2]}"`);
+  emit(project(prRecord(pr), flag('--json')));
 } else if (group === 'pr' && sub === 'merge') {
-  const number = Number(positional[2]);
-  const pr = state.prs.find((p) => p.number === number);
+  const pr = findPr(positional[2]);
   if (!pr || pr.state !== 'OPEN') die(`no open pull request found for "${positional[2] ?? ''}"`);
   if (has('--admin')) die('gh stub: --admin is not available to this token');
-  pr.autoMerge = has('--auto') ? (has('--squash') ? 'squash' : 'merge') : null;
-  writeState(state);
-  if (!has('--auto')) die('gh stub: the base branch requires all checks to pass');
-  process.stdout.write(
-    `✓ Pull request #${number} will be automatically merged when all requirements are met\n`,
-  );
+  if (has('--disable-auto')) {
+    if (!pr.autoMerge) die('gh stub: auto-merge is not enabled for this pull request');
+    pr.autoMerge = null;
+    writeState(state);
+    process.stdout.write(`✓ Auto-merge disabled for pull request #${pr.number}\n`);
+  } else if (has('--auto')) {
+    pr.autoMerge = has('--squash') ? 'squash' : 'merge';
+    writeState(state);
+    process.stdout.write(
+      `✓ Pull request #${pr.number} will be automatically merged when all requirements are met\n`,
+    );
+  } else {
+    const expected = flag('--match-head-commit');
+    const head = prRecord(pr).headRefOid;
+    if (expected && expected !== head) {
+      die(`gh stub: head commit ${head} does not match the expected ${expected}`);
+    }
+    // The base branch requires "Build & Test": GitHub refuses the merge until
+    // that check has succeeded on the head commit.
+    const check = (state.checks[head] ?? []).filter((run) => run.name === 'Build & Test').at(-1);
+    if (!check || check.conclusion !== 'success') {
+      die('gh stub: the base branch requires all checks to pass');
+    }
+    pr.state = 'MERGED';
+    pr.mergeCommit = `merge-of-${head.slice(0, 12)}`;
+    writeState(state);
+    process.stdout.write(`✓ Squashed and merged pull request #${pr.number}\n`);
+  }
 } else {
   die(`gh stub: unsupported invocation: gh ${argv.join(' ')}`);
 }

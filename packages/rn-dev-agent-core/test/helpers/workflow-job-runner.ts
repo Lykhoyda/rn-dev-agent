@@ -240,24 +240,38 @@ export type GhPullRequest = {
   headRefName: string;
   headRepo?: string;
   baseRefName?: string;
-  title?: string;
-  body?: string;
+  headRefOid?: string;
   state: string;
   autoMerge: string | null;
-  closeComment: string | null;
-  headSeenAlive?: boolean;
-  closedByBranchDelete?: boolean;
+  mergeCommit?: string;
+};
+export type GhRelease = {
+  assets: Record<string, { uploads: number }>;
+  draft?: boolean;
+  target?: string;
+};
+export type GhCheckRun = {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  html_url: string;
+  app: { slug: string };
 };
 export type GhState = {
-  releases: Record<string, { assets: Record<string, { uploads: number }> }>;
+  releases: Record<string, GhRelease>;
+  tags: Record<string, string>;
+  checks: Record<string, GhCheckRun[]>;
   prs: GhPullRequest[];
   nextPr: number;
 };
 
 const stubSource = fileURLToPath(new URL('./gh-stub.mts', import.meta.url));
 
+export type GhSeedRelease = { assets: Record<string, string>; draft?: boolean; target?: string };
 export type GhSeed = {
-  releases?: Record<string, Record<string, string>>;
+  releases?: Record<string, GhSeedRelease>;
+  tags?: Record<string, string>;
+  checks?: Record<string, GhCheckRun[]>;
   prs?: GhPullRequest[];
   nextPr?: number;
   gitDir?: string;
@@ -272,12 +286,16 @@ export function installGhStub(root: string, seed: GhSeed = {}): GhStub {
     join(stateDir, 'assets', tag.replace(/[^\w.-]/g, '_'), name);
   const state: GhState = {
     releases: {},
+    tags: seed.tags ?? {},
+    checks: seed.checks ?? {},
     prs: seed.prs ?? [],
     nextPr: seed.nextPr ?? 1,
   };
-  for (const [tag, assets] of Object.entries(seed.releases ?? {})) {
-    state.releases[tag] = { assets: {} };
-    for (const [name, content] of Object.entries(assets)) {
+  for (const [tag, release] of Object.entries(seed.releases ?? {})) {
+    state.releases[tag] = { assets: {}, draft: release.draft ?? false, target: release.target };
+    // A published release always has its tag; a draft never does.
+    if (!release.draft) state.tags[tag] ??= release.target ?? 'main';
+    for (const [name, content] of Object.entries(release.assets)) {
       mkdirSync(join(assetPath(tag, name), '..'), { recursive: true });
       writeFileSync(assetPath(tag, name), content);
       state.releases[tag].assets[name] = { uploads: 0 };
