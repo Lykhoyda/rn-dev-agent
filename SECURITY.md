@@ -1,8 +1,10 @@
 # Security Policy
 
+This repository is **rn-dev-agent**, a Claude Code and Codex plugin for local React Native and Expo development (`rn-dev-agent-plugin` / `rn-dev-agent-core`). Operator limits, including `cdp_evaluate` and local-dev-only use, are in [README Security](README.md#security).
+
 ## Supported Versions
 
-Security updates ship only on the latest 1.0.x version on `main`.
+Security updates ship only on the latest 1.0.x plugin/core version on `main`.
 
 | Version | Supported          |
 | ------- | ------------------ |
@@ -13,4 +15,4 @@ Security updates ship only on the latest 1.0.x version on `main`.
 
 GitHub private vulnerability reporting is enabled. Submit reports with [private vulnerability reporting](https://github.com/Lykhoyda/rn-dev-agent/security/advisories/new). Do not open a public issue.
 
-Accepted reports are fixed in a later 1.0.x release. Declined reports are closed on the advisory.
+Accepted reports are fixed in a later 1.0.x version on `main`. Declined reports are closed on the advisory.
