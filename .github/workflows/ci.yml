@@ -95,7 +95,7 @@ jobs:
       - name: Core dist contract unit test
         run: bash scripts/test/check-core-dist-contract.test.sh
 
-      # Release notes for runner-artifacts.yml render from the plugin CHANGELOG.
+      # Release notes for release.yml's publish job render from the plugin CHANGELOG.
       - name: Release-notes renderer unit test
         run: bash scripts/test/release-notes-from-changelog.test.sh
 

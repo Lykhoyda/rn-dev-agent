@@ -1989,3 +1989,134 @@ test('the public-asset assertion feeds the required Build & Test aggregate throu
   assert.equal((ci.jobs.test as unknown as { name: string }).name, 'Build & Test');
   assert.ok(existsSync(join(repoRoot, 'scripts', 'check-public-runner-assets.sh')));
 });
+
+// --- the whole transaction: main never advertises a version its bundled trust
+// root does not describe, and the named zips are already public when it does ---
+
+const trace = process.env.RELEASE_TRUST_ROOT_TRANSCRIPT ? console.log : () => {};
+
+function rootOf(fixture: Fixture, ref: string): { version: string; ios: string; android: string } {
+  const root = JSON.parse(
+    git(fixture.root, '--git-dir', fixture.origin, 'show', `${ref}:runner-manifest.json`),
+  );
+  return {
+    version: root.version,
+    ios: `${root.assets.ios[0].name} sha256=${root.assets.ios[0].sha256.slice(0, 12)}… ${root.assets.ios[0].bytes}B`,
+    android: `${root.assets.android[0].name} sha256=${root.assets.android[0].sha256.slice(0, 12)}… ${root.assets.android[0].bytes}B`,
+  };
+}
+
+function advertisedVersion(fixture: Fixture, ref: string): string {
+  return JSON.parse(
+    git(
+      fixture.root,
+      '--git-dir',
+      fixture.origin,
+      'show',
+      `${ref}:packages/claude-plugin/plugin.json`,
+    ),
+  ).version;
+}
+
+test('end to end: the first main commit advertising V carries V’s trust root and its zips are already public', () => {
+  const fixture = createFixture({ prs: [versionPr()] });
+  try {
+    trace(
+      `main before      ${fixture.base.slice(0, 12)} advertises ${advertisedVersion(fixture, 'refs/heads/main')}, root ${rootOf(fixture, 'refs/heads/main').version}`,
+    );
+
+    const pending = runVersionStep(fixture, PENDING_STEP);
+    assert.ok(pending.ok, pending.failed?.stderr);
+    assert.notEqual(pending.outputs.pending.resume, 'true');
+    const pinned = runVersionStep(fixture, CANDIDATE_STEP);
+    assert.ok(pinned.ok, pinned.failed?.stderr);
+    assert.equal(pinned.outputs.candidate.version, VERSION);
+
+    // P is what the pre-fix transaction merged: it advertises V while the
+    // bundled trust root still describes V-1 and no zip for V is public.
+    assert.equal(advertisedVersion(fixture, fixture.candidate), VERSION);
+    assert.equal(rootOf(fixture, fixture.candidate).version, ADVERTISED);
+    assert.equal(fixture.gh.state().releases[TAG], undefined);
+    trace(
+      `candidate P      ${fixture.candidate.slice(0, 12)} advertises ${advertisedVersion(fixture, fixture.candidate)}, root ${rootOf(fixture, fixture.candidate).version}  <- the lag`,
+    );
+
+    const finalized = runFinalize(fixture);
+    assert.ok(finalized.run.ok, finalized.run.failed?.stderr);
+    const head = finalized.run.outputs.commit.sha;
+    const atHead = { 'needs.finalize.outputs.head-sha': head, [HEAD_EXPR]: head };
+    trace(
+      `release head H   ${head.slice(0, 12)} advertises ${advertisedVersion(fixture, head)}, root ${rootOf(fixture, head).version}`,
+    );
+
+    const beforeValidate = ghCalls(fixture).length;
+    const validated = runJobSteps({
+      workflow: release,
+      jobId: 'validate',
+      cwd: checkout(fixture, head),
+      ctx: releaseCtx(fixture, { ...treeCtx(fixture, fixture.candidate), ...atHead }),
+      env: baseEnv(fixture),
+      only: [PREPARED_STEP],
+    });
+    assert.ok(validated.ok, validated.failed?.stderr);
+    assert.equal(ghCalls(fixture).length, beforeValidate, 'validation is offline');
+
+    const publishRun = runPublish(fixture, PUBLISH_PATH, { ctx: atHead });
+    assert.ok(publishRun.ok, publishRun.failed?.stderr);
+    assert.equal(publishRun.outputs.decide.action, 'publish');
+    assert.equal(fixture.gh.state().releases[TAG].draft, false);
+    assert.equal(fixture.gh.state().releases[TAG].target, head);
+    assert.equal(
+      originRef(fixture, 'refs/heads/main'),
+      fixture.base,
+      'the bytes are public while main still advertises V-1',
+    );
+    trace(
+      `published        ${TAG} -> ${head.slice(0, 12)} while main is still ${advertisedVersion(fixture, 'refs/heads/main')}`,
+    );
+
+    const ciRun = runCi(fixture, checkout(fixture, head), { 'github.base_ref': 'main' });
+    assert.ok(ciRun.ok, ciRun.failed?.stderr);
+    trace(`CI on H          ${stepStdout(ciRun, CI_STEP).trim().split('\n').pop()}`);
+
+    const state = fixture.gh.state();
+    state.checks[head] = [check('success')];
+    writeFileSync(join(fixture.root, 'gh-state', 'state.json'), JSON.stringify(state));
+    const merged = runMerge(fixture, atHead);
+    assert.ok(merged.ok, merged.failed?.stderr);
+    assert.ok(ghCalls(fixture).includes(`pr merge --squash --match-head-commit ${head} 11`));
+
+    // The squash lands exactly H's tree on main, so H is what an install made
+    // the instant the version becomes visible reads.
+    assert.equal(fixture.gh.state().prs[0].state, 'MERGED');
+    assert.equal(originRef(fixture, 'refs/heads/main'), fixture.base, 'nothing else reached main');
+    assert.equal(advertisedVersion(fixture, head), VERSION);
+    const root = rootOf(fixture, head);
+    assert.equal(root.version, VERSION);
+    for (const path of MANIFEST_PATHS) {
+      assert.equal(
+        git(fixture.root, '--git-dir', fixture.origin, 'show', `${head}:${path}`),
+        manifestFor(),
+        `${path} is the same trust root`,
+      );
+    }
+    const bundled = JSON.parse(
+      git(fixture.root, '--git-dir', fixture.origin, 'show', `${head}:runner-manifest.json`),
+    );
+    for (const asset of [bundled.assets.ios[0], bundled.assets.android[0]]) {
+      const bytes = readFileSync(fixture.gh.assetPath(TAG, asset.name));
+      assert.equal(createHash('sha256').update(bytes).digest('hex'), asset.sha256, asset.name);
+      assert.equal(bytes.length, asset.bytes, asset.name);
+    }
+    trace(
+      `merged           squash --match-head-commit ${head.slice(0, 12)} -> main advertises ${advertisedVersion(fixture, head)}, root ${root.version}`,
+    );
+    trace(`  bundled root   ${root.ios}`);
+    trace(`                 ${root.android}`);
+    trace(
+      `  public ${TAG}  both zips + runner-manifest.json, bytes verified against the bundled root`,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
