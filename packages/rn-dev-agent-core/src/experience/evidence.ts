@@ -204,7 +204,7 @@ export interface ExperienceRecord {
   lastRecoveredAt: string | null;
   unknownReasons: Record<string, string>;
   redactionVersion: number;
-  authorityRefusal?: AuthorityRefusalFacts;
+  authorityRefusal?: AuthorityRefusalFacts | null;
   systemicKey?: string;
 }
 
@@ -404,11 +404,9 @@ export class ExperienceRecorder {
       lastRecoveredAt: null,
       unknownReasons,
       redactionVersion: REDACTION_RULES_VERSION,
+      authorityRefusal,
       ...(authorityRefusal
-        ? {
-            authorityRefusal,
-            systemicKey: authorityRefusalSystemicKey(authorityRefusal, platform),
-          }
+        ? { systemicKey: authorityRefusalSystemicKey(authorityRefusal, platform) }
         : {}),
     };
     return sanitizeForEvidence(raw) as ExperienceRecord;
@@ -439,6 +437,9 @@ export class ExperienceRecorder {
           existing.platform,
         );
         existing.unknownReasons.recovery = 'recovery not verified';
+      } else {
+        existing.authorityRefusal = null;
+        delete existing.systemicKey;
       }
       existing.evidencePointers = boundedPointers(
         existing.evidencePointers,
@@ -738,7 +739,12 @@ function runnerFailureEnvelope(event: ToolObserverInput): { code: string } | nul
   if (code && RUNNER_FAILURE_CODES.has(code)) return { code };
   const message = event.error ?? '';
   const matched = [...RUNNER_FAILURE_CODES].find((candidate) => message.includes(candidate));
-  return matched ? { code: matched } : null;
+  if (matched) return { code: matched };
+  const meta = envelopeObject(envelope?.meta);
+  if (!envelope || envelope.ok !== false || !meta) return null;
+  if (event.tool === 'cdp_run_action' && meta.failureKind === 'TIMEOUT') return { code: 'TIMEOUT' };
+  if (event.tool === 'maestro_run' && meta.timedOut === true) return { code: 'TIMEOUT' };
+  return null;
 }
 
 function parseResultEnvelope(value: unknown): Record<string, unknown> | null {

@@ -9,6 +9,7 @@ import {
   ExperienceRecorder,
   EXPERIENCE_FAMILY_IDS,
   EXPERIENCE_STORE_NAME,
+  MAX_AUTHORITY_ENVELOPE_BYTES,
   MAX_SYMPTOM_LENGTH,
   REDACTION_RULES_VERSION,
   classifyExperience,
@@ -526,8 +527,52 @@ test('unknown structured codes retain text classification without systemic membe
   });
   const record = recorder.read()[0];
   assert.equal(record.classification, 'FF_REDBOX');
-  assert.equal(record.authorityRefusal, undefined);
+  assert.equal(record.authorityRefusal, null);
+  assert.equal(Object.hasOwn(record, 'authorityRefusal'), true);
   assert.equal(record.systemicKey, undefined);
+  assert.deepEqual(buildExperienceTrendReport([record], NOW, NOW).systemicRefusals, []);
+});
+
+test('oversized envelopes persist an explicit negative verdict and stay excluded', () => {
+  const recorder = synchronousRecorder(tempDirectory());
+  const envelope = {
+    ok: false,
+    code: 'METRO_ORIGIN_MISMATCH',
+    error: 'METRO_ORIGIN_MISMATCH: oversized',
+    padding: 'x'.repeat(MAX_AUTHORITY_ENVELOPE_BYTES),
+  };
+  recorder.observe({
+    ...refusal(),
+    result: { content: [{ type: 'text', text: JSON.stringify(envelope) }] },
+  });
+  const record = recorder.read()[0];
+  assert.equal(record.authorityRefusal, null);
+  assert.equal(Object.hasOwn(record, 'authorityRefusal'), true);
+  assert.equal(record.systemicKey, undefined);
+  assert.deepEqual(buildExperienceTrendReport([record], NOW, NOW).systemicRefusals, []);
+});
+
+test('repeat negatives keep explicit null on a matching historical keyless row', () => {
+  const directory = tempDirectory();
+  const recorder = synchronousRecorder(directory);
+  recorder.observe({
+    ...refusal(),
+    result: { code: 'FUTURE_CODE', error: 'METRO_ORIGIN_MISMATCH: redbox' },
+  });
+  const legacy = recorder.read()[0];
+  delete legacy.authorityRefusal;
+  delete legacy.systemicKey;
+  writeFileSync(join(directory, EXPERIENCE_STORE_NAME), JSON.stringify(legacy) + '\n');
+  recorder.observe({
+    ...refusal(),
+    result: { code: 'FUTURE_CODE', error: 'METRO_ORIGIN_MISMATCH: redbox' },
+  });
+  const record = recorder.read()[0];
+  assert.equal(record.count, 2);
+  assert.equal(record.authorityRefusal, null);
+  assert.equal(Object.hasOwn(record, 'authorityRefusal'), true);
+  assert.equal(record.systemicKey, undefined);
+  assert.deepEqual(buildExperienceTrendReport([record], NOW, NOW).systemicRefusals, []);
 });
 
 test('authority observations never become recovery candidates in any adjacency sequence', () => {
@@ -626,7 +671,7 @@ test('missing historical refusal facts do not backfill metadata or erase recover
   assert.equal(record.unknownReasons.recovery, 'recovery not verified');
 });
 
-test('separate tools retain known axis buckets and share keys only for common facts', () => {
+test('separate tools share one systemic key for the same code and platform across axes', () => {
   const recorder = synchronousRecorder(tempDirectory());
   recorder.observe(refusal('M', 'tool_a'));
   recorder.observe(refusal('S', 'tool_b'));
@@ -637,7 +682,7 @@ test('separate tools retain known axis buckets and share keys only for common fa
   const c = records.find((record) => record.tool === 'tool_c')!;
   assert.notEqual(a.signature, c.signature);
   assert.equal(a.systemicKey, c.systemicKey);
-  assert.notEqual(a.systemicKey, b.systemicKey);
+  assert.equal(a.systemicKey, b.systemicKey);
 });
 
 test('refusal metadata is discarded and platform sanitized before systemic hashing', () => {

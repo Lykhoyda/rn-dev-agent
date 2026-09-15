@@ -149,7 +149,9 @@ export interface FlowParkOpts {
  */
 export async function runFlowParked<T>(run: () => Promise<T>, opts: FlowParkOpts = {}): Promise<T> {
   const stale = opts.markCdpStale ?? defaultMarkCdpStale;
+  const platform = opts.platform === 'android' ? 'android' : 'ios';
   try {
+    recordRunnerDiagnostic('flow-park', { phase: 'begin', platform });
     if (opts.platform === 'android') {
       const release = opts.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
       const outcome = opts.signal
@@ -163,9 +165,11 @@ export async function runFlowParked<T>(run: () => Promise<T>, opts: FlowParkOpts
         await (opts.stopFastRunner ?? defaultStopFastRunner)(opts.deviceId);
       }
     }
+    recordRunnerDiagnostic('flow-park', { phase: 'released', platform });
     if (opts.completeRunnerPark) {
       if (opts.signal) await opts.completeRunnerPark(opts.signal);
       else await opts.completeRunnerPark();
+      recordRunnerDiagnostic('flow-park', { phase: 'committed', platform });
     }
     return await run();
   } finally {
@@ -424,11 +428,21 @@ export async function executeMaestroAuthorityStages<T>(
   let pendingOriginError: unknown;
   let originClaimed = options.firstOriginClaimed === true;
   const relaunches = options.relaunches ?? createFlowRelaunchTracker(false);
-  for (const stage of plan.stages) {
+  for (const [stageIndex, stage] of plan.stages.entries()) {
     if (stage.requiresOrigin && pendingOriginError === undefined) {
       if (!originClaimed) {
         try {
+          recordRunnerDiagnostic('flow-stage', {
+            phase: 'origin-begin',
+            role: 'claim',
+            stage: stageIndex,
+          });
           await claimOrigin();
+          recordRunnerDiagnostic('flow-stage', {
+            phase: 'origin-complete',
+            role: 'claim',
+            stage: stageIndex,
+          });
         } catch (error) {
           throw relaunches.attribute(error);
         }
@@ -437,12 +451,24 @@ export async function executeMaestroAuthorityStages<T>(
       originClaimed = false;
     }
     try {
+      recordRunnerDiagnostic('flow-stage', { phase: 'execute-begin', stage: stageIndex });
       results.push(await executeStage(stage.commands));
+      recordRunnerDiagnostic('flow-stage', { phase: 'execute-complete', stage: stageIndex });
       const launch = stage.commands.length === 1 ? flowRelaunchFacts(stage.commands[0]) : null;
       if (launch) {
         relaunches.launched(launch);
         try {
+          recordRunnerDiagnostic('flow-stage', {
+            phase: 'relaunch-begin',
+            stage: stageIndex,
+            stopApp: launch.stopApp,
+          });
           await relaunchManagedApp(launch.stopApp);
+          recordRunnerDiagnostic('flow-stage', {
+            phase: 'relaunch-complete',
+            stage: stageIndex,
+            stopApp: launch.stopApp,
+          });
           pendingOriginError = undefined;
         } catch (error) {
           if (!reproveManagedOrigin || error instanceof SessionAuthorityError) {
@@ -452,21 +478,29 @@ export async function executeMaestroAuthorityStages<T>(
         }
       }
     } catch (error) {
+      recordRunnerDiagnostic('flow-stage', { phase: 'cleanup-begin', stage: stageIndex });
       await completeOrigin(false, options.signal);
+      recordRunnerDiagnostic('flow-stage', { phase: 'cleanup-complete', stage: stageIndex });
       throw new MaestroStageExecutionError(results, error);
     }
   }
   if (pendingOriginError !== undefined) {
     try {
+      recordRunnerDiagnostic('flow-stage', { phase: 'origin-begin', role: 'reprove' });
       await reproveManagedOrigin!({ signal: options.signal });
+      recordRunnerDiagnostic('flow-stage', { phase: 'origin-complete', role: 'reprove' });
     } catch {
+      recordRunnerDiagnostic('flow-stage', { phase: 'cleanup-begin' });
       await completeOrigin(false, options.signal);
+      recordRunnerDiagnostic('flow-stage', { phase: 'cleanup-complete' });
       throw new MaestroStageExecutionError(results, pendingOriginError);
     }
     relaunches.claimed();
   }
   try {
+    recordRunnerDiagnostic('flow-stage', { phase: 'origin-begin', role: 'complete' });
     await completeOrigin(plan.targetExpected, options.signal);
+    recordRunnerDiagnostic('flow-stage', { phase: 'origin-complete', role: 'complete' });
   } catch (error) {
     throw relaunches.attribute(error);
   }

@@ -192,15 +192,80 @@ test('all recognized codes remain separate even under a shared stored classifica
   }
 });
 
-test('each observed axis and unknown axis retain their own systemic bucket', () => {
+test('conflicting axes collapse to one group whose displayed axis stays unknown', () => {
   const axes = ['C', 'S', 'I', 'M', 'A', 'B', 'D', 'R', 'P', null] as const;
   const records = axes.map((axis) =>
     recordFixture({ signature: String(axis), authorityRefusal: { ...FACTS, axis } }),
   );
   const rows = buildExperienceTrendReport(records, SINCE, NOW).systemicRefusals;
-  assert.equal(rows.length, axes.length);
-  assert.equal(new Set(rows.map((row) => row.systemicKey)).size, axes.length);
-  for (const axis of axes) assert.equal(rows.find((row) => row.axis === axis)?.count, 1);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].count, axes.length);
+  assert.equal(rows[0].axis, null);
+  assert.deepEqual(
+    buildExperienceTrendReport([...records].reverse(), SINCE, NOW).systemicRefusals,
+    rows,
+  );
+});
+
+test('a shared axis stays known when every member of the group agrees', () => {
+  const records = ['a', 'b'].map((signature) => recordFixture({ signature }));
+  const rows = buildExperienceTrendReport(records, SINCE, NOW).systemicRefusals;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].axis, 'M');
+  assert.equal(rows[0].count, 2);
+});
+
+test('mixed emission shapes for one code and platform form a single group', () => {
+  const code = 'BUNDLE_HANDSHAKE_UNAVAILABLE' as const;
+  const facts = { code, axis: 'B' as const, cause: null };
+  const records = [
+    recordFixture({
+      signature: 'gate',
+      count: 3,
+      platform: 'android',
+      authorityRefusal: facts,
+      systemicKey: authorityRefusalSystemicKey(facts, 'android'),
+    }),
+    recordFixture({
+      signature: 'plain',
+      tool: 'plain_tool',
+      count: 2,
+      platform: 'android',
+      authorityRefusal: { ...facts, axis: null },
+      systemicKey: authorityRefusalSystemicKey({ ...facts, axis: null }, 'android'),
+    }),
+    legacyFixture({
+      signature: 'prose',
+      tool: 'legacy_tool',
+      count: 4,
+      platform: 'android',
+      symptom: `${code}: matching refusal`,
+    }),
+  ];
+  const expected = buildExperienceTrendReport(records, SINCE, NOW);
+  assert.equal(expected.systemicRefusals.length, 1);
+  assert.equal(expected.systemicRefusals[0].count, 9);
+  assert.equal(expected.systemicRefusals[0].axis, null);
+  assert.equal(expected.systemicRefusals[0].code, code);
+  assert.equal(expected.systemicRefusals[0].platform, 'android');
+  assert.deepEqual(expected.systemicRefusals[0].tools, ['legacy_tool', 'plain_tool', 'rn_session']);
+  assert.deepEqual(expected.systemicRefusals[0].provenance, ['legacy-derived', 'recorded']);
+  for (const permutation of [
+    records,
+    [...records].reverse(),
+    [records[1], records[2], records[0]],
+  ]) {
+    assert.deepEqual(buildExperienceTrendReport(permutation, SINCE, NOW), expected);
+  }
+});
+
+test('explicit null recorder verdict is not re-admitted through matching prose', () => {
+  const record = recordFixture({
+    authorityRefusal: null,
+    systemicKey: undefined,
+    symptom: `${FACTS.code}: refused`,
+  });
+  assert.equal(buildExperienceTrendReport([record], SINCE, NOW).systemicRefusals.length, 0);
 });
 
 test('known platforms, unknown platform, and the literal unknown string do not join', () => {
@@ -247,7 +312,7 @@ test('persisted axis and cause values are revalidated with an explicit unknown c
   assert.equal(
     rows[0].systemicKey,
     createHash('sha256')
-      .update(JSON.stringify(['rn-dev-agent/authority-refusal/1', FACTS.code, null, null, 'ios']))
+      .update(JSON.stringify(['rn-dev-agent/authority-refusal/2', FACTS.code, null, 'ios']))
       .digest('hex'),
   );
   assert.doesNotMatch(JSON.stringify(rows), /private remedy|managed-metro-stop-proof-missing/);
@@ -470,11 +535,12 @@ test('mixed provenance aggregates once without promoting historical recoveries o
   for (const record of records) Object.freeze(record);
   Object.freeze(records);
   const report = buildExperienceTrendReport(records, SINCE, NOW);
-  assert.equal(report.systemicRefusals.length, 3);
+  assert.equal(report.systemicRefusals.length, 2);
   const row = report.systemicRefusals[0];
-  assert.equal(row.count, 5);
+  assert.equal(row.count, 6);
+  assert.equal(row.axis, null);
   assert.deepEqual(row.tools, ['old_tool', 'rn_session']);
-  assert.deepEqual(row.memberSignatures, ['legacy', 'recorded']);
+  assert.deepEqual(row.memberSignatures, ['legacy', 'recorded', 'unknown-axis']);
   assert.deepEqual(row.provenance, ['legacy-derived', 'recorded']);
   assert.equal(row.firstSeen, records[1].firstSeen);
   assert.equal(row.recoveryEvidence, 'not-verified');
