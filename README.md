@@ -403,7 +403,10 @@ stored. Runner failures may also retain up to five sanitized diagnostics bundles
 store, each capped at 200 typed lifecycle events and 256 KB for reviewed feedback or an explicit
 `collect_logs` export. From an installed plugin package, inspect the read-only trend report with
 `node <plugin-package>/rn-dev-agent-core/dist/experience-trends.js --since <previous-report-ISO-timestamp>`
-(omit `--since` for the last 24 hours). The command never updates the evidence store or uploads data.
+(omit `--since` for the last 24 hours; it only scopes the new-pattern list, other totals cover all
+retained history). Recognized authority refusals are also grouped per code and platform across
+tools; those groups describe retained history only and never claim recovery or a currently blocked
+session. The command never updates the evidence store or uploads data.
 
 </details>
 
