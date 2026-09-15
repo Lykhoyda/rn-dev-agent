@@ -83663,7 +83663,9 @@ import { basename as basename11, join as join47, dirname as dirname24 } from "no
 import { randomUUID as randomUUID9 } from "node:crypto";
 async function runFlowParked(run, opts = {}) {
   const stale = opts.markCdpStale ?? markCdpStale;
+  const platform = opts.platform === "android" ? "android" : "ios";
   try {
+    recordRunnerDiagnostic("flow-park", { phase: "begin", platform });
     if (opts.platform === "android") {
       const release2 = opts.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
       const outcome = opts.signal ? await release2({ deviceId: opts.deviceId, signal: opts.signal }) : await release2({ deviceId: opts.deviceId });
@@ -83675,11 +83677,13 @@ async function runFlowParked(run, opts = {}) {
         await (opts.stopFastRunner ?? stopFastRunner)(opts.deviceId);
       }
     }
+    recordRunnerDiagnostic("flow-park", { phase: "released", platform });
     if (opts.completeRunnerPark) {
       if (opts.signal)
         await opts.completeRunnerPark(opts.signal);
       else
         await opts.completeRunnerPark();
+      recordRunnerDiagnostic("flow-park", { phase: "committed", platform });
     }
     return await run();
   } finally {
@@ -83798,11 +83802,21 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
   let pendingOriginError;
   let originClaimed = options.firstOriginClaimed === true;
   const relaunches = options.relaunches ?? createFlowRelaunchTracker(false);
-  for (const stage of plan.stages) {
+  for (const [stageIndex, stage] of plan.stages.entries()) {
     if (stage.requiresOrigin && pendingOriginError === void 0) {
       if (!originClaimed) {
         try {
+          recordRunnerDiagnostic("flow-stage", {
+            phase: "origin-begin",
+            role: "claim",
+            stage: stageIndex
+          });
           await claimOrigin();
+          recordRunnerDiagnostic("flow-stage", {
+            phase: "origin-complete",
+            role: "claim",
+            stage: stageIndex
+          });
         } catch (error2) {
           throw relaunches.attribute(error2);
         }
@@ -83811,12 +83825,24 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
       originClaimed = false;
     }
     try {
+      recordRunnerDiagnostic("flow-stage", { phase: "execute-begin", stage: stageIndex });
       results.push(await executeStage(stage.commands));
+      recordRunnerDiagnostic("flow-stage", { phase: "execute-complete", stage: stageIndex });
       const launch = stage.commands.length === 1 ? flowRelaunchFacts(stage.commands[0]) : null;
       if (launch) {
         relaunches.launched(launch);
         try {
+          recordRunnerDiagnostic("flow-stage", {
+            phase: "relaunch-begin",
+            stage: stageIndex,
+            stopApp: launch.stopApp
+          });
           await relaunchManagedApp(launch.stopApp);
+          recordRunnerDiagnostic("flow-stage", {
+            phase: "relaunch-complete",
+            stage: stageIndex,
+            stopApp: launch.stopApp
+          });
           pendingOriginError = void 0;
         } catch (error2) {
           if (!reproveManagedOrigin || error2 instanceof SessionAuthorityError) {
@@ -83826,21 +83852,29 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
         }
       }
     } catch (error2) {
+      recordRunnerDiagnostic("flow-stage", { phase: "cleanup-begin", stage: stageIndex });
       await completeOrigin(false, options.signal);
+      recordRunnerDiagnostic("flow-stage", { phase: "cleanup-complete", stage: stageIndex });
       throw new MaestroStageExecutionError(results, error2);
     }
   }
   if (pendingOriginError !== void 0) {
     try {
+      recordRunnerDiagnostic("flow-stage", { phase: "origin-begin", role: "reprove" });
       await reproveManagedOrigin({ signal: options.signal });
+      recordRunnerDiagnostic("flow-stage", { phase: "origin-complete", role: "reprove" });
     } catch {
+      recordRunnerDiagnostic("flow-stage", { phase: "cleanup-begin" });
       await completeOrigin(false, options.signal);
+      recordRunnerDiagnostic("flow-stage", { phase: "cleanup-complete" });
       throw new MaestroStageExecutionError(results, pendingOriginError);
     }
     relaunches.claimed();
   }
   try {
+    recordRunnerDiagnostic("flow-stage", { phase: "origin-begin", role: "complete" });
     await completeOrigin(plan.targetExpected, options.signal);
+    recordRunnerDiagnostic("flow-stage", { phase: "origin-complete", role: "complete" });
   } catch (error2) {
     throw relaunches.attribute(error2);
   }
@@ -86905,18 +86939,12 @@ function authorityRefusalFacts(code, axis, cause) {
 function mergeAuthorityRefusalFacts(existing, incoming) {
   return {
     code: incoming.code,
-    axis: existing?.code === incoming.code && existing.axis === incoming.axis ? incoming.axis : null,
-    cause: existing?.code === incoming.code && existing.cause === incoming.cause ? incoming.cause : null
+    axis: existing != null && existing.code === incoming.code && existing.axis === incoming.axis ? incoming.axis : null,
+    cause: existing != null && existing.code === incoming.code && existing.cause === incoming.cause ? incoming.cause : null
   };
 }
 function authorityRefusalSystemicKey(facts, platform) {
-  return createHash18("sha256").update(JSON.stringify([
-    "rn-dev-agent/authority-refusal/1",
-    facts.code,
-    facts.axis,
-    facts.cause,
-    platform
-  ])).digest("hex");
+  return createHash18("sha256").update(JSON.stringify(["rn-dev-agent/authority-refusal/2", facts.code, facts.cause, platform])).digest("hex");
 }
 var AUTHORITY_REFUSAL_CODES, AUTHORITY_AXES, REFUSAL_CAUSES, MAX_AUTHORITY_ENVELOPE_BYTES;
 var init_authority_refusal = __esm({
@@ -87162,7 +87190,16 @@ function runnerFailureEnvelope(event) {
     return { code };
   const message = event.error ?? "";
   const matched = [...RUNNER_FAILURE_CODES].find((candidate) => message.includes(candidate));
-  return matched ? { code: matched } : null;
+  if (matched)
+    return { code: matched };
+  const meta = envelopeObject2(envelope?.meta);
+  if (!envelope || envelope.ok !== false || !meta)
+    return null;
+  if (event.tool === "cdp_run_action" && meta.failureKind === "TIMEOUT")
+    return { code: "TIMEOUT" };
+  if (event.tool === "maestro_run" && meta.timedOut === true)
+    return { code: "TIMEOUT" };
+  return null;
 }
 function parseResultEnvelope(value) {
   if (!value || typeof value !== "object")
@@ -87597,10 +87634,8 @@ var init_evidence = __esm({
           lastRecoveredAt: null,
           unknownReasons,
           redactionVersion: REDACTION_RULES_VERSION,
-          ...authorityRefusal ? {
-            authorityRefusal,
-            systemicKey: authorityRefusalSystemicKey(authorityRefusal, platform)
-          } : {}
+          authorityRefusal,
+          ...authorityRefusal ? { systemicKey: authorityRefusalSystemicKey(authorityRefusal, platform) } : {}
         };
         return sanitizeForEvidence(raw);
       }
@@ -87623,6 +87658,9 @@ var init_evidence = __esm({
             existing.authorityRefusal = mergeAuthorityRefusalFacts(existing.authorityRefusal, incoming.authorityRefusal);
             existing.systemicKey = authorityRefusalSystemicKey(existing.authorityRefusal, existing.platform);
             existing.unknownReasons.recovery = "recovery not verified";
+          } else {
+            existing.authorityRefusal = null;
+            delete existing.systemicKey;
           }
           existing.evidencePointers = boundedPointers(existing.evidencePointers, incoming.evidencePointers);
         } else {

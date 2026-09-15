@@ -147,13 +147,14 @@ test('axes are observed, never inferred, and no code admits a cause yet', () => 
 
 test('systemic identity is a versioned tuple with explicit unknown slots', () => {
   const expected = createHash('sha256')
-    .update(JSON.stringify(['rn-dev-agent/authority-refusal/1', code, 'M', null, 'ios']))
+    .update(JSON.stringify(['rn-dev-agent/authority-refusal/2', code, null, 'ios']))
     .digest('hex');
   assert.equal(authorityRefusalSystemicKey(facts, 'ios'), expected);
+  assert.equal(authorityRefusalSystemicKey({ ...facts, axis: null }, 'ios'), expected);
+  assert.equal(authorityRefusalSystemicKey({ ...facts, axis: 'S' }, 'ios'), expected);
   for (const other of [
     authorityRefusalSystemicKey(facts, null),
     authorityRefusalSystemicKey(facts, 'android'),
-    authorityRefusalSystemicKey({ ...facts, axis: null }, 'ios'),
     authorityRefusalSystemicKey({ ...facts, code: 'SESSION_AUTHORITY_REQUIRED' }, 'ios'),
   ])
     assert.notEqual(other, expected);
@@ -165,7 +166,12 @@ test('systemic identity is a versioned tuple with explicit unknown slots', () =>
 
 test('common metadata stays unknown after missing or conflicting observations', () => {
   assert.deepEqual(mergeAuthorityRefusalFacts(facts, facts), facts);
-  for (const previous of [undefined, { ...facts, axis: null }, { ...facts, axis: 'S' as const }]) {
+  for (const previous of [
+    undefined,
+    null,
+    { ...facts, axis: null },
+    { ...facts, axis: 'S' as const },
+  ]) {
     const merged = mergeAuthorityRefusalFacts(previous, facts);
     assert.deepEqual(merged, { code, axis: null, cause: null });
     assert.deepEqual(mergeAuthorityRefusalFacts(merged, facts), merged);

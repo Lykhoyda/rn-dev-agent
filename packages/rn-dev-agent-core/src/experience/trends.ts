@@ -4,6 +4,7 @@ import {
   authorityRefusalFamily,
   authorityRefusalSystemicKey,
   decodeLegacyAuthorityRefusal,
+  mergeAuthorityRefusalFacts,
   type AuthorityAxis,
   type AuthorityRefusalCause,
   type AuthorityRefusalCode,
@@ -117,6 +118,7 @@ function buildSystemicRefusalTrends(records: ExperienceRecord[]): SystemicRefusa
     const systemicKey = authorityRefusalSystemicKey(facts, platform);
     const aggregate = groups.get(systemicKey);
     if (aggregate) {
+      aggregate.axis = mergeAuthorityRefusalFacts(aggregate, facts).axis;
       aggregate.count += record.count;
       aggregate.tools.push(record.tool);
       aggregate.memberSignatures.push(record.signature);

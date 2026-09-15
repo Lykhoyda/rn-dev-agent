@@ -104,15 +104,19 @@ export function authorityRefusalFacts(
 }
 
 export function mergeAuthorityRefusalFacts(
-  existing: AuthorityRefusalFacts | undefined,
+  existing: AuthorityRefusalFacts | null | undefined,
   incoming: AuthorityRefusalFacts,
 ): AuthorityRefusalFacts {
   return {
     code: incoming.code,
     axis:
-      existing?.code === incoming.code && existing.axis === incoming.axis ? incoming.axis : null,
+      existing != null && existing.code === incoming.code && existing.axis === incoming.axis
+        ? incoming.axis
+        : null,
     cause:
-      existing?.code === incoming.code && existing.cause === incoming.cause ? incoming.cause : null,
+      existing != null && existing.code === incoming.code && existing.cause === incoming.cause
+        ? incoming.cause
+        : null,
   };
 }
 
@@ -122,14 +126,6 @@ export function authorityRefusalSystemicKey(
   platform: string | null,
 ): string {
   return createHash('sha256')
-    .update(
-      JSON.stringify([
-        'rn-dev-agent/authority-refusal/1',
-        facts.code,
-        facts.axis,
-        facts.cause,
-        platform,
-      ]),
-    )
+    .update(JSON.stringify(['rn-dev-agent/authority-refusal/2', facts.code, facts.cause, platform]))
     .digest('hex');
 }

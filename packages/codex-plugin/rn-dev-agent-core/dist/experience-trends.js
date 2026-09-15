@@ -78,14 +78,15 @@ function authorityRefusalFacts(code, axis, cause) {
     cause: REFUSAL_CAUSES[code].find((candidate) => candidate === cause) ?? null
   };
 }
+function mergeAuthorityRefusalFacts(existing, incoming) {
+  return {
+    code: incoming.code,
+    axis: existing != null && existing.code === incoming.code && existing.axis === incoming.axis ? incoming.axis : null,
+    cause: existing != null && existing.code === incoming.code && existing.cause === incoming.cause ? incoming.cause : null
+  };
+}
 function authorityRefusalSystemicKey(facts, platform) {
-  return createHash("sha256").update(JSON.stringify([
-    "rn-dev-agent/authority-refusal/1",
-    facts.code,
-    facts.axis,
-    facts.cause,
-    platform
-  ])).digest("hex");
+  return createHash("sha256").update(JSON.stringify(["rn-dev-agent/authority-refusal/2", facts.code, facts.cause, platform])).digest("hex");
 }
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
@@ -204,6 +205,7 @@ function buildSystemicRefusalTrends(records) {
     const systemicKey = authorityRefusalSystemicKey(facts, platform);
     const aggregate = groups.get(systemicKey);
     if (aggregate) {
+      aggregate.axis = mergeAuthorityRefusalFacts(aggregate, facts).axis;
       aggregate.count += record.count;
       aggregate.tools.push(record.tool);
       aggregate.memberSignatures.push(record.signature);

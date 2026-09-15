@@ -173,6 +173,9 @@ for (const legacyOnly of [false, true]) {
     const { directory, path, records } = fixture(t);
     const template = records.find((record) => record.classification === 'UNKNOWN');
     assert.ok(template);
+    const legacyBase = { ...template };
+    delete legacyBase.authorityRefusal;
+    delete legacyBase.systemicKey;
     const envelope = { ok: false, code: FACTS.code, meta: { axis: 'M', cause: 'private' } };
     const legacy = [
       {
@@ -213,7 +216,7 @@ for (const legacyOnly of [false, true]) {
         symptom: `{"code":"${FACTS.code}","meta": [TRUNCATED]`,
       },
     ].map((fields) => ({
-      ...template,
+      ...legacyBase,
       platform: 'ios',
       firstSeen: '2026-05-01T00:00:00.000Z',
       recovery: `PASS immediately followed FAIL for ${fields.tool}`,
@@ -238,9 +241,9 @@ for (const legacyOnly of [false, true]) {
         if (expectedJson) assert.deepEqual(report, expectedJson, cli);
         else expectedJson = report;
         const row = report.systemicRefusals[0];
-        assert.equal(row.count, legacyOnly ? 5 : 10);
+        assert.equal(row.count, legacyOnly ? 6 : 11);
         assert.equal(row.code, FACTS.code);
-        assert.equal(row.axis, 'M');
+        assert.equal(row.axis, null);
         assert.equal(row.cause, null);
         assert.deepEqual(
           row.provenance,
@@ -249,7 +252,11 @@ for (const legacyOnly of [false, true]) {
         assert.equal(row.firstSeen, legacy[0].firstSeen);
         assert.equal(row.recoveryEvidence, 'not-verified');
         assert.equal(row.currentAuthorityState, 'unknown');
-        assert.equal(report.systemicRefusals.length, legacyOnly ? 2 : 3);
+        assert.equal(report.systemicRefusals.length, legacyOnly ? 1 : 2);
+        assert.equal(
+          report.systemicRefusals.some((row) => row.memberSignatures.includes('legacy-malformed')),
+          false,
+        );
         assert.equal(
           report.families.find((row) => row.classification === 'UNKNOWN')?.count,
           legacyOnly ? 9 : 10,
