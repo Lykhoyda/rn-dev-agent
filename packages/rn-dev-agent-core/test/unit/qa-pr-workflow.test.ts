@@ -36,10 +36,7 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.match(agent, /Exempt only the exact Markdown/);
   assert.match(agent, /first public comment/);
   assert.doesNotMatch(agent, /if the draft has a slash-started absolute path/);
-  assert.doesNotMatch(
-    agent,
-    /Self-check the rewritten GitHub body after `--attach` rewrites, not/,
-  );
+  assert.doesNotMatch(agent, /Self-check the rewritten GitHub body after `--attach` rewrites, not/);
 
   const sharedCommand = readFileSync(
     join(root, 'packages/shared-agent-knowledge/commands/qa-pr.md'),
