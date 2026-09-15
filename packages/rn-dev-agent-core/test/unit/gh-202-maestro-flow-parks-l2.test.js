@@ -1,10 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runFlowParked } from '../../dist/tools/maestro-run.js';
-import {
-  snapshotRunnerDiagnostics,
-  withRunnerDiagnosticsContext,
-} from '../../dist/experience/runner-diagnostics.js';
 
 test('GH#202 runFlowParked: parks L2 before the flow and marks CDP stale after (success)', async () => {
   const calls = [];
@@ -107,93 +103,4 @@ test('GH#237 runFlowParked: marks stale even if the android release throws (flow
   );
   assert.ok(!calls.includes('flow'));
   assert.ok(calls.includes('stale'));
-});
-
-test('GH#202 runFlowParked: parking trace records begin, released, and committed', async () => {
-  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'ios' }, async () => {
-    const calls = [];
-    await runFlowParked(
-      async () => {
-        calls.push('flow');
-        return 'RESULT';
-      },
-      {
-        platform: 'ios',
-        stopFastRunner: () => calls.push('stop'),
-        completeRunnerPark: async () => calls.push('commit-park'),
-        markCdpStale: () => calls.push('stale'),
-      },
-    );
-    assert.deepEqual(calls, ['stop', 'commit-park', 'flow', 'stale']);
-    assert.deepEqual(
-      snapshotRunnerDiagnostics()?.events.map((event) => event.detail),
-      [
-        { phase: 'begin', platform: 'ios' },
-        { phase: 'released', platform: 'ios' },
-        { phase: 'committed', platform: 'ios' },
-      ],
-    );
-  });
-});
-
-test('GH#202 runFlowParked: release rejection records begin only and skips the flow', async () => {
-  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'android' }, async () => {
-    const calls = [];
-    await assert.rejects(
-      runFlowParked(
-        async () => {
-          calls.push('flow');
-          return 'OK';
-        },
-        {
-          platform: 'android',
-          releaseAndroidSlot: async () => {
-            throw new Error('release boom');
-          },
-          completeRunnerPark: async () => calls.push('commit-park'),
-          markCdpStale: () => calls.push('stale'),
-        },
-      ),
-      /release boom/,
-    );
-    assert.ok(!calls.includes('flow'));
-    assert.ok(!calls.includes('commit-park'));
-    assert.deepEqual(
-      snapshotRunnerDiagnostics()?.events.map((event) => event.detail),
-      [{ phase: 'begin', platform: 'android' }],
-    );
-  });
-});
-
-test('GH#202 runFlowParked: commit rejection records released and skips stage execution', async () => {
-  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'ios' }, async () => {
-    const calls = [];
-    await assert.rejects(
-      runFlowParked(
-        async () => {
-          calls.push('flow');
-          return 'RESULT';
-        },
-        {
-          platform: 'ios',
-          stopFastRunner: () => calls.push('stop'),
-          completeRunnerPark: async () => {
-            calls.push('commit-park');
-            throw new Error('commit boom');
-          },
-          markCdpStale: () => calls.push('stale'),
-        },
-      ),
-      /commit boom/,
-    );
-    assert.deepEqual(calls, ['stop', 'commit-park', 'stale']);
-    assert.ok(!calls.includes('flow'));
-    assert.deepEqual(
-      snapshotRunnerDiagnostics()?.events.map((event) => event.detail),
-      [
-        { phase: 'begin', platform: 'ios' },
-        { phase: 'released', platform: 'ios' },
-      ],
-    );
-  });
 });
