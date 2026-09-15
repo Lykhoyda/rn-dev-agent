@@ -47,9 +47,9 @@ this package) in this session. Summary:
    never write hostname (including `.local`), machine UUID, home
    directory (`/Users/…`), or other absolute local paths — even in a
    code fence. Replace with `[HOST]`, `[MACHINE_ID]`, `[HOME]`,
-   `[PATH]`, `[UDID]`, `[UUID]`. Keep local paths in the pre-upload
-   body file for `--attach`. Self-check the rewritten GitHub body,
-   then post. Follow `agents/rn-pr-qa.md` § Public identity.
+   `[PATH]`, `[UDID]`, `[UUID]`. Sanitize the pre-upload body before posting
+   (exempt only Markdown `--attach` destinations). Then self-check the
+   rewritten GitHub body. Follow `agents/rn-pr-qa.md` § Public identity.
 
 ## Examples
 

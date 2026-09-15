@@ -32,9 +32,14 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.match(agent, /\[MACHINE_ID\]/);
   assert.match(agent, /\[HOME\]/);
   assert.match(agent, /Public identity/);
-  assert.match(agent, /pre-upload `qa-pr-report\.md`/);
-  assert.match(agent, /rewritten GitHub body after `--attach`/);
+  assert.match(agent, /before posting/);
+  assert.match(agent, /Exempt only the exact Markdown/);
+  assert.match(agent, /first public comment/);
   assert.doesNotMatch(agent, /if the draft has a slash-started absolute path/);
+  assert.doesNotMatch(
+    agent,
+    /Self-check the rewritten GitHub body after `--attach` rewrites, not/,
+  );
 
   const sharedCommand = readFileSync(
     join(root, 'packages/shared-agent-knowledge/commands/qa-pr.md'),
@@ -43,7 +48,7 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.match(sharedCommand, /--attach/);
   assert.match(sharedCommand, /width="720"/);
   assert.match(sharedCommand, /\[HOST\]/);
-  assert.match(sharedCommand, /pre-upload/);
+  assert.match(sharedCommand, /before posting/);
   assert.match(sharedCommand, /rewritten GitHub body/);
 
   for (const host of ['shared-agent-knowledge', 'claude-plugin', 'codex-plugin'] as const) {

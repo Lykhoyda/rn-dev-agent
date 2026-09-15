@@ -2,4 +2,4 @@
 'rn-dev-agent-plugin': patch
 ---
 
-Permit local `--attach` paths in `/qa-pr` body files; redact the rewritten GitHub comment.
+Sanitize `/qa-pr` comments before posting, exempting only `--attach` destinations; check again after rewrite.
