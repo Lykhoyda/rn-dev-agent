@@ -44,8 +44,9 @@ Load `rn-workflow`, `rn-testing`, `rn-device-control`, and
    never write hostname (including `.local`), machine UUID, home
    directory (`/Users/…`), or other absolute local paths — even in a
    code fence. Replace with `[HOST]`, `[MACHINE_ID]`, `[HOME]`,
-   `[PATH]`, `[UDID]`, `[UUID]`. Self-check, then post. Follow
-   `agents/rn-pr-qa.md` § Public identity.
+   `[PATH]`, `[UDID]`, `[UUID]`. Sanitize the pre-upload body before posting
+   (exempt only Markdown `--attach` destinations). Then self-check the
+   rewritten GitHub body. Follow `agents/rn-pr-qa.md` § Public identity.
 
 ## Examples
 
