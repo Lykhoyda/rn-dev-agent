@@ -15,6 +15,10 @@ import {
   FLOW_RELAUNCH_NEXT_ACTION,
   MaestroStageExecutionError,
 } from '../../dist/tools/maestro-run.js';
+import {
+  snapshotRunnerDiagnostics,
+  withRunnerDiagnosticsContext,
+} from '../../dist/experience/runner-diagnostics.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
 import { authorityErrorMeta, SessionAuthorityError } from '../../dist/session/registry.js';
 import { provenMetroOriginMismatch } from '../../dist/session/metro-origin.js';
@@ -158,6 +162,129 @@ test('GH#708: a relaunch failure with no re-prove authority still aborts', async
     /did not re-register after launch/,
   );
   assert.equal(stages.length, 1);
+});
+
+test('failed execute and failed relaunch-plus-cleanup leave different traces without changing errors', async () => {
+  const executeError = new Error('native execute failed');
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'android' }, async () => {
+    await assert.rejects(
+      executeMaestroAuthorityStages(
+        [{ launchApp: { stopApp: true } }],
+        async () => {
+          throw executeError;
+        },
+        async () => {
+          throw new Error('claim should not run');
+        },
+        async () => {},
+        async () => {
+          throw new Error('relaunch should not run');
+        },
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof MaestroStageExecutionError);
+        assert.equal(error.stageError, executeError);
+        assert.deepEqual(error.completedResults, []);
+        return true;
+      },
+    );
+    assert.deepEqual(
+      snapshotRunnerDiagnostics()?.events.map((event) => event.detail),
+      [
+        { phase: 'execute-begin', stage: 0 },
+        { phase: 'cleanup-begin', stage: 0 },
+        { phase: 'cleanup-complete', stage: 0 },
+      ],
+    );
+  });
+
+  const cleanupError = new Error('cleanup rejected after deadline');
+  const relaunchError = new Error('managed reconnect did not become ready');
+  const calls: string[] = [];
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'android' }, async () => {
+    await assert.rejects(
+      executeMaestroAuthorityStages(
+        [{ launchApp: { stopApp: true } }],
+        async () => {
+          calls.push('execute');
+          return { stdout: 'native launch completed', stderr: '' };
+        },
+        async () => {
+          calls.push('claim');
+        },
+        async () => {
+          calls.push('cleanup');
+          throw cleanupError;
+        },
+        async (stopApp?: boolean) => {
+          calls.push(`relaunch:${String(stopApp)}`);
+          throw relaunchError;
+        },
+      ),
+      (error: unknown) => {
+        assert.equal(error, cleanupError);
+        assert.equal(error instanceof MaestroStageExecutionError, false);
+        return true;
+      },
+    );
+    assert.deepEqual(calls, ['execute', 'relaunch:true', 'cleanup']);
+    assert.deepEqual(
+      snapshotRunnerDiagnostics()?.events.map((event) => event.detail),
+      [
+        { phase: 'execute-begin', stage: 0 },
+        { phase: 'execute-complete', stage: 0 },
+        { phase: 'relaunch-begin', stage: 0, stopApp: true },
+        { phase: 'cleanup-begin', stage: 0 },
+      ],
+    );
+  });
+});
+
+test('stopApp false still records managed relaunch and origin proof', async () => {
+  const calls: Array<[string, unknown]> = [];
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'android' }, async () => {
+    await executeMaestroAuthorityStages(
+      [{ launchApp: { stopApp: false } }, { assertVisible: { id: 'app-root' } }],
+      async (commands) => {
+        calls.push(['execute', commands]);
+        return {};
+      },
+      async () => {
+        calls.push(['claim', true]);
+      },
+      async (expected) => {
+        calls.push(['complete', expected]);
+      },
+      async (stopApp) => {
+        calls.push(['relaunch', stopApp]);
+      },
+    );
+    assert.deepEqual(
+      calls.filter(
+        (call) => call[0] === 'relaunch' || call[0] === 'complete' || call[0] === 'claim',
+      ),
+      [
+        ['relaunch', false],
+        ['claim', true],
+        ['complete', true],
+      ],
+    );
+    assert.deepEqual(
+      snapshotRunnerDiagnostics()?.events.map((event) => event.detail),
+      [
+        { phase: 'execute-begin', stage: 0 },
+        { phase: 'execute-complete', stage: 0 },
+        { phase: 'relaunch-begin', stage: 0, stopApp: false },
+        { phase: 'relaunch-complete', stage: 0, stopApp: false },
+        { phase: 'origin-begin', role: 'claim', stage: 1 },
+        { phase: 'origin-complete', role: 'claim', stage: 1 },
+        { phase: 'execute-begin', stage: 1 },
+        { phase: 'execute-complete', stage: 1 },
+        { phase: 'origin-begin', role: 'complete' },
+        { phase: 'origin-complete', role: 'complete' },
+      ],
+    );
+  });
 });
 
 test('GH#708: a revoked session claim aborts immediately instead of deferring', async () => {

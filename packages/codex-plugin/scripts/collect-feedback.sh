@@ -32,7 +32,8 @@ redact() {
     -e 's#(localhost|127\.0\.0\.1):[0-9]{2,5}#[LOOPBACK_ENDPOINT_REDACTED]#g' \
     -e 's/"(metroPort|observePort|port)"[[:space:]]*:[[:space:]]*[0-9]+/"\1":"[PORT_REDACTED]"/g' \
     -e 's#/(Users|home|opt|var|tmp)/[A-Za-z0-9_./-]{10,}#[PATH_REDACTED]#g' \
-    -e 's/(com|org|io|dev|net)\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+/[BUNDLE_REDACTED]/g') \
+    -e 's/(com|org|io|dev|net)\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+/[BUNDLE_REDACTED]/g' \
+    -e 's/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/[ID_REDACTED]/g') \
     || { printf '%s' '[REDACTION_FAILED]'; return 0; }
   input="$redacted"
   # Strip app display names and project names from app.json if present

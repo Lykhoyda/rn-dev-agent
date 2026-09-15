@@ -11,6 +11,8 @@ export type RunnerDiagnosticEventType =
   | 'cache-publish'
   | 'runner-exec-begin'
   | 'wda-bootstrap-begin'
+  | 'flow-park'
+  | 'flow-stage'
   | 'typed-failure'
   | 'cleanup'
   | 'tool-outcome';
