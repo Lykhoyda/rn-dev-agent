@@ -62994,11 +62994,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
 import { readFileSync as readFileSync21 } from "node:fs";
 import { dirname as dirname12, join as join29 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-var EXECUTING_CORE_PACKAGE_NAMES = /* @__PURE__ */ new Set([
-  "rn-dev-agent-core",
-  "rn-dev-agent-core-claude-runtime",
-  "rn-dev-agent-core-codex-runtime"
-]);
+var EXECUTING_CORE_PACKAGE_NAME = "rn-dev-agent-core";
 var productByModuleUrl = /* @__PURE__ */ new Map();
 var loadedModuleUrl = import.meta.url;
 function projectRunningProductVersion(input) {
@@ -63020,8 +63016,8 @@ function findExecutingCorePackage(startDir) {
   let cursor = startDir;
   for (let i = 0; i < 8; i++) {
     const parsed = readPackageNameVersion(join29(cursor, "package.json"));
-    if (typeof parsed?.name === "string" && EXECUTING_CORE_PACKAGE_NAMES.has(parsed.name) && typeof parsed.version === "string" && parsed.version) {
-      return { name: parsed.name, version: parsed.version, dir: cursor };
+    if (typeof parsed?.name === "string" && parsed.name === EXECUTING_CORE_PACKAGE_NAME && typeof parsed.version === "string" && parsed.version) {
+      return { version: parsed.version, dir: cursor };
     }
     const parent = dirname12(cursor);
     if (parent === cursor)
@@ -63034,46 +63030,29 @@ function envPluginRoot(name) {
   const value = process.env[name];
   return value && value.length > 0 ? value : void 0;
 }
-function launchingHostManifestCandidates(packageName) {
+function launchingHostManifestCandidates() {
   const candidates = [];
   const codex = envPluginRoot("RN_DEV_AGENT_CODEX_PLUGIN_ROOT") ?? envPluginRoot("CODEX_PLUGIN_ROOT");
   const claude = envPluginRoot("CLAUDE_PLUGIN_ROOT");
-  const codexManifest = codex ? join29(codex, ".codex-plugin", "plugin.json") : void 0;
-  const claudeManifest = claude ? join29(claude, ".claude-plugin", "plugin.json") : void 0;
-  if (packageName === "rn-dev-agent-core-claude-runtime") {
-    if (claudeManifest)
-      candidates.push(claudeManifest);
-    return candidates;
-  }
-  if (packageName === "rn-dev-agent-core-codex-runtime") {
-    if (codexManifest)
-      candidates.push(codexManifest);
-    return candidates;
-  }
-  if (codexManifest)
-    candidates.push(codexManifest);
-  if (claudeManifest)
-    candidates.push(claudeManifest);
+  if (codex)
+    candidates.push(join29(codex, ".codex-plugin", "plugin.json"));
+  if (claude)
+    candidates.push(join29(claude, ".claude-plugin", "plugin.json"));
   return candidates;
 }
-function pluginManifestCandidates(packageDir, packageName) {
+function pluginManifestCandidates(packageDir) {
   const hostRoot = join29(packageDir, "..");
-  const claudeHost = join29(hostRoot, ".claude-plugin", "plugin.json");
-  const codexHost = join29(hostRoot, ".codex-plugin", "plugin.json");
-  const claudeSource = join29(hostRoot, "claude-plugin", ".claude-plugin", "plugin.json");
-  const codexSource = join29(hostRoot, "codex-plugin", ".codex-plugin", "plugin.json");
-  if (packageName === "rn-dev-agent-core-codex-runtime") {
-    return [codexHost, claudeHost, codexSource, claudeSource];
-  }
-  if (packageName === "rn-dev-agent-core-claude-runtime") {
-    return [claudeHost, codexHost, claudeSource, codexSource];
-  }
-  return [claudeHost, codexHost, claudeSource, codexSource];
+  return [
+    join29(hostRoot, ".claude-plugin", "plugin.json"),
+    join29(hostRoot, ".codex-plugin", "plugin.json"),
+    join29(hostRoot, "claude-plugin", ".claude-plugin", "plugin.json"),
+    join29(hostRoot, "codex-plugin", ".codex-plugin", "plugin.json")
+  ];
 }
-function readPluginManifestVersion(packageDir, packageName) {
+function readPluginManifestVersion(packageDir) {
   for (const candidate of [
-    ...launchingHostManifestCandidates(packageName),
-    ...pluginManifestCandidates(packageDir, packageName)
+    ...launchingHostManifestCandidates(),
+    ...pluginManifestCandidates(packageDir)
   ]) {
     const parsed = readPackageNameVersion(candidate);
     if (typeof parsed?.version === "string" && parsed.version)
@@ -63087,7 +63066,7 @@ function resolveRunningProductVersion(fromUrl) {
     return null;
   return projectRunningProductVersion({
     coreVersion: executing.version,
-    pluginVersion: readPluginManifestVersion(executing.dir, executing.name)
+    pluginVersion: readPluginManifestVersion(executing.dir)
   });
 }
 function cachedRunningProductVersion(fromUrl) {

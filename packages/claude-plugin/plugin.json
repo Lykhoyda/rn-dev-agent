@@ -64,7 +64,11 @@
       "command": "node",
       "args": [
         "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"
-      ]
+      ],
+      "env": {
+        "RN_DEV_AGENT_CODEX_PLUGIN_ROOT": "",
+        "CODEX_PLUGIN_ROOT": ""
+      }
     }
   }
 }

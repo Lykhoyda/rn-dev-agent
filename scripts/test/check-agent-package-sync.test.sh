@@ -39,18 +39,19 @@ write_valid_repo() {
     "$tmp/packages/claude-plugin/rn-dev-agent-core/dist/web-dist" \
     "$tmp/packages/claude-plugin/skills" \
     "$tmp/packages/claude-plugin/templates" \
+    "$tmp/packages/claude-plugin/.codex-plugin" \
+    "$tmp/packages/claude-plugin/bin" \
+    "$tmp/packages/claude-plugin/codex-skills" \
+    "$tmp/packages/claude-plugin/codex-commands" \
+    "$tmp/packages/claude-plugin/codex-agents" \
+    "$tmp/packages/claude-plugin/codex-templates/rn-agent" \
     "$tmp/packages/codex-plugin/agents" \
     "$tmp/packages/codex-plugin/bin" \
     "$tmp/packages/codex-plugin/src" \
     "$tmp/packages/codex-plugin/.codex-plugin" \
     "$tmp/packages/codex-plugin/commands" \
-    "$tmp/packages/codex-plugin/scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj" \
-    "$tmp/packages/codex-plugin/scripts/rn-android-runner/app" \
     "$tmp/packages/codex-plugin/skills" \
-    "$tmp/packages/codex-plugin/templates" \
-    "$tmp/packages/codex-plugin/rn-dev-agent-core/dist" \
-    "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/observability/web-dist" \
-    "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/web-dist" \
+    "$tmp/packages/codex-plugin/templates/rn-agent" \
     "$tmp/packages/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj" \
     "$tmp/packages/rn-android-runner/app" \
     "$tmp/packages/shared-agent-knowledge/skills/using-rn-dev-agent" \
@@ -73,20 +74,13 @@ write_valid_repo() {
   printf '%s\n' 'yarn release fixture' > "$tmp/.yarn/releases/yarn-4.17.0.cjs"
   printf '%s\n' '# lock fixture' > "$tmp/yarn.lock"
   printf '%s\n' '{"version":"1.2.3","assets":{"ios":[],"android":[]}}' > "$tmp/runner-manifest.json"
-  /bin/cp "$tmp/runner-manifest.json" "$tmp/packages/codex-plugin/runner-manifest.json"
   /bin/cp "$tmp/runner-manifest.json" "$tmp/packages/claude-plugin/runner-manifest.json"
   printf '%s\n' '{"name":"rn-dev-agent-ios-runner","private":true}' > "$tmp/packages/rn-fast-runner/package.json"
   printf '%s\n' 'fixture ios project' > "$tmp/packages/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj/project.pbxproj"
-  /bin/cp "$tmp/packages/rn-fast-runner/package.json" "$tmp/packages/codex-plugin/scripts/rn-fast-runner/package.json"
-  printf '%s\n' 'fixture ios project' > "$tmp/packages/codex-plugin/scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj/project.pbxproj"
   printf '%s\n' '{"name":"rn-dev-agent-android-runner","private":true}' > "$tmp/packages/rn-android-runner/package.json"
   printf '%s\n' '#!/usr/bin/env sh' 'echo gradle fixture' > "$tmp/packages/rn-android-runner/gradlew"
   /bin/chmod +x "$tmp/packages/rn-android-runner/gradlew"
   printf '%s\n' 'plugins {}' > "$tmp/packages/rn-android-runner/app/build.gradle.kts"
-  /bin/cp "$tmp/packages/rn-android-runner/package.json" "$tmp/packages/codex-plugin/scripts/rn-android-runner/package.json"
-  /bin/cp "$tmp/packages/rn-android-runner/gradlew" "$tmp/packages/codex-plugin/scripts/rn-android-runner/gradlew"
-  /bin/chmod +x "$tmp/packages/codex-plugin/scripts/rn-android-runner/gradlew"
-  /bin/cp "$tmp/packages/rn-android-runner/app/build.gradle.kts" "$tmp/packages/codex-plugin/scripts/rn-android-runner/app/build.gradle.kts"
   /bin/cp "$tmp/packages/rn-fast-runner/package.json" "$tmp/packages/claude-plugin/scripts/rn-fast-runner/package.json"
   printf '%s\n' 'fixture ios project' > "$tmp/packages/claude-plugin/scripts/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj/project.pbxproj"
   /bin/cp "$tmp/packages/rn-android-runner/package.json" "$tmp/packages/claude-plugin/scripts/rn-android-runner/package.json"
@@ -102,44 +96,37 @@ write_valid_repo() {
   /bin/cp "$tmp/scripts/record_proof.sh" "$tmp/packages/claude-plugin/scripts/record_proof.sh"
   /bin/cp "$tmp/scripts/collect-feedback.sh" "$tmp/packages/claude-plugin/scripts/collect-feedback.sh"
   /bin/cp "$tmp/scripts/generate_pr_body.sh" "$tmp/packages/claude-plugin/scripts/generate_pr_body.sh"
-  printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":{"cdp":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"]}}}' > "$tmp/packages/claude-plugin/plugin.json"
-  printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":{"cdp":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"]}}}' > "$tmp/packages/claude-plugin/.claude-plugin/plugin.json"
+  printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":{"cdp":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"],"env":{"RN_DEV_AGENT_CODEX_PLUGIN_ROOT":"","CODEX_PLUGIN_ROOT":""}}}}' > "$tmp/packages/claude-plugin/plugin.json"
+  printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":{"cdp":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"],"env":{"RN_DEV_AGENT_CODEX_PLUGIN_ROOT":"","CODEX_PLUGIN_ROOT":""}}}}' > "$tmp/packages/claude-plugin/.claude-plugin/plugin.json"
   printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":"./mcp.json","hooks":{"hooks":{}}}' > "$tmp/packages/claude-plugin/.cursor-plugin/plugin.json"
   printf '%s\n' '{"mcpServers":{"cdp":{"command":"node","args":["${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"]}}}' > "$tmp/packages/claude-plugin/mcp.json"
   printf '%s\n' '{"plugins":[{"name":"rn-dev-agent","version":"1.2.3","source":"./packages/claude-plugin"}]}' > "$tmp/.claude-plugin/marketplace.json"
   printf '%s\n' '{"name":"rn-dev-agent","plugins":[{"name":"rn-dev-agent","version":"1.2.3","source":"./packages/claude-plugin"}]}' > "$tmp/.cursor-plugin/marketplace.json"
   mkdir -p "$tmp/.agents/plugins"
-  printf '%s\n' '{"name":"rn-dev-agent","plugins":[{"name":"rn-dev-agent","source":{"source":"local","path":"./packages/codex-plugin"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"Engineering"}]}' > "$tmp/.agents/plugins/marketplace.json"
+  printf '%s\n' '{"name":"rn-dev-agent","plugins":[{"name":"rn-dev-agent","source":{"source":"local","path":"./packages/claude-plugin"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"Engineering"}]}' > "$tmp/.agents/plugins/marketplace.json"
   printf '%s\n' '{"plugins":[{"name":"rn-dev-agent","version":"1.2.3","source":"./"}]}' > "$tmp/packages/claude-plugin/marketplace.json"
   printf '%s\n' '{"plugins":[{"name":"rn-dev-agent","version":"1.2.3","source":"./"}]}' > "$tmp/packages/claude-plugin/.claude-plugin/marketplace.json"
   printf '%s\n' '{"hooks":{}}' > "$tmp/packages/claude-plugin/hooks/hooks.json"
   printf '%s\n' '{"name":"rn-dev-agent-codex-plugin","type":"module","dependencies":{"rn-dev-agent-core":"workspace:*","rn-dev-agent-shared-agent-knowledge":"workspace:*"}}' > "$tmp/packages/codex-plugin/package.json"
-  /bin/cp "$tmp/CLAUDE-MD-TEMPLATE.md" "$tmp/packages/codex-plugin/CLAUDE-MD-TEMPLATE.md"
-  /bin/cp "$tmp/scripts/record_proof.sh" "$tmp/packages/codex-plugin/scripts/record_proof.sh"
-  /bin/cp "$tmp/scripts/collect-feedback.sh" "$tmp/packages/codex-plugin/scripts/collect-feedback.sh"
-  /bin/cp "$tmp/scripts/generate_pr_body.sh" "$tmp/packages/codex-plugin/scripts/generate_pr_body.sh"
   for helper in expo_ensure_running.sh eas_resolve_artifact.sh check-vercel-rules.mjs snapshot_state.sh; do
-    /bin/cp "$tmp/scripts/$helper" "$tmp/packages/codex-plugin/scripts/$helper"
     /bin/cp "$tmp/scripts/$helper" "$tmp/packages/claude-plugin/scripts/$helper"
   done
   printf '%s\n' '# Codex AGENTS fixture' > "$tmp/packages/codex-plugin/src/AGENTS-MD-TEMPLATE.md"
-  /bin/cp "$tmp/packages/codex-plugin/src/AGENTS-MD-TEMPLATE.md" "$tmp/packages/codex-plugin/AGENTS-MD-TEMPLATE.md"
+  /bin/cp "$tmp/packages/codex-plugin/src/AGENTS-MD-TEMPLATE.md" "$tmp/packages/claude-plugin/AGENTS-MD-TEMPLATE.md"
   printf '%s\n' 'export const health = true;' > "$tmp/packages/codex-plugin/src/plugin-health.ts"
-  printf '%s\n' '// packages/codex-plugin/src/plugin-health.ts' 'console.log("health fixture")' > "$tmp/packages/codex-plugin/bin/plugin-health.js"
-  printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","skills":"./skills/","commands":[],"mcpServers":"./.mcp.json"}' > "$tmp/packages/codex-plugin/.codex-plugin/plugin.json"
+  printf '%s\n' '// packages/codex-plugin/src/plugin-health.ts' 'console.log("health fixture")' > "$tmp/packages/claude-plugin/bin/plugin-health.js"
+  printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","skills":"./codex-skills/","commands":[],"mcpServers":"./codex.mcp.json","hooks":{"hooks":{}}}' > "$tmp/packages/codex-plugin/.codex-plugin/plugin.json"
+  /bin/cp "$tmp/packages/codex-plugin/.codex-plugin/plugin.json" "$tmp/packages/claude-plugin/.codex-plugin/plugin.json"
   printf '%s\n' '{"mcpServers":{"cdp":{"command":"node","args":["-e","const V='\''1.2.3'\'';require(\"child_process\").spawn(process.execPath,[\"bin/cdp-supervisor.js\"],{stdio:\"inherit\"})"],"tool_timeout_sec":900}}}' > "$tmp/packages/codex-plugin/.mcp.json"
+  /bin/cp "$tmp/packages/codex-plugin/.mcp.json" "$tmp/packages/claude-plugin/codex.mcp.json"
   /bin/cp "$REPO_ROOT/packages/codex-plugin/bin/cdp-supervisor.js" "$tmp/packages/codex-plugin/bin/cdp-supervisor.js"
-  printf '%s\n' '{"name":"rn-dev-agent-core-codex-runtime","version":"4.5.6","private":true,"type":"module"}' > "$tmp/packages/codex-plugin/rn-dev-agent-core/package.json"
-  printf '%s\n' 'console.log("worker fixture")' > "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/index.js"
-  printf '%s\n' 'console.log("learned-actions fixture")' > "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/learned-actions.js"
-  /bin/cp "$tmp/packages/rn-dev-agent-core/dist/workflow-check.js" "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/workflow-check.js"
-  printf '%s\n' '<!doctype html><title>observe fixture</title>' > "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/observability/web-dist/index.html"
-  printf '%s\n' '<!doctype html><title>observe fixture</title>' > "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/web-dist/index.html"
-  printf '%s\n' 'import { writeFileSync } from "node:fs";' 'writeFileSync(process.env.LAUNCHER_PROBE_FILE, JSON.stringify({ cwd: process.cwd(), argv: process.argv.slice(2) }));' > "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js"
-  printf '%s\n' '{"name":"rn-dev-agent-core-claude-runtime","version":"4.5.6","private":true,"type":"module"}' > "$tmp/packages/claude-plugin/rn-dev-agent-core/package.json"
-  for runtime_entry in supervisor.js index.js learned-actions.js workflow-check.js; do
-    /bin/cp "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/$runtime_entry" "$tmp/packages/claude-plugin/rn-dev-agent-core/dist/$runtime_entry"
-  done
+  /bin/cp "$REPO_ROOT/packages/codex-plugin/bin/cdp-supervisor.js" "$tmp/packages/claude-plugin/bin/cdp-supervisor.js"
+  printf '%s\n' '{"private":true,"type":"module"}' > "$tmp/packages/claude-plugin/bin/package.json"
+  printf '%s\n' '{"name":"rn-dev-agent-core","version":"4.5.6","private":true,"type":"module"}' > "$tmp/packages/claude-plugin/rn-dev-agent-core/package.json"
+  printf '%s\n' 'console.log("worker fixture")' > "$tmp/packages/claude-plugin/rn-dev-agent-core/dist/index.js"
+  printf '%s\n' 'console.log("learned-actions fixture")' > "$tmp/packages/claude-plugin/rn-dev-agent-core/dist/learned-actions.js"
+  /bin/cp "$tmp/packages/rn-dev-agent-core/dist/workflow-check.js" "$tmp/packages/claude-plugin/rn-dev-agent-core/dist/workflow-check.js"
+  printf '%s\n' 'import { writeFileSync } from "node:fs";' 'writeFileSync(process.env.LAUNCHER_PROBE_FILE, JSON.stringify({ cwd: process.cwd(), argv: process.argv.slice(2) }));' > "$tmp/packages/claude-plugin/rn-dev-agent-core/dist/supervisor.js"
   printf '%s\n' '<!doctype html><title>observe fixture</title>' > "$tmp/packages/claude-plugin/rn-dev-agent-core/dist/observability/web-dist/index.html"
   printf '%s\n' '<!doctype html><title>observe fixture</title>' > "$tmp/packages/claude-plugin/rn-dev-agent-core/dist/web-dist/index.html"
   for helper in mcp-bridge-probe.mjs ensure-cdp-deps.sh ensure-maestro-runner.sh \
@@ -158,6 +145,7 @@ write_valid_repo() {
   for command in build-and-test check-env check-vercel-rules debug-screen doctor list-learned-actions lock-e2e nav-graph observe proof-capture qa-pr rn-feature-dev run-action run-workflow send-feedback setup test-feature; do
     printf '%s\n' "# $command" > "$tmp/packages/shared-agent-knowledge/commands/$command.md"
   done
+  printf '%s\n' '1' > "$tmp/packages/shared-agent-knowledge/templates/rn-agent/.scaffold-version"
   printf '%s\n' '# rn tester' > "$tmp/packages/shared-agent-knowledge/agents/rn-tester.md"
   printf '%s\n' '# rn pr qa' > "$tmp/packages/shared-agent-knowledge/agents/rn-pr-qa.md"
 
@@ -169,10 +157,14 @@ write_valid_repo() {
   /bin/cp -R "$tmp/packages/shared-agent-knowledge/commands/." "$tmp/packages/codex-plugin/commands/"
   /bin/cp -R "$tmp/packages/shared-agent-knowledge/agents/." "$tmp/packages/codex-plugin/agents/"
   /bin/cp -R "$tmp/packages/shared-agent-knowledge/templates/." "$tmp/packages/codex-plugin/templates/"
+  /bin/cp -R "$tmp/packages/codex-plugin/skills/." "$tmp/packages/claude-plugin/codex-skills/"
+  /bin/cp -R "$tmp/packages/codex-plugin/commands/." "$tmp/packages/claude-plugin/codex-commands/"
+  /bin/cp -R "$tmp/packages/codex-plugin/agents/." "$tmp/packages/claude-plugin/codex-agents/"
+  /bin/cp -R "$tmp/packages/codex-plugin/templates/." "$tmp/packages/claude-plugin/codex-templates/"
   for command in build-and-test check-env check-vercel-rules debug-screen doctor list-learned-actions lock-e2e nav-graph observe proof-capture qa-pr rn-feature-dev run-action run-workflow send-feedback setup test-feature; do
-    mkdir -p "$tmp/packages/codex-plugin/skills/$command/agents"
-    printf '%s\n' '<!-- GENERATED by scripts/build-host-runtimes.ts -->' '---' "name: $command" '---' > "$tmp/packages/codex-plugin/skills/$command/SKILL.md"
-    printf '%s\n' '# GENERATED' 'policy:' '  allow_implicit_invocation: false' > "$tmp/packages/codex-plugin/skills/$command/agents/openai.yaml"
+    mkdir -p "$tmp/packages/claude-plugin/codex-skills/$command/agents"
+    printf '%s\n' '<!-- GENERATED by scripts/build-host-runtimes.ts -->' '---' "name: $command" '---' "[workflow](../../codex-commands/$command.md)" > "$tmp/packages/claude-plugin/codex-skills/$command/SKILL.md"
+    printf '%s\n' '# GENERATED' 'policy:' '  allow_implicit_invocation: false' > "$tmp/packages/claude-plugin/codex-skills/$command/agents/openai.yaml"
   done
 }
 
@@ -217,9 +209,59 @@ REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "legacy Codex MCP path fails" 1 $?
 
 write_valid_repo
-printf '%s\n' '{"name":"rn-dev-agent","version":"9.9.9","skills":"./skills/","mcpServers":"./.mcp.json"}' > "$tmp/packages/codex-plugin/.codex-plugin/plugin.json"
+printf '%s\n' '{"name":"rn-dev-agent","version":"9.9.9","skills":"./codex-skills/","commands":[],"mcpServers":"./codex.mcp.json","hooks":{"hooks":{}}}' > "$tmp/packages/codex-plugin/.codex-plugin/plugin.json"
+/bin/cp "$tmp/packages/codex-plugin/.codex-plugin/plugin.json" "$tmp/packages/claude-plugin/.codex-plugin/plugin.json"
 REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "Codex plugin version drift fails" 1 $?
+
+write_valid_repo
+printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","skills":"./codex-skills/","commands":[],"mcpServers":"./codex.mcp.json","hooks":[]}' > "$tmp/packages/codex-plugin/.codex-plugin/plugin.json"
+/bin/cp "$tmp/packages/codex-plugin/.codex-plugin/plugin.json" "$tmp/packages/claude-plugin/.codex-plugin/plugin.json"
+REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "Codex manifest without inline empty hooks fails (would discover Claude hooks/)" 1 $?
+
+write_valid_repo
+printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","skills":"./skills/","commands":[],"mcpServers":"./codex.mcp.json","hooks":{"hooks":{}}}' > "$tmp/packages/codex-plugin/.codex-plugin/plugin.json"
+/bin/cp "$tmp/packages/codex-plugin/.codex-plugin/plugin.json" "$tmp/packages/claude-plugin/.codex-plugin/plugin.json"
+REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "Codex manifest selecting Claude skills/ fails" 1 $?
+
+write_valid_repo
+printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","skills":"./codex-skills/","commands":[],"mcpServers":"./codex.mcp.json","hooks":{"hooks":{}},"x":1}' > "$tmp/packages/claude-plugin/.codex-plugin/plugin.json"
+REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "distributed Codex manifest drifting from its authoring source fails" 1 $?
+
+write_valid_repo
+printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","mcpServers":{"cdp":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"]}}}' > "$tmp/packages/claude-plugin/.claude-plugin/plugin.json"
+REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "Claude manifest without cleared Codex root hints fails" 1 $?
+
+write_valid_repo
+printf '%s\n' '{"name":"rn-dev-agent-core-claude-runtime","version":"4.5.6","private":true,"type":"module"}' > "$tmp/packages/claude-plugin/rn-dev-agent-core/package.json"
+REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "host-specific packaged runtime name fails" 1 $?
+
+write_valid_repo
+mkdir -p "$tmp/packages/codex-plugin/rn-dev-agent-core/dist"
+printf '%s\n' 'second dist' > "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js"
+REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "second host runtime under packages/codex-plugin fails" 1 $?
+
+write_valid_repo
+printf '%s\n' '{"mcpServers":{}}' > "$tmp/packages/claude-plugin/.mcp.json"
+REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "root .mcp.json in the distributed package fails (Claude would auto-discover it)" 1 $?
+
+write_valid_repo
+/bin/rm -rf "$tmp/packages/claude-plugin/codex-commands"
+REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "missing generated codex-commands fails" 1 $?
+
+write_valid_repo
+mkdir -p "$tmp/packages/codex-plugin/skills/setup"
+printf '%s\n' '# stray' > "$tmp/packages/codex-plugin/skills/setup/SKILL.md"
+REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "generated workflow skill checked into the authoring tree fails" 1 $?
 
 write_valid_repo
 printf '%s\n' '{"lockfileVersion":3}' > "$tmp/package-lock.json"
@@ -242,7 +284,7 @@ REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "ignored Claude release package fails" 1 $?
 
 write_valid_repo
-/bin/rm -rf "$tmp/packages/codex-plugin/skills"
+/bin/rm -rf "$tmp/packages/claude-plugin/codex-skills"
 REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "missing Codex skills adapter fails" 1 $?
 
@@ -262,8 +304,8 @@ REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "legacy root Android runner project fails" 1 $?
 
 write_valid_repo
-/bin/rm -rf "$tmp/packages/codex-plugin/skills"
-ln -s ../shared-agent-knowledge/skills "$tmp/packages/codex-plugin/skills"
+/bin/rm -rf "$tmp/packages/claude-plugin/codex-skills"
+ln -s ../codex-plugin/skills "$tmp/packages/claude-plugin/codex-skills"
 REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "symlinked Codex skills adapter fails" 1 $?
 
@@ -272,7 +314,7 @@ probe_cwd="$tmp/probe-cwd"
 probe_file="$tmp/launcher-probe.json"
 mkdir -p "$probe_cwd"
 probe_cwd="$(cd "$probe_cwd" && pwd -P)"
-( cd "$probe_cwd" && LAUNCHER_PROBE_FILE="$probe_file" node "$tmp/packages/codex-plugin/bin/cdp-supervisor.js" --probe >/dev/null 2>&1 )
+( cd "$probe_cwd" && LAUNCHER_PROBE_FILE="$probe_file" node "$tmp/packages/claude-plugin/bin/cdp-supervisor.js" --probe >/dev/null 2>&1 )
 launcher_status=$?
 actual=1
 if [ "$launcher_status" -eq 0 ] && jq -e --arg cwd "$probe_cwd" '.cwd == $cwd and .argv == ["--no-lock", "--probe"]' "$probe_file" >/dev/null; then
@@ -281,14 +323,14 @@ fi
 check "Codex launcher uses packaged runtime and preserves app cwd/args" 0 $actual
 
 write_valid_repo
-/bin/rm -rf "$tmp/packages/codex-plugin/rn-dev-agent-core"
+/bin/rm -rf "$tmp/packages/claude-plugin/rn-dev-agent-core"
 mkdir -p "$tmp/home/.codex/plugins/cache/local/rn-dev-agent-core/9.9.9/dist"
 printf '%s\n' 'console.log("must not run")' > "$tmp/home/.codex/plugins/cache/local/rn-dev-agent-core/9.9.9/dist/supervisor.js"
-HOME="$tmp/home" LAUNCHER_PROBE_FILE="$tmp/should-not-exist.json" node "$tmp/packages/codex-plugin/bin/cdp-supervisor.js" >/dev/null 2>&1
+HOME="$tmp/home" LAUNCHER_PROBE_FILE="$tmp/should-not-exist.json" node "$tmp/packages/claude-plugin/bin/cdp-supervisor.js" >/dev/null 2>&1
 check "Codex launcher ignores unrelated global core cache" 1 $?
 
-actual_version="$(jq -r '.version' "$REPO_ROOT/packages/codex-plugin/.codex-plugin/plugin.json")"
-actual_bootstrap="$(jq -r '.mcpServers.cdp.args[1]' "$REPO_ROOT/packages/codex-plugin/.mcp.json")"
+actual_version="$(jq -r '.version' "$REPO_ROOT/packages/claude-plugin/.codex-plugin/plugin.json")"
+actual_bootstrap="$(jq -r '.mcpServers.cdp.args[1]' "$REPO_ROOT/packages/claude-plugin/codex.mcp.json")"
 bootstrap_home="$tmp/bootstrap-home"
 bootstrap_cwd="$tmp/bootstrap-cwd"
 bootstrap_probe="$tmp/bootstrap-probe.json"

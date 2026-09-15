@@ -41,7 +41,6 @@ VERIFY_CLI=""
 for candidate in \
   "$SCRIPT_DIR/../rn-dev-agent-core/dist/maestro-runner-pin.js" \
   "$SCRIPT_DIR/../packages/claude-plugin/rn-dev-agent-core/dist/maestro-runner-pin.js" \
-  "$SCRIPT_DIR/../packages/codex-plugin/rn-dev-agent-core/dist/maestro-runner-pin.js" \
   "$SCRIPT_DIR/../packages/rn-dev-agent-core/dist/maestro-runner-pin.js"
 do
   if [ -f "$candidate" ]; then

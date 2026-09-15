@@ -2,14 +2,34 @@
 # Syncs agent plugin manifest versions from the synthetic package source of truth
 # and guards against hardcoded version literals drifting in TypeScript source.
 # Run as: pre-commit hook, CI check, or manual `./scripts/sync-versions.sh`
+#
+# Test seams (scripts/test/sync-versions.test.sh):
+#   REPO_ROOT   fake checkout (default: this repository)
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+
+# GNU sed's `-i[SUFFIX]` is attached. `sed -i '' expr file` (BSD) treats the
+# empty argument as the script and the expression as a filename, then exits 2
+# (`can't read ...`) on Ubuntu — the Version Packages runner. Detect GNU vs BSD
+# so --fix can rewrite this PR's generated Codex copies before build:host-runtimes.
+replace_in_place() {
+  local expr="$1"
+  local file="$2"
+  if sed --version >/dev/null 2>&1; then
+    sed -i "$expr" "$file"
+  else
+    sed -i '' "$expr" "$file"
+  fi
+}
+
 PLUGIN_JSON="$REPO_ROOT/packages/claude-plugin/plugin.json"
 CLAUDE_PLUGIN_MANIFEST_JSON="$REPO_ROOT/packages/claude-plugin/.claude-plugin/plugin.json"
 CURSOR_PLUGIN_JSON="$REPO_ROOT/packages/claude-plugin/.cursor-plugin/plugin.json"
 CODEX_PLUGIN_JSON="$REPO_ROOT/packages/codex-plugin/.codex-plugin/plugin.json"
 CODEX_MCP_JSON="$REPO_ROOT/packages/codex-plugin/.mcp.json"
+DIST_CODEX_PLUGIN_JSON="$REPO_ROOT/packages/claude-plugin/.codex-plugin/plugin.json"
+DIST_CODEX_MCP_JSON="$REPO_ROOT/packages/claude-plugin/codex.mcp.json"
 MARKETPLACE_JSON="$REPO_ROOT/packages/claude-plugin/marketplace.json"
 CLAUDE_MARKETPLACE_MANIFEST_JSON="$REPO_ROOT/packages/claude-plugin/.claude-plugin/marketplace.json"
 ROOT_MARKETPLACE_MANIFEST_JSON="$REPO_ROOT/.claude-plugin/marketplace.json"
@@ -29,6 +49,8 @@ claude_plugin_manifest_version=$(grep '"version"' "$CLAUDE_PLUGIN_MANIFEST_JSON"
 cursor_plugin_version=$(grep '"version"' "$CURSOR_PLUGIN_JSON" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
 codex_plugin_version=$(grep '"version"' "$CODEX_PLUGIN_JSON" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
 codex_mcp_version=$(grep -o "const V='[0-9][^']*'" "$CODEX_MCP_JSON" | head -1 | sed "s/const V='\([^']*\)'/\1/")
+dist_codex_plugin_version=$(grep '"version"' "$DIST_CODEX_PLUGIN_JSON" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
+dist_codex_mcp_version=$(grep -o "const V='[0-9][^']*'" "$DIST_CODEX_MCP_JSON" | head -1 | sed "s/const V='\([^']*\)'/\1/")
 marketplace_version=$(grep '"version"' "$MARKETPLACE_JSON" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
 claude_marketplace_manifest_version=$(grep '"version"' "$CLAUDE_MARKETPLACE_MANIFEST_JSON" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
 root_marketplace_manifest_version=$(grep '"version"' "$ROOT_MARKETPLACE_MANIFEST_JSON" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
@@ -37,9 +59,10 @@ synth_version=$(grep '"version"' "$SYNTHETIC_PKG_JSON" | head -1 | sed 's/.*"ver
 
 # Manifest sync: packages/claude-plugin/package.json (the changesets-managed
 # source of truth) -> Claude plugin.json / Cursor Plugin manifest / Codex
-# .codex-plugin/plugin.json / marketplace.json. The post-version script in
-# yarn version-packages does the bumping; this script is the guard that
-# catches drift if anyone edits a version by hand.
+# .codex-plugin/plugin.json / marketplace.json and the generated Codex copies
+# inside packages/claude-plugin. The post-version script in yarn
+# version-packages does the bumping; this script is the guard that catches
+# drift if anyone edits a version by hand.
 mismatch=""
 if [ "$plugin_version" != "$synth_version" ]; then
   mismatch="plugin.json=$plugin_version synthetic-pkg=$synth_version"
@@ -76,22 +99,34 @@ if [ "$codex_mcp_version" != "$synth_version" ]; then
   if [ -n "$mismatch" ]; then mismatch="$mismatch "; fi
   mismatch="${mismatch}.mcp.json bootstrap=$codex_mcp_version synthetic-pkg=$synth_version"
 fi
+if [ "$dist_codex_plugin_version" != "$synth_version" ]; then
+  if [ -n "$mismatch" ]; then mismatch="$mismatch "; fi
+  mismatch="${mismatch}claude-plugin/.codex-plugin/plugin.json=$dist_codex_plugin_version synthetic-pkg=$synth_version"
+fi
+if [ "$dist_codex_mcp_version" != "$synth_version" ]; then
+  if [ -n "$mismatch" ]; then mismatch="$mismatch "; fi
+  mismatch="${mismatch}claude-plugin/codex.mcp.json bootstrap=$dist_codex_mcp_version synthetic-pkg=$synth_version"
+fi
 
 if [ -n "$mismatch" ]; then
   if [ "${1:-}" = "--fix" ]; then
     # synthetic-pkg is the source of truth; rewrite the generated manifests.
-    sed -i '' "s/\"version\": \"$plugin_version\"/\"version\": \"$synth_version\"/" "$PLUGIN_JSON"
-    sed -i '' "s/\"version\": \"$claude_plugin_manifest_version\"/\"version\": \"$synth_version\"/" "$CLAUDE_PLUGIN_MANIFEST_JSON"
-    sed -i '' "s/\"version\": \"$cursor_plugin_version\"/\"version\": \"$synth_version\"/" "$CURSOR_PLUGIN_JSON"
-    sed -i '' "s/\"version\": \"$codex_plugin_version\"/\"version\": \"$synth_version\"/" "$CODEX_PLUGIN_JSON"
+    replace_in_place "s/\"version\": \"$plugin_version\"/\"version\": \"$synth_version\"/" "$PLUGIN_JSON"
+    replace_in_place "s/\"version\": \"$claude_plugin_manifest_version\"/\"version\": \"$synth_version\"/" "$CLAUDE_PLUGIN_MANIFEST_JSON"
+    replace_in_place "s/\"version\": \"$cursor_plugin_version\"/\"version\": \"$synth_version\"/" "$CURSOR_PLUGIN_JSON"
+    replace_in_place "s/\"version\": \"$codex_plugin_version\"/\"version\": \"$synth_version\"/" "$CODEX_PLUGIN_JSON"
     if [ -n "$codex_mcp_version" ]; then
-      sed -i '' "s/const V='$codex_mcp_version'/const V='$synth_version'/" "$CODEX_MCP_JSON"
+      replace_in_place "s/const V='$codex_mcp_version'/const V='$synth_version'/" "$CODEX_MCP_JSON"
     fi
-    sed -i '' "s/\"version\": \"$marketplace_version\"/\"version\": \"$synth_version\"/" "$MARKETPLACE_JSON"
-    sed -i '' "s/\"version\": \"$claude_marketplace_manifest_version\"/\"version\": \"$synth_version\"/" "$CLAUDE_MARKETPLACE_MANIFEST_JSON"
-    sed -i '' "s/\"version\": \"$root_marketplace_manifest_version\"/\"version\": \"$synth_version\"/" "$ROOT_MARKETPLACE_MANIFEST_JSON"
-    sed -i '' "s/\"version\": \"$cursor_marketplace_version\"/\"version\": \"$synth_version\"/" "$CURSOR_MARKETPLACE_JSON"
-    echo "synced Claude manifests + Cursor Plugin manifest + Codex .codex-plugin/plugin.json + Codex .mcp.json + marketplace manifests -> $synth_version"
+    replace_in_place "s/\"version\": \"$dist_codex_plugin_version\"/\"version\": \"$synth_version\"/" "$DIST_CODEX_PLUGIN_JSON"
+    if [ -n "$dist_codex_mcp_version" ]; then
+      replace_in_place "s/const V='$dist_codex_mcp_version'/const V='$synth_version'/" "$DIST_CODEX_MCP_JSON"
+    fi
+    replace_in_place "s/\"version\": \"$marketplace_version\"/\"version\": \"$synth_version\"/" "$MARKETPLACE_JSON"
+    replace_in_place "s/\"version\": \"$claude_marketplace_manifest_version\"/\"version\": \"$synth_version\"/" "$CLAUDE_MARKETPLACE_MANIFEST_JSON"
+    replace_in_place "s/\"version\": \"$root_marketplace_manifest_version\"/\"version\": \"$synth_version\"/" "$ROOT_MARKETPLACE_MANIFEST_JSON"
+    replace_in_place "s/\"version\": \"$cursor_marketplace_version\"/\"version\": \"$synth_version\"/" "$CURSOR_MARKETPLACE_JSON"
+    echo "synced Claude manifests + Cursor Plugin manifest + Codex .codex-plugin/plugin.json + Codex .mcp.json + generated Codex copies + marketplace manifests -> $synth_version"
   else
     echo "ERROR: version mismatch — $mismatch"
     echo "Run: ./scripts/sync-versions.sh --fix"

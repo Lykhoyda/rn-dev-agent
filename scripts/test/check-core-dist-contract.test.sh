@@ -19,17 +19,23 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 git -C "$tmp" init -q
 git -C "$tmp" config commit.gpgsign false
-mkdir -p \
-  "$tmp/packages/claude-plugin/rn-dev-agent-core/dist" \
-  "$tmp/packages/codex-plugin/rn-dev-agent-core/dist"
+mkdir -p "$tmp/packages/claude-plugin/rn-dev-agent-core/dist"
 printf '%s\n' 'packages/rn-dev-agent-core/dist/' > "$tmp/.gitignore"
 printf '%s\n' 'host' > "$tmp/packages/claude-plugin/rn-dev-agent-core/dist/supervisor.js"
-printf '%s\n' 'host' > "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js"
 git -C "$tmp" add -A
 git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm fresh
 
 REPO_ROOT="$tmp" bash "$GUARD" >/dev/null
-check "gitignored core dist plus tracked hosts passes" 0 $?
+check "gitignored core dist plus one tracked host passes" 0 $?
+
+mkdir -p "$tmp/packages/codex-plugin/rn-dev-agent-core/dist"
+printf '%s\n' 'host' > "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js"
+git -C "$tmp" add -A
+git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "second host"
+REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "second tracked host dist fails" 1 $?
+git -C "$tmp" rm -r -q -- packages/codex-plugin/rn-dev-agent-core
+git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "drop second host"
 
 mkdir -p "$tmp/packages/rn-dev-agent-core/dist"
 printf '%s\n' 'core' > "$tmp/packages/rn-dev-agent-core/dist/supervisor.js"
@@ -41,9 +47,8 @@ check "tracked core dist fails" 1 $?
 git -C "$tmp" rm -q --cached -- packages/rn-dev-agent-core/dist/supervisor.js
 printf '%s\n' '# no dist ignore' > "$tmp/.gitignore"
 git -C "$tmp" add .gitignore
-git -C "$tmp" rm -q --cached -- packages/claude-plugin/rn-dev-agent-core/dist/supervisor.js \
-  packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js
-git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "drop ignore and hosts"
+git -C "$tmp" rm -q --cached -- packages/claude-plugin/rn-dev-agent-core/dist/supervisor.js
+git -C "$tmp" -c user.email=t@t -c user.name=t commit -qm "drop ignore and host"
 REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "missing gitignore and host tracking fails" 1 $?
 

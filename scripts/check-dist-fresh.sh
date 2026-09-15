@@ -1,49 +1,58 @@
 #!/usr/bin/env bash
-# CI gate: packaged host runtimes must equal a CLEAN rebuild from src/.
-# packages/rn-dev-agent-core/dist/ is a local/CI/npm-pack build product and must
-# not be committed. Marketplace installs run the committed HOST copies under
-# packages/{claude,codex}-plugin/rn-dev-agent-core/dist/.
-# Clean-slate so host drift shapes surface in porcelain:
+# CI gate: the committed distributed plugin package must equal a CLEAN rebuild
+# from src/. packages/rn-dev-agent-core/dist/ is a local/CI/npm-pack build
+# product and must not be committed. Both marketplaces install the ONE committed
+# runtime under packages/claude-plugin/rn-dev-agent-core/dist/ plus the Codex
+# adapters generated next to it; no other host dist may be tracked.
+# Clean-slate so drift shapes surface in porcelain:
 #   ' M' stale committed file, '??' emitted-but-uncommitted, ' D' orphan.
 # Core dist is wiped and regenerated (tsc + SPA + native copy) as the input to
 # scripts/build-host-runtimes.ts; it is gitignored, so it never appears in porcelain.
 # The porcelain scope covers EVERY path scripts/build-host-runtimes.ts writes
-# (both host packages) so no generator output can drift stale unnoticed.
+# so no generator output can drift stale unnoticed.
 # Env overrides (guard test): REPO_ROOT, DIST_BUILD_CMD, WEB_BUILD_CMD,
-# CODEX_RUNTIME_BUILD_CMD, SKIP_PACK_CHECK.
+# HOST_RUNTIME_BUILD_CMD, SKIP_PACK_CHECK.
 set -euo pipefail
 
 ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 BRIDGE="$ROOT/packages/rn-dev-agent-core"
 DIST_REL="packages/rn-dev-agent-core/dist"
-CODEX_RUNTIME_ROOT_REL="packages/codex-plugin/rn-dev-agent-core"
-CODEX_RUNTIME="$ROOT/$CODEX_RUNTIME_ROOT_REL/dist"
-CLAUDE_RUNTIME_ROOT_REL="packages/claude-plugin/rn-dev-agent-core"
-CLAUDE_RUNTIME="$ROOT/$CLAUDE_RUNTIME_ROOT_REL/dist"
+PLUGIN_REL="packages/claude-plugin"
+HOST_RUNTIME_ROOT_REL="$PLUGIN_REL/rn-dev-agent-core"
+HOST_RUNTIME="$ROOT/$HOST_RUNTIME_ROOT_REL/dist"
 HOST_OUTPUT_RELS=(
-  "$CODEX_RUNTIME_ROOT_REL"
-  "$CLAUDE_RUNTIME_ROOT_REL"
-  "packages/codex-plugin/runner-manifest.json"
-  "packages/claude-plugin/runner-manifest.json"
-  "packages/codex-plugin/CLAUDE-MD-TEMPLATE.md"
-  "packages/codex-plugin/AGENTS-MD-TEMPLATE.md"
-  "packages/codex-plugin/bin/plugin-health.js"
-  "packages/codex-plugin/skills"
-  "packages/claude-plugin/CLAUDE-MD-TEMPLATE.md"
-  "packages/codex-plugin/scripts"
-  "packages/claude-plugin/scripts"
+  "$HOST_RUNTIME_ROOT_REL"
+  "$PLUGIN_REL/runner-manifest.json"
+  "$PLUGIN_REL/CLAUDE-MD-TEMPLATE.md"
+  "$PLUGIN_REL/AGENTS-MD-TEMPLATE.md"
+  "$PLUGIN_REL/scripts"
+  "$PLUGIN_REL/bin"
+  "$PLUGIN_REL/.codex-plugin"
+  "$PLUGIN_REL/codex.mcp.json"
+  "$PLUGIN_REL/codex-skills"
+  "$PLUGIN_REL/codex-commands"
+  "$PLUGIN_REL/codex-agents"
+  "$PLUGIN_REL/codex-templates"
 )
 # corepack yarn build (= tsc + native copy) fails closed; bare `npx tsc` would
 # auto-install typescript@latest in non-interactive CI if resolution ever broke.
 BUILD_CMD="${DIST_BUILD_CMD:-corepack yarn build}"
 WEB_BUILD_CMD="${WEB_BUILD_CMD:-corepack yarn build:web}"
-CODEX_RUNTIME_BUILD_CMD="${CODEX_RUNTIME_BUILD_CMD:-node scripts/build-host-runtimes.ts}"
+HOST_RUNTIME_BUILD_CMD="${HOST_RUNTIME_BUILD_CMD:-node scripts/build-host-runtimes.ts}"
 
 tracked_core="$(git -C "$ROOT" ls-files -- "$DIST_REL")"
 if [ -n "$tracked_core" ]; then
   echo "ERROR: $DIST_REL is generated and must not be committed."
   echo "$tracked_core"
   echo "  Fix: git rm -r --cached $DIST_REL"
+  exit 1
+fi
+
+second_dist="$(git -C "$ROOT" ls-files | grep -E '^packages/[^/]+/rn-dev-agent-core/dist/' | grep -v "^$HOST_RUNTIME_ROOT_REL/dist/" || true)"
+if [ -n "$second_dist" ]; then
+  echo "ERROR: only $HOST_RUNTIME_ROOT_REL/dist may carry a committed host runtime."
+  echo "$second_dist"
+  echo "  Fix: git rm -r --cached <path>; both hosts install $PLUGIN_REL"
   exit 1
 fi
 
@@ -58,18 +67,20 @@ if [ ! -f "$BRIDGE/dist/supervisor.js" ]; then
   exit 1
 fi
 
-for runtime in "$CODEX_RUNTIME" "$CLAUDE_RUNTIME"; do
-  mkdir -p "$runtime"
-  find "$runtime" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-done
-( cd "$ROOT" && eval "$CODEX_RUNTIME_BUILD_CMD" )
+if [ -L "$HOST_RUNTIME" ]; then
+  echo "ERROR: $HOST_RUNTIME_ROOT_REL/dist must be a real directory, not a symlink"
+  exit 1
+fi
+mkdir -p "$HOST_RUNTIME"
+find "$HOST_RUNTIME" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+( cd "$ROOT" && eval "$HOST_RUNTIME_BUILD_CMD" )
 
 STATUS="$(
   git -C "$ROOT" status --porcelain -- \
     "${HOST_OUTPUT_RELS[@]}"
 )"
 if [ -n "$STATUS" ]; then
-  echo "ERROR: committed host package outputs are not a clean rebuild of src/."
+  echo "ERROR: committed plugin package outputs are not a clean rebuild of src/."
   echo "$STATUS"
   echo "  ' M' = stale committed file, '??' = emitted but uncommitted, ' D' = orphan no longer emitted"
   echo "  Fix: corepack yarn build:host-runtimes"

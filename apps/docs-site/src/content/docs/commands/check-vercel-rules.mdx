@@ -31,8 +31,9 @@ The same underlying checker runs in three places:
 2. **This host workflow** — manual, project- or changed-files-scoped.
 3. **CI / pre-ship gating** — `--ci` blocks on violations.
 
-The checker and rules index ship inside both host packages, so installed Codex
-workflows do not depend on an rn-dev-agent source checkout. Each violation cites
+The checker and rules index ship inside the installed plugin package both hosts
+share, so installed Codex workflows do not depend on an rn-dev-agent source
+checkout. Each violation cites
 packaged rule metadata and upstream provenance. Retrofitting an existing codebase? Take a `--baseline-snapshot` first so only new violations surface.
 
 ## See also

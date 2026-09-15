@@ -304,15 +304,11 @@ test('current process has a portable birth identity on supported hosts', () => {
   assert.match(birth?.token ?? '', /^[a-f0-9]{64}$/);
 });
 
-test('Darwin process helper ships executable in core and both host runtimes', () => {
+test('Darwin process helper ships executable in core and the packaged runtime', () => {
   const helperUrls = [
     new URL('../../../dist/native/darwin-process-birth', import.meta.url),
     new URL(
       '../../../../claude-plugin/rn-dev-agent-core/dist/native/darwin-process-birth',
-      import.meta.url,
-    ),
-    new URL(
-      '../../../../codex-plugin/rn-dev-agent-core/dist/native/darwin-process-birth',
       import.meta.url,
     ),
   ];
@@ -322,9 +318,7 @@ test('Darwin process helper ships executable in core and both host runtimes', ()
   );
 
   assert.deepEqual(helpers[1], helpers[0]);
-  assert.deepEqual(helpers[2], helpers[0]);
   assert.deepEqual(manifests[1], manifests[0]);
-  assert.deepEqual(manifests[2], manifests[0]);
   assert.equal(manifests[0].binarySha256, createHash('sha256').update(helpers[0]).digest('hex'));
   assert.equal(manifests[0].cdhashes.length, 2);
   assert.ok(manifests[0].cdhashes.every((cdhash) => /^[a-f0-9]{40}$/.test(cdhash)));
@@ -338,7 +332,7 @@ test('Darwin process helper ships executable in core and both host runtimes', ()
   }
 });
 
-test('Linux publication helpers ship in core and both host runtimes', () => {
+test('Linux publication helpers ship in core and the packaged runtime', () => {
   for (const [architecture, machine] of [
     ['x64', 62],
     ['arm64', 183],
@@ -347,7 +341,6 @@ test('Linux publication helpers ship in core and both host runtimes', () => {
     const urls = [
       new URL(`../../../dist/${relative}`, import.meta.url),
       new URL(`../../../../claude-plugin/rn-dev-agent-core/dist/${relative}`, import.meta.url),
-      new URL(`../../../../codex-plugin/rn-dev-agent-core/dist/${relative}`, import.meta.url),
     ];
     const helpers = urls.map((url) => readFileSync(url));
     const manifests = urls.map((url) =>
@@ -355,9 +348,7 @@ test('Linux publication helpers ship in core and both host runtimes', () => {
     );
 
     assert.deepEqual(helpers[1], helpers[0]);
-    assert.deepEqual(helpers[2], helpers[0]);
     assert.deepEqual(manifests[1], manifests[0]);
-    assert.deepEqual(manifests[2], manifests[0]);
     assert.equal(helpers[0].readUInt32BE(0), 0x7f454c46);
     assert.equal(helpers[0].readUInt16LE(18), machine);
     assert.equal(manifests[0].binarySha256, createHash('sha256').update(helpers[0]).digest('hex'));
