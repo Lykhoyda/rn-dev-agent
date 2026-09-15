@@ -110,6 +110,11 @@ jobs:
       - name: Agent package split guard unit test
         run: bash scripts/test/check-agent-package-sync.test.sh
 
+      # GH#1037: --fix must survive GNU sed so Ubuntu Version Packages can
+      # rewrite the generated Codex copies before build:host-runtimes.
+      - name: Version-sync fixer portable-sed guard
+        run: bash scripts/test/sync-versions.test.sh
+
       # Postpublication readiness of the release trust root: a checkout that
       # advertises a plugin version must already have that version's exact
       # runner bytes public (release.yml publishes them before the Version
