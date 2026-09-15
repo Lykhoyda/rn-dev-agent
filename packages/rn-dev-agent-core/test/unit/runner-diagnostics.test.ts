@@ -30,6 +30,7 @@ import {
   type RunnerDiagnosticsSnapshot,
 } from '../../dist/experience/runner-diagnostics.js';
 import { createCollectLogsHandler } from '../../dist/tools/collect-logs.js';
+import { runFlowParked } from '../../dist/tools/maestro-run.js';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
@@ -199,6 +200,84 @@ test('runner diagnostics retain terminal lifecycle events after the event cap', 
       (event, index, events) => index === 0 || event.sequence > events[index - 1]!.sequence,
     ),
   );
+});
+
+const flowParkPhases = () => snapshotRunnerDiagnostics()?.events.map((event) => event.detail);
+
+test('flow-park trace records begin, released, and committed on success', async () => {
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'ios' }, async () => {
+    await runFlowParked(async () => 'RESULT', {
+      platform: 'ios',
+      stopFastRunner: () => {},
+      completeRunnerPark: async () => {},
+      markCdpStale: () => {},
+    });
+    assert.deepEqual(flowParkPhases(), [
+      { phase: 'begin', platform: 'ios' },
+      { phase: 'released', platform: 'ios' },
+      { phase: 'committed', platform: 'ios' },
+    ]);
+  });
+});
+
+test('flow-park trace records begin only when the release rejects', async () => {
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'android' }, async () => {
+    const calls: string[] = [];
+    await assert.rejects(
+      runFlowParked(
+        async () => {
+          calls.push('flow');
+        },
+        {
+          platform: 'android',
+          releaseAndroidSlot: async () => {
+            throw new Error('release boom');
+          },
+          completeRunnerPark: async () => {
+            calls.push('commit-park');
+          },
+          markCdpStale: () => {
+            calls.push('stale');
+          },
+        },
+      ),
+      /release boom/,
+    );
+    assert.deepEqual(calls, ['stale']);
+    assert.deepEqual(flowParkPhases(), [{ phase: 'begin', platform: 'android' }]);
+  });
+});
+
+test('flow-park trace records released but not committed when the commit rejects', async () => {
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'ios' }, async () => {
+    const calls: string[] = [];
+    await assert.rejects(
+      runFlowParked(
+        async () => {
+          calls.push('flow');
+        },
+        {
+          platform: 'ios',
+          stopFastRunner: () => {
+            calls.push('stop');
+          },
+          completeRunnerPark: async () => {
+            calls.push('commit-park');
+            throw new Error('commit boom');
+          },
+          markCdpStale: () => {
+            calls.push('stale');
+          },
+        },
+      ),
+      /commit boom/,
+    );
+    assert.deepEqual(calls, ['stop', 'commit-park', 'stale']);
+    assert.deepEqual(flowParkPhases(), [
+      { phase: 'begin', platform: 'ios' },
+      { phase: 'released', platform: 'ios' },
+    ]);
+  });
 });
 
 test('runner diagnostics retain the owned workspace test-app bundle ID only', () => {
