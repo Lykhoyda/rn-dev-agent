@@ -4,7 +4,7 @@
 
 ### Your agent writes the code. This proves it runs.
 
-A plugin for **Claude Code** and **Codex** that turns your coding agent into a React Native
+A plugin for **Claude Code**, **Codex**, and **Cursor** that turns your coding agent into a React Native
 development partner — one that reads your running app's component tree, store state, and
 navigation over the Chrome DevTools Protocol, taps real UI on iOS and Android, and **records the
 evidence** that the feature actually works.
@@ -24,7 +24,7 @@ evidence** that the feature actually works.
 ## See it in 60 seconds
 
 ```text
-# 1. Install (Claude Code — Codex below)
+# 1. Install (Claude Code — Cursor and Codex below)
 /plugin marketplace add Lykhoyda/rn-dev-agent
 /plugin install rn-dev-agent@rn-dev-agent
 /reload-plugins
@@ -42,7 +42,7 @@ The agent explores your codebase, designs the change, implements it — then con
 app, navigates to the screen, checks the component tree and store state, taps through the flow, and
 saves the walk as a replayable test. You get working code **and** the proof.
 
-Codex users: replace `/rn-dev-agent:<name>` with `$rn-dev-agent:<name>`. [Install steps →](#install)
+Codex users: replace `/rn-dev-agent:<name>` with `$rn-dev-agent:<name>`. Cursor uses the Claude package (same slash commands). [Install steps →](#install)
 
 ---
 
@@ -59,7 +59,7 @@ benchmarks.
 | **Flows that repair themselves** | When a `testID` drifts, the saved action fuzzy-matches the live snapshot, patches its own YAML, and retries. Cosmetic drift is absorbed; genuinely broken product logic is surfaced, never auto-fixed |
 | **Minutes, not sessions** | Simple features land in 3–5 min, complex multi-step flows in 11–25 min. **Zero crashes and zero manual interventions across all 35 measured features** |
 | **iOS and Android, one contract** | In-tree XCTest and UiAutomator runners give real taps, typing, scrolling, and screenshots — shipped as prebuilt artifacts so first use skips the cold build |
-| **Both hosts, full parity** | Claude Code: 17 slash commands + 11 skills + 6 agents. Codex: 28 native skills (17 workflow + 11 domain). The same 81 MCP tools on both |
+| **Claude, Codex, and Cursor** | Claude and Cursor: 17 slash commands + 11 skills + 6 agents. Codex: 28 native skills (17 workflow + 11 domain). The same MCP tools on every host |
 
 [Full benchmarks and methodology →](https://lykhoyda.github.io/rn-dev-agent/benchmarks/)
 
@@ -259,6 +259,15 @@ Claude Code / Codex
 Local checkout: `claude --plugin-dir /path/to/rn-dev-agent` (the root `.claude-plugin/marketplace.json`
 resolves the plugin package from `packages/claude-plugin/`).
 
+### Cursor
+
+Install from **Customize → Plugins**. This repo's `.cursor-plugin/marketplace.json` resolves
+`packages/claude-plugin/`.
+
+Local checkout: load `/path/to/rn-dev-agent/packages/claude-plugin` — not the repository root.
+Cursor starts `cdp` from `${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js`. Claude
+SessionStart hooks are not loaded. Requires Node.js >= 24.
+
 ### Codex
 
 ```bash
@@ -281,6 +290,7 @@ requires exiting and relaunching Codex.
 cd /path/to/your-rn-app
 
 Claude: /rn-dev-agent:setup
+Cursor: /rn-dev-agent:setup
 Codex:  $rn-dev-agent:setup
 ```
 
@@ -408,6 +418,7 @@ store, each capped at 200 typed lifecycle events and 256 KB for reviewed feedbac
 | CDP rejected (1006) | Close React Native DevTools, Flipper, or Chrome DevTools |
 | Zustand store error | Add `global.__ZUSTAND_STORES__` ([setup](https://lykhoyda.github.io/rn-dev-agent/getting-started/#zustand-stores-one-bridge-call)) |
 | Plugin not detected (Claude) | `/plugin install rn-dev-agent@rn-dev-agent` then `/reload-plugins` |
+| Plugin not detected (Cursor) | Customize → Plugins; local path is `packages/claude-plugin`. Reload the window. Requires Node.js >= 24 |
 | Subagent says "MCP tools unavailable" | Never spawn `rn-tester`/`rn-pr-qa`/`rn-debugger` via the Task tool — use `/rn-dev-agent:test-feature`, `/rn-dev-agent:qa-pr`, or `/rn-dev-agent:debug-screen` instead (GH #31) |
 
 <details>
@@ -438,6 +449,7 @@ Enable auto-update in the host plugin manager, or update manually:
 ```text
 Claude: /plugin update rn-dev-agent@rn-dev-agent
         /reload-plugins
+Cursor: Customize → Plugins, then Developer: Reload Window
 Codex:  codex plugin marketplace upgrade rn-dev-agent
         codex plugin add rn-dev-agent@rn-dev-agent --json
         # relaunch after this external mutation
@@ -453,7 +465,7 @@ This is a Yarn workspace monorepo:
 | Package | What it is |
 |---------|------------|
 | `packages/rn-dev-agent-core` | The MCP server (CDP bridge, device control, actions, testing) — all TypeScript source and tests |
-| `packages/claude-plugin` | The one plugin package both marketplaces install — Claude manifest, commands, agents, skills, hooks, generated Codex adapters (`.codex-plugin/`, `codex-*`, `bin/`), one bundled runtime |
+| `packages/claude-plugin` | The one plugin package Claude, Cursor, and Codex install — Claude/Cursor manifests, commands, agents, skills, hooks, generated Codex adapters (`.codex-plugin/`, `codex-*`, `bin/`), one bundled runtime |
 | `packages/codex-plugin` | Codex authoring source (manifest, playbooks, adapted skills, launcher, health) generated into `packages/claude-plugin` |
 | `packages/shared-agent-knowledge` | Source of truth both host packages are generated from |
 | `packages/rn-fast-runner` | In-tree iOS XCTest device runner |
@@ -468,8 +480,8 @@ corepack yarn install --immutable
 corepack yarn build:host-runtimes   # builds core + generates the distributed plugin package
 ```
 
-Run locally: `claude --plugin-dir /path/to/rn-dev-agent` (Claude Code) or register
-`packages/claude-plugin` (Codex).
+Run locally: `claude --plugin-dir /path/to/rn-dev-agent` (Claude Code), load
+`packages/claude-plugin` (Cursor), or register `packages/claude-plugin` (Codex).
 
 ```bash
 corepack yarn test          # complete unit-test suite

@@ -284,9 +284,8 @@ const pkgVersion = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: stri
 
 // M3 / Phase 90: single-instance lock. Must run BEFORE telemetry prune / CDPClient creation
 // so two racing MCPs don't corrupt telemetry files or fight for the CDP slot. --no-lock
-// opt-out exists for CI parallelism and benchmark harnesses; documented in the conflict
-// message. Release is registered on process.exit so ALL exit paths (graceful, uncaught,
-// signal) clean up the lock.
+// opt-out exists for CI parallelism and benchmark harnesses. Release is registered on
+// process.exit so ALL exit paths (graceful, uncaught, signal) clean up the lock.
 // GH #182: module-scoped so the parent-death watch can touch() it (heartbeat) and
 // release() it on orphan-exit. null when --no-lock (touch/release become no-ops).
 let lockfile: Lockfile | null = null;

@@ -71,7 +71,7 @@ Maestro replay. Codified in
 `feedback_execute_artifacts_before_manual.md`.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/learned-actions.js" \
+node "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/learned-actions.js" \
   --json --section b --filter "<feature-keyword>" \
   --workspace-root "$PWD" --memory-cwd "$PWD" \
   > /tmp/learned-actions.json

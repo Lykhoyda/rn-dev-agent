@@ -43,7 +43,7 @@ For plugin-version or Vercel-rule drift, report the documented command but do
 not execute it. Offline version checks do not fail the plugin.
 
 For **session-authority health**, run the packaged read-only probe from the RN app root:
-`node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js" report --json`. The report is
+`node "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/session-doctor.js" report --json`. The report is
 three-state: GREEN when `sameRootOwner` is `absent` and `wedged` and `repairable` are both
 false, YELLOW when `repairable` is true (a proven-dead owner of this exact root, which the
 next transport start or the repair command releases on its own) or `sameRootOwner` is
@@ -61,7 +61,7 @@ report `abandonedContenders` when it is non-zero. When `startupCleanupBlocked.ca
 is `managed-metro-stop-proof-missing`, report its cause and `nextAction` verbatim and
 do not print or run a restart or repair command; the canonical handling is in
 `using-rn-dev-agent` § "Session ownership recovery". Otherwise, the supported repair is
-`node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js" repair`, which runs the
+`node "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/session-doctor.js" repair`, which runs the
 same proven-dead startup cleanup a fresh transport runs; print it for the user to run, but do
 not execute it from doctor. Print it rooted where it can succeed: for `ownerMismatch: app-root` that is the
 reported `ownerAppRoot`, because repair from the current root can never release another root's

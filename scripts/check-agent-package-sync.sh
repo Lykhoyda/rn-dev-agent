@@ -228,6 +228,7 @@ for path in \
   package.json \
   yarn.lock \
   .claude-plugin/marketplace.json \
+  .cursor-plugin/marketplace.json \
   .agents/plugins/marketplace.json \
   .changeset/config.json \
   .yarnrc.yml \
@@ -238,6 +239,8 @@ for path in \
   packages/claude-plugin/CLAUDE-MD-TEMPLATE.md \
   packages/claude-plugin/plugin.json \
   packages/claude-plugin/.claude-plugin/plugin.json \
+  packages/claude-plugin/.cursor-plugin/plugin.json \
+  packages/claude-plugin/mcp.json \
   packages/claude-plugin/marketplace.json \
   packages/claude-plugin/.claude-plugin/marketplace.json \
   packages/claude-plugin/hooks/hooks.json \
@@ -338,6 +341,19 @@ expect_synced_dir "packages/shared-agent-knowledge/skills" "packages/claude-plug
 expect_synced_dir "packages/shared-agent-knowledge/commands" "packages/claude-plugin/commands" "Claude commands"
 expect_synced_dir "packages/shared-agent-knowledge/agents" "packages/claude-plugin/agents" "Claude agents"
 expect_synced_dir "packages/shared-agent-knowledge/templates" "packages/claude-plugin/templates" "Claude templates"
+# Cursor reuses the Claude command/skill copies and exports CURSOR_PLUGIN_ROOT,
+# not CLAUDE_PLUGIN_ROOT. Claude-only path expansions miss the bundled helpers.
+shared_workflow_roots=(
+  "$ROOT/packages/shared-agent-knowledge/commands"
+  "$ROOT/packages/shared-agent-knowledge/skills"
+  "$ROOT/packages/shared-agent-knowledge/agents"
+)
+if grep -REn --include='*.md' '\$\{CLAUDE_PLUGIN_ROOT\}/' "${shared_workflow_roots[@]}" >/dev/null 2>&1; then
+  fail "shared workflows must use the host-neutral plugin-root fallback (include CURSOR_PLUGIN_ROOT)"
+fi
+if grep -REn --include='*.md' '\$CLAUDE_PLUGIN_ROOT/' "${shared_workflow_roots[@]}" >/dev/null 2>&1; then
+  fail "shared workflows must use the host-neutral plugin-root fallback (include CURSOR_PLUGIN_ROOT)"
+fi
 expect_codex_skill_inventory
 expect_same_file_set "packages/shared-agent-knowledge/commands" "packages/codex-plugin/commands" "Codex commands"
 expect_same_file_set "packages/shared-agent-knowledge/agents" "packages/codex-plugin/agents" "Codex agents"
@@ -451,6 +467,15 @@ for claude_manifest in packages/claude-plugin/plugin.json packages/claude-plugin
     '.mcpServers.cdp.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT == "" and .mcpServers.cdp.env.CODEX_PLUGIN_ROOT == ""' \
     "$claude_manifest must clear inherited Codex root hints so the neutral runtime resolves Claude's launching root"
 done
+expect_jq "packages/claude-plugin/.cursor-plugin/plugin.json" \
+  '.mcpServers == "./mcp.json" and .hooks.hooks == {}' \
+  "Cursor Plugin manifest must pin package-local mcp.json and skip Claude hooks"
+expect_jq "packages/claude-plugin/mcp.json" \
+  '.mcpServers.cdp.command == "node" and .mcpServers.cdp.args == ["${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js"] and (.mcpServers.cdp.cwd? | not)' \
+  "Cursor MCP registration must spawn the package-local supervisor with the process lock on and without overriding app cwd"
+expect_jq ".cursor-plugin/marketplace.json" \
+  '.plugins[] | select(.name == "rn-dev-agent") | .source == "./packages/claude-plugin"' \
+  "root Cursor marketplace must point at the Claude package (Cursor Plugin payload)"
 expect_jq ".agents/plugins/marketplace.json" \
   '.name == "rn-dev-agent" and (.plugins[] | select(.name == "rn-dev-agent") | .source.source == "local" and .source.path == "./packages/claude-plugin")' \
   "Codex marketplace manifest must resolve the shared distribution directory packages/claude-plugin"
@@ -487,9 +512,13 @@ done
 expect_jq "packages/shared-agent-knowledge/source-map.json" \
   '.canonicalSources.skills == "./skills" and .canonicalSources.commands == "./commands" and .canonicalSources.agents == "./agents" and .nativeRunners.ios == "../rn-fast-runner" and .nativeRunners.android == "../rn-android-runner" and (.hostAdaptations.codex.adaptedCommands | length) == 17 and (.hostAdaptations.codex.adaptedDomainSkills | length) == 11 and (.hostAdaptations.codex.commandSkills | length) == 17 and .hostAdaptations.codex.liveRefreshFloor == "0.145.0" and .hostAdaptations.codex.healthSource == "../codex-plugin/src/plugin-health.ts" and .hostAdaptations.codex.healthOutput == "../claude-plugin/bin/plugin-health.js" and .hostAdaptations.codex.agentsTemplateSource == "../codex-plugin/src/AGENTS-MD-TEMPLATE.md" and .hostAdaptations.codex.agentsTemplateOutput == "../claude-plugin/AGENTS-MD-TEMPLATE.md" and .hostAdaptations.codex.authoringRoot == "../codex-plugin" and .hostAdaptations.codex.manifestSource == "../codex-plugin/.codex-plugin/plugin.json" and .hostAdaptations.codex.mcpSource == "../codex-plugin/.mcp.json" and .hostAdaptations.codex.launcherSource == "../codex-plugin/bin/cdp-supervisor.js" and .hostAdaptations.codex.skillsSource == "../codex-plugin/skills" and .hostAdaptations.codex.commandsSource == "../codex-plugin/commands" and .hostAdaptations.codex.agentsSource == "../codex-plugin/agents" and .hostAdaptations.codex.templatesSource == "../codex-plugin/templates/rn-agent" and .hostOutputs.claude.manifest == "../claude-plugin/.claude-plugin/plugin.json" and .hostOutputs.claude.legacyManifest == "../claude-plugin/plugin.json" and .hostOutputs.claude.rootMarketplace == "../../.claude-plugin/marketplace.json" and .hostOutputs.claude.packageMarketplace == "../claude-plugin/.claude-plugin/marketplace.json" and .hostOutputs.claude.runtime == "../claude-plugin/rn-dev-agent-core/dist/supervisor.js" and .hostOutputs.claude.runnerManifest == "../claude-plugin/runner-manifest.json" and .hostOutputs.claude.nativeRunnerScripts == "../claude-plugin/scripts" and .hostOutputs.claude.skills == "../claude-plugin/skills" and .hostOutputs.codex.distributionRoot == "../claude-plugin" and .hostOutputs.codex.manifest == "../claude-plugin/.codex-plugin/plugin.json" and .hostOutputs.codex.mcp == "../claude-plugin/codex.mcp.json" and .hostOutputs.codex.launcher == "../claude-plugin/bin/cdp-supervisor.js" and .hostOutputs.codex.launcherPackage == "../claude-plugin/bin/package.json" and .hostOutputs.codex.health == "../claude-plugin/bin/plugin-health.js" and .hostOutputs.codex.agentsTemplate == "../claude-plugin/AGENTS-MD-TEMPLATE.md" and .hostOutputs.codex.runtime == "../claude-plugin/rn-dev-agent-core/dist/supervisor.js" and .hostOutputs.codex.runnerManifest == "../claude-plugin/runner-manifest.json" and .hostOutputs.codex.nativeRunnerScripts == "../claude-plugin/scripts" and .hostOutputs.codex.skills == "../claude-plugin/codex-skills" and .hostOutputs.codex.commands == "../claude-plugin/codex-commands" and .hostOutputs.codex.agents == "../claude-plugin/codex-agents" and .hostOutputs.codex.templates == "../claude-plugin/codex-templates/rn-agent" and (.compatibilityOutputs? | not) and .apps.docsSite.path == "../../apps/docs-site" and (.apps.docsSite.compatibilityPath? | not)' \
   "shared-agent-knowledge source map must point at package-owned sources, Codex authoring inputs, the single distributed outputs, and docs app"
+expect_jq "packages/shared-agent-knowledge/source-map.json" \
+  '.hostOutputs.claude.cursorManifest == "../claude-plugin/.cursor-plugin/plugin.json" and .hostOutputs.claude.cursorMcp == "../claude-plugin/mcp.json" and .hostOutputs.claude.cursorMarketplace == "../../.cursor-plugin/marketplace.json"' \
+  "source map must point at Cursor Plugin manifests on the Claude package"
 
 expect_eq "$(json '.version' "$ROOT/packages/claude-plugin/plugin.json")" "$synth_version" "Claude plugin manifest version"
 expect_eq "$(json '.version' "$ROOT/packages/claude-plugin/.claude-plugin/plugin.json")" "$synth_version" "Claude plugin .claude-plugin manifest version"
+expect_eq "$(json '.version' "$ROOT/packages/claude-plugin/.cursor-plugin/plugin.json")" "$synth_version" "Cursor Plugin manifest version"
 expect_eq "$(json '.version' "$ROOT/packages/codex-plugin/.codex-plugin/plugin.json")" "$synth_version" "Codex plugin manifest version"
 expect_eq "$(json '.version' "$ROOT/packages/claude-plugin/.codex-plugin/plugin.json")" "$synth_version" "distributed Codex plugin manifest version"
 marketplace_version="$(jq -r '.plugins[] | select(.name == "rn-dev-agent") | .version' "$ROOT/packages/claude-plugin/marketplace.json")"
@@ -498,6 +527,8 @@ claude_marketplace_manifest_version="$(jq -r '.plugins[] | select(.name == "rn-d
 expect_eq "$claude_marketplace_manifest_version" "$synth_version" "Claude package marketplace manifest version"
 root_marketplace_manifest_version="$(jq -r '.plugins[] | select(.name == "rn-dev-agent") | .version' "$ROOT/.claude-plugin/marketplace.json")"
 expect_eq "$root_marketplace_manifest_version" "$synth_version" "root Claude marketplace manifest version"
+cursor_marketplace_version="$(jq -r '.plugins[] | select(.name == "rn-dev-agent") | .version' "$ROOT/.cursor-plugin/marketplace.json")"
+expect_eq "$cursor_marketplace_version" "$synth_version" "root Cursor marketplace version"
 
 if [ -e "$ROOT/packages/codex-plugin/.codex-plugin/migrated-command-skills" ]; then
   fail "Codex package must not carry best-effort migrated command skills"

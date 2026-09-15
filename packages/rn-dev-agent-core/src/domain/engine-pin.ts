@@ -68,7 +68,7 @@ export function parseActionEnginePinVersion(enginePin: string): string | null {
 }
 
 const HOST_PLUGIN_ROOT =
-  '${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}';
+  '${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}';
 
 export const PINNED_RUNNER_INSTALL_HINT =
   `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh` as const;

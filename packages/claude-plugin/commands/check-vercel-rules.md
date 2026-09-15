@@ -35,9 +35,9 @@ It wraps `scripts/check-vercel-rules.mjs`. Same checker, three call sites:
 ```bash
 # Default: --all on cwd, hook-format output
 if [[ -z "$ARGUMENTS" ]]; then
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/check-vercel-rules.mjs" --all
+  node "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/check-vercel-rules.mjs" --all
 else
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/check-vercel-rules.mjs" $ARGUMENTS
+  node "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/check-vercel-rules.mjs" $ARGUMENTS
 fi
 ```
 

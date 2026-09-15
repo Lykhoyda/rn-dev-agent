@@ -33,9 +33,9 @@ Phase A — Build pre-flight (run in this session):
    - **With `--eas` flag:** enter one shell scope, create `<artifact-dir>` with
      `artifact_dir=$(mktemp -d)`, and immediately register
      `trap 'rm -rf -- "$artifact_dir"' EXIT` in that same scope. Then run
-     `bash "$CLAUDE_PLUGIN_ROOT/scripts/eas_resolve_artifact.sh" "<platform>" "<profile>" "<artifact-dir>"`,
+     `bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/eas_resolve_artifact.sh" "<platform>" "<profile>" "<artifact-dir>"`,
      parse a successful absolute artifact path, and run
-     `bash "$CLAUDE_PLUGIN_ROOT/scripts/expo_ensure_running.sh" "<platform>" --device-id "<device-id>" --artifact "<path>"`.
+     `bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/expo_ensure_running.sh" "<platform>" --device-id "<device-id>" --artifact "<path>"`.
      Keep resolution and installation inside the trapped scope so every success
      or failure path cleans only that exact caller-owned directory after the
      install attempt.

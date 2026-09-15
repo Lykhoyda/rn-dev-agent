@@ -25305,7 +25305,7 @@ var SESSION_DOCTOR, HEADLESS_SESSION_RECOVERY_COMMAND, HEADLESS_SESSION_REPORT_C
 var init_recovery_remedy = __esm({
   "packages/rn-dev-agent-core/dist/session/recovery-remedy.js"() {
     "use strict";
-    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js"';
+    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/session-doctor.js"';
     HEADLESS_SESSION_RECOVERY_COMMAND = `node ${SESSION_DOCTOR} repair`;
     HEADLESS_SESSION_REPORT_COMMAND = `node ${SESSION_DOCTOR} report`;
     SESSION_RECOVERY_DOCS = 'docs: session-authority "Recovering a wedged source root"';
@@ -59811,7 +59811,7 @@ function parseActionEnginePinVersion(enginePin) {
   const match = ACTION_ENGINE_PIN_RE.exec(enginePin.trim());
   return match?.[1] ?? null;
 }
-var HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
+var HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}";
 var PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
 var PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
 var MAESTRO_RUNNER_MIN_ANDROID_API = 26;
@@ -76721,7 +76721,7 @@ import { closeSync as closeSync10, constants as constants9, existsSync as exists
 import { dirname as dirname19, isAbsolute as isAbsolute12, join as join39, relative as relative7, resolve as resolve14, sep as sep7 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
-var WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
+var WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
 var HEADLESS_WORKTREE_REPAIR_COMMAND = `node ${WORKTREE_REPAIR_ENTRY} repair --app-root "$PWD"`;
 var LEGACY_ROOT_REPAIR_REQUIRED = "RN_AGENT_LEGACY_ROOT_REPAIR_REQUIRED";
 function legacyRootRepairRemedy(lead) {
@@ -92397,19 +92397,18 @@ function formatLockConflictMessage(conflict2) {
   const ageSec = Math.floor(conflict2.ageMs / 1e3);
   const ageStr = ageSec < 60 ? `${ageSec}s ago` : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago` : `${Math.floor(ageSec / 3600)}h ${Math.floor(ageSec % 3600 / 60)}m ago`;
   return [
-    `Another rn-dev-agent MCP is running in this project.`,
+    `Another rn-dev-agent MCP already owns this project root.`,
     `  PID:      ${conflict2.pid}`,
     `  Project:  ${conflict2.projectRoot}`,
     `  Started:  ${ageStr}`,
     `  Lock:     ${conflict2.lockPath}`,
     ``,
     `To resolve:`,
-    `  1. Close the other Claude Code window for this project, OR`,
-    `  2. Kill the other process:  kill ${conflict2.pid}`,
-    `  3. (If the process is dead) delete the lock file:  rm ${conflict2.lockPath}`,
+    `  1. Use the session that already owns this project root, OR`,
+    `  2. Quit that session's editor window or MCP client. The lock is released on exit`,
+    `     and reclaimed automatically once the owning process is gone.`,
     ``,
-    `Running two MCPs in the same project causes missed events and state flicker.`,
-    `Start with --no-lock to bypass this check (advanced; expect flaky behavior).`
+    `Running two MCPs in the same project causes missed events and state flicker.`
   ].join("\n");
 }
 

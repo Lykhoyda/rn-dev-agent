@@ -180,7 +180,7 @@ Add timed step labels to the recorded video. Build a JSON array mapping each
 step to a time range, then call the label subcommand:
 
 ```bash
-bash "$CLAUDE_PLUGIN_ROOT/scripts/record_proof.sh" label \
+bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/record_proof.sh" label \
   docs/proof/<slug>/flow-ios.mp4 \
   docs/proof/<slug>/flow-ios-labeled.mp4 \
   '[{"start":0,"end":5,"text":"Step 1: <description>"},{"start":5,"end":12,"text":"Step 2: <description>"}]'
@@ -243,7 +243,7 @@ Create `docs/proof/<slug>/PROOF.md` with the standard format:
 ### Step 8: Generate PR body
 
 ```bash
-bash "$CLAUDE_PLUGIN_ROOT/scripts/generate_pr_body.sh" docs/proof/<slug>/
+bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/generate_pr_body.sh" docs/proof/<slug>/
 ```
 
 ### Step 9: Present results

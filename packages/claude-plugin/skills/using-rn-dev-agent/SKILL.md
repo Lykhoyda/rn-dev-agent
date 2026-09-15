@@ -10,7 +10,7 @@ description: >
 
 # Using rn-dev-agent
 
-The React Native development plugin for Claude Code and Codex. **6 agents**, **17 commands**, **11 skills**, and an MCP tool suite for live app work.
+The React Native development plugin for Claude Code, Codex, and Cursor. **6 agents**, **17 commands**, **11 skills**, and an MCP tool suite for live app work.
 
 This skill is your front door. Before starting any RN work, use the decision tree below to route the user's intent to the right tool.
 
@@ -24,6 +24,12 @@ This skill is your front door. Before starting any RN work, use the decision tre
   `packages/claude-plugin/`. The Claude package owns slash commands in
   `commands/`, Claude subagents in `agents/`, hooks in `hooks/`, skills in
   `skills/`, and the `cdp` MCP server.
+- **Cursor** local development points at
+  `/path/to/rn-dev-agent/packages/claude-plugin` (the same package). Cursor loads
+  `.cursor-plugin/plugin.json` and package-root `mcp.json`. The `cdp` MCP
+  server spawns `${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js`.
+  Claude SessionStart hooks are not auto-loaded. Skills, commands, and agents
+  are the same files as Claude.
 - **Codex** local development points at the same installed directory,
   `/path/to/rn-dev-agent/packages/claude-plugin`. Codex loads
   `.codex-plugin/plugin.json`, package-local skills in `codex-skills/`, and the
@@ -31,7 +37,7 @@ This skill is your front door. Before starting any RN work, use the decision tre
   and hooks are not native Codex surfaces; treat `codex-commands/*.md` and
   `codex-agents/*.md` as playbooks to execute inline. `No plugin hooks` in Codex
   is expected.
-- Keep the MCP server key named `cdp` in both manifests. Older sessions and
+- Keep the MCP server key named `cdp` on every host. Older sessions and
   docs assume this stable key.
 
 Codex translation rule: when this skill routes to `/rn-dev-agent:<command>`,
@@ -42,8 +48,9 @@ directly. For action inventory, the slash command wraps:
 node <plugin-root>/rn-dev-agent-core/dist/learned-actions.js --json --filter "<keyword>"
 ```
 
-(`<plugin-root>` = `${CLAUDE_PLUGIN_ROOT}` on Claude, the installed package root
-on Codex — the one bundled runtime lives INSIDE the installed package.)
+(`<plugin-root>` = `${CLAUDE_PLUGIN_ROOT}` on Claude, `${CURSOR_PLUGIN_ROOT}` on
+Cursor, the installed package root on Codex — the one bundled runtime lives
+INSIDE the installed package.)
 
 For action replay, prefer the MCP tool `cdp_run_action` after the same
 pre-flight checks documented in `commands/run-action.md`.
@@ -224,7 +231,7 @@ read them as reference, execute the steps INLINE in the parent session.
 
 These use only `Glob, Grep, LS, Read` — no MCP tools. They can be spawned
 in parallel via the Task tool for concurrent codebase analysis. (Task-tool
-spawning is a Claude surface; on Codex, read the agent markdown and execute
+spawning is a Claude/Cursor surface; on Codex, read the agent markdown and execute
 the playbook inline instead — see the Host Surface Map above.)
 
 | Agent | Model | Purpose | How to invoke |
@@ -313,8 +320,8 @@ A `claude -p` run cannot reconnect its own transport, so every remedy also names
 a command it can execute from the app root:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js" report   # read-only
-node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js" repair   # release + reap
+node "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/session-doctor.js" report   # read-only
+node "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/session-doctor.js" repair   # release + reap
 ```
 
 `report` prints the authority store path, whether this source root is wedged,

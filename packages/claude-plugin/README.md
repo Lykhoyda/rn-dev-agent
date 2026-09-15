@@ -1,8 +1,10 @@
 # rn-dev-agent plugin package
 
-This is the one directory both marketplaces install: Claude Code reads its
-surface from `.claude-plugin/plugin.json`, Codex reads its own from
-`.codex-plugin/plugin.json`, and both run the single bundled runtime under
+This is the one directory Claude, Cursor, and Codex install: Claude Code reads
+its surface from `.claude-plugin/plugin.json`, Cursor from
+`.cursor-plugin/plugin.json` and `mcp.json` (root
+`.cursor-plugin/marketplace.json` points here), Codex from
+`.codex-plugin/plugin.json`, and all three run the single bundled runtime under
 `rn-dev-agent-core/dist/`.
 
 ## Installation Path
@@ -33,6 +35,7 @@ Claude surface (authored here, `commands/`/`agents/`/`skills/`/`templates/`
 mirrored from `packages/shared-agent-knowledge/`):
 
 - `plugin.json`, `.claude-plugin/plugin.json`, `marketplace.json`, `package.json`
+- `.cursor-plugin/plugin.json` and `mcp.json` (Cursor Plugin launch)
 - `hooks/`, `commands/`, `agents/`, `skills/`, `templates/`
 
 Codex surface (generated from `packages/codex-plugin/` by

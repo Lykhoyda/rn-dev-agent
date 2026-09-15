@@ -215,6 +215,40 @@ Per target, in order, then verify with `workflow-check` postflight:
 Remove only the disposable worktree you created, and only after the
 report exists. Never `--force` discard unlanded operator work.
 
+### Public identity (hard)
+
+Public comments, PR bodies, issue text, and uploaded alt text are
+public. Treat them as public before you write.
+
+Never write hostname / computer name (including `.local`), machine UUID
+/ IOPlatformUUID / hardware serial, home directory or username
+(`/Users/…`, `~`, `$HOME`), other absolute local paths (`/Volumes/…`,
+`/var/folders/…`, worktree pool paths), LAN IPs, MAC addresses, or Wi-Fi
+SSIDs — even in a code fence.
+
+Replace them with `[HOST]`, `[MACHINE_ID]`, `[HOME]`, `[PATH]`,
+`[UDID]`, `[UUID]`. Keep the sentence readable.
+
+Allowed: full `https://github.com/…` URLs, commit SHAs, public tool
+names, relative repo paths (`packages/…`).
+
+Attach evidence with `gh pr comment` / GitHub attachments. Never paste
+a local file path as the evidence. `--attach` may read a local file; the
+comment GitHub shows must not contain that path.
+
+Images: `<img src="…" width="720" alt="short public description">`. Alt
+text follows the same redaction.
+
+Do not approve, dismiss reviews, edit the branch, or merge from this QA
+report.
+
+Self-check `qa-pr-report.md` before posting: redact hostname, `.local`,
+UUID, `/Users/`, and other local identity. Exempt only the exact Markdown
+image/video destinations that `--attach` will rewrite. Then self-check
+the rewritten GitHub body again. Hostname, UUID, `/Users/`, and `.local`
+never appear in the first public comment, alt text, PR bodies, or issue
+text. GitHub `user-attachments` URLs may keep their asset ids.
+
 ### Step 9 — Report (GitHub-hosted screenshots and video)
 
 Do not paste raw local paths into the GitHub report. Host every
@@ -226,7 +260,9 @@ access on the PR's repository. Stop if either is missing.
 #### 9a. Body file with local paths
 
 Write `qa-pr-report.md` using the **local** file paths (so `--attach`
-can rewrite them). Markdown image refs for screenshots; a video
+can rewrite them). Redact identity in prose first; do **not** redact
+the exact Markdown image/video destinations `--attach` will rewrite.
+Markdown image refs for screenshots; a video
 reference must be the only content in its paragraph so GitHub renders
 a player. Do **not** put HTML `<img>` in this first body — `--attach`
 rewrites markdown image references, not HTML `src`.
@@ -272,7 +308,9 @@ proof. `gh pr comment` prints the comment URL
 which GitHub shows as small thumbs. Rewrite **images only** to HTML
 with an explicit width (720 for phone screenshots; 960 if landscape
 or tablet). Leave each video paragraph as the rewritten player URL
-(GitHub does not support alt text on video).
+(GitHub does not support alt text on video). The `--edit-last` body
+must pass Public identity (no `/Users/`, hostname, machine UUID, or
+unhosted local paths).
 
 ```html
 <img src="https://github.com/user-attachments/assets/<id>" alt="iOS home after login" width="720">
@@ -311,6 +349,8 @@ Rules:
 5. Never use raw `xcrun simctl` / `adb` for taps, typing, or screenshots.
 6. Scoped `cdp_component_tree` only — always filter.
 7. One target at a time; do not multiplex two simulators in one session.
+8. Never publish hostname, machine UUID, home directory, or other
+   local identity in GitHub comments.
 
 ## Red flags — stop
 
@@ -323,3 +363,5 @@ Rules:
 - About to post a GitHub report with unhosted local screenshot/video paths
 - About to skip `gh pr comment --attach` when a target produced media
 - About to leave attached screenshots as tiny markdown thumbs (no HTML width)
+- About to post `/Users/`, a `.local` host, a machine UUID, or a
+  slash-started absolute path on GitHub

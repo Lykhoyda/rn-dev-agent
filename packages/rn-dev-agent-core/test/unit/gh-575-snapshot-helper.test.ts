@@ -42,7 +42,8 @@ test('GH-575 snapshot guidance uses package-local exact-device invocations', asy
     'utf8',
   );
   assert.equal(claude, shared);
-  assert.match(shared, /\$CLAUDE_PLUGIN_ROOT\/scripts\/snapshot_state\.sh/);
+  assert.match(shared, /CURSOR_PLUGIN_ROOT/);
+  assert.match(shared, /snapshot_state\.sh/);
   assert.match(codex, /<package-root>\/scripts\/snapshot_state\.sh/);
   for (const guidance of [shared, codex]) {
     assert.match(guidance, /snapshot_state\.sh" ios --device-id/);

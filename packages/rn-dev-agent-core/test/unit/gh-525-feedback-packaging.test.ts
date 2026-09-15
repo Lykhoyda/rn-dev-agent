@@ -67,7 +67,7 @@ test('#525 relative collector references in packaged docs resolve to files in th
           // a reference like $PLUGIN_ROOT/wrong/collect-feedback.sh fails.
           const normalized = ref
             .replace(
-              /^\$\{?(?:PLUGIN_ROOT|CLAUDE_PLUGIN_ROOT|RN_DEV_AGENT_CODEX_PLUGIN_ROOT|CODEX_PLUGIN_ROOT)\}?\//,
+              /^\$\{?(?:PLUGIN_ROOT|CLAUDE_PLUGIN_ROOT|CURSOR_PLUGIN_ROOT|RN_DEV_AGENT_CODEX_PLUGIN_ROOT|CODEX_PLUGIN_ROOT)\}?\//,
               '',
             )
             .replace(/^<package-root>\//, '');
@@ -120,28 +120,30 @@ function makeFixture(prefix: string): { root: string; pluginRoot: string; projec
 
 // The Step 2 snippet is executable shell shipped to the agent, so run it with
 // bash and observe which collector it actually invokes.
-test('#525 the Claude workflow snippet runs the packaged collector from the plugin root', () => {
-  const snippet = collectorSnippet(join(CLAUDE_PKG, 'commands', 'send-feedback.md'));
-  const { root, pluginRoot, projectRoot } = makeFixture('rn-agent-gh525-claude-');
-  try {
-    const run = runSnippet(snippet, {
-      cwd: root,
-      env: { CLAUDE_PLUGIN_ROOT: pluginRoot, RN_PROJECT_ROOT: projectRoot },
-    });
-    assert.equal(run.status, 0, run.stderr);
-    assert.match(
-      run.stdout,
-      /PACKAGED_COLLECTOR/,
-      'must run <plugin root>/scripts/collect-feedback.sh',
-    );
-    assert.ok(
-      run.stdout.includes(`cwd=${projectRoot}\n`),
-      `must run the collector from the project root, got: ${run.stdout}`,
-    );
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+for (const envKey of ['CLAUDE_PLUGIN_ROOT', 'CURSOR_PLUGIN_ROOT'] as const) {
+  test(`#525 the workflow snippet runs the packaged collector from ${envKey}`, () => {
+    const snippet = collectorSnippet(join(CLAUDE_PKG, 'commands', 'send-feedback.md'));
+    const { root, pluginRoot, projectRoot } = makeFixture(`rn-agent-gh525-${envKey}-`);
+    try {
+      const run = runSnippet(snippet, {
+        cwd: root,
+        env: { [envKey]: pluginRoot, RN_PROJECT_ROOT: projectRoot },
+      });
+      assert.equal(run.status, 0, run.stderr);
+      assert.match(
+        run.stdout,
+        /PACKAGED_COLLECTOR/,
+        'must run <plugin root>/scripts/collect-feedback.sh',
+      );
+      assert.ok(
+        run.stdout.includes(`cwd=${projectRoot}\n`),
+        `must run the collector from the project root, got: ${run.stdout}`,
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
 
 test('#525 the workflow snippet falls back to rn-collect-feedback only when no packaged collector resolves', () => {
   const snippet = collectorSnippet(join(CLAUDE_PKG, 'commands', 'send-feedback.md'));
@@ -243,6 +245,7 @@ test('#525 each packaged sending-feedback skill points at a workflow inside its 
 // rather than matching sentences.
 const HOST_ROOT_ENV_VARS = [
   'CLAUDE_PLUGIN_ROOT',
+  'CURSOR_PLUGIN_ROOT',
   'CODEX_PLUGIN_ROOT',
   'RN_DEV_AGENT_CODEX_PLUGIN_ROOT',
   'CODEX_HOME',
@@ -287,6 +290,10 @@ test('#525 the canonical sending-feedback skill stays host-neutral (review r3798
   assert.ok(
     namedHostRoots(claudeWorkflow).includes('CLAUDE_PLUGIN_ROOT'),
     `${claudeWorkflow} must retain the Claude plugin-root collector guidance`,
+  );
+  assert.ok(
+    namedHostRoots(claudeWorkflow).includes('CURSOR_PLUGIN_ROOT'),
+    `${claudeWorkflow} must resolve the Cursor plugin-root collector path`,
   );
 
   const codexSkill = join(CODEX_PKG, 'codex-skills', 'sending-feedback', 'SKILL.md');

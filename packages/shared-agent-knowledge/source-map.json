@@ -92,7 +92,10 @@
       "skills": "../claude-plugin/skills",
       "commands": "../claude-plugin/commands",
       "agents": "../claude-plugin/agents",
-      "templates": "../claude-plugin/templates/rn-agent"
+      "templates": "../claude-plugin/templates/rn-agent",
+      "cursorManifest": "../claude-plugin/.cursor-plugin/plugin.json",
+      "cursorMcp": "../claude-plugin/mcp.json",
+      "cursorMarketplace": "../../.cursor-plugin/marketplace.json"
     },
     "codex": {
       "distributionRoot": "../claude-plugin",

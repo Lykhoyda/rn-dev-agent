@@ -102,7 +102,8 @@ test('GH-575 Claude build workflow uses package-local helpers and exact device i
     'utf8',
   );
   assert.equal(claude, shared);
-  assert.match(shared, /\$CLAUDE_PLUGIN_ROOT\/scripts\/expo_ensure_running\.sh/);
+  assert.match(shared, /CURSOR_PLUGIN_ROOT/);
+  assert.match(shared, /expo_ensure_running\.sh/);
   assert.match(shared, /--device-id "<device-id>"/);
   assert.match(shared, /trap 'rm -rf -- "\$artifact_dir"' EXIT/);
   assert.doesNotMatch(shared, /\$CLAUDE_PLUGIN_ROOT\/\.\.\/\.\.\/scripts/);
