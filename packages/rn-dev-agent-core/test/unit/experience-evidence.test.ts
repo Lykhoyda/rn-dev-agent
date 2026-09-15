@@ -770,7 +770,10 @@ test('refusal symptoms drop simulator UDIDs while systemic grouping is unchanged
     { encoding: 'utf8', env: { ...process.env, HOME: fakeHome, RN_PROJECT_ROOT: fakeHome } },
   );
   assert.equal(collected.status, 0, collected.stderr);
-  assert.deepEqual(JSON.parse(collected.stdout).cdp_bridge_log_tail, ['[ID_REDACTED]', '[ID_REDACTED]']);
+  assert.deepEqual(JSON.parse(collected.stdout).cdp_bridge_log_tail, [
+    '[ID_REDACTED]',
+    '[ID_REDACTED]',
+  ]);
 });
 
 test('refusal decoding is deferred and decoder failures clear earlier recovery candidates', () => {
