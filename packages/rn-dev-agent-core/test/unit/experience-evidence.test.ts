@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -759,6 +760,17 @@ test('refusal symptoms drop simulator UDIDs while systemic grouping is unchanged
     records[0].systemicKey,
     authorityRefusalSystemicKey({ code: 'METRO_ORIGIN_MISMATCH', axis: 'M', cause: null }, 'ios'),
   );
+
+  const fakeHome = tempDirectory();
+  mkdirSync(join(fakeHome, '.claude', 'logs'), { recursive: true });
+  writeFileSync(join(fakeHome, '.claude', 'logs', 'rn-dev-agent-cdp-bridge.log'), udids.join('\n'));
+  const collected = spawnSync(
+    'bash',
+    [resolve(dirname(fileURLToPath(import.meta.url)), '../../../../scripts/collect-feedback.sh')],
+    { encoding: 'utf8', env: { ...process.env, HOME: fakeHome, RN_PROJECT_ROOT: fakeHome } },
+  );
+  assert.equal(collected.status, 0, collected.stderr);
+  assert.deepEqual(JSON.parse(collected.stdout).cdp_bridge_log_tail, ['[ID_REDACTED]', '[ID_REDACTED]']);
 });
 
 test('refusal decoding is deferred and decoder failures clear earlier recovery candidates', () => {
