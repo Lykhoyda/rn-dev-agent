@@ -48,7 +48,7 @@ Example calls:
    `.rn-agent/actions/` directly):
    ```bash
    ACTION_NAME="<first-arg>"
-   RESULT=$(node "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/learned-actions.js" \
+   RESULT=$(node "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/learned-actions.js" \
      --json --section b \
      --workspace-root "$PWD" --memory-cwd "$PWD" \
      --filter "$ACTION_NAME")

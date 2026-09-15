@@ -11,7 +11,7 @@ import { Steps } from '@astrojs/starlight/components';
 | Requirement | Notes |
 |-------------|-------|
 | Node.js >= 24 | For the CDP bridge MCP server; every later major is supported |
-| Claude Code CLI or Codex CLI | Use the host agent you want to run rn-dev-agent from |
+| Claude Code, Codex, or Cursor | Use the host agent you want to run rn-dev-agent from |
 | iOS Simulator or Android Emulator | At least one platform |
 | Session-bound Metro | Setup previews the project integration; literal `pnpm ios` or `pnpm android` starts or validates the allocated Metro |
 
@@ -19,7 +19,7 @@ import { Steps } from '@astrojs/starlight/components';
 
 ## Installation
 
-Jump to your host: **[Claude Code](#claude-code)** · **[Codex](#codex)** — or [keeping up to date](#keeping-up-to-date) if it's already installed.
+Jump to your host: **[Claude Code](#claude-code)** · **[Cursor](#cursor)** · **[Codex](#codex)** — or [keeping up to date](#keeping-up-to-date) if it's already installed.
 
 ### Claude Code
 
@@ -57,6 +57,39 @@ The root `.claude-plugin/marketplace.json` resolves the actual Claude package
 from `packages/claude-plugin/`. Use
 `/path/to/rn-dev-agent/packages/claude-plugin` only when a tool asks for the
 plugin package root directly.
+
+### Cursor
+
+Install from **Customize → Plugins** (Cursor Marketplace or a team marketplace
+that imports this GitHub repo). The repo's `.cursor-plugin/marketplace.json`
+resolves the plugin from `packages/claude-plugin/`.
+
+For a local checkout, load that package directory, not the repository root:
+
+```text
+/path/to/rn-dev-agent/packages/claude-plugin
+```
+
+That directory owns `.cursor-plugin/plugin.json` and `mcp.json`. Cursor
+spawns `cdp` with `${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js`.
+Claude SessionStart hooks are not loaded (`No plugin hooks` is expected).
+Requires Node.js >= 24. Reload the window after install if MCP does not appear.
+
+**Limitation: the Cursor Plugin spawn does not bind the exact app.** rn-dev-agent
+binds source identity from the supervisor's working directory and keys its process
+lock on `CLAUDE_USER_CWD` or that directory. Cursor does not document a working
+directory for plugin MCP servers, and the observed spawn starts from the user home,
+so the lock is keyed on the home directory and source authority for the open app
+is unavailable. Consequences:
+
+- One rn-dev-agent server per user across Cursor windows. A second window refuses
+  with exit code 11 and names the owner; use that session or quit it. The lock is
+  not bypassed for Cursor.
+- Device and proof work for an exact app checkout uses the project-rooted host
+  workflow: `claude` or `codex` started in the app root. A project-scoped
+  `.cursor/mcp.json` in the app checkout only helps if Cursor starts that server
+  from the workspace folder, which Cursor does not document and this project has
+  not verified.
 
 ### Codex
 
@@ -107,6 +140,7 @@ Enable auto-update in the host plugin manager. Manual update:
 ```text
 Claude: /plugin update rn-dev-agent@rn-dev-agent
         /reload-plugins
+Cursor: Customize → Plugins, then Developer: Reload Window
 Codex:  codex plugin marketplace upgrade rn-dev-agent
         codex plugin add rn-dev-agent@rn-dev-agent --json
         # relaunch after this external mutation
@@ -124,7 +158,7 @@ The plugin connects to your running app via Metro's CDP endpoint and reads the R
 
 ### Zustand stores (one bridge call)
 
-Run the matching setup workflow (`/rn-dev-agent:setup` in Claude or
+Run the matching setup workflow (`/rn-dev-agent:setup` in Claude or Cursor, or
 `$rn-dev-agent:setup` in Codex) to scaffold `.rn-agent/dev-bridge.ts` and
 `.rn-agent/globals.d.ts`. Then add a single registration call alongside your
 store definitions:
@@ -185,15 +219,15 @@ Navigate to your React Native project and start building:
 
 ```bash
 cd /path/to/your-rn-app
-claude # or: codex
+claude # or: cursor / codex
 ```
 
 Claude's SessionStart hook auto-detects the project and prepares supported
-dependencies. Codex has no plugin hooks. For either host, invoke its setup
-workflow when onboarding is incomplete:
+dependencies. Cursor and Codex do not load Claude plugin hooks. For any host,
+invoke its setup workflow when onboarding is incomplete:
 
 ```text
-Claude: /rn-dev-agent:setup
+Claude / Cursor: /rn-dev-agent:setup
 Codex:  $rn-dev-agent:setup
 ```
 
@@ -202,7 +236,7 @@ runs passive multi-axis health and recommends user-confirmed recovery without
 executing it. Both preview project wiring before writing. Once setup is ready:
 
 ```text
-Claude: /rn-dev-agent:rn-feature-dev add task priority levels with color coding and sort
+Claude / Cursor: /rn-dev-agent:rn-feature-dev add task priority levels with color coding and sort
 Codex:  $rn-dev-agent:rn-feature-dev add task priority levels with color coding and sort
 ```
 
@@ -229,6 +263,12 @@ Claude Code local path:
 ```bash
 cd /path/to/your-rn-app
 claude --plugin-dir /path/to/rn-dev-agent
+```
+
+Cursor local plugin package path:
+
+```text
+/path/to/rn-dev-agent/packages/claude-plugin
 ```
 
 Codex local plugin package path:

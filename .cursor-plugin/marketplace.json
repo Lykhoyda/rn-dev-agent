@@ -1,0 +1,18 @@
+{
+  "name": "rn-dev-agent",
+  "owner": {
+    "name": "Anton Lykhoyda"
+  },
+  "metadata": {
+    "description": "React Native development and testing plugin"
+  },
+  "plugins": [
+    {
+      "name": "rn-dev-agent",
+      "source": "./packages/claude-plugin",
+      "description": "AI agent that fully tests React Native features on simulator/emulator — navigates the app, verifies UI, walks user flows, and confirms internal state.",
+      "version": "1.0.8",
+      "homepage": "https://github.com/Lykhoyda/rn-dev-agent"
+    }
+  ]
+}

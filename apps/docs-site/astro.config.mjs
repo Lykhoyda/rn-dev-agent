@@ -12,7 +12,7 @@ export default defineConfig({
       plugins: [starlightLlmsTxt()],
       title: 'rn-dev-agent',
       description:
-        'Claude Code and Codex plugin for React Native development — 78 MCP tools, 6 agents, 17 commands. Explore, build, verify, and test features live on iOS Simulator and Android Emulator via Chrome DevTools Protocol.',
+        'Claude Code, Codex, and Cursor plugin for React Native development — 78 MCP tools, 6 agents, 17 commands. Explore, build, verify, and test features live on iOS Simulator and Android Emulator via Chrome DevTools Protocol.',
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/Lykhoyda/rn-dev-agent' },
       ],
@@ -22,7 +22,7 @@ export default defineConfig({
           attrs: {
             name: 'keywords',
             content:
-              'react native, claude code, codex, plugin, mcp, chrome devtools protocol, expo, ios simulator, android emulator, ai testing, mobile development',
+              'react native, claude code, codex, cursor, plugin, mcp, chrome devtools protocol, expo, ios simulator, android emulator, ai testing, mobile development',
           },
         },
         {
@@ -42,7 +42,7 @@ export default defineConfig({
             '@type': 'SoftwareApplication',
             name: 'rn-dev-agent',
             description:
-              'Claude Code and Codex plugin for React Native development with 78 MCP tools for live app verification via Chrome DevTools Protocol.',
+              'Claude Code, Codex, and Cursor plugin for React Native development with 78 MCP tools for live app verification via Chrome DevTools Protocol.',
             applicationCategory: 'DeveloperApplication',
             operatingSystem: 'macOS, Linux',
             url: 'https://lykhoyda.github.io/rn-dev-agent/',

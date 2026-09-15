@@ -257,8 +257,8 @@ The package-local `snapshot_state.sh` captures a screenshot and Android UI
 hierarchy sequentially on one validated device.
 
 ```bash
-IOS_SNAPSHOT_RESULT=$(bash "$CLAUDE_PLUGIN_ROOT/scripts/snapshot_state.sh" ios --device-id "$IOS_UDID" --output-dir "$SNAPSHOT_DIR")
-ANDROID_SNAPSHOT_RESULT=$(bash "$CLAUDE_PLUGIN_ROOT/scripts/snapshot_state.sh" android --device-id "$ANDROID_SERIAL" --output-dir "$SNAPSHOT_DIR")
+IOS_SNAPSHOT_RESULT=$(bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/snapshot_state.sh" ios --device-id "$IOS_UDID" --output-dir "$SNAPSHOT_DIR")
+ANDROID_SNAPSHOT_RESULT=$(bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/snapshot_state.sh" android --device-id "$ANDROID_SERIAL" --output-dir "$SNAPSHOT_DIR")
 
 # Read "$IOS_SNAPSHOT_RESULT/screenshot.jpg"
 # Read "$ANDROID_SNAPSHOT_RESULT/screenshot.png" and "$ANDROID_SNAPSHOT_RESULT/ui_elements.json"

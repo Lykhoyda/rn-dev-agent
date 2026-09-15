@@ -25,7 +25,7 @@ Once diagnostics pass, perform the steps below (Step 0 and A–D inject; E verif
 Run this before every scaffold write. Resolve the RN app root (the nested app directory in a monorepo), then plan with the packaged helper:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/worktree-inheritance.js" plan --host claude --app-root "$APP_ROOT" --json
+node "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/worktree-inheritance.js" plan --host claude --app-root "$APP_ROOT" --json
 ```
 
 The only inheritable resource is `.rn-agent/actions`. `TRACKED` remains Git-owned. For `DEST_MISSING`, preview and ask before running `apply`. `LEGACY_ROOT_LINK` is detection-only during startup, reconnect, and `apply`, even with `--allow-repair`. Explain the typed remedy, ask a second time, then run `worktree-inheritance.js repair --app-root "$APP_ROOT"`; the explicit repository-locked repair restores the real `.rn-agent.bak` as local state and replaces only `actions` with the verified shared link. It preserves `integration/`, `local/`, backups, and ambiguous action corpora, and refuses foreign roots, collisions, unavailable sources, tracked recovery paths, and Git-visible private links without mutation. Explicit legacy repair supports apps rooted at the worktree root; report the typed refusal for nested app roots. Never print a source path or inspect action bodies.
@@ -34,11 +34,11 @@ Offer `hook install --host claude --app-root "$APP_ROOT"` after separate consent
 
 ### A. CLAUDE.md project instructions
 
-The plugin's full operating manual lives at `${CLAUDE_PLUGIN_ROOT}/CLAUDE-MD-TEMPLATE.md`. It documents the operating modes (Exploration/Debugging/Verification), tool selection guidance, multi-device routing escape hatches, anti-patterns, error-recovery patterns, and verification flow. Without this in the user's project CLAUDE.md, agents working on the project don't know which plugin tools to prefer.
+The plugin's full operating manual lives at `${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/CLAUDE-MD-TEMPLATE.md`. It documents the operating modes (Exploration/Debugging/Verification), tool selection guidance, multi-device routing escape hatches, anti-patterns, error-recovery patterns, and verification flow. Without this in the user's project CLAUDE.md, agents working on the project don't know which plugin tools to prefer.
 
 1. **Worktree preflight.** Step 0 must leave `.rn-agent` as a real local directory before Steps B–D write. A recognized legacy root link must be migrated with consent; a foreign root link blocks setup. `.rn-agent/actions` may be the one supported inherited symlink and must not be scaffolded over. Claude instruction files are not inherited by this mechanism.
 2. Check whether `CLAUDE.md` exists in the current working directory.
-3. Read `${CLAUDE_PLUGIN_ROOT}/CLAUDE-MD-TEMPLATE.md`. The template body to inject is everything AFTER the first `---` separator line — the lines before that separator are author-facing instructions for the template itself, not for the user's project. Find the separator dynamically (don't trust a hardcoded line number; the preamble may grow).
+3. Read `${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/CLAUDE-MD-TEMPLATE.md`. The template body to inject is everything AFTER the first `---` separator line — the lines before that separator are author-facing instructions for the template itself, not for the user's project. Find the separator dynamically (don't trust a hardcoded line number; the preamble may grow).
 4. Inject or refresh:
    - **No CLAUDE.md exists**: create one with the template body.
    - **CLAUDE.md exists, no rn-dev-agent block**: append the template body (look for the marker `## React Native Development (rn-dev-agent)` — if it's missing, append).
@@ -135,7 +135,7 @@ Show the diff before writing.
 
 Project-owned action knowledge and scaffold files live inside `<cwd>/.rn-agent/`. Mutable sidecars and recordings from an authority-fenced session instead live under its private runtime root; only an unfenced compatibility process writes them under `.rn-agent/state/` and `.rn-agent/recordings/`. This step creates the project scaffold from a versioned template.
 
-The template lives at `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and contains: `README.md`, `.gitignore`, `.scaffold-version`, `skeleton.yaml`, `dev-bridge.ts`, `globals.d.ts`, `vercel-rules.config.json`, `actions/.gitkeep`, `fixtures/.gitkeep`, `proposals/.gitkeep`.
+The template lives at `${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/templates/rn-agent/` and contains: `README.md`, `.gitignore`, `.scaffold-version`, `skeleton.yaml`, `dev-bridge.ts`, `globals.d.ts`, `vercel-rules.config.json`, `actions/.gitkeep`, `fixtures/.gitkeep`, `proposals/.gitkeep`.
 
 `dev-bridge.ts` and `globals.d.ts` are the user-facing surface for Steps B + C — `dev-bridge.ts` exposes `getBridge()?.registerNavRef(...)` / `registerStores(...)` (DEV-only via `__DEV__` guard) and `globals.d.ts` declares the global types so user code can call them without casts.
 
@@ -147,14 +147,14 @@ The template lives at `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and contains: 
    - `.rn-agent/actions/` contains any `*.yaml` file
    - `<cwd>/.rn-agent/` exists as a directory at all (even if empty — falls into the partial-add path so we don't try to `mv tmp dst` over it)
    
-   If already scaffolded: read the version from `.scaffold-version` and compare to `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/.scaffold-version`. If they match → skip with a one-liner (`scaffold v<X> already in place`). If they differ → enter **partial-add path** (Step 1a below). Bump `.scaffold-version` on apply.
+   If already scaffolded: read the version from `.scaffold-version` and compare to `${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/templates/rn-agent/.scaffold-version`. If they match → skip with a one-liner (`scaffold v<X> already in place`). If they differ → enter **partial-add path** (Step 1a below). Bump `.scaffold-version` on apply.
 
-   **Step 1a — partial-add path.** List the relative paths of every file under `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and check which are missing from `<cwd>/.rn-agent/`. **Filter the missing set first**: for any path ending in `.gitkeep`, look at the parent directory in the destination. If the parent already exists AND contains any non-`.gitkeep` file, drop the marker from the missing set — its sole purpose (keeping an empty directory git-trackable) is already satisfied by real content, and copying it would add visual noise next to artifacts (issue #123). For each remaining missing file, copy it individually (e.g. `cp -RL "${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/<relpath>" "$CWD/.rn-agent/<relpath>"`, creating any missing parent directories with `mkdir -p` first). Do NOT use the `mv tmp dst` pattern from Step 2 — `mv` of a directory onto an existing directory creates `dst/tmp/...` rather than merging, leaking nested junk. After copying the missing files, write the new version into `<cwd>/.rn-agent/.scaffold-version`.
+   **Step 1a — partial-add path.** List the relative paths of every file under `${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/templates/rn-agent/` and check which are missing from `<cwd>/.rn-agent/`. **Filter the missing set first**: for any path ending in `.gitkeep`, look at the parent directory in the destination. If the parent already exists AND contains any non-`.gitkeep` file, drop the marker from the missing set — its sole purpose (keeping an empty directory git-trackable) is already satisfied by real content, and copying it would add visual noise next to artifacts (issue #123). For each remaining missing file, copy it individually (e.g. `cp -RL "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/templates/rn-agent/<relpath>" "$CWD/.rn-agent/<relpath>"`, creating any missing parent directories with `mkdir -p` first). Do NOT use the `mv tmp dst` pattern from Step 2 — `mv` of a directory onto an existing directory creates `dst/tmp/...` rather than merging, leaking nested junk. After copying the missing files, write the new version into `<cwd>/.rn-agent/.scaffold-version`.
 
 2. **First-time scaffold.** Build the destination atomically:
    ```bash
    mkdir -p "$CWD/.rn-agent.tmp-$$"
-   cp -RL "${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/." "$CWD/.rn-agent.tmp-$$/"
+   cp -RL "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/templates/rn-agent/." "$CWD/.rn-agent.tmp-$$/"
    ```
    The `/.` suffix on the source ensures dotfiles (`.gitignore`, `.scaffold-version`) are included; `cp -RL` dereferences any symlinks. After copy, rename atomically:
    ```bash

@@ -1137,7 +1137,9 @@ test('tracked bin/rn-verify resolves the pin helper through its symlink', () => 
 });
 
 test('pin install and diagnose hints name both host plugin roots', () => {
+  assert.match(PINNED_RUNNER_INSTALL_HINT, /CURSOR_PLUGIN_ROOT/);
   assert.match(PINNED_RUNNER_INSTALL_HINT, /RN_DEV_AGENT_CODEX_PLUGIN_ROOT/);
   assert.match(PINNED_RUNNER_DIAGNOSE_HINT, /maestro-runner-pin\.js diagnose/);
+  assert.match(PINNED_RUNNER_DIAGNOSE_HINT, /CURSOR_PLUGIN_ROOT/);
   assert.match(PINNED_RUNNER_DIAGNOSE_HINT, /RN_DEV_AGENT_CODEX_PLUGIN_ROOT/);
 });

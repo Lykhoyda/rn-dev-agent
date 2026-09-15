@@ -19,12 +19,12 @@ Resolves an EAS build artifact through three tiers: local cache â†’ EAS server â
 # Auto-select profile, download artifact into a private caller-owned directory
 ARTIFACT_DIR=$(mktemp -d)
 trap 'rm -rf -- "$ARTIFACT_DIR"' EXIT
-bash "$CLAUDE_PLUGIN_ROOT/scripts/eas_resolve_artifact.sh" ios "" "$ARTIFACT_DIR"
-bash "$CLAUDE_PLUGIN_ROOT/scripts/eas_resolve_artifact.sh" android "" "$ARTIFACT_DIR"
+bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/eas_resolve_artifact.sh" ios "" "$ARTIFACT_DIR"
+bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/eas_resolve_artifact.sh" android "" "$ARTIFACT_DIR"
 
 # Specify profile explicitly
-bash "$CLAUDE_PLUGIN_ROOT/scripts/eas_resolve_artifact.sh" ios development "$ARTIFACT_DIR"
-bash "$CLAUDE_PLUGIN_ROOT/scripts/eas_resolve_artifact.sh" android preview "$ARTIFACT_DIR"
+bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/eas_resolve_artifact.sh" ios development "$ARTIFACT_DIR"
+bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/eas_resolve_artifact.sh" android preview "$ARTIFACT_DIR"
 ```
 
 ### Exit codes
@@ -77,15 +77,15 @@ Ensures the app is installed, launched, and Metro is running.
 
 ```bash
 # Local dev build (builds from source, starts Metro)
-bash "$CLAUDE_PLUGIN_ROOT/scripts/expo_ensure_running.sh" ios --device-id "$IOS_UDID"
-bash "$CLAUDE_PLUGIN_ROOT/scripts/expo_ensure_running.sh" android --device-id "$ANDROID_SERIAL"
+bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/expo_ensure_running.sh" ios --device-id "$IOS_UDID"
+bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/expo_ensure_running.sh" android --device-id "$ANDROID_SERIAL"
 
 # Install EAS artifact
-bash "$CLAUDE_PLUGIN_ROOT/scripts/expo_ensure_running.sh" ios --device-id "$IOS_UDID" --artifact "$ARTIFACT"
-bash "$CLAUDE_PLUGIN_ROOT/scripts/expo_ensure_running.sh" android --device-id "$ANDROID_SERIAL" --artifact "$ARTIFACT"
+bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/expo_ensure_running.sh" ios --device-id "$IOS_UDID" --artifact "$ARTIFACT"
+bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/expo_ensure_running.sh" android --device-id "$ANDROID_SERIAL" --artifact "$ARTIFACT"
 
 # With explicit bundle ID and Metro port
-bash "$CLAUDE_PLUGIN_ROOT/scripts/expo_ensure_running.sh" ios --device-id "$IOS_UDID" --bundle-id com.example.app --metro-port 8081
+bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/expo_ensure_running.sh" ios --device-id "$IOS_UDID" --bundle-id com.example.app --metro-port 8081
 ```
 
 ### Exit codes
@@ -117,12 +117,12 @@ bash "$CLAUDE_PLUGIN_ROOT/scripts/expo_ensure_running.sh" ios --device-id "$IOS_
 # Full EAS workflow: resolve artifact, then install and run
 ARTIFACT_DIR=$(mktemp -d)
 trap 'rm -rf -- "$ARTIFACT_DIR"' EXIT
-RESULT=$(bash "$CLAUDE_PLUGIN_ROOT/scripts/eas_resolve_artifact.sh" ios development "$ARTIFACT_DIR")
+RESULT=$(bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/eas_resolve_artifact.sh" ios development "$ARTIFACT_DIR")
 ARTIFACT=$(echo "$RESULT" | jq -r '.path')
-bash "$CLAUDE_PLUGIN_ROOT/scripts/expo_ensure_running.sh" ios --device-id "$IOS_UDID" --artifact "$ARTIFACT"
+bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/expo_ensure_running.sh" ios --device-id "$IOS_UDID" --artifact "$ARTIFACT"
 
 # Simple local build: just build and run
-bash "$CLAUDE_PLUGIN_ROOT/scripts/expo_ensure_running.sh" android --device-id "$ANDROID_SERIAL"
+bash "${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/expo_ensure_running.sh" android --device-id "$ANDROID_SERIAL"
 ```
 
 ## Metro Start Behavior

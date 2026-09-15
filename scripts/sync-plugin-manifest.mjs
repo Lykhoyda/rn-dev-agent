@@ -1,18 +1,19 @@
 #!/usr/bin/env node
 // Post-`changeset version` hook: mirror the synthetic
 // `packages/claude-plugin/package.json` version into the Claude Code plugin
-// manifest (`packages/claude-plugin/plugin.json`), the Codex plugin manifest
+// manifest (`packages/claude-plugin/plugin.json`), the Cursor Plugin manifest
+// (`packages/claude-plugin/.cursor-plugin/plugin.json`), the Codex plugin manifest
 // (`packages/codex-plugin/.codex-plugin/plugin.json`), the Codex MCP bootstrap
-// version pin (`packages/codex-plugin/.mcp.json`), and the Claude marketplace
-// listing (`packages/claude-plugin/marketplace.json`).
+// version pin (`packages/codex-plugin/.mcp.json`), and the Claude/Cursor marketplace
+// listings.
 //
 // Why a synthetic package: changesets manages versions of npm packages,
 // but the agent plugin versions live in plugin manifests + marketplace.json,
 // not in an npm package. The cheapest way to let changesets manage that
 // version is to give it a fake-but-private npm package whose only job is
 // to carry the version string. After `changeset version` bumps that
-// package, this script reads the new version and writes it where Claude
-// and Codex actually look.
+// package, this script reads the new version and writes it where Claude,
+// Cursor, and Codex actually look.
 //
 // Run via `yarn version-packages` (which chains `changeset version` →
 // this script → `sync-versions.sh --fix`).
@@ -33,6 +34,14 @@ const claudePluginManifestPath = join(
   '.claude-plugin',
   'plugin.json',
 );
+const cursorPluginJsonPath = join(
+  REPO_ROOT,
+  'packages',
+  'claude-plugin',
+  '.cursor-plugin',
+  'plugin.json',
+);
+const cursorMarketplacePath = join(REPO_ROOT, '.cursor-plugin', 'marketplace.json');
 const codexPluginJsonPath = join(
   REPO_ROOT,
   'packages',
@@ -63,6 +72,8 @@ if (typeof newVersion !== 'string' || !/^\d+\.\d+\.\d+/.test(newVersion)) {
 
 const claudePlugin = JSON.parse(readFileSync(claudePluginJsonPath, 'utf-8'));
 const claudePluginManifest = JSON.parse(readFileSync(claudePluginManifestPath, 'utf-8'));
+const cursorPlugin = JSON.parse(readFileSync(cursorPluginJsonPath, 'utf-8'));
+const cursorMarketplace = JSON.parse(readFileSync(cursorMarketplacePath, 'utf-8'));
 const codexPlugin = JSON.parse(readFileSync(codexPluginJsonPath, 'utf-8'));
 const codexMcp = JSON.parse(readFileSync(codexMcpJsonPath, 'utf-8'));
 const marketplace = JSON.parse(readFileSync(marketplaceJsonPath, 'utf-8'));
@@ -72,6 +83,7 @@ const rootMarketplaceManifest = JSON.parse(readFileSync(rootMarketplaceManifestP
 const oldPluginVersion = claudePlugin.version;
 claudePlugin.version = newVersion;
 claudePluginManifest.version = newVersion;
+cursorPlugin.version = newVersion;
 codexPlugin.version = newVersion;
 writeFileSync(claudePluginJsonPath, JSON.stringify(claudePlugin, null, 2) + '\n', 'utf-8');
 writeFileSync(
@@ -79,6 +91,7 @@ writeFileSync(
   JSON.stringify(claudePluginManifest, null, 2) + '\n',
   'utf-8',
 );
+writeFileSync(cursorPluginJsonPath, JSON.stringify(cursorPlugin, null, 2) + '\n', 'utf-8');
 writeFileSync(codexPluginJsonPath, JSON.stringify(codexPlugin, null, 2) + '\n', 'utf-8');
 
 const codexBootstrap = codexMcp.mcpServers?.cdp?.args?.[1];
@@ -103,10 +116,14 @@ const claudeManifestEntry = (claudeMarketplaceManifest.plugins ?? []).find(
 const rootManifestEntry = (rootMarketplaceManifest.plugins ?? []).find(
   (p) => p.name === 'rn-dev-agent',
 );
+const cursorMarketplaceEntry = (cursorMarketplace.plugins ?? []).find(
+  (p) => p.name === 'rn-dev-agent',
+);
 for (const [label, entry] of [
   ['marketplace.json', pluginEntry],
   ['packages/claude-plugin/.claude-plugin/marketplace.json', claudeManifestEntry],
   ['.claude-plugin/marketplace.json', rootManifestEntry],
+  ['.cursor-plugin/marketplace.json', cursorMarketplaceEntry],
 ]) {
   if (!entry) {
     console.error(`sync-plugin-manifest: ${label} has no plugins[].name === 'rn-dev-agent' entry`);
@@ -117,6 +134,7 @@ const _oldMarketplaceVersion = pluginEntry.version;
 pluginEntry.version = newVersion;
 claudeManifestEntry.version = newVersion;
 rootManifestEntry.version = newVersion;
+cursorMarketplaceEntry.version = newVersion;
 writeFileSync(marketplaceJsonPath, JSON.stringify(marketplace, null, 2) + '\n', 'utf-8');
 writeFileSync(
   claudeMarketplaceManifestPath,
@@ -128,8 +146,9 @@ writeFileSync(
   JSON.stringify(rootMarketplaceManifest, null, 2) + '\n',
   'utf-8',
 );
+writeFileSync(cursorMarketplacePath, JSON.stringify(cursorMarketplace, null, 2) + '\n', 'utf-8');
 
 console.log(
   `sync-plugin-manifest: ${oldPluginVersion} → ${newVersion} ` +
-    `(Claude manifests + Codex .codex-plugin/plugin.json + Codex .mcp.json + marketplace manifests)`,
+    `(Claude manifests + Cursor Plugin manifest + Codex .codex-plugin/plugin.json + Codex .mcp.json + marketplace manifests)`,
 );
