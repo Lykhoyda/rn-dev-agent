@@ -19,8 +19,11 @@ import { ExperienceRecorder, EXPERIENCE_STORE_NAME } from '../../dist/experience
 import type { ExperienceTrendReport } from '../../dist/experience/trends.js';
 
 const CLI = fileURLToPath(new URL('../../dist/experience-trends.js', import.meta.url));
-const HOST_CLI = fileURLToPath(
+const SHIPPED_CLI = fileURLToPath(
   new URL('../../../claude-plugin/rn-dev-agent-core/dist/experience-trends.js', import.meta.url),
+);
+const DELETED_CODEX_CLI = fileURLToPath(
+  new URL('../../../codex-plugin/rn-dev-agent-core/dist/experience-trends.js', import.meta.url),
 );
 const SINCE = '2026-06-01T00:00:00.000Z';
 const NOW = new Date('2026-06-10T12:00:00.000Z');
@@ -227,10 +230,11 @@ for (const legacyOnly of [false, true]) {
     writeFileSync(path, `${stored.map((record) => JSON.stringify(record)).join('\n')}\n`);
     utimesSync(path, NOW, NOW);
     const before = snapshot(directory, path);
+    assert.equal(existsSync(DELETED_CODEX_CLI), false, DELETED_CODEX_CLI);
     for (const since of [SINCE, FUTURE]) {
       let expectedJson: Omit<ExperienceTrendReport, 'generatedAt'> | undefined;
       let expectedText: string | undefined;
-      for (const cli of [CLI, HOST_CLI]) {
+      for (const cli of [CLI, SHIPPED_CLI]) {
         const json = runCli(directory, ['--since', since, '--json'], cli);
         assert.equal(json.status, 0, cli);
         assert.equal(json.stderr, '', cli);
