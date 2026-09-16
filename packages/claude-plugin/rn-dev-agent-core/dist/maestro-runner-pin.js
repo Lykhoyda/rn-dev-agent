@@ -16493,6 +16493,16 @@ function flowRelaunchFacts(command) {
   const launch = options && typeof options === "object" && !Array.isArray(options) ? options : {};
   return { stopApp: typeof launch.stopApp === "boolean" ? launch.stopApp : true };
 }
+function diagnosticErrorDetail(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : void 0;
+  return {
+    name: error instanceof Error ? error.name : typeof error,
+    code: /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1] ?? null,
+    message,
+    ...cause !== void 0 ? { cause } : {}
+  };
+}
 function createFlowRelaunchTracker(devClientReplay) {
   let unclaimed = null;
   return {
@@ -16579,6 +16589,12 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
             stage: stageIndex
           });
         } catch (error) {
+          recordRunnerDiagnostic("flow-stage", {
+            phase: "origin-failed",
+            role: "claim",
+            stage: stageIndex,
+            error: diagnosticErrorDetail(error)
+          });
           throw relaunches.attribute(error);
         }
         relaunches.claimed();
@@ -16606,15 +16622,36 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
           });
           pendingOriginError = void 0;
         } catch (error) {
-          if (!reproveManagedOrigin || error instanceof SessionAuthorityError) {
+          const deferred = Boolean(reproveManagedOrigin) && !(error instanceof SessionAuthorityError);
+          recordRunnerDiagnostic("flow-stage", {
+            phase: "relaunch-failed",
+            stage: stageIndex,
+            stopApp: launch.stopApp,
+            deferred,
+            error: diagnosticErrorDetail(error)
+          });
+          if (!deferred)
             throw error;
-          }
           pendingOriginError = error;
         }
       }
     } catch (error) {
+      recordRunnerDiagnostic("flow-stage", {
+        phase: "stage-failed",
+        stage: stageIndex,
+        error: diagnosticErrorDetail(error)
+      });
       recordRunnerDiagnostic("flow-stage", { phase: "cleanup-begin", stage: stageIndex });
-      await completeOrigin(false, options.signal);
+      try {
+        await completeOrigin(false, options.signal);
+      } catch (cleanupError) {
+        recordRunnerDiagnostic("flow-stage", {
+          phase: "cleanup-failed",
+          stage: stageIndex,
+          error: diagnosticErrorDetail(cleanupError)
+        });
+        throw cleanupError;
+      }
       recordRunnerDiagnostic("flow-stage", { phase: "cleanup-complete", stage: stageIndex });
       throw new MaestroStageExecutionError(results, error);
     }
@@ -16624,9 +16661,22 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
       recordRunnerDiagnostic("flow-stage", { phase: "origin-begin", role: "reprove" });
       await reproveManagedOrigin({ signal: options.signal });
       recordRunnerDiagnostic("flow-stage", { phase: "origin-complete", role: "reprove" });
-    } catch {
+    } catch (reproveError) {
+      recordRunnerDiagnostic("flow-stage", {
+        phase: "origin-failed",
+        role: "reprove",
+        error: diagnosticErrorDetail(reproveError)
+      });
       recordRunnerDiagnostic("flow-stage", { phase: "cleanup-begin" });
-      await completeOrigin(false, options.signal);
+      try {
+        await completeOrigin(false, options.signal);
+      } catch (cleanupError) {
+        recordRunnerDiagnostic("flow-stage", {
+          phase: "cleanup-failed",
+          error: diagnosticErrorDetail(cleanupError)
+        });
+        throw cleanupError;
+      }
       recordRunnerDiagnostic("flow-stage", { phase: "cleanup-complete" });
       throw new MaestroStageExecutionError(results, pendingOriginError);
     }
@@ -16637,6 +16687,11 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
     await completeOrigin(plan.targetExpected, options.signal);
     recordRunnerDiagnostic("flow-stage", { phase: "origin-complete", role: "complete" });
   } catch (error) {
+    recordRunnerDiagnostic("flow-stage", {
+      phase: "origin-failed",
+      role: "complete",
+      error: diagnosticErrorDetail(error)
+    });
     throw relaunches.attribute(error);
   }
   return results;
