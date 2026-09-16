@@ -98417,6 +98417,17 @@ function boundConnectConflict(status, request2) {
   }
   return null;
 }
+function loopbackMetroUrl(devClientUrl) {
+  try {
+    const inner = new URL(devClientUrl).searchParams.get("url");
+    if (!inner)
+      return null;
+    const host = new URL(inner).hostname;
+    return host === "127.0.0.1" || host === "localhost" || host === "[::1]" ? inner : null;
+  } catch {
+    return null;
+  }
+}
 async function pinExactDevClient(input, dependencies) {
   if (!Number.isSafeInteger(input.metroPort) || input.metroPort < 1 || input.metroPort > 65535) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: authority-bound Metro port is unavailable");
@@ -98427,7 +98438,10 @@ async function pinExactDevClient(input, dependencies) {
   if (input.runtimeKind === "bare-react-native" && input.devClientUrl) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: launch kind contradicts the signed build provenance");
   }
-  if (input.devClientUrl) {
+  const simulatorLaunchTarget = input.platform === "ios" && input.runtimeKind === "expo-dev-client" && input.devClientUrl ? loopbackMetroUrl(input.devClientUrl) : null;
+  if (simulatorLaunchTarget) {
+    await dependencies.launchExactAppWithInitialUrl(input.deviceId, input.appId, launchUrl(simulatorLaunchTarget), hideDevMenu);
+  } else if (input.devClientUrl) {
     await dependencies.openUrl(input.platform, input.deviceId, launchUrl(input.devClientUrl), input.appId, hideDevMenu);
     if (input.platform === "ios")
       await dependencies.acceptIosOpenDialog(input.deviceId);
