@@ -216,6 +216,7 @@ export async function pinExactDevClient(
       'DEV_CLIENT_ENDPOINT_NOT_FOUND: launch kind contradicts the signed build provenance',
     );
   }
+  // openurl's SpringBoard Open confirmation drops the Hermes target, so loopback simulator URLs launch like the managed build.
   const simulatorLaunchTarget =
     input.platform === 'ios' && input.runtimeKind === 'expo-dev-client' && input.devClientUrl
       ? loopbackMetroUrl(input.devClientUrl)
