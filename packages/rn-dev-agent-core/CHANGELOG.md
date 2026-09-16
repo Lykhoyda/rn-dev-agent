@@ -1,5 +1,12 @@
 # rn-dev-agent-core
 
+## 1.0.11
+
+### Patch Changes
+
+- 087d5b5: Pin an iOS simulator dev client with the same initial-URL launch the managed build uses instead of an openurl confirmation.
+- 087d5b5: Record recognized authority refusals as one code-and-platform group across emission shapes, persist an explicit non-membership verdict, and retain runner traces for every failed replay and for recognized authority refusals without treating successful diagnostic calls as verified recovery. Stored symptoms and submitted feedback now redact UUID-shaped device identifiers. Dispose the previous CDP client before an Android managed relaunch or re-prove so Metro's inspector proxy sees one debugger per page.
+
 ## 1.0.10
 
 ### Patch Changes
