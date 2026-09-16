@@ -51,8 +51,14 @@ test('dev-client pin opens only the declared URL on the exact device and binds i
       signerCapability: 'signer',
     },
     {
-      openUrl: async (platform, deviceId, url) => calls.push(['open', platform, deviceId, url]),
-      acceptIosOpenDialog: async (deviceId) => calls.push(['dialog', deviceId]),
+      openUrl: async () => {
+        throw new Error('loopback pin must not use openurl');
+      },
+      acceptIosOpenDialog: async () => {
+        throw new Error('loopback pin must not tap the Open dialog');
+      },
+      launchExactAppWithInitialUrl: async (deviceId, appId, initialUrl, hideDevMenu) =>
+        calls.push(['launch-with-initial-url', deviceId, appId, initialUrl, hideDevMenu]),
       connectExact: async (input) => {
         calls.push(['connect', input]);
         return {
@@ -66,13 +72,65 @@ test('dev-client pin opens only the declared URL on the exact device and binds i
     },
   );
 
-  assert.equal(calls[0][2], 'IOS-UUID');
-  assert.equal(
-    calls[0][3],
-    'example://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8341%2F%3FdisableOnboarding%3D1',
-  );
+  assert.deepEqual(calls[0], [
+    'launch-with-initial-url',
+    'IOS-UUID',
+    'com.example.app',
+    'http://localhost:8341/?disableOnboarding=1',
+    true,
+  ]);
   assert.equal(binding.targetId, 'target-a');
   assert.equal(binding.sourceFidelity, 'not-proven');
+});
+
+test('bound loopback dev-client URL on an iOS simulator launches through the initial-URL path', async () => {
+  const marker = buildSignedMetroMarker(expected, 'signer');
+  const calls = [];
+  const pin = async (autoHideDevMenu?: { simulators: boolean; devices: boolean }) => {
+    calls.length = 0;
+    await pinExactDevClient(
+      {
+        ...expected,
+        deviceId: 'IOS-UUID',
+        metroPort: 8341,
+        devClientUrl: 'example://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8341',
+        runtimeKind: 'expo-dev-client',
+        signerCapability: 'signer',
+        ...(autoHideDevMenu ? { autoHideDevMenu } : {}),
+      },
+      {
+        openUrl: async () => {
+          throw new Error('loopback pin must not use openurl');
+        },
+        acceptIosOpenDialog: async () => {
+          throw new Error('loopback pin must not tap the Open dialog');
+        },
+        launchExactAppWithInitialUrl: async (deviceId, appId, initialUrl, hideDevMenu) =>
+          calls.push(['launch-with-initial-url', deviceId, appId, initialUrl, hideDevMenu]),
+        connectExact: async () => ({
+          targetId: 'target-a',
+          connectionGeneration: 7,
+          deviceId: 'IOS-UUID',
+          metroPort: 8341,
+        }),
+        readMarker: async () => ({ status: 'signed', marker }),
+      },
+    );
+    return [...calls];
+  };
+
+  assert.deepEqual(await pin(), [
+    [
+      'launch-with-initial-url',
+      'IOS-UUID',
+      'com.example.app',
+      'http://127.0.0.1:8341/?disableOnboarding=1',
+      true,
+    ],
+  ]);
+  assert.deepEqual(await pin({ simulators: false, devices: true }), [
+    ['launch-with-initial-url', 'IOS-UUID', 'com.example.app', 'http://127.0.0.1:8341', false],
+  ]);
 });
 
 test('Android staged client publishes only after marker proof and atomic precommit assertion', async () => {
