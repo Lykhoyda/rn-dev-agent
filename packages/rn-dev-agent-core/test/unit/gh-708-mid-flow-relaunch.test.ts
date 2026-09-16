@@ -15,6 +15,10 @@ import {
   FLOW_RELAUNCH_NEXT_ACTION,
   MaestroStageExecutionError,
 } from '../../dist/tools/maestro-run.js';
+import {
+  snapshotRunnerDiagnostics,
+  withRunnerDiagnosticsContext,
+} from '../../dist/experience/runner-diagnostics.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
 import { authorityErrorMeta, SessionAuthorityError } from '../../dist/session/registry.js';
 import { provenMetroOriginMismatch } from '../../dist/session/metro-origin.js';
@@ -158,6 +162,304 @@ test('GH#708: a relaunch failure with no re-prove authority still aborts', async
     /did not re-register after launch/,
   );
   assert.equal(stages.length, 1);
+});
+
+test('failed execute and failed relaunch-plus-cleanup leave different traces without changing errors', async () => {
+  const executeError = new Error('native execute failed');
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'android' }, async () => {
+    await assert.rejects(
+      executeMaestroAuthorityStages(
+        [{ launchApp: { stopApp: true } }],
+        async () => {
+          throw executeError;
+        },
+        async () => {
+          throw new Error('claim should not run');
+        },
+        async () => {},
+        async () => {
+          throw new Error('relaunch should not run');
+        },
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof MaestroStageExecutionError);
+        assert.equal(error.stageError, executeError);
+        assert.deepEqual(error.completedResults, []);
+        return true;
+      },
+    );
+    assert.deepEqual(
+      snapshotRunnerDiagnostics()?.events.map((event) => event.detail),
+      [
+        { phase: 'execute-begin', stage: 0 },
+        {
+          phase: 'stage-failed',
+          stage: 0,
+          error: { name: 'Error', code: null, message: 'native execute failed' },
+        },
+        { phase: 'cleanup-begin', stage: 0 },
+        { phase: 'cleanup-complete', stage: 0 },
+      ],
+    );
+  });
+
+  const cleanupError = new Error('cleanup rejected after deadline');
+  const relaunchError = new Error('managed reconnect did not become ready');
+  const calls: string[] = [];
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'android' }, async () => {
+    await assert.rejects(
+      executeMaestroAuthorityStages(
+        [{ launchApp: { stopApp: true } }],
+        async () => {
+          calls.push('execute');
+          return { stdout: 'native launch completed', stderr: '' };
+        },
+        async () => {
+          calls.push('claim');
+        },
+        async () => {
+          calls.push('cleanup');
+          throw cleanupError;
+        },
+        async (stopApp?: boolean) => {
+          calls.push(`relaunch:${String(stopApp)}`);
+          throw relaunchError;
+        },
+      ),
+      (error: unknown) => {
+        assert.equal(error, cleanupError);
+        assert.equal(error instanceof MaestroStageExecutionError, false);
+        return true;
+      },
+    );
+    assert.deepEqual(calls, ['execute', 'relaunch:true', 'cleanup']);
+    assert.deepEqual(
+      snapshotRunnerDiagnostics()?.events.map((event) => event.detail),
+      [
+        { phase: 'execute-begin', stage: 0 },
+        { phase: 'execute-complete', stage: 0 },
+        { phase: 'relaunch-begin', stage: 0, stopApp: true },
+        {
+          phase: 'relaunch-failed',
+          stage: 0,
+          stopApp: true,
+          deferred: false,
+          error: { name: 'Error', code: null, message: 'managed reconnect did not become ready' },
+        },
+        {
+          phase: 'stage-failed',
+          stage: 0,
+          error: { name: 'Error', code: null, message: 'managed reconnect did not become ready' },
+        },
+        { phase: 'cleanup-begin', stage: 0 },
+        {
+          phase: 'cleanup-failed',
+          stage: 0,
+          error: { name: 'Error', code: null, message: 'cleanup rejected after deadline' },
+        },
+      ],
+    );
+  });
+});
+
+test('deferred relaunch rejection and cleanup timeout keep their dropped errors in the trace', async () => {
+  const relaunchError = new Error(
+    'CDP_TARGET_AUTHORITY_MISMATCH: Android exact-target readiness exceeded its absolute 120000ms deadline. Last exact-connect failure: leaf',
+    { cause: new Error('leaf') },
+  );
+  const timeoutError = new Error('ETIMEDOUT: Maestro flow timeout exhausted before the next stage');
+  const cleanupError = new Error('RUNNER_TIMEOUT: origin complete aborted');
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'android' }, async () => {
+    await assert.rejects(
+      executeMaestroAuthorityStages(
+        [{ launchApp: { stopApp: true } }, { tapOn: { id: 'after' } }],
+        async (commands) => {
+          if (
+            commands.some((command) => command && typeof command === 'object' && 'tapOn' in command)
+          ) {
+            throw timeoutError;
+          }
+          return { stdout: 'native launch completed', stderr: '' };
+        },
+        async () => {
+          throw new Error('claim should not run after a deferred relaunch');
+        },
+        async () => {
+          throw cleanupError;
+        },
+        async () => {
+          throw relaunchError;
+        },
+        async () => {},
+      ),
+      (error: unknown) => {
+        assert.equal(error, cleanupError);
+        return true;
+      },
+    );
+    const details = snapshotRunnerDiagnostics()?.events.map((event) => event.detail) ?? [];
+    assert.deepEqual(
+      details.filter((detail) => {
+        if (detail.phase === 'execute-begin') return detail.stage === 1;
+        return [
+          'relaunch-begin',
+          'relaunch-failed',
+          'stage-failed',
+          'cleanup-begin',
+          'cleanup-failed',
+          'cleanup-complete',
+        ].includes(String(detail.phase));
+      }),
+      [
+        { phase: 'relaunch-begin', stage: 0, stopApp: true },
+        {
+          phase: 'relaunch-failed',
+          stage: 0,
+          stopApp: true,
+          deferred: true,
+          error: {
+            name: 'Error',
+            code: 'CDP_TARGET_AUTHORITY_MISMATCH',
+            message: relaunchError.message,
+            cause: 'leaf',
+          },
+        },
+        { phase: 'execute-begin', stage: 1 },
+        {
+          phase: 'stage-failed',
+          stage: 1,
+          error: { name: 'Error', code: 'ETIMEDOUT', message: timeoutError.message },
+        },
+        { phase: 'cleanup-begin', stage: 1 },
+        {
+          phase: 'cleanup-failed',
+          stage: 1,
+          error: { name: 'Error', code: 'RUNNER_TIMEOUT', message: cleanupError.message },
+        },
+      ],
+    );
+    assert.equal(
+      details.some((detail) => detail.phase === 'cleanup-complete'),
+      false,
+    );
+  });
+});
+
+test('unbound-URL relaunch defers DEV_CLIENT_ENDPOINT_NOT_FOUND then continues stage 1', async () => {
+  const relaunchError = new Error(
+    'DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL',
+  );
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'android' }, async () => {
+    await executeMaestroAuthorityStages(
+      [{ launchApp: { stopApp: true } }, { tapOn: { id: 'after' } }],
+      async () => ({}),
+      async () => {},
+      async () => {},
+      async () => {
+        throw relaunchError;
+      },
+      async () => {},
+    );
+    const details = snapshotRunnerDiagnostics()?.events.map((event) => event.detail) ?? [];
+    const failed = details.find((detail) => detail.phase === 'relaunch-failed');
+    assert.deepEqual(failed, {
+      phase: 'relaunch-failed',
+      stage: 0,
+      stopApp: true,
+      deferred: true,
+      error: {
+        name: 'Error',
+        code: 'DEV_CLIENT_ENDPOINT_NOT_FOUND',
+        message: relaunchError.message,
+      },
+    });
+    assert.ok(details.some((detail) => detail.phase === 'execute-begin' && detail.stage === 1));
+  });
+});
+
+test('a deferred relaunch that later fails reprove records origin-failed before cleanup', async () => {
+  const relaunchError = new Error('CDP_TARGET_AUTHORITY_MISMATCH: target did not re-register');
+  const reproveError = new Error('reprove refused');
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'android' }, async () => {
+    await assert.rejects(
+      executeMaestroAuthorityStages(
+        [{ launchApp: { stopApp: true } }, { tapOn: { id: 'after' } }],
+        async () => ({}),
+        async () => {},
+        async () => {},
+        async () => {
+          throw relaunchError;
+        },
+        async () => {
+          throw reproveError;
+        },
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof MaestroStageExecutionError);
+        assert.equal(error.stageError, relaunchError);
+        return true;
+      },
+    );
+    const details = snapshotRunnerDiagnostics()?.events.map((event) => event.detail) ?? [];
+    const reproveFailed = details.findIndex(
+      (detail) => detail.phase === 'origin-failed' && detail.role === 'reprove',
+    );
+    const cleanupBegin = details.findIndex((detail) => detail.phase === 'cleanup-begin');
+    assert.ok(reproveFailed >= 0);
+    assert.ok(cleanupBegin > reproveFailed);
+    assert.deepEqual(details[reproveFailed], {
+      phase: 'origin-failed',
+      role: 'reprove',
+      error: { name: 'Error', code: null, message: 'reprove refused' },
+    });
+  });
+});
+
+test('stopApp false still records managed relaunch and origin proof', async () => {
+  const calls: Array<[string, unknown]> = [];
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'android' }, async () => {
+    await executeMaestroAuthorityStages(
+      [{ launchApp: { stopApp: false } }, { assertVisible: { id: 'app-root' } }],
+      async (commands) => {
+        calls.push(['execute', commands]);
+        return {};
+      },
+      async () => {
+        calls.push(['claim', true]);
+      },
+      async (expected) => {
+        calls.push(['complete', expected]);
+      },
+      async (stopApp) => {
+        calls.push(['relaunch', stopApp]);
+      },
+    );
+    assert.deepEqual(
+      calls.filter(
+        (call) => call[0] === 'relaunch' || call[0] === 'complete' || call[0] === 'claim',
+      ),
+      [
+        ['relaunch', false],
+        ['claim', true],
+        ['complete', true],
+      ],
+    );
+    assert.deepEqual(
+      snapshotRunnerDiagnostics()?.events.map((event) => event.detail),
+      [
+        { phase: 'execute-begin', stage: 0 },
+        { phase: 'execute-complete', stage: 0 },
+        { phase: 'relaunch-begin', stage: 0, stopApp: false },
+        { phase: 'relaunch-complete', stage: 0, stopApp: false },
+        { phase: 'origin-begin', role: 'claim', stage: 1 },
+        { phase: 'origin-complete', role: 'claim', stage: 1 },
+        { phase: 'execute-begin', stage: 1 },
+        { phase: 'execute-complete', stage: 1 },
+        { phase: 'origin-begin', role: 'complete' },
+        { phase: 'origin-complete', role: 'complete' },
+      ],
+    );
+  });
 });
 
 test('GH#708: a revoked session claim aborts immediately instead of deferring', async () => {

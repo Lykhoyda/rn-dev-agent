@@ -1191,6 +1191,8 @@ async function reconnectSessionRuntime(
     );
     return;
   }
+  await awaitWithSignal(getClient().disconnect());
+  setClient(createClient(metroPort));
   const connection = await awaitWithSignal(
     connectExactSessionTarget({ metroPort, platform, appId, deviceId }, readinessTimeoutMs),
   );
@@ -1259,6 +1261,8 @@ async function relaunchSessionRuntime(
       'DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL',
     );
   }
+  await getClient().disconnect();
+  setClient(createClient(metroPort));
   await execFileP('adb', [
     ...androidDeeplinkCommandArgs(
       launchUrl(boundDevClientUrl),

@@ -4,6 +4,91 @@ import { createRequire as __rnCreateRequire } from "node:module"; const require 
 // packages/rn-dev-agent-core/dist/experience/trends.js
 import { join as join2 } from "node:path";
 
+// packages/rn-dev-agent-core/dist/experience/authority-refusal.js
+import { createHash } from "node:crypto";
+var AUTHORITY_REFUSAL_CODES = [
+  "SESSION_AUTHORITY_REQUIRED",
+  "METRO_ORIGIN_MISMATCH",
+  "RUNNER_OWNERSHIP_MISMATCH",
+  "HANDOFF_NOT_AUTHORIZED",
+  "NON_GIT_MANIFEST_REQUIRED",
+  "BUNDLE_HANDSHAKE_UNAVAILABLE"
+];
+var AUTHORITY_AXES = ["C", "S", "I", "M", "A", "B", "D", "R", "P"];
+var REFUSAL_CAUSES = {
+  SESSION_AUTHORITY_REQUIRED: [],
+  METRO_ORIGIN_MISMATCH: [],
+  RUNNER_OWNERSHIP_MISMATCH: [],
+  HANDOFF_NOT_AUTHORIZED: [],
+  NON_GIT_MANIFEST_REQUIRED: [],
+  BUNDLE_HANDSHAKE_UNAVAILABLE: []
+};
+var MAX_AUTHORITY_ENVELOPE_BYTES = 16 * 1024;
+function envelopeObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function isBoundedEnvelopeText(text) {
+  return typeof text === "string" && text.length <= MAX_AUTHORITY_ENVELOPE_BYTES && Buffer.byteLength(text, "utf8") <= MAX_AUTHORITY_ENVELOPE_BYTES;
+}
+function parseAuthorityEnvelope(text) {
+  if (!isBoundedEnvelopeText(text))
+    return null;
+  try {
+    return envelopeObject(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+function authorityResultEnvelope(result) {
+  const envelope = envelopeObject(result);
+  if (!envelope || Object.hasOwn(envelope, "code"))
+    return envelope;
+  if (!Array.isArray(envelope.content))
+    return null;
+  return parseAuthorityEnvelope(envelopeObject(envelope.content[0])?.text);
+}
+function decodeAuthorityRefusalPayload(result, thrownError) {
+  const envelope = authorityResultEnvelope(result);
+  if (envelope && Object.hasOwn(envelope, "code")) {
+    const meta = envelopeObject(envelope.meta);
+    return authorityRefusalFacts(envelope.code, meta?.axis, meta?.cause);
+  }
+  if (typeof thrownError !== "string")
+    return null;
+  const code = AUTHORITY_REFUSAL_CODES.find((candidate) => thrownError.startsWith(`${candidate}:`));
+  return authorityRefusalFacts(code, null, null);
+}
+function decodeLegacyAuthorityRefusal(symptom) {
+  if (!isBoundedEnvelopeText(symptom))
+    return null;
+  return decodeAuthorityRefusalPayload(parseAuthorityEnvelope(symptom), symptom);
+}
+function isAuthorityRefusalCode(value) {
+  return AUTHORITY_REFUSAL_CODES.some((code) => code === value);
+}
+function authorityRefusalFamily(code) {
+  return `FF_${code}`;
+}
+function authorityRefusalFacts(code, axis, cause) {
+  if (!isAuthorityRefusalCode(code))
+    return null;
+  return {
+    code,
+    axis: AUTHORITY_AXES.find((candidate) => candidate === axis) ?? null,
+    cause: REFUSAL_CAUSES[code].find((candidate) => candidate === cause) ?? null
+  };
+}
+function mergeAuthorityRefusalFacts(existing, incoming) {
+  return {
+    code: incoming.code,
+    axis: existing != null && existing.code === incoming.code && existing.axis === incoming.axis ? incoming.axis : null,
+    cause: existing != null && existing.code === incoming.code && existing.cause === incoming.cause ? incoming.cause : null
+  };
+}
+function authorityRefusalSystemicKey(facts, platform) {
+  return createHash("sha256").update(JSON.stringify(["rn-dev-agent/authority-refusal/2", facts.code, facts.cause, platform])).digest("hex");
+}
+
 // packages/rn-dev-agent-core/dist/experience/evidence.js
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, platform as hostPlatform, release } from "node:os";
@@ -77,7 +162,10 @@ var CLASSIFICATION_RULES = [
   ["PQ_ANDROID_BOOT_DELAY", /sys\.boot_completed|emulator.*grpc.*ready/],
   ["PQ_ANDROID_PLAY_PROTECT", /play protect.*(?:block|apk|install)/]
 ];
-var EXPERIENCE_FAMILY_IDS = CLASSIFICATION_RULES.map(([id]) => id);
+var EXPERIENCE_FAMILY_IDS = [
+  ...CLASSIFICATION_RULES.map(([id]) => id),
+  ...AUTHORITY_REFUSAL_CODES.map(authorityRefusalFamily)
+];
 
 // packages/rn-dev-agent-core/dist/experience/trends.js
 function buildExperienceTrendReport(records, since2, now = /* @__PURE__ */ new Date()) {
@@ -102,8 +190,64 @@ function buildExperienceTrendReport(records, since2, now = /* @__PURE__ */ new D
     since: since2.toISOString(),
     families: [...families.entries()].map(([classification, value]) => ({ classification, ...value })).sort((a, b) => b.count - a.count || a.classification.localeCompare(b.classification)),
     newSincePreviousReport: records.filter((record) => Date.parse(record.firstSeen) >= since2.getTime()).map(project).sort(sortPatterns),
-    recurring: records.filter((record) => record.count > 1).map(project).sort(sortPatterns)
+    recurring: records.filter((record) => record.count > 1).map(project).sort(sortPatterns),
+    systemicRefusals: buildSystemicRefusalTrends(records)
   };
+}
+function buildSystemicRefusalTrends(records) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const record of records) {
+    const provenance = Object.hasOwn(record, "authorityRefusal") ? "recorded" : "legacy-derived";
+    const facts = provenance === "recorded" ? recordedRefusalFacts(record.authorityRefusal) : decodeLegacyAuthorityRefusal(record.symptom);
+    if (!facts)
+      continue;
+    const platform = typeof record.platform === "string" && record.platform.length > 0 ? record.platform : null;
+    const systemicKey = authorityRefusalSystemicKey(facts, platform);
+    const aggregate = groups.get(systemicKey);
+    if (aggregate) {
+      aggregate.axis = mergeAuthorityRefusalFacts(aggregate, facts).axis;
+      aggregate.count += record.count;
+      aggregate.tools.push(record.tool);
+      aggregate.memberSignatures.push(record.signature);
+      aggregate.provenance.push(provenance);
+      if (compareTimestamps(record.firstSeen, aggregate.firstSeen) < 0)
+        aggregate.firstSeen = record.firstSeen;
+      if (compareTimestamps(record.lastSeen, aggregate.lastSeen) > 0)
+        aggregate.lastSeen = record.lastSeen;
+    } else {
+      groups.set(systemicKey, {
+        systemicKey,
+        classification: authorityRefusalFamily(facts.code),
+        ...facts,
+        platform,
+        count: record.count,
+        tools: [record.tool],
+        memberSignatures: [record.signature],
+        firstSeen: record.firstSeen,
+        lastSeen: record.lastSeen,
+        recurring: false,
+        recoveryEvidence: "not-verified",
+        currentAuthorityState: "unknown",
+        scope: "retained-local-history",
+        provenance: [provenance]
+      });
+    }
+  }
+  return [...groups.values()].map((aggregate) => ({
+    ...aggregate,
+    tools: [...new Set(aggregate.tools)].sort(),
+    memberSignatures: [...new Set(aggregate.memberSignatures)].sort(),
+    provenance: [...new Set(aggregate.provenance)].sort(),
+    recurring: aggregate.count > 1
+  })).sort((a, b) => b.count - a.count || a.systemicKey.localeCompare(b.systemicKey));
+}
+function recordedRefusalFacts(extension) {
+  if (!extension || typeof extension !== "object" || Array.isArray(extension) || !("code" in extension))
+    return null;
+  return authorityRefusalFacts(extension.code, "axis" in extension ? extension.axis : null, "cause" in extension ? extension.cause : null);
+}
+function compareTimestamps(a, b) {
+  return Date.parse(a) - Date.parse(b) || a.localeCompare(b);
 }
 function readExperienceTrendReport(options) {
   const directory = options.directory ?? process.env.RN_DEV_AGENT_EXPERIENCE_DIR ?? EXPERIENCE_DIRECTORY;
@@ -112,7 +256,7 @@ function readExperienceTrendReport(options) {
 
 // packages/rn-dev-agent-core/dist/experience-trends.js
 function usage() {
-  process.stderr.write("Usage: rn-experience-trends [--since <ISO timestamp>] [--json]\n  --since is the generated-at timestamp printed by the previous report (default: 24 hours ago).\n  This command only reads ~/.claude/rn-agent/experience/patterns.jsonl.\n");
+  process.stderr.write("Usage: rn-experience-trends [--since <ISO timestamp>] [--json]\n  --since is the generated-at timestamp printed by the previous report (default: 24 hours ago).\n  --since affects only new-pattern selection.\n  Systemic, family, and recurring totals cover retained local history, not exact time-window counts.\n  Current authority state is unknown; historical observations do not establish a currently blocked session.\n  This command only reads patterns.jsonl in RN_DEV_AGENT_EXPERIENCE_DIR (default: ~/.claude/rn-agent/experience).\n");
   process.exit(2);
 }
 var since = new Date(Date.now() - 24 * 60 * 60 * 1e3);
@@ -143,6 +287,7 @@ try {
 `);
     process.stdout.write(`Report generated at ${report.generatedAt}; pass this value to --since next time.
 `);
+    process.stdout.write("Systemic, family, and recurring totals cover retained local history, not exact time-window counts.\n--since affects only new-pattern selection.\n");
     process.stdout.write("\nFamilies by frequency\n");
     if (report.families.length === 0)
       process.stdout.write("  none\n");
@@ -162,6 +307,16 @@ try {
       process.stdout.write("  none\n");
     for (const item of report.recurring) {
       process.stdout.write(`  ${item.classification} ${item.tool}: ${item.count} (${item.signature.slice(0, 12)})
+`);
+    }
+    process.stdout.write("\nSystemic authority refusals (retained local history)\n");
+    process.stdout.write("  Current authority state: unknown; historical observations do not establish a currently blocked session.\n");
+    if (report.systemicRefusals.length === 0)
+      process.stdout.write("  none\n");
+    for (const item of report.systemicRefusals) {
+      process.stdout.write(`  ${item.code} | axis: ${item.axis ?? "unknown"} | cause: ${item.cause ?? "unknown"} | platform: ${item.platform ?? "unknown"}
+    ${item.count} occurrence(s) | tools: ${item.tools.join(", ")} | recurring: ${item.recurring ? "yes" : "no"} | recovery not verified
+    first seen: ${item.firstSeen} | last seen: ${item.lastSeen}
 `);
     }
   }

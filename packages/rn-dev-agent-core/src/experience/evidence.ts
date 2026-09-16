@@ -16,6 +16,15 @@ import { fileURLToPath } from 'node:url';
 import { isValidActionId } from '../domain/path-safety.js';
 import type { ToolObserverInput } from '../observability/instrumentation.js';
 import {
+  AUTHORITY_REFUSAL_CODES,
+  authorityRefusalFamily,
+  authorityRefusalSystemicKey,
+  authorityResultEnvelope,
+  decodeAuthorityRefusalPayload,
+  mergeAuthorityRefusalFacts,
+  type AuthorityRefusalFacts,
+} from './authority-refusal.js';
+import {
   retainRunnerDiagnosticEvents,
   type RunnerDiagnosticEvent,
   type RunnerDiagnosticsSnapshot,
@@ -28,6 +37,7 @@ export const MAX_EVIDENCE_POINTERS = 3;
 export const EXPERIENCE_DIRECTORY = join(homedir(), '.claude', 'rn-agent', 'experience');
 export const EXPERIENCE_STORE_NAME = 'patterns.jsonl';
 export const MAX_SYMPTOM_LENGTH = 2048;
+export { MAX_AUTHORITY_ENVELOPE_BYTES } from './authority-refusal.js';
 export const RUNNER_DIAGNOSTICS_MAX_BYTES = 256 * 1024;
 export const RUNNER_DIAGNOSTICS_RETENTION = 5;
 export const RUNNER_DIAGNOSTICS_MAX_SCALAR_CHARS = 1024;
@@ -68,6 +78,7 @@ const REDACTION_RULES: ReadonlyArray<[RegExp, string]> = [
   [/~\/[A-Za-z0-9_./-]+/g, '[PATH_REDACTED]'],
   [/\/(Users|home|opt|var|tmp|etc|private|Volumes)\/[A-Za-z0-9_./-]+/g, '[PATH_REDACTED]'],
   [/(com|org|io|dev|net)\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+/g, '[BUNDLE_REDACTED]'],
+  [/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '[ID_REDACTED]'],
 ];
 
 // The shell contract catches keyword-adjacent values. Structured tool errors
@@ -79,7 +90,7 @@ export type RedactString = (value: string) => string;
 
 // Bump whenever a redaction rule changes: stored records stamped with an older
 // version are re-sanitized under the current rules before the next rewrite.
-export const REDACTION_RULES_VERSION = 1;
+export const REDACTION_RULES_VERSION = 2;
 
 export function sanitizeString(value: string, redact: RedactString = applyRedactionRules): string {
   try {
@@ -193,6 +204,8 @@ export interface ExperienceRecord {
   lastRecoveredAt: string | null;
   unknownReasons: Record<string, string>;
   redactionVersion: number;
+  authorityRefusal?: AuthorityRefusalFacts | null;
+  systemicKey?: string;
 }
 
 export interface ExperienceStoreOptions {
@@ -299,12 +312,15 @@ export class ExperienceRecorder {
       return;
     }
 
+    this.previousFailure = null;
     this.persistRunnerDiagnostics(event);
 
     const record = this.buildFailureRecord(event);
     this.persistFailure(record);
     this.previousFailure =
-      event.status === 'FAIL' ? { tool: event.tool, signature: record.signature } : null;
+      event.status === 'FAIL' && !record.authorityRefusal
+        ? { tool: event.tool, signature: record.signature }
+        : null;
   }
 
   private persistRunnerDiagnostics(event: ToolObserverInput): void {
@@ -325,15 +341,22 @@ export class ExperienceRecorder {
   }
 
   private buildFailureRecord(event: ToolObserverInput): ExperienceRecord {
+    const authorityRefusal = decodeAuthorityRefusal(event);
     const now = this.now().toISOString();
     const tool = sanitizeString(event.tool);
-    const symptom = sanitizeString(boundSymptom(extractSymptom(event)));
+    const symptom = sanitizeString(
+      boundSymptom(
+        authorityRefusal ? authorityRefusalSymptom(event, authorityRefusal) : extractSymptom(event),
+      ),
+    );
     const platform = sanitizeNullable(extractScalar(event, ['platform']));
     const deviceName = extractScalar(event, ['deviceName', 'deviceModel', 'model']);
     const hasDeviceId = extractScalar(event, ['deviceId', 'udid']) !== null;
     const device = sanitizeNullable(deviceName ?? (hasDeviceId ? 'identified-device' : null));
     const runtime = sanitizeNullable(extractScalar(event, ['runtime', 'engine']));
-    const classification = classifyExperience(symptom, tool, platform);
+    const classification = authorityRefusal
+      ? authorityRefusalFamily(authorityRefusal.code)
+      : classifyExperience(symptom, tool, platform);
     const normalizedSymptomShape = normalizeSymptomShape(symptom);
     const signature = experienceSignature({
       classification,
@@ -351,7 +374,9 @@ export class ExperienceRecorder {
       unknownReasons.device = 'tool event did not expose a device name or identifier';
     if (runtime === null) unknownReasons.runtime = 'tool event did not expose a runtime';
     unknownReasons.maskingCondition = 'not derivable from a single tool event';
-    unknownReasons.recovery = 'no immediate successful retry has been observed';
+    unknownReasons.recovery = authorityRefusal
+      ? 'recovery not verified'
+      : 'no immediate successful retry has been observed';
     unknownReasons.cleanup = 'tool events do not report cleanup actions';
 
     const raw: ExperienceRecord = {
@@ -368,7 +393,7 @@ export class ExperienceRecorder {
       recovery: null,
       cleanup: null,
       classification,
-      evidencePointers: [`event:${randomUUID()}`],
+      evidencePointers: [`event:${randomUUID().replaceAll('-', '')}`],
       tool,
       status: event.status === 'ERROR' ? 'ERROR' : 'FAIL',
       normalizedSymptomShape,
@@ -379,6 +404,10 @@ export class ExperienceRecorder {
       lastRecoveredAt: null,
       unknownReasons,
       redactionVersion: REDACTION_RULES_VERSION,
+      authorityRefusal,
+      ...(authorityRefusal
+        ? { systemicKey: authorityRefusalSystemicKey(authorityRefusal, platform) }
+        : {}),
     };
     return sanitizeForEvidence(raw) as ExperienceRecord;
   }
@@ -398,6 +427,20 @@ export class ExperienceRecorder {
       existing.environment = incoming.environment;
       adoptLateFact(existing, incoming, 'device');
       adoptLateFact(existing, incoming, 'runtime');
+      if (incoming.authorityRefusal) {
+        existing.authorityRefusal = mergeAuthorityRefusalFacts(
+          existing.authorityRefusal,
+          incoming.authorityRefusal,
+        );
+        existing.systemicKey = authorityRefusalSystemicKey(
+          existing.authorityRefusal,
+          existing.platform,
+        );
+        existing.unknownReasons.recovery = 'recovery not verified';
+      } else {
+        existing.authorityRefusal = null;
+        delete existing.systemicKey;
+      }
       existing.evidencePointers = boundedPointers(
         existing.evidencePointers,
         incoming.evidencePointers,
@@ -418,7 +461,7 @@ export class ExperienceRecorder {
     existing.lastRecoveredAt = now;
     delete existing.unknownReasons.recovery;
     existing.evidencePointers = boundedPointers(existing.evidencePointers, [
-      `event:${randomUUID()}`,
+      `event:${randomUUID().replaceAll('-', '')}`,
     ]);
     this.write(pruneExperienceRecords(records, this.now(), this.maxRecords, this.retentionMs));
   }
@@ -581,7 +624,10 @@ const CLASSIFICATION_RULES: ReadonlyArray<[string, RegExp]> = [
   ['PQ_ANDROID_PLAY_PROTECT', /play protect.*(?:block|apk|install)/],
 ];
 
-export const EXPERIENCE_FAMILY_IDS: readonly string[] = CLASSIFICATION_RULES.map(([id]) => id);
+export const EXPERIENCE_FAMILY_IDS: readonly string[] = [
+  ...CLASSIFICATION_RULES.map(([id]) => id),
+  ...AUTHORITY_REFUSAL_CODES.map(authorityRefusalFamily),
+];
 
 export function classifyExperience(symptom: string, tool: string, platform: string | null): string {
   const haystack = `${tool} ${platform ?? ''} ${symptom}`.toLowerCase();
@@ -589,6 +635,29 @@ export function classifyExperience(symptom: string, tool: string, platform: stri
     CLASSIFICATION_RULES.find(([, pattern]) => pattern.test(haystack))?.[0] ??
     UNKNOWN_CLASSIFICATION
   );
+}
+
+function envelopeObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+export function decodeAuthorityRefusal(event: ToolObserverInput): AuthorityRefusalFacts | null {
+  if (event.status !== 'FAIL' && event.status !== 'ERROR') return null;
+  return decodeAuthorityRefusalPayload(
+    event.result,
+    event.status === 'ERROR' ? event.error : undefined,
+  );
+}
+
+function authorityRefusalSymptom(event: ToolObserverInput, facts: AuthorityRefusalFacts): string {
+  const envelope = authorityResultEnvelope(event.result);
+  if (typeof envelope?.error === 'string') return envelope.error;
+  const content = envelopeObject(event.result)?.content;
+  const firstText = Array.isArray(content) ? envelopeObject(content[0])?.text : undefined;
+  if (event.error && event.error !== firstText) return event.error;
+  return `${facts.code}: refusal observed`;
 }
 
 function extractSymptom(event: ToolObserverInput): string {
@@ -670,7 +739,17 @@ function runnerFailureEnvelope(event: ToolObserverInput): { code: string } | nul
   if (code && RUNNER_FAILURE_CODES.has(code)) return { code };
   const message = event.error ?? '';
   const matched = [...RUNNER_FAILURE_CODES].find((candidate) => message.includes(candidate));
-  return matched ? { code: matched } : null;
+  if (matched) return { code: matched };
+  const refusal = decodeAuthorityRefusal(event);
+  if (refusal) return { code: refusal.code };
+  const meta = envelopeObject(envelope?.meta);
+  if (!envelope || envelope.ok !== false || !meta) return null;
+  if (event.tool === 'cdp_run_action' || event.tool === 'maestro_run') {
+    const kind = meta.failureKind ?? envelopeObject(meta.terminal)?.failureKind;
+    if (typeof kind === 'string' && kind.length > 0) return { code: kind };
+    return { code: meta.timedOut === true ? 'TIMEOUT' : 'UNKNOWN' };
+  }
+  return null;
 }
 
 function parseResultEnvelope(value: unknown): Record<string, unknown> | null {

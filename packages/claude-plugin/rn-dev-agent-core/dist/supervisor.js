@@ -61961,7 +61961,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes10, createHash: createHash26 } = __require("crypto");
+    var { randomBytes: randomBytes10, createHash: createHash27 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -62629,7 +62629,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest3 = createHash26("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash27("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest3) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -62998,7 +62998,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash26 } = __require("crypto");
+    var { createHash: createHash27 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -63305,7 +63305,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest3 = createHash26("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash27("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -83663,7 +83663,9 @@ import { basename as basename11, join as join47, dirname as dirname24 } from "no
 import { randomUUID as randomUUID9 } from "node:crypto";
 async function runFlowParked(run, opts = {}) {
   const stale = opts.markCdpStale ?? markCdpStale;
+  const platform = opts.platform === "android" ? "android" : "ios";
   try {
+    recordRunnerDiagnostic("flow-park", { phase: "begin", platform });
     if (opts.platform === "android") {
       const release2 = opts.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
       const outcome = opts.signal ? await release2({ deviceId: opts.deviceId, signal: opts.signal }) : await release2({ deviceId: opts.deviceId });
@@ -83675,11 +83677,13 @@ async function runFlowParked(run, opts = {}) {
         await (opts.stopFastRunner ?? stopFastRunner)(opts.deviceId);
       }
     }
+    recordRunnerDiagnostic("flow-park", { phase: "released", platform });
     if (opts.completeRunnerPark) {
       if (opts.signal)
         await opts.completeRunnerPark(opts.signal);
       else
         await opts.completeRunnerPark();
+      recordRunnerDiagnostic("flow-park", { phase: "committed", platform });
     }
     return await run();
   } finally {
@@ -83728,6 +83732,16 @@ function flowRelaunchFacts(command) {
   const options = command && typeof command === "object" && !Array.isArray(command) ? command.launchApp : void 0;
   const launch = options && typeof options === "object" && !Array.isArray(options) ? options : {};
   return { stopApp: typeof launch.stopApp === "boolean" ? launch.stopApp : true };
+}
+function diagnosticErrorDetail(error2) {
+  const message = error2 instanceof Error ? error2.message : String(error2);
+  const cause = error2 instanceof Error && error2.cause instanceof Error ? error2.cause.message : void 0;
+  return {
+    name: error2 instanceof Error ? error2.name : typeof error2,
+    code: /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1] ?? null,
+    message,
+    ...cause !== void 0 ? { cause } : {}
+  };
 }
 function createFlowRelaunchTracker(devClientReplay) {
   let unclaimed = null;
@@ -83798,12 +83812,28 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
   let pendingOriginError;
   let originClaimed = options.firstOriginClaimed === true;
   const relaunches = options.relaunches ?? createFlowRelaunchTracker(false);
-  for (const stage of plan.stages) {
+  for (const [stageIndex, stage] of plan.stages.entries()) {
     if (stage.requiresOrigin && pendingOriginError === void 0) {
       if (!originClaimed) {
         try {
+          recordRunnerDiagnostic("flow-stage", {
+            phase: "origin-begin",
+            role: "claim",
+            stage: stageIndex
+          });
           await claimOrigin();
+          recordRunnerDiagnostic("flow-stage", {
+            phase: "origin-complete",
+            role: "claim",
+            stage: stageIndex
+          });
         } catch (error2) {
+          recordRunnerDiagnostic("flow-stage", {
+            phase: "origin-failed",
+            role: "claim",
+            stage: stageIndex,
+            error: diagnosticErrorDetail(error2)
+          });
           throw relaunches.attribute(error2);
         }
         relaunches.claimed();
@@ -83811,37 +83841,96 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
       originClaimed = false;
     }
     try {
+      recordRunnerDiagnostic("flow-stage", { phase: "execute-begin", stage: stageIndex });
       results.push(await executeStage(stage.commands));
+      recordRunnerDiagnostic("flow-stage", { phase: "execute-complete", stage: stageIndex });
       const launch = stage.commands.length === 1 ? flowRelaunchFacts(stage.commands[0]) : null;
       if (launch) {
         relaunches.launched(launch);
         try {
+          recordRunnerDiagnostic("flow-stage", {
+            phase: "relaunch-begin",
+            stage: stageIndex,
+            stopApp: launch.stopApp
+          });
           await relaunchManagedApp(launch.stopApp);
+          recordRunnerDiagnostic("flow-stage", {
+            phase: "relaunch-complete",
+            stage: stageIndex,
+            stopApp: launch.stopApp
+          });
           pendingOriginError = void 0;
         } catch (error2) {
-          if (!reproveManagedOrigin || error2 instanceof SessionAuthorityError) {
+          const deferred = Boolean(reproveManagedOrigin) && !(error2 instanceof SessionAuthorityError);
+          recordRunnerDiagnostic("flow-stage", {
+            phase: "relaunch-failed",
+            stage: stageIndex,
+            stopApp: launch.stopApp,
+            deferred,
+            error: diagnosticErrorDetail(error2)
+          });
+          if (!deferred)
             throw error2;
-          }
           pendingOriginError = error2;
         }
       }
     } catch (error2) {
-      await completeOrigin(false, options.signal);
+      recordRunnerDiagnostic("flow-stage", {
+        phase: "stage-failed",
+        stage: stageIndex,
+        error: diagnosticErrorDetail(error2)
+      });
+      recordRunnerDiagnostic("flow-stage", { phase: "cleanup-begin", stage: stageIndex });
+      try {
+        await completeOrigin(false, options.signal);
+      } catch (cleanupError) {
+        recordRunnerDiagnostic("flow-stage", {
+          phase: "cleanup-failed",
+          stage: stageIndex,
+          error: diagnosticErrorDetail(cleanupError)
+        });
+        throw cleanupError;
+      }
+      recordRunnerDiagnostic("flow-stage", { phase: "cleanup-complete", stage: stageIndex });
       throw new MaestroStageExecutionError(results, error2);
     }
   }
   if (pendingOriginError !== void 0) {
     try {
+      recordRunnerDiagnostic("flow-stage", { phase: "origin-begin", role: "reprove" });
       await reproveManagedOrigin({ signal: options.signal });
-    } catch {
-      await completeOrigin(false, options.signal);
+      recordRunnerDiagnostic("flow-stage", { phase: "origin-complete", role: "reprove" });
+    } catch (reproveError) {
+      recordRunnerDiagnostic("flow-stage", {
+        phase: "origin-failed",
+        role: "reprove",
+        error: diagnosticErrorDetail(reproveError)
+      });
+      recordRunnerDiagnostic("flow-stage", { phase: "cleanup-begin" });
+      try {
+        await completeOrigin(false, options.signal);
+      } catch (cleanupError) {
+        recordRunnerDiagnostic("flow-stage", {
+          phase: "cleanup-failed",
+          error: diagnosticErrorDetail(cleanupError)
+        });
+        throw cleanupError;
+      }
+      recordRunnerDiagnostic("flow-stage", { phase: "cleanup-complete" });
       throw new MaestroStageExecutionError(results, pendingOriginError);
     }
     relaunches.claimed();
   }
   try {
+    recordRunnerDiagnostic("flow-stage", { phase: "origin-begin", role: "complete" });
     await completeOrigin(plan.targetExpected, options.signal);
+    recordRunnerDiagnostic("flow-stage", { phase: "origin-complete", role: "complete" });
   } catch (error2) {
+    recordRunnerDiagnostic("flow-stage", {
+      phase: "origin-failed",
+      role: "complete",
+      error: diagnosticErrorDetail(error2)
+    });
     throw relaunches.attribute(error2);
   }
   return results;
@@ -86851,8 +86940,94 @@ var init_dev_settings = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/experience/authority-refusal.js
+import { createHash as createHash18 } from "node:crypto";
+function envelopeObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function isBoundedEnvelopeText(text) {
+  return typeof text === "string" && text.length <= MAX_AUTHORITY_ENVELOPE_BYTES && Buffer.byteLength(text, "utf8") <= MAX_AUTHORITY_ENVELOPE_BYTES;
+}
+function parseAuthorityEnvelope(text) {
+  if (!isBoundedEnvelopeText(text))
+    return null;
+  try {
+    return envelopeObject(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+function authorityResultEnvelope(result) {
+  const envelope = envelopeObject(result);
+  if (!envelope || Object.hasOwn(envelope, "code"))
+    return envelope;
+  if (!Array.isArray(envelope.content))
+    return null;
+  return parseAuthorityEnvelope(envelopeObject(envelope.content[0])?.text);
+}
+function decodeAuthorityRefusalPayload(result, thrownError) {
+  const envelope = authorityResultEnvelope(result);
+  if (envelope && Object.hasOwn(envelope, "code")) {
+    const meta = envelopeObject(envelope.meta);
+    return authorityRefusalFacts(envelope.code, meta?.axis, meta?.cause);
+  }
+  if (typeof thrownError !== "string")
+    return null;
+  const code = AUTHORITY_REFUSAL_CODES.find((candidate) => thrownError.startsWith(`${candidate}:`));
+  return authorityRefusalFacts(code, null, null);
+}
+function isAuthorityRefusalCode(value) {
+  return AUTHORITY_REFUSAL_CODES.some((code) => code === value);
+}
+function authorityRefusalFamily(code) {
+  return `FF_${code}`;
+}
+function authorityRefusalFacts(code, axis, cause) {
+  if (!isAuthorityRefusalCode(code))
+    return null;
+  return {
+    code,
+    axis: AUTHORITY_AXES.find((candidate) => candidate === axis) ?? null,
+    cause: REFUSAL_CAUSES[code].find((candidate) => candidate === cause) ?? null
+  };
+}
+function mergeAuthorityRefusalFacts(existing, incoming) {
+  return {
+    code: incoming.code,
+    axis: existing != null && existing.code === incoming.code && existing.axis === incoming.axis ? incoming.axis : null,
+    cause: existing != null && existing.code === incoming.code && existing.cause === incoming.cause ? incoming.cause : null
+  };
+}
+function authorityRefusalSystemicKey(facts, platform) {
+  return createHash18("sha256").update(JSON.stringify(["rn-dev-agent/authority-refusal/2", facts.code, facts.cause, platform])).digest("hex");
+}
+var AUTHORITY_REFUSAL_CODES, AUTHORITY_AXES, REFUSAL_CAUSES, MAX_AUTHORITY_ENVELOPE_BYTES;
+var init_authority_refusal = __esm({
+  "packages/rn-dev-agent-core/dist/experience/authority-refusal.js"() {
+    "use strict";
+    AUTHORITY_REFUSAL_CODES = [
+      "SESSION_AUTHORITY_REQUIRED",
+      "METRO_ORIGIN_MISMATCH",
+      "RUNNER_OWNERSHIP_MISMATCH",
+      "HANDOFF_NOT_AUTHORIZED",
+      "NON_GIT_MANIFEST_REQUIRED",
+      "BUNDLE_HANDSHAKE_UNAVAILABLE"
+    ];
+    AUTHORITY_AXES = ["C", "S", "I", "M", "A", "B", "D", "R", "P"];
+    REFUSAL_CAUSES = {
+      SESSION_AUTHORITY_REQUIRED: [],
+      METRO_ORIGIN_MISMATCH: [],
+      RUNNER_OWNERSHIP_MISMATCH: [],
+      HANDOFF_NOT_AUTHORIZED: [],
+      NON_GIT_MANIFEST_REQUIRED: [],
+      BUNDLE_HANDSHAKE_UNAVAILABLE: []
+    };
+    MAX_AUTHORITY_ENVELOPE_BYTES = 16 * 1024;
+  }
+});
+
 // packages/rn-dev-agent-core/dist/experience/evidence.js
-import { createHash as createHash18, randomBytes as randomBytes8, randomUUID as randomUUID11 } from "node:crypto";
+import { createHash as createHash19, randomBytes as randomBytes8, randomUUID as randomUUID11 } from "node:crypto";
 import { chmodSync as chmodSync7, existsSync as existsSync31, mkdirSync as mkdirSync20, readFileSync as readFileSync32, readdirSync as readdirSync12, renameSync as renameSync9, statSync as statSync15, unlinkSync as unlinkSync14, writeFileSync as writeFileSync16 } from "node:fs";
 import { homedir as homedir9, platform as hostPlatform, release } from "node:os";
 import { dirname as dirname25, join as join48 } from "node:path";
@@ -86970,7 +87145,7 @@ function pruneExperienceRecords(records, now, maxRecords = DEFAULT_MAX_RECORDS, 
   }).sort((a, b) => Date.parse(b.lastSeen) - Date.parse(a.lastSeen) || a.signature.localeCompare(b.signature)).slice(0, Math.max(0, maxRecords)).sort((a, b) => a.signature.localeCompare(b.signature));
 }
 function experienceSignature(input) {
-  return createHash18("sha256").update(JSON.stringify([
+  return createHash19("sha256").update(JSON.stringify([
     input.classification,
     input.tool,
     input.normalizedSymptomShape,
@@ -86983,6 +87158,24 @@ function normalizeSymptomShape(symptom) {
 function classifyExperience(symptom, tool, platform) {
   const haystack = `${tool} ${platform ?? ""} ${symptom}`.toLowerCase();
   return CLASSIFICATION_RULES.find(([, pattern]) => pattern.test(haystack))?.[0] ?? UNKNOWN_CLASSIFICATION;
+}
+function envelopeObject2(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function decodeAuthorityRefusal(event) {
+  if (event.status !== "FAIL" && event.status !== "ERROR")
+    return null;
+  return decodeAuthorityRefusalPayload(event.result, event.status === "ERROR" ? event.error : void 0);
+}
+function authorityRefusalSymptom(event, facts) {
+  const envelope = authorityResultEnvelope(event.result);
+  if (typeof envelope?.error === "string")
+    return envelope.error;
+  const content = envelopeObject2(event.result)?.content;
+  const firstText = Array.isArray(content) ? envelopeObject2(content[0])?.text : void 0;
+  if (event.error && event.error !== firstText)
+    return event.error;
+  return `${facts.code}: refusal observed`;
 }
 function extractSymptom(event) {
   if (typeof event.error === "string" && event.error.length > 0)
@@ -87052,7 +87245,21 @@ function runnerFailureEnvelope(event) {
     return { code };
   const message = event.error ?? "";
   const matched = [...RUNNER_FAILURE_CODES].find((candidate) => message.includes(candidate));
-  return matched ? { code: matched } : null;
+  if (matched)
+    return { code: matched };
+  const refusal = decodeAuthorityRefusal(event);
+  if (refusal)
+    return { code: refusal.code };
+  const meta = envelopeObject2(envelope?.meta);
+  if (!envelope || envelope.ok !== false || !meta)
+    return null;
+  if (event.tool === "cdp_run_action" || event.tool === "maestro_run") {
+    const kind = meta.failureKind ?? envelopeObject2(meta.terminal)?.failureKind;
+    if (typeof kind === "string" && kind.length > 0)
+      return { code: kind };
+    return { code: meta.timedOut === true ? "TIMEOUT" : "UNKNOWN" };
+  }
+  return null;
 }
 function parseResultEnvelope(value) {
   if (!value || typeof value !== "object")
@@ -87146,7 +87353,7 @@ function findNumber(value, keys, depth) {
   return null;
 }
 function stableDeviceHash(directory, deviceId) {
-  return createHash18("sha256").update(readOrCreateRunnerDiagnosticsSalt(directory)).update("\0").update(deviceId).digest("hex");
+  return createHash19("sha256").update(readOrCreateRunnerDiagnosticsSalt(directory)).update("\0").update(deviceId).digest("hex");
 }
 function readOrCreateRunnerDiagnosticsSalt(directory) {
   const path = join48(directory, ".runner-diagnostics-salt");
@@ -87303,7 +87510,9 @@ var init_evidence = __esm({
   "packages/rn-dev-agent-core/dist/experience/evidence.js"() {
     "use strict";
     init_path_safety();
+    init_authority_refusal();
     init_runner_diagnostics();
+    init_authority_refusal();
     UNKNOWN_CLASSIFICATION = "UNKNOWN";
     DEFAULT_MAX_RECORDS = 500;
     DEFAULT_RETENTION_DAYS = 14;
@@ -87341,10 +87550,11 @@ var init_evidence = __esm({
       [/:([0-9]{2,5})(?=\/|\s|$)/g, ":[PORT_REDACTED]"],
       [/~\/[A-Za-z0-9_./-]+/g, "[PATH_REDACTED]"],
       [/\/(Users|home|opt|var|tmp|etc|private|Volumes)\/[A-Za-z0-9_./-]+/g, "[PATH_REDACTED]"],
-      [/(com|org|io|dev|net)\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+/g, "[BUNDLE_REDACTED]"]
+      [/(com|org|io|dev|net)\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+/g, "[BUNDLE_REDACTED]"],
+      [/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "[ID_REDACTED]"]
     ];
     KEYED_SECRET = /((?:token|secret|password|auth|api[_-]?key)\s*[:=]\s*)[^\s,;}]{6,}/gi;
-    REDACTION_RULES_VERSION = 1;
+    REDACTION_RULES_VERSION = 2;
     appIdentityCache = null;
     ExperienceRecorder = class {
       directory;
@@ -87404,10 +87614,11 @@ var init_evidence = __esm({
           this.previousFailure = null;
           return;
         }
+        this.previousFailure = null;
         this.persistRunnerDiagnostics(event);
         const record3 = this.buildFailureRecord(event);
         this.persistFailure(record3);
-        this.previousFailure = event.status === "FAIL" ? { tool: event.tool, signature: record3.signature } : null;
+        this.previousFailure = event.status === "FAIL" && !record3.authorityRefusal ? { tool: event.tool, signature: record3.signature } : null;
       }
       persistRunnerDiagnostics(event) {
         const trace = event.runnerDiagnostics;
@@ -87428,15 +87639,16 @@ var init_evidence = __esm({
         writeRunnerDiagnosticsBundle(this.directory, bundle);
       }
       buildFailureRecord(event) {
+        const authorityRefusal = decodeAuthorityRefusal(event);
         const now = this.now().toISOString();
         const tool = sanitizeString(event.tool);
-        const symptom = sanitizeString(boundSymptom(extractSymptom(event)));
+        const symptom = sanitizeString(boundSymptom(authorityRefusal ? authorityRefusalSymptom(event, authorityRefusal) : extractSymptom(event)));
         const platform = sanitizeNullable(extractScalar(event, ["platform"]));
         const deviceName = extractScalar(event, ["deviceName", "deviceModel", "model"]);
         const hasDeviceId = extractScalar(event, ["deviceId", "udid"]) !== null;
         const device = sanitizeNullable(deviceName ?? (hasDeviceId ? "identified-device" : null));
         const runtime = sanitizeNullable(extractScalar(event, ["runtime", "engine"]));
-        const classification = classifyExperience(symptom, tool, platform);
+        const classification = authorityRefusal ? authorityRefusalFamily(authorityRefusal.code) : classifyExperience(symptom, tool, platform);
         const normalizedSymptomShape = normalizeSymptomShape(symptom);
         const signature = experienceSignature({
           classification,
@@ -87455,7 +87667,7 @@ var init_evidence = __esm({
         if (runtime === null)
           unknownReasons.runtime = "tool event did not expose a runtime";
         unknownReasons.maskingCondition = "not derivable from a single tool event";
-        unknownReasons.recovery = "no immediate successful retry has been observed";
+        unknownReasons.recovery = authorityRefusal ? "recovery not verified" : "no immediate successful retry has been observed";
         unknownReasons.cleanup = "tool events do not report cleanup actions";
         const raw = {
           signature,
@@ -87471,7 +87683,7 @@ var init_evidence = __esm({
           recovery: null,
           cleanup: null,
           classification,
-          evidencePointers: [`event:${randomUUID11()}`],
+          evidencePointers: [`event:${randomUUID11().replaceAll("-", "")}`],
           tool,
           status: event.status === "ERROR" ? "ERROR" : "FAIL",
           normalizedSymptomShape,
@@ -87481,7 +87693,9 @@ var init_evidence = __esm({
           lastSeen: now,
           lastRecoveredAt: null,
           unknownReasons,
-          redactionVersion: REDACTION_RULES_VERSION
+          redactionVersion: REDACTION_RULES_VERSION,
+          authorityRefusal,
+          ...authorityRefusal ? { systemicKey: authorityRefusalSystemicKey(authorityRefusal, platform) } : {}
         };
         return sanitizeForEvidence(raw);
       }
@@ -87500,6 +87714,14 @@ var init_evidence = __esm({
           existing.environment = incoming.environment;
           adoptLateFact(existing, incoming, "device");
           adoptLateFact(existing, incoming, "runtime");
+          if (incoming.authorityRefusal) {
+            existing.authorityRefusal = mergeAuthorityRefusalFacts(existing.authorityRefusal, incoming.authorityRefusal);
+            existing.systemicKey = authorityRefusalSystemicKey(existing.authorityRefusal, existing.platform);
+            existing.unknownReasons.recovery = "recovery not verified";
+          } else {
+            existing.authorityRefusal = null;
+            delete existing.systemicKey;
+          }
           existing.evidencePointers = boundedPointers(existing.evidencePointers, incoming.evidencePointers);
         } else {
           records.push(incoming);
@@ -87517,7 +87739,7 @@ var init_evidence = __esm({
         existing.lastRecoveredAt = now;
         delete existing.unknownReasons.recovery;
         existing.evidencePointers = boundedPointers(existing.evidencePointers, [
-          `event:${randomUUID11()}`
+          `event:${randomUUID11().replaceAll("-", "")}`
         ]);
         this.write(pruneExperienceRecords(records, this.now(), this.maxRecords, this.retentionMs));
       }
@@ -87586,7 +87808,10 @@ var init_evidence = __esm({
       ["PQ_ANDROID_BOOT_DELAY", /sys\.boot_completed|emulator.*grpc.*ready/],
       ["PQ_ANDROID_PLAY_PROTECT", /play protect.*(?:block|apk|install)/]
     ];
-    EXPERIENCE_FAMILY_IDS = CLASSIFICATION_RULES.map(([id]) => id);
+    EXPERIENCE_FAMILY_IDS = [
+      ...CLASSIFICATION_RULES.map(([id]) => id),
+      ...AUTHORITY_REFUSAL_CODES.map(authorityRefusalFamily)
+    ];
     RUNNER_FAILURE_CODES = /* @__PURE__ */ new Set([
       "WDA_BOOTSTRAP_FAILED",
       "RUNNER_CACHE_UNAVAILABLE",
@@ -89859,7 +90084,7 @@ var init_device_deeplink = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 import { execFile as execFile22 } from "node:child_process";
-import { createHash as createHash19 } from "node:crypto";
+import { createHash as createHash20 } from "node:crypto";
 import { existsSync as existsSync32 } from "node:fs";
 import { promisify as promisify23 } from "node:util";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
@@ -90020,7 +90245,7 @@ function parseStatusOutput(stdout) {
   return active;
 }
 function recordingScope(args) {
-  return createHash19("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
+  return createHash20("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
 }
 function bindRecorderSession(runtime, args) {
   const available = runtime.requireAvailable();
@@ -90318,7 +90543,7 @@ var init_device_record = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
-import { createHash as createHash20 } from "node:crypto";
+import { createHash as createHash21 } from "node:crypto";
 function canonicalizeProofValue(value) {
   if (Array.isArray(value))
     return value.map(canonicalizeProofValue);
@@ -90330,14 +90555,14 @@ function hashProofArgs(params) {
   return hashProofValue(redact(params));
 }
 function hashProofValue(value) {
-  return createHash20("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
+  return createHash21("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
 }
 function proofRuntimeAuthorityMarker(input) {
   return hashProofValue(input);
 }
 function hashObservedValue(value) {
   const bytes = JSON.stringify(value) ?? String(value);
-  return createHash20("sha256").update(bytes).digest("hex");
+  return createHash21("sha256").update(bytes).digest("hex");
 }
 function resultEnvelope(result) {
   if (!result || typeof result !== "object")
@@ -90841,7 +91066,7 @@ var init_proof_receipt = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/proof-media.js
-import { createHash as createHash21 } from "node:crypto";
+import { createHash as createHash22 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir12 } from "node:os";
@@ -90881,7 +91106,7 @@ async function hashAcceptedFile(path) {
   }
 }
 async function sha256File2(path) {
-  const hash = createHash21("sha256");
+  const hash = createHash22("sha256");
   const stream = createReadStream(path);
   for await (const chunk of stream)
     hash.update(chunk);
@@ -91217,7 +91442,7 @@ var init_startup_integrity = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash22, randomUUID as randomUUID12 } from "node:crypto";
+import { createHash as createHash23, randomUUID as randomUUID12 } from "node:crypto";
 import { execFileSync as execFileSync16 } from "node:child_process";
 import { chmodSync as chmodSync8, closeSync as closeSync13, existsSync as existsSync33, fsyncSync, lstatSync as lstatSync19, mkdirSync as mkdirSync21, openSync as openSync13, readFileSync as readFileSync34, realpathSync as realpathSync17, renameSync as renameSync10, unlinkSync as unlinkSync16, writeFileSync as writeFileSync18 } from "node:fs";
 import { basename as basename12, dirname as dirname28, extname, isAbsolute as isAbsolute15, join as join52, relative as relative9, resolve as resolve18, sep as sep11 } from "node:path";
@@ -91253,7 +91478,7 @@ function evidenceTimingReasons(timestamps, videoDurationMs, steps) {
   return reasons;
 }
 function hashBytes(bytes) {
-  return createHash22("sha256").update(bytes).digest("hex");
+  return createHash23("sha256").update(bytes).digest("hex");
 }
 function captureProofWorkerStartup(argv = process.argv, attestation = readStartupIntegrityAttestation()) {
   let executedEntrypointPath = null;
@@ -91478,7 +91703,7 @@ function readProofActionIdentity(appProjectRoot, actionId, dependencies = {}) {
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash22("sha256").update(action.yamlText).digest("hex")
+      sha256: createHash23("sha256").update(action.yamlText).digest("hex")
     };
   } catch {
     return null;
@@ -96971,7 +97196,7 @@ var init_target = __esm({
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname33, join as join60 } from "node:path";
 import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync20, renameSync as renameSync11, readFileSync as readFileSync39, readdirSync as readdirSync17, existsSync as existsSync35 } from "node:fs";
-import { createHash as createHash23 } from "node:crypto";
+import { createHash as createHash24 } from "node:crypto";
 function e2eDirFor(projectRoot) {
   return join60(projectRoot, ".rn-agent", "e2e");
 }
@@ -97002,7 +97227,7 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash23("sha256").update(s).digest("hex");
+  return createHash24("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
@@ -97778,9 +98003,9 @@ var init_runner_binding = __esm({
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
 import { execFileSync as execFileSync19 } from "node:child_process";
-import { createHash as createHash24 } from "node:crypto";
+import { createHash as createHash25 } from "node:crypto";
 function identity(value) {
-  return createHash24("sha256").update(JSON.stringify(value)).digest("hex");
+  return createHash25("sha256").update(JSON.stringify(value)).digest("hex");
 }
 function objectBinding(status, name) {
   const value = status.bindings[name];
@@ -98192,6 +98417,17 @@ function boundConnectConflict(status, request2) {
   }
   return null;
 }
+function loopbackMetroUrl(devClientUrl) {
+  try {
+    const inner = new URL(devClientUrl).searchParams.get("url");
+    if (!inner)
+      return null;
+    const host = new URL(inner).hostname;
+    return host === "127.0.0.1" || host === "localhost" || host === "[::1]" ? inner : null;
+  } catch {
+    return null;
+  }
+}
 async function pinExactDevClient(input, dependencies) {
   if (!Number.isSafeInteger(input.metroPort) || input.metroPort < 1 || input.metroPort > 65535) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: authority-bound Metro port is unavailable");
@@ -98202,7 +98438,10 @@ async function pinExactDevClient(input, dependencies) {
   if (input.runtimeKind === "bare-react-native" && input.devClientUrl) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: launch kind contradicts the signed build provenance");
   }
-  if (input.devClientUrl) {
+  const simulatorLaunchTarget = input.platform === "ios" && input.runtimeKind === "expo-dev-client" && input.devClientUrl ? loopbackMetroUrl(input.devClientUrl) : null;
+  if (simulatorLaunchTarget) {
+    await dependencies.launchExactAppWithInitialUrl(input.deviceId, input.appId, launchUrl(simulatorLaunchTarget), hideDevMenu);
+  } else if (input.devClientUrl) {
     await dependencies.openUrl(input.platform, input.deviceId, launchUrl(input.devClientUrl), input.appId, hideDevMenu);
     if (input.platform === "ios")
       await dependencies.acceptIosOpenDialog(input.deviceId);
@@ -98670,7 +98909,7 @@ var index_exports = {};
 __export(index_exports, {
   strictProofMonitor: () => strictProofMonitor
 });
-import { createHash as createHash25, createHmac as createHmac5, randomUUID as randomUUID13 } from "node:crypto";
+import { createHash as createHash26, createHmac as createHmac5, randomUUID as randomUUID13 } from "node:crypto";
 import { readFileSync as readFileSync43, rmSync as rmSync12 } from "node:fs";
 import { execFile as execFile23 } from "node:child_process";
 import { promisify as promisify26 } from "node:util";
@@ -98915,6 +99154,8 @@ async function reconnectSessionRuntime(status, options) {
     await awaitWithSignal2(connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, readinessTimeoutMs));
     return;
   }
+  await awaitWithSignal2(getClient().disconnect());
+  setClient(createClient(metroPort));
   const connection = await awaitWithSignal2(connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, readinessTimeoutMs));
   return stageAndroidRuntimeConnection(connection);
 }
@@ -98953,6 +99194,8 @@ async function relaunchSessionRuntime(status, stopApp = true) {
   if (!boundDevClientUrl) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL");
   }
+  await getClient().disconnect();
+  setClient(createClient(metroPort));
   await execFileP("adb", [
     ...androidDeeplinkCommandArgs(launchUrl(boundDevClientUrl), void 0, deviceId, hideDevMenu ? DEV_MENU_NO_AUTO_LAUNCH_EXTRAS : []),
     "-p",
@@ -99424,7 +99667,7 @@ var init_index = __esm({
           runnerInstanceId: runner?.instanceId,
           runnerPid: runner?.pid,
           runnerProcessBirth: runner?.processBirth,
-          runnerCapabilityHash: typeof runner?.capability === "string" ? createHash25("sha256").update(runner.capability).digest("hex") : void 0,
+          runnerCapabilityHash: typeof runner?.capability === "string" ? createHash26("sha256").update(runner.capability).digest("hex") : void 0,
           runnerPort: runner?.port,
           runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key,
           deviceClaim: status.claims.find((claim) => claim.type === "device")?.key
@@ -100295,7 +100538,7 @@ var init_index = __esm({
           connectedAt: current.connectedAt
         }),
         errorCount: errors.length,
-        errorSha256: createHash25("sha256").update(errorBytes).digest("hex"),
+        errorSha256: createHash26("sha256").update(errorBytes).digest("hex"),
         device: identity2.device,
         runtime: identity2.runtime
       };

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -9,6 +10,7 @@ import {
   ExperienceRecorder,
   EXPERIENCE_FAMILY_IDS,
   EXPERIENCE_STORE_NAME,
+  MAX_AUTHORITY_ENVELOPE_BYTES,
   MAX_SYMPTOM_LENGTH,
   REDACTION_RULES_VERSION,
   classifyExperience,
@@ -23,6 +25,11 @@ import {
   readExperienceTrendReport,
 } from '../../dist/experience/trends.js';
 import { addToolObserver, instrumentTool } from '../../dist/observability/instrumentation.js';
+import {
+  AUTHORITY_REFUSAL_CODES,
+  authorityRefusalSystemicKey,
+} from '../../dist/experience/authority-refusal.js';
+import type { ToolObserverInput } from '../../dist/observability/instrumentation.js';
 
 const NOW = new Date('2026-06-10T12:00:00.000Z');
 
@@ -472,6 +479,322 @@ test('trend report is read-only and exposes frequency, new, and recurring patter
       .newSincePreviousReport,
     [],
   );
+});
+
+function refusal(axis: unknown = 'M', tool = 'rn_session'): ToolObserverInput {
+  return {
+    tool,
+    params: { platform: 'ios' },
+    status: 'FAIL',
+    latencyMs: 1,
+    result: {
+      ok: false,
+      code: 'METRO_ORIGIN_MISMATCH',
+      error: 'redbox not connected',
+      meta: { axis },
+    },
+  };
+}
+
+for (const code of AUTHORITY_REFUSAL_CODES) {
+  test(`${code} persists exact classification through all observer failure shapes`, () => {
+    const recorder = synchronousRecorder(tempDirectory());
+    const envelope = { ok: false, code, error: 'redbox not connected', meta: { axis: 'M' } };
+    const events: ToolObserverInput[] = [
+      { ...refusal(), result: envelope },
+      { ...refusal(), result: { content: [{ text: JSON.stringify(envelope) }] } },
+      { ...refusal(), result: undefined, error: `${code}: redbox not connected`, status: 'ERROR' },
+    ];
+    for (const event of events) recorder.observe(event);
+    const records = recorder.read();
+    assert.equal(
+      records.reduce((sum, record) => sum + record.count, 0),
+      3,
+    );
+    for (const record of records) {
+      assert.equal(record.classification, `FF_${code}`);
+      assert.equal(record.authorityRefusal?.code, code);
+      assert.equal(record.unknownReasons.recovery, 'recovery not verified');
+      assert.equal(record.signature, experienceSignature(record));
+    }
+  });
+}
+
+test('unknown structured codes retain text classification without systemic membership', () => {
+  const recorder = synchronousRecorder(tempDirectory());
+  recorder.observe({
+    ...refusal(),
+    result: { code: 'FUTURE_CODE', error: 'METRO_ORIGIN_MISMATCH: redbox' },
+  });
+  const record = recorder.read()[0];
+  assert.equal(record.classification, 'FF_REDBOX');
+  assert.equal(record.authorityRefusal, null);
+  assert.equal(Object.hasOwn(record, 'authorityRefusal'), true);
+  assert.equal(record.systemicKey, undefined);
+  assert.deepEqual(buildExperienceTrendReport([record], NOW, NOW).systemicRefusals, []);
+});
+
+test('oversized envelopes persist an explicit negative verdict and stay excluded', () => {
+  const recorder = synchronousRecorder(tempDirectory());
+  const envelope = {
+    ok: false,
+    code: 'METRO_ORIGIN_MISMATCH',
+    error: 'METRO_ORIGIN_MISMATCH: oversized',
+    padding: 'x'.repeat(MAX_AUTHORITY_ENVELOPE_BYTES),
+  };
+  recorder.observe({
+    ...refusal(),
+    result: { content: [{ type: 'text', text: JSON.stringify(envelope) }] },
+  });
+  const record = recorder.read()[0];
+  assert.equal(record.authorityRefusal, null);
+  assert.equal(Object.hasOwn(record, 'authorityRefusal'), true);
+  assert.equal(record.systemicKey, undefined);
+  assert.deepEqual(buildExperienceTrendReport([record], NOW, NOW).systemicRefusals, []);
+});
+
+test('repeat negatives keep explicit null on a matching historical keyless row', () => {
+  const directory = tempDirectory();
+  const recorder = synchronousRecorder(directory);
+  recorder.observe({
+    ...refusal(),
+    result: { code: 'FUTURE_CODE', error: 'METRO_ORIGIN_MISMATCH: redbox' },
+  });
+  const legacy = recorder.read()[0];
+  delete legacy.authorityRefusal;
+  delete legacy.systemicKey;
+  writeFileSync(join(directory, EXPERIENCE_STORE_NAME), JSON.stringify(legacy) + '\n');
+  recorder.observe({
+    ...refusal(),
+    result: { code: 'FUTURE_CODE', error: 'METRO_ORIGIN_MISMATCH: redbox' },
+  });
+  const record = recorder.read()[0];
+  assert.equal(record.count, 2);
+  assert.equal(record.authorityRefusal, null);
+  assert.equal(Object.hasOwn(record, 'authorityRefusal'), true);
+  assert.equal(record.systemicKey, undefined);
+  assert.deepEqual(buildExperienceTrendReport([record], NOW, NOW).systemicRefusals, []);
+});
+
+test('authority observations never become recovery candidates in any adjacency sequence', () => {
+  const pass = (tool = 'rn_session'): ToolObserverInput => ({
+    tool,
+    params: { action: 'status' },
+    status: 'PASS',
+    latencyMs: 1,
+  });
+  const error: ToolObserverInput = {
+    ...refusal(),
+    result: undefined,
+    status: 'ERROR',
+    error: 'METRO_ORIGIN_MISMATCH: failure',
+  };
+  const sequences = [
+    [refusal(), pass()],
+    [refusal(), pass('cdp_status')],
+    [error, pass()],
+    [refusal()],
+    [refusal(), pass('cdp_status'), pass()],
+    [refusal(), fail('other_tool', 'ordinary failure'), pass()],
+    [fail('rn_session', 'ordinary failure'), refusal(), pass()],
+    [fail('rn_session', 'ordinary failure'), error, pass()],
+  ];
+  for (const sequence of sequences) {
+    const recorder = synchronousRecorder(tempDirectory());
+    for (const event of sequence) recorder.observe(event);
+    for (const record of recorder.read()) {
+      assert.equal(record.recoveryCount, 0);
+      assert.equal(record.lastRecoveredAt, null);
+      assert.equal(record.recovery, null);
+    }
+  }
+});
+
+test('same-signature refusal merges preserve counts, evidence, status, and common metadata', () => {
+  for (const axes of [
+    ['M', 'M', 'M'],
+    ['M', 'S', 'M'],
+    [null, 'M', 'M'],
+    ['M', null, 'M'],
+  ]) {
+    let now = NOW;
+    const recorder = synchronousRecorder(tempDirectory(), { now: () => now });
+    recorder.observe(refusal(axes[0]));
+    const first = recorder.read()[0];
+    now = new Date(NOW.getTime() + 1000);
+    recorder.observe({ ...refusal(axes[1]), status: 'ERROR' });
+    now = new Date(NOW.getTime() + 2000);
+    recorder.observe(refusal(axes[2]));
+    recorder.observe(refusal(axes[2]));
+    const records = recorder.read();
+    assert.equal(records.length, 1);
+    const record = records[0];
+    assert.equal(record.signature, first.signature);
+    assert.equal(record.count, 4);
+    assert.equal(record.firstSeen, first.firstSeen);
+    assert.equal(record.lastSeen, now.toISOString());
+    assert.equal(record.status, 'ERROR');
+    assert.equal(record.evidencePointers.length, 3);
+    const expected = {
+      code: 'METRO_ORIGIN_MISMATCH',
+      axis: axes.every((axis) => axis === 'M') ? 'M' : null,
+      cause: null,
+    } as const;
+    assert.deepEqual(record.authorityRefusal, expected);
+    assert.equal(record.systemicKey, authorityRefusalSystemicKey(expected, 'ios'));
+  }
+});
+
+test('missing historical refusal facts do not backfill metadata or erase recovery counters', () => {
+  const directory = tempDirectory();
+  const recorder = synchronousRecorder(directory);
+  recorder.observe(refusal());
+  const legacy = recorder.read()[0];
+  delete legacy.authorityRefusal;
+  delete legacy.systemicKey;
+  legacy.count = 5;
+  legacy.recoveryCount = 2;
+  legacy.recovery = 'historical heuristic';
+  legacy.lastRecoveredAt = NOW.toISOString();
+  writeFileSync(join(directory, EXPERIENCE_STORE_NAME), JSON.stringify(legacy) + '\n');
+  recorder.observe(refusal());
+  recorder.observe(refusal());
+  const record = recorder.read()[0];
+  assert.equal(record.count, 7);
+  assert.deepEqual(record.authorityRefusal, {
+    code: 'METRO_ORIGIN_MISMATCH',
+    axis: null,
+    cause: null,
+  });
+  assert.equal(record.recoveryCount, 2);
+  assert.equal(record.recovery, legacy.recovery);
+  assert.equal(record.lastRecoveredAt, legacy.lastRecoveredAt);
+  assert.equal(record.unknownReasons.recovery, 'recovery not verified');
+});
+
+test('separate tools share one systemic key for the same code and platform across axes', () => {
+  const recorder = synchronousRecorder(tempDirectory());
+  recorder.observe(refusal('M', 'tool_a'));
+  recorder.observe(refusal('S', 'tool_b'));
+  recorder.observe(refusal('M', 'tool_c'));
+  const records = recorder.read();
+  const a = records.find((record) => record.tool === 'tool_a')!;
+  const b = records.find((record) => record.tool === 'tool_b')!;
+  const c = records.find((record) => record.tool === 'tool_c')!;
+  assert.notEqual(a.signature, c.signature);
+  assert.equal(a.systemicKey, c.systemicKey);
+  assert.equal(a.systemicKey, b.systemicKey);
+});
+
+test('refusal metadata is discarded and platform sanitized before systemic hashing', () => {
+  const directory = tempDirectory();
+  const recorder = synchronousRecorder(directory);
+  for (const withError of [true, false]) {
+    const envelope = {
+      ok: false,
+      code: 'METRO_ORIGIN_MISMATCH',
+      ...(withError ? { error: 'refused token=very-private-secret' } : {}),
+      meta: {
+        axis: 'M',
+        cause: 'private-cause',
+        holder: 'private-holder',
+        expected: 'private-expected',
+        observed: 'private-observed',
+        nextAction: 'private-remedy',
+      },
+      details: { cause: 'private-domain-cause' },
+    };
+    const text = JSON.stringify(envelope);
+    recorder.observe({
+      ...refusal(),
+      params: { platform: '/Users/private/platform' },
+      result: { content: [{ text }] },
+      error: withError ? envelope.error : text,
+    });
+  }
+  const serialized = readFileSync(join(directory, EXPERIENCE_STORE_NAME), 'utf8');
+  for (const secret of [
+    'very-private-secret',
+    'private-cause',
+    'private-holder',
+    'private-expected',
+    'private-observed',
+    'private-remedy',
+    'private-domain-cause',
+    '/Users/private/platform',
+  ]) {
+    assert.equal(serialized.includes(secret), false, secret);
+  }
+  for (const record of recorder.read()) {
+    assert.equal(record.platform, '[PATH_REDACTED]');
+    assert.ok(record.authorityRefusal);
+    assert.deepEqual(Object.keys(record.authorityRefusal).sort(), ['axis', 'cause', 'code']);
+    assert.equal(
+      record.systemicKey,
+      authorityRefusalSystemicKey(record.authorityRefusal, record.platform),
+    );
+  }
+});
+
+test('refusal symptoms drop simulator UDIDs while systemic grouping is unchanged', () => {
+  const directory = tempDirectory();
+  const recorder = synchronousRecorder(directory);
+  const udids = ['A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D', 'ffffffff-0000-4000-8000-123456789abc'];
+  for (const udid of udids) {
+    const envelope = {
+      ok: false,
+      code: 'METRO_ORIGIN_MISMATCH',
+      error: `the bound ios device ${udid} is running com.example.app served by Metro :8082, not this session's Metro :8081`,
+      meta: { axis: 'M' },
+    };
+    recorder.observe({ ...refusal(), result: envelope, error: envelope.error });
+  }
+  const serialized = readFileSync(join(directory, EXPERIENCE_STORE_NAME), 'utf8');
+  for (const udid of udids)
+    assert.equal(serialized.toLowerCase().includes(udid.toLowerCase()), false, udid);
+  const records = recorder.read();
+  assert.equal(records.length, 1);
+  assert.equal(records[0].count, 2);
+  assert.match(records[0].symptom, /device \[ID_REDACTED\] is running/);
+  assert.equal(
+    records[0].systemicKey,
+    authorityRefusalSystemicKey({ code: 'METRO_ORIGIN_MISMATCH', axis: 'M', cause: null }, 'ios'),
+  );
+
+  const fakeHome = tempDirectory();
+  mkdirSync(join(fakeHome, '.claude', 'logs'), { recursive: true });
+  writeFileSync(join(fakeHome, '.claude', 'logs', 'rn-dev-agent-cdp-bridge.log'), udids.join('\n'));
+  const collected = spawnSync(
+    'bash',
+    [resolve(dirname(fileURLToPath(import.meta.url)), '../../../../scripts/collect-feedback.sh')],
+    { encoding: 'utf8', env: { ...process.env, HOME: fakeHome, RN_PROJECT_ROOT: fakeHome } },
+  );
+  assert.equal(collected.status, 0, collected.stderr);
+  assert.deepEqual(JSON.parse(collected.stdout).cdp_bridge_log_tail, [
+    '[ID_REDACTED]',
+    '[ID_REDACTED]',
+  ]);
+});
+
+test('refusal decoding is deferred and decoder failures clear earlier recovery candidates', () => {
+  const queued: Array<() => void> = [];
+  const recorder = synchronousRecorder(tempDirectory(), { schedule: (work) => queued.push(work) });
+  let reads = 0;
+  const result = {
+    get code() {
+      reads++;
+      throw new Error('unreadable envelope');
+    },
+  };
+  recorder.observe(fail('rn_session', 'ordinary failure'));
+  recorder.observe({ ...refusal(), result });
+  assert.equal(reads, 0);
+  assert.deepEqual(recorder.read(), []);
+  for (const work of queued.splice(0)) assert.doesNotThrow(work);
+  assert.equal(reads, 1);
+  recorder.observe({ tool: 'rn_session', params: {}, status: 'PASS', latencyMs: 1 });
+  for (const work of queued.splice(0)) work();
+  assert.equal(recorder.read()[0].recoveryCount, 0);
 });
 
 function existsStore(directory: string): boolean {
