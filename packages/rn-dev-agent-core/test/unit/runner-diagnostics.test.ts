@@ -837,6 +837,22 @@ test('direct maestro_run producer timeout retains the authenticated session bund
   rmSync(directory, { recursive: true, force: true });
 });
 
+test('a failed maestro_run step retains its trace with its terminal failure kind', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-maestro-step-retain-'));
+  const params = { platform: 'android', actionId: 'qa-observe-screen-match' };
+  recordTimeout(
+    directory,
+    params,
+    { ok: false, meta: { terminal: { failureKind: 'ASSERTION_FAILED' } } },
+    timeoutTrace(params),
+    'authenticated-session',
+    'maestro_run',
+  );
+  const bundle = JSON.parse(readFileSync(join(directory, bundles(directory)[0]), 'utf8'));
+  assert.equal(bundle.failureCode, 'ASSERTION_FAILED');
+  rmSync(directory, { recursive: true, force: true });
+});
+
 test('a failed cdp_run_action step retains its trace with its failure kind', () => {
   const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-step-retain-'));
   const params = { platform: 'android', actionId: 'qa-observe-screen-match' };
