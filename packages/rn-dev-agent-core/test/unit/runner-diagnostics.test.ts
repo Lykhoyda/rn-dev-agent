@@ -800,6 +800,26 @@ test('code-less cdp_run_action TIMEOUT retains the existing sanitized trace', ()
   rmSync(directory, { recursive: true, force: true });
 });
 
+test('recognized authority refusal retains the existing sanitized trace', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-refusal-'));
+  const params = { platform: 'android', actionId: 'qa-observe-screen-match' };
+  const snapshot = timeoutTrace(params);
+  recordTimeout(
+    directory,
+    params,
+    { ok: false, code: 'BUNDLE_HANDSHAKE_UNAVAILABLE', meta: { axis: 'B' } },
+    {
+      ...snapshot,
+      events: snapshot.events.slice(0, 2),
+    },
+  );
+  const files = bundles(directory);
+  assert.equal(files.length, 1);
+  const bundle = JSON.parse(readFileSync(join(directory, files[0]), 'utf8'));
+  assert.equal(bundle.failureCode, 'BUNDLE_HANDSHAKE_UNAVAILABLE');
+  rmSync(directory, { recursive: true, force: true });
+});
+
 test('direct maestro_run producer timeout retains the authenticated session bundle', () => {
   const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-producer-timeout-'));
   const params = { platform: 'android', actionId: 'qa-observe-screen-match' };

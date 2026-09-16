@@ -740,6 +740,8 @@ function runnerFailureEnvelope(event: ToolObserverInput): { code: string } | nul
   const message = event.error ?? '';
   const matched = [...RUNNER_FAILURE_CODES].find((candidate) => message.includes(candidate));
   if (matched) return { code: matched };
+  const refusal = decodeAuthorityRefusal(event);
+  if (refusal) return { code: refusal.code };
   const meta = envelopeObject(envelope?.meta);
   if (!envelope || envelope.ok !== false || !meta) return null;
   if (event.tool === 'cdp_run_action' && meta.failureKind === 'TIMEOUT') return { code: 'TIMEOUT' };
