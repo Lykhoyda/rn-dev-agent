@@ -837,15 +837,32 @@ test('direct maestro_run producer timeout retains the authenticated session bund
   rmSync(directory, { recursive: true, force: true });
 });
 
-test('non-timeout, unrelated-tool, foreign-session, and malformed envelopes do not retain traces', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-timeout-reject-'));
+test('a failed cdp_run_action step retains its trace with its failure kind', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-step-retain-'));
   const params = { platform: 'android', actionId: 'qa-observe-screen-match' };
-  const snapshot = timeoutTrace(params);
   recordTimeout(directory, params, {
     ok: false,
     error: 'assert failed',
     meta: { failureKind: 'ASSERTION_FAILED' },
   });
+  const first = JSON.parse(readFileSync(join(directory, bundles(directory)[0]), 'utf8'));
+  assert.equal(first.failureCode, 'ASSERTION_FAILED');
+  recordTimeout(directory, params, {
+    ok: false,
+    error: 'Maestro flow failed at step "assertVisible"',
+    meta: { failureKind: 'UNKNOWN', terminal: { exitClass: 'step-failure' } },
+  });
+  const files = bundles(directory);
+  assert.equal(files.length, 2);
+  const second = JSON.parse(readFileSync(join(directory, files[1]), 'utf8'));
+  assert.equal(second.failureCode, 'UNKNOWN');
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('non-timeout, unrelated-tool, foreign-session, and malformed envelopes do not retain traces', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-timeout-reject-'));
+  const params = { platform: 'android', actionId: 'qa-observe-screen-match' };
+  const snapshot = timeoutTrace(params);
   recordTimeout(directory, params, {
     ok: true,
     meta: { failureKind: 'TIMEOUT' },
@@ -866,11 +883,6 @@ test('non-timeout, unrelated-tool, foreign-session, and malformed envelopes do n
     'authenticated-session',
     'cdp_status',
   );
-  recordTimeout(directory, params, {
-    ok: false,
-    error: 'TIMEOUT: message only',
-    meta: { timedOut: false },
-  });
   recordTimeout(directory, params, { ok: false, meta: ['TIMEOUT'] });
   recordTimeout(directory, params, { ok: false, details: { failureKind: 'TIMEOUT' } });
   assert.equal(bundles(directory).length, 0);

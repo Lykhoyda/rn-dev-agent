@@ -345,6 +345,38 @@ test('deferred relaunch rejection and cleanup timeout keep their dropped errors 
   });
 });
 
+test('unbound-URL relaunch defers DEV_CLIENT_ENDPOINT_NOT_FOUND then continues stage 1', async () => {
+  const relaunchError = new Error(
+    'DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL',
+  );
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'android' }, async () => {
+    await executeMaestroAuthorityStages(
+      [{ launchApp: { stopApp: true } }, { tapOn: { id: 'after' } }],
+      async () => ({}),
+      async () => {},
+      async () => {},
+      async () => {
+        throw relaunchError;
+      },
+      async () => {},
+    );
+    const details = snapshotRunnerDiagnostics()?.events.map((event) => event.detail) ?? [];
+    const failed = details.find((detail) => detail.phase === 'relaunch-failed');
+    assert.deepEqual(failed, {
+      phase: 'relaunch-failed',
+      stage: 0,
+      stopApp: true,
+      deferred: true,
+      error: {
+        name: 'Error',
+        code: 'DEV_CLIENT_ENDPOINT_NOT_FOUND',
+        message: relaunchError.message,
+      },
+    });
+    assert.ok(details.some((detail) => detail.phase === 'execute-begin' && detail.stage === 1));
+  });
+});
+
 test('a deferred relaunch that later fails reprove records origin-failed before cleanup', async () => {
   const relaunchError = new Error('CDP_TARGET_AUTHORITY_MISMATCH: target did not re-register');
   const reproveError = new Error('reprove refused');
