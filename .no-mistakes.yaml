@@ -1,0 +1,5 @@
+# Pin local no-mistakes lint and format to this repo's oxlint/oxfmt scripts.
+# Keep commands.test absent so the pipeline does not override the default test path.
+commands:
+  lint: yarn lint
+  format: yarn format
