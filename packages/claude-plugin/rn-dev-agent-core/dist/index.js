@@ -97283,6 +97283,8 @@ async function reconnectSessionRuntime(status, options) {
     await awaitWithSignal2(connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, readinessTimeoutMs));
     return;
   }
+  await awaitWithSignal2(getClient().disconnect());
+  setClient(createClient(metroPort));
   const connection = await awaitWithSignal2(connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, readinessTimeoutMs));
   return stageAndroidRuntimeConnection(connection);
 }
@@ -97332,6 +97334,8 @@ async function relaunchSessionRuntime(status, stopApp = true) {
   if (!boundDevClientUrl) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL");
   }
+  await getClient().disconnect();
+  setClient(createClient(metroPort));
   await execFileP("adb", [
     ...androidDeeplinkCommandArgs(launchUrl(boundDevClientUrl), void 0, deviceId, hideDevMenu ? DEV_MENU_NO_AUTO_LAUNCH_EXTRAS : []),
     "-p",
