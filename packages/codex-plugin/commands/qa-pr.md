@@ -34,14 +34,19 @@ this package) in this session. Summary:
 6. **Per selected target:** `bind_device` (exact id) →
    `preview_integration` → `apply_integration confirmed=true` → run the
    rewritten package `ios`/`android` script from the app root → poll until
-   `metroBound` and `installBound` → `pin_dev_client` → exercise the
-   PR change (artifact-first; `cdp_login_prologue` for auth).
+   `metroBound` and `installBound` → `pin_dev_client` → then the feature
+   proof (`agents/rn-pr-qa.md` Step 7): usable screen or FAIL with the
+   refusal code → record the real path → persist or reuse a Maestro
+   action → off-camera `cdp_run_action` rehearsal → `device_record` start
+   **before** `maestro_run` → short native take → stop and validate.
+   Missing video on an app-facing target is FAIL.
 7. **Cleanup** reverse-order: runner close → `stop_metro` →
    `restore_integration` → `release`. Remove only the worktree you added.
 8. **Report** on the PR with `gh pr comment --body-file` plus
    `--attach` for every screenshot and video (GitHub CLI attaching-files
    flow). Then rewrite screenshot markdown to
-   `<img src="…" alt="…" width="720">` via `--edit-last`. In-session,
+   `<img src="…" alt="…" width="390">` via `--edit-last`. Re-read the
+   head before posting; the verdict binds to the tested SHA. In-session,
    print the verdict table and the comment URL. Never leave unhosted
    `/tmp` paths as the reviewer-visible proof. Public comments are public:
    never write hostname (including `.local`), machine UUID, home
@@ -67,12 +72,13 @@ $rn-dev-agent:qa-pr 42 device
 - For Android emulator: Android SDK + a booted or bootable AVD
 - For physical: USB debugging, exclusive claim, exact serial
 - Pin-cache maestro-runner `>= 1.1.24`
-- Replay YAML only through `cdp_run_action`. Never PATH `maestro`.
+- Rehearse through `cdp_run_action`; the on-camera take is `maestro_run` of the saved action. Never PATH `maestro`.
 
 ## Output
 
+- Video of the saved action replaying, as the primary proof
 - Stand-alone verdict for the PR URL + head SHA
 - Per-target PASS / FAIL / SKIP with evidence
 - Repro steps a human can follow
-- GitHub comment with hosted screenshots (`<img width="720">`) and
+- GitHub comment with hosted screenshots (`<img width="390">`) and
   attached videos (player embed), not raw local paths

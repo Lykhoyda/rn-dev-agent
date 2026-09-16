@@ -175,26 +175,46 @@ From the PR files (and `git diff <base>...<head>` inside the worktree):
 Write a short test plan **before** acting: start state, steps, expected
 UI + data at each step, edge cases implied by the diff.
 
-### Step 7 — Exercise (artifact-first)
+### Step 7 — Feature proof (artifact-first; the video is the primary proof)
 
-Reuse the `rn-tester` exercise loop; do not re-derive it.
+Follow `capturing-proof` Steps 2.5 to 5 with these bounds. Reuse the
+`rn-tester` exercise loop for discovery; do not re-derive it.
 
-0. Scan `.rn-agent/actions/` (and the workspace test-app corpus when
-   testing plugin PRs). Replay a covering action via `cdp_run_action`.
-   Authentication goes through `cdp_login_prologue` only.
-1. Navigate from a real-user entry point. No silent deep-link or store
-   shortcuts; if you must shortcut, state it and mark the verdict partial.
-2. For each planned step: act (`device_*` / `cdp_interact`) → cheapest
-   effect check (`expect_*`, scoped `cdp_*`) → screenshot only when the
-   cheap check fails or you need a proof image.
-3. Capture at least one `device_screenshot` per target that ran, saved
-   to a unique local file (do not leave it only in the tool result).
-4. Capture at least one video of the exercised flow per target that ran
-   (`proof_capture` `start_recording` → covering `cdp_run_action` or
-   the key UI steps → `stop_recording`). Supported: mp4, mov, webm.
-   If recording is unavailable, record that as a report gap; still
-   attach every screenshot.
-5. Finish with `cdp_error_log`. New errors fail the target.
+1. **Usable screen through public tools.** After `pin_dev_client`:
+   `cdp_dev_settings(action="hideDevMenu")` (never swipe the sheet), then
+   `cdp_navigation_state` must return a real app route and a baseline
+   `device_screenshot` must show the app. A dev-client picker, a missing
+   Hermes target, or a session-authority refusal is **FAIL** for the target
+   with the refusal code and that one screenshot. Stop the target.
+2. **Record the real path.** From a real-user entry point, walk to the
+   feature with `device_*` / `cdp_interact` while `cdp_record_test_start`
+   captures; authentication only through `cdp_login_prologue` (reuse and,
+   if needed, update the project's existing login action; never record a
+   second one). No silent deep-link or store shortcut; if one is unavoidable,
+   state it and the verdict is at most PARTIAL.
+3. **Persist or reuse an action.** Scan `.rn-agent/actions/` first
+   (`creating-actions` Step 0). Reuse a covering action unchanged; otherwise
+   `cdp_record_test_stop` then `cdp_record_test_save_as_action` with the
+   metadata header and `enginePin: maestro-runner@1.1.24`.
+4. **Rehearse off camera.** `cdp_run_action` on that action, at most three
+   fix-and-replay loops (`creating-actions` Step 7). A clean pass freezes the
+   action bytes; reset the app to the recorded start screen.
+5. **Start recording before the runner.** `device_record(action="start",
+   platform=<target>, outputPath=<sandbox-writable absolute path>)`. Never
+   a path on an external volume. If recording cannot start, the target is
+   **FAIL** ("video unavailable"), not a gap.
+6. **The take.** `maestro_run(flowPath=<the saved action>)`, short and
+   precise. No `cdp_run_action`, repair, exploration, or navigation on
+   camera. A failed take is FAIL for that attempt; stop recording, keep the
+   file and the reason; one re-take is allowed only after a fresh off-camera
+   rehearsal passes.
+7. **Stop and validate.** `device_record(action="stop")`. Then the planned
+   `expect_*` checks, `cdp_navigation_state` on the end route, one result
+   `device_screenshot`, and `cdp_error_log` (new errors fail the target).
+   Watch the video: it must show the feature from its start screen to its
+   end state. Missing or unwatchable video on an app-facing target is FAIL;
+   screenshots do not substitute.
+8. Keep every file at a unique local path for Step 9.
 
 Circuit breaker: after 3 failures of the same category (screenshot, device
 interaction, CDP, launch, flow), STOP that target and report the blocker.
@@ -236,7 +256,7 @@ Attach evidence with `gh pr comment` / GitHub attachments. Never paste
 a local file path as the evidence. `--attach` may read a local file; the
 comment GitHub shows must not contain that path.
 
-Images: `<img src="…" width="720" alt="short public description">`. Alt
+Images: `<img src="…" width="390" alt="short public description">`. Alt
 text follows the same redaction.
 
 Do not approve, dismiss reviews, edit the branch, or merge from this QA
@@ -256,6 +276,11 @@ screenshot and video with GitHub CLI `--attach`
 (https://docs.github.com/en/github-cli/github-cli/attaching-files-with-github-cli).
 Need `gh` ≥ 2.99 (`gh pr comment --help` lists `--attach`) and push
 access on the PR's repository. Stop if either is missing.
+
+Re-read the PR head with `gh pr view --json headRefOid` immediately
+before posting. If it differs from the tested SHA, post FAIL for
+completion of this run, name the tested SHA, and ask for a rerun;
+never write an unqualified 'latest head passed'.
 
 #### 9a. Body file with local paths
 
@@ -278,14 +303,14 @@ Verdict: PASS | FAIL | PARTIAL | SKIP
 | android| SKIP   | no AVD |
 | device | FAIL   | screenshot + video below |
 
+![](/tmp/qa-pr-812-ios.mp4)
+
 Repro steps:
 1. ...
 
 ### ios
 
 ![iOS home after login](/tmp/qa-pr-812-ios-home.png)
-
-![](/tmp/qa-pr-812-ios.mp4)
 ```
 
 #### 9b. Attach and post
@@ -306,14 +331,14 @@ proof. `gh pr comment` prints the comment URL
 
 `--attach` leaves `![alt](https://github.com/user-attachments/assets/...)`,
 which GitHub shows as small thumbs. Rewrite **images only** to HTML
-with an explicit width (720 for phone screenshots; 960 if landscape
+with an explicit width (390 for phone screenshots; 960 if landscape
 or tablet). Leave each video paragraph as the rewritten player URL
 (GitHub does not support alt text on video). The `--edit-last` body
 must pass Public identity (no `/Users/`, hostname, machine UUID, or
 unhosted local paths).
 
 ```html
-<img src="https://github.com/user-attachments/assets/<id>" alt="iOS home after login" width="720">
+<img src="https://github.com/user-attachments/assets/<id>" alt="iOS home after login" width="390">
 ```
 
 Write the widened body, then:
@@ -365,3 +390,6 @@ Rules:
 - About to leave attached screenshots as tiny markdown thumbs (no HTML width)
 - About to post `/Users/`, a `.local` host, a machine UUID, or a
   slash-started absolute path on GitHub
+- About to run `cdp_run_action` or repair while recording
+- About to record the rehearsal instead of the replay
+- About to report PASS for an app-facing target without a watchable video
