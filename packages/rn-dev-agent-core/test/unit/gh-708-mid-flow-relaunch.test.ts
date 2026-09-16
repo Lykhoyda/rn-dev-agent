@@ -192,6 +192,11 @@ test('failed execute and failed relaunch-plus-cleanup leave different traces wit
       snapshotRunnerDiagnostics()?.events.map((event) => event.detail),
       [
         { phase: 'execute-begin', stage: 0 },
+        {
+          phase: 'stage-failed',
+          stage: 0,
+          error: { name: 'Error', code: null, message: 'native execute failed' },
+        },
         { phase: 'cleanup-begin', stage: 0 },
         { phase: 'cleanup-complete', stage: 0 },
       ],
@@ -234,9 +239,147 @@ test('failed execute and failed relaunch-plus-cleanup leave different traces wit
         { phase: 'execute-begin', stage: 0 },
         { phase: 'execute-complete', stage: 0 },
         { phase: 'relaunch-begin', stage: 0, stopApp: true },
+        {
+          phase: 'relaunch-failed',
+          stage: 0,
+          stopApp: true,
+          deferred: false,
+          error: { name: 'Error', code: null, message: 'managed reconnect did not become ready' },
+        },
+        {
+          phase: 'stage-failed',
+          stage: 0,
+          error: { name: 'Error', code: null, message: 'managed reconnect did not become ready' },
+        },
         { phase: 'cleanup-begin', stage: 0 },
+        {
+          phase: 'cleanup-failed',
+          stage: 0,
+          error: { name: 'Error', code: null, message: 'cleanup rejected after deadline' },
+        },
       ],
     );
+  });
+});
+
+test('deferred relaunch rejection and cleanup timeout keep their dropped errors in the trace', async () => {
+  const relaunchError = new Error(
+    'CDP_TARGET_AUTHORITY_MISMATCH: Android exact-target readiness exceeded its absolute 120000ms deadline. Last exact-connect failure: leaf',
+    { cause: new Error('leaf') },
+  );
+  const timeoutError = new Error('ETIMEDOUT: Maestro flow timeout exhausted before the next stage');
+  const cleanupError = new Error('RUNNER_TIMEOUT: origin complete aborted');
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'android' }, async () => {
+    await assert.rejects(
+      executeMaestroAuthorityStages(
+        [{ launchApp: { stopApp: true } }, { tapOn: { id: 'after' } }],
+        async (commands) => {
+          if (
+            commands.some((command) => command && typeof command === 'object' && 'tapOn' in command)
+          ) {
+            throw timeoutError;
+          }
+          return { stdout: 'native launch completed', stderr: '' };
+        },
+        async () => {
+          throw new Error('claim should not run after a deferred relaunch');
+        },
+        async () => {
+          throw cleanupError;
+        },
+        async () => {
+          throw relaunchError;
+        },
+        async () => {},
+      ),
+      (error: unknown) => {
+        assert.equal(error, cleanupError);
+        return true;
+      },
+    );
+    const details = snapshotRunnerDiagnostics()?.events.map((event) => event.detail) ?? [];
+    assert.deepEqual(
+      details.filter((detail) => {
+        if (detail.phase === 'execute-begin') return detail.stage === 1;
+        return [
+          'relaunch-begin',
+          'relaunch-failed',
+          'stage-failed',
+          'cleanup-begin',
+          'cleanup-failed',
+          'cleanup-complete',
+        ].includes(String(detail.phase));
+      }),
+      [
+        { phase: 'relaunch-begin', stage: 0, stopApp: true },
+        {
+          phase: 'relaunch-failed',
+          stage: 0,
+          stopApp: true,
+          deferred: true,
+          error: {
+            name: 'Error',
+            code: 'CDP_TARGET_AUTHORITY_MISMATCH',
+            message: relaunchError.message,
+            cause: 'leaf',
+          },
+        },
+        { phase: 'execute-begin', stage: 1 },
+        {
+          phase: 'stage-failed',
+          stage: 1,
+          error: { name: 'Error', code: 'ETIMEDOUT', message: timeoutError.message },
+        },
+        { phase: 'cleanup-begin', stage: 1 },
+        {
+          phase: 'cleanup-failed',
+          stage: 1,
+          error: { name: 'Error', code: 'RUNNER_TIMEOUT', message: cleanupError.message },
+        },
+      ],
+    );
+    assert.equal(
+      details.some((detail) => detail.phase === 'cleanup-complete'),
+      false,
+    );
+  });
+});
+
+test('a deferred relaunch that later fails reprove records origin-failed before cleanup', async () => {
+  const relaunchError = new Error('CDP_TARGET_AUTHORITY_MISMATCH: target did not re-register');
+  const reproveError = new Error('reprove refused');
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'android' }, async () => {
+    await assert.rejects(
+      executeMaestroAuthorityStages(
+        [{ launchApp: { stopApp: true } }, { tapOn: { id: 'after' } }],
+        async () => ({}),
+        async () => {},
+        async () => {},
+        async () => {
+          throw relaunchError;
+        },
+        async () => {
+          throw reproveError;
+        },
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof MaestroStageExecutionError);
+        assert.equal(error.stageError, relaunchError);
+        return true;
+      },
+    );
+    const details = snapshotRunnerDiagnostics()?.events.map((event) => event.detail) ?? [];
+    const reproveFailed = details.findIndex(
+      (detail) => detail.phase === 'origin-failed' && detail.role === 'reprove',
+    );
+    const cleanupBegin = details.findIndex((detail) => detail.phase === 'cleanup-begin');
+    assert.ok(reproveFailed >= 0);
+    assert.ok(cleanupBegin > reproveFailed);
+    assert.deepEqual(details[reproveFailed], {
+      phase: 'origin-failed',
+      role: 'reprove',
+      error: { name: 'Error', code: null, message: 'reprove refused' },
+    });
   });
 });
 
