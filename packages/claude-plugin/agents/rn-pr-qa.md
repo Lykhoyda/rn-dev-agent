@@ -278,10 +278,11 @@ screenshot and video with GitHub CLI `--attach`
 Need `gh` ≥ 2.99 (`gh pr comment --help` lists `--attach`) and push
 access on the PR's repository. Stop if either is missing.
 
-Re-read the PR head with `gh pr view --json headRefOid` immediately
-before posting. If it differs from the tested SHA, post FAIL for
-completion of this run, name the tested SHA, and ask for a rerun;
-never write an unqualified 'latest head passed'.
+Re-read the PR head with `gh pr view "<pr-url>" --json headRefOid`
+immediately before posting. Stop if that lookup fails. If it differs
+from the tested SHA, post FAIL for completion of this run, name the
+tested SHA, and ask for a rerun; never write an unqualified 'latest
+head passed'.
 
 #### 9a. Body file with local paths
 

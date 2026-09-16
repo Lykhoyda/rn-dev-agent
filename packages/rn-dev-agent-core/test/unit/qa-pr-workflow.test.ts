@@ -71,6 +71,8 @@ test('qa-pr workflow is registered and parent-session-only', () => {
     assert.match(agentText, /device_record\(action="start"/);
     assert.match(agentText, /maestro_run\(flowPath=/);
     assert.match(agentText, /width="390"/);
+    assert.match(agentText, /gh pr view "<pr-url>" --json headRefOid/);
+    assert.match(agentText, /Stop if that lookup fails/);
   }
 
   const claudeManifest = JSON.parse(
