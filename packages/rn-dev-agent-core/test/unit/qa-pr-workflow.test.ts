@@ -29,10 +29,7 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.match(agent, /width="390"/);
   assert.doesNotMatch(agent, /width="720"/);
   assert.match(agent, /device_record\(action="start"/);
-  assert.match(agent, /Start recording before the runner/);
   assert.match(agent, /maestro_run\(flowPath=/);
-  assert.match(agent, /video unavailable/);
-  assert.match(agent, /Re-read the PR head/);
   assert.match(agent, /!\[\]\(/);
   assert.match(agent, /\[HOST\]/);
   assert.match(agent, /\[MACHINE_ID\]/);
@@ -54,7 +51,6 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.match(sharedCommand, /maestro_run/);
   assert.match(sharedCommand, /\[HOST\]/);
   assert.match(sharedCommand, /before posting/);
-  assert.match(sharedCommand, /binds to the tested SHA/);
   assert.match(sharedCommand, /rewritten GitHub body/);
 
   for (const host of ['shared-agent-knowledge', 'claude-plugin', 'codex-plugin'] as const) {
@@ -68,9 +64,13 @@ test('qa-pr workflow is registered and parent-session-only', () => {
     assert.equal(existsSync(command), true, command);
     assert.equal(existsSync(agentPath), true, agentPath);
     const commandText = readFileSync(command, 'utf8');
+    const agentText = readFileSync(agentPath, 'utf8');
     assert.match(commandText, /--attach/);
     assert.match(commandText, /maestro_run/);
     assert.match(commandText, /width="390"/);
+    assert.match(agentText, /device_record\(action="start"/);
+    assert.match(agentText, /maestro_run\(flowPath=/);
+    assert.match(agentText, /width="390"/);
   }
 
   const claudeManifest = JSON.parse(

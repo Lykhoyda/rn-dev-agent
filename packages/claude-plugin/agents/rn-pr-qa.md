@@ -193,9 +193,9 @@ Follow `capturing-proof` Steps 2.5 to 5 with these bounds. Reuse the
    second one). No silent deep-link or store shortcut; if one is unavoidable,
    state it and the verdict is at most PARTIAL.
 3. **Persist or reuse an action.** Scan `.rn-agent/actions/` first
-   (`creating-actions` Step 0). Reuse a covering action unchanged; otherwise
-   `cdp_record_test_stop` then `cdp_record_test_save_as_action` with the
-   metadata header and `enginePin: maestro-runner@1.1.24`.
+   (`creating-actions` Step 0). `cdp_record_test_stop` in both cases. Reuse
+   a covering action unchanged; otherwise `cdp_record_test_save_as_action`
+   with the metadata header and `enginePin: maestro-runner@1.1.24`.
 4. **Rehearse off camera.** `cdp_run_action` on that action, at most three
    fix-and-replay loops (`creating-actions` Step 7). A clean pass freezes the
    action bytes; reset the app to the recorded start screen.
@@ -208,12 +208,13 @@ Follow `capturing-proof` Steps 2.5 to 5 with these bounds. Reuse the
    camera. A failed take is FAIL for that attempt; stop recording, keep the
    file and the reason; one re-take is allowed only after a fresh off-camera
    rehearsal passes.
-7. **Stop and validate.** `device_record(action="stop")`. Then the planned
-   `expect_*` checks, `cdp_navigation_state` on the end route, one result
-   `device_screenshot`, and `cdp_error_log` (new errors fail the target).
-   Watch the video: it must show the feature from its start screen to its
-   end state. Missing or unwatchable video on an app-facing target is FAIL;
-   screenshots do not substitute.
+7. **Stop and validate.** `device_record(action="stop")`. Then
+   `capturing-proof` Step 6 (file exists and is larger than 10 KB), the
+   planned `expect_*` checks, `cdp_navigation_state` on the end route, one
+   result `device_screenshot`, and `cdp_error_log` (new errors fail the
+   target). Watch the video: it must show the feature from its start
+   screen to its end state. Missing or unwatchable video on an app-facing
+   target is FAIL; screenshots do not substitute.
 8. Keep every file at a unique local path for Step 9.
 
 Circuit breaker: after 3 failures of the same category (screenshot, device
