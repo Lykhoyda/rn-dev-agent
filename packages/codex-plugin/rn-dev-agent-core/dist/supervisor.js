@@ -87253,10 +87253,12 @@ function runnerFailureEnvelope(event) {
   const meta = envelopeObject2(envelope?.meta);
   if (!envelope || envelope.ok !== false || !meta)
     return null;
-  if (event.tool === "cdp_run_action" && meta.failureKind === "TIMEOUT")
-    return { code: "TIMEOUT" };
-  if (event.tool === "maestro_run" && meta.timedOut === true)
-    return { code: "TIMEOUT" };
+  if (event.tool === "cdp_run_action" || event.tool === "maestro_run") {
+    const kind = meta.failureKind;
+    if (typeof kind === "string" && kind.length > 0)
+      return { code: kind };
+    return { code: meta.timedOut === true ? "TIMEOUT" : "UNKNOWN" };
+  }
   return null;
 }
 function parseResultEnvelope(value) {
