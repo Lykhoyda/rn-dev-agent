@@ -30,6 +30,12 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.doesNotMatch(agent, /width="720"/);
   assert.match(agent, /device_record\(action="start"/);
   assert.match(agent, /maestro_run\(flowPath=/);
+  assert.match(agent, /proofReplay=true/);
+  assert.match(agent, /cdp_reload/);
+  assert.match(agent, /NSCocoaErrorDomain 513/);
+  assert.match(agent, /this step wins/);
+  assert.match(agent, /proofDomain/);
+  assert.doesNotMatch(agent, /A clean pass freezes the action bytes/);
   assert.match(agent, /!\[\]\(/);
   assert.match(agent, /\[HOST\]/);
   assert.match(agent, /\[MACHINE_ID\]/);
@@ -49,6 +55,7 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.match(sharedCommand, /width="390"/);
   assert.doesNotMatch(sharedCommand, /width="720"/);
   assert.match(sharedCommand, /maestro_run/);
+  assert.match(sharedCommand, /gh pr view "<pr-url>" --json headRefOid/);
   assert.match(sharedCommand, /\[HOST\]/);
   assert.match(sharedCommand, /before posting/);
   assert.match(sharedCommand, /rewritten GitHub body/);
@@ -68,11 +75,13 @@ test('qa-pr workflow is registered and parent-session-only', () => {
     assert.match(commandText, /--attach/);
     assert.match(commandText, /maestro_run/);
     assert.match(commandText, /width="390"/);
+    assert.match(commandText, /headRefOid/);
     assert.match(agentText, /device_record\(action="start"/);
     assert.match(agentText, /maestro_run\(flowPath=/);
     assert.match(agentText, /width="390"/);
     assert.match(agentText, /gh pr view "<pr-url>" --json headRefOid/);
     assert.match(agentText, /Stop if that lookup fails/);
+    assert.match(agentText, /proofReplay=true/);
   }
 
   const claudeManifest = JSON.parse(

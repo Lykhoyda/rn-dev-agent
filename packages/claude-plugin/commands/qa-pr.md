@@ -33,8 +33,9 @@ Load `rn-workflow`, `rn-testing`, `rn-device-control`, and
    rewritten `<pm> run ios|android` from the app root → poll until
    `metroBound` and `installBound` → `pin_dev_client` → then the feature
    proof (`agents/rn-pr-qa.md` Step 7): usable screen or FAIL with the
-   refusal code → record the real path → persist or reuse a Maestro
-   action → off-camera `cdp_run_action` rehearsal → `device_record` start
+   refusal code → reuse a covering action (rehearse with `proofReplay=true`)
+   or record and save one → off-camera `cdp_run_action` rehearsal →
+   `cdp_reload` to the start screen → `device_record` start
    **before** `maestro_run` → short native take → stop and validate.
    Missing video on an app-facing target is FAIL.
 7. **Cleanup** reverse-order: runner close → `stop_metro` →
@@ -43,7 +44,8 @@ Load `rn-workflow`, `rn-testing`, `rn-device-control`, and
    `--attach` for every screenshot and video (GitHub CLI attaching-files
    flow). Then rewrite screenshot markdown to
    `<img src="…" alt="…" width="390">` via `--edit-last`. Re-read the
-   head before posting; the verdict binds to the tested SHA. In-session,
+   head with `gh pr view "<pr-url>" --json headRefOid` before posting
+   and stop if it fails; the verdict binds to the tested SHA. In-session,
    print the verdict table and the comment URL. Never leave unhosted
    `/tmp` paths as the reviewer-visible proof. Public comments are public:
    never write hostname (including `.local`), machine UUID, home

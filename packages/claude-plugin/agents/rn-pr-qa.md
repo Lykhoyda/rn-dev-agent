@@ -152,6 +152,9 @@ For each selected target, independently:
    file with `pipefail`. There is no `start_metro` action and no separate
    build/launch tool.
 4. Poll `rn_session status` until `metroBound` and `installBound`.
+   If the managed build's own install step fails (for example iOS
+   `IXErrorDomain`), rerun the same package script once and disclose it
+   in the report. A second failure is FAIL for the target.
 5. `pin_dev_client` / `cdp_connect` for the bound platform. Require the
    signed initial-bundle marker.
 6. Passive `cdp_status`. RedBox or paused debugger → `cdp_error_log`,
@@ -177,7 +180,8 @@ UI + data at each step, edge cases implied by the diff.
 
 ### Step 7 — Feature proof (artifact-first; the video is the primary proof)
 
-Follow `capturing-proof` Steps 2.5 to 5 with these bounds. Reuse the
+Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
+`capturing-proof` and this step differ, this step wins. Reuse the
 `rn-tester` exercise loop for discovery; do not re-derive it.
 
 1. **Usable screen through public tools.** After `pin_dev_client`:
@@ -186,35 +190,60 @@ Follow `capturing-proof` Steps 2.5 to 5 with these bounds. Reuse the
    `device_screenshot` must show the app. A dev-client picker, a missing
    Hermes target, or a session-authority refusal is **FAIL** for the target
    with the refusal code and that one screenshot. Stop the target.
-2. **Record the real path.** From a real-user entry point, walk to the
-   feature with `device_*` / `cdp_interact` while `cdp_record_test_start`
-   captures; authentication only through `cdp_login_prologue` (reuse and,
-   if needed, update the project's existing login action; never record a
-   second one). No silent deep-link or store shortcut; if one is unavoidable,
-   state it and the verdict is at most PARTIAL.
-3. **Persist or reuse an action.** Scan `.rn-agent/actions/` first
-   (`creating-actions` Step 0). `cdp_record_test_stop` in both cases. Reuse
-   a covering action unchanged; otherwise `cdp_record_test_save_as_action`
-   with the metadata header and `enginePin: maestro-runner@1.1.24`.
-4. **Rehearse off camera.** `cdp_run_action` on that action, at most three
-   fix-and-replay loops (`creating-actions` Step 7). A clean pass freezes the
-   action bytes; reset the app to the recorded start screen.
+2. **Reuse or record the path.** Scan `.rn-agent/actions/` first
+   (`creating-actions` Step 0). If a committed action covers the feature
+   from a real-user entry point, reuse it unchanged and do not start the
+   recorder. Otherwise walk to the feature from a real-user entry point
+   with `device_*` / `cdp_interact` between `cdp_record_test_start` and
+   `cdp_record_test_stop`, then `cdp_record_test_save_as_action` with the
+   metadata header and `enginePin: maestro-runner@1.1.24`. Authentication
+   only through `cdp_login_prologue` (reuse and, if needed, update the
+   project's existing login action; never record a second one). No silent
+   deep-link or store shortcut; if one is unavoidable, state it and the
+   verdict is at most PARTIAL.
+3. **Note the action bytes.** Record `git hash-object` of the action file
+   before the rehearsal.
+4. **Rehearse off camera.** For a reused committed action:
+   `cdp_run_action(actionId=<id>, platform=<target>, autoRepair=false,
+   forceReload=false, proofReplay=true)`. `proofReplay` writes neither the
+   action YAML nor runtime state, so the blob must be unchanged afterwards;
+   a failing rehearsal of a reused action is FAIL with the failing step
+   (QA does not edit committed actions). For an action saved in this run:
+   plain `cdp_run_action`, at most three fix-and-replay loops
+   (`creating-actions` Step 7); a clean pass may promote the header
+   `status: experimental` to `active`, which is expected and happens before
+   the camera. **Reset to the start screen** with `cdp_reload`, then
+   `cdp_navigation_state` must return the recorded start route and a start
+   `device_screenshot` must show it.
 5. **Start recording before the runner.** `device_record(action="start",
-   platform=<target>, outputPath=<sandbox-writable absolute path>)`. Never
-   a path on an external volume. If recording cannot start, the target is
-   **FAIL** ("video unavailable"), not a gap.
+   platform=<target>, outputPath=<sandbox-writable absolute path>)`. Every
+   `device_record` `outputPath` and every `device_screenshot` `path` is a
+   sandbox-writable absolute path (the session scratch directory or
+   `$TMPDIR`), copied to evidence storage afterwards: iOS simulators cannot
+   write to an external volume (`NSCocoaErrorDomain 513`). If recording
+   cannot start, the target is **FAIL** ("video unavailable"); this
+   overrides `capturing-proof` Step 3's "warn but continue".
 6. **The take.** `maestro_run(flowPath=<the saved action>)`, short and
    precise. No `cdp_run_action`, repair, exploration, or navigation on
    camera. A failed take is FAIL for that attempt; stop recording, keep the
    file and the reason; one re-take is allowed only after a fresh off-camera
-   rehearsal passes.
+   rehearsal passes. No screenshots during the take; this overrides
+   `capturing-proof` Step 4. On iOS, `maestro_run` executes exact-testID
+   steps through the React tree (`transport: cdp-js`, `proofDomain:
+   react-tree`) and native-only steps through WDA; that is the take. Report
+   `transport` and `proofDomain` verbatim from the result and never call a
+   react-tree take a maestro-runner certification.
 7. **Stop and validate.** `device_record(action="stop")`. Then
    `capturing-proof` Step 6 (file exists and is larger than 10 KB), the
    planned `expect_*` checks, `cdp_navigation_state` on the end route, one
    result `device_screenshot`, and `cdp_error_log` (new errors fail the
-   target). Watch the video: it must show the feature from its start
-   screen to its end state. Missing or unwatchable video on an app-facing
-   target is FAIL; screenshots do not substitute.
+   target). Record `git hash-object` of the action file again. For a reused
+   action the blob must equal the one noted in item 3; a changed blob is
+   FAIL for the target. For an action saved in this run, the only allowed
+   change is the disclosed `experimental` to `active` promotion. Watch the
+   video: it must show the feature from its start screen to its end state.
+   Missing or unwatchable video on an app-facing target is FAIL;
+   screenshots do not substitute.
 8. Keep every file at a unique local path for Step 9.
 
 Circuit breaker: after 3 failures of the same category (screenshot, device
