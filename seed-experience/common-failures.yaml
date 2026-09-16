@@ -1,4 +1,52 @@
 failure_families:
+  - id: FF_SESSION_AUTHORITY_REQUIRED
+    name: Session authority required
+    symptoms:
+      - SESSION_AUTHORITY_REQUIRED
+    recovery:
+      - inspect rn_session status and follow the refusal's supported next action
+    notes: An observed authority refusal, not necessarily a defect; diagnostic success does not verify recovery.
+
+  - id: FF_METRO_ORIGIN_MISMATCH
+    name: Metro origin mismatch
+    symptoms:
+      - METRO_ORIGIN_MISMATCH
+    recovery:
+      - inspect the session's managed Metro binding and follow the refusal's supported next action
+    notes: Origin authority remains owned by the session; do not bypass its checks.
+
+  - id: FF_RUNNER_OWNERSHIP_MISMATCH
+    name: Runner ownership mismatch
+    symptoms:
+      - RUNNER_OWNERSHIP_MISMATCH
+    recovery:
+      - inspect rn_session status and follow the supported runner ownership remedy
+    notes: A passing diagnostic call does not prove runner ownership was restored.
+
+  - id: FF_HANDOFF_NOT_AUTHORIZED
+    name: Handoff not authorized
+    symptoms:
+      - HANDOFF_NOT_AUTHORIZED
+    recovery:
+      - follow the session owner's supported handoff or recovery guidance
+    notes: Observation does not authorize handoff or release another owner's claims.
+
+  - id: FF_NON_GIT_MANIFEST_REQUIRED
+    name: Non-git source manifest required
+    symptoms:
+      - NON_GIT_MANIFEST_REQUIRED
+    recovery:
+      - supply the explicit source manifest required by the session's supported setup flow
+    notes: This refusal can indicate a missing setup prerequisite rather than a defect.
+
+  - id: FF_BUNDLE_HANDSHAKE_UNAVAILABLE
+    name: Bundle handshake unavailable
+    symptoms:
+      - BUNDLE_HANDSHAKE_UNAVAILABLE
+    recovery:
+      - inspect managed integration and follow the refusal's supported bundle handshake remedy
+    notes: Only the authority owner can prove the bundle binding; diagnostic success is not recovery proof.
+
   - id: FF_STALE_CDP
     name: Stale CDP target
     symptoms:

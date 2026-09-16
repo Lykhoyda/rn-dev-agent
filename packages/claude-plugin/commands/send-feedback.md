@@ -235,6 +235,7 @@ The following data is NEVER included:
 - Email addresses, phone numbers, SSNs (PII patterns redacted)
 - IP addresses (except localhost)
 - Company names and external bundle IDs (external IDs → [BUNDLE_REDACTED]); only `com.rndevagent.testapp` is retained verbatim
+- UUID-shaped identifiers such as device UDIDs (→ [ID_REDACTED])
 - App name and slug from app.json ([APP_NAME_REDACTED])
 - Tool call parameters (only tool name + result + latency)
 - Store state values

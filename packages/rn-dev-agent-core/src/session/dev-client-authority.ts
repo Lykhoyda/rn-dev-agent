@@ -187,6 +187,17 @@ export function boundConnectConflict(
   return null;
 }
 
+function loopbackMetroUrl(devClientUrl: string): string | null {
+  try {
+    const inner = new URL(devClientUrl).searchParams.get('url');
+    if (!inner) return null;
+    const host = new URL(inner).hostname;
+    return host === '127.0.0.1' || host === 'localhost' || host === '[::1]' ? inner : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function pinExactDevClient(
   input: PinDevClientInput,
   dependencies: PinDevClientDependencies,
@@ -205,7 +216,19 @@ export async function pinExactDevClient(
       'DEV_CLIENT_ENDPOINT_NOT_FOUND: launch kind contradicts the signed build provenance',
     );
   }
-  if (input.devClientUrl) {
+  // openurl's SpringBoard Open confirmation drops the Hermes target, so loopback simulator URLs launch like the managed build.
+  const simulatorLaunchTarget =
+    input.platform === 'ios' && input.runtimeKind === 'expo-dev-client' && input.devClientUrl
+      ? loopbackMetroUrl(input.devClientUrl)
+      : null;
+  if (simulatorLaunchTarget) {
+    await dependencies.launchExactAppWithInitialUrl(
+      input.deviceId,
+      input.appId,
+      launchUrl(simulatorLaunchTarget),
+      hideDevMenu,
+    );
+  } else if (input.devClientUrl) {
     await dependencies.openUrl(
       input.platform,
       input.deviceId,

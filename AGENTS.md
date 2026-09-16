@@ -210,6 +210,12 @@ alive for such callers.
   three are gated per target class by `resolveAutoHideDevMenu` (`autoHideDevMenu`).
   `EXPO_PACKAGER_PROXY_URL` and `managedMetroProxyUrl` stay unflagged: Expo CLI
   derives the manifest `hostUri` from them and a query there corrupts bundle URLs.
+- Managed relaunch and reconnect (`relaunchSessionRuntime`,
+  `reconnectSessionRuntime` in `src/index.ts`) dispose the ambient CDP client
+  and install a fresh one before launching the app or re-proving the exact
+  target, on Android as well as iOS; Metro's inspector proxy otherwise bounces
+  two debuggers off one Hermes page. No unit test pins the Android branch, so
+  never drop that disconnect when touching the relaunch path.
 - `managedMetroExitAttribution` (`src/session/managed-metro.ts`) runs in a later
   process than `startManagedMetro`, so it has none of the `credentialRedactions`
   the startup path builds from the managed child environment. It must therefore

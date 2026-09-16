@@ -30,6 +30,7 @@ import {
   type RunnerDiagnosticsSnapshot,
 } from '../../dist/experience/runner-diagnostics.js';
 import { createCollectLogsHandler } from '../../dist/tools/collect-logs.js';
+import { runFlowParked } from '../../dist/tools/maestro-run.js';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
@@ -199,6 +200,84 @@ test('runner diagnostics retain terminal lifecycle events after the event cap', 
       (event, index, events) => index === 0 || event.sequence > events[index - 1]!.sequence,
     ),
   );
+});
+
+const flowParkPhases = () => snapshotRunnerDiagnostics()?.events.map((event) => event.detail);
+
+test('flow-park trace records begin, released, and committed on success', async () => {
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'ios' }, async () => {
+    await runFlowParked(async () => 'RESULT', {
+      platform: 'ios',
+      stopFastRunner: () => {},
+      completeRunnerPark: async () => {},
+      markCdpStale: () => {},
+    });
+    assert.deepEqual(flowParkPhases(), [
+      { phase: 'begin', platform: 'ios' },
+      { phase: 'released', platform: 'ios' },
+      { phase: 'committed', platform: 'ios' },
+    ]);
+  });
+});
+
+test('flow-park trace records begin only when the release rejects', async () => {
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'android' }, async () => {
+    const calls: string[] = [];
+    await assert.rejects(
+      runFlowParked(
+        async () => {
+          calls.push('flow');
+        },
+        {
+          platform: 'android',
+          releaseAndroidSlot: async () => {
+            throw new Error('release boom');
+          },
+          completeRunnerPark: async () => {
+            calls.push('commit-park');
+          },
+          markCdpStale: () => {
+            calls.push('stale');
+          },
+        },
+      ),
+      /release boom/,
+    );
+    assert.deepEqual(calls, ['stale']);
+    assert.deepEqual(flowParkPhases(), [{ phase: 'begin', platform: 'android' }]);
+  });
+});
+
+test('flow-park trace records released but not committed when the commit rejects', async () => {
+  await withRunnerDiagnosticsContext('cdp_run_action', { platform: 'ios' }, async () => {
+    const calls: string[] = [];
+    await assert.rejects(
+      runFlowParked(
+        async () => {
+          calls.push('flow');
+        },
+        {
+          platform: 'ios',
+          stopFastRunner: () => {
+            calls.push('stop');
+          },
+          completeRunnerPark: async () => {
+            calls.push('commit-park');
+            throw new Error('commit boom');
+          },
+          markCdpStale: () => {
+            calls.push('stale');
+          },
+        },
+      ),
+      /commit boom/,
+    );
+    assert.deepEqual(calls, ['stop', 'commit-park', 'stale']);
+    assert.deepEqual(flowParkPhases(), [
+      { phase: 'begin', platform: 'ios' },
+      { phase: 'released', platform: 'ios' },
+    ]);
+  });
 });
 
 test('runner diagnostics retain the owned workspace test-app bundle ID only', () => {
@@ -626,4 +705,215 @@ test('diagnostics exports select only the exact authenticated session', async ()
     else process.env.RN_DEV_AGENT_SESSION_ID = previousSession;
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+function timeoutTrace(params: Record<string, unknown>): RunnerDiagnosticsSnapshot {
+  return {
+    rootTool: 'cdp_run_action',
+    rootParams: params,
+    truncated: false,
+    events: [
+      {
+        sequence: 1,
+        monotonicMs: 0.2,
+        timestamp: '2026-08-23T12:00:00.000Z',
+        type: 'flow-park',
+        detail: { phase: 'begin', platform: 'android' },
+      },
+      {
+        sequence: 2,
+        monotonicMs: 1.4,
+        timestamp: '2026-08-23T12:00:00.001Z',
+        type: 'flow-stage',
+        detail: { phase: 'execute-begin', stage: 0 },
+      },
+      {
+        sequence: 3,
+        monotonicMs: 2.4,
+        timestamp: '2026-08-23T12:00:00.002Z',
+        type: 'runner-exec-begin',
+        detail: { runnerPinVersion: '1.1.24' },
+      },
+    ],
+  };
+}
+
+function recordTimeout(
+  directory: string,
+  params: Record<string, unknown>,
+  result: unknown,
+  snapshot = timeoutTrace(params),
+  sessionId = 'authenticated-session',
+  tool = 'cdp_run_action',
+): void {
+  const recorder = new ExperienceRecorder({
+    directory,
+    coreVersion: '0.77.1',
+    pluginVersion: '0.77.1',
+    sessionId,
+    schedule: (work) => work(),
+  });
+  recorder.observe({
+    tool,
+    params,
+    status: 'FAIL',
+    latencyMs: 151815,
+    error: 'Maestro flow timed out',
+    result,
+    runnerDiagnostics: { ...snapshot, rootTool: tool },
+  });
+}
+
+test('code-less cdp_run_action TIMEOUT retains the existing sanitized trace', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-timeout-'));
+  const params = { platform: 'android', actionId: 'qa-observe-screen-match' };
+  recordTimeout(directory, params, {
+    ok: false,
+    error: 'Maestro flow timed out',
+    meta: { failureKind: 'TIMEOUT' },
+  });
+  const files = bundles(directory);
+  assert.equal(files.length, 1);
+  const bundle = JSON.parse(readFileSync(join(directory, files[0]), 'utf8'));
+  assert.equal(bundle.failureCode, 'TIMEOUT');
+  assert.equal(bundle.context.actionId, 'qa-observe-screen-match');
+  assert.equal(bundle.context.sessionId, 'authenticated-session');
+  assert.deepEqual(
+    bundle.events.map((event: { type: string; detail: Record<string, unknown> }) => [
+      event.type,
+      event.detail,
+    ]),
+    [
+      ['flow-park', { phase: 'begin', platform: 'android' }],
+      ['flow-stage', { phase: 'execute-begin', stage: 0 }],
+      ['runner-exec-begin', { runnerPinVersion: '1.1.24' }],
+    ],
+  );
+  const output = join(directory, 'timeout-export.json');
+  assert.equal(
+    exportLatestRunnerDiagnosticsBundle(output, 'authenticated-session', directory),
+    output,
+  );
+  const exported = JSON.parse(readFileSync(output, 'utf8'));
+  assert.equal(exported.failureCode, 'TIMEOUT');
+  assert.equal(exported.context.sessionId, 'authenticated-session');
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('recognized authority refusal retains the existing sanitized trace', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-refusal-'));
+  const params = { platform: 'android', actionId: 'qa-observe-screen-match' };
+  const snapshot = timeoutTrace(params);
+  recordTimeout(
+    directory,
+    params,
+    { ok: false, code: 'BUNDLE_HANDSHAKE_UNAVAILABLE', meta: { axis: 'B' } },
+    {
+      ...snapshot,
+      events: snapshot.events.slice(0, 2),
+    },
+  );
+  const files = bundles(directory);
+  assert.equal(files.length, 1);
+  const bundle = JSON.parse(readFileSync(join(directory, files[0]), 'utf8'));
+  assert.equal(bundle.failureCode, 'BUNDLE_HANDSHAKE_UNAVAILABLE');
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('direct maestro_run producer timeout retains the authenticated session bundle', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-producer-timeout-'));
+  const params = { platform: 'android', actionId: 'qa-observe-screen-match' };
+  recordTimeout(
+    directory,
+    params,
+    { ok: false, meta: { timedOut: true } },
+    timeoutTrace(params),
+    'authenticated-session',
+    'maestro_run',
+  );
+  const bundle = JSON.parse(readFileSync(join(directory, bundles(directory)[0]), 'utf8'));
+  assert.equal(bundle.failureCode, 'TIMEOUT');
+  assert.equal(bundle.context.sessionId, 'authenticated-session');
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('a failed maestro_run step retains its trace with its terminal failure kind', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-maestro-step-retain-'));
+  const params = { platform: 'android', actionId: 'qa-observe-screen-match' };
+  recordTimeout(
+    directory,
+    params,
+    { ok: false, meta: { terminal: { failureKind: 'ASSERTION_FAILED' } } },
+    timeoutTrace(params),
+    'authenticated-session',
+    'maestro_run',
+  );
+  const bundle = JSON.parse(readFileSync(join(directory, bundles(directory)[0]), 'utf8'));
+  assert.equal(bundle.failureCode, 'ASSERTION_FAILED');
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('a failed cdp_run_action step retains its trace with its failure kind', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-step-retain-'));
+  const params = { platform: 'android', actionId: 'qa-observe-screen-match' };
+  recordTimeout(directory, params, {
+    ok: false,
+    error: 'assert failed',
+    meta: { failureKind: 'ASSERTION_FAILED' },
+  });
+  const first = JSON.parse(readFileSync(join(directory, bundles(directory)[0]), 'utf8'));
+  assert.equal(first.failureCode, 'ASSERTION_FAILED');
+  recordTimeout(directory, params, {
+    ok: false,
+    error: 'Maestro flow failed at step "assertVisible"',
+    meta: { failureKind: 'UNKNOWN', terminal: { exitClass: 'step-failure' } },
+  });
+  const files = bundles(directory);
+  assert.equal(files.length, 2);
+  const second = JSON.parse(readFileSync(join(directory, files[1]), 'utf8'));
+  assert.equal(second.failureCode, 'UNKNOWN');
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('non-timeout, unrelated-tool, foreign-session, and malformed envelopes do not retain traces', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'runner-diagnostics-timeout-reject-'));
+  const params = { platform: 'android', actionId: 'qa-observe-screen-match' };
+  const snapshot = timeoutTrace(params);
+  recordTimeout(directory, params, {
+    ok: true,
+    meta: { failureKind: 'TIMEOUT' },
+  });
+  recordTimeout(
+    directory,
+    params,
+    { ok: false, meta: { failureKind: 'TIMEOUT' } },
+    snapshot,
+    'authenticated-session',
+    'device_snapshot',
+  );
+  recordTimeout(
+    directory,
+    params,
+    { ok: false, meta: { timedOut: true } },
+    snapshot,
+    'authenticated-session',
+    'cdp_status',
+  );
+  recordTimeout(directory, params, { ok: false, meta: ['TIMEOUT'] });
+  recordTimeout(directory, params, { ok: false, details: { failureKind: 'TIMEOUT' } });
+  assert.equal(bundles(directory).length, 0);
+
+  recordTimeout(
+    directory,
+    params,
+    { ok: false, meta: { failureKind: 'TIMEOUT' } },
+    snapshot,
+    'owned-session',
+  );
+  assert.throws(
+    () =>
+      exportLatestRunnerDiagnosticsBundle(join(directory, 'foreign.json'), 'foreign', directory),
+    /exact session/,
+  );
+  rmSync(directory, { recursive: true, force: true });
 });
