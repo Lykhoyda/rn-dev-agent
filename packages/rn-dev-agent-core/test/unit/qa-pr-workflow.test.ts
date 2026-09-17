@@ -33,7 +33,10 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.match(agent, /proofReplay=true/);
   assert.match(agent, /never call `cdp_reload` or `cdp_restart`/);
   assert.doesNotMatch(agent, /Reset to the start screen/);
-  assert.match(agent, /stopApp: true/);
+  assert.match(agent, /must not begin with `launchApp`/);
+  assert.match(agent, /cdp_navigate\(screen=/);
+  assert.match(agent, /RUNNER_OWNERSHIP_MISMATCH/);
+  assert.doesNotMatch(agent, /is the reset and happens on camera/);
   assert.match(agent, /NSCocoaErrorDomain 513/);
   assert.match(agent, /this step wins/);
   assert.match(agent, /proofDomain/);
@@ -58,6 +61,7 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.doesNotMatch(sharedCommand, /width="720"/);
   assert.doesNotMatch(sharedCommand, /maestro_run/);
   assert.match(sharedCommand, /never `cdp_reload`/);
+  assert.match(sharedCommand, /`launchApp` on camera/);
   assert.match(sharedCommand, /gh pr view "<pr-url>" --json headRefOid/);
   assert.match(sharedCommand, /\[HOST\]/);
   assert.match(sharedCommand, /before posting/);
@@ -78,6 +82,7 @@ test('qa-pr workflow is registered and parent-session-only', () => {
     assert.match(commandText, /--attach/);
     assert.doesNotMatch(commandText, /maestro_run/);
     assert.match(commandText, /never `cdp_reload`/);
+    assert.match(commandText, /launchApp/);
     assert.match(commandText, /width="390"/);
     assert.match(commandText, /headRefOid/);
     assert.match(agentText, /device_record\(action="start"/);

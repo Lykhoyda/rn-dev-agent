@@ -36,11 +36,13 @@ this package) in this session. Summary:
    rewritten package `ios`/`android` script from the app root → poll until
    `metroBound` and `installBound` → `pin_dev_client` → then the feature
    proof (`agents/rn-pr-qa.md` Step 7): usable screen or FAIL with the
-   refusal code → reuse a covering action (rehearse with `proofReplay=true`)
-   or record and save one → off-camera `cdp_run_action` rehearsal →
-   no runtime reset (never `cdp_reload` / `cdp_restart`) →
-   `device_record` start **before** the on-camera `cdp_run_action`
-   proof replay → stop and validate.
+   refusal code → reuse a covering action that starts from the attached
+   app (rehearse with `proofReplay=true`) or record and save one and drop
+   its generated `launchApp` → off-camera `cdp_run_action` rehearsal →
+   return to the first screen off camera (`cdp_navigate`), no runtime
+   reset and no relaunch (never `cdp_reload` / `cdp_restart` /
+   `launchApp` on camera) → `device_record` start **before** the
+   on-camera `cdp_run_action` proof replay → stop and validate.
    Missing video on an app-facing target is FAIL.
 7. **Cleanup** reverse-order: runner close → `stop_metro` →
    `restore_integration` → `release`. Remove only the worktree you added.

@@ -193,7 +193,16 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
 2. **Reuse or record the path.** Scan `.rn-agent/actions/` first
    (`creating-actions` Step 0). If a committed action covers the feature
    from a real-user entry point, reuse it unchanged and do not start the
-   recorder. Otherwise walk to the feature from a real-user entry point
+   recorder.
+   A usable action starts from the attached app: it must not begin with `launchApp`
+   (a bare `launchApp` means `stopApp: true`) or `clearState`.
+   On a dev client an in-flow relaunch under the screen recorder loses the
+   managed dev-client relaunch and strands the take on the picker. A
+   committed action that begins with `launchApp` is not reusable for the
+   take: FAIL the target naming the action (QA does not edit committed
+   actions). For an action saved in this run, delete the recorder's
+   generated `- launchApp` line before the rehearsal.
+   Otherwise walk to the feature from a real-user entry point
    with `device_*` / `cdp_interact` between `cdp_record_test_start` and
    `cdp_record_test_stop`, then `cdp_record_test_save_as_action` with the
    metadata header and `enginePin: maestro-runner@1.1.24`. Authentication
@@ -212,14 +221,15 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    plain `cdp_run_action`, at most three fix-and-replay loops
    (`creating-actions` Step 7); a clean pass may promote the header
    `status: experimental` to `active`, which is expected and happens before
-   the camera. **No runtime reset before the camera:** never call `cdp_reload` or `cdp_restart` in this step; on an Android
+   the camera. **No runtime reset and no relaunch on camera:** never call `cdp_reload` or `cdp_restart` in this step (on an Android)
    dev client their recovery relaunches the app without the bound
-   dev-client URL and strands it on the picker. The action's opening
-   `launchApp` (`stopApp: true`) is the reset and happens on camera; an
-   action that does not begin with `launchApp` is FAIL for this step.
-   After the rehearsal, `rn_session status` must read
-   `installIdentity: verified`; note the `cdp_navigation_state` route as
-   the pre-take route.
+   dev-client URL and strands it on the picker), and the take never
+   relaunches the app (item 2). **Return to the first screen off
+   camera:** the rehearsal ends on the feature's end screen, so
+   `cdp_navigate(screen=<the action's first route>)` (if it does not
+   land, `device_back` until it does), then `cdp_navigation_state` must
+   return that route and a start `device_screenshot` must show it;
+   `rn_session status` must read `installIdentity: verified`.
 5. **Start recording before the runner.** `device_record(action="start",
    platform=<target>, outputPath=<sandbox-writable absolute path>)`. Every
    `device_record` `outputPath` and every `device_screenshot` `path` is a
@@ -230,9 +240,9 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    overrides `capturing-proof` Step 3's "warn but continue".
 6. **The take.** The same call as the rehearsal, on camera:
    `cdp_run_action(actionId=<id>, platform=<target>, autoRepair=false,
-   forceReload=false, proofReplay=true)`. It is the only replay path whose
-   runtime re-acquisition after the in-flow relaunch the session gate
-   reconciles; `maestro_run` is not that path. No repair, exploration,
+   forceReload=false, proofReplay=true)`. It is the replay path the
+   session gate reconciles; `maestro_run` is not that path. Nothing
+   relaunches under the recorder (item 2). No repair, exploration,
    navigation, or screenshots on camera (this overrides `capturing-proof`
    Step 4). A failed take is FAIL for that attempt; stop recording, keep
    the file and the reason; one re-take is allowed only after a fresh
@@ -243,11 +253,16 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    `capturing-proof` Step 6 (file exists and is larger than 10 KB), the
    planned `expect_*` checks, `cdp_navigation_state` on the end route, one
    result `device_screenshot`, and `cdp_error_log` (new errors fail the
-   target). Record `git hash-object` of the action file again. For a reused
+   target). If the result `device_screenshot` refuses
+   `RUNNER_OWNERSHIP_MISMATCH` after the take, re-open the device with
+   `device_snapshot(action="open", attachOnly=true)` (that call rebinds
+   the interaction runner; `rn_session status` cannot) and take the
+   screenshot again; the take result stands. Record `git hash-object`
+   of the action file again. For a reused
    action the blob must equal the one noted in item 3; a changed blob is
    FAIL for the target. For an action saved in this run, the only allowed
    change is the disclosed `experimental` to `active` promotion. Watch the
-   video: it must show the app relaunch and the feature from its first screen to its end state; a dev menu or picker on camera is FAIL.
+   video: it must show the feature from its first screen to its end state; a relaunch, dev menu, or picker on camera is FAIL.
    Missing or unwatchable video on an app-facing target is FAIL;
    screenshots do not substitute.
 8. Keep every file at a unique local path for Step 9.
