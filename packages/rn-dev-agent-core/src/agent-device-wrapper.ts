@@ -2051,13 +2051,6 @@ export async function runNative(
       await import('./runners/rn-android-runner-client.js');
     const outsideApp = androidOutsideAppWindowRefusal(cliArgs, appId);
     if (outsideApp) return outsideAppWindowFailResult(outsideApp);
-    if (opts.focusedType) {
-      return failResult(
-        'device_fill focused: true is iOS-only in this version; no text was entered.',
-        'NO_TEXT_INPUT_TARGET',
-        { mutation: 'none' },
-      );
-    }
     let android = buildRunAndroidArgs(cliArgs, appId);
     if ((android.command === 'type' || android.command === 'verifyInput') && opts.exactTarget) {
       const decorated = decorateExactTargetAndroid(android, opts.exactTarget);
