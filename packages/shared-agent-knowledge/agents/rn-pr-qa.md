@@ -211,17 +211,24 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    deep-link or store shortcut; if one is unavoidable, state it and the
    verdict is at most PARTIAL.
 3. **Return to the first screen off camera, only after a run has moved
-   the app.** The first rehearsal starts from the screen item 1 proved (a
-   fresh install sits on its onboarding or login screen); the action's
-   own opening steps must get past it, and a reused action that cannot is
-   FAIL at its failing step. Do not navigate before that first rehearsal:
-   the navigator that owns the first route may not be mounted yet.
-   Before every later rehearsal and before the take, return: the first
-   route is the action's `# startRoute` header (the recorder writes it;
-   for a reused action without one, the screen named by the first anchor
-   of its header diagram, else the start state from the Step 6 plan).
-   `cdp_navigate(screen=<first route>)`, then `cdp_navigation_state` must
-   return that route. If `cdp_navigate` refuses, run
+   the app.** A reused action's first rehearsal starts from the screen
+   item 1 proved (a fresh install sits on its onboarding or login screen);
+   the action's own opening steps must get past it, and a reused action
+   that cannot is FAIL at its failing step.
+   Do not navigate before that first rehearsal: the navigator that owns
+   the first route may not be mounted yet. The recording walk (item 2) is
+   a run that moved the app: an action saved in this run returns before
+   its first rehearsal, also after a re-pin (item 4), because its
+   recording proved the first route mounted. Every action also returns before every later rehearsal and
+   before the take. The first route is the action's `# startRoute` header
+   (the recorder writes it; for a reused action without one, the screen
+   name on the first line of its header diagram, never that line's testID
+   anchor, else the start state from the Step 6 plan).
+   `cdp_navigate(screen=<first route>)`, then the focused leaf of
+   `cdp_navigation_state` (the deepest `nested` `routeName`, not a
+   top-level navigator route such as `Tabs`) must be that route.
+   `expect_route(name=...)` checks only the top-level `routeName`, so it
+   cannot prove a nested first route. If `cdp_navigate` refuses, run
    `cdp_dev_settings(action="dismissRedBox")` before anything else (in a
    dev build the refused dispatch leaves a full-screen console-error
    overlay that blocks every native tap), then stop the target and report
@@ -250,7 +257,7 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    rehearsal or take also leaves the bundle unbound (item 3's
    `cdp_navigate` refuses `BUNDLE_HANDSHAKE_UNAVAILABLE`): run
    `rn_session pin_dev_client` (it reloads the app to its initial route)
-   and rehearse again from that screen as a first rehearsal (item 3).
+   and rehearse again as a first rehearsal (item 3).
    After the last passing rehearsal, repeat item 3, take a start `device_screenshot` that shows the
    first route, require `rn_session status` to read
    `installIdentity: verified`, and record `git hash-object` of the action

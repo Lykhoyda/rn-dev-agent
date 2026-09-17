@@ -39,9 +39,9 @@ this package) in this session. Summary:
    refusal code → reuse a covering action that starts from the attached
    app (rehearse with `proofReplay=true`); if none does, record and save a
    new one and drop its generated `launchApp` → first `cdp_run_action`
-   rehearsal from the screen the app is on → return to the first screen
-   off camera (`cdp_navigate`) before any repeat rehearsal and
-   before the take, no runtime reset and no relaunch (never `cdp_reload` /
+   rehearsal of a reused action from the screen the app is on → return to
+   the first screen off camera (`cdp_navigate`) before a saved action's
+   first rehearsal, any repeat rehearsal, and the take, no runtime reset and no relaunch (never `cdp_reload` /
    `cdp_restart` / `launchApp` on camera) → hash the action after the last
    passing rehearsal → `device_record` start **before** the
    on-camera `cdp_run_action` proof replay → stop and validate.
