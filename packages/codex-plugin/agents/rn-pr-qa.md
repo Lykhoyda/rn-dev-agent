@@ -208,8 +208,10 @@ the journey.
    `EXDevMenuShowFloatingActionButton` = `false` (iOS `Info.plist` key,
    Android `<application>` `meta-data`). A visible dev-menu sheet or
    gear, a dev-client picker, a missing Hermes target, or a
-   session-authority refusal is **FAIL** for the target with the reason
-   or refusal code and that one screenshot. Stop the target.
+   session-authority refusal other than a `RUNNER_OWNERSHIP_MISMATCH`
+   that re-opening the device clears (item 4) is **FAIL** for the target
+   with the reason or refusal code and that one screenshot. Stop the
+   target.
 2. **Reuse or record the path.** Scan `.rn-agent/actions/` first
    (`creating-actions` Step 0). A usable action starts from the attached
    app: it must not begin with `launchApp` (a bare `launchApp` means
@@ -279,9 +281,10 @@ the journey.
    `cdp_repair_action` with the failed selector), then replay from item 3; a
    clean pass may promote the header `status: experimental` to `active`,
    which is expected and happens before the camera. Every `cdp_run_action`
-   leaves the interaction runner unbound: when a later off-camera call
-   refuses `RUNNER_OWNERSHIP_MISMATCH` (a repair, the next rehearsal, the
-   start screenshot), re-open the device with
+   leaves the interaction runner unbound: when any later off-camera call
+   refuses `RUNNER_OWNERSHIP_MISMATCH` (a repair, the next rehearsal,
+   `hideDevMenu` or the screenshot after a re-pin, the start
+   screenshot), re-open the device with
    `device_snapshot(action="open", attachOnly=true)` and retry it. A failed
    rehearsal or take also leaves the bundle unbound
    (`cdp_navigation_state` refuses `BUNDLE_HANDSHAKE_UNAVAILABLE`): run
