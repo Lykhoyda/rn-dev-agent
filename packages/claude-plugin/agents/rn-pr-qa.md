@@ -231,8 +231,16 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    while the app is still on the failing screen (for example
    `cdp_repair_action` with the failed selector), then replay from item 3; a
    clean pass may promote the header `status: experimental` to `active`,
-   which is expected and happens before the camera. After the last passing
-   rehearsal, repeat item 3, take a start `device_screenshot` that shows the
+   which is expected and happens before the camera. Every `cdp_run_action`
+   leaves the interaction runner unbound: when a later off-camera call
+   refuses `RUNNER_OWNERSHIP_MISMATCH` (a repair, the next rehearsal, the
+   start screenshot), re-open the device with
+   `device_snapshot(action="open", attachOnly=true)` and retry it. A failed
+   rehearsal or take also leaves the bundle unbound (item 3's
+   `cdp_navigate` refuses `BUNDLE_HANDSHAKE_UNAVAILABLE`): before item 3,
+   run `rn_session pin_dev_client` (it reloads the app to its initial
+   route), then walk to the first route through the app's real entry
+   point. After the last passing rehearsal, repeat item 3, take a start `device_screenshot` that shows the
    first route, require `rn_session status` to read
    `installIdentity: verified`, and record `git hash-object` of the action
    file.
