@@ -210,12 +210,23 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    project's existing login action; never record a second one). No silent
    deep-link or store shortcut; if one is unavoidable, state it and the
    verdict is at most PARTIAL.
-3. **Return to the first screen off camera, before every rehearsal and
-   before the take.** The first route is the action's `# startRoute`
-   header (for a reused action without one, the start state from the
-   Step 6 plan). `cdp_navigate(screen=<first route>)`, then
-   `cdp_navigation_state` must return that route; if it does not, stop the
-   target and report the observed route. **No runtime reset and no
+3. **Return to the first screen off camera, only after a run has moved
+   the app.** The first rehearsal starts from the screen item 1 proved (a
+   fresh install sits on its onboarding or login screen); the action's
+   own opening steps must get past it, and a reused action that cannot is
+   FAIL at its failing step. Do not navigate before that first rehearsal:
+   the navigator that owns the first route may not be mounted yet.
+   Before every later rehearsal and before the take, return: the first
+   route is the action's `# startRoute` header (the recorder writes it;
+   for a reused action without one, the screen named by the first anchor
+   of its header diagram, else the start state from the Step 6 plan).
+   `cdp_navigate(screen=<first route>)`, then `cdp_navigation_state` must
+   return that route. If `cdp_navigate` refuses, run
+   `cdp_dev_settings(action="dismissRedBox")` before anything else (in a
+   dev build the refused dispatch leaves a full-screen console-error
+   overlay that blocks every native tap), then stop the target and report
+   the observed route.
+   **No runtime reset and no
    relaunch:** never call `cdp_reload` or `cdp_restart` in this step (on
    an Android dev client their recovery relaunches the app without the
    bound dev-client URL and strands it on the picker), and the take never
@@ -237,10 +248,10 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    start screenshot), re-open the device with
    `device_snapshot(action="open", attachOnly=true)` and retry it. A failed
    rehearsal or take also leaves the bundle unbound (item 3's
-   `cdp_navigate` refuses `BUNDLE_HANDSHAKE_UNAVAILABLE`): before item 3,
-   run `rn_session pin_dev_client` (it reloads the app to its initial
-   route), then walk to the first route through the app's real entry
-   point. After the last passing rehearsal, repeat item 3, take a start `device_screenshot` that shows the
+   `cdp_navigate` refuses `BUNDLE_HANDSHAKE_UNAVAILABLE`): run
+   `rn_session pin_dev_client` (it reloads the app to its initial route)
+   and rehearse again from that screen as a first rehearsal (item 3).
+   After the last passing rehearsal, repeat item 3, take a start `device_screenshot` that shows the
    first route, require `rn_session status` to read
    `installIdentity: verified`, and record `git hash-object` of the action
    file.

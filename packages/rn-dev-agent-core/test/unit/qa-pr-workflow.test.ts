@@ -36,6 +36,9 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.match(agent, /must not begin with `launchApp`/);
   assert.match(agent, /cdp_navigate\(screen=/);
   assert.match(agent, /RUNNER_OWNERSHIP_MISMATCH/);
+  assert.match(agent, /Do not navigate before that first rehearsal/);
+  assert.match(agent, /dismissRedBox/);
+  assert.doesNotMatch(agent, /before every rehearsal and/);
   assert.doesNotMatch(agent, /is the reset and happens on camera/);
   assert.match(agent, /NSCocoaErrorDomain 513/);
   assert.match(agent, /this step wins/);
@@ -66,6 +69,7 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.match(sharedCommand, /\[HOST\]/);
   assert.match(sharedCommand, /before posting/);
   assert.match(sharedCommand, /rewritten GitHub body/);
+  assert.doesNotMatch(sharedCommand, /before every `cdp_run_action` rehearsal/);
 
   for (const host of ['shared-agent-knowledge', 'claude-plugin', 'codex-plugin'] as const) {
     const command = join(root, 'packages', host, 'commands/qa-pr.md');
@@ -85,6 +89,7 @@ test('qa-pr workflow is registered and parent-session-only', () => {
     assert.match(commandText, /launchApp/);
     assert.match(commandText, /width="390"/);
     assert.match(commandText, /headRefOid/);
+    assert.doesNotMatch(commandText, /before every `cdp_run_action` rehearsal/);
     assert.match(agentText, /device_record\(action="start"/);
     assert.doesNotMatch(agentText, /maestro_run\(flowPath=/);
     assert.match(agentText, /width="390"/);

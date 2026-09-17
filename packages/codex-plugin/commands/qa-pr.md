@@ -38,8 +38,9 @@ this package) in this session. Summary:
    proof (`agents/rn-pr-qa.md` Step 7): usable screen or FAIL with the
    refusal code → reuse a covering action that starts from the attached
    app (rehearse with `proofReplay=true`); if none does, record and save a
-   new one and drop its generated `launchApp` → return to the first screen
-   off camera (`cdp_navigate`) before every `cdp_run_action` rehearsal and
+   new one and drop its generated `launchApp` → first `cdp_run_action`
+   rehearsal from the screen the app is on → return to the first screen
+   off camera (`cdp_navigate`) before any repeat rehearsal and
    before the take, no runtime reset and no relaunch (never `cdp_reload` /
    `cdp_restart` / `launchApp` on camera) → hash the action after the last
    passing rehearsal → `device_record` start **before** the
