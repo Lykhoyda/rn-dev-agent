@@ -154,7 +154,7 @@ For each selected target, independently:
 4. Poll `rn_session status` until `metroBound` and `installBound`.
    If the managed build's own install step fails (for example iOS
    `IXErrorDomain`), rerun the same package script once and disclose it
-   in the report. A second failure is FAIL for the target.
+   in the session copy. A second failure is FAIL for the target.
 5. `pin_dev_client` / `cdp_connect` for the bound platform. Require the
    signed initial-bundle marker.
 6. Passive `cdp_status`. RedBox or paused debugger → `cdp_error_log`,
@@ -221,7 +221,7 @@ the journey.
    feature from a real-user entry point, reuse it unchanged and do not
    start the recorder. A covering committed action that begins with
    `launchApp` or `clearState` is neither reused nor edited (QA does not
-   edit committed actions): name it in the report and record a new one.
+   edit committed actions): name it in the session copy and record a new one.
    To record, walk to the feature from a real-user entry point
    with `device_*` / `cdp_interact` between `cdp_record_test_start` and
    `cdp_record_test_stop`, then `cdp_record_test_save_as_action` under a
@@ -335,7 +335,8 @@ the journey.
 8. Keep every file at a unique local path for Step 9.
 
 Circuit breaker: after 3 failures of the same category (screenshot, device
-interaction, CDP, launch, flow), STOP that target and report the blocker.
+interaction, CDP, launch, flow), STOP that target and record the blocker
+in the session copy.
 Do not switch devices mid-target.
 
 ### Step 8 — Reverse cleanup
@@ -396,8 +397,9 @@ repro steps a human can follow. On FAIL say what a user would see go
 wrong and at which step. Keep tool names, call arguments, transports,
 proof domains, route names, action ids and YAML, hashes, rehearsal
 history, session, install and cleanup state, refusal codes and logs out
-of the public comment. Wherever Step 7 says to report a result, that
-means the session copy below, never the public comment.
+of the public comment. Wherever an earlier step says to report or
+disclose a result, that means the session copy below, never the public
+comment.
 
 One verdict for the whole comment. FAIL if any tested platform failed.
 PASS only if every requested platform that ran passed. Add one plain
@@ -498,8 +500,8 @@ markdown-only image thumbs when a screenshot was attached.
 
 #### 9d. Clear `needs-qa`
 
-Once the public comment exists (9b posted it, and 9c widened it when a
-screenshot was attached). A stale-head FAIL comment and a SKIP comment
+Once the public comment exists (9b posted it). If 9c was required and
+failed, still run 9d. A stale-head FAIL comment and a SKIP comment
 still count. A run that never posted leaves the label alone. List the
 labels with `gh pr view "<pr-url>" --json labels --jq '.labels[].name'`. If
 `needs-qa` is listed, run `gh pr edit "<pr-url>" --remove-label needs-qa`. A missing label is not FAIL.
