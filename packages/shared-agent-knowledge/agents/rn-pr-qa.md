@@ -154,7 +154,7 @@ For each selected target, independently:
 4. Poll `rn_session status` until `metroBound` and `installBound`.
    If the managed build's own install step fails (for example iOS
    `IXErrorDomain`), rerun the same package script once and disclose it
-   in the report. A second failure is FAIL for the target.
+   in the session copy. A second failure is FAIL for the target.
 5. `pin_dev_client` / `cdp_connect` for the bound platform. Require the
    signed initial-bundle marker.
 6. Passive `cdp_status`. RedBox or paused debugger → `cdp_error_log`,
@@ -221,7 +221,7 @@ the journey.
    feature from a real-user entry point, reuse it unchanged and do not
    start the recorder. A covering committed action that begins with
    `launchApp` or `clearState` is neither reused nor edited (QA does not
-   edit committed actions): name it in the report and record a new one.
+   edit committed actions): name it in the session copy and record a new one.
    To record, walk to the feature from a real-user entry point
    with `device_*` / `cdp_interact` between `cdp_record_test_start` and
    `cdp_record_test_stop`, then `cdp_record_test_save_as_action` under a
@@ -314,8 +314,9 @@ the journey.
    navigation, or screenshots on camera (this overrides `capturing-proof`
    Step 4). A failed take is FAIL for that attempt; stop recording, keep
    the file and the reason; one re-take is allowed only after a fresh
-   off-camera rehearsal passes (item 4). Report `transport`,
-   `transportVersion`, and `proofDomain` verbatim from the result; a
+   off-camera rehearsal passes (item 4). Record `transport`,
+   `transportVersion`, and `proofDomain` verbatim from the result
+   for the session copy (Step 9), never the public comment; a
    `cdp-js` / `react-tree` take is never a maestro-runner certification.
 7. **Stop and validate.** `device_record(action="stop")`. Then
    `capturing-proof` Step 6 (file exists and is larger than 10 KB), the
@@ -334,7 +335,8 @@ the journey.
 8. Keep every file at a unique local path for Step 9.
 
 Circuit breaker: after 3 failures of the same category (screenshot, device
-interaction, CDP, launch, flow), STOP that target and report the blocker.
+interaction, CDP, launch, flow), STOP that target and record the blocker
+in the session copy.
 Do not switch devices mid-target.
 
 ### Step 8 — Reverse cleanup
@@ -388,6 +390,29 @@ text. GitHub `user-attachments` URLs may keep their asset ids.
 
 ### Step 9 — Report (GitHub-hosted screenshots and video)
 
+The public GitHub comment is for a human reviewer of the feature that was built, not a plugin log.
+Lead with the feature in one sentence, one verdict, the commit and
+platform tested, the video, what was tested in a user's words, and
+repro steps a human can follow. On FAIL say what a user would see go
+wrong and at which step. Keep tool names, call arguments, transports,
+proof domains, route names, action ids and YAML, hashes, rehearsal
+history, session, install and cleanup state, refusal codes and logs out
+of the public comment. Wherever an earlier step says to report or
+disclose a result, that means the session copy below, never the public
+comment.
+
+One verdict for the whole comment. FAIL if any tested platform failed.
+PASS only if every requested platform that ran passed. Add one plain
+sentence per platform not tested: "Android was not requested." or
+"Android was not available." The missing setup stays in the session
+copy. The per-target table is in-session only.
+
+A docs-only PR, or a run where every target is SKIP, gets the same
+human-shaped comment: "This PR is documentation only." or that there
+was no device journey, then `Verdict: SKIP`. No video and no SKIP table
+on GitHub. With nothing to attach, post 9b without `--attach`, skip 9c,
+and go to 9d.
+
 Do not paste raw local paths into the GitHub report. Host every
 screenshot and video with GitHub CLI `--attach`
 (https://docs.github.com/en/github-cli/github-cli/attaching-files-with-github-cli).
@@ -411,24 +436,25 @@ a player. Do **not** put HTML `<img>` in this first body — `--attach`
 rewrites markdown image references, not HTML `src`.
 
 ```markdown
-PR: <url>
-Head: <sha>
-Verdict: PASS | FAIL | PARTIAL | SKIP
+Camera scan from the home screen opens the captured image, not the picker.
 
-| Target | Result | Evidence |
-|--------|--------|----------|
-| ios    | PASS   | screenshot + video below |
-| android| SKIP   | no AVD |
-| device | FAIL   | screenshot + video below |
+Verdict: PASS
+
+Tested: commit 1a2b3c4 on an iPhone simulator. Android was not requested.
 
 ![](/tmp/qa-pr-812-ios.mp4)
 
+What I tested:
+- Opened the app to the home screen and tapped Scan: the camera opened.
+- Took a photo: the captured photo filled the screen. No picker appeared.
+
 Repro steps:
-1. ...
+1. Open the app to the home screen.
+2. Tap Scan.
+3. Take a photo.
+4. Confirm the captured image is on screen.
 
-### ios
-
-![iOS home after login](/tmp/qa-pr-812-ios-home.png)
+![Captured photo on iOS](/tmp/qa-pr-812-ios-home.png)
 ```
 
 #### 9b. Attach and post
@@ -446,6 +472,8 @@ proof. `gh pr comment` prints the comment URL
 (`...#issuecomment-<id>`). Keep that id.
 
 #### 9c. Widen screenshots
+
+Only when a screenshot was attached; with none, go to 9d.
 
 `--attach` leaves `![alt](https://github.com/user-attachments/assets/...)`,
 which GitHub shows as small thumbs. Rewrite **images only** to HTML
@@ -470,18 +498,31 @@ Do not pass `--attach` on the edit (URLs are already hosted). If
 `issuecomment` id instead. Never leave the GitHub report on
 markdown-only image thumbs when a screenshot was attached.
 
+#### 9d. Clear `needs-qa`
+
+Once the public comment exists (9b posted it). If 9c was required and
+failed, still run 9d. A stale-head FAIL comment and a SKIP comment
+still count. A run that never posted leaves the label alone. List the
+labels with `gh pr view "<pr-url>" --json labels --jq '.labels[].name'`. If
+`needs-qa` is listed, run `gh pr edit "<pr-url>" --remove-label needs-qa`. A missing label is not FAIL.
+Do not remove any other label. Do not change the verdict if the edit
+fails after the comment exists; report the comment URL and that the
+label is still on.
+
 #### Session copy
 
-Also print the verdict table in-session. After attach, cite the
-comment URL as the reviewer-visible proof, not the local files.
+Print the per-target verdict table in-session only. After posting, cite
+the comment URL as the reviewer-visible proof, not the local files.
 
 Rules:
 
-- Every row has concrete evidence or an explicit SKIP reason.
-- Failed rows include hosted screenshot + `cdp_error_log` /
+- The public comment stays in the human-reviewer shape above.
+- In-session: every row has concrete evidence or an explicit SKIP reason.
+- In-session: failed rows include screenshot + `cdp_error_log` /
   `collect_logs` and the exact next action.
 - Do not claim PASS without `cdp.connected: true` on that target.
-- Docs-only PRs: one SKIP table, no device work, no attach required.
+- In-session: docs-only PRs get one SKIP table. No device work, and
+  attachments are not required when there is nothing to attach.
 
 ## Safety
 
