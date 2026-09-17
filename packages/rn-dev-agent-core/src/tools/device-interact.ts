@@ -1365,13 +1365,31 @@ export async function performFocusedFill(
     });
   }
   const textEntryRoute = extractTextEntryRoute(native);
-  const after = controlledReactValue(await readReactInputValue(client, oracleTestId));
-  if (after !== null && after === (before ?? '') + args.text) {
-    return verifiedFillResult('native', args.text.length, {
-      textEntryPath: 'focused-synthesized',
-      verifiedOracle: 'react-tree',
-      textEntryRoute,
-    });
+  const unverified = () =>
+    warnResult(
+      {
+        typed: true,
+        chars: args.text.length,
+        verified: false,
+        verifiedOracle: 'none',
+        textEntryPath: 'focused-synthesized',
+        textEntryRoute,
+      },
+      'Typed into the focused field; no read-back oracle was available. Confirm with device_screenshot or expect_text before relying on it.',
+    );
+  if (before === null) return unverified();
+  const expected = before + args.text;
+  let after: string | null = null;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    after = controlledReactValue(await readReactInputValue(client, oracleTestId));
+    if (after === expected) {
+      return verifiedFillResult('native', args.text.length, {
+        textEntryPath: 'focused-synthesized',
+        verifiedOracle: 'react-tree',
+        textEntryRoute,
+      });
+    }
+    if (attempt < 5) await new Promise<void>((resolve) => setTimeout(resolve, 100));
   }
   if (after !== null) {
     return fillFailure(
@@ -1380,17 +1398,7 @@ export async function performFocusedFill(
       { mutation: 'observed', pathsTried },
     );
   }
-  return warnResult(
-    {
-      typed: true,
-      chars: args.text.length,
-      verified: false,
-      verifiedOracle: 'none',
-      textEntryPath: 'focused-synthesized',
-      textEntryRoute,
-    },
-    'Typed into the focused field; no read-back oracle was available. Confirm with device_screenshot or expect_text before relying on it.',
-  );
+  return unverified();
 }
 
 export async function performReactTreeInput(

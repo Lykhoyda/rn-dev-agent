@@ -32271,18 +32271,7 @@ async function performFocusedFill(args, client2) {
     });
   }
   const textEntryRoute = extractTextEntryRoute(native);
-  const after = controlledReactValue(await readReactInputValue(client2, oracleTestId));
-  if (after !== null && after === (before ?? "") + args.text) {
-    return verifiedFillResult("native", args.text.length, {
-      textEntryPath: "focused-synthesized",
-      verifiedOracle: "react-tree",
-      textEntryRoute
-    });
-  }
-  if (after !== null) {
-    return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill typed into the focused field but its React value differs; not retrying.", { mutation: "observed", pathsTried });
-  }
-  return warnResult({
+  const unverified = () => warnResult({
     typed: true,
     chars: args.text.length,
     verified: false,
@@ -32290,6 +32279,26 @@ async function performFocusedFill(args, client2) {
     textEntryPath: "focused-synthesized",
     textEntryRoute
   }, "Typed into the focused field; no read-back oracle was available. Confirm with device_screenshot or expect_text before relying on it.");
+  if (before === null)
+    return unverified();
+  const expected = before + args.text;
+  let after = null;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    after = controlledReactValue(await readReactInputValue(client2, oracleTestId));
+    if (after === expected) {
+      return verifiedFillResult("native", args.text.length, {
+        textEntryPath: "focused-synthesized",
+        verifiedOracle: "react-tree",
+        textEntryRoute
+      });
+    }
+    if (attempt < 5)
+      await new Promise((resolve22) => setTimeout(resolve22, 100));
+  }
+  if (after !== null) {
+    return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill typed into the focused field but its React value differs; not retrying.", { mutation: "observed", pathsTried });
+  }
+  return unverified();
 }
 async function performReactTreeInput(testID, text, client2, signal, options = {}) {
   const pathsTried = ["react-tree"];

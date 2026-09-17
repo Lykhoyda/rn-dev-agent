@@ -112,6 +112,41 @@ test('focused fill: wrapper ref derives the base testID and matching read-back v
   assert.equal(fill.opts.exactTarget, undefined);
 });
 
+test('focused fill: missing pre-read never verifies even when after equals text', async () => {
+  const client = fakeClient([null, { value: 'qa.user@example.com', controlled: true }]);
+  const { result } = await withFocusedSeam({}, () =>
+    performFocusedFill(
+      { ref: 'EmailOtpFormContent_email-pressable', text: 'qa.user@example.com' },
+      client,
+    ),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.ok, true);
+  assert.equal(env.data.verified, false);
+  assert.equal(env.data.verifiedOracle, 'none');
+  assert.equal(env.meta.verify, undefined);
+  assert.ok(!JSON.stringify(env).includes('"filled":true'));
+});
+
+test('focused fill: polls until the expected append lands', async () => {
+  const client = fakeClient([
+    { value: '', controlled: true },
+    { value: 'qa.user@example.co', controlled: true },
+    { value: 'qa.user@example.com', controlled: true },
+  ]);
+  const { result } = await withFocusedSeam({}, () =>
+    performFocusedFill(
+      { ref: 'EmailOtpFormContent_email-pressable', text: 'qa.user@example.com' },
+      client,
+    ),
+  );
+  assert.ok(!(result as { isError?: boolean }).isError, envelope(result as never).error);
+  const env = envelope(result as never);
+  assert.deepEqual(env.data, { filled: true, method: 'native', length: 19 });
+  assert.equal(env.meta.verify, 'exact');
+  assert.equal(env.meta.verifiedOracle, 'react-tree');
+});
+
 test('focused fill: React mismatch returns TEXT_ENTRY_UNVERIFIED with observed mutation', async () => {
   const client = fakeClient([
     { value: '', controlled: true },
