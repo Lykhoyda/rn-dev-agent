@@ -56,15 +56,28 @@ extension RnFastRunnerTests {
         synthesis = RunnerSynthesizedTextEntry.synthesizeText(withApplication: app, text: text)
       }
       let result = synthesis!
-      let route: String
       switch result.status {
       case .succeeded:
-        route = "synthesized-first-responder"
+        return Response(
+          ok: true,
+          data: DataPayload(
+            message: "typed",
+            typingBurst: false,
+            keyboardWaitMs: 0,
+            inputResolution: "focused-first-responder",
+            focusTap: "none",
+            textEntryRoute: "synthesized-first-responder"
+          )
+        )
       case .unavailable:
-        withTemporaryScrollIdleTimeoutIfSupported(app) {
-          app.typeText(text)
-        }
-        route = "xctest-application-fallback"
+        return Response(
+          ok: false,
+          error: ErrorPayload(
+            code: "TEXT_SYNTHESIS_FAILED",
+            message: result.message ?? "private XCTest text synthesis unavailable",
+            mutation: "none"
+          )
+        )
       case .failed:
         return Response(
           ok: false,
@@ -84,17 +97,6 @@ extension RnFastRunnerTests {
           )
         )
       }
-      return Response(
-        ok: true,
-        data: DataPayload(
-          message: "typed",
-          typingBurst: false,
-          keyboardWaitMs: 0,
-          inputResolution: "focused-first-responder",
-          focusTap: "none",
-          textEntryRoute: route
-        )
-      )
     }
   }
 
