@@ -74,10 +74,7 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.doesNotMatch(agent, /Report `transport`/);
   assert.match(agent, /Wherever an earlier step says to report or\s+disclose/);
   assert.doesNotMatch(agent, /Wherever Step 7 says to report/);
-  const step9bTo9d = agent.slice(
-    agent.indexOf('#### 9b.'),
-    agent.indexOf('#### Session copy'),
-  );
+  const step9bTo9d = agent.slice(agent.indexOf('#### 9b.'), agent.indexOf('#### Session copy'));
   const postedAt = step9bTo9d.indexOf('gh pr comment');
   const removeAt = step9bTo9d.indexOf('--remove-label needs-qa');
   assert.ok(postedAt !== -1 && removeAt !== -1 && postedAt < removeAt);
