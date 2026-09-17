@@ -225,8 +225,11 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    forceReload=false, proofReplay=true)`. `proofReplay` writes neither the
    action YAML nor runtime state; a failing rehearsal of a reused action is
    FAIL with the failing step (QA does not edit committed actions). For an
-   action saved in this run: plain `cdp_run_action`, at most three
-   fix-and-replay loops (`creating-actions` Step 7), each from item 3; a
+   action saved in this run: `cdp_run_action(actionId=<id>,
+   platform=<target>, autoRepair=false)`, at most three fix-and-replay
+   loops (`creating-actions` Step 7). After a failed replay, fix the action
+   while the app is still on the failing screen (for example
+   `cdp_repair_action` with the failed selector), then replay from item 3; a
    clean pass may promote the header `status: experimental` to `active`,
    which is expected and happens before the camera. After the last passing
    rehearsal, repeat item 3, take a start `device_screenshot` that shows the
