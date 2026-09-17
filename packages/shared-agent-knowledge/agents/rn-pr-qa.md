@@ -257,8 +257,8 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    `device_snapshot(action="open", attachOnly=true)` and retry it. A failed
    rehearsal or take also leaves the bundle unbound (item 3's
    `cdp_navigate` refuses `BUNDLE_HANDSHAKE_UNAVAILABLE`): run
-   `rn_session pin_dev_client` (it reloads the app to its initial route)
-   and rehearse again as a first rehearsal (item 3).
+   `rn_session pin_dev_client` (it does not reload the app) and rehearse
+   again as a first rehearsal from the current screen (item 3).
    After the last passing rehearsal, repeat item 3, take a start `device_screenshot` that shows the
    first route, require `rn_session status` to read
    `installIdentity: verified`, and record `git hash-object` of the action
