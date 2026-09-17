@@ -37,11 +37,12 @@ this package) in this session. Summary:
    `metroBound` and `installBound` → `pin_dev_client` → then the feature
    proof (`agents/rn-pr-qa.md` Step 7): usable screen or FAIL with the
    refusal code → reuse a covering action that starts from the attached
-   app (rehearse with `proofReplay=true`) or record and save one and drop
-   its generated `launchApp` → off-camera `cdp_run_action` rehearsal →
-   return to the first screen off camera (`cdp_navigate`), no runtime
-   reset and no relaunch (never `cdp_reload` / `cdp_restart` /
-   `launchApp` on camera) → `device_record` start **before** the
+   app (rehearse with `proofReplay=true`); if none does, record and save a
+   new one and drop its generated `launchApp` → return to the first screen
+   off camera (`cdp_navigate`) before every `cdp_run_action` rehearsal and
+   before the take, no runtime reset and no relaunch (never `cdp_reload` /
+   `cdp_restart` / `launchApp` on camera) → hash the action after the last
+   passing rehearsal → `device_record` start **before** the
    on-camera `cdp_run_action` proof replay → stop and validate.
    Missing video on an app-facing target is FAIL.
 7. **Cleanup** reverse-order: runner close → `stop_metro` →
