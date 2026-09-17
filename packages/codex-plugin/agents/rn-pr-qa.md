@@ -233,15 +233,14 @@ the journey.
    link, store dispatch, or navigation shortcut anywhere in the recorded
    path: a feature that user interactions cannot reach is FAIL at that
    step.
-3. **Walk back to the first screen off camera, only after a run has moved
-   the app.** A reused action's first rehearsal starts from the screen
-   item 1 proved (a fresh install sits on its onboarding or login screen);
-   the action's own opening steps must get past it, and a reused action
-   that cannot is FAIL at its failing step. Do not move the app before
-   that first rehearsal. The recording walk (item 2) is a run that moved
-   the app: an action saved in this run walks back before its first
-   rehearsal, also after a re-pin (item 4). Every action also walks back
-   before every later rehearsal and before the take. The first route is
+3. **Reach the first screen off camera.** A reused action's first
+   rehearsal starts from its first route: if item 1's screen is not that
+   route (a fresh install sits on onboarding or login), walk there as a
+   user, or FAIL the target at the step that cannot. The recording
+   walk (item 2) is a run that moved the app: an action saved in this run
+   walks back before its first rehearsal, also after a re-pin (item 4).
+   Every action also walks back before every later rehearsal and before
+   the take. The first route is
    the action's `# startRoute` header (the recorder writes it; for a
    reused action without one, the screen name on the first line of its
    header diagram, never that line's testID anchor, else the start state
@@ -293,7 +292,7 @@ the journey.
    `device_screenshot` that shows no dev-menu sheet and no gear (a visible
    one is FAIL for the target). Only then rehearse again as a first
    rehearsal from the current screen when the action can start there,
-   else walk back first (item 3).
+   else reach the first route first (item 3).
    After the last passing rehearsal, repeat item 3, take a start `device_screenshot` that shows the
    first route with no dev-menu sheet or gear, require `rn_session status` to read
    `installIdentity: verified`, and record `git hash-object` of the action

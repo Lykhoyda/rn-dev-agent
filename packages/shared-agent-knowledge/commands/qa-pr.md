@@ -38,7 +38,9 @@ Load `rn-workflow`, `rn-testing`, `rn-device-control`, and
    refusal code → reuse a covering action that starts from the attached
    app (rehearse with `proofReplay=true`); if none does, record and save a
    new one and drop its generated `launchApp` → first `cdp_run_action`
-   rehearsal of a reused action from the screen the app is on → walk back to
+   rehearsal of a reused action from its first route (walk there as a user
+   if the attached screen is not that route, or FAIL at the step that
+   cannot) → walk back to
    the first screen off camera as a user (visible controls, at most one
    `device_back` per screen; never `cdp_navigate` or a deep link) before a saved action's
    first rehearsal, any repeat rehearsal, and the take, no runtime reset and no relaunch (never `cdp_reload` /

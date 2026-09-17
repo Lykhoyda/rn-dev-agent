@@ -33,7 +33,7 @@ Default platform is `all` — every target that can be proven present. A request
 | 3 | Pin the head SHA in a disposable git worktree |
 | 4 | Establish the [run-workflow](../run-workflow/) operating sequence |
 | 5 | Bind one exact device, apply integration, run the managed package script |
-| 6 | Feature proof (user path only): dev menu disabled and hidden with no gear, usable screen, real path recorded, action reused (proof replay, no writes) or saved without `launchApp`, a reused action's first rehearsal from the screen the app is on, walk back to the first screen off camera as a user (no `cdp_navigate`, no deep link) before a saved action's first rehearsal, a repeat rehearsal, and the take, off-camera rehearsal, no runtime reset or relaunch under the recorder, video started before the runner, on-camera `cdp_run_action` proof replay, validation |
+| 6 | Feature proof (user path only): dev menu disabled and hidden with no gear, usable screen, real path recorded, action reused (proof replay, no writes) or saved without `launchApp`, first rehearsal of a reused action from its first route (walk there as a user if the attached screen is not that route, or FAIL at the step that cannot), walk back to the first screen off camera as a user (no `cdp_navigate`, no deep link) before a saved action's first rehearsal, a repeat rehearsal, and the take, off-camera rehearsal, no runtime reset or relaunch under the recorder, video started before the runner, on-camera `cdp_run_action` proof replay, validation |
 | 7 | Reverse cleanup and a GitHub comment at the live head with the video first |
 
 ## Output
