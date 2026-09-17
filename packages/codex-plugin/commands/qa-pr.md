@@ -53,12 +53,14 @@ this package) in this session. Summary:
    Missing video on an app-facing target is FAIL.
 7. **Cleanup** reverse-order: runner close → `stop_metro` →
    `restore_integration` → `release`. Remove only the worktree you added.
-8. **Report** on the PR with `gh pr comment --body-file` plus
-   `--attach` for every screenshot and video (GitHub CLI attaching-files
-   flow). Then rewrite screenshot markdown to
-   `<img src="…" alt="…" width="390">` via `--edit-last`. Re-read the
-   head with `gh pr view "<pr-url>" --json headRefOid` before posting
-   and stop if it fails; the verdict binds to the tested SHA. In-session,
+8. **Report.** The public GitHub comment is for a human reviewer of the feature that was built, not a plugin log.
+   Re-read the head with `gh pr view "<pr-url>" --json headRefOid` before posting
+   and stop if it fails; the verdict binds to the tested SHA. Post
+   with `gh pr comment --body-file` plus `--attach` for every screenshot
+   and video (GitHub CLI attaching-files flow). Then rewrite screenshot
+   markdown to `<img src="…" alt="…" width="390">` via `--edit-last`.
+   After that, if the PR has `needs-qa`, run
+   `gh pr edit "<pr-url>" --remove-label needs-qa`. A missing label is not FAIL. In-session,
    print the verdict table and the comment URL. Never leave unhosted
    `/tmp` paths as the reviewer-visible proof. Public comments are public:
    never write hostname (including `.local`), machine UUID, home

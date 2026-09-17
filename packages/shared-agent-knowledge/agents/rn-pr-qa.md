@@ -314,8 +314,9 @@ the journey.
    navigation, or screenshots on camera (this overrides `capturing-proof`
    Step 4). A failed take is FAIL for that attempt; stop recording, keep
    the file and the reason; one re-take is allowed only after a fresh
-   off-camera rehearsal passes (item 4). Report `transport`,
-   `transportVersion`, and `proofDomain` verbatim from the result; a
+   off-camera rehearsal passes (item 4). Record `transport`,
+   `transportVersion`, and `proofDomain` verbatim from the result
+   for the session copy (Step 9), never the public comment; a
    `cdp-js` / `react-tree` take is never a maestro-runner certification.
 7. **Stop and validate.** `device_record(action="stop")`. Then
    `capturing-proof` Step 6 (file exists and is larger than 10 KB), the
@@ -388,6 +389,16 @@ text. GitHub `user-attachments` URLs may keep their asset ids.
 
 ### Step 9 — Report (GitHub-hosted screenshots and video)
 
+The public GitHub comment is for a human reviewer of the feature that was built, not a plugin log.
+Lead with the feature in one sentence, PASS or FAIL, the commit and
+platform tested, the video, what was tested in a user's words, and
+repro steps a human can follow. On FAIL say what a user would see go
+wrong and at which step. Keep tool names, call arguments, transports,
+proof domains, route names, action ids and YAML, hashes, rehearsal
+history, session, install and cleanup state, refusal codes and logs out
+of the public comment. Wherever Step 7 says to report a result, that
+means the session copy below, never the public comment.
+
 Do not paste raw local paths into the GitHub report. Host every
 screenshot and video with GitHub CLI `--attach`
 (https://docs.github.com/en/github-cli/github-cli/attaching-files-with-github-cli).
@@ -411,24 +422,25 @@ a player. Do **not** put HTML `<img>` in this first body — `--attach`
 rewrites markdown image references, not HTML `src`.
 
 ```markdown
-PR: <url>
-Head: <sha>
-Verdict: PASS | FAIL | PARTIAL | SKIP
+Camera scan from the home screen opens the captured image, not the picker.
 
-| Target | Result | Evidence |
-|--------|--------|----------|
-| ios    | PASS   | screenshot + video below |
-| android| SKIP   | no AVD |
-| device | FAIL   | screenshot + video below |
+Verdict: PASS
+
+Tested: commit 1a2b3c4 on an iPhone simulator. Android was not requested.
 
 ![](/tmp/qa-pr-812-ios.mp4)
 
+What I tested:
+- Opened the app to the home screen and tapped Scan: the camera opened.
+- Took a photo: the captured photo filled the screen. No picker appeared.
+
 Repro steps:
-1. ...
+1. Open the app to the home screen.
+2. Tap Scan.
+3. Take a photo.
+4. Confirm the captured image is on screen.
 
-### ios
-
-![iOS home after login](/tmp/qa-pr-812-ios-home.png)
+![Captured photo on iOS](/tmp/qa-pr-812-ios-home.png)
 ```
 
 #### 9b. Attach and post
@@ -470,6 +482,16 @@ Do not pass `--attach` on the edit (URLs are already hosted). If
 `issuecomment` id instead. Never leave the GitHub report on
 markdown-only image thumbs when a screenshot was attached.
 
+#### 9d. Clear `needs-qa`
+
+Only after 9b posted the comment and 9c widened it for the live head; a
+run that stopped before posting leaves the label alone. List the labels
+with `gh pr view "<pr-url>" --json labels --jq '.labels[].name'`. If
+`needs-qa` is listed, run `gh pr edit "<pr-url>" --remove-label needs-qa`. A missing label is not FAIL.
+Do not remove any other label. Do not change the verdict if the edit
+fails after the comment exists; report the comment URL and that the
+label is still on.
+
 #### Session copy
 
 Also print the verdict table in-session. After attach, cite the
@@ -477,8 +499,9 @@ comment URL as the reviewer-visible proof, not the local files.
 
 Rules:
 
-- Every row has concrete evidence or an explicit SKIP reason.
-- Failed rows include hosted screenshot + `cdp_error_log` /
+- The public comment stays in the human-reviewer shape above.
+- In-session: every row has concrete evidence or an explicit SKIP reason.
+- In-session: failed rows include screenshot + `cdp_error_log` /
   `collect_logs` and the exact next action.
 - Do not claim PASS without `cdp.connected: true` on that target.
 - Docs-only PRs: one SKIP table, no device work, no attach required.

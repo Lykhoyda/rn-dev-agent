@@ -34,7 +34,7 @@ Like `rn-tester`, this protocol needs MCP tools. **Do not spawn it via the Task 
 4. **Inventory** through `rn-workflow` steps 0–2, then `rn_session(action="status")`. `device_list` diagnoses; it does not choose.
 5. **Per selected target** (`ios`, `android`, `device`, or `all`): exact `bind_device` → reversible integration → managed `<pm> run ios|android` from the app root → `pin_dev_client` → dev menu disabled and hidden (no gear) → feature proof, user path only: usable screen, recorded path, saved or reused Maestro action, walk back to the first screen as a user before each later off-camera rehearsal and the take, `device_record` start before the on-camera `cdp_run_action` proof replay, validation.
 6. **Cleanup** in reverse: runner close → `stop_metro` → `restore_integration` → `release`.
-7. **Report** a per-target table. Missing hardware is SKIP with the exact remaining setup, not FAIL. Host screenshots and videos with `gh pr comment --attach`, video first, then rewrite screenshots to `<img … width="390">`.
+7. **Report.** The public GitHub comment is for a human reviewer of the feature that was built, not a plugin log. Missing hardware is SKIP with the exact remaining setup, not FAIL. Host screenshots and videos with `gh pr comment --attach`, video first, then rewrite screenshots to `<img … width="390">`. If the PR has `needs-qa`, run `gh pr edit "<pr-url>" --remove-label needs-qa`. A missing label is not FAIL.
 
 ## Circuit breaker
 
