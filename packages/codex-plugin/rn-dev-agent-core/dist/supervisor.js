@@ -64564,7 +64564,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 70;
+    HELPERS_VERSION = 71;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -66031,10 +66031,13 @@ var init_injected_helpers = __esm({
   function clearErrors() { errors.length = 0; return 'cleared'; }
 
   var TYPE_TEXT_WORK_LIMIT = 2000;
+  // Read-back calls no handler, so it gets the file's 20000-fiber walk bound instead of the mutation budget.
+  var READ_INPUT_WORK_LIMIT = 100000;
 
-  function createTypeTextState() {
+  function createTypeTextState(workLimit) {
     return {
       work: 0,
+      workLimit: workLimit || TYPE_TEXT_WORK_LIMIT,
       visitedFibers: 0,
       truncated: false,
       reason: null
@@ -66042,7 +66045,7 @@ var init_injected_helpers = __esm({
   }
 
   function consumeTypeTextWork(state) {
-    if (state.work >= TYPE_TEXT_WORK_LIMIT) {
+    if (state.work >= state.workLimit) {
       state.truncated = true;
       state.reason = 'work-limit';
       return false;
@@ -66068,14 +66071,14 @@ var init_injected_helpers = __esm({
       reason: state.reason,
       scanned: state.visitedFibers,
       work: state.work,
-      workLimit: TYPE_TEXT_WORK_LIMIT,
+      workLimit: state.workLimit,
       handlerCalled: false,
       hint: 'The bounded typeText resolver did not inspect the complete selector and candidate graph; no handler was called.'
     };
   }
 
-  function resolveTypeTextTarget(opts) {
-    var state = createTypeTextState();
+  function resolveTypeTextTarget(opts, workLimit) {
+    var state = createTypeTextState(workLimit);
 
     function consumeWork() {
       return consumeTypeTextWork(state);
@@ -68161,7 +68164,7 @@ var init_injected_helpers = __esm({
 
   function readInputValue(testID) {
     if (!testID) return JSON.stringify({ __agent_error: 'testID is required' });
-    var resolution = resolveTypeTextTarget({ testID: testID });
+    var resolution = resolveTypeTextTarget({ testID: testID }, READ_INPUT_WORK_LIMIT);
     if (resolution.error) return JSON.stringify({ __agent_error: resolution.error });
     if (!resolution.binding) return JSON.stringify({ value: null, controlled: false });
     var props = resolution.binding.candidateFiber.memoizedProps || {};
