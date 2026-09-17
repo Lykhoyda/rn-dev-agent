@@ -212,8 +212,8 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    verdict is at most PARTIAL.
 3. **Return to the first screen off camera, before every rehearsal and
    before the take.** The first route is the action's `# startRoute`
-   header (for a reused action without one, the start state from the
-   Step 6 plan). `cdp_navigate(screen=<first route>)`, then
+   header, else the Step 6 plan start state. If neither names a route,
+   stop the target and report that. `cdp_navigate(screen=<first route>)`, then
    `cdp_navigation_state` must return that route; if it does not, stop the
    target and report the observed route. **No runtime reset and no
    relaunch:** never call `cdp_reload` or `cdp_restart` in this step (on

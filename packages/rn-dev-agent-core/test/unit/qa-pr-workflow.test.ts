@@ -35,6 +35,9 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.doesNotMatch(agent, /Reset to the start screen/);
   assert.match(agent, /must not begin with `launchApp`/);
   assert.match(agent, /cdp_navigate\(screen=/);
+  assert.match(agent, /else the Step 6 plan start state/);
+  assert.match(agent, /If neither names a route/);
+  assert.doesNotMatch(agent, /for a reused action without one/);
   assert.match(agent, /RUNNER_OWNERSHIP_MISMATCH/);
   assert.doesNotMatch(agent, /is the reset and happens on camera/);
   assert.match(agent, /NSCocoaErrorDomain 513/);
