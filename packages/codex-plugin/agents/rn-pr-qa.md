@@ -243,8 +243,9 @@ the journey.
    the take. The first route is
    the action's `# startRoute` header (the recorder writes it; for a
    reused action without one, the screen name on the first line of its
-   header diagram, never that line's testID anchor, else the start state
-   from the Step 6 plan). **Walk back as a user, one screen at a time:**
+   header diagram, never that line's testID anchor), else the start state
+   from the Step 6 plan. If neither names a route, stop the target and
+   report that. **Walk back as a user, one screen at a time:**
    `device_find` the current screen's own visible back control (Back,
    Close, Done, Home, Reset, a tab) and `device_press` it; after each
    press `cdp_navigation_state` must show the expected previous screen.

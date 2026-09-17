@@ -35,6 +35,8 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.doesNotMatch(agent, /Reset to the start screen/);
   assert.match(agent, /must not begin with `launchApp`/);
   assert.doesNotMatch(agent, /cdp_navigate\(screen=/);
+  assert.match(agent, /else the start state\s+from the Step 6 plan/);
+  assert.match(agent, /If neither names a route/);
   assert.match(agent, /RUNNER_OWNERSHIP_MISMATCH/);
   assert.match(agent, /A reused action's first\s+rehearsal starts from its first route/);
   assert.match(agent, /walk there as a\s+user, or FAIL the target at the step that cannot/);
