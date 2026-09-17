@@ -33,7 +33,7 @@ Default platform is `all` — every target that can be proven present. A request
 | 3 | Pin the head SHA in a disposable git worktree |
 | 4 | Establish the [run-workflow](../run-workflow/) operating sequence |
 | 5 | Bind one exact device, apply integration, run the managed package script |
-| 6 | Feature proof: usable screen, real path recorded, action reused (proof replay, no writes) or saved without `launchApp`, return to the first screen off camera before each rehearsal and the take, off-camera rehearsal, no runtime reset or relaunch under the recorder, video started before the runner, on-camera `cdp_run_action` proof replay, validation |
+| 6 | Feature proof (user path only): dev menu disabled and hidden with no gear, usable screen, real path recorded, action reused (proof replay, no writes) or saved without `launchApp`, first rehearsal of a reused action from its first route (walk there as a user if the attached screen is not that route, or FAIL at the step that cannot), walk back to the first screen off camera as a user (no `cdp_navigate`, no deep link) before a saved action's first rehearsal, a repeat rehearsal, and the take, off-camera rehearsal, no runtime reset or relaunch under the recorder, video started before the runner, on-camera `cdp_run_action` proof replay, validation |
 | 7 | Reverse cleanup and a GitHub comment at the live head with the video first |
 
 ## Output
@@ -55,5 +55,6 @@ Default platform is `all` — every target that can be proven present. A request
 - Android emulator: Android SDK + AVD
 - Physical: USB debugging, exclusive claim, exact serial
 - Pin-cache maestro-runner `>= 1.1.24`
+- Expo dev client: floating dev-menu gear turned off at build time (`EXDevMenuShowFloatingActionButton` = `false`); a visible gear is FAIL
 
 This command runs the [`rn-pr-qa`](../../agents/rn-pr-qa/) protocol inline in the parent session (GH #31).

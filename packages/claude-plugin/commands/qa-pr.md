@@ -31,13 +31,19 @@ Load `rn-workflow`, `rn-testing`, `rn-device-control`, and
 6. **Per selected target:** `bind_device` (exact id) →
    `preview_integration` → `apply_integration confirmed=true` → run the
    rewritten `<pm> run ios|android` from the app root → poll until
-   `metroBound` and `installBound` → `pin_dev_client` → then the feature
-   proof (`agents/rn-pr-qa.md` Step 7): usable screen or FAIL with the
+   `metroBound` and `installBound` → `pin_dev_client` → `cdp_dev_settings`
+   `disableDevMenu` then `hideDevMenu`, again after every re-pin (never
+   touch the sheet or the gear; a visible sheet or gear is FAIL) → then the feature
+   proof (`agents/rn-pr-qa.md` Step 7), user path only: usable screen or FAIL with the
    refusal code → reuse a covering action that starts from the attached
    app (rehearse with `proofReplay=true`); if none does, record and save a
-   new one and drop its generated `launchApp` → return to the first screen
-   off camera (`cdp_navigate`) before every `cdp_run_action` rehearsal and
-   before the take, no runtime reset and no relaunch (never `cdp_reload` /
+   new one and drop its generated `launchApp` → first `cdp_run_action`
+   rehearsal of a reused action from its first route (walk there as a user
+   if the attached screen is not that route, or FAIL at the step that
+   cannot) → walk back to
+   the first screen off camera as a user (visible controls, at most one
+   `device_back` per screen; never `cdp_navigate` or a deep link) before a saved action's
+   first rehearsal, any repeat rehearsal, and the take, no runtime reset and no relaunch (never `cdp_reload` /
    `cdp_restart` / `launchApp` on camera) → hash the action after the last
    passing rehearsal → `device_record` start **before** the
    on-camera `cdp_run_action` proof replay → stop and validate.
