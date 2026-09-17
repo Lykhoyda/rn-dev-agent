@@ -62,6 +62,27 @@ final class TypingRecipeTests: XCTestCase {
     XCTAssertEqual(result.waitedMs, 300)
   }
 
+  func testFocusedTypeDecisionRefusesEmptyText() {
+    XCTAssertEqual(
+      TypingRecipe.focusedTypeDecision(textIsEmpty: true, keyboardVisible: true),
+      .refuseEmptyText
+    )
+  }
+
+  func testFocusedTypeDecisionRefusesWhenKeyboardIsDown() {
+    XCTAssertEqual(
+      TypingRecipe.focusedTypeDecision(textIsEmpty: false, keyboardVisible: false),
+      .refuseNoKeyboard
+    )
+  }
+
+  func testFocusedTypeDecisionTypesWhenKeyboardIsUp() {
+    XCTAssertEqual(
+      TypingRecipe.focusedTypeDecision(textIsEmpty: false, keyboardVisible: true),
+      .type
+    )
+  }
+
   func testWaitForKeyboardTimesOutAndReportsElapsed() {
     var clock: TimeInterval = 0
     let result = TypingRecipe.waitForKeyboard(

@@ -1841,6 +1841,8 @@ export async function runNative(
     ) => Promise<{ matches: boolean; actual?: string | null }>;
     /** GH #581: exact input identity attached to type/verifyInput dispatches. */
     exactTarget?: ExactTargetOpts;
+    /** Type into the already focused field; skip exact-target decoration. */
+    focusedType?: boolean;
   } = {},
 ): Promise<ToolResult> {
   if (_runAgentDeviceOverrideForTest) {
@@ -1891,7 +1893,10 @@ export async function runNative(
     if (ios.command === 'type' && opts.verifyTypeReadback) {
       ios._verifyExactReadback = opts.verifyTypeReadback;
     }
-    if ((ios.command === 'type' || ios.command === 'verifyInput') && opts.exactTarget) {
+    if (ios.command === 'type' && opts.focusedType) {
+      ios.focused = true;
+      delete ios._staleRef;
+    } else if ((ios.command === 'type' || ios.command === 'verifyInput') && opts.exactTarget) {
       const decorated = decorateExactTargetIOS(ios, opts.exactTarget);
       if (decorated) return decorated;
     }
@@ -2046,6 +2051,13 @@ export async function runNative(
       await import('./runners/rn-android-runner-client.js');
     const outsideApp = androidOutsideAppWindowRefusal(cliArgs, appId);
     if (outsideApp) return outsideAppWindowFailResult(outsideApp);
+    if (opts.focusedType) {
+      return failResult(
+        'device_fill focused: true is iOS-only in this version; no text was entered.',
+        'NO_TEXT_INPUT_TARGET',
+        { mutation: 'none' },
+      );
+    }
     let android = buildRunAndroidArgs(cliArgs, appId);
     if ((android.command === 'type' || android.command === 'verifyInput') && opts.exactTarget) {
       const decorated = decorateExactTargetAndroid(android, opts.exactTarget);

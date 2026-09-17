@@ -26,6 +26,78 @@ extension RnFastRunnerTests {
     }
   }
 
+  private func executeFocusedType(app: XCUIApplication, text: String) -> Response {
+    var keyboardVisible = false
+    withTemporaryScrollIdleTimeoutIfSupported(app) {
+      keyboardVisible = app.keyboards.count > 0
+    }
+    switch TypingRecipe.focusedTypeDecision(textIsEmpty: text.isEmpty, keyboardVisible: keyboardVisible) {
+    case .refuseEmptyText:
+      return Response(
+        ok: false,
+        error: ErrorPayload(
+          code: "INVALID_ARGUMENT",
+          message: "focused typing appends to the focused field and cannot clear it; pass text",
+          mutation: "none"
+        )
+      )
+    case .refuseNoKeyboard:
+      return Response(
+        ok: false,
+        error: ErrorPayload(
+          code: "TEXT_TARGET_FOCUS_FAILED",
+          message: "TEXT_TARGET_FOCUS_FAILED: no software keyboard is visible, so no field is proven focused; tap the field, then retry. No typing was performed.",
+          mutation: "none"
+        )
+      )
+    case .type:
+      var synthesis: RunnerSynthesizedTextEntryResult?
+      withTemporaryScrollIdleTimeoutIfSupported(app) {
+        synthesis = RunnerSynthesizedTextEntry.synthesizeText(withApplication: app, text: text)
+      }
+      let result = synthesis!
+      let route: String
+      switch result.status {
+      case .succeeded:
+        route = "synthesized-first-responder"
+      case .unavailable:
+        withTemporaryScrollIdleTimeoutIfSupported(app) {
+          app.typeText(text)
+        }
+        route = "xctest-application-fallback"
+      case .failed:
+        return Response(
+          ok: false,
+          error: ErrorPayload(
+            code: "TEXT_SYNTHESIS_FAILED",
+            message: result.message ?? "private XCTest text synthesis failed",
+            mutation: "possible"
+          )
+        )
+      @unknown default:
+        return Response(
+          ok: false,
+          error: ErrorPayload(
+            code: "TEXT_SYNTHESIS_FAILED",
+            message: result.message ?? "private XCTest text synthesis failed",
+            mutation: "possible"
+          )
+        )
+      }
+      return Response(
+        ok: true,
+        data: DataPayload(
+          message: "typed",
+          typingBurst: false,
+          keyboardWaitMs: 0,
+          inputResolution: "focused-first-responder",
+          focusTap: "none",
+          textEntryRoute: route
+        )
+      )
+    }
+  }
+
   func execute(command: Command) throws -> Response {
     if Thread.isMainThread {
       return try executeOnMainSafely(command: command)
@@ -577,6 +649,7 @@ extension RnFastRunnerTests {
         return Response(ok: false, error: ErrorPayload(message: "type requires text"))
       }
       let delaySeconds = Double(max(command.delayMs ?? 0, 0)) / 1000.0
+      if command.focused == true { return executeFocusedType(app: activeApp, text: text) }
       // GH #581: one exact operation — bind the declared input (never an
       // ambient-focused substitute), skip the focus tap only when THAT input
       // is proven focused, otherwise tap the declared focus target and prove

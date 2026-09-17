@@ -29,7 +29,7 @@ import { resolveBundleId } from '../project-config.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 import { withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
-import { okResult, failResult, createStepTimer } from '../utils.js';
+import { okResult, failResult, warnResult, createStepTimer } from '../utils.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
 import type { RecoveryTier } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
@@ -893,6 +893,8 @@ export interface FillArgs {
   waitForKeyboardMs?: number;
   /** Explicit native testID; it must equal the exact bound input's current identifier. */
   testID?: string;
+  /** Type into the field that already has keyboard focus instead of binding an input. */
+  focused?: boolean;
   /** Story 04 (#385): per-call settle budget override in ms. */
   settleTimeoutMs?: number;
 }
@@ -1152,9 +1154,13 @@ export async function performExactFill(
   }
   const bind = bindExactFillTarget(snap.nodes, args.ref, priorSignature);
   if (!bind.ok) {
+    const focusedHint =
+      bind.detail.startsWith('wrapper "') || bind.detail.includes('is not a recognized text input')
+        ? ' If you already tapped this field and the software keyboard is up, retry with focused: true.'
+        : '';
     return fillFailure(
       'NO_TEXT_INPUT_TARGET',
-      `device_fill could not bind an exact input: ${bind.detail}. No text was entered.`,
+      `device_fill could not bind an exact input: ${bind.detail}. No text was entered.${focusedHint}`,
       { mutation: 'none', pathsTried },
     );
   }
@@ -1278,6 +1284,115 @@ export async function performExactFill(
   );
 }
 
+async function readReactInputValue(
+  client: CDPClient | null,
+  testID: string | null | undefined,
+): Promise<{ value: string | null; controlled: boolean } | null> {
+  if (!client || !testID) return null;
+  try {
+    const result = await client.evaluate(
+      '__RN_AGENT.readInputValue(' + JSON.stringify(testID) + ')',
+    );
+    if (result.error || typeof result.value !== 'string') return null;
+    const parsed: {
+      value?: string | null;
+      controlled?: boolean;
+      __agent_error?: string;
+    } = JSON.parse(result.value);
+    if (parsed.__agent_error) return null;
+    return { value: parsed.value ?? null, controlled: parsed.controlled === true };
+  } catch {
+    return null;
+  }
+}
+
+function focusedFillOracleTestId(args: FillArgs): string | null {
+  if (args.testID) return args.testID;
+  const clean = args.ref.replace(/^@/, '');
+  if (/^e\d+$/.test(clean)) return null;
+  return clean.endsWith(PRESSABLE_SUFFIX) ? clean.slice(0, -PRESSABLE_SUFFIX.length) : clean;
+}
+
+function extractTextEntryRoute(result: ToolResult): string | undefined {
+  try {
+    const envelope = JSON.parse(result.content[0].text) as {
+      data?: { textEntryRoute?: unknown };
+    };
+    return typeof envelope.data?.textEntryRoute === 'string'
+      ? envelope.data.textEntryRoute
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function controlledReactValue(
+  read: { value: string | null; controlled: boolean } | null,
+): string | null {
+  if (!read?.controlled) return null;
+  return read.value ?? '';
+}
+
+export async function performFocusedFill(
+  args: FillArgs,
+  client: CDPClient | null,
+): Promise<ToolResult> {
+  const pathsTried = ['focused'];
+  if (getActiveSession()?.platform === 'android') {
+    return fillFailure(
+      'NO_TEXT_INPUT_TARGET',
+      'device_fill focused: true is iOS-only in this version; no text was entered.',
+      { mutation: 'none', pathsTried },
+    );
+  }
+  const oracleTestId = focusedFillOracleTestId(args);
+  const before = controlledReactValue(await readReactInputValue(client, oracleTestId));
+  const native = await runNative(['fill', args.ref, args.text], {
+    focusedType: true,
+    settle: { enabled: false },
+  });
+  if (native.isError) {
+    const mutation = extractMutationDisposition(native);
+    if (mutation === 'none') {
+      return fillFailure('NO_TEXT_INPUT_TARGET', extractErrorText(native), {
+        mutation: 'none',
+        pathsTried,
+      });
+    }
+    return fillFailure('TEXT_ENTRY_UNVERIFIED', extractErrorText(native), {
+      mutation: 'possible',
+      pathsTried,
+    });
+  }
+  const textEntryRoute = extractTextEntryRoute(native);
+  const after = controlledReactValue(await readReactInputValue(client, oracleTestId));
+  if (after !== null && after === (before ?? '') + args.text) {
+    return verifiedFillResult('native', args.text.length, {
+      textEntryPath: 'focused-synthesized',
+      verifiedOracle: 'react-tree',
+      textEntryRoute,
+    });
+  }
+  if (after !== null) {
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      'device_fill typed into the focused field but its React value differs; not retrying.',
+      { mutation: 'observed', pathsTried },
+    );
+  }
+  return warnResult(
+    {
+      typed: true,
+      chars: args.text.length,
+      verified: false,
+      verifiedOracle: 'none',
+      textEntryPath: 'focused-synthesized',
+      textEntryRoute,
+    },
+    'Typed into the focused field; no read-back oracle was available. Confirm with device_screenshot or expect_text before relying on it.',
+  );
+}
+
 export async function performReactTreeInput(
   testID: string,
   text: string,
@@ -1299,23 +1414,8 @@ export async function performReactTreeInput(
       pathsTried,
     });
   }
-  const readInput = async (): Promise<{ value: string | null; controlled: boolean } | null> => {
-    try {
-      const result = await client.evaluate(
-        '__RN_AGENT.readInputValue(' + JSON.stringify(testID) + ')',
-      );
-      if (result.error || typeof result.value !== 'string') return null;
-      const parsed: {
-        value?: string | null;
-        controlled?: boolean;
-        __agent_error?: string;
-      } = JSON.parse(result.value);
-      if (parsed.__agent_error) return null;
-      return { value: parsed.value ?? null, controlled: parsed.controlled === true };
-    } catch {
-      return null;
-    }
-  };
+  const readInput = (): Promise<{ value: string | null; controlled: boolean } | null> =>
+    readReactInputValue(client, testID);
   const designated = typeof options.designationToken === 'string';
   let requestedText = text;
   if (!designated) {
@@ -1496,9 +1596,13 @@ export async function performReactTreeInput(
 }
 
 export function createDeviceFillHandler(
-  _getClient: () => CDPClient,
+  getClient: () => CDPClient,
 ): (args: FillArgs) => Promise<ToolResult> {
-  return withSession(async (args) => performExactFill(args, null, {}));
+  return withSession(async (args) =>
+    args.focused === true
+      ? performFocusedFill(args, cdpClientOrNull(getClient))
+      : performExactFill(args, null, {}),
+  );
 }
 
 // --- Swipe (coordinate-based with direction shortcut) ---
