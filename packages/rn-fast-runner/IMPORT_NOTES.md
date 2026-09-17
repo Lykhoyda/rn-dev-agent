@@ -73,3 +73,18 @@ Adaptation differences: process-wide `RN_QUIESCENCE_BYPASS` env toggle
 original implementation unmodified (no `_XCTSetApplicationStateTimeout`
 bounding); `FBLogger` dropped in favor of Swift-side startup markers.
 No upstream-sync relationship is maintained.
+
+## Imported 2026-09: synthesized text entry
+
+`RnFastRunnerUITests/ThirdParty/AgentDeviceTextEntry/` vendors four MIT files
+from https://github.com/callstack/agent-device at
+`849ad7d70de08abcbc7b4e371f197928ae0e2d81`:
+
+- `RunnerXCTestEventBridge.h`
+- `RunnerXCTestEventBridge.m`
+- `RunnerSynthesizedTextEntry.h`
+- `RunnerSynthesizedTextEntry.m`
+
+Licence: MIT, Copyright 2026 Callstack. Event-record names were rewritten to
+the `rn-dev-agent-*` prefix. Not called: `replaceTextWithApplication:text:`.
+No upstream-sync relationship is maintained.

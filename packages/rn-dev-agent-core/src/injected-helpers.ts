@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 70;
+export const HELPERS_VERSION = 71;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -1470,10 +1470,13 @@ export const INJECTED_HELPERS = `
   function clearErrors() { errors.length = 0; return 'cleared'; }
 
   var TYPE_TEXT_WORK_LIMIT = 2000;
+  // Read-back calls no handler, so it gets the file's 20000-fiber walk bound instead of the mutation budget.
+  var READ_INPUT_WORK_LIMIT = 100000;
 
-  function createTypeTextState() {
+  function createTypeTextState(workLimit) {
     return {
       work: 0,
+      workLimit: workLimit || TYPE_TEXT_WORK_LIMIT,
       visitedFibers: 0,
       truncated: false,
       reason: null
@@ -1481,7 +1484,7 @@ export const INJECTED_HELPERS = `
   }
 
   function consumeTypeTextWork(state) {
-    if (state.work >= TYPE_TEXT_WORK_LIMIT) {
+    if (state.work >= state.workLimit) {
       state.truncated = true;
       state.reason = 'work-limit';
       return false;
@@ -1507,14 +1510,14 @@ export const INJECTED_HELPERS = `
       reason: state.reason,
       scanned: state.visitedFibers,
       work: state.work,
-      workLimit: TYPE_TEXT_WORK_LIMIT,
+      workLimit: state.workLimit,
       handlerCalled: false,
       hint: 'The bounded typeText resolver did not inspect the complete selector and candidate graph; no handler was called.'
     };
   }
 
-  function resolveTypeTextTarget(opts) {
-    var state = createTypeTextState();
+  function resolveTypeTextTarget(opts, workLimit) {
+    var state = createTypeTextState(workLimit);
 
     function consumeWork() {
       return consumeTypeTextWork(state);
@@ -3600,7 +3603,7 @@ export const INJECTED_HELPERS = `
 
   function readInputValue(testID) {
     if (!testID) return JSON.stringify({ __agent_error: 'testID is required' });
-    var resolution = resolveTypeTextTarget({ testID: testID });
+    var resolution = resolveTypeTextTarget({ testID: testID }, READ_INPUT_WORK_LIMIT);
     if (resolution.error) return JSON.stringify({ __agent_error: resolution.error });
     if (!resolution.binding) return JSON.stringify({ value: null, controlled: false });
     var props = resolution.binding.candidateFiber.memoizedProps || {};
