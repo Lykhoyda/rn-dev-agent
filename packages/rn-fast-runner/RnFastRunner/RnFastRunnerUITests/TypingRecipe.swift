@@ -26,9 +26,20 @@ enum TypingRecipe {
     case refuseNoKeyboard
   }
 
+  enum FocusedTypeOutcome: Equatable {
+    case typed(route: String)
+    case refuseUnavailable
+    case failed
+  }
+
   static func focusedTypeDecision(textIsEmpty: Bool, keyboardVisible: Bool) -> FocusedTypeDecision {
     if textIsEmpty { return .refuseEmptyText }
     return keyboardVisible ? .type : .refuseNoKeyboard
+  }
+
+  static func focusedTypeOutcome(succeeded: Bool, unavailable: Bool) -> FocusedTypeOutcome {
+    if succeeded { return .typed(route: "synthesized-first-responder") }
+    return unavailable ? .refuseUnavailable : .failed
   }
 
   /// Splits text into the two-burst shape. Returns nil when there is no

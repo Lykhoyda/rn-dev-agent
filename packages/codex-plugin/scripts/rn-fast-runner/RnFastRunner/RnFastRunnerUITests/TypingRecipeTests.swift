@@ -83,6 +83,27 @@ final class TypingRecipeTests: XCTestCase {
     )
   }
 
+  func testFocusedTypeOutcomeTypesWhenSucceeded() {
+    XCTAssertEqual(
+      TypingRecipe.focusedTypeOutcome(succeeded: true, unavailable: false),
+      .typed(route: "synthesized-first-responder")
+    )
+  }
+
+  func testFocusedTypeOutcomeRefusesWhenUnavailable() {
+    XCTAssertEqual(
+      TypingRecipe.focusedTypeOutcome(succeeded: false, unavailable: true),
+      .refuseUnavailable
+    )
+  }
+
+  func testFocusedTypeOutcomeFailsOtherwise() {
+    XCTAssertEqual(
+      TypingRecipe.focusedTypeOutcome(succeeded: false, unavailable: false),
+      .failed
+    )
+  }
+
   func testWaitForKeyboardTimesOutAndReportsElapsed() {
     var clock: TimeInterval = 0
     let result = TypingRecipe.waitForKeyboard(

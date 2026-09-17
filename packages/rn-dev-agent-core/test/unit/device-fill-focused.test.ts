@@ -6,8 +6,12 @@ import assert from 'node:assert/strict';
 
 const { _setActiveSessionForTest, _setRunAgentDeviceForTest, markSnapshotDirty } =
   await import('../../dist/agent-device-wrapper.js');
-const { createDeviceFillHandler, performExactFill, performFocusedFill } =
-  await import('../../dist/tools/device-interact.js');
+const {
+  _setReactInputPollSleepForTest,
+  createDeviceFillHandler,
+  performExactFill,
+  performFocusedFill,
+} = await import('../../dist/tools/device-interact.js');
 const { updateRefMapFromFlat, clearRefMap } = await import('../../dist/fast-runner-ref-map.js');
 const { okResult, failResult } = await import('../../dist/utils.js');
 
@@ -41,6 +45,7 @@ async function withFocusedSeam<T>(
   markSnapshotDirty();
   updateRefMapFromFlat(WRAPPER_ONLY as never, { snapshotGeneration: 7, keyboardVisible: true });
   const calls: Call[] = [];
+  _setReactInputPollSleepForTest(async () => {});
   _setRunAgentDeviceForTest(async (cliArgs: string[], opts: Record<string, unknown>) => {
     const call = { cliArgs, opts };
     calls.push(call);
@@ -63,6 +68,7 @@ async function withFocusedSeam<T>(
     return { result, calls };
   } finally {
     _setRunAgentDeviceForTest(null);
+    _setReactInputPollSleepForTest(null);
     _setActiveSessionForTest(null);
     clearRefMap();
   }
@@ -138,7 +144,7 @@ test('focused fill: positional ref or no client is warned, never verified', asyn
   assert.equal(positionalEnv.ok, true);
   assert.equal(positionalEnv.data.verified, false);
   assert.equal(positionalEnv.data.verifiedOracle, 'none');
-  assert.equal(positionalEnv.meta.warning.includes('no read-back oracle'), true);
+  assert.equal(positionalEnv.meta.warning.includes('the value could not be confirmed'), true);
   assert.ok(!JSON.stringify(positionalEnv).includes('"verified":true'));
 
   const { result: noClient } = await withFocusedSeam({}, () =>
@@ -198,5 +204,72 @@ test('default fill: wrapper-bind refusal names focused: true and keeps NO_TEXT_I
   assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
   assert.equal(env.meta.mutation, 'none');
   assert.match(env.error, /retry with focused: true\.$/);
+  assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'));
+});
+
+test('focused fill: missing pre-read does not verify even when post-read equals the text', async () => {
+  const client = fakeClient([null, { value: 'qa.user@example.com', controlled: true }]);
+  const { result } = await withFocusedSeam({}, () =>
+    performFocusedFill(
+      { ref: 'EmailOtpFormContent_email-pressable', text: 'qa.user@example.com' },
+      client,
+    ),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.ok, true);
+  assert.equal(env.data.typed, true);
+  assert.equal(env.data.verified, false);
+  assert.equal(env.data.filled, undefined);
+  assert.ok(!JSON.stringify(env).includes('"filled":true'));
+});
+
+test('focused fill: stale then exact React read-back verifies', async () => {
+  const client = fakeClient([
+    { value: '', controlled: true },
+    { value: '', controlled: true },
+    { value: '', controlled: true },
+    { value: 'qa.user@example.com', controlled: true },
+  ]);
+  const { result } = await withFocusedSeam({}, () =>
+    performFocusedFill(
+      { ref: 'EmailOtpFormContent_email-pressable', text: 'qa.user@example.com' },
+      client,
+    ),
+  );
+  const env = envelope(result as never);
+  assert.ok(!(result as { isError?: boolean }).isError, env.error);
+  assert.deepEqual(env.data, { filled: true, method: 'native', length: 19 });
+  assert.equal(env.meta.verify, 'exact');
+  assert.equal(env.meta.verifiedOracle, 'react-tree');
+});
+
+test('focused fill: runner TEXT_SYNTHESIS_UNAVAILABLE surfaces as NO_TEXT_INPUT_TARGET with no mutation', async () => {
+  const message = 'text synthesis is unavailable on this Xcode; no typing was performed.';
+  const { result, calls } = await withFocusedSeam(
+    {
+      fill: () => failResult(message, 'TEXT_SYNTHESIS_UNAVAILABLE', { mutation: 'none' }),
+    },
+    () => performFocusedFill({ ref: 'EmailOtpFormContent_email-pressable', text: 'a' }, null),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
+  assert.equal(env.meta.mutation, 'none');
+  assert.equal(env.error, message);
+  assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 1);
+});
+
+test('default fill: Android wrapper-bind refusal omits the focused: true hint', async () => {
+  const { result, calls } = await withFocusedSeam({ platform: 'android' }, () =>
+    performExactFill(
+      { ref: 'EmailOtpFormContent_email-pressable', text: 'qa.user@example.com' },
+      null,
+      {},
+    ),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
+  assert.equal(env.meta.mutation, 'none');
+  assert.match(env.error, /No text was entered\.$/);
+  assert.equal(env.error.includes('focused: true'), false);
   assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'));
 });
