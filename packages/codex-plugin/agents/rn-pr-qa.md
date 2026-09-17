@@ -230,9 +230,10 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    `expect_route(name=...)` checks only the top-level `routeName`, so it
    cannot prove a nested first route. If `cdp_navigate` refuses, run
    `cdp_dev_settings(action="dismissRedBox")` before anything else (in a
-   dev build the refused dispatch leaves a full-screen console-error
-   overlay that blocks every native tap), then stop the target and report
-   the observed route.
+   dev build the refused dispatch leaves a LogBox error toast;
+   `executed: false` with the toast still shown is expected), never tap
+   the toast (a tap opens a full-screen overlay that blocks every native
+   tap), then stop the target and report the observed route.
    **No runtime reset and no
    relaunch:** never call `cdp_reload` or `cdp_restart` in this step (on
    an Android dev client their recovery relaunches the app without the
