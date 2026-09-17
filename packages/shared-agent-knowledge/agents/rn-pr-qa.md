@@ -184,12 +184,31 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
 `capturing-proof` and this step differ, this step wins. Reuse the
 `rn-tester` exercise loop for discovery; do not re-derive it.
 
-1. **Usable screen through public tools.** After `pin_dev_client`:
-   `cdp_dev_settings(action="hideDevMenu")` (never swipe the sheet), then
-   `cdp_navigation_state` must return a real app route and a baseline
-   `device_screenshot` must show the app. A dev-client picker, a missing
-   Hermes target, or a session-authority refusal is **FAIL** for the target
-   with the refusal code and that one screenshot. Stop the target.
+**User path only.** An action, every rehearsal, the take, and every walk
+between them are the taps, types, scrolls, and Back presses a real user
+would make on visible controls. Never reach or reset a screen with
+`cdp_navigate`, `cdp_nav_graph(action="go")`, `device_deeplink`,
+`cdp_dispatch`, `launchApp`, `clearState`, `device_reset_state`,
+`cdp_reload`, `cdp_restart`, or any other programmatic jump. If the app is
+not on the screen you need, walk there as a user would, or FAIL the
+target at the step that cannot. `pin_dev_client`, the dev-menu calls in
+item 1, session attach, and read-only proofs (`cdp_navigation_state`,
+`expect_*`, `device_screenshot`, `cdp_error_log`) are infrastructure, not
+the journey.
+
+1. **Usable screen through public tools, dev menu off.** After
+   `pin_dev_client`: `cdp_dev_settings(action="disableDevMenu")`, then
+   `cdp_dev_settings(action="hideDevMenu")`; report both results
+   verbatim. Never tap, drag, or swipe the dev-menu sheet or its gear.
+   Then `cdp_navigation_state` must return a real app route and a baseline
+   `device_screenshot` must show the app with no dev-menu sheet and no
+   Expo gear (the floating dev-menu button). Neither call removes the
+   gear: the app under test turns it off at build time with Expo's
+   `EXDevMenuShowFloatingActionButton` = `false` (iOS `Info.plist` key,
+   Android `<application>` `meta-data`). A visible gear, a dev-client
+   picker, a missing Hermes target, or a session-authority refusal is
+   **FAIL** for the target with the reason or refusal code and that one
+   screenshot. Stop the target.
 2. **Reuse or record the path.** Scan `.rn-agent/actions/` first
    (`creating-actions` Step 0). A usable action starts from the attached
    app: it must not begin with `launchApp` (a bare `launchApp` means
@@ -207,38 +226,42 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    `enginePin: maestro-runner@1.1.24`, and delete the generated
    `- launchApp` line. Authentication
    only through `cdp_login_prologue` (reuse and, if needed, update the
-   project's existing login action; never record a second one). No silent
-   deep-link or store shortcut; if one is unavoidable, state it and the
-   verdict is at most PARTIAL.
-3. **Return to the first screen off camera, only after a run has moved
+   project's existing login action; never record a second one). No deep
+   link, store dispatch, or navigation shortcut anywhere in the recorded
+   path: a feature that user interactions cannot reach is FAIL at that
+   step.
+3. **Walk back to the first screen off camera, only after a run has moved
    the app.** A reused action's first rehearsal starts from the screen
    item 1 proved (a fresh install sits on its onboarding or login screen);
    the action's own opening steps must get past it, and a reused action
-   that cannot is FAIL at its failing step.
-   Do not navigate before that first rehearsal: the navigator that owns
-   the first route may not be mounted yet. The recording walk (item 2) is
-   a run that moved the app: an action saved in this run returns before
-   its first rehearsal, also after a re-pin (item 4), because its
-   recording proved the first route mounted. Every action also returns before every later rehearsal and
-   before the take. The first route is the action's `# startRoute` header
-   (the recorder writes it; for a reused action without one, the screen
-   name on the first line of its header diagram, never that line's testID
-   anchor, else the start state from the Step 6 plan).
-   `cdp_navigate(screen=<first route>)`, then the focused leaf of
-   `cdp_navigation_state` (the deepest `nested` `routeName`, not a
-   top-level navigator route such as `Tabs`) must be that route.
+   that cannot is FAIL at its failing step. Do not move the app before
+   that first rehearsal. The recording walk (item 2) is a run that moved
+   the app: an action saved in this run walks back before its first
+   rehearsal, also after a re-pin (item 4). Every action also walks back
+   before every later rehearsal and before the take. The first route is
+   the action's `# startRoute` header (the recorder writes it; for a
+   reused action without one, the screen name on the first line of its
+   header diagram, never that line's testID anchor, else the start state
+   from the Step 6 plan). **Walk back as a user, one screen at a time:**
+   `device_find` the current screen's own visible back control (Back,
+   Close, Done, Home, Reset, a tab) and `device_press` it; after each
+   press `cdp_navigation_state` must show the expected previous screen.
+   Only where a screen shows no such control: one `device_back` for that
+   screen (Android system Back, iOS back gesture), never on the first
+   route or the app's root screen (on Android it closes the app). Stop
+   when the focused leaf of `cdp_navigation_state` (the deepest `nested`
+   `routeName`, not a top-level navigator route such as `Tabs`) is the
+   first route and the top-level `stack` holds each navigator once: a
+   walk back pops screens, it never pushes a second `Tabs`.
    `expect_route(name=...)` checks only the top-level `routeName`, so it
-   cannot prove a nested first route. If `cdp_navigate` refuses, run
-   `cdp_dev_settings(action="dismissRedBox")` before anything else (in a
-   dev build the refused dispatch leaves a LogBox error toast;
-   `executed: false` with the toast still shown is expected), never tap
-   the toast (a tap opens a full-screen overlay that blocks every native
-   tap), then stop the target and report the observed route.
-   **No runtime reset and no
+   cannot prove a nested first route. If a screen offers no user way
+   back, or a press lands elsewhere, stop the target and report the
+   screen and the observed route. **No jump, no runtime reset, no
    relaunch:** never call `cdp_reload` or `cdp_restart` in this step (on
    an Android dev client their recovery relaunches the app without the
-   bound dev-client URL and strands it on the picker), and the take never
-   relaunches the app (item 2).
+   bound dev-client URL and strands it on the picker), never
+   `cdp_navigate` or a deep link, and the take never relaunches the app
+   (item 2).
 4. **Rehearse off camera.** For a reused committed action:
    `cdp_run_action(actionId=<id>, platform=<target>, autoRepair=false,
    forceReload=false, proofReplay=true)`. `proofReplay` writes neither the
@@ -255,12 +278,13 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    refuses `RUNNER_OWNERSHIP_MISMATCH` (a repair, the next rehearsal, the
    start screenshot), re-open the device with
    `device_snapshot(action="open", attachOnly=true)` and retry it. A failed
-   rehearsal or take also leaves the bundle unbound (item 3's
-   `cdp_navigate` refuses `BUNDLE_HANDSHAKE_UNAVAILABLE`): run
+   rehearsal or take also leaves the bundle unbound
+   (`cdp_navigation_state` refuses `BUNDLE_HANDSHAKE_UNAVAILABLE`): run
    `rn_session pin_dev_client` (it does not reload the app) and rehearse
-   again as a first rehearsal from the current screen (item 3).
+   again as a first rehearsal from the current screen when the action can
+   start there, else walk back first (item 3).
    After the last passing rehearsal, repeat item 3, take a start `device_screenshot` that shows the
-   first route, require `rn_session status` to read
+   first route with no dev-menu sheet or gear, require `rn_session status` to read
    `installIdentity: verified`, and record `git hash-object` of the action
    file.
 5. **Start recording before the runner.** `device_record(action="start",
@@ -293,7 +317,7 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    screenshot again; the take result stands. Record `git hash-object`
    of the action file again: it must equal the one recorded before the
    take (item 4); a changed blob is FAIL for the target. Watch the
-   video: it must show the feature from its first screen to its end state; a relaunch, dev menu, or picker on camera is FAIL.
+   video: it must show the feature from its first screen to its end state; a relaunch, dev-menu sheet, Expo gear, or picker on camera is FAIL.
    Missing or unwatchable video on an app-facing target is FAIL;
    screenshots do not substitute.
 8. Keep every file at a unique local path for Step 9.

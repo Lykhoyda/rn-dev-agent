@@ -34,13 +34,16 @@ this package) in this session. Summary:
 6. **Per selected target:** `bind_device` (exact id) →
    `preview_integration` → `apply_integration confirmed=true` → run the
    rewritten package `ios`/`android` script from the app root → poll until
-   `metroBound` and `installBound` → `pin_dev_client` → then the feature
-   proof (`agents/rn-pr-qa.md` Step 7): usable screen or FAIL with the
+   `metroBound` and `installBound` → `pin_dev_client` → `cdp_dev_settings`
+   `disableDevMenu` then `hideDevMenu` (never touch the sheet or the gear;
+   a visible gear is FAIL) → then the feature
+   proof (`agents/rn-pr-qa.md` Step 7), user path only: usable screen or FAIL with the
    refusal code → reuse a covering action that starts from the attached
    app (rehearse with `proofReplay=true`); if none does, record and save a
    new one and drop its generated `launchApp` → first `cdp_run_action`
-   rehearsal of a reused action from the screen the app is on → return to
-   the first screen off camera (`cdp_navigate`) before a saved action's
+   rehearsal of a reused action from the screen the app is on → walk back to
+   the first screen off camera as a user (visible controls, at most one
+   `device_back` per screen; never `cdp_navigate` or a deep link) before a saved action's
    first rehearsal, any repeat rehearsal, and the take, no runtime reset and no relaunch (never `cdp_reload` /
    `cdp_restart` / `launchApp` on camera) → hash the action after the last
    passing rehearsal → `device_record` start **before** the

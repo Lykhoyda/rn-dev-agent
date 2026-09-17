@@ -32,7 +32,7 @@ Like `rn-tester`, this protocol needs MCP tools. **Do not spawn it via the Task 
 2. **Classify** the changed files. Docs-only PRs skip the device. Plugin MCP/device changes run against the workspace test-app (or the declared candidate app), never against the plugin checkout as Metro's serving root.
 3. **Pin the head** in a disposable git worktree. Never mutate the primary checkout.
 4. **Inventory** through `rn-workflow` steps 0–2, then `rn_session(action="status")`. `device_list` diagnoses; it does not choose.
-5. **Per selected target** (`ios`, `android`, `device`, or `all`): exact `bind_device` → reversible integration → managed `<pm> run ios|android` from the app root → `pin_dev_client` → feature proof: usable screen, recorded path, saved or reused Maestro action, return to the first screen before each off-camera rehearsal and the take, `device_record` start before the on-camera `cdp_run_action` proof replay, validation.
+5. **Per selected target** (`ios`, `android`, `device`, or `all`): exact `bind_device` → reversible integration → managed `<pm> run ios|android` from the app root → `pin_dev_client` → dev menu disabled and hidden (no gear) → feature proof, user path only: usable screen, recorded path, saved or reused Maestro action, walk back to the first screen as a user before each later off-camera rehearsal and the take, `device_record` start before the on-camera `cdp_run_action` proof replay, validation.
 6. **Cleanup** in reverse: runner close → `stop_metro` → `restore_integration` → `release`.
 7. **Report** a per-target table. Missing hardware is SKIP with the exact remaining setup, not FAIL. Host screenshots and videos with `gh pr comment --attach`, video first, then rewrite screenshots to `<img … width="390">`.
 

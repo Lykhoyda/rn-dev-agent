@@ -34,12 +34,17 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.match(agent, /never call `cdp_reload` or `cdp_restart`/);
   assert.doesNotMatch(agent, /Reset to the start screen/);
   assert.match(agent, /must not begin with `launchApp`/);
-  assert.match(agent, /cdp_navigate\(screen=/);
+  assert.doesNotMatch(agent, /cdp_navigate\(screen=/);
   assert.match(agent, /RUNNER_OWNERSHIP_MISMATCH/);
-  assert.match(agent, /Do not navigate before that first rehearsal/);
-  assert.match(agent, /dismissRedBox/);
+  assert.match(agent, /Do not move the app before\s+that first rehearsal/);
+  assert.doesNotMatch(agent, /dismissRedBox/);
   assert.doesNotMatch(agent, /before every rehearsal and/);
   assert.doesNotMatch(agent, /is the reset and happens on camera/);
+  assert.match(agent, /User path only/);
+  assert.match(agent, /disableDevMenu/);
+  assert.match(agent, /EXDevMenuShowFloatingActionButton/);
+  assert.match(agent, /one `device_back` for that/);
+  assert.doesNotMatch(agent, /at most PARTIAL/);
   assert.match(agent, /NSCocoaErrorDomain 513/);
   assert.match(agent, /this step wins/);
   assert.match(agent, /proofDomain/);
@@ -65,6 +70,9 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.doesNotMatch(sharedCommand, /maestro_run/);
   assert.match(sharedCommand, /never `cdp_reload`/);
   assert.match(sharedCommand, /`launchApp` on camera/);
+  assert.match(sharedCommand, /as a user/);
+  assert.match(sharedCommand, /disableDevMenu/);
+  assert.doesNotMatch(sharedCommand, /\(`cdp_navigate`\)/);
   assert.match(sharedCommand, /gh pr view "<pr-url>" --json headRefOid/);
   assert.match(sharedCommand, /\[HOST\]/);
   assert.match(sharedCommand, /before posting/);
@@ -90,12 +98,15 @@ test('qa-pr workflow is registered and parent-session-only', () => {
     assert.match(commandText, /width="390"/);
     assert.match(commandText, /headRefOid/);
     assert.doesNotMatch(commandText, /before every `cdp_run_action` rehearsal/);
+    assert.match(commandText, /as a user/);
+    assert.match(commandText, /disableDevMenu/);
     assert.match(agentText, /device_record\(action="start"/);
     assert.doesNotMatch(agentText, /maestro_run\(flowPath=/);
     assert.match(agentText, /width="390"/);
     assert.match(agentText, /gh pr view "<pr-url>" --json headRefOid/);
     assert.match(agentText, /Stop if that lookup fails/);
     assert.match(agentText, /proofReplay=true/);
+    assert.match(agentText, /User path only/);
   }
 
   const claudeManifest = JSON.parse(
