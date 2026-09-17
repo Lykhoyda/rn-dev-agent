@@ -152,6 +152,9 @@ For each selected target, independently:
    file with `pipefail`. There is no `start_metro` action and no separate
    build/launch tool.
 4. Poll `rn_session status` until `metroBound` and `installBound`.
+   If the managed build's own install step fails (for example iOS
+   `IXErrorDomain`), rerun the same package script once and disclose it
+   in the report. A second failure is FAIL for the target.
 5. `pin_dev_client` / `cdp_connect` for the bound platform. Require the
    signed initial-bundle marker.
 6. Passive `cdp_status`. RedBox or paused debugger → `cdp_error_log`,
@@ -175,26 +178,159 @@ From the PR files (and `git diff <base>...<head>` inside the worktree):
 Write a short test plan **before** acting: start state, steps, expected
 UI + data at each step, edge cases implied by the diff.
 
-### Step 7 — Exercise (artifact-first)
+### Step 7 — Feature proof (artifact-first; the video is the primary proof)
 
-Reuse the `rn-tester` exercise loop; do not re-derive it.
+Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
+`capturing-proof` and this step differ, this step wins. Reuse the
+`rn-tester` exercise loop for discovery; do not re-derive it.
 
-0. Scan `.rn-agent/actions/` (and the workspace test-app corpus when
-   testing plugin PRs). Replay a covering action via `cdp_run_action`.
-   Authentication goes through `cdp_login_prologue` only.
-1. Navigate from a real-user entry point. No silent deep-link or store
-   shortcuts; if you must shortcut, state it and mark the verdict partial.
-2. For each planned step: act (`device_*` / `cdp_interact`) → cheapest
-   effect check (`expect_*`, scoped `cdp_*`) → screenshot only when the
-   cheap check fails or you need a proof image.
-3. Capture at least one `device_screenshot` per target that ran, saved
-   to a unique local file (do not leave it only in the tool result).
-4. Capture at least one video of the exercised flow per target that ran
-   (`proof_capture` `start_recording` → covering `cdp_run_action` or
-   the key UI steps → `stop_recording`). Supported: mp4, mov, webm.
-   If recording is unavailable, record that as a report gap; still
-   attach every screenshot.
-5. Finish with `cdp_error_log`. New errors fail the target.
+**User path only.** An action, every rehearsal, the take, and every walk
+between them are the taps, types, scrolls, and Back presses a real user
+would make on visible controls. Never reach or reset a screen with
+`cdp_navigate`, `cdp_nav_graph(action="go")`, `device_deeplink`,
+`cdp_dispatch`, `launchApp`, `clearState`, `device_reset_state`,
+`cdp_reload`, `cdp_restart`, or any other programmatic jump. If the app is
+not on the screen you need, walk there as a user would, or FAIL the
+target at the step that cannot. `pin_dev_client`, the dev-menu calls in
+item 1, session attach, and read-only proofs (`cdp_navigation_state`,
+`expect_*`, `device_screenshot`, `cdp_error_log`) are infrastructure, not
+the journey.
+
+1. **Usable screen through public tools, dev menu off.** After every
+   `pin_dev_client`, the item 4 re-pin included:
+   `cdp_dev_settings(action="disableDevMenu")`, then
+   `cdp_dev_settings(action="hideDevMenu")`; report both results
+   verbatim. Never tap, drag, or swipe the dev-menu sheet or its gear.
+   Then `cdp_navigation_state` must return a real app route and a baseline
+   `device_screenshot` must show the app with no dev-menu sheet and no
+   Expo gear (the floating dev-menu button). Neither call removes the
+   gear: the app under test turns it off at build time with Expo's
+   `EXDevMenuShowFloatingActionButton` = `false` (iOS `Info.plist` key,
+   Android `<application>` `meta-data`). A visible dev-menu sheet or
+   gear, a dev-client picker, a missing Hermes target, or a
+   session-authority refusal other than a `RUNNER_OWNERSHIP_MISMATCH`
+   that re-opening the device clears (item 4) is **FAIL** for the target
+   with the reason or refusal code and that one screenshot. Stop the
+   target.
+2. **Reuse or record the path.** Scan `.rn-agent/actions/` first
+   (`creating-actions` Step 0). A usable action starts from the attached
+   app: it must not begin with `launchApp` (a bare `launchApp` means
+   `stopApp: true`) or `clearState`. On a dev client an in-flow relaunch
+   under the screen recorder loses the managed dev-client relaunch and
+   strands the take on the picker. If a usable committed action covers the
+   feature from a real-user entry point, reuse it unchanged and do not
+   start the recorder. A covering committed action that begins with
+   `launchApp` or `clearState` is neither reused nor edited (QA does not
+   edit committed actions): name it in the report and record a new one.
+   To record, walk to the feature from a real-user entry point
+   with `device_*` / `cdp_interact` between `cdp_record_test_start` and
+   `cdp_record_test_stop`, then `cdp_record_test_save_as_action` under a
+   new action id with the metadata header and
+   `enginePin: maestro-runner@1.1.24`, and delete the generated
+   `- launchApp` line. Authentication
+   only through `cdp_login_prologue` (reuse and, if needed, update the
+   project's existing login action; never record a second one). No deep
+   link, store dispatch, or navigation shortcut anywhere in the recorded
+   path: a feature that user interactions cannot reach is FAIL at that
+   step.
+3. **Reach the first screen off camera.** A reused action's first
+   rehearsal starts from its first route: if item 1's screen is not that
+   route (a fresh install sits on onboarding or login), walk there as a
+   user, or FAIL the target at the step that cannot. The recording
+   walk (item 2) is a run that moved the app: an action saved in this run
+   walks back before its first rehearsal, also after a re-pin (item 4).
+   Every action also walks back before every later rehearsal and before
+   the take. The first route is
+   the action's `# startRoute` header (the recorder writes it; for a
+   reused action without one, the screen name on the first line of its
+   header diagram, never that line's testID anchor, else the start state
+   from the Step 6 plan). **Walk back as a user, one screen at a time:**
+   `device_find` the current screen's own visible back control (Back,
+   Close, Done, Home, Reset, a tab) and `device_press` it; after each
+   press `cdp_navigation_state` must show the expected previous screen.
+   On the workspace Test App after a rehearsal that is two taps:
+   `Reset to baseline` (`qa-acceptance-reset`), then `Back to Home`
+   (`qa-acceptance-home`); never `Reset count` (`synthetic-test-reset`),
+   which changes no screen.
+   Only where a screen shows no such control: one `device_back` for that
+   screen (Android system Back, iOS back gesture), never on the first
+   route or the app's root screen (on Android it closes the app). Stop
+   when the focused leaf of `cdp_navigation_state` (the deepest `nested`
+   `routeName`, not a top-level navigator route such as `Tabs`) is the
+   first route and the top-level `stack` holds each navigator once: a
+   walk back pops screens, it never pushes a second `Tabs`.
+   `expect_route(name=...)` checks only the top-level `routeName`, so it
+   cannot prove a nested first route. If a screen offers no user way
+   back, or a press lands elsewhere, stop the target and report the
+   screen and the observed route. **No jump, no runtime reset, no
+   relaunch:** never call `cdp_reload` or `cdp_restart` in this step (on
+   an Android dev client their recovery relaunches the app without the
+   bound dev-client URL and strands it on the picker), never
+   `cdp_navigate` or a deep link, and the take never relaunches the app
+   (item 2).
+4. **Rehearse off camera.** For a reused committed action:
+   `cdp_run_action(actionId=<id>, platform=<target>, autoRepair=false,
+   forceReload=false, proofReplay=true)`. `proofReplay` writes neither the
+   action YAML nor runtime state; a failing rehearsal of a reused action is
+   FAIL with the failing step (QA does not edit committed actions). For an
+   action saved in this run: `cdp_run_action(actionId=<id>,
+   platform=<target>, autoRepair=false)`, at most three fix-and-replay
+   loops (`creating-actions` Step 7). After a failed replay, fix the action
+   while the app is still on the failing screen (for example
+   `cdp_repair_action` with the failed selector), then replay from item 3; a
+   clean pass may promote the header `status: experimental` to `active`,
+   which is expected and happens before the camera. Every `cdp_run_action`
+   leaves the interaction runner unbound: when any later off-camera call
+   refuses `RUNNER_OWNERSHIP_MISMATCH` (a repair, the next rehearsal,
+   `hideDevMenu` or the screenshot after a re-pin, the start
+   screenshot), re-open the device with
+   `device_snapshot(action="open", attachOnly=true)` and retry it. A failed
+   rehearsal or take also leaves the bundle unbound
+   (`cdp_navigation_state` refuses `BUNDLE_HANDSHAKE_UNAVAILABLE`): run
+   `rn_session pin_dev_client` (it does not reload the app), then
+   `disableDevMenu` and `hideDevMenu` again (item 1) and a
+   `device_screenshot` that shows no dev-menu sheet and no gear (a visible
+   one is FAIL for the target). Only then rehearse again as a first
+   rehearsal from the current screen when the action can start there,
+   else reach the first route first (item 3).
+   After the last passing rehearsal, repeat item 3, take a start `device_screenshot` that shows the
+   first route with no dev-menu sheet or gear, require `rn_session status` to read
+   `installIdentity: verified`, and record `git hash-object` of the action
+   file.
+5. **Start recording before the runner.** `device_record(action="start",
+   platform=<target>, outputPath=<sandbox-writable absolute path>)`. Every
+   `device_record` `outputPath` and every `device_screenshot` `path` is a
+   sandbox-writable absolute path (the session scratch directory or
+   `$TMPDIR`), copied to evidence storage afterwards: iOS simulators cannot
+   write to an external volume (`NSCocoaErrorDomain 513`). If recording
+   cannot start, the target is **FAIL** ("video unavailable"); this
+   overrides `capturing-proof` Step 3's "warn but continue".
+6. **The take.** The same call as the reused-action rehearsal, on camera:
+   `cdp_run_action(actionId=<id>, platform=<target>, autoRepair=false,
+   forceReload=false, proofReplay=true)`. It is the replay path the
+   session gate reconciles; `maestro_run` is not that path. Nothing
+   relaunches under the recorder (item 2). No repair, exploration,
+   navigation, or screenshots on camera (this overrides `capturing-proof`
+   Step 4). A failed take is FAIL for that attempt; stop recording, keep
+   the file and the reason; one re-take is allowed only after a fresh
+   off-camera rehearsal passes (item 4). Report `transport`,
+   `transportVersion`, and `proofDomain` verbatim from the result; a
+   `cdp-js` / `react-tree` take is never a maestro-runner certification.
+7. **Stop and validate.** `device_record(action="stop")`. Then
+   `capturing-proof` Step 6 (file exists and is larger than 10 KB), the
+   planned `expect_*` checks, `cdp_navigation_state` on the end route, one
+   result `device_screenshot`, and `cdp_error_log` (new errors fail the
+   target). If the result `device_screenshot` refuses
+   `RUNNER_OWNERSHIP_MISMATCH` after the take, re-open the device with
+   `device_snapshot(action="open", attachOnly=true)` (that call rebinds
+   the interaction runner; `rn_session status` cannot) and take the
+   screenshot again; the take result stands. Record `git hash-object`
+   of the action file again: it must equal the one recorded before the
+   take (item 4); a changed blob is FAIL for the target. Watch the
+   video: it must show the feature from its first screen to its end state; a relaunch, dev-menu sheet, Expo gear, or picker on camera is FAIL.
+   Missing or unwatchable video on an app-facing target is FAIL;
+   screenshots do not substitute.
+8. Keep every file at a unique local path for Step 9.
 
 Circuit breaker: after 3 failures of the same category (screenshot, device
 interaction, CDP, launch, flow), STOP that target and report the blocker.
@@ -236,7 +372,7 @@ Attach evidence with `gh pr comment` / GitHub attachments. Never paste
 a local file path as the evidence. `--attach` may read a local file; the
 comment GitHub shows must not contain that path.
 
-Images: `<img src="…" width="720" alt="short public description">`. Alt
+Images: `<img src="…" width="390" alt="short public description">`. Alt
 text follows the same redaction.
 
 Do not approve, dismiss reviews, edit the branch, or merge from this QA
@@ -256,6 +392,12 @@ screenshot and video with GitHub CLI `--attach`
 (https://docs.github.com/en/github-cli/github-cli/attaching-files-with-github-cli).
 Need `gh` ≥ 2.99 (`gh pr comment --help` lists `--attach`) and push
 access on the PR's repository. Stop if either is missing.
+
+Re-read the PR head with `gh pr view "<pr-url>" --json headRefOid`
+immediately before posting. Stop if that lookup fails. If it differs
+from the tested SHA, post FAIL for completion of this run, name the
+tested SHA, and ask for a rerun; never write an unqualified 'latest
+head passed'.
 
 #### 9a. Body file with local paths
 
@@ -278,14 +420,14 @@ Verdict: PASS | FAIL | PARTIAL | SKIP
 | android| SKIP   | no AVD |
 | device | FAIL   | screenshot + video below |
 
+![](/tmp/qa-pr-812-ios.mp4)
+
 Repro steps:
 1. ...
 
 ### ios
 
 ![iOS home after login](/tmp/qa-pr-812-ios-home.png)
-
-![](/tmp/qa-pr-812-ios.mp4)
 ```
 
 #### 9b. Attach and post
@@ -306,14 +448,14 @@ proof. `gh pr comment` prints the comment URL
 
 `--attach` leaves `![alt](https://github.com/user-attachments/assets/...)`,
 which GitHub shows as small thumbs. Rewrite **images only** to HTML
-with an explicit width (720 for phone screenshots; 960 if landscape
+with an explicit width (390 for phone screenshots; 960 if landscape
 or tablet). Leave each video paragraph as the rewritten player URL
 (GitHub does not support alt text on video). The `--edit-last` body
 must pass Public identity (no `/Users/`, hostname, machine UUID, or
 unhosted local paths).
 
 ```html
-<img src="https://github.com/user-attachments/assets/<id>" alt="iOS home after login" width="720">
+<img src="https://github.com/user-attachments/assets/<id>" alt="iOS home after login" width="390">
 ```
 
 Write the widened body, then:
@@ -365,3 +507,6 @@ Rules:
 - About to leave attached screenshots as tiny markdown thumbs (no HTML width)
 - About to post `/Users/`, a `.local` host, a machine UUID, or a
   slash-started absolute path on GitHub
+- About to run `cdp_run_action` or repair while recording
+- About to record the rehearsal instead of the replay
+- About to report PASS for an app-facing target without a watchable video
