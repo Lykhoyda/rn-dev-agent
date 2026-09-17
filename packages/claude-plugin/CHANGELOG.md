@@ -1,5 +1,12 @@
 # rn-dev-agent-plugin
 
+## 1.0.13
+
+### Patch Changes
+
+- fd4f88a: `device_fill` gains `focused: true`, which types into the already focused iOS field through a synthesized text event and verifies through the React tree when the testID is known.
+- 0c2e0a4: `/qa-pr` posts a human-reviewer comment (the feature, the verdict, the commit and platform tested, the video, what was tested, repro steps) and then removes the `needs-qa` label when it is present.
+
 ## 1.0.12
 
 ### Patch Changes
