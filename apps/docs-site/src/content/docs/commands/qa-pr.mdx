@@ -38,15 +38,18 @@ Default platform is `all` — every target that can be proven present. A request
 
 ## Output
 
-- Verdict for the PR URL + head SHA (`PASS` / `FAIL` / `PARTIAL` / `SKIP`)
-- Per-target evidence (hosted screenshot + video, route, error count)
+- One public verdict for the PR URL + head SHA: `FAIL` if any tested platform failed, `PASS` only if every requested platform that ran passed, plus one plain sentence per platform not tested ("Android was not requested." / "Android was not available.")
+- A docs-only or all-SKIP run posts the same human-shaped comment with `Verdict: SKIP`, no video and no SKIP table
+- In-session only: the per-target table (screenshot + video, route, error count)
 - Repro steps a human can follow
-- A `gh pr comment` with `--attach` for every screenshot and video, then
-  screenshot markdown rewritten to `<img … width="390">` so they are
-  reasonably large on GitHub. Videos stay as GitHub player embeds and are
-  the primary proof. Never leave unhosted local paths as the
-  reviewer-visible proof. The public GitHub comment is for a human reviewer of the feature that was built, not a plugin log.
-  If the PR has `needs-qa`, run `gh pr edit "<pr-url>" --remove-label needs-qa`. A missing label is not FAIL.
+- A `gh pr comment` with `--attach` for every screenshot and video, then,
+  when a screenshot was attached, screenshot markdown rewritten to
+  `<img … width="390">` so they are reasonably large on GitHub. Videos stay
+  as GitHub player embeds and are the primary proof. Attachments are not
+  required when there is nothing to attach. Never leave unhosted local
+  paths as the reviewer-visible proof. The public GitHub comment is for a human reviewer of the feature that was built, not a plugin log.
+  Once the public comment exists, if the PR has `needs-qa`, run `gh pr edit "<pr-url>" --remove-label needs-qa`. A missing label is not FAIL.
+  A stale-head FAIL comment and a SKIP comment still count; a run that never posted leaves the label.
 
 ## Prerequisites
 

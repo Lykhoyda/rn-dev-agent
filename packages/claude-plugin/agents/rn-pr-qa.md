@@ -390,7 +390,7 @@ text. GitHub `user-attachments` URLs may keep their asset ids.
 ### Step 9 — Report (GitHub-hosted screenshots and video)
 
 The public GitHub comment is for a human reviewer of the feature that was built, not a plugin log.
-Lead with the feature in one sentence, PASS or FAIL, the commit and
+Lead with the feature in one sentence, one verdict, the commit and
 platform tested, the video, what was tested in a user's words, and
 repro steps a human can follow. On FAIL say what a user would see go
 wrong and at which step. Keep tool names, call arguments, transports,
@@ -398,6 +398,18 @@ proof domains, route names, action ids and YAML, hashes, rehearsal
 history, session, install and cleanup state, refusal codes and logs out
 of the public comment. Wherever Step 7 says to report a result, that
 means the session copy below, never the public comment.
+
+One verdict for the whole comment. FAIL if any tested platform failed.
+PASS only if every requested platform that ran passed. Add one plain
+sentence per platform not tested: "Android was not requested." or
+"Android was not available." The missing setup stays in the session
+copy. The per-target table is in-session only.
+
+A docs-only PR, or a run where every target is SKIP, gets the same
+human-shaped comment: "This PR is documentation only." or that there
+was no device journey, then `Verdict: SKIP`. No video and no SKIP table
+on GitHub. With nothing to attach, post 9b without `--attach`, skip 9c,
+and go to 9d.
 
 Do not paste raw local paths into the GitHub report. Host every
 screenshot and video with GitHub CLI `--attach`
@@ -459,6 +471,8 @@ proof. `gh pr comment` prints the comment URL
 
 #### 9c. Widen screenshots
 
+Only when a screenshot was attached; with none, go to 9d.
+
 `--attach` leaves `![alt](https://github.com/user-attachments/assets/...)`,
 which GitHub shows as small thumbs. Rewrite **images only** to HTML
 with an explicit width (390 for phone screenshots; 960 if landscape
@@ -484,9 +498,10 @@ markdown-only image thumbs when a screenshot was attached.
 
 #### 9d. Clear `needs-qa`
 
-Only after 9b posted the comment and 9c widened it for the live head; a
-run that stopped before posting leaves the label alone. List the labels
-with `gh pr view "<pr-url>" --json labels --jq '.labels[].name'`. If
+Once the public comment exists (9b posted it, and 9c widened it when a
+screenshot was attached). A stale-head FAIL comment and a SKIP comment
+still count. A run that never posted leaves the label alone. List the
+labels with `gh pr view "<pr-url>" --json labels --jq '.labels[].name'`. If
 `needs-qa` is listed, run `gh pr edit "<pr-url>" --remove-label needs-qa`. A missing label is not FAIL.
 Do not remove any other label. Do not change the verdict if the edit
 fails after the comment exists; report the comment URL and that the
@@ -494,8 +509,8 @@ label is still on.
 
 #### Session copy
 
-Also print the verdict table in-session. After attach, cite the
-comment URL as the reviewer-visible proof, not the local files.
+Print the per-target verdict table in-session only. After posting, cite
+the comment URL as the reviewer-visible proof, not the local files.
 
 Rules:
 
@@ -504,7 +519,8 @@ Rules:
 - In-session: failed rows include screenshot + `cdp_error_log` /
   `collect_logs` and the exact next action.
 - Do not claim PASS without `cdp.connected: true` on that target.
-- Docs-only PRs: one SKIP table, no device work, no attach required.
+- In-session: docs-only PRs get one SKIP table. No device work, and
+  attachments are not required when there is nothing to attach.
 
 ## Safety
 
