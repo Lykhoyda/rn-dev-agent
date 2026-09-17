@@ -38,8 +38,9 @@ this package) in this session. Summary:
    proof (`agents/rn-pr-qa.md` Step 7): usable screen or FAIL with the
    refusal code → reuse a covering action (rehearse with `proofReplay=true`)
    or record and save one → off-camera `cdp_run_action` rehearsal →
-   `cdp_reload` to the start screen → `device_record` start
-   **before** `maestro_run` → short native take → stop and validate.
+   no runtime reset (never `cdp_reload` / `cdp_restart`) →
+   `device_record` start **before** the on-camera `cdp_run_action`
+   proof replay → stop and validate.
    Missing video on an app-facing target is FAIL.
 7. **Cleanup** reverse-order: runner close → `stop_metro` →
    `restore_integration` → `release`. Remove only the worktree you added.
@@ -74,7 +75,7 @@ $rn-dev-agent:qa-pr 42 device
 - For Android emulator: Android SDK + a booted or bootable AVD
 - For physical: USB debugging, exclusive claim, exact serial
 - Pin-cache maestro-runner `>= 1.1.24`
-- Rehearse through `cdp_run_action`; the on-camera take is `maestro_run` of the saved action. Never PATH `maestro`.
+- Rehearse through `cdp_run_action`; the on-camera take is the same `cdp_run_action` proof replay. Never PATH `maestro`.
 
 ## Output
 

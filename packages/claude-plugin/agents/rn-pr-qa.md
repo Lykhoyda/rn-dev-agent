@@ -212,9 +212,14 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    plain `cdp_run_action`, at most three fix-and-replay loops
    (`creating-actions` Step 7); a clean pass may promote the header
    `status: experimental` to `active`, which is expected and happens before
-   the camera. **Reset to the start screen** with `cdp_reload`, then
-   `cdp_navigation_state` must return the recorded start route and a start
-   `device_screenshot` must show it.
+   the camera. **No runtime reset before the camera:** never call `cdp_reload` or `cdp_restart` in this step; on an Android
+   dev client their recovery relaunches the app without the bound
+   dev-client URL and strands it on the picker. The action's opening
+   `launchApp` (`stopApp: true`) is the reset and happens on camera; an
+   action that does not begin with `launchApp` is FAIL for this step.
+   After the rehearsal, `rn_session status` must read
+   `installIdentity: verified`; note the `cdp_navigation_state` route as
+   the pre-take route.
 5. **Start recording before the runner.** `device_record(action="start",
    platform=<target>, outputPath=<sandbox-writable absolute path>)`. Every
    `device_record` `outputPath` and every `device_screenshot` `path` is a
@@ -223,16 +228,17 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    write to an external volume (`NSCocoaErrorDomain 513`). If recording
    cannot start, the target is **FAIL** ("video unavailable"); this
    overrides `capturing-proof` Step 3's "warn but continue".
-6. **The take.** `maestro_run(flowPath=<the saved action>)`, short and
-   precise. No `cdp_run_action`, repair, exploration, or navigation on
-   camera. A failed take is FAIL for that attempt; stop recording, keep the
-   file and the reason; one re-take is allowed only after a fresh off-camera
-   rehearsal passes. No screenshots during the take; this overrides
-   `capturing-proof` Step 4. On iOS, `maestro_run` executes exact-testID
-   steps through the React tree (`transport: cdp-js`, `proofDomain:
-   react-tree`) and native-only steps through WDA; that is the take. Report
-   `transport` and `proofDomain` verbatim from the result and never call a
-   react-tree take a maestro-runner certification.
+6. **The take.** The same call as the rehearsal, on camera:
+   `cdp_run_action(actionId=<id>, platform=<target>, autoRepair=false,
+   forceReload=false, proofReplay=true)`. It is the only replay path whose
+   runtime re-acquisition after the in-flow relaunch the session gate
+   reconciles; `maestro_run` is not that path. No repair, exploration,
+   navigation, or screenshots on camera (this overrides `capturing-proof`
+   Step 4). A failed take is FAIL for that attempt; stop recording, keep
+   the file and the reason; one re-take is allowed only after a fresh
+   off-camera rehearsal passes. Report `transport`, `transportVersion`,
+   and `proofDomain` verbatim from the result; a `cdp-js` / `react-tree`
+   take is never a maestro-runner certification.
 7. **Stop and validate.** `device_record(action="stop")`. Then
    `capturing-proof` Step 6 (file exists and is larger than 10 KB), the
    planned `expect_*` checks, `cdp_navigation_state` on the end route, one
@@ -241,7 +247,7 @@ Follow `capturing-proof` Steps 2.5 to 6 with these bounds. Where
    action the blob must equal the one noted in item 3; a changed blob is
    FAIL for the target. For an action saved in this run, the only allowed
    change is the disclosed `experimental` to `active` promotion. Watch the
-   video: it must show the feature from its start screen to its end state.
+   video: it must show the app relaunch and the feature from its first screen to its end state; a dev menu or picker on camera is FAIL.
    Missing or unwatchable video on an app-facing target is FAIL;
    screenshots do not substitute.
 8. Keep every file at a unique local path for Step 9.

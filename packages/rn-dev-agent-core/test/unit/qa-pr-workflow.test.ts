@@ -29,9 +29,11 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.match(agent, /width="390"/);
   assert.doesNotMatch(agent, /width="720"/);
   assert.match(agent, /device_record\(action="start"/);
-  assert.match(agent, /maestro_run\(flowPath=/);
+  assert.doesNotMatch(agent, /maestro_run\(flowPath=/);
   assert.match(agent, /proofReplay=true/);
-  assert.match(agent, /cdp_reload/);
+  assert.match(agent, /never call `cdp_reload` or `cdp_restart`/);
+  assert.doesNotMatch(agent, /Reset to the start screen/);
+  assert.match(agent, /stopApp: true/);
   assert.match(agent, /NSCocoaErrorDomain 513/);
   assert.match(agent, /this step wins/);
   assert.match(agent, /proofDomain/);
@@ -54,7 +56,8 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.match(sharedCommand, /--attach/);
   assert.match(sharedCommand, /width="390"/);
   assert.doesNotMatch(sharedCommand, /width="720"/);
-  assert.match(sharedCommand, /maestro_run/);
+  assert.doesNotMatch(sharedCommand, /maestro_run/);
+  assert.match(sharedCommand, /never `cdp_reload`/);
   assert.match(sharedCommand, /gh pr view "<pr-url>" --json headRefOid/);
   assert.match(sharedCommand, /\[HOST\]/);
   assert.match(sharedCommand, /before posting/);
@@ -73,11 +76,12 @@ test('qa-pr workflow is registered and parent-session-only', () => {
     const commandText = readFileSync(command, 'utf8');
     const agentText = readFileSync(agentPath, 'utf8');
     assert.match(commandText, /--attach/);
-    assert.match(commandText, /maestro_run/);
+    assert.doesNotMatch(commandText, /maestro_run/);
+    assert.match(commandText, /never `cdp_reload`/);
     assert.match(commandText, /width="390"/);
     assert.match(commandText, /headRefOid/);
     assert.match(agentText, /device_record\(action="start"/);
-    assert.match(agentText, /maestro_run\(flowPath=/);
+    assert.doesNotMatch(agentText, /maestro_run\(flowPath=/);
     assert.match(agentText, /width="390"/);
     assert.match(agentText, /gh pr view "<pr-url>" --json headRefOid/);
     assert.match(agentText, /Stop if that lookup fails/);
