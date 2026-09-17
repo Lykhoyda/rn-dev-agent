@@ -196,8 +196,9 @@ item 1, session attach, and read-only proofs (`cdp_navigation_state`,
 `expect_*`, `device_screenshot`, `cdp_error_log`) are infrastructure, not
 the journey.
 
-1. **Usable screen through public tools, dev menu off.** After
-   `pin_dev_client`: `cdp_dev_settings(action="disableDevMenu")`, then
+1. **Usable screen through public tools, dev menu off.** After every
+   `pin_dev_client`, the item 4 re-pin included:
+   `cdp_dev_settings(action="disableDevMenu")`, then
    `cdp_dev_settings(action="hideDevMenu")`; report both results
    verbatim. Never tap, drag, or swipe the dev-menu sheet or its gear.
    Then `cdp_navigation_state` must return a real app route and a baseline
@@ -205,10 +206,10 @@ the journey.
    Expo gear (the floating dev-menu button). Neither call removes the
    gear: the app under test turns it off at build time with Expo's
    `EXDevMenuShowFloatingActionButton` = `false` (iOS `Info.plist` key,
-   Android `<application>` `meta-data`). A visible gear, a dev-client
-   picker, a missing Hermes target, or a session-authority refusal is
-   **FAIL** for the target with the reason or refusal code and that one
-   screenshot. Stop the target.
+   Android `<application>` `meta-data`). A visible dev-menu sheet or
+   gear, a dev-client picker, a missing Hermes target, or a
+   session-authority refusal is **FAIL** for the target with the reason
+   or refusal code and that one screenshot. Stop the target.
 2. **Reuse or record the path.** Scan `.rn-agent/actions/` first
    (`creating-actions` Step 0). A usable action starts from the attached
    app: it must not begin with `launchApp` (a bare `launchApp` means
@@ -246,6 +247,10 @@ the journey.
    `device_find` the current screen's own visible back control (Back,
    Close, Done, Home, Reset, a tab) and `device_press` it; after each
    press `cdp_navigation_state` must show the expected previous screen.
+   On the workspace Test App after a rehearsal that is two taps:
+   `Reset to baseline` (`qa-acceptance-reset`), then `Back to Home`
+   (`qa-acceptance-home`); never `Reset count` (`synthetic-test-reset`),
+   which changes no screen.
    Only where a screen shows no such control: one `device_back` for that
    screen (Android system Back, iOS back gesture), never on the first
    route or the app's root screen (on Android it closes the app). Stop
@@ -280,9 +285,12 @@ the journey.
    `device_snapshot(action="open", attachOnly=true)` and retry it. A failed
    rehearsal or take also leaves the bundle unbound
    (`cdp_navigation_state` refuses `BUNDLE_HANDSHAKE_UNAVAILABLE`): run
-   `rn_session pin_dev_client` (it does not reload the app) and rehearse
-   again as a first rehearsal from the current screen when the action can
-   start there, else walk back first (item 3).
+   `rn_session pin_dev_client` (it does not reload the app), then
+   `disableDevMenu` and `hideDevMenu` again (item 1) and a
+   `device_screenshot` that shows no dev-menu sheet and no gear (a visible
+   one is FAIL for the target). Only then rehearse again as a first
+   rehearsal from the current screen when the action can start there,
+   else walk back first (item 3).
    After the last passing rehearsal, repeat item 3, take a start `device_screenshot` that shows the
    first route with no dev-menu sheet or gear, require `rn_session status` to read
    `installIdentity: verified`, and record `git hash-object` of the action

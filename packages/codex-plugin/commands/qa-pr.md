@@ -35,8 +35,8 @@ this package) in this session. Summary:
    `preview_integration` → `apply_integration confirmed=true` → run the
    rewritten package `ios`/`android` script from the app root → poll until
    `metroBound` and `installBound` → `pin_dev_client` → `cdp_dev_settings`
-   `disableDevMenu` then `hideDevMenu` (never touch the sheet or the gear;
-   a visible gear is FAIL) → then the feature
+   `disableDevMenu` then `hideDevMenu`, again after every re-pin (never
+   touch the sheet or the gear; a visible sheet or gear is FAIL) → then the feature
    proof (`agents/rn-pr-qa.md` Step 7), user path only: usable screen or FAIL with the
    refusal code → reuse a covering action that starts from the attached
    app (rehearse with `proofReplay=true`); if none does, record and save a
