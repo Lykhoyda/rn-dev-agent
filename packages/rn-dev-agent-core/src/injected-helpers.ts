@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 71;
+export const HELPERS_VERSION = 72;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -49,7 +49,7 @@ export const INJECTED_HELPERS = `
   ];
 
   // Synchronous scan result; finished stays false after the GH #789 empty-streak exit.
-  var lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
+  var lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false };
 
   function rootScanCoverage() {
     var reasons = [];
@@ -116,7 +116,15 @@ export const INJECTED_HELPERS = `
       }
       if (unscannedRendererIds.length > 0) addReason('renderers-unscanned');
     }
-    return { reasons: reasons, unscannedRendererIds: unscannedRendererIds };
+    return {
+      reasons: reasons,
+      registeredRendererIds: registryIds,
+      unscannedRendererIds: unscannedRendererIds,
+      erroredRendererIds: lastRootScan.erroredRendererIds.slice(0, MAX_REGISTERED_RENDERER_IDS),
+      rendererErrors: lastRootScan.rendererErrors,
+      extraRootsError: lastRootScan.extraRootsError === true,
+      scanFinished: lastRootScan.finished === true
+    };
   }
 
   // Read the renderer IDs React DevTools actually registered. A malformed or
@@ -143,7 +151,7 @@ export const INJECTED_HELPERS = `
   }
 
   function findActiveRenderer() {
-    lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
+    lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
     var rendererIds = getRegisteredRendererIds(hook);
@@ -167,6 +175,7 @@ export const INJECTED_HELPERS = `
       } catch (_) {
         if (!usingRegisteredIds) emptyStreak++;
         lastRootScan.rendererErrors++;
+        lastRootScan.erroredRendererIds.push(ri);
       }
     }
     lastRootScan.finished = true;
@@ -186,7 +195,7 @@ export const INJECTED_HELPERS = `
   // native renderer loop so user-registered portals stay lower priority
   // than React's own registry.
   function iterateAllRoots(cb) {
-    lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
+    lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (hook && typeof hook.getFiberRoots === 'function') {
       var rendererIds = getRegisteredRendererIds(hook);
@@ -221,6 +230,7 @@ export const INJECTED_HELPERS = `
         } catch (_) {
           if (!usingRegisteredIds) emptyStreak++;
           lastRootScan.rendererErrors++;
+          lastRootScan.erroredRendererIds.push(ri);
         }
       }
       if (!abortedEarly) lastRootScan.finished = true;
@@ -250,6 +260,7 @@ export const INJECTED_HELPERS = `
     } catch (_) {
       // swallow — resolver bug must not break iteration
       lastRootScan.rendererErrors++;
+      lastRootScan.extraRootsError = true;
     }
     return null;
   }
@@ -4350,7 +4361,8 @@ export const INJECTED_HELPERS = `
       return JSON.stringify({
         visible: false,
         code: 'ASSERTION_FAILED',
-        reason: 'frontmost proof cannot cover every mounted renderer'
+        reason: 'frontmost proof cannot cover every mounted renderer',
+        coverage: coverage
       });
     }
     function containsFiber(ancestor, candidate) {

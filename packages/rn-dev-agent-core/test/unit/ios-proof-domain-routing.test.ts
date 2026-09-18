@@ -1080,13 +1080,52 @@ test('frontmost exact matches refuse incomplete renderer coverage', () => {
       return new Set();
     },
   };
-  for (const hook of [incompleteRegistry, rendererError, unscannedRegistry]) {
+  const cases = [
+    [
+      incompleteRegistry,
+      {
+        reasons: ['renderer-error', 'root-enumeration-incomplete'],
+        registeredRendererIds: null,
+        unscannedRendererIds: [],
+        erroredRendererIds: [],
+        rendererErrors: 0,
+        extraRootsError: false,
+        scanFinished: false,
+      },
+    ],
+    [
+      rendererError,
+      {
+        reasons: ['renderer-error'],
+        registeredRendererIds: [1, 2],
+        unscannedRendererIds: [],
+        erroredRendererIds: [2],
+        rendererErrors: 1,
+        extraRootsError: false,
+        scanFinished: true,
+      },
+    ],
+    [
+      unscannedRegistry,
+      {
+        reasons: ['renderers-unscanned'],
+        registeredRendererIds: [40, 1, 30],
+        unscannedRendererIds: [30],
+        erroredRendererIds: [],
+        rendererErrors: 0,
+        extraRootsError: false,
+        scanFinished: true,
+      },
+    ],
+  ] as const;
+  for (const [hook, coverage] of cases) {
     sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = hook;
     const verdict = JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('coverage'));
     assert.deepEqual(verdict, {
       visible: false,
       code: 'ASSERTION_FAILED',
       reason: 'frontmost proof cannot cover every mounted renderer',
+      coverage,
     });
   }
 });
