@@ -240,6 +240,28 @@ test('focused fill: stale then exact React read-back verifies', async () => {
   assert.equal(env.meta.verifiedOracle, 'react-tree');
 });
 
+test('focused fill: exact read followed by a failed confirm is typed but unverified, not a mismatch', async () => {
+  const client = fakeClient([
+    { value: '', controlled: true },
+    { value: '', controlled: true },
+    { value: '', controlled: true },
+    { value: 'qa.user@example.com', controlled: true },
+    null,
+  ]);
+  const { result } = await withFocusedSeam({}, () =>
+    performFocusedFill(
+      { ref: 'EmailOtpFormContent_email-pressable', text: 'qa.user@example.com' },
+      client,
+    ),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.ok, true);
+  assert.equal(env.code, undefined);
+  assert.equal(env.data.typed, true);
+  assert.equal(env.data.verified, false);
+  assert.equal(env.data.verifiedOracle, 'none');
+});
+
 test('focused fill: runner TEXT_SYNTHESIS_UNAVAILABLE surfaces as NO_TEXT_INPUT_TARGET with no mutation', async () => {
   const message = 'text synthesis is unavailable on this Xcode; no typing was performed.';
   const { result, calls } = await withFocusedSeam(

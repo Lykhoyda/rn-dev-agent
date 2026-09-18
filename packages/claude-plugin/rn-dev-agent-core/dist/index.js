@@ -30584,7 +30584,6 @@ async function readReactInputValue(client2, testID) {
   }
 }
 async function awaitReactInputValue(readInput, expected, signal) {
-  let verification = "unreadable";
   let previous = null;
   let last = null;
   for (let attempt = 0; attempt < 6; attempt++) {
@@ -30594,10 +30593,9 @@ async function awaitReactInputValue(readInput, expected, signal) {
     if (read?.controlled && read.value === expected) {
       await new Promise((resolve21) => setTimeout(resolve21, 150));
       if (signal?.aborted)
-        break;
+        return "unreadable";
       const confirm = await readInput();
-      verification = confirm?.controlled === true && confirm.value === expected ? "exact" : "unreadable";
-      break;
+      return confirm?.controlled === true && confirm.value === expected ? "exact" : "unreadable";
     }
     if (read) {
       previous = last;
@@ -30609,10 +30607,7 @@ async function awaitReactInputValue(readInput, expected, signal) {
     if (attempt < 5)
       await new Promise((resolve21) => setTimeout(resolve21, 100));
   }
-  if (verification !== "exact" && last?.controlled === true && previous?.controlled === true && last.value !== null && last.value === previous.value) {
-    verification = "mismatch";
-  }
-  return verification;
+  return last?.controlled === true && previous?.controlled === true && last.value !== null && last.value === previous.value ? "mismatch" : "unreadable";
 }
 function focusedFillOracleTestId(args) {
   if (args.testID)
