@@ -509,7 +509,7 @@ See the [Actions guide](/rn-dev-agent/actions/) for full details.
 
 The React-tree prover refused because it could not cover every mounted renderer. The sentence and code (`ASSERTION_FAILED`) are unchanged. Read `meta.coverage`: `reasons`, `registeredRendererIds`, `erroredRendererIds`, `unscannedRendererIds`, `extraRootsError`, `scanFinished`.
 
-- `renderer-error`: a renderer whose roots could not be read, or an unreadable registry
+- `renderer-error`: a renderer whose roots could not be read (`erroredRendererIds`), an unreadable registry (`registeredRendererIds` is `null`), or a throwing `__RN_AGENT_EXTRA_ROOTS__` resolver (`extraRootsError`)
 - `root-enumeration-incomplete`: a scan that ended early
 - `renderers-unscanned`: a registered renderer that was never visited
 
