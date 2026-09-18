@@ -440,6 +440,10 @@ bind it. On iOS, tap the field so the software keyboard is up, then call
 text was typed but not confirmed. Its append and read-back rules are on the
 [device_fill](/rn-dev-agent/tools/device/device_fill/) page.
 
+If that `focused: true` call itself answers `NO_TEXT_INPUT_TARGET` saying text
+synthesis is unavailable, this Xcode cannot synthesize text: nothing was typed,
+and retrying `focused: true` cannot succeed.
+
 ### KEYBOARD_DISMISS_FAILED
 
 A visible software keyboard could not be proven dismissed. iOS automatically
