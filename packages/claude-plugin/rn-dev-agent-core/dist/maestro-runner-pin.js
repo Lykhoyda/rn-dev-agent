@@ -16351,7 +16351,7 @@ function buildCdpDispatch(deps, signal) {
     if (matches > 1)
       throw new ReplayDispatchError("AMBIGUOUS_TESTID", `testID "${id}" resolves to ${matches} mounted elements`, { matchCount: matches });
     if (!frontmost.visible)
-      throw new ReplayDispatchError(frontmost.code ?? "ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`);
+      throw new ReplayDispatchError(frontmost.code ?? "ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`, frontmost.coverage ? { coverage: frontmost.coverage } : void 0);
     if (frontmost.disabled === true || hasDisabledExactMatch(tree, id))
       throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `testID "${id}" is disabled/non-interactable`);
     const pointerEventsError = pointerEventsBlock(tree, id);
@@ -16393,7 +16393,8 @@ function buildCdpDispatch(deps, signal) {
         return {
           visible: false,
           code: frontmost.code ?? "ASSERTION_FAILED",
-          reason: frontmost.reason ?? `testID "${id}" is mounted but not frontmost`
+          reason: frontmost.reason ?? `testID "${id}" is mounted but not frontmost`,
+          ...frontmost.coverage ? { meta: { coverage: frontmost.coverage } } : {}
         };
       return { visible: true };
     },

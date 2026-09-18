@@ -51733,7 +51733,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 71;
+var HELPERS_VERSION = 72;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -51779,7 +51779,7 @@ var INJECTED_HELPERS = `
   ];
 
   // Synchronous scan result; finished stays false after the GH #789 empty-streak exit.
-  var lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
+  var lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false };
 
   function rootScanCoverage() {
     var reasons = [];
@@ -51846,7 +51846,15 @@ var INJECTED_HELPERS = `
       }
       if (unscannedRendererIds.length > 0) addReason('renderers-unscanned');
     }
-    return { reasons: reasons, unscannedRendererIds: unscannedRendererIds };
+    return {
+      reasons: reasons,
+      registeredRendererIds: registryIds,
+      unscannedRendererIds: unscannedRendererIds,
+      erroredRendererIds: lastRootScan.erroredRendererIds.slice(0, MAX_REGISTERED_RENDERER_IDS),
+      rendererErrors: lastRootScan.rendererErrors,
+      extraRootsError: lastRootScan.extraRootsError === true,
+      scanFinished: lastRootScan.finished === true
+    };
   }
 
   // Read the renderer IDs React DevTools actually registered. A malformed or
@@ -51873,7 +51881,7 @@ var INJECTED_HELPERS = `
   }
 
   function findActiveRenderer() {
-    lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
+    lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
     var rendererIds = getRegisteredRendererIds(hook);
@@ -51897,6 +51905,7 @@ var INJECTED_HELPERS = `
       } catch (_) {
         if (!usingRegisteredIds) emptyStreak++;
         lastRootScan.rendererErrors++;
+        lastRootScan.erroredRendererIds.push(ri);
       }
     }
     lastRootScan.finished = true;
@@ -51916,7 +51925,7 @@ var INJECTED_HELPERS = `
   // native renderer loop so user-registered portals stay lower priority
   // than React's own registry.
   function iterateAllRoots(cb) {
-    lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
+    lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (hook && typeof hook.getFiberRoots === 'function') {
       var rendererIds = getRegisteredRendererIds(hook);
@@ -51951,6 +51960,7 @@ var INJECTED_HELPERS = `
         } catch (_) {
           if (!usingRegisteredIds) emptyStreak++;
           lastRootScan.rendererErrors++;
+          lastRootScan.erroredRendererIds.push(ri);
         }
       }
       if (!abortedEarly) lastRootScan.finished = true;
@@ -51980,6 +51990,7 @@ var INJECTED_HELPERS = `
     } catch (_) {
       // swallow \u2014 resolver bug must not break iteration
       lastRootScan.rendererErrors++;
+      lastRootScan.extraRootsError = true;
     }
     return null;
   }
@@ -56080,7 +56091,8 @@ var INJECTED_HELPERS = `
       return JSON.stringify({
         visible: false,
         code: 'ASSERTION_FAILED',
-        reason: 'frontmost proof cannot cover every mounted renderer'
+        reason: 'frontmost proof cannot cover every mounted renderer',
+        coverage: coverage
       });
     }
     function containsFiber(ancestor, candidate) {
@@ -81600,7 +81612,7 @@ function buildCdpDispatch(deps, signal) {
     if (matches > 1)
       throw new ReplayDispatchError("AMBIGUOUS_TESTID", `testID "${id}" resolves to ${matches} mounted elements`, { matchCount: matches });
     if (!frontmost.visible)
-      throw new ReplayDispatchError(frontmost.code ?? "ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`);
+      throw new ReplayDispatchError(frontmost.code ?? "ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`, frontmost.coverage ? { coverage: frontmost.coverage } : void 0);
     if (frontmost.disabled === true || hasDisabledExactMatch(tree, id))
       throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `testID "${id}" is disabled/non-interactable`);
     const pointerEventsError = pointerEventsBlock(tree, id);
@@ -81642,7 +81654,8 @@ function buildCdpDispatch(deps, signal) {
         return {
           visible: false,
           code: frontmost.code ?? "ASSERTION_FAILED",
-          reason: frontmost.reason ?? `testID "${id}" is mounted but not frontmost`
+          reason: frontmost.reason ?? `testID "${id}" is mounted but not frontmost`,
+          ...frontmost.coverage ? { meta: { coverage: frontmost.coverage } } : {}
         };
       return { visible: true };
     },
@@ -84513,7 +84526,8 @@ function makeReplayDeps(deps, signal) {
           ...typeof parsed.disabled === "boolean" ? { disabled: parsed.disabled } : {},
           ...parsed.reason ? { reason: parsed.reason } : {},
           ...typeof parsed.matchCount === "number" ? { matchCount: parsed.matchCount } : {},
-          ...parsed.code ? { code: parsed.code } : {}
+          ...parsed.code ? { code: parsed.code } : {},
+          ...parsed.coverage && typeof parsed.coverage === "object" && !Array.isArray(parsed.coverage) ? { coverage: parsed.coverage } : {}
         };
       } catch {
         return {

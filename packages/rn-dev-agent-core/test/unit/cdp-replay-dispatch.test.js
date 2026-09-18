@@ -6,6 +6,7 @@ import {
   runCdpReplayCommands,
   unwrapTree,
 } from '../../dist/tools/cdp-replay-dispatch.js';
+import { ReplayDispatchError } from '../../dist/domain/cdp-flow-replay.js';
 
 // Contract: the REAL __RN_AGENT.getTree() payload wraps the node under `.tree`
 // (single match) or `.tree.matches[]` (multi match).
@@ -394,6 +395,57 @@ test('React replay refuses oracle renderer-coverage gaps distinctly from absence
   assert.equal(replay.passed, false);
   assert.equal(replay.failureCode, 'ASSERTION_FAILED');
   assert.match(replay.reason ?? '', /cannot cover every mounted renderer/);
+});
+
+const COVERAGE = {
+  reasons: ['renderer-error'],
+  registeredRendererIds: [1, 2],
+  erroredRendererIds: [3],
+  unscannedRendererIds: [],
+  rendererErrors: 1,
+  extraRootsError: false,
+  scanFinished: true,
+};
+
+function coverageDispatch(frontmost) {
+  return buildCdpDispatch({
+    pressByTestId: async () => {},
+    typeByTestId: async () => {},
+    treeFor: async () => ({ tree: { testID: 'otp', children: [] } }),
+    frontmostFor: async () => frontmost,
+    launchApp: async () => {},
+    settle: async () => {},
+  });
+}
+
+test('visibility and interactable assertion disclose oracle coverage meta', async () => {
+  const frontmost = {
+    visible: false,
+    code: 'ASSERTION_FAILED',
+    reason: 'frontmost proof cannot cover every mounted renderer',
+    coverage: COVERAGE,
+  };
+  const dispatch = coverageDispatch(frontmost);
+  const verdict = await dispatch.visibility('otp');
+  assert.deepEqual(verdict.meta?.coverage, COVERAGE);
+  await assert.rejects(dispatch.press('otp'), (error) => {
+    assert.ok(error instanceof ReplayDispatchError);
+    assert.deepEqual(error.meta?.coverage, COVERAGE);
+    return true;
+  });
+});
+
+test('visibility without coverage keeps today shape', async () => {
+  const verdict = await coverageDispatch({
+    visible: false,
+    code: 'ASSERTION_FAILED',
+    reason: 'frontmost proof cannot cover every mounted renderer',
+  }).visibility('otp');
+  assert.deepEqual(verdict, {
+    visible: false,
+    code: 'ASSERTION_FAILED',
+    reason: 'frontmost proof cannot cover every mounted renderer',
+  });
 });
 
 test('React replay propagates APP_HAS_REDBOX instead of reporting a missing testID', async () => {

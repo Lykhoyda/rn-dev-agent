@@ -83,6 +83,7 @@ export interface CdpReplayDeps {
     reason?: string;
     matchCount?: number;
     code?: string;
+    coverage?: Record<string, unknown>;
   }>;
   launchApp(stopApp: boolean): Promise<void>;
   settle(timeoutMs: number): Promise<void>;
@@ -242,6 +243,7 @@ export function buildCdpDispatch(deps: CdpReplayDeps, signal?: AbortSignal): Rep
       throw new ReplayDispatchError(
         frontmost.code ?? 'ASSERTION_FAILED',
         frontmost.reason ?? `testID "${id}" is mounted but not frontmost`,
+        frontmost.coverage ? { coverage: frontmost.coverage } : undefined,
       );
     if (frontmost.disabled === true || hasDisabledExactMatch(tree, id))
       throw new ReplayDispatchError(
@@ -292,6 +294,7 @@ export function buildCdpDispatch(deps: CdpReplayDeps, signal?: AbortSignal): Rep
           visible: false,
           code: frontmost.code ?? 'ASSERTION_FAILED',
           reason: frontmost.reason ?? `testID "${id}" is mounted but not frontmost`,
+          ...(frontmost.coverage ? { meta: { coverage: frontmost.coverage } } : {}),
         };
       return { visible: true };
     },
