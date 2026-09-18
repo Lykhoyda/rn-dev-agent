@@ -32234,7 +32234,7 @@ async function awaitReactInputValue(readInput, expected, signal) {
       break;
     const read = await readInput();
     if (read?.controlled && read.value === expected) {
-      await reactInputPollSleep(150);
+      await new Promise((resolve22) => setTimeout(resolve22, 150));
       if (signal?.aborted)
         break;
       const confirm = await readInput();
@@ -32249,12 +32249,12 @@ async function awaitReactInputValue(readInput, expected, signal) {
       last = null;
     }
     if (attempt < 5)
-      await reactInputPollSleep(100);
+      await new Promise((resolve22) => setTimeout(resolve22, 100));
   }
   if (verification !== "exact" && last?.controlled === true && previous?.controlled === true && last.value !== null && last.value === previous.value) {
     verification = "mismatch";
   }
-  return { verification, last };
+  return verification;
 }
 function focusedFillOracleTestId(args) {
   if (args.testID)
@@ -32312,15 +32312,15 @@ async function performFocusedFill(args, client2) {
   }, "Typed into the focused field; the value could not be confirmed. Confirm with device_screenshot or expect_text before relying on it.");
   if (before === null)
     return unverified();
-  const outcome = await awaitReactInputValue(() => readReactInputValue(client2, oracleTestId), before + args.text);
-  if (outcome.verification === "exact") {
+  const verification = await awaitReactInputValue(() => readReactInputValue(client2, oracleTestId), before + args.text);
+  if (verification === "exact") {
     return verifiedFillResult("native", args.text.length, {
       textEntryPath: "focused-synthesized",
       verifiedOracle: "react-tree",
       textEntryRoute
     });
   }
-  if (outcome.verification === "mismatch") {
+  if (verification === "mismatch") {
     return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill typed into the focused field but its React value differs; not retrying.", { mutation: "observed", pathsTried });
   }
   return unverified();
@@ -32409,7 +32409,7 @@ async function performReactTreeInput(testID, text, client2, signal, options = {}
     });
   }
   const expected = dispatch.resultingText;
-  const { verification } = await awaitReactInputValue(readInput, expected, signal);
+  const verification = await awaitReactInputValue(readInput, expected, signal);
   if (verification !== "exact") {
     return fillFailure("TEXT_ENTRY_UNVERIFIED", `React-tree input "${testID}" dispatched onChangeText but exact fiber read-back was ${verification}.`, { mutation: "possible", pathsTried });
   }
@@ -32811,7 +32811,7 @@ function decideScrollDirection(element, screen) {
     return "right";
   return null;
 }
-var execFile11, IME_PROBE_TIMEOUT_MS, TYPE_PRIORITY_FOR_TAP, IOS_INPUT_TYPES, ANDROID_INPUT_TYPE_RE, PRESSABLE_SUFFIX, NATIVE_VERIFY_VERDICTS, reactInputPollSleep, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS, _imePackageResolverForTest;
+var execFile11, IME_PROBE_TIMEOUT_MS, TYPE_PRIORITY_FOR_TAP, IOS_INPUT_TYPES, ANDROID_INPUT_TYPE_RE, PRESSABLE_SUFFIX, NATIVE_VERIFY_VERDICTS, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS, _imePackageResolverForTest;
 var init_device_interact = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
     "use strict";
@@ -32850,7 +32850,6 @@ var init_device_interact = __esm({
       "target-lost",
       "ambiguous"
     ]);
-    reactInputPollSleep = (ms) => new Promise((resolve22) => setTimeout(resolve22, ms));
     DEFAULT_SCREEN = { width: 402, height: 874 };
     SWIPE_FRACTION = 0.4;
     DEFAULT_SWIPE_DURATION_MS = 300;

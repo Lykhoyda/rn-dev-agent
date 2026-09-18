@@ -7,7 +7,6 @@ import assert from 'node:assert/strict';
 const { _setActiveSessionForTest, _setRunAgentDeviceForTest, markSnapshotDirty } =
   await import('../../dist/agent-device-wrapper.js');
 const {
-  _setReactInputPollSleepForTest,
   createDeviceFillHandler,
   performExactFill,
   performFocusedFill,
@@ -45,7 +44,6 @@ async function withFocusedSeam<T>(
   markSnapshotDirty();
   updateRefMapFromFlat(WRAPPER_ONLY as never, { snapshotGeneration: 7, keyboardVisible: true });
   const calls: Call[] = [];
-  _setReactInputPollSleepForTest(async () => {});
   _setRunAgentDeviceForTest(async (cliArgs: string[], opts: Record<string, unknown>) => {
     const call = { cliArgs, opts };
     calls.push(call);
@@ -68,7 +66,6 @@ async function withFocusedSeam<T>(
     return { result, calls };
   } finally {
     _setRunAgentDeviceForTest(null);
-    _setReactInputPollSleepForTest(null);
     _setActiveSessionForTest(null);
     clearRefMap();
   }
