@@ -1,5 +1,4 @@
-// MIT License. Source repository: https://github.com/callstack/agent-device
-// Pin: 849ad7d70de08abcbc7b4e371f197928ae0e2d81.
+// MIT License. Copyright (c) 2026 Callstack. See the LICENSE file at the root of this runner package.
 #import "RunnerSynthesizedTextEntry.h"
 #import "RunnerXCTestEventBridge.h"
 

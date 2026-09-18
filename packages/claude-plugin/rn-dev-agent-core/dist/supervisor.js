@@ -32122,7 +32122,7 @@ async function performExactFill(args, _client, tiers) {
   }
   const bind = bindExactFillTarget(snap.nodes, args.ref, priorSignature);
   if (!bind.ok) {
-    const focusedHint = bind.detail.startsWith('wrapper "') || bind.detail.includes("is not a recognized text input") ? " If you already tapped this field and the software keyboard is up, retry with focused: true." : "";
+    const focusedHint = getActiveSession()?.platform !== "android" && (bind.detail.startsWith('wrapper "') || bind.detail.includes("is not a recognized text input")) ? " If you already tapped this field and the software keyboard is up, retry with focused: true." : "";
     return fillFailure("NO_TEXT_INPUT_TARGET", `device_fill could not bind an exact input: ${bind.detail}. No text was entered.${focusedHint}`, { mutation: "none", pathsTried });
   }
   const binding = bind.binding;
@@ -32220,10 +32220,40 @@ async function readReactInputValue(client2, testID) {
     const parsed = JSON.parse(result.value);
     if (parsed.__agent_error)
       return null;
-    return { value: parsed.value ?? null, controlled: parsed.controlled === true };
+    return {
+      value: parsed.value ?? null,
+      controlled: parsed.controlled === true,
+      focused: parsed.focused === true
+    };
   } catch {
     return null;
   }
+}
+async function awaitReactInputValue(readInput, expected, signal) {
+  let previous = null;
+  let last = null;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (signal?.aborted)
+      break;
+    const read = await readInput();
+    if (read?.controlled && read.value === expected) {
+      await new Promise((resolve22) => setTimeout(resolve22, 150));
+      if (signal?.aborted)
+        return "unreadable";
+      const confirm = await readInput();
+      return confirm?.controlled === true && confirm.value === expected ? "exact" : "unreadable";
+    }
+    if (read) {
+      previous = last;
+      last = read;
+    } else {
+      previous = null;
+      last = null;
+    }
+    if (attempt < 5)
+      await new Promise((resolve22) => setTimeout(resolve22, 100));
+  }
+  return last?.controlled === true && previous?.controlled === true && last.value !== null && last.value === previous.value ? "mismatch" : "unreadable";
 }
 function focusedFillOracleTestId(args) {
   if (args.testID)
@@ -32252,7 +32282,8 @@ async function performFocusedFill(args, client2) {
     return fillFailure("NO_TEXT_INPUT_TARGET", "device_fill focused: true is iOS-only in this version; no text was entered.", { mutation: "none", pathsTried });
   }
   const oracleTestId = focusedFillOracleTestId(args);
-  const before = controlledReactValue(await readReactInputValue(client2, oracleTestId));
+  const beforeRead = await readReactInputValue(client2, oracleTestId);
+  const before = controlledReactValue(beforeRead);
   const native = await runNative(["fill", args.ref, args.text], {
     focusedType: true,
     settle: { enabled: false }
@@ -32262,7 +32293,10 @@ async function performFocusedFill(args, client2) {
     if (mutation === "none") {
       return fillFailure("NO_TEXT_INPUT_TARGET", extractErrorText(native), {
         mutation: "none",
-        pathsTried
+        pathsTried,
+        ...extractErrorCode(native) === "TEXT_SYNTHESIS_UNAVAILABLE" ? {
+          hint: "No text was entered. This Xcode cannot synthesize text, so device_fill focused: true cannot type here. Do not retry focused: true."
+        } : {}
       });
     }
     return fillFailure("TEXT_ENTRY_UNVERIFIED", extractErrorText(native), {
@@ -32271,25 +32305,28 @@ async function performFocusedFill(args, client2) {
     });
   }
   const textEntryRoute = extractTextEntryRoute(native);
-  const after = controlledReactValue(await readReactInputValue(client2, oracleTestId));
-  if (after !== null && after === (before ?? "") + args.text) {
-    return verifiedFillResult("native", args.text.length, {
-      textEntryPath: "focused-synthesized",
-      verifiedOracle: "react-tree",
-      textEntryRoute
-    });
-  }
-  if (after !== null) {
-    return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill typed into the focused field but its React value differs; not retrying.", { mutation: "observed", pathsTried });
-  }
-  return warnResult({
+  const unverified = () => warnResult({
     typed: true,
     chars: args.text.length,
     verified: false,
     verifiedOracle: "none",
     textEntryPath: "focused-synthesized",
     textEntryRoute
-  }, "Typed into the focused field; no read-back oracle was available. Confirm with device_screenshot or expect_text before relying on it.");
+  }, "Typed into the focused field; the value could not be confirmed. Confirm with device_screenshot or expect_text before relying on it.");
+  if (before === null || beforeRead?.focused !== true)
+    return unverified();
+  const verification = await awaitReactInputValue(() => readReactInputValue(client2, oracleTestId), before + args.text);
+  if (verification === "exact") {
+    return verifiedFillResult("native", args.text.length, {
+      textEntryPath: "focused-synthesized",
+      verifiedOracle: "react-tree",
+      textEntryRoute
+    });
+  }
+  if (verification === "mismatch") {
+    return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill typed into the focused field but its React value differs; not retrying.", { mutation: "observed", pathsTried });
+  }
+  return unverified();
 }
 async function performReactTreeInput(testID, text, client2, signal, options = {}) {
   const pathsTried = ["react-tree"];
@@ -32375,34 +32412,7 @@ async function performReactTreeInput(testID, text, client2, signal, options = {}
     });
   }
   const expected = dispatch.resultingText;
-  let verification = "unreadable";
-  let previous = null;
-  let last = null;
-  for (let attempt = 0; attempt < 6; attempt++) {
-    if (signal?.aborted)
-      break;
-    const read = await readInput();
-    if (read?.controlled && read.value === expected) {
-      await new Promise((resolve22) => setTimeout(resolve22, 150));
-      if (signal?.aborted)
-        break;
-      const confirm = await readInput();
-      verification = confirm?.controlled === true && confirm.value === expected ? "exact" : "unreadable";
-      break;
-    }
-    if (read) {
-      previous = last;
-      last = read;
-    } else {
-      previous = null;
-      last = null;
-    }
-    if (attempt < 5)
-      await new Promise((resolve22) => setTimeout(resolve22, 100));
-  }
-  if (verification !== "exact" && last?.controlled === true && previous?.controlled === true && last.value !== null && last.value === previous.value) {
-    verification = "mismatch";
-  }
+  const verification = await awaitReactInputValue(readInput, expected, signal);
   if (verification !== "exact") {
     return fillFailure("TEXT_ENTRY_UNVERIFIED", `React-tree input "${testID}" dispatched onChangeText but exact fiber read-back was ${verification}.`, { mutation: "possible", pathsTried });
   }
@@ -64564,7 +64574,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 71;
+    HELPERS_VERSION = 72;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -68162,14 +68172,30 @@ var init_injected_helpers = __esm({
     }, 100000);
   }
 
+  function hostIsFocused(fiber) {
+    try {
+      var sn = fiber && fiber.stateNode;
+      if (!sn) return false;
+      if (typeof sn.isFocused !== 'function' && sn.canonical && sn.canonical.publicInstance) {
+        sn = sn.canonical.publicInstance;
+      }
+      return typeof sn.isFocused === 'function' && sn.isFocused() === true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function readInputValue(testID) {
     if (!testID) return JSON.stringify({ __agent_error: 'testID is required' });
     var resolution = resolveTypeTextTarget({ testID: testID }, READ_INPUT_WORK_LIMIT);
     if (resolution.error) return JSON.stringify({ __agent_error: resolution.error });
-    if (!resolution.binding) return JSON.stringify({ value: null, controlled: false });
+    if (!resolution.binding) return JSON.stringify({ value: null, controlled: false, focused: false });
     var props = resolution.binding.candidateFiber.memoizedProps || {};
-    if (typeof props.value === 'string') return JSON.stringify({ value: props.value, controlled: true });
-    return JSON.stringify({ value: null, controlled: false });
+    var focused = hostIsFocused(resolution.binding.candidateFiber);
+    if (typeof props.value === 'string') {
+      return JSON.stringify({ value: props.value, controlled: true, focused: focused });
+    }
+    return JSON.stringify({ value: null, controlled: false, focused: focused });
   }
 
   // Task 8 \u2014 bounded fiber.return ancestor walk producing the bundle's
@@ -100445,12 +100471,12 @@ var init_index = __esm({
       settleTimeoutMs: external_exports.number().int().min(500).max(3e4).optional().describe("Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only \u2014 RN_SETTLE=0 disables settle."),
       retryIfNoChange: external_exports.boolean().optional().describe("Deprecated compatibility option. Interactions are never automatically replayed after a possible dispatch; uncertainty is reported from the first attempt.")
     }, createDevicePressHandler(getClient));
-    trackedTool("device_fill", 'Type text into an input field by its @ref or testID from device_snapshot, binding exactly one direct native TextInput or one `${name}-pressable` wrapper uniquely mapped to its inner `${name}` input before mutation. Exact raw control can operate without a managed Metro target and always labels meta.originAuthority as proven or not-proven. The tool skips the focus tap only when that exact input is already focused and returns filled:true ONLY after a stable exact native post-settle read-back (meta.verify is always "exact" on success). One operation token owns one native mutation and its read-back; mismatch or uncertainty refuses without resend, rebinding, React Fiber evidence, or Maestro. Unverifiable outcomes hard-fail: NO_TEXT_INPUT_TARGET means nothing was typed (rebind after a fresh snapshot); TEXT_ENTRY_UNVERIFIED means an attempt ran but the exact value could not be proven \u2014 check meta.mutation: "none" = safe to retry after a fresh snapshot; "observed" = the field holds a wrong value, take a fresh snapshot and re-read before a corrective fill; "possible" = do NOT retry the same ref \u2014 take a fresh device_snapshot, rebind the input by identity, and read its state first (a blind retry can double-type). Secure masked native values are never proof; empty text is a verified clear. With focused: true it appends the text to the already focused field and verifies through the React tree when the testID is known. Requires an open session.', {
+    trackedTool("device_fill", 'Type text into an input field by its @ref or testID from device_snapshot, binding exactly one direct native TextInput or one `${name}-pressable` wrapper uniquely mapped to its inner `${name}` input before mutation. Exact raw control can operate without a managed Metro target and always labels meta.originAuthority as proven or not-proven. The tool skips the focus tap only when that exact input is already focused and returns filled:true ONLY after a stable exact native post-settle read-back (meta.verify is always "exact" on success). One operation token owns one native mutation and its read-back; mismatch or uncertainty refuses without resend, rebinding, React Fiber evidence, or Maestro. Unverifiable outcomes hard-fail: NO_TEXT_INPUT_TARGET means nothing was typed (rebind after a fresh snapshot); TEXT_ENTRY_UNVERIFIED means an attempt ran but the exact value could not be proven \u2014 check meta.mutation: "none" = safe to retry after a fresh snapshot; "observed" = the field holds a wrong value, take a fresh snapshot and re-read before a corrective fill; "possible" = do NOT retry the same ref \u2014 take a fresh device_snapshot, rebind the input by identity, and read its state first (a blind retry can double-type). Secure masked native values are never proof; empty text is a verified clear. With focused: true it appends the text to the already focused field and confirms the value through the React tree when it can; otherwise it returns typed: true with verified: false. Requires an open session.', {
       ref: external_exports.string().describe('Input ref from device_snapshot (for example "@e5"), or a testID'),
       text: external_exports.string().describe("Text to type into the field (empty string = verified clear)"),
       waitForKeyboardMs: external_exports.number().int().min(0).max(5e3).optional().describe("Bounded wait for the exact input to gain focus after the in-operation focus tap (default 1500). Bump to 3000-5000ms for slow keyboard animations on Pressable-wrapped TextInputs."),
       testID: external_exports.string().optional().describe("Explicit exact target identity. Otherwise device_fill uses the fresh snapshot ref's nonblank testID."),
-      focused: external_exports.boolean().optional().describe('Type into the field that already has keyboard focus (software keyboard must be up) instead of binding an input. For Pressable-wrapped inputs whose inner TextInput is not in the snapshot. iOS only. Typing appends to whatever the focused field already holds. The read-back needs a testID-form ref or an explicit testID; a positional ref such as "@e5" alone types but returns an unverified warning.'),
+      focused: external_exports.boolean().optional().describe("Type into the field that already has keyboard focus (software keyboard must be up) instead of binding an input. For Pressable-wrapped inputs whose inner TextInput is not in the snapshot. iOS only. Typing appends to whatever the focused field already holds. The React read-back is best-effort: it needs a testID-form ref or an explicit testID, a connected app, and a controlled input that was readable before typing. `typed: true` with `verified: false` means the text was typed but not confirmed; confirm it with device_screenshot or expect_text."),
       settleTimeoutMs: external_exports.number().int().min(500).max(3e4).optional().describe("Deprecated compatibility option. Exact owner-local read-back supplies the bounded stability check.")
     }, createDeviceFillHandler(getClient));
     trackedTool("device_swipe", "Swipe on the device screen. Use direction for simple scrolling, or x1/y1/x2/y2 for precise coordinate-based swipes (drag-to-reorder, bottom sheets). Pass exact: true for a precise unclamped gesture duration via the in-tree runner \u2014 needed for momentum-sensitive UIs like UIDatePicker wheels where a normalized/clamped duration causes overshoot. Requires an open session.", {

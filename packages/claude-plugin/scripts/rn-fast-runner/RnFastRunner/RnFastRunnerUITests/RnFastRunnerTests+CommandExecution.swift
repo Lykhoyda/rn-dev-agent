@@ -56,15 +56,31 @@ extension RnFastRunnerTests {
         synthesis = RunnerSynthesizedTextEntry.synthesizeText(withApplication: app, text: text)
       }
       let result = synthesis!
-      let route: String
-      switch result.status {
-      case .succeeded:
-        route = "synthesized-first-responder"
-      case .unavailable:
-        withTemporaryScrollIdleTimeoutIfSupported(app) {
-          app.typeText(text)
-        }
-        route = "xctest-application-fallback"
+      switch TypingRecipe.focusedTypeOutcome(
+        succeeded: result.status == .succeeded,
+        unavailable: result.status == .unavailable
+      ) {
+      case .typed(let route):
+        return Response(
+          ok: true,
+          data: DataPayload(
+            message: "typed",
+            typingBurst: false,
+            keyboardWaitMs: 0,
+            inputResolution: "focused-first-responder",
+            focusTap: "none",
+            textEntryRoute: route
+          )
+        )
+      case .refuseUnavailable:
+        return Response(
+          ok: false,
+          error: ErrorPayload(
+            code: "TEXT_SYNTHESIS_UNAVAILABLE",
+            message: (result.message ?? "text synthesis is unavailable on this Xcode") + "; no typing was performed.",
+            mutation: "none"
+          )
+        )
       case .failed:
         return Response(
           ok: false,
@@ -74,27 +90,7 @@ extension RnFastRunnerTests {
             mutation: "possible"
           )
         )
-      @unknown default:
-        return Response(
-          ok: false,
-          error: ErrorPayload(
-            code: "TEXT_SYNTHESIS_FAILED",
-            message: result.message ?? "private XCTest text synthesis failed",
-            mutation: "possible"
-          )
-        )
       }
-      return Response(
-        ok: true,
-        data: DataPayload(
-          message: "typed",
-          typingBurst: false,
-          keyboardWaitMs: 0,
-          inputResolution: "focused-first-responder",
-          focusTap: "none",
-          textEntryRoute: route
-        )
-      )
     }
   }
 

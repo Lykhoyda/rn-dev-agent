@@ -1155,7 +1155,9 @@ export async function performExactFill(
   const bind = bindExactFillTarget(snap.nodes, args.ref, priorSignature);
   if (!bind.ok) {
     const focusedHint =
-      bind.detail.startsWith('wrapper "') || bind.detail.includes('is not a recognized text input')
+      getActiveSession()?.platform !== 'android' &&
+      (bind.detail.startsWith('wrapper "') ||
+        bind.detail.includes('is not a recognized text input'))
         ? ' If you already tapped this field and the software keyboard is up, retry with focused: true.'
         : '';
     return fillFailure(
@@ -1287,7 +1289,7 @@ export async function performExactFill(
 async function readReactInputValue(
   client: CDPClient | null,
   testID: string | null | undefined,
-): Promise<{ value: string | null; controlled: boolean } | null> {
+): Promise<{ value: string | null; controlled: boolean; focused: boolean } | null> {
   if (!client || !testID) return null;
   try {
     const result = await client.evaluate(
@@ -1297,13 +1299,53 @@ async function readReactInputValue(
     const parsed: {
       value?: string | null;
       controlled?: boolean;
+      focused?: boolean;
       __agent_error?: string;
     } = JSON.parse(result.value);
     if (parsed.__agent_error) return null;
-    return { value: parsed.value ?? null, controlled: parsed.controlled === true };
+    return {
+      value: parsed.value ?? null,
+      controlled: parsed.controlled === true,
+      focused: parsed.focused === true,
+    };
   } catch {
     return null;
   }
+}
+
+type ReactValueVerification = 'exact' | 'mismatch' | 'unreadable';
+
+async function awaitReactInputValue(
+  readInput: () => Promise<{ value: string | null; controlled: boolean } | null>,
+  expected: string,
+  signal?: AbortSignal,
+): Promise<ReactValueVerification> {
+  let previous: { value: string | null; controlled: boolean } | null = null;
+  let last: { value: string | null; controlled: boolean } | null = null;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (signal?.aborted) break;
+    const read = await readInput();
+    if (read?.controlled && read.value === expected) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 150));
+      if (signal?.aborted) return 'unreadable';
+      const confirm = await readInput();
+      return confirm?.controlled === true && confirm.value === expected ? 'exact' : 'unreadable';
+    }
+    if (read) {
+      previous = last;
+      last = read;
+    } else {
+      previous = null;
+      last = null;
+    }
+    if (attempt < 5) await new Promise<void>((resolve) => setTimeout(resolve, 100));
+  }
+  return last?.controlled === true &&
+    previous?.controlled === true &&
+    last.value !== null &&
+    last.value === previous.value
+    ? 'mismatch'
+    : 'unreadable';
 }
 
 function focusedFillOracleTestId(args: FillArgs): string | null {
@@ -1346,7 +1388,8 @@ export async function performFocusedFill(
     );
   }
   const oracleTestId = focusedFillOracleTestId(args);
-  const before = controlledReactValue(await readReactInputValue(client, oracleTestId));
+  const beforeRead = await readReactInputValue(client, oracleTestId);
+  const before = controlledReactValue(beforeRead);
   const native = await runNative(['fill', args.ref, args.text], {
     focusedType: true,
     settle: { enabled: false },
@@ -1357,6 +1400,11 @@ export async function performFocusedFill(
       return fillFailure('NO_TEXT_INPUT_TARGET', extractErrorText(native), {
         mutation: 'none',
         pathsTried,
+        ...(extractErrorCode(native) === 'TEXT_SYNTHESIS_UNAVAILABLE'
+          ? {
+              hint: 'No text was entered. This Xcode cannot synthesize text, so device_fill focused: true cannot type here. Do not retry focused: true.',
+            }
+          : {}),
       });
     }
     return fillFailure('TEXT_ENTRY_UNVERIFIED', extractErrorText(native), {
@@ -1365,32 +1413,38 @@ export async function performFocusedFill(
     });
   }
   const textEntryRoute = extractTextEntryRoute(native);
-  const after = controlledReactValue(await readReactInputValue(client, oracleTestId));
-  if (after !== null && after === (before ?? '') + args.text) {
+  const unverified = () =>
+    warnResult(
+      {
+        typed: true,
+        chars: args.text.length,
+        verified: false,
+        verifiedOracle: 'none',
+        textEntryPath: 'focused-synthesized',
+        textEntryRoute,
+      },
+      'Typed into the focused field; the value could not be confirmed. Confirm with device_screenshot or expect_text before relying on it.',
+    );
+  if (before === null || beforeRead?.focused !== true) return unverified();
+  const verification = await awaitReactInputValue(
+    () => readReactInputValue(client, oracleTestId),
+    before + args.text,
+  );
+  if (verification === 'exact') {
     return verifiedFillResult('native', args.text.length, {
       textEntryPath: 'focused-synthesized',
       verifiedOracle: 'react-tree',
       textEntryRoute,
     });
   }
-  if (after !== null) {
+  if (verification === 'mismatch') {
     return fillFailure(
       'TEXT_ENTRY_UNVERIFIED',
       'device_fill typed into the focused field but its React value differs; not retrying.',
       { mutation: 'observed', pathsTried },
     );
   }
-  return warnResult(
-    {
-      typed: true,
-      chars: args.text.length,
-      verified: false,
-      verifiedOracle: 'none',
-      textEntryPath: 'focused-synthesized',
-      textEntryRoute,
-    },
-    'Typed into the focused field; no read-back oracle was available. Confirm with device_screenshot or expect_text before relying on it.',
-  );
+  return unverified();
 }
 
 export async function performReactTreeInput(
@@ -1535,38 +1589,7 @@ export async function performReactTreeInput(
     });
   }
   const expected = dispatch.resultingText;
-  let verification: 'exact' | 'mismatch' | 'unreadable' = 'unreadable';
-  let previous: { value: string | null; controlled: boolean } | null = null;
-  let last: { value: string | null; controlled: boolean } | null = null;
-  for (let attempt = 0; attempt < 6; attempt++) {
-    if (signal?.aborted) break;
-    const read = await readInput();
-    if (read?.controlled && read.value === expected) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 150));
-      if (signal?.aborted) break;
-      const confirm = await readInput();
-      verification =
-        confirm?.controlled === true && confirm.value === expected ? 'exact' : 'unreadable';
-      break;
-    }
-    if (read) {
-      previous = last;
-      last = read;
-    } else {
-      previous = null;
-      last = null;
-    }
-    if (attempt < 5) await new Promise<void>((resolve) => setTimeout(resolve, 100));
-  }
-  if (
-    verification !== 'exact' &&
-    last?.controlled === true &&
-    previous?.controlled === true &&
-    last.value !== null &&
-    last.value === previous.value
-  ) {
-    verification = 'mismatch';
-  }
+  const verification = await awaitReactInputValue(readInput, expected, signal);
   if (verification !== 'exact') {
     return fillFailure(
       'TEXT_ENTRY_UNVERIFIED',
