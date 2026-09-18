@@ -72,7 +72,9 @@ function envelope(result: { content: Array<{ text: string }> }): Record<string, 
   return JSON.parse(result.content[0].text);
 }
 
-function fakeClient(values: Array<{ value?: string | null; controlled?: boolean } | null>) {
+function fakeClient(
+  values: Array<{ value?: string | null; controlled?: boolean; focused?: boolean } | null>,
+) {
   let reads = 0;
   return {
     isConnected: true,
@@ -82,7 +84,11 @@ function fakeClient(values: Array<{ value?: string | null; controlled?: boolean 
       reads += 1;
       if (!read) return { error: 'unreadable' };
       return {
-        value: JSON.stringify({ value: read.value ?? null, controlled: read.controlled ?? true }),
+        value: JSON.stringify({
+          value: read.value ?? null,
+          controlled: read.controlled ?? true,
+          focused: read.focused === true,
+        }),
       };
     },
   } as never;
@@ -90,8 +96,8 @@ function fakeClient(values: Array<{ value?: string | null; controlled?: boolean 
 
 test('focused fill: wrapper ref derives the base testID and matching read-back verifies', async () => {
   const client = fakeClient([
-    { value: '', controlled: true },
-    { value: 'qa.user@example.com', controlled: true },
+    { value: '', controlled: true, focused: true },
+    { value: 'qa.user@example.com', controlled: true, focused: true },
   ]);
   const { result, calls } = await withFocusedSeam({}, () =>
     performFocusedFill(
@@ -114,8 +120,8 @@ test('focused fill: wrapper ref derives the base testID and matching read-back v
 
 test('focused fill: React mismatch returns TEXT_ENTRY_UNVERIFIED with observed mutation', async () => {
   const client = fakeClient([
-    { value: '', controlled: true },
-    { value: 'other@example.com', controlled: true },
+    { value: '', controlled: true, focused: true },
+    { value: 'other@example.com', controlled: true, focused: true },
   ]);
   const { result, calls } = await withFocusedSeam({}, () =>
     performFocusedFill(
@@ -201,6 +207,26 @@ test('default fill: wrapper-bind refusal names focused: true and keeps NO_TEXT_I
   assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'));
 });
 
+test('focused fill: matching unfocused named field stays typed but unverified', async () => {
+  const client = fakeClient([
+    { value: '', controlled: true, focused: false },
+    { value: 'qa.user@example.com', controlled: true, focused: false },
+  ]);
+  const { result, calls } = await withFocusedSeam({}, () =>
+    performFocusedFill(
+      { ref: 'EmailOtpFormContent_email-pressable', text: 'qa.user@example.com' },
+      client,
+    ),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.ok, true);
+  assert.equal(env.data.typed, true);
+  assert.equal(env.data.verified, false);
+  assert.equal(env.data.filled, undefined);
+  assert.ok(!JSON.stringify(env).includes('"filled":true'));
+  assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 1);
+});
+
 test('focused fill: missing pre-read does not verify even when post-read equals the text', async () => {
   const client = fakeClient([null, { value: 'qa.user@example.com', controlled: true }]);
   const { result } = await withFocusedSeam({}, () =>
@@ -219,10 +245,10 @@ test('focused fill: missing pre-read does not verify even when post-read equals 
 
 test('focused fill: stale then exact React read-back verifies', async () => {
   const client = fakeClient([
-    { value: '', controlled: true },
-    { value: '', controlled: true },
-    { value: '', controlled: true },
-    { value: 'qa.user@example.com', controlled: true },
+    { value: '', controlled: true, focused: true },
+    { value: '', controlled: true, focused: true },
+    { value: '', controlled: true, focused: true },
+    { value: 'qa.user@example.com', controlled: true, focused: true },
   ]);
   const { result } = await withFocusedSeam({}, () =>
     performFocusedFill(
@@ -239,10 +265,10 @@ test('focused fill: stale then exact React read-back verifies', async () => {
 
 test('focused fill: exact read followed by a failed confirm is typed but unverified, not a mismatch', async () => {
   const client = fakeClient([
-    { value: '', controlled: true },
-    { value: '', controlled: true },
-    { value: '', controlled: true },
-    { value: 'qa.user@example.com', controlled: true },
+    { value: '', controlled: true, focused: true },
+    { value: '', controlled: true, focused: true },
+    { value: '', controlled: true, focused: true },
+    { value: 'qa.user@example.com', controlled: true, focused: true },
     null,
   ]);
   const { result } = await withFocusedSeam({}, () =>

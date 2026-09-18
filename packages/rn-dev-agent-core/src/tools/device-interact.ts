@@ -1289,7 +1289,7 @@ export async function performExactFill(
 async function readReactInputValue(
   client: CDPClient | null,
   testID: string | null | undefined,
-): Promise<{ value: string | null; controlled: boolean } | null> {
+): Promise<{ value: string | null; controlled: boolean; focused: boolean } | null> {
   if (!client || !testID) return null;
   try {
     const result = await client.evaluate(
@@ -1299,10 +1299,15 @@ async function readReactInputValue(
     const parsed: {
       value?: string | null;
       controlled?: boolean;
+      focused?: boolean;
       __agent_error?: string;
     } = JSON.parse(result.value);
     if (parsed.__agent_error) return null;
-    return { value: parsed.value ?? null, controlled: parsed.controlled === true };
+    return {
+      value: parsed.value ?? null,
+      controlled: parsed.controlled === true,
+      focused: parsed.focused === true,
+    };
   } catch {
     return null;
   }
@@ -1383,7 +1388,8 @@ export async function performFocusedFill(
     );
   }
   const oracleTestId = focusedFillOracleTestId(args);
-  const before = controlledReactValue(await readReactInputValue(client, oracleTestId));
+  const beforeRead = await readReactInputValue(client, oracleTestId);
+  const before = controlledReactValue(beforeRead);
   const native = await runNative(['fill', args.ref, args.text], {
     focusedType: true,
     settle: { enabled: false },
@@ -1419,7 +1425,7 @@ export async function performFocusedFill(
       },
       'Typed into the focused field; the value could not be confirmed. Confirm with device_screenshot or expect_text before relying on it.',
     );
-  if (before === null) return unverified();
+  if (before === null || beforeRead?.focused !== true) return unverified();
   const verification = await awaitReactInputValue(
     () => readReactInputValue(client, oracleTestId),
     before + args.text,

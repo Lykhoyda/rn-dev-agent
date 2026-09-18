@@ -30578,7 +30578,11 @@ async function readReactInputValue(client2, testID) {
     const parsed = JSON.parse(result.value);
     if (parsed.__agent_error)
       return null;
-    return { value: parsed.value ?? null, controlled: parsed.controlled === true };
+    return {
+      value: parsed.value ?? null,
+      controlled: parsed.controlled === true,
+      focused: parsed.focused === true
+    };
   } catch {
     return null;
   }
@@ -30636,7 +30640,8 @@ async function performFocusedFill(args, client2) {
     return fillFailure("NO_TEXT_INPUT_TARGET", "device_fill focused: true is iOS-only in this version; no text was entered.", { mutation: "none", pathsTried });
   }
   const oracleTestId = focusedFillOracleTestId(args);
-  const before = controlledReactValue(await readReactInputValue(client2, oracleTestId));
+  const beforeRead = await readReactInputValue(client2, oracleTestId);
+  const before = controlledReactValue(beforeRead);
   const native = await runNative(["fill", args.ref, args.text], {
     focusedType: true,
     settle: { enabled: false }
@@ -30666,7 +30671,7 @@ async function performFocusedFill(args, client2) {
     textEntryPath: "focused-synthesized",
     textEntryRoute
   }, "Typed into the focused field; the value could not be confirmed. Confirm with device_screenshot or expect_text before relying on it.");
-  if (before === null)
+  if (before === null || beforeRead?.focused !== true)
     return unverified();
   const verification = await awaitReactInputValue(() => readReactInputValue(client2, oracleTestId), before + args.text);
   if (verification === "exact") {
@@ -51738,7 +51743,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 71;
+var HELPERS_VERSION = 72;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -55336,14 +55341,30 @@ var INJECTED_HELPERS = `
     }, 100000);
   }
 
+  function hostIsFocused(fiber) {
+    try {
+      var sn = fiber && fiber.stateNode;
+      if (!sn) return false;
+      if (typeof sn.isFocused !== 'function' && sn.canonical && sn.canonical.publicInstance) {
+        sn = sn.canonical.publicInstance;
+      }
+      return typeof sn.isFocused === 'function' && sn.isFocused() === true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function readInputValue(testID) {
     if (!testID) return JSON.stringify({ __agent_error: 'testID is required' });
     var resolution = resolveTypeTextTarget({ testID: testID }, READ_INPUT_WORK_LIMIT);
     if (resolution.error) return JSON.stringify({ __agent_error: resolution.error });
-    if (!resolution.binding) return JSON.stringify({ value: null, controlled: false });
+    if (!resolution.binding) return JSON.stringify({ value: null, controlled: false, focused: false });
     var props = resolution.binding.candidateFiber.memoizedProps || {};
-    if (typeof props.value === 'string') return JSON.stringify({ value: props.value, controlled: true });
-    return JSON.stringify({ value: null, controlled: false });
+    var focused = hostIsFocused(resolution.binding.candidateFiber);
+    if (typeof props.value === 'string') {
+      return JSON.stringify({ value: props.value, controlled: true, focused: focused });
+    }
+    return JSON.stringify({ value: null, controlled: false, focused: focused });
   }
 
   // Task 8 \u2014 bounded fiber.return ancestor walk producing the bundle's
