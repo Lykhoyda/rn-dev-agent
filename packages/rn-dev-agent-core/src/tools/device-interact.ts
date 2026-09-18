@@ -1394,6 +1394,11 @@ export async function performFocusedFill(
       return fillFailure('NO_TEXT_INPUT_TARGET', extractErrorText(native), {
         mutation: 'none',
         pathsTried,
+        ...(extractErrorCode(native) === 'TEXT_SYNTHESIS_UNAVAILABLE'
+          ? {
+              hint: 'No text was entered. This Xcode cannot synthesize text, so device_fill focused: true cannot type here. Do not retry focused: true.',
+            }
+          : {}),
       });
     }
     return fillFailure('TEXT_ENTRY_UNVERIFIED', extractErrorText(native), {

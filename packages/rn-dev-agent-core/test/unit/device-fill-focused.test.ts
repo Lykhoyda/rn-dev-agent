@@ -274,6 +274,9 @@ test('focused fill: runner TEXT_SYNTHESIS_UNAVAILABLE surfaces as NO_TEXT_INPUT_
   assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
   assert.equal(env.meta.mutation, 'none');
   assert.equal(env.error, message);
+  assert.match(env.meta.hint, /cannot synthesize text/);
+  assert.match(env.meta.hint, /Do not retry focused: true/);
+  assert.equal(env.meta.hint.includes('rebind'), false);
   assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 1);
 });
 
