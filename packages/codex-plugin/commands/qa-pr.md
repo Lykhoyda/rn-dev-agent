@@ -34,15 +34,43 @@ this package) in this session. Summary:
 6. **Per selected target:** `bind_device` (exact id) →
    `preview_integration` → `apply_integration confirmed=true` → run the
    rewritten package `ios`/`android` script from the app root → poll until
-   `metroBound` and `installBound` → `pin_dev_client` → exercise the
-   PR change (artifact-first; `cdp_login_prologue` for auth).
+   `metroBound` and `installBound` → `pin_dev_client` → `cdp_dev_settings`
+   `disableDevMenu` then `hideDevMenu`, again after every re-pin (never
+   touch the sheet or the gear; a visible sheet or gear is FAIL) → then the feature
+   proof (`agents/rn-pr-qa.md` Step 7), user path only: usable screen or FAIL with the
+   refusal code → reuse a covering action that starts from the attached
+   app (rehearse with `proofReplay=true`); if none does, record and save a
+   new one and drop its generated `launchApp` → first `cdp_run_action`
+   rehearsal of a reused action from its first route (walk there as a user
+   if the attached screen is not that route, or FAIL at the step that
+   cannot) → walk back to
+   the first screen off camera as a user (visible controls, at most one
+   `device_back` per screen; never `cdp_navigate` or a deep link) before a saved action's
+   first rehearsal, any repeat rehearsal, and the take, no runtime reset and no relaunch (never `cdp_reload` /
+   `cdp_restart` / `launchApp` on camera) → hash the action after the last
+   passing rehearsal → `device_record` start **before** the
+   on-camera `cdp_run_action` proof replay → stop and validate.
+   Missing video on an app-facing target is FAIL.
 7. **Cleanup** reverse-order: runner close → `stop_metro` →
    `restore_integration` → `release`. Remove only the worktree you added.
-8. **Report** on the PR with `gh pr comment --body-file` plus
-   `--attach` for every screenshot and video (GitHub CLI attaching-files
-   flow). Then rewrite screenshot markdown to
-   `<img src="…" alt="…" width="720">` via `--edit-last`. In-session,
-   print the verdict table and the comment URL. Never leave unhosted
+8. **Report.** The public GitHub comment is for a human reviewer of the feature that was built, not a plugin log.
+   One verdict: FAIL if any tested platform failed, PASS only if every
+   requested platform that ran passed, plus one plain sentence per
+   platform not tested ("Android was not requested." / "Android was not
+   available."). A docs-only or all-SKIP run posts the same human shape
+   with `Verdict: SKIP`, no video and no SKIP table.
+   Re-read the head with `gh pr view "<pr-url>" --json headRefOid` before posting
+   and stop if it fails; the verdict binds to the tested SHA. Post
+   with `gh pr comment --body-file` plus `--attach` for every screenshot
+   and video (GitHub CLI attaching-files flow); attachments are not
+   required when there is nothing to attach. When a screenshot was
+   attached, rewrite screenshot markdown to
+   `<img src="…" alt="…" width="390">` via `--edit-last`.
+   Once the public comment exists, if the PR has `needs-qa`, run
+   `gh pr edit "<pr-url>" --remove-label needs-qa`. A missing label is not FAIL.
+   A stale-head FAIL comment and a SKIP comment still count; a run that
+   never posted leaves the label. In-session only,
+   print the per-target verdict table and the comment URL. Never leave unhosted
    `/tmp` paths as the reviewer-visible proof. Public comments are public:
    never write hostname (including `.local`), machine UUID, home
    directory (`/Users/…`), or other absolute local paths — even in a
@@ -67,12 +95,13 @@ $rn-dev-agent:qa-pr 42 device
 - For Android emulator: Android SDK + a booted or bootable AVD
 - For physical: USB debugging, exclusive claim, exact serial
 - Pin-cache maestro-runner `>= 1.1.24`
-- Replay YAML only through `cdp_run_action`. Never PATH `maestro`.
+- Rehearse through `cdp_run_action`; the on-camera take is the same `cdp_run_action` proof replay. Never PATH `maestro`.
 
 ## Output
 
-- Stand-alone verdict for the PR URL + head SHA
-- Per-target PASS / FAIL / SKIP with evidence
+- Video of the saved action replaying, as the primary proof
+- One public verdict (PASS / FAIL / SKIP) for the PR URL + head SHA
+- In-session only: per-target PASS / FAIL / SKIP table with evidence
 - Repro steps a human can follow
-- GitHub comment with hosted screenshots (`<img width="720">`) and
+- GitHub comment with hosted screenshots (`<img width="390">`) and
   attached videos (player embed), not raw local paths

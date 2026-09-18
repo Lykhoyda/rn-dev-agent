@@ -76,6 +76,7 @@ struct Command: Codable {
   var focusX: Double? = nil
   var focusY: Double? = nil
   var focusWaitMs: Int? = nil
+  var focused: Bool? = nil
   var operationToken: String? = nil
 }
 
@@ -164,6 +165,7 @@ struct DataPayload: Codable {
   let focusTap: String?
   let verifyVerdict: String?
   let verifyStable: Bool?
+  let textEntryRoute: String?
 
   init(
     message: String? = nil,
@@ -196,7 +198,8 @@ struct DataPayload: Codable {
     inputResolution: String? = nil,
     focusTap: String? = nil,
     verifyVerdict: String? = nil,
-    verifyStable: Bool? = nil
+    verifyStable: Bool? = nil,
+    textEntryRoute: String? = nil
   ) {
     self.message = message
     self.text = text
@@ -229,6 +232,7 @@ struct DataPayload: Codable {
     self.focusTap = focusTap
     self.verifyVerdict = verifyVerdict
     self.verifyStable = verifyStable
+    self.textEntryRoute = textEntryRoute
   }
 }
 

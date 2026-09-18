@@ -20,6 +20,17 @@ enum TypingRecipe {
     let remainder: String
   }
 
+  enum FocusedTypeDecision: Equatable {
+    case type
+    case refuseEmptyText
+    case refuseNoKeyboard
+  }
+
+  static func focusedTypeDecision(textIsEmpty: Bool, keyboardVisible: Bool) -> FocusedTypeDecision {
+    if textIsEmpty { return .refuseEmptyText }
+    return keyboardVisible ? .type : .refuseNoKeyboard
+  }
+
   /// Splits text into the two-burst shape. Returns nil when there is no
   /// remainder to send (empty or single-Character text types as one burst —
   /// no pointless inter-burst pause). `String.first` is a grapheme cluster,

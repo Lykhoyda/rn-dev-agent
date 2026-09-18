@@ -246,6 +246,49 @@ test('typeText readback resolves the same deep controlled target as mutation', (
   assert.deepEqual(readback, { value: 'verified', controlled: true });
 });
 
+test('readInputValue reads a controlled input on a screen-sized tree that exhausts the typeText budget', () => {
+  const root = makeFiber('Root');
+  for (let index = 0; index < 600; index += 1) {
+    appendChild(root, makeFiber('View', { testID: `row-${index}` }));
+  }
+  const calls: string[] = [];
+  appendChild(
+    wrap(appendChild(root, makeFiber('View', { testID: 'screen-email-pressable' })), 3),
+    makeFiber('AndroidTextInput', {
+      testID: 'screen-email',
+      value: 'qa.user@example.com',
+      onChangeText(value: string) {
+        calls.push(value);
+      },
+    }),
+  );
+  const agent = createAgent(root);
+
+  const readback = agent.readInputValue('screen-email');
+  const mutation = agent.interact({ action: 'typeText', testID: 'screen-email', text: 'unsafe' });
+
+  assert.deepEqual(readback, { value: 'qa.user@example.com', controlled: true });
+  assert.equal(mutation.truncated, true, JSON.stringify(mutation));
+  assert.equal(mutation.workLimit, 2000);
+  assert.deepEqual(calls, []);
+});
+
+test('readInputValue still refuses when its own read budget is exhausted', () => {
+  const root = makeFiber('Root');
+  let tail = appendChild(root, makeFiber('View', { testID: 'row-0' }));
+  for (let index = 1; index < 30000; index += 1) {
+    const next = makeFiber('View', { testID: `row-${index}` });
+    next.return = root;
+    tail.sibling = next;
+    tail = next;
+  }
+  const agent = createAgent(root);
+
+  assert.deepEqual(agent.readInputValue('row-0'), {
+    __agent_error: 'typeText resolution truncated',
+  });
+});
+
 test('React replay types through a wrapper and verifies the same controlled input', async () => {
   const root = makeFiber('Root');
   const wrapper = appendChild(root, makeFiber('View', { testID: 'replay-wrapper' }));
