@@ -6,11 +6,8 @@ import assert from 'node:assert/strict';
 
 const { _setActiveSessionForTest, _setRunAgentDeviceForTest, markSnapshotDirty } =
   await import('../../dist/agent-device-wrapper.js');
-const {
-  createDeviceFillHandler,
-  performExactFill,
-  performFocusedFill,
-} = await import('../../dist/tools/device-interact.js');
+const { createDeviceFillHandler, performExactFill, performFocusedFill } =
+  await import('../../dist/tools/device-interact.js');
 const { updateRefMapFromFlat, clearRefMap } = await import('../../dist/fast-runner-ref-map.js');
 const { okResult, failResult } = await import('../../dist/utils.js');
 
