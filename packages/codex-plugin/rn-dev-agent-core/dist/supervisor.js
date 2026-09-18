@@ -64564,7 +64564,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 72;
+    HELPERS_VERSION = 73;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -64610,7 +64610,13 @@ var init_injected_helpers = __esm({
   ];
 
   // Synchronous scan result; finished stays false after the GH #789 empty-streak exit.
-  var lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false };
+  var lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false, errors: [] };
+
+  function scanError(rendererId, phase, e) {
+    var message;
+    try { message = String(e && e.message != null ? e.message : e).slice(0, 200); } catch (_) { message = 'unreadable error'; }
+    if (lastRootScan.errors.length < 5) lastRootScan.errors.push({ rendererId: rendererId, phase: phase, message: message });
+  }
 
   function rootScanCoverage() {
     var reasons = [];
@@ -64684,7 +64690,8 @@ var init_injected_helpers = __esm({
       erroredRendererIds: lastRootScan.erroredRendererIds.slice(0, MAX_REGISTERED_RENDERER_IDS),
       rendererErrors: lastRootScan.rendererErrors,
       extraRootsError: lastRootScan.extraRootsError === true,
-      scanFinished: lastRootScan.finished === true
+      scanFinished: lastRootScan.finished === true,
+      scanErrors: lastRootScan.errors.slice()
     };
   }
 
@@ -64712,7 +64719,7 @@ var init_injected_helpers = __esm({
   }
 
   function findActiveRenderer() {
-    lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false };
+    lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false, errors: [] };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
     var rendererIds = getRegisteredRendererIds(hook);
@@ -64733,10 +64740,11 @@ var init_injected_helpers = __esm({
           emptyStreak++;
           if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) return null;
         }
-      } catch (_) {
+      } catch (e) {
         if (!usingRegisteredIds) emptyStreak++;
         lastRootScan.rendererErrors++;
         lastRootScan.erroredRendererIds.push(ri);
+        scanError(ri, 'roots', e);
       }
     }
     lastRootScan.finished = true;
@@ -64756,7 +64764,7 @@ var init_injected_helpers = __esm({
   // native renderer loop so user-registered portals stay lower priority
   // than React's own registry.
   function iterateAllRoots(cb) {
-    lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false };
+    lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false, errors: [] };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (hook && typeof hook.getFiberRoots === 'function') {
       var rendererIds = getRegisteredRendererIds(hook);
@@ -64769,8 +64777,17 @@ var init_injected_helpers = __esm({
       for (var rii = 0; rii < rendererIds.length; rii++) {
         var ri = rendererIds[rii];
         lastRootScan.visited[ri] = true;
+        var roots;
         try {
-          var roots = hook.getFiberRoots(ri);
+          roots = hook.getFiberRoots(ri);
+        } catch (e) {
+          if (!usingRegisteredIds) emptyStreak++;
+          lastRootScan.rendererErrors++;
+          lastRootScan.erroredRendererIds.push(ri);
+          scanError(ri, 'roots', e);
+          continue;
+        }
+        try {
           if (roots && roots.size) {
             emptyStreak = 0;
             var it = roots.values();
@@ -64788,10 +64805,11 @@ var init_injected_helpers = __esm({
               break;
             }
           }
-        } catch (_) {
+        } catch (e) {
           if (!usingRegisteredIds) emptyStreak++;
           lastRootScan.rendererErrors++;
           lastRootScan.erroredRendererIds.push(ri);
+          scanError(ri, 'walk', e);
         }
       }
       if (!abortedEarly) lastRootScan.finished = true;
@@ -64818,10 +64836,11 @@ var init_injected_helpers = __esm({
           }
         }
       }
-    } catch (_) {
+    } catch (e) {
       // swallow \u2014 resolver bug must not break iteration
       lastRootScan.rendererErrors++;
       lastRootScan.extraRootsError = true;
+      scanError(-1, 'extra-roots', e);
     }
     return null;
   }
@@ -68733,23 +68752,24 @@ var init_injected_helpers = __esm({
   }
 
   // \u2500\u2500 Task 5: accessibility "hidden" port (RNTL isHiddenFromAccessibility +
-  // isSubtreeInaccessible). No StyleSheet.flatten in-page \u2192 flatten manually.
-  // Walks fiber.return (live fibers) not instance.parent. opacity:0 is NOT
-  // hidden (RNTL accessibility.ts:73). Per-call cache WeakMap dropped (YAGNI).
-  function flattenStyle(style) {
-    var out = {};
-    if (style == null) return out;
-    if (Array.isArray(style)) {
-      for (var i = 0; i < style.length; i++) {
-        var part = flattenStyle(style[i]);
-        for (var k in part) if (part.hasOwnProperty(k)) out[k] = part[k];
+  // isSubtreeInaccessible). Read the two predicate keys directly \u2014 enumerating
+  // exotic style objects with hasOwnProperty throws and aborts the frontmost
+  // walk (GH #1057). Walks fiber.return (live fibers) not instance.parent.
+  // opacity:0 is NOT hidden (RNTL accessibility.ts:73).
+  // ponytail: last non-undefined wins; an entry whose key is explicitly undefined no longer overrides an earlier value
+  function styleValue(style, key) {
+    if (style == null) return undefined;
+    try {
+      if (Array.isArray(style)) {
+        for (var i = style.length - 1; i >= 0; i--) {
+          var v = styleValue(style[i], key);
+          if (v !== undefined) return v;
+        }
+        return undefined;
       }
-      return out;
-    }
-    if (typeof style === 'object') {
-      for (var key in style) if (style.hasOwnProperty(key)) out[key] = style[key];
-    }
-    return out;
+      if (typeof style === 'object') return style[key];
+    } catch (_) {}
+    return undefined;
   }
 
   // True if \`fiber\` itself is an inaccessible-subtree root.
@@ -68759,8 +68779,7 @@ var init_injected_helpers = __esm({
     if (props.accessibilityElementsHidden) return true;
     if (props.importantForAccessibility === 'no-hide-descendants') return true;
 
-    var flat = flattenStyle(props.style);
-    if (flat.display === 'none') return true;
+    if (styleValue(props.style, 'display') === 'none') return true;
 
     // iOS: a host sibling marked aria-modal / accessibilityViewIsModal hides
     // this subtree. Siblings = children of fiber.return other than fiber.
@@ -68794,8 +68813,8 @@ var init_injected_helpers = __esm({
     if (!props) return null;
     if (typeof props.pointerEvents === 'string') return props.pointerEvents;
     if (props.style == null) return null;
-    var flat = flattenStyle(props.style);
-    return typeof flat.pointerEvents === 'string' ? flat.pointerEvents : null;
+    var pe = styleValue(props.style, 'pointerEvents');
+    return typeof pe === 'string' ? pe : null;
   }
 
   // Only host fibers are views, and only a view decides pointerEvents/hidden in hitTest.

@@ -58,7 +58,9 @@ test('GH #126 + #597: iterateAllRoots primitive owns the renderer-loop invariant
     'root loop missing',
   );
   assert.match(slice, /try \{/, 'iterateAllRoots missing try guard');
-  assert.match(slice, /catch \(_\)/, 'iterateAllRoots missing per-renderer catch');
+  assert.match(slice, /catch \(e\)/, 'iterateAllRoots missing per-renderer catch');
+  assert.match(slice, /scanError\(ri, 'roots'/, 'iterateAllRoots missing roots-phase scanError');
+  assert.match(slice, /scanError\(ri, 'walk'/, 'iterateAllRoots missing walk-phase scanError');
   // Short-circuits on truthy callback return
   assert.match(slice, /if \(result\) return result;/, 'iterateAllRoots short-circuit missing');
 });

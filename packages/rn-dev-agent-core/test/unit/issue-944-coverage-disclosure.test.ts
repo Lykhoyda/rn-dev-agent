@@ -65,60 +65,7 @@ function frontmost(sandbox: { __RN_AGENT: { isTestIdFrontmost: (id: string) => s
   return JSON.parse(sandbox.__RN_AGENT.isTestIdFrontmost('target'));
 }
 
-test('isTestIdFrontmost discloses a throwing renderer id without changing the sentence', () => {
-  const fiber = userComp('App', userComp('Btn', null, { testID: 'target' }));
-  const sandbox = createSandbox({
-    hook: {
-      renderers: new Map([[1, {}]]),
-      getFiberRoots: (id: number) => {
-        if (id === 3) throw new Error('renderer teardown');
-        if (id === 1) return new Set([{ current: fiber }]);
-        return new Set();
-      },
-    },
-  });
-  const verdict = frontmost(sandbox);
-  assert.equal(verdict.visible, false);
-  assert.equal(verdict.code, 'ASSERTION_FAILED');
-  assert.equal(verdict.reason, COVERAGE_REASON);
-  assert.deepEqual(verdict.coverage.reasons, ['renderer-error']);
-  assert.ok(verdict.coverage.erroredRendererIds.includes(3));
-  assert.ok(verdict.coverage.rendererErrors >= 1);
-});
-
-test('isTestIdFrontmost discloses an unreadable registry as registeredRendererIds null', () => {
-  const fiber = userComp('App', userComp('Btn', null, { testID: 'target' }));
-  const sandbox = createSandbox({
-    hook: {
-      renderers: new Map<number | string, object>([
-        [1, {}],
-        ['qa', {}],
-      ]),
-      getFiberRoots: (id: number) => (id === 1 ? new Set([{ current: fiber }]) : new Set()),
-    },
-  });
-  const verdict = frontmost(sandbox);
-  assert.equal(verdict.visible, false);
-  assert.equal(verdict.code, 'ASSERTION_FAILED');
-  assert.equal(verdict.reason, COVERAGE_REASON);
-  assert.equal(verdict.coverage.registeredRendererIds, null);
-  assert.ok(verdict.coverage.reasons.includes('renderer-error'));
-});
-
-test('isTestIdFrontmost discloses a throwing extra-roots resolver', () => {
-  const fiber = userComp('App', userComp('Btn', null, { testID: 'target' }));
-  const sandbox = createSandbox({ fiberRoot: fiber });
-  sandbox.__RN_AGENT_EXTRA_ROOTS__ = () => {
-    throw new Error('qa');
-  };
-  const verdict = frontmost(sandbox);
-  assert.equal(verdict.visible, false);
-  assert.equal(verdict.code, 'ASSERTION_FAILED');
-  assert.equal(verdict.reason, COVERAGE_REASON);
-  assert.equal(verdict.coverage.extraRootsError, true);
-});
-
-test('a clean hook stays visible and omits coverage', () => {
+function visibleFrontmostTree() {
   const state = { index: 0, routes: [{ key: 'home-key', name: 'home' }] };
   const neverInvoke = () => assert.fail('scene callbacks must not be invoked');
   const root: Record<string, unknown> = {
@@ -164,9 +111,159 @@ test('a clean hook stays visible and omits coverage', () => {
   };
   root.child = screen;
   screen.child = target;
+  return { root, screen, target, state };
+}
+
+function attachOffPathFiber(
+  screen: Record<string, unknown>,
+  target: Record<string, unknown>,
+  props: Record<string, unknown>,
+) {
+  const exotic: Record<string, unknown> = {
+    type: { displayName: 'View' },
+    memoizedProps: props,
+    return: screen,
+    child: null,
+    sibling: null,
+  };
+  target.sibling = exotic;
+  return exotic;
+}
+
+test('isTestIdFrontmost discloses a throwing renderer id without changing the sentence', () => {
+  const fiber = userComp('App', userComp('Btn', null, { testID: 'target' }));
+  const sandbox = createSandbox({
+    hook: {
+      renderers: new Map([[1, {}]]),
+      getFiberRoots: (id: number) => {
+        if (id === 3) throw new Error('renderer teardown');
+        if (id === 1) return new Set([{ current: fiber }]);
+        return new Set();
+      },
+    },
+  });
+  const verdict = frontmost(sandbox);
+  assert.equal(verdict.visible, false);
+  assert.equal(verdict.code, 'ASSERTION_FAILED');
+  assert.equal(verdict.reason, COVERAGE_REASON);
+  assert.deepEqual(verdict.coverage.reasons, ['renderer-error']);
+  assert.ok(verdict.coverage.erroredRendererIds.includes(3));
+  assert.ok(verdict.coverage.rendererErrors >= 1);
+  assert.deepEqual(verdict.coverage.scanErrors, [
+    { rendererId: 3, phase: 'roots', message: 'renderer teardown' },
+  ]);
+});
+
+test('isTestIdFrontmost discloses an unreadable registry as registeredRendererIds null', () => {
+  const fiber = userComp('App', userComp('Btn', null, { testID: 'target' }));
+  const sandbox = createSandbox({
+    hook: {
+      renderers: new Map<number | string, object>([
+        [1, {}],
+        ['qa', {}],
+      ]),
+      getFiberRoots: (id: number) => (id === 1 ? new Set([{ current: fiber }]) : new Set()),
+    },
+  });
+  const verdict = frontmost(sandbox);
+  assert.equal(verdict.visible, false);
+  assert.equal(verdict.code, 'ASSERTION_FAILED');
+  assert.equal(verdict.reason, COVERAGE_REASON);
+  assert.equal(verdict.coverage.registeredRendererIds, null);
+  assert.ok(verdict.coverage.reasons.includes('renderer-error'));
+});
+
+test('isTestIdFrontmost discloses a throwing extra-roots resolver', () => {
+  const fiber = userComp('App', userComp('Btn', null, { testID: 'target' }));
+  const sandbox = createSandbox({ fiberRoot: fiber });
+  sandbox.__RN_AGENT_EXTRA_ROOTS__ = () => {
+    throw new Error('qa');
+  };
+  const verdict = frontmost(sandbox);
+  assert.equal(verdict.visible, false);
+  assert.equal(verdict.code, 'ASSERTION_FAILED');
+  assert.equal(verdict.reason, COVERAGE_REASON);
+  assert.equal(verdict.coverage.extraRootsError, true);
+});
+
+test('a clean hook stays visible and omits coverage', () => {
+  const { root, state } = visibleFrontmostTree();
   const sandbox = createSandbox({ fiberRoot: root });
   sandbox.__expo_router_state__ = state;
   const verdict = frontmost(sandbox);
   assert.equal(verdict.visible, true);
   assert.equal('coverage' in verdict, false);
+});
+
+test('isTestIdFrontmost stays visible when an off-path style has no Object.prototype', () => {
+  const { root, screen, target, state } = visibleFrontmostTree();
+  const style = Object.create(null) as Record<string, unknown>;
+  style.display = 'flex';
+  attachOffPathFiber(screen, target, { style });
+  const sandbox = createSandbox({ fiberRoot: root });
+  sandbox.__expo_router_state__ = state;
+  const verdict = frontmost(sandbox);
+  assert.equal(verdict.visible, true);
+  assert.equal('coverage' in verdict, false);
+});
+
+test('isTestIdFrontmost stays visible when an off-path display getter throws', () => {
+  const { root, screen, target, state } = visibleFrontmostTree();
+  const style = {};
+  Object.defineProperty(style, 'display', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      throw new Error('display getter');
+    },
+  });
+  attachOffPathFiber(screen, target, { style });
+  const sandbox = createSandbox({ fiberRoot: root });
+  sandbox.__expo_router_state__ = state;
+  const verdict = frontmost(sandbox);
+  assert.equal(verdict.visible, true);
+  assert.equal('coverage' in verdict, false);
+});
+
+test('isTestIdFrontmost still hides a target whose ancestor style array is display none', () => {
+  const { root, screen, state } = visibleFrontmostTree();
+  (screen.memoizedProps as Record<string, unknown>).style = [{ display: 'none' }];
+  const sandbox = createSandbox({ fiberRoot: root });
+  sandbox.__expo_router_state__ = state;
+  const verdict = frontmost(sandbox);
+  assert.equal(verdict.visible, false);
+  assert.equal(verdict.reason, 'testID is mounted in a hidden subtree');
+  assert.equal('coverage' in verdict, false);
+});
+
+test('isTestIdFrontmost attributes a throwing walk to scanErrors phase walk', () => {
+  const throwingProps = new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        if (prop === 'testID' || prop === 'nativeID') throw new Error('qa-walk');
+        return undefined;
+      },
+    },
+  );
+  const fiber = {
+    tag: 1,
+    type: { displayName: 'App' },
+    memoizedProps: throwingProps,
+    child: null,
+    sibling: null,
+    return: null,
+  };
+  const sandbox = createSandbox({
+    hook: {
+      renderers: new Map([[1, {}]]),
+      getFiberRoots: (id: number) => (id === 1 ? new Set([{ current: fiber }]) : new Set()),
+    },
+  });
+  const verdict = frontmost(sandbox);
+  assert.equal(verdict.visible, false);
+  assert.equal(verdict.code, 'ASSERTION_FAILED');
+  assert.equal(verdict.reason, COVERAGE_REASON);
+  assert.equal(verdict.coverage.scanErrors[0].phase, 'walk');
+  assert.equal(verdict.coverage.scanErrors[0].message, 'qa-walk');
 });
