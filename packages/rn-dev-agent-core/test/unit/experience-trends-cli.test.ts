@@ -19,10 +19,11 @@ import { ExperienceRecorder, EXPERIENCE_STORE_NAME } from '../../dist/experience
 import type { ExperienceTrendReport } from '../../dist/experience/trends.js';
 
 const CLI = fileURLToPath(new URL('../../dist/experience-trends.js', import.meta.url));
-const HOST_CLIS = ['claude-plugin', 'codex-plugin'].map((host) =>
-  fileURLToPath(
-    new URL(`../../../${host}/rn-dev-agent-core/dist/experience-trends.js`, import.meta.url),
-  ),
+const SHIPPED_CLI = fileURLToPath(
+  new URL('../../../claude-plugin/rn-dev-agent-core/dist/experience-trends.js', import.meta.url),
+);
+const DELETED_CODEX_CLI = fileURLToPath(
+  new URL('../../../codex-plugin/rn-dev-agent-core/dist/experience-trends.js', import.meta.url),
 );
 const SINCE = '2026-06-01T00:00:00.000Z';
 const NOW = new Date('2026-06-10T12:00:00.000Z');
@@ -169,7 +170,7 @@ test('compiled CLI JSON exposes systemic evidence alongside unchanged tool rows 
 });
 
 for (const legacyOnly of [false, true]) {
-  test(`core and both shipped CLIs agree on ${legacyOnly ? 'legacy-only' : 'mixed'} evidence without rewriting history`, (t) => {
+  test(`core and the shipped host CLI agree on ${legacyOnly ? 'legacy-only' : 'mixed'} evidence without rewriting history`, (t) => {
     const { directory, path, records } = fixture(t);
     const template = records.find((record) => record.classification === 'UNKNOWN');
     assert.ok(template);
@@ -229,10 +230,11 @@ for (const legacyOnly of [false, true]) {
     writeFileSync(path, `${stored.map((record) => JSON.stringify(record)).join('\n')}\n`);
     utimesSync(path, NOW, NOW);
     const before = snapshot(directory, path);
+    assert.equal(existsSync(DELETED_CODEX_CLI), false, DELETED_CODEX_CLI);
     for (const since of [SINCE, FUTURE]) {
       let expectedJson: Omit<ExperienceTrendReport, 'generatedAt'> | undefined;
       let expectedText: string | undefined;
-      for (const cli of [CLI, ...HOST_CLIS]) {
+      for (const cli of [CLI, SHIPPED_CLI]) {
         const json = runCli(directory, ['--since', since, '--json'], cli);
         assert.equal(json.status, 0, cli);
         assert.equal(json.stderr, '', cli);

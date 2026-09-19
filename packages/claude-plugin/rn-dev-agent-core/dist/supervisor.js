@@ -74252,8 +74252,8 @@ function findExecutingCorePackage(startDir) {
   let cursor = startDir;
   for (let i = 0; i < 8; i++) {
     const parsed = readPackageNameVersion(join38(cursor, "package.json"));
-    if (typeof parsed?.name === "string" && EXECUTING_CORE_PACKAGE_NAMES.has(parsed.name) && typeof parsed.version === "string" && parsed.version) {
-      return { name: parsed.name, version: parsed.version, dir: cursor };
+    if (typeof parsed?.name === "string" && parsed.name === EXECUTING_CORE_PACKAGE_NAME && typeof parsed.version === "string" && parsed.version) {
+      return { version: parsed.version, dir: cursor };
     }
     const parent = dirname18(cursor);
     if (parent === cursor)
@@ -74266,46 +74266,29 @@ function envPluginRoot(name) {
   const value = process.env[name];
   return value && value.length > 0 ? value : void 0;
 }
-function launchingHostManifestCandidates(packageName) {
+function launchingHostManifestCandidates() {
   const candidates = [];
   const codex = envPluginRoot("RN_DEV_AGENT_CODEX_PLUGIN_ROOT") ?? envPluginRoot("CODEX_PLUGIN_ROOT");
   const claude = envPluginRoot("CLAUDE_PLUGIN_ROOT");
-  const codexManifest = codex ? join38(codex, ".codex-plugin", "plugin.json") : void 0;
-  const claudeManifest = claude ? join38(claude, ".claude-plugin", "plugin.json") : void 0;
-  if (packageName === "rn-dev-agent-core-claude-runtime") {
-    if (claudeManifest)
-      candidates.push(claudeManifest);
-    return candidates;
-  }
-  if (packageName === "rn-dev-agent-core-codex-runtime") {
-    if (codexManifest)
-      candidates.push(codexManifest);
-    return candidates;
-  }
-  if (codexManifest)
-    candidates.push(codexManifest);
-  if (claudeManifest)
-    candidates.push(claudeManifest);
+  if (codex)
+    candidates.push(join38(codex, ".codex-plugin", "plugin.json"));
+  if (claude)
+    candidates.push(join38(claude, ".claude-plugin", "plugin.json"));
   return candidates;
 }
-function pluginManifestCandidates(packageDir, packageName) {
+function pluginManifestCandidates(packageDir) {
   const hostRoot = join38(packageDir, "..");
-  const claudeHost = join38(hostRoot, ".claude-plugin", "plugin.json");
-  const codexHost = join38(hostRoot, ".codex-plugin", "plugin.json");
-  const claudeSource = join38(hostRoot, "claude-plugin", ".claude-plugin", "plugin.json");
-  const codexSource = join38(hostRoot, "codex-plugin", ".codex-plugin", "plugin.json");
-  if (packageName === "rn-dev-agent-core-codex-runtime") {
-    return [codexHost, claudeHost, codexSource, claudeSource];
-  }
-  if (packageName === "rn-dev-agent-core-claude-runtime") {
-    return [claudeHost, codexHost, claudeSource, codexSource];
-  }
-  return [claudeHost, codexHost, claudeSource, codexSource];
+  return [
+    join38(hostRoot, ".claude-plugin", "plugin.json"),
+    join38(hostRoot, ".codex-plugin", "plugin.json"),
+    join38(hostRoot, "claude-plugin", ".claude-plugin", "plugin.json"),
+    join38(hostRoot, "codex-plugin", ".codex-plugin", "plugin.json")
+  ];
 }
-function readPluginManifestVersion(packageDir, packageName) {
+function readPluginManifestVersion(packageDir) {
   for (const candidate of [
-    ...launchingHostManifestCandidates(packageName),
-    ...pluginManifestCandidates(packageDir, packageName)
+    ...launchingHostManifestCandidates(),
+    ...pluginManifestCandidates(packageDir)
   ]) {
     const parsed = readPackageNameVersion(candidate);
     if (typeof parsed?.version === "string" && parsed.version)
@@ -74319,7 +74302,7 @@ function resolveRunningProductVersion(fromUrl) {
     return null;
   return projectRunningProductVersion({
     coreVersion: executing.version,
-    pluginVersion: readPluginManifestVersion(executing.dir, executing.name)
+    pluginVersion: readPluginManifestVersion(executing.dir)
   });
 }
 function cachedRunningProductVersion(fromUrl) {
@@ -74335,15 +74318,11 @@ function readRunningProductVersion(fromUrl = loadedModuleUrl) {
 function withRunningProduct(data, product = readRunningProductVersion()) {
   return product ? { product, ...data } : data;
 }
-var EXECUTING_CORE_PACKAGE_NAMES, productByModuleUrl, loadedModuleUrl;
+var EXECUTING_CORE_PACKAGE_NAME, productByModuleUrl, loadedModuleUrl;
 var init_product_version = __esm({
   "packages/rn-dev-agent-core/dist/session/product-version.js"() {
     "use strict";
-    EXECUTING_CORE_PACKAGE_NAMES = /* @__PURE__ */ new Set([
-      "rn-dev-agent-core",
-      "rn-dev-agent-core-claude-runtime",
-      "rn-dev-agent-core-codex-runtime"
-    ]);
+    EXECUTING_CORE_PACKAGE_NAME = "rn-dev-agent-core";
     productByModuleUrl = /* @__PURE__ */ new Map();
     loadedModuleUrl = import.meta.url;
     cachedRunningProductVersion(loadedModuleUrl);

@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { EXPECTED_SKILLS, MCP_CANARIES } from '../../../codex-plugin/src/plugin-health.ts';
 
 const pexecFile = promisify(execFile);
-const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../codex-plugin');
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../claude-plugin');
 const health = join(packageRoot, 'bin', 'plugin-health.js');
 const manifest = JSON.parse(
   await readFile(join(packageRoot, '.codex-plugin', 'plugin.json'), 'utf8'),

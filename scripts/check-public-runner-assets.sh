@@ -30,10 +30,8 @@ MANIFEST="$ROOT/runner-manifest.json"
 V=$(jq -r '.version' "$PLUGIN")
 MV=$(jq -r '.version // empty' "$MANIFEST")
 [ "$MV" = "$V" ] || fail "runner-manifest.json vouches for v$MV while plugin.json advertises v$V — the trust root is stale"
-for copy in packages/claude-plugin packages/codex-plugin; do
-  cmp -s "$MANIFEST" "$ROOT/$copy/runner-manifest.json" \
-    || fail "$copy/runner-manifest.json differs from the root trust root"
-done
+cmp -s "$MANIFEST" "$ROOT/packages/claude-plugin/runner-manifest.json" \
+  || fail "packages/claude-plugin/runner-manifest.json differs from the root trust root"
 
 BASE=""
 if [ -n "${BASE_REF:-}" ]; then

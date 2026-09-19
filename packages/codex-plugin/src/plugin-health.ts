@@ -228,9 +228,10 @@ function materializationFacts(
   const manifest = readManifest(packageRoot);
   const requiredFiles = [
     '.codex-plugin/plugin.json',
-    '.mcp.json',
+    'codex.mcp.json',
     'bin/cdp-supervisor.js',
     'bin/plugin-health.js',
+    'bin/package.json',
     'rn-dev-agent-core/dist/supervisor.js',
     'rn-dev-agent-core/dist/learned-actions.js',
     'rn-dev-agent-core/dist/workflow-check.js',
@@ -243,15 +244,20 @@ function materializationFacts(
     'scripts/snapshot_state.sh',
     'scripts/rn-fast-runner/package.json',
     'scripts/rn-android-runner/package.json',
-    'templates/rn-agent/.scaffold-version',
-    ...WORKFLOW_SKILLS.map((name) => `commands/${name}.md`),
-    ...DOMAIN_SKILLS.map((name) => `skills/${name}/SKILL.md`),
+    'codex-templates/rn-agent/.scaffold-version',
+    ...WORKFLOW_SKILLS.map((name) => `codex-commands/${name}.md`),
+    ...DOMAIN_SKILLS.map((name) => `codex-skills/${name}/SKILL.md`),
     ...WORKFLOW_SKILLS.flatMap((name) => [
-      `skills/${name}/SKILL.md`,
-      `skills/${name}/agents/openai.yaml`,
+      `codex-skills/${name}/SKILL.md`,
+      `codex-skills/${name}/agents/openai.yaml`,
     ]),
   ];
-  const requiredDirectories = ['templates/rn-agent', 'skills', 'commands', 'scripts'];
+  const requiredDirectories = [
+    'codex-templates/rn-agent',
+    'codex-skills',
+    'codex-commands',
+    'scripts',
+  ];
   const missing = [
     ...requiredFiles.filter((path) => !realPathUnder(packageRoot, join(packageRoot, path), 'file')),
     ...requiredDirectories.filter(

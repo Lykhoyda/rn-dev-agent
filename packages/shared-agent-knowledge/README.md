@@ -9,6 +9,8 @@ Canonical sources live here:
 - `agents/`
 - `templates/rn-agent/`
 
-Claude and Codex adapters consume these sources through real package-local
-outputs in `packages/claude-plugin/` and `packages/codex-plugin/`. Keep durable,
-host-neutral workflow knowledge here, then adapt only host-specific entrypoints.
+Claude consumes these sources as byte copies inside `packages/claude-plugin/`;
+Codex consumes hand-adapted copies authored in `packages/codex-plugin/` and
+shipped as `codex-*` directories inside that same `packages/claude-plugin/`
+package. Keep durable, host-neutral workflow knowledge here, then adapt only
+host-specific entrypoints.
