@@ -839,6 +839,27 @@ test('maestro_generate refuses invalid action ids before writing', async () => {
   assert.equal(existsSync(join(outputDir, `${'a'.repeat(65)}.yaml`)), false);
 });
 
+test('maestro_generate preserves its regex refusal response shape without writing', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-regex-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const outputDir = join(root, '.rn-agent', 'actions');
+  mkdirSync(outputDir, { recursive: true });
+  const result = await createMaestroGenerateHandler()({
+    name: 'login',
+    outputDir,
+    steps: [{ action: 'tap', text: '.*Login.*' }],
+  });
+  const envelope = JSON.parse(result.content[0]!.text);
+  assert.equal(result.isError, true);
+  assert.deepEqual(envelope, {
+    ok: false,
+    code: 'ENGINE_PIN_MISMATCH',
+    error: regexSelectorCapabilityRefusal([{ tapOn: '.*Login.*' }]),
+  });
+  assert.match(envelope.error, /regex text selectors/);
+  assert.deepEqual(readdirSync(outputDir), []);
+});
+
 test('maestro_generate refuses unsafe metadata and incomplete steps before writing', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-shape-'));
   const outputDir = join(root, '.rn-agent', 'actions');
@@ -1820,6 +1841,32 @@ test('diagnoseLearnedActions treats an absent corpus as compatible', () => {
     counts: { enginePin: 0, regexSelector: 0, unreadable: 0 },
     actionIds: { enginePin: [], regexSelector: [], unreadable: [] },
   });
+});
+
+test('diagnoseLearnedActions agrees with replay on invalid action ids without mutation', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-diagnose-invalid-id-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const invalidIds = ['-login', 'a'.repeat(65)];
+  for (const id of [...invalidIds, 'login']) {
+    seedCompatAction(dir, id, `# enginePin: ${ACTION_ENGINE_PIN}`);
+  }
+  const before = readdirSync(dir).map((name) => [name, readFileSync(join(dir, name), 'utf8')]);
+  for (const id of invalidIds) {
+    assert.throws(() => loadAction(root, id), /Invalid action ID/);
+  }
+
+  assert.deepEqual(diagnoseLearnedActions(root), {
+    scanned: 3,
+    compatible: 1,
+    counts: { enginePin: 0, regexSelector: 0, unreadable: 2 },
+    actionIds: { enginePin: [], regexSelector: [], unreadable: invalidIds },
+  });
+  assert.deepEqual(
+    readdirSync(dir).map((name) => [name, readFileSync(join(dir, name), 'utf8')]),
+    before,
+  );
 });
 
 test('diagnoseLearnedActions scans an inherited corpus and never prints its source path', () => {

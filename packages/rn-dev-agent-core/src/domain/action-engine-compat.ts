@@ -15,6 +15,7 @@ import {
   commitMigratedActionText,
   loadActionMigrationBaseline,
   captureActionFromPath,
+  captureActionFromContext,
   openReadableActionLoadContext,
   splitYaml,
   joinYaml,
@@ -411,24 +412,6 @@ function emptyLearnedActionCompatReport(): LearnedActionCompatReport {
   };
 }
 
-function classifyReadableAction(
-  id: string,
-  text: string,
-  flowDir: string,
-): LearnedActionRefusalClass | null {
-  const meta = parseM7Header(text, id);
-  if (!meta || meta.id !== id) return 'unreadable';
-  let commands: unknown[];
-  try {
-    commands = parseAndValidateFlow(text, { flowDir, flowRoot: flowDir }).commands;
-  } catch {
-    return 'unreadable';
-  }
-  if (regexSelectorCapabilityRefusal(commands)) return 'regexSelector';
-  if (actionEnginePinRefusal(meta.enginePin)) return 'enginePin';
-  return null;
-}
-
 export function diagnoseLearnedActions(projectRoot: string): LearnedActionCompatReport {
   const report = emptyLearnedActionCompatReport();
   let context: ReturnType<typeof openReadableActionLoadContext>;
@@ -441,23 +424,19 @@ export function diagnoseLearnedActions(projectRoot: string): LearnedActionCompat
   }
   if (!context) return report;
 
-  const filesById = new Map<string, string[]>();
-  for (const name of context.files.filter(isOwnedActionFile)) {
-    const id = actionIdFromFile(name);
-    const existing = filesById.get(id);
-    if (existing) existing.push(name);
-    else filesById.set(id, [name]);
-  }
-
-  const ids = [...filesById.keys()].sort();
+  const ids = [...new Set(context.files.filter(isOwnedActionFile).map(actionIdFromFile))].sort();
   report.scanned = ids.length;
-  const flowDir = context.snapshot.directory;
   for (const id of ids) {
-    const names = filesById.get(id) ?? [];
     let refusal: LearnedActionRefusalClass | null = 'unreadable';
-    if (names.length === 1) {
-      const text = context.fileContents.get(names[0]!);
-      refusal = text === undefined ? 'unreadable' : classifyReadableAction(id, text, flowDir);
+    try {
+      const captured = captureActionFromContext(context, id);
+      if (captured?.metadata && captured.replay.ok) {
+        if (regexSelectorCapabilityRefusal(captured.replay.commands)) refusal = 'regexSelector';
+        else if (actionEnginePinRefusal(captured.metadata.enginePin)) refusal = 'enginePin';
+        else refusal = null;
+      }
+    } catch {
+      refusal = 'unreadable';
     }
     if (refusal === null) report.compatible += 1;
     else {

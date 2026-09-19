@@ -94931,9 +94931,7 @@ function createMaestroGenerateHandler() {
     }
     const compatibilityRefusal = regexSelectorCapabilityRefusal(commands);
     if (compatibilityRefusal) {
-      return failResult(compatibilityRefusal, "ENGINE_PIN_MISMATCH", {
-        refusalClass: "regexSelector"
-      });
+      return failResult(compatibilityRefusal, "ENGINE_PIN_MISMATCH");
     }
     let content;
     try {

@@ -14314,22 +14314,6 @@ function emptyLearnedActionCompatReport() {
     actionIds: { enginePin: [], regexSelector: [], unreadable: [] }
   };
 }
-function classifyReadableAction(id, text, flowDir) {
-  const meta = parseM7Header(text, id);
-  if (!meta || meta.id !== id)
-    return "unreadable";
-  let commands;
-  try {
-    commands = parseAndValidateFlow(text, { flowDir, flowRoot: flowDir }).commands;
-  } catch {
-    return "unreadable";
-  }
-  if (regexSelectorCapabilityRefusal(commands))
-    return "regexSelector";
-  if (actionEnginePinRefusal(meta.enginePin))
-    return "enginePin";
-  return null;
-}
 function diagnoseLearnedActions(projectRoot) {
   const report = emptyLearnedActionCompatReport();
   let context;
@@ -14342,24 +14326,22 @@ function diagnoseLearnedActions(projectRoot) {
   }
   if (!context)
     return report;
-  const filesById = /* @__PURE__ */ new Map();
-  for (const name of context.files.filter(isOwnedActionFile)) {
-    const id = actionIdFromFile(name);
-    const existing = filesById.get(id);
-    if (existing)
-      existing.push(name);
-    else
-      filesById.set(id, [name]);
-  }
-  const ids = [...filesById.keys()].sort();
+  const ids = [...new Set(context.files.filter(isOwnedActionFile).map(actionIdFromFile))].sort();
   report.scanned = ids.length;
-  const flowDir = context.snapshot.directory;
   for (const id of ids) {
-    const names = filesById.get(id) ?? [];
     let refusal = "unreadable";
-    if (names.length === 1) {
-      const text = context.fileContents.get(names[0]);
-      refusal = text === void 0 ? "unreadable" : classifyReadableAction(id, text, flowDir);
+    try {
+      const captured = captureActionFromContext(context, id);
+      if (captured?.metadata && captured.replay.ok) {
+        if (regexSelectorCapabilityRefusal(captured.replay.commands))
+          refusal = "regexSelector";
+        else if (actionEnginePinRefusal(captured.metadata.enginePin))
+          refusal = "enginePin";
+        else
+          refusal = null;
+      }
+    } catch {
+      refusal = "unreadable";
     }
     if (refusal === null)
       report.compatible += 1;
