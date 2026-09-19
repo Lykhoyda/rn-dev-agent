@@ -1091,6 +1091,7 @@ test('frontmost exact matches refuse incomplete renderer coverage', () => {
         rendererErrors: 0,
         extraRootsError: false,
         scanFinished: false,
+        scanErrors: [],
       },
     ],
     [
@@ -1103,6 +1104,7 @@ test('frontmost exact matches refuse incomplete renderer coverage', () => {
         rendererErrors: 1,
         extraRootsError: false,
         scanFinished: true,
+        scanErrors: [{ rendererId: 2, phase: 'roots', message: 'renderer teardown' }],
       },
     ],
     [
@@ -1115,6 +1117,7 @@ test('frontmost exact matches refuse incomplete renderer coverage', () => {
         rendererErrors: 0,
         extraRootsError: false,
         scanFinished: true,
+        scanErrors: [],
       },
     ],
   ] as const;
