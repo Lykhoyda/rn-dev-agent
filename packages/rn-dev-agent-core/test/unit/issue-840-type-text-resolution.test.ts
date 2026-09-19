@@ -12,6 +12,10 @@ type Fiber = {
   type: string | { displayName?: string; name?: string };
   memoizedProps: Record<string, unknown>;
   memoizedState?: unknown;
+  stateNode?: {
+    isFocused?: () => boolean;
+    canonical?: { publicInstance?: { isFocused?: () => boolean } };
+  };
   child: Fiber | null;
   sibling: Fiber | null;
   return: Fiber | null;
@@ -243,7 +247,7 @@ test('typeText readback resolves the same deep controlled target as mutation', (
   assert.equal(mutation.handlerCalled, 'onChangeText');
   assert.equal(mutation.controlled, true);
   assert.equal(mutation.valueBefore, '');
-  assert.deepEqual(readback, { value: 'verified', controlled: true });
+  assert.deepEqual(readback, { value: 'verified', controlled: true, focused: false });
 });
 
 test('readInputValue reads a controlled input on a screen-sized tree that exhausts the typeText budget', () => {
@@ -267,10 +271,44 @@ test('readInputValue reads a controlled input on a screen-sized tree that exhaus
   const readback = agent.readInputValue('screen-email');
   const mutation = agent.interact({ action: 'typeText', testID: 'screen-email', text: 'unsafe' });
 
-  assert.deepEqual(readback, { value: 'qa.user@example.com', controlled: true });
+  assert.deepEqual(readback, { value: 'qa.user@example.com', controlled: true, focused: false });
   assert.equal(mutation.truncated, true, JSON.stringify(mutation));
   assert.equal(mutation.workLimit, 2000);
   assert.deepEqual(calls, []);
+});
+
+test('readInputValue reports focused from the host isFocused oracle', () => {
+  const root = makeFiber('Root');
+  const focused = appendChild(
+    root,
+    makeFiber('AndroidTextInput', {
+      testID: 'focused-email',
+      value: 'a',
+      onChangeText() {},
+    }),
+  );
+  focused.stateNode = { isFocused: () => true };
+  const fabric = appendChild(
+    root,
+    makeFiber('AndroidTextInput', {
+      testID: 'fabric-email',
+      value: 'b',
+      onChangeText() {},
+    }),
+  );
+  fabric.stateNode = { canonical: { publicInstance: { isFocused: () => true } } };
+  const agent = createAgent(root);
+
+  assert.deepEqual(agent.readInputValue('focused-email'), {
+    value: 'a',
+    controlled: true,
+    focused: true,
+  });
+  assert.deepEqual(agent.readInputValue('fabric-email'), {
+    value: 'b',
+    controlled: true,
+    focused: true,
+  });
 });
 
 test('readInputValue still refuses when its own read budget is exhausted', () => {

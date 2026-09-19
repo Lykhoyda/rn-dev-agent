@@ -437,8 +437,13 @@ fill. There is no automatic retype, adb input, or Maestro fallback.
 When `NO_TEXT_INPUT_TARGET` names a `-pressable` wrapper or a node that is not a
 text input, the inner TextInput is missing from the snapshot and a retry cannot
 bind it. On iOS, tap the field so the software keyboard is up, then call
-`device_fill` with `focused: true`. Its append and read-back rules are on the
+`device_fill` with `focused: true`. `typed: true, verified: false` means the
+text was typed but not confirmed. Its append and read-back rules are on the
 [device_fill](/rn-dev-agent/tools/device/device_fill/) page.
+
+If that `focused: true` call itself answers `NO_TEXT_INPUT_TARGET` saying text
+synthesis is unavailable, this Xcode cannot synthesize text: nothing was typed,
+and retrying `focused: true` cannot succeed.
 
 ### KEYBOARD_DISMISS_FAILED
 

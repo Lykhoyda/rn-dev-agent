@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 71;
+export const HELPERS_VERSION = 72;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -3601,14 +3601,30 @@ export const INJECTED_HELPERS = `
     }, 100000);
   }
 
+  function hostIsFocused(fiber) {
+    try {
+      var sn = fiber && fiber.stateNode;
+      if (!sn) return false;
+      if (typeof sn.isFocused !== 'function' && sn.canonical && sn.canonical.publicInstance) {
+        sn = sn.canonical.publicInstance;
+      }
+      return typeof sn.isFocused === 'function' && sn.isFocused() === true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function readInputValue(testID) {
     if (!testID) return JSON.stringify({ __agent_error: 'testID is required' });
     var resolution = resolveTypeTextTarget({ testID: testID }, READ_INPUT_WORK_LIMIT);
     if (resolution.error) return JSON.stringify({ __agent_error: resolution.error });
-    if (!resolution.binding) return JSON.stringify({ value: null, controlled: false });
+    if (!resolution.binding) return JSON.stringify({ value: null, controlled: false, focused: false });
     var props = resolution.binding.candidateFiber.memoizedProps || {};
-    if (typeof props.value === 'string') return JSON.stringify({ value: props.value, controlled: true });
-    return JSON.stringify({ value: null, controlled: false });
+    var focused = hostIsFocused(resolution.binding.candidateFiber);
+    if (typeof props.value === 'string') {
+      return JSON.stringify({ value: props.value, controlled: true, focused: focused });
+    }
+    return JSON.stringify({ value: null, controlled: false, focused: focused });
   }
 
   // Task 8 — bounded fiber.return ancestor walk producing the bundle's

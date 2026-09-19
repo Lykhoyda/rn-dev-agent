@@ -72,7 +72,9 @@ function envelope(result: { content: Array<{ text: string }> }): Record<string, 
   return JSON.parse(result.content[0].text);
 }
 
-function fakeClient(values: Array<{ value?: string | null; controlled?: boolean } | null>) {
+function fakeClient(
+  values: Array<{ value?: string | null; controlled?: boolean; focused?: boolean } | null>,
+) {
   let reads = 0;
   return {
     isConnected: true,
@@ -82,7 +84,11 @@ function fakeClient(values: Array<{ value?: string | null; controlled?: boolean 
       reads += 1;
       if (!read) return { error: 'unreadable' };
       return {
-        value: JSON.stringify({ value: read.value ?? null, controlled: read.controlled ?? true }),
+        value: JSON.stringify({
+          value: read.value ?? null,
+          controlled: read.controlled ?? true,
+          focused: read.focused === true,
+        }),
       };
     },
   } as never;
@@ -90,8 +96,8 @@ function fakeClient(values: Array<{ value?: string | null; controlled?: boolean 
 
 test('focused fill: wrapper ref derives the base testID and matching read-back verifies', async () => {
   const client = fakeClient([
-    { value: '', controlled: true },
-    { value: 'qa.user@example.com', controlled: true },
+    { value: '', controlled: true, focused: true },
+    { value: 'qa.user@example.com', controlled: true, focused: true },
   ]);
   const { result, calls } = await withFocusedSeam({}, () =>
     performFocusedFill(
@@ -114,8 +120,8 @@ test('focused fill: wrapper ref derives the base testID and matching read-back v
 
 test('focused fill: React mismatch returns TEXT_ENTRY_UNVERIFIED with observed mutation', async () => {
   const client = fakeClient([
-    { value: '', controlled: true },
-    { value: 'other@example.com', controlled: true },
+    { value: '', controlled: true, focused: true },
+    { value: 'other@example.com', controlled: true, focused: true },
   ]);
   const { result, calls } = await withFocusedSeam({}, () =>
     performFocusedFill(
@@ -138,7 +144,7 @@ test('focused fill: positional ref or no client is warned, never verified', asyn
   assert.equal(positionalEnv.ok, true);
   assert.equal(positionalEnv.data.verified, false);
   assert.equal(positionalEnv.data.verifiedOracle, 'none');
-  assert.equal(positionalEnv.meta.warning.includes('no read-back oracle'), true);
+  assert.equal(positionalEnv.meta.warning.includes('the value could not be confirmed'), true);
   assert.ok(!JSON.stringify(positionalEnv).includes('"verified":true'));
 
   const { result: noClient } = await withFocusedSeam({}, () =>
@@ -198,5 +204,117 @@ test('default fill: wrapper-bind refusal names focused: true and keeps NO_TEXT_I
   assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
   assert.equal(env.meta.mutation, 'none');
   assert.match(env.error, /retry with focused: true\.$/);
+  assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'));
+});
+
+test('focused fill: matching unfocused named field stays typed but unverified', async () => {
+  const client = fakeClient([
+    { value: '', controlled: true, focused: false },
+    { value: 'qa.user@example.com', controlled: true, focused: false },
+  ]);
+  const { result, calls } = await withFocusedSeam({}, () =>
+    performFocusedFill(
+      { ref: 'EmailOtpFormContent_email-pressable', text: 'qa.user@example.com' },
+      client,
+    ),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.ok, true);
+  assert.equal(env.data.typed, true);
+  assert.equal(env.data.verified, false);
+  assert.equal(env.data.filled, undefined);
+  assert.ok(!JSON.stringify(env).includes('"filled":true'));
+  assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 1);
+});
+
+test('focused fill: missing pre-read does not verify even when post-read equals the text', async () => {
+  const client = fakeClient([null, { value: 'qa.user@example.com', controlled: true }]);
+  const { result } = await withFocusedSeam({}, () =>
+    performFocusedFill(
+      { ref: 'EmailOtpFormContent_email-pressable', text: 'qa.user@example.com' },
+      client,
+    ),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.ok, true);
+  assert.equal(env.data.typed, true);
+  assert.equal(env.data.verified, false);
+  assert.equal(env.data.filled, undefined);
+  assert.ok(!JSON.stringify(env).includes('"filled":true'));
+});
+
+test('focused fill: stale then exact React read-back verifies', async () => {
+  const client = fakeClient([
+    { value: '', controlled: true, focused: true },
+    { value: '', controlled: true, focused: true },
+    { value: '', controlled: true, focused: true },
+    { value: 'qa.user@example.com', controlled: true, focused: true },
+  ]);
+  const { result } = await withFocusedSeam({}, () =>
+    performFocusedFill(
+      { ref: 'EmailOtpFormContent_email-pressable', text: 'qa.user@example.com' },
+      client,
+    ),
+  );
+  const env = envelope(result as never);
+  assert.ok(!(result as { isError?: boolean }).isError, env.error);
+  assert.deepEqual(env.data, { filled: true, method: 'native', length: 19 });
+  assert.equal(env.meta.verify, 'exact');
+  assert.equal(env.meta.verifiedOracle, 'react-tree');
+});
+
+test('focused fill: exact read followed by a failed confirm is typed but unverified, not a mismatch', async () => {
+  const client = fakeClient([
+    { value: '', controlled: true, focused: true },
+    { value: '', controlled: true, focused: true },
+    { value: '', controlled: true, focused: true },
+    { value: 'qa.user@example.com', controlled: true, focused: true },
+    null,
+  ]);
+  const { result } = await withFocusedSeam({}, () =>
+    performFocusedFill(
+      { ref: 'EmailOtpFormContent_email-pressable', text: 'qa.user@example.com' },
+      client,
+    ),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.ok, true);
+  assert.equal(env.code, undefined);
+  assert.equal(env.data.typed, true);
+  assert.equal(env.data.verified, false);
+  assert.equal(env.data.verifiedOracle, 'none');
+});
+
+test('focused fill: runner TEXT_SYNTHESIS_UNAVAILABLE surfaces as NO_TEXT_INPUT_TARGET with no mutation', async () => {
+  const message = 'text synthesis is unavailable on this Xcode; no typing was performed.';
+  const { result, calls } = await withFocusedSeam(
+    {
+      fill: () => failResult(message, 'TEXT_SYNTHESIS_UNAVAILABLE', { mutation: 'none' }),
+    },
+    () => performFocusedFill({ ref: 'EmailOtpFormContent_email-pressable', text: 'a' }, null),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
+  assert.equal(env.meta.mutation, 'none');
+  assert.equal(env.error, message);
+  assert.match(env.meta.hint, /cannot synthesize text/);
+  assert.match(env.meta.hint, /Do not retry focused: true/);
+  assert.equal(env.meta.hint.includes('rebind'), false);
+  assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 1);
+});
+
+test('default fill: Android wrapper-bind refusal omits the focused: true hint', async () => {
+  const { result, calls } = await withFocusedSeam({ platform: 'android' }, () =>
+    performExactFill(
+      { ref: 'EmailOtpFormContent_email-pressable', text: 'qa.user@example.com' },
+      null,
+      {},
+    ),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
+  assert.equal(env.meta.mutation, 'none');
+  assert.match(env.error, /No text was entered\.$/);
+  assert.equal(env.error.includes('focused: true'), false);
   assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'));
 });
