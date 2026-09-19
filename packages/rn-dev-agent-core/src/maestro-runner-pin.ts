@@ -11,15 +11,18 @@ import {
   nodePlatformKey,
   _resetEngineStatusForTest,
 } from './domain/engine-pin.js';
-import { migrateLearnedActions } from './domain/action-engine-compat.js';
-import { classifyLearnedActionPath } from './domain/action-engine-compat.js';
+import {
+  classifyLearnedActionPath,
+  diagnoseLearnedActions,
+  migrateLearnedActions,
+} from './domain/action-engine-compat.js';
 import { prepareActionVerificationSuite } from './domain/action-verification-suite.js';
 import { openReadableActionLoadContext } from './domain/action-store.js';
 import { filterWithBoundedRegex } from './domain/bounded-regex.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 
 const USAGE =
-  'usage: maestro-runner-pin [diagnose|install|migrate-actions|verify-actions] [--json] [--root <app>]';
+  'usage: maestro-runner-pin [diagnose|diagnose-actions|install|migrate-actions|verify-actions] [--json] [--root <app>]';
 
 function ensureScriptPath(): string {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -93,6 +96,26 @@ function install(): number {
   const script = ensureScriptPath();
   const result = spawnSync('bash', [script], { stdio: 'inherit' });
   return result.status === 0 ? 0 : 1;
+}
+
+function formatActionIds(ids: readonly string[]): string {
+  return ids.length === 0 ? '0' : `${ids.length} [${ids.join(',')}]`;
+}
+
+function diagnoseActions(root: string, json: boolean): number {
+  const report = diagnoseLearnedActions(root);
+  const failed =
+    report.counts.enginePin + report.counts.regexSelector + report.counts.unreadable > 0;
+  if (json) {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log(
+      failed
+        ? `learned-actions FAIL scanned=${report.scanned} compatible=${report.compatible} enginePin=${formatActionIds(report.actionIds.enginePin)} regexSelector=${formatActionIds(report.actionIds.regexSelector)} unreadable=${formatActionIds(report.actionIds.unreadable)}`
+        : `learned-actions OK scanned=${report.scanned} compatible=${report.compatible}`,
+    );
+  }
+  return failed ? 1 : 0;
 }
 
 function migrate(root: string, json: boolean): number {
@@ -234,6 +257,8 @@ function parseArgs(argv: string[]): {
 const { cmd, json, root } = parseArgs(process.argv.slice(2));
 if (cmd === 'diagnose') {
   process.exit(await diagnose(json));
+} else if (cmd === 'diagnose-actions') {
+  process.exit(diagnoseActions(root, json));
 } else if (cmd === 'install') {
   process.exit(install());
 } else if (cmd === 'migrate-actions') {

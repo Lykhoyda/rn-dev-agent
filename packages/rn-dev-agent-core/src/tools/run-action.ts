@@ -82,7 +82,7 @@ import {
 } from '../session/authority-gate.js';
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
-import { actionReplayPreflight } from '../domain/action-engine-compat.js';
+import { actionReplayRefusal } from '../domain/action-engine-compat.js';
 import { planIosProofDomains } from '../domain/ios-proof-router.js';
 import {
   getEngineStatus,
@@ -706,16 +706,17 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         ...(runtimeStatePath ? { writes: writeDisclosure() } : {}),
       });
     }
-    const compatRefusal = actionReplayPreflight({
+    const compatRefusal = actionReplayRefusal({
       enginePin: action.metadata.enginePin,
       commands: preflightCommands,
       engineStatus,
       requireRuntimePin: requiresNativeRuntime,
     });
     if (compatRefusal) {
-      return failResult(compatRefusal, 'ENGINE_PIN_MISMATCH', {
+      return failResult(compatRefusal.message, 'ENGINE_PIN_MISMATCH', {
         actionId: args.actionId,
         fallback: 'none',
+        refusalClass: compatRefusal.refusalClass,
         pin: engineStatus?.pin,
         selectedPath: engineStatus?.selectedPath ?? null,
         provenance: engineStatus?.provenance ?? 'none',
@@ -887,6 +888,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           {
             actionId: args.actionId,
             failureKind: 'ENGINE_PIN_MISMATCH',
+            refusalClass: 'runtimePin',
             enginePin: firstEnv.data?.enginePin,
             autoRepair,
             writes: writeDisclosure('none', persisted),

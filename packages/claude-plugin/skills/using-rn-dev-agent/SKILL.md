@@ -105,12 +105,12 @@ What is the user asking for?
 │
 ├── Plugin tools not working / environment broken
 │   └─► /rn-dev-agent:setup
-│       (13-check environment diagnostic with auto-retry + manual fallback,
+│       (Environment checklist from rn-setup with auto-retry + manual fallback,
 │        then CLAUDE.md/nav-ref/store-exposure injection)
 │
 ├── DIAGNOSE the environment (read-only, no changes)
 │   └─► /rn-dev-agent:doctor
-│       (Same 13-check diagnostic as setup Phase 1 — reports, never modifies)
+│       (Environment checklist from rn-setup — reports, never modifies)
 │
 ├── Need PROOF for a PR ("record a demo", "capture proof", "PR video")
 │   └─► Load the capturing-proof skill (or run /rn-dev-agent:proof-capture <feature-slug>)

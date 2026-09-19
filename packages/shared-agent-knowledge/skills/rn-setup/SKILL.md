@@ -138,6 +138,22 @@ or unowned UI fallback:
 node ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root "$APP_ROOT" --json
 ```
 
+Setup may mutate owned actions through `migrate-actions`. Doctor never does.
+
+### 4b. Learned-action compatibility (read-only)
+
+Doctor scans the same replay refusals without writing. A pinned-ok runner does not make this row GREEN:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose-actions --root "$APP_ROOT" --json
+```
+
+Print counts plus action ids only (`enginePin`, `regexSelector`, `unreadable`). Inherited symlink corpora may be scanned. Never run `migrate-actions` from doctor, never rewrite an action, and never print a YAML body or a private inherit source path.
+
+- all compatible / no corpus → OK
+- any `enginePin` or `regexSelector` id → FAIL with those ids. `enginePin` is an unmigrated or low action pin, not a missing runner binary. `regexSelector` must be rewritten as `id:` or literal text; migrate cannot repair it.
+- only `unreadable` ids → YELLOW/FAIL with those ids
+
 ### 5. iOS Simulator (if macOS)
 ```bash
 xcrun simctl list devices booted 2>/dev/null | grep -i booted
@@ -300,6 +316,7 @@ Present results as a table:
 | rn-fast-runner (iOS) | OK (built) / NEEDS_BUILD / N/A (non-macOS) | NEEDS_BUILD self-builds on first use (slow); offer the one-time `xcodebuild build-for-testing` to skip the wait (see check 3 above) |
 | rn-android-runner (Android) | OK (APKs present) / NEEDS_BUILD / N/A (iOS-only setup) | NEEDS_BUILD: `cd ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/rn-android-runner && ./gradlew assembleDebug assembleDebugAndroidTest` — only if targeting Android |
 | maestro-runner | pinned-ok (>= 1.1.24 pin-cache) / FAIL (missing, older, unattested, checksum, unsupported) | `bash ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/ensure-maestro-runner.sh` then re-diagnose. Never PATH, ~/.maestro-runner, or brew maestro. |
+| Learned actions | OK (N compatible) / FAIL (`enginePin=N [ids]`; `regexSelector=N [ids]`) / YELLOW (`unreadable=N [ids]`) | `maestro-runner-pin.js diagnose-actions --root "$APP_ROOT" --json`. Print counts and action ids only. Never migrate, rewrite, print YAML, or print a private inherit source path from doctor. |
 | iOS Simulator | BOOTED (iPhone 16) | — |
 | Android Emulator | NOT RUNNING | Boot an emulator |
 | Metro | RUNNING (port 8081) | — |
@@ -351,6 +368,7 @@ Setup is boring — agents skip it and pay for it later.
 - [ ] **Android targets**: `packages/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk` exists (build once via `./gradlew assembleDebug assembleDebugAndroidTest`) — only required if targeting Android; iOS uses the in-tree `rn-fast-runner` (D1219)
 - [ ] **iOS targets**: `packages/rn-fast-runner/build/DerivedData/Build/Products/Debug-iphonesimulator/RnFastRunnerUITests-Runner.app` exists (pre-built once via `xcodebuild build-for-testing`)
 - [ ] pin-cache `maestro-runner --version` is exactly `1.1.24` (`maestro-runner-pin.js diagnose` → `pinned-ok`, provenance `pin-cache`)
+- [ ] `maestro-runner-pin.js diagnose-actions --root "$APP_ROOT" --json` is OK, or FAIL/YELLOW with action ids (never silent GREEN when actions are unmigrated, regex, or unreadable)
 - [ ] At least ONE of: iOS simulator booted OR Android emulator running
 - [ ] `rn_session(action="status")` and `cdp_status` report the bound Metro
 - [ ] Passive `cdp_status` reports `cdp.connected: true` and a narrow `cdp_component_tree` query succeeds

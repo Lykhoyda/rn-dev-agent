@@ -14,8 +14,8 @@ Codex:  $rn-dev-agent:doctor
 
 ## What it reports
 
-Codex doctor runs the package-local health executable and keeps independent
-axes for:
+Codex doctor combines the package-local health executable with separate probes
+when the RN app root is known. It reports independent axes for:
 
 - Codex host support (`0.145.0` live-refresh floor; older hosts restart-only);
 - exact plugin ID/version/enabled state;
@@ -27,6 +27,11 @@ axes for:
 - prior observed transport/app status;
 - linked-worktree action inheritance and repository-local hook status, without
   exposing private source paths or reading action bodies;
+- learned-action compatibility (`diagnose-actions`): counts plus action ids for
+  missing/low `enginePin`, regex text selectors, and unreadable actions, without
+  printing YAML bodies or private inherit source paths. Any `enginePin` or
+  `regexSelector` finding is FAIL even with a pinned-ok runner; YELLOW is allowed
+  only when all findings are `unreadable`;
 - all findings, a primary finding, and ordered recovery commands.
 
 Unknown or partial task evidence is never classified stale. A direct contract

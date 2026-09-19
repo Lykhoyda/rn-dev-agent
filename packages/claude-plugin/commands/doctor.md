@@ -1,16 +1,16 @@
 ---
 command: doctor
-description: Diagnose installation health. Check Node, CDP bridge, rn-fast-runner (iOS), rn-android-runner (Android), maestro-runner, simulators, Metro, CDP, injected helpers, ffmpeg, physical devices, plugin version, Vercel rules sync. Reports what's missing — does NOT modify your project.
+description: Diagnose installation health. Check Node, CDP bridge, rn-fast-runner (iOS), rn-android-runner (Android), maestro-runner, learned-action compatibility, simulators, Metro, CDP, injected helpers, ffmpeg, physical devices, plugin version, Vercel rules sync. Reports what's missing — does NOT modify your project.
 argument-hint: 
 ---
 
-Run the environment-diagnostic checklist from the `rn-setup` skill. Walk all 17 prerequisite checks (Node.js version, CDP bridge dependencies, **rn-fast-runner build (iOS)**, **rn-android-runner build/install (Android)**, maestro-runner, iOS simulator, Android emulator, Metro dev server, CDP connection, **injected `__RN_AGENT` helpers**, ffmpeg, **idb (screen-mirror fast path)**, physical-device prerequisites, **plugin version freshness**, **Vercel rules sync freshness**, **CDP auto-reconnect mode**, **linked-worktree action inheritance**) and surface install commands for any missing dependencies.
+Run the environment-diagnostic checklist from the `rn-setup` skill. Walk all 18 prerequisite checks (Node.js version, CDP bridge dependencies, **rn-fast-runner build (iOS)**, **rn-android-runner build/install (Android)**, maestro-runner, **learned-action compatibility**, iOS simulator, Android emulator, Metro dev server, CDP connection, **injected `__RN_AGENT` helpers**, ffmpeg, **idb (screen-mirror fast path)**, physical-device prerequisites, **plugin version freshness**, **Vercel rules sync freshness**, **CDP auto-reconnect mode**, **linked-worktree action inheritance**) and surface install commands for any missing dependencies.
 
 iOS device automation is owned by the in-tree `rn-fast-runner` XCTest project (D1219, PR #164); Android device automation is owned by the in-tree `rn-android-runner` (UiAutomator instrumentation). These in-tree runners are the sole device backend — there is no external CLI to install. Mark `rn-android-runner` as N/A on iOS-only setups and `rn-fast-runner` as N/A on Android-only / non-macOS setups. If a device tool fails with RUNNER_PROTOCOL_MISMATCH, the installed/prebuilt runner artifact predates the plugin's wire protocol: on iOS delete packages/rn-fast-runner/build/DerivedData and re-open the device session (or re-run xcodebuild build-for-testing); on Android re-run ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest and adb install -r both APKs.
 
 **This command is read-only.** It diagnoses the current environment and recommends fixes. It does NOT modify any files in the user's project, inject documentation, or instrument source code.
 
-Present results as a 17-row table. Follow the detailed probes and remediation
+Present results as an 18-row table. Follow the detailed probes and remediation
 rules in `rn-setup`; do not infer runner provenance, helper availability, or
 auto-reconnect configuration from passive `cdp_status`.
 
@@ -20,6 +20,8 @@ selectors use `xctest-native`. A runtime-version heuristic is diagnostic context
 never proof of blindness. Report `NATIVE_SURFACE_BLIND` only when the replay includes the
 bounded same-screen native-selector evidence; otherwise preserve the ordinary selector miss.
 The supported next action is the central native WDA smoke on a WDA-healthy runtime.
+
+For **learned-action compatibility**, resolve the RN app root and run the packaged `maestro-runner-pin.js diagnose-actions --root <app> --json`. Print one table row with `scanned`, `compatible`, and the `enginePin` / `regexSelector` / `unreadable` counts plus those action ids. A `pinned-ok` runner with any of those refusals is FAIL (or YELLOW when the only findings are `unreadable`), never silent GREEN. Inherited symlink corpora may be scanned. Never run `migrate-actions`, rewrite an action, print a YAML body, or print a private inherit source path from doctor.
 
 For **linked-worktree action inheritance**, resolve the RN app root and run the packaged `worktree-inheritance.js plan --host claude --app-root <app> --json`. Report `.rn-agent/actions` as tracked, inherited, missing, explicit-legacy-repair-needed, unsafe, or refused. Also report `hook status`. Never apply, repair, install a hook, print a private source path, or inspect an action body from doctor.
 
