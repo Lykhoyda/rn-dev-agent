@@ -173,6 +173,12 @@ REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "valid package split passes" 0 $?
 
 write_valid_repo
+printf '%s\n' 'Do not use /plugin install.' >> "$tmp/packages/codex-plugin/commands/setup.md"
+/bin/cp "$tmp/packages/codex-plugin/commands/setup.md" "$tmp/packages/claude-plugin/codex-commands/setup.md"
+REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "instruction vocabulary does not determine package validity" 0 $?
+
+write_valid_repo
 printf '%s\n' '# allow_implicit_invocation: false' 'policy:' '  allow_implicit_invocation: true' > "$tmp/packages/claude-plugin/codex-skills/setup/agents/openai.yaml"
 REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "commented false cannot mask enabled implicit invocation" 1 $?

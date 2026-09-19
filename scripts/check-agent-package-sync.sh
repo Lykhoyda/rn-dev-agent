@@ -541,18 +541,6 @@ fi
 if find "$ROOT/packages/claude-plugin/codex-skills" -mindepth 1 -maxdepth 1 -type d -name 'source-command-*' | grep -q .; then
   fail "Codex native skill inventory must not contain source-command-*"
 fi
-codex_instruction_paths=(
-  "$ROOT/packages/codex-plugin/commands"
-  "$ROOT/packages/codex-plugin/skills"
-  "$ROOT/packages/codex-plugin/src/AGENTS-MD-TEMPLATE.md"
-  "$ROOT/packages/claude-plugin/codex-skills"
-)
-for pattern in '\$ARGUMENTS|\$\{ARGUMENTS' 'CLAUDE_PLUGIN_ROOT|RN_DEV_AGENT_CODEX_PLUGIN_ROOT|CODEX_PLUGIN_ROOT' '/rn-dev-agent:' 'mcp__plugin_rn-dev-agent_cdp__' '/plugin (install|update)' 'find .*plugins/cache|sort -V.*plugin'; do
-  if grep -ERn --include='*.md' --include='*.yaml' --include='*.yml' "$pattern" "${codex_instruction_paths[@]}" >/dev/null 2>&1; then
-    fail "Codex runtime instructions contain unsupported host/request/path syntax matching: $pattern"
-  fi
-done
-
 if [ "$failures" -ne 0 ]; then
   echo "check-agent-package-sync: $failures failure(s)" >&2
   exit 1
