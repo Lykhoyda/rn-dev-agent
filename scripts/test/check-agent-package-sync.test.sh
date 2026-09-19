@@ -114,7 +114,7 @@ write_valid_repo() {
   printf '%s\n' '# Codex AGENTS fixture' > "$tmp/packages/codex-plugin/src/AGENTS-MD-TEMPLATE.md"
   /bin/cp "$tmp/packages/codex-plugin/src/AGENTS-MD-TEMPLATE.md" "$tmp/packages/claude-plugin/AGENTS-MD-TEMPLATE.md"
   printf '%s\n' 'export const health = true;' > "$tmp/packages/codex-plugin/src/plugin-health.ts"
-  printf '%s\n' '// packages/codex-plugin/src/plugin-health.ts' 'console.log("health fixture")' > "$tmp/packages/claude-plugin/bin/plugin-health.js"
+  printf '%s\n' 'console.log("health fixture")' > "$tmp/packages/claude-plugin/bin/plugin-health.js"
   printf '%s\n' '{"name":"rn-dev-agent","version":"1.2.3","skills":"./codex-skills/","commands":[],"mcpServers":"./codex.mcp.json","hooks":{"hooks":{}}}' > "$tmp/packages/codex-plugin/.codex-plugin/plugin.json"
   /bin/cp "$tmp/packages/codex-plugin/.codex-plugin/plugin.json" "$tmp/packages/claude-plugin/.codex-plugin/plugin.json"
   printf '%s\n' '{"mcpServers":{"cdp":{"command":"node","args":["-e","const V='\''1.2.3'\'';require(\"child_process\").spawn(process.execPath,[\"bin/cdp-supervisor.js\"],{stdio:\"inherit\"})"],"tool_timeout_sec":900}}}' > "$tmp/packages/codex-plugin/.mcp.json"
@@ -171,6 +171,21 @@ write_valid_repo() {
 write_valid_repo
 REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "valid package split passes" 0 $?
+
+write_valid_repo
+printf '%s\n' '# allow_implicit_invocation: false' 'policy:' '  allow_implicit_invocation: true' > "$tmp/packages/claude-plugin/codex-skills/setup/agents/openai.yaml"
+REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "commented false cannot mask enabled implicit invocation" 1 $?
+
+write_valid_repo
+printf '%s\n' 'policy:' '  allow_implicit_invocation: "false"' > "$tmp/packages/claude-plugin/codex-skills/setup/agents/openai.yaml"
+REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "implicit invocation policy must be a boolean" 1 $?
+
+write_valid_repo
+printf '%s\n' 'policy: {allow_implicit_invocation: false}' > "$tmp/packages/claude-plugin/codex-skills/setup/agents/openai.yaml"
+REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "equivalent flow-style policy passes" 0 $?
 
 write_valid_repo
 mkdir -p "$tmp/packages/rn-android-runner/app/build/generated" "$tmp/packages/rn-android-runner/.gradle" "$tmp/packages/rn-android-runner/.kotlin" "$tmp/packages/rn-fast-runner/build/DerivedData" "$tmp/packages/rn-fast-runner/RnFastRunner/RnFastRunner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/configuration"

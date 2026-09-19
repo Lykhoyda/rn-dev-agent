@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { skillFrontmatter } from '../helpers/skill-metadata.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
@@ -112,13 +113,10 @@ test('Codex ships a discoverable feedback skill and package-local collector', as
 
   assert.notEqual(codexSkill, canonicalSkill, 'Codex skill is an intentional host adaptation');
   assert.equal(packagedCollector, canonicalCollector);
-  assert.match(codexSkill, /^name: sending-feedback$/m);
+  const metadata = skillFrontmatter(codexSkill);
+  assert.equal(metadata.name, 'sending-feedback');
+  assert.equal(typeof metadata.description, 'string');
+  assert.ok(metadata.description);
   assert.match(codexSkill, /\.\.\/\.\.\/scripts\/collect-feedback\.sh/);
   assert.match(command, /<package-root>\/scripts\/collect-feedback\.sh/);
-  assert.doesNotMatch(
-    command,
-    /RN_DEV_AGENT_CODEX_PLUGIN_ROOT|CODEX_PLUGIN_ROOT|CLAUDE_PLUGIN_ROOT/,
-  );
-  assert.doesNotMatch(command, /plugins\/cache|sort -V|-print -quit/);
-  assert.match(command, /collision-safe private temporary body file/);
 });

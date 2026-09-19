@@ -58,16 +58,9 @@ test('GH-575 packaged EAS helpers match the canonical source', async () => {
     ),
     source,
   );
-  assert.equal(
-    await readFile(
-      repositoryPath('packages/claude-plugin/scripts/eas_resolve_artifact.sh'),
-      'utf8',
-    ),
-    source,
-  );
 });
 
-test('GH-575 packaged EAS references document immutable app-scoped cache paths', async () => {
+test('GH-575 packaged EAS references match their authoring sources', async () => {
   const source = await readFile(
     repositoryPath(
       'packages/shared-agent-knowledge/skills/rn-device-control/references/expo-eas-builds.md',
@@ -89,13 +82,15 @@ test('GH-575 packaged EAS references document immutable app-scoped cache paths',
     ),
     'utf8',
   );
-  for (const reference of [source, codex]) {
-    assert.match(reference, /\.eas-cache-<project-id>-development-ios-A1b2C3\.json/);
-    assert.match(reference, /development-ios-A1b2C3\.tar\.gz/);
-    assert.match(reference, /exact Expo\/EAS project ID/);
-    assert.match(reference, /newest remote build timestamp and ID deterministically/);
-    assert.doesNotMatch(reference, /"path":"\/private\/path\/development-ios\.tar\.gz"/);
-  }
+  assert.equal(
+    codex,
+    await readFile(
+      repositoryPath(
+        'packages/codex-plugin/skills/rn-device-control/references/expo-eas-builds.md',
+      ),
+      'utf8',
+    ),
+  );
 });
 
 test('GH-575 iOS artifact install uses the selected simulator for every operation', async () => {

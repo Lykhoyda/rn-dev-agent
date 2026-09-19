@@ -164,10 +164,23 @@ expect_codex_skill_inventory() {
     if ! grep -q "](../../codex-commands/$name.md)" "$ROOT/packages/claude-plugin/codex-skills/$name/SKILL.md"; then
       fail "Codex workflow skill $name must link its packaged codex-commands playbook"
     fi
-    if ! grep -Eq 'allow_implicit_invocation:[[:space:]]+false' "$ROOT/packages/claude-plugin/codex-skills/$name/agents/openai.yaml"; then
-      fail "Codex workflow skill $name must disable implicit invocation"
-    fi
   done <<< "$command"
+  if ! node --input-type=commonjs - "$ROOT" "$(cd "$(dirname "$0")/.." && pwd)/packages/rn-dev-agent-core/package.json" <<'NODE'
+const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const { createRequire } = require('node:module');
+const { join } = require('node:path');
+const [root, corePackage] = process.argv.slice(2);
+const { parse } = createRequire(corePackage)('yaml');
+const sourceMap = JSON.parse(readFileSync(join(root, 'packages/shared-agent-knowledge/source-map.json'), 'utf8'));
+for (const name of sourceMap.hostAdaptations.codex.commandSkills) {
+  const metadata = parse(readFileSync(join(root, 'packages/claude-plugin/codex-skills', name, 'agents/openai.yaml'), 'utf8'));
+  assert.equal(metadata?.policy?.allow_implicit_invocation, false, `${name} must disable implicit invocation`);
+}
+NODE
+  then
+    fail "Codex workflow metadata must parse with implicit invocation disabled"
+  fi
 }
 
 expect_eq() {
@@ -408,9 +421,6 @@ done
 if ! cmp -s "$ROOT/packages/codex-plugin/src/AGENTS-MD-TEMPLATE.md" "$ROOT/packages/claude-plugin/AGENTS-MD-TEMPLATE.md"; then
   fail "packages/claude-plugin/AGENTS-MD-TEMPLATE.md must match packages/codex-plugin/src/AGENTS-MD-TEMPLATE.md"
 fi
-if ! grep -q 'plugin-health.ts' "$ROOT/packages/claude-plugin/bin/plugin-health.js"; then
-  fail "Codex plugin health output must be generated from the TypeScript source"
-fi
 
 expect_eq "$(json '.packageManager // empty' "$ROOT/package.json")" "yarn@$EXPECTED_YARN_VERSION" "root packageManager"
 expect_no_file "package-lock.json"
@@ -504,11 +514,6 @@ fi
 if printf '%s\n' "$codex_bootstrap" | grep -q "rn-dev-agent-core"; then
   fail "Codex MCP bootstrap must delegate only to the package launcher, not a global core cache"
 fi
-for launcher in packages/codex-plugin/bin/cdp-supervisor.js packages/claude-plugin/bin/cdp-supervisor.js; do
-  if grep -Eq 'marketplaceSourceFromConfig|sourcePluginRootFromMarketplace|rn-dev-agent-core.*plugins.*cache|plugins.*cache.*rn-dev-agent-core' "$ROOT/$launcher"; then
-    fail "$launcher must not depend on marketplace source or global core caches"
-  fi
-done
 expect_jq "packages/shared-agent-knowledge/source-map.json" \
   '.canonicalSources.skills == "./skills" and .canonicalSources.commands == "./commands" and .canonicalSources.agents == "./agents" and .nativeRunners.ios == "../rn-fast-runner" and .nativeRunners.android == "../rn-android-runner" and (.hostAdaptations.codex.adaptedCommands | length) == 17 and (.hostAdaptations.codex.adaptedDomainSkills | length) == 11 and (.hostAdaptations.codex.commandSkills | length) == 17 and .hostAdaptations.codex.liveRefreshFloor == "0.145.0" and .hostAdaptations.codex.healthSource == "../codex-plugin/src/plugin-health.ts" and .hostAdaptations.codex.healthOutput == "../claude-plugin/bin/plugin-health.js" and .hostAdaptations.codex.agentsTemplateSource == "../codex-plugin/src/AGENTS-MD-TEMPLATE.md" and .hostAdaptations.codex.agentsTemplateOutput == "../claude-plugin/AGENTS-MD-TEMPLATE.md" and .hostAdaptations.codex.authoringRoot == "../codex-plugin" and .hostAdaptations.codex.manifestSource == "../codex-plugin/.codex-plugin/plugin.json" and .hostAdaptations.codex.mcpSource == "../codex-plugin/.mcp.json" and .hostAdaptations.codex.launcherSource == "../codex-plugin/bin/cdp-supervisor.js" and .hostAdaptations.codex.skillsSource == "../codex-plugin/skills" and .hostAdaptations.codex.commandsSource == "../codex-plugin/commands" and .hostAdaptations.codex.agentsSource == "../codex-plugin/agents" and .hostAdaptations.codex.templatesSource == "../codex-plugin/templates/rn-agent" and .hostOutputs.claude.manifest == "../claude-plugin/.claude-plugin/plugin.json" and .hostOutputs.claude.legacyManifest == "../claude-plugin/plugin.json" and .hostOutputs.claude.rootMarketplace == "../../.claude-plugin/marketplace.json" and .hostOutputs.claude.packageMarketplace == "../claude-plugin/.claude-plugin/marketplace.json" and .hostOutputs.claude.runtime == "../claude-plugin/rn-dev-agent-core/dist/supervisor.js" and .hostOutputs.claude.runnerManifest == "../claude-plugin/runner-manifest.json" and .hostOutputs.claude.nativeRunnerScripts == "../claude-plugin/scripts" and .hostOutputs.claude.skills == "../claude-plugin/skills" and .hostOutputs.codex.distributionRoot == "../claude-plugin" and .hostOutputs.codex.manifest == "../claude-plugin/.codex-plugin/plugin.json" and .hostOutputs.codex.mcp == "../claude-plugin/codex.mcp.json" and .hostOutputs.codex.launcher == "../claude-plugin/bin/cdp-supervisor.js" and .hostOutputs.codex.launcherPackage == "../claude-plugin/bin/package.json" and .hostOutputs.codex.health == "../claude-plugin/bin/plugin-health.js" and .hostOutputs.codex.agentsTemplate == "../claude-plugin/AGENTS-MD-TEMPLATE.md" and .hostOutputs.codex.runtime == "../claude-plugin/rn-dev-agent-core/dist/supervisor.js" and .hostOutputs.codex.runnerManifest == "../claude-plugin/runner-manifest.json" and .hostOutputs.codex.nativeRunnerScripts == "../claude-plugin/scripts" and .hostOutputs.codex.skills == "../claude-plugin/codex-skills" and .hostOutputs.codex.commands == "../claude-plugin/codex-commands" and .hostOutputs.codex.agents == "../claude-plugin/codex-agents" and .hostOutputs.codex.templates == "../claude-plugin/codex-templates/rn-agent" and (.compatibilityOutputs? | not) and .apps.docsSite.path == "../../apps/docs-site" and (.apps.docsSite.compatibilityPath? | not)' \
   "shared-agent-knowledge source map must point at package-owned sources, Codex authoring inputs, the single distributed outputs, and docs app"

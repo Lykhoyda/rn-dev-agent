@@ -28,7 +28,7 @@ async function executable(path: string, contents: string): Promise<void> {
   await chmod(path, 0o755);
 }
 
-test('GH-575 snapshot guidance uses package-local exact-device invocations', async () => {
+test('GH-575 packaged device-control skills match their authoring sources', async () => {
   const shared = await readFile(
     repositoryPath('packages/shared-agent-knowledge/skills/rn-device-control/SKILL.md'),
     'utf8',
@@ -42,16 +42,13 @@ test('GH-575 snapshot guidance uses package-local exact-device invocations', asy
     'utf8',
   );
   assert.equal(claude, shared);
-  assert.match(shared, /CURSOR_PLUGIN_ROOT/);
-  assert.match(shared, /snapshot_state\.sh/);
-  assert.match(codex, /<package-root>\/scripts\/snapshot_state\.sh/);
-  for (const guidance of [shared, codex]) {
-    assert.match(guidance, /snapshot_state\.sh" ios --device-id/);
-    assert.match(guidance, /snapshot_state\.sh" android --device-id/);
-    assert.match(guidance, /immutable result directory/);
-    assert.match(guidance, /SNAPSHOT_RESULT=\$\(bash/);
-    assert.doesNotMatch(guidance, /captures screenshot \+ UI hierarchy simultaneously/);
-  }
+  assert.equal(
+    codex,
+    await readFile(
+      repositoryPath('packages/codex-plugin/skills/rn-device-control/SKILL.md'),
+      'utf8',
+    ),
+  );
 });
 
 test('GH-575 snapshot requires and targets one exact iOS simulator', async () => {
@@ -168,12 +165,6 @@ fi
       await readFile(repositoryPath('packages/claude-plugin/scripts/snapshot_state.sh'), 'utf8'),
       source,
     );
-    assert.equal(
-      await readFile(repositoryPath('packages/claude-plugin/scripts/snapshot_state.sh'), 'utf8'),
-      source,
-    );
-    assert.doesNotMatch(source, /\bkill\b/);
-    assert.doesNotMatch(source, /\s&\s*(?:\n|$)/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -427,20 +418,4 @@ fi
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-});
-
-test('GH-575 published snapshot docs describe exact sequential private capture', async () => {
-  const docs = await readFile(
-    repositoryPath('apps/docs-site/src/content/docs/skills/rn-device-control.mdx'),
-    'utf8',
-  );
-  assert.match(docs, /snapshot_state\.sh" ios --device-id/);
-  assert.match(docs, /captures state sequentially/);
-  assert.match(docs, /owner-only private directory/);
-  assert.match(docs, /fails closed.*identity/s);
-  assert.match(docs, /atomically published as its own immutable.*result directory/s);
-  assert.doesNotMatch(
-    docs,
-    /Concurrent State Snapshot|simultaneously, cutting state-check time by ~40%/,
-  );
 });

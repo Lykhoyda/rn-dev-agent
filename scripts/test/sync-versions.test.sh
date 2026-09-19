@@ -48,7 +48,7 @@ mkdir -p \
 
 plugin_json='{"name": "rn-dev-agent", "version": "1.0.8"}'
 marketplace_json='{"plugins": [{"name": "rn-dev-agent", "version": "1.0.8"}]}'
-mcp_json='{"mcpServers": {"cdp": {"command": "node", "args": ["-e", "const V='"'"'1.0.8'"'"';"]}}}'
+mcp_json='{"mcpServers": {"cdp": {"command": "node", "args": ["-e", "const V='"'"'1.0.8'"'"';process.stdout.write(V);"]}}}'
 
 printf '%s\n' '{"name": "rn-dev-agent-plugin", "version": "1.2.3"}' > "$tmp/packages/claude-plugin/package.json"
 printf '%s\n' "$plugin_json" > "$tmp/packages/claude-plugin/plugin.json"
@@ -71,12 +71,24 @@ fix_exit=$?
 set -e
 check "GNU sed --fix with stale generated Codex copies exits 0" 0 "$fix_exit"
 
-dist_plugin_version=$(grep '"version"' "$tmp/packages/claude-plugin/.codex-plugin/plugin.json" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
-dist_mcp_version=$(grep -o "const V='[0-9][^']*'" "$tmp/packages/claude-plugin/codex.mcp.json" | head -1 | sed "s/const V='\([^']*\)'/\1/")
-if [ "$dist_plugin_version" = "1.2.3" ] && [ "$dist_mcp_version" = "1.2.3" ]; then
+if node --input-type=commonjs - "$tmp" <<'NODE'
+const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
+const { spawnSync } = require('node:child_process');
+const root = process.argv[2];
+const manifest = JSON.parse(readFileSync(join(root, 'packages/claude-plugin/.codex-plugin/plugin.json'), 'utf8'));
+assert.equal(manifest.version, '1.2.3');
+const mcp = JSON.parse(readFileSync(join(root, 'packages/claude-plugin/codex.mcp.json'), 'utf8'));
+assert.equal(mcp.mcpServers.cdp.command, 'node');
+const result = spawnSync(process.execPath, mcp.mcpServers.cdp.args, { encoding: 'utf8' });
+assert.equal(result.status, 0, result.stderr);
+assert.equal(result.stdout, '1.2.3');
+NODE
+then
   echo "ok: --fix rewrote the generated Codex copies to the synthetic version"
 else
-  echo "FAIL: generated copies stayed plugin=$dist_plugin_version mcp=$dist_mcp_version (want 1.2.3)"
+  echo "FAIL: generated Codex manifest or executable bootstrap version is invalid"
   printf '%s\n' "$out"
   fail=1
 fi
