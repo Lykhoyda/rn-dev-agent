@@ -27,6 +27,10 @@ axes for:
 - prior observed transport/app status;
 - linked-worktree action inheritance and repository-local hook status, without
   exposing private source paths or reading action bodies;
+- learned-action compatibility (`diagnose-actions`): counts plus action ids for
+  missing/low `enginePin`, regex text selectors, and unreadable actions, without
+  printing YAML bodies or private inherit source paths. A pinned-ok runner with
+  incompatible actions is FAIL or YELLOW, never silent GREEN;
 - all findings, a primary finding, and ordered recovery commands.
 
 Unknown or partial task evidence is never classified stale. A direct contract

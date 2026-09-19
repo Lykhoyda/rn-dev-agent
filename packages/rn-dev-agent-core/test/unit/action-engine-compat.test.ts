@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -15,8 +16,9 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { spawn } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   ACTION_ENGINE_PIN,
   MAESTRO_RUNNER_PIN,
@@ -25,10 +27,13 @@ import {
 import {
   actionEnginePinRefusal,
   actionReplayPreflight,
+  actionReplayRefusal,
+  diagnoseLearnedActions,
   migrateLearnedActions,
   regexSelectorCapabilityRefusal,
   upsertEnginePinHeader,
 } from '../../dist/domain/action-engine-compat.js';
+import { applyInheritance } from '../../dist/session/worktree-inheritance.js';
 import { createRunActionHandler } from '../../dist/tools/run-action.js';
 import { createMaestroTestAllHandler } from '../../dist/tools/maestro-test-all.js';
 import { createMaestroRunHandler } from '../../dist/tools/maestro-run.js';
@@ -1195,9 +1200,38 @@ test('run-action pin mismatch refuses before maestro and before CDP probe', asyn
     const body = JSON.parse(result.content[0]!.text);
     assert.equal(body.code, 'ENGINE_PIN_MISMATCH');
     assert.equal(body.meta.fallback, 'none');
+    assert.equal(body.meta.refusalClass, 'enginePin');
     assert.match(String(body.error), /maestro-runner@1\.0\.9/);
+    assert.match(String(body.error), /not migrated|below the required floor|incompatible/);
     assert.equal(maestroCalls.length, 0);
     assert.equal(probeCalls.length, 0);
+  } finally {
+    project.cleanup();
+  }
+});
+
+test('run-action regex refusal keeps ENGINE_PIN_MISMATCH text user-visible', async () => {
+  const project = createTmpProject();
+  try {
+    project.seedAction(
+      'search',
+      actionYaml('search', `# enginePin: ${ACTION_ENGINE_PIN}`, '- tapOn: ".*Server.*"\n'),
+    );
+    let spawned = false;
+    const handler = createRunActionHandler({
+      maestroRun: async () => {
+        spawned = true;
+        return { content: [{ type: 'text', text: '{"ok":true}' }] };
+      },
+      engineStatus: async () => PINNED(),
+    });
+    const result = await handler({ actionId: 'search', projectRoot: project.root });
+    const body = JSON.parse(result.content[0]!.text);
+    assert.equal(body.code, 'ENGINE_PIN_MISMATCH');
+    assert.equal(body.meta.refusalClass, 'regexSelector');
+    assert.match(String(body.error), /regex text selectors/);
+    assert.doesNotMatch(String(body.error), /not-installed|pin-cache|missing binary/i);
+    assert.equal(spawned, false);
   } finally {
     project.cleanup();
   }
@@ -1264,6 +1298,7 @@ test('run-action still requires the native runtime pin for a native proof segmen
     const body = JSON.parse(result.content[0]!.text);
     assert.equal(body.ok, false);
     assert.equal(body.code, 'ENGINE_PIN_MISMATCH');
+    assert.equal(body.meta.refusalClass, 'runtimePin');
     assert.equal(maestroCalls, 0);
   } finally {
     project.cleanup();
@@ -1734,4 +1769,136 @@ test('maestro_test_all refuses an unapproved alias to an action corpus', async (
   assert.equal(envelope.ok, false);
   assert.match(String(envelope.error), /approved load context/);
   assert.equal(spawned, false);
+});
+
+const PIN_CLI = join(dirname(fileURLToPath(import.meta.url)), '../../dist/maestro-runner-pin.js');
+
+function seedCompatAction(dir: string, id: string, extraHeader = '', body?: string) {
+  writeFileSync(join(dir, `${id}.yaml`), actionYaml(id, extraHeader, body), 'utf8');
+}
+
+function git(cwd: string, args: string[]): void {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+}
+
+test('diagnoseLearnedActions reports refusal classes without mutating or leaking bodies', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-diagnose-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  seedCompatAction(dir, 'ok', `# enginePin: ${ACTION_ENGINE_PIN}`);
+  seedCompatAction(dir, 'login');
+  seedCompatAction(dir, 'search', `# enginePin: ${ACTION_ENGINE_PIN}`, '- tapOn: ".*Server.*"\n');
+  writeFileSync(join(dir, 'broken.yaml'), 'not-yaml', 'utf8');
+  const before = {
+    login: readFileSync(join(dir, 'login.yaml'), 'utf8'),
+    search: readFileSync(join(dir, 'search.yaml'), 'utf8'),
+    broken: readFileSync(join(dir, 'broken.yaml'), 'utf8'),
+  };
+
+  const report = diagnoseLearnedActions(root);
+  assert.equal(report.scanned, 4);
+  assert.equal(report.compatible, 1);
+  assert.deepEqual(report.counts, { enginePin: 1, regexSelector: 1, unreadable: 1 });
+  assert.deepEqual(report.actionIds.enginePin, ['login']);
+  assert.deepEqual(report.actionIds.regexSelector, ['search']);
+  assert.deepEqual(report.actionIds.unreadable, ['broken']);
+  assert.equal(readFileSync(join(dir, 'login.yaml'), 'utf8'), before.login);
+  assert.equal(readFileSync(join(dir, 'search.yaml'), 'utf8'), before.search);
+  assert.equal(readFileSync(join(dir, 'broken.yaml'), 'utf8'), before.broken);
+  assert.equal(JSON.stringify(report).includes(root), false);
+  assert.equal(JSON.stringify(report).includes('.*Server.*'), false);
+  assert.equal(JSON.stringify(report).includes('tapOn'), false);
+});
+
+test('diagnoseLearnedActions treats an absent corpus as compatible', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-diagnose-absent-'));
+  const report = diagnoseLearnedActions(root);
+  assert.deepEqual(report, {
+    scanned: 0,
+    compatible: 0,
+    counts: { enginePin: 0, regexSelector: 0, unreadable: 0 },
+    actionIds: { enginePin: [], regexSelector: [], unreadable: [] },
+  });
+});
+
+test('diagnoseLearnedActions scans an inherited corpus and never prints its source path', () => {
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), 'rn-action-diagnose-inherit-')));
+  const primary = join(repo, 'primary');
+  mkdirSync(primary, { recursive: true });
+  git(primary, ['init', '-q']);
+  git(primary, ['config', 'user.email', 'fixture@example.test']);
+  git(primary, ['config', 'user.name', 'fixture']);
+  git(primary, ['config', 'commit.gpgsign', 'false']);
+  writeFileSync(
+    join(primary, 'package.json'),
+    JSON.stringify({ name: 'app', dependencies: { 'react-native': '0.76.0' } }),
+  );
+  writeFileSync(join(primary, '.gitignore'), '.rn-agent/\n');
+  git(primary, ['add', '-A']);
+  git(primary, ['commit', '-qm', 'init']);
+  const actions = join(primary, '.rn-agent', 'actions');
+  mkdirSync(actions, { recursive: true });
+  mkdirSync(join(primary, '.rn-agent', 'state'), { recursive: true });
+  seedCompatAction(actions, 'login');
+  const source = readFileSync(join(actions, 'login.yaml'), 'utf8');
+  const worktree = join(repo, 'linked');
+  git(primary, ['worktree', 'add', '-q', worktree, '-b', 'linked']);
+  assert.equal(applyInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' }).applied, 1);
+
+  const report = diagnoseLearnedActions(worktree);
+  assert.deepEqual(report.actionIds.enginePin, ['login']);
+  assert.equal(readFileSync(join(actions, 'login.yaml'), 'utf8'), source);
+  const rendered = JSON.stringify(report);
+  assert.equal(rendered.includes(primary), false);
+  assert.equal(rendered.includes(actions), false);
+  assert.equal(rendered.includes(source), false);
+});
+
+test('diagnose-actions --json prints counts and refusal classes only', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-diagnose-cli-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  seedCompatAction(dir, 'login');
+  const before = readFileSync(join(dir, 'login.yaml'), 'utf8');
+  const result = spawnSync(
+    process.execPath,
+    [PIN_CLI, 'diagnose-actions', '--root', root, '--json'],
+    {
+      encoding: 'utf8',
+    },
+  );
+  assert.equal(result.status, 1);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.actionIds.enginePin, ['login']);
+  assert.equal(result.stdout.includes(before), false);
+  assert.equal(result.stdout.includes('tapOn'), false);
+  assert.equal(readFileSync(join(dir, 'login.yaml'), 'utf8'), before);
+});
+
+test('actionReplayRefusal labels unmigrated pin vs regex vs missing binary', () => {
+  assert.equal(
+    actionReplayRefusal({
+      enginePin: undefined,
+      commands: [{ tapOn: { id: 'x' } }],
+      engineStatus: PINNED(),
+    })?.refusalClass,
+    'enginePin',
+  );
+  assert.equal(
+    actionReplayRefusal({
+      enginePin: ACTION_ENGINE_PIN,
+      commands: [{ tapOn: '.*Server.*' }],
+      engineStatus: PINNED(),
+    })?.refusalClass,
+    'regexSelector',
+  );
+  assert.equal(
+    actionReplayRefusal({
+      enginePin: ACTION_ENGINE_PIN,
+      commands: [{ tapOn: { id: 'x' } }],
+      engineStatus: buildReplayEngineStatus('not-installed', null, false),
+    })?.refusalClass,
+    'runtimePin',
+  );
 });

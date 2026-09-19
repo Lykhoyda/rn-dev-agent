@@ -14022,26 +14022,29 @@ function regexSelectorCapabilityRefusal(commands) {
     return null;
   return `Action uses regex text selectors (${selectors[0]}) which are not a validated maestro-runner ${MAESTRO_RUNNER_PIN.version} capability (GH #750 CONTAINS mistranslation). Rewrite as id or literal text selectors before replay. No UI mutation will run.`;
 }
-function actionReplayPreflight(opts) {
-  return replayCompatibilityPreflight({
+function actionReplayRefusal(opts) {
+  return replayCompatibilityRefusal({
     ...opts,
     requireEnginePin: true,
     requireRuntimePin: opts.requireRuntimePin
   });
 }
 function replayCompatibilityPreflight(opts) {
+  return replayCompatibilityRefusal(opts)?.message ?? null;
+}
+function replayCompatibilityRefusal(opts) {
   if (opts.requireRuntimePin !== false) {
     const pin = exactPinRefusal(opts.engineStatus);
     if (pin)
-      return pin;
+      return { message: pin, refusalClass: "runtimePin" };
   }
   const selectors = regexSelectorCapabilityRefusal(opts.commands);
   if (selectors)
-    return selectors;
+    return { message: selectors, refusalClass: "regexSelector" };
   if (opts.requireEnginePin) {
     const format = actionEnginePinRefusal(opts.enginePin);
     if (format)
-      return format;
+      return { message: format, refusalClass: "enginePin" };
   }
   return null;
 }
@@ -14302,6 +14305,70 @@ function migrateLearnedActions(projectRoot) {
     });
   }
   return results;
+}
+function emptyLearnedActionCompatReport() {
+  return {
+    scanned: 0,
+    compatible: 0,
+    counts: { enginePin: 0, regexSelector: 0, unreadable: 0 },
+    actionIds: { enginePin: [], regexSelector: [], unreadable: [] }
+  };
+}
+function classifyReadableAction(id, text, flowDir) {
+  const meta = parseM7Header(text, id);
+  if (!meta || meta.id !== id)
+    return "unreadable";
+  let commands;
+  try {
+    commands = parseAndValidateFlow(text, { flowDir, flowRoot: flowDir }).commands;
+  } catch {
+    return "unreadable";
+  }
+  if (regexSelectorCapabilityRefusal(commands))
+    return "regexSelector";
+  if (actionEnginePinRefusal(meta.enginePin))
+    return "enginePin";
+  return null;
+}
+function diagnoseLearnedActions(projectRoot) {
+  const report = emptyLearnedActionCompatReport();
+  let context;
+  try {
+    context = openReadableActionLoadContext(projectRoot, { includeRunFlowFiles: true });
+  } catch {
+    report.counts.unreadable = 1;
+    report.actionIds.unreadable = ["actions"];
+    return report;
+  }
+  if (!context)
+    return report;
+  const filesById = /* @__PURE__ */ new Map();
+  for (const name of context.files.filter(isOwnedActionFile)) {
+    const id = actionIdFromFile(name);
+    const existing = filesById.get(id);
+    if (existing)
+      existing.push(name);
+    else
+      filesById.set(id, [name]);
+  }
+  const ids = [...filesById.keys()].sort();
+  report.scanned = ids.length;
+  const flowDir = context.snapshot.directory;
+  for (const id of ids) {
+    const names = filesById.get(id) ?? [];
+    let refusal = "unreadable";
+    if (names.length === 1) {
+      const text = context.fileContents.get(names[0]);
+      refusal = text === void 0 ? "unreadable" : classifyReadableAction(id, text, flowDir);
+    }
+    if (refusal === null)
+      report.compatible += 1;
+    else {
+      report.counts[refusal] += 1;
+      report.actionIds[refusal].push(id);
+    }
+  }
+  return report;
 }
 
 // packages/rn-dev-agent-core/dist/domain/action-verification-suite.js
@@ -16927,19 +16994,20 @@ function createMaestroRunHandler(deps = {}) {
     if (iosProofPlan?.ok && iosProofPlan.segments.some((segment) => segment.domain === "react-tree")) {
       const reactOnlyProof = iosProofPlan.segments.every((segment) => segment.domain === "react-tree");
       const reactEngineStatus = await resolveEngineStatus();
-      const reactCompatibilityRefusal = capturedAction || semanticActionMeta ? actionReplayPreflight({
+      const reactCompatibilityRefusal = capturedAction || semanticActionMeta ? actionReplayRefusal({
         enginePin: semanticActionMeta?.enginePin,
         commands: validatedCommands,
         engineStatus: reactEngineStatus,
         requireRuntimePin: !reactOnlyProof
-      }) : replayCompatibilityPreflight({
+      }) : replayCompatibilityRefusal({
         commands: validatedCommands,
         engineStatus: reactEngineStatus,
         requireEnginePin: false,
         requireRuntimePin: !reactOnlyProof
       });
       if (reactCompatibilityRefusal) {
-        return failResult(reactCompatibilityRefusal, "ENGINE_PIN_MISMATCH", {
+        return failResult(reactCompatibilityRefusal.message, "ENGINE_PIN_MISMATCH", {
+          refusalClass: reactCompatibilityRefusal.refusalClass,
           pin: reactEngineStatus?.pin,
           installedVersion: reactEngineStatus?.version ?? null,
           selectedPath: reactEngineStatus?.selectedPath ?? null,
@@ -17247,6 +17315,7 @@ function createMaestroRunHandler(deps = {}) {
     const exactRefusal = exactPinRefusal(engineStatus);
     if (exactRefusal) {
       return failResult(exactRefusal, "ENGINE_PIN_MISMATCH", {
+        refusalClass: "runtimePin",
         pin: engineStatus?.pin,
         installedVersion: engineStatus?.version ?? null,
         selectedPath: engineStatus?.selectedPath ?? null,
@@ -17255,17 +17324,18 @@ function createMaestroRunHandler(deps = {}) {
     }
     const learnedAction = Boolean(capturedAction || args.actionMetadata);
     const actionMeta = semanticActionMeta;
-    const compatibilityRefusal = learnedAction || actionMeta !== null ? actionReplayPreflight({
+    const compatibilityRefusal = learnedAction || actionMeta !== null ? actionReplayRefusal({
       enginePin: actionMeta?.enginePin,
       commands: validatedCommands,
       engineStatus
-    }) : replayCompatibilityPreflight({
+    }) : replayCompatibilityRefusal({
       commands: validatedCommands,
       engineStatus,
       requireEnginePin: false
     });
     if (compatibilityRefusal) {
-      return failResult(compatibilityRefusal, "ENGINE_PIN_MISMATCH", {
+      return failResult(compatibilityRefusal.message, "ENGINE_PIN_MISMATCH", {
+        refusalClass: compatibilityRefusal.refusalClass,
         pin: engineStatus?.pin,
         installedVersion: engineStatus?.version ?? null,
         selectedPath: engineStatus?.selectedPath ?? null,
@@ -17850,7 +17920,7 @@ function createMaestroRunHandler(deps = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/maestro-runner-pin.js
-var USAGE = "usage: maestro-runner-pin [diagnose|install|migrate-actions|verify-actions] [--json] [--root <app>]";
+var USAGE = "usage: maestro-runner-pin [diagnose|diagnose-actions|install|migrate-actions|verify-actions] [--json] [--root <app>]";
 function ensureScriptPath() {
   const here = dirname15(fileURLToPath2(import.meta.url));
   const candidates = [
@@ -17896,6 +17966,19 @@ function install() {
   const script = ensureScriptPath();
   const result = spawnSync3("bash", [script], { stdio: "inherit" });
   return result.status === 0 ? 0 : 1;
+}
+function formatActionIds(ids) {
+  return ids.length === 0 ? "0" : `${ids.length} [${ids.join(",")}]`;
+}
+function diagnoseActions(root2, json2) {
+  const report = diagnoseLearnedActions(root2);
+  const failed = report.counts.enginePin + report.counts.regexSelector + report.counts.unreadable > 0;
+  if (json2) {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log(failed ? `learned-actions FAIL scanned=${report.scanned} compatible=${report.compatible} enginePin=${formatActionIds(report.actionIds.enginePin)} regexSelector=${formatActionIds(report.actionIds.regexSelector)} unreadable=${formatActionIds(report.actionIds.unreadable)}` : `learned-actions OK scanned=${report.scanned} compatible=${report.compatible}`);
+  }
+  return failed ? 1 : 0;
 }
 function migrate(root2, json2) {
   const results = migrateLearnedActions(root2);
@@ -18020,6 +18103,8 @@ function parseArgs(argv) {
 var { cmd, json, root } = parseArgs(process.argv.slice(2));
 if (cmd === "diagnose") {
   process.exit(await diagnose(json));
+} else if (cmd === "diagnose-actions") {
+  process.exit(diagnoseActions(root, json));
 } else if (cmd === "install") {
   process.exit(install());
 } else if (cmd === "migrate-actions") {

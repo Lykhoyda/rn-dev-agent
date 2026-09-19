@@ -63,6 +63,7 @@ Read/report without mutation:
 | iOS runner | packaged Xcode project/artifact presence | one-time build command |
 | Android runner | packaged Gradle/APK presence | one-time Gradle command |
 | Maestro runner | `maestro-runner-pin.js diagnose --json` must be `pinned-ok` / `>= 1.1.24` / `pin-cache` | package `ensure-maestro-runner.sh` for attested 1.1.24 (floor >= 1.1.24); never PATH, `~/.maestro-runner`, or brew maestro |
+| Learned actions | `maestro-runner-pin.js diagnose-actions --root "$APP_ROOT" --json` counts plus `enginePin` / `regexSelector` / `unreadable` action ids | FAIL when any `enginePin` or `regexSelector` id is present; YELLOW/FAIL for `unreadable`. A pinned-ok runner is never silent GREEN here. Doctor never migrates, rewrites, prints YAML, or prints a private inherit source path. |
 | iOS/Android devices | list-only platform commands | boot guidance |
 | Metro | `rn_session` and passive `cdp_status` reads | integrated package script |
 | CDP/app | prior supplied observation only | active `check-env` later |

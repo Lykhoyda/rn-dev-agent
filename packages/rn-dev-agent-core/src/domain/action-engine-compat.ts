@@ -15,10 +15,27 @@ import {
   commitMigratedActionText,
   loadActionMigrationBaseline,
   captureActionFromPath,
+  openReadableActionLoadContext,
   splitYaml,
   joinYaml,
   resolveActionPath,
 } from './action-store.js';
+
+export type ReplayCompatibilityRefusalClass = 'runtimePin' | 'enginePin' | 'regexSelector';
+
+export interface ReplayCompatibilityRefusal {
+  message: string;
+  refusalClass: ReplayCompatibilityRefusalClass;
+}
+
+export type LearnedActionRefusalClass = 'enginePin' | 'regexSelector' | 'unreadable';
+
+export interface LearnedActionCompatReport {
+  scanned: number;
+  compatible: number;
+  counts: Record<LearnedActionRefusalClass, number>;
+  actionIds: Record<LearnedActionRefusalClass, string[]>;
+}
 
 export function actionEnginePinRefusal(enginePin: string | undefined): string | null {
   if (!enginePin) {
@@ -60,7 +77,16 @@ export function actionReplayPreflight(opts: {
   engineStatus: ReplayEngineStatus | null;
   requireRuntimePin?: boolean;
 }): string | null {
-  return replayCompatibilityPreflight({
+  return actionReplayRefusal(opts)?.message ?? null;
+}
+
+export function actionReplayRefusal(opts: {
+  enginePin?: string;
+  commands: readonly unknown[];
+  engineStatus: ReplayEngineStatus | null;
+  requireRuntimePin?: boolean;
+}): ReplayCompatibilityRefusal | null {
+  return replayCompatibilityRefusal({
     ...opts,
     requireEnginePin: true,
     requireRuntimePin: opts.requireRuntimePin,
@@ -74,16 +100,26 @@ export function replayCompatibilityPreflight(opts: {
   requireEnginePin: boolean;
   requireRuntimePin?: boolean;
 }): string | null {
+  return replayCompatibilityRefusal(opts)?.message ?? null;
+}
+
+export function replayCompatibilityRefusal(opts: {
+  enginePin?: string;
+  commands: readonly unknown[];
+  engineStatus: ReplayEngineStatus | null;
+  requireEnginePin: boolean;
+  requireRuntimePin?: boolean;
+}): ReplayCompatibilityRefusal | null {
   if (opts.requireRuntimePin !== false) {
     const pin = exactPinRefusal(opts.engineStatus);
-    if (pin) return pin;
+    if (pin) return { message: pin, refusalClass: 'runtimePin' };
   }
   // Migration cannot repair regex selectors, so report their terminal refusal first.
   const selectors = regexSelectorCapabilityRefusal(opts.commands);
-  if (selectors) return selectors;
+  if (selectors) return { message: selectors, refusalClass: 'regexSelector' };
   if (opts.requireEnginePin) {
     const format = actionEnginePinRefusal(opts.enginePin);
-    if (format) return format;
+    if (format) return { message: format, refusalClass: 'enginePin' };
   }
   return null;
 }
@@ -364,4 +400,70 @@ export function migrateLearnedActions(projectRoot: string): ActionMigrationResul
     });
   }
   return results;
+}
+
+function emptyLearnedActionCompatReport(): LearnedActionCompatReport {
+  return {
+    scanned: 0,
+    compatible: 0,
+    counts: { enginePin: 0, regexSelector: 0, unreadable: 0 },
+    actionIds: { enginePin: [], regexSelector: [], unreadable: [] },
+  };
+}
+
+function classifyReadableAction(
+  id: string,
+  text: string,
+  flowDir: string,
+): LearnedActionRefusalClass | null {
+  const meta = parseM7Header(text, id);
+  if (!meta || meta.id !== id) return 'unreadable';
+  let commands: unknown[];
+  try {
+    commands = parseAndValidateFlow(text, { flowDir, flowRoot: flowDir }).commands;
+  } catch {
+    return 'unreadable';
+  }
+  if (regexSelectorCapabilityRefusal(commands)) return 'regexSelector';
+  if (actionEnginePinRefusal(meta.enginePin)) return 'enginePin';
+  return null;
+}
+
+export function diagnoseLearnedActions(projectRoot: string): LearnedActionCompatReport {
+  const report = emptyLearnedActionCompatReport();
+  let context: ReturnType<typeof openReadableActionLoadContext>;
+  try {
+    context = openReadableActionLoadContext(projectRoot, { includeRunFlowFiles: true });
+  } catch {
+    report.counts.unreadable = 1;
+    report.actionIds.unreadable = ['actions'];
+    return report;
+  }
+  if (!context) return report;
+
+  const filesById = new Map<string, string[]>();
+  for (const name of context.files.filter(isOwnedActionFile)) {
+    const id = actionIdFromFile(name);
+    const existing = filesById.get(id);
+    if (existing) existing.push(name);
+    else filesById.set(id, [name]);
+  }
+
+  const ids = [...filesById.keys()].sort();
+  report.scanned = ids.length;
+  const flowDir = context.snapshot.directory;
+  for (const id of ids) {
+    const names = filesById.get(id) ?? [];
+    let refusal: LearnedActionRefusalClass | null = 'unreadable';
+    if (names.length === 1) {
+      const text = context.fileContents.get(names[0]!);
+      refusal = text === undefined ? 'unreadable' : classifyReadableAction(id, text, flowDir);
+    }
+    if (refusal === null) report.compatible += 1;
+    else {
+      report.counts[refusal] += 1;
+      report.actionIds[refusal].push(id);
+    }
+  }
+  return report;
 }
