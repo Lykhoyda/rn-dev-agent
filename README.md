@@ -471,7 +471,7 @@ This is a Yarn workspace monorepo:
 | `packages/rn-dev-agent-core` | The MCP server (CDP bridge, device control, actions, testing) — all TypeScript source and tests |
 | `packages/claude-plugin` | The one plugin package Claude, Cursor, and Codex install — Claude/Cursor manifests, commands, agents, skills, hooks, generated Codex adapters (`.codex-plugin/`, `codex-*`, `bin/`), one bundled runtime |
 | `packages/codex-plugin` | Codex authoring source (manifest, playbooks, adapted skills, launcher, health) generated into `packages/claude-plugin` |
-| `packages/shared-agent-knowledge` | Source of truth both host packages are generated from |
+| `packages/shared-agent-knowledge` | [Canonical workflow knowledge and host adaptation guidance](packages/shared-agent-knowledge/README.md) |
 | `packages/rn-fast-runner` | In-tree iOS XCTest device runner |
 | `packages/rn-android-runner` | In-tree Android UiAutomator device runner |
 | `apps/docs-site` | Astro Starlight docs → [lykhoyda.github.io/rn-dev-agent](https://lykhoyda.github.io/rn-dev-agent/) |

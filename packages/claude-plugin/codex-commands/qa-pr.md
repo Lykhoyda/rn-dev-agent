@@ -37,7 +37,7 @@ this package) in this session. Summary:
    `metroBound` and `installBound` → `pin_dev_client` → `cdp_dev_settings`
    `disableDevMenu` then `hideDevMenu`, again after every re-pin (never
    touch the sheet or the gear; a visible sheet or gear is FAIL) → then the feature
-   proof (`agents/rn-pr-qa.md` Step 7), user path only: usable screen or FAIL with the
+   proof (Step 7 of the loaded QA playbook), user path only: usable screen or FAIL with the
    refusal code → reuse a covering action that starts from the attached
    app (rehearse with `proofReplay=true`); if none does, record and save a
    new one and drop its generated `launchApp` → first `cdp_run_action`
@@ -77,7 +77,7 @@ this package) in this session. Summary:
    code fence. Replace with `[HOST]`, `[MACHINE_ID]`, `[HOME]`,
    `[PATH]`, `[UDID]`, `[UUID]`. Sanitize the pre-upload body before posting
    (exempt only Markdown `--attach` destinations). Then self-check the
-   rewritten GitHub body. Follow `agents/rn-pr-qa.md` § Public identity.
+   rewritten GitHub body. Follow the loaded QA playbook's Public identity section.
 
 ## Examples
 

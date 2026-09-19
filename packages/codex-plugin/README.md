@@ -48,7 +48,7 @@ The seventeen workflows are `build-and-test`, `check-env`,
 `lock-e2e`, `nav-graph`, `observe`, `proof-capture`, `qa-pr`, `rn-feature-dev`,
 `run-action`, `run-workflow`, `send-feedback`, `setup`, and `test-feature`.
 
-`commands/` contains their full package-local playbooks. The Codex manifest
+See the authoring-to-distribution map above for playbook locations. The Codex manifest
 sets `"commands": []` to disable host best-effort command migration; no
 `source-command-*` name is supported. Claude's slash-command spelling remains a
 Claude-only surface.

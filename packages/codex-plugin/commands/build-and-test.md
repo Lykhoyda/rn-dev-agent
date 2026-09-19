@@ -53,8 +53,7 @@ MCP tools are not inherited by spawned subagents. Use `rn-device-control` and
 7. Call `cdp_status`; require `ok:true` and the intended app/device.
 
 The helpers own local Expo build, artifact install, app launch, and Metro
-startup behavior. They are packaged in both host plugins; installed behavior
-must never be narrowed to "use the app's own workflow".
+startup behavior. Installed behavior must never be narrowed to "use the app's own workflow".
 
 ### Phase B — test
 

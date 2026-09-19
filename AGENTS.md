@@ -324,7 +324,8 @@ alive for such callers.
   `packages/claude-plugin/` regenerate (package-relative links inside the
   authoring tree target the `codex-*` names they ship under).
 - Host-neutral workflow knowledge: edit `packages/shared-agent-knowledge/`,
-  mirror/adapt the affected files into both host packages, and run
+  mirror the affected Claude files and update the Codex authoring sources,
+  then regenerate the Codex distribution as above before running
   `bash scripts/check-agent-package-sync.sh`. That gate compares Claude copies
   byte-for-byte but Codex commands and adapted domain skills by file set only,
   so a stale Codex adaptation passes silently — diff it yourself and re-apply
