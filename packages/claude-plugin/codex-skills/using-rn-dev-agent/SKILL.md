@@ -84,7 +84,7 @@ What is the user asking for?
 │
 ├── DIAGNOSE the environment (read-only, no changes)
 │   └─► $rn-dev-agent:doctor
-│       (Same 13-check diagnostic as setup Phase 1 — reports, never modifies)
+│       (Passive checklist from rn-setup — reports, never modifies)
 │
 ├── Need PROOF for a PR ("record a demo", "capture proof", "PR video")
 │   └─► Load the capturing-proof skill (or run $rn-dev-agent:proof-capture <feature-slug>)

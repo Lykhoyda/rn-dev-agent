@@ -151,7 +151,9 @@ export function createMaestroGenerateHandler(): (args: MaestroGenerateArgs) => P
     }
 
     const compatibilityRefusal = regexSelectorCapabilityRefusal(commands);
-    if (compatibilityRefusal) return failResult(compatibilityRefusal, 'ENGINE_PIN_MISMATCH');
+    if (compatibilityRefusal) {
+      return failResult(compatibilityRefusal, 'ENGINE_PIN_MISMATCH');
+    }
 
     let content: string;
     try {

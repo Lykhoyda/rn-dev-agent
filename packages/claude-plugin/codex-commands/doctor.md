@@ -62,6 +62,14 @@ blindness. `NATIVE_SURFACE_BLIND` requires bounded same-screen native-selector e
 without it, preserve the ordinary selector miss. Recommend the central native WDA smoke
 on a WDA-healthy runtime as the supported next action.
 
+When the RN app root is known, also run
+`<package-root>/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose-actions --root <app> --json`.
+Print one environment-table row with counts and the `enginePin` / `regexSelector` /
+`unreadable` action ids. A `pinned-ok` runner with incompatible actions is FAIL, or
+YELLOW when the only findings are `unreadable` — never silent GREEN. Inherited
+symlink corpora may be scanned. Doctor never runs `migrate-actions`, never rewrites
+an action, and never prints a YAML body or a private inherit source path.
+
 For missing components, print exact commands but do not offer to execute them
 inside doctor. Plugin recovery order is user-confirmed marketplace upgrade,
 materialization with `codex plugin add rn-dev-agent@rn-dev-agent --json`, Codex

@@ -80854,26 +80854,29 @@ function regexSelectorCapabilityRefusal(commands) {
     return null;
   return `Action uses regex text selectors (${selectors[0]}) which are not a validated maestro-runner ${MAESTRO_RUNNER_PIN.version} capability (GH #750 CONTAINS mistranslation). Rewrite as id or literal text selectors before replay. No UI mutation will run.`;
 }
-function actionReplayPreflight(opts) {
-  return replayCompatibilityPreflight({
+function actionReplayRefusal(opts) {
+  return replayCompatibilityRefusal({
     ...opts,
     requireEnginePin: true,
     requireRuntimePin: opts.requireRuntimePin
   });
 }
 function replayCompatibilityPreflight(opts) {
+  return replayCompatibilityRefusal(opts)?.message ?? null;
+}
+function replayCompatibilityRefusal(opts) {
   if (opts.requireRuntimePin !== false) {
     const pin = exactPinRefusal(opts.engineStatus);
     if (pin)
-      return pin;
+      return { message: pin, refusalClass: "runtimePin" };
   }
   const selectors = regexSelectorCapabilityRefusal(opts.commands);
   if (selectors)
-    return selectors;
+    return { message: selectors, refusalClass: "regexSelector" };
   if (opts.requireEnginePin) {
     const format = actionEnginePinRefusal(opts.enginePin);
     if (format)
-      return format;
+      return { message: format, refusalClass: "enginePin" };
   }
   return null;
 }
@@ -84237,19 +84240,20 @@ function createMaestroRunHandler(deps = {}) {
     if (iosProofPlan?.ok && iosProofPlan.segments.some((segment) => segment.domain === "react-tree")) {
       const reactOnlyProof = iosProofPlan.segments.every((segment) => segment.domain === "react-tree");
       const reactEngineStatus = await resolveEngineStatus();
-      const reactCompatibilityRefusal = capturedAction || semanticActionMeta ? actionReplayPreflight({
+      const reactCompatibilityRefusal = capturedAction || semanticActionMeta ? actionReplayRefusal({
         enginePin: semanticActionMeta?.enginePin,
         commands: validatedCommands,
         engineStatus: reactEngineStatus,
         requireRuntimePin: !reactOnlyProof
-      }) : replayCompatibilityPreflight({
+      }) : replayCompatibilityRefusal({
         commands: validatedCommands,
         engineStatus: reactEngineStatus,
         requireEnginePin: false,
         requireRuntimePin: !reactOnlyProof
       });
       if (reactCompatibilityRefusal) {
-        return failResult(reactCompatibilityRefusal, "ENGINE_PIN_MISMATCH", {
+        return failResult(reactCompatibilityRefusal.message, "ENGINE_PIN_MISMATCH", {
+          refusalClass: reactCompatibilityRefusal.refusalClass,
           pin: reactEngineStatus?.pin,
           installedVersion: reactEngineStatus?.version ?? null,
           selectedPath: reactEngineStatus?.selectedPath ?? null,
@@ -84557,6 +84561,7 @@ function createMaestroRunHandler(deps = {}) {
     const exactRefusal = exactPinRefusal(engineStatus);
     if (exactRefusal) {
       return failResult(exactRefusal, "ENGINE_PIN_MISMATCH", {
+        refusalClass: "runtimePin",
         pin: engineStatus?.pin,
         installedVersion: engineStatus?.version ?? null,
         selectedPath: engineStatus?.selectedPath ?? null,
@@ -84565,17 +84570,18 @@ function createMaestroRunHandler(deps = {}) {
     }
     const learnedAction = Boolean(capturedAction || args.actionMetadata);
     const actionMeta = semanticActionMeta;
-    const compatibilityRefusal = learnedAction || actionMeta !== null ? actionReplayPreflight({
+    const compatibilityRefusal = learnedAction || actionMeta !== null ? actionReplayRefusal({
       enginePin: actionMeta?.enginePin,
       commands: validatedCommands,
       engineStatus
-    }) : replayCompatibilityPreflight({
+    }) : replayCompatibilityRefusal({
       commands: validatedCommands,
       engineStatus,
       requireEnginePin: false
     });
     if (compatibilityRefusal) {
-      return failResult(compatibilityRefusal, "ENGINE_PIN_MISMATCH", {
+      return failResult(compatibilityRefusal.message, "ENGINE_PIN_MISMATCH", {
+        refusalClass: compatibilityRefusal.refusalClass,
         pin: engineStatus?.pin,
         installedVersion: engineStatus?.version ?? null,
         selectedPath: engineStatus?.selectedPath ?? null,
@@ -85689,16 +85695,17 @@ function createRunActionHandler(deps = {}) {
         ...runtimeStatePath ? { writes: writeDisclosure() } : {}
       });
     }
-    const compatRefusal = actionReplayPreflight({
+    const compatRefusal = actionReplayRefusal({
       enginePin: action.metadata.enginePin,
       commands: preflightCommands,
       engineStatus,
       requireRuntimePin: requiresNativeRuntime
     });
     if (compatRefusal) {
-      return failResult(compatRefusal, "ENGINE_PIN_MISMATCH", {
+      return failResult(compatRefusal.message, "ENGINE_PIN_MISMATCH", {
         actionId: args.actionId,
         fallback: "none",
+        refusalClass: compatRefusal.refusalClass,
         pin: engineStatus?.pin,
         selectedPath: engineStatus?.selectedPath ?? null,
         provenance: engineStatus?.provenance ?? "none",
@@ -85813,6 +85820,7 @@ function createRunActionHandler(deps = {}) {
         return failResult(`cdp_run_action: ${args.actionId} refused strict replay because the engine pin status is ${enginePinDivergence}.`, "ENGINE_PIN_MISMATCH", {
           actionId: args.actionId,
           failureKind: "ENGINE_PIN_MISMATCH",
+          refusalClass: "runtimePin",
           enginePin: firstEnv.data?.enginePin,
           autoRepair: autoRepair2,
           writes: writeDisclosure("none", persisted2),
@@ -94922,8 +94930,9 @@ function createMaestroGenerateHandler() {
       commands.push(...stepCommands);
     }
     const compatibilityRefusal = regexSelectorCapabilityRefusal(commands);
-    if (compatibilityRefusal)
+    if (compatibilityRefusal) {
       return failResult(compatibilityRefusal, "ENGINE_PIN_MISMATCH");
+    }
     let content;
     try {
       const generated = buildMaestroFlow(args.appId ? { appId: args.appId } : {}, commands);
