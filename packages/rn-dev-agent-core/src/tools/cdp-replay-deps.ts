@@ -106,6 +106,7 @@ export function makeReplayDeps(
           reason?: string;
           matchCount?: number;
           code?: string;
+          coverage?: unknown;
         };
         return {
           visible: parsed.visible === true,
@@ -113,6 +114,11 @@ export function makeReplayDeps(
           ...(parsed.reason ? { reason: parsed.reason } : {}),
           ...(typeof parsed.matchCount === 'number' ? { matchCount: parsed.matchCount } : {}),
           ...(parsed.code ? { code: parsed.code } : {}),
+          ...(parsed.coverage &&
+          typeof parsed.coverage === 'object' &&
+          !Array.isArray(parsed.coverage)
+            ? { coverage: parsed.coverage as Record<string, unknown> }
+            : {}),
         };
       } catch {
         return {

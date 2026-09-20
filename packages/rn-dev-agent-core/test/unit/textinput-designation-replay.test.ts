@@ -59,7 +59,10 @@ function replayFixture(
     inputHidden?: boolean;
     inputValue?: string;
     oversizedDesignationSubtree?: boolean;
+    designationFillers?: number;
     stockTextInput?: boolean;
+    ownerIsInputAlternate?: boolean;
+    matchPresentOnlyAsAlternate?: boolean;
     beforeDesignatedTypeDispatch?: (fixture: {
       root: Fiber;
       input: Fiber;
@@ -108,9 +111,17 @@ function replayFixture(
   if (options.branchedDuplicate) {
     append(wrapper ?? root, fiber('RCTView', { testID: 'email' }));
   }
-  if (options.oversizedDesignationSubtree) {
-    for (let filler = 0; filler < 2_100; filler++) {
-      append(wrapper ?? root, fiber('RCTView', { testID: `filler-${filler}` }));
+  const designationFillers = options.oversizedDesignationSubtree
+    ? 21_000
+    : (options.designationFillers ?? 0);
+  if (designationFillers > 0) {
+    const parent = wrapper ?? root;
+    let tail = append(parent, fiber('RCTView', { testID: 'filler-0' }));
+    for (let filler = 1; filler < designationFillers; filler++) {
+      const next = fiber('RCTView', { testID: `filler-${filler}` });
+      next.return = parent;
+      tail.sibling = next;
+      tail = next;
     }
   }
   append(
@@ -122,6 +133,24 @@ function replayFixture(
       },
     }),
   );
+  if (options.ownerIsInputAlternate && wrapper) {
+    const liveOwner = wrapper;
+    const staleOwner = fiber('RCTView', { testID: 'email' });
+    staleOwner.alternate = liveOwner;
+    liveOwner.alternate = staleOwner;
+    staleOwner.child = liveOwner.child;
+    staleOwner.sibling = liveOwner.sibling;
+    liveOwner.sibling = null;
+    staleOwner.return = root;
+    root.child = staleOwner;
+  }
+  if (options.matchPresentOnlyAsAlternate && wrapper) {
+    const extraMatch = fiber('RCTView', { testID: 'email' });
+    extraMatch.alternate = input;
+    extraMatch.return = wrapper;
+    extraMatch.sibling = input.sibling;
+    input.sibling = extraMatch;
+  }
 
   const sandbox: Record<string, unknown> = {
     Array,
@@ -149,7 +178,15 @@ function replayFixture(
   sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
     renderers: new Map([[1, {}]]),
     getFiberRoots: (rendererId: number) =>
-      rendererId === 1 ? new Set([{ current: root }]) : new Set(),
+      rendererId === 1
+        ? options.oversizedDesignationSubtree
+          ? new Set([
+              { current: root },
+              { current: fiber({ displayName: 'Root' }) },
+              { current: fiber({ displayName: 'Root' }) },
+            ])
+          : new Set([{ current: root }])
+        : new Set(),
   };
   vm.createContext(sandbox);
   vm.runInContext(INJECTED_HELPERS, sandbox);
@@ -257,6 +294,24 @@ test('replay designates and types into a stock TextInput rendered as composite p
   assert.equal(fixture.input.memoizedProps.value, 'ab');
 });
 
+test('replay designates and verifies typing beyond the former 2000-node cap', async () => {
+  const fixture = replayFixture({ wrapped: true, designationFillers: 2_100 });
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'email' } }, { inputText: 'person@example.test' }],
+    {},
+    fixture.deps,
+  );
+
+  assert.equal(result.passed, true, JSON.stringify(result));
+  assert.equal(result.steps[0].focusOnly, true);
+  assert.equal(result.steps[1].ok, true);
+  assert.equal(result.finalFocusId, null);
+  assert.equal(fixture.calls.focus, 0);
+  assert.equal(fixture.calls.press, 0);
+  assert.deepEqual(fixture.calls.typed, ['person@example.test']);
+  assert.equal(fixture.input.memoizedProps.value, 'person@example.test');
+});
+
 test('a truncated designation scan refuses the press as an unproven assertion', async () => {
   const fixture = replayFixture({ wrapped: true, oversizedDesignationSubtree: true });
 
@@ -268,6 +323,7 @@ test('a truncated designation scan refuses the press as an unproven assertion', 
   assert.ok(error instanceof ReplayDispatchError, `expected a refusal, got ${String(error)}`);
   assert.equal(error.code, 'ASSERTION_FAILED');
   assert.match(error.message, /TextInput designation resolution truncated/);
+  assert.doesNotMatch(error.message, /Resolution truncated/);
   assert.equal(fixture.calls.focus, 0);
   assert.equal(fixture.calls.press, 0);
   assert.deepEqual(fixture.calls.typed, []);
@@ -308,6 +364,38 @@ test('designation refuses a replacement input with the same selector and value s
   assert.deepEqual(fixture.calls.typed, []);
   assert.equal(replacementCalls, 0);
   assert.equal(replacement?.memoizedProps.value, 'b');
+});
+
+test("designation succeeds when the owner is the input's React alternate", async () => {
+  const fixture = replayFixture({ wrapped: true, ownerIsInputAlternate: true });
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'email' } }, { inputText: 'person@example.test' }],
+    {},
+    fixture.deps,
+  );
+
+  assert.equal(result.passed, true, JSON.stringify(result));
+  assert.equal(result.steps[0].focusOnly, true);
+  assert.equal(fixture.calls.focus, 0);
+  assert.equal(fixture.calls.press, 0);
+  assert.deepEqual(fixture.calls.typed, ['person@example.test']);
+  assert.equal(fixture.input.memoizedProps.value, 'person@example.test');
+});
+
+test("designation succeeds when a same-id match is present only as that match's alternate", async () => {
+  const fixture = replayFixture({ wrapped: true, matchPresentOnlyAsAlternate: true });
+  const result = await runCdpReplayCommands(
+    [{ tapOn: { id: 'email' } }, { inputText: 'person@example.test' }],
+    {},
+    fixture.deps,
+  );
+
+  assert.equal(result.passed, true, JSON.stringify(result));
+  assert.equal(result.steps[0].focusOnly, true);
+  assert.equal(fixture.calls.focus, 0);
+  assert.equal(fixture.calls.press, 0);
+  assert.deepEqual(fixture.calls.typed, ['person@example.test']);
+  assert.equal(fixture.input.memoizedProps.value, 'person@example.test');
 });
 
 test('designation follows the original input across its React alternate', async () => {

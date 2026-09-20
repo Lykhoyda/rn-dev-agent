@@ -51743,7 +51743,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 72;
+var HELPERS_VERSION = 75;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -51789,7 +51789,13 @@ var INJECTED_HELPERS = `
   ];
 
   // Synchronous scan result; finished stays false after the GH #789 empty-streak exit.
-  var lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
+  var lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false, errors: [] };
+
+  function scanError(rendererId, phase, e) {
+    var message;
+    try { message = String(e && e.message != null ? e.message : e).slice(0, 200); } catch (_) { message = 'unreadable error'; }
+    if (lastRootScan.errors.length < 5) lastRootScan.errors.push({ rendererId: rendererId, phase: phase, message: message });
+  }
 
   function rootScanCoverage() {
     var reasons = [];
@@ -51856,7 +51862,16 @@ var INJECTED_HELPERS = `
       }
       if (unscannedRendererIds.length > 0) addReason('renderers-unscanned');
     }
-    return { reasons: reasons, unscannedRendererIds: unscannedRendererIds };
+    return {
+      reasons: reasons,
+      registeredRendererIds: registryIds,
+      unscannedRendererIds: unscannedRendererIds,
+      erroredRendererIds: lastRootScan.erroredRendererIds.slice(0, MAX_REGISTERED_RENDERER_IDS),
+      rendererErrors: lastRootScan.rendererErrors,
+      extraRootsError: lastRootScan.extraRootsError === true,
+      scanFinished: lastRootScan.finished === true,
+      scanErrors: lastRootScan.errors.slice()
+    };
   }
 
   // Read the renderer IDs React DevTools actually registered. A malformed or
@@ -51883,7 +51898,7 @@ var INJECTED_HELPERS = `
   }
 
   function findActiveRenderer() {
-    lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
+    lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false, errors: [] };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
     var rendererIds = getRegisteredRendererIds(hook);
@@ -51904,9 +51919,11 @@ var INJECTED_HELPERS = `
           emptyStreak++;
           if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) return null;
         }
-      } catch (_) {
+      } catch (e) {
         if (!usingRegisteredIds) emptyStreak++;
         lastRootScan.rendererErrors++;
+        lastRootScan.erroredRendererIds.push(ri);
+        scanError(ri, 'roots', e);
       }
     }
     lastRootScan.finished = true;
@@ -51926,7 +51943,7 @@ var INJECTED_HELPERS = `
   // native renderer loop so user-registered portals stay lower priority
   // than React's own registry.
   function iterateAllRoots(cb) {
-    lastRootScan = { rendererErrors: 0, visited: {}, finished: false };
+    lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false, errors: [] };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (hook && typeof hook.getFiberRoots === 'function') {
       var rendererIds = getRegisteredRendererIds(hook);
@@ -51939,8 +51956,17 @@ var INJECTED_HELPERS = `
       for (var rii = 0; rii < rendererIds.length; rii++) {
         var ri = rendererIds[rii];
         lastRootScan.visited[ri] = true;
+        var roots;
         try {
-          var roots = hook.getFiberRoots(ri);
+          roots = hook.getFiberRoots(ri);
+        } catch (e) {
+          if (!usingRegisteredIds) emptyStreak++;
+          lastRootScan.rendererErrors++;
+          lastRootScan.erroredRendererIds.push(ri);
+          scanError(ri, 'roots', e);
+          continue;
+        }
+        try {
           if (roots && roots.size) {
             emptyStreak = 0;
             var it = roots.values();
@@ -51958,9 +51984,11 @@ var INJECTED_HELPERS = `
               break;
             }
           }
-        } catch (_) {
+        } catch (e) {
           if (!usingRegisteredIds) emptyStreak++;
           lastRootScan.rendererErrors++;
+          lastRootScan.erroredRendererIds.push(ri);
+          scanError(ri, 'walk', e);
         }
       }
       if (!abortedEarly) lastRootScan.finished = true;
@@ -51987,9 +52015,11 @@ var INJECTED_HELPERS = `
           }
         }
       }
-    } catch (_) {
+    } catch (e) {
       // swallow \u2014 resolver bug must not break iteration
       lastRootScan.rendererErrors++;
+      lastRootScan.extraRootsError = true;
+      scanError(-1, 'extra-roots', e);
     }
     return null;
   }
@@ -53209,9 +53239,8 @@ var INJECTED_HELPERS = `
   function getErrors() { return JSON.stringify(errors); }
   function clearErrors() { errors.length = 0; return 'cleared'; }
 
-  var TYPE_TEXT_WORK_LIMIT = 2000;
-  // Read-back calls no handler, so it gets the file's 20000-fiber walk bound instead of the mutation budget.
-  var READ_INPUT_WORK_LIMIT = 100000;
+  // ponytail: one budget for read-back and mutation; a pre-read that resolves must not be followed by a mutation that truncates
+  var TYPE_TEXT_WORK_LIMIT = 500000;
 
   function createTypeTextState(workLimit) {
     return {
@@ -54064,7 +54093,7 @@ var INJECTED_HELPERS = `
     var designationMatches = [];
     var designationInputs = [];
     var designationWork = 0;
-    while (designationStack.length > 0 && designationWork < 2000) {
+    while (designationStack.length > 0 && designationWork < 20000) {
       var designationFiber = designationStack.pop();
       if (designationSeen.has(designationFiber)) continue;
       designationSeen.add(designationFiber);
@@ -54123,11 +54152,11 @@ var INJECTED_HELPERS = `
         };
       }
       designationLineage.add(designationLineageFiber);
-      if (designationLineageFiber === owner) break;
+      if (isSameDesignatedInput(designationLineageFiber, owner)) break;
       designationLineageFiber = designationLineageFiber.return;
       designationLineageDepth++;
     }
-    if (designationLineageFiber !== owner) {
+    if (!isSameDesignatedInput(designationLineageFiber, owner)) {
       return {
         error: 'TextInput designation resolution truncated',
         code: 'ASSERTION_FAILED',
@@ -54138,7 +54167,7 @@ var INJECTED_HELPERS = `
     }
     for (var designationIndex = 0; designationIndex < designationMatches.length; designationIndex++) {
       var designationMatch = designationMatches[designationIndex];
-      if (!designationLineage.has(designationMatch)) {
+      if (!designationLineage.has(designationMatch) && !designationLineage.has(designationMatch.alternate)) {
         return {
           error: 'Ambiguous TextInput designation target',
           testID: selector,
@@ -55356,7 +55385,7 @@ var INJECTED_HELPERS = `
 
   function readInputValue(testID) {
     if (!testID) return JSON.stringify({ __agent_error: 'testID is required' });
-    var resolution = resolveTypeTextTarget({ testID: testID }, READ_INPUT_WORK_LIMIT);
+    var resolution = resolveTypeTextTarget({ testID: testID });
     if (resolution.error) return JSON.stringify({ __agent_error: resolution.error });
     if (!resolution.binding) return JSON.stringify({ value: null, controlled: false, focused: false });
     var props = resolution.binding.candidateFiber.memoizedProps || {};
@@ -55917,23 +55946,24 @@ var INJECTED_HELPERS = `
   }
 
   // \u2500\u2500 Task 5: accessibility "hidden" port (RNTL isHiddenFromAccessibility +
-  // isSubtreeInaccessible). No StyleSheet.flatten in-page \u2192 flatten manually.
-  // Walks fiber.return (live fibers) not instance.parent. opacity:0 is NOT
-  // hidden (RNTL accessibility.ts:73). Per-call cache WeakMap dropped (YAGNI).
-  function flattenStyle(style) {
-    var out = {};
-    if (style == null) return out;
-    if (Array.isArray(style)) {
-      for (var i = 0; i < style.length; i++) {
-        var part = flattenStyle(style[i]);
-        for (var k in part) if (part.hasOwnProperty(k)) out[k] = part[k];
+  // isSubtreeInaccessible). Read the two predicate keys directly \u2014 enumerating
+  // exotic style objects with hasOwnProperty throws and aborts the frontmost
+  // walk (GH #1057). Walks fiber.return (live fibers) not instance.parent.
+  // opacity:0 is NOT hidden (RNTL accessibility.ts:73).
+  // ponytail: last non-undefined wins; an entry whose key is explicitly undefined no longer overrides an earlier value
+  function styleValue(style, key) {
+    if (style == null) return undefined;
+    try {
+      if (Array.isArray(style)) {
+        for (var i = style.length - 1; i >= 0; i--) {
+          var v = styleValue(style[i], key);
+          if (v !== undefined) return v;
+        }
+        return undefined;
       }
-      return out;
-    }
-    if (typeof style === 'object') {
-      for (var key in style) if (style.hasOwnProperty(key)) out[key] = style[key];
-    }
-    return out;
+      if (typeof style === 'object') return style[key];
+    } catch (_) {}
+    return undefined;
   }
 
   // True if \`fiber\` itself is an inaccessible-subtree root.
@@ -55943,8 +55973,7 @@ var INJECTED_HELPERS = `
     if (props.accessibilityElementsHidden) return true;
     if (props.importantForAccessibility === 'no-hide-descendants') return true;
 
-    var flat = flattenStyle(props.style);
-    if (flat.display === 'none') return true;
+    if (styleValue(props.style, 'display') === 'none') return true;
 
     // iOS: a host sibling marked aria-modal / accessibilityViewIsModal hides
     // this subtree. Siblings = children of fiber.return other than fiber.
@@ -55978,8 +56007,8 @@ var INJECTED_HELPERS = `
     if (!props) return null;
     if (typeof props.pointerEvents === 'string') return props.pointerEvents;
     if (props.style == null) return null;
-    var flat = flattenStyle(props.style);
-    return typeof flat.pointerEvents === 'string' ? flat.pointerEvents : null;
+    var pe = styleValue(props.style, 'pointerEvents');
+    return typeof pe === 'string' ? pe : null;
   }
 
   // Only host fibers are views, and only a view decides pointerEvents/hidden in hitTest.
@@ -56106,7 +56135,8 @@ var INJECTED_HELPERS = `
       return JSON.stringify({
         visible: false,
         code: 'ASSERTION_FAILED',
-        reason: 'frontmost proof cannot cover every mounted renderer'
+        reason: 'frontmost proof cannot cover every mounted renderer',
+        coverage: coverage
       });
     }
     function containsFiber(ancestor, candidate) {
@@ -81608,7 +81638,7 @@ function buildCdpDispatch(deps, signal) {
     if (matches > 1)
       throw new ReplayDispatchError("AMBIGUOUS_TESTID", `testID "${id}" resolves to ${matches} mounted elements`, { matchCount: matches });
     if (!frontmost.visible)
-      throw new ReplayDispatchError(frontmost.code ?? "ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`);
+      throw new ReplayDispatchError(frontmost.code ?? "ASSERTION_FAILED", frontmost.reason ?? `testID "${id}" is mounted but not frontmost`, frontmost.coverage ? { coverage: frontmost.coverage } : void 0);
     if (frontmost.disabled === true || hasDisabledExactMatch(tree, id))
       throw new ReplayDispatchError("INTERACTION_NOT_ACTUATED", `testID "${id}" is disabled/non-interactable`);
     const pointerEventsError = pointerEventsBlock(tree, id);
@@ -81650,7 +81680,8 @@ function buildCdpDispatch(deps, signal) {
         return {
           visible: false,
           code: frontmost.code ?? "ASSERTION_FAILED",
-          reason: frontmost.reason ?? `testID "${id}" is mounted but not frontmost`
+          reason: frontmost.reason ?? `testID "${id}" is mounted but not frontmost`,
+          ...frontmost.coverage ? { meta: { coverage: frontmost.coverage } } : {}
         };
       return { visible: true };
     },
@@ -84526,7 +84557,8 @@ function makeReplayDeps(deps, signal) {
           ...typeof parsed.disabled === "boolean" ? { disabled: parsed.disabled } : {},
           ...parsed.reason ? { reason: parsed.reason } : {},
           ...typeof parsed.matchCount === "number" ? { matchCount: parsed.matchCount } : {},
-          ...parsed.code ? { code: parsed.code } : {}
+          ...parsed.code ? { code: parsed.code } : {},
+          ...parsed.coverage && typeof parsed.coverage === "object" && !Array.isArray(parsed.coverage) ? { coverage: parsed.coverage } : {}
         };
       } catch {
         return {
@@ -97859,7 +97891,7 @@ trackedTool("cdp_dev_settings", "Control React Native dev settings programmatica
     "hideDevMenu"
   ]).describe("Dev menu action to execute")
 }, createDevSettingsHandler(getClient, { probeForegroundSurface }));
-trackedTool("cdp_interact", 'Interact with React components by testID, accessibilityLabel, or supported discovery facts. Calls JS handlers directly, not native touch. typeText joins every matching source to exact eligible handler-owning fibers under one cycle-safe 2,000-work-unit limit and refuses incomplete or ambiguous resolution; success proves one exact React handler dispatch, not native keyboard or input fidelity. It accepts placeholder or role+name, and generic onChange is eligible only on a proven native text-input host Fiber. accessibilityLabel matching uses exact, normalized, then substring tiers. setFieldValue walks to the nearest FormProvider, or safely matches an explicit control prop to an ancestor useForm hook return by object identity before calling setValue. Portal roots can be registered through globalThis.__RN_AGENT_EXTRA_ROOTS__. walkUp (opt-in): for action:"press" with testID/accessibilityLabel selectors only, walks up at most 8 fiber ancestors to the nearest pressable and refuses absence or ambiguity. Use device_swipe/device_press for native gestures.', {
+trackedTool("cdp_interact", 'Interact with React components by testID, accessibilityLabel, or supported discovery facts. Calls JS handlers directly, not native touch. typeText joins every matching source to exact eligible handler-owning fibers under one cycle-safe 500,000-work-unit limit and refuses incomplete or ambiguous resolution; success proves one exact React handler dispatch, not native keyboard or input fidelity. It accepts placeholder or role+name, and generic onChange is eligible only on a proven native text-input host Fiber. accessibilityLabel matching uses exact, normalized, then substring tiers. setFieldValue walks to the nearest FormProvider, or safely matches an explicit control prop to an ancestor useForm hook return by object identity before calling setValue. Portal roots can be registered through globalThis.__RN_AGENT_EXTRA_ROOTS__. walkUp (opt-in): for action:"press" with testID/accessibilityLabel selectors only, walks up at most 8 fiber ancestors to the nearest pressable and refuses absence or ambiguity. Use device_swipe/device_press for native gestures.', {
   action: external_exports.enum(["press", "longPress", "typeText", "scroll", "setFieldValue"]).describe("Action: press, longPress, typeText, scroll, or React Hook Form setFieldValue."),
   testID: external_exports.string().optional().describe("testID prop of the target component (strict match \u2014 preferred). For setFieldValue, this is the testID anchor inside the form's subtree from which to walk up."),
   accessibilityLabel: external_exports.string().optional().describe("accessibilityLabel prop (used if testID not provided). Tiered match: exact \u2192 normalized (trim+lowercase) \u2192 substring. Returns Ambiguous error if >1 component matches."),

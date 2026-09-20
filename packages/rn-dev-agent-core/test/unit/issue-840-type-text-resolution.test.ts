@@ -250,7 +250,7 @@ test('typeText readback resolves the same deep controlled target as mutation', (
   assert.deepEqual(readback, { value: 'verified', controlled: true, focused: false });
 });
 
-test('readInputValue reads a controlled input on a screen-sized tree that exhausts the typeText budget', () => {
+test('typeText and readInputValue share one budget on a screen-sized tree', () => {
   const root = makeFiber('Root');
   for (let index = 0; index < 600; index += 1) {
     appendChild(root, makeFiber('View', { testID: `row-${index}` }));
@@ -272,9 +272,47 @@ test('readInputValue reads a controlled input on a screen-sized tree that exhaus
   const mutation = agent.interact({ action: 'typeText', testID: 'screen-email', text: 'unsafe' });
 
   assert.deepEqual(readback, { value: 'qa.user@example.com', controlled: true, focused: false });
-  assert.equal(mutation.truncated, true, JSON.stringify(mutation));
-  assert.equal(mutation.workLimit, 2000);
-  assert.deepEqual(calls, []);
+  assert.equal(mutation.success, true, JSON.stringify(mutation));
+  assert.equal(mutation.handlerCalled, 'onChangeText');
+  assert.equal(mutation.truncated, undefined);
+  assert.deepEqual(calls, ['unsafe']);
+});
+
+test('typeText mutates and reads back a controlled field beyond the former 100000 work limit', () => {
+  const root = makeFiber('Root');
+  let tail = appendChild(root, makeFiber('View'));
+  for (let index = 1; index < 40000; index += 1) {
+    const next = makeFiber('View');
+    next.return = root;
+    tail.sibling = next;
+    tail = next;
+  }
+  const calls: string[] = [];
+  const input = makeFiber('AndroidTextInput', {
+    testID: 'large-screen-field',
+    value: '',
+    onChangeText(value: string) {
+      calls.push(value);
+      input.memoizedProps.value = value;
+    },
+  });
+  input.return = root;
+  tail.sibling = input;
+  const agent = createAgent(root);
+
+  const result = agent.interact({
+    action: 'typeText',
+    testID: 'large-screen-field',
+    text: 'Example street',
+  });
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.deepEqual(calls, ['Example street']);
+  assert.deepEqual(agent.readInputValue('large-screen-field'), {
+    value: 'Example street',
+    controlled: true,
+    focused: false,
+  });
 });
 
 test('readInputValue reports focused from the host isFocused oracle', () => {
@@ -314,7 +352,7 @@ test('readInputValue reports focused from the host isFocused oracle', () => {
 test('readInputValue still refuses when its own read budget is exhausted', () => {
   const root = makeFiber('Root');
   let tail = appendChild(root, makeFiber('View', { testID: 'row-0' }));
-  for (let index = 1; index < 30000; index += 1) {
+  for (let index = 1; index < 150000; index += 1) {
     const next = makeFiber('View', { testID: `row-${index}` });
     next.return = root;
     tail.sibling = next;
@@ -325,6 +363,10 @@ test('readInputValue still refuses when its own read budget is exhausted', () =>
   assert.deepEqual(agent.readInputValue('row-0'), {
     __agent_error: 'typeText resolution truncated',
   });
+  const mutation = agent.interact({ action: 'typeText', testID: 'row-0', text: 'unsafe' });
+  assert.equal(mutation.truncated, true);
+  assert.equal(mutation.reason, 'work-limit');
+  assert.equal(mutation.workLimit, 500000);
 });
 
 test('React replay types through a wrapper and verifies the same controlled input', async () => {
@@ -815,12 +857,9 @@ test('typeText refuses cyclic hidden-state sibling traversal', () => {
 test('typeText charges hidden-state ancestor traversal to the shared work limit', () => {
   const calls: string[] = [];
   const root = makeFiber('Root');
-  let current = root;
-  for (let index = 0; index < 1100; index += 1) {
-    current = appendChild(current, makeFiber('View'));
-  }
+  const branch = appendChild(root, makeFiber('View'));
   appendChild(
-    current,
+    branch,
     makeFiber('AndroidTextInput', {
       placeholder: 'Bounded search',
       onChangeText(value: string) {
@@ -828,6 +867,13 @@ test('typeText charges hidden-state ancestor traversal to the shared work limit'
       },
     }),
   );
+  let tail = branch;
+  for (let index = 0; index < 200000; index += 1) {
+    const next = makeFiber('View');
+    next.return = root;
+    tail.sibling = next;
+    tail = next;
+  }
 
   const result = runInteract(root, {
     action: 'typeText',
@@ -838,7 +884,7 @@ test('typeText charges hidden-state ancestor traversal to the shared work limit'
 
   assert.equal(result.truncated, true);
   assert.equal(result.reason, 'work-limit');
-  assert.equal(result.workLimit, 2000);
+  assert.equal(result.workLimit, 500000);
   assert.deepEqual(calls, []);
 });
 
@@ -872,21 +918,23 @@ test('typeText refuses a cyclic accessible-name subtree within the shared budget
 test('typeText charges labelled-by accessible-name scans to the shared work limit', () => {
   const calls: string[] = [];
   const root = makeFiber('Root');
-  appendChild(
+  let tail = appendChild(
     root,
     makeFiber('AndroidTextInput', {
       accessibilityRole: 'textbox',
-      accessibilityLabelledBy: 'bounded-label',
+      'aria-labelledby': 'bounded-label',
       onChangeText(value: string) {
         calls.push(value);
       },
     }),
   );
-  let current = appendChild(root, makeFiber('View'));
-  for (let index = 0; index < 1100; index += 1) {
-    current = appendChild(current, makeFiber('View'));
+  for (let index = 0; index < 200000; index += 1) {
+    const next = makeFiber('View');
+    next.return = root;
+    tail.sibling = next;
+    tail = next;
   }
-  const label = appendChild(current, makeFiber('View', { nativeID: 'bounded-label' }));
+  const label = appendChild(root, makeFiber('View', { nativeID: 'bounded-label' }));
   const labelText = appendChild(label, makeFiber('Text'));
   labelText.memoizedProps = 'Bounded field' as unknown as Record<string, unknown>;
 
@@ -900,7 +948,7 @@ test('typeText charges labelled-by accessible-name scans to the shared work limi
 
   assert.equal(result.truncated, true);
   assert.equal(result.reason, 'work-limit');
-  assert.equal(result.workLimit, 2000);
+  assert.equal(result.workLimit, 500000);
   assert.deepEqual(calls, []);
 });
 
@@ -1137,7 +1185,7 @@ test('typeText refuses when its documented total-work limit is exhausted', () =>
   const root = makeFiber('Root');
   const wrapper = appendChild(root, makeFiber('View', { testID: 'huge' }));
   appendChild(
-    wrap(wrapper, 2200),
+    wrap(wrapper, 100000),
     makeFiber('AndroidTextInput', {
       onChangeText(value: string) {
         calls.push(value);
@@ -1149,7 +1197,7 @@ test('typeText refuses when its documented total-work limit is exhausted', () =>
 
   assert.equal(result.truncated, true);
   assert.equal(result.reason, 'work-limit', JSON.stringify(result));
-  assert.equal(result.workLimit, 2000);
+  assert.equal(result.workLimit, 500000);
   assert.deepEqual(calls, []);
 });
 
@@ -1161,7 +1209,7 @@ test('typeText stops root enumeration when style fan-out exhausts the shared lim
     firstRoot,
     makeFiber('AndroidTextInput', {
       placeholder: 'Huge style field',
-      style: Array.from({ length: 100_000 }, () => null),
+      style: Array.from({ length: 500_000 }, () => null),
       onChangeText(value: string) {
         calls.push(value);
       },
@@ -1181,7 +1229,7 @@ test('typeText stops root enumeration when style fan-out exhausts the shared lim
 
   assert.equal(result.truncated, true);
   assert.equal(result.reason, 'work-limit');
-  assert.equal(result.work, 2000);
+  assert.equal(result.work, 500000);
   assert.deepEqual(rootCalls, [1]);
   assert.deepEqual(calls, []);
 });
@@ -1190,12 +1238,12 @@ test('typeText shares one work limit across selector and candidate discovery', (
   const calls: string[] = [];
   const root = makeFiber('Root');
   let current = root;
-  for (let index = 0; index < 1500; index += 1) {
+  for (let index = 0; index < 90000; index += 1) {
     current = appendChild(current, makeFiber('View'));
   }
   const wrapper = appendChild(current, makeFiber('View', { testID: 'combined-budget' }));
   appendChild(
-    wrap(wrapper, 700),
+    wrap(wrapper, 42000),
     makeFiber('AndroidTextInput', {
       onChangeText(value: string) {
         calls.push(value);
@@ -1211,7 +1259,7 @@ test('typeText shares one work limit across selector and candidate discovery', (
 
   assert.equal(result.truncated, true);
   assert.equal(result.reason, 'work-limit');
-  assert.equal(result.workLimit, 2000);
+  assert.equal(result.workLimit, 500000);
   assert.deepEqual(calls, []);
 });
 

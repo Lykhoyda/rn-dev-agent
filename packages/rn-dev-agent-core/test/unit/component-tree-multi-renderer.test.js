@@ -307,7 +307,9 @@ test('B143 A3 (Gemini 80): IIFE wraps per-renderer getFiberRoots in try/catch', 
   const src = INJECTED_HELPERS;
   const slice = src.split('function iterateAllRoots')[1]?.split('function ')[0] ?? '';
   assert.match(slice, /try \{/, 'iterateAllRoots missing try guard around getFiberRoots');
-  assert.match(slice, /catch \(_\)/, 'iterateAllRoots missing per-renderer catch');
+  assert.match(slice, /catch \(e\)/, 'iterateAllRoots missing per-renderer catch');
+  assert.match(slice, /scanError\(ri, 'roots'/, 'iterateAllRoots missing roots-phase scanError');
+  assert.match(slice, /scanError\(ri, 'walk'/, 'iterateAllRoots missing walk-phase scanError');
 });
 
 test('GH #597: a renderers iterator that never reports done falls back to the numeric probe', () => {
