@@ -1,0 +1,2341 @@
+use crate::adapters::{android, devclient, ios, metro};
+use crate::buildplan::{
+    self, ArtifactKind, ArtifactStatus, BuildDecision, BuildPlan, CachedArtifact, LockHolder,
+    LockOutcome, LockPolicy, StateStatus,
+};
+use crate::candidate;
+use crate::exec::{CmdSpec, Runner};
+use crate::failure::{Failure, FailureCode};
+use crate::fingerprint::{self, NativeFingerprint};
+use crate::handoff::{self, ExpectedReceipt, HandoffDocument, HandoffState, HANDOFF_SCHEMA};
+use crate::receipt::{Receipt, ReceiptResult};
+use crate::redact::redact_secrets;
+use crate::runrecord::{
+    capture_pid_identity, probe_pid_identity, AppInstallResource, BuildLockResource, FarmResource,
+    IosSimResource, MetroResource, Phase, PidLiveness, RunRecord, TunnelResource,
+    UsbDeviceResource, RUN_SCHEMA,
+};
+use crate::scenario::{BuildOwner, BuildStrategy, DepsPolicy, Platform, Scenario};
+use crate::timefmt;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+pub struct PrepareArgs {
+    pub scenario_path: PathBuf,
+    pub dry_run: bool,
+    pub android_home: Option<String>,
+    pub lock_root: PathBuf,
+}
+
+fn platform_dir(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Ios => "ios",
+        Platform::Android => "android",
+    }
+}
+
+// Only rn-qa-owned build paths call this; scenario validation guarantees a
+// `metro:` section whenever build.owner is rn-qa.
+fn rn_qa_metro_port(scenario: &Scenario) -> u16 {
+    scenario
+        .metro
+        .as_ref()
+        .expect("validated rn-qa-owned scenario carries metro")
+        .port
+}
+
+struct Ctx<'a> {
+    runner: &'a mut dyn Runner,
+    repo_root: PathBuf,
+    record: RunRecord,
+    started_ms: u64,
+    timings: Vec<(String, u64)>,
+    notes: Vec<(String, String)>,
+}
+
+impl<'a> Ctx<'a> {
+    fn mark(&mut self, label: &str, phase_start_ms: u64) -> u64 {
+        let now = self.runner.now_epoch_ms();
+        self.timings
+            .push((label.to_string(), now.saturating_sub(phase_start_ms)));
+        now
+    }
+
+    fn save(&mut self) -> Result<(), Failure> {
+        self.record.save(&self.repo_root)
+    }
+
+    fn fail(mut self, mut failure: Failure) -> Receipt {
+        if self.record.resources.any_owned() {
+            failure.next_action = format!("rn-qa cleanup {} --json", self.record.run_id);
+        }
+        // Contention is a refusal even after the run record exists: nothing
+        // broke, rn-qa declined to take a claimed resource.
+        let result = if failure.code.is_refusal() {
+            ReceiptResult::Refused
+        } else {
+            ReceiptResult::Failed
+        };
+        self.record.phase = Phase::Failed;
+        self.record.failure = Some(failure.clone());
+        let at = timefmt::iso8601_utc(self.runner.now_epoch_ms());
+        self.record
+            .push_history(at, &format!("failed: {}", failure.code_str()));
+        if let Err(save_failure) = self.save() {
+            failure.detail = format!(
+                "{} — AND the run record could not be updated ({}); treat recorded ownership as stale",
+                failure.detail, save_failure.detail
+            );
+            self.record.failure = Some(failure.clone());
+        }
+        finish_receipt(self, result, Some(failure))
+    }
+}
+
+trait FailureCodeStr {
+    fn code_str(&self) -> String;
+}
+
+impl FailureCodeStr for Failure {
+    fn code_str(&self) -> String {
+        serde_json::to_string(&self.code)
+            .unwrap_or_default()
+            .replace('"', "")
+    }
+}
+
+fn finish_receipt(ctx: Ctx, result: ReceiptResult, failure: Option<Failure>) -> Receipt {
+    let now = ctx.runner.now_epoch_ms();
+    let phase = ctx.record.phase.as_str().to_string();
+    let next_action = match (&result, &failure) {
+        (ReceiptResult::Ready, _) if ctx.record.phase == Phase::HandedOff => format!(
+            "run the qaren managed build/bind chain against the allocated device (docs/qa/cooperative-qa.md), then: rn-qa complete {} <build-log> --json",
+            ctx.record.run_id
+        ),
+        (ReceiptResult::Ready, _) => format!(
+            "agents can attach now; later run: rn-qa cleanup {} --json",
+            ctx.record.run_id
+        ),
+        (_, Some(f)) => f.next_action.clone(),
+        _ => String::new(),
+    };
+    let mut receipt = Receipt::new(
+        "prepare",
+        &ctx.record.run_id,
+        result,
+        &phase,
+        timefmt::iso8601_utc(now),
+    );
+    receipt.scenario = Some(super::scenario_identity(&ctx.record));
+    receipt.candidate = Some(ctx.record.candidate.clone());
+    receipt.device = Some(super::device_identity(&ctx.record));
+    receipt.metro = super::metro_identity(&ctx.record);
+    receipt.build = ctx.record.build.clone();
+    for (name, value) in &ctx.notes {
+        receipt.outcomes.insert(name.clone(), value.clone());
+    }
+    receipt.failure = failure;
+    receipt.next_action = next_action;
+    receipt.commands_executed = ctx.runner.commands_executed();
+    for (label, ms) in &ctx.timings {
+        receipt.timings_ms.insert(label.clone(), *ms);
+    }
+    receipt
+        .timings_ms
+        .insert("total".to_string(), now.saturating_sub(ctx.started_ms));
+    super::attach_artifacts(&mut receipt, &ctx.repo_root, &ctx.record);
+    receipt
+}
+
+pub fn prepare(runner: &mut dyn Runner, args: &PrepareArgs) -> Receipt {
+    let started_ms = runner.now_epoch_ms();
+    match prepare_validated(runner, args, started_ms) {
+        Ok(receipt) => receipt,
+        Err(failure) => {
+            // Contention and missing-authorization outcomes are refusals, not
+            // failures: nothing broke, rn-qa declined to proceed.
+            let result = if failure.code.is_refusal() {
+                ReceiptResult::Refused
+            } else {
+                ReceiptResult::Failed
+            };
+            let mut receipt = Receipt::new(
+                "prepare",
+                "none",
+                result,
+                &failure.phase.clone(),
+                timefmt::iso8601_utc(runner.now_epoch_ms()),
+            );
+            receipt.next_action = failure.next_action.clone();
+            receipt.failure = Some(failure);
+            receipt.commands_executed = runner.commands_executed();
+            receipt
+        }
+    }
+}
+
+// Failures before a run record exists come back as Err; everything after is
+// folded into the record via Ctx::fail so cleanup can find the resources.
+fn prepare_validated(
+    runner: &mut dyn Runner,
+    args: &PrepareArgs,
+    started_ms: u64,
+) -> Result<Receipt, Failure> {
+    let (scenario, raw) = Scenario::load(&args.scenario_path)?;
+    let scenario_sha256 = candidate::sha256_hex(raw.as_bytes());
+    let scenario_dir = args
+        .scenario_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let cand = candidate::resolve(runner, &scenario, &scenario_dir)?;
+    let repo_root = cand.repo_root.clone();
+
+    // The refusal must come before any network-capable install: an
+    // unprewarmed run under require-prewarm may not even try.
+    if scenario.deps.policy == DepsPolicy::RequirePrewarm {
+        let prewarm = buildplan::load_prewarm(&repo_root);
+        let valid = prewarm.as_ref().is_some_and(|p| {
+            Some(&p.lockfile_sha256) == cand.lockfile_sha256.as_ref()
+                && p.project_root == cand.project_root
+        });
+        if !valid {
+            return Err(Failure::new(
+                "deps",
+                FailureCode::DepsNotPrewarmed,
+                match prewarm {
+                    Some(p) => format!(
+                        "deps.policy=require-prewarm but the recorded prewarm covers lockfile {}, not the candidate's {}",
+                        p.lockfile_sha256,
+                        cand.lockfile_sha256.as_deref().unwrap_or("<none>")
+                    ),
+                    None => "deps.policy=require-prewarm but no prewarm record exists for this worktree".to_string(),
+                },
+                format!(
+                    "run `rn-qa prewarm {}` once with credentials available, then re-run prepare",
+                    args.scenario_path.display()
+                ),
+            ));
+        }
+    }
+
+    check_prereqs(runner, &scenario, args.android_home.as_deref())?;
+    if let Some(metro) = &scenario.metro {
+        check_port_free(runner, metro.port)?;
+    }
+    if let Some(android) = &scenario.android {
+        check_port_free(runner, android.adb_server_port)?;
+    }
+    if let Some(port) = scenario
+        .android_usb
+        .as_ref()
+        .and_then(|usb| usb.adb_server_port)
+    {
+        check_port_free(runner, port)?;
+    }
+
+    let run_id = format!("{}-{}", scenario.name, timefmt::compact_utc(started_ms));
+
+    if args.dry_run {
+        return Ok(dry_run_receipt(
+            runner,
+            &scenario,
+            &cand,
+            &args.scenario_path,
+            &scenario_sha256,
+            &run_id,
+            started_ms,
+        ));
+    }
+
+    let run_dir = RunRecord::run_dir(&repo_root, &run_id);
+    if let Some(parent) = run_dir.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            Failure::new(
+                "allocate",
+                FailureCode::RunRecordUpdateFailed,
+                format!("cannot create {}: {e}", parent.display()),
+                "check .rn-qa directory permissions",
+            )
+        })?;
+    }
+    // mkdir is the atomic claim on the run id: two prepares racing within the
+    // same second cannot both own the directory.
+    std::fs::create_dir(&run_dir).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            Failure::new(
+                "allocate",
+                FailureCode::RunAlreadyExists,
+                format!("{} already exists", run_dir.display()),
+                "re-run prepare; run ids are timestamped per second",
+            )
+        } else {
+            Failure::new(
+                "allocate",
+                FailureCode::RunRecordUpdateFailed,
+                format!("cannot create {}: {e}", run_dir.display()),
+                "check .rn-qa directory permissions",
+            )
+        }
+    })?;
+    std::fs::create_dir_all(run_dir.join("logs")).map_err(|e| {
+        Failure::new(
+            "allocate",
+            FailureCode::RunRecordUpdateFailed,
+            format!("cannot create {}: {e}", run_dir.display()),
+            "check .rn-qa directory permissions",
+        )
+    })?;
+
+    let self_pid = std::process::id() as i32;
+    let record = RunRecord {
+        schema: RUN_SCHEMA.to_string(),
+        run_id: run_id.clone(),
+        created_at: timefmt::iso8601_utc(started_ms),
+        scenario: scenario.clone(),
+        scenario_path: args.scenario_path.clone(),
+        scenario_sha256,
+        candidate: cand,
+        phase: Phase::Created,
+        prepare: capture_pid_identity(runner, self_pid),
+        build: None,
+        handoff: None,
+        resources: Default::default(),
+        failure: None,
+        history: Vec::new(),
+    };
+    record.save(&repo_root)?;
+
+    let mut ctx = Ctx {
+        runner,
+        repo_root,
+        record,
+        started_ms,
+        timings: Vec::new(),
+        notes: Vec::new(),
+    };
+    let t = ctx.mark("validate", started_ms);
+
+    let offline = ctx.record.scenario.deps.policy == DepsPolicy::RequirePrewarm;
+    let mut deps_args = vec!["install", "--frozen-lockfile"];
+    if offline {
+        // The prewarm record proved the store covers this lockfile; --offline
+        // hard-guarantees no network and therefore no credential prompt.
+        deps_args.push("--offline");
+    }
+    let deps = ctx.runner.run(
+        &CmdSpec::new(
+            "pnpm-install",
+            "pnpm",
+            &deps_args,
+            ctx.record.scenario.deadlines.install_deps_seconds,
+        )
+        .cwd(&ctx.record.candidate.project_root.clone()),
+    );
+    if !deps.ok() {
+        return Ok(ctx.fail(Failure::new(
+            "deps",
+            FailureCode::DepsInstallFailed,
+            format!(
+                "pnpm {}: {}",
+                deps_args.join(" "),
+                redact_secrets(&deps.summary())
+            ),
+            if offline {
+                "the pnpm store no longer covers the lockfile; re-run rn-qa prewarm, then re-run prepare"
+            } else {
+                "fix the dependency install in the candidate project, then re-run prepare"
+            },
+        )));
+    }
+    ctx.record.phase = Phase::DepsInstalled;
+    if let Err(f) = ctx.save() {
+        return Ok(ctx.fail(f));
+    }
+    let t = ctx.mark("deps", t);
+
+    if ctx.record.scenario.build.owner == BuildOwner::Qaren {
+        return Ok(prepare_handoff(ctx, args, t));
+    }
+
+    let plan = match plan_build(&mut ctx) {
+        Ok(plan) => plan,
+        Err(f) => return Ok(ctx.fail(f)),
+    };
+    ctx.record.build = Some(plan.clone());
+    if let Err(f) = ctx.save() {
+        return Ok(ctx.fail(f));
+    }
+    let t = ctx.mark("plan", t);
+
+    if plan.decision != BuildDecision::Reuse {
+        if let Err(f) = claim_build_lock(&mut ctx, &args.lock_root) {
+            return Ok(ctx.fail(f));
+        }
+    }
+
+    let allocate_result = match ctx.record.scenario.platform {
+        Platform::Ios => allocate_ios(&mut ctx),
+        Platform::Android => {
+            if ctx.record.scenario.android_usb.is_some() {
+                allocate_usb(&mut ctx, args.android_home.as_deref(), &args.lock_root)
+            } else {
+                allocate_android(&mut ctx, args.android_home.as_deref())
+            }
+        }
+    };
+    if let Err(f) = allocate_result {
+        return Ok(ctx.fail(f));
+    }
+    ctx.record.phase = Phase::ResourcesAllocated;
+    if let Err(f) = ctx.save() {
+        return Ok(ctx.fail(f));
+    }
+    let t = ctx.mark("allocate", t);
+
+    let t = if plan.decision == BuildDecision::Reuse {
+        match run_reuse_path(&mut ctx, &plan, t) {
+            Ok(t) => t,
+            Err(f) => return Ok(ctx.fail(f)),
+        }
+    } else {
+        if plan.decision == BuildDecision::Clean {
+            if let Err(f) = run_clean_preparation(&mut ctx, &plan) {
+                return Ok(ctx.fail(f));
+            }
+        }
+        if let Err(f) = spawn_build(&mut ctx) {
+            return Ok(ctx.fail(f));
+        }
+        if let Err(f) = wait_ready(&mut ctx) {
+            return Ok(ctx.fail(f));
+        }
+        ctx.mark("build_and_ready", t)
+    };
+
+    if let Err(f) = recheck_candidate(&mut ctx) {
+        return Ok(ctx.fail(f));
+    }
+    let fp = match recheck_fingerprint(&mut ctx, &plan) {
+        Ok(fp) => fp,
+        Err(f) => return Ok(ctx.fail(f)),
+    };
+    let t = ctx.mark("verify", t);
+
+    if plan.decision != BuildDecision::Reuse {
+        record_build_result(&mut ctx, &fp);
+        release_build_lock(&mut ctx);
+    }
+    ctx.mark("cache_record", t);
+
+    ctx.record.phase = Phase::Ready;
+    let at = timefmt::iso8601_utc(ctx.runner.now_epoch_ms());
+    ctx.record.push_history(at, "ready");
+    if let Err(f) = ctx.save() {
+        return Ok(ctx.fail(f));
+    }
+    Ok(finish_receipt(ctx, ReceiptResult::Ready, None))
+}
+
+// Handoff mode (build.owner: qaren, workspace issue #34): rn-qa owns
+// validation, deps preparation, the native fingerprint, and exclusive device
+// allocation, then stops. The qaren session performs the one
+// authoritative managed build/install against the exact allocated device and
+// owns Metro, install proof, and runtime binding; `rn-qa complete` later
+// binds the session's signed build receipt to this run identity. No Metro,
+// adb server, build lock, or native-cache mutation happens here.
+fn prepare_handoff(mut ctx: Ctx, args: &PrepareArgs, t: u64) -> Receipt {
+    let platform = platform_dir(ctx.record.scenario.platform);
+    let repo_root = ctx.record.candidate.repo_root.clone();
+    let project_root = ctx.record.candidate.project_root.clone();
+    let fp = match fingerprint::compute(ctx.runner, &repo_root, &project_root, platform) {
+        Ok(fp) => fp,
+        Err(f) => return ctx.fail(f),
+    };
+    let t = ctx.mark("fingerprint", t);
+
+    let allocate_result = match ctx.record.scenario.platform {
+        Platform::Ios => allocate_ios(&mut ctx),
+        Platform::Android => {
+            let usb = ctx
+                .record
+                .scenario
+                .android_usb
+                .clone()
+                .expect("validated handoff scenario is ios or android_usb");
+            // Claim-only: the qaren session owns the adb lifecycle in
+            // handoff mode, so rn-qa never starts an adb server or contacts
+            // the device; presence and authorization are proven downstream by
+            // rn_session bind_device against the exact serial.
+            claim_usb_device(&mut ctx, &args.lock_root, &usb.serial)
+        }
+    };
+    if let Err(f) = allocate_result {
+        return ctx.fail(f);
+    }
+    ctx.record.phase = Phase::ResourcesAllocated;
+    if let Err(f) = ctx.save() {
+        return ctx.fail(f);
+    }
+    let t = ctx.mark("allocate", t);
+
+    // The handoff must describe the candidate exactly as it stands at issue
+    // time; drift since validation refuses instead of handing over a
+    // misattributed identity.
+    if let Err(f) = recheck_candidate(&mut ctx) {
+        return ctx.fail(f);
+    }
+    let t = ctx.mark("verify", t);
+
+    let device_id = match ctx.record.scenario.platform {
+        Platform::Ios => ctx
+            .record
+            .resources
+            .ios_simulator
+            .as_ref()
+            .map(|sim| sim.udid.clone()),
+        Platform::Android => ctx
+            .record
+            .resources
+            .usb_device
+            .as_ref()
+            .map(|usb| usb.serial.clone()),
+    };
+    let cleanup_next = format!(
+        "rn-qa cleanup {} --json, then re-run prepare",
+        ctx.record.run_id
+    );
+    let Some(device_id) = device_id.filter(|id| !id.is_empty()) else {
+        return ctx.fail(Failure::new(
+            "handoff",
+            FailureCode::RunRecordInvalid,
+            "the allocated device identity is missing from the run record".to_string(),
+            cleanup_next,
+        ));
+    };
+    let Some(app_root_key) = handoff::app_root_key(&repo_root, &project_root) else {
+        return ctx.fail(Failure::new(
+            "handoff",
+            FailureCode::CandidatePathInvalid,
+            format!(
+                "project root {} is not contained in worktree {}; refusing to derive a handoff identity",
+                project_root.display(),
+                repo_root.display()
+            ),
+            cleanup_next,
+        ));
+    };
+    let expected = ExpectedReceipt {
+        platform: platform.to_string(),
+        device_id,
+        app_id: ctx.record.candidate.app_id.clone(),
+        worktree_key: handoff::worktree_key(&repo_root),
+        app_root_key,
+    };
+    let issued_at = timefmt::iso8601_utc(ctx.runner.now_epoch_ms());
+    let document_path = handoff::document_path(&ctx.repo_root, &ctx.record.run_id);
+    let document = HandoffDocument {
+        schema: HANDOFF_SCHEMA.to_string(),
+        run_id: ctx.record.run_id.clone(),
+        issued_at: issued_at.clone(),
+        candidate: ctx.record.candidate.clone(),
+        platform: platform.to_string(),
+        device: super::device_identity(&ctx.record),
+        native_fingerprint: fp.value.clone(),
+        fingerprint_complete: fp.complete,
+        fingerprint_incompleteness: fp.incompleteness.clone(),
+        expected_receipt: expected.clone(),
+    };
+    let document_sha256 = match handoff::save_document(&document_path, &document) {
+        Ok(sha) => sha,
+        Err(e) => {
+            let failure = Failure::new(
+                "handoff",
+                FailureCode::RunRecordUpdateFailed,
+                format!("cannot write {}: {e}", document_path.display()),
+                format!(
+                    "check .rn-qa directory permissions, then rn-qa cleanup {} --json",
+                    ctx.record.run_id
+                ),
+            );
+            return ctx.fail(failure);
+        }
+    };
+    ctx.record.handoff = Some(HandoffState {
+        document_sha256,
+        expected,
+        accepted: None,
+        completed_at: None,
+        evidence_sha256: None,
+    });
+    ctx.record.phase = Phase::HandedOff;
+    ctx.record.push_history(issued_at, "handed_off");
+    if let Err(f) = ctx.save() {
+        return ctx.fail(f);
+    }
+    ctx.mark("handoff", t);
+    ctx.notes
+        .push(("handoff".to_string(), "issued".to_string()));
+    ctx.notes
+        .push(("build_owner".to_string(), "qaren".to_string()));
+    if !fp.complete {
+        ctx.notes.push((
+            "fingerprint".to_string(),
+            format!("incomplete: {}", fp.incompleteness.join("; ")),
+        ));
+    }
+    finish_receipt(ctx, ReceiptResult::Ready, None)
+}
+
+fn check_prereqs(
+    runner: &mut dyn Runner,
+    scenario: &Scenario,
+    android_home: Option<&str>,
+) -> Result<(), Failure> {
+    let handoff = scenario.build.owner == BuildOwner::Qaren;
+    let mut tools: Vec<&str> = vec!["git", "pnpm", "node"];
+    if !handoff {
+        tools.extend(["lsof", "curl"]);
+    }
+    tools.push("ps");
+    match scenario.platform {
+        Platform::Ios => tools.push("xcrun"),
+        Platform::Android => {
+            // ssh reaches the NUC farm; a USB device needs only local tooling.
+            if scenario.android.is_some() {
+                tools.push("ssh");
+            }
+            // The gradle build (java) and adb belong to the build owner; a
+            // handoff-mode allocation only claims the device lock.
+            if !handoff {
+                tools.push("java");
+            }
+        }
+    }
+    let mut missing = Vec::new();
+    for tool in tools {
+        let output = runner.run(&CmdSpec::new("which", "/usr/bin/which", &[tool], 10));
+        if !output.ok() {
+            missing.push(tool.to_string());
+        }
+    }
+    if scenario.platform == Platform::Android && !handoff {
+        match android_home {
+            Some(home) if android::adb_path(home).is_file() => {}
+            Some(home) => missing.push(format!("adb (not at {}/platform-tools/adb)", home)),
+            None => missing.push("ANDROID_HOME env var".to_string()),
+        }
+    }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(Failure::new(
+            "prereqs",
+            FailureCode::PrereqMissing,
+            format!("missing prerequisites: {}", missing.join(", ")),
+            "install the missing tools, then re-run prepare",
+        ))
+    }
+}
+
+fn check_port_free(runner: &mut dyn Runner, port: u16) -> Result<(), Failure> {
+    let output = runner.run(&metro::port_owner_spec(port));
+    match metro::parse_port_owner(&output) {
+        metro::PortOwners::Free => Ok(()),
+        metro::PortOwners::Owned(pid) => Err(Failure::new(
+            "prereqs",
+            FailureCode::MetroPortOccupied,
+            format!("metro port {port} is already owned by pid {pid}"),
+            "pick a different metro.port in the scenario or stop the foreign listener yourself",
+        )),
+        metro::PortOwners::Multiple => Err(Failure::new(
+            "prereqs",
+            FailureCode::MetroPortOccupied,
+            format!("metro port {port} has multiple listeners"),
+            "pick a different metro.port in the scenario",
+        )),
+        metro::PortOwners::Unknown => Err(Failure::new(
+            "prereqs",
+            FailureCode::PrereqMissing,
+            format!(
+                "cannot determine metro port {port} state: {}",
+                output.summary()
+            ),
+            "ensure lsof works on this host, then re-run prepare",
+        )),
+    }
+}
+
+fn allocate_ios(ctx: &mut Ctx) -> Result<(), Failure> {
+    let ios = ctx
+        .record
+        .scenario
+        .ios
+        .clone()
+        .expect("validated ios scenario");
+    let name = ios::sim_name(&ctx.record.run_id);
+    // The pending allocation is durable before the external create: a crash
+    // mid-create leaves the run-scoped name as cleanup's recovery key.
+    ctx.record.resources.ios_simulator = Some(IosSimResource {
+        udid: String::new(),
+        name: name.clone(),
+        device_type: ios.device_type.clone(),
+        runtime: ios.runtime.clone(),
+    });
+    ctx.save()?;
+    let created = ctx
+        .runner
+        .run(&ios::create_spec(&name, &ios.device_type, &ios.runtime));
+    if !created.ok() {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::SimulatorCreateFailed,
+            format!("simctl create {name}: {}", created.summary()),
+            "check ios.device_type and ios.runtime against `xcrun simctl list`",
+        ));
+    }
+    let udid = created.stdout.trim().to_string();
+    if udid.len() != 36 {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::SimulatorCreateFailed,
+            format!("simctl create returned unexpected output: {udid:?}"),
+            "inspect simctl output; the simulator may need manual deletion",
+        ));
+    }
+    if let Some(sim) = &mut ctx.record.resources.ios_simulator {
+        sim.udid = udid.clone();
+    }
+    ctx.save()?;
+
+    let boot = ctx.runner.run(&ios::bootstatus_spec(
+        &udid,
+        ctx.record.scenario.deadlines.device_boot_seconds,
+    ));
+    if !boot.ok() {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::SimulatorBootFailed,
+            format!("simctl bootstatus {udid}: {}", boot.summary()),
+            "run rn-qa cleanup for this run, then retry prepare",
+        ));
+    }
+    Ok(())
+}
+
+fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Failure> {
+    let android = ctx
+        .record
+        .scenario
+        .android
+        .clone()
+        .expect("validated android scenario");
+    let holder = android::holder(&ctx.record.run_id);
+
+    let status = ctx.runner.run(&android::farm_status_spec(
+        &android.ssh_host,
+        &android.farm_path,
+    ));
+    if !status.ok() {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::FarmUnreachable,
+            format!(
+                "ssh {} android-farm status: {}",
+                android.ssh_host,
+                status.summary()
+            ),
+            "check Tailscale/ssh access to the farm host, then re-run prepare",
+        ));
+    }
+    let slot_status =
+        android::parse_slot_status(&status.stdout, android.slot).ok_or_else(|| {
+            Failure::new(
+                "allocate",
+                FailureCode::FarmStartFailed,
+                format!(
+                    "farm status has no parseable line for slot {}",
+                    android.slot
+                ),
+                "inspect `android-farm status` output on the farm host",
+            )
+        })?;
+    if slot_status.lease != "free" {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::FarmSlotLeased,
+            format!(
+                "slot {} is leased by {:?} (state {})",
+                android.slot,
+                android::lease_holder_token(&slot_status.lease),
+                slot_status.state
+            ),
+            "pick the other slot in the scenario or wait for the lease to clear",
+        ));
+    }
+    if slot_status.state != "down" {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::FarmSlotLeased,
+            format!(
+                "slot {} has no lease but its emulator state is {:?}; refusing to adopt a foreign emulator",
+                android.slot, slot_status.state
+            ),
+            "investigate the farm host; the slot emulator is running without a lease",
+        ));
+    }
+
+    // The tunnel binds the farm-advertised adb port on this host; a listener
+    // already there (a local emulator on 5555 in particular) would be adopted
+    // as the leased device. Refuse before claiming the lease.
+    check_tunnel_port_free(ctx.runner, slot_status.adb_port)?;
+
+    // The pending lease is durable before the remote command runs at all: a
+    // crash inside `farm start` must still leave the claim discoverable.
+    ctx.record.resources.farm = Some(FarmResource {
+        ssh_host: android.ssh_host.clone(),
+        farm_path: android.farm_path.clone(),
+        slot: android.slot,
+        holder: holder.clone(),
+        avd: slot_status.avd.clone(),
+        remote_serial: slot_status.serial.clone(),
+        adb_port: slot_status.adb_port,
+    });
+    ctx.save()?;
+    let started = ctx.runner.run(&android::farm_start_spec(
+        &android.ssh_host,
+        &android.farm_path,
+        android.slot,
+        &holder,
+        ctx.record.scenario.deadlines.device_boot_seconds,
+    ));
+    let started_ok = started.ok()
+        && android::parse_started(&started.stdout, android.slot).is_some_and(|s| {
+            s.serial == slot_status.serial
+                && s.adb_port == slot_status.adb_port
+                && s.lease == holder
+        });
+    if !started_ok {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::FarmStartFailed,
+            format!(
+                "android-farm start slot {} did not echo the requested lease/serial/port: {}",
+                android.slot,
+                started.summary()
+            ),
+            "run rn-qa cleanup for this run, then retry prepare",
+        ));
+    }
+
+    let tunnel_log = RunRecord::run_dir(&ctx.repo_root, &ctx.record.run_id)
+        .join("logs")
+        .join("tunnel.log");
+    let tunnel_spec = android::tunnel_spec(&android.ssh_host, slot_status.adb_port);
+    let spawned = ctx
+        .runner
+        .spawn_group(&tunnel_spec, &tunnel_log)
+        .map_err(|e| {
+            Failure::new(
+                "allocate",
+                FailureCode::TunnelFailed,
+                format!("cannot spawn ssh tunnel: {e}"),
+                "run rn-qa cleanup for this run, then retry prepare",
+            )
+        })?;
+    let identity = capture_pid_identity(ctx.runner, spawned.pid);
+    ctx.record.resources.tunnel = Some(TunnelResource {
+        spawned: spawned.clone(),
+        identity: identity.clone(),
+        local_port: slot_status.adb_port,
+        log: tunnel_log.clone(),
+    });
+    ctx.save()?;
+    let Some(tunnel_identity) = identity else {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::TunnelFailed,
+            "ssh tunnel died before its identity could be captured".to_string(),
+            format!(
+                "inspect {} and run rn-qa cleanup for this run",
+                tunnel_log.display()
+            ),
+        )
+        .with_evidence(vec![super::log_tail(&tunnel_log, 25)]));
+    };
+    wait_for_local_listener(
+        ctx,
+        slot_status.adb_port,
+        spawned.pgid,
+        &tunnel_identity,
+        &tunnel_log,
+        30,
+        FailureCode::TunnelFailed,
+    )?;
+
+    let adb = android::adb_path(android_home.expect("prereqs checked ANDROID_HOME"));
+    ctx.record.resources.adb_path = Some(adb.clone());
+    ctx.save()?;
+
+    // The emulator guest only trusts the farm host's adb key; a run-scoped adb
+    // server authenticates with it and keeps the Mac's global server out of play.
+    let run_dir = RunRecord::run_dir(&ctx.repo_root, &ctx.record.run_id);
+    let key = ctx
+        .runner
+        .run(&android::fetch_adbkey_spec(&android.ssh_host));
+    if !key.ok() || key.stdout.trim().is_empty() {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::AdbServerFailed,
+            format!("cannot fetch the farm host adb key: {}", key.summary()),
+            "check ~/.android/adbkey on the farm host, run rn-qa cleanup, then retry",
+        ));
+    }
+    let vendor_key = run_dir.join("nuc-adbkey");
+    // Record ownership before the write so a partial key is still cleanable.
+    ctx.record.resources.adb_vendor_key = Some(vendor_key.clone());
+    ctx.save()?;
+    if let Err(e) = write_private_file(&vendor_key, &key.stdout) {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::AdbServerFailed,
+            format!("cannot write {}: {e}", vendor_key.display()),
+            "check .rn-qa permissions, run rn-qa cleanup, then retry",
+        ));
+    }
+
+    let server_port = android.adb_server_port;
+    let serial = android::local_serial(slot_status.adb_port);
+    let server_log = run_dir.join("logs").join("adb-server.log");
+    let server_spec = android::adb_server_spec(&adb, server_port, &serial, &vendor_key);
+    let server = ctx
+        .runner
+        .spawn_group(&server_spec, &server_log)
+        .map_err(|e| {
+            Failure::new(
+                "allocate",
+                FailureCode::AdbServerFailed,
+                format!("cannot spawn the private adb server: {e}"),
+                "run rn-qa cleanup for this run, then retry prepare",
+            )
+        })?;
+    let server_identity = capture_pid_identity(ctx.runner, server.pid);
+    let server_pgid = server.pgid;
+    ctx.record.resources.adb_server = Some(crate::runrecord::AdbServerResource {
+        spawned: server,
+        identity: server_identity.clone(),
+        server_port,
+        log: server_log.clone(),
+    });
+    ctx.save()?;
+    let Some(server_identity) = server_identity else {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::AdbServerFailed,
+            "the private adb server died before its identity could be captured".to_string(),
+            format!(
+                "inspect {} and run rn-qa cleanup for this run",
+                server_log.display()
+            ),
+        )
+        .with_evidence(vec![super::log_tail(&server_log, 25)]));
+    };
+    wait_for_local_listener(
+        ctx,
+        server_port,
+        server_pgid,
+        &server_identity,
+        &server_log,
+        20,
+        FailureCode::AdbServerFailed,
+    )?;
+
+    let connect = ctx
+        .runner
+        .run(&android::adb_connect_spec(&adb, server_port, &serial));
+    let connected = connect.ok()
+        && (connect.stdout.contains("connected to")
+            || connect.stdout.contains("already connected"));
+    if !connected {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::AdbConnectFailed,
+            format!("adb connect {serial}: {}", connect.summary()),
+            "run rn-qa cleanup for this run, then retry prepare",
+        ));
+    }
+    let state = ctx
+        .runner
+        .run(&android::adb_get_state_spec(&adb, server_port, &serial));
+    if !state.ok() || state.stdout.trim() != "device" {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::AdbConnectFailed,
+            format!("adb -s {serial} get-state: {}", state.summary()),
+            "run rn-qa cleanup for this run, then retry prepare",
+        ));
+    }
+    ctx.record.resources.adb_local_serial = Some(serial);
+    ctx.save()?;
+    Ok(())
+}
+
+fn plan_build(ctx: &mut Ctx) -> Result<BuildPlan, Failure> {
+    let platform = platform_dir(ctx.record.scenario.platform);
+    let repo_root = ctx.record.candidate.repo_root.clone();
+    let project_root = ctx.record.candidate.project_root.clone();
+    let fp = fingerprint::compute(ctx.runner, &repo_root, &project_root, platform)?;
+    let state = buildplan::load_state(&repo_root, platform, &ctx.record.candidate.app_id);
+    // The artifact is content-verified only when it could authorize reuse.
+    let artifact_status = match &state {
+        StateStatus::Loaded(s) if s.fingerprint == fp.value => {
+            s.artifact.as_ref().map(verify_artifact)
+        }
+        _ => None,
+    };
+    let scheme = ctx.record.scenario.candidate.dev_client_scheme.clone();
+    let native_dir_exists = project_root.join(platform).is_dir();
+    let inputs = buildplan::DecisionInputs {
+        platform,
+        app_id: &ctx.record.candidate.app_id,
+        worktree_root: &repo_root,
+        candidate_sha: &ctx.record.candidate.git_sha,
+        fingerprint: &fp.value,
+        fingerprint_complete: fp.complete,
+        incompleteness: &fp.incompleteness,
+        scheme: scheme.as_deref(),
+        force_clean: ctx.record.scenario.build.strategy == BuildStrategy::Clean,
+        native_dir_exists,
+        native_dir_in_candidate: fp.native_dir_in_candidate,
+    };
+    Ok(buildplan::decide(&inputs, &state, artifact_status))
+}
+
+fn verify_artifact(artifact: &CachedArtifact) -> ArtifactStatus {
+    if !artifact.path.exists() {
+        return ArtifactStatus::MissingFile;
+    }
+    match buildplan::hash_artifact(&artifact.path) {
+        Ok(hash) if hash == artifact.sha256 => ArtifactStatus::Verified,
+        Ok(_) => ArtifactStatus::Mismatch,
+        Err(_) => ArtifactStatus::Mismatch,
+    }
+}
+
+fn lock_holder_for(ctx: &mut Ctx) -> LockHolder {
+    LockHolder {
+        holder: android::holder(&ctx.record.run_id),
+        run_id: ctx.record.run_id.clone(),
+        identity: ctx.record.prepare.clone(),
+        at: timefmt::iso8601_utc(ctx.runner.now_epoch_ms()),
+    }
+}
+
+fn claim_build_lock(ctx: &mut Ctx, lock_root: &Path) -> Result<(), Failure> {
+    let name = format!(
+        "native-build-{}",
+        platform_dir(ctx.record.scenario.platform)
+    );
+    let holder = lock_holder_for(ctx);
+    // Persisted before the claim so an interrupted prepare leaves the intent
+    // discoverable; a foreign holder at cleanup time proves the claim never
+    // succeeded (only this run can write its own holder).
+    ctx.record.resources.build_lock = Some(BuildLockResource {
+        lock_dir: buildplan::lock_dir(lock_root, &name),
+        holder: holder.holder.clone(),
+    });
+    ctx.save()?;
+    match buildplan::claim_lock(ctx.runner, lock_root, &name, &holder, LockPolicy::AdoptDead) {
+        LockOutcome::Claimed { adopted_stale } => {
+            if adopted_stale {
+                ctx.notes.push((
+                    "build_lock".to_string(),
+                    "adopted a stale lock whose recorded holder is dead".to_string(),
+                ));
+            }
+            Ok(())
+        }
+        LockOutcome::Contended { detail, .. } => Err(Failure::new(
+            "plan",
+            FailureCode::BuildContended,
+            format!("a concurrent native build holds the serialization lock: {detail}"),
+            "native builds are deliberately serialized; wait for the other build (or clean up its run), then re-run prepare",
+        )),
+        LockOutcome::Error(detail) => Err(Failure::new(
+            "plan",
+            FailureCode::RunRecordUpdateFailed,
+            format!("cannot operate the build serialization lock: {detail}"),
+            "fix the lock directory permissions, then re-run prepare",
+        )),
+    }
+}
+
+fn release_build_lock(ctx: &mut Ctx) {
+    let Some(lock) = ctx.record.resources.build_lock.clone() else {
+        return;
+    };
+    let outcome = buildplan::release_lock(&lock.lock_dir, &lock.holder, &ctx.record.run_id);
+    match outcome {
+        buildplan::ReleaseOutcome::Removed
+        | buildplan::ReleaseOutcome::Absent
+        | buildplan::ReleaseOutcome::Foreign(_) => {
+            ctx.record.resources.build_lock = None;
+        }
+        buildplan::ReleaseOutcome::Refused(reason)
+        | buildplan::ReleaseOutcome::Unresolved(reason) => {
+            ctx.notes.push(("build_lock_release".to_string(), reason));
+        }
+    }
+}
+
+fn claim_usb_device(ctx: &mut Ctx, lock_root: &Path, serial: &str) -> Result<(), Failure> {
+    let holder = lock_holder_for(ctx);
+    let lock_name = android::usb_lock_name(serial);
+    let lock_dir = buildplan::lock_dir(lock_root, &lock_name);
+    // Persist-before-claim: an interrupted claim stays discoverable, and a
+    // foreign holder at cleanup proves this run never owned the device.
+    ctx.record.resources.usb_device = Some(UsbDeviceResource {
+        serial: serial.to_string(),
+        lock_dir: lock_dir.clone(),
+        holder: holder.holder.clone(),
+    });
+    ctx.save()?;
+    match buildplan::claim_lock(
+        ctx.runner,
+        lock_root,
+        &lock_name,
+        &holder,
+        LockPolicy::Strict,
+    ) {
+        LockOutcome::Claimed { .. } => Ok(()),
+        LockOutcome::Contended {
+            holder: existing,
+            detail,
+        } => {
+            let described = existing
+                .map(|h| format!(" (held for run {})", h.run_id))
+                .unwrap_or_default();
+            Err(Failure::new(
+                "allocate",
+                FailureCode::DeviceClaimContended,
+                format!(
+                    "physical device {serial} is exclusively claimed elsewhere{described}: {detail}"
+                ),
+                "wait for the holding run to clean up (rn-qa cleanup <its-run-id>); rn-qa never adopts a device claim, even a stale one",
+            ))
+        }
+        LockOutcome::Error(detail) => Err(Failure::new(
+            "allocate",
+            FailureCode::RunRecordUpdateFailed,
+            format!("cannot operate the device claim lock: {detail}"),
+            "fix the lock directory permissions, then re-run prepare",
+        )),
+    }
+}
+
+fn allocate_usb(
+    ctx: &mut Ctx,
+    android_home: Option<&str>,
+    lock_root: &Path,
+) -> Result<(), Failure> {
+    let usb = ctx
+        .record
+        .scenario
+        .android_usb
+        .clone()
+        .expect("validated usb scenario");
+    claim_usb_device(ctx, lock_root, &usb.serial)?;
+    let usb_adb_server_port = usb
+        .adb_server_port
+        .expect("validated rn-qa-owned usb scenario");
+
+    let adb = android::adb_path(android_home.expect("prereqs checked ANDROID_HOME"));
+    ctx.record.resources.adb_path = Some(adb.clone());
+    ctx.save()?;
+
+    let Some(home) = std::env::var_os("HOME") else {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::PrereqMissing,
+            "HOME is not set; the host adb key cannot be located".to_string(),
+            "run rn-qa in a normal user environment, then retry prepare",
+        ));
+    };
+    let host_key = PathBuf::from(home).join(".android").join("adbkey");
+    let run_dir = RunRecord::run_dir(&ctx.repo_root, &ctx.record.run_id);
+    let server_log = run_dir.join("logs").join("adb-server.log");
+    let server_spec =
+        android::usb_adb_server_spec(&adb, usb_adb_server_port, &usb.serial, &host_key);
+    let server = ctx
+        .runner
+        .spawn_group(&server_spec, &server_log)
+        .map_err(|e| {
+            Failure::new(
+                "allocate",
+                FailureCode::AdbServerFailed,
+                format!("cannot spawn the run-scoped adb server: {e}"),
+                "run rn-qa cleanup for this run, then retry prepare",
+            )
+        })?;
+    let server_identity = capture_pid_identity(ctx.runner, server.pid);
+    let server_pgid = server.pgid;
+    ctx.record.resources.adb_server = Some(crate::runrecord::AdbServerResource {
+        spawned: server,
+        identity: server_identity.clone(),
+        server_port: usb_adb_server_port,
+        log: server_log.clone(),
+    });
+    ctx.save()?;
+    let Some(server_identity) = server_identity else {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::AdbServerFailed,
+            "the run-scoped adb server died before its identity could be captured".to_string(),
+            format!(
+                "inspect {} and run rn-qa cleanup for this run",
+                server_log.display()
+            ),
+        )
+        .with_evidence(vec![super::log_tail(&server_log, 25)]));
+    };
+    wait_for_local_listener(
+        ctx,
+        usb_adb_server_port,
+        server_pgid,
+        &server_identity,
+        &server_log,
+        20,
+        FailureCode::AdbServerFailed,
+    )?;
+
+    let state = ctx.runner.run(&android::adb_get_state_spec(
+        &adb,
+        usb_adb_server_port,
+        &usb.serial,
+    ));
+    if !state.ok() || state.stdout.trim() != "device" {
+        return Err(Failure::new(
+            "allocate",
+            FailureCode::DeviceUnavailable,
+            format!(
+                "physical device {} is not online through the run-scoped server: {}",
+                usb.serial,
+                state.summary()
+            ),
+            "connect and authorize the device for this host (check `unauthorized`/`offline` on the phone screen), run rn-qa cleanup for this run, then retry",
+        ));
+    }
+    ctx.record.resources.adb_local_serial = Some(usb.serial.clone());
+    ctx.save()?;
+    Ok(())
+}
+
+fn native_build_output_dirs(platform: &str) -> &'static [&'static str] {
+    match platform {
+        "ios" => &["ios/build"],
+        _ => &["android/build", "android/app/build", "android/.gradle"],
+    }
+}
+
+fn run_clean_preparation(ctx: &mut Ctx, plan: &BuildPlan) -> Result<(), Failure> {
+    let platform = platform_dir(ctx.record.scenario.platform);
+    let project_root = ctx.record.candidate.project_root.clone();
+    if plan.regenerate_native_dir {
+        // A generated (git-ignored) native dir is a build output by expo's own
+        // CNG contract; prebuild --clean regenerates it from config.
+        let prebuild = ctx.runner.run(
+            &CmdSpec::new(
+                "expo-prebuild",
+                "pnpm",
+                &[
+                    "exec",
+                    "expo",
+                    "prebuild",
+                    "--platform",
+                    platform,
+                    "--clean",
+                ],
+                ctx.record.scenario.deadlines.build_seconds,
+            )
+            .cwd(&project_root)
+            .env("CI", "1")
+            .env("EXPO_NO_TELEMETRY", "1"),
+        );
+        if !prebuild.ok() {
+            return Err(Failure::new(
+                "build",
+                FailureCode::BuildFailed,
+                format!("expo prebuild --clean: {}", prebuild.summary()),
+                format!(
+                    "inspect the prebuild output, then rn-qa cleanup {} --json",
+                    ctx.record.run_id
+                ),
+            ));
+        }
+        ctx.notes.push((
+            "clean_preparation".to_string(),
+            format!("regenerated the generated {platform}/ dir via expo prebuild --clean"),
+        ));
+        return Ok(());
+    }
+    // A git-visible native dir is candidate input and is never deleted; clean
+    // means dropping the derived build outputs inside it.
+    let mut removed = Vec::new();
+    for rel in native_build_output_dirs(platform) {
+        let path = project_root.join(rel);
+        if !path.exists() {
+            continue;
+        }
+        std::fs::remove_dir_all(&path).map_err(|e| {
+            Failure::new(
+                "build",
+                FailureCode::BuildFailed,
+                format!("cannot remove build output {}: {e}", path.display()),
+                "fix the build directory permissions, then re-run prepare",
+            )
+        })?;
+        removed.push(rel.to_string());
+    }
+    ctx.notes.push((
+        "clean_preparation".to_string(),
+        if removed.is_empty() {
+            "no build outputs existed to remove".to_string()
+        } else {
+            format!("removed build outputs: {}", removed.join(", "))
+        },
+    ));
+    Ok(())
+}
+
+fn spawn_metro_only(ctx: &mut Ctx) -> Result<(), Failure> {
+    let port = rn_qa_metro_port(&ctx.record.scenario);
+    let project_root = ctx.record.candidate.project_root.clone();
+    let spec = metro::start_spec(&project_root, port);
+    let metro_log = RunRecord::run_dir(&ctx.repo_root, &ctx.record.run_id)
+        .join("logs")
+        .join("metro.log");
+    let spawned = ctx.runner.spawn_group(&spec, &metro_log).map_err(|e| {
+        Failure::new(
+            "build",
+            FailureCode::BuildFailed,
+            format!("cannot spawn {}: {e}", spec.rendered()),
+            "check pnpm/expo availability, run rn-qa cleanup, then retry prepare",
+        )
+    })?;
+    let identity = capture_pid_identity(ctx.runner, spawned.pid);
+    ctx.record.resources.metro = Some(MetroResource {
+        port,
+        endpoint: format!("http://127.0.0.1:{port}"),
+        spawned,
+        identity: identity.clone(),
+        log: metro_log.clone(),
+    });
+    ctx.record.phase = Phase::Building;
+    ctx.save()?;
+    if identity.is_none() {
+        return Err(Failure::new(
+            "build",
+            FailureCode::BuildFailed,
+            format!("metro exited immediately; see {}", metro_log.display()),
+            format!(
+                "inspect the log, then rn-qa cleanup {} --json",
+                ctx.record.run_id
+            ),
+        )
+        .with_evidence(vec![super::log_tail(&metro_log, 25)]));
+    }
+    Ok(())
+}
+
+fn wait_metro_responding(ctx: &mut Ctx) -> Result<(), Failure> {
+    let deadline = ctx.runner.monotonic_ms() + ctx.record.scenario.deadlines.build_seconds * 1000;
+    let metro_resource = ctx.record.resources.metro.clone().expect("metro spawned");
+    let identity = metro_resource.identity.clone().expect("identity captured");
+    loop {
+        if probe_pid_identity(ctx.runner, &identity) == PidLiveness::Dead {
+            return Err(Failure::new(
+                "build",
+                FailureCode::BuildFailed,
+                format!("metro exited; see {}", metro_resource.log.display()),
+                format!(
+                    "inspect the log, then rn-qa cleanup {} --json",
+                    ctx.record.run_id
+                ),
+            )
+            .with_evidence(vec![super::log_tail(&metro_resource.log, 25)]));
+        }
+        let port_output = ctx.runner.run(&metro::port_owner_spec(metro_resource.port));
+        let port_ours = match metro::parse_port_owner(&port_output) {
+            metro::PortOwners::Owned(pid) => {
+                metro::pgid_of(ctx.runner, pid) == Some(metro_resource.spawned.pgid)
+            }
+            _ => false,
+        };
+        if port_ours && metro::metro_responding(ctx.runner, metro_resource.port) {
+            return Ok(());
+        }
+        if ctx.runner.monotonic_ms() >= deadline {
+            return Err(Failure::new(
+                "build",
+                FailureCode::ReadyDeadlineExceeded,
+                format!(
+                    "metro did not become ready in time; see {}",
+                    metro_resource.log.display()
+                ),
+                format!(
+                    "inspect the log, then rn-qa cleanup {} --json",
+                    ctx.record.run_id
+                ),
+            )
+            .with_evidence(vec![super::log_tail(&metro_resource.log, 25)]));
+        }
+        ctx.runner.sleep(Duration::from_secs(2));
+    }
+}
+
+// Cached reuse: install the verified artifact, serve fresh candidate JS from
+// this run's Metro, deep-link the dev client onto it, then run the same full
+// readiness probes as a built run.
+fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<u64, Failure> {
+    let artifact = plan.artifact.clone().expect("reuse carries an artifact");
+    let metro_port = rn_qa_metro_port(&ctx.record.scenario);
+    match ctx.record.scenario.platform {
+        Platform::Ios => {
+            let sim = ctx
+                .record
+                .resources
+                .ios_simulator
+                .clone()
+                .expect("ios allocated");
+            let installed = ctx
+                .runner
+                .run(&ios::install_app_spec(&sim.udid, &artifact.path));
+            if !installed.ok() {
+                return Err(artifact_install_failure(
+                    &ctx.record.run_id,
+                    &artifact,
+                    installed.summary(),
+                ));
+            }
+        }
+        Platform::Android => {
+            let adb = ctx.record.resources.adb_path.clone().expect("allocated");
+            let serial = ctx
+                .record
+                .resources
+                .adb_local_serial
+                .clone()
+                .expect("allocated");
+            let server_port = ctx
+                .record
+                .resources
+                .adb_server
+                .as_ref()
+                .expect("allocated")
+                .server_port;
+            let installed = ctx.runner.run(&android::adb_install_spec(
+                &adb,
+                server_port,
+                &serial,
+                &artifact.path,
+            ));
+            if !installed.ok() || !installed.stdout.contains("Success") {
+                return Err(artifact_install_failure(
+                    &ctx.record.run_id,
+                    &artifact,
+                    installed.summary(),
+                ));
+            }
+            ctx.record.resources.app_install = Some(AppInstallResource {
+                app_id: ctx.record.candidate.app_id.clone(),
+                serial: serial.clone(),
+                server_port,
+                artifact: artifact.clone(),
+                via: "adb-install".to_string(),
+                installed_at: timefmt::iso8601_utc(ctx.runner.now_epoch_ms()),
+                removal: None,
+            });
+            // Recorded before the mutation so cleanup knows a reverse mapping
+            // may exist on the device.
+            ctx.record.resources.adb_reverse_port = Some(metro_port);
+            ctx.save()?;
+            let reversed = ctx.runner.run(&android::adb_reverse_spec(
+                &adb,
+                server_port,
+                &serial,
+                metro_port,
+            ));
+            if !reversed.ok() {
+                return Err(Failure::new(
+                    "build",
+                    FailureCode::DeviceUnavailable,
+                    format!("adb reverse tcp:{metro_port}: {}", reversed.summary()),
+                    format!(
+                        "run rn-qa cleanup {} --json, then retry prepare",
+                        ctx.record.run_id
+                    ),
+                ));
+            }
+        }
+    }
+    let t = ctx.mark("install_cached", t);
+
+    spawn_metro_only(ctx)?;
+    wait_metro_responding(ctx)?;
+    let t = ctx.mark("metro_ready", t);
+
+    let scheme = ctx
+        .record
+        .scenario
+        .candidate
+        .dev_client_scheme
+        .clone()
+        .expect("reuse was decided with a scheme");
+    let url = devclient::launch_url(&scheme, metro_port);
+    let launched = match ctx.record.scenario.platform {
+        Platform::Ios => {
+            let sim = ctx
+                .record
+                .resources
+                .ios_simulator
+                .clone()
+                .expect("ios allocated");
+            ctx.runner.run(&ios::openurl_spec(&sim.udid, &url))
+        }
+        Platform::Android => {
+            let adb = ctx.record.resources.adb_path.clone().expect("allocated");
+            let serial = ctx
+                .record
+                .resources
+                .adb_local_serial
+                .clone()
+                .expect("allocated");
+            let server_port = ctx
+                .record
+                .resources
+                .adb_server
+                .as_ref()
+                .expect("allocated")
+                .server_port;
+            ctx.runner.run(&android::am_start_deeplink_spec(
+                &adb,
+                server_port,
+                &serial,
+                &url,
+                &ctx.record.candidate.app_id,
+            ))
+        }
+    };
+    if !launched.ok() {
+        return Err(Failure::new(
+            "build",
+            FailureCode::BuildFailed,
+            format!("dev client launch via {url}: {}", launched.summary()),
+            format!(
+                "run rn-qa cleanup {} --json, then retry prepare",
+                ctx.record.run_id
+            ),
+        ));
+    }
+    let t = ctx.mark("app_launch", t);
+
+    wait_ready(ctx)?;
+    Ok(ctx.mark("ready_probes", t))
+}
+
+fn artifact_install_failure(run_id: &str, artifact: &CachedArtifact, summary: String) -> Failure {
+    Failure::new(
+        "build",
+        FailureCode::ArtifactInstallFailed,
+        format!(
+            "cached dev client {} failed to install: {summary}",
+            artifact.path.display()
+        ),
+        format!(
+            "delete the cached artifact to force a rebuild, then rn-qa cleanup {run_id} --json and re-run prepare"
+        ),
+    )
+}
+
+fn recheck_fingerprint(ctx: &mut Ctx, plan: &BuildPlan) -> Result<NativeFingerprint, Failure> {
+    let platform = platform_dir(ctx.record.scenario.platform);
+    let repo_root = ctx.record.candidate.repo_root.clone();
+    let project_root = ctx.record.candidate.project_root.clone();
+    let fp = fingerprint::compute(ctx.runner, &repo_root, &project_root, platform)?;
+    if fp.value != plan.fingerprint {
+        return Err(candidate_drift(
+            &ctx.record.run_id,
+            format!(
+                "native inputs changed during preparation: planned fingerprint {}, now {}",
+                plan.fingerprint, fp.value
+            ),
+        ));
+    }
+    Ok(fp)
+}
+
+fn locate_built_artifact(
+    platform: &str,
+    project_root: &Path,
+) -> Result<(PathBuf, ArtifactKind), String> {
+    if platform == "ios" {
+        let products = project_root
+            .join("ios")
+            .join("build")
+            .join("Build")
+            .join("Products")
+            .join("Debug-iphonesimulator");
+        let entries = std::fs::read_dir(&products)
+            .map_err(|e| format!("no build products at {}: {e}", products.display()))?;
+        let apps: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "app"))
+            .collect();
+        match apps.as_slice() {
+            [app] => Ok((app.clone(), ArtifactKind::AppBundle)),
+            [] => Err(format!("no .app bundle under {}", products.display())),
+            _ => Err(format!(
+                "{} .app bundles under {}; refusing to guess which one is the dev client",
+                apps.len(),
+                products.display()
+            )),
+        }
+    } else {
+        let apk = project_root
+            .join("android")
+            .join("app")
+            .join("build")
+            .join("outputs")
+            .join("apk")
+            .join("debug")
+            .join("app-debug.apk");
+        if apk.is_file() {
+            Ok((apk, ArtifactKind::Apk))
+        } else {
+            Err(format!("no apk at {}", apk.display()))
+        }
+    }
+}
+
+// A successful build refreshes the native cache state: fingerprint binding,
+// provenance of generated dirs, and (when the artifact is unambiguous) a
+// content-hashed copy of the dev client for future reuse. Failures here are
+// recorded, never fatal — the run is ready regardless.
+// Only the newest fingerprint's artifact is ever reusable, so older siblings
+// for the same platform+app are dead weight on a disk this pipeline has
+// already exhausted twice. Names must be exactly `<app_id>-<16 hex>` so a
+// different app whose id merely extends this one is never touched.
+fn prune_stale_artifacts(platform_dir: &Path, app_id: &str, keep_fp_key: &str) -> usize {
+    let prefix = format!("{app_id}-");
+    let mut pruned = 0;
+    let entries = match std::fs::read_dir(platform_dir) {
+        Ok(entries) => entries,
+        Err(_) => return 0,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(fp_key) = name.strip_prefix(&prefix) else {
+            continue;
+        };
+        if fp_key == keep_fp_key
+            || fp_key.len() != 16
+            || !fp_key.chars().all(|c| c.is_ascii_hexdigit())
+            || !entry.path().is_dir()
+        {
+            continue;
+        }
+        if std::fs::remove_dir_all(entry.path()).is_ok() {
+            pruned += 1;
+        }
+    }
+    pruned
+}
+
+fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
+    let platform = platform_dir(ctx.record.scenario.platform);
+    let repo_root = ctx.record.candidate.repo_root.clone();
+    let project_root = ctx.record.candidate.project_root.clone();
+    let app_id = ctx.record.candidate.app_id.clone();
+    let mut artifact = None;
+    match locate_built_artifact(platform, &project_root) {
+        Ok((src, kind)) => {
+            let fp_key: String = fp
+                .value
+                .chars()
+                .filter(|c| c.is_ascii_hexdigit())
+                .take(16)
+                .collect();
+            let dest_dir = buildplan::cache_dir(&repo_root)
+                .join("artifacts")
+                .join(platform)
+                .join(format!("{app_id}-{fp_key}"));
+            let _ = std::fs::remove_dir_all(&dest_dir);
+            let dest = dest_dir.join(src.file_name().unwrap_or_default());
+            let copied = buildplan::copy_artifact(&src, &dest)
+                .and_then(|()| buildplan::hash_artifact(&dest));
+            match copied {
+                Ok(sha256) => {
+                    artifact = Some(CachedArtifact {
+                        path: dest,
+                        sha256,
+                        kind,
+                    });
+                    // Bind the ready installation to hashed bytes for later owned removal.
+                    if let (ArtifactKind::Apk, Some(serial), Some(server)) = (
+                        kind,
+                        ctx.record.resources.adb_local_serial.clone(),
+                        ctx.record.resources.adb_server.as_ref(),
+                    ) {
+                        ctx.record.resources.app_install = Some(AppInstallResource {
+                            app_id: app_id.clone(),
+                            serial,
+                            server_port: server.server_port,
+                            artifact: artifact.clone().expect("just set"),
+                            via: "expo-run-android".to_string(),
+                            installed_at: timefmt::iso8601_utc(ctx.runner.now_epoch_ms()),
+                            removal: None,
+                        });
+                    }
+                    ctx.notes.push((
+                        "artifact_cache".to_string(),
+                        "cached the built dev client for fingerprint-matched reuse".to_string(),
+                    ));
+                    let pruned = prune_stale_artifacts(
+                        &buildplan::cache_dir(&repo_root)
+                            .join("artifacts")
+                            .join(platform),
+                        &app_id,
+                        &fp_key,
+                    );
+                    if pruned > 0 {
+                        ctx.notes.push((
+                            "artifact_cache".to_string(),
+                            format!(
+                                "pruned {pruned} artifact director{} for older native fingerprints",
+                                if pruned == 1 { "y" } else { "ies" }
+                            ),
+                        ));
+                    }
+                }
+                Err(reason) => ctx
+                    .notes
+                    .push(("artifact_cache".to_string(), format!("skipped: {reason}"))),
+            }
+        }
+        Err(reason) => ctx
+            .notes
+            .push(("artifact_cache".to_string(), format!("skipped: {reason}"))),
+    }
+    let generated =
+        ctx.record.candidate.project_root.join(platform).is_dir() && !fp.native_dir_in_candidate;
+    let state = buildplan::NativeCacheState {
+        schema: buildplan::CACHE_SCHEMA.to_string(),
+        platform: platform.to_string(),
+        app_id: app_id.clone(),
+        worktree_root: repo_root.clone(),
+        fingerprint: fp.value.clone(),
+        built_at: timefmt::iso8601_utc(ctx.runner.now_epoch_ms()),
+        candidate_sha: ctx.record.candidate.git_sha.clone(),
+        lockfile_sha256: ctx
+            .record
+            .candidate
+            .lockfile_sha256
+            .clone()
+            .unwrap_or_default(),
+        generated_native_dirs: if generated {
+            vec![platform.to_string()]
+        } else {
+            Vec::new()
+        },
+        artifact,
+    };
+    let path = buildplan::state_path(&repo_root, platform, &app_id);
+    if let Err(e) = buildplan::save_json(&path, &state) {
+        ctx.notes.push((
+            "native_cache_state".to_string(),
+            format!("could not persist {}: {e}", path.display()),
+        ));
+    }
+}
+
+fn write_private_file(path: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(content.as_bytes())
+}
+
+// The build can run for many minutes; the receipt's provenance claim is only
+// honest if the checkout still matches what was recorded at validation time.
+fn recheck_candidate(ctx: &mut Ctx) -> Result<(), Failure> {
+    // Handoff baselines are recorded through the integration filter, so the
+    // recheck must look through the same filter to compare like with like.
+    let tolerate = ctx.record.scenario.build.owner == BuildOwner::Qaren;
+    candidate::verify_unchanged_with(ctx.runner, &ctx.record.candidate, tolerate)
+        .map_err(|detail| candidate_drift(&ctx.record.run_id, format!("{detail} during the run")))
+}
+
+fn candidate_drift(run_id: &str, detail: String) -> Failure {
+    Failure::new(
+        "verify",
+        FailureCode::CandidateDrifted,
+        detail,
+        format!("rn-qa cleanup {run_id} --json, then re-run prepare on a stable checkout"),
+    )
+}
+
+fn check_tunnel_port_free(runner: &mut dyn Runner, port: u16) -> Result<(), Failure> {
+    let output = runner.run(&metro::port_owner_spec(port));
+    match metro::parse_port_owner(&output) {
+        metro::PortOwners::Free => Ok(()),
+        metro::PortOwners::Owned(pid) => Err(Failure::new(
+            "allocate",
+            FailureCode::TunnelFailed,
+            format!("farm adb port {port} already has a local listener (pid {pid}); refusing to bind the tunnel over it"),
+            "stop the local listener yourself (a local emulator commonly owns 5555) or lease a slot with a different adb_port",
+        )),
+        metro::PortOwners::Multiple => Err(Failure::new(
+            "allocate",
+            FailureCode::TunnelFailed,
+            format!("farm adb port {port} has multiple local listeners; refusing to bind the tunnel over them"),
+            "stop the local listeners yourself or lease a slot with a different adb_port",
+        )),
+        metro::PortOwners::Unknown => Err(Failure::new(
+            "allocate",
+            FailureCode::TunnelFailed,
+            format!(
+                "cannot determine local state of farm adb port {port}: {}",
+                output.summary()
+            ),
+            "ensure lsof works on this host, then re-run prepare",
+        )),
+    }
+}
+
+// A listener on the port only counts once it is proven to belong to the group
+// we just spawned; adopting a foreign listener would silently swap the device
+// identity behind the receipt.
+fn wait_for_local_listener(
+    ctx: &mut Ctx,
+    port: u16,
+    expected_pgid: i32,
+    leader: &crate::runrecord::PidIdentity,
+    log: &Path,
+    deadline_seconds: u64,
+    failure_code: FailureCode,
+) -> Result<(), Failure> {
+    let deadline = ctx.runner.monotonic_ms() + deadline_seconds * 1000;
+    loop {
+        let output = ctx.runner.run(&metro::port_owner_spec(port));
+        match metro::parse_port_owner(&output) {
+            metro::PortOwners::Owned(pid) => match metro::pgid_of(ctx.runner, pid) {
+                Some(pgid) if pgid == expected_pgid => return Ok(()),
+                Some(foreign_pgid) => {
+                    return Err(Failure::new(
+                        "allocate",
+                        failure_code,
+                        format!(
+                            "local port {port} is owned by pid {pid} in foreign process group {foreign_pgid}, not the spawned group {expected_pgid}"
+                        ),
+                        "run rn-qa cleanup for this run, resolve the foreign listener yourself, then retry prepare",
+                    ));
+                }
+                // The owner exited between lsof and ps; keep polling.
+                None => {}
+            },
+            metro::PortOwners::Multiple => {
+                return Err(Failure::new(
+                    "allocate",
+                    failure_code,
+                    format!("local port {port} has multiple listeners; refusing to adopt any of them"),
+                    "run rn-qa cleanup for this run, resolve the foreign listeners yourself, then retry prepare",
+                ));
+            }
+            _ => {}
+        }
+        // The listener is the spawned leader itself; once it dies, waiting out
+        // the full deadline would only hide the real cause in its log.
+        if probe_pid_identity(ctx.runner, leader) == PidLiveness::Dead {
+            return Err(Failure::new(
+                "allocate",
+                failure_code,
+                format!(
+                    "the process spawned for local port {port} exited before the port started listening; see {}",
+                    log.display()
+                ),
+                "run rn-qa cleanup for this run, then retry prepare",
+            )
+            .with_evidence(vec![super::log_tail(log, 25)]));
+        }
+        if ctx.runner.monotonic_ms() >= deadline {
+            return Err(Failure::new(
+                "allocate",
+                failure_code,
+                format!(
+                    "local port {port} did not start listening (owned by the spawned group) within {deadline_seconds}s; see {}",
+                    log.display()
+                ),
+                "run rn-qa cleanup for this run, then retry prepare",
+            )
+            .with_evidence(vec![super::log_tail(log, 25)]));
+        }
+        ctx.runner.sleep(Duration::from_millis(500));
+    }
+}
+
+fn spawn_build(ctx: &mut Ctx) -> Result<(), Failure> {
+    let port = rn_qa_metro_port(&ctx.record.scenario);
+    let deadline = ctx.record.scenario.deadlines.build_seconds;
+    let project_root = ctx.record.candidate.project_root.clone();
+    let spec = match ctx.record.scenario.platform {
+        Platform::Ios => {
+            let sim = ctx
+                .record
+                .resources
+                .ios_simulator
+                .as_ref()
+                .expect("ios allocated");
+            ios::build_spec(&project_root, &sim.udid, port, deadline)
+        }
+        Platform::Android => {
+            let serial = ctx
+                .record
+                .resources
+                .adb_local_serial
+                .clone()
+                .expect("android allocated");
+            let server_port = ctx
+                .record
+                .resources
+                .adb_server
+                .as_ref()
+                .expect("android allocated")
+                .server_port;
+            android::build_spec(&project_root, &serial, server_port, port, deadline)
+        }
+    };
+    let build_log = RunRecord::run_dir(&ctx.repo_root, &ctx.record.run_id)
+        .join("logs")
+        .join("build.log");
+    let spawned = ctx.runner.spawn_group(&spec, &build_log).map_err(|e| {
+        Failure::new(
+            "build",
+            FailureCode::BuildFailed,
+            format!("cannot spawn {}: {e}", spec.rendered()),
+            "check pnpm/expo availability, run rn-qa cleanup, then retry prepare",
+        )
+    })?;
+    let identity = capture_pid_identity(ctx.runner, spawned.pid);
+    ctx.record.resources.metro = Some(MetroResource {
+        port,
+        endpoint: format!("http://127.0.0.1:{port}"),
+        spawned,
+        identity: identity.clone(),
+        log: build_log.clone(),
+    });
+    ctx.record.phase = Phase::Building;
+    ctx.save()?;
+    if identity.is_none() {
+        return Err(Failure::new(
+            "build",
+            FailureCode::BuildFailed,
+            format!(
+                "build process exited immediately; see {}",
+                build_log.display()
+            ),
+            format!(
+                "inspect the log, then rn-qa cleanup {} --json",
+                ctx.record.run_id
+            ),
+        )
+        .with_evidence(vec![super::log_tail(&build_log, 25)]));
+    }
+    Ok(())
+}
+
+fn wait_ready(ctx: &mut Ctx) -> Result<(), Failure> {
+    let deadline = ctx.runner.monotonic_ms() + ctx.record.scenario.deadlines.build_seconds * 1000;
+    let metro_resource = ctx.record.resources.metro.clone().expect("metro spawned");
+    let identity = metro_resource.identity.clone().expect("identity captured");
+    loop {
+        if probe_pid_identity(ctx.runner, &identity) == PidLiveness::Dead {
+            return Err(Failure::new(
+                "build",
+                FailureCode::BuildFailed,
+                format!(
+                    "build/metro process exited; see {}",
+                    metro_resource.log.display()
+                ),
+                format!(
+                    "inspect the log, then rn-qa cleanup {} --json",
+                    ctx.record.run_id
+                ),
+            )
+            .with_evidence(vec![super::log_tail(&metro_resource.log, 25)]));
+        }
+        if ready_probes_pass(ctx, &metro_resource) {
+            return Ok(());
+        }
+        if ctx.runner.monotonic_ms() >= deadline {
+            return Err(Failure::new(
+                "build",
+                FailureCode::ReadyDeadlineExceeded,
+                format!(
+                    "readiness probes did not all pass within {}s; see {}",
+                    ctx.record.scenario.deadlines.build_seconds,
+                    metro_resource.log.display()
+                ),
+                format!(
+                    "inspect the log, then rn-qa cleanup {} --json",
+                    ctx.record.run_id
+                ),
+            )
+            .with_evidence(vec![super::log_tail(&metro_resource.log, 25)]));
+        }
+        ctx.runner.sleep(Duration::from_secs(5));
+    }
+}
+
+fn ready_probes_pass(ctx: &mut Ctx, metro_resource: &MetroResource) -> bool {
+    let port_output = ctx.runner.run(&metro::port_owner_spec(metro_resource.port));
+    let port_ours = match metro::parse_port_owner(&port_output) {
+        metro::PortOwners::Owned(pid) => {
+            metro::pgid_of(ctx.runner, pid) == Some(metro_resource.spawned.pgid)
+        }
+        _ => false,
+    };
+    if !port_ours || !metro::metro_responding(ctx.runner, metro_resource.port) {
+        return false;
+    }
+    let app_id = ctx.record.candidate.app_id.clone();
+    match ctx.record.scenario.platform {
+        Platform::Ios => {
+            let sim = ctx
+                .record
+                .resources
+                .ios_simulator
+                .clone()
+                .expect("ios allocated");
+            let container = ctx.runner.run(&ios::app_container_spec(&sim.udid, &app_id));
+            if !container.ok() {
+                return false;
+            }
+            let launchctl = ctx.runner.run(&ios::launchctl_list_spec(&sim.udid));
+            launchctl.ok() && ios::app_running_in_launchctl(&launchctl.stdout, &app_id)
+        }
+        Platform::Android => {
+            let Some(adb) = ctx.record.resources.adb_path.clone() else {
+                return false;
+            };
+            let Some(serial) = ctx.record.resources.adb_local_serial.clone() else {
+                return false;
+            };
+            let Some(server_port) = ctx
+                .record
+                .resources
+                .adb_server
+                .as_ref()
+                .map(|s| s.server_port)
+            else {
+                return false;
+            };
+            let installed =
+                ctx.runner
+                    .run(&android::pm_path_spec(&adb, server_port, &serial, &app_id));
+            if !installed.ok() || !installed.stdout.contains("package:") {
+                return false;
+            }
+            let running = ctx
+                .runner
+                .run(&android::pidof_spec(&adb, server_port, &serial, &app_id));
+            running.ok()
+                && running
+                    .stdout
+                    .split_whitespace()
+                    .any(|t| t.parse::<u32>().is_ok())
+        }
+    }
+}
+
+fn dry_run_receipt(
+    runner: &mut dyn Runner,
+    scenario: &Scenario,
+    cand: &crate::candidate::Candidate,
+    scenario_path: &Path,
+    scenario_sha256: &str,
+    run_id: &str,
+    started_ms: u64,
+) -> Receipt {
+    let now = runner.now_epoch_ms();
+    let mut receipt = Receipt::new(
+        "prepare",
+        run_id,
+        ReceiptResult::Planned,
+        "planned",
+        timefmt::iso8601_utc(now),
+    );
+    receipt.scenario = Some(crate::receipt::ScenarioIdentity {
+        name: scenario.name.clone(),
+        platform: match scenario.platform {
+            Platform::Ios => "ios".to_string(),
+            Platform::Android => "android".to_string(),
+        },
+        path: scenario_path.to_path_buf(),
+        sha256: scenario_sha256.to_string(),
+    });
+    receipt.candidate = Some(cand.clone());
+    let platform = platform_dir(scenario.platform);
+    // Handoff mode plans no build decision and no Metro/adb/build commands:
+    // rn-qa stops at allocation and the qaren session owns the rest.
+    if scenario.build.owner == BuildOwner::Qaren {
+        let mut deps_args = vec!["install", "--frozen-lockfile"];
+        if scenario.deps.policy == DepsPolicy::RequirePrewarm {
+            deps_args.push("--offline");
+        }
+        let mut planned: Vec<CmdSpec> = vec![CmdSpec::new(
+            "pnpm-install",
+            "pnpm",
+            &deps_args,
+            scenario.deadlines.install_deps_seconds,
+        )];
+        if scenario.platform == Platform::Ios {
+            let ios_spec = scenario.ios.as_ref().expect("validated");
+            planned.push(ios::create_spec(
+                &ios::sim_name(run_id),
+                &ios_spec.device_type,
+                &ios_spec.runtime,
+            ));
+            planned.push(ios::bootstatus_spec(
+                "<udid>",
+                scenario.deadlines.device_boot_seconds,
+            ));
+        }
+        receipt.planned_commands = planned.iter().map(|s| s.rendered()).collect();
+        receipt
+            .outcomes
+            .insert("build_owner".to_string(), "qaren".to_string());
+        receipt.outcomes.insert(
+            "handoff".to_string(),
+            "would be issued after allocation".to_string(),
+        );
+        receipt.commands_executed = runner.commands_executed();
+        receipt
+            .timings_ms
+            .insert("total".to_string(), now.saturating_sub(started_ms));
+        receipt.next_action =
+            "re-run without --dry-run to allocate and issue the handoff".to_string();
+        return receipt;
+    }
+    // The plan is read-only: the same fingerprint + cache-state decision the
+    // real prepare would take, made visible without allocating anything.
+    match fingerprint::compute(runner, &cand.repo_root, &cand.project_root, platform) {
+        Ok(fp) => {
+            let state = buildplan::load_state(&cand.repo_root, platform, &cand.app_id);
+            let artifact_status = match &state {
+                StateStatus::Loaded(s) if s.fingerprint == fp.value => {
+                    s.artifact.as_ref().map(verify_artifact)
+                }
+                _ => None,
+            };
+            let inputs = buildplan::DecisionInputs {
+                platform,
+                app_id: &cand.app_id,
+                worktree_root: &cand.repo_root,
+                candidate_sha: &cand.git_sha,
+                fingerprint: &fp.value,
+                fingerprint_complete: fp.complete,
+                incompleteness: &fp.incompleteness,
+                scheme: scenario.candidate.dev_client_scheme.as_deref(),
+                force_clean: scenario.build.strategy == BuildStrategy::Clean,
+                native_dir_exists: cand.project_root.join(platform).is_dir(),
+                native_dir_in_candidate: fp.native_dir_in_candidate,
+            };
+            receipt.build = Some(buildplan::decide(&inputs, &state, artifact_status));
+        }
+        Err(failure) => {
+            receipt.outcomes.insert(
+                "build_plan".to_string(),
+                format!("unavailable: {}", failure.detail),
+            );
+        }
+    }
+    let port = rn_qa_metro_port(scenario);
+    let deadlines = &scenario.deadlines;
+    let mut deps_args = vec!["install", "--frozen-lockfile"];
+    if scenario.deps.policy == DepsPolicy::RequirePrewarm {
+        deps_args.push("--offline");
+    }
+    let mut planned: Vec<CmdSpec> = vec![CmdSpec::new(
+        "pnpm-install",
+        "pnpm",
+        &deps_args,
+        deadlines.install_deps_seconds,
+    )];
+    let reuse = receipt
+        .build
+        .as_ref()
+        .is_some_and(|p| p.decision == BuildDecision::Reuse);
+    match scenario.platform {
+        Platform::Ios => {
+            let ios_spec = scenario.ios.as_ref().expect("validated");
+            let name = ios::sim_name(run_id);
+            planned.push(ios::create_spec(
+                &name,
+                &ios_spec.device_type,
+                &ios_spec.runtime,
+            ));
+            planned.push(ios::bootstatus_spec(
+                "<udid>",
+                deadlines.device_boot_seconds,
+            ));
+            planned.push(ios::build_spec(
+                &cand.project_root,
+                "<udid>",
+                port,
+                deadlines.build_seconds,
+            ));
+            planned.push(ios::app_container_spec("<udid>", &cand.app_id));
+            planned.push(ios::launchctl_list_spec("<udid>"));
+        }
+        Platform::Android if scenario.android_usb.is_some() => {
+            let usb = scenario.android_usb.as_ref().expect("checked");
+            let usb_adb_server_port = usb
+                .adb_server_port
+                .expect("validated rn-qa-owned usb scenario");
+            planned.push(android::usb_adb_server_spec(
+                Path::new("<android_home>/platform-tools/adb"),
+                usb_adb_server_port,
+                &usb.serial,
+                Path::new("<home>/.android/adbkey"),
+            ));
+            planned.push(android::adb_get_state_spec(
+                Path::new("<android_home>/platform-tools/adb"),
+                usb_adb_server_port,
+                &usb.serial,
+            ));
+            planned.push(android::build_spec(
+                &cand.project_root,
+                &usb.serial,
+                usb_adb_server_port,
+                port,
+                deadlines.build_seconds,
+            ));
+        }
+        Platform::Android => {
+            let android_spec = scenario.android.as_ref().expect("validated");
+            let holder = android::holder(run_id);
+            planned.push(android::farm_status_spec(
+                &android_spec.ssh_host,
+                &android_spec.farm_path,
+            ));
+            planned.push(android::farm_start_spec(
+                &android_spec.ssh_host,
+                &android_spec.farm_path,
+                android_spec.slot,
+                &holder,
+                deadlines.device_boot_seconds,
+            ));
+            planned.push(android::tunnel_spec(&android_spec.ssh_host, 0));
+            planned.push(android::fetch_adbkey_spec(&android_spec.ssh_host));
+            planned.push(android::adb_server_spec(
+                Path::new("<android_home>/platform-tools/adb"),
+                android_spec.adb_server_port,
+                "127.0.0.1:<adb_port>",
+                Path::new("<run_dir>/nuc-adbkey"),
+            ));
+            planned.push(android::adb_connect_spec(
+                Path::new("<android_home>/platform-tools/adb"),
+                android_spec.adb_server_port,
+                "127.0.0.1:<adb_port>",
+            ));
+            planned.push(android::adb_get_state_spec(
+                Path::new("<android_home>/platform-tools/adb"),
+                android_spec.adb_server_port,
+                "127.0.0.1:<adb_port>",
+            ));
+            planned.push(android::build_spec(
+                &cand.project_root,
+                "127.0.0.1:<adb_port>",
+                android_spec.adb_server_port,
+                port,
+                deadlines.build_seconds,
+            ));
+        }
+    }
+    // A reuse plan never compiles: swap the native build step for the cached
+    // install + Metro + dev-client launch it will actually run.
+    if reuse {
+        let artifact_path = receipt
+            .build
+            .as_ref()
+            .and_then(|p| p.artifact.as_ref())
+            .map(|a| a.path.clone())
+            .unwrap_or_else(|| PathBuf::from("<cached-artifact>"));
+        let scheme = scenario
+            .candidate
+            .dev_client_scheme
+            .as_deref()
+            .unwrap_or("<scheme>");
+        let url = devclient::launch_url(scheme, port);
+        planned.retain(|c| !matches!(c.label.as_str(), "expo-run-ios" | "expo-run-android"));
+        match scenario.platform {
+            Platform::Ios => {
+                planned.push(ios::install_app_spec("<udid>", &artifact_path));
+                planned.push(metro::start_spec(&cand.project_root, port));
+                planned.push(ios::openurl_spec("<udid>", &url));
+            }
+            Platform::Android => {
+                let adb = Path::new("<android_home>/platform-tools/adb");
+                let (serial, server_port) = match (&scenario.android_usb, &scenario.android) {
+                    (Some(usb), _) => (
+                        usb.serial.clone(),
+                        usb.adb_server_port
+                            .expect("validated rn-qa-owned usb scenario"),
+                    ),
+                    (None, Some(farm)) => {
+                        ("127.0.0.1:<adb_port>".to_string(), farm.adb_server_port)
+                    }
+                    (None, None) => unreachable!("validated android scenario"),
+                };
+                planned.push(android::adb_install_spec(
+                    adb,
+                    server_port,
+                    &serial,
+                    &artifact_path,
+                ));
+                planned.push(android::adb_reverse_spec(adb, server_port, &serial, port));
+                planned.push(metro::start_spec(&cand.project_root, port));
+                planned.push(android::am_start_deeplink_spec(
+                    adb,
+                    server_port,
+                    &serial,
+                    &url,
+                    &cand.app_id,
+                ));
+            }
+        }
+    }
+    // The tunnel port comes from farm status at allocate time; render the
+    // placeholder instead of the literal 0 used to build the spec.
+    receipt.planned_commands = planned
+        .iter()
+        .map(|s| {
+            s.rendered().replace(
+                "127.0.0.1:0:127.0.0.1:0",
+                "127.0.0.1:<adb_port>:127.0.0.1:<adb_port>",
+            )
+        })
+        .collect();
+    receipt.commands_executed = runner.commands_executed();
+    receipt
+        .timings_ms
+        .insert("total".to_string(), now.saturating_sub(started_ms));
+    receipt.next_action = "re-run without --dry-run to allocate resources".to_string();
+    receipt
+}

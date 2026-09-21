@@ -6,13 +6,18 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '../../..');
 const INDEX_TS = process.env.RN_DEV_AGENT_DOCS_SOURCE
   ? resolve(process.env.RN_DEV_AGENT_DOCS_SOURCE)
-  : resolve(ROOT, 'packages/rn-dev-agent-core/src/index.ts');
+  : resolve(ROOT, 'packages/qaren-core/src/index.ts');
 // RN_DEV_AGENT_DOCS_OUT lets a regression run the real generator into a scratch
 // directory instead of overwriting the committed docs.
 const OUT_ROOT = process.env.RN_DEV_AGENT_DOCS_OUT
   ? resolve(process.env.RN_DEV_AGENT_DOCS_OUT)
   : resolve(__dirname, '../src/content/docs');
 const OUT_BASE = resolve(OUT_ROOT, 'tools');
+
+if (!existsSync(INDEX_TS)) {
+  console.log(`generate-tool-docs: ${INDEX_TS} is absent; keeping the committed tool pages.`);
+  process.exit(0);
+}
 
 const CATEGORIES = {
   cdp_status: 'cdp',
@@ -405,8 +410,8 @@ for (const tool of tools) {
 }
 
 const CHANGELOG_SOURCES = [
-  ['Claude plugin', resolve(ROOT, 'packages/claude-plugin/CHANGELOG.md')],
-  ['Core MCP server', resolve(ROOT, 'packages/rn-dev-agent-core/CHANGELOG.md')],
+  ['Plugin', resolve(ROOT, 'packages/qaren-plugin/CHANGELOG.md')],
+  ['Core', resolve(ROOT, 'packages/qaren-core/CHANGELOG.md')],
 ];
 function packageChangelogSection(label, filePath) {
   const body = readFileSync(filePath, 'utf8')
