@@ -1,0 +1,427 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { parsePlan } from '../../../dist/qa/plan.js';
+import type { Screen } from '../../../dist/qa/screen.js';
+import { runPlan, walkBlock } from '../../../dist/qa/walker.js';
+import type { ActResult, WalkerDeps } from '../../../dist/qa/walker.js';
+import type { LedgerRow } from '../../../dist/qa/ledger.js';
+
+function screen(labels: string[], extra: Partial<Screen> = {}): Screen {
+  return {
+    elements: labels.map((label, i) => ({
+      ref: `@e${i}`,
+      kind: 'button',
+      label,
+      hittable: true,
+      disabled: false,
+      secure: false,
+      offscreen: false,
+      where: 'middle',
+      side: 'center',
+    })),
+    visibleText: labels,
+    front: 'app',
+    ...extra,
+  };
+}
+
+interface Fake {
+  deps: WalkerDeps;
+  rows: LedgerRow[];
+  calls: string[];
+}
+
+// Scripted screens: each captureScreen() pops the next screen; the last one repeats.
+function fake(screens: Screen[], acts: Partial<Record<string, ActResult>> = {}): Fake {
+  const rows: LedgerRow[] = [];
+  const calls: string[] = [];
+  let clock = 0;
+  const queue = [...screens];
+  const ok: ActResult = { ok: true, proven: false };
+  const deps: WalkerDeps = {
+    async captureScreen() {
+      calls.push('capture');
+      const next = queue.length > 1 ? queue.shift()! : queue[0];
+      return next;
+    },
+    async press(ref) {
+      calls.push(`press ${ref}`);
+      return acts.press ?? ok;
+    },
+    async fill(ref, text) {
+      calls.push(`fill ${ref} ${text}`);
+      return acts.fill ?? { ok: true, proven: true };
+    },
+    async scroll(direction) {
+      calls.push(`scroll ${direction}`);
+      return acts.scroll ?? ok;
+    },
+    async back() {
+      calls.push('back');
+      return acts.back ?? ok;
+    },
+    async dialog(action) {
+      calls.push(`dialog ${action}`);
+      return acts.dialog ?? { ok: true, proven: true };
+    },
+    async screenshot(name) {
+      calls.push(`shot ${name}`);
+      return name;
+    },
+    now: () => (clock += 100),
+    async sleep(ms) {
+      clock += ms;
+    },
+    row: (row) => {
+      rows.push(row);
+    },
+  };
+  return { deps, rows, calls };
+}
+
+function block(markdown: string) {
+  const parsed = parsePlan(markdown);
+  assert.ok(parsed.blocks, JSON.stringify(parsed.refused));
+  return parsed.blocks[0];
+}
+
+test('a changed screen after a press is done: never re-dispatched', async () => {
+  const f = fake([screen(['Settings']), screen(['Profile'])]);
+  const outcome = await walkBlock(block('1. Tap "Settings"\n✓ "Profile"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'pass');
+  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
+  assert.deepEqual(
+    f.rows.map((r) => [r.line, r.kind, r.attempt, r.outcome, r.ref, r.screenshot]),
+    [
+      [1, 'step', 1, 'pass', '@e0', 'screenshots/01-line1.png'],
+      [2, 'check', 1, 'pass', undefined, 'screenshots/02-line2.png'],
+    ],
+  );
+  assert.equal(f.rows[0].resolvedBy, 'exact');
+  assert.ok(f.rows[0].t > 0);
+});
+
+test('an unchanged screen retries the press exactly once, then fails at that line', async () => {
+  const same = screen(['Settings']);
+  const f = fake([same]);
+  const outcome = await walkBlock(block('1. Tap "Settings"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(f.calls.filter((c) => c === 'press @e0').length, 2);
+  assert.deepEqual(
+    f.rows.map((r) => [r.attempt, r.outcome]),
+    [
+      [1, 'retry'],
+      [2, 'fail'],
+    ],
+  );
+  assert.equal(outcome.failure?.step, 1);
+  assert.match(
+    outcome.failure?.seen ?? '',
+    /did not change after two attempts; on screen: Settings/,
+  );
+  assert.equal(outcome.failure?.screenshot, 'screenshots/02-line1.png');
+});
+
+test('a proven fill is done even when the screen looks the same', async () => {
+  const same: Screen = {
+    ...screen([]),
+    elements: [
+      {
+        ref: '@e1',
+        kind: 'input',
+        testID: 'name',
+        placeholder: 'Name',
+        hittable: true,
+        disabled: false,
+        secure: false,
+        offscreen: false,
+      },
+    ],
+  };
+  const f = fake([same]);
+  const outcome = await walkBlock(block('1. Type "Anton" into "name"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'pass');
+  assert.deepEqual(
+    f.calls.filter((c) => c.startsWith('fill')),
+    ['fill @e1 Anton'],
+  );
+});
+
+test('a target that is only in the React tree scrolls once, then acts', async () => {
+  const before: Screen = {
+    ...screen(['Header']),
+    elements: [
+      ...screen(['Header']).elements,
+      {
+        ref: 'react:load-more',
+        kind: 'button',
+        testID: 'load-more',
+        label: 'Load more',
+        hittable: false,
+        disabled: false,
+        secure: false,
+        offscreen: true,
+      },
+    ],
+  };
+  const scrolled = screen(['Header', 'Load more']);
+  scrolled.elements[1].testID = 'load-more';
+  const after = screen(['Loaded']);
+  const f = fake([before, scrolled, after]);
+  const outcome = await walkBlock(block('1. Tap "load-more"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'pass');
+  assert.deepEqual(
+    f.calls.filter((c) => !c.startsWith('shot')),
+    ['capture', 'scroll down', 'capture', 'press @e1', 'capture'],
+  );
+});
+
+test('a phrase target, an unquoted ✓ line and a missing target are FAILs naming the line', async () => {
+  const phrase = await walkBlock(block('1. Tap Save\n'), fake([screen(['Save'])]).deps);
+  assert.equal(phrase.failure?.step, 1);
+  assert.match(phrase.failure?.seen ?? '', /PHRASE_TARGET_UNSUPPORTED/);
+
+  const check = await walkBlock(
+    block('✓ The header looks right\n'),
+    fake([screen(['Header'])]).deps,
+  );
+  assert.equal(check.failure?.step, 1);
+  assert.match(check.failure?.seen ?? '', /has no quoted phrase/);
+
+  const missing = await walkBlock(block('1. Tap "Nope"\n'), fake([screen(['Save'])]).deps);
+  assert.equal(missing.failure?.step, 1);
+  assert.match(missing.failure?.seen ?? '', /TARGET_NOT_FOUND/);
+  assert.equal(missing.rows[0].outcome, 'fail');
+});
+
+test('an ambiguous quoted target is refused, not guessed', async () => {
+  const f = fake([screen(['Save', 'Save'])]);
+  const outcome = await walkBlock(block('1. Tap "Save"\n'), f.deps);
+  assert.match(outcome.failure?.seen ?? '', /AMBIGUOUS_TARGET: 2 elements match/);
+  assert.ok(!f.calls.some((c) => c.startsWith('press')));
+
+  const two: Screen = {
+    ...screen(['Header']),
+    elements: [
+      ...screen(['Header']).elements,
+      {
+        ref: 'react:a',
+        kind: 'button',
+        testID: 'more',
+        hittable: false,
+        disabled: false,
+        secure: false,
+        offscreen: true,
+      },
+      {
+        ref: 'react:b',
+        kind: 'button',
+        testID: 'more',
+        hittable: false,
+        disabled: false,
+        secure: false,
+        offscreen: true,
+      },
+    ],
+  };
+  const g = fake([two]);
+  const twice = await walkBlock(block('1. Tap "more"\n'), g.deps);
+  assert.match(twice.failure?.seen ?? '', /2 off-screen elements match/);
+  assert.ok(!g.calls.some((c) => c.startsWith('scroll')));
+});
+
+test('a fill only ever binds an input, even when a label carries the same text', async () => {
+  const s: Screen = {
+    ...screen(['Email']),
+    elements: [
+      ...screen(['Email']).elements,
+      {
+        ref: '@e9',
+        kind: 'input',
+        placeholder: 'Email',
+        hittable: true,
+        disabled: false,
+        secure: false,
+        offscreen: false,
+      },
+    ],
+  };
+  const f = fake([s]);
+  const outcome = await walkBlock(block('1. Type "a@b.co" into "Email"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'pass');
+  assert.deepEqual(
+    f.calls.filter((c) => c.startsWith('fill')),
+    ['fill @e9 a@b.co'],
+  );
+  const g = fake([screen(['Email'])]);
+  const noInput = await walkBlock(block('1. Type "x" into "Email"\n'), g.deps);
+  assert.match(noInput.failure?.seen ?? '', /TARGET_NOT_FOUND/);
+});
+
+test('wait polls until the target appears and scroll-until scrolls until visible', async () => {
+  const f = fake([
+    screen(['Loading']),
+    screen(['Loading']),
+    screen(['Welcome']),
+    screen(['Welcome']),
+  ]);
+  const waited = await walkBlock(block('1. Wait for "Welcome" to appear\n'), f.deps);
+  assert.equal(waited.block.outcome, 'pass');
+  assert.equal(f.calls.filter((c) => c === 'capture').length, 3);
+
+  const g = fake([screen(['Top']), screen(['Middle']), screen(['Footer'])]);
+  const scrolled = await walkBlock(block('1. Scroll until you see "Footer"\n'), g.deps);
+  assert.equal(scrolled.block.outcome, 'pass');
+  assert.equal(g.calls.filter((c) => c === 'scroll down').length, 2);
+  assert.equal(scrolled.rows[0].attempt, 2);
+});
+
+test('runPlan stops at the first failing block and rolls up the ledger', async () => {
+  const parsed = parsePlan(
+    '### One\n1. Tap "A"\n### Two\n1. Tap "Missing"\n### Three\n1. Tap "C"\n',
+  );
+  assert.ok(parsed.blocks);
+  const f = fake([screen(['A']), screen(['B'])]);
+  const ledger = await runPlan(parsed.blocks, f.deps);
+  assert.equal(ledger.verdict, 'FAIL');
+  assert.equal(ledger.path, 'walk');
+  assert.deepEqual(
+    ledger.blocks.map((b) => [b.key, b.outcome, b.source]),
+    [
+      ['one', 'pass', 'discovered'],
+      ['two', 'fail', 'discovered'],
+    ],
+  );
+  assert.equal(ledger.steps.length, 2);
+  assert.deepEqual(ledger.jev, { calls: 0, medianMs: 0 });
+  assert.equal(ledger.llmTurns, 0);
+  assert.equal(ledger.escapes, 0);
+  assert.equal(ledger.recoveries, 0);
+  assert.equal(ledger.failure?.step, 4, 'the failing step is named by its plan line');
+  assert.equal(ledger.steps[1].block, 'two');
+  assert.equal(
+    ledger.steps[1].screenshot,
+    'screenshots/02-line4.png',
+    'screenshot numbering continues across blocks',
+  );
+});
+
+test('an unquoted wait target fails at once instead of sitting out the wait budget', async () => {
+  const f = fake([screen(['Home'])]);
+  const outcome = await walkBlock(block('1. Wait for the header to appear\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(f.calls.filter((c) => c === 'capture').length, 1);
+  assert.deepEqual(
+    f.rows.map((r) => [r.line, r.attempt, r.outcome]),
+    [[1, 1, 'fail']],
+  );
+  assert.match(outcome.failure?.seen ?? '', /is not quoted; phrase targets arrive with Jev/);
+});
+
+test('an unquoted scroll-until target fails before any scroll is dispatched', async () => {
+  const f = fake([screen(['Home'])]);
+  const outcome = await walkBlock(block('1. Scroll until you see the footer\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(f.calls.filter((c) => c.startsWith('scroll')).length, 0);
+  assert.match(outcome.failure?.seen ?? '', /is not quoted; phrase targets arrive with Jev/);
+});
+
+test('a bare scroll that moves the screen is done after one dispatch', async () => {
+  const f = fake([screen(['List top']), screen(['List bottom'])]);
+  const outcome = await walkBlock(block('1. Scroll down\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'pass');
+  assert.equal(f.calls.filter((c) => c === 'scroll down').length, 1);
+});
+
+test('a bare scroll that moves nothing retries once, then fails: never a silent pass', async () => {
+  const f = fake([screen(['List bottom'])]);
+  const outcome = await walkBlock(block('1. Scroll down\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(f.calls.filter((c) => c === 'scroll down').length, 2);
+  assert.deepEqual(
+    f.rows.map((r) => [r.attempt, r.outcome]),
+    [
+      [1, 'retry'],
+      [2, 'fail'],
+    ],
+  );
+});
+
+test('a press whose handler reports not-ok but whose screen changed is done, not re-dispatched', async () => {
+  const f = fake([screen(['Settings']), screen(['Profile'])], {
+    press: { ok: false, proven: false, error: 'press timed out' },
+  });
+  const outcome = await walkBlock(block('1. Tap "Settings"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'pass');
+  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
+});
+
+test('a not-ok press on an unchanged screen retries once and fails naming the handler error', async () => {
+  const f = fake([screen(['Settings'])], {
+    press: { ok: false, proven: false, error: 'press timed out' },
+  });
+  const outcome = await walkBlock(block('1. Tap "Settings"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 2);
+  assert.match(
+    outcome.failure?.seen ?? '',
+    /press timed out; the screen did not change after two attempts/,
+  );
+});
+
+const NOT_OK: ActResult = { ok: false, proven: false, error: 'scroll timed out' };
+
+function withOffscreenLoadMore(): Screen {
+  const base = screen(['Header']);
+  return {
+    ...base,
+    elements: [
+      ...base.elements,
+      {
+        ref: 'react:load-more',
+        kind: 'button',
+        testID: 'load-more',
+        label: 'Load more',
+        hittable: false,
+        disabled: false,
+        secure: false,
+        offscreen: true,
+      },
+    ],
+  };
+}
+
+test('scroll-until accepts a not-ok scroll that landed and exposed the target', async () => {
+  const f = fake([screen(['Top']), screen(['Top', 'Footer'])], { scroll: NOT_OK });
+  const outcome = await walkBlock(block('1. Scroll until you see "Footer"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'pass');
+  assert.equal(f.calls.filter((c) => c.startsWith('scroll')).length, 1);
+});
+
+test('scroll-until stops after one not-ok scroll that moved nothing, with fresh evidence', async () => {
+  const f = fake([screen(['Top'])], { scroll: NOT_OK });
+  const outcome = await walkBlock(block('1. Scroll until you see "Footer"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(f.calls.filter((c) => c.startsWith('scroll')).length, 1);
+  assert.match(outcome.failure?.seen ?? '', /scroll timed out; on screen: Top/);
+});
+
+test('a not-ok preliminary scroll that brought the target into view still leads to the press', async () => {
+  const scrolled = screen(['Header', 'Load more']);
+  scrolled.elements[1].testID = 'load-more';
+  const f = fake([withOffscreenLoadMore(), scrolled, screen(['Loaded'])], { scroll: NOT_OK });
+  const outcome = await walkBlock(block('1. Tap "load-more"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'pass');
+  assert.deepEqual(
+    f.calls.filter((c) => !c.startsWith('shot')),
+    ['capture', 'scroll down', 'capture', 'press @e1', 'capture'],
+  );
+});
+
+test('a not-ok preliminary scroll that moved nothing fails naming the scroll error, with no press', async () => {
+  const f = fake([withOffscreenLoadMore()], { scroll: NOT_OK });
+  const outcome = await walkBlock(block('1. Tap "load-more"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 0);
+  assert.match(outcome.failure?.seen ?? '', /scroll timed out; "load-more" stayed off screen/);
+});

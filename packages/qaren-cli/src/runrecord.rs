@@ -5,7 +5,7 @@ use crate::scenario::Scenario;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const RUN_SCHEMA: &str = "rn-qa-run/1";
+pub const RUN_SCHEMA: &str = "qaren-run/1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -15,6 +15,7 @@ pub enum Phase {
     ResourcesAllocated,
     Building,
     Ready,
+    Walking,
     HandedOff,
     Failed,
     Cleaned,
@@ -28,6 +29,7 @@ impl Phase {
             Phase::ResourcesAllocated => "resources_allocated",
             Phase::Building => "building",
             Phase::Ready => "ready",
+            Phase::Walking => "walking",
             Phase::HandedOff => "handed_off",
             Phase::Failed => "failed",
             Phase::Cleaned => "cleaned",
@@ -159,6 +161,13 @@ pub struct Resources {
     pub adb_reverse_port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_install: Option<AppInstallResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease: Option<crate::lease::Lease>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core: Option<PidIdentity>,
+    // A borrowed device (the booted simulator `check` walks on) is never shut down or deleted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub device_borrowed: bool,
 }
 
 impl Resources {
@@ -171,6 +180,7 @@ impl Resources {
             || self.adb_vendor_key.is_some()
             || self.usb_device.is_some()
             || self.build_lock.is_some()
+            || self.lease.is_some()
     }
 }
 
@@ -217,23 +227,23 @@ pub fn validate_run_id(run_id: &str) -> Result<(), Failure> {
             "load",
             FailureCode::RunRecordInvalid,
             format!("run id {run_id:?} must match [A-Za-z0-9-]+ and not start with -"),
-            "pass a run id exactly as emitted by rn-qa prepare",
+            "pass a run id exactly as emitted by qaren prepare",
         ))
     }
 }
 
 impl RunRecord {
-    pub fn run_dir(repo_root: &Path, run_id: &str) -> PathBuf {
-        repo_root.join(".rn-qa").join("runs").join(run_id)
+    pub fn run_dir(runs_root: &Path, run_id: &str) -> PathBuf {
+        runs_root.join(run_id)
     }
 
-    pub fn path(repo_root: &Path, run_id: &str) -> PathBuf {
-        Self::run_dir(repo_root, run_id).join("run.json")
+    pub fn path(runs_root: &Path, run_id: &str) -> PathBuf {
+        Self::run_dir(runs_root, run_id).join("run.json")
     }
 
-    pub fn save(&self, repo_root: &Path) -> Result<(), Failure> {
+    pub fn save(&self, runs_root: &Path) -> Result<(), Failure> {
         validate_run_id(&self.run_id)?;
-        let dir = Self::run_dir(repo_root, &self.run_id);
+        let dir = Self::run_dir(runs_root, &self.run_id);
         let target = dir.join("run.json");
         let tmp = dir.join(format!(".run.json.tmp.{}", std::process::id()));
         let write = || -> std::io::Result<()> {
@@ -249,20 +259,20 @@ impl RunRecord {
                 self.phase.as_str(),
                 FailureCode::RunRecordUpdateFailed,
                 format!("cannot persist {}: {e}", target.display()),
-                "check .rn-qa directory permissions",
+                "check .qaren directory permissions",
             )
         })
     }
 
-    pub fn load(repo_root: &Path, run_id: &str) -> Result<RunRecord, Failure> {
+    pub fn load(runs_root: &Path, run_id: &str) -> Result<RunRecord, Failure> {
         validate_run_id(run_id)?;
-        let path = Self::path(repo_root, run_id);
+        let path = Self::path(runs_root, run_id);
         let raw = std::fs::read_to_string(&path).map_err(|e| {
             Failure::new(
                 "load",
                 FailureCode::RunRecordUnavailable,
                 format!("cannot read {}: {e}", path.display()),
-                "pass a run id that exists under .rn-qa/runs/",
+                "pass a run id that exists under .qaren/runs/",
             )
         })?;
         let record: RunRecord = serde_json::from_str(&raw).map_err(|e| {
@@ -282,7 +292,7 @@ impl RunRecord {
                     path.display(),
                     record.schema
                 ),
-                "this rn-qa build cannot interpret the record; do not guess ownership",
+                "this qaren build cannot interpret the record; do not guess ownership",
             ));
         }
         if record.run_id != run_id {

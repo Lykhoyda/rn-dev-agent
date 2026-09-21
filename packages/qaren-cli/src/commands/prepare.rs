@@ -25,6 +25,7 @@ pub struct PrepareArgs {
     pub dry_run: bool,
     pub android_home: Option<String>,
     pub lock_root: PathBuf,
+    pub runs_root: PathBuf,
 }
 
 fn platform_dir(platform: Platform) -> &'static str {
@@ -34,43 +35,44 @@ fn platform_dir(platform: Platform) -> &'static str {
     }
 }
 
-// Only rn-qa-owned build paths call this; scenario validation guarantees a
-// `metro:` section whenever build.owner is rn-qa.
-fn rn_qa_metro_port(scenario: &Scenario) -> u16 {
+// Only qaren-owned build paths call this; scenario validation guarantees a
+// `metro:` section whenever build.owner is qaren.
+fn qaren_metro_port(scenario: &Scenario) -> u16 {
     scenario
         .metro
         .as_ref()
-        .expect("validated rn-qa-owned scenario carries metro")
+        .expect("validated qaren-owned scenario carries metro")
         .port
 }
 
-struct Ctx<'a> {
-    runner: &'a mut dyn Runner,
-    repo_root: PathBuf,
-    record: RunRecord,
-    started_ms: u64,
-    timings: Vec<(String, u64)>,
-    notes: Vec<(String, String)>,
+pub(crate) struct Ctx<'a> {
+    pub(crate) runner: &'a mut dyn Runner,
+    pub(crate) runs_root: PathBuf,
+    pub(crate) record: RunRecord,
+    pub(crate) started_ms: u64,
+    pub(crate) timings: Vec<(String, u64)>,
+    pub(crate) notes: Vec<(String, String)>,
+    pub(crate) verb: &'static str,
 }
 
 impl<'a> Ctx<'a> {
-    fn mark(&mut self, label: &str, phase_start_ms: u64) -> u64 {
+    pub(crate) fn mark(&mut self, label: &str, phase_start_ms: u64) -> u64 {
         let now = self.runner.now_epoch_ms();
         self.timings
             .push((label.to_string(), now.saturating_sub(phase_start_ms)));
         now
     }
 
-    fn save(&mut self) -> Result<(), Failure> {
-        self.record.save(&self.repo_root)
+    pub(crate) fn save(&mut self) -> Result<(), Failure> {
+        self.record.save(&self.runs_root)
     }
 
-    fn fail(mut self, mut failure: Failure) -> Receipt {
+    pub(crate) fn fail(mut self, mut failure: Failure) -> Receipt {
         if self.record.resources.any_owned() {
-            failure.next_action = format!("rn-qa cleanup {} --json", self.record.run_id);
+            failure.next_action = format!("qaren cleanup {} --json", self.record.run_id);
         }
         // Contention is a refusal even after the run record exists: nothing
-        // broke, rn-qa declined to take a claimed resource.
+        // broke, qaren declined to take a claimed resource.
         let result = if failure.code.is_refusal() {
             ReceiptResult::Refused
         } else {
@@ -92,7 +94,7 @@ impl<'a> Ctx<'a> {
     }
 }
 
-trait FailureCodeStr {
+pub(crate) trait FailureCodeStr {
     fn code_str(&self) -> String;
 }
 
@@ -104,23 +106,26 @@ impl FailureCodeStr for Failure {
     }
 }
 
-fn finish_receipt(ctx: Ctx, result: ReceiptResult, failure: Option<Failure>) -> Receipt {
+pub(crate) fn finish_receipt(ctx: Ctx, result: ReceiptResult, failure: Option<Failure>) -> Receipt {
     let now = ctx.runner.now_epoch_ms();
     let phase = ctx.record.phase.as_str().to_string();
     let next_action = match (&result, &failure) {
+        (ReceiptResult::Pass | ReceiptResult::Fail, _) => {
+            format!("read the report under {}", RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id).display())
+        }
         (ReceiptResult::Ready, _) if ctx.record.phase == Phase::HandedOff => format!(
-            "run the qaren managed build/bind chain against the allocated device (docs/qa/cooperative-qa.md), then: rn-qa complete {} <build-log> --json",
+            "run the qaren managed build/bind chain against the allocated device (docs/qa/cooperative-qa.md), then: qaren complete {} <build-log> --json",
             ctx.record.run_id
         ),
         (ReceiptResult::Ready, _) => format!(
-            "agents can attach now; later run: rn-qa cleanup {} --json",
+            "agents can attach now; later run: qaren cleanup {} --json",
             ctx.record.run_id
         ),
         (_, Some(f)) => f.next_action.clone(),
         _ => String::new(),
     };
     let mut receipt = Receipt::new(
-        "prepare",
+        ctx.verb,
         &ctx.record.run_id,
         result,
         &phase,
@@ -143,7 +148,7 @@ fn finish_receipt(ctx: Ctx, result: ReceiptResult, failure: Option<Failure>) -> 
     receipt
         .timings_ms
         .insert("total".to_string(), now.saturating_sub(ctx.started_ms));
-    super::attach_artifacts(&mut receipt, &ctx.repo_root, &ctx.record);
+    super::attach_artifacts(&mut receipt, &ctx.runs_root, &ctx.record);
     receipt
 }
 
@@ -153,7 +158,7 @@ pub fn prepare(runner: &mut dyn Runner, args: &PrepareArgs) -> Receipt {
         Ok(receipt) => receipt,
         Err(failure) => {
             // Contention and missing-authorization outcomes are refusals, not
-            // failures: nothing broke, rn-qa declined to proceed.
+            // failures: nothing broke, qaren declined to proceed.
             let result = if failure.code.is_refusal() {
                 ReceiptResult::Refused
             } else {
@@ -212,7 +217,7 @@ fn prepare_validated(
                     None => "deps.policy=require-prewarm but no prewarm record exists for this worktree".to_string(),
                 },
                 format!(
-                    "run `rn-qa prewarm {}` once with credentials available, then re-run prepare",
+                    "run `qaren prewarm {}` once with credentials available, then re-run prepare",
                     args.scenario_path.display()
                 ),
             ));
@@ -248,14 +253,14 @@ fn prepare_validated(
         ));
     }
 
-    let run_dir = RunRecord::run_dir(&repo_root, &run_id);
+    let run_dir = RunRecord::run_dir(&args.runs_root, &run_id);
     if let Some(parent) = run_dir.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             Failure::new(
                 "allocate",
                 FailureCode::RunRecordUpdateFailed,
                 format!("cannot create {}: {e}", parent.display()),
-                "check .rn-qa directory permissions",
+                "check .qaren directory permissions",
             )
         })?;
     }
@@ -274,7 +279,7 @@ fn prepare_validated(
                 "allocate",
                 FailureCode::RunRecordUpdateFailed,
                 format!("cannot create {}: {e}", run_dir.display()),
-                "check .rn-qa directory permissions",
+                "check .qaren directory permissions",
             )
         }
     })?;
@@ -283,7 +288,7 @@ fn prepare_validated(
             "allocate",
             FailureCode::RunRecordUpdateFailed,
             format!("cannot create {}: {e}", run_dir.display()),
-            "check .rn-qa directory permissions",
+            "check .qaren directory permissions",
         )
     })?;
 
@@ -304,52 +309,20 @@ fn prepare_validated(
         failure: None,
         history: Vec::new(),
     };
-    record.save(&repo_root)?;
+    record.save(&args.runs_root)?;
 
     let mut ctx = Ctx {
         runner,
-        repo_root,
+        runs_root: args.runs_root.clone(),
         record,
         started_ms,
         timings: Vec::new(),
         notes: Vec::new(),
+        verb: "prepare",
     };
     let t = ctx.mark("validate", started_ms);
 
-    let offline = ctx.record.scenario.deps.policy == DepsPolicy::RequirePrewarm;
-    let mut deps_args = vec!["install", "--frozen-lockfile"];
-    if offline {
-        // The prewarm record proved the store covers this lockfile; --offline
-        // hard-guarantees no network and therefore no credential prompt.
-        deps_args.push("--offline");
-    }
-    let deps = ctx.runner.run(
-        &CmdSpec::new(
-            "pnpm-install",
-            "pnpm",
-            &deps_args,
-            ctx.record.scenario.deadlines.install_deps_seconds,
-        )
-        .cwd(&ctx.record.candidate.project_root.clone()),
-    );
-    if !deps.ok() {
-        return Ok(ctx.fail(Failure::new(
-            "deps",
-            FailureCode::DepsInstallFailed,
-            format!(
-                "pnpm {}: {}",
-                deps_args.join(" "),
-                redact_secrets(&deps.summary())
-            ),
-            if offline {
-                "the pnpm store no longer covers the lockfile; re-run rn-qa prewarm, then re-run prepare"
-            } else {
-                "fix the dependency install in the candidate project, then re-run prepare"
-            },
-        )));
-    }
-    ctx.record.phase = Phase::DepsInstalled;
-    if let Err(f) = ctx.save() {
+    if let Err(f) = install_deps(&mut ctx) {
         return Ok(ctx.fail(f));
     }
     let t = ctx.mark("deps", t);
@@ -437,11 +410,11 @@ fn prepare_validated(
     Ok(finish_receipt(ctx, ReceiptResult::Ready, None))
 }
 
-// Handoff mode (build.owner: qaren, workspace issue #34): rn-qa owns
+// Handoff mode (build.owner: qaren, workspace issue #34): qaren owns
 // validation, deps preparation, the native fingerprint, and exclusive device
 // allocation, then stops. The qaren session performs the one
 // authoritative managed build/install against the exact allocated device and
-// owns Metro, install proof, and runtime binding; `rn-qa complete` later
+// owns Metro, install proof, and runtime binding; `qaren complete` later
 // binds the session's signed build receipt to this run identity. No Metro,
 // adb server, build lock, or native-cache mutation happens here.
 fn prepare_handoff(mut ctx: Ctx, args: &PrepareArgs, t: u64) -> Receipt {
@@ -464,7 +437,7 @@ fn prepare_handoff(mut ctx: Ctx, args: &PrepareArgs, t: u64) -> Receipt {
                 .clone()
                 .expect("validated handoff scenario is ios or android_usb");
             // Claim-only: the qaren session owns the adb lifecycle in
-            // handoff mode, so rn-qa never starts an adb server or contacts
+            // handoff mode, so qaren never starts an adb server or contacts
             // the device; presence and authorization are proven downstream by
             // rn_session bind_device against the exact serial.
             claim_usb_device(&mut ctx, &args.lock_root, &usb.serial)
@@ -502,7 +475,7 @@ fn prepare_handoff(mut ctx: Ctx, args: &PrepareArgs, t: u64) -> Receipt {
             .map(|usb| usb.serial.clone()),
     };
     let cleanup_next = format!(
-        "rn-qa cleanup {} --json, then re-run prepare",
+        "qaren cleanup {} --json, then re-run prepare",
         ctx.record.run_id
     );
     let Some(device_id) = device_id.filter(|id| !id.is_empty()) else {
@@ -533,7 +506,7 @@ fn prepare_handoff(mut ctx: Ctx, args: &PrepareArgs, t: u64) -> Receipt {
         app_root_key,
     };
     let issued_at = timefmt::iso8601_utc(ctx.runner.now_epoch_ms());
-    let document_path = handoff::document_path(&ctx.repo_root, &ctx.record.run_id);
+    let document_path = handoff::document_path(&ctx.runs_root, &ctx.record.run_id);
     let document = HandoffDocument {
         schema: HANDOFF_SCHEMA.to_string(),
         run_id: ctx.record.run_id.clone(),
@@ -554,7 +527,7 @@ fn prepare_handoff(mut ctx: Ctx, args: &PrepareArgs, t: u64) -> Receipt {
                 FailureCode::RunRecordUpdateFailed,
                 format!("cannot write {}: {e}", document_path.display()),
                 format!(
-                    "check .rn-qa directory permissions, then rn-qa cleanup {} --json",
+                    "check .qaren directory permissions, then qaren cleanup {} --json",
                     ctx.record.run_id
                 ),
             );
@@ -587,7 +560,44 @@ fn prepare_handoff(mut ctx: Ctx, args: &PrepareArgs, t: u64) -> Receipt {
     finish_receipt(ctx, ReceiptResult::Ready, None)
 }
 
-fn check_prereqs(
+pub(crate) fn install_deps(ctx: &mut Ctx) -> Result<(), Failure> {
+    let offline = ctx.record.scenario.deps.policy == DepsPolicy::RequirePrewarm;
+    let mut deps_args = vec!["install", "--frozen-lockfile"];
+    if offline {
+        // The prewarm record proved the store covers this lockfile; --offline
+        // hard-guarantees no network and therefore no credential prompt.
+        deps_args.push("--offline");
+    }
+    let deps = ctx.runner.run(
+        &CmdSpec::new(
+            "pnpm-install",
+            "pnpm",
+            &deps_args,
+            ctx.record.scenario.deadlines.install_deps_seconds,
+        )
+        .cwd(&ctx.record.candidate.project_root.clone()),
+    );
+    if !deps.ok() {
+        return Err(Failure::new(
+            "deps",
+            FailureCode::DepsInstallFailed,
+            format!(
+                "pnpm {}: {}",
+                deps_args.join(" "),
+                redact_secrets(&deps.summary())
+            ),
+            if offline {
+                "the pnpm store no longer covers the lockfile; re-run qaren prewarm, then re-run"
+            } else {
+                "fix the dependency install in the candidate project, then re-run"
+            },
+        ));
+    }
+    ctx.record.phase = Phase::DepsInstalled;
+    ctx.save()
+}
+
+pub(crate) fn check_prereqs(
     runner: &mut dyn Runner,
     scenario: &Scenario,
     android_home: Option<&str>,
@@ -638,7 +648,7 @@ fn check_prereqs(
     }
 }
 
-fn check_port_free(runner: &mut dyn Runner, port: u16) -> Result<(), Failure> {
+pub(crate) fn check_port_free(runner: &mut dyn Runner, port: u16) -> Result<(), Failure> {
     let output = runner.run(&metro::port_owner_spec(port));
     match metro::parse_port_owner(&output) {
         metro::PortOwners::Free => Ok(()),
@@ -717,7 +727,7 @@ fn allocate_ios(ctx: &mut Ctx) -> Result<(), Failure> {
             "allocate",
             FailureCode::SimulatorBootFailed,
             format!("simctl bootstatus {udid}: {}", boot.summary()),
-            "run rn-qa cleanup for this run, then retry prepare",
+            "run qaren cleanup for this run, then retry prepare",
         ));
     }
     Ok(())
@@ -824,11 +834,11 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
                 android.slot,
                 started.summary()
             ),
-            "run rn-qa cleanup for this run, then retry prepare",
+            "run qaren cleanup for this run, then retry prepare",
         ));
     }
 
-    let tunnel_log = RunRecord::run_dir(&ctx.repo_root, &ctx.record.run_id)
+    let tunnel_log = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id)
         .join("logs")
         .join("tunnel.log");
     let tunnel_spec = android::tunnel_spec(&android.ssh_host, slot_status.adb_port);
@@ -840,7 +850,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
                 "allocate",
                 FailureCode::TunnelFailed,
                 format!("cannot spawn ssh tunnel: {e}"),
-                "run rn-qa cleanup for this run, then retry prepare",
+                "run qaren cleanup for this run, then retry prepare",
             )
         })?;
     let identity = capture_pid_identity(ctx.runner, spawned.pid);
@@ -857,7 +867,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
             FailureCode::TunnelFailed,
             "ssh tunnel died before its identity could be captured".to_string(),
             format!(
-                "inspect {} and run rn-qa cleanup for this run",
+                "inspect {} and run qaren cleanup for this run",
                 tunnel_log.display()
             ),
         )
@@ -879,7 +889,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
 
     // The emulator guest only trusts the farm host's adb key; a run-scoped adb
     // server authenticates with it and keeps the Mac's global server out of play.
-    let run_dir = RunRecord::run_dir(&ctx.repo_root, &ctx.record.run_id);
+    let run_dir = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id);
     let key = ctx
         .runner
         .run(&android::fetch_adbkey_spec(&android.ssh_host));
@@ -888,7 +898,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
             "allocate",
             FailureCode::AdbServerFailed,
             format!("cannot fetch the farm host adb key: {}", key.summary()),
-            "check ~/.android/adbkey on the farm host, run rn-qa cleanup, then retry",
+            "check ~/.android/adbkey on the farm host, run qaren cleanup, then retry",
         ));
     }
     let vendor_key = run_dir.join("nuc-adbkey");
@@ -900,7 +910,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
             "allocate",
             FailureCode::AdbServerFailed,
             format!("cannot write {}: {e}", vendor_key.display()),
-            "check .rn-qa permissions, run rn-qa cleanup, then retry",
+            "check .qaren permissions, run qaren cleanup, then retry",
         ));
     }
 
@@ -916,7 +926,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
                 "allocate",
                 FailureCode::AdbServerFailed,
                 format!("cannot spawn the private adb server: {e}"),
-                "run rn-qa cleanup for this run, then retry prepare",
+                "run qaren cleanup for this run, then retry prepare",
             )
         })?;
     let server_identity = capture_pid_identity(ctx.runner, server.pid);
@@ -934,7 +944,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
             FailureCode::AdbServerFailed,
             "the private adb server died before its identity could be captured".to_string(),
             format!(
-                "inspect {} and run rn-qa cleanup for this run",
+                "inspect {} and run qaren cleanup for this run",
                 server_log.display()
             ),
         )
@@ -961,7 +971,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
             "allocate",
             FailureCode::AdbConnectFailed,
             format!("adb connect {serial}: {}", connect.summary()),
-            "run rn-qa cleanup for this run, then retry prepare",
+            "run qaren cleanup for this run, then retry prepare",
         ));
     }
     let state = ctx
@@ -972,7 +982,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
             "allocate",
             FailureCode::AdbConnectFailed,
             format!("adb -s {serial} get-state: {}", state.summary()),
-            "run rn-qa cleanup for this run, then retry prepare",
+            "run qaren cleanup for this run, then retry prepare",
         ));
     }
     ctx.record.resources.adb_local_serial = Some(serial);
@@ -980,7 +990,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
     Ok(())
 }
 
-fn plan_build(ctx: &mut Ctx) -> Result<BuildPlan, Failure> {
+pub(crate) fn plan_build(ctx: &mut Ctx) -> Result<BuildPlan, Failure> {
     let platform = platform_dir(ctx.record.scenario.platform);
     let repo_root = ctx.record.candidate.repo_root.clone();
     let project_root = ctx.record.candidate.project_root.clone();
@@ -1031,7 +1041,7 @@ fn lock_holder_for(ctx: &mut Ctx) -> LockHolder {
     }
 }
 
-fn claim_build_lock(ctx: &mut Ctx, lock_root: &Path) -> Result<(), Failure> {
+pub(crate) fn claim_build_lock(ctx: &mut Ctx, lock_root: &Path) -> Result<(), Failure> {
     let name = format!(
         "native-build-{}",
         platform_dir(ctx.record.scenario.platform)
@@ -1070,7 +1080,7 @@ fn claim_build_lock(ctx: &mut Ctx, lock_root: &Path) -> Result<(), Failure> {
     }
 }
 
-fn release_build_lock(ctx: &mut Ctx) {
+pub(crate) fn release_build_lock(ctx: &mut Ctx) {
     let Some(lock) = ctx.record.resources.build_lock.clone() else {
         return;
     };
@@ -1121,7 +1131,7 @@ fn claim_usb_device(ctx: &mut Ctx, lock_root: &Path, serial: &str) -> Result<(),
                 format!(
                     "physical device {serial} is exclusively claimed elsewhere{described}: {detail}"
                 ),
-                "wait for the holding run to clean up (rn-qa cleanup <its-run-id>); rn-qa never adopts a device claim, even a stale one",
+                "wait for the holding run to clean up (qaren cleanup <its-run-id>); qaren never adopts a device claim, even a stale one",
             ))
         }
         LockOutcome::Error(detail) => Err(Failure::new(
@@ -1147,7 +1157,7 @@ fn allocate_usb(
     claim_usb_device(ctx, lock_root, &usb.serial)?;
     let usb_adb_server_port = usb
         .adb_server_port
-        .expect("validated rn-qa-owned usb scenario");
+        .expect("validated qaren-owned usb scenario");
 
     let adb = android::adb_path(android_home.expect("prereqs checked ANDROID_HOME"));
     ctx.record.resources.adb_path = Some(adb.clone());
@@ -1158,11 +1168,11 @@ fn allocate_usb(
             "allocate",
             FailureCode::PrereqMissing,
             "HOME is not set; the host adb key cannot be located".to_string(),
-            "run rn-qa in a normal user environment, then retry prepare",
+            "run qaren in a normal user environment, then retry prepare",
         ));
     };
     let host_key = PathBuf::from(home).join(".android").join("adbkey");
-    let run_dir = RunRecord::run_dir(&ctx.repo_root, &ctx.record.run_id);
+    let run_dir = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id);
     let server_log = run_dir.join("logs").join("adb-server.log");
     let server_spec =
         android::usb_adb_server_spec(&adb, usb_adb_server_port, &usb.serial, &host_key);
@@ -1174,7 +1184,7 @@ fn allocate_usb(
                 "allocate",
                 FailureCode::AdbServerFailed,
                 format!("cannot spawn the run-scoped adb server: {e}"),
-                "run rn-qa cleanup for this run, then retry prepare",
+                "run qaren cleanup for this run, then retry prepare",
             )
         })?;
     let server_identity = capture_pid_identity(ctx.runner, server.pid);
@@ -1192,7 +1202,7 @@ fn allocate_usb(
             FailureCode::AdbServerFailed,
             "the run-scoped adb server died before its identity could be captured".to_string(),
             format!(
-                "inspect {} and run rn-qa cleanup for this run",
+                "inspect {} and run qaren cleanup for this run",
                 server_log.display()
             ),
         )
@@ -1222,7 +1232,7 @@ fn allocate_usb(
                 usb.serial,
                 state.summary()
             ),
-            "connect and authorize the device for this host (check `unauthorized`/`offline` on the phone screen), run rn-qa cleanup for this run, then retry",
+            "connect and authorize the device for this host (check `unauthorized`/`offline` on the phone screen), run qaren cleanup for this run, then retry",
         ));
     }
     ctx.record.resources.adb_local_serial = Some(usb.serial.clone());
@@ -1237,7 +1247,7 @@ fn native_build_output_dirs(platform: &str) -> &'static [&'static str] {
     }
 }
 
-fn run_clean_preparation(ctx: &mut Ctx, plan: &BuildPlan) -> Result<(), Failure> {
+pub(crate) fn run_clean_preparation(ctx: &mut Ctx, plan: &BuildPlan) -> Result<(), Failure> {
     let platform = platform_dir(ctx.record.scenario.platform);
     let project_root = ctx.record.candidate.project_root.clone();
     if plan.regenerate_native_dir {
@@ -1267,7 +1277,7 @@ fn run_clean_preparation(ctx: &mut Ctx, plan: &BuildPlan) -> Result<(), Failure>
                 FailureCode::BuildFailed,
                 format!("expo prebuild --clean: {}", prebuild.summary()),
                 format!(
-                    "inspect the prebuild output, then rn-qa cleanup {} --json",
+                    "inspect the prebuild output, then qaren cleanup {} --json",
                     ctx.record.run_id
                 ),
             ));
@@ -1308,10 +1318,10 @@ fn run_clean_preparation(ctx: &mut Ctx, plan: &BuildPlan) -> Result<(), Failure>
 }
 
 fn spawn_metro_only(ctx: &mut Ctx) -> Result<(), Failure> {
-    let port = rn_qa_metro_port(&ctx.record.scenario);
+    let port = qaren_metro_port(&ctx.record.scenario);
     let project_root = ctx.record.candidate.project_root.clone();
     let spec = metro::start_spec(&project_root, port);
-    let metro_log = RunRecord::run_dir(&ctx.repo_root, &ctx.record.run_id)
+    let metro_log = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id)
         .join("logs")
         .join("metro.log");
     let spawned = ctx.runner.spawn_group(&spec, &metro_log).map_err(|e| {
@@ -1319,7 +1329,7 @@ fn spawn_metro_only(ctx: &mut Ctx) -> Result<(), Failure> {
             "build",
             FailureCode::BuildFailed,
             format!("cannot spawn {}: {e}", spec.rendered()),
-            "check pnpm/expo availability, run rn-qa cleanup, then retry prepare",
+            "check pnpm/expo availability, run qaren cleanup, then retry prepare",
         )
     })?;
     let identity = capture_pid_identity(ctx.runner, spawned.pid);
@@ -1338,7 +1348,7 @@ fn spawn_metro_only(ctx: &mut Ctx) -> Result<(), Failure> {
             FailureCode::BuildFailed,
             format!("metro exited immediately; see {}", metro_log.display()),
             format!(
-                "inspect the log, then rn-qa cleanup {} --json",
+                "inspect the log, then qaren cleanup {} --json",
                 ctx.record.run_id
             ),
         )
@@ -1358,7 +1368,7 @@ fn wait_metro_responding(ctx: &mut Ctx) -> Result<(), Failure> {
                 FailureCode::BuildFailed,
                 format!("metro exited; see {}", metro_resource.log.display()),
                 format!(
-                    "inspect the log, then rn-qa cleanup {} --json",
+                    "inspect the log, then qaren cleanup {} --json",
                     ctx.record.run_id
                 ),
             )
@@ -1383,7 +1393,7 @@ fn wait_metro_responding(ctx: &mut Ctx) -> Result<(), Failure> {
                     metro_resource.log.display()
                 ),
                 format!(
-                    "inspect the log, then rn-qa cleanup {} --json",
+                    "inspect the log, then qaren cleanup {} --json",
                     ctx.record.run_id
                 ),
             )
@@ -1396,9 +1406,9 @@ fn wait_metro_responding(ctx: &mut Ctx) -> Result<(), Failure> {
 // Cached reuse: install the verified artifact, serve fresh candidate JS from
 // this run's Metro, deep-link the dev client onto it, then run the same full
 // readiness probes as a built run.
-fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<u64, Failure> {
+pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<u64, Failure> {
     let artifact = plan.artifact.clone().expect("reuse carries an artifact");
-    let metro_port = rn_qa_metro_port(&ctx.record.scenario);
+    let metro_port = qaren_metro_port(&ctx.record.scenario);
     match ctx.record.scenario.platform {
         Platform::Ios => {
             let sim = ctx
@@ -1471,7 +1481,7 @@ fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<u64, Failur
                     FailureCode::DeviceUnavailable,
                     format!("adb reverse tcp:{metro_port}: {}", reversed.summary()),
                     format!(
-                        "run rn-qa cleanup {} --json, then retry prepare",
+                        "run qaren cleanup {} --json, then retry prepare",
                         ctx.record.run_id
                     ),
                 ));
@@ -1532,7 +1542,7 @@ fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<u64, Failur
             FailureCode::BuildFailed,
             format!("dev client launch via {url}: {}", launched.summary()),
             format!(
-                "run rn-qa cleanup {} --json, then retry prepare",
+                "run qaren cleanup {} --json, then retry prepare",
                 ctx.record.run_id
             ),
         ));
@@ -1552,12 +1562,15 @@ fn artifact_install_failure(run_id: &str, artifact: &CachedArtifact, summary: St
             artifact.path.display()
         ),
         format!(
-            "delete the cached artifact to force a rebuild, then rn-qa cleanup {run_id} --json and re-run prepare"
+            "delete the cached artifact to force a rebuild, then qaren cleanup {run_id} --json and re-run prepare"
         ),
     )
 }
 
-fn recheck_fingerprint(ctx: &mut Ctx, plan: &BuildPlan) -> Result<NativeFingerprint, Failure> {
+pub(crate) fn recheck_fingerprint(
+    ctx: &mut Ctx,
+    plan: &BuildPlan,
+) -> Result<NativeFingerprint, Failure> {
     let platform = platform_dir(ctx.record.scenario.platform);
     let repo_root = ctx.record.candidate.repo_root.clone();
     let project_root = ctx.record.candidate.project_root.clone();
@@ -1652,7 +1665,7 @@ fn prune_stale_artifacts(platform_dir: &Path, app_id: &str, keep_fp_key: &str) -
     pruned
 }
 
-fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
+pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
     let platform = platform_dir(ctx.record.scenario.platform);
     let repo_root = ctx.record.candidate.repo_root.clone();
     let project_root = ctx.record.candidate.project_root.clone();
@@ -1786,7 +1799,7 @@ fn candidate_drift(run_id: &str, detail: String) -> Failure {
         "verify",
         FailureCode::CandidateDrifted,
         detail,
-        format!("rn-qa cleanup {run_id} --json, then re-run prepare on a stable checkout"),
+        format!("qaren cleanup {run_id} --json, then re-run prepare on a stable checkout"),
     )
 }
 
@@ -1843,7 +1856,7 @@ fn wait_for_local_listener(
                         format!(
                             "local port {port} is owned by pid {pid} in foreign process group {foreign_pgid}, not the spawned group {expected_pgid}"
                         ),
-                        "run rn-qa cleanup for this run, resolve the foreign listener yourself, then retry prepare",
+                        "run qaren cleanup for this run, resolve the foreign listener yourself, then retry prepare",
                     ));
                 }
                 // The owner exited between lsof and ps; keep polling.
@@ -1854,7 +1867,7 @@ fn wait_for_local_listener(
                     "allocate",
                     failure_code,
                     format!("local port {port} has multiple listeners; refusing to adopt any of them"),
-                    "run rn-qa cleanup for this run, resolve the foreign listeners yourself, then retry prepare",
+                    "run qaren cleanup for this run, resolve the foreign listeners yourself, then retry prepare",
                 ));
             }
             _ => {}
@@ -1869,7 +1882,7 @@ fn wait_for_local_listener(
                     "the process spawned for local port {port} exited before the port started listening; see {}",
                     log.display()
                 ),
-                "run rn-qa cleanup for this run, then retry prepare",
+                "run qaren cleanup for this run, then retry prepare",
             )
             .with_evidence(vec![super::log_tail(log, 25)]));
         }
@@ -1881,7 +1894,7 @@ fn wait_for_local_listener(
                     "local port {port} did not start listening (owned by the spawned group) within {deadline_seconds}s; see {}",
                     log.display()
                 ),
-                "run rn-qa cleanup for this run, then retry prepare",
+                "run qaren cleanup for this run, then retry prepare",
             )
             .with_evidence(vec![super::log_tail(log, 25)]));
         }
@@ -1889,8 +1902,8 @@ fn wait_for_local_listener(
     }
 }
 
-fn spawn_build(ctx: &mut Ctx) -> Result<(), Failure> {
-    let port = rn_qa_metro_port(&ctx.record.scenario);
+pub(crate) fn spawn_build(ctx: &mut Ctx) -> Result<(), Failure> {
+    let port = qaren_metro_port(&ctx.record.scenario);
     let deadline = ctx.record.scenario.deadlines.build_seconds;
     let project_root = ctx.record.candidate.project_root.clone();
     let spec = match ctx.record.scenario.platform {
@@ -1920,7 +1933,7 @@ fn spawn_build(ctx: &mut Ctx) -> Result<(), Failure> {
             android::build_spec(&project_root, &serial, server_port, port, deadline)
         }
     };
-    let build_log = RunRecord::run_dir(&ctx.repo_root, &ctx.record.run_id)
+    let build_log = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id)
         .join("logs")
         .join("build.log");
     let spawned = ctx.runner.spawn_group(&spec, &build_log).map_err(|e| {
@@ -1928,7 +1941,7 @@ fn spawn_build(ctx: &mut Ctx) -> Result<(), Failure> {
             "build",
             FailureCode::BuildFailed,
             format!("cannot spawn {}: {e}", spec.rendered()),
-            "check pnpm/expo availability, run rn-qa cleanup, then retry prepare",
+            "check pnpm/expo availability, run qaren cleanup, then retry prepare",
         )
     })?;
     let identity = capture_pid_identity(ctx.runner, spawned.pid);
@@ -1950,7 +1963,7 @@ fn spawn_build(ctx: &mut Ctx) -> Result<(), Failure> {
                 build_log.display()
             ),
             format!(
-                "inspect the log, then rn-qa cleanup {} --json",
+                "inspect the log, then qaren cleanup {} --json",
                 ctx.record.run_id
             ),
         )
@@ -1959,7 +1972,7 @@ fn spawn_build(ctx: &mut Ctx) -> Result<(), Failure> {
     Ok(())
 }
 
-fn wait_ready(ctx: &mut Ctx) -> Result<(), Failure> {
+pub(crate) fn wait_ready(ctx: &mut Ctx) -> Result<(), Failure> {
     let deadline = ctx.runner.monotonic_ms() + ctx.record.scenario.deadlines.build_seconds * 1000;
     let metro_resource = ctx.record.resources.metro.clone().expect("metro spawned");
     let identity = metro_resource.identity.clone().expect("identity captured");
@@ -1973,7 +1986,7 @@ fn wait_ready(ctx: &mut Ctx) -> Result<(), Failure> {
                     metro_resource.log.display()
                 ),
                 format!(
-                    "inspect the log, then rn-qa cleanup {} --json",
+                    "inspect the log, then qaren cleanup {} --json",
                     ctx.record.run_id
                 ),
             )
@@ -1992,7 +2005,7 @@ fn wait_ready(ctx: &mut Ctx) -> Result<(), Failure> {
                     metro_resource.log.display()
                 ),
                 format!(
-                    "inspect the log, then rn-qa cleanup {} --json",
+                    "inspect the log, then qaren cleanup {} --json",
                     ctx.record.run_id
                 ),
             )
@@ -2092,7 +2105,7 @@ fn dry_run_receipt(
     receipt.candidate = Some(cand.clone());
     let platform = platform_dir(scenario.platform);
     // Handoff mode plans no build decision and no Metro/adb/build commands:
-    // rn-qa stops at allocation and the qaren session owns the rest.
+    // qaren stops at allocation and the qaren session owns the rest.
     if scenario.build.owner == BuildOwner::Qaren {
         let mut deps_args = vec!["install", "--frozen-lockfile"];
         if scenario.deps.policy == DepsPolicy::RequirePrewarm {
@@ -2165,7 +2178,7 @@ fn dry_run_receipt(
             );
         }
     }
-    let port = rn_qa_metro_port(scenario);
+    let port = qaren_metro_port(scenario);
     let deadlines = &scenario.deadlines;
     let mut deps_args = vec!["install", "--frozen-lockfile"];
     if scenario.deps.policy == DepsPolicy::RequirePrewarm {
@@ -2207,7 +2220,7 @@ fn dry_run_receipt(
             let usb = scenario.android_usb.as_ref().expect("checked");
             let usb_adb_server_port = usb
                 .adb_server_port
-                .expect("validated rn-qa-owned usb scenario");
+                .expect("validated qaren-owned usb scenario");
             planned.push(android::usb_adb_server_spec(
                 Path::new("<android_home>/platform-tools/adb"),
                 usb_adb_server_port,
@@ -2296,7 +2309,7 @@ fn dry_run_receipt(
                     (Some(usb), _) => (
                         usb.serial.clone(),
                         usb.adb_server_port
-                            .expect("validated rn-qa-owned usb scenario"),
+                            .expect("validated qaren-owned usb scenario"),
                     ),
                     (None, Some(farm)) => {
                         ("127.0.0.1:<adb_port>".to_string(), farm.adb_server_port)

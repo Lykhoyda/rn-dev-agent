@@ -40,7 +40,7 @@ fn dry_run_against_checked_in_ios_scenario_emits_parseable_receipt() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let value: serde_json::Value = serde_json::from_str(stdout.trim())
         .unwrap_or_else(|e| panic!("stdout must be pure JSON ({e}): {stdout}"));
-    assert_eq!(value["schema"], "rn-qa/1");
+    assert_eq!(value["schema"], "qaren/1");
     assert_eq!(value["verb"], "prepare");
     let result = value["result"].as_str().unwrap();
     match result {

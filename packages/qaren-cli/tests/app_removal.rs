@@ -1,11 +1,11 @@
 mod common;
 
-use rn_qa::buildplan::{ArtifactKind, CachedArtifact};
-use rn_qa::commands::cleanup::{cleanup, cleanup_with};
-use rn_qa::exec::{CmdOutput, CmdSpec, MockRunner, Spawned};
-use rn_qa::failure::FailureCode;
-use rn_qa::receipt::ReceiptResult;
-use rn_qa::runrecord::{
+use qaren::buildplan::{ArtifactKind, CachedArtifact};
+use qaren::commands::cleanup::{cleanup, cleanup_with};
+use qaren::exec::{CmdOutput, CmdSpec, MockRunner, Spawned};
+use qaren::failure::FailureCode;
+use qaren::receipt::ReceiptResult;
+use qaren::runrecord::{
     AdbServerResource, AppInstallResource, AppRemoval, FarmResource, IosSimResource, Phase,
     RunRecord, TunnelResource, UsbDeviceResource,
 };
@@ -17,7 +17,7 @@ const SERIAL: &str = "127.0.0.1:5555";
 const APK_SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const APK_PATH: &str = "/data/app/~~AbC-12==/com.rndevagent.testapp-XyZ_34==/base.apk";
 const CONFIRM: &str = "androidrun1/emulator-5554/com.rndevagent.testapp";
-const FARM_OURS: &str = "slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=rn-qa-androidrun1 claimed_at=x state=device\n";
+const FARM_OURS: &str = "slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=qaren-androidrun1 claimed_at=x state=device\n";
 const FARM_FREE: &str =
     "slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=free state=down\n";
 
@@ -62,7 +62,7 @@ fn owned_record(repo: &std::path::Path) -> RunRecord {
         ssh_host: "nuc".to_string(),
         farm_path: "bin/android-farm".to_string(),
         slot: 1,
-        holder: "rn-qa-androidrun1".to_string(),
+        holder: "qaren-androidrun1".to_string(),
         avd: "Pixel_10a".to_string(),
         remote_serial: "emulator-5554".to_string(),
         adb_port: 5555,
@@ -268,14 +268,12 @@ fn confirmed_removal_uninstalls_exact_package_before_disconnect_and_lease_releas
 #[test]
 fn cli_typo_then_confirmed_removal_and_repeat_preserve_the_removal_proof() {
     let repo = common::temp_repo();
-    assert!(std::process::Command::new("git")
-        .args(["init", "--quiet"])
-        .arg(&repo)
-        .status()
-        .unwrap()
-        .success());
-    owned_record(&repo).save(&repo).unwrap();
-    let record_path = RunRecord::path(&repo, "androidrun1");
+    // The binary resolves run records under $HOME/.qaren/runs; point HOME at
+    // the temp tree so the record it reads is the one this test wrote.
+    let home = repo.join("home");
+    let runs_root = home.join(".qaren").join("runs");
+    owned_record(&repo).save(&runs_root).unwrap();
+    let record_path = RunRecord::path(&runs_root, "androidrun1");
     let before = std::fs::read(&record_path).unwrap();
     let args = [
         "cleanup",
@@ -287,6 +285,7 @@ fn cli_typo_then_confirmed_removal_and_repeat_preserve_the_removal_proof() {
     ];
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_qaren"))
         .current_dir(&repo)
+        .env("HOME", &home)
         .args(args)
         .output()
         .unwrap();
@@ -294,7 +293,7 @@ fn cli_typo_then_confirmed_removal_and_repeat_preserve_the_removal_proof() {
     assert_eq!(output.status.code(), Some(4));
     assert_eq!(refused["result"], "refused");
     assert_eq!(refused["failure"]["code"], "APP_REMOVAL_NOT_CONFIRMED");
-    assert_eq!(refused["commands_executed"], 1); // Only git root discovery runs.
+    assert_eq!(refused["commands_executed"], 0); // Refused before any command runs.
     assert_eq!(std::fs::read(&record_path).unwrap(), before);
 
     let mut mock = MockRunner::new();
@@ -306,7 +305,7 @@ fn cli_typo_then_confirmed_removal_and_repeat_preserve_the_removal_proof() {
     );
     expect_absence_probes(&mut mock);
     expect_teardown_alive(&mut mock);
-    let removed = cleanup_with(&mut mock, &repo, "androidrun1", Some(CONFIRM));
+    let removed = cleanup_with(&mut mock, &runs_root, "androidrun1", Some(CONFIRM));
     assert_eq!(removed.result, ReceiptResult::Cleaned);
     assert_eq!(removed.cleanup["app_install"], "removed");
     assert_eq!(mock.remaining(), 0);
@@ -319,7 +318,7 @@ fn cli_typo_then_confirmed_removal_and_repeat_preserve_the_removal_proof() {
 
     let mut repeat_mock = MockRunner::new();
     expect_teardown_dead(&mut repeat_mock);
-    let repeated = cleanup_with(&mut repeat_mock, &repo, "androidrun1", Some(CONFIRM));
+    let repeated = cleanup_with(&mut repeat_mock, &runs_root, "androidrun1", Some(CONFIRM));
     assert_eq!(repeated.result, ReceiptResult::Cleaned);
     assert_eq!(repeated.cleanup["app_install"], "absent");
     assert!(!touches_package(&repeat_mock.calls));
@@ -567,7 +566,7 @@ fn removal_is_refused_for_ios_and_usb_routes_before_any_command() {
     );
     ios.resources.ios_simulator = Some(IosSimResource {
         udid: "AAAA-1111".to_string(),
-        name: "rn-qa-iosrun1".to_string(),
+        name: "qaren-iosrun1".to_string(),
         device_type: "dt".to_string(),
         runtime: "rt".to_string(),
     });
@@ -593,7 +592,7 @@ fn removal_is_refused_for_ios_and_usb_routes_before_any_command() {
     usb.resources.usb_device = Some(UsbDeviceResource {
         serial: "R5CT123ABC".to_string(),
         lock_dir: repo.join("locks").join("usb-R5CT123ABC"),
-        holder: "rn-qa-usbrun1".to_string(),
+        holder: "qaren-usbrun1".to_string(),
     });
     usb.resources.adb_local_serial = Some("R5CT123ABC".to_string());
     usb.save(&repo).unwrap();
@@ -718,7 +717,7 @@ fn slot_identity_drift_refuses_removal() {
     // Same holder, different emulator behind the slot.
     mock.expect_run(
         "~/bin/android-farm status",
-        CmdOutput::success("slot=1 avd=Pixel_10_Pro serial=emulator-5554 adb_port=5555 lease=rn-qa-androidrun1 claimed_at=x state=device\n"),
+        CmdOutput::success("slot=1 avd=Pixel_10_Pro serial=emulator-5554 adb_port=5555 lease=qaren-androidrun1 claimed_at=x state=device\n"),
     );
     expect_teardown_alive(&mut mock);
     let receipt = cleanup_with(&mut mock, &repo, "androidrun1", Some(CONFIRM));

@@ -136,19 +136,19 @@ fn serialize_porcelain_z<'a>(entries: impl IntoIterator<Item = PorcelainEntry<'a
     serialized
 }
 
-pub fn porcelain_without_rn_qa_state(porcelain_stdout: &str) -> String {
+pub fn porcelain_without_qaren_state(porcelain_stdout: &str) -> String {
     let Some(entries) = parse_porcelain_z(porcelain_stdout) else {
         return porcelain_stdout.to_string();
     };
     serialize_porcelain_z(
         entries
             .into_iter()
-            .filter(|entry| !entry.paths().all(is_rn_qa_state_path)),
+            .filter(|entry| !entry.paths().all(is_qaren_state_path)),
     )
 }
 
-fn is_rn_qa_state_path(path: &str) -> bool {
-    path == ".rn-qa" || path.starts_with(".rn-qa/")
+fn is_qaren_state_path(path: &str) -> bool {
+    path == ".qaren" || path.starts_with(".qaren/")
 }
 
 // Only file-level untracked integration outputs belong to the session.
@@ -443,7 +443,7 @@ fn verify_unchanged_inner(
             porcelain.summary()
         ));
     }
-    let project_state = porcelain_without_rn_qa_state(&porcelain.stdout);
+    let project_state = porcelain_without_qaren_state(&porcelain.stdout);
     let project_state = if tolerate_integration {
         filter_integration_entries(
             runner,
@@ -507,7 +507,7 @@ pub fn resolve(
                         scenario_dir.display(),
                         toplevel.summary()
                     ),
-                    "run rn-qa with the scenario inside the qaren-workspace checkout",
+                    "run qaren with the scenario inside the qaren-workspace checkout",
                 ));
             }
             PathBuf::from(toplevel.stdout.trim())
@@ -608,7 +608,7 @@ pub fn resolve(
             ))
         }
     };
-    let project_state = porcelain_without_rn_qa_state(&porcelain.stdout);
+    let project_state = porcelain_without_qaren_state(&porcelain.stdout);
     // Handoff-mode baselines are normalized through the integration filter so
     // the same comparison holds before and after the session applies (or has
     // left applied) its declared integration surface.
@@ -630,59 +630,59 @@ pub fn resolve(
 
 #[cfg(test)]
 mod tests {
-    use super::porcelain_without_rn_qa_state;
+    use super::porcelain_without_qaren_state;
 
     #[test]
-    fn drops_the_untracked_rn_qa_dir_entry() {
-        assert_eq!(porcelain_without_rn_qa_state("?? .rn-qa/\0"), "");
+    fn drops_the_untracked_qaren_dir_entry() {
+        assert_eq!(porcelain_without_qaren_state("?? .qaren/\0"), "");
     }
 
     #[test]
-    fn drops_entries_for_files_under_rn_qa() {
+    fn drops_entries_for_files_under_qaren() {
         assert_eq!(
-            porcelain_without_rn_qa_state(
-                "?? .rn-qa/runs/run-1/run.json\0 M .rn-qa/native-cache/state.json\0"
+            porcelain_without_qaren_state(
+                "?? .qaren/runs/run-1/run.json\0 M .qaren/native-cache/state.json\0"
             ),
             ""
         );
     }
 
     #[test]
-    fn keeps_entries_outside_rn_qa() {
+    fn keeps_entries_outside_qaren() {
         let porcelain = " M test-app/App.tsx\0?? stray.txt\0";
-        assert_eq!(porcelain_without_rn_qa_state(porcelain), porcelain);
+        assert_eq!(porcelain_without_qaren_state(porcelain), porcelain);
     }
 
     #[test]
-    fn keeps_paths_that_merely_share_the_rn_qa_prefix() {
-        let porcelain = "?? .rn-qa-notes.txt\0";
-        assert_eq!(porcelain_without_rn_qa_state(porcelain), porcelain);
+    fn keeps_paths_that_merely_share_the_qaren_prefix() {
+        let porcelain = "?? .qaren-notes.txt\0";
+        assert_eq!(porcelain_without_qaren_state(porcelain), porcelain);
     }
 
     #[test]
-    fn keeps_renames_that_cross_the_rn_qa_boundary() {
-        let porcelain = "R  .rn-qa/App.tsx\0src/App.tsx\0";
-        assert_eq!(porcelain_without_rn_qa_state(porcelain), porcelain);
+    fn keeps_renames_that_cross_the_qaren_boundary() {
+        let porcelain = "R  .qaren/App.tsx\0src/App.tsx\0";
+        assert_eq!(porcelain_without_qaren_state(porcelain), porcelain);
     }
 
     #[test]
-    fn drops_renames_fully_inside_rn_qa() {
+    fn drops_renames_fully_inside_qaren() {
         assert_eq!(
-            porcelain_without_rn_qa_state("R  .rn-qa/b.json\0.rn-qa/a.json\0"),
+            porcelain_without_qaren_state("R  .qaren/b.json\0.qaren/a.json\0"),
             ""
         );
     }
 
     #[test]
-    fn drops_paths_with_special_characters_under_rn_qa() {
-        assert_eq!(porcelain_without_rn_qa_state("?? .rn-qa/wei\nrd\0"), "");
+    fn drops_paths_with_special_characters_under_qaren() {
+        assert_eq!(porcelain_without_qaren_state("?? .qaren/wei\nrd\0"), "");
     }
 
     #[test]
     fn preserves_surviving_entries_byte_for_byte() {
-        let porcelain = "?? .rn-qa/\0 M test-app/App.tsx\0?? .rn-qa/runs/x\0";
+        let porcelain = "?? .qaren/\0 M test-app/App.tsx\0?? .qaren/runs/x\0";
         assert_eq!(
-            porcelain_without_rn_qa_state(porcelain),
+            porcelain_without_qaren_state(porcelain),
             " M test-app/App.tsx\0"
         );
     }

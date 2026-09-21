@@ -16,5 +16,5 @@ name = "qaren"
 path = "src/main.rs"
 
 [lib]
-name = "rn_qa"
+name = "qaren"
 path = "src/lib.rs"

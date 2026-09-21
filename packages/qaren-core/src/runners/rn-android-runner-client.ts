@@ -2,6 +2,7 @@
  * Copyright (c) 2026 Anton Lykhoyda
  * SPDX-License-Identifier: MIT
  */
+import { DEVICE_LEASE_REQUIRED, leaseFromEnvironment } from './lease-env.js';
 import { spawn, execFile } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -367,15 +368,17 @@ interface AndroidRunnerAuthority {
 }
 
 function androidRunnerAuthority(deviceId: string, appId: string): AndroidRunnerAuthority {
-  const sessionId =
-    (testAuthorityState ? runnerState?.sessionId : undefined) ?? process.env.QAREN_SESSION_ID;
+  const lease = leaseFromEnvironment();
+  const sessionId = (testAuthorityState ? runnerState?.sessionId : undefined) ?? lease?.sessionId;
   const claimEpoch =
-    (testAuthorityState ? runnerState?.claimEpoch : undefined) ??
-    Number(process.env.QAREN_CLAIM_EPOCH);
-  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1) {
-    throw new Error(
-      'SESSION_AUTHORITY_REQUIRED: native runner launch requires a fenced qaren session',
-    );
+    (testAuthorityState ? runnerState?.claimEpoch : undefined) ?? lease?.claimEpoch;
+  if (
+    !sessionId ||
+    typeof claimEpoch !== 'number' ||
+    !Number.isSafeInteger(claimEpoch) ||
+    claimEpoch < 1
+  ) {
+    throw new Error(DEVICE_LEASE_REQUIRED);
   }
   return {
     instanceId: randomUUID(),
@@ -556,10 +559,9 @@ export function shouldReuseAndroidRunner(
   deviceId?: string,
 ): boolean {
   if (state === null) return false;
-  const sessionId =
-    (testAuthorityState ? state.sessionId : undefined) ?? process.env.QAREN_SESSION_ID;
-  const claimEpoch =
-    (testAuthorityState ? state.claimEpoch : undefined) ?? Number(process.env.QAREN_CLAIM_EPOCH);
+  const lease = leaseFromEnvironment();
+  const sessionId = (testAuthorityState ? state.sessionId : undefined) ?? lease?.sessionId;
+  const claimEpoch = (testAuthorityState ? state.claimEpoch : undefined) ?? lease?.claimEpoch;
   if (
     !sessionId ||
     !Number.isSafeInteger(claimEpoch) ||

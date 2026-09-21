@@ -1,0 +1,115 @@
+use crate::buildplan::{self, LockHolder, LockOutcome, LockPolicy, ReleaseOutcome};
+use crate::candidate::sha256_hex;
+use crate::exec::Runner;
+use crate::failure::{Failure, FailureCode};
+use crate::runrecord::PidIdentity;
+use crate::scenario::Platform;
+use crate::timefmt;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+// The device lease: one Strict lock per (platform, device) under the host lock
+// root. The core child receives `<runId>:<token>` and echoes it in refusals.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Lease {
+    pub run_id: String,
+    pub token: String,
+    pub lock_dir: PathBuf,
+    pub holder: String,
+}
+
+impl Lease {
+    pub fn wire(&self) -> String {
+        format!("{}:{}", self.run_id, self.token)
+    }
+}
+
+// Device ids can carry `:` or `/` (wireless adb serials); the lock name keeps a
+// readable prefix and a hash so it stays one filesystem-safe component.
+pub fn lock_name(platform: Platform, device_id: &str) -> String {
+    let platform = match platform {
+        Platform::Ios => "ios",
+        Platform::Android => "android",
+    };
+    let safe: String = device_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(48)
+        .collect();
+    let digest = sha256_hex(device_id.as_bytes());
+    format!("device-{platform}-{safe}-{}", &digest[..8])
+}
+
+fn fresh_token(fallback_seed: &str) -> String {
+    let mut bytes = [0u8; 16];
+    let read = std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut bytes));
+    match read {
+        Ok(()) => bytes.iter().map(|b| format!("{b:02x}")).collect(),
+        Err(_) => sha256_hex(fallback_seed.as_bytes())[..32].to_string(),
+    }
+}
+
+pub fn acquire(
+    runner: &mut dyn Runner,
+    lock_root: &Path,
+    platform: Platform,
+    device_id: &str,
+    run_id: &str,
+    identity: Option<PidIdentity>,
+) -> Result<Lease, Failure> {
+    let now_ms = runner.now_epoch_ms();
+    let birth = identity
+        .as_ref()
+        .map(|i| i.started_at.clone())
+        .unwrap_or_default();
+    let token = fresh_token(&format!(
+        "{run_id}\0{}\0{now_ms}\0{birth}",
+        std::process::id()
+    ));
+    let holder = LockHolder {
+        holder: format!("qaren-{run_id}"),
+        run_id: run_id.to_string(),
+        identity,
+        at: timefmt::iso8601_utc(now_ms),
+    };
+    let name = lock_name(platform, device_id);
+    match buildplan::claim_lock(runner, lock_root, &name, &holder, LockPolicy::Strict) {
+        LockOutcome::Claimed { .. } => Ok(Lease {
+            run_id: run_id.to_string(),
+            token,
+            lock_dir: buildplan::lock_dir(lock_root, &name),
+            holder: holder.holder,
+        }),
+        LockOutcome::Contended {
+            holder: existing,
+            detail,
+        } => {
+            let described = existing
+                .map(|h| format!(" (held for run {})", h.run_id))
+                .unwrap_or_default();
+            Err(Failure::new(
+                "lease",
+                FailureCode::DeviceBusy,
+                format!("device {device_id} is leased elsewhere{described}: {detail}"),
+                "wait for the holding run to finish, or clean it up with `qaren cleanup <its-run-id>`; a live holder is never stolen",
+            ))
+        }
+        LockOutcome::Error(detail) => Err(Failure::new(
+            "lease",
+            FailureCode::RunRecordUpdateFailed,
+            format!("cannot operate the device lease lock: {detail}"),
+            "fix the lock directory permissions, then re-run",
+        )),
+    }
+}
+
+pub fn release(lease: &Lease) -> ReleaseOutcome {
+    buildplan::release_lock(&lease.lock_dir, &lease.holder, &lease.run_id)
+}

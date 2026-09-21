@@ -1,10 +1,10 @@
 mod common;
 
-use rn_qa::commands::prepare::{prepare, PrepareArgs};
-use rn_qa::exec::{CmdOutput, MockRunner, Spawned};
-use rn_qa::failure::FailureCode;
-use rn_qa::receipt::ReceiptResult;
-use rn_qa::runrecord::{Phase, RunRecord};
+use qaren::commands::prepare::{prepare, PrepareArgs};
+use qaren::exec::{CmdOutput, MockRunner, Spawned};
+use qaren::failure::FailureCode;
+use qaren::receipt::ReceiptResult;
+use qaren::runrecord::{Phase, RunRecord};
 
 const UDID: &str = "AAAABBBB-1111-2222-3333-444455556666";
 const LSTART: &str = "Wed Aug 12 16:01:00 2026";
@@ -34,6 +34,7 @@ fn prepare_args(
         // Per-test lock root keeps parallel tests from contending on the
         // shared build-serialization lock name.
         lock_root: scenario_path.parent().unwrap().join(".locks"),
+        runs_root: scenario_path.parent().unwrap().to_path_buf(),
     }
 }
 
@@ -67,7 +68,7 @@ fn ios_prepare_happy_path_produces_ready_receipt_and_record() {
     script_validation(&mut mock, &repo, IOS_TOOLS);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n")); // self lstart
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n")); // self command
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n")); // self command
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
@@ -116,7 +117,7 @@ fn ios_prepare_happy_path_produces_ready_receipt_and_record() {
     assert_eq!(device.ios_udid.as_deref(), Some(UDID));
     assert_eq!(
         device.ios_name.as_deref(),
-        Some(format!("rn-qa-{}", receipt.run_id).as_str())
+        Some(format!("qaren-{}", receipt.run_id).as_str())
     );
     let metro = receipt.metro.unwrap();
     assert_eq!(metro.port, 8791);
@@ -133,7 +134,7 @@ fn ios_prepare_happy_path_produces_ready_receipt_and_record() {
     assert_eq!(record.phase, Phase::Ready);
     let sim = record.resources.ios_simulator.as_ref().unwrap();
     assert_eq!(sim.udid, UDID);
-    assert_eq!(sim.name, format!("rn-qa-{}", receipt.run_id));
+    assert_eq!(sim.name, format!("qaren-{}", receipt.run_id));
     let metro = record.resources.metro.as_ref().unwrap();
     assert_eq!(metro.spawned.pgid, 6000);
     assert_eq!(metro.identity.as_ref().unwrap().started_at, LSTART);
@@ -145,7 +146,7 @@ fn ios_prepare_happy_path_produces_ready_receipt_and_record() {
         .iter()
         .find(|c| c.label == "simctl-create")
         .unwrap();
-    assert_eq!(create.args[2], format!("rn-qa-{}", receipt.run_id));
+    assert_eq!(create.args[2], format!("qaren-{}", receipt.run_id));
     let build = mock
         .calls
         .iter()
@@ -170,7 +171,7 @@ fn android_prepare_happy_path_leases_tunnels_and_pins_serial() {
     mock.expect_run("lsof", free_port()); // metro port
     mock.expect_run("lsof", free_port()); // adb server port
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run(
@@ -184,8 +185,8 @@ fn android_prepare_happy_path_leases_tunnels_and_pins_serial() {
     // MockRunner's clock is fixed until the first sleep, so the run id (and
     // therefore the echoed lease holder) is deterministic.
     let expected_holder = format!(
-        "rn-qa-nuc-android-{}",
-        rn_qa::timefmt::compact_utc(1_770_000_000_000)
+        "qaren-nuc-android-{}",
+        qaren::timefmt::compact_utc(1_770_000_000_000)
     );
     mock.expect_run(
         "~/bin/android-farm start 1",
@@ -276,7 +277,7 @@ fn android_prepare_happy_path_leases_tunnels_and_pins_serial() {
     assert_eq!(device.farm_slot, Some(1));
     assert_eq!(
         device.farm_lease_holder.as_deref(),
-        Some(format!("rn-qa-{}", receipt.run_id).as_str())
+        Some(format!("qaren-{}", receipt.run_id).as_str())
     );
     assert_eq!(device.remote_serial.as_deref(), Some("emulator-5554"));
     assert_eq!(device.local_adb_serial.as_deref(), Some("127.0.0.1:5555"));
@@ -286,7 +287,7 @@ fn android_prepare_happy_path_leases_tunnels_and_pins_serial() {
     assert_eq!(record.phase, Phase::Ready);
     assert_eq!(
         record.resources.farm.as_ref().unwrap().holder,
-        format!("rn-qa-{}", receipt.run_id)
+        format!("qaren-{}", receipt.run_id)
     );
     assert!(record
         .resources
@@ -371,7 +372,17 @@ fn occupied_metro_port_fails_before_any_allocation() {
         FailureCode::MetroPortOccupied
     );
     assert_eq!(receipt.run_id, "none", "no run may exist before allocation");
-    assert!(!repo.join(".rn-qa").exists());
+    let mut entries: Vec<String> = std::fs::read_dir(&repo)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    entries.sort();
+    assert_eq!(
+        entries,
+        ["scenario.yaml", "test-app"],
+        "no run dir may exist"
+    );
 }
 
 #[test]
@@ -387,7 +398,7 @@ fn android_prepare_refuses_leased_slot_and_records_failure() {
     mock.expect_run("lsof", free_port()); // metro port
     mock.expect_run("lsof", free_port()); // adb server port
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run(
@@ -435,7 +446,7 @@ fn android_prepare_refuses_unleased_but_running_emulator() {
     mock.expect_run("lsof", free_port()); // metro port
     mock.expect_run("lsof", free_port()); // adb server port
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run(
@@ -477,7 +488,7 @@ fn script_android_through_farm_status(
     mock.expect_run("lsof", free_port()); // metro port
     mock.expect_run("lsof", free_port()); // adb server port
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("~/bin/android-farm status", CmdOutput::success(slot_line));
@@ -534,8 +545,8 @@ fn android_prepare_refuses_foreign_listener_on_tunnel_port() {
     script_android_through_farm_status(&mut mock, &repo, FREE_SLOT_LINE);
     mock.expect_run("lsof", free_port()); // tunnel port preflight: free
     let expected_holder = format!(
-        "rn-qa-nuc-android-{}",
-        rn_qa::timefmt::compact_utc(1_770_000_000_000)
+        "qaren-nuc-android-{}",
+        qaren::timefmt::compact_utc(1_770_000_000_000)
     );
     mock.expect_run(
         "~/bin/android-farm start 1",
@@ -598,8 +609,8 @@ fn android_prepare_refuses_foreign_listener_on_adb_server_port() {
     script_android_through_farm_status(&mut mock, &repo, FREE_SLOT_LINE);
     mock.expect_run("lsof", free_port()); // tunnel port preflight: free
     let expected_holder = format!(
-        "rn-qa-nuc-android-{}",
-        rn_qa::timefmt::compact_utc(1_770_000_000_000)
+        "qaren-nuc-android-{}",
+        qaren::timefmt::compact_utc(1_770_000_000_000)
     );
     mock.expect_run(
         "~/bin/android-farm start 1",
@@ -679,8 +690,8 @@ fn android_prepare_fails_fast_when_the_tunnel_dies_before_listening() {
     script_android_through_farm_status(&mut mock, &repo, FREE_SLOT_LINE);
     mock.expect_run("lsof", free_port()); // tunnel port preflight: free
     let expected_holder = format!(
-        "rn-qa-nuc-android-{}",
-        rn_qa::timefmt::compact_utc(1_770_000_000_000)
+        "qaren-nuc-android-{}",
+        qaren::timefmt::compact_utc(1_770_000_000_000)
     );
     mock.expect_run(
         "~/bin/android-farm start 1",
@@ -739,8 +750,8 @@ fn vendor_key_is_recorded_before_the_adb_server_spawns() {
     script_android_through_farm_status(&mut mock, &repo, FREE_SLOT_LINE);
     mock.expect_run("lsof", free_port());
     let expected_holder = format!(
-        "rn-qa-nuc-android-{}",
-        rn_qa::timefmt::compact_utc(1_770_000_000_000)
+        "qaren-nuc-android-{}",
+        qaren::timefmt::compact_utc(1_770_000_000_000)
     );
     mock.expect_run(
         "~/bin/android-farm start 1",
@@ -803,8 +814,8 @@ struct RecordProbeRunner {
     observed: Option<String>,
 }
 
-impl rn_qa::exec::Runner for RecordProbeRunner {
-    fn run(&mut self, spec: &rn_qa::exec::CmdSpec) -> CmdOutput {
+impl qaren::exec::Runner for RecordProbeRunner {
+    fn run(&mut self, spec: &qaren::exec::CmdSpec) -> CmdOutput {
         if spec.label == self.probe_label {
             self.observed = std::fs::read_to_string(RunRecord::path(&self.repo, &self.run_id)).ok();
         }
@@ -812,10 +823,17 @@ impl rn_qa::exec::Runner for RecordProbeRunner {
     }
     fn spawn_group(
         &mut self,
-        spec: &rn_qa::exec::CmdSpec,
+        spec: &qaren::exec::CmdSpec,
         log_path: &std::path::Path,
     ) -> std::io::Result<Spawned> {
         self.inner.spawn_group(spec, log_path)
+    }
+    fn spawn_piped(
+        &mut self,
+        spec: &qaren::exec::CmdSpec,
+        stderr_log: &std::path::Path,
+    ) -> std::io::Result<qaren::exec::PipedChild> {
+        self.inner.spawn_piped(spec, stderr_log)
     }
     fn sleep(&mut self, duration: std::time::Duration) {
         self.inner.sleep(duration)
@@ -835,7 +853,7 @@ fn prepare_refuses_preexisting_run_dir_without_clobbering() {
     // MockRunner's clock is frozen, so the run id is deterministic.
     let run_id = format!(
         "ios-simulator-{}",
-        rn_qa::timefmt::compact_utc(1_770_000_000_000)
+        qaren::timefmt::compact_utc(1_770_000_000_000)
     );
     let run_dir = RunRecord::run_dir(&repo, &run_id);
     std::fs::create_dir_all(&run_dir).unwrap();
@@ -865,7 +883,7 @@ fn farm_lease_is_recorded_before_start_command() {
     let sdk = android_sdk(&repo);
     let run_id = format!(
         "nuc-android-{}",
-        rn_qa::timefmt::compact_utc(1_770_000_000_000)
+        qaren::timefmt::compact_utc(1_770_000_000_000)
     );
 
     let mut mock = MockRunner::new();
@@ -903,7 +921,7 @@ fn farm_lease_is_recorded_before_start_command() {
         .resources
         .farm
         .expect("the pending lease must be durable before farm start runs");
-    assert_eq!(farm.holder, format!("rn-qa-{run_id}"));
+    assert_eq!(farm.holder, format!("qaren-{run_id}"));
     assert_eq!(farm.slot, 1);
     assert_eq!(farm.remote_serial, "emulator-5554");
     assert_eq!(farm.adb_port, 5555);
@@ -920,14 +938,14 @@ fn simulator_allocation_is_recorded_before_create() {
     let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
     let run_id = format!(
         "ios-simulator-{}",
-        rn_qa::timefmt::compact_utc(1_770_000_000_000)
+        qaren::timefmt::compact_utc(1_770_000_000_000)
     );
 
     let mut mock = MockRunner::new();
     script_validation(&mut mock, &repo, IOS_TOOLS);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::failed(1, "boom"));
@@ -950,7 +968,7 @@ fn simulator_allocation_is_recorded_before_create() {
         .resources
         .ios_simulator
         .expect("the pending allocation must be durable before simctl create runs");
-    assert_eq!(pending.name, format!("rn-qa-{run_id}"));
+    assert_eq!(pending.name, format!("qaren-{run_id}"));
     assert_eq!(pending.udid, "", "no udid exists before create returns");
     let record = RunRecord::load(&repo, &run_id).unwrap();
     let sim = record
@@ -970,7 +988,7 @@ fn candidate_drift_during_build_fails_prepare() {
     script_validation(&mut mock, &repo, IOS_TOOLS);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
@@ -1070,7 +1088,7 @@ fn candidate_dirty_drift_during_build_fails_prepare() {
     script_validation(&mut mock, &repo, IOS_TOOLS);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
@@ -1121,7 +1139,7 @@ fn candidate_dirty_content_drift_during_build_fails_prepare() {
     script_validation_porcelain(&mut mock, &repo, IOS_TOOLS, " M test-app/App.tsx\0");
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
@@ -1178,7 +1196,7 @@ fn script_prepare_to_recheck(
     script_validation_porcelain(mock, repo, IOS_TOOLS, porcelain_at_validation);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
@@ -1213,29 +1231,29 @@ fn script_prepare_to_recheck(
 }
 
 // Regression for the external-worktree self-drift bug: prepare writes
-// .rn-qa/runs/<run-id>/ into the candidate worktree after the cleanliness
-// snapshot, so on a clean external project that does not gitignore .rn-qa
-// the recheck used to see "?? .rn-qa/" and false-trigger CANDIDATE_DRIFTED.
+// .qaren/runs/<run-id>/ into the candidate worktree after the cleanliness
+// snapshot, so on a clean external project that does not gitignore .qaren
+// the recheck used to see "?? .qaren/" and false-trigger CANDIDATE_DRIFTED.
 #[test]
-fn rn_qa_state_created_during_build_is_not_candidate_drift() {
+fn qaren_state_created_during_build_is_not_candidate_drift() {
     let repo = common::temp_repo();
     let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
-    script_prepare_to_recheck(&mut mock, &repo, "", "?? .rn-qa/\0");
+    script_prepare_to_recheck(&mut mock, &repo, "", "?? .qaren/\0");
     mock.expect_run("ls-files", CmdOutput::success(""));
 
     let receipt = prepare(&mut mock, &prepare_args(&scenario_path, false, None));
     assert_eq!(
         receipt.result,
         ReceiptResult::Ready,
-        "rn-qa's own state dir must not count as drift: {:?}",
+        "qaren's own state dir must not count as drift: {:?}",
         receipt.failure
     );
 }
 
 #[test]
-fn preexisting_rn_qa_state_does_not_mark_the_candidate_dirty() {
+fn preexisting_qaren_state_does_not_mark_the_candidate_dirty() {
     let repo = common::temp_repo();
     let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
 
@@ -1243,8 +1261,8 @@ fn preexisting_rn_qa_state_does_not_mark_the_candidate_dirty() {
     script_prepare_to_recheck(
         &mut mock,
         &repo,
-        "?? .rn-qa/\0",
-        "?? .rn-qa/runs/some-run/run.json\0",
+        "?? .qaren/\0",
+        "?? .qaren/runs/some-run/run.json\0",
     );
     mock.expect_run("ls-files", CmdOutput::success(""));
 
@@ -1258,41 +1276,41 @@ fn preexisting_rn_qa_state_does_not_mark_the_candidate_dirty() {
     let candidate = receipt.candidate.unwrap();
     assert!(
         !candidate.git_dirty,
-        "leftover rn-qa state from an earlier run is not candidate dirt"
+        "leftover qaren state from an earlier run is not candidate dirt"
     );
 }
 
 #[test]
-fn untracked_file_outside_rn_qa_state_during_build_fails_prepare() {
+fn untracked_file_outside_qaren_state_during_build_fails_prepare() {
     let repo = common::temp_repo();
     let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
-    script_prepare_to_recheck(&mut mock, &repo, "", "?? .rn-qa/\0?? stray.txt\0");
+    script_prepare_to_recheck(&mut mock, &repo, "", "?? .qaren/\0?? stray.txt\0");
 
     let receipt = prepare(&mut mock, &prepare_args(&scenario_path, false, None));
     assert_eq!(receipt.result, ReceiptResult::Failed);
     assert_eq!(
         receipt.failure.as_ref().unwrap().code,
         FailureCode::CandidateDrifted,
-        "an untracked file outside .rn-qa is real drift even next to rn-qa state"
+        "an untracked file outside .qaren is real drift even next to qaren state"
     );
 }
 
 #[test]
-fn tracked_modification_alongside_rn_qa_state_during_build_fails_prepare() {
+fn tracked_modification_alongside_qaren_state_during_build_fails_prepare() {
     let repo = common::temp_repo();
     let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
-    script_prepare_to_recheck(&mut mock, &repo, "", "?? .rn-qa/\0 M test-app/App.tsx\0");
+    script_prepare_to_recheck(&mut mock, &repo, "", "?? .qaren/\0 M test-app/App.tsx\0");
 
     let receipt = prepare(&mut mock, &prepare_args(&scenario_path, false, None));
     assert_eq!(receipt.result, ReceiptResult::Failed);
     assert_eq!(
         receipt.failure.as_ref().unwrap().code,
         FailureCode::CandidateDrifted,
-        "a tracked modification is real drift even next to rn-qa state"
+        "a tracked modification is real drift even next to qaren state"
     );
 }
 
@@ -1315,7 +1333,7 @@ fn dry_run_plans_without_allocating() {
         .iter()
         .any(|c| c.contains("expo run:ios")));
     assert!(
-        !repo.join(".rn-qa").exists(),
+        !repo.join(".qaren").exists(),
         "dry-run must not create run records"
     );
 }
@@ -1348,7 +1366,7 @@ fn build_process_death_fails_with_log_evidence() {
     script_validation(&mut mock, &repo, IOS_TOOLS);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
@@ -1407,7 +1425,7 @@ fn recording_a_build_prunes_older_fingerprint_artifacts_for_the_same_app() {
     std::fs::create_dir_all(products.join("testapp.app")).unwrap();
     std::fs::write(products.join("testapp.app").join("binary"), b"native bits").unwrap();
 
-    let artifacts = rn_qa::buildplan::cache_dir(&repo)
+    let artifacts = qaren::buildplan::cache_dir(&repo)
         .join("artifacts")
         .join("ios");
     let stale = artifacts.join(format!("com.rndevagent.testapp-{}", "a".repeat(16)));
@@ -1422,7 +1440,7 @@ fn recording_a_build_prunes_older_fingerprint_artifacts_for_the_same_app() {
     script_validation(&mut mock, &repo, IOS_TOOLS);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
@@ -1466,8 +1484,8 @@ fn recording_a_build_prunes_older_fingerprint_artifacts_for_the_same_app() {
         receipt.failure
     );
 
-    let state = match rn_qa::buildplan::load_state(&repo, "ios", "com.rndevagent.testapp") {
-        rn_qa::buildplan::StateStatus::Loaded(state) => state,
+    let state = match qaren::buildplan::load_state(&repo, "ios", "com.rndevagent.testapp") {
+        qaren::buildplan::StateStatus::Loaded(state) => state,
         other => panic!("expected recorded cache state, got {other:?}"),
     };
     let cached = state.artifact.as_ref().unwrap();
@@ -1508,7 +1526,7 @@ fn android_build_route_records_install_provenance_from_the_hashed_apk() {
     mock.expect_run("lsof", free_port());
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run(
@@ -1519,8 +1537,8 @@ fn android_build_route_records_install_provenance_from_the_hashed_apk() {
     );
     mock.expect_run("lsof", free_port());
     let expected_holder = format!(
-        "rn-qa-nuc-android-{}",
-        rn_qa::timefmt::compact_utc(1_770_000_000_000)
+        "qaren-nuc-android-{}",
+        qaren::timefmt::compact_utc(1_770_000_000_000)
     );
     mock.expect_run(
         "~/bin/android-farm start 1",
@@ -1621,10 +1639,10 @@ fn android_build_route_records_install_provenance_from_the_hashed_apk() {
     assert_eq!(install.via, "expo-run-android");
     assert_eq!(
         install.artifact.sha256,
-        rn_qa::candidate::sha256_hex(b"apk bits"),
+        qaren::candidate::sha256_hex(b"apk bits"),
         "the provenance hash is the hash of the artifact this run built and installed"
     );
-    assert_eq!(install.artifact.kind, rn_qa::buildplan::ArtifactKind::Apk);
+    assert_eq!(install.artifact.kind, qaren::buildplan::ArtifactKind::Apk);
     assert!(!install.installed_at.is_empty());
     assert!(install.removal.is_none());
 }

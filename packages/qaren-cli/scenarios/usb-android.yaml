@@ -1,12 +1,12 @@
 # Physical USB Android phone by explicit serial. Replace `serial` with the
 # exact adb transport serial from the authoritative allocation record for
 # the device assigned to you (the same value a scoped `adb -s <serial>`
-# would need) — rn-qa refuses emulator and loopback serial forms here, and
+# would need) — qaren refuses emulator and loopback serial forms here, and
 # never discovers or selects a device it was not explicitly given. The
 # placeholder below deliberately fails validation so an unedited scenario
 # refuses before allocating anything. The device claim is exclusive per
 # host; a contended claim is a structured refusal.
-schema: rn-qa/1
+schema: qaren/1
 name: usb-android
 platform: android
 candidate:

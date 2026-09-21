@@ -1,7 +1,7 @@
 mod common;
 
-use rn_qa::candidate::{resolve, verify_unchanged_with};
-use rn_qa::exec::{CmdSpec, RealRunner, Runner};
+use qaren::candidate::{resolve, verify_unchanged_with};
+use qaren::exec::{CmdSpec, RealRunner, Runner};
 use std::path::Path;
 
 fn git(repo: &Path, args: &[&str]) {
@@ -36,25 +36,19 @@ fn check_integration_drift(extra_path: Option<&str>, tracked: bool) -> bool {
         ],
     );
     let scenario = common::scenario_from(
-        "schema: rn-qa/1\nname: drift\nplatform: ios\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nbuild:\n  owner: qaren\nios:\n  device_type: iPhone\n  runtime: iOS\n",
+        "schema: qaren/1\nname: drift\nplatform: ios\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nbuild:\n  owner: qaren\nios:\n  device_type: iPhone\n  runtime: iOS\n",
     );
     let mut runner = RealRunner::new();
     let baseline = resolve(&mut runner, &scenario, &repo).unwrap();
     assert!(!baseline.git_dirty);
-    write(
-        ".qaren/integration/rn-session-adapter.cjs",
-        "integration\n",
-    );
+    write(".qaren/integration/rn-session-adapter.cjs", "integration\n");
     assert!(verify_unchanged_with(&mut runner, &baseline, true).is_ok());
     let integrated_baseline = resolve(&mut runner, &scenario, &repo).unwrap();
     assert_eq!(
         baseline.worktree_fingerprint,
         integrated_baseline.worktree_fingerprint
     );
-    write(
-        ".qaren/integration/rn-session-metro.cjs",
-        "integration\n",
-    );
+    write(".qaren/integration/rn-session-metro.cjs", "integration\n");
     if let Some(path) = extra_path {
         write(path, "changed\n");
     }

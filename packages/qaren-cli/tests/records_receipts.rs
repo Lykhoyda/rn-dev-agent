@@ -1,8 +1,8 @@
 mod common;
 
-use rn_qa::failure::FailureCode;
-use rn_qa::receipt::{Receipt, ReceiptResult, RECEIPT_SCHEMA};
-use rn_qa::runrecord::{validate_run_id, Phase, RunRecord, RUN_SCHEMA};
+use qaren::failure::FailureCode;
+use qaren::receipt::{Receipt, ReceiptResult, RECEIPT_SCHEMA};
+use qaren::runrecord::{validate_run_id, Phase, RunRecord, RUN_SCHEMA};
 
 #[test]
 fn run_record_round_trips() {
@@ -13,16 +13,16 @@ fn run_record_round_trips() {
         "roundtrip1",
         Phase::Ready,
     );
-    record.resources.ios_simulator = Some(rn_qa::runrecord::IosSimResource {
+    record.resources.ios_simulator = Some(qaren::runrecord::IosSimResource {
         udid: "AAAA-1111".to_string(),
-        name: "rn-qa-roundtrip1".to_string(),
+        name: "qaren-roundtrip1".to_string(),
         device_type: "dt".to_string(),
         runtime: "rt".to_string(),
     });
-    record.resources.metro = Some(rn_qa::runrecord::MetroResource {
+    record.resources.metro = Some(qaren::runrecord::MetroResource {
         port: 8791,
         endpoint: "http://127.0.0.1:8791".to_string(),
-        spawned: rn_qa::exec::Spawned {
+        spawned: qaren::exec::Spawned {
             pid: 5000,
             pgid: 5000,
         },
@@ -39,7 +39,7 @@ fn run_record_round_trips() {
     let sim = loaded.resources.ios_simulator.as_ref().unwrap();
     assert_eq!(
         (sim.udid.as_str(), sim.name.as_str()),
-        ("AAAA-1111", "rn-qa-roundtrip1")
+        ("AAAA-1111", "qaren-roundtrip1")
     );
     let metro = loaded.resources.metro.as_ref().unwrap();
     assert_eq!(metro.spawned.pgid, 5000);
@@ -61,7 +61,7 @@ fn load_rejects_embedded_run_id_mismatch() {
     );
     record.save(&repo).unwrap();
     let src = RunRecord::path(&repo, "realid");
-    let tampered_dir = repo.join(".rn-qa").join("runs").join("otherid");
+    let tampered_dir = repo.join("otherid");
     std::fs::create_dir_all(&tampered_dir).unwrap();
     std::fs::copy(&src, tampered_dir.join("run.json")).unwrap();
     let failure = RunRecord::load(&repo, "otherid").unwrap_err();
@@ -71,7 +71,7 @@ fn load_rejects_embedded_run_id_mismatch() {
 #[test]
 fn load_rejects_corrupt_and_foreign_schema_records() {
     let repo = common::temp_repo();
-    let dir = repo.join(".rn-qa").join("runs").join("corrupt1");
+    let dir = repo.join("corrupt1");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("run.json"), "{not json").unwrap();
     assert_eq!(
@@ -89,7 +89,7 @@ fn load_rejects_corrupt_and_foreign_schema_records() {
     let path = RunRecord::path(&repo, "schema1");
     let body = std::fs::read_to_string(&path)
         .unwrap()
-        .replace(RUN_SCHEMA, "rn-qa-run/999");
+        .replace(RUN_SCHEMA, "qaren-run/999");
     std::fs::write(&path, body).unwrap();
     assert_eq!(
         RunRecord::load(&repo, "schema1").unwrap_err().code,
@@ -159,7 +159,7 @@ fn failure_receipts_carry_bounded_codes_and_next_action() {
         "ready",
         "2026-08-12T16:00:00Z".to_string(),
     );
-    receipt.failure = Some(rn_qa::failure::Failure::new(
+    receipt.failure = Some(qaren::failure::Failure::new(
         "cleanup",
         FailureCode::OwnershipUnproven,
         "simulator renamed",

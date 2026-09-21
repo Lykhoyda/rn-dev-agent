@@ -41,10 +41,21 @@ pub enum FailureCode {
     HandoffEvidenceMissing,
     HandoffEvidenceAmbiguous,
     HandoffEvidenceMismatch,
+    DeviceBusy,
+    PlanUnparseable,
+    NodeUnsupported,
+    DiskBudgetExceeded,
+    PlatformUnsupported,
+    CoreSpawnFailed,
+    CoreResultMissing,
+    WalkDeadlineExceeded,
+    PlanStepFailed,
+    MetroOriginMismatch,
+    CoreRefused,
 }
 
 impl FailureCode {
-    // Refusals (exit 4): nothing broke — rn-qa declined to proceed, adopt a
+    // Refusals (exit 4): nothing broke — qaren declined to proceed, adopt a
     // claimed resource, or bind unprovable handoff evidence.
     pub fn is_refusal(&self) -> bool {
         matches!(
@@ -57,6 +68,13 @@ impl FailureCode {
                 | FailureCode::HandoffEvidenceMissing
                 | FailureCode::HandoffEvidenceAmbiguous
                 | FailureCode::HandoffEvidenceMismatch
+                | FailureCode::DeviceBusy
+                | FailureCode::PlanUnparseable
+                | FailureCode::NodeUnsupported
+                | FailureCode::DiskBudgetExceeded
+                | FailureCode::PlatformUnsupported
+                | FailureCode::MetroOriginMismatch
+                | FailureCode::CoreRefused
         )
     }
 }

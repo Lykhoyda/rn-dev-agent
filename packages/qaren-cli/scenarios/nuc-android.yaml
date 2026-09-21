@@ -1,4 +1,4 @@
-schema: rn-qa/1
+schema: qaren/1
 name: nuc-android
 platform: android
 candidate:

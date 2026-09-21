@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
-use rn_qa::candidate::Candidate;
-use rn_qa::exec::{CmdOutput, MockRunner};
-use rn_qa::runrecord::{Phase, PidIdentity, RunRecord, RUN_SCHEMA};
-use rn_qa::scenario::Scenario;
+use qaren::candidate::Candidate;
+use qaren::exec::{CmdOutput, MockRunner};
+use qaren::runrecord::{Phase, PidIdentity, RunRecord, RUN_SCHEMA};
+use qaren::scenario::Scenario;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -11,7 +11,7 @@ static COUNTER: AtomicU32 = AtomicU32::new(0);
 
 pub fn temp_repo() -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "rn-qa-test-{}-{}",
+        "qaren-test-{}-{}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
@@ -39,13 +39,13 @@ pub fn script_tracked_file_identity(mock: &mut MockRunner, path: &str, mode: &st
 
 pub fn ios_scenario_yaml(port: u16) -> String {
     format!(
-        "schema: rn-qa/1\nname: ios-simulator\nplatform: ios\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nmetro:\n  port: {port}\nios:\n  device_type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro\n  runtime: com.apple.CoreSimulator.SimRuntime.iOS-26-4\n"
+        "schema: qaren/1\nname: ios-simulator\nplatform: ios\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nmetro:\n  port: {port}\nios:\n  device_type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro\n  runtime: com.apple.CoreSimulator.SimRuntime.iOS-26-4\n"
     )
 }
 
 pub fn android_scenario_yaml(port: u16) -> String {
     format!(
-        "schema: rn-qa/1\nname: nuc-android\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nmetro:\n  port: {port}\nandroid:\n  ssh_host: nuc\n  farm_path: bin/android-farm\n  slot: 1\n  adb_server_port: 15037\n"
+        "schema: qaren/1\nname: nuc-android\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nmetro:\n  port: {port}\nandroid:\n  ssh_host: nuc\n  farm_path: bin/android-farm\n  slot: 1\n  adb_server_port: 15037\n"
     )
 }
 
@@ -84,15 +84,15 @@ pub fn base_record(
             git_sha: "b".repeat(40),
             git_dirty: false,
             lockfile_sha256: Some("c".repeat(64)),
-            worktree_fingerprint: Some(rn_qa::candidate::worktree_fingerprint("")),
+            worktree_fingerprint: Some(qaren::candidate::worktree_fingerprint("")),
         },
         phase,
         prepare: Some(identity(999, "Wed Aug 12 15:00:00 2026")),
         // Only phases reached after build planning carry a recorded plan,
         // matching what production records can actually contain.
         build: matches!(phase, Phase::Building | Phase::Ready | Phase::Cleaned).then(|| {
-            rn_qa::buildplan::BuildPlan {
-                decision: rn_qa::buildplan::BuildDecision::Clean,
+            qaren::buildplan::BuildPlan {
+                decision: qaren::buildplan::BuildDecision::Clean,
                 fingerprint: format!("rnfp1:{}", "e".repeat(64)),
                 reason:
                     "no native cache state recorded for this worktree/app; compatibility is unprovable"

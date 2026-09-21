@@ -1,3 +1,4 @@
+import { DEVICE_LEASE_REQUIRED, leaseFromEnvironment } from './lease-env.js';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
@@ -579,18 +580,15 @@ interface RunnerAuthority {
 }
 
 function runnerAuthorityFromEnvironment(required: boolean): RunnerAuthority | null {
-  const sessionId = process.env.QAREN_SESSION_ID;
-  const claimEpoch = Number(process.env.QAREN_CLAIM_EPOCH);
-  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1) {
+  const lease = leaseFromEnvironment();
+  if (!lease) {
     if (!required) return null;
-    throw new Error(
-      'SESSION_AUTHORITY_REQUIRED: native runner launch requires a fenced qaren session',
-    );
+    throw new Error(DEVICE_LEASE_REQUIRED);
   }
   return {
     instanceId: randomUUID(),
-    sessionId,
-    claimEpoch,
+    sessionId: lease.sessionId,
+    claimEpoch: lease.claimEpoch,
     capability: randomBytes(32).toString('base64url'),
   };
 }

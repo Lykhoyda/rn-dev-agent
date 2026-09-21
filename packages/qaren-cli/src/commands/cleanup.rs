@@ -11,40 +11,43 @@ use std::path::Path;
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Outcome {
+pub(crate) enum Outcome {
     Removed,
     Absent,
+    // A borrowed resource this run never owned; left exactly as found.
+    Kept,
     Refused(String),
     Unresolved(String),
 }
 
 impl Outcome {
-    fn render(&self) -> String {
+    pub(crate) fn render(&self) -> String {
         match self {
             Outcome::Removed => "removed".to_string(),
             Outcome::Absent => "absent".to_string(),
+            Outcome::Kept => "kept".to_string(),
             Outcome::Refused(reason) => format!("refused: {reason}"),
             Outcome::Unresolved(reason) => format!("unresolved: {reason}"),
         }
     }
 
-    fn clean(&self) -> bool {
-        matches!(self, Outcome::Removed | Outcome::Absent)
+    pub(crate) fn clean(&self) -> bool {
+        matches!(self, Outcome::Removed | Outcome::Absent | Outcome::Kept)
     }
 }
 
-pub fn cleanup(runner: &mut dyn Runner, repo_root: &Path, run_id: &str) -> Receipt {
-    cleanup_with(runner, repo_root, run_id, None)
+pub fn cleanup(runner: &mut dyn Runner, runs_root: &Path, run_id: &str) -> Receipt {
+    cleanup_with(runner, runs_root, run_id, None)
 }
 
 // `remove_app` confirms "<run-id>/<remote-serial>/<app-id>"; None skips uninstall.
 pub fn cleanup_with(
     runner: &mut dyn Runner,
-    repo_root: &Path,
+    runs_root: &Path,
     run_id: &str,
     remove_app: Option<&str>,
 ) -> Receipt {
-    let mut record = match RunRecord::load(repo_root, run_id) {
+    let mut record = match RunRecord::load(runs_root, run_id) {
         Ok(record) => record,
         Err(failure) => {
             let mut receipt = Receipt::new(
@@ -97,10 +100,12 @@ pub fn cleanup_with(
     match record.scenario.platform {
         Platform::Ios => {
             if let Some(sim) = record.resources.ios_simulator.clone() {
-                outcomes.push((
-                    "simulator".to_string(),
-                    cleanup_simulator(runner, &sim.udid, &sim.name),
-                ));
+                let outcome = if record.resources.device_borrowed {
+                    Outcome::Kept
+                } else {
+                    cleanup_simulator(runner, &sim.udid, &sim.name)
+                };
+                outcomes.push(("simulator".to_string(), outcome));
             }
         }
         Platform::Android => {
@@ -116,7 +121,7 @@ pub fn cleanup_with(
                 {
                     install.removal = Some(removal);
                     // The removal must be durable before any lease release.
-                    if let Err(failure) = record.save(repo_root) {
+                    if let Err(failure) = record.save(runs_root) {
                         removal_evidence_persisted = false;
                         outcome = Outcome::Unresolved(format!(
                             "{} but the removal record could not be persisted: {}",
@@ -207,7 +212,7 @@ pub fn cleanup_with(
             // Keyed off its own resource, not the server: prepare can die
             // between writing the key and spawning the server.
             if let Some(vendor_key) = record.resources.adb_vendor_key.clone() {
-                let run_dir = RunRecord::run_dir(repo_root, run_id);
+                let run_dir = RunRecord::run_dir(runs_root, run_id);
                 let key_normal = vendor_key
                     .components()
                     .all(|c| !matches!(c, std::path::Component::ParentDir));
@@ -316,6 +321,13 @@ pub fn cleanup_with(
         }
     }
 
+    if let Some(lease) = record.resources.lease.clone() {
+        outcomes.push((
+            "device_lease".to_string(),
+            release_lease_outcome(crate::lease::release(&lease)),
+        ));
+    }
+
     if let Some(lock) = record.resources.build_lock.clone() {
         let outcome =
             match crate::buildplan::release_lock(&lock.lock_dir, &lock.holder, &record.run_id) {
@@ -355,7 +367,7 @@ pub fn cleanup_with(
     } else if remove_app.is_some() && record.phase == Phase::Cleaned {
         record.phase = Phase::Failed;
     }
-    let save_result = record.save(repo_root);
+    let save_result = record.save(runs_root);
     // A cleaned verdict that could not be made durable is not a cleaned run:
     // the next status would read the stale phase and contradict this receipt.
     // The receipt must also carry the durable phase, not the in-memory one.
@@ -419,7 +431,7 @@ pub fn cleanup_with(
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            "resolve the listed resources manually; rn-qa will not touch them",
+            "resolve the listed resources manually; qaren will not touch them",
         )),
         ReceiptResult::Failed => Some(Failure::new(
             "cleanup",
@@ -433,7 +445,7 @@ pub fn cleanup_with(
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            format!("re-run rn-qa cleanup {run_id} --json"),
+            format!("re-run qaren cleanup {run_id} --json"),
         )),
         _ => None,
     };
@@ -449,7 +461,7 @@ pub fn cleanup_with(
                 "cleanup outcomes were computed but the run record could not be persisted: {}",
                 save_failure.detail
             ),
-            format!("fix .rn-qa permissions, then re-run rn-qa cleanup {run_id} --json"),
+            format!("fix .qaren permissions, then re-run qaren cleanup {run_id} --json"),
         ));
     }
     receipt.next_action = match result {
@@ -461,7 +473,7 @@ pub fn cleanup_with(
             .unwrap_or_default(),
     };
     receipt.commands_executed = runner.commands_executed();
-    super::attach_artifacts(&mut receipt, repo_root, &record);
+    super::attach_artifacts(&mut receipt, runs_root, &record);
     receipt
 }
 
@@ -842,6 +854,17 @@ fn remove_app_install(
     (outcome, Some(removal))
 }
 
+// A foreign holder proves this run's Strict claim never succeeded, so there is nothing of ours to release.
+pub(crate) fn release_lease_outcome(outcome: crate::buildplan::ReleaseOutcome) -> Outcome {
+    match outcome {
+        crate::buildplan::ReleaseOutcome::Removed => Outcome::Removed,
+        crate::buildplan::ReleaseOutcome::Absent => Outcome::Absent,
+        crate::buildplan::ReleaseOutcome::Foreign(_) => Outcome::Absent,
+        crate::buildplan::ReleaseOutcome::Refused(reason) => Outcome::Refused(reason),
+        crate::buildplan::ReleaseOutcome::Unresolved(reason) => Outcome::Unresolved(reason),
+    }
+}
+
 fn kill_group(runner: &mut dyn Runner, pgid: i32, signal: &str) {
     runner.run(&CmdSpec::new(
         "kill-group",
@@ -854,7 +877,7 @@ fn kill_group(runner: &mut dyn Runner, pgid: i32, signal: &str) {
 // Ownership proof for a spawned group: either the recorded leader identity still
 // matches, or the recorded port is owned by a pid whose pgid equals the recorded
 // pgid. Anything else is absent (dead) or refused (unprovable).
-fn cleanup_process_group(
+pub(crate) fn cleanup_process_group(
     runner: &mut dyn Runner,
     identity: Option<&PidIdentity>,
     pgid: i32,

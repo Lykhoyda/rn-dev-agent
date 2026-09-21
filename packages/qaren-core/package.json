@@ -13,7 +13,8 @@
     "test:contract": "yarn build:test && node --test test/unit/gh-383-protocol-sync.test.js test/unit/gh-418-command-surface-sync.test.js",
     "test:integration": "yarn build:test && node --test 'test/integration/*.test.js' 'test/integration/**/*.test.js' 'test/integration/*.test.ts' 'test/integration/**/*.test.ts'",
     "test:all": "yarn build:test && node --test 'test/unit/*.test.js' 'test/unit/**/*.test.js' 'test/unit/*.test.ts' 'test/unit/**/*.test.ts' 'test/integration/*.test.js' 'test/integration/**/*.test.js' 'test/integration/*.test.ts' 'test/integration/**/*.test.ts'",
-    "build:test": "yarn build"
+    "build:test": "yarn build",
+    "qa:walk": "node dist/qa/walk.js"
   },
   "dependencies": {
     "ws": "^8.18.0",

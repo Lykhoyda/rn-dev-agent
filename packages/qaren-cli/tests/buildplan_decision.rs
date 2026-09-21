@@ -1,10 +1,10 @@
-use rn_qa::buildplan::{
+use qaren::buildplan::{
     claim_lock, decide, lock_dir, release_lock, ArtifactKind, ArtifactStatus, BuildDecision,
     CachedArtifact, DecisionInputs, LockHolder, LockOutcome, LockPolicy, NativeCacheState,
     ReleaseOutcome, StateStatus, CACHE_SCHEMA,
 };
-use rn_qa::exec::{CmdOutput, MockRunner};
-use rn_qa::runrecord::PidIdentity;
+use qaren::exec::{CmdOutput, MockRunner};
+use qaren::runrecord::PidIdentity;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -12,7 +12,7 @@ static COUNTER: AtomicU32 = AtomicU32::new(0);
 
 fn temp_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "rn-qa-lock-test-{}-{}",
+        "qaren-lock-test-{}-{}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
@@ -281,7 +281,7 @@ fn strict_claim_refuses_even_a_dead_holder() {
     let dead = PidIdentity {
         pid: 4242,
         started_at: "Wed Aug 13 10:00:00 2026".to_string(),
-        command: "rn-qa prepare".to_string(),
+        command: "qaren prepare".to_string(),
     };
     assert!(matches!(
         claim_lock(
@@ -315,7 +315,7 @@ fn adopt_dead_policy_takes_over_a_dead_holder_but_not_a_live_one() {
     let identity = PidIdentity {
         pid: 4242,
         started_at: "Wed Aug 13 10:00:00 2026".to_string(),
-        command: "rn-qa prepare".to_string(),
+        command: "qaren prepare".to_string(),
     };
     assert!(matches!(
         claim_lock(
@@ -367,26 +367,26 @@ fn release_is_bound_to_holder_and_run_id() {
             &mut mock,
             &root,
             "usb-SER",
-            &holder("rn-qa-run-a", "run-a", None),
+            &holder("qaren-run-a", "run-a", None),
             LockPolicy::Strict
         ),
         LockOutcome::Claimed { .. }
     ));
     let dir = lock_dir(&root, "usb-SER");
     assert!(matches!(
-        release_lock(&dir, "rn-qa-run-a", "run-b"),
+        release_lock(&dir, "qaren-run-a", "run-b"),
         ReleaseOutcome::Foreign(_)
     ));
     assert!(matches!(
-        release_lock(&dir, "rn-qa-run-b", "run-a"),
+        release_lock(&dir, "qaren-run-b", "run-a"),
         ReleaseOutcome::Foreign(_)
     ));
     assert!(matches!(
-        release_lock(&dir, "rn-qa-run-a", "run-a"),
+        release_lock(&dir, "qaren-run-a", "run-a"),
         ReleaseOutcome::Removed
     ));
     assert!(matches!(
-        release_lock(&dir, "rn-qa-run-a", "run-a"),
+        release_lock(&dir, "qaren-run-a", "run-a"),
         ReleaseOutcome::Absent
     ));
 }
@@ -398,7 +398,7 @@ fn release_refuses_an_unreadable_holder_record() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("holder.json"), "not json").unwrap();
     assert!(matches!(
-        release_lock(&dir, "rn-qa-run-a", "run-a"),
+        release_lock(&dir, "qaren-run-a", "run-a"),
         ReleaseOutcome::Refused(_)
     ));
     assert!(dir.exists(), "an ambiguous lock must not be touched");

@@ -2,7 +2,7 @@ use crate::exec::CmdSpec;
 use std::path::Path;
 
 pub fn sim_name(run_id: &str) -> String {
-    format!("rn-qa-{run_id}")
+    format!("qaren-{run_id}")
 }
 
 pub fn create_spec(name: &str, device_type: &str, runtime: &str) -> CmdSpec {
@@ -21,6 +21,52 @@ pub fn bootstatus_spec(udid: &str, deadline_seconds: u64) -> CmdSpec {
         &["simctl", "bootstatus", udid, "-b"],
         deadline_seconds,
     )
+}
+
+pub fn list_booted_spec() -> CmdSpec {
+    CmdSpec::new(
+        "simctl-list-booted",
+        "xcrun",
+        &["simctl", "list", "devices", "booted", "-j"],
+        30,
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootedSim {
+    pub udid: String,
+    pub name: String,
+    pub device_type: String,
+    pub runtime: String,
+}
+
+// Booted iOS simulators only; paired watchOS/tvOS runtimes are not walk targets.
+pub fn parse_booted_sims(list_json: &str) -> Option<Vec<BootedSim>> {
+    let parsed: serde_json::Value = serde_json::from_str(list_json).ok()?;
+    let devices = parsed.get("devices")?.as_object()?;
+    let mut out = Vec::new();
+    for (runtime, list) in devices {
+        if !runtime.contains("SimRuntime.iOS") {
+            continue;
+        }
+        for device in list.as_array()? {
+            if device.get("state").and_then(|s| s.as_str()) != Some("Booted") {
+                continue;
+            }
+            let field = |key: &str| device.get(key).and_then(|v| v.as_str()).unwrap_or("");
+            let sim = BootedSim {
+                udid: field("udid").to_string(),
+                name: field("name").to_string(),
+                device_type: field("deviceTypeIdentifier").to_string(),
+                runtime: runtime.clone(),
+            };
+            if sim.udid.is_empty() || sim.device_type.is_empty() {
+                return None;
+            }
+            out.push(sim);
+        }
+    }
+    Some(out)
 }
 
 pub fn list_devices_spec() -> CmdSpec {

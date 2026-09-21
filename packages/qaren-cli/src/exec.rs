@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::io::{Read, Seek};
+use std::io::{BufRead, BufReader, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -104,9 +105,37 @@ pub struct Spawned {
     pub pgid: i32,
 }
 
+// A child the caller talks to over stdio: its stdin and stdout are pipes, its
+// stderr lands in the given log, and it leads its own process group.
+pub struct PipedChild {
+    pub pid: i32,
+    pub stdin: Box<dyn Write + Send>,
+    pub stdout: Box<dyn BufRead + Send>,
+    pub handle: Box<dyn ChildHandle + Send>,
+}
+
+pub trait ChildHandle {
+    // Some(code) once exited; a signal death reports -1.
+    fn try_wait(&mut self) -> std::io::Result<Option<i32>>;
+    fn kill_group(&mut self);
+}
+
+struct RealChildHandle(std::process::Child);
+
+impl ChildHandle for RealChildHandle {
+    fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
+        Ok(self.0.try_wait()?.map(|s| s.code().unwrap_or(-1)))
+    }
+
+    fn kill_group(&mut self) {
+        kill_group_and_reap(&mut self.0);
+    }
+}
+
 pub trait Runner {
     fn run(&mut self, spec: &CmdSpec) -> CmdOutput;
     fn spawn_group(&mut self, spec: &CmdSpec, log_path: &Path) -> std::io::Result<Spawned>;
+    fn spawn_piped(&mut self, spec: &CmdSpec, stderr_log: &Path) -> std::io::Result<PipedChild>;
     fn sleep(&mut self, duration: Duration);
     fn now_epoch_ms(&self) -> u64;
     // Deadline arithmetic must survive wall-clock adjustments; implementations
@@ -225,6 +254,36 @@ impl Runner for RealRunner {
         Ok(Spawned { pid, pgid: pid })
     }
 
+    fn spawn_piped(&mut self, spec: &CmdSpec, stderr_log: &Path) -> std::io::Result<PipedChild> {
+        use std::os::unix::process::CommandExt;
+        self.executed += 1;
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(stderr_log)?;
+        let mut cmd = Command::new(&spec.program);
+        cmd.args(&spec.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::from(log))
+            .process_group(0);
+        if let Some(dir) = &spec.cwd {
+            cmd.current_dir(dir);
+        }
+        for (k, v) in &spec.env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd.spawn()?;
+        let stdin = child.stdin.take().expect("stdin is piped");
+        let stdout = child.stdout.take().expect("stdout is piped");
+        Ok(PipedChild {
+            pid: child.id() as i32,
+            stdin: Box::new(stdin),
+            stdout: Box::new(BufReader::new(stdout)),
+            handle: Box::new(RealChildHandle(child)),
+        })
+    }
+
     fn sleep(&mut self, duration: Duration) {
         std::thread::sleep(duration);
     }
@@ -245,7 +304,7 @@ impl Runner for RealRunner {
 fn tempfile() -> std::io::Result<std::fs::File> {
     let dir = std::env::temp_dir();
     let name = format!(
-        "rn-qa-cmd-{}-{}",
+        "qaren-cmd-{}-{}",
         std::process::id(),
         crate::timefmt::epoch_ms()
     );
@@ -300,6 +359,43 @@ fn io_failure(started: &Instant, detail: String) -> CmdOutput {
 pub enum MockResult {
     Run(CmdOutput),
     Spawn(std::io::Result<Spawned>, Option<String>),
+    // Scripted stdout for a piped child; `exit` None means it never exits on its own.
+    SpawnPiped {
+        pid: i32,
+        stdout: String,
+        exit: Option<i32>,
+    },
+}
+
+struct MockChildHandle {
+    exit: Option<i32>,
+    killed: Arc<Mutex<bool>>,
+}
+
+impl ChildHandle for MockChildHandle {
+    fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
+        if *self.killed.lock().unwrap() {
+            return Ok(Some(-9));
+        }
+        Ok(self.exit)
+    }
+
+    fn kill_group(&mut self) {
+        *self.killed.lock().unwrap() = true;
+    }
+}
+
+struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+impl Write for SharedWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 pub struct MockExpectation {
@@ -310,6 +406,9 @@ pub struct MockExpectation {
 pub struct MockRunner {
     pub calls: Vec<CmdSpec>,
     pub spawned_logs: Vec<PathBuf>,
+    // Everything written to each piped child's stdin, in spawn order.
+    pub piped_stdin: Vec<Arc<Mutex<Vec<u8>>>>,
+    pub piped_killed: Vec<Arc<Mutex<bool>>>,
     script: VecDeque<MockExpectation>,
     now_ms: u64,
 }
@@ -319,9 +418,32 @@ impl MockRunner {
         MockRunner {
             calls: Vec::new(),
             spawned_logs: Vec::new(),
+            piped_stdin: Vec::new(),
+            piped_killed: Vec::new(),
             script: VecDeque::new(),
             now_ms: 1_770_000_000_000,
         }
+    }
+
+    pub fn expect_spawn_piped(
+        &mut self,
+        program_hint: &str,
+        pid: i32,
+        stdout: &str,
+        exit: Option<i32>,
+    ) {
+        self.script.push_back(MockExpectation {
+            program_hint: program_hint.to_string(),
+            result: MockResult::SpawnPiped {
+                pid,
+                stdout: stdout.to_string(),
+                exit,
+            },
+        });
+    }
+
+    pub fn piped_stdin_text(&self, index: usize) -> String {
+        String::from_utf8_lossy(&self.piped_stdin[index].lock().unwrap()).into_owned()
     }
 
     pub fn expect_run(&mut self, program_hint: &str, output: CmdOutput) {
@@ -387,9 +509,32 @@ impl Runner for MockRunner {
         self.calls.push(spec.clone());
         match self.next_for(spec).result {
             MockResult::Run(output) => output,
-            MockResult::Spawn(..) => {
+            MockResult::Spawn(..) | MockResult::SpawnPiped { .. } => {
                 panic!("expected run, script had spawn for {}", spec.rendered())
             }
+        }
+    }
+
+    fn spawn_piped(&mut self, spec: &CmdSpec, stderr_log: &Path) -> std::io::Result<PipedChild> {
+        self.calls.push(spec.clone());
+        self.spawned_logs.push(stderr_log.to_path_buf());
+        match self.next_for(spec).result {
+            MockResult::SpawnPiped { pid, stdout, exit } => {
+                let stdin = Arc::new(Mutex::new(Vec::new()));
+                let killed = Arc::new(Mutex::new(false));
+                self.piped_stdin.push(stdin.clone());
+                self.piped_killed.push(killed.clone());
+                Ok(PipedChild {
+                    pid,
+                    stdin: Box::new(SharedWriter(stdin)),
+                    stdout: Box::new(std::io::Cursor::new(stdout.into_bytes())),
+                    handle: Box::new(MockChildHandle { exit, killed }),
+                })
+            }
+            _ => panic!(
+                "expected spawn_piped, script had another shape for {}",
+                spec.rendered()
+            ),
         }
     }
 
@@ -403,7 +548,10 @@ impl Runner for MockRunner {
                 }
                 result
             }
-            MockResult::Run(_) => panic!("expected spawn, script had run for {}", spec.rendered()),
+            _ => panic!(
+                "expected spawn, script had another shape for {}",
+                spec.rendered()
+            ),
         }
     }
 

@@ -10,8 +10,8 @@ import {
 // emulator-A must NOT be reused to drive emulator-B (its adb forward + port
 // still target A — every device_* would silently hit the wrong emulator).
 
-process.env.QAREN_SESSION_ID = 'session-a';
-process.env.QAREN_CLAIM_EPOCH = '7';
+const LEASE = `session-a:${'f'.repeat(32)}`;
+process.env.QAREN_DEVICE_LEASE = LEASE;
 
 const stateFor = (deviceId) => ({
   hostPort: 22089,
@@ -19,8 +19,8 @@ const stateFor = (deviceId) => ({
   pid: 4242,
   deviceId,
   startedAt: 'now',
-  sessionId: 'session-a',
-  claimEpoch: 7,
+  sessionId: LEASE,
+  claimEpoch: 1,
   capability: 'x'.repeat(32),
 });
 

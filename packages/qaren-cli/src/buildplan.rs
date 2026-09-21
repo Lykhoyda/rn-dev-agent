@@ -3,8 +3,8 @@ use crate::runrecord::{probe_pid_identity, PidIdentity, PidLiveness};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const CACHE_SCHEMA: &str = "rn-qa-native-cache/1";
-pub const PREWARM_SCHEMA: &str = "rn-qa-deps-prewarm/1";
+pub const CACHE_SCHEMA: &str = "qaren-native-cache/1";
+pub const PREWARM_SCHEMA: &str = "qaren-deps-prewarm/1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,7 +46,7 @@ pub struct DepsPrewarm {
 }
 
 pub fn cache_dir(worktree_root: &Path) -> PathBuf {
-    worktree_root.join(".rn-qa").join("native-cache")
+    worktree_root.join(".qaren").join("native-cache")
 }
 
 pub fn state_path(worktree_root: &Path, platform: &str, app_id: &str) -> PathBuf {
@@ -221,7 +221,7 @@ pub fn decide(
             )],
         );
     }
-    // A generated native dir that rn-qa's own builds did not create carries
+    // A generated native dir that qaren's own builds did not create carries
     // caches of unprovable origin; only a clean regeneration is trustworthy.
     let platform_dir_proven = !inputs.native_dir_exists
         || inputs.native_dir_in_candidate
@@ -232,11 +232,11 @@ pub fn decide(
     let incremental = |reason: String, mut evidence: Vec<String>| {
         if !platform_dir_proven {
             evidence.push(format!(
-                "the generated {}/ dir was not created by a recorded rn-qa build",
+                "the generated {}/ dir was not created by a recorded qaren build",
                 inputs.platform
             ));
             return clean(
-                "existing generated native dir has no recorded rn-qa provenance; requiring a clean regeneration"
+                "existing generated native dir has no recorded qaren provenance; requiring a clean regeneration"
                     .to_string(),
                 evidence,
             );

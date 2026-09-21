@@ -1,6 +1,6 @@
-# rn-qa — deterministic QA preparation CLI (experiment)
+# qaren — deterministic QA preparation CLI (experiment)
 
-`rn-qa` is a workspace-only Rust prototype that answers one question: **does a
+`qaren` is a workspace-only Rust prototype that answers one question: **does a
 single reproducible build/install/launch contract reduce the time and variance
 agents spend rediscovering setup for every qaren live test?** It
 prepares an explicitly named project (the Expo `test-app`, or an external
@@ -14,7 +14,7 @@ tools after `ready`.
 ## Build
 
 ```sh
-cd dev/rn-qa && cargo build          # binary at dev/rn-qa/target/debug/rn-qa
+cd packages/qaren-cli && cargo build          # binary at packages/qaren-cli/target/debug/qaren
 cargo test                            # hermetic; no device or network access
 ```
 
@@ -27,15 +27,15 @@ authority — `pnpm` remains the package manager for the app it prepares.
 ## Usage
 
 ```sh
-rn-qa prepare <scenario.yaml> [--json] [--dry-run]
-rn-qa prewarm <scenario.yaml> [--json]
-rn-qa status  <run-id> [--json]
-rn-qa complete <run-id> <build-log> [--json]   # cooperative handoff only
-rn-qa cleanup <run-id> [--json]
-rn-qa cleanup <run-id> [--json] --remove-app --confirm-remove-app <run-id>/<remote-serial>/<app-id>
+qaren prepare <scenario.yaml> [--json] [--dry-run]
+qaren prewarm <scenario.yaml> [--json]
+qaren status  <run-id> [--json]
+qaren complete <run-id> <build-log> [--json]   # cooperative handoff only
+qaren cleanup <run-id> [--json]
+qaren cleanup <run-id> [--json] --remove-app --confirm-remove-app <run-id>/<remote-serial>/<app-id>
 ```
 
-Every syntactically valid invocation writes exactly one `rn-qa/1` JSON
+Every syntactically valid invocation writes exactly one `qaren/1` JSON
 receipt to stdout; argument/usage errors are the sole exception — they exit
 `2` with help on stderr and an empty stdout. All human-readable narration
 goes to stderr. Exit codes: `0` ready / cleaned / planned / working /
@@ -47,7 +47,7 @@ unconfirmed app removal, or rejected cooperative-handoff evidence).
 on `cleanup`; a missing flag or confirmation value, or use on another verb,
 is a usage error (exit `2`, no receipt).
 
-`status` and `cleanup` locate the run under `<repo>/.rn-qa/runs/<run-id>/`
+`status` and `cleanup` locate the run under `<repo>/.qaren/runs/<run-id>/`
 from the git toplevel of the current directory. `--dry-run` on `prepare`
 validates the scenario + candidate and emits the planned command sequence
 (listener/readiness poll probes elided) without allocating anything.
@@ -58,8 +58,8 @@ prepare ──► validate (scenario schema, candidate git sha, lockfile sha256)
         ──► plan     native fingerprint + cache state ──► reuse | incremental | clean
                      (decision + evidence recorded; non-reuse takes the
                       host-level build serialization lock)
-        ──► allocate  iOS:  simctl create rn-qa-<run-id> + bootstatus -b
-                      NUC:  ssh <host> ~/bin/android-farm start <slot> rn-qa-<run-id>
+        ──► allocate  iOS:  simctl create qaren-<run-id> + bootstatus -b
+                      NUC:  ssh <host> ~/bin/android-farm start <slot> qaren-<run-id>
                             ssh -N -L 127.0.0.1:<p>:127.0.0.1:<p>  (owned pid)
                             run-scoped adb server on adb_server_port with the
                             farm host's vendor key (fetched over ssh, 0600,
@@ -74,7 +74,7 @@ prepare ──► validate (scenario schema, candidate git sha, lockfile sha256)
                              one-device server) --port <port>   (CI=1)
         ──► verify   port owner pgid == spawned pgid, /status responds,
                      app installed + running on the owned device
-        ──► ready    receipt + durable .rn-qa/runs/<run-id>/run.json
+        ──► ready    receipt + durable .qaren/runs/<run-id>/run.json
 
 (With `build.owner: qaren` the chain branches after `allocate`: no
 build+launch — prepare re-verifies the candidate, issues `handoff.json`, and
@@ -83,7 +83,7 @@ finishes at phase `handed_off`; see the cooperative handoff section below.)
 
 ## Scenarios
 
-Scenarios are versioned (`schema: rn-qa/1`), narrow, and strictly validated
+Scenarios are versioned (`schema: qaren/1`), narrow, and strictly validated
 (unknown fields rejected). Five checked-in examples:
 
 - [`scenarios/ios-simulator.yaml`](scenarios/ios-simulator.yaml) — Mac iOS
@@ -102,11 +102,11 @@ With `build.owner: qaren` (workspace issue #34), `prepare` stops after
 allocation: validate → deps → native fingerprint → allocate (run-scoped
 simulator, or exclusive USB claim lock with **no adb server and no device
 contact**) → re-verify the candidate → issue a typed
-`handoff.json` (`rn-qa-handoff/1`) and finish at phase `handed_off` with
+`handoff.json` (`qaren-handoff/1`) and finish at phase `handed_off` with
 result `ready` — **meaning allocated and handed off; nothing is built,
-installed, or launched by rn-qa**. The qaren session then performs the
+installed, or launched by qaren**. The qaren session then performs the
 one authoritative managed build/install against the exact allocated device,
-and `rn-qa complete <run-id> <build-log>` binds the session's signed build
+and `qaren complete <run-id> <build-log>` binds the session's signed build
 receipt to the run identity, refusing missing, stale, ambiguous, mismatched,
 foreign, replayed, or late evidence (exit 4). In handoff mode,
 `deadlines.build_seconds` is one wall-clock validity window starting at the
@@ -114,25 +114,25 @@ typed handoff's `issued_at`; retries never reset it. Handoff scenarios carry no 
 no `android_usb.adb_server_port`, and no `dev_client_scheme` — the session
 owns those lifecycles — and the farm adapter is refused (the leased emulator
 is unreachable from the session's global adb server). Cleanup is unchanged:
-rn-qa removes exactly the allocation it recorded and never touches the
+qaren removes exactly the allocation it recorded and never touches the
 session's Metro or build. The full chain, ownership table, trust boundary,
 and temporary policy live in
 [`docs/qa/cooperative-qa.md`](../../docs/qa/cooperative-qa.md).
 
 ### Project-scoped real apps
 
-`candidate.worktree` (optional, absolute path) points rn-qa at an external
+`candidate.worktree` (optional, absolute path) points qaren at an external
 project instead of the workspace containing the scenario. The path must BE a
 git toplevel — a subdirectory of some larger repo is refused
 (`CANDIDATE_PATH_INVALID`) so a run can never bind to files outside the
 project it named. Everything project-scoped follows that worktree: run
-records and caches live under `<worktree>/.rn-qa/`, the fingerprint
+records and caches live under `<worktree>/.qaren/`, the fingerprint
 enumerates only that worktree, and `status`/`cleanup` are run from inside
-it. rn-qa never discovers, enumerates, or couples other projects.
+it. qaren never discovers, enumerates, or couples other projects.
 `candidate.project_root: .` selects a project living at the worktree root.
-Because `.rn-qa/` is rn-qa's own state, it is excluded from the candidate
+Because `.qaren/` is qaren's own state, it is excluded from the candidate
 cleanliness and drift comparison — an external project does not need to
-gitignore it, and a clean worktree stays provably clean while rn-qa writes
+gitignore it, and a clean worktree stays provably clean while qaren writes
 its run records there.
 
 `candidate.dev_client_scheme` names the app's dev-client URL scheme (e.g.
@@ -150,10 +150,10 @@ allocation path (exactly one of `android:` / `android_usb:` per scenario).
 The serial must be a plain physical-device serial — `emulator-*` and
 loopback forms are rejected at validation, so the farm path's
 structural guarantees never weaken. At allocate time the device is claimed
-by an atomic host-level lock (`$RN_QA_LOCK_ROOT` or `~/.rn-qa/locks`,
+by an atomic host-level lock (`$QAREN_LOCK_ROOT` or `~/.qaren/locks`,
 `usb-<serial>`); any existing claim — even one whose holder is provably
 dead — is a structured refusal (`DEVICE_CLAIM_CONTENDED`, exit 4), never an
-adoption. All rn-qa processes competing for a device must share the same
+adoption. All qaren processes competing for a device must share the same
 lock root (the per-user default covers the single-operator dev-machine
 model). A run-scoped `--one-device <serial>` adb server (host adb key
 pinned explicitly) is the only path to the phone; `expo run:android` routes
@@ -193,12 +193,12 @@ Symlinks hash their link text plus in-worktree target content. Anything
 that cannot be enumerated or bound — dynamic `app.config.*`, unresolvable
 local refs, out-of-worktree symlink targets, `workspace:` deps — marks the
 fingerprint **incomplete**, which forbids cached reuse (visible in the
-decision evidence). rn-qa is pnpm-only; other package managers' lockfiles
+decision evidence). qaren is pnpm-only; other package managers' lockfiles
 are out of contract.
 
 **Decision.** Cache state lives at
-`<worktree>/.rn-qa/native-cache/<platform>-<app_id>.json`
-(`rn-qa-native-cache/1`), bound to the exact worktree, platform, app id,
+`<worktree>/.qaren/native-cache/<platform>-<app_id>.json`
+(`qaren-native-cache/1`), bound to the exact worktree, platform, app id,
 fingerprint, and building candidate sha:
 
 1. **Reuse** — state matches this worktree/platform/app, fingerprints are
@@ -214,7 +214,7 @@ fingerprint, and building candidate sha:
    stale/missing/unverified, no scheme, incomplete fingerprint) but the
    worktree-keyed caches are provably this project's: the state binds this
    exact worktree/app and any generated native dir was created by a
-   recorded rn-qa build. `expo run:*` recompiles over the existing
+   recorded qaren build. `expo run:*` recompiles over the existing
    `ios/`+Pods+`ios/build` / gradle caches.
 3. **Clean** — mandatory whenever compatibility is unprovable: no/corrupt
    state, cross-worktree state, unproven generated-dir provenance, or
@@ -226,7 +226,7 @@ fingerprint, and building candidate sha:
 
 After a successful build the dev client (single `.app` bundle / debug apk)
 is content-hashed and copied under
-`.rn-qa/native-cache/artifacts/<platform>/`, and the state is refreshed
+`.qaren/native-cache/artifacts/<platform>/`, and the state is refreshed
 with the readiness-rechecked fingerprint (native-input drift during the
 build fails the run as `CANDIDATE_DRIFTED`). An ambiguous artifact (zero or
 several bundles) skips caching with a recorded reason — never a guess. The
@@ -241,7 +241,7 @@ holder's lock is adopted (unlike device claims, this lock guards only
 compile concurrency). The lock is released at ready and by cleanup.
 
 **Credential-authorized dependency prewarming.** Under `deps.policy:
-require-prewarm`, `rn-qa prewarm <scenario>` is the one deliberate network
+require-prewarm`, `qaren prewarm <scenario>` is the one deliberate network
 moment (the default `install` policy keeps today's behavior: prepare's own
 `pnpm install` may reach the network): run it while registry credentials
 are available; it runs `pnpm fetch` + `pnpm install
@@ -285,11 +285,11 @@ build_and_ready — so revisit this once live reuse is measurable.
 - **Local listeners are never adopted.** The farm-advertised adb port is
   preflighted free on this host *before* the lease is claimed (a local
   emulator commonly owns 5555), and a listener on the tunnel or private adb
-  server port only counts once its pgid equals the group rn-qa just spawned —
+  server port only counts once its pgid equals the group qaren just spawned —
   a foreign listener is a structured failure before any `adb connect`, so a
   `ready` receipt can never name a NUC lease while a local emulator answers.
 - **Cleanup is ownership-gated.** A simulator is deleted only when UDID *and*
-  run-scoped name (`rn-qa-<run-id>`) both match (a pending allocation whose
+  run-scoped name (`qaren-<run-id>`) both match (a pending allocation whose
   create crashed before the UDID was learned is recovered by its unique
   run-scoped name, refusing on ambiguity). A process group is signalled only
   when the recorded leader's birth time (`ps lstart`) still matches, or the
@@ -384,7 +384,7 @@ build_and_ready — so revisit this once live reuse is measurable.
   retries never reset it, and an unprovable backwards clock refuses.
 - **Provenance is rechecked at readiness.** The candidate sha, worktree
   cleanliness, the worktree fingerprint (sha256 of `git status --porcelain`
-  with entries under rn-qa's own `.rn-qa/` state directory excluded),
+  with entries under qaren's own `.qaren/` state directory excluded),
   and lockfile hash are re-verified immediately before `ready`;
   drift during the build fails the run (`CANDIDATE_DRIFTED`) instead of
   emitting a receipt that misattributes the built app.
@@ -395,12 +395,12 @@ build_and_ready — so revisit this once live reuse is measurable.
 ## What a worker does
 
 ```sh
-dev/rn-qa/target/debug/rn-qa prepare dev/rn-qa/scenarios/ios-simulator.yaml --json
+packages/qaren-cli/target/debug/qaren prepare packages/qaren-cli/scenarios/ios-simulator.yaml --json
 # → parse .result == "ready", read .metro.endpoint + .device, attach agents
-dev/rn-qa/target/debug/rn-qa status  <run-id> --json   # truthful current state
-dev/rn-qa/target/debug/rn-qa cleanup <run-id> --json   # ownership-safe teardown
+packages/qaren-cli/target/debug/qaren status  <run-id> --json   # truthful current state
+packages/qaren-cli/target/debug/qaren cleanup <run-id> --json   # ownership-safe teardown
 # opt-in: also remove the app this run installed (and its data) from the leased emulator
-dev/rn-qa/target/debug/rn-qa cleanup <run-id> --json --remove-app \
+packages/qaren-cli/target/debug/qaren cleanup <run-id> --json --remove-app \
   --confirm-remove-app <run-id>/<remote-serial>/<app-id>   # e.g. <run-id>/emulator-5554/com.rndevagent.testapp
 ```
 
@@ -426,7 +426,7 @@ worker typed exactly one command per phase.
 | | cleanup again | 0.7s | 5 | `cleaned` (all absent) |
 
 Independent post-cleanup verification: Metro/adb-server/tunnel ports free,
-zero `rn-qa-*` simulators, a foreign booted simulator untouched, both farm
+zero `qaren-*` simulators, a foreign booted simulator untouched, both farm
 slots `lease=free state=down`.
 
 After the tunnel-port ownership corrections (adb-port preflight, listener
@@ -438,7 +438,7 @@ prepare 37s / 48 subprocesses → `ready`, status 8/8, cleanup removed all six
 resources, idempotent re-cleanup `cleaned`. The same independent
 post-cleanup verification passed again. Receipts, device screenshots, and
 the rendered proof card live in
-[`docs/proof/2026-08-12-rn-qa-exact-head/`](../../docs/proof/2026-08-12-rn-qa-exact-head/PROOF.md);
+[`docs/proof/2026-08-12-qaren-exact-head/`](../../docs/proof/2026-08-12-qaren-exact-head/PROOF.md);
 every receipt there is pinned to the head that produced it (`f3e1e43`), which
 predates the later corrections documented above — lease release keyed on the
 tunnel port, worktree-fingerprint drift, monotonic deadlines, the atomic
@@ -449,7 +449,7 @@ run-id claim, and persist-before-allocate.
 Clean and incremental iOS simulator journeys were measured at candidate
 `75a8e76` (`git_dirty: false`) once the internal Data volume recovered to
 ~26 GiB free. Receipts, screenshots, and short videos:
-[`docs/proof/2026-08-17-rn-qa-issue-24/`](../../docs/proof/2026-08-17-rn-qa-issue-24/PROOF.md).
+[`docs/proof/2026-08-17-qaren-issue-24/`](../../docs/proof/2026-08-17-qaren-issue-24/PROOF.md).
 
 | journey | prepare total | deps | allocate | build_and_ready | decision |
 | --- | --- | --- | --- | --- | --- |
@@ -461,7 +461,7 @@ Metro + the run-scoped simulator and was idempotent. The USB phone was
 not used. An unedited placeholder serial is a validate-time
 `SCENARIO_INVALID` (0 commands, no device contact). Scenario bytes used
 for the iOS timings are archived next to the receipts so the pinned
-`dev/rn-qa/scenarios/ios-simulator.yaml` file was not mutated.
+`packages/qaren-cli/scenarios/ios-simulator.yaml` file was not mutated.
 
 Fingerprint-matched **reuse** did not run: Expo SDK 56 `expo run:ios`
 does not pass `-derivedDataPath`, so the `.app` lands in
@@ -494,8 +494,8 @@ decision recorded and ownership-safe recovery:
 | clean #1 | `clean` (no cache state; `ios/` regenerated via prebuild) | `BUILD_FAILED` at `pod install` with ENOSPC log-tail evidence after validate 0.8s / deps 0.6s / plan 0.08s / allocate 119s |
 | clean #2 | `clean` | `SIMULATOR_BOOT_FAILED` (bootstatus timed out under disk pressure) after validate 0.8s / deps 0.3s / plan 0.09s |
 
-Both runs were then cleaned with `rn-qa cleanup`: simulator and build
-serialization lock removed, Metro port verified free, zero `rn-qa-*`
+Both runs were then cleaned with `qaren cleanup`: simulator and build
+serialization lock removed, Metro port verified free, zero `qaren-*`
 simulators left, and a second cleanup returned `cleaned` idempotently —
 partial-failure recovery held on real hardware (abrupt-interruption
 recovery is covered by the hermetic cleanup tests, not by these runs). The `plan`
@@ -531,7 +531,7 @@ now encoded once and replayed deterministically.
 ## Limitations (recorded, not papered over)
 
 - **Farm stop is check-then-stop, not compare-and-stop.** The
-  `~/bin/android-farm` contract takes only a slot for `stop`. rn-qa verifies
+  `~/bin/android-farm` contract takes only a slot for `stop`. qaren verifies
   the lease holder immediately before stopping; the race window is closed in
   practice because `android-farm start` refuses while any lease file exists,
   so no legitimate actor can re-lease between the check and the stop. A
@@ -573,7 +573,7 @@ right flags, wait an unknown time, and verify readiness ad hoc — typically
 Android lane took). To reproduce the comparison:
 
 1. Time a fresh manual setup of the same scenario (count every command).
-2. Run `rn-qa prepare … --json` on a clean host and read `timings_ms` +
+2. Run `qaren prepare … --json` on a clean host and read `timings_ms` +
    `commands_executed` from the receipt.
 3. Compare failure handling: force a failure (occupy the Metro port, lease the
    farm slot) and compare "structured receipt with one next_action" against

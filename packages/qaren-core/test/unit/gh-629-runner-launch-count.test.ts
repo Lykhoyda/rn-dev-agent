@@ -32,12 +32,8 @@ test.after(() => {
 });
 
 test('a start that fails before the launch step does not advance the launch count', async () => {
-  const saved = {
-    sessionId: process.env.QAREN_SESSION_ID,
-    claimEpoch: process.env.QAREN_CLAIM_EPOCH,
-  };
-  process.env.QAREN_SESSION_ID = `gh-629-${randomUUID()}`;
-  process.env.QAREN_CLAIM_EPOCH = '1';
+  const saved = process.env.QAREN_DEVICE_LEASE;
+  process.env.QAREN_DEVICE_LEASE = `gh-629-${randomUUID()}:${'f'.repeat(32)}`;
   const before = getRunnerLaunchCount();
   try {
     await assert.rejects(
@@ -50,10 +46,8 @@ test('a start that fails before the launch step does not advance the launch coun
       'no launch child existed, so the retry gate must stay closed',
     );
   } finally {
-    if (saved.sessionId === undefined) delete process.env.QAREN_SESSION_ID;
-    else process.env.QAREN_SESSION_ID = saved.sessionId;
-    if (saved.claimEpoch === undefined) delete process.env.QAREN_CLAIM_EPOCH;
-    else process.env.QAREN_CLAIM_EPOCH = saved.claimEpoch;
+    if (saved === undefined) delete process.env.QAREN_DEVICE_LEASE;
+    else process.env.QAREN_DEVICE_LEASE = saved;
   }
 });
 
@@ -95,22 +89,17 @@ test('a runner that came up mid-settle is not claimed as this caller settling it
   }
 });
 
-test('a start refused for missing session authority does not advance the launch count', async () => {
-  const saved = {
-    sessionId: process.env.QAREN_SESSION_ID,
-    claimEpoch: process.env.QAREN_CLAIM_EPOCH,
-  };
-  delete process.env.QAREN_SESSION_ID;
-  delete process.env.QAREN_CLAIM_EPOCH;
+test('a start refused for a missing device lease does not advance the launch count', async () => {
+  const saved = process.env.QAREN_DEVICE_LEASE;
+  delete process.env.QAREN_DEVICE_LEASE;
   const before = getRunnerLaunchCount();
   try {
     await assert.rejects(
       startFastRunner(randomUUID().toUpperCase(), 'com.example.gh629'),
-      /SESSION_AUTHORITY_REQUIRED/,
+      /DEVICE_LEASE_REQUIRED/,
     );
     assert.equal(getRunnerLaunchCount(), before);
   } finally {
-    if (saved.sessionId !== undefined) process.env.QAREN_SESSION_ID = saved.sessionId;
-    if (saved.claimEpoch !== undefined) process.env.QAREN_CLAIM_EPOCH = saved.claimEpoch;
+    if (saved !== undefined) process.env.QAREN_DEVICE_LEASE = saved;
   }
 });
