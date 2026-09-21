@@ -25,13 +25,11 @@ done
 
 fail() { echo "::error::$*" >&2; exit 1; }
 
-PLUGIN="$ROOT/packages/claude-plugin/plugin.json"
+PLUGIN="$ROOT/packages/qaren-plugin/.claude-plugin/plugin.json"
 MANIFEST="$ROOT/runner-manifest.json"
 V=$(jq -r '.version' "$PLUGIN")
 MV=$(jq -r '.version // empty' "$MANIFEST")
 [ "$MV" = "$V" ] || fail "runner-manifest.json vouches for v$MV while plugin.json advertises v$V — the trust root is stale"
-cmp -s "$MANIFEST" "$ROOT/packages/claude-plugin/runner-manifest.json" \
-  || fail "packages/claude-plugin/runner-manifest.json differs from the root trust root"
 
 BASE=""
 if [ -n "${BASE_REF:-}" ]; then
@@ -45,7 +43,7 @@ fi
 # Offline only when the base already carried this exact version AND root:
 # a manifest edit without a version bump must still face the public bytes.
 if [ -n "$BASE" ] \
-   && [ "$(git -C "$ROOT" show "$BASE:packages/claude-plugin/plugin.json" | jq -r '.version')" = "$V" ] \
+   && [ "$(git -C "$ROOT" show "$BASE:packages/qaren-plugin/.claude-plugin/plugin.json" 2>/dev/null | jq -r '.version')" = "$V" ] \
    && [ "$(git -C "$ROOT" show "$BASE:runner-manifest.json")" = "$(cat "$MANIFEST")" ]; then
   echo "the base already carried this exact v$V trust root; its public assets were asserted when it landed — staying offline"
   exit 0

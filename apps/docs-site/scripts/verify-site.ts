@@ -94,7 +94,7 @@ check('install command present', landing.includes('/plugin marketplace add Lykho
 check(
   'eyebrow version comes from plugin.json',
   landing.includes(
-    `v${JSON.parse(readFileSync(join(DIST, '../../../packages/claude-plugin/.claude-plugin/plugin.json'), 'utf8')).version}`,
+    `v${JSON.parse(readFileSync(join(DIST, '../../../packages/qaren-plugin/.claude-plugin/plugin.json'), 'utf8')).version}`,
   ),
 );
 check('full transcript is static text', landing.includes('Verified on iPhone 16 Pro'));
