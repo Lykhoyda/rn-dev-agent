@@ -83,7 +83,7 @@ function parseFill(rest: string): Grammar {
   const text = match[1] ?? match[2];
   const after = rest
     .slice(match.index + match[0].length)
-    .replace(/^\s*(?:into|in|to|on|inside)?\s*(?:the\s+)?/i, '')
+    .replace(/^\s*(?:(?:into|in|to|on|inside)\s+)?(?:the\s+)?/i, '')
     .trim();
   if (!after) return { refuse: 'fill needs a target after the quoted text' };
   return { kind: 'fill', target: targetFrom(after), text };
@@ -131,28 +131,59 @@ const NUMBERED = /^(\d+)[.)]\s+(.+)$/;
 const HEADING = /^###\s+(.+)$/;
 const STARTS_ON = /^starts?\s+on:\s*(.+)$/i;
 
+// Returns the visible part of a line with every `<!-- -->` span removed, carrying an
+// open comment across lines.
+function uncomment(raw: string, comment: { open: boolean }): string {
+  let rest = raw;
+  let out = '';
+  while (rest.length > 0) {
+    if (comment.open) {
+      const close = rest.indexOf('-->');
+      if (close < 0) break;
+      comment.open = false;
+      rest = rest.slice(close + 3);
+      continue;
+    }
+    const open = rest.indexOf('<!--');
+    if (open < 0) {
+      out += rest;
+      break;
+    }
+    out += rest.slice(0, open);
+    comment.open = true;
+    rest = rest.slice(open + 4);
+  }
+  return out.trim();
+}
+
+// Comments are stripped once for the whole document, one entry per source line, so every
+// scan below sees the same visible text and line numbers stay those of the file.
+function visibleLines(lines: string[]): string[] {
+  const comment = { open: false };
+  return lines.map((line) => uncomment(line, comment));
+}
+
+const isSectionHeading = (text: string): boolean => /^##\s+/.test(text) && !text.startsWith('###');
+
 // Splits `## QA` (or the whole text) into blocks by `###` heading and reads every
 // numbered or ✓ line by the verb grammar. Lines the grammar cannot read are refused with their number.
 export function parsePlan(markdown: string): ParsedPlan {
-  const lines = markdown.split(/\r?\n/);
+  const visible = visibleLines(markdown.split(/\r?\n/));
   let start = 0;
-  let end = lines.length;
-  const qa = lines.findIndex((l) => /^##\s+QA\s*$/i.test(l.trim()));
+  let end = visible.length;
+  const qa = visible.findIndex((text) => /^##\s+QA\s*$/i.test(text));
   if (qa >= 0) {
     start = qa + 1;
-    const next = lines.findIndex(
-      (l, i) => i > qa && /^##\s+/.test(l.trim()) && !l.trim().startsWith('###'),
-    );
-    if (next > qa) end = next;
+    const next = visible.findIndex((text, i) => i >= start && isSectionHeading(text));
+    end = next >= 0 ? next : visible.length;
   }
-  const titleLine = lines.find((l) => /^#\s+/.test(l));
+  const titleLine = visible.find((text) => /^#\s+/.test(text));
   const title = titleLine ? titleLine.replace(/^#\s+/, '').trim() : 'plan';
 
   const blocks: Block[] = [];
   const refused: RefusedLine[] = [];
   let current: Block | null = null;
   let declaredAt: number | null = null;
-  let inComment = false;
   const open = (heading: string): Block => {
     current = { slug: slugify(heading), title: heading, items: [], planHash: '' };
     blocks.push(current);
@@ -170,21 +201,7 @@ export function parsePlan(markdown: string): ParsedPlan {
   };
   for (let i = start; i < end; i += 1) {
     const line = i + 1;
-    let text = lines[i].trim();
-    if (inComment) {
-      const close = text.indexOf('-->');
-      if (close < 0) continue;
-      inComment = false;
-      text = text.slice(close + 3).trim();
-    }
-    if (text.startsWith('<!--')) {
-      const close = text.indexOf('-->', 4);
-      if (close < 0) {
-        inComment = true;
-        continue;
-      }
-      text = text.slice(close + 3).trim();
-    }
+    const text = visible[i];
     if (!text) continue;
     const heading = HEADING.exec(text);
     if (heading) {

@@ -1,7 +1,7 @@
 mod common;
 
 use qaren::core::{self, Budgets, CoreRequest, CoreTarget, Verdict};
-use qaren::exec::MockRunner;
+use qaren::exec::{HoldStdout, MockRunner};
 use qaren::failure::FailureCode;
 use std::path::{Path, PathBuf};
 
@@ -375,4 +375,66 @@ fn a_pass_result_that_is_not_a_ledger_is_a_fail() {
         .unwrap()
         .detail
         .contains("not a valid ledger"));
+}
+
+#[test]
+fn a_held_verdict_survives_a_child_that_overstays_its_exit() {
+    let repo = common::temp_repo();
+    let rows = [row(1, 1, "pass"), row(2, 1, "pass")];
+    let stdout = format!(
+        "{}\n{}\n{}\n",
+        envelope(2, "row", &rows[0]),
+        envelope(3, "row", &rows[1]),
+        envelope(4, "result", &pass_ledger(&rows))
+    );
+    let mut mock = MockRunner::new();
+    // The child wrote its result, then never exits (stuck in runner teardown).
+    mock.expect_spawn_piped("walk.js", 9000, &stdout, None);
+    let outcome = run_child(&mut mock, &repo.join("core.log"));
+
+    assert_eq!(outcome.verdict, Verdict::Pass, "{:?}", outcome.failure);
+    assert!(outcome.failure.is_none());
+    assert_eq!(outcome.ledger.steps.len(), 2);
+    assert!(
+        *mock.piped_killed[0].lock().unwrap(),
+        "the overstaying child is taken down"
+    );
+    assert!(!outcome.group_survived);
+}
+
+#[test]
+fn a_group_member_that_dies_with_the_kill_is_not_a_survivor() {
+    let repo = common::temp_repo();
+    let rows = [row(1, 1, "pass")];
+    let stdout = format!(
+        "{}\n{}\n",
+        envelope(2, "row", &rows[0]),
+        envelope(3, "result", &pass_ledger(&rows))
+    );
+    let mut mock = MockRunner::new();
+    // The leader exits 0 but stdout stays open until the group is killed.
+    mock.expect_spawn_piped_holding("walk.js", 9000, &stdout, Some(0), HoldStdout::UntilKill);
+    let outcome = run_child(&mut mock, &repo.join("core.log"));
+
+    assert_eq!(outcome.verdict, Verdict::Pass, "{:?}", outcome.failure);
+    assert!(*mock.piped_killed[0].lock().unwrap());
+    assert!(!outcome.group_survived);
+}
+
+#[test]
+fn a_group_member_that_outlives_the_kill_is_reported_as_a_survivor() {
+    let repo = common::temp_repo();
+    let rows = [row(1, 1, "pass")];
+    let stdout = format!(
+        "{}\n{}\n",
+        envelope(2, "row", &rows[0]),
+        envelope(3, "result", &pass_ledger(&rows))
+    );
+    let mut mock = MockRunner::new();
+    mock.expect_spawn_piped_holding("walk.js", 9000, &stdout, Some(0), HoldStdout::Forever);
+    let outcome = run_child(&mut mock, &repo.join("core.log"));
+
+    assert_eq!(outcome.verdict, Verdict::Pass, "{:?}", outcome.failure);
+    assert!(*mock.piped_killed[0].lock().unwrap());
+    assert!(outcome.group_survived);
 }

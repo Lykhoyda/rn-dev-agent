@@ -425,3 +425,91 @@ test('a not-ok preliminary scroll that moved nothing fails naming the scroll err
   assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 0);
   assert.match(outcome.failure?.seen ?? '', /scroll timed out; "load-more" stayed off screen/);
 });
+
+test('a fill row never carries the typed value in its text', async () => {
+  const input: Screen = {
+    ...screen(['Password']),
+    elements: [
+      {
+        ref: '@e0',
+        kind: 'input',
+        label: 'Password',
+        hittable: true,
+        disabled: false,
+        secure: true,
+        offscreen: false,
+        where: 'middle',
+        side: 'center',
+      },
+    ],
+  };
+  const f = fake([input, screen(['Password', 'Next'])]);
+  const outcome = await walkBlock(block('1. Type "hunter2" into "Password"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'pass');
+  assert.equal(f.rows[0].text, '1. Type "•••" into "Password"');
+  assert.equal(JSON.stringify(f.rows).includes('hunter2'), false);
+});
+
+test('fill masking covers curly quotes and leaves a short value elsewhere on the line alone', async () => {
+  const input = (label: string): Screen => ({
+    ...screen([label]),
+    elements: [
+      {
+        ref: '@e0',
+        kind: 'input',
+        label,
+        hittable: true,
+        disabled: false,
+        secure: false,
+        offscreen: false,
+        where: 'middle',
+        side: 'center',
+      },
+    ],
+  });
+  const curly = fake([input('Token'), screen(['Token', 'Next'])]);
+  await walkBlock(block('1. Type “s3cret” into "Token"\n'), curly.deps);
+  assert.equal(curly.rows[0].text, '1. Type “•••” into "Token"');
+
+  const short = fake([input('address1'), screen(['address1', 'Next'])]);
+  await walkBlock(block('1. Type "1" into "address1"\n'), short.deps);
+  assert.equal(short.rows[0].text, '1. Type "•••" into "address1"');
+});
+
+test('a failing fill keeps the typed value out of the reason and the evidence line', async () => {
+  const f = fake([screen(['Sign in'])]);
+  const outcome = await walkBlock(block('1. Fill "hunter2" with "hunter2"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  const dumped = JSON.stringify({ rows: f.rows, failure: outcome.failure });
+  assert.equal(dumped.includes('hunter2'), false, dumped);
+  assert.match(outcome.failure?.seen ?? '', /•••/);
+});
+
+test('a value typed earlier in the run never reaches a later failure, even when the screen shows it', async () => {
+  const token: Screen = {
+    ...screen(['Token']),
+    elements: [
+      {
+        ref: '@e0',
+        kind: 'input',
+        label: 'Token',
+        hittable: true,
+        disabled: false,
+        secure: false,
+        offscreen: false,
+        where: 'middle',
+        side: 'center',
+      },
+    ],
+  };
+  const showing = screen(['Token: hunter2', 'Next']);
+  const f = fake([token, showing, showing]);
+  const ledger = await runPlan(
+    parsePlan('### One\n1. Type "hunter2" into "Token"\n### Two\n✓ "Welcome"\n').blocks!,
+    f.deps,
+  );
+  assert.equal(ledger.verdict, 'FAIL');
+  const dumped = JSON.stringify(ledger);
+  assert.equal(dumped.includes('hunter2'), false, dumped);
+  assert.match(ledger.failure?.seen ?? '', /Token: •••/);
+});

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { resolve, sep } from 'node:path';
 
 export interface ProveTarget {
   metroPort: number;
@@ -92,7 +92,12 @@ export async function prove(deps: ProveDeps, target: ProveTarget): Promise<Prove
       `the bundle registers no app modules (${parsed.count ?? 0} modules, none outside node_modules)`,
     );
   }
-  const missing = appModules.filter((name) => !fileExists(join(target.worktree, name)));
+  const root = resolve(target.worktree);
+  const missing = appModules.filter((name) => {
+    const candidate = resolve(root, name);
+    const contained = candidate === root || candidate.startsWith(root + sep);
+    return !contained || !fileExists(candidate);
+  });
   if (missing.length > 0) {
     return mismatch(
       `the bundle was built from another tree: ${missing.length} of ${appModules.length} app modules are not under ${target.worktree} (${missing.slice(0, 3).join(', ')})`,

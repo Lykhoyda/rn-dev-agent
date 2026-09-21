@@ -170,3 +170,57 @@ test('prose inside the plan and an empty plan are refused with a line number', (
   assert.match(unknown.refused?.[0].reason ?? '', /no verb the grammar knows/);
   assert.equal(parsePlan('# Only a title\n').refused?.[0].reason, 'the plan has no steps');
 });
+
+test('a commented-out ## heading inside the QA section does not end the section', () => {
+  const parsed = parsePlan(
+    '## QA\n1. Tap "A"\n<!--\n## old heading\n2. Tap "old"\n-->\n2. Tap "B"\n✓ "Done"\n',
+  );
+  assert.ok(parsed.blocks, JSON.stringify(parsed.refused));
+  assert.equal(parsed.blocks.length, 1);
+  assert.deepEqual(
+    parsed.blocks?.[0].items.map((i) => [i.line, i.kind]),
+    [
+      [2, 'press'],
+      [7, 'press'],
+      [8, 'check'],
+    ],
+  );
+});
+
+test('a comment opened mid-line and a commented-out ## QA are both ignored', () => {
+  const parsed = parsePlan(
+    '<!-- ## QA -->\n## QA\n1. Tap "A" <!--\n## obsolete\n-->\n2. Tap "B"\n',
+  );
+  assert.ok(parsed.blocks, JSON.stringify(parsed.refused));
+  assert.deepEqual(
+    parsed.blocks[0].items.map((i) => [i.line, i.raw]),
+    [
+      [3, '1. Tap "A"'],
+      [6, '2. Tap "B"'],
+    ],
+  );
+});
+
+test('a comment opened on the ## QA line itself hides the following steps until it closes', () => {
+  const parsed = parsePlan('## QA <!--\n1. Tap "commented"\n-->\n1. Tap "A"\n');
+  assert.ok(parsed.blocks, JSON.stringify(parsed.refused));
+  assert.deepEqual(
+    parsed.blocks[0].items.map((i) => [i.line, i.raw]),
+    [[4, '1. Tap "A"']],
+  );
+});
+
+test('a fill preposition is only stripped as a whole word', () => {
+  const step = parseStep('type "hello" input');
+  assert.deepEqual(step, {
+    kind: 'fill',
+    target: { quoted: undefined, phrase: 'input' },
+    text: 'hello',
+  });
+  const topic = parseStep('type "hello" into topic');
+  assert.deepEqual(topic, {
+    kind: 'fill',
+    target: { quoted: undefined, phrase: 'topic' },
+    text: 'hello',
+  });
+});

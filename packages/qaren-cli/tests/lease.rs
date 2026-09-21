@@ -118,3 +118,50 @@ fn release_refuses_a_foreign_holder() {
     assert!(matches!(release(&foreign), ReleaseOutcome::Foreign(_)));
     assert!(ours.lock_dir.exists());
 }
+
+#[test]
+fn a_rollback_release_that_fails_names_the_lock_in_the_failure() {
+    let root = common::temp_repo().join("locks");
+    let mut mock = MockRunner::new();
+    let lease = acquire(
+        &mut mock,
+        &root,
+        Platform::Ios,
+        UDID,
+        "check-1",
+        Some(common::identity(4242, "Wed Aug 12 15:00:00 2026")),
+    )
+    .unwrap();
+    // An unreadable holder record makes the release refuse rather than guess.
+    std::fs::write(lease.lock_dir.join("holder.json"), "not json").unwrap();
+
+    let failure = qaren::lease::release_or_annotate(
+        &lease,
+        qaren::failure::Failure::new(
+            "record",
+            FailureCode::RunRecordUpdateFailed,
+            "cannot create the run dir",
+            "check the run directory permissions",
+        ),
+    );
+    assert!(
+        failure.detail.contains("could not be released"),
+        "{}",
+        failure.detail
+    );
+    assert!(
+        failure
+            .next_action
+            .contains(&lease.lock_dir.parent().unwrap().display().to_string()),
+        "{}",
+        failure.next_action
+    );
+    assert!(lease.lock_dir.exists());
+
+    std::fs::remove_dir_all(&lease.lock_dir).unwrap();
+    let clean = qaren::lease::release_or_annotate(
+        &lease,
+        qaren::failure::Failure::new("record", FailureCode::RunRecordUpdateFailed, "x", "y"),
+    );
+    assert_eq!(clean.detail, "x", "an absent lock adds nothing");
+}

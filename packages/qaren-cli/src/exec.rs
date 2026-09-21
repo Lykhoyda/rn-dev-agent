@@ -356,6 +356,15 @@ fn io_failure(started: &Instant, detail: String) -> CmdOutput {
     }
 }
 
+// What the scripted stdout does once its bytes are consumed: close, stay open until the
+// group is killed (a member dying with the group), or stay open forever (a survivor).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoldStdout {
+    Close,
+    UntilKill,
+    Forever,
+}
+
 pub enum MockResult {
     Run(CmdOutput),
     Spawn(std::io::Result<Spawned>, Option<String>),
@@ -364,7 +373,53 @@ pub enum MockResult {
         pid: i32,
         stdout: String,
         exit: Option<i32>,
+        hold: HoldStdout,
     },
+}
+
+struct HeldStdout {
+    script: std::io::Cursor<Vec<u8>>,
+    hold: HoldStdout,
+    killed: Arc<Mutex<bool>>,
+}
+
+impl HeldStdout {
+    fn exhausted(&self) -> bool {
+        self.script.position() as usize >= self.script.get_ref().len()
+    }
+
+    // Blocks by the hold rule once the script is consumed; true means EOF.
+    fn wait_for_eof(&self) -> bool {
+        loop {
+            match self.hold {
+                HoldStdout::Close => return true,
+                HoldStdout::UntilKill if *self.killed.lock().unwrap() => return true,
+                _ => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+    }
+}
+
+impl std::io::Read for HeldStdout {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.exhausted() && self.wait_for_eof() {
+            return Ok(0);
+        }
+        self.script.read(buf)
+    }
+}
+
+impl BufRead for HeldStdout {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        if self.exhausted() && self.wait_for_eof() {
+            return Ok(&[]);
+        }
+        self.script.fill_buf()
+    }
+
+    fn consume(&mut self, amt: usize) {
+        self.script.consume(amt)
+    }
 }
 
 struct MockChildHandle {
@@ -373,11 +428,15 @@ struct MockChildHandle {
 }
 
 impl ChildHandle for MockChildHandle {
+    // A child that already exited keeps its status; a kill only ends one still running.
     fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
+        if self.exit.is_some() {
+            return Ok(self.exit);
+        }
         if *self.killed.lock().unwrap() {
             return Ok(Some(-9));
         }
-        Ok(self.exit)
+        Ok(None)
     }
 
     fn kill_group(&mut self) {
@@ -432,12 +491,30 @@ impl MockRunner {
         stdout: &str,
         exit: Option<i32>,
     ) {
+        // A child that never exits on its own keeps its pipe open until it is killed.
+        let hold = if exit.is_some() {
+            HoldStdout::Close
+        } else {
+            HoldStdout::UntilKill
+        };
+        self.expect_spawn_piped_holding(program_hint, pid, stdout, exit, hold);
+    }
+
+    pub fn expect_spawn_piped_holding(
+        &mut self,
+        program_hint: &str,
+        pid: i32,
+        stdout: &str,
+        exit: Option<i32>,
+        hold: HoldStdout,
+    ) {
         self.script.push_back(MockExpectation {
             program_hint: program_hint.to_string(),
             result: MockResult::SpawnPiped {
                 pid,
                 stdout: stdout.to_string(),
                 exit,
+                hold,
             },
         });
     }
@@ -519,7 +596,12 @@ impl Runner for MockRunner {
         self.calls.push(spec.clone());
         self.spawned_logs.push(stderr_log.to_path_buf());
         match self.next_for(spec).result {
-            MockResult::SpawnPiped { pid, stdout, exit } => {
+            MockResult::SpawnPiped {
+                pid,
+                stdout,
+                exit,
+                hold,
+            } => {
                 let stdin = Arc::new(Mutex::new(Vec::new()));
                 let killed = Arc::new(Mutex::new(false));
                 self.piped_stdin.push(stdin.clone());
@@ -527,7 +609,11 @@ impl Runner for MockRunner {
                 Ok(PipedChild {
                     pid,
                     stdin: Box::new(SharedWriter(stdin)),
-                    stdout: Box::new(std::io::Cursor::new(stdout.into_bytes())),
+                    stdout: Box::new(HeldStdout {
+                        script: std::io::Cursor::new(stdout.into_bytes()),
+                        hold,
+                        killed: killed.clone(),
+                    }),
                     handle: Box::new(MockChildHandle { exit, killed }),
                 })
             }

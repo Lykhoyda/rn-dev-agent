@@ -1,7 +1,7 @@
 mod common;
 
 use qaren::core::Budgets;
-use qaren::exec::{CmdOutput, MockRunner, Spawned};
+use qaren::exec::{CmdOutput, HoldStdout, MockRunner, Spawned};
 use qaren::failure::FailureCode;
 use qaren::receipt::ReceiptResult;
 use qaren::run::{run, RunRequest};
@@ -524,4 +524,45 @@ fn an_unreadable_disk_budget_fails_closed_before_any_claim() {
         .join(".locks")
         .join(qaren::lease::lock_name(Platform::Ios, UDID))
         .exists());
+}
+
+#[test]
+fn a_core_group_survivor_retains_the_device_lease() {
+    let (repo, app) = app_repo();
+    let mut mock = MockRunner::new();
+    script_preflight(&mut mock, &repo);
+    script_provision(&mut mock);
+    mock.expect_spawn_piped_holding(
+        "walk.js",
+        9000,
+        &pass_stdout(),
+        Some(0),
+        HoldStdout::Forever,
+    );
+    script_core_identity(&mut mock);
+    script_teardown(&mut mock);
+
+    let receipt = run(&mut mock, &request(&repo, &app, 30));
+
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Pass,
+        "failure: {:?}",
+        receipt.failure
+    );
+    assert_eq!(mock.remaining(), 0);
+    assert!(
+        receipt.cleanup["core"].starts_with("unresolved"),
+        "{}",
+        receipt.cleanup["core"]
+    );
+    assert_eq!(receipt.cleanup["metro"], "removed");
+    assert!(
+        receipt.cleanup["device_lease"].starts_with("unresolved: retained: core"),
+        "{}",
+        receipt.cleanup["device_lease"]
+    );
+    let record = RunRecord::load(&repo.join("runs"), &run_id()).unwrap();
+    assert!(record.resources.lease.is_some());
+    assert_eq!(record.phase, Phase::Walking);
 }

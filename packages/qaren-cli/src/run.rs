@@ -137,8 +137,7 @@ fn run_inner(
 
     let run_dir = RunRecord::run_dir(&req.runs_root, &run_id);
     if let Err(f) = claim_run_dir(&run_dir) {
-        let _ = lease::release(&lease);
-        return Err(f);
+        return Err(lease::release_or_annotate(&lease, f));
     }
     let record = RunRecord {
         schema: RUN_SCHEMA.to_string(),
@@ -170,8 +169,7 @@ fn run_inner(
         history: Vec::new(),
     };
     if let Err(f) = record.save(&req.runs_root) {
-        let _ = lease::release(&lease);
-        return Err(f);
+        return Err(lease::release_or_annotate(&lease, f));
     }
     let mut ctx = Ctx {
         runner,
@@ -275,7 +273,13 @@ fn run_inner(
         return Ok(finish_failed(ctx, f));
     }
     let outcome = core::wait(ctx.runner, core_child, req.budgets);
+    // The leader is gone either way; a surviving member is a teardown leg of its own.
     ctx.record.resources.core = None;
+    let core_leg = outcome.group_survived.then(|| {
+        Outcome::Unresolved(
+            "a member of the core process group survived SIGKILL after the core exited".to_string(),
+        )
+    });
     let t = ctx.mark("walk", t);
     if let Some(exit) = outcome.exit {
         ctx.notes.push(("core_exit".to_string(), exit.to_string()));
@@ -298,7 +302,7 @@ fn run_inner(
         Err(detail) => ctx.notes.push(("candidate_drift".to_string(), detail)),
     }
 
-    let (cleanup, all_clean) = teardown(&mut ctx);
+    let (cleanup, all_clean) = teardown(&mut ctx, core_leg);
     ctx.mark("teardown", t);
 
     let report_path = match report::write(
@@ -380,7 +384,7 @@ fn refusal_code(code: &str) -> FailureCode {
 }
 
 fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
-    let (cleanup, _) = teardown(&mut ctx);
+    let (cleanup, _) = teardown(&mut ctx, None);
     let mut receipt = ctx.fail(failure);
     for (name, rendered) in cleanup {
         receipt.cleanup.insert(name, rendered);
@@ -389,9 +393,13 @@ fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
 }
 
 // core dead → runners dead (they share the core's process group) → Metro pgid →
-// borrowed device kept → lease released. Every leg is ownership-gated.
-fn teardown(ctx: &mut Ctx) -> (Vec<(String, String)>, bool) {
+// borrowed device kept → lease released. Every leg is ownership-gated; `core_leg`
+// carries what the walk itself learned about the core group.
+fn teardown(ctx: &mut Ctx, core_leg: Option<Outcome>) -> (Vec<(String, String)>, bool) {
     let mut outcomes: Vec<(String, Outcome)> = Vec::new();
+    if let Some(outcome) = core_leg {
+        outcomes.push(("core".to_string(), outcome));
+    }
     if let Some(core) = ctx.record.resources.core.clone() {
         let outcome = cleanup_process_group(ctx.runner, Some(&core), core.pid, None);
         if outcome.clean() {

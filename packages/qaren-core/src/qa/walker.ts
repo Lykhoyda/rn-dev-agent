@@ -43,16 +43,35 @@ function seenOn(screen: Screen): string {
   return assertionView(screen).slice(0, 40).join(' | ');
 }
 
+// What was typed never reaches the ledger: every quoted span equal to a value is masked in
+// either quote style, and a value of three or more characters is masked wherever it appears.
+const MASK = '•••';
+const MASK_EMBEDDED_MIN = 3;
+
+function maskValue(text: string, value: string): string {
+  let masked = text;
+  for (const [open, close] of [
+    ['"', '"'],
+    ['“', '”'],
+  ]) {
+    masked = masked.split(`${open}${value}${close}`).join(`${open}${MASK}${close}`);
+  }
+  return value.length >= MASK_EMBEDDED_MIN ? masked.split(value).join(MASK) : masked;
+}
+
 function phraseTargetReason(phrase: string): string {
   return `"${phrase}" is not quoted; phrase targets arrive with Jev in a later phase`;
 }
 
 // One block, one sequential loop. A tap is never repeated on a timeout alone:
 // an act is retried once only when the screen provably did not move.
+// `typed` collects every value a fill typed during the run; nothing emitted afterwards
+// (row text, reasons, evidence) carries any of them, across block boundaries.
 export async function walkBlock(
   block: Block,
   deps: WalkerDeps,
   shotIndex = 0,
+  typed: string[] = [],
 ): Promise<WalkOutcome> {
   const rows: LedgerRow[] = [];
   let shots = shotIndex;
@@ -60,10 +79,12 @@ export async function walkBlock(
     rows.push(row);
     deps.row(row);
   };
+  const redact = (text: string): string =>
+    typed.reduce((masked, value) => maskValue(masked, value), text);
   const base = (item: Item, attempt: number): Omit<LedgerRow, 'outcome'> => ({
     block: block.slug,
     line: item.line,
-    text: item.raw,
+    text: redact(item.raw),
     attempt,
     kind: item.kind === 'check' ? 'check' : 'step',
     resolvedBy: 'exact',
@@ -82,14 +103,14 @@ export async function walkBlock(
       ...(ref ? { ref } : {}),
       ...(screenshot ? { screenshot } : {}),
       outcome: 'fail',
-      reason,
+      reason: redact(reason),
     });
     return {
       block: { key: block.slug, outcome: 'fail', source: 'discovered' },
       rows,
       failure: {
         step: item.line,
-        seen: `${reason}; on screen: ${seenOn(screen)}`,
+        seen: redact(`${reason}; on screen: ${seenOn(screen)}`),
         ...(screenshot ? { screenshot } : {}),
       },
     };
@@ -100,6 +121,7 @@ export async function walkBlock(
   };
 
   for (const item of block.items) {
+    if (item.kind === 'fill' && item.text && !typed.includes(item.text)) typed.push(item.text);
     if (item.kind === 'check') {
       const before = await deps.captureScreen();
       const verdict = judgeCheck(item, before);
@@ -236,9 +258,11 @@ export async function walkBlock(
           ...(ref ? { ref } : {}),
           ...(shot ? { screenshot: shot } : {}),
           outcome: 'retry',
-          reason: act.error
-            ? `${act.error}; the screen did not change; retrying once`
-            : 'the screen did not change; retrying once',
+          reason: redact(
+            act.error
+              ? `${act.error}; the screen did not change; retrying once`
+              : 'the screen did not change; retrying once',
+          ),
         });
         continue;
       }
@@ -261,8 +285,9 @@ export async function walkBlock(
 export async function runPlan(blocks: Block[], deps: WalkerDeps): Promise<Ledger> {
   const results: BlockResult[] = [];
   const steps: LedgerRow[] = [];
+  const typed: string[] = [];
   for (const block of blocks) {
-    const outcome = await walkBlock(block, deps, steps.length);
+    const outcome = await walkBlock(block, deps, steps.length, typed);
     results.push(outcome.block);
     steps.push(...outcome.rows);
     if (outcome.failure) return buildLedger(results, steps, outcome.failure);

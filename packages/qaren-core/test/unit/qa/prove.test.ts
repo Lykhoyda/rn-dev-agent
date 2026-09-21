@@ -106,3 +106,19 @@ test('app modules exclude vendored, out-of-root and virtual names', () => {
   assert.equal(isAppModule('__prelude__'), false);
   assert.equal(isAppModule('src/logo.png'), false);
 });
+
+test('a registry name that escapes the worktree through an embedded .. is a mismatch even when the file exists', async () => {
+  const escaped = new Set([...tree, '/work/other/App.tsx']);
+  const outcome = await prove(
+    {
+      ...client('http://localhost:8791/index.bundle?platform=ios&dev=true', [
+        'index.js',
+        'src/../../other/App.tsx',
+      ]),
+      fileExists: (path: string) => escaped.has(path),
+    },
+    { metroPort: 8791, worktree: WORKTREE },
+  );
+  assert.equal(outcome.ok, false);
+  assert.match(String((outcome as { message?: string }).message), /not under \/work\/app/);
+});

@@ -13,7 +13,6 @@ const MAX_ROWS: usize = 10_000;
 const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
 const INBOX_DEPTH: usize = 1_024;
 const POST_KILL_GRACE_MS: u64 = 5_000;
-const POST_EXIT_DRAIN_MS: u64 = 2_000;
 
 // The request payload the core child reads as its first stdin line.
 #[derive(Debug, Clone, Serialize)]
@@ -121,6 +120,8 @@ pub struct CoreOutcome {
     pub exit: Option<i32>,
     // Set when the ledger was synthesized: no result line, a contract violation, or a deadline kill.
     pub failure: Option<Failure>,
+    // The leader exited but a member of its group still held stdout after SIGKILL and its grace.
+    pub group_survived: bool,
 }
 
 pub fn spawn_spec(
@@ -338,7 +339,13 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
     let mut eof = false;
     let mut deadline_failure: Option<Failure> = None;
     let mut killed_at: Option<u64> = None;
-    let mut exited_at: Option<u64> = None;
+    let mut result_at: Option<u64> = None;
+    let mut killed_after_result = false;
+    let mut group_survived = false;
+    // The leader is never reaped before its group is killed, so the pgid cannot have been
+    // recycled: EOF, a deadline and an overstayed exit all end in one SIGKILL to the group,
+    // after which the exit code is read. "Gone" means the leader was reaped and the pipe
+    // closed within the grace; anything else is reported as a surviving group.
     loop {
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(Msg::Line(line)) => {
@@ -355,45 +362,47 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
             }
             Err(mpsc::RecvTimeoutError::Timeout) => runner.sleep(Duration::from_millis(50)),
         }
-        if exit.is_none() {
-            exit = match child.handle.try_wait() {
-                Ok(code) => code,
-                Err(_) => {
-                    // The child cannot be observed; take its group down rather than leave it running.
-                    child.handle.kill_group();
-                    Some(-1)
-                }
-            };
-            if exit.is_some() {
-                exited_at = Some(runner.monotonic_ms());
-            }
+        if result_at.is_none() && inbox.result.is_some() {
+            result_at = Some(runner.monotonic_ms());
         }
         let now = runner.monotonic_ms();
-        if let Some(at) = exited_at {
-            // The pipe closes with the process; a grandchild holding stdout is bounded here.
-            if eof || now.saturating_sub(at) > POST_EXIT_DRAIN_MS {
+        if let Some(at) = killed_at {
+            if exit.is_none() {
+                // An unobservable leader is never guessed dead; the grace below reports it.
+                exit = child.handle.try_wait().ok().flatten();
+            }
+            if exit.is_some() && eof {
+                break;
+            }
+            if now.saturating_sub(at) > POST_KILL_GRACE_MS {
+                group_survived = true;
                 break;
             }
             continue;
         }
-        if let Some(at) = killed_at {
-            if now.saturating_sub(at) > POST_KILL_GRACE_MS {
-                break;
-            }
+        if eof {
+            killed_after_result = inbox.result.is_some();
+            child.handle.kill_group();
+            killed_at = Some(now);
             continue;
         }
         // The step budget starts at the first walk row; before it, session setup
         // (runner build, attach, prove) is bounded by the whole-walk budget only.
+        // Once the result line is held the walk is over and neither budget applies.
         let walking = inbox.rows.iter().any(|r| r.line > 0);
         let reason = if inbox.violation.is_some() {
             inbox.violation.clone()
-        } else if now.saturating_sub(started) > budgets.walk_seconds * 1000 {
+        } else if result_at.is_some() {
+            None
+        } else if now.saturating_sub(started) > budgets.walk_seconds.saturating_mul(1000) {
             Some(format!(
                 "the walk exceeded its {}s budget after {} row(s)",
                 budgets.walk_seconds,
                 inbox.rows.len()
             ))
-        } else if walking && now.saturating_sub(last_progress) > budgets.step_seconds * 1000 {
+        } else if walking
+            && now.saturating_sub(last_progress) > budgets.step_seconds.saturating_mul(1000)
+        {
             Some(format!(
                 "no ledger row within {}s after {}",
                 budgets.step_seconds,
@@ -416,15 +425,23 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
             ));
             child.handle.kill_group();
             killed_at = Some(now);
+        } else if let Some(at) = result_at {
+            // The verdict is in hand; a child that overstays its exit is taken down without losing it.
+            if now.saturating_sub(at) > budgets.step_seconds.saturating_mul(1000) {
+                killed_after_result = true;
+                child.handle.kill_group();
+                killed_at = Some(now);
+            }
         }
     }
-    let (ledger, verdict, failure) = interpret(inbox, exit, deadline_failure);
+    let (ledger, verdict, failure) = interpret(inbox, exit, deadline_failure, killed_after_result);
     CoreOutcome {
         pid,
         ledger,
         verdict,
         exit,
         failure,
+        group_survived,
     }
 }
 
@@ -435,10 +452,13 @@ fn describe_last(rows: &[Row]) -> String {
     }
 }
 
+// `killed_after_result`: the CLI killed the group after the result line was held, so a
+// signal death is the kill's, not the child's, and the held verdict stands on its own.
 fn interpret(
     inbox: Inbox,
     exit: Option<i32>,
     deadline_failure: Option<Failure>,
+    killed_after_result: bool,
 ) -> (Ledger, Verdict, Option<Failure>) {
     let missing = |rows: &[Row], seen: String, code: FailureCode| {
         (
@@ -452,19 +472,19 @@ fn interpret(
             )),
         )
     };
+    if let Some(violation) = inbox.violation {
+        return missing(
+            &inbox.rows,
+            format!("wire contract violated: {violation}"),
+            FailureCode::CoreResultMissing,
+        );
+    }
     if let Some(failure) = deadline_failure {
         let seen = failure.detail.clone();
         return (
             synthesized_ledger(&inbox.rows, "FAIL", &seen),
             Verdict::Fail,
             Some(failure),
-        );
-    }
-    if let Some(violation) = inbox.violation {
-        return missing(
-            &inbox.rows,
-            format!("wire contract violated: {violation}"),
-            FailureCode::CoreResultMissing,
         );
     }
     let exit_text = exit.map_or("unknown".to_string(), |c| c.to_string());
@@ -486,7 +506,8 @@ fn interpret(
         "REFUSED" => Some(4),
         _ => None,
     };
-    if expected_exit.is_none() || expected_exit != exit {
+    let own_kill = killed_after_result && exit.is_some_and(|c| c < 0);
+    if expected_exit.is_none() || (expected_exit != exit && !own_kill) {
         return missing(
             &inbox.rows,
             format!("result line says {verdict:?} but the core exited with code {exit_text}"),
