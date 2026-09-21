@@ -513,3 +513,54 @@ test('a value typed earlier in the run never reaches a later failure, even when 
   assert.equal(dumped.includes('hunter2'), false, dumped);
   assert.match(ledger.failure?.seen ?? '', /Token: •••/);
 });
+
+function inputScreen(label: string, value?: string): Screen {
+  const base = screen([value ? `${label}: ${value}` : label]);
+  return {
+    ...base,
+    elements: [
+      {
+        ref: '@e0',
+        kind: 'input',
+        label,
+        ...(value ? { value } : {}),
+        hittable: true,
+        disabled: false,
+        secure: false,
+        offscreen: false,
+        where: 'middle',
+        side: 'center',
+      },
+    ],
+  };
+}
+
+test('a two-character value shown by its input is masked structurally in the evidence line', async () => {
+  const f = fake([inputScreen('PIN'), inputScreen('PIN', '42'), inputScreen('PIN', '42')]);
+  const ledger = await runPlan(
+    parsePlan('### One\n1. Type "42" into "PIN"\n### Two\n✓ "Welcome"\n').blocks!,
+    f.deps,
+  );
+  assert.equal(ledger.verdict, 'FAIL');
+  assert.match(ledger.failure?.seen ?? '', /PIN: •••/);
+  assert.equal((ledger.failure?.seen ?? '').includes('42'), false, ledger.failure?.seen);
+});
+
+test('a value that is a prefix of a later value cannot expose the remainder', async () => {
+  const f = fake([
+    inputScreen('Code'),
+    inputScreen('Code', 'abc'),
+    inputScreen('Password'),
+    screen(['Password: abcSECRET', 'Next']),
+    screen(['Password: abcSECRET', 'Next']),
+  ]);
+  const ledger = await runPlan(
+    parsePlan(
+      '### One\n1. Type "abc" into "Code"\n2. Type "abcSECRET" into "Password"\n### Two\n✓ "Welcome"\n',
+    ).blocks!,
+    f.deps,
+  );
+  assert.equal(ledger.verdict, 'FAIL');
+  const dumped = JSON.stringify(ledger);
+  assert.equal(dumped.includes('SECRET'), false, dumped);
+});

@@ -79,8 +79,20 @@ export async function walkBlock(
     rows.push(row);
     deps.row(row);
   };
+  // Longer values first, so a value that is a prefix of another cannot expose its remainder.
   const redact = (text: string): string =>
-    typed.reduce((masked, value) => maskValue(masked, value), text);
+    [...typed]
+      .sort((a, b) => b.length - a.length)
+      .reduce((masked, value) => maskValue(masked, value), text);
+  // An input showing a typed value is masked as the screen renders it (`label: value`), whatever the length.
+  const redactInputs = (screen: Screen, text: string): string =>
+    screen.elements.reduce(
+      (masked, el) =>
+        el.kind === 'input' && el.label && el.value && typed.includes(el.value)
+          ? masked.split(`${el.label}: ${el.value}`).join(`${el.label}: ${MASK}`)
+          : masked,
+      text,
+    );
   const base = (item: Item, attempt: number): Omit<LedgerRow, 'outcome'> => ({
     block: block.slug,
     line: item.line,
@@ -110,7 +122,7 @@ export async function walkBlock(
       rows,
       failure: {
         step: item.line,
-        seen: redact(`${reason}; on screen: ${seenOn(screen)}`),
+        seen: redact(redactInputs(screen, `${reason}; on screen: ${seenOn(screen)}`)),
         ...(screenshot ? { screenshot } : {}),
       },
     };
