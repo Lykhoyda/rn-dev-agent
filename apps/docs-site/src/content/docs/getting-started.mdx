@@ -101,20 +101,24 @@ codex plugin add rn-dev-agent@rn-dev-agent --json
 ```
 
 The repo's `.agents/plugins/marketplace.json` resolves the Codex payload from
-`packages/codex-plugin/`, and the installed plugin is fully self-contained
-(bundled MCP runtime, native runner sources, workflow helpers, health program, and runner manifest).
+`packages/claude-plugin/`, the same directory Claude installs. The installed
+plugin is fully self-contained (one bundled MCP runtime, native runner sources,
+workflow helpers, health program, and runner manifest); Codex selects its own
+surface from it through `.codex-plugin/plugin.json`.
 
-For a local checkout instead, Codex uses a separate package directory:
+For a local checkout instead, register that same package directory:
 
 ```text
-/path/to/rn-dev-agent/packages/codex-plugin
+/path/to/rn-dev-agent/packages/claude-plugin
 ```
 
 When installing locally through Codex, select or register
-`packages/codex-plugin`, not the repository root and not
-`packages/claude-plugin`. That directory owns `.codex-plugin/plugin.json`,
-`.mcp.json`, the package-local skills, and the bundled MCP runtime at
-`rn-dev-agent-core/dist/supervisor.js`.
+`packages/claude-plugin`, not the repository root. That directory owns
+`.codex-plugin/plugin.json`, `codex.mcp.json`, the package-local
+`codex-skills/`, the launcher `bin/cdp-supervisor.js`, and the bundled MCP
+runtime at `rn-dev-agent-core/dist/supervisor.js`. If an older registration
+points at `packages/codex-plugin`, remove it and add the new path: that
+directory is now authoring material and no longer carries a runtime.
 
 Codex does not load Claude Code hooks. If the detail screen says `No plugin
 hooks`, that is expected. Codex exposes the `cdp` MCP server, eleven domain skills,
@@ -201,7 +205,7 @@ Both paths preview changes for confirmation and are idempotent: re-running setup
 skips an in-sync managed block and existing scaffold files.
 
 Inspect the [Claude template](https://github.com/Lykhoyda/rn-dev-agent/blob/main/CLAUDE-MD-TEMPLATE.md)
-or the [Codex AGENTS.md template](https://github.com/Lykhoyda/rn-dev-agent/blob/main/packages/codex-plugin/AGENTS-MD-TEMPLATE.md)
+or the [Codex AGENTS.md template](https://github.com/Lykhoyda/rn-dev-agent/blob/main/packages/codex-plugin/src/AGENTS-MD-TEMPLATE.md)
 before running setup.
 
 ## Your agent's saved flows live in `.rn-agent/`
@@ -271,8 +275,8 @@ Cursor local plugin package path:
 /path/to/rn-dev-agent/packages/claude-plugin
 ```
 
-Codex local plugin package path:
+Codex local plugin package path (the same directory Claude installs):
 
 ```text
-/path/to/rn-dev-agent/packages/codex-plugin
+/path/to/rn-dev-agent/packages/claude-plugin
 ```

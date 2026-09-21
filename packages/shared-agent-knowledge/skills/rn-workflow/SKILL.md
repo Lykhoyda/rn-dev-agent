@@ -101,7 +101,7 @@ node <plugin-root>/rn-dev-agent-core/dist/workflow-check.js preflight --project 
 ```
 
 (`<plugin-root>` = `${CLAUDE_PLUGIN_ROOT}` on Claude, `${CURSOR_PLUGIN_ROOT}` on
-Cursor, the Codex package root on Codex.) It reports `packageManager` (the `packageManager` field wins, lockfile
+Cursor, the installed package root on Codex.) It reports `packageManager` (the `packageManager` field wins, lockfile
 inference is the fallback), the exact `installCommand`, `nodeModulesPresent`,
 `claudeMdBlock`, `claudeMdSentinel`, and the private-state-root kind and
 existence, with at most ONE actionable `stop`.

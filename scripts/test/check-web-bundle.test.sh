@@ -20,16 +20,12 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p \
   "$tmp/packages/rn-dev-agent-core/dist/observability/web-dist" \
   "$tmp/packages/claude-plugin/rn-dev-agent-core/dist/observability/web-dist" \
-  "$tmp/packages/claude-plugin/rn-dev-agent-core/dist/web-dist" \
-  "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/observability/web-dist" \
-  "$tmp/packages/codex-plugin/rn-dev-agent-core/dist/web-dist"
+  "$tmp/packages/claude-plugin/rn-dev-agent-core/dist/web-dist"
 
 generated="$tmp/packages/rn-dev-agent-core/dist/observability/web-dist/index.html"
 hosts=(
   packages/claude-plugin/rn-dev-agent-core/dist/observability/web-dist/index.html
   packages/claude-plugin/rn-dev-agent-core/dist/web-dist/index.html
-  packages/codex-plugin/rn-dev-agent-core/dist/observability/web-dist/index.html
-  packages/codex-plugin/rn-dev-agent-core/dist/web-dist/index.html
 )
 
 printf '%s\n' '<html>fresh</html>' > "$generated"
@@ -39,6 +35,9 @@ done
 
 REPO_ROOT="$tmp" WEB_BUILD_CMD='true' HOST_BUNDLES="${hosts[*]}" bash "$GUARD" >/dev/null
 check "matching host SPA copies pass" 0 $?
+
+REPO_ROOT="$tmp" WEB_BUILD_CMD='true' bash "$GUARD" >/dev/null
+check "default host bundle list is the single distributed package" 0 $?
 
 printf '%s\n' '<html>stale</html>' > "$tmp/${hosts[0]}"
 REPO_ROOT="$tmp" WEB_BUILD_CMD='true' HOST_BUNDLES="${hosts[*]}" bash "$GUARD" >/dev/null 2>&1

@@ -25,9 +25,9 @@ import {
 } from '../domain/engine-pin.js';
 import { recordRunnerDiagnostic } from '../experience/runner-diagnostics.js';
 import {
-  actionReplayPreflight,
+  actionReplayRefusal,
   classifyLearnedActionPath,
-  replayCompatibilityPreflight,
+  replayCompatibilityRefusal,
 } from '../domain/action-engine-compat.js';
 import { parseM7Header, type M7Metadata } from '../domain/reusable-action.js';
 import { captureActionFromPath, type CapturedActionReplay } from '../domain/action-store.js';
@@ -1005,20 +1005,21 @@ export function createMaestroRunHandler(
       const reactEngineStatus = await resolveEngineStatus();
       const reactCompatibilityRefusal =
         capturedAction || semanticActionMeta
-          ? actionReplayPreflight({
+          ? actionReplayRefusal({
               enginePin: semanticActionMeta?.enginePin,
               commands: validatedCommands,
               engineStatus: reactEngineStatus,
               requireRuntimePin: !reactOnlyProof,
             })
-          : replayCompatibilityPreflight({
+          : replayCompatibilityRefusal({
               commands: validatedCommands,
               engineStatus: reactEngineStatus,
               requireEnginePin: false,
               requireRuntimePin: !reactOnlyProof,
             });
       if (reactCompatibilityRefusal) {
-        return failResult(reactCompatibilityRefusal, 'ENGINE_PIN_MISMATCH', {
+        return failResult(reactCompatibilityRefusal.message, 'ENGINE_PIN_MISMATCH', {
+          refusalClass: reactCompatibilityRefusal.refusalClass,
           pin: reactEngineStatus?.pin,
           installedVersion: reactEngineStatus?.version ?? null,
           selectedPath: reactEngineStatus?.selectedPath ?? null,
@@ -1456,6 +1457,7 @@ export function createMaestroRunHandler(
     const exactRefusal = exactPinRefusal(engineStatus);
     if (exactRefusal) {
       return failResult(exactRefusal, 'ENGINE_PIN_MISMATCH', {
+        refusalClass: 'runtimePin',
         pin: engineStatus?.pin,
         installedVersion: engineStatus?.version ?? null,
         selectedPath: engineStatus?.selectedPath ?? null,
@@ -1466,18 +1468,19 @@ export function createMaestroRunHandler(
     const actionMeta = semanticActionMeta;
     const compatibilityRefusal =
       learnedAction || actionMeta !== null
-        ? actionReplayPreflight({
+        ? actionReplayRefusal({
             enginePin: actionMeta?.enginePin,
             commands: validatedCommands,
             engineStatus,
           })
-        : replayCompatibilityPreflight({
+        : replayCompatibilityRefusal({
             commands: validatedCommands,
             engineStatus,
             requireEnginePin: false,
           });
     if (compatibilityRefusal) {
-      return failResult(compatibilityRefusal, 'ENGINE_PIN_MISMATCH', {
+      return failResult(compatibilityRefusal.message, 'ENGINE_PIN_MISMATCH', {
+        refusalClass: compatibilityRefusal.refusalClass,
         pin: engineStatus?.pin,
         installedVersion: engineStatus?.version ?? null,
         selectedPath: engineStatus?.selectedPath ?? null,

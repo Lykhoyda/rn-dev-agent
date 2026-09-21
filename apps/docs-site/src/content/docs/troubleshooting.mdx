@@ -97,7 +97,8 @@ is the process lock refusing a second server for the same root, described under
 
 **Codex:** inspect `codex plugin list --json` and `/mcp verbose`. The latter is
 inventory only, never reconnect. Local development uses
-`/path/to/rn-dev-agent/packages/codex-plugin`. If materialization is absent,
+`/path/to/rn-dev-agent/packages/claude-plugin` (the same directory Claude
+installs; `packages/codex-plugin` is authoring only). If materialization is absent,
 user-confirm:
 
 ```bash
@@ -509,6 +510,16 @@ The plugin attempts to self-repair small UI drift: it looks at the live UI, find
 Self-repair refuses if the file has been hand-edited (mtime check), or after 3 repairs in 24h. If repair is refused or fails, the plugin asks before forcing. If the underlying flow has changed structurally (extra step, removed screen), re-record with `/rn-dev-agent:test-feature`.
 
 See the [Actions guide](/rn-dev-agent/actions/) for full details.
+
+### Action replay refused: frontmost proof cannot cover every mounted renderer
+
+The React-tree prover refused with `ASSERTION_FAILED` because it could not cover every mounted renderer. Read `meta.coverage.reasons`:
+
+- `renderer-error`: reading a renderer's roots or walking its tree threw (`erroredRendererIds`), the registry could not be fully read (`registeredRendererIds` is `null`), or resolving or walking `__RN_AGENT_EXTRA_ROOTS__` threw (`extraRootsError`).
+- `root-enumeration-incomplete`: root enumeration did not finish (`scanFinished` is `false`).
+- `renderers-unscanned`: a registered renderer was never visited (`unscannedRendererIds`).
+
+`meta.coverage.scanErrors` retains at most five scan errors, each with `rendererId`, `phase`, and a message capped at 200 characters. The phases are `roots` for reading renderer roots, `walk` for iterating those roots or walking their trees, and `extra-roots` for resolving or walking extra roots (whose `rendererId` is `-1`). `rendererErrors` counts caught scan errors, including extra-root failures; an unreadable registry can cause refusal without a `scanErrors` entry. Successful frontmost checks omit `coverage`.
 
 ### Action replay refused with WDA_BOOTSTRAP_FAILED
 

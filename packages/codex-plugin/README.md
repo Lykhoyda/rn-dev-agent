@@ -1,6 +1,25 @@
-# rn-dev-agent Codex plugin
+# rn-dev-agent Codex adapter (authoring source)
 
-This package is the self-contained Codex host boundary for rn-dev-agent.
+This package is the authoring source for the Codex host surface of rn-dev-agent.
+It is **not** an installable plugin directory. `scripts/build-host-runtimes.ts`
+copies its contents into `packages/claude-plugin`, the one directory both the
+Claude and Codex marketplaces install, and generates the 17 workflow skills there:
+
+| Authored here | Shipped from `packages/claude-plugin` |
+|---|---|
+| `.codex-plugin/plugin.json` | `.codex-plugin/plugin.json` |
+| `.mcp.json` | `codex.mcp.json` |
+| `bin/cdp-supervisor.js` | `bin/cdp-supervisor.js` (+ generated `bin/package.json`) |
+| `src/plugin-health.ts` | `bin/plugin-health.js` |
+| `src/AGENTS-MD-TEMPLATE.md` | `AGENTS-MD-TEMPLATE.md` |
+| `skills/` (11 adapted domain skills) | `codex-skills/` (+ 17 generated workflow skills) |
+| `commands/` | `codex-commands/` |
+| `agents/` | `codex-agents/` |
+| `templates/` | `codex-templates/` |
+
+Package-relative links in these files therefore target the shipped names
+(`../../codex-commands/...`, `<package-root>/codex-skills/...`), not the local
+`commands/` or `skills/` directories.
 
 ## Install
 
@@ -9,12 +28,16 @@ codex plugin marketplace add Lykhoyda/rn-dev-agent
 codex plugin add rn-dev-agent@rn-dev-agent --json
 ```
 
-A local install points at `/path/to/rn-dev-agent/packages/codex-plugin`, not the
-repository root or Claude package. `No plugin hooks` is expected.
+A local install points at `/path/to/rn-dev-agent/packages/claude-plugin`, not
+this directory and not the repository root. `No plugin hooks` is expected: the
+Codex manifest declares an inline empty hooks object so Claude's `hooks/` is
+never discovered.
 
 ## Native surface
 
-- Stable MCP server key `cdp` and the full MCP tool suite.
+- Stable MCP server key `cdp` and the full MCP tool suite, launched through
+  `bin/cdp-supervisor.js` into the one bundled runtime at
+  `rn-dev-agent-core/dist/supervisor.js`.
 - Eleven implicit domain skills.
 - Seventeen explicit native workflow skills, invoked as
   `$rn-dev-agent:<workflow> [request text]`.
@@ -25,7 +48,7 @@ The seventeen workflows are `build-and-test`, `check-env`,
 `lock-e2e`, `nav-graph`, `observe`, `proof-capture`, `qa-pr`, `rn-feature-dev`,
 `run-action`, `run-workflow`, `send-feedback`, `setup`, and `test-feature`.
 
-`commands/` contains their full package-local playbooks. The Codex manifest
+See the authoring-to-distribution map above for playbook locations. The Codex manifest
 sets `"commands": []` to disable host best-effort command migration; no
 `source-command-*` name is supported. Claude's slash-command spelling remains a
 Claude-only surface.
@@ -44,23 +67,9 @@ removes, edits configuration, attaches to an app/device, controls Observe, or
 kills/restarts a process. A task with zero plugin skills must use the external
 bootstrap documented on the troubleshooting page.
 
-## Package-local ownership
-
-- `.codex-plugin/plugin.json`, `.mcp.json`
-- `bin/cdp-supervisor.js`, generated `bin/plugin-health.js`
-- bundled `rn-dev-agent-core/`
-- eleven adapted domain skills + seventeen generated workflow adapters
-- seventeen adapted workflow playbooks under `commands/`
-- generated `AGENTS-MD-TEMPLATE.md`
-- Expo/EAS, Vercel, feedback, proof, snapshot, and native-runner helpers
-- rn-agent scaffold templates and runner manifest
-
 Resolve runtime resources relative to the exact selected `SKILL.md` or
 `import.meta.url`; never scan caches or treat a marketplace source path as the
 materialized package.
-
-Generated runtime, adapters, helpers, health entry, AGENTS template, runner
-sources, and manifests are owned by `scripts/build-host-runtimes.ts`:
 
 ```bash
 corepack yarn build:host-runtimes

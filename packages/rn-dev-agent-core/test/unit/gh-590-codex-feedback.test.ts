@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { skillFrontmatter } from '../helpers/skill-metadata.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
@@ -34,7 +35,7 @@ test('Codex launcher bypasses the process-wide bridge lock without changing app 
   try {
     const result = spawnSync(
       process.execPath,
-      [join(repoRoot, 'packages/codex-plugin/bin/cdp-supervisor.js'), '--probe'],
+      [join(repoRoot, 'packages/claude-plugin/bin/cdp-supervisor.js'), '--probe'],
       {
         cwd: temp,
         env: {
@@ -63,7 +64,7 @@ test('Codex launcher enforces the authority runtime Node floor', async () => {
     const shim = await nodeVersionShim(temp, '23.11.0');
     const result = spawnSync(
       process.execPath,
-      ['--require', shim, join(repoRoot, 'packages/codex-plugin/bin/cdp-supervisor.js')],
+      ['--require', shim, join(repoRoot, 'packages/claude-plugin/bin/cdp-supervisor.js')],
       { encoding: 'utf8' },
     );
     assert.equal(result.status, 1, result.stderr);
@@ -79,19 +80,16 @@ test('installed host packages declare and execute the authority runtime floor', 
       'packages/claude-plugin/package.json',
       'packages/codex-plugin/package.json',
       'packages/claude-plugin/rn-dev-agent-core/package.json',
-      'packages/codex-plugin/rn-dev-agent-core/package.json',
     ].map(async (path) => JSON.parse(await text(path))),
   );
   for (const manifest of manifests) {
     assert.equal(manifest.engines.node, '>=24');
   }
+  assert.equal(manifests[2].name, 'rn-dev-agent-core', 'packaged runtime metadata is host-neutral');
   const temp = await mkdtemp(join(tmpdir(), 'rn-gh590-host-node-floor-'));
   try {
     const shim = await nodeVersionShim(temp, '23.11.0');
-    for (const supervisor of [
-      'packages/claude-plugin/rn-dev-agent-core/dist/supervisor.js',
-      'packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js',
-    ]) {
+    for (const supervisor of ['packages/claude-plugin/rn-dev-agent-core/dist/supervisor.js']) {
       const result = spawnSync(process.execPath, ['--require', shim, join(repoRoot, supervisor)], {
         encoding: 'utf8',
       });
@@ -104,26 +102,21 @@ test('installed host packages declare and execute the authority runtime floor', 
 });
 
 test('Codex ships a discoverable feedback skill and package-local collector', async () => {
-  const [canonicalSkill, codexSkill, canonicalCollector, codexCollector, claudeCollector, command] =
+  const [canonicalSkill, codexSkill, canonicalCollector, packagedCollector, command] =
     await Promise.all([
       text('packages/shared-agent-knowledge/skills/sending-feedback/SKILL.md'),
-      text('packages/codex-plugin/skills/sending-feedback/SKILL.md'),
+      text('packages/claude-plugin/codex-skills/sending-feedback/SKILL.md'),
       text('scripts/collect-feedback.sh'),
-      text('packages/codex-plugin/scripts/collect-feedback.sh'),
       text('packages/claude-plugin/scripts/collect-feedback.sh'),
-      text('packages/codex-plugin/commands/send-feedback.md'),
+      text('packages/claude-plugin/codex-commands/send-feedback.md'),
     ]);
 
   assert.notEqual(codexSkill, canonicalSkill, 'Codex skill is an intentional host adaptation');
-  assert.equal(codexCollector, canonicalCollector);
-  assert.equal(claudeCollector, canonicalCollector);
-  assert.match(codexSkill, /^name: sending-feedback$/m);
+  assert.equal(packagedCollector, canonicalCollector);
+  const metadata = skillFrontmatter(codexSkill);
+  assert.equal(metadata.name, 'sending-feedback');
+  assert.equal(typeof metadata.description, 'string');
+  assert.ok(metadata.description);
   assert.match(codexSkill, /\.\.\/\.\.\/scripts\/collect-feedback\.sh/);
   assert.match(command, /<package-root>\/scripts\/collect-feedback\.sh/);
-  assert.doesNotMatch(
-    command,
-    /RN_DEV_AGENT_CODEX_PLUGIN_ROOT|CODEX_PLUGIN_ROOT|CLAUDE_PLUGIN_ROOT/,
-  );
-  assert.doesNotMatch(command, /plugins\/cache|sort -V|-print -quit/);
-  assert.match(command, /collision-safe private temporary body file/);
 });

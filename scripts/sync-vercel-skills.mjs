@@ -47,23 +47,35 @@ const ADAPTER_ROOT = path.join(
   'skills',
   'rn-best-practices',
 );
+// Codex installs its skills from packages/claude-plugin/codex-skills, so the
+// four local reference paths in its authored index point there.
 const HOST_RULES_INDEX_PATHS = [
-  path.join(
-    REPO_ROOT,
-    'packages',
-    'claude-plugin',
-    'skills',
-    'rn-best-practices',
-    'rules.index.json',
-  ),
-  path.join(
-    REPO_ROOT,
-    'packages',
-    'codex-plugin',
-    'skills',
-    'rn-best-practices',
-    'rules.index.json',
-  ),
+  {
+    path: path.join(
+      REPO_ROOT,
+      'packages',
+      'claude-plugin',
+      'skills',
+      'rn-best-practices',
+      'rules.index.json',
+    ),
+    adapt: (content) => content,
+  },
+  {
+    path: path.join(
+      REPO_ROOT,
+      'packages',
+      'codex-plugin',
+      'skills',
+      'rn-best-practices',
+      'rules.index.json',
+    ),
+    adapt: (content) =>
+      content.replaceAll(
+        '"upstream_path": "skills/rn-best-practices/',
+        '"upstream_path": "codex-skills/rn-best-practices/',
+      ),
+  },
 ];
 
 const UPSTREAM_REPO = 'vercel-labs/agent-skills';
@@ -310,9 +322,9 @@ function buildRulesIndex(lock) {
 
 function copyRulesIndexToHostOutputs(indexPath, opts) {
   const indexContent = fs.readFileSync(indexPath, 'utf8');
-  for (const hostIndexPath of HOST_RULES_INDEX_PATHS) {
+  for (const { path: hostIndexPath, adapt } of HOST_RULES_INDEX_PATHS) {
     fs.mkdirSync(path.dirname(hostIndexPath), { recursive: true });
-    fs.writeFileSync(hostIndexPath, indexContent, 'utf8');
+    fs.writeFileSync(hostIndexPath, adapt(indexContent), 'utf8');
     if (!opts.quiet) console.log(`  wrote ${path.relative(REPO_ROOT, hostIndexPath)}`);
   }
 }
@@ -324,14 +336,14 @@ function checkHostRulesIndexCopies(indexPath) {
   }
   const expected = fs.readFileSync(indexPath, 'utf8');
   let mismatches = 0;
-  for (const hostIndexPath of HOST_RULES_INDEX_PATHS) {
+  for (const { path: hostIndexPath, adapt } of HOST_RULES_INDEX_PATHS) {
     if (!fs.existsSync(hostIndexPath)) {
       console.error(`missing: ${path.relative(REPO_ROOT, hostIndexPath)}`);
       mismatches++;
       continue;
     }
     const actual = fs.readFileSync(hostIndexPath, 'utf8');
-    if (actual !== expected) {
+    if (actual !== adapt(expected)) {
       console.error(
         `drift: ${path.relative(REPO_ROOT, hostIndexPath)} does not match shared rules.index.json`,
       );

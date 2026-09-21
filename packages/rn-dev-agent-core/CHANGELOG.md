@@ -1,5 +1,17 @@
 # rn-dev-agent-core
 
+## 1.0.12
+
+### Patch Changes
+
+- fd4f88a: `device_fill` gains `focused: true`, which types into the already focused iOS field through a synthesized text event and confirms the value through the React tree only when that named field is the focused responder, returning `typed: true, verified: false` when it cannot.
+- e0a5803: Doctor reports learned-action compatibility as its own read-only row — missing or low enginePin, regex text selectors, and unreadable actions — so a pinned-ok runner can no longer hide replay refusals behind ENGINE_PIN_MISMATCH.
+- 466b3f5: The React-tree replay refusal `frontmost proof cannot cover every mounted renderer` now carries `meta.coverage` with its reasons and renderer ids.
+- 466b3f5: The React-tree replay refusal's `meta.coverage` now names the phase and message of each scan error, and the frontmost prover reads style keys directly so styles it cannot enumerate no longer abort the scan.
+- bc219d9: Ship one committed bundled runtime with host-neutral `rn-dev-agent-core` metadata from `packages/claude-plugin`, which both the Claude and Codex marketplaces now install (Codex selects its generated `.codex-plugin/plugin.json`, `codex.mcp.json`, `bin/` launchers and `codex-*` adapters from the same directory), so a Codex local registration must point at `packages/claude-plugin` instead of the removed `packages/codex-plugin` runtime (GH #892).
+- 466b3f5: Expand TextInput designation scans to 20,000 fibers.
+- 466b3f5: Raise React-tree `typeText` and input read-back to a shared 500,000-work-unit limit (a measured diagnostic, not a performance recommendation) and make TextInput designation recognize React alternates.
+
 ## 1.0.11
 
 ### Patch Changes

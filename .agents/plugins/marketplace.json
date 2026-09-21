@@ -6,7 +6,7 @@
       "name": "rn-dev-agent",
       "source": {
         "source": "local",
-        "path": "./packages/codex-plugin"
+        "path": "./packages/claude-plugin"
       },
       "policy": {
         "installation": "AVAILABLE",

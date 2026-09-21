@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# CI guard: committed HOST observability SPA bundles must match a fresh rebuild
-# of src/observability/web/. Core dist/observability/web-dist is generated and
-# untracked; marketplace installs serve the host-package copies.
+# CI guard: committed plugin-package observability SPA bundles must match a
+# fresh rebuild of src/observability/web/. Core dist/observability/web-dist is
+# generated and untracked; both marketplaces serve the packages/claude-plugin copies.
 set -euo pipefail
 
 ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -10,8 +10,6 @@ GENERATED="${GENERATED_BUNDLE:-$ROOT/packages/rn-dev-agent-core/dist/observabili
 DEFAULT_HOST_BUNDLES=(
   packages/claude-plugin/rn-dev-agent-core/dist/observability/web-dist/index.html
   packages/claude-plugin/rn-dev-agent-core/dist/web-dist/index.html
-  packages/codex-plugin/rn-dev-agent-core/dist/observability/web-dist/index.html
-  packages/codex-plugin/rn-dev-agent-core/dist/web-dist/index.html
 )
 WEB_BUILD_CMD="${WEB_BUILD_CMD:-}"
 
