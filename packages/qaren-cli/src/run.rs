@@ -1,7 +1,9 @@
 use crate::adapters::ios;
 use crate::buildplan::BuildDecision;
 use crate::candidate::{self, sha256_hex};
-use crate::commands::cleanup::{cleanup_process_group, release_lease_outcome, Outcome};
+use crate::commands::cleanup::{
+    cleanup_process_group, release_lease_outcome, retained_lease_outcome, unclean_legs, Outcome,
+};
 use crate::commands::prepare::{self, finish_receipt, Ctx};
 use crate::config::CheckConfig;
 use crate::core::{self, Budgets, CoreRequest, CoreTarget, Verdict};
@@ -268,6 +270,8 @@ fn run_inner(
     };
     ctx.record.resources.core = capture_pid_identity(ctx.runner, core_child.pid);
     if let Err(f) = ctx.save() {
+        core::abort(core_child);
+        ctx.record.resources.core = None;
         return Ok(finish_failed(ctx, f));
     }
     let outcome = core::wait(ctx.runner, core_child, req.budgets);
@@ -388,6 +392,13 @@ fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
 // borrowed device kept → lease released. Every leg is ownership-gated.
 fn teardown(ctx: &mut Ctx) -> (Vec<(String, String)>, bool) {
     let mut outcomes: Vec<(String, Outcome)> = Vec::new();
+    if let Some(core) = ctx.record.resources.core.clone() {
+        let outcome = cleanup_process_group(ctx.runner, Some(&core), core.pid, None);
+        if outcome.clean() {
+            ctx.record.resources.core = None;
+        }
+        outcomes.push(("core".to_string(), outcome));
+    }
     if let Some(m) = ctx.record.resources.metro.clone() {
         let outcome = cleanup_process_group(
             ctx.runner,
@@ -405,10 +416,16 @@ fn teardown(ctx: &mut Ctx) -> (Vec<(String, String)>, bool) {
         outcomes.push(("simulator".to_string(), Outcome::Kept));
     }
     if let Some(lease) = ctx.record.resources.lease.clone() {
-        let outcome = release_lease_outcome(lease::release(&lease));
-        if outcome.clean() {
-            ctx.record.resources.lease = None;
-        }
+        let unclean = unclean_legs(&outcomes);
+        let outcome = if unclean.is_empty() {
+            let outcome = release_lease_outcome(lease::release(&lease));
+            if outcome.clean() {
+                ctx.record.resources.lease = None;
+            }
+            outcome
+        } else {
+            retained_lease_outcome(&unclean, &ctx.record.run_id)
+        };
         outcomes.push(("device_lease".to_string(), outcome));
     }
     let all_clean = outcomes.iter().all(|(_, o)| o.clean());
@@ -527,6 +544,18 @@ fn preflight_disk(runner: &mut dyn Runner, runs_root: &Path) -> Result<(), Failu
         &["-Pk", &runs_root.to_string_lossy()],
         10,
     ));
+    if !output.ok() {
+        return Err(Failure::new(
+            "preflight",
+            FailureCode::PrereqMissing,
+            format!(
+                "df could not report free space under {}: {}",
+                runs_root.display(),
+                output.summary()
+            ),
+            "make df available on PATH and the run directory readable, then re-run",
+        ));
+    }
     let available_kb = output
         .stdout
         .lines()
@@ -534,7 +563,7 @@ fn preflight_disk(runner: &mut dyn Runner, runs_root: &Path) -> Result<(), Failu
         .and_then(|line| line.split_whitespace().nth(3))
         .and_then(|kb| kb.parse::<u64>().ok());
     match available_kb {
-        Some(kb) if output.ok() && kb < MIN_FREE_DISK_KB => Err(Failure::new(
+        Some(kb) if kb < MIN_FREE_DISK_KB => Err(Failure::new(
             "preflight",
             FailureCode::DiskBudgetExceeded,
             format!(
@@ -545,7 +574,16 @@ fn preflight_disk(runner: &mut dyn Runner, runs_root: &Path) -> Result<(), Failu
             ),
             "free disk space, then re-run",
         )),
-        _ => Ok(()),
+        Some(_) => Ok(()),
+        None => Err(Failure::new(
+            "preflight",
+            FailureCode::PrereqMissing,
+            format!(
+                "df -Pk output for {} had no readable available-space column",
+                runs_root.display()
+            ),
+            "check that df prints the POSIX table for the run directory, then re-run",
+        )),
     }
 }
 

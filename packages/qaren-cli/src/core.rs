@@ -167,6 +167,11 @@ pub struct CoreChild {
     rx: mpsc::Receiver<Msg>,
 }
 
+// The caller could not persist the pid, so nothing else will ever find this child: kill its group now.
+pub fn abort(mut core: CoreChild) {
+    core.child.handle.kill_group();
+}
+
 // Spawns the child and writes the request; the caller persists the pid, then waits.
 pub fn spawn(
     runner: &mut dyn Runner,

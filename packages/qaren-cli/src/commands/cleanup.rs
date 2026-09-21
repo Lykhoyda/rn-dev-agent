@@ -90,6 +90,12 @@ pub fn cleanup_with(
 
     let mut outcomes: Vec<(String, Outcome)> = Vec::new();
 
+    if let Some(core) = record.resources.core.clone() {
+        outcomes.push((
+            "core".to_string(),
+            cleanup_process_group(runner, Some(&core), core.pid, None),
+        ));
+    }
     if let Some(m) = record.resources.metro.clone() {
         outcomes.push((
             "metro".to_string(),
@@ -322,10 +328,13 @@ pub fn cleanup_with(
     }
 
     if let Some(lease) = record.resources.lease.clone() {
-        outcomes.push((
-            "device_lease".to_string(),
-            release_lease_outcome(crate::lease::release(&lease)),
-        ));
+        let unclean = unclean_legs(&outcomes);
+        let outcome = if unclean.is_empty() {
+            release_lease_outcome(crate::lease::release(&lease))
+        } else {
+            retained_lease_outcome(&unclean, &record.run_id)
+        };
+        outcomes.push(("device_lease".to_string(), outcome));
     }
 
     if let Some(lock) = record.resources.build_lock.clone() {
@@ -852,6 +861,23 @@ fn remove_app_install(
         package_list_after: probe_evidence(&list_after),
     };
     (outcome, Some(removal))
+}
+
+// The device lease is released last, and only once every leg that can still address
+// the device is proven clean; otherwise it is retained for `qaren cleanup`.
+pub(crate) fn unclean_legs(outcomes: &[(String, Outcome)]) -> Vec<String> {
+    outcomes
+        .iter()
+        .filter(|(_, o)| !o.clean())
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+pub(crate) fn retained_lease_outcome(unclean: &[String], run_id: &str) -> Outcome {
+    Outcome::Unresolved(format!(
+        "retained: {} not proven gone; qaren cleanup {run_id} releases it",
+        unclean.join(", ")
+    ))
 }
 
 // A foreign holder proves this run's Strict claim never succeeded, so there is nothing of ours to release.

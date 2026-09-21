@@ -421,3 +421,107 @@ fn a_child_refusal_is_a_typed_refusal_with_the_child_code() {
     assert_eq!(mock.remaining(), 0);
     assert_eq!(receipt.cleanup["device_lease"], "removed");
 }
+
+#[test]
+fn an_unresolved_metro_group_retains_the_device_lease_for_cleanup() {
+    let (repo, app) = app_repo();
+    let mut mock = MockRunner::new();
+    script_preflight(&mut mock, &repo);
+    script_provision(&mut mock);
+    mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
+    script_core_identity(&mut mock);
+    // Drift report, then the Metro group: alive, TERM, KILL, and the leader survives both.
+    mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
+    mock.expect_run(
+        "git",
+        CmdOutput::success("?? test-app/.qaren/\0?? test-app/plan.md\0"),
+    );
+    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
+    mock.expect_run("ps", CmdOutput::success("S\n"));
+    mock.expect_run("lsof", CmdOutput::success("6001\n"));
+    mock.expect_run("ps", CmdOutput::success("6000\n"));
+    mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n"))); // leader survived
+    mock.expect_run("ps", CmdOutput::success("S\n"));
+
+    let receipt = run(&mut mock, &request(&repo, &app, 30));
+
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Pass,
+        "failure: {:?}",
+        receipt.failure
+    );
+    assert_eq!(mock.remaining(), 0);
+    assert!(
+        receipt.cleanup["metro"].starts_with("unresolved"),
+        "{}",
+        receipt.cleanup["metro"]
+    );
+    assert!(
+        receipt.cleanup["device_lease"].starts_with("unresolved: retained: metro"),
+        "{}",
+        receipt.cleanup["device_lease"]
+    );
+    assert_eq!(
+        receipt.next_action,
+        format!("qaren cleanup {} --json", run_id())
+    );
+    let record = RunRecord::load(&repo.join("runs"), &run_id()).unwrap();
+    assert_eq!(record.phase, Phase::Walking);
+    assert!(
+        record.resources.lease.is_some(),
+        "the lease stays with the run until Metro is proven gone"
+    );
+    assert!(record.resources.metro.is_some());
+    assert!(repo
+        .join(".locks")
+        .join(qaren::lease::lock_name(Platform::Ios, UDID))
+        .exists());
+}
+
+#[test]
+fn an_unreadable_disk_budget_fails_closed_before_any_claim() {
+    let (repo, app) = app_repo();
+    let mut mock = MockRunner::new();
+    mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
+    mock.expect_run(
+        "walk.js --parse",
+        CmdOutput::success("{\"ok\":true,\"blocks\":1,\"items\":2}\n"),
+    );
+    mock.expect_run(
+        "simctl list devices booted",
+        CmdOutput::success(&booted_json()),
+    );
+    mock.expect_run("git", CmdOutput::success(&format!("{}\n", repo.display())));
+    mock.expect_run("git", CmdOutput::success(&format!("{}\n", repo.display())));
+    mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
+    mock.expect_run(
+        "git",
+        CmdOutput::success("?? test-app/.qaren/\0?? test-app/plan.md\0"),
+    );
+    for tool in IOS_TOOLS {
+        mock.expect_run("which", CmdOutput::success(&format!("/usr/bin/{tool}\n")));
+    }
+    mock.expect_run("lsof", free_port());
+    mock.expect_run("df", CmdOutput::failed(1, "df: No such file or directory"));
+
+    let receipt = run(&mut mock, &request(&repo, &app, 30));
+
+    assert_ne!(receipt.result, ReceiptResult::Pass);
+    let failure = receipt.failure.as_ref().unwrap();
+    assert_eq!(failure.code, FailureCode::PrereqMissing);
+    assert_eq!(failure.phase, "preflight");
+    assert!(
+        failure.detail.contains("df could not report"),
+        "{}",
+        failure.detail
+    );
+    assert_eq!(receipt.run_id, "none");
+    assert_eq!(mock.remaining(), 0);
+    assert!(!repo
+        .join(".locks")
+        .join(qaren::lease::lock_name(Platform::Ios, UDID))
+        .exists());
+}

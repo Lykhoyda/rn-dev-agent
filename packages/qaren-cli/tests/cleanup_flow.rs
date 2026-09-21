@@ -916,3 +916,72 @@ fn vendor_key_is_deleted_even_when_the_adb_server_never_spawned() {
         "the fetched vendor key must not survive a run that died before the server spawned"
     );
 }
+
+#[test]
+fn cleanup_retains_the_device_lease_until_the_metro_group_is_proven_gone() {
+    let repo = common::temp_repo();
+    let lock_root = repo.join(".locks");
+    let mut holder = MockRunner::new();
+    let lease = qaren::lease::acquire(
+        &mut holder,
+        &lock_root,
+        qaren::scenario::Platform::Ios,
+        "AAAA-1111",
+        "iosrun1",
+        Some(common::identity(4242, LSTART)),
+    )
+    .unwrap();
+    let lock_dir = lease.lock_dir.clone();
+    let mut record = ios_ready_record(&repo);
+    record.resources.device_borrowed = true;
+    record.resources.lease = Some(lease);
+    record.save(&repo).unwrap();
+
+    // Metro group: alive, TERM, KILL, and the leader survives both -> unresolved.
+    let mut mock = MockRunner::new();
+    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
+    mock.expect_run("ps", CmdOutput::success("S\n"));
+    mock.expect_run("lsof", CmdOutput::success("6001\n"));
+    mock.expect_run("ps", CmdOutput::success("5000\n"));
+    mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
+    mock.expect_run("ps", CmdOutput::success("S\n"));
+
+    let receipt = cleanup(&mut mock, &repo, "iosrun1");
+    assert_ne!(receipt.result, ReceiptResult::Cleaned);
+    assert!(receipt.cleanup["metro"].starts_with("unresolved"));
+    assert_eq!(receipt.cleanup["simulator"], "kept");
+    assert!(
+        receipt.cleanup["device_lease"].starts_with("unresolved: retained: metro"),
+        "{}",
+        receipt.cleanup["device_lease"]
+    );
+    assert!(
+        lock_dir.exists(),
+        "the lease survives an unresolved Metro leg"
+    );
+    assert_eq!(mock.remaining(), 0);
+
+    // Metro leader dead and the port free -> the lease is released.
+    let mut mock2 = MockRunner::new();
+    mock2.expect_run("ps", CmdOutput::failed(1, ""));
+    mock2.expect_run(
+        "lsof",
+        CmdOutput {
+            exit_code: Some(1),
+            ..Default::default()
+        },
+    );
+    let receipt2 = cleanup(&mut mock2, &repo, "iosrun1");
+    assert_eq!(
+        receipt2.result,
+        ReceiptResult::Cleaned,
+        "{:?}",
+        receipt2.failure
+    );
+    assert_eq!(receipt2.cleanup["metro"], "absent");
+    assert_eq!(receipt2.cleanup["device_lease"], "removed");
+    assert!(!lock_dir.exists());
+    assert_eq!(mock2.remaining(), 0);
+}
