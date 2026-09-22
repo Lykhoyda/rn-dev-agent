@@ -2,7 +2,7 @@ use crate::failure::{Failure, FailureCode};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-pub const SCENARIO_SCHEMA: &str = "rn-qa/1";
+pub const SCENARIO_SCHEMA: &str = "qaren/1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -83,14 +83,12 @@ pub enum BuildStrategy {
     Clean,
 }
 
-// Who performs the one authoritative build/install. `rn-qa` (default) keeps
-// today's behavior. `qaren` stops prepare at allocation and issues a
-// typed handoff; the qaren session then owns Metro, build, install,
-// and runtime binding (workspace issue #34).
+// Who performs the one authoritative build/install: the CLI itself (default),
+// or a cooperating session that takes a typed handoff after allocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BuildOwner {
-    RnQa,
+    Cli,
     Qaren,
 }
 
@@ -108,14 +106,14 @@ fn d_strategy() -> BuildStrategy {
 }
 
 fn d_owner() -> BuildOwner {
-    BuildOwner::RnQa
+    BuildOwner::Cli
 }
 
 impl Default for BuildSpec {
     fn default() -> Self {
         BuildSpec {
             strategy: BuildStrategy::Auto,
-            owner: BuildOwner::RnQa,
+            owner: BuildOwner::Cli,
         }
     }
 }
@@ -191,8 +189,8 @@ impl Scenario {
             Failure::new(
                 "validate",
                 FailureCode::ScenarioInvalid,
-                format!("scenario {} does not parse as rn-qa/1: {e}", path.display()),
-                "fix the scenario file against dev/rn-qa/README.md",
+                format!("scenario {} does not parse as qaren/1: {e}", path.display()),
+                "fix the scenario file against packages/qaren-cli/README.md",
             )
         })?;
         scenario.validate()?;
@@ -205,7 +203,7 @@ impl Scenario {
                 "validate",
                 FailureCode::ScenarioInvalid,
                 detail,
-                "fix the scenario file against dev/rn-qa/README.md",
+                "fix the scenario file against packages/qaren-cli/README.md",
             )
         };
         if self.schema != SCENARIO_SCHEMA {
@@ -213,7 +211,7 @@ impl Scenario {
                 "validate",
                 FailureCode::ScenarioSchemaUnsupported,
                 format!("scenario schema {:?} is not {SCENARIO_SCHEMA}", self.schema),
-                "use a scenario with schema rn-qa/1",
+                "use a scenario with schema qaren/1",
             ));
         }
         if self.name.is_empty()
@@ -234,9 +232,9 @@ impl Scenario {
                     metro.port
                 )));
             }
-            (None, BuildOwner::RnQa) => {
+            (None, BuildOwner::Cli) => {
                 return Err(invalid(
-                    "a `metro:` section is required when rn-qa owns the build".into(),
+                    "a `metro:` section is required when qaren owns the build".into(),
                 ));
             }
             (Some(_), BuildOwner::Qaren) => {
@@ -246,18 +244,16 @@ impl Scenario {
             }
             _ => {}
         }
-        if self.build.owner == BuildOwner::Qaren && self.build.strategy != BuildStrategy::Auto
-        {
+        if self.build.owner == BuildOwner::Qaren && self.build.strategy != BuildStrategy::Auto {
             return Err(invalid(
-                "build.strategy names rn-qa's own build path and must stay `auto` when build.owner is qaren".into(),
+                "build.strategy names qaren's own build path and must stay `auto` when build.owner is qaren".into(),
             ));
         }
-        if self.build.owner == BuildOwner::Qaren && self.candidate.dev_client_scheme.is_some()
-        {
-            // The scheme only drives rn-qa's own cached-reuse deep link; in
-            // handoff mode it would promise a launch path rn-qa does not own.
+        if self.build.owner == BuildOwner::Qaren && self.candidate.dev_client_scheme.is_some() {
+            // The scheme only drives qaren's own cached-reuse deep link; in
+            // handoff mode it would promise a launch path qaren does not own.
             return Err(invalid(
-                "candidate.dev_client_scheme drives rn-qa's cached-reuse launch and must be absent when build.owner is qaren".into(),
+                "candidate.dev_client_scheme drives qaren's cached-reuse launch and must be absent when build.owner is qaren".into(),
             ));
         }
         let root = Path::new(&self.candidate.project_root);
@@ -374,12 +370,12 @@ impl Scenario {
                 }
                 let android = match (&self.android, &self.android_usb) {
                     (Some(android), None) => {
-                        // The farm emulator is only reachable through rn-qa's
+                        // The farm emulator is only reachable through qaren's
                         // run-scoped vendor-key adb server, which the
                         // qaren session cannot use.
                         if self.build.owner == BuildOwner::Qaren {
                             return Err(invalid(
-                                "build.owner qaren does not support the `android:` farm adapter (the leased emulator is only reachable through rn-qa's run-scoped vendor-key adb server); use `android_usb:` or platform ios".into(),
+                                "build.owner qaren does not support the `android:` farm adapter (the leased emulator is only reachable through qaren's run-scoped vendor-key adb server); use `android_usb:` or platform ios".into(),
                             ));
                         }
                         android
@@ -447,7 +443,7 @@ impl Scenario {
                 "validate",
                 FailureCode::ScenarioInvalid,
                 detail,
-                "fix the scenario file against dev/rn-qa/README.md",
+                "fix the scenario file against packages/qaren-cli/README.md",
             )
         };
         let serial = &usb.serial;
@@ -469,19 +465,19 @@ impl Scenario {
             )));
         }
         match (usb.adb_server_port, self.build.owner) {
-            (None, BuildOwner::RnQa) => {
+            (None, BuildOwner::Cli) => {
                 return Err(invalid(
-                    "android_usb.adb_server_port is required when rn-qa owns the build".into(),
+                    "android_usb.adb_server_port is required when qaren owns the build".into(),
                 ));
             }
             (Some(_), BuildOwner::Qaren) => {
-                // In handoff mode rn-qa never starts an adb server; a pinned
-                // port would falsely promise an rn-qa-owned adb lifecycle.
+                // In handoff mode qaren never starts an adb server; a pinned
+                // port would falsely promise an qaren-owned adb lifecycle.
                 return Err(invalid(
                     "build.owner qaren must not carry android_usb.adb_server_port: the qaren session owns the adb lifecycle".into(),
                 ));
             }
-            (Some(port), BuildOwner::RnQa) => {
+            (Some(port), BuildOwner::Cli) => {
                 if port < 1024 {
                     return Err(invalid(format!(
                         "android_usb.adb_server_port {port} must be >= 1024"

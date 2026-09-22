@@ -2,7 +2,7 @@ use crate::exec::CmdSpec;
 use std::path::{Path, PathBuf};
 
 pub fn holder(run_id: &str) -> String {
-    format!("rn-qa-{run_id}")
+    format!("qaren-{run_id}")
 }
 
 pub fn local_serial(adb_port: u16) -> String {

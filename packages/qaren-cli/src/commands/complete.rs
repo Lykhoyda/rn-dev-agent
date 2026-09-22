@@ -7,14 +7,14 @@ use crate::timefmt;
 use crate::{candidate, commands};
 use std::path::Path;
 
-// `rn-qa complete <run-id> <evidence>` binds the qaren managed-build
+// `qaren complete <run-id> <evidence>` binds the qaren managed-build
 // receipt to a handed-off run. It is pure validation plus one record update:
 // a refusal mutates nothing, so the handoff stays pending and the managed
 // chain can retry. Evidence is the build log (or the receipt line alone)
 // produced by the session-integrated build.
 pub fn complete(
     runner: &mut dyn Runner,
-    repo_root: &Path,
+    runs_root: &Path,
     run_id: &str,
     evidence_path: &Path,
 ) -> Receipt {
@@ -46,7 +46,7 @@ pub fn complete(
         receipt
     };
 
-    let record = match RunRecord::load(repo_root, run_id) {
+    let record = match RunRecord::load(runs_root, run_id) {
         Ok(record) => record,
         Err(failure) => {
             let mut receipt = refuse(receipt, failure);
@@ -69,7 +69,7 @@ pub fn complete(
                     "run {run_id} already bound managed-build evidence at {}; refusing to adopt a second receipt",
                     state.completed_at.clone().unwrap_or_default()
                 ),
-                format!("rn-qa cleanup {run_id} --json when the journey is done"),
+                format!("qaren cleanup {run_id} --json when the journey is done"),
             );
             let mut receipt = refuse(receipt, failure);
             receipt.commands_executed = runner.commands_executed();
@@ -91,7 +91,7 @@ pub fn complete(
         }
     };
 
-    let document = match load_handoff_document(repo_root, run_id, &pending.document_sha256) {
+    let document = match load_handoff_document(runs_root, run_id, &pending.document_sha256) {
         Ok(document) => document,
         Err(failure) => {
             let mut receipt = refuse(receipt, failure);
@@ -135,7 +135,7 @@ pub fn complete(
     // Replay guard: a receipt whose install generation an earlier completed
     // run already bound for the same worktree/app/device is stale evidence
     // from a previous managed install, not this handoff's build.
-    match install_generation_already_bound(repo_root, run_id, &accepted) {
+    match install_generation_already_bound(runs_root, run_id, &accepted) {
         Ok(Some(prior_run)) => {
             let failure = Failure::new(
                 "complete",
@@ -186,7 +186,7 @@ pub fn complete(
         completed_at,
         "handoff completed: managed install receipt bound",
     );
-    if let Err(failure) = updated.save(repo_root) {
+    if let Err(failure) = updated.save(runs_root) {
         let mut receipt = refuse(receipt, failure);
         receipt.commands_executed = runner.commands_executed();
         return receipt;
@@ -208,19 +208,19 @@ pub fn complete(
         ),
     );
     receipt.next_action = format!(
-        "agents attach via qaren; after session teardown run: rn-qa cleanup {run_id} --json"
+        "agents attach via qaren; after session teardown run: qaren cleanup {run_id} --json"
     );
     receipt.commands_executed = runner.commands_executed();
-    commands::attach_artifacts(&mut receipt, repo_root, &updated);
+    commands::attach_artifacts(&mut receipt, runs_root, &updated);
     receipt
 }
 
 fn load_handoff_document(
-    repo_root: &Path,
+    runs_root: &Path,
     run_id: &str,
     expected_sha256: &str,
 ) -> Result<handoff::HandoffDocument, Failure> {
-    let path = handoff::document_path(repo_root, run_id);
+    let path = handoff::document_path(runs_root, run_id);
     let raw = std::fs::read(&path).map_err(|e| {
         Failure::new(
             "complete",
@@ -229,7 +229,7 @@ fn load_handoff_document(
                 "cannot read issued handoff document {}: {e}",
                 path.display()
             ),
-            format!("rn-qa cleanup {run_id} --json, then re-run prepare"),
+            format!("qaren cleanup {run_id} --json, then re-run prepare"),
         )
     })?;
     if candidate::sha256_hex(&raw) != expected_sha256 {
@@ -240,7 +240,7 @@ fn load_handoff_document(
                 "{} no longer matches the issued handoff document",
                 path.display()
             ),
-            format!("rn-qa cleanup {run_id} --json, then re-run prepare"),
+            format!("qaren cleanup {run_id} --json, then re-run prepare"),
         ));
     }
     serde_json::from_slice(&raw).map_err(|e| {
@@ -248,7 +248,7 @@ fn load_handoff_document(
             "complete",
             FailureCode::RunRecordInvalid,
             format!("issued handoff document {} is invalid: {e}", path.display()),
-            format!("rn-qa cleanup {run_id} --json, then re-run prepare"),
+            format!("qaren cleanup {run_id} --json, then re-run prepare"),
         )
     })
 }
@@ -262,7 +262,7 @@ fn verify_allocation_owned(runner: &mut dyn Runner, record: &RunRecord) -> Resul
             FailureCode::OwnershipUnproven,
             detail,
             format!(
-                "rn-qa cleanup {} --json, then re-run prepare",
+                "qaren cleanup {} --json, then re-run prepare",
                 record.run_id
             ),
         )
@@ -308,11 +308,11 @@ fn verify_allocation_owned(runner: &mut dyn Runner, record: &RunRecord) -> Resul
 }
 
 fn install_generation_already_bound(
-    repo_root: &Path,
+    runs_root: &Path,
     self_run_id: &str,
     accepted: &handoff::AcceptedReceipt,
 ) -> Result<Option<String>, Failure> {
-    let runs_path = repo_root.join(".rn-qa").join("runs");
+    let runs_path = runs_root.to_path_buf();
     let runs = std::fs::read_dir(&runs_path).map_err(|e| {
         Failure::new(
             "complete",
@@ -321,7 +321,7 @@ fn install_generation_already_bound(
                 "cannot prove replay history because {} is unreadable: {e}",
                 runs_path.display()
             ),
-            "restore readable rn-qa run history before retrying complete",
+            "restore readable qaren run history before retrying complete",
         )
     })?;
     for entry in runs {
@@ -333,23 +333,24 @@ fn install_generation_already_bound(
                     "cannot prove replay history because an entry under {} is unreadable: {e}",
                     runs_path.display()
                 ),
-                "restore readable rn-qa run history before retrying complete",
+                "restore readable qaren run history before retrying complete",
             )
         })?;
         let other_id = entry.file_name().to_string_lossy().into_owned();
-        if other_id == self_run_id {
+        // NOTE: only directories carrying run.json are runs; anything else under the runs root is not history.
+        if other_id == self_run_id || !RunRecord::path(runs_root, &other_id).is_file() {
             continue;
         }
-        let other = RunRecord::load(repo_root, &other_id).map_err(|failure| {
+        let other = RunRecord::load(runs_root, &other_id).map_err(|failure| {
             Failure::new(
                 "complete",
                 FailureCode::HandoffEvidenceMismatch,
                 format!(
                     "cannot prove replay history because run record {other_id:?} at {} is unreadable: {}",
-                    RunRecord::path(repo_root, &other_id).display(),
+                    RunRecord::path(runs_root, &other_id).display(),
                     failure.detail
                 ),
-                "restore or resolve the named rn-qa run record before retrying complete",
+                "restore or resolve the named qaren run record before retrying complete",
             )
         })?;
         let Some(state) = &other.handoff else {
@@ -438,7 +439,7 @@ fn recheck_candidate(runner: &mut dyn Runner, record: &RunRecord) -> Result<(), 
             FailureCode::CandidateDrifted,
             format!("{detail} since the handoff"),
             format!(
-                "the handoff no longer describes this worktree; rn-qa cleanup {} --json, then re-run prepare on a stable checkout",
+                "the handoff no longer describes this worktree; qaren cleanup {} --json, then re-run prepare on a stable checkout",
                 record.run_id
             ),
         )

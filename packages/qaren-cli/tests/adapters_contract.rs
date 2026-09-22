@@ -1,5 +1,5 @@
-use rn_qa::adapters::{android, ios, metro};
-use rn_qa::exec::CmdOutput;
+use qaren::adapters::{android, ios, metro};
+use qaren::exec::CmdOutput;
 use std::path::Path;
 
 // Captured verbatim from `ssh nuc '~/bin/android-farm status'` on 2026-08-12.
@@ -20,11 +20,11 @@ fn farm_status_parses_recorded_output() {
 
 #[test]
 fn farm_status_parses_leased_slot_with_flattened_leasefile() {
-    let leased = "slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=rn-qa-nuc-android-20260812T160000Z claimed_at=2026-08-12T16:00:00Z avd=Pixel_10a serial=emulator-5554 adb_port=5555 state=device\n";
+    let leased = "slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=qaren-nuc-android-20260812T160000Z claimed_at=2026-08-12T16:00:00Z avd=Pixel_10a serial=emulator-5554 adb_port=5555 state=device\n";
     let slot = android::parse_slot_status(leased, 1).unwrap();
     assert_eq!(
         android::lease_holder_token(&slot.lease),
-        "rn-qa-nuc-android-20260812T160000Z"
+        "qaren-nuc-android-20260812T160000Z"
     );
     assert_eq!(slot.state, "device");
 }
@@ -68,13 +68,13 @@ fn farm_status_rejects_malformed_lines() {
 #[test]
 fn farm_start_output_parses() {
     let started = android::parse_started(
-        "started slot=1 serial=emulator-5554 adb_port=5555 lease=rn-qa-x\nmac_tunnel: ssh -N ...\n",
+        "started slot=1 serial=emulator-5554 adb_port=5555 lease=qaren-x\nmac_tunnel: ssh -N ...\n",
         1,
     )
     .unwrap();
     assert_eq!(started.serial, "emulator-5554");
     assert_eq!(started.adb_port, 5555);
-    assert_eq!(started.lease, "rn-qa-x");
+    assert_eq!(started.lease, "qaren-x");
     assert!(android::parse_started("error: slot 1 already leased by: someone", 1).is_none());
     assert!(
         android::parse_started("started slot=1 serial=usb-PHONE adb_port=5555 lease=x", 1)
@@ -109,7 +109,7 @@ fn farm_commands_are_exact() {
             "status"
         ]
     );
-    let start = android::farm_start_spec("nuc", "bin/android-farm", 1, "rn-qa-run", 420);
+    let start = android::farm_start_spec("nuc", "bin/android-farm", 1, "qaren-run", 420);
     assert_eq!(
         start.args,
         vec![
@@ -122,7 +122,7 @@ fn farm_commands_are_exact() {
             "~/bin/android-farm",
             "start",
             "1",
-            "rn-qa-run"
+            "qaren-run"
         ]
     );
     assert_eq!(start.timeout_seconds, 480);
@@ -269,8 +269,8 @@ fn ios_build_command_pins_udid_and_port() {
 #[test]
 fn ios_sim_lifecycle_commands_are_exact() {
     assert_eq!(
-        ios::create_spec("rn-qa-run1", "devtype", "runtime").args,
-        vec!["simctl", "create", "rn-qa-run1", "devtype", "runtime"]
+        ios::create_spec("qaren-run1", "devtype", "runtime").args,
+        vec!["simctl", "create", "qaren-run1", "devtype", "runtime"]
     );
     let bootstatus = ios::bootstatus_spec("UDID", 420);
     assert_eq!(bootstatus.args, vec!["simctl", "bootstatus", "UDID", "-b"]);
@@ -292,12 +292,12 @@ fn ios_sim_lifecycle_commands_are_exact() {
 #[test]
 fn sim_presence_parses_simctl_json() {
     let json = r#"{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-4":[
-        {"udid":"AAAA","name":"rn-qa-run1","state":"Booted"},
+        {"udid":"AAAA","name":"qaren-run1","state":"Booted"},
         {"udid":"BBBB","name":"other","state":"Shutdown"}]}}"#;
     assert_eq!(
         ios::parse_sim_presence(json, "AAAA"),
         ios::SimPresence::Present {
-            name: "rn-qa-run1".to_string(),
+            name: "qaren-run1".to_string(),
             state: "Booted".to_string()
         }
     );
@@ -385,11 +385,11 @@ fn port_owner_parsing_is_strict() {
 fn holder_and_sim_name_derive_from_run_id() {
     assert_eq!(
         android::holder("nuc-android-20260812T160000Z"),
-        "rn-qa-nuc-android-20260812T160000Z"
+        "qaren-nuc-android-20260812T160000Z"
     );
     assert_eq!(
         ios::sim_name("ios-simulator-20260812T160000Z"),
-        "rn-qa-ios-simulator-20260812T160000Z"
+        "qaren-ios-simulator-20260812T160000Z"
     );
 }
 

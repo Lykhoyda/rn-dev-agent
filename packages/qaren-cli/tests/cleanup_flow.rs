@@ -1,11 +1,11 @@
 mod common;
 
-use rn_qa::commands::cleanup::cleanup;
-use rn_qa::exec::Spawned;
-use rn_qa::exec::{CmdOutput, MockRunner};
-use rn_qa::failure::FailureCode;
-use rn_qa::receipt::ReceiptResult;
-use rn_qa::runrecord::{
+use qaren::commands::cleanup::cleanup;
+use qaren::exec::Spawned;
+use qaren::exec::{CmdOutput, MockRunner};
+use qaren::failure::FailureCode;
+use qaren::receipt::ReceiptResult;
+use qaren::runrecord::{
     AdbServerResource, FarmResource, IosSimResource, MetroResource, Phase, RunRecord,
     TunnelResource,
 };
@@ -21,7 +21,7 @@ fn ios_ready_record(repo: &std::path::Path) -> RunRecord {
     );
     record.resources.ios_simulator = Some(IosSimResource {
         udid: "AAAA-1111".to_string(),
-        name: "rn-qa-iosrun1".to_string(),
+        name: "qaren-iosrun1".to_string(),
         device_type: "dt".to_string(),
         runtime: "rt".to_string(),
     });
@@ -74,7 +74,7 @@ fn ios_happy_cleanup_then_idempotent_rerun() {
     // simulator: present with matching name, booted -> shutdown + delete
     mock.expect_run(
         "simctl list",
-        CmdOutput::success(&sim_list_json("rn-qa-iosrun1", "Booted")),
+        CmdOutput::success(&sim_list_json("qaren-iosrun1", "Booted")),
     );
     mock.expect_run("simctl shutdown AAAA-1111", CmdOutput::success(""));
     mock.expect_run("simctl delete AAAA-1111", CmdOutput::success(""));
@@ -235,7 +235,7 @@ fn android_cleanup_stops_only_own_lease() {
         ssh_host: "nuc".to_string(),
         farm_path: "bin/android-farm".to_string(),
         slot: 1,
-        holder: "rn-qa-androidrun1".to_string(),
+        holder: "qaren-androidrun1".to_string(),
         avd: "Pixel_10a".to_string(),
         remote_serial: "emulator-5554".to_string(),
         adb_port: 5555,
@@ -307,7 +307,7 @@ fn android_cleanup_stops_only_own_lease() {
     );
     // farm: lease is ours -> stop
     mock.expect_run("~/bin/android-farm status", CmdOutput::success(
-        "slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=rn-qa-androidrun1 claimed_at=x state=device\nslot=2 avd=Pixel_10_Pro serial=emulator-5556 adb_port=5557 lease=free state=down\n",
+        "slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=qaren-androidrun1 claimed_at=x state=device\nslot=2 avd=Pixel_10_Pro serial=emulator-5556 adb_port=5557 lease=free state=down\n",
     ));
     mock.expect_run(
         "~/bin/android-farm stop 1",
@@ -484,7 +484,7 @@ fn cleanup_retains_farm_lease_when_tunnel_unproven() {
         ssh_host: "nuc".to_string(),
         farm_path: "bin/android-farm".to_string(),
         slot: 1,
-        holder: "rn-qa-androidrun7".to_string(),
+        holder: "qaren-androidrun7".to_string(),
         avd: "Pixel_10a".to_string(),
         remote_serial: "emulator-5554".to_string(),
         adb_port: 5555,
@@ -541,7 +541,7 @@ fn tunnel_and_farm_record(repo: &std::path::Path, run_id: &str) -> RunRecord {
         ssh_host: "nuc".to_string(),
         farm_path: "bin/android-farm".to_string(),
         slot: 1,
-        holder: format!("rn-qa-{run_id}"),
+        holder: format!("qaren-{run_id}"),
         avd: "Pixel_10a".to_string(),
         remote_serial: "emulator-5554".to_string(),
         adb_port: 5555,
@@ -551,7 +551,7 @@ fn tunnel_and_farm_record(repo: &std::path::Path, run_id: &str) -> RunRecord {
 
 fn farm_status_leased_by(run_id: &str) -> CmdOutput {
     CmdOutput::success(&format!(
-        "slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=rn-qa-{run_id} claimed_at=x state=device\n"
+        "slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=qaren-{run_id} claimed_at=x state=device\n"
     ))
 }
 
@@ -713,7 +713,7 @@ fn cleanup_recovers_pending_simulator_by_run_scoped_name() {
     let mut mock = MockRunner::new();
     mock.expect_run(
         "simctl list",
-        CmdOutput::success(&sim_list_json("rn-qa-iosrun1", "Booted")),
+        CmdOutput::success(&sim_list_json("qaren-iosrun1", "Booted")),
     );
     mock.expect_run("simctl shutdown AAAA-1111", CmdOutput::success(""));
     mock.expect_run("simctl delete AAAA-1111", CmdOutput::success(""));
@@ -806,7 +806,7 @@ fn android_cleanup_refuses_foreign_lease() {
         ssh_host: "nuc".to_string(),
         farm_path: "bin/android-farm".to_string(),
         slot: 1,
-        holder: "rn-qa-androidrun2".to_string(),
+        holder: "qaren-androidrun2".to_string(),
         avd: "Pixel_10a".to_string(),
         remote_serial: "emulator-5554".to_string(),
         adb_port: 5555,
@@ -844,7 +844,7 @@ fn android_cleanup_unreachable_farm_is_unresolved_not_cleaned() {
         ssh_host: "nuc".to_string(),
         farm_path: "bin/android-farm".to_string(),
         slot: 1,
-        holder: "rn-qa-androidrun3".to_string(),
+        holder: "qaren-androidrun3".to_string(),
         avd: "Pixel_10a".to_string(),
         remote_serial: "emulator-5554".to_string(),
         adb_port: 5555,
@@ -915,4 +915,73 @@ fn vendor_key_is_deleted_even_when_the_adb_server_never_spawned() {
         !vendor_key.exists(),
         "the fetched vendor key must not survive a run that died before the server spawned"
     );
+}
+
+#[test]
+fn cleanup_retains_the_device_lease_until_the_metro_group_is_proven_gone() {
+    let repo = common::temp_repo();
+    let lock_root = repo.join(".locks");
+    let mut holder = MockRunner::new();
+    let lease = qaren::lease::acquire(
+        &mut holder,
+        &lock_root,
+        qaren::scenario::Platform::Ios,
+        "AAAA-1111",
+        "iosrun1",
+        Some(common::identity(4242, LSTART)),
+    )
+    .unwrap();
+    let lock_dir = lease.lock_dir.clone();
+    let mut record = ios_ready_record(&repo);
+    record.resources.device_borrowed = true;
+    record.resources.lease = Some(lease);
+    record.save(&repo).unwrap();
+
+    // Metro group: alive, TERM, KILL, and the leader survives both -> unresolved.
+    let mut mock = MockRunner::new();
+    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
+    mock.expect_run("ps", CmdOutput::success("S\n"));
+    mock.expect_run("lsof", CmdOutput::success("6001\n"));
+    mock.expect_run("ps", CmdOutput::success("5000\n"));
+    mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
+    mock.expect_run("ps", CmdOutput::success("S\n"));
+
+    let receipt = cleanup(&mut mock, &repo, "iosrun1");
+    assert_ne!(receipt.result, ReceiptResult::Cleaned);
+    assert!(receipt.cleanup["metro"].starts_with("unresolved"));
+    assert_eq!(receipt.cleanup["simulator"], "kept");
+    assert!(
+        receipt.cleanup["device_lease"].starts_with("unresolved: retained: metro"),
+        "{}",
+        receipt.cleanup["device_lease"]
+    );
+    assert!(
+        lock_dir.exists(),
+        "the lease survives an unresolved Metro leg"
+    );
+    assert_eq!(mock.remaining(), 0);
+
+    // Metro leader dead and the port free -> the lease is released.
+    let mut mock2 = MockRunner::new();
+    mock2.expect_run("ps", CmdOutput::failed(1, ""));
+    mock2.expect_run(
+        "lsof",
+        CmdOutput {
+            exit_code: Some(1),
+            ..Default::default()
+        },
+    );
+    let receipt2 = cleanup(&mut mock2, &repo, "iosrun1");
+    assert_eq!(
+        receipt2.result,
+        ReceiptResult::Cleaned,
+        "{:?}",
+        receipt2.failure
+    );
+    assert_eq!(receipt2.cleanup["metro"], "absent");
+    assert_eq!(receipt2.cleanup["device_lease"], "removed");
+    assert!(!lock_dir.exists());
+    assert_eq!(mock2.remaining(), 0);
 }

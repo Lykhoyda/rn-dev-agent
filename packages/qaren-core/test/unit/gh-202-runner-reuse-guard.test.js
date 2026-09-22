@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { shouldReuseRunner } from '../../dist/runners/rn-fast-runner-client.js';
 
-process.env.QAREN_SESSION_ID = 'session-a';
-process.env.QAREN_CLAIM_EPOCH = '7';
+const LEASE = `session-a:${'f'.repeat(32)}`;
+process.env.QAREN_DEVICE_LEASE = LEASE;
 
 const state = {
   pid: 1,
@@ -11,8 +11,8 @@ const state = {
   deviceId: 'UDID-A',
   bundleId: 'com.x',
   startedAt: 'now',
-  sessionId: 'session-a',
-  claimEpoch: 7,
+  sessionId: LEASE,
+  claimEpoch: 1,
   capability: 'x'.repeat(32),
 };
 
@@ -28,6 +28,10 @@ test('GH#202 shouldReuseRunner: never reuse null state', () => {
   assert.equal(shouldReuseRunner(null, 'UDID-A'), false);
 });
 
-test('GH#202 shouldReuseRunner: never reuse a sibling claim epoch', () => {
+test('GH#202 shouldReuseRunner: never reuse a runner bound to another lease', () => {
+  assert.equal(
+    shouldReuseRunner({ ...state, sessionId: `session-b:${'f'.repeat(32)}` }, 'UDID-A'),
+    false,
+  );
   assert.equal(shouldReuseRunner({ ...state, claimEpoch: 6 }, 'UDID-A'), false);
 });

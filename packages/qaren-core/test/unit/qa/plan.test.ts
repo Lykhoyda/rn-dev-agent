@@ -1,0 +1,226 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { parsePlan, parseStep, slugify } from '../../../dist/qa/plan.js';
+
+test('every grammar shape parses to its step kind', () => {
+  const cases: Array<[string, unknown]> = [
+    ['Tap "Save"', { kind: 'press', target: { quoted: 'Save', phrase: 'Save' } }],
+    [
+      'Press on the "Edit profile" button',
+      { kind: 'press', target: { quoted: 'Edit profile', phrase: 'Edit profile button' } },
+    ],
+    ['Open Settings', { kind: 'press', target: { quoted: undefined, phrase: 'Settings' } }],
+    ['Go to "tab-tasks"', { kind: 'press', target: { quoted: 'tab-tasks', phrase: 'tab-tasks' } }],
+    [
+      'Type "Anton" into the name field',
+      { kind: 'fill', target: { quoted: undefined, phrase: 'name field' }, text: 'Anton' },
+    ],
+    [
+      'Type “Anton” into "wizard-title-input"',
+      {
+        kind: 'fill',
+        target: { quoted: 'wizard-title-input', phrase: 'wizard-title-input' },
+        text: 'Anton',
+      },
+    ],
+    [
+      'Fill "Email" with "a@b.co"',
+      { kind: 'fill', target: { quoted: 'Email', phrase: 'Email' }, text: 'a@b.co' },
+    ],
+    [
+      'Enter "1234" in "otp_code"',
+      { kind: 'fill', target: { quoted: 'otp_code', phrase: 'otp_code' }, text: '1234' },
+    ],
+    ['Scroll down', { kind: 'scroll', direction: 'down' }],
+    ['Scroll up', { kind: 'scroll', direction: 'up' }],
+    [
+      'Scroll until you see "Load more"',
+      { kind: 'scroll', direction: 'down', until: { quoted: 'Load more', phrase: 'Load more' } },
+    ],
+    [
+      'Scroll down to "Footer"',
+      { kind: 'scroll', direction: 'down', until: { quoted: 'Footer', phrase: 'Footer' } },
+    ],
+    [
+      'Wait for "Welcome" to appear',
+      { kind: 'wait', target: { quoted: 'Welcome', phrase: 'Welcome' } },
+    ],
+    ['Wait until "Done" is visible', { kind: 'wait', target: { quoted: 'Done', phrase: 'Done' } }],
+    ['Go back', { kind: 'back' }],
+    ['Back', { kind: 'back' }],
+    ['Press back', { kind: 'back' }],
+    ['Accept the permission dialog', { kind: 'dialog', action: 'accept' }],
+    ['Allow the notifications prompt', { kind: 'dialog', action: 'accept' }],
+    ['Dismiss the alert', { kind: 'dialog', action: 'dismiss' }],
+    ['Deny the location permission', { kind: 'dialog', action: 'dismiss' }],
+  ];
+  for (const [line, expected] of cases) {
+    assert.deepEqual(parseStep(line), expected, line);
+  }
+});
+
+test('lines the grammar cannot read return null', () => {
+  assert.equal(parseStep('Frobnicate the widget'), null);
+  assert.equal(
+    parseStep('Cancel'),
+    null,
+    'a bare Cancel is a button press only when written as Tap "Cancel"',
+  );
+});
+
+test('a fill without quoted text refuses with its line number', () => {
+  const parsed = parsePlan(
+    '## QA\n1. Tap "Settings"\n2. Type your name into the field\n✓ "Saved"\n',
+  );
+  assert.ok(parsed.refused);
+  assert.deepEqual(parsed.refused, [
+    { line: 3, text: '2. Type your name into the field', reason: 'fill needs the text in quotes' },
+  ]);
+});
+
+test('a plan splits into blocks by ### heading and hashes its item lines', () => {
+  const markdown = [
+    '# Change profile data',
+    '',
+    '## QA',
+    '### Log in as the test user',
+    '1. Tap "login_submit"',
+    '### Change profile data',
+    'starts on: Profile',
+    '1. Open "tab-profile"',
+    '2. Tap "profile-edit-btn"',
+    '3. Type "Anton" into "profile-name-input"',
+    '4. Tap "Save"',
+    '✓ The profile header shows "Anton"',
+    '✓ The avatar is unchanged',
+    '',
+    '## Notes',
+    'not part of the plan',
+  ].join('\n');
+  const parsed = parsePlan(markdown);
+  assert.ok(parsed.blocks);
+  assert.deepEqual(
+    parsed.blocks.map((b) => [b.slug, b.title, b.items.length, b.startsOn]),
+    [
+      ['log-in-as-the-test-user', 'Log in as the test user', 1, undefined],
+      ['change-profile-data', 'Change profile data', 6, 'Profile'],
+    ],
+  );
+  const [, profile] = parsed.blocks;
+  assert.deepEqual(
+    profile.items.map((i) => [i.line, i.kind, i.source]),
+    [
+      [8, 'press', 'grammar'],
+      [9, 'press', 'grammar'],
+      [10, 'fill', 'grammar'],
+      [11, 'press', 'grammar'],
+      [12, 'check', 'grammar'],
+      [13, 'check', 'grammar'],
+    ],
+  );
+  const literal = profile.items[4];
+  const phrase = profile.items[5];
+  assert.ok(literal.kind === 'check' && literal.literal && literal.text === 'Anton');
+  assert.ok(
+    phrase.kind === 'check' && !phrase.literal && phrase.text === 'The avatar is unchanged',
+  );
+  assert.match(profile.planHash, /^[0-9a-f]{64}$/);
+  assert.notEqual(profile.planHash, parsed.blocks[0].planHash);
+  assert.equal(
+    profile.planHash,
+    parsePlan(markdown.replace('4. Tap "Save"', '4.  Tap  "Save"')).blocks![1].planHash,
+  );
+});
+
+test('a headingless plan is one block named after the title', () => {
+  const parsed = parsePlan('# Smoke\n1. Tap "A"\n✓ "B"\n');
+  assert.ok(parsed.blocks);
+  assert.equal(parsed.blocks.length, 1);
+  assert.equal(parsed.blocks[0].slug, 'smoke');
+  assert.equal(parsed.blocks[0].items.length, 2);
+  assert.equal(slugify('  Hello, World!  '), 'hello-world');
+});
+
+test('duplicate headings, empty declared blocks and multiline comments are handled', () => {
+  const dup = parsePlan('### Login\n1. Tap "A"\n### Login\n1. Tap "B"\n');
+  assert.deepEqual(dup.refused, [
+    { line: 3, text: '### Login', reason: 'another block is already named "login"' },
+  ]);
+  const empty = parsePlan('### Login\n### Create\n1. Tap "A"\n');
+  assert.deepEqual(empty.refused?.[0], {
+    line: 1,
+    text: '### Login',
+    reason:
+      'this block has no steps (reusing a saved block by heading arrives with blocks in a later phase)',
+  });
+  const commented = parsePlan('<!--\nthis is\nignored -->\n1. Tap "A"\n<!-- one line -->\n✓ "B"\n');
+  assert.ok(commented.blocks);
+  assert.equal(commented.blocks[0].items.length, 2);
+  const indented = parsePlan('## QA\n1. Tap "A"\n   ## Notes\nprose here\n');
+  assert.ok(indented.blocks, JSON.stringify(indented.refused));
+});
+
+test('prose inside the plan and an empty plan are refused with a line number', () => {
+  const prose = parsePlan('## QA\n1. Tap "A"\nthen wait a bit\n');
+  assert.deepEqual(prose.refused, [
+    { line: 3, text: 'then wait a bit', reason: 'not a numbered step or a ✓ line' },
+  ]);
+  const unknown = parsePlan('1. Frobnicate the widget\n');
+  assert.equal(unknown.refused?.[0].line, 1);
+  assert.match(unknown.refused?.[0].reason ?? '', /no verb the grammar knows/);
+  assert.equal(parsePlan('# Only a title\n').refused?.[0].reason, 'the plan has no steps');
+});
+
+test('a commented-out ## heading inside the QA section does not end the section', () => {
+  const parsed = parsePlan(
+    '## QA\n1. Tap "A"\n<!--\n## old heading\n2. Tap "old"\n-->\n2. Tap "B"\n✓ "Done"\n',
+  );
+  assert.ok(parsed.blocks, JSON.stringify(parsed.refused));
+  assert.equal(parsed.blocks.length, 1);
+  assert.deepEqual(
+    parsed.blocks?.[0].items.map((i) => [i.line, i.kind]),
+    [
+      [2, 'press'],
+      [7, 'press'],
+      [8, 'check'],
+    ],
+  );
+});
+
+test('a comment opened mid-line and a commented-out ## QA are both ignored', () => {
+  const parsed = parsePlan(
+    '<!-- ## QA -->\n## QA\n1. Tap "A" <!--\n## obsolete\n-->\n2. Tap "B"\n',
+  );
+  assert.ok(parsed.blocks, JSON.stringify(parsed.refused));
+  assert.deepEqual(
+    parsed.blocks[0].items.map((i) => [i.line, i.raw]),
+    [
+      [3, '1. Tap "A"'],
+      [6, '2. Tap "B"'],
+    ],
+  );
+});
+
+test('a comment opened on the ## QA line itself hides the following steps until it closes', () => {
+  const parsed = parsePlan('## QA <!--\n1. Tap "commented"\n-->\n1. Tap "A"\n');
+  assert.ok(parsed.blocks, JSON.stringify(parsed.refused));
+  assert.deepEqual(
+    parsed.blocks[0].items.map((i) => [i.line, i.raw]),
+    [[4, '1. Tap "A"']],
+  );
+});
+
+test('a fill preposition is only stripped as a whole word', () => {
+  const step = parseStep('type "hello" input');
+  assert.deepEqual(step, {
+    kind: 'fill',
+    target: { quoted: undefined, phrase: 'input' },
+    text: 'hello',
+  });
+  const topic = parseStep('type "hello" into topic');
+  assert.deepEqual(topic, {
+    kind: 'fill',
+    target: { quoted: undefined, phrase: 'topic' },
+    text: 'hello',
+  });
+});

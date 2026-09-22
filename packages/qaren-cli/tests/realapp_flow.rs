@@ -1,17 +1,17 @@
 mod common;
 
-use rn_qa::buildplan::{
+use qaren::buildplan::{
     self, ArtifactKind, BuildDecision, CachedArtifact, NativeCacheState, CACHE_SCHEMA,
     PREWARM_SCHEMA,
 };
-use rn_qa::commands::prepare::{prepare, PrepareArgs};
-use rn_qa::commands::prewarm::{prewarm, PrewarmArgs};
-use rn_qa::commands::{cleanup, status};
-use rn_qa::exec::{CmdOutput, MockRunner, Spawned};
-use rn_qa::failure::FailureCode;
-use rn_qa::receipt::ReceiptResult;
-use rn_qa::runrecord::{AdbServerResource, MetroResource, Phase, RunRecord, UsbDeviceResource};
-use rn_qa::scenario::Scenario;
+use qaren::commands::prepare::{prepare, PrepareArgs};
+use qaren::commands::prewarm::{prewarm, PrewarmArgs};
+use qaren::commands::{cleanup, status};
+use qaren::exec::{CmdOutput, MockRunner, Spawned};
+use qaren::failure::FailureCode;
+use qaren::receipt::ReceiptResult;
+use qaren::runrecord::{AdbServerResource, MetroResource, Phase, RunRecord, UsbDeviceResource};
+use qaren::scenario::Scenario;
 use std::path::{Path, PathBuf};
 
 const LSTART: &str = "Wed Aug 12 16:01:00 2026";
@@ -26,7 +26,7 @@ fn free_port() -> CmdOutput {
 
 fn usb_scenario_yaml(port: u16) -> String {
     format!(
-        "schema: rn-qa/1\nname: usb-android\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nmetro:\n  port: {port}\nandroid_usb:\n  serial: {USB_SERIAL}\n  adb_server_port: 15039\n"
+        "schema: qaren/1\nname: usb-android\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nmetro:\n  port: {port}\nandroid_usb:\n  serial: {USB_SERIAL}\n  adb_server_port: 15039\n"
     )
 }
 
@@ -42,6 +42,7 @@ fn args(repo: &Path, scenario_path: &Path, android_home: Option<String>) -> Prep
         dry_run: false,
         android_home,
         lock_root: repo.join(".locks"),
+        runs_root: repo.to_path_buf(),
     }
 }
 
@@ -74,7 +75,7 @@ fn usb_prepare_happy_path_claims_device_and_pins_serial() {
     mock.expect_run("lsof", free_port()); // metro port
     mock.expect_run("lsof", free_port()); // adb server port
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_spawn(
@@ -142,13 +143,13 @@ fn usb_prepare_happy_path_claims_device_and_pins_serial() {
     assert_eq!(device.usb_serial.as_deref(), Some(USB_SERIAL));
     assert_eq!(
         device.usb_lock_holder.as_deref(),
-        Some(format!("rn-qa-{}", receipt.run_id).as_str())
+        Some(format!("qaren-{}", receipt.run_id).as_str())
     );
 
     // The exclusive claim is held after ready; only cleanup releases it.
     let lock_dir = repo.join(".locks").join(format!("usb-{USB_SERIAL}"));
     let holder = buildplan::read_holder(&lock_dir).expect("device claim held");
-    assert_eq!(holder.holder, format!("rn-qa-{}", receipt.run_id));
+    assert_eq!(holder.holder, format!("qaren-{}", receipt.run_id));
 
     // The build serialization lock is released once the run is ready.
     assert!(!repo.join(".locks").join("native-build-android").exists());
@@ -229,7 +230,7 @@ fn usb_prepare_refuses_contended_device_and_cleanup_stays_ownership_safe() {
     std::fs::write(
         lock_dir.join("holder.json"),
         serde_json::json!({
-            "holder": "rn-qa-other-run",
+            "holder": "qaren-other-run",
             "run_id": "other-run",
             "at": "2026-08-13T00:00:00Z"
         })
@@ -242,7 +243,7 @@ fn usb_prepare_refuses_contended_device_and_cleanup_stays_ownership_safe() {
     mock.expect_run("lsof", free_port());
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
 
@@ -258,7 +259,7 @@ fn usb_prepare_refuses_contended_device_and_cleanup_stays_ownership_safe() {
     let failure = receipt.failure.as_ref().unwrap();
     assert_eq!(failure.code, FailureCode::DeviceClaimContended);
     assert!(
-        failure.detail.contains("rn-qa-other-run"),
+        failure.detail.contains("qaren-other-run"),
         "{}",
         failure.detail
     );
@@ -274,7 +275,7 @@ fn usb_prepare_refuses_contended_device_and_cleanup_stays_ownership_safe() {
 
     // The foreign claim survives untouched.
     let holder = buildplan::read_holder(&lock_dir).unwrap();
-    assert_eq!(holder.holder, "rn-qa-other-run");
+    assert_eq!(holder.holder, "qaren-other-run");
 
     // Cleanup after the refused run: the foreign device claim proves this run
     // never owned the device (absent), while this run's own build lock is
@@ -291,7 +292,7 @@ fn usb_prepare_refuses_contended_device_and_cleanup_stays_ownership_safe() {
     assert_eq!(receipt.cleanup.get("build_lock").unwrap(), "removed");
     let holder = buildplan::read_holder(&lock_dir).unwrap();
     assert_eq!(
-        holder.holder, "rn-qa-other-run",
+        holder.holder, "qaren-other-run",
         "the foreign claim must survive cleanup"
     );
 }
@@ -307,7 +308,7 @@ fn usb_prepare_fails_when_device_is_unauthorized() {
     mock.expect_run("lsof", free_port());
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_spawn(
@@ -347,7 +348,7 @@ fn usb_prepare_fails_when_device_is_unauthorized() {
 
 fn ios_reuse_scenario_yaml(port: u16) -> String {
     format!(
-        "schema: rn-qa/1\nname: ios-simulator\nplatform: ios\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\n  dev_client_scheme: rndatest\nmetro:\n  port: {port}\nios:\n  device_type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro\n  runtime: com.apple.CoreSimulator.SimRuntime.iOS-26-4\n"
+        "schema: qaren/1\nname: ios-simulator\nplatform: ios\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\n  dev_client_scheme: rndatest\nmetro:\n  port: {port}\nios:\n  device_type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro\n  runtime: com.apple.CoreSimulator.SimRuntime.iOS-26-4\n"
     )
 }
 
@@ -367,7 +368,7 @@ fn ios_reuse_path_installs_cached_client_and_never_compiles() {
     let mut fp_mock = MockRunner::new();
     fp_mock.expect_run("ls-files", CmdOutput::success(""));
     let fp =
-        rn_qa::fingerprint::compute(&mut fp_mock, &repo, &repo.join("test-app"), "ios").unwrap();
+        qaren::fingerprint::compute(&mut fp_mock, &repo, &repo.join("test-app"), "ios").unwrap();
     let state = NativeCacheState {
         schema: CACHE_SCHEMA.to_string(),
         platform: "ios".to_string(),
@@ -395,7 +396,7 @@ fn ios_reuse_path_installs_cached_client_and_never_compiles() {
     script_validation(&mut mock, &repo, ios_tools);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
@@ -507,7 +508,7 @@ fn tampered_cached_artifact_is_refused_for_reuse() {
     let mut fp_mock = MockRunner::new();
     fp_mock.expect_run("ls-files", CmdOutput::success(""));
     let fp =
-        rn_qa::fingerprint::compute(&mut fp_mock, &repo, &repo.join("test-app"), "ios").unwrap();
+        qaren::fingerprint::compute(&mut fp_mock, &repo, &repo.join("test-app"), "ios").unwrap();
 
     let state = NativeCacheState {
         schema: CACHE_SCHEMA.to_string(),
@@ -596,7 +597,7 @@ fn prewarm_records_lockfile_binding_and_no_secrets() {
     let raw = std::fs::read_to_string(&record_path).unwrap();
     let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(value["schema"], PREWARM_SCHEMA);
-    let expected_lockfile = rn_qa::candidate::sha256_hex(b"lockfileVersion: 9\n");
+    let expected_lockfile = qaren::candidate::sha256_hex(b"lockfileVersion: 9\n");
     assert_eq!(value["lockfile_sha256"], expected_lockfile.as_str());
     // Nothing beyond identity + hash + timestamp is persisted.
     let keys: Vec<&String> = value.as_object().unwrap().keys().collect();
@@ -612,24 +613,24 @@ fn prewarm_records_lockfile_binding_and_no_secrets() {
     );
 }
 
-// rn-qa's own .rn-qa/ state (from earlier runs, or written mid-run) must not
+// qaren's own .qaren/ state (from earlier runs, or written mid-run) must not
 // read as drift, whether it changes between the snapshots or exists on only
 // one side of the comparison.
 #[test]
-fn prewarm_ignores_rn_qa_state_in_the_drift_comparison() {
+fn prewarm_ignores_qaren_state_in_the_drift_comparison() {
     let repo = common::temp_repo();
     let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", repo.display())));
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
-    mock.expect_run("git", CmdOutput::success("?? .rn-qa/\0"));
+    mock.expect_run("git", CmdOutput::success("?? .qaren/\0"));
     mock.expect_run("pnpm fetch", CmdOutput::success(""));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
     mock.expect_run(
         "git",
-        CmdOutput::success("?? .rn-qa/native-cache/state.json\0"),
+        CmdOutput::success("?? .qaren/native-cache/state.json\0"),
     );
 
     let receipt = prewarm(
@@ -647,7 +648,7 @@ fn prewarm_ignores_rn_qa_state_in_the_drift_comparison() {
 }
 
 #[test]
-fn prewarm_still_fails_on_drift_outside_rn_qa_state() {
+fn prewarm_still_fails_on_drift_outside_qaren_state() {
     let repo = common::temp_repo();
     let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
 
@@ -658,7 +659,7 @@ fn prewarm_still_fails_on_drift_outside_rn_qa_state() {
     mock.expect_run("pnpm fetch", CmdOutput::success(""));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
-    mock.expect_run("git", CmdOutput::success("?? .rn-qa/\0?? stray.txt\0"));
+    mock.expect_run("git", CmdOutput::success("?? .qaren/\0?? stray.txt\0"));
 
     let receipt = prewarm(
         &mut mock,
@@ -678,7 +679,7 @@ fn prewarm_accepts_an_existing_handoff_integration_baseline() {
     let repo = common::temp_repo();
     let scenario_path = write_scenario(
         &repo,
-        "schema: rn-qa/1\nname: coop-prewarm\nplatform: ios\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nbuild:\n  owner: qaren\nios:\n  device_type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro\n  runtime: com.apple.CoreSimulator.SimRuntime.iOS-26-4\n",
+        "schema: qaren/1\nname: coop-prewarm\nplatform: ios\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nbuild:\n  owner: qaren\nios:\n  device_type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro\n  runtime: com.apple.CoreSimulator.SimRuntime.iOS-26-4\n",
     );
     std::fs::write(
         repo.join("test-app").join("package.json"),
@@ -752,18 +753,18 @@ fn require_prewarm_without_record_is_a_structured_refusal() {
     assert_eq!(failure.code, FailureCode::DepsNotPrewarmed);
     assert!(failure.next_action.contains("prewarm"));
     assert_eq!(mock.remaining(), 0, "no install may be attempted");
-    assert!(!repo.join(".rn-qa").join("runs").exists());
+    assert!(!repo.join(".qaren").join("runs").exists());
 }
 
 #[test]
 fn require_prewarm_with_matching_record_installs_offline() {
     let repo = common::temp_repo();
     let scenario_path = write_scenario(&repo, &require_prewarm_yaml(8791));
-    let record = rn_qa::buildplan::DepsPrewarm {
+    let record = qaren::buildplan::DepsPrewarm {
         schema: PREWARM_SCHEMA.to_string(),
         worktree_root: repo.clone(),
         project_root: repo.join("test-app"),
-        lockfile_sha256: rn_qa::candidate::sha256_hex(b"lockfileVersion: 9\n"),
+        lockfile_sha256: qaren::candidate::sha256_hex(b"lockfileVersion: 9\n"),
         at: "2026-08-13T00:00:00Z".to_string(),
     };
     buildplan::save_json(&buildplan::prewarm_path(&repo), &record).unwrap();
@@ -773,7 +774,7 @@ fn require_prewarm_with_matching_record_installs_offline() {
     script_validation(&mut mock, &repo, ios_tools);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run(
         "pnpm install --frozen-lockfile --offline",
         CmdOutput::success(""),
@@ -809,7 +810,7 @@ fn explicit_worktree_must_be_a_git_toplevel() {
     let canonical = worktree.canonicalize().unwrap();
 
     let yaml = format!(
-        "schema: rn-qa/1\nname: external\nplatform: ios\ncandidate:\n  project_root: app\n  app_id: com.example.app\n  revision: HEAD\n  worktree: {}\nmetro:\n  port: 8791\nios:\n  device_type: iPhone-17-Pro\n  runtime: iOS-26-4\n",
+        "schema: qaren/1\nname: external\nplatform: ios\ncandidate:\n  project_root: app\n  app_id: com.example.app\n  revision: HEAD\n  worktree: {}\nmetro:\n  port: 8791\nios:\n  device_type: iPhone-17-Pro\n  runtime: iOS-26-4\n",
         worktree.display()
     );
     let scenario: Scenario = serde_yaml::from_str(&yaml).unwrap();
@@ -821,7 +822,7 @@ fn explicit_worktree_must_be_a_git_toplevel() {
         "git",
         CmdOutput::success(&format!("{}\n", canonical.parent().unwrap().display())),
     );
-    let err = rn_qa::candidate::resolve(&mut mock, &scenario, &repo).unwrap_err();
+    let err = qaren::candidate::resolve(&mut mock, &scenario, &repo).unwrap_err();
     assert_eq!(err.code, FailureCode::CandidatePathInvalid);
     assert!(err.detail.contains("not a git toplevel"), "{}", err.detail);
 
@@ -833,7 +834,7 @@ fn explicit_worktree_must_be_a_git_toplevel() {
     );
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
     mock.expect_run("git", CmdOutput::success(""));
-    let cand = rn_qa::candidate::resolve(&mut mock, &scenario, &repo).unwrap();
+    let cand = qaren::candidate::resolve(&mut mock, &scenario, &repo).unwrap();
     assert_eq!(cand.repo_root, canonical);
     assert!(cand.project_root.ends_with("app"));
     // The scenario dir's own repo is never consulted for an explicit worktree.
@@ -855,7 +856,7 @@ fn usb_status_probes_claim_server_and_app() {
     let run_id = "usb-android-20260813t120000z";
     let mut record = usb_base_record(&repo, run_id, Phase::Ready);
     let lock_root = repo.join(".locks");
-    let holder_name = format!("rn-qa-{run_id}");
+    let holder_name = format!("qaren-{run_id}");
     let mut claim_mock = MockRunner::new();
     assert!(matches!(
         buildplan::claim_lock(
@@ -949,7 +950,7 @@ fn usb_status_with_foreign_claim_never_addresses_the_device() {
     std::fs::write(
         lock_dir.join("holder.json"),
         serde_json::json!({
-            "holder": "rn-qa-other",
+            "holder": "qaren-other",
             "run_id": "other",
             "at": "2026-08-13T00:00:00Z"
         })
@@ -959,7 +960,7 @@ fn usb_status_with_foreign_claim_never_addresses_the_device() {
     record.resources.usb_device = Some(UsbDeviceResource {
         serial: USB_SERIAL.to_string(),
         lock_dir,
-        holder: format!("rn-qa-{run_id}"),
+        holder: format!("qaren-{run_id}"),
     });
     record.resources.adb_path = Some(repo.join("fake-sdk/platform-tools/adb"));
     record.resources.adb_local_serial = Some(USB_SERIAL.to_string());
@@ -1016,7 +1017,7 @@ fn scenario_rejects_ambiguous_or_illegal_usb_configs() {
     ];
     for (section, expected) in cases {
         let yaml = format!(
-            "schema: rn-qa/1\nname: usb-android\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nmetro:\n  port: 8794\n{section}"
+            "schema: qaren/1\nname: usb-android\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nmetro:\n  port: 8794\n{section}"
         );
         let scenario: Scenario = serde_yaml::from_str(&yaml).unwrap();
         let err = scenario.validate().unwrap_err();
@@ -1026,7 +1027,7 @@ fn scenario_rejects_ambiguous_or_illegal_usb_configs() {
             err.detail
         );
     }
-    let colon_serial = "schema: rn-qa/1\nname: usb-android\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nmetro:\n  port: 8794\nandroid_usb:\n  serial: \"127.0.0.1:5555\"\n  adb_server_port: 15039\n";
+    let colon_serial = "schema: qaren/1\nname: usb-android\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nmetro:\n  port: 8794\nandroid_usb:\n  serial: \"127.0.0.1:5555\"\n  adb_server_port: 15039\n";
     let scenario: Scenario = serde_yaml::from_str(colon_serial).unwrap();
     let err = scenario.validate().unwrap_err();
     // The colon form fails the serial grammar itself.
@@ -1047,7 +1048,7 @@ fn usb_claim_is_retained_while_the_build_process_group_is_unresolved() {
     buildplan::save_json(
         &lock_dir.join("holder.json"),
         &buildplan::LockHolder {
-            holder: "rn-qa-usbrun1".to_string(),
+            holder: "qaren-usbrun1".to_string(),
             run_id: "usbrun1".to_string(),
             identity: None,
             at: "2026-08-12T16:00:00Z".to_string(),
@@ -1069,7 +1070,7 @@ fn usb_claim_is_retained_while_the_build_process_group_is_unresolved() {
     record.resources.usb_device = Some(UsbDeviceResource {
         serial: USB_SERIAL.to_string(),
         lock_dir: lock_dir.clone(),
-        holder: "rn-qa-usbrun1".to_string(),
+        holder: "qaren-usbrun1".to_string(),
     });
     record.save(&repo).unwrap();
 
@@ -1127,7 +1128,7 @@ fn deps_install_failure_detail_never_carries_registry_credentials() {
     script_validation(&mut mock, &repo, ios_tools);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run(
         "pnpm install --frozen-lockfile",
         CmdOutput::failed(
@@ -1162,7 +1163,7 @@ fn deps_install_failure_detail_never_carries_registry_credentials() {
 
 fn android_reuse_scenario_yaml(port: u16) -> String {
     format!(
-        "schema: rn-qa/1\nname: nuc-android\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\n  dev_client_scheme: rndatest\nmetro:\n  port: {port}\nandroid:\n  ssh_host: nuc\n  farm_path: bin/android-farm\n  slot: 1\n  adb_server_port: 15037\n"
+        "schema: qaren/1\nname: nuc-android\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\n  dev_client_scheme: rndatest\nmetro:\n  port: {port}\nandroid:\n  ssh_host: nuc\n  farm_path: bin/android-farm\n  slot: 1\n  adb_server_port: 15037\n"
     )
 }
 
@@ -1178,7 +1179,7 @@ fn android_reuse_path_records_install_provenance_after_a_successful_adb_install(
     let artifact_sha = buildplan::hash_artifact(&apk).unwrap();
     let mut fp_mock = MockRunner::new();
     fp_mock.expect_run("ls-files", CmdOutput::success(""));
-    let fp = rn_qa::fingerprint::compute(&mut fp_mock, &repo, &repo.join("test-app"), "android")
+    let fp = qaren::fingerprint::compute(&mut fp_mock, &repo, &repo.join("test-app"), "android")
         .unwrap();
     let state = NativeCacheState {
         schema: CACHE_SCHEMA.to_string(),
@@ -1208,7 +1209,7 @@ fn android_reuse_path_records_install_provenance_after_a_successful_adb_install(
     mock.expect_run("lsof", free_port());
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run(
@@ -1219,8 +1220,8 @@ fn android_reuse_path_records_install_provenance_after_a_successful_adb_install(
     );
     mock.expect_run("lsof", free_port());
     let expected_holder = format!(
-        "rn-qa-nuc-android-{}",
-        rn_qa::timefmt::compact_utc(1_770_000_000_000)
+        "qaren-nuc-android-{}",
+        qaren::timefmt::compact_utc(1_770_000_000_000)
     );
     mock.expect_run(
         "~/bin/android-farm start 1",

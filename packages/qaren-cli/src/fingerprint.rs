@@ -271,7 +271,7 @@ fn local_dependency_manifest(
                 locals.push((name.clone(), rel.to_string()));
             } else if spec.starts_with("workspace:") {
                 incompleteness.push(format!(
-                    "dependency {name} uses a workspace: specifier that rn-qa does not resolve; the input set is unprovably complete"
+                    "dependency {name} uses a workspace: specifier that qaren does not resolve; the input set is unprovably complete"
                 ));
             }
         }
@@ -677,7 +677,7 @@ mod tests {
 
     #[test]
     fn referenced_paths_resolve_only_plain_existing_files() {
-        let dir = std::env::temp_dir().join(format!("rn-qa-fp-ref-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("qaren-fp-ref-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("assets2")).unwrap();
         std::fs::write(dir.join("assets2").join("icon.png"), b"png").unwrap();
         let app_json = r#"{"expo":{"icon":"./assets2/icon.png","name":"x","other":"/etc/passwd","up":"../secret.png","missing":"./assets2/nope.png"}}"#;
@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn trace_local_imports_walks_relative_closure_and_flags_unresolved() {
-        let dir = std::env::temp_dir().join(format!("rn-qa-fp-trace-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("qaren-fp-trace-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("plugins")).unwrap();
         std::fs::create_dir_all(dir.join("lib")).unwrap();
         std::fs::write(

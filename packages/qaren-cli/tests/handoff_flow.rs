@@ -1,14 +1,14 @@
 mod common;
 
-use rn_qa::candidate::sha256_hex;
-use rn_qa::commands::complete::complete;
-use rn_qa::commands::prepare::{prepare, PrepareArgs};
-use rn_qa::commands::{cleanup::cleanup, status::status};
-use rn_qa::exec::{CmdOutput, MockRunner, Runner};
-use rn_qa::failure::FailureCode;
-use rn_qa::handoff::{app_root_key, worktree_key, ExpectedReceipt, HandoffDocument, HandoffState};
-use rn_qa::receipt::ReceiptResult;
-use rn_qa::runrecord::{Phase, RunRecord};
+use qaren::candidate::sha256_hex;
+use qaren::commands::complete::complete;
+use qaren::commands::prepare::{prepare, PrepareArgs};
+use qaren::commands::{cleanup::cleanup, status::status};
+use qaren::exec::{CmdOutput, MockRunner, Runner};
+use qaren::failure::FailureCode;
+use qaren::handoff::{app_root_key, worktree_key, ExpectedReceipt, HandoffDocument, HandoffState};
+use qaren::receipt::ReceiptResult;
+use qaren::runrecord::{Phase, RunRecord};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -17,12 +17,12 @@ const UDID: &str = "AAAABBBB-1111-2222-3333-444455556666";
 const SERIAL: &str = "R5CR20XXYZ";
 
 fn ios_handoff_yaml() -> String {
-    "schema: rn-qa/1\nname: coop-ios\nplatform: ios\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nbuild:\n  owner: qaren\nios:\n  device_type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro\n  runtime: com.apple.CoreSimulator.SimRuntime.iOS-26-4\n".to_string()
+    "schema: qaren/1\nname: coop-ios\nplatform: ios\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nbuild:\n  owner: qaren\nios:\n  device_type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro\n  runtime: com.apple.CoreSimulator.SimRuntime.iOS-26-4\n".to_string()
 }
 
 fn usb_handoff_yaml() -> String {
     format!(
-        "schema: rn-qa/1\nname: coop-usb\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nbuild:\n  owner: qaren\nandroid_usb:\n  serial: {SERIAL}\n"
+        "schema: qaren/1\nname: coop-usb\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nbuild:\n  owner: qaren\nandroid_usb:\n  serial: {SERIAL}\n"
     )
 }
 
@@ -38,6 +38,7 @@ fn prepare_args(scenario_path: &Path, android_home: Option<String>) -> PrepareAr
         dry_run: false,
         android_home,
         lock_root: scenario_path.parent().unwrap().join(".locks"),
+        runs_root: scenario_path.parent().unwrap().to_path_buf(),
     }
 }
 
@@ -52,7 +53,7 @@ fn script_validation(mock: &mut MockRunner, repo: &Path, tools: &[&str]) {
 
 fn script_self_identity(mock: &mut MockRunner) {
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
-    mock.expect_run("ps", CmdOutput::success("rn-qa prepare\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
 }
 
 fn script_candidate_recheck(mock: &mut MockRunner) {
@@ -75,7 +76,7 @@ fn ios_handoff_prepare_allocates_and_issues_typed_handoff_without_building() {
 
     let mut mock = MockRunner::new();
     script_validation(&mut mock, &repo, IOS_HANDOFF_TOOLS);
-    // No metro/adb port checks: handoff scenarios carry no rn-qa-owned ports.
+    // No metro/adb port checks: handoff scenarios carry no qaren-owned ports.
     script_self_identity(&mut mock);
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
@@ -96,7 +97,7 @@ fn ios_handoff_prepare_allocates_and_issues_typed_handoff_without_building() {
     );
     assert_eq!(receipt.phase, "handed_off");
     assert_eq!(mock.remaining(), 0);
-    // rn-qa spawned nothing: no Metro, no build, no adb server.
+    // qaren spawned nothing: no Metro, no build, no adb server.
     assert!(mock.spawned_logs.is_empty());
     assert_eq!(
         receipt.outcomes.get("handoff").map(String::as_str),
@@ -104,7 +105,7 @@ fn ios_handoff_prepare_allocates_and_issues_typed_handoff_without_building() {
     );
     assert!(receipt.metro.is_none());
     assert!(receipt.build.is_none());
-    assert!(receipt.next_action.contains("rn-qa complete"));
+    assert!(receipt.next_action.contains("qaren complete"));
 
     let record = RunRecord::load(&repo, &receipt.run_id).unwrap();
     assert_eq!(record.phase, Phase::HandedOff);
@@ -116,10 +117,10 @@ fn ios_handoff_prepare_allocates_and_issues_typed_handoff_without_building() {
 
     let state = record.handoff.as_ref().unwrap();
     assert!(state.accepted.is_none() && state.completed_at.is_none());
-    let raw = std::fs::read(rn_qa::handoff::document_path(&repo, &receipt.run_id)).unwrap();
+    let raw = std::fs::read(qaren::handoff::document_path(&repo, &receipt.run_id)).unwrap();
     assert_eq!(sha256_hex(&raw), state.document_sha256);
     let doc: HandoffDocument = serde_json::from_slice(&raw).unwrap();
-    assert_eq!(doc.schema, "rn-qa-handoff/1");
+    assert_eq!(doc.schema, "qaren-handoff/1");
     assert_eq!(doc.run_id, receipt.run_id);
     assert_eq!(doc.platform, "ios");
     assert_eq!(doc.device.ios_udid.as_deref(), Some(UDID));
@@ -181,7 +182,7 @@ fn usb_handoff_prepare_refuses_contended_claim_without_adoption() {
     std::fs::write(
         lock_dir.join("holder.json"),
         serde_json::to_vec(&json!({
-            "holder": "rn-qa-other-run",
+            "holder": "qaren-other-run",
             "run_id": "other-run",
             "at": "2026-08-01T00:00:00Z"
         }))
@@ -243,9 +244,9 @@ fn seed_handoff_record_for_project(repo: &Path, run_id: &str, project_rel: &Path
     record.scenario.candidate.project_root = project_rel.to_string_lossy().into_owned();
     record.candidate.project_root = repo.join(project_rel);
     record.candidate.lockfile_sha256 = Some(sha256_hex(b"lockfileVersion: 9\n"));
-    record.resources.ios_simulator = Some(rn_qa::runrecord::IosSimResource {
+    record.resources.ios_simulator = Some(qaren::runrecord::IosSimResource {
         udid: UDID.to_string(),
-        name: format!("rn-qa-{run_id}"),
+        name: format!("qaren-{run_id}"),
         device_type: "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro".to_string(),
         runtime: "com.apple.CoreSimulator.SimRuntime.iOS-26-4".to_string(),
     });
@@ -256,21 +257,21 @@ fn seed_handoff_record_for_project(repo: &Path, run_id: &str, project_rel: &Path
         worktree_key: worktree_key(repo),
         app_root_key: app_root_key(repo, &repo.join(project_rel)).unwrap(),
     };
-    let document_path = rn_qa::handoff::document_path(repo, run_id);
+    let document_path = qaren::handoff::document_path(repo, run_id);
     std::fs::create_dir_all(document_path.parent().unwrap()).unwrap();
     let document = HandoffDocument {
-        schema: "rn-qa-handoff/1".to_string(),
+        schema: "qaren-handoff/1".to_string(),
         run_id: run_id.to_string(),
-        issued_at: rn_qa::timefmt::iso8601_utc(MockRunner::new().now_epoch_ms()),
+        issued_at: qaren::timefmt::iso8601_utc(MockRunner::new().now_epoch_ms()),
         candidate: record.candidate.clone(),
         platform: "ios".to_string(),
-        device: rn_qa::commands::device_identity(&record),
+        device: qaren::commands::device_identity(&record),
         native_fingerprint: format!("rnfp1:{}", "e".repeat(64)),
         fingerprint_complete: true,
         fingerprint_incompleteness: Vec::new(),
         expected_receipt: expected.clone(),
     };
-    let document_sha256 = rn_qa::handoff::save_document(&document_path, &document).unwrap();
+    let document_sha256 = qaren::handoff::save_document(&document_path, &document).unwrap();
     record.handoff = Some(HandoffState {
         document_sha256,
         expected,
@@ -286,7 +287,7 @@ fn seed_handoff_record_for_project(repo: &Path, run_id: &str, project_rel: &Path
 fn script_allocation_probe(mock: &mut MockRunner, run_id: &str) {
     mock.expect_run(
         "simctl list",
-        CmdOutput::success(&simctl_list_json(UDID, &format!("rn-qa-{run_id}"))),
+        CmdOutput::success(&simctl_list_json(UDID, &format!("qaren-{run_id}"))),
     );
 }
 
@@ -623,7 +624,7 @@ fn status_of_handed_off_run_probes_allocation_and_handoff_document() {
     let record = seed_handoff_record(&repo, "coop-6");
 
     let mut mock = MockRunner::new();
-    let sim_name = "rn-qa-coop-6".to_string();
+    let sim_name = "qaren-coop-6".to_string();
     mock.expect_run(
         "simctl list",
         CmdOutput::success(&simctl_list_json(UDID, &sim_name)),
@@ -648,11 +649,11 @@ fn status_of_handed_off_run_probes_allocation_and_handoff_document() {
 
     // A rewritten handoff document fails the byte-identity probe.
     let _ = &record;
-    let document = rn_qa::handoff::document_path(&repo, "coop-6");
+    let document = qaren::handoff::document_path(&repo, "coop-6");
     let mut doc: HandoffDocument =
         serde_json::from_slice(&std::fs::read(&document).unwrap()).unwrap();
     doc.expected_receipt.device_id = "TAMPERED".to_string();
-    rn_qa::handoff::save_document(&document, &doc).unwrap();
+    qaren::handoff::save_document(&document, &doc).unwrap();
     let mut mock = MockRunner::new();
     mock.expect_run(
         "simctl list",
@@ -723,7 +724,7 @@ fn cleanup_of_handoff_run_cleans_only_the_allocation() {
     seed_handoff_record(&repo, "coop-7");
 
     let mut mock = MockRunner::new();
-    let sim_name = "rn-qa-coop-7";
+    let sim_name = "qaren-coop-7";
     mock.expect_run(
         "simctl list",
         CmdOutput::success(&simctl_list_json(UDID, sim_name)),
@@ -760,8 +761,8 @@ fn cleanup_of_interrupted_usb_handoff_releases_only_the_owned_claim() {
     let lock_root = repo.join(".locks");
     let lock_dir = lock_root.join(format!("usb-{SERIAL}"));
     std::fs::create_dir_all(&lock_dir).unwrap();
-    let holder = rn_qa::buildplan::LockHolder {
-        holder: "rn-qa-coop-8".to_string(),
+    let holder = qaren::buildplan::LockHolder {
+        holder: "qaren-coop-8".to_string(),
         run_id: "coop-8".to_string(),
         identity: None,
         at: "2026-08-30T10:00:00Z".to_string(),
@@ -771,10 +772,10 @@ fn cleanup_of_interrupted_usb_handoff_releases_only_the_owned_claim() {
         serde_json::to_vec(&holder).unwrap(),
     )
     .unwrap();
-    record.resources.usb_device = Some(rn_qa::runrecord::UsbDeviceResource {
+    record.resources.usb_device = Some(qaren::runrecord::UsbDeviceResource {
         serial: SERIAL.to_string(),
         lock_dir: lock_dir.clone(),
-        holder: "rn-qa-coop-8".to_string(),
+        holder: "qaren-coop-8".to_string(),
     });
     record.save(&repo).unwrap();
 
@@ -805,8 +806,8 @@ fn cleanup_of_usb_handoff_run_never_releases_a_foreign_claim() {
     let lock_root = repo.join(".locks");
     let lock_dir = lock_root.join(format!("usb-{SERIAL}"));
     std::fs::create_dir_all(&lock_dir).unwrap();
-    let foreign = rn_qa::buildplan::LockHolder {
-        holder: "rn-qa-other".to_string(),
+    let foreign = qaren::buildplan::LockHolder {
+        holder: "qaren-other".to_string(),
         run_id: "other-run".to_string(),
         identity: None,
         at: "2026-08-30T10:00:00Z".to_string(),
@@ -816,10 +817,10 @@ fn cleanup_of_usb_handoff_run_never_releases_a_foreign_claim() {
         serde_json::to_vec(&foreign).unwrap(),
     )
     .unwrap();
-    record.resources.usb_device = Some(rn_qa::runrecord::UsbDeviceResource {
+    record.resources.usb_device = Some(qaren::runrecord::UsbDeviceResource {
         serial: SERIAL.to_string(),
         lock_dir: lock_dir.clone(),
-        holder: "rn-qa-coop-9".to_string(),
+        holder: "qaren-coop-9".to_string(),
     });
     record.save(&repo).unwrap();
 
@@ -1367,6 +1368,7 @@ fn handoff_dry_run_plans_allocation_only() {
         dry_run: true,
         android_home: None,
         lock_root: repo.join(".locks"),
+        runs_root: repo.to_path_buf(),
     };
     let receipt = prepare(&mut mock, &args);
     assert_eq!(receipt.result, ReceiptResult::Planned);

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-pub const RECEIPT_SCHEMA: &str = "rn-qa/1";
+pub const RECEIPT_SCHEMA: &str = "qaren/1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -17,6 +17,8 @@ pub enum ReceiptResult {
     Unknown,
     Planned,
     Prewarmed,
+    Pass,
+    Fail,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +110,8 @@ pub struct Receipt {
     pub cleanup: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub planned_commands: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ledger: Option<crate::report::LedgerSummary>,
     pub next_action: String,
 }
 
@@ -138,6 +142,7 @@ impl Receipt {
             failure: None,
             cleanup: BTreeMap::new(),
             planned_commands: Vec::new(),
+            ledger: None,
             next_action: String::new(),
         }
     }

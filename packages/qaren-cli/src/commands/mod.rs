@@ -22,7 +22,7 @@ pub fn repo_root_of_cwd(runner: &mut dyn Runner) -> Result<PathBuf, Failure> {
             "load",
             FailureCode::CandidateGitUnavailable,
             format!("git rev-parse --show-toplevel failed: {}", output.summary()),
-            "run rn-qa from inside the qaren-workspace checkout",
+            "run qaren from inside the app checkout",
         ));
     }
     Ok(PathBuf::from(output.stdout.trim()))
@@ -120,8 +120,8 @@ pub fn metro_identity(record: &RunRecord) -> Option<MetroIdentity> {
     })
 }
 
-pub fn attach_artifacts(receipt: &mut Receipt, repo_root: &Path, record: &RunRecord) {
-    let run_dir = RunRecord::run_dir(repo_root, &record.run_id);
+pub fn attach_artifacts(receipt: &mut Receipt, runs_root: &Path, record: &RunRecord) {
+    let run_dir = RunRecord::run_dir(runs_root, &record.run_id);
     receipt
         .artifacts
         .insert("run_dir".to_string(), run_dir.clone());
@@ -141,7 +141,7 @@ pub fn attach_artifacts(receipt: &mut Receipt, repo_root: &Path, record: &RunRec
     if record.handoff.is_some() {
         receipt.artifacts.insert(
             "handoff".to_string(),
-            crate::handoff::document_path(repo_root, &record.run_id),
+            crate::handoff::document_path(runs_root, &record.run_id),
         );
     }
 }

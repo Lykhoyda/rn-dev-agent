@@ -26,8 +26,8 @@ fn tri(output: &crate::exec::CmdOutput, pass: bool) -> Probe {
     }
 }
 
-pub fn status(runner: &mut dyn Runner, repo_root: &Path, run_id: &str) -> Receipt {
-    let record = match RunRecord::load(repo_root, run_id) {
+pub fn status(runner: &mut dyn Runner, runs_root: &Path, run_id: &str) -> Receipt {
+    let record = match RunRecord::load(runs_root, run_id) {
         Ok(record) => record,
         Err(failure) => {
             let mut receipt = Receipt::new(
@@ -60,8 +60,8 @@ pub fn status(runner: &mut dyn Runner, repo_root: &Path, run_id: &str) -> Receip
                 record.failure.clone(),
             )
         }
-        Phase::Ready => probe_ready(runner, &record),
-        Phase::HandedOff => probe_handoff(runner, &record),
+        Phase::Ready | Phase::Walking => probe_ready(runner, &record),
+        Phase::HandedOff => probe_handoff(runner, runs_root, &record),
         Phase::Created | Phase::DepsInstalled | Phase::ResourcesAllocated | Phase::Building => {
             probe_working(runner, &record)
         }
@@ -104,10 +104,10 @@ pub fn status(runner: &mut dyn Runner, repo_root: &Path, run_id: &str) -> Receip
         ReceiptResult::Ready if record.phase == Phase::HandedOff => {
             match record.handoff.as_ref().and_then(|h| h.completed_at.as_ref()) {
                 Some(_) => format!(
-                    "the managed install is bound; agents attach via qaren, then: rn-qa cleanup {run_id} --json"
+                    "the managed install is bound; agents attach via qaren, then: qaren cleanup {run_id} --json"
                 ),
                 None => format!(
-                    "run the qaren managed build/bind chain (docs/qa/cooperative-qa.md), then: rn-qa complete {run_id} <build-log> --json"
+                    "run the qaren managed build/bind chain (docs/qa/cooperative-qa.md), then: qaren complete {run_id} <build-log> --json"
                 ),
             }
         }
@@ -120,11 +120,11 @@ pub fn status(runner: &mut dyn Runner, repo_root: &Path, run_id: &str) -> Receip
             .failure
             .as_ref()
             .map(|f| f.next_action.clone())
-            .unwrap_or_else(|| format!("rn-qa cleanup {run_id} --json")),
+            .unwrap_or_else(|| format!("qaren cleanup {run_id} --json")),
         _ => "re-run status; if still unknown, inspect the run directory".to_string(),
     };
     receipt.commands_executed = runner.commands_executed();
-    super::attach_artifacts(&mut receipt, repo_root, &record);
+    super::attach_artifacts(&mut receipt, runs_root, &record);
     receipt
 }
 
@@ -190,7 +190,7 @@ fn probe_ready(
             "status",
             FailureCode::Interrupted,
             "one or more readiness probes now fail for a run recorded as ready",
-            format!("rn-qa cleanup {} --json", record.run_id),
+            format!("qaren cleanup {} --json", record.run_id),
         )
     });
     (result, outcomes, failure)
@@ -203,13 +203,14 @@ fn probe_ready(
 // managed install receipt is bound.
 fn probe_handoff(
     runner: &mut dyn Runner,
+    runs_root: &Path,
     record: &RunRecord,
 ) -> (ReceiptResult, Vec<(String, Probe)>, Option<Failure>) {
     let mut outcomes = Vec::new();
     // The document on disk must be byte-identical to what this run issued —
     // a rewritten or foreign handoff.json fails the probe rather than passing
     // on mere existence.
-    let document_path = crate::handoff::document_path(&record.candidate.repo_root, &record.run_id);
+    let document_path = crate::handoff::document_path(runs_root, &record.run_id);
     let (handoff_probe, document) = match &record.handoff {
         Some(state) => match std::fs::read(&document_path) {
             Ok(raw) if crate::candidate::sha256_hex(&raw) == state.document_sha256 => {
@@ -281,7 +282,7 @@ fn probe_handoff(
             "status",
             FailureCode::Interrupted,
             "one or more allocation probes now fail for a handed-off run",
-            format!("rn-qa cleanup {} --json", record.run_id),
+            format!("qaren cleanup {} --json", record.run_id),
         )
     });
     (result, outcomes, failure)
@@ -630,6 +631,6 @@ fn interrupted(record: &RunRecord) -> Failure {
             "prepare died at phase {} without recording an outcome",
             record.phase.as_str()
         ),
-        format!("rn-qa cleanup {} --json", record.run_id),
+        format!("qaren cleanup {} --json", record.run_id),
     )
 }

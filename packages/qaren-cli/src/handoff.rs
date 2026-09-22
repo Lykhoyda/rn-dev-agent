@@ -8,7 +8,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-pub const HANDOFF_SCHEMA: &str = "rn-qa-handoff/1";
+pub const HANDOFF_SCHEMA: &str = "qaren-handoff/1";
 
 // The exact identity a managed-build receipt must carry to be adoptable.
 // worktree_key/app_root_key reproduce the qaren session's source
@@ -73,8 +73,8 @@ pub struct HandoffState {
     pub evidence_sha256: Option<String>,
 }
 
-pub fn document_path(repo_root: &Path, run_id: &str) -> PathBuf {
-    crate::runrecord::RunRecord::run_dir(repo_root, run_id).join("handoff.json")
+pub fn document_path(runs_root: &Path, run_id: &str) -> PathBuf {
+    crate::runrecord::RunRecord::run_dir(runs_root, run_id).join("handoff.json")
 }
 
 pub fn verify_validity_window(
@@ -89,7 +89,7 @@ pub fn verify_validity_window(
             FailureCode::RunRecordInvalid,
             detail,
             format!(
-                "rn-qa cleanup {} --json, then re-run prepare",
+                "qaren cleanup {} --json, then re-run prepare",
                 record.run_id
             ),
         )
@@ -118,7 +118,7 @@ pub fn verify_validity_window(
                 document.issued_at
             ),
             format!(
-                "rn-qa cleanup {} --json, then re-run prepare to issue a fresh handoff",
+                "qaren cleanup {} --json, then re-run prepare to issue a fresh handoff",
                 record.run_id
             ),
         ));
@@ -136,7 +136,7 @@ pub fn verify_validity_window(
                 observed_at_ms - deadline_ms
             ),
             format!(
-                "rn-qa cleanup {} --json, then re-run prepare to issue a fresh handoff",
+                "qaren cleanup {} --json, then re-run prepare to issue a fresh handoff",
                 record.run_id
             ),
         ));
@@ -244,7 +244,7 @@ pub fn extract_receipt_payload(evidence: &str) -> Result<Value, (FailureCode, St
 // private signer capability, which never leaves the qaren session —
 // only the session itself verifies it (rn_session refuses a forged or foreign
 // receipt at bind time, and its install-identity gate refuses gated tools
-// when the installed artifact stops matching). rn-qa's acceptance binds the
+// when the installed artifact stops matching). qaren's acceptance binds the
 // attested identity fields to this run's identity; it is a recording step,
 // not an independent cryptographic proof.
 pub fn validate_receipt_payload(

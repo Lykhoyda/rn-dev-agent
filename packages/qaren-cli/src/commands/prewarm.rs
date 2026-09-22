@@ -126,7 +126,7 @@ fn prewarm_validated(
         ],
         30,
     ));
-    let project_state = candidate::porcelain_without_rn_qa_state(&porcelain_now.stdout);
+    let project_state = candidate::porcelain_without_qaren_state(&porcelain_now.stdout);
     let project_state = if scenario.build.owner == crate::scenario::BuildOwner::Qaren {
         candidate::filter_integration_entries(
             runner,
@@ -196,7 +196,7 @@ fn prewarm_validated(
                 "deps",
                 FailureCode::RunRecordUpdateFailed,
                 format!("cannot persist the prewarm record {}: {e}", path.display()),
-                "check .rn-qa directory permissions, then re-run prewarm",
+                "check .qaren directory permissions, then re-run prewarm",
             ),
             Some(cand.clone()),
         ))

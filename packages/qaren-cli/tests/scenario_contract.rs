@@ -1,5 +1,5 @@
-use rn_qa::failure::FailureCode;
-use rn_qa::scenario::{Platform, Scenario};
+use qaren::failure::FailureCode;
+use qaren::scenario::{Platform, Scenario};
 use std::path::Path;
 
 fn valid_ios_yaml() -> String {
@@ -16,9 +16,9 @@ fn valid_android_yaml() -> String {
     .unwrap()
 }
 
-fn parse(yaml: &str) -> Result<Scenario, rn_qa::failure::Failure> {
+fn parse(yaml: &str) -> Result<Scenario, qaren::failure::Failure> {
     let scenario: Scenario = serde_yaml::from_str(yaml).map_err(|e| {
-        rn_qa::failure::Failure::new("validate", FailureCode::ScenarioInvalid, e.to_string(), "")
+        qaren::failure::Failure::new("validate", FailureCode::ScenarioInvalid, e.to_string(), "")
     })?;
     scenario.validate()?;
     Ok(scenario)
@@ -54,7 +54,7 @@ fn examples_use_distinct_metro_ports() {
 
 #[test]
 fn rejects_unsupported_schema() {
-    let yaml = valid_ios_yaml().replace("rn-qa/1", "rn-qa/999");
+    let yaml = valid_ios_yaml().replace("qaren/1", "qaren/999");
     let failure = parse(&yaml).unwrap_err();
     assert_eq!(failure.code, FailureCode::ScenarioSchemaUnsupported);
 }
@@ -155,21 +155,18 @@ fn rejects_bad_slot() {
 }
 
 fn valid_handoff_yaml() -> String {
-    "schema: rn-qa/1\nname: coop-ios\nplatform: ios\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nbuild:\n  owner: qaren\nios:\n  device_type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro\n  runtime: com.apple.CoreSimulator.SimRuntime.iOS-26-4\n".to_string()
+    "schema: qaren/1\nname: coop-ios\nplatform: ios\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nbuild:\n  owner: qaren\nios:\n  device_type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro\n  runtime: com.apple.CoreSimulator.SimRuntime.iOS-26-4\n".to_string()
 }
 
 #[test]
 fn handoff_owner_scenario_is_valid_without_metro() {
     let scenario = parse(&valid_handoff_yaml()).unwrap();
     assert!(scenario.metro.is_none());
-    assert_eq!(
-        scenario.build.owner,
-        rn_qa::scenario::BuildOwner::Qaren
-    );
+    assert_eq!(scenario.build.owner, qaren::scenario::BuildOwner::Qaren);
 }
 
 #[test]
-fn rn_qa_owner_still_requires_metro() {
+fn qaren_owner_still_requires_metro() {
     let yaml = valid_ios_yaml()
         .lines()
         .filter(|l| !l.starts_with("metro") && !l.contains("port:"))
@@ -205,10 +202,7 @@ fn handoff_owner_rejects_the_farm_adapter() {
 
 #[test]
 fn handoff_owner_rejects_clean_strategy_and_scheme_and_usb_port() {
-    let clean = valid_handoff_yaml().replace(
-        "owner: qaren",
-        "owner: qaren\n  strategy: clean",
-    );
+    let clean = valid_handoff_yaml().replace("owner: qaren", "owner: qaren\n  strategy: clean");
     assert!(parse(&clean).unwrap_err().detail.contains("build.strategy"));
 
     let scheme = valid_handoff_yaml() + "  # comment\n";
@@ -221,13 +215,13 @@ fn handoff_owner_rejects_clean_strategy_and_scheme_and_usb_port() {
         .detail
         .contains("dev_client_scheme"));
 
-    let usb = "schema: rn-qa/1\nname: coop-usb\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nbuild:\n  owner: qaren\nandroid_usb:\n  serial: R5CR20XXYZ\n  adb_server_port: 15039\n";
+    let usb = "schema: qaren/1\nname: coop-usb\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nbuild:\n  owner: qaren\nandroid_usb:\n  serial: R5CR20XXYZ\n  adb_server_port: 15039\n";
     assert!(parse(usb).unwrap_err().detail.contains("adb_server_port"));
 }
 
 #[test]
-fn rn_qa_owner_usb_still_requires_adb_server_port() {
-    let usb = "schema: rn-qa/1\nname: usb\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nmetro:\n  port: 8794\nandroid_usb:\n  serial: R5CR20XXYZ\n";
+fn qaren_owner_usb_still_requires_adb_server_port() {
+    let usb = "schema: qaren/1\nname: usb\nplatform: android\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nmetro:\n  port: 8794\nandroid_usb:\n  serial: R5CR20XXYZ\n";
     let failure = parse(usb).unwrap_err();
     assert!(
         failure.detail.contains("adb_server_port is required"),

@@ -1,11 +1,11 @@
 mod common;
 
-use rn_qa::commands::status::status;
-use rn_qa::exec::Spawned;
-use rn_qa::exec::{CmdOutput, MockRunner};
-use rn_qa::failure::FailureCode;
-use rn_qa::receipt::ReceiptResult;
-use rn_qa::runrecord::{
+use qaren::commands::status::status;
+use qaren::exec::Spawned;
+use qaren::exec::{CmdOutput, MockRunner};
+use qaren::failure::FailureCode;
+use qaren::receipt::ReceiptResult;
+use qaren::runrecord::{
     FarmResource, IosSimResource, MetroResource, Phase, RunRecord, TunnelResource,
 };
 
@@ -16,7 +16,7 @@ fn ios_ready_record(repo: &std::path::Path, run_id: &str) -> RunRecord {
         common::base_record(repo, &common::ios_scenario_yaml(8791), run_id, Phase::Ready);
     record.resources.ios_simulator = Some(IosSimResource {
         udid: "AAAA-1111".to_string(),
-        name: format!("rn-qa-{run_id}"),
+        name: format!("qaren-{run_id}"),
         device_type: "dt".to_string(),
         runtime: "rt".to_string(),
     });
@@ -45,7 +45,7 @@ fn ready_run_with_all_probes_passing_reports_ready() {
     mock.expect_run(
         "simctl list",
         CmdOutput::success(
-            r#"{"devices":{"rt":[{"udid":"AAAA-1111","name":"rn-qa-run1","state":"Booted"}]}}"#,
+            r#"{"devices":{"rt":[{"udid":"AAAA-1111","name":"qaren-run1","state":"Booted"}]}}"#,
         ),
     );
     mock.expect_run(
@@ -80,7 +80,7 @@ fn ready_run_with_dead_metro_reports_failed() {
     mock.expect_run(
         "simctl list",
         CmdOutput::success(
-            r#"{"devices":{"rt":[{"udid":"AAAA-1111","name":"rn-qa-run2","state":"Booted"}]}}"#,
+            r#"{"devices":{"rt":[{"udid":"AAAA-1111","name":"qaren-run2","state":"Booted"}]}}"#,
         ),
     );
     mock.expect_run("simctl get_app_container", CmdOutput::success("/path\n"));
@@ -154,11 +154,11 @@ fn failed_run_echoes_recorded_failure() {
         "run5",
         Phase::Failed,
     );
-    record.failure = Some(rn_qa::failure::Failure::new(
+    record.failure = Some(qaren::failure::Failure::new(
         "build",
         FailureCode::BuildFailed,
         "xcodebuild exploded",
-        "rn-qa cleanup run5 --json",
+        "qaren cleanup run5 --json",
     ));
     record.save(&repo).unwrap();
     let mut mock = MockRunner::new();
@@ -232,7 +232,7 @@ fn android_unreachable_farm_reports_unknown() {
         ssh_host: "nuc".to_string(),
         farm_path: "bin/android-farm".to_string(),
         slot: 1,
-        holder: "rn-qa-run8".to_string(),
+        holder: "qaren-run8".to_string(),
         avd: "Pixel_10a".to_string(),
         remote_serial: "emulator-5554".to_string(),
         adb_port: 5555,
@@ -294,7 +294,7 @@ fn android_ready_record(repo: &std::path::Path, run_id: &str) -> RunRecord {
         ssh_host: "nuc".to_string(),
         farm_path: "bin/android-farm".to_string(),
         slot: 1,
-        holder: format!("rn-qa-{run_id}"),
+        holder: format!("qaren-{run_id}"),
         avd: "Pixel_10a".to_string(),
         remote_serial: "emulator-5554".to_string(),
         adb_port: 5555,
@@ -310,7 +310,7 @@ fn android_ready_record(repo: &std::path::Path, run_id: &str) -> RunRecord {
     });
     record.resources.adb_local_serial = Some("127.0.0.1:5555".to_string());
     record.resources.adb_path = Some(repo.join("adb"));
-    record.resources.adb_server = Some(rn_qa::runrecord::AdbServerResource {
+    record.resources.adb_server = Some(qaren::runrecord::AdbServerResource {
         spawned: Spawned {
             pid: 7100,
             pgid: 7100,
@@ -334,7 +334,7 @@ fn android_ready_run_with_all_probes_passing_reports_ready() {
     mock.expect_run("curl", CmdOutput::success("packager-status:running"));
     mock.expect_run(
         "~/bin/android-farm status",
-        CmdOutput::success("slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=rn-qa-run9 claimed_at=x state=device\n"),
+        CmdOutput::success("slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=qaren-run9 claimed_at=x state=device\n"),
     );
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n"))); // tunnel identity
     mock.expect_run("ps", CmdOutput::success("S\n")); // not a zombie
@@ -375,7 +375,7 @@ fn android_dead_tunnel_gates_adb_probes() {
     mock.expect_run("curl", CmdOutput::success("packager-status:running"));
     mock.expect_run(
         "~/bin/android-farm status",
-        CmdOutput::success("slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=rn-qa-run10 claimed_at=x state=device\n"),
+        CmdOutput::success("slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=qaren-run10 claimed_at=x state=device\n"),
     );
     mock.expect_run("ps", CmdOutput::failed(1, "")); // tunnel dead
 
@@ -411,7 +411,7 @@ fn probe_infrastructure_errors_report_unknown_not_failed() {
     mock.expect_run(
         "simctl list",
         CmdOutput::success(
-            r#"{"devices":{"rt":[{"udid":"AAAA-1111","name":"rn-qa-run11","state":"Booted"}]}}"#,
+            r#"{"devices":{"rt":[{"udid":"AAAA-1111","name":"qaren-run11","state":"Booted"}]}}"#,
         ),
     );
     mock.expect_run("simctl get_app_container", CmdOutput::success("/path\n"));
@@ -448,7 +448,7 @@ fn android_serial_port_mismatch_blocks_adb_probes() {
     mock.expect_run("curl", CmdOutput::success("packager-status:running"));
     mock.expect_run(
         "~/bin/android-farm status",
-        CmdOutput::success("slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5557 lease=rn-qa-run12 claimed_at=x state=device\n"),
+        CmdOutput::success("slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5557 lease=qaren-run12 claimed_at=x state=device\n"),
     );
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n"))); // tunnel identity
     mock.expect_run("ps", CmdOutput::success("S\n")); // not a zombie
@@ -476,7 +476,7 @@ fn farm_identity_drift_fails_lease_probe_despite_matching_holder() {
     // serial and AVD drifted. The old tunnel may now reach a different device.
     mock.expect_run(
         "~/bin/android-farm status",
-        CmdOutput::success("slot=1 avd=Pixel_10_Pro serial=emulator-5556 adb_port=5555 lease=rn-qa-run13 claimed_at=x state=device\n"),
+        CmdOutput::success("slot=1 avd=Pixel_10_Pro serial=emulator-5556 adb_port=5555 lease=qaren-run13 claimed_at=x state=device\n"),
     );
 
     let receipt = status(&mut mock, &repo, "run13");
@@ -504,7 +504,7 @@ fn failed_run_preserves_recorded_next_action() {
     );
     // A pre-allocation failure records a fix-and-retry action; nothing is
     // owned, so status must not redirect automation to cleanup.
-    record.failure = Some(rn_qa::failure::Failure::new(
+    record.failure = Some(qaren::failure::Failure::new(
         "deps",
         FailureCode::DepsInstallFailed,
         "pnpm install --frozen-lockfile: exit=1",

@@ -20,6 +20,7 @@
     "test:integration": "yarn workspace qaren-core test:integration",
     "test:native:android": "yarn workspace qaren-android-runner test",
     "test:native:ios": "yarn workspace qaren-ios-runner test",
+    "gate:qaren-check": "bash scripts/gate-qaren-check.sh",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",
