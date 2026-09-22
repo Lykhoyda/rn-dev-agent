@@ -84,15 +84,13 @@ export async function walkBlock(
     [...typed]
       .sort((a, b) => b.length - a.length)
       .reduce((masked, value) => maskValue(masked, value), text);
-  // An input showing a typed value is masked as the screen renders it (`label: value`), whatever the length.
+  // An input showing a typed value is masked as the screen renders it (`name: value`), whatever the length.
   const redactInputs = (screen: Screen, text: string): string =>
-    screen.elements.reduce(
-      (masked, el) =>
-        el.kind === 'input' && el.label && el.value && typed.includes(el.value)
-          ? masked.split(`${el.label}: ${el.value}`).join(`${el.label}: ${MASK}`)
-          : masked,
-      text,
-    );
+    screen.elements.reduce((masked, el) => {
+      if (el.kind !== 'input' || !el.value || !typed.includes(el.value)) return masked;
+      const name = el.label ?? el.placeholder ?? el.testID ?? 'input';
+      return masked.split(`${name}: ${el.value}`).join(`${name}: ${MASK}`);
+    }, text);
   const base = (item: Item, attempt: number): Omit<LedgerRow, 'outcome'> => ({
     block: block.slug,
     line: item.line,

@@ -25,8 +25,11 @@ export QAREN_RUNTIME="$ROOT/packages/qaren-core/dist"
 app_id="$(sed -nE "s/^[[:space:]]*appId:[[:space:]]*['\"]?([^'\"[:space:]#]+)['\"]?.*$/\1/p" "$CONFIG" | head -1)"
 [ -n "$app_id" ] || { echo "gate:qaren-check: cannot read appId from $CONFIG"; exit 1; }
 booted="$(xcrun simctl list devices booted -j | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const d=JSON.parse(s).devices;const u=Object.entries(d).filter(([r])=>r.includes("SimRuntime.iOS")).flatMap(([,l])=>l).filter(x=>x.state==="Booted").map(x=>x.udid);process.stdout.write(u.join("\n"))})')"
-if [ "$(printf '%s\n' "$booted" | grep -c .)" != "1" ]; then
-  echo "gate:qaren-check: exactly one booted iOS simulator is required; found: ${booted:-none}"
+if [ -n "${QAREN_DEVICE_UDID:-}" ]; then
+  printf '%s\n' "$booted" | grep -qx "$QAREN_DEVICE_UDID" || { echo "gate:qaren-check: QAREN_DEVICE_UDID $QAREN_DEVICE_UDID is not a booted iOS simulator; booted: ${booted:-none}"; exit 1; }
+  booted="$QAREN_DEVICE_UDID"
+elif [ "$(printf '%s\n' "$booted" | grep -c .)" != "1" ]; then
+  echo "gate:qaren-check: exactly one booted iOS simulator is required (or set QAREN_DEVICE_UDID); found: ${booted:-none}"
   exit 1
 fi
 # A fresh install is the plan's precondition: uninstall only when installed, and require it to succeed.
@@ -37,7 +40,7 @@ fi
 # `corepack yarn run` exports COREPACK_* to this script; a pnpm launched with them
 # fails the app's packageManager check, so qaren gets the caller's plain environment.
 set +e
-receipt="$(cd "$APP" && env -u COREPACK_ROOT -u COREPACK_ENABLE_DOWNLOAD_PROMPT -u COREPACK_ENABLE_AUTO_PIN "$QAREN" check --plan-file "$PLAN" --json)"
+receipt="$(cd "$APP" && env -u COREPACK_ROOT -u COREPACK_ENABLE_DOWNLOAD_PROMPT -u COREPACK_ENABLE_AUTO_PIN "$QAREN" check --plan-file "$PLAN" --device "$booted" --json)"
 status=$?
 set -e
 printf '%s\n' "$receipt"

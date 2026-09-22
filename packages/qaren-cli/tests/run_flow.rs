@@ -43,6 +43,7 @@ fn request(repo: &Path, app: &Path, step_seconds: u64) -> RunRequest {
         config_path: app.join(".qaren").join("config.yaml"),
         plan_file: app.join("plan.md"),
         platform: Platform::Ios,
+        device: None,
         runtime_dir: PathBuf::from("/runtime"),
         node: Some(PathBuf::from("/usr/local/bin/node")),
         lock_root: repo.join(".locks"),
@@ -565,4 +566,99 @@ fn a_core_group_survivor_retains_the_device_lease() {
     let record = RunRecord::load(&repo.join("runs"), &run_id()).unwrap();
     assert!(record.resources.lease.is_some());
     assert_eq!(record.phase, Phase::Walking);
+}
+
+const OTHER_UDID: &str = "76709EFC-0104-4A66-8908-F4F85A76F025";
+
+fn booted_json_two() -> String {
+    format!(
+        r#"{{"devices":{{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[{{"udid":"{UDID}","name":"qa-company-app","state":"Booted","deviceTypeIdentifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17"}},{{"udid":"{OTHER_UDID}","name":"other","state":"Booted","deviceTypeIdentifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17"}}]}}}}"#
+    )
+}
+
+fn script_preflight_booted(mock: &mut MockRunner, repo: &Path, booted: &str) {
+    mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
+    mock.expect_run(
+        "walk.js --parse",
+        CmdOutput::success("{\"ok\":true,\"blocks\":1,\"items\":2}\n"),
+    );
+    mock.expect_run("simctl list devices booted", CmdOutput::success(booted));
+}
+
+#[test]
+fn two_booted_simulators_refuse_without_a_device_and_borrow_the_named_one_with_it() {
+    let (repo, app) = app_repo();
+    let mut refusing = MockRunner::new();
+    script_preflight_booted(&mut refusing, &repo, &booted_json_two());
+    let receipt = run(&mut refusing, &request(&repo, &app, 30));
+    assert_ne!(receipt.result, ReceiptResult::Pass);
+    assert_eq!(
+        receipt.failure.as_ref().unwrap().code,
+        FailureCode::DeviceUnavailable
+    );
+    assert!(receipt
+        .failure
+        .as_ref()
+        .unwrap()
+        .detail
+        .contains("2 booted"));
+    assert_eq!(refusing.remaining(), 0);
+
+    let mut mock = MockRunner::new();
+    script_preflight_booted(&mut mock, &repo, &booted_json_two());
+    mock.expect_run("git", CmdOutput::success(&format!("{}\n", repo.display())));
+    mock.expect_run("git", CmdOutput::success(&format!("{}\n", repo.display())));
+    mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
+    mock.expect_run(
+        "git",
+        CmdOutput::success("?? test-app/.qaren/\0?? test-app/plan.md\0"),
+    );
+    for tool in IOS_TOOLS {
+        mock.expect_run("which", CmdOutput::success(&format!("/usr/bin/{tool}\n")));
+    }
+    mock.expect_run("lsof", free_port());
+    mock.expect_run("df", df_ok());
+    mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren check\n"));
+    script_provision(&mut mock);
+    mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
+    script_core_identity(&mut mock);
+    script_teardown(&mut mock);
+
+    let mut req = request(&repo, &app, 30);
+    req.device = Some(OTHER_UDID.to_string());
+    let receipt = run(&mut mock, &req);
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Pass,
+        "failure: {:?}",
+        receipt.failure
+    );
+    assert_eq!(mock.remaining(), 0);
+    let record = RunRecord::load(&repo.join("runs"), &run_id()).unwrap();
+    assert_eq!(
+        record.resources.ios_simulator.as_ref().unwrap().udid,
+        OTHER_UDID
+    );
+    assert!(
+        repo.join(".locks")
+            .join(qaren::lease::lock_name(Platform::Ios, UDID))
+            .exists()
+            == false
+    );
+}
+
+#[test]
+fn a_named_device_that_is_not_booted_refuses() {
+    let (repo, app) = app_repo();
+    let mut mock = MockRunner::new();
+    script_preflight_booted(&mut mock, &repo, &booted_json());
+    let mut req = request(&repo, &app, 30);
+    req.device = Some(OTHER_UDID.to_string());
+    let receipt = run(&mut mock, &req);
+    assert_ne!(receipt.result, ReceiptResult::Pass);
+    let failure = receipt.failure.as_ref().unwrap();
+    assert_eq!(failure.code, FailureCode::DeviceUnavailable);
+    assert!(failure.detail.contains(OTHER_UDID), "{}", failure.detail);
+    assert_eq!(mock.remaining(), 0);
 }

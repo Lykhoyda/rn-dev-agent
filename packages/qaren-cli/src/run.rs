@@ -33,6 +33,8 @@ pub struct RunRequest {
     pub config_path: PathBuf,
     pub plan_file: PathBuf,
     pub platform: Platform,
+    // A booted simulator to borrow by UDID; None borrows the only booted one.
+    pub device: Option<String>,
     pub runtime_dir: PathBuf,
     pub node: Option<PathBuf>,
     pub lock_root: PathBuf,
@@ -107,7 +109,7 @@ fn run_inner(
             "leave the plan file alone during the run, then re-run",
         ));
     }
-    let device = resolve_device(runner, req.platform)?;
+    let device = resolve_device(runner, req.platform, req.device.as_deref())?;
     let (repo_root, project_rel) = locate_worktree(runner, &req.project_root)?;
     let scenario = build_scenario(&config, req.platform, &device, &repo_root, &project_rel);
     scenario.validate()?;
@@ -595,7 +597,11 @@ fn preflight_disk(runner: &mut dyn Runner, runs_root: &Path) -> Result<(), Failu
     }
 }
 
-fn resolve_device(runner: &mut dyn Runner, platform: Platform) -> Result<Device, Failure> {
+fn resolve_device(
+    runner: &mut dyn Runner,
+    platform: Platform,
+    device: Option<&str>,
+) -> Result<Device, Failure> {
     match platform {
         Platform::Android => Err(Failure::new(
             "device",
@@ -621,12 +627,27 @@ fn resolve_device(runner: &mut dyn Runner, platform: Platform) -> Result<Device,
                     "check Xcode and CoreSimulator, then re-run",
                 ));
             };
+            let borrow = |sim: &ios::BootedSim| Device {
+                id: sim.udid.clone(),
+                name: sim.name.clone(),
+                ios: Some((sim.device_type.clone(), sim.runtime.clone())),
+            };
+            if let Some(udid) = device {
+                return match sims.iter().find(|sim| sim.udid == udid) {
+                    Some(sim) => Ok(borrow(sim)),
+                    None => Err(Failure::new(
+                        "device",
+                        FailureCode::DeviceUnavailable,
+                        format!(
+                            "{udid} is not a booted iOS simulator ({} booted)",
+                            sims.len()
+                        ),
+                        "boot the simulator named by --device, then re-run",
+                    )),
+                };
+            }
             match sims.as_slice() {
-                [sim] => Ok(Device {
-                    id: sim.udid.clone(),
-                    name: sim.name.clone(),
-                    ios: Some((sim.device_type.clone(), sim.runtime.clone())),
-                }),
+                [sim] => Ok(borrow(sim)),
                 [] => Err(Failure::new(
                     "device",
                     FailureCode::DeviceUnavailable,
