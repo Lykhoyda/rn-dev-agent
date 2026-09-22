@@ -52,11 +52,13 @@ pub enum FailureCode {
     PlanStepFailed,
     MetroOriginMismatch,
     CoreRefused,
+    JevUnreachable,
+    JevAuthFailed,
+    JevRequestInvalid,
 }
 
 impl FailureCode {
-    // Refusals (exit 4): nothing broke — qaren declined to proceed, adopt a
-    // claimed resource, or bind unprovable handoff evidence.
+    // Refusals exit 4 rather than claiming an app failure.
     pub fn is_refusal(&self) -> bool {
         matches!(
             self,
@@ -75,6 +77,9 @@ impl FailureCode {
                 | FailureCode::PlatformUnsupported
                 | FailureCode::MetroOriginMismatch
                 | FailureCode::CoreRefused
+                | FailureCode::JevUnreachable
+                | FailureCode::JevAuthFailed
+                | FailureCode::JevRequestInvalid
         )
     }
 }
@@ -99,14 +104,17 @@ impl Failure {
         Failure {
             phase: phase.to_string(),
             code,
-            detail: detail.into(),
+            detail: crate::redact::redact_secrets(&detail.into()),
             evidence: Vec::new(),
-            next_action: next_action.into(),
+            next_action: crate::redact::redact_secrets(&next_action.into()),
         }
     }
 
     pub fn with_evidence(mut self, evidence: Vec<String>) -> Self {
-        self.evidence = evidence;
+        self.evidence = evidence
+            .into_iter()
+            .map(|line| crate::redact::redact_secrets(&line))
+            .collect();
         self
     }
 }

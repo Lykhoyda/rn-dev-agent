@@ -582,10 +582,10 @@ fn probe_evidence(output: &CmdOutput) -> String {
     let code = output
         .exit_code
         .map_or("none".to_string(), |c| c.to_string());
-    format!(
+    crate::redact::redact_secrets(&format!(
         "exit={code} timed_out={} stdout={:?} stderr={:?}",
         output.timed_out, output.stdout, output.stderr
-    )
+    ))
 }
 
 // A silent `pm path` exit 1 can mean absence; require an independent package-list read.

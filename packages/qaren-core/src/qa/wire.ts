@@ -1,6 +1,8 @@
 import { StringDecoder } from 'node:string_decoder';
-import type { Ledger, LedgerRow } from './ledger.js';
+import type { Ledger, LedgerRow, WalkResult } from './ledger.js';
 import { ledgerWithoutResult } from './ledger.js';
+import type { PreparedPlan } from './plan.js';
+import { type JevCall, isRecord } from './questions.js';
 
 export const WIRE_VERSION = 1 as const;
 
@@ -26,6 +28,8 @@ export interface WireRequest {
   runId: string;
   t0: number;
   plan: string;
+  prepared?: PreparedPlan;
+  preflightCalls?: JevCall[];
   platform: 'ios' | 'android';
   appId: string;
   runDir: string;
@@ -33,7 +37,7 @@ export interface WireRequest {
   target: WireTarget;
 }
 
-export interface Refusal {
+export interface Refusal extends Partial<Omit<Ledger, 'verdict'>> {
   verdict: 'REFUSED';
   code: string;
   message: string;
@@ -41,6 +45,10 @@ export interface Refusal {
 }
 
 export type ResultPayload = Ledger | Refusal;
+
+export function resultForWalk(result: WalkResult, lease: string): ResultPayload {
+  return result.verdict === 'REFUSED' ? { ...result, lease } : result;
+}
 
 export class WireError extends Error {}
 
@@ -90,6 +98,24 @@ export function startupRow(): LedgerRow {
 
 const TYPES: ReadonlySet<string> = new Set(['request', 'row', 'result', 'cancel']);
 
+function validCall(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.questionIds) &&
+    value.questionIds.every((id) => typeof id === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(id)) &&
+    ['preflight', 'parse'].includes(String(value.scope)) &&
+    Number.isSafeInteger(value.ms) &&
+    (value.ms as number) >= 0 &&
+    (value.inputTokens === null ||
+      (Number.isSafeInteger(value.inputTokens) && (value.inputTokens as number) >= 0)) &&
+    ['ok', 'timeout', 'network', 'http', 'invalid'].includes(String(value.outcome)) &&
+    (value.status === undefined ||
+      (Number.isInteger(value.status) &&
+        (value.status as number) >= 100 &&
+        (value.status as number) <= 599))
+  );
+}
+
 export function parseEnvelope(line: string): Envelope | null {
   let value: unknown;
   try {
@@ -127,6 +153,8 @@ export function parseRequest(line: string): WireRequest {
     !p.runId ||
     !Number.isSafeInteger(p.t0) ||
     typeof p.plan !== 'string' ||
+    (p.preflightCalls !== undefined &&
+      (!Array.isArray(p.preflightCalls) || !p.preflightCalls.every(validCall))) ||
     (p.platform !== 'ios' && p.platform !== 'android') ||
     typeof p.appId !== 'string' ||
     typeof p.runDir !== 'string' ||

@@ -112,6 +112,8 @@ pub struct Receipt {
     pub planned_commands: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ledger: Option<crate::report::LedgerSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preflight_jev: Option<crate::core::JevRollup>,
     pub next_action: String,
 }
 
@@ -143,12 +145,13 @@ impl Receipt {
             cleanup: BTreeMap::new(),
             planned_commands: Vec::new(),
             ledger: None,
+            preflight_jev: None,
             next_action: String::new(),
         }
     }
 
     pub fn to_json(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_else(|e| {
+        crate::redact::redact_api_key(&serde_json::to_string_pretty(self).unwrap_or_else(|e| {
             let fallback = serde_json::json!({
                 "schema": RECEIPT_SCHEMA,
                 "verb": self.verb,
@@ -166,6 +169,6 @@ impl Receipt {
                 "next_action": "inspect the run directory manually"
             });
             serde_json::to_string_pretty(&fallback).expect("fallback receipt is plain strings")
-        })
+        }))
     }
 }

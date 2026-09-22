@@ -21,6 +21,7 @@
     "test:native:android": "yarn workspace qaren-android-runner test",
     "test:native:ios": "yarn workspace qaren-ios-runner test",
     "gate:qaren-check": "bash scripts/gate-qaren-check.sh",
+    "jev:evals": "yarn build:core && yarn workspace qaren-core jev:evals",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",

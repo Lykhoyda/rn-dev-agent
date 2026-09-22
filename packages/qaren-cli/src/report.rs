@@ -12,6 +12,8 @@ pub struct LedgerSummary {
     pub steps: u64,
     pub jev_calls: u64,
     pub jev_median_ms: u64,
+    #[serde(default)]
+    pub jev_input_tokens: u64,
     pub llm_turns: u64,
     pub escapes: u64,
     pub recoveries: u64,
@@ -26,6 +28,7 @@ pub fn summarize(ledger: &Ledger) -> LedgerSummary {
         steps: ledger.steps.len() as u64,
         jev_calls: ledger.jev.calls,
         jev_median_ms: ledger.jev.median_ms,
+        jev_input_tokens: ledger.jev.input_tokens,
         llm_turns: ledger.llm_turns,
         escapes: ledger.escapes,
         recoveries: ledger.recoveries,
@@ -120,6 +123,17 @@ pub fn render(input: &ReportInput<'_>) -> String {
             out.push_str(&format!("  ![line {}]({shot})\n", row.line));
         }
     }
+    if !input.ledger.blocks.is_empty() {
+        out.push_str("\n## Blocks\n\n");
+        for block in &input.ledger.blocks {
+            out.push_str(&format!(
+                "- {}: {} ({})\n",
+                prose(&block.key),
+                prose(&block.outcome),
+                prose(&block.source)
+            ));
+        }
+    }
     if let Some(failure) = &input.ledger.failure {
         out.push_str("\n## Failure\n\n");
         out.push_str(&format!(
@@ -133,10 +147,11 @@ pub fn render(input: &ReportInput<'_>) -> String {
     }
     out.push_str("\n## Run details\n\n");
     out.push_str(&format!(
-        "steps {} · jev.calls {} · jev.medianMs {} · llmTurns {} · escapes {} · recoveries {} · path {}\n",
+        "steps {} · jev.calls {} · jev.medianMs {} · jev.inputTokens {} · llmTurns {} · escapes {} · recoveries {} · path {}\n",
         summary.steps,
         summary.jev_calls,
         summary.jev_median_ms,
+        summary.jev_input_tokens,
         summary.llm_turns,
         summary.escapes,
         summary.recoveries,

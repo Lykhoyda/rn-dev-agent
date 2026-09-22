@@ -1,7 +1,19 @@
-// Registry failures can echo authenticated URLs, tokens, or npmrc-style
-// assignments; strip every known credential shape before anything reaches a
-// durable receipt.
+pub fn redact_api_key(raw: &str) -> String {
+    redact_known_key(raw, std::env::var("TYPESAFE_API_KEY").ok().as_deref())
+}
+
+pub fn redact_known_key(raw: &str, key: Option<&str>) -> String {
+    let Some(key) = key.filter(|k| !k.is_empty()) else {
+        return raw.to_string();
+    };
+    let encoded = serde_json::to_string(key).unwrap_or_default();
+    raw.replace(&encoded[1..encoded.len() - 1], "[REDACTED_SECRET]")
+        .replace(key, "[REDACTED_SECRET]")
+}
+
 pub fn redact_secrets(raw: &str) -> String {
+    let safe = redact_api_key(raw);
+    let raw = safe.as_str();
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw;
     while let Some(idx) = rest.find("://") {
@@ -37,6 +49,7 @@ pub fn redact_secrets(raw: &str) -> String {
                 || key.ends_with("_auth")
                 || key.ends_with("password")
                 || key.ends_with("token")
+                || key.ends_with("api_key")
         });
         if redact_next {
             redacted.push_str("<redacted>");
@@ -64,7 +77,22 @@ pub fn redact_secrets(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::redact_secrets;
+    use super::{redact_known_key, redact_secrets};
+
+    #[test]
+    fn typesafe_key_is_redacted_without_a_prefix_and_in_json() {
+        let key = "opaque-\"key\\value";
+        let raw = format!(
+            "plain {key} encoded {}",
+            serde_json::to_string(key).unwrap()
+        );
+        let safe = redact_known_key(&raw, Some(key));
+        assert!(!safe.contains("opaque"), "{safe}");
+        assert_eq!(
+            redact_secrets("TYPESAFE_API_KEY=secret"),
+            "TYPESAFE_API_KEY=<redacted>"
+        );
+    }
 
     #[test]
     fn redacts_url_userinfo_and_npm_tokens() {

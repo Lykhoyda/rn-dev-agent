@@ -11,6 +11,26 @@ use std::path::{Path, PathBuf};
 
 const UDID: &str = "1DC408C4-51DA-4C4F-ACA1-39881C916FDD";
 const LSTART: &str = "Wed Aug 12 16:01:00 2026";
+const TEST_KEY: &str = "hermetic-typesafe-key";
+
+fn probe_json() -> serde_json::Value {
+    serde_json::json!({"calls":1,"medianMs":12,"inputTokens":10,"callDetails":[{
+        "scope":"preflight","questionIds":["preflight"],"inputTokens":10,"ms":12,"outcome":"ok","status":200
+    }]})
+}
+
+fn script_plan(mock: &mut MockRunner, repo: &Path) {
+    mock.environment
+        .insert("TYPESAFE_API_KEY".into(), TEST_KEY.into());
+    let plan = std::fs::read(repo.join("test-app/plan.md")).unwrap();
+    let output = serde_json::json!({"ok":true,"prepared":{
+        "hash":qaren::candidate::sha256_hex(&plan),"blocks":[]
+    },"jev":probe_json()});
+    mock.expect_run(
+        "walk.js --preflight",
+        CmdOutput::success(&output.to_string()),
+    );
+}
 // MockRunner's clock is frozen until the first sleep, so the run id is deterministic.
 fn run_id() -> String {
     format!("check-{}", qaren::timefmt::compact_utc(1_770_000_000_000))
@@ -73,10 +93,7 @@ const IOS_TOOLS: &[&str] = &["git", "pnpm", "node", "lsof", "curl", "ps", "xcrun
 // Everything up to and including the lease: preflight, device, candidate, prereqs, port, disk, self identity.
 fn script_preflight(mock: &mut MockRunner, repo: &Path) {
     mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
-    mock.expect_run(
-        "walk.js --parse",
-        CmdOutput::success("{\"ok\":true,\"blocks\":1,\"items\":2}\n"),
-    );
+    script_plan(mock, repo);
     mock.expect_run(
         "simctl list devices booted",
         CmdOutput::success(&booted_json()),
@@ -215,7 +232,7 @@ fn check_runs_the_phases_in_order_and_ends_pass_with_a_report() {
         &labels(&mock),
         &[
             "node-version",
-            "plan-parse",
+            "plan-preflight",
             "simctl-list-booted",
             "git-toplevel",
             "which",
@@ -278,6 +295,17 @@ fn check_runs_the_phases_in_order_and_ends_pass_with_a_report() {
     assert_eq!(request_line["payload"]["appId"], "com.rndevagent.testapp");
     assert_eq!(request_line["payload"]["target"]["deviceId"], UDID);
     assert_eq!(
+        request_line["payload"]["preflightCalls"],
+        probe_json()["callDetails"]
+    );
+    assert_eq!(receipt.preflight_jev.as_ref().unwrap().calls, 1);
+    for call in &mock.calls {
+        assert!(!call.rendered().contains(TEST_KEY));
+        assert!(!serde_json::to_string(call).unwrap().contains(TEST_KEY));
+    }
+    assert!(!mock.piped_stdin_text(0).contains(TEST_KEY));
+    assert!(!receipt.to_json().contains(TEST_KEY));
+    assert_eq!(
         request_line["payload"]["plan"],
         "1. Tap \"Tasks\"\n✓ \"Tasks\"\n"
     );
@@ -300,6 +328,7 @@ fn a_deadline_overrun_fails_naming_the_walk_phase_and_still_tears_down() {
     let failure = receipt.failure.as_ref().unwrap();
     assert_eq!(failure.code, FailureCode::WalkDeadlineExceeded);
     assert_eq!(failure.phase, "walk");
+    assert!(failure.detail.contains("no ledger row within 5s"));
     assert!(
         failure.detail.contains("after line 1"),
         "{}",
@@ -364,9 +393,11 @@ fn a_leased_device_refuses_before_any_provisioning() {
 fn an_unparseable_plan_refuses_before_the_device_is_touched() {
     let (repo, app) = app_repo();
     let mut mock = MockRunner::new();
+    mock.environment
+        .insert("TYPESAFE_API_KEY".into(), TEST_KEY.into());
     mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
     mock.expect_run(
-        "walk.js --parse",
+        "walk.js --preflight",
         CmdOutput {
             exit_code: Some(4),
             stdout: r#"{"ok":false,"code":"PLAN_UNPARSEABLE","refused":[{"line":3,"text":"Frobnicate","reason":"no verb"}]}"#.to_string(),
@@ -487,10 +518,7 @@ fn an_unreadable_disk_budget_fails_closed_before_any_claim() {
     let (repo, app) = app_repo();
     let mut mock = MockRunner::new();
     mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
-    mock.expect_run(
-        "walk.js --parse",
-        CmdOutput::success("{\"ok\":true,\"blocks\":1,\"items\":2}\n"),
-    );
+    script_plan(&mut mock, &repo);
     mock.expect_run(
         "simctl list devices booted",
         CmdOutput::success(&booted_json()),
@@ -578,10 +606,7 @@ fn booted_json_two() -> String {
 
 fn script_preflight_booted(mock: &mut MockRunner, repo: &Path, booted: &str) {
     mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
-    mock.expect_run(
-        "walk.js --parse",
-        CmdOutput::success("{\"ok\":true,\"blocks\":1,\"items\":2}\n"),
-    );
+    script_plan(mock, repo);
     mock.expect_run("simctl list devices booted", CmdOutput::success(booted));
 }
 
@@ -661,4 +686,145 @@ fn a_named_device_that_is_not_booted_refuses() {
     assert_eq!(failure.code, FailureCode::DeviceUnavailable);
     assert!(failure.detail.contains(OTHER_UDID), "{}", failure.detail);
     assert_eq!(mock.remaining(), 0);
+}
+
+#[test]
+fn missing_or_rejected_key_refuses_before_device_or_lease() {
+    for supplied in [false, true] {
+        let (repo, app) = app_repo();
+        let mut mock = MockRunner::new();
+        mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
+        if supplied {
+            mock.environment
+                .insert("TYPESAFE_API_KEY".into(), TEST_KEY.into());
+            mock.expect_run("walk.js --preflight", CmdOutput {
+                exit_code: Some(4),
+                stdout: serde_json::json!({"ok":false,"code":"JEV_UNREACHABLE","message":TEST_KEY,
+                    "jev":{"calls":1,"medianMs":5,"inputTokens":0,"callDetails":[{
+                        "scope":"preflight","questionIds":["preflight"],"inputTokens":null,"ms":5,"outcome":"http","status":401
+                    }]}}).to_string(),
+                ..Default::default()
+            });
+        }
+        let receipt = run(&mut mock, &request(&repo, &app, 30));
+        assert_eq!(receipt.result, ReceiptResult::Refused);
+        assert_eq!(
+            receipt.failure.as_ref().unwrap().code,
+            FailureCode::JevUnreachable
+        );
+        assert_eq!(receipt.run_id, "none");
+        assert!(!repo.join(".locks").exists());
+        assert!(!repo.join("runs").exists());
+        assert_eq!(mock.remaining(), 0);
+        assert!(!receipt.to_json().contains(TEST_KEY));
+        assert!(!labels(&mock).iter().any(|l| l == "simctl-list-booted"));
+    }
+}
+
+#[test]
+fn walk_jev_refusals_preserve_prior_passes_and_the_complete_failure_evidence() {
+    for (code, expected, status) in [
+        ("JEV_AUTH_FAILED", FailureCode::JevAuthFailed, 401),
+        ("JEV_REQUEST_INVALID", FailureCode::JevRequestInvalid, 422),
+    ] {
+        let (repo, app) = app_repo();
+        let mut mock = MockRunner::new();
+        script_preflight(&mut mock, &repo);
+        script_provision(&mut mock);
+        let jev = serde_json::json!({"calls":2,"medianMs":25,"inputTokens":10,"callDetails":[
+            probe_json()["callDetails"][0],
+            {"scope":"walk","questionIds":["front"],"inputTokens":null,"ms":38,"outcome":"http","status":status}
+        ]});
+        let steps = serde_json::json!([
+            {"block":"navigation","line":1,"attempt":1,"kind":"step","resolvedBy":"exact","t":10,"outcome":"pass","text":"Open tasks","screenshot":"screenshots/open-tasks.png"},
+            {"block":"navigation","line":4,"attempt":1,"kind":"check","resolvedBy":"jev","t":20,"outcome":"pass","text":"Check home","screenshot":"screenshots/home.png"},
+            {"block":"account","line":9,"attempt":1,"kind":"check","resolvedBy":"jev","t":30,"outcome":"fail","text":"Check account","reason":"judgment refused","screenshot":"screenshots/row-nine.png"}
+        ]);
+        let blocks = serde_json::json!([
+            {"key":"navigation","outcome":"pass","source":"discovered"},
+            {"key":"account","outcome":"fail","source":"discovered"}
+        ]);
+        let failure = serde_json::json!({"step":9,"seen":format!("{code}: distinct account screen evidence"),"screenshot":"screenshots/refusal-evidence.png"});
+        let refusal = serde_json::json!({"verdict":"REFUSED","code":code,"message":"judgment refused","lease":"fixture-lease",
+            "path":"walk","steps":steps,"blocks":blocks,"failure":failure,"jev":jev,"llmTurns":1,"escapes":2,"recoveries":3});
+        mock.expect_spawn_piped(
+            "walk.js",
+            9000,
+            &format!(
+                "{}\n{}\n{}\n{}\n{}\n",
+                envelope(2, "row", &row(0, "step")),
+                envelope(3, "row", &steps[0].to_string()),
+                envelope(4, "row", &steps[1].to_string()),
+                envelope(5, "row", &steps[2].to_string()),
+                envelope(6, "result", &refusal.to_string())
+            ),
+            Some(4),
+        );
+        script_core_identity(&mut mock);
+        script_teardown(&mut mock);
+        let receipt = run(&mut mock, &request(&repo, &app, 5));
+        assert_eq!(receipt.result, ReceiptResult::Refused);
+        assert_eq!(receipt.outcomes["core_exit"], "4");
+        assert_eq!(receipt.failure.as_ref().unwrap().code, expected);
+        assert_eq!(receipt.ledger.as_ref().unwrap().verdict, "REFUSED");
+        assert_eq!(receipt.ledger.as_ref().unwrap().steps, 3);
+        assert_eq!(receipt.ledger.as_ref().unwrap().failed_step, Some(9));
+        assert_eq!(receipt.ledger.as_ref().unwrap().jev_calls, 2);
+        assert_eq!(receipt.ledger.as_ref().unwrap().jev_input_tokens, 10);
+        assert_eq!(receipt.ledger.as_ref().unwrap().jev_median_ms, 25);
+        let ledger: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&receipt.artifacts["ledger"]).unwrap()).unwrap();
+        assert_eq!(ledger["jev"], jev);
+        assert_eq!(ledger["failure"], failure);
+        assert_eq!(ledger["steps"], steps);
+        assert_eq!(ledger["blocks"], blocks);
+        assert_eq!(ledger["path"], "walk");
+        assert_eq!(ledger["llmTurns"], 1);
+        assert_eq!(ledger["escapes"], 2);
+        assert_eq!(ledger["recoveries"], 3);
+        let report = std::fs::read_to_string(&receipt.artifacts["report"]).unwrap();
+        assert!(report.starts_with("# QaReN check: REFUSED"));
+        assert!(report.contains("- ✓ line 1: Open tasks"));
+        assert!(report.contains("- ✓ line 4: Check home"));
+        assert!(report.contains("- ✗ line 9: Check account — judgment refused"));
+        assert!(report.contains("![line 9](screenshots/row-nine.png)"));
+        assert!(report.contains("![failure](screenshots/refusal-evidence.png)"));
+        assert!(report.contains(&format!(
+            "Step 9: {}: distinct account screen evidence",
+            code.replace('_', "\\_")
+        )));
+        assert!(report.contains("- navigation: pass (discovered)"));
+        assert!(report.contains("- account: fail (discovered)"));
+        assert!(report.contains(&code.replace('_', "\\_")), "{report}");
+        assert!(report.contains("jev.calls 2 · jev.medianMs 25 · jev.inputTokens 10"));
+        assert!(report.contains("llmTurns 1 · escapes 2 · recoveries 3 · path walk"));
+        assert_eq!(
+            RunRecord::load(&repo.join("runs"), &run_id())
+                .unwrap()
+                .failure
+                .unwrap()
+                .code,
+            expected
+        );
+        assert_eq!(mock.remaining(), 0);
+    }
+}
+
+#[test]
+fn invalid_preflight_payload_cannot_claim_a_device() {
+    for output in [
+        "not json",
+        r#"{"ok":true}"#,
+        r#"{"ok":true,"prepared":{"hash":"wrong","blocks":[]},"jev":{"calls":0,"medianMs":0}}"#,
+    ] {
+        let (repo, app) = app_repo();
+        let mut mock = MockRunner::new();
+        mock.environment
+            .insert("TYPESAFE_API_KEY".into(), TEST_KEY.into());
+        mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
+        mock.expect_run("walk.js --preflight", CmdOutput::success(output));
+        let receipt = run(&mut mock, &request(&repo, &app, 30));
+        assert_eq!(receipt.failure.unwrap().code, FailureCode::JevUnreachable);
+        assert!(!repo.join(".locks").exists());
+    }
 }

@@ -40,12 +40,21 @@ const AUTH_PATHS =
 
 const MAX_STRING_LENGTH = 2000;
 
+export function redactApiKey(value: string, key = process.env.TYPESAFE_API_KEY): string {
+  if (!key) return value;
+  return value
+    .split(JSON.stringify(key).slice(1, -1))
+    .join('[REDACTED_SECRET]')
+    .split(key)
+    .join('[REDACTED_SECRET]');
+}
+
 function redactString(value: string): string {
   // Redact BEFORE truncating. Truncation can sever a paired-delimiter secret —
   // e.g. a PEM private key's -----END----- marker — so the pattern would never
   // match and the key body would leak through. Apply every pattern to the full
   // string first, then clip what remains.
-  let result = value.replace(HOME_RE, '~');
+  let result = redactApiKey(value).replace(HOME_RE, '~');
   KEYED_SECRET_RE.lastIndex = 0;
   result = result.replace(KEYED_SECRET_RE, '$1[REDACTED_SECRET]');
   for (const pattern of SECRET_PATTERNS) {

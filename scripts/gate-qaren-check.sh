@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 # gate:qaren-check — device-bound, not run in hosted CI.
-# Builds qaren-core and the qaren CLI, uninstalls the app from the booted
-# simulator so the plan starts from a fresh install, runs `qaren check` against
-# the app at QAREN_TEST_APP with the literal plan fixture, and asserts exit 0
-# with a PASS ledger.
-#
 #   QAREN_TEST_APP   app root to check (required; the workspace test-app)
 #   QAREN_PLAN_FILE  plan to walk (default: packages/qaren-core/test/fixtures/plans/literal.md)
+#   TYPESAFE_API_KEY required for the fixed preflight probe, including literal plans
+#   QAREN_REQUIRE_JEV_WALK=1 requires walk judgments, not merely the preflight probe
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${QAREN_TEST_APP:?set QAREN_TEST_APP to the app root to check (e.g. the workspace test-app)}"
 PLAN="${QAREN_PLAN_FILE:-$ROOT/packages/qaren-core/test/fixtures/plans/literal.md}"
+if [ "$#" -gt 0 ]; then
+  [ "$#" = 2 ] && [ "$1" = "--plan-file" ] || { echo "usage: gate:qaren-check [--plan-file <path>]" >&2; exit 2; }
+  PLAN="$2"
+fi
+case "$PLAN" in /*) ;; *) PLAN="$ROOT/$PLAN" ;; esac
+if [ "$(basename "$PLAN")" = "phrases.md" ]; then export QAREN_REQUIRE_JEV_WALK=1; fi
+[ -n "${TYPESAFE_API_KEY:-}" ] || { echo "gate:qaren-check: set TYPESAFE_API_KEY in the environment" >&2; exit 1; }
 CONFIG="$APP/.qaren/config.yaml"
 
 [ -f "$CONFIG" ] || { echo "gate:qaren-check: $CONFIG is missing (needs at least appId)"; exit 1; }
@@ -48,11 +52,4 @@ if [ "$status" != "0" ]; then
   echo "gate:qaren-check: qaren check exited $status"
   exit 1
 fi
-printf '%s' "$receipt" | node -e '
-let s = "";
-process.stdin.on("data", (d) => (s += d)).on("end", () => {
-  const r = JSON.parse(s);
-  const ok = r.result === "pass" && r.ledger && r.ledger.verdict === "PASS";
-  console.log(`gate:qaren-check: result=${r.result} verdict=${r.ledger && r.ledger.verdict} steps=${r.ledger && r.ledger.steps} report=${r.artifacts && r.artifacts.report}`);
-  process.exit(ok ? 0 : 1);
-});'
+printf '%s' "$receipt" | node "$ROOT/scripts/assert-qaren-check.ts"

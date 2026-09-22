@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { captureInputPrivacy, nativeLabelMayBeValue } from './privacy.js';
+
 export type Kind = 'button' | 'input' | 'switch' | 'link' | 'cell' | 'text' | 'image' | 'other';
 
 export interface Element {
@@ -126,8 +129,7 @@ function thirds(center: number, extent: number, names: readonly [string, string,
   return ratio < 1 / 3 ? names[0] : ratio < 2 / 3 ? names[1] : names[2];
 }
 
-// Native nodes are the truth for what is on screen; the React digest enriches a
-// matched node and names what only React renders (off screen, the scroll signal).
+// Native nodes own visibility; unmatched React entries supply off-screen candidates.
 export function join(nodes: NativeNode[], digest: DigestEntry[], front: Front = 'app'): Screen {
   let width = 0;
   let height = 0;
@@ -168,7 +170,16 @@ export function join(nodes: NativeNode[], digest: DigestEntry[], front: Front = 
     };
     if (label) element.label = label;
     if (testID) element.testID = testID;
-    // React enriches the value; a secure field's value is never retained.
+    if (kind === 'input')
+      captureInputPrivacy(element, {
+        values: [nonEmpty(n.value), digestValue(match?.value)].filter(
+          (value): value is string => !!value,
+        ),
+        nativeLabelMayBeValue: ANDROID_KINDS.some(
+          ([suffix, kind]) => kind === 'input' && n.type?.endsWith(suffix),
+        ),
+      });
+    // Secure values stay in private boundary data, never in the public value property.
     const value = element.secure ? undefined : (digestValue(match?.value) ?? nonEmpty(n.value));
     if (value !== undefined) element.value = value;
     const placeholder = nonEmpty(match?.placeholder);
@@ -217,8 +228,7 @@ export function join(nodes: NativeNode[], digest: DigestEntry[], front: Front = 
       const bx = b.n.rect?.x ?? 0;
       return ax !== bx ? ax - bx : a.i - b.i;
     });
-  // Text the user can read: text nodes, control titles and input values; image and
-  // container labels are accessibility-only and never satisfy a ✓ line.
+  // Image and container labels are accessibility-only, not assertion evidence.
   const visibleText: string[] = [];
   for (const { e } of ordered) {
     if (e.kind === 'image' || e.kind === 'other') continue;
@@ -234,7 +244,7 @@ export function join(nodes: NativeNode[], digest: DigestEntry[], front: Front = 
 }
 
 export function actionView(screen: Screen): Element[] {
-  return screen.elements.filter((e) => e.offscreen || (e.hittable && !e.disabled));
+  return screen.elements.filter((e) => !e.disabled && (e.offscreen || e.hittable));
 }
 
 export function assertionView(screen: Screen): string[] {
@@ -246,26 +256,33 @@ export function describe(e: Element): string {
   if (e.label) parts.push(`"${e.label}"`);
   if (e.testID) parts.push(`[testID ${e.testID}]`);
   if (e.placeholder) parts.push(`placeholder "${e.placeholder}"`);
-  if (e.value !== undefined) parts.push(`value "${e.value}"`);
+  if (!e.secure && e.value !== undefined) parts.push(`value "${e.value}"`);
   if (e.offscreen) parts.push('off screen');
   else if (e.where && e.side) parts.push(e.side === 'center' ? e.where : `${e.where}-${e.side}`);
   if (e.disabled) parts.push('disabled');
   return parts.join(' ');
 }
 
-// What the screen-diff retry rule compares: labelled content and layout thirds in
-// order, never snapshot refs, unlabelled containers or pixels.
+// Compare content and layout, excluding secure input text and snapshot refs.
 export function screenSignature(screen: Screen): string {
-  return JSON.stringify({
+  const secureLines = new Set(
+    screen.elements
+      .filter((e) => e.secure)
+      .flatMap((e) => [
+        e.label,
+        `${e.label ?? e.placeholder ?? e.testID ?? 'input'}: ${e.value ?? ''}`,
+      ]),
+  );
+  const signature = JSON.stringify({
     front: screen.front,
-    text: screen.visibleText,
+    text: screen.visibleText.filter((text) => !secureLines.has(text)),
     elements: screen.elements
       .filter((e) => e.label !== undefined || e.testID !== undefined || e.value !== undefined)
       .map((e) => [
         e.kind,
-        e.label ?? null,
+        e.secure && nativeLabelMayBeValue(e) ? null : (e.label ?? null),
         e.testID ?? null,
-        e.value ?? null,
+        e.secure ? null : (e.value ?? null),
         e.hittable,
         e.disabled,
         e.offscreen,
@@ -273,6 +290,7 @@ export function screenSignature(screen: Screen): string {
         e.side ?? null,
       ]),
   });
+  return createHash('sha256').update(signature).digest('hex');
 }
 
 export function frontFromSurface(surface: string | undefined, nodes: NativeNode[]): Front {

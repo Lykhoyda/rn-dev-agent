@@ -1,9 +1,11 @@
 mod common;
 
 use qaren::core::{self, Budgets, CoreRequest, CoreTarget, Verdict};
-use qaren::exec::{HoldStdout, MockRunner};
+use qaren::exec::{CmdOutput, CmdSpec, HoldStdout, MockRunner, PipedChild, Runner, Spawned};
 use qaren::failure::FailureCode;
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const RUN: &str = "check-20260921T100000Z";
 
@@ -12,6 +14,8 @@ fn request() -> CoreRequest {
         run_id: RUN.to_string(),
         t0: 1_770_000_000_000,
         plan: "1. Tap \"Tasks\"\n✓ \"Tasks\"\n".to_string(),
+        prepared: serde_json::json!({"hash":"test","blocks":[]}),
+        preflight_calls: vec![],
         platform: "ios".to_string(),
         app_id: "com.rndevagent.testapp".to_string(),
         run_dir: PathBuf::from("/tmp/qaren-runs/check"),
@@ -256,6 +260,315 @@ fn a_typed_refusal_needs_exit_four() {
         }
     );
     assert!(outcome.failure.is_none());
+}
+
+#[test]
+fn jev_refusal_accounting_is_optional_but_strict_when_present() {
+    for jev in [
+        None,
+        Some(serde_json::json!({"calls": "invalid"})),
+        Some(serde_json::json!({
+            "calls": 2, "medianMs": 25, "inputTokens": 12, "callDetails": [
+                {"scope":"preflight", "questionIds":["preflight"], "inputTokens":12, "ms":10, "outcome":"ok", "status":200},
+                {"scope":"walk", "questionIds":["front"], "inputTokens":null, "ms":40, "outcome":"http", "status":401}
+            ]
+        })),
+    ] {
+        let repo = common::temp_repo();
+        let mut refusal = serde_json::json!({"verdict":"REFUSED", "code":"JEV_AUTH_FAILED", "message":"key rejected"});
+        if let Some(jev) = &jev {
+            refusal["jev"] = jev.clone();
+        }
+        let mut mock = MockRunner::new();
+        mock.expect_spawn_piped(
+            "walk.js",
+            9000,
+            &format!("{}\n", envelope(2, "result", &refusal.to_string())),
+            Some(4),
+        );
+        let outcome = run_child(&mut mock, &repo.join("core.log"));
+        if jev.as_ref().is_some_and(|j| j["calls"].is_string()) {
+            assert_eq!(outcome.verdict, Verdict::Fail);
+            assert_eq!(
+                outcome.failure.unwrap().code,
+                FailureCode::CoreResultMissing
+            );
+        } else {
+            assert!(
+                matches!(outcome.verdict, Verdict::Refused { ref code, .. } if code == "JEV_AUTH_FAILED")
+            );
+            assert!(outcome.failure.is_none());
+            if let Some(jev) = jev {
+                assert_eq!(serde_json::to_value(outcome.ledger.jev).unwrap(), jev);
+            } else {
+                assert_eq!(outcome.ledger.jev, Default::default());
+            }
+        }
+    }
+}
+
+#[test]
+fn default_step_budget_covers_reasks_and_the_bounded_scroll_schedule() {
+    use qaren::run::{DEFAULT_STEP_SECONDS, DEFAULT_WALK_SECONDS};
+    let judgment = 3 * 10 + 2 * 60;
+    let check_with_reask = 2 * judgment + 1 + 30;
+    let scroll_until = 7 * judgment + 150;
+    assert_eq!(DEFAULT_STEP_SECONDS, 1200);
+    assert!(DEFAULT_STEP_SECONDS >= check_with_reask);
+    assert!(DEFAULT_STEP_SECONDS >= scroll_until);
+    assert_eq!(
+        DEFAULT_WALK_SECONDS, 1200,
+        "the absolute walk cap is not extended or reset by retries"
+    );
+}
+
+struct ScheduleRunner {
+    inner: MockRunner,
+    intervals: VecDeque<u64>,
+    started_ms: u64,
+    after_schedule_ms: u64,
+}
+
+impl Runner for ScheduleRunner {
+    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+        self.inner.run(spec)
+    }
+    fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        self.inner.spawn_group(spec, log)
+    }
+    fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.inner.spawn_piped(spec, log)
+    }
+    fn sleep(&mut self, duration: Duration) {
+        if *self.inner.piped_killed[0].lock().unwrap() {
+            self.inner.sleep(duration);
+            return;
+        }
+        let ms = self.intervals.pop_front().unwrap_or_else(|| {
+            self.after_schedule_ms
+                .saturating_sub(self.inner.now_epoch_ms() - self.started_ms)
+                .max(1)
+        });
+        self.inner.sleep(Duration::from_millis(ms));
+    }
+    fn now_epoch_ms(&self) -> u64 {
+        self.inner.now_epoch_ms()
+    }
+    fn commands_executed(&self) -> u64 {
+        self.inner.commands_executed()
+    }
+}
+
+fn drive_schedule(intervals: Vec<u64>, budgets: Budgets) -> (core::CoreOutcome, ScheduleRunner) {
+    let repo = common::temp_repo();
+    let mut inner = MockRunner::new();
+    inner.expect_spawn_piped(
+        "walk.js",
+        9000,
+        &format!("{}\n", envelope(2, "row", &row(1, 1, "pass"))),
+        None,
+    );
+    let mut runner = ScheduleRunner {
+        started_ms: inner.now_epoch_ms(),
+        inner,
+        intervals: intervals.into(),
+        after_schedule_ms: budgets.walk_seconds * 1000 + 1,
+    };
+    let child = core::spawn(&mut runner, &spec(), &repo.join("core.log"), &request()).unwrap();
+    let outcome = core::wait(&mut runner, child, budgets);
+    (outcome, runner)
+}
+
+fn judgment_schedule() -> Vec<u64> {
+    vec![10_000, 60_000, 10_000, 60_000, 10_000]
+}
+
+fn scroll_schedule() -> Vec<u64> {
+    let mut schedule = vec![15_000];
+    schedule.extend(judgment_schedule());
+    for _ in 0..6 {
+        schedule.extend([5_000, 15_000]);
+        schedule.extend(judgment_schedule());
+    }
+    schedule.push(15_000);
+    schedule
+}
+
+#[test]
+fn wait_allows_the_full_retry_reask_and_scroll_schedules_before_the_absolute_cap() {
+    use qaren::run::{DEFAULT_STEP_SECONDS, DEFAULT_WALK_SECONDS};
+    let mut reask = vec![15_000];
+    reask.extend(judgment_schedule());
+    reask.extend([500, 15_000]);
+    reask.extend(judgment_schedule());
+    reask.push(15_000);
+    assert_eq!(judgment_schedule().iter().sum::<u64>(), 150_000);
+    assert_eq!(reask.iter().sum::<u64>(), 345_500);
+    assert_eq!(scroll_schedule().iter().sum::<u64>(), 1_200_000);
+    for schedule in [judgment_schedule(), reask, scroll_schedule()] {
+        let (outcome, runner) = drive_schedule(
+            schedule,
+            Budgets {
+                walk_seconds: DEFAULT_WALK_SECONDS,
+                step_seconds: DEFAULT_STEP_SECONDS,
+            },
+        );
+        assert!(
+            runner.intervals.is_empty(),
+            "the permitted schedule was interrupted: {:?}",
+            outcome.failure
+        );
+        assert_eq!(outcome.ledger.steps.len(), 1);
+        let failure = outcome.failure.unwrap();
+        assert_eq!(failure.code, FailureCode::WalkDeadlineExceeded);
+        assert!(
+            failure.detail.contains("walk exceeded its 1200s budget"),
+            "{}",
+            failure.detail
+        );
+    }
+}
+
+#[test]
+fn wait_honors_small_step_and_absolute_walk_caps_during_retries() {
+    for (budgets, message) in [
+        (
+            Budgets {
+                walk_seconds: 1200,
+                step_seconds: 5,
+            },
+            "no ledger row within 5s",
+        ),
+        (
+            Budgets {
+                walk_seconds: 5,
+                step_seconds: 1200,
+            },
+            "walk exceeded its 5s budget",
+        ),
+    ] {
+        let (outcome, runner) = drive_schedule(scroll_schedule(), budgets);
+        assert!(
+            !runner.intervals.is_empty(),
+            "a small override must interrupt the schedule"
+        );
+        let failure = outcome.failure.unwrap();
+        assert_eq!(failure.code, FailureCode::WalkDeadlineExceeded);
+        assert!(failure.detail.contains(message), "{}", failure.detail);
+        assert!(*runner.inner.piped_killed[0].lock().unwrap());
+    }
+}
+
+#[test]
+fn malformed_supplied_refusal_evidence_is_not_silently_synthesized() {
+    use serde_json::json;
+    let mut invalid_kind: serde_json::Value = serde_json::from_str(&row(9, 1, "fail")).unwrap();
+    invalid_kind["kind"] = json!("unknown");
+    let mut cases = vec![
+        ("blocks", json!({})),
+        ("blocks", json!([{"key":"account","outcome":"fail"}])),
+        (
+            "blocks",
+            json!([{"key":false,"outcome":"fail","source":"discovered"}]),
+        ),
+        (
+            "blocks",
+            json!([{"key":"account","outcome":"unknown","source":"discovered"}]),
+        ),
+        ("failure", json!({"step":"nine","seen":"evidence"})),
+        (
+            "failure",
+            json!({"step":9,"seen":"evidence","screenshot":42}),
+        ),
+        ("steps", json!({})),
+        ("steps", json!([{}])),
+        ("steps", json!([invalid_kind])),
+        ("path", json!(42)),
+        ("path", json!("unknown")),
+        ("jev", json!({"calls":-1,"medianMs":0})),
+        (
+            "jev",
+            json!({"calls":1,"medianMs":0,"callDetails":[{"scope":"unknown","questionIds":[],"ms":0,"inputTokens":null,"outcome":"ok"}]}),
+        ),
+        ("code", json!(42)),
+        ("message", json!([])),
+        ("lease", json!(false)),
+        ("llmTurns", json!("one")),
+        ("escapes", json!(-1)),
+        ("recoveries", json!(0.5)),
+    ];
+    for field in [
+        "blocks",
+        "steps",
+        "failure",
+        "path",
+        "jev",
+        "llmTurns",
+        "escapes",
+        "recoveries",
+    ] {
+        cases.push((field, serde_json::Value::Null));
+    }
+    for (field, value) in cases {
+        let repo = common::temp_repo();
+        let mut refusal =
+            json!({"verdict":"REFUSED","code":"JEV_REQUEST_INVALID","message":"refused"});
+        refusal[field] = value;
+        let mut mock = MockRunner::new();
+        mock.expect_spawn_piped(
+            "walk.js",
+            9000,
+            &format!("{}\n", envelope(2, "result", &refusal.to_string())),
+            Some(4),
+        );
+        let outcome = run_child(&mut mock, &repo.join("core.log"));
+        assert_eq!(outcome.verdict, Verdict::Fail, "{field}");
+        let failure = outcome.failure.unwrap();
+        assert_eq!(failure.code, FailureCode::CoreResultMissing, "{field}");
+        assert!(
+            failure.detail.contains("invalid ledger evidence"),
+            "{field}: {}",
+            failure.detail
+        );
+    }
+}
+
+#[test]
+fn partial_and_startup_refusals_use_the_available_rows_for_missing_evidence() {
+    for supplied_steps in [false, true] {
+        let repo = common::temp_repo();
+        let streamed = row(1, 1, "pass");
+        let later = row(9, 1, "fail");
+        let mut refusal =
+            serde_json::json!({"verdict":"REFUSED","code":"JEV_AUTH_FAILED","message":"refused"});
+        if supplied_steps {
+            refusal["steps"] =
+                serde_json::json!([serde_json::from_str::<serde_json::Value>(&later).unwrap()]);
+        }
+        let mut mock = MockRunner::new();
+        mock.expect_spawn_piped(
+            "walk.js",
+            9000,
+            &format!(
+                "{}\n{}\n",
+                envelope(2, "row", &streamed),
+                envelope(3, "result", &refusal.to_string())
+            ),
+            Some(4),
+        );
+        let outcome = run_child(&mut mock, &repo.join("core.log"));
+        assert!(matches!(outcome.verdict, Verdict::Refused { .. }));
+        assert_eq!(outcome.exit, Some(4));
+        let expected = if supplied_steps { 9 } else { 1 };
+        assert_eq!(outcome.ledger.steps[0].line, expected);
+        let failure = outcome.ledger.failure.unwrap();
+        assert_eq!(failure.step, expected);
+        assert_eq!(
+            failure.screenshot,
+            Some(format!("screenshots/{expected:02}.png"))
+        );
+        assert_eq!(failure.seen, "JEV_AUTH_FAILED: refused");
+    }
 }
 
 #[test]

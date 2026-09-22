@@ -195,3 +195,35 @@ test('nothing may follow the result line', () => {
   assert.throws(() => writer.row(row(1)), /already written/);
   assert.throws(() => writer.result(buildLedger([], [])), /already written/);
 });
+
+test('preflight accounting round-trips and rejects malformed or walk-scoped entries', () => {
+  const preflightCalls = [
+    {
+      scope: 'preflight',
+      questionIds: ['preflight'],
+      inputTokens: 12,
+      ms: 15,
+      outcome: 'ok',
+      status: 200,
+    },
+  ];
+  const encoded = (calls: unknown) =>
+    JSON.stringify({
+      v: 1,
+      runId: request.runId,
+      seq: 1,
+      type: 'request',
+      payload: { ...request, preflightCalls: calls },
+    });
+  assert.deepEqual(parseRequest(encoded(preflightCalls)).preflightCalls, preflightCalls);
+  for (const calls of [
+    null,
+    {},
+    [null],
+    [{ ...preflightCalls[0], ms: -1 }],
+    [{ ...preflightCalls[0], scope: 'walk' }],
+    [{ ...preflightCalls[0], questionIds: ['private text not an id'] }],
+    [{ ...preflightCalls[0], inputTokens: -5 }],
+  ])
+    assert.throws(() => parseRequest(encoded(calls)), /missing required fields/);
+});
