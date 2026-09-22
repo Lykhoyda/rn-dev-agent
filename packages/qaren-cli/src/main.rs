@@ -57,6 +57,13 @@ fn env_seconds(name: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+fn check_budgets() -> Budgets {
+    Budgets {
+        walk_seconds: env_seconds("QAREN_WALK_SECONDS", DEFAULT_WALK_SECONDS),
+        step_seconds: env_seconds("QAREN_STEP_SECONDS", DEFAULT_STEP_SECONDS),
+    }
+}
+
 fn failed_receipt(verb: &str, failure: Failure, runner: &dyn Runner) -> Receipt {
     let mut receipt = Receipt::new(
         verb,
@@ -86,6 +93,9 @@ fn roots_failure(detail: String) -> Failure {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args == [qaren::exec::log::HELPER_ARG] {
+        return ExitCode::from(u8::from(qaren::exec::log::run_helper().is_err()));
+    }
     let mut positional = Vec::new();
     let mut dry_run = false;
     let mut remove_app = false;
@@ -208,10 +218,7 @@ fn main() -> ExitCode {
                         lock_root,
                         runs_root,
                         android_home: std::env::var("ANDROID_HOME").ok(),
-                        budgets: Budgets {
-                            walk_seconds: env_seconds("QAREN_WALK_SECONDS", DEFAULT_WALK_SECONDS),
-                            step_seconds: env_seconds("QAREN_STEP_SECONDS", DEFAULT_STEP_SECONDS),
-                        },
+                        budgets: check_budgets(),
                     };
                     run::run(&mut runner, &request)
                 }
@@ -303,16 +310,20 @@ fn main() -> ExitCode {
         eprintln!("report: {}", report.display());
     }
 
-    match receipt.result {
+    ExitCode::from(receipt_exit_code(receipt.result))
+}
+
+fn receipt_exit_code(result: ReceiptResult) -> u8 {
+    match result {
         ReceiptResult::Ready
         | ReceiptResult::Cleaned
         | ReceiptResult::Planned
         | ReceiptResult::Prewarmed
         | ReceiptResult::Working
-        | ReceiptResult::Pass => ExitCode::from(0),
-        ReceiptResult::Failed | ReceiptResult::Fail => ExitCode::from(1),
-        ReceiptResult::Unknown => ExitCode::from(3),
-        ReceiptResult::Refused => ExitCode::from(4),
+        | ReceiptResult::Pass => 0,
+        ReceiptResult::Failed | ReceiptResult::Fail => 1,
+        ReceiptResult::Unknown => 3,
+        ReceiptResult::Refused => 4,
     }
 }
 
@@ -328,5 +339,43 @@ fn result_str(result: ReceiptResult) -> &'static str {
         ReceiptResult::Prewarmed => "prewarmed",
         ReceiptResult::Pass => "pass",
         ReceiptResult::Fail => "fail",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn check_uses_the_run_defaults_and_honors_a_small_step_override() {
+        let names = ["QAREN_STEP_SECONDS", "QAREN_WALK_SECONDS"];
+        let prior = names.map(std::env::var_os);
+        for name in names {
+            std::env::remove_var(name);
+        }
+        assert_eq!(
+            super::check_budgets().step_seconds,
+            super::DEFAULT_STEP_SECONDS
+        );
+        assert_eq!(
+            super::check_budgets().walk_seconds,
+            super::DEFAULT_WALK_SECONDS
+        );
+        std::env::set_var("QAREN_STEP_SECONDS", "5");
+        assert_eq!(super::check_budgets().step_seconds, 5);
+        assert_eq!(
+            super::check_budgets().walk_seconds,
+            super::DEFAULT_WALK_SECONDS
+        );
+        for (name, value) in names.into_iter().zip(prior) {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+
+    #[test]
+    fn a_refused_receipt_exits_four_not_one() {
+        assert_eq!(super::receipt_exit_code(super::ReceiptResult::Refused), 4);
+        assert_eq!(super::receipt_exit_code(super::ReceiptResult::Fail), 1);
     }
 }

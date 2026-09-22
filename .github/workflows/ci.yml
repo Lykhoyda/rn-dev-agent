@@ -73,6 +73,9 @@ jobs:
       - name: Documentation ownership gate unit test
         run: node --test scripts/test/check-document-ownership.test.ts
 
+      - name: QaReN device-gate assertion unit test
+        run: node --test scripts/test/assert-qaren-check.test.ts
+
       - name: Docs app build
         run: corepack yarn workspace qaren-docs build
 

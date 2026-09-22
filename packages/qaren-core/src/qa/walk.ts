@@ -20,7 +20,11 @@ import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
 import type { ToolResult } from '../utils.js';
 import { HandlerError, adapt, describeError, unwrap } from './adapt.js';
 import type { LedgerRow } from './ledger.js';
-import { parsePlan } from './plan.js';
+import { parsePlanWithJev, readPreparedPlan } from './plan.js';
+import { createJev } from './jev.js';
+import { preflightPlan } from './preflight.js';
+import { summarizeJev } from './ledger.js';
+import { redactApiKey } from '../util/redact.js';
 import { prove } from './prove.js';
 import {
   type DigestEntry,
@@ -35,11 +39,12 @@ import {
   createWriter,
   missingResult,
   readRequest,
+  resultForWalk,
   startupRow,
 } from './wire.js';
 
 const log = (message: string): void => {
-  process.stderr.write(`qaren-core: ${message}\n`);
+  process.stderr.write(`qaren-core: ${redactApiKey(message)}\n`);
 };
 
 // stdout is a pipe: wait for it to drain before the process exits.
@@ -49,7 +54,7 @@ function exitAfterDrain(code: number): Promise<never> {
   });
 }
 
-async function parseOnly(planFile: string): Promise<never> {
+async function parseOnly(planFile: string, probe: boolean): Promise<never> {
   let markdown: string;
   try {
     markdown = readFileSync(planFile, 'utf8');
@@ -59,7 +64,13 @@ async function parseOnly(planFile: string): Promise<never> {
     );
     return exitAfterDrain(4);
   }
-  const parsed = parsePlan(markdown);
+  const judge = createJev();
+  if (probe) {
+    const result = await preflightPlan(markdown, judge);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return exitAfterDrain(result.ok ? 0 : 4);
+  }
+  const parsed = await parsePlanWithJev(markdown, judge);
   if (parsed.refused) {
     process.stdout.write(
       `${JSON.stringify({ ok: false, code: 'PLAN_UNPARSEABLE', refused: parsed.refused })}\n`,
@@ -184,6 +195,7 @@ async function openSession(
   let digestWarned = false;
 
   const deps: WalkerDeps = {
+    judge: createJev(),
     async captureScreen() {
       const { nodes, surface } = await rawSnapshot();
       let digest: DigestEntry[] = [];
@@ -223,9 +235,10 @@ async function openSession(
 }
 
 async function main(): Promise<void> {
-  if (process.argv[2] === '--parse') return parseOnly(process.argv[3] ?? '');
+  if (process.argv[2] === '--parse' || process.argv[2] === '--preflight')
+    return parseOnly(process.argv[3] ?? '', process.argv[2] === '--preflight');
   const request = await readRequest(process.stdin);
-  const writer = createWriter((line) => process.stdout.write(line), request.runId);
+  const writer = createWriter((line) => process.stdout.write(redactApiKey(line)), request.runId);
   const rows: LedgerRow[] = [];
   const emitRow = (row: LedgerRow): void => {
     rows.push(row);
@@ -238,16 +251,26 @@ async function main(): Promise<void> {
     return exitAfterDrain(code);
   };
   const refuse = (code: string, message: string, close?: () => Promise<void>): Promise<never> =>
-    finish({ verdict: 'REFUSED', code, message, lease: request.lease }, close);
+    finish(
+      {
+        verdict: 'REFUSED',
+        code,
+        message,
+        lease: request.lease,
+        jev: summarizeJev(request.preflightCalls ?? []),
+      },
+      close,
+    );
 
   if (process.env.QAREN_DEVICE_LEASE !== request.lease) {
     return refuse('LEASE_MISMATCH', 'QAREN_DEVICE_LEASE does not match the request lease');
   }
-  const parsed = parsePlan(request.plan);
-  if (parsed.refused) {
-    const named = parsed.refused.map((r) => `line ${r.line}: ${r.reason}`).join('; ');
-    return refuse('PLAN_UNPARSEABLE', `the plan does not parse: ${named}`);
-  }
+  const blocks = readPreparedPlan(request.plan, request.prepared);
+  if (!blocks)
+    return refuse(
+      'PLAN_UNPARSEABLE',
+      'the prepared plan is missing, invalid or does not match the preflight bytes',
+    );
 
   let session: Session;
   try {
@@ -263,11 +286,16 @@ async function main(): Promise<void> {
     });
   }
   try {
-    const ledger = await runPlan(parsed.blocks, session.deps);
-    return finish(ledger, () => session.close());
+    const ledger = await runPlan(blocks, session.deps, request.preflightCalls);
+    return finish(resultForWalk(ledger, request.lease), () => session.close());
   } catch (error) {
     const { code, message } = describeError(error);
-    return finish(missingResult(rows, `${code}: ${message}`), () => session.close());
+    const ledger = missingResult(rows, `${code}: ${message}`);
+    ledger.jev = summarizeJev([
+      ...(request.preflightCalls ?? []),
+      ...(session.deps.judge?.calls ?? []),
+    ]);
+    return finish(ledger, () => session.close());
   }
 }
 

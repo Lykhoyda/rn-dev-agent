@@ -1239,3 +1239,34 @@ fn sibling_package_in_list_does_not_hide_absence() {
     );
     assert_eq!(receipt.cleanup.get("app_install").unwrap(), "removed");
 }
+
+#[test]
+fn removal_evidence_redacts_dotenv_output_before_saving_the_record() {
+    let repo = common::temp_repo();
+    owned_record(&repo).save(&repo).unwrap();
+    let mut mock = MockRunner::new();
+    expect_ownership_proof(&mut mock);
+    expect_installed_matching(&mut mock);
+    for command in [
+        format!("-s {SERIAL} uninstall {APP}"),
+        format!("-s {SERIAL} shell pm path {APP}"),
+        format!("-s {SERIAL} shell pm list packages {APP}"),
+    ] {
+        mock.expect_run(
+            &command,
+            CmdOutput {
+                exit_code: Some(1),
+                stdout: "diagnostic TYPESAFE_API_KEY=synthetic-removal-key end".into(),
+                ..Default::default()
+            },
+        );
+    }
+    expect_teardown_alive(&mut mock);
+    let receipt = cleanup_with(&mut mock, &repo, "androidrun1", Some(CONFIRM));
+    assert_eq!(receipt.result, ReceiptResult::Failed);
+    let record = std::fs::read_to_string(repo.join("androidrun1/run.json")).unwrap();
+    assert!(!record.contains("synthetic-removal-key"));
+    assert!(record.contains("diagnostic TYPESAFE_API_KEY=<redacted> end"));
+    assert!(!receipt.to_json().contains("synthetic-removal-key"));
+    assert_eq!(mock.remaining(), 0);
+}

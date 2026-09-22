@@ -1,10 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Read, Seek, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+pub mod log;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CmdSpec {
@@ -95,7 +99,7 @@ impl CmdOutput {
             .rev()
             .collect::<Vec<_>>()
             .join(" | ");
-        format!("exit={code} {tail}")
+        crate::redact::redact_secrets(&format!("exit={code} {tail}"))
     }
 }
 
@@ -105,8 +109,7 @@ pub struct Spawned {
     pub pgid: i32,
 }
 
-// A child the caller talks to over stdio: its stdin and stdout are pipes, its
-// stderr lands in the given log, and it leads its own process group.
+// Stdio protocol pipes and a redacted stderr log, in a dedicated process group.
 pub struct PipedChild {
     pub pid: i32,
     pub stdin: Box<dyn Write + Send>,
@@ -120,26 +123,36 @@ pub trait ChildHandle {
     fn kill_group(&mut self);
 }
 
-struct RealChildHandle(std::process::Child);
+struct RealChildHandle {
+    child: std::process::Child,
+    log: log::LogDrain,
+}
 
 impl ChildHandle for RealChildHandle {
     fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
-        Ok(self.0.try_wait()?.map(|s| s.code().unwrap_or(-1)))
+        let exit = self.child.try_wait()?.map(|s| s.code().unwrap_or(-1));
+        if exit.is_some() {
+            self.log.flush()?;
+        }
+        Ok(exit)
     }
 
     fn kill_group(&mut self) {
-        kill_group_and_reap(&mut self.0);
+        kill_group_and_reap(&mut self.child);
+        let _ = self.log.flush();
     }
 }
 
 pub trait Runner {
+    fn env_var(&self, name: &str) -> Option<String> {
+        std::env::var(name).ok()
+    }
     fn run(&mut self, spec: &CmdSpec) -> CmdOutput;
     fn spawn_group(&mut self, spec: &CmdSpec, log_path: &Path) -> std::io::Result<Spawned>;
     fn spawn_piped(&mut self, spec: &CmdSpec, stderr_log: &Path) -> std::io::Result<PipedChild>;
     fn sleep(&mut self, duration: Duration);
     fn now_epoch_ms(&self) -> u64;
-    // Deadline arithmetic must survive wall-clock adjustments; implementations
-    // with access to a monotonic source override this.
+    // Override with a monotonic source so deadlines survive wall-clock adjustments.
     fn monotonic_ms(&self) -> u64 {
         self.now_epoch_ms()
     }
@@ -149,14 +162,29 @@ pub trait Runner {
 pub struct RealRunner {
     executed: u64,
     started: Instant,
+    log_executable: PathBuf,
+    logs: Vec<log::LogDrain>,
 }
 
 impl RealRunner {
     pub fn new() -> Self {
+        Self::with_log_executable(std::env::current_exe().expect("qaren executable path"))
+    }
+
+    pub fn with_log_executable(executable: PathBuf) -> Self {
         RealRunner {
             executed: 0,
             started: Instant::now(),
+            log_executable: executable,
+            logs: Vec::new(),
         }
+    }
+
+    pub fn flush_logs(&mut self) -> std::io::Result<()> {
+        for log in &mut self.logs {
+            log.flush()?;
+        }
+        Ok(())
     }
 }
 
@@ -170,78 +198,24 @@ impl Runner for RealRunner {
     fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
         self.executed += 1;
         let started = Instant::now();
-        let mut stdout_file = match tempfile() {
-            Ok(f) => f,
-            Err(e) => return io_failure(&started, format!("tempfile: {e}")),
-        };
-        let mut stderr_file = match tempfile() {
-            Ok(f) => f,
-            Err(e) => return io_failure(&started, format!("tempfile: {e}")),
-        };
-        use std::os::unix::process::CommandExt;
-        let mut cmd = Command::new(&spec.program);
-        cmd.args(&spec.args)
-            .stdin(Stdio::null())
-            .stdout(match stdout_file.try_clone() {
-                Ok(f) => Stdio::from(f),
-                Err(e) => return io_failure(&started, format!("clone stdout: {e}")),
-            })
-            .stderr(match stderr_file.try_clone() {
-                Ok(f) => Stdio::from(f),
-                Err(e) => return io_failure(&started, format!("clone stderr: {e}")),
-            })
-            .process_group(0);
-        if let Some(dir) = &spec.cwd {
-            cmd.current_dir(dir);
+        let output = run_captured(spec, &started)
+            .unwrap_or_else(|e| io_failure(&started, format!("{}: {e}", spec.label)));
+        if let Err(e) = self.flush_logs() {
+            return io_failure(&started, format!("drain logs: {e}"));
         }
-        for (k, v) in &spec.env {
-            cmd.env(k, v);
-        }
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => return io_failure(&started, format!("spawn {}: {e}", spec.program)),
-        };
-        let deadline = started + Duration::from_secs(spec.timeout_seconds);
-        let mut timed_out = false;
-        let exit_code = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status.code(),
-                Ok(None) => {
-                    if Instant::now() >= deadline {
-                        timed_out = true;
-                        kill_group_and_reap(&mut child);
-                        break None;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Err(e) => {
-                    kill_group_and_reap(&mut child);
-                    return io_failure(&started, format!("wait {}: {e}", spec.program));
-                }
-            }
-        };
-        CmdOutput {
-            exit_code,
-            stdout: read_back(&mut stdout_file),
-            stderr: read_back(&mut stderr_file),
-            timed_out,
-            duration_ms: started.elapsed().as_millis() as u64,
-        }
+        output
     }
 
     fn spawn_group(&mut self, spec: &CmdSpec, log_path: &Path) -> std::io::Result<Spawned> {
         use std::os::unix::process::CommandExt;
         self.executed += 1;
-        let log = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_path)?;
-        let log_err = log.try_clone()?;
+        let (log_out, output) = log::LogDrain::spawn(&self.log_executable, log_path)?;
+        let (log_err, error) = log::LogDrain::spawn(&self.log_executable, log_path)?;
         let mut cmd = Command::new(&spec.program);
         cmd.args(&spec.args)
             .stdin(Stdio::null())
-            .stdout(Stdio::from(log))
-            .stderr(Stdio::from(log_err))
+            .stdout(Stdio::from(OwnedFd::from(output)))
+            .stderr(Stdio::from(OwnedFd::from(error)))
             .process_group(0);
         if let Some(dir) = &spec.cwd {
             cmd.current_dir(dir);
@@ -249,23 +223,22 @@ impl Runner for RealRunner {
         for (k, v) in &spec.env {
             cmd.env(k, v);
         }
+        cmd.env_remove("TYPESAFE_API_KEY");
         let child = cmd.spawn()?;
         let pid = child.id() as i32;
+        self.logs.extend([log_out, log_err]);
         Ok(Spawned { pid, pgid: pid })
     }
 
     fn spawn_piped(&mut self, spec: &CmdSpec, stderr_log: &Path) -> std::io::Result<PipedChild> {
         use std::os::unix::process::CommandExt;
         self.executed += 1;
-        let log = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(stderr_log)?;
+        let (log, stderr) = log::LogDrain::spawn(&self.log_executable, stderr_log)?;
         let mut cmd = Command::new(&spec.program);
         cmd.args(&spec.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::from(log))
+            .stderr(Stdio::from(OwnedFd::from(stderr)))
             .process_group(0);
         if let Some(dir) = &spec.cwd {
             cmd.current_dir(dir);
@@ -280,7 +253,7 @@ impl Runner for RealRunner {
             pid: child.id() as i32,
             stdin: Box::new(stdin),
             stdout: Box::new(BufReader::new(stdout)),
-            handle: Box::new(RealChildHandle(child)),
+            handle: Box::new(RealChildHandle { child, log }),
         })
     }
 
@@ -301,30 +274,88 @@ impl Runner for RealRunner {
     }
 }
 
-fn tempfile() -> std::io::Result<std::fs::File> {
-    let dir = std::env::temp_dir();
-    let name = format!(
-        "qaren-cmd-{}-{}",
-        std::process::id(),
-        crate::timefmt::epoch_ms()
-    );
-    let path = dir.join(name);
-    let file = std::fs::OpenOptions::new()
-        .create_new(true)
-        .read(true)
-        .write(true)
-        .open(&path)?;
-    let _ = std::fs::remove_file(&path);
-    Ok(file)
+const MAX_CAPTURE_BYTES: usize = 16 * 1024 * 1024;
+
+fn capture_stream(stream: &mut UnixStream, output: &mut Vec<u8>) -> std::io::Result<()> {
+    let mut buf = [0; 8192];
+    for _ in 0..128 {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if output.len() + n > MAX_CAPTURE_BYTES {
+                    return Err(std::io::Error::other("command output exceeded 16 MiB"));
+                }
+                output.extend_from_slice(&buf[..n]);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
-fn read_back(file: &mut std::fs::File) -> String {
-    let mut buf = Vec::new();
-    if file.rewind().is_err() {
-        return String::new();
+fn run_captured(spec: &CmdSpec, started: &Instant) -> std::io::Result<CmdOutput> {
+    use std::os::unix::process::CommandExt;
+    let (mut stdout, out) = UnixStream::pair()?;
+    let (mut stderr, err) = UnixStream::pair()?;
+    stdout.set_nonblocking(true)?;
+    stderr.set_nonblocking(true)?;
+    let mut cmd = Command::new(&spec.program);
+    cmd.args(&spec.args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(OwnedFd::from(out)))
+        .stderr(Stdio::from(OwnedFd::from(err)))
+        .process_group(0);
+    if let Some(dir) = &spec.cwd {
+        cmd.current_dir(dir);
     }
-    let _ = file.read_to_end(&mut buf);
-    String::from_utf8_lossy(&buf).into_owned()
+    for (k, v) in &spec.env {
+        cmd.env(k, v);
+    }
+    if spec.label != "plan-preflight" {
+        cmd.env_remove("TYPESAFE_API_KEY");
+    }
+    let mut child = cmd.spawn()?;
+    drop(cmd);
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut timed_out = false;
+    let mut stopped = false;
+    let result: std::io::Result<Option<i32>> = (|| loop {
+        let captured = out.len() + err.len();
+        let status = child.try_wait()?;
+        stopped = status.is_some();
+        capture_stream(&mut stdout, &mut out)?;
+        capture_stream(&mut stderr, &mut err)?;
+        if let Some(status) = status {
+            return Ok(status.code());
+        }
+        if started.elapsed() >= Duration::from_secs(spec.timeout_seconds) {
+            timed_out = true;
+            kill_group_and_reap(&mut child);
+            stopped = true;
+            capture_stream(&mut stdout, &mut out)?;
+            capture_stream(&mut stderr, &mut err)?;
+            return Ok(None);
+        }
+        if out.len() + err.len() == captured {
+            std::thread::sleep(Duration::from_millis(1));
+        } else {
+            std::thread::yield_now();
+        }
+    })();
+    if result.is_err() && !stopped {
+        kill_group_and_reap(&mut child);
+    }
+    Ok(CmdOutput {
+        exit_code: result?,
+        // Protocol stdout is memory-only; redact diagnostics at their persistence boundary.
+        stdout: String::from_utf8_lossy(&out).into_owned(),
+        stderr: crate::redact::redact_secrets(&String::from_utf8_lossy(&err)),
+        timed_out,
+        duration_ms: started.elapsed().as_millis() as u64,
+    })
 }
 
 // The child is its own group leader, so -pid addresses the whole group.
@@ -463,6 +494,7 @@ pub struct MockExpectation {
 }
 
 pub struct MockRunner {
+    pub environment: std::collections::BTreeMap<String, String>,
     pub calls: Vec<CmdSpec>,
     pub spawned_logs: Vec<PathBuf>,
     // Everything written to each piped child's stdin, in spawn order.
@@ -475,6 +507,7 @@ pub struct MockRunner {
 impl MockRunner {
     pub fn new() -> Self {
         MockRunner {
+            environment: Default::default(),
             calls: Vec::new(),
             spawned_logs: Vec::new(),
             piped_stdin: Vec::new(),
@@ -582,6 +615,9 @@ impl Default for MockRunner {
 }
 
 impl Runner for MockRunner {
+    fn env_var(&self, name: &str) -> Option<String> {
+        self.environment.get(name).cloned()
+    }
     fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
         self.calls.push(spec.clone());
         match self.next_for(spec).result {

@@ -21,6 +21,8 @@ pub struct CoreRequest {
     pub run_id: String,
     pub t0: u64,
     pub plan: String,
+    pub prepared: Value,
+    pub preflight_calls: Vec<JevCall>,
     pub platform: String,
     pub app_id: String,
     pub run_dir: PathBuf,
@@ -53,7 +55,7 @@ pub struct AdbTarget {
 pub struct Ledger {
     pub verdict: String,
     pub path: String,
-    pub blocks: Vec<Value>,
+    pub blocks: Vec<BlockResult>,
     pub steps: Vec<Row>,
     pub jev: JevRollup,
     pub llm_turns: u64,
@@ -64,10 +66,33 @@ pub struct Ledger {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BlockResult {
+    pub key: String,
+    pub outcome: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct JevRollup {
     pub calls: u64,
     pub median_ms: u64,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub call_details: Vec<JevCall>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct JevCall {
+    pub question_ids: Vec<String>,
+    pub scope: String,
+    pub input_tokens: Option<u64>,
+    pub ms: u64,
+    pub outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -142,16 +167,16 @@ pub fn spawn_spec(
     .env("QAREN_METRO_PORT", &metro_port.to_string())
 }
 
-pub fn parse_spec(node: &Path, runtime_dir: &Path, plan_file: &Path) -> CmdSpec {
+pub fn preflight_spec(node: &Path, runtime_dir: &Path, plan_file: &Path) -> CmdSpec {
     CmdSpec::new(
-        "plan-parse",
+        "plan-preflight",
         &node.to_string_lossy(),
         &[
             &runtime_dir.join("qa").join("walk.js").to_string_lossy(),
-            "--parse",
+            "--preflight",
             &plan_file.to_string_lossy(),
         ],
-        60,
+        320,
     )
 }
 
@@ -314,11 +339,10 @@ impl Inbox {
 }
 
 fn excerpt(line: &str) -> String {
-    redact_secrets(&line.chars().take(120).collect::<String>())
+    redact_secrets(line).chars().take(120).collect()
 }
 
-// Reads rows and the result under the two budgets and always returns a ledger:
-// a child that exits without a result line is a FAIL attributed to its last row.
+// A missing result or deadline kill becomes a FAIL attributed to the last row.
 pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreOutcome {
     let CoreChild {
         pid,
@@ -342,14 +366,11 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
     let mut result_at: Option<u64> = None;
     let mut killed_after_result = false;
     let mut group_survived = false;
-    // The leader is never reaped before its group is killed, so the pgid cannot have been
-    // recycled: EOF, a deadline and an overstayed exit all end in one SIGKILL to the group,
-    // after which the exit code is read. "Gone" means the leader was reaped and the pipe
-    // closed within the grace; anything else is reported as a surviving group.
+    // Kill before reaping to keep the pgid from being recycled under us.
     loop {
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(Msg::Line(line)) => {
-                if inbox.accept(&line) {
+                if inbox.accept(&crate::redact::redact_api_key(&line)) {
                     last_progress = runner.monotonic_ms();
                 }
             }
@@ -386,9 +407,7 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
             killed_at = Some(now);
             continue;
         }
-        // The step budget starts at the first walk row; before it, session setup
-        // (runner build, attach, prove) is bounded by the whole-walk budget only.
-        // Once the result line is held the walk is over and neither budget applies.
+        // Setup uses only the walk budget; a held result uses only the exit grace.
         let walking = inbox.rows.iter().any(|r| r.line > 0);
         let reason = if inbox.violation.is_some() {
             inbox.violation.clone()
@@ -452,8 +471,7 @@ fn describe_last(rows: &[Row]) -> String {
     }
 }
 
-// `killed_after_result`: the CLI killed the group after the result line was held, so a
-// signal death is the kill's, not the child's, and the held verdict stands on its own.
+// A signal from our post-result kill must not replace the child's held verdict.
 fn interpret(
     inbox: Inbox,
     exit: Option<i32>,
@@ -527,8 +545,14 @@ fn interpret(
                 .and_then(Value::as_str)
                 .unwrap_or("the core child refused the run"),
         );
-        let ledger = synthesized_ledger(&inbox.rows, "REFUSED", &format!("{code}: {message}"));
-        return (ledger, Verdict::Refused { code, message }, None);
+        return match refusal_ledger(&result, &inbox.rows, &format!("{code}: {message}")) {
+            Ok(ledger) => (ledger, Verdict::Refused { code, message }, None),
+            Err(error) => missing(
+                &inbox.rows,
+                format!("refusal has invalid ledger evidence: {error}"),
+                FailureCode::CoreResultMissing,
+            ),
+        };
     }
     match serde_json::from_value::<Ledger>(result) {
         Ok(ledger) => {
@@ -547,23 +571,86 @@ fn interpret(
     }
 }
 
+fn refusal_ledger(result: &Value, rows: &[Row], seen: &str) -> Result<Ledger, String> {
+    for field in ["code", "message", "lease"] {
+        if result.get(field).is_some_and(|value| !value.is_string()) {
+            return Err(format!("{field} must be a string when supplied"));
+        }
+    }
+    let mut normalized = serde_json::to_value(synthesized_ledger(rows, "REFUSED", seen))
+        .map_err(|error| error.to_string())?;
+    for field in [
+        "path",
+        "blocks",
+        "steps",
+        "jev",
+        "llmTurns",
+        "escapes",
+        "recoveries",
+        "failure",
+    ] {
+        if let Some(value) = result.get(field) {
+            if value.is_null() {
+                return Err(format!("{field} must not be null when supplied"));
+            }
+            normalized[field] = value.clone();
+        }
+    }
+    let mut ledger: Ledger =
+        serde_json::from_value(normalized).map_err(|error| error.to_string())?;
+    if ledger.path != "walk" {
+        return Err("path must be walk".into());
+    }
+    if ledger.blocks.iter().any(|block| {
+        !matches!(block.outcome.as_str(), "pass" | "fail") || block.source != "discovered"
+    }) {
+        return Err("invalid block outcome or source".into());
+    }
+    if ledger.steps.len() > MAX_ROWS
+        || ledger.steps.iter().any(|row| {
+            !matches!(row.kind.as_str(), "step" | "check")
+                || !matches!(row.resolved_by.as_str(), "exact" | "jev")
+                || !matches!(row.outcome.as_str(), "pass" | "fail" | "retry")
+        })
+    {
+        return Err("invalid ledger steps".into());
+    }
+    if ledger.jev.call_details.iter().any(|call| {
+        !matches!(call.scope.as_str(), "preflight" | "parse" | "walk")
+            || !matches!(
+                call.outcome.as_str(),
+                "ok" | "timeout" | "network" | "http" | "invalid"
+            )
+            || call
+                .status
+                .is_some_and(|status| !(100..=599).contains(&status))
+    }) {
+        return Err("invalid Jev call details".into());
+    }
+    if result.get("failure").is_none() {
+        ledger.failure = Some(synthesized_failure(&ledger.steps, seen));
+    }
+    Ok(ledger)
+}
+
+fn synthesized_failure(rows: &[Row], seen: &str) -> LedgerFailure {
+    let last = rows.last();
+    LedgerFailure {
+        step: last.map_or(0, |row| row.line),
+        seen: seen.to_string(),
+        screenshot: last.and_then(|row| row.screenshot.clone()),
+    }
+}
+
 pub fn synthesized_ledger(rows: &[Row], verdict: &str, seen: &str) -> Ledger {
     let steps: Vec<Row> = rows.to_vec();
-    let last = steps.last();
     Ledger {
         verdict: verdict.to_string(),
         path: "walk".to_string(),
         blocks: Vec::new(),
-        failure: Some(LedgerFailure {
-            step: last.map_or(0, |r| r.line),
-            seen: seen.to_string(),
-            screenshot: last.and_then(|r| r.screenshot.clone()),
-        }),
+        failure: Some(synthesized_failure(&steps, seen)),
         steps,
-        jev: JevRollup {
-            calls: 0,
-            median_ms: 0,
-        },
+        jev: JevRollup::default(),
         llm_turns: 0,
         escapes: 0,
         recoveries: 0,

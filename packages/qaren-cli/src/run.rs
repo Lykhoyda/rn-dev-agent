@@ -24,7 +24,8 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_WALK_SECONDS: u64 = 1200;
-pub const DEFAULT_STEP_SECONDS: u64 = 120;
+// Seven 150s judgment schedules during scroll-until, plus 150s for screen work.
+pub const DEFAULT_STEP_SECONDS: u64 = 1200;
 const MIN_FREE_DISK_KB: u64 = 1024 * 1024;
 
 // `check`: candidate = the working tree at project_root, device = the booted simulator, borrowed.
@@ -58,7 +59,8 @@ fn platform_str(platform: Platform) -> &'static str {
 
 pub fn run(runner: &mut dyn Runner, req: &RunRequest) -> Receipt {
     let started_ms = runner.now_epoch_ms();
-    match run_inner(runner, req, started_ms) {
+    let mut preflight_jev = None;
+    let mut receipt = match run_inner(runner, req, started_ms, &mut preflight_jev) {
         Ok(receipt) => receipt,
         Err(failure) => {
             let result = if failure.code.is_refusal() {
@@ -78,7 +80,9 @@ pub fn run(runner: &mut dyn Runner, req: &RunRequest) -> Receipt {
             receipt.commands_executed = runner.commands_executed();
             receipt
         }
-    }
+    };
+    receipt.preflight_jev = preflight_jev;
+    receipt
 }
 
 // Failures before the run record exists come back as Err; everything after is
@@ -87,6 +91,7 @@ fn run_inner(
     runner: &mut dyn Runner,
     req: &RunRequest,
     started_ms: u64,
+    preflight_jev: &mut Option<core::JevRollup>,
 ) -> Result<Receipt, Failure> {
     let (config, config_raw) = CheckConfig::load(&req.config_path)?;
     let node = req
@@ -96,7 +101,13 @@ fn run_inner(
         .unwrap_or_else(|| PathBuf::from("node"));
     preflight_node(runner, &node)?;
     let plan = read_plan(&req.plan_file)?;
-    preflight_plan(runner, &node, &req.runtime_dir, &req.plan_file)?;
+    let prepared = preflight_plan(
+        runner,
+        &node,
+        &req.runtime_dir,
+        &req.plan_file,
+        preflight_jev,
+    )?;
     // The parser read the file by path; the walk must use the bytes that passed.
     if read_plan(&req.plan_file)? != plan {
         return Err(Failure::new(
@@ -244,6 +255,11 @@ fn run_inner(
         run_id: run_id.clone(),
         t0: ctx.runner.now_epoch_ms(),
         plan: plan.clone(),
+        prepared,
+        preflight_calls: preflight_jev
+            .as_ref()
+            .map(|j| j.call_details.clone())
+            .unwrap_or_default(),
         platform: platform_str(req.platform).to_string(),
         app_id: config.app_id.clone(),
         run_dir: run_dir.clone(),
@@ -381,6 +397,9 @@ fn refusal_code(code: &str) -> FailureCode {
     match code {
         "METRO_ORIGIN_MISMATCH" => FailureCode::MetroOriginMismatch,
         "PLAN_UNPARSEABLE" => FailureCode::PlanUnparseable,
+        "JEV_AUTH_FAILED" => FailureCode::JevAuthFailed,
+        "JEV_REQUEST_INVALID" => FailureCode::JevRequestInvalid,
+        "JEV_UNREACHABLE" => FailureCode::JevUnreachable,
         _ => FailureCode::CoreRefused,
     }
 }
@@ -503,15 +522,52 @@ fn preflight_plan(
     node: &Path,
     runtime_dir: &Path,
     plan_file: &Path,
-) -> Result<(), Failure> {
-    let output = runner.run(&core::parse_spec(node, runtime_dir, plan_file));
-    if output.ok() {
-        return Ok(());
+    accounting: &mut Option<core::JevRollup>,
+) -> Result<Value, Failure> {
+    let unavailable = || {
+        Failure::new(
+            "preflight",
+            FailureCode::JevUnreachable,
+            "the fixed Jev probe or plan judgments did not succeed",
+            "set a valid TYPESAFE_API_KEY in the environment and check TypeSafe reachability and the built runtime",
+        )
+    };
+    if runner
+        .env_var("TYPESAFE_API_KEY")
+        .is_none_or(|key| key.trim().is_empty())
+    {
+        return Err(unavailable());
     }
-    if output.exit_code == Some(4) {
-        let refused = serde_json::from_str::<Value>(output.stdout.trim())
-            .ok()
-            .and_then(|v| v.get("refused").cloned())
+    let output = runner.run(&core::preflight_spec(node, runtime_dir, plan_file));
+    let value = serde_json::from_str::<Value>(output.stdout.trim()).map_err(|_| unavailable())?;
+    let jev = value
+        .get("jev")
+        .cloned()
+        .and_then(|v| serde_json::from_value::<core::JevRollup>(v).ok());
+    *accounting = jev;
+    if output.ok() && value.get("ok").and_then(Value::as_bool) == Some(true) {
+        let prepared = value
+            .get("prepared")
+            .filter(|p| p.get("blocks").is_some_and(Value::is_array));
+        if let (Some(prepared), Some(jev)) = (prepared, accounting.as_ref()) {
+            if prepared.get("hash").and_then(Value::as_str)
+                == Some(&sha256_hex(read_plan(plan_file)?.as_bytes()))
+                && jev
+                    .call_details
+                    .iter()
+                    .any(|c| c.scope == "preflight" && c.outcome == "ok")
+            {
+                return Ok(prepared.clone());
+            }
+        }
+        return Err(unavailable());
+    }
+    if output.exit_code == Some(4)
+        && value.get("code").and_then(Value::as_str) == Some("PLAN_UNPARSEABLE")
+    {
+        let refused = value
+            .get("refused")
+            .cloned()
             .and_then(|r| r.as_array().cloned())
             .map(|entries| {
                 entries
@@ -528,7 +584,7 @@ fn preflight_plan(
                     .collect::<Vec<_>>()
                     .join("; ")
             })
-            .unwrap_or_else(|| output.stdout.trim().to_string());
+            .unwrap_or_else(|| "unreadable plan".to_string());
         return Err(Failure::new(
             "preflight",
             FailureCode::PlanUnparseable,
@@ -536,15 +592,7 @@ fn preflight_plan(
             "rewrite the named lines with the verb grammar (Tap \"X\", Type \"t\" into \"X\", Scroll down, Wait for \"X\", Go back, Accept the dialog, ✓ \"text\")",
         ));
     }
-    Err(Failure::new(
-        "preflight",
-        FailureCode::PrereqMissing,
-        format!(
-            "the qaren runtime could not parse the plan: {}",
-            output.summary()
-        ),
-        "check QAREN_RUNTIME points at a built qaren-core dist, then re-run",
-    ))
+    Err(unavailable())
 }
 
 fn preflight_disk(runner: &mut dyn Runner, runs_root: &Path) -> Result<(), Failure> {

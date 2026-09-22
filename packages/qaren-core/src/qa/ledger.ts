@@ -6,7 +6,7 @@ export interface LedgerRow {
   text: string;
   attempt: number;
   kind: 'step' | 'check';
-  resolvedBy: 'exact';
+  resolvedBy: 'exact' | 'jev';
   ref?: string;
   screenshot?: string;
   t: number;
@@ -31,18 +31,27 @@ export interface Ledger {
   path: 'walk';
   blocks: BlockResult[];
   steps: LedgerRow[];
-  jev: { calls: number; medianMs: number };
+  jev: JevRollup;
   llmTurns: number;
   escapes: number;
   recoveries: number;
   failure?: LedgerFailure;
 }
 
+export interface RefusedLedger extends Omit<Ledger, 'verdict'> {
+  verdict: 'REFUSED';
+  code: string;
+  message: string;
+}
+
+export type WalkResult = Ledger | RefusedLedger;
+
 // The verdict never contradicts the rows: a failed row or block without a failure detail synthesizes one.
 export function buildLedger(
   blocks: BlockResult[],
   steps: LedgerRow[],
   failure?: LedgerFailure,
+  calls: readonly JevCall[] = [],
 ): Ledger {
   const failedRow = [...steps].reverse().find((r) => r.outcome === 'fail');
   const failedBlock = blocks.find((b) => b.outcome === 'fail');
@@ -58,13 +67,36 @@ export function buildLedger(
     path: 'walk',
     blocks,
     steps,
-    jev: { calls: 0, medianMs: 0 },
+    jev: summarizeJev(calls),
     llmTurns: 0,
     escapes: 0,
     recoveries: 0,
   };
   if (failure) ledger.failure = failure;
   return ledger;
+}
+
+export interface JevRollup {
+  calls: number;
+  medianMs: number;
+  inputTokens: number;
+  callDetails: JevCall[];
+}
+
+export function summarizeJev(calls: readonly JevCall[]): JevRollup {
+  const sorted = calls.map((call) => call.ms).sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const medianMs = !sorted.length
+    ? 0
+    : sorted.length % 2
+      ? sorted[mid]
+      : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+  return {
+    calls: calls.length,
+    medianMs,
+    inputTokens: calls.reduce((n, call) => n + (call.inputTokens ?? 0), 0),
+    callDetails: [...calls],
+  };
 }
 
 // A walk that ended without a verdict is a FAIL attributed to its last row.
@@ -80,3 +112,4 @@ export function ledgerWithoutResult(steps: LedgerRow[], seen: string): Ledger {
 export function screenshotName(index: number, line: number): string {
   return `screenshots/${String(index).padStart(2, '0')}-line${line}.png`;
 }
+import type { JevCall } from './questions.js';

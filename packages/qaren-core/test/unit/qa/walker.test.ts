@@ -176,17 +176,17 @@ test('a target that is only in the React tree scrolls once, then acts', async ()
   );
 });
 
-test('a phrase target, an unquoted ✓ line and a missing target are FAILs naming the line', async () => {
+test('a missing judge or target fails naming the line', async () => {
   const phrase = await walkBlock(block('1. Tap Save\n'), fake([screen(['Save'])]).deps);
   assert.equal(phrase.failure?.step, 1);
-  assert.match(phrase.failure?.seen ?? '', /PHRASE_TARGET_UNSUPPORTED/);
+  assert.match(phrase.failure?.seen ?? '', /JEV_UNAVAILABLE/);
 
   const check = await walkBlock(
     block('✓ The header looks right\n'),
     fake([screen(['Header'])]).deps,
   );
   assert.equal(check.failure?.step, 1);
-  assert.match(check.failure?.seen ?? '', /has no quoted phrase/);
+  assert.match(check.failure?.seen ?? '', /JEV_UNAVAILABLE/);
 
   const missing = await walkBlock(block('1. Tap "Nope"\n'), fake([screen(['Save'])]).deps);
   assert.equal(missing.failure?.step, 1);
@@ -194,10 +194,10 @@ test('a phrase target, an unquoted ✓ line and a missing target are FAILs namin
   assert.equal(missing.rows[0].outcome, 'fail');
 });
 
-test('an ambiguous quoted target is refused, not guessed', async () => {
+test('an ambiguous quoted target without a judge is refused, not guessed', async () => {
   const f = fake([screen(['Save', 'Save'])]);
   const outcome = await walkBlock(block('1. Tap "Save"\n'), f.deps);
-  assert.match(outcome.failure?.seen ?? '', /AMBIGUOUS_TARGET: 2 elements match/);
+  assert.match(outcome.failure?.seen ?? '', /JEV_UNAVAILABLE/);
   assert.ok(!f.calls.some((c) => c.startsWith('press')));
 
   const two: Screen = {
@@ -226,7 +226,7 @@ test('an ambiguous quoted target is refused, not guessed', async () => {
   };
   const g = fake([two]);
   const twice = await walkBlock(block('1. Tap "more"\n'), g.deps);
-  assert.match(twice.failure?.seen ?? '', /2 off-screen elements match/);
+  assert.match(twice.failure?.seen ?? '', /JEV_UNAVAILABLE/);
   assert.ok(!g.calls.some((c) => c.startsWith('scroll')));
 });
 
@@ -293,7 +293,7 @@ test('runPlan stops at the first failing block and rolls up the ledger', async (
     ],
   );
   assert.equal(ledger.steps.length, 2);
-  assert.deepEqual(ledger.jev, { calls: 0, medianMs: 0 });
+  assert.deepEqual(ledger.jev, { calls: 0, medianMs: 0, inputTokens: 0, callDetails: [] });
   assert.equal(ledger.llmTurns, 0);
   assert.equal(ledger.escapes, 0);
   assert.equal(ledger.recoveries, 0);
@@ -315,7 +315,7 @@ test('an unquoted wait target fails at once instead of sitting out the wait budg
     f.rows.map((r) => [r.line, r.attempt, r.outcome]),
     [[1, 1, 'fail']],
   );
-  assert.match(outcome.failure?.seen ?? '', /is not quoted; phrase targets arrive with Jev/);
+  assert.match(outcome.failure?.seen ?? '', /JEV_UNAVAILABLE/);
 });
 
 test('an unquoted scroll-until target fails before any scroll is dispatched', async () => {
@@ -323,7 +323,7 @@ test('an unquoted scroll-until target fails before any scroll is dispatched', as
   const outcome = await walkBlock(block('1. Scroll until you see the footer\n'), f.deps);
   assert.equal(outcome.block.outcome, 'fail');
   assert.equal(f.calls.filter((c) => c.startsWith('scroll')).length, 0);
-  assert.match(outcome.failure?.seen ?? '', /is not quoted; phrase targets arrive with Jev/);
+  assert.match(outcome.failure?.seen ?? '', /JEV_UNAVAILABLE/);
 });
 
 test('a bare scroll that moves the screen is done after one dispatch', async () => {

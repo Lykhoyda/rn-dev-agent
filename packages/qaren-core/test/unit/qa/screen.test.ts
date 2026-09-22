@@ -12,6 +12,7 @@ import {
   screenSignature,
 } from '../../../dist/qa/screen.js';
 import type { DigestEntry, NativeNode } from '../../../dist/qa/screen.js';
+import { redactEvidence } from '../../../dist/qa/privacy.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const snapshot = JSON.parse(
@@ -79,7 +80,8 @@ test('unmatched interactive digest entries become react:<testID> off-screen cand
 });
 
 test('visibleText reads top to bottom, left to right, with inputs as label: value', () => {
-  const text = assertionView(joinScreen(snapshot.data.nodes, digest.interactive));
+  const observed = joinScreen(snapshot.data.nodes, digest.interactive);
+  const text = assertionView(observed);
   const first = text.indexOf('10:08');
   const fixture = text.indexOf('Fixture');
   const increment = text.indexOf('Increment');
@@ -96,6 +98,10 @@ test('visibleText reads top to bottom, left to right, with inputs as label: valu
     text.join(' | '),
   );
   assert.ok(text.includes('type here'), 'an input without a value shows its label');
+  assert.ok(
+    !redactEvidence(observed, text.join(' | ')).includes('type here'),
+    'ambiguous Android input labels are private in outward evidence',
+  );
 
   const withValue = joinScreen(
     [
@@ -120,7 +126,7 @@ test('visibleText reads top to bottom, left to right, with inputs as label: valu
   assert.deepEqual(assertionView(withValue), ['Email: a@b.co', 'Welcome']);
 });
 
-test('secure values are never retained and image labels are not visible text', () => {
+test('secure values stay out of public values and evidence; image labels are not visible text', () => {
   const screen = joinScreen(
     [
       {

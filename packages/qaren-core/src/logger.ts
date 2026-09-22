@@ -1,6 +1,7 @@
 import { createWriteStream, mkdirSync, existsSync, type WriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
+import { redactApiKey } from './util/redact.js';
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -65,7 +66,7 @@ function shouldLog(level: LogLevel): boolean {
 
 function formatMessage(level: LogLevel, tag: string, msg: string): string {
   const ts = new Date().toISOString();
-  return `${ts} [${level.toUpperCase()}] [${tag}] ${msg}`;
+  return redactApiKey(`${ts} [${level.toUpperCase()}] [${tag}] ${msg}`);
 }
 
 function writeLog(level: LogLevel, tag: string, msg: string): void {
