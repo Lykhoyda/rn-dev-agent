@@ -53,6 +53,30 @@ test('review P1: protected value equality survives projection and an unequal val
   for (const requests of [matching.requests, mismatching.requests]) {
     assert.ok(!JSON.stringify(requests).includes('Anton'));
     assert.ok(!JSON.stringify(requests).includes('Bob'));
+    const instructions = requests[0].questions.check_2.instructions;
+    assert.match(
+      instructions,
+      /same token in the expectation and observed text is evidence of the same value/,
+    );
+    assert.match(instructions, /different tokens represent different values/);
+    assert.match(instructions, /no content, length, format, order or validity/);
+  }
+  const tokens = (requests: typeof matching.requests) =>
+    new Set(JSON.stringify(requests).match(/\[QAREN_VALUE_\d+\]/g));
+  assert.equal(tokens(matching.requests).size, 1);
+  assert.equal(tokens(mismatching.requests).size, 2);
+});
+
+test('protected equality still requires the noul threshold rather than a matching mask alone', async () => {
+  for (const [noul, expected] of [
+    [0.89, 'pass'],
+    [0.58, 'unsure'],
+    [0.56, 'unsure'],
+  ] as const) {
+    const judge = scriptedJudge(() => ({ check_2: { type: 'noul', noul } }));
+    const result = await decideScreen(nameScreen('Anton'), judge, nameCheck, undefined, ['Anton']);
+    assert.equal(result.check, expected);
+    assert.equal(judge.requests.length, 1);
   }
 });
 

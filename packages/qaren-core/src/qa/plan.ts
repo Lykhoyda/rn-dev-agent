@@ -271,7 +271,7 @@ function scanPlan(
 }
 
 const VERBS = {
-  press: 'Press one UI control',
+  press: 'Activate one UI control, including navigating to a screen or tab by pressing its control',
   fill: 'Enter a supplied, quoted text value into one input',
   scroll: 'Scroll in an explicit direction, optionally until a target is visible',
   wait: 'Wait until a target is visible without interacting',
