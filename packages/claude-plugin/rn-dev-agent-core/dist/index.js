@@ -81391,6 +81391,18 @@ function planIosProofDomains(commands, params) {
       focusedReactId = null;
     }
   }
+  const firstReact = segments.findIndex((segment) => segment.domain === "react-tree");
+  if (firstReact !== -1) {
+    const lateNative = segments.slice(firstReact + 1).find((segment) => segment.domain === "xctest-native" && !lifecycleCommands2.has(commandName(segment.commands[0]) ?? ""));
+    if (lateNative) {
+      const command = commandName(lateNative.commands[0]) ?? "command";
+      return {
+        ok: false,
+        sourceIndex: lateNative.sourceIndices[0],
+        reason: `${command}: a native segment starts a new runner session that relaunches the app and discards the React-tree steps`
+      };
+    }
+  }
   return { ok: true, segments };
 }
 function selectorsVisibleInNativeSnapshot(selectors, nodes) {
@@ -98348,7 +98360,7 @@ var maestroRunHandler = createMaestroRunHandler({
   getLiveRoute: () => readLiveRoute(getClient()),
   nativeVisionProbe: probeNativeVision
 });
-trackedTool("maestro_run", "Execute a validated flow using semantic proof-domain routing. On iOS, exact-testID React commands execute through the authority-bound React tree before WDA can claim selector truth; text/system/native-only commands remain XCTest, and mixed flows are partitioned before execution without React-to-XCTest correlation. Results label react-tree and xctest-native proof domains explicitly; a React-tree pass is never Maestro certification or proof of IME, AutoFill, keyboard occlusion, or native interaction fidelity. Android and native-only iOS flows use the pin-cache maestro-runner >= 1.1.24. A ledger-proven trailing-verification-only failure remains failed with meta.trailingVerification; verify the unproven goal state before retrying or rebooting. Pass flowPath for an existing .yaml file or inlineYaml for an ephemeral flow.", {
+trackedTool("maestro_run", "Execute a validated flow using semantic proof-domain routing. On iOS, exact-testID React commands execute through the authority-bound React tree before WDA can claim selector truth; text/system/native-only commands remain XCTest, and mixed flows are partitioned before execution without React-to-XCTest correlation; a native-only command after the first exact-testID command is refused before execution because the native runner's session start relaunches the app. launchApp, clearState, killApp, and stopApp remain allowed. Results label react-tree and xctest-native proof domains explicitly; a React-tree pass is never Maestro certification or proof of IME, AutoFill, keyboard occlusion, or native interaction fidelity. Android and native-only iOS flows use the pin-cache maestro-runner >= 1.1.24. A ledger-proven trailing-verification-only failure remains failed with meta.trailingVerification; verify the unproven goal state before retrying or rebooting. Pass flowPath for an existing .yaml file or inlineYaml for an ephemeral flow.", {
   flowPath: external_exports.string().optional().describe("Path to a .yaml flow file to execute"),
   inlineYaml: external_exports.string().optional().describe("Inline YAML flow content (written to /tmp and executed)"),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform (auto-detected from session)"),
@@ -98504,7 +98516,7 @@ var runActionHandler = createRunActionHandler({
   targetContext: getActiveSession,
   claimBundleAuthority: claimOptionalBundleAuthority
 });
-trackedTool("cdp_run_action", "Replay a learned action by id with end-to-end auto-repair. On iOS, the validated flow is partitioned before execution: exact-testID commands use the authority-bound React-tree prover, while native-only commands use XCTest. The RunRecord and result preserve the reported proof domain, and a react-tree pass never promotes an experimental action to Maestro-certified active status. Ordinary missing React testIDs remain TESTID_NOT_FOUND; native selector misses remain ordinary Maestro failures unless direct bounded evidence proves a NATIVE_SURFACE_BLIND environment. Pass autoRepair=false to opt out of selector repair. Successful runtime writes return their exact runtime sidecar path as writes.runtimeStatePath: fenced sessions use session-private state, while an unfenced compatibility process uses project-local .rn-agent/state. proofReplay=true is reserved for proof-capture rehearsal and writes no runtime state. When the canonical run ledger proves every authored mutating command completed and only trailing verification (extendedWaitUntil/assert) failed, the result stays failed but carries meta.trailingVerification (mutationEvidence proven, attempt lineage, termination provenance) \u2014 verify the live goal state instead of retrying or rebooting; auto-repair refuses so a merely-slow selector is never rewritten.", {
+trackedTool("cdp_run_action", "Replay a learned action by id with end-to-end auto-repair. On iOS, the validated flow is partitioned before execution: exact-testID commands use the authority-bound React-tree prover, while native-only commands use XCTest and must come before the first exact-testID command, except launchApp, clearState, killApp, and stopApp. The RunRecord and result preserve the reported proof domain, and a react-tree pass never promotes an experimental action to Maestro-certified active status. Ordinary missing React testIDs remain TESTID_NOT_FOUND; native selector misses remain ordinary Maestro failures unless direct bounded evidence proves a NATIVE_SURFACE_BLIND environment. Pass autoRepair=false to opt out of selector repair. Successful runtime writes return their exact runtime sidecar path as writes.runtimeStatePath: fenced sessions use session-private state, while an unfenced compatibility process uses project-local .rn-agent/state. proofReplay=true is reserved for proof-capture rehearsal and writes no runtime state. When the canonical run ledger proves every authored mutating command completed and only trailing verification (extendedWaitUntil/assert) failed, the result stays failed but carries meta.trailingVerification (mutationEvidence proven, attempt lineage, termination provenance) \u2014 verify the live goal state instead of retrying or rebooting; auto-repair refuses so a merely-slow selector is never rewritten.", {
   actionId: external_exports.string().describe("Owned action id; resolves one .yaml or .yml file."),
   projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Force a specific platform; otherwise auto-detected from the active device session."),
