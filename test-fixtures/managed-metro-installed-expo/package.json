@@ -2,6 +2,7 @@
   "name": "rn-dev-agent-managed-metro-installed-expo",
   "version": "1.0.0",
   "private": true,
+  "browserslist": ["defaults"],
   "main": "index.ts",
   "scripts": {
     "android": "expo run:android",

@@ -13053,7 +13053,8 @@ const liveCodeIdentityMatches = (pid, identity) => {
     !Number.isSafeInteger(pid) ||
     !identity ||
     typeof identity.identifier !== 'string' ||
-    typeof identity.cdHash !== 'string'
+    typeof identity.cdHash !== 'string' ||
+    !Array.isArray(identity.cdHashes)
   ) {
     return false;
   }
@@ -13078,7 +13079,7 @@ const liveCodeIdentityMatches = (pid, identity) => {
   );
   return (
     fields.get('Identifier') === identity.identifier &&
-    fields.get('CDHash') === identity.cdHash
+    identity.cdHashes.includes(fields.get('CDHash'))
   );
 };
 const waitForLiveCodeIdentity = (pid, identity) => {
