@@ -482,12 +482,7 @@ test('a native text prefix before exact-testID steps still plans', () => {
 
 test('lifecycle commands after exact-testID steps still plan', () => {
   const plan = planIosProofDomains(
-    [
-      { tapOn: { id: 'a' } },
-      { killApp: null },
-      { launchApp: {} },
-      { assertVisible: { id: 'b' } },
-    ],
+    [{ tapOn: { id: 'a' } }, { killApp: null }, { launchApp: {} }, { assertVisible: { id: 'b' } }],
     {},
   );
   assert.equal(plan.ok, true);
