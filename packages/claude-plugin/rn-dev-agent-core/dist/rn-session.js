@@ -13109,9 +13109,24 @@ function signingIdentity(path, run) {
   if (details.status !== 0 || !identifier || !/^[a-f0-9]{40,64}$/.test(cdHash ?? "")) {
     return null;
   }
+  const universalFormat = /^Mach-O universal \(([^)]+)\)/.exec(field(details.stderr, "Format") ?? "");
+  const cdHashes = [];
+  if (universalFormat) {
+    for (const arch of universalFormat[1].trim().split(/\s+/)) {
+      const slice = run(DARWIN_CODESIGN_EXECUTABLE, ["-dv", "--verbose=4", "--arch", arch, path]);
+      const sliceHash = field(slice.stderr, "CDHash");
+      if (slice.status !== 0 || field(slice.stderr, "Identifier") !== identifier || !/^[a-f0-9]{40,64}$/.test(sliceHash ?? "")) {
+        return null;
+      }
+      cdHashes.push(sliceHash);
+    }
+  } else {
+    cdHashes.push(cdHash);
+  }
   return {
     identifier,
     cdHash,
+    cdHashes: [...new Set(cdHashes)].sort(),
     authorities: details.stderr.split("\n").filter((line) => line.startsWith("Authority=")).map((line) => line.slice("Authority=".length)).sort()
   };
 }
@@ -14227,7 +14242,8 @@ const liveCodeIdentityMatches = (pid, identity) => {
     !Number.isSafeInteger(pid) ||
     !identity ||
     typeof identity.identifier !== 'string' ||
-    typeof identity.cdHash !== 'string'
+    typeof identity.cdHash !== 'string' ||
+    !Array.isArray(identity.cdHashes)
   ) {
     return false;
   }
@@ -14252,7 +14268,7 @@ const liveCodeIdentityMatches = (pid, identity) => {
   );
   return (
     fields.get('Identifier') === identity.identifier &&
-    fields.get('CDHash') === identity.cdHash
+    identity.cdHashes.includes(fields.get('CDHash'))
   );
 };
 const waitForLiveCodeIdentity = (pid, identity) => {
