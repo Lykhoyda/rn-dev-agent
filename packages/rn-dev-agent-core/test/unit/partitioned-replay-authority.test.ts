@@ -208,9 +208,9 @@ test('public mixed maestro_run forwards only its operation-scoped authority capa
   );
 });
 
-test('public mixed maestro_run reconnects and completes after native segments in either order', async (t) => {
+test('public mixed maestro_run reconnects and completes after native segments in either order (refused, GH-1075)', async (t) => {
   for (const order of ['react-native', 'native-react'] as const) {
-    await t.test(order, async () => {
+    await t.test(order === 'react-native' ? `${order} (refused, GH-1075)` : order, async () => {
       const { runtime, status } = authorityFixture();
       const runtimeClient = runtimeClientFixture();
       let nativeDispatches = 0;
@@ -287,15 +287,17 @@ test('public mixed maestro_run reconnects and completes after native segments in
       });
       const envelope = JSON.parse(result.content[0]!.text);
 
+      if (order === 'react-native') {
+        assert.equal(envelope.ok, false);
+        assert.equal(envelope.code, 'UNSUPPORTED_STEP');
+        assert.match(envelope.error ?? '', /relaunches the app/);
+        assert.equal(nativeDispatches, 0);
+        return;
+      }
       assert.equal(envelope.ok, true, envelope.error);
       assert.equal(envelope.data?.passed, true);
       assert.equal(envelope.data?.proofDomain, 'partitioned');
-      assert.deepEqual(
-        envelope.data?.proofDomains,
-        order === 'react-native'
-          ? ['react-tree', 'xctest-native']
-          : ['xctest-native', 'react-tree'],
-      );
+      assert.deepEqual(envelope.data?.proofDomains, ['xctest-native', 'react-tree']);
       assert.equal(nativeDispatches, 1);
       assert.equal(runtimeClient.reconnects, 2);
       assert.equal(runtimeClient.client.isConnected, true);

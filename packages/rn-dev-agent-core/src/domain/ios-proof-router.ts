@@ -168,6 +168,24 @@ export function planIosProofDomains(
       focusedReactId = null;
     }
   }
+  const firstReact = segments.findIndex((segment) => segment.domain === 'react-tree');
+  if (firstReact !== -1) {
+    const lateNative = segments
+      .slice(firstReact + 1)
+      .find(
+        (segment) =>
+          segment.domain === 'xctest-native' &&
+          !lifecycleCommands.has(commandName(segment.commands[0]) ?? ''),
+      );
+    if (lateNative) {
+      const command = commandName(lateNative.commands[0]) ?? 'command';
+      return {
+        ok: false,
+        sourceIndex: lateNative.sourceIndices[0]!,
+        reason: `${command}: a native segment starts a new runner session that relaunches the app and discards the React-tree steps`,
+      };
+    }
+  }
   return { ok: true, segments };
 }
 
