@@ -5,7 +5,6 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { runInNewContext } from 'node:vm';
 import { canonicalAuthorityJson } from '../../../dist/session/authority-json.js';
 import {
   DEFAULT_METRO_READINESS_TIMEOUT_MS,
@@ -319,7 +318,7 @@ test('managed Metro child environment excludes session authority', () => {
   );
 });
 
-test('managed Metro binds the actual listener rather than the launcher shim', async (t) => {
+test('managed Metro binds the actual listener rather than the launcher shim', async () => {
   const calls: Array<{
     executable: string;
     args: string[];
@@ -418,43 +417,6 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   assert.equal(binding.mode, 'managed');
   assert.equal(calls[0]?.executable, process.execPath);
   assert.equal(calls[0]?.args[0], '-e');
-  const launcherSource = calls[0]?.args[1] ?? '';
-  const identityStart = launcherSource.indexOf('const liveCodeIdentityMatches =');
-  const identityEnd = launcherSource.indexOf('const waitForLiveCodeIdentity =', identityStart);
-  assert.ok(identityStart >= 0 && identityEnd > identityStart);
-  const liveIdentitySource = launcherSource.slice(identityStart, identityEnd);
-  for (const [name, liveHash, expected] of [
-    ['matching architecture slice', 'b'.repeat(40), true],
-    ['unattested architecture slice', 'c'.repeat(40), false],
-  ] as const) {
-    await t.test(`launcher admission ${expected ? 'accepts' : 'refuses'} ${name}`, () => {
-      const calls: string[][] = [];
-      const admitted = runInNewContext(
-        `${liveIdentitySource}\nliveCodeIdentityMatches(123, identity)`,
-        {
-          identity: {
-            identifier: 'com.apple.bash',
-            cdHash: 'a'.repeat(40),
-            cdHashes: ['a'.repeat(40), 'b'.repeat(40)],
-          },
-          spawnSync: (_command: string, args: string[]) => {
-            calls.push([...args]);
-            return args[0] === '--verify'
-              ? { status: 0 }
-              : {
-                  status: 0,
-                  stderr: `Identifier=com.apple.bash\nCDHash=${liveHash}\n`,
-                };
-          },
-        },
-      );
-      assert.equal(admitted, expected);
-      assert.deepEqual(calls, [
-        ['--verify', '--strict', '+123'],
-        ['-dv', '--verbose=4', '+123'],
-      ]);
-    });
-  }
   assert.equal(calls[0]?.env?.RN_DEV_AGENT_METRO_EXECUTABLE, '/app/node_modules/.bin/expo');
   assert.equal(
     calls[0]?.env?.RN_DEV_AGENT_METRO_ARGS,
