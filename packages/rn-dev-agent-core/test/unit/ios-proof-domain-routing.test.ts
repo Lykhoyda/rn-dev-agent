@@ -285,6 +285,50 @@ test('an omitted-timeout wait preserves unreadable component-tree evidence', asy
   });
 });
 
+test('hideKeyboard after exact-testID steps is refused before WDA', async () => {
+  const calls: string[] = [];
+  const handler = createMaestroRunHandler({
+    chooseDispatch: () => {
+      throw new Error('WDA dispatch must not be selected');
+    },
+    replayDeps: () => ({
+      pressByTestId: async (id) => {
+        calls.push(`press:${id}`);
+      },
+      typeByTestId: async (id, text) => {
+        calls.push(`type:${id}:${text}`);
+      },
+      treeFor: async () => null,
+      frontmostFor: async () => ({ visible: false, matchCount: 0 }),
+      launchApp: async () => {},
+      settle: async () => {},
+    }),
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      inlineYaml: `appId: com.example.app
+---
+- tapOn:
+    id: email
+- inputText: x
+- hideKeyboard
+- extendedWaitUntil:
+    visible:
+      id: submit
+- tapOn:
+    id: submit
+`,
+      ...callbacks,
+    }),
+  );
+  assert.equal(env.ok, false);
+  assert.equal(env.code, 'UNSUPPORTED_STEP');
+  assert.match(env.error ?? '', /Refusing iOS proof-domain ambiguity at step 2/);
+  assert.match(env.error ?? '', /relaunches the app/);
+  assert.deepEqual(calls, []);
+});
+
 test('ordinary missing React testID stays TESTID_NOT_FOUND without WDA', async () => {
   const handler = createMaestroRunHandler({
     chooseDispatch: () => {
@@ -391,6 +435,64 @@ test('login replay refuses before mutation without a final positive ID', async (
   assert.equal(mutations, 0);
 });
 
+test('a native-only command after exact-testID steps is refused before execution', () => {
+  const plan = planIosProofDomains(
+    [
+      { tapOn: { id: 'email' } },
+      { inputText: 'x' },
+      { hideKeyboard: null },
+      { extendedWaitUntil: { visible: { id: 'submit' } } },
+      { tapOn: { id: 'submit' } },
+    ],
+    {},
+  );
+  assert.equal(plan.ok, false);
+  if (plan.ok) return;
+  assert.equal(plan.sourceIndex, 2);
+  assert.match(plan.reason, /hideKeyboard/);
+  assert.match(plan.reason, /relaunches the app/);
+});
+
+test('a text assertVisible after exact-testID steps is refused before a native segment', () => {
+  const plan = planIosProofDomains(
+    [
+      { assertVisible: { id: 'home-welcome' } },
+      { tapOn: { id: 'tab-tasks' } },
+      { waitForAnimationToEnd: null },
+      { assertVisible: { id: 'task-screen' } },
+      { assertVisible: { id: 'hackathon-qa-banner' } },
+      { assertVisible: 'Hackathon QA · live' },
+    ],
+    {},
+  );
+  assert.equal(plan.ok, false);
+  if (plan.ok) return;
+  assert.equal(plan.sourceIndex, 5);
+  assert.match(plan.reason, /assertVisible/);
+  assert.match(plan.reason, /relaunches the app/);
+});
+
+test('a native text prefix before exact-testID steps still plans', () => {
+  const plan = planIosProofDomains(
+    [{ tapOn: 'Cancel' }, { tapOn: { id: 'a' } }, { assertVisible: { id: 'b' } }],
+    {},
+  );
+  assert.equal(plan.ok, true);
+});
+
+test('lifecycle commands after exact-testID steps still plan', () => {
+  const plan = planIosProofDomains(
+    [
+      { tapOn: { id: 'a' } },
+      { killApp: null },
+      { launchApp: {} },
+      { assertVisible: { id: 'b' } },
+    ],
+    {},
+  );
+  assert.equal(plan.ok, true);
+});
+
 test('the real login shape partitions native prefix from exact React suffix', () => {
   const commands = [
     { launchApp: { clearState: true, stopApp: true } },
@@ -457,7 +559,7 @@ test('inputText inherits the preceding selector proof domain', () => {
     );
 });
 
-test('inputText keeps the focused selector domain across an intervening proof segment', () => {
+test('inputText keeps the focused selector domain across an intervening proof segment (refused, GH-1075)', () => {
   const nativeFocus = planIosProofDomains(
     [
       { tapOn: 'Email' },
@@ -466,16 +568,11 @@ test('inputText keeps the focused selector domain across an intervening proof se
     ],
     {},
   );
-  assert.equal(nativeFocus.ok, true);
-  if (nativeFocus.ok)
-    assert.deepEqual(
-      nativeFocus.segments.map(({ domain, sourceIndices }) => ({ domain, sourceIndices })),
-      [
-        { domain: 'xctest-native', sourceIndices: [0] },
-        { domain: 'react-tree', sourceIndices: [1] },
-        { domain: 'xctest-native', sourceIndices: [2] },
-      ],
-    );
+  assert.equal(nativeFocus.ok, false);
+  if (!nativeFocus.ok) {
+    assert.equal(nativeFocus.sourceIndex, 2);
+    assert.match(nativeFocus.reason, /relaunches the app/);
+  }
 
   const reactFocus = planIosProofDomains(
     [
@@ -485,17 +582,10 @@ test('inputText keeps the focused selector domain across an intervening proof se
     ],
     {},
   );
-  assert.equal(reactFocus.ok, true);
-  if (reactFocus.ok) {
-    assert.deepEqual(
-      reactFocus.segments.map(({ domain, sourceIndices }) => ({ domain, sourceIndices })),
-      [
-        { domain: 'react-tree', sourceIndices: [0] },
-        { domain: 'xctest-native', sourceIndices: [1] },
-        { domain: 'react-tree', sourceIndices: [2] },
-      ],
-    );
-    assert.equal(reactFocus.segments[2]?.initialReactFocusId, 'email');
+  assert.equal(reactFocus.ok, false);
+  if (!reactFocus.ok) {
+    assert.equal(reactFocus.sourceIndex, 1);
+    assert.match(reactFocus.reason, /relaunches the app/);
   }
 });
 
@@ -560,7 +650,7 @@ test('nested waits before inputText remain native without a React focus anchor',
   }
 });
 
-test('conditional nested tap cannot prove focus for a later inputText', () => {
+test('conditional nested tap cannot prove focus for a later inputText (refused, GH-1075)', () => {
   const plan = planIosProofDomains(
     [
       { tapOn: { id: 'field' } },
@@ -573,12 +663,10 @@ test('conditional nested tap cannot prove focus for a later inputText', () => {
     ],
     {},
   );
-  assert.equal(plan.ok, true);
-  if (plan.ok)
-    assert.deepEqual(
-      plan.segments.map(({ domain }) => domain),
-      ['react-tree', 'xctest-native'],
-    );
+  assert.equal(plan.ok, false);
+  if (plan.ok) return;
+  assert.equal(plan.sourceIndex, 1);
+  assert.match(plan.reason, /relaunches the app/);
 });
 
 test('nested leading inputText preserves native focus after a native tap', () => {
@@ -637,7 +725,7 @@ test('conditional React subflows preserve focus in both directions', async () =>
   ]);
 });
 
-test('partitioned replay carries nested React focus across a native segment', async () => {
+test('partitioned replay carries nested React focus across a native segment (refused, GH-1075)', async () => {
   const calls: string[] = [];
   const handler = createMaestroRunHandler({
     getActiveSession: () => ({
@@ -684,12 +772,13 @@ test('partitioned replay carries nested React focus across a native segment', as
       ...callbacks,
     }),
   );
-  assert.equal(env.ok, true);
-  assert.equal(env.data?.proofDomain, 'partitioned');
-  assert.deepEqual(calls, ['press:outer-field', 'press:inner-field', 'type:inner-field']);
+  assert.equal(env.ok, false);
+  assert.equal(env.code, 'UNSUPPORTED_STEP');
+  assert.match(env.error ?? '', /relaunches the app/);
+  assert.deepEqual(calls, []);
 });
 
-test('a designation-only tap cannot be revived as static React focus after a native segment', async () => {
+test('a designation-only tap cannot be revived as static React focus after a native segment (refused, GH-1075)', async () => {
   const calls: string[] = [];
   const handler = createMaestroRunHandler({
     getActiveSession: () => ({
@@ -734,11 +823,12 @@ test('a designation-only tap cannot be revived as static React focus after a nat
   );
 
   assert.equal(env.ok, false);
-  assert.match(env.error ?? '', /no focus target/);
-  assert.deepEqual(calls, ['press:email', 'type:email:first']);
+  assert.equal(env.code, 'UNSUPPORTED_STEP');
+  assert.match(env.error ?? '', /relaunches the app/);
+  assert.deepEqual(calls, []);
 });
 
-test('inputText follows a nested native tap instead of reviving stale React focus', () => {
+test('inputText follows a nested native tap instead of reviving stale React focus (refused, GH-1075)', () => {
   const plan = planIosProofDomains(
     [
       { tapOn: { id: 'react-field' } },
@@ -752,18 +842,13 @@ test('inputText follows a nested native tap instead of reviving stale React focu
     ],
     {},
   );
-  assert.equal(plan.ok, true);
-  if (!plan.ok) return;
-  assert.deepEqual(
-    plan.segments.map(({ domain, sourceIndices }) => ({ domain, sourceIndices })),
-    [
-      { domain: 'react-tree', sourceIndices: [0] },
-      { domain: 'xctest-native', sourceIndices: [1, 2] },
-    ],
-  );
+  assert.equal(plan.ok, false);
+  if (plan.ok) return;
+  assert.equal(plan.sourceIndex, 1);
+  assert.match(plan.reason, /relaunches the app/);
 });
 
-test('inputText does not retain React authority after a native coordinate tap', () => {
+test('inputText does not retain React authority after a native coordinate tap (refused, GH-1075)', () => {
   for (const nativeCommand of [
     { tap: { point: '50%,50%' } },
     { doubleTapOn: 'Native field' },
@@ -774,15 +859,10 @@ test('inputText does not retain React authority after a native coordinate tap', 
       [{ tapOn: { id: 'react-field' } }, nativeCommand, { inputText: 'value' }],
       {},
     );
-    assert.equal(plan.ok, true);
-    if (!plan.ok) continue;
-    assert.deepEqual(
-      plan.segments.map(({ domain, sourceIndices }) => ({ domain, sourceIndices })),
-      [
-        { domain: 'react-tree', sourceIndices: [0] },
-        { domain: 'xctest-native', sourceIndices: [1, 2] },
-      ],
-    );
+    assert.equal(plan.ok, false);
+    if (plan.ok) continue;
+    assert.equal(plan.sourceIndex, 1);
+    assert.match(plan.reason, /relaunches the app/);
   }
 });
 
@@ -2399,7 +2479,7 @@ test('a deadline-triggered runner abort remains a timeout', async () => {
   assert.match(env.error ?? '', /timed out/);
 });
 
-test('partitioned native trace indices map back to original commands', async () => {
+test('partitioned native trace indices map back to original commands (refused, GH-1075)', async () => {
   const handler = createMaestroRunHandler({
     getActiveSession: () => ({
       name: 'partition-index',
@@ -2433,11 +2513,10 @@ test('partitioned native trace indices map back to original commands', async () 
       ...callbacks,
     }),
   );
-  assert.equal(env.ok, true);
-  assert.deepEqual(
-    env.data?.steps.map((step: { index: number }) => step.index),
-    [0, 1],
-  );
+  assert.equal(env.ok, false);
+  assert.equal(env.code, 'UNSUPPORTED_STEP');
+  assert.match(env.error ?? '', /Refusing iOS proof-domain ambiguity at step 1/);
+  assert.match(env.error ?? '', /relaunches the app/);
 });
 
 test('partitioned route failures retain native and React proof evidence', async () => {
@@ -2493,7 +2572,7 @@ test('partitioned route failures retain native and React proof evidence', async 
   );
 });
 
-test('partitioned native failures map evidence back to original commands', async () => {
+test('partitioned native failures map evidence back to original commands (refused, GH-1075)', async () => {
   const handler = createMaestroRunHandler({
     getActiveSession: () => ({
       name: 'partition-failure-index',
@@ -2531,14 +2610,9 @@ test('partitioned native failures map evidence back to original commands', async
     }),
   );
   assert.equal(env.ok, false);
-  assert.equal(env.meta?.proofDomain, 'partitioned');
-  assert.equal(env.meta?.runner, 'partitioned');
-  assert.deepEqual(
-    env.meta?.steps.map((step: { index: number }) => step.index),
-    [0, 1],
-  );
-  assert.equal(env.meta?.failedStep.index, 1);
-  assert.equal(env.meta?.lastStep.index, 1);
+  assert.equal(env.code, 'UNSUPPORTED_STEP');
+  assert.match(env.error ?? '', /Refusing iOS proof-domain ambiguity at step 1/);
+  assert.match(env.error ?? '', /relaunches the app/);
 });
 
 test('partitioned React failures retain prior native proof evidence', async () => {
@@ -2634,7 +2708,7 @@ test('partitioned React setup failures retain prior native proof evidence', asyn
   );
 });
 
-test('partitioned warning failures retain native data evidence', async () => {
+test('partitioned warning failures retain native data evidence (refused, GH-1075)', async () => {
   const handler = createMaestroRunHandler({
     getActiveSession: () => ({
       name: 'partition-native-warning',
@@ -2669,16 +2743,9 @@ test('partitioned warning failures retain native data evidence', async () => {
     }),
   );
   assert.equal(env.ok, false);
-  assert.equal(env.meta?.proofDomain, 'partitioned');
-  assert.deepEqual(
-    env.meta?.steps.map((step: { index: number; status: string }) => [step.index, step.status]),
-    [
-      [0, 'pass'],
-      [1, 'fail'],
-    ],
-  );
-  assert.equal(env.meta?.failedStep.index, 1);
-  assert.equal(env.meta?.lastStep.index, 1);
+  assert.equal(env.code, 'UNSUPPORTED_STEP');
+  assert.match(env.error ?? '', /Refusing iOS proof-domain ambiguity at step 1/);
+  assert.match(env.error ?? '', /relaunches the app/);
 });
 
 test('native origin is claimed before runner parking and completed after resume', async () => {
