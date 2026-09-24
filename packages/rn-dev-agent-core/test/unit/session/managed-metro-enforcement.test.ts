@@ -112,6 +112,90 @@ const verifiedRuntime = {
   runtimeVersion: () => 'v24.14.0',
 };
 
+test('managed Metro attests every architecture slice of a universal executable', () => {
+  const cdHashes = {
+    x86_64: 'a245' + '0'.repeat(36),
+    arm64e: 'fb61' + '0'.repeat(36),
+    'arm64e.x1': '97b8' + '0'.repeat(36),
+  };
+  const plan = prepareManagedMetroEnforcement(fixtureInput(), {
+    ...verifiedRuntime,
+    run: (_command: string, args: readonly string[]) => {
+      if (args.at(-1) === '/usr/bin/sandbox-exec') return verifiedRuntime.run(_command, args);
+      if (args[0] === '--verify') return { status: 0, stdout: '', stderr: '' };
+      const arch = args.includes('--arch') ? args[args.indexOf('--arch') + 1] : null;
+      return {
+        status: 0,
+        stdout: '',
+        stderr: [
+          `Format=${arch ? `Mach-O thin (${arch})` : 'Mach-O universal (x86_64 arm64e arm64e.x1)'}`,
+          'Identifier=com.apple.bash',
+          'Platform identifier=26',
+          `CDHash=${arch ? cdHashes[arch as keyof typeof cdHashes] : cdHashes['arm64e.x1']}`,
+          'Authority=Software Signing',
+          'Authority=Apple Code Signing Certification Authority',
+          'Authority=Apple Root CA',
+        ].join('\n'),
+      };
+    },
+  });
+  assert.equal(plan.status, 'enforced');
+  if (plan.status !== 'enforced') return;
+  assert.deepEqual(plan.nodeRuntimeAttestation.executable.signingIdentity?.cdHashes, [
+    cdHashes['arm64e.x1'],
+    cdHashes.x86_64,
+    cdHashes.arm64e,
+  ]);
+  assert.equal(
+    plan.nodeRuntimeAttestation.executable.signingIdentity?.cdHash,
+    cdHashes['arm64e.x1'],
+  );
+});
+
+test('managed Metro rejects a universal slice with a different signing identifier', () => {
+  const hash = 'a'.repeat(40);
+  const plan = prepareManagedMetroEnforcement(fixtureInput(), {
+    ...verifiedRuntime,
+    run: (command: string, args: readonly string[]) => {
+      if (args.at(-1) === '/usr/bin/sandbox-exec') return verifiedRuntime.run(command, args);
+      if (args[0] === '--verify') return { status: 0, stdout: '', stderr: '' };
+      return {
+        status: 0,
+        stdout: '',
+        stderr: [
+          'Format=Mach-O universal (arm64e arm64e.x1)',
+          `Identifier=${args.includes('arm64e.x1') ? 'com.apple.other' : 'com.apple.bash'}`,
+          `CDHash=${hash}`,
+        ].join('\n'),
+      };
+    },
+  });
+  assert.equal(plan.status, 'enforced');
+  if (plan.status !== 'enforced') return;
+  assert.equal(plan.nodeRuntimeAttestation.executable.signingIdentity, null);
+});
+
+test('managed Metro attests a thin executable with its default CDHash', () => {
+  const hash = 'b'.repeat(40);
+  const plan = prepareManagedMetroEnforcement(fixtureInput(), {
+    ...verifiedRuntime,
+    run: (command: string, args: readonly string[]) => {
+      if (args.at(-1) === '/usr/bin/sandbox-exec') return verifiedRuntime.run(command, args);
+      if (args[0] === '--verify') return { status: 0, stdout: '', stderr: '' };
+      return {
+        status: 0,
+        stdout: '',
+        stderr: ['Format=Mach-O thin (arm64)', 'Identifier=com.apple.node', `CDHash=${hash}`].join(
+          '\n',
+        ),
+      };
+    },
+  });
+  assert.equal(plan.status, 'enforced');
+  if (plan.status !== 'enforced') return;
+  assert.deepEqual(plan.nodeRuntimeAttestation.executable.signingIdentity?.cdHashes, [hash]);
+});
+
 test('managed Metro keeps strict enforcement unsupported off Darwin', () => {
   assert.deepEqual(prepareManagedMetroEnforcement(fixtureInput('linux'), verifiedPlatformBinary), {
     status: 'unsupported',
@@ -1027,6 +1111,7 @@ test('managed Metro derives a deterministic descendant-capable Darwin profile', 
           'Software Signing',
         ],
         cdHash: '0123456789abcdef0123456789abcdef01234567',
+        cdHashes: ['0123456789abcdef0123456789abcdef01234567'],
         identifier: 'com.apple.sandbox-exec',
       },
     },
@@ -1041,6 +1126,7 @@ test('managed Metro derives a deterministic descendant-capable Darwin profile', 
             'Software Signing',
           ],
           cdHash: '0123456789abcdef0123456789abcdef01234567',
+          cdHashes: ['0123456789abcdef0123456789abcdef01234567'],
           identifier: 'com.apple.sandbox-exec',
         },
       },
@@ -1056,6 +1142,7 @@ test('managed Metro derives a deterministic descendant-capable Darwin profile', 
             'Software Signing',
           ],
           cdHash: '0123456789abcdef0123456789abcdef01234567',
+          cdHashes: ['0123456789abcdef0123456789abcdef01234567'],
           identifier: 'com.apple.sandbox-exec',
         },
       },
@@ -1071,6 +1158,7 @@ test('managed Metro derives a deterministic descendant-capable Darwin profile', 
             'Software Signing',
           ],
           cdHash: '0123456789abcdef0123456789abcdef01234567',
+          cdHashes: ['0123456789abcdef0123456789abcdef01234567'],
           identifier: 'com.apple.sandbox-exec',
         },
       },
@@ -1084,6 +1172,7 @@ test('managed Metro derives a deterministic descendant-capable Darwin profile', 
             'Software Signing',
           ],
           cdHash: '0123456789abcdef0123456789abcdef01234567',
+          cdHashes: ['0123456789abcdef0123456789abcdef01234567'],
           identifier: 'com.apple.sandbox-exec',
         },
       },
@@ -1100,6 +1189,7 @@ test('managed Metro derives a deterministic descendant-capable Darwin profile', 
             'Software Signing',
           ],
           cdHash: '0123456789abcdef0123456789abcdef01234567',
+          cdHashes: ['0123456789abcdef0123456789abcdef01234567'],
           identifier: 'com.apple.sandbox-exec',
         },
       },
@@ -1113,6 +1203,7 @@ test('managed Metro derives a deterministic descendant-capable Darwin profile', 
             'Software Signing',
           ],
           cdHash: '0123456789abcdef0123456789abcdef01234567',
+          cdHashes: ['0123456789abcdef0123456789abcdef01234567'],
           identifier: 'com.apple.sandbox-exec',
         },
       },

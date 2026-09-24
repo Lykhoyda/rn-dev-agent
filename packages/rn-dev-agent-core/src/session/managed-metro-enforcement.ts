@@ -103,6 +103,7 @@ export interface ManagedMetroEnforcementInput {
 export interface ManagedMetroSigningIdentity {
   identifier: string;
   cdHash: string;
+  cdHashes: string[];
   authorities: string[];
 }
 
@@ -283,9 +284,30 @@ function signingIdentity(path: string, run: RunCommand): ManagedMetroSigningIden
   if (details.status !== 0 || !identifier || !/^[a-f0-9]{40,64}$/.test(cdHash ?? '')) {
     return null;
   }
+  const universalFormat = /^Mach-O universal \(([^)]+)\)/.exec(
+    field(details.stderr, 'Format') ?? '',
+  );
+  const cdHashes: string[] = [];
+  if (universalFormat) {
+    for (const arch of universalFormat[1].trim().split(/\s+/)) {
+      const slice = run(DARWIN_CODESIGN_EXECUTABLE, ['-dv', '--verbose=4', '--arch', arch, path]);
+      const sliceHash = field(slice.stderr, 'CDHash');
+      if (
+        slice.status !== 0 ||
+        field(slice.stderr, 'Identifier') !== identifier ||
+        !/^[a-f0-9]{40,64}$/.test(sliceHash ?? '')
+      ) {
+        return null;
+      }
+      cdHashes.push(sliceHash!);
+    }
+  } else {
+    cdHashes.push(cdHash!);
+  }
   return {
     identifier,
     cdHash: cdHash!,
+    cdHashes: [...new Set(cdHashes)].sort(),
     authorities: details.stderr
       .split('\n')
       .filter((line) => line.startsWith('Authority='))
