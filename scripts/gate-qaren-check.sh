@@ -30,6 +30,9 @@ check_args=(check --plan-file "$PLAN" --fresh-install --json)
 if [ -n "${QAREN_DEVICE_UDID:-}" ]; then
   check_args+=(--device "$QAREN_DEVICE_UDID")
 fi
+if [ "${QAREN_BOOT_DEVICE:-}" = "1" ]; then
+  check_args+=(--boot-device)
+fi
 
 # `corepack yarn run` exports COREPACK_* to this script; a pnpm launched with them
 # fails the app's packageManager check, so qaren gets the caller's plain environment.

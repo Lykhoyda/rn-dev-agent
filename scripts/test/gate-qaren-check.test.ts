@@ -117,9 +117,31 @@ test('gate delegates fresh install and device selection to check without device 
       const args = readFileSync(join(f.root, 'args'), 'utf8').trim().split('\n');
       assert.equal(args[0], 'check');
       assert.ok(args.includes('--fresh-install'));
+      assert.ok(!args.includes('--boot-device'));
       assert.equal(args.includes('--device'), selected);
       if (selected) assert.equal(args[args.indexOf('--device') + 1], 'device-test');
       assert.match(output.stdout, /gate:qaren-check: PASS/);
+    }
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('gate forwards only QAREN_BOOT_DEVICE=1 and leaves explicit device enforcement to check', () => {
+  const f = fixture();
+  try {
+    for (const QAREN_BOOT_DEVICE of ['0', 'true', '1']) {
+      for (const selected of [false, true]) {
+        const output = f.run({
+          QAREN_BOOT_DEVICE,
+          ...(selected ? { QAREN_DEVICE_UDID: 'device-test' } : {}),
+        });
+        assert.equal(output.status, 0, output.stdout + output.stderr);
+        const args = readFileSync(join(f.root, 'args'), 'utf8').trim().split('\n');
+        assert.equal(args.includes('--boot-device'), QAREN_BOOT_DEVICE === '1');
+        assert.equal(args.includes('--device'), selected);
+        if (selected) assert.equal(args[args.indexOf('--device') + 1], 'device-test');
+      }
     }
   } finally {
     rmSync(f.root, { recursive: true, force: true });

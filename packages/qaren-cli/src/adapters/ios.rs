@@ -32,16 +32,51 @@ pub fn list_booted_spec() -> CmdSpec {
     )
 }
 
+pub fn canonical_udid(udid: &str) -> Option<String> {
+    (udid.len() == 36
+        && udid.bytes().enumerate().all(|(i, b)| match i {
+            8 | 13 | 18 | 23 => b == b'-',
+            _ => b.is_ascii_hexdigit(),
+        }))
+    .then(|| udid.to_ascii_uppercase())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BootedSim {
+pub enum SimState {
+    Booted,
+    Shutdown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Simulator {
     pub udid: String,
     pub name: String,
     pub device_type: String,
     pub runtime: String,
+    pub state: SimState,
+}
+
+fn parse_sim(runtime: &str, device: &serde_json::Value) -> Option<Simulator> {
+    let field = |key: &str| device.get(key).and_then(|v| v.as_str()).unwrap_or("");
+    let sim = Simulator {
+        udid: field("udid").to_string(),
+        name: field("name").to_string(),
+        device_type: field("deviceTypeIdentifier").to_string(),
+        runtime: runtime.to_string(),
+        state: match field("state") {
+            "Booted" => SimState::Booted,
+            "Shutdown" => SimState::Shutdown,
+            _ => return None,
+        },
+    };
+    if sim.udid.is_empty() || sim.device_type.is_empty() {
+        return None;
+    }
+    Some(sim)
 }
 
 // Booted iOS simulators only; paired watchOS/tvOS runtimes are not walk targets.
-pub fn parse_booted_sims(list_json: &str) -> Option<Vec<BootedSim>> {
+pub fn parse_booted_sims(list_json: &str) -> Option<Vec<Simulator>> {
     let parsed: serde_json::Value = serde_json::from_str(list_json).ok()?;
     let devices = parsed.get("devices")?.as_object()?;
     let mut out = Vec::new();
@@ -53,20 +88,40 @@ pub fn parse_booted_sims(list_json: &str) -> Option<Vec<BootedSim>> {
             if device.get("state").and_then(|s| s.as_str()) != Some("Booted") {
                 continue;
             }
-            let field = |key: &str| device.get(key).and_then(|v| v.as_str()).unwrap_or("");
-            let sim = BootedSim {
-                udid: field("udid").to_string(),
-                name: field("name").to_string(),
-                device_type: field("deviceTypeIdentifier").to_string(),
-                runtime: runtime.clone(),
-            };
-            if sim.udid.is_empty() || sim.device_type.is_empty() {
-                return None;
-            }
-            out.push(sim);
+            out.push(parse_sim(runtime, device)?);
         }
     }
     Some(out)
+}
+
+pub fn parse_selected_sim(list_json: &str, udid: &str) -> Option<Simulator> {
+    let udid = canonical_udid(udid)?;
+    let parsed: serde_json::Value = serde_json::from_str(list_json).ok()?;
+    let devices = parsed.get("devices")?.as_object()?;
+    let mut selected = None;
+    for (runtime, list) in devices {
+        for device in list.as_array()? {
+            let observed = device.get("udid")?.as_str()?;
+            if !observed.eq_ignore_ascii_case(&udid) {
+                continue;
+            }
+            if selected.is_some()
+                || observed != udid
+                || !device.get("isAvailable")?.as_bool()?
+                || runtime
+                    .strip_prefix("com.apple.CoreSimulator.SimRuntime.iOS-")?
+                    .is_empty()
+            {
+                return None;
+            }
+            let sim = parse_sim(runtime, device)?;
+            if sim.name.trim().is_empty() || sim.device_type.trim().is_empty() {
+                return None;
+            }
+            selected = Some(sim);
+        }
+    }
+    selected
 }
 
 pub fn list_devices_spec() -> CmdSpec {

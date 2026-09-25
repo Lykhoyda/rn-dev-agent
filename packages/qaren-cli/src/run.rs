@@ -29,14 +29,15 @@ pub const DEFAULT_WALK_SECONDS: u64 = 1200;
 pub const DEFAULT_STEP_SECONDS: u64 = 1200;
 const MIN_FREE_DISK_KB: u64 = 1024 * 1024;
 
-// `check`: candidate = the working tree at project_root, device = the booted simulator, borrowed.
+// `check` borrows a simulator against the working tree at project_root.
 pub struct RunRequest {
     pub project_root: PathBuf,
     pub config_path: PathBuf,
     pub plan_file: PathBuf,
     pub platform: Platform,
-    // A booted simulator to borrow by UDID; None borrows the only booted one.
+    // None borrows the only booted simulator; boot_device requires an exact UDID.
     pub device: Option<String>,
+    pub boot_device: bool,
     pub fresh_install: bool,
     pub runtime_dir: PathBuf,
     pub node: Option<PathBuf>,
@@ -50,6 +51,7 @@ struct Device {
     id: String,
     name: String,
     ios: Option<(String, String)>,
+    needs_boot: bool,
 }
 
 fn platform_str(platform: Platform) -> &'static str {
@@ -57,6 +59,33 @@ fn platform_str(platform: Platform) -> &'static str {
         Platform::Ios => "ios",
         Platform::Android => "android",
     }
+}
+
+pub fn validate_boot_device(
+    platform: Platform,
+    device: Option<&str>,
+    boot_device: bool,
+) -> Result<(), Failure> {
+    if !boot_device {
+        return Ok(());
+    }
+    if platform != Platform::Ios {
+        return Err(Failure::new(
+            "device",
+            FailureCode::PlatformUnsupported,
+            "--boot-device is only valid for check on iOS",
+            "use --platform ios with an explicit --device UUID",
+        ));
+    }
+    if device.and_then(ios::canonical_udid).is_none() {
+        return Err(Failure::new(
+            "device",
+            FailureCode::DeviceUnavailable,
+            "--boot-device requires --device with an exact iOS simulator UUID",
+            "pass the selected simulator UUID, not a name or booted alias",
+        ));
+    }
+    Ok(())
 }
 
 pub fn run(runner: &mut dyn Runner, req: &RunRequest) -> Receipt {
@@ -95,6 +124,7 @@ fn run_inner(
     started_ms: u64,
     preflight_jev: &mut Option<core::JevRollup>,
 ) -> Result<Receipt, Failure> {
+    validate_boot_device(req.platform, req.device.as_deref(), req.boot_device)?;
     let (config, config_raw) = CheckConfig::load(&req.config_path)?;
     let node = req
         .node
@@ -122,7 +152,7 @@ fn run_inner(
             "leave the plan file alone during the run, then re-run",
         ));
     }
-    let device = resolve_device(runner, req.platform, req.device.as_deref())?;
+    let device = resolve_device(runner, req.platform, req.device.as_deref(), req.boot_device)?;
     let (repo_root, project_rel) = locate_worktree(runner, &req.project_root)?;
     let scenario = build_scenario(&config, req.platform, &device, &repo_root, &project_rel);
     scenario.validate()?;
@@ -197,7 +227,7 @@ fn run_inner(
     };
     let t = ctx.mark("preflight", started_ms);
 
-    if req.fresh_install {
+    if req.fresh_install || req.boot_device {
         if let Err(f) = core::fresh_install_admission(
             ctx.runner,
             &node,
@@ -207,6 +237,13 @@ fn run_inner(
         ) {
             return Ok(finish_failed(ctx, f));
         }
+    }
+    if req.boot_device {
+        if let Err(f) = boot_selected_device(&mut ctx, &device) {
+            return Ok(finish_failed(ctx, f));
+        }
+    }
+    if req.fresh_install {
         if let Err(f) = reset_app(&mut ctx, &device.id, &config.app_id) {
             return Ok(finish_failed(ctx, f));
         }
@@ -474,6 +511,41 @@ fn reset_app(ctx: &mut Ctx, udid: &str, app_id: &str) -> Result<(), Failure> {
     Ok(())
 }
 
+fn boot_selected_device(ctx: &mut Ctx, device: &Device) -> Result<(), Failure> {
+    let failed = |detail| {
+        Failure::new(
+            "boot_device",
+            FailureCode::SimulatorBootFailed,
+            detail,
+            "check the selected simulator's health and inventory, then re-run",
+        )
+    };
+    if device.needs_boot {
+        let output = ctx.runner.run(&ios::bootstatus_spec(
+            &device.id,
+            ctx.record.scenario.deadlines.device_boot_seconds,
+        ));
+        if !output.ok() {
+            return Err(failed(
+                "bootstatus did not complete successfully for the selected simulator",
+            ));
+        }
+    }
+    let output = ctx.runner.run(&ios::list_devices_spec());
+    if output.ok() && output.stderr.is_empty() {
+        if let Some(sim) = ios::parse_selected_sim(&output.stdout, &device.id) {
+            if sim.state == ios::SimState::Booted
+                && device.ios.as_ref().is_some_and(|(device_type, runtime)| {
+                    sim.device_type == *device_type && sim.runtime == *runtime
+                })
+            {
+                return Ok(());
+            }
+        }
+    }
+    Err(failed("inventory did not prove the exact selected simulator Booted with unchanged runtime and device type"))
+}
+
 fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
     let (cleanup, _) = teardown(&mut ctx, false);
     let mut receipt = ctx.fail(failure);
@@ -711,6 +783,7 @@ fn resolve_device(
     runner: &mut dyn Runner,
     platform: Platform,
     device: Option<&str>,
+    boot_device: bool,
 ) -> Result<Device, Failure> {
     match platform {
         Platform::Android => Err(Failure::new(
@@ -720,14 +793,31 @@ fn resolve_device(
             "re-run with --platform ios",
         )),
         Platform::Ios => {
-            let output = runner.run(&ios::list_booted_spec());
-            if !output.ok() {
+            let output = runner.run(&if boot_device { ios::list_devices_spec() } else { ios::list_booted_spec() });
+            if !output.ok() || (boot_device && !output.stderr.is_empty()) {
                 return Err(Failure::new(
                     "device",
                     FailureCode::DeviceUnavailable,
                     format!("simctl list failed: {}", output.summary()),
                     "check Xcode and CoreSimulator, then re-run",
                 ));
+            }
+            let borrow = |sim: &ios::Simulator| Device {
+                id: sim.udid.clone(),
+                name: sim.name.clone(),
+                ios: Some((sim.device_type.clone(), sim.runtime.clone())),
+                needs_boot: sim.state == ios::SimState::Shutdown,
+            };
+            if boot_device {
+                return device
+                    .and_then(|udid| ios::parse_selected_sim(&output.stdout, udid))
+                    .map(|sim| borrow(&sim))
+                    .ok_or_else(|| Failure::new(
+                        "device",
+                        FailureCode::DeviceUnavailable,
+                        "selected UUID is not one available Booted or Shutdown iOS simulator with complete metadata",
+                        "check the exact --device UUID and simulator inventory, then re-run",
+                    ));
             }
             let Some(sims) = ios::parse_booted_sims(&output.stdout) else {
                 return Err(Failure::new(
@@ -736,11 +826,6 @@ fn resolve_device(
                     "simctl list output was unparseable".to_string(),
                     "check Xcode and CoreSimulator, then re-run",
                 ));
-            };
-            let borrow = |sim: &ios::BootedSim| Device {
-                id: sim.udid.clone(),
-                name: sim.name.clone(),
-                ios: Some((sim.device_type.clone(), sim.runtime.clone())),
             };
             if let Some(udid) = device {
                 return match sims.iter().find(|sim| sim.udid == udid) {

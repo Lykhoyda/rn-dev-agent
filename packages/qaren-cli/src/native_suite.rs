@@ -234,15 +234,7 @@ fn execute(runner: &mut dyn Runner, dir: &Path, record: &mut NativeSuite) -> Res
 }
 
 fn canonical_device(device: &str) -> Result<String, String> {
-    if device.len() != 36
-        || !device.bytes().enumerate().all(|(i, b)| match i {
-            8 | 13 | 18 | 23 => b == b'-',
-            _ => b.is_ascii_hexdigit(),
-        })
-    {
-        return Err("--device must be an exact simulator UUID".into());
-    }
-    Ok(device.to_ascii_uppercase())
+    ios::canonical_udid(device).ok_or_else(|| "--device must be an exact simulator UUID".into())
 }
 
 fn select_device(runner: &mut dyn Runner, device: &str) -> Result<String, String> {

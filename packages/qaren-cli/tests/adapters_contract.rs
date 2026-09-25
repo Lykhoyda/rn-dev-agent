@@ -349,6 +349,96 @@ fn sim_presence_parses_simctl_json() {
 }
 
 #[test]
+fn selected_ios_simulator_requires_unique_canonical_available_stable_metadata() {
+    let udid = "1DC408C4-51DA-4C4F-ACA1-39881C916FDD";
+    let runtime = "com.apple.CoreSimulator.SimRuntime.iOS-26-5";
+    let device_type = "com.apple.CoreSimulator.SimDeviceType.iPhone-17";
+    let sim = serde_json::json!({"udid":udid,"name":"selected","state":"Shutdown",
+        "isAvailable":true,"deviceTypeIdentifier":device_type});
+    let inventory = |rt: &str, entries: Vec<serde_json::Value>| {
+        serde_json::json!({"devices":{rt:entries}}).to_string()
+    };
+    for (state, expected) in [
+        ("Shutdown", ios::SimState::Shutdown),
+        ("Booted", ios::SimState::Booted),
+    ] {
+        let mut entry = sim.clone();
+        entry["state"] = state.into();
+        let selected =
+            ios::parse_selected_sim(&inventory(runtime, vec![entry]), &udid.to_lowercase())
+                .unwrap();
+        assert_eq!(selected.udid, udid);
+        assert_eq!(selected.name, "selected");
+        assert_eq!(selected.device_type, device_type);
+        assert_eq!(selected.runtime, runtime);
+        assert_eq!(selected.state, expected);
+    }
+    for (field, value) in [
+        ("udid", serde_json::json!(udid.to_lowercase())),
+        ("udid", serde_json::json!("not-a-uuid")),
+        (
+            "udid",
+            serde_json::json!("76709EFC-0104-4A66-8908-F4F85A76F025"),
+        ),
+        ("name", serde_json::json!("")),
+        ("name", serde_json::json!("   ")),
+        ("deviceTypeIdentifier", serde_json::json!("")),
+        ("deviceTypeIdentifier", serde_json::json!(42)),
+        ("isAvailable", serde_json::json!(false)),
+        ("isAvailable", serde_json::json!("true")),
+        ("state", serde_json::json!("Booting")),
+        ("state", serde_json::json!("Shutting Down")),
+        ("state", serde_json::json!("Unknown")),
+    ] {
+        let mut entry = sim.clone();
+        entry[field] = value;
+        assert!(
+            ios::parse_selected_sim(&inventory(runtime, vec![entry]), udid).is_none(),
+            "{field}"
+        );
+    }
+    for field in [
+        "udid",
+        "name",
+        "state",
+        "isAvailable",
+        "deviceTypeIdentifier",
+    ] {
+        let mut entry = sim.clone();
+        entry.as_object_mut().unwrap().remove(field);
+        assert!(
+            ios::parse_selected_sim(&inventory(runtime, vec![entry]), udid).is_none(),
+            "missing {field}"
+        );
+    }
+    let mut lowercase = sim.clone();
+    lowercase["udid"] = udid.to_lowercase().into();
+    for json in [
+        "not json".into(), "{}".into(), r#"{"devices":[]}"#.into(),
+        r#"{"devices":{"bad":{}}}"#.into(),
+        inventory(runtime, vec![]),
+        inventory(runtime, vec![sim.clone(), sim.clone()]),
+        inventory(runtime, vec![sim.clone(), lowercase]),
+        inventory("", vec![sim.clone()]),
+        inventory("com.apple.CoreSimulator.SimRuntime.iOS-", vec![sim.clone()]),
+        inventory("com.apple.CoreSimulator.SimRuntime.watchOS-26-5", vec![sim.clone()]),
+        inventory("com.apple.CoreSimulator.SimRuntime.tvOS-26-5", vec![sim.clone()]),
+        serde_json::json!({"devices":{runtime:[sim.clone()], "com.apple.CoreSimulator.SimRuntime.watchOS-26-5":[sim.clone()]}}).to_string(),
+    ] {
+        assert!(ios::parse_selected_sim(&json, udid).is_none(), "{json}");
+    }
+    for invalid in [
+        "",
+        "booted",
+        "selected",
+        "1DC408C451DA4C4FACA139881C916FDD",
+        "1DC408C4-51DA-4C4F-ACA1-39881C916FDG",
+    ] {
+        assert!(ios::parse_selected_sim(&inventory(runtime, vec![sim.clone()]), invalid).is_none());
+    }
+}
+
+#[test]
 fn launchctl_parsing_requires_live_pid_and_exact_label() {
     let running = "512\t0\tUIKitApplication:com.rndevagent.testapp[a1b2][rb-legacy]";
     assert!(ios::app_running_in_launchctl(
