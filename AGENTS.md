@@ -178,6 +178,8 @@ Jev unit tests are hermetic. `corepack yarn jev:evals` requires `TYPESAFE_API_KE
 
 For a shutdown iOS target, explicitly pass `check --boot-device --device <UUID>`; the existing lease and durable record precede strict admission, boot and exact-target readiness readback. Default selection remains booted-only, and cleanup keeps the borrowed simulator. The gate forwards this opt-in with `QAREN_BOOT_DEVICE=1` alongside `QAREN_DEVICE_UDID`.
 
+CLI-owned iOS builds require `devClientScheme` in the local app config; after dependency installation, QaReN proves app-local generic-build support before boot/reset, verifies a finite simulator bundle and starts it on the exact owned device with a separate Metro group. If finite-build group cleanup is unknown, the build lock and device lease remain claimed for `qaren cleanup`.
+
 Every `cdp_run_action` RunRecord write goes through the proven-identity action
 write lock (`src/domain/atomic-writer.ts`) until Phase 4 removes RunRecords. A
 shell that cannot execute setuid `/bin/ps` or read `kern.bootsessionuuid`

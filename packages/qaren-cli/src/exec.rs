@@ -177,6 +177,7 @@ pub trait Runner {
         PrivateOutput(CmdOutput::failed(1, "private capture unsupported"))
     }
     fn spawn_group(&mut self, spec: &CmdSpec, log_path: &Path) -> std::io::Result<Spawned>;
+    // Err proves the command child was not spawned; post-spawn failures must retain its handle.
     fn spawn_piped(&mut self, spec: &CmdSpec, stderr_log: &Path) -> std::io::Result<PipedChild>;
     fn sleep(&mut self, duration: Duration);
     fn now_epoch_ms(&self) -> u64;

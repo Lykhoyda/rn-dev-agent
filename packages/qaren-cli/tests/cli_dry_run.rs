@@ -44,6 +44,11 @@ fn dry_run_against_checked_in_ios_scenario_emits_parseable_receipt() {
     assert_eq!(value["verb"], "prepare");
     let result = value["result"].as_str().unwrap();
     match result {
+        "refused" => {
+            assert_eq!(output.status.code(), Some(4));
+            assert_eq!(value["failure"]["code"], "DEV_CLIENT_SCHEME_REQUIRED");
+            assert_eq!(value["commands_executed"], 0);
+        }
         "planned" => {
             assert!(output.status.success());
             let planned = value["planned_commands"].as_array().unwrap();

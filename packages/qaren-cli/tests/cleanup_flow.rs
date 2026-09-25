@@ -12,6 +12,80 @@ use qaren::runrecord::{
 
 const LSTART: &str = "Wed Aug 12 16:01:00 2026";
 
+#[test]
+fn interrupted_finite_build_retains_ownership_until_group_absence_is_proven() {
+    use qaren::runrecord::{BuildLockResource, BuildProcess};
+    for pending in [true, false] {
+        let repo = common::temp_repo();
+        let mut record = core_record(&repo);
+        record.resources.core = None;
+        record.resources.ios_simulator = Some(IosSimResource {
+            udid: "selected-device".into(),
+            name: "qaren-core-run".into(),
+            device_type: "iPhone".into(),
+            runtime: "iOS".into(),
+        });
+        record.resources.build_process = Some(if pending {
+            BuildProcess::SpawnPending
+        } else {
+            BuildProcess::Running {
+                pgid: 5000,
+                identity: Some(common::identity(5000, LSTART)),
+            }
+        });
+        record.resources.build_lock = Some(BuildLockResource {
+            lock_dir: repo.join("locks/native-build-ios"),
+            holder: "qaren-core-run".into(),
+        });
+        std::fs::create_dir_all(&record.resources.build_lock.as_ref().unwrap().lock_dir).unwrap();
+        qaren::buildplan::save_json(
+            &repo.join("locks/native-build-ios/holder.json"),
+            &qaren::buildplan::LockHolder {
+                holder: "qaren-core-run".into(),
+                run_id: "core-run".into(),
+                identity: None,
+                at: "now".into(),
+            },
+        )
+        .unwrap();
+        record.save(&repo).unwrap();
+        let lease_dir = record.resources.lease.as_ref().unwrap().lock_dir.clone();
+        let mut mock = MockRunner::new();
+        if !pending {
+            mock.expect_run("ps -A", CmdOutput::failed(1, "denied"));
+        }
+        let receipt = cleanup(&mut mock, &repo, "core-run");
+        assert!(receipt.cleanup["build_process"].starts_with("unresolved"));
+        assert!(receipt.cleanup["build_lock"].contains("retained"));
+        assert!(receipt.cleanup["simulator"].contains("retained"));
+        assert!(lease_dir.exists());
+        assert!(RunRecord::load(&repo, "core-run")
+            .unwrap()
+            .resources
+            .build_process
+            .is_some());
+        assert!(!mock.calls.iter().any(|c| c.label == "kill-group"));
+        assert_eq!(mock.remaining(), 0);
+        if !pending {
+            let mut recovery = MockRunner::new();
+            recovery.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+            recovery.expect_run("simctl list", CmdOutput::success("{\"devices\":{}}"));
+            let receipt = cleanup(&mut recovery, &repo, "core-run");
+            assert_eq!(receipt.result, ReceiptResult::Cleaned);
+            assert_eq!(receipt.cleanup["build_process"], "absent");
+            assert_eq!(receipt.cleanup["build_lock"], "removed");
+            assert!(!lease_dir.exists());
+            assert!(!repo.join("locks/native-build-ios").exists());
+            assert!(RunRecord::load(&repo, "core-run")
+                .unwrap()
+                .resources
+                .build_process
+                .is_none());
+            assert_eq!(recovery.remaining(), 0);
+        }
+    }
+}
+
 fn core_record(repo: &std::path::Path) -> RunRecord {
     let mut record = common::base_record(
         repo,

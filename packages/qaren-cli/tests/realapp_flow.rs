@@ -361,8 +361,7 @@ fn ios_reuse_path_installs_cached_client_and_never_compiles() {
 
     // A previous build's verified dev client and cache state.
     let app_dir = repo.join("cached").join("testapp.app");
-    std::fs::create_dir_all(&app_dir).unwrap();
-    std::fs::write(app_dir.join("binary"), b"native bits").unwrap();
+    common::write_ios_app(&app_dir);
     let artifact_sha = buildplan::hash_artifact(&app_dir).unwrap();
     // The fingerprint the plan phase will compute for this repo.
     let mut fp_mock = MockRunner::new();
@@ -397,13 +396,14 @@ fn ios_reuse_path_installs_cached_client_and_never_compiles() {
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
     mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
-    mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+    common::script_ios_deps(&mut mock);
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
     mock.expect_run(
         "simctl bootstatus",
         CmdOutput::success("Boot status: finished\n"),
     );
+    common::script_ios_app_verification(&mut mock);
     mock.expect_run("simctl install", CmdOutput::success(""));
     mock.expect_spawn(
         "expo start",
@@ -420,7 +420,10 @@ fn ios_reuse_path_installs_cached_client_and_never_compiles() {
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("6000\n"));
     mock.expect_run("curl", CmdOutput::success("packager-status:running"));
-    mock.expect_run("simctl openurl", CmdOutput::success(""));
+    mock.expect_run(
+        "simctl launch --terminate-running-process",
+        CmdOutput::success(""),
+    );
     // wait_ready
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n"));
@@ -471,14 +474,22 @@ fn ios_reuse_path_installs_cached_client_and_never_compiles() {
         .find(|c| c.label == "simctl-install")
         .unwrap();
     assert_eq!(install.args[3], app_dir.to_string_lossy());
-    let openurl = mock
+    let launch = mock
         .calls
         .iter()
-        .find(|c| c.label == "simctl-openurl")
+        .find(|c| c.label == "simctl-launch")
         .unwrap();
     assert_eq!(
-        openurl.args[3],
-        "rndatest://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8791"
+        launch.args,
+        vec![
+            "simctl",
+            "launch",
+            "--terminate-running-process",
+            UDID,
+            "com.rndevagent.testapp",
+            "--initialUrl",
+            "http://127.0.0.1:8791"
+        ]
     );
     for key in [
         "install_cached",
@@ -563,7 +574,7 @@ fn tampered_cached_artifact_is_refused_for_reuse() {
 #[test]
 fn prewarm_records_lockfile_binding_and_no_secrets() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_reuse_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", repo.display())));
@@ -619,7 +630,7 @@ fn prewarm_records_lockfile_binding_and_no_secrets() {
 #[test]
 fn prewarm_ignores_qaren_state_in_the_drift_comparison() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_reuse_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", repo.display())));
@@ -650,7 +661,7 @@ fn prewarm_ignores_qaren_state_in_the_drift_comparison() {
 #[test]
 fn prewarm_still_fails_on_drift_outside_qaren_state() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_reuse_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", repo.display())));
@@ -733,7 +744,7 @@ fn prewarm_accepts_an_existing_handoff_integration_baseline() {
 fn require_prewarm_yaml(port: u16) -> String {
     format!(
         "{}deps:\n  policy: require-prewarm\n",
-        common::ios_scenario_yaml(port)
+        ios_reuse_scenario_yaml(port)
     )
 }
 
@@ -778,6 +789,10 @@ fn require_prewarm_with_matching_record_installs_offline() {
     mock.expect_run(
         "pnpm install --frozen-lockfile --offline",
         CmdOutput::success(""),
+    );
+    mock.expect_run(
+        "expo run:ios --help",
+        CmdOutput::success(common::IOS_BUILD_HELP),
     );
     // End the walk deterministically at the fingerprint step.
     mock.expect_run("ls-files", CmdOutput::failed(128, "boom"));
@@ -1121,7 +1136,7 @@ fn usb_claim_is_retained_while_the_build_process_group_is_unresolved() {
 #[test]
 fn deps_install_failure_detail_never_carries_registry_credentials() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8796));
+    let scenario_path = write_scenario(&repo, &ios_reuse_scenario_yaml(8796));
 
     let ios_tools = &["git", "pnpm", "node", "lsof", "curl", "ps", "xcrun"];
     let mut mock = MockRunner::new();

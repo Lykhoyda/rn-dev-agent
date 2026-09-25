@@ -209,8 +209,20 @@ pub struct BuildLockResource {
     pub holder: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum BuildProcess {
+    SpawnPending,
+    Running {
+        pgid: i32,
+        identity: Option<PidIdentity>,
+    },
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Resources {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_process: Option<BuildProcess>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ios_simulator: Option<IosSimResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -250,7 +262,8 @@ pub struct Resources {
 
 impl Resources {
     pub fn any_owned(&self) -> bool {
-        self.ios_simulator.is_some()
+        self.build_process.is_some()
+            || self.ios_simulator.is_some()
             || self.metro.is_some()
             || self.farm.is_some()
             || self.tunnel.is_some()

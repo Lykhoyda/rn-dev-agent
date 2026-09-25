@@ -126,6 +126,9 @@ fn run_inner(
 ) -> Result<Receipt, Failure> {
     validate_boot_device(req.platform, req.device.as_deref(), req.boot_device)?;
     let (config, config_raw) = CheckConfig::load(&req.config_path)?;
+    if req.platform == Platform::Ios {
+        ios::require_launch_scheme(config.dev_client_scheme.as_deref())?;
+    }
     let node = req
         .node
         .clone()
@@ -238,6 +241,14 @@ fn run_inner(
             return Ok(finish_failed(ctx, f));
         }
     }
+    if req.platform == Platform::Ios {
+        if let Err(f) = prepare::install_deps(&mut ctx) {
+            return Ok(finish_failed(ctx, f));
+        }
+        if let Err(f) = ios::require_generic_build(ctx.runner, &ctx.record.candidate.project_root) {
+            return Ok(finish_failed(ctx, f));
+        }
+    }
     if req.boot_device {
         if let Err(f) = boot_selected_device(&mut ctx, &device) {
             return Ok(finish_failed(ctx, f));
@@ -249,8 +260,10 @@ fn run_inner(
         }
     }
 
-    if let Err(f) = prepare::install_deps(&mut ctx) {
-        return Ok(finish_failed(ctx, f));
+    if req.platform == Platform::Android {
+        if let Err(f) = prepare::install_deps(&mut ctx) {
+            return Ok(finish_failed(ctx, f));
+        }
     }
     let t = ctx.mark("deps", t);
 
@@ -281,10 +294,7 @@ fn run_inner(
                 return Ok(finish_failed(ctx, f));
             }
         }
-        if let Err(f) = prepare::spawn_build(&mut ctx) {
-            return Ok(finish_failed(ctx, f));
-        }
-        if let Err(f) = prepare::wait_ready(&mut ctx) {
+        if let Err(f) = prepare::build_and_ready(&mut ctx) {
             return Ok(finish_failed(ctx, f));
         }
         ctx.mark("build_and_ready", t)
@@ -557,6 +567,11 @@ fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
 
 fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, bool) {
     let mut outcomes: Vec<(String, Outcome)> = Vec::new();
+    if let Some(outcome) =
+        crate::commands::cleanup::cleanup_build(ctx.runner, &mut ctx.record, &ctx.runs_root)
+    {
+        outcomes.push(("build_process".to_string(), outcome));
+    }
     if let Some(outcome) =
         cleanup_core(ctx.runner, &mut ctx.record, &ctx.runs_root, wait_unresolved)
     {

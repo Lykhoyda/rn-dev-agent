@@ -30,6 +30,8 @@ pub enum FailureCode {
     BuildContended,
     DeviceClaimContended,
     DeviceUnavailable,
+    DevClientSchemeRequired,
+    IosBuildCapabilityUnavailable,
     ArtifactInstallFailed,
     BuildFailed,
     ReadyDeadlineExceeded,
@@ -74,6 +76,8 @@ impl FailureCode {
                 | FailureCode::HandoffEvidenceAmbiguous
                 | FailureCode::HandoffEvidenceMismatch
                 | FailureCode::DeviceBusy
+                | FailureCode::DevClientSchemeRequired
+                | FailureCode::IosBuildCapabilityUnavailable
                 | FailureCode::FreshInstallAdmissionUnknown
                 | FailureCode::AppPresenceUnknown
                 | FailureCode::PlanUnparseable

@@ -90,6 +90,10 @@ pub fn cleanup_with(
 
     let mut outcomes: Vec<(String, Outcome)> = Vec::new();
 
+    if let Some(outcome) = cleanup_build(runner, &mut record, runs_root) {
+        outcomes.push(("build_process".to_string(), outcome));
+    }
+
     if let Some(outcome) = cleanup_core(runner, &mut record, runs_root, false) {
         outcomes.push(("core".to_string(), outcome));
     }
@@ -105,6 +109,10 @@ pub fn cleanup_with(
             if let Some(sim) = record.resources.ios_simulator.clone() {
                 let outcome = if record.resources.device_borrowed {
                     Outcome::Kept
+                } else if record.resources.build_process.is_some() {
+                    Outcome::Unresolved(
+                        "build process cleanup is unproven; simulator retained".into(),
+                    )
                 } else {
                     cleanup_simulator(runner, &sim.udid, &sim.name)
                 };
@@ -338,7 +346,9 @@ pub fn cleanup_with(
     }
 
     if let Some(lock) = record.resources.build_lock.clone() {
-        let outcome =
+        let outcome = if record.resources.build_process.is_some() {
+            Outcome::Unresolved("build process cleanup is unproven; build lock retained".into())
+        } else {
             match crate::buildplan::release_lock(&lock.lock_dir, &lock.holder, &record.run_id) {
                 crate::buildplan::ReleaseOutcome::Removed => Outcome::Removed,
                 crate::buildplan::ReleaseOutcome::Absent => Outcome::Absent,
@@ -348,7 +358,8 @@ pub fn cleanup_with(
                 crate::buildplan::ReleaseOutcome::Foreign(_) => Outcome::Absent,
                 crate::buildplan::ReleaseOutcome::Refused(reason) => Outcome::Refused(reason),
                 crate::buildplan::ReleaseOutcome::Unresolved(reason) => Outcome::Unresolved(reason),
-            };
+            }
+        };
         outcomes.push(("build_lock".to_string(), outcome));
     }
 
@@ -900,6 +911,33 @@ fn kill_group(runner: &mut dyn Runner, pgid: i32, signal: &str) {
         &[signal, "--", &format!("-{pgid}")],
         10,
     ));
+}
+
+pub(crate) fn cleanup_build(
+    runner: &mut dyn Runner,
+    record: &mut RunRecord,
+    runs_root: &Path,
+) -> Option<Outcome> {
+    use crate::runrecord::BuildProcess;
+    let process = record.resources.build_process.clone()?;
+    let outcome = match &process {
+        BuildProcess::SpawnPending => {
+            Outcome::Unresolved("build spawn identity is unproven".into())
+        }
+        BuildProcess::Running { pgid, identity } => {
+            cleanup_process_group(runner, identity.as_ref(), *pgid, None)
+        }
+    };
+    if outcome.clean() {
+        record.resources.build_process = None;
+        if record.save(runs_root).is_err() {
+            record.resources.build_process = Some(process);
+            return Some(Outcome::Unresolved(
+                "build retirement could not be persisted".into(),
+            ));
+        }
+    }
+    Some(outcome)
 }
 
 pub(crate) fn cleanup_core(

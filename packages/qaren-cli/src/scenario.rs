@@ -46,6 +46,12 @@ pub struct CandidateSpec {
     pub dev_client_scheme: Option<String>,
 }
 
+pub(crate) fn is_uri_scheme(scheme: &str) -> bool {
+    let mut bytes = scheme.bytes();
+    bytes.next().is_some_and(|b| b.is_ascii_alphabetic())
+        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'.' | b'-'))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MetroSpec {
@@ -308,13 +314,11 @@ impl Scenario {
             }
         }
         if let Some(scheme) = &self.candidate.dev_client_scheme {
-            let mut chars = scheme.chars();
-            let scheme_ok = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
-                && chars.all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '.' || c == '-');
-            if !scheme_ok {
-                return Err(invalid(format!(
-                    "candidate.dev_client_scheme {scheme:?} must be a URI scheme ([A-Za-z][A-Za-z0-9+.-]*)"
-                )));
+            if !is_uri_scheme(scheme) {
+                return Err(invalid(
+                    "candidate.dev_client_scheme must be a URI scheme ([A-Za-z][A-Za-z0-9+.-]*)"
+                        .into(),
+                ));
             }
         }
         for (field, value) in [

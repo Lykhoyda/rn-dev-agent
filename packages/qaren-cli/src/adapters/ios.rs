@@ -1,6 +1,71 @@
 use crate::exec::{CmdSpec, Runner};
 use std::path::Path;
 
+pub fn require_launch_scheme(scheme: Option<&str>) -> Result<(), crate::failure::Failure> {
+    if scheme.is_some_and(|s| s.len() <= 128 && crate::scenario::is_uri_scheme(s)) {
+        return Ok(());
+    }
+    Err(crate::failure::Failure::new(
+        "config",
+        crate::failure::FailureCode::DevClientSchemeRequired,
+        "iOS CLI-owned builds require a 1–128-byte dev-client URI scheme matching [A-Za-z][A-Za-z0-9+.-]*",
+        "set devClientScheme in .qaren/config.yaml (candidate.dev_client_scheme for prepare) to the app's registered URI scheme",
+    ))
+}
+
+pub fn require_generic_build(
+    runner: &mut dyn Runner,
+    project_root: &Path,
+) -> Result<(), crate::failure::Failure> {
+    use std::os::unix::fs::PermissionsExt;
+    let refused = crate::failure::Failure::new(
+        "preflight",
+        crate::failure::FailureCode::IosBuildCapabilityUnavailable,
+        "app-local Expo CLI does not prove generic iOS build-only support with --output and --no-bundler",
+        "install app-local dependencies with an Expo CLI supporting generic iOS build-only output, then retry",
+    );
+    if !std::fs::metadata(project_root.join("node_modules/.bin/expo"))
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    {
+        return Err(refused);
+    }
+    let output = runner.run_private(
+        &CmdSpec::new(
+            "expo-ios-build-help",
+            "pnpm",
+            &["exec", "expo", "run:ios", "--help"],
+            15,
+        )
+        .cwd(project_root)
+        .env("CI", "1")
+        .env("EXPO_NO_TELEMETRY", "1")
+        .env("EXPO_OFFLINE", "1")
+        .env("COREPACK_ENABLE_NETWORK", "0")
+        .env("NO_COLOR", "1"),
+        &[],
+    );
+    let option = |flag: &str| {
+        output.stdout().lines().find_map(|line| {
+            let line = line.trim_start();
+            let line = line
+                .strip_prefix("-d, ")
+                .or_else(|| line.strip_prefix("-o, "))
+                .unwrap_or(line);
+            line.strip_prefix(flag)
+                .and_then(|tail| tail.strip_prefix(' '))
+        })
+    };
+    if !output.clean()
+        || output.stdout().len() > 64 * 1024
+        || option("--no-bundler").is_none()
+        || !option("--output").is_some_and(|tail| tail.starts_with("<path>"))
+        || !option("--device").is_some_and(|tail| tail.contains("\"generic\" for build-only"))
+    {
+        return Err(refused);
+    }
+    Ok(())
+}
+
 pub fn sim_name(run_id: &str) -> String {
     format!("qaren-{run_id}")
 }
@@ -218,11 +283,19 @@ pub fn uninstall_app_spec(udid: &str, app_id: &str) -> CmdSpec {
     )
 }
 
-pub fn openurl_spec(udid: &str, url: &str) -> CmdSpec {
+pub fn launch_spec(udid: &str, app_id: &str, metro_port: u16) -> CmdSpec {
     CmdSpec::new(
-        "simctl-openurl",
+        "simctl-launch",
         "xcrun",
-        &["simctl", "openurl", udid, url],
+        &[
+            "simctl",
+            "launch",
+            "--terminate-running-process",
+            udid,
+            app_id,
+            "--initialUrl",
+            &format!("http://127.0.0.1:{metro_port}"),
+        ],
         60,
     )
 }
@@ -240,7 +313,7 @@ pub fn delete_spec(udid: &str) -> CmdSpec {
     CmdSpec::new("simctl-delete", "xcrun", &["simctl", "delete", udid], 120)
 }
 
-pub fn build_spec(project_root: &Path, udid: &str, port: u16, deadline_seconds: u64) -> CmdSpec {
+pub fn build_spec(project_root: &Path, output: &Path, deadline_seconds: u64) -> CmdSpec {
     CmdSpec::new(
         "expo-run-ios",
         "pnpm",
@@ -249,15 +322,225 @@ pub fn build_spec(project_root: &Path, udid: &str, port: u16, deadline_seconds: 
             "expo",
             "run:ios",
             "--device",
-            udid,
-            "--port",
-            &port.to_string(),
+            "generic",
+            "--no-bundler",
+            "--output",
+            &output.to_string_lossy(),
         ],
         deadline_seconds,
     )
     .cwd(project_root)
     .env("CI", "1")
     .env("EXPO_NO_TELEMETRY", "1")
+}
+
+pub fn built_app(output: &Path) -> Result<std::path::PathBuf, String> {
+    if !std::fs::symlink_metadata(output)
+        .map_err(|e| e.to_string())?
+        .is_dir()
+    {
+        return Err("build output is not a real directory".into());
+    }
+    let mut apps = Vec::new();
+    for entry in std::fs::read_dir(output).map_err(|e| e.to_string())? {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        if path.extension().is_some_and(|ext| ext == "app") {
+            apps.push(path);
+        }
+    }
+    match apps.as_slice() {
+        [app] => Ok(app.clone()),
+        _ => Err(format!(
+            "expected exactly one simulator .app, found {}",
+            apps.len()
+        )),
+    }
+}
+
+pub fn verify_app(
+    runner: &mut dyn Runner,
+    path: &Path,
+    app_id: &str,
+    scheme: &str,
+) -> Result<crate::buildplan::CachedArtifact, String> {
+    use std::os::unix::fs::PermissionsExt;
+    fn regular_tree(path: &Path) -> Result<(), String> {
+        let meta = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        if meta.is_dir() {
+            for entry in std::fs::read_dir(path).map_err(|e| e.to_string())? {
+                regular_tree(&entry.map_err(|e| e.to_string())?.path())?;
+            }
+        } else if !meta.is_file() {
+            return Err("app bundle contains a symlink or special file".into());
+        }
+        Ok(())
+    }
+    if !path.is_dir() || path.extension().is_none_or(|ext| ext != "app") {
+        return Err("artifact is not an app bundle directory".into());
+    }
+    regular_tree(path)?;
+    let info = runner.run_private(
+        &CmdSpec::new(
+            "ios-app-info",
+            "plutil",
+            &[
+                "-convert",
+                "json",
+                "-o",
+                "-",
+                &path.join("Info.plist").to_string_lossy(),
+            ],
+            10,
+        ),
+        &[],
+    );
+    if !info.clean() {
+        return Err("app Info.plist could not be read".into());
+    }
+    let info: serde_json::Value =
+        serde_json::from_str(info.stdout()).map_err(|_| "app Info.plist is not an object")?;
+    if info["CFBundleIdentifier"].as_str() != Some(app_id)
+        || info["CFBundlePackageType"].as_str() != Some("APPL")
+        || info["CFBundleSupportedPlatforms"] != serde_json::json!(["iPhoneSimulator"])
+        || !info["CFBundleURLTypes"].as_array().is_some_and(|types| {
+            types.iter().any(|t| {
+                t["CFBundleURLSchemes"]
+                    .as_array()
+                    .is_some_and(|s| s.iter().any(|s| s.as_str() == Some(scheme)))
+            })
+        })
+    {
+        return Err(
+            "app bundle identity, simulator platform or launch scheme does not match".into(),
+        );
+    }
+    let executable = info["CFBundleExecutable"]
+        .as_str()
+        .ok_or("app executable is missing")?;
+    if executable.is_empty() || executable == "." || executable == ".." || executable.contains('/')
+    {
+        return Err("app executable is not a bundle-local filename".into());
+    }
+    let executable = path.join(executable);
+    let meta = std::fs::metadata(&executable).map_err(|_| "app executable is missing")?;
+    if !meta.is_file() || meta.len() < 4 || meta.permissions().mode() & 0o111 == 0 {
+        return Err("app executable is not usable".into());
+    }
+    let binary = runner.run_private(
+        &CmdSpec::new(
+            "ios-app-platform",
+            "xcrun",
+            &["vtool", "-show-build", &executable.to_string_lossy()],
+            10,
+        ),
+        &[],
+    );
+    let platforms: Vec<_> = binary
+        .stdout()
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("platform "))
+        .collect();
+    if !binary.clean()
+        || platforms.is_empty()
+        || platforms.iter().any(|p| p.trim() != "IOSSIMULATOR")
+    {
+        return Err("app executable does not prove an iOS simulator build".into());
+    }
+    verify_initial_url_launcher(runner, path, &executable)?;
+    Ok(crate::buildplan::CachedArtifact {
+        path: path.to_path_buf(),
+        sha256: crate::buildplan::hash_artifact(path)?,
+        kind: crate::buildplan::ArtifactKind::AppBundle,
+    })
+}
+
+fn verify_initial_url_launcher(
+    runner: &mut dyn Runner,
+    app: &Path,
+    executable: &Path,
+) -> Result<(), String> {
+    let refused = "app does not prove support for direct Metro launch via --initialUrl";
+    if app.join("main.jsbundle").exists() {
+        return Err(refused.into());
+    }
+    let linked = runner.run_private(
+        &CmdSpec::new(
+            "ios-app-linked-images",
+            "xcrun",
+            &["otool", "-L", &executable.to_string_lossy()],
+            10,
+        ),
+        &[],
+    );
+    if !linked.clean() {
+        return Err(refused.into());
+    }
+    // Xcode's debug executable may delegate to a bundle-local dylib.
+    let debug_name = format!(
+        "{}.debug.dylib",
+        executable.file_name().unwrap().to_string_lossy()
+    );
+    let debug_link = format!("@rpath/{debug_name}");
+    let image = if linked.stdout().lines().skip(1).any(|line| {
+        line.rsplit_once(" (compatibility version ")
+            .is_some_and(|(name, _)| name.trim() == debug_link)
+    }) {
+        app.join(debug_name)
+    } else {
+        executable.to_path_buf()
+    };
+    if !image.is_file() {
+        return Err(refused.into());
+    }
+    let symbols = runner.run_private(
+        &CmdSpec::new(
+            "ios-app-launcher-symbols",
+            "xcrun",
+            &["nm", "-j", "-U", &image.to_string_lossy()],
+            10,
+        ),
+        &[],
+    );
+    if !symbols.clean()
+        || ![
+            "+[EXDevLauncherController initialUrlFromProcessInfo]",
+            "-[EXDevLauncherController start:launchOptions:]",
+            "-[EXDevLauncherController loadApp:withProjectUrl:onSuccess:onError:]",
+        ]
+        .iter()
+        .all(|required| symbols.stdout().lines().any(|line| line == *required))
+    {
+        return Err(refused.into());
+    }
+    let strings = runner.run_private(
+        &CmdSpec::new(
+            "ios-app-launcher-arguments",
+            "xcrun",
+            &[
+                "otool",
+                "-v",
+                "-s",
+                "__TEXT",
+                "__cstring",
+                &image.to_string_lossy(),
+            ],
+            10,
+        ),
+        &[],
+    );
+    if !strings.clean()
+        || !strings.stdout().lines().any(|line| {
+            let mut fields = line.split_whitespace();
+            fields
+                .next()
+                .is_some_and(|address| address.bytes().all(|b| b.is_ascii_hexdigit()))
+                && fields.next() == Some("--initialUrl")
+                && fields.next().is_none()
+        })
+    {
+        return Err(refused.into());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
