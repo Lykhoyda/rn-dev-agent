@@ -1,18 +1,6 @@
 use crate::exec::{CmdSpec, Runner};
 use std::path::Path;
 
-pub fn require_launch_scheme(scheme: Option<&str>) -> Result<(), crate::failure::Failure> {
-    if scheme.is_some_and(|s| s.len() <= 128 && crate::scenario::is_uri_scheme(s)) {
-        return Ok(());
-    }
-    Err(crate::failure::Failure::new(
-        "config",
-        crate::failure::FailureCode::DevClientSchemeRequired,
-        "iOS CLI-owned builds require a 1–128-byte dev-client URI scheme matching [A-Za-z][A-Za-z0-9+.-]*",
-        "set devClientScheme in .qaren/config.yaml (candidate.dev_client_scheme for prepare) to the app's registered URI scheme",
-    ))
-}
-
 pub fn require_generic_build(
     runner: &mut dyn Runner,
     project_root: &Path,

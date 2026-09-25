@@ -5,44 +5,6 @@ use qaren::exec::CmdOutput;
 use std::path::Path;
 
 #[test]
-fn ios_launch_scheme_requires_bounded_rfc3986_syntax() {
-    for scheme in ["rndatest", "A", "Expo+test-1.2", &"a".repeat(128)] {
-        assert!(
-            ios::require_launch_scheme(Some(scheme)).is_ok(),
-            "{scheme:?}"
-        );
-    }
-    for scheme in [
-        None,
-        Some(""),
-        Some(" "),
-        Some(" rndatest"),
-        Some("rndatest "),
-        Some("rnda test"),
-        Some("rnda\ntest"),
-        Some("rnda\ttest"),
-        Some("rnda\0test"),
-        Some("1rndatest"),
-        Some("+rndatest"),
-        Some("rnda/test"),
-        Some("rndatest://"),
-        Some("rnda_test"),
-        Some("rndatést"),
-        Some(&"a".repeat(129)),
-    ] {
-        let failure = ios::require_launch_scheme(scheme).expect_err("invalid scheme must refuse");
-        assert_eq!(
-            failure.code,
-            qaren::failure::FailureCode::DevClientSchemeRequired
-        );
-        assert_eq!(
-            failure.detail,
-            ios::require_launch_scheme(None).unwrap_err().detail
-        );
-    }
-}
-
-#[test]
 fn app_inventory_conversion_is_private_stdin_only_and_uses_exact_bundle_lookup() {
     let plist = include_str!("fixtures/installed-apps.plist");
     let converted = r#"{"com.rndevagent.testapp":{"CFBundleIdentifier":"com.rndevagent.testapp","Path":"/private/fixture/Applications/Test.app"},"com.private.unrelated":{"CFBundleIdentifier":"com.private.unrelated","DataContainer":"file:///private/fixture/Data/OTHER"}}"#;

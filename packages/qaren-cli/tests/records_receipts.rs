@@ -5,6 +5,95 @@ use qaren::receipt::{Receipt, ReceiptResult, RECEIPT_SCHEMA};
 use qaren::runrecord::{validate_run_id, Phase, RunRecord, RUN_SCHEMA};
 
 #[test]
+fn build_spawn_requires_pending_and_rejects_replacement_or_invalid_identity() {
+    use qaren::runrecord::{BuildProcess, Resources};
+    let mut resources = Resources::default();
+    let identity = common::identity(5000, "Wed Aug 12 16:01:00 2026");
+    assert!(resources.can_release_build_ownership());
+    assert!(resources
+        .record_build_spawned(5000, Some(identity.clone()))
+        .is_err());
+    assert!(resources.build_process().is_none());
+
+    resources.begin_build().unwrap();
+    assert!(!resources.can_release_build_ownership());
+    assert!(resources.begin_build().is_err());
+    for (pgid, identity) in [
+        (-5000, None),
+        (0, None),
+        (1, None),
+        (5001, Some(identity.clone())),
+        (5000, Some(common::identity(5000, " "))),
+    ] {
+        assert!(resources.record_build_spawned(pgid, identity).is_err());
+        assert!(matches!(
+            resources.build_process(),
+            Some(BuildProcess::SpawnPending)
+        ));
+        assert!(!resources.can_release_build_ownership());
+    }
+
+    resources
+        .record_build_spawned(5000, Some(identity))
+        .unwrap();
+    let running = serde_json::to_value(&resources).unwrap();
+    assert!(resources.begin_build().is_err());
+    assert!(resources.record_build_spawned(6000, None).is_err());
+    assert_eq!(serde_json::to_value(&resources).unwrap(), running);
+    assert!(!resources.can_release_build_ownership());
+}
+
+#[test]
+fn build_retirement_requires_evidence_for_the_recorded_state_and_group() {
+    use qaren::runrecord::{BuildCompletionEvidence, GroupCleanupResult, Resources};
+    let group = |pgid, outcome| BuildCompletionEvidence::Group { pgid, outcome };
+    let mut resources = Resources::default();
+    assert!(resources
+        .finish_build(BuildCompletionEvidence::NotSpawned)
+        .is_err());
+    assert!(resources
+        .finish_build(group(5000, GroupCleanupResult::Absent))
+        .is_err());
+
+    resources.begin_build().unwrap();
+    for outcome in [GroupCleanupResult::Absent, GroupCleanupResult::Removed] {
+        assert!(resources.finish_build(group(5000, outcome)).is_err());
+        assert!(!resources.can_release_build_ownership());
+    }
+    resources
+        .finish_build(BuildCompletionEvidence::NotSpawned)
+        .unwrap();
+    assert!(resources.can_release_build_ownership());
+
+    for identity in [
+        None,
+        Some(common::identity(5000, "Wed Aug 12 16:01:00 2026")),
+    ] {
+        for outcome in [GroupCleanupResult::Absent, GroupCleanupResult::Removed] {
+            resources.begin_build().unwrap();
+            resources
+                .record_build_spawned(5000, identity.clone())
+                .unwrap();
+            let running = serde_json::to_value(&resources).unwrap();
+            for evidence in [
+                BuildCompletionEvidence::NotSpawned,
+                group(6000, GroupCleanupResult::Absent),
+                group(6000, GroupCleanupResult::Removed),
+                group(5000, GroupCleanupResult::Refused),
+                group(5000, GroupCleanupResult::Unresolved),
+            ] {
+                assert!(resources.finish_build(evidence).is_err());
+                assert_eq!(serde_json::to_value(&resources).unwrap(), running);
+                assert!(!resources.can_release_build_ownership());
+            }
+            resources.finish_build(group(5000, outcome)).unwrap();
+            assert!(resources.can_release_build_ownership());
+            assert!(resources.finish_build(group(5000, outcome)).is_err());
+        }
+    }
+}
+
+#[test]
 fn run_record_round_trips() {
     let repo = common::temp_repo();
     let mut record = common::base_record(

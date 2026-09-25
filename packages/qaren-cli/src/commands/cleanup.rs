@@ -3,7 +3,7 @@ use crate::exec::{CmdOutput, CmdSpec, Runner};
 use crate::failure::{Failure, FailureCode};
 use crate::receipt::{Receipt, ReceiptResult};
 use crate::runrecord::{
-    probe_pid_identity, AppRemoval, Phase, PidIdentity, PidLiveness, RunRecord,
+    probe_pid_identity, AppRemoval, GroupCleanupResult, Phase, PidIdentity, PidLiveness, RunRecord,
 };
 use crate::scenario::Platform;
 use crate::timefmt;
@@ -33,6 +33,15 @@ impl Outcome {
 
     pub(crate) fn clean(&self) -> bool {
         matches!(self, Outcome::Removed | Outcome::Absent | Outcome::Kept)
+    }
+
+    fn group_result(&self) -> GroupCleanupResult {
+        match self {
+            Outcome::Removed => GroupCleanupResult::Removed,
+            Outcome::Absent => GroupCleanupResult::Absent,
+            Outcome::Refused(_) => GroupCleanupResult::Refused,
+            _ => GroupCleanupResult::Unresolved,
+        }
     }
 }
 
@@ -109,7 +118,7 @@ pub fn cleanup_with(
             if let Some(sim) = record.resources.ios_simulator.clone() {
                 let outcome = if record.resources.device_borrowed {
                     Outcome::Kept
-                } else if record.resources.build_process.is_some() {
+                } else if !record.resources.can_release_build_ownership() {
                     Outcome::Unresolved(
                         "build process cleanup is unproven; simulator retained".into(),
                     )
@@ -334,7 +343,7 @@ pub fn cleanup_with(
 
     if let Some(lease) = record.resources.lease.clone() {
         let unclean = unclean_legs(&outcomes);
-        let outcome = if unclean.is_empty() {
+        let outcome = if record.resources.can_release_build_ownership() && unclean.is_empty() {
             release_lease_outcome(crate::lease::release(&lease))
         } else {
             retained_lease_outcome(&unclean, &record.run_id)
@@ -346,7 +355,7 @@ pub fn cleanup_with(
     }
 
     if let Some(lock) = record.resources.build_lock.clone() {
-        let outcome = if record.resources.build_process.is_some() {
+        let outcome = if !record.resources.can_release_build_ownership() {
             Outcome::Unresolved("build process cleanup is unproven; build lock retained".into())
         } else {
             match crate::buildplan::release_lock(&lock.lock_dir, &lock.holder, &record.run_id) {
@@ -918,24 +927,33 @@ pub(crate) fn cleanup_build(
     record: &mut RunRecord,
     runs_root: &Path,
 ) -> Option<Outcome> {
-    use crate::runrecord::BuildProcess;
-    let process = record.resources.build_process.clone()?;
-    let outcome = match &process {
+    use crate::runrecord::{BuildCompletionEvidence, BuildProcess};
+    let (pgid, outcome) = match record.resources.build_process()? {
         BuildProcess::SpawnPending => {
-            Outcome::Unresolved("build spawn identity is unproven".into())
+            return Some(Outcome::Unresolved(
+                "build spawn identity is unproven".into(),
+            ))
         }
-        BuildProcess::Running { pgid, identity } => {
-            cleanup_process_group(runner, identity.as_ref(), *pgid, None)
-        }
+        BuildProcess::Running { pgid, identity } => (
+            *pgid,
+            cleanup_process_group(runner, identity.as_ref(), *pgid, None),
+        ),
     };
-    if outcome.clean() {
-        record.resources.build_process = None;
-        if record.save(runs_root).is_err() {
-            record.resources.build_process = Some(process);
+    let mut retired = record.clone();
+    if retired
+        .resources
+        .finish_build(BuildCompletionEvidence::Group {
+            pgid,
+            outcome: outcome.group_result(),
+        })
+        .is_ok()
+    {
+        if retired.save(runs_root).is_err() {
             return Some(Outcome::Unresolved(
                 "build retirement could not be persisted".into(),
             ));
         }
+        *record = retired;
     }
     Some(outcome)
 }
@@ -946,7 +964,7 @@ pub(crate) fn cleanup_core(
     runs_root: &Path,
     wait_unresolved: bool,
 ) -> Option<Outcome> {
-    use crate::runrecord::{CoreCleanupEvidence, GroupCleanupResult};
+    use crate::runrecord::CoreCleanupEvidence;
     let core = record.resources.core.clone()?;
     let mut outcome = cleanup_process_group(runner, core.identity.as_ref(), core.pgid, None);
     if wait_unresolved && outcome.clean() {
@@ -957,12 +975,7 @@ pub(crate) fn cleanup_core(
         run_id: record.run_id.clone(),
         pgid: core.pgid,
         at: timefmt::iso8601_utc(runner.now_epoch_ms()),
-        outcome: match &outcome {
-            Outcome::Removed => GroupCleanupResult::Removed,
-            Outcome::Absent => GroupCleanupResult::Absent,
-            Outcome::Refused(_) => GroupCleanupResult::Refused,
-            _ => GroupCleanupResult::Unresolved,
-        },
+        outcome: outcome.group_result(),
     });
     if record.save(runs_root).is_err() {
         record.resources.core_cleanup = previous;

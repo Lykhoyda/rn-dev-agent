@@ -126,9 +126,7 @@ fn run_inner(
 ) -> Result<Receipt, Failure> {
     validate_boot_device(req.platform, req.device.as_deref(), req.boot_device)?;
     let (config, config_raw) = CheckConfig::load(&req.config_path)?;
-    if req.platform == Platform::Ios {
-        ios::require_launch_scheme(config.dev_client_scheme.as_deref())?;
-    }
+    config.validate_for_platform(req.platform)?;
     let node = req
         .node
         .clone()
@@ -187,6 +185,18 @@ fn run_inner(
     if let Err(f) = claim_run_dir(&run_dir) {
         return Err(lease::release_or_annotate(&lease, f));
     }
+    let mut resources = Resources::default();
+    resources.lease = Some(lease.clone());
+    resources.device_borrowed = true;
+    resources.ios_simulator = device
+        .ios
+        .as_ref()
+        .map(|(device_type, runtime)| IosSimResource {
+            udid: device.id.clone(),
+            name: device.name.clone(),
+            device_type: device_type.clone(),
+            runtime: runtime.clone(),
+        });
     let record = RunRecord {
         schema: RUN_SCHEMA.to_string(),
         run_id: run_id.clone(),
@@ -199,20 +209,7 @@ fn run_inner(
         prepare: identity,
         build: None,
         handoff: None,
-        resources: Resources {
-            lease: Some(lease.clone()),
-            device_borrowed: true,
-            ios_simulator: device
-                .ios
-                .as_ref()
-                .map(|(device_type, runtime)| IosSimResource {
-                    udid: device.id.clone(),
-                    name: device.name.clone(),
-                    device_type: device_type.clone(),
-                    runtime: runtime.clone(),
-                }),
-            ..Default::default()
-        },
+        resources,
         failure: None,
         history: Vec::new(),
     };
@@ -246,6 +243,17 @@ fn run_inner(
             return Ok(finish_failed(ctx, f));
         }
         if let Err(f) = ios::require_generic_build(ctx.runner, &ctx.record.candidate.project_root) {
+            return Ok(finish_failed(ctx, f));
+        }
+    }
+    if req.fresh_install || req.boot_device {
+        if let Err(f) = core::fresh_install_admission(
+            ctx.runner,
+            &node,
+            &req.runtime_dir,
+            &req.project_root,
+            &device.id,
+        ) {
             return Ok(finish_failed(ctx, f));
         }
     }
@@ -595,7 +603,7 @@ fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, boo
     }
     if let Some(lease) = ctx.record.resources.lease.clone() {
         let unclean = unclean_legs(&outcomes);
-        let outcome = if unclean.is_empty() {
+        let outcome = if ctx.record.resources.can_release_build_ownership() && unclean.is_empty() {
             let outcome = release_lease_outcome(lease::release(&lease));
             if outcome.clean() {
                 ctx.record.resources.lease = None;

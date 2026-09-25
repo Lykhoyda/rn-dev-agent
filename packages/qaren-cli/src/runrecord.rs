@@ -219,10 +219,19 @@ pub enum BuildProcess {
     },
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum BuildCompletionEvidence {
+    NotSpawned,
+    Group {
+        pgid: i32,
+        outcome: GroupCleanupResult,
+    },
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Resources {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub build_process: Option<BuildProcess>,
+    build_process: Option<BuildProcess>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ios_simulator: Option<IosSimResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -261,6 +270,67 @@ pub struct Resources {
 }
 
 impl Resources {
+    pub fn build_process(&self) -> Option<&BuildProcess> {
+        self.build_process.as_ref()
+    }
+
+    pub fn can_release_build_ownership(&self) -> bool {
+        self.build_process.is_none()
+    }
+
+    pub fn begin_build(&mut self) -> Result<(), Failure> {
+        if self.build_process.is_some() {
+            return Err(Self::invalid_build_transition());
+        }
+        self.build_process = Some(BuildProcess::SpawnPending);
+        Ok(())
+    }
+
+    pub fn record_build_spawned(
+        &mut self,
+        pgid: i32,
+        identity: Option<PidIdentity>,
+    ) -> Result<(), Failure> {
+        if !matches!(self.build_process, Some(BuildProcess::SpawnPending))
+            || pgid < 2
+            || identity
+                .as_ref()
+                .is_some_and(|i| i.pid != pgid || i.started_at.trim().is_empty())
+        {
+            return Err(Self::invalid_build_transition());
+        }
+        self.build_process = Some(BuildProcess::Running { pgid, identity });
+        Ok(())
+    }
+
+    pub fn finish_build(&mut self, evidence: BuildCompletionEvidence) -> Result<(), Failure> {
+        let proven = match (&self.build_process, evidence) {
+            (Some(BuildProcess::SpawnPending), BuildCompletionEvidence::NotSpawned) => true,
+            (
+                Some(BuildProcess::Running { pgid, .. }),
+                BuildCompletionEvidence::Group {
+                    pgid: observed,
+                    outcome: GroupCleanupResult::Absent | GroupCleanupResult::Removed,
+                },
+            ) => *pgid >= 2 && *pgid == observed,
+            _ => false,
+        };
+        if !proven {
+            return Err(Self::invalid_build_transition());
+        }
+        self.build_process = None;
+        Ok(())
+    }
+
+    fn invalid_build_transition() -> Failure {
+        Failure::new(
+            "build",
+            FailureCode::RunRecordInvalid,
+            "build process transition lacks matching state or proof",
+            "retain build ownership and resolve the recorded process before retrying",
+        )
+    }
+
     pub fn any_owned(&self) -> bool {
         self.build_process.is_some()
             || self.ios_simulator.is_some()

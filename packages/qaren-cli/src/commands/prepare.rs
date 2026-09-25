@@ -189,9 +189,6 @@ fn prepare_validated(
     started_ms: u64,
 ) -> Result<Receipt, Failure> {
     let (scenario, raw) = Scenario::load(&args.scenario_path)?;
-    if scenario.platform == Platform::Ios && scenario.build.owner == BuildOwner::Cli {
-        ios::require_launch_scheme(scenario.candidate.dev_client_scheme.as_deref())?;
-    }
     let scenario_sha256 = candidate::sha256_hex(raw.as_bytes());
     let scenario_dir = args
         .scenario_path
@@ -1098,7 +1095,7 @@ pub(crate) fn claim_build_lock(ctx: &mut Ctx, lock_root: &Path) -> Result<(), Fa
 }
 
 pub(crate) fn release_build_lock(ctx: &mut Ctx) {
-    if ctx.record.resources.build_process.is_some() {
+    if !ctx.record.resources.can_release_build_ownership() {
         return;
     }
     let Some(lock) = ctx.record.resources.build_lock.clone() else {
@@ -1795,7 +1792,7 @@ pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
         ));
         return;
     }
-    if platform != "ios" || ctx.record.resources.build_process.is_some() {
+    if platform != "ios" || !ctx.record.resources.can_release_build_ownership() {
         return;
     }
     let (Some(source), Some(cached)) = (verified, state.artifact) else {
@@ -1976,7 +1973,7 @@ fn build_failure(ctx: &Ctx, detail: impl Into<String>) -> Failure {
 }
 
 fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
-    use crate::runrecord::BuildProcess;
+    use crate::runrecord::BuildCompletionEvidence;
     use std::io::Write;
     let log = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id)
         .join("logs")
@@ -1995,17 +1992,18 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
     gated = gated
         .env("BASH_ENV", "/dev/null")
         .env("TYPESAFE_API_KEY", "");
-    ctx.record.resources.build_process = Some(BuildProcess::SpawnPending);
+    ctx.record.resources.begin_build()?;
     ctx.record.phase = Phase::Building;
     ctx.save()?;
     let mut child = match ctx.runner.spawn_piped(&gated, &log) {
         Ok(child) => child,
         Err(error) => {
-            let pending = ctx.record.resources.build_process.take();
-            if let Err(failure) = ctx.save() {
-                ctx.record.resources.build_process = pending;
-                return Err(failure);
-            }
+            let mut cancelled = ctx.record.clone();
+            cancelled
+                .resources
+                .finish_build(BuildCompletionEvidence::NotSpawned)?;
+            cancelled.save(&ctx.runs_root)?;
+            ctx.record = cancelled;
             return Err(build_failure(
                 ctx,
                 format!("build command did not spawn: {error}"),
@@ -2013,11 +2011,10 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
         }
     };
     let identity = capture_pid_identity(ctx.runner, child.pid);
-    let known = child.pid >= 2 && identity.is_some();
-    ctx.record.resources.build_process = Some(BuildProcess::Running {
-        pgid: child.pid,
-        identity,
-    });
+    let known = identity.is_some();
+    ctx.record
+        .resources
+        .record_build_spawned(child.pid, identity)?;
     ctx.save()?;
     let started = known
         && child

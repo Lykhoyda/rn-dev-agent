@@ -153,7 +153,7 @@ fn pre_spawn_build_error_retires_pending_before_releasing_ownership() {
     assert_eq!(receipt.result, ReceiptResult::Failed);
     assert_eq!(receipt.failure.unwrap().code, FailureCode::BuildFailed);
     let record = RunRecord::load(&req.runs_root, &run_id()).unwrap();
-    assert!(record.resources.build_process.is_none());
+    assert!(record.resources.build_process().is_none());
     assert!(record.resources.build_lock.is_none());
     assert!(record.resources.lease.is_none());
     assert!(!req.lock_root.join("native-build-ios").exists());
@@ -165,6 +165,38 @@ fn pre_spawn_build_error_retires_pending_before_releasing_ownership() {
     assert!(mock.piped_stdin.is_empty());
     assert_eq!(mock.remaining(), 0);
     assert_eq!(mock.calls.last().unwrap().label, "expo-run-ios");
+}
+
+#[test]
+fn invalid_spawned_build_group_retains_pending_and_both_locks_without_starting() {
+    let (repo, app) = app_repo();
+    let req = request(&repo, &app, 30);
+    let mut mock = MockRunner::new();
+    script_preflight(&mut mock, &repo);
+    common::script_ios_deps(&mut mock);
+    mock.expect_run("ls-files", CmdOutput::success(""));
+    mock.expect_spawn_piped("expo run:ios", 1, "", Some(0));
+    mock.expect_run("ps", CmdOutput::success(LSTART));
+    mock.expect_run("ps", CmdOutput::success("qaren-build"));
+
+    let receipt = run(&mut mock, &req);
+
+    assert_eq!(receipt.result, ReceiptResult::Failed);
+    let record = RunRecord::load(&req.runs_root, &run_id()).unwrap();
+    assert!(matches!(
+        record.resources.build_process(),
+        Some(qaren::runrecord::BuildProcess::SpawnPending)
+    ));
+    assert!(record.resources.build_lock.unwrap().lock_dir.exists());
+    assert!(record.resources.lease.unwrap().lock_dir.exists());
+    assert!(receipt.cleanup["build_process"].starts_with("unresolved"));
+    assert!(receipt.cleanup["device_lease"].starts_with("unresolved"));
+    assert_eq!(mock.piped_stdin_text(0), "");
+    assert!(!mock.calls.iter().any(|c| matches!(
+        c.label.as_str(),
+        "kill-group" | "simctl-install" | "simctl-launch" | "expo-start" | "core-walk"
+    )));
+    assert_eq!(mock.remaining(), 0);
 }
 
 #[test]
@@ -194,7 +226,7 @@ fn failed_spawn_retirement_save_or_interruption_retains_pending_and_both_locks()
         }
         let record = RunRecord::load(&req.runs_root, &run_id()).unwrap();
         assert!(matches!(
-            record.resources.build_process,
+            record.resources.build_process(),
             Some(qaren::runrecord::BuildProcess::SpawnPending)
         ));
         assert!(record.resources.build_lock.unwrap().lock_dir.exists());
@@ -294,7 +326,11 @@ fn finite_build_failures_never_install_or_walk_and_unproven_groups_retain_both_l
             "simctl-install" | "simctl-launch" | "expo-start" | "core-walk"
         )));
         let record = RunRecord::load(&req.runs_root, &run_id()).unwrap();
-        assert_eq!(record.resources.build_process.is_some(), retained, "{mode}");
+        assert_eq!(
+            record.resources.build_process().is_some(),
+            retained,
+            "{mode}"
+        );
         assert_eq!(record.resources.lease.is_some(), retained, "{mode}");
         assert_eq!(record.resources.build_lock.is_some(), retained, "{mode}");
         assert_eq!(
@@ -918,6 +954,7 @@ fn an_unresolved_metro_group_retains_the_device_lease_for_cleanup() {
     script_preflight(&mut mock, &repo);
     script_admission(&mut mock);
     common::script_ios_deps(&mut mock);
+    script_admission(&mut mock);
     script_app_presence(&mut mock, false);
     script_provision_after_deps(&mut mock);
     mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
@@ -1453,6 +1490,88 @@ fn script_admission(mock: &mut MockRunner) {
     );
 }
 
+#[test]
+fn driver_appearing_during_deps_refuses_before_boot_or_reset_and_releases_the_lease() {
+    for (fresh, boot) in [(true, false), (false, true), (true, true)] {
+        let (repo, app) = app_repo();
+        let mut mock = MockRunner::new();
+        if boot {
+            script_preflight_inventory(
+                &mut mock,
+                &repo,
+                "simctl list devices -j",
+                &available_inventory("Shutdown"),
+            );
+        } else {
+            script_preflight(&mut mock, &repo);
+        }
+        script_admission(&mut mock);
+        common::script_ios_deps(&mut mock);
+        mock.expect_run(
+            &format!("fresh-install-preflight.js --platform ios --device {UDID}"),
+            CmdOutput {
+                exit_code: Some(4),
+                stdout: serde_json::json!({
+                    "v": 1, "platform": "ios", "deviceId": UDID, "status": "busy"
+                })
+                .to_string(),
+                ..Default::default()
+            },
+        );
+        let mut req = request(&repo, &app, 30);
+        req.fresh_install = fresh;
+        req.boot_device = boot;
+        req.device = Some(if boot {
+            UDID.to_lowercase()
+        } else {
+            UDID.into()
+        });
+        let mut runner = LeaseObservedRunner {
+            mock,
+            repo,
+            wire: None,
+            observed: Vec::new(),
+            expect_fresh_install: fresh,
+        };
+
+        let receipt = run(&mut runner, &req);
+
+        assert_eq!(receipt.result, ReceiptResult::Refused);
+        assert_eq!(receipt.failure.unwrap().code, FailureCode::DeviceBusy);
+        assert_eq!(receipt.cleanup["device_lease"], "removed");
+        assert_eq!(receipt.cleanup["simulator"], "kept");
+        assert_eq!(runner.mock.remaining(), 0);
+        assert_eq!(
+            runner.observed,
+            [
+                "fresh-install-admission",
+                "pnpm-install",
+                "expo-ios-build-help",
+                "fresh-install-admission",
+            ]
+        );
+        for scan in runner
+            .mock
+            .calls
+            .iter()
+            .filter(|c| c.label == "fresh-install-admission")
+        {
+            assert!(scan.args.windows(2).any(|args| args == ["--device", UDID]));
+        }
+        let record = RunRecord::load(&req.runs_root, &run_id()).unwrap();
+        assert_eq!(record.phase, Phase::Failed);
+        assert_eq!(record.failure.unwrap().code, FailureCode::DeviceBusy);
+        assert!(record.resources.device_borrowed);
+        assert!(record.resources.lease.is_none());
+        assert!(record.resources.fresh_install.is_none());
+        assert!(record.build.is_none());
+        assert!(!req
+            .lock_root
+            .join(qaren::lease::lock_name(Platform::Ios, UDID))
+            .exists());
+    }
+}
+
 fn script_app_presence(mock: &mut MockRunner, installed: bool) {
     mock.expect_run(
         &format!("simctl listapps {UDID}"),
@@ -1475,6 +1594,7 @@ fn fresh_install_reset_build_readiness_walk_and_teardown_share_one_durable_lease
     script_preflight(&mut mock, &repo);
     script_admission(&mut mock);
     common::script_ios_deps(&mut mock);
+    script_admission(&mut mock);
     script_app_presence(&mut mock, true);
     mock.expect_run(
         &format!("simctl uninstall {UDID} com.rndevagent.testapp"),
@@ -1506,6 +1626,7 @@ fn fresh_install_reset_build_readiness_walk_and_teardown_share_one_durable_lease
             "fresh-install-admission",
             "pnpm-install",
             "expo-ios-build-help",
+            "fresh-install-admission",
             "simctl-listapps",
             "simctl-uninstall",
             "simctl-listapps",
@@ -1575,6 +1696,7 @@ fn fresh_install_resets_or_proves_absence_before_cached_install_under_the_same_l
         script_preflight(&mut mock, &repo);
         script_admission(&mut mock);
         common::script_ios_deps(&mut mock);
+        script_admission(&mut mock);
         if installed {
             script_app_presence(&mut mock, true);
             mock.expect_run(
@@ -1645,6 +1767,7 @@ fn fresh_install_resets_or_proves_absence_before_cached_install_under_the_same_l
                 "fresh-install-admission",
                 "pnpm-install",
                 "expo-ios-build-help",
+                "fresh-install-admission",
                 "simctl-listapps",
                 "simctl-install",
                 "metro-status",
@@ -1672,7 +1795,14 @@ fn fresh_install_and_boot_device_require_valid_matching_clear_admission_with_suc
         })
         .to_string()
     };
-    for (fresh, boot) in [(true, false), (false, true), (true, true)] {
+    for (fresh, boot, after_deps) in [
+        (true, false, false),
+        (false, true, false),
+        (true, true, false),
+        (true, false, true),
+        (false, true, true),
+        (true, true, true),
+    ] {
         for (output, expected) in [
             (
                 CmdOutput::failed(1, "entry point missing"),
@@ -1734,6 +1864,10 @@ fn fresh_install_and_boot_device_require_valid_matching_clear_admission_with_suc
             } else {
                 script_preflight(&mut mock, &repo);
             }
+            if after_deps {
+                script_admission(&mut mock);
+                common::script_ios_deps(&mut mock);
+            }
             mock.expect_run("fresh-install-preflight.js", output);
             let mut req = request(&repo, &app, 30);
             req.fresh_install = fresh;
@@ -1750,7 +1884,17 @@ fn fresh_install_and_boot_device_require_valid_matching_clear_admission_with_suc
             assert_eq!(receipt.result, ReceiptResult::Refused);
             assert_eq!(receipt.failure.unwrap().code, expected);
             assert_eq!(receipt.cleanup["device_lease"], "removed");
-            assert_eq!(runner.observed, ["fresh-install-admission"]);
+            let expected_phases = if after_deps {
+                vec![
+                    "fresh-install-admission",
+                    "pnpm-install",
+                    "expo-ios-build-help",
+                    "fresh-install-admission",
+                ]
+            } else {
+                vec!["fresh-install-admission"]
+            };
+            assert_eq!(runner.observed, expected_phases);
             assert_eq!(runner.mock.remaining(), 0);
             let record = RunRecord::load(&req.runs_root, &run_id()).unwrap();
             assert_eq!(record.phase, Phase::Failed);
@@ -1811,6 +1955,7 @@ fn fresh_install_unknown_inventory_never_authorizes_install_or_build() {
             script_preflight(&mut mock, &repo);
             script_admission(&mut mock);
             common::script_ios_deps(&mut mock);
+            script_admission(&mut mock);
             if after_uninstall {
                 script_app_presence(&mut mock, true);
                 mock.expect_run("simctl uninstall", CmdOutput::success(""));
@@ -1854,6 +1999,7 @@ fn fresh_install_requires_uninstall_success_and_proven_absence() {
         script_preflight(&mut mock, &repo);
         script_admission(&mut mock);
         common::script_ios_deps(&mut mock);
+        script_admission(&mut mock);
         script_app_presence(&mut mock, true);
         let ok = output.ok();
         mock.expect_run("simctl uninstall", output);
@@ -1964,6 +2110,7 @@ fn boot_device_failure_or_timeout_stops_before_readback_reset_install_or_walk() 
             );
             script_admission(&mut mock);
             common::script_ios_deps(&mut mock);
+            script_admission(&mut mock);
             mock.expect_run(&format!("simctl bootstatus {UDID} -b"), output);
             let mut runner = LeaseObservedRunner {
                 mock,
@@ -1988,6 +2135,7 @@ fn boot_device_failure_or_timeout_stops_before_readback_reset_install_or_walk() 
                     "fresh-install-admission",
                     "pnpm-install",
                     "expo-ios-build-help",
+                    "fresh-install-admission",
                     "simctl-bootstatus"
                 ]
             );
@@ -2041,6 +2189,7 @@ fn boot_device_readback_must_prove_exact_booted_target_and_unchanged_runtime_and
                 );
                 script_admission(&mut mock);
                 common::script_ios_deps(&mut mock);
+                script_admission(&mut mock);
                 if initial == "Shutdown" {
                     mock.expect_run(
                         &format!("simctl bootstatus {UDID} -b"),
@@ -2070,6 +2219,7 @@ fn boot_device_readback_must_prove_exact_booted_target_and_unchanged_runtime_and
                         "fresh-install-admission",
                         "pnpm-install",
                         "expo-ios-build-help",
+                        "fresh-install-admission",
                         "simctl-bootstatus",
                         "simctl-list",
                     ]
@@ -2078,6 +2228,7 @@ fn boot_device_readback_must_prove_exact_booted_target_and_unchanged_runtime_and
                         "fresh-install-admission",
                         "pnpm-install",
                         "expo-ios-build-help",
+                        "fresh-install-admission",
                         "simctl-list",
                     ]
                 };
@@ -2112,6 +2263,7 @@ fn boot_device_admission_boot_readback_and_walk_share_a_durable_borrowed_lease()
             );
             script_admission(&mut mock);
             common::script_ios_deps(&mut mock);
+            script_admission(&mut mock);
             if initial == "Shutdown" {
                 mock.expect_run(
                     &format!("simctl bootstatus {UDID} -b"),
@@ -2159,6 +2311,7 @@ fn boot_device_admission_boot_readback_and_walk_share_a_durable_borrowed_lease()
                 "fresh-install-admission",
                 "pnpm-install",
                 "expo-ios-build-help",
+                "fresh-install-admission",
             ];
             if initial == "Shutdown" {
                 phases.push("simctl-bootstatus");

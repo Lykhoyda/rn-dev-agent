@@ -1,5 +1,5 @@
 mod common;
-use common::IosBuildRunner as MockRunner;
+use common::{ios_scenario_yaml, IosBuildRunner as MockRunner};
 
 use qaren::commands::prepare::{prepare, PrepareArgs};
 use qaren::exec::{CmdOutput, Spawned};
@@ -9,13 +9,6 @@ use qaren::runrecord::{Phase, RunRecord};
 
 const UDID: &str = "AAAABBBB-1111-2222-3333-444455556666";
 const LSTART: &str = "Wed Aug 12 16:01:00 2026";
-
-fn ios_scenario_yaml(port: u16) -> String {
-    common::ios_scenario_yaml(port).replace(
-        "  revision: HEAD",
-        "  revision: HEAD\n  dev_client_scheme: rndatest",
-    )
-}
 
 fn free_port() -> CmdOutput {
     CmdOutput {
@@ -139,7 +132,10 @@ fn dry_run_refuses_unsupported_ios_cli_without_installing_or_allocating() {
 #[test]
 fn missing_launch_scheme_refuses_prepare_before_any_command_or_allocation() {
     let repo = common::temp_repo();
-    let path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let path = write_scenario(
+        &repo,
+        &ios_scenario_yaml(8791).replace("  dev_client_scheme: rndatest\n", ""),
+    );
     for dry_run in [false, true] {
         let mut mock = MockRunner::new();
         let receipt = prepare(&mut mock, &prepare_args(&path, dry_run, None));
@@ -172,7 +168,11 @@ fn invalid_ios_launch_scheme_stops_prepare_without_echoing_input() {
         let path = write_scenario(&repo, &yaml);
         let mut mock = MockRunner::new();
         let receipt = prepare(&mut mock, &prepare_args(&path, false, None));
-        assert!(receipt.failure.is_some());
+        assert_eq!(receipt.result, ReceiptResult::Refused);
+        assert_eq!(
+            receipt.failure.as_ref().unwrap().code,
+            FailureCode::DevClientSchemeRequired
+        );
         assert!(!receipt.to_json().contains("private"));
         assert!(!receipt.to_json().contains(&"a".repeat(129)));
         assert!(mock.calls.is_empty());
@@ -1620,7 +1620,7 @@ fn recording_a_build_retires_run_output_and_prunes_only_older_artifacts_for_the_
     assert_eq!(reported.sha256, cached.sha256);
     let installed_record: RunRecord =
         serde_json::from_str(probing.observed.as_ref().unwrap()).unwrap();
-    assert!(installed_record.resources.build_process.is_none());
+    assert!(installed_record.resources.build_process().is_none());
     let installed = installed_record.build.unwrap().artifact.unwrap();
     assert_eq!(cached.sha256, installed.sha256);
     assert_eq!(
@@ -1845,7 +1845,7 @@ fn unproven_or_unpersisted_build_group_absence_retains_run_output() {
         let receipt = prepare(&mut probing, &prepare_args(&scenario, false, None));
         assert_eq!(receipt.result, ReceiptResult::Failed, "{fault}");
         let record = RunRecord::load(&repo, &receipt.run_id).unwrap();
-        assert!(record.resources.build_process.is_some(), "{fault}");
+        assert!(record.resources.build_process().is_some(), "{fault}");
         assert!(
             record.resources.build_lock.unwrap().lock_dir.is_dir(),
             "{fault}"

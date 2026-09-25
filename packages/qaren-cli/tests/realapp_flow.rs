@@ -572,6 +572,23 @@ fn tampered_cached_artifact_is_refused_for_reuse() {
 }
 
 #[test]
+fn prewarm_preserves_the_scenario_launch_scheme_refusal_before_any_command() {
+    let repo = common::temp_repo();
+    let scenario_path = write_scenario(
+        &repo,
+        &ios_reuse_scenario_yaml(8791).replace("  dev_client_scheme: rndatest\n", ""),
+    );
+    let mut mock = MockRunner::new();
+    let receipt = prewarm(&mut mock, &PrewarmArgs { scenario_path });
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    assert_eq!(
+        receipt.failure.unwrap().code,
+        FailureCode::DevClientSchemeRequired
+    );
+    assert!(mock.calls.is_empty());
+}
+
+#[test]
 fn prewarm_records_lockfile_binding_and_no_secrets() {
     let repo = common::temp_repo();
     let scenario_path = write_scenario(&repo, &ios_reuse_scenario_yaml(8791));
@@ -825,7 +842,7 @@ fn explicit_worktree_must_be_a_git_toplevel() {
     let canonical = worktree.canonicalize().unwrap();
 
     let yaml = format!(
-        "schema: qaren/1\nname: external\nplatform: ios\ncandidate:\n  project_root: app\n  app_id: com.example.app\n  revision: HEAD\n  worktree: {}\nmetro:\n  port: 8791\nios:\n  device_type: iPhone-17-Pro\n  runtime: iOS-26-4\n",
+        "schema: qaren/1\nname: external\nplatform: ios\ncandidate:\n  project_root: app\n  app_id: com.example.app\n  revision: HEAD\n  dev_client_scheme: example\n  worktree: {}\nmetro:\n  port: 8791\nios:\n  device_type: iPhone-17-Pro\n  runtime: iOS-26-4\n",
         worktree.display()
     );
     let scenario: Scenario = serde_yaml::from_str(&yaml).unwrap();

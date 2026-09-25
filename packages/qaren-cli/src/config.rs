@@ -1,4 +1,5 @@
 use crate::failure::{Failure, FailureCode};
+use crate::scenario::{require_launch_scheme, Platform};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -49,6 +50,13 @@ fn d_metro_port() -> u16 {
 }
 
 impl CheckConfig {
+    pub fn validate_for_platform(&self, platform: Platform) -> Result<(), Failure> {
+        if platform == Platform::Ios {
+            require_launch_scheme(self.dev_client_scheme.as_deref())?;
+        }
+        Ok(())
+    }
+
     // Returns the bytes it parsed so the run record hashes exactly that configuration.
     pub fn load(path: &Path) -> Result<(CheckConfig, String), Failure> {
         let raw = std::fs::read_to_string(path).map_err(|e| {

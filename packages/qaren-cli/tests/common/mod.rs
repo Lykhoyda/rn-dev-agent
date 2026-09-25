@@ -51,7 +51,7 @@ pub fn script_tracked_file_identity(mock: &mut MockRunner, path: &str, mode: &st
 
 pub fn ios_scenario_yaml(port: u16) -> String {
     format!(
-        "schema: qaren/1\nname: ios-simulator\nplatform: ios\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\nmetro:\n  port: {port}\nios:\n  device_type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro\n  runtime: com.apple.CoreSimulator.SimRuntime.iOS-26-4\n"
+        "schema: qaren/1\nname: ios-simulator\nplatform: ios\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\n  dev_client_scheme: rndatest\nmetro:\n  port: {port}\nios:\n  device_type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro\n  runtime: com.apple.CoreSimulator.SimRuntime.iOS-26-4\n"
     )
 }
 
@@ -237,7 +237,7 @@ impl std::io::Write for BuildStart {
         let record: RunRecord =
             serde_json::from_slice(&std::fs::read(self.run_dir.join("run.json")).unwrap()).unwrap();
         assert!(matches!(
-            record.resources.build_process,
+            record.resources.build_process(),
             Some(qaren::runrecord::BuildProcess::Running {
                 identity: Some(_),
                 ..
@@ -296,7 +296,7 @@ impl qaren::exec::Runner for IosBuildRunner {
             let record: RunRecord =
                 serde_json::from_slice(&std::fs::read(run_dir.join("run.json")).unwrap()).unwrap();
             assert!(matches!(
-                record.resources.build_process,
+                record.resources.build_process(),
                 Some(qaren::runrecord::BuildProcess::SpawnPending)
             ));
             match fault {
@@ -320,7 +320,7 @@ impl qaren::exec::Runner for IosBuildRunner {
             let record: RunRecord =
                 serde_json::from_slice(&std::fs::read(run_dir.join("run.json")).unwrap()).unwrap();
             assert!(matches!(
-                record.resources.build_process,
+                record.resources.build_process(),
                 Some(qaren::runrecord::BuildProcess::SpawnPending)
             ));
             if let Some(text) = &self.build_log {

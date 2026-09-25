@@ -14,8 +14,9 @@ const LSTART: &str = "Wed Aug 12 16:01:00 2026";
 
 #[test]
 fn interrupted_finite_build_retains_ownership_until_group_absence_is_proven() {
-    use qaren::runrecord::{BuildLockResource, BuildProcess};
-    for pending in [true, false] {
+    use qaren::runrecord::BuildLockResource;
+    for fault in ["pending", "unknown_group", "retirement_save"] {
+        let pending = fault == "pending";
         let repo = common::temp_repo();
         let mut record = core_record(&repo);
         record.resources.core = None;
@@ -25,14 +26,13 @@ fn interrupted_finite_build_retains_ownership_until_group_absence_is_proven() {
             device_type: "iPhone".into(),
             runtime: "iOS".into(),
         });
-        record.resources.build_process = Some(if pending {
-            BuildProcess::SpawnPending
-        } else {
-            BuildProcess::Running {
-                pgid: 5000,
-                identity: Some(common::identity(5000, LSTART)),
-            }
-        });
+        record.resources.begin_build().unwrap();
+        if !pending {
+            record
+                .resources
+                .record_build_spawned(5000, Some(common::identity(5000, LSTART)))
+                .unwrap();
+        }
         record.resources.build_lock = Some(BuildLockResource {
             lock_dir: repo.join("locks/native-build-ios"),
             holder: "qaren-core-run".into(),
@@ -50,22 +50,48 @@ fn interrupted_finite_build_retains_ownership_until_group_absence_is_proven() {
         .unwrap();
         record.save(&repo).unwrap();
         let lease_dir = record.resources.lease.as_ref().unwrap().lock_dir.clone();
+        let build_lock_dir = record
+            .resources
+            .build_lock
+            .as_ref()
+            .unwrap()
+            .lock_dir
+            .clone();
+        let blocked_save = RunRecord::run_dir(&repo, "core-run")
+            .join(format!(".run.json.tmp.{}", std::process::id()));
+        if fault == "retirement_save" {
+            std::fs::create_dir(&blocked_save).unwrap();
+        }
         let mut mock = MockRunner::new();
         if !pending {
-            mock.expect_run("ps -A", CmdOutput::failed(1, "denied"));
+            mock.expect_run(
+                "ps -A",
+                if fault == "retirement_save" {
+                    CmdOutput::success("1 1 S\n")
+                } else {
+                    CmdOutput::failed(1, "denied")
+                },
+            );
         }
         let receipt = cleanup(&mut mock, &repo, "core-run");
+        assert_eq!(receipt.result, ReceiptResult::Failed);
         assert!(receipt.cleanup["build_process"].starts_with("unresolved"));
         assert!(receipt.cleanup["build_lock"].contains("retained"));
         assert!(receipt.cleanup["simulator"].contains("retained"));
+        assert!(receipt.cleanup["device_lease"].starts_with("unresolved"));
         assert!(lease_dir.exists());
+        assert!(build_lock_dir.exists());
         assert!(RunRecord::load(&repo, "core-run")
             .unwrap()
             .resources
-            .build_process
+            .build_process()
             .is_some());
         assert!(!mock.calls.iter().any(|c| c.label == "kill-group"));
         assert_eq!(mock.remaining(), 0);
+        if fault == "retirement_save" {
+            assert!(receipt.cleanup["build_process"].contains("could not be persisted"));
+            std::fs::remove_dir(&blocked_save).unwrap();
+        }
         if !pending {
             let mut recovery = MockRunner::new();
             recovery.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
@@ -79,7 +105,7 @@ fn interrupted_finite_build_retains_ownership_until_group_absence_is_proven() {
             assert!(RunRecord::load(&repo, "core-run")
                 .unwrap()
                 .resources
-                .build_process
+                .build_process()
                 .is_none());
             assert_eq!(recovery.remaining(), 0);
         }
