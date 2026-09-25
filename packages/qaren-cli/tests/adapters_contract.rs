@@ -2,6 +2,38 @@ use qaren::adapters::{android, ios, metro};
 use qaren::exec::CmdOutput;
 use std::path::Path;
 
+#[test]
+fn app_inventory_conversion_is_private_stdin_only_and_uses_exact_bundle_lookup() {
+    let plist = include_str!("fixtures/installed-apps.plist");
+    let converted = r#"{"com.rndevagent.testapp":{"CFBundleIdentifier":"com.rndevagent.testapp","Path":"/private/fixture/Applications/Test.app"},"com.private.unrelated":{"CFBundleIdentifier":"com.private.unrelated","DataContainer":"file:///private/fixture/Data/OTHER"}}"#;
+    for (app, expected) in [
+        ("com.rndevagent.testapp", ios::AppPresence::Installed),
+        ("com.rndevagent", ios::AppPresence::ProvenAbsent),
+    ] {
+        let mut mock = qaren::exec::MockRunner::new();
+        mock.expect_run(
+            "xcrun simctl listapps selected-udid",
+            CmdOutput::success(plist),
+        );
+        mock.expect_run("plutil -convert json -o - -", CmdOutput::success(converted));
+        assert_eq!(
+            ios::probe_app_presence(&mut mock, "selected-udid", app),
+            expected
+        );
+        assert_eq!(
+            mock.private_inputs,
+            [Vec::<u8>::new(), plist.as_bytes().to_vec()]
+        );
+        assert_eq!(mock.calls[0].args, ["simctl", "listapps", "selected-udid"]);
+        assert_eq!(mock.calls[1].args, ["-convert", "json", "-o", "-", "-"]);
+        assert_eq!(mock.calls[1].timeout_seconds, 10);
+        assert!(mock.spawned_logs.is_empty());
+        assert!(!serde_json::to_string(&mock.calls)
+            .unwrap()
+            .contains("com.private.unrelated"));
+    }
+}
+
 // Captured verbatim from `ssh nuc '~/bin/android-farm status'` on 2026-08-12.
 const FARM_STATUS: &str = "slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=free state=down\nslot=2 avd=Pixel_10_Pro serial=emulator-5556 adb_port=5557 lease=free state=down\n";
 

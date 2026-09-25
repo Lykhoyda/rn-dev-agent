@@ -145,7 +145,7 @@ pub struct CoreOutcome {
     pub exit: Option<i32>,
     // Set when the ledger was synthesized: no result line, a contract violation, or a deadline kill.
     pub failure: Option<Failure>,
-    // The leader exited but a member of its group still held stdout after SIGKILL and its grace.
+    // Exit/pipe grace expired; false is not proof that the process group is gone.
     pub group_survived: bool,
 }
 
@@ -178,6 +178,75 @@ pub fn preflight_spec(node: &Path, runtime_dir: &Path, plan_file: &Path) -> CmdS
         ],
         320,
     )
+}
+
+pub fn fresh_install_admission(
+    runner: &mut dyn Runner,
+    node: &Path,
+    runtime_dir: &Path,
+    worktree: &Path,
+    device_id: &str,
+) -> Result<(), Failure> {
+    let observer = std::env::current_exe()
+        .ok()
+        .filter(|path| path.is_absolute())
+        .and_then(|path| path.into_os_string().into_string().ok())
+        .ok_or_else(|| {
+            Failure::new(
+                "fresh_install",
+                FailureCode::FreshInstallAdmissionUnknown,
+                "native process observer is unavailable",
+                "ensure the qaren executable is available and re-run",
+            )
+        })?;
+    let output = runner.run(
+        &CmdSpec::new(
+            "fresh-install-admission",
+            &node.to_string_lossy(),
+            &[
+                &runtime_dir
+                    .join("qa/fresh-install-preflight.js")
+                    .to_string_lossy(),
+                "--platform",
+                "ios",
+                "--device",
+                device_id,
+                "--process-observer",
+                &observer,
+            ],
+            30,
+        )
+        .cwd(worktree),
+    );
+    let value = serde_json::from_str::<Value>(&output.stdout).ok();
+    let status = value
+        .as_ref()
+        .filter(|v| {
+            v.get("v").and_then(Value::as_u64) == Some(1)
+                && v.get("platform").and_then(Value::as_str) == Some("ios")
+                && v.get("deviceId").and_then(Value::as_str) == Some(device_id)
+        })
+        .and_then(|v| v.get("status"))
+        .and_then(Value::as_str);
+    if output.ok() && status == Some("clear") {
+        return Ok(());
+    }
+    let busy = !output.timed_out && output.exit_code == Some(4) && status == Some("busy");
+    Err(Failure::new(
+        "fresh_install",
+        if busy {
+            FailureCode::DeviceBusy
+        } else {
+            FailureCode::FreshInstallAdmissionUnknown
+        },
+        if busy {
+            "a foreign automation flow is active on the selected device"
+        } else {
+            "strict foreign-flow admission did not prove the selected device clear"
+        },
+        "stop other automation drivers and ensure the runtime supports strict fresh-install preflight, \
+         then re-run",
+    ))
 }
 
 enum Msg {

@@ -9,6 +9,8 @@ pub mod failure;
 pub mod fingerprint;
 pub mod handoff;
 pub mod lease;
+pub mod native_suite;
+pub mod process_observation;
 pub mod receipt;
 pub mod redact;
 pub mod report;

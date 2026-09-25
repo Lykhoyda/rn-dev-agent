@@ -20,6 +20,8 @@ pub struct CheckConfig {
     pub android: Option<AndroidConfig>,
     #[serde(default)]
     pub node_path: Option<String>,
+    #[serde(default)]
+    pub dev_client_scheme: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -62,7 +64,7 @@ impl CheckConfig {
                 "config",
                 FailureCode::ScenarioInvalid,
                 format!("{} does not parse: {e}", path.display()),
-                "fix .qaren/config.yaml (keys: appId, packageManager, metroPort, ios, android, nodePath)",
+                "fix .qaren/config.yaml (keys: appId, packageManager, metroPort, ios, android, nodePath, devClientScheme)",
             )
         })?;
         config.validate(path)?;

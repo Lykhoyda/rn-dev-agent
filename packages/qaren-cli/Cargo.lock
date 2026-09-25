@@ -109,6 +109,7 @@ dependencies = [
 name = "qaren"
 version = "1.0.13"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "serde_yaml",

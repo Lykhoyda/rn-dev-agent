@@ -136,6 +136,8 @@ pub(crate) fn finish_receipt(ctx: Ctx, result: ReceiptResult, failure: Option<Fa
     receipt.device = Some(super::device_identity(&ctx.record));
     receipt.metro = super::metro_identity(&ctx.record);
     receipt.build = ctx.record.build.clone();
+    receipt.core_cleanup = ctx.record.resources.core_cleanup.clone();
+    receipt.fresh_install = ctx.record.resources.fresh_install.clone();
     for (name, value) in &ctx.notes {
         receipt.outcomes.insert(name.clone(), value.clone());
     }

@@ -4,14 +4,27 @@ import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 export function createComponentTreeHandler(getClient: () => CDPClient) {
   return withConnection(
     getClient,
-    async (args: { filter?: string; depth: number; interactiveOnly?: boolean }, client) => {
+    async (
+      args: {
+        filter?: string;
+        depth: number;
+        interactiveOnly?: boolean;
+        semanticEvidence?: boolean;
+        typographyEvidence?: boolean;
+      },
+      client,
+    ) => {
       const depth = Math.min(Math.max(args.depth, 1), 12);
       const opts: Record<string, unknown> = { maxDepth: depth };
       if (args.filter !== undefined) opts.filter = args.filter;
       // GH #321: salient digest — only actionable nodes (+ text), no props/state.
       if (args.interactiveOnly === true) opts.interactiveOnly = true;
+      if (args.interactiveOnly === true && args.semanticEvidence === true)
+        opts.semanticEvidence = true;
+      const typography = opts.semanticEvidence === true && args.typographyEvidence === true;
+      if (typography) opts.typographyEvidence = true;
 
-      const result = await client.evaluate(`__QAREN.getTree(${JSON.stringify(opts)})`);
+      const result = await client.evaluate(`__QAREN.getTree(${JSON.stringify(opts)})`, typography);
 
       if (result.error) {
         return failResult(`Component tree error: ${result.error}`);

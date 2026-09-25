@@ -1,4 +1,4 @@
-use crate::exec::CmdSpec;
+use crate::exec::{CmdSpec, Runner};
 use std::path::Path;
 
 pub fn sim_name(run_id: &str) -> String {
@@ -102,6 +102,64 @@ pub fn install_app_spec(udid: &str, app_path: &Path) -> CmdSpec {
         "xcrun",
         &["simctl", "install", udid, &app_path.to_string_lossy()],
         120,
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppPresence {
+    Installed,
+    ProvenAbsent,
+    Unknown,
+}
+
+pub fn probe_app_presence(runner: &mut dyn Runner, udid: &str, app_id: &str) -> AppPresence {
+    let output = runner.run_private(
+        &CmdSpec::new(
+            "simctl-listapps",
+            "xcrun",
+            &["simctl", "listapps", udid],
+            30,
+        ),
+        &[],
+    );
+    if !output.clean() {
+        return AppPresence::Unknown;
+    }
+    let converted = runner.run_private(
+        &CmdSpec::new(
+            "app-list-json",
+            "plutil",
+            &["-convert", "json", "-o", "-", "-"],
+            10,
+        ),
+        output.stdout().as_bytes(),
+    );
+    if !converted.clean() {
+        return AppPresence::Unknown;
+    }
+    let Ok(serde_json::Value::Object(apps)) = serde_json::from_str(converted.stdout()) else {
+        return AppPresence::Unknown;
+    };
+    if apps.iter().any(|(id, info)| {
+        info.get("CFBundleIdentifier")
+            .and_then(serde_json::Value::as_str)
+            != Some(id.as_str())
+    }) {
+        return AppPresence::Unknown;
+    }
+    if apps.contains_key(app_id) {
+        AppPresence::Installed
+    } else {
+        AppPresence::ProvenAbsent
+    }
+}
+
+pub fn uninstall_app_spec(udid: &str, app_id: &str) -> CmdSpec {
+    CmdSpec::new(
+        "simctl-uninstall",
+        "xcrun",
+        &["simctl", "uninstall", udid, app_id],
+        60,
     )
 }
 

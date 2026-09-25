@@ -52,7 +52,7 @@ extension RnFastRunnerTests {
             protocolVersion: RunnerProtocol.version,
             runnerVersion: RunnerEnv.pluginVersion(),
             capabilities: QuiescenceStatus.current().capabilities
-              + ["SCREEN_STATIC", "HONEST_HITTABLE", "EXACT_KEYBOARD_TARGET_GUARD"],
+              + ["SCREEN_STATIC", "HONEST_HITTABLE", "EXACT_KEYBOARD_TARGET_GUARD", "PLATFORM_PRESENCE_V1"],
             commands: CommandType.allCases.map(\.rawValue),
             instanceId: RunnerEnv.instanceId(),
             sessionId: RunnerEnv.sessionId(),

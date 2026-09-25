@@ -2,7 +2,8 @@ use crate::adapters::ios;
 use crate::buildplan::BuildDecision;
 use crate::candidate::{self, sha256_hex};
 use crate::commands::cleanup::{
-    cleanup_process_group, release_lease_outcome, retained_lease_outcome, unclean_legs, Outcome,
+    cleanup_core, cleanup_process_group, release_lease_outcome, retained_lease_outcome,
+    unclean_legs, Outcome,
 };
 use crate::commands::prepare::{self, finish_receipt, Ctx};
 use crate::config::CheckConfig;
@@ -36,6 +37,7 @@ pub struct RunRequest {
     pub platform: Platform,
     // A booted simulator to borrow by UDID; None borrows the only booted one.
     pub device: Option<String>,
+    pub fresh_install: bool,
     pub runtime_dir: PathBuf,
     pub node: Option<PathBuf>,
     pub lock_root: PathBuf,
@@ -195,6 +197,21 @@ fn run_inner(
     };
     let t = ctx.mark("preflight", started_ms);
 
+    if req.fresh_install {
+        if let Err(f) = core::fresh_install_admission(
+            ctx.runner,
+            &node,
+            &req.runtime_dir,
+            &req.project_root,
+            &device.id,
+        ) {
+            return Ok(finish_failed(ctx, f));
+        }
+        if let Err(f) = reset_app(&mut ctx, &device.id, &config.app_id) {
+            return Ok(finish_failed(ctx, f));
+        }
+    }
+
     if let Err(f) = prepare::install_deps(&mut ctx) {
         return Ok(finish_failed(ctx, f));
     }
@@ -284,20 +301,15 @@ fn run_inner(
         Ok(child) => child,
         Err(f) => return Ok(finish_failed(ctx, f)),
     };
-    ctx.record.resources.core = capture_pid_identity(ctx.runner, core_child.pid);
+    ctx.record.resources.core = Some(crate::runrecord::CoreResource {
+        pgid: core_child.pid,
+        identity: capture_pid_identity(ctx.runner, core_child.pid),
+    });
     if let Err(f) = ctx.save() {
         core::abort(core_child);
-        ctx.record.resources.core = None;
         return Ok(finish_failed(ctx, f));
     }
     let outcome = core::wait(ctx.runner, core_child, req.budgets);
-    // The leader is gone either way; a surviving member is a teardown leg of its own.
-    ctx.record.resources.core = None;
-    let core_leg = outcome.group_survived.then(|| {
-        Outcome::Unresolved(
-            "a member of the core process group survived SIGKILL after the core exited".to_string(),
-        )
-    });
     let t = ctx.mark("walk", t);
     if let Some(exit) = outcome.exit {
         ctx.notes.push(("core_exit".to_string(), exit.to_string()));
@@ -320,7 +332,7 @@ fn run_inner(
         Err(detail) => ctx.notes.push(("candidate_drift".to_string(), detail)),
     }
 
-    let (cleanup, all_clean) = teardown(&mut ctx, core_leg);
+    let (cleanup, all_clean) = teardown(&mut ctx, outcome.group_survived);
     ctx.mark("teardown", t);
 
     let report_path = match report::write(
@@ -404,8 +416,66 @@ fn refusal_code(code: &str) -> FailureCode {
     }
 }
 
+fn reset_app(ctx: &mut Ctx, udid: &str, app_id: &str) -> Result<(), Failure> {
+    let unknown = || {
+        Failure::new(
+            "fresh_install",
+            FailureCode::AppPresenceUnknown,
+            "a successful structured app inventory could not prove app presence or absence",
+            "restore simulator inventory access before retrying the fresh install",
+        )
+    };
+    match ios::probe_app_presence(ctx.runner, udid, app_id) {
+        ios::AppPresence::Unknown => return Err(unknown()),
+        ios::AppPresence::ProvenAbsent => {}
+        ios::AppPresence::Installed => {
+            let at = timefmt::iso8601_utc(ctx.runner.now_epoch_ms());
+            ctx.record.push_history(
+                at,
+                "fresh install: reset admitted, uninstalling selected app",
+            );
+            ctx.save()?;
+            let output = ctx.runner.run(&ios::uninstall_app_spec(udid, app_id));
+            if !output.ok() {
+                return Err(Failure::new(
+                    "fresh_install",
+                    FailureCode::AppResetFailed,
+                    "uninstall did not complete successfully on the selected device",
+                    "inspect simulator health and retry the fresh install",
+                ));
+            }
+            match ios::probe_app_presence(ctx.runner, udid, app_id) {
+                ios::AppPresence::ProvenAbsent => {}
+                ios::AppPresence::Unknown => return Err(unknown()),
+                ios::AppPresence::Installed => {
+                    return Err(Failure::new(
+                        "fresh_install",
+                        FailureCode::AppResetFailed,
+                        "the selected app remains installed after uninstall",
+                        "inspect simulator health and retry the fresh install",
+                    ))
+                }
+            }
+        }
+    }
+    let at = timefmt::iso8601_utc(ctx.runner.now_epoch_ms());
+    ctx.record.resources.fresh_install = Some(crate::runrecord::FreshInstallEvidence {
+        run_id: ctx.record.run_id.clone(),
+        app_id: app_id.to_string(),
+        device_id: udid.to_string(),
+        proven_absent_at: at.clone(),
+        status: crate::runrecord::FreshInstallStatus::ProvenAbsent,
+    });
+    ctx.record
+        .push_history(at, "fresh install: selected app proven absent");
+    ctx.save()?;
+    ctx.notes
+        .push(("fresh_install".to_string(), "proven_absent".to_string()));
+    Ok(())
+}
+
 fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
-    let (cleanup, _) = teardown(&mut ctx, None);
+    let (cleanup, _) = teardown(&mut ctx, false);
     let mut receipt = ctx.fail(failure);
     for (name, rendered) in cleanup {
         receipt.cleanup.insert(name, rendered);
@@ -413,19 +483,11 @@ fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
     receipt
 }
 
-// core dead → runners dead (they share the core's process group) → Metro pgid →
-// borrowed device kept → lease released. Every leg is ownership-gated; `core_leg`
-// carries what the walk itself learned about the core group.
-fn teardown(ctx: &mut Ctx, core_leg: Option<Outcome>) -> (Vec<(String, String)>, bool) {
+fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, bool) {
     let mut outcomes: Vec<(String, Outcome)> = Vec::new();
-    if let Some(outcome) = core_leg {
-        outcomes.push(("core".to_string(), outcome));
-    }
-    if let Some(core) = ctx.record.resources.core.clone() {
-        let outcome = cleanup_process_group(ctx.runner, Some(&core), core.pid, None);
-        if outcome.clean() {
-            ctx.record.resources.core = None;
-        }
+    if let Some(outcome) =
+        cleanup_core(ctx.runner, &mut ctx.record, &ctx.runs_root, wait_unresolved)
+    {
         outcomes.push(("core".to_string(), outcome));
     }
     if let Some(m) = ctx.record.resources.metro.clone() {
@@ -786,7 +848,7 @@ fn build_scenario(
             app_id: config.app_id.clone(),
             revision: "HEAD".to_string(),
             worktree: Some(repo_root.to_string_lossy().into_owned()),
-            dev_client_scheme: None,
+            dev_client_scheme: config.dev_client_scheme.clone(),
         },
         metro: Some(MetroSpec {
             port: config.metro_port,

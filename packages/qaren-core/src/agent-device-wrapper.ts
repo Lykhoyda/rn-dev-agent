@@ -616,7 +616,13 @@ export function buildRunIOSArgs(
       return { command: 'type', text, ...extra, ...(bundleId ? { bundleId } : {}) };
     }
     case 'snapshot':
-      return { command: 'snapshot', interactiveOnly: true, ...(bundleId ? { bundleId } : {}) };
+      return {
+        command: 'snapshot',
+        ...(cliArgs.includes('--platform-presence')
+          ? { platformPresence: true }
+          : { interactiveOnly: true }),
+        ...(bundleId ? { bundleId } : {}),
+      };
     case 'back':
       return { command: 'back', ...(bundleId ? { bundleId } : {}) };
     case 'screenshot':
@@ -1872,6 +1878,10 @@ export async function runNative(
   const targetPlatform = opts.platform ?? activeSession?.platform;
   if (targetPlatform === 'ios' && !opts.skipSession && RN_FAST_RUNNER_COMMANDS.has(cliArgs[0])) {
     const appId = activeSession?.appId ?? resolveBundleId('ios') ?? undefined;
+    if (cliArgs[0] === 'snapshot' && cliArgs.includes('--platform-presence')) {
+      const { runIOS } = await import('./runners/rn-fast-runner-client.js');
+      return runIOS(buildRunIOSArgs(cliArgs, appId));
+    }
     // A2/#210: device_screenshot has its own simctl fallback (device-list.ts) — never block
     // it here; the gate is only for verbs that genuinely require the XCUITest runner.
     let upgradeNote: string | undefined;

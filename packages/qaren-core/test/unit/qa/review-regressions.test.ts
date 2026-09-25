@@ -140,10 +140,11 @@ test('adding unrelated filled or secure inputs never disables banner checks or c
 
 test('banner checks with unrelated private inputs retain check-target batching and only act after a pass', async () => {
   for (const noul of [0.9, 0.1]) {
-    const judge = scriptedJudge((q) => ({
-      check_1: { type: 'noul', noul },
-      target_2: choice(q.target_2, 'e1'),
-    }));
+    const judge = scriptedJudge((q) => {
+      assert.deepEqual(Object.keys(q.target_2.criteria!), ['e0', 'none']);
+      assert.match(q.target_2.criteria!.e0, /Done/);
+      return { check_1: { type: 'noul', noul }, target_2: choice(q.target_2, 'e0') };
+    });
     const observed = screen(
       [element('@name', 'Name', { kind: 'input', value: 'Anton' }), element('@done', 'Done')],
       ['Name: Anton', 'Saved', 'Done'],
@@ -313,6 +314,8 @@ test('review P2: duplicate Android input values are hidden in labels, identifier
         placeholder: `Replace ${secret}`,
       },
     ],
+    'app',
+    { native: 'complete', react: 'complete' },
   );
   const judge = alwaysYes();
   await decideScreen(
@@ -354,6 +357,8 @@ test('secure input copies keep their local identities but stay out of outward ev
         value: secret,
       },
     ],
+    'app',
+    { native: 'complete', react: 'complete' },
   );
   assert.equal(observed.elements[0].label, secret);
   assert.equal(observed.elements[0].testID, `pin-${secret}`);
@@ -368,6 +373,7 @@ test('secure input copies keep their local identities but stay out of outward ev
     { kind: 'fill', target: { phrase: 'the PIN field' }, text: '1234', line: 1 },
     ['1234'],
   );
+  assert.equal(judge.requests.length, 1);
   assert.ok(!JSON.stringify(judge.requests).includes(secret));
 });
 
@@ -415,11 +421,11 @@ test('review P2: swipe gestures normalize into the inverse content-scroll direct
       assert.ok(item.kind === 'scroll');
       assert.equal(item.direction, direction);
       assert.equal(!!item.until, !!suffix);
-      const walkJudge = scriptedJudge((q, index) =>
-        Object.fromEntries(
-          Object.entries(q).map(([id, question]) => [id, choice(question, index ? 'e0' : 'none')]),
-        ),
-      );
+      const walkJudge = scriptedJudge((q, index) => {
+        assert.deepEqual(Object.keys(q), ['visibility_1']);
+        assert.equal(q.visibility_1.type, 'noul');
+        return { visibility_1: { type: 'noul', noul: index ? 0.9 : 0.1 } };
+      });
       const f = walker(
         [screen([element('@loading', 'Loading')]), screen([element('@footer', 'Footer')])],
         walkJudge,

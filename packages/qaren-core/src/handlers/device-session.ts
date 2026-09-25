@@ -63,6 +63,7 @@ interface SnapshotArgs {
   sessionName?: string;
   /** Attach to the exact already-running app process without relaunching it. */
   attachOnly?: boolean;
+  platformPresence?: boolean;
 }
 
 /**
@@ -547,16 +548,38 @@ export function createDeviceSnapshotHandler(
 
     // action === 'snapshot'
     if (!getActiveSession()) {
+      if (args.platformPresence === true) {
+        return failResult(
+          'Platform presence requires an existing device session.',
+          'RN_FAST_RUNNER_DOWN',
+          {
+            capture: 'unknown',
+            mutation: 'none',
+            dispatched: false,
+          },
+        );
+      }
       return failResult('No device session open. Call device_snapshot with action="open" first.', {
         hint: 'Provide appId and platform to start a session.',
       });
     }
 
-    const result = await rawSnapshot();
+    const result = await rawSnapshot(args.platformPresence);
     const nodes = parseSnapshotNodes(result);
 
     if (!result.isError && nodes && isAgentDeviceRunnerSentinel(nodes)) {
       const session = getActiveSession();
+      if (args.platformPresence === true && session?.platform === 'ios') {
+        return failResult(
+          'Platform presence observed the runner UI; no recovery attempted.',
+          'RN_FAST_RUNNER_DOWN',
+          {
+            capture: 'unknown',
+            mutation: 'none',
+            dispatched: true,
+          },
+        );
+      }
       markSnapshotDirty(session?.platform);
       const recovery = await recoverFromRunnerLeak(
         {
@@ -583,7 +606,7 @@ export function createDeviceSnapshotHandler(
           },
           openSession: ({ appId, platform, deviceId, attachOnly }) =>
             reopenSessionForRecovery(appId, platform, attachOnly, deviceId, deps),
-          resnapshot: () => rawSnapshot(),
+          resnapshot: () => rawSnapshot(args.platformPresence),
           parseNodes: parseSnapshotNodes,
           reacquire:
             session?.platform === 'ios' &&
@@ -627,7 +650,7 @@ export function createDeviceSnapshotHandler(
       });
     }
 
-    cacheSnapshotIfPossible(result);
+    cacheSnapshotIfPossible(result, args.platformPresence === true);
     return attachForegroundSurfaceDiscovery(
       result,
       getActiveSession()?.appId,
@@ -701,8 +724,12 @@ export async function reacquireIosTargetApp(
   }
 }
 
-async function rawSnapshot(): Promise<ToolResult> {
-  return runNative(['snapshot', '-i']);
+async function rawSnapshot(platformPresence?: boolean): Promise<ToolResult> {
+  return runNative(
+    platformPresence === true && getActiveSession()?.platform === 'ios'
+      ? ['snapshot', '--platform-presence']
+      : ['snapshot', '-i'],
+  );
 }
 
 function parseSnapshotNodes(result: ToolResult): RunnerLeakNode[] | null {
@@ -719,11 +746,12 @@ function parseSnapshotNodes(result: ToolResult): RunnerLeakNode[] | null {
   }
 }
 
-function cacheSnapshotIfPossible(result: ToolResult): void {
+function cacheSnapshotIfPossible(result: ToolResult, platformPresence = false): void {
   if (result.isError) return;
   try {
     const envelope = JSON.parse(result.content[0].text) as {
       ok?: boolean;
+      meta?: { snapshotVerdict?: { state?: unknown; refMapUpdated?: unknown } };
       data?: {
         nodes?: {
           ref: string;
@@ -735,6 +763,15 @@ function cacheSnapshotIfPossible(result: ToolResult): void {
       };
     };
     const platform = getActiveSession()?.platform;
+    if (
+      platformPresence &&
+      platform === 'ios' &&
+      (envelope.meta?.snapshotVerdict?.state !== 'ok' ||
+        envelope.meta.snapshotVerdict.refMapUpdated !== true)
+    ) {
+      markSnapshotDirty(platform);
+      return;
+    }
     if (platform && envelope.ok && envelope.data?.nodes) {
       cacheSnapshot(platform, envelope.data.nodes);
     }

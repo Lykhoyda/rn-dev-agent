@@ -87,7 +87,7 @@ test('offscreen selections and none with offscreen evidence request a scroll, ne
   }
 });
 
-test('candidate coverage is bounded, disabled/non-hittable candidates excluded, fill only selects inputs', async () => {
+test('candidate coverage is bounded, disabled/hidden candidates excluded, fill only selects inputs', async () => {
   const limit = screen(Array.from({ length: 30 }, (_, i) => element(`@${i}`, `button ${i}`)));
   const judge = scriptedJudge((q) => ({ target_0: choice(q.target_0) }));
   assert.equal((await resolveTarget(target, limit, judge)).ref, '@0');
@@ -98,12 +98,31 @@ test('candidate coverage is bounded, disabled/non-hittable candidates excluded, 
   const mixed = screen([
     element('@text', 'Email'),
     element('@disabled', 'Email', { kind: 'input', disabled: true, offscreen: true }),
-    element('@covered', 'Email', { kind: 'input', hittable: false }),
+    element('@covered', 'Email', {
+      kind: 'input',
+      hittable: false,
+      semantic: { press: 'unsupported', fill: 'supported', visibility: 'hidden' },
+    }),
     element('@input', 'Email', { kind: 'input' }),
   ]);
   assert.equal((await resolveTarget(fill, mixed, judge)).ref, '@input');
   assert.equal(Object.keys(judge.requests[1].questions.target_0.criteria!).length, 2);
   assert.equal(judge.requests.length, 2, 'overflow does not silently omit candidates');
+});
+
+test('a supported non-hittable control without hidden or offscreen evidence is not silently excluded', async () => {
+  const observed = screen([
+    element('@blocked', 'Email', { kind: 'input', hittable: false }),
+    element('@input', 'Email', { kind: 'input' }),
+  ]);
+  const judge = scriptedJudge(() => assert.fail('incomplete evidence must not reach Jev'));
+  const result = await resolveTarget(
+    step('Type "sensitive" into the email field'),
+    observed,
+    judge,
+  );
+  assert.ok('refuse' in result && result.refuse === 'SCREEN_EVIDENCE_INCOMPLETE');
+  assert.equal(judge.requests.length, 0);
 });
 
 test('noul bars are inclusive and invalid answers fail closed', () => {
@@ -251,15 +270,15 @@ test('Jev unavailable is a line-attributed failure, with no mutation or recovery
   assert.equal(ledger.llmTurns, 0);
 });
 
-test('phrase waits and explicit scroll-until inspect visibility without dispatching the selected ref', async () => {
+test('phrase waits and explicit scroll-until ask a presence predicate without selecting or pressing a ref', async () => {
   const before = screen([element('@loading', 'Loading')]);
   const after = screen([element('@footer', 'Footer', { kind: 'text', hittable: false })]);
   for (const line of ['1. Wait for the footer', '1. Scroll down until the footer']) {
-    const judge = scriptedJudge((q, i) =>
-      Object.fromEntries(
-        Object.entries(q).map(([id, question]) => [id, choice(question, i ? 'e0' : 'none')]),
-      ),
-    );
+    const judge = scriptedJudge((q, i) => {
+      assert.deepEqual(Object.keys(q), ['visibility_1']);
+      assert.equal(q.visibility_1.type, 'noul');
+      return { visibility_1: { type: 'noul', noul: i ? 0.9 : 0.1 } };
+    });
     const f = walker([before, after], judge);
     const ledger = await runPlan(parsePlan(line).blocks!, f.deps);
     assert.equal(ledger.verdict, 'PASS');
@@ -293,22 +312,27 @@ test('quoted visibility remains model-free even with duplicate labels in a batch
 });
 
 test('uncertain visibility and candidate overflow name the resolution refusal, not an HTTP error', async () => {
-  for (const overflow of [false, true]) {
-    const judge = scriptedJudge((q) => ({
-      target_1: choice(q.target_1, 'e0', { e0: 0.4, e1: 0.3, none: 0.3 }),
-    }));
-    const f = walker(
-      [
-        overflow
-          ? screen(Array.from({ length: 31 }, (_, i) => element(`@${i}`, `entry${i}`)))
-          : save,
-      ],
-      judge,
-    );
-    const ledger = await runPlan(parsePlan('1. Scroll until Save').blocks!, f.deps);
-    assert.equal(ledger.verdict, 'FAIL');
-    assert.match(ledger.failure?.seen ?? '', overflow ? /CANDIDATE_LIMIT/ : /TARGET_UNSURE/);
-    assert.deepEqual(f.actions, []);
-    assert.equal(judge.requests.length, overflow ? 0 : 1);
+  for (const line of ['1. Wait for Save', '1. Scroll until Save']) {
+    for (const overflow of [false, true]) {
+      const judge = scriptedJudge((q) => {
+        assert.deepEqual(Object.keys(q), ['visibility_1']);
+        assert.equal(q.visibility_1.type, 'noul');
+        return { visibility_1: { type: 'noul', noul: 0.5 } };
+      });
+      const f = walker(
+        [
+          overflow
+            ? screen(Array.from({ length: 31 }, (_, i) => element(`@${i}`, `entry${i}`)))
+            : save,
+        ],
+        judge,
+      );
+      const ledger = await runPlan(parsePlan(line).blocks!, f.deps);
+      assert.equal(ledger.verdict, 'FAIL');
+      assert.match(ledger.failure?.seen ?? '', overflow ? /CANDIDATE_LIMIT/ : /VISIBILITY_UNSURE/);
+      assert.deepEqual(f.actions, []);
+      assert.equal(judge.requests.length, overflow ? 0 : 2);
+      assert.equal(f.captures(), overflow ? 1 : 2);
+    }
   }
 });

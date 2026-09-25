@@ -13,6 +13,39 @@ use std::time::{Duration, Instant};
 
 const KEY: &str = "synthetic-phase3-typesafe-key";
 
+#[test]
+fn private_capture_passes_bounded_stdin_without_inventory_in_diagnostics_or_command_logs() {
+    let dir = common::temp_repo();
+    let inventory = include_str!("fixtures/installed-apps.plist");
+    let mut runner = RealRunner::with_log_executable(env!("CARGO_BIN_EXE_qaren").into());
+    let spec = CmdSpec::new("private-fixture", "/bin/cat", &[], 5).cwd(&dir);
+    let output = runner.run_private(&spec, inventory.as_bytes());
+    assert!(output.clean());
+    assert_eq!(output.stdout(), inventory);
+    for diagnostic in [
+        format!("{output:?}"),
+        output.summary(),
+        spec.rendered(),
+        serde_json::to_string(&spec).unwrap(),
+    ] {
+        assert!(!diagnostic.contains("com.private.unrelated"));
+        assert!(!diagnostic.contains("/private/fixture"));
+    }
+    assert!(!dir.join("installed-apps.plist").exists());
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    let oversized = runner.run_private(&spec, &vec![b'x'; 16 * 1024 * 1024 + 1]);
+    assert!(!oversized.clean());
+    let failed = runner.run_private(&shell("cat >&2; exit 1", &dir), inventory.as_bytes());
+    assert!(!failed.clean());
+    assert!(!format!("{failed:?} {}", failed.summary()).contains("com.private.unrelated"));
+    let mut blocked = shell("sleep 5", &dir);
+    blocked.timeout_seconds = 1;
+    let started = Instant::now();
+    let timed_out = runner.run_private(&blocked, &vec![b'x'; 1024 * 1024]);
+    assert!(!timed_out.clean());
+    assert!(started.elapsed() < Duration::from_secs(4));
+}
+
 fn shell(script: &str, dir: &Path) -> CmdSpec {
     CmdSpec::new("fixture", "/bin/sh", &["-c", script], 5).cwd(dir)
 }

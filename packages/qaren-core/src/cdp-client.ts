@@ -387,6 +387,56 @@ export class CDPClient {
     }
   }
 
+  async withPrivateHelperWorld<T>(
+    operation: (
+      evaluate: (expression: string, timeoutMs: number) => Promise<unknown>,
+    ) => Promise<T>,
+  ): Promise<T> {
+    const token = this._helperToken;
+    let active = true;
+    const assertCurrent = (): void => {
+      if (
+        !active ||
+        !this.isConnected ||
+        !this._helpersInjected ||
+        !this.isHelperTokenCurrent(token)
+      ) {
+        throw new Error('Private helper world unavailable');
+      }
+    };
+    const evaluate = async (expression: string, timeoutMs: number): Promise<unknown> => {
+      try {
+        assertCurrent();
+        if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+          throw new Error('Private helper world unavailable');
+        }
+        const result = await this.evaluateForHelperToken(token, expression, timeoutMs);
+        assertCurrent();
+        if (Object.hasOwn(result, 'error')) throw new Error('Private helper world unavailable');
+        return result.value;
+      } catch {
+        active = false;
+        throw new Error('Private helper world unavailable');
+      }
+    };
+    try {
+      assertCurrent();
+      const version = await evaluate(
+        `typeof globalThis.__QAREN === 'object' && globalThis.__QAREN !== null ? globalThis.__QAREN.__v : null`,
+        1500,
+      );
+      if (version !== HELPERS_VERSION) throw new Error('Private helper world unavailable');
+      assertCurrent();
+      const result = await operation(evaluate);
+      assertCurrent();
+      return result;
+    } catch {
+      throw new Error('Private helper world unavailable');
+    } finally {
+      active = false;
+    }
+  }
+
   private invalidateHelperWorld(
     cause:
       | 'socket_opened'
@@ -454,8 +504,20 @@ export class CDPClient {
       exceptionDetails?: unknown;
     };
     if (!this.isHelperTokenCurrent(token)) throw new Error('helper world superseded');
-    if (result?.exceptionDetails) return { error: 'helper-world expression failed' };
-    return { value: result?.result?.value };
+    if (
+      !result ||
+      typeof result !== 'object' ||
+      Array.isArray(result) ||
+      Object.hasOwn(result, 'exceptionDetails') ||
+      Object.hasOwn(result, 'error') ||
+      !result.result ||
+      typeof result.result !== 'object' ||
+      Array.isArray(result.result) ||
+      Object.hasOwn(result.result, 'error')
+    ) {
+      return { error: 'helper-world expression failed' };
+    }
+    return { value: result.result.value };
   }
 
   private async ensureCurrentHelpers(

@@ -9,6 +9,46 @@ use std::time::Duration;
 
 const RUN: &str = "check-20260921T100000Z";
 
+#[test]
+fn fresh_admission_command_pins_runtime_node_device_cwd_and_deadline_without_adopting_a_lease() {
+    let observer = std::env::current_exe()
+        .unwrap()
+        .into_os_string()
+        .into_string()
+        .unwrap();
+    let mut mock = MockRunner::new();
+    mock.expect_run(
+        "fresh-install-preflight.js",
+        CmdOutput::success(r#"{"v":1,"platform":"ios","deviceId":"AAAA-1111","status":"clear"}"#),
+    );
+    core::fresh_install_admission(
+        &mut mock,
+        Path::new("/opt/node bin/node"),
+        Path::new("/runtime path"),
+        Path::new("/app path"),
+        "AAAA-1111",
+    )
+    .unwrap();
+    assert_eq!(
+        mock.calls,
+        [CmdSpec::new(
+            "fresh-install-admission",
+            "/opt/node bin/node",
+            &[
+                "/runtime path/qa/fresh-install-preflight.js",
+                "--platform",
+                "ios",
+                "--device",
+                "AAAA-1111",
+                "--process-observer",
+                &observer,
+            ],
+            30
+        )
+        .cwd(Path::new("/app path"))]
+    );
+}
+
 fn request() -> CoreRequest {
     CoreRequest {
         run_id: RUN.to_string(),

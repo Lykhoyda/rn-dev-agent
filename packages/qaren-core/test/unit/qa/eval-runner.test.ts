@@ -1,13 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
-import { evaluateCase, type EvalCase } from '../../jev-evals/run.ts';
-import { choice, scriptedJudge } from './judgment-fixtures.ts';
+import { evaluateCase, evaluateSyntheticCase, type EvalCase } from '../../jev-evals/run.ts';
+import { choice, element, screen, scriptedJudge } from './judgment-fixtures.ts';
 
-test('committed frozen-screen fixtures exercise the eval runner offline through a scripted judge', async () => {
+test('frozen Screens retain literal/check coverage and refuse semantic actions without attested provenance', async () => {
   const root = new URL('../../jev-evals/cases/', import.meta.url);
   const names = readdirSync(root).filter((n) => n.endsWith('.json'));
+  const awaitingProvenance = new Set([
+    'fill-name.json',
+    'navigate-settings-tab.json',
+    'no-match.json',
+    'offscreen-load-more.json',
+    'profile-target.json',
+    'verb-fallback.json',
+  ]);
   assert.ok(names.length >= 11);
+  for (const name of awaitingProvenance) assert.ok(names.includes(name), name);
   for (const name of names) {
     const fixture: EvalCase = JSON.parse(readFileSync(new URL(name, root), 'utf8'));
     const judge = scriptedJudge((questions) =>
@@ -39,13 +48,249 @@ test('committed frozen-screen fixtures exercise the eval runner offline through 
         }),
       ),
     );
-    assert.equal((await evaluateCase(fixture, judge)).pass, true, name);
-    assert.ok(
-      judge.requests.length > 0 ||
-        (fixture.expected.kind === 'check' && fixture.expected.verdict === 'unsure'),
-    );
+    const result = await evaluateCase(fixture, judge);
+    if (awaitingProvenance.has(name)) {
+      assert.deepEqual(
+        result,
+        { pass: false, actual: { kind: 'target', refuse: 'SCREEN_EVIDENCE_INCOMPLETE' } },
+        name,
+      );
+      assert.ok(
+        judge.requests.every((request) =>
+          Object.keys(request.questions).every((id) => id.startsWith('verb_')),
+        ),
+        `${name}: only verb parsing may call Jev before screen provenance is established`,
+      );
+    } else {
+      assert.equal(result.pass, true, name);
+      assert.ok(
+        judge.requests.length > 0 ||
+          (fixture.expected.kind === 'check' && fixture.expected.verdict === 'unsure'),
+      );
+    }
     for (const value of fixture.typedValues ?? [])
       assert.ok(!JSON.stringify(judge.requests).includes(value), name);
+  }
+});
+
+test('all frozen authored Screens exercise a separate synthetic model contract without changing production admission', async () => {
+  const root = new URL('../../jev-evals/cases/', import.meta.url);
+  const names = readdirSync(root)
+    .filter((name) => name.endsWith('.json'))
+    .sort();
+  assert.equal(names.length, 13);
+  for (const name of names) {
+    const fixture: EvalCase = JSON.parse(readFileSync(new URL(name, root), 'utf8'));
+    const before = structuredClone(fixture.screen);
+    const judge = scriptedJudge((questions) =>
+      Object.fromEntries(
+        Object.entries(questions).map(([id, q]) => {
+          if (id.startsWith('verb_')) return [id, choice(q, 'press')];
+          if (q.type === 'noul')
+            return [
+              id,
+              {
+                type: 'noul',
+                noul:
+                  fixture.expected.kind === 'check' && fixture.expected.verdict === 'pass'
+                    ? 0.9
+                    : 0.1,
+              },
+            ];
+          const expected = fixture.expected;
+          const candidates = fixture.screen.elements.filter(
+            (element) => !fixture.line.startsWith('Type') || element.kind === 'input',
+          );
+          const index =
+            expected.kind === 'target' && 'ref' in expected
+              ? candidates.findIndex((element) => element.ref === expected.ref)
+              : expected.kind === 'target' && 'scroll' in expected
+                ? candidates.findIndex((element) => element.offscreen)
+                : -1;
+          return [id, choice(q, index < 0 ? 'none' : `e${index}`)];
+        }),
+      ),
+    );
+    assert.deepEqual(
+      await evaluateSyntheticCase(fixture, judge),
+      { pass: true, actual: fixture.expected },
+      name,
+    );
+    assert.deepEqual(fixture.screen, before, `${name}: synthetic evaluation must not add evidence`);
+    if (
+      [
+        'fill-name.json',
+        'navigate-settings-tab.json',
+        'no-match.json',
+        'offscreen-load-more.json',
+        'profile-target.json',
+        'verb-fallback.json',
+      ].includes(name)
+    ) {
+      assert.ok(
+        judge.requests.some(({ questions }) => Object.keys(questions).includes('target_1')),
+        name,
+      );
+      assert.equal(fixture.screen.coverage, undefined, name);
+    }
+    const outbound = JSON.stringify(judge.requests);
+    for (const value of fixture.typedValues ?? []) assert.ok(!outbound.includes(value), name);
+    if (name === 'fill-name.json') {
+      assert.ok(!outbound.includes('Sample Person'), name);
+    }
+  }
+});
+
+test('synthetic model questions mask private values appearing in authored descriptions', async () => {
+  const fixture: EvalCase = {
+    screen: screen([
+      element('@name', 'Name', { kind: 'input', value: 'Sample Person' }),
+      element('@email', 'Email', { kind: 'input', value: 'someone@example.com' }),
+    ]),
+    line: 'Type "Sample Person" into the name field',
+    expected: { kind: 'target', ref: '@name' },
+  };
+  const judge = scriptedJudge((questions) => ({ target_1: choice(questions.target_1) }));
+  assert.deepEqual(await evaluateSyntheticCase(fixture, judge), {
+    pass: true,
+    actual: fixture.expected,
+  });
+  const outbound = JSON.stringify(judge.requests);
+  assert.ok(!outbound.includes('Sample Person'));
+  assert.ok(!outbound.includes('someone@example.com'));
+  assert.match(outbound, /\[QAREN_VALUE_1\]/);
+  assert.match(outbound, /\[QAREN_VALUE_2\]/);
+});
+
+test('synthetic phrase choices expose descriptions and none, scroll offscreen, and refuse unsure answers', async () => {
+  const fixture: EvalCase = {
+    screen: {
+      front: 'app',
+      elements: [
+        element('@save', 'Save'),
+        element('react:more', 'Load more', { offscreen: true, hittable: false }),
+      ],
+      visibleText: [],
+    },
+    line: 'Tap the load more control',
+    expected: { kind: 'target', scroll: 'down' },
+  };
+  const scrollJudge = scriptedJudge((questions) => ({
+    target_1: choice(questions.target_1, 'e1'),
+  }));
+  assert.deepEqual(await evaluateSyntheticCase(fixture, scrollJudge), {
+    pass: true,
+    actual: fixture.expected,
+  });
+  const { state, questions } = scrollJudge.requests[0];
+  assert.deepEqual(Object.keys(questions.target_1.criteria!), ['e0', 'e1', 'none']);
+  assert.deepEqual(state, {
+    front: 'app',
+    elements: ['Button "Save"', 'Button "Load more" off screen'],
+  });
+
+  const unsureJudge = scriptedJudge((questions) => ({
+    target_1: choice(questions.target_1, 'e1', { e0: 0.3, e1: 0.5, none: 0.2 }),
+  }));
+  assert.deepEqual(await evaluateSyntheticCase(fixture, unsureJudge), {
+    pass: false,
+    actual: { kind: 'target', refuse: 'TARGET_UNSURE' },
+  });
+  const narrowJudge = scriptedJudge((questions) => ({
+    target_1: choice(questions.target_1, 'e1', { e0: 0.43, e1: 0.57, none: 0 }),
+  }));
+  assert.deepEqual(await evaluateSyntheticCase(fixture, narrowJudge), {
+    pass: false,
+    actual: { kind: 'target', refuse: 'TARGET_UNSURE' },
+  });
+  const noMatch: EvalCase = {
+    ...fixture,
+    screen: screen([element('@save', 'Save')]),
+    expected: { kind: 'target', refuse: 'TARGET_NOT_FOUND' },
+  };
+  const noneJudge = scriptedJudge((questions) => ({
+    target_1: choice(questions.target_1, 'none'),
+  }));
+  assert.deepEqual(await evaluateSyntheticCase(noMatch, noneJudge), {
+    pass: true,
+    actual: noMatch.expected,
+  });
+  const emptyJudge = scriptedJudge(() => {
+    throw new Error('no eligible candidate should skip the model');
+  });
+  assert.deepEqual(await evaluateSyntheticCase({ ...noMatch, screen: screen([]) }, emptyJudge), {
+    pass: true,
+    actual: noMatch.expected,
+  });
+});
+
+test('explicit synthetic evidence exercises semantic eval targets, fills, scrolling, no-match and verb fallback', async () => {
+  const tabs = screen([element('@home', 'Home'), element('@profile', 'Profile')]);
+  const cases: { fixture: EvalCase; selected: string }[] = [
+    {
+      fixture: {
+        screen: tabs,
+        line: 'Open the profile tab',
+        expected: { kind: 'target', ref: '@profile' },
+      },
+      selected: 'e1',
+    },
+    {
+      fixture: {
+        screen: screen([
+          element('@name', 'Full name', { kind: 'input' }),
+          element('@email', 'Email address', { kind: 'input' }),
+        ]),
+        line: 'Type "private-fill-value" into the name field',
+        typedValues: ['private-fill-value'],
+        expected: { kind: 'target', ref: '@name' },
+      },
+      selected: 'e0',
+    },
+    {
+      fixture: {
+        screen: screen([
+          element('@back', 'Back'),
+          element('react:more', 'Load more', { offscreen: true, hittable: false }),
+        ]),
+        line: 'Tap the load more control',
+        expected: { kind: 'target', scroll: 'down' },
+      },
+      selected: 'e1',
+    },
+    {
+      fixture: {
+        screen: screen([element('@cancel', 'Cancel'), element('@help', 'Help')]),
+        line: 'Tap the save button',
+        expected: { kind: 'target', refuse: 'TARGET_NOT_FOUND' },
+      },
+      selected: 'none',
+    },
+    {
+      fixture: {
+        screen: tabs,
+        line: 'Visit the profile tab',
+        expected: { kind: 'target', ref: '@profile' },
+      },
+      selected: 'e1',
+    },
+  ];
+  for (const { fixture, selected } of cases) {
+    const judge = scriptedJudge((questions) =>
+      Object.fromEntries(
+        Object.entries(questions).map(([id, q]) => [
+          id,
+          choice(q, id.startsWith('verb_') ? 'press' : selected),
+        ]),
+      ),
+    );
+    assert.deepEqual(await evaluateCase(fixture, judge), { pass: true, actual: fixture.expected });
+    assert.deepEqual(
+      judge.calls.map((call) => call.questionIds),
+      fixture.line.startsWith('Visit') ? [['verb_1'], ['target_1']] : [['target_1']],
+    );
+    for (const value of fixture.typedValues ?? [])
+      assert.ok(!JSON.stringify(judge.requests).includes(value), fixture.line);
   }
 });
 

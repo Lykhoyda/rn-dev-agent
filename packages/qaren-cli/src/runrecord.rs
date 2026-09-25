@@ -45,6 +45,80 @@ pub struct PidIdentity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "StoredCoreResource")]
+pub struct CoreResource {
+    pub pgid: i32,
+    pub identity: Option<PidIdentity>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+enum StoredCoreResource {
+    Explicit {
+        pgid: i32,
+        identity: Option<PidIdentity>,
+    },
+    Original {
+        pid: i32,
+        started_at: String,
+        command: String,
+    },
+}
+
+impl From<StoredCoreResource> for CoreResource {
+    fn from(stored: StoredCoreResource) -> Self {
+        match stored {
+            StoredCoreResource::Explicit { pgid, identity } => Self { pgid, identity },
+            StoredCoreResource::Original {
+                pid,
+                started_at,
+                command,
+            } => Self {
+                // The original qaren-run/1 core spawn also made the child PID its PGID.
+                pgid: pid,
+                identity: Some(PidIdentity {
+                    pid,
+                    started_at,
+                    command,
+                }),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupCleanupResult {
+    Removed,
+    Absent,
+    Refused,
+    Unresolved,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoreCleanupEvidence {
+    pub run_id: String,
+    pub pgid: i32,
+    pub at: String,
+    pub outcome: GroupCleanupResult,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FreshInstallStatus {
+    ProvenAbsent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FreshInstallEvidence {
+    pub run_id: String,
+    pub app_id: String,
+    pub device_id: String,
+    pub proven_absent_at: String,
+    pub status: FreshInstallStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IosSimResource {
     pub udid: String,
     pub name: String,
@@ -164,7 +238,11 @@ pub struct Resources {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease: Option<crate::lease::Lease>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub core: Option<PidIdentity>,
+    pub core: Option<CoreResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_cleanup: Option<CoreCleanupEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_install: Option<FreshInstallEvidence>,
     // A borrowed device (the booted simulator `check` walks on) is never shut down or deleted.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub device_borrowed: bool,
@@ -181,6 +259,7 @@ impl Resources {
             || self.usb_device.is_some()
             || self.build_lock.is_some()
             || self.lease.is_some()
+            || self.core.is_some()
     }
 }
 

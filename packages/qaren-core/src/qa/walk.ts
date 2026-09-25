@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CDPClient } from '../cdp-client.js';
-import { createComponentTreeHandler } from '../handlers/component-tree.js';
+import { waitForExactPortTargets } from '../cdp/discovery.js';
+import { REACT_READY_POLL_MS, REACT_READY_TIMEOUT_MS } from '../cdp/setup.js';
 import { createDevSettingsHandler } from '../handlers/dev-settings.js';
 import {
   createDeviceBackHandler,
@@ -19,6 +20,8 @@ import { foregroundSurfaceFromSnapshot } from '../handlers/expo-dev-menu.js';
 import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
 import type { ToolResult } from '../utils.js';
 import { HandlerError, adapt, describeError, unwrap } from './adapt.js';
+import { captureScreen, type NativeObservation } from './capture.js';
+import { captureQaReact } from './react-capture.js';
 import type { LedgerRow } from './ledger.js';
 import { parsePlanWithJev, readPreparedPlan } from './plan.js';
 import { createJev } from './jev.js';
@@ -26,12 +29,6 @@ import { preflightPlan } from './preflight.js';
 import { summarizeJev } from './ledger.js';
 import { redactApiKey } from '../util/redact.js';
 import { prove } from './prove.js';
-import {
-  type DigestEntry,
-  type NativeNode,
-  frontFromSurface,
-  join as joinScreen,
-} from './screen.js';
 import { type ActResult, type WalkerDeps, runPlan } from './walker.js';
 import {
   type ResultPayload,
@@ -119,6 +116,7 @@ async function openSession(
   const cdp = new CDPClient(target.metroPort);
   const getClient = (): CDPClient => cdp;
   try {
+    await waitForExactPortTargets(target.metroPort, REACT_READY_TIMEOUT_MS, REACT_READY_POLL_MS);
     await cdp.connectExact(target.metroPort, { platform, bundleId: appId });
   } catch (error) {
     throw new HandlerError(
@@ -145,6 +143,7 @@ async function openSession(
     platform?: string;
     attachOnly?: boolean;
     sessionName?: string;
+    platformPresence?: boolean;
   }> = createDeviceSnapshotHandler();
   await adapt(snapshot)({
     action: 'open',
@@ -165,11 +164,21 @@ async function openSession(
     `bundle proven: ${proof.scriptURL} (${proof.appModules} app modules under ${target.worktree})`,
   );
 
-  const rawSnapshot = async (): Promise<{ nodes: NativeNode[]; surface: string | undefined }> => {
-    const result = await snapshot({ action: 'snapshot' });
-    const { data, meta } = unwrap<{ nodes?: NativeNode[] }>(result);
+  const rawSnapshot = async (platformPresence = false) => {
+    const result = await snapshot({
+      action: 'snapshot',
+      ...(platform === 'ios' && platformPresence ? { platformPresence: true } : {}),
+    });
+    const { data, meta } = unwrap<
+      NativeObservation & { presenceCapture?: unknown; snapshotGeneration?: unknown }
+    >(result);
     return {
-      nodes: data.nodes ?? [],
+      nodes: data.nodes,
+      presenceCapture: data.presenceCapture,
+      snapshotGeneration: data.snapshotGeneration,
+      truncated: data.truncated,
+      normalizationDroppedNodes: data.normalizationDroppedNodes,
+      snapshotVerdict: meta?.snapshotVerdict,
       surface: typeof meta?.foregroundSurface === 'string' ? meta.foregroundSurface : undefined,
     };
   };
@@ -185,30 +194,22 @@ async function openSession(
     }
   }
 
-  const tree = createComponentTreeHandler(getClient);
   const press = createDevicePressHandler(getClient);
   const fill = createDeviceFillHandler(getClient);
   const scroll = createDeviceScrollHandler();
   const back = createDeviceBackHandler();
   const accept = createDeviceAcceptSystemDialogHandler();
   const dismiss = createDeviceDismissSystemDialogHandler();
-  let digestWarned = false;
 
   const deps: WalkerDeps = {
     judge: createJev(),
-    async captureScreen() {
-      const { nodes, surface } = await rawSnapshot();
-      let digest: DigestEntry[] = [];
-      try {
-        const { data } = unwrap<{ interactive?: DigestEntry[] }>(
-          await tree({ interactiveOnly: true, depth: 12 }),
-        );
-        digest = data.interactive ?? [];
-      } catch (error) {
-        if (!digestWarned) log(`interactive digest unavailable: ${describeError(error).message}`);
-        digestWarned = true;
-      }
-      return joinScreen(nodes, digest, frontFromSurface(surface, nodes));
+    async captureScreen(options) {
+      return captureScreen({
+        appId,
+        requirePrivateInputs: true,
+        native: () => rawSnapshot(options?.platformPresence),
+        react: () => captureQaReact(cdp, options?.platformPresence === true),
+      });
     },
     press: (ref) => act(() => press({ ref }), false),
     fill: (ref, text) => act(() => fill({ ref, text }), true),

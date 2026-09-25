@@ -66,6 +66,7 @@ function executableBasename(command: string): string {
 }
 
 const SHELL_WRAPPERS = /^(?:sh|bash|zsh|dash|ksh|env)$/i;
+const MAESTRO_JAVA_ENTRYPOINT_RE = /(?:^|\s)maestro\.cli\.[\w.$]+(?:\s|$)/i;
 
 // `/bin/sh /usr/local/bin/maestro test flow.yaml` — the installed CLI is
 // routinely a shell wrapper, so the basename of argv[0] is the shell.
@@ -88,7 +89,7 @@ export function isIosExternalRunnerProcessLine(line: string): boolean {
   if (/^maestro(?:-driver-iosUITests-Runner)?$/i.test(executable)) return true;
   if (shellWrappedMaestro(command)) return true;
   if (/^WebDriverAgent(?:Runner)?(?:-Runner)?$/i.test(executable)) return true;
-  if (/^java$/i.test(executable) && /(?:^|\s)maestro\.cli\.[\w.$]+(?:\s|$)/i.test(command)) {
+  if (/^java$/i.test(executable) && MAESTRO_JAVA_ENTRYPOINT_RE.test(command)) {
     return true;
   }
   if (
@@ -102,24 +103,211 @@ export function isIosExternalRunnerProcessLine(line: string): boolean {
 
 const RN_FAST_RUNNER_RE = /RnFastRunner/i;
 
+const IOS_PS_OPTIONS = { timeout: 2_000, maxBuffer: 1024 * 1024, encoding: 'utf8' as const };
+
+function readIosProcesses(
+  execFileImpl: typeof execFile,
+): Promise<{ stdout: string; stderr?: string }> {
+  const run =
+    execFileImpl === execFile
+      ? promisify(execFileImpl)
+      : (execFileImpl as unknown as (
+          b: string,
+          a: string[],
+          o: typeof IOS_PS_OPTIONS,
+        ) => Promise<{ stdout: string; stderr?: string }>);
+  // Unlimited column width keeps simulator identities in long executable paths intact.
+  return run('ps', ['axww', '-o', 'pid=,command='], IOS_PS_OPTIONS);
+}
+
+export type IosStrictRunnerStatus = 'clear' | 'busy' | 'unknown';
+
+export function isIosSimulatorUdid(value: string): boolean {
+  return (
+    value.length === 36 &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+  );
+}
+
+function isIosStrictRunnerProcessLine(line: string): boolean {
+  const command = line.replace(/^\s*\d+\s+/, '');
+  const executable = executableBasename(command);
+  // Legacy shell detection scans argv; strict admission cannot attribute those path mentions.
+  if (SHELL_WRAPPERS.test(executable)) return false;
+  if (isIosExternalRunnerProcessLine(line)) return true;
+  if (/^(?:RnFastRunner[^/]*|XCTRunner|.*UITests-Runner)$/i.test(executable)) return true;
+  return (
+    /^xcodebuild$/i.test(executable) &&
+    /(?:^|\s)(?:test|test-without-building)(?:\s|$)/.test(command)
+  );
+}
+
+function hasUnresolvedIosPath(command: string): boolean {
+  if (command.length > 16_384) return true;
+  const components = command.split('/').slice(1);
+  const hasMaestroJavaEntrypoint = MAESTRO_JAVA_ENTRYPOINT_RE.test(command);
+  // Unescaped path fragments justify unknown, never an executable identity or busy verdict.
+  for (const [index, component] of components.entries()) {
+    if (
+      /^(?:maestro(?:-driver-iosUITests-Runner|\.\w+)?|WebDriverAgent(?:Runner)?(?:-Runner)?|RnFastRunner\S*|XCTRunner|xcodebuild|\S*UITests-?Runner)(?=$|[\s"'])/i.test(
+        component,
+      ) ||
+      (index < components.length - 1 && /(?:UITests-?Runner|XCTRunner)\.app/i.test(component)) ||
+      (hasMaestroJavaEntrypoint && /^java(?=$|[\s"'])/i.test(component))
+    )
+      return true;
+  }
+  return false;
+}
+
+function leadingShellWord(command: string): { word: string; rest: string } | null {
+  const match = /^(?:"([^"]*)"|'([^']*)'|(\S+))(?:\s+|$)/.exec(command);
+  return match
+    ? { word: match[1] ?? match[2] ?? match[3], rest: command.slice(match[0].length) }
+    : null;
+}
+
+function hasUnresolvedIosShellScript(command: string): boolean {
+  const shell = leadingShellWord(command);
+  if (!shell || !SHELL_WRAPPERS.test(executableBasename(shell.word))) return false;
+  let rest = shell.rest;
+  for (let options = 0; options < 16; options++) {
+    if (!rest) return false;
+    const next = leadingShellWord(rest);
+    if (!next) return true;
+    const { word } = next;
+    if (word === '--') return hasUnresolvedIosPath(next.rest);
+    if (executableBasename(shell.word) === 'env' && /^(?:-|\w+=)/.test(word)) return true;
+    if (!/^[+-]/.test(word)) return hasUnresolvedIosPath(rest);
+    // Command strings and stdin are not script operands; never scan their contents.
+    if (/^-[a-zA-Z]*[cs][a-zA-Z]*$/.test(word) || /^--command(?:=|$)/.test(word)) return false;
+    rest = next.rest;
+    if (/^[+-][oO]$/.test(word)) {
+      const option = leadingShellWord(rest);
+      if (!option || !/^[a-zA-Z][\w-]*$/.test(option.word)) return true;
+      rest = option.rest;
+    } else if (
+      !/^(?:[+-][aefhiklmnpruvxBCEHPT]+|--(?:noprofile|norc|posix|restricted|verbose|login))$/.test(
+        word,
+      )
+    ) {
+      return true;
+    }
+  }
+  return true;
+}
+
+function hasUnresolvedIosExecutablePath(line: string): boolean {
+  const command = line.replace(/^\s*\d+\s+/, '');
+  return hasUnresolvedIosPath(command) || hasUnresolvedIosShellScript(command);
+}
+
+export type ProcessIdentityObserver = (pid: number, timeoutMs: number) => Promise<unknown>;
+
+function identityRulesOutDriver(value: unknown, line: string, scanStartedAt: number): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const observation = value as Record<string, unknown>;
+  const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+  if (!match || observation.v !== 1 || observation.pid !== Number(match[1])) return false;
+  if (!observation.birth || typeof observation.birth !== 'object') return false;
+  const { seconds, micros } = observation.birth as Record<string, unknown>;
+  if (
+    typeof seconds !== 'number' ||
+    !Number.isSafeInteger(seconds) ||
+    seconds <= 0 ||
+    typeof micros !== 'number' ||
+    !Number.isInteger(micros) ||
+    micros < 0 ||
+    micros >= 1_000_000 ||
+    seconds * 1_000 + Math.ceil(micros / 1_000) > scanStartedAt
+  )
+    return false;
+  const executable = observation.executable;
+  if (
+    typeof executable !== 'string' ||
+    !executable.startsWith('/') ||
+    executable.endsWith('/') ||
+    Buffer.byteLength(executable) >= 4096 ||
+    // eslint-disable-next-line no-control-regex -- Kernel paths must remain an unambiguous single field.
+    /[\x00-\x1f\x7f\ufffd]/.test(executable)
+  )
+    return false;
+  const name = executable.slice(executable.lastIndexOf('/') + 1);
+  if (
+    SHELL_WRAPPERS.test(name) ||
+    /^(?:java|node|nodejs|python[\d.]*|ruby[\d.]*|perl[\d.]*|osascript)$/i.test(name) ||
+    /UITests-?Runner$/i.test(name) ||
+    hasUnresolvedIosPath(executable)
+  )
+    return false;
+  // Match the observed executable, not a path or driver name embedded in an argument.
+  return [executable, name].some(
+    (identity) => match[2] === identity || match[2].startsWith(`${identity} `),
+  );
+}
+
+// Known-pattern observation only: a clear scan is not an external coordination lease.
+export async function probeIosExternalRunnerStrict(
+  execFileImpl: typeof execFile = execFile,
+  udid?: string,
+  observeIdentity?: ProcessIdentityObserver,
+): Promise<IosStrictRunnerStatus> {
+  if (!udid || !isIosSimulatorUdid(udid)) return 'unknown';
+  const scanStartedAt = Date.now();
+  const deadline = performance.now() + 20_000;
+  try {
+    const { stdout, stderr } = await readIosProcesses(execFileImpl);
+    if (
+      typeof stdout !== 'string' ||
+      (stderr !== undefined && stderr !== '') ||
+      !stdout.endsWith('\n') ||
+      Buffer.byteLength(stdout) > IOS_PS_OPTIONS.maxBuffer ||
+      // eslint-disable-next-line no-control-regex -- Corrupt process-table bytes must fail closed.
+      /[\x00-\x08\x0b-\x1f\x7f\ufffd]/.test(stdout)
+    )
+      return 'unknown';
+
+    const lines = stdout.slice(0, -1).split('\n');
+    const pids = new Set<number>();
+    for (const line of lines) {
+      const match = /^\s*([1-9]\d*)[ \t]+(\S[^\n]*)$/.exec(line);
+      if (!match) return 'unknown';
+      const pid = Number(match[1]);
+      if (!Number.isSafeInteger(pid) || pids.has(pid)) return 'unknown';
+      pids.add(pid);
+    }
+    const drivers = lines.filter(isIosStrictRunnerProcessLine);
+    if (drivers.length === 0) {
+      const unresolved = lines.filter(hasUnresolvedIosExecutablePath);
+      if (!unresolved.length) return 'clear';
+      if (!observeIdentity || unresolved.length > 16) return 'unknown';
+      for (const line of unresolved) {
+        const remaining = Math.floor(deadline - performance.now());
+        if (remaining <= 0) return 'unknown';
+        const pid = Number(/^\s*(\d+)/.exec(line)![1]);
+        const observation = await observeIdentity(pid, Math.min(1_000, remaining));
+        if (
+          performance.now() >= deadline ||
+          !identityRulesOutDriver(observation, line, scanStartedAt)
+        )
+          return 'unknown';
+      }
+      return 'clear';
+    }
+    const target = new RegExp(`(?:^|[^a-z0-9-])${udid}(?=$|[^a-z0-9-])`, 'i');
+    // Unmatched drivers remain unknown, even if another UUID appears in their arguments.
+    return drivers.some((line) => target.test(line)) ? 'busy' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 export async function detectIosExternalRunner(
   execFileImpl: typeof execFile = execFile,
   udid?: string,
 ): Promise<IosExternalRunnerWarning | null> {
   try {
-    const opts = { timeout: 2_000, encoding: 'utf8' as const };
-    const run =
-      execFileImpl === execFile
-        ? promisify(execFileImpl)
-        : (execFileImpl as unknown as (
-            b: string,
-            a: string[],
-            o: typeof opts,
-          ) => Promise<{ stdout: string }>);
-    // -ww: unlimited command-column width — macOS ps truncates otherwise, and
-    // a UDID sitting mid-path in a long driver command line would be cut off,
-    // silently breaking the includes(udid) scoping (GH#186 plan review).
-    const { stdout } = await run('ps', ['axww', '-o', 'pid=,command='], opts);
+    const { stdout } = await readIosProcesses(execFileImpl);
     const lines = stdout
       .split('\n')
       .filter((line) => isIosExternalRunnerProcessLine(line))

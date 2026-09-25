@@ -39,7 +39,7 @@ test('GH #126 + #597: iterateAllRoots primitive owns the renderer-loop invariant
   // single source of truth for renderer iteration semantics.
   assert.match(
     INJECTED_HELPERS,
-    /function iterateAllRoots\(cb\)/,
+    /function iterateAllRoots\(cb(?:, bounds)?\)/,
     'iterateAllRoots primitive missing',
   );
   const slice = INJECTED_HELPERS.split('function iterateAllRoots')[1]?.split('function ')[0] ?? '';
@@ -143,7 +143,7 @@ test('B145: findActiveRenderer still exists (kept for getTree unfiltered path + 
   // helper around so the unfiltered branch still works.
   assert.match(
     INJECTED_HELPERS,
-    /function findActiveRenderer\(\)/,
+    /function findActiveRenderer\((?:bounds)?\)/,
     'findActiveRenderer helper was accidentally removed',
   );
 });

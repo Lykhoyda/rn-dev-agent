@@ -60,6 +60,31 @@ pub struct CmdOutput {
     pub duration_ms: u64,
 }
 
+pub struct PrivateOutput(CmdOutput);
+
+impl PrivateOutput {
+    pub fn clean(&self) -> bool {
+        self.0.ok() && self.0.stderr.is_empty()
+    }
+
+    pub fn stdout(&self) -> &str {
+        &self.0.stdout
+    }
+
+    pub fn summary(&self) -> String {
+        format!(
+            "exit={:?} timed_out={} [private output withheld]",
+            self.0.exit_code, self.0.timed_out
+        )
+    }
+}
+
+impl std::fmt::Debug for PrivateOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.summary())
+    }
+}
+
 impl CmdOutput {
     pub fn ok(&self) -> bool {
         !self.timed_out && self.exit_code == Some(0)
@@ -148,6 +173,9 @@ pub trait Runner {
         std::env::var(name).ok()
     }
     fn run(&mut self, spec: &CmdSpec) -> CmdOutput;
+    fn run_private(&mut self, _spec: &CmdSpec, _input: &[u8]) -> PrivateOutput {
+        PrivateOutput(CmdOutput::failed(1, "private capture unsupported"))
+    }
     fn spawn_group(&mut self, spec: &CmdSpec, log_path: &Path) -> std::io::Result<Spawned>;
     fn spawn_piped(&mut self, spec: &CmdSpec, stderr_log: &Path) -> std::io::Result<PipedChild>;
     fn sleep(&mut self, duration: Duration);
@@ -198,12 +226,23 @@ impl Runner for RealRunner {
     fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
         self.executed += 1;
         let started = Instant::now();
-        let output = run_captured(spec, &started)
+        let output = run_captured(spec, &started, None)
             .unwrap_or_else(|e| io_failure(&started, format!("{}: {e}", spec.label)));
         if let Err(e) = self.flush_logs() {
             return io_failure(&started, format!("drain logs: {e}"));
         }
         output
+    }
+
+    fn run_private(&mut self, spec: &CmdSpec, input: &[u8]) -> PrivateOutput {
+        self.executed += 1;
+        let started = Instant::now();
+        let output = run_captured(spec, &started, Some(input))
+            .unwrap_or_else(|_| CmdOutput::failed(1, "private capture failed"));
+        if self.flush_logs().is_err() {
+            return PrivateOutput(CmdOutput::failed(1, "log drain failed"));
+        }
+        PrivateOutput(output)
     }
 
     fn spawn_group(&mut self, spec: &CmdSpec, log_path: &Path) -> std::io::Result<Spawned> {
@@ -295,15 +334,31 @@ fn capture_stream(stream: &mut UnixStream, output: &mut Vec<u8>) -> std::io::Res
     Ok(())
 }
 
-fn run_captured(spec: &CmdSpec, started: &Instant) -> std::io::Result<CmdOutput> {
+fn run_captured(
+    spec: &CmdSpec,
+    started: &Instant,
+    input: Option<&[u8]>,
+) -> std::io::Result<CmdOutput> {
     use std::os::unix::process::CommandExt;
+    if input.is_some_and(|bytes| bytes.len() > MAX_CAPTURE_BYTES) {
+        return Err(std::io::Error::other("command input exceeded 16 MiB"));
+    }
+    let (mut stdin, child_stdin) = if input.is_some() {
+        let (writer, reader) = UnixStream::pair()?;
+        writer.set_nonblocking(true)?;
+        (Some(writer), Stdio::from(OwnedFd::from(reader)))
+    } else {
+        (None, Stdio::null())
+    };
+    let input = input.unwrap_or_default();
+    let mut written = 0;
     let (mut stdout, out) = UnixStream::pair()?;
     let (mut stderr, err) = UnixStream::pair()?;
     stdout.set_nonblocking(true)?;
     stderr.set_nonblocking(true)?;
     let mut cmd = Command::new(&spec.program);
     cmd.args(&spec.args)
-        .stdin(Stdio::null())
+        .stdin(child_stdin)
         .stdout(Stdio::from(OwnedFd::from(out)))
         .stderr(Stdio::from(OwnedFd::from(err)))
         .process_group(0);
@@ -323,12 +378,34 @@ fn run_captured(spec: &CmdSpec, started: &Instant) -> std::io::Result<CmdOutput>
     let mut timed_out = false;
     let mut stopped = false;
     let result: std::io::Result<Option<i32>> = (|| loop {
+        if let Some(writer) = &mut stdin {
+            if written < input.len() {
+                match writer.write(&input[written..input.len().min(written + 8192)]) {
+                    Ok(0) => return Err(std::io::Error::other("command stdin closed")),
+                    Ok(n) => written += n,
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            if written == input.len() {
+                stdin = None;
+            }
+        }
         let captured = out.len() + err.len();
         let status = child.try_wait()?;
         stopped = status.is_some();
         capture_stream(&mut stdout, &mut out)?;
         capture_stream(&mut stderr, &mut err)?;
         if let Some(status) = status {
+            if written < input.len() {
+                return Err(std::io::Error::other(
+                    "command exited before input was delivered",
+                ));
+            }
             return Ok(status.code());
         }
         if started.elapsed() >= Duration::from_secs(spec.timeout_seconds) {
@@ -500,6 +577,7 @@ pub struct MockRunner {
     // Everything written to each piped child's stdin, in spawn order.
     pub piped_stdin: Vec<Arc<Mutex<Vec<u8>>>>,
     pub piped_killed: Vec<Arc<Mutex<bool>>>,
+    pub private_inputs: Vec<Vec<u8>>,
     script: VecDeque<MockExpectation>,
     now_ms: u64,
 }
@@ -512,6 +590,7 @@ impl MockRunner {
             spawned_logs: Vec::new(),
             piped_stdin: Vec::new(),
             piped_killed: Vec::new(),
+            private_inputs: Vec::new(),
             script: VecDeque::new(),
             now_ms: 1_770_000_000_000,
         }
@@ -626,6 +705,11 @@ impl Runner for MockRunner {
                 panic!("expected run, script had spawn for {}", spec.rendered())
             }
         }
+    }
+
+    fn run_private(&mut self, spec: &CmdSpec, input: &[u8]) -> PrivateOutput {
+        self.private_inputs.push(input.to_vec());
+        PrivateOutput(self.run(spec))
     }
 
     fn spawn_piped(&mut self, spec: &CmdSpec, stderr_log: &Path) -> std::io::Result<PipedChild> {

@@ -14,13 +14,16 @@ import {
 } from 'node:fs';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
-import type { FastRunnerState } from '../types.js';
+import { markSnapshotDirty } from '../agent-device-wrapper.js';
+import type { FastRunnerState, ToolErrorCode } from '../types.js';
 import {
   updateRefMapFromFlat,
+  clearRefMap,
   buildSnapshotVerdict,
   getCachedMetadata,
   getFreshRefTarget,
   type FlatNode,
+  type RefMapUpdateOutcome,
 } from '../fast-runner-ref-map.js';
 import { withKeyboardGuard } from './keyboard-guard.js';
 import {
@@ -1500,6 +1503,7 @@ export interface RunIOSArgs {
   durationMs?: number;
   direction?: 'up' | 'down' | 'left' | 'right';
   scale?: number;
+  platformPresence?: boolean;
   interactiveOnly?: boolean;
   compact?: boolean;
   depth?: number;
@@ -1546,7 +1550,10 @@ interface RunnerResponse {
 }
 
 interface RunnerSnapshotNode {
+  presence?: unknown;
   index?: number;
+  parentIndex?: number;
+  depth?: number;
   type?: string;
   label?: string;
   identifier?: string;
@@ -1917,8 +1924,13 @@ function countIdentityMatches(
   return matches;
 }
 
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
 function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
   const out: FlatNode[] = [];
+  const nativeIndices = new Set<number>();
   let synthCounter = 0;
   for (const n of nodes) {
     if (!n.rect) continue;
@@ -1928,6 +1940,18 @@ function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
       type: n.type ?? '',
       rect: n.rect,
     };
+    if (isNonNegativeSafeInteger(n.index)) flat.index = n.index;
+    if (isNonNegativeSafeInteger(n.depth)) flat.depth = n.depth;
+    if (
+      isNonNegativeSafeInteger(n.parentIndex) &&
+      flat.index !== undefined &&
+      n.parentIndex < flat.index &&
+      nativeIndices.has(n.parentIndex)
+    ) {
+      flat.parentIndex = n.parentIndex;
+    }
+    if (flat.index !== undefined) nativeIndices.add(flat.index);
+    if (Object.hasOwn(n, 'presence')) flat.presence = n.presence;
     if (n.label !== undefined) flat.label = n.label;
     if (n.identifier !== undefined) flat.identifier = n.identifier;
     if (n.enabled !== undefined) flat.enabled = n.enabled;
@@ -1952,7 +1976,48 @@ function staleAfterKeyboardDismissal(ref: string | undefined): ToolResult {
   );
 }
 
+function presenceCaptureUnavailable(
+  reason: string,
+  code: ToolErrorCode = 'RN_FAST_RUNNER_DOWN',
+  dispatched = false,
+): ToolResult {
+  return failResult(
+    `Platform presence capture unavailable: ${reason}; no recovery attempted.`,
+    code,
+    {
+      capture: 'unknown',
+      mutation: 'none',
+      dispatched,
+    },
+  );
+}
+
 export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
+  const presenceRequested = args.command === 'snapshot' && args.platformPresence === true;
+  const presenceRunner = presenceRequested ? runnerState : null;
+  if (presenceRequested) {
+    // Observation may probe readiness, but must not tear down or repair a dead runner.
+    const readiness = await probeFastRunnerLivenessDetailed({ clearState: () => {} });
+    if (
+      !presenceRunner ||
+      runnerState !== presenceRunner ||
+      runnerPoisoned ||
+      readiness.liveness !== 'alive'
+    ) {
+      return presenceCaptureUnavailable(
+        readiness.staleReason ?? 'an existing healthy runner is required',
+        readiness.staleReason === 'authority-mismatch'
+          ? 'RUNNER_OWNERSHIP_MISMATCH'
+          : 'RN_FAST_RUNNER_DOWN',
+      );
+    }
+    if (!readiness.capabilities?.includes('PLATFORM_PRESENCE_V1')) {
+      return presenceCaptureUnavailable(
+        'the runner lacks PLATFORM_PRESENCE_V1',
+        'RN_FAST_RUNNER_STALE',
+      );
+    }
+  }
   // STALE_REF sentinel from buildRunIOSArgs(): the caller tried to press/type
   // a @ref but refCenter() returned null. Surface cached metadata so the agent
   // knows what it asked for, plus a hint to call device_snapshot.
@@ -1984,10 +2049,14 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (args.clearFirst !== undefined) body.clearFirst = args.clearFirst;
   if (args.direction !== undefined) body.direction = args.direction;
   if (args.scale !== undefined) body.scale = args.scale;
-  if (args.interactiveOnly !== undefined) body.interactiveOnly = args.interactiveOnly;
-  if (args.compact !== undefined) body.compact = args.compact;
-  if (args.depth !== undefined) body.depth = args.depth;
-  if (args.scope !== undefined) body.scope = args.scope;
+  if (presenceRequested) {
+    body.platformPresence = true;
+  } else {
+    if (args.interactiveOnly !== undefined) body.interactiveOnly = args.interactiveOnly;
+    if (args.compact !== undefined) body.compact = args.compact;
+    if (args.depth !== undefined) body.depth = args.depth;
+    if (args.scope !== undefined) body.scope = args.scope;
+  }
   if (args.targetBounds !== undefined) body.targetBounds = args.targetBounds;
   if (args.snapshotGeneration !== undefined) body.snapshotGeneration = args.snapshotGeneration;
   if (args.snapshotNodeIndex !== undefined) body.snapshotNodeIndex = args.snapshotNodeIndex;
@@ -2124,10 +2193,25 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   let recovery: TransportRecovery | undefined;
   let commandAuthorityBefore = captureFastRunnerCommandAuthority();
   try {
-    ({ resp, recovery } = await postCommandWithRecovery(
-      withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
-    ));
+    if (presenceRunner) {
+      resp = await sendCommandOnce(
+        presenceRunner.port,
+        { ...body, commandId: generateCommandId() },
+        commandTimeoutMs(args.command),
+      );
+    } else {
+      ({ resp, recovery } = await postCommandWithRecovery(
+        withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
+      ));
+    }
   } catch (err) {
+    if (presenceRequested) {
+      return presenceCaptureUnavailable(
+        err instanceof Error ? err.message : String(err),
+        'RN_FAST_RUNNER_DOWN',
+        true,
+      );
+    }
     const mapped = mapRunnerDispatchError(err);
     if (mapped) return mapped;
     const m = err instanceof Error ? err.message : String(err);
@@ -2138,7 +2222,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     }
     throw err;
   }
-  if (!resp.ok && resp.error?.code === 'KEYBOARD_RELAYOUT_REQUIRED') {
+  if (!presenceRequested && !resp.ok && resp.error?.code === 'KEYBOARD_RELAYOUT_REQUIRED') {
     if (!(await refreshTargetAfterKeyboard())) {
       return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
     }
@@ -2165,6 +2249,9 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (!resp.ok) {
     const message = resp.error?.message ?? 'runner returned !ok with no error';
     const code = resp.error?.code;
+    if (presenceRequested) {
+      return presenceCaptureUnavailable(message, 'RN_FAST_RUNNER_DOWN', true);
+    }
     if (code === 'RUNNER_TIMEOUT') {
       return args.command === 'type'
         ? containTypeTimeout(args, commandAuthorityBefore)
@@ -2198,30 +2285,48 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
 
   // Snapshot post-processing: feed the ref map so future press/fill calls
   // can resolve @refs without a separate fetch.
-  if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {
-    const data = resp.data as {
+  if (
+    args.command === 'snapshot' &&
+    (presenceRequested || (resp.data && typeof resp.data === 'object'))
+  ) {
+    const data = (resp.data ?? {}) as {
       nodes?: RunnerSnapshotNode[];
       tree?: unknown;
+      presenceCapture?: unknown;
+      truncated?: boolean;
       snapshotGeneration?: number;
       keyboardVisible?: boolean;
     };
+    const missingRefFreshness =
+      presenceRequested &&
+      (typeof data.keyboardVisible !== 'boolean' ||
+        !isNonNegativeSafeInteger(data.snapshotGeneration) ||
+        !Array.isArray(data.nodes));
+    if (missingRefFreshness) {
+      clearRefMap();
+      markSnapshotDirty('ios');
+    }
     if (Array.isArray(data.nodes)) {
       const flat = mapRunnerNodesToFlat(data.nodes);
-      const outcome = updateRefMapFromFlat(flat, {
-        ...(typeof data.snapshotGeneration === 'number'
-          ? { snapshotGeneration: data.snapshotGeneration }
-          : {}),
-        ...(typeof data.keyboardVisible === 'boolean'
-          ? { keyboardVisible: data.keyboardVisible }
-          : {}),
-      });
-      // GH #409: verdict rendered from the same call that decided whether the
-      // ref map was overwritten — an empty capture is reported as degraded and
-      // leaves the last-known-good refs bound.
+      const outcome: RefMapUpdateOutcome = missingRefFreshness
+        ? { applied: false, reason: 'snapshot-ref-freshness-unknown' }
+        : updateRefMapFromFlat(flat, {
+            ...(typeof data.snapshotGeneration === 'number'
+              ? { snapshotGeneration: data.snapshotGeneration }
+              : {}),
+            ...(typeof data.keyboardVisible === 'boolean'
+              ? { keyboardVisible: data.keyboardVisible }
+              : {}),
+          });
       const snapshotVerdict = buildSnapshotVerdict('rn-fast-runner', flat.length, outcome);
       return okResult(
         {
           nodes: flat,
+          ...(Object.hasOwn(data, 'presenceCapture')
+            ? { presenceCapture: data.presenceCapture }
+            : {}),
+          normalizationDroppedNodes: data.nodes.length - flat.length,
+          ...(typeof data.truncated === 'boolean' ? { truncated: data.truncated } : {}),
           ...(typeof data.keyboardVisible === 'boolean'
             ? { keyboardVisible: data.keyboardVisible }
             : {}),
@@ -2233,9 +2338,20 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       );
     }
     // Defensive fallback: the test seam mocks `{ tree: ... }`. Don't crash.
-    const fallbackMeta = { ...announce, ...recoveryMeta };
+    const fallbackMeta = {
+      ...announce,
+      ...recoveryMeta,
+      ...(missingRefFreshness
+        ? {
+            snapshotVerdict: buildSnapshotVerdict('rn-fast-runner', 0, {
+              applied: false,
+              reason: 'snapshot-ref-freshness-unknown',
+            }),
+          }
+        : {}),
+    };
     return okResult(
-      resp.data,
+      resp.data ?? {},
       Object.keys(fallbackMeta).length ? { meta: fallbackMeta } : undefined,
     );
   }

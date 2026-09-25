@@ -159,6 +159,9 @@ extension RnFastRunnerTests {
       })
 
       if let exceptionMessage {
+        if command.platformPresence == true {
+          return platformPresenceFailure()
+        }
         currentApp = nil
         currentBundleId = nil
         if !hasRetried, shouldRetryException(command, message: exceptionMessage) {
@@ -177,6 +180,9 @@ extension RnFastRunnerTests {
         )
       }
       if let swiftError {
+        if command.platformPresence == true {
+          return platformPresenceFailure()
+        }
         throw swiftError
       }
       guard let response else {
@@ -202,6 +208,29 @@ extension RnFastRunnerTests {
   }
 
   private func executeOnMain(command: Command) throws -> Response {
+    if command.platformPresence == true {
+      // Presence adapters must omit filters; this mode always enumerates the raw app tree.
+      guard command.command == .snapshot,
+            command.raw != false, command.compact != true, command.interactiveOnly != true,
+            command.depth == nil, command.scope == nil,
+            let appId = command.appBundleId,
+            !appId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        return Response(ok: false, error: ErrorPayload(
+          code: "INVALID_ARGUMENT",
+          message: "platformPresence requires an explicit appBundleId and an unfiltered raw snapshot"
+        ))
+      }
+      let bundleId = appId.trimmingCharacters(in: .whitespacesAndNewlines)
+      let target = currentBundleId == bundleId
+        ? (currentApp ?? XCUIApplication(bundleIdentifier: bundleId))
+        : XCUIApplication(bundleIdentifier: bundleId)
+      currentSnapshotGeneration += 1
+      // Observation must not activate or relaunch the app to manufacture presence.
+      let payload = snapshotPlatformPresence(app: target, appId: bundleId)
+      retainSnapshotTargets(payload.nodes ?? [])
+      needsPostSnapshotInteractionDelay = true
+      return Response(ok: true, data: payload)
+    }
     var activeApp = currentApp ?? app
     if !isRunnerLifecycleCommand(command.command) {
       let normalizedBundleId = command.appBundleId?

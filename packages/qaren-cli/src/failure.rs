@@ -42,6 +42,9 @@ pub enum FailureCode {
     HandoffEvidenceAmbiguous,
     HandoffEvidenceMismatch,
     DeviceBusy,
+    FreshInstallAdmissionUnknown,
+    AppPresenceUnknown,
+    AppResetFailed,
     PlanUnparseable,
     NodeUnsupported,
     DiskBudgetExceeded,
@@ -71,6 +74,8 @@ impl FailureCode {
                 | FailureCode::HandoffEvidenceAmbiguous
                 | FailureCode::HandoffEvidenceMismatch
                 | FailureCode::DeviceBusy
+                | FailureCode::FreshInstallAdmissionUnknown
+                | FailureCode::AppPresenceUnknown
                 | FailureCode::PlanUnparseable
                 | FailureCode::NodeUnsupported
                 | FailureCode::DiskBudgetExceeded

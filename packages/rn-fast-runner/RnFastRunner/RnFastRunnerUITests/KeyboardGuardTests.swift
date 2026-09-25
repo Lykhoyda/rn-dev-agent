@@ -14,6 +14,54 @@ final class KeyboardGuardTests: XCTestCase {
     XCTAssertEqual(command.keyboardStateAtSnapshot, true)
   }
 
+  private func presenceNode(type: String = "Keyboard", frame: CGRect = CGRect(x: 0, y: 500, width: 390, height: 336)) -> SnapshotNode {
+    SnapshotNode(
+      index: 0, type: type, label: "Keyboard", identifier: nil, value: nil,
+      rect: SnapshotRect(x: frame.minX, y: frame.minY, width: frame.width, height: frame.height),
+      enabled: false, focused: nil, hittable: false, depth: 0, parentIndex: nil,
+      hiddenContentAbove: nil, hiddenContentBelow: nil
+    )
+  }
+
+  private func presencePayload(nodes: [SnapshotNode], complete: Bool = true) -> DataPayload {
+    makePlatformPresencePayload(
+      nodes: nodes, truncated: false,
+      capture: PlatformPresenceCapture(
+        version: 1, source: "xcui-live", captureId: "capture", appId: "test.app", generation: 7,
+        startedUptimeMs: 1_000, endedUptimeMs: 1_100, enumeration: "raw-unfiltered", complete: complete
+      )
+    )
+  }
+
+  func testPresencePayloadEncodesSameCaptureKeyboardStateAndGeneration() throws {
+    for visible in [true, false] {
+      let payload = presencePayload(nodes: [presenceNode(type: visible ? "Keyboard" : "Other")])
+      let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as? [String: Any])
+      let capture = try XCTUnwrap(json["presenceCapture"] as? [String: Any])
+      XCTAssertEqual(json["keyboardVisible"] as? Bool, visible)
+      XCTAssertEqual(json["snapshotGeneration"] as? Int, 7)
+      XCTAssertEqual(capture["generation"] as? Int, 7)
+    }
+  }
+
+  func testPresenceKeyboardStateUsesTypeAndNonemptyFrameNotLabelsOrHittability() {
+    XCTAssertEqual(presencePayload(nodes: [presenceNode()]).keyboardVisible, true)
+    XCTAssertEqual(presencePayload(nodes: [presenceNode(frame: .zero)]).keyboardVisible, false)
+    XCTAssertEqual(presencePayload(nodes: [presenceNode(frame: .null)]).keyboardVisible, false)
+    XCTAssertEqual(presencePayload(nodes: [presenceNode(type: "Key"), presenceNode(type: "Other")]).keyboardVisible, false)
+    XCTAssertEqual(presencePayload(nodes: []).keyboardVisible, false)
+    XCTAssertEqual(presencePayload(nodes: [presenceNode(frame: .zero), presenceNode()]).keyboardVisible, true)
+  }
+
+  func testIncompletePresenceDoesNotClaimKeyboardState() throws {
+    for nodes in [[], [presenceNode()]] {
+      let payload = presencePayload(nodes: nodes, complete: false)
+      XCTAssertNil(payload.keyboardVisible)
+      let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as? [String: Any])
+      XCTAssertNil(json["keyboardVisible"])
+    }
+  }
+
   private func keyboardCommand(
     type: String = "Key",
     generation: Int = 7,
