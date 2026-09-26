@@ -178,8 +178,10 @@ the archive and complete payload against that manifest, and atomically publishes
 Concurrent or restarted installers converge on the same verified cache; an abandoned staging
 directory is ignored and never requires manual recovery.
 
-Owned actions must carry `# enginePin: maestro-runner@1.1.27` or newer. Setup migrates compatible
-actions; missing or older pins and unsupported regex text selectors are terminal.
+Owned actions must carry `# enginePin: maestro-runner@1.1.27` or newer. Older or missing
+pins refuse replay until you run setup or re-pin compatible actions with
+`node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app>`.
+Unsupported regex text selectors require rewriting as literal text or `id:` before replay.
 Bumping the pin follows the upgrade ritual documented beside the manifest: replay the
 committed action corpus on both platforms, reconcile known quirks, then update the manifest.
 

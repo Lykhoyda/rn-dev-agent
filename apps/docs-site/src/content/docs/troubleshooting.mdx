@@ -549,8 +549,8 @@ owned action carrying `enginePin: maestro-runner@1.1.27` or newer. Missing, olde
 checksum-mismatched, unverified, unknown, or unsupported runner states
 are terminal. Regex text selectors are also refused because the pinned runner
 does not have a validated implementation for them. Run setup to converge the
-runner and migrate compatible actions, or rewrite the selector as literal text
-or an `id`; no UI mutation occurs before these checks pass.
+runner; see [engine version pinning](../actions/#engine-version-pinning) for action
+migration and selector repair. No UI mutation occurs before these checks pass.
 
 ### Replay refused with DEV_CLIENT_CLEARSTATE_REFUSED
 
