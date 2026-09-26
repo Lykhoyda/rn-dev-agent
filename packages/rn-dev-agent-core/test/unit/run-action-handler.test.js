@@ -258,7 +258,7 @@ test('cdp_run_action preserves a typed native-blind refusal', async () => {
         meta: {
           proofDomain: 'xctest-native',
           runner: 'maestro-runner',
-          transportVersion: '1.1.24',
+          transportVersion: '1.1.27',
           nativeVision: { source: 'rn-fast-runner-snapshot', runtimeMajor: 26 },
           cleanup: { cleanupProven: true },
           nextAction: 'run the native smoke on a healthy runtime',
@@ -272,7 +272,7 @@ test('cdp_run_action preserves a typed native-blind refusal', async () => {
   assert.equal(env.code, 'NATIVE_SURFACE_BLIND');
   assert.equal(env.meta.failureKind, 'NATIVE_SURFACE_BLIND');
   assert.equal(env.meta.proofDomain, 'xctest-native');
-  assert.equal(env.meta.transportVersion, '1.1.24');
+  assert.equal(env.meta.transportVersion, '1.1.27');
   assert.equal(env.meta.nativeVision.runtimeMajor, 26);
   assert.equal(env.meta.cleanup.cleanupProven, true);
   assert.match(env.meta.nextAction, /native smoke/);

@@ -76,10 +76,10 @@ export function createTmpProject() {
       if (!/#\s*enginePin\s*:/.test(yamlText)) {
         yamlText = yamlText.replace(
           /(#\s*status\s*:\s*.+)$/m,
-          `$1\n# enginePin: maestro-runner@1.1.24`,
+          `$1\n# enginePin: maestro-runner@1.1.27`,
         );
         if (!/#\s*enginePin\s*:/.test(yamlText)) {
-          yamlText = `${yamlText.replace(/\s*$/, '')}\n# enginePin: maestro-runner@1.1.24\n`;
+          yamlText = `${yamlText.replace(/\s*$/, '')}\n# enginePin: maestro-runner@1.1.27\n`;
         }
       }
       const yamlPath = join(actionsDir, `${id}.yaml`);
@@ -162,7 +162,7 @@ export function fixtureYaml({
     `# tags: [${tags.join(', ')}]`,
     '# mutates: false',
     `# status: ${status}`,
-    '# enginePin: maestro-runner@1.1.24',
+    '# enginePin: maestro-runner@1.1.27',
     '',
     '- launchApp',
     tapLines,

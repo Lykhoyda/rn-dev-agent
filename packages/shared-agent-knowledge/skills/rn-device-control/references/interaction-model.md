@@ -49,7 +49,7 @@ Three levels of UI interaction, each with distinct trade-offs. Choose based on w
 **Limitations:**
 - Slower than direct `device_press`
 - Same coordinate/accessibility limitations as Tier 2 on iOS
-- Requires pin-cache maestro-runner `>= 1.1.24`
+- Requires pin-cache maestro-runner `>= 1.1.27`
 
 ---
 

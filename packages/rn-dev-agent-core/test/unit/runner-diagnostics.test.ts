@@ -47,7 +47,7 @@ function trace(params: Record<string, unknown>): RunnerDiagnosticsSnapshot {
         type: 'payload-verify',
         detail: {
           result: 'passed',
-          runnerPinVersion: '1.1.24',
+          runnerPinVersion: '1.1.27',
           provenance: 'pin-cache',
           payloadShaPrefix: '123456789abc',
         },
@@ -732,7 +732,7 @@ function timeoutTrace(params: Record<string, unknown>): RunnerDiagnosticsSnapsho
         monotonicMs: 2.4,
         timestamp: '2026-08-23T12:00:00.002Z',
         type: 'runner-exec-begin',
-        detail: { runnerPinVersion: '1.1.24' },
+        detail: { runnerPinVersion: '1.1.27' },
       },
     ],
   };
@@ -786,7 +786,7 @@ test('code-less cdp_run_action TIMEOUT retains the existing sanitized trace', ()
     [
       ['flow-park', { phase: 'begin', platform: 'android' }],
       ['flow-stage', { phase: 'execute-begin', stage: 0 }],
-      ['runner-exec-begin', { runnerPinVersion: '1.1.24' }],
+      ['runner-exec-begin', { runnerPinVersion: '1.1.27' }],
     ],
   );
   const output = join(directory, 'timeout-export.json');

@@ -205,7 +205,7 @@ test('action inventory authenticates inherited corpus to real primary directorie
         '# id: login',
         '# intent: Log in.',
         '# status: active',
-        '# enginePin: maestro-runner@1.1.24',
+        '# enginePin: maestro-runner@1.1.27',
         '- launchApp',
         '',
       ].join('\n'),
