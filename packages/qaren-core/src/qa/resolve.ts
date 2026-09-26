@@ -424,7 +424,9 @@ export async function decideScreen(
   ]);
   const bound = check
     ? (protectedCheckBound(check, screen, values) ??
-      (!check.literal && unobservedValue(check.text, screen, values, privacy) ? 'unsure' : undefined))
+      (!check.literal && unobservedValue(check.text, screen, values, privacy)
+        ? 'unsure'
+        : undefined))
     : undefined;
   const visibilityBound =
     presence && 'question' in presence
