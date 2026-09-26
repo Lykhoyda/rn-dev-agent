@@ -1,8 +1,11 @@
+import { isRecord } from './questions.js';
 import { associateHosts, hostPath } from './host-association.js';
 import { PRIVATE_INPUT_LIMITS } from './private-input-limits.js';
 import type { HostAssociation } from './host-association.js';
 import type { NativePresence } from './native-presence.js';
 import type { NativeNode, ReactHostEvidence } from './screen.js';
+
+export const TYPOGRAPHY_TEXT_LIMITS = { maxContentChars: 4096, maxTotalChars: 16384 } as const;
 
 type Rect = { x: number; y: number; width: number; height: number };
 type BlockText = {
@@ -42,17 +45,13 @@ export type HeadingEvidence = {
   bodyRefs: string[];
 };
 
-function record(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
 function rect(value: unknown): value is Rect {
   return (
-    record(value) &&
+    isRecord(value) &&
     finite(value.x) &&
     finite(value.y) &&
     finite(value.width) &&
@@ -67,7 +66,7 @@ function index(value: unknown): value is number {
 }
 
 function accessibilityFacts(value: unknown): boolean {
-  if (!record(value) || Object.keys(value).length !== 2) return false;
+  if (!isRecord(value) || Object.keys(value).length !== 2) return false;
   const accessible = Object.getOwnPropertyDescriptor(value, 'accessible');
   const label = Object.getOwnPropertyDescriptor(value, 'authoredLabel');
   return (
@@ -83,10 +82,10 @@ function accessibilityFacts(value: unknown): boolean {
 function block(value: Record<string, unknown>): boolean {
   if (
     typeof value.content !== 'string' ||
-    value.content.length > 4096 ||
+    value.content.length > TYPOGRAPHY_TEXT_LIMITS.maxContentChars ||
     !Array.isArray(value.runs) ||
     value.runs.length > 128 ||
-    !record(value.scaling) ||
+    !isRecord(value.scaling) ||
     typeof value.scaling.allowFontScaling !== 'boolean' ||
     !finite(value.scaling.maxFontSizeMultiplier) ||
     (value.scaling.maxFontSizeMultiplier !== 0 && value.scaling.maxFontSizeMultiplier < 1)
@@ -95,7 +94,7 @@ function block(value: Record<string, unknown>): boolean {
   let end = 0;
   for (const run of value.runs) {
     if (
-      !record(run) ||
+      !isRecord(run) ||
       run.start !== end ||
       !index(run.end) ||
       run.end <= end ||
@@ -114,7 +113,7 @@ export function validateHostTypography(
   hostCount: number,
 ): HostTypography | undefined {
   if (
-    !record(value) ||
+    !isRecord(value) ||
     value.version !== 1 ||
     typeof value.complete !== 'boolean' ||
     !finite(value.durationMs) ||
@@ -129,11 +128,11 @@ export function validateHostTypography(
     return undefined;
   let characters = 0;
   for (const [i, node] of value.nodes.entries()) {
-    const accessibility = record(node)
+    const accessibility = isRecord(node)
       ? Object.getOwnPropertyDescriptor(node, 'accessibility')
       : undefined;
     if (
-      !record(node) ||
+      !isRecord(node) ||
       node.hostIndex !== i ||
       !index(node.rootIndex) ||
       (node.parentHostIndex !== null &&
@@ -145,7 +144,7 @@ export function validateHostTypography(
       (accessibility !== undefined &&
         (!('value' in accessibility) ||
           (accessibility.value !== undefined && !accessibilityFacts(accessibility.value)))) ||
-      !record(node.text)
+      !isRecord(node.text)
     )
       return undefined;
     switch (node.text.kind) {
@@ -164,7 +163,7 @@ export function validateHostTypography(
         return undefined;
     }
   }
-  if (characters > 16384) return undefined;
+  if (characters > TYPOGRAPHY_TEXT_LIMITS.maxTotalChars) return undefined;
   const snapshot = value as unknown as HostTypography;
   for (const node of snapshot.nodes) {
     const path = hostPath(snapshot, node.hostIndex);

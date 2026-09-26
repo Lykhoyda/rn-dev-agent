@@ -1,3 +1,4 @@
+import { isRecord } from './questions.js';
 import { frontFromSurface, join, validateReactHostEvidence } from './screen.js';
 import type { DigestEntry, NativeNode, ReactHostEvidence, Screen } from './screen.js';
 import { PRESENCE_BUDGET_MS, validateNativePresence } from './native-presence.js';
@@ -42,16 +43,10 @@ export interface CaptureDeps {
   warn?(message: string): void;
 }
 
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 type Coverage = NonNullable<Screen['coverage']>;
 
 function nativeCaptureCoverage(observation: NativeObservation): Coverage['native'] {
-  const verdict = record(observation.snapshotVerdict);
+  const verdict = isRecord(observation.snapshotVerdict) ? observation.snapshotVerdict : undefined;
   if (
     observation.truncated === true ||
     (typeof observation.normalizationDroppedNodes === 'number' &&
@@ -79,7 +74,7 @@ function nativeCaptureCoverage(observation: NativeObservation): Coverage['native
 }
 
 function reactCaptureCoverage(observation: ReactObservation): Coverage['react'] {
-  const verdict = record(observation.verdict);
+  const verdict = isRecord(observation.verdict) ? observation.verdict : undefined;
   if (
     observation.truncated === true ||
     verdict?.state === 'failed' ||

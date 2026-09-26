@@ -53,6 +53,7 @@ import {
   WEDGED_RUNTIME_HINT,
 } from './lifecycle/no-change-tracker.js';
 import { resolveBundleId } from './project-config.js';
+import { dirtySnapshotPlatforms } from './snapshot-invalidation.js';
 import {
   getStateDir,
   readJsonStateFile,
@@ -183,7 +184,6 @@ interface CachedSnapshot {
 
 const snapshotCache = new Map<string, CachedSnapshot>();
 let snapshotCaptureSequence = 0;
-const dirtySnapshotPlatforms = new Set<string>();
 let snapshotAuthorityProvider: {
   current: () => Record<string, unknown> | null;
   record: (receipt: SnapshotAuthorityReceipt) => void;

@@ -1,3 +1,4 @@
+import { isRecord } from './questions.js';
 import type { NativeNode } from './screen.js';
 
 export const PRESENCE_BUDGET_MS = 5_000;
@@ -12,10 +13,6 @@ export interface NativePresence {
   nodes: NativePresenceNode[];
 }
 
-function record(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
@@ -27,7 +24,7 @@ export function validateNativePresence(
   expectedAppId: string | undefined,
 ): NativePresence | undefined {
   if (
-    !record(capture) ||
+    !isRecord(capture) ||
     capture.version !== 1 ||
     capture.source !== 'xcui-live' ||
     capture.enumeration !== 'raw-unfiltered' ||
@@ -77,7 +74,7 @@ export function validateNativePresence(
       !finite(node.rect.height) ||
       node.rect.width < 0 ||
       node.rect.height < 0 ||
-      !record(p) ||
+      !isRecord(p) ||
       p.captureId !== capture.captureId ||
       p.generation !== generation ||
       p.nodeIndex !== index ||

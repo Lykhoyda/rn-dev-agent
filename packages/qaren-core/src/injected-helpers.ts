@@ -1,4 +1,5 @@
 import { PRIVATE_INPUT_LIMITS } from './qa/private-input-limits.js';
+import { TYPOGRAPHY_TEXT_LIMITS } from './qa/host-typography.js';
 
 // Bump when the injected surface changes so warm runtimes replace stale helpers.
 export const HELPERS_VERSION = 87;
@@ -949,7 +950,7 @@ export const INJECTED_HELPERS = `
         var style = entry.style;
         if (record.tag === 6) {
           if (typeof record.props !== 'string' || record.child) return { kind: 'unsupported' };
-          if (content.length + record.props.length > 4096 || totalChars + record.props.length > 16384) return { kind: 'unsupported' };
+          if (content.length + record.props.length > ${TYPOGRAPHY_TEXT_LIMITS.maxContentChars} || totalChars + record.props.length > ${TYPOGRAPHY_TEXT_LIMITS.maxTotalChars}) return { kind: 'unsupported' };
           if (record.props.length) {
             var last = runs[runs.length - 1];
             var end = content.length + record.props.length;

@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
-import { markSnapshotDirty } from '../agent-device-wrapper.js';
+import { dirtySnapshotPlatforms } from '../snapshot-invalidation.js';
 import type { FastRunnerState, ToolErrorCode } from '../types.js';
 import {
   updateRefMapFromFlat,
@@ -2319,7 +2319,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         !Array.isArray(data.nodes));
     if (missingRefFreshness) {
       clearRefMap();
-      markSnapshotDirty('ios');
+      dirtySnapshotPlatforms.add('ios');
     }
     if (Array.isArray(data.nodes)) {
       const flat = mapRunnerNodesToFlat(data.nodes);

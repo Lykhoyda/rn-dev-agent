@@ -1,3 +1,4 @@
+import { isRecord } from './questions.js';
 import { createHash } from 'node:crypto';
 import { captureInputPrivacy, nativeLabelMayBeValue } from './privacy.js';
 import { PRIVATE_INPUT_LIMITS } from './private-input-limits.js';
@@ -95,13 +96,9 @@ export interface ReactHostEvidence {
   typography?: HostTypography;
 }
 
-function evidenceRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
 export function validateReactHostEvidence(value: unknown): ReactHostEvidence | undefined {
   if (
-    !evidenceRecord(value) ||
+    !isRecord(value) ||
     typeof value.complete !== 'boolean' ||
     !Array.isArray(value.hosts) ||
     value.hosts.length > PRIVATE_INPUT_LIMITS.maxHosts ||
@@ -111,7 +108,7 @@ export function validateReactHostEvidence(value: unknown): ReactHostEvidence | u
   const hosts: ReactHostObservation[] = [];
   for (const host of value.hosts) {
     if (
-      !evidenceRecord(host) ||
+      !isRecord(host) ||
       (host.roleSource !== 'role' &&
         host.roleSource !== 'accessibilityRole' &&
         host.roleSource !== 'none') ||
@@ -119,7 +116,7 @@ export function validateReactHostEvidence(value: unknown): ReactHostEvidence | u
         (typeof host.role !== 'string' || !/^[a-z][a-z0-9-]{0,31}$/.test(host.role))) ||
       (host.roleSource === 'none' && host.role !== null) ||
       (value.complete && host.roleSource !== 'none' && host.role === null) ||
-      !evidenceRecord(host.capabilities) ||
+      !isRecord(host.capabilities) ||
       Object.entries(host.capabilities).some(
         ([key, fact]) => !['press', 'fill'].includes(key) || fact !== true,
       ) ||

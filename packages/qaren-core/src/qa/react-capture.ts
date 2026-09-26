@@ -1,3 +1,4 @@
+import { isRecord } from './questions.js';
 import type { CDPClient } from '../cdp-client.js';
 import type { ReactObservation } from './capture.js';
 import {
@@ -8,13 +9,9 @@ import {
 import { validateReactHostEvidence } from './screen.js';
 import type { DigestEntry } from './screen.js';
 
-function record(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
 function completion(value: unknown, start: boolean, id?: string): Record<string, unknown> {
   if (
-    !record(value) ||
+    !isRecord(value) ||
     value.v !== 1 ||
     typeof value.id !== 'string' ||
     !/^[a-f0-9]{1,64}$/.test(value.id) ||
@@ -34,7 +31,7 @@ function publicObservation(tree: unknown): ReactObservation {
   if (typeof tree !== 'string' || tree.length > 999999) throw new PrivateInputCaptureError();
   const value: unknown = JSON.parse(tree);
   if (
-    !record(value) ||
+    !isRecord(value) ||
     !Array.isArray(value.interactive) ||
     value.interactive.length > 200 ||
     (value.truncated !== undefined && value.truncated !== false)
@@ -43,7 +40,7 @@ function publicObservation(tree: unknown): ReactObservation {
   }
   const verdict = value.verdict;
   if (
-    !record(verdict) ||
+    !isRecord(verdict) ||
     verdict.state !== 'ok' ||
     verdict.path !== 'interactive' ||
     verdict.complete !== true ||
@@ -61,7 +58,7 @@ function publicObservation(tree: unknown): ReactObservation {
   if (!hostEvidence?.complete) throw new PrivateInputCaptureError();
   const interactive: DigestEntry[] = value.interactive.map((entry: unknown) => {
     if (
-      !record(entry) ||
+      !isRecord(entry) ||
       typeof entry.role !== 'string' ||
       !/^[a-z][a-z0-9-]{0,31}$/.test(entry.role)
     ) {
@@ -85,7 +82,7 @@ function publicObservation(tree: unknown): ReactObservation {
     }
     if (entry.capabilities !== undefined) {
       if (
-        !record(entry.capabilities) ||
+        !isRecord(entry.capabilities) ||
         typeof entry.capabilities.press !== 'boolean' ||
         typeof entry.capabilities.fill !== 'boolean'
       ) {
