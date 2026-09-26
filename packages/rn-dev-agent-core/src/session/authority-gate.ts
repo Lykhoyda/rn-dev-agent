@@ -5,6 +5,7 @@ import type { ToolErrorCode } from '../types.js';
 import { failResult, type ToolResult } from '../utils.js';
 import type { OperationRef, SessionRef, SessionRegistry, SessionStatus } from './registry.js';
 import { authorityErrorMeta, SessionAuthorityError, shortAuthorityIdentity } from './registry.js';
+import { AuthorityStoreUnavailableError } from './authority-store.js';
 import { isProvenMetroOriginMismatch } from './metro-origin.js';
 import { reissueInstallBinding } from './install-reissue.js';
 import type { WorkerAuthorityStatus } from './runtime.js';
@@ -1325,9 +1326,22 @@ export function createAuthorityGate(
                     }
                   : baseProfile;
 
-        const runtimeStatus = runtime.status();
         if (profile.kind === 'diagnostic') {
-          return addMeta(await handler(...handlerArgs), { authoritative: false });
+          let result: unknown;
+          try {
+            result = await handler(...handlerArgs);
+          } catch (error) {
+            if (!(error instanceof AuthorityStoreUnavailableError)) throw error;
+            result = authorityFailure(error);
+          }
+          return addMeta(result, { authoritative: false });
+        }
+        let runtimeStatus: ReturnType<typeof runtime.status>;
+        try {
+          runtimeStatus = runtime.status();
+        } catch (error) {
+          if (!(error instanceof AuthorityStoreUnavailableError)) throw error;
+          return authorityFailure(error);
         }
         if (runtimeStatus.available && runtimeStatus.state === 'blocked') {
           return authorityFailure(runtime.blockedContenderError());
