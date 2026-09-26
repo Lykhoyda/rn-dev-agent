@@ -94,7 +94,7 @@ $rn-dev-agent:qa-pr 42 device
 - For iOS: Xcode + a simulator runtime
 - For Android emulator: Android SDK + a booted or bootable AVD
 - For physical: USB debugging, exclusive claim, exact serial
-- Pin-cache maestro-runner `>= 1.1.24`
+- Pin-cache maestro-runner `>= 1.1.27`
 - Rehearse through `cdp_run_action`; the on-camera take is the same `cdp_run_action` proof replay. Never PATH `maestro`.
 
 ## Output

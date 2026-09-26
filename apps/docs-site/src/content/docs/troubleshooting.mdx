@@ -187,8 +187,8 @@ Then re-add marketplace and install.
 
 ### Maestro runner pin is missing or below the floor
 
-Run the host setup workflow. It installs and verifies attested maestro-runner `1.1.24`
-(floor `>= 1.1.24`) in
+Run the host setup workflow. It installs and verifies attested maestro-runner `1.1.27`
+(floor `>= 1.1.27`) in
 rn-dev-agent's versioned pin-cache. Do not add an ambient runner to PATH or install brew
 Maestro as a substitute; replay accepts only a `pinned-ok` pin-cache diagnosis.
 
@@ -374,7 +374,7 @@ a last-resort identifier — a bare model name such as `iPhone-16-Pro`, or an
 `id` field naming the run rather than the device — so nothing was proven
 either way and the replay fails closed. Shutting down simulators will not
 clear it; run the current host setup workflow to converge the pin-cache to
-attested `1.1.24` (floor `>= 1.1.24`) and retry. If that attested build still emits only a weak
+attested `1.1.27` (floor `>= 1.1.27`) and retry. If that attested build still emits only a weak
 identity, the replay remains terminal rather than substituting another engine.
 
 ### ANDROID_API_UNSUPPORTED
@@ -544,8 +544,8 @@ the runner was not spawned and any owned snapshot or cache was removed.
 
 ### Replay refused by the engine floor preflight
 
-Replay requires maestro-runner `>= 1.1.24` from rn-dev-agent's pin-cache and an
-owned action carrying `enginePin: maestro-runner@1.1.24` or newer. Missing, older,
+Replay requires maestro-runner `>= 1.1.27` from rn-dev-agent's pin-cache and an
+owned action carrying `enginePin: maestro-runner@1.1.27` or newer. Missing, older,
 checksum-mismatched, unverified, unknown, or unsupported runner states
 are terminal. Regex text selectors are also refused because the pinned runner
 does not have a validated implementation for them. Run setup to converge the

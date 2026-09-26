@@ -60,7 +60,7 @@ function createInstallerFixture(prefix: string) {
   mkdirSync(join(payload, 'bin'), { recursive: true });
   mkdirSync(join(payload, 'drivers'), { recursive: true });
   const runner = join(payload, 'bin', 'maestro-runner');
-  writeFileSync(runner, '#!/bin/sh\necho maestro-runner 1.1.24\n', 'utf8');
+  writeFileSync(runner, '#!/bin/sh\necho maestro-runner 1.1.27\n', 'utf8');
   chmodSync(runner, 0o755);
   writeFileSync(join(payload, 'drivers', 'server.apk'), 'trusted-payload', 'utf8');
   const packed = spawnSync('tar', ['-czf', archive, '-C', join(root, 'payload'), 'maestro-runner']);
@@ -169,7 +169,7 @@ test('missing pin-cache with a dead download URL is terminal', () => {
   assert.notEqual(result.status, 0);
   const out = `${result.stdout}${result.stderr}`;
   assert.match(out, /failed to download|ERROR/);
-  assert.match(out, /1\.1\.24/);
+  assert.match(out, /1\.1\.27/);
 });
 
 test('older stub in pin-cache tries to converge rather than accepting drift', () => {
@@ -187,7 +187,7 @@ test('older stub in pin-cache tries to converge rather than accepting drift', ()
   });
   assert.notEqual(result.status, 0);
   const out = `${result.stdout}${result.stderr}`;
-  assert.match(out, /Converging|attested 1\.1\.24/);
+  assert.match(out, /Converging|attested 1\.1\.27/);
   assert.doesNotMatch(out, /pin ok/);
 });
 
@@ -206,7 +206,7 @@ test('newer stub in pin-cache is also refused', () => {
   });
   assert.notEqual(result.status, 0);
   const out = `${result.stdout}${result.stderr}`;
-  assert.match(out, /Converging|attested 1\.1\.24/);
+  assert.match(out, /Converging|attested 1\.1\.27/);
 });
 
 test('installer verifies the complete archive before replacing the live pin-cache', () => {
@@ -223,7 +223,7 @@ test('installer verifies the complete archive before replacing the live pin-cach
   );
   mkdirSync(join(payload, 'bin'), { recursive: true });
   mkdirSync(join(payload, 'drivers'), { recursive: true });
-  writeFileSync(join(payload, 'bin', 'maestro-runner'), '#!/bin/sh\necho maestro-runner 1.1.24\n');
+  writeFileSync(join(payload, 'bin', 'maestro-runner'), '#!/bin/sh\necho maestro-runner 1.1.27\n');
   chmodSync(join(payload, 'bin', 'maestro-runner'), 0o755);
   writeFileSync(join(payload, 'drivers', 'altered.apk'), 'altered');
   const packed = spawnSync('tar', ['-czf', archive, '-C', join(root, 'payload'), 'maestro-runner']);
@@ -326,7 +326,7 @@ test('installed fast path refuses a payload changed after verified installation'
   const runner = join(payload, 'bin', 'maestro-runner');
   writeFileSync(
     runner,
-    `#!/bin/sh\nprintf executed > ${JSON.stringify(executionMarker)}\necho maestro-runner 1.1.24\n`,
+    `#!/bin/sh\nprintf executed > ${JSON.stringify(executionMarker)}\necho maestro-runner 1.1.27\n`,
     'utf8',
   );
   chmodSync(runner, 0o755);
@@ -357,7 +357,7 @@ test('installed fast path refuses a payload changed after verified installation'
   writeFileSync(
     join(scriptDir, 'maestro-runner-pin.json'),
     JSON.stringify({
-      version: '1.1.24',
+      version: '1.1.27',
       sha256: {
         'darwin-arm64': runnerSha,
         'darwin-x64': runnerSha,
@@ -396,7 +396,7 @@ test('installed fast path refuses a payload changed after verified installation'
 
   const refused = spawnSync('bash', [copiedScript, '--print-bin'], { encoding: 'utf8', env });
   assert.notEqual(refused.status, 0);
-  assert.match(`${refused.stdout}${refused.stderr}`, /attested pin-cache maestro-runner 1\.1\.24/);
+  assert.match(`${refused.stdout}${refused.stderr}`, /attested pin-cache maestro-runner 1\.1\.27/);
   assert.equal(existsSync(executionMarker), false);
 });
 
@@ -409,7 +409,7 @@ test('payload matching ignores AppleDouble and PaxHeader members macOS extract o
   mkdirSync(join(packed, 'PaxHeader'), { recursive: true });
   mkdirSync(join(live, 'bin'), { recursive: true });
   mkdirSync(join(live, 'drivers'), { recursive: true });
-  const runner = '#!/bin/sh\necho maestro-runner 1.1.24\n';
+  const runner = '#!/bin/sh\necho maestro-runner 1.1.27\n';
   const driver = 'trusted-driver';
   writeFileSync(join(packed, 'bin', 'maestro-runner'), runner);
   chmodSync(join(packed, 'bin', 'maestro-runner'), 0o755);
@@ -456,7 +456,7 @@ test('installer print-bin accepts a pin-cache whose archive has AppleDouble memb
   mkdirSync(join(payload, 'drivers'), { recursive: true });
   mkdirSync(join(payload, 'PaxHeader'), { recursive: true });
   const runner = join(payload, 'bin', 'maestro-runner');
-  writeFileSync(runner, '#!/bin/sh\necho maestro-runner 1.1.24\n', 'utf8');
+  writeFileSync(runner, '#!/bin/sh\necho maestro-runner 1.1.27\n', 'utf8');
   chmodSync(runner, 0o755);
   writeFileSync(join(payload, 'drivers', 'server.apk'), 'trusted-payload', 'utf8');
   writeFileSync(join(payload, '._bin'), 'appledouble-root');
@@ -488,7 +488,7 @@ test('installer print-bin accepts a pin-cache whose archive has AppleDouble memb
   writeFileSync(
     join(scriptDir, 'maestro-runner-pin.json'),
     JSON.stringify({
-      version: '1.1.24',
+      version: '1.1.27',
       sha256: {
         'darwin-arm64': runnerSha,
         'darwin-x64': runnerSha,
@@ -531,7 +531,7 @@ test('installer keeps the live pin when atomic publication fails', () => {
   mkdirSync(join(pinDir, 'bin'), { recursive: true });
   mkdirSync(scriptDir);
   const runner = join(payload, 'bin', 'maestro-runner');
-  writeFileSync(runner, '#!/bin/sh\necho maestro-runner 1.1.24\n', 'utf8');
+  writeFileSync(runner, '#!/bin/sh\necho maestro-runner 1.1.27\n', 'utf8');
   chmodSync(runner, 0o755);
   writeFileSync(join(pinDir, 'bin', 'maestro-runner'), '#!/bin/sh\necho previous\n', 'utf8');
   chmodSync(join(pinDir, 'bin', 'maestro-runner'), 0o755);
@@ -779,8 +779,8 @@ test('pin manifest owns checksums for every supported release archive', () => {
 });
 
 test('doctorPinnedRunner truth table names missing/older/newer/checksum/unsupported', () => {
-  const pinned = buildReplayEngineStatus('pinned-ok', '1.1.24', false, {
-    selectedPath: '/cache/maestro-runner/1.1.24/bin/maestro-runner',
+  const pinned = buildReplayEngineStatus('pinned-ok', '1.1.27', false, {
+    selectedPath: '/cache/maestro-runner/1.1.27/bin/maestro-runner',
     provenance: 'pin-cache',
   });
   assert.equal(doctorPinnedRunner(pinned).ok, true);
@@ -798,12 +798,12 @@ test('doctorPinnedRunner truth table names missing/older/newer/checksum/unsuppor
   assert.match(String(newer.correction), /newer/);
 
   const checksum = doctorPinnedRunner(
-    buildReplayEngineStatus('checksum-mismatch', '1.1.24', false),
+    buildReplayEngineStatus('checksum-mismatch', '1.1.27', false),
   );
   assert.match(String(checksum.correction), /checksum/);
 
   const unsupported = doctorPinnedRunner(
-    buildReplayEngineStatus('unverified', '1.1.24', false),
+    buildReplayEngineStatus('unverified', '1.1.27', false),
     'win32-x64',
   );
   assert.equal(unsupported.platformStatus, 'unsupported');
@@ -812,7 +812,7 @@ test('doctorPinnedRunner truth table names missing/older/newer/checksum/unsuppor
 });
 
 test('exactPinRefusal is silent only for pinned-ok', () => {
-  assert.equal(exactPinRefusal(buildReplayEngineStatus('pinned-ok', '1.1.24', false)), null);
+  assert.equal(exactPinRefusal(buildReplayEngineStatus('pinned-ok', '1.1.27', false)), null);
   assert.match(
     String(exactPinRefusal(buildReplayEngineStatus('not-installed', null, true))),
     /refused/,
@@ -825,10 +825,10 @@ test('pin-cache helpers never resolve PATH or ~/.maestro-runner', () => {
   const cache = mkdtempSync(join(tmpdir(), 'mr-cache-'));
   process.env.RN_DEV_AGENT_RUNNER_CACHE = cache;
   try {
-    assert.equal(pinCacheRoot(), join(cache, 'maestro-runner', '1.1.24'));
+    assert.equal(pinCacheRoot(), join(cache, 'maestro-runner', '1.1.27'));
     assert.equal(
       pinnedRunnerBinPath(),
-      join(cache, 'maestro-runner', '1.1.24', 'bin', 'maestro-runner'),
+      join(cache, 'maestro-runner', '1.1.27', 'bin', 'maestro-runner'),
     );
     assert.equal(getMaestroRunnerPath(), null);
     assert.doesNotMatch(pinnedRunnerBinPath(), /\/\.maestro-runner\//);
@@ -905,7 +905,7 @@ test('test manifest cannot redefine canonical checksums or authorize execution',
   const pinDir = join(cache, 'maestro-runner', MAESTRO_RUNNER_PIN.version, 'bin');
   mkdirSync(pinDir, { recursive: true });
   const bin = join(pinDir, 'maestro-runner');
-  writeFileSync(bin, `#!/bin/sh\necho hit > "${marker}"\necho maestro-runner 1.1.24\n`);
+  writeFileSync(bin, `#!/bin/sh\necho hit > "${marker}"\necho maestro-runner 1.1.27\n`);
   chmodSync(bin, 0o755);
   const fakeSha = createHash('sha256').update(readFileSync(bin)).digest('hex');
   const manifest = join(cache, 'same-version-other-checksums.json');
@@ -1001,7 +1001,7 @@ test('test manifest cannot redefine the production pin version', () => {
     },
   });
   assert.notEqual(result.status, 0);
-  assert.match(`${result.stdout}${result.stderr}`, /attested pin-cache maestro-runner 1\.1\.24/);
+  assert.match(`${result.stdout}${result.stderr}`, /attested pin-cache maestro-runner 1\.1\.27/);
   assert.throws(() => readFileSync(marker));
 });
 
@@ -1021,7 +1021,7 @@ test('feedback collection uses package-local pin diagnosis without executing amb
   chmodSync(collector, 0o755);
   writeFileSync(
     join(runtimeDir, 'maestro-runner-pin.js'),
-    `const { writeFileSync } = require('node:fs');\nwriteFileSync(${JSON.stringify(diagnoseMarker)}, 'yes');\nconsole.log(JSON.stringify({ status: 'pinned-ok', installedVersion: '1.1.24', pinned: '1.1.24', provenance: 'pin-cache' }));\nprocess.exit(1);\n`,
+    `const { writeFileSync } = require('node:fs');\nwriteFileSync(${JSON.stringify(diagnoseMarker)}, 'yes');\nconsole.log(JSON.stringify({ status: 'pinned-ok', installedVersion: '1.1.27', pinned: '1.1.27', provenance: 'pin-cache' }));\nprocess.exit(1);\n`,
   );
   writeFileSync(
     join(ambientDir, 'maestro-runner'),
@@ -1039,7 +1039,7 @@ test('feedback collection uses package-local pin diagnosis without executing amb
   assert.throws(() => readFileSync(ambientMarker));
   assert.equal(
     JSON.parse(result.stdout).environment.maestro_runner,
-    '1.1.24 (pinned-ok, pin-cache)',
+    '1.1.27 (pinned-ok, pin-cache)',
   );
 });
 

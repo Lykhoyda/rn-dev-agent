@@ -105,7 +105,7 @@ $rn-dev-agent:run-action mark-all-done --no-auto-repair    # surface the raw fai
      trigger: "agent"                    // or "human" / "ci" based on context
    }
    ```
-   `cdp_run_action` resolves pin-cache maestro-runner `>= 1.1.24` and
+   `cdp_run_action` resolves pin-cache maestro-runner `>= 1.1.27` and
    refuses a missing or older action `enginePin` before UI mutation.
 
 6. **Execute via MCP**:

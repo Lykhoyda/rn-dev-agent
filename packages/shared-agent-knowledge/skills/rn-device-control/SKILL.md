@@ -324,7 +324,7 @@ simctl/adb for interactive testing. There is no external `agent-device` CLI invo
 | Fill a text input | `device_fill ref=@e5 text="hello"` | Binds one exact input and requires stable exact read-back |
 | Scroll/swipe | `device_swipe direction=up` | Native gesture |
 | Navigate back | `device_back` | System back (Android) or gesture (iOS) |
-| Persistent E2E test file | `maestro_run` / `cdp_run_action` (YAML) | Pin-cache replay at maestro-runner `>= 1.1.24` with CI-ready artifacts |
+| Persistent E2E test file | `maestro_run` / `cdp_run_action` (YAML) | Pin-cache replay at maestro-runner `>= 1.1.27` with CI-ready artifacts |
 | Deep React state inspection | `cdp_store_state` | Redux/Zustand internals |
 
 `device_fill` hard-fails ambiguous, transformed, unreadable, lost, or uncertain fills, and never falls back to raw adb input. It types into ambient focus only with `focused: true`: when `NO_TEXT_INPUT_TARGET` names a Pressable wrapper whose inner TextInput is missing from the snapshot, tap the field and retry with `focused: true` (iOS only; the `device_fill` tool description owns the append and read-back rules). `typed: true, verified: false` means the text was typed but not confirmed. It dispatches at most one native mutation and verifies only that operation token; mismatch or uncertainty refuses without resend. `device_fill` never escalates to Maestro; use `maestro_run` separately for an explicitly authorized flow. If failure metadata says `mutation: observed|possible`, inspect current state before deciding on any new fill.

@@ -38,7 +38,7 @@ function seedAction(): string {
       '# tags: [regression]',
       '# mutates: false',
       '# status: experimental',
-      '# enginePin: maestro-runner@1.1.24',
+      '# enginePin: maestro-runner@1.1.27',
       '',
       '- tapOn:',
       '    id: "offscreen-control"',

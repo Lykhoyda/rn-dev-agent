@@ -16,12 +16,12 @@ test('pin-cache present: ios without adb still uses maestro-runner', () => {
     platform: 'ios',
     whichAdb: () => null,
     whichMaestro: () => '/opt/homebrew/bin/maestro',
-    maestroRunnerPath: () => '/cache/maestro-runner/1.1.24/bin/maestro-runner',
+    maestroRunnerPath: () => '/cache/maestro-runner/1.1.27/bin/maestro-runner',
   });
   assert.equal('runner' in d ? d.runner : null, 'maestro-runner');
   assert.equal(
     'binPath' in d ? d.binPath : null,
-    '/cache/maestro-runner/1.1.24/bin/maestro-runner',
+    '/cache/maestro-runner/1.1.27/bin/maestro-runner',
   );
   assert.equal('fallbackReason' in d && d.fallbackReason !== undefined, false);
 });
@@ -70,7 +70,7 @@ test('pin-cache missing: refuses brew maestro and PATH runners', () => {
   });
   assert.ok('error' in d, 'expected error');
   assert.match(d.error, /pin-cache/);
-  assert.match(d.error, /1\.1\.24/);
+  assert.match(d.error, /1\.1\.27/);
   assert.doesNotMatch(d.error, /brew install maestro/);
   assert.match(d.hint, /ensure-maestro-runner/);
 });

@@ -5,7 +5,7 @@ appId: com.example.proof
 # tags: [proof, synthetic]
 # mutates: false
 # status: active
-# enginePin: maestro-runner@1.1.24
+# enginePin: maestro-runner@1.1.27
 # expectedRouteSequence: [ProofStart, ProofResult]
 - assertVisible:
     id: proof-start

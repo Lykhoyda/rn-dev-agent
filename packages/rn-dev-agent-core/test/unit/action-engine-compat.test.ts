@@ -57,7 +57,7 @@ import { createTmpProject } from '../helpers/tmp-project.js';
 
 const PINNED = () =>
   buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false, {
-    selectedPath: '/pin-cache/maestro-runner/1.1.24/bin/maestro-runner',
+    selectedPath: '/pin-cache/maestro-runner/1.1.27/bin/maestro-runner',
     provenance: 'pin-cache',
   });
 
@@ -99,19 +99,19 @@ test('matching enginePin is accepted', () => {
 });
 
 test('newer enginePin at or above the floor is accepted', () => {
-  assert.equal(actionEnginePinRefusal('maestro-runner@1.1.25'), null);
+  assert.equal(actionEnginePinRefusal('maestro-runner@1.1.28'), null);
   assert.equal(actionEnginePinRefusal('maestro-runner@1.2.0'), null);
 });
 
 test('malformed enginePin is terminal', () => {
-  assert.match(String(actionEnginePinRefusal('maestro-cli@1.1.24')), /incompatible/);
+  assert.match(String(actionEnginePinRefusal('maestro-cli@1.1.27')), /incompatible/);
   assert.match(String(actionEnginePinRefusal('garbage')), /incompatible/);
 });
 
 test('regex text selectors are refused before any runner spawn', () => {
   const msg = regexSelectorCapabilityRefusal([{ tapOn: '.*Fixture.*' }]);
   assert.ok(msg);
-  assert.match(msg, /1\.1\.24/);
+  assert.match(msg, /1\.1\.27/);
   assert.match(msg, /No UI mutation/);
 });
 
@@ -219,19 +219,19 @@ test('upsertEnginePinHeader inserts after status and is idempotent', () => {
 
 test('upsertEnginePinHeader normalizes duplicate pin headers', () => {
   const source =
-    '# id: x\n# intent: y\n# enginePin: maestro-runner@1.1.24\n# enginePin: maestro-runner@1.0.9\n- launchApp\n';
+    '# id: x\n# intent: y\n# enginePin: maestro-runner@1.1.27\n# enginePin: maestro-runner@1.0.9\n- launchApp\n';
   const updated = upsertEnginePinHeader(source);
   assert.equal(updated.changed, true);
   assert.equal(updated.text.match(/# enginePin:/g)?.length, 1);
-  assert.match(updated.text, /# enginePin: maestro-runner@1\.1\.24/);
+  assert.match(updated.text, /# enginePin: maestro-runner@1\.1\.27/);
 });
 
 test('upsertEnginePinHeader keeps a newer compatible pin', () => {
   const source =
-    '# id: x\n# intent: y\n# status: active\n# enginePin: maestro-runner@1.1.25\n- launchApp\n';
+    '# id: x\n# intent: y\n# status: active\n# enginePin: maestro-runner@1.1.28\n- launchApp\n';
   const updated = upsertEnginePinHeader(source);
   assert.equal(updated.changed, false);
-  assert.match(updated.text, /# enginePin: maestro-runner@1\.1\.25/);
+  assert.match(updated.text, /# enginePin: maestro-runner@1\.1\.28/);
 });
 
 test('migrateLearnedActions stamps compatible YAML and leaves regex actions unmutated', () => {
@@ -262,12 +262,30 @@ test('migrateLearnedActions stamps compatible YAML and leaves regex actions unmu
   const bad = results.find((r) => r.id === 'regex');
   assert.equal(ok?.status, 'migrated');
   assert.equal(ok?.mutated, true);
-  assert.match(readFileSync(okPath, 'utf8'), /enginePin: maestro-runner@1\.1\.24/);
+  assert.match(readFileSync(okPath, 'utf8'), /enginePin: maestro-runner@1\.1\.27/);
   assert.equal(yml?.status, 'migrated');
-  assert.match(readFileSync(ymlPath, 'utf8'), /enginePin: maestro-runner@1\.1\.24/);
+  assert.match(readFileSync(ymlPath, 'utf8'), /enginePin: maestro-runner@1\.1\.27/);
   assert.equal(bad?.status, 'incompatible');
   assert.equal(bad?.mutated, false);
   assert.doesNotMatch(readFileSync(badPath, 'utf8'), /enginePin/);
+});
+
+test('an action pinned to the previous 1.1.24 pin is below the floor until migrate re-pins it', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'rn-action-migrate-below-floor-')));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, 'login.yaml');
+  writeFileSync(path, actionYaml('login', '# enginePin: maestro-runner@1.1.24'), 'utf8');
+
+  assert.match(
+    String(actionEnginePinRefusal('maestro-runner@1.1.24')),
+    /below the required floor maestro-runner@1\.1\.27/,
+  );
+  const result = migrateLearnedActions(root).find((row) => row.id === 'login');
+  assert.equal(result?.status, 'migrated');
+  const text = readFileSync(path, 'utf8');
+  assert.match(text, /# enginePin: maestro-runner@1\.1\.27/);
+  assert.doesNotMatch(text, /1\.1\.24/);
 });
 
 test('migrateLearnedActions atomically rebaselines an existing action sidecar', () => {
@@ -510,7 +528,7 @@ test('action writer never age-reclaims a live process lock', () => {
     () =>
       atomicWriter.pairWriteConditional(
         actionPath,
-        actionYaml('checkout', '# enginePin: maestro-runner@1.1.24'),
+        actionYaml('checkout', '# enginePin: maestro-runner@1.1.27'),
         sidecarPath,
         freshRuntimeState(() => new Date('2026-01-01T00:00:00Z'), 1),
         () => true,
@@ -626,7 +644,7 @@ test('learned-action loading and suite preflight reject filename identity drift'
   const dir = join(root, '.rn-agent', 'actions');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, 'checkout.yaml');
-  writeFileSync(path, actionYaml('checkout-v2', '# enginePin: maestro-runner@1.1.24'), 'utf8');
+  writeFileSync(path, actionYaml('checkout-v2', '# enginePin: maestro-runner@1.1.27'), 'utf8');
 
   assert.throws(() => loadAction(root, 'checkout'), /does not match filename identity/);
   const suite = prepareActionVerificationSuite([path], dir, PINNED());
@@ -692,7 +710,7 @@ test('migrateLearnedActions expands contained runFlow files before pinning', () 
   );
   const result = migrateLearnedActions(root).find((row) => row.id === 'with-subflow');
   assert.equal(result?.status, 'migrated');
-  assert.match(readFileSync(actionPath, 'utf8'), /enginePin: maestro-runner@1\.1\.24/);
+  assert.match(readFileSync(actionPath, 'utf8'), /enginePin: maestro-runner@1\.1\.27/);
 });
 
 test('migrateLearnedActions refuses yaml and yml action-id collisions without mutation', () => {
@@ -757,7 +775,7 @@ test('cdp_run_action resolves yml actions and refuses extension collisions', asy
 
   writeFileSync(
     join(dir, 'login.yaml'),
-    actionYaml('login', '# enginePin: maestro-runner@1.1.24'),
+    actionYaml('login', '# enginePin: maestro-runner@1.1.27'),
     'utf8',
   );
   const collision = await handler({ actionId: 'login', projectRoot: root });
@@ -777,7 +795,7 @@ test('cdp_run_action preflights relative subflows from the action directory', as
     join(dir, 'checkout.yaml'),
     actionYaml(
       'checkout',
-      '# enginePin: maestro-runner@1.1.24',
+      '# enginePin: maestro-runner@1.1.27',
       '- runFlow: subflows/steps.yaml\n',
     ),
     'utf8',
@@ -787,7 +805,7 @@ test('cdp_run_action preflights relative subflows from the action directory', as
     maestroRun: async (args) => {
       assert.equal(args.flowPath, undefined);
       assert.equal(args.actionMetadata?.id, 'checkout');
-      assert.equal(args.actionMetadata?.enginePin, 'maestro-runner@1.1.24');
+      assert.equal(args.actionMetadata?.enginePin, 'maestro-runner@1.1.27');
       replayedCommands = parseAndValidateFlow(args.inlineYaml ?? '').commands;
       return { content: [{ type: 'text', text: '{"ok":true,"data":{"passed":true}}' }] };
     },
@@ -818,7 +836,7 @@ test('maestro_generate emits a pinned replayable action without regex waits', as
   const generated = readFileSync(join(outputDir, 'wait-for-checkout.yaml'), 'utf8');
   assert.match(generated, /# id: wait-for-checkout/);
   assert.match(generated, /# intent: Wait for checkout/);
-  assert.match(generated, /# enginePin: maestro-runner@1\.1\.24/);
+  assert.match(generated, /# enginePin: maestro-runner@1\.1\.27/);
   assert.match(generated, /waitForAnimationToEnd/);
   assert.doesNotMatch(generated, /visible:\s*['"]?\.\*/);
 });
@@ -1002,7 +1020,7 @@ test('maestro_run executes the captured action after its path changes', async ()
     flowPath,
     actionYaml(
       'login',
-      '# enginePin: maestro-runner@1.1.24',
+      '# enginePin: maestro-runner@1.1.27',
       '- tapOn:\n    id: "captured-selector"\n',
     ),
   );
@@ -1010,7 +1028,7 @@ test('maestro_run executes the captured action after its path changes', async ()
     foreignPath,
     actionYaml(
       'login',
-      '# enginePin: maestro-runner@1.1.24',
+      '# enginePin: maestro-runner@1.1.27',
       '- tapOn:\n    id: "foreign-selector"\n',
     ),
   );
@@ -1079,7 +1097,7 @@ test('maestro_run refuses ambiguous actions and standalone action descendants', 
   const dir = join(root, '.rn-agent', 'actions');
   const subflows = join(dir, 'subflows');
   mkdirSync(subflows, { recursive: true });
-  const source = actionYaml('login', '# enginePin: maestro-runner@1.1.24');
+  const source = actionYaml('login', '# enginePin: maestro-runner@1.1.27');
   writeFileSync(join(dir, 'login.yaml'), source, 'utf8');
   writeFileSync(join(dir, 'login.yml'), source, 'utf8');
   const descendant = join(subflows, 'steps.yaml');
@@ -1165,7 +1183,7 @@ test('NODE_TEST_CONTEXT cannot bypass a corrupt pin-cache binary', async () => {
   const cache = mkdtempSync(join(tmpdir(), 'rn-corrupt-pin-'));
   const bin = join(cache, 'maestro-runner', MAESTRO_RUNNER_PIN.version, 'bin', 'maestro-runner');
   mkdirSync(join(bin, '..'), { recursive: true });
-  writeFileSync(bin, '#!/bin/sh\necho maestro-runner 1.1.24\n', 'utf8');
+  writeFileSync(bin, '#!/bin/sh\necho maestro-runner 1.1.27\n', 'utf8');
   chmodSync(bin, 0o755);
   process.env.RN_DEV_AGENT_RUNNER_CACHE = cache;
   let spawned = false;
@@ -1364,7 +1382,7 @@ test('actionReplayPreflight is session-pin then format then selector', () => {
   );
   assert.equal(
     actionReplayPreflight({
-      enginePin: 'maestro-runner@1.1.25',
+      enginePin: 'maestro-runner@1.1.28',
       commands: [{ tapOn: { id: 'x' } }],
       engineStatus: PINNED(),
     }),
@@ -1414,7 +1432,7 @@ test('maestro_test_all refuses before spawn when the exact pin is missing', asyn
   assert.equal(body.ok, false);
   assert.equal(spawned, false);
   assert.equal(result.isError, true);
-  assert.match(String(body.error), /1\.1\.24|pin-cache|not installed/i);
+  assert.match(String(body.error), /1\.1\.27|pin-cache|not installed/i);
 });
 
 test('maestro_test_all requires M7 engine metadata in the owned corpus', async () => {
@@ -1449,10 +1467,10 @@ test('maestro_test_all preflights the complete suite before any execution', asyn
   const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-preflight-'));
   const dir = join(root, '.rn-agent', 'actions');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'a.yaml'), actionYaml('a', '# enginePin: maestro-runner@1.1.24'), 'utf8');
+  writeFileSync(join(dir, 'a.yaml'), actionYaml('a', '# enginePin: maestro-runner@1.1.27'), 'utf8');
   writeFileSync(
     join(dir, 'b.yaml'),
-    actionYaml('b', '# enginePin: maestro-runner@1.1.24', '- copyTextFrom: "Log.n"\n'),
+    actionYaml('b', '# enginePin: maestro-runner@1.1.27', '- copyTextFrom: "Log.n"\n'),
     'utf8',
   );
   let spawned = false;
@@ -1483,8 +1501,8 @@ test('action suite execution snapshots preserve the bytes accepted by preflight'
   mkdirSync(dir, { recursive: true });
   const first = join(dir, 'a.yaml');
   const second = join(dir, 'b.yaml');
-  writeFileSync(first, actionYaml('a', '# enginePin: maestro-runner@1.1.24'), 'utf8');
-  writeFileSync(second, actionYaml('b', '# enginePin: maestro-runner@1.1.24'), 'utf8');
+  writeFileSync(first, actionYaml('a', '# enginePin: maestro-runner@1.1.27'), 'utf8');
+  writeFileSync(second, actionYaml('b', '# enginePin: maestro-runner@1.1.27'), 'utf8');
 
   const suite = prepareActionVerificationSuite([first, second], dir, PINNED());
   assert.deepEqual(suite.errors, []);
@@ -1492,7 +1510,7 @@ test('action suite execution snapshots preserve the bytes accepted by preflight'
   const foreign = join(root, 'foreign.yaml');
   writeFileSync(
     foreign,
-    actionYaml('b', '# enginePin: maestro-runner@1.1.24', '- copyTextFrom: "Log.n"\n'),
+    actionYaml('b', '# enginePin: maestro-runner@1.1.27', '- copyTextFrom: "Log.n"\n'),
     'utf8',
   );
   rmSync(second);
@@ -1510,7 +1528,7 @@ test('action suite preflight resolves nested flows from its operation snapshot',
   writeFileSync(join(dir, 'flows', 'child.yaml'), '- tapOn:\n    id: "nested-selector"\n');
   writeFileSync(
     actionPath,
-    actionYaml('browse', '# enginePin: maestro-runner@1.1.24', '- runFlow: flows/child.yaml\n'),
+    actionYaml('browse', '# enginePin: maestro-runner@1.1.27', '- runFlow: flows/child.yaml\n'),
   );
 
   const suite = prepareActionVerificationSuite([actionPath], dir, PINNED());
@@ -1527,7 +1545,7 @@ test('maestro_test_all preflights nested flows from its operation snapshot', asy
   writeFileSync(join(dir, 'flows', 'child.yaml'), '- copyTextFrom: "Log.n"\n');
   writeFileSync(
     join(dir, 'browse.yaml'),
-    actionYaml('browse', '# enginePin: maestro-runner@1.1.24', '- runFlow: flows/child.yaml\n'),
+    actionYaml('browse', '# enginePin: maestro-runner@1.1.27', '- runFlow: flows/child.yaml\n'),
   );
   let spawned = false;
   const handler = createMaestroTestAllHandler({
@@ -1563,7 +1581,7 @@ test('maestro_test_all executes captured actions after their paths change', asyn
     flowPath,
     actionYaml(
       'browse',
-      '# enginePin: maestro-runner@1.1.24',
+      '# enginePin: maestro-runner@1.1.27',
       '- tapOn:\n    id: "captured-suite-selector"\n',
     ),
   );
@@ -1571,7 +1589,7 @@ test('maestro_test_all executes captured actions after their paths change', asyn
     foreignPath,
     actionYaml(
       'browse',
-      '# enginePin: maestro-runner@1.1.24',
+      '# enginePin: maestro-runner@1.1.27',
       '- tapOn:\n    id: "foreign-suite-selector"\n',
     ),
   );
@@ -1614,7 +1632,7 @@ test('maestro_test_all revalidates the exact pin before each subprocess', async 
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, 'browse.yaml'),
-    actionYaml('browse', '# enginePin: maestro-runner@1.1.24'),
+    actionYaml('browse', '# enginePin: maestro-runner@1.1.27'),
     'utf8',
   );
   let resolutions = 0;
@@ -1656,7 +1674,7 @@ test('maestro_test_all charges immediate runner attestation to the flow deadline
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, 'browse.yaml'),
-    actionYaml('browse', '# enginePin: maestro-runner@1.1.24'),
+    actionYaml('browse', '# enginePin: maestro-runner@1.1.27'),
     'utf8',
   );
   let clock = 0;
@@ -1699,7 +1717,7 @@ test('maestro_test_all refuses action extension collisions before execution', as
   const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-collision-'));
   const dir = join(root, '.rn-agent', 'actions');
   mkdirSync(dir, { recursive: true });
-  const source = actionYaml('login', '# enginePin: maestro-runner@1.1.24');
+  const source = actionYaml('login', '# enginePin: maestro-runner@1.1.27');
   writeFileSync(join(dir, 'login.yaml'), source, 'utf8');
   writeFileSync(join(dir, 'login.yml'), source, 'utf8');
   let spawned = false;
@@ -1764,7 +1782,7 @@ test('maestro_test_all refuses an unapproved alias to an action corpus', async (
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, 'browse.yaml'),
-    actionYaml('browse', '# enginePin: maestro-runner@1.1.24'),
+    actionYaml('browse', '# enginePin: maestro-runner@1.1.27'),
     'utf8',
   );
   const directoryAlias = join(root, 'action-link');
