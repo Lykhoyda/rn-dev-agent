@@ -19,6 +19,18 @@ function text(label: string, visibility: Visibility = 'visible'): Element {
   };
 }
 
+function heading(label: string): Element {
+  const base = text(label);
+  return {
+    ...base,
+    semantic: {
+      ...base.semantic!,
+      heading: { kind: 'typographic-title', hostIndex: 0, anchorRef: base.ref, bodyRefs: [] },
+      nativePresence: { kind: 'text', labelSource: 'direct', structural: false },
+    },
+  };
+}
+
 function screen(...elements: Element[]): Screen {
   return {
     front: 'app',
@@ -418,20 +430,49 @@ test('a local visibility refusal fails the row without a model call or scroll', 
   }
 });
 
-test('a heading request is refused when the capture attests only ordinary text', async () => {
-  for (const line of ['Wait for the welcome heading', 'Scroll until the welcome heading']) {
-    const judge = scriptedJudge(() => {
-      assert.fail('ordinary text cannot attest a heading role');
-    });
-    const f = walker([screen(text('Welcome'))], judge);
-    const result = await runPlan(parsePlan(`1. ${line}`).blocks!, f.deps);
-    assert.equal(result.verdict, 'FAIL');
-    assert.match(result.failure?.seen ?? '', /VISIBILITY_UNSUPPORTED.*heading role/);
-    assert.equal(result.steps[0].outcome, 'fail');
-    assert.equal(f.captures(), 1);
-    assert.equal(result.jev.calls, 0);
-    assert.deepEqual(f.actions, []);
-  }
+test('a heading wait keeps polling ordinary text for its whole budget and ends unsure, never absent', async () => {
+  const judge = scriptedJudge(() => {
+    assert.fail('ordinary text cannot attest a heading role');
+  });
+  const f = walker([screen(text('Welcome'))], judge);
+  const result = await runPlan(parsePlan('1. Wait for the welcome heading').blocks!, f.deps);
+  assert.equal(result.verdict, 'FAIL');
+  assert.match(result.failure?.seen ?? '', /VISIBILITY_UNSURE/);
+  assert.doesNotMatch(result.failure?.seen ?? '', /did not appear/);
+  assert.equal(f.captures(), 1 + WAIT_BUDGET_MS / WAIT_POLL_MS);
+  assert.equal(result.jev.calls, 0);
+  assert.deepEqual(f.actions, []);
+});
+
+test('an unestablished heading never authorizes scroll-until to scroll', async () => {
+  const judge = scriptedJudge(() => {
+    assert.fail('ordinary text cannot attest a heading role');
+  });
+  const f = walker([screen(text('Welcome'))], judge);
+  const result = await runPlan(parsePlan('1. Scroll until the welcome heading').blocks!, f.deps);
+  assert.equal(result.verdict, 'FAIL');
+  assert.match(result.failure?.seen ?? '', /VISIBILITY_UNSURE/);
+  assert.equal(f.captures(), 1 + CHECK.reasks);
+  assert.deepEqual(f.actions, []);
+});
+
+test('a heading wait passes once the heading qualifies on a later capture', async () => {
+  const f = walker(
+    [screen(text('Welcome')), screen(text('Welcome')), screen(heading('Welcome'))],
+    visibilityJudge(0.99),
+  );
+  const result = await runPlan(parsePlan('1. Wait for the welcome heading').blocks!, f.deps);
+  assert.equal(result.verdict, 'PASS');
+  assert.equal(f.captures(), 3);
+  assert.equal(result.jev.calls, 1);
+});
+
+test('a negative heading judgment keeps the wait polling instead of ending it', async () => {
+  const f = walker([screen(heading('Welcome'))], visibilityJudge(0.01, 0.01, 0.99));
+  const result = await runPlan(parsePlan('1. Wait for the welcome heading').blocks!, f.deps);
+  assert.equal(result.verdict, 'PASS');
+  assert.equal(f.captures(), 3);
+  assert.equal(result.jev.calls, 3);
 });
 
 test('hidden and offscreen observations do not authorize a wait to scroll', async () => {

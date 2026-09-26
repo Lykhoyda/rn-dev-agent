@@ -176,8 +176,9 @@ function describeSemantic(element: Element): string {
   });
 }
 
+// pending: not established on this capture, and not proven absent.
 export type VisibilityDecision =
-  | { verdict: 'present' | 'absent' | 'unsure' }
+  | { verdict: 'present' | 'absent' | 'pending' | 'unsure' }
   | { refuse: string; reason: string };
 
 interface VisibilityQuestion {
@@ -186,9 +187,10 @@ interface VisibilityQuestion {
   headingElements?: Element[];
 }
 
+const HEADING_REQUEST = /\b(?:headings?|headers?|titles?)\b/i;
+
 // Recognizable unsupported traits only; this is not a complete natural-language parser.
 const UNSUPPORTED_VISIBILITY_REQUIREMENTS = [
-  { dimension: 'heading role', pattern: /\b(?:headings?|headers?|titles?)\b/i },
   {
     dimension: 'layout',
     pattern:
@@ -213,7 +215,7 @@ function prepareVisibility(
       refuse: 'CANDIDATE_LIMIT',
       reason: `more than ${MAX_CANDIDATES} independent visibility contributions`,
     };
-  const headingRequest = UNSUPPORTED_VISIBILITY_REQUIREMENTS[0].pattern.test(target.phrase);
+  const headingRequest = HEADING_REQUEST.test(target.phrase);
   const declaredOnly = /\b(?:accessibility|accessible|declared|semantic|ax)\b/i.test(target.phrase);
   const headingElements = headingRequest
     ? projected.elements.filter(
@@ -223,15 +225,15 @@ function prepareVisibility(
           (!declaredOnly || e.semantic.heading.kind === 'declared-heading'),
       )
     : undefined;
-  const unsupported = UNSUPPORTED_VISIBILITY_REQUIREMENTS.find(
-    ({ dimension, pattern }) =>
-      pattern.test(target.phrase) && !(dimension === 'heading role' && headingElements?.length),
+  const unsupported = UNSUPPORTED_VISIBILITY_REQUIREMENTS.find(({ pattern }) =>
+    pattern.test(target.phrase),
   );
   if (unsupported)
     return {
       refuse: 'VISIBILITY_UNSUPPORTED',
       reason: `phrase visibility requires unsupported ${unsupported.dimension} evidence`,
     };
+  if (headingElements && !headingElements.length) return { verdict: 'pending' };
   if (!projected.elements.length) return { verdict: 'absent' };
   return {
     elements: projected.elements,
@@ -518,12 +520,10 @@ export async function decideScreen(
 function presenceVerdict(
   verdict: 'pass' | 'fail' | 'unsure',
   negativeUnknown = false,
-): 'present' | 'absent' | 'unsure' {
-  return verdict === 'pass'
-    ? 'present'
-    : verdict === 'fail' && !negativeUnknown
-      ? 'absent'
-      : 'unsure';
+): 'present' | 'absent' | 'pending' | 'unsure' {
+  if (verdict === 'pass') return 'present';
+  if (verdict === 'fail') return negativeUnknown ? 'pending' : 'absent';
+  return 'unsure';
 }
 
 export async function resolveTarget(step: Step, screen: Screen, judge: Judge): Promise<Resolution> {
