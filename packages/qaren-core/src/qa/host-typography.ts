@@ -1,4 +1,5 @@
 import { associateHosts, hostPath } from './host-association.js';
+import { PRIVATE_INPUT_LIMITS } from './private-input-limits.js';
 import type { HostAssociation } from './host-association.js';
 import type { NativePresence } from './native-presence.js';
 import type { NativeNode, ReactHostEvidence } from './screen.js';
@@ -122,8 +123,8 @@ export function validateHostTypography(
     value.coordinateSpace !== 'window-points' ||
     !Array.isArray(value.nodes) ||
     value.nodes.length !== hostCount ||
-    hostCount > 200 ||
-    (value.complete && hostCount === 200)
+    hostCount > PRIVATE_INPUT_LIMITS.maxHosts ||
+    (value.complete && hostCount === PRIVATE_INPUT_LIMITS.maxHosts)
   )
     return undefined;
   let characters = 0;

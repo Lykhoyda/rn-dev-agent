@@ -142,6 +142,14 @@ function isIosStrictRunnerProcessLine(line: string): boolean {
   );
 }
 
+function isUnscopedMcpControl(line: string): boolean {
+  const command = line.replace(/^\s*\d+\s+/, '').trimEnd();
+  return (
+    /^java$/i.test(executableBasename(command)) &&
+    /^\S+ -classpath \S+ maestro\.cli\.[\w.$]+ mcp$/i.test(command)
+  );
+}
+
 function hasUnresolvedIosPath(command: string): boolean {
   if (command.length > 16_384) return true;
   const components = command.split('/').slice(1);
@@ -204,12 +212,12 @@ function hasUnresolvedIosExecutablePath(line: string): boolean {
 
 export type ProcessIdentityObserver = (pid: number, timeoutMs: number) => Promise<unknown>;
 
-function identityRulesOutDriver(value: unknown, line: string, scanStartedAt: number): boolean {
-  if (!value || typeof value !== 'object') return false;
+function observedExecutable(value: unknown, line: string, scanStartedAt: number): string | null {
+  if (!value || typeof value !== 'object') return null;
   const observation = value as Record<string, unknown>;
   const match = /^\s*(\d+)\s+(.+)$/.exec(line);
-  if (!match || observation.v !== 1 || observation.pid !== Number(match[1])) return false;
-  if (!observation.birth || typeof observation.birth !== 'object') return false;
+  if (!match || observation.v !== 1 || observation.pid !== Number(match[1])) return null;
+  if (!observation.birth || typeof observation.birth !== 'object') return null;
   const { seconds, micros } = observation.birth as Record<string, unknown>;
   if (
     typeof seconds !== 'number' ||
@@ -221,7 +229,7 @@ function identityRulesOutDriver(value: unknown, line: string, scanStartedAt: num
     micros >= 1_000_000 ||
     seconds * 1_000 + Math.ceil(micros / 1_000) > scanStartedAt
   )
-    return false;
+    return null;
   const executable = observation.executable;
   if (
     typeof executable !== 'string' ||
@@ -231,18 +239,29 @@ function identityRulesOutDriver(value: unknown, line: string, scanStartedAt: num
     // eslint-disable-next-line no-control-regex -- Kernel paths must remain an unambiguous single field.
     /[\x00-\x1f\x7f\ufffd]/.test(executable)
   )
-    return false;
+    return null;
+  return executable;
+}
+
+function identityRulesOutDriver(value: unknown, line: string, scanStartedAt: number): boolean {
+  const executable = observedExecutable(value, line, scanStartedAt);
+  if (!executable) return false;
   const name = executable.slice(executable.lastIndexOf('/') + 1);
-  if (
+  // The kernel executable decides; argv[0] may name a symlink such as a versioned CLI.
+  return !(
     SHELL_WRAPPERS.test(name) ||
     /^(?:java|node|nodejs|python[\d.]*|ruby[\d.]*|perl[\d.]*|osascript)$/i.test(name) ||
     /UITests-?Runner$/i.test(name) ||
     hasUnresolvedIosPath(executable)
-  )
-    return false;
-  // Match the observed executable, not a path or driver name embedded in an argument.
-  return [executable, name].some(
-    (identity) => match[2] === identity || match[2].startsWith(`${identity} `),
+  );
+}
+
+function identityProvesMcpControl(value: unknown, line: string, scanStartedAt: number): boolean {
+  const executable = observedExecutable(value, line, scanStartedAt);
+  return (
+    executable?.slice(executable.lastIndexOf('/') + 1) === 'java' &&
+    !hasUnresolvedIosPath(executable) &&
+    line.replace(/^\s*\d+\s+/, '').startsWith(`${executable} `)
   );
 }
 
@@ -276,9 +295,13 @@ export async function probeIosExternalRunnerStrict(
       if (!Number.isSafeInteger(pid) || pids.has(pid)) return 'unknown';
       pids.add(pid);
     }
-    const drivers = lines.filter(isIosStrictRunnerProcessLine);
+    const drivers = lines.filter(
+      (line) => !isUnscopedMcpControl(line) && isIosStrictRunnerProcessLine(line),
+    );
     if (drivers.length === 0) {
-      const unresolved = lines.filter(hasUnresolvedIosExecutablePath);
+      const unresolved = lines.filter(
+        (line) => isUnscopedMcpControl(line) || hasUnresolvedIosExecutablePath(line),
+      );
       if (!unresolved.length) return 'clear';
       if (!observeIdentity || unresolved.length > 16) return 'unknown';
       for (const line of unresolved) {
@@ -288,7 +311,9 @@ export async function probeIosExternalRunnerStrict(
         const observation = await observeIdentity(pid, Math.min(1_000, remaining));
         if (
           performance.now() >= deadline ||
-          !identityRulesOutDriver(observation, line, scanStartedAt)
+          !(isUnscopedMcpControl(line)
+            ? identityProvesMcpControl(observation, line, scanStartedAt)
+            : identityRulesOutDriver(observation, line, scanStartedAt))
         )
           return 'unknown';
       }

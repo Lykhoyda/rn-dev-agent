@@ -5,6 +5,10 @@ import { HELPERS_VERSION } from '../../../dist/injected-helpers.js';
 import { associateHeadings } from '../../../dist/qa/host-typography.js';
 import { validateReactHostEvidence } from '../../../dist/qa/screen.js';
 import { createSandbox, INJECTED_HELPERS } from '../helpers/inject-harness.js';
+import { devFreeze } from './rn-dev-freeze.ts';
+import { PRIVATE_INPUT_LIMITS } from '../../../dist/qa/private-input-limits.js';
+
+const { maxHosts } = PRIVATE_INPUT_LIMITS;
 
 type Measure = (callback: (...rect: number[]) => void) => void;
 interface Fiber {
@@ -99,6 +103,23 @@ test('stable bailout children may retain alternate parent returns, but those exa
     assert.equal(evidence.nodes[0].text.kind, mutate ? 'unsupported' : 'block');
     assert.equal(Boolean(evidence.nodes[0].rect), !mutate);
   }
+});
+
+test('RN dev-frozen text styles keep block typography while lookalike accessors stay unsupported', async () => {
+  const frozen = await typography(text('Welcome', { style: devFreeze({ fontSize: 28 }) }));
+  assert.equal(frozen.nodes[0].text.kind, 'block');
+  assert.equal(frozen.nodes[0].text.runs[0].fontSize, 28);
+  let calls = 0;
+  const style = Object.defineProperty({}, 'fontSize', {
+    enumerable: true,
+    get() {
+      calls++;
+      return 28;
+    },
+  });
+  const lookalike = await typography(text('Welcome', { style: Object.freeze(style) }));
+  assert.equal(lookalike.nodes[0].text.kind, 'unsupported');
+  assert.equal(calls, 0);
 });
 
 test('named virtual spans preserve identity and ancestry without measuring or degrading the capture', async () => {
@@ -788,11 +809,11 @@ test('anonymous owner measurement is opt-in and retains the exact ordinary diges
   assert.equal(invoke(sandbox, { interactiveOnly: true }), ordinary);
 });
 
-test('anonymous potential owners retain the 200-host bound without exposing authored labels', async () => {
+test('anonymous potential owners retain the shared host bound without exposing authored labels', async () => {
   let measurements = 0;
   const evidence = await typography(
     composite(
-      Array.from({ length: 201 }, () =>
+      Array.from({ length: maxHosts + 1 }, () =>
         host('RCTView', { accessible: true, accessibilityLabel: 'Private' }, [], (cb) => {
           measurements++;
           measured(cb);
@@ -801,8 +822,8 @@ test('anonymous potential owners retain the 200-host bound without exposing auth
     ),
   );
   assert.equal(evidence.complete, false);
-  assert.equal(evidence.nodes.length, 200);
-  assert.equal(measurements, 200);
+  assert.equal(evidence.nodes.length, maxHosts);
+  assert.equal(measurements, maxHosts);
   assert.equal(JSON.stringify(evidence).includes('Private'), false);
 });
 
@@ -976,9 +997,11 @@ test('block, total-character, run, visit, host and graph bounds fail closed', as
     ).nodes[0].text.kind,
     'unsupported',
   );
-  const hosts = await typography(composite(Array.from({ length: 250 }, () => host('RCTView'))));
+  const hosts = await typography(
+    composite(Array.from({ length: maxHosts + 50 }, () => host('RCTView'))),
+  );
   assert.equal(hosts.complete, false);
-  assert.equal(hosts.nodes.length, 200);
+  assert.equal(hosts.nodes.length, maxHosts);
   const graph = await digest(
     fixture(composite([...Array.from({ length: 2000 }, () => composite([])), text('past scan')]))
       .sandbox,
@@ -1011,19 +1034,19 @@ test('early refusal is still a Promise carrying incomplete typography', async ()
   }
 });
 
-test('version 85 replaces a warm 84 producer and reinjection remains idempotent', async () => {
-  assert.equal(HELPERS_VERSION, 85);
+test('version 87 replaces a warm 86 producer and reinjection remains idempotent', async () => {
+  assert.equal(HELPERS_VERSION, 87);
   const { sandbox } = fixture(text());
   Object.assign(sandbox, {
     __QAREN: {
-      __v: 84,
+      __v: 86,
       getTree() {
         throw new Error('stale');
       },
     },
   });
   vm.runInContext(INJECTED_HELPERS, sandbox);
-  assert.equal(sandbox.__QAREN.__v, 85);
+  assert.equal(sandbox.__QAREN.__v, 87);
   const producer = sandbox.__QAREN.getTree;
   assert.equal((await digest(sandbox)).hostEvidence.typography.version, 1);
   vm.runInContext(INJECTED_HELPERS, sandbox);

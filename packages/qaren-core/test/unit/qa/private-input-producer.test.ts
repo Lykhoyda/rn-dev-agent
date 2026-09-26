@@ -12,6 +12,8 @@ import { parsePlan } from '../../../dist/qa/plan.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { scriptedJudge, walker } from './judgment-fixtures.ts';
 import { nativeCapture } from './platform-presence-fixtures.ts';
+import { devFreeze } from './rn-dev-freeze.ts';
+import { PRIVATE_INPUT_LIMITS } from '../../../dist/qa/private-input-limits.js';
 
 function setup(props: Record<string, unknown> = {}, hostType = 'RCTTextInput') {
   const fiber = buildFiber({ hostType, props });
@@ -687,12 +689,12 @@ test('private captures retain fixed refusals for data-named error overlays', () 
   }
 });
 
-test('version 85 replaces a warm 84 helper and reinjection preserves the private API', () => {
+test('version 87 replaces a warm 86 helper and reinjection preserves the private API', () => {
   const { sandbox } = setup({ value: '' });
-  sandbox.__QAREN = { __v: 84 };
+  sandbox.__QAREN = { __v: 86 };
   vm.runInContext(INJECTED_HELPERS, sandbox);
   const upgraded = sandbox.__QAREN;
-  assert.equal(upgraded.__v, 85);
+  assert.equal(upgraded.__v, 87);
   assert.equal(typeof upgraded.beginQaCapture, 'function');
   assert.equal(typeof upgraded.readQaCapture, 'function');
   vm.runInContext(INJECTED_HELPERS, sandbox);
@@ -782,7 +784,7 @@ test('public default, semantic and typography trees cannot opt into private inpu
     );
     assert.doesNotMatch(tree, /(?:value|text|default)-secret|"secureTextEntry"|"inputs"/);
   }
-  assert.equal(api.__v, 85);
+  assert.equal(api.__v, 87);
 });
 
 test('getter, inherited, opaque and invalid inputs refuse without executing getters or coercions', () => {
@@ -827,6 +829,89 @@ test('getter, inherited, opaque and invalid inputs refuse without executing gett
   assert.equal(calls, 0);
 });
 
+test('RN dev-frozen host props and Fragment children props admit a complete capture', () => {
+  for (const children of [[{}, {}], 7, 'text', null]) {
+    let reads = 0;
+    const fixture = setup({}, 'RCTView');
+    const fragment = buildFiber({}, fixture.fiber);
+    fragment.tag = 7;
+    fragment.memoizedProps = children;
+    const field = buildFiber(
+      {
+        hostType: 'RCTSinglelineTextInputView',
+        props: {
+          testID: 'field',
+          value: '',
+          onChangeText() {},
+          accessibilityState: devFreeze({ disabled: false }, () => reads++),
+        },
+      },
+      fragment,
+    );
+    field.tag = 5;
+    const next = buildFiber(
+      {
+        hostType: 'RCTView',
+        props: {
+          testID: 'next',
+          onPress() {},
+          accessibilityState: devFreeze({ busy: undefined, disabled: true }, () => reads++),
+          style: devFreeze({ padding: 4 }),
+        },
+      },
+      fragment,
+    );
+    next.tag = 5;
+    fixture.fiber.child = fragment;
+    fragment.child = field;
+    field.sibling = next;
+    const result = fixture.api.beginQaCapture();
+    assert.equal(result.state, 'ready');
+    assert.deepEqual(plain(result.inputs), {
+      version: 1,
+      complete: true,
+      facts: [{ hostIndex: 1, values: [''], secure: false }],
+    });
+    assert.ok(reads > 0);
+    const tree = JSON.parse(result.tree);
+    assert.equal(tree.hostEvidence.hosts[2].disabled, true);
+  }
+});
+
+test('dev-freeze lookalikes and dev-frozen input props refuse without invoking getters', () => {
+  let calls = 0;
+  function identity(value: unknown) {
+    calls++;
+    return value;
+  }
+  function throwOnImmutableMutation() {
+    throw new Error('immutable');
+  }
+  const accessor = (descriptor: PropertyDescriptor, freeze = true) => {
+    const state = Object.defineProperty({}, 'disabled', { ...descriptor, enumerable: true });
+    return freeze ? Object.freeze(state) : state;
+  };
+  const bound = { get: identity.bind(null, false), set: throwOnImmutableMutation.bind(null) };
+  for (const state of [
+    accessor(bound, false),
+    accessor({ get: bound.get }),
+    accessor({ get: identity, set: bound.set }),
+    accessor({ get: bound.get, set: throwOnImmutableMutation }),
+    accessor({ get: Object.defineProperty(() => false, 'name', { value: 'bound identity' }) }),
+  ]) {
+    const result = setup({ value: '', accessibilityState: state }).api.beginQaCapture();
+    assert.equal(result.state, 'refused');
+    assert.equal(result.inputs.complete, false);
+  }
+  for (const props of [{ value: 'secret' }, { value: '', secureTextEntry: true }]) {
+    const result = setup(devFreeze(props, () => calls++)).api.beginQaCapture();
+    assert.equal(result.state, 'refused');
+    assert.deepEqual(plain(result.inputs), { version: 1, complete: false, facts: [] });
+    assert.doesNotMatch(JSON.stringify(result), /secret/);
+  }
+  assert.equal(calls, 0);
+});
+
 test('complete empty differs from unknown coverage, and switches stay non-inputs', () => {
   const { api, sandbox } = setup({ value: true, onChange() {} }, 'RCTSwitch');
   assert.deepEqual(plain(api.beginQaCapture().inputs), {
@@ -851,11 +936,11 @@ test('complete empty differs from unknown coverage, and switches stay non-inputs
   ]);
 });
 
-function withChildren(count: number, props: Record<string, unknown>) {
+function withChildren(count: number, props: Record<string, unknown>, hostType = 'RCTTextInput') {
   const fixture = setup({}, 'RCTView');
   let previous = null;
   for (let i = 0; i < count; i++) {
-    const child = buildFiber({ hostType: 'RCTTextInput', props: { ...props } }, fixture.fiber);
+    const child = buildFiber({ hostType, props: { ...props } }, fixture.fiber);
     child.tag = 5;
     if (previous) previous.sibling = child;
     else fixture.fiber.child = child;
@@ -944,8 +1029,11 @@ test('value, aggregate, host and fiber bounds refuse instead of truncating compl
   assert.equal(setup({ value: 'x'.repeat(4097) }).api.beginQaCapture().state, 'refused');
   assert.equal(withChildren(4, { value: 'x'.repeat(4096) }).api.beginQaCapture().state, 'ready');
   assert.equal(withChildren(5, { value: 'x'.repeat(4096) }).api.beginQaCapture().state, 'refused');
-  assert.equal(withChildren(198, { value: 'x' }).api.beginQaCapture().state, 'ready');
-  assert.equal(withChildren(199, { value: 'x' }).api.beginQaCapture().state, 'refused');
+  const { maxHosts, maxValues } = PRIVATE_INPUT_LIMITS;
+  assert.equal(withChildren(maxValues, { value: 'x' }).api.beginQaCapture().state, 'ready');
+  assert.equal(withChildren(maxValues + 1, { value: 'x' }).api.beginQaCapture().state, 'refused');
+  assert.equal(withChildren(maxHosts - 2, {}, 'RCTView').api.beginQaCapture().state, 'ready');
+  assert.equal(withChildren(maxHosts - 1, {}, 'RCTView').api.beginQaCapture().state, 'refused');
   const { api, fiber } = setup({ value: '' });
   assert.equal(api.beginQaCapture().state, 'ready');
   fiber.child = fiber;

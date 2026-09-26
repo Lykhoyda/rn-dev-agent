@@ -9,13 +9,18 @@ afterEach(() => clearActiveSession());
 test('supported iOS runner close restores the cold-rebuild recovery credit', async () => {
   let resets = 0;
   let unbinds = 0;
+  const deviceId = randomUUID().toUpperCase();
+  const terminated: Array<string | undefined> = [];
   setActiveSession({
     name: 'runner-budget',
     platform: 'ios',
-    deviceId: randomUUID().toUpperCase(),
+    deviceId,
     appId: 'com.rndevagent.testapp',
   });
   const handler = createDeviceSnapshotHandler({
+    terminateIosRunnerHost: async (id) => {
+      terminated.push(id);
+    },
     resetIosRunnerRebuildBudget: () => {
       resets += 1;
     },
@@ -31,6 +36,7 @@ test('supported iOS runner close restores the cold-rebuild recovery credit', asy
   assert.equal(envelope.ok, true);
   assert.equal(resets, 1);
   assert.equal(unbinds, 1);
+  assert.deepEqual(terminated, [deviceId]);
 });
 
 test('idempotent close resets iOS recovery credit for stranded runner authority', async () => {

@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import { createComponentTreeHandler } from '../../../dist/handlers/component-tree.js';
 import { captureScreen } from '../../../dist/qa/capture.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
+import { PRIVATE_INPUT_LIMITS } from '../../../dist/qa/private-input-limits.js';
 import { validateReactHostEvidence } from '../../../dist/qa/screen.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { createMockClient } from '../../helpers/mock-cdp-client.js';
@@ -127,8 +128,11 @@ test('host admission rejects malformed facts and retains independent identities 
       hosts: [{ ...host, roleSource: { toString: () => assert.fail('no coercion') } }],
       complete: true,
     },
-    { hosts: Array.from({ length: 200 }, () => host), complete: true },
-    { hosts: Array.from({ length: 201 }, () => host), complete: false },
+    { hosts: Array.from({ length: PRIVATE_INPUT_LIMITS.maxHosts }, () => host), complete: true },
+    {
+      hosts: Array.from({ length: PRIVATE_INPUT_LIMITS.maxHosts + 1 }, () => host),
+      complete: false,
+    },
   ])
     assert.equal(validateReactHostEvidence(invalid), undefined);
   const input = { hosts: [host, host], complete: true };

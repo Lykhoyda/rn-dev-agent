@@ -8,6 +8,7 @@ export interface CloseDeviceSessionDeps {
   // GH #383: adoption-aware teardown needs the closing session's deviceId so a
   // post-respawn stop reaps the persisted per-device runner instead of no-oping.
   stopFastRunner: (deviceId?: string) => void | Promise<void>;
+  terminateRunnerHost?: (deviceId?: string) => Promise<void>;
   // GH #383: mirror stopFastRunner — pass the closing session's deviceId so a
   // post-respawn stop reaps the persisted per-device runner instead of no-oping.
   stopAndroidRunner: (deviceId?: string) => Promise<void>;
@@ -53,6 +54,7 @@ export async function closeDeviceSession(deps: CloseDeviceSessionDeps): Promise<
   const deviceId = deps.getDeviceId?.();
   const finalizeClose = async (): Promise<void> => {
     await deps.stopFastRunner(deviceId);
+    await deps.terminateRunnerHost?.(deviceId);
     await deps.stopAndroidRunner(deviceId);
     await deps.finalizeSuccessfulClose();
     deps.clearActiveSession();

@@ -11,6 +11,7 @@ import { parsePlan } from '../../../dist/qa/plan.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { exitCodeFor, resultForWalk } from '../../../dist/qa/wire.js';
 import { captureQaReact } from '../../../dist/qa/react-capture.js';
+import { PRIVATE_INPUT_LIMITS } from '../../../dist/qa/private-input-limits.js';
 
 const secret = 'private-rn-only@example.test';
 function observation(): ReactObservation {
@@ -211,7 +212,9 @@ test('strict bounded binding and acquisition failures all refuse without payload
 
 test('the adapter rejects domain-invalid private facts before polling public completion', async () => {
   for (const facts of [
-    ...[-1, 0.5, 200, NaN].map((hostIndex) => [{ hostIndex, values: [secret], secure: false }]),
+    ...[-1, 0.5, PRIVATE_INPUT_LIMITS.maxHosts, NaN].map((hostIndex) => [
+      { hostIndex, values: [secret], secure: false },
+    ]),
     [payload().facts[0], payload().facts[0]],
   ]) {
     let calls = 0;

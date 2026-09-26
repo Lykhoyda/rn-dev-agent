@@ -2,6 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { buildFiber, createSandbox, INJECTED_HELPERS } from '../helpers/inject-harness.js';
+import { PRIVATE_INPUT_LIMITS } from '../../../dist/qa/private-input-limits.js';
+
+const { maxHosts } = PRIVATE_INPUT_LIMITS;
 
 interface FiberSpec {
   name?: string;
@@ -218,8 +221,9 @@ test('host tag identifies native object types but similarly named composites are
   });
 });
 
-test('host evidence saturates at 200 hosts and discloses incomplete coverage without changing the digest', () => {
-  for (const count of [199, 200, 250]) {
+test('host evidence saturates at the shared host cap and discloses incomplete coverage without changing the digest', () => {
+  // 336 is the measured Home plus lazily mounted Tasks tab of the workspace test app.
+  for (const count of [336, maxHosts - 1, maxHosts, maxHosts + 50]) {
     const sandbox = createSandbox({
       fiberRoot: buildFiber({
         name: 'Screen',
@@ -234,8 +238,9 @@ test('host evidence saturates at 200 hosts and discloses incomplete coverage wit
     assert.deepEqual(rest, legacy);
     assert.deepEqual(legacy.interactive, []);
     assert.equal(legacy.verdict.complete, true);
-    assert.equal(hostEvidence.hosts.length, Math.min(count, 200));
-    assert.equal(hostEvidence.complete, count < 200);
+    assert.equal(hostEvidence.hosts.length, Math.min(count, maxHosts));
+    assert.equal(hostEvidence.complete, count < maxHosts);
+    if (count === 336) assert.equal(hostEvidence.complete, true);
   }
 });
 
@@ -366,7 +371,7 @@ test('current helper replaces a warm version 77 producer and reinjection stays i
   const sandbox = createSandbox({ fiberRoot: buildFiber({ hostType: 'RCTView' }) });
   Object.assign(sandbox, { __QAREN: { __v: 77 } });
   vm.runInContext(INJECTED_HELPERS, sandbox);
-  assert.equal(vm.runInContext('__QAREN.__v', sandbox), 85);
+  assert.equal(vm.runInContext('__QAREN.__v', sandbox), 87);
   assert.equal(readDigest(sandbox).hostEvidence.complete, true);
   const producer = vm.runInContext('__QAREN.getTree', sandbox);
   vm.runInContext(INJECTED_HELPERS, sandbox);

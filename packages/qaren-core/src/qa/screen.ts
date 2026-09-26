@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { captureInputPrivacy, nativeLabelMayBeValue } from './privacy.js';
+import { PRIVATE_INPUT_LIMITS } from './private-input-limits.js';
 import type { NativePresence, NativePresenceNode } from './native-presence.js';
 import { associateHeadings, validateHostTypography } from './host-typography.js';
 import type { HeadingEvidence, HostTypography } from './host-typography.js';
@@ -103,8 +104,8 @@ export function validateReactHostEvidence(value: unknown): ReactHostEvidence | u
     !evidenceRecord(value) ||
     typeof value.complete !== 'boolean' ||
     !Array.isArray(value.hosts) ||
-    value.hosts.length > 200 ||
-    (value.complete && value.hosts.length === 200)
+    value.hosts.length > PRIVATE_INPUT_LIMITS.maxHosts ||
+    (value.complete && value.hosts.length === PRIVATE_INPUT_LIMITS.maxHosts)
   )
     return undefined;
   const hosts: ReactHostObservation[] = [];

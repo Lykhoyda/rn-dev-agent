@@ -188,6 +188,75 @@ test('CLI, shell, Java and xcodebuild signatures are conservative, not arbitrary
   );
 });
 
+test('attested unscoped MCP controls coexist while observed device automation still blocks', async () => {
+  const controls =
+    '20 /usr/bin/java -classpath lib maestro.cli.AppKt mcp\n' +
+    '21 /opt/jdk/bin/java -classpath lib maestro.cli.AppKt mcp\n';
+  const observe = async (pid: number) => ({
+    v: 1,
+    pid,
+    birth: { seconds: 1, micros: 0 },
+    executable: pid === 20 ? '/usr/bin/java' : '/opt/jdk/bin/java',
+  });
+  assert.equal(await probeIosExternalRunnerStrict(fakePs(ordinary + controls), UDID), 'unknown');
+  assert.equal(
+    await probeIosExternalRunnerStrict(fakePs(ordinary + controls), UDID, observe),
+    'clear',
+  );
+  assert.equal(
+    await probeIosExternalRunnerStrict(fakePs(ordinary + controls), UDID, async () => null),
+    'unknown',
+  );
+  for (const invalid of [
+    { v: 1, pid: 99, birth: { seconds: 1, micros: 0 }, executable: '/usr/bin/java' },
+    { v: 1, pid: 20, birth: { seconds: 1, micros: 0 }, executable: '/usr/bin/node' },
+    { v: 1, pid: 20, birth: { seconds: 1, micros: 0 }, executable: '/opt/jdk/bin/java' },
+    {
+      v: 1,
+      pid: 20,
+      birth: { seconds: Math.ceil(Date.now() / 1_000) + 10, micros: 0 },
+      executable: '/usr/bin/java',
+    },
+  ]) {
+    assert.equal(
+      await probeIosExternalRunnerStrict(fakePs(ordinary + controls), UDID, async () => invalid),
+      'unknown',
+    );
+  }
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      fakePs(ordinary + controls + driver('WebDriverAgentRunner-Runner').replace(/^20 /, '22 ')),
+      UDID,
+      observe,
+    ),
+    'busy',
+  );
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      fakePs(ordinary + controls + '22 /usr/bin/java -classpath lib maestro.cli.AppKt test\n'),
+      UDID,
+      observe,
+    ),
+    'unknown',
+  );
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      fakePs('20 /usr/bin/java -classpath lib maestro.cli.AppKt mcp --device ' + UDID + '\n'),
+      UDID,
+      observe,
+    ),
+    'busy',
+  );
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      fakePs(`20 /usr/bin/java -classpath lib maestro.cli.AppKt --device ${UDID} mcp\n`),
+      UDID,
+      observe,
+    ),
+    'busy',
+  );
+});
+
 test('ambiguous JVM paths preserve the Java/Maestro conjunction for CLI and MCP', async () => {
   for (const jvm of ambiguousJvms) {
     for (const quote of ['', '"', "'"]) {

@@ -1,7 +1,7 @@
 import { PRIVATE_INPUT_LIMITS } from './qa/private-input-limits.js';
 
 // Bump when the injected surface changes so warm runtimes replace stale helpers.
-export const HELPERS_VERSION = 85;
+export const HELPERS_VERSION = 87;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -506,6 +506,16 @@ export const INJECTED_HELPERS = `
     }
   }
 
+  // Interactive evidence is helper-built plain data with producer-owned bounds; never truncate it.
+  function evidenceJson(out) {
+    try {
+      var json = JSON.stringify(out);
+      return json.length > 999999 ? JSON.stringify({ __agent_truncated: true, originalLength: json.length }) : json;
+    } catch (_) {
+      return JSON.stringify({ __agent_error: 'Serialization failed' });
+    }
+  }
+
   function typographyHostType(fiber) {
     if (fiber.tag !== 5) return null;
     var state = fiber.stateNode;
@@ -515,13 +525,26 @@ export const INJECTED_HELPERS = `
     return name && name.length <= 200 ? name : null;
   }
 
-  function qaData(object, key) {
+  // RN dev renderers deep-freeze host prop values into bound identity accessors.
+  function descriptorValue(object, descriptor) {
+    if (Object.prototype.hasOwnProperty.call(descriptor, 'value')) return descriptor.value;
+    var get = descriptor.get;
+    var set = descriptor.set;
+    var getName = typeof get === 'function' && Object.getOwnPropertyDescriptor(get, 'name');
+    var setName = typeof set === 'function' && Object.getOwnPropertyDescriptor(set, 'name');
+    if (!Object.isFrozen(object) || !getName || getName.value !== 'bound identity'
+      || !setName || setName.value !== 'bound throwOnImmutableMutation') throw new Error('Capture refused');
+    return Reflect.apply(get, object, []);
+  }
+
+  // Only nested public evidence may pass devFrozen; input facts stay data-only.
+  function qaData(object, key, devFrozen) {
     if (object == null) return undefined;
     if (typeof object !== 'object' && typeof object !== 'function') throw new Error('Capture refused');
     var descriptor = Object.getOwnPropertyDescriptor(object, key);
     if (!descriptor && !(key in object)) return undefined;
-    if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) throw new Error('Capture refused');
-    return descriptor.value;
+    if (!descriptor || (devFrozen !== true && !Object.prototype.hasOwnProperty.call(descriptor, 'value'))) throw new Error('Capture refused');
+    return descriptorValue(object, descriptor);
   }
 
   function qaHostType(fiber) {
@@ -619,12 +642,12 @@ export const INJECTED_HELPERS = `
 
     function propertyFacts(fiber) {
       var props = qaData(fiber, 'memoizedProps');
-      if (props == null || typeof props === 'string') return [props];
-      if (typeof props !== 'object' || Array.isArray(props)) throw new Error('Capture refused');
+      // HostText and Fragment fibers carry their children as props; identity is the whole fact.
+      if (props == null || typeof props !== 'object' || Array.isArray(props)) return [props];
       var keys = ['role', 'accessibilityRole', 'testID', 'nativeID', 'disabled', 'aria-disabled', 'editable', 'readOnly', 'aria-readonly', 'title', 'accessibilityLabel', 'placeholder', 'value', 'onPress', 'onPressIn', 'onLongPress', 'onChangeText', 'onValueChange', 'onChange', 'onSubmitEditing', 'onClick'];
       var values = [];
       for (var ki = 0; ki < keys.length; ki++) values.push(qaData(props, keys[ki]));
-      values.push(qaData(qaData(props, 'accessibilityState'), 'disabled'));
+      values.push(qaData(qaData(props, 'accessibilityState'), 'disabled', true));
       return values;
     }
 
@@ -720,9 +743,7 @@ export const INJECTED_HELPERS = `
     function ownData(object, key) {
       if (!object || typeof object !== 'object') return undefined;
       var descriptor = Object.getOwnPropertyDescriptor(object, key);
-      if (!descriptor) return undefined;
-      if (!Object.prototype.hasOwnProperty.call(descriptor, 'value')) throw new Error('Opaque property evidence');
-      return descriptor.value;
+      return descriptor ? descriptorValue(object, descriptor) : undefined;
     }
 
     function accessibilityFacts(props) {
@@ -889,8 +910,7 @@ export const INJECTED_HELPERS = `
           for (var ki = 0; ki < keys.length; ki++) {
             var descriptor = Object.getOwnPropertyDescriptor(value, keys[ki]);
             if (!descriptor) continue;
-            if (!Object.prototype.hasOwnProperty.call(descriptor, 'value')) return null;
-            flattened[keys[ki]] = descriptor.value;
+            try { flattened[keys[ki]] = descriptorValue(value, descriptor); } catch (_) { return null; }
           }
         }
       }
@@ -1038,7 +1058,7 @@ export const INJECTED_HELPERS = `
         if (!measureTypography) {
           capture.accepted = privateInputs.complete && unchanged(roots);
           privateInputs.complete = capture.accepted;
-          return capture.accepted ? safeStringify(out, 999999) : null;
+          return capture.accepted ? evidenceJson(out) : null;
         }
       }
       var tasks = [];
@@ -1079,7 +1099,7 @@ export const INJECTED_HELPERS = `
           }
           evidence.durationMs = Math.max(0, Date.now() - start);
           if (evidence.durationMs >= 1000) evidence.complete = false;
-          resolve(safeStringify(out, 999999));
+          resolve(evidenceJson(out));
         }
         function measure(record, measurementIndex) {
           var called = false;
@@ -1339,17 +1359,11 @@ export const INJECTED_HELPERS = `
         digestPropsCache.set(fiber, safe);
         if (!props || typeof props !== 'object') return safe;
         var keys = HANDLER_PROPS.concat(['role', 'accessibilityRole', 'testID', 'nativeID', 'disabled', 'aria-disabled', 'accessibilityState', 'editable', 'readOnly', 'aria-readonly', 'title', 'accessibilityLabel', 'placeholder', 'value']);
-        function read(object, key) {
-          var descriptor = Object.getOwnPropertyDescriptor(object, key);
-          if (!descriptor && !(key in object)) return undefined;
-          if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) throw new Error('Opaque digest property');
-          return descriptor.value;
-        }
         for (var i = 0; i < keys.length; i++) {
           try {
-            var value = read(props, keys[i]);
+            var value = qaData(props, keys[i]);
             if (['role', 'accessibilityRole', 'testID', 'nativeID', 'title', 'accessibilityLabel', 'placeholder'].indexOf(keys[i]) !== -1 && value != null && typeof value !== 'string') throw new Error('Opaque digest string');
-            if (keys[i] === 'accessibilityState' && value && typeof value === 'object') value = { disabled: read(value, 'disabled') };
+            if (keys[i] === 'accessibilityState' && value && typeof value === 'object') value = { disabled: qaData(value, 'disabled', true) };
             safe[keys[i]] = value;
           } catch (_) { typography.evidence.complete = false; }
         }
@@ -1406,7 +1420,7 @@ export const INJECTED_HELPERS = `
       var hostRoles = 'adjustable alert alertdialog application article banner blockquote button caption cell checkbox code columnheader combobox complementary contentinfo definition deletion dialog directory document emphasis feed figure form generic grid gridcell group header heading image imagebutton img insertion keyboardkey link list listbox listitem log main marquee math menu menubar menuitem menuitemcheckbox menuitemradio meter navigation none note option paragraph presentation progressbar radio radiogroup region row rowgroup rowheader scrollbar search searchbox separator slider spinbutton status strong subscript summary superscript switch tab table tablist tabpanel term text textbox time timer togglebutton toolbar tooltip tree treegrid treeitem'.split(' ');
       function collectHostEvidence(fiber) {
         if (!hostEvidence || !isHostFiber(fiber)) return null;
-        if (hostEvidence.hosts.length >= 200) return null;
+        if (hostEvidence.hosts.length >= ${PRIVATE_INPUT_LIMITS.maxHosts}) return null;
         var props = digestProps(fiber) || {};
         var source = props.role != null ? 'role' : props.accessibilityRole != null ? 'accessibilityRole' : 'none';
         var host = { role: null, roleSource: source, capabilities: {} };
@@ -1429,7 +1443,7 @@ export const INJECTED_HELPERS = `
           && (props.readOnly == null || props.readOnly === false)
           && (props['aria-readonly'] == null || props['aria-readonly'] === false)) host.capabilities.fill = true;
         hostEvidence.hosts.push(host);
-        if (hostEvidence.hosts.length === 200) hostEvidence.complete = false;
+        if (hostEvidence.hosts.length === ${PRIVATE_INPUT_LIMITS.maxHosts}) hostEvidence.complete = false;
         return hostEvidence.hosts.length - 1;
       }
       var iRoots = findAllRootFibers(typography);
@@ -1517,7 +1531,7 @@ export const INJECTED_HELPERS = `
         hostEvidence.complete = hostEvidence.complete && iRoots.length > 0 && iOut.verdict.complete;
         iOut.hostEvidence = hostEvidence;
       }
-      return typography ? typography.finish(iOut, iRoots) : safeStringify(iOut, 999999);
+      return typography ? typography.finish(iOut, iRoots) : evidenceJson(iOut);
     }
 
     // For filtered queries: BFS to find matches, then build compact subtrees.

@@ -1,5 +1,7 @@
 import { DEVICE_LEASE_REQUIRED, leaseFromEnvironment } from './lease-env.js';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
+import { isIosSimulatorUdid } from './external-runner-detect.js';
 import type { ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -932,6 +934,19 @@ export async function awaitChildExit(child: ChildProcess | null, graceMs = 5000)
 export async function stopFastRunner(deviceId?: string, signal?: AbortSignal): Promise<void> {
   adoptPersistedFastRunnerState(deviceId);
   await reapStaleFastRunner({ signal });
+}
+
+// Mirrors RN_FAST_RUNNER_APP_BUNDLE_ID in RnFastRunner.xcodeproj.
+const RUNNER_HOST_BUNDLE_ID = 'dev.lykhoyda.rndevagent.fastrunner';
+
+// The UI-test host app outlives its xcodebuild parent; the next admission would read it as a foreign driver.
+export async function terminateRunnerHost(deviceId?: string): Promise<void> {
+  if (!deviceId || !isIosSimulatorUdid(deviceId)) return;
+  await promisify(execFile)('xcrun', ['simctl', 'terminate', deviceId, RUNNER_HOST_BUNDLE_ID], {
+    timeout: 10_000,
+  }).catch((error: { stderr?: unknown }) => {
+    if (!/found nothing to terminate/.test(String(error?.stderr ?? ''))) throw error;
+  });
 }
 
 export function clearFastRunnerAfterVerifiedStop(binding: Record<string, unknown>): void {

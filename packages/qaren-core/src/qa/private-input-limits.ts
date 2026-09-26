@@ -3,5 +3,5 @@ export const PRIVATE_INPUT_LIMITS = {
   maxTotalChars: 16384,
   maxValuesPerHost: 3,
   maxValues: 600,
-  maxHosts: 200,
+  maxHosts: 1000,
 } as const;

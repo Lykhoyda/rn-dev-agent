@@ -16,6 +16,7 @@ import {
   consumePendingFastRunnerArtifactNote,
   resetRunnerRebuildBudgetForCurrentPlugin,
   stopFastRunner,
+  terminateRunnerHost,
 } from '../runners/rn-fast-runner-client.js';
 import {
   stopAndroidRunner,
@@ -166,6 +167,7 @@ interface DeviceSnapshotDependencies {
   resetIosRunnerRebuildBudget?: () => void;
   ensureIosRunner?: typeof ensureRunnerForCommand;
   stopIosRunner?: typeof stopFastRunner;
+  terminateIosRunnerHost?: typeof terminateRunnerHost;
   reapAndroidRunner?: typeof reapActiveAndroidRunner;
   remedyAuthorityAvailable?: () => boolean | Promise<boolean>;
 }
@@ -530,6 +532,7 @@ export function createDeviceSnapshotHandler(
         closeUnderlyingSession: async () => okResult({ closed: true }),
         clearActiveSession,
         stopFastRunner,
+        terminateRunnerHost: deps.terminateIosRunnerHost ?? terminateRunnerHost,
         stopAndroidRunner: async (deviceId) => {
           if (getActiveSession()?.platform === 'android') {
             await reapActiveAndroidRunner(deviceId);

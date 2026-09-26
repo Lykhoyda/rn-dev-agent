@@ -39,7 +39,6 @@ test('missing, mismatched, future and invalid identities cannot clear an ambiguo
     {},
     { ...identity(), v: 2 },
     identity(21),
-    identity(20, '/opt/bin/other'),
     identity(20, 'agent'),
     identity(20, '/'),
     identity(20, '/opt/bin/agent\n'),
@@ -60,6 +59,23 @@ test('missing, mismatched, future and invalid identities cannot clear an ambiguo
     }),
     'unknown',
   );
+});
+
+test('the kernel executable decides a symlinked launcher whose argv[0] differs', async () => {
+  const scan = ps(`20 claude --append-system-prompt ${prompt}\n`);
+  assert.equal(
+    await probeIosExternalRunnerStrict(scan, device, async () =>
+      identity(20, '/Users/me/.local/share/claude/versions/2.1.283'),
+    ),
+    'clear',
+  );
+  for (const name of ['node', 'java', 'bash', 'xcodebuild', 'maestro', 'ExampleUITestsRunner']) {
+    assert.equal(
+      await probeIosExternalRunnerStrict(scan, device, async () => identity(20, `/tools/${name}`)),
+      'unknown',
+      name,
+    );
+  }
 });
 
 test('observed drivers and interpreters remain unknown without inspecting their arguments', async () => {
@@ -98,7 +114,6 @@ test('native observations cannot override driver rows or partial scan failures',
     return identity();
   };
   for (const [row, result] of [
-    ['21 java -classpath lib maestro.cli.AppKt mcp\n', 'unknown'],
     [`21 maestro test --device ${device}\n`, 'busy'],
     ['bad row\n', 'unknown'],
   ] as const) {
@@ -108,6 +123,14 @@ test('native observations cannot override driver rows or partial scan failures',
     );
   }
   assert.equal(calls, 0);
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      ps(`20 agent ${prompt}\n21 java -classpath lib maestro.cli.AppKt mcp\n`),
+      device,
+      observe,
+    ),
+    'unknown',
+  );
 });
 
 test('every ambiguous row needs proof and excessive identity work refuses before probing', async () => {
