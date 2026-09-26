@@ -113,6 +113,8 @@ test('native-only Android input labels are private outward data, not rewritten l
           { ref: '@notice', type: 'android.widget.TextView', label: `Echo: ${label}` },
         ],
         [],
+        'app',
+        { native: 'complete', react: 'complete' },
       );
       const before = JSON.stringify(observed.elements);
       const judge = noulJudge(0.9);
@@ -123,6 +125,7 @@ test('native-only Android input labels are private outward data, not rewritten l
         { kind: 'fill', target: { phrase: 'the address field' }, text: 'replacement', line: 2 },
       );
       assert.equal(judge.requests.length, 1);
+      assert.deepEqual(Object.keys(judge.requests[0].questions), ['check_1', 'target_2']);
       const request = JSON.stringify(judge.requests);
       assert.ok(!request.includes(`Echo: ${label}`));
       assert.ok(!request.includes(`"${label}"`));

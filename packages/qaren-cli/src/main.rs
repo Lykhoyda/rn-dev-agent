@@ -8,7 +8,7 @@ use qaren::scenario::Platform;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: qaren check --plan-file <plan.md> [--platform ios|android] [--device <udid>] [--config .qaren/config.yaml] [--json]\n       qaren prepare <scenario.yaml> [--json] [--dry-run]\n       qaren prewarm <scenario.yaml> [--json]\n       qaren status  <run-id> [--json]\n       qaren complete <run-id> <build-log> [--json]\n       qaren cleanup <run-id> [--json] [--remove-app --confirm-remove-app <run-id>/<remote-serial>/<app-id>]\n\ncheck walks the plan on the booted simulator against the working tree; runs land in ~/.qaren/runs/<run-id>/.\n--remove-app also uninstalls the app (and its data) this run installed on its leased Android emulator;\nthe confirmation must name exactly this run, its recorded emulator serial and its app id.";
+const USAGE: &str = "usage: qaren check --plan-file <plan.md> [--platform ios|android] [--device <udid>] [--config .qaren/config.yaml] [--fresh-install] [--boot-device] [--json]\n       qaren prepare <scenario.yaml> [--json] [--dry-run]\n       qaren prewarm <scenario.yaml> [--json]\n       qaren status  <run-id> [--json]\n       qaren complete <run-id> <build-log> [--json]\n       qaren cleanup <run-id> [--json] [--remove-app --confirm-remove-app <run-id>/<remote-serial>/<app-id>]\n\ncheck walks the plan on the booted simulator against the working tree; runs land in ~/.qaren/runs/<run-id>/.\n--fresh-install opts into removing the selected app and its data under the check device lease before installation.\n--boot-device opts into booting an exact iOS simulator UUID selected by --device under the check lease; cleanup leaves it running.\n--remove-app also uninstalls the app (and its data) this run installed on its leased Android emulator;\nthe confirmation must name exactly this run, its recorded emulator serial and its app id.";
 
 fn qaren_home() -> Result<PathBuf, String> {
     match std::env::var_os("HOME") {
@@ -92,12 +92,21 @@ fn roots_failure(detail: String) -> Failure {
 }
 
 fn main() -> ExitCode {
+    let raw_args: Vec<_> = std::env::args_os().skip(1).collect();
+    if raw_args
+        .first()
+        .is_some_and(|arg| arg == qaren::process_observation::HELPER_ARG)
+    {
+        return ExitCode::from(qaren::process_observation::run_helper(&raw_args));
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args == [qaren::exec::log::HELPER_ARG] {
         return ExitCode::from(u8::from(qaren::exec::log::run_helper().is_err()));
     }
     let mut positional = Vec::new();
     let mut dry_run = false;
+    let mut fresh_install = false;
+    let mut boot_device = false;
     let mut remove_app = false;
     let mut confirm_remove_app: Option<String> = None;
     let mut plan_file: Option<String> = None;
@@ -118,6 +127,8 @@ fn main() -> ExitCode {
         match arg.as_str() {
             "--json" => {}
             "--dry-run" => dry_run = true,
+            "--fresh-install" => fresh_install = true,
+            "--boot-device" => boot_device = true,
             "--remove-app" => remove_app = true,
             "--confirm-remove-app" => match value_for("--confirm-remove-app", &mut iter) {
                 Some(v) => confirm_remove_app = Some(v),
@@ -175,11 +186,16 @@ fn main() -> ExitCode {
         eprintln!("--dry-run is only valid for prepare\n{USAGE}");
         return ExitCode::from(2);
     }
-    if (plan_file.is_some() || platform.is_some() || config.is_some() || device.is_some())
+    if (plan_file.is_some()
+        || platform.is_some()
+        || config.is_some()
+        || device.is_some()
+        || fresh_install
+        || boot_device)
         && verb != "check"
     {
         eprintln!(
-            "--plan-file, --platform, --config and --device are only valid for check\n{USAGE}"
+            "--plan-file, --platform, --config, --device, --fresh-install and --boot-device are only valid for check\n{USAGE}"
         );
         return ExitCode::from(2);
     }
@@ -199,6 +215,12 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
+            if let Err(failure) =
+                run::validate_boot_device(platform, device.as_deref(), boot_device)
+            {
+                eprintln!("{}\n{USAGE}", failure.detail);
+                return ExitCode::from(2);
+            }
             match lock_root().and_then(|lock| runs_root().map(|runs| (lock, runs))) {
                 Ok((lock_root, runs_root)) => {
                     let project_root =
@@ -213,6 +235,8 @@ fn main() -> ExitCode {
                         project_root,
                         platform,
                         device,
+                        boot_device,
+                        fresh_install,
                         runtime_dir: runtime_dir(),
                         node: std::env::var_os("QAREN_NODE").map(PathBuf::from),
                         lock_root,

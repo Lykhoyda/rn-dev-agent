@@ -61,6 +61,7 @@ struct Command: Codable {
   let depth: Int?
   let scope: String?
   let raw: Bool?
+  var platformPresence: Bool? = nil
   let fullscreen: Bool?
   var guardKeyboard: Bool? = nil
   var targetBounds: SnapshotRect? = nil
@@ -152,6 +153,7 @@ struct DataPayload: Codable {
   let keyboardGuardMs: Double?
   let keyboardVisible: Bool?
   let snapshotGeneration: Int?
+  let presenceCapture: PlatformPresenceCapture?
   let via: String?
   let `static`: Bool?
   // Story 10 (#391): typing telemetry — whether the two-burst recipe ran and
@@ -191,6 +193,7 @@ struct DataPayload: Codable {
     keyboardGuardMs: Double? = nil,
     keyboardVisible: Bool? = nil,
     snapshotGeneration: Int? = nil,
+    presenceCapture: PlatformPresenceCapture? = nil,
     via: String? = nil,
     `static`: Bool? = nil,
     typingBurst: Bool? = nil,
@@ -224,6 +227,7 @@ struct DataPayload: Codable {
     self.keyboardGuardMs = keyboardGuardMs
     self.keyboardVisible = keyboardVisible
     self.snapshotGeneration = snapshotGeneration
+    self.presenceCapture = presenceCapture
     self.via = via
     self.`static` = `static`
     self.typingBurst = typingBurst
@@ -304,6 +308,36 @@ struct SnapshotNode: Codable {
   let parentIndex: Int?
   let hiddenContentAbove: Bool?
   let hiddenContentBelow: Bool?
+  var presence: PlatformPresenceObservation? = nil
+}
+
+struct PlatformPresenceCapture: Codable {
+  let version: Int
+  let source: String
+  let captureId: String
+  let appId: String
+  let generation: Int
+  let startedUptimeMs: Double
+  let endedUptimeMs: Double
+  let enumeration: String
+  let complete: Bool
+}
+
+struct PlatformPresenceObservation: Codable {
+  enum Status: String, Codable {
+    case observed, unknown
+  }
+
+  enum LabelSource: String, Codable {
+    case direct, value, descendant, none
+  }
+
+  let captureId: String
+  let generation: Int
+  let nodeIndex: Int
+  var status: Status
+  let labelSource: LabelSource
+  var observedUptimeMs: Double? = nil
 }
 
 struct RetainedSnapshotTarget {

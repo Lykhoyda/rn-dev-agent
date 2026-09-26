@@ -1,7 +1,8 @@
 mod common;
+use common::{ios_scenario_yaml, IosBuildRunner as MockRunner};
 
 use qaren::commands::prepare::{prepare, PrepareArgs};
-use qaren::exec::{CmdOutput, MockRunner, Spawned};
+use qaren::exec::{CmdOutput, Spawned};
 use qaren::failure::FailureCode;
 use qaren::receipt::ReceiptResult;
 use qaren::runrecord::{Phase, RunRecord};
@@ -56,35 +57,147 @@ fn script_validation_porcelain(
     }
 }
 
+#[test]
+fn prepare_checks_the_installed_cli_before_device_allocation() {
+    let repo = common::temp_repo();
+    let scenario = write_scenario(&repo, &ios_scenario_yaml(8791));
+    let mut mock = MockRunner::new();
+    mock.expect_run(
+        "expo run:ios --help",
+        CmdOutput::success(common::IOS_BUILD_HELP),
+    );
+    qaren::adapters::ios::require_generic_build(&mut mock, &repo.join("test-app")).unwrap();
+    mock.expect_run("git", CmdOutput::success(&format!("{}\n", repo.display())));
+    mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
+    mock.expect_run("git", CmdOutput::success(""));
+    for tool in IOS_TOOLS {
+        mock.expect_run("which", CmdOutput::success(tool));
+    }
+    mock.expect_run("lsof", free_port());
+    mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
+    mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+    mock.expect_run(
+        "expo run:ios --help",
+        CmdOutput::success("--no-bundler\n--device [device]\n"),
+    );
+    let receipt = prepare(&mut mock, &prepare_args(&scenario, false, None));
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    assert_eq!(
+        serde_json::to_value(receipt.failure.unwrap().code).unwrap(),
+        "IOS_BUILD_CAPABILITY_UNAVAILABLE"
+    );
+    assert_eq!(mock.remaining(), 0);
+    let record = RunRecord::load(&repo, &receipt.run_id).unwrap();
+    assert_eq!(record.phase, Phase::Failed);
+    assert!(!record.resources.any_owned());
+    assert!(record.build.is_none());
+    assert!(!repo.join(".locks").exists());
+    assert!(!mock
+        .calls
+        .iter()
+        .any(|c| c.label == "simctl-create" || c.label == "simctl-bootstatus"));
+}
+
 const IOS_TOOLS: &[&str] = &["git", "pnpm", "node", "lsof", "curl", "ps", "xcrun"];
 const ANDROID_TOOLS: &[&str] = &["git", "pnpm", "node", "lsof", "curl", "ps", "ssh", "java"];
 
 #[test]
+fn dry_run_refuses_unsupported_ios_cli_without_installing_or_allocating() {
+    let repo = common::temp_repo();
+    let scenario = write_scenario(&repo, &ios_scenario_yaml(8791));
+    let mut mock = MockRunner::new();
+    script_validation(&mut mock, &repo, IOS_TOOLS);
+    mock.expect_run(
+        "expo run:ios --help",
+        CmdOutput::success("--no-bundler\n--device [device]\n"),
+    );
+
+    let receipt = prepare(&mut mock, &prepare_args(&scenario, true, None));
+
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    assert_eq!(
+        receipt.failure.unwrap().code,
+        FailureCode::IosBuildCapabilityUnavailable
+    );
+    assert_eq!(receipt.run_id, "none");
+    assert_eq!(mock.remaining(), 0);
+    assert!(!repo.join(".locks").exists());
+    assert!(!mock.calls.iter().any(|c| matches!(
+        c.label.as_str(),
+        "pnpm-install" | "simctl-create" | "simctl-bootstatus"
+    )));
+}
+
+#[test]
+fn missing_launch_scheme_refuses_prepare_before_any_command_or_allocation() {
+    let repo = common::temp_repo();
+    let path = write_scenario(
+        &repo,
+        &ios_scenario_yaml(8791).replace("  dev_client_scheme: rndatest\n", ""),
+    );
+    for dry_run in [false, true] {
+        let mut mock = MockRunner::new();
+        let receipt = prepare(&mut mock, &prepare_args(&path, dry_run, None));
+        assert_eq!(receipt.result, ReceiptResult::Refused);
+        assert_eq!(
+            receipt.failure.unwrap().code,
+            FailureCode::DevClientSchemeRequired
+        );
+        assert!(mock.calls.is_empty());
+        assert!(!repo.join(".locks").exists());
+    }
+}
+
+#[test]
+fn invalid_ios_launch_scheme_stops_prepare_without_echoing_input() {
+    for scheme in [
+        "private://log-payload",
+        "private invalid",
+        "private\npayload",
+        &"a".repeat(129),
+    ] {
+        let repo = common::temp_repo();
+        let yaml = ios_scenario_yaml(8791).replace(
+            "dev_client_scheme: rndatest",
+            &format!(
+                "dev_client_scheme: {}",
+                serde_json::to_string(scheme).unwrap()
+            ),
+        );
+        let path = write_scenario(&repo, &yaml);
+        let mut mock = MockRunner::new();
+        let receipt = prepare(&mut mock, &prepare_args(&path, false, None));
+        assert_eq!(receipt.result, ReceiptResult::Refused);
+        assert_eq!(
+            receipt.failure.as_ref().unwrap().code,
+            FailureCode::DevClientSchemeRequired
+        );
+        assert!(!receipt.to_json().contains("private"));
+        assert!(!receipt.to_json().contains(&"a".repeat(129)));
+        assert!(mock.calls.is_empty());
+        assert!(!repo.join(".locks").exists());
+    }
+}
+
+#[test]
 fn ios_prepare_happy_path_produces_ready_receipt_and_record() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
     script_validation(&mut mock, &repo, IOS_TOOLS);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n")); // self lstart
     mock.expect_run("ps", CmdOutput::success("qaren prepare\n")); // self command
-    mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+    common::script_ios_deps(&mut mock);
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
     mock.expect_run(
         "simctl bootstatus",
         CmdOutput::success("Boot status: finished\n"),
     );
-    mock.expect_spawn(
-        "expo run:ios",
-        Spawned {
-            pid: 6000,
-            pgid: 6000,
-        },
-    );
-    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n"))); // metro lstart
-    mock.expect_run("ps", CmdOutput::success("node expo run:ios\n")); // metro command
+    common::script_finite_ios_build(&mut mock);
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n"))); // liveness probe
     mock.expect_run("ps", CmdOutput::success("S\n")); // not a zombie
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
@@ -139,8 +252,7 @@ fn ios_prepare_happy_path_produces_ready_receipt_and_record() {
     assert_eq!(metro.spawned.pgid, 6000);
     assert_eq!(metro.identity.as_ref().unwrap().started_at, LSTART);
 
-    // The create call must carry the run-scoped name and the build must pin
-    // the exact simulator and port as adjacent option pairs.
+    // Only installation and launch target the owned simulator; compilation is generic.
     let create = mock
         .calls
         .iter()
@@ -153,9 +265,33 @@ fn ios_prepare_happy_path_produces_ready_receipt_and_record() {
         .find(|c| c.label == "expo-run-ios")
         .unwrap();
     let device_pos = build.args.iter().position(|a| a == "--device").unwrap();
-    assert_eq!(build.args[device_pos + 1], UDID);
-    let port_pos = build.args.iter().position(|a| a == "--port").unwrap();
-    assert_eq!(build.args[port_pos + 1], "8791");
+    assert_eq!(build.args[device_pos + 1], "generic");
+    assert!(build.args.contains(&"--no-bundler".into()));
+    assert!(!build.args.contains(&"--port".into()));
+    let install = mock
+        .calls
+        .iter()
+        .find(|c| c.label == "simctl-install")
+        .unwrap();
+    assert_eq!(install.args[2], UDID);
+    assert!(install.args[3].contains(&receipt.run_id));
+    let launch = mock
+        .calls
+        .iter()
+        .find(|c| c.label == "simctl-launch")
+        .unwrap();
+    assert_eq!(
+        launch.args,
+        vec![
+            "simctl",
+            "launch",
+            "--terminate-running-process",
+            UDID,
+            "com.rndevagent.testapp",
+            "--initialUrl",
+            "http://127.0.0.1:8791"
+        ]
+    );
 }
 
 #[test]
@@ -359,7 +495,7 @@ fn android_prepare_happy_path_leases_tunnels_and_pins_serial() {
 #[test]
 fn occupied_metro_port_fails_before_any_allocation() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
     script_validation(&mut mock, &repo, IOS_TOOLS);
@@ -803,23 +939,32 @@ fn vendor_key_is_recorded_before_the_adb_server_spawns() {
     assert!(vendor_key.exists(), "the key was written to the run dir");
 }
 
-// Delegating runner that snapshots the durable run record at the moment a
-// labelled command fires, so persist-before-external-operation ordering is
-// provable rather than assumed.
+// Observe durable ownership or inject a filesystem fault at a command boundary.
 struct RecordProbeRunner {
     inner: MockRunner,
     repo: std::path::PathBuf,
     run_id: String,
     probe_label: String,
     observed: Option<String>,
+    at_probe: Option<Box<dyn FnOnce(&std::path::Path)>>,
 }
 
 impl qaren::exec::Runner for RecordProbeRunner {
     fn run(&mut self, spec: &qaren::exec::CmdSpec) -> CmdOutput {
         if spec.label == self.probe_label {
             self.observed = std::fs::read_to_string(RunRecord::path(&self.repo, &self.run_id)).ok();
+            if let Some(probe) = self.at_probe.take() {
+                probe(&RunRecord::run_dir(&self.repo, &self.run_id));
+            }
         }
         self.inner.run(spec)
+    }
+    fn run_private(
+        &mut self,
+        spec: &qaren::exec::CmdSpec,
+        input: &[u8],
+    ) -> qaren::exec::PrivateOutput {
+        self.inner.run_private(spec, input)
     }
     fn spawn_group(
         &mut self,
@@ -849,7 +994,7 @@ impl qaren::exec::Runner for RecordProbeRunner {
 #[test]
 fn prepare_refuses_preexisting_run_dir_without_clobbering() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
     // MockRunner's clock is frozen, so the run id is deterministic.
     let run_id = format!(
         "ios-simulator-{}",
@@ -902,6 +1047,7 @@ fn farm_lease_is_recorded_before_start_command() {
         run_id: run_id.clone(),
         probe_label: "farm-start".to_string(),
         observed: None,
+        at_probe: None,
     };
     let receipt = prepare(
         &mut probing,
@@ -935,7 +1081,7 @@ fn farm_lease_is_recorded_before_start_command() {
 #[test]
 fn simulator_allocation_is_recorded_before_create() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
     let run_id = format!(
         "ios-simulator-{}",
         qaren::timefmt::compact_utc(1_770_000_000_000)
@@ -946,7 +1092,7 @@ fn simulator_allocation_is_recorded_before_create() {
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
     mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
-    mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+    common::script_ios_deps(&mut mock);
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::failed(1, "boom"));
 
@@ -956,6 +1102,7 @@ fn simulator_allocation_is_recorded_before_create() {
         run_id: run_id.clone(),
         probe_label: "simctl-create".to_string(),
         observed: None,
+        at_probe: None,
     };
     let receipt = prepare(&mut probing, &prepare_args(&scenario_path, false, None));
     assert_eq!(receipt.result, ReceiptResult::Failed);
@@ -982,29 +1129,21 @@ fn simulator_allocation_is_recorded_before_create() {
 #[test]
 fn candidate_drift_during_build_fails_prepare() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
     script_validation(&mut mock, &repo, IOS_TOOLS);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
     mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
-    mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+    common::script_ios_deps(&mut mock);
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
     mock.expect_run(
         "simctl bootstatus",
         CmdOutput::success("Boot status: finished\n"),
     );
-    mock.expect_spawn(
-        "expo run:ios",
-        Spawned {
-            pid: 6000,
-            pgid: 6000,
-        },
-    );
-    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
-    mock.expect_run("ps", CmdOutput::success("node expo run:ios\n"));
+    common::script_finite_ios_build(&mut mock);
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
@@ -1082,29 +1221,21 @@ fn android_dry_run_plans_adb_connect_and_state_check() {
 #[test]
 fn candidate_dirty_drift_during_build_fails_prepare() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
     script_validation(&mut mock, &repo, IOS_TOOLS);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
     mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
-    mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+    common::script_ios_deps(&mut mock);
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
     mock.expect_run(
         "simctl bootstatus",
         CmdOutput::success("Boot status: finished\n"),
     );
-    mock.expect_spawn(
-        "expo run:ios",
-        Spawned {
-            pid: 6000,
-            pgid: 6000,
-        },
-    );
-    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
-    mock.expect_run("ps", CmdOutput::success("node expo run:ios\n"));
+    common::script_finite_ios_build(&mut mock);
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
@@ -1133,29 +1264,21 @@ fn candidate_dirty_drift_during_build_fails_prepare() {
 #[test]
 fn candidate_dirty_content_drift_during_build_fails_prepare() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
     script_validation_porcelain(&mut mock, &repo, IOS_TOOLS, " M test-app/App.tsx\0");
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
     mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
-    mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+    common::script_ios_deps(&mut mock);
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
     mock.expect_run(
         "simctl bootstatus",
         CmdOutput::success("Boot status: finished\n"),
     );
-    mock.expect_spawn(
-        "expo run:ios",
-        Spawned {
-            pid: 6000,
-            pgid: 6000,
-        },
-    );
-    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
-    mock.expect_run("ps", CmdOutput::success("node expo run:ios\n"));
+    common::script_finite_ios_build(&mut mock);
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
@@ -1197,22 +1320,14 @@ fn script_prepare_to_recheck(
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
     mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
-    mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+    common::script_ios_deps(mock);
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
     mock.expect_run(
         "simctl bootstatus",
         CmdOutput::success("Boot status: finished\n"),
     );
-    mock.expect_spawn(
-        "expo run:ios",
-        Spawned {
-            pid: 6000,
-            pgid: 6000,
-        },
-    );
-    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
-    mock.expect_run("ps", CmdOutput::success("node expo run:ios\n"));
+    common::script_finite_ios_build(mock);
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
@@ -1237,7 +1352,7 @@ fn script_prepare_to_recheck(
 #[test]
 fn qaren_state_created_during_build_is_not_candidate_drift() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
     script_prepare_to_recheck(&mut mock, &repo, "", "?? .qaren/\0");
@@ -1255,7 +1370,7 @@ fn qaren_state_created_during_build_is_not_candidate_drift() {
 #[test]
 fn preexisting_qaren_state_does_not_mark_the_candidate_dirty() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
     script_prepare_to_recheck(
@@ -1283,7 +1398,7 @@ fn preexisting_qaren_state_does_not_mark_the_candidate_dirty() {
 #[test]
 fn untracked_file_outside_qaren_state_during_build_fails_prepare() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
     script_prepare_to_recheck(&mut mock, &repo, "", "?? .qaren/\0?? stray.txt\0");
@@ -1300,7 +1415,7 @@ fn untracked_file_outside_qaren_state_during_build_fails_prepare() {
 #[test]
 fn tracked_modification_alongside_qaren_state_during_build_fails_prepare() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
     script_prepare_to_recheck(&mut mock, &repo, "", "?? .qaren/\0 M test-app/App.tsx\0");
@@ -1317,10 +1432,14 @@ fn tracked_modification_alongside_qaren_state_during_build_fails_prepare() {
 #[test]
 fn dry_run_plans_without_allocating() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
     script_validation(&mut mock, &repo, IOS_TOOLS);
+    mock.expect_run(
+        "expo run:ios --help",
+        CmdOutput::success(common::IOS_BUILD_HELP),
+    );
     mock.expect_run("lsof", free_port());
     mock.expect_run("ls-files", CmdOutput::success(""));
 
@@ -1341,8 +1460,8 @@ fn dry_run_plans_without_allocating() {
 #[test]
 fn revision_pin_mismatch_fails_validation() {
     let repo = common::temp_repo();
-    let yaml = common::ios_scenario_yaml(8791)
-        .replace("revision: HEAD", &format!("revision: {}", "d".repeat(40)));
+    let yaml =
+        ios_scenario_yaml(8791).replace("revision: HEAD", &format!("revision: {}", "d".repeat(40)));
     let scenario_path = write_scenario(&repo, &yaml);
 
     let mut mock = MockRunner::new();
@@ -1360,28 +1479,22 @@ fn revision_pin_mismatch_fails_validation() {
 #[test]
 fn build_process_death_fails_with_log_evidence() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8791));
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
     script_validation(&mut mock, &repo, IOS_TOOLS);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
     mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
-    mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+    common::script_ios_deps(&mut mock);
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
     mock.expect_run("simctl bootstatus", CmdOutput::success(""));
-    mock.expect_spawn_with_log(
-        "expo run:ios",
-        Spawned {
-            pid: 6000,
-            pgid: 6000,
-        },
-        "CommandError: xcodebuild exited with error code 65\n",
-    );
-    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
-    mock.expect_run("ps", CmdOutput::success("node expo run:ios\n"));
-    mock.expect_run("ps", CmdOutput::failed(1, "")); // process died
+    mock.build_log = Some("CommandError: xcodebuild exited with error code 65\n".into());
+    mock.expect_spawn_piped("expo run:ios", 5000, "", Some(65));
+    mock.expect_run("ps", CmdOutput::success(LSTART));
+    mock.expect_run("ps", CmdOutput::success("qaren-build"));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
 
     let receipt = prepare(&mut mock, &prepare_args(&scenario_path, false, None));
     assert_eq!(receipt.result, ReceiptResult::Failed);
@@ -1408,12 +1521,10 @@ fn build_process_death_fails_with_log_evidence() {
     );
 }
 
-// Every native-input change would otherwise leave another full dev client on
-// disk forever; only the newest fingerprint's artifact is ever reusable.
 #[test]
-fn recording_a_build_prunes_older_fingerprint_artifacts_for_the_same_app() {
+fn recording_a_build_retires_run_output_and_prunes_only_older_artifacts_for_the_same_app() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &common::ios_scenario_yaml(8797));
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8797));
 
     let products = repo
         .join("test-app")
@@ -1441,7 +1552,7 @@ fn recording_a_build_prunes_older_fingerprint_artifacts_for_the_same_app() {
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
     mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
-    mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+    common::script_ios_deps(&mut mock);
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
     mock.expect_run(
@@ -1449,16 +1560,11 @@ fn recording_a_build_prunes_older_fingerprint_artifacts_for_the_same_app() {
         CmdOutput::success("Boot status: finished\n"),
     );
     // The ios/ dir is generated (untracked), so a clean build regenerates it.
-    mock.expect_run("expo prebuild", CmdOutput::success(""));
-    mock.expect_spawn(
-        "expo run:ios",
-        Spawned {
-            pid: 6000,
-            pgid: 6000,
-        },
-    );
-    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
-    mock.expect_run("ps", CmdOutput::success("node expo run:ios\n"));
+    mock.expect_spawn_piped("expo prebuild", 5000, "", Some(0));
+    mock.expect_run("ps", CmdOutput::success(LSTART));
+    mock.expect_run("ps", CmdOutput::success("qaren-build"));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+    common::script_finite_ios_build(&mut mock);
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
@@ -1476,7 +1582,26 @@ fn recording_a_build_prunes_older_fingerprint_artifacts_for_the_same_app() {
     mock.expect_run("git", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
 
-    let receipt = prepare(&mut mock, &prepare_args(&scenario_path, false, None));
+    let mut probing = RecordProbeRunner {
+        inner: mock,
+        repo: repo.clone(),
+        run_id: format!(
+            "ios-simulator-{}",
+            qaren::timefmt::compact_utc(1_770_000_000_000)
+        ),
+        probe_label: "simctl-install".into(),
+        observed: None,
+        at_probe: Some(Box::new(|run_dir| {
+            let record: RunRecord =
+                serde_json::from_slice(&std::fs::read(run_dir.join("run.json")).unwrap()).unwrap();
+            let artifact = record.build.unwrap().artifact.unwrap();
+            assert_eq!(
+                qaren::buildplan::hash_artifact(&artifact.path).unwrap(),
+                artifact.sha256
+            );
+        })),
+    };
+    let receipt = prepare(&mut probing, &prepare_args(&scenario_path, false, None));
     assert_eq!(
         receipt.result,
         ReceiptResult::Ready,
@@ -1490,6 +1615,37 @@ fn recording_a_build_prunes_older_fingerprint_artifacts_for_the_same_app() {
     };
     let cached = state.artifact.as_ref().unwrap();
     assert!(cached.path.exists(), "the new artifact must survive");
+    let reported = receipt.build.as_ref().unwrap().artifact.as_ref().unwrap();
+    assert_eq!(reported.path, cached.path);
+    assert_eq!(reported.sha256, cached.sha256);
+    let installed_record: RunRecord =
+        serde_json::from_str(probing.observed.as_ref().unwrap()).unwrap();
+    assert!(installed_record.resources.build_process().is_none());
+    let installed = installed_record.build.unwrap().artifact.unwrap();
+    assert_eq!(cached.sha256, installed.sha256);
+    assert_eq!(
+        cached.sha256,
+        qaren::buildplan::hash_artifact(&cached.path).unwrap()
+    );
+    let record = RunRecord::load(&repo, &receipt.run_id).unwrap();
+    assert_eq!(record.build.unwrap().artifact.as_ref(), Some(cached));
+    let install = probing
+        .inner
+        .calls
+        .iter()
+        .find(|c| c.label == "simctl-install")
+        .unwrap();
+    assert_eq!(installed.path, std::path::Path::new(&install.args[3]));
+    assert!(
+        !RunRecord::run_dir(&repo, &receipt.run_id)
+            .join("ios-build")
+            .exists(),
+        "the run-owned output must retire after its verified cache copy is published"
+    );
+    assert_ne!(
+        cached.sha256,
+        qaren::buildplan::hash_artifact(&products.join("testapp.app")).unwrap()
+    );
     assert!(
         !stale.exists(),
         "an older fingerprint's artifact must be pruned"
@@ -1502,6 +1658,215 @@ fn recording_a_build_prunes_older_fingerprint_artifacts_for_the_same_app() {
         not_a_fp_key.exists(),
         "a directory that is not a fingerprint artifact must never be pruned"
     );
+    assert_eq!(probing.inner.remaining(), 0);
+}
+
+#[test]
+fn recording_a_build_retains_source_on_cache_or_evidence_publication_failure() {
+    for fault in ["copy", "hash", "cache_save", "record_save"] {
+        let repo = common::temp_repo();
+        let scenario = write_scenario(&repo, &ios_scenario_yaml(8791));
+        let mut mock = MockRunner::new();
+        script_prepare_to_recheck(&mut mock, &repo, "", "");
+        mock.expect_run("ls-files", CmdOutput::success(""));
+        let mut probing = RecordProbeRunner {
+            inner: mock,
+            repo: repo.clone(),
+            run_id: format!(
+                "ios-simulator-{}",
+                qaren::timefmt::compact_utc(1_770_000_000_000)
+            ),
+            probe_label: "simctl-launchctl".into(),
+            observed: None,
+            at_probe: Some(Box::new(move |run_dir| {
+                let repo = run_dir.parent().unwrap();
+                let cache = qaren::buildplan::cache_dir(repo);
+                std::fs::create_dir_all(&cache).unwrap();
+                match fault {
+                    "copy" => std::fs::write(cache.join("artifacts"), b"not a directory").unwrap(),
+                    "hash" => std::fs::write(
+                        run_dir.join("ios-build/testapp.app/binary"),
+                        b"changed after install",
+                    )
+                    .unwrap(),
+                    "cache_save" => std::fs::create_dir(qaren::buildplan::state_path(
+                        repo,
+                        "ios",
+                        "com.rndevagent.testapp",
+                    ))
+                    .unwrap(),
+                    "record_save" => std::fs::create_dir(
+                        run_dir.join(format!(".run.json.tmp.{}", std::process::id())),
+                    )
+                    .unwrap(),
+                    _ => unreachable!(),
+                }
+            })),
+        };
+        let receipt = prepare(&mut probing, &prepare_args(&scenario, false, None));
+        assert_eq!(
+            receipt.result,
+            if fault == "record_save" {
+                ReceiptResult::Failed
+            } else {
+                ReceiptResult::Ready
+            },
+            "{fault}"
+        );
+        let source = RunRecord::run_dir(&repo, &receipt.run_id).join("ios-build/testapp.app");
+        assert!(
+            source.is_dir(),
+            "{fault}: source must survive failed publication"
+        );
+        assert_eq!(
+            receipt
+                .build
+                .as_ref()
+                .unwrap()
+                .artifact
+                .as_ref()
+                .unwrap()
+                .path,
+            source,
+            "{fault}"
+        );
+        let record = RunRecord::load(&repo, &receipt.run_id).unwrap();
+        assert_eq!(
+            record.build.unwrap().artifact.unwrap().path,
+            source,
+            "{fault}"
+        );
+        let outcome = match fault {
+            "copy" | "hash" => "artifact_cache",
+            "cache_save" => "native_cache_state",
+            "record_save" => "ios_build_output",
+            _ => unreachable!(),
+        };
+        assert!(receipt.outcomes.contains_key(outcome), "{fault}");
+        assert_eq!(probing.inner.remaining(), 0, "{fault}");
+    }
+}
+
+#[test]
+fn recording_a_build_does_not_retire_symlinked_paths() {
+    for target in ["run", "output", "app"] {
+        let repo = common::temp_repo();
+        let scenario = write_scenario(&repo, &ios_scenario_yaml(8791));
+        let mut mock = MockRunner::new();
+        script_prepare_to_recheck(&mut mock, &repo, "", "");
+        mock.expect_run("ls-files", CmdOutput::success(""));
+        let mut probing = RecordProbeRunner {
+            inner: mock,
+            repo: repo.clone(),
+            run_id: format!(
+                "ios-simulator-{}",
+                qaren::timefmt::compact_utc(1_770_000_000_000)
+            ),
+            probe_label: "simctl-launchctl".into(),
+            observed: None,
+            at_probe: Some(Box::new(move |run_dir| {
+                let path = match target {
+                    "run" => run_dir.to_path_buf(),
+                    "output" => run_dir.join("ios-build"),
+                    "app" => run_dir.join("ios-build/testapp.app"),
+                    _ => unreachable!(),
+                };
+                let elsewhere = run_dir.parent().unwrap().join("not-run-owned");
+                std::fs::rename(&path, &elsewhere).unwrap();
+                std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+            })),
+        };
+        let receipt = prepare(&mut probing, &prepare_args(&scenario, false, None));
+        assert_eq!(receipt.result, ReceiptResult::Ready, "{target}");
+        let run_dir = RunRecord::run_dir(&repo, &receipt.run_id);
+        let source = run_dir.join("ios-build/testapp.app");
+        assert!(
+            source.join("binary").is_file(),
+            "{target}: must not delete through a symlink"
+        );
+        let link = match target {
+            "run" => run_dir,
+            "output" => run_dir.join("ios-build"),
+            "app" => source,
+            _ => unreachable!(),
+        };
+        assert!(
+            std::fs::symlink_metadata(link).unwrap().is_symlink(),
+            "{target}"
+        );
+        assert!(repo.join("not-run-owned").is_dir(), "{target}");
+        assert_eq!(probing.inner.remaining(), 0, "{target}");
+    }
+}
+
+#[test]
+fn unproven_or_unpersisted_build_group_absence_retains_run_output() {
+    for fault in ["unknown_group", "retirement_save"] {
+        let repo = common::temp_repo();
+        let scenario = write_scenario(&repo, &ios_scenario_yaml(8791));
+        let mut mock = MockRunner::new();
+        script_validation(&mut mock, &repo, IOS_TOOLS);
+        mock.expect_run("lsof", free_port());
+        mock.expect_run("ps", CmdOutput::success(LSTART));
+        mock.expect_run("ps", CmdOutput::success("qaren prepare"));
+        common::script_ios_deps(&mut mock);
+        mock.expect_run("ls-files", CmdOutput::success(""));
+        mock.expect_run("simctl create", CmdOutput::success(UDID));
+        mock.expect_run("simctl bootstatus", CmdOutput::success(""));
+        mock.expect_spawn_piped("expo run:ios", 5000, "", Some(0));
+        mock.expect_run("ps", CmdOutput::success(LSTART));
+        mock.expect_run("ps", CmdOutput::success("qaren-build"));
+        mock.expect_run(
+            "ps -A",
+            if fault == "unknown_group" {
+                CmdOutput::failed(1, "inventory unavailable")
+            } else {
+                CmdOutput::success("1 1 S\n")
+            },
+        );
+        let mut probing = RecordProbeRunner {
+            inner: mock,
+            repo: repo.clone(),
+            run_id: format!(
+                "ios-simulator-{}",
+                qaren::timefmt::compact_utc(1_770_000_000_000)
+            ),
+            probe_label: "ps-groups".into(),
+            observed: None,
+            at_probe: Some(Box::new(move |run_dir| {
+                if fault == "retirement_save" {
+                    std::fs::create_dir(
+                        run_dir.join(format!(".run.json.tmp.{}", std::process::id())),
+                    )
+                    .unwrap();
+                }
+            })),
+        };
+        let receipt = prepare(&mut probing, &prepare_args(&scenario, false, None));
+        assert_eq!(receipt.result, ReceiptResult::Failed, "{fault}");
+        let record = RunRecord::load(&repo, &receipt.run_id).unwrap();
+        assert!(record.resources.build_process().is_some(), "{fault}");
+        assert!(
+            record.resources.build_lock.unwrap().lock_dir.is_dir(),
+            "{fault}"
+        );
+        assert!(
+            RunRecord::run_dir(&repo, &receipt.run_id)
+                .join("ios-build/testapp.app/binary")
+                .is_file(),
+            "{fault}"
+        );
+        assert!(matches!(
+            qaren::buildplan::load_state(&repo, "ios", "com.rndevagent.testapp"),
+            qaren::buildplan::StateStatus::Missing
+        ));
+        assert!(!probing
+            .inner
+            .calls
+            .iter()
+            .any(|spec| spec.label == "simctl-install"));
+        assert_eq!(probing.inner.remaining(), 0, "{fault}");
+    }
 }
 
 #[test]

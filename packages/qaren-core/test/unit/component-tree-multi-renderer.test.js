@@ -228,7 +228,7 @@ test('B143 + GH #597: injected root iteration prefers registered renderer IDs', 
   const src = INJECTED_HELPERS;
   assert.match(
     src,
-    /function findAllRootFibers\(\)/,
+    /function findAllRootFibers\((?:bounds)?\)/,
     'findAllRootFibers function missing from injected helpers',
   );
   // findAllRootFibers delegates to iterateAllRoots. The shared primitive
@@ -236,7 +236,7 @@ test('B143 + GH #597: injected root iteration prefers registered renderer IDs', 
   // numeric probing for older hook shims that do not expose renderers.keys().
   assert.match(
     src,
-    /function iterateAllRoots\(cb\)/,
+    /function iterateAllRoots\(cb(?:, bounds)?\)/,
     'iterateAllRoots primitive missing — findAllRootFibers depends on it',
   );
   assert.match(
@@ -256,7 +256,7 @@ test('B143 + GH #597: injected root iteration prefers registered renderer IDs', 
   const findAllSlice = src.split('function findAllRootFibers')[1]?.split('function ')[0] ?? '';
   assert.match(
     findAllSlice,
-    /out\.push\(\{ rendererId: rendererId, fiber: rootFiber \}\)/,
+    /out\.push\(\{ rendererId: rendererId, fiber: rootFiber(?:, root: root)? \}\)/,
     'findAllRootFibers collector cb drifted from {rendererId, fiber} shape',
   );
 });
@@ -289,7 +289,7 @@ test('B143 A1 (Gemini 85): hasErrorOverlay check runs across all renderers', () 
   const src = INJECTED_HELPERS;
   assert.match(
     src,
-    /var overlayRoots = findAllRootFibers\(\);/,
+    /var overlayRoots = findAllRootFibers\((?:typography)?\);/,
     'error-overlay check did not switch to findAllRootFibers',
   );
   assert.match(

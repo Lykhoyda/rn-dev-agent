@@ -53,7 +53,53 @@ test('review P1: protected value equality survives projection and an unequal val
   for (const requests of [matching.requests, mismatching.requests]) {
     assert.ok(!JSON.stringify(requests).includes('Anton'));
     assert.ok(!JSON.stringify(requests).includes('Bob'));
+    const instructions = requests[0].questions.check_2.instructions;
+    assert.match(
+      instructions,
+      /same token in the expectation and observed text is evidence of the same value/,
+    );
+    assert.match(instructions, /different tokens represent different values/);
+    assert.match(instructions, /unmasked text never equals a token's value/);
+    assert.match(instructions, /no content, length, format, order or validity/);
   }
+  const tokens = (requests: typeof matching.requests) =>
+    new Set(JSON.stringify(requests).match(/\[QAREN_VALUE_\d+\]/g));
+  assert.equal(tokens(matching.requests).size, 1);
+  assert.equal(tokens(mismatching.requests).size, 2);
+});
+
+test('protected equality still requires the noul threshold rather than a matching mask alone', async () => {
+  for (const [noul, expected] of [
+    [0.89, 'pass'],
+    [0.58, 'unsure'],
+    [0.56, 'unsure'],
+  ] as const) {
+    const judge = scriptedJudge(() => ({ check_2: { type: 'noul', noul } }));
+    const result = await decideScreen(nameScreen('Anton'), judge, nameCheck, undefined, ['Anton']);
+    assert.equal(result.check, expected);
+    assert.equal(judge.requests.length, 1);
+  }
+});
+
+test('review P1: an unparsed check cannot pass on a protected value the screen does not show', async () => {
+  const greeting = {
+    kind: 'check' as const,
+    literal: false,
+    text: 'The greeting says Welcome, Anton',
+    line: 2,
+  };
+  for (const [text, expected, asked] of [
+    ['Welcome, Anton', 'pass', 1],
+    ['Welcome, Bob', 'unsure', 0],
+  ] as const) {
+    const judge = alwaysYes();
+    const decision = await decideScreen(screen([], [text]), judge, greeting, undefined, ['Anton']);
+    assert.equal(decision.check, expected, text);
+    assert.equal(judge.requests.length, asked, text);
+  }
+  const judge = alwaysYes();
+  const mismatch = await decideScreen(nameScreen('Bob'), judge, nameCheck, undefined, ['Anton']);
+  assert.equal(mismatch.check, 'fail', 'a local mismatch outranks the unobserved-value bound');
 });
 
 test('review P1: opaque input values cannot prove hidden semantic properties', async () => {
@@ -116,10 +162,11 @@ test('adding unrelated filled or secure inputs never disables banner checks or c
 
 test('banner checks with unrelated private inputs retain check-target batching and only act after a pass', async () => {
   for (const noul of [0.9, 0.1]) {
-    const judge = scriptedJudge((q) => ({
-      check_1: { type: 'noul', noul },
-      target_2: choice(q.target_2, 'e1'),
-    }));
+    const judge = scriptedJudge((q) => {
+      assert.deepEqual(Object.keys(q.target_2.criteria!), ['e0', 'none']);
+      assert.match(q.target_2.criteria!.e0, /Done/);
+      return { check_1: { type: 'noul', noul }, target_2: choice(q.target_2, 'e0') };
+    });
     const observed = screen(
       [element('@name', 'Name', { kind: 'input', value: 'Anton' }), element('@done', 'Done')],
       ['Name: Anton', 'Saved', 'Done'],
@@ -289,6 +336,8 @@ test('review P2: duplicate Android input values are hidden in labels, identifier
         placeholder: `Replace ${secret}`,
       },
     ],
+    'app',
+    { native: 'complete', react: 'complete' },
   );
   const judge = alwaysYes();
   await decideScreen(
@@ -330,6 +379,8 @@ test('secure input copies keep their local identities but stay out of outward ev
         value: secret,
       },
     ],
+    'app',
+    { native: 'complete', react: 'complete' },
   );
   assert.equal(observed.elements[0].label, secret);
   assert.equal(observed.elements[0].testID, `pin-${secret}`);
@@ -344,6 +395,7 @@ test('secure input copies keep their local identities but stay out of outward ev
     { kind: 'fill', target: { phrase: 'the PIN field' }, text: '1234', line: 1 },
     ['1234'],
   );
+  assert.equal(judge.requests.length, 1);
   assert.ok(!JSON.stringify(judge.requests).includes(secret));
 });
 
@@ -391,11 +443,11 @@ test('review P2: swipe gestures normalize into the inverse content-scroll direct
       assert.ok(item.kind === 'scroll');
       assert.equal(item.direction, direction);
       assert.equal(!!item.until, !!suffix);
-      const walkJudge = scriptedJudge((q, index) =>
-        Object.fromEntries(
-          Object.entries(q).map(([id, question]) => [id, choice(question, index ? 'e0' : 'none')]),
-        ),
-      );
+      const walkJudge = scriptedJudge((q, index) => {
+        assert.deepEqual(Object.keys(q), ['visibility_1']);
+        assert.equal(q.visibility_1.type, 'noul');
+        return { visibility_1: { type: 'noul', noul: index ? 0.9 : 0.1 } };
+      });
       const f = walker(
         [screen([element('@loading', 'Loading')]), screen([element('@footer', 'Footer')])],
         walkJudge,

@@ -139,6 +139,40 @@ export async function fetchTargets(port: number, timeout: number): Promise<Herme
   }
 }
 
+// Readiness only: exact discovery still owns target selection and authority.
+export async function waitForExactPortTargets(
+  port: number,
+  timeoutMs: number,
+  pollMs: number,
+): Promise<void> {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new RangeError('port must be an integer between 1 and 65535');
+  }
+  for (const [name, value] of [
+    ['timeoutMs', timeoutMs],
+    ['pollMs', pollMs],
+  ] as const) {
+    if (!Number.isInteger(value) || value < 1 || value > 2_147_483_647) {
+      throw new RangeError(`${name} must be an integer between 1 and 2147483647`);
+    }
+  }
+
+  const deadline = performance.now() + timeoutMs;
+  let remaining = deadline - performance.now();
+  while (remaining > 0) {
+    const raw = await fetchTargets(port, Math.min(DISCOVERY_TIMEOUT_MS * 2, remaining));
+    if (!Array.isArray(raw)) {
+      throw new Error(`Invalid CDP target list on port ${port}: expected an array`);
+    }
+    remaining = deadline - performance.now();
+    if (remaining <= 0) break;
+    if (raw.length > 0) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(pollMs, remaining)));
+    remaining = deadline - performance.now();
+  }
+  throw new Error(`Timed out waiting for CDP targets on port ${port} after ${timeoutMs}ms`);
+}
+
 export function filterValidTargets(targets: HermesTarget[]): HermesTarget[] {
   return targets
     .filter(

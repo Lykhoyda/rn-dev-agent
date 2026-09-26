@@ -25,7 +25,11 @@ pub fn prewarm(runner: &mut dyn Runner, args: &PrewarmArgs) -> Receipt {
             let mut receipt = Receipt::new(
                 "prewarm",
                 "none",
-                ReceiptResult::Failed,
+                if failure.code.is_refusal() {
+                    ReceiptResult::Refused
+                } else {
+                    ReceiptResult::Failed
+                },
                 &failure.phase.clone(),
                 timefmt::iso8601_utc(runner.now_epoch_ms()),
             );

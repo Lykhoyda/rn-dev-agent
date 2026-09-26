@@ -45,6 +45,80 @@ pub struct PidIdentity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "StoredCoreResource")]
+pub struct CoreResource {
+    pub pgid: i32,
+    pub identity: Option<PidIdentity>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+enum StoredCoreResource {
+    Explicit {
+        pgid: i32,
+        identity: Option<PidIdentity>,
+    },
+    Original {
+        pid: i32,
+        started_at: String,
+        command: String,
+    },
+}
+
+impl From<StoredCoreResource> for CoreResource {
+    fn from(stored: StoredCoreResource) -> Self {
+        match stored {
+            StoredCoreResource::Explicit { pgid, identity } => Self { pgid, identity },
+            StoredCoreResource::Original {
+                pid,
+                started_at,
+                command,
+            } => Self {
+                // The original qaren-run/1 core spawn also made the child PID its PGID.
+                pgid: pid,
+                identity: Some(PidIdentity {
+                    pid,
+                    started_at,
+                    command,
+                }),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupCleanupResult {
+    Removed,
+    Absent,
+    Refused,
+    Unresolved,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoreCleanupEvidence {
+    pub run_id: String,
+    pub pgid: i32,
+    pub at: String,
+    pub outcome: GroupCleanupResult,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FreshInstallStatus {
+    ProvenAbsent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FreshInstallEvidence {
+    pub run_id: String,
+    pub app_id: String,
+    pub device_id: String,
+    pub proven_absent_at: String,
+    pub status: FreshInstallStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IosSimResource {
     pub udid: String,
     pub name: String,
@@ -135,8 +209,29 @@ pub struct BuildLockResource {
     pub holder: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum BuildProcess {
+    SpawnPending,
+    Running {
+        pgid: i32,
+        identity: Option<PidIdentity>,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BuildCompletionEvidence {
+    NotSpawned,
+    Group {
+        pgid: i32,
+        outcome: GroupCleanupResult,
+    },
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Resources {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    build_process: Option<BuildProcess>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ios_simulator: Option<IosSimResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -164,15 +259,81 @@ pub struct Resources {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease: Option<crate::lease::Lease>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub core: Option<PidIdentity>,
+    pub core: Option<CoreResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_cleanup: Option<CoreCleanupEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_install: Option<FreshInstallEvidence>,
     // A borrowed device (the booted simulator `check` walks on) is never shut down or deleted.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub device_borrowed: bool,
 }
 
 impl Resources {
+    pub fn build_process(&self) -> Option<&BuildProcess> {
+        self.build_process.as_ref()
+    }
+
+    pub fn can_release_build_ownership(&self) -> bool {
+        self.build_process.is_none()
+    }
+
+    pub fn begin_build(&mut self) -> Result<(), Failure> {
+        if self.build_process.is_some() {
+            return Err(Self::invalid_build_transition());
+        }
+        self.build_process = Some(BuildProcess::SpawnPending);
+        Ok(())
+    }
+
+    pub fn record_build_spawned(
+        &mut self,
+        pgid: i32,
+        identity: Option<PidIdentity>,
+    ) -> Result<(), Failure> {
+        if !matches!(self.build_process, Some(BuildProcess::SpawnPending))
+            || pgid < 2
+            || identity
+                .as_ref()
+                .is_some_and(|i| i.pid != pgid || i.started_at.trim().is_empty())
+        {
+            return Err(Self::invalid_build_transition());
+        }
+        self.build_process = Some(BuildProcess::Running { pgid, identity });
+        Ok(())
+    }
+
+    pub fn finish_build(&mut self, evidence: BuildCompletionEvidence) -> Result<(), Failure> {
+        let proven = match (&self.build_process, evidence) {
+            (Some(BuildProcess::SpawnPending), BuildCompletionEvidence::NotSpawned) => true,
+            (
+                Some(BuildProcess::Running { pgid, .. }),
+                BuildCompletionEvidence::Group {
+                    pgid: observed,
+                    outcome: GroupCleanupResult::Absent | GroupCleanupResult::Removed,
+                },
+            ) => *pgid >= 2 && *pgid == observed,
+            _ => false,
+        };
+        if !proven {
+            return Err(Self::invalid_build_transition());
+        }
+        self.build_process = None;
+        Ok(())
+    }
+
+    fn invalid_build_transition() -> Failure {
+        Failure::new(
+            "build",
+            FailureCode::RunRecordInvalid,
+            "build process transition lacks matching state or proof",
+            "retain build ownership and resolve the recorded process before retrying",
+        )
+    }
+
     pub fn any_owned(&self) -> bool {
-        self.ios_simulator.is_some()
+        self.build_process.is_some()
+            || self.ios_simulator.is_some()
             || self.metro.is_some()
             || self.farm.is_some()
             || self.tunnel.is_some()
@@ -181,6 +342,7 @@ impl Resources {
             || self.usb_device.is_some()
             || self.build_lock.is_some()
             || self.lease.is_some()
+            || self.core.is_some()
     }
 }
 

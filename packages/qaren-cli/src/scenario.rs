@@ -46,6 +46,25 @@ pub struct CandidateSpec {
     pub dev_client_scheme: Option<String>,
 }
 
+fn is_dev_client_scheme(scheme: &str) -> bool {
+    let mut bytes = scheme.bytes();
+    scheme.len() <= 128
+        && bytes.next().is_some_and(|b| b.is_ascii_alphabetic())
+        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'.' | b'-'))
+}
+
+pub(crate) fn require_launch_scheme(scheme: Option<&str>) -> Result<(), Failure> {
+    if scheme.is_some_and(is_dev_client_scheme) {
+        return Ok(());
+    }
+    Err(Failure::new(
+        "config",
+        FailureCode::DevClientSchemeRequired,
+        "iOS CLI-owned builds require a 1–128-byte dev-client URI scheme matching [A-Za-z][A-Za-z0-9+.-]*",
+        "set devClientScheme in .qaren/config.yaml (candidate.dev_client_scheme for prepare) to the app's registered URI scheme",
+    ))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MetroSpec {
@@ -307,14 +326,14 @@ impl Scenario {
                 )));
             }
         }
-        if let Some(scheme) = &self.candidate.dev_client_scheme {
-            let mut chars = scheme.chars();
-            let scheme_ok = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
-                && chars.all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '.' || c == '-');
-            if !scheme_ok {
-                return Err(invalid(format!(
-                    "candidate.dev_client_scheme {scheme:?} must be a URI scheme ([A-Za-z][A-Za-z0-9+.-]*)"
-                )));
+        if self.platform == Platform::Ios && self.build.owner == BuildOwner::Cli {
+            require_launch_scheme(self.candidate.dev_client_scheme.as_deref())?;
+        } else if let Some(scheme) = &self.candidate.dev_client_scheme {
+            if !is_dev_client_scheme(scheme) {
+                return Err(invalid(
+                    "candidate.dev_client_scheme must be a 1–128-byte URI scheme ([A-Za-z][A-Za-z0-9+.-]*)"
+                        .into(),
+                ));
             }
         }
         for (field, value) in [

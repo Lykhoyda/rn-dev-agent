@@ -2,7 +2,8 @@ use crate::adapters::ios;
 use crate::buildplan::BuildDecision;
 use crate::candidate::{self, sha256_hex};
 use crate::commands::cleanup::{
-    cleanup_process_group, release_lease_outcome, retained_lease_outcome, unclean_legs, Outcome,
+    cleanup_core, cleanup_process_group, release_lease_outcome, retained_lease_outcome,
+    unclean_legs, Outcome,
 };
 use crate::commands::prepare::{self, finish_receipt, Ctx};
 use crate::config::CheckConfig;
@@ -28,14 +29,16 @@ pub const DEFAULT_WALK_SECONDS: u64 = 1200;
 pub const DEFAULT_STEP_SECONDS: u64 = 1200;
 const MIN_FREE_DISK_KB: u64 = 1024 * 1024;
 
-// `check`: candidate = the working tree at project_root, device = the booted simulator, borrowed.
+// `check` borrows a simulator against the working tree at project_root.
 pub struct RunRequest {
     pub project_root: PathBuf,
     pub config_path: PathBuf,
     pub plan_file: PathBuf,
     pub platform: Platform,
-    // A booted simulator to borrow by UDID; None borrows the only booted one.
+    // None borrows the only booted simulator; boot_device requires an exact UDID.
     pub device: Option<String>,
+    pub boot_device: bool,
+    pub fresh_install: bool,
     pub runtime_dir: PathBuf,
     pub node: Option<PathBuf>,
     pub lock_root: PathBuf,
@@ -48,6 +51,7 @@ struct Device {
     id: String,
     name: String,
     ios: Option<(String, String)>,
+    needs_boot: bool,
 }
 
 fn platform_str(platform: Platform) -> &'static str {
@@ -55,6 +59,33 @@ fn platform_str(platform: Platform) -> &'static str {
         Platform::Ios => "ios",
         Platform::Android => "android",
     }
+}
+
+pub fn validate_boot_device(
+    platform: Platform,
+    device: Option<&str>,
+    boot_device: bool,
+) -> Result<(), Failure> {
+    if !boot_device {
+        return Ok(());
+    }
+    if platform != Platform::Ios {
+        return Err(Failure::new(
+            "device",
+            FailureCode::PlatformUnsupported,
+            "--boot-device is only valid for check on iOS",
+            "use --platform ios with an explicit --device UUID",
+        ));
+    }
+    if device.and_then(ios::canonical_udid).is_none() {
+        return Err(Failure::new(
+            "device",
+            FailureCode::DeviceUnavailable,
+            "--boot-device requires --device with an exact iOS simulator UUID",
+            "pass the selected simulator UUID, not a name or booted alias",
+        ));
+    }
+    Ok(())
 }
 
 pub fn run(runner: &mut dyn Runner, req: &RunRequest) -> Receipt {
@@ -93,7 +124,9 @@ fn run_inner(
     started_ms: u64,
     preflight_jev: &mut Option<core::JevRollup>,
 ) -> Result<Receipt, Failure> {
+    validate_boot_device(req.platform, req.device.as_deref(), req.boot_device)?;
     let (config, config_raw) = CheckConfig::load(&req.config_path)?;
+    config.validate_for_platform(req.platform)?;
     let node = req
         .node
         .clone()
@@ -120,7 +153,7 @@ fn run_inner(
             "leave the plan file alone during the run, then re-run",
         ));
     }
-    let device = resolve_device(runner, req.platform, req.device.as_deref())?;
+    let device = resolve_device(runner, req.platform, req.device.as_deref(), req.boot_device)?;
     let (repo_root, project_rel) = locate_worktree(runner, &req.project_root)?;
     let scenario = build_scenario(&config, req.platform, &device, &repo_root, &project_rel);
     scenario.validate()?;
@@ -152,6 +185,18 @@ fn run_inner(
     if let Err(f) = claim_run_dir(&run_dir) {
         return Err(lease::release_or_annotate(&lease, f));
     }
+    let mut resources = Resources::default();
+    resources.lease = Some(lease.clone());
+    resources.device_borrowed = true;
+    resources.ios_simulator = device
+        .ios
+        .as_ref()
+        .map(|(device_type, runtime)| IosSimResource {
+            udid: device.id.clone(),
+            name: device.name.clone(),
+            device_type: device_type.clone(),
+            runtime: runtime.clone(),
+        });
     let record = RunRecord {
         schema: RUN_SCHEMA.to_string(),
         run_id: run_id.clone(),
@@ -164,20 +209,7 @@ fn run_inner(
         prepare: identity,
         build: None,
         handoff: None,
-        resources: Resources {
-            lease: Some(lease.clone()),
-            device_borrowed: true,
-            ios_simulator: device
-                .ios
-                .as_ref()
-                .map(|(device_type, runtime)| IosSimResource {
-                    udid: device.id.clone(),
-                    name: device.name.clone(),
-                    device_type: device_type.clone(),
-                    runtime: runtime.clone(),
-                }),
-            ..Default::default()
-        },
+        resources,
         failure: None,
         history: Vec::new(),
     };
@@ -195,8 +227,51 @@ fn run_inner(
     };
     let t = ctx.mark("preflight", started_ms);
 
-    if let Err(f) = prepare::install_deps(&mut ctx) {
-        return Ok(finish_failed(ctx, f));
+    if req.fresh_install || req.boot_device {
+        if let Err(f) = core::fresh_install_admission(
+            ctx.runner,
+            &node,
+            &req.runtime_dir,
+            &req.project_root,
+            &device.id,
+        ) {
+            return Ok(finish_failed(ctx, f));
+        }
+    }
+    if req.platform == Platform::Ios {
+        if let Err(f) = prepare::install_deps(&mut ctx) {
+            return Ok(finish_failed(ctx, f));
+        }
+        if let Err(f) = ios::require_generic_build(ctx.runner, &ctx.record.candidate.project_root) {
+            return Ok(finish_failed(ctx, f));
+        }
+    }
+    if req.fresh_install || req.boot_device {
+        if let Err(f) = core::fresh_install_admission(
+            ctx.runner,
+            &node,
+            &req.runtime_dir,
+            &req.project_root,
+            &device.id,
+        ) {
+            return Ok(finish_failed(ctx, f));
+        }
+    }
+    if req.boot_device {
+        if let Err(f) = boot_selected_device(&mut ctx, &device) {
+            return Ok(finish_failed(ctx, f));
+        }
+    }
+    if req.fresh_install {
+        if let Err(f) = reset_app(&mut ctx, &device.id, &config.app_id) {
+            return Ok(finish_failed(ctx, f));
+        }
+    }
+
+    if req.platform == Platform::Android {
+        if let Err(f) = prepare::install_deps(&mut ctx) {
+            return Ok(finish_failed(ctx, f));
+        }
     }
     let t = ctx.mark("deps", t);
 
@@ -227,10 +302,7 @@ fn run_inner(
                 return Ok(finish_failed(ctx, f));
             }
         }
-        if let Err(f) = prepare::spawn_build(&mut ctx) {
-            return Ok(finish_failed(ctx, f));
-        }
-        if let Err(f) = prepare::wait_ready(&mut ctx) {
+        if let Err(f) = prepare::build_and_ready(&mut ctx) {
             return Ok(finish_failed(ctx, f));
         }
         ctx.mark("build_and_ready", t)
@@ -284,20 +356,15 @@ fn run_inner(
         Ok(child) => child,
         Err(f) => return Ok(finish_failed(ctx, f)),
     };
-    ctx.record.resources.core = capture_pid_identity(ctx.runner, core_child.pid);
+    ctx.record.resources.core = Some(crate::runrecord::CoreResource {
+        pgid: core_child.pid,
+        identity: capture_pid_identity(ctx.runner, core_child.pid),
+    });
     if let Err(f) = ctx.save() {
         core::abort(core_child);
-        ctx.record.resources.core = None;
         return Ok(finish_failed(ctx, f));
     }
     let outcome = core::wait(ctx.runner, core_child, req.budgets);
-    // The leader is gone either way; a surviving member is a teardown leg of its own.
-    ctx.record.resources.core = None;
-    let core_leg = outcome.group_survived.then(|| {
-        Outcome::Unresolved(
-            "a member of the core process group survived SIGKILL after the core exited".to_string(),
-        )
-    });
     let t = ctx.mark("walk", t);
     if let Some(exit) = outcome.exit {
         ctx.notes.push(("core_exit".to_string(), exit.to_string()));
@@ -320,7 +387,7 @@ fn run_inner(
         Err(detail) => ctx.notes.push(("candidate_drift".to_string(), detail)),
     }
 
-    let (cleanup, all_clean) = teardown(&mut ctx, core_leg);
+    let (cleanup, all_clean) = teardown(&mut ctx, outcome.group_survived);
     ctx.mark("teardown", t);
 
     let report_path = match report::write(
@@ -404,8 +471,101 @@ fn refusal_code(code: &str) -> FailureCode {
     }
 }
 
+fn reset_app(ctx: &mut Ctx, udid: &str, app_id: &str) -> Result<(), Failure> {
+    let unknown = || {
+        Failure::new(
+            "fresh_install",
+            FailureCode::AppPresenceUnknown,
+            "a successful structured app inventory could not prove app presence or absence",
+            "restore simulator inventory access before retrying the fresh install",
+        )
+    };
+    match ios::probe_app_presence(ctx.runner, udid, app_id) {
+        ios::AppPresence::Unknown => return Err(unknown()),
+        ios::AppPresence::ProvenAbsent => {}
+        ios::AppPresence::Installed => {
+            let at = timefmt::iso8601_utc(ctx.runner.now_epoch_ms());
+            ctx.record.push_history(
+                at,
+                "fresh install: reset admitted, uninstalling selected app",
+            );
+            ctx.save()?;
+            let output = ctx.runner.run(&ios::uninstall_app_spec(udid, app_id));
+            if !output.ok() {
+                return Err(Failure::new(
+                    "fresh_install",
+                    FailureCode::AppResetFailed,
+                    "uninstall did not complete successfully on the selected device",
+                    "inspect simulator health and retry the fresh install",
+                ));
+            }
+            match ios::probe_app_presence(ctx.runner, udid, app_id) {
+                ios::AppPresence::ProvenAbsent => {}
+                ios::AppPresence::Unknown => return Err(unknown()),
+                ios::AppPresence::Installed => {
+                    return Err(Failure::new(
+                        "fresh_install",
+                        FailureCode::AppResetFailed,
+                        "the selected app remains installed after uninstall",
+                        "inspect simulator health and retry the fresh install",
+                    ))
+                }
+            }
+        }
+    }
+    let at = timefmt::iso8601_utc(ctx.runner.now_epoch_ms());
+    ctx.record.resources.fresh_install = Some(crate::runrecord::FreshInstallEvidence {
+        run_id: ctx.record.run_id.clone(),
+        app_id: app_id.to_string(),
+        device_id: udid.to_string(),
+        proven_absent_at: at.clone(),
+        status: crate::runrecord::FreshInstallStatus::ProvenAbsent,
+    });
+    ctx.record
+        .push_history(at, "fresh install: selected app proven absent");
+    ctx.save()?;
+    ctx.notes
+        .push(("fresh_install".to_string(), "proven_absent".to_string()));
+    Ok(())
+}
+
+fn boot_selected_device(ctx: &mut Ctx, device: &Device) -> Result<(), Failure> {
+    let failed = |detail| {
+        Failure::new(
+            "boot_device",
+            FailureCode::SimulatorBootFailed,
+            detail,
+            "check the selected simulator's health and inventory, then re-run",
+        )
+    };
+    if device.needs_boot {
+        let output = ctx.runner.run(&ios::bootstatus_spec(
+            &device.id,
+            ctx.record.scenario.deadlines.device_boot_seconds,
+        ));
+        if !output.ok() {
+            return Err(failed(
+                "bootstatus did not complete successfully for the selected simulator",
+            ));
+        }
+    }
+    let output = ctx.runner.run(&ios::list_devices_spec());
+    if output.ok() && output.stderr.is_empty() {
+        if let Some(sim) = ios::parse_selected_sim(&output.stdout, &device.id) {
+            if sim.state == ios::SimState::Booted
+                && device.ios.as_ref().is_some_and(|(device_type, runtime)| {
+                    sim.device_type == *device_type && sim.runtime == *runtime
+                })
+            {
+                return Ok(());
+            }
+        }
+    }
+    Err(failed("inventory did not prove the exact selected simulator Booted with unchanged runtime and device type"))
+}
+
 fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
-    let (cleanup, _) = teardown(&mut ctx, None);
+    let (cleanup, _) = teardown(&mut ctx, false);
     let mut receipt = ctx.fail(failure);
     for (name, rendered) in cleanup {
         receipt.cleanup.insert(name, rendered);
@@ -413,19 +573,16 @@ fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
     receipt
 }
 
-// core dead → runners dead (they share the core's process group) → Metro pgid →
-// borrowed device kept → lease released. Every leg is ownership-gated; `core_leg`
-// carries what the walk itself learned about the core group.
-fn teardown(ctx: &mut Ctx, core_leg: Option<Outcome>) -> (Vec<(String, String)>, bool) {
+fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, bool) {
     let mut outcomes: Vec<(String, Outcome)> = Vec::new();
-    if let Some(outcome) = core_leg {
-        outcomes.push(("core".to_string(), outcome));
+    if let Some(outcome) =
+        crate::commands::cleanup::cleanup_build(ctx.runner, &mut ctx.record, &ctx.runs_root)
+    {
+        outcomes.push(("build_process".to_string(), outcome));
     }
-    if let Some(core) = ctx.record.resources.core.clone() {
-        let outcome = cleanup_process_group(ctx.runner, Some(&core), core.pid, None);
-        if outcome.clean() {
-            ctx.record.resources.core = None;
-        }
+    if let Some(outcome) =
+        cleanup_core(ctx.runner, &mut ctx.record, &ctx.runs_root, wait_unresolved)
+    {
         outcomes.push(("core".to_string(), outcome));
     }
     if let Some(m) = ctx.record.resources.metro.clone() {
@@ -446,7 +603,7 @@ fn teardown(ctx: &mut Ctx, core_leg: Option<Outcome>) -> (Vec<(String, String)>,
     }
     if let Some(lease) = ctx.record.resources.lease.clone() {
         let unclean = unclean_legs(&outcomes);
-        let outcome = if unclean.is_empty() {
+        let outcome = if ctx.record.resources.can_release_build_ownership() && unclean.is_empty() {
             let outcome = release_lease_outcome(lease::release(&lease));
             if outcome.clean() {
                 ctx.record.resources.lease = None;
@@ -649,6 +806,7 @@ fn resolve_device(
     runner: &mut dyn Runner,
     platform: Platform,
     device: Option<&str>,
+    boot_device: bool,
 ) -> Result<Device, Failure> {
     match platform {
         Platform::Android => Err(Failure::new(
@@ -658,14 +816,31 @@ fn resolve_device(
             "re-run with --platform ios",
         )),
         Platform::Ios => {
-            let output = runner.run(&ios::list_booted_spec());
-            if !output.ok() {
+            let output = runner.run(&if boot_device { ios::list_devices_spec() } else { ios::list_booted_spec() });
+            if !output.ok() || (boot_device && !output.stderr.is_empty()) {
                 return Err(Failure::new(
                     "device",
                     FailureCode::DeviceUnavailable,
                     format!("simctl list failed: {}", output.summary()),
                     "check Xcode and CoreSimulator, then re-run",
                 ));
+            }
+            let borrow = |sim: &ios::Simulator| Device {
+                id: sim.udid.clone(),
+                name: sim.name.clone(),
+                ios: Some((sim.device_type.clone(), sim.runtime.clone())),
+                needs_boot: sim.state == ios::SimState::Shutdown,
+            };
+            if boot_device {
+                return device
+                    .and_then(|udid| ios::parse_selected_sim(&output.stdout, udid))
+                    .map(|sim| borrow(&sim))
+                    .ok_or_else(|| Failure::new(
+                        "device",
+                        FailureCode::DeviceUnavailable,
+                        "selected UUID is not one available Booted or Shutdown iOS simulator with complete metadata",
+                        "check the exact --device UUID and simulator inventory, then re-run",
+                    ));
             }
             let Some(sims) = ios::parse_booted_sims(&output.stdout) else {
                 return Err(Failure::new(
@@ -674,11 +849,6 @@ fn resolve_device(
                     "simctl list output was unparseable".to_string(),
                     "check Xcode and CoreSimulator, then re-run",
                 ));
-            };
-            let borrow = |sim: &ios::BootedSim| Device {
-                id: sim.udid.clone(),
-                name: sim.name.clone(),
-                ios: Some((sim.device_type.clone(), sim.runtime.clone())),
             };
             if let Some(udid) = device {
                 return match sims.iter().find(|sim| sim.udid == udid) {
@@ -786,7 +956,7 @@ fn build_scenario(
             app_id: config.app_id.clone(),
             revision: "HEAD".to_string(),
             worktree: Some(repo_root.to_string_lossy().into_owned()),
-            dev_client_scheme: None,
+            dev_client_scheme: config.dev_client_scheme.clone(),
         },
         metro: Some(MetroSpec {
             port: config.metro_port,

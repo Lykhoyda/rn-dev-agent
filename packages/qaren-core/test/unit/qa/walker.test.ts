@@ -16,11 +16,13 @@ function screen(labels: string[], extra: Partial<Screen> = {}): Screen {
       disabled: false,
       secure: false,
       offscreen: false,
+      semantic: { press: 'supported', fill: 'unsupported', visibility: 'visible' },
       where: 'middle',
       side: 'center',
     })),
     visibleText: labels,
     front: 'app',
+    coverage: { native: 'complete', react: 'complete' },
     ...extra,
   };
 }
@@ -135,6 +137,7 @@ test('a proven fill is done even when the screen looks the same', async () => {
         disabled: false,
         secure: false,
         offscreen: false,
+        semantic: { press: 'unsupported', fill: 'supported', visibility: 'visible' },
       },
     ],
   };
@@ -147,7 +150,7 @@ test('a proven fill is done even when the screen looks the same', async () => {
   );
 });
 
-test('a target that is only in the React tree scrolls once, then acts', async () => {
+test('an attested offscreen target scrolls once, then acts', async () => {
   const before: Screen = {
     ...screen(['Header']),
     elements: [
@@ -161,6 +164,7 @@ test('a target that is only in the React tree scrolls once, then acts', async ()
         disabled: false,
         secure: false,
         offscreen: true,
+        semantic: { press: 'supported', fill: 'unsupported', visibility: 'offscreen' },
       },
     ],
   };
@@ -212,6 +216,7 @@ test('an ambiguous quoted target without a judge is refused, not guessed', async
         disabled: false,
         secure: false,
         offscreen: true,
+        semantic: { press: 'supported', fill: 'unsupported', visibility: 'offscreen' },
       },
       {
         ref: 'react:b',
@@ -221,6 +226,7 @@ test('an ambiguous quoted target without a judge is refused, not guessed', async
         disabled: false,
         secure: false,
         offscreen: true,
+        semantic: { press: 'supported', fill: 'unsupported', visibility: 'offscreen' },
       },
     ],
   };
@@ -243,6 +249,7 @@ test('a fill only ever binds an input, even when a label carries the same text',
         disabled: false,
         secure: false,
         offscreen: false,
+        semantic: { press: 'unsupported', fill: 'supported', visibility: 'visible' },
       },
     ],
   };
@@ -308,7 +315,7 @@ test('runPlan stops at the first failing block and rolls up the ledger', async (
 
 test('an unquoted wait target fails at once instead of sitting out the wait budget', async () => {
   const f = fake([screen(['Home'])]);
-  const outcome = await walkBlock(block('1. Wait for the header to appear\n'), f.deps);
+  const outcome = await walkBlock(block('1. Wait for the welcome text to appear\n'), f.deps);
   assert.equal(outcome.block.outcome, 'fail');
   assert.equal(f.calls.filter((c) => c === 'capture').length, 1);
   assert.deepEqual(
@@ -386,6 +393,7 @@ function withOffscreenLoadMore(): Screen {
         disabled: false,
         secure: false,
         offscreen: true,
+        semantic: { press: 'supported', fill: 'unsupported', visibility: 'offscreen' },
       },
     ],
   };
@@ -438,6 +446,7 @@ test('a fill row never carries the typed value in its text', async () => {
         disabled: false,
         secure: true,
         offscreen: false,
+        semantic: { press: 'unsupported', fill: 'supported', visibility: 'visible' },
         where: 'middle',
         side: 'center',
       },
@@ -462,6 +471,7 @@ test('fill masking covers curly quotes and leaves a short value elsewhere on the
         disabled: false,
         secure: false,
         offscreen: false,
+        semantic: { press: 'unsupported', fill: 'supported', visibility: 'visible' },
         where: 'middle',
         side: 'center',
       },
@@ -497,6 +507,7 @@ test('a value typed earlier in the run never reaches a later failure, even when 
         disabled: false,
         secure: false,
         offscreen: false,
+        semantic: { press: 'unsupported', fill: 'supported', visibility: 'visible' },
         where: 'middle',
         side: 'center',
       },
@@ -528,6 +539,7 @@ function inputScreen(label: string, value?: string): Screen {
         disabled: false,
         secure: false,
         offscreen: false,
+        semantic: { press: 'unsupported', fill: 'supported', visibility: 'visible' },
         where: 'middle',
         side: 'center',
       },

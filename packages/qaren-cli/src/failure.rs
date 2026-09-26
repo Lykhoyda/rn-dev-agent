@@ -30,6 +30,8 @@ pub enum FailureCode {
     BuildContended,
     DeviceClaimContended,
     DeviceUnavailable,
+    DevClientSchemeRequired,
+    IosBuildCapabilityUnavailable,
     ArtifactInstallFailed,
     BuildFailed,
     ReadyDeadlineExceeded,
@@ -42,6 +44,9 @@ pub enum FailureCode {
     HandoffEvidenceAmbiguous,
     HandoffEvidenceMismatch,
     DeviceBusy,
+    FreshInstallAdmissionUnknown,
+    AppPresenceUnknown,
+    AppResetFailed,
     PlanUnparseable,
     NodeUnsupported,
     DiskBudgetExceeded,
@@ -71,6 +76,10 @@ impl FailureCode {
                 | FailureCode::HandoffEvidenceAmbiguous
                 | FailureCode::HandoffEvidenceMismatch
                 | FailureCode::DeviceBusy
+                | FailureCode::DevClientSchemeRequired
+                | FailureCode::IosBuildCapabilityUnavailable
+                | FailureCode::FreshInstallAdmissionUnknown
+                | FailureCode::AppPresenceUnknown
                 | FailureCode::PlanUnparseable
                 | FailureCode::NodeUnsupported
                 | FailureCode::DiskBudgetExceeded

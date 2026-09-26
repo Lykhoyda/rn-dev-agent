@@ -5,11 +5,12 @@ import {
   CHECK,
   ResolutionError,
   decideScreen,
-  resolutionVisible,
   targetVisible,
 } from './resolve.js';
 import { type Judge, type JevCall, JevError, unavailableJudge } from './questions.js';
 import { maskInputs, ObservedPrivacy } from './privacy.js';
+import { PrivateInputCaptureError } from './private-input.js';
+import { NativeCaptureError } from './capture.js';
 import {
   type BlockResult,
   type WalkResult,
@@ -27,7 +28,7 @@ export interface ActResult {
 
 export interface WalkerDeps {
   judge?: Judge;
-  captureScreen(): Promise<Screen>;
+  captureScreen(options?: { platformPresence?: boolean }): Promise<Screen>;
   press(ref: string): Promise<ActResult>;
   fill(ref: string, text: string): Promise<ActResult>;
   scroll(direction: 'down' | 'up'): Promise<ActResult>;
@@ -69,9 +70,13 @@ export async function walkBlock(
   let resolvedBy: LedgerRow['resolvedBy'] = 'exact';
   let cached: { item: Item; screen: Screen; decision: ScreenDecision } | undefined;
   let latest: Screen = { elements: [], visibleText: [], front: 'app' };
-  const capture = async (): Promise<Screen> => {
+  const capture = async (step?: Exclude<Item, { kind: 'check' }>): Promise<Screen> => {
     cached = undefined;
-    latest = await deps.captureScreen();
+    const target =
+      step && ('target' in step ? step.target : step.kind === 'scroll' ? step.until : undefined);
+    latest = await deps.captureScreen(
+      target && target.quoted === undefined ? { platformPresence: true } : undefined,
+    );
     privacy.observe(latest);
     return latest;
   };
@@ -79,7 +84,8 @@ export async function walkBlock(
     screen: Screen,
     check?: Item & { kind: 'check' },
     step?: Exclude<Item, { kind: 'check' }>,
-  ): Promise<ScreenDecision> => decideScreen(screen, judge, check, step, privacy.modelValues());
+  ): Promise<ScreenDecision> =>
+    decideScreen(screen, judge, check, step, privacy.modelValues(), privacy);
   let shots = shotIndex;
   const emit = (row: LedgerRow): void => {
     rows.push(row);
@@ -121,8 +127,42 @@ export async function walkBlock(
     };
   };
   const shoot = async (item: Item): Promise<string | undefined> => {
+    if (!privacy.canScreenshot()) return undefined;
     shots += 1;
     return deps.screenshot(screenshotName(shots, item.line));
+  };
+  const visibilityProbe = (item: Item & { kind: 'wait' | 'scroll' }, deadline = Infinity) => {
+    let reasks = 0;
+    return async (
+      screen: Screen,
+      initial?: ScreenDecision,
+    ): Promise<{ screen: Screen; found: boolean }> => {
+      let decision = initial ?? (await decide(screen, undefined, item));
+      for (;;) {
+        const visibility = decision.visibility;
+        if (!visibility)
+          throw new ResolutionError({
+            refuse: 'VISIBILITY_MISSING',
+            reason: 'the screen decision contains no visibility judgment',
+          });
+        if ('refuse' in visibility) throw new ResolutionError(visibility);
+        if (visibility.verdict === 'present') return { screen, found: true };
+        if (visibility.verdict === 'absent') return { screen, found: false };
+        const remaining = deadline - deps.now();
+        if (reasks >= CHECK.reasks || remaining <= 0) break;
+        reasks += 1;
+        await deps.sleep(Math.min(WAIT_POLL_MS, remaining));
+        if (deps.now() >= deadline) break;
+        screen = await capture(item);
+        if (deps.now() >= deadline) break;
+        decision = await decide(screen, undefined, item);
+        if (deps.now() >= deadline) break;
+      }
+      throw new ResolutionError({
+        refuse: 'VISIBILITY_UNSURE',
+        reason: 'visibility remained uncertain within the available re-ask budget',
+      });
+    };
   };
 
   for (const item of block.items) {
@@ -130,14 +170,14 @@ export async function walkBlock(
     if (item.kind === 'fill' && item.text && !typed.includes(item.text)) typed.push(item.text);
     try {
       if (item.kind === 'check') {
-        let before = await capture();
         const next = block.items[block.items.indexOf(item) + 1];
         const nextStep = !item.literal && next && next.kind !== 'check' ? next : undefined;
+        let before = await capture(nextStep);
         resolvedBy = item.literal ? 'exact' : 'jev';
         let decision = await decide(before, item, nextStep);
         for (let reask = 0; decision.check === 'unsure' && reask < CHECK.reasks; reask++) {
           await deps.sleep(WAIT_POLL_MS);
-          before = await capture();
+          before = await capture(nextStep);
           decision = await decide(before, item, nextStep);
         }
         const shot = await shoot(item);
@@ -157,17 +197,19 @@ export async function walkBlock(
         resolvedBy = item.target.quoted === undefined ? 'jev' : resolvedBy;
         const deadline = deps.now() + WAIT_BUDGET_MS;
         const held = cached?.item === item ? cached : undefined;
-        let screen = held?.screen ?? (await capture());
+        let screen = held?.screen ?? (await capture(item));
         cached = undefined;
+        const probe = visibilityProbe(item, deadline);
         const visible = async (s: Screen, initial?: ScreenDecision): Promise<boolean> => {
           if (item.target.quoted !== undefined) return targetVisible(item.target, s);
-          const decision = initial ?? (await decide(s, undefined, item));
-          return resolutionVisible(decision.target);
+          const observed = await probe(s, initial);
+          screen = observed.screen;
+          return observed.found;
         };
         let found = await visible(screen, held?.decision);
         while (!found && deps.now() < deadline) {
           await deps.sleep(WAIT_POLL_MS);
-          screen = await capture();
+          screen = await capture(item);
           found = await visible(screen);
         }
         const shot = await shoot(item);
@@ -182,22 +224,24 @@ export async function walkBlock(
       if (item.kind === 'scroll' && item.until) {
         resolvedBy = item.until.quoted === undefined ? 'jev' : resolvedBy;
         const held = cached?.item === item ? cached : undefined;
-        let screen = held?.screen ?? (await capture());
+        let screen = held?.screen ?? (await capture(item));
         cached = undefined;
+        const probe = visibilityProbe(item);
         const visible = async (s: Screen, initial?: ScreenDecision): Promise<boolean> => {
           if (item.until!.quoted !== undefined) return targetVisible(item.until!, s);
-          const decision = initial ?? (await decide(s, undefined, item));
-          return resolutionVisible(decision.target);
+          const observed = await probe(s, initial);
+          screen = observed.screen;
+          return observed.found;
         };
         let found = await visible(screen, held?.decision);
         let attempts = 0;
         while (!found && attempts < SCROLL_ATTEMPTS) {
           attempts += 1;
+          const beforeSignature = screenSignature(screen);
           const act = await deps.scroll(item.direction);
-          const next = await capture();
-          const moved = screenSignature(next) !== screenSignature(screen);
-          screen = next;
+          screen = await capture(item);
           found = await visible(screen);
+          const moved = screenSignature(screen) !== beforeSignature;
           if (!act.ok && !moved)
             return failed(
               item,
@@ -224,7 +268,7 @@ export async function walkBlock(
       let outcome: WalkOutcome | undefined;
       for (let attempt = 1; attempt <= 2 && !outcome; attempt += 1) {
         const held = cached?.item === item ? cached : undefined;
-        let before = held?.screen ?? (await capture());
+        let before = held?.screen ?? (await capture(item));
         cached = undefined;
         let ref: string | undefined;
         if (item.kind === 'press' || item.kind === 'fill') {
@@ -236,7 +280,7 @@ export async function walkBlock(
           if ('scroll' in resolution) {
             const act = await deps.scroll(resolution.scroll);
             scrollError = act.ok ? undefined : (act.error ?? 'scroll was not dispatched');
-            before = await capture();
+            before = await capture(item);
             decision = await decide(before, undefined, item);
             resolvedBy = decision.resolvedBy === 'jev' ? 'jev' : resolvedBy;
             resolution = decision.target!;
@@ -275,7 +319,7 @@ export async function walkBlock(
                 : item.kind === 'back'
                   ? await deps.back()
                   : await deps.dialog(item.action);
-        const after = await capture();
+        const after = await capture(item);
         const shot = await shoot(item);
         // NOTE: a not-ok result is not a verdict; an act that timed out may still have landed.
         const changed = screenSignature(after) !== screenSignature(before);
@@ -315,6 +359,28 @@ export async function walkBlock(
       }
       if (outcome) return outcome;
     } catch (error) {
+      if (error instanceof PrivateInputCaptureError || error instanceof NativeCaptureError) {
+        const nativeFailure = error instanceof NativeCaptureError;
+        const safe = nativeFailure ? new NativeCaptureError() : new PrivateInputCaptureError();
+        const key = nativeFailure ? 'native-capture' : 'private-input-capture';
+        emit({
+          block: key,
+          line: item.line,
+          text: safe.message,
+          attempt: 1,
+          kind: item.kind === 'check' ? 'check' : 'step',
+          resolvedBy,
+          t: deps.now(),
+          outcome: 'fail',
+          reason: safe.code,
+        });
+        return {
+          block: { key, outcome: 'fail', source: 'discovered' },
+          rows,
+          failure: { step: item.line, seen: safe.message },
+          refusal: { code: safe.code, message: safe.message },
+        };
+      }
       if (!(error instanceof JevError) && !(error instanceof ResolutionError)) throw error;
       if (error instanceof JevError) resolvedBy = 'jev';
       const refusal =

@@ -7,6 +7,10 @@ fn valid_ios_yaml() -> String {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("scenarios/ios-simulator.yaml"),
     )
     .unwrap()
+    .replace(
+        "revision: HEAD",
+        "revision: HEAD\n  dev_client_scheme: rndatest",
+    )
 }
 
 fn valid_android_yaml() -> String {
@@ -25,7 +29,51 @@ fn parse(yaml: &str) -> Result<Scenario, qaren::failure::Failure> {
 }
 
 #[test]
-fn checked_in_ios_example_is_valid() {
+fn ios_cli_scenario_requires_bounded_launch_scheme_with_content_free_refusal() {
+    let mut scenario: Scenario = serde_yaml::from_str(&valid_ios_yaml()).unwrap();
+    for scheme in ["rndatest", "A", "Expo+test-1.2", &"a".repeat(128)] {
+        scenario.candidate.dev_client_scheme = Some(scheme.into());
+        assert!(scenario.validate().is_ok(), "{scheme:?}");
+    }
+    let mut refusal = None;
+    for scheme in [
+        None,
+        Some(""),
+        Some(" "),
+        Some(" rndatest"),
+        Some("rndatest "),
+        Some("rnda test"),
+        Some("rnda\ntest"),
+        Some("rnda\ttest"),
+        Some("rnda\0test"),
+        Some("1rndatest"),
+        Some("+rndatest"),
+        Some("rnda/test"),
+        Some("rndatest://"),
+        Some("rnda_test"),
+        Some("rndatést"),
+        Some(&"a".repeat(129)),
+    ] {
+        scenario.candidate.dev_client_scheme = scheme.map(String::from);
+        let failure = scenario.validate().expect_err("invalid scheme must refuse");
+        assert_eq!(failure.code, FailureCode::DevClientSchemeRequired);
+        assert!(failure.code.is_refusal());
+        let json = serde_json::to_value(failure).unwrap();
+        assert_eq!(refusal.get_or_insert(json.clone()), &json);
+    }
+}
+
+#[test]
+fn checked_in_ios_example_requires_a_launch_scheme() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("scenarios/ios-simulator.yaml");
+    assert_eq!(
+        Scenario::load(&path).unwrap_err().code,
+        FailureCode::DevClientSchemeRequired
+    );
+}
+
+#[test]
+fn ios_example_with_launch_scheme_is_valid() {
     let scenario = parse(&valid_ios_yaml()).unwrap();
     assert_eq!(scenario.platform, Platform::Ios);
     assert_eq!(scenario.name, "ios-simulator");
@@ -43,6 +91,21 @@ fn checked_in_android_example_is_valid() {
     assert_eq!(android.ssh_host, "nuc");
     assert_eq!(android.farm_path, "bin/android-farm");
     assert_eq!(android.slot, 1);
+}
+
+#[test]
+fn android_scenario_scheme_is_optional_but_uses_the_same_syntax_and_bounds() {
+    let mut scenario = parse(&valid_android_yaml()).unwrap();
+    assert!(scenario.candidate.dev_client_scheme.is_none());
+    scenario.candidate.dev_client_scheme = Some("a".repeat(128));
+    assert!(scenario.validate().is_ok());
+    for scheme in ["", "private://payload", &"a".repeat(129)] {
+        scenario.candidate.dev_client_scheme = Some(scheme.into());
+        let failure = scenario.validate().unwrap_err();
+        assert_eq!(failure.code, FailureCode::ScenarioInvalid);
+        assert!(!failure.detail.contains("private"));
+        assert!(!failure.detail.contains(&"a".repeat(129)));
+    }
 }
 
 #[test]

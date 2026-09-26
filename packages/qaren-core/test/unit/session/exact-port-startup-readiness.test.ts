@@ -1,0 +1,401 @@
+import assert from 'node:assert/strict';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { Socket } from 'node:net';
+import { setImmediate } from 'node:timers/promises';
+import { test, type TestContext } from 'node:test';
+import { CDPClient } from '../../../dist/cdp-client.js';
+import {
+  discoverExactPort,
+  listTargetsOnExactPort,
+  waitForExactPortTargets,
+} from '../../../dist/cdp/discovery.js';
+
+const managedPort = 8341;
+const endpoint = `http://127.0.0.1:${managedPort}/json/list`;
+const filters = {
+  platform: 'ios',
+  bundleId: 'com.example.app',
+  preferredBundleId: 'com.example.app',
+};
+
+function target(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'owned-1',
+    title: 'com.example.app (iPhone)',
+    description: 'React Native Bridgeless [C++ connection]',
+    appId: 'com.example.app',
+    type: 'node',
+    deviceName: 'iPhone',
+    webSocketDebuggerUrl: `ws://127.0.0.1:${managedPort}/inspector/debug?device=owned&page=1`,
+    ...overrides,
+  };
+}
+
+function setup(t: TestContext, respond: typeof fetch) {
+  let now = 10_000;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(performance, 'now', () => now);
+  const subprocess = t.mock.method(childProcess, 'execFileSync', () => {
+    throw new Error('Subprocesses are forbidden in startup readiness tests');
+  });
+  syncBuiltinESMExports();
+  const socket = t.mock.method(Socket.prototype, 'connect', () => {
+    throw new Error('Sockets are forbidden in startup readiness tests');
+  });
+  t.after(() => {
+    subprocess.mock.restore();
+    syncBuiltinESMExports();
+    assert.equal(socket.mock.callCount(), 0, 'readiness and refusal must not attach');
+  });
+  const requested: string[] = [];
+  const fetchMock = t.mock.method(globalThis, 'fetch', (url, options) => {
+    requested.push(String(url));
+    assert.equal(String(url), endpoint, 'only the managed /json/list may be read');
+    return respond(url, options);
+  });
+  return {
+    requested,
+    fetchMock,
+    subprocess,
+    now: () => now,
+    advance: async (ms: number) => {
+      now += ms;
+      t.mock.timers.tick(ms);
+      await setImmediate();
+    },
+  };
+}
+
+test('empty startup targets become selectable on the same exact port after polling', async (t) => {
+  let reads = 0;
+  const clock = setup(t, async () => Response.json(++reads === 1 ? [] : [target()]));
+  let settled = false;
+  const waiting = waitForExactPortTargets(managedPort, 30_000, 500).then(
+    () => {
+      settled = true;
+    },
+    (error: unknown) => error,
+  );
+  await setImmediate();
+  assert.equal(settled, false);
+  assert.deepEqual(clock.requested, [endpoint]);
+
+  await clock.advance(499);
+  assert.equal(settled, false);
+  assert.equal(reads, 1);
+  await clock.advance(1);
+  assert.equal(await waiting, undefined);
+  assert.equal(reads, 2);
+  assert.equal(clock.subprocess.mock.callCount(), 0, 'readiness must not inspect devices');
+
+  const result = await discoverExactPort(managedPort, filters);
+  assert.equal(result.port, managedPort);
+  assert.deepEqual(
+    result.targets.map((entry) => entry.id),
+    ['owned-1'],
+  );
+  assert.deepEqual(clock.requested, [endpoint, endpoint, endpoint]);
+});
+
+test('a non-array target response fails immediately instead of polling', async (t) => {
+  const clock = setup(t, async () => Response.json({ length: 1 }));
+  await assert.rejects(
+    waitForExactPortTargets(managedPort, 30_000, 500),
+    /Invalid CDP target list on port 8341: expected an array/,
+  );
+  assert.deepEqual(clock.requested, [endpoint]);
+  assert.equal(clock.now(), 10_000);
+  assert.equal(clock.subprocess.mock.callCount(), 0);
+});
+
+test('a zero poll interval is refused before making a request', async (t) => {
+  const clock = setup(t, async () => Response.json([target()]));
+  await assert.rejects(waitForExactPortTargets(managedPort, 30_000, 0), {
+    name: 'RangeError',
+    message: /pollMs/,
+  });
+  assert.deepEqual(clock.requested, []);
+});
+
+for (const [label, raw] of [
+  ['expected app', [target()]],
+  ['empty metadata', [{}]],
+  ['null metadata', [null]],
+] as const) {
+  test(`an existing raw target returns immediately without inspecting ${label}`, async (t) => {
+    const clock = setup(t, async () => Response.json(raw));
+    assert.equal(await waitForExactPortTargets(managedPort, 30_000, 500), undefined);
+    assert.equal(clock.now(), 10_000);
+    assert.deepEqual(clock.requested, [endpoint]);
+    assert.equal(clock.subprocess.mock.callCount(), 0);
+    await clock.advance(30_000);
+    assert.deepEqual(clock.requested, [endpoint], 'no background polling remains');
+    assert.equal(clock.fetchMock.mock.calls[0].arguments[1]?.signal?.aborted, false);
+  });
+}
+
+test('forever-empty lists stop at an absolute monotonic deadline despite wall-clock jumps', async (t) => {
+  let wallTime = 1_000_000;
+  t.mock.method(Date, 'now', () => wallTime);
+  const clock = setup(t, async () => Response.json([]));
+  let settled = false;
+  const waiting = assert
+    .rejects(
+      waitForExactPortTargets(managedPort, 1250, 500),
+      /Timed out waiting for CDP targets on port 8341 after 1250ms/,
+    )
+    .then(() => {
+      settled = true;
+    });
+  await setImmediate();
+  await clock.advance(500);
+  wallTime += 1_000_000;
+  await clock.advance(500);
+  wallTime = 0;
+  await clock.advance(249);
+  assert.equal(settled, false);
+  assert.deepEqual(clock.requested, [endpoint, endpoint, endpoint]);
+  await clock.advance(1);
+  await waiting;
+  assert.equal(clock.now(), 11_250);
+  await clock.advance(30_000);
+  assert.deepEqual(clock.requested, [endpoint, endpoint, endpoint]);
+  assert.equal(clock.subprocess.mock.callCount(), 0);
+});
+
+test('a delayed poll wakeup cannot start another request after the deadline', async (t) => {
+  const clock = setup(t, async () => Response.json([]));
+  const waiting = assert.rejects(
+    waitForExactPortTargets(managedPort, 1000, 500),
+    /Timed out waiting for CDP targets/,
+  );
+  await setImmediate();
+  await clock.advance(1001);
+  await waiting;
+  assert.deepEqual(clock.requested, [endpoint]);
+});
+
+function rejectOnAbort(signal: AbortSignal | null | undefined): Promise<never> {
+  assert.ok(signal);
+  return new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('request aborted')), { once: true });
+  });
+}
+
+for (const phase of ['headers', 'body']) {
+  test(`request duration and sleep reduce the next ${phase} timeout to the remaining budget`, async (t) => {
+    let reads = 0;
+    const clock = setup(t, async (_url, options) => {
+      if (++reads === 1) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
+        return Response.json([]);
+      }
+      if (phase === 'headers') return rejectOnAbort(options?.signal);
+      const response = Response.json([]);
+      response.json = () => rejectOnAbort(options?.signal);
+      return response;
+    });
+    let settled = false;
+    const waiting = assert
+      .rejects(
+        waitForExactPortTargets(managedPort, 1000, 500),
+        /Failed to list CDP targets on port 8341: request aborted/,
+      )
+      .then(() => {
+        settled = true;
+      });
+    await clock.advance(200);
+    await clock.advance(499);
+    assert.equal(reads, 1);
+    await clock.advance(1);
+    assert.equal(reads, 2);
+    await clock.advance(299);
+    assert.equal(settled, false);
+    await clock.advance(1);
+    await waiting;
+    assert.equal(clock.now(), 11_000);
+    assert.equal(clock.fetchMock.mock.calls[0].arguments[1]?.signal?.aborted, false);
+    assert.equal(clock.fetchMock.mock.calls[1].arguments[1]?.signal?.aborted, true);
+    await clock.advance(30_000);
+    assert.deepEqual(clock.requested, [endpoint, endpoint], 'aborted requests are never retried');
+  });
+}
+
+test('a request timeout fails once without consuming the entire readiness budget', async (t) => {
+  const clock = setup(t, async (_url, options) => rejectOnAbort(options?.signal));
+  let settled = false;
+  const waiting = assert
+    .rejects(
+      waitForExactPortTargets(managedPort, 30_000, 500),
+      /Failed to list CDP targets on port 8341: request aborted/,
+    )
+    .then(() => {
+      settled = true;
+    });
+  await clock.advance(2999);
+  assert.equal(settled, false);
+  await clock.advance(1);
+  await waiting;
+  assert.equal(clock.now(), 13_000);
+  await clock.advance(30_000);
+  assert.deepEqual(clock.requested, [endpoint]);
+});
+
+for (const delay of [1000, 1001]) {
+  for (const phase of ['headers', 'body']) {
+    test(`a nonempty ${phase} response at ${delay}ms cannot succeed at or after the deadline`, async (t) => {
+      const clock = setup(t, async () => {
+        const response = Response.json([target()]);
+        if (phase === 'headers') {
+          await new Promise<void>((resolve) => setTimeout(resolve, delay));
+        } else {
+          response.json = async () => {
+            await new Promise<void>((resolve) => setTimeout(resolve, delay));
+            return [target()];
+          };
+        }
+        return response;
+      });
+      const waiting = assert.rejects(
+        waitForExactPortTargets(managedPort, 1000, 500),
+        /Timed out waiting for CDP targets on port 8341 after 1000ms/,
+      );
+      await setImmediate();
+      await clock.advance(delay);
+      await waiting;
+      assert.deepEqual(clock.requested, [endpoint]);
+      assert.equal(clock.fetchMock.mock.calls[0].arguments[1]?.signal?.aborted, true);
+    });
+  }
+}
+
+test('transport failures propagate immediately without polling', async (t) => {
+  const clock = setup(t, async () => {
+    throw new Error('connection refused');
+  });
+  await assert.rejects(
+    waitForExactPortTargets(managedPort, 30_000, 500),
+    /Failed to list CDP targets on port 8341: connection refused/,
+  );
+  assert.equal(clock.now(), 10_000);
+  await clock.advance(30_000);
+  assert.deepEqual(clock.requested, [endpoint]);
+});
+
+test('a transport failure after an empty list is not treated as another empty list', async (t) => {
+  let reads = 0;
+  const clock = setup(t, async () => {
+    if (++reads === 1) return Response.json([]);
+    throw new Error('connection reset');
+  });
+  const waiting = assert.rejects(
+    waitForExactPortTargets(managedPort, 30_000, 500),
+    /Failed to list CDP targets on port 8341: connection reset/,
+  );
+  await setImmediate();
+  await clock.advance(500);
+  await waiting;
+  await clock.advance(30_000);
+  assert.deepEqual(clock.requested, [endpoint, endpoint]);
+});
+
+test('invalid JSON propagates immediately without polling', async (t) => {
+  const clock = setup(t, async () => new Response('{'));
+  await assert.rejects(
+    waitForExactPortTargets(managedPort, 30_000, 500),
+    /Failed to list CDP targets on port 8341:/,
+  );
+  assert.equal(clock.now(), 10_000);
+  await clock.advance(30_000);
+  assert.deepEqual(clock.requested, [endpoint]);
+});
+
+for (const raw of [null, {}, 'not an array', 1, false]) {
+  test(`non-array JSON ${JSON.stringify(raw)} is refused without a retry`, async (t) => {
+    const clock = setup(t, async () => Response.json(raw));
+    await assert.rejects(
+      waitForExactPortTargets(managedPort, 30_000, 500),
+      /Invalid CDP target list on port 8341: expected an array/,
+    );
+    assert.equal(clock.now(), 10_000);
+    await clock.advance(30_000);
+    assert.deepEqual(clock.requested, [endpoint]);
+  });
+}
+
+for (const [label, candidate, refusal] of [
+  [
+    'wrong app',
+    target({ appId: 'com.foreign.app', title: 'com.foreign.app (iPhone)' }),
+    /bundleId "com.example.app" not found/,
+  ],
+  ['wrong platform', target({ deviceName: 'Pixel 9' }), /PLATFORM_TARGET_NOT_FOUND/],
+  [
+    'foreign debugger port',
+    target({ webSocketDebuggerUrl: 'ws://127.0.0.1:8081/inspector/debug?page=1' }),
+    /PLATFORM_TARGET_NOT_FOUND/,
+  ],
+  ['invalid metadata', {}, /PLATFORM_TARGET_NOT_FOUND/],
+] as const) {
+  test(`readiness returns on ${label}, but real connectExact still refuses without attachment`, async (t) => {
+    const clock = setup(t, async () => Response.json([candidate]));
+    const client = new CDPClient(managedPort);
+    t.after(() => client.disconnect());
+    assert.equal(await waitForExactPortTargets(managedPort, 30_000, 500), undefined);
+    assert.equal(clock.now(), 10_000);
+    assert.deepEqual(clock.requested, [endpoint]);
+    assert.equal(clock.subprocess.mock.callCount(), 0, 'readiness must not inspect devices');
+
+    await assert.rejects(client.connectExact(managedPort, filters), refusal);
+    assert.equal(client.isConnected, false);
+    assert.equal(client.connectedTarget, null);
+    assert.equal(clock.now(), 10_000);
+    assert.deepEqual(clock.requested, [endpoint, endpoint]);
+  });
+}
+
+test('readiness does not cache authority when the target disappears before connectExact', async (t) => {
+  let reads = 0;
+  const clock = setup(t, async () => Response.json(++reads === 1 ? [target()] : []));
+  const client = new CDPClient(managedPort);
+  t.after(() => client.disconnect());
+  await waitForExactPortTargets(managedPort, 30_000, 500);
+  await assert.rejects(client.connectExact(managedPort, filters), /PLATFORM_TARGET_NOT_FOUND/);
+  assert.equal(client.isConnected, false);
+  assert.equal(client.connectedTarget, null);
+  assert.deepEqual(clock.requested, [endpoint, endpoint]);
+});
+
+test('existing exact-port discovery and listing remain one-shot on empty targets', async (t) => {
+  const clock = setup(t, async () => Response.json([]));
+  const discovery = await discoverExactPort(managedPort, filters);
+  assert.equal(discovery.port, managedPort);
+  assert.deepEqual(discovery.targets, []);
+  assert.equal(discovery.errorCode, 'PLATFORM_TARGET_NOT_FOUND');
+  assert.deepEqual(await listTargetsOnExactPort(managedPort), { port: managedPort, targets: [] });
+  assert.equal(clock.now(), 10_000);
+  assert.deepEqual(clock.requested, [endpoint, endpoint]);
+});
+
+test('invalid ports and unsafe timer arguments are rejected before any request', async (t) => {
+  const clock = setup(t, async () => Response.json([target()]));
+  for (const port of [0, -1, 65536, 8341.5, NaN, Infinity]) {
+    await assert.rejects(waitForExactPortTargets(port, 30_000, 500), {
+      name: 'RangeError',
+      message: /port/,
+    });
+  }
+  for (const value of [0, -1, 0.5, NaN, Infinity, 2_147_483_648]) {
+    await assert.rejects(waitForExactPortTargets(managedPort, value, 500), {
+      name: 'RangeError',
+      message: /timeoutMs/,
+    });
+    await assert.rejects(waitForExactPortTargets(managedPort, 30_000, value), {
+      name: 'RangeError',
+      message: /pollMs/,
+    });
+  }
+  assert.deepEqual(clock.requested, []);
+  assert.equal(clock.subprocess.mock.callCount(), 0);
+});

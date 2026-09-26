@@ -12,23 +12,36 @@ import type { ActResult, WalkerDeps } from '../../../dist/qa/walker.js';
 import type { LedgerRow } from '../../../dist/qa/ledger.js';
 
 export function element(ref: string, label: string, extra: Partial<Element> = {}): Element {
+  const kind = extra.kind ?? 'button';
   return {
     ref,
     label,
-    kind: 'button',
+    kind,
     hittable: true,
     disabled: false,
     secure: false,
     offscreen: false,
+    semantic: {
+      press: ['button', 'switch', 'link', 'cell'].includes(kind) ? 'supported' : 'unsupported',
+      fill: kind === 'input' ? 'supported' : 'unsupported',
+      visibility: extra.offscreen ? 'offscreen' : 'visible',
+    },
     ...extra,
   };
 }
 
 export function screen(
   elements: Element[],
-  visibleText = elements.map((e) => e.label ?? ''),
+  visibleText = elements
+    .filter((e) => e.semantic?.visibility === 'visible')
+    .map((e) => e.label ?? ''),
 ): Screen {
-  return { front: 'app', elements, visibleText };
+  return {
+    front: 'app',
+    elements,
+    visibleText,
+    coverage: { native: 'complete', react: 'complete' },
+  };
 }
 
 export function choice(

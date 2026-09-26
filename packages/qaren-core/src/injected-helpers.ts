@@ -1,8 +1,8 @@
-// Single source of truth for the injected-helpers protocol version. Bump this
-// whenever the injected surface changes; it flows into the IIFE's freshness
-// check (__QAREN.__v) AND the post-injection log line, so they can never
-// drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 75;
+import { PRIVATE_INPUT_LIMITS } from './qa/private-input-limits.js';
+import { TYPOGRAPHY_TEXT_LIMITS } from './qa/host-typography.js';
+
+// Bump when the injected surface changes so warm runtimes replace stale helpers.
+export const HELPERS_VERSION = 87;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -51,29 +51,32 @@ export const INJECTED_HELPERS = `
   // Synchronous scan result; finished stays false after the GH #789 empty-streak exit.
   var lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false, errors: [] };
 
-  function scanError(rendererId, phase, e) {
+  function scanError(rendererId, phase, e, bounds) {
     var message;
-    try { message = String(e && e.message != null ? e.message : e).slice(0, 200); } catch (_) { message = 'unreadable error'; }
+    if (bounds && bounds.private) message = 'Capture refused';
+    else try { message = String(e && e.message != null ? e.message : e).slice(0, 200); } catch (_) { message = 'unreadable error'; }
     if (lastRootScan.errors.length < 5) lastRootScan.errors.push({ rendererId: rendererId, phase: phase, message: message });
   }
 
-  function rootScanCoverage() {
+  function rootScanCoverage(bounds) {
     var reasons = [];
     var registryIds = [];
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     var renderers = hook && hook.renderers;
+    if (bounds && bounds.private && !renderers) registryIds = null;
     if (renderers) {
       if (typeof renderers.keys !== 'function' || typeof renderers.forEach !== 'function') {
         registryIds = null;
       } else {
         try {
-          var iterator = renderers.keys();
+          var iterator = bounds && bounds.private ? Map.prototype.keys.call(renderers) : renderers.keys();
           if (!iterator || typeof iterator.next !== 'function') {
             registryIds = null;
           } else {
             var step;
             var iterations = 0;
             while (registryIds !== null) {
+              if (bounds && Date.now() >= bounds.deadline) { registryIds = null; break; }
               step = iterator.next();
               if (!step || typeof step !== 'object' || typeof step.done !== 'boolean') {
                 registryIds = null;
@@ -91,7 +94,7 @@ export const INJECTED_HELPERS = `
         } catch (_) {
           registryIds = null;
         }
-        if (registryIds !== null) {
+        if (registryIds !== null && !(bounds && bounds.private)) {
           try {
             var forEachIterations = 0;
             renderers.forEach(function(_v, id) {
@@ -157,7 +160,7 @@ export const INJECTED_HELPERS = `
     }
   }
 
-  function findActiveRenderer() {
+  function findActiveRenderer(bounds) {
     lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false, errors: [] };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
@@ -168,6 +171,7 @@ export const INJECTED_HELPERS = `
     }
     var emptyStreak = 0;
     for (var rii = 0; rii < rendererIds.length; rii++) {
+      if (bounds && Date.now() >= bounds.deadline) return null;
       var ri = rendererIds[rii];
       lastRootScan.visited[ri] = true;
       try {
@@ -183,7 +187,7 @@ export const INJECTED_HELPERS = `
         if (!usingRegisteredIds) emptyStreak++;
         lastRootScan.rendererErrors++;
         lastRootScan.erroredRendererIds.push(ri);
-        scanError(ri, 'roots', e);
+        scanError(ri, 'roots', e, bounds);
       }
     }
     lastRootScan.finished = true;
@@ -202,9 +206,10 @@ export const INJECTED_HELPERS = `
   // extra-roots step (globalThis.__QAREN_EXTRA_ROOTS__) runs AFTER the
   // native renderer loop so user-registered portals stay lower priority
   // than React's own registry.
-  function iterateAllRoots(cb) {
+  function iterateAllRoots(cb, bounds) {
     lastRootScan = { rendererErrors: 0, erroredRendererIds: [], extraRootsError: false, visited: {}, finished: false, errors: [] };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    var rootVisits = 0;
     if (hook && typeof hook.getFiberRoots === 'function') {
       var rendererIds = getRegisteredRendererIds(hook);
       var usingRegisteredIds = rendererIds.length > 0;
@@ -214,6 +219,7 @@ export const INJECTED_HELPERS = `
       var emptyStreak = 0;
       var abortedEarly = false;
       for (var rii = 0; rii < rendererIds.length; rii++) {
+        if (bounds && Date.now() >= bounds.deadline) return null;
         var ri = rendererIds[rii];
         lastRootScan.visited[ri] = true;
         var roots;
@@ -223,7 +229,7 @@ export const INJECTED_HELPERS = `
           if (!usingRegisteredIds) emptyStreak++;
           lastRootScan.rendererErrors++;
           lastRootScan.erroredRendererIds.push(ri);
-          scanError(ri, 'roots', e);
+          scanError(ri, 'roots', e, bounds);
           continue;
         }
         try {
@@ -232,8 +238,11 @@ export const INJECTED_HELPERS = `
             var it = roots.values();
             var v;
             while (!(v = it.next()).done) {
-              if (v.value && v.value.current) {
-                var result = cb(v.value.current, ri);
+              if (bounds && (++rootVisits > 100 || Date.now() >= bounds.deadline)) return null;
+              var current = bounds && bounds.private ? qaData(v.value, 'current') : v.value && v.value.current;
+              if (bounds && bounds.private && (!current || typeof current !== 'object')) throw new Error('Capture refused');
+              if (current) {
+                var result = cb(current, ri, v.value);
                 if (result) return result;
               }
             }
@@ -248,7 +257,7 @@ export const INJECTED_HELPERS = `
           if (!usingRegisteredIds) emptyStreak++;
           lastRootScan.rendererErrors++;
           lastRootScan.erroredRendererIds.push(ri);
-          scanError(ri, 'walk', e);
+          scanError(ri, 'walk', e, bounds);
         }
       }
       if (!abortedEarly) lastRootScan.finished = true;
@@ -264,9 +273,14 @@ export const INJECTED_HELPERS = `
     try {
       var extraResolver = globalThis.__QAREN_EXTRA_ROOTS__;
       if (typeof extraResolver === 'function') {
+        if (bounds && bounds.private) throw new Error('Capture refused');
         var instances = extraResolver();
         if (Array.isArray(instances)) {
           for (var i = 0; i < instances.length; i++) {
+            if (bounds && (++rootVisits > 100 || Date.now() >= bounds.deadline)) {
+              lastRootScan.finished = false;
+              return null;
+            }
             var extraFiber = extractFiberFromInstance(instances[i]);
             if (extraFiber) {
               var extraResult = cb(extraFiber, -1);
@@ -279,7 +293,7 @@ export const INJECTED_HELPERS = `
       // swallow — resolver bug must not break iteration
       lastRootScan.rendererErrors++;
       lastRootScan.extraRootsError = true;
-      scanError(-1, 'extra-roots', e);
+      scanError(-1, 'extra-roots', e, bounds);
     }
     return null;
   }
@@ -316,12 +330,12 @@ export const INJECTED_HELPERS = `
   // that must reach all user components use this helper, not
   // findActiveRenderer. Delegates the iteration to iterateAllRoots; the
   // collector cb explicitly returns null to never short-circuit.
-  function findAllRootFibers() {
+  function findAllRootFibers(bounds) {
     var out = [];
-    iterateAllRoots(function(rootFiber, rendererId) {
-      out.push({ rendererId: rendererId, fiber: rootFiber });
+    iterateAllRoots(function(rootFiber, rendererId, root) {
+      out.push({ rendererId: rendererId, fiber: rootFiber, root: root });
       return null; // explicit — keep collecting, never short-circuit
-    });
+    }, bounds);
     return out;
   }
 
@@ -493,9 +507,661 @@ export const INJECTED_HELPERS = `
     }
   }
 
+  // Interactive evidence is helper-built plain data with producer-owned bounds; never truncate it.
+  function evidenceJson(out) {
+    try {
+      var json = JSON.stringify(out);
+      return json.length > 999999 ? JSON.stringify({ __agent_truncated: true, originalLength: json.length }) : json;
+    } catch (_) {
+      return JSON.stringify({ __agent_error: 'Serialization failed' });
+    }
+  }
+
+  function typographyHostType(fiber) {
+    if (fiber.tag !== 5) return null;
+    var state = fiber.stateNode;
+    var config = state && (state.canonical ? state.canonical.viewConfig : state.viewConfig);
+    var name = config && config.uiViewClassName;
+    if (typeof name !== 'string') name = typeof fiber.type === 'string' ? fiber.type : null;
+    return name && name.length <= 200 ? name : null;
+  }
+
+  // RN dev renderers deep-freeze host prop values into bound identity accessors.
+  function descriptorValue(object, descriptor) {
+    if (Object.prototype.hasOwnProperty.call(descriptor, 'value')) return descriptor.value;
+    var get = descriptor.get;
+    var set = descriptor.set;
+    var getName = typeof get === 'function' && Object.getOwnPropertyDescriptor(get, 'name');
+    var setName = typeof set === 'function' && Object.getOwnPropertyDescriptor(set, 'name');
+    if (!Object.isFrozen(object) || !getName || getName.value !== 'bound identity'
+      || !setName || setName.value !== 'bound throwOnImmutableMutation') throw new Error('Capture refused');
+    return Reflect.apply(get, object, []);
+  }
+
+  // Only nested public evidence may pass devFrozen; input facts stay data-only.
+  function qaData(object, key, devFrozen) {
+    if (object == null) return undefined;
+    if (typeof object !== 'object' && typeof object !== 'function') throw new Error('Capture refused');
+    var descriptor = Object.getOwnPropertyDescriptor(object, key);
+    if (!descriptor && !(key in object)) return undefined;
+    if (!descriptor || (devFrozen !== true && !Object.prototype.hasOwnProperty.call(descriptor, 'value'))) throw new Error('Capture refused');
+    return descriptorValue(object, descriptor);
+  }
+
+  function qaHostType(fiber) {
+    var state = qaData(fiber, 'stateNode');
+    var canonical = qaData(state, 'canonical');
+    var config = qaData(canonical || state, 'viewConfig');
+    var name = qaData(config, 'uiViewClassName');
+    if (name != null && (typeof name !== 'string' || name.length > 200)) throw new Error('Capture refused');
+    var type = qaData(fiber, 'type');
+    return name || (typeof type === 'string' ? type : null);
+  }
+
+  var qaCaptureSlot = null;
+  var qaCaptureCounter = 0;
+
+  function releaseQaCapture(slot) {
+    if (!slot) return;
+    clearTimeout(slot.timer);
+    if (slot.capture) slot.capture.release();
+    slot.capture = null;
+    slot.tree = undefined;
+    slot.state = 'refused';
+    if (qaCaptureSlot === slot) qaCaptureSlot = null;
+  }
+
+  function readQaCapture(id) {
+    var safeId = typeof id === 'string' && /^[a-f0-9]{1,32}$/.test(id) ? id : '0';
+    var reply = { v: 1, id: safeId, state: 'refused' };
+    var slot = qaCaptureSlot;
+    if (!slot || slot.id !== safeId) return reply;
+    if (Date.now() >= slot.expires) { releaseQaCapture(slot); return reply; }
+    reply.state = slot.state;
+    if (slot.state === 'ready') reply.tree = slot.tree;
+    if (slot.state !== 'pending') releaseQaCapture(slot);
+    return reply;
+  }
+
+  function beginQaCapture(typography) {
+    releaseQaCapture(qaCaptureSlot);
+    qaCaptureCounter = (qaCaptureCounter + 1) % 0x100000000;
+    var start = Date.now();
+    var slot = { id: start.toString(16) + qaCaptureCounter.toString(16), state: 'pending', expires: start + 1500 };
+    qaCaptureSlot = slot;
+    var inputs = { version: 1, complete: false, facts: [] };
+    function completed(tree) {
+      if (qaCaptureSlot !== slot || !slot.capture) return;
+      slot.state = slot.capture.accepted && typeof tree === 'string' && Date.now() < slot.capture.deadline ? 'ready' : 'refused';
+      if (slot.state === 'ready') slot.tree = tree;
+      slot.capture.release();
+      slot.capture = null;
+    }
+    try {
+      slot.capture = createTypographyCapture(start, inputs, typography === true);
+      slot.timer = setTimeout(function() { releaseQaCapture(slot); }, 1500);
+      var tree = getTree({ interactiveOnly: true, semanticEvidence: true, typographyEvidence: typography === true }, slot.capture);
+      if (tree && typeof tree.then === 'function') tree.then(completed, function() { completed(null); });
+      else completed(tree);
+      if (!inputs.complete) {
+        inputs.facts = [];
+        slot.state = 'refused';
+        releaseQaCapture(slot);
+      }
+    } catch (_) {
+      inputs.complete = false;
+      inputs.facts = [];
+      slot.state = 'refused';
+      releaseQaCapture(slot);
+    }
+    if (slot.state === 'refused') { inputs.complete = false; inputs.facts = []; releaseQaCapture(slot); }
+    var reply = { v: 1, id: slot.id, inputs: JSON.parse(JSON.stringify(inputs)), state: slot.state };
+    if (slot.state === 'ready') { reply.tree = slot.tree; releaseQaCapture(slot); }
+    return reply;
+  }
+
+  function createTypographyCapture(start, privateInputs, measureTypography) {
+    var deadline = start + 1000;
+    var evidence = { version: 1, complete: true, durationMs: 0, coordinateSpace: 'window-points', nodes: [] };
+    var records = new WeakMap();
+    var captured = [];
+    var hostRecords = [];
+    var totalChars = 0;
+    var textVisits = 0;
+    var styleVisits = 0;
+    var ownershipVisits = 0;
+    var rendererExport;
+    var rendererSearched = false;
+    var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    var inputChars = 0;
+    var inputCount = 0;
+    var inputSnapshots = [];
+    var released = false;
+    var cancel;
+    var capture;
+    var rendererCoverage;
+
+    function propertyFacts(fiber) {
+      var props = qaData(fiber, 'memoizedProps');
+      // HostText and Fragment fibers carry their children as props; identity is the whole fact.
+      if (props == null || typeof props !== 'object' || Array.isArray(props)) return [props];
+      var keys = ['role', 'accessibilityRole', 'testID', 'nativeID', 'disabled', 'aria-disabled', 'editable', 'readOnly', 'aria-readonly', 'title', 'accessibilityLabel', 'placeholder', 'value', 'onPress', 'onPressIn', 'onLongPress', 'onChangeText', 'onValueChange', 'onChange', 'onSubmitEditing', 'onClick'];
+      var values = [];
+      for (var ki = 0; ki < keys.length; ki++) values.push(qaData(props, keys[ki]));
+      values.push(qaData(qaData(props, 'accessibilityState'), 'disabled', true));
+      return values;
+    }
+
+    function prepare(fiber) {
+      if (!privateInputs) return;
+      if (!fiber || typeof fiber !== 'object') throw new Error('Capture refused');
+      var fields = ['memoizedProps', 'return', 'child', 'sibling', 'stateNode', 'type', 'tag', 'memoizedState'];
+      for (var fi = 0; fi < fields.length; fi++) qaData(fiber, fields[fi]);
+      if (isHostFiber(fiber)) qaHostType(fiber);
+    }
+
+    function nameOf(fiber) {
+      var type = qaData(fiber, 'type');
+      var seen = [];
+      function data(object, key) {
+        var descriptor = Object.getOwnPropertyDescriptor(object, key);
+        return descriptor && Object.prototype.hasOwnProperty.call(descriptor, 'value') ? descriptor.value : undefined;
+      }
+      try {
+        for (var hop = 0; hop <= 2; hop++) {
+          if (!type || (typeof type !== 'object' && typeof type !== 'function') || seen.indexOf(type) !== -1) return null;
+          seen.push(type);
+          var keys = ['displayName', 'name'];
+          for (var ni = 0; ni < keys.length; ni++) {
+            var name = data(type, keys[ni]);
+            if (typeof name === 'string' && name.length > 0 && name.length <= 200) return name;
+          }
+          if (hop === 2) return null;
+          var marker = data(type, '$$typeof');
+          if (marker === Symbol.for('react.memo')) type = data(type, 'type');
+          else if (marker === Symbol.for('react.forward_ref')) type = data(type, 'render');
+          else return null;
+        }
+      } catch (_) {}
+      return null;
+    }
+
+    function inputFacts(fiber, hostIndex) {
+      var props = qaData(fiber, 'memoizedProps');
+      if (!props || typeof props !== 'object' || Array.isArray(props)) throw new Error('Capture refused');
+      var proto = Object.getPrototypeOf(props);
+      if (proto !== null && Object.getPrototypeOf(proto) !== null) throw new Error('Capture refused');
+      var name = qaHostType(fiber);
+      var known = ['TextInput', 'RCTTextInput', 'RCTSinglelineTextInputView', 'RCTMultilineTextInputView', 'AndroidTextInput'].indexOf(name) !== -1;
+      var secure = qaData(props, 'secureTextEntry');
+      var value = qaData(props, 'value');
+      var text = qaData(props, 'text');
+      var fallback = qaData(props, 'defaultValue');
+      var changeText = qaData(props, 'onChangeText');
+      var change = qaData(props, 'onChange');
+      var input = known || secure != null || changeText != null || text != null || fallback != null
+        || typeof value === 'string';
+      var candidates = [value, text, fallback];
+      var snapshot = candidates.concat([secure, changeText, change, name]);
+      if (!input) return { snapshot: snapshot, fact: null };
+      if (secure != null && typeof secure !== 'boolean') throw new Error('Capture refused');
+      // RN forwards controlled value; text/defaultValue can stay stale after native edits.
+      if (typeof value !== 'string') throw new Error('Capture refused');
+      var values = [];
+      for (var vi = 0; vi < candidates.length; vi++) {
+        var candidate = candidates[vi];
+        if (candidate == null) continue;
+        if (typeof candidate !== 'string' || candidate.length > ${PRIVATE_INPUT_LIMITS.maxValueChars} || values.length >= ${PRIVATE_INPUT_LIMITS.maxValuesPerHost}) throw new Error('Capture refused');
+        values.push(candidate);
+      }
+      return { snapshot: snapshot, fact: { hostIndex: hostIndex, values: values, secure: secure === true } };
+    }
+
+    function observeInput(fiber, hostIndex) {
+      if (!privateInputs || hostIndex === null) return;
+      var input = inputFacts(fiber, hostIndex);
+      inputSnapshots.push({ fiber: fiber, hostIndex: hostIndex, values: input.snapshot });
+      if (!input.fact) return;
+      for (var vi = 0; vi < input.fact.values.length; vi++) {
+        inputChars += input.fact.values[vi].length;
+        if (++inputCount > ${PRIVATE_INPUT_LIMITS.maxValues} || inputChars > ${PRIVATE_INPUT_LIMITS.maxTotalChars}) throw new Error('Capture refused');
+      }
+      privateInputs.facts.push(input.fact);
+    }
+
+    function release() {
+      released = true;
+      if (cancel) { var stop = cancel; cancel = null; stop(); }
+      captured.length = 0;
+      hostRecords.length = 0;
+      inputSnapshots.length = 0;
+      records = new WeakMap();
+      privateInputs = null;
+      hook = null;
+      rendererExport = null;
+    }
+
+    function ownData(object, key) {
+      if (!object || typeof object !== 'object') return undefined;
+      var descriptor = Object.getOwnPropertyDescriptor(object, key);
+      return descriptor ? descriptorValue(object, descriptor) : undefined;
+    }
+
+    function accessibilityFacts(props) {
+      function fact(keys, boolean) {
+        try {
+          if (!props || typeof props !== 'object' || Array.isArray(props)) return 'unknown';
+          var present = false;
+          for (var i = 0; i < keys.length; i++) {
+            var key = keys[i];
+            if (!Object.getOwnPropertyDescriptor(props, key) && key in props) return 'unknown';
+            var value = ownData(props, key);
+            if (value == null) continue;
+            if (boolean) return value === true ? 'true' : value === false ? 'false' : 'unknown';
+            if (typeof value !== 'string') return 'unknown';
+            if (value.length > 0) present = true;
+          }
+          return present ? 'present' : 'absent';
+        } catch (_) { return 'unknown'; }
+      }
+      return {
+        accessible: fact(['accessible'], true),
+        authoredLabel: fact(['accessibilityLabel', 'aria-label', 'accessibilityLabelledBy', 'aria-labelledby'], false)
+      };
+    }
+
+    function inactiveCssSelection(value, allowEmpty) {
+      if (value === 'none') return true;
+      if (!Array.isArray(value) || value.length > 128 || (!allowEmpty && value.length === 0)) return false;
+      for (var i = 0; i < value.length; i++) {
+        if (++ownershipVisits > 16384 || Date.now() >= deadline || ownData(value, String(i)) !== 'none') return false;
+      }
+      return true;
+    }
+
+    function configuredCssAnimation(style) {
+      var animation = ownData(style, 'animationName');
+      if (animation != null && !inactiveCssSelection(animation, true)) return true;
+      var property = ownData(style, 'transitionProperty');
+      var shorthand = ownData(style, 'transition');
+      if (property !== undefined && !inactiveCssSelection(property, true)) return true;
+      if (shorthand !== undefined && !inactiveCssSelection(shorthand, true)) return true;
+      if (property !== undefined && shorthand !== undefined) {
+        return !inactiveCssSelection(property, false) || !inactiveCssSelection(shorthand, false);
+      }
+      if (inactiveCssSelection(property, false) || inactiveCssSelection(shorthand, false)) return false;
+      var settings = ['transitionDuration', 'transitionDelay', 'transitionTimingFunction', 'transitionBehavior'];
+      for (var i = 0; i < settings.length; i++) {
+        if (ownData(style, settings[i]) !== undefined) return true;
+      }
+      return false;
+    }
+
+    function animationFacts(value) {
+      var pending = [{ value: value, depth: 0 }];
+      var seen = new WeakSet();
+      var visits = 0;
+      while (pending.length) {
+        if (++visits > 128 || ++ownershipVisits > 16384 || Date.now() >= deadline) return true;
+        var item = pending.pop();
+        var current = item.value;
+        if (current == null || typeof current !== 'object') {
+          if (typeof current === 'function') return true;
+          continue;
+        }
+        if (item.depth > 16) return true;
+        if (seen.has(current)) continue;
+        seen.add(current);
+        // Original animation handles survive on owners even when native props contain only initial values.
+        if ('viewDescriptors' in current || '_isReanimatedSharedValue' in current
+          || '__getValue' in current || '__getAnimatedValue' in current) return true;
+        if (Array.isArray(current)) {
+          if (current.length > 128 || pending.length + current.length > 128) return true;
+          for (var ai = current.length - 1; ai >= 0; ai--) pending.push({ value: ownData(current, String(ai)), depth: item.depth + 1 });
+        } else {
+          var proto = Object.getPrototypeOf(current);
+          if (proto !== null && Object.getPrototypeOf(proto) !== null) return true;
+          if (configuredCssAnimation(current)) return true;
+          var keys = 0;
+          for (var key in current) {
+            if (++keys > 128 || pending.length >= 128) return true;
+            var nested = ownData(current, key);
+            if (nested !== null && (typeof nested === 'object' || typeof nested === 'function')) pending.push({ value: nested, depth: item.depth + 1 });
+          }
+        }
+      }
+      return false;
+    }
+
+    function animatedTypographyOwner(fiber) {
+      try {
+        var props = fiber.memoizedProps;
+        var layoutFields = ['entering', 'exiting', 'layout'];
+        for (var li = 0; li < layoutFields.length; li++) {
+          var configuration = ownData(props, layoutFields[li]);
+          if (configuration != null && configuration !== false) return true;
+        }
+        var fields = ['style', 'animatedProps', 'allowFontScaling', 'maxFontSizeMultiplier', 'adjustsFontSizeToFit', 'minimumFontScale', 'dynamicTypeRamp'];
+        for (var pi = 0; pi < fields.length; pi++) {
+          var value = ownData(props, fields[pi]);
+          if (value != null && animationFacts(value)) return true;
+        }
+        if (fiber.tag === 1 && fiber.stateNode) {
+          if (animationFacts(ownData(fiber.stateNode, '_animatedStyles'))
+            || animationFacts(ownData(fiber.stateNode, '_animatedProps'))
+            || animationFacts(ownData(fiber.stateNode, '_cssStyle'))
+            || animationFacts(ownData(ownData(fiber.stateNode, '_InlinePropManager'), '_inlineProps'))) return true;
+        }
+        return false;
+      } catch (_) { return true; }
+    }
+
+    function observe(fiber, frame, hostIndex) {
+      observeInput(fiber, hostIndex);
+      var record = {
+        fiber: fiber, props: fiber.memoizedProps, parent: fiber.return,
+        child: fiber.child, sibling: fiber.sibling, state: fiber.stateNode,
+        type: fiber.type, tag: fiber.tag, rootIndex: frame.rootIndex,
+        hostIndex: hostIndex, hostType: typographyHostType(fiber),
+        ancestryValid: fiber.return === frame.parentFiber || sameFiber(fiber.return, frame.parentFiber),
+        childParent: fiber.child && fiber.child.return,
+        siblingParent: fiber.sibling && fiber.sibling.return,
+        animated: (!privateInputs || measureTypography) && (frame.animatedTypography === true || animatedTypographyOwner(fiber)),
+        canonical: fiber.stateNode && fiber.stateNode.canonical
+      };
+      if (privateInputs) record.primitiveProps = propertyFacts(fiber);
+      records.set(fiber, record);
+      captured.push(record);
+      if (hostIndex !== null && (!privateInputs || measureTypography)) {
+        var node = {
+          hostIndex: hostIndex, parentHostIndex: frame.parentHostIndex,
+          rootIndex: frame.rootIndex, hostType: record.hostType, text: { kind: 'none' }
+        };
+        if (record.hostType !== 'RCTVirtualText') node.accessibility = accessibilityFacts(record.props);
+        record.node = node;
+        hostRecords.push(record);
+        evidence.nodes.push(node);
+        if (record.hostType === 'RCTVirtualText') {
+          node.text = frame.textOwnerHostIndex === null
+            ? { kind: 'unsupported' }
+            : { kind: 'inline', ownerHostIndex: frame.textOwnerHostIndex };
+        }
+      }
+      return record;
+    }
+
+    function textStyle(props, inherited) {
+      var flattened = {};
+      var keys = ['fontSize', 'fontSizeMultiplier', 'textTransform', 'transform', 'dynamicTypeRamp', 'allowFontScaling', 'maxFontSizeMultiplier'];
+      var pending = [{ value: ownData(props, 'style'), depth: 0 }];
+      var visits = 0;
+      while (pending.length) {
+        if (++visits > 128 || ++styleVisits > 8192 || Date.now() >= deadline) return null;
+        var item = pending.pop();
+        var value = item.value;
+        if (value == null || value === false) continue;
+        if (typeof value !== 'object' || item.depth > 16) return null;
+        if (Array.isArray(value)) {
+          if (value.length > 128 || pending.length + value.length > 128) return null;
+          for (var ai = value.length - 1; ai >= 0; ai--) pending.push({ value: ownData(value, String(ai)), depth: item.depth + 1 });
+        } else {
+          var proto = Object.getPrototypeOf(value);
+          if (proto !== null && Object.getPrototypeOf(proto) !== null) return null;
+          if ('__getValue' in value || 'viewDescriptors' in value || 'initial' in value) return null;
+          for (var ki = 0; ki < keys.length; ki++) {
+            var descriptor = Object.getOwnPropertyDescriptor(value, keys[ki]);
+            if (!descriptor) continue;
+            try { flattened[keys[ki]] = descriptorValue(value, descriptor); } catch (_) { return null; }
+          }
+        }
+      }
+      if ((props.adjustsFontSizeToFit != null && props.adjustsFontSizeToFit !== false)
+        || props.dynamicTypeRamp != null || props.minimumFontScale != null || props.fontSizeMultiplier != null
+        || flattened.fontSizeMultiplier != null || flattened.dynamicTypeRamp != null
+        || flattened.allowFontScaling != null || flattened.maxFontSizeMultiplier != null
+        || (flattened.textTransform != null && flattened.textTransform !== 'none')
+        || (flattened.transform != null && (!Array.isArray(flattened.transform) || flattened.transform.length !== 0))) return null;
+      var size = flattened.fontSize == null ? inherited.fontSize : flattened.fontSize;
+      var allow = props.allowFontScaling == null ? inherited.allowFontScaling : props.allowFontScaling;
+      var max = props.maxFontSizeMultiplier == null ? inherited.maxFontSizeMultiplier : props.maxFontSizeMultiplier;
+      if (typeof size !== 'number' || !Number.isFinite(size) || size <= 0
+        || typeof allow !== 'boolean' || typeof max !== 'number' || !Number.isFinite(max)
+        || (max !== 0 && max < 1)) return null;
+      return { fontSize: size, allowFontScaling: allow, maxFontSizeMultiplier: max };
+    }
+
+    function blockText(owner) {
+      if (owner.animated) return { kind: 'unsupported' };
+      // RN TextAttributes::defaultTextAttributes uses 14 points before scaling.
+      var base = textStyle(owner.props || {}, { fontSize: 14, allowFontScaling: true, maxFontSizeMultiplier: 0 });
+      if (!base) return { kind: 'unsupported' };
+      var content = '';
+      var runs = [];
+      var stack = owner.child ? [{ fiber: owner.child, style: base }] : [];
+      var visits = 0;
+      var seen = new WeakSet();
+      while (stack.length) {
+        if (++visits > 256 || ++textVisits > 5000 || Date.now() >= deadline) return { kind: 'unsupported' };
+        var entry = stack.pop();
+        var record = records.get(entry.fiber);
+        if (!record || record.animated || seen.has(entry.fiber) || record.rootIndex !== owner.rootIndex) return { kind: 'unsupported' };
+        seen.add(entry.fiber);
+        if (record.sibling) stack.push({ fiber: record.sibling, style: entry.style });
+        var style = entry.style;
+        if (record.tag === 6) {
+          if (typeof record.props !== 'string' || record.child) return { kind: 'unsupported' };
+          if (content.length + record.props.length > ${TYPOGRAPHY_TEXT_LIMITS.maxContentChars} || totalChars + record.props.length > ${TYPOGRAPHY_TEXT_LIMITS.maxTotalChars}) return { kind: 'unsupported' };
+          if (record.props.length) {
+            var last = runs[runs.length - 1];
+            var end = content.length + record.props.length;
+            if (last && last.fontSize === style.fontSize) last.end = end;
+            else {
+              if (runs.length >= 128) return { kind: 'unsupported' };
+              runs.push({ start: content.length, end: end, fontSize: style.fontSize });
+            }
+            totalChars += record.props.length;
+            content += record.props;
+          }
+        } else {
+          if (isHostFiber(record.fiber)) {
+            if (record.hostType !== 'RCTVirtualText') return { kind: 'unsupported' };
+            style = textStyle(record.props || {}, style);
+            if (!style || style.allowFontScaling !== base.allowFontScaling || style.maxFontSizeMultiplier !== base.maxFontSizeMultiplier) return { kind: 'unsupported' };
+          } else if (record.tag === 4 || (record.tag === 22 && record.fiber.memoizedState != null)) return { kind: 'unsupported' };
+          if (record.child) stack.push({ fiber: record.child, style: style });
+        }
+      }
+      return { kind: 'block', content: content, runs: runs, scaling: { allowFontScaling: base.allowFontScaling, maxFontSizeMultiplier: base.maxFontSizeMultiplier } };
+    }
+
+    function findRendererExport() {
+      if (rendererSearched) return rendererExport;
+      rendererSearched = true;
+      var metro = globalThis.__r;
+      if (!metro || typeof metro.getModules !== 'function') return null;
+      var modules = metro.getModules();
+      if (!modules || typeof modules.values !== 'function') return null;
+      var iterator = modules.values();
+      for (var i = 0; i < 20000 && Date.now() < deadline; i++) {
+        var step = iterator.next();
+        if (step.done) return rendererExport;
+        var mod = step.value;
+        if (!mod || mod.isInitialized !== true || typeof mod.verboseName !== 'string') continue;
+        if (!mod.verboseName.endsWith('/react-native/Libraries/Renderer/implementations/ReactFabric-dev.js')) continue;
+        var exports = mod.publicModule && mod.publicModule.exports;
+        if (exports && typeof exports.getPublicInstanceFromInternalInstanceHandle === 'function') {
+          if (rendererExport) return (rendererExport = null);
+          rendererExport = exports;
+        }
+      }
+      return (rendererExport = null);
+    }
+
+    function publicInstance(record) {
+      if (record.tag !== 5) return null;
+      var state = record.state;
+      if (!state) return null;
+      if (state.canonical) {
+        if (state.canonical.publicInstance) return state.canonical.publicInstance;
+        var exports = findRendererExport();
+        return exports ? exports.getPublicInstanceFromInternalInstanceHandle(record.fiber) : null;
+      }
+      return state;
+    }
+
+    function unchanged(roots) {
+      if (released || (privateInputs && Date.now() >= deadline)) return false;
+      if (globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ !== hook) return false;
+      var currentRoots = findAllRootFibers(privateInputs ? capture : { deadline: Infinity });
+      if (!lastRootScan.finished || lastRootScan.rendererErrors || currentRoots.length !== roots.length) return false;
+      if (privateInputs) {
+        var coverage = rootScanCoverage(capture);
+        if (coverage.reasons.length || JSON.stringify(coverage.registeredRendererIds) !== rendererCoverage) return false;
+      }
+      for (var ri = 0; ri < roots.length; ri++) {
+        var root = roots[ri];
+        if (!root.root || (privateInputs ? qaData(root.root, 'current') : root.root.current) !== root.fiber || root.rendererId < 0) return false;
+        if (currentRoots[ri].fiber !== root.fiber || currentRoots[ri].rendererId !== root.rendererId) return false;
+        if (privateInputs && currentRoots[ri].root !== root.root) return false;
+      }
+      for (var ci = 0; ci < captured.length; ci++) {
+        if (privateInputs && Date.now() >= deadline) return false;
+        var r = captured[ci];
+        var f = r.fiber;
+        prepare(f);
+        if (privateInputs) {
+          var primitiveProps = propertyFacts(f);
+          for (var ppi = 0; ppi < primitiveProps.length; ppi++) if (primitiveProps[ppi] !== r.primitiveProps[ppi]) return false;
+        }
+        if (!r.ancestryValid || f.memoizedProps !== r.props || f.return !== r.parent || f.child !== r.child
+          || f.sibling !== r.sibling || f.stateNode !== r.state || f.type !== r.type || f.tag !== r.tag
+          || (r.child && (r.child.return !== r.childParent || !sameFiber(r.childParent, f)))
+          || (r.sibling && (r.sibling.return !== r.siblingParent || (r.siblingParent !== r.parent && !sameFiber(r.siblingParent, r.parent))))
+          || (f.stateNode && f.stateNode.canonical) !== r.canonical || typographyHostType(f) !== r.hostType) return false;
+        if (r.node && r.node.accessibility && JSON.stringify(accessibilityFacts(r.props)) !== JSON.stringify(r.node.accessibility)) return false;
+      }
+      for (var ii = 0; ii < inputSnapshots.length; ii++) {
+        if (Date.now() >= deadline) return false;
+        var prior = inputSnapshots[ii];
+        var now = inputFacts(prior.fiber, prior.hostIndex).snapshot;
+        for (var pi = 0; pi < now.length; pi++) if (now[pi] !== prior.values[pi]) return false;
+      }
+      return true;
+    }
+
+    function finish(out, roots) {
+      evidence.complete = evidence.complete && out.hostEvidence.complete;
+      if (privateInputs) {
+        var coverage = rootScanCoverage(capture);
+        rendererCoverage = JSON.stringify(coverage.registeredRendererIds);
+        evidence.complete = evidence.complete && coverage.reasons.length === 0;
+        privateInputs.complete = evidence.complete;
+        if (!measureTypography) {
+          capture.accepted = privateInputs.complete && unchanged(roots);
+          privateInputs.complete = capture.accepted;
+          return capture.accepted ? evidenceJson(out) : null;
+        }
+      }
+      var tasks = [];
+      for (var hi = 0; hi < hostRecords.length; hi++) {
+        var record = hostRecords[hi];
+        try {
+          if (record.hostType === 'RCTText') record.node.text = blockText(record);
+          record.requiredMeasurement = record.hostType === 'RCTText' || typeof out.hostEvidence.hosts[hi].testID === 'string';
+          if (record.hostType !== 'RCTVirtualText') tasks.push(record);
+        } catch (_) { record.node.text = { kind: 'unsupported' }; evidence.complete = false; }
+      }
+      record = null;
+      out.hostEvidence.typography = evidence;
+      return new Promise(function(resolve) {
+        var next = 0;
+        var active = 0;
+        var done = false;
+        var timer;
+        function settle(timedOut) {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          cancel = null;
+          if (released) { roots = []; tasks = []; resolve(null); return; }
+          if (timedOut) evidence.complete = false;
+          var stable = false;
+          try { stable = unchanged(roots); } catch (_) {}
+          roots = [];
+          tasks = [];
+          if (privateInputs) capture.accepted = privateInputs.complete && stable && !timedOut && Date.now() < deadline;
+          if (!stable) {
+            evidence.complete = false;
+            for (var ni = 0; ni < evidence.nodes.length; ni++) {
+              var node = evidence.nodes[ni];
+              delete node.rect;
+              if (node.text.kind !== 'none') node.text = { kind: 'unsupported' };
+            }
+          }
+          evidence.durationMs = Math.max(0, Date.now() - start);
+          if (evidence.durationMs >= 1000) evidence.complete = false;
+          resolve(evidenceJson(out));
+        }
+        function measure(record, measurementIndex) {
+          var called = false;
+          function complete(x, y, width, height) {
+            if (called || done) return;
+            called = true;
+            if (Date.now() >= deadline) { settle(true); return; }
+            var measured = hostRecords[measurementIndex];
+            if (!measured) { settle(true); return; }
+            if ([x, y, width, height].every(function(v) { return typeof v === 'number' && Number.isFinite(v); }) && width >= 0 && height >= 0) {
+              measured.node.rect = { x: x, y: y, width: width, height: height };
+              if (measured.requiredMeasurement && (width === 0 || height === 0)) evidence.complete = false;
+            } else if (measured.requiredMeasurement) evidence.complete = false;
+            active--;
+            Promise.resolve().then(pump);
+          }
+          try {
+            var instance = publicInstance(record);
+            if (Date.now() >= deadline) { settle(true); return; }
+            var owner = instance;
+            var method;
+            for (var depth = 0; owner && depth < 8; depth++, owner = Object.getPrototypeOf(owner)) {
+              var descriptor = Object.getOwnPropertyDescriptor(owner, 'measureInWindow');
+              if (descriptor) { method = descriptor.value; break; }
+            }
+            if (typeof method === 'function') method.call(instance, complete);
+            else complete();
+          } catch (_) { complete(); }
+          finally { record = null; instance = null; owner = null; method = null; descriptor = null; }
+        }
+        function pump() {
+          if (done) return;
+          if (Date.now() >= deadline) { settle(true); return; }
+          while (!done && active < 8 && next < tasks.length) {
+            active++;
+            var task = tasks[next++];
+            measure(task, hostRecords.indexOf(task));
+          }
+          if (!done && next === tasks.length && active === 0) settle(false);
+        }
+        timer = setTimeout(function() { settle(true); }, Math.max(0, deadline - Date.now()));
+        cancel = function() { settle(true); };
+        pump();
+      });
+    }
+    capture = { prepare: prepare, nameOf: nameOf, observe: observe, finish: finish, evidence: evidence, deadline: deadline, start: start, private: !!privateInputs, accepted: false, release: release };
+    return capture;
+  }
+
   // Fiber Tree Walker
-  function getTree(opts) {
+  function getTree(opts, privateCapture) {
     opts = opts || {};
+    var typography = privateCapture || (opts.interactiveOnly === true && opts.semanticEvidence === true && opts.typographyEvidence === true
+      ? createTypographyCapture(Date.now()) : null);
+    function earlyTree(out) {
+      if (!typography) return JSON.stringify(out);
+      out.hostEvidence.typography = typography.evidence;
+      typography.evidence.complete = false;
+      typography.evidence.durationMs = Math.max(0, Date.now() - typography.start);
+      return Promise.resolve(JSON.stringify(out));
+    }
     var maxDepth = opts.maxDepth || 4;
     var filter = opts.filter || opts.testID || opts.type || null;
 
@@ -506,7 +1172,7 @@ export const INJECTED_HELPERS = `
       o = o || {};
       var reasons = [];
       if (o.noRenderer) reasons.push('no-renderer');
-      var coverage = rootScanCoverage();
+      var coverage = rootScanCoverage(privateCapture);
       for (var coverageIndex = 0; coverageIndex < coverage.reasons.length; coverageIndex++) {
         if (reasons.indexOf(coverage.reasons[coverageIndex]) === -1) {
           reasons.push(coverage.reasons[coverageIndex]);
@@ -530,18 +1196,37 @@ export const INJECTED_HELPERS = `
       };
     }
 
-    var renderer = findActiveRenderer();
+    var renderer = findActiveRenderer(typography);
     if (!renderer) {
-      return JSON.stringify({
+      return earlyTree({
         error: 'React DevTools hook not available or no fiber roots — app may still be loading',
-        verdict: buildVerdict('none', { noRenderer: true })
+        verdict: buildVerdict('none', { noRenderer: true }),
+        hostEvidence: opts.interactiveOnly && opts.semanticEvidence === true ? { hosts: [], complete: false } : undefined
       });
     }
 
     var visited = new WeakSet();
     var totalNodes = 0;
 
+    var typographyOverlayVisits = 0;
     function hasErrorOverlay(fiber, depth) {
+      if (typography) {
+        var pending = [fiber];
+        var overlaySeen = new WeakSet();
+        while (pending.length) {
+          if (++typographyOverlayVisits > 5000 || Date.now() >= typography.deadline) { typography.evidence.complete = false; return false; }
+          var node = pending.pop();
+          if (!node || overlaySeen.has(node)) continue;
+          overlaySeen.add(node);
+          typography.prepare(node);
+          var nodeName = getName(node);
+          if (nodeName === 'LogBox' || nodeName === 'ErrorWindow' || nodeName === 'RedBox') return true;
+          if (pending.length >= 5000) { typography.evidence.complete = false; return false; }
+          if (node.child) pending.push(node.child);
+          if (node.sibling) pending.push(node.sibling);
+        }
+        return false;
+      }
       var current = fiber;
       while (current) {
         if ((depth || 0) > 15) return false;
@@ -558,19 +1243,21 @@ export const INJECTED_HELPERS = `
     // would otherwise be silently missed while the filter path happily walks
     // past it. Performance is negligible — each root's hasErrorOverlay walk
     // is already depth-capped at 15.
-    var overlayRoots = findAllRootFibers();
+    var overlayRoots = findAllRootFibers(typography);
     var overlayFound = false;
     for (var oi = 0; oi < overlayRoots.length && !overlayFound; oi++) {
       if (hasErrorOverlay(overlayRoots[oi].fiber)) overlayFound = true;
     }
     if (overlayFound) {
-      return JSON.stringify({
+      return earlyTree({
         warning: 'APP_HAS_REDBOX',
-        message: 'App is showing an error screen. Use cdp_error_log to read the error, fix the code, then cdp_reload.'
+        message: 'App is showing an error screen. Use cdp_error_log to read the error, fix the code, then cdp_reload.',
+        hostEvidence: opts.interactiveOnly && opts.semanticEvidence === true ? { hosts: [], complete: false } : undefined
       });
     }
 
     function getName(fiber) {
+      if (privateCapture) return privateCapture.nameOf(fiber);
       if (!fiber || !fiber.type) return null;
       return fiber.type.displayName || fiber.type.name || null;
     }
@@ -623,6 +1310,11 @@ export const INJECTED_HELPERS = `
         for (var i = 0; i < propKeys.length; i++) {
           var k = propKeys[i];
           if (k === 'children' || k === 'testID' || k === 'style' || k === 'accessibilityLabel' || k === 'nativeID') continue;
+          if (k === 'value' || k === 'text' || k === 'defaultValue' || k === 'secureTextEntry') {
+            var inputDescriptor = Object.getOwnPropertyDescriptor(fiber.memoizedProps, k);
+            if (k === 'value' && inputDescriptor && Object.prototype.hasOwnProperty.call(inputDescriptor, 'value') && typeof inputDescriptor.value === 'boolean') props[k] = inputDescriptor.value;
+            continue;
+          }
           var v = fiber.memoizedProps[k];
           if (typeof v === 'function') { props[k] = '[Function]'; continue; }
           if (Array.isArray(v)) { props[k] = '[Array(' + v.length + ')]'; continue; }
@@ -659,8 +1351,28 @@ export const INJECTED_HELPERS = `
       var INTERACTIVE_ROLES = { button: 1, link: 1, switch: 1, checkbox: 1, radio: 1, menuitem: 1, tab: 1, togglebutton: 1, imagebutton: 1, search: 1, adjustable: 1 };
       var HANDLER_PROPS = ['onPress', 'onPressIn', 'onLongPress', 'onChangeText', 'onValueChange', 'onChange', 'onSubmitEditing', 'onClick'];
 
-      var isInteractiveFiber = function(fiber) {
+      var digestPropsCache = new WeakMap();
+      function digestProps(fiber) {
         var props = fiber.memoizedProps;
+        if (!typography) return props;
+        if (digestPropsCache.has(fiber)) return digestPropsCache.get(fiber);
+        var safe = {};
+        digestPropsCache.set(fiber, safe);
+        if (!props || typeof props !== 'object') return safe;
+        var keys = HANDLER_PROPS.concat(['role', 'accessibilityRole', 'testID', 'nativeID', 'disabled', 'aria-disabled', 'accessibilityState', 'editable', 'readOnly', 'aria-readonly', 'title', 'accessibilityLabel', 'placeholder', 'value']);
+        for (var i = 0; i < keys.length; i++) {
+          try {
+            var value = qaData(props, keys[i]);
+            if (['role', 'accessibilityRole', 'testID', 'nativeID', 'title', 'accessibilityLabel', 'placeholder'].indexOf(keys[i]) !== -1 && value != null && typeof value !== 'string') throw new Error('Opaque digest string');
+            if (keys[i] === 'accessibilityState' && value && typeof value === 'object') value = { disabled: qaData(value, 'disabled', true) };
+            safe[keys[i]] = value;
+          } catch (_) { typography.evidence.complete = false; }
+        }
+        return safe;
+      }
+
+      var isInteractiveFiber = function(fiber) {
+        var props = digestProps(fiber);
         if (!props || typeof props !== 'object') return false;
         var nm = getName(fiber);
         if (nm && INTERACTIVE_NAMES[nm]) return true;
@@ -689,6 +1401,7 @@ export const INJECTED_HELPERS = `
       // nodes (they each get their own entry).
       var collectText = function(fiber, depth, acc) {
         if (!fiber || depth > 8 || acc.s.length >= 120) return;
+        if (typography && (++typographyDigestVisits > 5000 || Date.now() >= typography.deadline)) { typography.evidence.complete = false; return; }
         if (fiber.tag === 6 && typeof fiber.memoizedProps === 'string') {
           var t = fiber.memoizedProps.trim();
           if (t) acc.s += (acc.s ? ' ' : '') + t;
@@ -696,28 +1409,72 @@ export const INJECTED_HELPERS = `
         }
         var c = fiber.child;
         while (c && acc.s.length < 120) {
+          if (typography && (++typographyDigestVisits > 5000 || Date.now() >= typography.deadline)) { typography.evidence.complete = false; break; }
           if (!isInteractiveFiber(c)) collectText(c, depth + 1, acc);
           c = c.sibling;
         }
       };
 
       var salient = [];
-      var iRoots = findAllRootFibers();
+      var typographyDigestVisits = 0;
+      var hostEvidence = opts.semanticEvidence === true ? { hosts: [], complete: true } : null;
+      var hostRoles = 'adjustable alert alertdialog application article banner blockquote button caption cell checkbox code columnheader combobox complementary contentinfo definition deletion dialog directory document emphasis feed figure form generic grid gridcell group header heading image imagebutton img insertion keyboardkey link list listbox listitem log main marquee math menu menubar menuitem menuitemcheckbox menuitemradio meter navigation none note option paragraph presentation progressbar radio radiogroup region row rowgroup rowheader scrollbar search searchbox separator slider spinbutton status strong subscript summary superscript switch tab table tablist tabpanel term text textbox time timer togglebutton toolbar tooltip tree treegrid treeitem'.split(' ');
+      function collectHostEvidence(fiber) {
+        if (!hostEvidence || !isHostFiber(fiber)) return null;
+        if (hostEvidence.hosts.length >= ${PRIVATE_INPUT_LIMITS.maxHosts}) return null;
+        var props = digestProps(fiber) || {};
+        var source = props.role != null ? 'role' : props.accessibilityRole != null ? 'accessibilityRole' : 'none';
+        var host = { role: null, roleSource: source, capabilities: {} };
+        if (source !== 'none') {
+          if (typeof props[source] === 'string' && hostRoles.indexOf(props[source]) !== -1) host.role = normalizeRole(props[source]);
+          else hostEvidence.complete = false;
+        }
+        var identities = ['testID', 'nativeID'];
+        for (var identityIndex = 0; identityIndex < identities.length; identityIndex++) {
+          var origin = identities[identityIndex];
+          if (props[origin] == null) continue;
+          if (typeof props[origin] === 'string') host[origin] = props[origin];
+          else hostEvidence.complete = false;
+        }
+        if (typeof props.onPress === 'function' || typeof props.onClick === 'function') host.capabilities.press = true;
+        if (props.disabled === true || props['aria-disabled'] === true || (props.accessibilityState && props.accessibilityState.disabled === true)) host.disabled = true;
+        if (props.editable === false || props.readOnly === true || props['aria-readonly'] === true) host.readOnly = true;
+        if ((privateCapture ? HOST_KIND_LOOKUP[qaHostType(fiber)] : hostKind(fiber)) === 'textinput'
+          && (props.editable == null || props.editable === true)
+          && (props.readOnly == null || props.readOnly === false)
+          && (props['aria-readonly'] == null || props['aria-readonly'] === false)) host.capabilities.fill = true;
+        hostEvidence.hosts.push(host);
+        if (hostEvidence.hosts.length === ${PRIVATE_INPUT_LIMITS.maxHosts}) hostEvidence.complete = false;
+        return hostEvidence.hosts.length - 1;
+      }
+      var iRoots = findAllRootFibers(typography);
       var iBudget = Math.min(5000, 2000 * Math.max(1, iRoots.length));
       var iQueue = [];
-      for (var iri = 0; iri < iRoots.length; iri++) iQueue.push(iRoots[iri].fiber);
+      for (var iri = 0; iri < iRoots.length; iri++) iQueue.push({ fiber: iRoots[iri].fiber, forwarded: null, parentFiber: null, parentHostIndex: null, textOwnerHostIndex: null, rootIndex: iri });
       var iSeen = new WeakSet();
       var iScanned = 0;
       var iStart = Date.now();
-      while (iQueue.length > 0 && iScanned < iBudget && (Date.now() - iStart) < 3000 && salient.length < 200) {
-        var ifiber = iQueue.shift();
+      var iEnqueued = iQueue.length;
+      var iEnqueueTruncated = false;
+      while (iQueue.length > 0 && iScanned < iBudget && (Date.now() - iStart) < 3000 && (!typography || Date.now() < typography.deadline) && salient.length < 200) {
+        var iframe = iQueue.shift();
+        var ifiber = iframe.fiber;
         if (!ifiber || iSeen.has(ifiber)) continue;
         iSeen.add(ifiber);
         iScanned++;
+        if (typography) typography.prepare(ifiber);
+        var hostIndex = collectHostEvidence(ifiber);
+        var typographyRecord = typography ? typography.observe(ifiber, iframe, hostIndex) : null;
+        var iprops = digestProps(ifiber) || {};
+        var itid = iprops.testID || iprops.nativeID;
+        var forwarded = iframe.forwarded;
+        if (forwarded && itid && forwarded.testID !== itid) forwarded = null;
         if (isInteractiveFiber(ifiber)) {
-          var iprops = ifiber.memoizedProps;
           var entry = { role: inferRole(getName(ifiber), iprops) };
-          var itid = iprops.testID || iprops.nativeID;
+          entry.capabilities = {
+            press: typeof iprops.onPress === 'function' || typeof iprops.onClick === 'function',
+            fill: iprops.editable !== false && (getName(ifiber) === 'TextInput' || typeof iprops.onChangeText === 'function')
+          };
           if (itid) entry.testID = itid;
           var acc = { s: '' };
           collectText(ifiber, 0, acc);
@@ -728,26 +1485,54 @@ export const INJECTED_HELPERS = `
           // surface on/off state for toggles so the agent need not re-read before deciding
           if (entry.role === 'switch' && typeof iprops.value === 'boolean') entry.value = iprops.value;
           if (iprops.disabled === true || iprops.editable === false || (iprops.accessibilityState && iprops.accessibilityState.disabled === true)) entry.disabled = true;
-          salient.push(entry);
+          if (itid && forwarded && forwarded.testID === itid && forwarded.role === entry.role) {
+            var forwardedFields = ['text', 'label', 'placeholder', 'value'];
+            for (var fi = 0; fi < forwardedFields.length; fi++) {
+              var field = forwardedFields[fi];
+              if (forwarded[field] === undefined && entry[field] !== undefined) forwarded[field] = entry[field];
+            }
+            forwarded.capabilities.press = forwarded.capabilities.press || entry.capabilities.press;
+            forwarded.capabilities.fill = forwarded.capabilities.fill || entry.capabilities.fill;
+            if (entry.disabled) forwarded.disabled = true;
+          } else {
+            salient.push(entry);
+            forwarded = entry;
+          }
         }
         var ich = ifiber.child;
-        while (ich) { iQueue.push(ich); ich = ich.sibling; }
+        // Only a single-child composite chain can forward one control identity.
+        var nextForwarded = ich && !ich.sibling && ifiber.tag !== 5 && typeof ifiber.type !== 'string' ? forwarded : null;
+        var parentHostIndex = hostIndex === null ? iframe.parentHostIndex : hostIndex;
+        var textOwnerHostIndex = iframe.textOwnerHostIndex;
+        if (typographyRecord && hostIndex !== null) {
+          if (typographyRecord.hostType === 'RCTText') textOwnerHostIndex = hostIndex;
+          else if (typographyRecord.hostType !== 'RCTVirtualText') textOwnerHostIndex = null;
+        }
+        while (ich) {
+          if (typography && (++iEnqueued > iBudget || Date.now() >= typography.deadline)) { iEnqueueTruncated = true; break; }
+          iQueue.push({ fiber: ich, forwarded: nextForwarded, parentFiber: ifiber, parentHostIndex: parentHostIndex, textOwnerHostIndex: textOwnerHostIndex, rootIndex: iframe.rootIndex, animatedTypography: typographyRecord && typographyRecord.animated });
+          ich = ich.sibling;
+        }
       }
       // Signal truncation rather than silently dropping actionable nodes (a hit
       // cap leaves the queue non-empty). Mirrors the filter branch's truncated
       // flag — a clean-looking partial list would mislead the agent into
       // "nothing more to tap here."
       var iOut = { interactive: salient, totalNodes: iScanned, rootsSeeded: iRoots.length };
-      if (iQueue.length > 0) {
+      if (iQueue.length > 0 || iEnqueueTruncated) {
         iOut.truncated = true;
         iOut.hint = 'More interactive elements exist beyond the cap — scope with filter or device_scrollintoview.';
       }
       iOut.verdict = buildVerdict('interactive', {
         rootsSeeded: iRoots.length,
         scannedNodes: iScanned,
-        scanBudgetExhausted: iQueue.length > 0
+        scanBudgetExhausted: iQueue.length > 0 || iEnqueueTruncated
       });
-      return safeStringify(iOut, 999999);
+      if (hostEvidence) {
+        hostEvidence.complete = hostEvidence.complete && iRoots.length > 0 && iOut.verdict.complete;
+        iOut.hostEvidence = hostEvidence;
+      }
+      return typography ? typography.finish(iOut, iRoots) : evidenceJson(iOut);
     }
 
     // For filtered queries: BFS to find matches, then build compact subtrees.
@@ -891,6 +1676,10 @@ export const INJECTED_HELPERS = `
     }
     return map;
   })();
+
+  function isHostFiber(fiber) {
+    return !!fiber && (fiber.tag === 5 || typeof fiber.type === 'string');
+  }
 
   function hostKind(fiber) {
     if (!fiber || !fiber.type) return null;
@@ -4890,7 +5679,7 @@ export const INJECTED_HELPERS = `
   globalThis.__QAREN = {
     __v: __HELPERS_VERSION__,
     dismissKeyboard: dismissKeyboard,
-    getTree: getTree,
+    getTree: function(opts) { return getTree(opts); },
     getNavState: getNavState,
     getNavGraph: getNavGraph,
     navigateTo: navigateTo,
@@ -4980,6 +5769,10 @@ export const INJECTED_HELPERS = `
       }
     }
   };
+  Object.defineProperties(globalThis.__QAREN, {
+    beginQaCapture: { value: beginQaCapture },
+    readQaCapture: { value: readQaCapture }
+  });
 })();
 `;
 

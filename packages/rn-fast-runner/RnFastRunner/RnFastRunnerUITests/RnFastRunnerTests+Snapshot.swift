@@ -256,6 +256,228 @@ extension RnFastRunnerTests {
     )
   }
 
+  private struct PresenceDescriptor: Equatable {
+    enum Value: Equatable {
+      case absent
+      case text(String)
+      case number(String, String)
+    }
+
+    let type: XCUIElement.ElementType
+    let identifier: String
+    let label: String
+    let value: Value
+    let frame: CGRect
+    let enabled: Bool
+
+    init?(_ snapshot: XCUIElementSnapshot) {
+      type = snapshot.elementType
+      identifier = snapshot.identifier
+      label = snapshot.label
+      frame = snapshot.frame
+      enabled = snapshot.isEnabled
+      if let original = snapshot.value {
+        if let text = original as? String {
+          value = .text(text)
+        } else if let number = original as? NSNumber, number.doubleValue.isFinite {
+          value = .number(String(cString: number.objCType), number.stringValue)
+        } else {
+          return nil
+        }
+      } else {
+        value = .absent
+      }
+    }
+  }
+
+  func platformPresenceFailure() -> Response {
+    Response(ok: false, error: ErrorPayload(
+      code: "PLATFORM_PRESENCE_FAILED", message: "native platform presence capture failed"
+    ))
+  }
+
+  private func presenceUptimeMs() -> Double {
+    ProcessInfo.processInfo.systemUptime * 1000
+  }
+
+  private func presenceRead<T>(deadline: Double? = nil, _ read: () throws -> T) -> T? {
+    if let deadline, presenceUptimeMs() >= deadline { return nil }
+    var result: T?
+    let exception = RunnerObjCExceptionCatcher.catchException({
+      result = try? read()
+    })
+    guard exception == nil else { return nil }
+    if let deadline, presenceUptimeMs() >= deadline { return nil }
+    return result
+  }
+
+  private func presenceAppIsEligible(_ app: XCUIApplication, deadline: Double) -> Bool? {
+    guard let state = presenceRead(deadline: deadline, { app.state }) else { return nil }
+    guard state == .runningForeground else { return false }
+    #if !os(macOS)
+      guard let alerts = presenceRead(deadline: deadline, { self.springboard.alerts.count }),
+            let sheets = presenceRead(deadline: deadline, { self.springboard.sheets.count }) else { return nil }
+      return alerts == 0 && sheets == 0
+    #else
+      return true
+    #endif
+  }
+
+  private func presenceLabelSource(_ snapshot: XCUIElementSnapshot) -> PlatformPresenceObservation.LabelSource {
+    if !snapshot.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .direct }
+    if snapshotValueText(snapshot) != nil { return .value }
+    return aggregatedLabel(for: snapshot) == nil ? .none : .descendant
+  }
+
+  func snapshotPlatformPresence(app: XCUIApplication, appId: String) -> DataPayload {
+    let started = presenceUptimeMs()
+    let deadline = started + 5_000
+    let captureId = UUID().uuidString
+    let generation = currentSnapshotGeneration
+    var nodes: [SnapshotNode] = []
+    var descriptors: [PresenceDescriptor?] = []
+    var truncated = false
+    var complete = false
+
+    let enumerated = presenceRead { () -> Bool in
+      guard self.presenceAppIsEligible(app, deadline: deadline) == true,
+            let root = self.presenceRead(deadline: deadline, { try app.snapshot() }) else { return false }
+      let windowFrame = root.children.first {
+        $0.elementType == .window && !$0.frame.isNull && !$0.frame.isEmpty
+      }?.frame
+      let appFrame = root.frame
+      let viewport = windowFrame ?? (appFrame.isNull || appFrame.isEmpty ? .infinite : appFrame)
+      let context = SnapshotTraversalContext(
+        queryRoot: app, rootSnapshot: root, viewport: viewport, maxDepth: Int.max
+      )
+      var stack: [(XCUIElementSnapshot, Int, Int?)] = [(root, 0, nil)]
+      while let (snapshot, depth, parentIndex) = stack.popLast() {
+        guard nodes.count < self.maxSnapshotElements else {
+          truncated = true
+          break
+        }
+        let descriptor = PresenceDescriptor(snapshot)
+        var node = self.makeSnapshotNode(
+          snapshot: snapshot, evaluation: self.evaluateSnapshot(snapshot, in: context),
+          depth: depth, index: nodes.count, parentIndex: parentIndex
+        )
+        node.presence = PlatformPresenceObservation(
+          captureId: captureId, generation: generation, nodeIndex: node.index,
+          status: .unknown, labelSource: self.presenceLabelSource(snapshot)
+        )
+        nodes.append(node)
+        descriptors.append(descriptor)
+        for child in snapshot.children.reversed() {
+          stack.append((child, depth + 1, node.index))
+        }
+      }
+      return !truncated
+    }
+    if let enumerated {
+      complete = enumerated
+    } else {
+      nodes.removeAll()
+      descriptors.removeAll()
+    }
+
+    // A capped tree cannot establish descriptor uniqueness in the whole raw snapshot.
+    if complete {
+      for index in nodes.indices {
+        if presenceUptimeMs() >= deadline { break }
+        guard nodes[index].depth > 0,
+              nodes[index].presence?.labelSource != .descendant,
+              let descriptor = descriptors[index],
+              descriptor.type != .application, descriptor.type != .window,
+              descriptors.filter({ $0 == descriptor }).count == 1 else { continue }
+        let observation = presenceRead(deadline: deadline) {
+          self.observePresence(descriptor, app: app, deadline: deadline)
+        }
+        if let observed = observation ?? nil {
+          nodes[index].presence?.status = .observed
+          nodes[index].presence?.observedUptimeMs = observed
+        }
+      }
+      complete = presenceAppIsEligible(app, deadline: deadline) == true
+        && presenceEnumerationIsUnchanged(app: app, nodes: nodes, descriptors: descriptors, deadline: deadline)
+    }
+    let ended = presenceUptimeMs()
+    complete = complete && ended < deadline
+    if !complete {
+      for index in nodes.indices {
+        nodes[index].presence?.status = .unknown
+        nodes[index].presence?.observedUptimeMs = nil
+      }
+    }
+    return makePlatformPresencePayload(
+      nodes: nodes, truncated: truncated,
+      capture: PlatformPresenceCapture(
+        version: 1, source: "xcui-live", captureId: captureId, appId: appId,
+        generation: generation, startedUptimeMs: started, endedUptimeMs: ended,
+        enumeration: "raw-unfiltered", complete: complete
+      )
+    )
+  }
+
+  private func presenceEnumerationIsUnchanged(
+    app: XCUIApplication, nodes: [SnapshotNode], descriptors: [PresenceDescriptor?], deadline: Double
+  ) -> Bool {
+    guard nodes.count == descriptors.count else { return false }
+    return presenceRead(deadline: deadline) {
+      let root = try app.snapshot()
+      var stack: [(XCUIElementSnapshot, Int, Int?)] = [(root, 0, nil)]
+      var index = 0
+      while let (snapshot, depth, parentIndex) = stack.popLast() {
+        guard self.presenceUptimeMs() < deadline,
+              index < self.maxSnapshotElements, index < nodes.count,
+              let descriptor = PresenceDescriptor(snapshot),
+              descriptors[index] == descriptor,
+              nodes[index].depth == depth, nodes[index].parentIndex == parentIndex else { return false }
+        for child in snapshot.children.reversed() {
+          stack.append((child, depth + 1, index))
+        }
+        index += 1
+      }
+      return index == nodes.count
+    } == true
+  }
+
+  private func uniquePresenceElement(
+    _ descriptor: PresenceDescriptor, app: XCUIApplication, deadline: Double
+  ) -> XCUIElement? {
+    guard let root = presenceRead(deadline: deadline, { try app.snapshot() }),
+          let elements = presenceRead(deadline: deadline, {
+            // The predicate only narrows exact attributes; frame and value are checked on snapshots.
+            app.descendants(matching: descriptor.type)
+              .matching(NSPredicate(format: "identifier == %@ AND label == %@", descriptor.identifier, descriptor.label))
+              .allElementsBoundByAccessibilityElement
+          }) else { return nil }
+    var match: XCUIElement? = PresenceDescriptor(root) == descriptor ? app : nil
+    for element in elements {
+      guard let snapshot = presenceRead(deadline: deadline, { try element.snapshot() }) else { return nil }
+      if PresenceDescriptor(snapshot) == descriptor {
+        guard match == nil else { return nil }
+        match = element
+      }
+    }
+    return presenceUptimeMs() < deadline ? match : nil
+  }
+
+  private func observePresence(
+    _ descriptor: PresenceDescriptor, app: XCUIApplication, deadline: Double
+  ) -> Double? {
+    guard let element = uniquePresenceElement(descriptor, app: app, deadline: deadline),
+          let before = presenceRead(deadline: deadline, { try element.snapshot() }),
+          PresenceDescriptor(before) == descriptor,
+          presenceRead(deadline: deadline, { element.isHittable }) == true else { return nil }
+    let observed = presenceUptimeMs()
+    guard let after = presenceRead(deadline: deadline, { try element.snapshot() }),
+          PresenceDescriptor(after) == descriptor,
+          uniquePresenceElement(descriptor, app: app, deadline: deadline) != nil,
+          let retained = presenceRead(deadline: deadline, { try element.snapshot() }),
+          PresenceDescriptor(retained) == descriptor else { return nil }
+    return observed
+  }
+
   func retainSnapshotTargets(_ nodes: [SnapshotNode]) {
     retainedSnapshotTargets = Dictionary(uniqueKeysWithValues: nodes.map { node in
       (
@@ -622,4 +844,18 @@ extension RnFastRunnerTests {
     if !Self.scrollContainerTypes.contains(snapshot.elementType) { return false }
     return !snapshot.children.isEmpty
   }
+}
+
+func makePlatformPresencePayload(
+  nodes: [SnapshotNode], truncated: Bool, capture: PlatformPresenceCapture
+) -> DataPayload {
+  let keyboardVisible: Bool? = capture.complete ? nodes.contains { node in
+    node.type == "Keyboard" && !CGRect(
+      x: node.rect.x, y: node.rect.y, width: node.rect.width, height: node.rect.height
+    ).isEmpty
+  } : nil
+  return DataPayload(
+    nodes: nodes, truncated: truncated, keyboardVisible: keyboardVisible,
+    snapshotGeneration: capture.generation, presenceCapture: capture
+  )
 }

@@ -1,6 +1,40 @@
+mod common;
+
 use qaren::adapters::{android, ios, metro};
 use qaren::exec::CmdOutput;
 use std::path::Path;
+
+#[test]
+fn app_inventory_conversion_is_private_stdin_only_and_uses_exact_bundle_lookup() {
+    let plist = include_str!("fixtures/installed-apps.plist");
+    let converted = r#"{"com.rndevagent.testapp":{"CFBundleIdentifier":"com.rndevagent.testapp","Path":"/private/fixture/Applications/Test.app"},"com.private.unrelated":{"CFBundleIdentifier":"com.private.unrelated","DataContainer":"file:///private/fixture/Data/OTHER"}}"#;
+    for (app, expected) in [
+        ("com.rndevagent.testapp", ios::AppPresence::Installed),
+        ("com.rndevagent", ios::AppPresence::ProvenAbsent),
+    ] {
+        let mut mock = qaren::exec::MockRunner::new();
+        mock.expect_run(
+            "xcrun simctl listapps selected-udid",
+            CmdOutput::success(plist),
+        );
+        mock.expect_run("plutil -convert json -o - -", CmdOutput::success(converted));
+        assert_eq!(
+            ios::probe_app_presence(&mut mock, "selected-udid", app),
+            expected
+        );
+        assert_eq!(
+            mock.private_inputs,
+            [Vec::<u8>::new(), plist.as_bytes().to_vec()]
+        );
+        assert_eq!(mock.calls[0].args, ["simctl", "listapps", "selected-udid"]);
+        assert_eq!(mock.calls[1].args, ["-convert", "json", "-o", "-", "-"]);
+        assert_eq!(mock.calls[1].timeout_seconds, 10);
+        assert!(mock.spawned_logs.is_empty());
+        assert!(!serde_json::to_string(&mock.calls)
+            .unwrap()
+            .contains("com.private.unrelated"));
+    }
+}
 
 // Captured verbatim from `ssh nuc '~/bin/android-farm status'` on 2026-08-12.
 const FARM_STATUS: &str = "slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=free state=down\nslot=2 avd=Pixel_10_Pro serial=emulator-5556 adb_port=5557 lease=free state=down\n";
@@ -248,8 +282,105 @@ fn android_build_command_pins_device_port_and_serial_env() {
 }
 
 #[test]
-fn ios_build_command_pins_udid_and_port() {
-    let spec = ios::build_spec(Path::new("/repo/test-app"), "ABCD-UDID", 8791, 2400);
+fn ios_generic_build_capability_is_app_local_bounded_private_and_fail_closed() {
+    let repo = common::temp_repo();
+    let app = repo.join("test-app");
+    let root = app.as_path();
+    for output in [
+        CmdOutput::success("--no-bundler\n-d, --device [device]\n"),
+        CmdOutput::success(&common::IOS_BUILD_HELP.replace("--output", "--output-other")),
+        CmdOutput::success(&common::IOS_BUILD_HELP.replace("generic", "selected")),
+        CmdOutput::success(&common::IOS_BUILD_HELP.replace("--no-bundler", "--bundler")),
+        CmdOutput::failed(127, "PRIVATE_CLI_MISSING"),
+        CmdOutput {
+            timed_out: true,
+            ..CmdOutput::success(common::IOS_BUILD_HELP)
+        },
+        CmdOutput {
+            stderr: "PRIVATE_PROMPT".into(),
+            ..CmdOutput::success(common::IOS_BUILD_HELP)
+        },
+        CmdOutput::success(common::IOS_BUILD_HELP),
+    ] {
+        let supported =
+            output.ok() && output.stderr.is_empty() && output.stdout == common::IOS_BUILD_HELP;
+        let mut mock = qaren::exec::MockRunner::new();
+        mock.expect_run("pnpm exec expo run:ios --help", output);
+        let result = ios::require_generic_build(&mut mock, root);
+        assert_eq!(result.is_ok(), supported);
+        if let Err(failure) = result {
+            assert!(failure.code.is_refusal());
+            assert_eq!(
+                serde_json::to_value(failure.code).unwrap(),
+                "IOS_BUILD_CAPABILITY_UNAVAILABLE"
+            );
+            assert!(!serde_json::to_string(&failure)
+                .unwrap()
+                .contains("PRIVATE_"));
+            assert!(failure.evidence.is_empty());
+        }
+        assert_eq!(mock.private_inputs, vec![Vec::<u8>::new()]);
+        let spec = &mock.calls[0];
+        assert_eq!(spec.cwd.as_deref(), Some(root));
+        assert_eq!(spec.args, ["exec", "expo", "run:ios", "--help"]);
+        assert_eq!(spec.timeout_seconds, 15);
+        for key in ["CI", "EXPO_NO_TELEMETRY", "NO_COLOR"] {
+            assert!(spec.env.contains(&(key.into(), "1".into())));
+        }
+    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        root.join("node_modules/.bin/expo"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    let mut mock = qaren::exec::MockRunner::new();
+    assert!(ios::require_generic_build(&mut mock, root)
+        .unwrap_err()
+        .code
+        .is_refusal());
+    assert!(
+        mock.calls.is_empty(),
+        "an unusable local CLI must not fall through to PATH"
+    );
+    std::fs::remove_file(root.join("node_modules/.bin/expo")).unwrap();
+    let mut mock = qaren::exec::MockRunner::new();
+    assert!(ios::require_generic_build(&mut mock, root)
+        .unwrap_err()
+        .code
+        .is_refusal());
+    assert!(
+        mock.calls.is_empty(),
+        "must not fall back to a global Expo CLI"
+    );
+}
+
+#[test]
+fn ios_launch_targets_the_verified_bundle_without_scheme_approval() {
+    let spec = ios::launch_spec("EXACT-UDID", "com.x.y", 8791);
+    assert_eq!(spec.program, "xcrun");
+    assert_eq!(
+        spec.args,
+        vec![
+            "simctl",
+            "launch",
+            "--terminate-running-process",
+            "EXACT-UDID",
+            "com.x.y",
+            "--initialUrl",
+            "http://127.0.0.1:8791"
+        ]
+    );
+    assert_eq!(spec.timeout_seconds, 60);
+}
+
+#[test]
+fn ios_build_command_is_finite_generic_and_writes_only_to_the_run_output() {
+    let spec = ios::build_spec(
+        Path::new("/repo/test-app"),
+        Path::new("/runs/check/ios-build"),
+        2400,
+    );
     assert_eq!(
         spec.args,
         vec![
@@ -257,13 +388,191 @@ fn ios_build_command_pins_udid_and_port() {
             "expo",
             "run:ios",
             "--device",
-            "ABCD-UDID",
-            "--port",
-            "8791"
+            "generic",
+            "--no-bundler",
+            "--output",
+            "/runs/check/ios-build"
         ]
     );
     assert!(spec.env.contains(&("CI".to_string(), "1".to_string())));
     assert_eq!(spec.timeout_seconds, 2400);
+}
+
+#[test]
+fn ios_output_cannot_be_redirected_to_an_ambient_build() {
+    let repo = common::temp_repo();
+    let ambient = repo.join("ambient");
+    common::write_ios_app(&ambient.join("testapp.app"));
+    let output = repo.join("ios-build");
+    std::os::unix::fs::symlink(&ambient, &output).unwrap();
+    assert!(ios::built_app(&output).is_err());
+}
+
+#[test]
+fn ios_artifact_requires_a_built_initial_url_launcher_not_just_a_successful_build() {
+    let repo = common::temp_repo();
+    let app = repo.join("test.app");
+    common::write_ios_app(&app);
+    let mut mock = qaren::exec::MockRunner::new();
+    mock.expect_run("plutil", CmdOutput::success(&common::ios_app_info()));
+    mock.expect_run("vtool", CmdOutput::success("platform IOSSIMULATOR\n"));
+    mock.expect_run("otool -L", CmdOutput::success("test.app/binary:\n"));
+    mock.expect_run("nm", CmdOutput::success("_main\n"));
+    assert!(ios::verify_app(&mut mock, &app, "com.rndevagent.testapp", "rndatest").is_err());
+    assert_eq!(mock.remaining(), 0);
+}
+
+#[test]
+fn ios_launcher_verification_checks_the_linked_image_and_argument_and_refuses_local_js() {
+    for debug in [false, true] {
+        for output in [
+            CmdOutput::success("0000000100012345  --initialUrl\n"),
+            CmdOutput::success("0000000100012345  --initialUrlUnsupported\n"),
+            CmdOutput::failed(1, "PRIVATE_BINARY_CONTENT"),
+            CmdOutput {
+                timed_out: true,
+                ..CmdOutput::success("0000000100012345  --initialUrl\n")
+            },
+        ] {
+            let supported = output.ok() && output.stdout == "0000000100012345  --initialUrl\n";
+            let repo = common::temp_repo();
+            let app = repo.join("test.app");
+            common::write_ios_app(&app);
+            std::fs::write(app.join("binary.debug.dylib"), "debug image").unwrap();
+            let image = app.join(if debug {
+                "binary.debug.dylib"
+            } else {
+                "binary"
+            });
+            let mut mock = qaren::exec::MockRunner::new();
+            mock.expect_run("plutil", CmdOutput::success(&common::ios_app_info()));
+            mock.expect_run("vtool", CmdOutput::success("platform IOSSIMULATOR\n"));
+            mock.expect_run("otool -L", CmdOutput::success(if debug {
+                "test.app/binary:\n  @rpath/binary.debug.dylib (compatibility version 0.0.0, current version 0.0.0)\n"
+            } else { "test.app/binary:\n" }));
+            mock.expect_run("nm", CmdOutput::success(common::IOS_LAUNCHER_SYMBOLS));
+            mock.expect_run("otool -v -s __TEXT __cstring", output);
+            let result = ios::verify_app(&mut mock, &app, "com.rndevagent.testapp", "rndatest");
+            assert_eq!(result.is_ok(), supported);
+            assert!(!format!("{result:?}").contains("PRIVATE_BINARY_CONTENT"));
+            for spec in &mock.calls[3..] {
+                assert_eq!(spec.args.last().unwrap(), &image.to_string_lossy());
+            }
+            assert_eq!(mock.private_inputs.len(), 5);
+            assert_eq!(mock.remaining(), 0);
+        }
+    }
+    let repo = common::temp_repo();
+    let app = repo.join("test.app");
+    common::write_ios_app(&app);
+    std::fs::write(app.join("main.jsbundle"), "bundled JS bypasses initialUrl").unwrap();
+    let mut mock = qaren::exec::MockRunner::new();
+    mock.expect_run("plutil", CmdOutput::success(&common::ios_app_info()));
+    mock.expect_run("vtool", CmdOutput::success("platform IOSSIMULATOR\n"));
+    assert!(ios::verify_app(&mut mock, &app, "com.rndevagent.testapp", "rndatest").is_err());
+    assert_eq!(mock.remaining(), 0);
+}
+
+#[test]
+fn ios_launcher_verification_accepts_a_linked_debug_image_with_spaces_in_its_name() {
+    let repo = common::temp_repo();
+    let app = repo.join("My App.app");
+    common::write_ios_app(&app);
+    std::fs::rename(app.join("binary"), app.join("My App")).unwrap();
+    let image = app.join("My App.debug.dylib");
+    std::fs::write(&image, "debug image").unwrap();
+    let mut info: serde_json::Value = serde_json::from_str(&common::ios_app_info()).unwrap();
+    info["CFBundleExecutable"] = "My App".into();
+    std::fs::write(app.join("Info.plist"), info.to_string()).unwrap();
+    let mut mock = qaren::exec::MockRunner::new();
+    mock.expect_run("plutil", CmdOutput::success(&info.to_string()));
+    mock.expect_run("vtool", CmdOutput::success("platform IOSSIMULATOR\n"));
+    mock.expect_run(
+        "otool -L",
+        CmdOutput::success("My App.app/My App:\n\t@rpath/My App.debug.dylib (compatibility version 0.0.0, current version 0.0.0)\n"),
+    );
+    mock.expect_run(
+        &format!("nm -j -U {}", image.display()),
+        CmdOutput::success(common::IOS_LAUNCHER_SYMBOLS),
+    );
+    mock.expect_run(
+        &format!("otool -v -s __TEXT __cstring {}", image.display()),
+        CmdOutput::success("0000000100012345  --initialUrl\n"),
+    );
+
+    assert!(ios::verify_app(&mut mock, &app, "com.rndevagent.testapp", "rndatest").is_ok());
+    assert_eq!(mock.remaining(), 0);
+}
+
+#[test]
+fn ios_output_requires_exactly_one_app_and_a_usable_matching_simulator_bundle() {
+    use qaren::exec::MockRunner;
+    use std::os::unix::fs::PermissionsExt;
+    let repo = common::temp_repo();
+    let output = repo.join("ios-build");
+    assert!(ios::built_app(&output).is_err());
+    std::fs::create_dir(&output).unwrap();
+    assert!(ios::built_app(&output).is_err());
+    let app = output.join("one.app");
+    common::write_ios_app(&app);
+    common::write_ios_app(&output.join("two.app"));
+    assert!(ios::built_app(&output).is_err());
+    std::fs::remove_dir_all(output.join("two.app")).unwrap();
+    assert_eq!(ios::built_app(&output).unwrap(), app);
+
+    for (field, value) in [
+        ("CFBundleIdentifier", serde_json::json!("com.other.app")),
+        ("CFBundlePackageType", serde_json::json!("FMWK")),
+        (
+            "CFBundleSupportedPlatforms",
+            serde_json::json!(["iPhoneOS"]),
+        ),
+        ("CFBundleURLTypes", serde_json::json!([])),
+        ("CFBundleExecutable", serde_json::json!("../outside")),
+        ("CFBundleExecutable", serde_json::json!("missing")),
+    ] {
+        let mut info: serde_json::Value = serde_json::from_str(&common::ios_app_info()).unwrap();
+        info[field] = value;
+        let mut mock = MockRunner::new();
+        mock.expect_run("plutil", CmdOutput::success(&info.to_string()));
+        assert!(
+            ios::verify_app(&mut mock, &app, "com.rndevagent.testapp", "rndatest").is_err(),
+            "{field}"
+        );
+        assert_eq!(mock.remaining(), 0);
+    }
+    for output in [
+        CmdOutput::failed(1, "bad plist"),
+        CmdOutput::success("{}"),
+        CmdOutput::success("not json"),
+    ] {
+        let mut mock = MockRunner::new();
+        mock.expect_run("plutil", output);
+        assert!(ios::verify_app(&mut mock, &app, "com.rndevagent.testapp", "rndatest").is_err());
+    }
+    for output in [
+        CmdOutput::failed(1, "not Mach-O"),
+        CmdOutput::success("platform IOS\n"),
+        CmdOutput::success("platform IOSSIMULATOR\nplatform IOS\n"),
+        CmdOutput::success(""),
+    ] {
+        let mut mock = MockRunner::new();
+        mock.expect_run("plutil", CmdOutput::success(&common::ios_app_info()));
+        mock.expect_run("vtool", output);
+        assert!(ios::verify_app(&mut mock, &app, "com.rndevagent.testapp", "rndatest").is_err());
+    }
+    std::fs::set_permissions(app.join("binary"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    let mut mock = MockRunner::new();
+    mock.expect_run("plutil", CmdOutput::success(&common::ios_app_info()));
+    assert!(ios::verify_app(&mut mock, &app, "com.rndevagent.testapp", "rndatest").is_err());
+    std::os::unix::fs::symlink("/outside", app.join("escape")).unwrap();
+    assert!(ios::verify_app(
+        &mut MockRunner::new(),
+        &app,
+        "com.rndevagent.testapp",
+        "rndatest"
+    )
+    .is_err());
 }
 
 #[test]
@@ -314,6 +623,96 @@ fn sim_presence_parses_simctl_json() {
         ios::parse_sim_presence(missing_name, "AAAA"),
         ios::SimPresence::Unparseable
     );
+}
+
+#[test]
+fn selected_ios_simulator_requires_unique_canonical_available_stable_metadata() {
+    let udid = "1DC408C4-51DA-4C4F-ACA1-39881C916FDD";
+    let runtime = "com.apple.CoreSimulator.SimRuntime.iOS-26-5";
+    let device_type = "com.apple.CoreSimulator.SimDeviceType.iPhone-17";
+    let sim = serde_json::json!({"udid":udid,"name":"selected","state":"Shutdown",
+        "isAvailable":true,"deviceTypeIdentifier":device_type});
+    let inventory = |rt: &str, entries: Vec<serde_json::Value>| {
+        serde_json::json!({"devices":{rt:entries}}).to_string()
+    };
+    for (state, expected) in [
+        ("Shutdown", ios::SimState::Shutdown),
+        ("Booted", ios::SimState::Booted),
+    ] {
+        let mut entry = sim.clone();
+        entry["state"] = state.into();
+        let selected =
+            ios::parse_selected_sim(&inventory(runtime, vec![entry]), &udid.to_lowercase())
+                .unwrap();
+        assert_eq!(selected.udid, udid);
+        assert_eq!(selected.name, "selected");
+        assert_eq!(selected.device_type, device_type);
+        assert_eq!(selected.runtime, runtime);
+        assert_eq!(selected.state, expected);
+    }
+    for (field, value) in [
+        ("udid", serde_json::json!(udid.to_lowercase())),
+        ("udid", serde_json::json!("not-a-uuid")),
+        (
+            "udid",
+            serde_json::json!("76709EFC-0104-4A66-8908-F4F85A76F025"),
+        ),
+        ("name", serde_json::json!("")),
+        ("name", serde_json::json!("   ")),
+        ("deviceTypeIdentifier", serde_json::json!("")),
+        ("deviceTypeIdentifier", serde_json::json!(42)),
+        ("isAvailable", serde_json::json!(false)),
+        ("isAvailable", serde_json::json!("true")),
+        ("state", serde_json::json!("Booting")),
+        ("state", serde_json::json!("Shutting Down")),
+        ("state", serde_json::json!("Unknown")),
+    ] {
+        let mut entry = sim.clone();
+        entry[field] = value;
+        assert!(
+            ios::parse_selected_sim(&inventory(runtime, vec![entry]), udid).is_none(),
+            "{field}"
+        );
+    }
+    for field in [
+        "udid",
+        "name",
+        "state",
+        "isAvailable",
+        "deviceTypeIdentifier",
+    ] {
+        let mut entry = sim.clone();
+        entry.as_object_mut().unwrap().remove(field);
+        assert!(
+            ios::parse_selected_sim(&inventory(runtime, vec![entry]), udid).is_none(),
+            "missing {field}"
+        );
+    }
+    let mut lowercase = sim.clone();
+    lowercase["udid"] = udid.to_lowercase().into();
+    for json in [
+        "not json".into(), "{}".into(), r#"{"devices":[]}"#.into(),
+        r#"{"devices":{"bad":{}}}"#.into(),
+        inventory(runtime, vec![]),
+        inventory(runtime, vec![sim.clone(), sim.clone()]),
+        inventory(runtime, vec![sim.clone(), lowercase]),
+        inventory("", vec![sim.clone()]),
+        inventory("com.apple.CoreSimulator.SimRuntime.iOS-", vec![sim.clone()]),
+        inventory("com.apple.CoreSimulator.SimRuntime.watchOS-26-5", vec![sim.clone()]),
+        inventory("com.apple.CoreSimulator.SimRuntime.tvOS-26-5", vec![sim.clone()]),
+        serde_json::json!({"devices":{runtime:[sim.clone()], "com.apple.CoreSimulator.SimRuntime.watchOS-26-5":[sim.clone()]}}).to_string(),
+    ] {
+        assert!(ios::parse_selected_sim(&json, udid).is_none(), "{json}");
+    }
+    for invalid in [
+        "",
+        "booted",
+        "selected",
+        "1DC408C451DA4C4FACA139881C916FDD",
+        "1DC408C4-51DA-4C4F-ACA1-39881C916FDG",
+    ] {
+        assert!(ios::parse_selected_sim(&inventory(runtime, vec![sim.clone()]), invalid).is_none());
+    }
 }
 
 #[test]

@@ -116,6 +116,7 @@ Doctrine for the kept handlers, each with one owner:
   passes its own from Phase 2; nothing else re-implements authority inline.
 - Native runner launches require `QAREN_DEVICE_LEASE`; `runners/lease-env.ts` adapts the CLI lease to the runners' internal protocol.
 - Jev decisions use `qa/questions.ts` thresholds and `qa/resolve.ts` policy; `qa/jev.ts` owns HTTP only. Keep observed identities and local literal assertions separate from outbound masking in `qa/privacy.ts`; generated masks are never assertion evidence.
+- Private QA capture uses `beginQaCapture`/`readQaCapture` through the context-pinned `qa/react-capture.ts` adapter; `qa/private-input.ts` owns admission and `qa/private-input-limits.ts` owns input bounds. Every production capture requires it: unknown capture refuses content-free, without reinjection or fallback. Keep raw facts out of public tree envelopes, async result slots and logs; `qa/privacy.ts` owns masking history and sensitive screenshot withholding.
 - Login replay refusal is owned by `handlers/run-action.ts` using attested
   install provenance and `containsClearState` in `domain/maestro-validator.ts`.
   Flow-relaunch attribution is owned by `createFlowRelaunchTracker` in
@@ -169,11 +170,15 @@ corepack yarn workspace qaren-core test:contract
 cargo test --manifest-path packages/qaren-cli/Cargo.toml --locked
 bash scripts/check-public-runner-assets.sh
 for t in scripts/test/*.test.sh; do bash "$t"; done
-node --test scripts/test/check-document-ownership.test.ts scripts/test/assert-qaren-check.test.ts
+node --test scripts/test/check-document-ownership.test.ts scripts/test/assert-qaren-check.test.ts scripts/test/gate-qaren-check.test.ts scripts/test/native-ios-command.test.ts
 corepack yarn build:docs
 ```
 
-Jev unit tests are hermetic. `corepack yarn jev:evals` requires `TYPESAFE_API_KEY` and makes live calls; run it before changing the pinned model. The device-bound `gate:qaren-check` also needs the key and uninstalls the selected test app to establish its initial state; coordinate device ownership before running it. It accepts `--plan-file` for the phrase fixture under `packages/qaren-core/test/fixtures/plans/`.
+Jev unit tests are hermetic. `corepack yarn jev:evals` requires `TYPESAFE_API_KEY` and makes live calls; run it before changing the pinned model. The device-bound `gate:qaren-check` also needs the key and uninstalls the selected test app through `qaren check --fresh-install` under the CLI's device lease; coordinate external device ownership before running it. It accepts `--plan-file` for the phrase fixture under `packages/qaren-core/test/fixtures/plans/`.
+
+For a shutdown iOS target, explicitly pass `check --boot-device --device <UUID>`; the existing lease and durable record precede strict admission, boot and exact-target readiness readback. Default selection remains booted-only, and cleanup keeps the borrowed simulator. The gate forwards this opt-in with `QAREN_BOOT_DEVICE=1` alongside `QAREN_DEVICE_UDID`.
+
+CLI-owned iOS builds require `devClientScheme` in the local app config; after dependency installation, QaReN proves app-local generic-build support before boot/reset, verifies a finite simulator bundle and starts it on the exact owned device with a separate Metro group. If finite-build group cleanup is unknown, the build lock and device lease remain claimed for `qaren cleanup`.
 
 Every `cdp_run_action` RunRecord write goes through the proven-identity action
 write lock (`src/domain/atomic-writer.ts`) until Phase 4 removes RunRecords. A
@@ -182,12 +187,15 @@ makes `probeProcessBirth` return `unknown`, so persistence throws and
 handler-driven tests report zero RunRecords. Run those tests from an
 unsandboxed shell before treating that as a regression.
 
-Native runner checks:
+Local native iOS checks use the developer-only suite owner, which acquires the same device lease as `qaren check`, proves strict admission, and sets one exact destination with parallel workers disabled:
 
 ```bash
-corepack yarn test:native:ios
+corepack yarn build:core
+cargo run --manifest-path packages/qaren-cli/Cargo.toml --locked --example native-ios-suite -- run --device <UDID>
 corepack yarn test:native:android
 ```
+
+Suite records and redacted logs live under `~/.qaren/native-suites/<run-id>`. Unknown cleanup retains the lease; use the same example with `recover --run-id <run-id>` after the owner exits, rather than deleting locks. Recovery rechecks group absence and admission before release and preserves the original test verdict. The wrapper neither shuts down nor deletes the borrowed simulator; re-read its state before subsequent app work. Isolated CI still invokes `corepack yarn test:native:ios` directly.
 
 ## Changesets And Versions
 

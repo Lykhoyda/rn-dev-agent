@@ -49,6 +49,36 @@ test('fallback lines are classified together once and retain line numbers and wh
   assert.equal(judge.requests.length, 1, 'handing off the parsed plan never asks again');
 });
 
+test('fallback defines UI navigation as a press and retains the original target phrase', async () => {
+  const markdown = '1. Visit the profile tab';
+  const judge = scriptedJudge((questions) => {
+    const question = questions.verb_1;
+    assert.ok(question.type === 'choice');
+    assert.match(question.criteria.press, /navigating to a screen or tab/);
+    assert.match(question.criteria.press, /pressing its control/);
+    return {
+      verb_1: choice(question, 'press', {
+        press: 0.98,
+        fill: 0,
+        scroll: 0,
+        wait: 0,
+        back: 0,
+        dialog: 0,
+        check: 0,
+        unsupported: 0.02,
+      }),
+    };
+  });
+  const parsed = await parsePlanWithJev(markdown, judge);
+  assert.ok(parsed.blocks);
+  assert.equal(judge.requests.length, 1);
+  const item = parsed.blocks[0].items[0];
+  assert.ok(item.kind === 'press');
+  assert.deepEqual(item.target, { phrase: 'Visit the profile tab' });
+  assert.equal(item.source, 'jev');
+  assert.deepEqual(readPreparedPlan(markdown, preparePlan(markdown, parsed.blocks)), parsed.blocks);
+});
+
 test('grammar and literal checks never call the model during parsing', async () => {
   const judge = scriptedJudge(() => {
     throw new Error('must not ask');

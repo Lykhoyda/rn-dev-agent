@@ -76,8 +76,13 @@ export function handleMessage(
       const p = pending.get(msg.id)!;
       clearTimeout(p.timer);
       pending.delete(msg.id);
-      if (msg.error) {
-        p.reject(new CDPProtocolError(msg.error.code, msg.error.message));
+      if (Object.hasOwn(msg, 'error')) {
+        p.reject(
+          new CDPProtocolError(
+            typeof msg.error?.code === 'number' ? msg.error.code : -32603,
+            typeof msg.error?.message === 'string' ? msg.error.message : 'CDP protocol failure',
+          ),
+        );
       } else {
         p.resolve(msg.result);
       }
@@ -89,7 +94,7 @@ export function handleMessage(
         onConsoleHook(msg.params);
       }
     }
-  } catch (err) {
-    console.error('CDP: malformed message:', err instanceof Error ? err.message : err);
+  } catch {
+    console.error('CDP: malformed message, ignoring');
   }
 }

@@ -21,6 +21,10 @@ interface SnapshotNode {
 
 export interface FlatNode {
   ref: string;
+  presence?: unknown;
+  index?: number;
+  parentIndex?: number;
+  depth?: number;
   type: string;
   label?: string;
   identifier?: string;
@@ -298,7 +302,7 @@ export function flattenXCUITree(tree: XCUITreeNode): {
 
 export interface RefMapUpdateOutcome {
   applied: boolean;
-  reason?: 'empty-capture';
+  reason?: 'empty-capture' | 'snapshot-ref-freshness-unknown';
 }
 
 // GH #409 (Story 16): a snapshot quality verdict for the runner capture path,
@@ -319,6 +323,7 @@ export function buildSnapshotVerdict(
 ): SnapshotQualityVerdict {
   const reasons: string[] = [];
   if (nodeCount === 0) reasons.push('empty-capture');
+  if (outcome.reason && !reasons.includes(outcome.reason)) reasons.push(outcome.reason);
   return {
     state: reasons.length > 0 ? 'degraded' : 'ok',
     source,

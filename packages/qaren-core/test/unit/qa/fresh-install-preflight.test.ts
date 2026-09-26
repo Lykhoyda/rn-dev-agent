@@ -1,0 +1,743 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { mkdtemp, writeFile, readFile, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  detectIosExternalRunner,
+  isIosExternalRunnerProcessLine,
+  probeIosExternalRunnerStrict,
+} from '../../../dist/runners/external-runner-detect.js';
+import { freshInstallPreflight } from '../../../dist/qa/fresh-install-preflight.js';
+
+const UDID = 'FC78646A-56D5-4737-9CD0-A360D622F3B3';
+const OTHER = 'AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB';
+const entry = fileURLToPath(
+  new URL('../../../dist/qa/fresh-install-preflight.js', import.meta.url),
+);
+const args = ['--platform', 'ios', '--device', UDID];
+const ordinary = '1 /sbin/launchd\n2 /usr/bin/login\n';
+const secret = '/private/secret-token/flow.yaml';
+const driver = (name: string, device = UDID) =>
+  `20 /Users/test/Library/Developer/CoreSimulator/Devices/${device}/data/${name}.app/${name}\n`;
+
+const spacedExecutables = [
+  `/Users/test/Library/Developer/CoreSimulator/Devices/${UDID}/data/My AppUITests-Runner.app/My AppUITests-Runner`,
+  '/Applications/Xcode 26.app/Contents/Developer/usr/bin/xcodebuild',
+  '/Applications/Xcode - Beta.app/Contents/Developer/usr/bin/xcodebuild',
+  "/Applications/Xcode 'Beta'.app/Contents/Developer/usr/bin/xcodebuild",
+  '/Applications/Xcode "Beta".app/Contents/Developer/usr/bin/xcodebuild',
+  '/Applications/Xcode /Beta.app/Contents/Developer/usr/bin/xcodebuild',
+  `/Applications/Xcode '"Beta"' - /QA.app/Contents/Developer/usr/bin/xcodebuild`,
+  `/Users/test/Library/Developer/CoreSimulator/Devices/${UDID}/data/My App - QAUITests-Runner.app/My App - QAUITests-Runner`,
+  `/Users/test/Library/Developer/CoreSimulator/Devices/${UDID}/data/My 'QA' AppUITests-Runner.app/My 'QA' AppUITests-Runner`,
+  `/Users/test/Library/Developer/CoreSimulator/Devices/${UDID}/data/My 'QA' AppUITestsRunner.app/My 'QA' AppUITestsRunner`,
+  `/Users/Test /QA/Library/Developer/CoreSimulator/Devices/${UDID}/data/RnFastRunnerUITests-Runner.app/RnFastRunnerUITests-Runner`,
+  `/Users/Test User/Library/Developer/CoreSimulator/Devices/${UDID}/data/RnFastRunnerUITests-Runner.app/RnFastRunnerUITests-Runner`,
+  `/Users/Test Full Name/Library/Developer/CoreSimulator/Devices/${UDID}/data/WebDriverAgentRunner-Runner.app/WebDriverAgentRunner-Runner`,
+];
+
+const spacedShellScripts = [
+  '/Users/Test User/.maestro/bin/maestro',
+  '/Users/Test - QA User/.maestro/bin/maestro',
+  "/Users/Test 'QA' User/.maestro/bin/maestro",
+  '/Users/Test "QA" User/.maestro/bin/maestro',
+  '/Users/Test /QA User/.maestro/bin/maestro',
+  `/Users/Test '"QA"' - /User/.maestro/bin/maestro`,
+];
+
+const shellPrefixes = [
+  '/bin/sh',
+  '/bin/bash -eu',
+  '/bin/zsh -o errexit --',
+  '/bin/bash -O extglob -x',
+  '"/bin/sh" --',
+  '/usr/bin/env',
+];
+
+const ambiguousJvms = [
+  '/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin/java',
+  '/Applications/Android Studio - Beta.app/Contents/jbr/Contents/Home/bin/java',
+  "/Applications/Android 'Studio'.app/Contents/jbr/Contents/Home/bin/java",
+  '/Applications/Android "Studio".app/Contents/jbr/Contents/Home/bin/java',
+  '/Applications/Android /Studio.app/Contents/jbr/Contents/Home/bin/java',
+];
+
+function maestroJava(jvm: string, mode: string, scope = ''): string {
+  return `${jvm} -classpath /Users/test/.maestro/lib/* maestro.cli.AppKt ${mode}${scope}`;
+}
+
+function fakePs(stdout: string, stderr = ''): typeof execFile {
+  return (async (bin: string, argv: string[], opts: object) => {
+    assert.equal(bin, 'ps');
+    assert.deepEqual(argv, ['axww', '-o', 'pid=,command=']);
+    assert.deepEqual(opts, { timeout: 2_000, maxBuffer: 1024 * 1024, encoding: 'utf8' });
+    return { stdout, stderr };
+  }) as unknown as typeof execFile;
+}
+
+test('strict detector admits only complete, clean process scans', async () => {
+  assert.equal(await probeIosExternalRunnerStrict(fakePs(ordinary), UDID), 'clear');
+  for (const output of [
+    '',
+    '\n',
+    '   \n',
+    ordinary.trimEnd(),
+    'PID COMMAND\n',
+    '0 /sbin/launchd\n',
+    '12 \n',
+    '12\n',
+    '12 /bin/login\npartial',
+    `${ordinary}\n`,
+    '12 /bin/login\n12 /bin/login\n',
+    '9007199254740992 /bin/login\n',
+    '1 /bin/lo\0gin\n',
+    '1 /bin/lo\rgin\n',
+    '1 /bin/lo\ufffdgin\n',
+    `${ordinary}diagnostic: ${secret}\n`,
+    `1 ${'x'.repeat(1024 * 1024)}\n`,
+  ]) {
+    assert.equal(await probeIosExternalRunnerStrict(fakePs(output), UDID), 'unknown');
+  }
+  for (const diagnostic of ['warning', ' ', secret]) {
+    assert.equal(await probeIosExternalRunnerStrict(fakePs(ordinary, diagnostic), UDID), 'unknown');
+  }
+  const failing = (async () => {
+    throw new Error(secret);
+  }) as unknown as typeof execFile;
+  assert.equal(await probeIosExternalRunnerStrict(failing, UDID), 'unknown');
+  assert.equal(await detectIosExternalRunner(failing, UDID), null);
+});
+
+test('strict detector includes foreign, own and generic test drivers without changing legacy policy', async () => {
+  for (const name of [
+    'maestro-driver-iosUITests-Runner',
+    'WebDriverAgentRunner-Runner',
+    'RnFastRunnerUITests-Runner',
+    'XCTRunner',
+    'ExampleUITests-Runner',
+  ]) {
+    assert.equal(await probeIosExternalRunnerStrict(fakePs(driver(name)), UDID), 'busy', name);
+    assert.equal(
+      await probeIosExternalRunnerStrict(fakePs(driver(name, OTHER)), UDID),
+      'unknown',
+      name,
+    );
+    assert.equal(
+      await probeIosExternalRunnerStrict(fakePs(`20 /tmp/${name}\n`), UDID),
+      'unknown',
+      name,
+    );
+  }
+  for (const name of ['RnFastRunnerUITests-Runner', 'XCTRunner', 'ExampleUITests-Runner']) {
+    assert.equal(await detectIosExternalRunner(fakePs(driver(name)), UDID), null);
+  }
+  assert.ok(await detectIosExternalRunner(fakePs(driver('WebDriverAgentRunner-Runner')), UDID));
+  assert.equal(
+    await detectIosExternalRunner(fakePs(driver('WebDriverAgentRunner-Runner', OTHER)), UDID),
+    null,
+  );
+  assert.equal(await detectIosExternalRunner(fakePs('broken output'), UDID), null);
+  assert.equal(await detectIosExternalRunner(fakePs(ordinary, 'diagnostic'), UDID), null);
+});
+
+test('CLI, shell, Java and xcodebuild signatures are conservative, not arbitrary prompt words', async () => {
+  for (const command of [
+    '/opt/bin/maestro test',
+    '/bin/sh /opt/bin/maestro test',
+    'java -classpath lib maestro.cli.AppKt mcp',
+    '/Xcode/usr/bin/xcodebuild test -scheme Example',
+    '/Xcode/usr/bin/xcodebuild test-without-building -xctestrun /tmp/example.xctestrun',
+  ]) {
+    assert.equal(await probeIosExternalRunnerStrict(fakePs(`20 ${command}\n`), UDID), 'unknown');
+    assert.equal(
+      await probeIosExternalRunnerStrict(fakePs(`20 ${command} --device ${UDID}\n`), UDID),
+      command.startsWith('/bin/sh ') ? 'unknown' : 'busy',
+    );
+    assert.equal(
+      await probeIosExternalRunnerStrict(fakePs(`20 ${command} --log ${OTHER}\n`), UDID),
+      'unknown',
+    );
+    assert.equal(
+      await probeIosExternalRunnerStrict(fakePs(`20 ${command} --device ${UDID}-extra\n`), UDID),
+      'unknown',
+    );
+  }
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      fakePs(
+        `20 /bin/agent prompt Maestro WebDriverAgent RnFastRunner XCTRunner xcodebuild test ${UDID}\n`,
+      ),
+      UDID,
+    ),
+    'clear',
+  );
+  assert.equal(
+    await probeIosExternalRunnerStrict(fakePs('20 xcodebuild build -scheme Example\n'), UDID),
+    'clear',
+  );
+  assert.equal(
+    await probeIosExternalRunnerStrict(fakePs(`${ordinary}${driver('XCTRunner')}`), UDID),
+    'busy',
+  );
+  assert.equal(
+    await probeIosExternalRunnerStrict(fakePs(`${driver('XCTRunner')}bad row\n`), UDID),
+    'unknown',
+  );
+});
+
+test('attested unscoped MCP controls coexist while observed device automation still blocks', async () => {
+  const controls =
+    '20 /usr/bin/java -classpath lib maestro.cli.AppKt mcp\n' +
+    '21 /opt/jdk/bin/java -classpath lib maestro.cli.AppKt mcp\n';
+  const observe = async (pid: number) => ({
+    v: 1,
+    pid,
+    birth: { seconds: 1, micros: 0 },
+    executable: pid === 20 ? '/usr/bin/java' : '/opt/jdk/bin/java',
+  });
+  assert.equal(await probeIosExternalRunnerStrict(fakePs(ordinary + controls), UDID), 'unknown');
+  assert.equal(
+    await probeIosExternalRunnerStrict(fakePs(ordinary + controls), UDID, observe),
+    'clear',
+  );
+  assert.equal(
+    await probeIosExternalRunnerStrict(fakePs(ordinary + controls), UDID, async () => null),
+    'unknown',
+  );
+  for (const invalid of [
+    { v: 1, pid: 99, birth: { seconds: 1, micros: 0 }, executable: '/usr/bin/java' },
+    { v: 1, pid: 20, birth: { seconds: 1, micros: 0 }, executable: '/usr/bin/node' },
+    { v: 1, pid: 20, birth: { seconds: 1, micros: 0 }, executable: '/opt/jdk/bin/java' },
+    {
+      v: 1,
+      pid: 20,
+      birth: { seconds: Math.ceil(Date.now() / 1_000) + 10, micros: 0 },
+      executable: '/usr/bin/java',
+    },
+  ]) {
+    assert.equal(
+      await probeIosExternalRunnerStrict(fakePs(ordinary + controls), UDID, async () => invalid),
+      'unknown',
+    );
+  }
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      fakePs(ordinary + controls + driver('WebDriverAgentRunner-Runner').replace(/^20 /, '22 ')),
+      UDID,
+      observe,
+    ),
+    'busy',
+  );
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      fakePs(ordinary + controls + '22 /usr/bin/java -classpath lib maestro.cli.AppKt test\n'),
+      UDID,
+      observe,
+    ),
+    'unknown',
+  );
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      fakePs('20 /usr/bin/java -classpath lib maestro.cli.AppKt mcp --device ' + UDID + '\n'),
+      UDID,
+      observe,
+    ),
+    'busy',
+  );
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      fakePs(`20 /usr/bin/java -classpath lib maestro.cli.AppKt --device ${UDID} mcp\n`),
+      UDID,
+      observe,
+    ),
+    'busy',
+  );
+});
+
+test('ambiguous JVM paths preserve the Java/Maestro conjunction for CLI and MCP', async () => {
+  for (const jvm of ambiguousJvms) {
+    for (const quote of ['', '"', "'"]) {
+      for (const mode of ['test', 'mcp']) {
+        for (const scope of ['', ` --device ${UDID}`, ` --device ${OTHER}`]) {
+          const command = maestroJava(`${quote}${jvm}${quote}`, mode, scope);
+          assert.equal(
+            await probeIosExternalRunnerStrict(fakePs(`20 ${command}\n`), UDID),
+            'unknown',
+            command,
+          );
+          assert.equal(
+            await detectIosExternalRunner(fakePs(`20 ${command}\n`), UDID),
+            null,
+            'legacy unchanged',
+          );
+        }
+      }
+    }
+  }
+  for (const mode of ['test', 'mcp']) {
+    for (const entrypoint of ['maestro.cli.AppKt', 'maestro.cli.AppKt$Main', 'MAESTRO.CLI.AppKt']) {
+      const command = maestroJava('/usr/bin/java', mode, ` --device ${UDID}`).replace(
+        'maestro.cli.AppKt',
+        entrypoint,
+      );
+      assert.equal(await probeIosExternalRunnerStrict(fakePs(`20 ${command}\n`), UDID), 'busy');
+      assert.ok(await detectIosExternalRunner(fakePs(`20 ${command}\n`), UDID));
+      const ambiguous = command.replace('/usr/bin/java', ambiguousJvms[0]);
+      assert.equal(
+        await probeIosExternalRunnerStrict(fakePs(`20 ${ambiguous}\n`), UDID),
+        'unknown',
+      );
+    }
+  }
+});
+
+test('Java fallback requires both a java executable path fragment and the Maestro entrypoint field in one command', async () => {
+  for (const jvm of ambiguousJvms) {
+    for (const quote of ['', '"', "'"]) {
+      for (const entrypoint of [
+        'com.example.Main',
+        'notmaestro.cli.AppKt',
+        'maestro.cli.',
+        'maestro.cli.AppKt-extra',
+        '-Dentry=maestro.cli.AppKt',
+        '/tmp/maestro.cli.AppKt',
+      ]) {
+        const command = `${quote}${jvm}${quote} -classpath /tmp/lib ${entrypoint} --device ${UDID}`;
+        assert.equal(
+          await probeIosExternalRunnerStrict(fakePs(`20 ${command}\n`), UDID),
+          'clear',
+          command,
+        );
+      }
+      const prompt = maestroJava(`${quote}${jvm}${quote}`, 'mcp', ` --device ${UDID}`);
+      assert.equal(
+        await probeIosExternalRunnerStrict(fakePs(`20 /usr/bin/agent review ${prompt}\n`), UDID),
+        'unknown',
+      );
+      for (const suffix of ['w', '-helper', '.bak']) {
+        assert.equal(
+          await probeIosExternalRunnerStrict(
+            fakePs(`20 ${maestroJava(`${quote}${jvm}${suffix}${quote}`, 'test')}\n`),
+            UDID,
+          ),
+          'clear',
+        );
+      }
+    }
+  }
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      fakePs(`20 /usr/bin/agent review java maestro.cli.AppKt ${UDID}\n`),
+      UDID,
+    ),
+    'clear',
+  );
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      fakePs(
+        `20 ${ambiguousJvms[0]} com.example.Main\n21 /usr/bin/agent review maestro.cli.AppKt\n`,
+      ),
+      UDID,
+    ),
+    'clear',
+  );
+});
+
+test('covered-family checklist keeps every legacy and strict-only driver family non-clear under path ambiguity', async () => {
+  const families = [
+    ['Maestro CLI', '/tools/maestro test', true],
+    ['Maestro iOS runner', '/tools/maestro-driver-iosUITests-Runner', true],
+    ['Maestro shell script', '/bin/sh /tools/maestro.sh test', true],
+    ['WebDriverAgent', '/tools/WebDriverAgent', true],
+    ['WebDriverAgentRunner', '/tools/WebDriverAgentRunner', true],
+    ['WebDriverAgent-Runner', '/tools/WebDriverAgent-Runner', true],
+    ['WebDriverAgentRunner-Runner', '/tools/WebDriverAgentRunner-Runner', true],
+    ['Java Maestro CLI', maestroJava('/tools/java', 'test'), true],
+    ['Java Maestro MCP', maestroJava('/tools/java', 'mcp'), true],
+    ['Maestro xctestrun', '/tools/xcodebuild -xctestrun /tmp/maestro-config.xctestrun', true],
+    [
+      'WebDriverAgent xctestrun',
+      '/tools/xcodebuild -xctestrun /tmp/WebDriverAgent.xctestrun',
+      true,
+    ],
+    ['RnFastRunner', '/tools/RnFastRunnerUITests-Runner', false],
+    ['XCTRunner', '/tools/XCTRunner', false],
+    ['generic UITests runner', '/tools/ExampleUITests-Runner', false],
+    ['generic xcodebuild test', '/tools/xcodebuild test -scheme Example', false],
+    [
+      'generic xcodebuild test-without-building',
+      '/tools/xcodebuild test-without-building -scheme Example',
+      false,
+    ],
+  ] as const;
+  for (const [family, command, legacy] of families) {
+    assert.equal(isIosExternalRunnerProcessLine(`20 ${command}`), legacy, family);
+    for (const scope of ['', ` --device ${UDID}`]) {
+      const ambiguous = `${command.replace('/tools/', `/tools/Test 'QA' - /`)}${scope}`;
+      assert.equal(
+        await probeIosExternalRunnerStrict(fakePs(`20 ${ambiguous}\n`), UDID),
+        'unknown',
+        family,
+      );
+    }
+  }
+});
+
+test('strict detector never clears ambiguous spaced executable paths, including quoted paths', async () => {
+  for (const executable of spacedExecutables) {
+    for (const quote of ['', '"', "'"]) {
+      const command = `${quote}${executable}${quote} test -destination id=${UDID}`;
+      const output = `20 ${command}\n`;
+      assert.equal(await probeIosExternalRunnerStrict(fakePs(output), UDID), 'unknown', command);
+      assert.equal(await detectIosExternalRunner(fakePs(output), UDID), null, 'legacy unchanged');
+      assert.equal(
+        await probeIosExternalRunnerStrict(fakePs(output.replaceAll(UDID, OTHER)), UDID),
+        'unknown',
+      );
+      assert.equal(
+        await probeIosExternalRunnerStrict(fakePs(`20 ${quote}${executable}${quote}\n`), UDID),
+        'unknown',
+      );
+    }
+  }
+});
+
+test('strict detector refuses ambiguous shell script paths and unresolved leading options', async () => {
+  for (const shell of shellPrefixes) {
+    for (const script of spacedShellScripts) {
+      for (const quote of ['', '"', "'"]) {
+        const command = `${shell} ${quote}${script}${quote} test --device ${UDID}`;
+        const output = `20 ${command}\n`;
+        assert.equal(await probeIosExternalRunnerStrict(fakePs(output), UDID), 'unknown', command);
+        if (!script.includes(' /')) {
+          assert.equal(
+            await detectIosExternalRunner(fakePs(output), UDID),
+            null,
+            'legacy unchanged',
+          );
+        }
+        assert.equal(
+          await probeIosExternalRunnerStrict(fakePs(output.replaceAll(UDID, OTHER)), UDID),
+          'unknown',
+        );
+      }
+    }
+  }
+  for (const command of [
+    `/bin/sh ${'-e '.repeat(40)}${spacedShellScripts[0]} test`,
+    `/bin/sh --unrecognized-option ${spacedShellScripts[0]} test`,
+    '/bin/sh -o',
+  ]) {
+    assert.equal(await probeIosExternalRunnerStrict(fakePs(`20 ${command}\n`), UDID), 'unknown');
+  }
+});
+
+test('strict executable ambiguity keeps word-only prompts clear and never attributes prompt paths as busy', async () => {
+  const prompts = [
+    `review Maestro WebDriverAgent RnFastRunner XCTRunner My AppUITests-Runner ${UDID}`,
+    ...spacedExecutables.map((executable) => `review ${executable} test -destination id=${UDID}`),
+    ...spacedShellScripts.map((script) => `review ${script} test --device ${UDID}`),
+  ];
+  for (const prompt of prompts) {
+    for (const command of [
+      `/usr/bin/agent ${prompt}`,
+      `/usr/bin/agent --prompt "${prompt}"`,
+      `/usr/bin/node /tmp/agent.mjs "${prompt}"`,
+      `"/usr/bin/agent" --prompt "${prompt}"`,
+      `/bin/sh /tmp/agent.sh --prompt "${prompt}"`,
+      `/bin/bash -eu -- /tmp/agent.sh --prompt "${prompt}"`,
+      `/bin/sh -c '${prompt}'`,
+      `/bin/bash -lc '${prompt}'`,
+    ]) {
+      const status = await probeIosExternalRunnerStrict(fakePs(`20 ${command}\n`), UDID);
+      if (prompt === prompts[0]) assert.equal(status, 'clear', command);
+      // Unescaped ps text cannot always distinguish a driver path in argv from the executable.
+      else assert.notEqual(status, 'busy', command);
+    }
+  }
+});
+
+test('strict path ambiguity refuses over-budget lines rather than truncating away evidence', async () => {
+  const command = `/usr/bin/agent ${'word '.repeat(4_000)}`;
+  assert.equal(await probeIosExternalRunnerStrict(fakePs(`20 ${command}\n`), UDID), 'unknown');
+  assert.equal(
+    await probeIosExternalRunnerStrict(fakePs(`20 ${command}${spacedExecutables[0]}\n`), UDID),
+    'unknown',
+  );
+});
+
+test('strict probe validates the device before attempting a scan', async () => {
+  let calls = 0;
+  const spy = (async () => {
+    calls++;
+    return { stdout: ordinary };
+  }) as unknown as typeof execFile;
+  for (const device of [undefined, '', 'UDID', secret, `--${UDID}`, `${UDID}\n`]) {
+    assert.equal(await probeIosExternalRunnerStrict(spy, device), 'unknown');
+  }
+  assert.equal(calls, 0);
+});
+
+async function fixture(run: (root: string, marker: string) => Promise<void>) {
+  const root = await mkdtemp(join(tmpdir(), 'qaren-preflight-'));
+  const marker = join(root, 'called');
+  try {
+    await writeFile(
+      join(root, 'ps'),
+      `#!${process.execPath}
+const fs = require('node:fs');
+fs.appendFileSync(process.env.FAKE_PS_MARKER, JSON.stringify(process.argv.slice(2)) + '\\n');
+if (process.env.FAKE_PS_MODE === 'timeout') setInterval(() => {}, 1000);
+else {
+  process.stdout.write(process.env.FAKE_PS_MODE === 'overflow' ? 'x'.repeat(2 * 1024 * 1024) : (process.env.FAKE_PS_STDOUT || ''));
+  process.stderr.write(process.env.FAKE_PS_STDERR || '');
+  process.exitCode = Number(process.env.FAKE_PS_EXIT || 0);
+}
+`,
+      { mode: 0o755 },
+    );
+    await run(root, marker);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+function invoke(
+  root: string,
+  marker: string,
+  argv = args,
+  env: Record<string, string> = {},
+  nodeArgs = [entry],
+) {
+  return new Promise<{ code: number | string | null; stdout: string; stderr: string }>(
+    (resolve) => {
+      execFile(
+        process.execPath,
+        [...nodeArgs, ...argv],
+        {
+          env: {
+            ...process.env,
+            PATH: root,
+            FAKE_PS_MARKER: marker,
+            FAKE_PS_STDOUT: ordinary,
+            ...env,
+          },
+          timeout: 8_000,
+          encoding: 'utf8',
+        },
+        (error, stdout, stderr) =>
+          resolve({ code: error ? (error.code ?? null) : 0, stdout, stderr }),
+      );
+    },
+  );
+}
+
+function assertResult(result: Awaited<ReturnType<typeof invoke>>, status: string, deviceId = UDID) {
+  assert.equal(result.code, status === 'clear' ? 0 : 4);
+  assert.equal(result.stderr, '');
+  assert.equal(result.stdout.split('\n').length, 2, 'exactly one newline-terminated object');
+  assert.deepEqual(JSON.parse(result.stdout), { v: 1, platform: 'ios', deviceId, status });
+  assert.ok(!result.stdout.includes(secret));
+}
+
+test('real CLI runs only the fake PATH ps and agrees on exit/status without leaking diagnostics', async () => {
+  await fixture(async (root, marker) => {
+    for (const [env, status] of [
+      [{}, 'clear'],
+      [{ FAKE_PS_STDOUT: driver('WebDriverAgentRunner-Runner') }, 'busy'],
+      [{ FAKE_PS_STDOUT: driver('RnFastRunnerUITests-Runner') }, 'busy'],
+      [{ FAKE_PS_STDOUT: driver('WebDriverAgentRunner-Runner', OTHER) }, 'unknown'],
+      [{ FAKE_PS_STDOUT: `20 maestro mcp --output ${secret}\n` }, 'unknown'],
+      [
+        {
+          FAKE_PS_STDOUT: `20 maestro test --device ${UDID} ${secret}\n`,
+          RN_IOS_FOREIGN_GUARD: '0',
+          RN_IOS_FOREIGN_WARN: '0',
+        },
+        'busy',
+      ],
+      [{ FAKE_PS_STDOUT: '' }, 'unknown'],
+      [{ FAKE_PS_STDOUT: ordinary.trimEnd() }, 'unknown'],
+      [{ FAKE_PS_STDOUT: `malformed ${secret}\n` }, 'unknown'],
+      [{ FAKE_PS_STDERR: secret }, 'unknown'],
+      [{ FAKE_PS_EXIT: '1', FAKE_PS_STDERR: secret }, 'unknown'],
+      [{ FAKE_PS_MODE: 'overflow' }, 'unknown'],
+      [{ FAKE_PS_MODE: 'timeout' }, 'unknown'],
+    ] as const) {
+      assertResult(await invoke(root, marker, args, env), status);
+    }
+    const calls = (await readFile(marker, 'utf8')).trim().split('\n');
+    assert.equal(calls.length, 13);
+    for (const call of calls) assert.deepEqual(JSON.parse(call), ['axww', '-o', 'pid=,command=']);
+    await rm(join(root, 'ps'));
+    assertResult(await invoke(root, marker), 'unknown');
+  });
+});
+
+test('actual CLI refuses spaced executable paths through fake ps without leaking them', async () => {
+  await fixture(async (root, marker) => {
+    for (const executable of spacedExecutables) {
+      for (const quote of ['', '"', "'"]) {
+        assertResult(
+          await invoke(root, marker, args, {
+            FAKE_PS_STDOUT: `20 ${quote}${executable}${quote} test -destination id=${UDID} --log ${secret}\n`,
+          }),
+          'unknown',
+        );
+      }
+    }
+    for (const script of spacedShellScripts) {
+      for (const quote of ['', '"', "'"]) {
+        assertResult(
+          await invoke(root, marker, args, {
+            FAKE_PS_STDOUT: `20 /bin/sh -eu -- ${quote}${script}${quote} test --device ${UDID} --log ${secret}\n`,
+          }),
+          'unknown',
+        );
+      }
+    }
+  });
+});
+
+test('actual CLI refuses ambiguous JVM Maestro CLI and MCP processes, but admits non-Maestro Java', async () => {
+  await fixture(async (root, marker) => {
+    for (const jvm of ambiguousJvms) {
+      for (const quote of ['', '"', "'"]) {
+        for (const mode of ['test', 'mcp']) {
+          for (const scope of ['', ` --device ${UDID}`]) {
+            const command = maestroJava(`${quote}${jvm}${quote}`, mode, scope);
+            assertResult(
+              await invoke(root, marker, args, { FAKE_PS_STDOUT: `20 ${command}\n` }),
+              'unknown',
+            );
+          }
+        }
+        assertResult(
+          await invoke(root, marker, args, {
+            FAKE_PS_STDOUT: `20 ${quote}${jvm}${quote} com.example.Main\n`,
+          }),
+          'clear',
+        );
+      }
+    }
+  });
+});
+
+test('actual CLI rejects all invalid arguments without spawning ps or reflecting their values', async () => {
+  await fixture(async (root, marker) => {
+    for (const invalid of [
+      [],
+      ['--platform', 'ios'],
+      ['--device', UDID],
+      [...args, '--extra'],
+      ['--platform', 'android', '--device', UDID],
+      ['--platform', secret, '--device', UDID],
+      ['--device', UDID, '--device', OTHER],
+      ['--platform', 'ios', '--platform', 'ios'],
+      ['--unknown', secret, '--device', UDID],
+      ['--platform=ios', '--device', UDID],
+      ['--platform', 'ios', '--device', secret],
+      ['--platform', 'ios', '--device', ''],
+      ['--platform', 'ios', '--device', `${UDID}\n`],
+      ['--platform', 'ios', '--device', 'UDID'],
+      [...args, '--process-observer', 'relative'],
+      [...args, '--process-observer', ''],
+    ]) {
+      assertResult(await invoke(root, marker, invalid), 'unknown', '');
+      assert.deepEqual(await freshInstallPreflight(invalid), {
+        v: 1,
+        platform: 'ios',
+        deviceId: '',
+        status: 'unknown',
+      });
+    }
+    await assert.rejects(readFile(marker), { code: 'ENOENT' });
+  });
+});
+
+test('CLI identity disambiguation keeps observer output private and refuses unknown acquisition', async () => {
+  await fixture(async (root, marker) => {
+    const observer = join(root, 'observer');
+    await writeFile(
+      observer,
+      `#!${process.execPath}
+const fs = require('node:fs');
+fs.appendFileSync(process.env.FAKE_OBSERVER_MARKER, JSON.stringify(process.argv.slice(2)) + '\\n');
+if (process.env.FAKE_OBSERVER_MODE === 'timeout') setInterval(() => {}, 1000);
+else {
+  process.stdout.write(process.env.FAKE_OBSERVER_OUTPUT || '');
+  process.stderr.write(process.env.FAKE_OBSERVER_STDERR || '');
+  process.exitCode = Number(process.env.FAKE_OBSERVER_EXIT || 0);
+}
+`,
+      { mode: 0o755 },
+    );
+    const output = {
+      v: 1,
+      pid: 20,
+      birth: { seconds: 1, micros: 0 },
+      executable: '/tools/agent',
+    };
+    const observerMarker = join(root, 'observed');
+    const env = {
+      FAKE_PS_STDOUT: `20 agent ${'word '.repeat(4000)}${secret}\n`,
+      FAKE_OBSERVER_MARKER: observerMarker,
+      FAKE_OBSERVER_OUTPUT: JSON.stringify(output),
+    };
+    for (const [change, status] of [
+      [{}, 'clear'],
+      [{ FAKE_OBSERVER_OUTPUT: JSON.stringify({ ...output, pid: 21 }) }, 'unknown'],
+      [{ FAKE_OBSERVER_OUTPUT: JSON.stringify({ ...output, executable: '/bin/bash' }) }, 'unknown'],
+      [{ FAKE_OBSERVER_OUTPUT: `not-json ${secret}` }, 'unknown'],
+      [{ FAKE_OBSERVER_OUTPUT: 'x'.repeat(40_000) }, 'unknown'],
+      [{ FAKE_OBSERVER_STDERR: secret }, 'unknown'],
+      [{ FAKE_OBSERVER_EXIT: '4' }, 'unknown'],
+      [{ FAKE_OBSERVER_MODE: 'timeout' }, 'unknown'],
+    ] as const) {
+      assertResult(
+        await invoke(root, marker, [...args, '--process-observer', observer], {
+          ...env,
+          ...change,
+        }),
+        status,
+      );
+    }
+    for (const call of (await readFile(observerMarker, 'utf8')).trim().split('\n'))
+      assert.deepEqual(JSON.parse(call), ['--internal-process-observation', '20']);
+    await rm(observer);
+    assertResult(
+      await invoke(root, marker, [...args, '--process-observer', observer], env),
+      'unknown',
+    );
+  });
+});
+
+test('direct invocation follows realpaths, preserves exact UDID, and imports have no scan or output', async () => {
+  await fixture(async (root, marker) => {
+    const link = join(root, 'preflight.mjs');
+    await symlink(entry, link);
+    assertResult(
+      await invoke(root, marker, ['--device', UDID.toLowerCase(), '--platform', 'ios'], {}, [link]),
+      'clear',
+      UDID.toLowerCase(),
+    );
+    await rm(marker);
+    const imported = await invoke(root, marker, [], {}, [
+      '--input-type=module',
+      '-e',
+      `await import(${JSON.stringify(entry)});`,
+    ]);
+    assert.deepEqual(imported, { code: 0, stdout: '', stderr: '' });
+    const importer = join(root, 'importer.mts');
+    await writeFile(importer, `await import(${JSON.stringify(entry)});\n`);
+    assert.deepEqual(await invoke(root, marker, args, {}, [importer]), {
+      code: 0,
+      stdout: '',
+      stderr: '',
+    });
+    await assert.rejects(readFile(marker), { code: 'ENOENT' });
+  });
+});

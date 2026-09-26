@@ -89,6 +89,53 @@ pub fn pgid_of(runner: &mut dyn Runner, pid: i32) -> Option<i32> {
     output.stdout.trim().parse::<i32>().ok()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupPresence {
+    Present,
+    Absent,
+    Unknown,
+}
+
+pub fn group_presence(runner: &mut dyn Runner, pgid: i32) -> GroupPresence {
+    let output = runner.run(&CmdSpec::new(
+        "ps-groups",
+        "ps",
+        &["-A", "-o", "pid=", "-o", "pgid=", "-o", "stat="],
+        10,
+    ));
+    if !output.ok()
+        || !output.stderr.is_empty()
+        || output.stdout.trim().is_empty()
+        || !output.stdout.ends_with('\n')
+        || output.stdout.contains(['\0', '\r', '\u{fffd}'])
+    {
+        return GroupPresence::Unknown;
+    }
+    let mut present = false;
+    let mut pids = std::collections::HashSet::new();
+    for row in output.stdout.lines() {
+        let cols: Vec<_> = row.split_whitespace().collect();
+        if cols.len() != 3
+            || !cols[0].parse::<i32>().is_ok_and(|id| id > 0)
+            || !cols[1].parse::<i32>().is_ok_and(|id| id >= 0)
+            || !pids.insert(cols[0].parse::<i32>().ok())
+            || !cols[2].starts_with(['R', 'S', 'D', 'T', 't', 'Z', 'X', 'I', 'W', 'U'])
+            || !cols[2]
+                .chars()
+                .skip(1)
+                .all(|flag| "<>NLsl+EXWVATIS".contains(flag))
+        {
+            return GroupPresence::Unknown;
+        }
+        present |= cols[1].parse::<i32>().ok() == Some(pgid);
+    }
+    if present {
+        GroupPresence::Present
+    } else {
+        GroupPresence::Absent
+    }
+}
+
 pub fn metro_responding(runner: &mut dyn Runner, port: u16) -> bool {
     let output = runner.run(&status_spec(port));
     output.ok() && output.stdout.trim() == "packager-status:running"

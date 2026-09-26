@@ -1,4 +1,5 @@
 use crate::failure::{Failure, FailureCode};
+use crate::scenario::{require_launch_scheme, Platform};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -20,6 +21,8 @@ pub struct CheckConfig {
     pub android: Option<AndroidConfig>,
     #[serde(default)]
     pub node_path: Option<String>,
+    #[serde(default)]
+    pub dev_client_scheme: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -47,6 +50,13 @@ fn d_metro_port() -> u16 {
 }
 
 impl CheckConfig {
+    pub fn validate_for_platform(&self, platform: Platform) -> Result<(), Failure> {
+        if platform == Platform::Ios {
+            require_launch_scheme(self.dev_client_scheme.as_deref())?;
+        }
+        Ok(())
+    }
+
     // Returns the bytes it parsed so the run record hashes exactly that configuration.
     pub fn load(path: &Path) -> Result<(CheckConfig, String), Failure> {
         let raw = std::fs::read_to_string(path).map_err(|e| {
@@ -62,7 +72,7 @@ impl CheckConfig {
                 "config",
                 FailureCode::ScenarioInvalid,
                 format!("{} does not parse: {e}", path.display()),
-                "fix .qaren/config.yaml (keys: appId, packageManager, metroPort, ios, android, nodePath)",
+                "fix .qaren/config.yaml (keys: appId, packageManager, metroPort, ios, android, nodePath, devClientScheme)",
             )
         })?;
         config.validate(path)?;

@@ -44,6 +44,11 @@ fn dry_run_against_checked_in_ios_scenario_emits_parseable_receipt() {
     assert_eq!(value["verb"], "prepare");
     let result = value["result"].as_str().unwrap();
     match result {
+        "refused" => {
+            assert_eq!(output.status.code(), Some(4));
+            assert_eq!(value["failure"]["code"], "DEV_CLIENT_SCHEME_REQUIRED");
+            assert_eq!(value["commands_executed"], 0);
+        }
         "planned" => {
             assert!(output.status.success());
             let planned = value["planned_commands"].as_array().unwrap();
@@ -84,6 +89,42 @@ fn usage_errors_exit_2_with_empty_stdout() {
 }
 
 #[test]
+fn fresh_install_is_check_only_and_opt_in() {
+    for verb in ["prepare", "prewarm", "status", "cleanup", "complete"] {
+        let mut args = vec![verb, "missing", "--fresh-install"];
+        if verb == "complete" {
+            args.push("log");
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_qaren"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("only valid for check"));
+        assert!(output.stdout.is_empty());
+    }
+    for fresh in [false, true] {
+        let mut args = vec![
+            "check",
+            "--plan-file",
+            "missing",
+            "--config",
+            "/nonexistent/qaren-config",
+        ];
+        if fresh {
+            args.push("--fresh-install");
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_qaren"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(receipt["commands_executed"], 0);
+    }
+}
+
+#[test]
 fn status_of_unknown_run_exits_3_with_receipt() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ghost = format!("ghost-run-{}", std::process::id());
@@ -97,6 +138,75 @@ fn status_of_unknown_run_exits_3_with_receipt() {
     let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(value["result"], "unknown");
     assert_eq!(value["failure"]["code"], "RUN_RECORD_UNAVAILABLE");
+}
+
+#[test]
+fn boot_device_usage_requires_check_ios_and_an_exact_device_uuid() {
+    for args in [
+        vec!["prepare", "missing", "--boot-device"],
+        vec!["prewarm", "missing", "--boot-device"],
+        vec!["status", "missing", "--boot-device"],
+        vec!["cleanup", "missing", "--boot-device"],
+        vec!["complete", "missing", "log", "--boot-device"],
+        vec!["check", "--plan-file", "missing", "--boot-device"],
+        vec![
+            "check",
+            "--plan-file",
+            "missing",
+            "--boot-device",
+            "--device",
+            "booted",
+        ],
+        vec![
+            "check",
+            "--plan-file",
+            "missing",
+            "--boot-device",
+            "--device",
+            "1DC408C4-51DA-4C4F-ACA1-39881C916FDD",
+            "--platform",
+            "android",
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_qaren"))
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("--boot-device"));
+        assert!(!stderr.contains("unknown flag"), "{stderr}");
+    }
+    for udid in [
+        "1DC408C4-51DA-4C4F-ACA1-39881C916FDD",
+        "1dc408c4-51da-4c4f-aca1-39881c916fdd",
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_qaren"))
+            .args([
+                "check",
+                "--plan-file",
+                "missing",
+                "--boot-device",
+                "--device",
+                udid,
+                "--config",
+                "/nonexistent/qaren-config",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(receipt["commands_executed"], 0);
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_qaren"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8_lossy(&output.stderr);
+    assert!(help.contains("[--boot-device]"));
+    assert!(help.contains("exact iOS simulator UUID"));
 }
 
 #[test]

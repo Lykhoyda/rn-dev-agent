@@ -133,6 +133,15 @@ pub fn attach_artifacts(receipt: &mut Receipt, runs_root: &Path, record: &RunRec
             .artifacts
             .insert("build_log".to_string(), metro.log.clone());
     }
+    let build_log = run_dir.join("logs/expo-run-ios.log");
+    if build_log.is_file() {
+        if let Some(metro) = &record.resources.metro {
+            receipt
+                .artifacts
+                .insert("metro_log".into(), metro.log.clone());
+        }
+        receipt.artifacts.insert("build_log".into(), build_log);
+    }
     if let Some(tunnel) = &record.resources.tunnel {
         receipt
             .artifacts
