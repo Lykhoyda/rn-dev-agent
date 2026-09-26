@@ -446,7 +446,7 @@ export async function decideScreen(
   const sanitize = mask.apply;
   const modelDescribe = (e: Element): string => sanitize(describe(e));
   for (const q of Object.values(questions)) {
-    q.instructions = `${sanitize(q.instructions)} Each opaque QAREN_VALUE token represents one original value. The same token in the expectation and observed text is evidence of the same value; different tokens represent different values. Tokens disclose no content, length, format, order or validity.`;
+    q.instructions = `${sanitize(q.instructions)} Each opaque QAREN_VALUE token represents one original value. The same token in the expectation and observed text is evidence of the same value; different tokens represent different values. Text equal to a protected value is always shown as its token, so unmasked text never equals a token's value. Tokens disclose no content, length, format, order or validity.`;
     if (q.criteria)
       q.criteria = Object.fromEntries(
         Object.entries(q.criteria).map(([key, text]) => [key, sanitize(text)]),

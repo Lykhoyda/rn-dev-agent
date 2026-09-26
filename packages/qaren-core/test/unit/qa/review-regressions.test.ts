@@ -59,6 +59,7 @@ test('review P1: protected value equality survives projection and an unequal val
       /same token in the expectation and observed text is evidence of the same value/,
     );
     assert.match(instructions, /different tokens represent different values/);
+    assert.match(instructions, /unmasked text never equals a token's value/);
     assert.match(instructions, /no content, length, format, order or validity/);
   }
   const tokens = (requests: typeof matching.requests) =>

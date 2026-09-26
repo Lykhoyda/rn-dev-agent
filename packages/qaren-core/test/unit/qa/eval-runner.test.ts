@@ -78,7 +78,7 @@ test('all frozen authored Screens exercise a separate synthetic model contract w
   const names = readdirSync(root)
     .filter((name) => name.endsWith('.json'))
     .sort();
-  assert.equal(names.length, 13);
+  assert.equal(names.length, 14);
   for (const name of names) {
     const fixture: EvalCase = JSON.parse(readFileSync(new URL(name, root), 'utf8'));
     const before = structuredClone(fixture.screen);
