@@ -80,6 +80,27 @@ test('protected equality still requires the noul threshold rather than a matchin
   }
 });
 
+test('review P1: an unparsed check cannot pass on a protected value the screen does not show', async () => {
+  const greeting = {
+    kind: 'check' as const,
+    literal: false,
+    text: 'The greeting says Welcome, Anton',
+    line: 2,
+  };
+  for (const [text, expected, asked] of [
+    ['Welcome, Anton', 'pass', 1],
+    ['Welcome, Bob', 'unsure', 0],
+  ] as const) {
+    const judge = alwaysYes();
+    const decision = await decideScreen(screen([], [text]), judge, greeting, undefined, ['Anton']);
+    assert.equal(decision.check, expected, text);
+    assert.equal(judge.requests.length, asked, text);
+  }
+  const judge = alwaysYes();
+  const mismatch = await decideScreen(nameScreen('Bob'), judge, nameCheck, undefined, ['Anton']);
+  assert.equal(mismatch.check, 'fail', 'a local mismatch outranks the unobserved-value bound');
+});
+
 test('review P1: opaque input values cannot prove hidden semantic properties', async () => {
   for (const text of [
     'The name field contains a valid name',

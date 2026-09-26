@@ -374,6 +374,20 @@ function protectedCheckBound(
   return bounds.length > 1 ? 'unsure' : bounds[0];
 }
 
+// Jev sees only masked text, so it cannot rule out a protected value the screen never shows.
+function unobservedValue(
+  text: string,
+  screen: Screen,
+  values: readonly string[],
+  privacy: ObservedPrivacy,
+): boolean {
+  const observed = [...screen.visibleText, ...inputValues(screen)];
+  return values.some((value) => {
+    const { apply } = privacy.maskForModel([value], []);
+    return apply(text) !== text && observed.every((line) => apply(line) === line);
+  });
+}
+
 export async function decideScreen(
   screen: Screen,
   judge: Judge,
@@ -408,7 +422,10 @@ export async function decideScreen(
     ...screen.visibleText,
     ...screen.elements.map(describe),
   ]);
-  const bound = check ? protectedCheckBound(check, screen, values) : undefined;
+  const bound = check
+    ? (protectedCheckBound(check, screen, values) ??
+      (!check.literal && unobservedValue(check.text, screen, values, privacy) ? 'unsure' : undefined))
+    : undefined;
   const visibilityBound =
     presence && 'question' in presence
       ? protectedCheckBound(
