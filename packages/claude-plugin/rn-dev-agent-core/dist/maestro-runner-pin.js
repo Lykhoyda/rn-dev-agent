@@ -10222,6 +10222,7 @@ var init_authority_gate = __esm({
     "use strict";
     init_utils();
     init_registry();
+    init_authority_store();
     init_metro_origin();
     init_install_reissue();
     init_tool_profiles();
