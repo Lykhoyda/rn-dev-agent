@@ -136,7 +136,7 @@ export async function walkBlock(
     return async (
       screen: Screen,
       initial?: ScreenDecision,
-    ): Promise<{ screen: Screen; found: boolean }> => {
+    ): Promise<{ screen: Screen; found: boolean; pending?: boolean }> => {
       let decision = initial ?? (await decide(screen, undefined, item));
       for (;;) {
         const visibility = decision.visibility;
@@ -148,6 +148,8 @@ export async function walkBlock(
         if ('refuse' in visibility) throw new ResolutionError(visibility);
         if (visibility.verdict === 'present') return { screen, found: true };
         if (visibility.verdict === 'absent') return { screen, found: false };
+        if (visibility.verdict === 'pending' && item.kind === 'wait')
+          return { screen, found: false, pending: true };
         const remaining = deadline - deps.now();
         if (reasks >= CHECK.reasks || remaining <= 0) break;
         reasks += 1;
@@ -200,10 +202,12 @@ export async function walkBlock(
         let screen = held?.screen ?? (await capture(item));
         cached = undefined;
         const probe = visibilityProbe(item, deadline);
+        let pending = false;
         const visible = async (s: Screen, initial?: ScreenDecision): Promise<boolean> => {
           if (item.target.quoted !== undefined) return targetVisible(item.target, s);
           const observed = await probe(s, initial);
           screen = observed.screen;
+          pending = observed.pending === true;
           return observed.found;
         };
         let found = await visible(screen, held?.decision);
@@ -217,7 +221,9 @@ export async function walkBlock(
           emit({ ...base(item, 1), ...(shot ? { screenshot: shot } : {}), outcome: 'pass' });
           continue;
         }
-        const reason = `"${item.target.phrase}" did not appear within ${WAIT_BUDGET_MS / 1000}s`;
+        const reason = pending
+          ? `VISIBILITY_UNSURE: "${item.target.phrase}" was not established within ${WAIT_BUDGET_MS / 1000}s; unqualified heading evidence does not prove absence`
+          : `"${item.target.phrase}" did not appear within ${WAIT_BUDGET_MS / 1000}s`;
         return failed(item, 1, reason, screen, shot);
       }
 
