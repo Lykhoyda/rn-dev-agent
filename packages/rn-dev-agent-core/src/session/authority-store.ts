@@ -97,7 +97,9 @@ function runWithBusyRetry<T>(operation: () => T, timeoutMs = DATABASE_OPERATION_
     } catch (error) {
       const code = (error as { code?: string }).code;
       const message = error instanceof Error ? error.message : '';
-      if (code !== 'SQLITE_BUSY' && !/database is (?:locked|busy)/i.test(message)) throw error;
+      if (code !== 'SQLITE_BUSY' && !/database is (?:locked|busy)/i.test(message)) {
+        throw unreadableStoreError(error) ?? error;
+      }
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw error;
       Atomics.wait(INITIALIZATION_WAIT, 0, 0, Math.min(25, remaining));
@@ -105,12 +107,31 @@ function runWithBusyRetry<T>(operation: () => T, timeoutMs = DATABASE_OPERATION_
   }
 }
 
+const UNREADABLE_SQLITE_PRIMARY_CODES = new Set([10, 11, 26]);
+
+function unreadableStoreError(error: unknown): AuthorityStoreUnavailableError | null {
+  const errcode = (error as { errcode?: unknown }).errcode;
+  if (typeof errcode !== 'number' || !UNREADABLE_SQLITE_PRIMARY_CODES.has(errcode & 0xff)) {
+    return null;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return new AuthorityStoreUnavailableError(
+    `AUTHORITY_STORE_UNAVAILABLE: authority registry is unreadable (${message})`,
+    { cause: error },
+  );
+}
+
 function retryingDatabase(database: AuthorityDatabase): AuthorityDatabase {
   return {
     close: () => database.close(),
     exec: (sql) => runWithBusyRetry(() => database.exec(sql)),
     prepare: (sql) => {
-      const statement = database.prepare(sql);
+      let statement: ReturnType<AuthorityDatabase['prepare']>;
+      try {
+        statement = database.prepare(sql);
+      } catch (error) {
+        throw unreadableStoreError(error) ?? error;
+      }
       return {
         get: (...params) => runWithBusyRetry(() => statement.get(...params)),
         run: (...params) => runWithBusyRetry(() => statement.run(...params)),
