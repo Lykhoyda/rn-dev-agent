@@ -120,6 +120,21 @@ test('native text, image and plain views are not pressable unless React evidence
     { elements: [plain.elements[2]] },
     'static content no longer blocks choosing among proven controls',
   );
+  const backed = projection.join(
+    [
+      { ref: '@title', type: 'StaticText', label: 'Welcome', hittable: true },
+      { ref: '@go', type: 'Other', identifier: 'go', label: 'Go', hittable: true },
+    ],
+    [{ role: 'button', testID: 'go', capabilities: { press: true } }],
+    'app',
+    complete,
+    { hosts: [], complete: true },
+  );
+  assert.deepEqual(
+    projection.semanticActionView(backed, 'press'),
+    { elements: [backed.elements[1]] },
+    'a uniquely associated React control is chosen next to static text',
+  );
 });
 
 test('native control types supply operation evidence independently of digest roles', () => {

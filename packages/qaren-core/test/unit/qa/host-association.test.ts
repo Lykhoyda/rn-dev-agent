@@ -440,21 +440,33 @@ test('generic and text views leave the choice only while every interactive host 
         presence: { ...f.native.nodes[2].presence, nodeIndex: 3 },
       });
       f.native.snapshotVerdict.nodeCount++;
-      if (stray)
+      if (stray) {
         f.hostEvidence.hosts.push({
           role: null,
           roleSource: 'none',
           capabilities: { press: true },
         });
+        f.hostEvidence.typography!.nodes.push({
+          hostIndex: f.hostEvidence.hosts.length - 1,
+          parentHostIndex: null,
+          rootIndex: 0,
+          hostType: 'RCTView',
+          rect: { x: 0, y: 500, width: 40, height: 40 },
+          text: { kind: 'none' },
+        });
+      }
       const screen = await f.capture();
+      assert.deepEqual(screen.coverage, { native: 'complete', react: 'complete' }, type);
       assert.equal(screen.elements.length, 4);
       assert.equal(screen.elements[3].semantic?.press, stray ? 'unknown' : 'unsupported', type);
-      if (stray)
+      if (stray) {
+        const refused = semanticActionView(screen, 'press');
         assert.ok(
-          'refuse' in semanticActionView(screen, 'press'),
+          'refuse' in refused,
           `${type}: an unassociated handler could be this view, so it is never removed`,
         );
-      else
+        assert.match(refused.reason, /; 1 interactive React host unassociated\)$/);
+      } else
         assert.deepEqual(semanticActionView(screen, 'press'), { elements: [screen.elements[2]] });
     }
   }

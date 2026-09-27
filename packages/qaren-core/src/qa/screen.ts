@@ -51,6 +51,7 @@ export interface Screen {
   };
   captureCoverage?: Screen['coverage'];
   nativeCaptureCauses?: string[];
+  pressEvidenceGap?: string;
   reactHostEvidence?: ReactHostEvidence;
 }
 
@@ -282,14 +283,21 @@ export function join(
   const interactiveRole = (role: string | null | undefined) =>
     !!role && kindOfRole(role) !== 'text' && kindOfRole(role) !== 'image';
   // Native type may rule out press only while every interactive React host is accounted for.
-  const unaccountedInteractiveHost =
-    reactHostEvidence === undefined ||
-    !reactHostEvidence.complete ||
-    reactHostEvidence.hosts.some(
+  const unassociated =
+    reactHostEvidence?.hosts.filter(
       (host, hostIndex) =>
         (host.capabilities.press === true || interactiveRole(host.role)) &&
         !associations.has(hostIndex),
-    );
+    ) ?? [];
+  const pressEvidenceGap =
+    reactHostEvidence === undefined
+      ? 'React host evidence missing'
+      : !reactHostEvidence.complete
+        ? 'React host evidence incomplete'
+        : unassociated.length > 0
+          ? `${unassociated.length} interactive React host${unassociated.length === 1 ? '' : 's'} unassociated`
+          : undefined;
+  const unaccountedInteractiveHost = pressEvidenceGap !== undefined;
   let width = 0;
   let height = 0;
   for (const n of nodes) {
@@ -497,6 +505,7 @@ export function join(
     semanticUnassociatedReact,
     ...(coverage ? { coverage } : {}),
     ...(reactHostEvidence ? { reactHostEvidence } : {}),
+    ...(pressEvidenceGap ? { pressEvidenceGap } : {}),
   };
 }
 
@@ -546,7 +555,9 @@ export function semanticActionView(screen: Screen, kind: 'press' | 'fill'): Proj
     if (!e.semantic) return incomplete('an observation has no semantic facts');
     if (e.semantic.visibility === 'hidden' || e.semantic[kind] === 'unsupported') continue;
     if (e.semantic[kind] !== 'supported')
-      return incomplete(`an observation has unknown ${kind} capability (${e.ref}, ${e.kind})`);
+      return incomplete(
+        `an observation has unknown ${kind} capability (${e.ref}, ${e.kind}${kind === 'press' && screen.pressEvidenceGap ? `; ${screen.pressEvidenceGap}` : ''})`,
+      );
     if (e.semantic.nativePresence && e.semantic.visibility !== 'visible')
       return incomplete('a native control lacks positive platform presence');
     if (e.semantic.visibility !== 'offscreen' && !e.hittable)
