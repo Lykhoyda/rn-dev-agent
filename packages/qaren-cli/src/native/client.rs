@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 
 // curl exits proving the request never left: bad invocation, bad URL, unresolved host, connect refused.
 const UNSENT_EXITS: [i32; 4] = [2, 3, 6, 7];
+const RUNNER_PROTOCOL_VERSION: u64 = 2;
 
 // Whether a verb can change device state; a refusal without mutation evidence is only clean for a read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +100,9 @@ fn classify(verb: &str, effect: Effect, output: &PrivateOutput) -> DriverResult<
     }
     let reply: Value =
         serde_json::from_str(output.stdout()).map_err(|_| unknown("malformed reply"))?;
+    if reply["v"].as_u64() != Some(RUNNER_PROTOCOL_VERSION) {
+        return Err(unknown("incompatible runner protocol version"));
+    }
     match reply["ok"].as_bool() {
         Some(true) if reply["data"].is_object() => return Ok(reply["data"].clone()),
         Some(true) => return Err(unknown("reply carries no data object")),
@@ -113,6 +117,10 @@ fn classify(verb: &str, effect: Effect, output: &PrivateOutput) -> DriverResult<
         .to_string();
     match (error.get("mutation").and_then(Value::as_str), effect) {
         (Some("none"), _) | (None, Effect::Reads) => Err(DriverError::Refused {
+            code,
+            message: String::new(),
+        }),
+        (None, Effect::Mutates) if code == "KEYBOARD_DISMISS_FAILED" => Err(DriverError::Refused {
             code,
             message: String::new(),
         }),
@@ -167,7 +175,7 @@ mod tests {
     }
 
     fn error(body: &str) -> CmdOutput {
-        CmdOutput::success(&format!(r#"{{"ok":false,"error":{body}}}"#))
+        CmdOutput::success(&format!(r#"{{"ok":false,"error":{body},"v":2}}"#))
     }
 
     fn classify_one(output: CmdOutput, effect: Effect) -> DriverError {
@@ -275,11 +283,29 @@ mod tests {
     }
 
     #[test]
+    fn incompatible_protocol_replies_are_unknown() {
+        for reply in [
+            r#"{"ok":true,"data":{},"v":3}"#,
+            r#"{"ok":false,"error":{"code":"KEYBOARD_DISMISS_FAILED"},"v":1}"#,
+            r#"{"ok":true,"data":{}}"#,
+        ] {
+            assert!(matches!(
+                classify_one(CmdOutput::success(reply), Effect::Mutates),
+                DriverError::Unknown(why) if why.contains("protocol version")
+            ));
+        }
+    }
+
+    #[test]
     fn refusals_need_mutation_evidence_unless_the_verb_only_reads() {
         let none = error(r#"{"code":"KEYBOARD_DISMISS_FAILED","message":"m","mutation":"none"}"#);
         assert!(matches!(
             classify_one(none, Effect::Mutates),
             DriverError::Refused { code, message } if code == "KEYBOARD_DISMISS_FAILED" && message.is_empty()
+        ));
+        assert!(matches!(
+            classify_one(error(r#"{"code":"KEYBOARD_DISMISS_FAILED","message":"m"}"#), Effect::Mutates),
+            DriverError::Refused { code, .. } if code == "KEYBOARD_DISMISS_FAILED"
         ));
         let bare = error(r#"{"code":"INVALID_ARGUMENT","message":"m"}"#);
         assert!(matches!(

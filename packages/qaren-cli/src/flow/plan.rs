@@ -8,6 +8,9 @@ pub const PLAN_SCHEMA: &str = "rn-flow/1";
 const MAX_PLAN_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STEPS: usize = 10_000;
 const MAX_DEPTH: usize = 5;
+const MAX_BUDGET_MS: u64 = 600_000;
+const MAX_SWIPE_MS: u64 = 60_000;
+const MAX_ERASE_CHARACTERS: u64 = 10_000;
 const BASE_KEYS: [&str; 5] = ["id", "source", "domain", "optional", "budgetMs"];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -436,6 +439,12 @@ impl Context {
                 "budgetMs must be positive".into()
             }));
         }
+        if base.budget_ms > MAX_BUDGET_MS {
+            return Err(refuse(format!("budgetMs exceeds {MAX_BUDGET_MS}")));
+        }
+        if base.source.line > u32::MAX as u64 {
+            return Err(refuse("source line exceeds u32".into()));
+        }
         if base.optional && !op.supports_optional() {
             return Err(refuse(format!(
                 "{} cannot be optional; only taps and assertions can",
@@ -487,7 +496,14 @@ impl Context {
                 non_empty(&text, "text")?;
                 Op::InputText(Private(text))
             }
-            RawOp::EraseText { characters } => Op::EraseText(characters),
+            RawOp::EraseText { characters } => {
+                if characters > MAX_ERASE_CHARACTERS {
+                    return Err(PlanError(format!(
+                        "characters exceeds {MAX_ERASE_CHARACTERS}"
+                    )));
+                }
+                Op::EraseText(characters)
+            }
             RawOp::HideKeyboard {
                 fallback_domain: Domain::ReactTree,
             } => Op::HideKeyboard,
@@ -501,11 +517,16 @@ impl Context {
                 direction,
                 from,
                 duration_ms,
-            } => Op::Swipe {
-                direction,
-                from: from.map(selector_of).transpose()?,
-                duration_ms,
-            },
+            } => {
+                if duration_ms > MAX_SWIPE_MS {
+                    return Err(PlanError(format!("durationMs exceeds {MAX_SWIPE_MS}")));
+                }
+                Op::Swipe {
+                    direction,
+                    from: from.map(selector_of).transpose()?,
+                    duration_ms,
+                }
+            }
             RawOp::Back {} => Op::Back,
             RawOp::Scroll {} => Op::Scroll,
             RawOp::WaitForAnimationToEnd {} => Op::WaitForAnimationToEnd,
@@ -558,7 +579,9 @@ fn selector_of(raw: RawSelector) -> Result<Selector, PlanError> {
     let index = raw
         .index
         .map(|index| {
-            usize::try_from(index).map_err(|_| PlanError(format!("index {index} does not fit")))
+            u32::try_from(index)
+                .map(|value| value as usize)
+                .map_err(|_| PlanError(format!("index {index} exceeds u32")))
         })
         .transpose()?;
     Ok(Selector { target, index })

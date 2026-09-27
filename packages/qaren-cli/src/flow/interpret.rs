@@ -12,11 +12,9 @@ pub const POLL_MS: u64 = 250;
 pub const DISPATCH_WINDOW_MS: u64 = 10_000;
 // One snapshot or settle probe never waits longer than the runners' slow-verb ceiling.
 pub const READ_WINDOW_CAP_MS: u64 = 35_000;
-const READ_WINDOW_FLOOR_MS: u64 = 1_000;
 pub const SETTLE_CAP_MS: u64 = 5_000;
 const SCROLL_DURATION_MS: u64 = 300;
 pub const KEYBOARD_DISMISS_FAILED: &str = "KEYBOARD_DISMISS_FAILED";
-const KEYBOARD_RETRY_CODES: [&str; 2] = ["KEYBOARD_RELAYOUT_REQUIRED", "KEYBOARD_TARGET_STALE"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriverError {
@@ -288,9 +286,17 @@ impl Engine<'_> {
         deadline.saturating_sub(self.now())
     }
 
-    fn read_window(&self, deadline: u64) -> u64 {
-        self.remaining(deadline)
-            .clamp(READ_WINDOW_FLOOR_MS, READ_WINDOW_CAP_MS)
+    fn window(&self, deadline: u64, cap: u64) -> Result<u64, Fail> {
+        let remaining = self.remaining(deadline);
+        if remaining == 0 {
+            Err(Fail::Miss("step deadline reached".into()))
+        } else {
+            Ok(remaining.min(cap))
+        }
+    }
+
+    fn read_window(&self, deadline: u64) -> Result<u64, Fail> {
+        self.window(deadline, READ_WINDOW_CAP_MS)
     }
 
     fn cancelled(&self) -> Result<(), Fail> {
@@ -404,7 +410,6 @@ impl Engine<'_> {
     }
 
     fn execute(&mut self, step: &Step, deadline: u64) -> Result<String, Fail> {
-        let budget = step.budget_ms;
         match &step.op {
             Op::LaunchApp {
                 stop_app: false,
@@ -421,15 +426,15 @@ impl Engine<'_> {
                     stop_app: *stop_app,
                     clear_state: *clear_state,
                 },
-                budget,
+                deadline,
             ),
-            Op::StopApp => self.perform(&HostOp::StopApp, budget),
-            Op::KillApp => self.perform(&HostOp::KillApp, budget),
-            Op::ClearState => self.perform(&HostOp::ClearState, budget),
+            Op::StopApp => self.perform(&HostOp::StopApp, deadline),
+            Op::KillApp => self.perform(&HostOp::KillApp, deadline),
+            Op::ClearState => self.perform(&HostOp::ClearState, deadline),
             Op::OpenLink(link) => {
-                self.perform(&HostOp::OpenLink(link.as_str().to_string()), budget)
+                self.perform(&HostOp::OpenLink(link.as_str().to_string()), deadline)
             }
-            Op::Press(press, selector) => self.press(step, *press, selector, deadline),
+            Op::Press(press, selector) => self.press(*press, selector, deadline),
             Op::AssertVisible(selector) if step.domain == Domain::ReactTree => {
                 self.tree_visible(selector, deadline)
             }
@@ -442,19 +447,21 @@ impl Engine<'_> {
                 direction,
             } => self.scroll_until_visible(selector, *direction, deadline),
             Op::InputText(text) => self
-                .dispatch("inputText", |e| {
-                    e.native.type_text(e.runner, text.as_str(), budget)
+                .dispatch("inputText", deadline, step.budget_ms, |e, window| {
+                    e.native.type_text(e.runner, text.as_str(), window)
                 })
                 .map(|_| "typed".into()),
             Op::EraseText(0) => Ok("nothing to erase".into()),
             Op::EraseText(characters) => self
-                .dispatch("eraseText", |e| {
-                    e.native.erase(e.runner, *characters, budget)
+                .dispatch("eraseText", deadline, step.budget_ms, |e, window| {
+                    e.native.erase(e.runner, *characters, window)
                 })
                 .map(|_| format!("erased {characters}")),
             Op::HideKeyboard => self.hide_keyboard(step, deadline),
             Op::PressKey(key) => self
-                .dispatch("pressKey", |e| e.native.press_key(e.runner, *key, budget))
+                .dispatch("pressKey", deadline, step.budget_ms, |e, window| {
+                    e.native.press_key(e.runner, *key, window)
+                })
                 .map(|_| format!("pressed {key:?}")),
             Op::Swipe {
                 direction,
@@ -462,29 +469,35 @@ impl Engine<'_> {
                 duration_ms,
             } => self.swipe(from.as_ref(), *direction, *duration_ms, deadline),
             Op::Back => self
-                .dispatch("back", |e| e.native.back(e.runner, budget))
+                .dispatch("back", deadline, step.budget_ms, |e, window| {
+                    e.native.back(e.runner, window)
+                })
                 .map(|_| "back".into()),
             Op::Scroll => {
                 let screen = self.snapshot_within(deadline)?.nodes[0].clone();
                 let (start, end) = scroll_path(&screen, Direction::Down);
-                self.dispatch("scroll", |e| {
-                    e.native.drag(
-                        e.runner,
-                        start,
-                        end,
-                        SCROLL_DURATION_MS,
-                        DISPATCH_WINDOW_MS.saturating_add(SCROLL_DURATION_MS),
-                    )
-                })
+                self.dispatch(
+                    "scroll",
+                    deadline,
+                    DISPATCH_WINDOW_MS.saturating_add(SCROLL_DURATION_MS),
+                    |e, window| {
+                        e.native
+                            .drag(e.runner, start, end, SCROLL_DURATION_MS, window)
+                    },
+                )
                 .map(|_| "scrolled".into())
             }
             Op::WaitForAnimationToEnd => self.settle(deadline),
             Op::TakeScreenshot(name) => {
                 self.cancelled()?;
+                let window = self.window(deadline, step.budget_ms)?;
                 let capture = self
                     .native
-                    .screenshot(self.runner, budget)
+                    .screenshot(self.runner, window)
                     .map_err(|e| Fail::Miss(format!("screenshot failed: {e}")))?;
+                if self.now() > deadline {
+                    return Err(Fail::Miss("screenshot exceeded step deadline".into()));
+                }
                 self.captures.push((name.clone(), capture));
                 self.screenshot = Some(name.clone());
                 Ok("captured".into())
@@ -496,16 +509,25 @@ impl Engine<'_> {
     fn dispatch(
         &mut self,
         what: &str,
-        call: impl FnOnce(&mut Self) -> DriverResult<()>,
+        deadline: u64,
+        cap: u64,
+        call: impl FnOnce(&mut Self, u64) -> DriverResult<()>,
     ) -> Result<(), Fail> {
         self.cancelled()?;
-        outcome(call(self), what)
+        let window = self.window(deadline, cap)?;
+        let result = call(self, window);
+        if self.now() > deadline {
+            return Err(Fail::Unknown(format!("{what} exceeded step deadline")));
+        }
+        outcome(result, what)
     }
 
-    fn perform(&mut self, op: &HostOp, window_ms: u64) -> Result<String, Fail> {
+    fn perform(&mut self, op: &HostOp, deadline: u64) -> Result<String, Fail> {
         let what = op.name();
-        self.dispatch(what, |e| e.host.perform(e.runner, op, window_ms))
-            .map(|_| format!("{what} done"))
+        self.dispatch(what, deadline, DISPATCH_WINDOW_MS, |e, window| {
+            e.host.perform(e.runner, op, window)
+        })
+        .map(|_| format!("{what} done"))
     }
 
     // Observes until the closure yields or the deadline passes, always at least once; the closure
@@ -517,8 +539,14 @@ impl Engine<'_> {
     ) -> Result<Option<T>, Fail> {
         loop {
             self.cancelled()?;
-            let window = self.read_window(deadline);
+            if self.now() >= deadline {
+                return Ok(None);
+            }
+            let window = self.read_window(deadline)?;
             if let Some(found) = observe(self, window)? {
+                if self.now() > deadline {
+                    return Err(Fail::Miss("observation exceeded step deadline".into()));
+                }
                 return Ok(Some(found));
             }
             let now = self.now();
@@ -693,55 +721,35 @@ impl Engine<'_> {
         })
     }
 
-    fn press(
-        &mut self,
-        step: &Step,
-        press: Press,
-        selector: &Selector,
-        deadline: u64,
-    ) -> Result<String, Fail> {
+    fn press(&mut self, press: Press, selector: &Selector, deadline: u64) -> Result<String, Fail> {
         let (node, _) = self.lookup(selector, deadline)?;
         let (x, y) = node.center();
-        self.cancelled()?;
-        let first = self
-            .native
-            .press(self.runner, press, x, y, DISPATCH_WINDOW_MS);
-        match first {
-            // The runner's keyboard guard dismissed the keyboard without pressing; one re-resolved press follows.
-            Err(DriverError::Refused { code, message })
-                if KEYBOARD_RETRY_CODES.contains(&code.as_str()) =>
-            {
-                self.retry(step, format!("{code} {message}").trim().to_string());
-                let (node, _) = self.lookup(selector, deadline)?;
-                let (x, y) = node.center();
-                self.cancelled()?;
-                let second = self
-                    .native
-                    .press(self.runner, press, x, y, DISPATCH_WINDOW_MS);
-                outcome(second, "press").map(|_| {
-                    format!(
-                        "{} at ({x:.0},{y:.0}) after the keyboard guard",
-                        node.describe()
-                    )
-                })
-            }
-            result => {
-                outcome(result, "press").map(|_| format!("{} at ({x:.0},{y:.0})", node.describe()))
-            }
-        }
+        self.dispatch("press", deadline, DISPATCH_WINDOW_MS, |e, window| {
+            e.native.press(e.runner, press, x, y, window)
+        })
+        .map(|_| format!("{} at ({x:.0},{y:.0})", node.describe()))
     }
 
     fn hide_keyboard(&mut self, step: &Step, deadline: u64) -> Result<String, Fail> {
         self.cancelled()?;
-        match self.native.keyboard_dismiss(self.runner, step.budget_ms) {
+        let window = self.window(deadline, step.budget_ms)?;
+        let result = self.native.keyboard_dismiss(self.runner, window);
+        if self.now() > deadline {
+            return Err(Fail::Unknown(
+                "keyboardDismiss exceeded step deadline".into(),
+            ));
+        }
+        match result {
             Ok(()) => Ok("native dismissal".into()),
             Err(DriverError::Refused { code, .. }) if code == KEYBOARD_DISMISS_FAILED => {
                 self.retry(step, code);
                 self.answered_by = Domain::ReactTree;
-                let window = self.remaining(deadline).max(READ_WINDOW_FLOOR_MS);
-                self.dispatch("keyboard.dismissJs", |e| {
-                    e.host.perform(e.runner, &HostOp::KeyboardDismissJs, window)
-                })
+                self.dispatch(
+                    "keyboard.dismissJs",
+                    deadline,
+                    step.budget_ms,
+                    |e, window| e.host.perform(e.runner, &HostOp::KeyboardDismissJs, window),
+                )
                 .map(|_| "JavaScript tier dismissed the keyboard".into())
             }
             result => outcome(result, "keyboardDismiss").map(|_| String::new()),
@@ -766,10 +774,12 @@ impl Engine<'_> {
             }
         };
         let (start, end) = swipe_path(&screen, origin, direction);
-        let window = DISPATCH_WINDOW_MS.saturating_add(duration_ms);
-        self.dispatch("swipe", |e| {
-            e.native.drag(e.runner, start, end, duration_ms, window)
-        })
+        self.dispatch(
+            "swipe",
+            deadline,
+            DISPATCH_WINDOW_MS.saturating_add(duration_ms),
+            |e, window| e.native.drag(e.runner, start, end, duration_ms, window),
+        )
         .map(|_| {
             format!(
                 "swiped {direction:?} from ({:.0},{:.0}) to ({:.0},{:.0})",
@@ -785,17 +795,27 @@ impl Engine<'_> {
         deadline: u64,
     ) -> Result<String, Fail> {
         let mut scrolls = 0u32;
-        let mut last: String;
+        let mut last = String::from("no snapshot observed");
         loop {
             self.cancelled()?;
-            let window = self.read_window(deadline);
+            if self.now() >= deadline {
+                return Err(Fail::Miss(format!(
+                    "{} not visible after {scrolls} scroll(s); {last}",
+                    selector.describe()
+                )));
+            }
+            let window = self.read_window(deadline)?;
             let screen = match self.native.snapshot(self.runner, window) {
                 Ok(snapshot) => match resolve::resolve(selector, &snapshot.nodes) {
-                    Resolution::Found(node) => {
+                    Resolution::Found(node) if self.now() <= deadline => {
                         return Ok(format!(
                             "{} visible after {scrolls} scroll(s)",
                             node.describe()
                         ))
+                    }
+                    Resolution::Found(node) => {
+                        last = format!("last seen after deadline: {}", node.describe());
+                        Some(snapshot.nodes[0].clone())
                     }
                     Resolution::Ambiguous { candidates } => {
                         return Err(ambiguous(selector, &candidates))
@@ -830,15 +850,15 @@ impl Engine<'_> {
             match screen {
                 Some(screen) => {
                     let (start, end) = scroll_path(&screen, direction);
-                    self.dispatch("scroll", |e| {
-                        e.native.drag(
-                            e.runner,
-                            start,
-                            end,
-                            SCROLL_DURATION_MS,
-                            DISPATCH_WINDOW_MS.saturating_add(SCROLL_DURATION_MS),
-                        )
-                    })?;
+                    self.dispatch(
+                        "scroll",
+                        deadline,
+                        DISPATCH_WINDOW_MS.saturating_add(SCROLL_DURATION_MS),
+                        |e, window| {
+                            e.native
+                                .drag(e.runner, start, end, SCROLL_DURATION_MS, window)
+                        },
+                    )?;
                     scrolls += 1;
                     let settle_by = deadline.min(self.now().saturating_add(SETTLE_CAP_MS));
                     if let Err(Fail::Cancelled(reason)) = self.settle(settle_by) {
@@ -874,7 +894,9 @@ impl Engine<'_> {
         })?;
         match (settled, observed) {
             (Some(()), _) => Ok(format!("settled after {polls} poll(s)")),
-            (None, true) => Ok(format!("still changing after {polls} poll(s)")),
+            (None, true) => Ok(format!(
+                "animation wait cap reached; still changing after {polls} poll(s)"
+            )),
             (None, false) => Err(Fail::Miss(format!("no settle observation: {last}"))),
         }
     }
@@ -982,6 +1004,8 @@ mod tests {
         settled: VecDeque<DriverResult<bool>>,
         mutations: Vec<String>,
         snapshots_taken: u32,
+        snapshot_windows: Vec<u64>,
+        drag_windows: Vec<u64>,
     }
 
     impl ScriptedNative {
@@ -995,6 +1019,8 @@ mod tests {
                 settled: VecDeque::new(),
                 mutations: Vec::new(),
                 snapshots_taken: 0,
+                snapshot_windows: Vec::new(),
+                drag_windows: Vec::new(),
             }
         }
 
@@ -1010,9 +1036,10 @@ mod tests {
     }
 
     impl NativeDriver for ScriptedNative {
-        fn snapshot(&mut self, runner: &mut dyn Runner, _window_ms: u64) -> DriverResult<Snapshot> {
+        fn snapshot(&mut self, runner: &mut dyn Runner, window_ms: u64) -> DriverResult<Snapshot> {
             runner.sleep(Duration::from_millis(LATENCY_MS));
             self.snapshots_taken += 1;
+            self.snapshot_windows.push(window_ms);
             self.snapshots
                 .pop_front()
                 .unwrap_or_else(|| self.steady.clone())
@@ -1061,8 +1088,9 @@ mod tests {
             from: (f64, f64),
             to: (f64, f64),
             duration_ms: u64,
-            _window_ms: u64,
+            window_ms: u64,
         ) -> DriverResult<()> {
+            self.drag_windows.push(window_ms);
             self.mutate(
                 runner,
                 format!(
@@ -1102,6 +1130,7 @@ mod tests {
         observations: VecDeque<DriverResult<Presence>>,
         observed: Vec<(String, u64)>,
         performed: Vec<HostOp>,
+        performed_windows: Vec<u64>,
         results: VecDeque<DriverResult<()>>,
     }
 
@@ -1119,9 +1148,15 @@ mod tests {
                 .unwrap_or(Ok(Presence::Absent))
         }
 
-        fn perform(&mut self, runner: &mut dyn Runner, op: &HostOp, _w: u64) -> DriverResult<()> {
+        fn perform(
+            &mut self,
+            runner: &mut dyn Runner,
+            op: &HostOp,
+            window_ms: u64,
+        ) -> DriverResult<()> {
             runner.sleep(Duration::from_millis(LATENCY_MS));
             self.performed.push(op.clone());
+            self.performed_windows.push(window_ms);
             self.results.pop_front().unwrap_or(Ok(()))
         }
     }
@@ -1178,6 +1213,71 @@ mod tests {
         assert_eq!(row.r#ref.as_deref(), Some("s1"));
         assert_eq!(row.resolved_by, "native");
         assert_eq!(row.text.as_deref(), Some("tapOn text \"Go\""));
+    }
+
+    #[test]
+    fn reads_and_mutations_cannot_succeed_after_the_step_deadline() {
+        let mut native = ScriptedNative::steady(screen(&["Go"]));
+        let read = plan(vec![step(
+            "s1",
+            Domain::Native,
+            50,
+            Op::AssertVisible(text("Go")),
+        )]);
+        let (late_read, _) = drive(&read, &mut native, &mut ScriptedHost::default());
+        assert_eq!(late_read.verdict, Verdict::Fail);
+        assert_eq!(native.snapshot_windows, vec![50]);
+
+        let mut native = ScriptedNative::steady(screen(&["Go"]));
+        let press = plan(vec![step("s1", Domain::Native, 150, tap("Go"))]);
+        let (late_press, _) = drive(&press, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcomes(&late_press.rows), vec!["dispatched-unknown"]);
+        assert_eq!(native.mutations, vec!["Tap@200,120/50"]);
+
+        let mut native = ScriptedNative::steady(screen(&[]));
+        let scroll = plan(vec![step("s1", Domain::Native, 150, Op::Scroll)]);
+        let (late_scroll, _) = drive(&scroll, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcomes(&late_scroll.rows), vec!["dispatched-unknown"]);
+        assert_eq!(native.drag_windows, vec![50]);
+
+        let mut native = ScriptedNative::steady(screen(&[]));
+        let screenshot = plan(vec![step(
+            "s1",
+            Domain::Native,
+            50,
+            Op::TakeScreenshot("shot".into()),
+        )]);
+        let (late_screenshot, _) = drive(&screenshot, &mut native, &mut ScriptedHost::default());
+        assert_eq!(late_screenshot.verdict, Verdict::Fail);
+        assert!(late_screenshot.captures.is_empty());
+    }
+
+    #[test]
+    fn late_keyboard_fallback_and_scroll_until_visible_fail() {
+        let mut native = ScriptedNative::steady(screen(&[]));
+        native.keyboard = vec![Err(refused(KEYBOARD_DISMISS_FAILED))].into();
+        let mut host = ScriptedHost::default();
+        let hide = plan(vec![step("s1", Domain::Native, 150, Op::HideKeyboard)]);
+        let (late_hide, _) = drive(&hide, &mut native, &mut host);
+        assert_eq!(
+            outcomes(&late_hide.rows),
+            vec!["retry", "dispatched-unknown"]
+        );
+        assert_eq!(host.performed_windows, vec![50]);
+
+        let mut native = ScriptedNative::steady(screen(&[]));
+        let scroll = plan(vec![step(
+            "s1",
+            Domain::Native,
+            150,
+            Op::ScrollUntilVisible {
+                selector: text("Footer"),
+                direction: Direction::Down,
+            },
+        )]);
+        let (late_scroll, _) = drive(&scroll, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcomes(&late_scroll.rows), vec!["dispatched-unknown"]);
+        assert_eq!(native.drag_windows, vec![50]);
     }
 
     #[test]
@@ -1416,7 +1516,7 @@ mod tests {
             .reason
             .clone()
             .unwrap()
-            .contains("still changing"));
+            .contains("cap reached; still changing"));
 
         let mut blind = ScriptedNative::steady(screen(&[]));
         blind.settled = std::iter::repeat_n(Err(DriverError::Unsent("down".into())), 20).collect();
@@ -1600,25 +1700,18 @@ mod tests {
     }
 
     #[test]
-    fn the_keyboard_guard_earns_exactly_one_re_resolved_press() {
+    fn keyboard_guard_refusals_fail_without_a_second_press() {
         let plan = plan(vec![step("s1", Domain::Native, 17_000, tap("Go"))]);
-        let mut native = ScriptedNative::steady(screen(&["Go"]));
-        native.presses = vec![Err(refused("KEYBOARD_RELAYOUT_REQUIRED")), Ok(())].into();
-        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
-        assert_eq!(outcome.verdict, Verdict::Pass);
-        assert_eq!(outcomes(&outcome.rows), vec!["retry", "pass"]);
-        assert_eq!(native.mutations.len(), 2);
-        assert_eq!(native.snapshots_taken, 2, "the target is re-resolved");
-
-        let mut native = ScriptedNative::steady(screen(&["Go"]));
-        native.presses = vec![
-            Err(refused("KEYBOARD_RELAYOUT_REQUIRED")),
-            Err(refused("KEYBOARD_TARGET_STALE")),
-        ]
-        .into();
-        let (twice, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
-        assert_eq!(twice.verdict, Verdict::Fail);
-        assert_eq!(outcomes(&twice.rows), vec!["retry", "fail"]);
+        for code in ["KEYBOARD_RELAYOUT_REQUIRED", "KEYBOARD_TARGET_STALE"] {
+            let mut native = ScriptedNative::steady(screen(&["Go"]));
+            native.presses = vec![Err(refused(code)), Ok(())].into();
+            let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+            assert_eq!(outcome.verdict, Verdict::Fail);
+            assert_eq!(outcomes(&outcome.rows), vec!["fail"]);
+            assert!(outcome.rows[0].reason.as_ref().unwrap().contains(code));
+            assert_eq!(native.mutations.len(), 1);
+            assert_eq!(native.snapshots_taken, 1);
+        }
     }
 
     #[test]

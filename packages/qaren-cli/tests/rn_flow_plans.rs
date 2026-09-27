@@ -127,18 +127,36 @@ fn a_well_formed_step_parses() {
 }
 
 #[test]
-fn compiler_valid_values_are_admitted_without_engine_side_caps() {
-    let day = TAP.replace("17000", "86400000");
-    assert!(plan::parse(&with_step(&day)).is_ok(), "any positive budget");
+fn bounded_plan_values_are_admitted() {
+    let budget = TAP.replace("17000", "600000");
+    assert!(plan::parse(&with_step(&budget)).is_ok());
     let erase = ios_step("native", 10_000, r#""op":"eraseText","characters":0"#);
     assert!(plan::parse(&with_step(&erase)).is_ok(), "zero characters");
-    let far = TAP.replace(r#"{"text":"Go"}"#, r#"{"text":"Go","index":123456}"#);
-    assert!(plan::parse(&with_step(&far)).is_ok(), "any index");
+    let far = TAP.replace(r#"{"text":"Go"}"#, r#"{"text":"Go","index":4294967295}"#);
+    assert!(plan::parse(&with_step(&far)).is_ok());
     let blank = TAP.replace(r#"{"text":"Go"}"#, r#"{"text":"   "}"#);
     assert!(
         plan::parse(&with_step(&blank)).is_ok(),
         "whitespace text is the resolver's concern"
     );
+}
+
+#[test]
+fn numeric_values_outside_wire_bounds_refuse() {
+    let cases = [
+        TAP.replace("17000", "600001"),
+        TAP.replace(r#""line":3"#, r#""line":4294967296"#),
+        TAP.replace(r#"{"text":"Go"}"#, r#"{"text":"Go","index":4294967296}"#),
+        ios_step("native", 10_000, r#""op":"eraseText","characters":10001"#),
+        ios_step(
+            "native",
+            10_000,
+            r#""op":"swipe","direction":"UP","durationMs":60001"#,
+        ),
+    ];
+    for step in cases {
+        assert!(plan::parse(&with_step(&step)).is_err(), "{step}");
+    }
 }
 
 #[test]

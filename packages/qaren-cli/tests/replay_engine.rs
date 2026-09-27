@@ -14,9 +14,9 @@ fn reply(data: Value) -> CmdOutput {
     CmdOutput::success(&json!({"ok": true, "data": data, "v": 2}).to_string())
 }
 
-fn refusal(code: &str, mutation: &str) -> CmdOutput {
+fn refusal(code: &str) -> CmdOutput {
     CmdOutput::success(
-        &json!({"ok": false, "error": {"code": code, "message": "no", "mutation": mutation}})
+        &json!({"ok": false, "error": {"code": code, "message": "no"}, "v": 2})
             .to_string(),
     )
 }
@@ -74,7 +74,7 @@ fn a_compiled_plan_replays_through_the_ios_runner_wire_without_leaking_secrets()
     );
     runner.expect_run("curl", reply(json!({"message": "tap"})));
     runner.expect_run("curl", reply(json!({"message": "typed"})));
-    runner.expect_run("curl", refusal("KEYBOARD_DISMISS_FAILED", "none"));
+    runner.expect_run("curl", refusal("KEYBOARD_DISMISS_FAILED"));
     runner.expect_run("curl", reply(screen(&[("Sign in", "sign-in")])));
     runner.expect_run("curl", reply(screen(&[("Done", "done")])));
     let mut native = IosDriver::new(RunnerClient::new(4711, CAPABILITY, "com.x.app", "run-7"));
