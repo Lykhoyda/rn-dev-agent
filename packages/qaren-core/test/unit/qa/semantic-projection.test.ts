@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as projection from '../../../dist/qa/screen.js';
-import type { Element, Screen } from '../../../dist/qa/screen.js';
+import type { DigestEntry, Element, ReactHostEvidence, Screen } from '../../../dist/qa/screen.js';
 import { inputValues, redactEvidence } from '../../../dist/qa/privacy.js';
 import { decideTarget, prepareTarget } from '../../../dist/qa/resolve.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
@@ -382,6 +382,7 @@ test('a plain container offering no operation contributes only through its own n
   const view = (
     rows: typeof containers,
     hosts: ReactHostEvidence['hosts'] = [],
+    digest: DigestEntry[] = [],
   ): ReturnType<typeof projection.visibilityView> => {
     const nodes = [
       ...scrolled.slice(0, 2),
@@ -405,7 +406,7 @@ test('a plain container offering no operation contributes only through its own n
       ],
     };
     return projection.visibilityView(
-      projection.join(nodes, [], 'app', complete, { hosts, complete: true }, presence),
+      projection.join(nodes, digest, 'app', complete, { hosts, complete: true }, presence),
     );
   };
   const skipped = view(containers);
@@ -419,6 +420,10 @@ test('a plain container offering no operation contributes only through its own n
     'SCREEN_EVIDENCE_INCOMPLETE',
   );
   refused(view([['meter', '40%', 'value', 'observed']]), 'SCREEN_EVIDENCE_INCOMPLETE');
+  refused(
+    view(containers, [], [{ role: 'text', testID: 'card', value: '3 tasks' }]),
+    'SCREEN_EVIDENCE_INCOMPLETE',
+  );
 });
 
 test('native control types supply operation evidence independently of digest roles', () => {

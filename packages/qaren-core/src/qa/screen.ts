@@ -606,6 +606,8 @@ export function visibilityView(screen: Screen): Projection {
     if (
       native?.kind === 'other' &&
       (native.labelSource === 'none' || native.labelSource === 'descendant') &&
+      e.value === undefined &&
+      e.placeholder === undefined &&
       e.semantic.press === 'unsupported' &&
       e.semantic.fill === 'unsupported'
     )
