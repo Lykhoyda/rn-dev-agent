@@ -28,7 +28,7 @@ import { createJev } from './jev.js';
 import { preflightPlan } from './preflight.js';
 import { summarizeJev } from './ledger.js';
 import { redactApiKey } from '../util/redact.js';
-import { watchParent } from './parent-watch.js';
+import { createStop, watchParent } from './stop.js';
 import { prove } from './prove.js';
 import { type ActResult, type WalkerDeps, runPlan } from './walker.js';
 import {
@@ -87,16 +87,16 @@ interface Session {
 
 type Handler<A> = (args: A) => Promise<ToolResult>;
 
-let stopping = false;
+const stop = createStop();
 
 function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActResult> {
-  if (stopping)
+  if (stop.stopping)
     return Promise.resolve({
       ok: false,
       proven: false,
       error: 'RUN_CANCELLED: the device session is closing',
     });
-  return handler().then(
+  return stop.track(handler).then(
     (result) => {
       try {
         unwrap(result);
@@ -124,6 +124,24 @@ async function openSession(
   const perfStart = performance.now();
   const cdp = new CDPClient(target.metroPort);
   const getClient = (): CDPClient => cdp;
+  const snapshot: Handler<{
+    action: 'open' | 'close' | 'snapshot';
+    appId?: string;
+    deviceId?: string;
+    platform?: string;
+    attachOnly?: boolean;
+    sessionName?: string;
+    platformPresence?: boolean;
+  }> = createDeviceSnapshotHandler();
+  const cancelled = async (opened: boolean): Promise<void> => {
+    if (!stop.stopping) return;
+    if (opened) await snapshot({ action: 'close' }).catch(() => undefined);
+    await cdp.disconnect().catch(() => undefined);
+    throw new HandlerError(
+      'RUN_CANCELLED',
+      'the run was cancelled while opening the device session',
+    );
+  };
   try {
     await waitForExactPortTargets(target.metroPort, REACT_READY_TIMEOUT_MS, REACT_READY_POLL_MS);
     await cdp.connectExact(target.metroPort, { platform, bundleId: appId });
@@ -133,6 +151,7 @@ async function openSession(
       `cannot attach to the dev client through Metro ${target.metroPort}: ${describeError(error).message}`,
     );
   }
+  await cancelled(false);
   // The lease coordinates qaren processes only; a foreign Maestro or XCUITest driver is a probe.
   if (platform === 'ios') {
     const foreign = await foreignFlowGate.check(target.deviceId);
@@ -144,16 +163,8 @@ async function openSession(
       );
     }
   }
+  await cancelled(false);
 
-  const snapshot: Handler<{
-    action: 'open' | 'close' | 'snapshot';
-    appId?: string;
-    deviceId?: string;
-    platform?: string;
-    attachOnly?: boolean;
-    sessionName?: string;
-    platformPresence?: boolean;
-  }> = createDeviceSnapshotHandler();
   await adapt(snapshot)({
     action: 'open',
     appId,
@@ -162,6 +173,7 @@ async function openSession(
     attachOnly: false,
     sessionName: `qaren-${request.runId}`,
   });
+  await cancelled(true);
   // Opening the session may have relaunched the app: prove the bundle the walk will see.
   const proof = await prove({ evaluate: (expr) => cdp.evaluate(expr) }, target);
   if (!proof.ok) {
@@ -169,6 +181,7 @@ async function openSession(
     await cdp.disconnect().catch(() => undefined);
     throw new HandlerError(proof.code, proof.message);
   }
+  await cancelled(true);
   log(
     `bundle proven: ${proof.scriptURL} (${proof.appModules} app modules under ${target.worktree})`,
   );
@@ -202,6 +215,7 @@ async function openSession(
       log(`${action}: ${describeError(error).message}`);
     }
   }
+  await cancelled(true);
 
   const press = createDevicePressHandler(getClient);
   const fill = createDeviceFillHandler(getClient);
@@ -210,16 +224,18 @@ async function openSession(
   const accept = createDeviceAcceptSystemDialogHandler();
   const dismiss = createDeviceDismissSystemDialogHandler();
 
+  let closing: Promise<void> | undefined;
   const deps: WalkerDeps = {
     judge: createJev(),
-    async captureScreen(options) {
-      return captureScreen({
-        appId,
-        requirePrivateInputs: true,
-        native: () => rawSnapshot(options?.platformPresence),
-        react: () => captureQaReact(cdp, options?.platformPresence === true),
-      });
-    },
+    captureScreen: (options) =>
+      stop.track(() =>
+        captureScreen({
+          appId,
+          requirePrivateInputs: true,
+          native: () => rawSnapshot(options?.platformPresence),
+          react: () => captureQaReact(cdp, options?.platformPresence === true),
+        }),
+      ),
     press: (ref) => act(() => press({ ref }), false),
     fill: (ref, text) => act(() => fill({ ref, text }), true),
     scroll: (direction) => act(() => scroll({ direction, amount: 0.6 }), false),
@@ -227,7 +243,10 @@ async function openSession(
     dialog: (action) =>
       act(() => (action === 'accept' ? accept({ platform }) : dismiss({ platform })), true),
     async screenshot(name) {
-      const shot = await tryRawScreenshot(platform, join(request.runDir, name), target.deviceId);
+      if (stop.stopping) return undefined;
+      const shot = await stop.track(() =>
+        tryRawScreenshot(platform, join(request.runDir, name), target.deviceId),
+      );
       if (!shot.ok) log(`screenshot ${name} failed: ${shot.reason}`);
       return shot.ok ? name : undefined;
     },
@@ -237,9 +256,12 @@ async function openSession(
   };
   return {
     deps,
-    async close() {
-      await snapshot({ action: 'close' }).catch(() => undefined);
-      await cdp.disconnect().catch(() => undefined);
+    close() {
+      closing ??= (async () => {
+        await snapshot({ action: 'close' }).catch(() => undefined);
+        await cdp.disconnect().catch(() => undefined);
+      })();
+      return closing;
     },
   };
 }
@@ -256,8 +278,19 @@ async function main(): Promise<void> {
     writer.row(row);
   };
   emitRow(startupRow());
+  // The one exit owner; once stopping, no verdict other than the cancellation is reported.
   const finish = async (payload: ResultPayload, close?: () => Promise<void>): Promise<never> => {
-    const code = writer.result(payload);
+    const code = writer.result(
+      stop.stopping && payload.verdict !== 'REFUSED'
+        ? {
+            verdict: 'REFUSED',
+            code: 'RUN_CANCELLED',
+            message: 'the run was cancelled',
+            lease: request.lease,
+            jev: payload.jev,
+          }
+        : payload,
+    );
     if (close) await close();
     return exitAfterDrain(code);
   };
@@ -283,36 +316,48 @@ async function main(): Promise<void> {
       'the prepared plan is missing, invalid or does not match the preflight bytes',
     );
 
-  let session: Session;
+  let session: Session | undefined;
+  // Stopping makes the next device operation fail, so the walk ends through `finish`.
+  // The fallback only covers a walk stuck inside one operation, within the CLI's grace.
+  const halt = (why: string): void => {
+    if (!stop.begin()) return;
+    log(`${why}: stopping the walk`);
+    setTimeout(() => {
+      void stop
+        .drained(1000)
+        .then(() => session?.close())
+        .finally(() => process.exit(1));
+    }, 8000);
+  };
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) process.once(signal, () => halt(signal));
+  watchParent(
+    cliParent,
+    () => process.ppid,
+    () => halt('the qaren CLI exited'),
+  );
+  let opened: Session;
   try {
-    session = await openSession(request, emitRow);
+    opened = await openSession(request, emitRow);
   } catch (error) {
     const { code, message } = describeError(error);
     return refuse(code, message);
   }
-  const stop = (why: string): void => {
-    if (stopping) return;
-    stopping = true;
-    log(`${why}: closing the device session`);
-    void session.close().finally(() => process.exit(1));
-  };
-  for (const signal of ['SIGTERM', 'SIGINT'] as const) process.once(signal, () => stop(signal));
-  watchParent(
-    cliParent,
-    () => process.ppid,
-    () => stop('the qaren CLI exited'),
-  );
+  session = opened;
+  if (stop.stopping)
+    return refuse('RUN_CANCELLED', 'the run was cancelled before the walk started', () =>
+      opened.close(),
+    );
   try {
-    const ledger = await runPlan(blocks, session.deps, request.preflightCalls);
-    return finish(resultForWalk(ledger, request.lease), () => session.close());
+    const ledger = await runPlan(blocks, opened.deps, request.preflightCalls);
+    return finish(resultForWalk(ledger, request.lease), () => opened.close());
   } catch (error) {
     const { code, message } = describeError(error);
     const ledger = missingResult(rows, `${code}: ${message}`);
     ledger.jev = summarizeJev([
       ...(request.preflightCalls ?? []),
-      ...(session.deps.judge?.calls ?? []),
+      ...(opened.deps.judge?.calls ?? []),
     ]);
-    return finish(ledger, () => session.close());
+    return finish(ledger, () => opened.close());
   }
 }
 

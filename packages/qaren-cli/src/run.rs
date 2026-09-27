@@ -510,6 +510,7 @@ fn refusal_code(code: &str) -> FailureCode {
         "JEV_AUTH_FAILED" => FailureCode::JevAuthFailed,
         "JEV_REQUEST_INVALID" => FailureCode::JevRequestInvalid,
         "JEV_UNREACHABLE" => FailureCode::JevUnreachable,
+        "RUN_CANCELLED" => FailureCode::RunCancelled,
         _ => FailureCode::CoreRefused,
     }
 }
