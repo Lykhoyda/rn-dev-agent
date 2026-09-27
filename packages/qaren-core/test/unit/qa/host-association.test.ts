@@ -926,58 +926,47 @@ test('text under a structurally matched ancestor is searched only inside that an
 });
 
 test('identified ancestors may be hoisted beside the native path but not sit in an unrelated subtree', () => {
-  const rect = (x: number, y: number, width: number, height: number) => ({ x, y, width, height });
-  const scene = (panelParent: number, panelRect = rect(0, 0, 400, 400)) => {
-    const nodes = [
-      { ref: '@e0', index: 0, depth: 0, type: 'Application', rect: rect(0, 0, 400, 800) },
-      {
-        ref: '@e1',
-        index: 1,
-        parentIndex: 0,
-        depth: 1,
-        type: 'Window',
-        rect: rect(0, 0, 400, 800),
-      },
-      { ref: '@e2', index: 2, parentIndex: 1, depth: 2, type: 'Other', rect: rect(0, 0, 400, 400) },
-      {
-        ref: '@e3',
-        index: 3,
-        parentIndex: 1,
-        depth: 2,
-        type: 'Other',
-        rect: rect(0, 400, 400, 400),
-      },
-      {
-        ref: '@e4',
-        index: 4,
-        parentIndex: panelParent,
-        depth: 3,
-        type: 'Other',
-        identifier: 'panel',
-        rect: panelRect,
-      },
-      {
-        ref: '@e5',
-        index: 5,
-        parentIndex: 2,
-        depth: 3,
-        type: 'Other',
-        identifier: 'save',
-        rect: rect(10, 10, 100, 40),
-      },
-    ];
+  type Rect = { x: number; y: number; width: number; height: number };
+  const rect = (x: number, y: number, width: number, height: number): Rect => ({
+    x,
+    y,
+    width,
+    height,
+  });
+  const other = (
+    index: number,
+    parentIndex: number,
+    depth: number,
+    r: Rect,
+    identifier?: string,
+  ) => ({
+    ref: `@e${index}`,
+    index,
+    parentIndex,
+    depth,
+    type: 'Other',
+    rect: r,
+    ...(identifier ? { identifier } : {}),
+  });
+  const saveRect = rect(10, 10, 100, 40);
+  const panel = (index: number, parentIndex: number, depth: number, r: Rect) =>
+    other(index, parentIndex, depth, r, 'panel');
+  const save = (index: number, parentIndex: number, depth: number) =>
+    other(index, parentIndex, depth, saveRect, 'save');
+  const base = [
+    { ref: '@e0', index: 0, depth: 0, type: 'Application', rect: rect(0, 0, 400, 800) },
+    { ref: '@e1', index: 1, parentIndex: 0, depth: 1, type: 'Window', rect: rect(0, 0, 400, 800) },
+  ];
+  const left = other(2, 1, 2, rect(0, 0, 400, 400));
+  const associate = (nodes: Array<Record<string, unknown>>, panelRect: Rect, saveIndex: number) => {
     const presence = {
       source: 'xcui-live' as const,
       nodes: nodes.map((_, i) => ({
-        status: i === 5 ? 'observed' : 'unknown',
+        status: i === saveIndex ? 'observed' : 'unknown',
         labelSource: 'none' as const,
       })),
     };
-    const view = (
-      hostIndex: number,
-      parentHostIndex: number | null,
-      r: ReturnType<typeof rect>,
-    ) => ({
+    const view = (hostIndex: number, parentHostIndex: number | null, r: Rect) => ({
       hostIndex,
       parentHostIndex,
       rootIndex: 0,
@@ -989,29 +978,61 @@ test('identified ancestors may be hoisted beside the native path but not sit in 
       complete: true,
       hosts: [
         { testID: 'panel', role: null, roleSource: 'none' as const, capabilities: {} },
-        {
-          testID: 'save',
-          role: null,
-          roleSource: 'none' as const,
-          capabilities: { press: true as const },
-        },
+        { testID: 'save', role: null, roleSource: 'none' as const, capabilities: { press: true } },
       ],
       typography: {
         version: 1 as const,
         complete: true,
         durationMs: 10,
         coordinateSpace: 'window-points' as const,
-        nodes: [view(0, null, panelRect), view(1, 0, rect(10, 10, 100, 40))],
+        nodes: [view(0, null, panelRect), view(1, 0, saveRect)],
       },
     };
-    return associateHosts(nodes as never, evidence as never, presence as never);
+    return associateHosts(nodes as never, evidence as never, presence as never).get(1)?.nativeIndex;
   };
-  assert.equal(scene(2).get(1)?.nativeIndex, 5, 'panel hoisted beside save on its native path');
-  assert.equal(scene(3).get(1), undefined, 'panel in an unrelated native subtree');
-  assert.equal(scene(5).get(1), undefined, 'panel below save natively is reversed ancestry');
-  assert.equal(
-    scene(2, rect(200, 500, 100, 100)).get(1),
-    undefined,
-    'a hoisted panel whose frame does not contain save',
-  );
+  const cases: Array<[string, Array<Record<string, unknown>>, Rect, number, number | undefined]> = [
+    [
+      'hoisted beside save and containing it',
+      [...base, left, panel(3, 2, 3, rect(0, 0, 400, 400)), save(4, 2, 3)],
+      rect(0, 0, 400, 400),
+      4,
+      4,
+    ],
+    [
+      'a direct native ancestor that save overflows',
+      [...base, panel(2, 1, 2, rect(0, 0, 100, 20)), save(3, 2, 3)],
+      rect(0, 0, 100, 20),
+      3,
+      3,
+    ],
+    [
+      'an overlay branch whose panel contains save but is off its native path',
+      [
+        ...base,
+        left,
+        other(3, 1, 2, rect(0, 0, 400, 800)),
+        panel(4, 3, 3, rect(0, 0, 400, 400)),
+        save(5, 2, 3),
+      ],
+      rect(0, 0, 400, 400),
+      5,
+      undefined,
+    ],
+    [
+      'panel is save’s native child (reversed ancestry)',
+      [...base, left, save(3, 2, 3), panel(4, 3, 4, saveRect)],
+      saveRect,
+      3,
+      undefined,
+    ],
+    [
+      'hoisted beside save without containing it',
+      [...base, left, panel(3, 2, 3, rect(200, 200, 100, 100)), save(4, 2, 3)],
+      rect(200, 200, 100, 100),
+      4,
+      undefined,
+    ],
+  ];
+  for (const [name, nodes, panelRect, saveIndex, expected] of cases)
+    assert.equal(associate(nodes, panelRect, saveIndex), expected, name);
 });

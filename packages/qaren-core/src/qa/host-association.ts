@@ -126,15 +126,16 @@ export function associateHosts(
   // Covered containers are not hittable, and XCUI hoists nested identified views beside their
   // descendants' native path, so an ancestor may sit on that path or hang off it, never elsewhere.
   const onNativePath = (child: number, ancestor: number) => {
+    if (child === ancestor || nativePaths[ancestor].includes(child)) return false;
+    // Direct native ancestry proves itself, even when the child overflows its parent.
+    if (nativePaths[child].includes(ancestor)) return true;
     const parent = nodes[ancestor].parentIndex;
     return (
-      child !== ancestor &&
-      !nativePaths[ancestor].includes(child) &&
+      parent !== undefined &&
+      nativePaths[child].slice(1).includes(parent) &&
       !!nodes[ancestor].rect &&
       !!nodes[child].rect &&
-      contains(nodes[ancestor].rect!, nodes[child].rect!) &&
-      (nativePaths[child].includes(ancestor) ||
-        (parent !== undefined && nativePaths[child].slice(1).includes(parent)))
+      contains(nodes[ancestor].rect!, nodes[child].rect!)
     );
   };
   const anchoredPath = (i: number): boolean => {
