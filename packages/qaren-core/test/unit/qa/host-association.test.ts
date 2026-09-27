@@ -7,6 +7,7 @@ import { decideScreen } from '../../../dist/qa/resolve.js';
 import { inputValues, isPossibleInput } from '../../../dist/qa/privacy.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { join, semanticActionView, visibilityView } from '../../../dist/qa/screen.js';
+import { associateHosts } from '../../../dist/qa/host-association.js';
 import type { DigestEntry, ReactHostEvidence } from '../../../dist/qa/screen.js';
 import { nativeCapture } from './platform-presence-fixtures.ts';
 import { buildFiber, createSandbox } from '../helpers/inject-harness.js';
@@ -315,7 +316,7 @@ for (const [name, weaken] of unproven) {
   });
 }
 
-test('every named host ancestor must independently match native ancestry and measured presence', async () => {
+test('named host ancestors must match native ancestry structurally; only the host itself needs measured presence', async () => {
   for (const variant of ['proven', 'frame', 'unknown-presence', 'missing-ID', 'disconnected']) {
     const f = fixture();
     const control = f.native.nodes[2];
@@ -362,11 +363,11 @@ test('every named host ancestor must independently match native ancestry and mea
     const screen = await f.capture();
     assert.equal(
       screen.elements[3].semantic?.press,
-      variant === 'proven' ? 'supported' : 'unknown',
+      variant === 'proven' || variant === 'unknown-presence' ? 'supported' : 'unknown',
       variant,
     );
     assert.equal(screen.elements.length, 4);
-    if (variant === 'proven')
+    if (variant === 'proven' || variant === 'unknown-presence')
       assert.deepEqual(
         semanticActionView(screen, 'press'),
         { elements: [screen.elements[3]] },
@@ -844,4 +845,82 @@ test('unassociated positive-fill observations retain privacy without acquiring n
     line: 1,
   });
   assert.equal(judge.requests.length, 1);
+});
+
+test('text under a structurally matched ancestor is searched only inside that ancestor', () => {
+  const rect = (x: number, y: number, width: number, height: number) => ({ x, y, width, height });
+  const node = (
+    index: number,
+    parentIndex: number | undefined,
+    depth: number,
+    type: string,
+    r: ReturnType<typeof rect>,
+    extra = {},
+  ) => ({
+    ref: `@e${index}`,
+    index,
+    parentIndex,
+    depth,
+    type,
+    rect: r,
+    enabled: true,
+    ...extra,
+  });
+  const nodes = [
+    node(0, undefined, 0, 'Application', rect(0, 0, 400, 800)),
+    node(1, 0, 1, 'Window', rect(0, 0, 400, 800)),
+    node(2, 1, 2, 'Other', rect(0, 0, 400, 800), { identifier: 'root' }),
+    node(3, 2, 3, 'Other', rect(0, 0, 200, 400), { identifier: 'panel' }),
+    node(4, 2, 3, 'Other', rect(200, 0, 200, 400), { identifier: 'other' }),
+    node(5, 4, 4, 'StaticText', rect(10, 10, 100, 20), { label: 'Title' }),
+  ];
+  const status = ['unknown', 'unknown', 'observed', 'unknown', 'observed', 'observed'] as const;
+  const presence = {
+    source: 'xcui-live' as const,
+    nodes: status.map((s) => ({ status: s, labelSource: 'direct' as const })),
+  };
+  const view = (hostIndex: number, parentHostIndex: number | null, r: ReturnType<typeof rect>) => ({
+    hostIndex,
+    parentHostIndex,
+    rootIndex: 0,
+    hostType: 'RCTView',
+    rect: r,
+    text: { kind: 'none' as const },
+  });
+  const evidence = {
+    complete: true,
+    hosts: [
+      { testID: 'root', role: null, roleSource: 'none' as const, capabilities: {} },
+      { testID: 'panel', role: null, roleSource: 'none' as const, capabilities: {} },
+      { role: null, roleSource: 'none' as const, capabilities: {} },
+      { testID: 'other', role: null, roleSource: 'none' as const, capabilities: {} },
+    ],
+    typography: {
+      version: 1 as const,
+      complete: true,
+      durationMs: 10,
+      coordinateSpace: 'window-points' as const,
+      nodes: [
+        view(0, null, rect(0, 0, 400, 800)),
+        view(1, 0, rect(0, 0, 200, 400)),
+        {
+          ...view(2, 1, rect(10, 10, 100, 20)),
+          hostType: 'RCTText',
+          text: { kind: 'block' as const, content: 'Title' },
+        },
+        view(3, 0, rect(200, 0, 200, 400)),
+      ],
+    },
+  };
+  const associations = associateHosts(nodes as never, evidence as never, presence as never);
+  assert.equal(
+    associations.get(1)?.nativeIndex,
+    undefined,
+    'the panel itself has no measured presence',
+  );
+  assert.equal(
+    associations.get(2),
+    undefined,
+    'text inside the panel never matches native text in a sibling subtree',
+  );
 });

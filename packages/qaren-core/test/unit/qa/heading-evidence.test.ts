@@ -247,13 +247,6 @@ const unsupported: Array<[string, (f: ReturnType<typeof fixture>) => void]> = [
     },
   ],
   [
-    'unknown anchor presence',
-    (f) => {
-      f.native.nodes[2].presence.status = 'unknown';
-      delete f.native.nodes[2].presence.observedUptimeMs;
-    },
-  ],
-  [
     'no native window',
     (f) => {
       f.native.nodes[1].type = 'Other';
@@ -411,6 +404,22 @@ for (const [name, change] of unsupported) {
     );
   });
 }
+
+test('an unobserved anchor scopes the title, but as a contribution it still refuses the visibility view', async () => {
+  const f = fixture();
+  f.native.nodes[2].presence.status = 'unknown';
+  delete f.native.nodes[2].presence.observedUptimeMs;
+  const screen = await f.capture();
+  assert.equal(screen.elements[3].semantic?.heading?.kind, 'typographic-title');
+  const judge = scriptedJudge(() =>
+    assert.fail('an unobserved anchor contribution must not reach the judge'),
+  );
+  const { visibility } = await decideScreen(screen, judge, undefined, wait());
+  assert.deepEqual(visibility, {
+    refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
+    reason: 'a possible assertion contribution has unknown visibility',
+  });
+});
 
 test('distinct matching anonymous hosts or native observations cannot share title identity', async () => {
   for (const duplicate of ['host', 'native', 'named-native']) {
