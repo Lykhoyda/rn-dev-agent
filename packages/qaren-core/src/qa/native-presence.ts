@@ -96,3 +96,48 @@ export function validateNativePresence(
   }
   return { source: 'xcui-live', nodes: observations };
 }
+
+type Rect = NonNullable<NativeNode['rect']>;
+
+function overlaps(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+function clip(a: Rect, b: Rect | undefined): Rect {
+  if (!b) return a;
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  return {
+    x,
+    y,
+    width: Math.max(0, Math.min(a.x + a.width, b.x + b.width) - x),
+    height: Math.max(0, Math.min(a.y + a.height, b.y + b.height) - y),
+  };
+}
+
+// Unobserved nodes of a verified capture lying wholly outside the window or a scroll view ancestor.
+export function offscreenNodes(
+  nodes: NativeNode[],
+  presence: NativePresence | undefined,
+): Set<number> {
+  const offscreen = new Set<number>();
+  const windows = nodes.flatMap((node, i) => (node.type === 'Window' ? [i] : []));
+  const window = windows.length === 1 ? nodes[windows[0]].rect : undefined;
+  if (!presence || !window || window.width <= 0 || window.height <= 0) return offscreen;
+  nodes.forEach((node, i) => {
+    if (presence.nodes[i]?.status !== 'unknown' || !node.rect) return;
+    if (node.rect.width <= 0 || node.rect.height <= 0) return;
+    let visible = window;
+    let parent = node.parentIndex;
+    for (
+      let hops = 0;
+      parent !== undefined && parent !== windows[0] && hops < nodes.length;
+      hops++
+    ) {
+      if (nodes[parent]?.type === 'ScrollView') visible = clip(visible, nodes[parent].rect);
+      parent = nodes[parent]?.parentIndex;
+    }
+    if (parent === windows[0] && !overlaps(node.rect, visible)) offscreen.add(i);
+  });
+  return offscreen;
+}

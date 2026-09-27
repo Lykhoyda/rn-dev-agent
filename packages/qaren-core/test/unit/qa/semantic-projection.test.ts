@@ -3,6 +3,10 @@ import { test } from 'node:test';
 import * as projection from '../../../dist/qa/screen.js';
 import type { Element, Screen } from '../../../dist/qa/screen.js';
 import { inputValues, redactEvidence } from '../../../dist/qa/privacy.js';
+import { decideTarget, prepareTarget } from '../../../dist/qa/resolve.js';
+import { parsePlan } from '../../../dist/qa/plan.js';
+import { runPlan } from '../../../dist/qa/walker.js';
+import { choice, scriptedJudge, walker } from './judgment-fixtures.ts';
 
 const complete = { native: 'complete', react: 'complete' } as const;
 
@@ -184,6 +188,148 @@ test('an unlabeled, unidentified plain view is inert, so the visibility view nev
     'refuse' in projection.visibilityView(strayInput),
     'an unassociated fillable host could be this view, so its visibility still matters',
   );
+});
+
+const band = (y: number, height = 40) => ({ x: 0, y, width: 400, height });
+const scrolled = [
+  { ref: '@app', type: 'Application', rect: band(0, 800) },
+  { ref: '@window', type: 'Window', parentIndex: 0, rect: band(0, 800) },
+  { ref: '@list', type: 'ScrollView', parentIndex: 1, rect: band(100, 600) },
+];
+function presenceOf(statuses: ('observed' | 'unknown')[]) {
+  return {
+    source: 'xcui-live' as const,
+    nodes: statuses.map((status) => ({ status, labelSource: 'direct' as const })),
+  };
+}
+
+test('a verified node outside its scroll view or the window is offscreen; partial, empty and observed nodes are not', () => {
+  const nodes = [
+    ...scrolled,
+    { ref: '@shown', type: 'StaticText', label: 'Shown', parentIndex: 2, rect: band(200) },
+    { ref: '@below', type: 'StaticText', label: 'Below', parentIndex: 2, rect: band(720) },
+    { ref: '@sheet', type: 'StaticText', label: 'Sheet', parentIndex: 1, rect: band(800) },
+    { ref: '@seen', type: 'StaticText', label: 'Seen', parentIndex: 2, rect: band(760) },
+    { ref: '@edge', type: 'StaticText', label: 'Edge', parentIndex: 2, rect: band(680) },
+    { ref: '@empty', type: 'StaticText', label: 'Empty', parentIndex: 2, rect: band(720, 0) },
+  ];
+  const statuses = ['unknown', 'unknown', 'unknown', 'observed', 'unknown', 'unknown', 'observed'];
+  const screen = projection.join(
+    nodes,
+    [],
+    'app',
+    complete,
+    { hosts: [], complete: true },
+    presenceOf([...statuses, 'unknown', 'unknown']),
+  );
+  assert.deepEqual(
+    screen.elements.map((e) => [e.ref, e.semantic?.visibility]),
+    [
+      ['@app', 'unknown'],
+      ['@window', 'unknown'],
+      ['@list', 'unknown'],
+      ['@shown', 'visible'],
+      ['@below', 'offscreen'],
+      ['@sheet', 'offscreen'],
+      ['@seen', 'visible'],
+      ['@edge', 'unknown'],
+      ['@empty', 'unknown'],
+    ],
+  );
+  refused(projection.visibilityView(screen), 'SCREEN_EVIDENCE_INCOMPLETE');
+
+  const settled = projection.join(
+    nodes.slice(0, 7),
+    [],
+    'app',
+    complete,
+    { hosts: [], complete: true },
+    presenceOf(statuses),
+  );
+  assert.deepEqual(
+    projection.visibilityView(settled),
+    { elements: [settled.elements[3], settled.elements[6]] },
+    'offscreen content is not visible content and needs no presence',
+  );
+  assert.equal(
+    projection.join(
+      nodes.slice(0, 7),
+      [],
+      'app',
+      complete,
+      { hosts: [], complete: true },
+      undefined,
+    ).elements[4].semantic?.visibility,
+    'unknown',
+    'geometry is offscreen evidence only inside a verified capture',
+  );
+});
+
+test('an offscreen native control is a described action candidate; an unobserved one on screen still refuses', async () => {
+  const more = (y: number) => [
+    ...scrolled,
+    {
+      ref: '@more',
+      type: 'Button',
+      label: 'Show more',
+      parentIndex: 2,
+      rect: band(y),
+      hittable: true,
+    },
+  ];
+  const statuses = presenceOf(['unknown', 'unknown', 'unknown', 'unknown']);
+  const below = projection.join(
+    more(720),
+    [],
+    'app',
+    complete,
+    { hosts: [], complete: true },
+    statuses,
+  );
+  assert.deepEqual(projection.semanticActionView(below, 'press'), {
+    elements: [below.elements[3]],
+  });
+  const question = prepareTarget({ kind: 'press', target: { phrase: 'show more' } }, below);
+  assert.ok('question' in question);
+  assert.equal(
+    question.question.criteria.e0,
+    'Button "Show more" off screen (native accessibility name; outside the visible area)',
+  );
+  const chosen = { e0: 0.97, none: 0.03 };
+  assert.deepEqual(
+    decideTarget(question, {
+      type: 'choice',
+      choice: 'e0',
+      probabilities: chosen,
+      confidence: 0.9,
+    }),
+    { scroll: 'down' },
+  );
+
+  const shown = projection.join(
+    more(300),
+    [],
+    'app',
+    complete,
+    { hosts: [], complete: true },
+    statuses,
+  );
+  refused(projection.semanticActionView(shown, 'press'), 'SCREEN_EVIDENCE_INCOMPLETE');
+
+  const observed = presenceOf(['unknown', 'unknown', 'unknown', 'observed']);
+  const scrolledIn = projection.join(
+    more(300),
+    [],
+    'app',
+    complete,
+    { hosts: [], complete: true },
+    observed,
+  );
+  const judge = scriptedJudge((questions) => ({ target_1: choice(questions.target_1) }));
+  const f = walker([below, scrolledIn], judge);
+  const result = await runPlan(parsePlan('1. Tap show more').blocks!, f.deps);
+  assert.equal(result.verdict, 'PASS', result.failure?.seen);
+  assert.deepEqual(f.actions, ['scroll down', 'press @more']);
 });
 
 test('native control types supply operation evidence independently of digest roles', () => {

@@ -84,6 +84,28 @@ test('measured exact host identity admits positive press without inventing a nat
   assert.deepEqual(visibilityView(screen), { elements: [screen.elements[2]] });
 });
 
+test('an exact structural match below the window associates without presence; an unobserved one on screen does not', async () => {
+  const offscreen = fixture();
+  const host = offscreen.hostEvidence.typography!.nodes[0];
+  host.rect = { ...host.rect!, y: 900 };
+  offscreen.native.nodes[2].rect = { ...offscreen.native.nodes[2].rect, y: 940 };
+  const unknown = { ...offscreen.native.nodes[2].presence, status: 'unknown' };
+  delete (unknown as { observedUptimeMs?: number }).observedUptimeMs;
+  offscreen.native.nodes[2].presence = unknown;
+  const below = await offscreen.capture();
+  assert.equal(below.elements[2].semantic?.visibility, 'offscreen');
+  assert.equal(below.elements[2].semantic?.press, 'supported');
+  assert.equal(below.pressEvidenceGap, undefined);
+  assert.deepEqual(semanticActionView(below, 'press'), { elements: [below.elements[2]] });
+  assert.deepEqual(visibilityView(below), { elements: [] });
+
+  const onScreen = fixture();
+  onScreen.native.nodes[2].presence = unknown;
+  const shown = await onScreen.capture();
+  assert.equal(shown.elements[2].semantic?.visibility, 'unknown');
+  assert.equal(shown.pressEvidenceGap, '1 interactive React host unassociated');
+});
+
 test('associated disabled and read-only facts block both operations without erasing positive capabilities', async () => {
   for (const state of ['disabled', 'readOnly'] as const) {
     const f = fixture();

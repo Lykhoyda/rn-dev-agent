@@ -196,7 +196,7 @@ export function associateHeadings(
       );
   for (const host of snapshot.nodes) {
     const association = associations.get(host.hostIndex);
-    if (!association) continue;
+    if (!association || presence.nodes[association.nativeIndex]?.status !== 'observed') continue;
     const identity = evidence.hosts[host.hostIndex];
     const base = {
       hostIndex: host.hostIndex,

@@ -184,6 +184,20 @@ test('associated declared headings need no typographic prominence but still need
   assert.equal((await f.capture()).elements[3].semantic?.heading, undefined);
 });
 
+test('an offscreen host association establishes no heading evidence', async () => {
+  const f = fixture();
+  f.hostEvidence.hosts[0].role = 'heading';
+  f.hostEvidence.hosts[0].roleSource = 'role';
+  assert.equal((await f.capture()).elements[2].semantic?.heading?.kind, 'declared-heading');
+  f.typography.nodes[0].rect = { ...f.typography.nodes[0].rect!, y: 860 };
+  f.native.nodes[2].rect = { ...f.native.nodes[2].rect, y: 900 };
+  f.native.nodes[2].presence.status = 'unknown';
+  delete f.native.nodes[2].presence.observedUptimeMs;
+  const below = await f.capture();
+  assert.equal(below.elements[2].semantic?.visibility, 'offscreen');
+  assert.equal(below.elements[2].semantic?.heading, undefined);
+});
+
 const unsupported: Array<[string, (f: ReturnType<typeof fixture>) => void]> = [
   [
     'no typography',

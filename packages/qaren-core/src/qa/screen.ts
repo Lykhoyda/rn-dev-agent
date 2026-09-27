@@ -2,6 +2,7 @@ import { isRecord } from './questions.js';
 import { createHash } from 'node:crypto';
 import { captureInputPrivacy, nativeLabelMayBeValue } from './privacy.js';
 import { PRIVATE_INPUT_LIMITS } from './private-input-limits.js';
+import { offscreenNodes } from './native-presence.js';
 import type { NativePresence, NativePresenceNode } from './native-presence.js';
 import { associateHeadings, validateHostTypography } from './host-typography.js';
 import type { HeadingEvidence, HostTypography } from './host-typography.js';
@@ -278,6 +279,7 @@ export function join(
     ) ??
       false);
   const presence = nativePresence === 'unknown' ? undefined : nativePresence;
+  const offscreen = offscreenNodes(nodes, presence);
   const associations = associateHosts(nodes, reactHostEvidence, presence);
   const associatedHosts = new Map(
     [...associations].map(([hostIndex, { nativeIndex }]) => [
@@ -382,7 +384,12 @@ export function join(
       semantic: {
         ...capabilities,
         ...(headings.has(nodeIndex) ? { heading: headings.get(nodeIndex)! } : {}),
-        visibility: observed?.status === 'observed' ? 'visible' : 'unknown',
+        visibility:
+          observed?.status === 'observed'
+            ? 'visible'
+            : offscreen.has(nodeIndex)
+              ? 'offscreen'
+              : 'unknown',
         disabled:
           n.enabled === false ||
           host?.disabled === true ||
@@ -574,7 +581,7 @@ export function semanticActionView(screen: Screen, kind: 'press' | 'fill'): Proj
       return incomplete(
         `an observation has unknown ${kind} capability (${e.ref}, ${e.kind}${kind === 'press' && screen.pressEvidenceGap ? `; ${screen.pressEvidenceGap}` : ''})`,
       );
-    if (e.semantic.nativePresence && e.semantic.visibility !== 'visible')
+    if (e.semantic.nativePresence && e.semantic.visibility === 'unknown')
       return incomplete('a native control lacks positive platform presence');
     if (e.semantic.visibility !== 'offscreen' && !e.hittable)
       return incomplete('a supported control has neither a hit hint nor offscreen evidence');

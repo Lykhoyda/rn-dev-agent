@@ -157,6 +157,7 @@ function describeSemantic(element: Element): string {
       : heading?.kind === 'declared-heading'
         ? '; associated declared heading role'
         : '';
+  const offscreen = element.semantic?.visibility === 'offscreen';
   if (native)
     return `${describe({
       ...element,
@@ -167,13 +168,9 @@ function describeSemantic(element: Element): string {
       where: undefined,
       side: undefined,
       disabled: semanticDisabled(element),
-      offscreen: false,
-    })} (native accessibility name; platform-observed presence${qualification})`;
-  return describe({
-    ...element,
-    disabled: semanticDisabled(element),
-    offscreen: element.semantic?.visibility === 'offscreen',
-  });
+      offscreen,
+    })} (native accessibility name; ${offscreen ? 'outside the visible area' : 'platform-observed presence'}${qualification})`;
+  return describe({ ...element, disabled: semanticDisabled(element), offscreen });
 }
 
 // pending: not established on this capture, and not proven absent.

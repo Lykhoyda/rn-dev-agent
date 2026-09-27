@@ -1,3 +1,4 @@
+import { offscreenNodes } from './native-presence.js';
 import type { NativePresence } from './native-presence.js';
 import type { NativeNode, ReactHostEvidence } from './screen.js';
 import type { HostTypography } from './host-typography.js';
@@ -121,8 +122,9 @@ export function associateHosts(
     )
       structural.set(host.hostIndex, nativeIndex);
   }
-  const anchors = new Map([...structural].filter(([, nativeIndex]) => positive(nativeIndex)));
-  // A host needs measured presence; each identified ancestor needs its own structural match.
+  const offscreen = offscreenNodes(nodes, presence);
+  const anchors = new Map([...structural].filter(([, i]) => positive(i) || offscreen.has(i)));
+  // A host needs measured presence or proven offscreen geometry; each identified ancestor needs its own structural match.
   // Covered containers are not hittable, and XCUI hoists nested identified views beside their
   // descendants' native path, so an ancestor may sit on that path or hang off it, never elsewhere.
   const onNativePath = (child: number, ancestor: number) => {
