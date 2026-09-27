@@ -2,7 +2,7 @@ import { isRecord } from './questions.js';
 import { createHash } from 'node:crypto';
 import { captureInputPrivacy, nativeLabelMayBeValue } from './privacy.js';
 import { PRIVATE_INPUT_LIMITS } from './private-input-limits.js';
-import { duplicateNodes, offscreenNodes } from './native-presence.js';
+import { duplicateNodes, offscreenNodes, scrollChromeNodes } from './native-presence.js';
 import type { NativePresence, NativePresenceNode } from './native-presence.js';
 import { associateHeadings, validateHostTypography } from './host-typography.js';
 import type { HeadingEvidence, HostTypography } from './host-typography.js';
@@ -285,6 +285,7 @@ export function join(
     ) ??
       false);
   const offscreen = offscreenNodes(nodes, presence);
+  const chrome = scrollChromeNodes(nodes, presence);
   const associations = associateHosts(nodes, reactHostEvidence, presence);
   const associatedHosts = new Map(
     [...associations].map(([hostIndex, { nativeIndex }]) => [
@@ -413,7 +414,8 @@ export function join(
               nativePresence: {
                 kind: nativeKind,
                 labelSource: observed.labelSource,
-                structural: n.type === 'Application' || n.type === 'Window',
+                structural:
+                  n.type === 'Application' || n.type === 'Window' || chrome.has(nodeIndex),
               },
             }
           : {}),

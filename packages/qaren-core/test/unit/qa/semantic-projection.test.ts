@@ -391,6 +391,35 @@ test('an unnamed handlerless React entry is not an unaccounted competitor; named
   );
 });
 
+test('identical unidentified sibling views directly under a native scroll view are platform chrome', () => {
+  const bar = { type: 'Other', label: 'Vertical scroll bar, 2 pages', rect: band(100, 600) };
+  const view = (parents: number[]) => {
+    const nodes = [
+      ...scrolled,
+      ...parents.map((parentIndex, i) => ({ ...bar, ref: `@bar${i}`, parentIndex })),
+      { ref: '@text', type: 'StaticText', label: 'Hi', parentIndex: 2, rect: band(200) },
+    ];
+    const statuses = nodes.map((n) => (n.ref === '@text' ? 'observed' : 'unknown') as const);
+    const screen = projection.join(
+      nodes,
+      [],
+      'app',
+      complete,
+      { hosts: [], complete: true },
+      presenceOf(statuses),
+    );
+    return projection.visibilityView(screen);
+  };
+  const chrome = view([2, 2]);
+  assert.ok('elements' in chrome);
+  assert.deepEqual(
+    chrome.elements.map((e) => e.ref),
+    ['@text'],
+  );
+  refused(view([2]), 'SCREEN_EVIDENCE_INCOMPLETE');
+  refused(view([1, 1]), 'SCREEN_EVIDENCE_INCOMPLETE');
+});
+
 test('a verified text identical to its parent text counts once; other identical pairs stay distinct', () => {
   const text = { type: 'StaticText', identifier: 'title', label: 'Welcome', rect: band(60) };
   const save = { type: 'Button', identifier: 'save', label: 'Save', rect: band(300) };

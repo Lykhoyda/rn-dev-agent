@@ -145,6 +145,35 @@ export function duplicateNodes(
   return duplicates;
 }
 
+// Unidentified views of a verified capture repeated identically beside each other directly under a
+// scroll view, as XCUI reports the platform's scroll indicators.
+export function scrollChromeNodes(
+  nodes: NativeNode[],
+  presence: NativePresence | undefined,
+): Set<number> {
+  const chrome = new Set<number>();
+  if (!presence) return chrome;
+  const key = (n: NativeNode) =>
+    JSON.stringify([
+      n.parentIndex,
+      n.label ?? '',
+      n.value ?? null,
+      n.rect ? [n.rect.x, n.rect.y, n.rect.width, n.rect.height] : null,
+      n.enabled,
+    ]);
+  const counts = new Map<string, number>();
+  const candidate = (n: NativeNode) =>
+    n.type === 'Other' &&
+    !n.identifier &&
+    n.parentIndex !== undefined &&
+    nodes[n.parentIndex]?.type === 'ScrollView';
+  for (const n of nodes) if (candidate(n)) counts.set(key(n), (counts.get(key(n)) ?? 0) + 1);
+  nodes.forEach((n, i) => {
+    if (candidate(n) && counts.get(key(n))! > 1) chrome.add(i);
+  });
+  return chrome;
+}
+
 // Unobserved nodes of a verified capture lying wholly outside the window or a scroll view ancestor.
 export function offscreenNodes(
   nodes: NativeNode[],
