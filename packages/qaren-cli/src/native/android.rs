@@ -154,7 +154,7 @@ impl NativeDriver for AndroidDriver {
             runner,
             "isWindowUpdating",
             Effect::Reads,
-            json!({"timeoutMs": WINDOW_PROBE_MS}),
+            json!({"timeoutMs": WINDOW_PROBE_MS.min(window_ms)}),
             window_ms,
         )?;
         data["updating"]
@@ -308,5 +308,14 @@ mod tests {
             (probe["command"].as_str(), probe["timeoutMs"].as_u64()),
             (Some("isWindowUpdating"), Some(500))
         );
+    }
+
+    #[test]
+    fn settle_probe_never_outlasts_the_supplied_window() {
+        let mut runner = MockRunner::new();
+        runner.expect_run("curl", data(json!({"updating": false})));
+        let mut driver = driver();
+        assert_eq!(driver.is_settled(&mut runner, 1), Ok(true));
+        assert_eq!(body(&runner, 0)["timeoutMs"], 1);
     }
 }

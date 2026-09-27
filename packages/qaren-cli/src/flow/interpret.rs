@@ -487,7 +487,9 @@ impl Engine<'_> {
                 )
                 .map(|_| "scrolled".into())
             }
-            Op::WaitForAnimationToEnd => self.settle(deadline),
+            Op::WaitForAnimationToEnd => {
+                self.settle(deadline.min(self.now().saturating_add(SETTLE_CAP_MS)))
+            }
             Op::TakeScreenshot(name) => {
                 self.cancelled()?;
                 let window = self.window(deadline, step.budget_ms)?;
@@ -579,19 +581,31 @@ impl Engine<'_> {
         let found = self.poll(deadline, |engine, window| {
             match engine.native.snapshot(engine.runner, window) {
                 Ok(snapshot) => match resolve::resolve(selector, &snapshot.nodes) {
+                    Resolution::Found(_) if snapshot.truncated && selector.index.is_none() => {
+                        last = "the snapshot was truncated, so uniqueness is unproven".into();
+                        Ok(None)
+                    }
                     Resolution::Found(node) => Ok(Some((node, snapshot.nodes[0].clone()))),
                     Resolution::Ambiguous { candidates } => Err(ambiguous(selector, &candidates)),
                     Resolution::OutOfRange { index, matches } => {
                         last = format!(
-                            "index {index} is out of range of {} match(es): {}",
+                            "index {index} is out of range of {} match(es): {}{}",
                             matches.len(),
-                            matches.join("; ")
+                            matches.join("; "),
+                            if snapshot.truncated {
+                                "; the snapshot was truncated"
+                            } else {
+                                ""
+                            }
                         );
                         Ok(None)
                     }
                     Resolution::NotFound { near_misses } => {
                         last = if snapshot.truncated {
-                            "the snapshot was truncated".into()
+                            format!(
+                                "the snapshot was truncated; near misses: {}",
+                                near_misses.join("; ")
+                            )
                         } else if near_misses.is_empty() {
                             "no near misses".into()
                         } else {
@@ -699,6 +713,11 @@ impl Engine<'_> {
                 .snapshot(self.runner, DISPATCH_WINDOW_MS)
                 .map_err(|e| Fail::Miss(format!("condition unobservable: snapshot failed: {e}")))?;
             match resolve::resolve(selector, &snapshot.nodes) {
+                Resolution::Found(_) if snapshot.truncated && selector.index.is_none() => {
+                    return Err(Fail::Miss(
+                        "condition unobservable: the snapshot was truncated, so uniqueness is unproven".into(),
+                    ))
+                }
                 Resolution::Found(_) => true,
                 Resolution::NotFound { .. } | Resolution::OutOfRange { .. }
                     if !snapshot.truncated =>
@@ -807,6 +826,10 @@ impl Engine<'_> {
             let window = self.read_window(deadline)?;
             let screen = match self.native.snapshot(self.runner, window) {
                 Ok(snapshot) => match resolve::resolve(selector, &snapshot.nodes) {
+                    Resolution::Found(_) if snapshot.truncated && selector.index.is_none() => {
+                        last = "the snapshot was truncated, so uniqueness is unproven".into();
+                        None
+                    }
                     Resolution::Found(node) if self.now() <= deadline => {
                         return Ok(format!(
                             "{} visible after {scrolls} scroll(s)",
@@ -822,18 +845,28 @@ impl Engine<'_> {
                     }
                     Resolution::OutOfRange { index, matches } => {
                         last = format!(
-                            "index {index} is out of range of {} match(es)",
-                            matches.len()
+                            "index {index} is out of range of {} match(es){}",
+                            matches.len(),
+                            if snapshot.truncated {
+                                "; the snapshot was truncated"
+                            } else {
+                                ""
+                            }
                         );
-                        Some(snapshot.nodes[0].clone())
+                        (!snapshot.truncated).then(|| snapshot.nodes[0].clone())
                     }
                     Resolution::NotFound { near_misses } => {
-                        last = if near_misses.is_empty() {
+                        last = if snapshot.truncated {
+                            format!(
+                                "the snapshot was truncated; near misses: {}",
+                                near_misses.join("; ")
+                            )
+                        } else if near_misses.is_empty() {
                             "no near misses".into()
                         } else {
                             format!("near misses: {}", near_misses.join("; "))
                         };
-                        Some(snapshot.nodes[0].clone())
+                        (!snapshot.truncated).then(|| snapshot.nodes[0].clone())
                     }
                 },
                 Err(error) => {
@@ -865,7 +898,9 @@ impl Engine<'_> {
                         return Err(Fail::Cancelled(reason));
                     }
                 }
-                None => self.runner.sleep(Duration::from_millis(POLL_MS)),
+                None => self
+                    .runner
+                    .sleep(Duration::from_millis(POLL_MS.min(self.remaining(deadline)))),
             }
         }
     }
@@ -1216,6 +1251,51 @@ mod tests {
     }
 
     #[test]
+    fn unindexed_lookup_waits_for_a_complete_snapshot() {
+        let mut truncated = screen(&["Go"]);
+        truncated.truncated = true;
+        for op in [tap("Go"), Op::AssertVisible(text("Go"))] {
+            let mut native = ScriptedNative::steady(truncated.clone());
+            let (unproven, _) = drive(
+                &plan(vec![step("s1", Domain::Native, 500, op.clone())]),
+                &mut native,
+                &mut ScriptedHost::default(),
+            );
+            assert_eq!(unproven.verdict, Verdict::Fail);
+            assert!(unproven.rows[0]
+                .reason
+                .as_ref()
+                .unwrap()
+                .contains("truncated"));
+            assert!(native.mutations.is_empty());
+
+            let mut native =
+                ScriptedNative::steady(screen(&["Go"])).then(vec![Ok(truncated.clone())]);
+            let (complete, _) = drive(
+                &plan(vec![step("s1", Domain::Native, 1_000, op)]),
+                &mut native,
+                &mut ScriptedHost::default(),
+            );
+            assert_eq!(complete.verdict, Verdict::Pass);
+            assert_eq!(native.snapshots_taken, 2);
+        }
+
+        let mut native = ScriptedNative::steady(truncated);
+        let (indexed, _) = drive(
+            &plan(vec![step(
+                "s1",
+                Domain::Native,
+                500,
+                Op::Press(Press::Tap, indexed(text("Go"), 0)),
+            )]),
+            &mut native,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(indexed.verdict, Verdict::Pass);
+        assert_eq!(native.mutations.len(), 1);
+    }
+
+    #[test]
     fn reads_and_mutations_cannot_succeed_after_the_step_deadline() {
         let mut native = ScriptedNative::steady(screen(&["Go"]));
         let read = plan(vec![step(
@@ -1489,6 +1569,30 @@ mod tests {
     }
 
     #[test]
+    fn scroll_until_visible_does_not_accept_or_scroll_a_truncated_unique_match() {
+        let mut truncated = screen(&["Footer"]);
+        truncated.truncated = true;
+        let mut native = ScriptedNative::steady(truncated);
+        let scroll = plan(vec![step(
+            "s1",
+            Domain::Native,
+            500,
+            Op::ScrollUntilVisible {
+                selector: text("Footer"),
+                direction: Direction::Down,
+            },
+        )]);
+        let (outcome, _) = drive(&scroll, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        assert!(outcome.rows[0]
+            .reason
+            .as_ref()
+            .unwrap()
+            .contains("truncated"));
+        assert!(native.mutations.is_empty());
+    }
+
+    #[test]
     fn wait_for_animation_passes_when_static_or_at_the_cap_but_needs_one_observation() {
         let wait = || {
             plan(vec![step(
@@ -1527,6 +1631,27 @@ mod tests {
             .clone()
             .unwrap()
             .contains("no settle observation"));
+    }
+
+    #[test]
+    fn animation_wait_caps_a_larger_step_budget() {
+        let mut native = ScriptedNative::steady(screen(&[]));
+        native.settled = std::iter::repeat_n(Ok(false), 100).collect();
+        let wait = plan(vec![step(
+            "s1",
+            Domain::Native,
+            60_000,
+            Op::WaitForAnimationToEnd,
+        )]);
+        let (outcome, elapsed) = drive(&wait, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert!(outcome.rows[0]
+            .reason
+            .as_ref()
+            .unwrap()
+            .contains("cap reached; still changing"));
+        assert!(elapsed <= SETTLE_CAP_MS + LATENCY_MS, "{elapsed}");
+        assert!(!native.settled.is_empty());
     }
 
     fn conditional(when: Condition, domain: Domain) -> Plan {
@@ -1603,6 +1728,37 @@ mod tests {
             &mut ScriptedHost::default(),
         );
         assert_eq!(outcomes(&ambiguous.rows), vec!["fail"]);
+    }
+
+    #[test]
+    fn native_conditions_need_completeness_for_unindexed_presence() {
+        let mut truncated = screen(&["Skip", "Go"]);
+        truncated.truncated = true;
+        for when in [
+            Condition::Visible(text("Skip")),
+            Condition::NotVisible(text("Skip")),
+        ] {
+            let mut native = ScriptedNative::steady(truncated.clone());
+            let (outcome, _) = drive(
+                &conditional(when, Domain::Native),
+                &mut native,
+                &mut ScriptedHost::default(),
+            );
+            assert_eq!(outcomes(&outcome.rows), vec!["fail"]);
+            assert!(outcome.rows[0]
+                .reason
+                .as_ref()
+                .unwrap()
+                .contains("truncated"));
+            assert!(native.mutations.is_empty());
+        }
+        let mut native = ScriptedNative::steady(truncated);
+        let (indexed, _) = drive(
+            &conditional(Condition::Visible(indexed(text("Skip"), 0)), Domain::Native),
+            &mut native,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(indexed.rows[0].outcome, "pass");
     }
 
     #[test]
