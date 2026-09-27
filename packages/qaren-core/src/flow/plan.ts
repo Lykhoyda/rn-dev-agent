@@ -14,13 +14,16 @@ export type Platform = 'ios' | 'android';
 export type Domain = 'native' | 'react-tree' | 'lifecycle';
 export type Direction = 'UP' | 'DOWN' | 'LEFT' | 'RIGHT';
 
-export type Selector =
+type DeepReadonly<T> = T extends object ? { readonly [K in keyof T]: DeepReadonly<T[K]> } : T;
+
+export type Selector = DeepReadonly<
   | { id: string; text?: never; index?: number }
-  | { text: string; id?: never; index?: number };
+  | { text: string; id?: never; index?: number }
+>;
 
 export interface StepSource {
-  line: number;
-  file?: string;
+  readonly line: number;
+  readonly file?: string;
 }
 
 interface StepBase {
@@ -32,7 +35,7 @@ interface StepBase {
   budgetMs: number;
 }
 
-export type Step = StepBase &
+export type Step = DeepReadonly<StepBase &
   (
     | { op: 'launchApp'; stopApp: boolean; clearState: boolean }
     | { op: 'tapOn' | 'doubleTapOn' | 'longPressOn'; selector: Selector }
@@ -51,12 +54,12 @@ export type Step = StepBase &
         when: { visible: Selector } | { notVisible: Selector };
         steps: Step[];
       }
-  );
+  )>;
 
 export interface Plan {
-  schema: typeof PLAN_SCHEMA;
-  actionId: string;
-  appId: string;
-  platform: Platform;
-  steps: Step[];
+  readonly schema: typeof PLAN_SCHEMA;
+  readonly actionId: string;
+  readonly appId: string;
+  readonly platform: Platform;
+  readonly steps: readonly Step[];
 }

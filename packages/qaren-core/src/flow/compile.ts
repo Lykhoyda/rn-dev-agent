@@ -7,6 +7,7 @@ import {
   MaestroValidationError,
   parseAndValidateFlow,
   resolveRunFlowTarget,
+  validateCommand,
 } from '../domain/maestro-validator.js';
 import { parseM7Header } from '../domain/reusable-action.js';
 import {
@@ -159,13 +160,21 @@ export function compileFlow({ file, params, platform }: CompileFlowInput): Plan 
   }
   if (!appId) throw new FlowCompileError(0, '', 'the flow has no appId header');
   const fallbackId = basename(file, extname(file));
-  return {
+  return deepFreeze({
     schema: PLAN_SCHEMA,
     actionId: parseM7Header(text, fallbackId)?.id ?? fallbackId,
     appId,
     platform,
     steps,
-  };
+  });
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object') {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
 }
 
 function compileCommands(body: Body, context: Context): Step[] {
@@ -191,6 +200,15 @@ function compileCommand(
   const refuse = (reason: string): never => {
     throw new FlowCompileError(line, name, reason, context.file);
   };
+  const validate = (): void => {
+    try {
+      validateCommand(value);
+    } catch (error) {
+      if (error instanceof MaestroValidationError) refuse(error.message);
+      throw error;
+    }
+  };
+  if (name !== 'runFlow') validate();
 
   const onlyKeys = (object: Record<string, unknown>, allowed: string[], label = name): void => {
     for (const key of Object.keys(object)) {
@@ -231,7 +249,7 @@ function compileCommand(
     return resolved;
   };
   const integer = (raw: unknown, what: string, fallback: number): number => {
-    if (raw === undefined || raw === null) return fallback;
+    if (raw === undefined) return fallback;
     if (!Number.isSafeInteger(raw) || (raw as number) < 0) {
       refuse(`${what} must be a non-negative integer`);
     }
@@ -447,14 +465,17 @@ function compileCommand(
     case 'clearState':
       noArgument();
       return step({ op: name }, 'lifecycle', LAUNCH_BUDGET_MS);
-    case 'runFlow':
-      return compileRunFlow(arg, node, lines, context, {
+    case 'runFlow': {
+      const steps = compileRunFlow(arg, node, lines, context, {
         refuse,
         onlyKeys,
         selector,
         readDomain,
         step,
       });
+      validate();
+      return steps;
+    }
     default:
       return refuse('not in rn-flow@1');
   }
@@ -537,6 +558,5 @@ function compileRunFlow(
     );
   }
   if (!conditional) return steps;
-  (conditional as Step & { steps: Step[] }).steps = steps;
-  return [conditional];
+  return [{ ...conditional, steps } as Step];
 }

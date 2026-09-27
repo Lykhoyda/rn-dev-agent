@@ -43,7 +43,7 @@ malformed YAML refuses with the parser's line. Every flow also passes the same
 validator as every other flow path (command allowlist, denied commands, scalar
 safety, contained `runFlow` file references). Command-level refusals carry the command name and its line (plus
 the sub-flow `file` when the step comes from one); the validator's own
-value-level refusals, such as an unsafe scalar, report line 0 with the reason.
+value-level refusals, such as an unsafe scalar, report the offending command and line.
 Refused at compile time: a command
 outside the list, an unknown key, a coordinate swipe, `retryTapIfNoChange`, or a
 value passed to a command that takes none. Nothing falls back to another
@@ -97,6 +97,9 @@ dispatched once through the runner. `hideKeyboard` is native and carries
 `fallbackDomain: "react-tree"`: the JavaScript dismissal tier runs only after
 the runner reports `KEYBOARD_DISMISS_FAILED`. `openLink` is lifecycle because no
 runner opens URLs.
+
+In v1, exact-id presence domains are fixed at compile time; they do not have a
+runtime native fallback. `hideKeyboard` is the only tiered step.
 
 A bare `launchApp` stops and relaunches the app. Lifecycle steps are exactly the
 steps a user could not perform by hand (relaunch, clear, kill, deep link), so a

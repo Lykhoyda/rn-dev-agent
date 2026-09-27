@@ -53,7 +53,26 @@ test('commands outside the validator allowlist refuse with their line', () => {
   assert.deepEqual([denied.command, denied.line], ['runScript', 6]);
   const unknown = refusal('- repeat:\n    times: 2\n');
   assert.deepEqual([unknown.command, unknown.line], ['repeat', 5]);
-  assert.match(refusal('- inputText: "a\\u0007"\n').reason, /Unsafe scalar/);
+  const unsafe = refusal('- inputText: "a\\u0007"\n');
+  assert.match(unsafe.reason, /Unsafe scalar/);
+  assert.deepEqual([unsafe.command, unsafe.line], ['inputText', 5]);
+});
+
+test('explicit null numeric fields refuse at their command', () => {
+  const commands = [
+    '- tapOn:\n    id: a\n    index: null',
+    '- eraseText:\n    charactersToErase: null',
+    '- swipe:\n    direction: DOWN\n    duration: null',
+    '- extendedWaitUntil:\n    visible: A\n    timeout: null',
+    '- scrollUntilVisible:\n    element: A\n    timeout: null',
+    '- waitForAnimationToEnd:\n    timeout: null',
+  ];
+  for (const command of commands) {
+    const error = refusal(`${command}\n`);
+    assert.equal(error.line, 5);
+    assert.ok(error.command);
+    assert.match(error.reason, /non-negative integer/);
+  }
 });
 
 test('malformed and cyclic runFlow refuse instead of crashing', () => {
@@ -140,6 +159,34 @@ test('absence reads stay native on iOS: a parked sheet keeps its fibers mounted'
       ['runFlow', 'react-tree'],
     ],
   );
+});
+
+test('all exact-id presence reads share the compile-time domain', () => {
+  const plan = compile(
+    '- assertVisible:\n    id: a\n- extendedWaitUntil:\n    visible:\n      id: a\n- runFlow:\n    when:\n      visible:\n        id: a\n    commands:\n      - back\n',
+  );
+  assert.deepEqual(plan.steps.map((step) => step.domain), [
+    'react-tree',
+    'react-tree',
+    'react-tree',
+  ]);
+});
+
+test('compiled plans are deeply frozen, including nested runFlow steps', () => {
+  const plan = compile(
+    '- runFlow:\n    when:\n      visible:\n        id: a\n    commands:\n      - tapOn:\n          id: b\n',
+  );
+  const nested = plan.steps[0]!;
+  assert.equal(nested.op, 'runFlow');
+  if (nested.op !== 'runFlow') return;
+  assert.ok(Object.isFrozen(plan));
+  assert.ok(Object.isFrozen(plan.steps));
+  assert.ok(Object.isFrozen(nested.when));
+  assert.ok(Object.isFrozen(nested.steps));
+  assert.ok(Object.isFrozen(nested.steps[0]!.source));
+  assert.ok(Object.isFrozen(nested.steps[0]!.selector));
+  assert.throws(() => Object.assign(nested.steps[0]!.selector, { id: 'wrong' }), TypeError);
+  assert.throws(() => Object.assign(plan, { appId: 'wrong' }), TypeError);
 });
 
 test('malformed YAML refuses with its line instead of throwing', () => {

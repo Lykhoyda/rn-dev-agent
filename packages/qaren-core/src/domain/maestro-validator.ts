@@ -164,7 +164,7 @@ export function buildMaestroFlow(opts: MaestroFlowOptions, commands: unknown[]):
   return `${headerYaml}---\n${bodyYaml}`;
 }
 
-function validateCommand(cmd: unknown): void {
+export function validateCommand(cmd: unknown): void {
   if (cmd === null || cmd === undefined) {
     throw new MaestroValidationError('Command is null/undefined');
   }
