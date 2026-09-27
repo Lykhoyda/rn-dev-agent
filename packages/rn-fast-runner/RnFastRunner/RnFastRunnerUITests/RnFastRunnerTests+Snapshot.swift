@@ -386,9 +386,14 @@ extension RnFastRunnerTests {
       for index in nodes.indices {
         if presenceUptimeMs() >= deadline { break }
         // Identified containers are association anchors, so they are observed whatever their label source.
+        // Unnamed, unidentified plain views are inert to the consumer and never need presence.
+        let labelSource = nodes[index].presence?.labelSource
         guard nodes[index].depth > 0,
               let descriptor = descriptors[index],
-              nodes[index].presence?.labelSource != .descendant || !descriptor.identifier.isEmpty,
+              labelSource != .descendant || !descriptor.identifier.isEmpty,
+              !(labelSource == PlatformPresenceObservation.LabelSource.none
+                && descriptor.identifier.isEmpty
+                && descriptor.type == .other),
               descriptor.type != .application, descriptor.type != .window,
               descriptors.filter({ $0 == descriptor }).count == 1 else { continue }
         let observation = presenceRead(deadline: deadline) {

@@ -230,18 +230,23 @@ function thirds(center: number, extent: number, names: readonly [string, string,
 function nativeCapabilities(
   kind: Kind,
   type: string | undefined,
-  reactInteractive: boolean,
+  react: { press: boolean; fill: boolean },
 ): Pick<NonNullable<Element['semantic']>, 'press' | 'fill'> {
-  // Plain iOS views and scroll containers carry no press of their own; their children do.
+  // Plain iOS views and scroll containers carry no press or text entry of their own.
   const plain = kind === 'text' || kind === 'image' || type === 'Other' || type === 'ScrollView';
   return {
     press:
       kind === 'button' || kind === 'switch' || kind === 'link'
         ? 'supported'
-        : plain && !reactInteractive
+        : plain && !react.press
           ? 'unsupported'
           : 'unknown',
-    fill: kind === 'input' ? 'supported' : kind === 'other' ? 'unknown' : 'unsupported',
+    fill:
+      kind === 'input'
+        ? 'supported'
+        : kind === 'other' && !(plain && !react.fill)
+          ? 'unknown'
+          : 'unsupported',
   };
 }
 
@@ -283,22 +288,26 @@ export function join(
   const headings = associateHeadings(nodes, reactHostEvidence, presence, associations);
   const interactiveRole = (role: string | null | undefined) =>
     !!role && kindOfRole(role) !== 'text' && kindOfRole(role) !== 'image';
-  // Native type may rule out press only while every interactive React host is accounted for.
-  const unassociated =
+  const inputRole = (role: string | null | undefined) => !!role && kindOfRole(role) === 'input';
+  // Native type may rule out an operation only while every React host offering it is accounted for.
+  const unassociated = (offers: (host: ReactHostObservation) => boolean) =>
     reactHostEvidence?.hosts.filter(
-      (host, hostIndex) =>
-        (host.capabilities.press === true || interactiveRole(host.role)) &&
-        !associations.has(hostIndex),
-    ) ?? [];
-  const pressEvidenceGap =
+      (host, hostIndex) => offers(host) && !associations.has(hostIndex),
+    ).length ?? 0;
+  const evidenceGap = (count: number) =>
     reactHostEvidence === undefined
       ? 'React host evidence missing'
       : !reactHostEvidence.complete
         ? 'React host evidence incomplete'
-        : unassociated.length > 0
-          ? `${unassociated.length} interactive React host${unassociated.length === 1 ? '' : 's'} unassociated`
+        : count > 0
+          ? `${count} interactive React host${count === 1 ? '' : 's'} unassociated`
           : undefined;
-  const unaccountedInteractiveHost = pressEvidenceGap !== undefined;
+  const pressEvidenceGap = evidenceGap(
+    unassociated((host) => host.capabilities.press === true || interactiveRole(host.role)),
+  );
+  const fillEvidenceGap = evidenceGap(
+    unassociated((host) => host.capabilities.fill === true || inputRole(host.role)),
+  );
   let width = 0;
   let height = 0;
   for (const n of nodes) {
@@ -337,12 +346,18 @@ export function join(
         (testID !== undefined && d.testID === testID) ||
         (d.testID === undefined && label !== undefined && norm(d.text ?? d.label) === norm(label)),
     );
-    const reactInteractive =
-      unaccountedInteractiveHost ||
-      host?.capabilities.press === true ||
-      interactiveRole(host?.role) ||
-      reactCandidates.some((d) => d.capabilities?.press === true || interactiveRole(d.role));
-    const capabilities = nativeCapabilities(kind, n.type, reactInteractive);
+    const capabilities = nativeCapabilities(kind, n.type, {
+      press:
+        pressEvidenceGap !== undefined ||
+        host?.capabilities.press === true ||
+        interactiveRole(host?.role) ||
+        reactCandidates.some((d) => d.capabilities?.press === true || interactiveRole(d.role)),
+      fill:
+        fillEvidenceGap !== undefined ||
+        host?.capabilities.fill === true ||
+        inputRole(host?.role) ||
+        reactCandidates.some((d) => d.capabilities?.fill === true || inputRole(d.role)),
+    });
     if (host?.capabilities.press === true) capabilities.press = 'supported';
     if (host?.capabilities.fill === true) capabilities.fill = 'supported';
     const uniqueIdentity =

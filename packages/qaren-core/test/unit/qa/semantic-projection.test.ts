@@ -139,6 +139,53 @@ test('native text, image and plain views are not pressable unless React evidence
   );
 });
 
+test('an unlabeled, unidentified plain view is inert, so the visibility view never needs its presence', () => {
+  const nodes = [
+    { ref: '@title', type: 'StaticText', label: 'Welcome', hittable: true },
+    { ref: '@container', type: 'Other', hittable: true },
+    { ref: '@pager', type: 'ScrollView', hittable: true },
+  ];
+  const presence = {
+    source: 'xcui-live' as const,
+    nodes: [
+      { status: 'observed' as const, labelSource: 'direct' as const },
+      { status: 'unknown' as const, labelSource: 'none' as const },
+      { status: 'unknown' as const, labelSource: 'none' as const },
+    ],
+  };
+  const inert = projection.join(
+    nodes,
+    [],
+    'app',
+    complete,
+    { hosts: [], complete: true },
+    presence,
+  );
+  assert.deepEqual(
+    inert.elements.map((e) => [e.semantic?.press, e.semantic?.fill]),
+    [
+      ['unsupported', 'unsupported'],
+      ['unsupported', 'unsupported'],
+      ['unsupported', 'unsupported'],
+    ],
+  );
+  assert.deepEqual(projection.visibilityView(inert), { elements: [inert.elements[0]] });
+
+  const strayInput = projection.join(
+    nodes,
+    [],
+    'app',
+    complete,
+    { hosts: [{ role: null, roleSource: 'none', capabilities: { fill: true } }], complete: true },
+    presence,
+  );
+  assert.equal(strayInput.elements[1].semantic?.fill, 'unknown');
+  assert.ok(
+    'refuse' in projection.visibilityView(strayInput),
+    'an unassociated fillable host could be this view, so its visibility still matters',
+  );
+});
+
 test('native control types supply operation evidence independently of digest roles', () => {
   for (const type of [
     'Button',

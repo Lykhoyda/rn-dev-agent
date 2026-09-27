@@ -73,7 +73,11 @@ function fixture() {
 test('measured exact host identity admits positive press without inventing a native role', async () => {
   const screen = await fixture().capture();
   assert.equal(screen.elements[2].semantic?.press, 'supported');
-  assert.equal(screen.elements[2].semantic?.fill, 'unknown');
+  assert.equal(
+    screen.elements[2].semantic?.fill,
+    'unsupported',
+    'a press handler offers no text entry',
+  );
   assert.equal(screen.elements[2].kind, 'other');
   assert.equal(screen.reactHostEvidence!.hosts[0].role, null);
   assert.deepEqual(semanticActionView(screen, 'press'), { elements: [screen.elements[2]] });
@@ -412,7 +416,7 @@ test('real measured producer press reaches the walker without a role; an account
       react: async () => produced,
     });
     assert.equal(screen.elements[2].kind, 'other');
-    assert.equal(screen.elements[2].semantic?.fill, 'unknown');
+    assert.equal(screen.elements[2].semantic?.fill, 'unsupported');
     assert.equal(screen.elements[2].semantic?.press, mode === 'none' ? 'unsupported' : 'supported');
     const judge = scriptedJudge((questions) => {
       assert.equal(mode, 'press', 'blocked controls never reach a model');
@@ -478,7 +482,11 @@ test('an admitted positive fill fact supports fill without inferring an input ki
   f.hostEvidence.hosts[0].capabilities = { fill: true };
   const screen = await f.capture();
   assert.equal(screen.elements[2].kind, 'other');
-  assert.equal(screen.elements[2].semantic?.press, 'unsupported');
+  assert.equal(
+    screen.elements[2].semantic?.press,
+    'unsupported',
+    'fill evidence alone opens no press',
+  );
   assert.deepEqual(semanticActionView(screen, 'fill'), { elements: [screen.elements[2]] });
 });
 
