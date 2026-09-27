@@ -400,7 +400,7 @@ function compileCommand(
     case 'eraseText': {
       const raw = isObject(arg)
         ? (onlyKeys(arg, ['charactersToErase']), arg.charactersToErase)
-        : arg;
+        : (arg ?? undefined);
       return step(
         { op: name, characters: integer(raw, 'charactersToErase', DEFAULT_ERASE_CHARACTERS) },
         'native',

@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { parseArgs } from 'node:util';
 import { CDPClient } from '../cdp-client.js';
 import { waitForExactPortTargets } from '../cdp/discovery.js';
 import { REACT_READY_POLL_MS, REACT_READY_TIMEOUT_MS } from '../cdp/setup.js';
@@ -82,19 +83,34 @@ async function parseOnly(planFile: string, probe: boolean): Promise<never> {
 }
 
 function compileOnly(args: string[]): Promise<never> {
-  const option = (name: string): string | undefined => {
-    const index = args.indexOf(name);
-    return index < 0 ? undefined : args[index + 1];
-  };
   const refuse = (code: string, refused: object): Promise<never> => {
     process.stdout.write(`${JSON.stringify({ ok: false, code, refused: [refused] })}\n`);
     return exitAfterDrain(4);
   };
-  const file = args[0] ?? '';
-  const platform = option('--platform');
+  const usage = (): Promise<never> =>
+    refuse('FLOW_USAGE', {
+      line: 0,
+      reason:
+        'usage: --compile <action.yaml> --platform ios|android [--params <JSON object of strings>]',
+    });
+  const parse = () => {
+    try {
+      return parseArgs({
+        args,
+        options: { platform: { type: 'string' }, params: { type: 'string' } },
+        allowPositionals: true,
+      });
+    } catch {
+      return undefined;
+    }
+  };
+  const parsed = parse();
+  if (!parsed) return usage();
+  const [file, ...extra] = parsed.positionals;
+  const platform = parsed.values.platform;
   let params: unknown;
   try {
-    params = JSON.parse(option('--params') ?? '{}');
+    params = JSON.parse(parsed.values.params ?? '{}');
   } catch {
     params = undefined;
   }
@@ -103,12 +119,8 @@ function compileOnly(args: string[]): Promise<never> {
     params !== null &&
     !Array.isArray(params) &&
     Object.values(params).every((value) => typeof value === 'string');
-  if (!file || (platform !== 'ios' && platform !== 'android') || !paramsValid) {
-    return refuse('FLOW_USAGE', {
-      line: 0,
-      reason:
-        'usage: --compile <action.yaml> --platform ios|android [--params <JSON object of strings>]',
-    });
+  if (!file || extra.length > 0 || (platform !== 'ios' && platform !== 'android') || !paramsValid) {
+    return usage();
   }
   try {
     const plan = compileFlow({ file, platform, params: params as Record<string, string> });

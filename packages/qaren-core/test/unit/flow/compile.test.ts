@@ -298,6 +298,16 @@ test('Android keeps every read native; lifecycle and the keyboard tier stay', ()
   assert.equal(plan.steps[2]!.fallbackDomain, 'react-tree');
 });
 
+test('eraseText defaults to 50 characters when no count is given', () => {
+  const plan = compile(
+    '- eraseText\n- eraseText:\n- eraseText: {}\n- eraseText: 3\n- eraseText:\n    charactersToErase: 4\n',
+  );
+  assert.deepEqual(
+    plan.steps.map((step) => step.characters),
+    [50, 50, 50, 3, 4],
+  );
+});
+
 test('launchApp defaults to stopApp; only an activation is native', () => {
   const plan = compile(
     '- launchApp\n- launchApp:\n    stopApp: false\n- launchApp:\n    stopApp: false\n    clearState: true\n- killApp\n- stopApp\n- clearState\n- openLink: "app://x"\n',
@@ -434,8 +444,23 @@ test('walk.js --compile prints the plan or the refusal', () => {
   assert.equal(out.ok, true);
   assert.equal(out.plan.schema, 'rn-flow/1');
   assert.equal(out.plan.actionId, 'wizard-create-task');
-  const usage = spawnSync(process.execPath, [walk, '--compile', file, '--platform', 'web'], {
-    encoding: 'utf8',
-  });
-  assert.equal(usage.status, 4);
+  const flagsFirst = spawnSync(
+    process.execPath,
+    [walk, '--compile', '--platform', 'android', '--params', JSON.stringify(PARAMS), file],
+    { encoding: 'utf8' },
+  );
+  assert.equal(flagsFirst.status, 0, flagsFirst.stderr);
+  assert.equal(flagsFirst.stdout, ok.stdout);
+  for (const args of [
+    [file, '--platform', 'web'],
+    ['--platform', 'ios'],
+    [file, file, '--platform', 'ios'],
+    [file, '--platform'],
+    [file, '--platform', 'ios', '--verbose'],
+    [file, '--platform', 'ios', '--params', '[]'],
+  ]) {
+    const usage = spawnSync(process.execPath, [walk, '--compile', ...args], { encoding: 'utf8' });
+    assert.equal(usage.status, 4, args.join(' '));
+    assert.equal(JSON.parse(usage.stdout).code, 'FLOW_USAGE', args.join(' '));
+  }
 });
