@@ -2,7 +2,7 @@ import { PRIVATE_INPUT_LIMITS } from './qa/private-input-limits.js';
 import { TYPOGRAPHY_TEXT_LIMITS } from './qa/host-typography.js';
 
 // Bump when the injected surface changes so warm runtimes replace stale helpers.
-export const HELPERS_VERSION = 87;
+export const HELPERS_VERSION = 88;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -1468,14 +1468,21 @@ export const INJECTED_HELPERS = `
         var iprops = digestProps(ifiber) || {};
         var itid = iprops.testID || iprops.nativeID;
         var forwarded = iframe.forwarded;
-        if (forwarded && itid && forwarded.testID !== itid) forwarded = null;
-        if (isInteractiveFiber(ifiber)) {
+        if (forwarded && itid && (forwarded.testID || forwarded.nativeID) !== itid) forwarded = null;
+        var interactive = isInteractiveFiber(ifiber);
+        if (interactive) {
           var entry = { role: inferRole(getName(ifiber), iprops) };
           entry.capabilities = {
             press: typeof iprops.onPress === 'function' || typeof iprops.onClick === 'function',
             fill: iprops.editable !== false && (getName(ifiber) === 'TextInput' || typeof iprops.onChangeText === 'function')
           };
-          if (itid) entry.testID = itid;
+          var handled = entry.capabilities.fill;
+          for (var hj = 0; hj < HANDLER_PROPS.length; hj++) {
+            if (typeof iprops[HANDLER_PROPS[hj]] === 'function') handled = true;
+          }
+          if (!handled) entry.handlerless = true;
+          if (iprops.testID) entry.testID = iprops.testID;
+          else if (iprops.nativeID) entry.nativeID = iprops.nativeID;
           var acc = { s: '' };
           collectText(ifiber, 0, acc);
           if (acc.s) entry.text = acc.s.length > 120 ? acc.s.substring(0, 120) : acc.s;
@@ -1485,7 +1492,7 @@ export const INJECTED_HELPERS = `
           // surface on/off state for toggles so the agent need not re-read before deciding
           if (entry.role === 'switch' && typeof iprops.value === 'boolean') entry.value = iprops.value;
           if (iprops.disabled === true || iprops.editable === false || (iprops.accessibilityState && iprops.accessibilityState.disabled === true)) entry.disabled = true;
-          if (itid && forwarded && forwarded.testID === itid && forwarded.role === entry.role) {
+          if (itid && forwarded && (forwarded.testID || forwarded.nativeID) === itid && forwarded.role === entry.role) {
             var forwardedFields = ['text', 'label', 'placeholder', 'value'];
             for (var fi = 0; fi < forwardedFields.length; fi++) {
               var field = forwardedFields[fi];
@@ -1493,6 +1500,7 @@ export const INJECTED_HELPERS = `
             }
             forwarded.capabilities.press = forwarded.capabilities.press || entry.capabilities.press;
             forwarded.capabilities.fill = forwarded.capabilities.fill || entry.capabilities.fill;
+            if (!entry.handlerless) delete forwarded.handlerless;
             if (entry.disabled) forwarded.disabled = true;
           } else {
             salient.push(entry);
@@ -1500,8 +1508,9 @@ export const INJECTED_HELPERS = `
           }
         }
         var ich = ifiber.child;
-        // Only a single-child composite chain can forward one control identity.
-        var nextForwarded = ich && !ich.sibling && ifiber.tag !== 5 && typeof ifiber.type !== 'string' ? forwarded : null;
+        // Only a single-child chain of composites or identity-less, non-interactive wrapper views forwards one control identity.
+        var wrapperHost = ifiber.tag === 5 || typeof ifiber.type === 'string';
+        var nextForwarded = ich && !ich.sibling && (!wrapperHost || (!itid && !interactive)) ? forwarded : null;
         var parentHostIndex = hostIndex === null ? iframe.parentHostIndex : hostIndex;
         var textOwnerHostIndex = iframe.textOwnerHostIndex;
         if (typographyRecord && hostIndex !== null) {

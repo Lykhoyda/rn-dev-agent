@@ -332,6 +332,24 @@ test('an offscreen native control is a described action candidate; an unobserved
   assert.deepEqual(f.actions, ['scroll down', 'press @more']);
 });
 
+test('an unnamed handlerless React entry is not an unaccounted competitor; named or handled ones are', () => {
+  const nodes = [
+    ...scrolled.slice(0, 2),
+    { ref: '@hi', type: 'StaticText', label: 'Hi', parentIndex: 1, rect: band(60) },
+  ];
+  const presence = presenceOf(['unknown', 'unknown', 'observed']);
+  const none = { press: false, fill: false };
+  const unaccounted = (digest: DigestEntry[]) =>
+    projection.join(nodes, digest, 'app', complete, { hosts: [], complete: true }, presence)
+      .semanticUnassociatedReact;
+  assert.equal(unaccounted([{ role: 'adjustable', handlerless: true, capabilities: none }]), 0);
+  assert.equal(unaccounted([{ role: 'switch', capabilities: none }]), 1);
+  assert.equal(
+    unaccounted([{ role: 'button', testID: 'ghost', handlerless: true, capabilities: none }]),
+    1,
+  );
+});
+
 test('a verified text identical to its parent text counts once; other identical pairs stay distinct', () => {
   const text = { type: 'StaticText', identifier: 'title', label: 'Welcome', rect: band(60) };
   const save = { type: 'Button', identifier: 'save', label: 'Save', rect: band(300) };

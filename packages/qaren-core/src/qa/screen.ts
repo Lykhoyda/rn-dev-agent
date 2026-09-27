@@ -81,6 +81,8 @@ export interface DigestEntry {
   value?: string | boolean;
   disabled?: boolean;
   capabilities?: { press: boolean; fill: boolean };
+  // Interactive only by role or component name: no handler prop and nothing to fill.
+  handlerless?: boolean;
 }
 
 export interface ReactHostObservation {
@@ -321,7 +323,8 @@ export function join(
     height = Math.max(height, n.rect.y + n.rect.height);
   }
   const used = new Set<number>();
-  let semanticUnassociatedReact = digest.length;
+  // An unnamed entry that is interactive only by role or name offers no React handler to compete.
+  let semanticUnassociatedReact = digest.filter((d) => !(d.handlerless && !d.testID)).length;
   const elements: Element[] = nodes.map((n, nodeIndex) => {
     const observed = nativePresence === 'unknown' ? undefined : nativePresence?.nodes[nodeIndex];
     const testID = nonEmpty(n.identifier);
