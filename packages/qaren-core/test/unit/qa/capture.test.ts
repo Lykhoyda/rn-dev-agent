@@ -66,6 +66,97 @@ test('a dropped native observation cannot turn 31 raw controls into an admissibl
   assert.equal(decision.target.refuse, 'SCREEN_EVIDENCE_INCOMPLETE');
 });
 
+test('an incomplete native capture names its causes as content-free codes', async () => {
+  const screen = await captureScreen({
+    native: async () => ({
+      nodes,
+      truncated: true,
+      normalizationDroppedNodes: 2,
+      snapshotVerdict: {
+        ...snapshotVerdict,
+        state: 'degraded',
+        nodeCount: 3,
+        refMapUpdated: false,
+        reasons: ['snapshot-ref-freshness-unknown', 'Welcome back, Anton', 'anton'],
+      },
+      presenceCapture: { complete: false, startedUptimeMs: 1_000, endedUptimeMs: 6_012.4 },
+    }),
+    react: async () => ({ interactive, verdict }),
+  });
+  assert.deepEqual(screen.nativeCaptureCauses, [
+    'truncated',
+    'dropped=2',
+    'verdict=degraded',
+    'ref-map-not-updated',
+    'reason=snapshot-ref-freshness-unknown',
+    'reason=unrecognized',
+    'reason=unrecognized',
+    'node-count-mismatch',
+    'presence-incomplete',
+    'presence-ms=5012',
+  ]);
+  const view = visibilityView(screen);
+  assert.ok('refuse' in view);
+  assert.match(view.reason, /native capture: truncated, dropped=2, verdict=degraded/);
+  assert.doesNotMatch(view.reason, /anton/i);
+
+  const complete = await captureScreen({
+    native: async () => ({
+      nodes,
+      truncated: false,
+      normalizationDroppedNodes: 0,
+      snapshotVerdict,
+    }),
+    react: async () => ({ interactive, verdict }),
+  });
+  assert.equal(complete.nativeCaptureCauses, undefined);
+});
+
+test('discarded presence evidence on a complete native capture names why', async () => {
+  const cases: Array<[string, Record<string, unknown>, number, string[]]> = [
+    [
+      'runner could not finish',
+      { complete: false, startedUptimeMs: 0, endedUptimeMs: 5_001 },
+      100,
+      ['presence-incomplete', 'presence-ms=5001'],
+    ],
+    [
+      'evidence fails validation',
+      { complete: true, startedUptimeMs: 0, endedUptimeMs: 1_200 },
+      1_300,
+      ['presence-rejected', 'presence-ms=1200', 'capture-ms=1300'],
+    ],
+    [
+      'capture outlived the budget',
+      { complete: true, startedUptimeMs: 0, endedUptimeMs: 3_100 },
+      5_400,
+      ['presence-over-budget', 'presence-ms=3100', 'capture-ms=5400'],
+    ],
+  ];
+  for (const [name, presenceCapture, elapsed, causes] of cases) {
+    const times = [0, elapsed];
+    const screen = await captureScreen({
+      now: () => times.shift() ?? elapsed,
+      appId: 'com.example',
+      native: async () => ({
+        nodes,
+        truncated: false,
+        normalizationDroppedNodes: 0,
+        snapshotVerdict,
+        snapshotGeneration: 1,
+        presenceCapture,
+      }),
+      react: async () => ({ interactive, verdict, hostEvidence }),
+    });
+    assert.equal(screen.captureCoverage?.native, 'complete', name);
+    assert.equal(screen.coverage?.native, 'incomplete', name);
+    assert.deepEqual(screen.nativeCaptureCauses, causes, name);
+    const view = visibilityView(screen);
+    assert.ok('refuse' in view, name);
+    assert.ok(view.reason.includes(`native capture: ${causes.join(', ')}`), name);
+  }
+});
+
 test('complete acquisition preserves legacy joins without claiming semantic enumeration', async () => {
   const screen = await captureScreen({
     native: async () => ({

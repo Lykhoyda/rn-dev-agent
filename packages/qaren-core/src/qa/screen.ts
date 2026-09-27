@@ -50,6 +50,7 @@ export interface Screen {
     react: 'complete' | 'incomplete' | 'unknown';
   };
   captureCoverage?: Screen['coverage'];
+  nativeCaptureCauses?: string[];
   reactHostEvidence?: ReactHostEvidence;
 }
 
@@ -492,8 +493,11 @@ function projectionRefusal(screen: Screen): { refuse: string; reason: string } |
   if (screen.coverage?.native !== 'complete' || screen.coverage.react !== 'complete') {
     const sides = (c?: Screen['coverage']) =>
       c ? `native=${c.native} react=${c.react}` : 'missing';
+    const causes = screen.nativeCaptureCauses?.length
+      ? `; native capture: ${screen.nativeCaptureCauses.join(', ')}`
+      : '';
     return incomplete(
-      `semantic projection requires complete native and React coverage (capture ${sides(screen.captureCoverage)}; projected ${sides(screen.coverage)})`,
+      `semantic projection requires complete native and React coverage (capture ${sides(screen.captureCoverage)}; projected ${sides(screen.coverage)}${causes})`,
     );
   }
   if ((screen.semanticUnassociatedReact ?? 0) > 0)
