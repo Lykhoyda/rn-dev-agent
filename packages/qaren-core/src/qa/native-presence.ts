@@ -115,25 +115,32 @@ function clip(a: Rect, b: Rect | undefined): Rect {
   };
 }
 
-// Nodes of a verified capture indistinguishable from their parent, as XCUI reports a React Native text.
+// Texts of a verified capture indistinguishable from their parent text, as XCUI reports React Native text.
 export function duplicateNodes(
   nodes: NativeNode[],
   presence: NativePresence | undefined,
 ): Set<number> {
   const duplicates = new Set<number>();
   if (!presence) return duplicates;
-  const key = (n: NativeNode) =>
-    JSON.stringify([
+  const key = (i: number) => {
+    const n = nodes[i];
+    return JSON.stringify([
       n.type,
       n.identifier ?? '',
       n.label ?? '',
       n.value ?? null,
       n.rect ? [n.rect.x, n.rect.y, n.rect.width, n.rect.height] : null,
       n.enabled,
+      n.hittable,
+      n.secure,
+      presence.nodes[i]?.status,
+      presence.nodes[i]?.labelSource,
     ]);
+  };
   nodes.forEach((n, i) => {
-    const parent = n.parentIndex === undefined ? undefined : nodes[n.parentIndex];
-    if (parent && n.parentIndex! < i && key(parent) === key(n)) duplicates.add(i);
+    const parent = n.parentIndex;
+    if (n.type === 'StaticText' && parent !== undefined && parent < i && key(parent) === key(i))
+      duplicates.add(i);
   });
   return duplicates;
 }

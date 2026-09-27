@@ -602,6 +602,14 @@ export function visibilityView(screen: Screen): Projection {
     const native = e.semantic.nativePresence;
     if (native?.structural) continue;
     if (e.semantic.visibility === 'hidden' || e.semantic.visibility === 'offscreen') continue;
+    // A plain container offering no operation names nothing its own descendants don't name themselves.
+    if (
+      native?.kind === 'other' &&
+      (native.labelSource === 'none' || native.labelSource === 'descendant') &&
+      e.semantic.press === 'unsupported' &&
+      e.semantic.fill === 'unsupported'
+    )
+      continue;
     const control =
       ['button', 'input', 'switch', 'link', 'cell'].includes(native?.kind ?? e.kind) ||
       e.semantic.press === 'supported' ||

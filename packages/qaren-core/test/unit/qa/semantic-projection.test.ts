@@ -332,54 +332,93 @@ test('an offscreen native control is a described action candidate; an unobserved
   assert.deepEqual(f.actions, ['scroll down', 'press @more']);
 });
 
-test('a verified node identical to its parent counts once, keeping exact identity unique; identical siblings stay distinct', () => {
+test('a verified text identical to its parent text counts once; other identical pairs stay distinct', () => {
+  const text = { type: 'StaticText', identifier: 'title', label: 'Welcome', rect: band(60) };
+  const save = { type: 'Button', identifier: 'save', label: 'Save', rect: band(300) };
   const nodes = [
     ...scrolled.slice(0, 2),
-    { ref: '@title', type: 'StaticText', label: 'Welcome', parentIndex: 1, rect: band(60) },
-    { ref: '@title-inner', type: 'StaticText', label: 'Welcome', parentIndex: 2, rect: band(60) },
+    { ...text, ref: '@title', parentIndex: 1 },
+    { ...text, ref: '@title-inner', parentIndex: 2 },
+    { ...text, ref: '@title-innermost', parentIndex: 3 },
     { ref: '@bar', type: 'Other', label: 'Scroll bar', parentIndex: 1, rect: band(700) },
     { ref: '@bar-twin', type: 'Other', label: 'Scroll bar', parentIndex: 1, rect: band(700) },
-    {
-      ref: '@save',
-      type: 'Button',
-      identifier: 'save',
-      label: 'Save',
-      parentIndex: 1,
-      rect: band(300),
-      hittable: true,
-    },
-    {
-      ref: '@save-inner',
-      type: 'Button',
-      identifier: 'save',
-      label: 'Save',
-      parentIndex: 6,
-      rect: band(300),
-      hittable: true,
-    },
+    { ...save, ref: '@save', parentIndex: 1 },
+    { ...save, ref: '@save-inner', parentIndex: 7 },
   ];
-  const observed = presenceOf(['unknown', 'unknown', ...Array(6).fill('observed')]);
-  const digest = [{ role: 'button', testID: 'save', label: 'Save' }];
-  const screen = projection.join(
-    nodes,
-    digest,
-    'app',
-    complete,
-    { hosts: [], complete: true },
-    observed,
-  );
+  const observed = presenceOf(['unknown', 'unknown', ...Array(7).fill('observed')]);
+  const digest = [{ role: 'text', testID: 'title', label: 'Welcome' }];
+  const join = (presence = observed) =>
+    projection.join(nodes, digest, 'app', complete, { hosts: [], complete: true }, presence);
+  const screen = join();
   assert.deepEqual(
     screen.elements.map((e) => e.ref),
-    ['@app', '@window', '@title', '@bar', '@bar-twin', '@save'],
+    ['@app', '@window', '@title', '@bar', '@bar-twin', '@save', '@save-inner'],
   );
   assert.deepEqual(screen.visibleText, ['Welcome', 'Save']);
   assert.equal(screen.semanticUnassociatedReact, 0, 'the unique exact ID still accounts for React');
-  assert.deepEqual(projection.semanticActionView(screen, 'press'), {
-    elements: [screen.elements[5]],
-  });
 
-  const legacy = projection.join(nodes, digest, 'app', complete);
-  assert.equal(legacy.elements.length, 8, 'legacy captures are unchanged');
+  const differing = presenceOf([
+    'unknown',
+    'unknown',
+    'observed',
+    'unknown',
+    ...Array(5).fill('observed'),
+  ]);
+  assert.equal(
+    join(differing).elements.filter((e) => e.testID === 'title').length,
+    3,
+    'differing presence evidence keeps every observation',
+  );
+  assert.equal(projection.join(nodes, digest, 'app', complete).elements.length, 9);
+});
+
+test('a plain container offering no operation contributes only through its own named descendants', () => {
+  type Source = 'direct' | 'value' | 'descendant' | 'none';
+  const containers: [string, string | undefined, Source, 'observed' | 'unknown'][] = [
+    ['hero', 'Welcome', 'descendant', 'observed'],
+    ['card', undefined, 'none', 'observed'],
+    ['', 'Welcome', 'descendant', 'unknown'],
+  ];
+  const view = (
+    rows: typeof containers,
+    hosts: ReactHostEvidence['hosts'] = [],
+  ): ReturnType<typeof projection.visibilityView> => {
+    const nodes = [
+      ...scrolled.slice(0, 2),
+      ...rows.map(([identifier, label]) => ({
+        ref: `@${identifier || 'group'}`,
+        type: 'Other',
+        identifier,
+        label,
+        parentIndex: 1,
+        rect: band(60, 200),
+      })),
+      { ref: '@text', type: 'StaticText', label: 'Welcome', parentIndex: 2, rect: band(60) },
+    ];
+    const presence = {
+      source: 'xcui-live' as const,
+      nodes: [
+        { status: 'unknown' as const, labelSource: 'none' as const },
+        { status: 'unknown' as const, labelSource: 'none' as const },
+        ...rows.map(([, , labelSource, status]) => ({ status, labelSource })),
+        { status: 'observed' as const, labelSource: 'direct' as const },
+      ],
+    };
+    return projection.visibilityView(
+      projection.join(nodes, [], 'app', complete, { hosts, complete: true }, presence),
+    );
+  };
+  const skipped = view(containers);
+  assert.ok('elements' in skipped);
+  assert.deepEqual(
+    skipped.elements.map((e) => e.ref),
+    ['@text'],
+  );
+  refused(
+    view(containers, [{ role: null, roleSource: 'none', capabilities: { press: true } }]),
+    'SCREEN_EVIDENCE_INCOMPLETE',
+  );
+  refused(view([['meter', '40%', 'value', 'observed']]), 'SCREEN_EVIDENCE_INCOMPLETE');
 });
 
 test('native control types supply operation evidence independently of digest roles', () => {
