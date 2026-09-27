@@ -5,7 +5,7 @@ appId: com.rndevagent.expo55devclient
 # tags: [auth, login, otp, regression]
 # mutates: false
 # status: experimental
-# enginePin: maestro-runner@1.1.24
+# enginePin: maestro-runner@1.1.27
 # appId: com.rndevagent.expo55devclient
 - assertVisible: Expo 55 dev client manifest fixture
 - tapOn: Open OTP

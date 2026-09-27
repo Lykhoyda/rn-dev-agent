@@ -142,7 +142,7 @@ const ACTION_YAML_BYTES = `appId: dev.rnproof.fixture
 # id: canonical-proof
 # intent: Create a task through the proof fixture
 # status: active
-# enginePin: maestro-runner@1.1.24
+# enginePin: maestro-runner@1.1.27
 - tapOn:
     id: open-task-form
 `;
@@ -2577,7 +2577,7 @@ test('real canonical action proof replay is read-only while normal replay persis
       flowFile: 'canonical-proof.yaml',
       platform: 'ios',
       transport: 'maestro-runner',
-      transportVersion: '1.1.24',
+      transportVersion: '1.1.27',
       fallback: 'none',
       steps: [
         { index: 0, name: 'tapOn: proof-continue', verb: 'tapOn', status: 'pass', durationMs: 20 },

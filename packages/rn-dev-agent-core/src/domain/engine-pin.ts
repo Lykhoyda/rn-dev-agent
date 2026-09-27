@@ -566,8 +566,8 @@ export function exactPinRefusal(
   status: ReplayEngineStatus | null,
   platformKey = nodePlatformKey(),
 ): string | null {
-  // Execution stays pin-cache + attested 1.1.24 bytes. The product contract is a
-  // floor (>= 1.1.24); unattested newer binaries remain non-executable.
+  // Execution stays pin-cache + attested 1.1.27 bytes. The product contract is a
+  // floor (>= 1.1.27); unattested newer binaries remain non-executable.
   if (!status) {
     return `maestro_run refused: session runner ${MAESTRO_RUNNER_PIN.version} could not be detected. ${pinCorrection(buildReplayEngineStatus('not-installed', null, false), platformKey)}`;
   }

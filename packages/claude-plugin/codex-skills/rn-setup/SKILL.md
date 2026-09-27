@@ -62,7 +62,7 @@ Read/report without mutation:
 | Core package | selected package runtime files | marketplace refresh/materialization |
 | iOS runner | packaged Xcode project/artifact presence | one-time build command |
 | Android runner | packaged Gradle/APK presence | one-time Gradle command |
-| Maestro runner | `maestro-runner-pin.js diagnose --json` must be `pinned-ok` / `>= 1.1.24` / `pin-cache` | package `ensure-maestro-runner.sh` for attested 1.1.24 (floor >= 1.1.24); never PATH, `~/.maestro-runner`, or brew maestro |
+| Maestro runner | `maestro-runner-pin.js diagnose --json` must be `pinned-ok` / `>= 1.1.27` / `pin-cache` | package `ensure-maestro-runner.sh` for attested 1.1.27 (floor >= 1.1.27); never PATH, `~/.maestro-runner`, or brew maestro |
 | Learned actions | `maestro-runner-pin.js diagnose-actions --root "$APP_ROOT" --json` counts plus `enginePin` / `regexSelector` / `unreadable` action ids | FAIL when any `enginePin` or `regexSelector` id is present; YELLOW/FAIL for `unreadable`. A pinned-ok runner is never silent GREEN here. Doctor never migrates, rewrites, prints YAML, or prints a private inherit source path. |
 | iOS/Android devices | list-only platform commands | boot guidance |
 | Metro | `rn_session` and passive `cdp_status` reads | integrated package script |
@@ -95,7 +95,7 @@ node <package-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions
 ```
 
 Continue only when diagnosis reports `status: pinned-ok`, `installedVersion`
-`>= 1.1.24`, `pin: 1.1.24`, `provenance: pin-cache`, and every owned action is
+`>= 1.1.27`, `pin: 1.1.27`, `provenance: pin-cache`, and every owned action is
 migrated or already pinned. Missing,
 older, unattested, checksum-mismatched, unknown, unverified, unsupported, unreadable,
 or incompatible results are terminal setup failures. Setup uses Codex

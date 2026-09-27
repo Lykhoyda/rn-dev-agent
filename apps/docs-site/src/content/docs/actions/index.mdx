@@ -125,7 +125,7 @@ Run `/rn-dev-agent:test-feature <feature description>`. The plugin walks the fea
 # tags: [task, wizard, create]
 # mutates: true
 # status: active
-# enginePin: maestro-runner@1.1.24
+# enginePin: maestro-runner@1.1.27
 appId: com.rndevagent.testapp
 ---
 # Maestro YAML body...
@@ -167,10 +167,10 @@ Self-repair handles **small UI drift** (a renamed `testID`, a moved button), not
 
 ## Engine version pinning
 
-Action replay requires maestro-runner `>= 1.1.24` from rn-dev-agent's versioned pin-cache.
+Action replay requires maestro-runner `>= 1.1.27` from rn-dev-agent's versioned pin-cache.
 The authoritative pin manifest lives at
 `packages/rn-dev-agent-core/src/domain/maestro-runner-pin.json`; setup installs and verifies
-attested 1.1.24 as the default known-good and `/doctor` reports missing, older, unattested, checksum-mismatched,
+attested 1.1.27 as the default known-good and `/doctor` reports missing, older, unattested, checksum-mismatched,
 unverified, unknown, or unsupported installations. Replay refuses every non-`pinned-ok`
 state before UI mutation and never substitutes PATH, `~/.maestro-runner`, or Maestro CLI.
 Runner-backed replay passes `--driver uiautomator2` on Android and `--driver wda` on iOS,
@@ -180,8 +180,10 @@ the archive and complete payload against that manifest, and atomically publishes
 Concurrent or restarted installers converge on the same verified cache; an abandoned staging
 directory is ignored and never requires manual recovery.
 
-Owned actions must carry `# enginePin: maestro-runner@1.1.24` or newer. Setup migrates compatible
-actions; missing or older pins and unsupported regex text selectors are terminal.
+Owned actions must carry `# enginePin: maestro-runner@1.1.27` or newer. Older or missing
+pins refuse replay until you run setup or re-pin compatible actions with
+`node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app>`.
+Unsupported regex text selectors require rewriting as literal text or `id:` before replay.
 For manual `migrate-actions` or `diagnose-actions`, `--root` accepts an absolute app path or one
 relative to the current directory (for example, `--root test-app` from its parent); omitting it
 uses the current directory.

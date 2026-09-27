@@ -3,7 +3,7 @@
 #
 # Discovers and runs all plugin-managed Maestro flows in .rn-agent/actions/
 # without requiring a Claude Code session. Uses only the pin-cache
-# maestro-runner (floor >= 1.1.24, attested default). Never PATH, ~/.maestro-runner, or
+# maestro-runner (floor >= 1.1.27, attested default). Never PATH, ~/.maestro-runner, or
 # maestro-cli. Pass --flow-dir only for an owned .rn-agent/actions directory.
 #
 # Usage:

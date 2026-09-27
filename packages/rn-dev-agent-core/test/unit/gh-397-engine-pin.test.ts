@@ -1,9 +1,18 @@
 // GH #397 Phase 1 — engine pin manifest + pure classification truth table.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   MAESTRO_RUNNER_PIN,
   classifyEnginePin,
@@ -18,12 +27,13 @@ import {
   _resetEngineStatusForTest,
   _setEngineStatusForTest,
 } from '../../dist/domain/engine-pin.js';
+import { actionEnginePinRefusal } from '../../dist/domain/action-engine-compat.js';
 
 const KEY = 'darwin-arm64';
 const PIN_HASH = MAESTRO_RUNNER_PIN.sha256[KEY] as string;
 
 test('gh-397: pin constant matches the tested engine', () => {
-  assert.equal(MAESTRO_RUNNER_PIN.version, '1.1.24');
+  assert.equal(MAESTRO_RUNNER_PIN.version, '1.1.27');
   assert.match(PIN_HASH, /^[0-9a-f]{64}$/);
   const ids = MAESTRO_RUNNER_PIN.knownQuirks.map((q) => q.id);
   assert.deepEqual(ids, ['android-pre-o-unsupported']);
@@ -37,7 +47,7 @@ test('gh-397: exported pin identity is deeply immutable', () => {
   assert.throws(() => {
     (MAESTRO_RUNNER_PIN as { version: string }).version = '9.9.9';
   });
-  assert.equal(MAESTRO_RUNNER_PIN.version, '1.1.24');
+  assert.equal(MAESTRO_RUNNER_PIN.version, '1.1.27');
   assert.equal(MAESTRO_RUNNER_PIN.sha256[KEY], checksum);
 });
 
@@ -48,13 +58,40 @@ test('gh-397: compareVersions is numeric per segment', () => {
   assert.equal(compareVersions('2.0.0', '1.9.9'), 1);
 });
 
-test('gh-397: runner floor accepts 1.1.24 and newer semver', () => {
-  assert.equal(parseActionEnginePinVersion('maestro-runner@1.1.24'), '1.1.24');
-  assert.equal(parseActionEnginePinVersion('maestro-runner@1.1.25'), '1.1.25');
-  assert.equal(parseActionEnginePinVersion('maestro-cli@1.1.24'), null);
-  assert.equal(meetsMaestroRunnerFloor('1.1.24'), true);
-  assert.equal(meetsMaestroRunnerFloor('1.1.25'), true);
+test('gh-397: runner floor accepts 1.1.27 and newer semver', () => {
+  assert.equal(parseActionEnginePinVersion('maestro-runner@1.1.27'), '1.1.27');
+  assert.equal(parseActionEnginePinVersion('maestro-runner@1.1.28'), '1.1.28');
+  assert.equal(parseActionEnginePinVersion('maestro-cli@1.1.27'), null);
+  assert.equal(meetsMaestroRunnerFloor('1.1.27'), true);
+  assert.equal(meetsMaestroRunnerFloor('1.1.28'), true);
   assert.equal(meetsMaestroRunnerFloor('1.0.9'), false);
+});
+
+test('gh-397: a 1.1.24-pinned action is refused below the floor and migrate-actions re-pins it', () => {
+  assert.equal(meetsMaestroRunnerFloor('1.1.24'), false);
+  assert.match(
+    String(actionEnginePinRefusal('maestro-runner@1.1.24')),
+    /below the required floor maestro-runner@1\.1\.27/,
+  );
+
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'gh-397-below-floor-')));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, 'login.yaml');
+  writeFileSync(
+    path,
+    'appId: com.x\n---\n# id: login\n# intent: sign in\n# status: active\n# enginePin: maestro-runner@1.1.24\n- tapOn:\n    id: "email"\n',
+    'utf8',
+  );
+  const cli = join(dirname(fileURLToPath(import.meta.url)), '../../dist/maestro-runner-pin.js');
+  const run = spawnSync(process.execPath, [cli, 'migrate-actions', '--root', root], {
+    encoding: 'utf8',
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /^migrated\tlogin/m);
+  const text = readFileSync(path, 'utf8');
+  assert.match(text, /# enginePin: maestro-runner@1\.1\.27/);
+  assert.doesNotMatch(text, /1\.1\.24/);
 });
 
 test('gh-397: classification truth table', () => {
@@ -68,15 +105,15 @@ test('gh-397: classification truth table', () => {
   assert.equal(classifyEnginePin(d('1.2.0', 'f'.repeat(64)), KEY), 'checksum-mismatch');
   assert.equal(classifyEnginePin(d('1.2.0', PIN_HASH), KEY), 'pinned-ok');
   assert.equal(classifyEnginePin(d('1.0.8', 'f'.repeat(64)), KEY), 'drift-older');
-  assert.equal(classifyEnginePin(d('1.1.24', 'f'.repeat(64)), KEY), 'checksum-mismatch');
-  assert.equal(classifyEnginePin(d('1.1.24', PIN_HASH), KEY), 'pinned-ok');
+  assert.equal(classifyEnginePin(d('1.1.27', 'f'.repeat(64)), KEY), 'checksum-mismatch');
+  assert.equal(classifyEnginePin(d('1.1.27', PIN_HASH), KEY), 'pinned-ok');
   assert.equal(
-    classifyEnginePin(d('1.1.24', 'f'.repeat(64)), 'win32-x64'),
+    classifyEnginePin(d('1.1.27', 'f'.repeat(64)), 'win32-x64'),
     'unverified',
     'no manifest hash for this platform — pinned-ok must mean version AND hash verified',
   );
   assert.equal(
-    classifyEnginePin(d('1.1.24', null), KEY),
+    classifyEnginePin(d('1.1.27', null), KEY),
     'unverified',
     'expected hash exists but hashing failed — must not claim pinned-ok',
   );
@@ -85,13 +122,13 @@ test('gh-397: classification truth table', () => {
     'unknown-version',
     'malformed version must not compare equal via NaN',
   );
-  assert.equal(classifyEnginePin(d('1.1.24-beta', PIN_HASH), KEY), 'unknown-version');
+  assert.equal(classifyEnginePin(d('1.1.27-beta', PIN_HASH), KEY), 'unknown-version');
 });
 
 test('gh-397: buildReplayEngineStatus picks engine + carries quirk ids', () => {
-  const ok = buildReplayEngineStatus('pinned-ok', '1.1.24', true);
+  const ok = buildReplayEngineStatus('pinned-ok', '1.1.27', true);
   assert.equal(ok.engine, 'maestro-runner');
-  assert.deepEqual(ok.pin, { pinned: '1.1.24', status: 'pinned-ok' });
+  assert.deepEqual(ok.pin, { pinned: '1.1.27', status: 'pinned-ok' });
   assert.ok(ok.quirks.includes('android-pre-o-unsupported'));
   assert.equal(buildReplayEngineStatus('not-installed', null, true).engine, 'none');
   assert.equal(buildReplayEngineStatus('not-installed', null, false).engine, 'none');
@@ -99,15 +136,15 @@ test('gh-397: buildReplayEngineStatus picks engine + carries quirk ids', () => {
 });
 
 test('gh-397: enginePinCaveat only fires on drift/checksum states', () => {
-  assert.equal(enginePinCaveat(buildReplayEngineStatus('pinned-ok', '1.1.24', true)), null);
+  assert.equal(enginePinCaveat(buildReplayEngineStatus('pinned-ok', '1.1.27', true)), null);
   assert.equal(enginePinCaveat(buildReplayEngineStatus('not-installed', null, true)), null);
   assert.equal(enginePinCaveat(buildReplayEngineStatus('unknown-version', null, true)), null);
   const drift = enginePinCaveat(buildReplayEngineStatus('drift-newer', '1.2.0', true));
   assert.ok(drift !== null);
   assert.match(drift, /1\.2\.0/);
-  assert.match(drift, /1\.1\.24/);
+  assert.match(drift, /1\.1\.27/);
   assert.match(drift, /untested/i);
-  const bad = enginePinCaveat(buildReplayEngineStatus('checksum-mismatch', '1.1.24', true));
+  const bad = enginePinCaveat(buildReplayEngineStatus('checksum-mismatch', '1.1.27', true));
   assert.ok(bad !== null);
   assert.match(bad, /checksum/i);
 });
@@ -127,11 +164,11 @@ test('gh-397: detection derives the exact version without executing the live cac
   };
   const s1 = await getEngineStatus(resolvers);
   assert.equal(s1.pin.status, 'pinned-ok');
-  assert.equal(s1.version, '1.1.24');
+  assert.equal(s1.version, '1.1.27');
   const s2 = await getEngineStatus(resolvers);
   assert.equal(execCalls, 0);
   assert.equal(s2.pin.status, 'pinned-ok');
-  assert.equal(s2.version, '1.1.24');
+  assert.equal(s2.version, '1.1.27');
 });
 
 test('gh-397: checksum mismatch is classified before executing the binary', async () => {
@@ -141,7 +178,7 @@ test('gh-397: checksum mismatch is classified before executing the binary', asyn
     binPath: () => '/fake/maestro-runner',
     execVersion: async () => {
       execCalls += 1;
-      return 'maestro-runner 1.1.24';
+      return 'maestro-runner 1.1.27';
     },
     hashFile: () => 'f'.repeat(64),
     platformKey: KEY,
@@ -167,9 +204,9 @@ test('gh-397: fabricated version output cannot redefine checksum identity', asyn
     platformKey: KEY,
   });
   assert.equal(older.pin.status, 'pinned-ok');
-  assert.equal(older.version, '1.1.24');
+  assert.equal(older.version, '1.1.27');
   assert.equal(newer.pin.status, 'pinned-ok');
-  assert.equal(newer.version, '1.1.24');
+  assert.equal(newer.version, '1.1.27');
   _resetEngineStatusForTest();
 });
 

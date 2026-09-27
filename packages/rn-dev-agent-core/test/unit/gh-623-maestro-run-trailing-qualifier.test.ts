@@ -45,7 +45,7 @@ const REGISTRATION_YAML = [
 // Slow-but-passing taps (median ≥ 1500ms) so RUNTIME_DEGRADED fires; only the
 // trailing wait fails.
 const TRAILING_FAIL_STDOUT = [
-  'maestro-runner 1.1.24',
+  'maestro-runner 1.1.27',
   `Starting WDA on device ${EXACT} (port: 8447)`,
   '    ✓ launchApp (2.7s)',
   '    ✓ tapOn: id="email" (1.8s)',
@@ -58,7 +58,7 @@ const TRAILING_FAIL_STDOUT = [
 ].join('\n');
 
 const EARLY_FAIL_STDOUT = [
-  'maestro-runner 1.1.24',
+  'maestro-runner 1.1.27',
   `Starting WDA on device ${EXACT} (port: 8447)`,
   '    ✓ launchApp (2.7s)',
   '    ✓ tapOn: id="email" (1.8s)',
@@ -416,7 +416,7 @@ test('gh-623 regression: a partial native partition forwards no whole-attempt le
       );
       throw Object.assign(new Error('runner exited 1'), {
         stdout: [
-          'maestro-runner 1.1.24',
+          'maestro-runner 1.1.27',
           `Starting WDA on device ${EXACT} (port: 8447)`,
           '    ✓ tapOn: text="Native submit" (1.8s)',
           '    ✓ tapOn: text="Native confirm" (1.9s)',
@@ -583,7 +583,7 @@ test('gh-623 adversarial: unparseable stdout with a ledger-proven trailing failu
       { rows: [['launchApp', 'passed']] },
       {
         rows: [...MAIN_STAGE_PASSING, ['extendedWaitUntil', 'failed']],
-        stdout: 'maestro-runner 1.1.24\nunstructured noise without any step lines',
+        stdout: 'maestro-runner 1.1.27\nunstructured noise without any step lines',
         throwWith: { code: 1 },
       },
     ]),
@@ -618,7 +618,7 @@ test('gh-623: a passing flow carries no qualifier fields at all', async () => {
     {
       rows: [...MAIN_STAGE_PASSING, ['extendedWaitUntil', 'passed']],
       stdout: [
-        'maestro-runner 1.1.24',
+        'maestro-runner 1.1.27',
         `Starting WDA on device ${EXACT} (port: 8447)`,
         '    ✓ tapOn: id="email" (1.8s)',
         '    ✓ extendedWaitUntil: visible text="Welcome home" (2.0s)',

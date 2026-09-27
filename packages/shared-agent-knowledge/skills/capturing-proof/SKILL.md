@@ -77,7 +77,7 @@ without the camera capturing the search.
      schema, so the header is not auto-populated.
    In both paths, the agent MUST then PREPEND the replay metadata header
    by hand (`id`, `intent`, `tags`, `mutates`, `status`,
-   `enginePin: maestro-runner@1.1.24`) — see the
+   `enginePin: maestro-runner@1.1.27`) — see the
    creating-actions skill for the full authoring contract (header
    validation, replay-to-promote).
 4. Reset the app state to the same starting screen the recording will use

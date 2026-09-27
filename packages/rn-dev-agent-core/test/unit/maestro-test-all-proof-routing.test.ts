@@ -17,7 +17,7 @@ const session = {
 
 const engineStatus = () =>
   buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false, {
-    selectedPath: '/pin-cache/maestro-runner/1.1.24/bin/maestro-runner',
+    selectedPath: '/pin-cache/maestro-runner/1.1.27/bin/maestro-runner',
     provenance: 'pin-cache',
   });
 

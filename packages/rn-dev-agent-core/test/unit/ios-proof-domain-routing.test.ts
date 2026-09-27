@@ -74,7 +74,7 @@ test('exact iOS commands route before dispatch to react-tree proof', async () =>
 `,
     actionMetadata: {
       id: 'login-en',
-      enginePin: 'maestro-runner@1.1.24',
+      enginePin: 'maestro-runner@1.1.27',
       tags: ['auth', 'login'],
       expectedRouteSequence: ['home'],
     },
@@ -383,7 +383,7 @@ test('login replay refuses before mutation without a final positive ID', async (
 - tapOn:
     id: submit
 `,
-      actionMetadata: { id: 'login-en', tags: ['auth'], enginePin: 'maestro-runner@1.1.24' },
+      actionMetadata: { id: 'login-en', tags: ['auth'], enginePin: 'maestro-runner@1.1.27' },
       ...callbacks,
     }),
   );
@@ -1820,7 +1820,7 @@ test('a matching route returned after the replay deadline cannot report success'
       inlineYaml: `appId: com.example.app\n---\n- assertVisible:\n    id: home\n`,
       actionMetadata: {
         id: 'route-deadline-proof',
-        enginePin: 'maestro-runner@1.1.24',
+        enginePin: 'maestro-runner@1.1.27',
         tags: [],
         expectedRouteSequence: ['home'],
       },
@@ -2474,7 +2474,7 @@ test('partitioned route failures retain native and React proof evidence', async 
       inlineYaml: `appId: com.example.app\n---\n- assertVisible: Native status\n- assertVisible:\n    id: react-status\n`,
       actionMetadata: {
         id: 'partition-route-proof',
-        enginePin: 'maestro-runner@1.1.24',
+        enginePin: 'maestro-runner@1.1.27',
         tags: [],
         expectedRouteSequence: ['expected-route'],
       },

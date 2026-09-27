@@ -226,7 +226,7 @@ the journey.
    with `device_*` / `cdp_interact` between `cdp_record_test_start` and
    `cdp_record_test_stop`, then `cdp_record_test_save_as_action` under a
    new action id with the metadata header and
-   `enginePin: maestro-runner@1.1.24`, and delete the generated
+   `enginePin: maestro-runner@1.1.27`, and delete the generated
    `- launchApp` line. Authentication
    only through `cdp_login_prologue` (reuse and, if needed, update the
    project's existing login action; never record a second one). No deep

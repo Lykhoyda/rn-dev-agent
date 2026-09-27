@@ -29,7 +29,7 @@ function clearStateLoginYaml(id = 'user-login'): string {
     '# tags: [auth]',
     '# mutates: true',
     '# status: active',
-    '# enginePin: maestro-runner@1.1.24',
+    '# enginePin: maestro-runner@1.1.27',
     '',
     '- launchApp:',
     '    clearState: true',
@@ -311,7 +311,7 @@ test('GH#993: a clearState relaunch inlined in a runFlow subflow is refused', as
     '# tags: [auth]',
     '# mutates: true',
     '# status: active',
-    '# enginePin: maestro-runner@1.1.24',
+    '# enginePin: maestro-runner@1.1.27',
     '',
     '- runFlow:',
     '    when:',
@@ -336,7 +336,7 @@ test('GH#993: an unpinned clearState action on a dev-client session gets the ter
   // Both refusals are pre-execution; the dev-client one names the rewrite the
   // action needs regardless of its pin, so it must not hide behind
   // migrate-actions the way the regex fence used to.
-  const unpinned = clearStateLoginYaml().replace('# enginePin: maestro-runner@1.1.24\n', '');
+  const unpinned = clearStateLoginYaml().replace('# enginePin: maestro-runner@1.1.27\n', '');
   assert.doesNotMatch(unpinned, /enginePin/);
   const devClient = harness(t, EXPO_INSTALL);
   writeFileSync(devClient.project.yamlPath('user-login'), unpinned, 'utf8');

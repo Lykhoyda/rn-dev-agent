@@ -34,7 +34,7 @@ Before replay, the command reads `rn_session({ action: "status" })`. A blocked s
 - `--platform ios|android` — requires an exact match with the bound session platform; it never chooses among booted devices.
 
 Replay always goes through `cdp_run_action`, which verifies pin-cache
-maestro-runner `>= 1.1.24` and the action's `enginePin` before
+maestro-runner `>= 1.1.27` and the action's `enginePin` before
 any UI mutation.
 
 ## Self-repair
