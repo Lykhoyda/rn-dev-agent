@@ -479,9 +479,12 @@ extension RnFastRunnerTests {
   }
 
   // XCUI reports a React Native text as a text holding an identical text; the chain is one element.
+  // Members must also agree on every fact the consumer compares before merging them.
   private func isNestedTextChain(_ group: [Int], nodes: [SnapshotNode]) -> Bool {
     zip(group, group.dropFirst()).allSatisfy { parent, child in
       nodes[child].parentIndex == parent && nodes[child].type == "StaticText"
+        && nodes[child].hittable == nodes[parent].hittable
+        && nodes[child].presence?.labelSource == nodes[parent].presence?.labelSource
     }
   }
 
