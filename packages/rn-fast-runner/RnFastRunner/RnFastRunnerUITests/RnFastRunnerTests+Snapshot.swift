@@ -385,9 +385,10 @@ extension RnFastRunnerTests {
     if complete {
       for index in nodes.indices {
         if presenceUptimeMs() >= deadline { break }
+        // Identified containers are association anchors, so they are observed whatever their label source.
         guard nodes[index].depth > 0,
-              nodes[index].presence?.labelSource != .descendant,
               let descriptor = descriptors[index],
+              nodes[index].presence?.labelSource != .descendant || !descriptor.identifier.isEmpty,
               descriptor.type != .application, descriptor.type != .window,
               descriptors.filter({ $0 == descriptor }).count == 1 else { continue }
         let observation = presenceRead(deadline: deadline) {
