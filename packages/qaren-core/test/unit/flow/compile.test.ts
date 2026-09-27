@@ -96,7 +96,8 @@ test('malformed and cyclic runFlow refuse instead of crashing', () => {
     writeFileSync(join(dir, 'sub.yaml'), '- runFlow: sub.yaml\n');
     assert.throws(
       () => compileFlow({ file, params: {}, platform: 'ios' }),
-      (error: unknown) => error instanceof FlowCompileError && /nesting exceeds 5/.test(error.reason),
+      (error: unknown) =>
+        error instanceof FlowCompileError && /nesting exceeds 5/.test(error.reason),
     );
   });
   assert.match(refusal('- runFlow: ../escape.yaml\n').reason, /must not contain/);
@@ -185,11 +186,10 @@ test('all exact-id presence reads share the compile-time domain', () => {
   const plan = compile(
     '- assertVisible:\n    id: a\n- extendedWaitUntil:\n    visible:\n      id: a\n- runFlow:\n    when:\n      visible:\n        id: a\n    commands:\n      - back\n',
   );
-  assert.deepEqual(plan.steps.map((step) => step.domain), [
-    'react-tree',
-    'react-tree',
-    'react-tree',
-  ]);
+  assert.deepEqual(
+    plan.steps.map((step) => step.domain),
+    ['react-tree', 'react-tree', 'react-tree'],
+  );
 });
 
 test('compiled plans are deeply frozen, including nested runFlow steps', () => {
@@ -248,11 +248,21 @@ test('file-backed flow document shapes compile or refuse at their document', () 
     { name: 'mapping commands', top: true, yaml: `${header}back: true\n`, line: 2 },
     { name: 'mapping sub-flow commands', top: false, yaml: 'back: true\n', line: 1 },
     { name: 'preceding command list', top: true, yaml: '- tapOn: Save\n---\n- back\n', line: 1 },
-    { name: 'preceding sub-flow command list', top: false, yaml: '- tapOn: Save\n---\n- back\n', line: 1 },
+    {
+      name: 'preceding sub-flow command list',
+      top: false,
+      yaml: '- tapOn: Save\n---\n- back\n',
+      line: 1,
+    },
     { name: 'unexpected header', top: true, yaml: 'name: extra\n---\n- back\n', line: 1 },
     { name: 'unexpected sub-flow header', top: false, yaml: 'name: extra\n---\n- back\n', line: 1 },
     { name: 'third document', top: true, yaml: `${header}- back\n---\n- back\n`, line: 4 },
-    { name: 'third sub-flow document', top: false, yaml: `${header}- back\n---\n- back\n`, line: 4 },
+    {
+      name: 'third sub-flow document',
+      top: false,
+      yaml: `${header}- back\n---\n- back\n`,
+      line: 4,
+    },
   ];
   for (const entry of cases) {
     withFlow('- runFlow: sub.yaml\n', (file, dir) => {

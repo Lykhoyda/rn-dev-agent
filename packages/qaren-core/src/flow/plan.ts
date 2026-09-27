@@ -17,8 +17,7 @@ export type Direction = 'UP' | 'DOWN' | 'LEFT' | 'RIGHT';
 type DeepReadonly<T> = T extends object ? { readonly [K in keyof T]: DeepReadonly<T[K]> } : T;
 
 export type Selector = DeepReadonly<
-  | { id: string; text?: never; index?: number }
-  | { text: string; id?: never; index?: number }
+  { id: string; text?: never; index?: number } | { text: string; id?: never; index?: number }
 >;
 
 export interface StepSource {
@@ -35,26 +34,28 @@ interface StepBase {
   budgetMs: number;
 }
 
-export type Step = DeepReadonly<StepBase &
-  (
-    | { op: 'launchApp'; stopApp: boolean; clearState: boolean }
-    | { op: 'tapOn' | 'doubleTapOn' | 'longPressOn'; selector: Selector }
-    | { op: 'assertVisible' | 'assertNotVisible'; selector: Selector }
-    | { op: 'scrollUntilVisible'; selector: Selector; direction: Direction }
-    | { op: 'inputText'; text: string }
-    | { op: 'eraseText'; characters: number }
-    | { op: 'hideKeyboard'; fallbackDomain: 'react-tree' }
-    | { op: 'pressKey'; key: 'Enter' | 'Back' }
-    | { op: 'swipe'; direction: Direction; from?: Selector; durationMs: number }
-    | { op: 'back' | 'scroll' | 'waitForAnimationToEnd' | 'stopApp' | 'killApp' | 'clearState' }
-    | { op: 'takeScreenshot'; name: string }
-    | { op: 'openLink'; link: string }
-    | {
-        op: 'runFlow';
-        when: { visible: Selector } | { notVisible: Selector };
-        steps: Step[];
-      }
-  )>;
+export type Step = DeepReadonly<
+  StepBase &
+    (
+      | { op: 'launchApp'; stopApp: boolean; clearState: boolean }
+      | { op: 'tapOn' | 'doubleTapOn' | 'longPressOn'; selector: Selector }
+      | { op: 'assertVisible' | 'assertNotVisible'; selector: Selector }
+      | { op: 'scrollUntilVisible'; selector: Selector; direction: Direction }
+      | { op: 'inputText'; text: string }
+      | { op: 'eraseText'; characters: number }
+      | { op: 'hideKeyboard'; fallbackDomain: 'react-tree' }
+      | { op: 'pressKey'; key: 'Enter' | 'Back' }
+      | { op: 'swipe'; direction: Direction; from?: Selector; durationMs: number }
+      | { op: 'back' | 'scroll' | 'waitForAnimationToEnd' | 'stopApp' | 'killApp' | 'clearState' }
+      | { op: 'takeScreenshot'; name: string }
+      | { op: 'openLink'; link: string }
+      | {
+          op: 'runFlow';
+          when: { visible: Selector } | { notVisible: Selector };
+          steps: Step[];
+        }
+    )
+>;
 
 export interface Plan {
   readonly schema: typeof PLAN_SCHEMA;
