@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { parseArgs } from 'node:util';
 import { CDPClient } from '../cdp-client.js';
 import { waitForExactPortTargets } from '../cdp/discovery.js';
 import { REACT_READY_POLL_MS, REACT_READY_TIMEOUT_MS } from '../cdp/setup.js';
@@ -17,6 +18,7 @@ import {
   createDeviceDismissSystemDialogHandler,
 } from '../handlers/device-system-dialog.js';
 import { foregroundSurfaceFromSnapshot } from '../handlers/expo-dev-menu.js';
+import { compileFlow, FlowCompileError } from '../flow/compile.js';
 import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
 import type { ToolResult } from '../utils.js';
 import { HandlerError, adapt, describeError, unwrap } from './adapt.js';
@@ -78,6 +80,62 @@ async function parseOnly(planFile: string, probe: boolean): Promise<never> {
   const items = parsed.blocks.reduce((n, b) => n + b.items.length, 0);
   process.stdout.write(`${JSON.stringify({ ok: true, blocks: parsed.blocks.length, items })}\n`);
   return exitAfterDrain(0);
+}
+
+function compileOnly(args: string[]): Promise<never> {
+  const refuse = (code: string, refused: object): Promise<never> => {
+    process.stdout.write(`${JSON.stringify({ ok: false, code, refused: [refused] })}\n`);
+    return exitAfterDrain(4);
+  };
+  const usage = (): Promise<never> =>
+    refuse('FLOW_USAGE', {
+      line: 0,
+      reason:
+        'usage: --compile <action.yaml> --platform ios|android [--params <JSON object of strings>]',
+    });
+  const parse = () => {
+    try {
+      return parseArgs({
+        args,
+        options: { platform: { type: 'string' }, params: { type: 'string' } },
+        allowPositionals: true,
+      });
+    } catch {
+      return undefined;
+    }
+  };
+  const parsed = parse();
+  if (!parsed) return usage();
+  const [file, ...extra] = parsed.positionals;
+  const platform = parsed.values.platform;
+  let params: unknown;
+  try {
+    params = JSON.parse(parsed.values.params ?? '{}');
+  } catch {
+    params = undefined;
+  }
+  const paramsValid =
+    typeof params === 'object' &&
+    params !== null &&
+    !Array.isArray(params) &&
+    Object.values(params).every((value) => typeof value === 'string');
+  if (!file || extra.length > 0 || (platform !== 'ios' && platform !== 'android') || !paramsValid) {
+    return usage();
+  }
+  try {
+    const plan = compileFlow({ file, platform, params: params as Record<string, string> });
+    process.stdout.write(`${JSON.stringify({ ok: true, plan })}\n`);
+    return exitAfterDrain(0);
+  } catch (error) {
+    if (!(error instanceof FlowCompileError)) throw error;
+    const { file: source, line, command, reason } = error;
+    return refuse('FLOW_UNSUPPORTED', {
+      ...(source ? { file: source } : {}),
+      line,
+      command,
+      reason,
+    });
+  }
 }
 
 interface Session {
@@ -268,6 +326,7 @@ async function openSession(
 }
 
 async function main(): Promise<void> {
+  if (process.argv[2] === '--compile') return compileOnly(process.argv.slice(3));
   if (process.argv[2] === '--parse' || process.argv[2] === '--preflight')
     return parseOnly(process.argv[3] ?? '', process.argv[2] === '--preflight');
   const cliParent = process.ppid;
