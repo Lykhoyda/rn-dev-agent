@@ -149,6 +149,11 @@ Doctrine for the kept handlers, each with one owner:
   beside the pin-cache. Persist only contained `DerivedData/Build/Products`,
   seed after the snapshot seal walk, and skip publication if the toolchain
   fingerprint changed.
+- Saved actions compile to `rn-flow/1` replay plans in one place,
+  `flow/compile.ts` (`dist/qa/walk.js --compile`); the dialect contract is
+  `apps/docs-site/src/content/docs/actions/rn-flow-1.md`. Change semantics
+  there, never per action; regenerate the goldens under
+  `test/fixtures/rn-flow-1/plans/` with `UPDATE_GOLDEN=1` and review the diff.
 - Learned-action compatibility is diagnosed read-only by
   `diagnoseLearnedActions` (`domain/action-engine-compat.ts`), also reachable
   as `node packages/qaren-core/dist/maestro-runner-pin.js diagnose-actions --root <app> [--json]`,

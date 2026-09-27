@@ -66,9 +66,11 @@ export interface ReplayResult {
   }[];
 }
 
-const interp = (s: string, p: Record<string, string>): string =>
+export const PARAM_PLACEHOLDER = /\$\{([A-Z_][A-Z0-9_]*)(?:\s*\?\?\s*(['"])(.*?)\2)?\}/g;
+
+export const interp = (s: string, p: Record<string, string>): string =>
   s.replace(
-    /\$\{([A-Z_][A-Z0-9_]*)(?:\s*\?\?\s*(['"])(.*?)\2)?\}/g,
+    PARAM_PLACEHOLDER,
     (match, key: string, _quote: string | undefined, fallback: string | undefined) =>
       p[key] ?? fallback ?? match,
   );

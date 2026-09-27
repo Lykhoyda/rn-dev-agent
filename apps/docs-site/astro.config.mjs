@@ -83,6 +83,7 @@ export default defineConfig({
             { label: 'Architecture', slug: 'architecture' },
             { label: 'Parallel session authority', slug: 'session-authority' },
             { label: 'Actions', slug: 'actions' },
+            { label: 'rn-flow@1 replay dialect', slug: 'actions/rn-flow-1' },
             { label: 'Troubleshooting Memory', slug: 'troubleshooting-memory' },
           ],
         },
