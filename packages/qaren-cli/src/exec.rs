@@ -153,26 +153,37 @@ pub trait ChildHandle {
 struct RealChildHandle {
     child: std::process::Child,
     log: log::LogDrain,
+    // Set before any later fallible step; a reaped pid may already name another process.
+    reaped: bool,
 }
 
 impl ChildHandle for RealChildHandle {
     fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
-        let exit = self.child.try_wait()?.map(|s| s.code().unwrap_or(-1));
+        let exit = match self.child.try_wait() {
+            Ok(status) => status.map(|s| s.code().unwrap_or(-1)),
+            Err(e) => {
+                self.reaped = true;
+                return Err(e);
+            }
+        };
         if exit.is_some() {
+            self.reaped = true;
             self.log.flush()?;
         }
         Ok(exit)
     }
 
     fn kill_group(&mut self) {
+        self.reaped = true;
         kill_group_and_reap(&mut self.child);
         let _ = self.log.flush();
     }
 
-    // Callers terminate before anything reaps (core::wait reaps only after kill_group), so the
-    // pid still names this child; checking with try_wait here would reap it too early.
+    // Signals only an unreaped child and never reaps here, so kill_group still precedes reaping.
     fn terminate(&mut self) {
-        unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) };
+        if !self.reaped {
+            unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) };
+        }
     }
 }
 
@@ -312,7 +323,11 @@ impl Runner for RealRunner {
             pid: child.id() as i32,
             stdin: Box::new(stdin),
             stdout: Box::new(BufReader::new(stdout)),
-            handle: Box::new(RealChildHandle { child, log }),
+            handle: Box::new(RealChildHandle {
+                child,
+                log,
+                reaped: false,
+            }),
         })
     }
 

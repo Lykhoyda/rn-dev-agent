@@ -1249,9 +1249,9 @@ fn a_dead_native_suite_holder_names_the_suite_recovery_command() {
 
     assert_eq!(failure.code, FailureCode::DeviceBusy);
     assert!(
-        failure
-            .next_action
-            .contains("native-ios-suite recover --run-id native-ios-1790000000000-4242"),
+        failure.next_action.contains(
+            "--example native-ios-suite -- recover --run-id native-ios-1790000000000-4242"
+        ),
         "{}",
         failure.next_action
     );

@@ -59,7 +59,9 @@ fn fresh_token(fallback_seed: &str) -> String {
 // Native-suite runs keep their records outside the check runs root.
 pub fn cleanup_command(run_id: &str) -> String {
     if run_id.starts_with("native-ios-") {
-        format!("`native-ios-suite recover --run-id {run_id}`")
+        format!(
+            "`cargo run --manifest-path packages/qaren-cli/Cargo.toml --locked --example native-ios-suite -- recover --run-id {run_id}` from the repository root"
+        )
     } else {
         format!("`qaren cleanup {run_id}`")
     }
