@@ -117,6 +117,7 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
 async function openSession(
   request: WireRequest,
   emitRow: (row: LedgerRow) => void,
+  onClose: (close: () => Promise<void>) => void,
 ): Promise<Session> {
   const { target, platform, appId } = request;
   // Run-relative ms on a monotonic clock, anchored once to the CLI's t0.
@@ -133,10 +134,17 @@ async function openSession(
     sessionName?: string;
     platformPresence?: boolean;
   }> = createDeviceSnapshotHandler();
-  const cancelled = async (opened: boolean): Promise<void> => {
+  let deviceOpen = false;
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> =>
+    (closing ??= (async () => {
+      if (deviceOpen) await snapshot({ action: 'close' }).catch(() => undefined);
+      await cdp.disconnect().catch(() => undefined);
+    })());
+  onClose(close);
+  const cancelled = async (): Promise<void> => {
     if (!stop.stopping) return;
-    if (opened) await snapshot({ action: 'close' }).catch(() => undefined);
-    await cdp.disconnect().catch(() => undefined);
+    await close();
     throw new HandlerError(
       'RUN_CANCELLED',
       'the run was cancelled while opening the device session',
@@ -151,7 +159,7 @@ async function openSession(
       `cannot attach to the dev client through Metro ${target.metroPort}: ${describeError(error).message}`,
     );
   }
-  await cancelled(false);
+  await cancelled();
   // The lease coordinates qaren processes only; a foreign Maestro or XCUITest driver is a probe.
   if (platform === 'ios') {
     const foreign = await foreignFlowGate.check(target.deviceId);
@@ -163,8 +171,9 @@ async function openSession(
       );
     }
   }
-  await cancelled(false);
+  await cancelled();
 
+  deviceOpen = true;
   await adapt(snapshot)({
     action: 'open',
     appId,
@@ -173,15 +182,14 @@ async function openSession(
     attachOnly: false,
     sessionName: `qaren-${request.runId}`,
   });
-  await cancelled(true);
+  await cancelled();
   // Opening the session may have relaunched the app: prove the bundle the walk will see.
   const proof = await prove({ evaluate: (expr) => cdp.evaluate(expr) }, target);
   if (!proof.ok) {
-    await snapshot({ action: 'close' }).catch(() => undefined);
-    await cdp.disconnect().catch(() => undefined);
+    await close();
     throw new HandlerError(proof.code, proof.message);
   }
-  await cancelled(true);
+  await cancelled();
   log(
     `bundle proven: ${proof.scriptURL} (${proof.appModules} app modules under ${target.worktree})`,
   );
@@ -215,7 +223,7 @@ async function openSession(
       log(`${action}: ${describeError(error).message}`);
     }
   }
-  await cancelled(true);
+  await cancelled();
 
   const press = createDevicePressHandler(getClient);
   const fill = createDeviceFillHandler(getClient);
@@ -224,7 +232,6 @@ async function openSession(
   const accept = createDeviceAcceptSystemDialogHandler();
   const dismiss = createDeviceDismissSystemDialogHandler();
 
-  let closing: Promise<void> | undefined;
   const deps: WalkerDeps = {
     judge: createJev(),
     captureScreen: (options) =>
@@ -256,13 +263,7 @@ async function openSession(
   };
   return {
     deps,
-    close() {
-      closing ??= (async () => {
-        await snapshot({ action: 'close' }).catch(() => undefined);
-        await cdp.disconnect().catch(() => undefined);
-      })();
-      return closing;
-    },
+    close,
   };
 }
 
@@ -281,7 +282,7 @@ async function main(): Promise<void> {
   // The one exit owner; once stopping, no verdict other than the cancellation is reported.
   const finish = async (payload: ResultPayload, close?: () => Promise<void>): Promise<never> => {
     const code = writer.result(
-      stop.stopping && payload.verdict !== 'REFUSED'
+      stop.stopping
         ? {
             verdict: 'REFUSED',
             code: 'RUN_CANCELLED',
@@ -316,7 +317,7 @@ async function main(): Promise<void> {
       'the prepared plan is missing, invalid or does not match the preflight bytes',
     );
 
-  let session: Session | undefined;
+  let release: (() => Promise<void>) | undefined;
   // Stopping makes the next device operation fail, so the walk ends through `finish`.
   // The fallback only covers a walk stuck inside one operation, within the CLI's grace.
   const halt = (why: string): void => {
@@ -325,7 +326,7 @@ async function main(): Promise<void> {
     setTimeout(() => {
       void stop
         .drained(1000)
-        .then(() => session?.close())
+        .then(() => release?.())
         .finally(() => process.exit(1));
     }, 8000);
   };
@@ -337,12 +338,13 @@ async function main(): Promise<void> {
   );
   let opened: Session;
   try {
-    opened = await openSession(request, emitRow);
+    opened = await openSession(request, emitRow, (close) => {
+      release = close;
+    });
   } catch (error) {
     const { code, message } = describeError(error);
     return refuse(code, message);
   }
-  session = opened;
   if (stop.stopping)
     return refuse('RUN_CANCELLED', 'the run was cancelled before the walk started', () =>
       opened.close(),
