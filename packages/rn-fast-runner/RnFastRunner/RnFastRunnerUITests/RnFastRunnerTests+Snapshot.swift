@@ -339,6 +339,7 @@ extension RnFastRunnerTests {
     var descriptors: [PresenceDescriptor?] = []
     var truncated = false
     var complete = false
+    var viewport = CGRect.infinite
 
     let enumerated = presenceRead { () -> Bool in
       guard self.presenceAppIsEligible(app, deadline: deadline) == true,
@@ -347,7 +348,7 @@ extension RnFastRunnerTests {
         $0.elementType == .window && !$0.frame.isNull && !$0.frame.isEmpty
       }?.frame
       let appFrame = root.frame
-      let viewport = windowFrame ?? (appFrame.isNull || appFrame.isEmpty ? .infinite : appFrame)
+      viewport = windowFrame ?? (appFrame.isNull || appFrame.isEmpty ? .infinite : appFrame)
       let context = SnapshotTraversalContext(
         queryRoot: app, rootSnapshot: root, viewport: viewport, maxDepth: Int.max
       )
@@ -383,10 +384,12 @@ extension RnFastRunnerTests {
 
     // A capped tree cannot establish descriptor uniqueness in the whole raw snapshot.
     if complete {
-      for index in nodes.indices {
+      var handled = Set<Int>()
+      for index in nodes.indices where !handled.contains(index) {
         if presenceUptimeMs() >= deadline { break }
         // Identified containers are association anchors, so they are observed whatever their label source.
         // Unnamed, unidentified plain views are inert to the consumer and never need presence.
+        // Nodes outside the window or a scroll view ancestor are never hittable; the consumer proves them offscreen.
         let labelSource = nodes[index].presence?.labelSource
         guard nodes[index].depth > 0,
               let descriptor = descriptors[index],
@@ -395,13 +398,26 @@ extension RnFastRunnerTests {
                 && descriptor.identifier.isEmpty
                 && descriptor.type == .other),
               descriptor.type != .application, descriptor.type != .window,
-              descriptors.filter({ $0 == descriptor }).count == 1 else { continue }
+              !descriptor.frame.isEmpty,
+              presenceClip(index, nodes: nodes, descriptors: descriptors, viewport: viewport)
+                .intersects(descriptor.frame) else { continue }
+        let group = descriptors.indices.filter { descriptors[$0] == descriptor }
+        guard group.count == 1 || isNestedTextChain(group, nodes: nodes) else { continue }
+        handled.formUnion(group)
+        let predicateMatches = descriptors.filter {
+          $0?.type == descriptor.type && $0?.identifier == descriptor.identifier && $0?.label == descriptor.label
+        }.count
         let observation = presenceRead(deadline: deadline) {
-          self.observePresence(descriptor, app: app, deadline: deadline)
+          self.observePresence(
+            descriptor, count: group.count, predicateIsExact: predicateMatches == group.count,
+            app: app, deadline: deadline
+          )
         }
         if let observed = observation ?? nil {
-          nodes[index].presence?.status = .observed
-          nodes[index].presence?.observedUptimeMs = observed
+          for member in group {
+            nodes[member].presence?.status = .observed
+            nodes[member].presence?.observedUptimeMs = observed
+          }
         }
       }
       complete = presenceAppIsEligible(app, deadline: deadline) == true
@@ -448,38 +464,59 @@ extension RnFastRunnerTests {
     } == true
   }
 
-  private func uniquePresenceElement(
-    _ descriptor: PresenceDescriptor, app: XCUIApplication, deadline: Double
-  ) -> (element: XCUIElement, snapshot: XCUIElementSnapshot)? {
+  private func presenceClip(
+    _ index: Int, nodes: [SnapshotNode], descriptors: [PresenceDescriptor?], viewport: CGRect
+  ) -> CGRect {
+    var clip = viewport
+    var parent = nodes[index].parentIndex
+    while let current = parent {
+      if let frame = descriptors[current]?.frame, descriptors[current]?.type == .scrollView {
+        clip = clip.intersection(frame)
+      }
+      parent = nodes[current].parentIndex
+    }
+    return clip
+  }
+
+  // XCUI reports a React Native text as a text holding an identical text; the chain is one element.
+  private func isNestedTextChain(_ group: [Int], nodes: [SnapshotNode]) -> Bool {
+    zip(group, group.dropFirst()).allSatisfy { parent, child in
+      nodes[child].parentIndex == parent && nodes[child].type == "StaticText"
+    }
+  }
+
+  // Descriptor and hierarchy stability is proven once for all nodes by the final whole-tree revalidation.
+  private func observePresence(
+    _ descriptor: PresenceDescriptor, count: Int, predicateIsExact: Bool,
+    app: XCUIApplication, deadline: Double
+  ) -> Double? {
     // Callers never pass application or window descriptors, so the app root cannot be a match.
     guard let elements = presenceRead(deadline: deadline, {
-            // The predicate only narrows exact attributes; frame and value are checked on snapshots.
             app.descendants(matching: descriptor.type)
               .matching(NSPredicate(format: "identifier == %@ AND label == %@", descriptor.identifier, descriptor.label))
               .allElementsBoundByAccessibilityElement
           }) else { return nil }
-    var match: (element: XCUIElement, snapshot: XCUIElementSnapshot)?
+    if predicateIsExact {
+      // The tree holds exactly these matches for type, identifier and label, so no per-match snapshot is needed.
+      guard elements.count == count else { return nil }
+      for element in elements where presenceRead(deadline: deadline, { element.isHittable }) == true {
+        return presenceUptimeMs()
+      }
+      return nil
+    }
+    var matches: [XCUIElement] = []
     for element in elements {
       guard let snapshot = presenceRead(deadline: deadline, { try element.snapshot() }) else { return nil }
-      if PresenceDescriptor(snapshot) == descriptor {
-        guard match == nil else { return nil }
-        match = (element, snapshot)
-      }
+      if PresenceDescriptor(snapshot) == descriptor { matches.append(element) }
     }
-    return presenceUptimeMs() < deadline ? match : nil
-  }
-
-  private func observePresence(
-    _ descriptor: PresenceDescriptor, app: XCUIApplication, deadline: Double
-  ) -> Double? {
-    // The uniqueness scan's own snapshot of the match is the "before" reading.
-    guard let element = uniquePresenceElement(descriptor, app: app, deadline: deadline)?.element,
-          presenceRead(deadline: deadline, { element.isHittable }) == true else { return nil }
-    let observed = presenceUptimeMs()
-    // Uniqueness after the reading is proven once for all nodes by the final whole-tree revalidation.
-    guard let after = presenceRead(deadline: deadline, { try element.snapshot() }),
-          PresenceDescriptor(after) == descriptor else { return nil }
-    return observed
+    guard matches.count == count else { return nil }
+    for element in matches where presenceRead(deadline: deadline, { element.isHittable }) == true {
+      let observed = presenceUptimeMs()
+      guard let after = presenceRead(deadline: deadline, { try element.snapshot() }),
+            PresenceDescriptor(after) == descriptor else { return nil }
+      return observed
+    }
+    return nil
   }
 
   func retainSnapshotTargets(_ nodes: [SnapshotNode]) {
