@@ -226,9 +226,19 @@ function thirds(center: number, extent: number, names: readonly [string, string,
   return ratio < 1 / 3 ? names[0] : ratio < 2 / 3 ? names[1] : names[2];
 }
 
-function nativeCapabilities(kind: Kind): Pick<NonNullable<Element['semantic']>, 'press' | 'fill'> {
+function nativeCapabilities(
+  kind: Kind,
+  type: string | undefined,
+  reactInteractive: boolean,
+): Pick<NonNullable<Element['semantic']>, 'press' | 'fill'> {
+  const plain = kind === 'text' || kind === 'image' || type === 'Other';
   return {
-    press: kind === 'button' || kind === 'switch' || kind === 'link' ? 'supported' : 'unknown',
+    press:
+      kind === 'button' || kind === 'switch' || kind === 'link'
+        ? 'supported'
+        : plain && !reactInteractive
+          ? 'unsupported'
+          : 'unknown',
     fill: kind === 'input' ? 'supported' : kind === 'other' ? 'unknown' : 'unsupported',
   };
 }
@@ -269,6 +279,17 @@ export function join(
     ]),
   );
   const headings = associateHeadings(nodes, reactHostEvidence, presence, associations);
+  const interactiveRole = (role: string | null | undefined) =>
+    !!role && kindOfRole(role) !== 'text' && kindOfRole(role) !== 'image';
+  // Native type may rule out press only while every interactive React host is accounted for.
+  const unaccountedInteractiveHost =
+    reactHostEvidence === undefined ||
+    !reactHostEvidence.complete ||
+    reactHostEvidence.hosts.some(
+      (host, hostIndex) =>
+        (host.capabilities.press === true || interactiveRole(host.role)) &&
+        !associations.has(hostIndex),
+    );
   let width = 0;
   let height = 0;
   for (const n of nodes) {
@@ -300,8 +321,19 @@ export function join(
     }
     let kind = kindOf(n.type);
     const nativeKind = kind;
-    const capabilities = nativeCapabilities(kind);
     const host = associatedHosts.get(nodeIndex);
+    // Over-associated on purpose: any React hint of interactivity keeps press unknown.
+    const reactCandidates = digest.filter(
+      (d) =>
+        (testID !== undefined && d.testID === testID) ||
+        (d.testID === undefined && label !== undefined && norm(d.text ?? d.label) === norm(label)),
+    );
+    const reactInteractive =
+      unaccountedInteractiveHost ||
+      host?.capabilities.press === true ||
+      interactiveRole(host?.role) ||
+      reactCandidates.some((d) => d.capabilities?.press === true || interactiveRole(d.role));
+    const capabilities = nativeCapabilities(kind, n.type, reactInteractive);
     if (host?.capabilities.press === true) capabilities.press = 'supported';
     if (host?.capabilities.fill === true) capabilities.fill = 'supported';
     const uniqueIdentity =
@@ -347,12 +379,7 @@ export function join(
     if (testID) element.testID = testID;
     const privateNativeLabel = presenceMode && observed?.labelSource !== 'direct';
     // Privacy may over-associate input observations without granting semantic capabilities.
-    const privacyCandidates = digest.filter(
-      (d) =>
-        (testID !== undefined && d.testID === testID) ||
-        (d.testID === undefined && label !== undefined && norm(d.text ?? d.label) === norm(label)),
-    );
-    const possibleDigestInput = privacyCandidates.some(
+    const possibleDigestInput = reactCandidates.some(
       (d) => kindOfRole(d.role) === 'input' || d.capabilities?.fill === true,
     );
     if (
@@ -377,7 +404,7 @@ export function join(
         values: [
           nonEmpty(n.value),
           digestValue(match?.value),
-          ...privacyCandidates.map((d) => digestValue(d.value)),
+          ...reactCandidates.map((d) => digestValue(d.value)),
           ...(privateNativeLabel ? [label] : []),
         ].filter((value): value is string => !!value),
         nativeLabelMayBeValue:

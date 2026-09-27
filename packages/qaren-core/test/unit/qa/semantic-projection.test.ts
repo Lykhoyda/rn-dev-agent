@@ -55,12 +55,70 @@ test('join adds native capabilities without upgrading geometry to visibility', (
   assert.deepEqual(
     screen.elements.slice(2).map((e) => e.semantic?.press),
     ['unknown', 'unknown', 'unknown'],
+    'without React host evidence nothing proves a view is not pressable',
   );
   assert.ok(screen.elements.every((e) => e.semantic?.visibility === 'unknown'));
   assert.deepEqual(projection.assertionView(screen), ['Save', 'Email: a@example.test', 'Welcome']);
   assert.deepEqual(
     projection.actionView(screen).map((e) => e.ref),
     ['@save', '@text', '@image', '@wrapper'],
+  );
+});
+
+test('native text, image and plain views are not pressable unless React evidence says otherwise', () => {
+  const screen = projection.join(
+    [
+      { ref: '@title', type: 'StaticText', label: 'Welcome', hittable: true },
+      { ref: '@logo', type: 'Image', hittable: true },
+      { ref: '@container', type: 'Other', hittable: true },
+      { ref: '@row', type: 'Other', label: 'Open settings', hittable: true },
+      { ref: '@more', type: 'StaticText', label: 'Read more', hittable: true },
+      { ref: '@field', type: 'TextField', label: 'Email', hittable: true },
+      { ref: '@cell', type: 'Cell', label: 'Inbox', hittable: true },
+      { ref: '@go', type: 'Other', identifier: 'go', label: 'Go', hittable: true },
+      { ref: '@map', type: 'Map', hittable: true },
+      { ref: '@group', type: 'android.view.ViewGroup', hittable: true },
+    ],
+    [
+      { role: 'button', text: 'Open settings' },
+      { role: 'text', text: 'Read more', capabilities: { press: true } },
+      { role: 'button', testID: 'go', capabilities: { press: true } },
+    ],
+    'app',
+    complete,
+    { hosts: [], complete: true },
+  );
+  assert.deepEqual(
+    screen.elements.map((e) => e.semantic?.press),
+    [
+      'unsupported',
+      'unsupported',
+      'unsupported',
+      'unknown',
+      'unknown',
+      'unknown',
+      'unknown',
+      'supported',
+      'unknown',
+      'unknown',
+    ],
+    'an unrecognized native type proves nothing about press',
+  );
+  const plain = projection.join(
+    [
+      { ref: '@title', type: 'StaticText', label: 'Welcome', hittable: true },
+      { ref: '@container', type: 'Other', hittable: true },
+      { ref: '@skip', type: 'Button', label: 'Skip', hittable: true },
+    ],
+    [],
+    'app',
+    complete,
+    { hosts: [], complete: true },
+  );
+  assert.deepEqual(
+    projection.semanticActionView(plain, 'press'),
+    { elements: [plain.elements[2]] },
+    'static content no longer blocks choosing among proven controls',
   );
 });
 

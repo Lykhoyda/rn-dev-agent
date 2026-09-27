@@ -366,14 +366,21 @@ test('every named host ancestor must independently match native ancestry and mea
       variant,
     );
     assert.equal(screen.elements.length, 4);
-    assert.ok(
-      'refuse' in semanticActionView(screen, 'press'),
-      'the generic ancestor remains an unknown competitor',
-    );
+    if (variant === 'proven')
+      assert.deepEqual(
+        semanticActionView(screen, 'press'),
+        { elements: [screen.elements[3]] },
+        'with every interactive host accounted for, the handler-less panel is not pressable',
+      );
+    else
+      assert.ok(
+        'refuse' in semanticActionView(screen, 'press'),
+        `${variant}: an unassociated handler keeps the generic ancestor an unknown competitor`,
+      );
   }
 });
 
-test('real measured producer press reaches the walker without a role; absent handlers stay unknown', async () => {
+test('real measured producer press reaches the walker without a role; an accounted host without a handler is not pressable', async () => {
   for (const mode of ['press', 'none', 'disabled', 'readonly']) {
     const f = fixture();
     const fiber = buildFiber({
@@ -405,7 +412,7 @@ test('real measured producer press reaches the walker without a role; absent han
     });
     assert.equal(screen.elements[2].kind, 'other');
     assert.equal(screen.elements[2].semantic?.fill, 'unknown');
-    assert.equal(screen.elements[2].semantic?.press, mode === 'none' ? 'unknown' : 'supported');
+    assert.equal(screen.elements[2].semantic?.press, mode === 'none' ? 'unsupported' : 'supported');
     const judge = scriptedJudge((questions) => {
       assert.equal(mode, 'press', 'blocked controls never reach a model');
       return Object.fromEntries(
@@ -419,23 +426,37 @@ test('real measured producer press reaches the walker without a role; absent han
   }
 });
 
-test('generic and text competitors remain unknown for press and are never removed to make a choice', async () => {
+test('generic and text views leave the choice only while every interactive host is accounted for', async () => {
   for (const type of ['Other', 'StaticText']) {
-    const f = fixture();
-    f.native.nodes.push({
-      ...f.native.nodes[2],
-      ref: '@e3',
-      index: 3,
-      identifier: undefined,
-      type,
-      label: 'Other contribution',
-      presence: { ...f.native.nodes[2].presence, nodeIndex: 3 },
-    });
-    f.native.snapshotVerdict.nodeCount++;
-    const screen = await f.capture();
-    assert.equal(screen.elements.length, 4);
-    assert.equal(screen.elements[3].semantic?.press, 'unknown');
-    assert.ok('refuse' in semanticActionView(screen, 'press'));
+    for (const stray of [false, true]) {
+      const f = fixture();
+      f.native.nodes.push({
+        ...f.native.nodes[2],
+        ref: '@e3',
+        index: 3,
+        identifier: undefined,
+        type,
+        label: 'Other contribution',
+        presence: { ...f.native.nodes[2].presence, nodeIndex: 3 },
+      });
+      f.native.snapshotVerdict.nodeCount++;
+      if (stray)
+        f.hostEvidence.hosts.push({
+          role: null,
+          roleSource: 'none',
+          capabilities: { press: true },
+        });
+      const screen = await f.capture();
+      assert.equal(screen.elements.length, 4);
+      assert.equal(screen.elements[3].semantic?.press, stray ? 'unknown' : 'unsupported', type);
+      if (stray)
+        assert.ok(
+          'refuse' in semanticActionView(screen, 'press'),
+          `${type}: an unassociated handler could be this view, so it is never removed`,
+        );
+      else
+        assert.deepEqual(semanticActionView(screen, 'press'), { elements: [screen.elements[2]] });
+    }
   }
 });
 
@@ -444,7 +465,7 @@ test('an admitted positive fill fact supports fill without inferring an input ki
   f.hostEvidence.hosts[0].capabilities = { fill: true };
   const screen = await f.capture();
   assert.equal(screen.elements[2].kind, 'other');
-  assert.equal(screen.elements[2].semantic?.press, 'unknown');
+  assert.equal(screen.elements[2].semantic?.press, 'unsupported');
   assert.deepEqual(semanticActionView(screen, 'fill'), { elements: [screen.elements[2]] });
 });
 

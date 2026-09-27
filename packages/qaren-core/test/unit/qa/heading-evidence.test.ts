@@ -840,7 +840,7 @@ test('accessible View competitors require proven independent identity even when 
       variant === 'proven' ? 'typographic-title' : undefined,
       variant,
     );
-    assert.equal(screen.elements[5].semantic?.press, 'unknown');
+    assert.equal(screen.elements[5].semantic?.press, 'unsupported');
   }
 });
 
@@ -1151,7 +1151,7 @@ test('separately measured nested unsupported stats do not veto ScrollView title 
     ['@e0', '@e1', '@e2', '@e3', '@e4', '@e5', '@e6'],
   );
   assert.equal(screen.elements[6].label, '42 visits');
-  assert.equal(screen.elements[5].semantic?.press, 'unknown');
+  assert.equal(screen.elements[5].semantic?.press, 'unsupported');
   const judge = scriptedJudge(() => assert.fail('generic containers remain unknown contributions'));
   assert.equal(
     (await decideScreen(screen, judge, undefined, wait())).visibility.refuse,
@@ -1274,7 +1274,7 @@ test('real entering-text producer in a separate measured stats container preserv
     );
     assert.equal(screen.elements.length, 7);
     assert.equal(screen.elements[5].kind, 'other');
-    assert.equal(screen.elements[5].semantic?.press, 'unknown');
+    assert.equal(screen.elements[5].semantic?.press, 'unsupported');
     assert.equal(screen.elements[6].label, '42 visits');
   }
 });
