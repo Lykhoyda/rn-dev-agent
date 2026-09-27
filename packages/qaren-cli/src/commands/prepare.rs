@@ -1138,6 +1138,7 @@ fn claim_usb_device(ctx: &mut Ctx, lock_root: &Path, serial: &str) -> Result<(),
         LockOutcome::Contended {
             holder: existing,
             detail,
+            ..
         } => {
             let described = existing
                 .map(|h| format!(" (held for run {})", h.run_id))
@@ -2025,6 +2026,7 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
     drop(child.stdin);
     drop(child.stdout);
     let mut exit = None;
+    let mut cancelled = None;
     if started {
         let deadline = ctx
             .runner
@@ -2038,7 +2040,13 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
                 }
                 Err(_) => break,
                 Ok(None) if ctx.runner.monotonic_ms() >= deadline => break,
-                Ok(None) => ctx.runner.sleep(Duration::from_millis(100)),
+                Ok(None) => match ctx.runner.cancellation() {
+                    Some(reason) => {
+                        cancelled = Some(reason);
+                        break;
+                    }
+                    None => ctx.runner.sleep(Duration::from_millis(100)),
+                },
             }
         }
     }
@@ -2053,6 +2061,9 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
         spec.label.clone(),
         format!("exit={exit:?}; group={}", outcome.render()),
     ));
+    if let Some(reason) = cancelled {
+        return Err(Failure::cancelled("build", &reason));
+    }
     if !started || exit != Some(0) || !matches!(outcome, super::cleanup::Outcome::Absent) {
         return Err(build_failure(
             ctx,

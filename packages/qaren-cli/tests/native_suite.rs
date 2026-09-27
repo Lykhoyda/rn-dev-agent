@@ -763,6 +763,10 @@ impl ChildHandle for TrackedChild {
     fn kill_group(&mut self) {
         panic!("native suite must use the shared cleanup owner")
     }
+
+    fn terminate(&mut self) {
+        panic!("native suite must use the shared cleanup owner")
+    }
 }
 
 struct HybridRunner {

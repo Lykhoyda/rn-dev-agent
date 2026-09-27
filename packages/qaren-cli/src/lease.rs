@@ -2,7 +2,7 @@ use crate::buildplan::{self, LockHolder, LockOutcome, LockPolicy, ReleaseOutcome
 use crate::candidate::sha256_hex;
 use crate::exec::Runner;
 use crate::failure::{Failure, FailureCode};
-use crate::runrecord::PidIdentity;
+use crate::runrecord::{PidIdentity, PidLiveness};
 use crate::scenario::Platform;
 use crate::timefmt;
 use serde::{Deserialize, Serialize};
@@ -56,6 +56,25 @@ fn fresh_token(fallback_seed: &str) -> String {
     }
 }
 
+// Native-suite runs keep their records outside the check runs root.
+pub fn cleanup_command(run_id: &str) -> String {
+    if run_id.starts_with("native-ios-") {
+        format!(
+            "`cargo run --manifest-path packages/qaren-cli/Cargo.toml --locked --example native-ios-suite -- recover --run-id {run_id}` from the repository root"
+        )
+    } else {
+        format!("`qaren cleanup {run_id}`")
+    }
+}
+
+// A refused claim, with the holder and the liveness the claim already observed.
+#[derive(Debug)]
+pub struct Busy {
+    pub failure: Failure,
+    pub holder: Option<LockHolder>,
+    pub liveness: Option<PidLiveness>,
+}
+
 pub fn acquire(
     runner: &mut dyn Runner,
     lock_root: &Path,
@@ -64,6 +83,18 @@ pub fn acquire(
     run_id: &str,
     identity: Option<PidIdentity>,
 ) -> Result<Lease, Failure> {
+    try_acquire(runner, lock_root, platform, device_id, run_id, identity)
+        .map_err(|busy| busy.failure)
+}
+
+pub fn try_acquire(
+    runner: &mut dyn Runner,
+    lock_root: &Path,
+    platform: Platform,
+    device_id: &str,
+    run_id: &str,
+    identity: Option<PidIdentity>,
+) -> Result<Lease, Box<Busy>> {
     let now_ms = runner.now_epoch_ms();
     let birth = identity
         .as_ref()
@@ -89,24 +120,44 @@ pub fn acquire(
         }),
         LockOutcome::Contended {
             holder: existing,
+            liveness,
             detail,
         } => {
-            let described = existing
-                .map(|h| format!(" (held for run {})", h.run_id))
-                .unwrap_or_default();
-            Err(Failure::new(
-                "lease",
-                FailureCode::DeviceBusy,
-                format!("device {device_id} is leased elsewhere{described}: {detail}"),
-                "wait for the holding run to finish, or clean it up with `qaren cleanup <its-run-id>`; a live holder is never stolen",
-            ))
+            let (described, next_action) = match &existing {
+                Some(h) => (
+                    format!(" (held for run {})", h.run_id),
+                    format!(
+                        "wait for run {} to finish, or clean it up with {}; a live holder is never stolen",
+                        h.run_id,
+                        cleanup_command(&h.run_id)
+                    ),
+                ),
+                None => (
+                    String::new(),
+                    "wait for the holding run to finish, or clean it up with `qaren cleanup <its-run-id>`; a live holder is never stolen".to_string(),
+                ),
+            };
+            Err(Box::new(Busy {
+                failure: Failure::new(
+                    "lease",
+                    FailureCode::DeviceBusy,
+                    format!("device {device_id} is leased elsewhere{described}: {detail}"),
+                    next_action,
+                ),
+                holder: existing,
+                liveness,
+            }))
         }
-        LockOutcome::Error(detail) => Err(Failure::new(
-            "lease",
-            FailureCode::RunRecordUpdateFailed,
-            format!("cannot operate the device lease lock: {detail}"),
-            "fix the lock directory permissions, then re-run",
-        )),
+        LockOutcome::Error(detail) => Err(Box::new(Busy {
+            failure: Failure::new(
+                "lease",
+                FailureCode::RunRecordUpdateFailed,
+                format!("cannot operate the device lease lock: {detail}"),
+                "fix the lock directory permissions, then re-run",
+            ),
+            holder: None,
+            liveness: None,
+        })),
     }
 }
 

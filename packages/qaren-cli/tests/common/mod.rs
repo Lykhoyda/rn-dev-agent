@@ -352,4 +352,7 @@ impl qaren::exec::Runner for IosBuildRunner {
     fn commands_executed(&self) -> u64 {
         self.inner.commands_executed()
     }
+    fn cancellation(&self) -> Option<String> {
+        self.inner.cancellation()
+    }
 }

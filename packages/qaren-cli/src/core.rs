@@ -13,6 +13,8 @@ const MAX_ROWS: usize = 10_000;
 const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
 const INBOX_DEPTH: usize = 1_024;
 const POST_KILL_GRACE_MS: u64 = 5_000;
+// Time for a cancelled core to close its device session before the group is killed.
+const CANCEL_GRACE_MS: u64 = 10_000;
 
 // The request payload the core child reads as its first stdin line.
 #[derive(Debug, Clone, Serialize)]
@@ -435,6 +437,7 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
     let mut result_at: Option<u64> = None;
     let mut killed_after_result = false;
     let mut group_survived = false;
+    let mut cancel_deadline: Option<u64> = None;
     // Kill before reaping to keep the pgid from being recycled under us.
     loop {
         match rx.recv_timeout(Duration::from_millis(50)) {
@@ -475,6 +478,21 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
             child.handle.kill_group();
             killed_at = Some(now);
             continue;
+        }
+        if let Some(deadline) = cancel_deadline {
+            if now >= deadline {
+                child.handle.kill_group();
+                killed_at = Some(now);
+            }
+            continue;
+        }
+        if result_at.is_none() {
+            if let Some(reason) = runner.cancellation() {
+                deadline_failure = Some(Failure::cancelled("walk", &reason));
+                child.handle.terminate();
+                cancel_deadline = Some(now + CANCEL_GRACE_MS);
+                continue;
+            }
         }
         // Setup uses only the walk budget; a held result uses only the exit grace.
         let walking = inbox.rows.iter().any(|r| r.line > 0);
@@ -568,6 +586,16 @@ fn interpret(
     }
     if let Some(failure) = deadline_failure {
         let seen = failure.detail.clone();
+        if failure.code == FailureCode::RunCancelled {
+            return (
+                synthesized_ledger(&inbox.rows, "REFUSED", &seen),
+                Verdict::Refused {
+                    code: "RUN_CANCELLED".to_string(),
+                    message: seen,
+                },
+                Some(failure),
+            );
+        }
         return (
             synthesized_ledger(&inbox.rows, "FAIL", &seen),
             Verdict::Fail,

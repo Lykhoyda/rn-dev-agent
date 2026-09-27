@@ -146,25 +146,44 @@ pub trait ChildHandle {
     // Some(code) once exited; a signal death reports -1.
     fn try_wait(&mut self) -> std::io::Result<Option<i32>>;
     fn kill_group(&mut self);
+    // SIGTERM to the leader only, so it can close what it opened before the group is killed.
+    fn terminate(&mut self);
 }
 
 struct RealChildHandle {
     child: std::process::Child,
     log: log::LogDrain,
+    // Set before any later fallible step; a reaped pid may already name another process.
+    reaped: bool,
 }
 
 impl ChildHandle for RealChildHandle {
     fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
-        let exit = self.child.try_wait()?.map(|s| s.code().unwrap_or(-1));
+        let exit = match self.child.try_wait() {
+            Ok(status) => status.map(|s| s.code().unwrap_or(-1)),
+            Err(e) => {
+                self.reaped = true;
+                return Err(e);
+            }
+        };
         if exit.is_some() {
+            self.reaped = true;
             self.log.flush()?;
         }
         Ok(exit)
     }
 
     fn kill_group(&mut self) {
+        self.reaped = true;
         kill_group_and_reap(&mut self.child);
         let _ = self.log.flush();
+    }
+
+    // Signals only an unreaped child and never reaps here, so kill_group still precedes reaping.
+    fn terminate(&mut self) {
+        if !self.reaped {
+            unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) };
+        }
     }
 }
 
@@ -186,6 +205,10 @@ pub trait Runner {
         self.now_epoch_ms()
     }
     fn commands_executed(&self) -> u64;
+    // Why the run must stop now: a caught signal or a vanished caller.
+    fn cancellation(&self) -> Option<String> {
+        None
+    }
 }
 
 pub struct RealRunner {
@@ -193,6 +216,7 @@ pub struct RealRunner {
     started: Instant,
     log_executable: PathBuf,
     logs: Vec<log::LogDrain>,
+    caller: Option<u32>,
 }
 
 impl RealRunner {
@@ -206,7 +230,13 @@ impl RealRunner {
             started: Instant::now(),
             log_executable: executable,
             logs: Vec::new(),
+            caller: None,
         }
+    }
+
+    // Ties this run to the process that launched it; used by `check` only.
+    pub fn watch_caller(&mut self) {
+        self.caller = Some(std::os::unix::process::parent_id());
     }
 
     pub fn flush_logs(&mut self) -> std::io::Result<()> {
@@ -293,7 +323,11 @@ impl Runner for RealRunner {
             pid: child.id() as i32,
             stdin: Box::new(stdin),
             stdout: Box::new(BufReader::new(stdout)),
-            handle: Box::new(RealChildHandle { child, log }),
+            handle: Box::new(RealChildHandle {
+                child,
+                log,
+                reaped: false,
+            }),
         })
     }
 
@@ -311,6 +345,15 @@ impl Runner for RealRunner {
 
     fn commands_executed(&self) -> u64 {
         self.executed
+    }
+
+    fn cancellation(&self) -> Option<String> {
+        let parent_now = std::os::unix::process::parent_id();
+        crate::cancel::reason(
+            crate::cancel::caught(),
+            self.caller.unwrap_or(parent_now),
+            parent_now,
+        )
     }
 }
 
@@ -534,6 +577,7 @@ impl BufRead for HeldStdout {
 struct MockChildHandle {
     exit: Option<i32>,
     killed: Arc<Mutex<bool>>,
+    terminated: Arc<Mutex<bool>>,
 }
 
 impl ChildHandle for MockChildHandle {
@@ -549,6 +593,12 @@ impl ChildHandle for MockChildHandle {
     }
 
     fn kill_group(&mut self) {
+        *self.killed.lock().unwrap() = true;
+    }
+
+    // A scripted child honours SIGTERM by ending the way a kill does.
+    fn terminate(&mut self) {
+        *self.terminated.lock().unwrap() = true;
         *self.killed.lock().unwrap() = true;
     }
 }
@@ -578,7 +628,10 @@ pub struct MockRunner {
     // Everything written to each piped child's stdin, in spawn order.
     pub piped_stdin: Vec<Arc<Mutex<Vec<u8>>>>,
     pub piped_killed: Vec<Arc<Mutex<bool>>>,
+    pub piped_terminated: Vec<Arc<Mutex<bool>>>,
     pub private_inputs: Vec<Vec<u8>>,
+    // (command substring, reason): cancellation starts once a matching command ran.
+    pub cancel_after: Option<(String, String)>,
     script: VecDeque<MockExpectation>,
     now_ms: u64,
 }
@@ -591,7 +644,9 @@ impl MockRunner {
             spawned_logs: Vec::new(),
             piped_stdin: Vec::new(),
             piped_killed: Vec::new(),
+            piped_terminated: Vec::new(),
             private_inputs: Vec::new(),
+            cancel_after: None,
             script: VecDeque::new(),
             now_ms: 1_770_000_000_000,
         }
@@ -727,6 +782,8 @@ impl Runner for MockRunner {
                 let killed = Arc::new(Mutex::new(false));
                 self.piped_stdin.push(stdin.clone());
                 self.piped_killed.push(killed.clone());
+                let terminated = Arc::new(Mutex::new(false));
+                self.piped_terminated.push(terminated.clone());
                 Ok(PipedChild {
                     pid,
                     stdin: Box::new(SharedWriter(stdin)),
@@ -735,7 +792,11 @@ impl Runner for MockRunner {
                         hold,
                         killed: killed.clone(),
                     }),
-                    handle: Box::new(MockChildHandle { exit, killed }),
+                    handle: Box::new(MockChildHandle {
+                        exit,
+                        killed,
+                        terminated,
+                    }),
                 })
             }
             _ => panic!(
@@ -772,5 +833,13 @@ impl Runner for MockRunner {
 
     fn commands_executed(&self) -> u64 {
         self.calls.len() as u64
+    }
+
+    fn cancellation(&self) -> Option<String> {
+        let (after, reason) = self.cancel_after.as_ref()?;
+        self.calls
+            .iter()
+            .any(|call| call.rendered().contains(after.as_str()))
+            .then(|| reason.clone())
     }
 }

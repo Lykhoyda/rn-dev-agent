@@ -221,6 +221,8 @@ fn main() -> ExitCode {
                 eprintln!("{}\n{USAGE}", failure.detail);
                 return ExitCode::from(2);
             }
+            qaren::cancel::install();
+            runner.watch_caller();
             match lock_root().and_then(|lock| runs_root().map(|runs| (lock, runs))) {
                 Ok((lock_root, runs_root)) => {
                     let project_root =

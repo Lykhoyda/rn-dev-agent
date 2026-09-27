@@ -44,6 +44,7 @@ pub enum FailureCode {
     HandoffEvidenceAmbiguous,
     HandoffEvidenceMismatch,
     DeviceBusy,
+    RunCancelled,
     FreshInstallAdmissionUnknown,
     AppPresenceUnknown,
     AppResetFailed,
@@ -76,6 +77,7 @@ impl FailureCode {
                 | FailureCode::HandoffEvidenceAmbiguous
                 | FailureCode::HandoffEvidenceMismatch
                 | FailureCode::DeviceBusy
+                | FailureCode::RunCancelled
                 | FailureCode::DevClientSchemeRequired
                 | FailureCode::IosBuildCapabilityUnavailable
                 | FailureCode::FreshInstallAdmissionUnknown
@@ -117,6 +119,15 @@ impl Failure {
             evidence: Vec::new(),
             next_action: crate::redact::redact_secrets(&next_action.into()),
         }
+    }
+
+    pub fn cancelled(phase: &str, reason: &str) -> Self {
+        Failure::new(
+            phase,
+            FailureCode::RunCancelled,
+            format!("the run was cancelled: {reason}"),
+            "re-run when ready; teardown released what it could prove, and the cleanup map names anything retained",
+        )
     }
 
     pub fn with_evidence(mut self, evidence: Vec<String>) -> Self {

@@ -49,6 +49,60 @@ pub fn cleanup(runner: &mut dyn Runner, runs_root: &Path, run_id: &str) -> Recei
     cleanup_with(runner, runs_root, run_id, None)
 }
 
+// A dead holder's device lease is reclaimed only through that run's own cleanup proofs.
+pub fn reclaim_dead_holder(
+    runner: &mut dyn Runner,
+    runs_root: &Path,
+    busy: &crate::lease::Busy,
+) -> Result<String, Failure> {
+    let (Some(holder), Some(PidLiveness::Dead | PidLiveness::AliveForeign)) =
+        (busy.holder.as_ref(), busy.liveness)
+    else {
+        return Err(busy.failure.clone());
+    };
+    let run_id = holder.run_id.clone();
+    let refuse = |detail: String| {
+        Failure::new(
+            "lease",
+            FailureCode::DeviceBusy,
+            format!("the device lease is held by run {run_id}, whose qaren process is gone, but {detail}"),
+            format!(
+                "run {} against that run's records once its resources are accounted for",
+                crate::lease::cleanup_command(&run_id)
+            ),
+        )
+    };
+    let record = RunRecord::load(runs_root, &run_id)
+        .map_err(|f| refuse(format!("its run record is not readable here: {}", f.detail)))?;
+    let owned_by_holder = matches!(
+        (&record.prepare, &holder.identity),
+        (Some(a), Some(b)) if a.pid == b.pid && a.started_at == b.started_at
+    ) && record
+        .resources
+        .lease
+        .as_ref()
+        .is_some_and(|l| l.holder == holder.holder && l.run_id == holder.run_id);
+    if !owned_by_holder {
+        return Err(refuse(
+            "its run record does not name the lease holder's process; nothing was cleaned".into(),
+        ));
+    }
+    let receipt = cleanup_with(runner, runs_root, &run_id, None);
+    if receipt.result != ReceiptResult::Cleaned {
+        let unproven: Vec<String> = receipt
+            .cleanup
+            .iter()
+            .filter(|(_, outcome)| !matches!(outcome.as_str(), "removed" | "absent" | "kept"))
+            .map(|(leg, outcome)| format!("{leg}={outcome}"))
+            .collect();
+        return Err(refuse(format!(
+            "its cleanup is not proven ({})",
+            unproven.join(", ")
+        )));
+    }
+    Ok(run_id)
+}
+
 // `remove_app` confirms "<run-id>/<remote-serial>/<app-id>"; None skips uninstall.
 pub fn cleanup_with(
     runner: &mut dyn Runner,
@@ -111,6 +165,10 @@ pub fn cleanup_with(
             "metro".to_string(),
             cleanup_process_group(runner, m.identity.as_ref(), m.spawned.pgid, Some(m.port)),
         ));
+    }
+
+    if let Some(outcome) = cleanup_runner_host(runner, &record) {
+        outcomes.push(("runner_host".to_string(), outcome));
     }
 
     match record.scenario.platform {
@@ -887,6 +945,34 @@ fn remove_app_install(
 
 // The device lease is released last, and only once every leg that can still address
 // the device is proven clean; otherwise it is retained for `qaren cleanup`.
+// A core that died before closing its session leaves the UITest host running, and the next
+// admission reads it as a foreign driver. Only a run whose core started can have launched it,
+// and the device lease still naming this run is what makes the device, and its host, ours.
+pub(crate) fn cleanup_runner_host(runner: &mut dyn Runner, record: &RunRecord) -> Option<Outcome> {
+    let sim = record.resources.ios_simulator.as_ref()?;
+    if record.resources.core.is_none() && record.resources.core_cleanup.is_none() {
+        return None;
+    }
+    let lease = record.resources.lease.as_ref()?;
+    let held = crate::buildplan::read_holder(&lease.lock_dir)
+        .is_some_and(|h| h.holder == lease.holder && h.run_id == record.run_id);
+    if !held {
+        return None;
+    }
+    let output = runner.run(&ios::terminate_runner_host_spec(&sim.udid));
+    Some(if output.ok() {
+        Outcome::Removed
+    } else if output.stderr.contains("found nothing to terminate") {
+        Outcome::Absent
+    } else {
+        Outcome::Unresolved(format!(
+            "the runner host app on {} could not be terminated: {}",
+            sim.udid,
+            output.summary()
+        ))
+    })
+}
+
 pub(crate) fn unclean_legs(outcomes: &[(String, Outcome)]) -> Vec<String> {
     outcomes
         .iter()

@@ -1,5 +1,6 @@
 pub mod adapters;
 pub mod buildplan;
+pub mod cancel;
 pub mod candidate;
 pub mod commands;
 pub mod config;

@@ -483,6 +483,7 @@ pub enum LockOutcome {
     },
     Contended {
         holder: Option<LockHolder>,
+        liveness: Option<PidLiveness>,
         detail: String,
     },
     Error(String),
@@ -577,6 +578,7 @@ pub fn claim_lock(
             if std::fs::rename(&taken, &dir).is_err() {
                 return LockOutcome::Contended {
                     holder: isolated,
+                    liveness: None,
                     detail: format!(
                         "a foreign lock replaced the stale one mid-adoption and was preserved at {}; resolve it manually",
                         taken.display()
@@ -585,6 +587,7 @@ pub fn claim_lock(
             }
             return LockOutcome::Contended {
                 holder: read_holder(&dir),
+                liveness: None,
                 detail: format!(
                     "lock {} was re-claimed while adopting a stale holder",
                     dir.display()
@@ -609,6 +612,7 @@ pub fn claim_lock(
         };
         return LockOutcome::Contended {
             holder: existing,
+            liveness,
             detail,
         };
     }
