@@ -332,6 +332,30 @@ test('an offscreen native control is a described action candidate; an unobserved
   assert.deepEqual(f.actions, ['scroll down', 'press @more']);
 });
 
+test('an unassociated React host interactive only by role and without a testID leaves plain views not pressable', () => {
+  const nodes = [
+    ...scrolled.slice(0, 2),
+    { ref: '@group', type: 'Other', parentIndex: 1, rect: band(60, 200) },
+  ];
+  const presence = presenceOf(['unknown', 'unknown', 'unknown']);
+  const press = (host: ReactHostEvidence['hosts'][number]) =>
+    projection.join(nodes, [], 'app', complete, { hosts: [host], complete: true }, presence)
+      .elements[2].semantic?.press;
+  assert.equal(
+    press({ role: 'adjustable', roleSource: 'accessibilityRole', capabilities: {} }),
+    'unsupported',
+  );
+  assert.equal(
+    press({ nativeID: '20', role: 'tablist', roleSource: 'role', capabilities: {} }),
+    'unsupported',
+  );
+  assert.equal(
+    press({ testID: 'sheet', role: 'adjustable', roleSource: 'role', capabilities: {} }),
+    'unknown',
+  );
+  assert.equal(press({ role: null, roleSource: 'none', capabilities: { press: true } }), 'unknown');
+});
+
 test('an unnamed handlerless React entry is not an unaccounted competitor; named or handled ones are', () => {
   const nodes = [
     ...scrolled.slice(0, 2),
