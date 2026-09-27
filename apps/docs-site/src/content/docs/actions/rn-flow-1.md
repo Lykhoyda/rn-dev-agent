@@ -38,13 +38,15 @@ compilation.
 `stopApp`, `killApp`, `clearState`, and `runFlow` with inline `commands` or a
 `file`, optionally guarded by `when: {visible | notVisible}`.
 
-A flow file holds at most one header document (`appId`) and a final, non-empty command list;
-malformed YAML refuses with the parser's line. Every flow also passes the same
-validator as every other flow path (command allowlist, denied commands, scalar
-safety, contained `runFlow` file references). Command-level refusals carry the command name and its line (plus
-the sub-flow `file` when the step comes from one); the validator's own
-value-level refusals, such as an unsafe scalar, report the offending command and line.
-Refused at compile time: a command
+A top-level action needs an `appId` header. A file-backed `runFlow` must have no
+`appId` header. Both require a final, non-empty command list: an absent, empty,
+null, scalar, or mapping final document refuses at its location, as does a
+command list before `---` or an unexpected header. Malformed YAML refuses with
+the parser's line. Every flow also passes the same validator (command allowlist,
+denied commands, scalar safety, contained `runFlow` file references).
+Command-level refusals carry the command name and line (plus the sub-flow `file`
+when the step comes from one); value-level refusals, such as an unsafe scalar,
+report the offending command and line. Refused at compile time: a command
 outside the list, an unknown key, a coordinate swipe, `retryTapIfNoChange`, or a
 value passed to a command that takes none. Nothing falls back to another
 engine.
@@ -124,6 +126,9 @@ never start a second implicit wait.
 | other native dispatch | 10,000 ms |
 | `launchApp`, `openLink`, `clearState` | 15,000 ms |
 | `stopApp`, `killApp` | 10,000 ms |
+
+Explicit `timeout` values for `extendedWaitUntil`, `scrollUntilVisible`, and
+`waitForAnimationToEnd` must be positive integers.
 
 A timed-out step records what it polled and the last snapshot's near misses.
 A tap or type is dispatched once; a transport timeout fails the step as
