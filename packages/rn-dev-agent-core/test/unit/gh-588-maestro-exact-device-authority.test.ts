@@ -259,6 +259,8 @@ test('exact active UDID is forwarded to maestro-runner before the flow', () => {
   assert.deepEqual(runner.buildArgs('ios', '/tmp/flow.yaml', undefined, EXACT), [
     '--platform',
     'ios',
+    '--driver',
+    'wda',
     '--device',
     EXACT,
     'test',
@@ -380,7 +382,15 @@ test('real maestro_run path forwards active UDID and accepts only matching direc
   });
   const body = envelope(result);
   assert.equal(body.ok, true, result.content[0].text);
-  assert.deepEqual(argv.slice(0, 5), ['--platform', 'ios', '--device', EXACT, 'test']);
+  assert.deepEqual(argv.slice(0, 7), [
+    '--platform',
+    'ios',
+    '--driver',
+    'wda',
+    '--device',
+    EXACT,
+    'test',
+  ]);
   assert.equal(body.data.deviceAuthority.verified, true);
   assert.equal(body.data.deviceAuthority.reportedDeviceId, EXACT);
 });
