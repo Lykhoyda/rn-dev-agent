@@ -778,4 +778,8 @@ test('the handlerless digest fact survives capture and a malformed one refuses',
     capture({ ...entry, capabilities: { press: true, fill: false } }),
     PrivateInputCaptureError,
   );
+  await assert.rejects(
+    capture({ role: 'adjustable', handlerless: true }),
+    PrivateInputCaptureError,
+  );
 });
