@@ -27,13 +27,17 @@ function nativePath(nodes: NativeNode[], start: number): number[] {
   return path;
 }
 
-function compatible(host: string | null, native: string | undefined): boolean {
+function compatible(
+  host: string | null,
+  native: string | undefined,
+  scrollsBeneath = false,
+): boolean {
   if (host === 'RCTText' || host === 'Text') return native === 'StaticText';
   if (host === 'RCTView' || host === 'View')
     return native === 'Other' || native === 'Button' || native === 'Cell';
-  // On iOS the identifier sits on the scroll view's container view, above the native ScrollView.
+  // On iOS the identifier sits on the scroll view's container view, directly above the native ScrollView.
   if (host === 'RCTScrollView' || host === 'ScrollView')
-    return native === 'ScrollView' || native === 'Other';
+    return native === 'ScrollView' || (native === 'Other' && scrollsBeneath);
   return false;
 }
 
@@ -122,7 +126,11 @@ export function associateHosts(
     const nativeIndex = matches[0];
     if (
       inWindow(nativeIndex) &&
-      compatible(host.hostType, nodes[nativeIndex].type) &&
+      compatible(
+        host.hostType,
+        nodes[nativeIndex].type,
+        nodes.some((n) => n.parentIndex === nativeIndex && n.type === 'ScrollView'),
+      ) &&
       sameFrame(host.rect, nodes[nativeIndex].rect, window)
     )
       structural.set(host.hostIndex, nativeIndex);

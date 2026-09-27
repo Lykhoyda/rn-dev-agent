@@ -356,6 +356,23 @@ test('an unassociated React host interactive only by role and without a testID l
   assert.equal(press({ role: null, roleSource: 'none', capabilities: { press: true } }), 'unknown');
 });
 
+test('an unnamed handlerless digest entry sharing a label does not make a plain view possibly pressable', () => {
+  const nodes = [
+    ...scrolled.slice(0, 2),
+    { ref: '@sheet', type: 'Other', label: 'Bottom Sheet', parentIndex: 1, rect: band(60, 200) },
+  ];
+  const presence = presenceOf(['unknown', 'unknown', 'unknown']);
+  const none = { press: false, fill: false };
+  const press = (entry: DigestEntry) =>
+    projection.join(nodes, [entry], 'app', complete, { hosts: [], complete: true }, presence)
+      .elements[2].semantic?.press;
+  assert.equal(
+    press({ role: 'adjustable', label: 'Bottom Sheet', capabilities: none, handlerless: true }),
+    'unsupported',
+  );
+  assert.equal(press({ role: 'adjustable', label: 'Bottom Sheet', capabilities: none }), 'unknown');
+});
+
 test('an unnamed handlerless React entry is not an unaccounted competitor; named or handled ones are', () => {
   const nodes = [
     ...scrolled.slice(0, 2),

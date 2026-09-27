@@ -309,16 +309,14 @@ export function join(
         : count > 0
           ? `${count} interactive React host${count === 1 ? '' : 's'} unassociated`
           : undefined;
-  // A host without a testID that is interactive only by role offers no React handler to compete.
+  // A host without a testID that is interactive only by role offers no React handler to press.
   const pressEvidenceGap = evidenceGap(
     unassociated(
       (host) => host.capabilities.press === true || (interactiveRole(host.role) && !!host.testID),
     ),
   );
   const fillEvidenceGap = evidenceGap(
-    unassociated(
-      (host) => host.capabilities.fill === true || (inputRole(host.role) && !!host.testID),
-    ),
+    unassociated((host) => host.capabilities.fill === true || inputRole(host.role)),
   );
   let width = 0;
   let height = 0;
@@ -364,7 +362,11 @@ export function join(
         pressEvidenceGap !== undefined ||
         host?.capabilities.press === true ||
         interactiveRole(host?.role) ||
-        reactCandidates.some((d) => d.capabilities?.press === true || interactiveRole(d.role)),
+        reactCandidates.some(
+          (d) =>
+            d.capabilities?.press === true ||
+            (interactiveRole(d.role) && !(d.handlerless && !d.testID)),
+        ),
       fill:
         fillEvidenceGap !== undefined ||
         host?.capabilities.fill === true ||

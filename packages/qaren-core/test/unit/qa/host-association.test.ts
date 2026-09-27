@@ -1144,4 +1144,10 @@ test('a React scroll view identified on its native container view anchors its de
     nativeIndex: 4,
     anchorIndex: 4,
   });
+  const flat = nodes.map((n) => (n.type === 'ScrollView' ? { ...n, type: 'Other' } : n));
+  assert.equal(
+    associateHosts(flat, evidence, presence).get(1),
+    undefined,
+    'an identified Other stands for a scroll view only when a native ScrollView sits directly under it',
+  );
 });
