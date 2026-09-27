@@ -169,11 +169,10 @@ impl ChildHandle for RealChildHandle {
         let _ = self.log.flush();
     }
 
-    // An unreaped child keeps its pid, so it cannot name a recycled process here.
+    // Callers terminate before anything reaps (core::wait reaps only after kill_group), so the
+    // pid still names this child; checking with try_wait here would reap it too early.
     fn terminate(&mut self) {
-        if matches!(self.child.try_wait(), Ok(None)) {
-            unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) };
-        }
+        unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) };
     }
 }
 

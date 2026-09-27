@@ -66,7 +66,10 @@ pub fn reclaim_dead_holder(
             "lease",
             FailureCode::DeviceBusy,
             format!("the device lease is held by run {run_id}, whose qaren process is gone, but {detail}"),
-            format!("run `qaren cleanup {run_id}` against that run's runs root once its resources are accounted for"),
+            format!(
+                "run {} against that run's records once its resources are accounted for",
+                crate::lease::cleanup_command(&run_id)
+            ),
         )
     };
     let record = RunRecord::load(runs_root, &run_id)
@@ -162,6 +165,10 @@ pub fn cleanup_with(
             "metro".to_string(),
             cleanup_process_group(runner, m.identity.as_ref(), m.spawned.pgid, Some(m.port)),
         ));
+    }
+
+    if let Some(outcome) = cleanup_runner_host(runner, &record) {
+        outcomes.push(("runner_host".to_string(), outcome));
     }
 
     match record.scenario.platform {
@@ -938,6 +945,34 @@ fn remove_app_install(
 
 // The device lease is released last, and only once every leg that can still address
 // the device is proven clean; otherwise it is retained for `qaren cleanup`.
+// A core that died before closing its session leaves the UITest host running, and the next
+// admission reads it as a foreign driver. Only a run whose core started can have launched it,
+// and the device lease still naming this run is what makes the device, and its host, ours.
+pub(crate) fn cleanup_runner_host(runner: &mut dyn Runner, record: &RunRecord) -> Option<Outcome> {
+    let sim = record.resources.ios_simulator.as_ref()?;
+    if record.resources.core.is_none() && record.resources.core_cleanup.is_none() {
+        return None;
+    }
+    let lease = record.resources.lease.as_ref()?;
+    let held = crate::buildplan::read_holder(&lease.lock_dir)
+        .is_some_and(|h| h.holder == lease.holder && h.run_id == record.run_id);
+    if !held {
+        return None;
+    }
+    let output = runner.run(&ios::terminate_runner_host_spec(&sim.udid));
+    Some(if output.ok() {
+        Outcome::Removed
+    } else if output.stderr.contains("found nothing to terminate") {
+        Outcome::Absent
+    } else {
+        Outcome::Unresolved(format!(
+            "the runner host app on {} could not be terminated: {}",
+            sim.udid,
+            output.summary()
+        ))
+    })
+}
+
 pub(crate) fn unclean_legs(outcomes: &[(String, Outcome)]) -> Vec<String> {
     outcomes
         .iter()

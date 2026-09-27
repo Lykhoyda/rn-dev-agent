@@ -262,6 +262,18 @@ pub fn probe_app_presence(runner: &mut dyn Runner, udid: &str, app_id: &str) -> 
     }
 }
 
+// Mirrors RN_FAST_RUNNER_APP_BUNDLE_ID in the runner's Xcode project.
+pub const RUNNER_HOST_BUNDLE_ID: &str = "dev.lykhoyda.rndevagent.fastrunner";
+
+pub fn terminate_runner_host_spec(udid: &str) -> CmdSpec {
+    CmdSpec::new(
+        "simctl-terminate-runner-host",
+        "xcrun",
+        &["simctl", "terminate", udid, RUNNER_HOST_BUNDLE_ID],
+        10,
+    )
+}
+
 pub fn uninstall_app_spec(udid: &str, app_id: &str) -> CmdSpec {
     CmdSpec::new(
         "simctl-uninstall",

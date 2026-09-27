@@ -280,8 +280,9 @@ async function main(): Promise<void> {
   };
   emitRow(startupRow());
   // The one exit owner; once stopping, no verdict other than the cancellation is reported.
+  let written: 0 | 1 | 4 | undefined;
   const finish = async (payload: ResultPayload, close?: () => Promise<void>): Promise<never> => {
-    const code = writer.result(
+    const code = (written = writer.result(
       stop.stopping
         ? {
             verdict: 'REFUSED',
@@ -291,7 +292,7 @@ async function main(): Promise<void> {
             jev: payload.jev,
           }
         : payload,
-    );
+    ));
     if (close) await close();
     return exitAfterDrain(code);
   };
@@ -327,7 +328,7 @@ async function main(): Promise<void> {
       void stop
         .drained(1000)
         .then(() => release?.())
-        .finally(() => process.exit(1));
+        .finally(() => process.exit(written ?? 1));
     }, 8000);
   };
   for (const signal of ['SIGTERM', 'SIGINT'] as const) process.once(signal, () => halt(signal));

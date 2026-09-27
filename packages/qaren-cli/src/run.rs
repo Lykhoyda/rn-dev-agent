@@ -641,6 +641,9 @@ fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, boo
         }
         outcomes.push(("metro".to_string(), outcome));
     }
+    if let Some(outcome) = crate::commands::cleanup::cleanup_runner_host(ctx.runner, &ctx.record) {
+        outcomes.push(("runner_host".to_string(), outcome));
+    }
     prepare::release_build_lock(ctx);
     if ctx.record.resources.ios_simulator.is_some() {
         outcomes.push(("simulator".to_string(), Outcome::Kept));

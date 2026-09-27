@@ -56,6 +56,15 @@ fn fresh_token(fallback_seed: &str) -> String {
     }
 }
 
+// Native-suite runs keep their records outside the check runs root.
+pub fn cleanup_command(run_id: &str) -> String {
+    if run_id.starts_with("native-ios-") {
+        format!("`native-ios-suite recover --run-id {run_id}`")
+    } else {
+        format!("`qaren cleanup {run_id}`")
+    }
+}
+
 // A refused claim, with the holder and the liveness the claim already observed.
 #[derive(Debug)]
 pub struct Busy {
@@ -116,8 +125,9 @@ pub fn try_acquire(
                 Some(h) => (
                     format!(" (held for run {})", h.run_id),
                     format!(
-                        "wait for run {0} to finish, or clean it up with `qaren cleanup {0}`; a live holder is never stolen",
-                        h.run_id
+                        "wait for run {} to finish, or clean it up with {}; a live holder is never stolen",
+                        h.run_id,
+                        cleanup_command(&h.run_id)
                     ),
                 ),
                 None => (

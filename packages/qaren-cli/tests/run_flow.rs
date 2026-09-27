@@ -559,7 +559,21 @@ fn script_teardown(mock: &mut MockRunner) {
     script_teardown_core(mock, CmdOutput::success("1 1 S\n6000 6000 S\n"), false);
 }
 
+fn nothing_to_terminate() -> CmdOutput {
+    CmdOutput::failed(3, "found nothing to terminate")
+}
+
 fn script_teardown_core(mock: &mut MockRunner, inventory: CmdOutput, probe_dead_leader: bool) {
+    script_teardown_core_host(mock, inventory, probe_dead_leader, nothing_to_terminate());
+}
+
+// After the core and Metro groups, the CLI terminates the runner host on the leased simulator.
+fn script_teardown_core_host(
+    mock: &mut MockRunner,
+    inventory: CmdOutput,
+    probe_dead_leader: bool,
+    runner_host: CmdOutput,
+) {
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
     mock.expect_run(
         "git",
@@ -578,6 +592,7 @@ fn script_teardown_core(mock: &mut MockRunner, inventory: CmdOutput, probe_dead_
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
+    mock.expect_run("simctl terminate", runner_host);
 }
 
 fn envelope(seq: u64, kind: &str, payload: &str) -> String {
@@ -871,6 +886,95 @@ fn a_cancelled_walk_is_a_refusal_that_still_tears_down_and_releases_the_lease() 
     assert!(record.resources.lease.is_none());
 }
 
+fn script_cancelled_walk(mock: &mut MockRunner, repo: &Path, runner_host: CmdOutput) {
+    script_preflight(mock, repo);
+    script_provision(mock);
+    let one_row = format!("{}\n", envelope(2, "row", &row(1, "step")));
+    mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
+    script_core_identity(mock);
+    script_teardown_core_host(
+        mock,
+        CmdOutput::success("1 1 S\n6000 6000 S\n"),
+        false,
+        runner_host,
+    );
+    mock.cancel_after = Some(("-p 9000".into(), "received SIGKILL of the caller".into()));
+}
+
+#[test]
+fn a_runner_host_the_core_left_running_is_terminated_before_the_lease_is_released() {
+    let (repo, app) = app_repo();
+    let mut mock = MockRunner::new();
+    script_cancelled_walk(&mut mock, &repo, CmdOutput::success(""));
+
+    let receipt = run(&mut mock, &request(&repo, &app, 30));
+
+    assert_eq!(receipt.cleanup["runner_host"], "removed");
+    assert!(mock.calls.iter().any(|c| c.rendered().contains(&format!(
+        "simctl terminate {UDID} dev.lykhoyda.rndevagent.fastrunner"
+    ))));
+    assert_eq!(receipt.cleanup["device_lease"], "removed");
+    assert_eq!(mock.remaining(), 0);
+}
+
+#[test]
+fn an_unproven_runner_host_termination_keeps_the_lease_for_cleanup() {
+    let (repo, app) = app_repo();
+    let mut mock = MockRunner::new();
+    script_cancelled_walk(
+        &mut mock,
+        &repo,
+        CmdOutput::failed(1, "CoreSimulatorService connection interrupted"),
+    );
+
+    let receipt = run(&mut mock, &request(&repo, &app, 30));
+
+    assert!(receipt.cleanup["runner_host"].starts_with("unresolved"));
+    assert!(receipt.cleanup["device_lease"].starts_with("unresolved"));
+    assert_eq!(mock.remaining(), 0);
+    let record = RunRecord::load(&repo.join("runs"), &run_id()).unwrap();
+    assert!(
+        record.resources.lease.is_some(),
+        "the lease waits for qaren cleanup"
+    );
+}
+
+#[test]
+fn reclaiming_a_run_that_reached_the_walk_also_terminates_its_runner_host() {
+    let (repo, app) = app_repo();
+    let held = plant_holder(&repo, |r| {
+        r.resources.ios_simulator = Some(qaren::runrecord::IosSimResource {
+            udid: UDID.into(),
+            name: "qaren-check".into(),
+            device_type: "iPhone 17".into(),
+            runtime: "iOS 26.5".into(),
+        });
+        r.resources.core_cleanup = Some(qaren::runrecord::CoreCleanupEvidence {
+            run_id: "check-earlier".into(),
+            pgid: 9000,
+            at: "2026-08-12T16:05:00Z".into(),
+            outcome: qaren::runrecord::GroupCleanupResult::Absent,
+        });
+    });
+    let mut mock = MockRunner::new();
+    script_preflight_until_lease(&mut mock, &repo);
+    mock.expect_run("ps", CmdOutput::success(""));
+    mock.expect_run(
+        &format!("simctl terminate {UDID} dev.lykhoyda.rndevagent.fastrunner"),
+        CmdOutput::success(""),
+    );
+    mock.expect_run("lsof", free_port());
+    script_unknown_admission(&mut mock);
+    let mut req = request(&repo, &app, 30);
+    req.fresh_install = true;
+
+    let receipt = run(&mut mock, &req);
+
+    assert_eq!(receipt.outcomes["recovered_run"], "check-earlier");
+    assert_eq!(mock.remaining(), 0);
+    assert!(!held.lock_dir.exists());
+}
+
 #[test]
 fn a_cancel_during_the_build_stops_it_with_proof_and_releases_both_locks() {
     let (repo, app) = app_repo();
@@ -1124,6 +1228,37 @@ fn a_dead_holder_without_a_matching_record_or_clean_proof_keeps_its_lease() {
 }
 
 #[test]
+fn a_dead_native_suite_holder_names_the_suite_recovery_command() {
+    let (repo, app) = app_repo();
+    let held = qaren::lease::acquire(
+        &mut MockRunner::new(),
+        &repo.join(".locks"),
+        Platform::Ios,
+        UDID,
+        "native-ios-1790000000000-4242",
+        Some(common::identity(4242, EARLIER_BIRTH)),
+    )
+    .unwrap();
+    let mut mock = MockRunner::new();
+    script_preflight_until_lease(&mut mock, &repo);
+    mock.expect_run("ps", CmdOutput::success(""));
+    let mut req = request(&repo, &app, 30);
+    req.fresh_install = true;
+
+    let failure = run(&mut mock, &req).failure.unwrap();
+
+    assert_eq!(failure.code, FailureCode::DeviceBusy);
+    assert!(
+        failure
+            .next_action
+            .contains("native-ios-suite recover --run-id native-ios-1790000000000-4242"),
+        "{}",
+        failure.next_action
+    );
+    assert!(held.lock_dir.exists());
+}
+
+#[test]
 fn a_holder_with_unknown_liveness_is_never_cleaned_up() {
     let (repo, app) = app_repo();
     plant_holder(&repo, |_| {});
@@ -1236,6 +1371,7 @@ fn an_unresolved_metro_group_retains_the_device_lease_for_cleanup() {
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n"))); // leader survived
     mock.expect_run("ps", CmdOutput::success("S\n"));
+    mock.expect_run("simctl terminate", nothing_to_terminate());
 
     let mut req = request(&repo, &app, 30);
     req.fresh_install = true;
@@ -2686,6 +2822,7 @@ fn closed_stdout_and_dead_leader_do_not_release_an_unproven_core_group() {
 
         let mut cleanup = MockRunner::new();
         cleanup.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+        cleanup.expect_run("simctl terminate", nothing_to_terminate());
         let receipt = qaren::commands::cleanup::cleanup(&mut cleanup, &req.runs_root, &run_id());
         assert_eq!(
             receipt.result,
