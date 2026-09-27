@@ -109,6 +109,21 @@ function readBody(text: string, file?: string): Body {
       file,
     );
   }
+  if (all.length === 2) {
+    const header = all[0]!;
+    if (
+      !isMap(header.contents) ||
+      header.contents.items.length !== 1 ||
+      !header.contents.has('appId')
+    ) {
+      throw new FlowCompileError(
+        lines.linePos(header.range[0]).line,
+        '',
+        'the first document must be an appId header',
+        file,
+      );
+    }
+  }
   const doc = all.at(-1);
   let values: unknown;
   try {
@@ -122,7 +137,7 @@ function readBody(text: string, file?: string): Body {
     values,
     nodes: isSeq(doc?.contents) ? doc.contents.items : [],
     lines,
-    hasAppIdHeader: all.length > 1 && isMap(all[0]?.contents) && all[0]!.contents.has('appId'),
+    hasAppIdHeader: all.length === 2,
   };
 }
 

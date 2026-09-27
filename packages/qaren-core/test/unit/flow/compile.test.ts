@@ -230,6 +230,43 @@ test('malformed YAML refuses with its line instead of throwing', () => {
   assert.match(error.reason, /^YAML:/);
 });
 
+test('a command list before the final YAML document refuses', () => {
+  withFlow('', (file) => {
+    writeFileSync(file, '- tapOn: Save\n---\n- back\n');
+    assert.throws(
+      () => compileFlow({ file, params: {}, platform: 'ios' }),
+      (error: unknown) => {
+        assert.ok(error instanceof FlowCompileError);
+        assert.equal(error.line, 1);
+        assert.match(error.reason, /first document must be an appId header/);
+        return true;
+      },
+    );
+  });
+});
+
+test('runFlow refuses a first command list or unexpected header', () => {
+  withFlow('- runFlow: sub.yaml\n', (file, dir) => {
+    for (const first of [
+      '- tapOn: Save',
+      'name: unexpected',
+      'appId: com.example.other\nname: unexpected',
+    ]) {
+      writeFileSync(join(dir, 'sub.yaml'), `${first}\n---\n- back\n`);
+      assert.throws(
+        () => compileFlow({ file, params: {}, platform: 'ios' }),
+        (error: unknown) => {
+          assert.ok(error instanceof FlowCompileError);
+          assert.equal(error.file, 'sub.yaml');
+          assert.equal(error.line, 1);
+          assert.match(error.reason, /first document must be an appId header/);
+          return true;
+        },
+      );
+    }
+  });
+});
+
 test('Android keeps every read native; lifecycle and the keyboard tier stay', () => {
   const plan = compile('- launchApp\n- assertVisible:\n    id: "a"\n- hideKeyboard\n', 'android');
   assert.deepEqual(
