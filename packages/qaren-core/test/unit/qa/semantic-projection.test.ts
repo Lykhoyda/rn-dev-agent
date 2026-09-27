@@ -256,6 +256,25 @@ test('both projections require complete coverage, including for an empty observa
   assert.deepEqual(projection.visibilityView(attested([])), { elements: [] });
 });
 
+test('a coverage refusal names the capture and projected coverage of each side', () => {
+  const screen: Screen = {
+    ...attested([]),
+    captureCoverage: complete,
+    coverage: { native: 'incomplete', react: 'unknown' },
+  };
+  for (const result of [
+    projection.semanticActionView(screen, 'press'),
+    projection.visibilityView(screen),
+  ]) {
+    assert.ok('refuse' in result);
+    assert.match(result.reason, /capture native=complete react=complete/);
+    assert.match(result.reason, /projected native=incomplete react=unknown/);
+  }
+  const bare = projection.visibilityView({ ...attested([]), coverage: undefined });
+  assert.ok('refuse' in bare);
+  assert.match(bare.reason, /capture missing; projected missing/);
+});
+
 test('reference collisions refuse before any exclusions or content coalescing', () => {
   const screen = attested([element('@same'), element('@same', { disabled: true })]);
   refused(projection.semanticActionView(screen, 'press'), 'AMBIGUOUS_REFS');
