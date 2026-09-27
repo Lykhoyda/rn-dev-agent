@@ -45,21 +45,60 @@ export interface CaptureDeps {
 
 type Coverage = NonNullable<Screen['coverage']>;
 
+function nativeIncompleteCauses(observation: NativeObservation): string[] {
+  const verdict = isRecord(observation.snapshotVerdict) ? observation.snapshotVerdict : undefined;
+  const causes: string[] = [];
+  if (observation.truncated === true) causes.push('truncated');
+  if (
+    typeof observation.normalizationDroppedNodes === 'number' &&
+    observation.normalizationDroppedNodes > 0
+  )
+    causes.push(`dropped=${observation.normalizationDroppedNodes}`);
+  if (verdict?.state === 'degraded' || verdict?.state === 'failed')
+    causes.push(`verdict=${verdict.state}`);
+  if (verdict?.refMapUpdated === false) causes.push('ref-map-not-updated');
+  if (Array.isArray(verdict?.reasons))
+    for (const reason of verdict.reasons)
+      causes.push(`reason=${SNAPSHOT_REASONS.has(reason) ? reason : 'unrecognized'}`);
+  if (
+    Array.isArray(observation.nodes) &&
+    typeof verdict?.nodeCount === 'number' &&
+    (observation.nodes.length === 0 || verdict.nodeCount !== observation.nodes.length)
+  )
+    causes.push('node-count-mismatch');
+  return causes;
+}
+
+const SNAPSHOT_REASONS = new Set<unknown>(['empty-capture', 'snapshot-ref-freshness-unknown']);
+
+function presenceCauses(
+  capture: unknown,
+  nodes: NativeNode[],
+  evaluated: boolean,
+  withinBudget: boolean,
+  elapsed: number,
+): string[] {
+  if (!isRecord(capture)) return [];
+  const { startedUptimeMs: started, endedUptimeMs: ended } = capture;
+  const measured = [
+    ...(typeof started === 'number' && typeof ended === 'number' && Number.isFinite(ended - started)
+      ? [`presence-ms=${Math.round(ended - started)}`]
+      : []),
+    `nodes=${nodes.length}`,
+    `reported-observed=${nodes.filter((node) => isRecord(node.presence) && node.presence.status === 'observed').length}`,
+  ];
+  if (capture.complete !== true) return ['presence-incomplete', ...measured];
+  if (!evaluated) return [];
+  return [
+    withinBudget ? 'presence-rejected' : 'capture-over-budget',
+    ...measured,
+    `capture-ms=${Math.round(elapsed)}`,
+  ];
+}
+
 function nativeCaptureCoverage(observation: NativeObservation): Coverage['native'] {
   const verdict = isRecord(observation.snapshotVerdict) ? observation.snapshotVerdict : undefined;
-  if (
-    observation.truncated === true ||
-    (typeof observation.normalizationDroppedNodes === 'number' &&
-      observation.normalizationDroppedNodes > 0) ||
-    verdict?.state === 'degraded' ||
-    verdict?.state === 'failed' ||
-    verdict?.refMapUpdated === false ||
-    (Array.isArray(verdict?.reasons) && verdict.reasons.length > 0) ||
-    (Array.isArray(observation.nodes) &&
-      typeof verdict?.nodeCount === 'number' &&
-      (observation.nodes.length === 0 || verdict.nodeCount !== observation.nodes.length))
-  )
-    return 'incomplete';
+  if (nativeIncompleteCauses(observation).length > 0) return 'incomplete';
   return Array.isArray(observation.nodes) &&
     observation.nodes.length > 0 &&
     observation.truncated === false &&
@@ -145,10 +184,23 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
   };
   const hostEvidence = validateReactHostEvidence(react.hostEvidence);
   const elapsed = now() - started;
+  const withinBudget = elapsed >= 0 && elapsed < PRESENCE_BUDGET_MS;
   const nativePresence =
-    captureCoverage.native === 'complete' && elapsed >= 0 && elapsed < PRESENCE_BUDGET_MS
+    captureCoverage.native === 'complete' && withinBudget
       ? validateNativePresence(native.presenceCapture, nodes, native.snapshotGeneration, deps.appId)
       : undefined;
+  const nativeCaptureCauses = [
+    ...nativeIncompleteCauses(native),
+    ...(nativePresence
+      ? []
+      : presenceCauses(
+          native.presenceCapture,
+          nodes,
+          captureCoverage.native === 'complete',
+          withinBudget,
+          elapsed,
+        )),
+  ];
   return applyPrivateInputs(react, {
     ...join(
       nodes,
@@ -166,5 +218,6 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
       nativePresence ?? (native.presenceCapture !== undefined ? 'unknown' : undefined),
     ),
     captureCoverage,
+    ...(nativeCaptureCauses.length > 0 ? { nativeCaptureCauses } : {}),
   });
 }

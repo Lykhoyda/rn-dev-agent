@@ -176,6 +176,19 @@ test('semantic actions keep separate native controls with equal IDs and exclude 
   assert.equal(screen.elements.length, 3);
 });
 
+test('an unknown capability refusal names the operation, ref and kind but not the label', () => {
+  const screen = attested([
+    element('@e14', {
+      kind: 'text',
+      label: 'Welcome back, Anton',
+      semantic: { press: 'unknown', fill: 'unknown', visibility: 'visible' },
+    }),
+  ]);
+  const result = projection.semanticActionView(screen, 'press');
+  assert.ok('refuse' in result);
+  assert.equal(result.reason, 'an observation has unknown press capability (@e14, text)');
+});
+
 test('unknown capabilities, missing facts and non-hittable controls cannot create an action winner', () => {
   for (const competitor of [
     element('@unknown', { semantic: { press: 'unknown', fill: 'unknown', visibility: 'visible' } }),
@@ -254,6 +267,25 @@ test('both projections require complete coverage, including for an empty observa
   }
   assert.deepEqual(projection.semanticActionView(attested([]), 'press'), { elements: [] });
   assert.deepEqual(projection.visibilityView(attested([])), { elements: [] });
+});
+
+test('a coverage refusal names the capture and projected coverage of each side', () => {
+  const screen: Screen = {
+    ...attested([]),
+    captureCoverage: complete,
+    coverage: { native: 'incomplete', react: 'unknown' },
+  };
+  for (const result of [
+    projection.semanticActionView(screen, 'press'),
+    projection.visibilityView(screen),
+  ]) {
+    assert.ok('refuse' in result);
+    assert.match(result.reason, /capture native=complete react=complete/);
+    assert.match(result.reason, /projected native=incomplete react=unknown/);
+  }
+  const bare = projection.visibilityView({ ...attested([]), coverage: undefined });
+  assert.ok('refuse' in bare);
+  assert.match(bare.reason, /capture missing; projected missing/);
 });
 
 test('reference collisions refuse before any exclusions or content coalescing', () => {

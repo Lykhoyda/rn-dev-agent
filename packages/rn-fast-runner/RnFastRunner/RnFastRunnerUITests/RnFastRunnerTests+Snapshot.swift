@@ -331,7 +331,8 @@ extension RnFastRunnerTests {
 
   func snapshotPlatformPresence(app: XCUIApplication, appId: String) -> DataPayload {
     let started = presenceUptimeMs()
-    let deadline = started + 5_000
+    // Inside the core's 5,000 ms budget, which also covers the React read that follows.
+    let deadline = started + 4_800
     let captureId = UUID().uuidString
     let generation = currentSnapshotGeneration
     var nodes: [SnapshotNode] = []
@@ -384,9 +385,10 @@ extension RnFastRunnerTests {
     if complete {
       for index in nodes.indices {
         if presenceUptimeMs() >= deadline { break }
+        // Identified containers are association anchors, so they are observed whatever their label source.
         guard nodes[index].depth > 0,
-              nodes[index].presence?.labelSource != .descendant,
               let descriptor = descriptors[index],
+              nodes[index].presence?.labelSource != .descendant || !descriptor.identifier.isEmpty,
               descriptor.type != .application, descriptor.type != .window,
               descriptors.filter({ $0 == descriptor }).count == 1 else { continue }
         let observation = presenceRead(deadline: deadline) {
@@ -443,20 +445,20 @@ extension RnFastRunnerTests {
 
   private func uniquePresenceElement(
     _ descriptor: PresenceDescriptor, app: XCUIApplication, deadline: Double
-  ) -> XCUIElement? {
-    guard let root = presenceRead(deadline: deadline, { try app.snapshot() }),
-          let elements = presenceRead(deadline: deadline, {
+  ) -> (element: XCUIElement, snapshot: XCUIElementSnapshot)? {
+    // Callers never pass application or window descriptors, so the app root cannot be a match.
+    guard let elements = presenceRead(deadline: deadline, {
             // The predicate only narrows exact attributes; frame and value are checked on snapshots.
             app.descendants(matching: descriptor.type)
               .matching(NSPredicate(format: "identifier == %@ AND label == %@", descriptor.identifier, descriptor.label))
               .allElementsBoundByAccessibilityElement
           }) else { return nil }
-    var match: XCUIElement? = PresenceDescriptor(root) == descriptor ? app : nil
+    var match: (element: XCUIElement, snapshot: XCUIElementSnapshot)?
     for element in elements {
       guard let snapshot = presenceRead(deadline: deadline, { try element.snapshot() }) else { return nil }
       if PresenceDescriptor(snapshot) == descriptor {
         guard match == nil else { return nil }
-        match = element
+        match = (element, snapshot)
       }
     }
     return presenceUptimeMs() < deadline ? match : nil
@@ -465,9 +467,8 @@ extension RnFastRunnerTests {
   private func observePresence(
     _ descriptor: PresenceDescriptor, app: XCUIApplication, deadline: Double
   ) -> Double? {
-    guard let element = uniquePresenceElement(descriptor, app: app, deadline: deadline),
-          let before = presenceRead(deadline: deadline, { try element.snapshot() }),
-          PresenceDescriptor(before) == descriptor,
+    // The uniqueness scan's own snapshot of the match is the "before" reading.
+    guard let element = uniquePresenceElement(descriptor, app: app, deadline: deadline)?.element,
           presenceRead(deadline: deadline, { element.isHittable }) == true else { return nil }
     let observed = presenceUptimeMs()
     guard let after = presenceRead(deadline: deadline, { try element.snapshot() }),

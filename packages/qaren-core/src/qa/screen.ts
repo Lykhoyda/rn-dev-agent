@@ -50,6 +50,7 @@ export interface Screen {
     react: 'complete' | 'incomplete' | 'unknown';
   };
   captureCoverage?: Screen['coverage'];
+  nativeCaptureCauses?: string[];
   reactHostEvidence?: ReactHostEvidence;
 }
 
@@ -489,8 +490,16 @@ function incomplete(reason: string): { refuse: string; reason: string } {
 function projectionRefusal(screen: Screen): { refuse: string; reason: string } | undefined {
   if (new Set(screen.elements.map((e) => e.ref)).size !== screen.elements.length)
     return { refuse: 'AMBIGUOUS_REFS', reason: 'screen references are not unique' };
-  if (screen.coverage?.native !== 'complete' || screen.coverage.react !== 'complete')
-    return incomplete('semantic projection requires complete native and React coverage');
+  if (screen.coverage?.native !== 'complete' || screen.coverage.react !== 'complete') {
+    const sides = (c?: Screen['coverage']) =>
+      c ? `native=${c.native} react=${c.react}` : 'missing';
+    const causes = screen.nativeCaptureCauses?.length
+      ? `; native capture: ${screen.nativeCaptureCauses.join(', ')}`
+      : '';
+    return incomplete(
+      `semantic projection requires complete native and React coverage (capture ${sides(screen.captureCoverage)}; projected ${sides(screen.coverage)}${causes})`,
+    );
+  }
   if ((screen.semanticUnassociatedReact ?? 0) > 0)
     return incomplete('React observations lack a proven unique native association');
   return undefined;
@@ -510,7 +519,7 @@ export function semanticActionView(screen: Screen, kind: 'press' | 'fill'): Proj
     if (!e.semantic) return incomplete('an observation has no semantic facts');
     if (e.semantic.visibility === 'hidden' || e.semantic[kind] === 'unsupported') continue;
     if (e.semantic[kind] !== 'supported')
-      return incomplete('an observation has unknown operation capability');
+      return incomplete(`an observation has unknown ${kind} capability (${e.ref}, ${e.kind})`);
     if (e.semantic.nativePresence && e.semantic.visibility !== 'visible')
       return incomplete('a native control lacks positive platform presence');
     if (e.semantic.visibility !== 'offscreen' && !e.hittable)

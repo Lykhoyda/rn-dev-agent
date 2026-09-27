@@ -429,6 +429,36 @@ fn core_group_settle_retains_ownership_when_still_present_or_inventory_unknown()
 }
 
 #[test]
+fn core_group_inventory_reads_a_process_whose_state_ps_cannot_report() {
+    let repo = common::temp_repo();
+    let record = core_record(&repo);
+    let lock = record.resources.lease.as_ref().unwrap().lock_dir.clone();
+    record.save(&repo).unwrap();
+    let mut mock = MockRunner::new();
+    mock.expect_run(
+        "ps -A",
+        CmdOutput::success("1 1 S\n715 54753 ?\n725 34131 ?+\n726 34131 ?E\n"),
+    );
+    let receipt = cleanup(&mut mock, &repo, "core-run");
+    assert_eq!(receipt.cleanup["core"], "absent");
+    assert!(!lock.exists());
+
+    let repo = common::temp_repo();
+    let record = core_record(&repo);
+    record.save(&repo).unwrap();
+    let mut mock = MockRunner::new();
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n9001 9000 ?\n"));
+    mock.expect_run("ps -p 9000 -o lstart=", CmdOutput::failed(1, ""));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n9001 9000 ?\n"));
+    let receipt = cleanup(&mut mock, &repo, "core-run");
+    assert_eq!(
+        receipt.cleanup["core"],
+        "unresolved: process group remains but its leader ownership is unproven"
+    );
+    assert_eq!(mock.remaining(), 0);
+}
+
+#[test]
 fn core_group_unknown_initial_inventory_is_not_retried() {
     for inventory in [
         CmdOutput::failed(1, "inventory denied"),
