@@ -232,7 +232,8 @@ function nativeCapabilities(
   type: string | undefined,
   reactInteractive: boolean,
 ): Pick<NonNullable<Element['semantic']>, 'press' | 'fill'> {
-  const plain = kind === 'text' || kind === 'image' || type === 'Other';
+  // Plain iOS views and scroll containers carry no press of their own; their children do.
+  const plain = kind === 'text' || kind === 'image' || type === 'Other' || type === 'ScrollView';
   return {
     press:
       kind === 'button' || kind === 'switch' || kind === 'link'
