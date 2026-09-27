@@ -1,4 +1,4 @@
-import { offscreenNodes } from './native-presence.js';
+import { duplicateNodes, offscreenNodes } from './native-presence.js';
 import type { NativePresence } from './native-presence.js';
 import type { NativeNode, ReactHostEvidence } from './screen.js';
 import type { HostTypography } from './host-typography.js';
@@ -107,12 +107,15 @@ export function associateHosts(
   const positive = (i: number) => presence.nodes[i]?.status === 'observed' && inWindow(i);
   const inline = (i: number) =>
     snapshot.nodes[i].hostType === 'RCTVirtualText' && snapshot.nodes[i].text.kind === 'inline';
+  const duplicates = duplicateNodes(nodes, presence);
   const structural = new Map<number, number>();
   for (const host of snapshot.nodes) {
     if (inline(host.hostIndex)) continue;
     const id = evidence.hosts[host.hostIndex].testID;
     if (!id || evidence.hosts.filter((h) => h.testID === id).length !== 1) continue;
-    const matches = nodes.flatMap((node, i) => (node.identifier === id ? [i] : []));
+    const matches = nodes.flatMap((node, i) =>
+      node.identifier === id && !duplicates.has(i) ? [i] : [],
+    );
     if (matches.length !== 1) continue;
     const nativeIndex = matches[0];
     if (
@@ -182,6 +185,7 @@ export function associateHosts(
     const content = host.text.content;
     const matches = nodes.flatMap((node, i) =>
       i !== anchorIndex &&
+      !duplicates.has(i) &&
       nativePaths[i].includes(anchorIndex) &&
       node.type === 'StaticText' &&
       node.label === content &&

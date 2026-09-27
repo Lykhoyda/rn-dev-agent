@@ -184,6 +184,26 @@ test('associated declared headings need no typographic prominence but still need
   assert.equal((await f.capture()).elements[3].semantic?.heading, undefined);
 });
 
+test('a title text with an identical native child is one heading, not two competing observations', async () => {
+  const f = fixture();
+  const title = f.native.nodes[3];
+  f.native.nodes.push({
+    ...title,
+    ref: '@e5',
+    index: 5,
+    parentIndex: 3,
+    depth: title.depth + 1,
+    presence: { ...title.presence, nodeIndex: 5 },
+  });
+  f.native.snapshotVerdict.nodeCount = f.native.nodes.length;
+  const screen = await f.capture();
+  assert.deepEqual(
+    screen.elements.map((e) => e.ref),
+    ['@e0', '@e1', '@e2', '@e3', '@e4'],
+  );
+  assert.equal(screen.elements[3].semantic?.heading?.kind, 'typographic-title');
+});
+
 test('an offscreen host association establishes no heading evidence', async () => {
   const f = fixture();
   f.hostEvidence.hosts[0].role = 'heading';

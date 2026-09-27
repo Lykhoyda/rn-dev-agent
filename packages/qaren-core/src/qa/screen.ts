@@ -2,7 +2,7 @@ import { isRecord } from './questions.js';
 import { createHash } from 'node:crypto';
 import { captureInputPrivacy, nativeLabelMayBeValue } from './privacy.js';
 import { PRIVATE_INPUT_LIMITS } from './private-input-limits.js';
-import { offscreenNodes } from './native-presence.js';
+import { duplicateNodes, offscreenNodes } from './native-presence.js';
 import type { NativePresence, NativePresenceNode } from './native-presence.js';
 import { associateHeadings, validateHostTypography } from './host-typography.js';
 import type { HeadingEvidence, HostTypography } from './host-typography.js';
@@ -270,7 +270,11 @@ export function join(
 ): Screen {
   const presenceMode =
     nativePresence !== undefined || nodes.some((node) => Object.hasOwn(node, 'presence'));
-  const nativeIds = idCounts(nodes.map((n) => nonEmpty(n.identifier)));
+  const presence = nativePresence === 'unknown' ? undefined : nativePresence;
+  const duplicates = duplicateNodes(nodes, presence);
+  const nativeIds = idCounts(
+    nodes.map((n, i) => (duplicates.has(i) ? undefined : nonEmpty(n.identifier))),
+  );
   const reactIds = idCounts(digest.map((d) => d.testID));
   const hasPositiveHostFill = (id: string | undefined): boolean =>
     id !== undefined &&
@@ -278,7 +282,6 @@ export function join(
       (host) => host.capabilities.fill === true && (host.testID === id || host.nativeID === id),
     ) ??
       false);
-  const presence = nativePresence === 'unknown' ? undefined : nativePresence;
   const offscreen = offscreenNodes(nodes, presence);
   const associations = associateHosts(nodes, reactHostEvidence, presence);
   const associatedHosts = new Map(
@@ -324,7 +327,7 @@ export function join(
     const testID = nonEmpty(n.identifier);
     const label = nonEmpty(n.label);
     let match: DigestEntry | undefined;
-    for (let i = 0; i < digest.length; i += 1) {
+    for (let i = 0; !duplicates.has(nodeIndex) && i < digest.length; i += 1) {
       if (used.has(i)) continue;
       const d = digest[i];
       const byId = testID !== undefined && d.testID === testID;
@@ -511,8 +514,8 @@ export function join(
     });
   // Image and container labels are accessibility-only, not assertion evidence.
   const visibleText: string[] = [];
-  for (const { e } of ordered) {
-    if (e.kind === 'image' || e.kind === 'other') continue;
+  for (const { e, i } of ordered) {
+    if (duplicates.has(i) || e.kind === 'image' || e.kind === 'other') continue;
     const line =
       e.kind === 'input'
         ? e.value !== undefined
@@ -522,7 +525,7 @@ export function join(
     if (line && visibleText[visibleText.length - 1] !== line) visibleText.push(line);
   }
   return {
-    elements,
+    elements: elements.filter((_, i) => !duplicates.has(i)),
     visibleText,
     front,
     semanticUnassociatedReact,

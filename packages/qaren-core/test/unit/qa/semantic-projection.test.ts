@@ -332,6 +332,56 @@ test('an offscreen native control is a described action candidate; an unobserved
   assert.deepEqual(f.actions, ['scroll down', 'press @more']);
 });
 
+test('a verified node identical to its parent counts once, keeping exact identity unique; identical siblings stay distinct', () => {
+  const nodes = [
+    ...scrolled.slice(0, 2),
+    { ref: '@title', type: 'StaticText', label: 'Welcome', parentIndex: 1, rect: band(60) },
+    { ref: '@title-inner', type: 'StaticText', label: 'Welcome', parentIndex: 2, rect: band(60) },
+    { ref: '@bar', type: 'Other', label: 'Scroll bar', parentIndex: 1, rect: band(700) },
+    { ref: '@bar-twin', type: 'Other', label: 'Scroll bar', parentIndex: 1, rect: band(700) },
+    {
+      ref: '@save',
+      type: 'Button',
+      identifier: 'save',
+      label: 'Save',
+      parentIndex: 1,
+      rect: band(300),
+      hittable: true,
+    },
+    {
+      ref: '@save-inner',
+      type: 'Button',
+      identifier: 'save',
+      label: 'Save',
+      parentIndex: 6,
+      rect: band(300),
+      hittable: true,
+    },
+  ];
+  const observed = presenceOf(['unknown', 'unknown', ...Array(6).fill('observed')]);
+  const digest = [{ role: 'button', testID: 'save', label: 'Save' }];
+  const screen = projection.join(
+    nodes,
+    digest,
+    'app',
+    complete,
+    { hosts: [], complete: true },
+    observed,
+  );
+  assert.deepEqual(
+    screen.elements.map((e) => e.ref),
+    ['@app', '@window', '@title', '@bar', '@bar-twin', '@save'],
+  );
+  assert.deepEqual(screen.visibleText, ['Welcome', 'Save']);
+  assert.equal(screen.semanticUnassociatedReact, 0, 'the unique exact ID still accounts for React');
+  assert.deepEqual(projection.semanticActionView(screen, 'press'), {
+    elements: [screen.elements[5]],
+  });
+
+  const legacy = projection.join(nodes, digest, 'app', complete);
+  assert.equal(legacy.elements.length, 8, 'legacy captures are unchanged');
+});
+
 test('native control types supply operation evidence independently of digest roles', () => {
   for (const type of [
     'Button',
