@@ -1,5 +1,11 @@
 # rn-dev-agent-core
 
+## 1.0.13
+
+### Patch Changes
+
+- fa1cee3: An unreadable authority registry (SQLite corrupt, I/O or not-a-database errors) now returns a typed `AUTHORITY_STORE_UNAVAILABLE` refusal from `rn_session status`, `cdp_status` and every gated tool instead of a bare `database disk image is malformed` error.
+
 ## 1.0.12
 
 ### Patch Changes
