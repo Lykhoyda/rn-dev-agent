@@ -912,7 +912,11 @@ impl Engine<'_> {
         let mut last = String::new();
         let settled = self.poll(deadline, |engine, window| {
             polls += 1;
-            match engine.native.is_settled(engine.runner, window) {
+            let probe = engine.native.is_settled(engine.runner, window);
+            if engine.now() > deadline {
+                return Err(Fail::Miss("settle probe exceeded deadline".into()));
+            }
+            match probe {
                 Ok(true) => {
                     observed = true;
                     Ok(Some(()))
@@ -1381,6 +1385,31 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_text_in_trace_reasons_is_redacted() {
+        let secret = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+        let mut snapshot = screen(&["Save"]);
+        snapshot.nodes[1].label = format!("Save {secret}");
+        snapshot.nodes[1].identifier = "target".into();
+        for (selector, verdict) in [(id("target"), Verdict::Pass), (text("Save"), Verdict::Fail)] {
+            let mut native = ScriptedNative::steady(snapshot.clone());
+            let (outcome, _) = drive(
+                &plan(vec![step(
+                    "s1",
+                    Domain::Native,
+                    500,
+                    Op::AssertVisible(selector),
+                )]),
+                &mut native,
+                &mut ScriptedHost::default(),
+            );
+            assert_eq!(outcome.verdict, verdict);
+            let reason = outcome.rows[0].reason.as_ref().unwrap();
+            assert!(!reason.contains(secret), "{reason}");
+            assert!(reason.contains("<redacted>"), "{reason}");
+        }
+    }
+
+    #[test]
     fn an_optional_miss_is_skipped_and_the_run_continues() {
         let plan = plan(vec![
             optional(step("s1", Domain::Native, 500, tap("Skip"))),
@@ -1631,6 +1660,27 @@ mod tests {
             .clone()
             .unwrap()
             .contains("no settle observation"));
+    }
+
+    #[test]
+    fn late_settle_replies_do_not_pass_at_the_cap() {
+        let wait = plan(vec![step(
+            "s1",
+            Domain::Native,
+            50,
+            Op::WaitForAnimationToEnd,
+        )]);
+        for reply in [Ok(false), Ok(true)] {
+            let mut native = ScriptedNative::steady(screen(&[]));
+            native.settled = vec![reply].into();
+            let (outcome, _) = drive(&wait, &mut native, &mut ScriptedHost::default());
+            assert_eq!(outcome.verdict, Verdict::Fail);
+            assert!(outcome.rows[0]
+                .reason
+                .as_ref()
+                .unwrap()
+                .contains("settle probe exceeded deadline"));
+        }
     }
 
     #[test]

@@ -71,13 +71,26 @@ impl Node {
         let label = if self.is_input() {
             "[input]".to_string()
         } else {
-            format!("{:?}", self.label)
+            format!("{:?}", safe_snapshot_text(&self.label))
         };
         format!(
             "{}[label={label} id={:?} rect={},{},{}x{}]",
-            self.kind, self.identifier, self.x, self.y, self.width, self.height
+            safe_snapshot_text(&self.kind),
+            safe_snapshot_text(&self.identifier),
+            self.x,
+            self.y,
+            self.width,
+            self.height
         )
     }
+}
+
+fn safe_snapshot_text(raw: &str) -> String {
+    crate::redact::redact_secrets(raw)
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(64)
+        .collect()
 }
 
 impl std::fmt::Debug for Node {
@@ -457,6 +470,39 @@ mod tests {
         };
         assert!(button.describe().contains("\"Save\""));
         assert!(!format!("{button:?}").contains("secret"));
+    }
+
+    #[test]
+    fn snapshot_diagnostics_redact_and_bound_displayed_fields() {
+        let secret = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+        let mut first = node(
+            1,
+            Some(0),
+            "Button",
+            &format!("Save {secret} {}", "x".repeat(200)),
+        );
+        first.identifier = "target".into();
+        let mut second = node(2, Some(0), "Button", "Save");
+        second.identifier = "target".into();
+        let nodes = vec![screen(), first, second];
+
+        let shown = nodes[1].describe();
+        assert!(!shown.contains(secret), "{shown}");
+        assert!(!shown.contains(&"x".repeat(65)), "{shown}");
+        assert!(shown.contains("<redacted>"), "{shown}");
+
+        for diagnostics in [
+            match resolve(&id("target"), &nodes) {
+                Resolution::Ambiguous { candidates } => candidates,
+                other => panic!("{other:?}"),
+            },
+            match resolve(&id("Save"), &nodes) {
+                Resolution::NotFound { near_misses } => near_misses,
+                other => panic!("{other:?}"),
+            },
+        ] {
+            assert!(!diagnostics.join(" ").contains(secret));
+        }
     }
 
     #[test]
