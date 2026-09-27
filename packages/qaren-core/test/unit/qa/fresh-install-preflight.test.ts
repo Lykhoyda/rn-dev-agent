@@ -123,7 +123,7 @@ test('strict detector includes foreign, own and generic test drivers without cha
     assert.equal(
       await probeIosExternalRunnerStrict(fakePs(driver(name, OTHER)), UDID),
       'unknown',
-      name,
+      `${name}: a container path in process text is not kernel evidence`,
     );
     assert.equal(
       await probeIosExternalRunnerStrict(fakePs(`20 /tmp/${name}\n`), UDID),
@@ -185,6 +185,122 @@ test('CLI, shell, Java and xcodebuild signatures are conservative, not arbitrary
   assert.equal(
     await probeIosExternalRunnerStrict(fakePs(`${driver('XCTRunner')}bad row\n`), UDID),
     'unknown',
+  );
+});
+
+test('only kernel evidence scopes a driver away to other simulators', async () => {
+  const SECOND = 'CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD';
+  const xcodebuild = '/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild';
+  const maestro = '/opt/bin/maestro';
+  const java = '/Library/Java/bin/java';
+  const inOther = `/Users/t/Library/Developer/CoreSimulator/Devices/${OTHER}/data/X.app/XCTRunner`;
+  const run = ['xcodebuild', 'test-without-building', '-scheme', 'RnFastRunner'];
+  const cases: Array<[string, string, string[], 'clear' | 'busy' | 'unknown', string?]> = [
+    ['runner app in another simulator', inOther, ['XCTRunner'], 'clear'],
+    [
+      'destination id',
+      xcodebuild,
+      [...run, '-destination', `platform=iOS Simulator,id=${OTHER}`],
+      'clear',
+    ],
+    [
+      'two destination ids',
+      xcodebuild,
+      [...run, '-destination', `id=${OTHER}`, '-destination', `id=${SECOND}`],
+      'clear',
+    ],
+    ['our destination', xcodebuild, [...run, '-destination', `id=${UDID}`], 'busy'],
+    [
+      'name destination',
+      xcodebuild,
+      [...run, '-destination', 'platform=iOS Simulator,name=iPhone 17'],
+      'unknown',
+    ],
+    [
+      'generic destination',
+      xcodebuild,
+      [...run, '-destination', 'generic/platform=iOS Simulator'],
+      'unknown',
+    ],
+    [
+      'mixed destinations',
+      xcodebuild,
+      [...run, '-destination', `id=${OTHER}`, '-destination', 'name=iPhone 17'],
+      'unknown',
+    ],
+    ['no destination', xcodebuild, [...run, '-xctestrun', '/tmp/x.xctestrun'], 'unknown'],
+    [
+      'destination words inside one argument',
+      xcodebuild,
+      [...run, '-resultBundlePath', `/tmp/x -destination id=${OTHER}`],
+      'unknown',
+    ],
+    ['maestro device flag', maestro, ['maestro', '--device', OTHER, 'test', 'flow.yaml'], 'clear'],
+    ['maestro device list', maestro, ['maestro', 'test', `--device=${OTHER},${SECOND}`], 'clear'],
+    [
+      'maestro partial list',
+      maestro,
+      ['maestro', 'test', '--device', `${OTHER},not-a-udid`],
+      'unknown',
+    ],
+    ['maestro without device', maestro, ['maestro', 'test', '--log', OTHER], 'unknown'],
+    [
+      'jvm maestro device flag',
+      java,
+      ['java', '-classpath', 'lib', 'maestro.cli.AppKt', '--device', OTHER, 'test'],
+      'clear',
+    ],
+    [
+      'executable contradicts argv',
+      '/usr/bin/python3',
+      [...run, '-destination', `id=${OTHER}`],
+      'unknown',
+      xcodebuild,
+    ],
+  ];
+  for (const [name, executable, argv, expected, shown = executable] of cases) {
+    const observe = async (pid: number, _timeout: number, withArgv?: boolean) => {
+      assert.equal(withArgv, true, name);
+      return { v: 1, pid, birth: { seconds: 1, micros: 0 }, executable, argv };
+    };
+    const line = `20 ${shown} ${argv.slice(1).join(' ')}`.trimEnd();
+    assert.equal(
+      await probeIosExternalRunnerStrict(fakePs(`${ordinary}${line}\n`), UDID, observe),
+      expected,
+      name,
+    );
+  }
+  const unscoped = async (pid: number) => ({
+    v: 1,
+    pid,
+    birth: { seconds: 1, micros: 0 },
+    executable: pid === 20 ? inOther : maestro,
+    argv: pid === 20 ? ['XCTRunner'] : ['maestro', 'test', 'flow.yaml'],
+  });
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      fakePs(`20 ${inOther}\n21 ${maestro} test flow.yaml\n`),
+      UDID,
+      unscoped,
+    ),
+    'unknown',
+    'a scoped driver does not excuse an unscoped one',
+  );
+  const shell = async (pid: number) => ({
+    v: 1,
+    pid,
+    birth: { seconds: 1, micros: 0 },
+    executable: '/bin/sh',
+    argv: ['/bin/sh', maestro, '--device', OTHER, 'test'],
+  });
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      fakePs(`20 /bin/sh ${maestro} --device ${OTHER} test\n`),
+      UDID,
+      shell,
+    ),
+    'unknown',
+    'a shell-wrapped Maestro stays unresolved even with a device flag',
   );
 });
 
