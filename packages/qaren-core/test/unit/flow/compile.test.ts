@@ -71,14 +71,34 @@ test('explicit null numeric fields refuse at their command', () => {
     const error = refusal(`${command}\n`);
     assert.equal(error.line, 5);
     assert.ok(error.command);
-    assert.match(error.reason, /non-negative integer/);
+    assert.match(error.reason, /integer/);
+  }
+});
+
+test('poll commands refuse zero timeouts at their source line', () => {
+  for (const [command, body] of [
+    ['extendedWaitUntil', 'visible: A'],
+    ['extendedWaitUntil', 'notVisible: A'],
+    ['scrollUntilVisible', 'element: A'],
+    ['waitForAnimationToEnd', ''],
+  ]) {
+    const fields = body ? `    ${body}\n` : '';
+    const error = refusal(`- ${command}:\n${fields}    timeout: 0\n`);
+    assert.deepEqual([error.command, error.line], [command, 5]);
+    assert.match(error.reason, /positive integer/);
   }
 });
 
 test('malformed and cyclic runFlow refuse instead of crashing', () => {
   assert.match(refusal('- runFlow:\n    file: 12\n').reason, /must be a path/);
   assert.match(refusal('- runFlow:\n    commands: true\n').reason, /must be a list/);
-  assert.match(refusal('- runFlow: a.yaml\n').reason, /nesting exceeds 5/);
+  withFlow('- runFlow: sub.yaml\n', (file, dir) => {
+    writeFileSync(join(dir, 'sub.yaml'), '- runFlow: sub.yaml\n');
+    assert.throws(
+      () => compileFlow({ file, params: {}, platform: 'ios' }),
+      (error: unknown) => error instanceof FlowCompileError && /nesting exceeds 5/.test(error.reason),
+    );
+  });
   assert.match(refusal('- runFlow: ../escape.yaml\n').reason, /must not contain/);
 });
 
@@ -294,6 +314,21 @@ test('runFlow file refs compile with their own file and line', () => {
       );
     },
   );
+});
+
+test('sub-flow appId header refuses at the parent runFlow', () => {
+  withFlow('- runFlow: sub.yaml\n', (file, dir) => {
+    writeFileSync(join(dir, 'sub.yaml'), 'appId: com.example.other\n---\n- back\n');
+    assert.throws(
+      () => compileFlow({ file, params: {}, platform: 'ios' }),
+      (error: unknown) => {
+        assert.ok(error instanceof FlowCompileError);
+        assert.deepEqual([error.command, error.line], ['runFlow', 5]);
+        assert.match(error.reason, /appId header/);
+        return true;
+      },
+    );
+  });
 });
 
 test('the enginePin header never gates compilation', () => {

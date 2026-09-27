@@ -51,6 +51,7 @@ interface Body {
   values: unknown[];
   nodes: unknown[];
   lines: LineCounter;
+  hasAppIdHeader: boolean;
 }
 
 interface Context {
@@ -117,7 +118,12 @@ function readBody(text: string, file?: string): Body {
   }
   if (!Array.isArray(values))
     throw new FlowCompileError(0, '', 'the flow body must be a list', file);
-  return { values, nodes: isSeq(doc?.contents) ? doc.contents.items : [], lines };
+  return {
+    values,
+    nodes: isSeq(doc?.contents) ? doc.contents.items : [],
+    lines,
+    hasAppIdHeader: all.length > 1 && isMap(all[0]?.contents) && all[0]!.contents.has('appId'),
+  };
 }
 
 export function compileFlow({ file, params, platform }: CompileFlowInput): Plan {
@@ -248,10 +254,10 @@ function compileCommand(
     if (resolved === '') refuse(`${what} resolves to an empty string`);
     return resolved;
   };
-  const integer = (raw: unknown, what: string, fallback: number): number => {
+  const integer = (raw: unknown, what: string, fallback: number, minimum = 0): number => {
     if (raw === undefined) return fallback;
-    if (!Number.isSafeInteger(raw) || (raw as number) < 0) {
-      refuse(`${what} must be a non-negative integer`);
+    if (!Number.isSafeInteger(raw) || (raw as number) < minimum) {
+      refuse(`${what} must be a ${minimum === 0 ? 'non-negative' : 'positive'} integer`);
     }
     return raw as number;
   };
@@ -356,6 +362,7 @@ function compileCommand(
         arg.timeout,
         'timeout',
         visible ? LOOKUP_BUDGET_MS : OPTIONAL_LOOKUP_BUDGET_MS,
+        1,
       );
       return step(
         { op: visible ? 'assertVisible' : 'assertNotVisible', selector: target },
@@ -433,7 +440,7 @@ function compileCommand(
           direction: direction(arg.direction, 'DOWN'),
         },
         'native',
-        integer(arg.timeout, 'timeout', SCROLL_UNTIL_VISIBLE_BUDGET_MS),
+        integer(arg.timeout, 'timeout', SCROLL_UNTIL_VISIBLE_BUDGET_MS, 1),
       );
     }
     case 'waitForAnimationToEnd': {
@@ -443,7 +450,7 @@ function compileCommand(
       return step(
         { op: name },
         'native',
-        Math.min(integer(options.timeout, 'timeout', SETTLE_CAP_MS), SETTLE_CAP_MS),
+        Math.min(integer(options.timeout, 'timeout', SETTLE_CAP_MS, 1), SETTLE_CAP_MS),
       );
     }
     case 'takeScreenshot': {
@@ -540,7 +547,9 @@ function compileRunFlow(
       return refuse((error as Error).message);
     }
     const file = relative(context.root, target);
-    steps = compileCommands(readBody(text, file), {
+    const body = readBody(text, file);
+    if (body.hasAppIdHeader) refuse('sub-flow appId header is not allowed');
+    steps = compileCommands(body, {
       ...context,
       depth: context.depth + 1,
       dir: dirname(target),
@@ -553,6 +562,7 @@ function compileRunFlow(
         values: options.commands as unknown[],
         nodes: isSeq(commands) ? commands.items : [],
         lines,
+        hasAppIdHeader: false,
       },
       { ...context, depth: context.depth + 1 },
     );
