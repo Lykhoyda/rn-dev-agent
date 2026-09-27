@@ -1066,3 +1066,82 @@ test('identified ancestors may be hoisted beside the native path but not sit in 
   for (const [name, nodes, panelRect, saveIndex, expected] of cases)
     assert.equal(associate(nodes, panelRect, saveIndex), expected, name);
 });
+
+test('a React scroll view identified on its native container view anchors its descendants', () => {
+  const frame = { x: 0, y: 0, width: 400, height: 700 };
+  const saveRect = { x: 10, y: 100, width: 100, height: 40 };
+  const nodes = [
+    {
+      ref: '@e0',
+      index: 0,
+      depth: 0,
+      type: 'Application',
+      rect: { x: 0, y: 0, width: 400, height: 800 },
+    },
+    {
+      ref: '@e1',
+      index: 1,
+      parentIndex: 0,
+      depth: 1,
+      type: 'Window',
+      rect: { x: 0, y: 0, width: 400, height: 800 },
+    },
+    {
+      ref: '@e2',
+      index: 2,
+      parentIndex: 1,
+      depth: 2,
+      type: 'Other',
+      identifier: 'feed',
+      rect: frame,
+    },
+    { ref: '@e3', index: 3, parentIndex: 2, depth: 3, type: 'ScrollView', rect: frame },
+    {
+      ref: '@e4',
+      index: 4,
+      parentIndex: 3,
+      depth: 4,
+      type: 'Button',
+      identifier: 'save',
+      rect: saveRect,
+    },
+  ];
+  const presence = {
+    source: 'xcui-live' as const,
+    nodes: nodes.map((_, i) => ({
+      status: i === 4 ? ('observed' as const) : ('unknown' as const),
+      labelSource: 'none' as const,
+    })),
+  };
+  const host = (
+    hostIndex: number,
+    parentHostIndex: number | null,
+    hostType: string,
+    rect: typeof frame,
+  ) => ({
+    hostIndex,
+    parentHostIndex,
+    rootIndex: 0,
+    hostType,
+    rect,
+    text: { kind: 'none' as const },
+  });
+  const evidence: ReactHostEvidence = {
+    complete: true,
+    hosts: [
+      { testID: 'feed', role: null, roleSource: 'none', capabilities: {} },
+      { testID: 'save', role: null, roleSource: 'none', capabilities: { press: true } },
+    ],
+    typography: {
+      version: 1,
+      complete: true,
+      durationMs: 10,
+      coordinateSpace: 'window-points',
+      nodes: [host(0, null, 'RCTScrollView', frame), host(1, 0, 'RCTView', saveRect)],
+    },
+  };
+  assert.deepEqual(associateHosts(nodes, evidence, presence).get(1), {
+    nativeIndex: 4,
+    anchorIndex: 4,
+  });
+});

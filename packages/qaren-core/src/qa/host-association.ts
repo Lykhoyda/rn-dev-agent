@@ -31,7 +31,9 @@ function compatible(host: string | null, native: string | undefined): boolean {
   if (host === 'RCTText' || host === 'Text') return native === 'StaticText';
   if (host === 'RCTView' || host === 'View')
     return native === 'Other' || native === 'Button' || native === 'Cell';
-  if (host === 'RCTScrollView' || host === 'ScrollView') return native === 'ScrollView';
+  // On iOS the identifier sits on the scroll view's container view, above the native ScrollView.
+  if (host === 'RCTScrollView' || host === 'ScrollView')
+    return native === 'ScrollView' || native === 'Other';
   return false;
 }
 
