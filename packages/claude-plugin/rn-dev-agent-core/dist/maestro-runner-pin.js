@@ -10222,6 +10222,7 @@ var init_authority_gate = __esm({
     "use strict";
     init_utils();
     init_registry();
+    init_authority_store();
     init_metro_origin();
     init_install_reissue();
     init_tool_profiles();
@@ -18078,7 +18079,7 @@ async function verifyActions(argv) {
 function parseArgs(argv) {
   const json2 = argv.includes("--json");
   const rootIdx = argv.indexOf("--root");
-  const root2 = rootIdx >= 0 ? argv[rootIdx + 1] ?? process.cwd() : process.cwd();
+  const root2 = resolve8(rootIdx >= 0 ? argv[rootIdx + 1] ?? process.cwd() : process.cwd());
   const positional = argv.filter((a, i) => !a.startsWith("--") && argv[i - 1] !== "--root");
   const cmd2 = positional[0] ?? "diagnose";
   return { cmd: cmd2, json: json2, root: root2 };

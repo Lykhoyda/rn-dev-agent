@@ -248,7 +248,7 @@ function parseArgs(argv: string[]): {
 } {
   const json = argv.includes('--json');
   const rootIdx = argv.indexOf('--root');
-  const root = rootIdx >= 0 ? (argv[rootIdx + 1] ?? process.cwd()) : process.cwd();
+  const root = resolve(rootIdx >= 0 ? (argv[rootIdx + 1] ?? process.cwd()) : process.cwd());
   const positional = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--root');
   const cmd = positional[0] ?? 'diagnose';
   return { cmd, json, root };

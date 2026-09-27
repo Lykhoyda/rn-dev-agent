@@ -8297,8 +8297,9 @@ function runWithBusyRetry(operation, timeoutMs = DATABASE_OPERATION_TIMEOUT_MS) 
     } catch (error) {
       const code = error.code;
       const message = error instanceof Error ? error.message : "";
-      if (code !== "SQLITE_BUSY" && !/database is (?:locked|busy)/i.test(message))
-        throw error;
+      if (code !== "SQLITE_BUSY" && !/database is (?:locked|busy)/i.test(message)) {
+        throw unreadableStoreError(error) ?? error;
+      }
       const remaining = deadline - Date.now();
       if (remaining <= 0)
         throw error;
@@ -8306,12 +8307,25 @@ function runWithBusyRetry(operation, timeoutMs = DATABASE_OPERATION_TIMEOUT_MS) 
     }
   }
 }
+function unreadableStoreError(error) {
+  const errcode = error.errcode;
+  if (typeof errcode !== "number" || !UNREADABLE_SQLITE_PRIMARY_CODES.has(errcode & 255)) {
+    return null;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return new AuthorityStoreUnavailableError(`AUTHORITY_STORE_UNAVAILABLE: authority registry is unreadable (${message})`, { cause: error });
+}
 function retryingDatabase(database) {
   return {
     close: () => database.close(),
     exec: (sql) => runWithBusyRetry(() => database.exec(sql)),
     prepare: (sql) => {
-      const statement = database.prepare(sql);
+      let statement;
+      try {
+        statement = database.prepare(sql);
+      } catch (error) {
+        throw unreadableStoreError(error) ?? error;
+      }
       return {
         get: (...params) => runWithBusyRetry(() => statement.get(...params)),
         run: (...params) => runWithBusyRetry(() => statement.run(...params)),
@@ -8385,7 +8399,7 @@ function openAuthorityStore(path, options = {}) {
     throw new AuthorityStoreUnavailableError("authority registry could not be opened", { cause });
   }
 }
-var require2, INITIALIZATION_WAIT, INITIALIZATION_TIMEOUT_MS, DATABASE_OPERATION_TIMEOUT_MS, AuthorityStoreUnavailableError;
+var require2, INITIALIZATION_WAIT, INITIALIZATION_TIMEOUT_MS, DATABASE_OPERATION_TIMEOUT_MS, AuthorityStoreUnavailableError, UNREADABLE_SQLITE_PRIMARY_CODES;
 var init_authority_store = __esm({
   "packages/rn-dev-agent-core/dist/session/authority-store.js"() {
     "use strict";
@@ -8400,6 +8414,7 @@ var init_authority_store = __esm({
         this.name = "AuthorityStoreUnavailableError";
       }
     };
+    UNREADABLE_SQLITE_PRIMARY_CODES = /* @__PURE__ */ new Set([10, 11, 26]);
   }
 });
 
@@ -12686,6 +12701,7 @@ var init_authority_gate = __esm({
     "use strict";
     init_utils();
     init_registry();
+    init_authority_store();
     init_metro_origin();
     init_install_reissue();
     init_tool_profiles();

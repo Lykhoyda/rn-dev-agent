@@ -1941,6 +1941,37 @@ test('diagnose-actions --json prints counts and refusal classes only', () => {
   assert.equal(readFileSync(join(dir, 'login.yaml'), 'utf8'), before);
 });
 
+for (const form of ['relative', 'absolute'] as const) {
+  test(`migrate-actions and diagnose-actions accept a ${form} --root from another cwd`, (t) => {
+    const parent = realpathSync(mkdtempSync(join(tmpdir(), 'rn-action-migrate-root-')));
+    t.after(() => rmSync(parent, { recursive: true, force: true }));
+    const app = join(parent, 'test-app');
+    const dir = join(app, '.rn-agent', 'actions');
+    mkdirSync(dir, { recursive: true });
+    seedCompatAction(dir, 'login');
+    const root = form === 'relative' ? 'test-app' : app;
+    const cli = (cmd: string) =>
+      spawnSync(process.execPath, [PIN_CLI, cmd, '--root', root, '--json'], {
+        cwd: parent,
+        encoding: 'utf8',
+      });
+
+    const migrated = cli('migrate-actions');
+    assert.equal(migrated.status, 0, migrated.stdout + migrated.stderr);
+    const out = JSON.parse(migrated.stdout);
+    assert.equal(out.root, app);
+    assert.deepEqual(
+      out.results.map((r: { id: string; status: string }) => [r.id, r.status]),
+      [['login', 'migrated']],
+    );
+    assert.match(readFileSync(join(dir, 'login.yaml'), 'utf8'), /enginePin: /);
+
+    const diagnosed = cli('diagnose-actions');
+    assert.equal(diagnosed.status, 0, diagnosed.stdout + diagnosed.stderr);
+    assert.equal(JSON.parse(diagnosed.stdout).compatible, 1);
+  });
+}
+
 test('actionReplayRefusal labels unmigrated pin vs regex vs missing binary', () => {
   assert.equal(
     actionReplayRefusal({

@@ -182,6 +182,9 @@ Owned actions must carry `# enginePin: maestro-runner@1.1.27` or newer. Older or
 pins refuse replay until you run setup or re-pin compatible actions with
 `node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app>`.
 Unsupported regex text selectors require rewriting as literal text or `id:` before replay.
+For manual `migrate-actions` or `diagnose-actions`, `--root` accepts an absolute app path or one
+relative to the current directory (for example, `--root test-app` from its parent); omitting it
+uses the current directory.
 Bumping the pin follows the upgrade ritual documented beside the manifest: replay the
 committed action corpus on both platforms, reconcile known quirks, then update the manifest.
 
