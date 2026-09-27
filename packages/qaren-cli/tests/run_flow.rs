@@ -381,6 +381,26 @@ fn script_preflight(mock: &mut MockRunner, repo: &Path) {
 }
 
 fn script_preflight_inventory(mock: &mut MockRunner, repo: &Path, command: &str, inventory: &str) {
+    script_preflight_inventory_until_lease(mock, repo, command, inventory);
+    mock.expect_run("lsof", free_port());
+}
+
+fn script_preflight_until_lease(mock: &mut MockRunner, repo: &Path) {
+    script_preflight_inventory_until_lease(
+        mock,
+        repo,
+        "simctl list devices booted",
+        &booted_json(),
+    );
+}
+
+// Everything up to the lease claim; the Metro port is checked only after the lease is held.
+fn script_preflight_inventory_until_lease(
+    mock: &mut MockRunner,
+    repo: &Path,
+    command: &str,
+    inventory: &str,
+) {
     mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
     script_plan(mock, repo);
     mock.expect_run(command, CmdOutput::success(inventory));
@@ -394,7 +414,6 @@ fn script_preflight_inventory(mock: &mut MockRunner, repo: &Path, command: &str,
     for tool in IOS_TOOLS {
         mock.expect_run("which", CmdOutput::success(&format!("/usr/bin/{tool}\n")));
     }
-    mock.expect_run("lsof", free_port());
     mock.expect_run("df", df_ok());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n")); // self lstart
     mock.expect_run("ps", CmdOutput::success("qaren check\n")); // self command
@@ -689,8 +708,9 @@ fn check_runs_the_phases_in_order_and_ends_pass_with_a_report() {
             "simctl-list-booted",
             "git-toplevel",
             "which",
-            "lsof-port",
             "df",
+            "ps-lstart",
+            "lsof-port",
             "pnpm-install",
             "expo-ios-build-help",
             "git-ls-files",
@@ -815,6 +835,98 @@ fn a_deadline_overrun_fails_naming_the_walk_phase_and_still_tears_down() {
 }
 
 #[test]
+fn a_cancelled_walk_is_a_refusal_that_still_tears_down_and_releases_the_lease() {
+    let (repo, app) = app_repo();
+    let mut mock = MockRunner::new();
+    script_preflight(&mut mock, &repo);
+    script_provision(&mut mock);
+    let one_row = format!("{}\n", envelope(2, "row", &row(1, "step")));
+    mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
+    script_core_identity(&mut mock);
+    script_teardown(&mut mock);
+    mock.cancel_after = Some(("-p 9000".into(), "received SIGTERM".into()));
+
+    let receipt = run(&mut mock, &request(&repo, &app, 30));
+
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    let failure = receipt.failure.as_ref().unwrap();
+    assert_eq!(failure.code, FailureCode::RunCancelled);
+    assert_eq!(failure.phase, "walk");
+    assert!(
+        failure.detail.contains("received SIGTERM"),
+        "{}",
+        failure.detail
+    );
+    assert!(
+        *mock.piped_terminated[1].lock().unwrap(),
+        "the core gets SIGTERM first so it can close its device session"
+    );
+    assert!(*mock.piped_killed[1].lock().unwrap());
+    assert_eq!(receipt.ledger.as_ref().unwrap().verdict, "REFUSED");
+    assert_eq!(receipt.cleanup["metro"], "removed");
+    assert_eq!(receipt.cleanup["device_lease"], "removed");
+    assert_eq!(mock.remaining(), 0);
+    let record = RunRecord::load(&repo.join("runs"), &run_id()).unwrap();
+    assert_eq!(record.phase, Phase::Cleaned);
+    assert!(record.resources.lease.is_none());
+}
+
+#[test]
+fn a_cancel_during_the_build_stops_it_with_proof_and_releases_both_locks() {
+    let (repo, app) = app_repo();
+    let req = request(&repo, &app, 30);
+    let mut mock = MockRunner::new();
+    script_preflight(&mut mock, &repo);
+    common::script_ios_deps(&mut mock);
+    mock.expect_run("ls-files", CmdOutput::success(""));
+    mock.expect_spawn_piped("expo run:ios", 5000, "", None);
+    mock.expect_run("ps", CmdOutput::success(LSTART));
+    mock.expect_run("ps", CmdOutput::success("qaren-build"));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n5000 5000 S\n"));
+    mock.expect_run("ps -p 5000 -o lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("ps -p 5000 -o stat=", CmdOutput::success("S"));
+    mock.expect_run("/bin/kill -TERM -- -5000", CmdOutput::success(""));
+    mock.expect_run("/bin/kill -KILL -- -5000", CmdOutput::success(""));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+    mock.cancel_after = Some(("-p 5000".into(), "received SIGINT".into()));
+
+    let receipt = run(&mut mock, &req);
+
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    let failure = receipt.failure.as_ref().unwrap();
+    assert_eq!(failure.code, FailureCode::RunCancelled);
+    assert_eq!(failure.phase, "build");
+    assert!(failure.detail.contains("received SIGINT"));
+    assert_eq!(receipt.cleanup["device_lease"], "removed");
+    assert_eq!(mock.remaining(), 0);
+    assert!(!req.lock_root.join("native-build-ios").exists());
+}
+
+#[test]
+fn a_cancel_between_phases_stops_before_the_next_phase_and_releases_the_lease() {
+    let (repo, app) = app_repo();
+    let mut mock = MockRunner::new();
+    script_preflight(&mut mock, &repo);
+    common::script_ios_deps(&mut mock);
+    mock.cancel_after = Some((
+        "expo run:ios --help".into(),
+        "the calling process exited".into(),
+    ));
+
+    let receipt = run(&mut mock, &request(&repo, &app, 30));
+
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    let failure = receipt.failure.as_ref().unwrap();
+    assert_eq!(failure.code, FailureCode::RunCancelled);
+    assert_eq!(failure.phase, "build");
+    assert!(failure.detail.contains("the calling process exited"));
+    assert_eq!(receipt.cleanup["device_lease"], "removed");
+    assert_eq!(mock.remaining(), 0);
+    let record = RunRecord::load(&repo.join("runs"), &run_id()).unwrap();
+    assert!(record.resources.lease.is_none());
+}
+
+#[test]
 fn a_leased_device_refuses_before_any_provisioning() {
     for boot in [false, true] {
         let (repo, app) = app_repo();
@@ -832,14 +944,14 @@ fn a_leased_device_refuses_before_any_provisioning() {
 
         let mut mock = MockRunner::new();
         if boot {
-            script_preflight_inventory(
+            script_preflight_inventory_until_lease(
                 &mut mock,
                 &repo,
                 "simctl list devices -j",
                 &available_inventory("Shutdown"),
             );
         } else {
-            script_preflight(&mut mock, &repo);
+            script_preflight_until_lease(&mut mock, &repo);
         }
         mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:00:00 2026\n")); // holder alive
         mock.expect_run("ps", CmdOutput::success("S\n"));
@@ -879,6 +991,156 @@ fn a_leased_device_refuses_before_any_provisioning() {
             "check-earlier"
         );
     }
+}
+
+const EARLIER_BIRTH: &str = "Wed Aug 12 15:00:00 2026";
+
+fn plant_holder(repo: &Path, edit: impl FnOnce(&mut RunRecord)) -> qaren::lease::Lease {
+    let identity = common::identity(4242, EARLIER_BIRTH);
+    let held = qaren::lease::acquire(
+        &mut MockRunner::new(),
+        &repo.join(".locks"),
+        Platform::Ios,
+        UDID,
+        "check-earlier",
+        Some(identity.clone()),
+    )
+    .unwrap();
+    let mut record = common::base_record(
+        repo,
+        &common::ios_scenario_yaml(8791),
+        "check-earlier",
+        Phase::Walking,
+    );
+    record.prepare = Some(identity);
+    record.resources.lease = Some(held.clone());
+    record.resources.device_borrowed = true;
+    edit(&mut record);
+    record.save(&repo.join("runs")).unwrap();
+    held
+}
+
+fn script_unknown_admission(mock: &mut MockRunner) {
+    mock.expect_run(
+        "fresh-install-preflight.js --platform ios --device",
+        CmdOutput::success(
+            &serde_json::json!({"v":1,"platform":"ios","deviceId":UDID,"status":"unknown"})
+                .to_string(),
+        ),
+    );
+}
+
+#[test]
+fn a_dead_holders_run_is_cleaned_up_and_its_lease_reclaimed_without_a_manual_step() {
+    for holder_ps in ["", "Thu Aug 13 09:00:00 2026\n"] {
+        let (repo, app) = app_repo();
+        let held = plant_holder(&repo, |_| {});
+        let mut mock = MockRunner::new();
+        script_preflight_until_lease(&mut mock, &repo);
+        mock.expect_run("ps", CmdOutput::success(holder_ps));
+        mock.expect_run("lsof", free_port());
+        script_unknown_admission(&mut mock);
+        let mut req = request(&repo, &app, 30);
+        req.fresh_install = true;
+
+        let receipt = run(&mut mock, &req);
+
+        assert_eq!(receipt.failure.as_ref().unwrap().phase, "fresh_install");
+        assert_eq!(receipt.outcomes["recovered_run"], "check-earlier");
+        assert_eq!(receipt.cleanup["device_lease"], "removed");
+        assert_eq!(mock.remaining(), 0);
+        let earlier = RunRecord::load(&req.runs_root, "check-earlier").unwrap();
+        assert_eq!(earlier.phase, Phase::Cleaned);
+        assert!(earlier.resources.lease.is_none());
+        assert!(!held.lock_dir.exists());
+    }
+}
+
+#[test]
+fn a_dead_holder_without_a_matching_record_or_clean_proof_keeps_its_lease() {
+    type Plant = Box<dyn Fn(&Path)>;
+    let cases: [(&str, Plant); 3] = [
+        (
+            "no run record",
+            Box::new(|repo: &Path| {
+                plant_holder(repo, |_| {});
+                std::fs::remove_dir_all(repo.join("runs/check-earlier")).unwrap();
+            }),
+        ),
+        (
+            "record owned by another process",
+            Box::new(|repo: &Path| {
+                plant_holder(repo, |r| {
+                    r.prepare = Some(common::identity(5555, EARLIER_BIRTH));
+                });
+            }),
+        ),
+        (
+            "unproven build process",
+            Box::new(|repo: &Path| {
+                plant_holder(repo, |r| r.resources.begin_build().unwrap());
+            }),
+        ),
+    ];
+    for (case, plant) in cases {
+        let (repo, app) = app_repo();
+        plant(&repo);
+        let lock_dir = repo
+            .join(".locks")
+            .join(qaren::lease::lock_name(Platform::Ios, UDID));
+        let mut mock = MockRunner::new();
+        script_preflight_until_lease(&mut mock, &repo);
+        mock.expect_run("ps", CmdOutput::success(""));
+        let mut req = request(&repo, &app, 30);
+        req.fresh_install = true;
+
+        let receipt = run(&mut mock, &req);
+
+        assert_eq!(receipt.result, ReceiptResult::Refused, "{case}");
+        let failure = receipt.failure.unwrap();
+        assert_eq!(failure.code, FailureCode::DeviceBusy, "{case}");
+        assert!(
+            failure.detail.contains("check-earlier"),
+            "{case}: {}",
+            failure.detail
+        );
+        assert!(
+            failure.next_action.contains("qaren cleanup check-earlier"),
+            "{case}: {}",
+            failure.next_action
+        );
+        assert_eq!(receipt.run_id, "none", "{case}");
+        assert_eq!(mock.remaining(), 0, "{case}");
+        assert_eq!(
+            qaren::buildplan::read_holder(&lock_dir).unwrap().run_id,
+            "check-earlier",
+            "{case}"
+        );
+        if case == "record owned by another process" {
+            let earlier = RunRecord::load(&req.runs_root, "check-earlier").unwrap();
+            assert_eq!(earlier.phase, Phase::Walking, "{case}: nothing was cleaned");
+        }
+    }
+}
+
+#[test]
+fn a_holder_with_unknown_liveness_is_never_cleaned_up() {
+    let (repo, app) = app_repo();
+    plant_holder(&repo, |_| {});
+    let mut mock = MockRunner::new();
+    script_preflight_until_lease(&mut mock, &repo);
+    mock.expect_run("ps", CmdOutput::failed(1, "ps: operation not permitted"));
+    let mut req = request(&repo, &app, 30);
+    req.fresh_install = true;
+
+    let receipt = run(&mut mock, &req);
+
+    let failure = receipt.failure.unwrap();
+    assert_eq!(failure.code, FailureCode::DeviceBusy);
+    assert!(failure.next_action.contains("qaren cleanup check-earlier"));
+    assert_eq!(mock.remaining(), 0);
+    let earlier = RunRecord::load(&req.runs_root, "check-earlier").unwrap();
+    assert_eq!(earlier.phase, Phase::Walking);
 }
 
 #[test]
@@ -1033,7 +1295,6 @@ fn an_unreadable_disk_budget_fails_closed_before_any_claim() {
     for tool in IOS_TOOLS {
         mock.expect_run("which", CmdOutput::success(&format!("/usr/bin/{tool}\n")));
     }
-    mock.expect_run("lsof", free_port());
     mock.expect_run("df", CmdOutput::failed(1, "df: No such file or directory"));
 
     let receipt = run(&mut mock, &request(&repo, &app, 30));
@@ -1141,10 +1402,10 @@ fn two_booted_simulators_refuse_without_a_device_and_borrow_the_named_one_with_i
     for tool in IOS_TOOLS {
         mock.expect_run("which", CmdOutput::success(&format!("/usr/bin/{tool}\n")));
     }
-    mock.expect_run("lsof", free_port());
     mock.expect_run("df", df_ok());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
     mock.expect_run("ps", CmdOutput::success("qaren check\n"));
+    mock.expect_run("lsof", free_port());
     script_provision(&mut mock);
     mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
     script_core_identity(&mut mock);

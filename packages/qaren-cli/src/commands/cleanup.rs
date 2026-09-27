@@ -49,6 +49,57 @@ pub fn cleanup(runner: &mut dyn Runner, runs_root: &Path, run_id: &str) -> Recei
     cleanup_with(runner, runs_root, run_id, None)
 }
 
+// A dead holder's device lease is reclaimed only through that run's own cleanup proofs.
+pub fn reclaim_dead_holder(
+    runner: &mut dyn Runner,
+    runs_root: &Path,
+    busy: &crate::lease::Busy,
+) -> Result<String, Failure> {
+    let (Some(holder), Some(PidLiveness::Dead | PidLiveness::AliveForeign)) =
+        (busy.holder.as_ref(), busy.liveness)
+    else {
+        return Err(busy.failure.clone());
+    };
+    let run_id = holder.run_id.clone();
+    let refuse = |detail: String| {
+        Failure::new(
+            "lease",
+            FailureCode::DeviceBusy,
+            format!("the device lease is held by run {run_id}, whose qaren process is gone, but {detail}"),
+            format!("run `qaren cleanup {run_id}` against that run's runs root once its resources are accounted for"),
+        )
+    };
+    let record = RunRecord::load(runs_root, &run_id)
+        .map_err(|f| refuse(format!("its run record is not readable here: {}", f.detail)))?;
+    let owned_by_holder = matches!(
+        (&record.prepare, &holder.identity),
+        (Some(a), Some(b)) if a.pid == b.pid && a.started_at == b.started_at
+    ) && record
+        .resources
+        .lease
+        .as_ref()
+        .is_some_and(|l| l.holder == holder.holder && l.run_id == holder.run_id);
+    if !owned_by_holder {
+        return Err(refuse(
+            "its run record does not name the lease holder's process; nothing was cleaned".into(),
+        ));
+    }
+    let receipt = cleanup_with(runner, runs_root, &run_id, None);
+    if receipt.result != ReceiptResult::Cleaned {
+        let unproven: Vec<String> = receipt
+            .cleanup
+            .iter()
+            .filter(|(_, outcome)| !matches!(outcome.as_str(), "removed" | "absent" | "kept"))
+            .map(|(leg, outcome)| format!("{leg}={outcome}"))
+            .collect();
+        return Err(refuse(format!(
+            "its cleanup is not proven ({})",
+            unproven.join(", ")
+        )));
+    }
+    Ok(run_id)
+}
+
 // `remove_app` confirms "<run-id>/<remote-serial>/<app-id>"; None skips uninstall.
 pub fn cleanup_with(
     runner: &mut dyn Runner,

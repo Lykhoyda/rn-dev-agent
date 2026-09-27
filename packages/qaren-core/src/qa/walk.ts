@@ -28,6 +28,7 @@ import { createJev } from './jev.js';
 import { preflightPlan } from './preflight.js';
 import { summarizeJev } from './ledger.js';
 import { redactApiKey } from '../util/redact.js';
+import { watchParent } from './parent-watch.js';
 import { prove } from './prove.js';
 import { type ActResult, type WalkerDeps, runPlan } from './walker.js';
 import {
@@ -86,7 +87,15 @@ interface Session {
 
 type Handler<A> = (args: A) => Promise<ToolResult>;
 
+let stopping = false;
+
 function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActResult> {
+  if (stopping)
+    return Promise.resolve({
+      ok: false,
+      proven: false,
+      error: 'RUN_CANCELLED: the device session is closing',
+    });
   return handler().then(
     (result) => {
       try {
@@ -238,6 +247,7 @@ async function openSession(
 async function main(): Promise<void> {
   if (process.argv[2] === '--parse' || process.argv[2] === '--preflight')
     return parseOnly(process.argv[3] ?? '', process.argv[2] === '--preflight');
+  const cliParent = process.ppid;
   const request = await readRequest(process.stdin);
   const writer = createWriter((line) => process.stdout.write(redactApiKey(line)), request.runId);
   const rows: LedgerRow[] = [];
@@ -280,12 +290,18 @@ async function main(): Promise<void> {
     const { code, message } = describeError(error);
     return refuse(code, message);
   }
-  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.once(signal, () => {
-      log(`${signal}: closing the device session`);
-      void session.close().finally(() => process.exit(1));
-    });
-  }
+  const stop = (why: string): void => {
+    if (stopping) return;
+    stopping = true;
+    log(`${why}: closing the device session`);
+    void session.close().finally(() => process.exit(1));
+  };
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) process.once(signal, () => stop(signal));
+  watchParent(
+    cliParent,
+    () => process.ppid,
+    () => stop('the qaren CLI exited'),
+  );
   try {
     const ledger = await runPlan(blocks, session.deps, request.preflightCalls);
     return finish(resultForWalk(ledger, request.lease), () => session.close());

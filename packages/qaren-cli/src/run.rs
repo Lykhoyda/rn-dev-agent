@@ -159,7 +159,6 @@ fn run_inner(
     scenario.validate()?;
     let cand = candidate::resolve(runner, &scenario, &req.project_root)?;
     prepare::check_prereqs(runner, &scenario, req.android_home.as_deref())?;
-    prepare::check_port_free(runner, config.metro_port)?;
     std::fs::create_dir_all(&req.runs_root).map_err(|e| {
         Failure::new(
             "preflight",
@@ -172,14 +171,37 @@ fn run_inner(
 
     let run_id = format!("check-{}", timefmt::compact_utc(started_ms));
     let identity = capture_pid_identity(runner, std::process::id() as i32);
-    let lease = lease::acquire(
+    let mut recovered = None;
+    let lease = match lease::try_acquire(
         runner,
         &req.lock_root,
         req.platform,
         &device.id,
         &run_id,
         identity.clone(),
-    )?;
+    ) {
+        Ok(lease) => lease,
+        Err(busy) if busy.failure.code == FailureCode::DeviceBusy => {
+            recovered = Some(crate::commands::cleanup::reclaim_dead_holder(
+                runner,
+                &req.runs_root,
+                &busy,
+            )?);
+            lease::acquire(
+                runner,
+                &req.lock_root,
+                req.platform,
+                &device.id,
+                &run_id,
+                identity.clone(),
+            )?
+        }
+        Err(busy) => return Err(busy.failure),
+    };
+    // After reclaim, so a dead holder's surviving Metro is stopped by its own cleanup first.
+    if let Err(f) = prepare::check_port_free(runner, config.metro_port) {
+        return Err(lease::release_or_annotate(&lease, f));
+    }
 
     let run_dir = RunRecord::run_dir(&req.runs_root, &run_id);
     if let Err(f) = claim_run_dir(&run_dir) {
@@ -225,7 +247,13 @@ fn run_inner(
         notes: Vec::new(),
         verb: "check",
     };
+    if let Some(earlier) = recovered {
+        ctx.notes.push(("recovered_run".to_string(), earlier));
+    }
     let t = ctx.mark("preflight", started_ms);
+    if let Err(f) = ensure_running(&*ctx.runner, "deps") {
+        return Ok(finish_failed(ctx, f));
+    }
 
     if req.fresh_install || req.boot_device {
         if let Err(f) = core::fresh_install_admission(
@@ -274,6 +302,9 @@ fn run_inner(
         }
     }
     let t = ctx.mark("deps", t);
+    if let Err(f) = ensure_running(&*ctx.runner, "build") {
+        return Ok(finish_failed(ctx, f));
+    }
 
     let plan_decision = match prepare::plan_build(&mut ctx) {
         Ok(plan) => plan,
@@ -316,6 +347,9 @@ fn run_inner(
         prepare::release_build_lock(&mut ctx);
     }
     let t = ctx.mark("verify", t);
+    if let Err(f) = ensure_running(&*ctx.runner, "walk") {
+        return Ok(finish_failed(ctx, f));
+    }
 
     ctx.record.phase = Phase::Walking;
     let at = timefmt::iso8601_utc(ctx.runner.now_epoch_ms());
@@ -426,12 +460,14 @@ fn run_inner(
         }
         Verdict::Refused { code, message } => (
             ReceiptResult::Refused,
-            Some(Failure::new(
-                "prove",
-                refusal_code(code),
-                format!("{code}: {message}"),
-                "resolve the refusal, then re-run",
-            )),
+            Some(outcome.failure.clone().unwrap_or_else(|| {
+                Failure::new(
+                    "prove",
+                    refusal_code(code),
+                    format!("{code}: {message}"),
+                    "resolve the refusal, then re-run",
+                )
+            })),
         ),
     };
     ctx.record.failure = failure.clone();
@@ -458,6 +494,13 @@ fn run_inner(
         receipt.next_action = format!("qaren cleanup {run_id} --json");
     }
     Ok(receipt)
+}
+
+fn ensure_running(runner: &dyn Runner, next_phase: &str) -> Result<(), Failure> {
+    match runner.cancellation() {
+        Some(reason) => Err(Failure::cancelled(next_phase, &reason)),
+        None => Ok(()),
+    }
 }
 
 fn refusal_code(code: &str) -> FailureCode {
