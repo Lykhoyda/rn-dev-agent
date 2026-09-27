@@ -92528,7 +92528,7 @@ function buildGracefulShutdown(deps) {
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
 import { createHash as createHash22 } from "node:crypto";
 import { execFileSync as execFileSync17 } from "node:child_process";
-import { closeSync as closeSync13, existsSync as existsSync33, mkdirSync as mkdirSync21, openSync as openSync13, readFileSync as readFileSync35, statSync as statSync15, unlinkSync as unlinkSync16, writeFileSync as writeFileSync18, writeSync as writeSync3 } from "node:fs";
+import { closeSync as closeSync13, existsSync as existsSync33, mkdirSync as mkdirSync21, openSync as openSync13, readFileSync as readFileSync35, renameSync as renameSync11, statSync as statSync15, unlinkSync as unlinkSync16, writeFileSync as writeFileSync18, writeSync as writeSync3 } from "node:fs";
 import { tmpdir as tmpdir12, userInfo as userInfo2 } from "node:os";
 import { join as join52, resolve as resolve19 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
@@ -92691,7 +92691,9 @@ var Lockfile = class {
       return false;
     body.lastHeartbeat = this.opts.clock();
     try {
-      writeFileSync18(this.lockPath, JSON.stringify(body, null, 2), { encoding: "utf8" });
+      const nextPath = `${this.lockPath}.${this.opts.pid}.tmp`;
+      writeFileSync18(nextPath, JSON.stringify(body, null, 2), { encoding: "utf8" });
+      renameSync11(nextPath, this.lockPath);
     } catch {
     }
     return true;
@@ -95198,7 +95200,7 @@ init_sources();
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname31, join as join59 } from "node:path";
-import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync20, renameSync as renameSync11, readFileSync as readFileSync39, readdirSync as readdirSync17, existsSync as existsSync35 } from "node:fs";
+import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync20, renameSync as renameSync12, readFileSync as readFileSync39, readdirSync as readdirSync17, existsSync as existsSync35 } from "node:fs";
 import { createHash as createHash23 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
@@ -95250,7 +95252,7 @@ function freezeLockedTest(projectRoot, source, ctx) {
   };
   const tmp = `${filePath}.tmp`;
   writeFileSync20(tmp, serializeLockedTest(meta), "utf8");
-  renameSync11(tmp, filePath);
+  renameSync12(tmp, filePath);
   return { ...meta, filePath };
 }
 function loadLockedTest(projectRoot, id) {
@@ -95453,7 +95455,7 @@ function createLockE2eTestHandler(deps = {}) {
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 import { join as join61 } from "node:path";
-import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync21, renameSync as renameSync12, readFileSync as readFileSync41, existsSync as existsSync36 } from "node:fs";
+import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync21, renameSync as renameSync13, readFileSync as readFileSync41, existsSync as existsSync36 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -95514,7 +95516,7 @@ function writeJsonAtomic(file, value) {
   mkdirSync23(join61(file, ".."), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync21(tmp, JSON.stringify(value, null, 2), "utf8");
-  renameSync12(tmp, file);
+  renameSync13(tmp, file);
 }
 function loadIndex(projectRoot) {
   const file = join61(e2eRunsDirFor(projectRoot), "index.json");
@@ -95562,7 +95564,7 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
 import { join as join62 } from "node:path";
-import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync22, renameSync as renameSync13, readFileSync as readFileSync42, readdirSync as readdirSync18, existsSync as existsSync37 } from "node:fs";
+import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync22, renameSync as renameSync14, readFileSync as readFileSync42, readdirSync as readdirSync18, existsSync as existsSync37 } from "node:fs";
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "done",
   "failed",
@@ -95581,7 +95583,7 @@ function writeRequest(projectRoot, req) {
   mkdirSync24(requestsDir(projectRoot), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync22(tmp, JSON.stringify(req, null, 2), "utf8");
-  renameSync13(tmp, file);
+  renameSync14(tmp, file);
 }
 function loadRequest(projectRoot, runId) {
   const file = requestPath(projectRoot, runId);
