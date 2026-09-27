@@ -176,6 +176,19 @@ test('semantic actions keep separate native controls with equal IDs and exclude 
   assert.equal(screen.elements.length, 3);
 });
 
+test('an unknown capability refusal names the operation, ref and kind but not the label', () => {
+  const screen = attested([
+    element('@e14', {
+      kind: 'text',
+      label: 'Welcome back, Anton',
+      semantic: { press: 'unknown', fill: 'unknown', visibility: 'visible' },
+    }),
+  ]);
+  const result = projection.semanticActionView(screen, 'press');
+  assert.ok('refuse' in result);
+  assert.equal(result.reason, 'an observation has unknown press capability (@e14, text)');
+});
+
 test('unknown capabilities, missing facts and non-hittable controls cannot create an action winner', () => {
   for (const competitor of [
     element('@unknown', { semantic: { press: 'unknown', fill: 'unknown', visibility: 'visible' } }),

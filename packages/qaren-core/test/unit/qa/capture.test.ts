@@ -94,6 +94,8 @@ test('an incomplete native capture names its causes as content-free codes', asyn
     'node-count-mismatch',
     'presence-incomplete',
     'presence-ms=5012',
+    'nodes=1',
+    'reported-observed=0',
   ]);
   const view = visibilityView(screen);
   assert.ok('refuse' in view);
@@ -118,19 +120,31 @@ test('discarded presence evidence on a complete native capture names why', async
       'runner could not finish',
       { complete: false, startedUptimeMs: 0, endedUptimeMs: 5_001 },
       100,
-      ['presence-incomplete', 'presence-ms=5001'],
+      ['presence-incomplete', 'presence-ms=5001', 'nodes=1', 'reported-observed=0'],
     ],
     [
       'evidence fails validation',
       { complete: true, startedUptimeMs: 0, endedUptimeMs: 1_200 },
       1_300,
-      ['presence-rejected', 'presence-ms=1200', 'capture-ms=1300'],
+      [
+        'presence-rejected',
+        'presence-ms=1200',
+        'nodes=1',
+        'reported-observed=0',
+        'capture-ms=1300',
+      ],
     ],
     [
       'capture outlived the budget',
       { complete: true, startedUptimeMs: 0, endedUptimeMs: 3_100 },
       5_400,
-      ['presence-over-budget', 'presence-ms=3100', 'capture-ms=5400'],
+      [
+        'capture-over-budget',
+        'presence-ms=3100',
+        'nodes=1',
+        'reported-observed=0',
+        'capture-ms=5400',
+      ],
     ],
   ];
   for (const [name, presenceCapture, elapsed, causes] of cases) {

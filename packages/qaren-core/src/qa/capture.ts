@@ -73,21 +73,25 @@ const SNAPSHOT_REASONS = new Set<unknown>(['empty-capture', 'snapshot-ref-freshn
 
 function presenceCauses(
   capture: unknown,
+  nodes: NativeNode[],
   evaluated: boolean,
   withinBudget: boolean,
   elapsed: number,
 ): string[] {
   if (!isRecord(capture)) return [];
   const { startedUptimeMs: started, endedUptimeMs: ended } = capture;
-  const ms =
-    typeof started === 'number' && typeof ended === 'number' && Number.isFinite(ended - started)
+  const measured = [
+    ...(typeof started === 'number' && typeof ended === 'number' && Number.isFinite(ended - started)
       ? [`presence-ms=${Math.round(ended - started)}`]
-      : [];
-  if (capture.complete !== true) return ['presence-incomplete', ...ms];
+      : []),
+    `nodes=${nodes.length}`,
+    `reported-observed=${nodes.filter((node) => isRecord(node.presence) && node.presence.status === 'observed').length}`,
+  ];
+  if (capture.complete !== true) return ['presence-incomplete', ...measured];
   if (!evaluated) return [];
   return [
-    withinBudget ? 'presence-rejected' : 'presence-over-budget',
-    ...ms,
+    withinBudget ? 'presence-rejected' : 'capture-over-budget',
+    ...measured,
     `capture-ms=${Math.round(elapsed)}`,
   ];
 }
@@ -191,6 +195,7 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
       ? []
       : presenceCauses(
           native.presenceCapture,
+          nodes,
           captureCoverage.native === 'complete',
           withinBudget,
           elapsed,

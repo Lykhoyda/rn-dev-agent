@@ -519,7 +519,7 @@ export function semanticActionView(screen: Screen, kind: 'press' | 'fill'): Proj
     if (!e.semantic) return incomplete('an observation has no semantic facts');
     if (e.semantic.visibility === 'hidden' || e.semantic[kind] === 'unsupported') continue;
     if (e.semantic[kind] !== 'supported')
-      return incomplete('an observation has unknown operation capability');
+      return incomplete(`an observation has unknown ${kind} capability (${e.ref}, ${e.kind})`);
     if (e.semantic.nativePresence && e.semantic.visibility !== 'visible')
       return incomplete('a native control lacks positive platform presence');
     if (e.semantic.visibility !== 'offscreen' && !e.hittable)

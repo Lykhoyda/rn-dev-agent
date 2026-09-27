@@ -2,4 +2,4 @@
 "qaren": patch
 ---
 
-A `SCREEN_EVIDENCE_INCOMPLETE` coverage refusal now names the capture and projected coverage of each side and the codes that made a native capture incomplete.
+A `SCREEN_EVIDENCE_INCOMPLETE` refusal now names the coverage of each side, the codes that made a native capture incomplete, and the element whose capability is unknown.
