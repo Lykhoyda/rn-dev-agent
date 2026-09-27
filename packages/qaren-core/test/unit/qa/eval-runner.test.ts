@@ -29,7 +29,8 @@ test('frozen Screens retain literal/check coverage and refuse semantic actions w
               {
                 type: 'noul',
                 noul:
-                  fixture.expected.kind === 'check' && fixture.expected.verdict === 'pass'
+                  (fixture.expected.kind === 'check' && fixture.expected.verdict === 'pass') ||
+                  (fixture.expected.kind === 'visibility' && fixture.expected.verdict === 'present')
                     ? 0.9
                     : 0.1,
               },
@@ -78,7 +79,7 @@ test('all frozen authored Screens exercise a separate synthetic model contract w
   const names = readdirSync(root)
     .filter((name) => name.endsWith('.json'))
     .sort();
-  assert.equal(names.length, 14);
+  assert.equal(names.length, 18);
   for (const name of names) {
     const fixture: EvalCase = JSON.parse(readFileSync(new URL(name, root), 'utf8'));
     const before = structuredClone(fixture.screen);
@@ -92,7 +93,8 @@ test('all frozen authored Screens exercise a separate synthetic model contract w
               {
                 type: 'noul',
                 noul:
-                  fixture.expected.kind === 'check' && fixture.expected.verdict === 'pass'
+                  (fixture.expected.kind === 'check' && fixture.expected.verdict === 'pass') ||
+                  (fixture.expected.kind === 'visibility' && fixture.expected.verdict === 'present')
                     ? 0.9
                     : 0.1,
               },
@@ -308,4 +310,35 @@ test('eval mismatches are failures and an uncertain frozen check is re-asked onl
     actual: { kind: 'check', verdict: 'unsure' },
   });
   assert.equal(judge.requests.length, 2);
+});
+
+test('frozen visibility cases compare the wait verdict and re-ask an uncertain one once', async () => {
+  const fixture: EvalCase = JSON.parse(
+    readFileSync(
+      new URL('../../jev-evals/cases/home-welcome-heading.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  const answering = (nouls: number[]) => {
+    let call = 0;
+    return scriptedJudge((questions) =>
+      Object.fromEntries(
+        Object.keys(questions).map((id) => [id, { type: 'noul', noul: nouls[call++] ?? 0.5 }]),
+      ),
+    );
+  };
+  assert.deepEqual(await evaluateCase(fixture, answering([0.9])), {
+    pass: true,
+    actual: { kind: 'visibility', verdict: 'present' },
+  });
+  assert.deepEqual(await evaluateCase(fixture, answering([0.1])), {
+    pass: false,
+    actual: { kind: 'visibility', verdict: 'pending' },
+  });
+  const unsure = answering([0.5, 0.9]);
+  assert.deepEqual(await evaluateCase(fixture, unsure), {
+    pass: true,
+    actual: { kind: 'visibility', verdict: 'present' },
+  });
+  assert.equal(unsure.requests.length, 2);
 });
