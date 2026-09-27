@@ -491,19 +491,15 @@ extension RnFastRunnerTests {
     app: XCUIApplication, deadline: Double
   ) -> Double? {
     // Callers never pass application or window descriptors, so the app root cannot be a match.
-    guard let elements = presenceRead(deadline: deadline, {
-            app.descendants(matching: descriptor.type)
-              .matching(NSPredicate(format: "identifier == %@ AND label == %@", descriptor.identifier, descriptor.label))
-              .allElementsBoundByAccessibilityElement
-          }) else { return nil }
+    let query = app.descendants(matching: descriptor.type)
+      .matching(NSPredicate(format: "identifier == %@ AND label == %@", descriptor.identifier, descriptor.label))
     if predicateIsExact {
-      // The tree holds exactly these matches for type, identifier and label, so no per-match snapshot is needed.
-      guard elements.count == count else { return nil }
-      for element in elements where presenceRead(deadline: deadline, { element.isHittable }) == true {
-        return presenceUptimeMs()
-      }
-      return nil
+      // Type, identifier and label single out this node or its nested text chain in the initial tree.
+      guard presenceRead(deadline: deadline, { query.firstMatch.isHittable }) == true else { return nil }
+      return presenceUptimeMs()
     }
+    guard let elements = presenceRead(deadline: deadline, { query.allElementsBoundByAccessibilityElement })
+    else { return nil }
     var matches: [XCUIElement] = []
     for element in elements {
       guard let snapshot = presenceRead(deadline: deadline, { try element.snapshot() }) else { return nil }
