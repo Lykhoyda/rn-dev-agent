@@ -122,22 +122,13 @@ export function associateHosts(
       structural.set(host.hostIndex, nativeIndex);
   }
   const anchors = new Map([...structural].filter(([, nativeIndex]) => positive(nativeIndex)));
-  // A host needs measured presence; its identified ancestors only need to match structurally,
-  // since a covered container is not hittable yet still proves the nesting around it.
-  const anchoredPath = (i: number): boolean => {
-    const named = paths[i].filter((p) => !inline(p) && !!evidence.hosts[p].testID);
-    return named.every((p, n) => {
-      const nativeIndex = (p === i ? anchors : structural).get(p);
-      const parentIndex = n + 1 < named.length ? structural.get(named[n + 1]) : undefined;
-      return (
-        nativeIndex !== undefined &&
-        (n + 1 === named.length ||
-          (parentIndex !== undefined &&
-            nativeIndex !== parentIndex &&
-            nativePaths[nativeIndex].includes(parentIndex)))
-      );
-    });
-  };
+  // A host needs measured presence; each identified ancestor needs its own structural match.
+  // Covered containers are not hittable, and XCUI flattens nested identified views into
+  // siblings, so neither presence nor native nesting can be required of ancestors.
+  const anchoredPath = (i: number): boolean =>
+    paths[i]
+      .filter((p) => !inline(p) && !!evidence.hosts[p].testID)
+      .every((p) => (p === i ? anchors : structural).has(p));
   for (const host of snapshot.nodes) {
     if (!anchoredPath(host.hostIndex)) continue;
     const direct = anchors.get(host.hostIndex);

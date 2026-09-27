@@ -316,7 +316,7 @@ for (const [name, weaken] of unproven) {
   });
 }
 
-test('named host ancestors must match native ancestry structurally; only the host itself needs measured presence', async () => {
+test('named host ancestors need their own structural match, not native nesting; only the host needs presence', async () => {
   for (const variant of ['proven', 'frame', 'unknown-presence', 'missing-ID', 'disconnected']) {
     const f = fixture();
     const control = f.native.nodes[2];
@@ -363,11 +363,11 @@ test('named host ancestors must match native ancestry structurally; only the hos
     const screen = await f.capture();
     assert.equal(
       screen.elements[3].semantic?.press,
-      variant === 'proven' || variant === 'unknown-presence' ? 'supported' : 'unknown',
+      ['proven', 'unknown-presence', 'disconnected'].includes(variant) ? 'supported' : 'unknown',
       variant,
     );
     assert.equal(screen.elements.length, 4);
-    if (variant === 'proven' || variant === 'unknown-presence')
+    if (['proven', 'unknown-presence', 'disconnected'].includes(variant))
       assert.deepEqual(
         semanticActionView(screen, 'press'),
         { elements: [screen.elements[3]] },
