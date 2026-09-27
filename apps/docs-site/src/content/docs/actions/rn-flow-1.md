@@ -15,11 +15,13 @@ node packages/qaren-core/dist/qa/walk.js --compile .qaren/actions/user-login.yam
   --platform ios --params '{"TITLE":"Ship it"}'
 ```
 
-The command prints `{"ok":true,"plan":{…}}` and exits 0, or prints
+The file and flags may appear in any order after `--compile`; provide exactly
+one file. The command prints `{"ok":true,"plan":{…}}` and exits 0, or prints
 `{"ok":false,"code":"FLOW_UNSUPPORTED","refused":[{"line":…,"command":…,"reason":…}]}`
 and exits 4. A missing file argument, a platform other than `ios` or `android`,
 or `--params` that is not a JSON object of strings refuses the same way with
-code `FLOW_USAGE`. The printed plan contains resolved parameter values,
+code `FLOW_USAGE`. A second file, unknown flag, or flag without a value also
+refuses with `FLOW_USAGE`. The printed plan contains resolved parameter values,
 including typed text, so treat compiler output like any other private run data
 and keep it out of shared logs.
 The `enginePin` header is not read: nothing about a pinned runner version gates
@@ -37,6 +39,9 @@ compilation.
 (`visible` or `notVisible`, `timeout`), `takeScreenshot`, `openLink`,
 `stopApp`, `killApp`, `clearState`, and `runFlow` with inline `commands` or a
 `file`, optionally guarded by `when: {visible | notVisible}`.
+
+A bare `- eraseText` or `eraseText:` with no value uses the default count;
+`charactersToErase: null` refuses.
 
 A top-level action needs an `appId` header. A file-backed `runFlow` must have no
 `appId` header. Both require a final, non-empty command list: an absent, empty,
