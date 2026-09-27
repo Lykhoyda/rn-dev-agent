@@ -332,7 +332,7 @@ extension RnFastRunnerTests {
   func snapshotPlatformPresence(app: XCUIApplication, appId: String) -> DataPayload {
     let started = presenceUptimeMs()
     // Inside the core's 5,000 ms budget, which also covers the React read that follows.
-    let deadline = started + 4_500
+    let deadline = started + 4_800
     let captureId = UUID().uuidString
     let generation = currentSnapshotGeneration
     var nodes: [SnapshotNode] = []
@@ -444,7 +444,7 @@ extension RnFastRunnerTests {
 
   private func uniquePresenceElement(
     _ descriptor: PresenceDescriptor, app: XCUIApplication, deadline: Double
-  ) -> XCUIElement? {
+  ) -> (element: XCUIElement, snapshot: XCUIElementSnapshot)? {
     // Callers never pass application or window descriptors, so the app root cannot be a match.
     guard let elements = presenceRead(deadline: deadline, {
             // The predicate only narrows exact attributes; frame and value are checked on snapshots.
@@ -452,12 +452,12 @@ extension RnFastRunnerTests {
               .matching(NSPredicate(format: "identifier == %@ AND label == %@", descriptor.identifier, descriptor.label))
               .allElementsBoundByAccessibilityElement
           }) else { return nil }
-    var match: XCUIElement?
+    var match: (element: XCUIElement, snapshot: XCUIElementSnapshot)?
     for element in elements {
       guard let snapshot = presenceRead(deadline: deadline, { try element.snapshot() }) else { return nil }
       if PresenceDescriptor(snapshot) == descriptor {
         guard match == nil else { return nil }
-        match = element
+        match = (element, snapshot)
       }
     }
     return presenceUptimeMs() < deadline ? match : nil
@@ -466,9 +466,8 @@ extension RnFastRunnerTests {
   private func observePresence(
     _ descriptor: PresenceDescriptor, app: XCUIApplication, deadline: Double
   ) -> Double? {
-    guard let element = uniquePresenceElement(descriptor, app: app, deadline: deadline),
-          let before = presenceRead(deadline: deadline, { try element.snapshot() }),
-          PresenceDescriptor(before) == descriptor,
+    // The uniqueness scan's own snapshot of the match is the "before" reading.
+    guard let element = uniquePresenceElement(descriptor, app: app, deadline: deadline)?.element,
           presenceRead(deadline: deadline, { element.isHittable }) == true else { return nil }
     let observed = presenceUptimeMs()
     guard let after = presenceRead(deadline: deadline, { try element.snapshot() }),
