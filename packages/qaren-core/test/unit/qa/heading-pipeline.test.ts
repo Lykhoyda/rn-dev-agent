@@ -248,7 +248,7 @@ test('the same real producer cannot promote bold-only text or a mismatched measu
       f.deps,
     );
     assert.equal(outcome.verdict, 'FAIL');
-    assert.match(outcome.failure!.seen, /VISIBILITY_UNSUPPORTED/);
+    assert.match(outcome.failure!.seen, /VISIBILITY_UNSURE/);
     assert.deepEqual(f.actions, []);
   }
 });
@@ -360,7 +360,7 @@ test('missing, failed and invalid spacer measurements stay unknown and cannot cr
     const f = walker([screen], judge);
     const result = await runPlan(parsePlan('1. Wait for the welcome heading').blocks!, f.deps);
     assert.equal(result.verdict, 'FAIL');
-    assert.match(result.failure!.seen, /VISIBILITY_UNSUPPORTED/);
+    assert.match(result.failure!.seen, /VISIBILITY_UNSURE/);
     assert.deepEqual(f.actions, []);
   }
 });

@@ -8,7 +8,7 @@ import { parsePlan } from '../../../dist/qa/plan.js';
 import { decideScreen } from '../../../dist/qa/resolve.js';
 import { validateReactHostEvidence } from '../../../dist/qa/screen.js';
 import type { ReactHostEvidence } from '../../../dist/qa/screen.js';
-import { runPlan } from '../../../dist/qa/walker.js';
+import { runPlan, WAIT_BUDGET_MS, WAIT_POLL_MS } from '../../../dist/qa/walker.js';
 import { nativeCapture } from './platform-presence-fixtures.ts';
 import { buildFiber, createSandbox } from '../helpers/inject-harness.js';
 import { element, screen as syntheticScreen, scriptedJudge, walker } from './judgment-fixtures.ts';
@@ -401,8 +401,14 @@ for (const [name, change] of unsupported) {
     const screen = await f.capture();
     assert.equal(screen.elements[3].semantic?.heading, undefined);
     const judge = scriptedJudge(() => assert.fail('unsupported heading must not reach the judge'));
-    const result = await decideScreen(screen, judge, undefined, wait());
-    assert.ok(result.visibility && 'refuse' in result.visibility);
+    const { visibility } = await decideScreen(screen, judge, undefined, wait());
+    assert.ok(
+      (visibility && 'verdict' in visibility && visibility.verdict === 'pending') ||
+        (visibility &&
+          'refuse' in visibility &&
+          visibility.refuse === 'SCREEN_EVIDENCE_INCOMPLETE'),
+      JSON.stringify(visibility),
+    );
   });
 }
 
@@ -432,17 +438,18 @@ test('typographic title cannot satisfy an explicit accessibility role or unlock 
   const judge = scriptedJudge(() =>
     assert.fail('unsupported requirement must not reach the judge'),
   );
-  for (const phrase of [
-    'the welcome accessibility heading',
-    'the red welcome heading',
-    'the welcome heading at the top',
-  ]) {
+  assert.deepEqual(
+    (await decideScreen(screen, judge, undefined, wait('the welcome accessibility heading')))
+      .visibility,
+    { verdict: 'pending' },
+  );
+  for (const phrase of ['the red welcome heading', 'the welcome heading at the top']) {
     const decision = await decideScreen(screen, judge, undefined, wait(phrase));
     assert.equal(decision.visibility.refuse, 'VISIBILITY_UNSUPPORTED');
   }
 });
 
-test('unrelated Account heading and plain Settings text remain unsure even after a low Noul answer', async () => {
+test('unrelated Account heading and plain Settings text stay unestablished even after a low Noul answer', async () => {
   const f = fixture();
   f.typography.nodes[1].text.content = 'Account';
   f.native.nodes[3].label = 'Account';
@@ -464,18 +471,19 @@ test('unrelated Account heading and plain Settings text remain unsure even after
   });
   assert.deepEqual(
     (await decideScreen(screen, judge, undefined, wait('the Settings heading'))).visibility,
-    {
-      verdict: 'unsure',
-    },
+    { verdict: 'pending' },
   );
-  for (const plan of ['Wait for the Settings heading', 'Scroll down until the Settings heading']) {
+  for (const [plan, captures] of [
+    ['Wait for the Settings heading', 1 + WAIT_BUDGET_MS / WAIT_POLL_MS],
+    ['Scroll down until the Settings heading', 2],
+  ] as const) {
     const start = judge.requests.length;
     const w = walker([screen, screen], judge);
     const result = await runPlan(parsePlan(`1. ${plan}`).blocks!, w.deps);
     assert.equal(result.verdict, 'FAIL');
     assert.match(result.failure!.seen, /VISIBILITY_UNSURE/);
-    assert.equal(judge.requests.length - start, 2);
-    assert.equal(w.captures(), 2);
+    assert.equal(judge.requests.length - start, captures);
+    assert.equal(w.captures(), captures);
     assert.deepEqual(w.actions, []);
   }
 });
@@ -508,13 +516,12 @@ test('heading qualification preserves unknown-container refusal and 30/31 contri
   );
 });
 
-test('legacy synthetic heading refusal and quoted compatibility remain unchanged', async () => {
+test('legacy synthetic heading stays unestablished and quoted compatibility remains unchanged', async () => {
   const screen = syntheticScreen([element('title', 'Welcome', { kind: 'text' })]);
   const judge = scriptedJudge(() => assert.fail('no new evidence was provided'));
-  assert.equal(
-    (await decideScreen(screen, judge, undefined, wait())).visibility.refuse,
-    'VISIBILITY_UNSUPPORTED',
-  );
+  assert.deepEqual((await decideScreen(screen, judge, undefined, wait())).visibility, {
+    verdict: 'pending',
+  });
   const w = walker([screen], judge);
   assert.equal((await runPlan(parsePlan('1. Wait for "Welcome"').blocks!, w.deps)).verdict, 'PASS');
 });
@@ -694,10 +701,9 @@ test('capture accounts for competing anonymous text in another renderer root', a
       const judge = scriptedJudge(() =>
         assert.fail('unresolved cross-root ownership cannot reach Jev'),
       );
-      assert.equal(
-        (await decideScreen(screen, judge, undefined, wait())).visibility.refuse,
-        'VISIBILITY_UNSUPPORTED',
-      );
+      assert.deepEqual((await decideScreen(screen, judge, undefined, wait())).visibility, {
+        verdict: 'pending',
+      });
     }
   }
 });
@@ -1000,7 +1006,7 @@ test('real producer unsupported text in another root cannot create a heading ass
       const w = walker([screen], judge);
       const result = await runPlan(parsePlan('1. Wait for the welcome heading').blocks!, w.deps);
       assert.equal(result.verdict, 'FAIL');
-      assert.match(result.failure!.seen, /VISIBILITY_UNSUPPORTED/);
+      assert.match(result.failure!.seen, /VISIBILITY_UNSURE/);
       assert.deepEqual(w.actions, []);
     }
   }
@@ -1046,12 +1052,12 @@ test('identified inline spans retain graph identity without independent measurem
   );
 });
 
-test('heading CHECK pass stays inclusive while every lower answer remains unsure', async () => {
+test('heading CHECK pass stays inclusive while no lower answer becomes absence', async () => {
   const screen = await fixture().capture();
   for (const noul of [0, 0.01, 0.3, 0.5, 0.699, 0.7, 1]) {
     const judge = scriptedJudge(() => ({ visibility_1: { type: 'noul', noul } }));
     assert.deepEqual((await decideScreen(screen, judge, undefined, wait())).visibility, {
-      verdict: noul >= 0.7 ? 'present' : 'unsure',
+      verdict: noul >= 0.7 ? 'present' : noul <= 0.3 ? 'pending' : 'unsure',
     });
   }
 });

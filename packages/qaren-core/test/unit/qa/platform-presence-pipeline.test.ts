@@ -181,6 +181,10 @@ test('presence names do not gain heading, spatial, visual or aggregate-label sem
       target: { phrase },
       line: 1,
     });
+    if (phrase === 'the save heading') {
+      assert.deepEqual(result.visibility, { verdict: 'pending' });
+      continue;
+    }
     assert.ok(result.visibility && 'refuse' in result.visibility);
     assert.equal(result.visibility.refuse, 'VISIBILITY_UNSUPPORTED');
   }

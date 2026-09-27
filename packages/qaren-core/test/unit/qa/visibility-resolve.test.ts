@@ -125,9 +125,6 @@ test('unmatched React observations are not presence evidence or permission to sc
 
 test('recognizable unsupported visibility traits refuse before an optimistic model can pass them', async (t) => {
   for (const phrase of [
-    'welcome heading',
-    'the welcome header',
-    'the Welcome TITLE',
     'welcome text above the Save control',
     'welcome text below the Save control',
     'welcome text next to Save',
@@ -157,6 +154,26 @@ test('recognizable unsupported visibility traits refuse before an optimistic mod
   }
 });
 
+test('a heading request without qualified heading evidence stays pending, never refused or absent', async (t) => {
+  for (const phrase of ['welcome heading', 'the welcome header', 'the Welcome TITLE']) {
+    await t.test(phrase, async () => {
+      const observed = screen([
+        element('@welcome', 'Welcome', { kind: 'text' }),
+        element('@save', 'Save'),
+      ]);
+      for (const step of [
+        wait(phrase),
+        { kind: 'scroll' as const, direction: 'down' as const, until: { phrase }, line: 1 },
+      ]) {
+        const judge = yes();
+        const result = await decideScreen(observed, judge, undefined, step);
+        assert.deepEqual(result.visibility, { verdict: 'pending' });
+        assert.equal(judge.requests.length, 0);
+      }
+    });
+  }
+});
+
 test('supported text presence keeps all contributions and is not proved by equal words locally', async () => {
   const observed = screen([
     element('@welcome', 'Welcome', { kind: 'text' }),
@@ -176,7 +193,7 @@ test('supported text presence keeps all contributions and is not proved by equal
   }
 });
 
-test('unsupported visibility is not absence on an empty screen and does not suppress adjacent checks', async () => {
+test('an unestablished heading is not absence on an empty screen and does not suppress adjacent checks', async () => {
   const judge = yes();
   const decision = await decideScreen(
     screen([]),
@@ -184,8 +201,7 @@ test('unsupported visibility is not absence on an empty screen and does not supp
     { kind: 'check', text: 'the welcome heading is absent', literal: false, line: 0 },
     wait('welcome heading'),
   );
-  assert.ok(decision.visibility && 'refuse' in decision.visibility);
-  assert.equal(decision.visibility.refuse, 'VISIBILITY_UNSUPPORTED');
+  assert.deepEqual(decision.visibility, { verdict: 'pending' });
   assert.equal(decision.check, 'pass');
   assert.deepEqual(Object.keys(judge.requests[0].questions), ['check_0']);
   assert.ok(!('visibilityEvidence' in Object(judge.requests[0].state)));
