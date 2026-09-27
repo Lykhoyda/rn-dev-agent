@@ -924,3 +924,94 @@ test('text under a structurally matched ancestor is searched only inside that an
     'text inside the panel never matches native text in a sibling subtree',
   );
 });
+
+test('identified ancestors may be hoisted beside the native path but not sit in an unrelated subtree', () => {
+  const rect = (x: number, y: number, width: number, height: number) => ({ x, y, width, height });
+  const scene = (panelParent: number, panelRect = rect(0, 0, 400, 400)) => {
+    const nodes = [
+      { ref: '@e0', index: 0, depth: 0, type: 'Application', rect: rect(0, 0, 400, 800) },
+      {
+        ref: '@e1',
+        index: 1,
+        parentIndex: 0,
+        depth: 1,
+        type: 'Window',
+        rect: rect(0, 0, 400, 800),
+      },
+      { ref: '@e2', index: 2, parentIndex: 1, depth: 2, type: 'Other', rect: rect(0, 0, 400, 400) },
+      {
+        ref: '@e3',
+        index: 3,
+        parentIndex: 1,
+        depth: 2,
+        type: 'Other',
+        rect: rect(0, 400, 400, 400),
+      },
+      {
+        ref: '@e4',
+        index: 4,
+        parentIndex: panelParent,
+        depth: 3,
+        type: 'Other',
+        identifier: 'panel',
+        rect: panelRect,
+      },
+      {
+        ref: '@e5',
+        index: 5,
+        parentIndex: 2,
+        depth: 3,
+        type: 'Other',
+        identifier: 'save',
+        rect: rect(10, 10, 100, 40),
+      },
+    ];
+    const presence = {
+      source: 'xcui-live' as const,
+      nodes: nodes.map((_, i) => ({
+        status: i === 5 ? 'observed' : 'unknown',
+        labelSource: 'none' as const,
+      })),
+    };
+    const view = (
+      hostIndex: number,
+      parentHostIndex: number | null,
+      r: ReturnType<typeof rect>,
+    ) => ({
+      hostIndex,
+      parentHostIndex,
+      rootIndex: 0,
+      hostType: 'RCTView',
+      rect: r,
+      text: { kind: 'none' as const },
+    });
+    const evidence = {
+      complete: true,
+      hosts: [
+        { testID: 'panel', role: null, roleSource: 'none' as const, capabilities: {} },
+        {
+          testID: 'save',
+          role: null,
+          roleSource: 'none' as const,
+          capabilities: { press: true as const },
+        },
+      ],
+      typography: {
+        version: 1 as const,
+        complete: true,
+        durationMs: 10,
+        coordinateSpace: 'window-points' as const,
+        nodes: [view(0, null, panelRect), view(1, 0, rect(10, 10, 100, 40))],
+      },
+    };
+    return associateHosts(nodes as never, evidence as never, presence as never);
+  };
+  assert.equal(scene(2).get(1)?.nativeIndex, 5, 'panel hoisted beside save on its native path');
+  assert.equal(scene(3).get(1), undefined, 'panel in an unrelated native subtree');
+  assert.equal(scene(5).get(1), undefined, 'panel below save natively is reversed ancestry');
+  assert.equal(
+    scene(2, rect(200, 500, 100, 100)).get(1),
+    undefined,
+    'a hoisted panel whose frame does not contain save',
+  );
+});
