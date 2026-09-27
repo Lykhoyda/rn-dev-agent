@@ -39,7 +39,7 @@ test('pin-cache present: android hideKeyboard still uses maestro-runner', () => 
   assert.equal('degradedReason' in d && d.degradedReason !== undefined, false);
 });
 
-test('pin-cache present: buildArgs emits --platform and optional --device', () => {
+test('pin-cache present: buildArgs emits --platform, --driver and optional --device', () => {
   const d = chooseMaestroDispatch({
     platform: 'ios',
     maestroRunnerPath: () => '/runner',
@@ -48,12 +48,16 @@ test('pin-cache present: buildArgs emits --platform and optional --device', () =
   assert.deepEqual(d.buildArgs('ios', '/tmp/flow.yaml'), [
     '--platform',
     'ios',
+    '--driver',
+    'wda',
     'test',
     '/tmp/flow.yaml',
   ]);
   assert.deepEqual(d.buildArgs('android', '/tmp/flow.yaml', undefined, 'emulator-5554'), [
     '--platform',
     'android',
+    '--driver',
+    'uiautomator2',
     '--device',
     'emulator-5554',
     'test',

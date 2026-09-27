@@ -6,6 +6,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -314,7 +315,9 @@ export class Lockfile {
     if (!body || body.pid !== this.opts.pid) return false; // usurped → caller should exit
     body.lastHeartbeat = this.opts.clock();
     try {
-      writeFileSync(this.lockPath, JSON.stringify(body, null, 2), { encoding: 'utf8' });
+      const nextPath = `${this.lockPath}.${this.opts.pid}.tmp`;
+      writeFileSync(nextPath, JSON.stringify(body, null, 2), { encoding: 'utf8' });
+      renameSync(nextPath, this.lockPath);
     } catch {
       // Best-effort: a failed heartbeat just means the lock may look stale sooner.
     }

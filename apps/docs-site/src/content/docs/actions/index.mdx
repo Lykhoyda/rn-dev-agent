@@ -173,6 +173,8 @@ The authoritative pin manifest lives at
 attested 1.1.24 as the default known-good and `/doctor` reports missing, older, unattested, checksum-mismatched,
 unverified, unknown, or unsupported installations. Replay refuses every non-`pinned-ok`
 state before UI mutation and never substitutes PATH, `~/.maestro-runner`, or Maestro CLI.
+Runner-backed replay passes `--driver uiautomator2` on Android and `--driver wda` on iOS,
+so a runner default or ambient `MAESTRO_DRIVER` cannot change the selected driver.
 Installation stages each candidate in a collision-safe sibling temporary directory, verifies
 the archive and complete payload against that manifest, and atomically publishes the pin.
 Concurrent or restarted installers converge on the same verified cache; an abandoned staging

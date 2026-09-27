@@ -25,6 +25,8 @@ test('GH#201 maestro-runner buildArgs injects --app-file before --platform when 
     '/DerivedData/MyApp.app',
     '--platform',
     'ios',
+    '--driver',
+    'wda',
     'test',
     '/tmp/flow.yaml',
   ]);
@@ -35,6 +37,8 @@ test('GH#201 maestro-runner buildArgs unchanged when appFile omitted', () => {
   assert.deepEqual(d.buildArgs('ios', '/tmp/flow.yaml'), [
     '--platform',
     'ios',
+    '--driver',
+    'wda',
     'test',
     '/tmp/flow.yaml',
   ]);
