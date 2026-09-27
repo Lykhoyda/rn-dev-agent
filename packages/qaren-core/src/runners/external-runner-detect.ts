@@ -142,6 +142,52 @@ function isIosStrictRunnerProcessLine(line: string): boolean {
   );
 }
 
+const SIMULATOR_CONTAINER = /\/CoreSimulator\/Devices\/([^/]+)\//;
+
+// The simulators a driver targets, read only from the kernel's executable path and exact argv;
+// process-table text flattens argument boundaries and can never scope a driver.
+function observedDriverDevices(
+  value: unknown,
+  line: string,
+  scanStartedAt: number,
+): string[] | undefined {
+  const executable = observedExecutable(value, line, scanStartedAt);
+  if (!executable) return undefined;
+  const inside = SIMULATOR_CONTAINER.exec(executable);
+  if (inside) return isIosSimulatorUdid(inside[1]) ? [inside[1]] : undefined;
+  const argv = (value as { argv?: unknown }).argv;
+  if (!Array.isArray(argv) || argv.length === 0 || !argv.every((arg) => typeof arg === 'string'))
+    return undefined;
+  const name = executable.slice(executable.lastIndexOf('/') + 1);
+  let devices: Array<string | undefined>;
+  if (name === 'xcodebuild') {
+    devices = argv.flatMap((arg, i) =>
+      arg === '-destination'
+        ? [
+            (argv[i + 1] as string | undefined)
+              ?.split(',')
+              .find((part) => part.startsWith('id='))
+              ?.slice(3),
+          ]
+        : [],
+    );
+  } else if (
+    name === 'maestro' ||
+    (name === 'java' && argv.some((arg) => /^maestro\.cli\.[\w.$]+$/i.test(arg)))
+  ) {
+    devices = argv.flatMap((arg, i) =>
+      arg === '--device'
+        ? String(argv[i + 1] ?? '').split(',')
+        : arg.startsWith('--device=')
+          ? arg.slice('--device='.length).split(',')
+          : [],
+    );
+  } else return undefined;
+  return devices.length > 0 && devices.every((d) => d !== undefined && isIosSimulatorUdid(d))
+    ? (devices as string[])
+    : undefined;
+}
+
 function isUnscopedMcpControl(line: string): boolean {
   const command = line.replace(/^\s*\d+\s+/, '').trimEnd();
   return (
@@ -210,7 +256,11 @@ function hasUnresolvedIosExecutablePath(line: string): boolean {
   return hasUnresolvedIosPath(command) || hasUnresolvedIosShellScript(command);
 }
 
-export type ProcessIdentityObserver = (pid: number, timeoutMs: number) => Promise<unknown>;
+export type ProcessIdentityObserver = (
+  pid: number,
+  timeoutMs: number,
+  withArgv?: boolean,
+) => Promise<unknown>;
 
 function observedExecutable(value: unknown, line: string, scanStartedAt: number): string | null {
   if (!value || typeof value !== 'object') return null;
@@ -298,30 +348,42 @@ export async function probeIosExternalRunnerStrict(
     const drivers = lines.filter(
       (line) => !isUnscopedMcpControl(line) && isIosStrictRunnerProcessLine(line),
     );
-    if (drivers.length === 0) {
-      const unresolved = lines.filter(
-        (line) => isUnscopedMcpControl(line) || hasUnresolvedIosExecutablePath(line),
-      );
-      if (!unresolved.length) return 'clear';
-      if (!observeIdentity || unresolved.length > 16) return 'unknown';
-      for (const line of unresolved) {
-        const remaining = Math.floor(deadline - performance.now());
-        if (remaining <= 0) return 'unknown';
-        const pid = Number(/^\s*(\d+)/.exec(line)![1]);
-        const observation = await observeIdentity(pid, Math.min(1_000, remaining));
-        if (
-          performance.now() >= deadline ||
-          !(isUnscopedMcpControl(line)
-            ? identityProvesMcpControl(observation, line, scanStartedAt)
-            : identityRulesOutDriver(observation, line, scanStartedAt))
-        )
-          return 'unknown';
-      }
-      return 'clear';
-    }
     const target = new RegExp(`(?:^|[^a-z0-9-])${udid}(?=$|[^a-z0-9-])`, 'i');
-    // Unmatched drivers remain unknown, even if another UUID appears in their arguments.
-    return drivers.some((line) => target.test(line)) ? 'busy' : 'unknown';
+    if (drivers.some((line) => target.test(line))) return 'busy';
+    if (drivers.length > 0 && (!observeIdentity || drivers.length > 16)) return 'unknown';
+    for (const line of drivers) {
+      const remaining = Math.floor(deadline - performance.now());
+      if (remaining <= 0) return 'unknown';
+      const pid = Number(/^\s*(\d+)/.exec(line)![1]);
+      const devices = observedDriverDevices(
+        await observeIdentity!(pid, Math.min(1_000, remaining), true),
+        line,
+        scanStartedAt,
+      );
+      if (performance.now() >= deadline || !devices) return 'unknown';
+      if (devices.some((device) => device.toLowerCase() === udid.toLowerCase())) return 'busy';
+    }
+    const unresolved = lines.filter(
+      (line) =>
+        !drivers.includes(line) &&
+        (isUnscopedMcpControl(line) || hasUnresolvedIosExecutablePath(line)),
+    );
+    if (!unresolved.length) return 'clear';
+    if (!observeIdentity || unresolved.length > 16) return 'unknown';
+    for (const line of unresolved) {
+      const remaining = Math.floor(deadline - performance.now());
+      if (remaining <= 0) return 'unknown';
+      const pid = Number(/^\s*(\d+)/.exec(line)![1]);
+      const observation = await observeIdentity(pid, Math.min(1_000, remaining));
+      if (
+        performance.now() >= deadline ||
+        !(isUnscopedMcpControl(line)
+          ? identityProvesMcpControl(observation, line, scanStartedAt)
+          : identityRulesOutDriver(observation, line, scanStartedAt))
+      )
+        return 'unknown';
+    }
+    return 'clear';
   } catch {
     return 'unknown';
   }
