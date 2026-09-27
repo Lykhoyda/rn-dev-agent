@@ -119,7 +119,8 @@ pub fn group_presence(runner: &mut dyn Runner, pgid: i32) -> GroupPresence {
             || !cols[0].parse::<i32>().is_ok_and(|id| id > 0)
             || !cols[1].parse::<i32>().is_ok_and(|id| id >= 0)
             || !pids.insert(cols[0].parse::<i32>().ok())
-            || !cols[2].starts_with(['R', 'S', 'D', 'T', 't', 'Z', 'X', 'I', 'W', 'U'])
+            // macOS prints `?` for a process caught mid-exec or mid-exit; its pgid still counts.
+            || !cols[2].starts_with(['R', 'S', 'D', 'T', 't', 'Z', 'X', 'I', 'W', 'U', '?'])
             || !cols[2]
                 .chars()
                 .skip(1)
