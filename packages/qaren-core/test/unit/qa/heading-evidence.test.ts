@@ -531,22 +531,19 @@ test('unrelated Account heading and plain Settings text stay unestablished even 
   }
 });
 
-test('heading qualification preserves unknown-container refusal and 30/31 contribution accounting', async () => {
+test('heading qualification preserves unknown-container refusal and judges only qualified headings past 30 contributions', async () => {
   for (const count of [30, 31]) {
     const screen = await fixture().capture();
     for (let i = 3; i < count; i++)
       screen.elements.push(element(`extra${i}`, 'Other content', { kind: 'text' }));
-    const judge = scriptedJudge((_, __, state) => {
-      assert.equal(state.visibilityEvidence.length, 30);
+    const judge = scriptedJudge((questions, __, state) => {
+      assert.deepEqual(Object.keys(questions), ['visibility_1']);
+      assert.equal(state.visibilityEvidence.length, count);
       assert.equal(state.qualifiedHeadingEvidence.length, 1);
       return { visibility_1: { type: 'noul', noul: 0.99 } };
     });
     const result = await decideScreen(screen, judge, undefined, wait());
-    if (count === 30) assert.deepEqual(result.visibility, { verdict: 'present' });
-    else {
-      assert.equal(result.visibility.refuse, 'CANDIDATE_LIMIT');
-      assert.equal(judge.requests.length, 0);
-    }
+    assert.deepEqual(result.visibility, { verdict: 'present' });
   }
   const f = fixture();
   f.native.nodes[2].type = 'Other';

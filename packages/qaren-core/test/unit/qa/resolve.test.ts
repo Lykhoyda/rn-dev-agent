@@ -1,7 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parsePlan, parseStep } from '../../../dist/qa/plan.js';
-import { ACT, CHECK, judgeCheck, prepareTarget, resolveTarget } from '../../../dist/qa/resolve.js';
+import {
+  ACT,
+  CHECK,
+  decideScreen,
+  judgeCheck,
+  prepareTarget,
+  resolveTarget,
+} from '../../../dist/qa/resolve.js';
 import { JevError, confidentChoice } from '../../../dist/qa/questions.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { choice, element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
@@ -311,13 +318,14 @@ test('quoted visibility remains model-free even with duplicate labels in a batch
   assert.equal(ledger.steps[1].resolvedBy, 'exact');
 });
 
-test('uncertain visibility and candidate overflow name the resolution refusal, not an HTTP error', async () => {
+test('uncertain visibility names the resolution refusal, not an HTTP error, also across grouped contributions', async () => {
   for (const line of ['1. Wait for Save', '1. Scroll until Save']) {
     for (const overflow of [false, true]) {
       const judge = scriptedJudge((q) => {
-        assert.deepEqual(Object.keys(q), ['visibility_1']);
-        assert.equal(q.visibility_1.type, 'noul');
-        return { visibility_1: { type: 'noul', noul: 0.5 } };
+        const ids = overflow ? ['visibility_1_1', 'visibility_1_2'] : ['visibility_1'];
+        assert.deepEqual(Object.keys(q), ids);
+        assert.ok(ids.every((id) => q[id].type === 'noul'));
+        return Object.fromEntries(ids.map((id) => [id, { type: 'noul', noul: 0.5 }]));
       });
       const f = walker(
         [
@@ -329,10 +337,48 @@ test('uncertain visibility and candidate overflow name the resolution refusal, n
       );
       const ledger = await runPlan(parsePlan(line).blocks!, f.deps);
       assert.equal(ledger.verdict, 'FAIL');
-      assert.match(ledger.failure?.seen ?? '', overflow ? /CANDIDATE_LIMIT/ : /VISIBILITY_UNSURE/);
+      assert.match(ledger.failure?.seen ?? '', /VISIBILITY_UNSURE/);
       assert.deepEqual(f.actions, []);
-      assert.equal(judge.requests.length, overflow ? 0 : 2);
-      assert.equal(f.captures(), overflow ? 1 : 2);
+      assert.equal(judge.requests.length, 2);
+      assert.equal(f.captures(), 2);
     }
   }
+});
+
+test('more than 30 visibility contributions are judged in groups of at most 30 in one request', async () => {
+  const entries = screen(Array.from({ length: 65 }, (_, i) => element(`@${i}`, `entry${i}`)));
+  const decide = async (answers: number[]) => {
+    const judge = scriptedJudge((q, _i, state) => {
+      assert.deepEqual(Object.keys(q), ['visibility_1_1', 'visibility_1_2', 'visibility_1_3']);
+      assert.match(q.visibility_1_2.instructions, /`visibilityEvidenceGroups\[1\]`/);
+      assert.deepEqual(
+        state.visibilityEvidenceGroups.map((g: string[]) => g.length),
+        [30, 30, 5],
+      );
+      const flat: string[] = state.visibilityEvidenceGroups.flat();
+      assert.equal(new Set(flat).size, 65, 'every contribution appears exactly once');
+      assert.match(state.visibilityEvidenceGroups[2].at(-1), /entry64/);
+      assert.equal(state.visibilityEvidence, undefined);
+      return Object.fromEntries(
+        answers.map((noul, k) => [`visibility_1_${k + 1}`, { type: 'noul', noul }]),
+      );
+    });
+    const f = walker([entries], judge);
+    const ledger = await runPlan(parsePlan('1. Wait for entry64').blocks!, f.deps);
+    return { ledger, calls: judge.calls.length };
+  };
+  const present = await decide([0.01, 0.01, 0.99]);
+  assert.equal(present.ledger.verdict, 'PASS');
+  assert.equal(present.calls, 1, 'every group is asked in the same request');
+  const unsure = await decide([0.01, 0.5, 0.01]);
+  assert.match(unsure.ledger.failure?.seen ?? '', /VISIBILITY_UNSURE/);
+  const denied = scriptedJudge((q) =>
+    Object.fromEntries(Object.keys(q).map((id) => [id, { type: 'noul', noul: 0.01 }])),
+  );
+  const wait = { kind: 'wait' as const, target: { phrase: 'a sign-in form' }, line: 1 };
+  assert.deepEqual(
+    (await decideScreen(entries, denied, undefined, wait)).visibility,
+    { verdict: 'pending' },
+    'a description may span groups, so separate denials never prove absence',
+  );
 });

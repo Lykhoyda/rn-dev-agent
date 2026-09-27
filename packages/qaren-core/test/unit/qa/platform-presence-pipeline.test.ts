@@ -304,7 +304,7 @@ test('native presence cannot authorize positional actions without layout evidenc
   }
 });
 
-test('independent native names retain the unchanged 30-contribution limit', async () => {
+test('independent native names past 30 contributions are judged in groups of at most 30', async () => {
   for (const count of [30, 31]) {
     const source = nativeCapture();
     for (let index = 2; index <= count; index++) {
@@ -319,18 +319,25 @@ test('independent native names retain the unchanged 30-contribution limit', asyn
     }
     const screen = await capture(source);
     const judge = scriptedJudge((_questions, _index, state) => {
-      assert.equal(state.visibilityEvidence.length, 30);
-      return { visibility_1: { type: 'noul', noul: 0.99 } };
+      if (count === 30) {
+        assert.equal(state.visibilityEvidence.length, 30);
+        return { visibility_1: { type: 'noul', noul: 0.99 } };
+      }
+      assert.deepEqual(
+        state.visibilityEvidenceGroups.map((group: string[]) => group.length),
+        [30, 1],
+      );
+      return {
+        visibility_1_1: { type: 'noul', noul: 0.99 },
+        visibility_1_2: { type: 'noul', noul: 0.01 },
+      };
     });
     const result = await decideScreen(screen, judge, undefined, {
       kind: 'wait',
       target: { phrase: 'Save' },
       line: 1,
     });
-    if (count === 30) assert.deepEqual(result.visibility, { verdict: 'present' });
-    else {
-      assert.equal(result.visibility.refuse, 'CANDIDATE_LIMIT');
-      assert.equal(judge.requests.length, 0);
-    }
+    assert.deepEqual(result.visibility, { verdict: 'present' });
+    assert.equal(judge.requests.length, 1);
   }
 });

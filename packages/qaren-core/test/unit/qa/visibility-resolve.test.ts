@@ -42,19 +42,20 @@ test('presence uses inclusive CHECK boundaries, not ACT or a unique matching ref
   }
 });
 
-test('the visibility guard counts all independent contributions before equal text coalescing', async () => {
+test('the visibility groups count all independent contributions before equal text coalescing', async () => {
   for (const count of [30, 31]) {
     const observed = screen(Array.from({ length: count }, (_, i) => element(`@${i}`, 'Save')));
     const judge = yes();
     const result = await decideScreen(observed, judge, undefined, wait());
-    if (count === 30) {
-      assert.deepEqual(result.visibility, { verdict: 'present' });
-      assert.equal(judge.requests.length, 1);
-    } else {
-      assert.ok(result.visibility && 'refuse' in result.visibility);
-      assert.equal(result.visibility.refuse, 'CANDIDATE_LIMIT');
-      assert.equal(judge.requests.length, 0);
-    }
+    assert.deepEqual(result.visibility, { verdict: 'present' });
+    assert.equal(judge.requests.length, 1);
+    const state = judge.requests[0].state as Record<string, string[][] | string[]>;
+    if (count === 30) assert.equal(state.visibilityEvidence.length, 30);
+    else
+      assert.deepEqual(
+        (state.visibilityEvidenceGroups as string[][]).map((group) => group.length),
+        [30, 1],
+      );
   }
 });
 
@@ -331,11 +332,11 @@ test('a local visibility refusal does not suppress an independent batched check'
     screen(Array.from({ length: 31 }, (_, i) => element(`@${i}`, 'Save'))),
     judge,
     { kind: 'check', literal: false, text: 'There are Save controls', line: 0 },
-    wait(),
+    wait('a red Save control'),
   );
   assert.equal(decision.check, 'pass');
   assert.ok(decision.visibility && 'refuse' in decision.visibility);
-  assert.equal(decision.visibility.refuse, 'CANDIDATE_LIMIT');
+  assert.equal(decision.visibility.refuse, 'VISIBILITY_UNSUPPORTED');
   assert.deepEqual(Object.keys(judge.requests[0].questions), ['check_0']);
   assert.ok(!('visibilityEvidence' in Object(judge.requests[0].state)));
 });
