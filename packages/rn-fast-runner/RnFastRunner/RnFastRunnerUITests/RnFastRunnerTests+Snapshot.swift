@@ -476,11 +476,9 @@ extension RnFastRunnerTests {
     guard let element = uniquePresenceElement(descriptor, app: app, deadline: deadline)?.element,
           presenceRead(deadline: deadline, { element.isHittable }) == true else { return nil }
     let observed = presenceUptimeMs()
+    // Uniqueness after the reading is proven once for all nodes by the final whole-tree revalidation.
     guard let after = presenceRead(deadline: deadline, { try element.snapshot() }),
-          PresenceDescriptor(after) == descriptor,
-          uniquePresenceElement(descriptor, app: app, deadline: deadline) != nil,
-          let retained = presenceRead(deadline: deadline, { try element.snapshot() }),
-          PresenceDescriptor(retained) == descriptor else { return nil }
+          PresenceDescriptor(after) == descriptor else { return nil }
     return observed
   }
 
