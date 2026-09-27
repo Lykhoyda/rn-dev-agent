@@ -125,17 +125,23 @@ function readBody(text: string, file?: string): Body {
     }
   }
   const doc = all.at(-1);
-  let values: unknown;
+  if (!isSeq(doc?.contents) || doc.contents.items.length === 0) {
+    throw new FlowCompileError(
+      doc ? lines.linePos(doc.range[0]).line : 1,
+      '',
+      'the final document must be a non-empty command list',
+      file,
+    );
+  }
+  let values: unknown[];
   try {
-    values = all.map((each) => each.toJS()).at(-1) ?? [];
+    values = all.map((each) => each.toJS()).at(-1) as unknown[];
   } catch (caught) {
     throw new FlowCompileError(0, '', `YAML: ${(caught as Error).message}`, file);
   }
-  if (!Array.isArray(values))
-    throw new FlowCompileError(0, '', 'the flow body must be a list', file);
   return {
     values,
-    nodes: isSeq(doc?.contents) ? doc.contents.items : [],
+    nodes: doc.contents.items,
     lines,
     hasAppIdHeader: all.length === 2,
   };

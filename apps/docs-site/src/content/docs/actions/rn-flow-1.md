@@ -38,7 +38,7 @@ compilation.
 `stopApp`, `killApp`, `clearState`, and `runFlow` with inline `commands` or a
 `file`, optionally guarded by `when: {visible | notVisible}`.
 
-A flow file holds at most one header document (`appId`) and one command list;
+A flow file holds at most one header document (`appId`) and a final, non-empty command list;
 malformed YAML refuses with the parser's line. Every flow also passes the same
 validator as every other flow path (command allowlist, denied commands, scalar
 safety, contained `runFlow` file references). Command-level refusals carry the command name and its line (plus

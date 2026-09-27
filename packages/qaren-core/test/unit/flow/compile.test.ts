@@ -214,7 +214,7 @@ test('malformed YAML refuses with its line instead of throwing', () => {
   const syntax = refusal('- back\n- tapOn: "unterminated\n');
   assert.match(syntax.reason, /^YAML:/);
   assert.ok(syntax.line >= 6, `line ${syntax.line}`);
-  assert.match(refusal('back: true\n').reason, /must be a list/);
+  assert.match(refusal('back: true\n').reason, /command list/);
   assert.match(refusal('- back\n---\n- tapOn: Save\n').reason, /one optional header/);
   let error: unknown;
   const dir = mkdtempSync(join(tmpdir(), 'rn-flow-'));
@@ -230,41 +230,53 @@ test('malformed YAML refuses with its line instead of throwing', () => {
   assert.match(error.reason, /^YAML:/);
 });
 
-test('a command list before the final YAML document refuses', () => {
-  withFlow('', (file) => {
-    writeFileSync(file, '- tapOn: Save\n---\n- back\n');
-    assert.throws(
-      () => compileFlow({ file, params: {}, platform: 'ios' }),
-      (error: unknown) => {
-        assert.ok(error instanceof FlowCompileError);
-        assert.equal(error.line, 1);
-        assert.match(error.reason, /first document must be an appId header/);
-        return true;
-      },
-    );
-  });
-});
-
-test('runFlow refuses a first command list or unexpected header', () => {
-  withFlow('- runFlow: sub.yaml\n', (file, dir) => {
-    for (const first of [
-      '- tapOn: Save',
-      'name: unexpected',
-      'appId: com.example.other\nname: unexpected',
-    ]) {
-      writeFileSync(join(dir, 'sub.yaml'), `${first}\n---\n- back\n`);
-      assert.throws(
-        () => compileFlow({ file, params: {}, platform: 'ios' }),
-        (error: unknown) => {
-          assert.ok(error instanceof FlowCompileError);
-          assert.equal(error.file, 'sub.yaml');
-          assert.equal(error.line, 1);
-          assert.match(error.reason, /first document must be an appId header/);
-          return true;
-        },
-      );
-    }
-  });
+test('file-backed flow document shapes compile or refuse at their document', () => {
+  const header = 'appId: com.example.app\n---\n';
+  const cases = [
+    { name: 'top-level header and commands', top: true, yaml: `${header}- back\n`, ok: true },
+    { name: 'sub-flow commands', top: false, yaml: '- back\n', ok: true },
+    { name: 'empty top-level file', top: true, yaml: '', line: 1 },
+    { name: 'empty sub-flow file', top: false, yaml: '', line: 1 },
+    { name: 'missing final commands', top: true, yaml: header, line: 2 },
+    { name: 'missing sub-flow commands', top: false, yaml: '---\n', line: 1 },
+    { name: 'null final commands', top: true, yaml: `${header}null\n`, line: 2 },
+    { name: 'null sub-flow commands', top: false, yaml: 'null\n', line: 1 },
+    { name: 'empty command list', top: true, yaml: `${header}[]\n`, line: 2 },
+    { name: 'empty sub-flow command list', top: false, yaml: '[]\n', line: 1 },
+    { name: 'scalar commands', top: true, yaml: `${header}back\n`, line: 2 },
+    { name: 'scalar sub-flow commands', top: false, yaml: 'back\n', line: 1 },
+    { name: 'mapping commands', top: true, yaml: `${header}back: true\n`, line: 2 },
+    { name: 'mapping sub-flow commands', top: false, yaml: 'back: true\n', line: 1 },
+    { name: 'preceding command list', top: true, yaml: '- tapOn: Save\n---\n- back\n', line: 1 },
+    { name: 'preceding sub-flow command list', top: false, yaml: '- tapOn: Save\n---\n- back\n', line: 1 },
+    { name: 'unexpected header', top: true, yaml: 'name: extra\n---\n- back\n', line: 1 },
+    { name: 'unexpected sub-flow header', top: false, yaml: 'name: extra\n---\n- back\n', line: 1 },
+    { name: 'third document', top: true, yaml: `${header}- back\n---\n- back\n`, line: 4 },
+    { name: 'third sub-flow document', top: false, yaml: `${header}- back\n---\n- back\n`, line: 4 },
+  ];
+  for (const entry of cases) {
+    withFlow('- runFlow: sub.yaml\n', (file, dir) => {
+      const target = entry.top ? file : join(dir, 'sub.yaml');
+      writeFileSync(target, entry.yaml);
+      if (entry.ok) {
+        assert.deepEqual(
+          compileFlow({ file, params: {}, platform: 'ios' }).steps.map((step) => step.op),
+          ['back'],
+          entry.name,
+        );
+      } else {
+        assert.throws(
+          () => compileFlow({ file, params: {}, platform: 'ios' }),
+          (error: unknown) => {
+            assert.ok(error instanceof FlowCompileError);
+            assert.equal(error.line, entry.line, entry.name);
+            assert.equal(error.file, entry.top ? undefined : 'sub.yaml', entry.name);
+            return true;
+          },
+        );
+      }
+    });
+  }
 });
 
 test('Android keeps every read native; lifecycle and the keyboard tier stay', () => {
