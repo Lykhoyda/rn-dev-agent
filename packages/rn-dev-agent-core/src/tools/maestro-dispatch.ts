@@ -64,6 +64,9 @@ export function chooseMaestroDispatch(
         ...(appFile ? ['--app-file', appFile] : []),
         '--platform',
         platform,
+        // NOTE: explicit so a runner release changing its default driver (or an ambient MAESTRO_DRIVER) cannot switch drivers silently.
+        '--driver',
+        platform === 'android' ? 'uiautomator2' : 'wda',
         ...(deviceId ? ['--device', deviceId] : []),
         'test',
         flowFile,

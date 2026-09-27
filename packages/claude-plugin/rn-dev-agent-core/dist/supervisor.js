@@ -51,7 +51,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 function defaultProjectRoot() {
@@ -245,7 +245,9 @@ var init_lockfile = __esm({
           return false;
         body.lastHeartbeat = this.opts.clock();
         try {
-          writeFileSync(this.lockPath, JSON.stringify(body, null, 2), { encoding: "utf8" });
+          const nextPath = `${this.lockPath}.${this.opts.pid}.tmp`;
+          writeFileSync(nextPath, JSON.stringify(body, null, 2), { encoding: "utf8" });
+          renameSync(nextPath, this.lockPath);
         } catch {
         }
         return true;
@@ -8569,7 +8571,7 @@ var require_dist = __commonJS({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync5, renameSync, readdirSync, lstatSync as lstatSync2, mkdirSync as mkdirSync3, realpathSync as realpathSync2 } from "node:fs";
+import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync5, renameSync as renameSync2, readdirSync, lstatSync as lstatSync2, mkdirSync as mkdirSync3, realpathSync as realpathSync2 } from "node:fs";
 import { join as join4, dirname as dirname2 } from "node:path";
 function isRnProject(dir) {
   const pkgPath2 = join4(dir, "package.json");
@@ -8799,7 +8801,7 @@ function writeGraph(projectRoot, graph) {
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   const yaml3 = (0, import_yaml.stringify)({ nav_graph: graph }, { lineWidth: 120 });
   writeFileSync2(tmpPath, yaml3, "utf-8");
-  renameSync(tmpPath, filePath);
+  renameSync2(tmpPath, filePath);
   return filePath;
 }
 function buildScreen(raw, isActive) {
@@ -10806,7 +10808,7 @@ var init_worktree_repair_remedy = __esm({
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { closeSync as closeSync5, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync5, mkdirSync as mkdirSync5, openSync as openSync5, readFileSync as readFileSync6, readlinkSync as readlinkSync3, realpathSync as realpathSync6, renameSync as renameSync2, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync3 } from "node:fs";
+import { closeSync as closeSync5, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync5, mkdirSync as mkdirSync5, openSync as openSync5, readFileSync as readFileSync6, readlinkSync as readlinkSync3, realpathSync as realpathSync6, renameSync as renameSync3, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync3 } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute2, join as join7, relative as relative2, resolve as resolve5, sep as sep2 } from "node:path";
 function gitEnvironment() {
   const env = { ...process.env };
@@ -11630,7 +11632,7 @@ var init_worktree_inheritance = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync7, writeFileSync as writeFileSync3, unlinkSync as unlinkSync4, mkdirSync as mkdirSync6, renameSync as renameSync3, lstatSync as lstatSync6 } from "node:fs";
+import { readFileSync as readFileSync7, writeFileSync as writeFileSync3, unlinkSync as unlinkSync4, mkdirSync as mkdirSync6, renameSync as renameSync4, lstatSync as lstatSync6 } from "node:fs";
 import { join as join8, dirname as dirname6 } from "node:path";
 import { homedir as homedir2 } from "node:os";
 function getStateDir() {
@@ -11660,7 +11662,7 @@ function writeJsonStateFileAtomic(path, value) {
   mkdirSync6(dirname6(path), { recursive: true });
   const tmpPath = `${path}.tmp.${process.pid}`;
   writeFileSync3(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
-  renameSync3(tmpPath, path);
+  renameSync4(tmpPath, path);
 }
 function deleteStateFile(path) {
   try {
@@ -11688,7 +11690,7 @@ var init_secure_state_file = __esm({
 
 // packages/rn-dev-agent-core/dist/session/state-root.js
 import { randomBytes as randomBytes2, randomUUID } from "node:crypto";
-import { chmodSync as chmodSync2, linkSync, lstatSync as lstatSync7, mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync4, rmSync as rmSync2, statSync as statSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { chmodSync as chmodSync2, linkSync, lstatSync as lstatSync7, mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync5, rmSync as rmSync2, statSync as statSync4, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join9, resolve as resolve6 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
@@ -11810,7 +11812,7 @@ function writeSessionJson(layout, sessionId, filename, value) {
   const temporary = join9(directory, `.${filename}.${process.pid}.${Date.now()}.tmp`);
   writeFileSync4(temporary, JSON.stringify(value), { encoding: "utf8", mode: 384 });
   chmodSync2(temporary, 384);
-  renameSync4(temporary, path);
+  renameSync5(temporary, path);
   chmodSync2(path, 384);
   return path;
 }
@@ -14090,7 +14092,7 @@ var init_build_adapter = __esm({
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync7, constants as constants5, existsSync as existsSync10, fstatSync as fstatSync5, lstatSync as lstatSync8, mkdtempSync, openSync as openSync7, readFileSync as readFileSync10, realpathSync as realpathSync9, renameSync as renameSync5, rmSync as rmSync4, writeFileSync as writeFileSync6 } from "node:fs";
+import { closeSync as closeSync7, constants as constants5, existsSync as existsSync10, fstatSync as fstatSync5, lstatSync as lstatSync8, mkdtempSync, openSync as openSync7, readFileSync as readFileSync10, realpathSync as realpathSync9, renameSync as renameSync6, rmSync as rmSync4, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join12 } from "node:path";
 function sameIdentity(left, right) {
@@ -14286,7 +14288,7 @@ function sendOperation(directory, request2, timeoutMs) {
   const requestPath2 = join12(directory.worker.controlPath, `${prefix}.request`);
   const responsePath = join12(directory.worker.controlPath, `${prefix}.response`);
   writeFileSync6(pendingPath, JSON.stringify(request2), { flag: "wx", mode: 384 });
-  renameSync5(pendingPath, requestPath2);
+  renameSync6(pendingPath, requestPath2);
   if (!waitForFile(responsePath, timeoutMs)) {
     throw new Error("SESSION_INTEGRATION_WORKER_TIMEOUT");
   }
@@ -26721,7 +26723,7 @@ var init_public_diagnostics = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/device-screenshot-raw.js
 import { execFile as execFile2, spawn as spawn5 } from "node:child_process";
-import { createWriteStream as createWriteStream2, renameSync as renameSync6, statSync as statSync8, unlinkSync as unlinkSync5 } from "node:fs";
+import { createWriteStream as createWriteStream2, renameSync as renameSync7, statSync as statSync8, unlinkSync as unlinkSync5 } from "node:fs";
 import { basename as basename4, dirname as dirname10, join as join19 } from "node:path";
 import { promisify } from "node:util";
 function parseSimctlBootedAll(jsonText) {
@@ -26969,7 +26971,7 @@ var init_device_screenshot_raw = __esm({
           return;
         }
         try {
-          renameSync6(tmp, path);
+          renameSync7(tmp, path);
           settle(true);
         } catch {
           cleanupTemp();
@@ -72894,7 +72896,7 @@ var init_maestro_runner_pin = __esm({
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
 import { spawnSync as spawnSync3 } from "node:child_process";
 import { createHash as createHash13 } from "node:crypto";
-import { accessSync, chmodSync as chmodSync5, constants as constants7, copyFileSync as copyFileSync2, cpSync as cpSync2, existsSync as existsSync24, lstatSync as lstatSync13, mkdirSync as mkdirSync17, mkdtempSync as mkdtempSync2, readFileSync as readFileSync25, readdirSync as readdirSync8, readlinkSync as readlinkSync5, realpathSync as realpathSync13, renameSync as renameSync7, rmSync as rmSync10, symlinkSync as symlinkSync4, unlinkSync as unlinkSync11, writeFileSync as writeFileSync13 } from "node:fs";
+import { accessSync, chmodSync as chmodSync5, constants as constants7, copyFileSync as copyFileSync2, cpSync as cpSync2, existsSync as existsSync24, lstatSync as lstatSync13, mkdirSync as mkdirSync17, mkdtempSync as mkdtempSync2, readFileSync as readFileSync25, readdirSync as readdirSync8, readlinkSync as readlinkSync5, realpathSync as realpathSync13, renameSync as renameSync8, rmSync as rmSync10, symlinkSync as symlinkSync4, unlinkSync as unlinkSync11, writeFileSync as writeFileSync13 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import { basename as basename7, dirname as dirname17, isAbsolute as isAbsolute9, join as join36, relative as relative7, resolve as resolve12, sep as sep6 } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -73580,7 +73582,7 @@ function seedRunnerSnapshotCacheFromStore(cacheRoot, fingerprint) {
       const stagedKey = join36(target, `.seed-${entry.name}`);
       try {
         if (copyReusableWdaBuild(sourceKey, stagedKey)) {
-          renameSync7(stagedKey, join36(target, entry.name));
+          renameSync8(stagedKey, join36(target, entry.name));
           seeded += 1;
         } else {
           rmSync10(stagedKey, { recursive: true, force: true });
@@ -73619,9 +73621,9 @@ function publishRunnerSnapshotCacheToStore(cacheRoot, fingerprint) {
         if (copyReusableWdaBuild(sourceKey, stagedKey)) {
           if (existsSync24(storeKey)) {
             const evicted = join36(stage, "evicted");
-            renameSync7(storeKey, evicted);
+            renameSync8(storeKey, evicted);
           }
-          renameSync7(stagedKey, storeKey);
+          renameSync8(stagedKey, storeKey);
           published += 1;
         }
       } finally {
@@ -78857,7 +78859,7 @@ var init_macro_asserts = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync14, renameSync as renameSync8, statSync as statSync13, mkdirSync as mkdirSync19, existsSync as existsSync26, unlinkSync as unlinkSync12, readdirSync as readdirSync9, openSync as openSync11, closeSync as closeSync11, chmodSync as chmodSync6, fstatSync as fstatSync8, lstatSync as lstatSync14, readFileSync as readFileSync28, linkSync as linkSync2, constants as constants9 } from "node:fs";
+import { writeFileSync as writeFileSync14, renameSync as renameSync9, statSync as statSync13, mkdirSync as mkdirSync19, existsSync as existsSync26, unlinkSync as unlinkSync12, readdirSync as readdirSync9, openSync as openSync11, closeSync as closeSync11, chmodSync as chmodSync6, fstatSync as fstatSync8, lstatSync as lstatSync14, readFileSync as readFileSync28, linkSync as linkSync2, constants as constants9 } from "node:fs";
 import { dirname as dirname21, basename as basename8 } from "node:path";
 function generateTmpStamp() {
   const rand = Math.random().toString(36).slice(2, 10);
@@ -79166,7 +79168,7 @@ var init_atomic_writer = __esm({
       },
       /** Underlying `fs.renameSync(from, to)`. */
       _rename(from, to) {
-        renameSync8(from, to);
+        renameSync9(from, to);
       },
       /** Underlying `fs.statSync(path).mtimeMs`. */
       _statMtimeMs(path) {
@@ -82277,6 +82279,9 @@ function chooseMaestroDispatch(inputs) {
         ...appFile ? ["--app-file", appFile] : [],
         "--platform",
         platform,
+        // NOTE: explicit so a runner release changing its default driver (or an ambient MAESTRO_DRIVER) cannot switch drivers silently.
+        "--driver",
+        platform === "android" ? "uiautomator2" : "wda",
         ...deviceId ? ["--device", deviceId] : [],
         "test",
         flowFile
@@ -87182,7 +87187,7 @@ var init_authority_refusal = __esm({
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
 import { createHash as createHash19, randomBytes as randomBytes8, randomUUID as randomUUID11 } from "node:crypto";
-import { chmodSync as chmodSync7, existsSync as existsSync31, mkdirSync as mkdirSync20, readFileSync as readFileSync32, readdirSync as readdirSync12, renameSync as renameSync9, statSync as statSync15, unlinkSync as unlinkSync14, writeFileSync as writeFileSync16 } from "node:fs";
+import { chmodSync as chmodSync7, existsSync as existsSync31, mkdirSync as mkdirSync20, readFileSync as readFileSync32, readdirSync as readdirSync12, renameSync as renameSync10, statSync as statSync15, unlinkSync as unlinkSync14, writeFileSync as writeFileSync16 } from "node:fs";
 import { homedir as homedir9, platform as hostPlatform, release } from "node:os";
 import { dirname as dirname25, join as join48 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
@@ -87555,7 +87560,7 @@ function writeRunnerDiagnosticsBundle(directory, bundle) {
   }
   const temporary = join48(directory, `.runner-diagnostics.${process.pid}.${randomUUID11()}`);
   writeFileSync16(temporary, serialized, { encoding: "utf8", flag: "wx", mode: 384 });
-  renameSync9(temporary, outputPath);
+  renameSync10(temporary, outputPath);
   chmodSync7(outputPath, 384);
   const retained = runnerDiagnosticsFiles(directory).map((file) => ({
     file,
@@ -87912,7 +87917,7 @@ var init_evidence = __esm({
             flag: "wx",
             mode: 384
           });
-          renameSync9(temp, this.path);
+          renameSync10(temp, this.path);
           chmodSync7(this.path, 384);
         } catch (error2) {
           try {
@@ -91598,7 +91603,7 @@ var init_startup_integrity = __esm({
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash23, randomUUID as randomUUID12 } from "node:crypto";
 import { execFileSync as execFileSync16 } from "node:child_process";
-import { chmodSync as chmodSync8, closeSync as closeSync13, existsSync as existsSync33, fsyncSync, lstatSync as lstatSync19, mkdirSync as mkdirSync21, openSync as openSync13, readFileSync as readFileSync34, realpathSync as realpathSync17, renameSync as renameSync10, unlinkSync as unlinkSync16, writeFileSync as writeFileSync18 } from "node:fs";
+import { chmodSync as chmodSync8, closeSync as closeSync13, existsSync as existsSync33, fsyncSync, lstatSync as lstatSync19, mkdirSync as mkdirSync21, openSync as openSync13, readFileSync as readFileSync34, realpathSync as realpathSync17, renameSync as renameSync11, unlinkSync as unlinkSync16, writeFileSync as writeFileSync18 } from "node:fs";
 import { basename as basename12, dirname as dirname28, extname, isAbsolute as isAbsolute15, join as join52, relative as relative9, resolve as resolve18, sep as sep11 } from "node:path";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 function proofActionPayload(unparsedArgs) {
@@ -92067,7 +92072,7 @@ function writeProofReceiptAtomic(path, receipt2) {
     fsyncSync(descriptor);
     closeSync13(descriptor);
     descriptor = null;
-    renameSync10(temporary, path);
+    renameSync11(temporary, path);
     chmodSync8(path, 384);
   } catch (error2) {
     if (descriptor !== null)
@@ -97350,7 +97355,7 @@ var init_target = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname33, join as join60 } from "node:path";
-import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync20, renameSync as renameSync11, readFileSync as readFileSync39, readdirSync as readdirSync17, existsSync as existsSync35 } from "node:fs";
+import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync20, renameSync as renameSync12, readFileSync as readFileSync39, readdirSync as readdirSync17, existsSync as existsSync35 } from "node:fs";
 import { createHash as createHash24 } from "node:crypto";
 function e2eDirFor(projectRoot) {
   return join60(projectRoot, ".rn-agent", "e2e");
@@ -97401,7 +97406,7 @@ function freezeLockedTest(projectRoot, source, ctx) {
   };
   const tmp = `${filePath}.tmp`;
   writeFileSync20(tmp, serializeLockedTest(meta), "utf8");
-  renameSync11(tmp, filePath);
+  renameSync12(tmp, filePath);
   return { ...meta, filePath };
 }
 function loadLockedTest(projectRoot, id) {
@@ -97633,7 +97638,7 @@ var init_lock_e2e_test = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 import { join as join62 } from "node:path";
-import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync21, renameSync as renameSync12, readFileSync as readFileSync41, existsSync as existsSync36 } from "node:fs";
+import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync21, renameSync as renameSync13, readFileSync as readFileSync41, existsSync as existsSync36 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -97693,7 +97698,7 @@ function writeJsonAtomic(file, value) {
   mkdirSync23(join62(file, ".."), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync21(tmp, JSON.stringify(value, null, 2), "utf8");
-  renameSync12(tmp, file);
+  renameSync13(tmp, file);
 }
 function loadIndex(projectRoot) {
   const file = join62(e2eRunsDirFor(projectRoot), "index.json");
@@ -97746,7 +97751,7 @@ var init_e2e_run = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
 import { join as join63 } from "node:path";
-import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync22, renameSync as renameSync13, readFileSync as readFileSync42, readdirSync as readdirSync18, existsSync as existsSync37 } from "node:fs";
+import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync22, renameSync as renameSync14, readFileSync as readFileSync42, readdirSync as readdirSync18, existsSync as existsSync37 } from "node:fs";
 function requestsDir(projectRoot) {
   return join63(e2eRunsDirFor(projectRoot), "requests");
 }
@@ -97759,7 +97764,7 @@ function writeRequest(projectRoot, req) {
   mkdirSync24(requestsDir(projectRoot), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync22(tmp, JSON.stringify(req, null, 2), "utf8");
-  renameSync13(tmp, file);
+  renameSync14(tmp, file);
 }
 function loadRequest(projectRoot, runId) {
   const file = requestPath(projectRoot, runId);
