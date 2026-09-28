@@ -2551,6 +2551,45 @@ mod tests {
     }
 
     #[test]
+    fn private_value_starting_with_marker_does_not_leave_its_tail() {
+        const SECRET: &str = "<private>abc";
+        let mut shown = screen(&[]);
+        shown.nodes.push(node(
+            1,
+            "Button",
+            "Welcome <private>abc",
+            "login-<private>abc",
+            100.0,
+        ));
+        let plan = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(SECRET.into())),
+            ),
+            step("s2", Domain::Native, 500, Op::AssertVisible(text(SECRET))),
+        ]);
+        let (outcome, _) = drive(
+            &plan,
+            &mut ScriptedNative::steady(shown),
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        let rows = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!rows.contains("abc"), "{rows}");
+        assert_eq!(
+            outcome.rows[1].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
+        );
+        let reason = outcome.rows[1].reason.as_deref().unwrap();
+        assert!(reason.contains("Welcome <private>"), "{reason}");
+        let failure = outcome.failure.unwrap();
+        assert!(failure.contains("Welcome <private>"), "{failure}");
+        assert!(!failure.contains("abc"), "{failure}");
+    }
+
+    #[test]
     fn screenshot_name_with_private_value_refuses_before_dispatch() {
         let plan = plan(vec![
             step("s1", Domain::Native, 10_000, tap("Go")),

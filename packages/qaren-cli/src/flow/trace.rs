@@ -94,16 +94,16 @@ impl Trace {
             let inner = &text[open + 1..end];
             let mut at = 0;
             while at < inner.len() {
-                if inner[at..].starts_with("<private>") {
-                    result.push_str("<private>");
-                    at += "<private>".len();
-                } else if let Some(form) = self
+                if let Some(form) = self
                     .private
                     .iter()
                     .find(|form| inner[at..].starts_with(form.as_str()))
                 {
                     result.push_str("<private>");
                     at += form.len();
+                } else if inner[at..].starts_with("<private>") {
+                    result.push_str("<private>");
+                    at += "<private>".len();
                 } else {
                     let ch = inner[at..].chars().next().unwrap();
                     result.push(ch);
