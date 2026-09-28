@@ -1138,3 +1138,53 @@ test('a navigation title needs exactly one observed match and never replaces Rea
   );
   assert.equal(declared.elements[3].semantic?.heading?.kind, 'declared-heading');
 });
+
+test('React observations hidden from accessibility are neither unaccounted evidence nor competitors', () => {
+  const nodes = [
+    ...scrolled.slice(0, 2),
+    { ref: '@title', type: 'StaticText', label: 'Tasks', parentIndex: 1, rect: band(60) },
+    { ref: '@group', type: 'Other', parentIndex: 1, rect: band(120, 200) },
+  ];
+  const presence = presenceOf(['unknown', 'unknown', 'observed', 'unknown']);
+  const view = (hidden: boolean) =>
+    projection.join(
+      nodes,
+      [
+        {
+          role: 'button',
+          testID: 'home-btn',
+          text: 'Go to Feed',
+          capabilities: { press: true, fill: false },
+          ...(hidden ? { hidden } : {}),
+        },
+      ],
+      'app',
+      complete,
+      {
+        complete: true,
+        hosts: [
+          {
+            testID: 'home-btn',
+            role: 'button',
+            roleSource: 'role',
+            capabilities: { press: true },
+            ...(hidden ? { hidden: true as const } : {}),
+          },
+        ],
+      },
+      presence,
+    );
+  const hidden = view(true);
+  assert.equal(hidden.semanticUnassociatedReact, 0);
+  assert.equal(hidden.pressEvidenceGap, undefined);
+  assert.equal(hidden.elements[3].semantic?.press, 'unsupported');
+  assert.equal(
+    hidden.elements.some((e) => e.ref === 'react:home-btn'),
+    false,
+  );
+  assert.deepEqual(projection.visibilityView(hidden), { elements: [hidden.elements[2]] });
+
+  const shown = view(false);
+  assert.equal(shown.semanticUnassociatedReact, 1);
+  assert.equal(shown.pressEvidenceGap, '1 interactive React host unassociated');
+});

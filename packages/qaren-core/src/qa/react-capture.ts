@@ -90,6 +90,10 @@ function publicObservation(tree: unknown): ReactObservation {
       }
       result.capabilities = { press: entry.capabilities.press, fill: entry.capabilities.fill };
     }
+    if (entry.hidden !== undefined) {
+      if (entry.hidden !== true) throw new PrivateInputCaptureError();
+      result.hidden = true;
+    }
     if (entry.handlerless !== undefined) {
       if (
         entry.handlerless !== true ||

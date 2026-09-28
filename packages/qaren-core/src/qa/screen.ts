@@ -88,6 +88,8 @@ export interface DigestEntry {
   capabilities?: { press: boolean; fill: boolean };
   // Interactive only by role or component name: no handler prop and nothing to fill.
   handlerless?: boolean;
+  // Under a host view that hides its subtree from accessibility.
+  hidden?: boolean;
 }
 
 export interface ReactHostObservation {
@@ -98,6 +100,7 @@ export interface ReactHostObservation {
   capabilities: { press?: true; fill?: true };
   disabled?: true;
   readOnly?: true;
+  hidden?: true;
 }
 
 export interface ReactHostEvidence {
@@ -133,7 +136,9 @@ export function validateReactHostEvidence(value: unknown): ReactHostEvidence | u
       ['testID', 'nativeID'].some(
         (key) => host[key] !== undefined && typeof host[key] !== 'string',
       ) ||
-      ['disabled', 'readOnly'].some((key) => host[key] !== undefined && host[key] !== true)
+      ['disabled', 'readOnly', 'hidden'].some(
+        (key) => host[key] !== undefined && host[key] !== true,
+      )
     )
       return undefined;
     hosts.push({
@@ -144,6 +149,7 @@ export function validateReactHostEvidence(value: unknown): ReactHostEvidence | u
       ...(host.nativeID !== undefined ? { nativeID: host.nativeID as string } : {}),
       ...(host.disabled === true ? { disabled: true } : {}),
       ...(host.readOnly === true ? { readOnly: true } : {}),
+      ...(host.hidden === true ? { hidden: true as const } : {}),
     });
   }
   const typography =
@@ -287,7 +293,7 @@ export function join(
   const nativeIds = idCounts(
     nodes.map((n, i) => (duplicates.has(i) ? undefined : nonEmpty(n.identifier))),
   );
-  const reactIds = idCounts(digest.map((d) => d.testID));
+  const reactIds = idCounts(digest.map((d) => (d.hidden ? undefined : d.testID)));
   const hasPositiveHostFill = (id: string | undefined): boolean =>
     id !== undefined &&
     (reactHostEvidence?.hosts.some(
@@ -314,7 +320,7 @@ export function join(
   // Native type may rule out an operation only while every React host offering it is accounted for.
   const unassociated = (offers: (host: ReactHostObservation) => boolean) =>
     reactHostEvidence?.hosts.filter(
-      (host, hostIndex) => offers(host) && !associations.has(hostIndex),
+      (host, hostIndex) => !host.hidden && offers(host) && !associations.has(hostIndex),
     ).length ?? 0;
   const evidenceGap = (count: number) =>
     reactHostEvidence === undefined
@@ -342,14 +348,16 @@ export function join(
   }
   const used = new Set<number>();
   // An unnamed entry that is interactive only by role or name offers no React handler to compete.
-  let semanticUnassociatedReact = digest.filter((d) => !(d.handlerless && !d.testID)).length;
+  let semanticUnassociatedReact = digest.filter(
+    (d) => !d.hidden && !(d.handlerless && !d.testID),
+  ).length;
   const elements: Element[] = nodes.map((n, nodeIndex) => {
     const observed = nativePresence === 'unknown' ? undefined : nativePresence?.nodes[nodeIndex];
     const testID = nonEmpty(n.identifier);
     const label = nonEmpty(n.label);
     let match: DigestEntry | undefined;
     for (let i = 0; !duplicates.has(nodeIndex) && i < digest.length; i += 1) {
-      if (used.has(i)) continue;
+      if (used.has(i) || digest[i].hidden) continue;
       const d = digest[i];
       const byId = testID !== undefined && d.testID === testID;
       const byLabel =
@@ -369,8 +377,11 @@ export function join(
     // Over-associated on purpose: any React hint of interactivity keeps press unknown.
     const reactCandidates = digest.filter(
       (d) =>
-        (testID !== undefined && d.testID === testID) ||
-        (d.testID === undefined && label !== undefined && norm(d.text ?? d.label) === norm(label)),
+        !d.hidden &&
+        ((testID !== undefined && d.testID === testID) ||
+          (d.testID === undefined &&
+            label !== undefined &&
+            norm(d.text ?? d.label) === norm(label))),
     );
     const capabilities = nativeCapabilities(kind, n.type, {
       press:
@@ -491,7 +502,7 @@ export function join(
     return element;
   });
   digest.forEach((d, i) => {
-    if (used.has(i) || !d.testID) return;
+    if (used.has(i) || !d.testID || d.hidden) return;
     if (
       nativeIds.get(d.testID) === 1 &&
       reactIds.get(d.testID) === 1 &&

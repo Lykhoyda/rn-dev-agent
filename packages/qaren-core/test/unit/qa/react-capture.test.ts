@@ -783,3 +783,23 @@ test('the handlerless digest fact survives capture and a malformed one refuses',
     PrivateInputCaptureError,
   );
 });
+
+test('the hidden digest fact survives capture and a malformed one refuses', async () => {
+  const capture = (entry: Record<string, unknown>) =>
+    captureQaReact(
+      mockClient([
+        {
+          ...ready(),
+          tree: JSON.stringify({
+            ...publicTree(),
+            interactive: [entry],
+            hostEvidence: { complete: true, hosts: [] },
+          }),
+          inputs: { version: 1, complete: true, facts: [] },
+        },
+      ]).client,
+    );
+  const entry = { role: 'button', testID: 'home-btn', hidden: true };
+  assert.deepEqual((await capture(entry)).interactive, [entry]);
+  await assert.rejects(capture({ ...entry, hidden: 'yes' }), PrivateInputCaptureError);
+});

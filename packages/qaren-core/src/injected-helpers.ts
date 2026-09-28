@@ -2,7 +2,7 @@ import { PRIVATE_INPUT_LIMITS } from './qa/private-input-limits.js';
 import { TYPOGRAPHY_TEXT_LIMITS } from './qa/host-typography.js';
 
 // Bump when the injected surface changes so warm runtimes replace stale helpers.
-export const HELPERS_VERSION = 88;
+export const HELPERS_VERSION = 89;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -1359,7 +1359,7 @@ export const INJECTED_HELPERS = `
         var safe = {};
         digestPropsCache.set(fiber, safe);
         if (!props || typeof props !== 'object') return safe;
-        var keys = HANDLER_PROPS.concat(['role', 'accessibilityRole', 'testID', 'nativeID', 'disabled', 'aria-disabled', 'accessibilityState', 'editable', 'readOnly', 'aria-readonly', 'title', 'accessibilityLabel', 'placeholder', 'value']);
+        var keys = HANDLER_PROPS.concat(['role', 'accessibilityRole', 'testID', 'nativeID', 'disabled', 'aria-disabled', 'accessibilityState', 'editable', 'readOnly', 'aria-readonly', 'title', 'accessibilityLabel', 'placeholder', 'value', 'aria-hidden', 'accessibilityElementsHidden', 'importantForAccessibility']);
         for (var i = 0; i < keys.length; i++) {
           try {
             var value = qaData(props, keys[i]);
@@ -1466,6 +1466,9 @@ export const INJECTED_HELPERS = `
         var hostIndex = collectHostEvidence(ifiber);
         var typographyRecord = typography ? typography.observe(ifiber, iframe, hostIndex) : null;
         var iprops = digestProps(ifiber) || {};
+        // A host view hiding its subtree from accessibility keeps that subtree out of the native tree.
+        var hidden = iframe.hidden === true || (isHostFiber(ifiber) && (iprops['aria-hidden'] === true || iprops.accessibilityElementsHidden === true || iprops.importantForAccessibility === 'no-hide-descendants'));
+        if (hidden && hostIndex !== null) hostEvidence.hosts[hostIndex].hidden = true;
         var itid = iprops.testID || iprops.nativeID;
         var forwarded = iframe.forwarded;
         if (forwarded && itid && (forwarded.testID || forwarded.nativeID) !== itid) forwarded = null;
@@ -1481,6 +1484,7 @@ export const INJECTED_HELPERS = `
             if (typeof iprops[HANDLER_PROPS[hj]] === 'function') handled = true;
           }
           if (!handled) entry.handlerless = true;
+          if (hidden) entry.hidden = true;
           if (iprops.testID) entry.testID = iprops.testID;
           else if (iprops.nativeID) entry.nativeID = iprops.nativeID;
           var acc = { s: '' };
@@ -1502,6 +1506,7 @@ export const INJECTED_HELPERS = `
             forwarded.capabilities.fill = forwarded.capabilities.fill || entry.capabilities.fill;
             if (!entry.handlerless) delete forwarded.handlerless;
             if (entry.disabled) forwarded.disabled = true;
+            if (entry.hidden) forwarded.hidden = true;
           } else {
             salient.push(entry);
             forwarded = entry;
@@ -1519,7 +1524,7 @@ export const INJECTED_HELPERS = `
         }
         while (ich) {
           if (typography && (++iEnqueued > iBudget || Date.now() >= typography.deadline)) { iEnqueueTruncated = true; break; }
-          iQueue.push({ fiber: ich, forwarded: nextForwarded, parentFiber: ifiber, parentHostIndex: parentHostIndex, textOwnerHostIndex: textOwnerHostIndex, rootIndex: iframe.rootIndex, animatedTypography: typographyRecord && typographyRecord.animated });
+          iQueue.push({ fiber: ich, forwarded: nextForwarded, parentFiber: ifiber, parentHostIndex: parentHostIndex, textOwnerHostIndex: textOwnerHostIndex, rootIndex: iframe.rootIndex, animatedTypography: typographyRecord && typographyRecord.animated, hidden: hidden });
           ich = ich.sibling;
         }
       }
