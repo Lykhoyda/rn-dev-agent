@@ -22,6 +22,7 @@ export function iosSimulatorDevMenuDefaultsArgs(deviceId: string, appId: string)
     [
       ['EXDevMenuShowsAtLaunch', 'NO'],
       ['EXDevMenuIsOnboardingFinished', 'YES'],
+      ['EXDevMenuShowFloatingActionButton', 'NO'],
     ] as const
   ).map(([key, value]) => [
     'simctl',

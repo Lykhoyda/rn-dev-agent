@@ -74,6 +74,7 @@ test('Expo iOS launches through its exact managed Metro proxy without starting a
     before: [
       defaultsWrite('EXDevMenuShowsAtLaunch', 'NO'),
       defaultsWrite('EXDevMenuIsOnboardingFinished', 'YES'),
+      defaultsWrite('EXDevMenuShowFloatingActionButton', 'NO'),
     ],
     command: [
       'xcrun',

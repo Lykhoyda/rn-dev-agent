@@ -3971,6 +3971,7 @@ test('copied adapter accepts build identity only from the package-local session 
     assert.deepEqual(startupCalls(), [
       ['spawn', 'session-ios-device', 'defaults'],
       ['spawn', 'session-ios-device', 'defaults'],
+      ['spawn', 'session-ios-device', 'defaults'],
       ['launch', '--terminate-running-process', 'session-ios-device'],
     ]);
 
