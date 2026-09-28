@@ -1750,6 +1750,10 @@ exec node "$basedir/../expo/bin/cli" "$@"
         readinessTimeoutMs: READINESS_TIMEOUT_MS,
       },
       {
+        environment: {
+          ...process.env,
+          PATH: [dirname(process.execPath), process.env.PATH].filter(Boolean).join(':'),
+        },
         capture: async (input) => {
           const birth = readProcessBirth(input.pid);
           assert.ok(birth);
@@ -1961,6 +1965,7 @@ exec node "$basedir/../expo/bin/cli" "$@"
         receipt = runManagedMetroEnforcementPreflight(attestedPlan, {
           environment: {
             ...process.env,
+            PATH: [dirname(process.execPath), process.env.PATH].filter(Boolean).join(':'),
             NODE_OPTIONS: attestedPlan.baseNodeOptions,
           },
           observe: (value) => {

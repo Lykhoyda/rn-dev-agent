@@ -110,6 +110,7 @@ config.maxWorkers = ${maxWorkers};
 module.exports = config;
 `
       : `const { getDefaultConfig } = require('expo/metro-config');
+require('node:fs').writeFileSync(require('node:path').join(process.env.CACHE_DIR, 'expo-config-probe'), process.env.XDG_CACHE_HOME);
 const config = getDefaultConfig(__dirname);
 config.maxWorkers = ${maxWorkers};
 module.exports = config;
@@ -367,6 +368,17 @@ for (const transport of [
           signerCapability,
           readinessTimeoutMs: READINESS_TIMEOUT_MS,
         });
+        if (process.platform === 'darwin') {
+          assert.equal(binding.runtimeEvidenceAuthority, 'managed-sandbox-v1');
+        }
+        console.log(JSON.stringify({ runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority }));
+        if (transport.metroConfig === 'default') {
+          assert.equal(
+            readFileSync(join(runtimeRoot, 'metro-cache', 'expo-config-probe'), 'utf8'),
+            join(runtimeRoot, 'metro-cache'),
+          );
+          console.log(JSON.stringify({ configCacheRoot: join(runtimeRoot, 'metro-cache') }));
+        }
 
         const listenerExecutable = processExecutable(binding.pid);
         assert.ok(
