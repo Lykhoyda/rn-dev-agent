@@ -456,6 +456,8 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   assert.equal(calls[0]?.env?.RN_DEV_AGENT_SESSION_SECRET_PATH, undefined);
   assert.equal(calls[0]?.env?.RN_DEV_AGENT_REGISTRY_PATH, undefined);
   assert.equal(calls[0]?.env?.RCT_METRO_PORT, '8341');
+  assert.equal(calls[0]?.env?.CACHE_DIR, '/tmp/metro-cache');
+  assert.equal(calls[0]?.env?.XDG_CACHE_HOME, calls[0]?.env?.CACHE_DIR);
   const runtimeEnforcement = JSON.parse(
     calls[0]?.env?.RN_DEV_AGENT_METRO_RUNTIME_ENFORCEMENT ?? '{}',
   ) as Record<string, unknown>;
@@ -466,6 +468,7 @@ test('managed Metro binds the actual listener rather than the launcher shim', as
   ) as NodeJS.ProcessEnv;
   assert.equal(childEnvironment.RCT_METRO_PORT, '8341');
   assert.equal(childEnvironment.EXPO_UNSTABLE_HEADLESS, '1');
+  assert.equal(childEnvironment.CACHE_DIR, '/tmp/metro-cache');
   assert.equal(childEnvironment.RN_DEV_AGENT_SESSION_SECRET_PATH, undefined);
   assert.equal(childEnvironment.RN_DEV_AGENT_REGISTRY_PATH, undefined);
   assert.equal(childEnvironment.RN_DEV_AGENT_METRO_CONTENT_ROOT, '/app');

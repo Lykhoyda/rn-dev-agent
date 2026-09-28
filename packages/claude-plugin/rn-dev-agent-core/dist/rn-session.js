@@ -15699,6 +15699,8 @@ async function startManagedMetro(input, dependencies = {}) {
     TMP: metroTemporaryRoot,
     TEMP: metroTemporaryRoot,
     XDG_CACHE_HOME: metroCacheRoot,
+    // NOTE: find-cache-dir consumers (Storybook at config load) otherwise write the denied node_modules/.cache.
+    CACHE_DIR: metroCacheRoot,
     EXPO_OFFLINE: "1",
     EXPO_UNSTABLE_HEADLESS: "1",
     RCT_METRO_PORT: String(input.port)
