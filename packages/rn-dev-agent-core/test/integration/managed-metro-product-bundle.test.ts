@@ -85,6 +85,10 @@ function prepareFixture(
 ): void {
   cpSync(fixtureRoot, root, { recursive: true });
   writeFileSync(join(root, '.gitignore'), 'node_modules/\nios/\n.expo/\n.rn-agent/runtime/\n');
+  writeFileSync(
+    join(root, 'tsconfig.json'),
+    '{"extends":"expo/tsconfig.base","compilerOptions":{"strict":true}}\n',
+  );
   if (metroConfig === 'default') {
     writeFileSync(
       join(root, 'App.tsx'),
@@ -106,6 +110,7 @@ config.maxWorkers = ${maxWorkers};
 module.exports = config;
 `
       : `const { getDefaultConfig } = require('expo/metro-config');
+require('node:fs').writeFileSync(require('node:path').join(process.env.CACHE_DIR, 'expo-config-probe'), process.env.XDG_CACHE_HOME);
 const config = getDefaultConfig(__dirname);
 config.maxWorkers = ${maxWorkers};
 module.exports = config;
@@ -363,6 +368,17 @@ for (const transport of [
           signerCapability,
           readinessTimeoutMs: READINESS_TIMEOUT_MS,
         });
+        if (process.platform === 'darwin') {
+          assert.equal(binding.runtimeEvidenceAuthority, 'managed-sandbox-v1');
+        }
+        console.log(JSON.stringify({ runtimeEvidenceAuthority: binding.runtimeEvidenceAuthority }));
+        if (transport.metroConfig === 'default') {
+          assert.equal(
+            readFileSync(join(runtimeRoot, 'metro-cache', 'expo-config-probe'), 'utf8'),
+            join(runtimeRoot, 'metro-cache'),
+          );
+          console.log(JSON.stringify({ configCacheRoot: join(runtimeRoot, 'metro-cache') }));
+        }
 
         const listenerExecutable = processExecutable(binding.pid);
         assert.ok(
@@ -392,7 +408,7 @@ for (const transport of [
         // Repeat so a lucky first pass cannot hide the race this regression exists to catch.
         for (let attempt = 0; attempt < 2; attempt += 1) {
           const bundle = await fetchBounded(devClientBundleUrl.toString(), 300_000);
-          assert.equal(bundle.status, 200);
+          assert.equal(bundle.status, 200, bundle.body.subarray(0, 2_000).toString('utf8'));
           assert.ok(
             bundle.body.length > 1024 * 1024,
             `managed product bundle was ${bundle.body.length} bytes`,
