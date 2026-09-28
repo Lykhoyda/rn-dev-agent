@@ -2,7 +2,12 @@ import { isRecord } from './questions.js';
 import { createHash } from 'node:crypto';
 import { captureInputPrivacy, nativeLabelMayBeValue } from './privacy.js';
 import { PRIVATE_INPUT_LIMITS } from './private-input-limits.js';
-import { duplicateNodes, offscreenNodes, scrollChromeNodes } from './native-presence.js';
+import {
+  duplicateNodes,
+  navigationTitles,
+  offscreenNodes,
+  scrollChromeNodes,
+} from './native-presence.js';
 import type { NativePresence, NativePresenceNode } from './native-presence.js';
 import { associateHeadings, validateHostTypography } from './host-typography.js';
 import type { HeadingEvidence, HostTypography } from './host-typography.js';
@@ -236,7 +241,12 @@ function nativeCapabilities(
   react: { press: boolean; fill: boolean },
 ): Pick<NonNullable<Element['semantic']>, 'press' | 'fill'> {
   // Plain iOS views and scroll containers carry no press or text entry of their own.
-  const plain = kind === 'text' || kind === 'image' || type === 'Other' || type === 'ScrollView';
+  const plain =
+    kind === 'text' ||
+    kind === 'image' ||
+    type === 'Other' ||
+    type === 'ScrollView' ||
+    type === 'NavigationBar';
   return {
     press:
       kind === 'button' || kind === 'switch' || kind === 'link'
@@ -293,7 +303,10 @@ export function join(
       reactHostEvidence!.hosts[hostIndex],
     ]),
   );
-  const headings = associateHeadings(nodes, reactHostEvidence, presence, associations);
+  const headings = new Map<number, HeadingEvidence>([
+    ...associateHeadings(nodes, reactHostEvidence, presence, associations),
+    ...navigationTitles(nodes, presence),
+  ]);
   const interactiveRole = (role: string | null | undefined) =>
     !!role && kindOfRole(role) !== 'text' && kindOfRole(role) !== 'image';
   const inputRole = (role: string | null | undefined) => !!role && kindOfRole(role) === 'input';

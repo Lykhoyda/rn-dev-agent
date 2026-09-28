@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import * as projection from '../../../dist/qa/screen.js';
 import type { DigestEntry, Element, ReactHostEvidence, Screen } from '../../../dist/qa/screen.js';
 import { inputValues, redactEvidence } from '../../../dist/qa/privacy.js';
-import { decideTarget, prepareTarget } from '../../../dist/qa/resolve.js';
+import { decideScreen, decideTarget, prepareTarget } from '../../../dist/qa/resolve.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { choice, scriptedJudge, walker } from './judgment-fixtures.ts';
@@ -1008,4 +1008,65 @@ test('the domain retains all 31 independent candidates and contributions for res
   assert.deepEqual(visibility, { elements: controls });
   assert.ok('elements' in action && action.elements.every((e, i) => e === controls[i]));
   assert.ok('elements' in visibility && visibility.elements.every((e, i) => e === controls[i]));
+});
+
+test('an observed navigation bar title matching its bar is a native heading witness', async () => {
+  const nav = (title: string, statuses: ('observed' | 'unknown')[], barId = 'Tasks') => {
+    const nodes = [
+      ...scrolled.slice(0, 2),
+      {
+        ref: '@bar',
+        type: 'NavigationBar',
+        identifier: barId,
+        label: barId,
+        parentIndex: 1,
+        rect: band(60, 50),
+      },
+      { ref: '@title', type: 'StaticText', label: title, parentIndex: 2, rect: band(70, 20) },
+    ];
+    const presence = {
+      source: 'xcui-live' as const,
+      nodes: statuses.map((status, i) => ({
+        status,
+        labelSource: i === 2 ? ('descendant' as const) : ('direct' as const),
+      })),
+    };
+    return projection.join(nodes, [], 'app', complete, { hosts: [], complete: true }, presence);
+  };
+  const shown = nav('Tasks', ['unknown', 'unknown', 'unknown', 'observed']);
+  assert.deepEqual(shown.elements[3].semantic?.heading, {
+    kind: 'navigation-title',
+    barRef: '@bar',
+  });
+  assert.equal(
+    nav('Settings', ['unknown', 'unknown', 'unknown', 'observed']).elements[3].semantic?.heading,
+    undefined,
+  );
+  assert.equal(
+    nav('Tasks', ['unknown', 'unknown', 'unknown', 'unknown']).elements[3].semantic?.heading,
+    undefined,
+  );
+
+  const judge = scriptedJudge((questions, _i, state) => {
+    assert.deepEqual(Object.keys(questions), ['visibility_1']);
+    assert.equal(state.qualifiedHeadingEvidence.length, 1);
+    assert.match(
+      state.qualifiedHeadingEvidence[0].description,
+      /platform-observed navigation bar title/,
+    );
+    return { visibility_1: { type: 'noul', noul: 0.9 } };
+  });
+  const wait = (phrase: string) => ({ kind: 'wait' as const, target: { phrase }, line: 1 });
+  assert.deepEqual(
+    (await decideScreen(shown, judge, undefined, wait('the tasks heading'))).visibility,
+    {
+      verdict: 'present',
+    },
+  );
+  assert.deepEqual(
+    (await decideScreen(shown, judge, undefined, wait('the tasks accessibility heading')))
+      .visibility,
+    { verdict: 'pending' },
+    'a navigation title is not a declared accessibility role',
+  );
 });

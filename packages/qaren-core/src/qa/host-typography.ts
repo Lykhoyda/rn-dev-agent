@@ -38,12 +38,14 @@ export interface HostTypography {
   }>;
 }
 
-export type HeadingEvidence = {
-  kind: 'declared-heading' | 'typographic-title';
-  hostIndex: number;
-  anchorRef: string;
-  bodyRefs: string[];
-};
+export type HeadingEvidence =
+  | {
+      kind: 'declared-heading' | 'typographic-title';
+      hostIndex: number;
+      anchorRef: string;
+      bodyRefs: string[];
+    }
+  | { kind: 'navigation-title'; barRef: string };
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);

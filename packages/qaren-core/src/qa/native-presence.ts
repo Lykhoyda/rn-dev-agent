@@ -145,6 +145,30 @@ export function duplicateNodes(
   return duplicates;
 }
 
+// An observed title of a verified capture that a navigation bar is named after; iOS exposes it as the bar's header.
+export function navigationTitles(
+  nodes: NativeNode[],
+  presence: NativePresence | undefined,
+): Map<number, { kind: 'navigation-title'; barRef: string }> {
+  const titles = new Map<number, { kind: 'navigation-title'; barRef: string }>();
+  if (!presence) return titles;
+  nodes.forEach((bar, b) => {
+    const name = bar.identifier?.trim();
+    if (bar.type !== 'NavigationBar' || !name) return;
+    const matches = nodes.flatMap((n, i) =>
+      n.parentIndex === b && n.type === 'StaticText' && n.label === bar.identifier ? [i] : [],
+    );
+    const title = matches.length === 1 ? matches[0] : undefined;
+    if (
+      title !== undefined &&
+      presence.nodes[title]?.status === 'observed' &&
+      presence.nodes[title].labelSource === 'direct'
+    )
+      titles.set(title, { kind: 'navigation-title', barRef: bar.ref });
+  });
+  return titles;
+}
+
 // Unidentified views of a verified capture repeated identically beside each other directly under a
 // scroll view, as XCUI reports the platform's scroll indicators.
 export function scrollChromeNodes(

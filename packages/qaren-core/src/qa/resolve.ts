@@ -156,7 +156,9 @@ function describeSemantic(element: Element): string {
       ? '; platform-observed typographic title (larger than and above body siblings, not a declared accessibility role)'
       : heading?.kind === 'declared-heading'
         ? '; associated declared heading role'
-        : '';
+        : heading?.kind === 'navigation-title'
+          ? '; platform-observed navigation bar title'
+          : '';
   const offscreen = element.semantic?.visibility === 'offscreen';
   if (native)
     return `${describe({
