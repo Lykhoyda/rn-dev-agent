@@ -31,8 +31,6 @@ const MASK: &str = "\"<private>\"";
 pub struct Trace {
     action_id: String,
     t0: u64,
-    // Every quoted form a run-private value takes in a row, longest first so that one value's
-    // form can never split another's.
     private: Vec<String>,
     pub rows: Vec<Row>,
 }
@@ -48,22 +46,20 @@ pub struct Entry<'a> {
 }
 
 impl Trace {
-    // Selectors and labels render text with {:?}, so a run-private value recurs only in its
-    // quoted form: whole, cut to the label length, or as the sanitised label itself.
     pub fn new(action_id: &str, t0: u64, private: Vec<String>) -> Trace {
+        let rendered = |value: &str| {
+            let quoted = format!("{value:?}");
+            quoted[1..quoted.len() - 1].to_string()
+        };
         let mut forms: Vec<String> = private
             .iter()
             .filter(|value| !value.is_empty())
             .flat_map(|value| {
                 let head: String = value.chars().take(LABEL_CHARS).collect();
                 let label = safe_snapshot_text(value);
-                [
-                    format!("{value:?}"),
-                    format!("{head:?}"),
-                    format!("{label:?}"),
-                ]
+                [rendered(value), rendered(&head), rendered(&label)]
             })
-            .filter(|form| form != MASK)
+            .filter(|form| !form.is_empty() && form != "<private>")
             .collect();
         forms.sort_by_key(|form| std::cmp::Reverse(form.len()));
         Trace {
@@ -77,13 +73,57 @@ impl Trace {
     pub fn mask(&self, text: &str) -> String {
         let mut masked = text.to_string();
         for form in &self.private {
-            // Re-find after each hit: `replace` skips an occurrence that shares a quote with the
-            // previous one. Every hit removes original text, so the loop ends.
-            while let Some(at) = masked.find(form.as_str()) {
-                masked.replace_range(at..at + form.len(), MASK);
+            let quoted = format!("\"{form}\"");
+            while let Some(at) = masked.find(&quoted) {
+                masked.replace_range(at..at + quoted.len(), MASK);
             }
         }
-        masked
+        let mut result = String::with_capacity(masked.len());
+        let mut cursor = 0;
+        while let Some(open) = masked[cursor..].find('"').map(|at| cursor + at) {
+            result.push_str(&masked[cursor..=open]);
+            let mut end = open + 1;
+            while end < masked.len() {
+                let ch = masked[end..].chars().next().unwrap();
+                if ch == '\\' {
+                    end += 1;
+                    if end < masked.len() {
+                        end += masked[end..].chars().next().unwrap().len_utf8();
+                    }
+                } else if ch == '"' {
+                    break;
+                } else {
+                    end += ch.len_utf8();
+                }
+            }
+            if end == masked.len() {
+                cursor = open + 1;
+                break;
+            }
+            let inner = &masked[open + 1..end];
+            let mut at = 0;
+            while at < inner.len() {
+                if inner[at..].starts_with("<private>") {
+                    result.push_str("<private>");
+                    at += "<private>".len();
+                } else if let Some(form) = self
+                    .private
+                    .iter()
+                    .find(|form| inner[at..].starts_with(form.as_str()))
+                {
+                    result.push_str("<private>");
+                    at += form.len();
+                } else {
+                    let ch = inner[at..].chars().next().unwrap();
+                    result.push(ch);
+                    at += ch.len_utf8();
+                }
+            }
+            result.push('"');
+            cursor = end + 1;
+        }
+        result.push_str(&masked[cursor..]);
+        result
     }
 
     pub fn record(&mut self, entry: Entry<'_>) {

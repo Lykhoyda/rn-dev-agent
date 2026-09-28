@@ -171,12 +171,21 @@ pub fn run(
     native: &mut dyn NativeDriver,
     host: &mut dyn HostDriver,
 ) -> Outcome {
+    let private = typed_values(&plan.steps);
+    if screenshot_contains_private_value(&plan.steps, &private) {
+        return Outcome {
+            verdict: Verdict::Fail,
+            rows: Vec::new(),
+            failure: Some("takeScreenshot name contains a private value".into()),
+            captures: Vec::new(),
+        };
+    }
     let t0 = runner.monotonic_ms();
     let mut engine = Engine {
         runner,
         native,
         host,
-        trace: Trace::new(&plan.action_id, t0, typed_values(&plan.steps)),
+        trace: Trace::new(&plan.action_id, t0, private),
         captures: Vec::new(),
         attempt: 1,
         answered_by: Domain::Native,
@@ -199,11 +208,21 @@ fn typed_values(steps: &[Step]) -> Vec<String> {
     steps
         .iter()
         .flat_map(|step| match &step.op {
-            Op::InputText(text) => vec![text.as_str().to_string()],
+            Op::InputText(text) | Op::OpenLink(text) => vec![text.as_str().to_string()],
             Op::RunFlow { steps, .. } => typed_values(steps),
             _ => Vec::new(),
         })
         .collect()
+}
+
+fn screenshot_contains_private_value(steps: &[Step], private: &[String]) -> bool {
+    steps.iter().any(|step| match &step.op {
+        Op::TakeScreenshot(name) => private
+            .iter()
+            .any(|value| !value.is_empty() && name.contains(value)),
+        Op::RunFlow { steps, .. } => screenshot_contains_private_value(steps, private),
+        _ => false,
+    })
 }
 
 enum Fail {
@@ -2484,6 +2503,77 @@ mod tests {
             !failure.contains(SECRET) && failure.contains("<private>"),
             "{failure}"
         );
+    }
+
+    #[test]
+    fn private_value_embedded_in_near_miss_is_masked() {
+        const SECRET: &str = "qa-password";
+        let mut shown = screen(&[]);
+        shown.nodes.push(node(
+            1,
+            "Button",
+            "Welcome qa-password",
+            "login-qa-password",
+            100.0,
+        ));
+        let plan = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(SECRET.into())),
+            ),
+            step("s2", Domain::Native, 500, Op::AssertVisible(text(SECRET))),
+        ]);
+        let (outcome, _) = drive(
+            &plan,
+            &mut ScriptedNative::steady(shown),
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        let rows = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!rows.contains(SECRET), "{rows}");
+        assert!(rows.contains("Welcome <private>"), "{rows}");
+        assert!(rows.contains("text \\\"<private>\\\""), "{rows}");
+        let failure = outcome.failure.unwrap();
+        assert!(!failure.contains(SECRET), "{failure}");
+    }
+
+    #[test]
+    fn screenshot_name_with_private_value_refuses_before_dispatch() {
+        let plan = plan(vec![
+            step("s1", Domain::Native, 10_000, tap("Go")),
+            step(
+                "s2",
+                Domain::Native,
+                0,
+                Op::RunFlow {
+                    when: Condition::Visible(text("Go")),
+                    steps: vec![step(
+                        "s2a",
+                        Domain::Native,
+                        10_000,
+                        Op::TakeScreenshot("after-qa-password".into()),
+                    )],
+                },
+            ),
+            step(
+                "s3",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private("qa-password".into())),
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(screen(&["Go"]));
+        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        assert_eq!(
+            outcome.failure.as_deref(),
+            Some("takeScreenshot name contains a private value")
+        );
+        assert!(outcome.rows.is_empty());
+        assert!(outcome.captures.is_empty());
+        assert!(native.mutations.is_empty());
     }
 
     #[test]
