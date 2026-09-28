@@ -205,7 +205,6 @@ pub fn run(
     }
 }
 
-// Every value the plan types is run-private for the whole run, wherever a row repeats it.
 fn typed_values(steps: &[Step]) -> Vec<String> {
     steps
         .iter()

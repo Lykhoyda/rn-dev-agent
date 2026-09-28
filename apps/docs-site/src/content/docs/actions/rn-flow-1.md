@@ -94,11 +94,14 @@ any other `${…}` expression refuses. The regex rule applies to the authored
 text, so a parameter value is always literal. Because typed values are resolved
 into the plan, a plan file is run-private.
 
-**Trace privacy.** Values typed by `inputText` and parameter values are
-run-private. Trace rows and the run's failure text show a run-private value as
-`<private>` wherever it recurs, including in a later selector or a matched
-label. The engine collects the typed values itself; the replay command adds its
-`--param` values when it arrives.
+**Trace privacy.** Values typed by `inputText`, `openLink` values, and
+caller-declared parameter values are run-private. The engine masks their
+occurrences inside quoted fields in trace row text, reasons, and the run's
+failure text, including embedded occurrences in selectors and matched labels.
+Unquoted indexes, counts, and coordinates remain readable. The engine collects
+typed values and `openLink` values itself; the replay command will pass its
+`--param` values when it arrives. A plan whose `takeScreenshot` name contains
+one of these private values fails before the first step, with no rows or captures.
 
 ## Domains
 
