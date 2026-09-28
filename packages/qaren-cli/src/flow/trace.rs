@@ -25,8 +25,6 @@ impl StepOutcome {
     }
 }
 
-const MASK: &str = "\"<private>\"";
-
 // Replay rows share core::Row so the ledger, report and Observe SPA need no second row type.
 pub struct Trace {
     action_id: String,
@@ -71,24 +69,17 @@ impl Trace {
     }
 
     pub fn mask(&self, text: &str) -> String {
-        let mut masked = text.to_string();
-        for form in &self.private {
-            let quoted = format!("\"{form}\"");
-            while let Some(at) = masked.find(&quoted) {
-                masked.replace_range(at..at + quoted.len(), MASK);
-            }
-        }
-        let mut result = String::with_capacity(masked.len());
+        let mut result = String::with_capacity(text.len());
         let mut cursor = 0;
-        while let Some(open) = masked[cursor..].find('"').map(|at| cursor + at) {
-            result.push_str(&masked[cursor..=open]);
+        while let Some(open) = text[cursor..].find('"').map(|at| cursor + at) {
+            result.push_str(&text[cursor..=open]);
             let mut end = open + 1;
-            while end < masked.len() {
-                let ch = masked[end..].chars().next().unwrap();
+            while end < text.len() {
+                let ch = text[end..].chars().next().unwrap();
                 if ch == '\\' {
                     end += 1;
-                    if end < masked.len() {
-                        end += masked[end..].chars().next().unwrap().len_utf8();
+                    if end < text.len() {
+                        end += text[end..].chars().next().unwrap().len_utf8();
                     }
                 } else if ch == '"' {
                     break;
@@ -96,11 +87,11 @@ impl Trace {
                     end += ch.len_utf8();
                 }
             }
-            if end == masked.len() {
+            if end == text.len() {
                 cursor = open + 1;
                 break;
             }
-            let inner = &masked[open + 1..end];
+            let inner = &text[open + 1..end];
             let mut at = 0;
             while at < inner.len() {
                 if inner[at..].starts_with("<private>") {
@@ -122,7 +113,7 @@ impl Trace {
             result.push('"');
             cursor = end + 1;
         }
-        result.push_str(&masked[cursor..]);
+        result.push_str(&text[cursor..]);
         result
     }
 

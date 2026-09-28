@@ -79,7 +79,7 @@ fn a_compiled_plan_replays_through_the_ios_runner_wire_without_leaking_secrets()
     let mut native = IosDriver::new(RunnerClient::new(4711, CAPABILITY, "com.x.app", "run-7"));
     let mut host = Host { performed: vec![] };
 
-    let outcome = interpret::run(&plan, &mut runner, &mut native, &mut host);
+    let outcome = interpret::run(&plan, &[], &mut runner, &mut native, &mut host);
 
     assert_eq!(outcome.verdict, Verdict::Pass, "{:?}", outcome.failure);
     let summary: Vec<(String, u64, String, String)> = outcome
@@ -144,7 +144,7 @@ fn a_timed_out_tap_is_dispatched_unknown_and_nothing_follows() {
     runner.expect_run("curl", CmdOutput::failed(28, "Operation timed out"));
     let mut native = IosDriver::new(RunnerClient::new(4711, CAPABILITY, "com.x.app", "run-8"));
     let mut host = Host { performed: vec![] };
-    let outcome = interpret::run(&plan, &mut runner, &mut native, &mut host);
+    let outcome = interpret::run(&plan, &[], &mut runner, &mut native, &mut host);
     assert_eq!(outcome.verdict, Verdict::Fail);
     assert_eq!(outcome.rows.len(), 1);
     assert_eq!(outcome.rows[0].outcome, "dispatched-unknown");

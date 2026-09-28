@@ -167,11 +167,13 @@ pub struct Outcome {
 // Runs a plan whose foreground surface the caller has already proven to be the app.
 pub fn run(
     plan: &Plan,
+    caller_private: &[String],
     runner: &mut dyn Runner,
     native: &mut dyn NativeDriver,
     host: &mut dyn HostDriver,
 ) -> Outcome {
-    let private = typed_values(&plan.steps);
+    let mut private = typed_values(&plan.steps);
+    private.extend_from_slice(caller_private);
     if screenshot_contains_private_value(&plan.steps, &private) {
         return Outcome {
             verdict: Verdict::Fail,
@@ -1245,9 +1247,18 @@ mod tests {
     }
 
     fn drive(plan: &Plan, native: &mut ScriptedNative, host: &mut ScriptedHost) -> (Outcome, u64) {
+        drive_with_private(plan, &[], native, host)
+    }
+
+    fn drive_with_private(
+        plan: &Plan,
+        private: &[String],
+        native: &mut ScriptedNative,
+        host: &mut ScriptedHost,
+    ) -> (Outcome, u64) {
         let mut runner = MockRunner::new();
         let t0 = runner.now_epoch_ms();
-        let outcome = run(plan, &mut runner, native, host);
+        let outcome = run(plan, private, &mut runner, native, host);
         (outcome, runner.now_epoch_ms() - t0)
     }
 
@@ -1260,7 +1271,7 @@ mod tests {
     ) -> Outcome {
         let mut runner = MockRunner::new();
         runner.cancel_at_ms = Some((runner.now_epoch_ms() + after_ms, reason.into()));
-        run(plan, &mut runner, native, host)
+        run(plan, &[], &mut runner, native, host)
     }
 
     fn outcomes(rows: &[Row]) -> Vec<&str> {
@@ -2612,8 +2623,6 @@ mod tests {
         );
     }
 
-    // The typed value equals the text between two quoted fields, so its first occurrence in the
-    // rendering shares a quote with the real one.
     #[test]
     fn typed_value_matching_a_field_separator_is_still_masked() {
         let mut shown = screen(&[]);
@@ -2639,9 +2648,72 @@ mod tests {
         assert_eq!(outcome.verdict, Verdict::Pass);
         let reason = outcome.rows[1].reason.clone().unwrap();
         assert!(
-            !reason.contains(" id=") && reason.contains("Other") && reason.contains("<private>"),
+            reason.contains("label=\"Other\" id=\"<private>\"") && reason.contains("rect=0,100"),
             "{reason}"
         );
+    }
+
+    #[test]
+    fn caller_private_selector_value_is_masked_in_rows_and_failure() {
+        let mut shown = screen(&[]);
+        shown.nodes.push(node(
+            1,
+            "Button",
+            "Welcome account-name",
+            "login-account-name",
+            100.0,
+        ));
+        let plan = plan(vec![step(
+            "s1",
+            Domain::Native,
+            500,
+            Op::AssertVisible(text("account-name")),
+        )]);
+        let (outcome, _) = drive_with_private(
+            &plan,
+            &["account-name".into()],
+            &mut ScriptedNative::steady(shown),
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        assert_eq!(
+            outcome.rows[0].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
+        );
+        let reason = outcome.rows[0].reason.as_deref().unwrap();
+        assert!(reason.contains("Welcome <private>"), "{reason}");
+        assert!(!reason.contains("account-name"), "{reason}");
+        let failure = outcome.failure.unwrap();
+        assert!(failure.contains("Welcome <private>"), "{failure}");
+        assert!(!failure.contains("account-name"), "{failure}");
+    }
+
+    #[test]
+    fn caller_private_screenshot_name_refuses_before_first_step() {
+        let plan = plan(vec![
+            step("s1", Domain::Native, 10_000, tap("Go")),
+            step(
+                "s2",
+                Domain::Native,
+                10_000,
+                Op::TakeScreenshot("after-account-name".into()),
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(screen(&["Go"]));
+        let (outcome, _) = drive_with_private(
+            &plan,
+            &["account-name".into()],
+            &mut native,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        assert_eq!(
+            outcome.failure.as_deref(),
+            Some("takeScreenshot name contains a private value")
+        );
+        assert!(outcome.rows.is_empty());
+        assert!(outcome.captures.is_empty());
+        assert!(native.mutations.is_empty());
     }
 
     // A longer value's cut form must not split a shorter value's escaped rendering, and a
