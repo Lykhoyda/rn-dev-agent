@@ -303,9 +303,10 @@ export function join(
       reactHostEvidence!.hosts[hostIndex],
     ]),
   );
+  // React heading evidence wins over a navigation title on the same node.
   const headings = new Map<number, HeadingEvidence>([
-    ...associateHeadings(nodes, reactHostEvidence, presence, associations),
     ...navigationTitles(nodes, presence),
+    ...associateHeadings(nodes, reactHostEvidence, presence, associations),
   ]);
   const interactiveRole = (role: string | null | undefined) =>
     !!role && kindOfRole(role) !== 'text' && kindOfRole(role) !== 'image';

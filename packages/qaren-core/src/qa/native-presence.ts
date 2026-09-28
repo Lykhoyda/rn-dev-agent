@@ -155,16 +155,18 @@ export function navigationTitles(
   nodes.forEach((bar, b) => {
     const name = bar.identifier?.trim();
     if (bar.type !== 'NavigationBar' || !name) return;
-    const matches = nodes.flatMap((n, i) =>
-      n.parentIndex === b && n.type === 'StaticText' && n.label === bar.identifier ? [i] : [],
+    // A bar may hold a hidden twin of its title, as iOS large titles do; exactly one may be observed.
+    const observed = nodes.flatMap((n, i) =>
+      n.parentIndex === b &&
+      n.type === 'StaticText' &&
+      n.label === bar.identifier &&
+      presence.nodes[i]?.status === 'observed' &&
+      presence.nodes[i].labelSource === 'direct'
+        ? [i]
+        : [],
     );
-    const title = matches.length === 1 ? matches[0] : undefined;
-    if (
-      title !== undefined &&
-      presence.nodes[title]?.status === 'observed' &&
-      presence.nodes[title].labelSource === 'direct'
-    )
-      titles.set(title, { kind: 'navigation-title', barRef: bar.ref });
+    if (observed.length === 1)
+      titles.set(observed[0], { kind: 'navigation-title', barRef: bar.ref });
   });
   return titles;
 }

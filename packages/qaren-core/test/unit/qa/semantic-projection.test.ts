@@ -1070,3 +1070,71 @@ test('an observed navigation bar title matching its bar is a native heading witn
     'a navigation title is not a declared accessibility role',
   );
 });
+
+test('a navigation title needs exactly one observed match and never replaces React heading evidence', () => {
+  const bar = {
+    ref: '@bar',
+    type: 'NavigationBar',
+    identifier: 'Tasks',
+    label: 'Tasks',
+    parentIndex: 1,
+    rect: band(60, 50),
+  };
+  const title = (ref: string, y: number, identifier?: string) => ({
+    ref,
+    type: 'StaticText',
+    label: 'Tasks',
+    parentIndex: 2,
+    rect: band(y, 20),
+    ...(identifier ? { identifier } : {}),
+  });
+  const presence = (statuses: ('observed' | 'unknown')[]) => ({
+    source: 'xcui-live' as const,
+    nodes: statuses.map((status, i) => ({
+      status,
+      labelSource: i === 2 ? ('descendant' as const) : ('direct' as const),
+    })),
+  });
+  const large = projection.join(
+    [...scrolled.slice(0, 2), bar, title('@small', 70), title('@large', 120)],
+    [],
+    'app',
+    complete,
+    { hosts: [], complete: true },
+    presence(['unknown', 'unknown', 'unknown', 'unknown', 'observed']),
+  );
+  assert.equal(large.elements[3].semantic?.heading, undefined);
+  assert.deepEqual(large.elements[4].semantic?.heading, {
+    kind: 'navigation-title',
+    barRef: '@bar',
+  });
+
+  const declared = projection.join(
+    [...scrolled.slice(0, 2), bar, title('@title', 70, 'screen-title')],
+    [],
+    'app',
+    complete,
+    {
+      complete: true,
+      hosts: [{ testID: 'screen-title', role: 'heading', roleSource: 'role', capabilities: {} }],
+      typography: {
+        version: 1,
+        complete: true,
+        durationMs: 1,
+        coordinateSpace: 'window-points',
+        nodes: [
+          {
+            hostIndex: 0,
+            parentHostIndex: null,
+            rootIndex: 0,
+            hostType: 'RCTText',
+            rect: band(70, 20),
+            text: { kind: 'block', content: 'Tasks', runs: [{ start: 0, end: 5, fontSize: 17 }] },
+          },
+        ],
+      },
+    },
+    presence(['unknown', 'unknown', 'unknown', 'observed']),
+  );
+  assert.equal(declared.elements[3].semantic?.heading?.kind, 'declared-heading');
+});
