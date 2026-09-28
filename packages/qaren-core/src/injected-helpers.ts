@@ -2,7 +2,7 @@ import { PRIVATE_INPUT_LIMITS } from './qa/private-input-limits.js';
 import { TYPOGRAPHY_TEXT_LIMITS } from './qa/host-typography.js';
 
 // Bump when the injected surface changes so warm runtimes replace stale helpers.
-export const HELPERS_VERSION = 89;
+export const HELPERS_VERSION = 90;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -1471,6 +1471,7 @@ export const INJECTED_HELPERS = `
         if (hidden && hostIndex !== null) hostEvidence.hosts[hostIndex].hidden = true;
         var itid = iprops.testID || iprops.nativeID;
         var forwarded = iframe.forwarded;
+        var wrapperCandidate = iframe.wrapperCandidate;
         if (forwarded && itid && (forwarded.testID || forwarded.nativeID) !== itid) forwarded = null;
         var interactive = isInteractiveFiber(ifiber);
         if (interactive) {
@@ -1510,6 +1511,11 @@ export const INJECTED_HELPERS = `
           } else {
             salient.push(entry);
             forwarded = entry;
+            if (wrapperCandidate) wrapperCandidate.compositeWrapper = true;
+            var componentName = getName(ifiber);
+            var baseName = componentName && componentName.slice(componentName.lastIndexOf('.') + 1);
+            wrapperCandidate = !isHostFiber(ifiber) && baseName && baseName !== 'View' && baseName !== 'RCTView'
+              && !HOST_KIND_LOOKUP[baseName] && !INTERACTIVE_NAMES[baseName] && !iprops.role && !iprops.accessibilityRole ? entry : null;
           }
         }
         var ich = ifiber.child;
@@ -1524,7 +1530,7 @@ export const INJECTED_HELPERS = `
         }
         while (ich) {
           if (typography && (++iEnqueued > iBudget || Date.now() >= typography.deadline)) { iEnqueueTruncated = true; break; }
-          iQueue.push({ fiber: ich, forwarded: nextForwarded, parentFiber: ifiber, parentHostIndex: parentHostIndex, textOwnerHostIndex: textOwnerHostIndex, rootIndex: iframe.rootIndex, animatedTypography: typographyRecord && typographyRecord.animated, hidden: hidden });
+          iQueue.push({ fiber: ich, forwarded: nextForwarded, wrapperCandidate: wrapperCandidate, parentFiber: ifiber, parentHostIndex: parentHostIndex, textOwnerHostIndex: textOwnerHostIndex, rootIndex: iframe.rootIndex, animatedTypography: typographyRecord && typographyRecord.animated, hidden: hidden });
           ich = ich.sibling;
         }
       }

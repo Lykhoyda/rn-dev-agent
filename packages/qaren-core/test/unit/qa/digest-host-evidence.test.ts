@@ -371,7 +371,7 @@ test('current helper replaces a warm version 77 producer and reinjection stays i
   const sandbox = createSandbox({ fiberRoot: buildFiber({ hostType: 'RCTView' }) });
   Object.assign(sandbox, { __QAREN: { __v: 77 } });
   vm.runInContext(INJECTED_HELPERS, sandbox);
-  assert.equal(vm.runInContext('__QAREN.__v', sandbox), 89);
+  assert.equal(vm.runInContext('__QAREN.__v', sandbox), 90);
   assert.equal(readDigest(sandbox).hostEvidence.complete, true);
   const producer = vm.runInContext('__QAREN.getTree', sandbox);
   vm.runInContext(INJECTED_HELPERS, sandbox);

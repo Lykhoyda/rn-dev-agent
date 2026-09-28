@@ -88,6 +88,8 @@ export interface DigestEntry {
   capabilities?: { press: boolean; fill: boolean };
   // Interactive only by role or component name: no handler prop and nothing to fill.
   handlerless?: boolean;
+  // Custom composite with a separately emitted interactive descendant, not a view or declared control.
+  compositeWrapper?: true;
   // Under a host view that hides its subtree from accessibility.
   hidden?: boolean;
 }
@@ -347,9 +349,9 @@ export function join(
     height = Math.max(height, n.rect.y + n.rect.height);
   }
   const used = new Set<number>();
-  // An unnamed entry that is interactive only by role or name offers no React handler to compete.
+  // Unnamed role-only entries and custom wrappers do not count as independent controls.
   let semanticUnassociatedReact = digest.filter(
-    (d) => !d.hidden && !(d.handlerless && !d.testID),
+    (d) => !d.hidden && !((d.handlerless || d.compositeWrapper) && !d.testID),
   ).length;
   const elements: Element[] = nodes.map((n, nodeIndex) => {
     const observed = nativePresence === 'unknown' ? undefined : nativePresence?.nodes[nodeIndex];

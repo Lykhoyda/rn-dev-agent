@@ -689,12 +689,12 @@ test('private captures retain fixed refusals for data-named error overlays', () 
   }
 });
 
-test('version 89 replaces a warm 88 helper and reinjection preserves the private API', () => {
+test('version 90 replaces a warm 89 helper and reinjection preserves the private API', () => {
   const { sandbox } = setup({ value: '' });
-  sandbox.__QAREN = { __v: 88 };
+  sandbox.__QAREN = { __v: 89 };
   vm.runInContext(INJECTED_HELPERS, sandbox);
   const upgraded = sandbox.__QAREN;
-  assert.equal(upgraded.__v, 89);
+  assert.equal(upgraded.__v, 90);
   assert.equal(typeof upgraded.beginQaCapture, 'function');
   assert.equal(typeof upgraded.readQaCapture, 'function');
   vm.runInContext(INJECTED_HELPERS, sandbox);
@@ -784,7 +784,7 @@ test('public default, semantic and typography trees cannot opt into private inpu
     );
     assert.doesNotMatch(tree, /(?:value|text|default)-secret|"secureTextEntry"|"inputs"/);
   }
-  assert.equal(api.__v, 89);
+  assert.equal(api.__v, 90);
 });
 
 test('getter, inherited, opaque and invalid inputs refuse without executing getters or coercions', () => {

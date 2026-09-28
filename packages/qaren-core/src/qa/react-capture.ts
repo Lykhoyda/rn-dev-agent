@@ -94,6 +94,10 @@ function publicObservation(tree: unknown): ReactObservation {
       if (entry.hidden !== true) throw new PrivateInputCaptureError();
       result.hidden = true;
     }
+    if (entry.compositeWrapper !== undefined) {
+      if (entry.compositeWrapper !== true) throw new PrivateInputCaptureError();
+      result.compositeWrapper = true;
+    }
     if (entry.handlerless !== undefined) {
       if (
         entry.handlerless !== true ||
