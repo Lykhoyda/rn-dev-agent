@@ -488,6 +488,17 @@ test('lifecycle commands after exact-testID steps still plan', () => {
   assert.equal(plan.ok, true);
 });
 
+test('a native-only command after a late lifecycle command is refused at its source index', () => {
+  const plan = planIosProofDomains(
+    [{ tapOn: { id: 'a' } }, { killApp: null }, { hideKeyboard: null }],
+    {},
+  );
+  assert.equal(plan.ok, false);
+  if (plan.ok) return;
+  assert.equal(plan.sourceIndex, 2);
+  assert.match(plan.reason, /hideKeyboard/);
+});
+
 test('the real login shape partitions native prefix from exact React suffix', () => {
   const commands = [
     { launchApp: { clearState: true, stopApp: true } },
