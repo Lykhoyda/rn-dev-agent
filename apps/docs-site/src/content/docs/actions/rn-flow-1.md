@@ -60,6 +60,11 @@ engine.
 own budget. A `runFlow` without `when` is spliced in place; with `when` it is one
 `runFlow` step holding its sub-steps.
 
+**Platform support.** iOS runs every command. On Android, `doubleTapOn`,
+`eraseText`, `pressKey` `Enter` and `hideKeyboard` refuse as
+`UNSUPPORTED_COMMAND` until the runner gains those verbs (Phase 1 slice 6), and
+`inputText` types into the focused input.
+
 ## Selectors
 
 - `id`: exact `accessibilityIdentifier` on iOS, exact raw resource-id on
@@ -88,6 +93,12 @@ interpolates. A placeholder without a value or fallback refuses with its name;
 any other `${…}` expression refuses. The regex rule applies to the authored
 text, so a parameter value is always literal. Because typed values are resolved
 into the plan, a plan file is run-private.
+
+**Trace privacy.** Values typed by `inputText` and parameter values are
+run-private. Trace rows and the run's failure text show a run-private value as
+`<private>` wherever it recurs, including in a later selector or a matched
+label. The engine collects the typed values itself; the replay command adds its
+`--param` values when it arrives.
 
 ## Domains
 
@@ -125,7 +136,7 @@ never start a second implicit wait.
 | optional lookup | 7,000 ms |
 | `assertNotVisible` | 7,000 ms, a bounded absence poll, never a single read |
 | `extendedWaitUntil` | its `timeout` (default 17,000 visible, 7,000 not visible) |
-| `scrollUntilVisible` | its `timeout`, default 20,000 ms |
+| `scrollUntilVisible` | its `timeout`, default 20,000 ms; a drag is dispatched only when at least 600 ms remain, otherwise the step fails with the last near misses |
 | `waitForAnimationToEnd` | polls the runner's static predicate, capped at 5,000 ms |
 | `runFlow` condition | 0: one observation |
 | other native dispatch | 10,000 ms |
@@ -133,7 +144,12 @@ never start a second implicit wait.
 | `stopApp`, `killApp` | 10,000 ms |
 
 Explicit `timeout` values for `extendedWaitUntil`, `scrollUntilVisible`, and
-`waitForAnimationToEnd` must be positive integers.
+`waitForAnimationToEnd` must be positive integers. The interpreter refuses a
+plan past these upper bounds, and the compiler refuses them at compile time
+from slice 2: `budgetMs` at most 600,000; a `swipe` duration at most 60,000 ms;
+`eraseText` at most 10,000 characters; `index` and a source line at most
+4,294,967,295; at most 10,000 steps, five levels of `runFlow` nesting and a
+4 MiB plan.
 
 A timed-out step records what it polled and the last snapshot's near misses.
 A tap or type is dispatched once; a transport timeout fails the step as

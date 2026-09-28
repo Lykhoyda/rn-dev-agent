@@ -85,11 +85,13 @@ impl Node {
     }
 }
 
-fn safe_snapshot_text(raw: &str) -> String {
+pub(crate) const LABEL_CHARS: usize = 64;
+
+pub(crate) fn safe_snapshot_text(raw: &str) -> String {
     crate::redact::redact_secrets(raw)
         .chars()
         .filter(|c| !c.is_control())
-        .take(64)
+        .take(LABEL_CHARS)
         .collect()
 }
 

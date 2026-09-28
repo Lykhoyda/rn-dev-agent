@@ -14,6 +14,8 @@ pub const DISPATCH_WINDOW_MS: u64 = 10_000;
 pub const READ_WINDOW_CAP_MS: u64 = 35_000;
 pub const SETTLE_CAP_MS: u64 = 5_000;
 const SCROLL_DURATION_MS: u64 = 300;
+// NOTE: a drag only starts when the gesture and its round trip still fit inside the step budget.
+const SCROLL_WINDOW_MIN_MS: u64 = 2 * SCROLL_DURATION_MS;
 pub const KEYBOARD_DISMISS_FAILED: &str = "KEYBOARD_DISMISS_FAILED";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,7 +176,7 @@ pub fn run(
         runner,
         native,
         host,
-        trace: Trace::new(&plan.action_id, t0),
+        trace: Trace::new(&plan.action_id, t0, typed_values(&plan.steps)),
         captures: Vec::new(),
         attempt: 1,
         answered_by: Domain::Native,
@@ -182,7 +184,7 @@ pub fn run(
     };
     let (verdict, failure) = match engine.run_steps(&plan.steps) {
         Ok(()) => (Verdict::Pass, None),
-        Err(stop) => (stop.verdict, Some(stop.reason)),
+        Err(stop) => (stop.verdict, Some(engine.trace.mask(&stop.reason))),
     };
     Outcome {
         verdict,
@@ -190,6 +192,18 @@ pub fn run(
         failure,
         captures: engine.captures,
     }
+}
+
+// Every value the plan types is run-private for the whole run, wherever a row repeats it.
+fn typed_values(steps: &[Step]) -> Vec<String> {
+    steps
+        .iter()
+        .flat_map(|step| match &step.op {
+            Op::InputText(text) => vec![text.as_str().to_string()],
+            Op::RunFlow { steps, .. } => typed_values(steps),
+            _ => Vec::new(),
+        })
+        .collect()
 }
 
 enum Fail {
@@ -882,6 +896,13 @@ impl Engine<'_> {
             }
             match screen {
                 Some(screen) => {
+                    self.cancelled()?;
+                    if self.remaining(deadline) < SCROLL_WINDOW_MIN_MS {
+                        return Err(Fail::Miss(format!(
+                            "{} not visible after {scrolls} scroll(s); {last}",
+                            selector.describe()
+                        )));
+                    }
                     let (start, end) = scroll_path(&screen, direction);
                     self.dispatch(
                         "scroll",
@@ -1045,6 +1066,8 @@ mod tests {
         snapshots_taken: u32,
         snapshot_windows: Vec<u64>,
         drag_windows: Vec<u64>,
+        snapshot_latency_ms: u64,
+        mutation_latency_ms: u64,
     }
 
     impl ScriptedNative {
@@ -1060,6 +1083,8 @@ mod tests {
                 snapshots_taken: 0,
                 snapshot_windows: Vec::new(),
                 drag_windows: Vec::new(),
+                snapshot_latency_ms: LATENCY_MS,
+                mutation_latency_ms: LATENCY_MS,
             }
         }
 
@@ -1069,14 +1094,14 @@ mod tests {
         }
 
         fn mutate(&mut self, runner: &mut dyn Runner, what: String) {
-            runner.sleep(Duration::from_millis(LATENCY_MS));
+            runner.sleep(Duration::from_millis(self.mutation_latency_ms));
             self.mutations.push(what);
         }
     }
 
     impl NativeDriver for ScriptedNative {
         fn snapshot(&mut self, runner: &mut dyn Runner, window_ms: u64) -> DriverResult<Snapshot> {
-            runner.sleep(Duration::from_millis(LATENCY_MS));
+            runner.sleep(Duration::from_millis(self.snapshot_latency_ms));
             self.snapshots_taken += 1;
             self.snapshot_windows.push(window_ms);
             self.snapshots
@@ -1360,8 +1385,13 @@ mod tests {
             },
         )]);
         let (late_scroll, _) = drive(&scroll, &mut native, &mut ScriptedHost::default());
-        assert_eq!(outcomes(&late_scroll.rows), vec!["dispatched-unknown"]);
-        assert_eq!(native.drag_windows, vec![50]);
+        assert_eq!(outcomes(&late_scroll.rows), vec!["fail"]);
+        assert!(
+            native.drag_windows.is_empty() && native.mutations.is_empty(),
+            "a drag that cannot finish inside the budget is never dispatched"
+        );
+        let reason = late_scroll.rows[0].reason.clone().unwrap();
+        assert!(reason.contains("after 0 scroll(s)"), "{reason}");
     }
 
     #[test]
@@ -1570,31 +1600,132 @@ mod tests {
         );
     }
 
-    #[test]
-    fn scroll_until_visible_gives_up_at_its_deadline() {
-        let plan = plan(vec![step(
+    fn scroll_for(selector: Selector, budget_ms: u64) -> Plan {
+        plan(vec![step(
             "s1",
             Domain::Native,
-            1_000,
+            budget_ms,
             Op::ScrollUntilVisible {
-                selector: text("Footer"),
+                selector,
                 direction: Direction::Up,
             },
-        )]);
-        let mut native = ScriptedNative::steady(screen(&["Header"]));
-        let (outcome, elapsed) = drive(&plan, &mut native, &mut ScriptedHost::default());
-        assert_eq!(outcome.verdict, Verdict::Fail);
-        assert!(!native.mutations.is_empty());
+        )])
+    }
+
+    // Each round costs a snapshot, a drag and one settle probe (300 ms); the third snapshot
+    // answers with 300 ms left, less than a drag and its round trip, so no third drag starts.
+    #[test]
+    fn scroll_until_visible_gives_up_at_its_deadline() {
+        let mut native = ScriptedNative::steady(screen(&["Footer link"]));
+        let (outcome, elapsed) = drive(
+            &scroll_for(text("Footer"), 1_000),
+            &mut native,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["fail"]);
+        assert_eq!(native.mutations.len(), 2);
         assert!(native
             .mutations
             .iter()
             .all(|m| m.starts_with("drag:200,280->200,560")));
-        assert!(outcome.rows[0]
-            .reason
-            .clone()
-            .unwrap()
-            .contains("scroll(s)"));
-        assert!(elapsed < 2_000, "{elapsed}");
+        assert_eq!(
+            native.snapshots_taken, 3,
+            "the last snapshot is not followed by a drag"
+        );
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("after 2 scroll(s)")
+                && reason.contains("near misses")
+                && reason.contains("Footer link"),
+            "{reason}"
+        );
+        assert!(
+            elapsed < 1_000,
+            "the guard fails the step before the deadline: {elapsed}"
+        );
+    }
+
+    #[test]
+    fn scroll_until_visible_without_a_snapshot_runs_to_its_deadline() {
+        let mut native = ScriptedNative::steady(screen(&["Footer link"]));
+        native.steady = Err(DriverError::Unsent("runner down".into()));
+        native.snapshots = vec![Ok(screen(&["Footer link"])), Ok(screen(&["Footer link"]))].into();
+        let (outcome, elapsed) = drive(
+            &scroll_for(text("Footer"), 1_000),
+            &mut native,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["fail"]);
+        assert_eq!(native.mutations.len(), 2);
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("after 2 scroll(s)") && reason.contains("snapshot failed"),
+            "{reason}"
+        );
+        assert!(elapsed >= 1_000, "{elapsed}");
+    }
+
+    #[test]
+    fn scroll_until_visible_outcome_is_timing_independent() {
+        for snapshot_latency_ms in [50, 150, 300] {
+            for mutation_latency_ms in [100, 300] {
+                let mut native = ScriptedNative::steady(screen(&["Row 9 footer"]));
+                native.snapshot_latency_ms = snapshot_latency_ms;
+                native.mutation_latency_ms = mutation_latency_ms;
+                let (outcome, _) = drive(
+                    &scroll_for(text("Row 9"), 20_000),
+                    &mut native,
+                    &mut ScriptedHost::default(),
+                );
+                let cell =
+                    format!("snapshot {snapshot_latency_ms} ms, drag {mutation_latency_ms} ms");
+                assert_eq!(outcomes(&outcome.rows), vec!["fail"], "{cell}");
+                let reason = outcome.rows[0].reason.clone().unwrap();
+                assert!(reason.contains("near misses"), "{cell}: {reason}");
+            }
+        }
+    }
+
+    #[test]
+    fn scroll_until_visible_drag_timeout_is_still_unknown() {
+        let mut lost = ScriptedNative::steady(screen(&["Header"]));
+        lost.presses = vec![Err(DriverError::Unknown("timed out".into()))].into();
+        let (outcome, _) = drive(
+            &scroll_for(text("Footer"), 1_000),
+            &mut lost,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["dispatched-unknown"]);
+        assert_eq!(lost.mutations.len(), 1);
+        assert!(lost.drag_windows[0] >= SCROLL_WINDOW_MIN_MS);
+
+        let mut overrun = ScriptedNative::steady(screen(&["Header"]));
+        overrun.mutation_latency_ms = 1_000;
+        let (outcome, _) = drive(
+            &scroll_for(text("Footer"), 1_000),
+            &mut overrun,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["dispatched-unknown"]);
+        assert_eq!(overrun.mutations.len(), 1);
+    }
+
+    #[test]
+    fn scroll_until_visible_guard_keeps_cancellation_first() {
+        let mut native = ScriptedNative::steady(screen(&["Header"]));
+        let outcome = drive_cancelling(
+            &scroll_for(text("Footer"), 500),
+            &mut native,
+            &mut ScriptedHost::default(),
+            50,
+            "received SIGHUP",
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["cancelled"]);
+        assert_eq!(
+            outcome.verdict,
+            Verdict::Cancelled("received SIGHUP".into())
+        );
+        assert!(native.mutations.is_empty());
     }
 
     #[test]
@@ -2278,6 +2409,297 @@ mod tests {
         assert_eq!(
             scroll_path(&screen, Direction::Right),
             ((280.0, 400.0), (140.0, 400.0))
+        );
+    }
+
+    #[test]
+    fn typed_text_never_recurs_in_rows() {
+        const SECRET: &str = "hunter2-probe-secret";
+        let mut shown = screen(&[]);
+        shown
+            .nodes
+            .push(node(1, "StaticText", SECRET, "title", 100.0));
+        let asserted = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(SECRET.into())),
+            ),
+            step(
+                "s2",
+                Domain::Native,
+                17_000,
+                Op::AssertVisible(text(SECRET)),
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(shown);
+        let (outcome, _) = drive(&asserted, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        let json = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!json.contains(SECRET), "{json}");
+        assert_eq!(
+            outcome.rows[1].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
+        );
+        let reason = outcome.rows[1].reason.clone().unwrap();
+        assert!(reason.contains("label=\"<private>\""), "{reason}");
+
+        let mut near = screen(&[]);
+        near.nodes
+            .push(node(1, "Button", "Title field", SECRET, 100.0));
+        let scrolled = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(SECRET.into())),
+            ),
+            step(
+                "s2",
+                Domain::Native,
+                1_000,
+                Op::ScrollUntilVisible {
+                    selector: text(SECRET),
+                    direction: Direction::Down,
+                },
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(near);
+        let (outcome, _) = drive(&scrolled, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        let json = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!json.contains(SECRET), "{json}");
+        assert_eq!(
+            outcome.rows[1].text.as_deref(),
+            Some("scrollUntilVisible text \"<private>\"")
+        );
+        let reason = outcome.rows[1].reason.clone().unwrap();
+        assert!(
+            reason.contains("near misses") && reason.contains("id=\"<private>\""),
+            "{reason}"
+        );
+        let failure = outcome.failure.unwrap();
+        assert!(
+            !failure.contains(SECRET) && failure.contains("<private>"),
+            "{failure}"
+        );
+    }
+
+    #[test]
+    fn short_typed_value_masks_only_its_quoted_form() {
+        let plan = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private("1".into())),
+            ),
+            step(
+                "s2",
+                Domain::Native,
+                17_000,
+                Op::Press(Press::Tap, indexed(text("Row"), 1)),
+            ),
+            step("s3", Domain::Native, 17_000, Op::AssertVisible(text("1"))),
+        ]);
+        let mut native = ScriptedNative::steady(screen(&["Row", "Row", "1"]));
+        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert_eq!(
+            outcome.rows[1].text.as_deref(),
+            Some("tapOn text \"Row\" index 1")
+        );
+        assert_eq!(native.mutations, vec!["type:1/10000", "Tap@200,220/10000"]);
+        assert_eq!(
+            outcome.rows[2].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
+        );
+        let reason = outcome.rows[2].reason.clone().unwrap();
+        assert!(
+            reason.contains("label=\"<private>\"") && reason.contains("rect=0,300"),
+            "{reason}"
+        );
+    }
+
+    // The typed value equals the text between two quoted fields, so its first occurrence in the
+    // rendering shares a quote with the real one.
+    #[test]
+    fn typed_value_matching_a_field_separator_is_still_masked() {
+        let mut shown = screen(&[]);
+        shown
+            .nodes
+            .push(node(1, "StaticText", "Other", " id=", 100.0));
+        let plan = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(" id=".into())),
+            ),
+            step(
+                "s2",
+                Domain::Native,
+                17_000,
+                Op::AssertVisible(text("Other")),
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(shown);
+        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        let reason = outcome.rows[1].reason.clone().unwrap();
+        assert!(
+            !reason.contains(" id=") && reason.contains("Other") && reason.contains("<private>"),
+            "{reason}"
+        );
+    }
+
+    // A longer value's cut form must not split a shorter value's escaped rendering, and a
+    // value with a control character is masked both as authored and as its sanitised label.
+    #[test]
+    fn typed_values_are_masked_in_every_quoted_form() {
+        let longer = format!("{}{}", "x".repeat(64), "A".repeat(40));
+        let shorter = format!("hunter2\"{}", "x".repeat(64));
+        let mut shown = screen(&[]);
+        shown
+            .nodes
+            .push(node(1, "StaticText", &shorter, "title", 100.0));
+        let split = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(longer.clone())),
+            ),
+            step(
+                "s2",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(shorter.clone())),
+            ),
+            step(
+                "s3",
+                Domain::Native,
+                17_000,
+                Op::AssertVisible(text(&shorter)),
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(shown);
+        let (outcome, _) = drive(&split, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        let json = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!json.contains("hunter2"), "{json}");
+        assert_eq!(
+            outcome.rows[2].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
+        );
+        assert!(outcome.rows[2]
+            .reason
+            .clone()
+            .unwrap()
+            .contains("label=\"<private>\""));
+
+        let typed = format!("a\n{}", "b".repeat(68));
+        let head: String = typed.chars().take(64).collect();
+        let mut shown = screen(&[]);
+        shown
+            .nodes
+            .push(node(1, "StaticText", &typed, "title", 100.0));
+        let cut = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(typed.clone())),
+            ),
+            step(
+                "s2",
+                Domain::Native,
+                17_000,
+                Op::AssertVisible(text(&typed)),
+            ),
+            step("s3", Domain::Native, 500, Op::AssertVisible(text(&head))),
+        ]);
+        let mut native = ScriptedNative::steady(shown);
+        let (outcome, _) = drive(&cut, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcomes(&outcome.rows), vec!["pass", "pass", "fail"]);
+        let json = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!json.contains("bbbb"), "{json}");
+        assert_eq!(
+            outcome.rows[2].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
+        );
+    }
+
+    #[test]
+    fn long_typed_value_is_masked_in_its_truncated_label() {
+        let long: String = (0..70u8).map(|i| char::from(b'a' + i % 26)).collect();
+        let head: String = long.chars().take(64).collect();
+        let mut shown = screen(&[]);
+        shown
+            .nodes
+            .push(node(1, "StaticText", &long, "title", 100.0));
+        let plan = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(long.clone())),
+            ),
+            step("s2", Domain::Native, 17_000, Op::AssertVisible(text(&long))),
+        ]);
+        let mut native = ScriptedNative::steady(shown);
+        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert_eq!(
+            outcome.rows[1].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
+        );
+        let reason = outcome.rows[1].reason.clone().unwrap();
+        assert!(
+            !reason.contains(&head) && reason.contains("label=\"<private>\""),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn run_flow_sub_step_typed_text_is_private() {
+        const SECRET: &str = "nested-typed-secret";
+        let mut shown = screen(&["Go"]);
+        shown
+            .nodes
+            .push(node(2, "StaticText", SECRET, "title", 200.0));
+        let plan = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                0,
+                Op::RunFlow {
+                    when: Condition::Visible(text("Go")),
+                    steps: vec![step(
+                        "s1a",
+                        Domain::Native,
+                        10_000,
+                        Op::InputText(Private(SECRET.into())),
+                    )],
+                },
+            ),
+            step(
+                "s2",
+                Domain::Native,
+                17_000,
+                Op::AssertVisible(text(SECRET)),
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(shown);
+        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert_eq!(outcomes(&outcome.rows), vec!["pass", "pass", "pass"]);
+        let json = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!json.contains(SECRET), "{json}");
+        assert_eq!(
+            outcome.rows[2].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
         );
     }
 }

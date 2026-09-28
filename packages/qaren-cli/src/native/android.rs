@@ -7,8 +7,9 @@ use serde_json::{json, Value};
 
 const LONG_PRESS_MS: u64 = 1_000;
 const WINDOW_PROBE_MS: u64 = 500;
-// ponytail: the current runner has no per-character erase, key or IME-aware dismissal verb;
-// those steps refuse until the slice 6 runner changes land instead of pressing Back blindly.
+// ponytail: no double-tap, counted-erase, key or IME-aware dismissal verb yet, so those steps
+// refuse until slice 6 adds `tap` count, `erase` characters and `pressKey` key, and binds `type`
+// to the resolved target (`snapshotIdentifier`, `snapshotElementType`, bounds), not the focus.
 const UNSUPPORTED: &str = "UNSUPPORTED_COMMAND";
 
 // The Android runner over POST /command: flat UiAutomator snapshots, booleans that must be true.
