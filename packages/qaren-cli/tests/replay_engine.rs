@@ -16,8 +16,7 @@ fn reply(data: Value) -> CmdOutput {
 
 fn refusal(code: &str) -> CmdOutput {
     CmdOutput::success(
-        &json!({"ok": false, "error": {"code": code, "message": "no"}, "v": 2})
-            .to_string(),
+        &json!({"ok": false, "error": {"code": code, "message": "no"}, "v": 2}).to_string(),
     )
 }
 
