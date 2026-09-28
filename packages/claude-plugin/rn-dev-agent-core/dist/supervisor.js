@@ -13890,7 +13890,8 @@ function autoHidesDevMenu(platform, deviceId, setting = { simulators: true, devi
 function iosSimulatorDevMenuDefaultsArgs(deviceId, appId) {
   return [
     ["EXDevMenuShowsAtLaunch", "NO"],
-    ["EXDevMenuIsOnboardingFinished", "YES"]
+    ["EXDevMenuIsOnboardingFinished", "YES"],
+    ["EXDevMenuShowFloatingActionButton", "NO"]
   ].map(([key, value]) => [
     "simctl",
     "spawn",
@@ -20317,7 +20318,7 @@ function managedMetroProxyUrl(binding) {
     }
     const hideDevMenu = autoHideDevMenuOnSimulators();
     const launchUrl = hideDevMenu ? withDevMenuOnboardingDisabled(expoProxyUrl) : expoProxyUrl;
-    for (const [key, value] of hideDevMenu ? [['EXDevMenuShowsAtLaunch', 'NO'], ['EXDevMenuIsOnboardingFinished', 'YES']] : []) {
+    for (const [key, value] of hideDevMenu ? [['EXDevMenuShowsAtLaunch', 'NO'], ['EXDevMenuIsOnboardingFinished', 'YES'], ['EXDevMenuShowFloatingActionButton', 'NO']] : []) {
       const written = spawnSync('xcrun', ['simctl', 'spawn', session.deviceId, 'defaults', 'write', session.appId, key, '-bool', value], {
         cwd: process.cwd(),
         env: authorityEnvironment,
