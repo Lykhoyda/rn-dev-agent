@@ -499,6 +499,27 @@ test('a native-only command after a late lifecycle command is refused at its sou
   assert.match(plan.reason, /hideKeyboard/);
 });
 
+test('neutral prefixes do not trigger late-native refusal before an exact testID', () => {
+  for (const neutral of [{ launchApp: {} }, { waitForAnimationToEnd: null }]) {
+    const native = planIosProofDomains([neutral, { inputText: 'autofocused value' }], {});
+    assert.equal(native.ok, true);
+
+    const afterExactId = planIosProofDomains(
+      [
+        neutral,
+        { inputText: 'autofocused value' },
+        { assertVisible: { id: 'ready' } },
+        { hideKeyboard: null },
+      ],
+      {},
+    );
+    assert.equal(afterExactId.ok, false);
+    if (afterExactId.ok) continue;
+    assert.equal(afterExactId.sourceIndex, 3);
+    assert.match(afterExactId.reason, /hideKeyboard/);
+  }
+});
+
 test('the real login shape partitions native prefix from exact React suffix', () => {
   const commands = [
     { launchApp: { clearState: true, stopApp: true } },

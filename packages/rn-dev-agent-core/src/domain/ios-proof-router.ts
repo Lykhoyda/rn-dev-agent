@@ -168,7 +168,9 @@ export function planIosProofDomains(
       focusedReactId = null;
     }
   }
-  const firstReact = segments.findIndex((segment) => segment.domain === 'react-tree');
+  const firstReact = segments.findIndex(
+    (segment) => segment.domain === 'react-tree' && segment.commands.some(containsExactId),
+  );
   if (firstReact !== -1) {
     for (const segment of segments.slice(firstReact + 1)) {
       if (segment.domain !== 'xctest-native') continue;
