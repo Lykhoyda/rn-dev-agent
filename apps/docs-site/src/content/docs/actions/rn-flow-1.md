@@ -96,24 +96,23 @@ text, so a parameter value is always literal. Because typed values are resolved
 into the plan, a plan file is run-private.
 
 **Trace privacy.** Values typed by `inputText`, `openLink` values, and
-caller-declared parameter values are run-private. Every string that leaves the
-engine (row text, row reason, and the run's failure text) passes through one
-masking step over its whole, untruncated text before any bounding: each
-occurrence of a private value renders as `<private>`, whether whole or embedded
+caller-declared parameter values are run-private. Human-readable trace fields
+(row text, row reason, action and step ids, cancellation reason, and the run's
+failure text) pass through one masking step over their full text before any
+bounding. Eligible occurrences render as `<private>`, whether whole or embedded
 in a label, selector, or candidate list, and the match covers the value as
 typed, trimmed, with runs of whitespace collapsed, in its escaped rendering, and
 in any ASCII-case variant (Unicode case folding is not applied). Overlapping or
-adjacent values render as one `<private>`; a value that equals engine
-punctuation masks that punctuation too. Values shorter than three characters
-are masked only as whole quoted strings, so `Save` stays readable when `a` was
+adjacent values render as one `<private>`; a value of at least three characters
+can mask engine punctuation too. Values shorter than three characters are
+masked only as whole quoted strings, so `Save` stays readable when `a` was
 typed. Token redaction runs on the same text and neither hides the other. Row
 reasons and failure text are bounded to 2,048 characters and row text to 512,
 cut after masking, so a cut can only shorten a `<private>` marker. Indexes,
-counts, and coordinates remain readable unless they equal a private value. A
-row's `block` (the action id) and `ref` (the step id) and a cancellation reason
-pass through the same boundary, so an identifier that carries a private value
-is exported masked while the plan keeps its own identity. The engine collects
-typed values and `openLink` values itself; the replay command will pass its
+counts, and coordinates may also be masked when they contain a private value of
+at least three characters. The plan keeps its own identifiers while trace rows
+export identifiers through the same masking step. The engine collects typed
+values and `openLink` values itself; the replay command will pass its
 `--param` values when it arrives. A plan whose `takeScreenshot` name contains
 one of these private values (any form of three or more characters, or a
 shorter value exactly) fails before the first step, with no rows or captures,
@@ -170,7 +169,8 @@ from slice 2: `budgetMs` at most 600,000; a `swipe` duration at most 60,000 ms;
 4,294,967,295; at most 10,000 steps, five levels of `runFlow` nesting and a
 4 MiB plan.
 
-A timed-out step records what it polled and the last snapshot's near misses.
+A timed-out lookup or scroll records its best near misses and the last
+snapshot's status.
 A tap or type is dispatched once; a transport timeout fails the step as
 `dispatched-unknown` and is never re-sent. There is no retry-if-no-change.
 
