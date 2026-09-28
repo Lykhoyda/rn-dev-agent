@@ -5,9 +5,9 @@ description: The contract for replaying saved actions — which Maestro-format c
 
 Saved actions stay Maestro-format YAML files. `rn-flow@1` is the subset of that
 format QaReN replays with its own engine. The TypeScript core compiles a flow
-into an immutable plan (`schema: "rn-flow/1"`). The Rust `qaren` replay
-interpreter that will execute plans is still being built; this page fixes the
-semantics it implements, and it never parses YAML itself.
+into an immutable plan (`schema: "rn-flow/1"`). The Rust `qaren` crate can
+validate and interpret that plan through its library API; a replay CLI command
+and host integration are not available yet. Rust never parses YAML itself.
 
 ```sh
 corepack yarn build:core
@@ -60,6 +60,12 @@ engine.
 own budget. A `runFlow` without `when` is spliced in place; with `when` it is one
 `runFlow` step holding its sub-steps.
 
+**Platform support.** iOS runs every command. On Android, `doubleTapOn`,
+`eraseText`, `pressKey` `Enter` and `hideKeyboard` refuse as
+`UNSUPPORTED_COMMAND` until the runner gains those verbs, and `inputText` types
+into the focused input rather than the resolved target; both limits lift with
+the Android runner work in Phase 1 slice 6.
+
 ## Selectors
 
 - `id`: exact `accessibilityIdentifier` on iOS, exact raw resource-id on
@@ -88,6 +94,29 @@ interpolates. A placeholder without a value or fallback refuses with its name;
 any other `${…}` expression refuses. The regex rule applies to the authored
 text, so a parameter value is always literal. Because typed values are resolved
 into the plan, a plan file is run-private.
+
+**Trace privacy.** Values typed by `inputText`, `openLink` values, and
+caller-declared parameter values are run-private. Human-readable trace fields
+(row text, row reason, action and step ids, cancellation reason, and the run's
+failure text) pass through one masking step over their full text before any
+bounding. Eligible occurrences render as `<private>`, whether whole or embedded
+in a label, selector, or candidate list, and the match covers the value as
+typed, trimmed, with runs of whitespace collapsed, in its escaped rendering, and
+in any ASCII-case variant (Unicode case folding is not applied). Overlapping or
+adjacent values render as one `<private>`; a value of at least three characters
+can mask engine punctuation too. Values shorter than three characters are
+masked only as whole quoted strings, so `Save` stays readable when `a` was
+typed. Token redaction runs on the same text and neither hides the other. Row
+reasons and failure text are bounded to 2,048 characters and row text to 512,
+cut after masking, so a cut can only shorten a `<private>` marker. Indexes,
+counts, and coordinates may also be masked when they contain a private value of
+at least three characters. The plan keeps its own identifiers while trace rows
+export identifiers through the same masking step. The engine collects typed
+values and `openLink` values itself; the replay command will pass its
+`--param` values when it arrives. A plan whose `takeScreenshot` name contains
+one of these private values (any form of three or more characters, or a
+shorter value exactly) fails before the first step, with no rows or captures,
+because a capture's name must stay intact.
 
 ## Domains
 
@@ -125,7 +154,7 @@ never start a second implicit wait.
 | optional lookup | 7,000 ms |
 | `assertNotVisible` | 7,000 ms, a bounded absence poll, never a single read |
 | `extendedWaitUntil` | its `timeout` (default 17,000 visible, 7,000 not visible) |
-| `scrollUntilVisible` | its `timeout`, default 20,000 ms |
+| `scrollUntilVisible` | its `timeout`, default 20,000 ms; a drag is dispatched only when the remaining budget holds the gesture plus twice the slowest round trip measured in the step; when the budget runs out the step fails with its best near misses; `dispatched-unknown` means the runner did not answer a drag inside such a window, or answered without proof of the outcome, and the row still carries the cause, the near misses and the scroll count |
 | `waitForAnimationToEnd` | polls the runner's static predicate, capped at 5,000 ms |
 | `runFlow` condition | 0: one observation |
 | other native dispatch | 10,000 ms |
@@ -133,9 +162,15 @@ never start a second implicit wait.
 | `stopApp`, `killApp` | 10,000 ms |
 
 Explicit `timeout` values for `extendedWaitUntil`, `scrollUntilVisible`, and
-`waitForAnimationToEnd` must be positive integers.
+`waitForAnimationToEnd` must be positive integers. The interpreter refuses a
+plan past these upper bounds, and the compiler refuses them at compile time
+from slice 2: `budgetMs` at most 600,000; a `swipe` duration at most 60,000 ms;
+`eraseText` at most 10,000 characters; `index` and a source line at most
+4,294,967,295; at most 10,000 steps, five levels of `runFlow` nesting and a
+4 MiB plan.
 
-A timed-out step records what it polled and the last snapshot's near misses.
+A timed-out lookup or scroll records its best near misses and the last
+snapshot's status.
 A tap or type is dispatched once; a transport timeout fails the step as
 `dispatched-unknown` and is never re-sent. There is no retry-if-no-change.
 

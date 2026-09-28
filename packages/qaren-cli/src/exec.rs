@@ -71,6 +71,14 @@ impl PrivateOutput {
         &self.0.stdout
     }
 
+    pub fn exit_code(&self) -> Option<i32> {
+        self.0.exit_code
+    }
+
+    pub fn timed_out(&self) -> bool {
+        self.0.timed_out
+    }
+
     pub fn summary(&self) -> String {
         format!(
             "exit={:?} timed_out={} [private output withheld]",
@@ -632,6 +640,8 @@ pub struct MockRunner {
     pub private_inputs: Vec<Vec<u8>>,
     // (command substring, reason): cancellation starts once a matching command ran.
     pub cancel_after: Option<(String, String)>,
+    // (clock ms, reason): cancellation starts once the scripted clock reaches the time.
+    pub cancel_at_ms: Option<(u64, String)>,
     script: VecDeque<MockExpectation>,
     now_ms: u64,
 }
@@ -647,6 +657,7 @@ impl MockRunner {
             piped_terminated: Vec::new(),
             private_inputs: Vec::new(),
             cancel_after: None,
+            cancel_at_ms: None,
             script: VecDeque::new(),
             now_ms: 1_770_000_000_000,
         }
@@ -836,6 +847,11 @@ impl Runner for MockRunner {
     }
 
     fn cancellation(&self) -> Option<String> {
+        if let Some((at, reason)) = &self.cancel_at_ms {
+            if self.now_ms >= *at {
+                return Some(reason.clone());
+            }
+        }
         let (after, reason) = self.cancel_after.as_ref()?;
         self.calls
             .iter()

@@ -1,0 +1,3233 @@
+use crate::core::Row;
+use crate::exec::Runner;
+use crate::flow::plan::{
+    Condition, Direction, Domain, Key, Op, Plan, Press, Selector, Step, Target,
+};
+use crate::flow::privacy::{Privacy, REASON_CHARS};
+use crate::flow::resolve::{self, Node, Resolution, Snapshot};
+use crate::flow::trace::{Entry, StepOutcome, Trace};
+use std::time::Duration;
+
+pub const POLL_MS: u64 = 250;
+// A dispatch that follows a lookup keeps the compiler's native dispatch budget as its window.
+pub const DISPATCH_WINDOW_MS: u64 = 10_000;
+// One snapshot or settle probe never waits longer than the runners' slow-verb ceiling.
+pub const READ_WINDOW_CAP_MS: u64 = 35_000;
+pub const SETTLE_CAP_MS: u64 = 5_000;
+const SCROLL_DURATION_MS: u64 = 300;
+pub const KEYBOARD_DISMISS_FAILED: &str = "KEYBOARD_DISMISS_FAILED";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DriverError {
+    // The request never reached the runner, so a mutation failed cleanly.
+    Unsent(String),
+    // Sent, but nothing proved the outcome: a timeout, a malformed reply, or a refusal without proof that nothing mutated.
+    Unknown(String),
+    // The runner answered ok:false and proved it did not mutate; the message is the engine's own text.
+    Refused { code: String, message: String },
+}
+
+impl std::fmt::Display for DriverError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DriverError::Unsent(why) => write!(f, "not sent: {why}"),
+            DriverError::Unknown(why) => write!(f, "outcome unknown: {why}"),
+            DriverError::Refused { code, message } if message.is_empty() => f.write_str(code),
+            DriverError::Refused { code, message } => write!(f, "{code}: {message}"),
+        }
+    }
+}
+
+pub type DriverResult<T> = Result<T, DriverError>;
+
+// What a runner hands back for a screenshot; the run owner materialises it later.
+#[derive(Clone, PartialEq, Eq)]
+pub enum Capture {
+    PngBase64(String),
+    RunnerPath(String),
+}
+
+impl std::fmt::Debug for Capture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Capture::PngBase64(png) => write!(f, "PngBase64({} bytes)", png.len()),
+            Capture::RunnerPath(_) => f.write_str("RunnerPath([withheld])"),
+        }
+    }
+}
+
+// Every call takes the runner it reaches the device through and the transport window it may use.
+pub trait NativeDriver {
+    fn snapshot(&mut self, runner: &mut dyn Runner, window_ms: u64) -> DriverResult<Snapshot>;
+    fn press(
+        &mut self,
+        runner: &mut dyn Runner,
+        press: Press,
+        x: f64,
+        y: f64,
+        window_ms: u64,
+    ) -> DriverResult<()>;
+    fn type_text(
+        &mut self,
+        runner: &mut dyn Runner,
+        text: &str,
+        window_ms: u64,
+    ) -> DriverResult<()>;
+    fn erase(
+        &mut self,
+        runner: &mut dyn Runner,
+        characters: u64,
+        window_ms: u64,
+    ) -> DriverResult<()>;
+    fn press_key(&mut self, runner: &mut dyn Runner, key: Key, window_ms: u64) -> DriverResult<()>;
+    fn drag(
+        &mut self,
+        runner: &mut dyn Runner,
+        from: (f64, f64),
+        to: (f64, f64),
+        duration_ms: u64,
+        window_ms: u64,
+    ) -> DriverResult<()>;
+    fn back(&mut self, runner: &mut dyn Runner, window_ms: u64) -> DriverResult<()>;
+    fn keyboard_dismiss(&mut self, runner: &mut dyn Runner, window_ms: u64) -> DriverResult<()>;
+    fn is_settled(&mut self, runner: &mut dyn Runner, window_ms: u64) -> DriverResult<bool>;
+    fn screenshot(&mut self, runner: &mut dyn Runner, window_ms: u64) -> DriverResult<Capture>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presence {
+    Present,
+    Absent,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub enum HostOp {
+    KeyboardDismissJs,
+    Launch { stop_app: bool, clear_state: bool },
+    StopApp,
+    KillApp,
+    ClearState,
+    OpenLink(String),
+}
+
+impl HostOp {
+    // The only form of the operation that rows and errors carry; a link stays in the request.
+    pub fn name(&self) -> &'static str {
+        match self {
+            HostOp::KeyboardDismissJs => "keyboard.dismissJs",
+            HostOp::Launch { .. } => "launchApp",
+            HostOp::StopApp => "stopApp",
+            HostOp::KillApp => "killApp",
+            HostOp::ClearState => "clearState",
+            HostOp::OpenLink(_) => "openLink",
+        }
+    }
+}
+
+impl std::fmt::Debug for HostOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HostOp::Launch {
+                stop_app,
+                clear_state,
+            } => write!(f, "launchApp(stopApp={stop_app}, clearState={clear_state})"),
+            other => f.write_str(other.name()),
+        }
+    }
+}
+
+// The core child: one React-tree observation at a time, and the lifecycle and keyboard JS tiers.
+pub trait HostDriver {
+    fn observe(
+        &mut self,
+        runner: &mut dyn Runner,
+        id: &str,
+        window_ms: u64,
+    ) -> DriverResult<Presence>;
+    fn perform(&mut self, runner: &mut dyn Runner, op: &HostOp, window_ms: u64)
+        -> DriverResult<()>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    Pass,
+    Fail,
+    Cancelled(String),
+}
+
+#[derive(Debug)]
+pub struct Outcome {
+    pub verdict: Verdict,
+    pub rows: Vec<Row>,
+    pub failure: Option<String>,
+    pub captures: Vec<(String, Capture)>,
+}
+
+// Runs a plan whose foreground surface the caller has already proven to be the app.
+pub fn run(
+    plan: &Plan,
+    caller_private: &[String],
+    runner: &mut dyn Runner,
+    native: &mut dyn NativeDriver,
+    host: &mut dyn HostDriver,
+) -> Outcome {
+    let privacy = Privacy::new(
+        typed_values(&plan.steps)
+            .into_iter()
+            .chain(caller_private.iter().cloned()),
+    );
+    if screenshot_names_private_value(&plan.steps, &privacy) {
+        return Outcome {
+            verdict: Verdict::Fail,
+            rows: Vec::new(),
+            failure: Some("takeScreenshot name contains a private value".into()),
+            captures: Vec::new(),
+        };
+    }
+    let t0 = runner.monotonic_ms();
+    let mut engine = Engine {
+        runner,
+        native,
+        host,
+        trace: Trace::new(&plan.action_id, t0, privacy),
+        captures: Vec::new(),
+        attempt: 1,
+        answered_by: Domain::Native,
+        screenshot: None,
+    };
+    let (verdict, failure) = match engine.run_steps(&plan.steps) {
+        Ok(()) => (Verdict::Pass, None),
+        Err(stop) => (
+            match stop.verdict {
+                Verdict::Cancelled(reason) => Verdict::Cancelled(engine.trace.sanitize(&reason)),
+                verdict => verdict,
+            },
+            Some(Privacy::bound(
+                engine.trace.sanitize(&stop.reason),
+                REASON_CHARS,
+            )),
+        ),
+    };
+    Outcome {
+        verdict,
+        rows: engine.trace.rows,
+        failure,
+        captures: engine.captures,
+    }
+}
+
+fn typed_values(steps: &[Step]) -> Vec<String> {
+    steps
+        .iter()
+        .flat_map(|step| match &step.op {
+            Op::InputText(text) | Op::OpenLink(text) => vec![text.as_str().to_string()],
+            Op::RunFlow { steps, .. } => typed_values(steps),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+fn screenshot_names_private_value(steps: &[Step], privacy: &Privacy) -> bool {
+    steps.iter().any(|step| match &step.op {
+        Op::TakeScreenshot(name) => privacy.names(name),
+        Op::RunFlow { steps, .. } => screenshot_names_private_value(steps, privacy),
+        _ => false,
+    })
+}
+
+enum Fail {
+    // The target was not there or the runner cleanly refused; `optional` may skip it.
+    Miss(String),
+    // The selector itself is wrong (ambiguous); `optional` never hides an authoring error.
+    Selector(String),
+    Unknown(String),
+    Cancelled(String),
+}
+
+struct Stop {
+    verdict: Verdict,
+    reason: String,
+}
+
+struct Engine<'a> {
+    runner: &'a mut dyn Runner,
+    native: &'a mut dyn NativeDriver,
+    host: &'a mut dyn HostDriver,
+    trace: Trace,
+    captures: Vec<(String, Capture)>,
+    attempt: u64,
+    answered_by: Domain,
+    screenshot: Option<String>,
+}
+
+fn outcome(result: DriverResult<()>, what: &str) -> Result<(), Fail> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(DriverError::Unsent(why)) => Err(Fail::Miss(format!("{what} was not sent: {why}"))),
+        Err(DriverError::Unknown(why)) => Err(Fail::Unknown(format!(
+            "{what} was dispatched but its outcome is unknown: {why}"
+        ))),
+        Err(refused @ DriverError::Refused { .. }) => {
+            Err(Fail::Miss(format!("{what} refused {refused}")))
+        }
+    }
+}
+
+fn ambiguous(selector: &Selector, candidates: &[String]) -> Fail {
+    Fail::Selector(format!(
+        "{} is ambiguous between {}",
+        selector.describe(),
+        candidates.join("; ")
+    ))
+}
+
+// What a polling read remembers: the best list of near misses or matches seen so far, and the
+// status of the latest observation when it proved nothing (failed, truncated or late).
+#[derive(Default)]
+struct Observed {
+    best: Option<String>,
+    note: Option<String>,
+}
+
+impl Observed {
+    // A complete snapshot replaces the best list when it carries one; a truncated snapshot
+    // only seeds an empty one and is remembered as truncated.
+    fn definite(&mut self, list: Option<String>, truncated: bool) {
+        if truncated {
+            if self.best.is_none() {
+                self.best = list;
+            }
+            self.note = Some("the last snapshot was truncated".into());
+        } else {
+            if list.is_some() {
+                self.best = list;
+            }
+            self.note = None;
+        }
+    }
+
+    fn resolution(&mut self, resolution: &Resolution, truncated: bool) {
+        let list = match resolution {
+            Resolution::NotFound { near_misses } if near_misses.is_empty() => None,
+            Resolution::NotFound { near_misses } => {
+                Some(format!("near misses: {}", near_misses.join("; ")))
+            }
+            Resolution::OutOfRange { index, matches } => Some(format!(
+                "index {index} is out of range of {} match(es): {}",
+                matches.len(),
+                matches.join("; ")
+            )),
+            Resolution::Found(_) | Resolution::Ambiguous { .. } => return,
+        };
+        self.definite(list, truncated);
+    }
+
+    fn note(&mut self, note: String) {
+        self.note = Some(note);
+    }
+
+    fn summary(&self) -> String {
+        match (&self.best, &self.note) {
+            (Some(best), Some(note)) => format!("{best}; {note}"),
+            (Some(best), None) => best.clone(),
+            (None, Some(note)) => format!("no near misses; {note}"),
+            (None, None) => "no near misses".into(),
+        }
+    }
+}
+
+// Half a screen in the direction, clamped to the screen.
+pub fn swipe_path(
+    screen: &Node,
+    origin: (f64, f64),
+    direction: Direction,
+) -> ((f64, f64), (f64, f64)) {
+    let (dx, dy) = match direction {
+        Direction::Up => (0.0, -screen.height / 2.0),
+        Direction::Down => (0.0, screen.height / 2.0),
+        Direction::Left => (-screen.width / 2.0, 0.0),
+        Direction::Right => (screen.width / 2.0, 0.0),
+    };
+    let clamp = |x: f64, y: f64| {
+        (
+            x.clamp(screen.x, screen.x + screen.width),
+            y.clamp(screen.y, screen.y + screen.height),
+        )
+    };
+    (
+        clamp(origin.0, origin.1),
+        clamp(origin.0 + dx, origin.1 + dy),
+    )
+}
+
+// Scrolling DOWN reveals content below: the finger moves from 70% to 35% of the screen.
+pub fn scroll_path(screen: &Node, direction: Direction) -> ((f64, f64), (f64, f64)) {
+    let (cx, cy) = screen.center();
+    let far = 0.7;
+    let near = 0.35;
+    let along_y = |f: f64| (cx, screen.y + screen.height * f);
+    let along_x = |f: f64| (screen.x + screen.width * f, cy);
+    match direction {
+        Direction::Down => (along_y(far), along_y(near)),
+        Direction::Up => (along_y(near), along_y(far)),
+        Direction::Right => (along_x(far), along_x(near)),
+        Direction::Left => (along_x(near), along_x(far)),
+    }
+}
+
+impl Engine<'_> {
+    fn now(&self) -> u64 {
+        self.runner.monotonic_ms()
+    }
+
+    fn remaining(&self, deadline: u64) -> u64 {
+        deadline.saturating_sub(self.now())
+    }
+
+    fn measured<T>(&mut self, call: impl FnOnce(&mut Self) -> T) -> (T, u64) {
+        let started = self.now();
+        let result = call(self);
+        (result, self.now().saturating_sub(started))
+    }
+
+    fn window(&self, deadline: u64, cap: u64) -> Result<u64, Fail> {
+        let remaining = self.remaining(deadline);
+        if remaining == 0 {
+            Err(Fail::Miss("step deadline reached".into()))
+        } else {
+            Ok(remaining.min(cap))
+        }
+    }
+
+    fn read_window(&self, deadline: u64) -> Result<u64, Fail> {
+        self.window(deadline, READ_WINDOW_CAP_MS)
+    }
+
+    fn cancelled(&self) -> Result<(), Fail> {
+        match self.runner.cancellation() {
+            Some(reason) => Err(Fail::Cancelled(reason)),
+            None => Ok(()),
+        }
+    }
+
+    fn record(&mut self, step: &Step, outcome: StepOutcome, reason: Option<String>) {
+        let now = self.now();
+        self.trace.record(Entry {
+            step,
+            attempt: self.attempt,
+            answered_by: self.answered_by,
+            now,
+            outcome,
+            reason: reason.filter(|r| !r.is_empty()),
+            screenshot: self.screenshot.take(),
+        });
+    }
+
+    // The attempt that ends in a permitted second try leaves its own row.
+    fn retry(&mut self, step: &Step, reason: String) {
+        self.record(step, StepOutcome::Retry, Some(reason));
+        self.attempt += 1;
+    }
+
+    fn run_steps(&mut self, steps: &[Step]) -> Result<(), Stop> {
+        steps.iter().try_for_each(|step| self.step(step))
+    }
+
+    fn step(&mut self, step: &Step) -> Result<(), Stop> {
+        self.attempt = 1;
+        self.answered_by = step.domain;
+        self.screenshot = None;
+        if let Some(reason) = self.runner.cancellation() {
+            return self.finish(step, Err(Fail::Cancelled(reason)));
+        }
+        let deadline = self.now().saturating_add(step.budget_ms);
+        if let Op::RunFlow { when, steps } = &step.op {
+            return match self.condition(when, step.domain) {
+                Ok(true) => {
+                    self.record(step, StepOutcome::Pass, Some("condition held".into()));
+                    self.check_after(step)?;
+                    self.run_steps(steps)
+                }
+                Ok(false) => {
+                    self.record(
+                        step,
+                        StepOutcome::Skipped,
+                        Some("condition not held".into()),
+                    );
+                    self.check_after(step)
+                }
+                Err(fail) => self.finish(step, Err(fail)),
+            };
+        }
+        let result = self.execute(step, deadline);
+        self.finish(step, result)
+    }
+
+    fn finish(&mut self, step: &Step, result: Result<String, Fail>) -> Result<(), Stop> {
+        match result {
+            Ok(detail) => {
+                self.record(step, StepOutcome::Pass, Some(detail));
+                self.check_after(step)
+            }
+            Err(Fail::Miss(reason)) if step.optional => {
+                self.record(step, StepOutcome::Skipped, Some(reason));
+                self.check_after(step)
+            }
+            Err(Fail::Miss(reason)) | Err(Fail::Selector(reason)) => {
+                self.record(step, StepOutcome::Fail, Some(reason.clone()));
+                Err(Stop {
+                    verdict: Verdict::Fail,
+                    reason: format!("step {}: {reason}", step.id),
+                })
+            }
+            // Device state is unknown after an unanswered mutation, so even an optional step ends the run.
+            Err(Fail::Unknown(reason)) => {
+                self.record(step, StepOutcome::DispatchedUnknown, Some(reason.clone()));
+                let verdict = self
+                    .runner
+                    .cancellation()
+                    .map_or(Verdict::Fail, Verdict::Cancelled);
+                Err(Stop {
+                    verdict,
+                    reason: format!("step {}: {reason}", step.id),
+                })
+            }
+            Err(Fail::Cancelled(reason)) => {
+                self.record(step, StepOutcome::Cancelled, Some(reason.clone()));
+                Err(Stop {
+                    verdict: Verdict::Cancelled(reason.clone()),
+                    reason: format!("step {}: cancelled: {reason}", step.id),
+                })
+            }
+        }
+    }
+
+    // A cancellation that arrived while the step ran ends the run after the step's truthful row.
+    fn check_after(&mut self, step: &Step) -> Result<(), Stop> {
+        match self.runner.cancellation() {
+            Some(reason) => Err(Stop {
+                verdict: Verdict::Cancelled(reason.clone()),
+                reason: format!("cancelled after step {}: {reason}", step.id),
+            }),
+            None => Ok(()),
+        }
+    }
+
+    fn execute(&mut self, step: &Step, deadline: u64) -> Result<String, Fail> {
+        match &step.op {
+            Op::LaunchApp {
+                stop_app: false,
+                clear_state: false,
+            } => {
+                let snapshot = self.snapshot_within(deadline)?;
+                Ok(format!("app answered with {} nodes", snapshot.nodes.len()))
+            }
+            Op::LaunchApp {
+                stop_app,
+                clear_state,
+            } => self.perform(
+                &HostOp::Launch {
+                    stop_app: *stop_app,
+                    clear_state: *clear_state,
+                },
+                deadline,
+            ),
+            Op::StopApp => self.perform(&HostOp::StopApp, deadline),
+            Op::KillApp => self.perform(&HostOp::KillApp, deadline),
+            Op::ClearState => self.perform(&HostOp::ClearState, deadline),
+            Op::OpenLink(link) => {
+                self.perform(&HostOp::OpenLink(link.as_str().to_string()), deadline)
+            }
+            Op::Press(press, selector) => self.press(*press, selector, deadline),
+            Op::AssertVisible(selector) if step.domain == Domain::ReactTree => {
+                self.tree_visible(selector, deadline)
+            }
+            Op::AssertVisible(selector) => self
+                .lookup(selector, deadline)
+                .map(|(node, _)| format!("found {}", node.describe())),
+            Op::AssertNotVisible(selector) => self.absent(selector, deadline),
+            Op::ScrollUntilVisible {
+                selector,
+                direction,
+            } => self.scroll_until_visible(selector, *direction, deadline),
+            Op::InputText(text) => self
+                .dispatch("inputText", deadline, step.budget_ms, |e, window| {
+                    e.native.type_text(e.runner, text.as_str(), window)
+                })
+                .map(|_| "typed".into()),
+            Op::EraseText(0) => Ok("nothing to erase".into()),
+            Op::EraseText(characters) => self
+                .dispatch("eraseText", deadline, step.budget_ms, |e, window| {
+                    e.native.erase(e.runner, *characters, window)
+                })
+                .map(|_| format!("erased {characters}")),
+            Op::HideKeyboard => self.hide_keyboard(step, deadline),
+            Op::PressKey(key) => self
+                .dispatch("pressKey", deadline, step.budget_ms, |e, window| {
+                    e.native.press_key(e.runner, *key, window)
+                })
+                .map(|_| format!("pressed {key:?}")),
+            Op::Swipe {
+                direction,
+                from,
+                duration_ms,
+            } => self.swipe(from.as_ref(), *direction, *duration_ms, deadline),
+            Op::Back => self
+                .dispatch("back", deadline, step.budget_ms, |e, window| {
+                    e.native.back(e.runner, window)
+                })
+                .map(|_| "back".into()),
+            Op::Scroll => {
+                let screen = self.snapshot_within(deadline)?.nodes[0].clone();
+                let (start, end) = scroll_path(&screen, Direction::Down);
+                self.dispatch(
+                    "scroll",
+                    deadline,
+                    DISPATCH_WINDOW_MS.saturating_add(SCROLL_DURATION_MS),
+                    |e, window| {
+                        e.native
+                            .drag(e.runner, start, end, SCROLL_DURATION_MS, window)
+                    },
+                )
+                .map(|_| "scrolled".into())
+            }
+            Op::WaitForAnimationToEnd => {
+                self.settle(deadline.min(self.now().saturating_add(SETTLE_CAP_MS)))
+            }
+            Op::TakeScreenshot(name) => {
+                self.cancelled()?;
+                let window = self.window(deadline, step.budget_ms)?;
+                let capture = self
+                    .native
+                    .screenshot(self.runner, window)
+                    .map_err(|e| Fail::Miss(format!("screenshot failed: {e}")))?;
+                if self.now() > deadline {
+                    return Err(Fail::Miss("screenshot exceeded step deadline".into()));
+                }
+                self.captures.push((name.clone(), capture));
+                self.screenshot = Some(name.clone());
+                Ok("captured".into())
+            }
+            Op::RunFlow { .. } => unreachable!("runFlow is handled by step()"),
+        }
+    }
+
+    fn dispatch(
+        &mut self,
+        what: &str,
+        deadline: u64,
+        cap: u64,
+        call: impl FnOnce(&mut Self, u64) -> DriverResult<()>,
+    ) -> Result<(), Fail> {
+        self.cancelled()?;
+        let window = self.window(deadline, cap)?;
+        let result = call(self, window);
+        if self.now() > deadline {
+            return Err(Fail::Unknown(format!("{what} exceeded step deadline")));
+        }
+        outcome(result, what)
+    }
+
+    fn perform(&mut self, op: &HostOp, deadline: u64) -> Result<String, Fail> {
+        let what = op.name();
+        self.dispatch(what, deadline, DISPATCH_WINDOW_MS, |e, window| {
+            e.host.perform(e.runner, op, window)
+        })
+        .map(|_| format!("{what} done"))
+    }
+
+    // Observes until the closure yields or the deadline passes, always at least once; the closure
+    // decides what is fatal.
+    fn poll<T>(
+        &mut self,
+        deadline: u64,
+        mut observe: impl FnMut(&mut Self, u64) -> Result<Option<T>, Fail>,
+    ) -> Result<Option<T>, Fail> {
+        loop {
+            self.cancelled()?;
+            if self.now() >= deadline {
+                return Ok(None);
+            }
+            let window = self.read_window(deadline)?;
+            if let Some(found) = observe(self, window)? {
+                if self.now() > deadline {
+                    return Err(Fail::Miss("observation exceeded step deadline".into()));
+                }
+                return Ok(Some(found));
+            }
+            let now = self.now();
+            if now >= deadline {
+                return Ok(None);
+            }
+            self.runner
+                .sleep(Duration::from_millis(POLL_MS.min(deadline - now)));
+        }
+    }
+
+    fn snapshot_within(&mut self, deadline: u64) -> Result<Snapshot, Fail> {
+        let mut last = String::from("no snapshot observed");
+        let snapshot = self.poll(deadline, |engine, window| {
+            match engine.native.snapshot(engine.runner, window) {
+                Ok(snapshot) => Ok(Some(snapshot)),
+                Err(error) => {
+                    last = format!("snapshot failed: {error}");
+                    Ok(None)
+                }
+            }
+        })?;
+        snapshot.ok_or(Fail::Miss(last))
+    }
+
+    // The target and the screen node it was found on. An index past today's list keeps polling:
+    // more matches may still render, and the deadline failure names the best list seen.
+    fn lookup(&mut self, selector: &Selector, deadline: u64) -> Result<(Node, Node), Fail> {
+        let mut observed = Observed::default();
+        let found = self.poll(deadline, |engine, window| {
+            match engine.native.snapshot(engine.runner, window) {
+                Ok(snapshot) => match resolve::resolve(selector, &snapshot.nodes) {
+                    Resolution::Found(_) if snapshot.truncated && selector.index.is_none() => {
+                        observed.note(
+                            "the last snapshot was truncated, so uniqueness is unproven".into(),
+                        );
+                        Ok(None)
+                    }
+                    Resolution::Found(node) if engine.now() > deadline => {
+                        observed.note(format!("last seen after the deadline: {}", node.describe()));
+                        Ok(None)
+                    }
+                    Resolution::Found(node) => Ok(Some((node, snapshot.nodes[0].clone()))),
+                    Resolution::Ambiguous { candidates } => Err(ambiguous(selector, &candidates)),
+                    resolution => {
+                        observed.resolution(&resolution, snapshot.truncated);
+                        Ok(None)
+                    }
+                },
+                Err(error) => {
+                    observed.note(format!("last snapshot failed: {error}"));
+                    Ok(None)
+                }
+            }
+        })?;
+        found.ok_or_else(|| {
+            Fail::Miss(format!(
+                "{} not found before the deadline; {}",
+                selector.describe(),
+                observed.summary()
+            ))
+        })
+    }
+
+    // Absence is one complete snapshot without the nth match on screen; ambiguity means it is
+    // still visible more than once.
+    fn absent(&mut self, selector: &Selector, deadline: u64) -> Result<String, Fail> {
+        let mut last = String::from("no snapshot observed");
+        let gone = self.poll(deadline, |engine, window| {
+            match engine.native.snapshot(engine.runner, window) {
+                Ok(snapshot) => match resolve::resolve(selector, &snapshot.nodes) {
+                    Resolution::NotFound { .. } | Resolution::OutOfRange { .. }
+                        if !snapshot.truncated =>
+                    {
+                        Ok(Some(()))
+                    }
+                    Resolution::NotFound { .. } | Resolution::OutOfRange { .. } => {
+                        last = "the snapshot was truncated, so absence is unproven".into();
+                        Ok(None)
+                    }
+                    Resolution::Found(node) => {
+                        last = format!("still visible: {}", node.describe());
+                        Ok(None)
+                    }
+                    Resolution::Ambiguous { candidates } => {
+                        last = format!("still visible: {}", candidates.join("; "));
+                        Ok(None)
+                    }
+                },
+                Err(error) => {
+                    last = format!("snapshot failed: {error}");
+                    Ok(None)
+                }
+            }
+        })?;
+        gone.map(|_| format!("{} absent", selector.describe()))
+            .ok_or_else(|| {
+                Fail::Miss(format!(
+                    "{} still visible at the deadline; {last}",
+                    selector.describe()
+                ))
+            })
+    }
+
+    fn tree_visible(&mut self, selector: &Selector, deadline: u64) -> Result<String, Fail> {
+        let Target::Id(id) = &selector.target else {
+            return Err(Fail::Selector("a React-tree read takes an id".into()));
+        };
+        let mut last = String::from("no observation");
+        let present = self.poll(deadline, |engine, window| {
+            match engine.host.observe(engine.runner, id, window) {
+                Ok(Presence::Present) => Ok(Some(())),
+                Ok(Presence::Absent) => {
+                    last = "not mounted".into();
+                    Ok(None)
+                }
+                Err(error) => {
+                    last = format!("React tree unavailable: {error}");
+                    Ok(None)
+                }
+            }
+        })?;
+        present
+            .map(|_| format!("id {id:?} mounted"))
+            .ok_or_else(|| Fail::Miss(format!("id {id:?} not visible before the deadline; {last}")))
+    }
+
+    // One observation decides a condition; anything short of a valid observation fails the step.
+    fn condition(&mut self, when: &Condition, domain: Domain) -> Result<bool, Fail> {
+        let selector = when.selector();
+        let present = if domain == Domain::ReactTree {
+            let Target::Id(id) = &selector.target else {
+                return Err(Fail::Selector("a React-tree condition takes an id".into()));
+            };
+            match self.host.observe(self.runner, id, DISPATCH_WINDOW_MS) {
+                Ok(Presence::Present) => true,
+                Ok(Presence::Absent) => false,
+                Err(error) => {
+                    return Err(Fail::Miss(format!(
+                        "condition unobservable: React tree unavailable: {error}"
+                    )))
+                }
+            }
+        } else {
+            let snapshot = self
+                .native
+                .snapshot(self.runner, DISPATCH_WINDOW_MS)
+                .map_err(|e| Fail::Miss(format!("condition unobservable: snapshot failed: {e}")))?;
+            match resolve::resolve(selector, &snapshot.nodes) {
+                Resolution::Found(_) if snapshot.truncated && selector.index.is_none() => {
+                    return Err(Fail::Miss(
+                        "condition unobservable: the snapshot was truncated, so uniqueness is unproven".into(),
+                    ))
+                }
+                Resolution::Found(_) => true,
+                Resolution::NotFound { .. } | Resolution::OutOfRange { .. }
+                    if !snapshot.truncated =>
+                {
+                    false
+                }
+                Resolution::NotFound { .. } | Resolution::OutOfRange { .. } => {
+                    return Err(Fail::Miss(
+                        "condition unobservable: the snapshot was truncated".into(),
+                    ))
+                }
+                Resolution::Ambiguous { candidates } => {
+                    return Err(ambiguous(selector, &candidates))
+                }
+            }
+        };
+        Ok(match when {
+            Condition::Visible(_) => present,
+            Condition::NotVisible(_) => !present,
+        })
+    }
+
+    fn press(&mut self, press: Press, selector: &Selector, deadline: u64) -> Result<String, Fail> {
+        let (node, _) = self.lookup(selector, deadline)?;
+        let (x, y) = node.center();
+        self.dispatch("press", deadline, DISPATCH_WINDOW_MS, |e, window| {
+            e.native.press(e.runner, press, x, y, window)
+        })
+        .map(|_| format!("{} at ({x:.0},{y:.0})", node.describe()))
+    }
+
+    fn hide_keyboard(&mut self, step: &Step, deadline: u64) -> Result<String, Fail> {
+        self.cancelled()?;
+        let window = self.window(deadline, step.budget_ms)?;
+        let result = self.native.keyboard_dismiss(self.runner, window);
+        if self.now() > deadline {
+            return Err(Fail::Unknown(
+                "keyboardDismiss exceeded step deadline".into(),
+            ));
+        }
+        match result {
+            Ok(()) => Ok("native dismissal".into()),
+            Err(DriverError::Refused { code, .. }) if code == KEYBOARD_DISMISS_FAILED => {
+                self.retry(step, code);
+                self.answered_by = Domain::ReactTree;
+                self.dispatch(
+                    "keyboard.dismissJs",
+                    deadline,
+                    step.budget_ms,
+                    |e, window| e.host.perform(e.runner, &HostOp::KeyboardDismissJs, window),
+                )
+                .map(|_| "JavaScript tier dismissed the keyboard".into())
+            }
+            result => outcome(result, "keyboardDismiss").map(|_| String::new()),
+        }
+    }
+
+    fn swipe(
+        &mut self,
+        from: Option<&Selector>,
+        direction: Direction,
+        duration_ms: u64,
+        deadline: u64,
+    ) -> Result<String, Fail> {
+        let (origin, screen) = match from {
+            Some(selector) => {
+                let (node, screen) = self.lookup(selector, deadline)?;
+                (node.center(), screen)
+            }
+            None => {
+                let screen = self.snapshot_within(deadline)?.nodes[0].clone();
+                (screen.center(), screen)
+            }
+        };
+        let (start, end) = swipe_path(&screen, origin, direction);
+        self.dispatch(
+            "swipe",
+            deadline,
+            DISPATCH_WINDOW_MS.saturating_add(duration_ms),
+            |e, window| e.native.drag(e.runner, start, end, duration_ms, window),
+        )
+        .map(|_| {
+            format!(
+                "swiped {direction:?} from ({:.0},{:.0}) to ({:.0},{:.0})",
+                start.0, start.1, end.0, end.1
+            )
+        })
+    }
+
+    // A drag starts only when the remaining budget holds the gesture plus twice the slowest
+    // round trip measured in this step, so a missed target fails with its best near misses.
+    fn scroll_until_visible(
+        &mut self,
+        selector: &Selector,
+        direction: Direction,
+        deadline: u64,
+    ) -> Result<String, Fail> {
+        let mut scrolls = 0u32;
+        let mut observed = Observed::default();
+        let mut slowest_rtt_ms = 0u64;
+        let miss = |scrolls: u32, observed: &Observed| {
+            Fail::Miss(format!(
+                "{} not visible after {scrolls} scroll(s); {}",
+                selector.describe(),
+                observed.summary()
+            ))
+        };
+        loop {
+            self.cancelled()?;
+            if self.now() >= deadline {
+                return Err(miss(scrolls, &observed));
+            }
+            let window = self.read_window(deadline)?;
+            let (snapshot, rtt) = self.measured(|e| e.native.snapshot(e.runner, window));
+            slowest_rtt_ms = slowest_rtt_ms.max(rtt);
+            let screen = match snapshot {
+                Ok(snapshot) => match resolve::resolve(selector, &snapshot.nodes) {
+                    Resolution::Found(_) if snapshot.truncated && selector.index.is_none() => {
+                        observed.note(
+                            "the last snapshot was truncated, so uniqueness is unproven".into(),
+                        );
+                        None
+                    }
+                    Resolution::Found(node) if self.now() <= deadline => {
+                        return Ok(format!(
+                            "{} visible after {scrolls} scroll(s)",
+                            node.describe()
+                        ))
+                    }
+                    Resolution::Found(node) => {
+                        observed.note(format!("last seen after the deadline: {}", node.describe()));
+                        None
+                    }
+                    Resolution::Ambiguous { candidates } => {
+                        return Err(ambiguous(selector, &candidates))
+                    }
+                    resolution => {
+                        observed.resolution(&resolution, snapshot.truncated);
+                        (!snapshot.truncated).then(|| snapshot.nodes[0].clone())
+                    }
+                },
+                Err(error) => {
+                    observed.note(format!("last snapshot failed: {error}"));
+                    None
+                }
+            };
+            let Some(screen) = screen else {
+                let remaining = self.remaining(deadline);
+                if remaining > 0 {
+                    self.runner
+                        .sleep(Duration::from_millis(POLL_MS.min(remaining)));
+                }
+                continue;
+            };
+            self.cancelled()?;
+            let allowance = SCROLL_DURATION_MS + 2 * slowest_rtt_ms.max(SCROLL_DURATION_MS);
+            let remaining = self.remaining(deadline);
+            if remaining < allowance {
+                return Err(miss(scrolls, &observed));
+            }
+            let (start, end) = scroll_path(&screen, direction);
+            let (result, rtt) = self.measured(|e| {
+                e.native
+                    .drag(e.runner, start, end, SCROLL_DURATION_MS, remaining)
+            });
+            slowest_rtt_ms = slowest_rtt_ms.max(rtt);
+            match outcome(result, "scroll") {
+                Ok(()) => scrolls += 1,
+                Err(Fail::Unknown(why)) => {
+                    return Err(Fail::Unknown(format!(
+                        "{why}; after {scrolls} scroll(s); {}",
+                        observed.summary()
+                    )))
+                }
+                Err(Fail::Miss(why)) => {
+                    return Err(Fail::Miss(format!(
+                        "{why}; after {scrolls} scroll(s); {}",
+                        observed.summary()
+                    )))
+                }
+                Err(other) => return Err(other),
+            }
+            let settle_by = deadline.min(self.now().saturating_add(SETTLE_CAP_MS));
+            if let Err(Fail::Cancelled(reason)) = self.settle(settle_by) {
+                return Err(Fail::Cancelled(reason));
+            }
+        }
+    }
+
+    // Passes when the screen is static, or at the deadline when at least one probe answered.
+    fn settle(&mut self, deadline: u64) -> Result<String, Fail> {
+        let mut polls = 0u32;
+        let mut observed = false;
+        let mut last = String::new();
+        let settled = self.poll(deadline, |engine, window| {
+            polls += 1;
+            let probe = engine.native.is_settled(engine.runner, window);
+            if engine.now() > deadline {
+                return Err(Fail::Miss("settle probe exceeded deadline".into()));
+            }
+            match probe {
+                Ok(true) => {
+                    observed = true;
+                    Ok(Some(()))
+                }
+                Ok(false) => {
+                    observed = true;
+                    Ok(None)
+                }
+                Err(error) => {
+                    last = format!("settle probe failed: {error}");
+                    Ok(None)
+                }
+            }
+        })?;
+        match (settled, observed) {
+            (Some(()), _) => Ok(format!("settled after {polls} poll(s)")),
+            (None, true) => Ok(format!(
+                "animation wait cap reached; still changing after {polls} poll(s)"
+            )),
+            (None, false) => Err(Fail::Miss(format!("no settle observation: {last}"))),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::exec::MockRunner;
+    use crate::flow::plan::{Private, Source};
+    use crate::scenario::Platform;
+    use std::collections::VecDeque;
+
+    const LATENCY_MS: u64 = 100;
+
+    fn node(index: usize, kind: &str, label: &str, id: &str, y: f64) -> Node {
+        Node {
+            index,
+            parent: Some(0),
+            kind: kind.into(),
+            label: label.into(),
+            identifier: id.into(),
+            value: String::new(),
+            secure: false,
+            x: 0.0,
+            y,
+            width: 400.0,
+            height: 40.0,
+        }
+    }
+
+    fn screen(labels: &[&str]) -> Snapshot {
+        let mut nodes = vec![Node {
+            parent: None,
+            width: 400.0,
+            height: 800.0,
+            ..node(0, "Application", "", "", 0.0)
+        }];
+        for (i, label) in labels.iter().enumerate() {
+            nodes.push(node(i + 1, "Button", label, label, 100.0 * (i + 1) as f64));
+        }
+        Snapshot {
+            nodes,
+            truncated: false,
+        }
+    }
+
+    fn text(label: &str) -> Selector {
+        Selector {
+            target: Target::Text(label.into()),
+            index: None,
+        }
+    }
+
+    fn id(id: &str) -> Selector {
+        Selector {
+            target: Target::Id(id.into()),
+            index: None,
+        }
+    }
+
+    fn indexed(selector: Selector, index: usize) -> Selector {
+        Selector {
+            index: Some(index),
+            ..selector
+        }
+    }
+
+    fn step(id: &str, domain: Domain, budget_ms: u64, op: Op) -> Step {
+        Step {
+            id: id.into(),
+            source: Source {
+                line: 10,
+                file: None,
+            },
+            domain,
+            optional: false,
+            budget_ms,
+            op,
+        }
+    }
+
+    fn optional(step: Step) -> Step {
+        Step {
+            optional: true,
+            ..step
+        }
+    }
+
+    fn plan(steps: Vec<Step>) -> Plan {
+        Plan {
+            action_id: "action".into(),
+            app_id: "com.x".into(),
+            platform: Platform::Ios,
+            steps,
+        }
+    }
+
+    struct ScriptedNative {
+        snapshots: VecDeque<DriverResult<Snapshot>>,
+        steady: DriverResult<Snapshot>,
+        after_scroll: Option<Snapshot>,
+        presses: VecDeque<DriverResult<()>>,
+        keyboard: VecDeque<DriverResult<()>>,
+        settled: VecDeque<DriverResult<bool>>,
+        mutations: Vec<String>,
+        snapshots_taken: u32,
+        snapshot_windows: Vec<u64>,
+        drag_windows: Vec<u64>,
+        snapshot_latency_ms: u64,
+        mutation_latency_ms: u64,
+        drag_latencies_ms: VecDeque<u64>,
+        // When set, a call slower than its window times out as curl does instead of answering late.
+        honour_windows: bool,
+        drag_timeouts: u32,
+    }
+
+    impl ScriptedNative {
+        fn steady(snapshot: Snapshot) -> Self {
+            ScriptedNative {
+                snapshots: VecDeque::new(),
+                steady: Ok(snapshot),
+                after_scroll: None,
+                presses: VecDeque::new(),
+                keyboard: VecDeque::new(),
+                settled: VecDeque::new(),
+                mutations: Vec::new(),
+                snapshots_taken: 0,
+                snapshot_windows: Vec::new(),
+                drag_windows: Vec::new(),
+                snapshot_latency_ms: LATENCY_MS,
+                mutation_latency_ms: LATENCY_MS,
+                drag_latencies_ms: VecDeque::new(),
+                honour_windows: false,
+                drag_timeouts: 0,
+            }
+        }
+
+        fn then(mut self, snapshots: Vec<DriverResult<Snapshot>>) -> Self {
+            self.snapshots = snapshots.into();
+            self
+        }
+
+        fn wait(
+            &self,
+            runner: &mut dyn Runner,
+            latency_ms: u64,
+            window_ms: u64,
+        ) -> DriverResult<()> {
+            if self.honour_windows && latency_ms > window_ms {
+                runner.sleep(Duration::from_millis(window_ms));
+                return Err(DriverError::Unknown(format!(
+                    "timed out after {window_ms} ms"
+                )));
+            }
+            runner.sleep(Duration::from_millis(latency_ms));
+            Ok(())
+        }
+
+        fn mutate(
+            &mut self,
+            runner: &mut dyn Runner,
+            what: String,
+            window_ms: u64,
+        ) -> DriverResult<()> {
+            let sent = self.wait(runner, self.mutation_latency_ms, window_ms);
+            self.mutations.push(what);
+            sent
+        }
+    }
+
+    impl NativeDriver for ScriptedNative {
+        fn snapshot(&mut self, runner: &mut dyn Runner, window_ms: u64) -> DriverResult<Snapshot> {
+            self.snapshots_taken += 1;
+            self.snapshot_windows.push(window_ms);
+            self.wait(runner, self.snapshot_latency_ms, window_ms)?;
+            self.snapshots
+                .pop_front()
+                .unwrap_or_else(|| self.steady.clone())
+        }
+
+        fn press(
+            &mut self,
+            runner: &mut dyn Runner,
+            press: Press,
+            x: f64,
+            y: f64,
+            window_ms: u64,
+        ) -> DriverResult<()> {
+            self.mutate(
+                runner,
+                format!("{press:?}@{x:.0},{y:.0}/{window_ms}"),
+                window_ms,
+            )?;
+            self.presses.pop_front().unwrap_or(Ok(()))
+        }
+
+        fn type_text(
+            &mut self,
+            runner: &mut dyn Runner,
+            text: &str,
+            window_ms: u64,
+        ) -> DriverResult<()> {
+            self.mutate(runner, format!("type:{text}/{window_ms}"), window_ms)?;
+            self.presses.pop_front().unwrap_or(Ok(()))
+        }
+
+        fn erase(
+            &mut self,
+            runner: &mut dyn Runner,
+            characters: u64,
+            window_ms: u64,
+        ) -> DriverResult<()> {
+            self.mutate(runner, format!("erase:{characters}"), window_ms)
+        }
+
+        fn press_key(&mut self, runner: &mut dyn Runner, key: Key, w: u64) -> DriverResult<()> {
+            self.mutate(runner, format!("key:{key:?}"), w)
+        }
+
+        fn drag(
+            &mut self,
+            runner: &mut dyn Runner,
+            from: (f64, f64),
+            to: (f64, f64),
+            duration_ms: u64,
+            window_ms: u64,
+        ) -> DriverResult<()> {
+            self.drag_windows.push(window_ms);
+            let latency_ms = self
+                .drag_latencies_ms
+                .pop_front()
+                .unwrap_or(self.mutation_latency_ms);
+            let sent = self.wait(runner, latency_ms, window_ms);
+            self.mutations.push(format!(
+                "drag:{:.0},{:.0}->{:.0},{:.0}/{duration_ms}",
+                from.0, from.1, to.0, to.1
+            ));
+            if sent.is_err() {
+                self.drag_timeouts += 1;
+            }
+            sent?;
+            if let Some(after) = self.after_scroll.take() {
+                self.snapshots.push_front(Ok(after));
+            }
+            self.presses.pop_front().unwrap_or(Ok(()))
+        }
+
+        fn back(&mut self, runner: &mut dyn Runner, window_ms: u64) -> DriverResult<()> {
+            self.mutate(runner, "back".into(), window_ms)
+        }
+
+        fn keyboard_dismiss(&mut self, runner: &mut dyn Runner, w: u64) -> DriverResult<()> {
+            self.mutate(runner, "keyboardDismiss".into(), w)?;
+            self.keyboard.pop_front().unwrap_or(Ok(()))
+        }
+
+        fn is_settled(&mut self, runner: &mut dyn Runner, window_ms: u64) -> DriverResult<bool> {
+            self.wait(runner, LATENCY_MS, window_ms)?;
+            self.settled.pop_front().unwrap_or(Ok(true))
+        }
+
+        fn screenshot(&mut self, runner: &mut dyn Runner, _w: u64) -> DriverResult<Capture> {
+            runner.sleep(Duration::from_millis(LATENCY_MS));
+            Ok(Capture::RunnerPath("tmp/shot.png".into()))
+        }
+    }
+
+    #[derive(Default)]
+    struct ScriptedHost {
+        observations: VecDeque<DriverResult<Presence>>,
+        observed: Vec<(String, u64)>,
+        performed: Vec<HostOp>,
+        performed_windows: Vec<u64>,
+        results: VecDeque<DriverResult<()>>,
+    }
+
+    impl HostDriver for ScriptedHost {
+        fn observe(
+            &mut self,
+            runner: &mut dyn Runner,
+            id: &str,
+            window_ms: u64,
+        ) -> DriverResult<Presence> {
+            runner.sleep(Duration::from_millis(LATENCY_MS));
+            self.observed.push((id.into(), window_ms));
+            self.observations
+                .pop_front()
+                .unwrap_or(Ok(Presence::Absent))
+        }
+
+        fn perform(
+            &mut self,
+            runner: &mut dyn Runner,
+            op: &HostOp,
+            window_ms: u64,
+        ) -> DriverResult<()> {
+            runner.sleep(Duration::from_millis(LATENCY_MS));
+            self.performed.push(op.clone());
+            self.performed_windows.push(window_ms);
+            self.results.pop_front().unwrap_or(Ok(()))
+        }
+    }
+
+    fn drive(plan: &Plan, native: &mut ScriptedNative, host: &mut ScriptedHost) -> (Outcome, u64) {
+        drive_with_private(plan, &[], native, host)
+    }
+
+    fn drive_with_private(
+        plan: &Plan,
+        private: &[String],
+        native: &mut ScriptedNative,
+        host: &mut ScriptedHost,
+    ) -> (Outcome, u64) {
+        let mut runner = MockRunner::new();
+        let t0 = runner.now_epoch_ms();
+        let outcome = run(plan, private, &mut runner, native, host);
+        (outcome, runner.now_epoch_ms() - t0)
+    }
+
+    fn drive_cancelling(
+        plan: &Plan,
+        native: &mut ScriptedNative,
+        host: &mut ScriptedHost,
+        after_ms: u64,
+        reason: &str,
+    ) -> Outcome {
+        let mut runner = MockRunner::new();
+        runner.cancel_at_ms = Some((runner.now_epoch_ms() + after_ms, reason.into()));
+        run(plan, &[], &mut runner, native, host)
+    }
+
+    fn outcomes(rows: &[Row]) -> Vec<&str> {
+        rows.iter().map(|row| row.outcome.as_str()).collect()
+    }
+
+    fn tap(label: &str) -> Op {
+        Op::Press(Press::Tap, text(label))
+    }
+
+    fn refused(code: &str) -> DriverError {
+        DriverError::Refused {
+            code: code.into(),
+            message: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_lookup_polls_until_the_target_appears_then_presses_once() {
+        let plan = plan(vec![step("s1", Domain::Native, 17_000, tap("Go"))]);
+        let mut native =
+            ScriptedNative::steady(screen(&["Go"])).then(vec![Ok(screen(&[])), Ok(screen(&[]))]);
+        let (outcome, elapsed) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert_eq!(native.snapshots_taken, 3);
+        assert_eq!(native.mutations, vec!["Tap@200,120/10000"]);
+        assert!(elapsed >= 2 * POLL_MS, "{elapsed}");
+        let row = &outcome.rows[0];
+        assert_eq!(
+            (row.outcome.as_str(), row.attempt, row.line),
+            ("pass", 1, 10)
+        );
+        assert_eq!(row.r#ref.as_deref(), Some("s1"));
+        assert_eq!(row.resolved_by, "native");
+        assert_eq!(row.text.as_deref(), Some("tapOn text \"Go\""));
+    }
+
+    #[test]
+    fn unindexed_lookup_waits_for_a_complete_snapshot() {
+        let mut truncated = screen(&["Go"]);
+        truncated.truncated = true;
+        for op in [tap("Go"), Op::AssertVisible(text("Go"))] {
+            let mut native = ScriptedNative::steady(truncated.clone());
+            let (unproven, _) = drive(
+                &plan(vec![step("s1", Domain::Native, 500, op.clone())]),
+                &mut native,
+                &mut ScriptedHost::default(),
+            );
+            assert_eq!(unproven.verdict, Verdict::Fail);
+            assert!(unproven.rows[0]
+                .reason
+                .as_ref()
+                .unwrap()
+                .contains("truncated"));
+            assert!(native.mutations.is_empty());
+
+            let mut native =
+                ScriptedNative::steady(screen(&["Go"])).then(vec![Ok(truncated.clone())]);
+            let (complete, _) = drive(
+                &plan(vec![step("s1", Domain::Native, 1_000, op)]),
+                &mut native,
+                &mut ScriptedHost::default(),
+            );
+            assert_eq!(complete.verdict, Verdict::Pass);
+            assert_eq!(native.snapshots_taken, 2);
+        }
+
+        let mut native = ScriptedNative::steady(truncated);
+        let (indexed, _) = drive(
+            &plan(vec![step(
+                "s1",
+                Domain::Native,
+                500,
+                Op::Press(Press::Tap, indexed(text("Go"), 0)),
+            )]),
+            &mut native,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(indexed.verdict, Verdict::Pass);
+        assert_eq!(native.mutations.len(), 1);
+    }
+
+    #[test]
+    fn reads_and_mutations_cannot_succeed_after_the_step_deadline() {
+        let mut native = ScriptedNative::steady(screen(&["Go"]));
+        let read = plan(vec![step(
+            "s1",
+            Domain::Native,
+            50,
+            Op::AssertVisible(text("Go")),
+        )]);
+        let (late_read, _) = drive(&read, &mut native, &mut ScriptedHost::default());
+        assert_eq!(late_read.verdict, Verdict::Fail);
+        assert_eq!(native.snapshot_windows, vec![50]);
+
+        let mut native = ScriptedNative::steady(screen(&["Go"]));
+        let press = plan(vec![step("s1", Domain::Native, 150, tap("Go"))]);
+        let (late_press, _) = drive(&press, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcomes(&late_press.rows), vec!["dispatched-unknown"]);
+        assert_eq!(native.mutations, vec!["Tap@200,120/50"]);
+
+        let mut native = ScriptedNative::steady(screen(&[]));
+        let scroll = plan(vec![step("s1", Domain::Native, 150, Op::Scroll)]);
+        let (late_scroll, _) = drive(&scroll, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcomes(&late_scroll.rows), vec!["dispatched-unknown"]);
+        assert_eq!(native.drag_windows, vec![50]);
+
+        let mut native = ScriptedNative::steady(screen(&[]));
+        let screenshot = plan(vec![step(
+            "s1",
+            Domain::Native,
+            50,
+            Op::TakeScreenshot("shot".into()),
+        )]);
+        let (late_screenshot, _) = drive(&screenshot, &mut native, &mut ScriptedHost::default());
+        assert_eq!(late_screenshot.verdict, Verdict::Fail);
+        assert!(late_screenshot.captures.is_empty());
+    }
+
+    #[test]
+    fn late_keyboard_fallback_and_scroll_until_visible_fail() {
+        let mut native = ScriptedNative::steady(screen(&[]));
+        native.keyboard = vec![Err(refused(KEYBOARD_DISMISS_FAILED))].into();
+        let mut host = ScriptedHost::default();
+        let hide = plan(vec![step("s1", Domain::Native, 150, Op::HideKeyboard)]);
+        let (late_hide, _) = drive(&hide, &mut native, &mut host);
+        assert_eq!(
+            outcomes(&late_hide.rows),
+            vec!["retry", "dispatched-unknown"]
+        );
+        assert_eq!(host.performed_windows, vec![50]);
+
+        let mut native = ScriptedNative::steady(screen(&[]));
+        let scroll = plan(vec![step(
+            "s1",
+            Domain::Native,
+            150,
+            Op::ScrollUntilVisible {
+                selector: text("Footer"),
+                direction: Direction::Down,
+            },
+        )]);
+        let (late_scroll, _) = drive(&scroll, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcomes(&late_scroll.rows), vec!["fail"]);
+        assert!(
+            native.drag_windows.is_empty() && native.mutations.is_empty(),
+            "a drag that cannot finish inside the budget is never dispatched"
+        );
+        let reason = late_scroll.rows[0].reason.clone().unwrap();
+        assert!(reason.contains("after 0 scroll(s)"), "{reason}");
+    }
+
+    #[test]
+    fn a_lookup_that_never_resolves_fails_with_near_misses_and_stops_the_run() {
+        let plan = plan(vec![
+            step("s1", Domain::Native, 1_000, tap("Go")),
+            step("s2", Domain::Native, 1_000, tap("Later")),
+        ]);
+        let mut native = ScriptedNative::steady(screen(&["Go home", "Later"]));
+        let (outcome, elapsed) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        assert_eq!(outcomes(&outcome.rows), vec!["fail"]);
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("near misses") && reason.contains("Go home"),
+            "{reason}"
+        );
+        assert!(native.mutations.is_empty());
+        assert!((1_000..1_400).contains(&elapsed), "{elapsed}");
+        assert!(outcome.failure.unwrap().starts_with("step s1"));
+    }
+
+    // A lookup keeps the best near misses it saw; later failed, truncated or late snapshots are
+    // reported beside them, never instead of them.
+    #[test]
+    fn a_lookup_keeps_its_near_misses_across_failed_truncated_and_late_snapshots() {
+        let near = screen(&["Go home"]);
+        let lookup = |budget_ms| plan(vec![step("s1", Domain::Native, budget_ms, tap("Go"))]);
+
+        let mut failing = ScriptedNative::steady(near.clone());
+        failing.steady = Err(DriverError::Unsent("runner down".into()));
+        failing.snapshots = vec![Ok(near.clone())].into();
+        let (outcome, _) = drive(&lookup(1_000), &mut failing, &mut ScriptedHost::default());
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("near misses")
+                && reason.contains("Go home")
+                && reason.contains("last snapshot failed: not sent: runner down"),
+            "{reason}"
+        );
+
+        let mut truncated = screen(&["Go settings"]);
+        truncated.truncated = true;
+        let mut cut = ScriptedNative::steady(truncated);
+        cut.snapshots = vec![Ok(near.clone())].into();
+        let (outcome, _) = drive(&lookup(1_000), &mut cut, &mut ScriptedHost::default());
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("Go home")
+                && !reason.contains("Go settings")
+                && reason.contains("the last snapshot was truncated"),
+            "{reason}"
+        );
+
+        let mut late = ScriptedNative::steady(screen(&["Go"]));
+        late.snapshots = vec![Ok(near)].into();
+        late.snapshot_latency_ms = 600;
+        let (outcome, _) = drive(&lookup(1_000), &mut late, &mut ScriptedHost::default());
+        assert_eq!(outcomes(&outcome.rows), vec!["fail"]);
+        assert!(late.mutations.is_empty());
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("Go home") && reason.contains("last seen after the deadline"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn snapshot_text_in_trace_reasons_is_redacted() {
+        let secret = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+        for label in [
+            format!("Save {secret}"),
+            secret.to_string(),
+            "Bearer\nsecret-token".to_string(),
+            "password=\"secret-token\"".to_string(),
+        ] {
+            let mut snapshot = screen(&["Save"]);
+            snapshot.nodes[1].label = label.clone();
+            snapshot.nodes[1].identifier = "target".into();
+            for (selector, verdict) in [(id("target"), Verdict::Pass), (id("targ"), Verdict::Fail)]
+            {
+                let mut native = ScriptedNative::steady(snapshot.clone());
+                let (outcome, _) = drive(
+                    &plan(vec![step(
+                        "s1",
+                        Domain::Native,
+                        500,
+                        Op::AssertVisible(selector),
+                    )]),
+                    &mut native,
+                    &mut ScriptedHost::default(),
+                );
+                assert_eq!(outcome.verdict, verdict, "{label:?}");
+                let reason = outcome.rows[0].reason.as_ref().unwrap();
+                assert!(
+                    !reason.contains(secret) && !reason.contains("secret-token"),
+                    "{label:?}: {reason}"
+                );
+                assert!(reason.contains("<redacted>"), "{label:?}: {reason}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_optional_miss_is_skipped_and_the_run_continues() {
+        let plan = plan(vec![
+            optional(step("s1", Domain::Native, 500, tap("Skip"))),
+            step("s2", Domain::Native, 1_000, tap("Go")),
+        ]);
+        let mut native = ScriptedNative::steady(screen(&["Go"]));
+        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert_eq!(outcomes(&outcome.rows), vec!["skipped", "pass"]);
+        assert_eq!(native.mutations.len(), 1);
+    }
+
+    #[test]
+    fn an_ambiguous_selector_fails_even_when_optional() {
+        let plan = plan(vec![
+            optional(step("s1", Domain::Native, 1_000, tap("Save"))),
+            step("s2", Domain::Native, 1_000, tap("Go")),
+        ]);
+        let mut snapshot = screen(&["Save", "Save", "Go"]);
+        snapshot.nodes[2].kind = "StaticText".into();
+        let mut native = ScriptedNative::steady(snapshot);
+        let (outcome, elapsed) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(
+            outcome.verdict,
+            Verdict::Fail,
+            "an authoring error is never skipped"
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["fail"]);
+        assert!(outcome.rows[0]
+            .reason
+            .clone()
+            .unwrap()
+            .contains("ambiguous"));
+        assert!(native.mutations.is_empty(), "nothing is pressed");
+        assert!(
+            elapsed < POLL_MS,
+            "fails on the first observation: {elapsed}"
+        );
+    }
+
+    #[test]
+    fn an_extended_wait_honours_its_own_budget() {
+        let late = |budget| {
+            plan(vec![step(
+                "s1",
+                Domain::Native,
+                budget,
+                Op::AssertVisible(text("Done")),
+            )])
+        };
+        let appears_late = || {
+            ScriptedNative::steady(screen(&["Done"])).then(vec![
+                Ok(screen(&[])),
+                Ok(screen(&[])),
+                Ok(screen(&[])),
+                Ok(screen(&[])),
+            ])
+        };
+        let (patient, _) = drive(
+            &late(3_000),
+            &mut appears_late(),
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(patient.verdict, Verdict::Pass);
+        let (hasty, elapsed) = drive(
+            &late(500),
+            &mut appears_late(),
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(hasty.verdict, Verdict::Fail);
+        assert!(elapsed < 1_000, "the deadline bounds the wait: {elapsed}");
+    }
+
+    #[test]
+    fn absence_is_a_bounded_poll_over_complete_snapshots() {
+        let absent = |budget| {
+            plan(vec![step(
+                "s1",
+                Domain::Native,
+                budget,
+                Op::AssertNotVisible(id("sheet")),
+            )])
+        };
+        let mut leaves = ScriptedNative::steady(screen(&[]))
+            .then(vec![Ok(screen(&["sheet"])), Ok(screen(&["sheet"]))]);
+        let (gone, _) = drive(&absent(7_000), &mut leaves, &mut ScriptedHost::default());
+        assert_eq!(gone.verdict, Verdict::Pass);
+        assert_eq!(leaves.snapshots_taken, 3);
+
+        let mut stays = ScriptedNative::steady(screen(&["sheet"]));
+        let (still, _) = drive(&absent(1_000), &mut stays, &mut ScriptedHost::default());
+        assert_eq!(still.verdict, Verdict::Fail);
+        assert!(still.rows[0]
+            .reason
+            .clone()
+            .unwrap()
+            .contains("still visible"));
+
+        let mut twice = ScriptedNative::steady(screen(&["sheet", "sheet"]));
+        let (doubled, _) = drive(&absent(1_000), &mut twice, &mut ScriptedHost::default());
+        assert_eq!(
+            doubled.verdict,
+            Verdict::Fail,
+            "two matches are still visible"
+        );
+
+        let mut truncated = screen(&[]);
+        truncated.truncated = true;
+        let mut partial = ScriptedNative::steady(truncated);
+        let (unproven, _) = drive(&absent(1_000), &mut partial, &mut ScriptedHost::default());
+        assert_eq!(unproven.verdict, Verdict::Fail);
+        assert!(unproven.rows[0]
+            .reason
+            .clone()
+            .unwrap()
+            .contains("truncated"));
+    }
+
+    #[test]
+    fn an_index_past_the_visible_matches_counts_as_absent() {
+        let plan = plan(vec![step(
+            "s1",
+            Domain::Native,
+            7_000,
+            Op::AssertNotVisible(indexed(id("sheet"), 3)),
+        )]);
+        let mut native = ScriptedNative::steady(screen(&["sheet"]));
+        let (outcome, elapsed) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert!(elapsed < POLL_MS, "one observation: {elapsed}");
+    }
+
+    #[test]
+    fn scroll_until_visible_scrolls_settles_and_finds_the_target() {
+        let plan = plan(vec![step(
+            "s1",
+            Domain::Native,
+            20_000,
+            Op::ScrollUntilVisible {
+                selector: text("Footer"),
+                direction: Direction::Down,
+            },
+        )]);
+        let mut native = ScriptedNative::steady(screen(&["Header"]));
+        native.after_scroll = Some(screen(&["Footer"]));
+        native.settled = vec![Ok(false), Ok(true)].into();
+        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert_eq!(native.mutations, vec!["drag:200,560->200,280/300"]);
+        assert!(outcome.rows[0]
+            .reason
+            .clone()
+            .unwrap()
+            .contains("after 1 scroll"));
+        assert!(
+            native.settled.is_empty(),
+            "both settle probes were consumed"
+        );
+    }
+
+    fn scroll_for(selector: Selector, budget_ms: u64) -> Plan {
+        plan(vec![step(
+            "s1",
+            Domain::Native,
+            budget_ms,
+            Op::ScrollUntilVisible {
+                selector,
+                direction: Direction::Up,
+            },
+        )])
+    }
+
+    // Each round costs a snapshot, a drag and one settle probe (300 ms); with 100 ms round trips
+    // a drag needs 900 ms of budget, so the third snapshot (600 ms left) is not followed by one.
+    #[test]
+    fn scroll_until_visible_gives_up_at_its_deadline() {
+        let mut native = ScriptedNative::steady(screen(&["Footer link"]));
+        let (outcome, elapsed) = drive(
+            &scroll_for(text("Footer"), 1_300),
+            &mut native,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["fail"]);
+        assert_eq!(native.mutations.len(), 2);
+        assert!(native
+            .mutations
+            .iter()
+            .all(|m| m.starts_with("drag:200,280->200,560")));
+        assert_eq!(
+            native.snapshots_taken, 3,
+            "the last snapshot is not followed by a drag"
+        );
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("after 2 scroll(s)")
+                && reason.contains("near misses")
+                && reason.contains("Footer link"),
+            "{reason}"
+        );
+        assert!(
+            elapsed < 1_300,
+            "the allowance fails the step before the deadline: {elapsed}"
+        );
+    }
+
+    // Snapshots that fail after the near misses were seen keep them and are reported beside them.
+    #[test]
+    fn scroll_until_visible_keeps_near_misses_when_later_snapshots_fail() {
+        let mut native = ScriptedNative::steady(screen(&["Footer link"]));
+        native.steady = Err(DriverError::Unsent("runner down".into()));
+        native.snapshots = vec![Ok(screen(&["Footer link"])), Ok(screen(&["Footer link"]))].into();
+        let (outcome, elapsed) = drive(
+            &scroll_for(text("Footer"), 1_300),
+            &mut native,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["fail"]);
+        assert_eq!(native.mutations.len(), 2);
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("after 2 scroll(s)")
+                && reason.contains("near misses")
+                && reason.contains("Footer link")
+                && reason.contains("last snapshot failed: not sent: runner down"),
+            "{reason}"
+        );
+        assert!(elapsed >= 1_300, "{elapsed}");
+    }
+
+    fn never_visible(
+        snapshot_latency_ms: u64,
+        drag_latency_ms: u64,
+        honour: bool,
+    ) -> ScriptedNative {
+        let mut native = ScriptedNative::steady(screen(&["Row 9 footer"]));
+        native.snapshot_latency_ms = snapshot_latency_ms;
+        native.mutation_latency_ms = drag_latency_ms;
+        native.honour_windows = honour;
+        native
+    }
+
+    // The QA sweep: a never-found target ends as a miss with its near miss at every timing,
+    // whether a slow runner answers late or times out at its window.
+    #[test]
+    fn scroll_until_visible_misses_with_near_misses_at_every_timing() {
+        for honour in [false, true] {
+            for snapshot_latency_ms in [50, 150, 300, 600] {
+                for drag_latency_ms in [50, 150, 300, 350, 400, 500, 700, 1_000] {
+                    let mut native = never_visible(snapshot_latency_ms, drag_latency_ms, honour);
+                    let (outcome, _) = drive(
+                        &scroll_for(text("Row 9"), 20_000),
+                        &mut native,
+                        &mut ScriptedHost::default(),
+                    );
+                    let cell = format!(
+                        "snapshot {snapshot_latency_ms} ms, drag {drag_latency_ms} ms, honour {honour}"
+                    );
+                    assert_eq!(outcomes(&outcome.rows), vec!["fail"], "{cell}");
+                    let reason = outcome.rows[0].reason.clone().unwrap();
+                    assert!(
+                        reason.contains("near misses") && reason.contains("Row 9 footer"),
+                        "{cell}: {reason}"
+                    );
+                    assert!(!native.mutations.is_empty(), "{cell}");
+                    assert_eq!(native.drag_timeouts, 0, "{cell}");
+                }
+            }
+        }
+    }
+
+    // The widened sweep: the only unknown outcome is a drag the runner did not answer inside a
+    // window of at least the gesture plus twice the slowest measured round trip, and even that
+    // row carries the near miss and the scroll count.
+    #[test]
+    fn scroll_until_visible_is_unknown_only_when_a_drag_goes_unanswered() {
+        let (mut misses, mut unknowns) = (0, 0);
+        for budget_ms in (300..=5_000).step_by(50) {
+            for drag_latency_ms in [300, 599, 600, 601, 1_000, 2_000] {
+                let mut native = never_visible(100, drag_latency_ms, true);
+                let (outcome, _) = drive(
+                    &scroll_for(text("Row 9"), budget_ms),
+                    &mut native,
+                    &mut ScriptedHost::default(),
+                );
+                let cell = format!("budget {budget_ms} ms, drag {drag_latency_ms} ms");
+                let reason = outcome.rows[0].reason.clone().unwrap();
+                assert!(reason.contains("Row 9 footer"), "{cell}: {reason}");
+                assert!(native.drag_timeouts <= 1, "{cell}");
+                if native.drag_timeouts == 1 {
+                    unknowns += 1;
+                    assert_eq!(
+                        outcomes(&outcome.rows),
+                        vec!["dispatched-unknown"],
+                        "{cell}"
+                    );
+                    assert!(reason.contains("after 0 scroll(s)"), "{cell}: {reason}");
+                    assert!(
+                        native.drag_windows[0] >= 900,
+                        "{cell}: {:?}",
+                        native.drag_windows
+                    );
+                    assert!(drag_latency_ms > native.drag_windows[0], "{cell}");
+                } else {
+                    misses += 1;
+                    assert_eq!(outcomes(&outcome.rows), vec!["fail"], "{cell}: {reason}");
+                    if native.mutations.is_empty() {
+                        assert!(reason.contains("after 0 scroll(s)"), "{cell}: {reason}");
+                    }
+                }
+            }
+        }
+        assert!(
+            misses > 0 && unknowns > 0,
+            "misses {misses}, unknowns {unknowns}"
+        );
+    }
+
+    #[test]
+    fn scroll_until_visible_reports_the_cause_and_near_misses_of_an_unknown_drag() {
+        let mut silent = never_visible(100, 300, true);
+        silent.drag_latencies_ms = vec![300, 100_000].into();
+        let (outcome, _) = drive(
+            &scroll_for(text("Row 9"), 20_000),
+            &mut silent,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["dispatched-unknown"]);
+        assert_eq!(silent.mutations.len(), 2);
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("timed out after")
+                && reason.contains("after 1 scroll(s)")
+                && reason.contains("Row 9 footer"),
+            "{reason}"
+        );
+
+        let mut malformed = never_visible(100, 100, false);
+        malformed.presses =
+            vec![Ok(()), Err(DriverError::Unknown("malformed reply".into()))].into();
+        let (outcome, _) = drive(
+            &scroll_for(text("Row 9"), 20_000),
+            &mut malformed,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["dispatched-unknown"]);
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("malformed reply")
+                && reason.contains("after 1 scroll(s)")
+                && reason.contains("Row 9 footer"),
+            "{reason}"
+        );
+        let failure = outcome.failure.unwrap();
+        assert!(failure.contains("malformed reply"), "{failure}");
+    }
+
+    #[test]
+    fn scroll_until_visible_outcome_is_timing_independent() {
+        for snapshot_latency_ms in [50, 150, 300] {
+            for mutation_latency_ms in [100, 300] {
+                let mut native = ScriptedNative::steady(screen(&["Row 9 footer"]));
+                native.snapshot_latency_ms = snapshot_latency_ms;
+                native.mutation_latency_ms = mutation_latency_ms;
+                let (outcome, _) = drive(
+                    &scroll_for(text("Row 9"), 20_000),
+                    &mut native,
+                    &mut ScriptedHost::default(),
+                );
+                let cell =
+                    format!("snapshot {snapshot_latency_ms} ms, drag {mutation_latency_ms} ms");
+                assert_eq!(outcomes(&outcome.rows), vec!["fail"], "{cell}");
+                let reason = outcome.rows[0].reason.clone().unwrap();
+                assert!(reason.contains("near misses"), "{cell}: {reason}");
+            }
+        }
+    }
+
+    // A scripted unknown stays unknown; a reply that only arrives after the deadline is a known
+    // outcome, so the next check fails the step instead of calling the drag unanswered.
+    #[test]
+    fn scroll_until_visible_unknown_drags_stay_unknown_and_late_replies_do_not() {
+        let mut lost = ScriptedNative::steady(screen(&["Header"]));
+        lost.presses = vec![Err(DriverError::Unknown("timed out".into()))].into();
+        let (outcome, _) = drive(
+            &scroll_for(text("Footer"), 1_000),
+            &mut lost,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["dispatched-unknown"]);
+        assert_eq!(lost.mutations.len(), 1);
+        assert_eq!(
+            lost.drag_windows,
+            vec![900],
+            "the whole remaining budget is the window"
+        );
+
+        let mut overrun = ScriptedNative::steady(screen(&["Footer link"]));
+        overrun.mutation_latency_ms = 1_000;
+        let (outcome, _) = drive(
+            &scroll_for(text("Footer"), 1_000),
+            &mut overrun,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["fail"]);
+        assert_eq!(overrun.mutations.len(), 1);
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("after 1 scroll(s)") && reason.contains("Footer link"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn scroll_until_visible_guard_keeps_cancellation_first() {
+        let mut native = ScriptedNative::steady(screen(&["Header"]));
+        let outcome = drive_cancelling(
+            &scroll_for(text("Footer"), 500),
+            &mut native,
+            &mut ScriptedHost::default(),
+            50,
+            "received SIGHUP",
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["cancelled"]);
+        assert_eq!(
+            outcome.verdict,
+            Verdict::Cancelled("received SIGHUP".into())
+        );
+        assert!(native.mutations.is_empty());
+    }
+
+    #[test]
+    fn scroll_until_visible_does_not_accept_or_scroll_a_truncated_unique_match() {
+        let mut truncated = screen(&["Footer"]);
+        truncated.truncated = true;
+        let mut native = ScriptedNative::steady(truncated);
+        let scroll = plan(vec![step(
+            "s1",
+            Domain::Native,
+            500,
+            Op::ScrollUntilVisible {
+                selector: text("Footer"),
+                direction: Direction::Down,
+            },
+        )]);
+        let (outcome, _) = drive(&scroll, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        assert!(outcome.rows[0]
+            .reason
+            .as_ref()
+            .unwrap()
+            .contains("truncated"));
+        assert!(native.mutations.is_empty());
+    }
+
+    #[test]
+    fn wait_for_animation_passes_when_static_or_at_the_cap_but_needs_one_observation() {
+        let wait = || {
+            plan(vec![step(
+                "s1",
+                Domain::Native,
+                1_000,
+                Op::WaitForAnimationToEnd,
+            )])
+        };
+        let mut settles = ScriptedNative::steady(screen(&[]));
+        settles.settled = vec![Ok(false), Ok(false), Ok(true)].into();
+        let (settled, _) = drive(&wait(), &mut settles, &mut ScriptedHost::default());
+        assert_eq!(settled.verdict, Verdict::Pass);
+        assert!(settled.rows[0]
+            .reason
+            .clone()
+            .unwrap()
+            .contains("settled after 3"));
+
+        let mut busy = ScriptedNative::steady(screen(&[]));
+        busy.settled = std::iter::repeat_n(Ok(false), 20).collect();
+        let (changing, _) = drive(&wait(), &mut busy, &mut ScriptedHost::default());
+        assert_eq!(changing.verdict, Verdict::Pass);
+        assert!(changing.rows[0]
+            .reason
+            .clone()
+            .unwrap()
+            .contains("cap reached; still changing"));
+
+        let mut blind = ScriptedNative::steady(screen(&[]));
+        blind.settled = std::iter::repeat_n(Err(DriverError::Unsent("down".into())), 20).collect();
+        let (unobserved, _) = drive(&wait(), &mut blind, &mut ScriptedHost::default());
+        assert_eq!(unobserved.verdict, Verdict::Fail);
+        assert!(unobserved.rows[0]
+            .reason
+            .clone()
+            .unwrap()
+            .contains("no settle observation"));
+    }
+
+    #[test]
+    fn late_settle_replies_do_not_pass_at_the_cap() {
+        let wait = plan(vec![step(
+            "s1",
+            Domain::Native,
+            50,
+            Op::WaitForAnimationToEnd,
+        )]);
+        for reply in [Ok(false), Ok(true)] {
+            let mut native = ScriptedNative::steady(screen(&[]));
+            native.settled = vec![reply].into();
+            let (outcome, _) = drive(&wait, &mut native, &mut ScriptedHost::default());
+            assert_eq!(outcome.verdict, Verdict::Fail);
+            assert!(outcome.rows[0]
+                .reason
+                .as_ref()
+                .unwrap()
+                .contains("settle probe exceeded deadline"));
+        }
+    }
+
+    #[test]
+    fn animation_wait_caps_a_larger_step_budget() {
+        let mut native = ScriptedNative::steady(screen(&[]));
+        native.settled = std::iter::repeat_n(Ok(false), 100).collect();
+        let wait = plan(vec![step(
+            "s1",
+            Domain::Native,
+            60_000,
+            Op::WaitForAnimationToEnd,
+        )]);
+        let (outcome, elapsed) = drive(&wait, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert!(outcome.rows[0]
+            .reason
+            .as_ref()
+            .unwrap()
+            .contains("cap reached; still changing"));
+        assert!(elapsed <= SETTLE_CAP_MS + LATENCY_MS, "{elapsed}");
+        assert!(!native.settled.is_empty());
+    }
+
+    fn conditional(when: Condition, domain: Domain) -> Plan {
+        plan(vec![
+            step(
+                "s1",
+                domain,
+                0,
+                Op::RunFlow {
+                    when,
+                    steps: vec![step("s2", Domain::Native, 1_000, tap("Skip"))],
+                },
+            ),
+            step("s3", Domain::Native, 1_000, tap("Go")),
+        ])
+    }
+
+    #[test]
+    fn a_run_flow_condition_is_one_observation_and_gates_its_sub_steps() {
+        let mut shown = ScriptedNative::steady(screen(&["Skip", "Go"]));
+        let (held, _) = drive(
+            &conditional(Condition::Visible(text("Skip")), Domain::Native),
+            &mut shown,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(held.verdict, Verdict::Pass);
+        assert_eq!(outcomes(&held.rows), vec!["pass", "pass", "pass"]);
+        assert_eq!(held.rows[0].kind, "check");
+        assert_eq!(shown.mutations.len(), 2);
+
+        let mut hidden = ScriptedNative::steady(screen(&["Go"]));
+        let (skipped, elapsed) = drive(
+            &conditional(Condition::Visible(text("Skip")), Domain::Native),
+            &mut hidden,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(skipped.verdict, Verdict::Pass);
+        assert_eq!(outcomes(&skipped.rows), vec!["skipped", "pass"]);
+        assert_eq!(hidden.mutations.len(), 1);
+        assert!(
+            elapsed < 3 * LATENCY_MS + POLL_MS,
+            "one observation: {elapsed}"
+        );
+
+        let mut hidden = ScriptedNative::steady(screen(&["Go"]));
+        let (inverse, _) = drive(
+            &conditional(Condition::NotVisible(text("Skip")), Domain::Native),
+            &mut hidden,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(
+            outcomes(&inverse.rows),
+            vec!["pass", "fail"],
+            "the sub-step needs Skip"
+        );
+        assert_eq!(inverse.verdict, Verdict::Fail);
+
+        let mut single = ScriptedNative::steady(screen(&["Skip", "Go"]));
+        let (second_missing, _) = drive(
+            &conditional(Condition::Visible(indexed(text("Skip"), 1)), Domain::Native),
+            &mut single,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(
+            outcomes(&second_missing.rows),
+            vec!["skipped", "pass"],
+            "no second Skip"
+        );
+
+        let mut doubled = ScriptedNative::steady(screen(&["Skip", "Skip", "Go"]));
+        let (ambiguous, _) = drive(
+            &conditional(Condition::Visible(text("Skip")), Domain::Native),
+            &mut doubled,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcomes(&ambiguous.rows), vec!["fail"]);
+    }
+
+    #[test]
+    fn native_conditions_need_completeness_for_unindexed_presence() {
+        let mut truncated = screen(&["Skip", "Go"]);
+        truncated.truncated = true;
+        for when in [
+            Condition::Visible(text("Skip")),
+            Condition::NotVisible(text("Skip")),
+        ] {
+            let mut native = ScriptedNative::steady(truncated.clone());
+            let (outcome, _) = drive(
+                &conditional(when, Domain::Native),
+                &mut native,
+                &mut ScriptedHost::default(),
+            );
+            assert_eq!(outcomes(&outcome.rows), vec!["fail"]);
+            assert!(outcome.rows[0]
+                .reason
+                .as_ref()
+                .unwrap()
+                .contains("truncated"));
+            assert!(native.mutations.is_empty());
+        }
+        let mut native = ScriptedNative::steady(truncated);
+        let (indexed, _) = drive(
+            &conditional(Condition::Visible(indexed(text("Skip"), 0)), Domain::Native),
+            &mut native,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(indexed.rows[0].outcome, "pass");
+    }
+
+    #[test]
+    fn a_react_tree_condition_asks_the_host_once_and_fails_when_unobservable() {
+        let mut native = ScriptedNative::steady(screen(&["Skip", "Go"]));
+        let mut host = ScriptedHost {
+            observations: vec![Ok(Presence::Present)].into(),
+            ..Default::default()
+        };
+        let (held, _) = drive(
+            &conditional(Condition::Visible(id("onboarding")), Domain::ReactTree),
+            &mut native,
+            &mut host,
+        );
+        assert_eq!(held.verdict, Verdict::Pass);
+        assert_eq!(
+            host.observed,
+            vec![("onboarding".to_string(), DISPATCH_WINDOW_MS)]
+        );
+        assert_eq!(held.rows[0].resolved_by, "react-tree");
+
+        let mut host = ScriptedHost {
+            observations: vec![Err(refused("REACT_TREE_UNAVAILABLE"))].into(),
+            ..Default::default()
+        };
+        let (blind, _) = drive(
+            &conditional(Condition::Visible(id("onboarding")), Domain::ReactTree),
+            &mut native,
+            &mut host,
+        );
+        assert_eq!(blind.verdict, Verdict::Fail);
+        assert_eq!(outcomes(&blind.rows), vec!["fail"]);
+    }
+
+    #[test]
+    fn a_react_tree_assertion_polls_the_host_within_its_budget() {
+        let plan = plan(vec![step(
+            "s1",
+            Domain::ReactTree,
+            2_000,
+            Op::AssertVisible(id("screen")),
+        )]);
+        let mut host = ScriptedHost {
+            observations: vec![Ok(Presence::Absent), Ok(Presence::Present)].into(),
+            ..Default::default()
+        };
+        let (outcome, _) = drive(&plan, &mut ScriptedNative::steady(screen(&[])), &mut host);
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert_eq!(host.observed.len(), 2);
+        let mut never = ScriptedHost::default();
+        let (missing, _) = drive(&plan, &mut ScriptedNative::steady(screen(&[])), &mut never);
+        assert_eq!(missing.verdict, Verdict::Fail);
+        assert!(missing.rows[0]
+            .reason
+            .clone()
+            .unwrap()
+            .contains("not mounted"));
+    }
+
+    #[test]
+    fn the_keyboard_tier_runs_only_after_a_native_dismiss_failure() {
+        let hide = || plan(vec![step("s1", Domain::Native, 10_000, Op::HideKeyboard)]);
+        let mut native = ScriptedNative::steady(screen(&[]));
+        native.keyboard = vec![Err(refused(KEYBOARD_DISMISS_FAILED))].into();
+        let mut host = ScriptedHost::default();
+        let (outcome, _) = drive(&hide(), &mut native, &mut host);
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert_eq!(host.performed, vec![HostOp::KeyboardDismissJs]);
+        let attempts: Vec<(u64, &str, &str)> = outcome
+            .rows
+            .iter()
+            .map(|r| (r.attempt, r.outcome.as_str(), r.resolved_by.as_str()))
+            .collect();
+        assert_eq!(
+            attempts,
+            vec![(1, "retry", "native"), (2, "pass", "react-tree")]
+        );
+
+        let mut native = ScriptedNative::steady(screen(&[]));
+        native.keyboard = vec![Err(refused(KEYBOARD_DISMISS_FAILED))].into();
+        let mut host = ScriptedHost {
+            results: vec![Err(refused("KEYBOARD_STILL_VISIBLE"))].into(),
+            ..Default::default()
+        };
+        let (failed, _) = drive(&hide(), &mut native, &mut host);
+        assert_eq!(failed.verdict, Verdict::Fail);
+        assert_eq!(outcomes(&failed.rows), vec!["retry", "fail"]);
+
+        let mut native = ScriptedNative::steady(screen(&[]));
+        native.keyboard = vec![Err(refused("UNSUPPORTED_COMMAND"))].into();
+        let mut host = ScriptedHost::default();
+        let (other, _) = drive(&hide(), &mut native, &mut host);
+        assert_eq!(outcomes(&other.rows), vec!["fail"]);
+        assert!(host.performed.is_empty(), "no tier for other refusals");
+    }
+
+    #[test]
+    fn keyboard_guard_refusals_fail_without_a_second_press() {
+        let plan = plan(vec![step("s1", Domain::Native, 17_000, tap("Go"))]);
+        for code in ["KEYBOARD_RELAYOUT_REQUIRED", "KEYBOARD_TARGET_STALE"] {
+            let mut native = ScriptedNative::steady(screen(&["Go"]));
+            native.presses = vec![Err(refused(code)), Ok(())].into();
+            let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+            assert_eq!(outcome.verdict, Verdict::Fail);
+            assert_eq!(outcomes(&outcome.rows), vec!["fail"]);
+            assert!(outcome.rows[0].reason.as_ref().unwrap().contains(code));
+            assert_eq!(native.mutations.len(), 1);
+            assert_eq!(native.snapshots_taken, 1);
+        }
+    }
+
+    #[test]
+    fn an_unanswered_mutation_is_dispatched_unknown_and_never_re_sent() {
+        let plan = plan(vec![
+            optional(step("s1", Domain::Native, 17_000, tap("Go"))),
+            step("s2", Domain::Native, 17_000, tap("Go")),
+        ]);
+        let mut native = ScriptedNative::steady(screen(&["Go"]));
+        native.presses = vec![Err(DriverError::Unknown("curl timed out".into()))].into();
+        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        assert_eq!(outcomes(&outcome.rows), vec!["dispatched-unknown"]);
+        assert_eq!(
+            native.mutations.len(),
+            1,
+            "one outstanding mutation, never a second"
+        );
+        assert!(outcome.failure.unwrap().contains("outcome is unknown"));
+    }
+
+    #[test]
+    fn an_unsent_mutation_fails_cleanly_and_may_be_optional() {
+        let plan = plan(vec![
+            optional(step("s1", Domain::Native, 17_000, tap("Go"))),
+            step("s2", Domain::Native, 17_000, tap("Go")),
+        ]);
+        let mut native = ScriptedNative::steady(screen(&["Go"]));
+        native.presses = vec![Err(DriverError::Unsent("connection refused".into()))].into();
+        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert_eq!(outcomes(&outcome.rows), vec!["skipped", "pass"]);
+    }
+
+    #[test]
+    fn cancellation_mid_lookup_ends_the_run_without_a_dispatch() {
+        let plan = plan(vec![
+            step("s1", Domain::Native, 17_000, tap("Go")),
+            step("s2", Domain::Native, 17_000, tap("Go")),
+        ]);
+        let mut native = ScriptedNative::steady(screen(&[]));
+        let outcome = drive_cancelling(
+            &plan,
+            &mut native,
+            &mut ScriptedHost::default(),
+            600,
+            "received SIGTERM",
+        );
+        assert_eq!(
+            outcome.verdict,
+            Verdict::Cancelled("received SIGTERM".into())
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["cancelled"]);
+        assert!(native.mutations.is_empty());
+        assert!(
+            (2..=3).contains(&native.snapshots_taken),
+            "{}",
+            native.snapshots_taken
+        );
+    }
+
+    #[test]
+    fn cancellation_during_a_completed_mutation_keeps_its_row_truthful() {
+        let plan = plan(vec![
+            step("s1", Domain::Native, 17_000, tap("Go")),
+            step("s2", Domain::Native, 17_000, tap("Go")),
+        ]);
+        let mut native = ScriptedNative::steady(screen(&["Go"]));
+        let outcome = drive_cancelling(
+            &plan,
+            &mut native,
+            &mut ScriptedHost::default(),
+            150,
+            "received SIGINT",
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["pass"]);
+        assert_eq!(
+            outcome.verdict,
+            Verdict::Cancelled("received SIGINT".into())
+        );
+        assert_eq!(native.mutations.len(), 1);
+        assert!(outcome.failure.unwrap().contains("cancelled after step s1"));
+    }
+
+    #[test]
+    fn cancellation_on_a_final_skip_never_passes_the_run() {
+        let optional_last = plan(vec![optional(step(
+            "s1",
+            Domain::Native,
+            17_000,
+            tap("Go"),
+        ))]);
+        let mut native = ScriptedNative::steady(screen(&["Go"]));
+        native.presses = vec![Err(DriverError::Unsent("connection refused".into()))].into();
+        let outcome = drive_cancelling(
+            &optional_last,
+            &mut native,
+            &mut ScriptedHost::default(),
+            150,
+            "received SIGTERM",
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["skipped"]);
+        assert_eq!(
+            outcome.verdict,
+            Verdict::Cancelled("received SIGTERM".into())
+        );
+
+        let condition_last = plan(vec![step(
+            "s1",
+            Domain::Native,
+            0,
+            Op::RunFlow {
+                when: Condition::Visible(text("Skip")),
+                steps: vec![step("s2", Domain::Native, 1_000, tap("Skip"))],
+            },
+        )]);
+        let mut hidden = ScriptedNative::steady(screen(&["Go"]));
+        let outcome = drive_cancelling(
+            &condition_last,
+            &mut hidden,
+            &mut ScriptedHost::default(),
+            50,
+            "received SIGHUP",
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["skipped"]);
+        assert_eq!(
+            outcome.verdict,
+            Verdict::Cancelled("received SIGHUP".into())
+        );
+    }
+
+    #[test]
+    fn lifecycle_steps_go_to_the_host_and_a_foreground_launch_only_proves_the_app_answers() {
+        let plan = plan(vec![
+            step(
+                "s1",
+                Domain::Lifecycle,
+                15_000,
+                Op::LaunchApp {
+                    stop_app: true,
+                    clear_state: false,
+                },
+            ),
+            step(
+                "s2",
+                Domain::Native,
+                15_000,
+                Op::LaunchApp {
+                    stop_app: false,
+                    clear_state: false,
+                },
+            ),
+            step(
+                "s3",
+                Domain::Lifecycle,
+                15_000,
+                Op::OpenLink(Private("app://x?token=TOKEN-42".into())),
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(screen(&["Home"]));
+        let mut host = ScriptedHost {
+            results: vec![Ok(()), Err(refused("LINK_REFUSED"))].into(),
+            ..Default::default()
+        };
+        let (outcome, _) = drive(&plan, &mut native, &mut host);
+        assert_eq!(
+            outcome.verdict,
+            Verdict::Fail,
+            "the refused link fails the step"
+        );
+        assert_eq!(
+            host.performed,
+            vec![
+                HostOp::Launch {
+                    stop_app: true,
+                    clear_state: false
+                },
+                HostOp::OpenLink("app://x?token=TOKEN-42".into())
+            ]
+        );
+        assert_eq!(outcome.rows[0].resolved_by, "lifecycle");
+        assert!(outcome.rows[1].reason.clone().unwrap().contains("2 nodes"));
+        assert!(native.mutations.is_empty());
+        let shown = format!(
+            "{} {:?} {}",
+            serde_json::to_string(&outcome.rows).unwrap(),
+            host.performed,
+            outcome.failure.unwrap()
+        );
+        assert!(!shown.contains("TOKEN-42"), "{shown}");
+        assert!(shown.contains("openLink refused LINK_REFUSED"));
+    }
+
+    #[test]
+    fn a_swipe_looks_up_its_origin_and_never_drags_after_the_deadline() {
+        let swipe = |from, duration_ms| {
+            plan(vec![step(
+                "s1",
+                Domain::Native,
+                1_000,
+                Op::Swipe {
+                    direction: Direction::Down,
+                    from,
+                    duration_ms,
+                },
+            )])
+        };
+        let mut native = ScriptedNative::steady(screen(&["handle"]));
+        let (outcome, _) = drive(
+            &swipe(Some(id("handle")), 400),
+            &mut native,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert_eq!(native.mutations, vec!["drag:200,120->200,520/400"]);
+
+        let mut missing = ScriptedNative::steady(screen(&[]));
+        let (failed, _) = drive(
+            &swipe(Some(id("handle")), 400),
+            &mut missing,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(failed.verdict, Verdict::Fail);
+        assert!(missing.mutations.is_empty(), "no drag without an origin");
+
+        let mut centre = ScriptedNative::steady(screen(&[]));
+        let (free, _) = drive(
+            &swipe(None, u64::MAX),
+            &mut centre,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(
+            free.verdict,
+            Verdict::Pass,
+            "an absurd duration saturates instead of panicking"
+        );
+        assert!(centre.mutations[0].starts_with("drag:200,400->200,800/"));
+    }
+
+    #[test]
+    fn typing_erasing_and_screenshots_leave_no_typed_text_in_rows() {
+        let plan = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private("hunter2".into())),
+            ),
+            step("s2", Domain::Native, 10_000, Op::EraseText(0)),
+            step("s3", Domain::Native, 10_000, Op::EraseText(7)),
+            step("s4", Domain::Native, 10_000, Op::PressKey(Key::Enter)),
+            step(
+                "s5",
+                Domain::Native,
+                10_000,
+                Op::TakeScreenshot("after".into()),
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(screen(&[]));
+        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert_eq!(
+            native.mutations,
+            vec!["type:hunter2/10000", "erase:7", "key:Enter"],
+            "zero characters dispatch nothing"
+        );
+        let json = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!json.contains("hunter2"), "{json}");
+        assert!(!format!("{plan:?} {outcome:?}").contains("hunter2"));
+        assert!(json.contains("\"resolvedBy\":\"native\"") && json.contains("\"ref\":\"s1\""));
+        assert_eq!(outcome.rows[4].screenshot.as_deref(), Some("after"));
+        assert_eq!(
+            outcome.captures,
+            vec![(
+                "after".to_string(),
+                Capture::RunnerPath("tmp/shot.png".into())
+            )]
+        );
+        assert!(!format!("{:?}", outcome.captures).contains("shot.png"));
+    }
+
+    #[test]
+    fn every_outcome_appears_in_rows_and_serialises_as_a_core_row() {
+        let mut seen: Vec<String> = Vec::new();
+        let mut collect = |outcome: Outcome| {
+            seen.extend(outcome.rows.iter().map(|r| r.outcome.clone()));
+            for row in &outcome.rows {
+                let value = serde_json::to_value(row).unwrap();
+                let back: Row = serde_json::from_value(value).unwrap();
+                assert_eq!(&back, row);
+            }
+        };
+        let mut native = ScriptedNative::steady(screen(&["Go"]));
+        native.keyboard = vec![Err(refused(KEYBOARD_DISMISS_FAILED))].into();
+        native.presses = vec![Ok(()), Err(DriverError::Unknown("lost".into()))].into();
+        collect(
+            drive(
+                &plan(vec![
+                    step("s1", Domain::Native, 10_000, Op::HideKeyboard),
+                    optional(step("s2", Domain::Native, 500, tap("Missing"))),
+                    step("s3", Domain::Native, 17_000, tap("Go")),
+                    step("s4", Domain::Native, 17_000, tap("Go")),
+                ]),
+                &mut native,
+                &mut ScriptedHost::default(),
+            )
+            .0,
+        );
+        collect(
+            drive(
+                &plan(vec![step("s1", Domain::Native, 500, tap("Missing"))]),
+                &mut ScriptedNative::steady(screen(&[])),
+                &mut ScriptedHost::default(),
+            )
+            .0,
+        );
+        collect(drive_cancelling(
+            &plan(vec![step("s1", Domain::Native, 5_000, tap("Go"))]),
+            &mut ScriptedNative::steady(screen(&[])),
+            &mut ScriptedHost::default(),
+            1,
+            "received SIGHUP",
+        ));
+        for outcome in [
+            "pass",
+            "fail",
+            "skipped",
+            "retry",
+            "dispatched-unknown",
+            "cancelled",
+        ] {
+            assert!(
+                seen.iter().any(|s| s == outcome),
+                "{outcome} missing from {seen:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn swipe_and_scroll_paths_stay_on_screen() {
+        let screen = screen(&[]).nodes[0].clone();
+        assert_eq!(
+            swipe_path(&screen, (200.0, 700.0), Direction::Down),
+            ((200.0, 700.0), (200.0, 800.0))
+        );
+        assert_eq!(
+            swipe_path(&screen, (50.0, 400.0), Direction::Left),
+            ((50.0, 400.0), (0.0, 400.0))
+        );
+        assert_eq!(
+            swipe_path(&screen, (200.0, 400.0), Direction::Right),
+            ((200.0, 400.0), (400.0, 400.0))
+        );
+        assert_eq!(
+            scroll_path(&screen, Direction::Left),
+            ((140.0, 400.0), (280.0, 400.0))
+        );
+        assert_eq!(
+            scroll_path(&screen, Direction::Right),
+            ((280.0, 400.0), (140.0, 400.0))
+        );
+    }
+
+    #[test]
+    fn typed_text_never_recurs_in_rows() {
+        const SECRET: &str = "hunter2-probe-secret";
+        let mut shown = screen(&[]);
+        shown
+            .nodes
+            .push(node(1, "StaticText", SECRET, "title", 100.0));
+        let asserted = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(SECRET.into())),
+            ),
+            step(
+                "s2",
+                Domain::Native,
+                17_000,
+                Op::AssertVisible(text(SECRET)),
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(shown);
+        let (outcome, _) = drive(&asserted, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        let json = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!json.contains(SECRET), "{json}");
+        assert_eq!(
+            outcome.rows[1].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
+        );
+        let reason = outcome.rows[1].reason.clone().unwrap();
+        assert!(reason.contains("label=\"<private>\""), "{reason}");
+
+        let mut near = screen(&[]);
+        near.nodes
+            .push(node(1, "Button", "Title field", SECRET, 100.0));
+        let scrolled = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(SECRET.into())),
+            ),
+            step(
+                "s2",
+                Domain::Native,
+                1_000,
+                Op::ScrollUntilVisible {
+                    selector: text(SECRET),
+                    direction: Direction::Down,
+                },
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(near);
+        let (outcome, _) = drive(&scrolled, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        let json = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!json.contains(SECRET), "{json}");
+        assert_eq!(
+            outcome.rows[1].text.as_deref(),
+            Some("scrollUntilVisible text \"<private>\"")
+        );
+        let reason = outcome.rows[1].reason.clone().unwrap();
+        assert!(
+            reason.contains("near misses") && reason.contains("id=\"<private>\""),
+            "{reason}"
+        );
+        let failure = outcome.failure.unwrap();
+        assert!(
+            !failure.contains(SECRET) && failure.contains("<private>"),
+            "{failure}"
+        );
+    }
+
+    #[test]
+    fn private_value_embedded_in_near_miss_is_masked() {
+        const SECRET: &str = "qa-password";
+        let mut shown = screen(&[]);
+        shown.nodes.push(node(
+            1,
+            "Button",
+            "Welcome qa-password",
+            "login-qa-password",
+            100.0,
+        ));
+        let plan = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(SECRET.into())),
+            ),
+            step("s2", Domain::Native, 500, Op::AssertVisible(text(SECRET))),
+        ]);
+        let (outcome, _) = drive(
+            &plan,
+            &mut ScriptedNative::steady(shown),
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        let rows = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!rows.contains(SECRET), "{rows}");
+        assert!(rows.contains("Welcome <private>"), "{rows}");
+        assert!(rows.contains("text \\\"<private>\\\""), "{rows}");
+        let failure = outcome.failure.unwrap();
+        assert!(!failure.contains(SECRET), "{failure}");
+    }
+
+    #[test]
+    fn private_value_starting_with_marker_does_not_leave_its_tail() {
+        const SECRET: &str = "<private>abc";
+        let mut shown = screen(&[]);
+        shown.nodes.push(node(
+            1,
+            "Button",
+            "Welcome <private>abc",
+            "login-<private>abc",
+            100.0,
+        ));
+        let plan = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(SECRET.into())),
+            ),
+            step("s2", Domain::Native, 500, Op::AssertVisible(text(SECRET))),
+        ]);
+        let (outcome, _) = drive(
+            &plan,
+            &mut ScriptedNative::steady(shown),
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        let rows = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!rows.contains("abc"), "{rows}");
+        assert_eq!(
+            outcome.rows[1].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
+        );
+        let reason = outcome.rows[1].reason.as_deref().unwrap();
+        assert!(reason.contains("Welcome <private>"), "{reason}");
+        let failure = outcome.failure.unwrap();
+        assert!(failure.contains("Welcome <private>"), "{failure}");
+        assert!(!failure.contains("abc"), "{failure}");
+    }
+
+    #[test]
+    fn screenshot_name_with_private_value_refuses_before_dispatch() {
+        let plan = plan(vec![
+            step("s1", Domain::Native, 10_000, tap("Go")),
+            step(
+                "s2",
+                Domain::Native,
+                0,
+                Op::RunFlow {
+                    when: Condition::Visible(text("Go")),
+                    steps: vec![step(
+                        "s2a",
+                        Domain::Native,
+                        10_000,
+                        Op::TakeScreenshot("after-qa-password".into()),
+                    )],
+                },
+            ),
+            step(
+                "s3",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private("qa-password".into())),
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(screen(&["Go"]));
+        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        assert_eq!(
+            outcome.failure.as_deref(),
+            Some("takeScreenshot name contains a private value")
+        );
+        assert!(outcome.rows.is_empty());
+        assert!(outcome.captures.is_empty());
+        assert!(native.mutations.is_empty());
+    }
+
+    #[test]
+    fn short_typed_value_masks_only_its_quoted_form() {
+        let plan = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private("1".into())),
+            ),
+            step(
+                "s2",
+                Domain::Native,
+                17_000,
+                Op::Press(Press::Tap, indexed(text("Row"), 1)),
+            ),
+            step("s3", Domain::Native, 17_000, Op::AssertVisible(text("1"))),
+        ]);
+        let mut native = ScriptedNative::steady(screen(&["Row", "Row", "1"]));
+        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert_eq!(
+            outcome.rows[1].text.as_deref(),
+            Some("tapOn text \"Row\" index 1")
+        );
+        assert_eq!(native.mutations, vec!["type:1/10000", "Tap@200,220/10000"]);
+        assert_eq!(
+            outcome.rows[2].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
+        );
+        let reason = outcome.rows[2].reason.clone().unwrap();
+        assert!(
+            reason.contains("label=\"<private>\"") && reason.contains("rect=0,300"),
+            "{reason}"
+        );
+    }
+
+    // Masking runs over the whole row, so a value equal to engine punctuation masks that too.
+    #[test]
+    fn typed_value_matching_a_field_separator_masks_the_separator_too() {
+        let mut shown = screen(&[]);
+        shown
+            .nodes
+            .push(node(1, "StaticText", "Other", " id=", 100.0));
+        let plan = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(" id=".into())),
+            ),
+            step(
+                "s2",
+                Domain::Native,
+                17_000,
+                Op::AssertVisible(text("Other")),
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(shown);
+        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert_eq!(
+            outcome.rows[1].reason.as_deref(),
+            Some("found StaticText[label=\"Other\"<private>\"<private>\" rect=0,100,400x40]")
+        );
+    }
+
+    #[test]
+    fn caller_private_selector_value_is_masked_in_rows_and_failure() {
+        let mut shown = screen(&[]);
+        shown.nodes.push(node(
+            1,
+            "Button",
+            "Welcome account-name",
+            "login-account-name",
+            100.0,
+        ));
+        let plan = plan(vec![step(
+            "s1",
+            Domain::Native,
+            500,
+            Op::AssertVisible(text("account-name")),
+        )]);
+        let (outcome, _) = drive_with_private(
+            &plan,
+            &["account-name".into()],
+            &mut ScriptedNative::steady(shown),
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        assert_eq!(
+            outcome.rows[0].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
+        );
+        let reason = outcome.rows[0].reason.as_deref().unwrap();
+        assert!(reason.contains("Welcome <private>"), "{reason}");
+        assert!(!reason.contains("account-name"), "{reason}");
+        let failure = outcome.failure.unwrap();
+        assert!(failure.contains("Welcome <private>"), "{failure}");
+        assert!(!failure.contains("account-name"), "{failure}");
+    }
+
+    #[test]
+    fn caller_private_screenshot_name_refuses_before_first_step() {
+        let plan = plan(vec![
+            step("s1", Domain::Native, 10_000, tap("Go")),
+            step(
+                "s2",
+                Domain::Native,
+                10_000,
+                Op::TakeScreenshot("after-account-name".into()),
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(screen(&["Go"]));
+        let (outcome, _) = drive_with_private(
+            &plan,
+            &["account-name".into()],
+            &mut native,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcome.verdict, Verdict::Fail);
+        assert_eq!(
+            outcome.failure.as_deref(),
+            Some("takeScreenshot name contains a private value")
+        );
+        assert!(outcome.rows.is_empty());
+        assert!(outcome.captures.is_empty());
+        assert!(native.mutations.is_empty());
+    }
+
+    // A value with a quote is masked in its escaped rendering, and a value with a newline is
+    // masked both as the app shows it verbatim and as the app shows it on one line.
+    #[test]
+    fn typed_values_are_masked_in_escaped_and_normalised_renderings() {
+        let longer = format!("{}{}", "x".repeat(64), "A".repeat(40));
+        let shorter = format!("hunter2\"{}", "x".repeat(64));
+        let mut shown = screen(&[]);
+        shown
+            .nodes
+            .push(node(1, "StaticText", &shorter, "title", 100.0));
+        let split = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(longer.clone())),
+            ),
+            step(
+                "s2",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(shorter.clone())),
+            ),
+            step(
+                "s3",
+                Domain::Native,
+                17_000,
+                Op::AssertVisible(text(&shorter)),
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(shown);
+        let (outcome, _) = drive(&split, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        let json = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!json.contains("hunter2"), "{json}");
+        assert_eq!(
+            outcome.rows[2].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
+        );
+        assert!(outcome.rows[2]
+            .reason
+            .clone()
+            .unwrap()
+            .contains("label=\"<private>\""));
+
+        let typed = format!("a\n{}", "b".repeat(68));
+        let one_line = format!("a {}", "b".repeat(68));
+        let mut shown = screen(&[]);
+        shown
+            .nodes
+            .push(node(1, "StaticText", &typed, "title", 100.0));
+        shown
+            .nodes
+            .push(node(2, "StaticText", &one_line, "subtitle", 200.0));
+        let cut = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(typed.clone())),
+            ),
+            step(
+                "s2",
+                Domain::Native,
+                17_000,
+                Op::AssertVisible(text(&typed)),
+            ),
+            step("s3", Domain::Native, 500, Op::AssertVisible(id("sub"))),
+        ]);
+        let mut native = ScriptedNative::steady(shown);
+        let (outcome, _) = drive(&cut, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcomes(&outcome.rows), vec!["pass", "pass", "fail"]);
+        let json = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!json.contains("bbbb"), "{json}");
+        assert_eq!(
+            outcome.rows[1].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
+        );
+        let reason = outcome.rows[2].reason.clone().unwrap();
+        assert!(
+            reason.contains("label=\"<private>\" id=\"subtitle\""),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn long_typed_value_is_masked_in_its_full_label() {
+        let long: String = (0..70u8).map(|i| char::from(b'a' + i % 26)).collect();
+        let head: String = long.chars().take(64).collect();
+        let mut shown = screen(&[]);
+        shown
+            .nodes
+            .push(node(1, "StaticText", &long, "title", 100.0));
+        let plan = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private(long.clone())),
+            ),
+            step("s2", Domain::Native, 17_000, Op::AssertVisible(text(&long))),
+        ]);
+        let mut native = ScriptedNative::steady(shown);
+        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert_eq!(
+            outcome.rows[1].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
+        );
+        let reason = outcome.rows[1].reason.clone().unwrap();
+        assert!(
+            !reason.contains(&head) && reason.contains("label=\"<private>\""),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn identifiers_and_cancellation_reasons_pass_the_same_boundary() {
+        let steps = vec![
+            step(
+                "type-hunter2",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private("hunter2".into())),
+            ),
+            step("s2", Domain::Native, 5_000, tap("Go")),
+        ];
+        let plan = Plan {
+            action_id: "login-hunter2".into(),
+            ..plan(steps)
+        };
+        let mut native = ScriptedNative::steady(screen(&[]));
+        let outcome = drive_cancelling(
+            &plan,
+            &mut native,
+            &mut ScriptedHost::default(),
+            150,
+            "hunter2 asked to stop",
+        );
+        assert_eq!(
+            outcome.verdict,
+            Verdict::Cancelled("<private> asked to stop".into())
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["pass", "cancelled"]);
+        let json = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!json.contains("hunter2"), "{json}");
+        assert_eq!(outcome.rows[0].block, "login-<private>");
+        assert_eq!(outcome.rows[0].r#ref.as_deref(), Some("type-<private>"));
+        assert_eq!(outcome.rows[1].r#ref.as_deref(), Some("s2"));
+        assert!(!outcome.failure.unwrap().contains("hunter2"));
+    }
+
+    #[test]
+    fn run_flow_sub_step_typed_text_is_private() {
+        const SECRET: &str = "nested-typed-secret";
+        let mut shown = screen(&["Go"]);
+        shown
+            .nodes
+            .push(node(2, "StaticText", SECRET, "title", 200.0));
+        let plan = plan(vec![
+            step(
+                "s1",
+                Domain::Native,
+                0,
+                Op::RunFlow {
+                    when: Condition::Visible(text("Go")),
+                    steps: vec![step(
+                        "s1a",
+                        Domain::Native,
+                        10_000,
+                        Op::InputText(Private(SECRET.into())),
+                    )],
+                },
+            ),
+            step(
+                "s2",
+                Domain::Native,
+                17_000,
+                Op::AssertVisible(text(SECRET)),
+            ),
+        ]);
+        let mut native = ScriptedNative::steady(shown);
+        let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
+        assert_eq!(outcome.verdict, Verdict::Pass);
+        assert_eq!(outcomes(&outcome.rows), vec!["pass", "pass", "pass"]);
+        let json = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!json.contains(SECRET), "{json}");
+        assert_eq!(
+            outcome.rows[2].text.as_deref(),
+            Some("assertVisible text \"<private>\"")
+        );
+    }
+}
