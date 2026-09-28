@@ -62,8 +62,9 @@ own budget. A `runFlow` without `when` is spliced in place; with `when` it is on
 
 **Platform support.** iOS runs every command. On Android, `doubleTapOn`,
 `eraseText`, `pressKey` `Enter` and `hideKeyboard` refuse as
-`UNSUPPORTED_COMMAND` until the runner gains those verbs (Phase 1 slice 6), and
-`inputText` types into the focused input.
+`UNSUPPORTED_COMMAND` until the runner gains those verbs, and `inputText` types
+into the focused input rather than the resolved target; both limits lift with
+the Android runner work in Phase 1 slice 6.
 
 ## Selectors
 
@@ -95,13 +96,28 @@ text, so a parameter value is always literal. Because typed values are resolved
 into the plan, a plan file is run-private.
 
 **Trace privacy.** Values typed by `inputText`, `openLink` values, and
-caller-declared parameter values are run-private. The engine masks their
-occurrences inside quoted fields in trace row text, reasons, and the run's
-failure text, including embedded occurrences in selectors and matched labels.
-Unquoted indexes, counts, and coordinates remain readable. The engine collects
+caller-declared parameter values are run-private. Every string that leaves the
+engine (row text, row reason, and the run's failure text) passes through one
+masking step over its whole, untruncated text before any bounding: each
+occurrence of a private value renders as `<private>`, whether whole or embedded
+in a label, selector, or candidate list, and the match covers the value as
+typed, trimmed, with runs of whitespace collapsed, in its escaped rendering, and
+in any ASCII-case variant (Unicode case folding is not applied). Overlapping or
+adjacent values render as one `<private>`; a value that equals engine
+punctuation masks that punctuation too. Values shorter than three characters
+are masked only as whole quoted strings, so `Save` stays readable when `a` was
+typed. Token redaction runs on the same text and neither hides the other. Row
+reasons and failure text are bounded to 2,048 characters and row text to 512,
+cut after masking, so a cut can only shorten a `<private>` marker. Indexes,
+counts, and coordinates remain readable unless they equal a private value. A
+row's `block` (the action id) and `ref` (the step id) and a cancellation reason
+pass through the same boundary, so an identifier that carries a private value
+is exported masked while the plan keeps its own identity. The engine collects
 typed values and `openLink` values itself; the replay command will pass its
 `--param` values when it arrives. A plan whose `takeScreenshot` name contains
-one of these private values fails before the first step, with no rows or captures.
+one of these private values (any form of three or more characters, or a
+shorter value exactly) fails before the first step, with no rows or captures,
+because a capture's name must stay intact.
 
 ## Domains
 
@@ -139,7 +155,7 @@ never start a second implicit wait.
 | optional lookup | 7,000 ms |
 | `assertNotVisible` | 7,000 ms, a bounded absence poll, never a single read |
 | `extendedWaitUntil` | its `timeout` (default 17,000 visible, 7,000 not visible) |
-| `scrollUntilVisible` | its `timeout`, default 20,000 ms; a drag is dispatched only when at least 600 ms remain, otherwise the step fails with the last near misses |
+| `scrollUntilVisible` | its `timeout`, default 20,000 ms; a drag is dispatched only when the remaining budget holds the gesture plus twice the slowest round trip measured in the step; when the budget runs out the step fails with its best near misses; `dispatched-unknown` means the runner did not answer a drag inside such a window, or answered without proof of the outcome, and the row still carries the cause, the near misses and the scroll count |
 | `waitForAnimationToEnd` | polls the runner's static predicate, capped at 5,000 ms |
 | `runFlow` condition | 0: one observation |
 | other native dispatch | 10,000 ms |

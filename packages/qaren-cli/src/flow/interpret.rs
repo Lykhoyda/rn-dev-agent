@@ -3,6 +3,7 @@ use crate::exec::Runner;
 use crate::flow::plan::{
     Condition, Direction, Domain, Key, Op, Plan, Press, Selector, Step, Target,
 };
+use crate::flow::privacy::{Privacy, REASON_CHARS};
 use crate::flow::resolve::{self, Node, Resolution, Snapshot};
 use crate::flow::trace::{Entry, StepOutcome, Trace};
 use std::time::Duration;
@@ -14,8 +15,6 @@ pub const DISPATCH_WINDOW_MS: u64 = 10_000;
 pub const READ_WINDOW_CAP_MS: u64 = 35_000;
 pub const SETTLE_CAP_MS: u64 = 5_000;
 const SCROLL_DURATION_MS: u64 = 300;
-// NOTE: a drag only starts when the gesture and its round trip still fit inside the step budget.
-const SCROLL_WINDOW_MIN_MS: u64 = 2 * SCROLL_DURATION_MS;
 pub const KEYBOARD_DISMISS_FAILED: &str = "KEYBOARD_DISMISS_FAILED";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,9 +171,12 @@ pub fn run(
     native: &mut dyn NativeDriver,
     host: &mut dyn HostDriver,
 ) -> Outcome {
-    let mut private = typed_values(&plan.steps);
-    private.extend_from_slice(caller_private);
-    if screenshot_contains_private_value(&plan.steps, &private) {
+    let privacy = Privacy::new(
+        typed_values(&plan.steps)
+            .into_iter()
+            .chain(caller_private.iter().cloned()),
+    );
+    if screenshot_names_private_value(&plan.steps, &privacy) {
         return Outcome {
             verdict: Verdict::Fail,
             rows: Vec::new(),
@@ -187,7 +189,7 @@ pub fn run(
         runner,
         native,
         host,
-        trace: Trace::new(&plan.action_id, t0, private),
+        trace: Trace::new(&plan.action_id, t0, privacy),
         captures: Vec::new(),
         attempt: 1,
         answered_by: Domain::Native,
@@ -195,7 +197,16 @@ pub fn run(
     };
     let (verdict, failure) = match engine.run_steps(&plan.steps) {
         Ok(()) => (Verdict::Pass, None),
-        Err(stop) => (stop.verdict, Some(engine.trace.mask(&stop.reason))),
+        Err(stop) => (
+            match stop.verdict {
+                Verdict::Cancelled(reason) => Verdict::Cancelled(engine.trace.sanitize(&reason)),
+                verdict => verdict,
+            },
+            Some(Privacy::bound(
+                engine.trace.sanitize(&stop.reason),
+                REASON_CHARS,
+            )),
+        ),
     };
     Outcome {
         verdict,
@@ -216,12 +227,10 @@ fn typed_values(steps: &[Step]) -> Vec<String> {
         .collect()
 }
 
-fn screenshot_contains_private_value(steps: &[Step], private: &[String]) -> bool {
+fn screenshot_names_private_value(steps: &[Step], privacy: &Privacy) -> bool {
     steps.iter().any(|step| match &step.op {
-        Op::TakeScreenshot(name) => private
-            .iter()
-            .any(|value| !value.is_empty() && name.contains(value)),
-        Op::RunFlow { steps, .. } => screenshot_contains_private_value(steps, private),
+        Op::TakeScreenshot(name) => privacy.names(name),
+        Op::RunFlow { steps, .. } => screenshot_names_private_value(steps, privacy),
         _ => false,
     })
 }
@@ -272,6 +281,61 @@ fn ambiguous(selector: &Selector, candidates: &[String]) -> Fail {
     ))
 }
 
+// What a polling read remembers: the best list of near misses or matches seen so far, and the
+// status of the latest observation when it proved nothing (failed, truncated or late).
+#[derive(Default)]
+struct Observed {
+    best: Option<String>,
+    note: Option<String>,
+}
+
+impl Observed {
+    // A complete snapshot replaces the best list when it carries one; a truncated snapshot
+    // only seeds an empty one and is remembered as truncated.
+    fn definite(&mut self, list: Option<String>, truncated: bool) {
+        if truncated {
+            if self.best.is_none() {
+                self.best = list;
+            }
+            self.note = Some("the last snapshot was truncated".into());
+        } else {
+            if list.is_some() {
+                self.best = list;
+            }
+            self.note = None;
+        }
+    }
+
+    fn resolution(&mut self, resolution: &Resolution, truncated: bool) {
+        let list = match resolution {
+            Resolution::NotFound { near_misses } if near_misses.is_empty() => None,
+            Resolution::NotFound { near_misses } => {
+                Some(format!("near misses: {}", near_misses.join("; ")))
+            }
+            Resolution::OutOfRange { index, matches } => Some(format!(
+                "index {index} is out of range of {} match(es): {}",
+                matches.len(),
+                matches.join("; ")
+            )),
+            Resolution::Found(_) | Resolution::Ambiguous { .. } => return,
+        };
+        self.definite(list, truncated);
+    }
+
+    fn note(&mut self, note: String) {
+        self.note = Some(note);
+    }
+
+    fn summary(&self) -> String {
+        match (&self.best, &self.note) {
+            (Some(best), Some(note)) => format!("{best}; {note}"),
+            (Some(best), None) => best.clone(),
+            (None, Some(note)) => format!("no near misses; {note}"),
+            (None, None) => "no near misses".into(),
+        }
+    }
+}
+
 // Half a screen in the direction, clamped to the screen.
 pub fn swipe_path(
     screen: &Node,
@@ -318,6 +382,12 @@ impl Engine<'_> {
 
     fn remaining(&self, deadline: u64) -> u64 {
         deadline.saturating_sub(self.now())
+    }
+
+    fn measured<T>(&mut self, call: impl FnOnce(&mut Self) -> T) -> (T, u64) {
+        let started = self.now();
+        let result = call(self);
+        (result, self.now().saturating_sub(started))
     }
 
     fn window(&self, deadline: u64, cap: u64) -> Result<u64, Fail> {
@@ -609,55 +679,40 @@ impl Engine<'_> {
     }
 
     // The target and the screen node it was found on. An index past today's list keeps polling:
-    // more matches may still render, and the deadline failure names the list.
+    // more matches may still render, and the deadline failure names the best list seen.
     fn lookup(&mut self, selector: &Selector, deadline: u64) -> Result<(Node, Node), Fail> {
-        let mut last = String::from("no snapshot observed");
+        let mut observed = Observed::default();
         let found = self.poll(deadline, |engine, window| {
             match engine.native.snapshot(engine.runner, window) {
                 Ok(snapshot) => match resolve::resolve(selector, &snapshot.nodes) {
                     Resolution::Found(_) if snapshot.truncated && selector.index.is_none() => {
-                        last = "the snapshot was truncated, so uniqueness is unproven".into();
+                        observed.note(
+                            "the last snapshot was truncated, so uniqueness is unproven".into(),
+                        );
+                        Ok(None)
+                    }
+                    Resolution::Found(node) if engine.now() > deadline => {
+                        observed.note(format!("last seen after the deadline: {}", node.describe()));
                         Ok(None)
                     }
                     Resolution::Found(node) => Ok(Some((node, snapshot.nodes[0].clone()))),
                     Resolution::Ambiguous { candidates } => Err(ambiguous(selector, &candidates)),
-                    Resolution::OutOfRange { index, matches } => {
-                        last = format!(
-                            "index {index} is out of range of {} match(es): {}{}",
-                            matches.len(),
-                            matches.join("; "),
-                            if snapshot.truncated {
-                                "; the snapshot was truncated"
-                            } else {
-                                ""
-                            }
-                        );
-                        Ok(None)
-                    }
-                    Resolution::NotFound { near_misses } => {
-                        last = if snapshot.truncated {
-                            format!(
-                                "the snapshot was truncated; near misses: {}",
-                                near_misses.join("; ")
-                            )
-                        } else if near_misses.is_empty() {
-                            "no near misses".into()
-                        } else {
-                            format!("near misses: {}", near_misses.join("; "))
-                        };
+                    resolution => {
+                        observed.resolution(&resolution, snapshot.truncated);
                         Ok(None)
                     }
                 },
                 Err(error) => {
-                    last = format!("snapshot failed: {error}");
+                    observed.note(format!("last snapshot failed: {error}"));
                     Ok(None)
                 }
             }
         })?;
         found.ok_or_else(|| {
             Fail::Miss(format!(
-                "{} not found before the deadline; {last}",
-                selector.describe()
+                "{} not found before the deadline; {}",
+                selector.describe(),
+                observed.summary()
             ))
         })
     }
@@ -841,6 +896,8 @@ impl Engine<'_> {
         })
     }
 
+    // A drag starts only when the remaining budget holds the gesture plus twice the slowest
+    // round trip measured in this step, so a missed target fails with its best near misses.
     fn scroll_until_visible(
         &mut self,
         selector: &Selector,
@@ -848,20 +905,29 @@ impl Engine<'_> {
         deadline: u64,
     ) -> Result<String, Fail> {
         let mut scrolls = 0u32;
-        let mut last = String::from("no snapshot observed");
+        let mut observed = Observed::default();
+        let mut slowest_rtt_ms = 0u64;
+        let miss = |scrolls: u32, observed: &Observed| {
+            Fail::Miss(format!(
+                "{} not visible after {scrolls} scroll(s); {}",
+                selector.describe(),
+                observed.summary()
+            ))
+        };
         loop {
             self.cancelled()?;
             if self.now() >= deadline {
-                return Err(Fail::Miss(format!(
-                    "{} not visible after {scrolls} scroll(s); {last}",
-                    selector.describe()
-                )));
+                return Err(miss(scrolls, &observed));
             }
             let window = self.read_window(deadline)?;
-            let screen = match self.native.snapshot(self.runner, window) {
+            let (snapshot, rtt) = self.measured(|e| e.native.snapshot(e.runner, window));
+            slowest_rtt_ms = slowest_rtt_ms.max(rtt);
+            let screen = match snapshot {
                 Ok(snapshot) => match resolve::resolve(selector, &snapshot.nodes) {
                     Resolution::Found(_) if snapshot.truncated && selector.index.is_none() => {
-                        last = "the snapshot was truncated, so uniqueness is unproven".into();
+                        observed.note(
+                            "the last snapshot was truncated, so uniqueness is unproven".into(),
+                        );
                         None
                     }
                     Resolution::Found(node) if self.now() <= deadline => {
@@ -871,77 +937,61 @@ impl Engine<'_> {
                         ))
                     }
                     Resolution::Found(node) => {
-                        last = format!("last seen after deadline: {}", node.describe());
-                        Some(snapshot.nodes[0].clone())
+                        observed.note(format!("last seen after the deadline: {}", node.describe()));
+                        None
                     }
                     Resolution::Ambiguous { candidates } => {
                         return Err(ambiguous(selector, &candidates))
                     }
-                    Resolution::OutOfRange { index, matches } => {
-                        last = format!(
-                            "index {index} is out of range of {} match(es){}",
-                            matches.len(),
-                            if snapshot.truncated {
-                                "; the snapshot was truncated"
-                            } else {
-                                ""
-                            }
-                        );
-                        (!snapshot.truncated).then(|| snapshot.nodes[0].clone())
-                    }
-                    Resolution::NotFound { near_misses } => {
-                        last = if snapshot.truncated {
-                            format!(
-                                "the snapshot was truncated; near misses: {}",
-                                near_misses.join("; ")
-                            )
-                        } else if near_misses.is_empty() {
-                            "no near misses".into()
-                        } else {
-                            format!("near misses: {}", near_misses.join("; "))
-                        };
+                    resolution => {
+                        observed.resolution(&resolution, snapshot.truncated);
                         (!snapshot.truncated).then(|| snapshot.nodes[0].clone())
                     }
                 },
                 Err(error) => {
-                    last = format!("snapshot failed: {error}");
+                    observed.note(format!("last snapshot failed: {error}"));
                     None
                 }
             };
-            if self.now() >= deadline {
-                return Err(Fail::Miss(format!(
-                    "{} not visible after {scrolls} scroll(s); {last}",
-                    selector.describe()
-                )));
-            }
-            match screen {
-                Some(screen) => {
-                    self.cancelled()?;
-                    if self.remaining(deadline) < SCROLL_WINDOW_MIN_MS {
-                        return Err(Fail::Miss(format!(
-                            "{} not visible after {scrolls} scroll(s); {last}",
-                            selector.describe()
-                        )));
-                    }
-                    let (start, end) = scroll_path(&screen, direction);
-                    self.dispatch(
-                        "scroll",
-                        deadline,
-                        DISPATCH_WINDOW_MS.saturating_add(SCROLL_DURATION_MS),
-                        |e, window| {
-                            e.native
-                                .drag(e.runner, start, end, SCROLL_DURATION_MS, window)
-                        },
-                    )?;
-                    scrolls += 1;
-                    let settle_by = deadline.min(self.now().saturating_add(SETTLE_CAP_MS));
-                    if let Err(Fail::Cancelled(reason)) = self.settle(settle_by) {
-                        return Err(Fail::Cancelled(reason));
-                    }
+            let Some(screen) = screen else {
+                let remaining = self.remaining(deadline);
+                if remaining > 0 {
+                    self.runner
+                        .sleep(Duration::from_millis(POLL_MS.min(remaining)));
                 }
-                None => self
-                    .runner
-                    .sleep(Duration::from_millis(POLL_MS.min(self.remaining(deadline)))),
+                continue;
+            };
+            self.cancelled()?;
+            let allowance = SCROLL_DURATION_MS + 2 * slowest_rtt_ms.max(SCROLL_DURATION_MS);
+            let remaining = self.remaining(deadline);
+            if remaining < allowance {
+                return Err(miss(scrolls, &observed));
+            }
+            let (start, end) = scroll_path(&screen, direction);
+            let (result, rtt) = self.measured(|e| {
+                e.native
+                    .drag(e.runner, start, end, SCROLL_DURATION_MS, remaining)
+            });
+            slowest_rtt_ms = slowest_rtt_ms.max(rtt);
+            match outcome(result, "scroll") {
+                Ok(()) => scrolls += 1,
+                Err(Fail::Unknown(why)) => {
+                    return Err(Fail::Unknown(format!(
+                        "{why}; after {scrolls} scroll(s); {}",
+                        observed.summary()
+                    )))
+                }
+                Err(Fail::Miss(why)) => {
+                    return Err(Fail::Miss(format!(
+                        "{why}; after {scrolls} scroll(s); {}",
+                        observed.summary()
+                    )))
+                }
+                Err(other) => return Err(other),
+            }
+            let settle_by = deadline.min(self.now().saturating_add(SETTLE_CAP_MS));
+            if let Err(Fail::Cancelled(reason)) = self.settle(settle_by) {
+                return Err(Fail::Cancelled(reason));
             }
         }
     }
@@ -1088,6 +1138,10 @@ mod tests {
         drag_windows: Vec<u64>,
         snapshot_latency_ms: u64,
         mutation_latency_ms: u64,
+        drag_latencies_ms: VecDeque<u64>,
+        // When set, a call slower than its window times out as curl does instead of answering late.
+        honour_windows: bool,
+        drag_timeouts: u32,
     }
 
     impl ScriptedNative {
@@ -1105,6 +1159,9 @@ mod tests {
                 drag_windows: Vec::new(),
                 snapshot_latency_ms: LATENCY_MS,
                 mutation_latency_ms: LATENCY_MS,
+                drag_latencies_ms: VecDeque::new(),
+                honour_windows: false,
+                drag_timeouts: 0,
             }
         }
 
@@ -1113,17 +1170,39 @@ mod tests {
             self
         }
 
-        fn mutate(&mut self, runner: &mut dyn Runner, what: String) {
-            runner.sleep(Duration::from_millis(self.mutation_latency_ms));
+        fn wait(
+            &self,
+            runner: &mut dyn Runner,
+            latency_ms: u64,
+            window_ms: u64,
+        ) -> DriverResult<()> {
+            if self.honour_windows && latency_ms > window_ms {
+                runner.sleep(Duration::from_millis(window_ms));
+                return Err(DriverError::Unknown(format!(
+                    "timed out after {window_ms} ms"
+                )));
+            }
+            runner.sleep(Duration::from_millis(latency_ms));
+            Ok(())
+        }
+
+        fn mutate(
+            &mut self,
+            runner: &mut dyn Runner,
+            what: String,
+            window_ms: u64,
+        ) -> DriverResult<()> {
+            let sent = self.wait(runner, self.mutation_latency_ms, window_ms);
             self.mutations.push(what);
+            sent
         }
     }
 
     impl NativeDriver for ScriptedNative {
         fn snapshot(&mut self, runner: &mut dyn Runner, window_ms: u64) -> DriverResult<Snapshot> {
-            runner.sleep(Duration::from_millis(self.snapshot_latency_ms));
             self.snapshots_taken += 1;
             self.snapshot_windows.push(window_ms);
+            self.wait(runner, self.snapshot_latency_ms, window_ms)?;
             self.snapshots
                 .pop_front()
                 .unwrap_or_else(|| self.steady.clone())
@@ -1137,7 +1216,11 @@ mod tests {
             y: f64,
             window_ms: u64,
         ) -> DriverResult<()> {
-            self.mutate(runner, format!("{press:?}@{x:.0},{y:.0}/{window_ms}"));
+            self.mutate(
+                runner,
+                format!("{press:?}@{x:.0},{y:.0}/{window_ms}"),
+                window_ms,
+            )?;
             self.presses.pop_front().unwrap_or(Ok(()))
         }
 
@@ -1147,7 +1230,7 @@ mod tests {
             text: &str,
             window_ms: u64,
         ) -> DriverResult<()> {
-            self.mutate(runner, format!("type:{text}/{window_ms}"));
+            self.mutate(runner, format!("type:{text}/{window_ms}"), window_ms)?;
             self.presses.pop_front().unwrap_or(Ok(()))
         }
 
@@ -1155,15 +1238,13 @@ mod tests {
             &mut self,
             runner: &mut dyn Runner,
             characters: u64,
-            _window_ms: u64,
+            window_ms: u64,
         ) -> DriverResult<()> {
-            self.mutate(runner, format!("erase:{characters}"));
-            Ok(())
+            self.mutate(runner, format!("erase:{characters}"), window_ms)
         }
 
-        fn press_key(&mut self, runner: &mut dyn Runner, key: Key, _w: u64) -> DriverResult<()> {
-            self.mutate(runner, format!("key:{key:?}"));
-            Ok(())
+        fn press_key(&mut self, runner: &mut dyn Runner, key: Key, w: u64) -> DriverResult<()> {
+            self.mutate(runner, format!("key:{key:?}"), w)
         }
 
         fn drag(
@@ -1175,31 +1256,36 @@ mod tests {
             window_ms: u64,
         ) -> DriverResult<()> {
             self.drag_windows.push(window_ms);
-            self.mutate(
-                runner,
-                format!(
-                    "drag:{:.0},{:.0}->{:.0},{:.0}/{duration_ms}",
-                    from.0, from.1, to.0, to.1
-                ),
-            );
+            let latency_ms = self
+                .drag_latencies_ms
+                .pop_front()
+                .unwrap_or(self.mutation_latency_ms);
+            let sent = self.wait(runner, latency_ms, window_ms);
+            self.mutations.push(format!(
+                "drag:{:.0},{:.0}->{:.0},{:.0}/{duration_ms}",
+                from.0, from.1, to.0, to.1
+            ));
+            if sent.is_err() {
+                self.drag_timeouts += 1;
+            }
+            sent?;
             if let Some(after) = self.after_scroll.take() {
                 self.snapshots.push_front(Ok(after));
             }
             self.presses.pop_front().unwrap_or(Ok(()))
         }
 
-        fn back(&mut self, runner: &mut dyn Runner, _window_ms: u64) -> DriverResult<()> {
-            self.mutate(runner, "back".into());
-            Ok(())
+        fn back(&mut self, runner: &mut dyn Runner, window_ms: u64) -> DriverResult<()> {
+            self.mutate(runner, "back".into(), window_ms)
         }
 
-        fn keyboard_dismiss(&mut self, runner: &mut dyn Runner, _w: u64) -> DriverResult<()> {
-            self.mutate(runner, "keyboardDismiss".into());
+        fn keyboard_dismiss(&mut self, runner: &mut dyn Runner, w: u64) -> DriverResult<()> {
+            self.mutate(runner, "keyboardDismiss".into(), w)?;
             self.keyboard.pop_front().unwrap_or(Ok(()))
         }
 
-        fn is_settled(&mut self, runner: &mut dyn Runner, _window_ms: u64) -> DriverResult<bool> {
-            runner.sleep(Duration::from_millis(LATENCY_MS));
+        fn is_settled(&mut self, runner: &mut dyn Runner, window_ms: u64) -> DriverResult<bool> {
+            self.wait(runner, LATENCY_MS, window_ms)?;
             self.settled.pop_front().unwrap_or(Ok(true))
         }
 
@@ -1443,28 +1529,84 @@ mod tests {
         assert!(outcome.failure.unwrap().starts_with("step s1"));
     }
 
+    // A lookup keeps the best near misses it saw; later failed, truncated or late snapshots are
+    // reported beside them, never instead of them.
+    #[test]
+    fn a_lookup_keeps_its_near_misses_across_failed_truncated_and_late_snapshots() {
+        let near = screen(&["Go home"]);
+        let lookup = |budget_ms| plan(vec![step("s1", Domain::Native, budget_ms, tap("Go"))]);
+
+        let mut failing = ScriptedNative::steady(near.clone());
+        failing.steady = Err(DriverError::Unsent("runner down".into()));
+        failing.snapshots = vec![Ok(near.clone())].into();
+        let (outcome, _) = drive(&lookup(1_000), &mut failing, &mut ScriptedHost::default());
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("near misses")
+                && reason.contains("Go home")
+                && reason.contains("last snapshot failed: not sent: runner down"),
+            "{reason}"
+        );
+
+        let mut truncated = screen(&["Go settings"]);
+        truncated.truncated = true;
+        let mut cut = ScriptedNative::steady(truncated);
+        cut.snapshots = vec![Ok(near.clone())].into();
+        let (outcome, _) = drive(&lookup(1_000), &mut cut, &mut ScriptedHost::default());
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("Go home")
+                && !reason.contains("Go settings")
+                && reason.contains("the last snapshot was truncated"),
+            "{reason}"
+        );
+
+        let mut late = ScriptedNative::steady(screen(&["Go"]));
+        late.snapshots = vec![Ok(near)].into();
+        late.snapshot_latency_ms = 600;
+        let (outcome, _) = drive(&lookup(1_000), &mut late, &mut ScriptedHost::default());
+        assert_eq!(outcomes(&outcome.rows), vec!["fail"]);
+        assert!(late.mutations.is_empty());
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("Go home") && reason.contains("last seen after the deadline"),
+            "{reason}"
+        );
+    }
+
     #[test]
     fn snapshot_text_in_trace_reasons_is_redacted() {
         let secret = "ghp_abcdefghijklmnopqrstuvwxyz123456";
-        let mut snapshot = screen(&["Save"]);
-        snapshot.nodes[1].label = format!("Save {secret}");
-        snapshot.nodes[1].identifier = "target".into();
-        for (selector, verdict) in [(id("target"), Verdict::Pass), (text("Save"), Verdict::Fail)] {
-            let mut native = ScriptedNative::steady(snapshot.clone());
-            let (outcome, _) = drive(
-                &plan(vec![step(
-                    "s1",
-                    Domain::Native,
-                    500,
-                    Op::AssertVisible(selector),
-                )]),
-                &mut native,
-                &mut ScriptedHost::default(),
-            );
-            assert_eq!(outcome.verdict, verdict);
-            let reason = outcome.rows[0].reason.as_ref().unwrap();
-            assert!(!reason.contains(secret), "{reason}");
-            assert!(reason.contains("<redacted>"), "{reason}");
+        for label in [
+            format!("Save {secret}"),
+            secret.to_string(),
+            "Bearer\nsecret-token".to_string(),
+            "password=\"secret-token\"".to_string(),
+        ] {
+            let mut snapshot = screen(&["Save"]);
+            snapshot.nodes[1].label = label.clone();
+            snapshot.nodes[1].identifier = "target".into();
+            for (selector, verdict) in [(id("target"), Verdict::Pass), (id("targ"), Verdict::Fail)]
+            {
+                let mut native = ScriptedNative::steady(snapshot.clone());
+                let (outcome, _) = drive(
+                    &plan(vec![step(
+                        "s1",
+                        Domain::Native,
+                        500,
+                        Op::AssertVisible(selector),
+                    )]),
+                    &mut native,
+                    &mut ScriptedHost::default(),
+                );
+                assert_eq!(outcome.verdict, verdict, "{label:?}");
+                let reason = outcome.rows[0].reason.as_ref().unwrap();
+                assert!(
+                    !reason.contains(secret) && !reason.contains("secret-token"),
+                    "{label:?}: {reason}"
+                );
+                assert!(reason.contains("<redacted>"), "{label:?}: {reason}");
+            }
         }
     }
 
@@ -1641,13 +1783,13 @@ mod tests {
         )])
     }
 
-    // Each round costs a snapshot, a drag and one settle probe (300 ms); the third snapshot
-    // answers with 300 ms left, less than a drag and its round trip, so no third drag starts.
+    // Each round costs a snapshot, a drag and one settle probe (300 ms); with 100 ms round trips
+    // a drag needs 900 ms of budget, so the third snapshot (600 ms left) is not followed by one.
     #[test]
     fn scroll_until_visible_gives_up_at_its_deadline() {
         let mut native = ScriptedNative::steady(screen(&["Footer link"]));
         let (outcome, elapsed) = drive(
-            &scroll_for(text("Footer"), 1_000),
+            &scroll_for(text("Footer"), 1_300),
             &mut native,
             &mut ScriptedHost::default(),
         );
@@ -1669,18 +1811,19 @@ mod tests {
             "{reason}"
         );
         assert!(
-            elapsed < 1_000,
-            "the guard fails the step before the deadline: {elapsed}"
+            elapsed < 1_300,
+            "the allowance fails the step before the deadline: {elapsed}"
         );
     }
 
+    // Snapshots that fail after the near misses were seen keep them and are reported beside them.
     #[test]
-    fn scroll_until_visible_without_a_snapshot_runs_to_its_deadline() {
+    fn scroll_until_visible_keeps_near_misses_when_later_snapshots_fail() {
         let mut native = ScriptedNative::steady(screen(&["Footer link"]));
         native.steady = Err(DriverError::Unsent("runner down".into()));
         native.snapshots = vec![Ok(screen(&["Footer link"])), Ok(screen(&["Footer link"]))].into();
         let (outcome, elapsed) = drive(
-            &scroll_for(text("Footer"), 1_000),
+            &scroll_for(text("Footer"), 1_300),
             &mut native,
             &mut ScriptedHost::default(),
         );
@@ -1688,10 +1831,140 @@ mod tests {
         assert_eq!(native.mutations.len(), 2);
         let reason = outcome.rows[0].reason.clone().unwrap();
         assert!(
-            reason.contains("after 2 scroll(s)") && reason.contains("snapshot failed"),
+            reason.contains("after 2 scroll(s)")
+                && reason.contains("near misses")
+                && reason.contains("Footer link")
+                && reason.contains("last snapshot failed: not sent: runner down"),
             "{reason}"
         );
-        assert!(elapsed >= 1_000, "{elapsed}");
+        assert!(elapsed >= 1_300, "{elapsed}");
+    }
+
+    fn never_visible(
+        snapshot_latency_ms: u64,
+        drag_latency_ms: u64,
+        honour: bool,
+    ) -> ScriptedNative {
+        let mut native = ScriptedNative::steady(screen(&["Row 9 footer"]));
+        native.snapshot_latency_ms = snapshot_latency_ms;
+        native.mutation_latency_ms = drag_latency_ms;
+        native.honour_windows = honour;
+        native
+    }
+
+    // The QA sweep: a never-found target ends as a miss with its near miss at every timing,
+    // whether a slow runner answers late or times out at its window.
+    #[test]
+    fn scroll_until_visible_misses_with_near_misses_at_every_timing() {
+        for honour in [false, true] {
+            for snapshot_latency_ms in [50, 150, 300, 600] {
+                for drag_latency_ms in [50, 150, 300, 350, 400, 500, 700, 1_000] {
+                    let mut native = never_visible(snapshot_latency_ms, drag_latency_ms, honour);
+                    let (outcome, _) = drive(
+                        &scroll_for(text("Row 9"), 20_000),
+                        &mut native,
+                        &mut ScriptedHost::default(),
+                    );
+                    let cell = format!(
+                        "snapshot {snapshot_latency_ms} ms, drag {drag_latency_ms} ms, honour {honour}"
+                    );
+                    assert_eq!(outcomes(&outcome.rows), vec!["fail"], "{cell}");
+                    let reason = outcome.rows[0].reason.clone().unwrap();
+                    assert!(
+                        reason.contains("near misses") && reason.contains("Row 9 footer"),
+                        "{cell}: {reason}"
+                    );
+                    assert!(!native.mutations.is_empty(), "{cell}");
+                    assert_eq!(native.drag_timeouts, 0, "{cell}");
+                }
+            }
+        }
+    }
+
+    // The widened sweep: the only unknown outcome is a drag the runner did not answer inside a
+    // window of at least the gesture plus twice the slowest measured round trip, and even that
+    // row carries the near miss and the scroll count.
+    #[test]
+    fn scroll_until_visible_is_unknown_only_when_a_drag_goes_unanswered() {
+        let (mut misses, mut unknowns) = (0, 0);
+        for budget_ms in (300..=5_000).step_by(50) {
+            for drag_latency_ms in [300, 599, 600, 601, 1_000, 2_000] {
+                let mut native = never_visible(100, drag_latency_ms, true);
+                let (outcome, _) = drive(
+                    &scroll_for(text("Row 9"), budget_ms),
+                    &mut native,
+                    &mut ScriptedHost::default(),
+                );
+                let cell = format!("budget {budget_ms} ms, drag {drag_latency_ms} ms");
+                let reason = outcome.rows[0].reason.clone().unwrap();
+                assert!(reason.contains("Row 9 footer"), "{cell}: {reason}");
+                assert!(native.drag_timeouts <= 1, "{cell}");
+                if native.drag_timeouts == 1 {
+                    unknowns += 1;
+                    assert_eq!(
+                        outcomes(&outcome.rows),
+                        vec!["dispatched-unknown"],
+                        "{cell}"
+                    );
+                    assert!(reason.contains("after 0 scroll(s)"), "{cell}: {reason}");
+                    assert!(
+                        native.drag_windows[0] >= 900,
+                        "{cell}: {:?}",
+                        native.drag_windows
+                    );
+                    assert!(drag_latency_ms > native.drag_windows[0], "{cell}");
+                } else {
+                    misses += 1;
+                    assert_eq!(outcomes(&outcome.rows), vec!["fail"], "{cell}: {reason}");
+                    if native.mutations.is_empty() {
+                        assert!(reason.contains("after 0 scroll(s)"), "{cell}: {reason}");
+                    }
+                }
+            }
+        }
+        assert!(
+            misses > 0 && unknowns > 0,
+            "misses {misses}, unknowns {unknowns}"
+        );
+    }
+
+    #[test]
+    fn scroll_until_visible_reports_the_cause_and_near_misses_of_an_unknown_drag() {
+        let mut silent = never_visible(100, 300, true);
+        silent.drag_latencies_ms = vec![300, 100_000].into();
+        let (outcome, _) = drive(
+            &scroll_for(text("Row 9"), 20_000),
+            &mut silent,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["dispatched-unknown"]);
+        assert_eq!(silent.mutations.len(), 2);
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("timed out after")
+                && reason.contains("after 1 scroll(s)")
+                && reason.contains("Row 9 footer"),
+            "{reason}"
+        );
+
+        let mut malformed = never_visible(100, 100, false);
+        malformed.presses =
+            vec![Ok(()), Err(DriverError::Unknown("malformed reply".into()))].into();
+        let (outcome, _) = drive(
+            &scroll_for(text("Row 9"), 20_000),
+            &mut malformed,
+            &mut ScriptedHost::default(),
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["dispatched-unknown"]);
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("malformed reply")
+                && reason.contains("after 1 scroll(s)")
+                && reason.contains("Row 9 footer"),
+            "{reason}"
+        );
+        let failure = outcome.failure.unwrap();
+        assert!(failure.contains("malformed reply"), "{failure}");
     }
 
     #[test]
@@ -1715,8 +1988,10 @@ mod tests {
         }
     }
 
+    // A scripted unknown stays unknown; a reply that only arrives after the deadline is a known
+    // outcome, so the next check fails the step instead of calling the drag unanswered.
     #[test]
-    fn scroll_until_visible_drag_timeout_is_still_unknown() {
+    fn scroll_until_visible_unknown_drags_stay_unknown_and_late_replies_do_not() {
         let mut lost = ScriptedNative::steady(screen(&["Header"]));
         lost.presses = vec![Err(DriverError::Unknown("timed out".into()))].into();
         let (outcome, _) = drive(
@@ -1726,17 +2001,26 @@ mod tests {
         );
         assert_eq!(outcomes(&outcome.rows), vec!["dispatched-unknown"]);
         assert_eq!(lost.mutations.len(), 1);
-        assert!(lost.drag_windows[0] >= SCROLL_WINDOW_MIN_MS);
+        assert_eq!(
+            lost.drag_windows,
+            vec![900],
+            "the whole remaining budget is the window"
+        );
 
-        let mut overrun = ScriptedNative::steady(screen(&["Header"]));
+        let mut overrun = ScriptedNative::steady(screen(&["Footer link"]));
         overrun.mutation_latency_ms = 1_000;
         let (outcome, _) = drive(
             &scroll_for(text("Footer"), 1_000),
             &mut overrun,
             &mut ScriptedHost::default(),
         );
-        assert_eq!(outcomes(&outcome.rows), vec!["dispatched-unknown"]);
+        assert_eq!(outcomes(&outcome.rows), vec!["fail"]);
         assert_eq!(overrun.mutations.len(), 1);
+        let reason = outcome.rows[0].reason.clone().unwrap();
+        assert!(
+            reason.contains("after 1 scroll(s)") && reason.contains("Footer link"),
+            "{reason}"
+        );
     }
 
     #[test]
@@ -2661,8 +2945,9 @@ mod tests {
         );
     }
 
+    // Masking runs over the whole row, so a value equal to engine punctuation masks that too.
     #[test]
-    fn typed_value_matching_a_field_separator_is_still_masked() {
+    fn typed_value_matching_a_field_separator_masks_the_separator_too() {
         let mut shown = screen(&[]);
         shown
             .nodes
@@ -2684,10 +2969,9 @@ mod tests {
         let mut native = ScriptedNative::steady(shown);
         let (outcome, _) = drive(&plan, &mut native, &mut ScriptedHost::default());
         assert_eq!(outcome.verdict, Verdict::Pass);
-        let reason = outcome.rows[1].reason.clone().unwrap();
-        assert!(
-            reason.contains("label=\"Other\" id=\"<private>\"") && reason.contains("rect=0,100"),
-            "{reason}"
+        assert_eq!(
+            outcome.rows[1].reason.as_deref(),
+            Some("found StaticText[label=\"Other\"<private>\"<private>\" rect=0,100,400x40]")
         );
     }
 
@@ -2754,10 +3038,10 @@ mod tests {
         assert!(native.mutations.is_empty());
     }
 
-    // A longer value's cut form must not split a shorter value's escaped rendering, and a
-    // value with a control character is masked both as authored and as its sanitised label.
+    // A value with a quote is masked in its escaped rendering, and a value with a newline is
+    // masked both as the app shows it verbatim and as the app shows it on one line.
     #[test]
-    fn typed_values_are_masked_in_every_quoted_form() {
+    fn typed_values_are_masked_in_escaped_and_normalised_renderings() {
         let longer = format!("{}{}", "x".repeat(64), "A".repeat(40));
         let shorter = format!("hunter2\"{}", "x".repeat(64));
         let mut shown = screen(&[]);
@@ -2800,11 +3084,14 @@ mod tests {
             .contains("label=\"<private>\""));
 
         let typed = format!("a\n{}", "b".repeat(68));
-        let head: String = typed.chars().take(64).collect();
+        let one_line = format!("a {}", "b".repeat(68));
         let mut shown = screen(&[]);
         shown
             .nodes
             .push(node(1, "StaticText", &typed, "title", 100.0));
+        shown
+            .nodes
+            .push(node(2, "StaticText", &one_line, "subtitle", 200.0));
         let cut = plan(vec![
             step(
                 "s1",
@@ -2818,7 +3105,7 @@ mod tests {
                 17_000,
                 Op::AssertVisible(text(&typed)),
             ),
-            step("s3", Domain::Native, 500, Op::AssertVisible(text(&head))),
+            step("s3", Domain::Native, 500, Op::AssertVisible(id("sub"))),
         ]);
         let mut native = ScriptedNative::steady(shown);
         let (outcome, _) = drive(&cut, &mut native, &mut ScriptedHost::default());
@@ -2826,13 +3113,18 @@ mod tests {
         let json = serde_json::to_string(&outcome.rows).unwrap();
         assert!(!json.contains("bbbb"), "{json}");
         assert_eq!(
-            outcome.rows[2].text.as_deref(),
+            outcome.rows[1].text.as_deref(),
             Some("assertVisible text \"<private>\"")
+        );
+        let reason = outcome.rows[2].reason.clone().unwrap();
+        assert!(
+            reason.contains("label=\"<private>\" id=\"subtitle\""),
+            "{reason}"
         );
     }
 
     #[test]
-    fn long_typed_value_is_masked_in_its_truncated_label() {
+    fn long_typed_value_is_masked_in_its_full_label() {
         let long: String = (0..70u8).map(|i| char::from(b'a' + i % 26)).collect();
         let head: String = long.chars().take(64).collect();
         let mut shown = screen(&[]);
@@ -2860,6 +3152,42 @@ mod tests {
             !reason.contains(&head) && reason.contains("label=\"<private>\""),
             "{reason}"
         );
+    }
+
+    #[test]
+    fn identifiers_and_cancellation_reasons_pass_the_same_boundary() {
+        let steps = vec![
+            step(
+                "type-hunter2",
+                Domain::Native,
+                10_000,
+                Op::InputText(Private("hunter2".into())),
+            ),
+            step("s2", Domain::Native, 5_000, tap("Go")),
+        ];
+        let plan = Plan {
+            action_id: "login-hunter2".into(),
+            ..plan(steps)
+        };
+        let mut native = ScriptedNative::steady(screen(&[]));
+        let outcome = drive_cancelling(
+            &plan,
+            &mut native,
+            &mut ScriptedHost::default(),
+            150,
+            "hunter2 asked to stop",
+        );
+        assert_eq!(
+            outcome.verdict,
+            Verdict::Cancelled("<private> asked to stop".into())
+        );
+        assert_eq!(outcomes(&outcome.rows), vec!["pass", "cancelled"]);
+        let json = serde_json::to_string(&outcome.rows).unwrap();
+        assert!(!json.contains("hunter2"), "{json}");
+        assert_eq!(outcome.rows[0].block, "login-<private>");
+        assert_eq!(outcome.rows[0].r#ref.as_deref(), Some("type-<private>"));
+        assert_eq!(outcome.rows[1].r#ref.as_deref(), Some("s2"));
+        assert!(!outcome.failure.unwrap().contains("hunter2"));
     }
 
     #[test]

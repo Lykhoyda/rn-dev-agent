@@ -66,33 +66,19 @@ impl Node {
         self.secure || INPUT_TYPES.iter().any(|t| self.kind.ends_with(t))
     }
 
-    // Diagnostics never carry a value, and an input's label may be what the user typed.
+    // Diagnostics never carry a value, and an input's label may be what the user typed. The
+    // text stays raw here; the trace boundary masks, redacts and bounds it.
     pub fn describe(&self) -> String {
         let label = if self.is_input() {
             "[input]".to_string()
         } else {
-            format!("{:?}", safe_snapshot_text(&self.label))
+            format!("{:?}", self.label)
         };
         format!(
             "{}[label={label} id={:?} rect={},{},{}x{}]",
-            safe_snapshot_text(&self.kind),
-            safe_snapshot_text(&self.identifier),
-            self.x,
-            self.y,
-            self.width,
-            self.height
+            self.kind, self.identifier, self.x, self.y, self.width, self.height
         )
     }
-}
-
-pub(crate) const LABEL_CHARS: usize = 64;
-
-pub(crate) fn safe_snapshot_text(raw: &str) -> String {
-    crate::redact::redact_secrets(raw)
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(LABEL_CHARS)
-        .collect()
 }
 
 impl std::fmt::Debug for Node {
@@ -475,35 +461,20 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_diagnostics_redact_and_bound_displayed_fields() {
-        let secret = "ghp_abcdefghijklmnopqrstuvwxyz123456";
-        let mut first = node(
-            1,
-            Some(0),
-            "Button",
-            &format!("Save {secret} {}", "x".repeat(200)),
+    fn describe_keeps_raw_text_for_the_trace_boundary() {
+        let long = format!(
+            "Save ghp_abcdefghijklmnopqrstuvwxyz123456 {}",
+            "x".repeat(200)
         );
+        let mut first = node(1, Some(0), "Button", &long);
         first.identifier = "target".into();
-        let mut second = node(2, Some(0), "Button", "Save");
-        second.identifier = "target".into();
-        let nodes = vec![screen(), first, second];
-
-        let shown = nodes[1].describe();
-        assert!(!shown.contains(secret), "{shown}");
-        assert!(!shown.contains(&"x".repeat(65)), "{shown}");
-        assert!(shown.contains("<redacted>"), "{shown}");
-
-        for diagnostics in [
-            match resolve(&id("target"), &nodes) {
-                Resolution::Ambiguous { candidates } => candidates,
-                other => panic!("{other:?}"),
-            },
-            match resolve(&id("Save"), &nodes) {
-                Resolution::NotFound { near_misses } => near_misses,
-                other => panic!("{other:?}"),
-            },
-        ] {
-            assert!(!diagnostics.join(" ").contains(secret));
+        assert_eq!(
+            first.describe(),
+            format!("Button[label={long:?} id=\"target\" rect=0,0,400x40]")
+        );
+        match resolve(&id("Save"), &[screen(), first]) {
+            Resolution::NotFound { near_misses } => assert!(near_misses[0].contains(&long)),
+            other => panic!("{other:?}"),
         }
     }
 

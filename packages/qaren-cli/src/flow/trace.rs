@@ -1,6 +1,6 @@
 use crate::core::Row;
 use crate::flow::plan::{Domain, Op, Step};
-use crate::flow::resolve::{safe_snapshot_text, LABEL_CHARS};
+use crate::flow::privacy::{Privacy, REASON_CHARS, TEXT_CHARS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepOutcome {
@@ -29,7 +29,7 @@ impl StepOutcome {
 pub struct Trace {
     action_id: String,
     t0: u64,
-    private: Vec<String>,
+    privacy: Privacy,
     pub rows: Vec<Row>,
 }
 
@@ -44,77 +44,18 @@ pub struct Entry<'a> {
 }
 
 impl Trace {
-    pub fn new(action_id: &str, t0: u64, private: Vec<String>) -> Trace {
-        let rendered = |value: &str| {
-            let quoted = format!("{value:?}");
-            quoted[1..quoted.len() - 1].to_string()
-        };
-        let mut forms: Vec<String> = private
-            .iter()
-            .filter(|value| !value.is_empty())
-            .flat_map(|value| {
-                let head: String = value.chars().take(LABEL_CHARS).collect();
-                let label = safe_snapshot_text(value);
-                [rendered(value), rendered(&head), rendered(&label)]
-            })
-            .filter(|form| !form.is_empty() && form != "<private>")
-            .collect();
-        forms.sort_by_key(|form| std::cmp::Reverse(form.len()));
+    pub fn new(action_id: &str, t0: u64, privacy: Privacy) -> Trace {
         Trace {
-            action_id: action_id.to_string(),
+            action_id: privacy.sanitize(action_id),
             t0,
-            private: forms,
+            privacy,
             rows: Vec::new(),
         }
     }
 
-    pub fn mask(&self, text: &str) -> String {
-        let mut result = String::with_capacity(text.len());
-        let mut cursor = 0;
-        while let Some(open) = text[cursor..].find('"').map(|at| cursor + at) {
-            result.push_str(&text[cursor..=open]);
-            let mut end = open + 1;
-            while end < text.len() {
-                let ch = text[end..].chars().next().unwrap();
-                if ch == '\\' {
-                    end += 1;
-                    if end < text.len() {
-                        end += text[end..].chars().next().unwrap().len_utf8();
-                    }
-                } else if ch == '"' {
-                    break;
-                } else {
-                    end += ch.len_utf8();
-                }
-            }
-            if end == text.len() {
-                cursor = open + 1;
-                break;
-            }
-            let inner = &text[open + 1..end];
-            let mut at = 0;
-            while at < inner.len() {
-                if let Some(form) = self
-                    .private
-                    .iter()
-                    .find(|form| inner[at..].starts_with(form.as_str()))
-                {
-                    result.push_str("<private>");
-                    at += form.len();
-                } else if inner[at..].starts_with("<private>") {
-                    result.push_str("<private>");
-                    at += "<private>".len();
-                } else {
-                    let ch = inner[at..].chars().next().unwrap();
-                    result.push(ch);
-                    at += ch.len_utf8();
-                }
-            }
-            result.push('"');
-            cursor = end + 1;
-        }
-        result.push_str(&text[cursor..]);
-        result
+    // Every string that leaves the engine passes here once, on its full text, before any bound.
+    pub fn sanitize(&self, text: &str) -> String {
+        self.privacy.sanitize(text)
     }
 
     pub fn record(&mut self, entry: Entry<'_>) {
@@ -128,12 +69,17 @@ impl Trace {
             attempt: entry.attempt,
             kind: kind.to_string(),
             resolved_by: entry.answered_by.as_str().to_string(),
-            r#ref: Some(entry.step.id.clone()),
+            r#ref: Some(self.sanitize(&entry.step.id)),
             screenshot: entry.screenshot,
             t: entry.now.saturating_sub(self.t0),
             outcome: entry.outcome.as_str().to_string(),
-            text: Some(self.mask(&entry.step.op.describe())),
-            reason: entry.reason.map(|reason| self.mask(&reason)),
+            text: Some(Privacy::bound(
+                self.sanitize(&entry.step.op.describe()),
+                TEXT_CHARS,
+            )),
+            reason: entry
+                .reason
+                .map(|reason| Privacy::bound(self.sanitize(&reason), REASON_CHARS)),
         });
     }
 }
