@@ -320,9 +320,8 @@ for (const transport of [
     name: 'NativeWind forked worker transform transport',
   },
 ] as const) {
-  const admissionOnly = process.env.RN_DEV_AGENT_METRO_ADMISSION_ONLY_TEST === '1';
   test(
-    `managed Metro ${admissionOnly ? 'serves the Expo manifest' : 'serves the product bundle'} over the ${transport.name}`,
+    `managed Metro serves the product bundle over the ${transport.name}`,
     {
       skip: process.env.RN_DEV_AGENT_MANAGED_PRODUCT_BUNDLE_TEST !== '1',
       timeout: 900_000,
@@ -391,18 +390,6 @@ for (const transport of [
           JSON.parse(manifest.body.toString('utf8')) as { launchAsset: { url: string } }
         ).launchAsset.url;
         assert.equal(new URL(bundleUrl).port, String(port));
-        if (admissionOnly) {
-          console.log(
-            JSON.stringify({
-              metroMode: binding.mode,
-              metroPort: port,
-              listenerPid: binding.pid,
-              manifestStatus: manifest.status,
-              bundlePort: new URL(bundleUrl).port,
-            }),
-          );
-          return;
-        }
         const devClientBundleUrl = new URL(bundleUrl);
         devClientBundleUrl.searchParams.set('lazy', 'true');
 
