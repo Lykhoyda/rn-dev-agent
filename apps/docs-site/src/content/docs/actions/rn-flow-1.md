@@ -5,9 +5,9 @@ description: The contract for replaying saved actions — which Maestro-format c
 
 Saved actions stay Maestro-format YAML files. `rn-flow@1` is the subset of that
 format QaReN replays with its own engine. The TypeScript core compiles a flow
-into an immutable plan (`schema: "rn-flow/1"`). The Rust `qaren` replay
-interpreter that will execute plans is still being built; this page fixes the
-semantics it implements, and it never parses YAML itself.
+into an immutable plan (`schema: "rn-flow/1"`). The Rust `qaren` crate can
+validate and interpret that plan through its library API; a replay CLI command
+and host integration are not available yet. Rust never parses YAML itself.
 
 ```sh
 corepack yarn build:core
