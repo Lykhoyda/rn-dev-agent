@@ -200,11 +200,17 @@ full diagnosis and what still works.
 On iOS, replay routes by proof semantics before execution. Exact `testID` tap, type, wait,
 assert, conditional-flow, and launch stages use the authority-bound React tree; native text,
 system-dialog, permission, and SpringBoard stages use XCTest/WDA. Results label the domain as
-`react-tree`, `xctest-native`, or `partitioned`. A React-tree pass proves deterministic React
-identity and controlled fiber text read-back, not IME composition, AutoFill, keyboard
-occlusion, or secure native-entry fidelity, and it never promotes an action to
-Maestro-certified active status. A `tapOn` whose exact target is an editable `TextInput`
-without `onPress` only designates that input for the immediately following `inputText`: it
+`react-tree`, `xctest-native`, or `partitioned`. On iOS, a native-only command after an exact
+`testID` React-tree step returns `UNSUPPORTED_STEP` before replay starts because starting a
+native runner session relaunches the app. Native commands before exact `testID` steps and
+`launchApp`, `clearState`, `killApp`, or `stopApp` after them remain allowed; a later native-only
+command is still refused even when a lifecycle command precedes it.
+
+A React-tree pass proves deterministic React identity and controlled fiber text read-back,
+not IME composition, AutoFill, keyboard occlusion, or secure native-entry fidelity, and it
+never promotes an action to Maestro-certified active status. A `tapOn` whose exact target is
+an editable `TextInput` without `onPress` only designates that input for the immediately
+following `inputText`: it
 dispatches no press and no `onFocus`, the step is reported as `focusOnly`, and a designation
 that the next step does not consume fails the replay. A `tapOn` whose exact target is not
 such an input and carries no `onPress` walks up to the nearest pressable ancestor within
