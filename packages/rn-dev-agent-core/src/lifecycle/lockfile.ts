@@ -64,6 +64,7 @@ export interface LockConflict {
   startedAt: number;
   ageMs: number;
   version?: string;
+  ppid?: number;
 }
 
 export type LockAcquireResult = LockAcquired | LockConflict;
@@ -171,7 +172,7 @@ function hashProjectRoot(projectRoot: string): string {
  * both racing for the single Hermes CDP slot and producing missed events + state flicker.
  * This module writes a lock file at startup keyed on the user's uid + an 8-char hash of
  * the project root, so:
- *   - same project, two windows → conflict (exit 11)
+ *   - same project, two windows → conflict (the supervisor waits read-only, GH #991)
  *   - different projects, same machine → coexist fine (different hash)
  *   - different users on the same machine → coexist fine (different uid)
  *
@@ -281,6 +282,7 @@ export class Lockfile {
       startedAt: body.startedAt,
       ageMs: this.opts.clock() - body.startedAt,
       version: body.version,
+      ppid: body.ppid,
     };
   }
 
@@ -316,7 +318,9 @@ export class Lockfile {
     body.lastHeartbeat = this.opts.clock();
     try {
       const nextPath = `${this.lockPath}.${this.opts.pid}.tmp`;
-      writeFileSync(nextPath, JSON.stringify(body, null, 2), { encoding: 'utf8' });
+      writeFileSync(nextPath, JSON.stringify(body, null, 2), {
+        encoding: 'utf8',
+      });
       renameSync(nextPath, this.lockPath);
     } catch {
       // Best-effort: a failed heartbeat just means the lock may look stale sooner.
@@ -446,19 +450,67 @@ function isValidLockBody(obj: unknown): obj is LockFileBody {
   );
 }
 
+function formatAge(ageMs: number): string {
+  const ageSec = Math.floor(ageMs / 1000);
+  return ageSec < 60
+    ? `${ageSec}s ago`
+    : ageSec < 3600
+      ? `${Math.floor(ageSec / 60)}m ago`
+      : `${Math.floor(ageSec / 3600)}h ${Math.floor((ageSec % 3600) / 60)}m ago`;
+}
+
+export interface ProcessHost {
+  name: string;
+  tty: string | null;
+}
+
+// Executable basename and tty only: a full command line can carry secrets.
+const SAFE_HOST_LABEL = /^[A-Za-z0-9._-]{1,64}$/;
+const SAFE_TTY = /^(tty|pts\/)[A-Za-z0-9]{1,8}$/;
+
+function readTtyAndComm(pid: number): string {
+  return execFileSync('ps', ['-p', String(pid), '-o', 'tty=,comm='], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: 1000,
+  });
+}
+
+export function describeProcessHost(
+  pid: number | undefined,
+  readPs: (pid: number) => string = readTtyAndComm,
+): ProcessHost | null {
+  if (typeof pid !== 'number' || pid <= 1) return null;
+  try {
+    const match = /^(\S+)\s+(.+)$/.exec(readPs(pid).trim());
+    if (!match) return null;
+    const name = match[2].trim().split('/').pop() ?? '';
+    if (!SAFE_HOST_LABEL.test(name)) return null;
+    return { name, tty: SAFE_TTY.test(match[1]) ? match[1] : null };
+  } catch {
+    return null;
+  }
+}
+
+export function formatContenderRefusal(conflict: LockConflict, host: ProcessHost | null): string {
+  const safe = host && SAFE_HOST_LABEL.test(host.name) ? host : null;
+  const tty = safe?.tty && SAFE_TTY.test(safe.tty) ? ` on ${safe.tty}` : '';
+  const owner = safe ? `, host ${safe.name}${tty}` : '';
+  return (
+    `Another rn-dev-agent session owns this worktree (pid ${
+      conflict.pid
+    }${owner}, started ${formatAge(conflict.ageMs)}). ` +
+    'This transport stays connected read-only and takes over automatically once that session exits: ' +
+    'close it, or keep working there. No restart or /mcp reconnect is needed.'
+  );
+}
+
 export function formatLockConflictMessage(conflict: LockConflict): string {
-  const ageSec = Math.floor(conflict.ageMs / 1000);
-  const ageStr =
-    ageSec < 60
-      ? `${ageSec}s ago`
-      : ageSec < 3600
-        ? `${Math.floor(ageSec / 60)}m ago`
-        : `${Math.floor(ageSec / 3600)}h ${Math.floor((ageSec % 3600) / 60)}m ago`;
   return [
     `Another rn-dev-agent MCP already owns this project root.`,
     `  PID:      ${conflict.pid}`,
     `  Project:  ${conflict.projectRoot}`,
-    `  Started:  ${ageStr}`,
+    `  Started:  ${formatAge(conflict.ageMs)}`,
     `  Lock:     ${conflict.lockPath}`,
     ``,
     `To resolve:`,

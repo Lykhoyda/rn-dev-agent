@@ -82,9 +82,10 @@ directory for plugin MCP servers, and the observed spawn starts from the user ho
 so the lock is keyed on the home directory and source authority for the open app
 is unavailable. Consequences:
 
-- One rn-dev-agent server per user across Cursor windows. A second window refuses
-  with exit code 11 and names the owner; use that session or quit it. The lock is
-  not bypassed for Cursor.
+- One rn-dev-agent server per user across Cursor windows. A second window stays
+  connected read-only and refuses every call with `SAME_ROOT_OWNER_LIVE` naming the
+  owner; use that session or quit it, and the waiting window takes over. The lock
+  is not bypassed for Cursor.
 - Device and proof work for an exact app checkout uses the project-rooted host
   workflow: `claude` or `codex` started in the app root. A project-scoped
   `.cursor/mcp.json` in the app checkout only helps if Cursor starts that server

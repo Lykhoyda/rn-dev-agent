@@ -318,7 +318,11 @@ alive for such callers.
   and Cursor spawns acquire it; `--no-lock` is for CI and test harnesses, never a
   Claude or Cursor host manifest or the conflict message
   (`scripts/check-agent-package-sync.sh` pins the Cursor spawn). The Codex
-  launcher's `--no-lock` stays as-is.
+  launcher's `--no-lock` stays as-is. A conflicting supervisor (the standard path;
+  legacy `RN_BRIDGE_SUPERVISOR=0` still exits 11) never exits: it waits as a
+  read-only contender (`RN_DEV_AGENT_CONTENDER_REFUSAL` worker,
+  `SAME_ROOT_OWNER_LIVE`) and mints authority only after winning the lock, then
+  hot-reloads in place (GH #991, `test/integration/gh-672-same-root-lock-takeover.test.ts`).
 - Codex-only host behavior: edit `packages/codex-plugin/`, then rerun
   `corepack yarn build:host-runtimes` so the `codex-*` copies in
   `packages/claude-plugin/` regenerate (package-relative links inside the

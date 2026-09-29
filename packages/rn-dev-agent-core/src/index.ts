@@ -289,8 +289,10 @@ const pkgVersion = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: stri
 // GH #182: module-scoped so the parent-death watch can touch() it (heartbeat) and
 // release() it on orphan-exit. null when --no-lock (touch/release become no-ops).
 let lockfile: Lockfile | null = null;
-const diagnosticContractProbe = process.argv.includes('--diagnostic-contract-probe');
-const noLock = diagnosticContractProbe || process.argv.includes('--no-lock');
+const contenderRefusal = process.env.RN_DEV_AGENT_CONTENDER_REFUSAL || null;
+const readOnlyWorker =
+  process.argv.includes('--diagnostic-contract-probe') || contenderRefusal !== null;
+const noLock = readOnlyWorker || process.argv.includes('--no-lock');
 if (!noLock) {
   lockfile = new Lockfile({ version: pkgVersion });
   const lockResult = lockfile.acquire();
@@ -300,7 +302,7 @@ if (!noLock) {
   }
   process.on('exit', () => lockfile?.release());
 }
-if (!diagnosticContractProbe) {
+if (!readOnlyWorker) {
   process.on('exit', () => {
     try {
       releaseDeviceLockForSession();
@@ -314,7 +316,7 @@ if (!diagnosticContractProbe) {
 // files-only pass runs — remove orphaned ~/.agent-device/daemon.{json,lock}
 // when their daemon PID is dead. Never touches a live process at startup.
 // Default-on; opt out with RN_DEVICE_KILL_LEGACY=0.
-if (!diagnosticContractProbe && process.env.RN_DEVICE_KILL_LEGACY !== '0') {
+if (!readOnlyWorker && process.env.RN_DEVICE_KILL_LEGACY !== '0') {
   void ensureSingleRunner()
     .then((r) => {
       if (r.removedFiles.length) {
@@ -718,9 +720,7 @@ setForeignGateUdidProvider(() => {
 // Mirror block declared BEFORE liveDeps: buildLiveDeps's isMirrorActive input
 // closes over `mirrorManager`, so this must exist first (TDZ safety) even
 // though the arrow body only runs later.
-const mirrorCfg = diagnosticContractProbe
-  ? { enabled: false as const, fps: 0 }
-  : resolveMirrorConfig();
+const mirrorCfg = readOnlyWorker ? { enabled: false as const, fps: 0 } : resolveMirrorConfig();
 // Share one authority-fenced target resolver across both Device pane capture paths.
 const observeTargetResolver = buildMirrorTargetResolver({
   getPlatform: () => {
@@ -771,7 +771,7 @@ const mirrorManager = mirrorCfg.enabled
   : undefined;
 if (mirrorManager) setObserveMirror(mirrorManager);
 
-const liveEnabled = !diagnosticContractProbe && process.env.RN_OBSERVE_LIVE !== '0';
+const liveEnabled = !readOnlyWorker && process.env.RN_OBSERVE_LIVE !== '0';
 const liveDeps = buildLiveDeps({
   recorder,
   isFlowActive: () => arbiter.flowActive || foreignFlowGate.lastActive,
@@ -828,11 +828,13 @@ function trackedTool(
   // here and runs regardless of liveEnabled. GH #206 live capture layers on top.
   const installLiveCapture = liveEnabled && mayTriggerLiveCapture(name);
   const wrapped = async (...a: unknown[]): Promise<unknown> => {
-    if (diagnosticContractProbe) {
-      return failResult(
-        'Tool calls are disabled in the read-only MCP contract probe.',
-        'DIAGNOSTIC_MODE_READ_ONLY',
-      );
+    if (readOnlyWorker) {
+      return contenderRefusal
+        ? failResult(contenderRefusal, 'SAME_ROOT_OWNER_LIVE')
+        : failResult(
+            'Tool calls are disabled in the read-only MCP contract probe.',
+            'DIAGNOSTIC_MODE_READ_ONLY',
+          );
     }
     const args = a[0] as Record<string, unknown> | undefined;
     let result: unknown;
@@ -4197,7 +4199,7 @@ setObserveStateDeps({
 // GH #182 (mirror subsystem): stopMirrorFn reaps idb/ffmpeg/simctl capture children
 // via MirrorManager.shutdown() — synchronous + idempotent, safe to call from here
 // and again from the process.on('exit') net below.
-const shutdown = diagnosticContractProbe
+const shutdown = readOnlyWorker
   ? async (exitCode: number): Promise<void> => process.exit(exitCode)
   : buildGracefulShutdown({
       getClient,
@@ -4257,7 +4259,7 @@ process.stdin.on('end', () => {
 // and if touch() reports we were usurped (a contender reclaimed our slot while the
 // laptop slept, then we woke), self-terminate so we don't run as a second bridge on
 // the same device. Unref'd timer — never keeps a should-be-dead process alive.
-const stopParentWatch = diagnosticContractProbe
+const stopParentWatch = readOnlyWorker
   ? () => {}
   : startParentDeathWatch({
       onOrphaned: () => {
@@ -4277,12 +4279,12 @@ const stopParentWatch = diagnosticContractProbe
     });
 process.on('exit', () => stopParentWatch());
 process.on('exit', () => authorityRuntime.close());
-if (!diagnosticContractProbe) process.on('exit', () => removeObserveState());
+if (!readOnlyWorker) process.on('exit', () => removeObserveState());
 // GH #182 zombie class for observe-mirror: catch-all net alongside the shutdown()
 // path above. Covers cases that never call shutdown() at all — e.g. the fatal
 // main().catch() handler below (process.exit(1) direct) and any other exit — so
 // idb/ffmpeg/simctl capture children are always reaped. Synchronous + idempotent.
-if (!diagnosticContractProbe) {
+if (!readOnlyWorker) {
   process.on('exit', () => {
     try {
       mirrorManager?.shutdown();
@@ -4317,7 +4319,7 @@ async function main() {
   await server.connect(transport);
   logger.info('MCP', 'MCP server connected and ready');
 
-  if (!diagnosticContractProbe) {
+  if (!readOnlyWorker) {
     const rootResolution = observeRootResolver();
     if (!rootResolution.ok) {
       logger.warn('OBSERVE', `interrupted e2e run recovery skipped: ${rootResolution.reason}`);
@@ -4341,7 +4343,7 @@ async function main() {
   // Autostart is fire-and-forget: nothing downstream depends on its result,
   // and even a throwing logger in its catch must not reject main() after MCP
   // is already connected.
-  if (!diagnosticContractProbe) {
+  if (!readOnlyWorker) {
     void autostartObserve({
       findRoot: observeRootResolver,
       resolveEnabled: resolveObserveAutostart,
@@ -4364,6 +4366,6 @@ main().catch((err) => {
   if (logger.logFilePath) {
     console.error(`CDP bridge log: ${logger.logFilePath}`);
   }
-  if (!diagnosticContractProbe) void stopFastRunner(getActiveSession()?.deviceId);
+  if (!readOnlyWorker) void stopFastRunner(getActiveSession()?.deviceId);
   process.exit(1);
 });
