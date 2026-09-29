@@ -51,7 +51,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 function defaultProjectRoot() {
@@ -114,11 +114,16 @@ function formatAge(ageMs) {
   return ageSec < 60 ? `${ageSec}s ago` : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago` : `${Math.floor(ageSec / 3600)}h ${Math.floor(ageSec % 3600 / 60)}m ago`;
 }
 function readTtyAndComm(pid) {
-  return execFileSync("ps", ["-p", String(pid), "-o", "tty=,comm="], {
+  const out = execFileSync("ps", ["-p", String(pid), "-o", "tty=,comm="], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 1e3
   });
+  try {
+    return `${out.trim().split(/\s+/)[0]} ${readlinkSync(`/proc/${pid}/exe`)}`;
+  } catch {
+    return out;
+  }
 }
 function describeProcessHost(pid, readPs = readTtyAndComm) {
   if (typeof pid !== "number" || pid <= 1)
@@ -9113,7 +9118,7 @@ var init_storage = __esm({
 
 // packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { readlinkSync, realpathSync as realpathSync3 } from "node:fs";
+import { readlinkSync as readlinkSync2, realpathSync as realpathSync3 } from "node:fs";
 import { resolve as resolve2, sep } from "node:path";
 function parseLsofPid(stdout) {
   for (const line of stdout.split("\n")) {
@@ -9159,7 +9164,7 @@ function parseWindowsMetroRoot(commandLine) {
   const explicit = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
   return explicit ?? null;
 }
-function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync, executableDependencies = {}) {
+function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync2, executableDependencies = {}) {
   try {
     if (platform === "linux") {
       return realpathOrResolve(readLink(`/proc/${pid}/cwd`));
@@ -9200,7 +9205,7 @@ function cwdForPort(port, exec = defaultExec, platform = process.platform, execu
   const pid = pidForPort(port, exec, platform, executableDependencies);
   if (pid == null)
     return null;
-  return cwdForProcess(pid, platform, exec, readlinkSync, executableDependencies);
+  return cwdForProcess(pid, platform, exec, readlinkSync2, executableDependencies);
 }
 function pathMatchesRoot(servingCwd, projectRoot) {
   if (!servingCwd || !projectRoot)
@@ -10108,7 +10113,7 @@ var init_strict_proof_limits = __esm({
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash4, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { execFileSync as execFileSync4 } from "node:child_process";
-import { closeSync as closeSync4, constants as constants3, existsSync as existsSync7, fstatSync as fstatSync2, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync2, readSync as readSync2, realpathSync as realpathSync5 } from "node:fs";
+import { closeSync as closeSync4, constants as constants3, existsSync as existsSync7, fstatSync as fstatSync2, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync as readSync2, realpathSync as realpathSync5 } from "node:fs";
 import { dirname as dirname4, isAbsolute, join as join6, relative, resolve as resolve4 } from "node:path";
 function digest(parts) {
   const hash = createHash4("sha256");
@@ -10185,7 +10190,7 @@ function updateDependencyPath(hash, path, label, state) {
     updateFramed(hash, current.label);
     updateFramed(hash, String(stat2.mode & 511));
     if (stat2.isSymbolicLink()) {
-      const link = readlinkSync2(current.path);
+      const link = readlinkSync3(current.path);
       const target = realpathSync5(current.path);
       state.totalBytes += Buffer.byteLength(link);
       if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
@@ -10761,7 +10766,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     if (stat2.isSymbolicLink()) {
       const target = realpathSync5(file);
       assertContained(identity2.contentRoot, target, "STRICT_PROOF_PATH_ESCAPE");
-      const link = readlinkSync2(file);
+      const link = readlinkSync3(file);
       const targetStat = lstatSync4(target);
       if (!targetStat.isFile()) {
         throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked symlink target is not a regular file");
@@ -10871,7 +10876,7 @@ var init_worktree_repair_remedy = __esm({
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { closeSync as closeSync5, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync5, mkdirSync as mkdirSync5, openSync as openSync5, readFileSync as readFileSync6, readlinkSync as readlinkSync3, realpathSync as realpathSync6, renameSync as renameSync3, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync3 } from "node:fs";
+import { closeSync as closeSync5, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync5, mkdirSync as mkdirSync5, openSync as openSync5, readFileSync as readFileSync6, readlinkSync as readlinkSync4, realpathSync as realpathSync6, renameSync as renameSync3, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync3 } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute2, join as join7, relative as relative2, resolve as resolve5, sep as sep2 } from "node:path";
 function gitEnvironment() {
   const env = { ...process.env };
@@ -11621,7 +11626,7 @@ function expectedLegacyRoot(layout) {
 }
 function isVerifiedLegacyRootLink(root, expected) {
   try {
-    if (resolve5(dirname5(root), readlinkSync3(root)) !== expected)
+    if (resolve5(dirname5(root), readlinkSync4(root)) !== expected)
       return false;
     const resolvedExpected = canonical(expected);
     return resolvedExpected === null || canonical(root) === resolvedExpected;
@@ -33182,7 +33187,7 @@ var init_metro_origin = __esm({
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync12 } from "node:child_process";
 import { createHash as createHash10 } from "node:crypto";
-import { lstatSync as lstatSync11, readFileSync as readFileSync19, readdirSync as readdirSync5, readlinkSync as readlinkSync4, realpathSync as realpathSync11, statSync as statSync9 } from "node:fs";
+import { lstatSync as lstatSync11, readFileSync as readFileSync19, readdirSync as readdirSync5, readlinkSync as readlinkSync5, realpathSync as realpathSync11, statSync as statSync9 } from "node:fs";
 import { isAbsolute as isAbsolute7, join as join24, relative as relative5 } from "node:path";
 function runText(command, args) {
   return execFileSync12(command, [...args], {
@@ -33321,7 +33326,7 @@ function captureInstalledArtifact(target, dependencies = {}) {
     }
     const files = iosAppFiles(appPath, dependencies);
     const lstat = dependencies.lstat ?? lstatSync11;
-    const readLink = dependencies.readLink ?? readlinkSync4;
+    const readLink = dependencies.readLink ?? readlinkSync5;
     const realpath = dependencies.realpath ?? realpathSync11;
     const artifactParts = [];
     for (const entry of files) {
@@ -72961,7 +72966,7 @@ var init_maestro_runner_pin = __esm({
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
 import { spawnSync as spawnSync3 } from "node:child_process";
 import { createHash as createHash13 } from "node:crypto";
-import { accessSync, chmodSync as chmodSync5, constants as constants7, copyFileSync as copyFileSync2, cpSync as cpSync2, existsSync as existsSync24, lstatSync as lstatSync13, mkdirSync as mkdirSync17, mkdtempSync as mkdtempSync2, readFileSync as readFileSync25, readdirSync as readdirSync8, readlinkSync as readlinkSync5, realpathSync as realpathSync13, renameSync as renameSync8, rmSync as rmSync10, symlinkSync as symlinkSync4, unlinkSync as unlinkSync11, writeFileSync as writeFileSync13 } from "node:fs";
+import { accessSync, chmodSync as chmodSync5, constants as constants7, copyFileSync as copyFileSync2, cpSync as cpSync2, existsSync as existsSync24, lstatSync as lstatSync13, mkdirSync as mkdirSync17, mkdtempSync as mkdtempSync2, readFileSync as readFileSync25, readdirSync as readdirSync8, readlinkSync as readlinkSync6, realpathSync as realpathSync13, renameSync as renameSync8, rmSync as rmSync10, symlinkSync as symlinkSync4, unlinkSync as unlinkSync11, writeFileSync as writeFileSync13 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import { basename as basename7, dirname as dirname17, isAbsolute as isAbsolute9, join as join36, relative as relative7, resolve as resolve12, sep as sep6 } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -73087,7 +73092,7 @@ function payloadMatchesPinnedArchive(root, archive, expectedArchiveSha256) {
         return false;
       seen.add(rel);
       if (entry.isSymbolicLink()) {
-        if (wanted.kind !== "symlink" || readlinkSync5(path) !== wanted.target)
+        if (wanted.kind !== "symlink" || readlinkSync6(path) !== wanted.target)
           return false;
         continue;
       }
@@ -73325,7 +73330,7 @@ function copyPayloadTree(source, destination) {
       copyFileSync2(sourcePath, destinationPath, constants7.COPYFILE_EXCL | constants7.COPYFILE_FICLONE);
       chmodSync5(destinationPath, stat2.mode & 511);
     } else if (stat2.isSymbolicLink()) {
-      symlinkSync4(readlinkSync5(sourcePath), destinationPath);
+      symlinkSync4(readlinkSync6(sourcePath), destinationPath);
     } else {
       throw new Error(`RUNNER_PIN_CHANGED: unsupported payload entry ${sourcePath}.`);
     }
@@ -73492,7 +73497,7 @@ function isContainedWdaProductTree(keyDir, products) {
       const path = join36(directory, entry.name);
       const stat2 = lstatSync13(path);
       if (stat2.isSymbolicLink()) {
-        const target = readlinkSync5(path);
+        const target = readlinkSync6(path);
         if (isAbsolute9(target) || !isWithinWdaKey(lexicalKey, resolve12(directory, target)) || !isWithinWdaKey(realKey, realpathSync13(path))) {
           return false;
         }

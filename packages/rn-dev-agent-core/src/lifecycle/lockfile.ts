@@ -6,6 +6,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readlinkSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -489,11 +490,17 @@ const SAFE_HOST_LABEL = /^[A-Za-z0-9._-]{1,64}$/;
 const SAFE_TTY = /^(tty|pts\/)[A-Za-z0-9]{1,8}$/;
 
 function readTtyAndComm(pid: number): string {
-  return execFileSync('ps', ['-p', String(pid), '-o', 'tty=,comm='], {
+  const out = execFileSync('ps', ['-p', String(pid), '-o', 'tty=,comm='], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
     timeout: 1000,
   });
+  // Linux `comm` is the renameable task name (Node reports `MainThread`), not the executable.
+  try {
+    return `${out.trim().split(/\s+/)[0]} ${readlinkSync(`/proc/${pid}/exe`)}`;
+  } catch {
+    return out;
+  }
 }
 
 export function describeProcessHost(
