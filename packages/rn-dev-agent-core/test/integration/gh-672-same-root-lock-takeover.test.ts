@@ -470,7 +470,8 @@ test(
 
       const winnerSessionId = sourceClaims[0].session_id;
       const winnerExit = new Promise((resolve) => winner.child.on('exit', resolve));
-      process.kill(newOwnerPid, 'SIGKILL');
+      assert.equal(newOwnerPid, winner.child.pid, 'the lock names the winner supervisor');
+      winner.child.kill('SIGKILL');
       await winnerExit;
       running.splice(running.indexOf(winner), 1);
 

@@ -106,6 +106,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
   // Non-null while a live same-root owner holds the lock: the worker stays read-only (GH #991).
   let contenderRefusal: string | null = null;
   let contenderOwnerKey: string | null = null;
+  let upgrading = false;
   const ownerKey = (conflict: LockConflict): string => `${conflict.pid}:${conflict.startedAt}`;
   const awaitOwner = (conflict: LockConflict): void => {
     contenderOwnerKey = ownerKey(conflict);
@@ -117,7 +118,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
       version: string;
     };
     lockfile = new Lockfile({ version: pkg.version });
-    const lockResult = lockfile.acquire();
+    const lockResult = lockfile.acquire({ confirmStaleHeartbeat: true });
     if (lockResult.status === 'conflict') {
       process.stderr.write(formatLockConflictMessage(lockResult) + '\n');
       process.stderr.write(
@@ -205,6 +206,11 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
               : (process.env.USER ?? 'unknown'),
           ownerStatus: inspectSessionOwner,
         });
+      if (upgrading && lockfile && !lockfile.touch()) {
+        throw new Error(
+          'SINGLE_INSTANCE_LOCK_LOST: another bridge reclaimed the lock during the upgrade',
+        );
+      }
       authority = mintAuthority();
     } catch (error) {
       authorityError =
@@ -400,10 +406,9 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
   }
   process.on('SIGUSR2', reloadWorker);
 
-  let upgrading = false;
   async function retryAsContender(): Promise<void> {
     if (!lockfile || upgrading || shutdownRequested) return;
-    const result = lockfile.acquire();
+    const result = lockfile.acquire({ confirmStaleHeartbeat: true });
     if (result.status === 'conflict') {
       if (ownerKey(result) !== contenderOwnerKey) {
         awaitOwner(result);

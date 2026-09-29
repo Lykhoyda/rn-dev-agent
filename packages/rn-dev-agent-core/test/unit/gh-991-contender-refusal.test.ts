@@ -1,6 +1,7 @@
 // GH #991: a same-root contender names the live owner without leaking its command line.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { describeProcessHost, formatContenderRefusal } from '../../dist/lifecycle/lockfile.js';
 
 const conflict = {
@@ -22,10 +23,9 @@ test('the refusal names the owner pid, host label, tty and age', () => {
 
 test('an unresolvable or unsafe host is omitted rather than guessed', () => {
   assert.match(formatContenderRefusal(conflict, null), /\(pid 4242, started 6m ago\)/);
-  assert.match(
-    formatContenderRefusal(conflict, { name: 'node --token=secret', tty: 'ttys003' }),
-    /\(pid 4242, started 6m ago\)/,
-  );
+  const unsafe = formatContenderRefusal(conflict, { name: 'node --token=secret', tty: 'ttys003' });
+  assert.match(unsafe, /\(pid 4242, started 6m ago\)/);
+  assert.doesNotMatch(unsafe, /token=secret|ttys003/);
 });
 
 test('the host label is an executable basename with a validated tty', () => {
@@ -50,3 +50,26 @@ test('the host label is an executable basename with a validated tty', () => {
   assert.equal(describeProcessHost(undefined), null);
   assert.equal(describeProcessHost(1), null, 'init/launchd is never reported as a host');
 });
+
+const psReadable = describeProcessHost(process.pid) !== null;
+
+test(
+  'a real process lookup never surfaces command-line arguments',
+  { skip: psReadable ? false : 'ps cannot read process metadata in this environment' },
+  async () => {
+    const child = spawn(
+      process.execPath,
+      ['-e', 'setInterval(() => {}, 1000)', '/secret-dir/token-value'],
+      { stdio: 'ignore' },
+    );
+    try {
+      await new Promise((resolve) => child.once('spawn', resolve));
+      const host = describeProcessHost(child.pid);
+      assert.ok(host, 'ps is readable here, so the lookup must resolve a host');
+      assert.equal(host.name, process.execPath.split('/').pop());
+      assert.doesNotMatch(formatContenderRefusal(conflict, host), /secret|token-value|setInterval/);
+    } finally {
+      child.kill('SIGKILL');
+    }
+  },
+);

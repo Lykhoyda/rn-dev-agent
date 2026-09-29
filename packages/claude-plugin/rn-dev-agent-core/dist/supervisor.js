@@ -157,7 +157,7 @@ function formatLockConflictMessage(conflict2) {
     `Running two MCPs in the same project causes missed events and state flicker.`
   ].join("\n");
 }
-var DEFAULT_MAX_AGE_MS, DEFAULT_PROCESS_NAME_NEEDLE, PROCESS_IDENTITY_MARKERS, DEFAULT_STALE_MS, Lockfile, SAFE_HOST_LABEL, SAFE_TTY;
+var DEFAULT_MAX_AGE_MS, DEFAULT_PROCESS_NAME_NEEDLE, PROCESS_IDENTITY_MARKERS, DEFAULT_STALE_MS, DEFAULT_STALE_CONFIRM_MS, Lockfile, SAFE_HOST_LABEL, SAFE_TTY;
 var init_lockfile = __esm({
   "packages/rn-dev-agent-core/dist/lifecycle/lockfile.js"() {
     "use strict";
@@ -165,10 +165,12 @@ var init_lockfile = __esm({
     DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
     PROCESS_IDENTITY_MARKERS = ["cdp-bridge", "rn-dev-agent", "supervisor.js"];
     DEFAULT_STALE_MS = 9e4;
+    DEFAULT_STALE_CONFIRM_MS = 3e4;
     Lockfile = class {
       opts;
       lockPath;
       acquired = false;
+      staleSighting = null;
       constructor(opts = {}) {
         const projectRoot = opts.projectRoot ?? defaultProjectRoot();
         const uid = opts.uid ?? userInfo().uid;
@@ -188,7 +190,8 @@ var init_lockfile = __esm({
           maxAgeMs: opts.maxAgeMs ?? DEFAULT_MAX_AGE_MS,
           processNameNeedle: opts.processNameNeedle ?? DEFAULT_PROCESS_NAME_NEEDLE,
           processIdentity: opts.processIdentity ?? defaultProcessIdentity(),
-          staleMs: opts.staleMs ?? DEFAULT_STALE_MS
+          staleMs: opts.staleMs ?? DEFAULT_STALE_MS,
+          staleConfirmMs: opts.staleConfirmMs ?? DEFAULT_STALE_CONFIRM_MS
         };
         this.lockPath = join(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
       }
@@ -198,7 +201,7 @@ var init_lockfile = __esm({
       // truncating the first. With 'wx' the loser gets EEXIST and evaluates the
       // winner's lock as a conflict. Infra errors (not contention) fail OPEN with
       // `degraded` so an fs hiccup never blocks a legitimate session.
-      acquire() {
+      acquire(options = {}) {
         try {
           this.writeLock();
           this.acquired = true;
@@ -212,8 +215,18 @@ var init_lockfile = __esm({
         if (existing && this.isLockLive(existing)) {
           return this.conflictOf(existing);
         }
+        if (existing && options.confirmStaleHeartbeat && this.isLockLive(existing, true)) {
+          const key = `${existing.pid}:${existing.startedAt}:${existing.lastHeartbeat}`;
+          if (this.staleSighting?.key !== key) {
+            this.staleSighting = { key, at: this.opts.clock() };
+            return this.conflictOf(existing);
+          }
+          if (this.opts.clock() - this.staleSighting.at < this.opts.staleConfirmMs) {
+            return this.conflictOf(existing);
+          }
+        }
         const before = this.readExisting();
-        if (before && (existing === null || before.pid !== existing.pid || before.startedAt !== existing.startedAt) && this.isLockLive(before)) {
+        if (before && (existing === null || before.pid !== existing.pid || before.startedAt !== existing.startedAt || before.lastHeartbeat !== existing.lastHeartbeat) && this.isLockLive(before)) {
           return this.conflictOf(before);
         }
         try {
@@ -298,7 +311,7 @@ var init_lockfile = __esm({
           return null;
         }
       }
-      isLockLive(body) {
+      isLockLive(body, ignoreHeartbeat = false) {
         if (!this.opts.processAlive(body.pid))
           return false;
         const age = this.ageOfLockFile();
@@ -316,7 +329,7 @@ var init_lockfile = __esm({
             return false;
           }
         }
-        if (typeof body.lastHeartbeat === "number" && this.opts.clock() - body.lastHeartbeat > this.opts.staleMs) {
+        if (!ignoreHeartbeat && typeof body.lastHeartbeat === "number" && this.opts.clock() - body.lastHeartbeat > this.opts.staleMs) {
           return false;
         }
         return true;
@@ -101845,6 +101858,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
   let lockfile2 = null;
   let contenderRefusal2 = null;
   let contenderOwnerKey = null;
+  let upgrading = false;
   const ownerKey = (conflict2) => `${conflict2.pid}:${conflict2.startedAt}`;
   const awaitOwner = (conflict2) => {
     contenderOwnerKey = ownerKey(conflict2);
@@ -101853,7 +101867,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
   if (!noLock2 && !diagnosticContractProbe) {
     const pkg = JSON.parse(readFileSync44(join65(here, "..", "package.json"), "utf8"));
     lockfile2 = new Lockfile({ version: pkg.version });
-    const lockResult = lockfile2.acquire();
+    const lockResult = lockfile2.acquire({ confirmStaleHeartbeat: true });
     if (lockResult.status === "conflict") {
       process.stderr.write(formatLockConflictMessage(lockResult) + "\n");
       process.stderr.write("rn-bridge-supervisor: waiting read-only; this transport takes over once the owner exits\n");
@@ -101919,6 +101933,9 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
         uid: typeof process.getuid === "function" ? String(process.getuid()) : process.env.USER ?? "unknown",
         ownerStatus: inspectSessionOwner
       });
+      if (upgrading && lockfile2 && !lockfile2.touch()) {
+        throw new Error("SINGLE_INSTANCE_LOCK_LOST: another bridge reclaimed the lock during the upgrade");
+      }
       authority = mintAuthority();
     } catch (error2) {
       authorityError = error2 instanceof Error ? error2.message : "AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized";
@@ -101947,11 +101964,10 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
   process.on("SIGINT", () => beginShutdown2("SIGINT"));
   process.on("SIGHUP", () => beginShutdown2("SIGHUP"));
   process.on("SIGUSR2", reloadWorker2);
-  let upgrading = false;
   async function retryAsContender() {
     if (!lockfile2 || upgrading || shutdownRequested)
       return;
-    const result = lockfile2.acquire();
+    const result = lockfile2.acquire({ confirmStaleHeartbeat: true });
     if (result.status === "conflict") {
       if (ownerKey(result) !== contenderOwnerKey) {
         awaitOwner(result);

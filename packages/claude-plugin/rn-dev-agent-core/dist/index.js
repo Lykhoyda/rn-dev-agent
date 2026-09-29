@@ -92552,6 +92552,7 @@ var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
 var PROCESS_IDENTITY_MARKERS = ["cdp-bridge", "rn-dev-agent", "supervisor.js"];
 var DEFAULT_STALE_MS = 9e4;
+var DEFAULT_STALE_CONFIRM_MS = 3e4;
 function defaultProjectRoot() {
   return process.env.CLAUDE_USER_CWD ?? process.cwd();
 }
@@ -92602,6 +92603,7 @@ var Lockfile = class {
   opts;
   lockPath;
   acquired = false;
+  staleSighting = null;
   constructor(opts = {}) {
     const projectRoot = opts.projectRoot ?? defaultProjectRoot();
     const uid = opts.uid ?? userInfo2().uid;
@@ -92621,7 +92623,8 @@ var Lockfile = class {
       maxAgeMs: opts.maxAgeMs ?? DEFAULT_MAX_AGE_MS,
       processNameNeedle: opts.processNameNeedle ?? DEFAULT_PROCESS_NAME_NEEDLE,
       processIdentity: opts.processIdentity ?? defaultProcessIdentity(),
-      staleMs: opts.staleMs ?? DEFAULT_STALE_MS
+      staleMs: opts.staleMs ?? DEFAULT_STALE_MS,
+      staleConfirmMs: opts.staleConfirmMs ?? DEFAULT_STALE_CONFIRM_MS
     };
     this.lockPath = join52(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
   }
@@ -92631,7 +92634,7 @@ var Lockfile = class {
   // truncating the first. With 'wx' the loser gets EEXIST and evaluates the
   // winner's lock as a conflict. Infra errors (not contention) fail OPEN with
   // `degraded` so an fs hiccup never blocks a legitimate session.
-  acquire() {
+  acquire(options = {}) {
     try {
       this.writeLock();
       this.acquired = true;
@@ -92645,8 +92648,18 @@ var Lockfile = class {
     if (existing && this.isLockLive(existing)) {
       return this.conflictOf(existing);
     }
+    if (existing && options.confirmStaleHeartbeat && this.isLockLive(existing, true)) {
+      const key = `${existing.pid}:${existing.startedAt}:${existing.lastHeartbeat}`;
+      if (this.staleSighting?.key !== key) {
+        this.staleSighting = { key, at: this.opts.clock() };
+        return this.conflictOf(existing);
+      }
+      if (this.opts.clock() - this.staleSighting.at < this.opts.staleConfirmMs) {
+        return this.conflictOf(existing);
+      }
+    }
     const before = this.readExisting();
-    if (before && (existing === null || before.pid !== existing.pid || before.startedAt !== existing.startedAt) && this.isLockLive(before)) {
+    if (before && (existing === null || before.pid !== existing.pid || before.startedAt !== existing.startedAt || before.lastHeartbeat !== existing.lastHeartbeat) && this.isLockLive(before)) {
       return this.conflictOf(before);
     }
     try {
@@ -92731,7 +92744,7 @@ var Lockfile = class {
       return null;
     }
   }
-  isLockLive(body) {
+  isLockLive(body, ignoreHeartbeat = false) {
     if (!this.opts.processAlive(body.pid))
       return false;
     const age = this.ageOfLockFile();
@@ -92749,7 +92762,7 @@ var Lockfile = class {
         return false;
       }
     }
-    if (typeof body.lastHeartbeat === "number" && this.opts.clock() - body.lastHeartbeat > this.opts.staleMs) {
+    if (!ignoreHeartbeat && typeof body.lastHeartbeat === "number" && this.opts.clock() - body.lastHeartbeat > this.opts.staleMs) {
       return false;
     }
     return true;
