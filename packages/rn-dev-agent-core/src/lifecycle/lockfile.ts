@@ -6,6 +6,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readlinkSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -27,6 +28,7 @@ const PROCESS_IDENTITY_MARKERS = ['cdp-bridge', 'rn-dev-agent', 'supervisor.js']
 // well within this (index.ts touches every ~30s); a wedged bridge stops, so its
 // lock becomes reclaimable. Matches device-lock.ts's 90s.
 const DEFAULT_STALE_MS = 90_000;
+const DEFAULT_STALE_CONFIRM_MS = 30_000;
 
 export interface LockfileOptions {
   projectRoot?: string;
@@ -47,6 +49,8 @@ export interface LockfileOptions {
   processIdentity?: string;
   /** GH #182: heartbeat-staleness window in ms (a live owner past this is wedged → reclaimable). */
   staleMs?: number;
+  /** GH #991: minimum gap between two identical stale-heartbeat sightings before a live owner counts as wedged. */
+  staleConfirmMs?: number;
 }
 
 export interface LockAcquired {
@@ -64,6 +68,7 @@ export interface LockConflict {
   startedAt: number;
   ageMs: number;
   version?: string;
+  ppid?: number;
 }
 
 export type LockAcquireResult = LockAcquired | LockConflict;
@@ -171,7 +176,7 @@ function hashProjectRoot(projectRoot: string): string {
  * both racing for the single Hermes CDP slot and producing missed events + state flicker.
  * This module writes a lock file at startup keyed on the user's uid + an 8-char hash of
  * the project root, so:
- *   - same project, two windows → conflict (exit 11)
+ *   - same project, two windows → conflict (the supervisor waits read-only, GH #991)
  *   - different projects, same machine → coexist fine (different hash)
  *   - different users on the same machine → coexist fine (different uid)
  *
@@ -188,6 +193,7 @@ export class Lockfile {
   private readonly opts: Required<LockfileOptions>;
   readonly lockPath: string;
   private acquired = false;
+  private staleSighting: { key: string; at: number } | null = null;
 
   constructor(opts: LockfileOptions = {}) {
     const projectRoot = opts.projectRoot ?? defaultProjectRoot();
@@ -210,6 +216,7 @@ export class Lockfile {
       processNameNeedle: opts.processNameNeedle ?? DEFAULT_PROCESS_NAME_NEEDLE,
       processIdentity: opts.processIdentity ?? defaultProcessIdentity(),
       staleMs: opts.staleMs ?? DEFAULT_STALE_MS,
+      staleConfirmMs: opts.staleConfirmMs ?? DEFAULT_STALE_CONFIRM_MS,
     };
 
     this.lockPath = join(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
@@ -221,7 +228,7 @@ export class Lockfile {
   // truncating the first. With 'wx' the loser gets EEXIST and evaluates the
   // winner's lock as a conflict. Infra errors (not contention) fail OPEN with
   // `degraded` so an fs hiccup never blocks a legitimate session.
-  acquire(): LockAcquireResult {
+  acquire(options: { confirmStaleHeartbeat?: boolean } = {}): LockAcquireResult {
     try {
       this.writeLock();
       this.acquired = true;
@@ -236,6 +243,19 @@ export class Lockfile {
     if (existing && this.isLockLive(existing)) {
       return this.conflictOf(existing);
     }
+    // GH #991: after a host sleep a polling contender can read the owner's pre-sleep
+    // heartbeat before the owner's first post-wake touch(); only the same stale
+    // heartbeat still unchanged a full grace interval later proves a wedged owner.
+    if (existing && options.confirmStaleHeartbeat && this.isLockLive(existing, true)) {
+      const key = `${existing.pid}:${existing.startedAt}:${existing.lastHeartbeat}`;
+      if (this.staleSighting?.key !== key) {
+        this.staleSighting = { key, at: this.opts.clock() };
+        return this.conflictOf(existing);
+      }
+      if (this.opts.clock() - this.staleSighting.at < this.opts.staleConfirmMs) {
+        return this.conflictOf(existing);
+      }
+    }
 
     // Stale/dead/unreadable holder → reclaim. Narrow the steal-a-fresh-lock
     // window: re-read immediately before unlink and bail if a DIFFERENT,
@@ -247,7 +267,8 @@ export class Lockfile {
       before &&
       (existing === null ||
         before.pid !== existing.pid ||
-        before.startedAt !== existing.startedAt) &&
+        before.startedAt !== existing.startedAt ||
+        before.lastHeartbeat !== existing.lastHeartbeat) &&
       this.isLockLive(before)
     ) {
       return this.conflictOf(before);
@@ -281,6 +302,7 @@ export class Lockfile {
       startedAt: body.startedAt,
       ageMs: this.opts.clock() - body.startedAt,
       version: body.version,
+      ppid: body.ppid,
     };
   }
 
@@ -316,7 +338,9 @@ export class Lockfile {
     body.lastHeartbeat = this.opts.clock();
     try {
       const nextPath = `${this.lockPath}.${this.opts.pid}.tmp`;
-      writeFileSync(nextPath, JSON.stringify(body, null, 2), { encoding: 'utf8' });
+      writeFileSync(nextPath, JSON.stringify(body, null, 2), {
+        encoding: 'utf8',
+      });
       renameSync(nextPath, this.lockPath);
     } catch {
       // Best-effort: a failed heartbeat just means the lock may look stale sooner.
@@ -336,7 +360,7 @@ export class Lockfile {
     }
   }
 
-  private isLockLive(body: LockFileBody): boolean {
+  private isLockLive(body: LockFileBody, ignoreHeartbeat = false): boolean {
     if (!this.opts.processAlive(body.pid)) return false;
 
     const age = this.ageOfLockFile();
@@ -368,6 +392,7 @@ export class Lockfile {
     // no longer refreshing) — reclaim. Skipped for pre-0.39 locks with no
     // lastHeartbeat (they fall back to the mtime check above).
     if (
+      !ignoreHeartbeat &&
       typeof body.lastHeartbeat === 'number' &&
       this.opts.clock() - body.lastHeartbeat > this.opts.staleMs
     ) {
@@ -446,19 +471,73 @@ function isValidLockBody(obj: unknown): obj is LockFileBody {
   );
 }
 
+function formatAge(ageMs: number): string {
+  const ageSec = Math.floor(ageMs / 1000);
+  return ageSec < 60
+    ? `${ageSec}s ago`
+    : ageSec < 3600
+      ? `${Math.floor(ageSec / 60)}m ago`
+      : `${Math.floor(ageSec / 3600)}h ${Math.floor((ageSec % 3600) / 60)}m ago`;
+}
+
+export interface ProcessHost {
+  name: string;
+  tty: string | null;
+}
+
+// Executable basename and tty only: a full command line can carry secrets.
+const SAFE_HOST_LABEL = /^[A-Za-z0-9._-]{1,64}$/;
+const SAFE_TTY = /^(tty|pts\/)[A-Za-z0-9]{1,8}$/;
+
+function readTtyAndComm(pid: number): string {
+  const out = execFileSync('ps', ['-p', String(pid), '-o', 'tty=,comm='], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: 1000,
+  });
+  // Linux `comm` is the renameable task name (Node reports `MainThread`), not the executable.
+  try {
+    return `${out.trim().split(/\s+/)[0]} ${readlinkSync(`/proc/${pid}/exe`)}`;
+  } catch {
+    return out;
+  }
+}
+
+export function describeProcessHost(
+  pid: number | undefined,
+  readPs: (pid: number) => string = readTtyAndComm,
+): ProcessHost | null {
+  if (typeof pid !== 'number' || pid <= 1) return null;
+  try {
+    const match = /^(\S+)\s+(.+)$/.exec(readPs(pid).trim());
+    if (!match) return null;
+    const name = match[2].trim().split('/').pop() ?? '';
+    if (!SAFE_HOST_LABEL.test(name)) return null;
+    return { name, tty: SAFE_TTY.test(match[1]) ? match[1] : null };
+  } catch {
+    return null;
+  }
+}
+
+export function formatContenderRefusal(conflict: LockConflict, host: ProcessHost | null): string {
+  const safe = host && SAFE_HOST_LABEL.test(host.name) ? host : null;
+  const tty = safe?.tty && SAFE_TTY.test(safe.tty) ? ` on ${safe.tty}` : '';
+  const owner = safe ? `, host ${safe.name}${tty}` : '';
+  return (
+    `Another rn-dev-agent session owns this worktree (pid ${
+      conflict.pid
+    }${owner}, started ${formatAge(conflict.ageMs)}). ` +
+    'This transport stays connected read-only and takes over automatically once that session exits: ' +
+    'close it, or keep working there. No restart or /mcp reconnect is needed.'
+  );
+}
+
 export function formatLockConflictMessage(conflict: LockConflict): string {
-  const ageSec = Math.floor(conflict.ageMs / 1000);
-  const ageStr =
-    ageSec < 60
-      ? `${ageSec}s ago`
-      : ageSec < 3600
-        ? `${Math.floor(ageSec / 60)}m ago`
-        : `${Math.floor(ageSec / 3600)}h ${Math.floor((ageSec % 3600) / 60)}m ago`;
   return [
     `Another rn-dev-agent MCP already owns this project root.`,
     `  PID:      ${conflict.pid}`,
     `  Project:  ${conflict.projectRoot}`,
-    `  Started:  ${ageStr}`,
+    `  Started:  ${formatAge(conflict.ageMs)}`,
     `  Lock:     ${conflict.lockPath}`,
     ``,
     `To resolve:`,

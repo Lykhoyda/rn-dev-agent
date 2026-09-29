@@ -5,7 +5,13 @@ import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { awaitChildErrorOrExit, completeSqliteRelaunch } from './lifecycle/child-error-or-exit.js';
-import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
+import {
+  Lockfile,
+  describeProcessHost,
+  formatContenderRefusal,
+  formatLockConflictMessage,
+  type LockConflict,
+} from './lifecycle/lockfile.js';
 import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { LineSplitter } from './lifecycle/stdio-frames.js';
 import { SupervisorCore, type SupervisorAction } from './lifecycle/supervisor-core.js';
@@ -97,15 +103,28 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
   const diagnosticContractProbe = process.argv.includes('--diagnostic-contract-probe');
 
   let lockfile: Lockfile | null = null;
-  if (!noLock) {
+  // Non-null while a live same-root owner holds the lock: the worker stays read-only (GH #991).
+  let contenderRefusal: string | null = null;
+  let contenderOwnerKey: string | null = null;
+  let upgrading = false;
+  const ownerKey = (conflict: LockConflict): string => `${conflict.pid}:${conflict.startedAt}`;
+  const awaitOwner = (conflict: LockConflict): void => {
+    contenderOwnerKey = ownerKey(conflict);
+    contenderRefusal = formatContenderRefusal(conflict, describeProcessHost(conflict.ppid));
+  };
+  // The read-only probe opens nothing, so it never competes for (or waits on) the root lock.
+  if (!noLock && !diagnosticContractProbe) {
     const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')) as {
       version: string;
     };
     lockfile = new Lockfile({ version: pkg.version });
-    const lockResult = lockfile.acquire();
+    const lockResult = lockfile.acquire({ confirmStaleHeartbeat: true });
     if (lockResult.status === 'conflict') {
       process.stderr.write(formatLockConflictMessage(lockResult) + '\n');
-      process.exit(11);
+      process.stderr.write(
+        'rn-bridge-supervisor: waiting read-only; this transport takes over once the owner exits\n',
+      );
+      awaitOwner(lockResult);
     }
     process.on('exit', () => lockfile?.release());
   }
@@ -116,79 +135,94 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
   let resolveIdentityForSpawn: (root: string) => ReturnType<typeof resolveSourceIdentity> = (
     root,
   ) => resolveSourceIdentity(root);
-  try {
-    if (diagnosticContractProbe) throw new Error('DIAGNOSTIC_MODE_READ_ONLY');
-    if (legacyRepairArtifactPresent(process.cwd())) {
-      try {
-        const repair = detectLegacyRootRepair({ cwd: process.cwd() });
-        if (repair.status === 'required' || repair.status === 'refused') {
-          process.stderr.write(`rn-dev-agent worktree layout: ${repair.code}: ${repair.reason}\n`);
-        }
-      } catch {
-        process.stderr.write(
-          'rn-dev-agent worktree layout: RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED: detection failed without changing project state.\n',
-        );
-      }
-    }
-    const declaredContract = declaredSourceContractFromEnv();
-    resolveIdentityForSpawn = (root) => resolveSourceIdentity(root, declaredContract);
-    const source = resolveSourceIdentity(process.cwd(), declaredContract);
-    // L4: release a proven-dead same-root predecessor before claiming. Any refusal
-    // (live/unproven owner, unproven obligation) falls through to the blocked path.
+  // Registry claims are only safe once the lock is held, so a contender defers this until it upgrades.
+  const bootAuthority = async (): Promise<void> => {
     try {
-      const cleanup = await runStartupCleanupForSource({
-        source,
-        ownerStatus: inspectSessionOwner,
-      });
-      if (cleanup.released.length > 0) {
-        process.stderr.write(
-          `rn-dev-agent startup cleanup: released ${cleanup.released.length} proven-dead session(s) for this worktree\n`,
-        );
-      }
-      if (cleanup.status === 'refused' && cleanup.refusal) {
-        // These already-redacted details explain why a restart will not converge.
-        process.stderr.write(
-          `rn-dev-agent startup cleanup deferred: ${cleanup.refusal.code}: ${cleanup.refusal.message}\n`,
-        );
-        if (cleanup.refusal.nextAction) {
+      if (diagnosticContractProbe) throw new Error('DIAGNOSTIC_MODE_READ_ONLY');
+      if (legacyRepairArtifactPresent(process.cwd())) {
+        try {
+          const repair = detectLegacyRootRepair({ cwd: process.cwd() });
+          if (repair.status === 'required' || repair.status === 'refused') {
+            process.stderr.write(
+              `rn-dev-agent worktree layout: ${repair.code}: ${repair.reason}\n`,
+            );
+          }
+        } catch {
           process.stderr.write(
-            `rn-dev-agent startup cleanup next action: ${cleanup.refusal.nextAction}\n`,
+            'rn-dev-agent worktree layout: RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED: detection failed without changing project state.\n',
           );
         }
       }
-    } catch {
-      process.stderr.write(startupCleanupFailureMessage());
+      const declaredContract = declaredSourceContractFromEnv();
+      resolveIdentityForSpawn = (root) => resolveSourceIdentity(root, declaredContract);
+      const source = resolveSourceIdentity(process.cwd(), declaredContract);
+      // L4: release a proven-dead same-root predecessor before claiming. Any refusal
+      // (live/unproven owner, unproven obligation) falls through to the blocked path.
+      try {
+        const cleanup = await runStartupCleanupForSource({
+          source,
+          ownerStatus: inspectSessionOwner,
+        });
+        if (cleanup.released.length > 0) {
+          process.stderr.write(
+            `rn-dev-agent startup cleanup: released ${cleanup.released.length} proven-dead session(s) for this worktree\n`,
+          );
+        }
+        if (cleanup.status === 'refused' && cleanup.refusal) {
+          // These already-redacted details explain why a restart will not converge.
+          process.stderr.write(
+            `rn-dev-agent startup cleanup deferred: ${cleanup.refusal.code}: ${cleanup.refusal.message}\n`,
+          );
+          if (cleanup.refusal.nextAction) {
+            process.stderr.write(
+              `rn-dev-agent startup cleanup next action: ${cleanup.refusal.nextAction}\n`,
+            );
+          }
+        }
+      } catch {
+        process.stderr.write(startupCleanupFailureMessage());
+      }
+      // GH #776: a successor inherits the released session's source (or a validated
+      // bind_source declaration), never silently the supervisor's boot cwd.
+      mintAuthority = () =>
+        createSupervisorAuthority({
+          source: resolveSuccessorMintSource({
+            terminal: authority
+              ? {
+                  layout: authority.layout,
+                  session: authority.session,
+                  source: authority.source,
+                }
+              : null,
+            bootSource: source,
+            resolveIdentity: (root) => resolveSourceIdentity(root, declaredContract),
+            diagnostic: (message) =>
+              process.stderr.write(`rn-dev-agent successor source: ${message}\n`),
+          }),
+          supervisorBirth: readProcessBirth(process.pid),
+          uid:
+            typeof process.getuid === 'function'
+              ? String(process.getuid())
+              : (process.env.USER ?? 'unknown'),
+          ownerStatus: inspectSessionOwner,
+        });
+      if (upgrading && lockfile && !lockfile.touch()) {
+        throw new Error(
+          'SINGLE_INSTANCE_LOCK_LOST: another bridge reclaimed the lock during the upgrade',
+        );
+      }
+      authority = mintAuthority();
+    } catch (error) {
+      authorityError =
+        error instanceof Error
+          ? error.message
+          : 'AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized';
+      if (!diagnosticContractProbe) {
+        process.stderr.write(`rn-dev-agent authority diagnostic: ${authorityError}\n`);
+      }
     }
-    // GH #776: a successor inherits the released session's source (or a validated
-    // bind_source declaration), never silently the supervisor's boot cwd.
-    mintAuthority = () =>
-      createSupervisorAuthority({
-        source: resolveSuccessorMintSource({
-          terminal: authority
-            ? { layout: authority.layout, session: authority.session, source: authority.source }
-            : null,
-          bootSource: source,
-          resolveIdentity: (root) => resolveSourceIdentity(root, declaredContract),
-          diagnostic: (message) =>
-            process.stderr.write(`rn-dev-agent successor source: ${message}\n`),
-        }),
-        supervisorBirth: readProcessBirth(process.pid),
-        uid:
-          typeof process.getuid === 'function'
-            ? String(process.getuid())
-            : (process.env.USER ?? 'unknown'),
-        ownerStatus: inspectSessionOwner,
-      });
-    authority = mintAuthority();
-  } catch (error) {
-    authorityError =
-      error instanceof Error
-        ? error.message
-        : 'AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized';
-    if (!diagnosticContractProbe) {
-      process.stderr.write(`rn-dev-agent authority diagnostic: ${authorityError}\n`);
-    }
-  }
+  };
+  if (contenderRefusal === null) await bootAuthority();
 
   const core = new SupervisorCore({
     maxRespawns: Number(process.env.RN_BRIDGE_MAX_RESPAWNS ?? '3') || 3,
@@ -265,6 +299,8 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
       ...rootEnvironment.set,
     };
     for (const key of rootEnvironment.unset) delete workerEnvironment[key];
+    if (contenderRefusal === null) delete workerEnvironment.RN_DEV_AGENT_CONTENDER_REFUSAL;
+    else workerEnvironment.RN_DEV_AGENT_CONTENDER_REFUSAL = contenderRefusal;
     const child = spawn(
       process.execPath,
       workerSpawnArgs(workerPath, sqliteWarningFilterPath, undefined, process.argv.slice(2)),
@@ -363,11 +399,39 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
   // Hot reload, now real: flag the core FIRST (so the exit-1 is treated as
   // requested — never charged to the crash budget), then forward to the
   // worker, whose documented SIGUSR2 path exits 1 → respawn + replay.
-  process.on('SIGUSR2', () => {
+  function reloadWorker(): void {
     if (!worker) return;
     core.onHotReloadRequested();
     worker.kill('SIGUSR2');
-  });
+  }
+  process.on('SIGUSR2', reloadWorker);
+
+  async function retryAsContender(): Promise<void> {
+    if (!lockfile || upgrading || shutdownRequested) return;
+    const result = lockfile.acquire({ confirmStaleHeartbeat: true });
+    if (result.status === 'conflict') {
+      if (ownerKey(result) !== contenderOwnerKey) {
+        awaitOwner(result);
+        reloadWorker();
+      }
+      return;
+    }
+    // A degraded acquire created no lock and proves no ownership.
+    if (result.degraded) return;
+    upgrading = true;
+    process.stderr.write(
+      'rn-bridge-supervisor: single-instance lock acquired; upgrading to a full worker\n',
+    );
+    await bootAuthority();
+    if (!lockfile.touch()) {
+      beginShutdown('single-instance lock reclaimed by another bridge during upgrade');
+      return;
+    }
+    contenderRefusal = null;
+    contenderOwnerKey = null;
+    upgrading = false;
+    reloadWorker();
+  }
 
   // GH #672: the same-root lock regression must observe several real ownership
   // checks without a 10s-per-tick wall clock. Clamped so a bad value can never
@@ -380,7 +444,8 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     onOrphaned: () => beginShutdown('parent host gone (PPID changed)'),
     onHeartbeat: () => {
       try {
-        if (lockfile && !lockfile.touch())
+        if (contenderRefusal !== null && !upgrading) void retryAsContender();
+        else if (lockfile && !lockfile.touch())
           beginShutdown('single-instance lock reclaimed by another bridge');
       } catch {
         /* best-effort heartbeat */

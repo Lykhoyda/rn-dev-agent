@@ -90,9 +90,8 @@ Use `storeType: 'react-query'` explicitly. React Query state is read from the Qu
 **Cursor:** install from Customize → Plugins. Local development uses
 `/path/to/rn-dev-agent/packages/claude-plugin` (`.cursor-plugin/plugin.json` +
 `mcp.json`), not the repository root. Reload the window after install. Requires
-Node.js >= 24. If MCP reports Connection closed, check the MCP log first: a
-`Another rn-dev-agent MCP already owns this project root` line with exit code 11
-is the process lock refusing a second server for the same root, described under
+Node.js >= 24. If every tool refuses with `SAME_ROOT_OWNER_LIVE`, another server
+already owns the same root; see
 [Another MCP already owns this project root](#another-mcp-already-owns-this-project-root).
 
 **Codex:** inspect `codex plugin list --json` and `/mcp verbose`. The latter is
@@ -114,15 +113,18 @@ Claude, Cursor, or Codex process.
 ### Another MCP already owns this project root
 
 The supervisor keeps one process lock per project root (`CLAUDE_USER_CWD`, else
-its working directory). A second Claude or Cursor server for the same root exits
-with code 11 and prints the owning PID, project, and lock path. Codex starts the
-supervisor with `--no-lock` and does not acquire this lock. This is not a
-stale-lock bug: a dead owner is reclaimed automatically on the next start.
+its working directory). A second Claude or Cursor server for the same root stays
+connected read-only: it lists every tool, refuses every call with
+`SAME_ROOT_OWNER_LIVE` naming the owner's PID, host, and age, and writes the owning
+PID, project, and lock path to the MCP log. Codex starts the supervisor with
+`--no-lock` and does not acquire this lock.
 
 Use the session that already owns the root, or quit that session's window or MCP
-client so the lock releases on exit. Do not kill the owner, delete the lock file,
-or add `--no-lock` to a Claude or Cursor host config; each of those lets two
-servers race for one CDP slot.
+client. The waiting server retries the lock on every heartbeat, so within seconds
+of the owner exiting, cleanly or by crash, it takes over in place: its next call
+works without a restart or `/mcp` reconnect. A live owner is never taken over. Do
+not kill the owner, delete the lock file, or add `--no-lock` to a Claude or Cursor
+host config; each of those lets two servers race for one CDP slot.
 
 `Project:` showing your home directory means the server was started outside an
 app checkout, so every session launched that way shares one lock. The Cursor

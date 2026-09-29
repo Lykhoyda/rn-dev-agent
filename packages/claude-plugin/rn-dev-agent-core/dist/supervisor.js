@@ -51,7 +51,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 function defaultProjectRoot() {
@@ -109,14 +109,49 @@ function isValidLockBody(obj) {
   const o = obj;
   return typeof o.pid === "number" && typeof o.projectRoot === "string" && typeof o.startedAt === "number";
 }
+function formatAge(ageMs) {
+  const ageSec = Math.floor(ageMs / 1e3);
+  return ageSec < 60 ? `${ageSec}s ago` : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago` : `${Math.floor(ageSec / 3600)}h ${Math.floor(ageSec % 3600 / 60)}m ago`;
+}
+function readTtyAndComm(pid) {
+  const out = execFileSync("ps", ["-p", String(pid), "-o", "tty=,comm="], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 1e3
+  });
+  try {
+    return `${out.trim().split(/\s+/)[0]} ${readlinkSync(`/proc/${pid}/exe`)}`;
+  } catch {
+    return out;
+  }
+}
+function describeProcessHost(pid, readPs = readTtyAndComm) {
+  if (typeof pid !== "number" || pid <= 1)
+    return null;
+  try {
+    const match = /^(\S+)\s+(.+)$/.exec(readPs(pid).trim());
+    if (!match)
+      return null;
+    const name = match[2].trim().split("/").pop() ?? "";
+    if (!SAFE_HOST_LABEL.test(name))
+      return null;
+    return { name, tty: SAFE_TTY.test(match[1]) ? match[1] : null };
+  } catch {
+    return null;
+  }
+}
+function formatContenderRefusal(conflict2, host) {
+  const safe = host && SAFE_HOST_LABEL.test(host.name) ? host : null;
+  const tty = safe?.tty && SAFE_TTY.test(safe.tty) ? ` on ${safe.tty}` : "";
+  const owner = safe ? `, host ${safe.name}${tty}` : "";
+  return `Another rn-dev-agent session owns this worktree (pid ${conflict2.pid}${owner}, started ${formatAge(conflict2.ageMs)}). This transport stays connected read-only and takes over automatically once that session exits: close it, or keep working there. No restart or /mcp reconnect is needed.`;
+}
 function formatLockConflictMessage(conflict2) {
-  const ageSec = Math.floor(conflict2.ageMs / 1e3);
-  const ageStr = ageSec < 60 ? `${ageSec}s ago` : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago` : `${Math.floor(ageSec / 3600)}h ${Math.floor(ageSec % 3600 / 60)}m ago`;
   return [
     `Another rn-dev-agent MCP already owns this project root.`,
     `  PID:      ${conflict2.pid}`,
     `  Project:  ${conflict2.projectRoot}`,
-    `  Started:  ${ageStr}`,
+    `  Started:  ${formatAge(conflict2.ageMs)}`,
     `  Lock:     ${conflict2.lockPath}`,
     ``,
     `To resolve:`,
@@ -127,7 +162,7 @@ function formatLockConflictMessage(conflict2) {
     `Running two MCPs in the same project causes missed events and state flicker.`
   ].join("\n");
 }
-var DEFAULT_MAX_AGE_MS, DEFAULT_PROCESS_NAME_NEEDLE, PROCESS_IDENTITY_MARKERS, DEFAULT_STALE_MS, Lockfile;
+var DEFAULT_MAX_AGE_MS, DEFAULT_PROCESS_NAME_NEEDLE, PROCESS_IDENTITY_MARKERS, DEFAULT_STALE_MS, DEFAULT_STALE_CONFIRM_MS, Lockfile, SAFE_HOST_LABEL, SAFE_TTY;
 var init_lockfile = __esm({
   "packages/rn-dev-agent-core/dist/lifecycle/lockfile.js"() {
     "use strict";
@@ -135,10 +170,12 @@ var init_lockfile = __esm({
     DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
     PROCESS_IDENTITY_MARKERS = ["cdp-bridge", "rn-dev-agent", "supervisor.js"];
     DEFAULT_STALE_MS = 9e4;
+    DEFAULT_STALE_CONFIRM_MS = 3e4;
     Lockfile = class {
       opts;
       lockPath;
       acquired = false;
+      staleSighting = null;
       constructor(opts = {}) {
         const projectRoot = opts.projectRoot ?? defaultProjectRoot();
         const uid = opts.uid ?? userInfo().uid;
@@ -158,7 +195,8 @@ var init_lockfile = __esm({
           maxAgeMs: opts.maxAgeMs ?? DEFAULT_MAX_AGE_MS,
           processNameNeedle: opts.processNameNeedle ?? DEFAULT_PROCESS_NAME_NEEDLE,
           processIdentity: opts.processIdentity ?? defaultProcessIdentity(),
-          staleMs: opts.staleMs ?? DEFAULT_STALE_MS
+          staleMs: opts.staleMs ?? DEFAULT_STALE_MS,
+          staleConfirmMs: opts.staleConfirmMs ?? DEFAULT_STALE_CONFIRM_MS
         };
         this.lockPath = join(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
       }
@@ -168,7 +206,7 @@ var init_lockfile = __esm({
       // truncating the first. With 'wx' the loser gets EEXIST and evaluates the
       // winner's lock as a conflict. Infra errors (not contention) fail OPEN with
       // `degraded` so an fs hiccup never blocks a legitimate session.
-      acquire() {
+      acquire(options = {}) {
         try {
           this.writeLock();
           this.acquired = true;
@@ -182,8 +220,18 @@ var init_lockfile = __esm({
         if (existing && this.isLockLive(existing)) {
           return this.conflictOf(existing);
         }
+        if (existing && options.confirmStaleHeartbeat && this.isLockLive(existing, true)) {
+          const key = `${existing.pid}:${existing.startedAt}:${existing.lastHeartbeat}`;
+          if (this.staleSighting?.key !== key) {
+            this.staleSighting = { key, at: this.opts.clock() };
+            return this.conflictOf(existing);
+          }
+          if (this.opts.clock() - this.staleSighting.at < this.opts.staleConfirmMs) {
+            return this.conflictOf(existing);
+          }
+        }
         const before = this.readExisting();
-        if (before && (existing === null || before.pid !== existing.pid || before.startedAt !== existing.startedAt) && this.isLockLive(before)) {
+        if (before && (existing === null || before.pid !== existing.pid || before.startedAt !== existing.startedAt || before.lastHeartbeat !== existing.lastHeartbeat) && this.isLockLive(before)) {
           return this.conflictOf(before);
         }
         try {
@@ -210,7 +258,8 @@ var init_lockfile = __esm({
           projectRoot: body.projectRoot,
           startedAt: body.startedAt,
           ageMs: this.opts.clock() - body.startedAt,
-          version: body.version
+          version: body.version,
+          ppid: body.ppid
         };
       }
       release() {
@@ -246,7 +295,9 @@ var init_lockfile = __esm({
         body.lastHeartbeat = this.opts.clock();
         try {
           const nextPath = `${this.lockPath}.${this.opts.pid}.tmp`;
-          writeFileSync(nextPath, JSON.stringify(body, null, 2), { encoding: "utf8" });
+          writeFileSync(nextPath, JSON.stringify(body, null, 2), {
+            encoding: "utf8"
+          });
           renameSync(nextPath, this.lockPath);
         } catch {
         }
@@ -265,7 +316,7 @@ var init_lockfile = __esm({
           return null;
         }
       }
-      isLockLive(body) {
+      isLockLive(body, ignoreHeartbeat = false) {
         if (!this.opts.processAlive(body.pid))
           return false;
         const age = this.ageOfLockFile();
@@ -283,7 +334,7 @@ var init_lockfile = __esm({
             return false;
           }
         }
-        if (typeof body.lastHeartbeat === "number" && this.opts.clock() - body.lastHeartbeat > this.opts.staleMs) {
+        if (!ignoreHeartbeat && typeof body.lastHeartbeat === "number" && this.opts.clock() - body.lastHeartbeat > this.opts.staleMs) {
           return false;
         }
         return true;
@@ -337,6 +388,8 @@ var init_lockfile = __esm({
         }
       }
     };
+    SAFE_HOST_LABEL = /^[A-Za-z0-9._-]{1,64}$/;
+    SAFE_TTY = /^(tty|pts\/)[A-Za-z0-9]{1,8}$/;
   }
 });
 
@@ -9065,7 +9118,7 @@ var init_storage = __esm({
 
 // packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { readlinkSync, realpathSync as realpathSync3 } from "node:fs";
+import { readlinkSync as readlinkSync2, realpathSync as realpathSync3 } from "node:fs";
 import { resolve as resolve2, sep } from "node:path";
 function parseLsofPid(stdout) {
   for (const line of stdout.split("\n")) {
@@ -9111,7 +9164,7 @@ function parseWindowsMetroRoot(commandLine) {
   const explicit = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
   return explicit ?? null;
 }
-function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync, executableDependencies = {}) {
+function cwdForProcess(pid, platform = process.platform, exec = defaultExec, readLink = readlinkSync2, executableDependencies = {}) {
   try {
     if (platform === "linux") {
       return realpathOrResolve(readLink(`/proc/${pid}/cwd`));
@@ -9152,7 +9205,7 @@ function cwdForPort(port, exec = defaultExec, platform = process.platform, execu
   const pid = pidForPort(port, exec, platform, executableDependencies);
   if (pid == null)
     return null;
-  return cwdForProcess(pid, platform, exec, readlinkSync, executableDependencies);
+  return cwdForProcess(pid, platform, exec, readlinkSync2, executableDependencies);
 }
 function pathMatchesRoot(servingCwd, projectRoot) {
   if (!servingCwd || !projectRoot)
@@ -10060,7 +10113,7 @@ var init_strict_proof_limits = __esm({
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash4, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { execFileSync as execFileSync4 } from "node:child_process";
-import { closeSync as closeSync4, constants as constants3, existsSync as existsSync7, fstatSync as fstatSync2, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync2, readSync as readSync2, realpathSync as realpathSync5 } from "node:fs";
+import { closeSync as closeSync4, constants as constants3, existsSync as existsSync7, fstatSync as fstatSync2, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync as readSync2, realpathSync as realpathSync5 } from "node:fs";
 import { dirname as dirname4, isAbsolute, join as join6, relative, resolve as resolve4 } from "node:path";
 function digest(parts) {
   const hash = createHash4("sha256");
@@ -10137,7 +10190,7 @@ function updateDependencyPath(hash, path, label, state) {
     updateFramed(hash, current.label);
     updateFramed(hash, String(stat2.mode & 511));
     if (stat2.isSymbolicLink()) {
-      const link = readlinkSync2(current.path);
+      const link = readlinkSync3(current.path);
       const target = realpathSync5(current.path);
       state.totalBytes += Buffer.byteLength(link);
       if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
@@ -10713,7 +10766,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     if (stat2.isSymbolicLink()) {
       const target = realpathSync5(file);
       assertContained(identity2.contentRoot, target, "STRICT_PROOF_PATH_ESCAPE");
-      const link = readlinkSync2(file);
+      const link = readlinkSync3(file);
       const targetStat = lstatSync4(target);
       if (!targetStat.isFile()) {
         throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked symlink target is not a regular file");
@@ -10823,7 +10876,7 @@ var init_worktree_repair_remedy = __esm({
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { closeSync as closeSync5, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync5, mkdirSync as mkdirSync5, openSync as openSync5, readFileSync as readFileSync6, readlinkSync as readlinkSync3, realpathSync as realpathSync6, renameSync as renameSync3, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync3 } from "node:fs";
+import { closeSync as closeSync5, constants as constants4, existsSync as existsSync8, fstatSync as fstatSync3, lstatSync as lstatSync5, mkdirSync as mkdirSync5, openSync as openSync5, readFileSync as readFileSync6, readlinkSync as readlinkSync4, realpathSync as realpathSync6, renameSync as renameSync3, statSync as statSync3, symlinkSync as symlinkSync2, unlinkSync as unlinkSync3 } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute2, join as join7, relative as relative2, resolve as resolve5, sep as sep2 } from "node:path";
 function gitEnvironment() {
   const env = { ...process.env };
@@ -11573,7 +11626,7 @@ function expectedLegacyRoot(layout) {
 }
 function isVerifiedLegacyRootLink(root, expected) {
   try {
-    if (resolve5(dirname5(root), readlinkSync3(root)) !== expected)
+    if (resolve5(dirname5(root), readlinkSync4(root)) !== expected)
       return false;
     const resolvedExpected = canonical(expected);
     return resolvedExpected === null || canonical(root) === resolvedExpected;
@@ -33134,7 +33187,7 @@ var init_metro_origin = __esm({
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync12 } from "node:child_process";
 import { createHash as createHash10 } from "node:crypto";
-import { lstatSync as lstatSync11, readFileSync as readFileSync19, readdirSync as readdirSync5, readlinkSync as readlinkSync4, realpathSync as realpathSync11, statSync as statSync9 } from "node:fs";
+import { lstatSync as lstatSync11, readFileSync as readFileSync19, readdirSync as readdirSync5, readlinkSync as readlinkSync5, realpathSync as realpathSync11, statSync as statSync9 } from "node:fs";
 import { isAbsolute as isAbsolute7, join as join24, relative as relative5 } from "node:path";
 function runText(command, args) {
   return execFileSync12(command, [...args], {
@@ -33273,7 +33326,7 @@ function captureInstalledArtifact(target, dependencies = {}) {
     }
     const files = iosAppFiles(appPath, dependencies);
     const lstat = dependencies.lstat ?? lstatSync11;
-    const readLink = dependencies.readLink ?? readlinkSync4;
+    const readLink = dependencies.readLink ?? readlinkSync5;
     const realpath = dependencies.realpath ?? realpathSync11;
     const artifactParts = [];
     for (const entry of files) {
@@ -72913,7 +72966,7 @@ var init_maestro_runner_pin = __esm({
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
 import { spawnSync as spawnSync3 } from "node:child_process";
 import { createHash as createHash13 } from "node:crypto";
-import { accessSync, chmodSync as chmodSync5, constants as constants7, copyFileSync as copyFileSync2, cpSync as cpSync2, existsSync as existsSync24, lstatSync as lstatSync13, mkdirSync as mkdirSync17, mkdtempSync as mkdtempSync2, readFileSync as readFileSync25, readdirSync as readdirSync8, readlinkSync as readlinkSync5, realpathSync as realpathSync13, renameSync as renameSync8, rmSync as rmSync10, symlinkSync as symlinkSync4, unlinkSync as unlinkSync11, writeFileSync as writeFileSync13 } from "node:fs";
+import { accessSync, chmodSync as chmodSync5, constants as constants7, copyFileSync as copyFileSync2, cpSync as cpSync2, existsSync as existsSync24, lstatSync as lstatSync13, mkdirSync as mkdirSync17, mkdtempSync as mkdtempSync2, readFileSync as readFileSync25, readdirSync as readdirSync8, readlinkSync as readlinkSync6, realpathSync as realpathSync13, renameSync as renameSync8, rmSync as rmSync10, symlinkSync as symlinkSync4, unlinkSync as unlinkSync11, writeFileSync as writeFileSync13 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import { basename as basename7, dirname as dirname17, isAbsolute as isAbsolute9, join as join36, relative as relative7, resolve as resolve12, sep as sep6 } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -73039,7 +73092,7 @@ function payloadMatchesPinnedArchive(root, archive, expectedArchiveSha256) {
         return false;
       seen.add(rel);
       if (entry.isSymbolicLink()) {
-        if (wanted.kind !== "symlink" || readlinkSync5(path) !== wanted.target)
+        if (wanted.kind !== "symlink" || readlinkSync6(path) !== wanted.target)
           return false;
         continue;
       }
@@ -73277,7 +73330,7 @@ function copyPayloadTree(source, destination) {
       copyFileSync2(sourcePath, destinationPath, constants7.COPYFILE_EXCL | constants7.COPYFILE_FICLONE);
       chmodSync5(destinationPath, stat2.mode & 511);
     } else if (stat2.isSymbolicLink()) {
-      symlinkSync4(readlinkSync5(sourcePath), destinationPath);
+      symlinkSync4(readlinkSync6(sourcePath), destinationPath);
     } else {
       throw new Error(`RUNNER_PIN_CHANGED: unsupported payload entry ${sourcePath}.`);
     }
@@ -73444,7 +73497,7 @@ function isContainedWdaProductTree(keyDir, products) {
       const path = join36(directory, entry.name);
       const stat2 = lstatSync13(path);
       if (stat2.isSymbolicLink()) {
-        const target = readlinkSync5(path);
+        const target = readlinkSync6(path);
         if (isAbsolute9(target) || !isWithinWdaKey(lexicalKey, resolve12(directory, target)) || !isWithinWdaKey(realKey, realpathSync13(path))) {
           return false;
         }
@@ -99101,8 +99154,8 @@ function trackedTool(name, desc, schema, handler, afterAuthority) {
   });
   const installLiveCapture = liveEnabled && mayTriggerLiveCapture(name);
   const wrapped = async (...a) => {
-    if (diagnosticContractProbe) {
-      return failResult("Tool calls are disabled in the read-only MCP contract probe.", "DIAGNOSTIC_MODE_READ_ONLY");
+    if (readOnlyWorker) {
+      return contenderRefusal ? failResult(contenderRefusal, "SAME_ROOT_OWNER_LIVE") : failResult("Tool calls are disabled in the read-only MCP contract probe.", "DIAGNOSTIC_MODE_READ_ONLY");
     }
     const args = a[0];
     let result;
@@ -99573,7 +99626,7 @@ async function main() {
   logger.info("MCP", "StdioServerTransport created, connecting...");
   await server2.connect(transport);
   logger.info("MCP", "MCP server connected and ready");
-  if (!diagnosticContractProbe) {
+  if (!readOnlyWorker) {
     const rootResolution = observeRootResolver();
     if (!rootResolution.ok) {
       logger.warn("OBSERVE", `interrupted e2e run recovery skipped: ${rootResolution.reason}`);
@@ -99590,7 +99643,7 @@ async function main() {
         console.error(`[e2e] marked interrupted runs: ${recovered.join(", ")}`);
     }
   }
-  if (!diagnosticContractProbe) {
+  if (!readOnlyWorker) {
     void autostartObserve({
       findRoot: observeRootResolver,
       resolveEnabled: resolveObserveAutostart,
@@ -99607,7 +99660,7 @@ async function main() {
     });
   }
 }
-var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, configureClientLifecycle, setClient, publishClient, createClient, execFileP, probeNativeVision, server2, strictProofMonitor, experienceRecorder, authorityRuntime, probeForegroundSurface, foreignMetroOriginScanner, createRuntimeAuthorityProbe, localAuthorityProbe, authorityGate, mirrorCfg, observeTargetResolver, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, isSessionRuntimeAbsent, persistedAuthorityStatus, getSessionSignerCapability, spawningSupervisorPid, requestWorkerRecycle, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, maestroRunHandler, runActionHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, observeRootResolver, projectRootFor, triggerE2eRun, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
+var pkgPath, pkgVersion, lockfile, contenderRefusal, readOnlyWorker, noLock, client, getClient, configureClientLifecycle, setClient, publishClient, createClient, execFileP, probeNativeVision, server2, strictProofMonitor, experienceRecorder, authorityRuntime, probeForegroundSurface, foreignMetroOriginScanner, createRuntimeAuthorityProbe, localAuthorityProbe, authorityGate, mirrorCfg, observeTargetResolver, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, isSessionRuntimeAbsent, persistedAuthorityStatus, getSessionSignerCapability, spawningSupervisorPid, requestWorkerRecycle, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, maestroRunHandler, runActionHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, observeRootResolver, projectRootFor, triggerE2eRun, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
 var init_index = __esm({
   "packages/rn-dev-agent-core/dist/index.js"() {
     "use strict";
@@ -99741,8 +99794,9 @@ var init_index = __esm({
     pkgPath = join64(dirname34(fileURLToPath8(import.meta.url)), "..", "package.json");
     pkgVersion = JSON.parse(readFileSync43(pkgPath, "utf8")).version;
     lockfile = null;
-    diagnosticContractProbe = process.argv.includes("--diagnostic-contract-probe");
-    noLock = diagnosticContractProbe || process.argv.includes("--no-lock");
+    contenderRefusal = process.env.RN_DEV_AGENT_CONTENDER_REFUSAL || null;
+    readOnlyWorker = process.argv.includes("--diagnostic-contract-probe") || contenderRefusal !== null;
+    noLock = readOnlyWorker || process.argv.includes("--no-lock");
     if (!noLock) {
       lockfile = new Lockfile({ version: pkgVersion });
       const lockResult = lockfile.acquire();
@@ -99752,7 +99806,7 @@ var init_index = __esm({
       }
       process.on("exit", () => lockfile?.release());
     }
-    if (!diagnosticContractProbe) {
+    if (!readOnlyWorker) {
       process.on("exit", () => {
         try {
           releaseDeviceLockForSession();
@@ -99760,7 +99814,7 @@ var init_index = __esm({
         }
       });
     }
-    if (!diagnosticContractProbe && process.env.RN_DEVICE_KILL_LEGACY !== "0") {
+    if (!readOnlyWorker && process.env.RN_DEVICE_KILL_LEGACY !== "0") {
       void ensureSingleRunner().then((r) => {
         if (r.removedFiles.length) {
           logger.info("rn-device", `ensureSingleRunner(boot): removed ${r.removedFiles.join(", ")}`);
@@ -100065,7 +100119,7 @@ var init_index = __esm({
       const s = getActiveSession();
       return s?.platform === "ios" && s.deviceId ? s.deviceId : null;
     });
-    mirrorCfg = diagnosticContractProbe ? { enabled: false, fps: 0 } : resolveMirrorConfig();
+    mirrorCfg = readOnlyWorker ? { enabled: false, fps: 0 } : resolveMirrorConfig();
     observeTargetResolver = buildMirrorTargetResolver({
       getPlatform: () => {
         const p = getActiveSession()?.platform ?? getClient().connectedTarget?.platform;
@@ -100109,7 +100163,7 @@ var init_index = __esm({
     }) : void 0;
     if (mirrorManager2)
       setObserveMirror(mirrorManager2);
-    liveEnabled = !diagnosticContractProbe && process.env.RN_OBSERVE_LIVE !== "0";
+    liveEnabled = !readOnlyWorker && process.env.RN_OBSERVE_LIVE !== "0";
     liveDeps = buildLiveDeps({
       recorder,
       isFlowActive: () => arbiter.flowActive || foreignFlowGate.lastActive,
@@ -101176,7 +101230,7 @@ var init_index = __esm({
         }
       })
     });
-    shutdown = diagnosticContractProbe ? async (exitCode) => process.exit(exitCode) : buildGracefulShutdown({
+    shutdown = readOnlyWorker ? async (exitCode) => process.exit(exitCode) : buildGracefulShutdown({
       getClient,
       stopFastRunnerFn: stopFastRunner,
       stopMirrorFn: () => mirrorManager2?.shutdown()
@@ -101209,7 +101263,7 @@ var init_index = __esm({
       logger.info("MCP", "stdin closed \u2014 host disconnected");
       void shutdown(0);
     });
-    stopParentWatch = diagnosticContractProbe ? () => {
+    stopParentWatch = readOnlyWorker ? () => {
     } : startParentDeathWatch({
       onOrphaned: () => {
         logger.info("MCP", "parent host gone (PPID changed) \u2014 exiting");
@@ -101227,9 +101281,9 @@ var init_index = __esm({
     });
     process.on("exit", () => stopParentWatch());
     process.on("exit", () => authorityRuntime.close());
-    if (!diagnosticContractProbe)
+    if (!readOnlyWorker)
       process.on("exit", () => removeObserveState());
-    if (!diagnosticContractProbe) {
+    if (!readOnlyWorker) {
       process.on("exit", () => {
         try {
           mirrorManager2?.shutdown();
@@ -101243,7 +101297,7 @@ var init_index = __esm({
       if (logger.logFilePath) {
         console.error(`CDP bridge log: ${logger.logFilePath}`);
       }
-      if (!diagnosticContractProbe)
+      if (!readOnlyWorker)
         void stopFastRunner(getActiveSession()?.deviceId);
       process.exit(1);
     });
@@ -101732,6 +101786,10 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
     };
     for (const key of rootEnvironment.unset)
       delete workerEnvironment[key];
+    if (contenderRefusal2 === null)
+      delete workerEnvironment.RN_DEV_AGENT_CONTENDER_REFUSAL;
+    else
+      workerEnvironment.RN_DEV_AGENT_CONTENDER_REFUSAL = contenderRefusal2;
     const child = spawn10(process.execPath, workerSpawnArgs(workerPath, sqliteWarningFilterPath, void 0, process.argv.slice(2)), {
       cwd: workerCwd,
       stdio: ["pipe", "pipe", "inherit"],
@@ -101792,19 +101850,33 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
       }
     }, 3e3);
     force.unref();
+  }, reloadWorker2 = function() {
+    if (!worker)
+      return;
+    core.onHotReloadRequested();
+    worker.kill("SIGUSR2");
   };
-  apply = apply2, resolveAuthorityForSpawn = resolveAuthorityForSpawn2, spawnWorker = spawnWorker2, closeAuthorityAndExit = closeAuthorityAndExit2, beginShutdown = beginShutdown2;
+  apply = apply2, resolveAuthorityForSpawn = resolveAuthorityForSpawn2, spawnWorker = spawnWorker2, closeAuthorityAndExit = closeAuthorityAndExit2, beginShutdown = beginShutdown2, reloadWorker = reloadWorker2;
   const workerPath = process.env.RN_BRIDGE_WORKER_PATH ? resolve21(process.env.RN_BRIDGE_WORKER_PATH) : join65(here, "index.js");
   const noLock2 = process.argv.includes("--no-lock");
-  const diagnosticContractProbe2 = process.argv.includes("--diagnostic-contract-probe");
+  const diagnosticContractProbe = process.argv.includes("--diagnostic-contract-probe");
   let lockfile2 = null;
-  if (!noLock2) {
+  let contenderRefusal2 = null;
+  let contenderOwnerKey = null;
+  let upgrading = false;
+  const ownerKey = (conflict2) => `${conflict2.pid}:${conflict2.startedAt}`;
+  const awaitOwner = (conflict2) => {
+    contenderOwnerKey = ownerKey(conflict2);
+    contenderRefusal2 = formatContenderRefusal(conflict2, describeProcessHost(conflict2.ppid));
+  };
+  if (!noLock2 && !diagnosticContractProbe) {
     const pkg = JSON.parse(readFileSync44(join65(here, "..", "package.json"), "utf8"));
     lockfile2 = new Lockfile({ version: pkg.version });
-    const lockResult = lockfile2.acquire();
+    const lockResult = lockfile2.acquire({ confirmStaleHeartbeat: true });
     if (lockResult.status === "conflict") {
       process.stderr.write(formatLockConflictMessage(lockResult) + "\n");
-      process.exit(11);
+      process.stderr.write("rn-bridge-supervisor: waiting read-only; this transport takes over once the owner exits\n");
+      awaitOwner(lockResult);
     }
     process.on("exit", () => lockfile2?.release());
   }
@@ -101812,63 +101884,74 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
   let authorityError = null;
   let mintAuthority = null;
   let resolveIdentityForSpawn = (root) => resolveSourceIdentity(root);
-  try {
-    if (diagnosticContractProbe2)
-      throw new Error("DIAGNOSTIC_MODE_READ_ONLY");
-    if (legacyRepairArtifactPresent(process.cwd())) {
-      try {
-        const repair = detectLegacyRootRepair({ cwd: process.cwd() });
-        if (repair.status === "required" || repair.status === "refused") {
-          process.stderr.write(`rn-dev-agent worktree layout: ${repair.code}: ${repair.reason}
+  const bootAuthority = async () => {
+    try {
+      if (diagnosticContractProbe)
+        throw new Error("DIAGNOSTIC_MODE_READ_ONLY");
+      if (legacyRepairArtifactPresent(process.cwd())) {
+        try {
+          const repair = detectLegacyRootRepair({ cwd: process.cwd() });
+          if (repair.status === "required" || repair.status === "refused") {
+            process.stderr.write(`rn-dev-agent worktree layout: ${repair.code}: ${repair.reason}
 `);
+          }
+        } catch {
+          process.stderr.write("rn-dev-agent worktree layout: RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED: detection failed without changing project state.\n");
+        }
+      }
+      const declaredContract = declaredSourceContractFromEnv();
+      resolveIdentityForSpawn = (root) => resolveSourceIdentity(root, declaredContract);
+      const source = resolveSourceIdentity(process.cwd(), declaredContract);
+      try {
+        const cleanup = await runStartupCleanupForSource({
+          source,
+          ownerStatus: inspectSessionOwner
+        });
+        if (cleanup.released.length > 0) {
+          process.stderr.write(`rn-dev-agent startup cleanup: released ${cleanup.released.length} proven-dead session(s) for this worktree
+`);
+        }
+        if (cleanup.status === "refused" && cleanup.refusal) {
+          process.stderr.write(`rn-dev-agent startup cleanup deferred: ${cleanup.refusal.code}: ${cleanup.refusal.message}
+`);
+          if (cleanup.refusal.nextAction) {
+            process.stderr.write(`rn-dev-agent startup cleanup next action: ${cleanup.refusal.nextAction}
+`);
+          }
         }
       } catch {
-        process.stderr.write("rn-dev-agent worktree layout: RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED: detection failed without changing project state.\n");
+        process.stderr.write(startupCleanupFailureMessage());
       }
-    }
-    const declaredContract = declaredSourceContractFromEnv();
-    resolveIdentityForSpawn = (root) => resolveSourceIdentity(root, declaredContract);
-    const source = resolveSourceIdentity(process.cwd(), declaredContract);
-    try {
-      const cleanup = await runStartupCleanupForSource({
-        source,
+      mintAuthority = () => createSupervisorAuthority({
+        source: resolveSuccessorMintSource({
+          terminal: authority ? {
+            layout: authority.layout,
+            session: authority.session,
+            source: authority.source
+          } : null,
+          bootSource: source,
+          resolveIdentity: (root) => resolveSourceIdentity(root, declaredContract),
+          diagnostic: (message) => process.stderr.write(`rn-dev-agent successor source: ${message}
+`)
+        }),
+        supervisorBirth: readProcessBirth(process.pid),
+        uid: typeof process.getuid === "function" ? String(process.getuid()) : process.env.USER ?? "unknown",
         ownerStatus: inspectSessionOwner
       });
-      if (cleanup.released.length > 0) {
-        process.stderr.write(`rn-dev-agent startup cleanup: released ${cleanup.released.length} proven-dead session(s) for this worktree
+      if (upgrading && lockfile2 && !lockfile2.touch()) {
+        throw new Error("SINGLE_INSTANCE_LOCK_LOST: another bridge reclaimed the lock during the upgrade");
+      }
+      authority = mintAuthority();
+    } catch (error2) {
+      authorityError = error2 instanceof Error ? error2.message : "AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized";
+      if (!diagnosticContractProbe) {
+        process.stderr.write(`rn-dev-agent authority diagnostic: ${authorityError}
 `);
       }
-      if (cleanup.status === "refused" && cleanup.refusal) {
-        process.stderr.write(`rn-dev-agent startup cleanup deferred: ${cleanup.refusal.code}: ${cleanup.refusal.message}
-`);
-        if (cleanup.refusal.nextAction) {
-          process.stderr.write(`rn-dev-agent startup cleanup next action: ${cleanup.refusal.nextAction}
-`);
-        }
-      }
-    } catch {
-      process.stderr.write(startupCleanupFailureMessage());
     }
-    mintAuthority = () => createSupervisorAuthority({
-      source: resolveSuccessorMintSource({
-        terminal: authority ? { layout: authority.layout, session: authority.session, source: authority.source } : null,
-        bootSource: source,
-        resolveIdentity: (root) => resolveSourceIdentity(root, declaredContract),
-        diagnostic: (message) => process.stderr.write(`rn-dev-agent successor source: ${message}
-`)
-      }),
-      supervisorBirth: readProcessBirth(process.pid),
-      uid: typeof process.getuid === "function" ? String(process.getuid()) : process.env.USER ?? "unknown",
-      ownerStatus: inspectSessionOwner
-    });
-    authority = mintAuthority();
-  } catch (error2) {
-    authorityError = error2 instanceof Error ? error2.message : "AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized";
-    if (!diagnosticContractProbe2) {
-      process.stderr.write(`rn-dev-agent authority diagnostic: ${authorityError}
-`);
-    }
-  }
+  };
+  if (contenderRefusal2 === null)
+    await bootAuthority();
   const core = new SupervisorCore({
     maxRespawns: Number(process.env.RN_BRIDGE_MAX_RESPAWNS ?? "3") || 3,
     logPath: logger.logFilePath
@@ -101885,19 +101968,41 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
   process.on("SIGTERM", () => beginShutdown2("SIGTERM"));
   process.on("SIGINT", () => beginShutdown2("SIGINT"));
   process.on("SIGHUP", () => beginShutdown2("SIGHUP"));
-  process.on("SIGUSR2", () => {
-    if (!worker)
+  process.on("SIGUSR2", reloadWorker2);
+  async function retryAsContender() {
+    if (!lockfile2 || upgrading || shutdownRequested)
       return;
-    core.onHotReloadRequested();
-    worker.kill("SIGUSR2");
-  });
+    const result = lockfile2.acquire({ confirmStaleHeartbeat: true });
+    if (result.status === "conflict") {
+      if (ownerKey(result) !== contenderOwnerKey) {
+        awaitOwner(result);
+        reloadWorker2();
+      }
+      return;
+    }
+    if (result.degraded)
+      return;
+    upgrading = true;
+    process.stderr.write("rn-bridge-supervisor: single-instance lock acquired; upgrading to a full worker\n");
+    await bootAuthority();
+    if (!lockfile2.touch()) {
+      beginShutdown2("single-instance lock reclaimed by another bridge during upgrade");
+      return;
+    }
+    contenderRefusal2 = null;
+    contenderOwnerKey = null;
+    upgrading = false;
+    reloadWorker2();
+  }
   const parentWatchMs = Number(process.env.RN_DEV_AGENT_PARENT_WATCH_MS);
   startParentDeathWatch({
     ...Number.isFinite(parentWatchMs) && parentWatchMs >= 100 && parentWatchMs <= 6e4 ? { intervalMs: parentWatchMs } : {},
     onOrphaned: () => beginShutdown2("parent host gone (PPID changed)"),
     onHeartbeat: () => {
       try {
-        if (lockfile2 && !lockfile2.touch())
+        if (contenderRefusal2 !== null && !upgrading)
+          void retryAsContender();
+        else if (lockfile2 && !lockfile2.touch())
           beginShutdown2("single-instance lock reclaimed by another bridge");
       } catch {
       }
@@ -101910,3 +102015,4 @@ var resolveAuthorityForSpawn;
 var spawnWorker;
 var closeAuthorityAndExit;
 var beginShutdown;
+var reloadWorker;

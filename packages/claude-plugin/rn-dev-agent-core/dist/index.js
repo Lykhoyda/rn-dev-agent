@@ -92545,13 +92545,14 @@ function buildGracefulShutdown(deps) {
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
 import { createHash as createHash22 } from "node:crypto";
 import { execFileSync as execFileSync17 } from "node:child_process";
-import { closeSync as closeSync13, existsSync as existsSync33, mkdirSync as mkdirSync21, openSync as openSync13, readFileSync as readFileSync35, renameSync as renameSync11, statSync as statSync15, unlinkSync as unlinkSync16, writeFileSync as writeFileSync18, writeSync as writeSync3 } from "node:fs";
+import { closeSync as closeSync13, existsSync as existsSync33, mkdirSync as mkdirSync21, openSync as openSync13, readFileSync as readFileSync35, readlinkSync as readlinkSync6, renameSync as renameSync11, statSync as statSync15, unlinkSync as unlinkSync16, writeFileSync as writeFileSync18, writeSync as writeSync3 } from "node:fs";
 import { tmpdir as tmpdir12, userInfo as userInfo2 } from "node:os";
 import { join as join52, resolve as resolve19 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
 var PROCESS_IDENTITY_MARKERS = ["cdp-bridge", "rn-dev-agent", "supervisor.js"];
 var DEFAULT_STALE_MS = 9e4;
+var DEFAULT_STALE_CONFIRM_MS = 3e4;
 function defaultProjectRoot() {
   return process.env.CLAUDE_USER_CWD ?? process.cwd();
 }
@@ -92602,6 +92603,7 @@ var Lockfile = class {
   opts;
   lockPath;
   acquired = false;
+  staleSighting = null;
   constructor(opts = {}) {
     const projectRoot = opts.projectRoot ?? defaultProjectRoot();
     const uid = opts.uid ?? userInfo2().uid;
@@ -92621,7 +92623,8 @@ var Lockfile = class {
       maxAgeMs: opts.maxAgeMs ?? DEFAULT_MAX_AGE_MS,
       processNameNeedle: opts.processNameNeedle ?? DEFAULT_PROCESS_NAME_NEEDLE,
       processIdentity: opts.processIdentity ?? defaultProcessIdentity(),
-      staleMs: opts.staleMs ?? DEFAULT_STALE_MS
+      staleMs: opts.staleMs ?? DEFAULT_STALE_MS,
+      staleConfirmMs: opts.staleConfirmMs ?? DEFAULT_STALE_CONFIRM_MS
     };
     this.lockPath = join52(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
   }
@@ -92631,7 +92634,7 @@ var Lockfile = class {
   // truncating the first. With 'wx' the loser gets EEXIST and evaluates the
   // winner's lock as a conflict. Infra errors (not contention) fail OPEN with
   // `degraded` so an fs hiccup never blocks a legitimate session.
-  acquire() {
+  acquire(options = {}) {
     try {
       this.writeLock();
       this.acquired = true;
@@ -92645,8 +92648,18 @@ var Lockfile = class {
     if (existing && this.isLockLive(existing)) {
       return this.conflictOf(existing);
     }
+    if (existing && options.confirmStaleHeartbeat && this.isLockLive(existing, true)) {
+      const key = `${existing.pid}:${existing.startedAt}:${existing.lastHeartbeat}`;
+      if (this.staleSighting?.key !== key) {
+        this.staleSighting = { key, at: this.opts.clock() };
+        return this.conflictOf(existing);
+      }
+      if (this.opts.clock() - this.staleSighting.at < this.opts.staleConfirmMs) {
+        return this.conflictOf(existing);
+      }
+    }
     const before = this.readExisting();
-    if (before && (existing === null || before.pid !== existing.pid || before.startedAt !== existing.startedAt) && this.isLockLive(before)) {
+    if (before && (existing === null || before.pid !== existing.pid || before.startedAt !== existing.startedAt || before.lastHeartbeat !== existing.lastHeartbeat) && this.isLockLive(before)) {
       return this.conflictOf(before);
     }
     try {
@@ -92673,7 +92686,8 @@ var Lockfile = class {
       projectRoot: body.projectRoot,
       startedAt: body.startedAt,
       ageMs: this.opts.clock() - body.startedAt,
-      version: body.version
+      version: body.version,
+      ppid: body.ppid
     };
   }
   release() {
@@ -92709,7 +92723,9 @@ var Lockfile = class {
     body.lastHeartbeat = this.opts.clock();
     try {
       const nextPath = `${this.lockPath}.${this.opts.pid}.tmp`;
-      writeFileSync18(nextPath, JSON.stringify(body, null, 2), { encoding: "utf8" });
+      writeFileSync18(nextPath, JSON.stringify(body, null, 2), {
+        encoding: "utf8"
+      });
       renameSync11(nextPath, this.lockPath);
     } catch {
     }
@@ -92728,7 +92744,7 @@ var Lockfile = class {
       return null;
     }
   }
-  isLockLive(body) {
+  isLockLive(body, ignoreHeartbeat = false) {
     if (!this.opts.processAlive(body.pid))
       return false;
     const age = this.ageOfLockFile();
@@ -92746,7 +92762,7 @@ var Lockfile = class {
         return false;
       }
     }
-    if (typeof body.lastHeartbeat === "number" && this.opts.clock() - body.lastHeartbeat > this.opts.staleMs) {
+    if (!ignoreHeartbeat && typeof body.lastHeartbeat === "number" && this.opts.clock() - body.lastHeartbeat > this.opts.staleMs) {
       return false;
     }
     return true;
@@ -92809,14 +92825,16 @@ function isValidLockBody(obj) {
   const o = obj;
   return typeof o.pid === "number" && typeof o.projectRoot === "string" && typeof o.startedAt === "number";
 }
+function formatAge(ageMs) {
+  const ageSec = Math.floor(ageMs / 1e3);
+  return ageSec < 60 ? `${ageSec}s ago` : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago` : `${Math.floor(ageSec / 3600)}h ${Math.floor(ageSec % 3600 / 60)}m ago`;
+}
 function formatLockConflictMessage(conflict2) {
-  const ageSec = Math.floor(conflict2.ageMs / 1e3);
-  const ageStr = ageSec < 60 ? `${ageSec}s ago` : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago` : `${Math.floor(ageSec / 3600)}h ${Math.floor(ageSec % 3600 / 60)}m ago`;
   return [
     `Another rn-dev-agent MCP already owns this project root.`,
     `  PID:      ${conflict2.pid}`,
     `  Project:  ${conflict2.projectRoot}`,
-    `  Started:  ${ageStr}`,
+    `  Started:  ${formatAge(conflict2.ageMs)}`,
     `  Lock:     ${conflict2.lockPath}`,
     ``,
     `To resolve:`,
@@ -96844,8 +96862,9 @@ async function withRecoveredAuthoritativeRuntime(status, connectedClient, operat
 var pkgPath = join63(dirname32(fileURLToPath8(import.meta.url)), "..", "package.json");
 var pkgVersion = JSON.parse(readFileSync43(pkgPath, "utf8")).version;
 var lockfile = null;
-var diagnosticContractProbe = process.argv.includes("--diagnostic-contract-probe");
-var noLock = diagnosticContractProbe || process.argv.includes("--no-lock");
+var contenderRefusal = process.env.RN_DEV_AGENT_CONTENDER_REFUSAL || null;
+var readOnlyWorker = process.argv.includes("--diagnostic-contract-probe") || contenderRefusal !== null;
+var noLock = readOnlyWorker || process.argv.includes("--no-lock");
 if (!noLock) {
   lockfile = new Lockfile({ version: pkgVersion });
   const lockResult = lockfile.acquire();
@@ -96855,7 +96874,7 @@ if (!noLock) {
   }
   process.on("exit", () => lockfile?.release());
 }
-if (!diagnosticContractProbe) {
+if (!readOnlyWorker) {
   process.on("exit", () => {
     try {
       releaseDeviceLockForSession();
@@ -96863,7 +96882,7 @@ if (!diagnosticContractProbe) {
     }
   });
 }
-if (!diagnosticContractProbe && process.env.RN_DEVICE_KILL_LEGACY !== "0") {
+if (!readOnlyWorker && process.env.RN_DEVICE_KILL_LEGACY !== "0") {
   void ensureSingleRunner().then((r) => {
     if (r.removedFiles.length) {
       logger.info("rn-device", `ensureSingleRunner(boot): removed ${r.removedFiles.join(", ")}`);
@@ -97169,7 +97188,7 @@ setForeignGateUdidProvider(() => {
   const s = getActiveSession();
   return s?.platform === "ios" && s.deviceId ? s.deviceId : null;
 });
-var mirrorCfg = diagnosticContractProbe ? { enabled: false, fps: 0 } : resolveMirrorConfig();
+var mirrorCfg = readOnlyWorker ? { enabled: false, fps: 0 } : resolveMirrorConfig();
 var observeTargetResolver = buildMirrorTargetResolver({
   getPlatform: () => {
     const p = getActiveSession()?.platform ?? getClient().connectedTarget?.platform;
@@ -97213,7 +97232,7 @@ var mirrorManager2 = mirrorCfg.enabled ? new MirrorManager({
 }) : void 0;
 if (mirrorManager2)
   setObserveMirror(mirrorManager2);
-var liveEnabled = !diagnosticContractProbe && process.env.RN_OBSERVE_LIVE !== "0";
+var liveEnabled = !readOnlyWorker && process.env.RN_OBSERVE_LIVE !== "0";
 var liveDeps = buildLiveDeps({
   recorder,
   isFlowActive: () => arbiter.flowActive || foreignFlowGate.lastActive,
@@ -97244,8 +97263,8 @@ function trackedTool(name, desc, schema, handler, afterAuthority) {
   });
   const installLiveCapture = liveEnabled && mayTriggerLiveCapture(name);
   const wrapped = async (...a) => {
-    if (diagnosticContractProbe) {
-      return failResult("Tool calls are disabled in the read-only MCP contract probe.", "DIAGNOSTIC_MODE_READ_ONLY");
+    if (readOnlyWorker) {
+      return contenderRefusal ? failResult(contenderRefusal, "SAME_ROOT_OWNER_LIVE") : failResult("Tool calls are disabled in the read-only MCP contract probe.", "DIAGNOSTIC_MODE_READ_ONLY");
     }
     const args = a[0];
     let result;
@@ -98749,7 +98768,7 @@ setObserveStateDeps({
     }
   })
 });
-var shutdown = diagnosticContractProbe ? async (exitCode) => process.exit(exitCode) : buildGracefulShutdown({
+var shutdown = readOnlyWorker ? async (exitCode) => process.exit(exitCode) : buildGracefulShutdown({
   getClient,
   stopFastRunnerFn: stopFastRunner,
   stopMirrorFn: () => mirrorManager2?.shutdown()
@@ -98782,7 +98801,7 @@ process.stdin.on("end", () => {
   logger.info("MCP", "stdin closed \u2014 host disconnected");
   void shutdown(0);
 });
-var stopParentWatch = diagnosticContractProbe ? () => {
+var stopParentWatch = readOnlyWorker ? () => {
 } : startParentDeathWatch({
   onOrphaned: () => {
     logger.info("MCP", "parent host gone (PPID changed) \u2014 exiting");
@@ -98800,9 +98819,9 @@ var stopParentWatch = diagnosticContractProbe ? () => {
 });
 process.on("exit", () => stopParentWatch());
 process.on("exit", () => authorityRuntime.close());
-if (!diagnosticContractProbe)
+if (!readOnlyWorker)
   process.on("exit", () => removeObserveState());
-if (!diagnosticContractProbe) {
+if (!readOnlyWorker) {
   process.on("exit", () => {
     try {
       mirrorManager2?.shutdown();
@@ -98823,7 +98842,7 @@ async function main() {
   logger.info("MCP", "StdioServerTransport created, connecting...");
   await server2.connect(transport);
   logger.info("MCP", "MCP server connected and ready");
-  if (!diagnosticContractProbe) {
+  if (!readOnlyWorker) {
     const rootResolution = observeRootResolver();
     if (!rootResolution.ok) {
       logger.warn("OBSERVE", `interrupted e2e run recovery skipped: ${rootResolution.reason}`);
@@ -98840,7 +98859,7 @@ async function main() {
         console.error(`[e2e] marked interrupted runs: ${recovered.join(", ")}`);
     }
   }
-  if (!diagnosticContractProbe) {
+  if (!readOnlyWorker) {
     void autostartObserve({
       findRoot: observeRootResolver,
       resolveEnabled: resolveObserveAutostart,
@@ -98862,7 +98881,7 @@ main().catch((err) => {
   if (logger.logFilePath) {
     console.error(`CDP bridge log: ${logger.logFilePath}`);
   }
-  if (!diagnosticContractProbe)
+  if (!readOnlyWorker)
     void stopFastRunner(getActiveSession()?.deviceId);
   process.exit(1);
 });

@@ -40,9 +40,36 @@ async function handshake(supervisor, clientName) {
 }
 
 async function sessionStatus(supervisor) {
-  supervisor.send('tools/call', { name: 'rn_session', arguments: { action: 'status' } });
+  supervisor.send('tools/call', {
+    name: 'rn_session',
+    arguments: { action: 'status' },
+  });
   const call = JSON.parse(await supervisor.nextLine());
   return JSON.parse(call.result?.content?.[0]?.text ?? '{}');
+}
+
+async function toolNames(supervisor) {
+  supervisor.send('tools/list');
+  const list = JSON.parse(await supervisor.nextLine());
+  return (list.result?.tools ?? []).map((tool) => tool.name).sort();
+}
+
+async function callTool(supervisor, name, args = {}) {
+  supervisor.send('tools/call', { name, arguments: args });
+  const call = JSON.parse(await supervisor.nextLine());
+  return JSON.parse(call.result?.content?.[0]?.text ?? '{}');
+}
+
+// A requested worker reload can answer an in-flight call with a JSON-RPC error; poll past it.
+async function waitForStatus(supervisor, predicate, what, timeoutMs = 20_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await sessionStatus(supervisor);
+    if (predicate(last)) return last;
+    await new Promise((resolve) => setTimeout(resolve, PARENT_WATCH_MS / 2));
+  }
+  assert.fail(`${what}; last status: ${JSON.stringify(last)}`);
 }
 
 function readRegistry(stateHome) {
@@ -60,7 +87,7 @@ function readRegistry(stateHome) {
 }
 
 test(
-  'GH#672: a second same-root supervisor refuses without stealing the lock or killing the owner',
+  'GH#672/#991: a second same-root supervisor waits read-only without stealing the lock or killing the owner',
   { timeout: 120_000 },
   async () => {
     const root = await mkdtemp(join(tmpdir(), 'rn-agent-gh672-'));
@@ -75,7 +102,11 @@ test(
       }
       await writeFile(
         join(project, 'package.json'),
-        JSON.stringify({ name: 'gh672-fixture', version: '0.0.0', dependencies: {} }),
+        JSON.stringify({
+          name: 'gh672-fixture',
+          version: '0.0.0',
+          dependencies: {},
+        }),
         'utf8',
       );
 
@@ -88,7 +119,12 @@ test(
         RN_DEV_AGENT_PARENT_WATCH_MS: String(PARENT_WATCH_MS),
       };
 
-      owner = startSupervisor({ cwd: project, env, noLock: false, lineTimeoutMs: 30_000 });
+      owner = startSupervisor({
+        cwd: project,
+        env,
+        noLock: false,
+        lineTimeoutMs: 30_000,
+      });
       await handshake(owner, 'gh672-owner');
       const ownerStatus = await sessionStatus(owner);
       assert.equal(ownerStatus.ok, true, `owner status failed: ${JSON.stringify(ownerStatus)}`);
@@ -104,30 +140,31 @@ test(
         'the lock is held by a live owner supervisor',
       );
 
-      contender = startSupervisor({ cwd: project, env, noLock: false, lineTimeoutMs: 30_000 });
-      // Bounded: a contender that stole the lock stays alive as a blocked session, so an
-      // unbounded wait would hang the regression instead of reporting the takeover.
-      const contenderExit = await Promise.race([
-        new Promise((resolve) => contender.child.on('exit', (code) => resolve(code))),
-        new Promise((resolve) => setTimeout(() => resolve('still-running'), 20_000)),
-      ]);
-      assert.equal(
-        contenderExit,
-        11,
-        `the contender must refuse with the lock-conflict exit; got ${contenderExit}. ` +
-          `contender stderr:\n${contender.stderrText().slice(-1500)}`,
+      const ownerTools = await toolNames(owner);
+      contender = startSupervisor({
+        cwd: project,
+        env,
+        noLock: false,
+        lineTimeoutMs: 30_000,
+      });
+      await handshake(contender, 'gh672-contender');
+      assert.deepEqual(
+        await toolNames(contender),
+        ownerTools,
+        'the contender lists the full tool surface so an upgrade needs no tools/list_changed',
       );
+      const refusal = await sessionStatus(contender);
+      assert.equal(refusal.ok, false, `contender must refuse: ${JSON.stringify(refusal)}`);
+      assert.equal(refusal.code, 'SAME_ROOT_OWNER_LIVE');
+      assert.match(refusal.error, new RegExp(`pid ${ownerPid}\\b`), 'the refusal names the owner');
+      const operational = await callTool(contender, 'cdp_status');
+      assert.equal(operational.code, 'SAME_ROOT_OWNER_LIVE', 'operational tools refuse too');
+      assert.equal(contender.child.exitCode, null, 'the contender stays connected');
       assert.match(
         contender.stderrText(),
         /Another rn-dev-agent MCP already owns this project root/,
-        'the refusal must be the documented non-destructive conflict message',
+        'the documented conflict diagnostic still reaches the MCP log',
       );
-      assert.equal(
-        /worker pid/.test(contender.stderrText()),
-        false,
-        'a refused contender must not spawn an operational worker child',
-      );
-      contender = null;
 
       // Span several REAL ownership checks: each parent-watch tick re-validates the
       // lock and self-terminates the owner if it was stolen.
@@ -189,7 +226,16 @@ test(
         'string',
         'the lock records the owner entrypoint identity the contender matched against',
       );
+      assert.equal(contender.child.exitCode, null, 'the contender waited through every check');
+      assert.equal(
+        (await sessionStatus(contender)).code,
+        'SAME_ROOT_OWNER_LIVE',
+        'a live owner is never taken over',
+      );
 
+      contender.child.kill('SIGTERM');
+      await new Promise((resolve) => contender.child.on('exit', resolve));
+      contender = null;
       owner.child.kill('SIGTERM');
       const ownerExit = await new Promise((resolve) => owner.child.on('exit', resolve));
       assert.equal(ownerExit, 0, 'the owner exits cleanly on SIGTERM');
@@ -221,7 +267,11 @@ test(
       }
       await writeFile(
         join(project, 'package.json'),
-        JSON.stringify({ name: 'gh672-l4-fixture', version: '0.0.0', dependencies: {} }),
+        JSON.stringify({
+          name: 'gh672-l4-fixture',
+          version: '0.0.0',
+          dependencies: {},
+        }),
         'utf8',
       );
       const env = {
@@ -233,7 +283,12 @@ test(
         RN_DEV_AGENT_PARENT_WATCH_MS: String(PARENT_WATCH_MS),
       };
 
-      owner = startSupervisor({ cwd: project, env, noLock: false, lineTimeoutMs: 30_000 });
+      owner = startSupervisor({
+        cwd: project,
+        env,
+        noLock: false,
+        lineTimeoutMs: 30_000,
+      });
       await handshake(owner, 'gh672-l4-owner');
       const ownerStatus = await sessionStatus(owner);
       assert.equal(ownerStatus.ok, true, `owner status failed: ${JSON.stringify(ownerStatus)}`);
@@ -248,7 +303,12 @@ test(
       await ownerExit;
       owner = null;
 
-      successor = startSupervisor({ cwd: project, env, noLock: false, lineTimeoutMs: 30_000 });
+      successor = startSupervisor({
+        cwd: project,
+        env,
+        noLock: false,
+        lineTimeoutMs: 30_000,
+      });
       await handshake(successor, 'gh672-l4-successor');
       const successorStatus = await sessionStatus(successor);
       assert.equal(
@@ -299,6 +359,154 @@ test(
     } finally {
       if (successor) successor.child.kill('SIGKILL');
       if (owner) owner.child.kill('SIGKILL');
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'GH#991: a waiting contender upgrades in place after a clean or crashed owner exit and names each new owner',
+  { timeout: 180_000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rn-agent-gh991-'));
+    const project = join(root, 'project');
+    const stateHome = join(root, 'state');
+    const lockDir = join(root, 'lock');
+    const running = [];
+    try {
+      for (const dir of [project, stateHome, lockDir]) {
+        await mkdir(dir, { recursive: true });
+      }
+      await writeFile(
+        join(project, 'package.json'),
+        JSON.stringify({
+          name: 'gh991-fixture',
+          version: '0.0.0',
+          dependencies: {},
+        }),
+        'utf8',
+      );
+      const env = {
+        XDG_STATE_HOME: stateHome,
+        TMPDIR: lockDir,
+        RN_DEV_AGENT_DECLARED_ROOT: project,
+        RN_DEV_AGENT_DECLARED_MANIFESTS: 'package.json',
+        RN_AGENT_OBSERVE_AUTOSTART: '0',
+        RN_DEV_AGENT_PARENT_WATCH_MS: String(PARENT_WATCH_MS),
+      };
+      const start = (name) => {
+        const supervisor = startSupervisor({
+          cwd: project,
+          env,
+          noLock: false,
+          lineTimeoutMs: 30_000,
+        });
+        supervisor.name = name;
+        running.push(supervisor);
+        return supervisor;
+      };
+
+      const owner = start('owner');
+      await handshake(owner, 'gh991-owner');
+      assert.equal((await sessionStatus(owner)).data?.authority?.state, 'source_bound');
+      const ownerPid = (await readLockBody(lockDir)).pid;
+      const ownerSessionId = readRegistry(stateHome).sessions[0].session_id;
+
+      const contenders = [start('first'), start('second')];
+      for (const contender of contenders) {
+        await handshake(contender, `gh991-${contender.name}`);
+        const refusal = await sessionStatus(contender);
+        assert.equal(refusal.code, 'SAME_ROOT_OWNER_LIVE');
+        assert.match(refusal.error, new RegExp(`pid ${ownerPid}\\b`));
+      }
+
+      owner.child.kill('SIGTERM');
+      assert.equal(await new Promise((resolve) => owner.child.on('exit', resolve)), 0);
+      running.splice(running.indexOf(owner), 1);
+
+      const deadline = Date.now() + 20_000;
+      let winner = null;
+      while (!winner && Date.now() < deadline) {
+        for (const contender of contenders) {
+          const status = await sessionStatus(contender);
+          if (status.ok && status.data?.authority?.state === 'source_bound') winner = contender;
+        }
+        if (!winner) await new Promise((resolve) => setTimeout(resolve, PARENT_WATCH_MS / 2));
+      }
+      assert.ok(
+        winner,
+        `no contender upgraded after the owner exited; stderr:\n${contenders
+          .map((contender) => contender.stderrText().slice(-1200))
+          .join('\n---\n')}`,
+      );
+      assert.equal(winner.child.exitCode, null, 'the winner upgraded without a host restart');
+      assert.match(winner.stderrText(), /upgrading to a full worker/);
+
+      const newOwnerPid = (await readLockBody(lockDir)).pid;
+      assert.notEqual(newOwnerPid, ownerPid, 'the lock moved to the winner');
+      const loser = contenders.find((contender) => contender !== winner);
+      const refreshed = await waitForStatus(
+        loser,
+        (status) =>
+          status.code === 'SAME_ROOT_OWNER_LIVE' && status.error.includes(`pid ${newOwnerPid}`),
+        'the waiting contender must name the new owner',
+      );
+      assert.doesNotMatch(refreshed.error, new RegExp(`pid ${ownerPid}\\b`));
+      assert.equal(loser.child.exitCode, null);
+
+      const registry = readRegistry(stateHome);
+      const sourceClaims = registry.claims.filter((claim) => claim.resource_type === 'source');
+      assert.equal(sourceClaims.length, 1, `one source claim: ${JSON.stringify(registry.claims)}`);
+      assert.notEqual(
+        sourceClaims[0].session_id,
+        ownerSessionId,
+        'the winner minted its own session',
+      );
+      assert.equal(
+        registry.allocations.filter((row) => row.service === 'metro').length,
+        1,
+        'the upgrade reuses the worktree Metro allocation',
+      );
+
+      const winnerSessionId = sourceClaims[0].session_id;
+      const winnerExit = new Promise((resolve) => winner.child.on('exit', resolve));
+      assert.equal(newOwnerPid, winner.child.pid, 'the lock names the winner supervisor');
+      winner.child.kill('SIGKILL');
+      await winnerExit;
+      running.splice(running.indexOf(winner), 1);
+
+      await waitForStatus(
+        loser,
+        (status) => status.ok && status.data?.authority?.state === 'source_bound',
+        'the waiting contender must take over from a crashed owner',
+      );
+      assert.equal(loser.child.exitCode, null, 'the crash takeover also needs no host restart');
+      assert.match(
+        loser.stderrText(),
+        /startup cleanup: released 1 proven-dead session/,
+        'the upgrade runs journaled startup cleanup for the crashed owner',
+      );
+      const afterCrash = readRegistry(stateHome);
+      assert.equal(
+        afterCrash.sessions.find((row) => row.session_id === winnerSessionId)?.state,
+        'released',
+      );
+      const crashClaims = afterCrash.claims.filter((claim) => claim.resource_type === 'source');
+      assert.equal(crashClaims.length, 1);
+      assert.notEqual(crashClaims[0].session_id, winnerSessionId);
+
+      loser.child.kill('SIGTERM');
+      assert.equal(await new Promise((resolve) => loser.child.on('exit', resolve)), 0);
+      running.splice(running.indexOf(loser), 1);
+    } finally {
+      await Promise.all(
+        running.map((supervisor) => {
+          if (supervisor.child.exitCode !== null || supervisor.child.signalCode !== null) return;
+          const exited = new Promise((resolve) => supervisor.child.on('exit', resolve));
+          supervisor.child.kill('SIGKILL');
+          return exited;
+        }),
+      );
       await rm(root, { recursive: true, force: true });
     }
   },
