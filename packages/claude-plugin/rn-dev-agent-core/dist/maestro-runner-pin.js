@@ -16216,6 +16216,23 @@ function planIosProofDomains(commands, params) {
       focusedReactId = null;
     }
   }
+  const firstReact = segments.findIndex((segment) => segment.domain === "react-tree" && segment.commands.some(containsExactId));
+  if (firstReact !== -1) {
+    for (const segment of segments.slice(firstReact + 1)) {
+      if (segment.domain !== "xctest-native")
+        continue;
+      for (let index = 0; index < segment.commands.length; index++) {
+        const command = commandName(segment.commands[index]) ?? "command";
+        if (lifecycleCommands2.has(command))
+          continue;
+        return {
+          ok: false,
+          sourceIndex: segment.sourceIndices[index],
+          reason: `${command}: a native segment starts a new runner session that relaunches the app and discards the React-tree steps`
+        };
+      }
+    }
+  }
   return { ok: true, segments };
 }
 function nativeSelectorsForCommands(commands) {

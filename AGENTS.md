@@ -275,6 +275,11 @@ alive for such callers.
   `corepack yarn gate:otp-omitted-timeout` (needs `OTP_FIXTURE_ROOT` and
   `OTP_FIXTURE_DEVICE_ID`; not run in hosted CI), with the causal modal-
   alternate regressions in `test/unit/ios-proof-domain-routing.test.ts`.
+- On iOS, `planIosProofDomains` allows lifecycle commands (`launchApp`,
+  `clearState`, `killApp`, `stopApp`) themselves, but refuses any other
+  native-only command after the first exact-testID React-tree command before
+  anything runs (`UNSUPPORTED_STEP`), even when a lifecycle command precedes
+  it in the same native segment. Native-prefix flows still plan.
 - The partitioned iOS native leg must re-prove the exact CDP target before
   completing its deferred origin: only `reproveManagedOrigin`
   (`connectExactSessionTarget`, which waits for the target to re-register)
