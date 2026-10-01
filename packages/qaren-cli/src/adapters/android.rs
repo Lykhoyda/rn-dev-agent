@@ -38,6 +38,7 @@ fn ssh_base(host: &str, args: &[String], label: &str, timeout_seconds: u64) -> C
         args: full,
         cwd: None,
         env: Vec::new(),
+        unset: Vec::new(),
         timeout_seconds,
     }
 }
@@ -103,6 +104,7 @@ pub fn tunnel_spec(host: &str, adb_port: u16) -> CmdSpec {
         ],
         cwd: None,
         env: Vec::new(),
+        unset: Vec::new(),
         timeout_seconds: 0,
     }
 }

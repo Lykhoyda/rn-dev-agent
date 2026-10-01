@@ -140,6 +140,15 @@ pub fn write_ios_app(path: &std::path::Path) {
     std::fs::set_permissions(path.join("binary"), std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+pub fn write_ios_workspace(root: &std::path::Path, workspace: &str) {
+    let path = root.join(workspace);
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::write(path.join("contents.xcworkspacedata"), "<Workspace/>").unwrap();
+    std::fs::write(root.join("ios/Podfile"), "platform :ios, '15.0'\n").unwrap();
+}
+
+pub const IOS_NATIVE_FILES: &str = "test-app/ios/Podfile\0";
+
 pub fn script_ios_app_verification(mock: &mut MockRunner) {
     mock.expect_run("plutil", CmdOutput::success(&ios_app_info()));
     mock.expect_run(
@@ -164,11 +173,19 @@ pub fn script_ios_deps(mock: &mut MockRunner) {
 }
 
 pub fn script_finite_ios_build(mock: &mut MockRunner) {
-    mock.expect_spawn_piped("expo run:ios", 5000, "", Some(0));
+    script_finite_ios_build_with(mock, "expo run:ios");
+}
+
+pub fn script_finite_ios_build_with(mock: &mut MockRunner, command: &str) {
+    mock.expect_spawn_piped(command, 5000, "", Some(0));
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 16:00:00 2026"));
     mock.expect_run("ps", CmdOutput::success("qaren-build"));
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     script_ios_app_verification(mock);
+    script_ios_install_and_launch(mock);
+}
+
+pub fn script_ios_install_and_launch(mock: &mut MockRunner) {
     script_ios_app_verification(mock);
     mock.expect_run("simctl install", CmdOutput::success(""));
     mock.expect_spawn(
@@ -195,8 +212,17 @@ pub fn script_finite_ios_build(mock: &mut MockRunner) {
 pub struct IosBuildRunner {
     pub inner: MockRunner,
     pub omit_app: bool,
+    pub ambiguous_app: bool,
+    pub workspace_mutation: Option<WorkspaceMutation>,
     pub build_log: Option<String>,
     pub build_spawn_fault: Option<BuildSpawnFault>,
+    pub symlink_build_root: Option<&'static str>,
+}
+
+#[derive(Clone)]
+pub enum WorkspaceMutation {
+    Remove(PathBuf),
+    Symlink(PathBuf),
 }
 
 #[derive(Clone, Copy)]
@@ -229,6 +255,9 @@ struct BuildStart {
     stdin: Box<dyn std::io::Write + Send>,
     run_dir: PathBuf,
     output: Option<PathBuf>,
+    xcode: bool,
+    ambiguous_app: bool,
+    workspace_mutation: Option<WorkspaceMutation>,
 }
 
 impl std::io::Write for BuildStart {
@@ -251,8 +280,45 @@ impl std::io::Write for BuildStart {
                 .run_id,
             record.run_id
         );
+        if record.scenario.name == "check" {
+            let lease = record
+                .resources
+                .lease
+                .as_ref()
+                .expect("check owns a device lease");
+            assert_eq!(
+                qaren::buildplan::read_holder(&lease.lock_dir)
+                    .unwrap()
+                    .run_id,
+                record.run_id
+            );
+        }
         if let Some(output) = &self.output {
             write_ios_app(&output.join("testapp.app"));
+            if self.ambiguous_app {
+                write_ios_app(&output.join("other.app"));
+            }
+        }
+        if self.xcode {
+            let derived = self
+                .run_dir
+                .join("ios-derived-data/Build/Intermediates.noindex");
+            std::fs::create_dir_all(&derived).unwrap();
+            std::fs::write(derived.join("compile.o"), "intermediate").unwrap();
+            std::fs::write(self.run_dir.join("ios-build/libNative.a"), "library").unwrap();
+        }
+        if let Some(mutation) = &self.workspace_mutation {
+            let path = match mutation {
+                WorkspaceMutation::Remove(path) | WorkspaceMutation::Symlink(path) => path,
+            };
+            std::fs::remove_dir_all(path).unwrap();
+            if matches!(mutation, WorkspaceMutation::Symlink(_)) {
+                let replacement = path.with_extension("replacement");
+                std::fs::create_dir(&replacement).unwrap();
+                std::fs::write(replacement.join("contents.xcworkspacedata"), "<Workspace/>")
+                    .unwrap();
+                std::os::unix::fs::symlink(replacement, path).unwrap();
+            }
         }
         self.stdin.write(bytes)
     }
@@ -280,6 +346,15 @@ impl qaren::exec::Runner for IosBuildRunner {
         spec: &qaren::exec::CmdSpec,
         log: &std::path::Path,
     ) -> std::io::Result<qaren::exec::Spawned> {
+        if spec.label == "expo-start" {
+            if let Some(root) = self.symlink_build_root.take() {
+                let run_dir = log.parent().unwrap().parent().unwrap();
+                let source = run_dir.join(root);
+                let outside = run_dir.parent().unwrap().join("outside-build").join(root);
+                std::fs::rename(&source, &outside).unwrap();
+                std::os::unix::fs::symlink(&outside, &source).unwrap();
+            }
+        }
         self.inner.spawn_group(spec, log)
     }
     fn spawn_piped(
@@ -289,7 +364,7 @@ impl qaren::exec::Runner for IosBuildRunner {
     ) -> std::io::Result<qaren::exec::PipedChild> {
         if let Some(fault) = self
             .build_spawn_fault
-            .filter(|_| spec.label == "expo-run-ios")
+            .filter(|_| matches!(spec.label.as_str(), "expo-run-ios" | "xcodebuild-ios"))
         {
             self.inner.calls.push(spec.clone());
             let run_dir = log.parent().unwrap().parent().unwrap();
@@ -315,7 +390,10 @@ impl qaren::exec::Runner for IosBuildRunner {
             ));
         }
         let mut child = self.inner.spawn_piped(spec, log)?;
-        if spec.label == "expo-run-ios" || spec.label == "expo-prebuild" {
+        if matches!(
+            spec.label.as_str(),
+            "expo-run-ios" | "xcodebuild-ios" | "expo-prebuild"
+        ) {
             let run_dir = log.parent().unwrap().parent().unwrap().to_path_buf();
             let record: RunRecord =
                 serde_json::from_slice(&std::fs::read(run_dir.join("run.json")).unwrap()).unwrap();
@@ -330,15 +408,23 @@ impl qaren::exec::Runner for IosBuildRunner {
                 .args
                 .iter()
                 .position(|a| a == "--output")
-                .filter(|_| !self.omit_app)
-                .map(|i| PathBuf::from(&spec.args[i + 1]));
-            if let Some(output) = &output {
-                assert_eq!(output, &run_dir.join("ios-build"));
-            }
+                .map(|i| PathBuf::from(&spec.args[i + 1]))
+                .inspect(|output| assert_eq!(output, &run_dir.join("ios-build")))
+                .or_else(|| {
+                    (spec.label == "xcodebuild-ios").then(|| {
+                        run_dir.join("ios-derived-data/Build/Products/Debug-iphonesimulator")
+                    })
+                })
+                .filter(|_| !self.omit_app);
             child.stdin = Box::new(BuildStart {
                 stdin: child.stdin,
                 run_dir,
                 output,
+                xcode: spec.label == "xcodebuild-ios",
+                ambiguous_app: self.ambiguous_app,
+                workspace_mutation: (spec.label == "expo-prebuild")
+                    .then(|| self.workspace_mutation.clone())
+                    .flatten(),
             });
         }
         Ok(child)

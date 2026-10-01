@@ -127,6 +127,11 @@ fn run_inner(
     validate_boot_device(req.platform, req.device.as_deref(), req.boot_device)?;
     let (config, config_raw) = CheckConfig::load(&req.config_path)?;
     config.validate_for_platform(req.platform)?;
+    if req.platform == Platform::Ios {
+        if let Some(workspace) = config.ios.as_ref().and_then(|ios| ios.build.as_ref()) {
+            ios::validate_workspace(&req.project_root, workspace)?;
+        }
+    }
     let node = req
         .node
         .clone()
@@ -270,7 +275,11 @@ fn run_inner(
         if let Err(f) = prepare::install_deps(&mut ctx) {
             return Ok(finish_failed(ctx, f));
         }
-        if let Err(f) = ios::require_generic_build(ctx.runner, &ctx.record.candidate.project_root) {
+        if let Err(f) = ios::require_build(
+            ctx.runner,
+            &ctx.record.candidate.project_root,
+            ctx.record.scenario.build.ios_workspace.as_ref(),
+        ) {
             return Ok(finish_failed(ctx, f));
         }
     }
@@ -1014,7 +1023,14 @@ fn build_scenario(
         }),
         android: None,
         android_usb: None,
-        build: BuildSpec::default(),
+        build: BuildSpec {
+            ios_workspace: config
+                .ios
+                .as_ref()
+                .filter(|_| platform == Platform::Ios)
+                .and_then(|ios| ios.build.clone()),
+            ..BuildSpec::default()
+        },
         deps: DepsSpec::default(),
         deadlines: Deadlines::default(),
     }

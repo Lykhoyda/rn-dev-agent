@@ -1,18 +1,25 @@
 use crate::exec::{CmdSpec, Runner};
-use std::path::Path;
+use crate::failure::{Failure, FailureCode};
+use crate::scenario::IosWorkspaceBuild;
+use std::path::{Path, PathBuf};
 
-pub fn require_generic_build(
+pub fn require_build(
     runner: &mut dyn Runner,
     project_root: &Path,
+    workspace: Option<&IosWorkspaceBuild>,
 ) -> Result<(), crate::failure::Failure> {
+    if let Some(workspace) = workspace {
+        return validate_workspace(project_root, workspace);
+    }
     use std::os::unix::fs::PermissionsExt;
     let refused = crate::failure::Failure::new(
         "preflight",
         crate::failure::FailureCode::IosBuildCapabilityUnavailable,
         "app-local Expo CLI does not prove generic iOS build-only support with --output and --no-bundler",
-        "install app-local dependencies with an Expo CLI supporting generic iOS build-only output, then retry",
+        "use an app-local Expo CLI supporting generic build-only output, or configure ios.build.workspace and ios.build.scheme for an existing native workspace",
     );
-    if !std::fs::metadata(project_root.join("node_modules/.bin/expo"))
+    let expo = project_root.join("node_modules/.bin/expo");
+    if !std::fs::metadata(&expo)
         .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
     {
         return Err(refused);
@@ -20,12 +27,12 @@ pub fn require_generic_build(
     let output = runner.run_private(
         &CmdSpec::new(
             "expo-ios-build-help",
-            "pnpm",
-            &["exec", "expo", "run:ios", "--help"],
+            &expo.to_string_lossy(),
+            &["run:ios", "--help"],
             15,
         )
         .cwd(project_root)
-        .env("CI", "1")
+        .env_remove("CI")
         .env("EXPO_NO_TELEMETRY", "1")
         .env("EXPO_OFFLINE", "1")
         .env("COREPACK_ENABLE_NETWORK", "0")
@@ -50,6 +57,34 @@ pub fn require_generic_build(
         || !option("--device").is_some_and(|tail| tail.contains("\"generic\" for build-only"))
     {
         return Err(refused);
+    }
+    Ok(())
+}
+
+pub fn validate_workspace(project_root: &Path, spec: &IosWorkspaceBuild) -> Result<(), Failure> {
+    let refused = || {
+        Failure::new(
+            "preflight",
+            FailureCode::IosBuildCapabilityUnavailable,
+            "explicit iOS build requires a plain workspace directory and contents.xcworkspacedata file",
+            "provide an existing project-relative workspace under ios/ and an explicit scheme",
+        )
+    };
+    spec.validate().map_err(|_| refused())?;
+    if !std::fs::symlink_metadata(project_root).is_ok_and(|meta| meta.is_dir()) {
+        return Err(refused());
+    }
+    let mut path = project_root.to_path_buf();
+    for component in Path::new(&spec.workspace).components() {
+        path.push(component);
+        if !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+            return Err(refused());
+        }
+    }
+    if !std::fs::symlink_metadata(path.join("contents.xcworkspacedata"))
+        .is_ok_and(|meta| meta.is_file())
+    {
+        return Err(refused());
     }
     Ok(())
 }
@@ -410,7 +445,54 @@ pub fn delete_spec(udid: &str) -> CmdSpec {
     CmdSpec::new("simctl-delete", "xcrun", &["simctl", "delete", udid], 120)
 }
 
-pub fn build_spec(project_root: &Path, output: &Path, deadline_seconds: u64) -> CmdSpec {
+fn workspace_derived_data(output: &Path) -> PathBuf {
+    output
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("ios-derived-data")
+}
+
+// Xcode's own products dir: a global CONFIGURATION_BUILD_DIR breaks use_frameworks! header paths.
+pub fn workspace_products(output: &Path) -> PathBuf {
+    workspace_derived_data(output).join("Build/Products/Debug-iphonesimulator")
+}
+
+pub fn build_spec(
+    project_root: &Path,
+    output: &Path,
+    deadline_seconds: u64,
+    workspace: Option<&IosWorkspaceBuild>,
+) -> CmdSpec {
+    if let Some(workspace) = workspace {
+        let derived_data = workspace_derived_data(output);
+        return CmdSpec::new(
+            "xcodebuild-ios",
+            "xcrun",
+            &[
+                "xcodebuild",
+                "-workspace",
+                &project_root.join(&workspace.workspace).to_string_lossy(),
+                "-scheme",
+                &workspace.scheme,
+                "-configuration",
+                "Debug",
+                "-sdk",
+                "iphonesimulator",
+                "-destination",
+                "generic/platform=iOS Simulator",
+                "-derivedDataPath",
+                &derived_data.to_string_lossy(),
+                "CODE_SIGNING_ALLOWED=NO",
+                "CODE_SIGNING_REQUIRED=NO",
+                "build",
+            ],
+            deadline_seconds,
+        )
+        .cwd(project_root)
+        .env_remove("CI")
+        .env("EXPO_NO_TELEMETRY", "1")
+        .env("RCT_NO_LAUNCH_PACKAGER", "1");
+    }
     CmdSpec::new(
         "expo-run-ios",
         "pnpm",
@@ -427,7 +509,7 @@ pub fn build_spec(project_root: &Path, output: &Path, deadline_seconds: u64) -> 
         deadline_seconds,
     )
     .cwd(project_root)
-    .env("CI", "1")
+    .env_remove("CI")
     .env("EXPO_NO_TELEMETRY", "1")
 }
 
@@ -551,6 +633,23 @@ pub fn verify_app(
     })
 }
 
+// Large debug images print tens of MB of symbols; filter in the child so the capture stays bounded.
+fn filtered_probe(label: &str, pipeline: &str, image: &Path) -> CmdSpec {
+    CmdSpec::new(
+        label,
+        "/bin/bash",
+        &[
+            "-o",
+            "pipefail",
+            "-c",
+            pipeline,
+            "qaren-probe",
+            &image.to_string_lossy(),
+        ],
+        20,
+    )
+}
+
 fn verify_initial_url_launcher(
     runner: &mut dyn Runner,
     app: &Path,
@@ -590,11 +689,10 @@ fn verify_initial_url_launcher(
         return Err(refused.into());
     }
     let symbols = runner.run_private(
-        &CmdSpec::new(
+        &filtered_probe(
             "ios-app-launcher-symbols",
-            "xcrun",
-            &["nm", "-j", "-U", &image.to_string_lossy()],
-            10,
+            "xcrun nm -j -U \"$1\" | grep -F EXDevLauncherController",
+            &image,
         ),
         &[],
     );
@@ -610,18 +708,10 @@ fn verify_initial_url_launcher(
         return Err(refused.into());
     }
     let strings = runner.run_private(
-        &CmdSpec::new(
+        &filtered_probe(
             "ios-app-launcher-arguments",
-            "xcrun",
-            &[
-                "otool",
-                "-v",
-                "-s",
-                "__TEXT",
-                "__cstring",
-                &image.to_string_lossy(),
-            ],
-            10,
+            "xcrun otool -v -s __TEXT __cstring \"$1\" | grep -E '[[:space:]]--initialUrl$'",
+            &image,
         ),
         &[],
     );

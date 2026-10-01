@@ -57,7 +57,9 @@ booting that exact iOS simulator under the lease. `--fresh-install` opts into
 removing the selected app and its data, proving absence, then installing it
 under the same lease. Both opt-ins require strict admission before mutation.
 Cleanup leaves the borrowed simulator running and keeps the installed app.
-iOS preparation proves app-local Expo generic-build support, builds a finite
+iOS preparation proves app-local Expo generic-build support, or uses an
+explicitly configured Xcode workspace (see
+[CLI-owned iOS build routes](#cli-owned-ios-build-routes)), builds a finite
 simulator bundle, and starts the app on the selected simulator with a separate
 Metro process group. If finite-build cleanup is unknown, the build lock and
 device lease remain claimed for `qaren cleanup`. The developer
@@ -140,11 +142,12 @@ prepare ──► validate (scenario schema, candidate git sha, lockfile sha256)
                       USB:  exclusive claim lock usb-<serial> (refuse if held)
                             run-scoped --one-device <serial> adb server on
                             adb_server_port; device must probe `device`
-        ──► build+launch   iOS: finite build, verified install, separate Metro
-                             (see the iOS preparation contract above)
-                           Android: pnpm exec expo run:android --port <port>
-                             (CI=1, no --device; serial pinned via
-                             ANDROID_SERIAL + the one-device server)
+        ──► build+launch   iOS: finite generic Expo or explicit Xcode workspace build
+                             → verify simulator bundle → install on owned UDID
+                             → separate owned Metro → launch verified bundle
+                          Android: pnpm exec expo run:android --port <port>
+                             (serial pinned via ANDROID_SERIAL + the
+                             one-device server; CI=1)
         ──► verify   port owner pgid == spawned pgid, /status responds,
                      app installed + running on the owned device
         ──► ready    receipt + durable host-level run.json
@@ -168,6 +171,27 @@ Scenarios are versioned (`schema: qaren/1`), narrow, and strictly validated
 - [`scenarios/cooperative-ios.yaml`](scenarios/cooperative-ios.yaml) /
   [`scenarios/cooperative-usb-android.yaml`](scenarios/cooperative-usb-android.yaml)
   — `build.owner: qaren` handoff mode (see below).
+
+### CLI-owned iOS build routes
+
+The default route requires the app-local Expo CLI to advertise generic build-only mode, `--no-bundler` and `--output`. For older Expo CLIs, explicitly select an existing native workspace and its Xcode scheme in the app's `.qaren/config.yaml` (or an external `check --config` file):
+
+```yaml
+appId: com.example.app
+devClientScheme: exp+example
+ios:
+  build:
+    workspace: ios/Example.xcworkspace
+    scheme: Example
+```
+
+For `prepare`, the same pair belongs under `build.ios_workspace` in the scenario, alongside `build.owner: cli`. Workspace paths are relative to the app root, remain under `ios/`, and must resolve through plain directories to an existing `.xcworkspace` with a plain `contents.xcworkspacedata` file. No scheme discovery, Expo upgrade or automatic fallback after a failed build occurs. An iOS section in shared `check` config does not select this route for Android.
+
+This route runs `xcrun xcodebuild` in Debug against the generic iOS Simulator destination, with signing and the React Native packager launch disabled. Products and DerivedData are isolated under the run directory. The existing finite-build process group and lock remain authoritative; only a clean exit with proven group shutdown can proceed to single-bundle verification, exact-device installation, separate Metro and launch. A missing or ambiguous app, wrong bundle/platform/scheme or unsupported dev-client launcher still fails before installation. Workspace and scheme selection participate in the native cache fingerprint; omitting the opt-in preserves existing Expo cache keys.
+
+**Native preparation remains explicit.** Supply a workspace whose native dependencies and generated inputs are ready for Xcode. QaReN retains its existing clean/incremental policy: an unproven generated native directory is regenerated through owned `expo prebuild --clean`, then the workspace is revalidated before compilation; a git-visible native tree is not regenerated. The workspace route adds no CocoaPods synchronization or codegen command of its own, and workspace existence is not proof that those inputs are current after a dependency update. A build failure is reported, not retried through another backend.
+
+After verified cache publication and proven build-group shutdown, successful workspace builds retire their run-local products and DerivedData. Failed builds, failed publication or unresolved cleanup retain outputs; symlinked retirement roots are not followed. Unknown build-group cleanup continues to retain the build lock and device lease for `qaren cleanup`.
 
 ### Cooperative handoff mode (`build.owner: qaren`)
 
@@ -208,13 +232,7 @@ cleanliness and drift comparison — an external project does not need to
 gitignore it, and a clean worktree stays provably clean while qaren writes
 its project caches there.
 
-`candidate.dev_client_scheme` names the app's dev-client URL scheme (e.g.
-`rndatest`); it is required for cached dev-client reuse (the launch deep
-link) and its absence visibly downgrades a reusable run to an incremental
-build. The checked-in iOS scenario deliberately omits it — its exact bytes
-are pinned by the archived 2026-08-12 proof receipts — so cached reuse on
-the workspace lane is an explicit opt-in via a scenario copy carrying the
-scheme (the USB example shows the field).
+`candidate.dev_client_scheme` names the app's registered dev-client URL scheme (e.g. `exp+example`), not its Xcode scheme; it is required for CLI-owned iOS builds and cached dev-client reuse. `check` calls this field `devClientScheme`. Bundle verification checks both the registered scheme and the built dev-client launcher before installation.
 
 ### Physical USB Android
 

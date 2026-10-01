@@ -1,5 +1,5 @@
 use crate::failure::{Failure, FailureCode};
-use crate::scenario::{require_launch_scheme, Platform};
+use crate::scenario::{require_launch_scheme, BuildOwner, IosWorkspaceBuild, Platform};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -32,6 +32,8 @@ pub struct IosConfig {
     pub device_type: Option<String>,
     #[serde(default)]
     pub runtime: Option<String>,
+    #[serde(default)]
+    pub build: Option<IosWorkspaceBuild>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -52,6 +54,9 @@ fn d_metro_port() -> u16 {
 impl CheckConfig {
     pub fn validate_for_platform(&self, platform: Platform) -> Result<(), Failure> {
         if platform == Platform::Ios {
+            if let Some(build) = self.ios.as_ref().and_then(|ios| ios.build.as_ref()) {
+                build.validate_for(platform, BuildOwner::Cli)?;
+            }
             require_launch_scheme(self.dev_client_scheme.as_deref())?;
         }
         Ok(())
@@ -80,6 +85,9 @@ impl CheckConfig {
     }
 
     fn validate(&self, path: &Path) -> Result<(), Failure> {
+        if let Some(build) = self.ios.as_ref().and_then(|ios| ios.build.as_ref()) {
+            build.validate()?;
+        }
         let invalid = |detail: String| {
             Failure::new(
                 "config",

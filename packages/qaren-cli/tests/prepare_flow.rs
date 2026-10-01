@@ -66,7 +66,7 @@ fn prepare_checks_the_installed_cli_before_device_allocation() {
         "expo run:ios --help",
         CmdOutput::success(common::IOS_BUILD_HELP),
     );
-    qaren::adapters::ios::require_generic_build(&mut mock, &repo.join("test-app")).unwrap();
+    qaren::adapters::ios::require_build(&mut mock, &repo.join("test-app"), None).unwrap();
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", repo.display())));
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
     mock.expect_run("git", CmdOutput::success(""));
