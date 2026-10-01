@@ -1286,10 +1286,11 @@ export async function withImmediatePinnedRunner<T>(
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) chmodSync(entryPath, 0o500);
       else if (entry.isFile()) {
-        chmodSync(
-          entryPath,
-          entryPath === snapshotRunner || entryPath === snapshotHelper ? 0o500 : 0o400,
-        );
+        const executable =
+          entryPath === snapshotRunner ||
+          entryPath === snapshotHelper ||
+          (lstatSync(entryPath).mode & 0o111) !== 0;
+        chmodSync(entryPath, executable ? 0o500 : 0o400);
       }
     }
     chmodSync(snapshotRoot, 0o500);

@@ -60875,7 +60875,8 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, pl
       if (entry.isDirectory())
         chmodSync4(entryPath, 320);
       else if (entry.isFile()) {
-        chmodSync4(entryPath, entryPath === snapshotRunner || entryPath === snapshotHelper ? 320 : 256);
+        const executable = entryPath === snapshotRunner || entryPath === snapshotHelper || (lstatSync7(entryPath).mode & 73) !== 0;
+        chmodSync4(entryPath, executable ? 320 : 256);
       }
     }
     chmodSync4(snapshotRoot, 320);
