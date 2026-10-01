@@ -160,6 +160,17 @@ ${section(source, '  func snapshotPlatformPresence(', '  func retainSnapshotTarg
     return ["observed": stamp != nil, "stamp": stamp ?? -1, "reasons": reasons, "reads": reads,
       "deadline": timing.diagnostics(complete: false).deadline != nil]
   }
+  func observeShared(_ groups: [(XCUIElementSnapshot, Int)], app: XCUIApplication) -> [[String: Any]] {
+    let timing = PresenceCaptureTiming(started: now, now: { self.now })
+    let bindings = PresenceBindings()
+    return groups.map { descriptor, count in
+      var reasons: [String] = []
+      let stamp = observePresence(PresenceDescriptor(descriptor)!, count: count, predicateIsExact: false,
+        app: app, deadline: 20_000, timing: timing, unknownReason: { reasons.append($0.rawValue) },
+        bindings: bindings)
+      return ["observed": stamp != nil, "reasons": reasons]
+    }
+  }
 }
 func emit(_ value: [String: Any]) throws {
   print(String(data: try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), encoding: .utf8)!)
@@ -228,6 +239,20 @@ for name in ["empty", "clipped", "ambiguous", "group-false", "group-nil", "group
   try emit(["name": name, "complete": capture.complete, "observations": observations, "reads": reads,
     "samples": capture.diagnostics!.preparationSamples!, "quietMs": capture.diagnostics!.preparationQuietElapsedMs!])
 }
+do {
+  reads = []
+  let h = Harness(), app = XCUIApplication(XCUIElementSnapshot())
+  let elements = (0..<3).map { XCUIElement($0) }
+  let descriptors = elements.map { element -> XCUIElementSnapshot in
+    let snapshot = XCUIElementSnapshot()
+    snapshot.frame.origin.x = CGFloat(element.ordinal * 100)
+    element.snapshots = [snapshot]
+    return snapshot
+  }
+  app.query.elements = elements
+  let shared = h.observeShared(descriptors.map { ($0, 1) } + [(descriptors[0], 2)], app: app)
+  try emit(["name": "shared-predicate", "results": shared, "reads": reads])
+}
 let allowed = ["empty-frame", "clipped", "ambiguous-descriptor", "not-hittable", "read-unavailable", "match-count-mismatch", "post-hit-mismatch"]
 for raw in allowed {
   let reason = PlatformPresenceObservation.UnknownReason(rawValue: raw)!
@@ -286,6 +311,28 @@ precondition(decoded.unknownReason == nil)
       );
     });
   }
+  await t.test('groups sharing a fallback predicate bind it once per capture', () => {
+    const row = rows.find((row) => row.name === 'shared-predicate');
+    assert.deepEqual(row.results, [
+      { observed: true, reasons: [] },
+      { observed: true, reasons: [] },
+      { observed: true, reasons: [] },
+      { observed: false, reasons: ['match-count-mismatch'] },
+    ]);
+    assert.equal(row.reads.filter((read: string) => read === 'all').length, 1);
+    assert.deepEqual(row.reads.slice(0, 6), [
+      'descendants',
+      'matching',
+      'all',
+      'snapshot-0',
+      'snapshot-1',
+      'snapshot-2',
+    ]);
+    for (const ordinal of [0, 1, 2]) {
+      assert.equal(row.reads.filter((read: string) => read === `hit-${ordinal}`).length, 1);
+      assert.equal(row.reads.filter((read: string) => read === `snapshot-${ordinal}`).length, 2);
+    }
+  });
   for (const [name, reason, count, liveReads] of [
     ['empty', 'empty-frame', 1, []],
     ['clipped', 'clipped', 1, []],
