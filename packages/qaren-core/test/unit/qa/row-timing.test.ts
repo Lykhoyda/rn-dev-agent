@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildLedger, ledgerWithoutResult, type LedgerRow } from '../../../dist/qa/ledger.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
+import { createJev, JEV_MODEL } from '../../../dist/qa/jev.js';
+import type { Questions } from '../../../dist/qa/questions.js';
 import { createRowTimer, summarizeSpeed } from '../../../dist/qa/row-timing.js';
 import type { TimingEvent } from '../../../dist/qa/timing.js';
 import { runPlan, walkBlock } from '../../../dist/qa/walker.js';
@@ -232,6 +234,43 @@ test('a walked step carries its window timing and the ledger carries speed', asy
     passed: 1,
     failed: 0,
   });
+});
+
+test('row Jev timing includes retry backoff and resets after each row', async () => {
+  let now = 0;
+  let attempts = 0;
+  const judge = createJev({
+    apiKey: 'test-key',
+    now: () => now,
+    sleep: async (ms) => {
+      now += ms;
+    },
+    fetch: async (_url, init) => {
+      now += 100;
+      if (attempts++ === 1)
+        return new Response('', { status: 429, headers: { 'Retry-After': '2' } });
+      const { questions } = JSON.parse(String(init?.body)) as { questions: Questions };
+      return Response.json({
+        model: JEV_MODEL,
+        answers: Object.fromEntries(Object.entries(questions).map(([id, q]) => [id, choice(q)])),
+        usage: { input_tokens: 10 },
+      });
+    },
+  });
+  const f = walker([screen([element('@save', 'Save')])], judge);
+  f.deps.now = () => now;
+  f.deps.timing = () => {};
+  await judge.ask(
+    {},
+    { warmup: { type: 'choice', instructions: 'Choose', criteria: { e0: 'yes', e1: 'no' } } },
+  );
+  const plan = parsePlan('1. Tap the save button\n2. Tap the save button').blocks!;
+  const ledger = await runPlan(plan, f.deps);
+  assert.equal(ledger.verdict, 'PASS');
+  assert.deepEqual(
+    ledger.steps.map((step) => step.timing?.jevMs),
+    [2_200, 100],
+  );
 });
 
 test('timing is passive: rows and verdict match a walk without an observer', async () => {

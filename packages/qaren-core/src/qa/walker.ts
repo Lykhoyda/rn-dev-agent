@@ -891,6 +891,7 @@ function withRowTiming(deps: WalkerDeps): WalkerDeps {
   if (!observe) return deps;
   const timer = createRowTimer(deps.now());
   let jevCalls = deps.judge?.calls.length ?? 0;
+  let jevElapsed = deps.judge?.elapsedMs ?? 0;
   return {
     ...deps,
     timing: (event) => {
@@ -903,8 +904,13 @@ function withRowTiming(deps: WalkerDeps): WalkerDeps {
     },
     rowTiming: (t) => {
       const calls = deps.judge?.calls ?? [];
-      const jevMs = calls.slice(jevCalls).reduce((sum, call) => sum + call.ms, 0);
+      const elapsed = deps.judge?.elapsedMs;
+      const jevMs =
+        elapsed === undefined
+          ? calls.slice(jevCalls).reduce((sum, call) => sum + call.ms, 0)
+          : elapsed - jevElapsed;
       jevCalls = calls.length;
+      jevElapsed = elapsed ?? 0;
       return timer.take(t, jevMs);
     },
   };
