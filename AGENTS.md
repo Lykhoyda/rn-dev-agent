@@ -21,7 +21,7 @@ The package cut and literal `qaren check` are merged into `develop`. The Phase 3
 - Root workspace: Yarn 4 workspace, managed by `package.json` and `yarn.lock`.
   Use `corepack yarn ...` from the repository root. The Rust crate is driven
   with `cargo` directly.
-- `packages/qaren-cli/`: Rust CLI, library and binary `qaren`, `publish = false`. `src/run.rs` orchestrates `check`; the prototype debug verbs remain. Device leases live under `QAREN_LOCK_ROOT` or `~/.qaren/locks`, and run evidence under `~/.qaren/runs`. `check` reclaims a lease whose holder is proven dead by running that run's own cleanup (`commands/cleanup.rs`); a live or unprovable holder still refuses `DEVICE_BUSY`. While its lease is held, iOS teardown and cleanup also terminate the runner host app a core may have left running. A signal or a vanished caller ends the run as `RUN_CANCELLED` after normal teardown (`src/cancel.rs`). `src/exec/log.rs` owns redaction before durable subprocess logging, including detached debug runs. `observe/` is the Observe SPA (Vite); `target/` and `observe/dist/` are ignored.
+- `packages/qaren-cli/`: Rust CLI, library and binary `qaren`, `publish = false`. `src/run.rs` orchestrates `check`; the prototype debug verbs remain. Device leases live under `QAREN_LOCK_ROOT` or `~/.qaren/locks`, and run evidence under `~/.qaren/runs`. `check` reclaims a lease whose holder is proven dead by running that run's own cleanup (`commands/cleanup.rs`); a live or unprovable holder still refuses `DEVICE_BUSY`. iOS cleanup proves exact-simulator app/test runner-host absence; present or unknown hosts retain the lease because a lease alone does not prove host-process ownership. A signal or a vanished caller ends the run as `RUN_CANCELLED` after normal teardown (`src/cancel.rs`). `src/exec/log.rs` owns redaction before durable subprocess logging, including detached debug runs. `observe/` is the Observe SPA (Vite); `target/` and `observe/dist/` are ignored.
 - `packages/qaren-core/`: TypeScript screen child, entered through `src/qa/walk.ts`. The `qa/` module owns parsing, judgments, screen projections, walking and the ledger, using the kept handlers, CDP helpers, native runners and learned-action domain. `corepack yarn build:core` generates uncommitted `dist/`; entries run as `node packages/qaren-core/dist/<entry>.js`. The package is private and the CLI tarball bundles it in Phase 8.
 - `packages/qaren-plugin/`: the one host package. Claude, Cursor and Codex
   manifests (`.claude-plugin/`, `.cursor-plugin/`, `.codex-plugin/`), a
@@ -149,6 +149,11 @@ Doctrine for the kept handlers, each with one owner:
   beside the pin-cache. Persist only contained `DerivedData/Build/Products`,
   seed after the snapshot seal walk, and skip publication if the toolchain
   fingerprint changed.
+- Saved actions compile to `rn-flow/1` replay plans in one place,
+  `flow/compile.ts` (`dist/qa/walk.js --compile`); the dialect contract is
+  `apps/docs-site/src/content/docs/actions/rn-flow-1.md`. Change semantics
+  there, never per action; regenerate the goldens under
+  `test/fixtures/rn-flow-1/plans/` with `UPDATE_GOLDEN=1` and review the diff.
 - Learned-action compatibility is diagnosed read-only by
   `diagnoseLearnedActions` (`domain/action-engine-compat.ts`), also reachable
   as `node packages/qaren-core/dist/maestro-runner-pin.js diagnose-actions --root <app> [--json]`,
@@ -195,7 +200,7 @@ cargo run --manifest-path packages/qaren-cli/Cargo.toml --locked --example nativ
 corepack yarn test:native:android
 ```
 
-Suite records and redacted logs live under `~/.qaren/native-suites/<run-id>`. Unknown cleanup retains the lease; use the same example with `recover --run-id <run-id>` after the owner exits, rather than deleting locks. Recovery rechecks group absence and admission before release and preserves the original test verdict. The wrapper neither shuts down nor deletes the borrowed simulator; re-read its state before subsequent app work. Isolated CI still invokes `corepack yarn test:native:ios` directly.
+Suite records and redacted logs live under `~/.qaren/native-suites/<run-id>`. Unknown cleanup retains the lease; use the same example with `recover --run-id <run-id>` after the owner exits, rather than deleting locks. Recovery proves the owned group and exact-simulator runner hosts absent, not global admission, and preserves the original test verdict. Admission's controller classification requires kernel identity plus exact argv; an attested unscoped MCP controller is not itself a device conflict, but the scan cannot exclude uncooperative in-process automation. The wrapper neither shuts down nor deletes the borrowed simulator; re-read its state before subsequent app work. Isolated CI still invokes `corepack yarn test:native:ios` directly.
 
 ## Changesets And Versions
 

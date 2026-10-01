@@ -1,30 +1,102 @@
-# qaren — deterministic QA preparation CLI (experiment)
+# qaren — plan-based React Native QA CLI
 
-`qaren` is a workspace-only Rust prototype that answers one question: **does a
-single reproducible build/install/launch contract reduce the time and variance
-agents spend rediscovering setup for every qaren live test?** It
-prepares an explicitly named project (the Expo `test-app`, or an external
-worktree via `candidate.worktree`) on an *owned* device — a dedicated iOS
-simulator on the Mac, one leased NUC Android emulator slot, or one
-exclusively claimed physical USB Android phone — and hands agents a
-candidate-bound `ready` receipt. It deliberately stops there: no interaction,
-no assertions, no session authority. Agents attach with the normal qaren
-tools after `ready`.
+`qaren check` owns a QA run against the current app worktree: it leases a
+simulator, prepares the app and Metro, starts the TypeScript screen child,
+walks a Markdown plan, writes evidence, and tears down owned resources.
+QaReN is still in development; this checkout is not the published 1.x MCP plugin.
+The scenario-based preparation verbs remain available for explicit iOS,
+NUC Android and USB Android setup experiments.
 
 ## Build
 
 ```sh
-cd packages/qaren-cli && cargo build          # binary at packages/qaren-cli/target/debug/qaren
-cargo test                            # hermetic; no device or network access
+corepack yarn install --immutable
+corepack yarn build:core
+cargo build --manifest-path packages/qaren-cli/Cargo.toml --locked
 ```
 
-Rust is the captain-selected language for this prototype. Dependencies are
-deliberately few: `serde`/`serde_json` (receipts and run records),
-`serde_yaml` (scenario input), `sha2` (provenance hashes). Arg parsing and UTC
-formatting are hand-rolled. The crate never touches the repository's pnpm
-authority — `pnpm` remains the package manager for the app it prepares.
+Run these commands from the repository root. The binary is
+`packages/qaren-cli/target/debug/qaren`; its screen child uses the generated
+`packages/qaren-core/dist/`. Set `QAREN_RUNTIME` to its absolute path when running
+the binary from another location. Set `TYPESAFE_API_KEY` for Jev judgments;
+even a literal plan performs a live readiness judgment before device allocation.
 
-## Usage
+## Check a plan
+
+From the app's directory, supply `.qaren/config.yaml` and a Markdown plan:
+
+```sh
+qaren check --plan-file plan.md --device <simulator-UUID> --json
+```
+
+The configuration keys, defaults and validation are owned by
+[`src/config.rs`](src/config.rs). iOS requires `appId` and `devClientScheme`;
+only `pnpm` is supported as the app package manager. `--config` selects another
+configuration file. `check` currently supports iOS simulators only;
+`--platform android` refuses with `PLATFORM_UNSUPPORTED`.
+
+Plans contain a `## QA` section, named `###` blocks, numbered actions and
+`✓` checks. See the executable
+[literal](../qaren-core/test/fixtures/plans/literal.md) and
+[phrase](../qaren-core/test/fixtures/plans/phrases.md) fixtures and the
+[parser](../qaren-core/src/qa/plan.ts) for accepted grammar. Quoted targets
+resolve observed identities; phrase targets and semantic checks use Jev.
+Unparseable lines refuse before allocation; unresolved screen targets refuse during the walk.
+Native platform presence establishes observed presence, not complete visual exposure
+or an accessibility heading role. Heading predicates require qualified heading evidence;
+unsupported visual or layout claims remain uncertain.
+
+```text
+plan preflight -> device selection -> lease + durable run record
+               -> app preparation -> screen proof -> walk -> teardown
+```
+
+By default `check` borrows the only booted simulator, or the booted target
+selected by `--device`. `--boot-device --device <simulator-UUID>` opts into
+booting that exact iOS simulator under the lease. `--fresh-install` opts into
+removing the selected app and its data, proving absence, then installing it
+under the same lease. Both opt-ins require strict admission before mutation.
+Cleanup leaves the borrowed simulator running and keeps the installed app.
+iOS preparation proves app-local Expo generic-build support, builds a finite
+simulator bundle, and starts the app on the selected simulator with a separate
+Metro process group. If finite-build cleanup is unknown, the build lock and
+device lease remain claimed for `qaren cleanup`. The developer
+[check gate](../../scripts/gate-qaren-check.sh) forwards the boot opt-in with
+`QAREN_BOOT_DEVICE=1` alongside `QAREN_DEVICE_UDID`.
+
+### iOS admission and cleanup
+
+Strict admission observes known automation patterns for the selected simulator.
+A driver targeting it is busy; a driver can coexist only when kernel executable
+identity and exact arguments prove that it targets other simulators exclusively.
+An unscoped Maestro MCP controller can coexist when its Java executable and
+exact MCP arguments are attested; its command-line spelling alone is insufficient.
+Unknown identity, scope, process-table completeness or inspection outcome refuses.
+The scan cannot exclude uncooperative automation inside an otherwise admitted
+process and is not an external coordination lease.
+
+Drivers and unresolved process identities share one candidate budget and one
+scan deadline. Oversized arguments require bounded kernel path inspection that
+returns an outcome without exporting argument content. Budget exhaustion refuses
+instead of admitting a partial scan. The limits and classification rules are
+owned by the [strict scanner](../qaren-core/src/runners/external-runner-detect.ts)
+and [kernel observer](src/process_observation.rs).
+
+Runs and evidence live under `~/.qaren/runs/<run-id>/`; device leases use
+`QAREN_LOCK_ROOT` or `~/.qaren/locks`. The walk writes `ledger.json` and
+`report.md` when it reaches reporting; the receipt names available artifacts.
+Cleanup proves owned process-group and exact-simulator runner-host absence
+before releasing the lease. Present or unknown hosts retain it. A dead lease
+holder is reclaimed only through that run's cleanup; a live or unprovable holder
+refuses `DEVICE_BUSY`. Recover a retained run with `qaren cleanup <run-id>`;
+do not delete locks to bypass unresolved ownership.
+
+## Preparation verbs
+
+These scenario-based verbs retain the preparation receipt contract below;
+`check` adds `pass` / `fail` results (exit 0 / 1), with typed refusals exiting 4.
+
+### Usage
 
 ```sh
 qaren prepare <scenario.yaml> [--json] [--dry-run]
@@ -35,7 +107,7 @@ qaren cleanup <run-id> [--json]
 qaren cleanup <run-id> [--json] --remove-app --confirm-remove-app <run-id>/<remote-serial>/<app-id>
 ```
 
-Every syntactically valid invocation writes exactly one `qaren/1` JSON
+Every syntactically valid preparation invocation writes exactly one `qaren/1` JSON
 receipt to stdout; argument/usage errors are the sole exception — they exit
 `2` with help on stderr and an empty stdout. All human-readable narration
 goes to stderr. Exit codes: `0` ready / cleaned / planned / working /
@@ -47,8 +119,8 @@ unconfirmed app removal, or rejected cooperative-handoff evidence).
 on `cleanup`; a missing flag or confirmation value, or use on another verb,
 is a usage error (exit `2`, no receipt).
 
-`status` and `cleanup` locate the run under `<repo>/.qaren/runs/<run-id>/`
-from the git toplevel of the current directory. `--dry-run` on `prepare`
+`status`, `cleanup` and `complete` load the host-level run record described
+under [iOS admission and cleanup](#ios-admission-and-cleanup). `--dry-run` on `prepare`
 validates the scenario + candidate and emits the planned command sequence
 (listener/readiness poll probes elided) without allocating anything.
 
@@ -68,13 +140,14 @@ prepare ──► validate (scenario schema, candidate git sha, lockfile sha256)
                       USB:  exclusive claim lock usb-<serial> (refuse if held)
                             run-scoped --one-device <serial> adb server on
                             adb_server_port; device must probe `device`
-        ──► build+launch   pnpm exec expo run:{ios|android}
-                             iOS: --device <udid>; Android: no --device
-                             (serial pinned via ANDROID_SERIAL + the
-                             one-device server) --port <port>   (CI=1)
+        ──► build+launch   iOS: finite build, verified install, separate Metro
+                             (see the iOS preparation contract above)
+                           Android: pnpm exec expo run:android --port <port>
+                             (CI=1, no --device; serial pinned via
+                             ANDROID_SERIAL + the one-device server)
         ──► verify   port owner pgid == spawned pgid, /status responds,
                      app installed + running on the owned device
-        ──► ready    receipt + durable .qaren/runs/<run-id>/run.json
+        ──► ready    receipt + durable host-level run.json
 
 (With `build.owner: qaren` the chain branches after `allocate`: no
 build+launch — prepare re-verifies the candidate, issues `handoff.json`, and
@@ -117,7 +190,7 @@ is unreachable from the session's global adb server). Cleanup is unchanged:
 qaren removes exactly the allocation it recorded and never touches the
 session's Metro or build. The full chain, ownership table, trust boundary,
 and temporary policy live in
-[`docs/qa/cooperative-qa.md`](../../docs/qa/cooperative-qa.md).
+[`docs/qa/cooperative-qa.md`](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/qa/cooperative-qa.md).
 
 ### Project-scoped real apps
 
@@ -125,15 +198,15 @@ and temporary policy live in
 project instead of the workspace containing the scenario. The path must BE a
 git toplevel — a subdirectory of some larger repo is refused
 (`CANDIDATE_PATH_INVALID`) so a run can never bind to files outside the
-project it named. Everything project-scoped follows that worktree: run
-records and caches live under `<worktree>/.qaren/`, the fingerprint
-enumerates only that worktree, and `status`/`cleanup` are run from inside
-it. qaren never discovers, enumerates, or couples other projects.
+project it named. Project caches live under `<worktree>/.qaren/`, and the
+fingerprint enumerates only that worktree. Run records remain host-level;
+`status`/`cleanup` load them by run id without requiring the app directory.
+qaren never discovers, enumerates, or couples other projects.
 `candidate.project_root: .` selects a project living at the worktree root.
 Because `.qaren/` is qaren's own state, it is excluded from the candidate
 cleanliness and drift comparison — an external project does not need to
 gitignore it, and a clean worktree stays provably clean while qaren writes
-its run records there.
+its project caches there.
 
 `candidate.dev_client_scheme` names the app's dev-client URL scheme (e.g.
 `rndatest`); it is required for cached dev-client reuse (the launch deep
@@ -165,8 +238,8 @@ drives adb through that socket and serial) is proven removed or absent.
 
 Every device, Metro port, bundle id, candidate revision, project root, and
 artifact directory is explicit — in the scenario, the run record, or the
-receipt. The tool never selects `booted`, a default device, or "first
-available". `candidate.revision: HEAD` records the exact sha; a pinned
+receipt. The scenario-based preparation verbs never select `booted`, a default device,
+or "first available". `candidate.revision: HEAD` records the exact sha; a pinned
 40-char sha refuses to run against any other checkout state.
 
 ## Native-fingerprint build selection
@@ -236,9 +309,11 @@ reusable dev client is kept on disk.
 
 **Build serialization.** Native builds (incremental and clean) take a
 host-level `native-build-<platform>` lock before allocation. A live holder
-is a structured refusal (`BUILD_CONTENDED`, exit 4); a provably dead
-holder's lock is adopted (unlike device claims, this lock guards only
-compile concurrency). The lock is released at ready and by cleanup.
+is a structured refusal (`BUILD_CONTENDED`, exit 4). Android can adopt a
+provably dead holder's lock. iOS refuses an existing lock until its run's
+cleanup proves the finite build group retired; a dead CLI alone is insufficient.
+The lock is released after preparation or by cleanup only when owned build
+authority is retired.
 
 **Credential-authorized dependency prewarming.** Under `deps.policy:
 require-prewarm`, `qaren prewarm <scenario>` is the one deliberate network
@@ -265,7 +340,7 @@ its run" cleanup story. Once compile is short the balance flips — the
 incremental run spent 1m 31s in allocate against 1m 03s in
 build_and_ready — so revisit this once live reuse is measurable.
 
-## Ownership and safety rules
+## Preparation ownership and safety rules
 
 - **On the farm path, physical USB phones are structurally unreachable.**
   Every device-addressing adb call carries `-s 127.0.0.1:<port>` (plus
@@ -438,7 +513,7 @@ prepare 37s / 48 subprocesses → `ready`, status 8/8, cleanup removed all six
 resources, idempotent re-cleanup `cleaned`. The same independent
 post-cleanup verification passed again. Receipts, device screenshots, and
 the rendered proof card live in
-[`docs/proof/2026-08-12-qaren-exact-head/`](../../docs/proof/2026-08-12-qaren-exact-head/PROOF.md);
+[`docs/proof/2026-08-12-qaren-exact-head/`](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/proof/2026-08-12-qaren-exact-head/PROOF.md);
 every receipt there is pinned to the head that produced it (`f3e1e43`), which
 predates the later corrections documented above — lease release keyed on the
 tunnel port, worktree-fingerprint drift, monotonic deadlines, the atomic
@@ -449,7 +524,7 @@ run-id claim, and persist-before-allocate.
 Clean and incremental iOS simulator journeys were measured at candidate
 `75a8e76` (`git_dirty: false`) once the internal Data volume recovered to
 ~26 GiB free. Receipts, screenshots, and short videos:
-[`docs/proof/2026-08-17-qaren-issue-24/`](../../docs/proof/2026-08-17-qaren-issue-24/PROOF.md).
+[`docs/proof/2026-08-17-qaren-issue-24/`](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/proof/2026-08-17-qaren-issue-24/PROOF.md).
 
 | journey | prepare total | deps | allocate | build_and_ready | decision |
 | --- | --- | --- | --- | --- | --- |
@@ -547,21 +622,19 @@ now encoded once and replayed deterministically.
   it after every resource verified removed/absent, and re-running cleanup
   re-verifies.
 - **App removal limitations:** see the opt-in contract under
-  [Ownership and safety rules](#ownership-and-safety-rules).
+  [Ownership and safety rules](#preparation-ownership-and-safety-rules).
 - **Crash-durability**: `run.json` writes are atomic (temp + rename) but not
   fsync'd; power loss during a write can lose the newest phase transition.
   Acceptable for a dev-machine tool.
-- The build step reuses `expo run:*` semantics: the spawned process *is* the
-  Metro owner and stays alive after `ready`; killing its process group is the
-  cleanup contract for both Metro and build.
+- Android preparation uses `expo run:android`: its spawned process owns
+  Metro and stays alive after `ready`. iOS uses the finite-build contract under
+  [Check a plan](#check-a-plan).
 - app_id validation is one shared grammar (dot-separated `[A-Za-z0-9_-]`
   segments), not per-platform store rules; invalid-but-well-formed ids fail
   later as visible `BUILD_FAILED`.
-- **Expo SDK 56 reuse cannot see the built `.app`.** `expo run:ios` writes
-  DerivedData; `locate_built_artifact` looks under `ios/build`. Live
-  fingerprint-matched reuse is unmeasured until discovery follows the
-  real product path. Hermetic tests already cover reuse vs stale/missing
-  artifacts.
+- The historical Expo SDK 56 artifact-discovery gap in the timing evidence
+  predates the current finite iOS build path. Those measurements do not validate
+  this implementation; exact-head device acceptance remains separate.
 
 ## Comparing against the manual approach
 

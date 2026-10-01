@@ -559,19 +559,28 @@ fn script_teardown(mock: &mut MockRunner) {
     script_teardown_core(mock, CmdOutput::success("1 1 S\n6000 6000 S\n"), false);
 }
 
-fn nothing_to_terminate() -> CmdOutput {
-    CmdOutput::failed(3, "found nothing to terminate")
+fn hosts_absent() -> CmdOutput {
+    CmdOutput::success("PID\tStatus\tLabel\n1\t0\tcom.apple.SpringBoard\n")
+}
+
+fn script_host_probe(mock: &mut MockRunner, udid: &str, output: CmdOutput) {
+    mock.expect_run(
+        "simctl list devices -j",
+        CmdOutput::success(&available_inventory("Booted")),
+    );
+    mock.expect_run(&format!("simctl spawn {udid} launchctl list"), output);
 }
 
 fn script_teardown_core(mock: &mut MockRunner, inventory: CmdOutput, probe_dead_leader: bool) {
-    script_teardown_core_host(mock, inventory, probe_dead_leader, nothing_to_terminate());
+    script_teardown_core_host(mock, inventory, probe_dead_leader, UDID, hosts_absent());
 }
 
-// After the core and Metro groups, the CLI terminates the runner host on the leased simulator.
+// After the core and Metro groups, observe both hosts on the exact leased simulator.
 fn script_teardown_core_host(
     mock: &mut MockRunner,
     inventory: CmdOutput,
     probe_dead_leader: bool,
+    udid: &str,
     runner_host: CmdOutput,
 ) {
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
@@ -592,7 +601,7 @@ fn script_teardown_core_host(
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
-    mock.expect_run("simctl terminate", runner_host);
+    script_host_probe(mock, udid, runner_host);
 }
 
 fn envelope(seq: u64, kind: &str, payload: &str) -> String {
@@ -896,29 +905,31 @@ fn script_cancelled_walk(mock: &mut MockRunner, repo: &Path, runner_host: CmdOut
         mock,
         CmdOutput::success("1 1 S\n6000 6000 S\n"),
         false,
+        UDID,
         runner_host,
     );
     mock.cancel_after = Some(("-p 9000".into(), "received SIGKILL of the caller".into()));
 }
 
 #[test]
-fn a_runner_host_the_core_left_running_is_terminated_before_the_lease_is_released() {
+fn absent_runner_hosts_release_the_lease_without_termination() {
     let (repo, app) = app_repo();
     let mut mock = MockRunner::new();
-    script_cancelled_walk(&mut mock, &repo, CmdOutput::success(""));
+    script_cancelled_walk(&mut mock, &repo, hosts_absent());
 
     let receipt = run(&mut mock, &request(&repo, &app, 30));
 
-    assert_eq!(receipt.cleanup["runner_host"], "removed");
-    assert!(mock.calls.iter().any(|c| c.rendered().contains(&format!(
-        "simctl terminate {UDID} dev.lykhoyda.rndevagent.fastrunner"
-    ))));
+    assert_eq!(receipt.cleanup["runner_host"], "absent");
+    assert!(!mock
+        .calls
+        .iter()
+        .any(|c| c.args.iter().any(|a| a == "terminate")));
     assert_eq!(receipt.cleanup["device_lease"], "removed");
     assert_eq!(mock.remaining(), 0);
 }
 
 #[test]
-fn an_unproven_runner_host_termination_keeps_the_lease_for_cleanup() {
+fn an_unknown_runner_host_inventory_keeps_the_lease_for_cleanup() {
     let (repo, app) = app_repo();
     let mut mock = MockRunner::new();
     script_cancelled_walk(
@@ -940,7 +951,48 @@ fn an_unproven_runner_host_termination_keeps_the_lease_for_cleanup() {
 }
 
 #[test]
-fn reclaiming_a_run_that_reached_the_walk_also_terminates_its_runner_host() {
+fn present_shared_runner_hosts_are_not_terminated_by_check_or_cleanup() {
+    for bundle in [
+        "dev.lykhoyda.rndevagent.fastrunner",
+        "dev.lykhoyda.rndevagent.fastrunner.uitests.xctrunner",
+    ] {
+        let (repo, app) = app_repo();
+        let mut mock = MockRunner::new();
+        let present = CmdOutput::success(&format!(
+            "PID Status Label\n42 0 UIKitApplication:{bundle}[abc][rb-legacy]\n"
+        ));
+        script_cancelled_walk(&mut mock, &repo, present.clone());
+        let req = request(&repo, &app, 30);
+        let receipt = run(&mut mock, &req);
+        assert!(receipt.cleanup["runner_host"].starts_with("unresolved"));
+        assert!(receipt.cleanup["device_lease"].starts_with("unresolved"));
+        assert!(!mock
+            .calls
+            .iter()
+            .any(|c| c.args.iter().any(|a| a == "terminate")));
+        assert_eq!(mock.remaining(), 0);
+        let record = RunRecord::load(&req.runs_root, &run_id()).unwrap();
+        let lease = record.resources.lease.unwrap();
+        let mut cleanup = MockRunner::new();
+        script_host_probe(&mut cleanup, UDID, present);
+        let receipt = qaren::commands::cleanup::cleanup(&mut cleanup, &req.runs_root, &run_id());
+        assert!(receipt.cleanup["runner_host"].starts_with("unresolved"));
+        assert!(lease.lock_dir.exists());
+        assert!(cleanup
+            .calls
+            .iter()
+            .all(|c| c.program != "/bin/kill" && !c.args.iter().any(|a| a == "terminate")));
+        script_host_probe(&mut cleanup, UDID, hosts_absent());
+        let receipt = qaren::commands::cleanup::cleanup(&mut cleanup, &req.runs_root, &run_id());
+        assert_eq!(receipt.cleanup["runner_host"], "absent");
+        assert_eq!(receipt.cleanup["device_lease"], "removed");
+        assert!(!lease.lock_dir.exists());
+        assert_eq!(cleanup.remaining(), 0);
+    }
+}
+
+#[test]
+fn reclaiming_a_run_that_reached_the_walk_requires_scoped_host_absence() {
     let (repo, app) = app_repo();
     let held = plant_holder(&repo, |r| {
         r.resources.ios_simulator = Some(qaren::runrecord::IosSimResource {
@@ -959,10 +1011,7 @@ fn reclaiming_a_run_that_reached_the_walk_also_terminates_its_runner_host() {
     let mut mock = MockRunner::new();
     script_preflight_until_lease(&mut mock, &repo);
     mock.expect_run("ps", CmdOutput::success(""));
-    mock.expect_run(
-        &format!("simctl terminate {UDID} dev.lykhoyda.rndevagent.fastrunner"),
-        CmdOutput::success(""),
-    );
+    script_host_probe(&mut mock, UDID, hosts_absent());
     mock.expect_run("lsof", free_port());
     script_unknown_admission(&mut mock);
     let mut req = request(&repo, &app, 30);
@@ -1371,7 +1420,7 @@ fn an_unresolved_metro_group_retains_the_device_lease_for_cleanup() {
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n"))); // leader survived
     mock.expect_run("ps", CmdOutput::success("S\n"));
-    mock.expect_run("simctl terminate", nothing_to_terminate());
+    script_host_probe(&mut mock, UDID, hosts_absent());
 
     let mut req = request(&repo, &app, 30);
     req.fresh_install = true;
@@ -1545,7 +1594,13 @@ fn two_booted_simulators_refuse_without_a_device_and_borrow_the_named_one_with_i
     script_provision(&mut mock);
     mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
     script_core_identity(&mut mock);
-    script_teardown(&mut mock);
+    script_teardown_core_host(
+        &mut mock,
+        CmdOutput::success("1 1 S\n6000 6000 S\n"),
+        false,
+        OTHER_UDID,
+        hosts_absent(),
+    );
 
     let mut req = request(&repo, &app, 30);
     req.device = Some(OTHER_UDID.to_string());
@@ -2822,7 +2877,7 @@ fn closed_stdout_and_dead_leader_do_not_release_an_unproven_core_group() {
 
         let mut cleanup = MockRunner::new();
         cleanup.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
-        cleanup.expect_run("simctl terminate", nothing_to_terminate());
+        script_host_probe(&mut cleanup, UDID, hosts_absent());
         let receipt = qaren::commands::cleanup::cleanup(&mut cleanup, &req.runs_root, &run_id());
         assert_eq!(
             receipt.result,
