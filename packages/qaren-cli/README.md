@@ -46,6 +46,22 @@ Native platform presence establishes observed presence, not complete visual expo
 or an accessibility heading role. Heading predicates require qualified heading evidence;
 unsupported visual or layout claims remain uncertain.
 
+Phrase presses require complete native and React coverage and proven React-to-native
+associations. Native text, images and plain views are excluded from press candidates
+only when complete React host evidence accounts for every interactive host and no
+associated React evidence suggests that node is interactive. A React role alone
+does not grant press capability; a proven host press handler or native button,
+switch or link does. Unknown capability or missing positive platform presence
+refuses with `SCREEN_EVIDENCE_INCOMPLETE` rather than guessing a target.
+The [screen projection](../qaren-core/src/qa/screen.ts) owns this policy.
+
+Private input capture is required before walking a screen. If it cannot be
+established safely, the walk refuses with `PRIVATE_INPUT_CAPTURE_UNKNOWN` without
+reinjection or a public-tree fallback. Observed input values are masked before
+Jev requests; private values are also masked in reporting. Once sensitive input
+pixels are observed, screenshots are withheld for the rest of the walk.
+Masks preserve identity for comparisons and do not prove unobserved value content.
+
 ```text
 plan preflight -> device selection -> lease + durable run record
                -> app preparation -> screen proof -> walk -> teardown

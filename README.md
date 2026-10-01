@@ -1,3 +1,18 @@
+# QaReN development checkout
+
+This branch is migrating rn-dev-agent to QaReN, a Rust CLI that walks a Markdown
+QA plan against a React Native app and records the result. It is not a working
+installation of the published rn-dev-agent 1.x MCP plugin; QaReN packaging and
+host commands are still pending.
+
+For this checkout, use the [CLI build and usage guide](packages/qaren-cli/README.md).
+It owns `qaren check` configuration, plan syntax, device admission and recovery.
+The [repository guide](AGENTS.md) owns contribution and validation mechanics.
+
+The introduction and installation instructions below describe **published
+rn-dev-agent 1.x**. Use a [published release](https://github.com/Lykhoyda/rn-dev-agent/releases)
+for that product; do not register this development checkout as the 1.x plugin.
+
 <div align="center">
 
 # rn-dev-agent
@@ -184,9 +199,7 @@ phases also apply a bundled set of React Native and React
 | **Testing** | E2E replay and PR-ready proof | `proof_step`, `cross_platform_verify`, `maestro_run`, `maestro_test_all` (`cdp_auto_login` is legacy per-call recovery, not a failed-login fallback or PR proof) |
 | **Macro-Asserts** | State-assertive replays — internal state, not pixels | `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` |
 
-The committed tool surface is asserted in CI against a golden registry
-(`packages/rn-dev-agent-core/test/fixtures/tool-registry.json`), so tool additions and removals
-can't silently drift. [Full tool reference →](https://lykhoyda.github.io/rn-dev-agent/tools/)
+[Full published 1.x tool reference →](https://lykhoyda.github.io/rn-dev-agent/tools/)
 
 </details>
 
@@ -256,16 +269,9 @@ Claude Code / Codex
 /reload-plugins
 ```
 
-Local checkout: `claude --plugin-dir /path/to/rn-dev-agent` (the root `.claude-plugin/marketplace.json`
-resolves the plugin package from `packages/claude-plugin/`).
-
 ### Cursor
 
-Install from **Customize → Plugins**. This repo's `.cursor-plugin/marketplace.json` resolves
-`packages/claude-plugin/`.
-
-Local checkout: load `/path/to/rn-dev-agent/packages/claude-plugin` — not the repository root.
-Cursor starts `cdp` from `${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js`. Claude
+Install the published 1.x plugin from **Customize → Plugins**. Claude
 SessionStart hooks are not loaded. Requires Node.js >= 24.
 
 ### Codex
@@ -275,11 +281,6 @@ codex plugin marketplace add Lykhoyda/rn-dev-agent
 codex plugin add rn-dev-agent@rn-dev-agent
 ```
 
-Local checkout: register the package directory `/path/to/rn-dev-agent/packages/claude-plugin` — the
-same directory Claude installs, not the repository root. Codex selects its own surface from it
-(`.codex-plugin/plugin.json`, `codex-skills/`, `codex.mcp.json`, `bin/cdp-supervisor.js`) and runs
-the one bundled MCP runtime under `rn-dev-agent-core/dist/`. A registration that still points at
-`packages/codex-plugin` must be re-added: that directory is now authoring material only.
 Codex does not load Claude Code hooks — `No plugin hooks` is expected. Codex 0.145.0 is the
 live-refresh floor; older hosts are restart-only. An external CLI or manual plugin change always
 requires exiting and relaunching Codex.
@@ -422,7 +423,7 @@ session. The command never updates the evidence store or uploads data.
 | CDP rejected (1006) | Close React Native DevTools, Flipper, or Chrome DevTools |
 | Zustand store error | Add `global.__ZUSTAND_STORES__` ([setup](https://lykhoyda.github.io/rn-dev-agent/getting-started/#zustand-stores-one-bridge-call)) |
 | Plugin not detected (Claude) | `/plugin install rn-dev-agent@rn-dev-agent` then `/reload-plugins` |
-| Plugin not detected (Cursor) | Customize → Plugins; local path is `packages/claude-plugin`. Reload the window. Requires Node.js >= 24 |
+| Plugin not detected (Cursor) | Customize → Plugins; select the published 1.x plugin and reload the window. Requires Node.js >= 24 |
 | Subagent says "MCP tools unavailable" | Never spawn `rn-tester`/`rn-pr-qa`/`rn-debugger` via the Task tool — use `/rn-dev-agent:test-feature`, `/rn-dev-agent:qa-pr`, or `/rn-dev-agent:debug-screen` instead (GH #31) |
 
 <details>
@@ -459,42 +460,14 @@ Codex:  codex plugin marketplace upgrade rn-dev-agent
         # relaunch after this external mutation
 ```
 
-Release notes: [GitHub Releases](https://github.com/Lykhoyda/rn-dev-agent/releases) · [core changelog](packages/rn-dev-agent-core/CHANGELOG.md)
+Release notes: [GitHub Releases](https://github.com/Lykhoyda/rn-dev-agent/releases) · [core changelog](packages/qaren-core/CHANGELOG.md)
 
 <details>
 <summary><strong>Development — building from source</strong></summary>
 
-This is a Yarn workspace monorepo:
-
-| Package | What it is |
-|---------|------------|
-| `packages/rn-dev-agent-core` | The MCP server (CDP bridge, device control, actions, testing) — all TypeScript source and tests |
-| `packages/claude-plugin` | The one plugin package Claude, Cursor, and Codex install — Claude/Cursor manifests, commands, agents, skills, hooks, generated Codex adapters (`.codex-plugin/`, `codex-*`, `bin/`), one bundled runtime |
-| `packages/codex-plugin` | Codex authoring source (manifest, playbooks, adapted skills, launcher, health) generated into `packages/claude-plugin` |
-| `packages/shared-agent-knowledge` | [Canonical workflow knowledge and host adaptation guidance](packages/shared-agent-knowledge/README.md) |
-| `packages/rn-fast-runner` | In-tree iOS XCTest device runner |
-| `packages/rn-android-runner` | In-tree Android UiAutomator device runner |
-| `apps/docs-site` | Astro Starlight docs → [lykhoyda.github.io/rn-dev-agent](https://lykhoyda.github.io/rn-dev-agent/) |
-
-```bash
-git clone https://github.com/Lykhoyda/rn-dev-agent.git
-cd rn-dev-agent
-corepack enable
-corepack yarn install --immutable
-corepack yarn build:host-runtimes   # builds core + generates the distributed plugin package
-```
-
-Run locally: `claude --plugin-dir /path/to/rn-dev-agent` (Claude Code), load
-`packages/claude-plugin` (Cursor), or register `packages/claude-plugin` (Codex).
-
-```bash
-corepack yarn test          # complete unit-test suite
-corepack yarn lint          # oxlint
-corepack yarn format:check  # oxfmt
-```
-
-Versioning uses [changesets](https://github.com/changesets/changesets); every tool-surface change
-must update the golden registry (`node scripts/update-tool-registry.mjs`).
+For the current QaReN source layout, contribution commands and versioning,
+see [the repository guide](AGENTS.md). Build and run the CLI using
+[its usage guide](packages/qaren-cli/README.md).
 
 </details>
 
