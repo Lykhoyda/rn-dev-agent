@@ -176,9 +176,17 @@ pub struct RowTiming {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LedgerSpeed {
-    pub step_median_ms: u64,
-    pub step_p95_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_median_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_p95_ms: Option<u64>,
     pub walk_ms: u64,
+    #[serde(default)]
+    pub steps: u64,
+    #[serde(default)]
+    pub passed: u64,
+    #[serde(default)]
+    pub failed: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

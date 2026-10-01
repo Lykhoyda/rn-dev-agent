@@ -306,8 +306,12 @@ fn a_typed_refusal_needs_exit_four() {
 fn a_typed_refusal_keeps_its_walk_speed_and_drops_a_malformed_one() {
     for (speed, expected) in [
         (
-            serde_json::json!({"stepMedianMs": 250, "stepP95Ms": 400, "walkMs": 1900}),
-            Some(400),
+            serde_json::json!({"stepMedianMs": 250, "stepP95Ms": 400, "walkMs": 1900, "steps": 5, "passed": 4, "failed": 1}),
+            Some((Some(400), 5, 4, 1)),
+        ),
+        (
+            serde_json::json!({"walkMs": 0, "steps": 0, "passed": 0, "failed": 0}),
+            Some((None, 0, 0, 0)),
         ),
         (serde_json::Value::Null, None),
         (serde_json::json!({"walkMs": "slow"}), None),
@@ -326,7 +330,12 @@ fn a_typed_refusal_keeps_its_walk_speed_and_drops_a_malformed_one() {
         assert!(matches!(outcome.verdict, Verdict::Refused { .. }));
         assert!(outcome.failure.is_none());
         assert_eq!(
-            outcome.ledger.speed.map(|speed| speed.step_p95_ms),
+            outcome.ledger.speed.map(|speed| (
+                speed.step_p95_ms,
+                speed.steps,
+                speed.passed,
+                speed.failed
+            )),
             expected
         );
     }

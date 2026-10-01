@@ -77,22 +77,10 @@ test('overlap and fractional rounding still partition the row total exactly', ()
   assert.equal(sum(rounded), rounded.total);
 });
 
-test('speed summarizes passing timed steps and checks only', () => {
-  const timed = (line: number, total: number, extra: Partial<LedgerRow> = {}): LedgerRow =>
-    row(line, {
-      timing: {
-        captureMs: 0,
-        nativeMs: 0,
-        reactMs: 0,
-        resolveMs: 0,
-        jevMs: 0,
-        actMs: 0,
-        postCaptureMs: 0,
-        otherMs: total,
-        total,
-      },
-      ...extra,
-    });
+const timed = (line: number, total: number, extra: Partial<LedgerRow> = {}): LedgerRow =>
+  row(line, { timing: createRowTimer(0).take(total, 0), ...extra });
+
+test('speed summarizes every logical step and check across all attempts', () => {
   const rows = [
     timed(1, 100),
     timed(2, 300, { kind: 'check' }),
@@ -101,10 +89,77 @@ test('speed summarizes passing timed steps and checks only', () => {
     timed(5, 400),
     row(6),
   ];
-  assert.deepEqual(summarizeSpeed(rows), { stepMedianMs: 250, stepP95Ms: 400, walkMs: 1_900 });
-  assert.equal(summarizeSpeed([row(1)]), undefined);
+  assert.deepEqual(summarizeSpeed(rows), {
+    stepMedianMs: 300,
+    stepP95Ms: 900,
+    walkMs: 1_900,
+    steps: 5,
+    passed: 4,
+    failed: 1,
+  });
   assert.deepEqual(buildLedger([], rows).speed, summarizeSpeed(rows));
-  assert.equal('speed' in buildLedger([], [row(1)]), false);
+});
+
+test('retry and success windows sum to the elapsed logical step time', () => {
+  for (const kind of ['step', 'check'] as const) {
+    assert.deepEqual(
+      summarizeSpeed([
+        timed(1, 9_000, { kind, outcome: 'retry' }),
+        timed(1, 1_000, { kind, attempt: 2 }),
+      ]),
+      {
+        stepMedianMs: 10_000,
+        stepP95Ms: 10_000,
+        walkMs: 10_000,
+        steps: 1,
+        passed: 1,
+        failed: 0,
+      },
+    );
+  }
+});
+
+test('failed-only walks retain real durations and count the final outcome', () => {
+  const rows = [
+    timed(1, 9_000, { outcome: 'retry' }),
+    timed(1, 1_000, { outcome: 'fail', attempt: 2 }),
+    timed(2, 2_000, { kind: 'check', outcome: 'fail' }),
+  ];
+  assert.deepEqual(buildLedger([], rows).speed, {
+    stepMedianMs: 6_000,
+    stepP95Ms: 10_000,
+    walkMs: 12_000,
+    steps: 2,
+    passed: 0,
+    failed: 2,
+  });
+});
+
+test('logical step identities include block, line and kind', () => {
+  assert.deepEqual(
+    summarizeSpeed([
+      timed(1, 100),
+      timed(1, 200, { block: 'other' }),
+      timed(1, 300, { kind: 'check' }),
+      timed(2, 400),
+    ]),
+    {
+      stepMedianMs: 250,
+      stepP95Ms: 400,
+      walkMs: 1_000,
+      steps: 4,
+      passed: 4,
+      failed: 0,
+    },
+  );
+});
+
+test('walks without timed logical steps omit percentiles and retain counts', () => {
+  const empty = { walkMs: 0, steps: 0, passed: 0, failed: 0 };
+  assert.deepEqual(summarizeSpeed([]), empty);
+  assert.deepEqual(summarizeSpeed([row(1)]), empty);
+  assert.deepEqual(buildLedger([], [row(1)]).speed, empty);
+  assert.deepEqual(summarizeSpeed([{ ...timed(1, 50), kind: 'setup' }]), { ...empty, walkMs: 50 });
 });
 
 function timedWalk() {
@@ -145,6 +200,9 @@ test('a walked step carries its window timing and the ledger carries speed', asy
     stepMedianMs: t.total,
     stepP95Ms: t.total,
     walkMs: t.total,
+    steps: 1,
+    passed: 1,
+    failed: 0,
   });
 });
 
@@ -160,7 +218,7 @@ test('timing is passive: rows and verdict match a walk without an observer', asy
     a.steps.map(({ timing: _timing, ...rest }) => rest),
     b.steps,
   );
-  assert.equal('speed' in b, false);
+  assert.deepEqual(b.speed, { walkMs: 0, steps: 0, passed: 0, failed: 0 });
   assert.ok(b.steps.every((s) => !('timing' in s)));
   assert.deepEqual(timed.f.actions, plain.f.actions);
 });

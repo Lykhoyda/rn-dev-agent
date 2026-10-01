@@ -15,9 +15,12 @@ export interface RowTiming {
 }
 
 export interface LedgerSpeed {
-  stepMedianMs: number;
-  stepP95Ms: number;
+  stepMedianMs?: number;
+  stepP95Ms?: number;
   walkMs: number;
+  steps: number;
+  passed: number;
+  failed: number;
 }
 
 interface Window {
@@ -115,24 +118,37 @@ export function createRowTimer(startedAt: number): RowTimer {
   };
 }
 
-// Median and nearest-rank p95 over passing step and check rows; walk time spans every timed row.
 export function summarizeSpeed(
-  rows: readonly { kind: string; outcome: string; timing?: RowTiming }[],
-): LedgerSpeed | undefined {
-  const timed = rows.filter((row) => row.timing);
-  if (!timed.length) return undefined;
-  const passing = timed
-    .filter((row) => row.outcome === 'pass' && (row.kind === 'step' || row.kind === 'check'))
-    .map((row) => row.timing!.total)
+  rows: readonly { block: string; line: number; kind: string; outcome: string; timing?: RowTiming }[],
+): LedgerSpeed {
+  const steps = new Map<string, { total: number; outcome: string }>();
+  let walkMs = 0;
+  for (const row of rows) {
+    if (!row.timing) continue;
+    walkMs += row.timing.total;
+    if (row.kind !== 'step' && row.kind !== 'check') continue;
+    const key = JSON.stringify([row.block, row.line, row.kind]);
+    steps.set(key, {
+      total: (steps.get(key)?.total ?? 0) + row.timing.total,
+      outcome: row.outcome,
+    });
+  }
+  const totals = [...steps.values()]
+    .map((step) => step.total)
     .sort((a, b) => a - b);
-  const mid = Math.floor(passing.length / 2);
+  const mid = Math.floor(totals.length / 2);
+  const passed = [...steps.values()].filter((step) => step.outcome === 'pass').length;
   return {
-    stepMedianMs: !passing.length
-      ? 0
-      : passing.length % 2
-        ? passing[mid]
-        : Math.round((passing[mid - 1] + passing[mid]) / 2),
-    stepP95Ms: passing.length ? passing[Math.ceil(passing.length * 0.95) - 1] : 0,
-    walkMs: timed.reduce((sum, row) => sum + row.timing!.total, 0),
+    ...(totals.length
+      ? {
+          stepMedianMs:
+            totals.length % 2 ? totals[mid] : Math.round((totals[mid - 1] + totals[mid]) / 2),
+          stepP95Ms: totals[Math.ceil(totals.length * 0.95) - 1],
+        }
+      : {}),
+    walkMs,
+    steps: steps.size,
+    passed,
+    failed: steps.size - passed,
   };
 }

@@ -159,8 +159,17 @@ pub fn render(input: &ReportInput<'_>) -> String {
     ));
     if let Some(speed) = &input.ledger.speed {
         out.push_str(&format!(
-            "stepMedianMs {} · stepP95Ms {} · walkMs {}\n",
-            speed.step_median_ms, speed.step_p95_ms, speed.walk_ms
+            "stepMedianMs {} · stepP95Ms {} · walkMs {} · steps {} ({} passed, {} failed)\n",
+            speed
+                .step_median_ms
+                .map_or_else(|| "n/a".to_string(), |ms| ms.to_string()),
+            speed
+                .step_p95_ms
+                .map_or_else(|| "n/a".to_string(), |ms| ms.to_string()),
+            speed.walk_ms,
+            speed.steps,
+            speed.passed,
+            speed.failed
         ));
     }
     out

@@ -17,11 +17,11 @@ fn row_timing_and_ledger_speed_round_trip_through_the_ledger() {
     let raw = ledger(
         json!([{"block":"qa","line":1,"attempt":1,"kind":"step","resolvedBy":"jev","t":120,
             "outcome":"pass","timing":timing()}]),
-        json!({"stepMedianMs":120,"stepP95Ms":120,"walkMs":120}),
+        json!({"stepMedianMs":120,"stepP95Ms":120,"walkMs":120,"steps":1,"passed":1,"failed":0}),
     );
     let parsed: Ledger = serde_json::from_value(raw.clone()).unwrap();
     assert_eq!(parsed.steps[0].timing.as_ref().unwrap().post_capture_ms, 30);
-    assert_eq!(parsed.speed.as_ref().unwrap().step_p95_ms, 120);
+    assert_eq!(parsed.speed.as_ref().unwrap().step_p95_ms, Some(120));
     assert_eq!(serde_json::to_value(&parsed).unwrap(), raw);
 }
 
@@ -56,10 +56,35 @@ fn report_run_details_print_speed_only_when_present() {
     };
     let timed: Ledger = serde_json::from_value(ledger(
         json!([]),
-        json!({"stepMedianMs":250,"stepP95Ms":400,"walkMs":1900}),
+        json!({"stepMedianMs":250,"stepP95Ms":400,"walkMs":1900,"steps":5,"passed":4,"failed":1}),
     ))
     .unwrap();
-    assert!(input(&timed).contains("stepMedianMs 250 · stepP95Ms 400 · walkMs 1900\n"));
+    assert!(input(&timed).contains(
+        "stepMedianMs 250 · stepP95Ms 400 · walkMs 1900 · steps 5 (4 passed, 1 failed)\n"
+    ));
+    for (speed, expected) in [
+        (
+            json!({"walkMs":0,"steps":0,"passed":0,"failed":0}),
+            "stepMedianMs n/a · stepP95Ms n/a · walkMs 0 · steps 0 (0 passed, 0 failed)\n",
+        ),
+        (
+            json!({"stepMedianMs":10000,"stepP95Ms":10000,"walkMs":10000,"steps":1,"passed":0,"failed":1}),
+            "stepMedianMs 10000 · stepP95Ms 10000 · walkMs 10000 · steps 1 (0 passed, 1 failed)\n",
+        ),
+        (
+            json!({"stepMedianMs":10,"walkMs":10}),
+            "stepMedianMs 10 · stepP95Ms n/a · walkMs 10 · steps 0 (0 passed, 0 failed)\n",
+        ),
+    ] {
+        let parsed: Ledger = serde_json::from_value(ledger(json!([]), speed)).unwrap();
+        assert!(input(&parsed).contains(expected));
+    }
+    let empty = ledger(
+        json!([]),
+        json!({"walkMs":0,"steps":0,"passed":0,"failed":0}),
+    );
+    let parsed: Ledger = serde_json::from_value(empty.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), empty);
     let untimed: Ledger = serde_json::from_value(ledger(json!([]), json!(null))).unwrap();
     assert!(!input(&untimed).contains("stepMedianMs"));
 }
