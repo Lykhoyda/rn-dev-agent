@@ -164,7 +164,7 @@ export function buildMaestroFlow(opts: MaestroFlowOptions, commands: unknown[]):
   return `${headerYaml}---\n${bodyYaml}`;
 }
 
-function validateCommand(cmd: unknown): void {
+export function validateCommand(cmd: unknown): void {
   if (cmd === null || cmd === undefined) {
     throw new MaestroValidationError('Command is null/undefined');
   }
@@ -348,7 +348,7 @@ export function collectRunFlowFileReferences(yamlText: string): string[] {
 // GH #186: resolve a runFlow file ref to a canonical path, enforcing: relative
 // only, no `..`, .yaml/.yml only, and containment within flowRoot after realpath
 // (defeats symlink escape). Throws on any violation or missing root context.
-function resolveRunFlowTarget(file: string, opts: ParseAndValidateOptions): string {
+export function resolveRunFlowTarget(file: string, opts: ParseAndValidateOptions): string {
   if (!opts.flowDir || !opts.flowRoot) {
     throw new MaestroValidationError(
       `runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`,
