@@ -80,6 +80,9 @@ final class XCUIElement {
     return snapshots[min(snapshotReads - 1, snapshots.count - 1)]
   }
 }
+struct NSPredicate {
+  init(format: String, _ arguments: CVarArg...) {}
+}
 final class Query {
   var elements: [XCUIElement] = []
   var unavailable = false
