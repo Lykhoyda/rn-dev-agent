@@ -134,9 +134,7 @@ export function summarizeSpeed(
       outcome: row.outcome,
     });
   }
-  const totals = [...steps.values()]
-    .map((step) => step.total)
-    .sort((a, b) => a - b);
+  const totals = [...steps.values()].map((step) => step.total).sort((a, b) => a - b);
   const mid = Math.floor(totals.length / 2);
   const passed = [...steps.values()].filter((step) => step.outcome === 'pass').length;
   return {

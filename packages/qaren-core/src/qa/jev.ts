@@ -185,7 +185,8 @@ export function createJev(options: JevOptions = {}): Judge {
                 record.outcome = 'http';
                 retryAfter = response.headers.get('Retry-After');
                 retryAfterMs = response.headers.get('retry-after-ms');
-                retry = response.status === 408 || response.status === 429 || response.status >= 500;
+                retry =
+                  response.status === 408 || response.status === 429 || response.status >= 500;
                 void response.body?.cancel().catch(() => undefined);
                 throw new JevError(
                   response.status === 401 || response.status === 403
