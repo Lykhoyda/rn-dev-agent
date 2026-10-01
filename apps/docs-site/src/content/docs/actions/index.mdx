@@ -193,11 +193,19 @@ full diagnosis and what still works.
 On iOS, replay routes by proof semantics before execution. Exact `testID` tap, type, wait,
 assert, conditional-flow, and launch stages use the authority-bound React tree; native text,
 system-dialog, permission, and SpringBoard stages use XCTest/WDA. Results label the domain as
-`react-tree`, `xctest-native`, or `partitioned`. On iOS, a native-only command after an exact
+`react-tree`, `xctest-native`, or `partitioned`. This routing applies to both `maestro_run`
+and `cdp_run_action`. On iOS, a native-only command after an exact
 `testID` React-tree step returns `UNSUPPORTED_STEP` before replay starts because starting a
 native runner session relaunches the app. Native commands before exact `testID` steps and
 `launchApp`, `clearState`, `killApp`, or `stopApp` after them remain allowed; a later native-only
-command is still refused even when a lifecycle command precedes it.
+command is still refused even when a lifecycle command precedes it. The refusal reports
+the offending command's zero-based `meta.sourceIndex`. Flows without an exact `testID`
+step keep their native route.
+
+Saved-action preflight resolves the platform from the explicit argument, then the active
+target context, then the active session. An iOS proof-plan refusal precedes runtime-pin
+compatibility checks, so it returns `UNSUPPORTED_STEP` even when the runtime pin is
+unavailable, before any runner dispatch, native claim, or runner parking.
 
 A React-tree pass proves deterministic React identity and controlled fiber text read-back,
 not IME composition, AutoFill, keyboard occlusion, or secure native-entry fidelity, and it
