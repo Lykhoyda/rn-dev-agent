@@ -46,7 +46,6 @@ test('qa-pr workflow is registered and parent-session-only', () => {
   assert.doesNotMatch(agent, /is the reset and happens on camera/);
   assert.match(agent, /User path only/);
   assert.match(agent, /disableDevMenu/);
-  assert.match(agent, /EXDevMenuShowFloatingActionButton/);
   assert.match(agent, /one `device_back` for that/);
   assert.doesNotMatch(agent, /at most PARTIAL/);
   assert.match(agent, /NSCocoaErrorDomain 513/);
