@@ -181,9 +181,9 @@ corepack yarn build:docs
 
 Jev unit tests are hermetic. `corepack yarn jev:evals` requires `TYPESAFE_API_KEY` and makes live calls; run it before changing the pinned model. The device-bound `gate:qaren-check` also needs the key and uninstalls the selected test app through `qaren check --fresh-install` under the CLI's device lease; coordinate external device ownership before running it. It accepts `--plan-file` for the phrase fixture under `packages/qaren-core/test/fixtures/plans/`.
 
-For `check` device selection, boot/fresh-install opt-ins, iOS build prerequisites,
-admission and retained-lease recovery, read
-[`packages/qaren-cli/README.md`](packages/qaren-cli/README.md#check-a-plan).
+For a shutdown iOS target, explicitly pass `check --boot-device --device <UUID>`; the existing lease and durable record precede strict admission, boot and exact-target readiness readback. Default selection remains booted-only, and cleanup keeps the borrowed simulator. The gate forwards this opt-in with `QAREN_BOOT_DEVICE=1` alongside `QAREN_DEVICE_UDID`.
+
+CLI-owned iOS builds require `devClientScheme` in the local app config; after dependency installation, QaReN proves app-local generic-build support before boot/reset, verifies a finite simulator bundle and starts it on the exact owned device with a separate Metro group. If finite-build group cleanup is unknown, the build lock and device lease remain claimed for `qaren cleanup`.
 
 Every `cdp_run_action` RunRecord write goes through the proven-identity action
 write lock (`src/domain/atomic-writer.ts`) until Phase 4 removes RunRecords. A
@@ -200,7 +200,7 @@ cargo run --manifest-path packages/qaren-cli/Cargo.toml --locked --example nativ
 corepack yarn test:native:android
 ```
 
-Suite records and redacted logs live under `~/.qaren/native-suites/<run-id>`. Unknown cleanup retains the lease; use the same example with `recover --run-id <run-id>` after the owner exits, rather than deleting locks. Recovery proves the owned group and exact-simulator runner hosts absent, not global admission, and preserves the original test verdict. Admission rules are owned by the [CLI reference](packages/qaren-cli/README.md#ios-admission-and-cleanup). The wrapper neither shuts down nor deletes the borrowed simulator; re-read its state before subsequent app work. Isolated CI still invokes `corepack yarn test:native:ios` directly.
+Suite records and redacted logs live under `~/.qaren/native-suites/<run-id>`. Unknown cleanup retains the lease; use the same example with `recover --run-id <run-id>` after the owner exits, rather than deleting locks. Recovery proves the owned group and exact-simulator runner hosts absent, not global admission, and preserves the original test verdict. Admission's controller classification requires kernel identity plus exact argv; an attested unscoped MCP controller is not itself a device conflict, but the scan cannot exclude uncooperative in-process automation. The wrapper neither shuts down nor deletes the borrowed simulator; re-read its state before subsequent app work. Isolated CI still invokes `corepack yarn test:native:ios` directly.
 
 ## Changesets And Versions
 

@@ -6,10 +6,6 @@ description: Install and configure rn-dev-agent for your React Native project.
 import VerifyLoopScene from '../../components/concepts/VerifyLoopScene.astro';
 import { Steps } from '@astrojs/starlight/components';
 
-This guide covers published rn-dev-agent 1.x. The QaReN development branch
-uses `qaren check`; its current source build and CLI contract are owned by the
-[CLI reference](https://github.com/Lykhoyda/rn-dev-agent/blob/develop/packages/qaren-cli/README.md).
-
 ## Requirements
 
 | Requirement | Notes |
@@ -51,12 +47,33 @@ From inside Claude Code:
 
 </Steps>
 
-For the QaReN development checkout, use the [source build reference](#install-from-source-development).
+For local source development, point Claude Code at the repository root:
+
+```bash
+claude --plugin-dir /path/to/rn-dev-agent
+```
+
+The root `.claude-plugin/marketplace.json` resolves the actual Claude package
+from `packages/claude-plugin/`. Use
+`/path/to/rn-dev-agent/packages/claude-plugin` only when a tool asks for the
+plugin package root directly.
 
 ### Cursor
 
-Install the published 1.x plugin from **Customize → Plugins**. For the
-QaReN development checkout, use the [source build reference](#install-from-source-development).
+Install from **Customize → Plugins** (Cursor Marketplace or a team marketplace
+that imports this GitHub repo). The repo's `.cursor-plugin/marketplace.json`
+resolves the plugin from `packages/claude-plugin/`.
+
+For a local checkout, load that package directory, not the repository root:
+
+```text
+/path/to/rn-dev-agent/packages/claude-plugin
+```
+
+That directory owns `.cursor-plugin/plugin.json` and `mcp.json`. Cursor
+spawns `cdp` with `${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js`.
+Claude SessionStart hooks are not loaded (`No plugin hooks` is expected).
+Requires Node.js >= 24. Reload the window after install if MCP does not appear.
 
 **Limitation: the Cursor Plugin spawn does not bind the exact app.** rn-dev-agent
 binds source identity from the supervisor's working directory and keys its process
@@ -83,7 +100,25 @@ codex plugin marketplace add Lykhoyda/rn-dev-agent
 codex plugin add rn-dev-agent@rn-dev-agent --json
 ```
 
-For the QaReN development checkout, use the [source build reference](#install-from-source-development).
+The repo's `.agents/plugins/marketplace.json` resolves the Codex payload from
+`packages/claude-plugin/`, the same directory Claude installs. The installed
+plugin is fully self-contained (one bundled MCP runtime, native runner sources,
+workflow helpers, health program, and runner manifest); Codex selects its own
+surface from it through `.codex-plugin/plugin.json`.
+
+For a local checkout instead, register that same package directory:
+
+```text
+/path/to/rn-dev-agent/packages/claude-plugin
+```
+
+When installing locally through Codex, select or register
+`packages/claude-plugin`, not the repository root. That directory owns
+`.codex-plugin/plugin.json`, `codex.mcp.json`, the package-local
+`codex-skills/`, the launcher `bin/cdp-supervisor.js`, and the bundled MCP
+runtime at `rn-dev-agent-core/dist/supervisor.js`. If an older registration
+points at `packages/codex-plugin`, remove it and add the new path: that
+directory is now authoring material and no longer carries a runtime.
 
 Codex does not load Claude Code hooks. If the detail screen says `No plugin
 hooks`, that is expected. Codex exposes the `cdp` MCP server, eleven domain skills,
@@ -218,7 +253,30 @@ in your browser.
 
 ## Install from source (development)
 
-Source builds on `develop` use QaReN. Follow the
-[CLI build and usage reference](https://github.com/Lykhoyda/rn-dev-agent/blob/develop/packages/qaren-cli/README.md#build).
-The development host package does not carry the published 1.x MCP runtime;
-packaging and installation arrive in the packaging phase.
+```bash
+git clone https://github.com/Lykhoyda/rn-dev-agent.git
+cd rn-dev-agent
+corepack enable
+corepack yarn install --immutable
+corepack yarn workspace rn-dev-agent-core build
+corepack yarn build:host-runtimes
+```
+
+Claude Code local path:
+
+```bash
+cd /path/to/your-rn-app
+claude --plugin-dir /path/to/rn-dev-agent
+```
+
+Cursor local plugin package path:
+
+```text
+/path/to/rn-dev-agent/packages/claude-plugin
+```
+
+Codex local plugin package path (the same directory Claude installs):
+
+```text
+/path/to/rn-dev-agent/packages/claude-plugin
+```
