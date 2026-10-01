@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import type { Element, Screen, Visibility } from '../../../dist/qa/screen.js';
 import { CHECK } from '../../../dist/qa/questions.js';
+import { PHRASE_WAIT_BUDGET_MS } from '../../../dist/qa/timing.js';
 import { runPlan, SCROLL_ATTEMPTS, WAIT_BUDGET_MS, WAIT_POLL_MS } from '../../../dist/qa/walker.js';
 import { scriptedJudge, walker } from './judgment-fixtures.ts';
 
@@ -43,10 +44,18 @@ function screen(...elements: Element[]): Screen {
 }
 
 function evidence(state: unknown): unknown[] {
-  assert.ok(state && typeof state === 'object' && 'visibilityEvidence' in state);
-  assert.ok(Array.isArray(state.visibilityEvidence));
+  assert.ok(state && typeof state === 'object' && 'assertionEvidence' in state);
+  const assertion = state.assertionEvidence;
+  assert.ok(assertion && typeof assertion === 'object' && 'observed' in assertion);
+  assert.ok(Array.isArray(assertion.observed));
+  assert.deepEqual(Object.keys(assertion).sort(), [
+    'observed',
+    'qualifiedHeadings',
+    'unassociatedReact',
+    'unknown',
+  ]);
   assert.ok(!('elements' in state), 'visibility does not select action candidates');
-  return state.visibilityEvidence;
+  return assertion.observed;
 }
 
 function visibilityJudge(...probabilities: number[]) {
@@ -93,16 +102,92 @@ test('an absent phrase wait polls fresh screens without scrolling', async () => 
   assert.deepEqual(evidence(judge.requests[1].state), ['Text "Welcome"']);
 });
 
-test('a consistently absent phrase wait exhausts only the existing wait budget', async () => {
+test('negative phrase polls exhaust the wait budget without claiming current absence', async () => {
   const judge = visibilityJudge(0.1);
   const f = walker([screen(text('Loading'))], judge);
   const result = await runPlan(parsePlan('1. Wait for the welcome text').blocks!, f.deps);
   assert.equal(result.verdict, 'FAIL');
-  assert.match(result.failure?.seen ?? '', /did not appear within 15s/);
-  assert.equal(f.deps.now(), WAIT_BUDGET_MS);
-  assert.equal(f.captures(), WAIT_BUDGET_MS / WAIT_POLL_MS + 1);
+  assert.match(result.failure?.seen ?? '', /VISIBILITY_UNSURE: ITEM_DEADLINE_EXCEEDED/);
+  assert.equal(f.deps.now(), PHRASE_WAIT_BUDGET_MS);
+  assert.equal(f.captures(), PHRASE_WAIT_BUDGET_MS / WAIT_POLL_MS);
   assert.equal(result.jev.calls, f.captures());
   assert.deepEqual(f.actions, []);
+});
+
+test('waits accept visibility only before the item deadline on final polled captures or judgments', async (t) => {
+  for (const quoted of [false, true]) {
+    for (const delayed of quoted ? ['capture'] : ['capture', 'judge']) {
+      for (const offset of [-1, 0, 1]) {
+        await t.test(`${quoted ? 'quoted' : 'phrase'} ${delayed} ${offset}`, async () => {
+          let elapsed = 0;
+          const budget = quoted ? WAIT_BUDGET_MS : PHRASE_WAIT_BUDGET_MS;
+          const finalIndex = budget / WAIT_POLL_MS - 1;
+          const judge = scriptedJudge((_, index) => {
+            assert.equal(quoted, false, 'quoted waits stay model-free');
+            if (delayed === 'judge' && index === finalIndex) elapsed = budget + offset;
+            return { visibility_1: { type: 'noul', noul: index === finalIndex ? 0.9 : 0.1 } };
+          });
+          const f = walker(
+            [...Array(finalIndex).fill(screen(text('Loading'))), screen(text('Welcome'))],
+            judge,
+          );
+          f.deps.now = () => elapsed;
+          f.deps.sleep = async (ms) => {
+            elapsed += ms;
+          };
+          const capture = f.deps.captureScreen;
+          f.deps.captureScreen = async () => {
+            const observed = await capture();
+            if (delayed === 'capture' && f.captures() === finalIndex + 1) elapsed = budget + offset;
+            return observed;
+          };
+          const line = quoted ? 'Wait for "Welcome"' : 'Wait for the welcome text';
+          const result = await runPlan(parsePlan(`1. ${line}`).blocks!, f.deps);
+          assert.equal(result.verdict, offset < 0 ? 'PASS' : 'FAIL');
+          assert.equal(f.captures(), finalIndex + 1);
+          assert.equal(
+            result.jev.calls,
+            quoted ? 0 : finalIndex + Number(delayed === 'judge' || offset < 0),
+          );
+          assert.equal(elapsed, budget + offset);
+          assert.deepEqual(f.actions, []);
+        });
+      }
+    }
+  }
+});
+
+test('wait polling clamps its final sleep and never starts another capture at the deadline', async (t) => {
+  for (const line of ['Wait for the welcome text', 'Wait for "Welcome"']) {
+    for (const oversleep of [0, 1]) {
+      await t.test(`${line}, oversleep ${oversleep}`, async () => {
+        let elapsed = 0;
+        const slept: number[] = [];
+        const budget = line.includes('"') ? WAIT_BUDGET_MS : PHRASE_WAIT_BUDGET_MS;
+        const judge = visibilityJudge(0.1);
+        const f = walker([screen(text('Loading')), screen(text('Welcome'))], judge);
+        f.deps.now = () => elapsed;
+        f.deps.sleep = async (ms) => {
+          slept.push(ms);
+          elapsed += ms + (ms < WAIT_POLL_MS ? oversleep : 0);
+        };
+        const capture = f.deps.captureScreen;
+        f.deps.captureScreen = async () => {
+          await capture();
+          if (f.captures() === budget / WAIT_POLL_MS) elapsed = budget - 1;
+          return screen(text('Loading'));
+        };
+        const result = await runPlan(parsePlan(`1. ${line}\n2. Back`).blocks!, f.deps);
+        assert.equal(result.verdict, 'FAIL');
+        assert.equal(result.failure?.step, 1);
+        assert.equal(slept.at(-1), 1);
+        assert.equal(elapsed, budget + oversleep);
+        assert.equal(f.captures(), budget / WAIT_POLL_MS);
+        assert.equal(result.jev.calls, line.includes('"') ? 0 : f.captures());
+        assert.deepEqual(f.actions, []);
+      });
+    }
+  }
 });
 
 test('phrase scroll-until moves only in the plan direction after confirmed absence', async () => {
@@ -182,7 +267,10 @@ test('a not-ok scroll fails if the final re-ask capture returns to the original 
     f.deps,
   );
   assert.equal(result.verdict, 'FAIL');
-  assert.match(result.failure?.seen ?? '', /scroll timed out; on screen: Middle/);
+  assert.match(
+    result.failure?.seen ?? '',
+    /scroll timed out; historical context, previously on screen: Middle/,
+  );
   assert.deepEqual(f.actions, ['scroll up']);
   assert.equal(f.captures(), 3);
   assert.equal(result.steps[0].attempt, 1);
@@ -248,9 +336,9 @@ test('an uncertainty re-ask spends the wait budget rather than restarting it', a
   const f = walker([screen(text('Loading'))], judge);
   const result = await runPlan(parsePlan('1. Wait for the welcome text').blocks!, f.deps);
   assert.equal(result.verdict, 'FAIL');
-  assert.match(result.failure?.seen ?? '', /did not appear within 15s/);
-  assert.equal(f.deps.now(), WAIT_BUDGET_MS);
-  assert.equal(f.captures(), WAIT_BUDGET_MS / WAIT_POLL_MS + 1);
+  assert.match(result.failure?.seen ?? '', /VISIBILITY_UNSURE: ITEM_DEADLINE_EXCEEDED/);
+  assert.equal(f.deps.now(), PHRASE_WAIT_BUDGET_MS);
+  assert.equal(f.captures(), PHRASE_WAIT_BUDGET_MS / WAIT_POLL_MS);
   assert.equal(result.jev.calls, f.captures());
 });
 
@@ -271,7 +359,7 @@ test('a visibility re-ask cannot capture or judge when its sleep reaches the wai
   for (const remaining of [0, WAIT_POLL_MS / 2, WAIT_POLL_MS]) {
     let elapsed = 0;
     const judge = scriptedJudge((_questions, index) => {
-      if (index === 0) elapsed += WAIT_BUDGET_MS - remaining;
+      if (index === 0) elapsed += PHRASE_WAIT_BUDGET_MS - remaining;
       return { visibility_1: { type: 'noul', noul: index === 0 ? 0.5 : 0.9 } };
     });
     const f = walker([screen(text('Loading'))], judge);
@@ -281,7 +369,7 @@ test('a visibility re-ask cannot capture or judge when its sleep reaches the wai
     };
     const result = await runPlan(parsePlan('1. Wait for the welcome text').blocks!, f.deps);
     assert.equal(result.verdict, 'FAIL');
-    assert.equal(elapsed, WAIT_BUDGET_MS);
+    assert.equal(elapsed, PHRASE_WAIT_BUDGET_MS);
     assert.equal(f.captures(), 1);
     assert.equal(result.jev.calls, 1);
     assert.match(result.failure?.seen ?? '', /VISIBILITY_UNSURE/);
@@ -293,7 +381,7 @@ test('a visibility re-ask cannot pass when its capture or judgment exhausts the 
   for (const delayed of ['capture', 'judge']) {
     let elapsed = 0;
     const judge = scriptedJudge((_questions, index) => {
-      if (index === 1 && delayed === 'judge') elapsed = WAIT_BUDGET_MS;
+      if (index === 1 && delayed === 'judge') elapsed = PHRASE_WAIT_BUDGET_MS;
       return { visibility_1: { type: 'noul', noul: index === 0 ? 0.5 : 0.9 } };
     });
     const f = walker([screen(text('Loading')), screen(text('Welcome'))], judge);
@@ -304,15 +392,18 @@ test('a visibility re-ask cannot pass when its capture or judgment exhausts the 
     const capture = f.deps.captureScreen;
     f.deps.captureScreen = async () => {
       const observed = await capture();
-      if (f.captures() === 2 && delayed === 'capture') elapsed = WAIT_BUDGET_MS;
+      if (f.captures() === 2 && delayed === 'capture') elapsed = PHRASE_WAIT_BUDGET_MS;
       return observed;
     };
     const result = await runPlan(parsePlan('1. Wait for the welcome text').blocks!, f.deps);
     assert.equal(result.verdict, 'FAIL');
-    assert.match(result.failure?.seen ?? '', /VISIBILITY_UNSURE/);
+    assert.match(
+      result.failure?.seen ?? '',
+      delayed === 'capture' ? /SCREEN_EVIDENCE_INCOMPLETE/ : /VISIBILITY_UNSURE/,
+    );
     assert.equal(f.captures(), 2);
     assert.equal(result.jev.calls, delayed === 'capture' ? 1 : 2);
-    assert.equal(elapsed, WAIT_BUDGET_MS);
+    assert.equal(elapsed, PHRASE_WAIT_BUDGET_MS);
     assert.deepEqual(f.actions, []);
   }
 });
@@ -430,6 +521,41 @@ test('a local visibility refusal fails the row without a model call or scroll', 
   }
 });
 
+test('negative judgments with unknown contributions cannot pass checks or authorize scroll-until', async () => {
+  for (const line of ['✓ The welcome text is visible', '1. Scroll until the welcome text']) {
+    const judge = scriptedJudge((questions) =>
+      Object.fromEntries(Object.keys(questions).map((id) => [id, { type: 'noul', noul: 0.1 }])),
+    );
+    const f = walker([screen(text('Loading'), text('Welcome', 'unknown'))], judge);
+    const result = await runPlan(parsePlan(line).blocks!, f.deps);
+    assert.equal(result.verdict, 'FAIL');
+    assert.match(
+      result.steps[0].reason!,
+      line.startsWith('✓') ? /^CHECK_UNSURE:/ : /^VISIBILITY_UNSURE:/,
+    );
+    assert.equal(f.captures(), 1 + CHECK.reasks);
+    assert.equal(judge.requests.length, 1 + CHECK.reasks);
+    assert.equal(f.deps.now(), WAIT_POLL_MS);
+    assert.deepEqual(f.actions, []);
+  }
+});
+
+test('negative gap-bearing visibility keeps a wait polling until established evidence arrives', async () => {
+  const judge = visibilityJudge(0.1, 0.9);
+  const f = walker(
+    [screen(text('Loading'), text('Welcome', 'unknown')), screen(text('Welcome'))],
+    judge,
+  );
+  const result = await runPlan(parsePlan('1. Wait for the welcome text').blocks!, f.deps);
+  assert.equal(result.verdict, 'PASS');
+  assert.equal(f.captures(), 2);
+  assert.equal(judge.requests.length, 2);
+  assert.equal(f.deps.now(), WAIT_POLL_MS);
+  assert.deepEqual(f.actions, []);
+  assert.deepEqual(evidence(judge.requests[0].state), ['Text "Loading"']);
+  assert.deepEqual(evidence(judge.requests[1].state), ['Text "Welcome"']);
+});
+
 test('a heading wait keeps polling ordinary text for its whole budget and ends unsure, never absent', async () => {
   const judge = scriptedJudge(() => {
     assert.fail('ordinary text cannot attest a heading role');
@@ -439,7 +565,7 @@ test('a heading wait keeps polling ordinary text for its whole budget and ends u
   assert.equal(result.verdict, 'FAIL');
   assert.match(result.failure?.seen ?? '', /VISIBILITY_UNSURE/);
   assert.doesNotMatch(result.failure?.seen ?? '', /did not appear/);
-  assert.equal(f.captures(), 1 + WAIT_BUDGET_MS / WAIT_POLL_MS);
+  assert.equal(f.captures(), PHRASE_WAIT_BUDGET_MS / WAIT_POLL_MS);
   assert.equal(result.jev.calls, 0);
   assert.deepEqual(f.actions, []);
 });

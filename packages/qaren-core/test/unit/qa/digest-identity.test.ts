@@ -207,7 +207,15 @@ test('an attested offscreen control remains a scroll candidate, never visible as
     element('react:later', 'Load more', { testID: 'later', offscreen: true, hittable: false }),
   ]);
   assert.deepEqual(assertionView(screen), []);
-  const judge = scriptedJudge((q) => ({ target_0: choice(q.target_0) }));
+  const judge = scriptedJudge((q, index, state) => {
+    if (index === 0) return { target_0: choice(q.target_0) };
+    assert.deepEqual(Object.keys(q), ['visibility_1']);
+    assert.deepEqual(state, {
+      front: 'app',
+      assertionEvidence: { observed: [], unknown: [], unassociatedReact: 0, qualifiedHeadings: [] },
+    });
+    return { visibility_1: { type: 'noul', noul: 0 } };
+  });
   assert.deepEqual(
     await resolveTarget({ kind: 'press', target: { phrase: 'Load more' } }, screen, judge),
     { scroll: 'down' },
@@ -218,7 +226,7 @@ test('an attested offscreen control remains a scroll candidate, never visible as
     line: 1,
   });
   assert.deepEqual(visibility.visibility, { verdict: 'absent' });
-  assert.equal(judge.requests.length, 1, 'offscreen content supplies no visible proof to Jev');
+  assert.equal(judge.requests.length, 2, 'the assertion question carries no offscreen content');
 });
 
 test('forwarded metadata survives transparent wrappers and disabled state is never weakened', () => {

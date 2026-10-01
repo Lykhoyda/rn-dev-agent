@@ -173,7 +173,11 @@ test('an unlabeled, unidentified plain view is inert, so the visibility view nev
       ['unsupported', 'unsupported'],
     ],
   );
-  assert.deepEqual(projection.visibilityView(inert), { elements: [inert.elements[0]] });
+  assert.deepEqual(projection.visibilityView(inert), {
+    elements: [inert.elements[0]],
+    unknown: [],
+    unassociatedReact: 0,
+  });
 
   const strayInput = projection.join(
     nodes,
@@ -184,10 +188,12 @@ test('an unlabeled, unidentified plain view is inert, so the visibility view nev
     presence,
   );
   assert.equal(strayInput.elements[1].semantic?.fill, 'unknown');
-  assert.ok(
-    'refuse' in projection.visibilityView(strayInput),
-    'an unassociated fillable host could be this view, so its visibility still matters',
-  );
+  assert.deepEqual(projection.visibilityView(strayInput), {
+    elements: [strayInput.elements[0]],
+    unknown: strayInput.elements.slice(1).map((element) => ({ element, reason: 'visibility' })),
+    unassociatedReact: 0,
+  });
+  refused(projection.semanticActionView(strayInput, 'fill'), 'SCREEN_EVIDENCE_INCOMPLETE');
 });
 
 const band = (y: number, height = 40) => ({ x: 0, y, width: 400, height });
@@ -236,7 +242,11 @@ test('a verified node outside its scroll view or the window is offscreen; partia
       ['@empty', 'unknown'],
     ],
   );
-  refused(projection.visibilityView(screen), 'SCREEN_EVIDENCE_INCOMPLETE');
+  assert.deepEqual(projection.visibilityView(screen), {
+    elements: [screen.elements[3], screen.elements[6]],
+    unknown: screen.elements.slice(7).map((element) => ({ element, reason: 'visibility' })),
+    unassociatedReact: 0,
+  });
 
   const settled = projection.join(
     nodes.slice(0, 7),
@@ -248,7 +258,7 @@ test('a verified node outside its scroll view or the window is offscreen; partia
   );
   assert.deepEqual(
     projection.visibilityView(settled),
-    { elements: [settled.elements[3], settled.elements[6]] },
+    { elements: [settled.elements[3], settled.elements[6]], unknown: [], unassociatedReact: 0 },
     'offscreen content is not visible content and needs no presence',
   );
   assert.equal(
@@ -416,8 +426,21 @@ test('identical unidentified sibling views directly under a native scroll view a
     chrome.elements.map((e) => e.ref),
     ['@text'],
   );
-  refused(view([2]), 'SCREEN_EVIDENCE_INCOMPLETE');
-  refused(view([1, 1]), 'SCREEN_EVIDENCE_INCOMPLETE');
+  assert.deepEqual(chrome.unknown, []);
+  assert.equal(chrome.unassociatedReact, 0);
+  for (const parents of [[2], [1, 1]]) {
+    const evidence = view(parents);
+    assert.ok('elements' in evidence);
+    assert.deepEqual(
+      evidence.elements.map((e) => e.ref),
+      ['@text'],
+    );
+    assert.deepEqual(
+      evidence.unknown.map(({ element, reason }) => [element.ref, reason]),
+      parents.map((_, i) => [`@bar${i}`, 'visibility']),
+    );
+    assert.equal(evidence.unassociatedReact, 0);
+  }
 });
 
 test('a verified text identical to its parent text counts once; other identical pairs stay distinct', () => {
@@ -503,15 +526,34 @@ test('a plain container offering no operation contributes only through its own n
     skipped.elements.map((e) => e.ref),
     ['@text'],
   );
-  refused(
-    view(containers, [{ role: null, roleSource: 'none', capabilities: { press: true } }]),
-    'SCREEN_EVIDENCE_INCOMPLETE',
-  );
-  refused(view([['meter', '40%', 'value', 'observed']]), 'SCREEN_EVIDENCE_INCOMPLETE');
-  refused(
-    view(containers, [], [{ role: 'text', testID: 'card', value: '3 tasks' }]),
-    'SCREEN_EVIDENCE_INCOMPLETE',
-  );
+  assert.deepEqual(skipped.unknown, []);
+  assert.equal(skipped.unassociatedReact, 0);
+  for (const [evidence, expected] of [
+    [
+      view(containers, [{ role: null, roleSource: 'none', capabilities: { press: true } }]),
+      [
+        ['@hero', 'name-provenance'],
+        ['@card', 'content'],
+        ['@group', 'visibility'],
+      ],
+    ],
+    [view([['meter', '40%', 'value', 'observed']]), [['@meter', 'name-provenance']]],
+    [
+      view(containers, [], [{ role: 'text', testID: 'card', value: '3 tasks' }]),
+      [['@card', 'content']],
+    ],
+  ] as const) {
+    assert.ok('elements' in evidence);
+    assert.deepEqual(
+      evidence.elements.map((e) => e.ref),
+      ['@text'],
+    );
+    assert.deepEqual(
+      evidence.unknown.map(({ element, reason }) => [element.ref, reason]),
+      expected,
+    );
+    assert.equal(evidence.unassociatedReact, 0);
+  }
 });
 
 test('native control types supply operation evidence independently of digest roles', () => {
@@ -697,7 +739,11 @@ test('visibility keeps independent readable contributions and disabled controls'
   });
   const screen = attested([text, disabled, duplicate, hidden, offscreen, structural]);
 
-  assert.deepEqual(projection.visibilityView(screen), { elements: [text, disabled, duplicate] });
+  assert.deepEqual(projection.visibilityView(screen), {
+    elements: [text, disabled, duplicate],
+    unknown: [],
+    unassociatedReact: 0,
+  });
   assert.equal(screen.elements.length, 6);
   assert.deepEqual(projection.assertionView(screen), [], 'semantic evidence is not literal text');
 });
@@ -716,7 +762,11 @@ test('both projections require complete coverage, including for an empty observa
     refused(projection.visibilityView(screen), 'SCREEN_EVIDENCE_INCOMPLETE');
   }
   assert.deepEqual(projection.semanticActionView(attested([]), 'press'), { elements: [] });
-  assert.deepEqual(projection.visibilityView(attested([])), { elements: [] });
+  assert.deepEqual(projection.visibilityView(attested([])), {
+    elements: [],
+    unknown: [],
+    unassociatedReact: 0,
+  });
 });
 
 test('a coverage refusal names the capture and projected coverage of each side', () => {
@@ -762,7 +812,7 @@ test('reference collisions refuse before any exclusions or content coalescing', 
   refused(projection.visibilityView({ ...duplicatedReact, coverage: undefined }), 'AMBIGUOUS_REFS');
 });
 
-test('unknown visibility refuses even when native geometry or legacy flags suggest visibility', () => {
+test('unknown visibility stays explicit even when native geometry or legacy flags suggest visibility', () => {
   const screen = projection.join(
     [
       {
@@ -777,7 +827,11 @@ test('unknown visibility refuses even when native geometry or legacy flags sugge
     'app',
     complete,
   );
-  refused(projection.visibilityView(screen), 'SCREEN_EVIDENCE_INCOMPLETE');
+  assert.deepEqual(projection.visibilityView(screen), {
+    elements: [],
+    unknown: [{ element: screen.elements[0], reason: 'visibility' }],
+    unassociatedReact: 0,
+  });
   const disabled = projection.join(
     [{ ref: '@disabled', type: 'Button', enabled: false }],
     [],
@@ -785,14 +839,22 @@ test('unknown visibility refuses even when native geometry or legacy flags sugge
     complete,
   );
   assert.deepEqual(projection.semanticActionView(disabled, 'press'), { elements: [] });
-  refused(projection.visibilityView(disabled), 'SCREEN_EVIDENCE_INCOMPLETE');
+  assert.deepEqual(projection.visibilityView(disabled), {
+    elements: [],
+    unknown: [{ element: disabled.elements[0], reason: 'visibility' }],
+    unassociatedReact: 0,
+  });
   refused(
     projection.visibilityView(attested([element('@missing', { semantic: undefined })])),
     'SCREEN_EVIDENCE_INCOMPLETE',
   );
   for (const type of ['Application', 'Window', 'Other', 'StaticText', 'Image', undefined]) {
     const unknown = projection.join([{ ref: '@unknown', type }], [], 'app', complete);
-    refused(projection.visibilityView(unknown), 'SCREEN_EVIDENCE_INCOMPLETE');
+    assert.deepEqual(projection.visibilityView(unknown), {
+      elements: [],
+      unknown: [{ element: unknown.elements[0], reason: 'visibility' }],
+      unassociatedReact: 0,
+    });
     refused(projection.semanticActionView(unknown, 'press'), 'SCREEN_EVIDENCE_INCOMPLETE');
   }
 });
@@ -805,7 +867,12 @@ test('accessibility-only labels do not become readable assertions without contro
         semantic: { press: 'unknown', fill: 'unknown', visibility: 'visible' },
       }),
     ]);
-    refused(projection.visibilityView(screen), 'SCREEN_EVIDENCE_INCOMPLETE');
+    assert.deepEqual(projection.visibilityView(screen), {
+      elements: [],
+      unknown: [{ element: screen.elements[0], reason: 'content' }],
+      unassociatedReact: 0,
+    });
+    refused(projection.semanticActionView(screen, 'press'), 'SCREEN_EVIDENCE_INCOMPLETE');
   }
 });
 
@@ -824,10 +891,14 @@ test('unmatched React observations remain unknown, not proven offscreen', () => 
   });
   assert.equal(screen.elements[0].offscreen, true, 'legacy exact paths remain unchanged');
   refused(projection.semanticActionView(screen, 'press'), 'SCREEN_EVIDENCE_INCOMPLETE');
-  refused(projection.visibilityView(screen), 'SCREEN_EVIDENCE_INCOMPLETE');
+  assert.deepEqual(projection.visibilityView(screen), {
+    elements: [],
+    unknown: [{ element: screen.elements[0], reason: 'visibility' }],
+    unassociatedReact: 1,
+  });
 });
 
-test('unaddressable React observations cannot disappear to manufacture complete empty evidence', () => {
+test('unaddressable React observations cannot disappear to manufacture complete empty evidence', async () => {
   const screen = projection.join(
     [],
     [{ role: 'button', text: 'Save', capabilities: { press: true, fill: false } }],
@@ -835,11 +906,36 @@ test('unaddressable React observations cannot disappear to manufacture complete 
     complete,
   );
   assert.deepEqual(screen.elements, [], 'legacy identity output still omits unaddressable entries');
+  const judge = scriptedJudge(() => assert.fail('no established contribution is available'));
   for (const copy of [screen, { ...screen }, structuredClone(screen)]) {
     refused(projection.semanticActionView(copy, 'press'), 'SCREEN_EVIDENCE_INCOMPLETE');
-    refused(projection.visibilityView(copy), 'SCREEN_EVIDENCE_INCOMPLETE');
+    assert.deepEqual(projection.visibilityView(copy), {
+      elements: [],
+      unknown: [],
+      unassociatedReact: 1,
+    });
     assert.equal(copy.semanticUnassociatedReact, 1);
+    const decision = await decideScreen(
+      copy,
+      judge,
+      { kind: 'check', literal: false, text: 'Save is visible', line: 1 },
+      { kind: 'wait', target: { phrase: 'Save' }, line: 2 },
+    );
+    assert.deepEqual(decision.check, {
+      refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
+      reason: 'no established assertion contribution is available',
+    });
+    assert.equal(decision.visibility, undefined);
+    assert.equal(decision.target, undefined);
+    assert.equal(judge.requests.length, 0);
+    const standalone = await decideScreen(copy, judge, undefined, {
+      kind: 'wait',
+      target: { phrase: 'Save' },
+      line: 2,
+    });
+    assert.deepEqual(standalone.visibility, decision.check);
   }
+  assert.equal(judge.requests.length, 0);
 });
 
 test('anonymous same-label controls are not removed from semantic accounting by the legacy join', () => {
@@ -859,7 +955,11 @@ test('anonymous same-label controls are not removed from semantic accounting by 
     structuredClone(screen),
   ]) {
     refused(projection.semanticActionView(copy, 'press'), 'SCREEN_EVIDENCE_INCOMPLETE');
-    refused(projection.visibilityView(copy), 'SCREEN_EVIDENCE_INCOMPLETE');
+    assert.deepEqual(projection.visibilityView(copy), {
+      elements: copy.elements,
+      unknown: [],
+      unassociatedReact: 1,
+    });
     assert.equal(copy.semanticUnassociatedReact, 1);
   }
 });
@@ -960,7 +1060,11 @@ test('semanticDisabled is the action owner and falls back only when its fact is 
   assert.deepEqual(projection.semanticActionView(copied, 'press'), {
     elements: [copied.elements[0]],
   });
-  assert.deepEqual(projection.visibilityView(copied), { elements: copied.elements });
+  assert.deepEqual(projection.visibilityView(copied), {
+    elements: copied.elements,
+    unknown: [],
+    unassociatedReact: 0,
+  });
   assert.equal(
     projection.semanticDisabled(element('@legacy', { semantic: undefined, disabled: true })),
     true,
@@ -995,7 +1099,11 @@ test('projections retain private source values before excluding observations', (
   assert.equal(projection.assertionView(screen)[0], 'Password');
   screen.elements[0].semantic!.visibility = 'hidden';
   screen.elements[1].semantic!.visibility = 'visible';
-  assert.deepEqual(projection.visibilityView(screen), { elements: [screen.elements[1]] });
+  assert.deepEqual(projection.visibilityView(screen), {
+    elements: [screen.elements[1]],
+    unknown: [],
+    unassociatedReact: 0,
+  });
   assert.deepEqual(inputValues(screen), ['native-secret', 'react-secret']);
 });
 
@@ -1005,7 +1113,7 @@ test('the domain retains all 31 independent candidates and contributions for res
   const action = projection.semanticActionView(screen, 'press');
   const visibility = projection.visibilityView(screen);
   assert.deepEqual(action, { elements: controls });
-  assert.deepEqual(visibility, { elements: controls });
+  assert.deepEqual(visibility, { elements: controls, unknown: [], unassociatedReact: 0 });
   assert.ok('elements' in action && action.elements.every((e, i) => e === controls[i]));
   assert.ok('elements' in visibility && visibility.elements.every((e, i) => e === controls[i]));
 });
@@ -1049,11 +1157,12 @@ test('an observed navigation bar title matching its bar is a native heading witn
 
   const judge = scriptedJudge((questions, _i, state) => {
     assert.deepEqual(Object.keys(questions), ['visibility_1']);
-    assert.equal(state.qualifiedHeadingEvidence.length, 1);
-    assert.match(
-      state.qualifiedHeadingEvidence[0].description,
-      /platform-observed navigation bar title/,
-    );
+    assert.deepEqual(state.assertionEvidence.qualifiedHeadings, [
+      { contribution: 0, kind: 'navigation-title' },
+    ]);
+    assert.deepEqual(state.assertionEvidence.unknown, []);
+    assert.equal(state.assertionEvidence.unassociatedReact, 0);
+    assert.match(state.assertionEvidence.observed[0], /platform-observed navigation bar title/);
     return { visibility_1: { type: 'noul', noul: 0.9 } };
   });
   const wait = (phrase: string) => ({ kind: 'wait' as const, target: { phrase }, line: 1 });
@@ -1182,7 +1291,11 @@ test('React observations hidden from accessibility are neither unaccounted evide
     hidden.elements.some((e) => e.ref === 'react:home-btn'),
     false,
   );
-  assert.deepEqual(projection.visibilityView(hidden), { elements: [hidden.elements[2]] });
+  assert.deepEqual(projection.visibilityView(hidden), {
+    elements: [hidden.elements[2]],
+    unknown: [],
+    unassociatedReact: 0,
+  });
 
   const shown = view(false);
   assert.equal(shown.semanticUnassociatedReact, 1);

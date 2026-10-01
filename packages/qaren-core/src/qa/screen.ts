@@ -797,8 +797,6 @@ function projectionRefusal(screen: Screen): { refuse: string; reason: string } |
       `semantic projection requires complete native and React coverage (capture ${sides(screen.captureCoverage)}; projected ${sides(screen.coverage)}${causes})`,
     );
   }
-  if ((screen.semanticUnassociatedReact ?? 0) > 0)
-    return incomplete('React observations lack a proven unique native association');
   return undefined;
 }
 
@@ -809,6 +807,8 @@ export function semanticDisabled(element: Element): boolean {
 export function semanticActionView(screen: Screen, kind: 'press' | 'fill'): Projection {
   const refusal = projectionRefusal(screen);
   if (refusal) return refusal;
+  if ((screen.semanticUnassociatedReact ?? 0) > 0)
+    return incomplete('React observations lack a proven unique native association');
   const elements: Element[] = [];
   for (const e of screen.elements) {
     if (e.semantic?.nativePresence?.structural) continue;
@@ -828,10 +828,21 @@ export function semanticActionView(screen: Screen, kind: 'press' | 'fill'): Proj
   return { elements };
 }
 
-export function visibilityView(screen: Screen): Projection {
+export interface AssertionEvidence {
+  elements: Element[];
+  unknown: Array<{ element: Element; reason: 'visibility' | 'name-provenance' | 'content' }>;
+  unassociatedReact: number;
+  diagnostic?: VisibilityBlockerDiagnostic;
+}
+
+export function visibilityView(
+  screen: Screen,
+  diagnostics = false,
+): AssertionEvidence | { refuse: string; reason: string } {
   const refusal = projectionRefusal(screen);
   if (refusal) return refusal;
   const elements: Element[] = [];
+  const unknown: AssertionEvidence['unknown'] = [];
   for (const e of screen.elements) {
     if (!e.semantic) return incomplete('an observation has no semantic facts');
     const native = e.semantic.nativePresence;
@@ -862,18 +873,35 @@ export function visibilityView(screen: Screen): Projection {
       e.semantic.fill === 'unsupported'
     )
       continue;
-    if (e.semantic.visibility !== 'visible')
-      return incomplete('a possible assertion contribution has unknown visibility');
-    if (native && native.labelSource !== 'direct' && native.labelSource !== 'none')
-      return incomplete(
-        'a native label is derived from a value or descendant, not an independent name',
-      );
+    if (e.semantic.visibility !== 'visible') {
+      unknown.push({ element: e, reason: 'visibility' });
+      continue;
+    }
+    if (native && native.labelSource !== 'direct' && native.labelSource !== 'none') {
+      unknown.push({ element: e, reason: 'name-provenance' });
+      continue;
+    }
     const kind = native?.kind ?? e.kind;
-    if (!control && !((kind === 'text' || kind === 'input') && content))
-      return incomplete('an observation is not proven readable content or an identified control');
+    if (!control && !((kind === 'text' || kind === 'input') && content)) {
+      unknown.push({ element: e, reason: 'content' });
+      continue;
+    }
     elements.push(e);
   }
-  return { elements };
+  const evidence: AssertionEvidence = {
+    elements,
+    unknown,
+    unassociatedReact: screen.semanticUnassociatedReact ?? 0,
+  };
+  if (diagnostics && unknown.length) {
+    try {
+      const element = unknown[0].element;
+      evidence.diagnostic = visibilityBlocker(screen, element, screen.elements.indexOf(element));
+    } catch {
+      // Diagnostics cannot change assertion admission.
+    }
+  }
+  return evidence;
 }
 
 export function describe(e: Element): string {

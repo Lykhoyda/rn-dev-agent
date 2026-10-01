@@ -31,7 +31,12 @@ test('presence uses inclusive CHECK boundaries, not ACT or a unique matching ref
       assert.equal(q.visibility_1.type, 'noul');
       assert.deepEqual(state, {
         front: 'app',
-        visibilityEvidence: ['Button "Save"', 'Button "Save"'],
+        assertionEvidence: {
+          observed: ['Button "Save"', 'Button "Save"'],
+          unknown: [],
+          unassociatedReact: 0,
+          qualifiedHeadings: [],
+        },
       });
       return { visibility_1: { type: 'noul', noul } };
     });
@@ -42,20 +47,91 @@ test('presence uses inclusive CHECK boundaries, not ACT or a unique matching ref
   }
 });
 
-test('the visibility groups count all independent contributions before equal text coalescing', async () => {
+test('the whole-claim bound counts all independent contributions before equal text coalescing', async () => {
   for (const count of [30, 31]) {
     const observed = screen(Array.from({ length: count }, (_, i) => element(`@${i}`, 'Save')));
     const judge = yes();
     const result = await decideScreen(observed, judge, undefined, wait());
-    assert.deepEqual(result.visibility, { verdict: 'present' });
-    assert.equal(judge.requests.length, 1);
-    const state = judge.requests[0].state as Record<string, string[][] | string[]>;
-    if (count === 30) assert.equal(state.visibilityEvidence.length, 30);
-    else
-      assert.deepEqual(
-        (state.visibilityEvidenceGroups as string[][]).map((group) => group.length),
-        [30, 1],
+    if (count === 30) {
+      assert.deepEqual(result.visibility, { verdict: 'present' });
+      assert.equal(judge.requests.length, 1);
+      assert.deepEqual(judge.requests[0].state, {
+        front: 'app',
+        assertionEvidence: {
+          observed: Array(30).fill('Button "Save"'),
+          unknown: [],
+          unassociatedReact: 0,
+          qualifiedHeadings: [],
+        },
+      });
+    } else {
+      assert.ok(result.visibility && 'refuse' in result.visibility);
+      assert.equal(result.visibility.refuse, 'CANDIDATE_LIMIT');
+      assert.equal(judge.requests.length, 0);
+    }
+  }
+});
+
+test('unknown contributions share the 30-item assertion bound without becoming positive evidence', async () => {
+  for (const count of [29, 30]) {
+    const observed = screen([
+      element('@save', 'Save'),
+      ...Array.from({ length: count }, (_, i) =>
+        element(`@unknown${i}`, 'Uncertain text', {
+          kind: 'text',
+          semantic: { press: 'unsupported', fill: 'unsupported', visibility: 'unknown' },
+        }),
+      ),
+    ]);
+    const judge = yes();
+    const result = await decideScreen(observed, judge, undefined, wait());
+    if (count === 29) {
+      assert.deepEqual(result.visibility, { verdict: 'present' });
+      assert.deepEqual(Object.keys(judge.requests[0].questions), ['visibility_1']);
+      assert.deepEqual(judge.requests[0].state, {
+        front: 'app',
+        assertionEvidence: {
+          observed: ['Button "Save"'],
+          unknown: Array(29).fill({ description: 'Text "Uncertain text"', reason: 'visibility' }),
+          unassociatedReact: 0,
+          qualifiedHeadings: [],
+        },
+      });
+    } else {
+      assert.ok(result.visibility && 'refuse' in result.visibility);
+      assert.equal(result.visibility.refuse, 'CANDIDATE_LIMIT');
+      assert.equal(judge.requests.length, 0);
+    }
+  }
+});
+
+test('complete empty evidence still asks each whole claim instead of locally inferring absence', async () => {
+  for (const text of ['nothing is visible', 'Save is visible', 'the screen is ready']) {
+    for (const noul of [0.9, 0.1]) {
+      const judge = scriptedJudge(() => ({
+        check_0: { type: 'noul', noul },
+        visibility_1: { type: 'noul', noul },
+      }));
+      const result = await decideScreen(
+        screen([]),
+        judge,
+        { kind: 'check', text, literal: false, line: 0 },
+        wait(text),
       );
+      assert.equal(result.check, noul === 0.9 ? 'pass' : 'fail');
+      assert.deepEqual(result.visibility, { verdict: noul === 0.9 ? 'present' : 'absent' });
+      assert.equal(judge.requests.length, 1);
+      assert.deepEqual(Object.keys(judge.requests[0].questions), ['check_0', 'visibility_1']);
+      assert.deepEqual(judge.requests[0].state, {
+        front: 'app',
+        assertionEvidence: {
+          observed: [],
+          unknown: [],
+          unassociatedReact: 0,
+          qualifiedHeadings: [],
+        },
+      });
+    }
   }
 });
 
@@ -72,7 +148,12 @@ test('only witnessed structural observations can be omitted from the semantic bu
   });
   assert.deepEqual(judge.requests[0].state, {
     front: 'app',
-    visibilityEvidence: ['Button "Save"'],
+    assertionEvidence: {
+      observed: ['Button "Save"'],
+      unknown: [],
+      unassociatedReact: 0,
+      qualifiedHeadings: [],
+    },
   });
   const unknown: Screen = {
     ...observed,
@@ -189,12 +270,17 @@ test('supported text presence keeps all contributions and is not proved by equal
     assert.deepEqual(decision.visibility, { verdict });
     assert.deepEqual(judge.requests[0].state, {
       front: 'app',
-      visibilityEvidence: ['Text "Welcome"', 'Text "Header"'],
+      assertionEvidence: {
+        observed: ['Text "Welcome"', 'Text "Header"'],
+        unknown: [],
+        unassociatedReact: 0,
+        qualifiedHeadings: [],
+      },
     });
   }
 });
 
-test('an unestablished heading is not absence on an empty screen and does not suppress adjacent checks', async () => {
+test('an unestablished heading cannot prove either a check or a wait even on a complete empty screen', async () => {
   const judge = yes();
   const decision = await decideScreen(
     screen([]),
@@ -203,9 +289,8 @@ test('an unestablished heading is not absence on an empty screen and does not su
     wait('welcome heading'),
   );
   assert.deepEqual(decision.visibility, { verdict: 'pending' });
-  assert.equal(decision.check, 'pass');
-  assert.deepEqual(Object.keys(judge.requests[0].questions), ['check_0']);
-  assert.ok(!('visibilityEvidence' in Object(judge.requests[0].state)));
+  assert.equal(decision.check, 'unsure');
+  assert.equal(judge.requests.length, 0);
 });
 
 test('unsupported phrase traits do not change quoted targets or literal checks', async () => {
@@ -301,7 +386,7 @@ test('semantic presence keeps native input privacy facts attached to the origina
   assert.equal(input.label, 'Anton');
 });
 
-test('semantic presence privacy does not change the legacy check or literal assertion paths', async () => {
+test('nonliteral checks share semantic presence privacy while literal checks remain local', async () => {
   const observed = screen(
     [
       element('@name', 'Name', {
@@ -320,16 +405,16 @@ test('semantic presence privacy does not change the legacy check or literal asse
     { kind: 'check', literal: false, text: 'name starts with A', line: 0 },
     wait('name starts with A'),
   );
-  assert.equal(decision.check, 'pass');
+  assert.equal(decision.check, 'unsure');
   assert.deepEqual(decision.visibility, { verdict: 'unsure' });
-  assert.deepEqual(Object.keys(judge.requests[0].questions), ['check_0']);
+  assert.equal(judge.requests.length, 0);
   assert.equal(judgeCheck({ kind: 'check', literal: true, text: 'Anton' }, observed), 'pass');
 });
 
 test('a local visibility refusal does not suppress an independent batched check', async () => {
   const judge = yes();
   const decision = await decideScreen(
-    screen(Array.from({ length: 31 }, (_, i) => element(`@${i}`, 'Save'))),
+    screen(Array.from({ length: 30 }, (_, i) => element(`@${i}`, 'Save'))),
     judge,
     { kind: 'check', literal: false, text: 'There are Save controls', line: 0 },
     wait('a red Save control'),
@@ -338,7 +423,7 @@ test('a local visibility refusal does not suppress an independent batched check'
   assert.ok(decision.visibility && 'refuse' in decision.visibility);
   assert.equal(decision.visibility.refuse, 'VISIBILITY_UNSUPPORTED');
   assert.deepEqual(Object.keys(judge.requests[0].questions), ['check_0']);
-  assert.ok(!('visibilityEvidence' in Object(judge.requests[0].state)));
+  assert.ok('assertionEvidence' in Object(judge.requests[0].state));
 });
 
 test('semantic action selection still uses Choice and only attested offscreen evidence requests scrolling', async () => {
@@ -385,7 +470,12 @@ test('legacy React disabled flags cannot bias semantic action criteria or model 
   });
   assert.deepEqual(visibilityJudge.requests[0].state, {
     front: 'app',
-    visibilityEvidence: ['Button "Save"'],
+    assertionEvidence: {
+      observed: ['Button "Save"'],
+      unknown: [],
+      unassociatedReact: 0,
+      qualifiedHeadings: [],
+    },
   });
   assert.equal(observed.elements[0].disabled, true);
 });

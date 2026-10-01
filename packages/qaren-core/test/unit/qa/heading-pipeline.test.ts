@@ -174,16 +174,22 @@ async function observedTitle(
         ok: true,
         protocolVersion: 2,
         commands: REQUIRED_IOS_COMMANDS,
-        capabilities: [...REQUIRED_IOS_FEATURES, 'HONEST_HITTABLE', 'PLATFORM_PRESENCE_V1'],
+        capabilities: [...REQUIRED_IOS_FEATURES, 'HONEST_HITTABLE', 'PLATFORM_PRESENCE_V2'],
       });
     assert.equal(JSON.parse(String(init?.body)).platformPresence, true);
+    assert.equal(JSON.parse(String(init?.body)).presenceBudgetMs, 20_000);
     return Response.json({ ok: true, data: native });
   });
   return captureScreen({
     appId: 'com.test',
-    native: async () => {
+    native: async (presenceBudgetMs) => {
       const { data, meta } = parseEnvelope(
-        await runIOS({ command: 'snapshot', platformPresence: true, bundleId: 'com.test' }),
+        await runIOS({
+          command: 'snapshot',
+          platformPresence: true,
+          bundleId: 'com.test',
+          presenceBudgetMs,
+        }),
       );
       return { ...data, snapshotVerdict: meta.snapshotVerdict };
     },
@@ -217,13 +223,15 @@ test('real asynchronous typography producer and handlers qualify an anonymous ri
   );
   const judge = scriptedJudge((questions, _index, state) => {
     assert.equal(questions.visibility_1.type, 'noul');
-    assert.equal(state.visibilityEvidence.length, 3);
-    assert.equal(state.qualifiedHeadingEvidence.length, 1);
-    assert.match(state.qualifiedHeadingEvidence[0].description, /Welcome/);
-    assert.match(
-      state.qualifiedHeadingEvidence[0].description,
-      /not a declared accessibility role/,
-    );
+    assert.deepEqual(Object.keys(questions), ['visibility_1']);
+    assert.equal(state.assertionEvidence.observed.length, 3);
+    assert.deepEqual(state.assertionEvidence.unknown, []);
+    assert.equal(state.assertionEvidence.unassociatedReact, 0);
+    assert.deepEqual(state.assertionEvidence.qualifiedHeadings, [
+      { contribution: 1, kind: 'typographic-title' },
+    ]);
+    assert.match(state.assertionEvidence.observed[1], /Welcome/);
+    assert.match(state.assertionEvidence.observed[1], /not a declared accessibility role/);
     assert.equal(Object.hasOwn(state, 'hostEvidence'), false);
     return { visibility_1: { type: 'noul', noul: 0.99 } };
   });
@@ -312,8 +320,12 @@ test('measured zero-area anonymous Views survive producer → handler → captur
       ['@e0', '@e1', '@e2', '@e3', '@e4'],
     );
     const judge = scriptedJudge((_, __, state) => {
-      assert.equal(state.visibilityEvidence.length, 3);
-      assert.equal(state.qualifiedHeadingEvidence.length, 1);
+      assert.equal(state.assertionEvidence.observed.length, 3);
+      assert.deepEqual(state.assertionEvidence.unknown, []);
+      assert.equal(state.assertionEvidence.unassociatedReact, 0);
+      assert.deepEqual(state.assertionEvidence.qualifiedHeadings, [
+        { contribution: 1, kind: 'typographic-title' },
+      ]);
       return { visibility_1: { type: 'noul', noul: 0.99 } };
     });
     const f = walker([screen], judge);

@@ -18,7 +18,9 @@ export interface EvalCase {
     | { kind: 'target'; scroll: 'up' | 'down' }
     | { kind: 'target'; refuse: string }
     | { kind: 'check'; verdict: 'pass' | 'fail' | 'unsure' }
-    | { kind: 'visibility'; verdict: 'present' | 'absent' | 'pending' | 'unsure' };
+    | { kind: 'check'; refuse: string }
+    | { kind: 'visibility'; verdict: 'present' | 'absent' | 'pending' | 'unsure' }
+    | { kind: 'visibility'; refuse: string };
 }
 
 export async function evaluateCase(
@@ -64,7 +66,12 @@ export async function evaluateCase(
     );
   const actual =
     input.expected.kind === 'check'
-      ? { kind: 'check', verdict: decision.check }
+      ? {
+          kind: 'check',
+          ...(typeof decision.check === 'object'
+            ? { refuse: decision.check.refuse }
+            : { verdict: decision.check }),
+        }
       : decision.target && 'ref' in decision.target
         ? { kind: 'target', ref: decision.target.ref }
         : decision.target && 'scroll' in decision.target
