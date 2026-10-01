@@ -276,9 +276,9 @@ test('serializeM7Header emits enginePin when present', () => {
     id: 'x',
     intent: 'y',
     status: 'active',
-    enginePin: 'maestro-runner@1.1.27',
+    enginePin: 'maestro-runner@1.1.28',
   });
-  assert.match(out, /# enginePin: maestro-runner@1\.1\.27/);
+  assert.match(out, /# enginePin: maestro-runner@1\.1\.28/);
 });
 
 test('Phase127 serializeM7Header: omits absent optional fields', () => {

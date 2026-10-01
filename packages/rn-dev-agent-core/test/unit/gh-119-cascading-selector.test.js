@@ -22,7 +22,7 @@ function makeProject() {
       '# intent: a sample',
       '# status: experimental',
       '# mutates: false',
-      '# enginePin: maestro-runner@1.1.27',
+      '# enginePin: maestro-runner@1.1.28',
       '- launchApp',
       '- tapOn:',
       '    id: "btn-A"',
