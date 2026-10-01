@@ -135,7 +135,7 @@ test('failed-only walks retain real durations and count the final outcome', () =
   });
 });
 
-test('logical step identities include block, line and kind', () => {
+test('logical step identities use line and kind regardless of block', () => {
   assert.deepEqual(
     summarizeSpeed([
       timed(1, 100),
@@ -144,22 +144,50 @@ test('logical step identities include block, line and kind', () => {
       timed(2, 400),
     ]),
     {
-      stepMedianMs: 250,
+      stepMedianMs: 300,
       stepP95Ms: 400,
       walkMs: 1_000,
-      steps: 4,
-      passed: 4,
+      steps: 3,
+      passed: 3,
       failed: 0,
     },
   );
 });
 
-test('walks without timed logical steps omit percentiles and retain counts', () => {
-  const empty = { walkMs: 0, steps: 0, passed: 0, failed: 0 };
-  assert.deepEqual(summarizeSpeed([]), empty);
-  assert.deepEqual(summarizeSpeed([row(1)]), empty);
-  assert.deepEqual(buildLedger([], [row(1)]).speed, empty);
-  assert.deepEqual(summarizeSpeed([{ ...timed(1, 50), kind: 'setup' }]), { ...empty, walkMs: 50 });
+test('capture-refusal retries keep one logical step across diagnostic blocks', () => {
+  for (const block of ['native-capture', 'private-input-capture']) {
+    for (const kind of ['step', 'check'] as const) {
+      const rows = [
+        timed(1, 9_000, { block: 'plan', kind, outcome: 'retry' }),
+        timed(1, 1_000, { block, kind, outcome: 'fail', attempt: 2 }),
+      ];
+      assert.deepEqual(buildLedger([], rows).speed, {
+        stepMedianMs: 10_000,
+        stepP95Ms: 10_000,
+        walkMs: 10_000,
+        steps: 1,
+        passed: 0,
+        failed: 1,
+      });
+    }
+  }
+});
+
+test('walks without timing omit speed', () => {
+  assert.equal(summarizeSpeed([]), undefined);
+  assert.equal(summarizeSpeed([row(1)]), undefined);
+  assert.equal('speed' in buildLedger([], [row(1)]), false);
+});
+
+test('timed walks without logical steps omit percentiles and retain counts', () => {
+  for (const total of [0, 50]) {
+    assert.deepEqual(summarizeSpeed([{ ...timed(1, total), kind: 'setup' }]), {
+      walkMs: total,
+      steps: 0,
+      passed: 0,
+      failed: 0,
+    });
+  }
 });
 
 function timedWalk() {
@@ -218,7 +246,7 @@ test('timing is passive: rows and verdict match a walk without an observer', asy
     a.steps.map(({ timing: _timing, ...rest }) => rest),
     b.steps,
   );
-  assert.deepEqual(b.speed, { walkMs: 0, steps: 0, passed: 0, failed: 0 });
+  assert.equal('speed' in b, false);
   assert.ok(b.steps.every((s) => !('timing' in s)));
   assert.deepEqual(timed.f.actions, plain.f.actions);
 });

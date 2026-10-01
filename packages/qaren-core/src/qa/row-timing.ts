@@ -119,15 +119,16 @@ export function createRowTimer(startedAt: number): RowTimer {
 }
 
 export function summarizeSpeed(
-  rows: readonly { block: string; line: number; kind: string; outcome: string; timing?: RowTiming }[],
-): LedgerSpeed {
+  rows: readonly { line: number; kind: string; outcome: string; timing?: RowTiming }[],
+): LedgerSpeed | undefined {
+  if (!rows.some((row) => row.timing)) return undefined;
   const steps = new Map<string, { total: number; outcome: string }>();
   let walkMs = 0;
   for (const row of rows) {
     if (!row.timing) continue;
     walkMs += row.timing.total;
     if (row.kind !== 'step' && row.kind !== 'check') continue;
-    const key = JSON.stringify([row.block, row.line, row.kind]);
+    const key = JSON.stringify([row.line, row.kind]);
     steps.set(key, {
       total: (steps.get(key)?.total ?? 0) + row.timing.total,
       outcome: row.outcome,
