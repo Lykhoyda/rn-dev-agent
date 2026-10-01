@@ -9,8 +9,8 @@ notes here.
 The repository is mid-pivot from rn-dev-agent (an MCP server plus host plugins
 that drive React Native apps on simulators) to QaReN: a Rust CLI that owns the
 run and spawns a TypeScript child that reads the screen. `main` still ships
-rn-dev-agent 1.0.x; `develop` carries the migration as one PR per phase and
-merges into `main` as 2.0.0 once the label path runs end to end. The QaReN
+rn-dev-agent 1.0.x; `develop` carries the migration as one PR per phase.
+See Branches, CI And Release below for QA and merge authority. The QaReN
 structure outline and TDD that the phase PRs cite are the specification; each
 phase PR names its Linear issue in the QaReN project.
 
@@ -222,6 +222,9 @@ Suite records and redacted logs live under `~/.qaren/native-suites/<run-id>`. Un
 
 ## Branches, CI And Release
 
+- A QaReN task is done only after the factory QA mate passes it at the exact
+  head; green CI alone does not complete it. After that pass, merge `main`
+  into `develop`. The `develop` → `main` merge for 2.0.0 requires the captain.
 - `main` is protected and its only required check is `Build & Test`
   (`ci.yml`), which now requires `cargo-test` as well. Nothing reaches `main`
   except a PR carrying that check green.
