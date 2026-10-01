@@ -150,7 +150,7 @@ const start=require(${JSON.stringify(expoStartBundlerPath)}).startBundlerAsync;
       writeFileSync(
         join(bin, 'adb'),
         `#!/usr/bin/env node
-const a=process.argv.slice(2);if(a[0]==='devices'){process.stdout.write('List of devices attached\\nemulator-5690 device product:sdk model:Pixel_9_Pro device:emu\\n');}else if(a.includes('emu')){process.stdout.write('Pixel_9_Pro\\n');}else if(a.includes('pm')&&a.includes('path')){process.stdout.write('package:/data/app/base.apk\\n');}else if(a.includes('stat')){process.stdout.write('/data/app/base.apk:1:12:1\\n');}else if(a.includes('cat')){process.stdout.write('fixture-apk');}else if(a.includes('ro.product.model')){process.stdout.write('Pixel 9 Pro\\n');}else process.stdout.write('');
+const a=process.argv.slice(2);if(a[0]==='devices'){process.stdout.write('List of devices attached\\nemulator-5690 device product:sdk model:Pixel_9_Pro device:emu\\n');}else if(a.includes('emu')){process.stdout.write('Pixel_9_Pro\\n');}else if(a.includes('pm')&&a.includes('path')){process.stdout.write('package:/data/app/base.apk\\n');}else if(a.includes('stat')){process.stdout.write('/data/app/base.apk:1:12:1\\n');}else if(a.includes('cat')){process.stdout.write('fixture-apk');}else if(a.includes('ro.product.model')){process.stdout.write('Pixel 9 Pro\\n');}else if(a.includes('resolve-activity')){process.stdout.write('com.rndevagent.testapp/.MainActivity\\n');}else if(a.includes('start')){process.stdout.write('Starting: Intent\\n');}else process.stdout.write('');
 `,
       );
       chmodSync(join(bin, 'adb'), 0o755);

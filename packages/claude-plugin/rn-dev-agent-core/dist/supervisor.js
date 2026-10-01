@@ -20407,6 +20407,45 @@ function managedMetroProxyUrl(binding) {
     }
     process.stdout.write(String(startup.stdout));
   }
+  if (session && platform === 'android' && expoProxyUrl && /^emulator-\d+$/.test(session.deviceId) && autoHideDevMenuOnSimulators()) {
+    const adb = (args, step) => {
+      const result = spawnSync('adb', ['-s', session.deviceId, 'shell', ...args], {
+        cwd: process.cwd(),
+        env: authorityEnvironment,
+        encoding: 'utf8',
+        timeout: 30_000,
+      });
+      const output = String(result.stdout) + String(result.stderr);
+      if (result.error || result.status !== 0 || /Error:|Error type \d|Warning: Activity not started|No Activity found|Status: error/i.test(output)) {
+        const detail = result.error?.message || output.trim() || step + ' failed';
+        failBuild(2, 'DEV_CLIENT_STARTUP_UNCONFIRMED: emulator ' + step + ' failed: ' + detail);
+      }
+      return String(result.stdout);
+    };
+    if (!/^[A-Za-z0-9_.]+$/.test(session.appId)) {
+      failBuild(2, 'DEV_CLIENT_STARTUP_UNCONFIRMED: ' + session.appId + ' is not an Android application id');
+    }
+    adb(['am', 'force-stop', session.appId], 'force-stop');
+    const component = adb(['cmd', 'package', 'resolve-activity', '--brief', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER', session.appId], 'launcher resolution')
+      .split('\n').map((line) => line.trim()).filter(Boolean).pop();
+    if (!component || !component.startsWith(session.appId + '/') || !/^[A-Za-z0-9_.]+\/[A-Za-z0-9_.$]+$/.test(component)) {
+      failBuild(2, 'DEV_CLIENT_STARTUP_UNCONFIRMED: launcher activity of ' + session.appId + ' could not be resolved on emulator ' + session.deviceId);
+    }
+    // The launcher matches only the expo-development-client host and the component is explicit, so no app scheme is needed.
+    const launchUrl = 'rn-dev-agent://expo-development-client/?url=' + encodeURIComponent(withDevMenuOnboardingDisabled(expoProxyUrl)) + '&disableFab=1';
+    process.stdout.write(
+      'rn-session-adapter: starting ' + session.appId + ' on emulator ' + session.deviceId + ' with the dev menu deactivated\n'
+    );
+    const started = adb([
+      'am', 'start', '-a', 'android.intent.action.VIEW', '-n', "'" + component + "'",
+      '-d', "'" + launchUrl + "'", '--ez', 'EXDevMenuDisableAutoLaunch', 'true',
+    ], 'launch');
+    if (!/^Starting: Intent/m.test(started)) {
+      failBuild(2, 'DEV_CLIENT_STARTUP_UNCONFIRMED: emulator launch was not confirmed: ' + (started.trim() || 'no output'));
+    }
+    process.stdout.write(started);
+    await drainBuildTerminationSignals();
+  }
   if (session) {
     const complete = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'complete-build', platform, session.buildToken], {
       cwd: process.cwd(),

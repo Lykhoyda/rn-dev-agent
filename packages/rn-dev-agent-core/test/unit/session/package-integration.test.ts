@@ -4106,6 +4106,11 @@ test('copied adapter aborts pending build authority on every pre-completion fail
     );
     chmodSync(join(binRoot, 'xcrun'), 0o755);
     writeFileSync(
+      join(binRoot, 'adb'),
+      "#!/usr/bin/env node\nif(process.argv.includes('resolve-activity'))process.stdout.write('dev.example.android/.MainActivity\\n');if(process.argv.includes('start'))process.stdout.write('Starting: Intent\\n');\n",
+    );
+    chmodSync(join(binRoot, 'adb'), 0o755);
+    writeFileSync(
       sessionCliPath,
       "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){const platform=args[1];fs.appendFileSync(process.env.ADAPTER_PREPARE,JSON.stringify({args})+'\\n');process.stdout.write(JSON.stringify(platform==='ios'?{platform:'ios',deviceId:'session-ios-device',appId:'dev.example',metroPort:8341,sessionId:'session-ios',buildToken:args[2],simulator:true}:{platform:'android',deviceId:'emulator-5582',appId:'dev.example.android',metroPort:8342,sessionId:'session-android',buildToken:args[2]}));}else if(args[0]==='resolve-expo-android-device'){process.stdout.write(JSON.stringify({deviceId:args[1],displayName:'Pixel_API_35'}));}else if(args[0]==='abort-build'){if(process.env.ADAPTER_ABORT_FAIL==='1'){process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: build abort capability is stale or foreign\\n');process.exit(2);}fs.appendFileSync(process.env.ADAPTER_ABORT,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID})+'\\n');process.stdout.write('{\"aborted\":true}\\n');}else{fs.writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID}));process.stdout.write('{\"receipt\":true}\\n');}",
     );
@@ -4203,6 +4208,163 @@ test('copied adapter aborts pending build authority on every pre-completion fail
       session: 'session-android',
     });
     assert.equal(existsSync(abortPath), false, 'a completed build must never be aborted');
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('copied adapter relaunches Android emulator dev clients with the dev menu deactivated', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-adapter-android-devmenu-'));
+  try {
+    const integrationRoot = join(root, '.rn-agent', 'integration');
+    const binRoot = join(root, 'bin');
+    const adapterPath = join(integrationRoot, 'rn-session-adapter.cjs');
+    const completionPath = join(root, 'completion.json');
+    const abortPath = join(root, 'abort.jsonl');
+    const adbCallsPath = join(root, 'adb.jsonl');
+    const preparePath = join(root, 'prepare.jsonl');
+    const sessionCliPath = join(root, 'rn-session.cjs');
+    mkdirSync(integrationRoot, { recursive: true });
+    mkdirSync(binRoot, { recursive: true });
+    writeFileSync(adapterPath, renderProjectAdapter(), { mode: 0o755 });
+    writeFileSync(
+      join(integrationRoot, 'rn-session-integration.json'),
+      JSON.stringify({
+        version: 1,
+        adapter: '.rn-agent/integration/rn-session-adapter.cjs',
+        sessionCli: sessionCliPath,
+        originalScripts: {
+          ios: ['npx', 'expo', 'run:ios'],
+          android: ['npx', 'expo', 'run:android'],
+        },
+      }),
+    );
+    writeFileSync(join(binRoot, 'npx'), '#!/usr/bin/env node\n');
+    chmodSync(join(binRoot, 'npx'), 0o755);
+    writeFileSync(
+      join(binRoot, 'adb'),
+      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);fs.appendFileSync(process.env.ADAPTER_ADB_CALLS,JSON.stringify(args)+'\\n');if(args.includes('resolve-activity')){process.stdout.write('priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\\n'+(process.env.ADAPTER_ADB_COMPONENT||'dev.example/.MainActivity')+'\\n');}else if(args.includes('start')){if(process.env.ADAPTER_ADB_START_FAIL==='1'){process.stderr.write('start refused\\n');process.exit(3);}if(process.env.ADAPTER_ADB_SIGNAL==='1')process.kill(process.ppid,'SIGTERM');process.stdout.write(process.env.ADAPTER_ADB_START_OUTPUT??'Starting: Intent { act=android.intent.action.VIEW }\\n');}\n",
+    );
+    chmodSync(join(binRoot, 'adb'), 0o755);
+    writeFileSync(
+      sessionCliPath,
+      "const fs=require('node:fs');const args=process.argv.slice(2);const serial=process.env.ADAPTER_SERIAL||'emulator-5582';if(args[0]==='prepare-build'){fs.appendFileSync(process.env.ADAPTER_PREPARE,JSON.stringify({args})+'\\n');process.stdout.write(JSON.stringify({platform:'android',deviceId:serial,appId:'dev.example',metroPort:8342,sessionId:'session-android',buildToken:args[2],androidMetroReverse:{platform:'android',deviceId:serial,metroPort:8342,local:'tcp:8342',remote:'tcp:8342'}}));}else if(args[0]==='resolve-expo-android-device'){process.stdout.write(JSON.stringify({deviceId:args[1],displayName:'Pixel_API_35'}));}else if(args[0]==='abort-build'){fs.appendFileSync(process.env.ADAPTER_ABORT,JSON.stringify({args})+'\\n');process.stdout.write('{\"aborted\":true}\\n');}else{fs.writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args}));process.stdout.write('{\"receipt\":true}\\n');}",
+    );
+    const runAndroid = (env: Record<string, string> = {}) => {
+      rmSync(adbCallsPath, { force: true });
+      rmSync(completionPath, { force: true });
+      rmSync(abortPath, { force: true });
+      return spawnSync(process.execPath, [adapterPath, 'android'], {
+        cwd: root,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${binRoot}:${process.env.PATH}`,
+          ADAPTER_ADB_CALLS: adbCallsPath,
+          ADAPTER_COMPLETION: completionPath,
+          ADAPTER_ABORT: abortPath,
+          ADAPTER_PREPARE: preparePath,
+          ...env,
+        },
+      });
+    };
+    const postBuildAdbCalls = () =>
+      existsSync(adbCallsPath)
+        ? readFileSync(adbCallsPath, 'utf8')
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line) as string[])
+        : [];
+
+    const relaunched = runAndroid();
+    assert.equal(relaunched.status, 0, relaunched.stderr);
+    const [forceStop, resolveActivity, start, ...extra] = postBuildAdbCalls();
+    assert.deepEqual(extra, []);
+    assert.deepEqual(forceStop, [
+      '-s',
+      'emulator-5582',
+      'shell',
+      'am',
+      'force-stop',
+      'dev.example',
+    ]);
+    assert.deepEqual(resolveActivity, [
+      '-s',
+      'emulator-5582',
+      'shell',
+      'cmd',
+      'package',
+      'resolve-activity',
+      '--brief',
+      '-a',
+      'android.intent.action.MAIN',
+      '-c',
+      'android.intent.category.LAUNCHER',
+      'dev.example',
+    ]);
+    const quotedUrl = start?.[start.indexOf('-d') + 1] as string;
+    assert.deepEqual(
+      start?.filter((_arg, index) => index !== start.indexOf('-d') + 1),
+      [
+        '-s',
+        'emulator-5582',
+        'shell',
+        'am',
+        'start',
+        '-a',
+        'android.intent.action.VIEW',
+        '-n',
+        "'dev.example/.MainActivity'",
+        '-d',
+        '--ez',
+        'EXDevMenuDisableAutoLaunch',
+        'true',
+      ],
+    );
+    assert.match(quotedUrl, /^'[^']+'$/);
+    const launchUrl = new URL(quotedUrl.slice(1, -1));
+    assert.equal(launchUrl.host, 'expo-development-client');
+    assert.equal(launchUrl.searchParams.get('url'), 'http://10.0.2.2:8342/?disableOnboarding=1');
+    assert.equal(launchUrl.searchParams.get('disableFab'), '1');
+    assert.match(
+      relaunched.stdout,
+      /starting dev\.example on emulator emulator-5582 with the dev menu deactivated/,
+    );
+    assert.ok(existsSync(completionPath));
+
+    writeFileSync(
+      join(root, '.rn-agent', 'config.json'),
+      JSON.stringify({ autoHideDevMenu: { simulators: false } }),
+    );
+    const shownDevMenu = runAndroid();
+    assert.equal(shownDevMenu.status, 0, shownDevMenu.stderr);
+    assert.deepEqual(postBuildAdbCalls(), []);
+    rmSync(join(root, '.rn-agent', 'config.json'));
+
+    const physical = runAndroid({ ADAPTER_SERIAL: 'R5CT1234ABC' });
+    assert.equal(physical.status, 0, physical.stderr);
+    assert.deepEqual(postBuildAdbCalls(), []);
+
+    const innerClass = runAndroid({ ADAPTER_ADB_COMPONENT: 'dev.example/.Launcher$Main' });
+    assert.equal(innerClass.status, 0, innerClass.stderr);
+    assert.ok(postBuildAdbCalls()[2]?.includes("'dev.example/.Launcher$Main'"));
+
+    for (const failure of [
+      { ADAPTER_ADB_COMPONENT: 'dev.foreign/.MainActivity' },
+      { ADAPTER_ADB_COMPONENT: 'dev.example/.MainActivity;true' },
+      { ADAPTER_ADB_START_FAIL: '1' },
+      { ADAPTER_ADB_START_OUTPUT: '' },
+      { ADAPTER_ADB_START_OUTPUT: 'unexpected launch output\n' },
+      { ADAPTER_ADB_SIGNAL: '1' },
+    ]) {
+      const failed = runAndroid(failure);
+      assert.notEqual(failed.status, 0);
+      if (!('ADAPTER_ADB_SIGNAL' in failure)) {
+        assert.match(failed.stderr, /DEV_CLIENT_STARTUP_UNCONFIRMED/);
+      }
+      assert.equal(existsSync(completionPath), false);
+      assert.equal(readFileSync(abortPath, 'utf8').trim().split('\n').length, 1);
+    }
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
