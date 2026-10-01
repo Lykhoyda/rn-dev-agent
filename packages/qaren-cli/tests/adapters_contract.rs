@@ -380,7 +380,7 @@ fn ios_launch_targets_the_verified_bundle_without_scheme_approval() {
             "EXACT-UDID",
             "com.x.y",
             "--initialUrl",
-            "http://127.0.0.1:8791"
+            "http://127.0.0.1:8791/?disableOnboarding=1"
         ]
     );
     assert_eq!(spec.timeout_seconds, 60);

@@ -1035,7 +1035,7 @@ fn assert_direct_ios_launch(mock: &MockRunner) {
             UDID,
             "com.rndevagent.testapp",
             "--initialUrl",
-            "http://127.0.0.1:8791"
+            "http://127.0.0.1:8791/?disableOnboarding=1"
         ]
     );
     assert_subsequence(

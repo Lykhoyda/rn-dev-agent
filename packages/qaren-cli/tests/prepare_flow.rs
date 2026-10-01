@@ -289,7 +289,7 @@ fn ios_prepare_happy_path_produces_ready_receipt_and_record() {
             UDID,
             "com.rndevagent.testapp",
             "--initialUrl",
-            "http://127.0.0.1:8791"
+            "http://127.0.0.1:8791/?disableOnboarding=1"
         ]
     );
 }

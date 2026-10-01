@@ -630,7 +630,7 @@ fn assert_ios_prepare_reuses_cached_client(workspace: bool) {
             UDID,
             "com.rndevagent.testapp",
             "--initialUrl",
-            "http://127.0.0.1:8791"
+            "http://127.0.0.1:8791/?disableOnboarding=1"
         ]
     );
     for key in [
