@@ -564,7 +564,10 @@ test('unrelated Account heading and plain Settings text stay unestablished even 
   );
   for (const [plan, captures] of [
     // An unchanged screen is re-judged once per evidence-use window.
-    ['Wait for the Settings heading', Math.floor((PHRASE_WAIT_BUDGET_MS - 1) / EVIDENCE_USE_MS) + 1],
+    [
+      'Wait for the Settings heading',
+      Math.floor((PHRASE_WAIT_BUDGET_MS - 1) / EVIDENCE_USE_MS) + 1,
+    ],
     ['Scroll down until the Settings heading', 2],
   ] as const) {
     const start = judge.requests.length;

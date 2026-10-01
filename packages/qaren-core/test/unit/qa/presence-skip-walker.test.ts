@@ -80,7 +80,9 @@ test('a changed screen signature takes a fresh presence capture before any posit
   assert.equal(f.probes(), 2);
   assert.equal(events.filter((e) => e.stage === 'cache-reuse').length, 0);
   const positive = events.filter((e) => e.stage === 'decision' && e.edge === 'end').at(-1)!;
-  const judged = events.filter((e) => e.stage === 'capture' && e.edge === 'end' && !e.probe).at(-1)!;
+  const judged = events
+    .filter((e) => e.stage === 'capture' && e.edge === 'end' && !e.probe)
+    .at(-1)!;
   assert.equal(positive.observation, judged.observation);
   assert.equal(judged.presence, 1);
 });
