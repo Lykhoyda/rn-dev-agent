@@ -17,7 +17,8 @@ const BIRTH: &str = "Wed Aug 12 16:02:00 2026";
 
 fn inventory(state: &str) -> String {
     serde_json::json!({"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-4":[{
-        "udid":DEVICE,"state":state,"isAvailable":true
+        "udid":DEVICE,"state":state,"isAvailable":true,
+        "name":"suite simulator","deviceTypeIdentifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17"
     }]}})
     .to_string()
 }
@@ -171,19 +172,10 @@ impl Runner for Witness {
             self.assert_lease();
         }
         let output = self.mock.run(spec);
-        if spec.label == "fresh-install-admission" {
-            let final_scan = self
-                .mock
-                .calls
-                .iter()
-                .filter(|c| c.label == spec.label)
-                .count()
-                == 2;
-            if (self.fault == Fault::PendingSave && !final_scan)
-                || (self.fault == Fault::CleanupSave && final_scan)
-            {
-                self.block_save();
-            }
+        if (self.fault == Fault::PendingSave && spec.label == "fresh-install-admission")
+            || (self.fault == Fault::CleanupSave && spec.label == "simctl-launchctl")
+        {
+            self.block_save();
         }
         output
     }
@@ -248,6 +240,175 @@ fn absent_group(runner: &mut MockRunner) {
     runner.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
 }
 
+fn scoped_hosts(runner: &mut MockRunner, output: CmdOutput) {
+    runner.expect_run(
+        "simctl list devices -j",
+        CmdOutput::success(&inventory("Booted")),
+    );
+    runner.expect_run(&format!("simctl spawn {DEVICE} launchctl list"), output);
+}
+
+fn absent_hosts(runner: &mut MockRunner) {
+    scoped_hosts(
+        runner,
+        CmdOutput::success("PID\tStatus\tLabel\n1\t0\tcom.apple.SpringBoard\n"),
+    );
+}
+
+#[test]
+fn scoped_cleanup_releases_despite_an_unrelated_controller_without_post_admission() {
+    let (mut runner, _) = setup();
+    preflight(&mut runner, "Booted");
+    suite(&mut runner, Some(65));
+    runner.expect_run("ps -A", CmdOutput::success("1 1 S\n777 777 S\n"));
+    absent_hosts(&mut runner);
+    let record = native_suite::run(&mut runner, DEVICE).unwrap();
+    assert_eq!(record.suite_exit, Some(65));
+    assert!(!record.lock_dir.exists());
+    assert_eq!(
+        runner
+            .calls
+            .iter()
+            .filter(|c| c.label == "fresh-install-admission")
+            .count(),
+        1
+    );
+    assert!(runner
+        .calls
+        .iter()
+        .all(|c| c.program != "/bin/kill" && !c.args.iter().any(|a| a == "terminate")));
+    assert_eq!(runner.remaining(), 0);
+}
+
+#[test]
+fn old_retained_suite_recovers_with_fresh_scoped_proof_and_preserves_exit_65() {
+    let (mut runner, home, record) = abandoned();
+    let mut old = serde_json::to_value(&record).unwrap();
+    old["suite_exit"] = 65.into();
+    old["cleanup"] = serde_json::json!({"group":"absent", "admission_clear":false});
+    qaren::buildplan::save_json(&record_path(&home), &old).unwrap();
+    runner.expect_run("lstart=", CmdOutput::failed(1, ""));
+    runner.expect_run("ps -A", CmdOutput::success("1 1 S\n777 777 S\n"));
+    absent_hosts(&mut runner);
+    let recovered = native_suite::recover(&mut runner, &record.run_id).unwrap();
+    assert_eq!(recovered.suite_exit, Some(65));
+    assert!(!record.lock_dir.exists());
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(record_path(&home)).unwrap()).unwrap();
+    assert_eq!(saved["cleanup"]["runner_host"], "absent");
+    assert_eq!(saved["cleanup"]["admission_clear"], false);
+    assert_eq!(
+        runner
+            .calls
+            .iter()
+            .filter(|c| c.label == "fresh-install-admission")
+            .count(),
+        1
+    );
+    assert_eq!(runner.remaining(), 0);
+}
+
+#[test]
+fn scoped_hosts_present_or_unknown_retain_old_suite_without_signals() {
+    for output in [
+        CmdOutput::success("PID Status Label\n42 0 UIKitApplication:dev.lykhoyda.rndevagent.fastrunner[abc][rb-legacy]\n"),
+        CmdOutput::success("PID Status Label\n43 0 UIKitApplication:dev.lykhoyda.rndevagent.fastrunner.uitests.xctrunner[abc]\n"),
+        CmdOutput::failed(1, "unreadable inventory"),
+        CmdOutput::success("PID Status Label\n42 0\n"),
+        CmdOutput::success("PID Status Label\n1 0 com.apple.SpringBoard"),
+    ] {
+        let (mut runner, home, record) = abandoned();
+        let mut old = serde_json::to_value(&record).unwrap();
+        old["cleanup"] = serde_json::json!({"group":"absent", "admission_clear":false});
+        qaren::buildplan::save_json(&record_path(&home), &old).unwrap();
+        runner.expect_run("lstart=", CmdOutput::failed(1, ""));
+        absent_group(&mut runner);
+        scoped_hosts(&mut runner, output);
+        assert!(native_suite::recover(&mut runner, &record.run_id).is_err());
+        assert!(record.lock_dir.exists());
+        assert!(runner.calls.iter().all(|c| c.program != "/bin/kill" && !c.args.iter().any(|a| a == "terminate")));
+        assert_eq!(runner.remaining(), 0);
+    }
+}
+
+#[test]
+fn scoped_cleanup_requires_exact_readable_supported_simulator_inventory() {
+    for output in [
+        CmdOutput::success(
+            &inventory("Shutdown").replace(DEVICE, "BBBBBBBB-1111-2222-3333-444455556666"),
+        ),
+        CmdOutput::success(&inventory("Shutting Down")),
+        CmdOutput::success("not json"),
+        CmdOutput::failed(1, "unreadable inventory"),
+        CmdOutput {
+            stderr: "warning".into(),
+            ..CmdOutput::success(&inventory("Shutdown"))
+        },
+    ] {
+        let (mut runner, _, record) = abandoned();
+        runner.expect_run("lstart=", CmdOutput::failed(1, ""));
+        absent_group(&mut runner);
+        runner.expect_run("simctl list devices -j", output);
+        assert!(native_suite::recover(&mut runner, &record.run_id).is_err());
+        assert!(record.lock_dir.exists());
+        assert_eq!(runner.remaining(), 0);
+    }
+}
+
+#[test]
+fn old_successful_missing_lock_evidence_is_not_relabelled_as_scoped_proof() {
+    let (mut runner, home, record) = abandoned();
+    let mut old = serde_json::to_value(&record).unwrap();
+    old["suite_exit"] = 65.into();
+    old["cleanup"] = serde_json::json!({"group":"absent", "admission_clear":true});
+    qaren::buildplan::save_json(&record_path(&home), &old).unwrap();
+    lease::release(record.lease.as_ref().unwrap());
+    runner.expect_run("lstart=", CmdOutput::failed(1, ""));
+    let recovered = native_suite::recover(&mut runner, &record.run_id).unwrap();
+    assert_eq!(recovered.suite_exit, Some(65));
+    assert!(serde_json::to_value(&recovered).unwrap()["cleanup"]["runner_host"].is_null());
+    assert_eq!(runner.remaining(), 0);
+}
+
+#[test]
+fn exact_shutdown_inventory_releases_without_launchctl_or_post_admission() {
+    let (mut runner, _, record) = abandoned();
+    runner.expect_run("lstart=", CmdOutput::failed(1, ""));
+    absent_group(&mut runner);
+    runner.expect_run(
+        "simctl list devices -j",
+        CmdOutput::success(&inventory("Shutdown")),
+    );
+    let recovered = native_suite::recover(&mut runner, &record.run_id).unwrap();
+    assert!(!record.lock_dir.exists());
+    assert_eq!(
+        recovered.cleanup.unwrap().runner_host.as_deref(),
+        Some("absent")
+    );
+    assert_eq!(runner.remaining(), 0);
+    assert_eq!(
+        runner
+            .calls
+            .iter()
+            .filter(|c| c.label == "fresh-install-admission")
+            .count(),
+        1
+    );
+    assert!(runner.calls.iter().all(|c| c.label != "simctl-launchctl"));
+}
+
+#[test]
+fn legacy_admission_cannot_override_new_unresolved_host_evidence_on_missing_lock() {
+    let (mut runner, home, record) = abandoned();
+    let mut contradictory = serde_json::to_value(&record).unwrap();
+    contradictory["cleanup"] = serde_json::json!({"group":"absent", "admission_clear":true, "runner_host":"unresolved: present"});
+    qaren::buildplan::save_json(&record_path(&home), &contradictory).unwrap();
+    lease::release(record.lease.as_ref().unwrap());
+    runner.expect_run("lstart=", CmdOutput::failed(1, ""));
+    assert!(native_suite::recover(&mut runner, &record.run_id).is_err());
+    assert_eq!(runner.remaining(), 0);
+}
+
 #[test]
 fn exact_shutdown_and_booted_targets_run_only_after_durable_ownership() {
     for state in ["Shutdown", "Booted"] {
@@ -255,7 +416,7 @@ fn exact_shutdown_and_booted_targets_run_only_after_durable_ownership() {
         preflight(&mut mock, state);
         suite(&mut mock, Some(0));
         absent_group(&mut mock);
-        admission(&mut mock, "clear");
+        absent_hosts(&mut mock);
         let mut runner = Witness::new(mock, &home, Fault::None);
         let record = native_suite::run(&mut runner, &DEVICE.to_ascii_lowercase()).unwrap();
         assert!(runner.intent.borrow().is_some());
@@ -334,14 +495,15 @@ fn dead_owner_recovery_releases_only_after_clean_evidence_and_is_idempotent() {
     let (mut runner, home, record) = abandoned();
     runner.expect_run("lstart=", CmdOutput::failed(1, ""));
     absent_group(&mut runner);
-    admission(&mut runner, "clear");
+    absent_hosts(&mut runner);
     let recovered = native_suite::recover(&mut runner, &record.run_id).unwrap();
     assert_eq!(recovered.suite_exit, Some(0));
     assert!(!record.lock_dir.exists());
     let saved: serde_json::Value =
         serde_json::from_slice(&std::fs::read(record_path(&home)).unwrap()).unwrap();
     assert_eq!(saved["cleanup"]["group"], "absent");
-    assert_eq!(saved["cleanup"]["admission_clear"], true);
+    assert_eq!(saved["cleanup"]["runner_host"], "absent");
+    assert_eq!(saved["cleanup"]["admission_clear"], false);
     runner.expect_run("lstart=", CmdOutput::failed(1, ""));
     native_suite::recover(&mut runner, &record.run_id).unwrap();
     assert_eq!(runner.remaining(), 0);
@@ -393,19 +555,29 @@ fn live_and_dead_check_leases_cannot_be_stolen_even_with_a_clear_driver_scan() {
 }
 
 #[test]
-fn absent_group_still_requires_a_fresh_clear_admission() {
-    for status in ["busy", "unknown"] {
+fn absent_group_still_requires_fresh_scoped_host_absence() {
+    for output in [
+        CmdOutput::success(
+            "PID Status Label\n42 0 UIKitApplication:dev.lykhoyda.rndevagent.fastrunner[abc]\n",
+        ),
+        CmdOutput::failed(1, "inventory unknown"),
+    ] {
         let (mut runner, home) = setup();
         preflight(&mut runner, "Booted");
         suite(&mut runner, Some(0));
         absent_group(&mut runner);
-        admission(&mut runner, status);
+        scoped_hosts(&mut runner, output);
         assert!(native_suite::run(&mut runner, DEVICE).is_err());
         let record: native_suite::NativeSuite =
             serde_json::from_slice(&std::fs::read(record_path(&home)).unwrap()).unwrap();
         assert!(record.lock_dir.exists());
         assert_eq!(record.suite_exit, Some(0));
-        assert!(!record.cleanup.unwrap().admission_clear);
+        assert!(record
+            .cleanup
+            .unwrap()
+            .runner_host
+            .unwrap()
+            .starts_with("unresolved"));
         assert_eq!(runner.remaining(), 0);
     }
 }
@@ -417,7 +589,7 @@ fn failure_signal_and_lost_exit_are_not_replaced_by_cleanup_success() {
         preflight(&mut runner, "Shutdown");
         suite(&mut runner, exit);
         absent_group(&mut runner);
-        admission(&mut runner, "clear");
+        absent_hosts(&mut runner);
         let before = runner.now_epoch_ms();
         let record = native_suite::run(&mut runner, DEVICE).unwrap();
         assert_eq!(record.suite_exit, exit);
@@ -578,7 +750,7 @@ fn cleanup_evidence_must_be_saved_before_release_and_recovery_rechecks() {
     preflight(&mut mock, "Booted");
     suite(&mut mock, Some(0));
     absent_group(&mut mock);
-    admission(&mut mock, "clear");
+    absent_hosts(&mut mock);
     let mut runner = Witness::new(mock, &home, Fault::CleanupSave);
     assert!(native_suite::run(&mut runner, DEVICE).is_err());
     runner.restore_save();
@@ -587,7 +759,7 @@ fn cleanup_evidence_must_be_saved_before_release_and_recovery_rechecks() {
     assert!(lock.exists());
     runner.mock.expect_run("lstart=", CmdOutput::failed(1, ""));
     absent_group(&mut runner.mock);
-    admission(&mut runner.mock, "clear");
+    absent_hosts(&mut runner.mock);
     native_suite::recover(&mut runner.mock, record["run_id"].as_str().unwrap()).unwrap();
     assert!(!lock.exists());
     assert_eq!(runner.mock.remaining(), 0);
@@ -653,7 +825,7 @@ fn timeout_cleanup_uses_owned_group_policy_and_positive_absence() {
         runner.expect_run("/bin/kill -KILL -- -9000", CmdOutput::success(""));
         if gone {
             absent_group(&mut runner);
-            admission(&mut runner, "clear");
+            absent_hosts(&mut runner);
         } else {
             runner.expect_run("ps -A", CmdOutput::failed(1, "unknown inventory"));
         }
@@ -682,7 +854,7 @@ fn unknown_child_identity_never_starts_the_suite() {
         runner.expect_run("command=", CmdOutput::success("withheld"));
         if gone {
             absent_group(&mut runner);
-            admission(&mut runner, "clear");
+            absent_hosts(&mut runner);
         } else {
             runner.expect_run("ps -A", CmdOutput::failed(1, "unknown inventory"));
         }
@@ -838,7 +1010,7 @@ impl Runner for HybridRunner {
 
     fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
         match spec.label.as_str() {
-            "simctl-list" | "fresh-install-admission" => self.mock.run(spec),
+            "simctl-list" | "simctl-launchctl" | "fresh-install-admission" => self.mock.run(spec),
             "ps-lstart" | "ps-command" | "ps-stat" | "ps-groups" | "kill-group" => {
                 assert!(matches!(spec.program.as_str(), "ps" | "/bin/kill"));
                 if spec.label == "ps-groups" && self.reaped.load(Ordering::SeqCst) {
@@ -947,7 +1119,7 @@ impl Runner for HybridRunner {
 #[test]
 fn real_timeout_reaps_the_killed_leader_before_proving_absence_and_releasing() {
     let mut runner = HybridRunner::new();
-    admission(&mut runner.mock, "clear");
+    absent_hosts(&mut runner.mock);
     let result = native_suite::run(&mut runner, DEVICE);
     assert!(runner.home.join("harmless-suite.sh.started").exists());
     assert!(runner.saw_zombie, "exercise the real unreaped group leader");
@@ -965,7 +1137,10 @@ fn real_timeout_reaps_the_killed_leader_before_proving_absence_and_releasing() {
     assert!(result.is_ok(), "timeout cleanup must settle: {result:?}");
     assert!(!record.lock_dir.exists());
     assert_eq!(record.cleanup.as_ref().unwrap().group, "absent");
-    assert!(record.cleanup.as_ref().unwrap().admission_clear);
+    assert_eq!(
+        record.cleanup.as_ref().unwrap().runner_host.as_deref(),
+        Some("absent")
+    );
     assert_eq!(runner.mock.remaining(), 0);
 }
 
@@ -1011,7 +1186,7 @@ fn reaping_the_leader_does_not_release_a_surviving_or_unknown_group() {
         assert_eq!(
             runner.mock.remaining(),
             0,
-            "no admission scan can replace group absence"
+            "no host scan can replace group absence"
         );
     }
 }

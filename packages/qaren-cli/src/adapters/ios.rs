@@ -265,13 +265,110 @@ pub fn probe_app_presence(runner: &mut dyn Runner, udid: &str, app_id: &str) -> 
 // Mirrors RN_FAST_RUNNER_APP_BUNDLE_ID in the runner's Xcode project.
 pub const RUNNER_HOST_BUNDLE_ID: &str = "dev.lykhoyda.rndevagent.fastrunner";
 
-pub fn terminate_runner_host_spec(udid: &str) -> CmdSpec {
-    CmdSpec::new(
-        "simctl-terminate-runner-host",
-        "xcrun",
-        &["simctl", "terminate", udid, RUNNER_HOST_BUNDLE_ID],
-        10,
-    )
+// Xcode adds .xctrunner to RN_FAST_RUNNER_TEST_BUNDLE_ID for the XCTest host.
+pub const RUNNER_TEST_HOST_BUNDLE_ID: &str = "dev.lykhoyda.rndevagent.fastrunner.uitests.xctrunner";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunnerHostPresence {
+    Present,
+    Absent,
+    Unknown,
+}
+
+pub fn parse_runner_hosts(output: &str) -> RunnerHostPresence {
+    use RunnerHostPresence::{Absent, Present, Unknown};
+    if output.len() >= 1024 * 1024
+        || !output.ends_with('\n')
+        || output
+            .bytes()
+            .any(|b| !b.is_ascii_graphic() && !matches!(b, b' ' | b'\t' | b'\n'))
+    {
+        return Unknown;
+    }
+    let mut lines = output.lines();
+    if !lines
+        .next()
+        .is_some_and(|line| line.split_whitespace().eq(["PID", "Status", "Label"]))
+    {
+        return Unknown;
+    }
+    let mut labels = std::collections::HashSet::new();
+    let mut present = false;
+    for row in lines {
+        let cols: Vec<_> = row.split_whitespace().collect();
+        if cols.len() != 3
+            || (cols[0] != "-"
+                && !(cols[0].bytes().all(|b| b.is_ascii_digit())
+                    && cols[0].parse::<i32>().is_ok_and(|pid| pid > 0)))
+            || cols[1].parse::<i32>().is_err()
+            || !labels.insert(cols[2])
+            || labels.len() > 16_384
+        {
+            return Unknown;
+        }
+        let bundle = if let Some(label) = cols[2].strip_prefix("UIKitApplication:") {
+            let Some((bundle, suffix)) = label.split_once('[') else {
+                return Unknown;
+            };
+            if bundle.is_empty()
+                || !bundle
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b".-_".contains(&b))
+            {
+                return Unknown;
+            }
+            let mut tail = suffix;
+            loop {
+                let Some((identifier, rest)) = tail.split_once(']') else {
+                    return Unknown;
+                };
+                if identifier.is_empty() || identifier.contains('[') {
+                    return Unknown;
+                }
+                if rest.is_empty() {
+                    break;
+                }
+                let Some(next) = rest.strip_prefix('[') else {
+                    return Unknown;
+                };
+                tail = next;
+            }
+            bundle
+        } else {
+            cols[2]
+        };
+        present |=
+            cols[0] != "-" && matches!(bundle, RUNNER_HOST_BUNDLE_ID | RUNNER_TEST_HOST_BUNDLE_ID);
+    }
+    if labels.is_empty() {
+        Unknown
+    } else if present {
+        Present
+    } else {
+        Absent
+    }
+}
+
+pub fn probe_runner_hosts(runner: &mut dyn Runner, udid: &str) -> RunnerHostPresence {
+    if canonical_udid(udid).as_deref() != Some(udid) {
+        return RunnerHostPresence::Unknown;
+    }
+    let inventory = runner.run(&list_devices_spec());
+    if !inventory.ok() || !inventory.stderr.is_empty() || inventory.stdout.len() >= 1024 * 1024 {
+        return RunnerHostPresence::Unknown;
+    }
+    match parse_selected_sim(&inventory.stdout, udid).map(|sim| sim.state) {
+        Some(SimState::Shutdown) => RunnerHostPresence::Absent,
+        Some(SimState::Booted) => {
+            let output = runner.run(&launchctl_list_spec(udid));
+            if output.ok() && output.stderr.is_empty() {
+                parse_runner_hosts(&output.stdout)
+            } else {
+                RunnerHostPresence::Unknown
+            }
+        }
+        None => RunnerHostPresence::Unknown,
+    }
 }
 
 pub fn uninstall_app_spec(udid: &str, app_id: &str) -> CmdSpec {

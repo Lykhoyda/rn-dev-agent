@@ -308,10 +308,25 @@ function identityRulesOutDriver(value: unknown, line: string, scanStartedAt: num
 
 function identityProvesMcpControl(value: unknown, line: string, scanStartedAt: number): boolean {
   const executable = observedExecutable(value, line, scanStartedAt);
+  if (!executable || executable.slice(executable.lastIndexOf('/') + 1) !== 'java') return false;
+  const argv = (value as { argv?: unknown }).argv;
   return (
-    executable?.slice(executable.lastIndexOf('/') + 1) === 'java' &&
     !hasUnresolvedIosPath(executable) &&
-    line.replace(/^\s*\d+\s+/, '').startsWith(`${executable} `)
+    Array.isArray(argv) &&
+    argv.length === 5 &&
+    argv.every(
+      (arg) =>
+        typeof arg === 'string' &&
+        arg.length > 0 &&
+        // eslint-disable-next-line no-control-regex -- Attested arguments must be complete text fields.
+        !/[\x00-\x1f\x7f\ufffd]/.test(arg),
+    ) &&
+    Buffer.byteLength(argv.join(' ')) <= 16_384 &&
+    argv[1] === '-classpath' &&
+    argv[3] === 'maestro.cli.AppKt' &&
+    argv[4] === 'mcp' &&
+    // Kernel identity binds the real executable; argv preserves the launcher's symlink spelling.
+    line.replace(/^\s*\d+\s+/, '').trimEnd() === argv.join(' ')
   );
 }
 
@@ -355,11 +370,10 @@ export async function probeIosExternalRunnerStrict(
       const remaining = Math.floor(deadline - performance.now());
       if (remaining <= 0) return 'unknown';
       const pid = Number(/^\s*(\d+)/.exec(line)![1]);
-      const devices = observedDriverDevices(
-        await observeIdentity!(pid, Math.min(1_000, remaining), true),
-        line,
-        scanStartedAt,
-      );
+      const observation = await observeIdentity!(pid, Math.min(1_000, remaining), true);
+      if (performance.now() >= deadline) return 'unknown';
+      if (identityProvesMcpControl(observation, line, scanStartedAt)) continue;
+      const devices = observedDriverDevices(observation, line, scanStartedAt);
       if (performance.now() >= deadline || !devices) return 'unknown';
       if (devices.some((device) => device.toLowerCase() === udid.toLowerCase())) return 'busy';
     }
@@ -374,12 +388,17 @@ export async function probeIosExternalRunnerStrict(
       const remaining = Math.floor(deadline - performance.now());
       if (remaining <= 0) return 'unknown';
       const pid = Number(/^\s*(\d+)/.exec(line)![1]);
-      const observation = await observeIdentity(pid, Math.min(1_000, remaining));
+      const observation = await observeIdentity(
+        pid,
+        Math.min(1_000, remaining),
+        MAESTRO_JAVA_ENTRYPOINT_RE.test(line) || undefined,
+      );
       if (
         performance.now() >= deadline ||
-        !(isUnscopedMcpControl(line)
-          ? identityProvesMcpControl(observation, line, scanStartedAt)
-          : identityRulesOutDriver(observation, line, scanStartedAt))
+        !(
+          identityProvesMcpControl(observation, line, scanStartedAt) ||
+          (!isUnscopedMcpControl(line) && identityRulesOutDriver(observation, line, scanStartedAt))
+        )
       )
         return 'unknown';
     }
