@@ -486,6 +486,113 @@ test('first-mismatch diagnostics accept only bounded structural fields and never
   assert.ok(longest.logs[1].length < 800);
 });
 
+test('preparation diagnostics expose only scalar quiet-window facts on success and refusal', async () => {
+  const secret = 'PRIVATE-preparation-canary';
+  for (const complete of [true, false]) {
+    const source = nativeCapture();
+    const logs: string[] = [];
+    const events: TimingEvent[] = [];
+    let now = 0;
+    const screen = await captureScreen({
+      appId: 'com.test',
+      now: () => now,
+      native: async () => {
+        now += 900;
+        return {
+          ...source,
+          presenceCapture: {
+            ...source.presenceCapture,
+            complete,
+            endedUptimeMs: 1_000,
+            diagnostics: {
+              preparationSamples: 8,
+              preparationResets: 1,
+              preparationQuietWindowMs: 500,
+              preparationQuietElapsedMs: 500.25,
+              phaseMs: { preparation: 700.25, [secret]: 1 },
+              ...(complete
+                ? {}
+                : {
+                    failure: { phase: 'preparation', reason: 'deadline' },
+                    deadline: { phase: 'preparation', read: 'preparation-poll', edge: 'after' },
+                  }),
+              label: secret,
+              descriptor: secret,
+              treeHash: secret,
+            },
+          },
+        };
+      },
+      react: async () => ({
+        interactive: [],
+        verdict,
+        hostEvidence: { hosts: [], complete: true },
+      }),
+      warn: (line) => logs.push(line),
+      timing: (event) => events.push(event),
+    });
+    assert.equal(screen.coverage?.native, complete ? 'complete' : 'incomplete');
+    assert.ok(logs.includes('presence-preparation-samples=8'));
+    assert.ok(logs.includes('presence-preparation-ms=700'));
+    assert.ok(logs.includes('presence-preparation-quiet-window-ms=500'));
+    assert.ok(logs.includes('presence-preparation-resets=1'));
+    assert.ok(logs.includes('presence-preparation-quiet-elapsed-ms=500.25'));
+    assert.deepEqual(
+      events.find((event) => event.stage === 'native-preparation'),
+      {
+        stage: 'native-preparation',
+        edge: 'point',
+        outcome: complete ? 'ok' : 'failed',
+        at: 900,
+        ms: 700.25,
+        count: 8,
+      },
+    );
+    assert.equal(events.find((event) => event.stage === 'native-production')?.ms, 900);
+    assert.equal(
+      events.find((event) => event.stage === 'native-total' && event.edge === 'end')?.ms,
+      900,
+    );
+    if (!complete) {
+      assert.ok(logs.includes('presence-failure=preparation:deadline'));
+      assert.ok(logs.includes('presence-deadline=preparation:preparation-poll:after'));
+      assert.ok(screen.nativeCaptureCauses?.includes('presence-preparation-samples=8'));
+      assert.ok(
+        screen.nativeCaptureCauses?.includes('presence-preparation-quiet-elapsed-ms=500.25'),
+      );
+    }
+    assert.ok(!JSON.stringify({ screen, events, logs }).includes(secret));
+  }
+  for (const value of [
+    undefined,
+    null,
+    secret,
+    {},
+    [],
+    -1,
+    1.5,
+    NaN,
+    Infinity,
+    Number.MAX_SAFE_INTEGER + 1,
+  ]) {
+    const logs: string[] = [];
+    const events: TimingEvent[] = [];
+    await captureScreen({
+      native: async () => ({
+        presenceCapture: {
+          diagnostics: { preparationSamples: value, phaseMs: { preparation: secret } },
+        },
+      }),
+      react: async () => ({}),
+      warn: (line) => logs.push(line),
+      timing: (event) => events.push(event),
+    });
+    assert.ok(!logs.some((line) => line.includes('preparation')));
+    assert.ok(!events.some((event) => event.stage === 'native-preparation'));
+    assert.ok(!JSON.stringify({ logs, events }).includes(secret));
+  }
+});
+
 test('quiet-window diagnostics reject malformed scalars and cannot change admission through a sink', async () => {
   const secret = 'PRIVATE-quiet-canary';
   const valid = {

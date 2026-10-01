@@ -7,6 +7,7 @@ import {
   isRecord,
   validateAnswer,
 } from './questions.js';
+import { observeTiming, measureTiming, type TimingObserver } from './timing.js';
 
 export const JEV_MODEL = 'jev-1.13.0';
 export const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
@@ -18,6 +19,7 @@ export const MAX_RESPONSE_BYTES = 512_000;
 export const MAX_QUESTIONS = 64;
 
 export interface JevOptions {
+  timing?: TimingObserver;
   apiKey?: string;
   fetch?: typeof fetch;
   now?: () => number;
@@ -131,6 +133,13 @@ export function createJev(options: JevOptions = {}): Judge {
         const started = now();
         const remaining = deadline === undefined ? Infinity : deadline - started;
         if (remaining <= 0) {
+          observeTiming(options.timing, {
+            stage: 'jev-attempt',
+            edge: 'point',
+            outcome: 'failed',
+            at: started,
+            ms: 0,
+          });
           throw new JevError('JEV_DEADLINE_EXCEEDED');
         }
         const timeout = Math.min(options.timeoutMs ?? JEV_TIMEOUT_MS, JEV_TIMEOUT_MS);
@@ -147,9 +156,15 @@ export function createJev(options: JevOptions = {}): Judge {
         let retryAfter: string | null = null;
         let retryAfterMs: string | null = null;
         let retry = false;
-
+        let accepted = false;
         let failure = new JevError('JEV_UNAVAILABLE');
-
+        observeTiming(options.timing, {
+          stage: 'jev-attempt',
+          edge: 'start',
+          outcome: 'ok',
+          at: started,
+          count: calls.length + 1,
+        });
         try {
           const operation = async (): Promise<Answers> => {
             const response = await fetcher(JEV_ENDPOINT, {
@@ -175,25 +190,45 @@ export function createJev(options: JevOptions = {}): Judge {
               );
             }
             record.outcome = 'invalid';
-
-            const data = await readResponse(response);
-            if (
-              !isRecord(data) ||
-              data.model !== JEV_MODEL ||
-              !isRecord(data.answers) ||
-              !isRecord(data.usage) ||
-              !Number.isSafeInteger(data.usage.input_tokens) ||
-              (data.usage.input_tokens as number) < 0 ||
-              Object.keys(data.answers).length !== Object.keys(questions).length
-            )
-              throw new JevError('JEV_RESPONSE_INVALID');
-            record.inputTokens = data.usage.input_tokens as number;
-            const answers: Answers = {};
-            for (const [id, question] of Object.entries(questions))
-              answers[id] = validateAnswer(question, data.answers[id]);
-            record.outcome = 'ok';
-
-            return answers;
+            const validationStarted = options.timing ? now() : 0;
+            observeTiming(options.timing, {
+              stage: 'jev-validation',
+              edge: 'start',
+              outcome: 'ok',
+              at: validationStarted,
+            });
+            let validated = false;
+            try {
+              const data = await readResponse(response);
+              if (
+                !isRecord(data) ||
+                data.model !== JEV_MODEL ||
+                !isRecord(data.answers) ||
+                !isRecord(data.usage) ||
+                !Number.isSafeInteger(data.usage.input_tokens) ||
+                (data.usage.input_tokens as number) < 0 ||
+                Object.keys(data.answers).length !== Object.keys(questions).length
+              )
+                throw new JevError('JEV_RESPONSE_INVALID');
+              record.inputTokens = data.usage.input_tokens as number;
+              const answers: Answers = {};
+              for (const [id, question] of Object.entries(questions))
+                answers[id] = validateAnswer(question, data.answers[id]);
+              record.outcome = 'ok';
+              validated = true;
+              return answers;
+            } finally {
+              if (options.timing) {
+                const at = now();
+                observeTiming(options.timing, {
+                  stage: 'jev-validation',
+                  edge: 'end',
+                  outcome: validated ? 'ok' : 'failed',
+                  at,
+                  ms: at - validationStarted,
+                });
+              }
+            }
           };
           const answers = await Promise.race([
             operation(),
@@ -209,7 +244,7 @@ export function createJev(options: JevOptions = {}): Judge {
           ]);
           if (deadline !== undefined && now() >= deadline)
             throw new JevError('JEV_DEADLINE_EXCEEDED');
-
+          accepted = true;
           return answers;
         } catch (error) {
           if (controller.signal.aborted) {
@@ -232,6 +267,15 @@ export function createJev(options: JevOptions = {}): Judge {
           controller.abort();
           record.ms = Math.max(0, Math.round(now() - started));
           calls.push({ ...record });
+          if (options.timing)
+            observeTiming(options.timing, {
+              stage: 'jev-attempt',
+              edge: 'end',
+              outcome: accepted ? 'ok' : 'failed',
+              at: now(),
+              ms: record.ms,
+              count: calls.length,
+            });
         }
         if (!retry || attempt === JEV_MAX_RETRIES) throw failure;
         const delay = retryDelay(
@@ -244,10 +288,18 @@ export function createJev(options: JevOptions = {}): Judge {
         );
         if (deadline !== undefined && now() + delay >= deadline) {
           calls[calls.length - 1].diagnostic = 'retry-after-outside-window';
-
+          if (options.timing)
+            observeTiming(options.timing, {
+              stage: 'jev-backoff',
+              edge: 'point',
+              outcome: 'failed',
+              at: now(),
+              ms: 0,
+              count: delay,
+            });
           throw new JevError('JEV_UNAVAILABLE');
         }
-        await sleep(delay);
+        await measureTiming(options.timing, now, 'jev-backoff', () => sleep(delay));
       }
       throw new JevError('JEV_UNAVAILABLE');
     },

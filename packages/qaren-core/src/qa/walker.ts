@@ -19,6 +19,10 @@ import {
   observationUsable,
   PHRASE_WAIT_BUDGET_MS,
   type ObservationTiming,
+  observeTiming,
+  measureTiming,
+  type TimingObserver,
+  type TimingEvent,
 } from './timing.js';
 import {
   type BlockResult,
@@ -37,7 +41,7 @@ export interface ActResult {
 
 export interface WalkerDeps {
   judge?: Judge;
-  captureScreen(options?: { platformPresence?: boolean }): Promise<Screen>;
+  captureScreen(options?: { platformPresence?: boolean; timing?: TimingObserver }): Promise<Screen>;
   press(ref: string, context: QaDispatchContext): Promise<ActResult>;
   fill(ref: string, text: string, context: QaDispatchContext): Promise<ActResult>;
   scroll(direction: 'down' | 'up', context: QaDispatchContext): Promise<ActResult>;
@@ -49,6 +53,7 @@ export interface WalkerDeps {
   row(row: LedgerRow): void;
   cancelled?(): boolean;
   diagnostic?(event: WalkerTimingDiagnostic): void;
+  timing?: TimingObserver;
 }
 
 export interface WalkerTimingDiagnostic {
@@ -116,7 +121,27 @@ export async function walkBlock(
   let cached: { item: Item; observation: Observation; decision: ScreenDecision } | undefined;
   let latest: Screen = { elements: [], visibleText: [], front: 'app' };
   let line = 0;
-
+  let latestObservation = 0;
+  const metric = (
+    stage: TimingEvent['stage'],
+    observation?: Observation,
+    extra: Partial<TimingEvent> = {},
+  ): void => {
+    if (!deps.timing) return;
+    const at = deps.now();
+    observeTiming(deps.timing, {
+      stage,
+      edge: 'point',
+      outcome: 'ok',
+      at,
+      line,
+      observation: observation?.id ?? latestObservation,
+      ...(observation
+        ? { useMs: at - observation.timing.completedAt, ageMs: at - observation.timing.startedAt }
+        : {}),
+      ...extra,
+    });
+  };
   const assertActive = (): void => {
     if (deps.cancelled?.()) throw new QaDispatchError('RUN_CANCELLED');
   };
@@ -136,34 +161,73 @@ export async function walkBlock(
     const platformPresence = assertion || (!!target && target.quoted === undefined);
     const startedAt = deps.now();
     const id = ++sequence.observation;
-
-    latest = await deps.captureScreen(platformPresence ? { platformPresence: true } : undefined);
-
-    privacy.observe(latest);
-
-    assertActive();
-    const timing = admitObservation(startedAt, deps.now());
-    if (!timing)
-      throw new ResolutionError({
-        refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
-        reason: 'ACQUISITION_EXPIRED',
-      });
-    // Raw acquisition and semantic projection have different completeness requirements.
-    if (
-      (step || assertion) &&
-      (latest.captureCoverage?.native ?? latest.coverage?.native) !== 'complete'
-    )
-      throw new ResolutionError({
-        refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
-        reason: 'NATIVE_ACQUISITION_UNUSABLE',
-      });
-    if (platformPresence && latest.coverage?.native !== 'complete')
-      throw new ResolutionError({
-        refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
-        reason: 'NATIVE_PRESENCE_UNUSABLE',
-      });
-
-    return { screen: latest, timing, id };
+    latestObservation = id;
+    const captureLine = line;
+    const timingObserver: TimingObserver | undefined = deps.timing
+      ? (event) => observeTiming(deps.timing, { ...event, line: captureLine, observation: id })
+      : undefined;
+    observeTiming(timingObserver, {
+      stage: 'capture',
+      edge: 'start',
+      outcome: 'ok',
+      at: startedAt,
+      presence: Number(platformPresence),
+    });
+    let admitted = false;
+    try {
+      latest = await deps.captureScreen(
+        deps.timing
+          ? { ...(platformPresence ? { platformPresence: true } : {}), timing: timingObserver }
+          : platformPresence
+            ? { platformPresence: true }
+            : undefined,
+      );
+      const privacyStarted = deps.timing ? deps.now() : 0;
+      privacy.observe(latest);
+      if (deps.timing)
+        observeTiming(timingObserver, {
+          stage: 'privacy-history',
+          edge: 'point',
+          outcome: 'ok',
+          at: deps.now(),
+          ms: deps.now() - privacyStarted,
+        });
+      assertActive();
+      const timing = admitObservation(startedAt, deps.now());
+      if (!timing)
+        throw new ResolutionError({
+          refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
+          reason: 'ACQUISITION_EXPIRED',
+        });
+      // Raw acquisition and semantic projection have different completeness requirements.
+      if (
+        (step || assertion) &&
+        (latest.captureCoverage?.native ?? latest.coverage?.native) !== 'complete'
+      )
+        throw new ResolutionError({
+          refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
+          reason: 'NATIVE_ACQUISITION_UNUSABLE',
+        });
+      if (platformPresence && latest.coverage?.native !== 'complete')
+        throw new ResolutionError({
+          refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
+          reason: 'NATIVE_PRESENCE_UNUSABLE',
+        });
+      admitted = true;
+      return { screen: latest, timing, id };
+    } finally {
+      if (deps.timing) {
+        const at = deps.now();
+        observeTiming(timingObserver, {
+          stage: 'capture',
+          edge: 'end',
+          outcome: admitted ? 'ok' : 'failed',
+          at,
+          ms: at - startedAt,
+          presence: Number(platformPresence),
+        });
+      }
+    }
   };
   const diagnostic = (
     item: Item,
@@ -193,6 +257,7 @@ export async function walkBlock(
     assertActive();
     const now = deps.now();
     if (!observationUsable(observation.timing, now, deadline)) {
+      metric('expiry', observation, { outcome: 'failed' });
       const itemExpired = now >= deadline;
       diagnostic(
         item,
@@ -212,53 +277,70 @@ export async function walkBlock(
   ): Promise<ScreenDecision> => {
     const item = (check ?? step)!;
     usable(observation, item, deadline);
-
+    const started = deps.timing ? deps.now() : 0;
+    metric('decision', observation, {
+      edge: 'start',
+      line: item.line,
+      ...(check && step ? { nextLine: step.line } : {}),
+    });
+    if (initial) metric('cache-reuse', observation, { line: item.line });
     let decision: ScreenDecision;
-
+    let accepted = false;
     try {
-      decision =
-        initial ??
-        (await decideScreen(
-          observation.screen,
-          judge,
-          check,
-          step,
-          privacy.modelValues(),
-          privacy,
-          observationDeadline(observation.timing, deadline),
-          deps.diagnostic !== undefined,
-        ));
-    } catch (error) {
-      assertActive();
-      if (error instanceof JevError && error.code === 'JEV_DEADLINE_EXCEEDED') {
-        const itemExpired = deps.now() >= deadline;
-        diagnostic(
-          item,
-          observation,
-          'decision',
-          itemExpired ? 'ITEM_DEADLINE_EXCEEDED' : 'EVIDENCE_EXPIRED',
-        );
-        throw new EvidenceExpired(itemExpired);
+      try {
+        decision =
+          initial ??
+          (await decideScreen(
+            observation.screen,
+            judge,
+            check,
+            step,
+            privacy.modelValues(),
+            privacy,
+            observationDeadline(observation.timing, deadline),
+            deps.diagnostic !== undefined,
+          ));
+      } catch (error) {
+        assertActive();
+        if (error instanceof JevError && error.code === 'JEV_DEADLINE_EXCEEDED') {
+          metric('expiry', observation, { outcome: 'failed' });
+          const itemExpired = deps.now() >= deadline;
+          diagnostic(
+            item,
+            observation,
+            'decision',
+            itemExpired ? 'ITEM_DEADLINE_EXCEEDED' : 'EVIDENCE_EXPIRED',
+          );
+          throw new EvidenceExpired(itemExpired);
+        }
+        throw error;
       }
-      throw error;
+      if (typeof decision.check === 'object') {
+        assertActive();
+        if (decision.check.diagnostic)
+          diagnostic(
+            item,
+            observation,
+            'decision',
+            'SCREEN_EVIDENCE_INCOMPLETE',
+            undefined,
+            decision.check.diagnostic,
+          );
+        throw new ResolutionError(decision.check);
+      }
+      usable(observation, item, deadline);
+      diagnostic(item, observation, 'decision', 'ACCEPTED');
+      accepted = true;
+      return decision;
+    } finally {
+      if (deps.timing)
+        metric('decision', observation, {
+          edge: 'end',
+          line: item.line,
+          outcome: accepted ? 'ok' : 'failed',
+          ms: deps.now() - started,
+        });
     }
-    if (typeof decision.check === 'object') {
-      assertActive();
-      if (decision.check.diagnostic)
-        diagnostic(
-          item,
-          observation,
-          'decision',
-          'SCREEN_EVIDENCE_INCOMPLETE',
-          undefined,
-          decision.check.diagnostic,
-        );
-      throw new ResolutionError(decision.check);
-    }
-    usable(observation, item, deadline);
-    diagnostic(item, observation, 'decision', 'ACCEPTED');
-
-    return decision;
   };
   const mutate = async (
     item: Item,
@@ -266,11 +348,18 @@ export async function walkBlock(
     send: (context: QaDispatchContext) => Promise<ActResult>,
     deadline = Infinity,
   ): Promise<ActResult> => {
+    const preparedAt = deps.timing ? deps.now() : 0;
+    metric('mutation', observation, { edge: 'start' });
+    let completed = false;
     const context = new (class extends QaDispatchContext {
       override authorize(): void {
         super.authorize();
         diagnostic(item, observation, 'dispatch', 'ACCEPTED', this.authorizations);
-
+        if (deps.timing)
+          metric('authorization', observation, {
+            count: this.authorizations,
+            ms: deps.now() - preparedAt,
+          });
         super.check();
       }
     })(observationDeadline(observation.timing, deadline), deps.now, deps.cancelled);
@@ -279,12 +368,13 @@ export async function walkBlock(
       const result = await send(context);
       context.assertComplete();
       diagnostic(item, observation, 'dispatch', 'COMPLETED', context.authorizations);
-
+      completed = true;
       return result;
     } catch (error) {
       if (context.refusal || error instanceof QaDispatchError) {
         const refusal = context.refusal ?? (error as QaDispatchError);
-
+        if (refusal.code === 'EVIDENCE_EXPIRED')
+          metric('expiry', observation, { outcome: 'failed' });
         const itemExpired = deps.now() >= deadline;
         diagnostic(
           item,
@@ -306,6 +396,14 @@ export async function walkBlock(
         );
       }
       throw error;
+    } finally {
+      if (deps.timing)
+        metric('mutation', observation, {
+          edge: 'end',
+          outcome: completed ? 'ok' : 'failed',
+          count: context.authorizations,
+          ms: deps.now() - preparedAt,
+        });
     }
   };
   let shots = shotIndex;
@@ -357,14 +455,23 @@ export async function walkBlock(
   const shoot = async (item: Item): Promise<string | undefined> => {
     assertActive();
     if (!privacy.canScreenshot()) {
+      metric('screenshot', undefined, { outcome: 'withheld' });
       return undefined;
     }
     shots += 1;
-
+    const started = deps.timing ? deps.now() : 0;
+    metric('screenshot', undefined, { edge: 'start' });
     let shot: string | undefined;
-
-    shot = await deps.screenshot(screenshotName(shots, item.line));
-
+    try {
+      shot = await deps.screenshot(screenshotName(shots, item.line));
+    } finally {
+      if (deps.timing)
+        metric('screenshot', undefined, {
+          edge: 'end',
+          outcome: shot ? 'ok' : 'failed',
+          ms: deps.now() - started,
+        });
+    }
     assertActive();
     return shot;
   };
@@ -381,7 +488,7 @@ export async function walkBlock(
         } catch (error) {
           if (!(error instanceof EvidenceExpired)) throw error;
           if (error.itemExpired) throw error;
-
+          metric('refresh', observation);
           await pause(Math.min(WAIT_POLL_MS, Math.max(0, deadline - deps.now())));
           if (deps.now() >= deadline) throw new EvidenceExpired(true);
           observation = await capture(item);
@@ -416,7 +523,7 @@ export async function walkBlock(
         const remaining = deadline - deps.now();
         if (reasks >= CHECK.reasks || remaining <= 0) break;
         reasks += 1;
-
+        metric('reask', observation);
         await pause(Math.min(WAIT_POLL_MS, remaining));
         if (deps.now() >= deadline) break;
         observation = await capture(item);
@@ -452,12 +559,12 @@ export async function walkBlock(
             decision = await decide(before, item, nextStep);
           } catch (error) {
             if (!(error instanceof EvidenceExpired) || freshness-- <= 0) throw error;
-
+            metric('refresh', before);
             before = await capture(nextStep, !item.literal);
             continue;
           }
           if (decision.check !== 'unsure' || reasks-- <= 0) break;
-
+          metric('reask', before);
           await pause(WAIT_POLL_MS);
           before = await capture(nextStep, !item.literal);
         }
@@ -529,7 +636,7 @@ export async function walkBlock(
             );
           } catch (error) {
             if (!(error instanceof EvidenceExpired) || error.itemExpired) throw error;
-
+            metric('refresh', observation);
             await pause(Math.min(WAIT_POLL_MS, Math.max(0, deadline - deps.now())));
             if (deps.now() >= deadline) throw new EvidenceExpired(true);
             observation = await capture(item);
@@ -640,7 +747,7 @@ export async function walkBlock(
             if (error instanceof EvidenceExpired && scrollNeedsReadback)
               throw new QaDispatchError('ACTION_OUTCOME_UNCERTAIN');
             if (!(error instanceof EvidenceExpired) || freshness-- <= 0) throw error;
-
+            metric('refresh', before);
             before = await capture(item);
             initial = undefined;
           }
@@ -651,7 +758,7 @@ export async function walkBlock(
         const changed = screenSignature(after.screen) !== screenSignature(before.screen);
         usable(after, item);
         diagnostic(item, after, 'decision', 'ACCEPTED');
-
+        metric('readback', after);
         const shot = await shoot(item);
         if (act!.proven || changed) {
           emit({
@@ -663,6 +770,7 @@ export async function walkBlock(
           break;
         }
         if (attempt === 1) {
+          metric('replay', after);
           emit({
             ...base(item, attempt),
             ...(ref ? { ref } : {}),
@@ -746,20 +854,24 @@ export async function runPlan(
   deps: WalkerDeps,
   preflightCalls: readonly JevCall[] = [],
 ): Promise<WalkResult> {
-  const results: BlockResult[] = [];
-  const steps: LedgerRow[] = [];
-  const typed = blocks.flatMap((b) => b.items.flatMap((i) => (i.kind === 'fill' ? [i.text] : [])));
-  const privacy = new ObservedPrivacy(typed);
-  const calls = (): JevCall[] => [...preflightCalls, ...(deps.judge?.calls ?? [])];
-  const sequence = { observation: 0 };
-  for (const block of blocks) {
-    const outcome = await walkBlock(block, deps, steps.length, typed, privacy, sequence);
-    results.push(outcome.block);
-    steps.push(...outcome.rows);
-    if (outcome.failure) {
-      const ledger = buildLedger(results, steps, outcome.failure, calls());
-      return outcome.refusal ? { ...ledger, ...outcome.refusal, verdict: 'REFUSED' } : ledger;
+  return measureTiming(deps.timing, deps.now, 'walk', async () => {
+    const results: BlockResult[] = [];
+    const steps: LedgerRow[] = [];
+    const typed = blocks.flatMap((b) =>
+      b.items.flatMap((i) => (i.kind === 'fill' ? [i.text] : [])),
+    );
+    const privacy = new ObservedPrivacy(typed);
+    const calls = (): JevCall[] => [...preflightCalls, ...(deps.judge?.calls ?? [])];
+    const sequence = { observation: 0 };
+    for (const block of blocks) {
+      const outcome = await walkBlock(block, deps, steps.length, typed, privacy, sequence);
+      results.push(outcome.block);
+      steps.push(...outcome.rows);
+      if (outcome.failure) {
+        const ledger = buildLedger(results, steps, outcome.failure, calls());
+        return outcome.refusal ? { ...ledger, ...outcome.refusal, verdict: 'REFUSED' } : ledger;
+      }
     }
-  }
-  return buildLedger(results, steps, undefined, calls());
+    return buildLedger(results, steps, undefined, calls());
+  });
 }

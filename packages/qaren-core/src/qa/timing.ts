@@ -4,6 +4,150 @@ export const EVIDENCE_USE_MS = 10_000;
 export const MAX_EVIDENCE_AGE_MS = 32_000;
 export const PHRASE_WAIT_BUDGET_MS = 65_000;
 
+export const TIMING_STAGES = [
+  'walk',
+  'capture',
+  'native-total',
+  'native-production',
+  'native-initial-eligibility',
+  'native-preparation',
+  'native-enumeration',
+  'native-observation',
+  'native-final-eligibility',
+  'native-revalidation',
+  'native-readiness',
+  'native-transport',
+  'native-decode',
+  'native-presence-v2',
+  'native-read-only-v1',
+  'react-private',
+  'join-private',
+  'privacy-history',
+  'decision',
+  'jev-attempt',
+  'jev-validation',
+  'jev-backoff',
+  'screenshot',
+  'cache-reuse',
+  'mutation',
+  'authorization',
+  'refresh',
+  'reask',
+  'replay',
+  'expiry',
+  'readback',
+  'overflow',
+] as const;
+export type TimingStage = (typeof TIMING_STAGES)[number];
+export interface TimingEvent {
+  stage: TimingStage;
+  edge: 'start' | 'end' | 'point';
+  outcome: 'ok' | 'failed' | 'unknown' | 'withheld';
+  at: number;
+  line?: number;
+  observation?: number;
+  ms?: number;
+  useMs?: number;
+  ageMs?: number;
+  count?: number;
+  nextLine?: number;
+  presence?: number;
+  budgetMs?: number;
+  appliedBudgetMs?: number;
+}
+export type TimingObserver = (event: TimingEvent) => void;
+export interface TimingContext {
+  readonly now: () => number;
+  readonly observe: TimingObserver;
+}
+export type RecordedTimingEvent = TimingEvent & { v: 1; seq: number };
+export const TIMING_EVENT_LIMIT = 20_000;
+export const TIMING_PREFIX = 'qaren-core: metric ';
+export const formatTimingEvent = (event: RecordedTimingEvent): string =>
+  `${TIMING_PREFIX}${JSON.stringify(event)}\n`;
+
+export function cleanTimingEvent(value: unknown): TimingEvent | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const input = value as Record<string, unknown>;
+  if (
+    !TIMING_STAGES.includes(input.stage as TimingStage) ||
+    !['start', 'end', 'point'].includes(input.edge as string) ||
+    !['ok', 'failed', 'unknown', 'withheld'].includes(input.outcome as string)
+  )
+    return undefined;
+  const event = { stage: input.stage, edge: input.edge, outcome: input.outcome } as TimingEvent;
+  for (const key of [
+    'at',
+    'line',
+    'observation',
+    'ms',
+    'useMs',
+    'ageMs',
+    'count',
+    'nextLine',
+    'presence',
+    'budgetMs',
+    'appliedBudgetMs',
+  ] as const) {
+    const number = input[key];
+    if (number === undefined && key !== 'at') continue;
+    if (
+      typeof number !== 'number' ||
+      !Number.isFinite(number) ||
+      number < 0 ||
+      number > Number.MAX_SAFE_INTEGER
+    )
+      return undefined;
+    event[key] = number;
+  }
+  return event;
+}
+
+export function observeTiming(observer: TimingObserver | undefined, event: TimingEvent): void {
+  if (!observer) return;
+  try {
+    const clean = cleanTimingEvent(event);
+    if (clean) observer(clean);
+  } catch {
+    // Diagnostics cannot change an operation's outcome.
+  }
+}
+
+export function createTimingObserver(write: (event: RecordedTimingEvent) => void): TimingObserver {
+  let seq = 0;
+  return (event) => {
+    if (seq > TIMING_EVENT_LIMIT) return;
+    observeTiming((clean) => {
+      seq += 1;
+      write(
+        seq > TIMING_EVENT_LIMIT
+          ? { v: 1, seq, at: clean.at, stage: 'overflow', edge: 'point', outcome: 'failed' }
+          : { ...clean, v: 1, seq },
+      );
+    }, event);
+  };
+}
+
+export async function measureTiming<T>(
+  observer: TimingObserver | undefined,
+  now: () => number,
+  stage: TimingStage,
+  work: () => Promise<T>,
+): Promise<T> {
+  if (!observer) return work();
+  const started = now();
+  observeTiming(observer, { stage, edge: 'start', outcome: 'ok', at: started });
+  let outcome: TimingEvent['outcome'] = 'failed';
+  try {
+    const result = await work();
+    outcome = 'ok';
+    return result;
+  } finally {
+    const at = now();
+    observeTiming(observer, { stage, edge: 'end', outcome, at, ms: at - started });
+  }
+}
+
 export interface ObservationTiming {
   readonly startedAt: number;
   readonly completedAt: number;

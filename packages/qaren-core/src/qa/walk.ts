@@ -28,7 +28,7 @@ import type { LedgerRow } from './ledger.js';
 import { parsePlanWithJev, readPreparedPlan } from './plan.js';
 import { createJev } from './jev.js';
 import { isRecord } from './questions.js';
-
+import { createTimingObserver, formatTimingEvent, type TimingContext } from './timing.js';
 import { preflightPlan } from './preflight.js';
 import { summarizeJev } from './ledger.js';
 import { redactApiKey } from '../util/redact.js';
@@ -212,7 +212,9 @@ async function openSession(
   const runOffset = Date.now() - request.t0;
   const perfStart = performance.now();
   const now = (): number => Math.round(runOffset + performance.now() - perfStart);
-
+  const timing = createTimingObserver((event) =>
+    process.stderr.write(redactApiKey(formatTimingEvent(event))),
+  );
   const cdp = new CDPClient(target.metroPort);
   const getClient = (): CDPClient => cdp;
   const snapshot: Handler<{
@@ -225,6 +227,7 @@ async function openSession(
     platformPresence?: boolean;
     presenceBudgetMs?: number;
     qaReadOnly?: boolean;
+    qaTiming?: TimingContext;
   }> = createDeviceSnapshotHandler();
   let deviceOpen = false;
   let closing: Promise<void> | undefined;
@@ -286,10 +289,15 @@ async function openSession(
     `bundle proven: ${proof.scriptURL} (${proof.appModules} app modules under ${target.worktree})`,
   );
 
-  const rawSnapshot = async (platformPresence = false, presenceBudgetMs?: number) => {
+  const rawSnapshot = async (
+    platformPresence = false,
+    presenceBudgetMs?: number,
+    qaTiming?: TimingContext,
+  ) => {
     const result = await snapshot({
       action: 'snapshot',
       qaReadOnly: true,
+      qaTiming,
       ...(platform === 'ios' && platformPresence
         ? { platformPresence: true, presenceBudgetMs }
         : {}),
@@ -328,15 +336,22 @@ async function openSession(
   const dismiss = createDeviceDismissSystemDialogHandler();
 
   const deps: WalkerDeps = {
-    judge: createJev({ now }),
+    judge: createJev({ now, timing }),
+    timing,
     captureScreen: (options) =>
       stop.track(() =>
         captureScreen({
           appId,
           requirePrivateInputs: true,
           now,
+          timing: options?.timing,
           warn: log,
-          native: (presenceBudgetMs) => rawSnapshot(options?.platformPresence, presenceBudgetMs),
+          native: (presenceBudgetMs) =>
+            rawSnapshot(
+              options?.platformPresence,
+              presenceBudgetMs,
+              options?.timing ? { now, observe: options.timing } : undefined,
+            ),
           react: () => captureQaReact(cdp, options?.platformPresence === true),
         }),
       ),

@@ -1,6 +1,6 @@
 import { DEVICE_LEASE_REQUIRED, leaseFromEnvironment } from './lease-env.js';
 import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
-
+import { measureTiming, observeTiming, type TimingContext } from '../qa/timing.js';
 import { QA_READ_ONLY_CAPABILITY, checkQaNativeOutcome } from './qa-native-policy.js';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -1510,6 +1510,7 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
 // subsequent press/fill via runAgentDevice('press @e3') can resolve refs.
 
 export interface RunIOSArgs {
+  qaTiming?: TimingContext;
   qaContext?: QaDispatchContext;
   qaReadOnly?: boolean;
   deviceId?: string;
@@ -1634,6 +1635,7 @@ async function sendCommandOnce(
   body: { command?: unknown; commandId?: string },
   timeoutMs: number,
   qaContext?: QaDispatchContext,
+  qaTiming?: TimingContext,
 ): Promise<RunnerResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -1643,18 +1645,22 @@ async function sendCommandOnce(
       throw new Error('RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable');
     }
     const serialized = JSON.stringify(body);
-
-    if (isMutatingCommand(body.command)) qaContext?.authorize();
-    const resp = await fetchImpl(`http://127.0.0.1:${port}/command`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${capability}`,
-      },
-      body: serialized,
-      signal: controller.signal,
+    const now = qaTiming?.now ?? (() => performance.now());
+    const resp = await measureTiming(qaTiming?.observe, now, 'native-transport', async () => {
+      if (isMutatingCommand(body.command)) qaContext?.authorize();
+      return fetchImpl(`http://127.0.0.1:${port}/command`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${capability}`,
+        },
+        body: serialized,
+        signal: controller.signal,
+      });
     });
-    const parsed = (await resp.json()) as RunnerResponse;
+    const parsed = (await measureTiming(qaTiming?.observe, now, 'native-decode', () =>
+      resp.json(),
+    )) as RunnerResponse;
     // GH #383: defense-in-depth — the liveness gate already reaps a
     // protocol-mismatched runner, but a runner that flipped protocol mid-session
     // (hot-swapped binary) is caught here on the /command reply's `v` stamp.
@@ -1689,6 +1695,7 @@ const STATUS_PROBE_TIMEOUT_MS = 2000;
 async function probeCommandStatus(
   port: number,
   commandId: string,
+  qaTiming?: TimingContext,
 ): Promise<ReturnType<typeof parseStatusProbeReply>> {
   try {
     const resp = await sendCommandOnce(
@@ -1696,6 +1703,7 @@ async function probeCommandStatus(
       { command: 'status', commandId },
       STATUS_PROBE_TIMEOUT_MS,
       undefined,
+      qaTiming,
     );
     return parseStatusProbeReply(resp, commandId);
   } catch {
@@ -1715,6 +1723,7 @@ async function postCommandWithRecovery(
     [key: string]: unknown;
   },
   qaContext?: QaDispatchContext,
+  qaTiming?: TimingContext,
 ): Promise<{ resp: RunnerResponse; recovery?: TransportRecovery }> {
   if (runnerPoisoned && body.command !== 'status') {
     throw new Error(
@@ -1732,13 +1741,22 @@ async function postCommandWithRecovery(
   const timeoutMs = commandTimeoutMs(body.command);
   try {
     return {
-      resp: await sendCommandOnce(state.port, { ...body, commandId }, timeoutMs, qaContext),
+      resp: await sendCommandOnce(
+        state.port,
+        { ...body, commandId },
+        timeoutMs,
+        qaContext,
+        qaTiming,
+      ),
     };
   } catch (err) {
     if (err instanceof QaDispatchError) throw err;
     const message = err instanceof Error ? err.message : String(err);
     if (!isAmbiguousTransportFailure(message)) throw err;
-    const decision = decideRecovery(await probeCommandStatus(state.port, commandId), body.command);
+    const decision = decideRecovery(
+      await probeCommandStatus(state.port, commandId, qaTiming),
+      body.command,
+    );
     if (decision.action === 'return-recovered') {
       return {
         resp: decision.response as RunnerResponse,
@@ -1751,6 +1769,7 @@ async function postCommandWithRecovery(
         { ...body, commandId: generateCommandId() },
         timeoutMs,
         qaContext,
+        qaTiming,
       );
       return { resp: resent, recovery: { commandId, outcome: 'resent' } };
     }
@@ -2056,15 +2075,65 @@ function presenceCaptureUnavailable(
   );
 }
 
+async function probeQaReadiness(
+  qaTiming: TimingContext | undefined,
+  count: number,
+): Promise<FastRunnerLivenessDetail> {
+  let alive = false;
+  return measureTiming(
+    qaTiming &&
+      ((event) =>
+        observeTiming(qaTiming.observe, {
+          ...event,
+          count,
+          ...(event.edge === 'end' ? { outcome: alive ? 'ok' : 'failed' } : {}),
+        })),
+    qaTiming?.now ?? (() => performance.now()),
+    'native-readiness',
+    async () => {
+      const readiness = await probeFastRunnerLivenessDetailed({ clearState: () => {} });
+      alive = readiness.liveness === 'alive';
+      return readiness;
+    },
+  );
+}
+
+function attestQaReadOnly(
+  qaTiming: TimingContext | undefined,
+  state: FastRunnerState,
+  readiness: FastRunnerLivenessDetail,
+  count: number,
+): void {
+  if (!qaTiming) return;
+  const attested =
+    runnerState === state &&
+    !runnerPoisoned &&
+    readiness.liveness === 'alive' &&
+    readiness.capabilities?.includes(QA_READ_ONLY_CAPABILITY) &&
+    !!state.instanceId &&
+    !!state.sessionId &&
+    Number.isSafeInteger(state.claimEpoch) &&
+    !!state.deviceId &&
+    !!state.bundleId;
+  observeTiming(qaTiming.observe, {
+    stage: 'native-read-only-v1',
+    edge: 'point',
+    outcome: attested ? 'ok' : 'unknown',
+    at: qaTiming.now(),
+    count,
+  });
+}
+
 async function requireQaFastRunner(
   qaContext?: QaDispatchContext,
   bundleId?: string,
   deviceId?: string,
   readOnly = false,
+  qaTiming?: TimingContext,
 ): Promise<void> {
   qaContext?.assertComplete();
   const before = runnerState;
-  const readiness = await probeFastRunnerLivenessDetailed({ clearState: () => {} });
+  const readiness = await probeQaReadiness(qaTiming, 1);
   if (
     !before ||
     runnerState !== before ||
@@ -2077,6 +2146,7 @@ async function requireQaFastRunner(
     if (qaContext) qaContext.invalidate();
     throw new QaDispatchError('ACTION_CONTEXT_CHANGED');
   }
+  if (readOnly) attestQaReadOnly(qaTiming, before, readiness, 1);
 }
 
 export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
@@ -2087,7 +2157,13 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     throw new QaDispatchError('ACTION_CONTEXT_CHANGED');
   }
   if (args.qaContext || args.qaReadOnly)
-    await requireQaFastRunner(args.qaContext, args.bundleId, args.deviceId, qaReadOnly);
+    await requireQaFastRunner(
+      args.qaContext,
+      args.bundleId,
+      args.deviceId,
+      qaReadOnly,
+      args.qaTiming,
+    );
   const presenceRequested = args.command === 'snapshot' && args.platformPresence === true;
   const presenceRunner = presenceRequested ? runnerState : null;
   if (presenceRequested) {
@@ -2098,7 +2174,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       );
     }
     // Observation may probe readiness, but must not tear down or repair a dead runner.
-    const readiness = await probeFastRunnerLivenessDetailed({ clearState: () => {} });
+    const readiness = await probeQaReadiness(args.qaTiming, 2);
     if (
       !presenceRunner ||
       runnerState !== presenceRunner ||
@@ -2118,6 +2194,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         'RN_FAST_RUNNER_STALE',
       );
     }
+    if (qaReadOnly) attestQaReadOnly(args.qaTiming, presenceRunner, readiness, 2);
   }
   // STALE_REF sentinel from buildRunIOSArgs(): the caller tried to press/type
   // a @ref but refCenter() returned null. Surface cached metadata so the agent
@@ -2304,11 +2381,13 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         { ...body, commandId: generateCommandId() },
         commandTimeoutMs(args.command),
         undefined,
+        args.qaTiming,
       );
     } else {
       ({ resp, recovery } = await postCommandWithRecovery(
         withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
         args.qaContext,
+        args.qaTiming,
       ));
     }
   } catch (err) {
@@ -2345,6 +2424,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       ({ resp, recovery } = await postCommandWithRecovery(
         withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
         args.qaContext,
+        args.qaTiming,
       ));
     } catch (err) {
       const mapped = mapRunnerDispatchError(err);

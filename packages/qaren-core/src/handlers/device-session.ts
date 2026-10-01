@@ -1,6 +1,6 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
-
+import type { TimingContext } from '../qa/timing.js';
 import { promisify } from 'node:util';
 import {
   runNative,
@@ -58,6 +58,7 @@ const execFile = promisify(execFileCb);
 type SnapshotAction = 'open' | 'close' | 'snapshot';
 
 interface SnapshotArgs {
+  qaTiming?: TimingContext;
   qaContext?: QaDispatchContext;
   qaReadOnly?: boolean;
   action: SnapshotAction;
@@ -583,6 +584,7 @@ export function createDeviceSnapshotHandler(
       args.qaContext,
       args.qaReadOnly,
       args.presenceBudgetMs,
+      args.qaTiming,
     );
     const nodes = parseSnapshotNodes(result);
 
@@ -633,6 +635,7 @@ export function createDeviceSnapshotHandler(
               args.qaContext,
               args.qaReadOnly,
               args.presenceBudgetMs,
+              args.qaTiming,
             ),
           parseNodes: parseSnapshotNodes,
           reacquire:
@@ -756,12 +759,13 @@ async function rawSnapshot(
   qaContext?: QaDispatchContext,
   qaReadOnly?: boolean,
   presenceBudgetMs?: number,
+  qaTiming?: TimingContext,
 ): Promise<ToolResult> {
   return runNative(
     platformPresence === true && getActiveSession()?.platform === 'ios'
       ? ['snapshot', '--platform-presence']
       : ['snapshot', '-i'],
-    { qaContext, qaReadOnly, presenceBudgetMs },
+    { qaContext, qaReadOnly, presenceBudgetMs, qaTiming },
   );
 }
 

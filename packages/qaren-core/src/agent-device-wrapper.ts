@@ -1,6 +1,6 @@
 import { unlinkSync, rmSync } from 'node:fs';
 import { QaDispatchError, type QaDispatchContext } from './domain/qa-dispatch.js';
-
+import type { TimingContext } from './qa/timing.js';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { ToolResult } from './utils.js';
@@ -1846,6 +1846,7 @@ export interface ExactTargetOpts {
 export async function runNative(
   cliArgs: string[],
   opts: {
+    qaTiming?: TimingContext;
     qaContext?: QaDispatchContext;
     qaReadOnly?: boolean;
     presenceBudgetMs?: number;
@@ -1904,6 +1905,7 @@ export async function runNative(
         presenceBudgetMs: opts.presenceBudgetMs,
         qaContext: opts.qaContext,
         qaReadOnly: opts.qaReadOnly,
+        qaTiming: opts.qaTiming,
         deviceId: activeSession?.deviceId,
       });
     }
@@ -1927,7 +1929,7 @@ export async function runNative(
     let ios = buildRunIOSArgs(cliArgs, appId);
     ios.qaContext = opts.qaContext;
     ios.qaReadOnly = opts.qaReadOnly;
-
+    ios.qaTiming = opts.qaTiming;
     ios.deviceId = activeSession?.deviceId;
     if (ios.command === 'type' && opts.verifyTypeReadback) {
       ios._verifyExactReadback = opts.verifyTypeReadback;
