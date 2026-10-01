@@ -196,22 +196,65 @@ function isUnscopedMcpControl(line: string): boolean {
   );
 }
 
-function hasUnresolvedIosPath(command: string): boolean {
-  if (command.length > 16_384) return true;
+// The kernel inspector embeds this same specification; neither predicate establishes device scope.
+export const IOS_PATH_PATTERN_SPEC = String.raw`{
+  "exact": ["maestro", "maestro-driver-iosuitests-runner", "webdriveragent", "webdriveragentrunner", "webdriveragent-runner", "webdriveragentrunner-runner", "xctrunner", "xcodebuild"],
+  "prefix": "rnfastrunner",
+  "wordExtension": "maestro.",
+  "suffixes": ["uitestsrunner", "uitests-runner"],
+  "containers": ["uitestsrunner.app", "uitests-runner.app", "xctrunner.app"],
+  "java": "java",
+  "javaEntrypoint": "maestro.cli."
+}`;
+const iosPathPatterns: {
+  exact: string[];
+  prefix: string;
+  wordExtension: string;
+  suffixes: string[];
+  containers: string[];
+  java: string;
+  javaEntrypoint: string;
+} = JSON.parse(IOS_PATH_PATTERN_SPEC);
+
+export function hasUnresolvedIosPathPattern(command: string): boolean {
+  command = command.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
   const components = command.split('/').slice(1);
-  const hasMaestroJavaEntrypoint = MAESTRO_JAVA_ENTRYPOINT_RE.test(command);
-  // Unescaped path fragments justify unknown, never an executable identity or busy verdict.
+  const hasMaestroJavaEntrypoint = command
+    .split(/\s/)
+    .some(
+      (word) =>
+        word.startsWith(iosPathPatterns.javaEntrypoint) &&
+        /^[\w.$]+$/.test(word.slice(iosPathPatterns.javaEntrypoint.length)),
+    );
   for (const [index, component] of components.entries()) {
     if (
-      /^(?:maestro(?:-driver-iosUITests-Runner|\.\w+)?|WebDriverAgent(?:Runner)?(?:-Runner)?|RnFastRunner\S*|XCTRunner|xcodebuild|\S*UITests-?Runner)(?=$|[\s"'])/i.test(
-        component,
-      ) ||
-      (index < components.length - 1 && /(?:UITests-?Runner|XCTRunner)\.app/i.test(component)) ||
-      (hasMaestroJavaEntrypoint && /^java(?=$|[\s"'])/i.test(component))
+      component.startsWith(iosPathPatterns.prefix) ||
+      (index < components.length - 1 &&
+        iosPathPatterns.containers.some((part) => component.includes(part)))
     )
       return true;
+    const extensionLength = component.startsWith(iosPathPatterns.wordExtension)
+      ? (component.slice(iosPathPatterns.wordExtension.length).match(/^\w+/)?.[0].length ?? 0)
+      : 0;
+    for (let end = 0; end <= component.length; end++) {
+      if (end !== component.length && !/[\s"']/.test(component[end])) continue;
+      if (
+        iosPathPatterns.exact.some((name) => end === name.length && component.startsWith(name)) ||
+        (extensionLength > 0 && end === iosPathPatterns.wordExtension.length + extensionLength) ||
+        iosPathPatterns.suffixes.some((suffix) => component.endsWith(suffix, end)) ||
+        (hasMaestroJavaEntrypoint &&
+          end === iosPathPatterns.java.length &&
+          component.startsWith(iosPathPatterns.java))
+      )
+        return true;
+      if (/\s/.test(component[end] ?? '')) break;
+    }
   }
   return false;
+}
+
+function hasUnresolvedIosPath(command: string): boolean {
+  return command.length > 16_384 || hasUnresolvedIosPathPattern(command);
 }
 
 function leadingShellWord(command: string): { word: string; rest: string } | null {
