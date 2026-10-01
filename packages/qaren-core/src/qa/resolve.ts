@@ -2,6 +2,7 @@ import type { Check, Step, Target } from './plan.js';
 import {
   type Element,
   type Screen,
+  type VisibilityBlockerDiagnostic,
   actionView,
   assertionView,
   describe,
@@ -178,7 +179,7 @@ function describeSemantic(element: Element): string {
 // pending: not established on this capture, and not proven absent.
 export type VisibilityDecision =
   | { verdict: 'present' | 'absent' | 'pending' | 'unsure' }
-  | { refuse: string; reason: string };
+  | { refuse: string; reason: string; diagnostic?: VisibilityBlockerDiagnostic };
 
 interface VisibilityQuestion {
   // One question, or one per group of at most MAX_CANDIDATES contributions in the same request.
@@ -318,7 +319,11 @@ export function judgeCheck(
 }
 
 export interface ScreenDecision {
-  check?: 'pass' | 'fail' | 'unsure';
+  check?:
+    | 'pass'
+    | 'fail'
+    | 'unsure'
+    | { refuse: string; reason: string; diagnostic?: VisibilityBlockerDiagnostic };
   target?: Resolution;
   visibility?: VisibilityDecision;
   resolvedBy: 'exact' | 'jev';
@@ -427,6 +432,8 @@ export async function decideScreen(
   step?: Step & { line: number },
   typed: readonly string[] = [],
   privacy = new ObservedPrivacy(),
+  deadline?: number,
+  diagnostics = false,
 ): Promise<ScreenDecision> {
   const literalVisibility =
     step &&
@@ -524,6 +531,7 @@ export async function decideScreen(
         },
         questions,
         'walk',
+        deadline,
       )
     : {};
   return {

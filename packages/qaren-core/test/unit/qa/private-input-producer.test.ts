@@ -48,9 +48,15 @@ function inputPipeline(
   echo.child.tag = 6;
   fixture.fiber.child = input;
   input.sibling = echo;
+  const provenance = nativeCapture();
+  const observed = provenance.nodes[1];
   const native = async () => ({
+    ...provenance,
+    snapshotVerdict: { ...provenance.snapshotVerdict, nodeCount: 3 },
     nodes: [
+      provenance.nodes[0],
       {
+        ...observed,
         ref: '@field',
         type: props.secureTextEntry ? 'SecureTextField' : 'TextField',
         identifier: 'field',
@@ -60,12 +66,21 @@ function inputPipeline(
         hittable: true,
         enabled: true,
       },
-      { ref: '@echo', type: 'StaticText', label: echoText, hittable: true },
+      {
+        ...observed,
+        ref: '@echo',
+        index: 2,
+        identifier: undefined,
+        type: 'StaticText',
+        label: echoText,
+        presence: { ...observed.presence, nodeIndex: 2 },
+      },
     ],
   });
   const capture = () =>
     captureScreen({
       requirePrivateInputs: true,
+      appId: 'com.test',
       native,
       react: () =>
         captureQaReact(
@@ -323,7 +338,24 @@ test('wrapped TextInput preserves quoted typing through producer, adapter, captu
   const nameReads = fixture.namesRead();
   assert.ok(nameReads > 0, 'legacy producer reads the configured dev displayName');
   const capture = () =>
-    captureScreen({ requirePrivateInputs: true, native: fixture.native, react: fixture.react });
+    captureScreen({
+      requirePrivateInputs: true,
+      native: async () => {
+        const observation = await fixture.native();
+        return {
+          ...observation,
+          truncated: false,
+          normalizationDroppedNodes: 0,
+          snapshotVerdict: {
+            state: 'ok',
+            nodeCount: observation.nodes.length,
+            refMapUpdated: true,
+            reasons: [],
+          },
+        };
+      },
+      react: fixture.react,
+    });
   const observed = await capture();
   const judge = scriptedJudge(() => assert.fail('unique quoted fill must stay model-free'));
   const walk = walker([], judge);

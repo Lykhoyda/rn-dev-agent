@@ -1,11 +1,20 @@
 import { isRecord } from './questions.js';
 import type { NativeNode } from './screen.js';
 
-export const PRESENCE_BUDGET_MS = 5_000;
+export const NATIVE_PRESENCE_UNKNOWN_REASONS = [
+  'empty-frame',
+  'clipped',
+  'ambiguous-descriptor',
+  'not-hittable',
+  'read-unavailable',
+  'match-count-mismatch',
+  'post-hit-mismatch',
+] as const;
 
 export interface NativePresenceNode {
   status: 'observed' | 'unknown';
   labelSource: 'direct' | 'value' | 'descendant' | 'none';
+  unknownReason?: (typeof NATIVE_PRESENCE_UNKNOWN_REASONS)[number];
 }
 
 export interface NativePresence {
@@ -22,10 +31,15 @@ export function validateNativePresence(
   nodes: NativeNode[],
   generation: unknown,
   expectedAppId: string | undefined,
+  requestedBudgetMs: unknown,
 ): NativePresence | undefined {
   if (
+    !Number.isSafeInteger(requestedBudgetMs) ||
+    typeof requestedBudgetMs !== 'number' ||
+    requestedBudgetMs <= 0 ||
     !isRecord(capture) ||
-    capture.version !== 1 ||
+    capture.version !== 2 ||
+    capture.appliedBudgetMs !== requestedBudgetMs ||
     capture.source !== 'xcui-live' ||
     capture.enumeration !== 'raw-unfiltered' ||
     capture.complete !== true ||
@@ -42,7 +56,7 @@ export function validateNativePresence(
     capture.startedUptimeMs < 0 ||
     !finite(capture.endedUptimeMs) ||
     capture.endedUptimeMs < capture.startedUptimeMs ||
-    capture.endedUptimeMs - capture.startedUptimeMs >= PRESENCE_BUDGET_MS ||
+    capture.endedUptimeMs - capture.startedUptimeMs >= requestedBudgetMs ||
     nodes.length === 0 ||
     nodes.length > 600 ||
     nodes[0].type !== 'Application' ||
@@ -92,7 +106,15 @@ export function validateNativePresence(
       (p.status === 'unknown' && p.observedUptimeMs !== undefined)
     )
       return undefined;
-    observations.push({ status: p.status, labelSource: p.labelSource });
+    const unknownReason =
+      p.status === 'unknown'
+        ? NATIVE_PRESENCE_UNKNOWN_REASONS.find((reason) => reason === p.unknownReason)
+        : undefined;
+    observations.push({
+      status: p.status,
+      labelSource: p.labelSource,
+      ...(unknownReason ? { unknownReason } : {}),
+    });
   }
   return { source: 'xcui-live', nodes: observations };
 }

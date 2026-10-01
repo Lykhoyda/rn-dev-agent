@@ -1,16 +1,25 @@
 import type { Block, Item } from './plan.js';
-import { type Screen, screenSignature } from './screen.js';
+import { type Screen, type VisibilityBlockerDiagnostic, screenSignature } from './screen.js';
 import {
   type ScreenDecision,
   CHECK,
   ResolutionError,
   decideScreen,
+  stepTarget,
   targetVisible,
 } from './resolve.js';
 import { type Judge, type JevCall, JevError, unavailableJudge } from './questions.js';
 import { maskInputs, ObservedPrivacy } from './privacy.js';
 import { PrivateInputCaptureError } from './private-input.js';
 import { NativeCaptureError } from './capture.js';
+import { QaDispatchContext, QaDispatchError } from '../domain/qa-dispatch.js';
+import {
+  admitObservation,
+  observationDeadline,
+  observationUsable,
+  PHRASE_WAIT_BUDGET_MS,
+  type ObservationTiming,
+} from './timing.js';
 import {
   type BlockResult,
   type WalkResult,
@@ -29,15 +38,50 @@ export interface ActResult {
 export interface WalkerDeps {
   judge?: Judge;
   captureScreen(options?: { platformPresence?: boolean }): Promise<Screen>;
-  press(ref: string): Promise<ActResult>;
-  fill(ref: string, text: string): Promise<ActResult>;
-  scroll(direction: 'down' | 'up'): Promise<ActResult>;
-  back(): Promise<ActResult>;
-  dialog(action: 'accept' | 'dismiss'): Promise<ActResult>;
+  press(ref: string, context: QaDispatchContext): Promise<ActResult>;
+  fill(ref: string, text: string, context: QaDispatchContext): Promise<ActResult>;
+  scroll(direction: 'down' | 'up', context: QaDispatchContext): Promise<ActResult>;
+  back(context: QaDispatchContext): Promise<ActResult>;
+  dialog(action: 'accept' | 'dismiss', context: QaDispatchContext): Promise<ActResult>;
   screenshot(name: string): Promise<string | undefined>;
   now(): number;
   sleep(ms: number): Promise<void>;
   row(row: LedgerRow): void;
+  cancelled?(): boolean;
+  diagnostic?(event: WalkerTimingDiagnostic): void;
+}
+
+export interface WalkerTimingDiagnostic {
+  line: number;
+  stage: 'decision' | 'dispatch';
+  code:
+    | 'ACCEPTED'
+    | 'COMPLETED'
+    | 'EVIDENCE_EXPIRED'
+    | 'ITEM_DEADLINE_EXCEEDED'
+    | 'ACTION_INTERRUPTED'
+    | 'ACTION_CONTEXT_CHANGED'
+    | 'RUN_CANCELLED'
+    | 'ACTION_OUTCOME_UNCERTAIN'
+    | 'SCREEN_EVIDENCE_INCOMPLETE';
+  at: number;
+  acquisitionMs: number;
+  observationAgeMs: number;
+  authorizations?: number;
+  observation?: number;
+  visibilityBlocker?: VisibilityBlockerDiagnostic;
+}
+
+interface Observation {
+  id: number;
+  screen: Screen;
+  timing: ObservationTiming;
+}
+
+class EvidenceExpired extends Error {
+  constructor(readonly itemExpired = false) {
+    super(itemExpired ? 'VISIBILITY_UNSURE: ITEM_DEADLINE_EXCEEDED' : 'EVIDENCE_EXPIRED');
+  }
 }
 
 export const WAIT_BUDGET_MS = 15_000;
@@ -62,30 +106,208 @@ export async function walkBlock(
   shotIndex = 0,
   typed: string[] = [],
   privacy = new ObservedPrivacy(typed),
+  sequence = { observation: 0 },
 ): Promise<WalkOutcome> {
   const rows: LedgerRow[] = [];
   for (const item of block.items)
     if (item.kind === 'fill' && !typed.includes(item.text)) typed.push(item.text);
   const judge = deps.judge ?? unavailableJudge;
   let resolvedBy: LedgerRow['resolvedBy'] = 'exact';
-  let cached: { item: Item; screen: Screen; decision: ScreenDecision } | undefined;
+  let cached: { item: Item; observation: Observation; decision: ScreenDecision } | undefined;
   let latest: Screen = { elements: [], visibleText: [], front: 'app' };
-  const capture = async (step?: Exclude<Item, { kind: 'check' }>): Promise<Screen> => {
+  let line = 0;
+
+  const assertActive = (): void => {
+    if (deps.cancelled?.()) throw new QaDispatchError('RUN_CANCELLED');
+  };
+  const pause = async (ms: number): Promise<void> => {
+    assertActive();
+    await deps.sleep(ms);
+    assertActive();
+  };
+  const capture = async (
+    step?: Exclude<Item, { kind: 'check' }>,
+    assertion = false,
+  ): Promise<Observation> => {
+    assertActive();
     cached = undefined;
     const target =
       step && ('target' in step ? step.target : step.kind === 'scroll' ? step.until : undefined);
-    latest = await deps.captureScreen(
-      target && target.quoted === undefined ? { platformPresence: true } : undefined,
-    );
+    const platformPresence = assertion || (!!target && target.quoted === undefined);
+    const startedAt = deps.now();
+    const id = ++sequence.observation;
+
+    latest = await deps.captureScreen(platformPresence ? { platformPresence: true } : undefined);
+
     privacy.observe(latest);
-    return latest;
+
+    assertActive();
+    const timing = admitObservation(startedAt, deps.now());
+    if (!timing)
+      throw new ResolutionError({
+        refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
+        reason: 'ACQUISITION_EXPIRED',
+      });
+    // Raw acquisition and semantic projection have different completeness requirements.
+    if (
+      (step || assertion) &&
+      (latest.captureCoverage?.native ?? latest.coverage?.native) !== 'complete'
+    )
+      throw new ResolutionError({
+        refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
+        reason: 'NATIVE_ACQUISITION_UNUSABLE',
+      });
+    if (platformPresence && latest.coverage?.native !== 'complete')
+      throw new ResolutionError({
+        refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
+        reason: 'NATIVE_PRESENCE_UNUSABLE',
+      });
+
+    return { screen: latest, timing, id };
   };
-  const decide = (
-    screen: Screen,
+  const diagnostic = (
+    item: Item,
+    observation: Observation,
+    stage: WalkerTimingDiagnostic['stage'],
+    code: WalkerTimingDiagnostic['code'],
+    authorizations?: number,
+    visibilityBlocker?: VisibilityBlockerDiagnostic,
+  ): void => {
+    try {
+      const at = deps.now();
+      deps.diagnostic?.({
+        line: item.line,
+        stage,
+        code,
+        at,
+        acquisitionMs: observation.timing.completedAt - observation.timing.startedAt,
+        observationAgeMs: at - observation.timing.startedAt,
+        ...(authorizations === undefined ? {} : { authorizations }),
+        ...(visibilityBlocker ? { observation: observation.id, visibilityBlocker } : {}),
+      });
+    } catch {
+      // Diagnostics cannot change a decision or dispatch outcome.
+    }
+  };
+  const usable = (observation: Observation, item: Item, deadline = Infinity): void => {
+    assertActive();
+    const now = deps.now();
+    if (!observationUsable(observation.timing, now, deadline)) {
+      const itemExpired = now >= deadline;
+      diagnostic(
+        item,
+        observation,
+        'decision',
+        itemExpired ? 'ITEM_DEADLINE_EXCEEDED' : 'EVIDENCE_EXPIRED',
+      );
+      throw new EvidenceExpired(itemExpired);
+    }
+  };
+  const decide = async (
+    observation: Observation,
     check?: Item & { kind: 'check' },
     step?: Exclude<Item, { kind: 'check' }>,
-  ): Promise<ScreenDecision> =>
-    decideScreen(screen, judge, check, step, privacy.modelValues(), privacy);
+    deadline = Infinity,
+    initial?: ScreenDecision,
+  ): Promise<ScreenDecision> => {
+    const item = (check ?? step)!;
+    usable(observation, item, deadline);
+
+    let decision: ScreenDecision;
+
+    try {
+      decision =
+        initial ??
+        (await decideScreen(
+          observation.screen,
+          judge,
+          check,
+          step,
+          privacy.modelValues(),
+          privacy,
+          observationDeadline(observation.timing, deadline),
+          deps.diagnostic !== undefined,
+        ));
+    } catch (error) {
+      assertActive();
+      if (error instanceof JevError && error.code === 'JEV_DEADLINE_EXCEEDED') {
+        const itemExpired = deps.now() >= deadline;
+        diagnostic(
+          item,
+          observation,
+          'decision',
+          itemExpired ? 'ITEM_DEADLINE_EXCEEDED' : 'EVIDENCE_EXPIRED',
+        );
+        throw new EvidenceExpired(itemExpired);
+      }
+      throw error;
+    }
+    if (typeof decision.check === 'object') {
+      assertActive();
+      if (decision.check.diagnostic)
+        diagnostic(
+          item,
+          observation,
+          'decision',
+          'SCREEN_EVIDENCE_INCOMPLETE',
+          undefined,
+          decision.check.diagnostic,
+        );
+      throw new ResolutionError(decision.check);
+    }
+    usable(observation, item, deadline);
+    diagnostic(item, observation, 'decision', 'ACCEPTED');
+
+    return decision;
+  };
+  const mutate = async (
+    item: Item,
+    observation: Observation,
+    send: (context: QaDispatchContext) => Promise<ActResult>,
+    deadline = Infinity,
+  ): Promise<ActResult> => {
+    const context = new (class extends QaDispatchContext {
+      override authorize(): void {
+        super.authorize();
+        diagnostic(item, observation, 'dispatch', 'ACCEPTED', this.authorizations);
+
+        super.check();
+      }
+    })(observationDeadline(observation.timing, deadline), deps.now, deps.cancelled);
+    try {
+      context.check();
+      const result = await send(context);
+      context.assertComplete();
+      diagnostic(item, observation, 'dispatch', 'COMPLETED', context.authorizations);
+
+      return result;
+    } catch (error) {
+      if (context.refusal || error instanceof QaDispatchError) {
+        const refusal = context.refusal ?? (error as QaDispatchError);
+
+        const itemExpired = deps.now() >= deadline;
+        diagnostic(
+          item,
+          observation,
+          'dispatch',
+          context.authorizations
+            ? 'ACTION_INTERRUPTED'
+            : refusal.code === 'EVIDENCE_EXPIRED' && itemExpired
+              ? 'ITEM_DEADLINE_EXCEEDED'
+              : refusal.code,
+          context.authorizations,
+        );
+        if (refusal.code === 'EVIDENCE_EXPIRED' && context.authorizations === 0)
+          throw new EvidenceExpired(itemExpired);
+        throw new QaDispatchError(
+          context.authorizations && refusal.code !== 'RUN_CANCELLED'
+            ? 'ACTION_OUTCOME_UNCERTAIN'
+            : refusal.code,
+        );
+      }
+      throw error;
+    }
+  };
   let shots = shotIndex;
   const emit = (row: LedgerRow): void => {
     rows.push(row);
@@ -121,45 +343,86 @@ export async function walkBlock(
       rows,
       failure: {
         step: item.line,
-        seen: redact(maskInputs(screen, `${reason}; on screen: ${seenOn(screen)}`, typed)),
+        seen: redact(
+          maskInputs(
+            screen,
+            `${reason}; historical context, previously on screen: ${seenOn(screen)}`,
+            typed,
+          ),
+        ),
         ...(screenshot ? { screenshot } : {}),
       },
     };
   };
   const shoot = async (item: Item): Promise<string | undefined> => {
-    if (!privacy.canScreenshot()) return undefined;
+    assertActive();
+    if (!privacy.canScreenshot()) {
+      return undefined;
+    }
     shots += 1;
-    return deps.screenshot(screenshotName(shots, item.line));
+
+    let shot: string | undefined;
+
+    shot = await deps.screenshot(screenshotName(shots, item.line));
+
+    assertActive();
+    return shot;
   };
   const visibilityProbe = (item: Item & { kind: 'wait' | 'scroll' }, deadline = Infinity) => {
     let reasks = 0;
     return async (
-      screen: Screen,
+      observation: Observation,
       initial?: ScreenDecision,
-    ): Promise<{ screen: Screen; found: boolean; pending?: boolean }> => {
-      let decision = initial ?? (await decide(screen, undefined, item));
-      for (;;) {
+    ): Promise<{ observation: Observation; found: boolean }> => {
+      let decision = initial;
+      while (deps.now() < deadline) {
+        try {
+          decision = await decide(observation, undefined, item, deadline, decision);
+        } catch (error) {
+          if (!(error instanceof EvidenceExpired)) throw error;
+          if (error.itemExpired) throw error;
+
+          await pause(Math.min(WAIT_POLL_MS, Math.max(0, deadline - deps.now())));
+          if (deps.now() >= deadline) throw new EvidenceExpired(true);
+          observation = await capture(item);
+          decision = undefined;
+          continue;
+        }
+        const target = item.kind === 'wait' ? item.target : item.until!;
+        if (target.quoted !== undefined)
+          return { observation, found: targetVisible(target, observation.screen) };
         const visibility = decision.visibility;
         if (!visibility)
           throw new ResolutionError({
             refuse: 'VISIBILITY_MISSING',
             reason: 'the screen decision contains no visibility judgment',
           });
-        if ('refuse' in visibility) throw new ResolutionError(visibility);
-        if (visibility.verdict === 'present') return { screen, found: true };
-        if (visibility.verdict === 'absent') return { screen, found: false };
+        if ('refuse' in visibility) {
+          if (visibility.diagnostic)
+            diagnostic(
+              item,
+              observation,
+              'decision',
+              'SCREEN_EVIDENCE_INCOMPLETE',
+              undefined,
+              visibility.diagnostic,
+            );
+          throw new ResolutionError(visibility);
+        }
+        if (visibility.verdict === 'present') return { observation, found: true };
+        if (visibility.verdict === 'absent') return { observation, found: false };
         if (visibility.verdict === 'pending' && item.kind === 'wait')
-          return { screen, found: false, pending: true };
+          return { observation, found: false };
         const remaining = deadline - deps.now();
         if (reasks >= CHECK.reasks || remaining <= 0) break;
         reasks += 1;
-        await deps.sleep(Math.min(WAIT_POLL_MS, remaining));
+
+        await pause(Math.min(WAIT_POLL_MS, remaining));
         if (deps.now() >= deadline) break;
-        screen = await capture(item);
-        if (deps.now() >= deadline) break;
-        decision = await decide(screen, undefined, item);
-        if (deps.now() >= deadline) break;
+        observation = await capture(item);
+        decision = undefined;
       }
+      usable(observation, item, deadline);
       throw new ResolutionError({
         refuse: 'VISIBILITY_UNSURE',
         reason: 'visibility remained uncertain within the available re-ask budget',
@@ -168,23 +431,39 @@ export async function walkBlock(
   };
 
   for (const item of block.items) {
+    line = item.line;
+    let currentAttempt = 1;
     resolvedBy = item.source === 'jev' ? 'jev' : 'exact';
     if (item.kind === 'fill' && item.text && !typed.includes(item.text)) typed.push(item.text);
     try {
       if (item.kind === 'check') {
         const next = block.items[block.items.indexOf(item) + 1];
-        const nextStep = !item.literal && next && next.kind !== 'check' ? next : undefined;
-        let before = await capture(nextStep);
+        const nextStep =
+          !item.literal && next && next.kind !== 'check' && stepTarget(next)?.quoted === undefined
+            ? next
+            : undefined;
+        let before = await capture(nextStep, !item.literal);
         resolvedBy = item.literal ? 'exact' : 'jev';
-        let decision = await decide(before, item, nextStep);
-        for (let reask = 0; decision.check === 'unsure' && reask < CHECK.reasks; reask++) {
-          await deps.sleep(WAIT_POLL_MS);
-          before = await capture(nextStep);
-          decision = await decide(before, item, nextStep);
+        let decision: ScreenDecision;
+        let freshness = 1;
+        let reasks = CHECK.reasks;
+        for (;;) {
+          try {
+            decision = await decide(before, item, nextStep);
+          } catch (error) {
+            if (!(error instanceof EvidenceExpired) || freshness-- <= 0) throw error;
+
+            before = await capture(nextStep, !item.literal);
+            continue;
+          }
+          if (decision.check !== 'unsure' || reasks-- <= 0) break;
+
+          await pause(WAIT_POLL_MS);
+          before = await capture(nextStep, !item.literal);
         }
         const shot = await shoot(item);
         if (decision.check === 'pass') {
-          if (nextStep) cached = { item: nextStep, screen: before, decision };
+          if (nextStep) cached = { item: nextStep, observation: before, decision };
           emit({ ...base(item, 1), ...(shot ? { screenshot: shot } : {}), outcome: 'pass' });
           continue;
         }
@@ -192,71 +471,87 @@ export async function walkBlock(
           decision.check === 'unsure'
             ? 'CHECK_UNSURE: the expectation remained uncertain after a fresh-screen re-ask'
             : `"${item.text}" is not satisfied on screen`;
-        return failed(item, 1, reason, before, shot);
+        return failed(item, 1, reason, before.screen, shot);
       }
 
       if (item.kind === 'wait') {
         resolvedBy = item.target.quoted === undefined ? 'jev' : resolvedBy;
-        const deadline = deps.now() + WAIT_BUDGET_MS;
+        const budget = item.target.quoted === undefined ? PHRASE_WAIT_BUDGET_MS : WAIT_BUDGET_MS;
+        const deadline = deps.now() + budget;
         const held = cached?.item === item ? cached : undefined;
-        let screen = held?.screen ?? (await capture(item));
+        let observation = held?.observation ?? (await capture(item));
         cached = undefined;
         const probe = visibilityProbe(item, deadline);
-        let pending = false;
-        const visible = async (s: Screen, initial?: ScreenDecision): Promise<boolean> => {
-          if (item.target.quoted !== undefined) return targetVisible(item.target, s);
+        const visible = async (s: Observation, initial?: ScreenDecision): Promise<boolean> => {
           const observed = await probe(s, initial);
-          screen = observed.screen;
-          pending = observed.pending === true;
+          observation = observed.observation;
           return observed.found;
         };
-        let found = await visible(screen, held?.decision);
+        let found = await visible(observation, held?.decision);
         while (!found && deps.now() < deadline) {
-          await deps.sleep(WAIT_POLL_MS);
-          screen = await capture(item);
-          found = await visible(screen);
+          await pause(Math.min(WAIT_POLL_MS, deadline - deps.now()));
+          if (deps.now() >= deadline) break;
+          observation = await capture(item);
+          found = await visible(observation);
+        }
+        if (!found) {
+          usable(observation, item, deadline);
+          throw new EvidenceExpired(true);
         }
         const shot = await shoot(item);
-        if (found) {
-          emit({ ...base(item, 1), ...(shot ? { screenshot: shot } : {}), outcome: 'pass' });
-          continue;
-        }
-        const reason = pending
-          ? `VISIBILITY_UNSURE: "${item.target.phrase}" was not established within ${WAIT_BUDGET_MS / 1000}s; unqualified heading evidence does not prove absence`
-          : `"${item.target.phrase}" did not appear within ${WAIT_BUDGET_MS / 1000}s`;
-        return failed(item, 1, reason, screen, shot);
+        emit({ ...base(item, 1), ...(shot ? { screenshot: shot } : {}), outcome: 'pass' });
+        continue;
       }
 
       if (item.kind === 'scroll' && item.until) {
         resolvedBy = item.until.quoted === undefined ? 'jev' : resolvedBy;
+        const deadline = deps.now() + PHRASE_WAIT_BUDGET_MS;
         const held = cached?.item === item ? cached : undefined;
-        let screen = held?.screen ?? (await capture(item));
+        let observation = held?.observation ?? (await capture(item));
         cached = undefined;
-        const probe = visibilityProbe(item);
-        const visible = async (s: Screen, initial?: ScreenDecision): Promise<boolean> => {
-          if (item.until!.quoted !== undefined) return targetVisible(item.until!, s);
+        const probe = visibilityProbe(item, deadline);
+        const visible = async (s: Observation, initial?: ScreenDecision): Promise<boolean> => {
           const observed = await probe(s, initial);
-          screen = observed.screen;
+          observation = observed.observation;
           return observed.found;
         };
-        let found = await visible(screen, held?.decision);
+        let found = await visible(observation, held?.decision);
         let attempts = 0;
-        while (!found && attempts < SCROLL_ATTEMPTS) {
+        while (!found && attempts < SCROLL_ATTEMPTS && deps.now() < deadline) {
+          const beforeSignature = screenSignature(observation.screen);
+          let act: ActResult;
+          try {
+            act = await mutate(
+              item,
+              observation,
+              (context) => deps.scroll(item.direction, context),
+              deadline,
+            );
+          } catch (error) {
+            if (!(error instanceof EvidenceExpired) || error.itemExpired) throw error;
+
+            await pause(Math.min(WAIT_POLL_MS, Math.max(0, deadline - deps.now())));
+            if (deps.now() >= deadline) throw new EvidenceExpired(true);
+            observation = await capture(item);
+            found = await visible(observation);
+            continue;
+          }
           attempts += 1;
-          const beforeSignature = screenSignature(screen);
-          const act = await deps.scroll(item.direction);
-          screen = await capture(item);
-          found = await visible(screen);
-          const moved = screenSignature(screen) !== beforeSignature;
+          await pause(Math.min(WAIT_POLL_MS, Math.max(0, deadline - deps.now())));
+          if (deps.now() >= deadline) throw new EvidenceExpired(true);
+          observation = await capture(item);
+          found = await visible(observation);
+          const moved = screenSignature(observation.screen) !== beforeSignature;
           if (!act.ok && !moved)
             return failed(
               item,
               attempts,
               act.error ?? 'scroll was not dispatched',
-              screen,
+              observation.screen,
               await shoot(item),
             );
         }
+        if (!found) usable(observation, item, deadline);
         const shot = await shoot(item);
         if (found) {
           emit({
@@ -267,69 +562,98 @@ export async function walkBlock(
           continue;
         }
         const reason = `"${item.until.phrase}" did not come into view after ${SCROLL_ATTEMPTS} scrolls`;
-        return failed(item, Math.max(attempts, 1), reason, screen, shot);
+        return failed(item, Math.max(attempts, 1), reason, observation.screen, shot);
       }
 
       // press · fill · back · dialog: snapshot → resolve → act → read-back → snapshot → diff rule
       let outcome: WalkOutcome | undefined;
       for (let attempt = 1; attempt <= 2 && !outcome; attempt += 1) {
+        currentAttempt = attempt;
         const held = cached?.item === item ? cached : undefined;
-        let before = held?.screen ?? (await capture(item));
+        let before = held?.observation ?? (await capture(item));
         cached = undefined;
         let ref: string | undefined;
-        if (item.kind === 'press' || item.kind === 'fill') {
-          if (item.target.quoted === undefined) resolvedBy = 'jev';
-          let decision = held?.decision ?? (await decide(before, undefined, item));
-          resolvedBy = decision.resolvedBy === 'jev' ? 'jev' : resolvedBy;
-          let resolution = decision.target!;
-          let scrollError: string | undefined;
-          if ('scroll' in resolution) {
-            const act = await deps.scroll(resolution.scroll);
-            scrollError = act.ok ? undefined : (act.error ?? 'scroll was not dispatched');
+        let initial = held?.decision;
+        let freshness = attempt === 1 ? 1 : 0;
+        let scrolled = false;
+        let scrollNeedsReadback = false;
+        let scrollError: string | undefined;
+        let act: ActResult;
+        for (;;) {
+          try {
+            usable(before, item);
+            if (item.kind === 'press' || item.kind === 'fill') {
+              if (item.target.quoted === undefined) resolvedBy = 'jev';
+              const decision = await decide(before, undefined, item, Infinity, initial);
+              initial = undefined;
+              resolvedBy = decision.resolvedBy === 'jev' ? 'jev' : resolvedBy;
+              const resolution = decision.target!;
+              if ('refuse' in resolution) throw new ResolutionError(resolution);
+              if ('scroll' in resolution) {
+                if (scrolled) {
+                  outcome = failed(
+                    item,
+                    attempt,
+                    `${scrollError ? `${scrollError}; ` : ''}"${item.target.phrase}" stayed off screen after one scroll`,
+                    before.screen,
+                    await shoot(item),
+                  );
+                  break;
+                }
+                const result = await mutate(item, before, (context) =>
+                  deps.scroll(resolution.scroll, context),
+                );
+                scrolled = true;
+                scrollNeedsReadback = !result.ok && !result.proven;
+                scrollError = result.ok ? undefined : (result.error ?? 'scroll was not dispatched');
+                const signature = screenSignature(before.screen);
+                before = await capture(item);
+                usable(before, item);
+                if (!result.ok && !result.proven && screenSignature(before.screen) === signature) {
+                  outcome = failed(
+                    item,
+                    attempt,
+                    `${scrollError}; "${item.target.phrase}" stayed off screen after one scroll`,
+                    before.screen,
+                    await shoot(item),
+                  );
+                  break;
+                }
+                scrollNeedsReadback = false;
+                continue;
+              }
+              ref = resolution.ref;
+            }
+            act = await mutate(item, before, (context) =>
+              item.kind === 'press'
+                ? deps.press(ref!, context)
+                : item.kind === 'fill'
+                  ? deps.fill(ref!, item.text, context)
+                  : item.kind === 'scroll'
+                    ? deps.scroll(item.direction, context)
+                    : item.kind === 'back'
+                      ? deps.back(context)
+                      : deps.dialog(item.action, context),
+            );
+            break;
+          } catch (error) {
+            if (error instanceof EvidenceExpired && scrollNeedsReadback)
+              throw new QaDispatchError('ACTION_OUTCOME_UNCERTAIN');
+            if (!(error instanceof EvidenceExpired) || freshness-- <= 0) throw error;
+
             before = await capture(item);
-            decision = await decide(before, undefined, item);
-            resolvedBy = decision.resolvedBy === 'jev' ? 'jev' : resolvedBy;
-            resolution = decision.target!;
+            initial = undefined;
           }
-          if ('refuse' in resolution) {
-            outcome = failed(
-              item,
-              attempt,
-              `${resolution.refuse}: ${resolution.reason}`,
-              before,
-              await shoot(item),
-            );
-            break;
-          }
-          if ('scroll' in resolution) {
-            outcome = failed(
-              item,
-              attempt,
-              scrollError
-                ? `${scrollError}; "${item.target.phrase}" stayed off screen after one scroll`
-                : `"${item.target.phrase}" stayed off screen after one scroll`,
-              before,
-              await shoot(item),
-            );
-            break;
-          }
-          ref = resolution.ref;
         }
-        const act =
-          item.kind === 'press'
-            ? await deps.press(ref!)
-            : item.kind === 'fill'
-              ? await deps.fill(ref!, item.text)
-              : item.kind === 'scroll'
-                ? await deps.scroll(item.direction)
-                : item.kind === 'back'
-                  ? await deps.back()
-                  : await deps.dialog(item.action);
+        if (outcome) break;
         const after = await capture(item);
-        const shot = await shoot(item);
         // NOTE: a not-ok result is not a verdict; an act that timed out may still have landed.
-        const changed = screenSignature(after) !== screenSignature(before);
-        if (act.proven || changed) {
+        const changed = screenSignature(after.screen) !== screenSignature(before.screen);
+        usable(after, item);
+        diagnostic(item, after, 'decision', 'ACCEPTED');
+
+        const shot = await shoot(item);
+        if (act!.proven || changed) {
           emit({
             ...base(item, attempt),
             ...(ref ? { ref } : {}),
@@ -345,8 +669,8 @@ export async function walkBlock(
             ...(shot ? { screenshot: shot } : {}),
             outcome: 'retry',
             reason: redact(
-              act.error
-                ? `${act.error}; the screen did not change; retrying once`
+              act!.error
+                ? `${act!.error}; the screen did not change; retrying once`
                 : 'the screen did not change; retrying once',
             ),
           });
@@ -355,10 +679,10 @@ export async function walkBlock(
         outcome = failed(
           item,
           attempt,
-          act.error
-            ? `${act.error}; the screen did not change after two attempts`
+          act!.error
+            ? `${act!.error}; the screen did not change after two attempts`
             : 'the screen did not change after two attempts',
-          after,
+          after.screen,
           shot,
           ref,
         );
@@ -373,7 +697,7 @@ export async function walkBlock(
           block: key,
           line: item.line,
           text: safe.message,
-          attempt: 1,
+          attempt: currentAttempt,
           kind: item.kind === 'check' ? 'check' : 'step',
           resolvedBy,
           t: deps.now(),
@@ -387,14 +711,31 @@ export async function walkBlock(
           refusal: { code: safe.code, message: safe.message },
         };
       }
-      if (!(error instanceof JevError) && !(error instanceof ResolutionError)) throw error;
+      if (
+        !(error instanceof JevError) &&
+        !(error instanceof ResolutionError) &&
+        !(error instanceof EvidenceExpired) &&
+        !(error instanceof QaDispatchError)
+      )
+        throw error;
       if (error instanceof JevError) resolvedBy = 'jev';
       const refusal =
         error instanceof JevError && error.isRefusal
           ? { code: error.code, message: error.message }
           : undefined;
-      const shot = refusal ? await shoot(item).catch(() => undefined) : await shoot(item);
-      return { ...failed(item, 1, error.message, latest, shot), ...(refusal ? { refusal } : {}) };
+      const shot =
+        error instanceof QaDispatchError ||
+        error instanceof EvidenceExpired ||
+        (error instanceof ResolutionError && item.kind === 'check' && !item.literal) ||
+        deps.cancelled?.()
+          ? undefined
+          : refusal
+            ? await shoot(item).catch(() => undefined)
+            : await shoot(item);
+      return {
+        ...failed(item, currentAttempt, error.message, latest, shot),
+        ...(refusal ? { refusal } : {}),
+      };
     }
   }
   return { block: { key: block.slug, outcome: 'pass', source: 'discovered' }, rows };
@@ -410,8 +751,9 @@ export async function runPlan(
   const typed = blocks.flatMap((b) => b.items.flatMap((i) => (i.kind === 'fill' ? [i.text] : [])));
   const privacy = new ObservedPrivacy(typed);
   const calls = (): JevCall[] => [...preflightCalls, ...(deps.judge?.calls ?? [])];
+  const sequence = { observation: 0 };
   for (const block of blocks) {
-    const outcome = await walkBlock(block, deps, steps.length, typed, privacy);
+    const outcome = await walkBlock(block, deps, steps.length, typed, privacy, sequence);
     results.push(outcome.block);
     steps.push(...outcome.rows);
     if (outcome.failure) {

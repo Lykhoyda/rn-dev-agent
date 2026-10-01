@@ -5,6 +5,8 @@ import { decideScreen } from '../../../dist/qa/resolve.js';
 import type { NativeObservation, ReactObservation } from '../../../dist/qa/capture.js';
 import { assertionView, visibilityView } from '../../../dist/qa/screen.js';
 import type { DigestEntry, NativeNode, ReactHostEvidence } from '../../../dist/qa/screen.js';
+import { nativeCapture } from './platform-presence-fixtures.ts';
+import type { TimingEvent } from '../../../dist/qa/timing.js';
 
 const nodes: NativeNode[] = [
   {
@@ -137,13 +139,13 @@ test('discarded presence evidence on a complete native capture names why', async
     [
       'capture outlived the budget',
       { complete: true, startedUptimeMs: 0, endedUptimeMs: 3_100 },
-      5_400,
+      22_400,
       [
         'capture-over-budget',
         'presence-ms=3100',
         'nodes=1',
         'reported-observed=0',
-        'capture-ms=5400',
+        'capture-ms=22400',
       ],
     ],
   ];
@@ -168,6 +170,454 @@ test('discarded presence evidence on a complete native capture names why', async
     const view = visibilityView(screen);
     assert.ok('refuse' in view, name);
     assert.ok(view.reason.includes(`native capture: ${causes.join(', ')}`), name);
+  }
+});
+
+test('native deadline diagnostics survive coverage refusal without becoming evidence', async () => {
+  const observation = nativeCapture();
+  const diagnostics = {
+    phaseMs: {
+      'initial-eligibility': 10,
+      enumeration: 20,
+      observation: 4791.2,
+      'final-eligibility': 0,
+    },
+    failure: { phase: 'observation', reason: 'deadline' },
+    deadline: { phase: 'observation', read: 'first-match', edge: 'after' },
+  };
+  const screen = await captureScreen({
+    appId: 'com.test',
+    native: async () => ({
+      ...observation,
+      snapshotVerdict: {
+        ...observation.snapshotVerdict,
+        state: 'degraded',
+        refMapUpdated: false,
+        reasons: ['snapshot-ref-freshness-unknown'],
+      },
+      presenceCapture: {
+        ...observation.presenceCapture,
+        complete: false,
+        endedUptimeMs: 4921.2,
+        diagnostics,
+      },
+    }),
+    react: async () => ({ interactive: [], verdict, hostEvidence: { hosts: [], complete: true } }),
+  });
+  assert.equal(screen.coverage?.native, 'incomplete');
+  const view = visibilityView(screen);
+  assert.ok('refuse' in view);
+  assert.equal(view.refuse, 'SCREEN_EVIDENCE_INCOMPLETE');
+  for (const cause of [
+    'presence-ms=4821',
+    'presence-failure=observation:deadline',
+    'presence-deadline=observation:first-match:after',
+    'presence-initial-eligibility-ms=10',
+    'presence-enumeration-ms=20',
+    'presence-observation-ms=4791',
+    'presence-final-eligibility-ms=0',
+  ]) {
+    assert.ok(screen.nativeCaptureCauses?.includes(cause), cause);
+    assert.ok(view.reason.includes(cause), cause);
+  }
+  assert.doesNotMatch(view.reason, /presence-revalidation-ms/);
+  const decision = await decideScreen(
+    screen,
+    { calls: [], ask: async () => assert.fail('diagnostics cannot authorize a judgment') },
+    undefined,
+    { kind: 'wait', target: { phrase: 'the tasks heading' }, line: 14 },
+  );
+  assert.ok(decision.visibility && 'refuse' in decision.visibility);
+  assert.equal(decision.visibility.refuse, 'SCREEN_EVIDENCE_INCOMPLETE');
+});
+
+test('native diagnostic strings and timings are bounded and allowlisted', async () => {
+  const baseline = ['presence-incomplete', 'nodes=1', 'reported-observed=0'];
+  for (const diagnostics of [
+    undefined,
+    null,
+    'private-content',
+    [],
+    {
+      phaseMs: {
+        'initial-eligibility': -1,
+        enumeration: NaN,
+        observation: Infinity,
+        'final-eligibility': 'private-content',
+        revalidation: Number.MAX_VALUE,
+        'private-content': 1,
+      },
+      failure: { phase: 'private-content', reason: 'deadline' },
+      deadline: { phase: 'observation', read: 'private-content', edge: 'after' },
+    },
+    {
+      phaseMs: [],
+      failure: { phase: 'observation', reason: 'private-content' },
+      deadline: { phase: 'observation', read: 'first-match', edge: 'private-content' },
+    },
+    {
+      failure: { phase: 'observation' },
+      deadline: { phase: 'private-content', read: 'first-match', edge: 'after' },
+    },
+  ]) {
+    const screen = await captureScreen({
+      native: async () => ({ nodes, presenceCapture: { complete: false, diagnostics } }),
+      react: async () => ({ interactive: [], verdict }),
+    });
+    assert.deepEqual(screen.nativeCaptureCauses, baseline);
+  }
+});
+
+test('first-mismatch diagnostics accept only bounded structural fields and never change admission', async () => {
+  const secret = 'PRIVATE-mismatch-canary';
+  const mismatch = { kind: 'node', index: 1, fieldMask: 16, beforeType: 9, afterType: 48 };
+  const capture = async (detail: unknown, reason = 'enumeration-changed', throwSink = false) => {
+    const logs: string[] = [];
+    const source = nativeCapture();
+    const screen = await captureScreen({
+      appId: 'com.test',
+      now: () => 0,
+      native: async () => ({
+        ...source,
+        presenceCapture: {
+          ...source.presenceCapture,
+          complete: false,
+          diagnostics: { failure: { phase: 'revalidation', reason, mismatch: detail } },
+        },
+      }),
+      react: async () => ({
+        interactive: [],
+        verdict,
+        hostEvidence: { hosts: [], complete: true },
+      }),
+      warn: (line) => {
+        logs.push(line);
+        if (throwSink && line.startsWith('presence-mismatch=')) throw new Error(secret);
+      },
+    });
+    assert.equal(screen.coverage?.native, 'incomplete');
+    assert.ok('refuse' in visibilityView(screen));
+    assert.ok(!JSON.stringify({ screen, logs }).includes(secret));
+    return { screen, logs };
+  };
+  const safe = await capture({
+    ...mismatch,
+    label: secret,
+    value: secret,
+    identifier: secret,
+    hash: secret,
+  });
+  assert.deepEqual(safe.logs, [
+    'presence-failure=revalidation:enumeration-changed',
+    'presence-mismatch=kind=node,index=1,fieldMask=16,beforeType=9,afterType=48',
+  ]);
+  assert.ok(safe.screen.nativeCaptureCauses?.includes(safe.logs[1]));
+  assert.deepEqual(await capture(mismatch, 'enumeration-changed', true), safe);
+  for (const detail of [
+    undefined,
+    null,
+    [],
+    secret,
+    { ...mismatch, kind: secret },
+    ...['index', 'fieldMask', 'beforeType', 'afterType'].flatMap((key) =>
+      [secret, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, null, {}].map((value) => ({
+        ...mismatch,
+        [key]: value,
+      })),
+    ),
+    { ...mismatch, index: 600 },
+    { ...mismatch, index: undefined },
+    { ...mismatch, fieldMask: 512 },
+    { ...mismatch, fieldMask: 0 },
+    { ...mismatch, beforeType: 65536 },
+    { ...mismatch, afterType: 65536 },
+  ]) {
+    const { logs } = await capture(detail);
+    assert.deepEqual(logs, ['presence-failure=revalidation:enumeration-changed']);
+  }
+  for (const kind of ['descriptor-count', 'added-node', 'missing-node']) {
+    const detail = { kind, fieldMask: 0, ...(kind === 'descriptor-count' ? {} : { index: 1 }) };
+    const { logs } = await capture(detail);
+    assert.equal(
+      logs[1],
+      `presence-mismatch=kind=${kind}${kind === 'descriptor-count' ? '' : ',index=1'},fieldMask=0`,
+    );
+  }
+  const { logs } = await capture({ kind: 'node', index: 599, fieldMask: 511, afterType: 65535 });
+  assert.equal(logs[1], 'presence-mismatch=kind=node,index=599,fieldMask=511,afterType=65535');
+  assert.deepEqual((await capture(mismatch, 'read-unavailable')).logs, [
+    'presence-failure=revalidation:read-unavailable',
+  ]);
+  const geometry = {
+    changedMask: 15,
+    beforeFiniteMask: 15,
+    afterFiniteMask: 15,
+    deltaFiniteMask: 15,
+    dx: 0.125,
+    dy: -0.25,
+    dWidth: 0.5,
+    dHeight: -1,
+    beforeNull: false,
+    afterNull: false,
+    beforeInfinite: false,
+    afterInfinite: false,
+    beforeInvalidSize: false,
+    afterInvalidSize: false,
+  };
+  const detailed = {
+    ...mismatch,
+    geometry,
+    ancestorTypes: [1],
+    ancestorsTruncated: false,
+  };
+  const enriched = await capture({
+    ...detailed,
+    geometry: {
+      ...geometry,
+      x: secret,
+      y: secret,
+      width: secret,
+      height: secret,
+      before: { frame: secret },
+      label: secret,
+      identifier: secret,
+      value: secret,
+      hash: secret,
+    },
+    ancestorLabels: [secret],
+  });
+  assert.deepEqual(enriched.logs, [
+    safe.logs[0],
+    `${safe.logs[1]},geometry=${JSON.stringify(geometry)},ancestorTypes=[1],ancestorsTruncated=false`,
+  ]);
+  assert.deepEqual(await capture(detailed, 'enumeration-changed', true), enriched);
+  assert.ok(enriched.screen.nativeCaptureCauses?.includes(enriched.logs[1]));
+  const decision = await decideScreen(
+    enriched.screen,
+    { calls: [], ask: async () => assert.fail('geometry diagnostics must not authorize Jev') },
+    undefined,
+    { kind: 'wait', target: { phrase: 'the heading' }, line: 10 },
+  );
+  assert.ok(decision.visibility && 'refuse' in decision.visibility);
+  assert.equal(decision.visibility.refuse, 'SCREEN_EVIDENCE_INCOMPLETE');
+  for (const detail of [
+    ...[null, [], secret].map((geometry) => ({ ...detailed, geometry })),
+    ...['changedMask', 'beforeFiniteMask', 'afterFiniteMask', 'deltaFiniteMask'].flatMap((key) =>
+      [-1, 16, 1.5, NaN, Infinity, secret, null, undefined].map((value) => ({
+        ...detailed,
+        geometry: { ...geometry, [key]: value },
+      })),
+    ),
+    ...['dx', 'dy', 'dWidth', 'dHeight'].flatMap((key) =>
+      [NaN, Infinity, -Infinity, secret, null, undefined, {}].map((value) => ({
+        ...detailed,
+        geometry: { ...geometry, [key]: value },
+      })),
+    ),
+    ...[
+      'beforeNull',
+      'afterNull',
+      'beforeInfinite',
+      'afterInfinite',
+      'beforeInvalidSize',
+      'afterInvalidSize',
+    ].flatMap((key) =>
+      [0, 1, secret, null, undefined, {}].map((value) => ({
+        ...detailed,
+        geometry: { ...geometry, [key]: value },
+      })),
+    ),
+    { ...detailed, geometry: { ...geometry, afterFiniteMask: 14 } },
+    { ...detailed, geometry: { ...geometry, deltaFiniteMask: 14 } },
+    { ...detailed, geometry: { ...geometry, changedMask: 14 } },
+    { ...detailed, geometry: { ...geometry, dx: 0 } },
+    { ...detailed, beforeType: undefined },
+    ...[
+      undefined,
+      null,
+      {},
+      secret,
+      Array(17).fill(1),
+      Array(1),
+      [-1],
+      [65536],
+      [1.5],
+      [NaN],
+      [Infinity],
+      [secret],
+      [null],
+    ].map((ancestorTypes) => ({ ...detailed, ancestorTypes })),
+    ...[undefined, null, 0, 1, secret, {}].map((ancestorsTruncated) => ({
+      ...detailed,
+      ancestorsTruncated,
+    })),
+    { kind: 'descriptor-count', fieldMask: 0, geometry },
+    { kind: 'missing-node', index: 1, fieldMask: 0, ancestorTypes: [1], ancestorsTruncated: false },
+  ]) {
+    assert.deepEqual((await capture(detail)).logs, [safe.logs[0]], JSON.stringify(detail));
+  }
+  const partial = { ...geometry, afterFiniteMask: 14, deltaFiniteMask: 14, dx: undefined };
+  assert.ok(
+    (await capture({ ...detailed, geometry: partial })).logs[1].includes(
+      `geometry=${JSON.stringify(partial)}`,
+    ),
+  );
+  for (const dx of [
+    Number.MIN_VALUE,
+    -Number.MIN_VALUE,
+    Number.MAX_VALUE,
+    -Number.MAX_VALUE,
+    1.7763568394002505e-15,
+  ]) {
+    const detail = { ...detailed, geometry: { ...geometry, dx } };
+    assert.ok((await capture(detail)).logs[1].includes(`"dx":${dx}`));
+  }
+  const longest = await capture({
+    ...detailed,
+    index: 599,
+    ancestorTypes: Array(16).fill(65535),
+    ancestorsTruncated: true,
+  });
+  assert.ok(
+    longest.logs[1].endsWith(
+      `ancestorTypes=${JSON.stringify(Array(16).fill(65535))},ancestorsTruncated=true`,
+    ),
+  );
+  assert.ok(longest.logs[1].length < 800);
+});
+
+test('quiet-window diagnostics reject malformed scalars and cannot change admission through a sink', async () => {
+  const secret = 'PRIVATE-quiet-canary';
+  const valid = {
+    preparationSamples: 6,
+    preparationResets: 0,
+    preparationQuietWindowMs: 500,
+    preparationQuietElapsedMs: 500,
+    phaseMs: { preparation: 500 },
+    descriptor: secret,
+    treeHash: secret,
+  };
+  const malformed: object[] = [];
+  for (const field of [
+    'preparationSamples',
+    'preparationResets',
+    'preparationQuietWindowMs',
+    'preparationQuietElapsedMs',
+  ]) {
+    for (const value of [
+      undefined,
+      null,
+      secret,
+      {},
+      [],
+      -1,
+      NaN,
+      Infinity,
+      Number.MAX_SAFE_INTEGER + 1,
+    ])
+      malformed.push({ ...valid, [field]: value });
+  }
+  malformed.push(
+    { ...valid, preparationSamples: 1 },
+    { ...valid, preparationSamples: 1.5 },
+    { ...valid, preparationResets: 6 },
+    { ...valid, preparationResets: 0.5 },
+    { ...valid, preparationQuietWindowMs: 501 },
+    { ...valid, preparationQuietElapsedMs: 501 },
+    { ...valid, preparationQuietElapsedMs: 20_000, phaseMs: { preparation: 20_000 } },
+    ...[undefined, null, secret, NaN, Infinity, -1, 499].map((value) => ({
+      ...valid,
+      phaseMs: { preparation: value },
+    })),
+  );
+  const source = nativeCapture();
+  for (const diagnostics of malformed) {
+    const logs: string[] = [];
+    const screen = await captureScreen({
+      appId: 'com.test',
+      native: async () => ({
+        ...source,
+        presenceCapture: { ...source.presenceCapture, complete: false, diagnostics },
+      }),
+      react: async () => ({}),
+      warn: (line) => logs.push(line),
+    });
+    assert.equal(screen.coverage?.native, 'incomplete');
+    assert.ok(!logs.some((line) => /preparation-(quiet|resets)/.test(line)));
+    assert.ok(!JSON.stringify({ screen, logs }).includes(secret));
+  }
+  for (const complete of [true, false]) {
+    const capture = (warn?: (line: string) => void) =>
+      captureScreen({
+        appId: 'com.test',
+        now: () => 0,
+        native: async () => ({
+          ...source,
+          presenceCapture: { ...source.presenceCapture, complete, diagnostics: valid },
+        }),
+        react: async () => ({
+          interactive: [],
+          verdict,
+          hostEvidence: { hosts: [], complete: true },
+        }),
+        warn,
+      });
+    const baseline = await capture();
+    assert.equal(baseline.coverage?.native, complete ? 'complete' : 'incomplete');
+    assert.deepEqual(
+      await capture(() => {
+        throw new Error(secret);
+      }),
+      baseline,
+    );
+  }
+});
+
+test('optional native diagnostics never change coverage or a successful projection', async () => {
+  const observation = nativeCapture();
+  const capture = (diagnostics?: unknown) =>
+    captureScreen({
+      appId: 'com.test',
+      now: () => 0,
+      native: async () => ({
+        ...observation,
+        presenceCapture: { ...observation.presenceCapture, diagnostics },
+      }),
+      react: async () => ({
+        interactive: [],
+        verdict,
+        hostEvidence: { hosts: [], complete: true },
+      }),
+    });
+  const baseline = await capture();
+  assert.equal(baseline.coverage?.native, 'complete');
+  assert.ok(!('refuse' in visibilityView(baseline)));
+  for (const diagnostics of [
+    null,
+    'private-content',
+    { preparationSamples: 3, phaseMs: { preparation: 200 } },
+    {
+      preparationSamples: 6,
+      preparationResets: 0,
+      preparationQuietWindowMs: 500,
+      preparationQuietElapsedMs: 500,
+      phaseMs: { preparation: 500 },
+    },
+    {
+      failure: {
+        phase: 'revalidation',
+        reason: 'enumeration-changed',
+        mismatch: { kind: 'node', index: 1, fieldMask: 16, beforeType: 9, afterType: 9 },
+      },
+    },
+    { phaseMs: { observation: -1 }, failure: { phase: 'observation', reason: 'deadline' } },
+    {
+      phaseMs: { observation: 4821 },
+      failure: { phase: 'observation', reason: 'deadline' },
+      deadline: { phase: 'observation', read: 'first-match', edge: 'after' },
+    },
+  ]) {
+    assert.deepEqual(await capture(diagnostics), baseline);
   }
 });
 

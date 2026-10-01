@@ -242,6 +242,55 @@ test('the pinned model honors Retry-After through 60 seconds and caps longer sec
   }
 });
 
+test('retry-after-ms takes precedence and falls back to Retry-After or backoff when invalid', async (t) => {
+  for (const [milliseconds, seconds, delay] of [
+    ['1500', null, 1500],
+    ['125.5', null, 125.5],
+    ['1500', '7', 1500],
+    ['0', '7', 0],
+    ['60000', '7', 60_000],
+    ['999999', '7', 60_000],
+    ['', '2', 2000],
+    ['   ', '2', 2000],
+    ['garbage', '2', 2000],
+    ['100ms', '2', 2000],
+    ['-1', '2', 2000],
+    ['NaN', '2', 2000],
+    ['Infinity', '2', 2000],
+    ['1e309', '2', 2000],
+    ['garbage', 'Thu, 01 Jan 2026 00:00:03 GMT', 3000],
+    ['garbage', null, 500],
+    ['-1', 'garbage', 500],
+  ] as const) {
+    await t.test(
+      `${JSON.stringify(milliseconds)} ms, ${JSON.stringify(seconds)} seconds`,
+      async () => {
+        const slept: number[] = [];
+        let attempts = 0;
+        const judge = createJev({
+          apiKey: key,
+          wallNow: () => Date.parse('2026-01-01T00:00:00Z'),
+          random: () => 0.5,
+          sleep: async (ms) => {
+            slept.push(ms);
+          },
+          fetch: async () => {
+            attempts++;
+            const headers = new Headers({ 'retry-after-ms': milliseconds });
+            if (seconds !== null) headers.set('Retry-After', seconds);
+            return attempts === 1
+              ? new Response('', { status: 429, headers })
+              : Response.json(valid);
+          },
+        });
+        assert.deepEqual(await judge.ask({}, questions), valid.answers);
+        assert.deepEqual(slept, [delay]);
+        assert.equal(attempts, 2);
+      },
+    );
+  }
+});
+
 test('literal API key redaction handles both plain and JSON-encoded secrets', () => {
   const secret = 'opaque"key\\value';
   assert.ok(!redactApiKey(`secret=${secret}`, secret).includes(secret));

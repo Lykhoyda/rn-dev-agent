@@ -1,0 +1,149 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { test } from 'node:test';
+import { runInNewContext } from 'node:vm';
+import { HandlerError, describeError, unwrap } from '../../../dist/qa/adapt.js';
+import { isRecord } from '../../../dist/qa/questions.js';
+import { createStop } from '../../../dist/qa/stop.js';
+import type { ActResult } from '../../../dist/qa/walker.js';
+import type { ToolResult } from '../../../dist/utils.js';
+
+function fixture(throwSink = false) {
+  const source = readFileSync(new URL('../../../dist/qa/walk.js', import.meta.url), 'utf8');
+  const from = source.indexOf('function act(');
+  const to = source.indexOf('// Attach over CDP', from);
+  assert.ok(from >= 0 && to > from);
+  const logs: string[] = [];
+  const stop = createStop();
+  // Execute the built action adapter without starting the wire, CDP, or a device session.
+  const act: (handler: () => Promise<ToolResult>, proven: boolean) => Promise<ActResult> =
+    runInNewContext(`${source.slice(from, to)}; act`, {
+      HandlerError,
+      describeError,
+      unwrap,
+      isRecord,
+      stop,
+      log: (line: string) => {
+        logs.push(line);
+        if (throwSink) throw new Error('PRIVATE-log-sink');
+      },
+    });
+  return { act, logs, stop };
+}
+
+function result(meta?: unknown, ok = true): ToolResult {
+  return {
+    ...(ok ? {} : { isError: true }),
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          ok,
+          data: { label: 'PRIVATE-data', value: 'PRIVATE-input' },
+          ...(ok ? {} : { code: 'TEST_FAILURE', error: 'handler failed' }),
+          meta,
+        }),
+      },
+    ],
+  };
+}
+
+const unknown = {
+  method: 'unknown',
+  settled: 'unknown',
+  hierarchyChanged: 'unknown',
+  ms: 'unknown',
+};
+
+test('act exposes only existing allowlisted settle metadata before discarding it', async () => {
+  for (const method of ['screen-static', 'snapshot-eq', 'window-gate', 'timeout']) {
+    const f = fixture();
+    let calls = 0;
+    const outcome = await f.act(async () => {
+      calls++;
+      return result({
+        settle: {
+          method,
+          settled: method !== 'timeout',
+          hierarchyChanged: false,
+          label: 'PRIVATE-label',
+          hash: 'PRIVATE-hash',
+        },
+        timings_ms: { settle: 2513, value: 'PRIVATE-value' },
+        label: 'PRIVATE-other',
+      });
+    }, true);
+    assert.equal(outcome.ok, true);
+    assert.equal(outcome.proven, true);
+    assert.equal(calls, 1);
+    assert.deepEqual(f.logs, [
+      `action-settle=${JSON.stringify({ method, settled: method !== 'timeout', hierarchyChanged: false, ms: 2513 })}`,
+    ]);
+    assert.ok(!JSON.stringify({ outcome, logs: f.logs }).includes('PRIVATE-'));
+  }
+});
+
+test('missing or malformed settle metadata is unknown, never disabled or false', async () => {
+  const invalid = ['PRIVATE-canary', null, [], {}, 1];
+  const cases = [
+    undefined,
+    null,
+    'PRIVATE-canary',
+    [],
+    {},
+    ...invalid.map((settle) => ({ settle })),
+    {
+      settle: {
+        method: 'PRIVATE-canary',
+        settled: 'PRIVATE-canary',
+        hierarchyChanged: 'PRIVATE-canary',
+      },
+      timings_ms: { settle: 'PRIVATE-canary' },
+    },
+    ...[-1, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1, false, {}].map((ms) => ({
+      timings_ms: { settle: ms },
+    })),
+  ];
+  for (const meta of cases) {
+    const f = fixture();
+    const outcome = await f.act(async () => result(meta), false);
+    assert.equal(outcome.ok, true);
+    assert.equal(outcome.proven, false);
+    assert.deepEqual(f.logs, [`action-settle=${JSON.stringify(unknown)}`]);
+    assert.ok(!f.logs.join('').includes('PRIVATE-'));
+  }
+});
+
+test('settle reporting preserves handler errors, rejected promises, and sink failures', async () => {
+  for (const throwSink of [false, true]) {
+    for (const ok of [false, true]) {
+      const f = fixture(throwSink);
+      const outcome = await f.act(
+        async () =>
+          result({ settle: { method: 'timeout', settled: false }, timings_ms: { settle: 0 } }, ok),
+        true,
+      );
+      assert.equal(outcome.ok, ok);
+      assert.equal(outcome.proven, ok);
+      assert.equal(outcome.error, ok ? undefined : 'TEST_FAILURE: handler failed');
+      assert.deepEqual(f.logs, [
+        `action-settle=${JSON.stringify({ ...unknown, method: 'timeout', settled: false, ms: 0 })}`,
+      ]);
+    }
+    const f = fixture(throwSink);
+    const outcome = await f.act(async () => {
+      throw new Error('TEST_FAILURE: handler failed');
+    }, false);
+    assert.equal(outcome.error, 'TEST_FAILURE: handler failed');
+    assert.deepEqual(f.logs, [`action-settle=${JSON.stringify(unknown)}`]);
+  }
+});
+
+test('cancelled act does not dispatch or manufacture settle diagnostics', async () => {
+  const f = fixture();
+  f.stop.begin();
+  const outcome = await f.act(async () => assert.fail('cancelled'), false);
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.error!, /RUN_CANCELLED/);
+  assert.deepEqual(f.logs, []);
+});

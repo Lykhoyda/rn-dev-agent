@@ -288,6 +288,54 @@ extension RnFastRunnerTests {
         value = .absent
       }
     }
+
+    func changedFields(from previous: PresenceDescriptor?) -> Int {
+      typealias Field = PlatformPresenceDiagnostics.Mismatch.Field
+      guard let previous else { return Field.initialDescriptorUnavailable.rawValue }
+      var mask = 0
+      if type != previous.type { mask |= Field.type.rawValue }
+      if identifier != previous.identifier { mask |= Field.identifier.rawValue }
+      if label != previous.label { mask |= Field.label.rawValue }
+      if value != previous.value { mask |= Field.value.rawValue }
+      if frame != previous.frame { mask |= Field.frame.rawValue }
+      if enabled != previous.enabled { mask |= Field.enabled.rawValue }
+      return mask
+    }
+
+    func geometryDifference(from previous: PresenceDescriptor) -> PlatformPresenceDiagnostics.Mismatch.Geometry {
+      let before = previous.frame
+      let old = [before.origin.x, before.origin.y, before.size.width, before.size.height]
+      let new = [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]
+      var result = PlatformPresenceDiagnostics.Mismatch.Geometry(
+        beforeNull: before.isNull, afterNull: frame.isNull,
+        beforeInfinite: before.isInfinite, afterInfinite: frame.isInfinite,
+        beforeInvalidSize: !old[2].isFinite || !old[3].isFinite || old[2] < 0 || old[3] < 0,
+        afterInvalidSize: !new[2].isFinite || !new[3].isFinite || new[2] < 0 || new[3] < 0
+      )
+      var deltas: [Double?] = Array(repeating: nil, count: 4)
+      for index in 0..<4 {
+        let bit = 1 << index
+        if old[index] != new[index] { result.changedMask |= bit }
+        if old[index].isFinite { result.beforeFiniteMask |= bit }
+        if new[index].isFinite { result.afterFiniteMask |= bit }
+        let delta = new[index] - old[index]
+        if old[index].isFinite && new[index].isFinite && delta.isFinite {
+          result.deltaFiniteMask |= bit
+          deltas[index] = Double(delta)
+        }
+      }
+      result.dx = deltas[0]
+      result.dy = deltas[1]
+      result.dWidth = deltas[2]
+      result.dHeight = deltas[3]
+      return result
+    }
+  }
+
+  private struct PresenceEntry: Equatable {
+    let descriptor: PresenceDescriptor
+    let depth: Int
+    let parentIndex: Int?
   }
 
   func platformPresenceFailure() -> Response {
@@ -300,27 +348,92 @@ extension RnFastRunnerTests {
     ProcessInfo.processInfo.systemUptime * 1000
   }
 
-  private func presenceRead<T>(deadline: Double? = nil, _ read: () throws -> T) -> T? {
-    if let deadline, presenceUptimeMs() >= deadline { return nil }
+  private func presenceRead<T>(
+    deadline: Double? = nil, timing: PresenceCaptureTiming, read kind: PlatformPresenceDiagnostics.Read,
+    _ read: () throws -> T
+  ) -> T? {
+    if let deadline, timing.deadlineReached(deadline, read: kind, edge: .before) { return nil }
     var result: T?
     let exception = RunnerObjCExceptionCatcher.catchException({
       result = try? read()
     })
     guard exception == nil else { return nil }
-    if let deadline, presenceUptimeMs() >= deadline { return nil }
+    if let deadline, timing.deadlineReached(deadline, read: kind, edge: .after) { return nil }
     return result
   }
 
-  private func presenceAppIsEligible(_ app: XCUIApplication, deadline: Double) -> Bool? {
-    guard let state = presenceRead(deadline: deadline, { app.state }) else { return nil }
-    guard state == .runningForeground else { return false }
+  private func presenceAppIsEligible(
+    _ app: XCUIApplication, deadline: Double, timing: PresenceCaptureTiming
+  ) -> Bool? {
+    guard let state = presenceRead(deadline: deadline, timing: timing, read: .appState, { app.state }) else {
+      timing.fail(.readUnavailable)
+      return nil
+    }
+    guard state == .runningForeground else {
+      timing.fail(.ineligible)
+      return false
+    }
     #if !os(macOS)
-      guard let alerts = presenceRead(deadline: deadline, { self.springboard.alerts.count }),
-            let sheets = presenceRead(deadline: deadline, { self.springboard.sheets.count }) else { return nil }
+      guard let alerts = presenceRead(deadline: deadline, timing: timing, read: .alerts, { self.springboard.alerts.count }),
+            let sheets = presenceRead(deadline: deadline, timing: timing, read: .sheets, { self.springboard.sheets.count }) else {
+        timing.fail(.readUnavailable)
+        return nil
+      }
+      if alerts != 0 || sheets != 0 { timing.fail(.ineligible) }
       return alerts == 0 && sheets == 0
     #else
       return true
     #endif
+  }
+
+  private func preparePresenceEnumeration(
+    app: XCUIApplication, deadline: Double, timing: PresenceCaptureTiming, truncated: inout Bool
+  ) -> [(snapshot: XCUIElementSnapshot, entry: PresenceEntry)]? {
+    let quietWindowMs = 500.0
+    timing.preparationStarted(quietWindowMs: quietWindowMs)
+    var previous: [PresenceEntry]?
+    var quietStarted: Double?
+    while true {
+      guard let root = presenceRead(deadline: deadline, timing: timing, read: .rootSnapshot, {
+        timing.preparationSampleStarted()
+        return try app.snapshot()
+      }) else {
+        timing.fail(.readUnavailable)
+        return nil
+      }
+      var sample: [(snapshot: XCUIElementSnapshot, entry: PresenceEntry)] = []
+      var stack: [(XCUIElementSnapshot, Int, Int?)] = [(root, 0, nil)]
+      while let (snapshot, depth, parentIndex) = stack.popLast() {
+        guard !timing.deadlineReached(deadline, read: .enumeration, edge: .before) else { return nil }
+        guard sample.count < maxSnapshotElements else {
+          truncated = true
+          timing.fail(.nodeLimit)
+          return nil
+        }
+        guard let descriptor = PresenceDescriptor(snapshot) else {
+          timing.fail(.readUnavailable)
+          return nil
+        }
+        let index = sample.count
+        sample.append((snapshot, PresenceEntry(descriptor: descriptor, depth: depth, parentIndex: parentIndex)))
+        for child in snapshot.children.reversed() {
+          stack.append((child, depth + 1, index))
+        }
+      }
+      let entries = sample.map { $0.entry }
+      let stable = previous == entries
+      let completed = presenceUptimeMs()
+      guard !timing.deadlineReached(deadline, read: .enumeration, edge: .after, at: completed) else { return nil }
+      if !stable { quietStarted = completed }
+      let quietElapsedMs = completed - (quietStarted ?? completed)
+      timing.preparationSampleCompleted(reset: previous != nil && !stable, quietElapsedMs: quietElapsedMs)
+      if stable && quietElapsedMs >= quietWindowMs { return sample }
+      previous = entries
+      let polling = presenceUptimeMs()
+      guard !timing.deadlineReached(deadline, read: .preparationPoll, edge: .before, at: polling) else { return nil }
+      sleepFor(min(0.1, (deadline - polling) / 1000))
+      guard !timing.deadlineReached(deadline, read: .preparationPoll, edge: .after) else { return nil }
+    }
   }
 
   private func presenceLabelSource(_ snapshot: XCUIElementSnapshot) -> PlatformPresenceObservation.LabelSource {
@@ -329,10 +442,10 @@ extension RnFastRunnerTests {
     return aggregatedLabel(for: snapshot) == nil ? .none : .descendant
   }
 
-  func snapshotPlatformPresence(app: XCUIApplication, appId: String) -> DataPayload {
+  func snapshotPlatformPresence(app: XCUIApplication, appId: String, presenceBudgetMs: Int) -> DataPayload {
     let started = presenceUptimeMs()
-    // Inside the core's 5,000 ms budget, which also covers the React read that follows.
-    let deadline = started + 4_800
+    let deadline = started + Double(presenceBudgetMs)
+    let timing = PresenceCaptureTiming(started: started, now: presenceUptimeMs)
     let captureId = UUID().uuidString
     let generation = currentSnapshotGeneration
     var nodes: [SnapshotNode] = []
@@ -341,9 +454,15 @@ extension RnFastRunnerTests {
     var complete = false
     var viewport = CGRect.infinite
 
-    let enumerated = presenceRead { () -> Bool in
-      guard self.presenceAppIsEligible(app, deadline: deadline) == true,
-            let root = self.presenceRead(deadline: deadline, { try app.snapshot() }) else { return false }
+    let enumerated = presenceRead(timing: timing, read: .enumeration) { () -> Bool in
+      guard self.presenceAppIsEligible(app, deadline: deadline, timing: timing) == true else { return false }
+      timing.endPhase()
+      timing.begin(.preparation)
+      guard let sample = self.preparePresenceEnumeration(
+        app: app, deadline: deadline, timing: timing, truncated: &truncated
+      ), let root = sample.first?.snapshot else { return false }
+      timing.endPhase()
+      timing.begin(.enumeration)
       let windowFrame = root.children.first {
         $0.elementType == .window && !$0.frame.isNull && !$0.frame.isEmpty
       }?.frame
@@ -352,44 +471,37 @@ extension RnFastRunnerTests {
       let context = SnapshotTraversalContext(
         queryRoot: app, rootSnapshot: root, viewport: viewport, maxDepth: Int.max
       )
-      var stack: [(XCUIElementSnapshot, Int, Int?)] = [(root, 0, nil)]
-      while let (snapshot, depth, parentIndex) = stack.popLast() {
-        guard nodes.count < self.maxSnapshotElements else {
-          truncated = true
-          break
-        }
-        let descriptor = PresenceDescriptor(snapshot)
+      for (snapshot, entry) in sample {
+        guard !timing.deadlineReached(deadline, read: .enumeration, edge: .before) else { return false }
         var node = self.makeSnapshotNode(
           snapshot: snapshot, evaluation: self.evaluateSnapshot(snapshot, in: context),
-          depth: depth, index: nodes.count, parentIndex: parentIndex
+          depth: entry.depth, index: nodes.count, parentIndex: entry.parentIndex
         )
         node.presence = PlatformPresenceObservation(
           captureId: captureId, generation: generation, nodeIndex: node.index,
           status: .unknown, labelSource: self.presenceLabelSource(snapshot)
         )
         nodes.append(node)
-        descriptors.append(descriptor)
-        for child in snapshot.children.reversed() {
-          stack.append((child, depth + 1, node.index))
-        }
+        descriptors.append(entry.descriptor)
       }
-      return !truncated
+      return !timing.deadlineReached(deadline, read: .enumeration, edge: .after)
     }
+    timing.endPhase()
     if let enumerated {
       complete = enumerated
     } else {
+      timing.fail(.readUnavailable)
       nodes.removeAll()
       descriptors.removeAll()
     }
 
     // A capped tree cannot establish descriptor uniqueness in the whole raw snapshot.
     if complete {
+      timing.begin(.observation)
       var handled = Set<Int>()
       for index in nodes.indices where !handled.contains(index) {
-        if presenceUptimeMs() >= deadline { break }
-        // Identified containers are association anchors, so they are observed whatever their label source.
-        // Unnamed, unidentified plain views are inert to the consumer and never need presence.
-        // Nodes outside the window or a scroll view ancestor are never hittable; the consumer proves them offscreen.
+        if timing.deadlineReached(deadline, read: .observationLoop, edge: .before) { break }
+        // Observe association anchors; skip inert or clipped nodes.
         let labelSource = nodes[index].presence?.labelSource
         guard nodes[index].depth > 0,
               let descriptor = descriptors[index],
@@ -397,34 +509,60 @@ extension RnFastRunnerTests {
               !(labelSource == PlatformPresenceObservation.LabelSource.none
                 && descriptor.identifier.isEmpty
                 && descriptor.type == .other),
-              descriptor.type != .application, descriptor.type != .window,
-              !descriptor.frame.isEmpty,
-              presenceClip(index, nodes: nodes, descriptors: descriptors, viewport: viewport)
-                .intersects(descriptor.frame) else { continue }
+              descriptor.type != .application, descriptor.type != .window else { continue }
+        guard !descriptor.frame.isEmpty else {
+          nodes[index].presence?.unknownReason = .emptyFrame
+          continue
+        }
+        guard presenceClip(index, nodes: nodes, descriptors: descriptors, viewport: viewport)
+          .intersects(descriptor.frame) else {
+          nodes[index].presence?.unknownReason = .clipped
+          continue
+        }
         let group = descriptors.indices.filter { descriptors[$0] == descriptor }
-        guard group.count == 1 || isNestedTextChain(group, nodes: nodes) else { continue }
+        guard group.count == 1 || isNestedTextChain(group, nodes: nodes) else {
+          nodes[index].presence?.unknownReason = .ambiguousDescriptor
+          continue
+        }
         handled.formUnion(group)
         let predicateMatches = descriptors.filter {
           $0?.type == descriptor.type && $0?.identifier == descriptor.identifier && $0?.label == descriptor.label
         }.count
-        let observation = presenceRead(deadline: deadline) {
+        var unknownReason: PlatformPresenceObservation.UnknownReason?
+        let observation = presenceRead(deadline: deadline, timing: timing, read: .observation) {
           self.observePresence(
             descriptor, count: group.count, predicateIsExact: predicateMatches == group.count,
-            app: app, deadline: deadline
+            app: app, deadline: deadline, timing: timing, unknownReason: { unknownReason = $0 }
           )
         }
         if let observed = observation ?? nil {
           for member in group {
             nodes[member].presence?.status = .observed
             nodes[member].presence?.observedUptimeMs = observed
+            nodes[member].presence?.unknownReason = nil
+          }
+        } else {
+          for member in group {
+            nodes[member].presence?.unknownReason = observation == nil ? .readUnavailable : unknownReason
           }
         }
       }
-      complete = presenceAppIsEligible(app, deadline: deadline) == true
-        && presenceEnumerationIsUnchanged(app: app, nodes: nodes, descriptors: descriptors, deadline: deadline)
+      timing.endPhase()
+      timing.begin(.finalEligibility)
+      complete = presenceAppIsEligible(app, deadline: deadline, timing: timing) == true
+      timing.endPhase()
+      if complete {
+        timing.begin(.revalidation)
+        complete = presenceEnumerationIsUnchanged(
+          app: app, nodes: nodes, descriptors: descriptors, deadline: deadline, timing: timing
+        )
+        timing.endPhase()
+      }
     }
     let ended = presenceUptimeMs()
-    complete = complete && ended < deadline
+    complete = complete && !timing.deadlineReached(
+      deadline, read: .finalization, edge: .after, phase: .finalization, at: ended
+    )
     if !complete {
       for index in nodes.indices {
         nodes[index].presence?.status = .unknown
@@ -434,34 +572,85 @@ extension RnFastRunnerTests {
     return makePlatformPresencePayload(
       nodes: nodes, truncated: truncated,
       capture: PlatformPresenceCapture(
-        version: 1, source: "xcui-live", captureId: captureId, appId: appId,
+        version: 2, source: "xcui-live", captureId: captureId, appId: appId,
         generation: generation, startedUptimeMs: started, endedUptimeMs: ended,
-        enumeration: "raw-unfiltered", complete: complete
+        enumeration: "raw-unfiltered", complete: complete, appliedBudgetMs: presenceBudgetMs,
+        diagnostics: timing.diagnostics(complete: complete)
       )
     )
   }
 
   private func presenceEnumerationIsUnchanged(
-    app: XCUIApplication, nodes: [SnapshotNode], descriptors: [PresenceDescriptor?], deadline: Double
+    app: XCUIApplication, nodes: [SnapshotNode], descriptors: [PresenceDescriptor?], deadline: Double,
+    timing: PresenceCaptureTiming
   ) -> Bool {
-    guard nodes.count == descriptors.count else { return false }
-    return presenceRead(deadline: deadline) {
+    guard nodes.count == descriptors.count else {
+      timing.fail(.enumerationChanged, mismatch: .init(kind: .descriptorCount))
+      return false
+    }
+    let unchanged = presenceRead(deadline: deadline, timing: timing, read: .revalidation) {
       let root = try app.snapshot()
       var stack: [(XCUIElementSnapshot, Int, Int?)] = [(root, 0, nil)]
       var index = 0
       while let (snapshot, depth, parentIndex) = stack.popLast() {
-        guard self.presenceUptimeMs() < deadline,
-              index < self.maxSnapshotElements, index < nodes.count,
-              let descriptor = PresenceDescriptor(snapshot),
-              descriptors[index] == descriptor,
-              nodes[index].depth == depth, nodes[index].parentIndex == parentIndex else { return false }
+        guard !timing.deadlineReached(deadline, read: .revalidation, edge: .before) else { return false }
+        guard index < self.maxSnapshotElements else {
+          timing.fail(.nodeLimit)
+          return false
+        }
+        guard index < nodes.count else {
+          timing.fail(.enumerationChanged, mismatch: .init(kind: .addedNode, index: index))
+          return false
+        }
+        guard let descriptor = PresenceDescriptor(snapshot) else {
+          timing.fail(.readUnavailable)
+          return false
+        }
+        guard descriptors[index] == descriptor,
+              nodes[index].depth == depth, nodes[index].parentIndex == parentIndex else {
+          typealias Field = PlatformPresenceDiagnostics.Mismatch.Field
+          var mask = descriptor.changedFields(from: descriptors[index])
+          if nodes[index].depth != depth { mask |= Field.depth.rawValue }
+          if nodes[index].parentIndex != parentIndex { mask |= Field.parentIndex.rawValue }
+          let ancestors = self.presenceMismatchAncestors(index, nodes: nodes, descriptors: descriptors)
+          timing.fail(.enumerationChanged, mismatch: .init(
+            kind: .node, index: index, fieldMask: mask,
+            beforeType: descriptors[index]?.type.rawValue, afterType: descriptor.type.rawValue,
+            geometry: descriptors[index].map { descriptor.geometryDifference(from: $0) },
+            ancestorTypes: ancestors.types, ancestorsTruncated: ancestors.truncated
+          ))
+          return false
+        }
         for child in snapshot.children.reversed() {
           stack.append((child, depth + 1, index))
         }
         index += 1
       }
+      if index != nodes.count {
+        timing.fail(.enumerationChanged, mismatch: .init(
+          kind: .missingNode, index: index, beforeType: descriptors[index]?.type.rawValue
+        ))
+      }
       return index == nodes.count
-    } == true
+    }
+    if unchanged == nil { timing.fail(.readUnavailable) }
+    return unchanged == true
+  }
+
+  private func presenceMismatchAncestors(
+    _ index: Int, nodes: [SnapshotNode], descriptors: [PresenceDescriptor?]
+  ) -> (types: [UInt], truncated: Bool) {
+    var types: [UInt] = []
+    var child = index
+    var parent = nodes[index].parentIndex
+    while let ancestor = parent {
+      guard types.count < 16, ancestor >= 0, ancestor < child,
+            let descriptor = descriptors[ancestor] else { return (types, true) }
+      types.append(descriptor.type.rawValue)
+      child = ancestor
+      parent = nodes[ancestor].parentIndex
+    }
+    return (types, false)
   }
 
   private func presenceClip(
@@ -491,30 +680,42 @@ extension RnFastRunnerTests {
   // Descriptor and hierarchy stability is proven once for all nodes by the final whole-tree revalidation.
   private func observePresence(
     _ descriptor: PresenceDescriptor, count: Int, predicateIsExact: Bool,
-    app: XCUIApplication, deadline: Double
+    app: XCUIApplication, deadline: Double, timing: PresenceCaptureTiming,
+    unknownReason: ((PlatformPresenceObservation.UnknownReason) -> Void)? = nil
   ) -> Double? {
     // Callers never pass application or window descriptors, so the app root cannot be a match.
     let query = app.descendants(matching: descriptor.type)
       .matching(NSPredicate(format: "identifier == %@ AND label == %@", descriptor.identifier, descriptor.label))
     if predicateIsExact {
       // Type, identifier and label single out this node or its nested text chain in the initial tree.
-      guard presenceRead(deadline: deadline, { query.firstMatch.isHittable }) == true else { return nil }
+      let hittable = presenceRead(deadline: deadline, timing: timing, read: .firstMatch, { query.firstMatch.isHittable })
+      guard hittable == true else {
+        unknownReason?(hittable == nil ? .readUnavailable : .notHittable)
+        return nil
+      }
       return presenceUptimeMs()
     }
-    guard let elements = presenceRead(deadline: deadline, { query.allElementsBoundByAccessibilityElement })
-    else { return nil }
+    guard let elements = presenceRead(deadline: deadline, timing: timing, read: .allMatches, { query.allElementsBoundByAccessibilityElement })
+    else { unknownReason?(.readUnavailable); return nil }
     var matches: [XCUIElement] = []
     for element in elements {
-      guard let snapshot = presenceRead(deadline: deadline, { try element.snapshot() }) else { return nil }
+      guard let snapshot = presenceRead(deadline: deadline, timing: timing, read: .candidateSnapshot, { try element.snapshot() })
+      else { unknownReason?(.readUnavailable); return nil }
       if PresenceDescriptor(snapshot) == descriptor { matches.append(element) }
     }
-    guard matches.count == count else { return nil }
-    for element in matches where presenceRead(deadline: deadline, { element.isHittable }) == true {
+    guard matches.count == count else { unknownReason?(.matchCountMismatch); return nil }
+    var readUnavailable = false
+    for element in matches {
+      let hittable = presenceRead(deadline: deadline, timing: timing, read: .candidateHit, { element.isHittable })
+      if hittable == nil { readUnavailable = true }
+      guard hittable == true else { continue }
       let observed = presenceUptimeMs()
-      guard let after = presenceRead(deadline: deadline, { try element.snapshot() }),
-            PresenceDescriptor(after) == descriptor else { return nil }
+      guard let after = presenceRead(deadline: deadline, timing: timing, read: .postHitSnapshot, { try element.snapshot() })
+      else { unknownReason?(.readUnavailable); return nil }
+      guard PresenceDescriptor(after) == descriptor else { unknownReason?(.postHitMismatch); return nil }
       return observed
     }
+    unknownReason?(readUnavailable ? .readUnavailable : .notHittable)
     return nil
   }
 
@@ -883,6 +1084,89 @@ extension RnFastRunnerTests {
     if !visible { return false }
     if !Self.scrollContainerTypes.contains(snapshot.elementType) { return false }
     return !snapshot.children.isEmpty
+  }
+}
+
+final class PresenceCaptureTiming {
+  private let now: () -> Double
+  private var lastCheckedTime: Double
+  private var invalidClock = false
+  private var phase: PlatformPresenceDiagnostics.Phase = .initialEligibility
+  private var phaseStarted: Double?
+  private var recorded = PlatformPresenceDiagnostics(phaseMs: [:])
+
+  init(started: Double, now: @escaping () -> Double) {
+    self.now = now
+    lastCheckedTime = started
+    phaseStarted = started
+  }
+
+  func begin(_ phase: PlatformPresenceDiagnostics.Phase) {
+    self.phase = phase
+    phaseStarted = now()
+  }
+
+  func preparationStarted(quietWindowMs: Double) {
+    recorded.preparationSamples = 0
+    recorded.preparationResets = 0
+    recorded.preparationQuietWindowMs = quietWindowMs
+    recorded.preparationQuietElapsedMs = 0
+  }
+
+  func preparationSampleStarted() {
+    recorded.preparationSamples = (recorded.preparationSamples ?? 0) + 1
+  }
+
+  func preparationSampleCompleted(reset: Bool, quietElapsedMs: Double) {
+    if reset { recorded.preparationResets = (recorded.preparationResets ?? 0) + 1 }
+    recorded.preparationQuietElapsedMs = quietElapsedMs
+  }
+
+  func endPhase() {
+    guard let started = phaseStarted else { return }
+    let elapsed = now() - started
+    if elapsed.isFinite { recorded.phaseMs[phase.rawValue] = max(0, elapsed) }
+    phaseStarted = nil
+  }
+
+  func fail(
+    _ reason: PlatformPresenceDiagnostics.Reason, phase: PlatformPresenceDiagnostics.Phase? = nil,
+    mismatch: PlatformPresenceDiagnostics.Mismatch? = nil
+  ) {
+    if recorded.failure == nil {
+      recorded.failure = .init(phase: phase ?? self.phase, reason: reason, mismatch: mismatch)
+    }
+  }
+
+  func deadlineReached(
+    _ deadline: Double, read: PlatformPresenceDiagnostics.Read, edge: PlatformPresenceDiagnostics.Edge,
+    phase: PlatformPresenceDiagnostics.Phase? = nil, at time: Double? = nil
+  ) -> Bool {
+    let checked = time ?? now()
+    guard !invalidClock, deadline.isFinite, deadline >= 0,
+          lastCheckedTime.isFinite, lastCheckedTime >= 0,
+          checked.isFinite, checked >= lastCheckedTime else {
+      invalidClock = true
+      fail(.readUnavailable, phase: phase)
+      return true
+    }
+    lastCheckedTime = checked
+    guard checked >= deadline else { return false }
+    if recorded.deadline == nil {
+      recorded.deadline = .init(phase: phase ?? self.phase, read: read, edge: edge)
+    }
+    fail(.deadline, phase: phase)
+    return true
+  }
+
+  func diagnostics(complete: Bool) -> PlatformPresenceDiagnostics {
+    PlatformPresenceDiagnostics(
+      phaseMs: recorded.phaseMs, preparationSamples: recorded.preparationSamples,
+      preparationResets: recorded.preparationResets,
+      preparationQuietWindowMs: recorded.preparationQuietWindowMs,
+      preparationQuietElapsedMs: recorded.preparationQuietElapsedMs,
+      failure: complete ? nil : recorded.failure, deadline: recorded.deadline
+    )
   }
 }
 

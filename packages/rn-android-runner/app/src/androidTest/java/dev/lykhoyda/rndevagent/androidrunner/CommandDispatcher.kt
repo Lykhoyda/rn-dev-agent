@@ -119,7 +119,16 @@ class CommandDispatcher(
         val command = cmd.getString("command")
         val appPackage = cmd.optString("appBundleId").ifBlank { null }
 
-        if (appPackage != null && command in setOf(
+        if (cmd.has("qaReadOnly") && cmd.opt("qaReadOnly") !is Boolean) {
+            return error("INVALID_ARGUMENT", "qaReadOnly must be a boolean")
+        }
+        if (cmd.optBoolean("qaReadOnly", false)) {
+            if (command !in setOf("snapshot", "verifyInput", "isWindowUpdating", "findText", "screenshot", "status") ||
+                appPackage == null || !isPackageForeground(appPackage)
+            ) {
+                return error("ACTION_CONTEXT_CHANGED", "QA read requires the unchanged foreground target; no recovery attempted")
+            }
+        } else if (appPackage != null && command in setOf(
                 "snapshot", "findText", "tap", "press", "type", "fill",
                 "longPress", "drag", "swipe", "scroll", "pinch",
             )
@@ -226,6 +235,7 @@ class CommandDispatcher(
         device.dumpWindowHierarchy(bytes)
         val xml = bytes.toString("UTF-8")
         val nodes = JSONArray()
+        var normalizationDroppedNodes = 0
         val parser = XmlPullParserFactory.newInstance().newPullParser()
         parser.setInput(xml.reader())
 
@@ -259,6 +269,8 @@ class CommandDispatcher(
                         if (secure) node.put("secure", true)
                         nodes.put(node)
                         index += 1
+                    } else {
+                        normalizationDroppedNodes += 1
                     }
                 }
                 parser.next()
@@ -270,7 +282,10 @@ class CommandDispatcher(
             )
         }
 
-        return JSONObject().put("nodes", nodes)
+        return JSONObject()
+            .put("nodes", nodes)
+            .put("truncated", false)
+            .put("normalizationDroppedNodes", normalizationDroppedNodes)
     }
 
     private fun tap(cmd: JSONObject): JSONObject {

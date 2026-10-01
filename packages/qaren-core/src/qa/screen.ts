@@ -2,16 +2,18 @@ import { isRecord } from './questions.js';
 import { createHash } from 'node:crypto';
 import { captureInputPrivacy, nativeLabelMayBeValue } from './privacy.js';
 import { PRIVATE_INPUT_LIMITS } from './private-input-limits.js';
+import { INPUT_HOST_TYPES } from './input-host-types.js';
 import {
   duplicateNodes,
   navigationTitles,
   offscreenNodes,
   scrollChromeNodes,
+  NATIVE_PRESENCE_UNKNOWN_REASONS,
 } from './native-presence.js';
 import type { NativePresence, NativePresenceNode } from './native-presence.js';
 import { associateHeadings, validateHostTypography } from './host-typography.js';
 import type { HeadingEvidence, HostTypography } from './host-typography.js';
-import { associateHosts } from './host-association.js';
+import { associateHosts, type HostAssociationDiagnostic } from './host-association.js';
 
 export type Kind = 'button' | 'input' | 'switch' | 'link' | 'cell' | 'text' | 'image' | 'other';
 export type EvidenceStatus = 'supported' | 'unsupported' | 'unknown';
@@ -60,6 +62,17 @@ export interface Screen {
   pressEvidenceGap?: string;
   reactHostEvidence?: ReactHostEvidence;
 }
+
+const joinedDiagnosticFacts = new WeakMap<
+  Element,
+  {
+    nativeStatus?: NativePresenceNode['status'];
+    nativeUnknownReason?: NativePresenceNode['unknownReason'];
+    pressGapCount: number;
+    fillGapCount: number;
+    gapHosts?: GapHostDiagnostics;
+  }
+>();
 
 export interface NativeNode {
   ref: string;
@@ -279,6 +292,45 @@ function idCounts(ids: Array<string | undefined>): Map<string, number> {
   return counts;
 }
 
+interface GapHostDiagnostics {
+  total: number;
+  truncated: boolean;
+  rows: Array<{
+    hostOrdinal: number;
+    hostKind: 'view' | 'text' | 'virtual-text' | 'scroll-view' | 'input' | 'unknown';
+    capabilities: { press: boolean; fill: boolean };
+    roleCategory: 'none' | 'input' | 'interactive' | 'noninteractive';
+    testIDPresent: boolean;
+    nativeIDPresent: boolean;
+    hidden: boolean;
+    rectStatus: 'positive' | 'zero' | 'unknown';
+    pressGap: boolean;
+    fillGap: boolean;
+    association?: HostAssociationDiagnostic;
+  }>;
+}
+
+function diagnosticHostKind(
+  type: string | null | undefined,
+): GapHostDiagnostics['rows'][number]['hostKind'] {
+  if (INPUT_HOST_TYPES.includes(type ?? '')) return 'input';
+  switch (type) {
+    case 'RCTView':
+    case 'View':
+      return 'view';
+    case 'RCTText':
+    case 'Text':
+      return 'text';
+    case 'RCTVirtualText':
+      return 'virtual-text';
+    case 'RCTScrollView':
+    case 'ScrollView':
+      return 'scroll-view';
+    default:
+      return 'unknown';
+  }
+}
+
 // Legacy offscreen flags are compatibility data, not semantic visibility evidence.
 export function join(
   nodes: NativeNode[],
@@ -304,7 +356,8 @@ export function join(
       false);
   const offscreen = offscreenNodes(nodes, presence);
   const chrome = scrollChromeNodes(nodes, presence);
-  const associations = associateHosts(nodes, reactHostEvidence, presence);
+  const associationDiagnostics = new Map<number, HostAssociationDiagnostic>();
+  const associations = associateHosts(nodes, reactHostEvidence, presence, associationDiagnostics);
   const associatedHosts = new Map(
     [...associations].map(([hostIndex, { nativeIndex }]) => [
       nativeIndex,
@@ -321,9 +374,9 @@ export function join(
   const inputRole = (role: string | null | undefined) => !!role && kindOfRole(role) === 'input';
   // Native type may rule out an operation only while every React host offering it is accounted for.
   const unassociated = (offers: (host: ReactHostObservation) => boolean) =>
-    reactHostEvidence?.hosts.filter(
-      (host, hostIndex) => !host.hidden && offers(host) && !associations.has(hostIndex),
-    ).length ?? 0;
+    reactHostEvidence?.hosts.flatMap((host, hostIndex) =>
+      !host.hidden && offers(host) && !associations.has(hostIndex) ? [hostIndex] : [],
+    ) ?? [];
   const evidenceGap = (count: number) =>
     reactHostEvidence === undefined
       ? 'React host evidence missing'
@@ -333,14 +386,66 @@ export function join(
           ? `${count} interactive React host${count === 1 ? '' : 's'} unassociated`
           : undefined;
   // A host without a testID that is interactive only by role offers no React handler to press.
-  const pressEvidenceGap = evidenceGap(
+  const pressGaps = new Set(
     unassociated(
       (host) => host.capabilities.press === true || (interactiveRole(host.role) && !!host.testID),
     ),
   );
-  const fillEvidenceGap = evidenceGap(
+  const fillGaps = new Set(
     unassociated((host) => host.capabilities.fill === true || inputRole(host.role)),
   );
+  const gapCounts = { pressGapCount: pressGaps.size, fillGapCount: fillGaps.size };
+  const pressEvidenceGap = evidenceGap(gapCounts.pressGapCount);
+  const fillEvidenceGap = evidenceGap(gapCounts.fillGapCount);
+  let gapHosts: GapHostDiagnostics | undefined;
+  try {
+    const ordinals = [...new Set([...pressGaps, ...fillGaps])].sort((a, b) => a - b);
+    if (ordinals.length)
+      gapHosts = {
+        total: ordinals.length,
+        truncated: ordinals.length > 8,
+        rows: ordinals.slice(0, 8).map((hostOrdinal) => {
+          const host = reactHostEvidence!.hosts[hostOrdinal];
+          const measured = reactHostEvidence!.typography?.nodes[hostOrdinal];
+          const rect = measured?.rect;
+          const validRect =
+            rect &&
+            [rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) &&
+            rect.width >= 0 &&
+            rect.height >= 0;
+          return {
+            hostOrdinal,
+            hostKind: diagnosticHostKind(measured?.hostType),
+            capabilities: {
+              press: host.capabilities.press === true,
+              fill: host.capabilities.fill === true,
+            },
+            roleCategory:
+              host.role === null
+                ? 'none'
+                : inputRole(host.role)
+                  ? 'input'
+                  : interactiveRole(host.role)
+                    ? 'interactive'
+                    : 'noninteractive',
+            testIDPresent: typeof host.testID === 'string' && host.testID.length > 0,
+            nativeIDPresent: typeof host.nativeID === 'string' && host.nativeID.length > 0,
+            hidden: host.hidden === true,
+            rectStatus: !validRect
+              ? 'unknown'
+              : rect.width > 0 && rect.height > 0
+                ? 'positive'
+                : 'zero',
+            pressGap: pressGaps.has(hostOrdinal),
+            fillGap: fillGaps.has(hostOrdinal),
+            association: associationDiagnostics.get(hostOrdinal),
+          };
+        }),
+      };
+  } catch {
+    // Diagnostic dependencies cannot change host accounting.
+  }
+  const diagnosticFacts = { ...gapCounts, ...(gapHosts ? { gapHosts } : {}) };
   let width = 0;
   let height = 0;
   for (const n of nodes) {
@@ -501,6 +606,11 @@ export function join(
         'right',
       ]) as Element['side'];
     }
+    joinedDiagnosticFacts.set(element, {
+      ...diagnosticFacts,
+      nativeStatus: observed?.status,
+      nativeUnknownReason: observed?.status === 'unknown' ? observed.unknownReason : undefined,
+    });
     return element;
   });
   digest.forEach((d, i) => {
@@ -538,6 +648,7 @@ export function join(
         values: value ? [value] : [],
         nativeLabelMayBeValue: false,
       });
+    joinedDiagnosticFacts.set(element, diagnosticFacts);
     elements.push(element);
   });
 
@@ -582,7 +693,92 @@ export function assertionView(screen: Screen): string[] {
   return screen.visibleText;
 }
 
-type Projection = { elements: Element[] } | { refuse: string; reason: string };
+export interface VisibilityBlockerDiagnostic {
+  ordinal: number;
+  kind: Kind | 'unknown';
+  nativePresence: boolean;
+  nativeStatus: NativePresenceNode['status'] | 'missing';
+  nativeUnknownReason?: NativePresenceNode['unknownReason'];
+  visibility: Visibility;
+  press: EvidenceStatus;
+  fill: EvidenceStatus;
+  labelSource: NativePresenceNode['labelSource'] | 'missing' | 'unknown';
+  structural: boolean;
+  fields: Record<
+    'label' | 'value' | 'placeholder' | 'identifier',
+    { defined: boolean; nonempty: boolean }
+  >;
+  semanticUnassociatedReact?: number;
+  pressGapCount?: number;
+  fillGapCount?: number;
+  gapHosts?: GapHostDiagnostics;
+}
+
+type Projection =
+  | { elements: Element[] }
+  | { refuse: string; reason: string; diagnostic?: VisibilityBlockerDiagnostic };
+
+function visibilityBlocker(
+  screen: Screen,
+  element: Element,
+  ordinal: number,
+): VisibilityBlockerDiagnostic {
+  const semantic = element.semantic!;
+  const native = semantic.nativePresence;
+  const facts = joinedDiagnosticFacts.get(element);
+  const unknownReason = NATIVE_PRESENCE_UNKNOWN_REASONS.find(
+    (reason) => reason === facts?.nativeUnknownReason,
+  );
+  const member = <T extends string>(value: unknown, allowed: readonly T[]): T | 'unknown' =>
+    allowed.find((item) => item === value) ?? 'unknown';
+  const count = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  const field = (value: unknown) => ({
+    defined: value !== undefined,
+    nonempty: typeof value === 'string' && value.trim().length > 0,
+  });
+  return {
+    ordinal,
+    kind: member(element.kind, [
+      'button',
+      'input',
+      'switch',
+      'link',
+      'cell',
+      'text',
+      'image',
+      'other',
+    ]),
+    nativePresence: native !== undefined,
+    nativeStatus: member(facts?.nativeStatus ?? 'missing', ['observed', 'unknown', 'missing']),
+    ...(unknownReason ? { nativeUnknownReason: unknownReason } : {}),
+    visibility: member(semantic.visibility, ['visible', 'offscreen', 'hidden', 'unknown']),
+    press: member(semantic.press, ['supported', 'unsupported', 'unknown']),
+    fill: member(semantic.fill, ['supported', 'unsupported', 'unknown']),
+    labelSource: member(native?.labelSource ?? 'missing', [
+      'direct',
+      'value',
+      'descendant',
+      'none',
+      'missing',
+    ]),
+    structural: native?.structural === true,
+    fields: {
+      label: field(element.label),
+      value: field(element.value),
+      placeholder: field(element.placeholder),
+      identifier: field(element.testID),
+    },
+    semanticUnassociatedReact: count(screen.semanticUnassociatedReact ?? 0),
+    ...(facts
+      ? {
+          pressGapCount: count(facts.pressGapCount),
+          fillGapCount: count(facts.fillGapCount),
+          ...(facts.gapHosts ? { gapHosts: facts.gapHosts } : {}),
+        }
+      : {}),
+  };
+}
 
 function incomplete(reason: string): { refuse: string; reason: string } {
   return { refuse: 'SCREEN_EVIDENCE_INCOMPLETE', reason };

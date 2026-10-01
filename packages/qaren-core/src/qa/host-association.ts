@@ -7,6 +7,41 @@ import type { HostTypography } from './host-typography.js';
 type Rect = NonNullable<NativeNode['rect']>;
 export type HostAssociation = { nativeIndex: number; anchorIndex: number };
 
+export interface HostAssociationDiagnostic {
+  identity:
+    | 'evidence-unavailable'
+    | 'window-count'
+    | 'window-frame'
+    | 'inline'
+    | 'no-test-id'
+    | 'host-id-ambiguous'
+    | 'native-id-count'
+    | 'outside-window'
+    | 'incompatible-type'
+    | 'frame-mismatch'
+    | 'matched';
+  // Null means the association path never evaluated that check.
+  nativeIdentityCandidateCount: number | null;
+  compatibleCount: number | null;
+  sameFrameCount: number | null;
+  inputContainmentCount?: number;
+  presenceProofCount: number | null;
+  ancestorPath:
+    | 'not-evaluated'
+    | 'valid'
+    | 'self-anchor-missing'
+    | 'ancestor-structure-missing'
+    | 'ancestor-path-mismatch';
+  collisions: number | null;
+  frameMismatch?: {
+    nativeKind: 'TextField' | 'SecureTextField' | 'TextView' | 'other';
+    hostFinite: boolean;
+    nativeFinite: boolean;
+    windowOriginFinite: boolean;
+    delta: { x: number | null; y: number | null; width: number | null; height: number | null };
+  };
+}
+
 export function hostPath(snapshot: HostTypography, start: number): number[] | undefined {
   const path: number[] = [];
   let current: number | null = start;
@@ -58,6 +93,35 @@ function sameFrame(host: Rect | undefined, native: Rect | undefined, window: Rec
   );
 }
 
+function frameMismatchDiagnostic(
+  host: Rect | undefined,
+  native: NativeNode,
+  window: Rect,
+): NonNullable<HostAssociationDiagnostic['frameMismatch']> {
+  const rectFinite = (rect: Rect | undefined) =>
+    !!rect && [rect.x, rect.y, rect.width, rect.height].every(Number.isFinite);
+  const delta = (a: number | undefined, b: number | undefined, offset: number | undefined) => {
+    if (![a, b, offset].every(Number.isFinite)) return null;
+    const difference = a! - (b! + offset!);
+    return Number.isFinite(difference) ? difference : null;
+  };
+  const type = native.type;
+  return {
+    nativeKind:
+      type === 'TextField' || type === 'SecureTextField' || type === 'TextView' ? type : 'other',
+    hostFinite: rectFinite(host),
+    nativeFinite: rectFinite(native.rect),
+    windowOriginFinite: Number.isFinite(window.x) && Number.isFinite(window.y),
+    // Native minus host, with the same window-origin translation as the strict comparison.
+    delta: {
+      x: delta(native.rect?.x, host?.x, window.x),
+      y: delta(native.rect?.y, host?.y, window.y),
+      width: delta(native.rect?.width, host?.width, 0),
+      height: delta(native.rect?.height, host?.height, 0),
+    },
+  };
+}
+
 function contains(outer: Rect, inner: Rect): boolean {
   return (
     inner.x >= outer.x &&
@@ -65,6 +129,27 @@ function contains(outer: Rect, inner: Rect): boolean {
     inner.x + inner.width <= outer.x + outer.width &&
     inner.y + inner.height <= outer.y + outer.height
   );
+}
+
+function containsInputFrame(
+  host: Rect | undefined,
+  native: Rect | undefined,
+  window: Rect,
+): boolean {
+  try {
+    if (!host || !native) return false;
+    const outer = { ...host, x: host.x + window.x, y: host.y + window.y };
+    return (
+      [host, outer, native, window].every(
+        (r) =>
+          r.width > 0 &&
+          r.height > 0 &&
+          [r.x, r.y, r.width, r.height, r.x + r.width, r.y + r.height].every(Number.isFinite),
+      ) && contains(outer, native)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function possibleTextOwner(host: HostTypography['nodes'][number], content: string): boolean {
@@ -94,12 +179,36 @@ export function associateHosts(
   nodes: NativeNode[],
   evidence: ReactHostEvidence | undefined,
   presence: NativePresence | undefined,
+  diagnostics?: Map<number, HostAssociationDiagnostic>,
 ): Map<number, HostAssociation> {
   const associations = new Map<number, HostAssociation>();
+  const note = (index: number, facts: Partial<HostAssociationDiagnostic>) => {
+    if (!diagnostics) return;
+    try {
+      diagnostics.set(index, {
+        identity: 'evidence-unavailable',
+        nativeIdentityCandidateCount: null,
+        compatibleCount: null,
+        sameFrameCount: null,
+        presenceProofCount: null,
+        ancestorPath: 'not-evaluated',
+        collisions: null,
+        ...diagnostics.get(index),
+        ...facts,
+      });
+    } catch {
+      // Diagnostics cannot change association results.
+    }
+  };
+  const unavailable = (identity: HostAssociationDiagnostic['identity']) => {
+    if (diagnostics) evidence?.hosts.forEach((_, index) => note(index, { identity }));
+    return associations;
+  };
   const snapshot = evidence?.typography;
-  if (!evidence?.complete || !snapshot?.complete || !presence) return associations;
+  if (!evidence?.complete || !snapshot?.complete || !presence)
+    return unavailable('evidence-unavailable');
   const windows = nodes.flatMap((node, i) => (node.type === 'Window' ? [i] : []));
-  if (windows.length !== 1) return associations;
+  if (windows.length !== 1) return unavailable('window-count');
   const windowIndex = windows[0];
   const window = nodes[windowIndex].rect;
   if (
@@ -108,7 +217,7 @@ export function associateHosts(
     window.width <= 0 ||
     window.height <= 0
   )
-    return associations;
+    return unavailable('window-frame');
   const paths = snapshot.nodes.map((node) => hostPath(snapshot, node.hostIndex)!);
   const nativePaths = nodes.map((_, i) => nativePath(nodes, i));
   const inWindow = (i: number) =>
@@ -122,30 +231,80 @@ export function associateHosts(
   const duplicates = duplicateNodes(nodes, presence);
   const structural = new Map<number, number>();
   for (const host of snapshot.nodes) {
-    if (inline(host.hostIndex)) continue;
+    if (inline(host.hostIndex)) {
+      note(host.hostIndex, { identity: 'inline' });
+      continue;
+    }
     const id = evidence.hosts[host.hostIndex].testID;
-    if (!id || evidence.hosts.filter((h) => h.testID === id).length !== 1) continue;
+    if (!id) {
+      note(host.hostIndex, { identity: 'no-test-id' });
+      continue;
+    }
+    if (evidence.hosts.filter((h) => h.testID === id).length !== 1) {
+      note(host.hostIndex, { identity: 'host-id-ambiguous' });
+      continue;
+    }
+    const inputHost =
+      host.hostType === 'RCTSinglelineTextInputView' ||
+      host.hostType === 'RCTMultilineTextInputView';
     const matches = nodes.flatMap((node, i) =>
-      node.identifier === id && !duplicates.has(i) ? [i] : [],
+      node.identifier === id && (inputHost || !duplicates.has(i)) ? [i] : [],
     );
+    note(host.hostIndex, {
+      identity: 'native-id-count',
+      nativeIdentityCandidateCount: matches.length,
+    });
     if (matches.length !== 1) continue;
     const nativeIndex = matches[0];
-    if (
-      inWindow(nativeIndex) &&
-      compatible(
-        host.hostType,
-        nodes[nativeIndex].type,
-        nodes.some((n) => n.parentIndex === nativeIndex && n.type === 'ScrollView'),
-      ) &&
-      sameFrame(host.rect, nodes[nativeIndex].rect, window)
-    )
-      structural.set(host.hostIndex, nativeIndex);
+    if (!inWindow(nativeIndex)) {
+      note(host.hostIndex, { identity: 'outside-window' });
+      continue;
+    }
+    const compatibleType = compatible(
+      host.hostType,
+      nodes[nativeIndex].type,
+      nodes.some((n) => n.parentIndex === nativeIndex && n.type === 'ScrollView'),
+    );
+    note(host.hostIndex, {
+      identity: 'incompatible-type',
+      compatibleCount: Number(compatibleType),
+    });
+    if (!compatibleType) continue;
+    const matchingFrame = sameFrame(host.rect, nodes[nativeIndex].rect, window);
+    // Native input accessibility frames can be inset from their React host's outer frame.
+    const matchingGeometry = inputHost
+      ? !evidence.hosts[host.hostIndex].hidden &&
+        containsInputFrame(host.rect, nodes[nativeIndex].rect, window)
+      : matchingFrame;
+    note(host.hostIndex, {
+      identity: 'frame-mismatch',
+      sameFrameCount: Number(matchingFrame),
+      ...(inputHost ? { inputContainmentCount: Number(matchingGeometry) } : {}),
+    });
+    if (!matchingGeometry) {
+      if (diagnostics) {
+        try {
+          note(host.hostIndex, {
+            frameMismatch: frameMismatchDiagnostic(host.rect, nodes[nativeIndex], window),
+          });
+        } catch {
+          // Frame diagnostics cannot change association decisions.
+        }
+      }
+      continue;
+    }
+    structural.set(host.hostIndex, nativeIndex);
+    note(host.hostIndex, { identity: 'matched' });
   }
   const offscreen = offscreenNodes(nodes, presence);
-  const anchors = new Map([...structural].filter(([, i]) => positive(i) || offscreen.has(i)));
-  // A host needs measured presence or proven offscreen geometry; each identified ancestor needs its own structural match.
-  // Covered containers are not hittable, and XCUI hoists nested identified views beside their
-  // descendants' native path, so an ancestor may sit on that path or hang off it, never elsewhere.
+  const anchors = new Map(
+    [...structural].filter(([hostIndex, i]) => {
+      const eligible = positive(i) || offscreen.has(i);
+      note(hostIndex, { presenceProofCount: Number(eligible) });
+      return eligible;
+    }),
+  );
+  // Identified ancestors may be hoisted beside the native path; only the host needs presence.
   const onNativePath = (child: number, ancestor: number) => {
     if (child === ancestor || nativePaths[ancestor].includes(child)) return false;
     // Direct native ancestry proves itself, even when the child overflows its parent.
@@ -161,13 +320,27 @@ export function associateHosts(
   };
   const anchoredPath = (i: number): boolean => {
     const named = paths[i].filter((p) => !inline(p) && !!evidence.hosts[p].testID);
-    return named.every((p, n) => {
+    let reason: HostAssociationDiagnostic['ancestorPath'] = 'valid';
+    const valid = named.every((p, n) => {
       const nativeIndex = (p === i ? anchors : structural).get(p);
-      if (nativeIndex === undefined) return false;
+      if (nativeIndex === undefined) {
+        reason = p === i ? 'self-anchor-missing' : 'ancestor-structure-missing';
+        return false;
+      }
       if (n + 1 === named.length) return true;
       const ancestor = structural.get(named[n + 1]);
-      return ancestor !== undefined && onNativePath(nativeIndex, ancestor);
+      if (ancestor === undefined) {
+        reason = 'ancestor-structure-missing';
+        return false;
+      }
+      if (!onNativePath(nativeIndex, ancestor)) {
+        reason = 'ancestor-path-mismatch';
+        return false;
+      }
+      return true;
     });
+    note(i, { ancestorPath: reason });
+    return valid;
   };
   for (const host of snapshot.nodes) {
     if (!anchoredPath(host.hostIndex)) continue;
@@ -230,12 +403,10 @@ export function associateHosts(
   }
   const admitted = [...associations.values()];
   for (const [hostIndex, association] of associations) {
-    if (
-      admitted.some(
-        (other) => other !== association && other.nativeIndex === association.nativeIndex,
-      )
-    )
-      associations.delete(hostIndex);
+    const collides = (other: HostAssociation) =>
+      other !== association && other.nativeIndex === association.nativeIndex;
+    if (admitted.some(collides)) associations.delete(hostIndex);
+    if (diagnostics) note(hostIndex, { collisions: admitted.filter(collides).length });
   }
   return associations;
 }

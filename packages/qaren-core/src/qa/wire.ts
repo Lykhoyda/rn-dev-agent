@@ -108,7 +108,10 @@ function validCall(value: unknown): boolean {
     (value.ms as number) >= 0 &&
     (value.inputTokens === null ||
       (Number.isSafeInteger(value.inputTokens) && (value.inputTokens as number) >= 0)) &&
-    ['ok', 'timeout', 'network', 'http', 'invalid'].includes(String(value.outcome)) &&
+    ['ok', 'timeout', 'deadline', 'network', 'http', 'invalid'].includes(String(value.outcome)) &&
+    (value.diagnostic === undefined ||
+      value.diagnostic === null ||
+      value.diagnostic === 'retry-after-outside-window') &&
     (value.status === undefined ||
       (Number.isInteger(value.status) &&
         (value.status as number) >= 100 &&

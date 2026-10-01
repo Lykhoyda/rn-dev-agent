@@ -62,6 +62,8 @@ struct Command: Codable {
   let scope: String?
   let raw: Bool?
   var platformPresence: Bool? = nil
+  var qaReadOnly: Bool? = nil
+  var presenceBudgetMs: Int? = nil
   let fullscreen: Bool?
   var guardKeyboard: Bool? = nil
   var targetBounds: SnapshotRect? = nil
@@ -321,6 +323,106 @@ struct PlatformPresenceCapture: Codable {
   let endedUptimeMs: Double
   let enumeration: String
   let complete: Bool
+  let appliedBudgetMs: Int
+  var diagnostics: PlatformPresenceDiagnostics? = nil
+}
+
+struct PlatformPresenceDiagnostics: Codable {
+  enum Phase: String, Codable {
+    case initialEligibility = "initial-eligibility"
+    case preparation, enumeration, observation
+    case finalEligibility = "final-eligibility"
+    case revalidation, finalization
+  }
+
+  enum Reason: String, Codable {
+    case deadline
+    case readUnavailable = "read-unavailable"
+    case ineligible
+    case nodeLimit = "node-limit"
+    case enumerationChanged = "enumeration-changed"
+  }
+
+  enum Read: String, Codable {
+    case appState = "app-state"
+    case alerts, sheets
+    case rootSnapshot = "root-snapshot"
+    case preparationPoll = "preparation-poll"
+    case enumeration
+    case observationLoop = "observation-loop"
+    case observation
+    case firstMatch = "first-match"
+    case allMatches = "all-matches"
+    case candidateSnapshot = "candidate-snapshot"
+    case candidateHit = "candidate-hit"
+    case postHitSnapshot = "post-hit-snapshot"
+    case revalidation, finalization
+  }
+
+  enum Edge: String, Codable {
+    case before, after
+  }
+
+  struct Failure: Codable {
+    let phase: Phase
+    let reason: Reason
+    var mismatch: Mismatch? = nil
+  }
+
+  struct Mismatch: Codable {
+    enum Kind: String, Codable {
+      case descriptorCount = "descriptor-count"
+      case addedNode = "added-node"
+      case missingNode = "missing-node"
+      case node
+    }
+
+    enum Field: Int {
+      case type = 1, identifier = 2, label = 4, value = 8, frame = 16, enabled = 32
+      case depth = 64, parentIndex = 128, initialDescriptorUnavailable = 256
+    }
+
+    struct Geometry: Codable {
+      // Component masks use x=1, y=2, width=4, height=8.
+      var changedMask = 0
+      var beforeFiniteMask = 0
+      var afterFiniteMask = 0
+      var deltaFiniteMask = 0
+      var dx: Double?
+      var dy: Double?
+      var dWidth: Double?
+      var dHeight: Double?
+      let beforeNull: Bool
+      let afterNull: Bool
+      let beforeInfinite: Bool
+      let afterInfinite: Bool
+      let beforeInvalidSize: Bool
+      let afterInvalidSize: Bool
+    }
+
+    let kind: Kind
+    var index: Int? = nil
+    var fieldMask: Int = 0
+    var beforeType: UInt? = nil
+    var afterType: UInt? = nil
+    var geometry: Geometry? = nil
+    var ancestorTypes: [UInt]? = nil
+    var ancestorsTruncated: Bool? = nil
+  }
+
+  struct Deadline: Codable {
+    let phase: Phase
+    let read: Read
+    let edge: Edge
+  }
+
+  var phaseMs: [String: Double]
+  var preparationSamples: Int?
+  var preparationResets: Int?
+  var preparationQuietWindowMs: Double?
+  var preparationQuietElapsedMs: Double?
+  var failure: Failure?
+  var deadline: Deadline?
 }
 
 struct PlatformPresenceObservation: Codable {
@@ -332,12 +434,23 @@ struct PlatformPresenceObservation: Codable {
     case direct, value, descendant, none
   }
 
+  enum UnknownReason: String, Codable {
+    case emptyFrame = "empty-frame"
+    case clipped
+    case ambiguousDescriptor = "ambiguous-descriptor"
+    case notHittable = "not-hittable"
+    case readUnavailable = "read-unavailable"
+    case matchCountMismatch = "match-count-mismatch"
+    case postHitMismatch = "post-hit-mismatch"
+  }
+
   let captureId: String
   let generation: Int
   let nodeIndex: Int
   var status: Status
   let labelSource: LabelSource
   var observedUptimeMs: Double? = nil
+  var unknownReason: UnknownReason? = nil
 }
 
 struct RetainedSnapshotTarget {

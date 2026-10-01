@@ -95,6 +95,25 @@ pub struct JevCall {
     pub outcome: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<JevDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case", try_from = "String")]
+pub enum JevDiagnostic {
+    RetryAfterOutsideWindow,
+}
+
+impl TryFrom<String> for JevDiagnostic {
+    type Error = &'static str;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "retry-after-outside-window" => Ok(Self::RetryAfterOutsideWindow),
+            _ => Err("invalid Jev diagnostic"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -716,7 +735,7 @@ fn refusal_ledger(result: &Value, rows: &[Row], seen: &str) -> Result<Ledger, St
         !matches!(call.scope.as_str(), "preflight" | "parse" | "walk")
             || !matches!(
                 call.outcome.as_str(),
-                "ok" | "timeout" | "network" | "http" | "invalid"
+                "ok" | "timeout" | "deadline" | "network" | "http" | "invalid"
             )
             || call
                 .status

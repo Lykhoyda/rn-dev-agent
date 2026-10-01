@@ -2,6 +2,8 @@
  * Copyright (c) 2026 Anton Lykhoyda
  * SPDX-License-Identifier: MIT
  */
+import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
+import { QA_READ_ONLY_CAPABILITY, checkQaNativeOutcome } from './qa-native-policy.js';
 import { DEVICE_LEASE_REQUIRED, leaseFromEnvironment } from './lease-env.js';
 import { spawn, execFile } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
@@ -42,6 +44,7 @@ import {
   decideRecovery,
   generateCommandId,
   isAmbiguousTransportFailure,
+  isMutatingCommand,
   parseStatusProbeReply,
 } from './transport-recovery.js';
 import { readProcessBirth } from '../lifecycle/process-birth.js';
@@ -121,6 +124,8 @@ export function getAndroidRunnerState(): AndroidRunnerState | null {
 }
 
 export interface RunAndroidArgs {
+  qaContext?: QaDispatchContext;
+  qaReadOnly?: boolean;
   command:
     | 'snapshot'
     | 'tap'
@@ -1710,6 +1715,7 @@ async function sendCommandOnce(
   hostPort: number,
   body: { command?: unknown; commandId?: string },
   timeoutMs: number,
+  qaContext?: QaDispatchContext,
 ): Promise<RunnerResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -1719,13 +1725,15 @@ async function sendCommandOnce(
     if (!capability) {
       throw new Error('RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable');
     }
+    const serialized = JSON.stringify(body);
+    if (isMutatingCommand(body.command)) qaContext?.authorize();
     resp = await fetchImpl(`http://127.0.0.1:${hostPort}/command`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json; charset=UTF-8',
         authorization: `Bearer ${capability}`,
       },
-      body: JSON.stringify(body),
+      body: serialized,
       signal: controller.signal,
     });
   } catch (err) {
@@ -1788,16 +1796,22 @@ async function probeCommandStatus(
 // rethrows and runAndroid's catch maps it to RN_ANDROID_RUNNER_DOWN). Recovery
 // info travels in the return value so callers that don't surface meta (the
 // settle probes) discard it with the response.
-async function postCommandWithRecovery(body: {
-  command?: unknown;
-}): Promise<{ resp: RunnerResponse; recovery?: TransportRecovery }> {
+async function postCommandWithRecovery(
+  body: {
+    command?: unknown;
+  },
+  qaContext?: QaDispatchContext,
+): Promise<{ resp: RunnerResponse; recovery?: TransportRecovery }> {
   const state = runnerState;
   if (!state) throw new Error('rn-android-runner not started');
   const commandId = generateCommandId();
   const timeoutMs = commandTimeoutMs(body.command);
   try {
-    return { resp: await sendCommandOnce(state.hostPort, { ...body, commandId }, timeoutMs) };
+    return {
+      resp: await sendCommandOnce(state.hostPort, { ...body, commandId }, timeoutMs, qaContext),
+    };
   } catch (err) {
+    if (err instanceof QaDispatchError) throw err;
     const message = err instanceof Error ? err.message : String(err);
     if (!isAmbiguousTransportFailure(message)) throw err;
     const decision = decideRecovery(
@@ -1815,6 +1829,7 @@ async function postCommandWithRecovery(body: {
         state.hostPort,
         { ...body, commandId: generateCommandId() },
         timeoutMs,
+        qaContext,
       );
       return { resp: resent, recovery: { commandId, outcome: 'resent' } };
     }
@@ -1877,7 +1892,14 @@ function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
   const out: FlatNode[] = [];
   let synthCounter = 0;
   for (const n of nodes) {
-    if (!n.rect) continue;
+    if (
+      !n ||
+      !n.rect ||
+      ![n.rect.x, n.rect.y, n.rect.width, n.rect.height].every(Number.isFinite) ||
+      n.rect.width < 0 ||
+      n.rect.height < 0
+    )
+      continue;
     const ref = `@e${n.index ?? synthCounter++}`;
     const flat: FlatNode = { ref, type: n.type ?? '', rect: n.rect };
     if (n.label !== undefined) flat.label = n.label;
@@ -1902,7 +1924,39 @@ export function shouldRecoverAndroidAccessibility(
 }
 
 export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
+  const qaReadOnly =
+    (args.qaContext !== undefined || args.qaReadOnly === true) && !isMutatingCommand(args.command);
+  if (args.qaReadOnly && isMutatingCommand(args.command)) {
+    if (args.qaContext) args.qaContext.invalidate();
+    throw new QaDispatchError('ACTION_CONTEXT_CHANGED');
+  }
+  if (args.qaContext || args.qaReadOnly) {
+    args.qaContext?.assertComplete();
+    const before = runnerState;
+    const info = before ? await probeAndroidRunnerHealthInfo(before.hostPort) : null;
+    if (
+      !before ||
+      runnerState !== before ||
+      !info?.reachable ||
+      !info.ok ||
+      !classifyAndroidHealth(info).compatible ||
+      (qaReadOnly && !info.capabilities?.includes(QA_READ_ONLY_CAPABILITY)) ||
+      (args.deviceId !== undefined && before.deviceId !== args.deviceId) ||
+      (args.bundleId !== undefined && before.bundleId !== args.bundleId) ||
+      !androidHealthMatchesAuthority(info, {
+        instanceId: before.instanceId,
+        sessionId: before.sessionId,
+        claimEpoch: before.claimEpoch,
+        deviceId: before.deviceId,
+        appId: before.bundleId,
+      })
+    ) {
+      if (args.qaContext) args.qaContext.invalidate();
+      throw new QaDispatchError('ACTION_CONTEXT_CHANGED');
+    }
+  }
   if (args._staleRef) {
+    args.qaContext?.invalidate();
     return failResult(
       `Element at ref ${args._staleRef} no longer hittable - UI re-rendered since snapshot`,
       'STALE_REF',
@@ -1917,6 +1971,7 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   }
 
   const body: Record<string, unknown> = { command: args.command };
+  if (qaReadOnly) body.qaReadOnly = true;
   if (args.bundleId) body.appBundleId = args.bundleId;
   if (args.x !== undefined) body.x = args.x;
   if (args.y !== undefined) body.y = args.y;
@@ -1947,11 +2002,13 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   let resp: RunnerResponse;
   let recovery: TransportRecovery | undefined;
   try {
-    await startAndroidRunner(args.deviceId, args.bundleId);
+    if (!args.qaContext && !args.qaReadOnly) await startAndroidRunner(args.deviceId, args.bundleId);
     ({ resp, recovery } = await postCommandWithRecovery(
       withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
+      args.qaContext,
     ));
   } catch (err) {
+    if (args.qaContext) args.qaContext.refuse('ACTION_OUTCOME_UNCERTAIN');
     const m = errMessage(err);
     // GH #383: a protocol mismatch (reuse-gate reject, post-start verify, or the
     // /command v-stamp) is a distinct, actionable failure — surface it before the
@@ -1978,6 +2035,8 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   // retries the read exactly once. A second failure remains explicit.
   let accessibilityRecovery: 'runner-restarted' | undefined;
   if (shouldRecoverAndroidAccessibility(args.command, resp)) {
+    if (args.qaContext) args.qaContext.invalidate();
+    if (args.qaReadOnly) throw new QaDispatchError('ACTION_CONTEXT_CHANGED');
     await stopAndroidRunner(args.deviceId);
     await startAndroidRunner(args.deviceId, args.bundleId);
     ({ resp, recovery } = await postCommandWithRecovery(
@@ -1994,6 +2053,7 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
     ...(recovery ? { transportRecovery: recovery } : {}),
     ...(accessibilityRecovery ? { accessibilityRecovery } : {}),
   };
+  checkQaNativeOutcome(args.qaContext, resp.error?.code, resp.data, resp.error?.reason);
   if (!resp.ok) {
     const message = resp.error?.message ?? 'Android runner returned !ok with no error';
     const code = resp.error?.code;
@@ -2078,14 +2138,30 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   }
 
   if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {
-    const data = resp.data as { nodes?: RunnerSnapshotNode[] };
+    const data = resp.data as {
+      nodes?: RunnerSnapshotNode[];
+      truncated?: unknown;
+      normalizationDroppedNodes?: unknown;
+    };
     if (Array.isArray(data.nodes)) {
       const flat = mapRunnerNodesToFlat(data.nodes);
       const outcome = updateRefMapFromFlat(flat);
-      // GH #409: same capture-quality contract as the iOS client — empty
-      // captures report degraded and never clobber last-known-good refs.
       const snapshotVerdict = buildSnapshotVerdict('rn-android-runner', flat.length, outcome);
-      return okResult({ nodes: flat }, { meta: { snapshotVerdict, ...recoveryMeta } });
+      const producerDropped = data.normalizationDroppedNodes;
+      const dropped =
+        typeof producerDropped === 'number' &&
+        Number.isSafeInteger(producerDropped) &&
+        producerDropped >= 0
+          ? producerDropped + (data.nodes.length - flat.length)
+          : undefined;
+      return okResult(
+        {
+          nodes: flat,
+          ...(typeof data.truncated === 'boolean' ? { truncated: data.truncated } : {}),
+          ...(Number.isSafeInteger(dropped) ? { normalizationDroppedNodes: dropped } : {}),
+        },
+        { meta: { snapshotVerdict, ...recoveryMeta } },
+      );
     }
   }
 

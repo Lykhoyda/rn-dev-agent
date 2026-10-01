@@ -1,6 +1,7 @@
 export function nativeCapture() {
   const presenceCapture = {
-    version: 1,
+    version: 2,
+    appliedBudgetMs: 20_000,
     source: 'xcui-live',
     captureId: 'capture-7',
     appId: 'com.test',

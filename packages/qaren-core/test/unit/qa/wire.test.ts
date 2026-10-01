@@ -216,6 +216,10 @@ test('preflight accounting round-trips and rejects malformed or walk-scoped entr
       payload: { ...request, preflightCalls: calls },
     });
   assert.deepEqual(parseRequest(encoded(preflightCalls)).preflightCalls, preflightCalls);
+  const bounded = [
+    { ...preflightCalls[0], outcome: 'deadline', diagnostic: 'retry-after-outside-window' },
+  ];
+  assert.deepEqual(parseRequest(encoded(bounded)).preflightCalls, bounded);
   for (const calls of [
     null,
     {},
@@ -224,6 +228,8 @@ test('preflight accounting round-trips and rejects malformed or walk-scoped entr
     [{ ...preflightCalls[0], scope: 'walk' }],
     [{ ...preflightCalls[0], questionIds: ['private text not an id'] }],
     [{ ...preflightCalls[0], inputTokens: -5 }],
+    [{ ...preflightCalls[0], diagnostic: 'private transport message' }],
+    [{ ...preflightCalls[0], diagnostic: 42 }],
   ])
     assert.throws(() => parseRequest(encoded(calls)), /missing required fields/);
 });
