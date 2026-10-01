@@ -72939,18 +72939,18 @@ var maestro_runner_pin_default;
 var init_maestro_runner_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json"() {
     maestro_runner_pin_default = {
-      version: "1.1.27",
+      version: "1.1.28",
       sha256: {
-        "darwin-arm64": "e7096a1ddd004778e56a2487d5cfb0969253c1b7dc9463d67dfa49bfe977156d",
-        "darwin-x64": "64a12d653722741b3a7d266238396e9bff2b739112387d8cad2ed91f10ccd6cb",
-        "linux-x64": "83dfb2be543c4ad2b58f28f191395b139685571223e47ffc406519f885ccb557",
-        "linux-arm64": "fcfffa58d205ff05d27bc466c919d330a97d50123c6c9a15e348ced60466cc4b"
+        "darwin-arm64": "2f6e3e9d72f99d001e6bf9a3d2939f8274ce9ff5169dc5411d6aa362c8c85d84",
+        "darwin-x64": "5a6a9b74511cf6f531f723733db055b952e8137b021f0ce362b735b043a1039e",
+        "linux-x64": "7a781bdfa0dcf191baab4481904fe35fc8935072170e4ca62287cc57318c5db4",
+        "linux-arm64": "3ed1949dca03aec77a545a85c3a3bc1ebc9642b04023aea06a06c1ab15e5da3e"
       },
       archiveSha256: {
-        "darwin-arm64": "223615595dd9b2534f3987bab9a02200c18f685e7a99f20b48279ea72534db6d",
-        "darwin-x64": "aade54c71cd5c7652b23ce6983cbf6d3a208f4900a7e476ca62cb393e2f6efd4",
-        "linux-x64": "886c5dc0c6c84f697c5814af9044b273837115a7775b0bda16ce9e8324f17b4e",
-        "linux-arm64": "c36a132e0d8e6243cf075994e099225d353e99e35fa31d405eb4f61026228ae0"
+        "darwin-arm64": "2670df92f15d164a9f1a3fa8e5397b1aecbb4ff6e12894ed74380cac9f16f924",
+        "darwin-x64": "8ca04fc7d882def955ef28ee79f45f508ef56899824029ba31bf6a860cbb2752",
+        "linux-x64": "48d370d5dbf98ac019df59fe1c7d328dc1b9304cbe823a735e07054eef6c6b9d",
+        "linux-arm64": "49e50c46ac7ade700a61a570ca17d0d2807522d424ea162f631e73196656fa8f"
       },
       knownQuirks: [
         {
@@ -73821,7 +73821,8 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2, pl
       if (entry.isDirectory())
         chmodSync5(entryPath, 320);
       else if (entry.isFile()) {
-        chmodSync5(entryPath, entryPath === snapshotRunner || entryPath === snapshotHelper ? 320 : 256);
+        const executable = entryPath === snapshotRunner || entryPath === snapshotHelper || (lstatSync13(entryPath).mode & 73) !== 0;
+        chmodSync5(entryPath, executable ? 320 : 256);
       }
     }
     chmodSync5(snapshotRoot, 320);
@@ -100882,7 +100883,7 @@ var init_index = __esm({
       getLiveRoute: () => readLiveRoute(getClient()),
       nativeVisionProbe: probeNativeVision
     });
-    trackedTool("maestro_run", "Execute a validated flow using semantic proof-domain routing. On iOS, exact-testID React commands execute through the authority-bound React tree before WDA can claim selector truth; text/system/native-only commands remain XCTest, and mixed flows are partitioned before execution without React-to-XCTest correlation. Results label react-tree and xctest-native proof domains explicitly; a React-tree pass is never Maestro certification or proof of IME, AutoFill, keyboard occlusion, or native interaction fidelity. Android and native-only iOS flows use the pin-cache maestro-runner >= 1.1.27. A ledger-proven trailing-verification-only failure remains failed with meta.trailingVerification; verify the unproven goal state before retrying or rebooting. Pass flowPath for an existing .yaml file or inlineYaml for an ephemeral flow.", {
+    trackedTool("maestro_run", "Execute a validated flow using semantic proof-domain routing. On iOS, exact-testID React commands execute through the authority-bound React tree before WDA can claim selector truth; text/system/native-only commands remain XCTest, and mixed flows are partitioned before execution without React-to-XCTest correlation. Results label react-tree and xctest-native proof domains explicitly; a React-tree pass is never Maestro certification or proof of IME, AutoFill, keyboard occlusion, or native interaction fidelity. Android and native-only iOS flows use the pin-cache maestro-runner >= 1.1.28. A ledger-proven trailing-verification-only failure remains failed with meta.trailingVerification; verify the unproven goal state before retrying or rebooting. Pass flowPath for an existing .yaml file or inlineYaml for an ephemeral flow.", {
       flowPath: external_exports.string().optional().describe("Path to a .yaml flow file to execute"),
       inlineYaml: external_exports.string().optional().describe("Inline YAML flow content (written to /tmp and executed)"),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform (auto-detected from session)"),

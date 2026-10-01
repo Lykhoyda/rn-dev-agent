@@ -39,7 +39,7 @@ function wizardYaml(status: 'active' | 'experimental' = 'active'): string {
     '# tags: [tasks, wizard, create]',
     '# mutates: true',
     `# status: ${status}`,
-    '# enginePin: maestro-runner@1.1.27',
+    '# enginePin: maestro-runner@1.1.28',
     '',
     '- launchApp:',
     '    stopApp: false',
