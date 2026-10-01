@@ -1,18 +1,14 @@
 # Lykhoyda/rn-dev-agent security
 
-This repository contains the in-development **QaReN** CLI and its TypeScript
-screen core, native runners and host package. The latest release on `main`
-remains the rn-dev-agent 1.x MCP plugin. Both run locally on the operator's
-machine; this is not a hosted SaaS or a generic Node library.
+**rn-dev-agent** is the Claude Code, Codex, and Cursor plugin (`rn-dev-agent-plugin` / `rn-dev-agent-core`) for local React Native / Expo development. It is not a hosted SaaS and not a generic Node library.
 
-See the [product introduction](README.md) for this checkout and the
-[CLI guide](packages/qaren-cli/README.md) for its supported run paths.
+Install it from the Claude Code, Codex, or Cursor marketplace. It runs on the operator's machine: the MCP supervisor, managed Metro, and packaged iOS/Android runners drive a local simulator, emulator, or a bound physical device.
 
 ## Report scope
 
-**In scope:** vulnerabilities in the CLI, screen core, host package, packaged native runners and local Observe UI in this repository, including the released 1.x plugin.
+**In scope:** vulnerabilities in this plugin, `rn-dev-agent-core`, the packaged native runners, and the local Observe UI as shipped from this repo.
 
-**Out of scope:** a cloud backend (this repo has none) and operator-driven use of these local tools against an app the operator chose. Operator limits for runtime introspection are in [README Security](README.md#security).
+**Out of scope:** a cloud backend (this repo has none) and operator-driven use of these local tools against an app the operator chose. Operator limits such as `cdp_evaluate` are in [README Security](README.md#security).
 
 ## Support
 

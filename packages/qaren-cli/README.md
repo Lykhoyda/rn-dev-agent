@@ -9,17 +9,25 @@ NUC Android and USB Android setup experiments.
 
 ## Build
 
-Follow the [source build instructions](../../README.md#build-from-source).
-The binary's screen child uses the generated
+```sh
+corepack yarn install --immutable
+corepack yarn build:core
+cargo build --manifest-path packages/qaren-cli/Cargo.toml --locked
+```
+
+Run these commands from the repository root. The binary is
+`packages/qaren-cli/target/debug/qaren`; its screen child uses the generated
 `packages/qaren-core/dist/`. Set `QAREN_RUNTIME` to its absolute path when running
 the binary from another location. Set `TYPESAFE_API_KEY` for Jev judgments;
 even a literal plan performs a live readiness judgment before device allocation.
 
 ## Check a plan
 
-From the app's directory, supply `.qaren/config.yaml` and a Markdown plan.
-Use the [common check invocation](../../README.md#check-an-app), with the built
-binary on PATH or named by its absolute path.
+From the app's directory, supply `.qaren/config.yaml` and a Markdown plan:
+
+```sh
+qaren check --plan-file plan.md --device <simulator-UUID> --json
+```
 
 The configuration keys, defaults and validation are owned by
 [`src/config.rs`](src/config.rs). iOS requires `appId` and `devClientScheme`;
