@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 
 import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
+import { getActiveSession, _setActiveSessionForTest } from '../../dist/agent-device-wrapper.js';
 import {
   nativeSelectorsForCommands,
   planIosProofDomains,
@@ -331,12 +332,19 @@ test('hideKeyboard after exact-testID steps is refused before WDA', async () => 
   assert.deepEqual(calls, []);
 });
 
-test('default saved-action replay refuses late native steps before native dispatch', async () => {
-  const project = createTmpProject();
-  try {
-    project.seedAction(
-      'late-native',
-      `appId: com.example.app
+for (const platform of ['ios', undefined] as const) {
+  test(`default saved-action refuses late native steps (${platform ?? 'session iOS'})`, async () => {
+    const project = createTmpProject();
+    const priorSession = getActiveSession();
+    try {
+      _setActiveSessionForTest({
+        name: 'late-native-test',
+        platform: 'ios',
+        openedAt: new Date(0).toISOString(),
+      });
+      project.seedAction(
+        'late-native',
+        `appId: com.example.app
 ---
 # id: late-native
 # intent: submit
@@ -346,49 +354,102 @@ test('default saved-action replay refuses late native steps before native dispat
     id: submit
 - hideKeyboard
 `,
-      null,
-    );
-    const calls: string[] = [];
-    const handler = createRunActionHandler({
-      engineStatus: async () => {
-        calls.push('native-runtime-preflight');
-        return buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false);
-      },
-      claimNativeOrigin: async () => {
-        calls.push('claim-native-origin');
-      },
-      completeNativeOrigin: async () => {
-        calls.push('complete-native-origin');
-      },
-      relaunchManagedApp: async () => {
-        calls.push('relaunch');
-      },
-      reproveManagedOrigin: async () => {
-        calls.push('reprove');
-      },
-    });
-    const env = envelope(
-      await handler({
-        actionId: 'late-native',
-        projectRoot: project.root,
-        platform: 'ios',
-        autoRepair: false,
-        forceReload: false,
-      }),
-    );
-    assert.equal(env.ok, false);
-    assert.equal(env.code, 'UNSUPPORTED_STEP');
-    assert.equal(
-      env.error,
-      'Refusing iOS proof-domain ambiguity at step 1: hideKeyboard: a native segment starts a new runner session that relaunches the app and discards the React-tree steps.',
-    );
-    assert.equal(env.meta?.actionId, 'late-native');
-    assert.equal(env.meta?.sourceIndex, 1);
-    assert.deepEqual(env.meta?.proofDomains, ['react-tree', 'xctest-native']);
-    assert.deepEqual(calls, []);
-  } finally {
-    project.cleanup();
-  }
+        null,
+      );
+      const calls: string[] = [];
+      const handler = createRunActionHandler({
+        engineStatus: async () => {
+          calls.push('native-runtime-preflight');
+          return buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false);
+        },
+        claimNativeOrigin: async () => {
+          calls.push('claim-native-origin');
+        },
+        completeNativeOrigin: async () => {
+          calls.push('complete-native-origin');
+        },
+        relaunchManagedApp: async () => {
+          calls.push('relaunch');
+        },
+        reproveManagedOrigin: async () => {
+          calls.push('reprove');
+        },
+      });
+      const env = envelope(
+        await handler({
+          actionId: 'late-native',
+          projectRoot: project.root,
+          platform,
+          appId: 'com.example.app',
+          autoRepair: false,
+          forceReload: false,
+          proofReplay: true,
+        }),
+      );
+      assert.equal(env.ok, false);
+      assert.equal(env.code, 'UNSUPPORTED_STEP');
+      assert.match(env.error ?? '', /Refusing iOS proof-domain ambiguity at step 1: hideKeyboard:/);
+      assert.equal(env.meta?.actionId, 'late-native');
+      assert.equal(env.meta?.sourceIndex, 1);
+      assert.deepEqual(env.meta?.proofDomains, ['react-tree', 'xctest-native']);
+      assert.deepEqual(calls, platform ? [] : ['native-runtime-preflight']);
+    } finally {
+      _setActiveSessionForTest(priorSession);
+      project.cleanup();
+    }
+  });
+}
+
+test('Maestro without replay adapters refuses late native steps before dispatch', async () => {
+  const calls: string[] = [];
+  const handler = createMaestroRunHandler({
+    chooseDispatch: () => {
+      calls.push('dispatch');
+      return { error: 'unexpected native dispatch' };
+    },
+    parkFlow: async (run) => {
+      calls.push('park');
+      return run();
+    },
+    claimNativeOrigin: async () => {
+      calls.push('claim');
+    },
+    execFile: async () => {
+      calls.push('runner');
+      return { stdout: '', stderr: '' };
+    },
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      appId: 'com.example.app',
+      inlineYaml: 'appId: com.example.app\n---\n- tapOn:\n    id: submit\n- hideKeyboard\n',
+    }),
+  );
+  assert.equal(env.code, 'UNSUPPORTED_STEP');
+  assert.equal(env.meta?.sourceIndex, 1);
+  assert.deepEqual(env.meta?.proofDomains, ['react-tree', 'xctest-native']);
+  assert.match(env.error ?? '', /Refusing iOS proof-domain ambiguity at step 1: hideKeyboard:/);
+  assert.deepEqual(calls, []);
+});
+
+test('native-only iOS flows without exact testIDs still reach native dispatch', async () => {
+  let dispatches = 0;
+  const handler = createMaestroRunHandler({
+    chooseDispatch: () => {
+      dispatches++;
+      return { error: 'native dispatch reached' };
+    },
+  });
+  const env = envelope(
+    await handler({
+      platform: 'ios',
+      appId: 'com.example.app',
+      inlineYaml: 'appId: com.example.app\n---\n- inputText: autofocused value\n- hideKeyboard\n',
+    }),
+  );
+  assert.equal(dispatches, 1);
+  assert.equal(env.error, 'native dispatch reached');
 });
 
 test('ordinary missing React testID stays TESTID_NOT_FOUND without WDA', async () => {
