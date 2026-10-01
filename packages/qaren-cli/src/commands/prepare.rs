@@ -2093,6 +2093,7 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
             }
         }
     }
+    crate::progress::finished(&spec.label, exit == Some(0));
     let mut outcome = super::cleanup::cleanup_build(ctx.runner, &mut ctx.record, &ctx.runs_root)
         .expect("build recorded");
     if !outcome.clean() && exit.is_none() && matches!(child.handle.try_wait(), Ok(Some(_))) {

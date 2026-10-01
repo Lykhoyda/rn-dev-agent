@@ -400,6 +400,7 @@ impl Inbox {
                 }
                 match serde_json::from_value::<Row>(payload.clone()) {
                     Ok(row) => {
+                        crate::progress::row(&row);
                         self.rows.push(row);
                         true
                     }

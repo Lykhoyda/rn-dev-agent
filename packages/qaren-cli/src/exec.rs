@@ -274,11 +274,14 @@ impl Runner for RealRunner {
     fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
         self.executed += 1;
         let started = Instant::now();
+        crate::progress::started(&spec.label, false);
         let output = run_captured(spec, &started, None)
             .unwrap_or_else(|e| io_failure(&started, format!("{}: {e}", spec.label)));
-        if let Err(e) = self.flush_logs() {
-            return io_failure(&started, format!("drain logs: {e}"));
-        }
+        let output = match self.flush_logs() {
+            Ok(()) => output,
+            Err(e) => io_failure(&started, format!("drain logs: {e}")),
+        };
+        crate::progress::finished(&spec.label, output.ok());
         output
     }
 
@@ -296,6 +299,7 @@ impl Runner for RealRunner {
     fn spawn_group(&mut self, spec: &CmdSpec, log_path: &Path) -> std::io::Result<Spawned> {
         use std::os::unix::process::CommandExt;
         self.executed += 1;
+        crate::progress::started(&spec.label, true);
         let (log_out, output) = log::LogDrain::spawn(&self.log_executable, log_path)?;
         let (log_err, error) = log::LogDrain::spawn(&self.log_executable, log_path)?;
         let mut cmd = Command::new(&spec.program);
@@ -323,6 +327,7 @@ impl Runner for RealRunner {
     fn spawn_piped(&mut self, spec: &CmdSpec, stderr_log: &Path) -> std::io::Result<PipedChild> {
         use std::os::unix::process::CommandExt;
         self.executed += 1;
+        crate::progress::started(&spec.label, true);
         let (log, stderr) = log::LogDrain::spawn(&self.log_executable, stderr_log)?;
         let mut cmd = Command::new(&spec.program);
         cmd.args(&spec.args)
