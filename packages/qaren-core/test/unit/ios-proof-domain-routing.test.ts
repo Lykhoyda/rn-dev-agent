@@ -520,6 +520,17 @@ test('neutral prefixes do not trigger late-native refusal before an exact testID
   }
 });
 
+test('22 neutral waits followed by inputText still plan without an exact testID', () => {
+  const plan = planIosProofDomains(
+    [
+      ...Array.from({ length: 22 }, () => ({ waitForAnimationToEnd: null })),
+      { inputText: 'autofocused value' },
+    ],
+    {},
+  );
+  assert.equal(plan.ok, true);
+});
+
 test('the real login shape partitions native prefix from exact React suffix', () => {
   const commands = [
     { launchApp: { clearState: true, stopApp: true } },

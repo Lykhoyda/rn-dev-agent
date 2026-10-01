@@ -169,7 +169,9 @@ export function planIosProofDomains(
     }
   }
   const firstReact = segments.findIndex(
-    (segment) => segment.domain === 'react-tree' && segment.commands.some(containsExactId),
+    (segment) =>
+      segment.domain === 'react-tree' &&
+      segment.commands.some((command) => containsExactId(command)),
   );
   if (firstReact !== -1) {
     for (const segment of segments.slice(firstReact + 1)) {
