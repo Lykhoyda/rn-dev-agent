@@ -181,6 +181,25 @@ test('inspection cannot override native paths, shell ambiguity, drivers or inval
   }
 });
 
+test('complete inspection shares the combined 64-candidate admission budget', async () => {
+  let calls = 0;
+  const scan = (async () => ({
+    stdout:
+      Array.from(
+        { length: 64 },
+        (_, i) => `${20 + i} /usr/bin/java -classpath lib maestro.cli.AppKt mcp\n`,
+      ).join('') + `84 node -e ${program}\n`,
+  })) as unknown as typeof execFile;
+  assert.equal(
+    await probeIosExternalRunnerStrict(scan, device, async () => {
+      calls++;
+      return identity;
+    }),
+    'unknown',
+  );
+  assert.equal(calls, 0);
+});
+
 test('complete inspection cannot extend the overall observation deadline', async (t) => {
   let now = 0;
   t.mock.method(performance, 'now', () => now);

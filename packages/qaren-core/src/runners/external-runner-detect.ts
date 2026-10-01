@@ -104,6 +104,7 @@ export function isIosExternalRunnerProcessLine(line: string): boolean {
 const RN_FAST_RUNNER_RE = /RnFastRunner/i;
 
 const IOS_PS_OPTIONS = { timeout: 2_000, maxBuffer: 1024 * 1024, encoding: 'utf8' as const };
+const MAX_ADMISSION_CANDIDATES = 64;
 
 function readIosProcesses(
   execFileImpl: typeof execFile,
@@ -434,9 +435,20 @@ export async function probeIosExternalRunnerStrict(
     const drivers = lines.filter(
       (line) => !isUnscopedMcpControl(line) && isIosStrictRunnerProcessLine(line),
     );
+    const driverLines = new Set(drivers);
+    const unresolved = lines.filter(
+      (line) =>
+        !driverLines.has(line) &&
+        (isUnscopedMcpControl(line) || hasUnresolvedIosExecutablePath(line)),
+    );
+    if (
+      drivers.length + unresolved.length > MAX_ADMISSION_CANDIDATES ||
+      performance.now() >= deadline
+    )
+      return 'unknown';
     const target = new RegExp(`(?:^|[^a-z0-9-])${udid}(?=$|[^a-z0-9-])`, 'i');
     if (drivers.some((line) => target.test(line))) return 'busy';
-    if (drivers.length > 0 && (!observeIdentity || drivers.length > 16)) return 'unknown';
+    if (drivers.length > 0 && !observeIdentity) return 'unknown';
     for (const line of drivers) {
       const remaining = Math.floor(deadline - performance.now());
       if (remaining <= 0) return 'unknown';
@@ -448,14 +460,9 @@ export async function probeIosExternalRunnerStrict(
       if (performance.now() >= deadline || !devices) return 'unknown';
       if (devices.some((device) => device.toLowerCase() === udid.toLowerCase())) return 'busy';
     }
-    const unresolved = lines.filter(
-      (line) =>
-        !drivers.includes(line) &&
-        (isUnscopedMcpControl(line) || hasUnresolvedIosExecutablePath(line)),
-    );
     if (performance.now() >= deadline) return 'unknown';
     if (!unresolved.length) return 'clear';
-    if (!observeIdentity || unresolved.length > 16) return 'unknown';
+    if (!observeIdentity) return 'unknown';
     for (const line of unresolved) {
       const remaining = Math.floor(deadline - performance.now());
       if (remaining <= 0) return 'unknown';
