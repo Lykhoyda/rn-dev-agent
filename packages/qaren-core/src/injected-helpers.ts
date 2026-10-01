@@ -1,5 +1,6 @@
 import { PRIVATE_INPUT_LIMITS } from './qa/private-input-limits.js';
 import { TYPOGRAPHY_TEXT_LIMITS } from './qa/host-typography.js';
+import { INPUT_HOST_TYPES } from './qa/input-host-types.js';
 
 // Bump when the injected surface changes so warm runtimes replace stale helpers.
 export const HELPERS_VERSION = 90;
@@ -692,7 +693,7 @@ export const INJECTED_HELPERS = `
       var proto = Object.getPrototypeOf(props);
       if (proto !== null && Object.getPrototypeOf(proto) !== null) throw new Error('Capture refused');
       var name = qaHostType(fiber);
-      var known = ['TextInput', 'RCTTextInput', 'RCTSinglelineTextInputView', 'RCTMultilineTextInputView', 'AndroidTextInput'].indexOf(name) !== -1;
+      var known = ${JSON.stringify(INPUT_HOST_TYPES)}.indexOf(name) !== -1;
       var secure = qaData(props, 'secureTextEntry');
       var value = qaData(props, 'value');
       var text = qaData(props, 'text');
@@ -1670,18 +1671,10 @@ export const INJECTED_HELPERS = `
     return output;
   }
 
-  // Task 2 — live-fiber host-kind classifier. Ports RNTL host-component-names.ts
-  // (isHostText/isHostTextInput/isHostImage/isHostSwitch/isHostScrollView/
-  // isHostModal). RNTL keys off a STRING instance.type; live fibers carry the
-  // host name as a raw string fiber.type OR as fiber.type.displayName/name for
-  // native views, so we resolve a string name from both shapes via getName.
-  // Name lists are widened to the native view names (RCTSinglelineTextInputView,
-  // RCTImageView, RCTModalHostView, ...) per FIXED INTERFACES because the live
-  // tree exposes the platform view name, not the JS component name. Returns null
-  // for plain Views, user components, text nodes (tag 6) and null types.
+  // Known host kinds use platform view names, not composite component names.
   var HOST_KIND_NAMES = {
     text: ['Text', 'RCTText'],
-    textinput: ['TextInput', 'RCTTextInput', 'RCTSinglelineTextInputView', 'RCTMultilineTextInputView', 'AndroidTextInput'],
+    textinput: ${JSON.stringify(INPUT_HOST_TYPES)},
     image: ['Image', 'RCTImageView', 'RCTImage'],
     switch: ['Switch', 'RCTSwitch'],
     scrollview: ['ScrollView', 'RCTScrollView'],

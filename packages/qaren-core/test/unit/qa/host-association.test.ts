@@ -234,7 +234,7 @@ const unproven: Array<[string, (f: ReturnType<typeof fixture>) => void]> = [
     },
   ],
   [
-    'unmapped input host type',
+    'input host cannot associate with a generic native view',
     (f) => {
       f.hostEvidence.typography!.nodes[0].hostType = 'RCTSinglelineTextInputView';
     },

@@ -1,4 +1,5 @@
 import { duplicateNodes, offscreenNodes } from './native-presence.js';
+import { INPUT_HOST_TYPES } from './input-host-types.js';
 import type { NativePresence } from './native-presence.js';
 import type { NativeNode, ReactHostEvidence } from './screen.js';
 import type { HostTypography } from './host-typography.js';
@@ -32,6 +33,11 @@ function compatible(
   native: string | undefined,
   scrollsBeneath = false,
 ): boolean {
+  if (host === 'RCTSinglelineTextInputView')
+    return native === 'TextField' || native === 'SecureTextField';
+  if (host === 'RCTMultilineTextInputView') return native === 'TextView';
+  if (INPUT_HOST_TYPES.includes(host ?? ''))
+    return native === 'TextField' || native === 'SecureTextField' || native === 'TextView';
   if (host === 'RCTText' || host === 'Text') return native === 'StaticText';
   if (host === 'RCTView' || host === 'View')
     return native === 'Other' || native === 'Button' || native === 'Cell';
