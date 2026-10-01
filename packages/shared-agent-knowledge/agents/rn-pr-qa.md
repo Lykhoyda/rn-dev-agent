@@ -204,12 +204,9 @@ the journey.
    Then `cdp_navigation_state` must return a real app route and a baseline
    `device_screenshot` must show the app with no dev-menu sheet and no
    Expo gear (the floating dev-menu button). Neither call removes the
-   gear. On iOS simulators rn-dev-agent turns it off before launch by
-   writing Expo's `EXDevMenuShowFloatingActionButton` = `false` into the
-   app's defaults (unless `autoHideDevMenu` is off); on Android and
-   physical devices the app under test turns it off at build time with
-   the same key (iOS `Info.plist` key, Android `<application>`
-   `meta-data`). A visible dev-menu sheet or
+   gear. For managed launch suppression and physical-device build settings,
+   read [dev-menu troubleshooting](https://lykhoyda.github.io/rn-dev-agent/troubleshooting/#expo-dev-menu-sheet-onboarding-tutorial-or-gear-appears-after-a-managed-launch).
+   A visible dev-menu sheet or
    gear, a dev-client picker, a missing Hermes target, or a
    session-authority refusal other than a `RUNNER_OWNERSHIP_MISMATCH`
    that re-opening the device clears (item 4) is **FAIL** for the target

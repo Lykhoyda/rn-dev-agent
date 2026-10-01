@@ -59,6 +59,6 @@ Default platform is `all` — every target that can be proven present. A request
 - Android emulator: Android SDK + AVD
 - Physical: USB debugging, exclusive claim, exact serial
 - Pin-cache maestro-runner `>= 1.1.27`
-- Expo dev client: floating dev-menu gear off — on iOS simulators rn-dev-agent turns it off before launch with its other dev-menu defaults (`EXDevMenuShowFloatingActionButton` = `false`, unless `autoHideDevMenu` is off); on Android and physical devices the app turns it off at build time with the same key; a visible gear is FAIL
+- Expo dev client: floating dev-menu gear off; a visible gear is FAIL. See [managed launch and physical-device gear settings](/rn-dev-agent/troubleshooting/#expo-dev-menu-sheet-onboarding-tutorial-or-gear-appears-after-a-managed-launch).
 
 This command runs the [`rn-pr-qa`](../../agents/rn-pr-qa/) protocol inline in the parent session (GH #31).
