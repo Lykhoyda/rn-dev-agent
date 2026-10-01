@@ -157,6 +157,12 @@ pub fn render(input: &ReportInput<'_>) -> String {
         summary.recoveries,
         prose(&summary.path)
     ));
+    if let Some(speed) = &input.ledger.speed {
+        out.push_str(&format!(
+            "stepMedianMs {} · stepP95Ms {} · walkMs {}\n",
+            speed.step_median_ms, speed.step_p95_ms, speed.walk_ms
+        ));
+    }
     out
 }
 

@@ -212,6 +212,7 @@ mod tests {
             outcome: outcome.into(),
             text: Some(text.into()),
             reason: None,
+            timing: None,
         }
     }
 

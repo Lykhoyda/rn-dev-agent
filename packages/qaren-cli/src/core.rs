@@ -63,6 +63,12 @@ pub struct Ledger {
     pub llm_turns: u64,
     pub escapes: u64,
     pub recoveries: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "passive"
+    )]
+    pub speed: Option<LedgerSpeed>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<LedgerFailure>,
 }
@@ -134,6 +140,45 @@ pub struct Row {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "passive"
+    )]
+    pub timing: Option<RowTiming>,
+}
+
+// Timing is diagnostics only: a malformed value is dropped, never a reason to reject the row or ledger.
+fn passive<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    Ok(serde_json::from_value(Value::deserialize(deserializer)?).ok())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RowTiming {
+    pub capture_ms: u64,
+    pub native_ms: u64,
+    pub react_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence_ms: Option<u64>,
+    pub resolve_ms: u64,
+    pub jev_ms: u64,
+    pub act_ms: u64,
+    pub post_capture_ms: u64,
+    pub other_ms: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerSpeed {
+    pub step_median_ms: u64,
+    pub step_p95_ms: u64,
+    pub walk_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -713,6 +758,10 @@ fn refusal_ledger(result: &Value, rows: &[Row], seen: &str) -> Result<Ledger, St
             normalized[field] = value.clone();
         }
     }
+    // Speed is passive: copied as-is, and a malformed or null value is dropped on decode.
+    if let Some(speed) = result.get("speed") {
+        normalized["speed"] = speed.clone();
+    }
     let mut ledger: Ledger =
         serde_json::from_value(normalized).map_err(|error| error.to_string())?;
     if ledger.path != "walk" {
@@ -771,5 +820,6 @@ pub fn synthesized_ledger(rows: &[Row], verdict: &str, seen: &str) -> Ledger {
         llm_turns: 0,
         escapes: 0,
         recoveries: 0,
+        speed: None,
     }
 }
