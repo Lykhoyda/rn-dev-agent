@@ -332,8 +332,12 @@ test('hideKeyboard after exact-testID steps is refused before WDA', async () => 
   assert.deepEqual(calls, []);
 });
 
-for (const platform of ['ios', undefined] as const) {
-  test(`default saved-action refuses late native steps (${platform ?? 'session iOS'})`, async () => {
+for (const [platform, runtimeAvailable] of [
+  ['ios', true],
+  [undefined, true],
+  [undefined, false],
+] as const) {
+  test(`late-native refusal (${platform ?? 'session'}, pin ${runtimeAvailable})`, async () => {
     const project = createTmpProject();
     const priorSession = getActiveSession();
     try {
@@ -360,7 +364,9 @@ for (const platform of ['ios', undefined] as const) {
       const handler = createRunActionHandler({
         engineStatus: async () => {
           calls.push('native-runtime-preflight');
-          return buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false);
+          return runtimeAvailable
+            ? buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false)
+            : buildReplayEngineStatus('not-installed', null, false);
         },
         claimNativeOrigin: async () => {
           calls.push('claim-native-origin');
@@ -392,7 +398,7 @@ for (const platform of ['ios', undefined] as const) {
       assert.equal(env.meta?.actionId, 'late-native');
       assert.equal(env.meta?.sourceIndex, 1);
       assert.deepEqual(env.meta?.proofDomains, ['react-tree', 'xctest-native']);
-      assert.deepEqual(calls, platform ? [] : ['native-runtime-preflight']);
+      assert.deepEqual(calls, []);
     } finally {
       _setActiveSessionForTest(priorSession);
       project.cleanup();

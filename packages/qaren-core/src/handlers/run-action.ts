@@ -1,4 +1,4 @@
-import { attachMeta } from '../agent-device-wrapper.js';
+import { attachMeta, getActiveSession } from '../agent-device-wrapper.js';
 import {
   collectRunnerFailureEvidence,
   createRunnerFailureEvidence,
@@ -569,7 +569,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     const replayPlatform =
       args.platform && activeTarget?.platform && args.platform !== activeTarget.platform
         ? undefined
-        : (args.platform ?? activeTarget?.platform);
+        : (args.platform ?? activeTarget?.platform ?? getActiveSession()?.platform);
     const iosProofPlan =
       replayPlatform === 'ios' ? planIosProofDomains(preflightCommands, args.params ?? {}) : null;
     if (iosProofPlan && !iosProofPlan.ok) {
