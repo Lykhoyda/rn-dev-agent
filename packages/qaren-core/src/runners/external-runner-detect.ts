@@ -303,6 +303,7 @@ export type ProcessIdentityObserver = (
   pid: number,
   timeoutMs: number,
   withArgv?: boolean,
+  inspection?: 'ios-paths',
 ) => Promise<unknown>;
 
 function observedExecutable(value: unknown, line: string, scanStartedAt: number): string | null {
@@ -346,6 +347,33 @@ function identityRulesOutDriver(value: unknown, line: string, scanStartedAt: num
     /^(?:java|node|nodejs|python[\d.]*|ruby[\d.]*|perl[\d.]*|osascript)$/i.test(name) ||
     /UITests-?Runner$/i.test(name) ||
     hasUnresolvedIosPath(executable)
+  );
+}
+
+function completeInspectionRulesOutPath(
+  value: unknown,
+  line: string,
+  scanStartedAt: number,
+): boolean {
+  const command = line.replace(/^\s*\d+\s+/, '');
+  const executable = observedExecutable(value, line, scanStartedAt);
+  if (
+    !executable ||
+    command.length <= 16_384 ||
+    SHELL_WRAPPERS.test(executable.slice(executable.lastIndexOf('/') + 1)) ||
+    /UITests-?Runner$/i.test(executable) ||
+    SHELL_WRAPPERS.test(executableBasename(command)) ||
+    hasUnresolvedIosPathPattern(executable) ||
+    hasUnresolvedIosPathPattern(command) ||
+    hasUnresolvedIosShellScript(command)
+  )
+    return false;
+  const inspection = (value as { iosPathInspection?: unknown }).iosPathInspection;
+  return (
+    !!inspection &&
+    typeof inspection === 'object' &&
+    (inspection as Record<string, unknown>).status === 'complete' &&
+    (inspection as Record<string, unknown>).unresolvedPath === 'absent'
   );
 }
 
@@ -425,23 +453,30 @@ export async function probeIosExternalRunnerStrict(
         !drivers.includes(line) &&
         (isUnscopedMcpControl(line) || hasUnresolvedIosExecutablePath(line)),
     );
+    if (performance.now() >= deadline) return 'unknown';
     if (!unresolved.length) return 'clear';
     if (!observeIdentity || unresolved.length > 16) return 'unknown';
     for (const line of unresolved) {
       const remaining = Math.floor(deadline - performance.now());
       if (remaining <= 0) return 'unknown';
       const pid = Number(/^\s*(\d+)/.exec(line)![1]);
+      const inspectPaths =
+        !isUnscopedMcpControl(line) && line.replace(/^\s*\d+\s+/, '').length > 16_384;
       const observation = await observeIdentity(
         pid,
         Math.min(1_000, remaining),
-        MAESTRO_JAVA_ENTRYPOINT_RE.test(line) || undefined,
+        (!inspectPaths && MAESTRO_JAVA_ENTRYPOINT_RE.test(line)) || undefined,
+        inspectPaths ? 'ios-paths' : undefined,
       );
       if (
         performance.now() >= deadline ||
         !(
           identityProvesMcpControl(observation, line, scanStartedAt) ||
-          (!isUnscopedMcpControl(line) && identityRulesOutDriver(observation, line, scanStartedAt))
-        )
+          (!isUnscopedMcpControl(line) &&
+            (identityRulesOutDriver(observation, line, scanStartedAt) ||
+              (inspectPaths && completeInspectionRulesOutPath(observation, line, scanStartedAt))))
+        ) ||
+        performance.now() >= deadline
       )
         return 'unknown';
     }

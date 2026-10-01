@@ -905,7 +905,33 @@ else {
       );
     }
     for (const call of (await readFile(observerMarker, 'utf8')).trim().split('\n'))
-      assert.deepEqual(JSON.parse(call), ['--internal-process-observation', '20']);
+      assert.deepEqual(JSON.parse(call), [
+        '--internal-process-observation',
+        '20',
+        '--inspect-ios-paths',
+      ]);
+    const inspected = {
+      ...output,
+      executable: '/usr/local/bin/node',
+      iosPathInspection: { status: 'complete', unresolvedPath: 'absent' },
+    };
+    const inspectedEnv = { ...env, FAKE_PS_STDOUT: `20 node -e ${'x'.repeat(35_000)}${secret}\n` };
+    for (const [observation, status] of [
+      [inspected, 'clear'],
+      [{ ...inspected, iosPathInspection: undefined }, 'unknown'],
+      [
+        { ...inspected, iosPathInspection: { status: 'complete', unresolvedPath: 'present' } },
+        'unknown',
+      ],
+    ] as const) {
+      assertResult(
+        await invoke(root, marker, [...args, '--process-observer', observer], {
+          ...inspectedEnv,
+          FAKE_OBSERVER_OUTPUT: JSON.stringify(observation),
+        }),
+        status,
+      );
+    }
     const controllerArgv = [
       '/opt/java/current/bin/java',
       '-classpath',

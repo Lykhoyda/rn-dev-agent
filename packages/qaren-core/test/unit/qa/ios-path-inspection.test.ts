@@ -8,6 +8,21 @@ import {
 } from '../../../dist/runners/external-runner-detect.js';
 
 const device = 'AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB';
+const complete = { status: 'complete', unresolvedPath: 'absent' };
+const identity = {
+  v: 1,
+  pid: 20,
+  birth: { seconds: 1, micros: 0 },
+  executable: '/usr/local/bin/node',
+  iosPathInspection: complete,
+};
+const ps = (command: string) =>
+  (async (_bin: string, _args: string[], options: object) => {
+    assert.deepEqual(options, { timeout: 2_000, maxBuffer: 1024 * 1024, encoding: 'utf8' });
+    return { stdout: `20 ${command}\n`, stderr: '' };
+  }) as unknown as typeof execFile;
+const program = `privacy-canary-${'x'.repeat(35_000)}`;
+
 test('quote-heavy non-path rows remain clear within the scan budget', async (t) => {
   const command = `/usr/local/bin/node -e /maestro.${'x'.repeat(7500)}+${'"'.repeat(7500)}`;
   assert.ok(command.length < 16_384);
@@ -20,6 +35,22 @@ test('quote-heavy non-path rows remain clear within the scan budget', async (t) 
   t.diagnostic(`64-row quote-heavy scan: ${elapsed.toFixed(1)}ms`);
   assert.equal(status, 'clear');
   assert.ok(elapsed < 2_000, `quote-heavy scan took ${elapsed.toFixed(1)}ms`);
+});
+
+test('a scan with no unresolved rows cannot clear at or beyond its deadline', async (t) => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  for (const elapsed of [19_999, 20_000, 35_400]) {
+    now = 0;
+    const scan = (async () => {
+      now = elapsed;
+      return { stdout: '20 /usr/local/bin/node -e ordinary\n', stderr: '' };
+    }) as unknown as typeof execFile;
+    assert.equal(
+      await probeIosExternalRunnerStrict(scan, device),
+      elapsed < 20_000 ? 'clear' : 'unknown',
+    );
+  }
 });
 
 test('shared Rust/TypeScript fixtures retain the original unresolved-path predicate', () => {
@@ -75,4 +106,103 @@ test('shared Rust/TypeScript fixtures retain the original unresolved-path predic
     }
     assert.equal(hasUnresolvedIosPathPattern(command), original(command), command);
   }
+});
+
+test('oversized inline programs need complete content-free inspection, not interpreter shape', async () => {
+  let calls = 0;
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      ps(`/usr/local/bin/node -e ${program}`),
+      device,
+      async (pid, timeout, withArgv, inspection) => {
+        calls++;
+        assert.equal(pid, 20);
+        assert.ok(timeout > 0 && timeout <= 1_000);
+        assert.equal(withArgv, undefined);
+        assert.equal(inspection, 'ios-paths');
+        return identity;
+      },
+    ),
+    'clear',
+  );
+  assert.equal(calls, 1);
+  for (const iosPathInspection of [
+    undefined,
+    true,
+    {},
+    { status: 'partial', unresolvedPath: 'absent' },
+    { status: 'complete' },
+    { status: 'complete', unresolvedPath: false },
+    { status: 'complete', unresolvedPath: 'present' },
+  ]) {
+    assert.equal(
+      await probeIosExternalRunnerStrict(ps(`node -e ${program}`), device, async () => ({
+        ...identity,
+        iosPathInspection,
+      })),
+      'unknown',
+    );
+  }
+});
+
+test('inspection cannot override native paths, shell ambiguity, drivers or invalid identities', async () => {
+  for (const command of [
+    `node -e ${program}/usr/bin/xcodebuild`,
+    `node -e /tmp/WebDriverAgent ${program}`,
+    'node -e /tmp/WebDriverAgent',
+    `/bin/sh --unknown ${program}`,
+    `/bin/bash -c ${program}`,
+    `xcodebuild test ${program}`,
+    `java -classpath lib maestro.cli.AppKt test ${program}`,
+  ]) {
+    assert.equal(
+      await probeIosExternalRunnerStrict(ps(command), device, async () => identity),
+      'unknown',
+    );
+  }
+  for (const change of [
+    { pid: 21 },
+    { v: 2 },
+    { birth: { seconds: Date.now(), micros: 0 } },
+    { birth: { seconds: 1, micros: -1 } },
+    { executable: '/bin/bash' },
+    { executable: '/Users/Test User/bin/bash' },
+    { executable: '/tmp/My AppUITestsRunner' },
+    { executable: '/tmp/xcodebuild' },
+    { executable: 'node' },
+  ]) {
+    assert.equal(
+      await probeIosExternalRunnerStrict(ps(`node -e ${program}`), device, async () => ({
+        ...identity,
+        ...change,
+      })),
+      'unknown',
+    );
+  }
+});
+
+test('complete inspection cannot extend the overall observation deadline', async (t) => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  assert.equal(
+    await probeIosExternalRunnerStrict(ps(`node -e ${program}`), device, async () => {
+      now = 20_000;
+      return identity;
+    }),
+    'unknown',
+  );
+  now = 0;
+  assert.equal(
+    await probeIosExternalRunnerStrict(ps(`node -e ${program}`), device, async () => ({
+      ...identity,
+      iosPathInspection: {
+        get status() {
+          now = 20_000;
+          return 'complete';
+        },
+        unresolvedPath: 'absent',
+      },
+    })),
+    'unknown',
+  );
 });
