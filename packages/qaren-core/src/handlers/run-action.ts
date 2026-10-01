@@ -572,6 +572,17 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         : (args.platform ?? activeTarget?.platform);
     const iosProofPlan =
       replayPlatform === 'ios' ? planIosProofDomains(preflightCommands, args.params ?? {}) : null;
+    if (iosProofPlan && !iosProofPlan.ok) {
+      return failResult(
+        `Refusing iOS proof-domain ambiguity at step ${iosProofPlan.sourceIndex}: ${iosProofPlan.reason}.`,
+        'UNSUPPORTED_STEP',
+        {
+          actionId: args.actionId,
+          sourceIndex: iosProofPlan.sourceIndex,
+          proofDomains: ['react-tree', 'xctest-native'],
+        },
+      );
+    }
     const requiresNativeRuntime =
       iosProofPlan?.ok !== true ||
       iosProofPlan.segments.some((segment) => segment.domain === 'xctest-native');

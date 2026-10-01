@@ -17,6 +17,8 @@ import {
 import { replayTreeData, runCdpReplayCommands } from '../../dist/handlers/cdp-replay-dispatch.js';
 import { performReactTreeInput } from '../../dist/handlers/device-interact.js';
 import { chooseMaestroDispatch } from '../../dist/handlers/maestro-dispatch.js';
+import { createRunActionHandler } from '../../dist/handlers/run-action.js';
+import { createTmpProject } from '../helpers/tmp-project.js';
 import { buildReplayEngineStatus, MAESTRO_RUNNER_PIN } from '../../dist/domain/engine-pin.js';
 import { reapStaleFastRunner } from '../../dist/runners/rn-fast-runner-client.js';
 import {
@@ -327,6 +329,66 @@ test('hideKeyboard after exact-testID steps is refused before WDA', async () => 
   assert.match(env.error ?? '', /Refusing iOS proof-domain ambiguity at step 2/);
   assert.match(env.error ?? '', /relaunches the app/);
   assert.deepEqual(calls, []);
+});
+
+test('default saved-action replay refuses late native steps before native dispatch', async () => {
+  const project = createTmpProject();
+  try {
+    project.seedAction(
+      'late-native',
+      `appId: com.example.app
+---
+# id: late-native
+# intent: submit
+# status: active
+# enginePin: maestro-runner@${MAESTRO_RUNNER_PIN.version}
+- tapOn:
+    id: submit
+- hideKeyboard
+`,
+      null,
+    );
+    const calls: string[] = [];
+    const handler = createRunActionHandler({
+      engineStatus: async () => {
+        calls.push('native-runtime-preflight');
+        return buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false);
+      },
+      claimNativeOrigin: async () => {
+        calls.push('claim-native-origin');
+      },
+      completeNativeOrigin: async () => {
+        calls.push('complete-native-origin');
+      },
+      relaunchManagedApp: async () => {
+        calls.push('relaunch');
+      },
+      reproveManagedOrigin: async () => {
+        calls.push('reprove');
+      },
+    });
+    const env = envelope(
+      await handler({
+        actionId: 'late-native',
+        projectRoot: project.root,
+        platform: 'ios',
+        autoRepair: false,
+        forceReload: false,
+      }),
+    );
+    assert.equal(env.ok, false);
+    assert.equal(env.code, 'UNSUPPORTED_STEP');
+    assert.equal(
+      env.error,
+      'Refusing iOS proof-domain ambiguity at step 1: hideKeyboard: a native segment starts a new runner session that relaunches the app and discards the React-tree steps.',
+    );
+    assert.equal(env.meta?.actionId, 'late-native');
+    assert.equal(env.meta?.sourceIndex, 1);
+    assert.deepEqual(env.meta?.proofDomains, ['react-tree', 'xctest-native']);
+    assert.deepEqual(calls, []);
+  } finally {
+    project.cleanup();
+  }
 });
 
 test('ordinary missing React testID stays TESTID_NOT_FOUND without WDA', async () => {
