@@ -109,6 +109,36 @@ holder is reclaimed only through that run's cleanup; a live or unprovable holder
 refuses `DEVICE_BUSY`. Recover a retained run with `qaren cleanup <run-id>`;
 do not delete locks to bypass unresolved ownership.
 
+### Walk timing
+
+`ledger.json` adds a `timing` object to each walked attempt row, in milliseconds.
+`captureMs`, `resolveMs` (decision), `actMs`, `postCaptureMs` and `otherMs`
+partition `total`, the elapsed window between consecutive row timestamps
+(starting at the walk for the first row). `nativeMs`, `reactMs` and optional
+`presenceMs` detail reads within capture; `jevMs` details judgment time within
+decision, including HTTP retries and their backoff. These breakdowns overlap
+the partition and must not be added to `total`. Post-action captures start
+after an authorized dispatch; captures after a dispatch refused before
+authorization remain in `captureMs`.
+
+The ledger's `speed` summary groups timed action/check rows by plan line and
+kind, summing every retry, passing and failing attempt into one logical-step
+duration, even when a capture refusal changes the block name. `stepMedianMs`
+and nearest-rank `stepP95Ms` cover all those logical steps; `steps`, `passed`
+and `failed` count them, with the last attempt determining whether a step
+passed. `walkMs` sums all timed row windows, not app preparation or teardown.
+`report.md` prints these summary values under Run details; inspect the ledger
+for individual timing breakdowns.
+
+Without timed rows, `speed` is omitted. With timed rows but no timed actions
+or checks, counts are zero and percentiles are omitted (shown as `n/a` in the
+report). An interrupted child without a final result retains row evidence
+but omits `speed`. Timing is passive: it does not alter verdicts, actions or
+budgets, and the CLI drops malformed timing rather than rejecting the ledger.
+The [row timing implementation](../qaren-core/src/qa/row-timing.ts) owns
+aggregation; [CLI decoding](src/core.rs) and [report rendering](src/report.rs)
+own consumption.
+
 ## Preparation verbs
 
 These scenario-based verbs retain the preparation receipt contract below;
