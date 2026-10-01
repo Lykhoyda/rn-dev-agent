@@ -7,9 +7,10 @@ import { choice, element, screen, scriptedJudge, walker } from './judgment-fixtu
 function traceCaptures(f: ReturnType<typeof walker>) {
   const modes: boolean[] = [];
   const capture = f.deps.captureScreen;
-  f.deps.captureScreen = async (options?: { platformPresence?: boolean }) => {
-    modes.push(options?.platformPresence === true);
-    return capture();
+  // Probes only detect an unchanged screen; the trace records judged captures.
+  f.deps.captureScreen = async (options) => {
+    if (!options?.probe) modes.push(options?.platformPresence === true);
+    return capture(options);
   };
   return modes;
 }
@@ -238,7 +239,15 @@ test('phrase waits and scroll-until retain presence mode for re-asks and subsequ
       const probability = [0.5, 0.1, 0.9][index];
       return { visibility_1: { type: 'noul', noul: probability } };
     });
-    const f = walker([screen([element('@save', 'Save')])], judge);
+    // The screen changes after the re-ask, so the wait's next poll is a judged capture.
+    const f = walker(
+      [
+        screen([element('@save', 'Save')]),
+        screen([element('@save', 'Save')]),
+        screen([element('@save', 'Save'), element('@ready', 'Ready', { kind: 'text' })]),
+      ],
+      judge,
+    );
     const modes = traceCaptures(f);
     const result = await runPlan(
       parsePlan(

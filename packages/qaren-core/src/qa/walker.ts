@@ -42,7 +42,12 @@ export interface ActResult {
 
 export interface WalkerDeps {
   judge?: Judge;
-  captureScreen(options?: { platformPresence?: boolean; timing?: TimingObserver }): Promise<Screen>;
+  // `probe` marks a plain capture taken only to tell whether the screen changed.
+  captureScreen(options?: {
+    platformPresence?: boolean;
+    probe?: boolean;
+    timing?: TimingObserver;
+  }): Promise<Screen>;
   press(ref: string, context: QaDispatchContext): Promise<ActResult>;
   fill(ref: string, text: string, context: QaDispatchContext): Promise<ActResult>;
   scroll(direction: 'down' | 'up', context: QaDispatchContext): Promise<ActResult>;
@@ -155,6 +160,7 @@ export async function walkBlock(
   const capture = async (
     step?: Exclude<Item, { kind: 'check' }>,
     assertion = false,
+    probe = false,
   ): Promise<Observation> => {
     assertActive();
     cached = undefined;
@@ -174,14 +180,19 @@ export async function walkBlock(
       outcome: 'ok',
       at: startedAt,
       presence: Number(platformPresence),
+      ...(probe ? { probe: 1 } : {}),
     });
     let admitted = false;
     try {
+      const mode = {
+        ...(platformPresence ? { platformPresence: true } : {}),
+        ...(probe ? { probe: true } : {}),
+      };
       latest = await deps.captureScreen(
         deps.timing
-          ? { ...(platformPresence ? { platformPresence: true } : {}), timing: timingObserver }
-          : platformPresence
-            ? { platformPresence: true }
+          ? { ...mode, timing: timingObserver }
+          : Object.keys(mode).length
+            ? mode
             : undefined,
       );
       const privacyStarted = deps.timing ? deps.now() : 0;
@@ -227,6 +238,7 @@ export async function walkBlock(
           at,
           ms: at - startedAt,
           presence: Number(platformPresence),
+          ...(probe ? { probe: 1 } : {}),
         });
       }
     }
@@ -595,6 +607,11 @@ export async function walkBlock(
         const budget = item.target.quoted === undefined ? PHRASE_WAIT_BUDGET_MS : WAIT_BUDGET_MS;
         const deadline = deps.now() + budget;
         const held = cached?.item === item ? cached : undefined;
+        // Presence and plain captures sign the same screen differently, so polls compare plain to plain.
+        const phrase = item.target.quoted === undefined;
+        const probeSignature = async (): Promise<string> =>
+          screenSignature((await capture(undefined, false, true)).screen);
+        let presenceScreen = phrase && !held ? await probeSignature() : undefined;
         let observation = held?.observation ?? (await capture(item));
         cached = undefined;
         const probe = visibilityProbe(item, deadline);
@@ -607,6 +624,15 @@ export async function walkBlock(
         while (!found && deps.now() < deadline) {
           await pause(Math.min(WAIT_POLL_MS, deadline - deps.now()));
           if (deps.now() >= deadline) break;
+          if (phrase) {
+            const signature = await probeSignature();
+            if (signature === presenceScreen && observationUsable(observation.timing, deps.now())) {
+              metric('cache-reuse', observation);
+              continue;
+            }
+            if (deps.now() >= deadline) break;
+            presenceScreen = signature;
+          }
           observation = await capture(item);
           found = await visible(observation);
         }

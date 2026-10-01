@@ -12,8 +12,8 @@ import {
   visibilityView,
 } from '../../../dist/qa/screen.js';
 import type { ReactHostEvidence } from '../../../dist/qa/screen.js';
-import { runPlan, WAIT_POLL_MS } from '../../../dist/qa/walker.js';
-import { PHRASE_WAIT_BUDGET_MS } from '../../../dist/qa/timing.js';
+import { runPlan } from '../../../dist/qa/walker.js';
+import { EVIDENCE_USE_MS, PHRASE_WAIT_BUDGET_MS } from '../../../dist/qa/timing.js';
 import { nativeCapture } from './platform-presence-fixtures.ts';
 import { buildFiber, createSandbox } from '../helpers/inject-harness.js';
 import { element, screen as syntheticScreen, scriptedJudge, walker } from './judgment-fixtures.ts';
@@ -563,7 +563,8 @@ test('unrelated Account heading and plain Settings text stay unestablished even 
     { verdict: 'pending' },
   );
   for (const [plan, captures] of [
-    ['Wait for the Settings heading', PHRASE_WAIT_BUDGET_MS / WAIT_POLL_MS],
+    // An unchanged screen is re-judged once per evidence-use window.
+    ['Wait for the Settings heading', Math.floor((PHRASE_WAIT_BUDGET_MS - 1) / EVIDENCE_USE_MS) + 1],
     ['Scroll down until the Settings heading', 2],
   ] as const) {
     const start = judge.requests.length;

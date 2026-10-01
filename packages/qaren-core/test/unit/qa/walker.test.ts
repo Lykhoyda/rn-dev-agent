@@ -33,7 +33,7 @@ interface Fake {
   calls: string[];
 }
 
-// Scripted screens: each captureScreen() pops the next screen; the last one repeats.
+// Scripted screens: each captureScreen() pops the next screen; the last one repeats. A probe peeks.
 function fake(screens: Screen[], acts: Partial<Record<string, ActResult>> = {}): Fake {
   const rows: LedgerRow[] = [];
   const calls: string[] = [];
@@ -41,7 +41,11 @@ function fake(screens: Screen[], acts: Partial<Record<string, ActResult>> = {}):
   const queue = [...screens];
   const ok: ActResult = { ok: true, proven: false };
   const deps: WalkerDeps = {
-    async captureScreen() {
+    async captureScreen(options) {
+      if (options?.probe) {
+        calls.push('probe');
+        return queue[0];
+      }
       calls.push('capture');
       const next = queue.length > 1 ? queue.shift()! : queue[0];
       return next;
