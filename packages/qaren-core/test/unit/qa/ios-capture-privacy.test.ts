@@ -178,7 +178,11 @@ function iosNode(index: number, type: string, extra: Record<string, unknown> = {
   };
 }
 
-function literalWalk(nodes: unknown[], truncated: boolean | undefined) {
+function captureWalk(
+  nodes: ReturnType<typeof iosNode>[],
+  truncated: boolean | undefined,
+  judge = scriptedJudge(() => assert.fail('literal plans must not call Jev')),
+) {
   const bodies: Record<string, unknown>[] = [];
   _setFetchForTest(async (url, init) => {
     if (String(url).endsWith('/health'))
@@ -186,21 +190,33 @@ function literalWalk(nodes: unknown[], truncated: boolean | undefined) {
         ok: true,
         protocolVersion: 2,
         commands: REQUIRED_IOS_COMMANDS,
-        capabilities: [...REQUIRED_IOS_FEATURES, 'QA_READ_ONLY_V1'],
+        capabilities: [...REQUIRED_IOS_FEATURES, 'PLATFORM_PRESENCE_V2', 'QA_READ_ONLY_V1'],
       });
     const body = JSON.parse(String(init?.body));
     bodies.push(body);
     assert.equal(body.command, 'snapshot');
     return Response.json({
       ok: true,
-      data: { nodes, ...(truncated === undefined ? {} : { truncated }) },
+      data: {
+        ...(truncated === false
+          ? {
+              ...nativeCapture(),
+              nodes: nodes.map((node, index) => ({
+                ...node,
+                ref: `@e${index}`,
+                presence: {
+                  ...nativeCapture().nodes[1].presence,
+                  nodeIndex: index,
+                },
+              })),
+            }
+          : { nodes }),
+        ...(truncated === undefined ? {} : { truncated }),
+      },
     });
   });
   const snapshot = createDeviceSnapshotHandler();
-  const f = walker(
-    [],
-    scriptedJudge(() => assert.fail('literal plans must not call Jev')),
-  );
+  const f = walker([], judge);
   let shots = 0;
   f.deps.screenshot = async (name) => {
     shots++;
@@ -211,7 +227,13 @@ function literalWalk(nodes: unknown[], truncated: boolean | undefined) {
       appId: 'com.test',
       requirePrivateInputs: true,
       native: async () => {
-        const result = parseEnvelope(await snapshot({ action: 'snapshot', qaReadOnly: true }));
+        const result = parseEnvelope(
+          await snapshot({
+            action: 'snapshot',
+            qaReadOnly: true,
+            ...(truncated === false ? { platformPresence: true, presenceBudgetMs: 20_000 } : {}),
+          }),
+        );
         assert.equal(result.ok, true);
         return { ...result.data, snapshotVerdict: result.meta.snapshotVerdict };
       },
@@ -231,12 +253,37 @@ test('a container label built from a prefilled child value is masked when comple
   const screen = { rect: { x: 0, y: 0, width: 390, height: 844 } };
   const base = [iosNode(0, 'Application', screen), iosNode(1, 'Window', screen)];
   for (const truncated of [false, true, undefined]) {
-    const { f, bodies, shots } = literalWalk(
-      truncated === false ? [...base, parent, child] : [...base, parent],
+    const judge = scriptedJudge((questions, _, state) => {
+      const evidence = state as {
+        assertionEvidence: { unknown: { description: string }[] };
+      };
+      const container = evidence.assertionEvidence.unknown.find((entry) =>
+        entry.description.includes('[testID prefilled-container]'),
+      );
+      assert.ok(container, 'the model request must include the parent container');
+      assert.match(container.description, /"Account \[QAREN_VALUE_\d+\]"/);
+      assert.equal(JSON.stringify({ questions, state }).includes(secret), false);
+      return Object.fromEntries(
+        Object.keys(questions).map((id) => [id, { type: 'noul', noul: 0.99 }]),
+      );
+    });
+    const { f, bodies, shots } = captureWalk(
+      truncated === false
+        ? [
+            ...base,
+            { ...parent, identifier: 'prefilled-container', label: `Account ${secret}` },
+            child,
+          ]
+        : [...base, parent],
       truncated,
+      truncated === false ? judge : undefined,
     );
-    const result = await runPlan(parsePlan('✓ "Nothing like this"').blocks!, f.deps);
-    const all = JSON.stringify({ result, rows: f.rows });
+    const plan =
+      truncated === false
+        ? '✓ An email field is shown\n✓ "Nothing like this"'
+        : '✓ "Nothing like this"';
+    const result = await runPlan(parsePlan(plan).blocks!, f.deps);
+    const all = JSON.stringify({ result, rows: f.rows, requests: judge.requests });
     assert.equal(all.includes(secret), false, all);
     assert.equal(shots(), 0);
     for (const body of bodies) {
@@ -248,6 +295,7 @@ test('a container label built from a prefilled child value is masked when comple
       assert.equal('code' in result && result.code, 'PRIVATE_INPUT_CAPTURE_UNKNOWN');
       assert.match(result.failure!.seen, truncated ? /causes=truncated\)/ : /causes=unattested\)/);
     } else {
+      assert.equal(judge.requests.length, 1, JSON.stringify(result));
       assert.equal(result.verdict, 'FAIL');
       assert.match(result.failure!.seen, /Email/);
     }
