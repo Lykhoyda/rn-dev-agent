@@ -4,6 +4,7 @@ use crate::commands::cleanup::{cleanup_process_group, cleanup_scoped_runner_host
 use crate::core;
 use crate::exec::{ChildHandle, CmdSpec, Runner};
 use crate::lease::{self, Lease};
+use crate::redact::OutputText;
 use crate::runrecord::{
     capture_pid_identity, probe_pid_identity, validate_run_id, PidIdentity, PidLiveness,
 };
@@ -41,11 +42,11 @@ pub enum SuiteProcess {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CleanupEvidence {
-    pub group: String,
+    pub group: OutputText,
     #[serde(default)]
     pub admission_clear: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runner_host: Option<String>,
+    pub runner_host: Option<OutputText>,
 }
 
 fn roots(runner: &dyn Runner) -> Result<(PathBuf, PathBuf), String> {
@@ -62,9 +63,6 @@ fn roots(runner: &dyn Runner) -> Result<(PathBuf, PathBuf), String> {
     if !locks.is_absolute() {
         return Err("QAREN_LOCK_ROOT must be an absolute path".into());
     }
-    crate::redact::validate_operational_path(&home.join("native-suites"))
-        .and_then(|_| crate::redact::validate_operational_path(&locks))
-        .map_err(|f| f.detail)?;
     Ok((home.join("native-suites"), locks))
 }
 
@@ -89,7 +87,7 @@ fn admit(runner: &mut dyn Runner, device: &str) -> Result<(), String> {
 
 fn identity(runner: &mut dyn Runner, pid: i32) -> Option<PidIdentity> {
     capture_pid_identity(runner, pid).map(|mut identity| {
-        identity.command.clear();
+        identity.command = OutputText::from_output("");
         identity
     })
 }
@@ -117,7 +115,7 @@ fn release(record: &NativeSuite) -> Result<(), String> {
 fn rollback(dir: &Path, record: &mut NativeSuite) -> Result<(), String> {
     record.process = SuiteProcess::NotSpawned;
     record.cleanup = Some(CleanupEvidence {
-        group: "not_spawned".into(),
+        group: OutputText::from_output("not_spawned"),
         admission_clear: false,
         runner_host: None,
     });
@@ -152,9 +150,11 @@ fn finish(
     let runner_host = absent.then(|| cleanup_scoped_runner_hosts(runner, &record.device_id));
     let hosts_absent = matches!(runner_host, Some(Outcome::Absent));
     record.cleanup = Some(CleanupEvidence {
-        group: group.render(),
+        group: crate::redact::OutputText::from_output(&group.render()),
         admission_clear: false,
-        runner_host: runner_host.map(|outcome| outcome.render()),
+        runner_host: runner_host
+            .map(|outcome| outcome.render())
+            .map(|text| crate::redact::OutputText::from_output(&text)),
     });
     save(dir, record)?;
     if !absent || !hosts_absent {
@@ -352,8 +352,6 @@ pub fn recover(runner: &mut dyn Runner, run_id: &str) -> Result<NativeSuite, Str
         std::fs::read(dir.join("suite.json")).map_err(|_| "native suite record is unreadable")?;
     let mut record: NativeSuite =
         serde_json::from_slice(&raw).map_err(|_| "native suite record is invalid")?;
-    crate::redact::validate_operational_paths(&record)
-        .map_err(|f| format!("{}; {}", f.detail, f.next_action))?;
     let expected = locks
         .canonicalize()
         .map_err(|_| "cannot resolve lock root")?

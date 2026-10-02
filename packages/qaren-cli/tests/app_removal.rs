@@ -350,11 +350,11 @@ fn repeat_after_proven_removal_never_readdresses_the_device() {
     let mut record = owned_record(&repo);
     record.resources.app_install.as_mut().unwrap().removal = Some(AppRemoval {
         at: "2026-09-05T10:00:00Z".to_string(),
-        outcome: "removed".to_string(),
+        outcome: qaren::redact::OutputText::from_output("removed"),
         installed_sha256: APK_SHA.to_string(),
-        uninstall: "exit=0 Success".to_string(),
-        pm_path_after: "exit=1".to_string(),
-        package_list_after: "exit=0".to_string(),
+        uninstall: qaren::redact::OutputText::from_output("exit=0 Success"),
+        pm_path_after: qaren::redact::OutputText::from_output("exit=1"),
+        package_list_after: qaren::redact::OutputText::from_output("exit=0"),
     });
     record.save(&repo).unwrap();
 
@@ -383,11 +383,17 @@ fn repeat_after_failed_removal_refuses_the_now_unowned_device() {
     let mut record = owned_record(&repo);
     record.resources.app_install.as_mut().unwrap().removal = Some(AppRemoval {
         at: "2026-09-05T10:00:00Z".to_string(),
-        outcome: "unresolved: package still present after uninstall".to_string(),
+        outcome: qaren::redact::OutputText::from_output(
+            &"unresolved: package still present after uninstall",
+        ),
         installed_sha256: APK_SHA.to_string(),
-        uninstall: "exit=1 Failure".to_string(),
-        pm_path_after: format!("exit=0 package:{APK_PATH}"),
-        package_list_after: format!("exit=0 package:{APP}"),
+        uninstall: qaren::redact::OutputText::from_output("exit=1 Failure"),
+        pm_path_after: qaren::redact::OutputText::from_output(&format!(
+            "exit=0 package:{APK_PATH}"
+        )),
+        package_list_after: qaren::redact::OutputText::from_output(&format!(
+            "exit=0 package:{APP}"
+        )),
     });
     record.save(&repo).unwrap();
 
@@ -418,11 +424,19 @@ fn interrupted_unresolved_removal_is_preserved_even_while_resources_are_owned() 
     let mut record = owned_record(&repo);
     let prior = AppRemoval {
         at: "2026-09-05T10:00:00Z".to_string(),
-        outcome: "unresolved: absence could not be proven: device offline".to_string(),
+        outcome: qaren::redact::OutputText::from_output(
+            &"unresolved: absence could not be proven: device offline",
+        ),
         installed_sha256: APK_SHA.to_string(),
-        uninstall: "exit=none timed_out=true stdout=\"\" stderr=\"\"".to_string(),
-        pm_path_after: "exit=1 stdout=\"\" stderr=\"device offline\"".to_string(),
-        package_list_after: "exit=1 stdout=\"\" stderr=\"device offline\"".to_string(),
+        uninstall: qaren::redact::OutputText::from_output(
+            &"exit=none timed_out=true stdout=\"\" stderr=\"\"",
+        ),
+        pm_path_after: qaren::redact::OutputText::from_output(
+            &"exit=1 stdout=\"\" stderr=\"device offline\"",
+        ),
+        package_list_after: qaren::redact::OutputText::from_output(
+            &"exit=1 stdout=\"\" stderr=\"device offline\"",
+        ),
     };
     record.resources.app_install.as_mut().unwrap().removal = Some(prior.clone());
     record.save(&repo).unwrap();
@@ -441,12 +455,12 @@ fn interrupted_unresolved_removal_is_preserved_even_while_resources_are_owned() 
         serde_json::to_value(&prior).unwrap()
     );
     for (key, value) in [
-        ("app_removal_at", &prior.at),
-        ("app_removal_outcome", &prior.outcome),
-        ("app_installed_sha256", &prior.installed_sha256),
-        ("app_removal_uninstall", &prior.uninstall),
-        ("app_removal_pm_path", &prior.pm_path_after),
-        ("app_removal_package_list", &prior.package_list_after),
+        ("app_removal_at", prior.at.as_str()),
+        ("app_removal_outcome", prior.outcome.as_str()),
+        ("app_installed_sha256", prior.installed_sha256.as_str()),
+        ("app_removal_uninstall", prior.uninstall.as_str()),
+        ("app_removal_pm_path", prior.pm_path_after.as_str()),
+        ("app_removal_package_list", prior.package_list_after.as_str()),
     ] {
         assert_eq!(receipt.outcomes.get(key).unwrap(), value);
     }

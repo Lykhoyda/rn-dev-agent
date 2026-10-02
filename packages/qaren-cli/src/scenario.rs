@@ -147,7 +147,6 @@ impl IosWorkspaceBuild {
     }
 
     pub fn validate(&self) -> Result<(), Failure> {
-        crate::redact::validate_operational_path(Path::new(&self.workspace))?;
         let workspace_ok = self.workspace.starts_with("ios/")
             && self.workspace.ends_with(".xcworkspace")
             && !self.workspace.contains('\\')
@@ -250,7 +249,6 @@ impl Default for Deadlines {
 
 impl Scenario {
     pub fn load(path: &Path) -> Result<(Scenario, String), Failure> {
-        crate::redact::validate_operational_path(path)?;
         let raw = std::fs::read_to_string(path).map_err(|e| {
             Failure::new(
                 "validate",
@@ -272,7 +270,6 @@ impl Scenario {
     }
 
     pub fn validate(&self) -> Result<(), Failure> {
-        crate::redact::validate_operational_paths(self)?;
         let invalid = |detail: String| {
             Failure::new(
                 "validate",

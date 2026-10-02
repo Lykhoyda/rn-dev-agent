@@ -71,7 +71,7 @@ pub fn identity(pid: i32, started_at: &str) -> PidIdentity {
     PidIdentity {
         pid,
         started_at: started_at.to_string(),
-        command: "node metro".to_string(),
+        command: qaren::redact::OutputText::from_output("node metro"),
     }
 }
 
@@ -106,9 +106,8 @@ pub fn base_record(
             qaren::buildplan::BuildPlan {
                 decision: qaren::buildplan::BuildDecision::Clean,
                 fingerprint: format!("rnfp1:{}", "e".repeat(64)),
-                reason:
-                    "no native cache state recorded for this worktree/app; compatibility is unprovable"
-                        .to_string(),
+                reason: qaren::redact::OutputText::from_output("no native cache state recorded for this worktree/app; compatibility is unprovable"
+                        ),
                 evidence: Vec::new(),
                 artifact: None,
                 regenerate_native_dir: false,

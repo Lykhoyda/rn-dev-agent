@@ -518,8 +518,6 @@ pub fn resolve(
     } else {
         repo_root.join(&scenario.candidate.project_root)
     };
-    crate::redact::validate_operational_path(&repo_root)?;
-    crate::redact::validate_operational_path(&project_root)?;
     let contained = repo_root
         .canonicalize()
         .and_then(|repo| {
@@ -619,11 +617,6 @@ pub fn resolve(
     } else {
         project_state
     };
-    let platform = match scenario.platform {
-        crate::scenario::Platform::Ios => "ios",
-        crate::scenario::Platform::Android => "android",
-    };
-    crate::buildplan::validate_cache_paths(&repo_root, platform, &scenario.candidate.app_id)?;
     Ok(Candidate {
         repo_root,
         project_root,

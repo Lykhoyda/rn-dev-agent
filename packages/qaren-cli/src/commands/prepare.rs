@@ -69,7 +69,10 @@ impl<'a> Ctx<'a> {
 
     pub(crate) fn fail(mut self, mut failure: Failure) -> Receipt {
         if self.record.resources.any_owned() {
-            failure.next_action = format!("qaren cleanup {} --json", self.record.run_id);
+            failure.next_action = crate::redact::OutputText::from_output(&format!(
+                "qaren cleanup {} --json",
+                self.record.run_id
+            ));
         }
         // Contention is a refusal even after the run record exists: nothing
         // broke, qaren declined to take a claimed resource.
@@ -84,10 +87,10 @@ impl<'a> Ctx<'a> {
         self.record
             .push_history(at, &format!("failed: {}", failure.code_str()));
         if let Err(save_failure) = self.save() {
-            failure.detail = format!(
+            failure.detail = crate::redact::OutputText::from_output(&format!(
                 "{} — AND the run record could not be updated ({}); treat recorded ownership as stale",
                 failure.detail, save_failure.detail
-            );
+            ));
             self.record.failure = Some(failure.clone());
         }
         finish_receipt(self, result, Some(failure))
@@ -121,7 +124,7 @@ pub(crate) fn finish_receipt(ctx: Ctx, result: ReceiptResult, failure: Option<Fa
             "agents can attach now; later run: qaren cleanup {} --json",
             ctx.record.run_id
         ),
-        (_, Some(f)) => f.next_action.clone(),
+        (_, Some(f)) => f.next_action.to_string(),
         _ => String::new(),
     };
     let mut receipt = Receipt::new(
@@ -173,7 +176,7 @@ pub fn prepare(runner: &mut dyn Runner, args: &PrepareArgs) -> Receipt {
                 &failure.phase.clone(),
                 timefmt::iso8601_utc(runner.now_epoch_ms()),
             );
-            receipt.next_action = failure.next_action.clone();
+            receipt.next_action = failure.next_action.to_string();
             receipt.failure = Some(failure);
             receipt.commands_executed = runner.commands_executed();
             receipt
@@ -188,9 +191,6 @@ fn prepare_validated(
     args: &PrepareArgs,
     started_ms: u64,
 ) -> Result<Receipt, Failure> {
-    for path in [&args.lock_root, &args.runs_root, &args.scenario_path] {
-        crate::redact::validate_operational_path(path)?;
-    }
     let (scenario, raw) = Scenario::load(&args.scenario_path)?;
     let scenario_sha256 = candidate::sha256_hex(raw.as_bytes());
     let scenario_dir = args
@@ -538,7 +538,11 @@ fn prepare_handoff(mut ctx: Ctx, args: &PrepareArgs, t: u64) -> Receipt {
         device: super::device_identity(&ctx.record),
         native_fingerprint: fp.value.clone(),
         fingerprint_complete: fp.complete,
-        fingerprint_incompleteness: fp.incompleteness.clone(),
+        fingerprint_incompleteness: fp
+            .incompleteness
+            .iter()
+            .map(|text| crate::redact::OutputText::from_output(text))
+            .collect(),
         expected_receipt: expected.clone(),
     };
     let document_sha256 = match handoff::save_document(&document_path, &document) {
@@ -624,9 +628,6 @@ pub(crate) fn check_prereqs(
     scenario: &Scenario,
     android_home: Option<&str>,
 ) -> Result<(), Failure> {
-    if let Some(home) = android_home {
-        crate::redact::validate_operational_path(Path::new(home))?;
-    }
     let handoff = scenario.build.owner == BuildOwner::Qaren;
     let mut tools: Vec<&str> = vec!["git", "pnpm", "node"];
     if !handoff {

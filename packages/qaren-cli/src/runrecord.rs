@@ -1,6 +1,7 @@
 use crate::candidate::Candidate;
 use crate::exec::{CmdSpec, Runner, Spawned};
 use crate::failure::{Failure, FailureCode};
+use crate::redact::OutputText;
 use crate::scenario::Scenario;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -41,7 +42,7 @@ impl Phase {
 pub struct PidIdentity {
     pub pid: i32,
     pub started_at: String,
-    pub command: String,
+    pub command: OutputText,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,7 +62,7 @@ enum StoredCoreResource {
     Original {
         pid: i32,
         started_at: String,
-        command: String,
+        command: OutputText,
     },
 }
 
@@ -173,11 +174,11 @@ pub struct AppInstallResource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppRemoval {
     pub at: String,
-    pub outcome: String,
+    pub outcome: OutputText,
     pub installed_sha256: String,
-    pub uninstall: String,
-    pub pm_path_after: String,
-    pub package_list_after: String,
+    pub uninstall: OutputText,
+    pub pm_path_after: OutputText,
+    pub package_list_after: OutputText,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -350,7 +351,7 @@ impl Resources {
 pub struct HistoryEntry {
     pub at: String,
     pub phase: String,
-    pub note: String,
+    pub note: OutputText,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -405,14 +406,12 @@ impl RunRecord {
 
     pub fn save(&self, runs_root: &Path) -> Result<(), Failure> {
         validate_run_id(&self.run_id)?;
-        crate::redact::validate_operational_path(runs_root)?;
-        crate::redact::validate_operational_paths(self)?;
         let dir = Self::run_dir(runs_root, &self.run_id);
         let target = dir.join("run.json");
         let tmp = dir.join(format!(".run.json.tmp.{}", std::process::id()));
         let write = || -> std::io::Result<()> {
             std::fs::create_dir_all(&dir)?;
-            let body = crate::redact::durable_json(self)
+            let body = serde_json::to_string_pretty(self)
                 .map_err(|e| std::io::Error::other(format!("serialize run record: {e}")))?;
             std::fs::write(&tmp, body)?;
             std::fs::rename(&tmp, &target)?;
@@ -430,7 +429,6 @@ impl RunRecord {
 
     pub fn load(runs_root: &Path, run_id: &str) -> Result<RunRecord, Failure> {
         validate_run_id(run_id)?;
-        crate::redact::validate_operational_path(runs_root)?;
         let path = Self::path(runs_root, run_id);
         let raw = std::fs::read_to_string(&path).map_err(|e| {
             Failure::new(
@@ -448,7 +446,6 @@ impl RunRecord {
                 "the record is corrupt; resolve ownership manually before touching resources",
             )
         })?;
-        crate::redact::validate_operational_paths(&record)?;
         if record.schema != RUN_SCHEMA {
             return Err(Failure::new(
                 "load",
@@ -492,7 +489,7 @@ impl RunRecord {
         self.history.push(HistoryEntry {
             at,
             phase: self.phase.as_str().to_string(),
-            note: note.to_string(),
+            note: crate::redact::OutputText::from_output(note),
         });
     }
 }
@@ -520,7 +517,7 @@ pub fn capture_pid_identity(runner: &mut dyn Runner, pid: i32) -> Option<PidIden
     Some(PidIdentity {
         pid,
         started_at: started.stdout.trim().to_string(),
-        command: command.stdout.trim().to_string(),
+        command: crate::redact::OutputText::from_output(command.stdout.trim()),
     })
 }
 

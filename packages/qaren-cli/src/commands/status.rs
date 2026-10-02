@@ -37,7 +37,7 @@ pub fn status(runner: &mut dyn Runner, runs_root: &Path, run_id: &str) -> Receip
                 "load",
                 timefmt::iso8601_utc(runner.now_epoch_ms()),
             );
-            receipt.next_action = failure.next_action.clone();
+            receipt.next_action = failure.next_action.to_string();
             receipt.failure = Some(failure);
             receipt.commands_executed = runner.commands_executed();
             return receipt;
@@ -119,7 +119,7 @@ pub fn status(runner: &mut dyn Runner, runs_root: &Path, run_id: &str) -> Receip
         ReceiptResult::Failed | ReceiptResult::Refused => receipt
             .failure
             .as_ref()
-            .map(|f| f.next_action.clone())
+            .map(|f| f.next_action.to_string())
             .unwrap_or_else(|| format!("qaren cleanup {run_id} --json")),
         _ => "re-run status; if still unknown, inspect the run directory".to_string(),
     };

@@ -20,73 +20,51 @@ pub fn names_private_key(text: &str) -> bool {
         .any(|w| w.eq_ignore_ascii_case(b"private key"))
 }
 
-pub fn validate_operational_path(path: &std::path::Path) -> Result<(), crate::failure::Failure> {
-    let unsafe_path = names_private_key(&path.to_string_lossy())
-        || path.ancestors().any(|ancestor| {
-            ancestor
-                .canonicalize()
-                .is_ok_and(|resolved| names_private_key(&resolved.to_string_lossy()))
-        });
-    if unsafe_path {
-        Err(crate::failure::Failure::new(
-            "validate",
-            crate::failure::FailureCode::OwnershipUnproven,
-            "operational path is unsafe for durable ownership; operation refused",
-            "choose paths without the sensitive phrase; for existing records, resolve ownership manually before retrying",
-        ))
-    } else {
-        Ok(())
+#[derive(Debug, Clone, Eq, serde::Serialize)]
+#[serde(transparent)]
+pub struct OutputText(String);
+
+impl OutputText {
+    pub fn from_output(raw: &str) -> Self {
+        Self(redact_secrets(raw))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-pub fn validate_operational_paths<T: serde::Serialize>(
-    value: &T,
-) -> Result<(), crate::failure::Failure> {
-    fn walk(value: &serde_json::Value) -> Result<(), crate::failure::Failure> {
-        match value {
-            serde_json::Value::Array(items) => {
-                for item in items {
-                    walk(item)?;
-                }
-            }
-            serde_json::Value::Object(fields) => {
-                for (key, value) in fields {
-                    if matches!(
-                        key.as_str(),
-                        "path"
-                            | "log"
-                            | "lock_dir"
-                            | "repo_root"
-                            | "project_root"
-                            | "worktree_root"
-                            | "scenario_path"
-                            | "adb_vendor_key"
-                            | "adb_path"
-                            | "usb_lock_dir"
-                            | "worktree"
-                            | "farm_path"
-                            | "workspace"
-                    ) {
-                        if let Some(path) = value.as_str() {
-                            validate_operational_path(std::path::Path::new(path))?;
-                        }
-                    }
-                    walk(value)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
+impl<'de> serde::Deserialize<'de> for OutputText {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = <String as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(Self::from_output(&raw))
     }
-    let value = serde_json::to_value(value).map_err(|_| {
-        crate::failure::Failure::new(
-            "validate",
-            crate::failure::FailureCode::OwnershipUnproven,
-            "operational paths could not be validated",
-            "resolve ownership manually before retrying",
-        )
-    })?;
-    walk(&value)
+}
+
+impl std::ops::Deref for OutputText {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for OutputText {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<T: AsRef<str> + ?Sized> PartialEq<T> for OutputText {
+    fn eq(&self, other: &T) -> bool {
+        self.0 == other.as_ref()
+    }
+}
+
+impl std::fmt::Display for OutputText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 pub fn redact_secrets(raw: &str) -> String {
