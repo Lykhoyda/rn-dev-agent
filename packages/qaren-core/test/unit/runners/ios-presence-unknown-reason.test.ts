@@ -146,15 +146,15 @@ ${section(source, '  private func presenceRead<', '  private func presenceLabelS
       hiddenContentAbove: nil, hiddenContentBelow: nil)
   }
 ${section(source, '  func snapshotPlatformPresence(', '  func retainSnapshotTargets(')}
-  func observe(_ descriptor: XCUIElementSnapshot, count: Int, exact: Bool, app: XCUIApplication, diagnostic: Bool, deadline: Double) -> [String: Any] {
+  func observe(_ descriptor: XCUIElementSnapshot, count: Int, app: XCUIApplication, diagnostic: Bool, deadline: Double) -> [String: Any] {
     let timing = PresenceCaptureTiming(started: now, now: { self.now })
     var reasons: [String] = []
     let stamp: Double?
     if diagnostic {
-      stamp = observePresence(PresenceDescriptor(descriptor)!, count: count, predicateIsExact: exact,
+      stamp = observePresence(PresenceDescriptor(descriptor)!, count: count,
         app: app, deadline: deadline, timing: timing, unknownReason: { reasons.append($0.rawValue) })
     } else {
-      stamp = observePresence(PresenceDescriptor(descriptor)!, count: count, predicateIsExact: exact,
+      stamp = observePresence(PresenceDescriptor(descriptor)!, count: count,
         app: app, deadline: deadline, timing: timing)
     }
     return ["observed": stamp != nil, "stamp": stamp ?? -1, "reasons": reasons, "reads": reads,
@@ -164,7 +164,7 @@ ${section(source, '  func snapshotPlatformPresence(', '  func retainSnapshotTarg
 func emit(_ value: [String: Any]) throws {
   print(String(data: try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), encoding: .utf8)!)
 }
-for name in ["first-true", "first-false", "first-nil", "all-nil", "snapshot-nil", "snapshot-mismatch", "invalid-descriptor", "count-mismatch", "false-false", "nil-false", "false-nil", "nil-true", "false-true", "true-nil", "post-nil", "post-mismatch", "deadline-before", "deadline-after"] {
+for name in ["first-true", "first-false", "first-nil", "r8-transient", "r8-replaced", "all-nil", "snapshot-nil", "snapshot-mismatch", "invalid-descriptor", "count-mismatch", "false-false", "nil-false", "false-nil", "nil-true", "false-true", "true-nil", "post-nil", "post-mismatch", "deadline-before", "deadline-after"] {
   for diagnostic in [false, true] {
     reads = []
     let h = Harness(), initial = XCUIElementSnapshot()
@@ -172,8 +172,20 @@ for name in ["first-true", "first-false", "first-nil", "all-nil", "snapshot-nil"
     let a = XCUIElement(0), b = XCUIElement(1)
     app.query.elements = [a, b]
     var count = 2
+    // A single node: one live element and a group of one, so only that node can be hit.
+    if name.hasPrefix("first-") || name.hasPrefix("deadline-") { app.query.elements = [a]; count = 1 }
     switch name {
     case "first-false": a.hit = false
+    // A is unique but occluded; B shares type, identifier and label at another frame and is hittable.
+    case "r8-transient":
+      count = 1; a.hit = false
+      let moved = XCUIElementSnapshot(); moved.frame.origin.x += 50; b.snapshots = [moved]
+      app.query.elements = [b, a]
+    // Only the different-frame B exists live.
+    case "r8-replaced":
+      count = 1
+      let moved = XCUIElementSnapshot(); moved.frame.origin.x += 50; b.snapshots = [moved]
+      app.query.elements = [b]
     case "first-nil": a.hit = nil
     case "all-nil": app.query.unavailable = true
     case "snapshot-nil": a.unavailableAt = 1
@@ -191,7 +203,7 @@ for name in ["first-true", "first-false", "first-nil", "all-nil", "snapshot-nil"
     case "deadline-after": a.onHit = { h.now = 20_000 }
     default: break
     }
-    var result = h.observe(initial, count: count, exact: name.hasPrefix("first-") || name.hasPrefix("deadline-"), app: app, diagnostic: diagnostic, deadline: name == "deadline-before" ? 1000 : 20_000)
+    var result = h.observe(initial, count: count, app: app, diagnostic: diagnostic, deadline: name == "deadline-before" ? 1000 : 20_000)
     result["name"] = name; result["diagnostic"] = diagnostic
     try emit(result)
   }
@@ -216,6 +228,13 @@ for name in ["empty", "clipped", "ambiguous", "group-false", "group-nil", "group
   case "disabled-positive": first.isEnabled = false
   default: break
   }
+  // The general path binds every live member: a nested text chain has two, and live state mirrors the tree.
+  if !first.children.isEmpty {
+    let twin = XCUIElement(1)
+    twin.hit = live.hit
+    app.query.elements = [live, twin]
+  }
+  live.snapshots[0].isEnabled = first.isEnabled
   let payload = h.snapshotPlatformPresence(app: app, appId: "PRIVATE-app", presenceBudgetMs: 20_000)
   let nodes = payload.nodes!, capture = payload.presenceCapture!
   var observations: [[String: Any]] = []
@@ -249,11 +268,19 @@ precondition(decoded.unknownReason == nil)
     .split('\n')
     .map((line) => JSON.parse(line));
   const fallback = ['descendants', 'matching', 'all', 'snapshot-0', 'snapshot-1'];
-  const first = ['descendants', 'matching', 'first', 'hit-0'];
+  // Every group binds all matches and checks the full descriptor live; there is no first-match read.
+  const single = ['descendants', 'matching', 'all', 'snapshot-0'];
+  const pair = ['descendants', 'matching', 'all', 'snapshot-0', 'snapshot-1'];
   for (const [name, reason, expectedReads] of [
-    ['first-true', undefined, first],
-    ['first-false', 'not-hittable', first],
-    ['first-nil', 'read-unavailable', first],
+    ['first-true', undefined, [...single, 'hit-0', 'snapshot-0']],
+    ['first-false', 'not-hittable', [...single, 'hit-0']],
+    ['first-nil', 'read-unavailable', [...single, 'hit-0']],
+    [
+      'r8-transient',
+      'not-hittable',
+      ['descendants', 'matching', 'all', 'snapshot-1', 'snapshot-0', 'hit-0'],
+    ],
+    ['r8-replaced', 'match-count-mismatch', ['descendants', 'matching', 'all', 'snapshot-1']],
     ['all-nil', 'read-unavailable', ['descendants', 'matching', 'all']],
     ['snapshot-nil', 'read-unavailable', fallback.slice(0, -1)],
     ['snapshot-mismatch', 'match-count-mismatch', fallback],
@@ -268,7 +295,7 @@ precondition(decoded.unknownReason == nil)
     ['post-nil', 'read-unavailable', [...fallback, 'hit-0', 'snapshot-0']],
     ['post-mismatch', 'post-hit-mismatch', [...fallback, 'hit-0', 'snapshot-0']],
     ['deadline-before', 'read-unavailable', ['descendants', 'matching']],
-    ['deadline-after', 'read-unavailable', first],
+    ['deadline-after', 'read-unavailable', [...single, 'hit-0']],
   ] as const) {
     await t.test(name, () => {
       const on = rows.find((row) => row.name === name && row.diagnostic);
@@ -290,12 +317,12 @@ precondition(decoded.unknownReason == nil)
     ['empty', 'empty-frame', 1, []],
     ['clipped', 'clipped', 1, []],
     ['ambiguous', 'ambiguous-descriptor', 2, []],
-    ['group-false', 'not-hittable', 2, first],
-    ['group-nil', 'read-unavailable', 2, first],
-    ['group-true', 'none', 2, first],
-    ['outer-nil', 'read-unavailable', 2, first],
-    ['outer-nil-after-false', 'read-unavailable', 2, first],
-    ['disabled-positive', 'none', 1, first],
+    ['group-false', 'not-hittable', 2, [...pair, 'hit-0', 'hit-1']],
+    ['group-nil', 'read-unavailable', 2, [...pair, 'hit-0', 'hit-1']],
+    ['group-true', 'none', 2, [...pair, 'hit-0', 'snapshot-0']],
+    ['outer-nil', 'read-unavailable', 2, [...pair, 'hit-0', 'snapshot-0']],
+    ['outer-nil-after-false', 'read-unavailable', 2, [...pair, 'hit-0', 'hit-1']],
+    ['disabled-positive', 'none', 1, [...single, 'hit-0', 'snapshot-0']],
   ] as const) {
     await t.test(name, () => {
       const row = rows.find((row) => row.name === name);
