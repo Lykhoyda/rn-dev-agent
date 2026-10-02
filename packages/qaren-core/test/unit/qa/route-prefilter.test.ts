@@ -2,11 +2,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { buildFiber, createSandbox } from '../helpers/inject-harness.js';
+import { captureScreen } from '../../../dist/qa/capture.js';
+import { parsePlan } from '../../../dist/qa/plan.js';
+import { runPlan } from '../../../dist/qa/walker.js';
+import { nativeCapture } from './platform-presence-fixtures.ts';
+import { choice, scriptedJudge, walker } from './judgment-fixtures.ts';
 
 interface FiberSpec {
   name?: string;
   hostType?: string;
   props?: Record<string, unknown>;
+  text?: string;
   children?: FiberSpec[];
 }
 
@@ -14,7 +20,15 @@ const onPress = () => undefined;
 const button = (testID: string): FiberSpec => ({ name: 'Pressable', props: { testID, onPress } });
 
 function digest(children: FiberSpec[], qaCapture = false) {
-  const sandbox = createSandbox({ fiberRoot: buildFiber({ name: 'App', children }) });
+  const fiberRoot = buildFiber({ name: 'App', children });
+  const queue = [fiberRoot];
+  while (queue.length) {
+    const fiber = queue.pop()!;
+    if (typeof fiber.memoizedProps === 'string') fiber.tag = 6;
+    if (fiber.child) queue.push(fiber.child);
+    if (fiber.sibling) queue.push(fiber.sibling);
+  }
+  const sandbox = createSandbox({ fiberRoot });
   return JSON.parse(
     vm.runInContext(
       `__QAREN.getTree({ interactiveOnly: true, semanticEvidence: true${qaCapture ? ', qa: true' : ''} })`,
@@ -69,4 +83,63 @@ test('a large tree whose bulk is on inactive routes still yields a complete acti
   assert.deepEqual(ids(out), ['active']);
   assert.equal(out.truncated, undefined);
   assert.equal(out.verdict.complete, true);
+});
+
+test('inactive fibers with their own control identity cannot block a visible action', async () => {
+  for (const qa of [false, true]) {
+    const out = digest(
+      [
+        {
+          hostType: 'RCTView',
+          props: { testID: 'hidden-action', onPress, style: { display: 'none' } },
+          children: [{ text: 'Hidden action text' }],
+        },
+        {
+          name: 'Screen',
+          props: { activityState: 0, testID: 'inactive-action', onPress },
+          children: [{ text: 'Inactive route text' }],
+        },
+        {
+          hostType: 'RCTView',
+          props: { testID: 'save', onPress, accessibilityRole: 'button' },
+          children: [
+            { text: 'Save' },
+            {
+              hostType: 'RCTView',
+              props: { style: { display: 'none' } },
+              children: [{ text: 'Hidden descendant text' }],
+            },
+            {
+              name: 'Screen',
+              props: { activityState: 0 },
+              children: [{ text: 'Inactive descendant text' }],
+            },
+          ],
+        },
+      ],
+      qa,
+    );
+    assert.deepEqual(ids(out), ['save']);
+    assert.deepEqual(
+      out.hostEvidence.hosts.map((host) => host.testID),
+      ['save'],
+    );
+    assert.equal(out.interactive[0].text, 'Save');
+    const f = walker(
+      [],
+      scriptedJudge((questions) => ({
+        target_1: choice(questions.target_1),
+      })),
+    );
+    f.deps.captureScreen = () =>
+      captureScreen({
+        appId: 'com.test',
+        requirePrivateInputs: true,
+        native: async () => nativeCapture(),
+        react: async () => out,
+      });
+    const result = await runPlan(parsePlan('1. Tap the save button').blocks!, f.deps);
+    assert.equal(result.verdict, 'PASS', JSON.stringify(result));
+    assert.deepEqual(f.actions, ['press @e1']);
+  }
 });

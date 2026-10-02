@@ -1,4 +1,5 @@
 import type { NativeNode, Screen } from './screen.js';
+import { kindOf } from './screen.js';
 import { capturePrivateScreen, isPossibleInput } from './privacy.js';
 
 export class PrivateInputCaptureError extends Error {
@@ -33,23 +34,21 @@ export function applyNativePrivateInputs(screen: Screen, nodes: readonly NativeN
   capturePrivateScreen(
     screen,
     screen.elements
-      .filter((element) => isPossibleInput(element) || element.secure)
-      .map((element) => {
-        // Android reports an input's text as its label, so the label may be the value.
-        const android = byRef.get(element.ref)?.type?.includes('.') === true;
-        const values = [element.value, ...(android ? [element.label] : [])].filter(
-          (value): value is string => !!value,
-        );
-        return {
-          values,
-          secure: element.secure,
-          testID: element.testID,
-          elements: [element],
-          associationUnique: true,
-          // A secure node's label may be its value natively; masking a name too is the safe error.
-          labelMayBeValue: android || element.secure,
-        };
-      }),
+      .filter(
+        (element) =>
+          isPossibleInput(element) ||
+          element.secure ||
+          (kindOf(byRef.get(element.ref)?.type) === 'other' &&
+            !['Application', 'Window'].includes(byRef.get(element.ref)?.type ?? '')),
+      )
+      .map((element) => ({
+        values: element.value ? [element.value] : [],
+        secure: element.secure,
+        testID: element.testID,
+        elements: [element],
+        associationUnique: true,
+        labelMayBeValue: true,
+      })),
   );
   return screen;
 }

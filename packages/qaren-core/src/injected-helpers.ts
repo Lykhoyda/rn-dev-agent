@@ -1346,7 +1346,7 @@ export const INJECTED_HELPERS = `
       // Gather descendant text (capped), NOT recursing into nested interactive
       // nodes (they each get their own entry).
       var collectText = function(fiber, depth, acc) {
-        if (!fiber || depth > 8 || acc.s.length >= 120) return;
+        if (!fiber || depth > 8 || acc.s.length >= 120 || inactiveRoute(fiber)) return;
         if (typography && (++typographyDigestVisits > 5000 || Date.now() >= typography.deadline)) { typography.evidence.complete = false; return; }
         if (fiber.tag === 6 && typeof fiber.memoizedProps === 'string') {
           var t = fiber.memoizedProps.trim();
@@ -1439,6 +1439,7 @@ export const INJECTED_HELPERS = `
         if (!ifiber || iSeen.has(ifiber)) continue;
         iSeen.add(ifiber);
         iScanned++;
+        if (inactiveRoute(ifiber)) continue;
         if (typography) typography.prepare(ifiber);
         var hostIndex = collectHostEvidence(ifiber);
         var typographyRecord = typography ? typography.observe(ifiber, iframe, hostIndex) : null;
@@ -1505,7 +1506,6 @@ export const INJECTED_HELPERS = `
           if (typographyRecord.hostType === 'RCTText') textOwnerHostIndex = hostIndex;
           else if (typographyRecord.hostType !== 'RCTVirtualText') textOwnerHostIndex = null;
         }
-        if (inactiveRoute(ifiber)) ich = null;
         while (ich) {
           if (typography && (++iEnqueued > iBudget || Date.now() >= typography.deadline)) { iEnqueueTruncated = true; break; }
           iQueue.push({ fiber: ich, forwarded: nextForwarded, wrapperCandidate: wrapperCandidate, parentFiber: ifiber, parentHostIndex: parentHostIndex, textOwnerHostIndex: textOwnerHostIndex, rootIndex: iframe.rootIndex, animatedTypography: typographyRecord && typographyRecord.animated, hidden: hidden });
