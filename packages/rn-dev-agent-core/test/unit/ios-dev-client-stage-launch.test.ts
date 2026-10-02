@@ -34,7 +34,15 @@ const APP_ID = 'com.rndevagent.testapp';
 const SESSION_URL = 'http://127.0.0.1:8208/?disableOnboarding=1';
 
 function hook(url = SESSION_URL) {
-  return [{ launchApp: { appId: APP_ID, arguments: { '-initialUrl': url } } }];
+  return [
+    {
+      launchApp: {
+        appId: APP_ID,
+        permissions: { all: 'unset' },
+        arguments: { '-initialUrl': url },
+      },
+    },
+  ];
 }
 
 function parseFlow(text: string): { header: Record<string, unknown>; body: unknown } {

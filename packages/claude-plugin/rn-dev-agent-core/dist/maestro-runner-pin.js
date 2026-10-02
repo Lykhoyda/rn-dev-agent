@@ -16612,6 +16612,7 @@ function stageFlowOptions(stage) {
       {
         launchApp: {
           appId: stage.appId,
+          permissions: { all: "unset" },
           arguments: { "-initialUrl": stage.devClientLaunchUrl }
         }
       }
