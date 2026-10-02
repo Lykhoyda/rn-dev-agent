@@ -681,7 +681,11 @@ test('monotonic overall deadline includes freshness and prevents begin after tim
       });
     },
   };
-  const result = assert.rejects(captureQaReact(client), sanitized);
+  const result = assert.rejects(captureQaReact(client), (error) => {
+    sanitized(error);
+    assert.ok(error instanceof PrivateInputCaptureTimeout);
+    return true;
+  });
   now = 1500;
   t.mock.timers.tick(1500);
   await result;
@@ -734,7 +738,11 @@ test('hung begin and late completion cannot bypass the overall deadline', async 
       });
     },
   };
-  const result = assert.rejects(captureQaReact(client), sanitized);
+  const result = assert.rejects(captureQaReact(client), (error) => {
+    sanitized(error);
+    assert.ok(error instanceof PrivateInputCaptureTimeout);
+    return true;
+  });
   now = 1500;
   t.mock.timers.tick(1500);
   await result;
@@ -753,7 +761,51 @@ test('port completion after the monotonic deadline cannot return an observation'
       return observation;
     },
   };
-  await assert.rejects(captureQaReact(client), sanitized);
+  await assert.rejects(captureQaReact(client), (error) => {
+    sanitized(error);
+    assert.equal(error instanceof PrivateInputCaptureTimeout, false);
+    return true;
+  });
+});
+
+test('a hung private read retries only when begin supplied no private values', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  for (const facts of [
+    inputs().facts,
+    [{ ...inputs().facts[0], values: [''] }],
+    [{ ...inputs().facts[0], values: [] }],
+    [],
+  ]) {
+    let calls = 0;
+    const client: Pick<CDPClient, 'withPrivateHelperWorld'> = {
+      async withPrivateHelperWorld(operation) {
+        return operation(async () => {
+          calls++;
+          if (calls === 1) return { ...start(), inputs: { version: 1, complete: true, facts } };
+          return new Promise<never>(() => {});
+        });
+      },
+    };
+    const result = assert.rejects(captureQaReact(client), (error) => {
+      sanitized(error);
+      assert.equal(
+        error instanceof PrivateInputCaptureTimeout,
+        !facts.some((fact) => fact.values.length > 0),
+      );
+      assert.equal(JSON.stringify(error).includes(sentinel), false);
+      return true;
+    });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    now += 25;
+    t.mock.timers.tick(25);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    assert.equal(calls, 2);
+    now += 1475;
+    t.mock.timers.tick(1475);
+    await result;
+  }
 });
 
 test('the handlerless digest fact survives capture and a malformed one refuses', async () => {

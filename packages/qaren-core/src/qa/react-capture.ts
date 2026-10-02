@@ -124,6 +124,7 @@ export async function captureQaReact(
 ): Promise<ReactObservation> {
   const deadline = performance.now() + 1500;
   let expired = false;
+  let receivedPrivateValues = false;
   const remaining = (): number => {
     const ms = deadline - performance.now();
     if (expired || ms <= 0) throw new PrivateInputCaptureError();
@@ -146,9 +147,10 @@ export async function captureQaReact(
           ),
           true,
         );
-        remaining();
         const inputs = start.inputs;
         assertPrivateInputPayload(inputs);
+        receivedPrivateValues = inputs.facts.some((fact) => fact.values.length > 0);
+        remaining();
         const id = start.id as string;
         let current = start;
         while (current.state === 'pending') {
@@ -168,7 +170,7 @@ export async function captureQaReact(
     remaining();
     return observation;
   } catch {
-    throw expired || performance.now() >= deadline
+    throw !receivedPrivateValues && (expired || performance.now() >= deadline)
       ? new PrivateInputCaptureTimeout()
       : new PrivateInputCaptureError();
   } finally {
