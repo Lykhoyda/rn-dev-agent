@@ -1,5 +1,5 @@
 import type { NativeNode, Screen } from './screen.js';
-import { capturePrivateScreen } from './privacy.js';
+import { capturePrivateScreen, isPossibleInput } from './privacy.js';
 
 export class PrivateInputCaptureError extends Error {
   readonly code = 'PRIVATE_INPUT_CAPTURE_UNKNOWN' as const;
@@ -35,7 +35,7 @@ export function applyNativePrivateInputs(screen: Screen, nodes: readonly NativeN
   capturePrivateScreen(
     screen,
     screen.elements
-      .filter((element) => element.kind === 'input' || element.secure)
+      .filter((element) => isPossibleInput(element) || element.secure)
       .map((element) => {
         // Android reports an input's text as its label, so the label may be the value.
         const android = byRef.get(element.ref)?.type?.includes('.') === true;
