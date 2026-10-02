@@ -90,6 +90,9 @@ pub fn load_state(worktree_root: &Path, platform: &str, app_id: &str) -> StateSt
 pub fn save_json<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NONCE: AtomicU64 = AtomicU64::new(0);
+    crate::redact::validate_operational_path(path)
+        .and_then(|_| crate::redact::validate_operational_paths(value))
+        .map_err(|f| std::io::Error::other(f.detail))?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -522,6 +525,9 @@ pub fn claim_lock(
     holder: &LockHolder,
     policy: LockPolicy,
 ) -> LockOutcome {
+    if let Err(f) = crate::redact::validate_operational_path(&lock_dir(lock_root, name)) {
+        return LockOutcome::Error(f.detail);
+    }
     if let Err(e) = std::fs::create_dir_all(lock_root) {
         return LockOutcome::Error(format!(
             "cannot create lock root {}: {e}",
@@ -639,6 +645,9 @@ pub enum ReleaseOutcome {
 }
 
 pub fn release_lock(dir: &Path, expected_holder: &str, expected_run_id: &str) -> ReleaseOutcome {
+    if let Err(f) = crate::redact::validate_operational_path(dir) {
+        return ReleaseOutcome::Refused(f.detail);
+    }
     let Some(parent) = dir.parent() else {
         return ReleaseOutcome::Refused(format!(
             "lock path {} has no parent directory; refusing",

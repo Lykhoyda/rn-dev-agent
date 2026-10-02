@@ -188,6 +188,9 @@ fn prepare_validated(
     args: &PrepareArgs,
     started_ms: u64,
 ) -> Result<Receipt, Failure> {
+    for path in [&args.lock_root, &args.runs_root, &args.scenario_path] {
+        crate::redact::validate_operational_path(path)?;
+    }
     let (scenario, raw) = Scenario::load(&args.scenario_path)?;
     let scenario_sha256 = candidate::sha256_hex(raw.as_bytes());
     let scenario_dir = args
@@ -621,6 +624,9 @@ pub(crate) fn check_prereqs(
     scenario: &Scenario,
     android_home: Option<&str>,
 ) -> Result<(), Failure> {
+    if let Some(home) = android_home {
+        crate::redact::validate_operational_path(Path::new(home))?;
+    }
     let handoff = scenario.build.owner == BuildOwner::Qaren;
     let mut tools: Vec<&str> = vec!["git", "pnpm", "node"];
     if !handoff {

@@ -20,6 +20,75 @@ pub fn names_private_key(text: &str) -> bool {
         .any(|w| w.eq_ignore_ascii_case(b"private key"))
 }
 
+pub fn validate_operational_path(path: &std::path::Path) -> Result<(), crate::failure::Failure> {
+    let unsafe_path = names_private_key(&path.to_string_lossy())
+        || path.ancestors().any(|ancestor| {
+            ancestor
+                .canonicalize()
+                .is_ok_and(|resolved| names_private_key(&resolved.to_string_lossy()))
+        });
+    if unsafe_path {
+        Err(crate::failure::Failure::new(
+            "validate",
+            crate::failure::FailureCode::OwnershipUnproven,
+            "operational path is unsafe for durable ownership; operation refused",
+            "choose paths without the sensitive phrase; for existing records, resolve ownership manually before retrying",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+pub fn validate_operational_paths<T: serde::Serialize>(
+    value: &T,
+) -> Result<(), crate::failure::Failure> {
+    fn walk(value: &serde_json::Value) -> Result<(), crate::failure::Failure> {
+        match value {
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    walk(item)?;
+                }
+            }
+            serde_json::Value::Object(fields) => {
+                for (key, value) in fields {
+                    if matches!(
+                        key.as_str(),
+                        "path"
+                            | "log"
+                            | "lock_dir"
+                            | "repo_root"
+                            | "project_root"
+                            | "worktree_root"
+                            | "scenario_path"
+                            | "adb_vendor_key"
+                            | "adb_path"
+                            | "usb_lock_dir"
+                            | "worktree"
+                            | "farm_path"
+                            | "workspace"
+                    ) {
+                        if let Some(path) = value.as_str() {
+                            validate_operational_path(std::path::Path::new(path))?;
+                        }
+                    }
+                    walk(value)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    let value = serde_json::to_value(value).map_err(|_| {
+        crate::failure::Failure::new(
+            "validate",
+            crate::failure::FailureCode::OwnershipUnproven,
+            "operational paths could not be validated",
+            "resolve ownership manually before retrying",
+        )
+    })?;
+    walk(&value)
+}
+
 pub fn redact_secrets(raw: &str) -> String {
     if names_private_key(raw) {
         return PRIVATE_KEY_WITHHELD.to_string();

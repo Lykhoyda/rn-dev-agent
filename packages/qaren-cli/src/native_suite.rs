@@ -62,6 +62,9 @@ fn roots(runner: &dyn Runner) -> Result<(PathBuf, PathBuf), String> {
     if !locks.is_absolute() {
         return Err("QAREN_LOCK_ROOT must be an absolute path".into());
     }
+    crate::redact::validate_operational_path(&home.join("native-suites"))
+        .and_then(|_| crate::redact::validate_operational_path(&locks))
+        .map_err(|f| f.detail)?;
     Ok((home.join("native-suites"), locks))
 }
 
@@ -349,6 +352,8 @@ pub fn recover(runner: &mut dyn Runner, run_id: &str) -> Result<NativeSuite, Str
         std::fs::read(dir.join("suite.json")).map_err(|_| "native suite record is unreadable")?;
     let mut record: NativeSuite =
         serde_json::from_slice(&raw).map_err(|_| "native suite record is invalid")?;
+    crate::redact::validate_operational_paths(&record)
+        .map_err(|f| format!("{}; {}", f.detail, f.next_action))?;
     let expected = locks
         .canonicalize()
         .map_err(|_| "cannot resolve lock root")?

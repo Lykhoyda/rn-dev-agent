@@ -405,6 +405,8 @@ impl RunRecord {
 
     pub fn save(&self, runs_root: &Path) -> Result<(), Failure> {
         validate_run_id(&self.run_id)?;
+        crate::redact::validate_operational_path(runs_root)?;
+        crate::redact::validate_operational_paths(self)?;
         let dir = Self::run_dir(runs_root, &self.run_id);
         let target = dir.join("run.json");
         let tmp = dir.join(format!(".run.json.tmp.{}", std::process::id()));
@@ -428,6 +430,7 @@ impl RunRecord {
 
     pub fn load(runs_root: &Path, run_id: &str) -> Result<RunRecord, Failure> {
         validate_run_id(run_id)?;
+        crate::redact::validate_operational_path(runs_root)?;
         let path = Self::path(runs_root, run_id);
         let raw = std::fs::read_to_string(&path).map_err(|e| {
             Failure::new(
@@ -445,6 +448,7 @@ impl RunRecord {
                 "the record is corrupt; resolve ownership manually before touching resources",
             )
         })?;
+        crate::redact::validate_operational_paths(&record)?;
         if record.schema != RUN_SCHEMA {
             return Err(Failure::new(
                 "load",

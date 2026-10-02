@@ -124,6 +124,16 @@ fn run_inner(
     started_ms: u64,
     preflight_jev: &mut Option<core::JevRollup>,
 ) -> Result<Receipt, Failure> {
+    for path in [
+        &req.lock_root,
+        &req.runs_root,
+        &req.project_root,
+        &req.config_path,
+        &req.plan_file,
+        &req.runtime_dir,
+    ] {
+        crate::redact::validate_operational_path(path)?;
+    }
     validate_boot_device(req.platform, req.device.as_deref(), req.boot_device)?;
     let (config, config_raw) = CheckConfig::load(&req.config_path)?;
     config.validate_for_platform(req.platform)?;
@@ -137,6 +147,7 @@ fn run_inner(
         .clone()
         .or_else(|| config.node_path.as_ref().map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("node"));
+    crate::redact::validate_operational_path(&node)?;
     preflight_node(runner, &node)?;
     let plan = read_plan(&req.plan_file)?;
     let prepared = preflight_plan(

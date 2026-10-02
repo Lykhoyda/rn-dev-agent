@@ -180,6 +180,9 @@ pub fn app_root_key(repo_root: &Path, project_root: &Path) -> Option<String> {
 
 // Writes the document atomically and returns the sha256 of its bytes.
 pub fn save_document(path: &Path, document: &HandoffDocument) -> std::io::Result<String> {
+    crate::redact::validate_operational_path(path)
+        .and_then(|_| crate::redact::validate_operational_paths(document))
+        .map_err(|f| std::io::Error::other(f.detail))?;
     let body = crate::redact::durable_json(document)
         .map_err(|e| std::io::Error::other(format!("serialize handoff: {e}")))?
         .into_bytes();

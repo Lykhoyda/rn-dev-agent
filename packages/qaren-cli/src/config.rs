@@ -64,6 +64,7 @@ impl CheckConfig {
 
     // Returns the bytes it parsed so the run record hashes exactly that configuration.
     pub fn load(path: &Path) -> Result<(CheckConfig, String), Failure> {
+        crate::redact::validate_operational_path(path)?;
         let raw = std::fs::read_to_string(path).map_err(|e| {
             Failure::new(
                 "config",
@@ -112,6 +113,7 @@ impl CheckConfig {
             return Err(invalid("appId is required".to_string()));
         }
         if let Some(node) = &self.node_path {
+            crate::redact::validate_operational_path(Path::new(node))?;
             if !Path::new(node).is_absolute() {
                 return Err(invalid(format!(
                     "nodePath {node:?} must be an absolute path"

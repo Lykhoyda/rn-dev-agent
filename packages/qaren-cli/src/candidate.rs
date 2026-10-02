@@ -518,6 +518,8 @@ pub fn resolve(
     } else {
         repo_root.join(&scenario.candidate.project_root)
     };
+    crate::redact::validate_operational_path(&repo_root)?;
+    crate::redact::validate_operational_path(&project_root)?;
     let contained = repo_root
         .canonicalize()
         .and_then(|repo| {
