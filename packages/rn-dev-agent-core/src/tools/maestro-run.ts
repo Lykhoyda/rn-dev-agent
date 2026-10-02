@@ -45,6 +45,7 @@ import {
   parseAndValidateFlow,
   isValidBundleId,
   MaestroValidationError,
+  type MaestroFlowOptions,
 } from '../domain/maestro-validator.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { parseMaestroFailure } from '../domain/maestro-error-parser.js';
@@ -220,6 +221,8 @@ export interface MaestroRunArgs {
   flowRelaunches?: FlowRelaunchTracker;
   /** GH #993: managed learned-action replay on a dev client; scopes flow-relaunch attribution. */
   devClientReplay?: boolean;
+  /** iOS dev-client session URL; each origin stage relaunches into it instead of the launcher. */
+  devClientLaunchUrl?: string;
   /**
    * GH #623: attempt lineage for the canonical run ledger. cdp_run_action
    * passes kind 'repaired' + parentAttemptId on its post-repair retry so one
@@ -383,6 +386,31 @@ function attributeOriginFailureToFlowRelaunch(
     },
   });
   return attributed;
+}
+
+// Each runner process cold-launches the app without arguments, which leaves a dev
+// client on its launcher; relaunch it straight into the session URL first.
+export function stageFlowOptions(stage: {
+  platform: 'ios' | 'android';
+  appId: string | undefined;
+  requiresOrigin: boolean;
+  devClientLaunchUrl: string | undefined;
+}): MaestroFlowOptions {
+  if (!stage.appId) return {};
+  if (stage.platform !== 'ios' || !stage.requiresOrigin || !stage.devClientLaunchUrl) {
+    return { appId: stage.appId };
+  }
+  return {
+    appId: stage.appId,
+    onFlowStart: [
+      {
+        launchApp: {
+          appId: stage.appId,
+          arguments: { '-initialUrl': stage.devClientLaunchUrl },
+        },
+      },
+    ],
+  };
 }
 
 export function planMaestroAuthorityStages(commands: readonly unknown[]): {
@@ -1655,7 +1683,15 @@ export function createMaestroRunHandler(
                 const stageResult = await (async () => {
                   writeFileSync(
                     flowFile,
-                    buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]),
+                    buildMaestroFlow(
+                      stageFlowOptions({
+                        platform,
+                        appId: headerAppId,
+                        requiresOrigin: plannedStageMeta[ledgerStageIndex]?.requiresOrigin === true,
+                        devClientLaunchUrl: args.devClientLaunchUrl,
+                      }),
+                      [...commands],
+                    ),
                     'utf-8',
                   );
                   const executeOnce = async (

@@ -188,13 +188,8 @@ import {
 import { buildStateRead } from './observability/state-read.js';
 import { autostartObserve } from './observability/autostart.js';
 import { removeObserveState } from './observability/observe-state.js';
-import {
-  readRnAgentConfig,
-  resolveAutoHideDevMenu,
-  resolveObserveAutostart,
-  resolveMirrorConfig,
-  type AutoHideDevMenuResolution,
-} from './project-config.js';
+import { resolveObserveAutostart, resolveMirrorConfig } from './project-config.js';
+import { iosDevClientLaunchUrl, sessionAutoHideDevMenu } from './session/session-launch-url.js';
 import { MirrorManager } from './observability/mirror/manager.js';
 import { buildMirrorTargetResolver } from './observability/mirror/target.js';
 import {
@@ -1212,12 +1207,6 @@ const isSessionRuntimeAbsent = createSessionRuntimeAbsenceProbe({
   execute: (file, args, options) => execFileP(file, args, options),
 });
 
-function sessionAutoHideDevMenu(status: SessionStatus): AutoHideDevMenuResolution {
-  return resolveAutoHideDevMenu({
-    readConfig: () => readRnAgentConfig(String(status.source.appRoot)),
-  });
-}
-
 async function writeIosSimulatorDevMenuDefaults(deviceId: string, appId: string): Promise<void> {
   for (const args of iosSimulatorDevMenuDefaultsArgs(deviceId, appId)) {
     await execFileP('xcrun', args);
@@ -1249,7 +1238,7 @@ async function relaunchSessionRuntime(
       deviceId,
       appId,
       '--initialUrl',
-      launchUrl(`http://127.0.0.1:${String(metroPort)}`),
+      iosDevClientLaunchUrl(metroPort, hideDevMenu),
     ]);
     await connectExactSessionTarget(
       { metroPort, platform, appId, deviceId },
