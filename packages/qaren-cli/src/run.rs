@@ -528,23 +528,26 @@ fn run_inner(
     Ok(receipt)
 }
 
-// Blocks are saved beside the config the run read; an external config saves under the checked tree.
 pub fn app_root_for(config_path: &Path, project_root: &Path) -> Result<PathBuf, Failure> {
-    let config_dir = config_path.parent();
-    let root = match config_dir {
-        Some(dir) if dir.file_name().is_some_and(|name| name == ".qaren") => {
-            dir.parent().unwrap_or(project_root)
-        }
-        _ => project_root,
-    };
-    std::fs::canonicalize(root).map_err(|e| {
+    let project = std::fs::canonicalize(project_root).map_err(|e| {
         Failure::new(
             "config",
             FailureCode::ScenarioUnreadable,
-            format!("cannot resolve the app root {}: {e}", root.display()),
+            format!(
+                "cannot resolve the app root {}: {e}",
+                project_root.display()
+            ),
             "run check from the app directory that holds .qaren/config.yaml",
         )
-    })
+    })?;
+    let root = config_path
+        .parent()
+        .filter(|dir| dir.file_name().is_some_and(|name| name == ".qaren"))
+        .and_then(Path::parent)
+        .and_then(|dir| std::fs::canonicalize(dir).ok())
+        .filter(|dir| dir.starts_with(&project))
+        .unwrap_or(project);
+    Ok(root)
 }
 
 pub fn worktree_status(runner: &mut dyn Runner, app_root: &Path) -> Option<BTreeSet<String>> {

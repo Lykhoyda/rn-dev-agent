@@ -1,13 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import type { Block } from '../../../dist/qa/plan.js';
 import type { LedgerRow, Selector } from '../../../dist/qa/ledger.js';
 import {
-  keyboardDismissal,
+  loadBlock,
   readBlock,
   serializeBlock,
   storedMatches,
@@ -240,8 +247,6 @@ test('every ✓ line appears as its exact item.raw comment', () => {
 });
 
 test('Android keyboard dismissal is always settled first; iOS never emits it', () => {
-  assert.deepEqual(keyboardDismissal('android'), ['- waitForAnimationToEnd', '- hideKeyboard']);
-  assert.deepEqual(keyboardDismissal('ios'), []);
   const block = blockOf('### K\n1. Type "ada" into "name-input"\n2. Tap "Save"\n');
   const rows = passRows(block, {
     [block.items[0].line]: { id: 'name-input' },
@@ -307,3 +312,24 @@ test('writeBlock refuses a symlinked corpus and a slug collision', () => {
   assert.throws(() => writeBlock(other, block.slug, yaml), /BLOCK_SLUG_COLLISION/);
   assert.match(readFileSync(path, 'utf8'), /recorded/);
 });
+
+for (const extension of ['yaml', 'yml']) {
+  test(`blocks load and update existing .${extension} without creating an alias`, () => {
+    const root = appRoot();
+    mkdirSync(join(root, '.qaren/actions'));
+    const block = blockOf(literal);
+    const text = serialized(block, passRows(block, literalSelectors));
+    const path = join(root, '.qaren/actions', `${block.slug}.${extension}`);
+    writeFileSync(path, text);
+    assert.equal(loadBlock(root, block.slug), text);
+    assert.equal(
+      writeBlock(root, block.slug, text.replace('com.example.app', 'other.app')),
+      'written',
+    );
+    assert.equal(loadBlock(root, block.slug), readFileSync(path, 'utf8'));
+    assert.deepEqual(readdirSync(join(root, '.qaren/actions')), [`${block.slug}.${extension}`]);
+    writeFileSync(path, '# id: unrelated\n- launchApp\n');
+    assert.throws(() => writeBlock(root, block.slug, text), /BLOCK_SLUG_COLLISION/);
+    assert.equal(readFileSync(path, 'utf8'), '# id: unrelated\n- launchApp\n');
+  });
+}

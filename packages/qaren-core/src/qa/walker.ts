@@ -155,6 +155,7 @@ export async function walkBlock(
   let cached: { item: Item; observation: Observation; decision: ScreenDecision } | undefined;
   let latest: Screen = { elements: [], visibleText: [], front: 'app' };
   let line = 0;
+  let mutationStarted = false;
   let latestObservation = 0;
   const metric = (
     stage: TimingEvent['stage'],
@@ -405,6 +406,7 @@ export async function walkBlock(
     })(observationDeadline(observation.timing, deadline), deps.now, deps.cancelled);
     try {
       context.check();
+      mutationStarted = true;
       const result = await send(context);
       context.assertComplete();
       diagnostic(item, observation, 'dispatch', 'COMPLETED', context.authorizations);
@@ -603,6 +605,7 @@ export async function walkBlock(
   for (const item of block.items) {
     if (opts.fromLine !== undefined && item.line < opts.fromLine) continue;
     line = item.line;
+    mutationStarted = false;
     let currentAttempt = 1;
     resolvedBy = item.source === 'jev' && !replay ? 'jev' : 'exact';
     if (item.kind === 'fill' && item.text && !typed.includes(item.text)) typed.push(item.text);
@@ -871,7 +874,6 @@ export async function walkBlock(
           after.screen,
           shot,
           ref,
-          replay,
         );
       }
       if (outcome) return outcome;
@@ -919,7 +921,12 @@ export async function walkBlock(
           : refusal
             ? await shoot(item).catch(() => undefined)
             : await shoot(item);
-      const miss = replay && error instanceof ResolutionError && error.code === 'REPLAY_SELECTOR';
+      const miss =
+        replay &&
+        !mutationStarted &&
+        item.kind !== 'check' &&
+        error instanceof ResolutionError &&
+        error.code === 'REPLAY_SELECTOR';
       const unknownProcess =
         error instanceof ResolutionError && error.code === 'APP_PROCESS_UNKNOWN'
           ? { code: error.code, message: error.message }

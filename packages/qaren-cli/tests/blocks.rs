@@ -72,18 +72,31 @@ fn actions_list_is_empty_without_a_corpus_and_refuses_a_symlinked_one() {
 }
 
 #[test]
-fn the_app_root_is_the_directory_above_qaren_or_the_checked_tree() {
+fn external_config_never_writes_into_its_project() {
     let root = temp_dir("root");
     let tree = temp_dir("tree");
     assert_eq!(
         app_root_for(&root.join(".qaren/config.yaml"), &tree).unwrap(),
-        root
+        tree
     );
     assert_eq!(
         app_root_for(&root.join("qa/external.yaml"), &tree).unwrap(),
         tree
     );
-    assert!(app_root_for(Path::new("/nonexistent-qaren/.qaren/config.yaml"), &tree).is_err());
+    assert_eq!(
+        app_root_for(&tree.join(".qaren/config.yaml"), &tree).unwrap(),
+        tree
+    );
+    let action = root.join(".qaren/actions/login.yaml");
+    std::fs::write(&action, "project B action").unwrap();
+    let selected = app_root_for(&root.join(".qaren/config.yaml"), &tree).unwrap();
+    std::fs::write(
+        selected.join(".qaren/actions/login.yaml"),
+        "project A action",
+    )
+    .unwrap();
+    assert_eq!(std::fs::read_to_string(action).unwrap(), "project B action");
+    assert!(app_root_for(Path::new("unused"), Path::new("/nonexistent-qaren")).is_err());
 }
 
 fn git(dir: &Path, args: &[&str]) {

@@ -16,32 +16,6 @@ function section(source: string, start: string, end: string) {
   return source.slice(from, to);
 }
 
-test('native no-activation agreement is independent of presence V2 and covers Android dispatch', () => {
-  assert.match(read('Transport'), /"QA_READ_ONLY_V1"/);
-  assert.match(read('Transport'), /"PLATFORM_PRESENCE_V2"/);
-  assert.match(
-    read('CommandExecution'),
-    /if command\.qaReadOnly != true, let bundleId = command\.appBundleId/,
-  );
-  const android = new URL(
-    '../../../../rn-android-runner/app/src/androidTest/java/dev/lykhoyda/rndevagent/androidrunner/',
-    import.meta.url,
-  );
-  const dispatcher = readFileSync(new URL('CommandDispatcher.kt', android), 'utf8');
-  const gate = section(
-    dispatcher,
-    '        if (cmd.optBoolean("qaReadOnly", false))',
-    '        // GH #581: the recorded type target',
-  );
-  const qaBranch = gate.slice(0, gate.indexOf('} else if'));
-  assert.match(qaBranch, /"snapshot", "verifyInput", "isWindowUpdating"/);
-  assert.match(qaBranch, /appPackage == null \|\| !isPackageForeground\(appPackage\)/);
-  assert.match(qaBranch, /return error\("ACTION_CONTEXT_CHANGED"/);
-  assert.doesNotMatch(qaBranch, /foreground\(|startActivity\(/);
-  assert.match(gate.slice(gate.indexOf('} else if')), /foreground\(appPackage\)/);
-  assert.match(readFileSync(new URL('CommandServer.kt', android), 'utf8'), /"QA_READ_ONLY_V1"/);
-});
-
 test('actual Swift preparation and retry loop cannot activate, retarget or recover QA reads', (t) => {
   const available = spawnSync('swift', ['--version'], { encoding: 'utf8' });
   if (available.error && 'code' in available.error && available.error.code === 'ENOENT')

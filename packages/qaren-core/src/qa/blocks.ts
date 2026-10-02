@@ -18,6 +18,7 @@ import {
   captureOwnedActionPathIdentity,
   ownedActionPathIdentityMatches,
   splitYaml,
+  resolveActionPath,
 } from '../domain/action-store.js';
 import { parseM7Header, serializeM7Header } from '../domain/reusable-action.js';
 import type { Block, Item } from './plan.js';
@@ -56,11 +57,6 @@ const selectorYaml = (selector: Selector): string =>
   selector.id !== undefined
     ? `{ id: ${quote(selector.id)} }`
     : `{ text: ${quote(selector.text!)} }`;
-
-// Android dismisses the keyboard only after animations settle; a bare hideKeyboard flakes.
-export function keyboardDismissal(platform: BlockPlatform): string[] {
-  return platform === 'android' ? ['- waitForAnimationToEnd', '- hideKeyboard'] : [];
-}
 
 function commandsFor(item: Item, selector: Selector | undefined, platform: BlockPlatform) {
   switch (item.kind) {
@@ -292,7 +288,8 @@ function readOwnedFile(path: string): string | null {
 }
 
 export function loadBlock(appRoot: string, slug: string): string | null {
-  return readOwnedFile(actionPathFor(appRoot, slug));
+  const path = resolveActionPath(appRoot, slug);
+  return path ? readOwnedFile(path) : null;
 }
 
 // Replay only a block exactly as serializeBlock writes it, so a patch rewrites nothing before line k.
@@ -323,7 +320,7 @@ export function storedFits(
 
 export function writeBlock(appRoot: string, slug: string, text: string): 'written' | 'unchanged' {
   assertOwnedActionCorpus(appRoot);
-  const path = actionPathFor(appRoot, slug);
+  const path = resolveActionPath(appRoot, slug) ?? actionPathFor(appRoot, slug);
   mkdirSync(dirname(path), { recursive: true });
   const identity = captureOwnedActionPathIdentity(appRoot);
   const owned = (): void => {

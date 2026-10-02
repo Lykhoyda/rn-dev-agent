@@ -13,9 +13,9 @@ import { join } from 'node:path';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import type { Block } from '../../../dist/qa/plan.js';
 import type { Element, Screen } from '../../../dist/qa/screen.js';
-import { runPlan, type BlockStore } from '../../../dist/qa/walker.js';
+import { runPlan, walkBlock, type BlockStore } from '../../../dist/qa/walker.js';
 import type { Ledger, WalkResult } from '../../../dist/qa/ledger.js';
-import { element, scriptedJudge, walker } from './judgment-fixtures.ts';
+import { element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
 import { AppProcessGoneError } from '../../../dist/qa/capture.js';
 import { captureInputPrivacy, isPrivateInput } from '../../../dist/qa/privacy.js';
 
@@ -32,6 +32,7 @@ function blocks(markdown: string): Block[] {
 interface AppOptions {
   doneId?: string;
   taskTitle?: string;
+  welcomeId?: string;
 }
 
 // A fresh install of the onboarding → home → tasks app; presses move it forward by testID.
@@ -42,7 +43,7 @@ function app(options: AppOptions = {}) {
     [element('@skip', 'Skip', { testID: 'onboarding-skip' })],
     [element('@done', 'Done', { testID: doneId })],
     [
-      element('@welcome', 'Welcome', { kind: 'text', testID: 'home-title' }),
+      element('@welcome', 'Welcome', { kind: 'text', testID: options.welcomeId ?? 'home-title' }),
       element('@tasks', 'Tasks', { testID: 'tab-tasks' }),
     ],
     [element('@header', options.taskTitle ?? 'Tasks (3)', { kind: 'text', testID: 'task-header' })],
@@ -403,3 +404,87 @@ test('the private-input predicate covers secure fields and inputs the privacy mo
   });
   assert.equal(isPrivateInput(labelValue), true);
 });
+
+for (const targetLine of ['3. Wait for "Welcome" to appear', '3. Scroll down until "Welcome"']) {
+  test(`${targetLine} re-walks target ID drift without repeating prior actions`, async () => {
+    const dir = root();
+    const plan = literal.replace('3. Wait for "Welcome" to appear', targetLine);
+    await run(plan, dir);
+    const line = blocks(plan)[0].items[2].line;
+    const { result, fake } = await run(plan, dir, { welcomeId: 'welcome-title' });
+    assert.equal(result.verdict, 'PASS', JSON.stringify(result.failure));
+    assert.equal(result.path, `replay→walk@${line}`);
+    assert.deepEqual(fake.actions, ['press @skip', 'press @done', 'press @tasks']);
+    assert.equal(result.steps.find((row) => row.line === line)?.outcome, 'retry');
+    assert.match(readFileSync(actionFile(dir), 'utf8'), /id: "welcome-title"/);
+  });
+}
+
+for (const kind of ['wait', 'scroll', 'press', 'fill'] as const) {
+  for (const exact of ['id', 'text'] as const) {
+    test(`replay ${kind} rejects duplicate stored ${exact} before dispatch`, async () => {
+      const raw =
+        kind === 'wait'
+          ? '1. Wait for "Go"'
+          : kind === 'scroll'
+            ? '1. Scroll down until "Go"'
+            : kind === 'fill'
+              ? '1. Fill "Go" with "Ada"'
+              : '1. Tap "Go"';
+      const block = blocks(raw)[0];
+      const item = block.items[0];
+      const target = { quoted: 'Go', phrase: 'Go', exact };
+      block.items[0] = kind === 'scroll' ? { ...item, until: target } : { ...item, target };
+      const fake = walker(
+        [
+          screen([
+            element('@a', 'Go', { testID: 'Go', kind: kind === 'fill' ? 'input' : 'button' }),
+            element('@b', 'Go', { testID: 'Go', kind: kind === 'fill' ? 'input' : 'button' }),
+          ]),
+        ],
+        scriptedJudge(() => assert.fail('exact replay cannot ask Jev')),
+      );
+      const result = await walkBlock(block, fake.deps, 0, [], undefined, undefined, {
+        mode: 'replay',
+      });
+      assert.equal(result.miss, item.line);
+      assert.deepEqual(fake.actions, []);
+    });
+  }
+}
+
+test('an offscreen replay target lost after scrolling stays terminal', async () => {
+  const block = blocks('1. Tap "Go"')[0];
+  const item = block.items[0];
+  assert.equal(item.kind, 'press');
+  block.items[0] = { ...item, target: { quoted: 'go', phrase: 'go', exact: 'id' } };
+  const fake = walker(
+    [
+      screen([element('@go', 'Go', { testID: 'go', offscreen: true })]),
+      screen([element('@other', 'Other')]),
+    ],
+    scriptedJudge(() => assert.fail('exact replay cannot ask Jev')),
+  );
+  const result = await walkBlock(block, fake.deps, 0, [], undefined, undefined, { mode: 'replay' });
+  assert.equal(result.miss, undefined);
+  assert.ok(result.failure);
+  assert.deepEqual(fake.actions, ['scroll down']);
+});
+
+for (const occurrences of [1, 2]) {
+  test(`stored text visibility handles ${occurrences} painted contributions`, async () => {
+    const block = blocks('1. Wait for "Welcome"')[0];
+    const item = block.items[0];
+    block.items[0] = { ...item, target: { quoted: 'Welcome', phrase: 'Welcome', exact: 'text' } };
+    const fake = walker(
+      [screen([], Array(occurrences).fill('Welcome'))],
+      scriptedJudge(() => assert.fail('exact visibility cannot ask Jev')),
+    );
+    const result = await walkBlock(block, fake.deps, 0, [], undefined, undefined, {
+      mode: 'replay',
+    });
+    assert.equal(result.miss, occurrences === 2 ? item.line : undefined);
+    assert.equal(!!result.failure, occurrences === 2);
+    assert.deepEqual(fake.actions, []);
+  });
+}

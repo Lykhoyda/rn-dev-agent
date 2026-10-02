@@ -258,13 +258,22 @@ function prepareAssertion(
 
 export function targetVisible(target: Target, screen: Screen): boolean {
   if (target.quoted === undefined) return false;
-  if (target.exact === 'id')
-    return screen.elements.some((e) => !e.offscreen && e.testID === target.quoted);
-  if (target.exact === 'text')
-    return (
-      screen.elements.some((e) => !e.offscreen && e.label === target.quoted) ||
-      assertionView(screen).some((t) => t === target.quoted)
+  if (target.exact) {
+    const matches = screen.elements.filter((e) =>
+      target.exact === 'id' ? e.testID === target.quoted : e.label === target.quoted,
     );
+    const painted =
+      target.exact === 'text'
+        ? assertionView(screen).filter((text) => text === target.quoted).length
+        : 0;
+    const count = Math.max(matches.length, painted);
+    if (count !== 1)
+      throw new ResolutionError({
+        refuse: 'REPLAY_SELECTOR',
+        reason: `${count} identities match the stored ${target.exact} "${target.quoted}"`,
+      });
+    return matches.length ? !matches[0].offscreen : painted === 1;
+  }
   return (
     screen.elements.some(
       (e) => !e.offscreen && (e.label === target.quoted || e.testID === target.quoted),

@@ -159,10 +159,11 @@ comment, then the commands with the exact `testID` (or, without one, the label) 
 step used. On the next run a block whose plan lines, platform and app are unchanged
 is replayed by those stored identities through the same walk, without Jev for quoted
 targets or literal checks; phrase checks still ask Jev. A stored identity that no
-longer matches exactly one element, or a step that does not move the screen, re-walks
+longer matches exactly one element before any mutation is dispatched re-walks
 the block from that line; on PASS only the commands under that line and later ones are
 rewritten, and every `✓` comment stays byte-identical. A failing check is a FAIL and
-is never re-walked or rewritten. Failed walks write nothing. A step without a `testID`
+is never re-walked or rewritten. Timeout and ambiguous screen-movement recovery
+remain deferred; app-process changes stay terminal. Failed walks write nothing. A step without a `testID`
 or label, a phrase wait, or a fill into a secure or private input leaves the block
 unsaved and the ledger says why without naming any value; ordinary fills keep their
 plan literal in the saved block.

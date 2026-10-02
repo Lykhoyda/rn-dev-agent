@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, test } from 'node:test';
 import { captureScreen } from '../../../dist/qa/capture.js';
 import { bindPrivateInputs } from '../../../dist/qa/private-input.js';
@@ -162,31 +161,19 @@ test('Android acquisition reports producer and host losses together', async () =
   assert.ok(screen.nativeCaptureCauses?.includes('dropped=3'));
 });
 
-test('Android producer counts skipped XML nodes and attests only after end-of-document', () => {
-  const source = readFileSync(
-    new URL(
-      '../../../../rn-android-runner/app/src/androidTest/java/dev/lykhoyda/rndevagent/androidrunner/CommandDispatcher.kt',
-      import.meta.url,
-    ),
-    'utf8',
-  );
-  const snapshot = source.slice(
-    source.indexOf('    private fun snapshot('),
-    source.indexOf('    private fun tap('),
-  );
-  assert.match(snapshot, /var normalizationDroppedNodes = 0/);
-  assert.match(snapshot, /while \(parser\.eventType != XmlPullParser\.END_DOCUMENT\)/);
-  assert.match(
-    snapshot,
-    /if \(bounds != null\) \{[\s\S]*nodes\.put\(node\)[\s\S]*\} else \{\s*normalizationDroppedNodes \+= 1/,
-  );
-  assert.match(
-    snapshot,
-    /catch \(e: XmlPullParserException\) \{[\s\S]*throw SnapshotParseException/,
-  );
-  assert.match(
-    snapshot,
-    /return JSONObject\(\)\s*\.put\("nodes", nodes\)\s*\.put\("truncated", false\)\s*\.put\("normalizationDroppedNodes", normalizationDroppedNodes\)/,
-  );
-  assert.doesNotMatch(snapshot, /\bbreak\b|nodes\.take\(/);
+test('Android incomplete producer reply never permits a mutation', async () => {
+  for (const data of [
+    { ...complete(), normalizationDroppedNodes: 2 },
+    { ...complete(), truncated: true },
+  ]) {
+    const screen = await capture(data);
+    const f = walker(
+      [screen],
+      scriptedJudge(() => assert.fail('incomplete capture must not ask Jev')),
+    );
+    const result = await runPlan(parsePlan('1. Tap "Save"').blocks!, f.deps);
+    assert.equal(result.verdict, 'FAIL');
+    assert.match(result.failure!.seen, /NATIVE_ACQUISITION_UNUSABLE/);
+    assert.deepEqual(f.actions, []);
+  }
 });
