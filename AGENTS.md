@@ -22,7 +22,7 @@ The package cut and literal `qaren check` are merged into `develop`. The Phase 3
   Use `corepack yarn ...` from the repository root. The Rust crate is driven
   with `cargo` directly.
 - `packages/qaren-cli/`: Rust CLI, library and binary `qaren`, `publish = false`. `src/run.rs` orchestrates `check`; the prototype debug verbs remain. Device leases live under `QAREN_LOCK_ROOT` or `~/.qaren/locks`, and run evidence under `~/.qaren/runs`. `check` reclaims a lease whose holder is proven dead by running that run's own cleanup (`commands/cleanup.rs`); a live or unprovable holder still refuses `DEVICE_BUSY`. While its lease is held, iOS teardown and cleanup also terminate the runner host app a core may have left running. A signal or a vanished caller ends the run as `RUN_CANCELLED` after normal teardown (`src/cancel.rs`). `src/exec/log.rs` owns redaction before durable subprocess logging, including detached debug runs. `observe/` is the Observe SPA (Vite); `target/` and `observe/dist/` are ignored.
-- `packages/qaren-core/`: TypeScript screen child, entered through `src/qa/walk.ts`. The `qa/` module owns parsing, judgments, screen projections, walking and the ledger, using the kept handlers, CDP helpers, native runners and learned-action domain. `corepack yarn build:core` generates uncommitted `dist/`; entries run as `node packages/qaren-core/dist/<entry>.js`. The package is private and the CLI tarball bundles it in Phase 8.
+- `packages/qaren-core/`: TypeScript screen child, entered through `src/qa/walk.ts`. The `qa/` module owns parsing, judgments, screen projections, walking and the ledger, using the kept handlers, CDP helpers, native runners and learned-action domain. `corepack yarn build:core` generates uncommitted `dist/`; entries run as `node packages/qaren-core/dist/<entry>.js`. The package is private; `scripts/build-qaren-tarball.ts` bundles its spawned entries into the CLI tarball.
 - `packages/qaren-plugin/`: the one host package. Claude, Cursor and Codex
   manifests (`.claude-plugin/`, `.cursor-plugin/`, `.codex-plugin/`), a
   SessionStart-only `hooks/hooks.json`, and `skills/`. The five skills keep
@@ -66,9 +66,7 @@ The package cut and literal `qaren check` are merged into `develop`. The Phase 3
   migration work is tracked in Linear.
 - The SessionStart hook must never download. `hooks/hooks.json` runs
   `scripts/ensure-qaren.sh --print-bin`, the verify-only mode that prints the
-  exact install command and exits 0. That script lands in Phase 8; until then
-  the hook fails with command-not-found on a marketplace install, which is
-  expected on `develop`. `maestro-runner-pin` no longer has an `install`
+  exact install command and exits 0. `maestro-runner-pin` no longer has an `install`
   subcommand; pin-cache messages that still name `ensure-maestro-runner.sh`
   are rewritten with the Phase 8 install path.
 - Do not create compatibility symlinks or shims for removed paths and names.
@@ -228,15 +226,14 @@ Suite records and redacted logs live under `~/.qaren/native-suites/<run-id>`. Un
 - `ci.yml`, `codeql.yml` and `native-tests.yml` trigger on `main` and
   `develop`; `release.yml` and `deploy-docs.yml` trigger on `main` only, so
   nothing releases or deploys from `develop`.
-- `release.yml`, `deploy-docs.yml` and `scripts/runner-manifest-publication.mts`
-  still describe the rn-dev-agent release: they reference
-  `packages/claude-plugin` and `build:host-runtimes`, which no longer exist on
-  `develop`. They are dormant there by design and Phase 8 rewires them to ship
-  the `qaren` tarball through the same retained-bytes transaction. Until then
-  only `scripts/check-public-runner-assets.sh` runs on `develop`; it reads the
-  advertised version from `packages/qaren-plugin/.claude-plugin/plugin.json`
-  and asserts that version's runner bytes are public. A published release is
-  never rebuilt, clobbered or retagged.
+- `release.yml` and `scripts/runner-manifest-publication.mts` ship the runner
+  zips and one `qaren` tarball per macOS architecture through the
+  retained-bytes transaction, with `packages/qaren-plugin/runner-manifest.json`
+  as the plugin's copy of the trust root. On `develop` only
+  `scripts/check-public-runner-assets.sh` runs; it reads the advertised version
+  from `packages/qaren-plugin/.claude-plugin/plugin.json` and asserts that
+  version's listed bytes are public. A published release is never rebuilt,
+  clobbered or retagged.
 
 ## Maintaining this file
 
