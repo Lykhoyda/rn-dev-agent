@@ -179,7 +179,7 @@ node --test scripts/test/check-document-ownership.test.ts scripts/test/assert-qa
 corepack yarn build:docs
 ```
 
-Jev unit tests are hermetic. `corepack yarn jev:evals` requires `TYPESAFE_API_KEY` and makes live calls; run it before changing the pinned model. The device-bound `gate:qaren-check` needs the key only for phrase plans and uninstalls the selected test app through `qaren check --fresh-install` under the CLI's device lease; coordinate external device ownership before running it. It accepts `--plan-file` for the phrase fixture under `packages/qaren-core/test/fixtures/plans/`.
+Jev unit tests are hermetic. `corepack yarn jev:evals` requires `TYPESAFE_API_KEY` and makes live calls; run it before changing the pinned model. The device-bound `gate:qaren-check` follows the [plan readiness contract](packages/qaren-cli/README.md#check-a-plan) and uninstalls the selected test app through `qaren check --fresh-install` under the CLI's device lease; coordinate external device ownership before running it. It accepts `--plan-file` for the phrase fixture under `packages/qaren-core/test/fixtures/plans/`.
 
 For a shutdown iOS target, explicitly pass `check --boot-device --device <UUID>`; the existing lease and durable record precede strict admission, boot and exact-target readiness readback. Default selection remains booted-only, and cleanup keeps the borrowed simulator. The gate forwards this opt-in with `QAREN_BOOT_DEVICE=1` alongside `QAREN_DEVICE_UDID`.
 
