@@ -47,7 +47,6 @@ export function applyNativePrivateInputs(screen: Screen, nodes: readonly NativeN
         testID: element.testID,
         elements: [element],
         associationUnique: true,
-        labelMayBeValue: true,
       })),
   );
   return screen;
