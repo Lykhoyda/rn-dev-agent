@@ -105,8 +105,10 @@ fn no_durable_writer_bypasses_the_private_key_sink() {
                 );
             }
         }
-        let count =
-            source.matches("fs::write(").count() + source.matches("OpenOptions::new()").count();
+        let count = ["fs::write(", "OpenOptions::new()", "File::create("]
+            .iter()
+            .map(|writer| source.matches(writer).count())
+            .sum::<usize>();
         if count > 0 {
             writers.insert(rel, count);
         }
