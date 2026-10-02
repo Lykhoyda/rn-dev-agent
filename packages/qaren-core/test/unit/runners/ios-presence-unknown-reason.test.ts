@@ -366,7 +366,10 @@ precondition(decoded.unknownReason == nil)
       { observed: false, reasons: ['match-count-mismatch'] },
     ]);
     assert.equal(row.reads.filter((read: string) => read === 'all').length, 3);
-    assert.deepEqual(row.reads.filter((read: string) => read.startsWith('hit-')), ['hit-0']);
+    assert.deepEqual(
+      row.reads.filter((read: string) => read.startsWith('hit-')),
+      ['hit-0'],
+    );
     for (const ordinal of [0, 1, 2]) {
       assert.equal(
         row.reads.filter((read: string) => read === `snapshot-${ordinal}`).length,
@@ -401,7 +404,10 @@ precondition(decoded.unknownReason == nil)
       { observed: true, reasons: [] },
     ]);
     assert.equal(row.reads.filter((read: string) => read === 'all').length, 2);
-    assert.deepEqual(row.reads.filter((read: string) => read.startsWith('hit-')), ['hit-0']);
+    assert.deepEqual(
+      row.reads.filter((read: string) => read.startsWith('hit-')),
+      ['hit-0'],
+    );
   });
   for (const [name, reason, count, liveReads] of [
     ['empty', 'empty-frame', 1, []],

@@ -65,19 +65,31 @@ test('geometry-only scroll clipping changes are observed on the next phrase poll
     const nodes: NativeNode[] = [
       { ref: '@app', type: 'Application', rect: { x: 0, y: 0, width: 400, height: 800 } },
       {
-        ref: '@window', type: 'Window', parentIndex: 0,
+        ref: '@window',
+        type: 'Window',
+        parentIndex: 0,
         rect: { x: 0, y: 0, width: 400, height: 800 },
       },
       {
-        ref: '@scroll', type: 'ScrollView', parentIndex: 1,
+        ref: '@scroll',
+        type: 'ScrollView',
+        parentIndex: 1,
         rect: { x: 0, y: 100, width: 400, height: 100 },
       },
       {
-        ref: '@text', type: 'StaticText', parentIndex: 2, label: 'Welcome', hittable: true,
+        ref: '@text',
+        type: 'StaticText',
+        parentIndex: 2,
+        label: 'Welcome',
+        hittable: true,
         rect: { x: 10, y, width: 100, height: 20 },
       },
       {
-        ref: '@loading', type: 'StaticText', parentIndex: 1, label: 'Loading', hittable: true,
+        ref: '@loading',
+        type: 'StaticText',
+        parentIndex: 1,
+        label: 'Loading',
+        hittable: true,
         rect: { x: 10, y: 400, width: 100, height: 20 },
       },
     ];
