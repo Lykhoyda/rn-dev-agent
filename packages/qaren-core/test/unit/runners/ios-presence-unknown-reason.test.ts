@@ -166,7 +166,7 @@ ${section(source, '  func snapshotPlatformPresence(', '  func retainSnapshotTarg
     let timing = PresenceCaptureTiming(started: now, now: { self.now })
     return groups.map { descriptor, count in
       var reasons: [String] = []
-      let stamp = observePresence(PresenceDescriptor(descriptor)!, count: count, predicateIsExact: false,
+      let stamp = observePresence(PresenceDescriptor(descriptor)!, count: count,
         app: app, deadline: 20_000, timing: timing, unknownReason: { reasons.append($0.rawValue) })
       return ["observed": stamp != nil, "reasons": reasons]
     }
