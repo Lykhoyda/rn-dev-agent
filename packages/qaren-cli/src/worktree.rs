@@ -2,6 +2,7 @@ use crate::commands::cleanup::Outcome;
 use crate::exec::{CmdOutput, CmdSpec, Runner};
 use crate::failure::{Failure, FailureCode};
 use crate::github::PrInfo;
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 pub fn pr_worktree_path(run_dir: &Path) -> PathBuf {
@@ -37,12 +38,13 @@ pub fn add(
     let Some(wt_arg) = wt.to_str() else {
         return Err(failed(format!("{} is not a UTF-8 path", wt.display())));
     };
-    let refspec = format!("pull/{}/head", pr.number);
+    let run_ref = format!("refs/qaren/pr/{:x}", Sha256::digest(wt_arg.as_bytes()));
+    let refspec = format!("pull/{}/head:{run_ref}", pr.number);
     let fetch = git(
         runner,
         "git-fetch-pr",
         repo_root,
-        &["fetch", "origin", &refspec],
+        &["fetch", "origin", &refspec, "--no-write-fetch-head"],
         300,
     );
     if !fetch.ok() {
@@ -55,7 +57,14 @@ pub fn add(
         runner,
         "git-fetch-head",
         repo_root,
-        &["rev-parse", "FETCH_HEAD"],
+        &["rev-parse", &run_ref],
+        20,
+    );
+    git(
+        runner,
+        "git-fetch-ref-remove",
+        repo_root,
+        &["update-ref", "-d", &run_ref],
         20,
     );
     if !fetched.ok() || fetched.stdout.trim() != pr.head_ref_oid {
@@ -201,9 +210,10 @@ mod tests {
         let mut mock = MockRunner::new();
         mock.expect_run("fetch origin pull/12/head", CmdOutput::success(""));
         mock.expect_run(
-            "rev-parse FETCH_HEAD",
+            "rev-parse refs/qaren/pr/",
             CmdOutput::success(&format!("{}\n", "a".repeat(40))),
         );
+        mock.expect_run("update-ref -d", CmdOutput::success(""));
         mock.expect_run("worktree add --detach", CmdOutput::success(""));
         add(
             &mut mock,
@@ -213,17 +223,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            mock.calls[2].args,
+            mock.calls[3].args,
             ["worktree", "add", "--detach", "/runs/r/wt", &"a".repeat(40)]
         );
-        assert_eq!(mock.calls[2].cwd.as_deref(), Some(Path::new("/repo")));
+        assert_eq!(mock.calls[3].cwd.as_deref(), Some(Path::new("/repo")));
     }
 
     #[test]
     fn a_fetched_head_other_than_the_viewed_one_refuses_before_any_worktree() {
         let mut mock = MockRunner::new();
         mock.expect_run("fetch", CmdOutput::success(""));
-        mock.expect_run("FETCH_HEAD", CmdOutput::success(&"b".repeat(40)));
+        mock.expect_run(
+            "rev-parse refs/qaren/pr/",
+            CmdOutput::success(&"b".repeat(40)),
+        );
+        mock.expect_run("update-ref -d", CmdOutput::success(""));
         let failure = add(
             &mut mock,
             Path::new("/repo"),
@@ -232,7 +246,119 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(failure.code, FailureCode::PrWorktreeFailed);
-        assert_eq!(mock.calls.len(), 2);
+        assert_eq!(mock.calls.len(), 3);
+    }
+
+    struct ConcurrentFetch(std::sync::Arc<std::sync::Barrier>);
+
+    impl Runner for ConcurrentFetch {
+        fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+            let output = std::process::Command::new(&spec.program)
+                .args(&spec.args)
+                .current_dir(spec.cwd.as_ref().unwrap())
+                .output()
+                .unwrap();
+            if spec.label == "git-fetch-pr" {
+                self.0.wait();
+            }
+            CmdOutput {
+                exit_code: output.status.code(),
+                stdout: String::from_utf8(output.stdout).unwrap(),
+                stderr: String::from_utf8(output.stderr).unwrap(),
+                ..Default::default()
+            }
+        }
+        fn spawn_group(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<crate::exec::Spawned> {
+            unreachable!()
+        }
+        fn spawn_piped(
+            &mut self,
+            _: &CmdSpec,
+            _: &Path,
+        ) -> std::io::Result<crate::exec::PipedChild> {
+            unreachable!()
+        }
+        fn sleep(&mut self, _: std::time::Duration) {
+            unreachable!()
+        }
+        fn now_epoch_ms(&self) -> u64 {
+            0
+        }
+        fn commands_executed(&self) -> u64 {
+            0
+        }
+    }
+
+    #[test]
+    fn concurrent_pr_fetches_verify_their_own_heads() {
+        let root =
+            std::env::temp_dir().join(format!("qaren-concurrent-fetch-{}", std::process::id()));
+        let origin = root.join("origin");
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&origin).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |cwd: &Path, args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+        git(&origin, &["init"]);
+        let mut first = pr();
+        let mut second = pr();
+        second.number = 13;
+        for info in [&mut first, &mut second] {
+            git(
+                &origin,
+                &[
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    &format!("PR {}", info.number),
+                ],
+            );
+            info.head_ref_oid = git(&origin, &["rev-parse", "HEAD"]);
+            git(
+                &origin,
+                &[
+                    "update-ref",
+                    &format!("refs/pull/{}/head", info.number),
+                    &info.head_ref_oid,
+                ],
+            );
+        }
+        git(&repo, &["init"]);
+        git(
+            &repo,
+            &["remote", "add", "origin", origin.to_str().unwrap()],
+        );
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let wt1 = root.join("run1/wt");
+        let wt2 = root.join("run2/wt");
+        std::thread::scope(|scope| {
+            let a = scope.spawn(|| add(&mut ConcurrentFetch(barrier.clone()), &repo, &first, &wt1));
+            let b =
+                scope.spawn(|| add(&mut ConcurrentFetch(barrier.clone()), &repo, &second, &wt2));
+            a.join().unwrap().unwrap();
+            b.join().unwrap().unwrap();
+        });
+        assert_eq!(git(&wt1, &["rev-parse", "HEAD"]), first.head_ref_oid);
+        assert_eq!(git(&wt2, &["rev-parse", "HEAD"]), second.head_ref_oid);
+        assert!(git(&repo, &["for-each-ref", "refs/qaren/pr/"]).is_empty());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

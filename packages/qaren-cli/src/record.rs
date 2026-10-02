@@ -154,7 +154,6 @@ pub fn start(
         recorder.pid = Some(spawned.pid);
         recorder.birth = birth;
     }
-    // An identity cleanup cannot read back is no ownership: end our own unreaped child now.
     if !proven || record.save(runs_root).is_err() {
         runner.run(&CmdSpec::new(
             "recorder-abort",
@@ -162,7 +161,20 @@ pub fn start(
             &["-KILL", "--", &format!("-{}", spawned.pgid)],
             10,
         ));
-        record.resources.recorder = None;
+        if cleanup_process_group(
+            runner,
+            record
+                .resources
+                .recorder
+                .as_ref()
+                .and_then(|r| r.birth.as_ref()),
+            spawned.pgid,
+            None,
+        )
+        .clean()
+        {
+            record.resources.recorder = None;
+        }
         let _ = record.save(runs_root);
         return Err(unavailable("recorder identity was not persisted"));
     }
@@ -184,21 +196,17 @@ pub fn start(
     )))
 }
 
-fn wait_gone(
-    runner: &mut dyn Runner,
-    birth: &crate::runrecord::PidIdentity,
-    budget_ms: u64,
-) -> bool {
+fn wait_gone(runner: &mut dyn Runner, birth: &crate::runrecord::PidIdentity, budget_ms: u64) {
     let deadline = now_ms(runner) + budget_ms;
     loop {
         if matches!(
             probe_pid_identity(runner, birth),
             PidLiveness::Dead | PidLiveness::AliveForeign
         ) {
-            return true;
+            return;
         }
         if now_ms(runner) >= deadline {
-            return false;
+            return;
         }
         runner.sleep(Duration::from_millis(POLL_MS));
     }
@@ -209,10 +217,14 @@ pub fn stop(runner: &mut dyn Runner, record: &mut RunRecord, runs_root: &Path) -
     let Some(recorder) = record.resources.recorder.clone() else {
         return Outcome::Absent;
     };
-    let (Some(pid), Some(birth)) = (recorder.pid, recorder.birth.as_ref()) else {
+    let Some(pid) = recorder.pid else {
         return Outcome::Unresolved("recorder spawn identity is unproven".into());
     };
-    if probe_pid_identity(runner, birth) == PidLiveness::AliveMatching {
+    if recorder
+        .birth
+        .as_ref()
+        .is_some_and(|birth| probe_pid_identity(runner, birth) == PidLiveness::AliveMatching)
+    {
         runner.run(&CmdSpec::new(
             "recorder-interrupt",
             "/bin/kill",
@@ -220,10 +232,12 @@ pub fn stop(runner: &mut dyn Runner, record: &mut RunRecord, runs_root: &Path) -
             10,
         ));
     }
-    let outcome = if wait_gone(runner, birth, STOP_WAIT_MS) {
-        Outcome::Removed
-    } else {
-        cleanup_process_group(runner, Some(birth), pid, None)
+    if let Some(birth) = recorder.birth.as_ref() {
+        wait_gone(runner, birth, STOP_WAIT_MS);
+    }
+    let outcome = match cleanup_process_group(runner, recorder.birth.as_ref(), pid, None) {
+        Outcome::Absent => Outcome::Removed,
+        other => other,
     };
     if outcome.clean() {
         record.resources.recorder = None;

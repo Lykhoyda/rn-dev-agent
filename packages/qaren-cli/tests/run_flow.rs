@@ -3439,9 +3439,10 @@ fn script_pr_preflight(mock: &mut MockRunner, repo: &Path, wt: &Path) {
     mock.expect_run("gh pr view", pr_view_json(PR_HEAD));
     mock.expect_run("fetch origin pull/12/head", CmdOutput::success(""));
     mock.expect_run(
-        "rev-parse FETCH_HEAD",
+        "rev-parse refs/qaren/pr/",
         CmdOutput::success(&format!("{PR_HEAD}\n")),
     );
+    mock.expect_run("update-ref -d", CmdOutput::success(""));
     mock.expect_run("worktree add --detach", CmdOutput::success(""));
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", wt.display()))); // toplevel of the worktree
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", wt.display()))); // explicit worktree
@@ -3479,6 +3480,7 @@ fn script_recorder_stop(mock: &mut MockRunner) {
     mock.expect_run("ps -p 7100", CmdOutput::success("S\n"));
     mock.expect_run("/bin/kill -INT 7100", CmdOutput::success(""));
     mock.expect_run("ps -p 7100", CmdOutput::failed(1, ""));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
 }
 
 // The check teardown after its drift report: core group, Metro group, hosts.
@@ -3665,9 +3667,10 @@ fn a_fetched_head_that_is_not_the_viewed_head_refuses_and_leaves_no_worktree() {
     mock.expect_run("gh pr view", pr_view_json(PR_HEAD));
     mock.expect_run("fetch origin pull/12/head", CmdOutput::success(""));
     mock.expect_run(
-        "rev-parse FETCH_HEAD",
+        "rev-parse refs/qaren/pr/",
         CmdOutput::success(&format!("{PR_MOVED}\n")),
     );
+    mock.expect_run("update-ref -d", CmdOutput::success(""));
     mock.expect_run("worktree prune", CmdOutput::success(""));
 
     let receipt = run(&mut mock, &pr_request(&repo, &app));

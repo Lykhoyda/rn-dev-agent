@@ -70,6 +70,7 @@ fn ios_start_without_recording_started_is_unavailable_and_the_run_continues() {
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("/bin/kill -INT 7100", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
 
     let status = record::start(&mut mock, &mut record, &root, "U").unwrap_err();
 
@@ -108,6 +109,7 @@ fn stop_sends_sigint_and_waits_for_exit() {
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("Z\n"));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
 
     assert_eq!(
         record::stop(&mut mock, &mut record, &root),
@@ -140,12 +142,21 @@ fn a_recorder_with_an_unproven_spawn_is_unresolved() {
 }
 
 // Deletes the worktree directory when git is asked to remove it, as git would.
-struct GitRemoves(MockRunner);
+struct GitRemoves(MockRunner, Option<PathBuf>);
 
 impl qaren::exec::Runner for GitRemoves {
     fn run(&mut self, spec: &qaren::exec::CmdSpec) -> CmdOutput {
         if spec.args.starts_with(&["worktree".into(), "remove".into()]) {
             let _ = std::fs::remove_dir_all(spec.args.last().unwrap());
+        }
+        if let Some(path) = &self.1 {
+            if spec.label == "ps-command" {
+                std::fs::rename(path, path.with_extension("backup")).unwrap();
+                std::fs::create_dir(path).unwrap();
+            } else if spec.label == "recorder-abort" {
+                std::fs::remove_dir(path).unwrap();
+                std::fs::rename(path.with_extension("backup"), path).unwrap();
+            }
         }
         self.0.run(spec)
     }
@@ -206,8 +217,9 @@ fn a_dead_owners_recorder_is_stopped_and_its_worktree_removed() {
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("/bin/kill -INT 7100", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     mock.expect_run("worktree remove --force", CmdOutput::success(""));
-    let mut runner = GitRemoves(mock);
+    let mut runner = GitRemoves(mock, None);
 
     let receipt = qaren::commands::cleanup::cleanup(&mut runner, &root, &record.run_id);
 
@@ -239,4 +251,97 @@ fn a_live_owners_recorder_and_worktree_are_untouched() {
     assert!(saved.resources.recorder.is_some());
     assert!(saved.resources.pr_worktree.is_some());
     assert_eq!(mock.remaining(), 0);
+}
+
+#[test]
+fn failed_or_timed_out_abort_retains_ownership_until_group_absence() {
+    for abort in [
+        CmdOutput::failed(1, "signal failed"),
+        CmdOutput {
+            timed_out: true,
+            ..Default::default()
+        },
+    ] {
+        let (root, mut record) = walking_record();
+        let mut mock = MockRunner::new();
+        mock.expect_spawn_with_log(
+            "recordVideo",
+            Spawned {
+                pid: 7100,
+                pgid: 7100,
+            },
+            "",
+        );
+        mock.expect_run("ps", CmdOutput::failed(1, "identity unavailable"));
+        mock.expect_run("ps", CmdOutput::failed(1, "identity unavailable"));
+        mock.expect_run("/bin/kill -KILL -- -7100", abort);
+        mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
+        mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
+        assert!(record::start(&mut mock, &mut record, &root, "U").is_err());
+        let mut saved = RunRecord::load(&root, &record.run_id).unwrap();
+        assert_eq!(saved.resources.recorder.as_ref().unwrap().pid, Some(7100));
+        mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
+        mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
+        assert!(matches!(
+            record::stop(&mut mock, &mut saved, &root),
+            Outcome::Unresolved(_)
+        ));
+        assert!(saved.resources.recorder.is_some());
+        mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+        assert_eq!(record::stop(&mut mock, &mut saved, &root), Outcome::Removed);
+        assert!(RunRecord::load(&root, &record.run_id)
+            .unwrap()
+            .resources
+            .recorder
+            .is_none());
+        assert_eq!(mock.remaining(), 0);
+    }
+}
+
+#[test]
+fn failed_persistence_and_abort_keep_the_proven_recorder_for_teardown() {
+    let (root, mut record) = walking_record();
+    let mut mock = MockRunner::new();
+    mock.expect_spawn_with_log(
+        "recordVideo",
+        Spawned {
+            pid: 7100,
+            pgid: 7100,
+        },
+        "",
+    );
+    script_identity(&mut mock);
+    mock.expect_run(
+        "/bin/kill -KILL -- -7100",
+        CmdOutput::failed(1, "signal failed"),
+    );
+    mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
+    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
+    mock.expect_run("ps", CmdOutput::success("S\n"));
+    mock.expect_run("/bin/kill -TERM", CmdOutput::failed(1, "signal failed"));
+    mock.expect_run("/bin/kill -KILL", CmdOutput::failed(1, "signal failed"));
+    mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
+    let mut runner = GitRemoves(mock, Some(RunRecord::path(&root, &record.run_id)));
+    assert!(record::start(&mut runner, &mut record, &root, "U").is_err());
+    let mut saved = RunRecord::load(&root, &record.run_id).unwrap();
+    assert!(saved.resources.recorder.as_ref().unwrap().birth.is_some());
+    runner
+        .0
+        .expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
+    runner.0.expect_run("ps", CmdOutput::success("S\n"));
+    runner
+        .0
+        .expect_run("/bin/kill -INT 7100", CmdOutput::success(""));
+    runner.0.expect_run("ps", CmdOutput::failed(1, ""));
+    runner.0.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+    assert_eq!(
+        record::stop(&mut runner, &mut saved, &root),
+        Outcome::Removed
+    );
+    assert!(RunRecord::load(&root, &record.run_id)
+        .unwrap()
+        .resources
+        .recorder
+        .is_none());
+    assert_eq!(runner.0.remaining(), 0);
 }
