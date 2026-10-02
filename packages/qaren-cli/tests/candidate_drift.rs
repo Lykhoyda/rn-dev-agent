@@ -68,3 +68,56 @@ fn only_untracked_integration_files_are_tolerated_in_a_real_checkout() {
     ];
     assert_eq!(accepted, [true, false, false, false]);
 }
+
+#[test]
+fn phrase_named_files_preserve_native_fingerprints_and_drift_detection() {
+    for tracked in [true, false] {
+        let repo = common::temp_repo();
+        let project = repo.join("test-app");
+        std::fs::write(project.join("app.json"), r#"{"expo":{"name":"before"}}"#).unwrap();
+        std::fs::create_dir_all(project.join("ios")).unwrap();
+        std::fs::write(project.join("ios/Podfile"), "platform :ios, '15.0'\n").unwrap();
+        let notes = project.join("private key notes.txt");
+        if tracked {
+            std::fs::write(&notes, "notes").unwrap();
+        }
+        git(&repo, &["init", "-q"]);
+        git(&repo, &["add", "."]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "baseline",
+            ],
+        );
+        if !tracked {
+            std::fs::write(&notes, "notes").unwrap();
+        }
+        let scenario = common::scenario_from(&common::ios_scenario_yaml(8793));
+        let mut runner = RealRunner::new();
+        let baseline = resolve(&mut runner, &scenario, &repo).unwrap();
+        let before = qaren::fingerprint::compute(&mut runner, &repo, &project, "ios").unwrap();
+        assert!(before.complete);
+        assert!(before.native_dir_in_candidate);
+        assert!(before.file_count >= 2);
+        assert!(verify_unchanged_with(&mut runner, &baseline, false).is_ok());
+        std::fs::write(project.join("app.json"), r#"{"expo":{"name":"after"}}"#).unwrap();
+        let after = qaren::fingerprint::compute(&mut runner, &repo, &project, "ios").unwrap();
+        assert_ne!(before.value, after.value, "tracked={tracked}");
+        assert!(after.complete);
+        let changed = resolve(&mut runner, &scenario, &repo).unwrap();
+        assert_ne!(
+            baseline.worktree_fingerprint, changed.worktree_fingerprint,
+            "tracked={tracked}"
+        );
+        assert!(verify_unchanged_with(&mut runner, &baseline, false).is_err());
+        std::fs::remove_dir_all(repo).unwrap();
+    }
+}

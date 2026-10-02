@@ -128,15 +128,6 @@ impl CmdOutput {
             || crate::redact::names_private_key(&self.stderr)
     }
 
-    // Withholds both streams together: a header on one stream says the other may hold the body.
-    pub fn withhold_private_key(mut self) -> Self {
-        if self.names_private_key() {
-            self.stdout = crate::redact::PRIVATE_KEY_WITHHELD.to_string();
-            self.stderr = crate::redact::PRIVATE_KEY_WITHHELD.to_string();
-        }
-        self
-    }
-
     pub fn summary(&self) -> String {
         if self.timed_out {
             return format!("timed out after {}ms", self.duration_ms);
@@ -294,8 +285,7 @@ impl Runner for RealRunner {
         let started = Instant::now();
         crate::progress::started(&spec.label, false);
         let output = run_captured(spec, &started, None)
-            .unwrap_or_else(|e| io_failure(&started, format!("{}: {e}", spec.label)))
-            .withhold_private_key();
+            .unwrap_or_else(|e| io_failure(&started, format!("{}: {e}", spec.label)));
         let output = match self.flush_logs() {
             Ok(()) => output,
             Err(e) => io_failure(&started, format!("drain logs: {e}")),
@@ -520,9 +510,8 @@ fn run_captured(
     }
     Ok(CmdOutput {
         exit_code: result?,
-        // Protocol stdout is memory-only; redact diagnostics at their persistence boundary.
         stdout: String::from_utf8_lossy(&out).into_owned(),
-        stderr: crate::redact::redact_secrets(&String::from_utf8_lossy(&err)),
+        stderr: String::from_utf8_lossy(&err).into_owned(),
         timed_out,
         duration_ms: started.elapsed().as_millis() as u64,
     })

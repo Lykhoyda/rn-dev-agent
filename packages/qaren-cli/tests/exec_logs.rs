@@ -45,11 +45,19 @@ fn command_summary_withholds_output_naming_a_private_key() {
 const FAKE_BODY: &str = "FAKEKEYBODY";
 
 #[test]
-fn real_capture_withholds_both_streams_when_either_names_a_private_key() {
+fn real_capture_preserves_protocol_bytes_and_withholds_summaries() {
     let mut runner = RealRunner::new();
-    for script in [
-        "printf '%s\\n' '-----BEGIN PRIVATE KEY-----' >&2; printf 'FAKEKEYBODY\\n'; exit 1",
-        "printf 'FAKEKEYBODY\\n' >&2; printf 'quoting a private key\\n'; exit 1",
+    for (script, stdout, stderr) in [
+        (
+            "printf '%s\\n' '-----BEGIN PRIVATE KEY-----' >&2; printf 'FAKEKEYBODY\\n'; exit 1",
+            "FAKEKEYBODY\n",
+            "-----BEGIN PRIVATE KEY-----\n",
+        ),
+        (
+            "printf 'FAKEKEYBODY\\n' >&2; printf 'quoting a private key\\n'; exit 1",
+            "quoting a private key\n",
+            "FAKEKEYBODY\n",
+        ),
     ] {
         let output = runner.run(&CmdSpec::new(
             "private-key-summary",
@@ -58,8 +66,8 @@ fn real_capture_withholds_both_streams_when_either_names_a_private_key() {
             5,
         ));
         assert_eq!(output.exit_code, Some(1));
-        assert_eq!(output.stdout, PRIVATE_KEY_WITHHELD);
-        assert_eq!(output.stderr, PRIVATE_KEY_WITHHELD);
+        assert_eq!(output.stdout, stdout);
+        assert_eq!(output.stderr, stderr);
         assert_eq!(output.summary(), format!("exit=1 {PRIVATE_KEY_WITHHELD}"));
     }
     for marker in ["private key", "PrIvAtE KeY", "<redacted private key>"] {
@@ -536,7 +544,8 @@ fn subprocess_fixture_worker() {
         dir,
     ));
     assert_eq!(output.exit_code, Some(2));
-    assert!(!output.stderr.contains(KEY));
+    assert_eq!(output.stdout, format!("captured stdout {KEY}\n"));
+    assert_eq!(output.stderr, format!("captured stderr {KEY}\n"));
     assert!(!output.summary().contains(KEY));
     let failure = Failure::new(
         "deps",
@@ -569,7 +578,8 @@ fn subprocess_fixture_worker() {
     timeout.timeout_seconds = 1;
     let output = runner.run(&timeout);
     assert!(output.timed_out);
-    assert_eq!(output.stderr, "[REDACTED_SECRET]");
+    assert_eq!(output.stderr, KEY);
+    assert!(!output.summary().contains(KEY));
     let mut overflowing = shell("head -c 17825792 /dev/zero", dir);
     overflowing.timeout_seconds = 30;
     let output = runner.run(&overflowing);
