@@ -85629,6 +85629,9 @@ function boundIosDevClientLaunchUrl() {
 function isDevClientLaunchShape(install) {
   return install?.buildKind === "expo";
 }
+function boundDevClientLaunchUrl() {
+  return isDevClientLaunchShape(boundInstallReceipt()) ? boundIosDevClientLaunchUrl() : null;
+}
 function classifyFailure(failure) {
   switch (failure.kind) {
     case "SELECTOR_NOT_FOUND":
@@ -95378,6 +95381,7 @@ function createMaestroTestAllHandler(deps = {}) {
     const reproveManagedOrigin = deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
     const completeRunnerPark = deps.completeRunnerPark ?? managedAuthority.completeRunnerPark;
     const reissueInstallReceipt = deps.reissueInstallReceipt ?? managedAuthority.reissueInstallReceipt;
+    const devClientLaunchUrl = (deps.devClientLaunchUrl ?? boundDevClientLaunchUrl)() ?? void 0;
     const results = [];
     let passed = 0;
     let failed = 0;
@@ -95398,7 +95402,8 @@ function createMaestroTestAllHandler(deps = {}) {
             relaunchManagedApp,
             reproveManagedOrigin,
             completeRunnerPark,
-            reissueInstallReceipt
+            reissueInstallReceipt,
+            ...devClientLaunchUrl ? { devClientLaunchUrl } : {}
           }));
           const evidence = { ...nested.meta, ...nested.data };
           const flowPassed = nested.ok === true && nested.data?.passed === true;
@@ -95454,16 +95459,22 @@ function createMaestroTestAllHandler(deps = {}) {
         installReceiptCommitted = true;
         await reissueInstallReceipt();
       };
+      const plannedStages = planMaestroAuthorityStages(parsedCommands).stages;
+      let stageCursor = 0;
       try {
         const stageResults = await parkFlow(() => executeMaestroAuthorityStages(parsedCommands, async (commands) => {
+          const requiresOrigin = plannedStages[stageCursor++]?.requiresOrigin === true;
           if (start + timeout - now() <= 0) {
             const error2 = new Error("Maestro flow timeout exhausted before the next stage");
             Object.assign(error2, { code: "ETIMEDOUT" });
             throw error2;
           }
-          writeFileSync19(safeFlowFile, buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, [
-            ...commands
-          ]), "utf-8");
+          writeFileSync19(safeFlowFile, buildMaestroFlow(stageFlowOptions({
+            platform,
+            appId: parsedAppId,
+            requiresOrigin,
+            devClientLaunchUrl
+          }), [...commands]), "utf-8");
           const executeRunner = (runnerPath, prefixArgs = []) => {
             const remainingTimeout = start + timeout - now();
             if (remainingTimeout <= 0) {
@@ -95614,6 +95625,7 @@ var init_maestro_test_all = __esm({
     init_maestro_dispatch();
     init_maestro_validator();
     init_maestro_run();
+    init_run_action();
     init_maestro_error_parser();
     init_engine_pin();
     init_ios_proof_router();

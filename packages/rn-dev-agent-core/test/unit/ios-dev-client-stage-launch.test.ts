@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import yaml from 'yaml';
 import { buildMaestroFlow, MaestroValidationError } from '../../dist/domain/maestro-validator.js';
 import { createMaestroRunHandler, stageFlowOptions } from '../../dist/tools/maestro-run.js';
+import { createMaestroTestAllHandler } from '../../dist/tools/maestro-test-all.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
 import { sessionIosDevClientLaunchUrl } from '../../dist/session/session-launch-url.js';
 import {
@@ -375,4 +376,105 @@ test('cdp_run_action passes the session URL only for an Expo dev-client install'
   assert.equal(replays.length, 2);
   assert.equal(replays[0]?.devClientLaunchUrl, SESSION_URL);
   assert.equal(replays[1]?.devClientLaunchUrl, undefined);
+});
+
+function suiteCorpus(t: TestContext, dir: string[], flow: string): string {
+  const root = mkdtempSync(join(tmpdir(), 'rn-suite-launch-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const flowDir = join(root, ...dir);
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(join(flowDir, 'user-login.yaml'), flow, 'utf8');
+  return flowDir;
+}
+
+const SUITE_SESSION = {
+  name: 'exact',
+  platform: 'ios' as const,
+  deviceId: SIM,
+  appId: APP_ID,
+  openedAt: new Date(0).toISOString(),
+};
+
+function suiteHandler(flows: string[], launchUrl: string | null) {
+  return createMaestroTestAllHandler({
+    getActiveSession: () => SUITE_SESSION,
+    chooseDispatch: () => fakeRunnerDispatch(),
+    parkFlow: async (run: () => Promise<unknown>) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
+    reproveManagedOrigin: async () => {},
+    completeRunnerPark: async () => {},
+    devClientLaunchUrl: () => launchUrl,
+    execFile: async (_file: string, args: string[]) => {
+      flows.push(readFileSync(args[args.length - 1]!, 'utf8'));
+      writeStageReport(args[args.indexOf('--output') + 1]!, [['tapOn', 'passed']]);
+      return { stdout: '    ✓ tapOn (0.5s)', stderr: '' };
+    },
+  });
+}
+
+test('maestro_test_all starts each iOS origin stage in the session URL', async (t) => {
+  const flowDir = suiteCorpus(t, ['.maestro'], `appId: ${APP_ID}\n---\n${FLOW}\n`);
+  const flows: string[] = [];
+  const result = await suiteHandler(flows, SESSION_URL)({ platform: 'ios', flowDir });
+  const envelope = JSON.parse(result.content[0]!.text);
+
+  assert.equal(envelope.ok, true, JSON.stringify(envelope));
+  assert.deepEqual(
+    flows.map((flow) => parseFlow(flow).header),
+    [
+      { appId: APP_ID, onFlowStart: hook() },
+      { appId: APP_ID },
+      { appId: APP_ID, onFlowStart: hook() },
+    ],
+  );
+
+  const bare: string[] = [];
+  await suiteHandler(bare, null)({ platform: 'ios', flowDir });
+  assert.ok(bare.length > 0 && bare.every((flow) => !('onFlowStart' in parseFlow(flow).header)));
+});
+
+test('maestro_test_all hands the session URL to the shared iOS planner for learned actions', async (t) => {
+  const flowDir = suiteCorpus(
+    t,
+    ['.rn-agent', 'actions'],
+    [
+      `appId: ${APP_ID}`,
+      '---',
+      '# id: user-login',
+      '# intent: prove suite launch URL',
+      '# status: active',
+      `# enginePin: maestro-runner@${MAESTRO_RUNNER_PIN.version}`,
+      '- assertVisible: Native status',
+      '',
+    ].join('\n'),
+  );
+  const forwarded: Array<string | undefined> = [];
+  const handler = createMaestroTestAllHandler({
+    getActiveSession: () => SUITE_SESSION,
+    resolveEngineStatus: async () =>
+      buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
+    devClientLaunchUrl: () => SESSION_URL,
+    runFlow: async (args: { devClientLaunchUrl?: string }) => {
+      forwarded.push(args.devClientLaunchUrl);
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({ ok: true, data: { passed: true } }),
+          },
+        ],
+      };
+    },
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
+    reproveManagedOrigin: async () => {},
+    completeRunnerPark: async () => {},
+  });
+
+  const envelope = JSON.parse((await handler({ platform: 'ios', flowDir })).content[0]!.text);
+  assert.equal(envelope.ok, true, JSON.stringify(envelope));
+  assert.deepEqual(forwarded, [SESSION_URL]);
 });

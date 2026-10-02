@@ -83447,6 +83447,9 @@ function boundIosDevClientLaunchUrl() {
 function isDevClientLaunchShape(install) {
   return install?.buildKind === "expo";
 }
+function boundDevClientLaunchUrl() {
+  return isDevClientLaunchShape(boundInstallReceipt()) ? boundIosDevClientLaunchUrl() : null;
+}
 var DEV_CLIENT_CLEARSTATE_REFUSAL = "Refusing to replay a flow containing clearState on a managed dev-client session. The clearState relaunch uninstalls the app and strands the dev client at its picker, so the relaunched app cannot re-attach to the authority-bound Metro (EG_DEV_CLIENT_CLEARSTATE). No runner was invoked and the app was not touched. Remove launchApp clearState from the action so it starts from the attached app; when a state reset is needed, run device_reset_state before cdp_run_action or cdp_login_prologue.";
 function classifyFailure(failure) {
   switch (failure.kind) {
@@ -93266,6 +93269,7 @@ function createMaestroTestAllHandler(deps = {}) {
     const reproveManagedOrigin = deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
     const completeRunnerPark = deps.completeRunnerPark ?? managedAuthority.completeRunnerPark;
     const reissueInstallReceipt = deps.reissueInstallReceipt ?? managedAuthority.reissueInstallReceipt;
+    const devClientLaunchUrl = (deps.devClientLaunchUrl ?? boundDevClientLaunchUrl)() ?? void 0;
     const results = [];
     let passed = 0;
     let failed = 0;
@@ -93286,7 +93290,8 @@ function createMaestroTestAllHandler(deps = {}) {
             relaunchManagedApp,
             reproveManagedOrigin,
             completeRunnerPark,
-            reissueInstallReceipt
+            reissueInstallReceipt,
+            ...devClientLaunchUrl ? { devClientLaunchUrl } : {}
           }));
           const evidence = { ...nested.meta, ...nested.data };
           const flowPassed = nested.ok === true && nested.data?.passed === true;
@@ -93342,16 +93347,22 @@ function createMaestroTestAllHandler(deps = {}) {
         installReceiptCommitted = true;
         await reissueInstallReceipt();
       };
+      const plannedStages = planMaestroAuthorityStages(parsedCommands).stages;
+      let stageCursor = 0;
       try {
         const stageResults = await parkFlow(() => executeMaestroAuthorityStages(parsedCommands, async (commands) => {
+          const requiresOrigin = plannedStages[stageCursor++]?.requiresOrigin === true;
           if (start + timeout - now() <= 0) {
             const error2 = new Error("Maestro flow timeout exhausted before the next stage");
             Object.assign(error2, { code: "ETIMEDOUT" });
             throw error2;
           }
-          writeFileSync19(safeFlowFile, buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, [
-            ...commands
-          ]), "utf-8");
+          writeFileSync19(safeFlowFile, buildMaestroFlow(stageFlowOptions({
+            platform,
+            appId: parsedAppId,
+            requiresOrigin,
+            devClientLaunchUrl
+          }), [...commands]), "utf-8");
           const executeRunner = (runnerPath, prefixArgs = []) => {
             const remainingTimeout = start + timeout - now();
             if (remainingTimeout <= 0) {

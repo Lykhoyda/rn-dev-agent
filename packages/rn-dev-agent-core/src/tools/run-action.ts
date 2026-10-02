@@ -150,6 +150,10 @@ export function isDevClientLaunchShape(install: RunActionInstallReceipt | null):
   return install?.buildKind === 'expo';
 }
 
+export function boundDevClientLaunchUrl(): string | null {
+  return isDevClientLaunchShape(boundInstallReceipt()) ? boundIosDevClientLaunchUrl() : null;
+}
+
 export const DEV_CLIENT_CLEARSTATE_REFUSAL =
   'Refusing to replay a flow containing clearState on a managed dev-client session. The ' +
   'clearState relaunch uninstalls the app and strands the dev client at its picker, so the ' +
