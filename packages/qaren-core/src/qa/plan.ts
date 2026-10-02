@@ -167,21 +167,20 @@ export function parsePlan(markdown: string): ParsedPlan {
   return scanPlan(markdown, new Map());
 }
 
-// A grammar refusal needs no model: the plain parse reports it.
 export function planNeedsJev(markdown: string): boolean {
   const pending: RefusedLine[] = [];
-  const parsed = scanPlan(markdown, new Map(), pending);
-  if (pending.length) return true;
-  if (parsed.refused) return false;
-  return parsed.blocks.some((block) =>
-    block.items.some((item) => {
+  const items: (Step | Check)[] = [];
+  scanPlan(markdown, new Map(), pending, undefined, items);
+  return (
+    pending.length > 0 ||
+    items.some((item) => {
       if (item.kind === 'check') return !item.literal;
       if (item.kind === 'press' || item.kind === 'fill' || item.kind === 'wait')
         return item.target.quoted === undefined;
       if (item.kind === 'scroll')
         return item.until !== undefined && item.until.quoted === undefined;
       return false;
-    }),
+    })
   );
 }
 
@@ -190,6 +189,7 @@ function scanPlan(
   resolved: ReadonlyMap<number, Step | Check>,
   pending?: RefusedLine[],
   fillValues?: string[],
+  encountered?: (Step | Check)[],
 ): ParsedPlan {
   const visible = visibleLines(markdown.split(/\r?\n/));
   let start = 0;
@@ -281,6 +281,7 @@ function scanPlan(
     }
   }
   closeDeclared();
+  encountered?.push(...blocks.flatMap((block) => block.items));
   if (refused.length > 0) return { refused };
   const filled = blocks.filter((b) => b.items.length > 0);
   if (filled.length === 0)

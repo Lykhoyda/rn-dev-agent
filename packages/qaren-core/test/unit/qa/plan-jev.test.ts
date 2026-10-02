@@ -290,3 +290,65 @@ test('only a whole quoted check is literal; mixed expectations retain the readin
     if (!literal) assert.deepEqual(judge.requests[0].state, { readiness: 'ready' });
   }
 });
+
+test('phrase lines require readiness even when another line refuses, in either order', async () => {
+  for (const phrase of [
+    '✓ The heading shows "Welcome" and no error is visible',
+    '1. Tap the save button',
+    '1. Type "x" into the name field',
+    '1. Fill the name field with "x"',
+    '1. Wait for the footer',
+    '1. Scroll down until the footer',
+    '1. Scroll up until the header',
+    '1. Visit the profile',
+  ]) {
+    for (const refusal of ['2. Type your name into the field', 'unparseable prose']) {
+      for (const markdown of [`${phrase}\n${refusal}`, `${refusal}\n${phrase}`]) {
+        assert.equal(planNeedsJev(markdown), true, markdown);
+        const rejected = scriptedJudge(() => {
+          throw new JevError('JEV_AUTH_FAILED');
+        });
+        const result = await preflightPlan(markdown, rejected);
+        assert.ok(!result.ok && result.code === 'JEV_UNREACHABLE', markdown);
+        assert.equal(rejected.requests.length, 1);
+        assert.deepEqual(rejected.requests[0].state, { readiness: 'ready' });
+        assert.equal(rejected.calls[0].scope, 'preflight');
+        const ready = scriptedJudge((questions, index) =>
+          index === 0
+            ? { preflight: { type: 'noul', noul: 0.99 } }
+            : Object.fromEntries(
+                Object.entries(questions).map(([id, q]) => [id, choice(q, 'press')]),
+              ),
+        );
+        const refused = await preflightPlan(markdown, ready);
+        assert.ok(!refused.ok && refused.code === 'PLAN_UNPARSEABLE', markdown);
+        assert.equal(ready.calls[0].scope, 'preflight');
+      }
+    }
+  }
+});
+
+test('structural refusals retain phrase classification across blocks', () => {
+  for (const markdown of [
+    '### Empty\n### Next\n✓ the header is visible',
+    '### Same\n✓ "Welcome"\n### Same\n1. Tap the save button',
+  ]) {
+    assert.ok(parsePlan(markdown).refused);
+    assert.equal(planNeedsJev(markdown), true);
+  }
+});
+
+test('refused plans without active phrase lines still skip readiness', async () => {
+  for (const markdown of [
+    '✓ "Welcome"\n1. Type "x"',
+    '### Empty\n### Next\n✓ “Welcome”',
+    '## QA\n✓ "Welcome"\nunparseable prose\n## Notes\n1. Tap the save button',
+    '<!-- ✓ the header is visible -->\n✓ "Welcome"\nunparseable prose',
+  ]) {
+    assert.equal(planNeedsJev(markdown), false, markdown);
+    const judge = throwingJudge();
+    const result = await preflightPlan(markdown, judge);
+    assert.ok(!result.ok && result.code === 'PLAN_UNPARSEABLE');
+    assert.equal(judge.requests.length, 0);
+  }
+});
