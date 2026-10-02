@@ -97,9 +97,11 @@ installed_bin() {
     && [ "$(exec 9>&-; cat "$dest/$RECORD")" = "$sha" ] && echo "$dest/bin/qaren"
 }
 
+# Staging names are .staging-<version>.<six mktemp characters>; matching exactly six keeps
+# 2.0.0-alpha from claiming .staging-2.0.0-alpha.1.XXXXXX.
 has_staging() {
   local staging
-  for staging in "$RUNTIME_ROOT/.staging-$1".*; do
+  for staging in "$RUNTIME_ROOT/.staging-$1".??????; do
     { [ -e "$staging" ] || [ -L "$staging" ]; } && return 0
   done
   return 1
@@ -109,7 +111,7 @@ has_staging() {
 interrupted_install() {
   local staging
   [ -e "$RUNTIME_ROOT/$1" ] && return 1
-  for staging in "$RUNTIME_ROOT/.staging-$1".*; do
+  for staging in "$RUNTIME_ROOT/.staging-$1".??????; do
     [ -d "$staging/previous" ] && return 0
   done
   return 1
@@ -179,12 +181,12 @@ take_lock() {
   esac
 }
 
-# With this version's lock held every .staging-<version>.* directory belongs to an install
+# With this version's lock held every .staging-<version>.XXXXXX directory belongs to an install
 # that has exited. Put back a runtime it had moved aside, then remove it; refuse and touch
 # nothing whenever the state is not exactly what this script creates.
 heal() {
   local version="$1" dest="$RUNTIME_ROOT/$1" staging
-  for staging in "$RUNTIME_ROOT/.staging-$version".*; do
+  for staging in "$RUNTIME_ROOT/.staging-$version".??????; do
     [ -e "$staging" ] || [ -L "$staging" ] || continue
     { [ -d "$staging" ] && [ ! -L "$staging" ] && [ -O "$staging" ]; } \
       || refuse "unexpected install state at $staging; inspect it and remove it if it is not needed"
@@ -211,8 +213,8 @@ install() {
 
   mkdir -p "$RUNTIME_ROOT"
   take_lock "$version"
-  heal "$version"
   [ -L "$dest" ] && refuse "$dest is a symbolic link; inspect it and remove it before installing"
+  heal "$version"
   installed_bin "$version" "$sha" && return 0
 
   STAGING=""

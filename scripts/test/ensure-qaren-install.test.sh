@@ -313,20 +313,20 @@ done
 reset_home
 mkdir -p "$tmp/home/.qaren/runtime" "$tmp/elsewhere"
 printf 'keep\n' > "$tmp/elsewhere/file"
-ln -s "$tmp/elsewhere" "$tmp/home/.qaren/runtime/.staging-$VERSION.evil"
+ln -s "$tmp/elsewhere" "$tmp/home/.qaren/runtime/.staging-$VERSION.evil01"
 run_install "$tmp/good.tgz" >/dev/null; rc=$?
 check "symlinked staging is refused" 1 "$rc"
-check "symlinked staging: named" yes "$(grep -q "unexpected install state at .*staging-$VERSION.evil" "$tmp/stderr" && echo yes || echo no)"
-check "symlinked staging: left in place" yes "$([ -L "$tmp/home/.qaren/runtime/.staging-$VERSION.evil" ] && echo yes || echo no)"
+check "symlinked staging: named" yes "$(grep -q "unexpected install state at .*staging-$VERSION.evil01" "$tmp/stderr" && echo yes || echo no)"
+check "symlinked staging: left in place" yes "$([ -L "$tmp/home/.qaren/runtime/.staging-$VERSION.evil01" ] && echo yes || echo no)"
 check "symlinked staging: its target untouched" keep "$(cat "$tmp/elsewhere/file")"
 check "symlinked staging: nothing installed" no "$([ -e "$DEST" ] && echo yes || echo no)"
 
 reset_home
-mkdir -p "$tmp/home/.qaren/runtime/.staging-$VERSION.odd"
-ln -s "$tmp/elsewhere" "$tmp/home/.qaren/runtime/.staging-$VERSION.odd/previous"
+mkdir -p "$tmp/home/.qaren/runtime/.staging-$VERSION.odd001"
+ln -s "$tmp/elsewhere" "$tmp/home/.qaren/runtime/.staging-$VERSION.odd001/previous"
 run_install "$tmp/good.tgz" >/dev/null; rc=$?
 check "a symlinked previous runtime is refused" 1 "$rc"
-check "symlinked previous: left in place" yes "$([ -L "$tmp/home/.qaren/runtime/.staging-$VERSION.odd/previous" ] && echo yes || echo no)"
+check "symlinked previous: left in place" yes "$([ -L "$tmp/home/.qaren/runtime/.staging-$VERSION.odd001/previous" ] && echo yes || echo no)"
 check "symlinked previous: never moved into place" no "$([ -e "$DEST" ] || [ -L "$DEST" ] && echo yes || echo no)"
 
 reset_home
@@ -342,6 +342,28 @@ ln -s "$tmp/elsewhere" "$DEST"
 run_install "$tmp/good.tgz" >/dev/null; rc=$?
 check "a symlinked runtime directory is refused" 1 "$rc"
 check "symlinked runtime: its target untouched" keep "$(cat "$tmp/elsewhere/file")"
+
+# A saved runtime is never discarded because the destination turned out to be a symlink.
+reset_home
+mkdir -p "$tmp/home/.qaren/runtime/.staging-$VERSION.keep01/previous/bin"
+printf 'saved\n' > "$tmp/home/.qaren/runtime/.staging-$VERSION.keep01/previous/bin/qaren"
+ln -s "$tmp/elsewhere" "$DEST"
+run_install "$tmp/good.tgz" >/dev/null; rc=$?
+check "symlinked runtime with a saved runtime is refused" 1 "$rc"
+check "symlinked runtime: the saved runtime is kept" saved "$(cat "$tmp/home/.qaren/runtime/.staging-$VERSION.keep01/previous/bin/qaren" 2>&1)"
+
+# Staging of another version whose name extends this one is not this version's to heal.
+reset_home
+OTHER="$tmp/home/.qaren/runtime/.staging-$VERSION.1.ABC123"
+mkdir -p "$OTHER/previous/bin"
+printf 'other\n' > "$OTHER/previous/bin/qaren"
+out=$(run_install "$tmp/good.tgz"); rc=$?
+check "an install beside a longer version's staging succeeds" 0 "$rc"
+check "the longer version's staging is untouched" other "$(cat "$OTHER/previous/bin/qaren" 2>&1)"
+check "nothing of it is restored into this version" "$GOOD_SHA" "$(cat "$DEST/.tarball-sha256" 2>&1)"
+rm -rf "$OTHER"
+hint=$(HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
+check "after it, print-bin sees this version installed" "$DEST/bin/qaren" "$hint"
 
 # The unpacked size is bounded before extraction and checked again on disk after it.
 stale_runtime
