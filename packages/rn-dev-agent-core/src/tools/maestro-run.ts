@@ -388,8 +388,7 @@ function attributeOriginFailureToFlowRelaunch(
   return attributed;
 }
 
-// Each runner process cold-launches the app without arguments, which leaves a dev
-// client on its launcher; relaunch it straight into the session URL first.
+// WDA cold-launches without arguments; restore the session URL without resetting permissions.
 export function stageFlowOptions(stage: {
   platform: 'ios' | 'android';
   appId: string | undefined;
