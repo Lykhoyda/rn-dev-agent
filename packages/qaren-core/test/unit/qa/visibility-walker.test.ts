@@ -575,8 +575,8 @@ test('a heading wait keeps polling ordinary text for its whole budget and ends u
   assert.equal(result.verdict, 'FAIL');
   assert.match(result.failure?.seen ?? '', /VISIBILITY_UNSURE/);
   assert.doesNotMatch(result.failure?.seen ?? '', /did not appear/);
-  assert.equal(f.captures(), Math.floor((PHRASE_WAIT_BUDGET_MS - 1) / EVIDENCE_USE_MS) + 1);
-  assert.equal(f.probes(), PHRASE_WAIT_BUDGET_MS / WAIT_POLL_MS);
+  assert.equal(f.captures(), PHRASE_WAIT_BUDGET_MS / WAIT_POLL_MS);
+  assert.equal(f.probes(), 0);
   assert.equal(result.jev.calls, 0);
   assert.deepEqual(f.actions, []);
 });

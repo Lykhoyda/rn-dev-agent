@@ -113,3 +113,31 @@ test('quoted waits never probe; their polls already use plain captures', async (
   assert.deepEqual(presence, [false, false]);
   assert.equal(f.probes(), 0);
 });
+
+test('a heading wait observes a transient title change on the next poll without probes', async () => {
+  const body = shown('Welcome');
+  const title = structuredClone(body);
+  title.elements[0].semantic!.nativePresence = {
+    kind: 'text',
+    labelSource: 'direct',
+    structural: false,
+  };
+  title.elements[0].semantic!.heading = {
+    kind: 'typographic-title',
+    hostIndex: 0,
+    anchorRef: '@text',
+    bodyRefs: [],
+  };
+  const { f, judge: j, presence } = timedWalker([body]);
+  const capture = f.deps.captureScreen;
+  f.deps.captureScreen = async (options) => {
+    await capture(options);
+    return !options?.probe && f.deps.now() >= 1_000 && f.deps.now() < 8_000 ? title : body;
+  };
+  const result = await runPlan(parsePlan('1. Wait for the welcome heading').blocks!, f.deps);
+  assert.equal(result.verdict, 'PASS');
+  assert.ok(f.deps.now() >= 1_000 && f.deps.now() <= 1_000 + WAIT_POLL_MS);
+  assert.deepEqual(presence, [true, true, true]);
+  assert.equal(f.probes(), 0);
+  assert.equal(j.calls.length, 1);
+});

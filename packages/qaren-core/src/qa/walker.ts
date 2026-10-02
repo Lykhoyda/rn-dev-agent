@@ -5,6 +5,7 @@ import {
   CHECK,
   ResolutionError,
   decideScreen,
+  isHeadingRequest,
   stepTarget,
   targetVisible,
 } from './resolve.js';
@@ -608,10 +609,11 @@ export async function walkBlock(
         const deadline = deps.now() + budget;
         const held = cached?.item === item ? cached : undefined;
         // Presence and plain captures sign the same screen differently, so polls compare plain to plain.
-        const phrase = item.target.quoted === undefined;
+        const probeUnchanged =
+          item.target.quoted === undefined && !isHeadingRequest(item.target.phrase);
         const probeSignature = async (): Promise<string> =>
           screenSignature((await capture(undefined, false, true)).screen);
-        let presenceScreen = phrase && !held ? await probeSignature() : undefined;
+        let presenceScreen = probeUnchanged && !held ? await probeSignature() : undefined;
         let observation = held?.observation ?? (await capture(item));
         cached = undefined;
         const probe = visibilityProbe(item, deadline);
@@ -624,7 +626,7 @@ export async function walkBlock(
         while (!found && deps.now() < deadline) {
           await pause(Math.min(WAIT_POLL_MS, deadline - deps.now()));
           if (deps.now() >= deadline) break;
-          if (phrase) {
+          if (probeUnchanged) {
             const signature = await probeSignature();
             if (signature === presenceScreen && observationUsable(observation.timing, deps.now())) {
               metric('cache-reuse', observation);
