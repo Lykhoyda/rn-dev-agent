@@ -14,7 +14,7 @@ pub fn redact_known_key(raw: &str, key: Option<&str>) -> String {
 const PRIVATE_KEY_MASK: &str = "<redacted private key>";
 
 // The `-----BEGIN|END ...PRIVATE KEY-----` header nearest the start: (start, end).
-fn private_key_header(raw: &str, kind: &str) -> Option<(usize, usize)> {
+pub(crate) fn private_key_header(raw: &str, kind: &str) -> Option<(usize, usize)> {
     let marker = format!("-----{kind} ");
     let mut from = 0;
     while let Some(found) = raw[from..].find(&marker) {
@@ -29,14 +29,7 @@ fn private_key_header(raw: &str, kind: &str) -> Option<(usize, usize)> {
     None
 }
 
-// `in_key` carries an open PEM block across log lines; an END before any BEGIN means
-// the start was cut off, so everything before it is key material.
 fn mask_private_keys(raw: &str, in_key: &mut bool) -> String {
-    if let Some((end, _)) = private_key_header(raw, "END") {
-        if private_key_header(raw, "BEGIN").is_none_or(|(begin, _)| end < begin) {
-            *in_key = true;
-        }
-    }
     let mask = |span: &str, out: &mut String| {
         let body = span.trim_end_matches(['\r', '\n']);
         if !body.trim().is_empty() {
@@ -47,14 +40,21 @@ fn mask_private_keys(raw: &str, in_key: &mut bool) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw;
     loop {
+        if let Some((end, _)) = private_key_header(rest, "END") {
+            if private_key_header(rest, "BEGIN").is_none_or(|(begin, _)| end < begin) {
+                *in_key = true;
+            }
+        }
         if *in_key {
-            let Some((end, _)) = private_key_header(rest, "END") else {
+            let Some((end, header_end)) = private_key_header(rest, "END") else {
                 mask(rest, &mut out);
                 return out;
             };
             mask(&rest[..end], &mut out);
-            rest = &rest[end..];
+            out.push_str(&rest[end..header_end]);
+            rest = &rest[header_end..];
             *in_key = false;
+            continue;
         }
         let Some((_, header_end)) = private_key_header(rest, "BEGIN") else {
             out.push_str(rest);
@@ -136,7 +136,7 @@ pub fn redact_stream_line(raw: &str, in_private_key: &mut bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{redact_known_key, redact_secrets};
+    use super::{redact_known_key, redact_secrets, PRIVATE_KEY_MASK};
 
     #[test]
     fn typesafe_key_is_redacted_without_a_prefix_and_in_json() {
@@ -189,6 +189,24 @@ mod tests {
         let plain =
             "commit 0123456789abcdef0123456789abcdef01234567 -----BEGIN CERTIFICATE----- MIIB";
         assert_eq!(redact_secrets(plain), plain);
+    }
+
+    #[test]
+    fn every_orphan_end_fragment_is_masked() {
+        for raw in [
+            "bodyA -----END PRIVATE KEY----- bodyB -----END PRIVATE KEY----- tail",
+            "-----BEGIN PRIVATE KEY----- bodyA -----END PRIVATE KEY----- bodyB -----END PRIVATE KEY----- tail",
+            "-----BEGIN PRIVATE KEY----- bodyA -----END PRIVATE KEY----- -----BEGIN PRIVATE KEY----- bodyB",
+        ] {
+            for text in [raw.to_string(), serde_json::to_string(raw).unwrap()] {
+                let clean = redact_secrets(&text);
+                assert!(!clean.contains("bodyA") && !clean.contains("bodyB"), "{clean}");
+                assert_eq!(clean.matches(PRIVATE_KEY_MASK).count(), 2, "{clean}");
+                if raw.ends_with("tail") {
+                    assert!(clean.contains("tail"), "{clean}");
+                }
+            }
+        }
     }
 
     #[test]

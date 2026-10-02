@@ -91,13 +91,12 @@ impl Lines {
         for &byte in bytes {
             self.pending.push(byte);
             if !self.dropping && self.pending.len() == MAX_LINE {
-                self.track_withheld();
+                self.track_withheld(false);
                 self.dropping = true;
                 log.write_all(b"[oversized log line withheld]\n")?;
             }
-            // ponytail: only the withheld line's last 256 bytes reach key tracking.
-            if self.dropping && self.pending.len() == 512 {
-                self.pending.drain(..256);
+            if self.dropping && self.pending.len() == MAX_LINE {
+                self.track_withheld(false);
             }
             if byte == b'\n' || byte == b'\r' {
                 self.finish(log)?;
@@ -106,18 +105,45 @@ impl Lines {
         Ok(())
     }
 
-    // A withheld line may still open or close a private-key block for the lines after it.
-    fn track_withheld(&mut self) {
+    fn track_withheld(&mut self, final_chunk: bool) {
+        let raw = String::from_utf8_lossy(&self.pending);
+        let mut complete = 0;
+        while let Some(end) = ["BEGIN", "END"]
+            .iter()
+            .filter_map(|kind| crate::redact::private_key_header(&raw[complete..], kind))
+            .map(|(_, end)| end)
+            .max()
+        {
+            complete += end;
+        }
+        let carry = if final_chunk {
+            0
+        } else {
+            (complete.max(raw.len().saturating_sub(64))..raw.len())
+                .find(|&start| {
+                    raw.as_bytes()[start] == b'-'
+                        && (start == 0 || raw.as_bytes()[start - 1] != b'-')
+                        && ["-----BEGIN ", "-----END "].iter().any(|marker| {
+                            let tail = &raw[start..];
+                            marker.starts_with(tail)
+                                || tail
+                                    .strip_prefix(*marker)
+                                    .is_some_and(|label| !label.contains("-----"))
+                        })
+                })
+                .map_or(0, |start| raw.len() - start)
+        };
+        let consumed = self.pending.len() - carry;
         crate::redact::redact_stream_line(
-            &String::from_utf8_lossy(&self.pending),
+            &String::from_utf8_lossy(&self.pending[..consumed]),
             &mut self.in_private_key,
         );
-        self.pending.clear();
+        self.pending.drain(..consumed);
     }
 
     fn finish(&mut self, log: &mut impl Write) -> io::Result<()> {
         if std::mem::take(&mut self.dropping) {
-            self.track_withheld();
+            self.track_withheld(true);
             return log.flush();
         }
         log.write_all(
