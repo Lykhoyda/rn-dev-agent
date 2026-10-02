@@ -123,8 +123,8 @@ ${section(source, '  private func presenceRead<', '  private func presenceLabelS
       enabled: snapshot.isEnabled, focused: nil, hittable: true, depth: depth, parentIndex: parentIndex,
       hiddenContentAbove: nil, hiddenContentBelow: nil)
   }
-${section(source, '  func snapshotPlatformPresence(', '  // Descriptor and hierarchy stability')}
-  private func observePresence(_ descriptor: PresenceDescriptor, count: Int, predicateIsExact: Bool, app: XCUIApplication, deadline: Double, timing: PresenceCaptureTiming, unknownReason: ((PlatformPresenceObservation.UnknownReason) -> Void)? = nil) -> Double? {
+${section(source, '  func snapshotPlatformPresence(', '  private func observePresence(')}
+  private func observePresence(_ descriptor: PresenceDescriptor, count: Int, app: XCUIApplication, deadline: Double, timing: PresenceCaptureTiming, unknownReason: ((PlatformPresenceObservation.UnknownReason) -> Void)? = nil) -> Double? {
     observations += 1; now += observationMs; return now
   }
 }

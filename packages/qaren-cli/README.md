@@ -96,6 +96,12 @@ device lease remain claimed for `qaren cleanup`. The developer
 [check gate](../../scripts/gate-qaren-check.sh) forwards the boot opt-in with
 `QAREN_BOOT_DEVICE=1` alongside `QAREN_DEVICE_UDID`.
 
+iOS artifact verification requires an Expo Dev Launcher image supporting
+`--initialUrl` and refuses bundles containing `main.jsbundle`. Symbol and string
+probes filter output before capture, allowing large debug images without raising
+the 16 MiB capture limit; failed probes or missing required evidence still refuse.
+The verification contract is owned by [`src/adapters/ios.rs`](src/adapters/ios.rs).
+
 ### iOS admission and cleanup
 
 Strict admission observes known automation patterns for the selected simulator.

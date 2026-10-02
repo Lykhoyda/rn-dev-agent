@@ -525,13 +525,10 @@ extension RnFastRunnerTests {
           continue
         }
         handled.formUnion(group)
-        let predicateMatches = descriptors.filter {
-          $0?.type == descriptor.type && $0?.identifier == descriptor.identifier && $0?.label == descriptor.label
-        }.count
         var unknownReason: PlatformPresenceObservation.UnknownReason?
         let observation = presenceRead(deadline: deadline, timing: timing, read: .observation) {
           self.observePresence(
-            descriptor, count: group.count, predicateIsExact: predicateMatches == group.count,
+            descriptor, count: group.count,
             app: app, deadline: deadline, timing: timing, unknownReason: { unknownReason = $0 }
           )
         }
@@ -677,24 +674,15 @@ extension RnFastRunnerTests {
     }
   }
 
-  // Descriptor and hierarchy stability is proven once for all nodes by the final whole-tree revalidation.
+  // Attribute hits only after full live descriptor and group-count checks, then recheck the hit element.
   private func observePresence(
-    _ descriptor: PresenceDescriptor, count: Int, predicateIsExact: Bool,
+    _ descriptor: PresenceDescriptor, count: Int,
     app: XCUIApplication, deadline: Double, timing: PresenceCaptureTiming,
     unknownReason: ((PlatformPresenceObservation.UnknownReason) -> Void)? = nil
   ) -> Double? {
     // Callers never pass application or window descriptors, so the app root cannot be a match.
     let query = app.descendants(matching: descriptor.type)
       .matching(NSPredicate(format: "identifier == %@ AND label == %@", descriptor.identifier, descriptor.label))
-    if predicateIsExact {
-      // Type, identifier and label single out this node or its nested text chain in the initial tree.
-      let hittable = presenceRead(deadline: deadline, timing: timing, read: .firstMatch, { query.firstMatch.isHittable })
-      guard hittable == true else {
-        unknownReason?(hittable == nil ? .readUnavailable : .notHittable)
-        return nil
-      }
-      return presenceUptimeMs()
-    }
     guard let elements = presenceRead(deadline: deadline, timing: timing, read: .allMatches, { query.allElementsBoundByAccessibilityElement })
     else { unknownReason?(.readUnavailable); return nil }
     var matches: [XCUIElement] = []
