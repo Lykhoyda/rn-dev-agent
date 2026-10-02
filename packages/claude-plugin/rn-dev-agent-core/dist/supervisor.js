@@ -64681,7 +64681,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 75;
+    HELPERS_VERSION = 76;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -67611,7 +67611,7 @@ var init_injected_helpers = __esm({
           var node = inner.return;
           var steps = 0;
           while (node && steps < 1000) {
-            if (node === outer) return true;
+            if (sameFiber(node, outer)) return true;
             node = node.return;
             steps++;
           }
@@ -67652,7 +67652,7 @@ var init_injected_helpers = __esm({
           walkOriginalCandidates.push({ fiber: walkNode, hops: walkHops, source: walkSources[wi] });
           var existing = null;
           for (var wj = 0; wj < walkCandidates.length; wj++) {
-            if (walkCandidates[wj].fiber === walkNode || walkForwarded(walkCandidates[wj].fiber, walkNode)) {
+            if (sameFiber(walkCandidates[wj].fiber, walkNode) || walkForwarded(walkCandidates[wj].fiber, walkNode)) {
               existing = walkCandidates[wj];
               break;
             }

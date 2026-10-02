@@ -715,6 +715,166 @@ test('#525 nested distinct pressables both matching the testID refuse as ambiguo
   assert.equal(outer, 0);
 });
 
+function threadAlternate(fiber: SandboxFiber): SandboxFiber {
+  const old: SandboxFiber = { ...fiber, alternate: fiber };
+  fiber.alternate = old;
+  return old;
+}
+
+// One sheet close control: four components forward one testID and one handler
+// through a native glass host that is not an inert RCTView.
+function sheetCloseTree(opts: { distinctInner?: boolean; alternates?: boolean } = {}) {
+  const calls = { close: 0, inner: 0 };
+  const onClose = () => calls.close++;
+  const forwarded = { testID: 'sheet-close', onPress: onClose };
+  const root = buildFiber({
+    name: 'Sheet',
+    children: [
+      {
+        name: 'SheetHeader',
+        props: forwarded,
+        children: [
+          {
+            name: 'RCTView',
+            host: true,
+            children: [
+              {
+                name: 'ClosePill',
+                props: forwarded,
+                children: [
+                  {
+                    name: 'IconButton',
+                    props: forwarded,
+                    children: [
+                      {
+                        name: 'AnimatedComponent',
+                        children: [
+                          {
+                            name: 'GlassView',
+                            host: true,
+                            children: [
+                              {
+                                name: 'Pressable',
+                                props: {
+                                  testID: 'sheet-close',
+                                  onPress: opts.distinctInner ? () => calls.inner++ : onClose,
+                                },
+                                children: [
+                                  {
+                                    name: 'RCTView',
+                                    host: true,
+                                    props: {
+                                      testID: 'sheet-close',
+                                      accessible: true,
+                                      accessibilityRole: 'button',
+                                      onResponderGrant: () => {},
+                                    },
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  const header = root.child!;
+  const headerHost = header.child!;
+  const pill = headerHost.child!;
+  const icon = pill.child!;
+  const animated = icon.child!;
+  if (opts.alternates) {
+    headerHost.return = threadAlternate(header);
+    const iconOld = threadAlternate(icon);
+    iconOld.return = threadAlternate(pill);
+    animated.return = iconOld;
+  }
+  return { root, calls };
+}
+
+function pressSheetClose(root: SandboxFiber) {
+  return JSON.parse(
+    createSandbox({ fiberRoot: root }).__RN_AGENT.interact({
+      action: 'press',
+      testID: 'sheet-close',
+      walkUp: true,
+    }),
+  );
+}
+
+test('#525 one shared handler forwarded through a glass host and alternate returns presses once', async (t) => {
+  for (const alternates of [false, true]) {
+    await t.test(`alternates=${alternates}`, () => {
+      const fixture = sheetCloseTree({ alternates });
+      const result = pressSheetClose(fixture.root);
+      assert.equal(result.success, true, JSON.stringify(result));
+      assert.equal(result.component, 'SheetHeader');
+      assert.deepEqual(fixture.calls, { close: 1, inner: 0 });
+    });
+  }
+});
+
+test('#525 a distinct inner handler under the glass host stays ambiguous with or without alternates', async (t) => {
+  for (const alternates of [false, true]) {
+    await t.test(`alternates=${alternates}`, () => {
+      const fixture = sheetCloseTree({ distinctInner: true, alternates });
+      const result = pressSheetClose(fixture.root);
+      assert.equal(result.error, 'Ambiguous walkUp press target', JSON.stringify(result));
+      assert.deepEqual(result.candidates, [
+        { component: 'SheetHeader', testID: 'sheet-close' },
+        { component: 'Pressable', testID: 'sheet-close' },
+      ]);
+      assert.deepEqual(fixture.calls, { close: 0, inner: 0 });
+    });
+  }
+});
+
+test('#525 one pressable reached through both halves of its alternate pair presses once', () => {
+  let fired = 0;
+  const root = buildFiber({
+    name: 'App',
+    children: [
+      {
+        name: 'Pressable',
+        props: { testID: 'pair', onPress: () => fired++ },
+        children: [
+          {
+            name: 'GlassView',
+            host: true,
+            children: [
+              {
+                name: 'RCTView',
+                host: true,
+                props: { testID: 'pair', accessible: true, onResponderGrant: () => {} },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  const pressable = root.child!;
+  pressable.child!.return = threadAlternate(pressable);
+  const result = JSON.parse(
+    createSandbox({ fiberRoot: root }).__RN_AGENT.interact({
+      action: 'press',
+      testID: 'pair',
+      walkUp: true,
+    }),
+  );
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.component, 'Pressable');
+  assert.equal(fired, 1);
+});
+
 test('#525 walkUp press passes an explicit value to the ancestor handler (GH#336 parity)', () => {
   const seen: unknown[] = [];
   const sandbox = createSandbox({ fiberRoot: cardTree((v) => seen.push(v)) });

@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 75;
+export const HELPERS_VERSION = 76;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -2933,7 +2933,7 @@ export const INJECTED_HELPERS = `
           var node = inner.return;
           var steps = 0;
           while (node && steps < 1000) {
-            if (node === outer) return true;
+            if (sameFiber(node, outer)) return true;
             node = node.return;
             steps++;
           }
@@ -2974,7 +2974,7 @@ export const INJECTED_HELPERS = `
           walkOriginalCandidates.push({ fiber: walkNode, hops: walkHops, source: walkSources[wi] });
           var existing = null;
           for (var wj = 0; wj < walkCandidates.length; wj++) {
-            if (walkCandidates[wj].fiber === walkNode || walkForwarded(walkCandidates[wj].fiber, walkNode)) {
+            if (sameFiber(walkCandidates[wj].fiber, walkNode) || walkForwarded(walkCandidates[wj].fiber, walkNode)) {
               existing = walkCandidates[wj];
               break;
             }

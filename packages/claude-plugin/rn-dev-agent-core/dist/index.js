@@ -51778,7 +51778,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 75;
+var HELPERS_VERSION = 76;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -54708,7 +54708,7 @@ var INJECTED_HELPERS = `
           var node = inner.return;
           var steps = 0;
           while (node && steps < 1000) {
-            if (node === outer) return true;
+            if (sameFiber(node, outer)) return true;
             node = node.return;
             steps++;
           }
@@ -54749,7 +54749,7 @@ var INJECTED_HELPERS = `
           walkOriginalCandidates.push({ fiber: walkNode, hops: walkHops, source: walkSources[wi] });
           var existing = null;
           for (var wj = 0; wj < walkCandidates.length; wj++) {
-            if (walkCandidates[wj].fiber === walkNode || walkForwarded(walkCandidates[wj].fiber, walkNode)) {
+            if (sameFiber(walkCandidates[wj].fiber, walkNode) || walkForwarded(walkCandidates[wj].fiber, walkNode)) {
               existing = walkCandidates[wj];
               break;
             }
