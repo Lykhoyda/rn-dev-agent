@@ -74,7 +74,7 @@ pub fn redact_secrets(raw: &str) -> String {
     redact_plain(raw)
 }
 
-// The one serializer for durable JSON: any string or key naming a private key is withheld whole.
+// Ledger and receipt evidence only; operational records must preserve exact identities.
 pub fn durable_json<T: serde::Serialize>(value: &T) -> serde_json::Result<String> {
     let text = serde_json::to_string_pretty(value)?;
     if !names_private_key(&text) {
