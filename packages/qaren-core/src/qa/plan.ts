@@ -167,11 +167,29 @@ export function parsePlan(markdown: string): ParsedPlan {
   return scanPlan(markdown, new Map());
 }
 
+export function planNeedsJev(markdown: string): boolean {
+  const pending: RefusedLine[] = [];
+  const items: (Step | Check)[] = [];
+  scanPlan(markdown, new Map(), pending, undefined, items);
+  return (
+    pending.length > 0 ||
+    items.some((item) => {
+      if (item.kind === 'check') return !item.literal;
+      if (item.kind === 'press' || item.kind === 'fill' || item.kind === 'wait')
+        return item.target.quoted === undefined;
+      if (item.kind === 'scroll')
+        return item.until !== undefined && item.until.quoted === undefined;
+      return false;
+    })
+  );
+}
+
 function scanPlan(
   markdown: string,
   resolved: ReadonlyMap<number, Step | Check>,
   pending?: RefusedLine[],
   fillValues?: string[],
+  encountered?: (Step | Check)[],
 ): ParsedPlan {
   const visible = visibleLines(markdown.split(/\r?\n/));
   let start = 0;
@@ -233,7 +251,8 @@ function scanPlan(
     }
     const block = current ?? open(title);
     if (check) {
-      const quoted = firstQuoted(check[1]);
+      const match = /^(?:"([^"]+)"|“([^”]+)”)$/.exec(check[1].trim());
+      const quoted = match ? (match[1] ?? match[2]) : undefined;
       block.items.push({
         kind: 'check',
         text: quoted ?? check[1].trim(),
@@ -262,6 +281,7 @@ function scanPlan(
     }
   }
   closeDeclared();
+  encountered?.push(...blocks.flatMap((block) => block.items));
   if (refused.length > 0) return { refused };
   const filled = blocks.filter((b) => b.items.length > 0);
   if (filled.length === 0)
