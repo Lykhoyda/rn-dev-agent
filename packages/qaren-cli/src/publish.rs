@@ -3,7 +3,7 @@ use crate::exec::{CmdSpec, Runner};
 use crate::failure::{Failure, FailureCode};
 use crate::github::{self, PrInfo, NEEDS_QA};
 use crate::receipt::{Receipt, ReceiptResult};
-use crate::record::{self, VideoStatus};
+use crate::record::{self, VideoPublication, VideoStatus};
 use crate::redact::{redact_machine, MachineIdentity};
 use crate::report::{self, PrRun, ReportInput};
 use crate::runrecord::{validate_run_id, RunRecord};
@@ -28,10 +28,22 @@ pub struct PrRunRecord {
     pub device: String,
     pub plan_sha256: String,
     pub video: VideoStatus,
+    #[serde(default, deserialize_with = "video_publication")]
+    pub video_publication: VideoPublication,
+    #[serde(default, deserialize_with = "withholding_reason")]
+    pub video_withholding_reason: Option<String>,
     #[serde(default)]
     pub tested_older_commit: bool,
     #[serde(default)]
     pub blocks: Vec<String>,
+}
+
+fn video_publication<'de, D: serde::Deserializer<'de>>(d: D) -> Result<VideoPublication, D::Error> {
+    Ok(serde_json::from_value(serde_json::Value::deserialize(d)?).unwrap_or_default())
+}
+
+fn withholding_reason<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(serde_json::from_value(serde_json::Value::deserialize(d)?).ok())
 }
 
 // `<run_dir>/publication.json`, rewritten atomically after every step so a rerun resumes.
@@ -428,67 +440,35 @@ fn blocks_comment(
     redact_machine(&out, machine)
 }
 
-// One publisher per run: the lock names its pid, and a dead holder's lock is taken over.
-struct PublishLock(PathBuf);
+struct PublishLock {
+    _file: std::fs::File,
+}
 
 impl PublishLock {
     fn acquire(run_dir: &Path) -> Result<Self, Failure> {
-        use std::io::Write;
+        use std::os::fd::AsRawFd;
         let path = run_dir.join(LOCK);
-        for _ in 0..2 {
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(mut file) => {
-                    file.write_all(std::process::id().to_string().as_bytes())
-                        .map_err(|e| {
-                            failure(
-                                format!("cannot write {}: {e}", path.display()),
-                                "re-run qaren publish",
-                            )
-                        })?;
-                    return Ok(PublishLock(path));
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let holder = std::fs::read_to_string(&path)
-                        .ok()
-                        .and_then(|p| p.trim().parse::<i32>().ok());
-                    // ponytail: pid liveness only; a recycled pid keeps the lock until it exits.
-                    let alive =
-                        holder.is_some_and(|pid| pid > 1 && unsafe { libc::kill(pid, 0) } == 0);
-                    if alive {
-                        return Err(Failure::new(
-                            "publish",
-                            FailureCode::PublishFailed,
-                            format!(
-                                "another qaren publish (pid {}) is publishing this run",
-                                holder.unwrap_or(0)
-                            ),
-                            "wait for it to finish, then re-run qaren publish",
-                        ));
-                    }
-                    let _ = std::fs::remove_file(&path);
-                }
-                Err(e) => {
-                    return Err(failure(
-                        format!("cannot lock {}: {e}", path.display()),
-                        "publish a run that `qaren pr` completed",
-                    ))
-                }
-            }
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|e| {
+                failure(
+                    format!("cannot lock {}: {e}", path.display()),
+                    "re-run qaren publish",
+                )
+            })?;
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err(failure(
+                format!(
+                    "another qaren publish holds the lock or locking failed: {}",
+                    std::io::Error::last_os_error()
+                ),
+                "wait for it to finish, then re-run qaren publish",
+            ));
         }
-        Err(failure(
-            "the publication lock kept changing hands",
-            "re-run qaren publish",
-        ))
-    }
-}
-
-impl Drop for PublishLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        Ok(Self { _file: file })
     }
 }
 
@@ -569,7 +549,6 @@ fn publish_inner(
             })?;
         let ledger: Ledger = read_json(&run_dir.join("ledger.json"))?;
         let plan = std::fs::read_to_string(run_dir.join("plan.md")).unwrap_or_default();
-        let gaps = record::read_gaps(&run_dir);
         let body = report::render_pr_comment(
             &ReportInput {
                 run_id,
@@ -585,7 +564,7 @@ fn publish_inner(
                 tested_older_commit: pr.tested_older_commit,
                 video: &pr.video,
                 plan_sha256: &pr.plan_sha256,
-                gaps: &gaps,
+                video_publication: &pr.video_publication,
             },
             machine,
         );
@@ -601,7 +580,10 @@ fn publish_inner(
 
     if publication.comment_url.is_none() {
         let mut attachments = Vec::new();
-        if pr.video == VideoStatus::Available && record::video_path(&run_dir).is_file() {
+        if pr.video_publication == VideoPublication::Eligible
+            && pr.video == VideoStatus::Available
+            && record::video_path(&run_dir).is_file()
+        {
             attachments.push((PathBuf::from("./media/video.mp4"), None));
         }
         let ledger: Option<Ledger> = read_json(&run_dir.join("ledger.json")).ok();
@@ -632,10 +614,13 @@ fn publish_inner(
     }
 
     if publication.label.is_none() {
-        // Fresh labels: one added after the run is still removed.
         let current = github::pr_view(runner, &pr.url, &pr.repo_root)?;
-        let removed = github::remove_label(runner, &current, NEEDS_QA, &pr.repo_root)?;
-        publication.label = Some(if removed { "removed" } else { "absent" }.to_string());
+        publication.label = Some(if current.head_ref_oid != pr.head_ref_oid {
+            "retained-head-changed".to_string()
+        } else {
+            let removed = github::remove_label(runner, &current, NEEDS_QA, &pr.repo_root)?;
+            if removed { "removed" } else { "absent" }.to_string()
+        });
         save(&run_dir, publication)?;
     }
 
@@ -698,7 +683,21 @@ fn publish_inner(
 
 #[cfg(test)]
 mod tests {
-    use super::{fence, remote_repo};
+    use super::{fence, remote_repo, PublishLock};
+
+    #[test]
+    fn descriptor_lock_excludes_contenders_and_releases_without_unlinking() {
+        let dir = std::env::temp_dir().join(format!("qaren-publish-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = PublishLock::acquire(&dir).unwrap();
+        assert!(PublishLock::acquire(&dir).is_err());
+        assert!(dir.join("publish.lock").exists());
+        drop(first);
+        let second = PublishLock::acquire(&dir).unwrap();
+        assert!(PublishLock::acquire(&dir).is_err());
+        drop(second);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn remote_urls_resolve_to_host_owner_repo() {

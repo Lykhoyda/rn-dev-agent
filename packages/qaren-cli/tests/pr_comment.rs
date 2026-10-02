@@ -1,5 +1,5 @@
 use qaren::core::Ledger;
-use qaren::record::{Gap, VideoStatus};
+use qaren::record::{VideoPublication, VideoStatus};
 use qaren::redact::MachineIdentity;
 use qaren::report::{render_pr_comment, PrRun, ReportInput};
 
@@ -31,7 +31,12 @@ fn failing_ledger() -> Ledger {
     .unwrap()
 }
 
-fn render(ledger: &Ledger, older: bool, video: &VideoStatus, gaps: &[Gap]) -> String {
+fn render(
+    ledger: &Ledger,
+    older: bool,
+    video: &VideoStatus,
+    video_publication: &VideoPublication,
+) -> String {
     render_pr_comment(
         &ReportInput {
             run_id: "check-20261002T101500Z",
@@ -47,7 +52,7 @@ fn render(ledger: &Ledger, older: bool, video: &VideoStatus, gaps: &[Gap]) -> St
             tested_older_commit: older,
             video,
             plan_sha256: &"e".repeat(64),
-            gaps,
+            video_publication,
         },
         &machine(),
     )
@@ -55,7 +60,12 @@ fn render(ledger: &Ledger, older: bool, video: &VideoStatus, gaps: &[Gap]) -> St
 
 #[test]
 fn the_comment_carries_no_machine_identity_or_internal_vocabulary() {
-    let body = render(&failing_ledger(), false, &VideoStatus::Available, &[]);
+    let body = render(
+        &failing_ledger(),
+        false,
+        &VideoStatus::Available,
+        &VideoPublication::Eligible,
+    );
     for leak in [
         "qa-mac-mini",
         "/Users",
@@ -95,20 +105,22 @@ fn the_comment_carries_no_machine_identity_or_internal_vocabulary() {
 
 #[test]
 fn a_moved_head_renders_the_older_commit_line() {
-    let body = render(&failing_ledger(), true, &VideoStatus::Available, &[]);
+    let body = render(
+        &failing_ledger(),
+        true,
+        &VideoStatus::Available,
+        &VideoPublication::Eligible,
+    );
     assert!(body.contains("this tested an older commit"), "{body}");
 }
 
 #[test]
-fn run_details_list_every_field_and_disclose_video_gaps() {
+fn run_details_list_every_field() {
     let body = render(
         &failing_ledger(),
         false,
         &VideoStatus::Unavailable("ffmpeg".into()),
-        &[Gap {
-            after_ms: 180_000,
-            gap_ms: 2_000,
-        }],
+        &VideoPublication::Eligible,
     );
     let details = &body[body
         .find("<details><summary>Run details</summary>")
@@ -121,7 +133,6 @@ fn run_details_list_every_field_and_disclose_video_gaps() {
         "escapes 0",
         "recoveries 2",
         "path ",
-        "Video gaps: 2.0s missing after 180.0s",
     ] {
         assert!(details.contains(field), "{field}: {details}");
     }
@@ -147,7 +158,7 @@ fn the_verdict_sentence_is_bounded() {
             tested_older_commit: false,
             video: &VideoStatus::TooLarge,
             plan_sha256: "0",
-            gaps: &[],
+            video_publication: &VideoPublication::Eligible,
         },
         &machine(),
     );

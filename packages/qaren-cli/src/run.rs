@@ -17,8 +17,8 @@ use crate::receipt::{Receipt, ReceiptResult};
 use crate::record::{self, VideoStatus};
 use crate::report::{self, ReportInput};
 use crate::runrecord::{
-    capture_pid_identity, IosSimResource, Phase, PrWorktreeResource, RecorderKind, Resources,
-    RunRecord, RUN_SCHEMA,
+    capture_pid_identity, IosSimResource, Phase, PrWorktreeResource, Resources, RunRecord,
+    RUN_SCHEMA,
 };
 use crate::scenario::{
     BuildSpec, CandidateSpec, Deadlines, DepsSpec, IosSpec, MetroSpec, Platform, Scenario,
@@ -474,8 +474,8 @@ fn run_inner(
     // ⑧: the recording starts before the walk so it shows the first step.
     let mut video = None;
     if pr_state.is_some() {
-        let target = record::Target::Ios { udid: &device.id };
-        if let Err(status) = record::start(ctx.runner, &mut ctx.record, &ctx.runs_root, &target) {
+        if let Err(status) = record::start(ctx.runner, &mut ctx.record, &ctx.runs_root, &device.id)
+        {
             video = Some(status);
         }
     }
@@ -634,8 +634,7 @@ fn run_inner(
     }
     let mut tested_older_commit = None;
     if let Some(pr) = &pr_state {
-        let video = video
-            .unwrap_or_else(|| record::finalize(ctx.runner, &run_dir, RecorderKind::IosSimulator));
+        let video = video.unwrap_or_else(|| record::finalize(ctx.runner, &run_dir));
         ctx.notes.push(("video".to_string(), video.to_string()));
         // ⑭: a head that moved during the run means an older commit was tested.
         match github::pr_view(ctx.runner, &pr.info.url, &pr.repo_root) {
@@ -647,6 +646,7 @@ fn run_inner(
                 .notes
                 .push(("pr_head_recheck".to_string(), f.detail.clone())),
         }
+        let video_publication = outcome.ledger.video_publication.clone().unwrap_or_default();
         let pr_record = PrRunRecord {
             number: pr.info.number,
             url: pr.info.url.clone(),
@@ -660,6 +660,8 @@ fn run_inner(
             device: device.name.clone(),
             plan_sha256: sha256_hex(plan.as_bytes()),
             video,
+            video_withholding_reason: video_publication.withholding_reason().map(str::to_string),
+            video_publication,
             tested_older_commit: tested_older_commit.is_some(),
             blocks,
         };

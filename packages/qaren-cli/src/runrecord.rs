@@ -207,7 +207,6 @@ pub struct UsbDeviceResource {
 #[serde(rename_all = "snake_case")]
 pub enum RecorderKind {
     IosSimulator,
-    AndroidAdb,
 }
 
 // Persisted before the spawn: a None pid means the spawn outcome is unproven.
@@ -220,10 +219,6 @@ pub struct RecorderResource {
     pub kind: RecorderKind,
     pub device: String,
     pub output: PathBuf,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adb: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

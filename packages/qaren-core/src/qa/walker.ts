@@ -871,6 +871,12 @@ export async function runPlan(
       b.items.flatMap((i) => (i.kind === 'fill' ? [i.text] : [])),
     );
     const privacy = new ObservedPrivacy(typed);
+    const videoPublication = (): NonNullable<WalkResult['videoPublication']> =>
+      blocks.some((block) => block.items.some((item) => item.kind === 'fill'))
+        ? 'withheld-fill'
+        : privacy.canScreenshot()
+          ? 'eligible'
+          : 'withheld-privacy';
     const calls = (): JevCall[] => [...preflightCalls, ...(deps.judge?.calls ?? [])];
     const sequence = { observation: 0 };
     for (const block of blocks) {
@@ -878,11 +884,25 @@ export async function runPlan(
       results.push(outcome.block);
       steps.push(...outcome.rows);
       if (outcome.failure) {
-        const ledger = buildLedger(results, steps, outcome.failure, calls());
-        return outcome.refusal ? { ...ledger, ...outcome.refusal, verdict: 'REFUSED' } : ledger;
+        const ledger = {
+          ...buildLedger(results, steps, outcome.failure, calls()),
+          videoPublication: videoPublication(),
+        };
+        return outcome.refusal
+          ? {
+              ...ledger,
+              ...outcome.refusal,
+              verdict: 'REFUSED',
+              videoPublication:
+                ledger.videoPublication === 'eligible' ? 'unknown' : ledger.videoPublication,
+            }
+          : ledger;
       }
     }
-    return buildLedger(results, steps, undefined, calls());
+    return {
+      ...buildLedger(results, steps, undefined, calls()),
+      videoPublication: videoPublication(),
+    };
   });
 }
 

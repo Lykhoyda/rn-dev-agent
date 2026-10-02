@@ -29,6 +29,7 @@ export interface BlockResult {
 
 export interface Ledger {
   verdict: 'PASS' | 'FAIL';
+  videoPublication?: 'eligible' | 'withheld-fill' | 'withheld-privacy' | 'unknown';
   path: 'walk';
   blocks: BlockResult[];
   steps: LedgerRow[];

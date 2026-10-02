@@ -3,7 +3,7 @@ mod common;
 use qaren::exec::{CmdOutput, CmdSpec, MockRunner, PipedChild, Runner, Spawned};
 use qaren::publish::{publish, PrRunRecord, Publication};
 use qaren::receipt::ReceiptResult;
-use qaren::record::VideoStatus;
+use qaren::record::{VideoPublication, VideoStatus};
 use qaren::redact::MachineIdentity;
 use std::path::{Path, PathBuf};
 
@@ -68,6 +68,8 @@ fn run_dir(cross_repository: bool) -> (PathBuf, PathBuf, PathBuf) {
         device: "qaren-check".into(),
         plan_sha256: "e".repeat(64),
         video: VideoStatus::Available,
+        video_publication: VideoPublication::Eligible,
+        video_withholding_reason: None,
         tested_older_commit: false,
         blocks: vec!["tasks".into()],
     };
@@ -484,7 +486,12 @@ fn a_symlinked_corpus_in_the_pr_tree_is_refused_and_the_yaml_is_attached() {
 #[test]
 fn a_live_publisher_holds_the_run() {
     let (runs, dir, verdict) = run_dir(false);
-    std::fs::write(dir.join("publish.lock"), std::process::id().to_string()).unwrap();
+    use std::os::fd::AsRawFd;
+    let held = std::fs::File::create(dir.join("publish.lock")).unwrap();
+    assert_eq!(
+        unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
     let mut runner = Git(MockRunner::new());
     let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
     assert_eq!(receipt.result, ReceiptResult::Failed);
@@ -600,5 +607,106 @@ fn a_typed_secret_never_lands_in_the_posted_block_yaml() {
     let posted = std::fs::read_to_string(dir.join("blocks-comment.md")).unwrap();
     for leak in [TYPED_SECRET, "/Users/qa", "qa-mac"] {
         assert!(!posted.contains(leak), "{leak} posted:\n{posted}");
+    }
+}
+
+#[test]
+fn withheld_or_unknown_eligibility_never_uploads_video() {
+    for eligibility in [
+        None,
+        Some(serde_json::json!("withheld-fill")),
+        Some(serde_json::json!("withheld-privacy")),
+        Some(serde_json::json!("future-status")),
+        Some(serde_json::json!({"invalid": true})),
+        Some(serde_json::Value::Null),
+    ] {
+        let (runs, dir, verdict) = run_dir(false);
+        let path = dir.join("pr.json");
+        let mut pr: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        pr["blocks"] = serde_json::json!([]);
+        if let Some(value) = eligibility {
+            pr["videoPublication"] = value;
+        } else {
+            pr.as_object_mut().unwrap().remove("videoPublication");
+        }
+        std::fs::write(&path, serde_json::to_vec(&pr).unwrap()).unwrap();
+        let mut runner = Git(MockRunner::new());
+        script_comment_and_label(&mut runner.0);
+        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+        assert_eq!(
+            receipt.result,
+            ReceiptResult::Published,
+            "{:?}",
+            receipt.failure
+        );
+        let comment = runner
+            .0
+            .calls
+            .iter()
+            .find(|c| c.label == "gh-pr-comment")
+            .unwrap();
+        assert!(!comment.args.iter().any(|arg| arg.contains("video.mp4")));
+        let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
+        assert!(body.contains("Video withheld:"));
+        assert!(!body.contains("Video of the walk is attached"));
+        assert!(dir.join("media/video.mp4").is_file());
+        assert_eq!(runner.0.remaining(), 0);
+    }
+}
+
+#[test]
+fn publishing_an_older_head_retains_the_qa_request_and_receipt() {
+    let (runs, dir, verdict) = run_dir(false);
+    let path = dir.join("pr.json");
+    let mut pr: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    pr["blocks"] = serde_json::json!([]);
+    std::fs::write(path, serde_json::to_vec(&pr).unwrap()).unwrap();
+    let mut runner = Git(MockRunner::new());
+    runner.0.expect_run(
+        "gh pr comment",
+        CmdOutput::success("https://github.com/o/r/pull/12#issuecomment-1"),
+    );
+    let mut current: serde_json::Value =
+        serde_json::from_str(&view(r#"{"name":"needs-qa"}"#).stdout).unwrap();
+    current["headRefOid"] = serde_json::json!(COMMIT);
+    runner
+        .0
+        .expect_run("gh pr view", CmdOutput::success(&current.to_string()));
+    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    assert_eq!(receipt.result, ReceiptResult::Published);
+    assert_eq!(receipt.outcomes["label"], "retained-head-changed");
+    assert_eq!(
+        publication(&dir).label.as_deref(),
+        Some("retained-head-changed")
+    );
+    assert!(!runner
+        .0
+        .calls
+        .iter()
+        .any(|c| c.args.contains(&"--remove-label".into())));
+    assert_eq!(runner.0.remaining(), 0);
+}
+
+#[test]
+fn an_abandoned_empty_or_partial_lock_does_not_block_publication() {
+    for content in ["", "not-a-pid", "12"] {
+        let (runs, dir, verdict) = run_dir(false);
+        std::fs::write(dir.join("publish.lock"), content).unwrap();
+        let path = dir.join("pr.json");
+        let mut pr: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        pr["blocks"] = serde_json::json!([]);
+        std::fs::write(path, serde_json::to_vec(&pr).unwrap()).unwrap();
+        let mut runner = Git(MockRunner::new());
+        script_comment_and_label(&mut runner.0);
+        assert_eq!(
+            publish(&mut runner, &runs, RUN, &verdict, &machine()).result,
+            ReceiptResult::Published
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("publish.lock")).unwrap(),
+            content
+        );
     }
 }

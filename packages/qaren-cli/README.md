@@ -203,12 +203,20 @@ request moved during the run, the receipt names the tested commit in
 tested commit, the video, the plan with ✓/✗ per line, the failing screenshot
 and collapsed run details. The hostname, home directory, absolute paths, device
 UUIDs and private network addresses are removed from the comment. It then
-removes the `needs-qa` label and commits the saved blocks to the pull request
+removes the `needs-qa` label only if the current head is the tested head, and commits the saved blocks to the pull request
 branch with a `Qaren-Run: <run-id>` trailer, using your own git identity and a
 push lease on the tested commit. When the branch moved, the pull request comes
 from a fork, or origin is not the pull request's repository, nothing is pushed;
 a second comment carries the block YAML instead. Each step is recorded in
 `publication.json`, so a re-run resumes without posting again.
+
+Video publication eligibility and a value-free withholding reason are persisted
+in `pr.json`. A plan containing any fill/type step or a walk whose screenshot
+privacy disallowed capture keeps the recording local. Missing or unknown
+eligibility also withholds the video; the comment explains why, without changing
+the run verdict. Local recordings contain raw pixels. Transient prefilled values
+between captures remain a limitation for 2.1; there is no continuous privacy
+monitoring or pixel redaction.
 
 ## Preparation verbs
 

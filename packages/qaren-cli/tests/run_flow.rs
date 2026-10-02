@@ -3586,6 +3586,14 @@ fn pr_runs_the_walk_on_a_worktree_at_the_head_with_a_recording_in_order() {
     );
     let pr: qaren::publish::PrRunRecord =
         serde_json::from_slice(&std::fs::read(run_dir.join("pr.json")).unwrap()).unwrap();
+    assert_eq!(
+        pr.video_publication,
+        qaren::record::VideoPublication::Unknown
+    );
+    assert_eq!(
+        pr.video_withholding_reason.as_deref(),
+        Some("video publication eligibility is missing or unknown")
+    );
     assert_eq!(pr.head_ref_oid, PR_HEAD);
     assert_eq!(pr.head_ref_name, "feat/tasks");
     assert!(pr.tested_older_commit);

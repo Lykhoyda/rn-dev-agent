@@ -11,9 +11,7 @@ use std::time::Duration;
 const START_WAIT_MS: u64 = 10_000;
 const STOP_WAIT_MS: u64 = 30_000;
 const POLL_MS: u64 = 250;
-pub const SEGMENT_SECONDS: u64 = 180;
 pub const MAX_VIDEO_BYTES: u64 = 100 * 1024 * 1024;
-const GAP_DISCLOSE_MS: u64 = 500;
 const FFMPEG_SECONDS: u64 = 900;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,16 +60,26 @@ impl<'de> Deserialize<'de> for VideoStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Gap {
-    pub after_ms: u64,
-    pub gap_ms: u64,
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VideoPublication {
+    Eligible,
+    WithheldFill,
+    WithheldPrivacy,
+    #[default]
+    #[serde(other)]
+    Unknown,
 }
 
-pub enum Target<'a> {
-    Ios { udid: &'a str },
-    Android { adb: &'a Path, serial: &'a str },
+impl VideoPublication {
+    pub fn withholding_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::Eligible => None,
+            Self::WithheldFill => Some("the plan contains a fill or type step"),
+            Self::WithheldPrivacy => Some("screenshot privacy disallowed capture during the walk"),
+            Self::Unknown => Some("video publication eligibility is missing or unknown"),
+        }
+    }
 }
 
 fn media_dir(run_dir: &Path) -> PathBuf {
@@ -82,10 +90,6 @@ pub fn video_path(run_dir: &Path) -> PathBuf {
     media_dir(run_dir).join("video.mp4")
 }
 
-pub fn timeline_path(run_dir: &Path) -> PathBuf {
-    media_dir(run_dir).join("timeline.json")
-}
-
 fn segment_log(run_dir: &Path) -> PathBuf {
     run_dir.join("logs").join("recorder.log")
 }
@@ -94,43 +98,22 @@ fn now_ms(runner: &dyn Runner) -> u64 {
     runner.monotonic_ms()
 }
 
-fn record_spec(target: &Target<'_>, run_id: &str, raw: &Path) -> (CmdSpec, Option<String>) {
-    match target {
-        Target::Ios { udid } => (
-            CmdSpec::new(
-                "simctl-record-video",
-                "xcrun",
-                &[
-                    "simctl",
-                    "io",
-                    udid,
-                    "recordVideo",
-                    "--codec",
-                    "h264",
-                    "--force",
-                    &raw.to_string_lossy(),
-                ],
-                0,
-            ),
-            None,
-        ),
-        Target::Android { adb, serial } => {
-            let prefix = format!("/sdcard/qaren-{run_id}-");
-            // Each segment brackets itself with millisecond stamps so gaps can be disclosed.
-            let script = format!(
-                "k=0; while :; do echo \"segment-start $k $(perl -MTime::HiRes=time -e 'printf q(%d), time*1000')\"; \"$0\" -s \"$1\" shell screenrecord --time-limit {SEGMENT_SECONDS} \"$2$k.mp4\" || exit 1; echo \"segment-end $k $(perl -MTime::HiRes=time -e 'printf q(%d), time*1000')\"; k=$((k+1)); done"
-            );
-            (
-                CmdSpec::new(
-                    "adb-screenrecord-loop",
-                    "/bin/sh",
-                    &["-c", &script, &adb.to_string_lossy(), serial, &prefix],
-                    0,
-                ),
-                Some(prefix),
-            )
-        }
-    }
+fn record_spec(udid: &str, raw: &Path) -> CmdSpec {
+    CmdSpec::new(
+        "simctl-record-video",
+        "xcrun",
+        &[
+            "simctl",
+            "io",
+            udid,
+            "recordVideo",
+            "--codec",
+            "h264",
+            "--force",
+            &raw.to_string_lossy(),
+        ],
+        0,
+    )
 }
 
 // ⑧: persisted before the spawn; any failure leaves the run going without video.
@@ -138,29 +121,19 @@ pub fn start(
     runner: &mut dyn Runner,
     record: &mut RunRecord,
     runs_root: &Path,
-    target: &Target<'_>,
+    udid: &str,
 ) -> Result<(), VideoStatus> {
     let run_dir = RunRecord::run_dir(runs_root, &record.run_id);
     let unavailable = |why: &str| VideoStatus::Unavailable(why.to_string());
     std::fs::create_dir_all(media_dir(&run_dir)).map_err(|_| unavailable("media directory"))?;
     let raw = media_dir(&run_dir).join("raw.mov");
-    let (spec, device_path) = record_spec(target, &record.run_id, &raw);
-    let (kind, device, adb) = match target {
-        Target::Ios { udid } => (RecorderKind::IosSimulator, udid.to_string(), None),
-        Target::Android { adb, serial } => (
-            RecorderKind::AndroidAdb,
-            serial.to_string(),
-            Some(adb.to_path_buf()),
-        ),
-    };
+    let spec = record_spec(udid, &raw);
     record.resources.recorder = Some(RecorderResource {
         pid: None,
         birth: None,
-        kind,
-        device,
+        kind: RecorderKind::IosSimulator,
+        device: udid.to_string(),
         output: raw,
-        device_path,
-        adb,
     });
     if record.save(runs_root).is_err() {
         record.resources.recorder = None;
@@ -192,9 +165,6 @@ pub fn start(
         record.resources.recorder = None;
         let _ = record.save(runs_root);
         return Err(unavailable("recorder identity was not persisted"));
-    }
-    if kind == RecorderKind::AndroidAdb {
-        return Ok(());
     }
     let deadline = now_ms(runner) + START_WAIT_MS;
     loop {
@@ -234,20 +204,6 @@ fn wait_gone(
     }
 }
 
-fn adb_shell(
-    runner: &mut dyn Runner,
-    label: &str,
-    adb: &Path,
-    serial: &str,
-    args: &[&str],
-) -> bool {
-    let mut full = vec!["-s", serial, "shell"];
-    full.extend_from_slice(args);
-    runner
-        .run(&CmdSpec::new(label, &adb.to_string_lossy(), &full, 30))
-        .ok()
-}
-
 // ⑫: SIGINT so the container is finalized; the group is killed only if it will not exit.
 pub fn stop(runner: &mut dyn Runner, record: &mut RunRecord, runs_root: &Path) -> Outcome {
     let Some(recorder) = record.resources.recorder.clone() else {
@@ -256,141 +212,24 @@ pub fn stop(runner: &mut dyn Runner, record: &mut RunRecord, runs_root: &Path) -
     let (Some(pid), Some(birth)) = (recorder.pid, recorder.birth.as_ref()) else {
         return Outcome::Unresolved("recorder spawn identity is unproven".into());
     };
-    let outcome = match recorder.kind {
-        RecorderKind::IosSimulator => {
-            if probe_pid_identity(runner, birth) == PidLiveness::AliveMatching {
-                runner.run(&CmdSpec::new(
-                    "recorder-interrupt",
-                    "/bin/kill",
-                    &["-INT", &pid.to_string()],
-                    10,
-                ));
-            }
-            if wait_gone(runner, birth, STOP_WAIT_MS) {
-                Outcome::Removed
-            } else {
-                cleanup_process_group(runner, Some(birth), pid, None)
-            }
-        }
-        RecorderKind::AndroidAdb => {
-            // The loop goes first so no new segment starts, then the device side finalizes.
-            let loop_outcome = cleanup_process_group(runner, Some(birth), pid, None);
-            if let Some(adb) = recorder.adb.as_deref() {
-                adb_shell(
-                    runner,
-                    "adb-screenrecord-interrupt",
-                    adb,
-                    &recorder.device,
-                    &["pkill", "-INT", "screenrecord"],
-                );
-                runner.sleep(Duration::from_millis(2_000));
-            }
-            loop_outcome
-        }
+    if probe_pid_identity(runner, birth) == PidLiveness::AliveMatching {
+        runner.run(&CmdSpec::new(
+            "recorder-interrupt",
+            "/bin/kill",
+            &["-INT", &pid.to_string()],
+            10,
+        ));
+    }
+    let outcome = if wait_gone(runner, birth, STOP_WAIT_MS) {
+        Outcome::Removed
+    } else {
+        cleanup_process_group(runner, Some(birth), pid, None)
     };
     if outcome.clean() {
-        if recorder.kind == RecorderKind::AndroidAdb {
-            pull_segments(runner, &recorder);
-        }
         record.resources.recorder = None;
         let _ = record.save(runs_root);
     }
     outcome
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Segment {
-    index: u64,
-    start_ms: u64,
-    end_ms: Option<u64>,
-}
-
-fn parse_segments(log: &str) -> Vec<Segment> {
-    let mut segments: Vec<Segment> = Vec::new();
-    for line in log.lines() {
-        let mut parts = line.split_whitespace();
-        let (Some(tag), Some(index), Some(ms)) = (parts.next(), parts.next(), parts.next()) else {
-            continue;
-        };
-        let (Ok(index), Ok(ms)) = (index.parse::<u64>(), ms.parse::<u64>()) else {
-            continue;
-        };
-        match tag {
-            "segment-start" => segments.push(Segment {
-                index,
-                start_ms: ms,
-                end_ms: None,
-            }),
-            "segment-end" => {
-                if let Some(s) = segments.iter_mut().find(|s| s.index == index) {
-                    s.end_ms = Some(ms);
-                }
-            }
-            _ => {}
-        }
-    }
-    segments
-}
-
-// Gaps over the disclosure threshold, on the clock of the first segment's start.
-fn segment_gaps(segments: &[Segment]) -> Vec<Gap> {
-    let Some(first) = segments.first() else {
-        return Vec::new();
-    };
-    segments
-        .windows(2)
-        .filter_map(|pair| {
-            let end = pair[0].end_ms?;
-            let gap = pair[1].start_ms.saturating_sub(end);
-            (gap > GAP_DISCLOSE_MS).then(|| Gap {
-                after_ms: end.saturating_sub(first.start_ms),
-                gap_ms: gap,
-            })
-        })
-        .collect()
-}
-
-fn pull_segments(runner: &mut dyn Runner, recorder: &RecorderResource) {
-    let (Some(adb), Some(prefix)) = (recorder.adb.as_deref(), recorder.device_path.as_deref())
-    else {
-        return;
-    };
-    let run_dir = recorder
-        .output
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    let log = std::fs::read_to_string(segment_log(&run_dir)).unwrap_or_default();
-    let segments = parse_segments(&log);
-    let media = media_dir(&run_dir);
-    for segment in &segments {
-        let remote = format!("{prefix}{}.mp4", segment.index);
-        let local = media.join(format!("segment-{}.mp4", segment.index));
-        runner.run(&CmdSpec::new(
-            "adb-pull-segment",
-            &adb.to_string_lossy(),
-            &[
-                "-s",
-                &recorder.device,
-                "pull",
-                &remote,
-                &local.to_string_lossy(),
-            ],
-            300,
-        ));
-        adb_shell(
-            runner,
-            "adb-rm-segment",
-            adb,
-            &recorder.device,
-            &["rm", "-f", &remote],
-        );
-    }
-    let _ = std::fs::write(
-        timeline_path(&run_dir),
-        serde_json::to_vec_pretty(&segment_gaps(&segments)).unwrap_or_default(),
-    );
 }
 
 fn ffmpeg_encode(
@@ -453,8 +292,7 @@ fn size_of(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
-// Turns the raw capture (or Android segments) into one H.264 mp4 a reviewer can play.
-pub fn finalize(runner: &mut dyn Runner, run_dir: &Path, kind: RecorderKind) -> VideoStatus {
+pub fn finalize(runner: &mut dyn Runner, run_dir: &Path) -> VideoStatus {
     let unavailable = |why: &str| VideoStatus::Unavailable(why.to_string());
     if !runner
         .run(&CmdSpec::new("which", "which", &["ffmpeg"], 10))
@@ -464,51 +302,11 @@ pub fn finalize(runner: &mut dyn Runner, run_dir: &Path, kind: RecorderKind) -> 
     }
     let media = media_dir(run_dir);
     let video = video_path(run_dir);
-    let input: Vec<String> = match kind {
-        RecorderKind::IosSimulator => {
-            let raw = media.join("raw.mov");
-            if size_of(&raw) == 0 {
-                return unavailable("no capture was written");
-            }
-            vec!["-i".into(), raw.to_string_lossy().into_owned()]
-        }
-        RecorderKind::AndroidAdb => {
-            let mut segments: Vec<(u64, PathBuf)> = std::fs::read_dir(&media)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .filter_map(|e| {
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    let index = name
-                        .strip_prefix("segment-")?
-                        .strip_suffix(".mp4")?
-                        .parse()
-                        .ok()?;
-                    (size_of(&e.path()) > 0).then(|| (index, e.path()))
-                })
-                .collect();
-            if segments.is_empty() {
-                return unavailable("no segment was pulled");
-            }
-            segments.sort();
-            let list = media.join("segments.txt");
-            let body: String = segments
-                .iter()
-                .map(|(_, p)| format!("file '{}'\n", p.to_string_lossy().replace('\'', "'\\''")))
-                .collect();
-            if std::fs::write(&list, body).is_err() {
-                return unavailable("segment list");
-            }
-            vec![
-                "-f".into(),
-                "concat".into(),
-                "-safe".into(),
-                "0".into(),
-                "-i".into(),
-                list.to_string_lossy().into_owned(),
-            ]
-        }
-    };
+    let raw = media.join("raw.mov");
+    if size_of(&raw) == 0 {
+        return unavailable("no capture was written");
+    }
+    let input = ["-i".to_string(), raw.to_string_lossy().into_owned()];
     let input: Vec<&str> = input.iter().map(String::as_str).collect();
     if !ffmpeg_encode(runner, &input, &video, None) {
         return unavailable("encode failed");
@@ -534,13 +332,6 @@ pub fn finalize(runner: &mut dyn Runner, run_dir: &Path, kind: RecorderKind) -> 
     VideoStatus::TooLarge
 }
 
-pub fn read_gaps(run_dir: &Path) -> Vec<Gap> {
-    std::fs::read(timeline_path(run_dir))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -559,20 +350,6 @@ mod tests {
         dir
     }
 
-    #[test]
-    fn an_android_two_segment_timeline_discloses_a_two_second_gap() {
-        let log = "segment-start 0 1000\nsegment-end 0 181000\nsegment-start 1 183000\nsegment-end 1 200000\nsegment-start 2 200100\n";
-        let segments = parse_segments(log);
-        assert_eq!(segments.len(), 3);
-        assert_eq!(
-            segment_gaps(&segments),
-            [Gap {
-                after_ms: 180_000,
-                gap_ms: 2_000
-            }]
-        );
-    }
-
     fn write_raw(run_dir: &Path, bytes: usize) {
         std::fs::write(media_dir(run_dir).join("raw.mov"), vec![0u8; bytes]).unwrap();
     }
@@ -586,7 +363,7 @@ mod tests {
         mock.expect_run("ffmpeg", CmdOutput::success(""));
         mock.expect_run("ffprobe", CmdOutput::failed(1, "moov atom not found"));
         assert!(matches!(
-            finalize(&mut mock, &run_dir, RecorderKind::IosSimulator),
+            finalize(&mut mock, &run_dir),
             VideoStatus::Unavailable(r) if r.contains("ffprobe")
         ));
     }
@@ -597,7 +374,7 @@ mod tests {
         let mut mock = MockRunner::new();
         mock.expect_run("which ffmpeg", CmdOutput::failed(1, ""));
         assert_eq!(
-            finalize(&mut mock, &run_dir, RecorderKind::IosSimulator),
+            finalize(&mut mock, &run_dir),
             VideoStatus::Unavailable("ffmpeg".into())
         );
     }
@@ -657,10 +434,7 @@ mod tests {
         runner
             .mock
             .expect_run("ffprobe", CmdOutput::success("60.0\n"));
-        assert_eq!(
-            finalize(&mut runner, &run_dir, RecorderKind::IosSimulator),
-            VideoStatus::TooLarge
-        );
+        assert_eq!(finalize(&mut runner, &run_dir), VideoStatus::TooLarge);
         let reencode = &runner.mock.calls[3];
         assert!(reencode.args.contains(&"-b:v".to_string()));
         assert_eq!(runner.mock.remaining(), 0);
@@ -681,10 +455,7 @@ mod tests {
         runner
             .mock
             .expect_run("ffprobe", CmdOutput::success("12.5\n"));
-        assert_eq!(
-            finalize(&mut runner, &run_dir, RecorderKind::IosSimulator),
-            VideoStatus::Available
-        );
+        assert_eq!(finalize(&mut runner, &run_dir), VideoStatus::Available);
         let encode = &runner.mock.calls[1].args;
         for arg in ["libx264", "30", "yuv420p", "+faststart"] {
             assert!(encode.contains(&arg.to_string()), "{arg}: {encode:?}");

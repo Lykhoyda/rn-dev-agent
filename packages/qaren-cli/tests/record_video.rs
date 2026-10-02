@@ -2,7 +2,7 @@ mod common;
 
 use qaren::commands::cleanup::Outcome;
 use qaren::exec::{CmdOutput, MockRunner, Spawned};
-use qaren::record::{self, Target, VideoStatus};
+use qaren::record::{self, VideoStatus};
 use qaren::runrecord::{Phase, PidIdentity, RecorderKind, RecorderResource, RunRecord};
 use std::path::PathBuf;
 
@@ -40,7 +40,7 @@ fn ios_start_persists_the_resource_and_waits_for_recording_started() {
     );
     script_identity(&mut mock);
 
-    record::start(&mut mock, &mut record, &root, &Target::Ios { udid: "U" }).unwrap();
+    record::start(&mut mock, &mut record, &root, "U").unwrap();
 
     let recorder = RunRecord::load(&root, &record.run_id)
         .unwrap()
@@ -71,8 +71,7 @@ fn ios_start_without_recording_started_is_unavailable_and_the_run_continues() {
     mock.expect_run("/bin/kill -INT 7100", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
 
-    let status =
-        record::start(&mut mock, &mut record, &root, &Target::Ios { udid: "U" }).unwrap_err();
+    let status = record::start(&mut mock, &mut record, &root, "U").unwrap_err();
 
     assert!(
         matches!(&status, VideoStatus::Unavailable(r) if r.contains("did not start")),
@@ -100,8 +99,6 @@ fn stop_sends_sigint_and_waits_for_exit() {
         kind: RecorderKind::IosSimulator,
         device: "U".into(),
         output: PathBuf::from("raw.mov"),
-        device_path: None,
-        adb: None,
     });
     let mut mock = MockRunner::new();
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
@@ -136,8 +133,6 @@ fn a_recorder_with_an_unproven_spawn_is_unresolved() {
         kind: RecorderKind::IosSimulator,
         device: "U".into(),
         output: PathBuf::from("raw.mov"),
-        device_path: None,
-        adb: None,
     });
     let outcome = record::stop(&mut MockRunner::new(), &mut record, &root);
     assert!(matches!(outcome, Outcome::Unresolved(_)));
@@ -191,8 +186,6 @@ fn pr_run_record() -> (PathBuf, RunRecord, PathBuf) {
         kind: RecorderKind::IosSimulator,
         device: "U".into(),
         output: PathBuf::from("raw.mov"),
-        device_path: None,
-        adb: None,
     });
     let wt = qaren::worktree::pr_worktree_path(&RunRecord::run_dir(&root, &record.run_id));
     std::fs::create_dir_all(&wt).unwrap();

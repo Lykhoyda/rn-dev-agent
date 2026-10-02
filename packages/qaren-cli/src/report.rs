@@ -1,6 +1,6 @@
 use crate::core::{Ledger, Row};
 use crate::failure::{Failure, FailureCode};
-use crate::record::{Gap, VideoStatus};
+use crate::record::{VideoPublication, VideoStatus};
 use crate::redact::{redact_machine, redact_secrets, MachineIdentity};
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
@@ -204,7 +204,7 @@ pub struct PrRun<'a> {
     pub tested_older_commit: bool,
     pub video: &'a VideoStatus,
     pub plan_sha256: &'a str,
-    pub gaps: &'a [Gap],
+    pub video_publication: &'a VideoPublication,
 }
 
 // Public text must not carry internal transport vocabulary.
@@ -238,10 +238,6 @@ fn verdict_sentence(verdict_md: &str) -> String {
     cut
 }
 
-fn seconds(ms: u64) -> String {
-    format!("{}.{}s", ms / 1000, (ms % 1000) / 100)
-}
-
 pub fn render_pr_comment(
     input: &ReportInput<'_>,
     verdict_md: &str,
@@ -270,11 +266,17 @@ pub fn render_pr_comment(
         );
     }
     out.push_str("\n\n");
-    match pr.video {
-        VideoStatus::Available => out.push_str("Video of the walk is attached below.\n\n"),
-        VideoStatus::TooLarge => out.push_str("Video: the recording was too large to attach.\n\n"),
-        VideoStatus::Unavailable(reason) => {
-            out.push_str(&format!("Video: unavailable ({}).\n\n", clean(reason)))
+    if let Some(reason) = pr.video_publication.withholding_reason() {
+        out.push_str(&format!("Video withheld: {reason}.\n\n"));
+    } else {
+        match pr.video {
+            VideoStatus::Available => out.push_str("Video of the walk is attached below.\n\n"),
+            VideoStatus::TooLarge => {
+                out.push_str("Video: the recording was too large to attach.\n\n")
+            }
+            VideoStatus::Unavailable(reason) => {
+                out.push_str(&format!("Video: unavailable ({}).\n\n", clean(reason)))
+            }
         }
     }
     out.push_str("**Plan**\n\n");
@@ -303,20 +305,6 @@ pub fn render_pr_comment(
         summary.recoveries,
         clean(&summary.path)
     ));
-    if !pr.gaps.is_empty() {
-        let gaps: Vec<String> = pr
-            .gaps
-            .iter()
-            .map(|g| {
-                format!(
-                    "{} missing after {}",
-                    seconds(g.gap_ms),
-                    seconds(g.after_ms)
-                )
-            })
-            .collect();
-        out.push_str(&format!("\nVideo gaps: {}\n", gaps.join("; ")));
-    }
     out.push_str("\n</details>\n");
     redact_machine(&public(&redact_machine(&out, machine)), machine)
 }

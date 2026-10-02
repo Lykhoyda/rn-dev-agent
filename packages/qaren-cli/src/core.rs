@@ -56,6 +56,8 @@ pub struct AdbTarget {
 #[serde(rename_all = "camelCase")]
 pub struct Ledger {
     pub verdict: String,
+    #[serde(default, deserialize_with = "passive")]
+    pub video_publication: Option<crate::record::VideoPublication>,
     pub path: String,
     pub blocks: Vec<BlockResult>,
     pub steps: Vec<Row>,
@@ -773,6 +775,9 @@ fn refusal_ledger(result: &Value, rows: &[Row], seen: &str) -> Result<Ledger, St
     if let Some(speed) = result.get("speed") {
         normalized["speed"] = speed.clone();
     }
+    if let Some(eligibility) = result.get("videoPublication") {
+        normalized["videoPublication"] = eligibility.clone();
+    }
     let mut ledger: Ledger =
         serde_json::from_value(normalized).map_err(|error| error.to_string())?;
     if ledger.path != "walk" {
@@ -823,6 +828,7 @@ pub fn synthesized_ledger(rows: &[Row], verdict: &str, seen: &str) -> Ledger {
     let steps: Vec<Row> = rows.to_vec();
     Ledger {
         verdict: verdict.to_string(),
+        video_publication: None,
         path: "walk".to_string(),
         blocks: Vec::new(),
         failure: Some(synthesized_failure(&steps, seen)),
