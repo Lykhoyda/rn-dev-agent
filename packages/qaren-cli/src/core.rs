@@ -56,7 +56,11 @@ pub struct AdbTarget {
 #[serde(rename_all = "camelCase")]
 pub struct Ledger {
     pub verdict: String,
-    #[serde(default, deserialize_with = "passive")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "passive"
+    )]
     pub video_publication: Option<crate::record::VideoPublication>,
     pub path: String,
     pub blocks: Vec<BlockResult>,

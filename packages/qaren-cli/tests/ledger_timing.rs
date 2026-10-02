@@ -26,6 +26,19 @@ fn row_timing_and_ledger_speed_round_trip_through_the_ledger() {
 }
 
 #[test]
+fn explicit_video_publication_survives_ledger_round_trip() {
+    for eligibility in ["eligible", "withheld-fill", "withheld-privacy", "unknown"] {
+        let mut raw = ledger(
+            json!([]),
+            json!({"walkMs":0,"steps":0,"passed":0,"failed":0}),
+        );
+        raw["videoPublication"] = json!(eligibility);
+        let parsed: Ledger = serde_json::from_value(raw.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), raw);
+    }
+}
+
+#[test]
 fn malformed_timing_is_dropped_without_rejecting_the_row_or_ledger() {
     let row: Row = serde_json::from_value(json!({"block":"qa","line":1,"attempt":1,"kind":"step",
         "resolvedBy":"exact","t":5,"outcome":"pass","timing":{"captureMs":-1}}))
