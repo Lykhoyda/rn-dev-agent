@@ -143,3 +143,107 @@ fn a_recorder_with_an_unproven_spawn_is_unresolved() {
     assert!(matches!(outcome, Outcome::Unresolved(_)));
     assert!(record.resources.recorder.is_some());
 }
+
+// Deletes the worktree directory when git is asked to remove it, as git would.
+struct GitRemoves(MockRunner);
+
+impl qaren::exec::Runner for GitRemoves {
+    fn run(&mut self, spec: &qaren::exec::CmdSpec) -> CmdOutput {
+        if spec.args.starts_with(&["worktree".into(), "remove".into()]) {
+            let _ = std::fs::remove_dir_all(spec.args.last().unwrap());
+        }
+        self.0.run(spec)
+    }
+    fn spawn_group(
+        &mut self,
+        spec: &qaren::exec::CmdSpec,
+        log: &std::path::Path,
+    ) -> std::io::Result<Spawned> {
+        self.0.spawn_group(spec, log)
+    }
+    fn spawn_piped(
+        &mut self,
+        spec: &qaren::exec::CmdSpec,
+        log: &std::path::Path,
+    ) -> std::io::Result<qaren::exec::PipedChild> {
+        self.0.spawn_piped(spec, log)
+    }
+    fn sleep(&mut self, d: std::time::Duration) {
+        self.0.sleep(d)
+    }
+    fn now_epoch_ms(&self) -> u64 {
+        self.0.now_epoch_ms()
+    }
+    fn commands_executed(&self) -> u64 {
+        self.0.commands_executed()
+    }
+}
+
+fn pr_run_record() -> (PathBuf, RunRecord, PathBuf) {
+    let (root, mut record) = walking_record();
+    record.resources.recorder = Some(RecorderResource {
+        pid: Some(7100),
+        birth: Some(PidIdentity {
+            pid: 7100,
+            started_at: LSTART.into(),
+            command: "xcrun".into(),
+        }),
+        kind: RecorderKind::IosSimulator,
+        device: "U".into(),
+        output: PathBuf::from("raw.mov"),
+        device_path: None,
+        adb: None,
+    });
+    let wt = qaren::worktree::pr_worktree_path(&RunRecord::run_dir(&root, &record.run_id));
+    std::fs::create_dir_all(&wt).unwrap();
+    record.resources.pr_worktree = Some(qaren::runrecord::PrWorktreeResource {
+        repo_root: root.clone(),
+        path: wt.clone(),
+    });
+    record.save(&root).unwrap();
+    (root, record, wt)
+}
+
+#[test]
+fn a_dead_owners_recorder_is_stopped_and_its_worktree_removed() {
+    let (root, record, wt) = pr_run_record();
+    let mut mock = MockRunner::new();
+    mock.expect_run("ps -p 999", CmdOutput::failed(1, "")); // owner gone
+    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
+    mock.expect_run("ps", CmdOutput::success("S\n"));
+    mock.expect_run("/bin/kill -INT 7100", CmdOutput::success(""));
+    mock.expect_run("ps", CmdOutput::failed(1, ""));
+    mock.expect_run("worktree remove --force", CmdOutput::success(""));
+    let mut runner = GitRemoves(mock);
+
+    let receipt = qaren::commands::cleanup::cleanup(&mut runner, &root, &record.run_id);
+
+    assert_eq!(receipt.cleanup["recorder"], "removed");
+    assert_eq!(receipt.cleanup["pr_worktree"], "removed");
+    assert!(!wt.exists());
+    let saved = RunRecord::load(&root, &record.run_id).unwrap();
+    assert!(saved.resources.recorder.is_none());
+    assert!(saved.resources.pr_worktree.is_none());
+    assert_eq!(runner.0.remaining(), 0);
+}
+
+#[test]
+fn a_live_owners_recorder_and_worktree_are_untouched() {
+    let (root, record, wt) = pr_run_record();
+    let mut mock = MockRunner::new();
+    mock.expect_run(
+        "ps -p 999",
+        CmdOutput::success("Wed Aug 12 15:00:00 2026\n"),
+    );
+    mock.expect_run("ps -p 999", CmdOutput::success("S\n"));
+
+    let receipt = qaren::commands::cleanup::cleanup(&mut mock, &root, &record.run_id);
+
+    assert!(receipt.cleanup["recorder"].starts_with("refused"));
+    assert!(receipt.cleanup["pr_worktree"].starts_with("refused"));
+    assert!(wt.exists());
+    let saved = RunRecord::load(&root, &record.run_id).unwrap();
+    assert!(saved.resources.recorder.is_some());
+    assert!(saved.resources.pr_worktree.is_some());
+    assert_eq!(mock.remaining(), 0);
+}

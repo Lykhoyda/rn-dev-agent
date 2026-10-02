@@ -3344,3 +3344,333 @@ fn closed_stdout_and_dead_leader_do_not_release_an_unproven_core_group() {
         );
     }
 }
+
+const PR_HEAD: &str = "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00";
+const PR_MOVED: &str = "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed";
+
+fn pr_view_json(head: &str) -> CmdOutput {
+    CmdOutput::success(
+        &serde_json::json!({
+            "number": 12, "url": "https://github.com/o/r/pull/12", "headRefOid": head,
+            "headRefName": "feat/tasks", "isCrossRepository": false,
+            "labels": [{"name": "needs-qa"}]
+        })
+        .to_string(),
+    )
+}
+
+// Plays git for the PR worktree: add materializes the app at the head (with a block the
+// walk saves), remove deletes it. A recorder spawn must find its resource already persisted.
+struct PrRunner {
+    inner: MockRunner,
+    app: PathBuf,
+    recorder_persisted_before_spawn: Option<bool>,
+    fail_core_spawn: bool,
+}
+
+impl PrRunner {
+    fn materialize(&self, wt: &Path) {
+        let app = wt.join("test-app");
+        std::fs::create_dir_all(app.join("node_modules/.bin")).unwrap();
+        for file in ["package.json", "pnpm-lock.yaml", "node_modules/.bin/expo"] {
+            std::fs::copy(self.app.join(file), app.join(file)).unwrap();
+        }
+        std::fs::create_dir_all(app.join(".qaren/actions")).unwrap();
+        std::fs::write(app.join(".qaren/actions/tasks.yaml"), "steps: []\n").unwrap();
+    }
+}
+
+impl Runner for PrRunner {
+    fn env_var(&self, name: &str) -> Option<String> {
+        self.inner.env_var(name)
+    }
+    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+        let output = self.inner.run(spec);
+        match spec.label.as_str() {
+            "git-worktree-add" => self.materialize(Path::new(&spec.args[3])),
+            "git-worktree-remove" => std::fs::remove_dir_all(&spec.args[3]).unwrap(),
+            _ => {}
+        }
+        output
+    }
+    fn run_private(&mut self, spec: &CmdSpec, input: &[u8]) -> qaren::exec::PrivateOutput {
+        self.inner.run_private(spec, input)
+    }
+    fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        if spec.label == "simctl-record-video" {
+            let run_dir = log.parent().unwrap().parent().unwrap();
+            let record: RunRecord =
+                serde_json::from_slice(&std::fs::read(run_dir.join("run.json")).unwrap()).unwrap();
+            self.recorder_persisted_before_spawn =
+                Some(record.resources.recorder.is_some_and(|r| r.pid.is_none()));
+        }
+        self.inner.spawn_group(spec, log)
+    }
+    fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        if self.fail_core_spawn && spec.label == "core-walk" {
+            self.inner.calls.push(spec.clone());
+            return Err(std::io::Error::other("node vanished"));
+        }
+        self.inner.spawn_piped(spec, log)
+    }
+    fn sleep(&mut self, d: std::time::Duration) {
+        self.inner.sleep(d)
+    }
+    fn now_epoch_ms(&self) -> u64 {
+        self.inner.now_epoch_ms()
+    }
+    fn commands_executed(&self) -> u64 {
+        self.inner.commands_executed()
+    }
+    fn cancellation(&self) -> Option<String> {
+        self.inner.cancellation()
+    }
+}
+
+// Preflight through the lease for a PR run: the PR worktree comes before provenance and the lease.
+fn script_pr_preflight(mock: &mut MockRunner, repo: &Path, wt: &Path) {
+    mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
+    script_plan(mock, repo);
+    mock.expect_run(
+        "simctl list devices booted",
+        CmdOutput::success(&booted_json()),
+    );
+    mock.expect_run("git", CmdOutput::success(&format!("{}\n", repo.display()))); // invoking checkout
+    mock.expect_run("gh pr view", pr_view_json(PR_HEAD));
+    mock.expect_run("fetch origin pull/12/head", CmdOutput::success(""));
+    mock.expect_run(
+        "rev-parse FETCH_HEAD",
+        CmdOutput::success(&format!("{PR_HEAD}\n")),
+    );
+    mock.expect_run("worktree add --detach", CmdOutput::success(""));
+    mock.expect_run("git", CmdOutput::success(&format!("{}\n", wt.display()))); // toplevel of the worktree
+    mock.expect_run("git", CmdOutput::success(&format!("{}\n", wt.display()))); // explicit worktree
+    mock.expect_run("git", CmdOutput::success(&format!("{PR_HEAD}\n")));
+    mock.expect_run("git", CmdOutput::success(""));
+    for tool in IOS_TOOLS {
+        mock.expect_run("which", CmdOutput::success(&format!("/usr/bin/{tool}\n")));
+    }
+    mock.expect_run("df", df_ok());
+    mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren pr\n"));
+    mock.expect_run("lsof", free_port());
+}
+
+fn script_pr_provenance_recheck(mock: &mut MockRunner) {
+    mock.expect_run("git", CmdOutput::success(&format!("{PR_HEAD}\n")));
+    mock.expect_run("git", CmdOutput::success(""));
+}
+
+fn script_recorder_start(mock: &mut MockRunner) {
+    mock.expect_spawn_with_log(
+        "recordVideo",
+        Spawned {
+            pid: 7100,
+            pgid: 7100,
+        },
+        "Recording started\n",
+    );
+    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
+    mock.expect_run("ps", CmdOutput::success("xcrun simctl io\n"));
+}
+
+fn script_recorder_stop(mock: &mut MockRunner) {
+    mock.expect_run("ps -p 7100", CmdOutput::success(&format!("{LSTART}\n")));
+    mock.expect_run("ps -p 7100", CmdOutput::success("S\n"));
+    mock.expect_run("/bin/kill -INT 7100", CmdOutput::success(""));
+    mock.expect_run("ps -p 7100", CmdOutput::failed(1, ""));
+}
+
+// The check teardown after its drift report: core group, Metro group, hosts.
+fn script_teardown_after_drift(mock: &mut MockRunner) {
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n6000 6000 S\n"));
+    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
+    mock.expect_run("ps", CmdOutput::success("S\n"));
+    mock.expect_run("lsof", CmdOutput::success("6001\n"));
+    mock.expect_run("ps", CmdOutput::success("6000\n"));
+    mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("ps", CmdOutput::failed(1, ""));
+    mock.expect_run("lsof", free_port());
+    script_host_probe(mock, UDID, hosts_absent());
+}
+
+fn pr_pass_stdout() -> String {
+    pass_stdout().replace(
+        r#""recoveries":0}"#,
+        r#""recoveries":0,"blocksWritten":["tasks"]}"#,
+    )
+}
+
+fn pr_request(repo: &Path, app: &Path) -> RunRequest {
+    let mut req = request(repo, app, 30);
+    req.pr = Some(qaren::run::PrTarget {
+        target: "12".into(),
+    });
+    req
+}
+
+#[test]
+fn pr_runs_the_walk_on_a_worktree_at_the_head_with_a_recording_in_order() {
+    let (repo, app) = app_repo();
+    let wt = repo.join("runs").join(run_id()).join("wt");
+    let mut runner = PrRunner {
+        inner: MockRunner::new(),
+        app: app.clone(),
+        recorder_persisted_before_spawn: None,
+        fail_core_spawn: false,
+    };
+    let mock = &mut runner.inner;
+    script_pr_preflight(mock, &repo, &wt);
+    script_provision(mock);
+    script_pr_provenance_recheck(mock);
+    script_recorder_start(mock);
+    mock.expect_spawn_piped("walk.js", 9000, &pr_pass_stdout(), Some(0));
+    script_core_identity(mock);
+    mock.expect_run("git", CmdOutput::success(&format!("{PR_HEAD}\n"))); // drift report
+    mock.expect_run("git", CmdOutput::success(""));
+    script_recorder_stop(mock);
+    script_teardown_after_drift(mock);
+    mock.expect_run("worktree remove --force", CmdOutput::success(""));
+    mock.expect_run("which ffmpeg", CmdOutput::failed(1, ""));
+    mock.expect_run(
+        "gh pr view https://github.com/o/r/pull/12",
+        pr_view_json(PR_MOVED),
+    );
+
+    let receipt = run(&mut runner, &pr_request(&repo, &app));
+
+    assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
+    assert_eq!(receipt.verb, "pr");
+    assert_eq!(runner.inner.remaining(), 0);
+    assert_eq!(runner.recorder_persisted_before_spawn, Some(true));
+    assert_subsequence(
+        &labels(&runner.inner),
+        &[
+            "gh-pr-view",
+            "git-fetch-pr",
+            "git-fetch-head",
+            "git-worktree-add",
+            "git-head",
+            "git-dirty",
+            "ps-lstart",
+            "lsof-port",
+            "pnpm-install",
+            "expo-run-ios",
+            "git-head",
+            "simctl-record-video",
+            "core-walk",
+            "recorder-interrupt",
+            "kill-group",
+            "git-worktree-remove",
+            "gh-pr-view",
+        ],
+    );
+    let core = runner
+        .inner
+        .calls
+        .iter()
+        .find(|c| c.label == "core-walk")
+        .unwrap();
+    assert_eq!(core.cwd.as_deref(), Some(wt.join("test-app").as_path()));
+    assert_eq!(receipt.tested_older_commit.as_deref(), Some(PR_HEAD));
+    assert_eq!(receipt.outcomes["video"], "unavailable(ffmpeg)");
+    assert_eq!(receipt.cleanup["recorder"], "removed");
+    assert_eq!(receipt.cleanup["pr_worktree"], "removed");
+    assert_eq!(receipt.cleanup["device_lease"], "removed");
+    assert!(!wt.exists());
+    let run_dir = repo.join("runs").join(run_id());
+    assert_eq!(
+        std::fs::read_to_string(run_dir.join("blocks/tasks.yaml")).unwrap(),
+        "steps: []\n"
+    );
+    let pr: qaren::publish::PrRunRecord =
+        serde_json::from_slice(&std::fs::read(run_dir.join("pr.json")).unwrap()).unwrap();
+    assert_eq!(pr.head_ref_oid, PR_HEAD);
+    assert_eq!(pr.head_ref_name, "feat/tasks");
+    assert!(pr.tested_older_commit);
+    assert_eq!(pr.app_rel, "test-app");
+    assert_eq!(pr.blocks, ["tasks"]);
+    let record = RunRecord::load(&repo.join("runs"), &run_id()).unwrap();
+    assert_eq!(record.phase, Phase::Cleaned);
+    assert!(record.resources.recorder.is_none());
+    assert!(record.resources.pr_worktree.is_none());
+}
+
+#[test]
+fn a_core_failure_on_a_pr_run_still_stops_the_recorder_and_removes_the_worktree() {
+    let (repo, app) = app_repo();
+    let wt = repo.join("runs").join(run_id()).join("wt");
+    let mut runner = PrRunner {
+        inner: MockRunner::new(),
+        app: app.clone(),
+        recorder_persisted_before_spawn: None,
+        fail_core_spawn: true,
+    };
+    let mock = &mut runner.inner;
+    script_pr_preflight(mock, &repo, &wt);
+    script_provision(mock);
+    script_pr_provenance_recheck(mock);
+    script_recorder_start(mock);
+    // teardown: Metro group, hosts, then the recorder before the lease, then the worktree.
+    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
+    mock.expect_run("ps", CmdOutput::success("S\n"));
+    mock.expect_run("lsof", CmdOutput::success("6001\n"));
+    mock.expect_run("ps", CmdOutput::success("6000\n"));
+    mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("ps", CmdOutput::failed(1, ""));
+    mock.expect_run("lsof", free_port());
+    script_recorder_stop(mock);
+    mock.expect_run("worktree remove --force", CmdOutput::success(""));
+
+    let receipt = run(&mut runner, &pr_request(&repo, &app));
+
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Failed,
+        "{:?}",
+        receipt.failure
+    );
+    assert_eq!(
+        receipt.failure.as_ref().unwrap().code,
+        FailureCode::CoreSpawnFailed
+    );
+    assert_eq!(runner.inner.remaining(), 0);
+    assert_eq!(receipt.cleanup["recorder"], "removed");
+    assert_eq!(receipt.cleanup["pr_worktree"], "removed");
+    assert_eq!(receipt.cleanup["device_lease"], "removed");
+    assert!(!wt.exists());
+}
+
+#[test]
+fn a_fetched_head_that_is_not_the_viewed_head_refuses_and_leaves_no_worktree() {
+    let (repo, app) = app_repo();
+    let mut mock = MockRunner::new();
+    mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
+    script_plan(&mut mock, &repo);
+    mock.expect_run(
+        "simctl list devices booted",
+        CmdOutput::success(&booted_json()),
+    );
+    mock.expect_run("git", CmdOutput::success(&format!("{}\n", repo.display())));
+    mock.expect_run("gh pr view", pr_view_json(PR_HEAD));
+    mock.expect_run("fetch origin pull/12/head", CmdOutput::success(""));
+    mock.expect_run(
+        "rev-parse FETCH_HEAD",
+        CmdOutput::success(&format!("{PR_MOVED}\n")),
+    );
+    mock.expect_run("worktree prune", CmdOutput::success(""));
+
+    let receipt = run(&mut mock, &pr_request(&repo, &app));
+
+    assert_eq!(receipt.result, ReceiptResult::Failed);
+    assert_eq!(
+        receipt.failure.as_ref().unwrap().code,
+        FailureCode::PrWorktreeFailed
+    );
+    assert_eq!(receipt.verb, "pr");
+    assert_eq!(receipt.cleanup["pr_worktree"], "absent");
+    assert_eq!(mock.remaining(), 0);
+    assert!(!labels(&mock).contains(&"git-worktree-add".to_string()));
+}

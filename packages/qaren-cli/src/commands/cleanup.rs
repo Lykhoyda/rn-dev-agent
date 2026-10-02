@@ -171,6 +171,22 @@ pub fn cleanup_with(
         outcomes.push(("runner_host".to_string(), outcome));
     }
 
+    // A live `qaren pr` still owns its recorder and worktree; only a dead owner's are reclaimed.
+    let owner_alive =
+        (record.resources.recorder.is_some() || record.resources.pr_worktree.is_some())
+            && record.prepare.as_ref().is_some_and(|owner| {
+                probe_pid_identity(runner, owner) == PidLiveness::AliveMatching
+            });
+    let owner_refusal = || Outcome::Refused("the run's qaren process is still alive".to_string());
+    if record.resources.recorder.is_some() {
+        let outcome = if owner_alive {
+            owner_refusal()
+        } else {
+            crate::record::stop(runner, &mut record, runs_root)
+        };
+        outcomes.push(("recorder".to_string(), outcome));
+    }
+
     match record.scenario.platform {
         Platform::Ios => {
             if let Some(sim) = record.resources.ios_simulator.clone() {
@@ -410,6 +426,24 @@ pub fn cleanup_with(
             record.resources.lease = None;
         }
         outcomes.push(("device_lease".to_string(), outcome));
+    }
+
+    if let Some(wt) = record.resources.pr_worktree.clone() {
+        let expected = crate::worktree::pr_worktree_path(&RunRecord::run_dir(runs_root, run_id));
+        let outcome = if owner_alive {
+            owner_refusal()
+        } else if wt.path != expected {
+            Outcome::Refused(format!(
+                "recorded worktree {} is not this run's; not removing it",
+                wt.path.display()
+            ))
+        } else {
+            crate::worktree::remove(runner, &wt.repo_root, &wt.path)
+        };
+        if outcome.clean() {
+            record.resources.pr_worktree = None;
+        }
+        outcomes.push(("pr_worktree".to_string(), outcome));
     }
 
     if let Some(lock) = record.resources.build_lock.clone() {

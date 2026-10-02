@@ -56,6 +56,7 @@ pub struct Publication {
 }
 
 const PUBLICATION: &str = "publication.json";
+const LOCK: &str = "publish.lock";
 const COMMENT_BODY: &str = "comment.md";
 const BLOCKS_BODY: &str = "blocks-comment.md";
 
@@ -191,19 +192,78 @@ fn post_once(
 
 use crate::worktree::git;
 
-fn saved_blocks(run_dir: &Path) -> Vec<String> {
-    let mut slugs: Vec<String> = std::fs::read_dir(run_dir.join("blocks"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            let slug = name.strip_suffix(".yaml")?.to_string();
-            worktree::safe_slug(&slug).then_some(slug)
+// The blocks `qaren pr` preserved, read back in full; missing evidence fails rather than reads as none.
+fn saved_blocks(run_dir: &Path, pr: &PrRunRecord) -> Result<Vec<(String, String)>, Failure> {
+    pr.blocks
+        .iter()
+        .map(|slug| {
+            let path = run_dir.join("blocks").join(format!("{slug}.yaml"));
+            let real = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_file());
+            match (worktree::safe_slug(slug) && real)
+                .then(|| std::fs::read_to_string(&path).ok())
+                .flatten()
+            {
+                Some(yaml) => Ok((slug.clone(), yaml)),
+                None => Err(failure(
+                    format!("the saved block {slug} is missing or unreadable in the run directory"),
+                    "re-run qaren pr to save the blocks again",
+                )),
+            }
         })
-        .collect();
-    slugs.sort();
-    slugs
+        .collect()
+}
+
+// `[HOST/]OWNER/REPO` a remote URL points at, for https, ssh and scp-style forms.
+fn remote_repo(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("ssh://"))
+        .map(|r| r.split_once('@').map_or(r, |(_, host)| host).to_string())
+        .or_else(|| {
+            let (_, scp) = url.split_once('@')?;
+            Some(scp.replacen(':', "/", 1))
+        })?;
+    let rest = rest.trim_end_matches('/').trim_end_matches(".git");
+    let parts: Vec<&str> = rest.split('/').collect();
+    (parts.len() == 3).then(|| parts.join("/").to_ascii_lowercase())
+}
+
+// The lease authenticates the ref value only; the destination must also be the PR's repository.
+fn origin_is_pr_repo(runner: &mut dyn Runner, pr: &PrRunRecord) -> bool {
+    let output = git(
+        runner,
+        "git-push-url",
+        &pr.repo_root,
+        &["remote", "get-url", "--push", "origin"],
+        20,
+    );
+    let expected = pr_info(pr).repo().map(|r| r.to_ascii_lowercase());
+    output.ok() && expected.is_some() && remote_repo(output.stdout.trim()) == expected
+}
+
+// Every existing component must be a real directory; missing ones are created. A PR controls this tree.
+fn real_dir_under(root: &Path, rel: &Path) -> Result<PathBuf, String> {
+    let mut at = root.to_path_buf();
+    for part in rel.components() {
+        let std::path::Component::Normal(name) = part else {
+            return Err(format!("{} is not a plain relative path", rel.display()));
+        };
+        at.push(name);
+        match std::fs::symlink_metadata(&at) {
+            Ok(m) if m.file_type().is_dir() => {}
+            Ok(_) => return Err(format!("{} is not a real directory", at.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&at).map_err(|e| e.to_string())?
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(at)
+}
+
+fn fence(content: &str, min: usize) -> String {
+    let longest = content.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    "`".repeat(min.max(longest + 1))
 }
 
 fn action_rel(app_rel: &str, slug: &str) -> String {
@@ -221,7 +281,7 @@ fn commit_blocks(
     run_id: &str,
     run_dir: &Path,
     pr: &PrRunRecord,
-    slugs: &[String],
+    blocks: &[(String, String)],
 ) -> Result<String, String> {
     let repo = &pr.repo_root;
     // The tested commit may be gone from the object store after a force-push; fetch it by id.
@@ -233,8 +293,14 @@ fn commit_blocks(
         300,
     );
     let tmp = run_dir.join("writeback-wt");
-    if tmp.exists() {
-        worktree::remove(runner, repo, &tmp);
+    if std::fs::symlink_metadata(&tmp).is_ok() {
+        let outcome = worktree::remove(runner, repo, &tmp);
+        if !outcome.clean() {
+            return Err(format!(
+                "an earlier writeback worktree is still present: {}",
+                outcome.render()
+            ));
+        }
     }
     let added = git(
         runner,
@@ -249,21 +315,22 @@ fn commit_blocks(
         ],
         120,
     );
-    if !added.ok() {
-        return Err(format!("git worktree add failed: {}", added.summary()));
-    }
     let result = (|| {
+        if !added.ok() {
+            return Err(format!("git worktree add failed: {}", added.summary()));
+        }
         let mut paths = Vec::new();
-        for slug in slugs {
+        for (slug, yaml) in blocks {
             let rel = action_rel(&pr.app_rel, slug);
-            let dest = tmp.join(&rel);
-            if let Some(parent) = dest.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            let dir = real_dir_under(&tmp, Path::new(&rel).parent().unwrap_or(Path::new("")))?;
+            let dest = dir.join(format!("{slug}.yaml"));
+            if std::fs::symlink_metadata(&dest).is_ok_and(|m| !m.file_type().is_file()) {
+                return Err(format!("{rel} exists and is not a regular file"));
             }
-            std::fs::copy(run_dir.join("blocks").join(format!("{slug}.yaml")), &dest)
-                .map_err(|e| e.to_string())?;
+            std::fs::write(&dest, yaml).map_err(|e| e.to_string())?;
             paths.push(rel);
         }
+        let slugs: Vec<&str> = blocks.iter().map(|(slug, _)| slug.as_str()).collect();
         let mut add_args = vec!["add", "-f", "--"];
         add_args.extend(paths.iter().map(String::as_str));
         let added = git(runner, "git-add-blocks", &tmp, &add_args, 60);
@@ -288,8 +355,15 @@ fn commit_blocks(
         }
         Ok(head.stdout.trim().to_string())
     })();
-    worktree::remove(runner, repo, &tmp);
-    result
+    let removed = worktree::remove(runner, repo, &tmp);
+    match (result, removed.clean()) {
+        (Ok(commit), true) => Ok(commit),
+        (Ok(_), false) => Err(format!(
+            "the writeback worktree was not removed: {}",
+            removed.render()
+        )),
+        (Err(e), _) => Err(e),
+    }
 }
 
 fn push_with_lease(runner: &mut dyn Runner, pr: &PrRunRecord, commit: &str) -> bool {
@@ -328,25 +402,89 @@ fn remote_head(runner: &mut dyn Runner, pr: &PrRunRecord) -> Option<String> {
 
 fn blocks_comment(
     run_id: &str,
-    run_dir: &Path,
     pr: &PrRunRecord,
-    slugs: &[String],
+    blocks: &[(String, String)],
     machine: &MachineIdentity,
 ) -> String {
     let mut out = format!("<!-- qaren-run: {run_id} blocks -->\n");
     out.push_str("These blocks were saved by the QA run but could not be pushed to the branch. Commit them to replay the walk next time.\n\n");
     out.push_str("<details><summary>Saved blocks to commit</summary>\n\n");
-    for slug in slugs {
-        let yaml = std::fs::read_to_string(run_dir.join("blocks").join(format!("{slug}.yaml")))
-            .unwrap_or_default();
+    // YAML is committable content, so it is fenced verbatim rather than rewritten.
+    for (slug, yaml) in blocks {
+        let path = action_rel(&pr.app_rel, slug);
+        let tick = fence(&path, 1);
+        let block = fence(yaml, 3);
         out.push_str(&format!(
-            "`{}`\n\n````yaml\n{}\n````\n\n",
-            action_rel(&pr.app_rel, slug),
+            "{tick} {path} {tick}\n\n{block}yaml\n{}\n{block}\n\n",
             yaml.trim_end()
         ));
     }
     out.push_str("</details>\n");
     redact_machine(&out, machine)
+}
+
+// One publisher per run: the lock names its pid, and a dead holder's lock is taken over.
+struct PublishLock(PathBuf);
+
+impl PublishLock {
+    fn acquire(run_dir: &Path) -> Result<Self, Failure> {
+        use std::io::Write;
+        let path = run_dir.join(LOCK);
+        for _ in 0..2 {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut file) => {
+                    file.write_all(std::process::id().to_string().as_bytes())
+                        .map_err(|e| {
+                            failure(
+                                format!("cannot write {}: {e}", path.display()),
+                                "re-run qaren publish",
+                            )
+                        })?;
+                    return Ok(PublishLock(path));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let holder = std::fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|p| p.trim().parse::<i32>().ok());
+                    // ponytail: pid liveness only; a recycled pid keeps the lock until it exits.
+                    let alive =
+                        holder.is_some_and(|pid| pid > 1 && unsafe { libc::kill(pid, 0) } == 0);
+                    if alive {
+                        return Err(Failure::new(
+                            "publish",
+                            FailureCode::PublishFailed,
+                            format!(
+                                "another qaren publish (pid {}) is publishing this run",
+                                holder.unwrap_or(0)
+                            ),
+                            "wait for it to finish, then re-run qaren publish",
+                        ));
+                    }
+                    let _ = std::fs::remove_file(&path);
+                }
+                Err(e) => {
+                    return Err(failure(
+                        format!("cannot lock {}: {e}", path.display()),
+                        "publish a run that `qaren pr` completed",
+                    ))
+                }
+            }
+        }
+        Err(failure(
+            "the publication lock kept changing hands",
+            "re-run qaren publish",
+        ))
+    }
+}
+
+impl Drop for PublishLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 pub fn publish(
@@ -406,10 +544,12 @@ fn publish_inner(
 ) -> Result<(), Failure> {
     validate_run_id(run_id)?;
     let run_dir = RunRecord::run_dir(runs_root, run_id);
+    let _lock = PublishLock::acquire(&run_dir)?;
     let pr: PrRunRecord = read_json(&run_dir.join("pr.json"))?;
     let info = pr_info(&pr);
-    if let Ok(existing) = read_json::<Publication>(&run_dir.join(PUBLICATION)) {
-        *publication = existing;
+    let state = run_dir.join(PUBLICATION);
+    if std::fs::symlink_metadata(&state).is_ok() {
+        *publication = read_json(&state)?;
     }
 
     if !publication.rendered {
@@ -468,6 +608,7 @@ fn publish_inner(
                 ));
             }
         }
+        // ponytail: a publisher killed mid-upload can leave gh running; a rerun inside that window may repost.
         let attempted = publication.comment_attempted;
         let url = post_once(
             runner,
@@ -494,16 +635,16 @@ fn publish_inner(
     }
 
     if publication.writeback.is_none() {
-        let slugs = saved_blocks(&run_dir);
+        let blocks = saved_blocks(&run_dir, &pr)?;
         let mut needs_comment = false;
-        if slugs.is_empty() {
+        if blocks.is_empty() {
             publication.writeback = Some("none".to_string());
-        } else if pr.is_cross_repository {
+        } else if pr.is_cross_repository || !origin_is_pr_repo(runner, &pr) {
             needs_comment = true;
         } else {
             let commit = match &publication.writeback_commit {
                 Some(commit) => Ok(commit.clone()),
-                None => commit_blocks(runner, run_id, &run_dir, &pr, &slugs),
+                None => commit_blocks(runner, run_id, &run_dir, &pr, &blocks),
             };
             match commit {
                 Ok(commit) => {
@@ -522,7 +663,7 @@ fn publish_inner(
         }
         if needs_comment {
             if !run_dir.join(BLOCKS_BODY).is_file() {
-                let body = blocks_comment(run_id, &run_dir, &pr, &slugs, machine);
+                let body = blocks_comment(run_id, &pr, &blocks, machine);
                 std::fs::write(run_dir.join(BLOCKS_BODY), body).map_err(|e| {
                     failure(
                         format!("cannot write the blocks comment: {e}"),
@@ -548,4 +689,30 @@ fn publish_inner(
         save(&run_dir, publication)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fence, remote_repo};
+
+    #[test]
+    fn remote_urls_resolve_to_host_owner_repo() {
+        for url in [
+            "git@github.com:O/r.git",
+            "https://github.com/o/r.git",
+            "https://user:tok@github.com/o/r",
+            "ssh://git@github.com/o/r.git",
+        ] {
+            assert_eq!(remote_repo(url).as_deref(), Some("github.com/o/r"), "{url}");
+        }
+        assert_eq!(remote_repo("https://github.com/o/r/extra"), None);
+        assert_eq!(remote_repo("/local/path"), None);
+    }
+
+    #[test]
+    fn fences_outgrow_the_content_they_wrap() {
+        assert_eq!(fence("a: 1", 3), "```");
+        assert_eq!(fence("x: |\n  ````\n", 3), "`````");
+        assert_eq!(fence("dir`name", 1), "``");
+    }
 }
