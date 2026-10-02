@@ -11,6 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import test from 'node:test';
 import { packDirectory, runtimeRunnerManifest, tarballName } from '../build-qaren-tarball.ts';
 
@@ -63,8 +64,9 @@ test('the archive carries sorted entries, root ownership, normalised modes and t
     5,
   );
   try {
+    const gz = packDirectory(dir, 1_700_000_000);
     const archive = join(dir, 'out.tar.gz');
-    writeFileSync(archive, packDirectory(dir, 1_700_000_000));
+    writeFileSync(archive, gz);
     const names = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' }).trim().split('\n');
     assert.deepEqual(names, [...names].sort());
     assert.ok(names.includes(LONG), 'a path beyond 100 bytes survives through the ustar prefix');
@@ -77,7 +79,15 @@ test('the archive carries sorted entries, root ownership, normalised modes and t
     }
     assert.match(listing, /-rwxr-xr-x.*top\/a\/run/);
     assert.match(listing, /-rw-r--r--.*top\/b\.txt/);
-    const gz = packDirectory(dir, 1_700_000_000);
+    const tar = gunzipSync(gz);
+    let headers = 0;
+    for (let offset = 0; tar[offset] !== 0; headers++) {
+      const field = (start: number, length: number) =>
+        parseInt(tar.subarray(offset + start, offset + start + length).toString('ascii'), 8);
+      assert.equal(field(136, 12), 1_700_000_000, 'every header carries the fixed mtime');
+      offset += 512 + Math.ceil(field(124, 12) / 512) * 512;
+    }
+    assert.equal(headers, names.length);
     assert.equal(gz.readUInt32LE(4), 0, 'gzip header carries no mtime');
     assert.equal(gz[9], 0xff, 'gzip header carries no build-host OS');
   } finally {

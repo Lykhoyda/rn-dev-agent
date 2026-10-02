@@ -31,24 +31,31 @@ printf '#!/bin/sh\ncase "$1" in -s) echo "${FAKE_OS:-Darwin}" ;; -m) echo arm64 
 printf '#!/bin/sh\necho "network touched" >> "%s/network"\nexit 7\n' "$tmp" > "$tmp/bin/curl"
 chmod +x "$tmp/bin/uname" "$tmp/bin/curl"
 # Only the tools the hook may use; curl is a tripwire, not a real client.
-for tool in bash cat cut dirname node shasum tr wc; do
+for tool in bash cat cut dirname mktemp node rm shasum sleep tr wc; do
   ln -sf "$(command -v "$tool")" "$tmp/bin/$tool"
 done
+# The same toolbox without even the curl tripwire.
+cp -R "$tmp/bin" "$tmp/bin-no-curl"
+rm "$tmp/bin-no-curl/curl"
 
 write_manifest() {
   printf '{"version":"%s","assets":{"ios":[],"android":[],"qaren":{"darwin-arm64":{"name":"qaren-%s-darwin-arm64.tar.gz","sha256":"%s","bytes":1234}}}}\n' \
     "$VERSION" "$VERSION" "$SHA" > "$tmp/plugin/runner-manifest.json"
 }
 
-now_ms() { node -p 'Date.now()'; }
+PERL=$(command -v perl)
+NODE=$(command -v node)
+now_ms() { "$NODE" -p 'Date.now()'; }
 
 contains() { case "$1" in *"$2"*) echo yes ;; *) echo "no: $1" ;; esac; }
 
 # hook [PATH]: runs --print-bin like the SessionStart hook; sets out, rc, ms.
+# perl's alarm kills a hook that hangs, so a regression fails instead of stalling the suite.
 hook() {
   local start
   start=$(now_ms)
-  out=$(HOME="$tmp/home" PATH="${1:-$tmp/bin}" "$tmp/bin/bash" "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin 2>&1)
+  out=$(HOME="$tmp/home" PATH="${1:-$tmp/bin}" "$PERL" -e 'alarm 5; exec @ARGV' \
+    "$tmp/bin/bash" "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin 2>&1)
   rc=$?
   ms=$(( $(now_ms) - start ))
 }
@@ -63,10 +70,11 @@ DEST="$tmp/home/.qaren/runtime/$VERSION"
 write_manifest
 hook
 bounded "missing runtime"
-check "missing runtime: prints the install command" yes "$(contains "$out" "ensure-qaren.sh' --install")"
+check "missing runtime: prints the install command" yes "$(contains "$out" "ensure-qaren.sh --install")"
 
-hook "$(dirname "$(command -v node)"):$tmp/no-such-dir"
+hook "$tmp/bin-no-curl"
 bounded "no curl on PATH"
+check "no curl on PATH: prints the install command" yes "$(contains "$out" "ensure-qaren.sh --install")"
 
 mkdir -p "$DEST/bin"
 printf '#!/bin/sh\n' > "$DEST/bin/qaren"
@@ -97,6 +105,20 @@ write_manifest
 FAKE_OS=Linux hook
 bounded "not macOS"
 check "not macOS: says so" yes "$(contains "$out" "macOS runtime only")"
+
+printf '#!/bin/sh\nsleep 30\n' > "$tmp/slow-node"
+chmod +x "$tmp/slow-node"
+ln -sf "$tmp/slow-node" "$tmp/bin/node"
+hook
+bounded "Node that never starts"
+check "Node that never starts: names the install command" yes "$(contains "$out" "did not finish in time")"
+
+printf '#!/bin/sh\nexec "%s" --import "data:text/javascript,Object.defineProperty(process.versions,\\"node\\",{value:\\"22.1.0\\"})" "$@"\n' "$NODE" > "$tmp/old-node"
+chmod +x "$tmp/old-node"
+ln -sf "$tmp/old-node" "$tmp/bin/node"
+hook
+bounded "Node 22"
+check "Node 22: names the Node 24 prerequisite" yes "$(contains "$out" "needs Node 24 or newer; found")"
 
 rm "$tmp/bin/node"
 hook

@@ -184,6 +184,23 @@ check "interrupted replacement keeps the previous runtime" stale "$("$DEST/bin/q
 check "interrupted replacement keeps the previous files" yes "$([ -e "$DEST/stale-file" ] && echo yes || echo no)"
 check "interrupted replacement: no staging left behind" 0 "$(leftovers)"
 
+# A concurrent install of the same version is refused, never nested.
+reset_home
+mkdir -p "$tmp/home/.qaren/runtime/.install-$VERSION.lock"
+run_install "$tmp/good.tgz" >/dev/null; rc=$?
+check "a held install lock refuses" 1 "$rc"
+check "held lock names the lock" yes "$(grep -q 'install is running' "$tmp/stderr" && echo yes || echo no)"
+check "held lock: nothing installed" no "$([ -e "$DEST" ] && echo yes || echo no)"
+check "held lock is left to its owner" yes "$([ -d "$tmp/home/.qaren/runtime/.install-$VERSION.lock" ] && echo yes || echo no)"
+rmdir "$tmp/home/.qaren/runtime/.install-$VERSION.lock"
+run_install "$tmp/good.tgz" >/dev/null; rc=$?
+check "the lock is released after an install" no "$([ -e "$tmp/home/.qaren/runtime/.install-$VERSION.lock" ] && echo yes || echo no)"
+
+# Without an absolute HOME there is nowhere safe to install.
+out=$(HOME= bash "$tmp/plugin/scripts/ensure-qaren.sh" --install --from-file "$tmp/good.tgz" 2>&1); rc=$?
+check "empty HOME refuses the install" 1 "$rc"
+check "empty HOME names the reason" yes "$(grep -q 'HOME is not an absolute path' <<< "$out" && echo yes || echo no)"
+
 # No qaren asset for this host refuses the install.
 reset_home
 printf '{"version":"%s","assets":{"ios":[],"android":[]}}\n' "$VERSION" > "$tmp/plugin/runner-manifest.json"

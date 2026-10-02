@@ -13,7 +13,9 @@ MANIFEST="$PLUGIN_ROOT/runner-manifest.json"
 RELEASES="https://github.com/Lykhoyda/rn-dev-agent/releases/download"
 RUNTIME_ROOT="${HOME:-}/.qaren/runtime"
 RECORD=".tarball-sha256"
-INSTALL_COMMAND="bash '$PLUGIN_ROOT/scripts/ensure-qaren.sh' --install"
+INSTALL_COMMAND="bash $(printf %q "$PLUGIN_ROOT/scripts/ensure-qaren.sh") --install"
+# The SessionStart hook must answer within 2 s even if Node is slow to start.
+PRINT_BIN_BUDGET_TENTHS=15
 
 MODE=""
 FROM_FILE=""
@@ -45,10 +47,15 @@ expected_asset() {
   command -v node >/dev/null 2>&1 || { echo "qaren needs Node 24 or newer on PATH" >&2; return 1; }
   local out version name sha bytes
   out=$(node -e '
+    const major = Number(process.versions.node.split(".")[0]);
+    if (major < 24) {
+      console.error(`qaren needs Node 24 or newer; found ${process.version}`);
+      process.exit(3);
+    }
     const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     const a = (m.assets && m.assets.qaren && m.assets.qaren[process.argv[2]]) || {};
     console.log([m.version, a.name, a.sha256, a.bytes].map((v) => (v === undefined ? "" : v)).join("\n"));
-  ' "$MANIFEST" "$platform") || { echo "runner-manifest.json is unreadable" >&2; return 1; }
+  ' "$MANIFEST" "$platform") || { [ $? = 3 ] || echo "runner-manifest.json is unreadable" >&2; return 1; }
   { read -r version; read -r name; read -r sha; read -r bytes; } <<< "$out"
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "runner-manifest.json has no release version" >&2; return 1; }
   [ -n "$name" ] || { echo "qaren v$version has no $platform tarball in runner-manifest.json" >&2; return 1; }
@@ -65,11 +72,27 @@ installed_bin() {
 }
 
 print_bin() {
-  local asset version name sha bytes
-  if ! asset=$(expected_asset 2>&1); then
-    echo "qaren: $asset"
+  local result pid tick=0 asset version name sha bytes
+  result=$(mktemp) || { echo "qaren: cannot create a temporary file"; return 0; }
+  expected_asset > "$result" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$tick" -ge "$PRINT_BIN_BUDGET_TENTHS" ]; then
+      kill "$pid" 2>/dev/null
+      rm -f "$result"
+      echo "qaren: the runtime check did not finish in time; run: $INSTALL_COMMAND"
+      return 0
+    fi
+    sleep 0.1
+    tick=$((tick + 1))
+  done
+  if ! wait "$pid"; then
+    echo "qaren: $(cat "$result")"
+    rm -f "$result"
     return 0
   fi
+  asset=$(cat "$result")
+  rm -f "$result"
   { read -r version; read -r name; read -r sha; read -r bytes; } <<< "$asset"
   installed_bin "$version" "$sha" && return 0
   echo "qaren v$version is not installed. Install it with: $INSTALL_COMMAND"
@@ -82,14 +105,19 @@ install() {
   asset=$(expected_asset) || exit 1
   { read -r version; read -r name; read -r sha; read -r bytes; } <<< "$asset"
   dest="$RUNTIME_ROOT/$version"
+  [[ "${HOME:-}" == /?* ]] || refuse "HOME is not an absolute path"
   installed_bin "$version" "$sha" && return 0
 
   mkdir -p "$RUNTIME_ROOT"
-  STAGING=$(mktemp -d "$RUNTIME_ROOT/.install.XXXXXX")
+  LOCK="$RUNTIME_ROOT/.install-$version.lock"
+  mkdir "$LOCK" 2>/dev/null || refuse "another qaren v$version install is running; if none is, remove $LOCK"
+  STAGING=""
   DEST="$dest"
-  # An interrupted replacement puts the previous runtime back before staging is removed.
-  trap '[ -e "$STAGING/previous" ] && [ ! -e "$DEST" ] && mv "$STAGING/previous" "$DEST"; rm -rf "$STAGING"' EXIT
+  # An interrupted replacement puts the previous runtime back before staging and the lock go.
+  trap '[ -n "$STAGING" ] && [ -e "$STAGING/previous" ] && [ ! -e "$DEST" ] && mv "$STAGING/previous" "$DEST"; [ -n "$STAGING" ] && rm -rf "$STAGING"; rmdir "$LOCK"' EXIT
   trap 'exit 130' INT TERM
+  installed_bin "$version" "$sha" && return 0
+  STAGING=$(mktemp -d "$RUNTIME_ROOT/.install.XXXXXX")
   local tarball="$STAGING/$name" top="${name%.tar.gz}"
 
   if [ -n "$FROM_FILE" ]; then
