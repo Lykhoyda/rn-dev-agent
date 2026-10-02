@@ -619,6 +619,11 @@ pub fn resolve(
     } else {
         project_state
     };
+    let platform = match scenario.platform {
+        crate::scenario::Platform::Ios => "ios",
+        crate::scenario::Platform::Android => "android",
+    };
+    crate::buildplan::validate_cache_paths(&repo_root, platform, &scenario.candidate.app_id)?;
     Ok(Candidate {
         repo_root,
         project_root,

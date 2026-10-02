@@ -296,3 +296,221 @@ fn handoff_candidate_paths_are_refused_before_writing() {
     assert_eq!(loaded.candidate.repo_root, doc.candidate.repo_root);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn cache_preflight_refuses_before_acquisition_or_install_and_preserves_state() {
+    use qaren::buildplan::{
+        self, ArtifactKind, ArtifactStatus, BuildDecision, CachedArtifact, DecisionInputs,
+        DepsPrewarm, NativeCacheState, StateStatus,
+    };
+    use qaren::commands::{
+        prepare::{prepare, PrepareArgs},
+        prewarm::{prewarm, PrewarmArgs},
+    };
+    use qaren::exec::{CmdOutput, MockRunner};
+    use qaren::scenario::Platform;
+    const APP: &str = "com.rndevagent.testapp";
+    for case in [
+        "artifact",
+        "worktree",
+        "prewarm",
+        "cache-symlink",
+        "platform-symlink",
+        "destination-symlink",
+    ] {
+        let dir = common::temp_repo();
+        let app = dir.join("test-app");
+        let cache = buildplan::cache_dir(&dir);
+        let unsafe_dir = dir.join("Private Key qa");
+        std::fs::create_dir_all(&unsafe_dir).unwrap();
+        std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        if case == "cache-symlink" {
+            std::os::unix::fs::symlink(&unsafe_dir, &cache).unwrap();
+        } else {
+            std::fs::create_dir(&cache).unwrap();
+        }
+        let artifact = if case == "artifact" {
+            unsafe_dir.join("app.app")
+        } else {
+            dir.join("app.app")
+        };
+        common::write_ios_app(&artifact);
+        let state = NativeCacheState {
+            schema: buildplan::CACHE_SCHEMA.into(),
+            platform: "ios".into(),
+            app_id: APP.into(),
+            worktree_root: if case == "worktree" {
+                unsafe_dir.clone()
+            } else {
+                dir.clone()
+            },
+            fingerprint: "rnfp1:eeee".into(),
+            built_at: "now".into(),
+            candidate_sha: "b".repeat(40),
+            lockfile_sha256: qaren::candidate::sha256_hex(
+                &std::fs::read(app.join("pnpm-lock.yaml")).unwrap(),
+            ),
+            generated_native_dirs: Vec::new(),
+            artifact: Some(CachedArtifact {
+                sha256: buildplan::hash_artifact(&artifact).unwrap(),
+                path: artifact,
+                kind: ArtifactKind::AppBundle,
+            }),
+        };
+        if case == "artifact" {
+            let inputs = DecisionInputs {
+                platform: "ios",
+                app_id: APP,
+                worktree_root: &dir,
+                candidate_sha: &state.candidate_sha,
+                fingerprint: &state.fingerprint,
+                fingerprint_complete: true,
+                incompleteness: &[],
+                scheme: Some("rndatest"),
+                force_clean: false,
+                native_dir_exists: false,
+                native_dir_in_candidate: false,
+            };
+            assert_eq!(
+                buildplan::decide(
+                    &inputs,
+                    &StateStatus::Loaded(Box::new(state.clone())),
+                    Some(ArtifactStatus::Verified)
+                )
+                .decision,
+                BuildDecision::Reuse
+            );
+        }
+        let state_path = buildplan::state_path(&dir, "ios", APP);
+        let raw_state = serde_json::to_string(&state).unwrap();
+        std::fs::write(&state_path, &raw_state).unwrap();
+        let prewarm_state = DepsPrewarm {
+            schema: buildplan::PREWARM_SCHEMA.into(),
+            worktree_root: dir.clone(),
+            project_root: if case == "prewarm" {
+                unsafe_dir.clone()
+            } else {
+                app.clone()
+            },
+            lockfile_sha256: state.lockfile_sha256.clone(),
+            at: "now".into(),
+        };
+        let raw_prewarm = serde_json::to_string(&prewarm_state).unwrap();
+        std::fs::write(buildplan::prewarm_path(&dir), &raw_prewarm).unwrap();
+        if case == "platform-symlink" || case == "destination-symlink" {
+            let artifacts = cache.join("artifacts");
+            std::fs::create_dir(&artifacts).unwrap();
+            let destination = if case == "platform-symlink" {
+                artifacts.join("ios")
+            } else {
+                std::fs::create_dir(artifacts.join("ios")).unwrap();
+                artifacts.join("ios").join(format!("{APP}-eeee"))
+            };
+            std::os::unix::fs::symlink(&unsafe_dir, destination).unwrap();
+        }
+        let scenario_path = dir.join("scenario.yaml");
+        std::fs::write(&scenario_path, common::ios_scenario_yaml(8793)).unwrap();
+        std::fs::create_dir_all(app.join(".qaren")).unwrap();
+        let config_path = app.join(".qaren/config.yaml");
+        std::fs::write(
+            &config_path,
+            format!("appId: {APP}\ndevClientScheme: rndatest\n"),
+        )
+        .unwrap();
+        let plan_file = app.join("plan.md");
+        let plan = "1. Tap \"Tasks\"\n";
+        std::fs::write(&plan_file, plan).unwrap();
+        for verb in ["prepare", "dry-run", "prewarm", "check"] {
+            let mut mock = MockRunner::new();
+            if verb == "check" {
+                mock.expect_run("node --version", CmdOutput::success("v24.14.0"));
+                mock.expect_run("walk.js --preflight", CmdOutput::success(&serde_json::json!({
+                    "ok": true, "jevRequired": false,
+                    "prepared": {"hash": qaren::candidate::sha256_hex(plan.as_bytes()), "blocks": []},
+                    "jev": {"calls": 0, "medianMs": 0, "inputTokens": 0, "callDetails": []}
+                }).to_string()));
+                mock.expect_run("simctl list devices booted", CmdOutput::success(r#"{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[{"udid":"1DC408C4-51DA-4C4F-ACA1-39881C916FDD","name":"test","state":"Booted","deviceTypeIdentifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}}"#));
+                mock.expect_run("git", CmdOutput::success(&dir.to_string_lossy()));
+            }
+            mock.expect_run("git", CmdOutput::success(&dir.to_string_lossy()));
+            mock.expect_run("git", CmdOutput::success(&state.candidate_sha));
+            mock.expect_run("git", CmdOutput::success(""));
+            let receipt = match verb {
+                "prewarm" => prewarm(
+                    &mut mock,
+                    &PrewarmArgs {
+                        scenario_path: scenario_path.clone(),
+                    },
+                ),
+                "check" => qaren::run::run(
+                    &mut mock,
+                    &qaren::run::RunRequest {
+                        project_root: app.clone(),
+                        config_path: config_path.clone(),
+                        plan_file: plan_file.clone(),
+                        platform: Platform::Ios,
+                        device: None,
+                        boot_device: false,
+                        fresh_install: true,
+                        runtime_dir: dir.join("runtime"),
+                        node: None,
+                        lock_root: dir.join("locks"),
+                        runs_root: dir.join("runs"),
+                        android_home: None,
+                        budgets: qaren::core::Budgets {
+                            walk_seconds: 60,
+                            step_seconds: 10,
+                        },
+                    },
+                ),
+                _ => prepare(
+                    &mut mock,
+                    &PrepareArgs {
+                        scenario_path: scenario_path.clone(),
+                        dry_run: verb == "dry-run",
+                        android_home: None,
+                        lock_root: dir.join("locks"),
+                        runs_root: dir.join("runs"),
+                    },
+                ),
+            };
+            assert_eq!(receipt.result, ReceiptResult::Refused, "{case}/{verb}");
+            assert_eq!(
+                receipt.failure.as_ref().unwrap().code,
+                FailureCode::OwnershipUnproven
+            );
+            assert!(!receipt.to_json().contains("Private Key"));
+            assert_eq!(mock.remaining(), 0);
+            assert!(mock.spawned_logs.is_empty());
+            assert!(!dir.join("locks").exists());
+            assert!(!dir.join("runs").exists());
+            assert_eq!(std::fs::read_to_string(&state_path).unwrap(), raw_state);
+            assert_eq!(
+                std::fs::read_to_string(buildplan::prewarm_path(&dir)).unwrap(),
+                raw_prewarm
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn safe_cache_preflight_preserves_candidate_resolution() {
+    use qaren::exec::{CmdOutput, MockRunner};
+    let dir = common::temp_repo();
+    let mut mock = MockRunner::new();
+    mock.expect_run("git", CmdOutput::success(&dir.to_string_lossy()));
+    mock.expect_run("git", CmdOutput::success(&"b".repeat(40)));
+    mock.expect_run("git", CmdOutput::success(""));
+    let candidate = qaren::candidate::resolve(
+        &mut mock,
+        &common::scenario_from(&common::ios_scenario_yaml(8793)),
+        &dir,
+    )
+    .unwrap();
+    assert_eq!(candidate.repo_root, dir);
+    assert_eq!(candidate.project_root, dir.join("test-app"));
+    assert!(!qaren::buildplan::cache_dir(&dir).exists());
+    assert_eq!(mock.remaining(), 0);
+    std::fs::remove_dir_all(dir).unwrap();
+}

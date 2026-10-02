@@ -87,6 +87,43 @@ pub fn load_state(worktree_root: &Path, platform: &str, app_id: &str) -> StateSt
     }
 }
 
+pub fn validate_cache_paths(
+    worktree_root: &Path,
+    platform: &str,
+    app_id: &str,
+) -> Result<(), crate::failure::Failure> {
+    for path in [
+        state_path(worktree_root, platform, app_id),
+        prewarm_path(worktree_root),
+    ] {
+        crate::redact::validate_operational_path(&path)?;
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+                crate::redact::validate_operational_paths(&value)?;
+            }
+        }
+    }
+    let artifacts = cache_dir(worktree_root).join("artifacts").join(platform);
+    crate::redact::validate_operational_path(&artifacts)?;
+    if let Ok(entries) = std::fs::read_dir(&artifacts) {
+        for entry in entries.flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{app_id}-"))
+            {
+                crate::redact::validate_operational_path(&entry.path())?;
+                if let Ok(children) = std::fs::read_dir(entry.path()) {
+                    for child in children.flatten() {
+                        crate::redact::validate_operational_path(&child.path())?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn save_json<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NONCE: AtomicU64 = AtomicU64::new(0);
