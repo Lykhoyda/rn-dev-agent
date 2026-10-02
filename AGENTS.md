@@ -66,9 +66,8 @@ The package cut and literal `qaren check` are merged into `develop`. The Phase 3
   migration work is tracked in Linear.
 - The SessionStart hook must never download. `hooks/hooks.json` runs
   `scripts/ensure-qaren.sh --print-bin`, the verify-only mode that prints the
-  installed binary path or a diagnostic and exits 0. For runtime installation
-  and prerequisites, follow [README Install](README.md#install).
-  `maestro-runner-pin` no longer has an `install` subcommand; pin-cache messages that still name `ensure-maestro-runner.sh`
+  exact install command and exits 0. `maestro-runner-pin` no longer has an `install`
+  subcommand; pin-cache messages that still name `ensure-maestro-runner.sh`
   are rewritten with the Phase 8 install path.
 - Do not create compatibility symlinks or shims for removed paths and names.
 - Code in `src/injected-helpers.ts` is evaluated via CDP inside an

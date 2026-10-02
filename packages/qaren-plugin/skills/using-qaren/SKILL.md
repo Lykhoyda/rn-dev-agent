@@ -18,14 +18,42 @@ This skill is your front door. Before starting any RN work, use the decision tre
 
 ## Host Surface Map
 
-For host loading, runtime verification or installation, follow
-[README Install](../../../../README.md#install) in a source checkout, or the
-[repository README](https://github.com/Lykhoyda/rn-dev-agent/blob/develop/README.md#install)
-when this skill is installed separately.
+- **Claude Code** local development points at the repository root with
+  `claude --plugin-dir /path/to/rn-dev-agent`; the root
+  `.claude-plugin/marketplace.json` resolves the package at
+  `packages/claude-plugin/`. The Claude package owns slash commands in
+  `commands/`, Claude subagents in `agents/`, hooks in `hooks/`, skills in
+  `skills/`, and the `cdp` MCP server.
+- **Cursor** local development points at
+  `/path/to/rn-dev-agent/packages/claude-plugin` (the same package). Cursor loads
+  `.cursor-plugin/plugin.json` and package-root `mcp.json`. The `cdp` MCP
+  server spawns `${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js`.
+  Claude SessionStart hooks are not auto-loaded. Skills, commands, and agents
+  are the same files as Claude.
+- **Codex** local development points at the same installed directory,
+  `/path/to/rn-dev-agent/packages/claude-plugin`. Codex loads
+  `.codex-plugin/plugin.json`, package-local skills in `codex-skills/`, and the
+  same `cdp` MCP server from `codex.mcp.json`. Claude slash commands, subagents,
+  and hooks are not native Codex surfaces; treat `codex-commands/*.md` and
+  `codex-agents/*.md` as playbooks to execute inline. `No plugin hooks` in Codex
+  is expected.
+- Keep the MCP server key named `cdp` on every host. Older sessions and
+  docs assume this stable key.
 
-The routing guidance below is retained rn-dev-agent 1.x material pending the
-Phase 8 skill migration. Its MCP tools, commands and agents are not supplied by
-the QaReN host package; use it only with an existing 1.x installation.
+Codex translation rule: when this skill routes to `/rn-dev-agent:<command>`,
+load the matching skill or command Markdown and run the underlying steps
+directly. For action inventory, the slash command wraps:
+
+```bash
+node <plugin-root>/rn-dev-agent-core/dist/learned-actions.js --json --filter "<keyword>"
+```
+
+(`<plugin-root>` = `${CLAUDE_PLUGIN_ROOT}` on Claude, `${CURSOR_PLUGIN_ROOT}` on
+Cursor, the installed package root on Codex — the one bundled runtime lives
+INSIDE the installed package.)
+
+For action replay, prefer the MCP tool `cdp_run_action` after the same
+pre-flight checks documented in `commands/run-action.md`.
 
 ---
 
