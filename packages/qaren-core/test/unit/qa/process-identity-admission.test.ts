@@ -151,7 +151,12 @@ test('every ambiguous row needs proof and excessive identity work refuses before
   calls = 0;
   assert.equal(
     await probeIosExternalRunnerStrict(
-      ps(Array.from({ length: 17 }, (_, i) => `${i + 20} agent ${prompt}\n`).join('')),
+      ps(
+        Array.from(
+          { length: 65 },
+          (_, i) => `${i + 20} java -classpath lib maestro.cli.AppKt mcp\n`,
+        ).join(''),
+      ),
       device,
       observe,
     ),

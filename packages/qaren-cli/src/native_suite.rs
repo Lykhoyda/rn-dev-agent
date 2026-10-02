@@ -1,6 +1,6 @@
 use crate::adapters::ios;
 use crate::buildplan::{self, ReleaseOutcome};
-use crate::commands::cleanup::{cleanup_process_group, Outcome};
+use crate::commands::cleanup::{cleanup_process_group, cleanup_scoped_runner_hosts, Outcome};
 use crate::core;
 use crate::exec::{ChildHandle, CmdSpec, Runner};
 use crate::lease::{self, Lease};
@@ -42,7 +42,10 @@ pub enum SuiteProcess {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CleanupEvidence {
     pub group: String,
+    #[serde(default)]
     pub admission_clear: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_host: Option<String>,
 }
 
 fn roots(runner: &dyn Runner) -> Result<(PathBuf, PathBuf), String> {
@@ -113,6 +116,7 @@ fn rollback(dir: &Path, record: &mut NativeSuite) -> Result<(), String> {
     record.cleanup = Some(CleanupEvidence {
         group: "not_spawned".into(),
         admission_clear: false,
+        runner_host: None,
     });
     let saved = save(dir, record);
     release(record)?;
@@ -142,15 +146,18 @@ fn finish(
         }
     };
     let absent = matches!(group, Outcome::Removed | Outcome::Absent);
-    let admission_clear = absent && admit(runner, &record.device_id).is_ok();
+    let runner_host = absent.then(|| cleanup_scoped_runner_hosts(runner, &record.device_id));
+    let hosts_absent = matches!(runner_host, Some(Outcome::Absent));
     record.cleanup = Some(CleanupEvidence {
         group: group.render(),
-        admission_clear,
+        admission_clear: false,
+        runner_host: runner_host.map(|outcome| outcome.render()),
     });
     save(dir, record)?;
-    if !absent || !admission_clear {
+    if !absent || !hosts_absent {
         return Err(
-            "group absence and strict admission are not both proven; lease retained".into(),
+            "group and exact simulator runner host absence are not both proven; lease retained"
+                .into(),
         );
     }
     release(record)
@@ -376,7 +383,12 @@ pub fn recover(runner: &mut dyn Runner, run_id: &str) -> Result<NativeSuite, Str
                 .is_some_and(|e| match record.process {
                     SuiteProcess::NotSpawned => e.group == "not_spawned",
                     SuiteProcess::Spawned { .. } => {
-                        matches!(e.group.as_str(), "removed" | "absent") && e.admission_clear
+                        matches!(e.group.as_str(), "removed" | "absent")
+                            && match e.runner_host.as_deref() {
+                                Some("absent") => true,
+                                None => e.admission_clear,
+                                _ => false,
+                            }
                     }
                     SuiteProcess::SpawnPending => false,
                 });
