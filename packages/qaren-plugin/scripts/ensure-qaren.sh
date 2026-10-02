@@ -15,7 +15,7 @@ RUNTIME_ROOT="${HOME:-}/.qaren/runtime"
 RECORD=".tarball-sha256"
 INSTALL_COMMAND="bash $(printf %q "$PLUGIN_ROOT/scripts/ensure-qaren.sh") --install"
 # The SessionStart hook must answer within 2 s even if Node is slow to start.
-PRINT_BIN_BUDGET_TENTHS=15
+PRINT_BIN_BUDGET_SECONDS=1
 
 MODE=""
 FROM_FILE=""
@@ -35,7 +35,7 @@ done
 
 # Prints the expected asset as four lines: version, name, sha256, bytes.
 # Fails (with a reason on stderr) when this plugin carries no tarball for the host.
-expected_asset() {
+read_asset() {
   local platform
   [ "$(uname -s)" = Darwin ] || { echo "qaren ships a macOS runtime only; this host is $(uname -s)" >&2; return 1; }
   case "$(uname -m)" in
@@ -45,8 +45,7 @@ expected_asset() {
   esac
   [ -f "$MANIFEST" ] || { echo "this plugin carries no runner-manifest.json" >&2; return 1; }
   command -v node >/dev/null 2>&1 || { echo "qaren needs Node 24 or newer on PATH" >&2; return 1; }
-  local out version name sha bytes
-  out=$(node -e '
+  exec node -e '
     const major = Number(process.versions.node.split(".")[0]);
     if (major < 24) {
       console.error(`qaren needs Node 24 or newer; found ${process.version}`);
@@ -55,7 +54,12 @@ expected_asset() {
     const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     const a = (m.assets && m.assets.qaren && m.assets.qaren[process.argv[2]]) || {};
     console.log([m.version, a.name, a.sha256, a.bytes].map((v) => (v === undefined ? "" : v)).join("\n"));
-  ' "$MANIFEST" "$platform") || { [ $? = 3 ] || echo "runner-manifest.json is unreadable" >&2; return 1; }
+  ' "$MANIFEST" "$platform"
+}
+
+validate_asset() {
+  local out="$1" version name sha bytes platform
+  case "$(uname -m)" in arm64) platform=darwin-arm64 ;; x86_64) platform=darwin-x64 ;; esac
   { read -r version; read -r name; read -r sha; read -r bytes; } <<< "$out"
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "runner-manifest.json has no release version" >&2; return 1; }
   [ -n "$name" ] || { echo "qaren v$version has no $platform tarball in runner-manifest.json" >&2; return 1; }
@@ -65,6 +69,12 @@ expected_asset() {
   printf '%s\n%s\n%s\n%s\n' "$version" "$name" "$sha" "$bytes"
 }
 
+expected_asset() {
+  local out
+  out=$(read_asset) || { [ $? = 3 ] || echo "runner-manifest.json is unreadable" >&2; return 1; }
+  validate_asset "$out"
+}
+
 installed_bin() {
   local dest="$RUNTIME_ROOT/$1" sha="$2"
   [ -x "$dest/bin/qaren" ] && [ -f "$dest/$RECORD" ] && [ "$(cat "$dest/$RECORD")" = "$sha" ] \
@@ -72,19 +82,19 @@ installed_bin() {
 }
 
 print_bin() {
-  local result pid tick=0 asset version name sha bytes
+  local result pid deadline=$((SECONDS + PRINT_BIN_BUDGET_SECONDS)) asset version name sha bytes
   result=$(mktemp) || { echo "qaren: cannot create a temporary file"; return 0; }
-  expected_asset > "$result" 2>&1 &
+  read_asset > "$result" 2>&1 &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
-    if [ "$tick" -ge "$PRINT_BIN_BUDGET_TENTHS" ]; then
-      kill "$pid" 2>/dev/null
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      kill -KILL "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
       rm -f "$result"
       echo "qaren: the runtime check did not finish in time; run: $INSTALL_COMMAND"
       return 0
     fi
     sleep 0.1
-    tick=$((tick + 1))
   done
   if ! wait "$pid"; then
     echo "qaren: $(cat "$result")"
@@ -93,6 +103,10 @@ print_bin() {
   fi
   asset=$(cat "$result")
   rm -f "$result"
+  if ! asset=$(validate_asset "$asset" 2>&1); then
+    echo "qaren: $asset"
+    return 0
+  fi
   { read -r version; read -r name; read -r sha; read -r bytes; } <<< "$asset"
   installed_bin "$version" "$sha" && return 0
   echo "qaren v$version is not installed. Install it with: $INSTALL_COMMAND"

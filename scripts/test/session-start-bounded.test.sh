@@ -106,12 +106,13 @@ FAKE_OS=Linux hook
 bounded "not macOS"
 check "not macOS: says so" yes "$(contains "$out" "macOS runtime only")"
 
-printf '#!/bin/sh\nsleep 30\n' > "$tmp/slow-node"
+printf '#!/bin/sh\necho "$$" > "%s/slow-node.pid"\nexec "%s" -e '\''process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'\''\n' "$tmp" "$NODE" > "$tmp/slow-node"
 chmod +x "$tmp/slow-node"
 ln -sf "$tmp/slow-node" "$tmp/bin/node"
 hook
 bounded "Node that never starts"
 check "Node that never starts: names the install command" yes "$(contains "$out" "did not finish in time")"
+check "Node that never starts: child is gone" no "$(kill -0 "$(cat "$tmp/slow-node.pid")" 2>/dev/null && echo yes || echo no)"
 
 printf '#!/bin/sh\nexec "%s" --import "data:text/javascript,Object.defineProperty(process.versions,\\"node\\",{value:\\"22.1.0\\"})" "$@"\n' "$NODE" > "$tmp/old-node"
 chmod +x "$tmp/old-node"

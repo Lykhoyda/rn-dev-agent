@@ -36,6 +36,7 @@ import {
   ghCommands,
   installGhStub,
   loadWorkflow,
+  resolveExpressions,
   runJobSteps,
   shellCommands,
   type GhCheckRun,
@@ -2192,11 +2193,37 @@ test('the release transaction is ordered: prepare -> finalize -> validate -> pub
     s.uses?.startsWith('actions/download-artifact@'),
   );
   assert.equal(artifactSteps.length, 2);
+  const expectedIds = {
+    'ios-artifact-id': '101',
+    'android-artifact-id': '102',
+    'qaren-darwin-arm64-artifact-id': '103',
+    'qaren-darwin-x64-artifact-id': '104',
+  };
+  const producerIds = {
+    'jobs.build-ios.outputs.artifact-id': expectedIds['ios-artifact-id'],
+    'jobs.build-android.outputs.artifact-id': expectedIds['android-artifact-id'],
+    'jobs.build-qaren.outputs.darwin-arm64-artifact-id':
+      expectedIds['qaren-darwin-arm64-artifact-id'],
+    'jobs.build-qaren.outputs.darwin-x64-artifact-id': expectedIds['qaren-darwin-x64-artifact-id'],
+  };
+  const exposedOutputs = (
+    artifacts as unknown as {
+      on: { workflow_call: { outputs: Record<string, { value: string }> } };
+    }
+  ).on.workflow_call.outputs;
+  const prepareOutputs = Object.fromEntries(
+    Object.entries(expectedIds).map(([name, id]) => {
+      assert.ok(exposedOutputs[name], `producer must expose ${name}`);
+      const resolved = resolveExpressions(exposedOutputs[name].value, producerIds);
+      assert.equal(resolved, id, `producer output ${name}`);
+      return [`needs.prepare.outputs.${name}`, resolved];
+    }),
+  );
   for (const step of artifactSteps) {
-    assert.match(
-      String(step.with?.['artifact-ids']),
-      /needs\.prepare\.outputs\.ios-artifact-id.*needs\.prepare\.outputs\.android-artifact-id.*needs\.prepare\.outputs\.qaren-darwin-arm64-artifact-id.*needs\.prepare\.outputs\.qaren-darwin-x64-artifact-id/,
-    );
+    const ids = resolveExpressions(String(step.with?.['artifact-ids']), prepareOutputs)
+      .split(',')
+      .map((id) => id.trim());
+    assert.deepEqual(new Set(ids), new Set(Object.values(expectedIds)));
   }
   for (const name of [RETIRE_STEP]) {
     assert.equal(
