@@ -307,7 +307,7 @@ pub fn decide(
                     fingerprint: inputs.fingerprint.to_string(),
                     reason: crate::redact::OutputText::from_output("native inputs are unchanged and the cached dev client is content-verified; reusing it with fresh candidate JS via Metro"
                             ),
-                    evidence: vec![
+                    evidence: [
                         match_evidence,
                         sha_evidence,
                         format!(

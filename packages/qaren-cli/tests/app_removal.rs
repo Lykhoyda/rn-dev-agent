@@ -384,7 +384,7 @@ fn repeat_after_failed_removal_refuses_the_now_unowned_device() {
     record.resources.app_install.as_mut().unwrap().removal = Some(AppRemoval {
         at: "2026-09-05T10:00:00Z".to_string(),
         outcome: qaren::redact::OutputText::from_output(
-            &"unresolved: package still present after uninstall",
+            "unresolved: package still present after uninstall",
         ),
         installed_sha256: APK_SHA.to_string(),
         uninstall: qaren::redact::OutputText::from_output("exit=1 Failure"),
@@ -425,17 +425,17 @@ fn interrupted_unresolved_removal_is_preserved_even_while_resources_are_owned() 
     let prior = AppRemoval {
         at: "2026-09-05T10:00:00Z".to_string(),
         outcome: qaren::redact::OutputText::from_output(
-            &"unresolved: absence could not be proven: device offline",
+            "unresolved: absence could not be proven: device offline",
         ),
         installed_sha256: APK_SHA.to_string(),
         uninstall: qaren::redact::OutputText::from_output(
-            &"exit=none timed_out=true stdout=\"\" stderr=\"\"",
+            "exit=none timed_out=true stdout=\"\" stderr=\"\"",
         ),
         pm_path_after: qaren::redact::OutputText::from_output(
-            &"exit=1 stdout=\"\" stderr=\"device offline\"",
+            "exit=1 stdout=\"\" stderr=\"device offline\"",
         ),
         package_list_after: qaren::redact::OutputText::from_output(
-            &"exit=1 stdout=\"\" stderr=\"device offline\"",
+            "exit=1 stdout=\"\" stderr=\"device offline\"",
         ),
     };
     record.resources.app_install.as_mut().unwrap().removal = Some(prior.clone());
@@ -460,7 +460,10 @@ fn interrupted_unresolved_removal_is_preserved_even_while_resources_are_owned() 
         ("app_installed_sha256", prior.installed_sha256.as_str()),
         ("app_removal_uninstall", prior.uninstall.as_str()),
         ("app_removal_pm_path", prior.pm_path_after.as_str()),
-        ("app_removal_package_list", prior.package_list_after.as_str()),
+        (
+            "app_removal_package_list",
+            prior.package_list_after.as_str(),
+        ),
     ] {
         assert_eq!(receipt.outcomes.get(key).unwrap(), value);
     }
