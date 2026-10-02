@@ -59,6 +59,8 @@ Unparseable lines refuse before allocation; unresolved screen targets refuse dur
 Native platform presence establishes observed presence, not complete visual exposure
 or an accessibility heading role. Heading predicates require qualified heading evidence;
 unsupported visual or layout claims remain uncertain.
+Phrase waits capture fresh screen and presence evidence on every poll, even when the
+screen appears unchanged; prior observations do not establish current presence.
 
 Phrase presses require complete native and React coverage and proven React-to-native
 associations. Native text, images and plain views are excluded from press candidates

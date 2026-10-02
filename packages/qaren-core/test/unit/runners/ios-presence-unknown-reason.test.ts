@@ -87,6 +87,7 @@ final class Query {
   var elements: [XCUIElement] = []
   var unavailable = false
   var outerUnavailable = false
+  var onAll: () -> Void = {}
   var count: Int { 0 }
   func matching(_ predicate: NSPredicate) -> Query {
     reads.append("matching")
@@ -97,6 +98,7 @@ final class Query {
   var allElementsBoundByAccessibilityElement: [XCUIElement] {
     reads.append("all")
     if unavailable { RunnerObjCExceptionCatcher.failed = true }
+    onAll()
     return elements
   }
 }
@@ -159,6 +161,15 @@ ${section(source, '  func snapshotPlatformPresence(', '  func retainSnapshotTarg
     }
     return ["observed": stamp != nil, "stamp": stamp ?? -1, "reasons": reasons, "reads": reads,
       "deadline": timing.diagnostics(complete: false).deadline != nil]
+  }
+  func observeGroups(_ groups: [(XCUIElementSnapshot, Int)], app: XCUIApplication) -> [[String: Any]] {
+    let timing = PresenceCaptureTiming(started: now, now: { self.now })
+    return groups.map { descriptor, count in
+      var reasons: [String] = []
+      let stamp = observePresence(PresenceDescriptor(descriptor)!, count: count,
+        app: app, deadline: 20_000, timing: timing, unknownReason: { reasons.append($0.rawValue) })
+      return ["observed": stamp != nil, "reasons": reasons]
+    }
   }
 }
 func emit(_ value: [String: Any]) throws {
@@ -247,6 +258,45 @@ for name in ["empty", "clipped", "ambiguous", "group-false", "group-nil", "group
   try emit(["name": name, "complete": capture.complete, "observations": observations, "reads": reads,
     "samples": capture.diagnostics!.preparationSamples!, "quietMs": capture.diagnostics!.preparationQuietElapsedMs!])
 }
+for scenario in ["stable", "moving", "added"] {
+  reads = []
+  let h = Harness(), app = XCUIApplication(XCUIElementSnapshot())
+  let elements = (0..<3).map { XCUIElement($0) }
+  let descriptors = elements.map { element -> XCUIElementSnapshot in
+    let snapshot = XCUIElementSnapshot()
+    snapshot.frame.origin.x = CGFloat(element.ordinal * 100)
+    let live = XCUIElementSnapshot()
+    live.frame = snapshot.frame
+    element.snapshots = [live]
+    return snapshot
+  }
+  app.query.elements = elements
+  if scenario == "moving" {
+    elements[0].onHit = { elements[1].snapshots[0].frame.origin.x = 200 }
+    elements[2].onHit = { elements[1].snapshots[0].frame.origin.x = 100 }
+  }
+  if scenario == "added" {
+    let added = XCUIElement(3)
+    added.snapshots[0].frame = descriptors[2].frame
+    elements[0].onHit = { app.query.elements.append(added) }
+    elements[2].onHit = { app.query.elements = elements }
+  }
+  let groups = descriptors.map { ($0, 1) } + (scenario == "stable" ? [(descriptors[0], 2)] : [])
+  let observed = h.observeGroups(groups, app: app)
+  elements[1].snapshots[0].frame.origin.x = 100
+  app.query.elements = elements
+  try emit(["name": "groups-" + scenario, "results": observed, "reads": reads])
+}
+do {
+  reads = []
+  let h = Harness(), descriptor = XCUIElementSnapshot()
+  let app = XCUIApplication(descriptor)
+  app.query.elements = [XCUIElement(0)]
+  app.query.unavailable = true
+  app.query.onAll = { app.query.unavailable = false }
+  let observed = h.observeGroups([(descriptor, 1), (descriptor, 1)], app: app)
+  try emit(["name": "binding-unavailable", "results": observed, "reads": reads])
+}
 let allowed = ["empty-frame", "clipped", "ambiguous-descriptor", "not-hittable", "read-unavailable", "match-count-mismatch", "post-hit-mismatch"]
 for raw in allowed {
   let reason = PlatformPresenceObservation.UnknownReason(rawValue: raw)!
@@ -313,6 +363,79 @@ precondition(decoded.unknownReason == nil)
       );
     });
   }
+  await t.test('each fallback group re-binds and snapshots the live candidates', () => {
+    const row = rows.find((row) => row.name === 'groups-stable');
+    assert.deepEqual(row.results, [
+      { observed: true, reasons: [] },
+      { observed: true, reasons: [] },
+      { observed: true, reasons: [] },
+      { observed: false, reasons: ['match-count-mismatch'] },
+    ]);
+    assert.equal(row.reads.filter((read: string) => read === 'all').length, 4);
+    assert.deepEqual(row.reads.slice(0, 6), [
+      'descendants',
+      'matching',
+      'all',
+      'snapshot-0',
+      'snapshot-1',
+      'snapshot-2',
+    ]);
+    for (const ordinal of [0, 1, 2]) {
+      assert.equal(row.reads.filter((read: string) => read === `hit-${ordinal}`).length, 1);
+      assert.equal(row.reads.filter((read: string) => read === `snapshot-${ordinal}`).length, 5);
+    }
+  });
+  await t.test('fresh descriptors refuse a candidate moving into a later group', () => {
+    const row = rows.find((row) => row.name === 'groups-moving');
+    assert.deepEqual(row.results, [
+      { observed: true, reasons: [] },
+      { observed: false, reasons: ['match-count-mismatch'] },
+      { observed: false, reasons: ['match-count-mismatch'] },
+    ]);
+    assert.equal(row.reads.filter((read: string) => read === 'all').length, 3);
+    assert.deepEqual(
+      row.reads.filter((read: string) => read.startsWith('hit-')),
+      ['hit-0'],
+    );
+    for (const ordinal of [0, 1, 2]) {
+      assert.equal(
+        row.reads.filter((read: string) => read === `snapshot-${ordinal}`).length,
+        ordinal === 0 ? 4 : 3,
+      );
+    }
+  });
+  await t.test('fresh membership refuses a transient candidate matching a later group', () => {
+    const row = rows.find((row) => row.name === 'groups-added');
+    assert.deepEqual(row.results, [
+      { observed: true, reasons: [] },
+      { observed: true, reasons: [] },
+      { observed: false, reasons: ['match-count-mismatch'] },
+    ]);
+    const candidates = ['descendants', 'matching', 'all', 'snapshot-0', 'snapshot-1', 'snapshot-2'];
+    assert.deepEqual(row.reads, [
+      ...candidates,
+      'hit-0',
+      'snapshot-0',
+      ...candidates,
+      'snapshot-3',
+      'hit-1',
+      'snapshot-1',
+      ...candidates,
+      'snapshot-3',
+    ]);
+  });
+  await t.test('a group retries binding after an unavailable read', () => {
+    const row = rows.find((row) => row.name === 'binding-unavailable');
+    assert.deepEqual(row.results, [
+      { observed: false, reasons: ['read-unavailable'] },
+      { observed: true, reasons: [] },
+    ]);
+    assert.equal(row.reads.filter((read: string) => read === 'all').length, 2);
+    assert.deepEqual(
+      row.reads.filter((read: string) => read.startsWith('hit-')),
+      ['hit-0'],
+    );
+  });
   for (const [name, reason, count, liveReads] of [
     ['empty', 'empty-frame', 1, []],
     ['clipped', 'clipped', 1, []],
