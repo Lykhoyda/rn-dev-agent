@@ -359,7 +359,19 @@ function reactCoverage(
 
 export async function captureScreen(deps: CaptureDeps): Promise<Screen> {
   try {
-    return await capture(deps);
+    try {
+      return await capture(deps);
+    } catch (error) {
+      if (!(error instanceof PrivateInputCaptureError)) throw error;
+      // One refusal cannot tell a busy JS thread from a broken read; a fresh full capture can.
+      observeTiming(deps.timing, {
+        stage: 'refresh',
+        edge: 'point',
+        outcome: 'ok',
+        at: (deps.now ?? (() => performance.now()))(),
+      });
+      return await capture(deps);
+    }
   } catch (error) {
     if (error instanceof NativeCaptureError) throw error;
     if (deps.requirePrivateInputs || error instanceof PrivateInputCaptureError)
