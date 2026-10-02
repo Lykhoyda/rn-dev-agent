@@ -250,25 +250,29 @@ export function offscreenNodes(
   );
 }
 
-// Only a single sized Window proves the viewport; without one nothing is claimed off screen.
 export function outsideViewport(nodes: NativeNode[]): Set<number> {
   const offscreen = new Set<number>();
-  const windows = nodes.flatMap((node, i) => (node.type === 'Window' ? [i] : []));
-  const window = windows.length === 1 ? nodes[windows[0]].rect : undefined;
-  if (!window || window.width <= 0 || window.height <= 0) return offscreen;
   nodes.forEach((node, i) => {
     if (!node.rect) return;
-    let visible = window;
+    let visible: Rect | undefined;
+    let window: Rect | undefined;
     let parent = node.parentIndex;
-    for (
-      let hops = 0;
-      parent !== undefined && parent !== windows[0] && hops < nodes.length;
-      hops++
-    ) {
-      if (nodes[parent]?.type === 'ScrollView') visible = clip(visible, nodes[parent].rect);
-      parent = nodes[parent]?.parentIndex;
+    for (let hops = 0; parent !== undefined && hops < nodes.length; hops++) {
+      const ancestor = nodes[parent];
+      if (
+        ancestor?.type === 'Window' &&
+        ancestor.rect &&
+        ancestor.rect.width > 0 &&
+        ancestor.rect.height > 0
+      ) {
+        window = clip(ancestor.rect, visible);
+        break;
+      }
+      if (ancestor?.rect && ['ScrollView', 'Table', 'CollectionView'].includes(ancestor.type ?? ''))
+        visible = clip(ancestor.rect, visible);
+      parent = ancestor?.parentIndex;
     }
-    if (parent === windows[0] && !within(node.rect, visible)) offscreen.add(i);
+    if (window && !within(node.rect, window)) offscreen.add(i);
   });
   return offscreen;
 }

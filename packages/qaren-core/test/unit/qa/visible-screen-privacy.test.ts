@@ -4,6 +4,8 @@ import { captureScreen } from '../../../dist/qa/capture.js';
 import type { ReactObservation } from '../../../dist/qa/capture.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import { runPlan } from '../../../dist/qa/walker.js';
+import { outsideViewport } from '../../../dist/qa/native-presence.js';
+import { ObservedPrivacy } from '../../../dist/qa/privacy.js';
 import type { NativeNode } from '../../../dist/qa/screen.js';
 import { scriptedJudge, walker } from './judgment-fixtures.ts';
 import { attested, nativeCapture } from './platform-presence-fixtures.ts';
@@ -126,7 +128,7 @@ test('strings from a React-only digest entry never reach any output', async () =
 
 test('a field value seen earlier stays masked when echoed after navigation', async () => {
   const secret = 'history-b@example.test';
-  const { f, judge } = deps([
+  const { f, judge, shots } = deps([
     {
       nodes: [
         { ref: '@email', type: 'TextField', identifier: 'email', label: 'Email', value: secret },
@@ -139,13 +141,14 @@ test('a field value seen earlier stays masked when echoed after navigation', asy
   assert.deepEqual(f.actions, ['press @e1']);
   assert.equal(f.rows[0].outcome, 'pass');
   assert.match(result.failure!.seen, /Welcome •••/);
+  assert.equal(shots(), 0);
   const all = outputs(result, judge, f.rows);
   assert.equal(all.includes(secret), false, all);
 });
 
-test('a typed value echoed in a label is masked', async () => {
+test('filling an empty field then navigating to a native echo masks output and withholds screenshots', async () => {
   const typed = 'typed-c@example.test';
-  const { f, judge } = deps([
+  const { f, judge, shots } = deps([
     { nodes: [{ ref: '@email', type: 'TextField', identifier: 'Email', label: 'Email' }] },
     { nodes: [{ ref: '@note', type: 'StaticText', label: `Sent to ${typed}` }] },
   ]);
@@ -156,6 +159,7 @@ test('a typed value echoed in a label is masked', async () => {
   assert.deepEqual(f.actions, [`fill @email ${typed}`]);
   assert.equal(f.rows[0].outcome, 'pass');
   assert.match(result.failure!.seen, /Sent to •••/);
+  assert.equal(shots(), 0);
   const all = outputs(result, judge, f.rows);
   assert.equal(all.includes(typed), false, all);
 });
@@ -230,12 +234,12 @@ test('a literal check refuses when the native tree is not proven complete', asyn
   }
 });
 
-test('an open field showing its placeholder stays public, a secure one does not', async () => {
+test('open and secure field values equal to their placeholders are masked', async () => {
   const fields = digest([
     { role: 'textbox', testID: 'search', placeholder: 'Search', capabilities: { fill: true } },
     { role: 'textbox', testID: 'code', placeholder: 'Code', capabilities: { fill: true } },
   ]);
-  const { f } = deps([
+  const { f, judge, shots } = deps([
     {
       nodes: [
         { ref: '@search', type: 'TextField', identifier: 'search', value: 'Search' },
@@ -247,8 +251,67 @@ test('an open field showing its placeholder stays public, a secure one does not'
     },
   ]);
   const result = await runPlan(parsePlan('✓ "Nothing like this"').blocks!, f.deps);
-  assert.match(result.failure!.seen, /Search results/);
+  assert.match(result.failure!.seen, /••• results/);
   assert.match(result.failure!.seen, /••• sent/);
+  assert.equal(shots(), 0);
+  const all = outputs(result, judge, f.rows);
+  assert.equal(all.includes('Search'), false, all);
+  assert.equal(all.includes('Code'), false, all);
+});
+
+test('bullet-only open values and Android placeholder-equal labels are private', async () => {
+  for (const [type, secret] of [
+    ['TextField', '***'],
+    ['android.widget.EditText', 'Search'],
+  ]) {
+    const { f, judge, shots } = deps([
+      {
+        nodes: [
+          {
+            ref: '@input',
+            type,
+            identifier: 'entry',
+            ...(type === 'TextField' ? { value: secret } : { label: secret }),
+          },
+          { ref: '@echo', type: 'StaticText', label: `Echo ${secret}` },
+        ],
+        react: digest([{ role: 'textbox', testID: 'entry', placeholder: secret }]),
+      },
+    ]);
+    const result = await runPlan(parsePlan('✓ "Nothing like this"').blocks!, f.deps);
+    assert.match(result.failure!.seen, /Echo •••/);
+    assert.equal(shots(), 0);
+    const all = outputs(result, judge, f.rows);
+    assert.equal(all.includes(secret), false, all);
+  }
+});
+
+test('native pixel echoes withhold screenshots without changing short-token text disclosure', async () => {
+  for (const echo of [
+    { ref: '@text', type: 'StaticText', label: 'Echo x' },
+    { ref: '@image', type: 'Image', label: 'Echo x' },
+    { ref: '@container', type: 'Other', value: 'Echo x' },
+  ]) {
+    const privacy = new ObservedPrivacy(['x']);
+    const screen = await captureScreen({
+      appId: 'com.test',
+      requirePrivateInputs: true,
+      native: async () => native([echo]),
+      react: async () => digest(),
+    });
+    privacy.observe(screen);
+    assert.equal(privacy.canScreenshot(), false);
+    assert.equal(privacy.redact('Echo x'), 'Echo x');
+  }
+  const privacy = new ObservedPrivacy(['absent-secret']);
+  const screen = await captureScreen({
+    appId: 'com.test',
+    requirePrivateInputs: true,
+    native: async () => native([{ ref: '@text', type: 'StaticText', label: 'Welcome' }]),
+    react: async () => digest(),
+  });
+  privacy.observe(screen);
+  assert.equal(privacy.canScreenshot(), true);
 });
 
 function viewportTree(
@@ -325,4 +388,146 @@ test('text below the native viewport is not on screen until scrolled into it', a
   assert.deepEqual(f.actions, ['scroll down']);
   const unproven = await walkViewport('✓ "Later"', [viewportTree(1200, { window: false })]);
   assert.equal(unproven.result.verdict, 'PASS', 'without a Window nothing is claimed off screen');
+});
+
+test('each node uses its own sized Window ancestor when multiple windows exist', async () => {
+  const rect = { x: 0, y: 0, width: 390, height: 844 };
+  const nodes: NativeNode[] = [
+    { ref: '@app', type: 'Application', rect },
+    { ref: '@main', type: 'Window', parentIndex: 0, rect },
+    { ref: '@welcome', type: 'StaticText', parentIndex: 1, label: 'Welcome', rect },
+    {
+      ref: '@aux',
+      type: 'Window',
+      parentIndex: 0,
+      rect: { x: 500, y: 100, width: 200, height: 200 },
+    },
+    {
+      ref: '@later',
+      type: 'StaticText',
+      parentIndex: 1,
+      label: 'Later',
+      rect: { x: 10, y: 1200, width: 100, height: 30 },
+    },
+    {
+      ref: '@aux-visible',
+      type: 'StaticText',
+      parentIndex: 3,
+      label: 'Auxiliary',
+      rect: { x: 510, y: 120, width: 100, height: 30 },
+    },
+    {
+      ref: '@aux-outside',
+      type: 'StaticText',
+      parentIndex: 3,
+      label: 'Outside auxiliary',
+      rect: { x: 10, y: 120, width: 100, height: 30 },
+    },
+    {
+      ref: '@unowned',
+      type: 'StaticText',
+      parentIndex: 0,
+      label: 'Unowned',
+      rect: { x: 10, y: 1200, width: 100, height: 30 },
+    },
+    { ref: '@unsized', type: 'Window', parentIndex: 0 },
+    {
+      ref: '@unsized-child',
+      type: 'StaticText',
+      parentIndex: 8,
+      rect: { x: 10, y: 1200, width: 100, height: 30 },
+    },
+  ];
+  assert.deepEqual([...outsideViewport(nodes)], [4, 6]);
+  const initial = attested(nodes);
+  const revealed = attested(
+    nodes.map((node) =>
+      node.ref === '@later' ? { ...node, rect: { ...node.rect!, y: 500 } } : node,
+    ),
+  );
+  const failed = await walkViewport('✓ "Later"', [initial]);
+  assert.equal(failed.result.verdict, 'FAIL');
+  assert.equal(failed.result.failure!.seen.includes('Outside auxiliary'), false);
+  const visible = await walkViewport('✓ "Auxiliary"', [initial]);
+  assert.equal(visible.result.verdict, 'PASS');
+  const scrolled = await walkViewport('1. Scroll until you see "Later"', [initial, revealed]);
+  assert.equal(scrolled.result.verdict, 'PASS');
+  assert.deepEqual(scrolled.f.actions, ['scroll down']);
+  const waited = await walkViewport('1. Wait for "Later"', [initial, revealed]);
+  assert.equal(waited.result.verdict, 'PASS');
+});
+
+test('nested ScrollView clips intersect Table and CollectionView clips on both axes', async () => {
+  const rect = { x: 0, y: 0, width: 390, height: 844 };
+  for (const type of ['Table', 'CollectionView']) {
+    const nodes: NativeNode[] = [
+      { ref: '@app', type: 'Application', rect },
+      { ref: '@window', type: 'Window', parentIndex: 0, rect },
+      {
+        ref: '@outer',
+        type,
+        parentIndex: 1,
+        rect: { x: 50, y: 100, width: 200, height: 300 },
+      },
+      { ref: '@inner', type: 'ScrollView', parentIndex: 2, rect },
+      {
+        ref: '@later',
+        type: 'StaticText',
+        label: 'Later',
+        parentIndex: 3,
+        rect: { x: 60, y: 500, width: 100, height: 30 },
+      },
+      {
+        ref: '@left',
+        type: 'StaticText',
+        parentIndex: 3,
+        rect: { x: 0, y: 120, width: 30, height: 30 },
+      },
+      {
+        ref: '@right',
+        type: 'StaticText',
+        parentIndex: 3,
+        rect: { x: 260, y: 120, width: 30, height: 30 },
+      },
+      {
+        ref: '@above',
+        type: 'StaticText',
+        parentIndex: 3,
+        rect: { x: 60, y: 50, width: 100, height: 30 },
+      },
+      {
+        ref: '@partial',
+        type: 'StaticText',
+        label: 'Partial',
+        parentIndex: 3,
+        rect: { x: 40, y: 90, width: 100, height: 30 },
+      },
+      {
+        ref: '@zero',
+        type: 'StaticText',
+        parentIndex: 3,
+        rect: { x: 60, y: 120, width: 0, height: 0 },
+      },
+    ];
+    assert.deepEqual([...outsideViewport(nodes)], [4, 5, 6, 7], type);
+    const initial = attested(nodes);
+    const revealed = attested(
+      nodes.map((node) =>
+        node.ref === '@later' ? { ...node, rect: { ...node.rect!, y: 200 } } : node,
+      ),
+    );
+    const failed = await walkViewport('✓ "Later"', [initial]);
+    assert.equal(failed.result.verdict, 'FAIL', type);
+    const visible = await walkViewport('✓ "Partial"', [initial]);
+    assert.equal(visible.result.verdict, 'PASS', type);
+    const scrolled = await walkViewport('1. Scroll until you see "Later"', [initial, revealed]);
+    assert.equal(scrolled.result.verdict, 'PASS', type);
+    assert.deepEqual(scrolled.f.actions, ['scroll down']);
+    const waited = await walkViewport('1. Wait for "Later"', [initial, revealed]);
+    assert.equal(waited.result.verdict, 'PASS', type);
+    const empty = nodes.map((node) =>
+      node.ref === '@inner' ? { ...node, rect: { x: 260, y: 100, width: 100, height: 300 } } : node,
+    );
+    assert.ok(outsideViewport(empty).has(9), `${type}: an empty clip hides zero-size frames`);
+  }
 });

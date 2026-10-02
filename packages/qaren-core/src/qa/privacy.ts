@@ -2,18 +2,6 @@ import type { Element, EvidenceStatus, Screen } from './screen.js';
 
 export const MASK = '•••';
 
-const BULLETS = /^[\s•●∙*]+$/u;
-
-// A placeholder or a run of bullets is not private content.
-// A secure value equal to its placeholder may be a real secret, so only open fields drop it.
-function readable(element: Element, value: string | undefined): value is string {
-  return !!value && !BULLETS.test(value) && (element.secure || value !== element.placeholder);
-}
-
-export function readableValue(element: Element): string | undefined {
-  return readable(element, element.value) ? element.value : undefined;
-}
-
 interface InputPrivacy {
   values: string[];
   nativeLabelMayBeValue: boolean;
@@ -75,10 +63,8 @@ export function capturePrivateScreen(
     if (fact.secure && !fact.associationUnique) unassociatedSecure = true;
     for (const element of fact.elements) {
       if (uncertain) uncertainPrivateInputs.add(element);
-      for (const value of inputPrivacy.get(element)?.values ?? [])
-        if (readable(element, value)) add(value);
-      const shown = readableValue(element);
-      if (shown) add(shown);
+      for (const value of inputPrivacy.get(element)?.values ?? []) add(value);
+      if (element.value) add(element.value);
       if (
         ((fact.labelMayBeValue ?? fact.secure) || nativeLabelMayBeValue(element)) &&
         element.label
@@ -90,10 +76,8 @@ export function capturePrivateScreen(
     for (const element of screen.elements) {
       if (isPossibleInput(element) || element.kind === 'other' || element.value !== undefined) {
         uncertainPrivateInputs.add(element);
-        for (const value of inputPrivacy.get(element)?.values ?? [])
-          if (readable(element, value)) add(value);
-        const shown = readableValue(element);
-        if (shown) add(shown);
+        for (const value of inputPrivacy.get(element)?.values ?? []) add(value);
+        if (element.value) add(element.value);
         if (element.label) add(element.label);
       }
     }
@@ -146,10 +130,7 @@ export function inputValues(screen: Screen, evidenceOnly = false): string[] {
         const data = inputPrivacy.get(e);
         return [
           ...(!evidenceOnly || e.secure
-            ? [
-                ...(data?.values ?? []).filter((value) => readable(e, value)),
-                ...(readableValue(e) ? [readableValue(e)!] : []),
-              ]
+            ? [...(data?.values ?? []).filter(Boolean), ...(e.value ? [e.value] : [])]
             : []),
           ...(data?.nativeLabelMayBeValue && e.label ? [e.label] : []),
         ];
@@ -202,6 +183,15 @@ export class ObservedPrivacy {
     for (const value of privateScreens.get(screen)?.values ?? []) this.substringValues.add(value);
     for (const value of inputValues(screen)) this.observed.add(value);
     for (const value of inputValues(screen, true)) this.concealed.add(value);
+    const text = [
+      ...screen.visibleText,
+      ...screen.elements
+        .filter((element) => !element.offscreen && !element.ref.startsWith('react:'))
+        .flatMap((element) => [element.label ?? '', element.value ?? '']),
+    ];
+    this.sensitivePixels ||= this.modelValues().some(
+      (value) => !!value && text.some((line) => line.includes(value)),
+    );
   }
 
   canScreenshot(): boolean {
