@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import type { Element, Screen, Visibility } from '../../../dist/qa/screen.js';
 import { CHECK } from '../../../dist/qa/questions.js';
-import { EVIDENCE_USE_MS, PHRASE_WAIT_BUDGET_MS } from '../../../dist/qa/timing.js';
+import { PHRASE_WAIT_BUDGET_MS } from '../../../dist/qa/timing.js';
 import { runPlan, SCROLL_ATTEMPTS, WAIT_BUDGET_MS, WAIT_POLL_MS } from '../../../dist/qa/walker.js';
 import { scriptedJudge, walker } from './judgment-fixtures.ts';
 
@@ -109,9 +109,7 @@ test('negative phrase polls exhaust the wait budget without claiming current abs
   assert.equal(result.verdict, 'FAIL');
   assert.match(result.failure?.seen ?? '', /VISIBILITY_UNSURE: ITEM_DEADLINE_EXCEEDED/);
   assert.equal(f.deps.now(), PHRASE_WAIT_BUDGET_MS);
-  // An unchanged screen is re-judged only when its presence evidence stops being usable.
-  assert.equal(f.captures(), Math.floor((PHRASE_WAIT_BUDGET_MS - 1) / EVIDENCE_USE_MS) + 1);
-  assert.equal(f.probes(), PHRASE_WAIT_BUDGET_MS / WAIT_POLL_MS);
+  assert.equal(f.captures(), PHRASE_WAIT_BUDGET_MS / WAIT_POLL_MS);
   assert.equal(result.jev.calls, f.captures());
   assert.deepEqual(f.actions, []);
 });
@@ -129,12 +127,8 @@ test('waits accept visibility only before the item deadline on final polled capt
             if (delayed === 'judge' && index === finalIndex) elapsed = budget + offset;
             return { visibility_1: { type: 'noul', noul: index === finalIndex ? 0.9 : 0.1 } };
           });
-          // Distinct screens keep every poll a judged capture, so only the deadline is under test.
           const f = walker(
-            [
-              ...Array.from({ length: finalIndex }, (_, i) => screen(text(`Loading ${i}`))),
-              screen(text('Welcome')),
-            ],
+            [...Array(finalIndex).fill(screen(text('Loading'))), screen(text('Welcome'))],
             judge,
           );
           f.deps.now = () => elapsed;
@@ -142,8 +136,8 @@ test('waits accept visibility only before the item deadline on final polled capt
             elapsed += ms;
           };
           const capture = f.deps.captureScreen;
-          f.deps.captureScreen = async (options) => {
-            const observed = await capture(options);
+          f.deps.captureScreen = async () => {
+            const observed = await capture();
             if (delayed === 'capture' && f.captures() === finalIndex + 1) elapsed = budget + offset;
             return observed;
           };
@@ -178,10 +172,10 @@ test('wait polling clamps its final sleep and never starts another capture at th
           elapsed += ms + (ms < WAIT_POLL_MS ? oversleep : 0);
         };
         const capture = f.deps.captureScreen;
-        f.deps.captureScreen = async (options) => {
-          await capture(options);
+        f.deps.captureScreen = async () => {
+          await capture();
           if (f.captures() === budget / WAIT_POLL_MS) elapsed = budget - 1;
-          return screen(text(`Loading ${f.captures()}`));
+          return screen(text('Loading'));
         };
         const result = await runPlan(parsePlan(`1. ${line}\n2. Back`).blocks!, f.deps);
         assert.equal(result.verdict, 'FAIL');
@@ -344,11 +338,7 @@ test('an uncertainty re-ask spends the wait budget rather than restarting it', a
   assert.equal(result.verdict, 'FAIL');
   assert.match(result.failure?.seen ?? '', /VISIBILITY_UNSURE: ITEM_DEADLINE_EXCEEDED/);
   assert.equal(f.deps.now(), PHRASE_WAIT_BUDGET_MS);
-  // The re-ask captures twice; the unchanged screen is then re-judged once per evidence-use window.
-  assert.equal(
-    f.captures(),
-    2 + Math.floor((PHRASE_WAIT_BUDGET_MS - WAIT_POLL_MS - 1) / EVIDENCE_USE_MS),
-  );
+  assert.equal(f.captures(), PHRASE_WAIT_BUDGET_MS / WAIT_POLL_MS);
   assert.equal(result.jev.calls, f.captures());
 });
 
@@ -400,8 +390,8 @@ test('a visibility re-ask cannot pass when its capture or judgment exhausts the 
       elapsed += ms;
     };
     const capture = f.deps.captureScreen;
-    f.deps.captureScreen = async (options) => {
-      const observed = await capture(options);
+    f.deps.captureScreen = async () => {
+      const observed = await capture();
       if (f.captures() === 2 && delayed === 'capture') elapsed = PHRASE_WAIT_BUDGET_MS;
       return observed;
     };
@@ -576,7 +566,6 @@ test('a heading wait keeps polling ordinary text for its whole budget and ends u
   assert.match(result.failure?.seen ?? '', /VISIBILITY_UNSURE/);
   assert.doesNotMatch(result.failure?.seen ?? '', /did not appear/);
   assert.equal(f.captures(), PHRASE_WAIT_BUDGET_MS / WAIT_POLL_MS);
-  assert.equal(f.probes(), 0);
   assert.equal(result.jev.calls, 0);
   assert.deepEqual(f.actions, []);
 });

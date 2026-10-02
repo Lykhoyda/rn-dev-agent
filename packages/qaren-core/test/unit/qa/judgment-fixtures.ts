@@ -94,16 +94,10 @@ export function walker(
   const actions: string[] = [];
   const rows: LedgerRow[] = [];
   let captures = 0;
-  let probes = 0;
   let time = 0;
   const deps: WalkerDeps = {
     judge,
-    // A probe reads the screen the next capture would see without advancing the script.
-    async captureScreen(options) {
-      if (options?.probe) {
-        probes++;
-        return screens[Math.min(captures, screens.length - 1)];
-      }
+    async captureScreen() {
       return screens[Math.min(captures++, screens.length - 1)];
     },
     async press(ref) {
@@ -137,5 +131,5 @@ export function walker(
       rows.push(row);
     },
   };
-  return { deps, actions, rows, captures: () => captures, probes: () => probes };
+  return { deps, actions, rows, captures: () => captures };
 }

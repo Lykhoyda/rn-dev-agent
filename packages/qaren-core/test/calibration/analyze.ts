@@ -55,8 +55,7 @@ export function analyze(events: RecordedTimingEvent[], ledger: WalkResult): Cali
   const manifest = schedule();
   const select = (stage: TimingStage, edge: RecordedTimingEvent['edge'] = 'point') =>
     events.filter((e) => e.stage === stage && e.edge === edge);
-  // Probes only detect an unchanged screen; acquisition and use rules apply to judged captures.
-  const captures = select('capture', 'end').filter((c) => !c.probe);
+  const captures = select('capture', 'end');
   const authorizations = select('authorization');
   const counts = {
     captures: captures.length,

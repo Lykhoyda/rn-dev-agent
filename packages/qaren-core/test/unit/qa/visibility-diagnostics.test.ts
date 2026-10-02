@@ -91,10 +91,9 @@ test('join → resolve → walker reports only the first visibility blocker with
   assert.equal(judge.requests.length, 0);
   const blockers = events.filter((event) => event.visibilityBlocker !== undefined);
   assert.equal(blockers.length, 1);
-  // Observation 1 is the probe a phrase wait takes before its first judged capture.
   assert.deepEqual(blockers[0], {
     line: 1,
-    observation: 2,
+    observation: 1,
     stage: 'decision',
     code: 'SCREEN_EVIDENCE_INCOMPLETE',
     at: 0,

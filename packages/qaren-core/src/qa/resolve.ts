@@ -189,7 +189,6 @@ interface AssertionQuestion {
 }
 
 const HEADING_REQUEST = /\b(?:headings?|headers?|titles?)\b/i;
-export const isHeadingRequest = (text: string): boolean => HEADING_REQUEST.test(text);
 
 // Recognizable unsupported traits only; this is not a complete natural-language parser.
 const UNSUPPORTED_VISIBILITY_REQUIREMENTS = [
@@ -225,7 +224,7 @@ function prepareAssertion(
       reason: 'no established assertion contribution is available',
       ...(projected.diagnostic ? { diagnostic: projected.diagnostic } : {}),
     };
-  const headingRequest = isHeadingRequest(text);
+  const headingRequest = HEADING_REQUEST.test(text);
   const declaredOnly = /\b(?:accessibility|accessible|declared|semantic|ax)\b/i.test(text);
   const headingElements = headingRequest
     ? projected.elements.filter(

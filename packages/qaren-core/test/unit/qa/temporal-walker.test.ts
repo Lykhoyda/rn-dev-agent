@@ -216,8 +216,8 @@ test('all target-free mutations carry the preceding observation deadline', async
     );
     f.deps.now = () => now;
     const capture = f.deps.captureScreen;
-    f.deps.captureScreen = async (options) => {
-      const result = await capture(options);
+    f.deps.captureScreen = async () => {
+      const result = await capture();
       now += 20_000;
       return result;
     };
@@ -247,8 +247,8 @@ test('judgment deadline includes joined capture duration and does not enter mode
   );
   f.deps.now = () => now;
   const capture = f.deps.captureScreen;
-  f.deps.captureScreen = async (options) => {
-    const result = await capture(options);
+  f.deps.captureScreen = async () => {
+    const result = await capture();
     now += 20_000;
     return result;
   };
@@ -360,8 +360,8 @@ test('late host finalization refuses before judgment while remembering private v
   );
   f.deps.now = () => now;
   const capture = f.deps.captureScreen;
-  f.deps.captureScreen = async (options) => {
-    const result = await capture(options);
+  f.deps.captureScreen = async () => {
+    const result = await capture();
     now += 22_000;
     return result;
   };
@@ -526,9 +526,9 @@ test('cancellation stops capture, judgment acceptance, refresh, and screenshots 
     f.deps.cancelled = () => cancelled;
     f.deps.now = () => now;
     const capture = f.deps.captureScreen;
-    f.deps.captureScreen = async (options) => {
-      const result = await capture(options);
-      if (stage === 'capture' && !options?.probe) cancelled = true;
+    f.deps.captureScreen = async () => {
+      const result = await capture();
+      if (stage === 'capture') cancelled = true;
       return result;
     };
     f.deps.sleep = async () => {
@@ -634,12 +634,6 @@ test('item expiry wins an evidence deadline tie and starts no screenshot or next
   f.deps.screenshot = async () => {
     shots++;
     return 'unexpected.png';
-  };
-  // Distinct screens keep every poll a judged capture, so the tie lands on a judgment.
-  const capture = f.deps.captureScreen;
-  f.deps.captureScreen = async (options) => {
-    await capture(options);
-    return screen([element('@one', `Loading ${f.captures()}`)]);
   };
   f.deps.judge = {
     calls: [],

@@ -1,120 +1,38 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parsePlan } from '../../../dist/qa/plan.js';
-import type { Element, Screen } from '../../../dist/qa/screen.js';
-import { EVIDENCE_USE_MS, type TimingEvent } from '../../../dist/qa/timing.js';
+import type { NativePresence } from '../../../dist/qa/native-presence.js';
+import { join, screenSignature, type NativeNode, type Screen } from '../../../dist/qa/screen.js';
+import { PHRASE_WAIT_BUDGET_MS } from '../../../dist/qa/timing.js';
 import { runPlan, WAIT_POLL_MS } from '../../../dist/qa/walker.js';
-import { scriptedJudge, walker } from './judgment-fixtures.ts';
+import { element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
 
-const text = (label: string): Element => ({
-  ref: '@text',
-  label,
-  kind: 'text',
-  hittable: true,
-  disabled: false,
-  secure: false,
-  offscreen: false,
-  semantic: { press: 'unsupported', fill: 'unsupported', visibility: 'visible' },
-});
-const shown = (label: string): Screen => ({
-  front: 'app',
-  elements: [text(label)],
-  visibleText: [label],
-  coverage: { native: 'complete', react: 'complete' },
-});
+const shown = (label: string): Screen => screen([element('@text', label, { kind: 'text' })]);
 
-// Visibility answers by screen text: 'Welcome' is present, anything else is not yet.
-function judge() {
-  return scriptedJudge((questions, _index, state) => {
-    const welcome = JSON.stringify(state).includes('Welcome');
-    return Object.fromEntries(
-      Object.keys(questions).map((id) => [id, { type: 'noul', noul: welcome ? 0.9 : 0.1 }]),
-    );
-  });
-}
-
-function timedWalker(screens: Screen[]) {
-  const j = judge();
-  const f = walker(screens, j);
-  const presence: boolean[] = [];
-  const events: TimingEvent[] = [];
+function fixture(initial: Screen) {
+  const judge = scriptedJudge((questions, _index, state) =>
+    Object.fromEntries(
+      Object.keys(questions).map((id) => [
+        id,
+        { type: 'noul', noul: JSON.stringify(state).includes('Welcome') ? 0.9 : 0.1 },
+      ]),
+    ),
+  );
+  const f = walker([initial], judge);
+  const modes: boolean[] = [];
   const capture = f.deps.captureScreen;
   f.deps.captureScreen = async (options) => {
-    if (!options?.probe) presence.push(options?.platformPresence === true);
+    modes.push(options?.platformPresence === true);
     return capture(options);
   };
-  f.deps.timing = (event) => events.push(event);
-  return { f, judge: j, presence, events };
+  return { f, judge, modes };
 }
 
-test('an unchanged screen gets one presence capture and then only probes until it changes', async () => {
-  const loading = shown('Loading');
-  const { f, judge: j, presence, events } = timedWalker([loading]);
-  let polls = 0;
-  const sleep = f.deps.sleep;
-  f.deps.sleep = async (ms) => {
-    polls++;
-    await sleep(ms);
-  };
-  const capture = f.deps.captureScreen;
-  f.deps.captureScreen = async (options) => {
-    const screen = await capture(options);
-    return polls >= 6 ? shown('Welcome') : screen;
-  };
-  const result = await runPlan(parsePlan('1. Wait for the welcome text').blocks!, f.deps);
-  assert.equal(result.verdict, 'PASS');
-  assert.deepEqual(presence, [true, true]);
-  assert.equal(j.calls.length, 2);
-  assert.equal(f.deps.now(), 6 * WAIT_POLL_MS);
-  const skipped = events.filter((e) => e.stage === 'cache-reuse');
-  assert.equal(skipped.length, 5);
-  assert.ok(skipped.every((e) => e.observation === skipped[0].observation));
-});
+function assertNextPoll(now: number, changedAt: number): void {
+  assert.ok(now >= changedAt && now <= changedAt + WAIT_POLL_MS);
+}
 
-test('a changed screen signature takes a fresh presence capture before any positive judgment', async () => {
-  const { f, judge: j, presence, events } = timedWalker([shown('Loading'), shown('Welcome')]);
-  const result = await runPlan(parsePlan('1. Wait for the welcome text').blocks!, f.deps);
-  assert.equal(result.verdict, 'PASS');
-  assert.deepEqual(presence, [true, true]);
-  assert.equal(j.calls.length, 2);
-  assert.equal(f.probes(), 2);
-  assert.equal(events.filter((e) => e.stage === 'cache-reuse').length, 0);
-  const positive = events.filter((e) => e.stage === 'decision' && e.edge === 'end').at(-1)!;
-  const judged = events
-    .filter((e) => e.stage === 'capture' && e.edge === 'end' && !e.probe)
-    .at(-1)!;
-  assert.equal(positive.observation, judged.observation);
-  assert.equal(judged.presence, 1);
-});
-
-test('presence evidence that stops being usable is recaptured on an unchanged screen', async () => {
-  const { f, judge: j, presence } = timedWalker([shown('Loading')]);
-  let elapsed = 0;
-  f.deps.now = () => elapsed;
-  f.deps.sleep = async (ms) => {
-    elapsed += ms;
-  };
-  const capture = f.deps.captureScreen;
-  f.deps.captureScreen = async (options) => {
-    const screen = await capture(options);
-    return !options?.probe && presence.length === 3 ? shown('Welcome') : screen;
-  };
-  const result = await runPlan(parsePlan('1. Wait for the welcome text').blocks!, f.deps);
-  assert.equal(result.verdict, 'PASS');
-  assert.deepEqual(presence, [true, true, true]);
-  assert.equal(j.calls.length, 3);
-  assert.equal(elapsed, 2 * EVIDENCE_USE_MS);
-});
-
-test('quoted waits never probe; their polls already use plain captures', async () => {
-  const { f, presence } = timedWalker([shown('Loading'), shown('Welcome')]);
-  const result = await runPlan(parsePlan('1. Wait for "Welcome"').blocks!, f.deps);
-  assert.equal(result.verdict, 'PASS');
-  assert.deepEqual(presence, [false, false]);
-  assert.equal(f.probes(), 0);
-});
-
-test('a heading wait observes a transient title change on the next poll without probes', async () => {
+test('a transient title qualification is observed on the next heading poll', async () => {
   const body = shown('Welcome');
   const title = structuredClone(body);
   title.elements[0].semantic!.nativePresence = {
@@ -128,16 +46,99 @@ test('a heading wait observes a transient title change on the next poll without 
     anchorRef: '@text',
     bodyRefs: [],
   };
-  const { f, judge: j, presence } = timedWalker([body]);
+  assert.equal(screenSignature(body), screenSignature(title));
+  const { f, judge, modes } = fixture(body);
   const capture = f.deps.captureScreen;
   f.deps.captureScreen = async (options) => {
     await capture(options);
-    return !options?.probe && f.deps.now() >= 1_000 && f.deps.now() < 8_000 ? title : body;
+    return f.deps.now() >= 1_000 && f.deps.now() < 8_000 ? title : body;
   };
   const result = await runPlan(parsePlan('1. Wait for the welcome heading').blocks!, f.deps);
   assert.equal(result.verdict, 'PASS');
-  assert.ok(f.deps.now() >= 1_000 && f.deps.now() <= 1_000 + WAIT_POLL_MS);
-  assert.deepEqual(presence, [true, true, true]);
-  assert.equal(f.probes(), 0);
-  assert.equal(j.calls.length, 1);
+  assertNextPoll(f.deps.now(), 1_000);
+  assert.deepEqual(modes, [true, true, true]);
+  assert.equal(judge.calls.length, 1);
+});
+
+test('geometry-only scroll clipping changes are observed on the next phrase poll', async () => {
+  const geometry = (y: number) => {
+    const nodes: NativeNode[] = [
+      { ref: '@app', type: 'Application', rect: { x: 0, y: 0, width: 400, height: 800 } },
+      {
+        ref: '@window', type: 'Window', parentIndex: 0,
+        rect: { x: 0, y: 0, width: 400, height: 800 },
+      },
+      {
+        ref: '@scroll', type: 'ScrollView', parentIndex: 1,
+        rect: { x: 0, y: 100, width: 400, height: 100 },
+      },
+      {
+        ref: '@text', type: 'StaticText', parentIndex: 2, label: 'Welcome', hittable: true,
+        rect: { x: 10, y, width: 100, height: 20 },
+      },
+      {
+        ref: '@loading', type: 'StaticText', parentIndex: 1, label: 'Loading', hittable: true,
+        rect: { x: 10, y: 400, width: 100, height: 20 },
+      },
+    ];
+    const presence: NativePresence = {
+      source: 'xcui-live',
+      nodes: nodes.map((_, index) => ({
+        status: index === 4 || (index === 3 && y === 150) ? 'observed' : 'unknown',
+        labelSource: 'direct',
+      })),
+    };
+    const coverage = { native: 'complete', react: 'complete' } as const;
+    return {
+      plain: join(nodes, [], 'app', coverage),
+      observed: join(nodes, [], 'app', coverage, undefined, presence),
+    };
+  };
+  const clipped = geometry(210);
+  const visible = geometry(150);
+  assert.equal(screenSignature(clipped.plain), screenSignature(visible.plain));
+  assert.equal(clipped.observed.elements[3].semantic?.visibility, 'offscreen');
+  assert.equal(visible.observed.elements[3].semantic?.visibility, 'visible');
+  const { f, judge, modes } = fixture(clipped.observed);
+  const capture = f.deps.captureScreen;
+  f.deps.captureScreen = async (options) => {
+    await capture(options);
+    const current = f.deps.now() >= 1_000 && f.deps.now() < 8_000 ? visible : clipped;
+    return options?.platformPresence ? current.observed : current.plain;
+  };
+  const result = await runPlan(parsePlan('1. Wait for the welcome text').blocks!, f.deps);
+  assert.equal(result.verdict, 'PASS');
+  assertNextPoll(f.deps.now(), 1_000);
+  assert.deepEqual(modes, [true, true, true]);
+  assert.equal(judge.calls.length, 3);
+});
+
+test('Welcome returning after a Loading capture is observed at the next poll', async () => {
+  const { f, judge, modes } = fixture(shown('Welcome'));
+  let presenceCaptures = 0;
+  const capture = f.deps.captureScreen;
+  f.deps.captureScreen = async (options) => {
+    await capture(options);
+    if (!options?.platformPresence) return shown('Welcome');
+    presenceCaptures++;
+    return presenceCaptures === 1 || f.deps.now() >= 8_000 ? shown('Loading') : shown('Welcome');
+  };
+  const result = await runPlan(parsePlan('1. Wait for the welcome text').blocks!, f.deps);
+  assert.equal(result.verdict, 'PASS');
+  assertNextPoll(f.deps.now(), WAIT_POLL_MS);
+  assert.deepEqual(modes, [true, true]);
+  assert.equal(judge.calls.length, 2);
+  assert.ok(JSON.stringify(judge.requests[0].state).includes('Loading'));
+  assert.ok(JSON.stringify(judge.requests[1].state).includes('Welcome'));
+});
+
+test('an unchanged screen receives one presence capture and judgment per poll', async () => {
+  const { f, judge, modes } = fixture(shown('Loading'));
+  const result = await runPlan(parsePlan('1. Wait for the welcome text').blocks!, f.deps);
+  assert.equal(result.verdict, 'FAIL');
+  assert.match(result.failure?.seen ?? '', /ITEM_DEADLINE_EXCEEDED/);
+  assert.equal(f.deps.now(), PHRASE_WAIT_BUDGET_MS);
+  assert.equal(f.captures(), PHRASE_WAIT_BUDGET_MS / WAIT_POLL_MS);
+  assert.equal(judge.calls.length, f.captures());
+  assert.deepEqual(modes, Array(f.captures()).fill(true));
 });

@@ -52,7 +52,6 @@ export interface TimingEvent {
   count?: number;
   nextLine?: number;
   presence?: number;
-  probe?: number;
   budgetMs?: number;
   appliedBudgetMs?: number;
 }
@@ -87,7 +86,6 @@ export function cleanTimingEvent(value: unknown): TimingEvent | undefined {
     'count',
     'nextLine',
     'presence',
-    'probe',
     'budgetMs',
     'appliedBudgetMs',
   ] as const) {
