@@ -194,3 +194,24 @@ test('Android producer counts skipped XML nodes and attests only after end-of-do
   );
   assert.doesNotMatch(snapshot, /\bbreak\b|nodes\.take\(/);
 });
+
+test('Android input text reported as a label stays masked with its echo', async () => {
+  const secret = 'prefilled-c@example.test';
+  const data = {
+    ...complete(),
+    nodes: [
+      node,
+      { ...node, index: 1, type: 'android.widget.EditText', label: secret, identifier: 'email' },
+      { ...node, index: 2, type: 'android.widget.TextView', label: `Sent to ${secret}` },
+    ],
+  };
+  const f = walker(
+    [],
+    scriptedJudge(() => assert.fail('literal plans must not call Jev')),
+  );
+  f.deps.captureScreen = () => capture(data);
+  const result = await runPlan(parsePlan('✓ "Nothing like this"').blocks!, f.deps);
+  assert.equal(result.verdict, 'FAIL');
+  assert.match(result.failure!.seen, /Sent to •••/);
+  assert.equal(JSON.stringify({ result, rows: f.rows }).includes(secret), false);
+});
