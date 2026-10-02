@@ -5,6 +5,7 @@ use qaren::failure::{Failure, FailureCode};
 use qaren::redact::PRIVATE_KEY_WITHHELD;
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -621,4 +622,51 @@ fn subprocess_fixture_worker() {
             &dir.join("detached.log"),
         )
         .unwrap();
+}
+
+#[test]
+fn a_live_tail_never_copies_a_body_whose_mention_awaits_its_newline() {
+    let dir = common::temp_repo();
+    let log = dir.join("live.log");
+    let mut runner = RealRunner::with_log_executable(env!("CARGO_BIN_EXE_qaren").into());
+    let script = format!(
+        "printf -- '-----BEGIN PRIVATE KEY-----' >&2\nprintf '{FAKE_BODY}1\\n{FAKE_BODY}2\\n'\n: > done\nsleep 30"
+    );
+    let spawned = runner.spawn_group(&shell(&script, &dir), &log).unwrap();
+    until(|| dir.join("done").exists());
+    runner.flush_logs().unwrap();
+    let failure = Failure::new(
+        "metro",
+        FailureCode::TunnelFailed,
+        "not ready".to_string(),
+        "inspect the log",
+    )
+    .with_evidence(vec![qaren::commands::log_tail(&log, 25)]);
+    persist_failure(&dir, "liverun", failure);
+    unsafe { libc::kill(-spawned.pgid, libc::SIGKILL) };
+    let recorded =
+        std::fs::read_to_string(qaren::runrecord::RunRecord::path(&dir, "liverun")).unwrap();
+    assert!(!recorded.contains(FAKE_BODY), "{recorded}");
+    assert!(recorded.contains(PRIVATE_KEY_WITHHELD), "{recorded}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_command_log_that_cannot_be_truncated_is_refused() {
+    let dir = common::temp_repo();
+    let fifo = dir.join("collector.fifo");
+    assert!(Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap()
+        .success());
+    let mut runner = RealRunner::with_log_executable(env!("CARGO_BIN_EXE_qaren").into());
+    let reader = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&fifo)
+        .unwrap();
+    assert!(runner.spawn_group(&shell("true", &dir), &fifo).is_err());
+    drop(reader);
+    std::fs::remove_dir_all(dir).unwrap();
 }

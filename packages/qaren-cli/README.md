@@ -461,8 +461,10 @@ build_and_ready — so revisit this once live reuse is measurable.
   deliberately fail-closed: harmless output that names a private key (an ssh
   permissions warning, for example) is withheld too. Oversized log lines are
   still withheld, and API-key redaction still applies to retained diagnostics
-  and log lines. Key material printed with no mention of a private key at all
-  cannot be recognized.
+  and log lines. The log helper checks every byte as it arrives and only
+  accepts a regular file. Key material cannot be recognized before something
+  mentions a private key, so a body printed with no such mention, or copied
+  out before its mention arrives, is not withheld.
 - **Local listeners are never adopted.** The farm-advertised adb port is
   preflighted free on this host *before* the lease is claimed (a local
   emulator commonly owns 5555), and a listener on the tunnel or private adb

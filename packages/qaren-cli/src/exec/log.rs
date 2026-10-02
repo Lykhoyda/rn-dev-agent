@@ -45,6 +45,10 @@ impl LogDrain {
             .create(true)
             .append(true)
             .open(path)?;
+        // Withholding truncates this command's output away, which only a regular file allows.
+        if !log.metadata()?.is_file() {
+            return Err(io::Error::other("command log must be a regular file"));
+        }
         let (input, output) = UnixStream::pair()?;
         let (control, child_control) = UnixStream::pair()?;
         control.set_read_timeout(Some(DRAIN_TIMEOUT))?;
@@ -138,22 +142,20 @@ struct Sink {
 }
 
 impl Sink {
+    fn withhold(&mut self) -> io::Result<()> {
+        self.withheld = true;
+        self.file.set_len(self.start)?;
+        self.file
+            .write_all(crate::redact::PRIVATE_KEY_WITHHELD.as_bytes())?;
+        self.file.write_all(b"\n")
+    }
+
     fn line(&mut self, bytes: &[u8]) -> io::Result<()> {
         if self.withheld {
             return Ok(());
         }
-        let text = String::from_utf8_lossy(bytes);
-        if crate::redact::names_private_key(&text) {
-            self.withheld = true;
-            self.file.set_len(self.start)?;
-            self.file
-                .write_all(crate::redact::PRIVATE_KEY_WITHHELD.as_bytes())?;
-            self.file.write_all(b"\n")?;
-        } else {
-            self.file
-                .write_all(crate::redact::redact_plain(&text).as_bytes())?;
-        }
-        self.file.flush()
+        self.file
+            .write_all(crate::redact::redact_plain(&String::from_utf8_lossy(bytes)).as_bytes())
     }
 }
 
@@ -164,11 +166,23 @@ struct Lines {
 }
 
 impl Lines {
+    // Checked per byte, so a mention still waiting for its newline withholds before any checkpoint.
     fn write(&mut self, bytes: &[u8], sink: &mut Sink) -> io::Result<()> {
         for &byte in bytes {
+            if sink.withheld {
+                return Ok(());
+            }
             self.pending.push(byte);
+            if self.pending.len() >= 11
+                && self.pending[self.pending.len() - 11..].eq_ignore_ascii_case(b"private key")
+            {
+                return sink.withhold();
+            }
             if self.pending.len() == MAX_LINE {
-                self.withhold_oversized(sink)?;
+                if !std::mem::replace(&mut self.oversized, true) {
+                    sink.line(b"[oversized log line withheld]\n")?;
+                }
+                self.pending.drain(..MAX_LINE - 10);
             }
             if byte == b'\n' || byte == b'\r' {
                 self.finish(sink)?;
@@ -177,27 +191,12 @@ impl Lines {
         Ok(())
     }
 
-    // Keeps a phrase-length overlap so a mention split across the cut is still found.
-    fn withhold_oversized(&mut self, sink: &mut Sink) -> io::Result<()> {
-        if crate::redact::names_private_key(&String::from_utf8_lossy(&self.pending)) {
-            return sink.line(&self.pending);
-        }
-        if !std::mem::replace(&mut self.oversized, true) {
-            sink.line(b"[oversized log line withheld]\n")?;
-        }
-        self.pending.drain(..self.pending.len() - 10);
-        Ok(())
-    }
-
     fn finish(&mut self, sink: &mut Sink) -> io::Result<()> {
         let pending = std::mem::take(&mut self.pending);
-        if !std::mem::take(&mut self.oversized) {
-            return sink.line(&pending);
+        if std::mem::take(&mut self.oversized) {
+            return Ok(());
         }
-        if crate::redact::names_private_key(&String::from_utf8_lossy(&pending)) {
-            return sink.line(&pending);
-        }
-        Ok(())
+        sink.line(&pending)
     }
 }
 
