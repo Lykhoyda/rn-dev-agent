@@ -191,7 +191,9 @@ qaren publish <run-id> --verdict-file verdict.md --json
 same `.qaren/config.yaml` and plan, but walks a detached worktree at the pull
 request head under `~/.qaren/runs/<run-id>/wt`. It refuses unless origin's
 `pull/<n>/head` is the head GitHub reports and the worktree is clean at that
-commit, both before the lease and again before the walk. On iOS the simulator
+commit, both before the lease and again before the walk. Fetch verification uses
+a per-run local ref rather than shared `FETCH_HEAD`, so concurrent PR runs
+verify their own fetched commits. On iOS the simulator
 screen is recorded from just before the walk to just after it and encoded to
 `media/video.mp4` (H.264, 30 fps); without `ffmpeg`, or when a capture cannot
 start, the run continues and the receipt's `video` outcome says why. Blocks the
@@ -199,6 +201,12 @@ walk saved are copied to `blocks/` before the worktree is removed. If the pull
 request moved during the run, the receipt names the tested commit in
 `tested_older_commit`. Like `check`, `pr` currently refuses Android with
 `PLATFORM_UNSUPPORTED`.
+
+An unproven recorder shutdown retains recorder ownership and the device lease,
+including when recording startup fails. Teardown retries an unresolved stop;
+the receipt's `cleanup.recorder` reports that final outcome. If shutdown remains
+unresolved, recover with `qaren cleanup <run-id>` as described under
+[iOS admission and cleanup](#ios-admission-and-cleanup).
 
 `qaren publish` posts one comment: the sentence from `--verdict-file`, the
 tested commit, an eligible available video, the plan with ✓/✗ per walked line,
