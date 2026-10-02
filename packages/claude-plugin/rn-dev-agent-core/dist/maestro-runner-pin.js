@@ -7931,10 +7931,14 @@ function buildMaestroFlow(opts, commands) {
   if (opts.appId !== void 0) {
     assertValidBundleId(opts.appId, "appId header");
   }
-  for (const cmd2 of commands) {
+  for (const cmd2 of [...opts.onFlowStart ?? [], ...commands]) {
     validateCommand(cmd2);
   }
-  const headerYaml = opts.appId ? import_yaml.default.stringify({ appId: opts.appId }) : "";
+  const header = {
+    ...opts.appId ? { appId: opts.appId } : {},
+    ...opts.onFlowStart?.length ? { onFlowStart: opts.onFlowStart } : {}
+  };
+  const headerYaml = Object.keys(header).length > 0 ? import_yaml.default.stringify(header) : "";
   const bodyYaml = import_yaml.default.stringify(commands);
   return `${headerYaml}---
 ${bodyYaml}`;
@@ -16596,6 +16600,25 @@ function attributeOriginFailureToFlowRelaunch(error, relaunch) {
   });
   return attributed;
 }
+function stageFlowOptions(stage) {
+  if (!stage.appId)
+    return {};
+  if (stage.platform !== "ios" || !stage.requiresOrigin || !stage.devClientLaunchUrl) {
+    return { appId: stage.appId };
+  }
+  return {
+    appId: stage.appId,
+    onFlowStart: [
+      {
+        launchApp: {
+          appId: stage.appId,
+          permissions: { all: "unset" },
+          arguments: { "-initialUrl": stage.devClientLaunchUrl }
+        }
+      }
+    ]
+  };
+}
 function planMaestroAuthorityStages(commands) {
   const stages = [];
   let pending = [];
@@ -17447,7 +17470,12 @@ function createMaestroRunHandler(deps = {}) {
         };
         try {
           const stageResult = await (async () => {
-            writeFileSync6(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
+            writeFileSync6(flowFile, buildMaestroFlow(stageFlowOptions({
+              platform,
+              appId: headerAppId,
+              requiresOrigin: plannedStageMeta[ledgerStageIndex]?.requiresOrigin === true,
+              devClientLaunchUrl: args.devClientLaunchUrl
+            }), [...commands]), "utf-8");
             const executeOnce = async (beforeDispatch) => {
               if (flowDeadline - now() <= 0) {
                 const error = new Error("Maestro flow timeout exhausted before the next stage");

@@ -147,20 +147,25 @@ export function containsClearState(value: unknown): boolean {
 
 // ── Builder ─────────────────────────────────────────────────────────
 
+export type MaestroCommand = Record<string, unknown>;
+
 export interface MaestroFlowOptions {
   appId?: string;
+  onFlowStart?: MaestroCommand[];
 }
-
-export type MaestroCommand = Record<string, unknown>;
 
 export function buildMaestroFlow(opts: MaestroFlowOptions, commands: unknown[]): string {
   if (opts.appId !== undefined) {
     assertValidBundleId(opts.appId, 'appId header');
   }
-  for (const cmd of commands) {
+  for (const cmd of [...(opts.onFlowStart ?? []), ...commands]) {
     validateCommand(cmd);
   }
-  const headerYaml = opts.appId ? yaml.stringify({ appId: opts.appId }) : '';
+  const header = {
+    ...(opts.appId ? { appId: opts.appId } : {}),
+    ...(opts.onFlowStart?.length ? { onFlowStart: opts.onFlowStart } : {}),
+  };
+  const headerYaml = Object.keys(header).length > 0 ? yaml.stringify(header) : '';
   const bodyYaml = yaml.stringify(commands);
   return `${headerYaml}---\n${bodyYaml}`;
 }

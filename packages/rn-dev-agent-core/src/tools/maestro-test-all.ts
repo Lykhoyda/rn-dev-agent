@@ -21,8 +21,10 @@ import {
   planMaestroAuthorityStages,
   resolveMaestroFlowAppId,
   runFlowParked,
+  stageFlowOptions,
   type MaestroRunArgs,
 } from './maestro-run.js';
+import { boundDevClientLaunchUrl } from './run-action.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import {
   exactPinRefusal,
@@ -93,6 +95,7 @@ export interface MaestroTestAllDeps {
   now?: () => number;
   resolveEngineStatus?: () => Promise<ReplayEngineStatus | null>;
   runFlow?: (args: MaestroRunArgs) => Promise<ToolResult>;
+  devClientLaunchUrl?: () => string | null;
 }
 
 interface FlowResult {
@@ -365,6 +368,7 @@ export function createMaestroTestAllHandler(
     const completeRunnerPark = deps.completeRunnerPark ?? managedAuthority.completeRunnerPark;
     const reissueInstallReceipt =
       deps.reissueInstallReceipt ?? managedAuthority.reissueInstallReceipt;
+    const devClientLaunchUrl = (deps.devClientLaunchUrl ?? boundDevClientLaunchUrl)() ?? undefined;
     const results: FlowResult[] = [];
     let passed = 0;
     let failed = 0;
@@ -388,6 +392,7 @@ export function createMaestroTestAllHandler(
               reproveManagedOrigin,
               completeRunnerPark,
               reissueInstallReceipt,
+              ...(devClientLaunchUrl ? { devClientLaunchUrl } : {}),
             }),
           );
           const evidence = { ...nested.meta, ...nested.data };
@@ -466,12 +471,15 @@ export function createMaestroTestAllHandler(
         await reissueInstallReceipt();
       };
 
+      const plannedStages = planMaestroAuthorityStages(parsedCommands).stages;
+      let stageCursor = 0;
       try {
         const stageResults = await parkFlow(
           () =>
             executeMaestroAuthorityStages(
               parsedCommands,
               async (commands) => {
+                const requiresOrigin = plannedStages[stageCursor++]?.requiresOrigin === true;
                 if (start + timeout - now() <= 0) {
                   const error = new Error('Maestro flow timeout exhausted before the next stage');
                   Object.assign(error, { code: 'ETIMEDOUT' });
@@ -479,9 +487,15 @@ export function createMaestroTestAllHandler(
                 }
                 writeFileSync(
                   safeFlowFile,
-                  buildMaestroFlow(parsedAppId !== undefined ? { appId: parsedAppId } : {}, [
-                    ...commands,
-                  ]),
+                  buildMaestroFlow(
+                    stageFlowOptions({
+                      platform,
+                      appId: parsedAppId,
+                      requiresOrigin,
+                      devClientLaunchUrl,
+                    }),
+                    [...commands],
+                  ),
                   'utf-8',
                 );
                 const executeRunner = (runnerPath: string, prefixArgs: readonly string[] = []) => {

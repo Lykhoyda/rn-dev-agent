@@ -81,6 +81,7 @@ import {
   type ManagedNativeOriginReproveOptions,
 } from '../session/authority-gate.js';
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
+import { sessionIosDevClientLaunchUrl } from '../session/session-launch-url.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
 import { actionReplayRefusal } from '../domain/action-engine-compat.js';
 import { planIosProofDomains } from '../domain/ios-proof-router.js';
@@ -135,9 +136,22 @@ function boundInstallReceipt(): RunActionInstallReceipt | null {
   }
 }
 
+function boundIosDevClientLaunchUrl(): string | null {
+  try {
+    const status = getWorkerAuthorityRuntime().status();
+    return status.available ? sessionIosDevClientLaunchUrl(status) : null;
+  } catch {
+    return null;
+  }
+}
+
 // Use attested build provenance; bare and unmanaged replay retain reinstall support.
 export function isDevClientLaunchShape(install: RunActionInstallReceipt | null): boolean {
   return install?.buildKind === 'expo';
+}
+
+export function boundDevClientLaunchUrl(): string | null {
+  return isDevClientLaunchShape(boundInstallReceipt()) ? boundIosDevClientLaunchUrl() : null;
 }
 
 export const DEV_CLIENT_CLEARSTATE_REFUSAL =
@@ -550,6 +564,7 @@ export interface RunActionDeps {
   reissueInstallReceipt?: (args: RunActionArgs) => Promise<void>;
   /** GH #705: the session's attested install receipt, for appFile auto-resolution. */
   installReceipt?: () => RunActionInstallReceipt | null;
+  devClientLaunchUrl?: () => string | null;
   resolveAppFile?: (appId: string, deviceId: string) => string | null;
   engineStatus?: () => Promise<ReplayEngineStatus | null>;
 }
@@ -583,6 +598,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
   const reproveManagedOrigin = deps.reproveManagedOrigin ?? reproveManagedNativeOrigin;
   const reissueInstallReceipt = deps.reissueInstallReceipt ?? reissueManagedInstallAuthority;
   const installReceipt = deps.installReceipt ?? boundInstallReceipt;
+  const iosDevClientLaunchUrl = deps.devClientLaunchUrl ?? boundIosDevClientLaunchUrl;
   const resolveAppFile =
     deps.resolveAppFile ??
     ((appId: string, deviceId: string) => resolveIosAppFile(appId, { deviceId }));
@@ -683,6 +699,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       iosProofPlan.segments.some((segment) => segment.domain === 'xctest-native');
 
     const install = installReceipt();
+    const devClientLaunchUrl = isDevClientLaunchShape(install) ? iosDevClientLaunchUrl() : null;
     // Refuse before compatibility advice or any runner, claim, or park operation.
     if (isDevClientLaunchShape(install) && containsClearState(preflightCommands)) {
       return failResult(DEV_CLIENT_CLEARSTATE_REFUSAL, 'DEV_CLIENT_CLEARSTATE_REFUSED', {
@@ -854,6 +871,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
           reissueInstallReceipt: () => reissueInstallReceipt(args),
           devClientReplay: isDevClientLaunchShape(install),
+          ...(devClientLaunchUrl ? { devClientLaunchUrl } : {}),
         }),
       );
       const firstAttemptMs = Date.now() - tBeforeFirst;
@@ -1311,6 +1329,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
           reissueInstallReceipt: () => reissueInstallReceipt(args),
           devClientReplay: isDevClientLaunchShape(install),
+          ...(devClientLaunchUrl ? { devClientLaunchUrl } : {}),
         }),
       );
       const retryMs = Date.now() - tBeforeRetry;

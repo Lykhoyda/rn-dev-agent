@@ -24046,10 +24046,14 @@ function buildMaestroFlow(opts, commands) {
   if (opts.appId !== void 0) {
     assertValidBundleId(opts.appId, "appId header");
   }
-  for (const cmd of commands) {
+  for (const cmd of [...opts.onFlowStart ?? [], ...commands]) {
     validateCommand(cmd);
   }
-  const headerYaml = opts.appId ? import_yaml2.default.stringify({ appId: opts.appId }) : "";
+  const header = {
+    ...opts.appId ? { appId: opts.appId } : {},
+    ...opts.onFlowStart?.length ? { onFlowStart: opts.onFlowStart } : {}
+  };
+  const headerYaml = Object.keys(header).length > 0 ? import_yaml2.default.stringify(header) : "";
   const bodyYaml = import_yaml2.default.stringify(commands);
   return `${headerYaml}---
 ${bodyYaml}`;
@@ -81881,6 +81885,25 @@ function attributeOriginFailureToFlowRelaunch(error2, relaunch) {
   });
   return attributed;
 }
+function stageFlowOptions(stage) {
+  if (!stage.appId)
+    return {};
+  if (stage.platform !== "ios" || !stage.requiresOrigin || !stage.devClientLaunchUrl) {
+    return { appId: stage.appId };
+  }
+  return {
+    appId: stage.appId,
+    onFlowStart: [
+      {
+        launchApp: {
+          appId: stage.appId,
+          permissions: { all: "unset" },
+          arguments: { "-initialUrl": stage.devClientLaunchUrl }
+        }
+      }
+    ]
+  };
+}
 function planMaestroAuthorityStages(commands) {
   const stages = [];
   let pending2 = [];
@@ -82732,7 +82755,12 @@ function createMaestroRunHandler(deps = {}) {
         };
         try {
           const stageResult = await (async () => {
-            writeFileSync14(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
+            writeFileSync14(flowFile, buildMaestroFlow(stageFlowOptions({
+              platform,
+              appId: headerAppId,
+              requiresOrigin: plannedStageMeta[ledgerStageIndex]?.requiresOrigin === true,
+              devClientLaunchUrl: args.devClientLaunchUrl
+            }), [...commands]), "utf-8");
             const executeOnce = async (beforeDispatch) => {
               if (flowDeadline - now() <= 0) {
                 const error2 = new Error("Maestro flow timeout exhausted before the next stage");
@@ -83369,6 +83397,26 @@ function getWorkerAuthorityRuntime() {
   return sharedRuntime;
 }
 
+// packages/rn-dev-agent-core/dist/session/session-launch-url.js
+init_project_config();
+function sessionAutoHideDevMenu(status) {
+  return resolveAutoHideDevMenu({
+    readConfig: () => readRnAgentConfig(String(status.source.appRoot))
+  });
+}
+function iosDevClientLaunchUrl(metroPort, hideDevMenu) {
+  const url = `http://127.0.0.1:${String(metroPort)}`;
+  return hideDevMenu ? withDevMenuOnboardingDisabled(url) : url;
+}
+function sessionIosDevClientLaunchUrl(status) {
+  const device = status.bindings.device;
+  const metroPort = status.bindings.metro?.port;
+  if (device?.platform !== "ios" || typeof device.deviceId !== "string" || typeof metroPort !== "number" || !Number.isSafeInteger(metroPort)) {
+    return null;
+  }
+  return iosDevClientLaunchUrl(metroPort, autoHidesDevMenu("ios", device.deviceId, sessionAutoHideDevMenu(status)));
+}
+
 // packages/rn-dev-agent-core/dist/tools/run-action.js
 var strictRunActionPolicy = /* @__PURE__ */ Symbol("strictRunActionPolicy");
 function sealStrictRunAction(args) {
@@ -83389,8 +83437,19 @@ function boundInstallReceipt() {
     return null;
   }
 }
+function boundIosDevClientLaunchUrl() {
+  try {
+    const status = getWorkerAuthorityRuntime().status();
+    return status.available ? sessionIosDevClientLaunchUrl(status) : null;
+  } catch {
+    return null;
+  }
+}
 function isDevClientLaunchShape(install) {
   return install?.buildKind === "expo";
+}
+function boundDevClientLaunchUrl() {
+  return isDevClientLaunchShape(boundInstallReceipt()) ? boundIosDevClientLaunchUrl() : null;
 }
 var DEV_CLIENT_CLEARSTATE_REFUSAL = "Refusing to replay a flow containing clearState on a managed dev-client session. The clearState relaunch uninstalls the app and strands the dev client at its picker, so the relaunched app cannot re-attach to the authority-bound Metro (EG_DEV_CLIENT_CLEARSTATE). No runner was invoked and the app was not touched. Remove launchApp clearState from the action so it starts from the attached app; when a state reset is needed, run device_reset_state before cdp_run_action or cdp_login_prologue.";
 function classifyFailure(failure) {
@@ -83584,6 +83643,7 @@ function createRunActionHandler(deps = {}) {
   const reproveManagedOrigin = deps.reproveManagedOrigin ?? reproveManagedNativeOrigin;
   const reissueInstallReceipt = deps.reissueInstallReceipt ?? reissueManagedInstallAuthority;
   const installReceipt = deps.installReceipt ?? boundInstallReceipt;
+  const iosDevClientLaunchUrl2 = deps.devClientLaunchUrl ?? boundIosDevClientLaunchUrl;
   const resolveAppFile = deps.resolveAppFile ?? ((appId, deviceId) => resolveIosAppFile(appId, { deviceId }));
   const resolveEngineStatus = deps.engineStatus ?? (() => getEngineStatus().catch(() => null));
   const run = async (args, evidence) => {
@@ -83641,6 +83701,7 @@ function createRunActionHandler(deps = {}) {
     const iosProofPlan = replayPlatform === "ios" ? planIosProofDomains(preflightCommands, args.params ?? {}) : null;
     const requiresNativeRuntime = iosProofPlan?.ok !== true || iosProofPlan.segments.some((segment) => segment.domain === "xctest-native");
     const install = installReceipt();
+    const devClientLaunchUrl = isDevClientLaunchShape(install) ? iosDevClientLaunchUrl2() : null;
     if (isDevClientLaunchShape(install) && containsClearState(preflightCommands)) {
       return failResult(DEV_CLIENT_CLEARSTATE_REFUSAL, "DEV_CLIENT_CLEARSTATE_REFUSED", {
         actionId: args.actionId,
@@ -83756,7 +83817,8 @@ function createRunActionHandler(deps = {}) {
         reproveManagedOrigin: (options) => reproveManagedOrigin(args, options),
         completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
         reissueInstallReceipt: () => reissueInstallReceipt(args),
-        devClientReplay: isDevClientLaunchShape(install)
+        devClientReplay: isDevClientLaunchShape(install),
+        ...devClientLaunchUrl ? { devClientLaunchUrl } : {}
       }));
       const firstAttemptMs = Date.now() - tBeforeFirst;
       const firstEnv = parseEnvelope(firstResult, "maestro_run");
@@ -84091,7 +84153,8 @@ function createRunActionHandler(deps = {}) {
         reproveManagedOrigin: (options) => reproveManagedOrigin(args, options),
         completeRunnerPark: (signal) => completeManagedRunnerParkAuthority(args, signal),
         reissueInstallReceipt: () => reissueInstallReceipt(args),
-        devClientReplay: isDevClientLaunchShape(install)
+        devClientReplay: isDevClientLaunchShape(install),
+        ...devClientLaunchUrl ? { devClientLaunchUrl } : {}
       }));
       const retryMs = Date.now() - tBeforeRetry;
       const retryEnv = parseEnvelope(retryResult, "maestro_run");
@@ -93207,6 +93270,7 @@ function createMaestroTestAllHandler(deps = {}) {
     const reproveManagedOrigin = deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
     const completeRunnerPark = deps.completeRunnerPark ?? managedAuthority.completeRunnerPark;
     const reissueInstallReceipt = deps.reissueInstallReceipt ?? managedAuthority.reissueInstallReceipt;
+    const devClientLaunchUrl = (deps.devClientLaunchUrl ?? boundDevClientLaunchUrl)() ?? void 0;
     const results = [];
     let passed = 0;
     let failed = 0;
@@ -93227,7 +93291,8 @@ function createMaestroTestAllHandler(deps = {}) {
             relaunchManagedApp,
             reproveManagedOrigin,
             completeRunnerPark,
-            reissueInstallReceipt
+            reissueInstallReceipt,
+            ...devClientLaunchUrl ? { devClientLaunchUrl } : {}
           }));
           const evidence = { ...nested.meta, ...nested.data };
           const flowPassed = nested.ok === true && nested.data?.passed === true;
@@ -93283,16 +93348,22 @@ function createMaestroTestAllHandler(deps = {}) {
         installReceiptCommitted = true;
         await reissueInstallReceipt();
       };
+      const plannedStages = planMaestroAuthorityStages(parsedCommands).stages;
+      let stageCursor = 0;
       try {
         const stageResults = await parkFlow(() => executeMaestroAuthorityStages(parsedCommands, async (commands) => {
+          const requiresOrigin = plannedStages[stageCursor++]?.requiresOrigin === true;
           if (start + timeout - now() <= 0) {
             const error2 = new Error("Maestro flow timeout exhausted before the next stage");
             Object.assign(error2, { code: "ETIMEDOUT" });
             throw error2;
           }
-          writeFileSync19(safeFlowFile, buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, [
-            ...commands
-          ]), "utf-8");
+          writeFileSync19(safeFlowFile, buildMaestroFlow(stageFlowOptions({
+            platform,
+            appId: parsedAppId,
+            requiresOrigin,
+            devClientLaunchUrl
+          }), [...commands]), "utf-8");
           const executeRunner = (runnerPath, prefixArgs = []) => {
             const remainingTimeout = start + timeout - now();
             if (remainingTimeout <= 0) {
@@ -97510,11 +97581,6 @@ var isSessionRuntimeAbsent = createSessionRuntimeAbsenceProbe({
   listTargets: (metroPort) => getClient().listTargetsExact(metroPort),
   execute: (file, args, options) => execFileP(file, args, options)
 });
-function sessionAutoHideDevMenu(status) {
-  return resolveAutoHideDevMenu({
-    readConfig: () => readRnAgentConfig(String(status.source.appRoot))
-  });
-}
 async function writeIosSimulatorDevMenuDefaults(deviceId, appId) {
   for (const args of iosSimulatorDevMenuDefaultsArgs(deviceId, appId)) {
     await execFileP("xcrun", args);
@@ -97537,7 +97603,7 @@ async function relaunchSessionRuntime(status, stopApp = true) {
       deviceId,
       appId,
       "--initialUrl",
-      launchUrl(`http://127.0.0.1:${String(metroPort)}`)
+      iosDevClientLaunchUrl(metroPort, hideDevMenu)
     ]);
     await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
     return;
