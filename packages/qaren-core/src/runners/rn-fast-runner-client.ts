@@ -957,7 +957,6 @@ export async function terminateRunnerHost(deviceId?: string): Promise<void> {
 const RUNNER_TEST_BUNDLE_ID = `${RUNNER_HOST_BUNDLE_ID}.uitests.xctrunner`;
 const runnerDataContainers = new Map<string, string>();
 
-// The runner writes into its own data container; false lets the caller fall back to simctl.
 export async function captureRunnerScreenshot(
   deviceId: string,
   appId: string,

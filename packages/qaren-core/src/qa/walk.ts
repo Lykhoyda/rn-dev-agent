@@ -11,8 +11,7 @@ import {
   createDevicePressHandler,
   createDeviceScrollHandler,
 } from '../handlers/device-interact.js';
-import { tryRawScreenshot } from '../handlers/device-screenshot-raw.js';
-import { captureRunnerScreenshot } from '../runners/rn-fast-runner-client.js';
+import { captureQaScreenshot } from './screenshot.js';
 import { createDeviceSnapshotHandler } from '../handlers/device-session.js';
 import {
   createDeviceAcceptSystemDialogHandler,
@@ -375,13 +374,9 @@ async function openSession(
     async screenshot(name) {
       if (stop.stopping) return undefined;
       const path = join(request.runDir, name);
-      if (
-        platform === 'ios' &&
-        target.deviceId &&
-        (await stop.track(() => captureRunnerScreenshot(target.deviceId!, appId, path)))
-      )
-        return name;
-      const shot = await stop.track(() => tryRawScreenshot(platform, path, target.deviceId));
+      const shot = await stop.track(() =>
+        captureQaScreenshot(platform, path, target.deviceId, appId),
+      );
       if (!shot.ok) log(`screenshot ${name} failed: ${shot.reason}`);
       return shot.ok ? name : undefined;
     },

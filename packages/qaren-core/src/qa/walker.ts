@@ -915,7 +915,10 @@ export async function walkBlock(
       const shot =
         error instanceof QaDispatchError ||
         error instanceof EvidenceExpired ||
-        (error instanceof ResolutionError && item.kind === 'check' && !item.literal) ||
+        (error instanceof ResolutionError &&
+          (error.code === 'APP_PROCESS_CHANGED' ||
+            error.code === 'APP_PROCESS_UNKNOWN' ||
+            (item.kind === 'check' && !item.literal))) ||
         deps.cancelled?.()
           ? undefined
           : refusal

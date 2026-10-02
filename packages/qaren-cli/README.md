@@ -93,9 +93,10 @@ Masks preserve identity for comparisons and do not prove unobserved value conten
 iOS interactions check app existence immediately and wait only when the app is
 missing; availability and foreground checks remain in place. When the privacy
 gate permits a row screenshot, the walk requests a full-screen image from the
-running iOS runner and copies it into the run evidence directory. Runner refusal,
-an invalid screenshot path or a failed copy falls back to `simctl` capture;
-if that also fails, the row has no screenshot and the failure is logged.
+running iOS runner and copies it into the run evidence directory. Lost or unknown
+app-process identity withholds screenshots. Runner refusal, an invalid screenshot
+path or a failed copy leaves the row without a screenshot and logs a value-free
+unavailable reason; iOS QA never falls back to unrestricted simulator capture.
 
 ```text
 plan preflight -> device selection -> lease + durable run record

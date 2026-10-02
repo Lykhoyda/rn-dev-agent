@@ -253,6 +253,13 @@ test('the iOS process guard: a changed or missing identifier fails the step; not
   ] as const) {
     const dir = root();
     const fake = app();
+    let shots = 0;
+    mkdirSync(join(dir, 'screenshots'));
+    fake.deps.screenshot = async (name) => {
+      shots += 1;
+      writeFileSync(join(dir, name), 'other-app-private-pixels');
+      return name;
+    };
     let captures = 0;
     const capture = fake.deps.captureScreen;
     fake.deps.captureScreen = async (options) => {
@@ -267,18 +274,31 @@ test('the iOS process guard: a changed or missing identifier fails the step; not
     assert.equal(result.failure?.step, blocks(literal)[0].items[0].line, label);
     assert.match(result.failure?.seen ?? '', /APP_PROCESS_CHANGED: the app restarted or crashed/);
     assert.deepEqual(fake.actions, ['press @skip'], label);
+    assert.equal(shots, 0);
+    assert.equal(result.failure?.screenshot, undefined);
+    assert.ok(result.steps.every((row) => row.screenshot === undefined));
     assert.deepEqual(result.blocksWritten, []);
     assert.equal(existsSync(actionFile(dir)), false);
   }
 });
 
 test('the iOS process guard refuses a runner that does not report the app process', async () => {
+  const dir = root();
   const fake = app();
+  const path = join(dir, 'unknown-process.png');
+  let shots = 0;
+  fake.deps.screenshot = async () => {
+    shots += 1;
+    writeFileSync(path, 'other-app-private-pixels');
+    return 'unknown-process.png';
+  };
   fake.deps.appProcess = {};
-  const result = await runPlan(blocks(literal), fake.deps, [], store(root()));
+  const result = await runPlan(blocks(literal), fake.deps, [], store(dir));
   assert.equal(result.verdict, 'REFUSED');
   assert.equal((result as { code?: string }).code, 'APP_PROCESS_UNKNOWN');
   assert.equal(fake.actions.length, 0);
+  assert.equal(shots, 0);
+  assert.equal(existsSync(path), false);
 });
 
 test('without the guard (Android) captures need no process identifier', async () => {
@@ -292,6 +312,13 @@ test('without the guard (Android) captures need no process identifier', async ()
 test('a capture that finds the app process gone fails APP_PROCESS_CHANGED and writes nothing', async () => {
   const dir = root();
   const fake = app();
+  const path = join(dir, 'lost-process.png');
+  let shots = 0;
+  fake.deps.screenshot = async () => {
+    shots += 1;
+    writeFileSync(path, 'other-app-private-pixels');
+    return 'lost-process.png';
+  };
   let captures = 0;
   const capture = fake.deps.captureScreen;
   fake.deps.captureScreen = async (options) => {
@@ -303,6 +330,9 @@ test('a capture that finds the app process gone fails APP_PROCESS_CHANGED and wr
   assert.equal(result.verdict, 'FAIL');
   assert.match(result.failure?.seen ?? '', /APP_PROCESS_CHANGED/);
   assert.equal(existsSync(actionFile(dir)), false);
+  assert.equal(shots, 0);
+  assert.equal(existsSync(path), false);
+  assert.equal(result.failure?.screenshot, undefined);
 });
 
 test('a process change on a capture still records its concealed inputs before reporting', async () => {
