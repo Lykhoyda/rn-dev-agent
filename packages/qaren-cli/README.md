@@ -73,8 +73,15 @@ The [screen projection](../qaren-core/src/qa/screen.ts) owns this policy.
 
 Private input capture is required before walking a screen. If it cannot be
 established safely, the walk refuses with `PRIVATE_INPUT_CAPTURE_UNKNOWN` without
-reinjection or a public-tree fallback. Observed input values are masked before
-Jev requests; private values are also masked in reporting. Once sensitive input
+reinjection or a public-tree fallback. A React private-input read that misses
+its deadline triggers at most one complete fresh capture, including native
+and React evidence; the late first reply is discarded. A second timeout refuses
+without another retry. Malformed payloads and unbound private evidence refuse
+immediately; native and other failures do not trigger this retry. Capture deadlines,
+budgets and item deadlines remain unchanged.
+
+Observed input values are masked before Jev requests; private values are also
+masked in reporting. Once sensitive input
 pixels are observed, screenshots are withheld for the rest of the walk.
 Masks preserve identity for comparisons and do not prove unobserved value content.
 
