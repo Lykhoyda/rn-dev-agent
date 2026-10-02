@@ -11,67 +11,71 @@ pub fn redact_known_key(raw: &str, key: Option<&str>) -> String {
         .replace(key, "[REDACTED_SECRET]")
 }
 
-const PRIVATE_KEY_MASK: &str = "<redacted private key>";
+pub const PRIVATE_KEY_MASK: &str = "<redacted private key>";
 
-// The `-----BEGIN|END ...PRIVATE KEY-----` header nearest the start: (start, end).
-pub(crate) fn private_key_header(raw: &str, kind: &str) -> Option<(usize, usize)> {
-    let marker = format!("-----{kind} ");
-    let mut from = 0;
-    while let Some(found) = raw[from..].find(&marker) {
-        let label = from + found + marker.len();
-        let close = raw[label..].find("-----")?;
-        let end = label + close + 5;
-        if raw[label..label + close].contains("PRIVATE KEY") {
-            return Some((from + found, end));
-        }
-        from = end;
-    }
-    None
+// One line at a time, in arrival order: any line naming a private key is masked. A block
+// opened on any stream suppresses every line until each stream closes its own with `-----END`.
+#[derive(Default)]
+pub struct KeyMasker {
+    open: [bool; 2],
+    pub orphan_end: bool,
 }
 
-fn mask_private_keys(raw: &str, in_key: &mut bool) -> String {
-    let mask = |span: &str, out: &mut String| {
-        let body = span.trim_end_matches(['\r', '\n']);
-        if !body.trim().is_empty() {
-            out.push_str(PRIVATE_KEY_MASK);
-        }
-        out.push_str(&span[body.len()..]);
-    };
-    let mut out = String::with_capacity(raw.len());
-    let mut rest = raw;
-    loop {
-        if let Some((end, _)) = private_key_header(rest, "END") {
-            if private_key_header(rest, "BEGIN").is_none_or(|(begin, _)| end < begin) {
-                *in_key = true;
+fn opens(line: &str) -> bool {
+    line.rfind("BEGIN")
+        .is_some_and(|begin| line.rfind("-----END").is_none_or(|end| end < begin))
+}
+
+impl KeyMasker {
+    pub fn open(&mut self, stream: usize) {
+        self.open[stream] = true;
+    }
+
+    pub fn line(&mut self, stream: usize, line: &str) -> Option<String> {
+        let named = line.contains("PRIVATE KEY");
+        if self.open.iter().any(|open| *open) {
+            if named && line.contains("-----END") {
+                self.open[stream] = opens(line);
+            } else if named && opens(line) {
+                self.open[stream] = true;
             }
+            return None;
         }
-        if *in_key {
-            let Some((end, header_end)) = private_key_header(rest, "END") else {
-                mask(rest, &mut out);
-                return out;
-            };
-            mask(&rest[..end], &mut out);
-            out.push_str(&rest[end..header_end]);
-            rest = &rest[header_end..];
-            *in_key = false;
-            continue;
+        if !named {
+            return Some(line.to_string());
         }
-        let Some((_, header_end)) = private_key_header(rest, "BEGIN") else {
-            out.push_str(rest);
-            return out;
-        };
-        out.push_str(&rest[..header_end]);
-        rest = &rest[header_end..];
-        *in_key = true;
+        // Fail-closed: any END not preceded by its own BEGIN means a body may sit before it.
+        if line
+            .find("END")
+            .is_some_and(|end| line.find("-----BEGIN").is_none_or(|begin| end < begin))
+            || line.matches("END").count() > line.matches("-----BEGIN").count()
+        {
+            self.orphan_end = true;
+        }
+        self.open[stream] = opens(line);
+        let ending = &line[line.trim_end_matches(['\r', '\n']).len()..];
+        Some(format!("{PRIVATE_KEY_MASK}{ending}"))
     }
 }
 
 pub fn redact_secrets(raw: &str) -> String {
-    redact_stream_line(raw, &mut false)
+    if !raw.contains("PRIVATE KEY") {
+        return redact_plain(raw);
+    }
+    let mut masker = KeyMasker::default();
+    let kept: String = raw
+        .split_inclusive(['\n', '\r'])
+        .filter_map(|line| masker.line(0, line))
+        .collect();
+    // A body printed without its header can sit anywhere before an orphan END.
+    if masker.orphan_end {
+        return PRIVATE_KEY_MASK.to_string();
+    }
+    redact_plain(&kept)
 }
 
-pub fn redact_stream_line(raw: &str, in_private_key: &mut bool) -> String {
-    let safe = redact_api_key(&mask_private_keys(raw, in_private_key));
+pub fn redact_plain(raw: &str) -> String {
+    let safe = redact_api_key(raw);
     let raw = safe.as_str();
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw;
@@ -165,75 +169,128 @@ mod tests {
         assert!(clean.contains("registry.example.com"), "{clean}");
     }
 
-    #[test]
-    fn private_key_bodies_are_masked_in_every_representation() {
-        let body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7";
-        let short = "Zq3=";
-        for raw in [
-            format!("exit=255 -----BEGIN PRIVATE KEY-----\n{body}\n{short}\n"),
-            format!("exit=255 -----BEGIN PRIVATE KEY----- | {body} | {short}"),
-            format!("{body} | {short} | -----END OPENSSH PRIVATE KEY----- tail"),
-            serde_json::to_string(&format!(
-                "-----BEGIN RSA PRIVATE KEY-----\n{body}\n{short}\n-----END RSA PRIVATE KEY-----\n"
-            ))
-            .unwrap(),
-        ] {
-            let clean = redact_secrets(&raw);
-            assert!(!clean.contains(body) && !clean.contains(short), "{clean}");
-            assert!(clean.contains("<redacted private key>"), "{clean}");
+    const BODY: [&str; 3] = ["FAKEKEYBODYAAAA1", "FAKEKEYBODYBBBB2", "Zq3="];
+
+    fn no_body(text: &str) {
+        for body in BODY {
+            assert!(!text.contains(body), "{text}");
         }
-        assert!(redact_secrets(&format!(
-            "x -----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY----- exit=1"
-        ))
-        .ends_with("-----END PRIVATE KEY----- exit=1"));
-        let plain =
-            "commit 0123456789abcdef0123456789abcdef01234567 -----BEGIN CERTIFICATE----- MIIB";
-        assert_eq!(redact_secrets(plain), plain);
     }
 
     #[test]
-    fn every_orphan_end_fragment_is_masked() {
+    fn a_marker_mention_cannot_blind_a_following_truncated_key() {
+        let raw = format!(
+            "error: unterminated -----BEGIN marker\n-----BEGIN PRIVATE KEY-----\n{}\n{}\n{}\n",
+            BODY[0], BODY[1], BODY[2]
+        );
+        let clean = redact_secrets(&raw);
+        no_body(&clean);
+        assert!(
+            clean.starts_with("error: unterminated -----BEGIN marker\n"),
+            "{clean}"
+        );
+    }
+
+    #[test]
+    fn an_unterminated_begin_masks_to_the_end_of_the_string() {
+        let clean = redact_secrets(&format!(
+            "start\nfetched -----BEGIN RSA PRIVATE KEY-----\n{}\n{}\nafter\n",
+            BODY[0], BODY[1]
+        ));
+        assert_eq!(clean, format!("start\n{PRIVATE_KEY_MASK}\n"));
+    }
+
+    #[test]
+    fn an_orphan_end_masks_the_whole_string() {
         for raw in [
-            "bodyA -----END PRIVATE KEY----- bodyB -----END PRIVATE KEY----- tail",
-            "-----BEGIN PRIVATE KEY----- bodyA -----END PRIVATE KEY----- bodyB -----END PRIVATE KEY----- tail",
-            "-----BEGIN PRIVATE KEY----- bodyA -----END PRIVATE KEY----- -----BEGIN PRIVATE KEY----- bodyB",
+            format!(
+                "exit=1 {}\n{}\n-----END PRIVATE KEY----- tail",
+                BODY[0], BODY[1]
+            ),
+            format!(
+                "{} | {} | -----END OPENSSH PRIVATE KEY-----",
+                BODY[0], BODY[1]
+            ),
         ] {
-            for text in [raw.to_string(), serde_json::to_string(raw).unwrap()] {
-                let clean = redact_secrets(&text);
-                assert!(!clean.contains("bodyA") && !clean.contains("bodyB"), "{clean}");
-                assert_eq!(clean.matches(PRIVATE_KEY_MASK).count(), 2, "{clean}");
-                if raw.ends_with("tail") {
-                    assert!(clean.contains("tail"), "{clean}");
-                }
+            assert_eq!(redact_secrets(&raw), PRIVATE_KEY_MASK);
+        }
+    }
+
+    #[test]
+    fn a_dashless_or_extra_end_still_masks_the_whole_string() {
+        for raw in [
+            format!("{}\nEND PRIVATE KEY\n", BODY[0]),
+            format!(
+                "{}\n-----BEGIN PRIVATE KEY----- x -----END PRIVATE KEY----- y -----END PRIVATE KEY-----\n",
+                BODY[0]
+            ),
+        ] {
+            assert_eq!(redact_secrets(&raw), PRIVATE_KEY_MASK);
+        }
+    }
+
+    #[test]
+    fn complete_and_one_line_blocks_mask_only_their_lines() {
+        let clean = redact_secrets(&format!(
+            "-----BEGIN PRIVATE KEY----- {} -----END PRIVATE KEY----- exit=1\nnext line\n",
+            BODY[0]
+        ));
+        assert_eq!(clean, format!("{PRIVATE_KEY_MASK}\nnext line\n"));
+        let clean = redact_secrets(&format!(
+            "a\r\n-----BEGIN PRIVATE KEY-----\r\n{}\r\n-----END PRIVATE KEY-----\r\nb\n",
+            BODY[0]
+        ));
+        no_body(&clean);
+        assert!(
+            clean.starts_with("a\r") && clean.ends_with("b\n"),
+            "{clean}"
+        );
+        let escaped = serde_json::to_string(&format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+            BODY[0]
+        ))
+        .unwrap();
+        assert_eq!(redact_secrets(&escaped), PRIVATE_KEY_MASK);
+    }
+
+    #[test]
+    fn a_closing_word_inside_prose_never_ends_a_block() {
+        let clean = redact_secrets(&format!(
+            "-----BEGIN PRIVATE KEY-----\nSENDING PRIVATE KEY\n{}\n",
+            BODY[0]
+        ));
+        no_body(&clean);
+    }
+
+    #[test]
+    fn an_end_on_another_stream_never_closes_this_streams_block() {
+        let mut masker = super::KeyMasker::default();
+        assert_eq!(
+            masker.line(0, "-----BEGIN PRIVATE KEY-----\n").as_deref(),
+            Some("<redacted private key>\n")
+        );
+        let mut kept = Vec::new();
+        for n in 0..26 {
+            kept.extend(masker.line(0, &format!("FAKEKEYBODY{n}\n")));
+            if n == 9 {
+                kept.extend(masker.line(1, "-----END PRIVATE KEY-----\n"));
             }
         }
+        assert!(kept.is_empty(), "{kept:?}");
+        assert_eq!(masker.line(1, "stream b keeps going\n"), None);
+        assert_eq!(masker.line(0, "-----END PRIVATE KEY-----\n"), None);
+        assert_eq!(masker.line(1, "after\n").as_deref(), Some("after\n"));
     }
 
     #[test]
-    fn an_open_private_key_block_masks_following_stream_lines() {
-        let mut open = false;
-        let lines = [
-            "fetched -----BEGIN PRIVATE KEY-----\n",
-            "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj\n",
-            "Zq3=\n",
-            "-----END PRIVATE KEY-----\n",
-            "after\n",
-        ];
-        let out: Vec<_> = lines
-            .iter()
-            .map(|line| super::redact_stream_line(line, &mut open))
-            .collect();
-        assert_eq!(
-            out,
-            [
-                "fetched -----BEGIN PRIVATE KEY-----\n",
-                "<redacted private key>\n",
-                "<redacted private key>\n",
-                "-----END PRIVATE KEY-----\n",
-                "after\n",
-            ]
-        );
-        assert!(!open);
+    fn non_key_text_passes_byte_identical() {
+        for plain in [
+            "commit 0123456789abcdef0123456789abcdef01234567 built\n",
+            "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIU\n-----END CERTIFICATE-----\n",
+            "BUILD SUCCEEDED\r\n[1/3] Compiling\n",
+        ] {
+            assert_eq!(redact_secrets(plain), plain);
+        }
     }
 
     #[test]

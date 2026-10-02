@@ -130,6 +130,10 @@ impl CmdOutput {
         let code = self
             .exit_code
             .map_or("signal".to_string(), |c| c.to_string());
+        // Captured streams lose their interleaving, so any key text withholds the whole tail.
+        if self.stdout.contains("PRIVATE KEY") || self.stderr.contains("PRIVATE KEY") {
+            return format!("exit={code} <output withheld: private key material>");
+        }
         let stderr = crate::redact::redact_secrets(&self.stderr);
         let stdout = crate::redact::redact_secrets(&self.stdout);
         let tail: String = stderr
@@ -301,8 +305,7 @@ impl Runner for RealRunner {
         use std::os::unix::process::CommandExt;
         self.executed += 1;
         crate::progress::started(&spec.label, true);
-        let (log_out, output) = log::LogDrain::spawn(&self.log_executable, log_path)?;
-        let (log_err, error) = log::LogDrain::spawn(&self.log_executable, log_path)?;
+        let (drain, output, error) = log::LogDrain::spawn_paired(&self.log_executable, log_path)?;
         let mut cmd = Command::new(&spec.program);
         cmd.args(&spec.args)
             .stdin(Stdio::null())
@@ -321,7 +324,7 @@ impl Runner for RealRunner {
         cmd.env_remove("TYPESAFE_API_KEY");
         let child = cmd.spawn()?;
         let pid = child.id() as i32;
-        self.logs.extend([log_out, log_err]);
+        self.logs.push(drain);
         Ok(Spawned { pid, pgid: pid })
     }
 

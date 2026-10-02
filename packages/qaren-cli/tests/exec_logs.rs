@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 const KEY: &str = "synthetic-phase3-typesafe-key";
 
 #[test]
-fn command_summary_redacts_complete_streams_before_selecting_the_tail() {
+fn command_summary_withholds_output_naming_a_private_key() {
     let body = (0..7)
         .map(|line| format!("private-body-{line}\n"))
         .collect::<String>();
@@ -28,7 +28,7 @@ fn command_summary_redacts_complete_streams_before_selecting_the_tail() {
     ] {
         let summary = output.summary();
         assert!(!summary.contains("private-body"), "{summary}");
-        assert!(summary.contains("<redacted private key>"), "{summary}");
+        assert_eq!(summary, "exit=1 <output withheld: private key material>");
     }
     assert_eq!(
         CmdOutput {
@@ -38,6 +38,71 @@ fn command_summary_redacts_complete_streams_before_selecting_the_tail() {
         .summary(),
         "exit=1 two | three | four | five | six | seven"
     );
+}
+
+const FAKE_BODY: &str = "FAKEKEYBODY";
+
+#[test]
+fn a_marker_mention_cannot_blind_a_truncated_key_in_a_summary() {
+    let failure = CmdOutput::failed(
+        255,
+        &format!(
+            "error: unterminated -----BEGIN marker\n-----BEGIN PRIVATE KEY-----\n{FAKE_BODY}1\n{FAKE_BODY}2\n{FAKE_BODY}3\n"
+        ),
+    );
+    let summary = failure.summary();
+    assert!(!summary.contains(FAKE_BODY), "{summary}");
+    assert_eq!(summary, "exit=255 <output withheld: private key material>");
+}
+
+fn spawned_log(script: &str) -> String {
+    let dir = common::temp_repo();
+    let log = dir.join("child.log");
+    let mut runner = RealRunner::with_log_executable(env!("CARGO_BIN_EXE_qaren").into());
+    runner
+        .spawn_group(&shell(&format!("{script}\n: > done"), &dir), &log)
+        .unwrap();
+    until(|| dir.join("done").exists());
+    until(|| {
+        runner.flush_logs().unwrap();
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .contains("tail line")
+    });
+    let stored = std::fs::read_to_string(&log).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    stored
+}
+
+#[test]
+fn a_key_header_on_stdout_masks_its_body_on_stderr_in_the_durable_log() {
+    let stored = spawned_log(&format!(
+        r#"printf 'starting\n'
+printf '%s\n' '-----BEGIN PRIVATE KEY-----'
+sleep 0.05
+n=0; while [ "$n" -lt 26 ]; do printf '{FAKE_BODY}%s\n' "$n" >&2; n=$((n+1)); done
+sleep 0.05
+printf '%s\n' '-----END PRIVATE KEY-----'
+printf 'tail line\n'"#
+    ));
+    assert!(!stored.contains(FAKE_BODY), "{stored}");
+    assert!(
+        stored.contains("starting\n<redacted private key>\n"),
+        "{stored}"
+    );
+}
+
+#[test]
+fn a_mention_on_the_header_line_cannot_blind_the_durable_log() {
+    let stored = spawned_log(&format!(
+        r#"printf '%s\n' 'quoting -----BEGIN unterminated -----BEGIN PRIVATE KEY-----' >&2
+printf '{FAKE_BODY}1\n{FAKE_BODY}2\n{FAKE_BODY}3\n' >&2
+printf '%s\n' '-----END PRIVATE KEY-----' >&2
+sleep 0.05
+printf 'tail line\n'"#
+    ));
+    assert!(!stored.contains(FAKE_BODY), "{stored}");
+    assert!(stored.starts_with("<redacted private key>\n"), "{stored}");
 }
 
 #[test]
@@ -159,9 +224,7 @@ fn the_log_drain_masks_a_private_key_split_across_lines_and_writes() {
                 (1, 8),
             ] {
                 if kind == "END" {
-                    output
-                        .write_all(b"-----BEGIN PRIVATE KEY-----\n")
-                        .unwrap();
+                    output.write_all(b"-----BEGIN PRIVATE KEY-----\n").unwrap();
                 }
                 let line = format!(
                     "{}{}-----{kind} PRIVATE KEY-----{}\n",
@@ -205,7 +268,8 @@ fn the_log_drain_masks_a_private_key_split_across_lines_and_writes() {
         stored.contains("Connection closed") && stored.contains("done"),
         "{stored}"
     );
-    assert_eq!(stored.matches("after oversized header\n").count(), 48);
+    // A withheld line naming a key masks until the next END line, so only the BEGIN cases' trailers survive.
+    assert_eq!(stored.matches("after oversized header\n").count(), 24);
 }
 
 #[test]

@@ -634,6 +634,46 @@ const FREE_SLOT_LINE: &str =
     "slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=free state=down\n";
 
 #[test]
+fn a_failing_farm_status_never_records_a_truncated_key_after_a_marker_mention() {
+    let repo = common::temp_repo();
+    let scenario_path = write_scenario(&repo, &common::android_scenario_yaml(8792));
+    let sdk = android_sdk(&repo);
+    let mut mock = MockRunner::new();
+    script_validation(&mut mock, &repo, ANDROID_TOOLS);
+    mock.expect_run("lsof", free_port());
+    mock.expect_run("lsof", free_port());
+    mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
+    mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
+    mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+    mock.expect_run("ls-files", CmdOutput::success(""));
+    mock.expect_run(
+        "~/bin/android-farm status",
+        CmdOutput::failed(
+            255,
+            "error: unterminated -----BEGIN marker\n-----BEGIN PRIVATE KEY-----\nFAKEKEYBODY1\nFAKEKEYBODY2\nFAKEKEYBODY3\n",
+        ),
+    );
+    let receipt = prepare(
+        &mut mock,
+        &prepare_args(
+            &scenario_path,
+            false,
+            Some(sdk.to_string_lossy().into_owned()),
+        ),
+    );
+    assert_eq!(receipt.result, ReceiptResult::Failed);
+    let printed = serde_json::to_string(&receipt).unwrap();
+    let recorded = std::fs::read_to_string(RunRecord::path(&repo, &receipt.run_id)).unwrap();
+    for evidence in [&printed, &recorded] {
+        assert!(!evidence.contains("FAKEKEYBODY"), "{evidence}");
+    }
+    assert!(
+        printed.contains("output withheld: private key material"),
+        "{printed}"
+    );
+}
+
+#[test]
 fn android_prepare_fails_when_farm_adb_port_is_occupied_locally() {
     let repo = common::temp_repo();
     let scenario_path = write_scenario(&repo, &common::android_scenario_yaml(8792));
