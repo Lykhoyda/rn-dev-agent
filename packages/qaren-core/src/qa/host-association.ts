@@ -98,15 +98,15 @@ export function associateHosts(
     return associations;
   const paths = snapshot.nodes.map((node) => hostPath(snapshot, node.hostIndex)!);
   const nativePaths = nodes.map((_, i) => nativePath(nodes, i));
-  const positive = (i: number) =>
-    presence.nodes[i]?.status === 'observed' &&
+  const inWindow = (i: number) =>
     nativePaths[i].includes(windowIndex) &&
     typeof nodes[i].ref === 'string' &&
     !!nodes[i].ref.trim() &&
     nodes.filter((node) => node.ref === nodes[i].ref).length === 1;
+  const positive = (i: number) => presence.nodes[i]?.status === 'observed' && inWindow(i);
   const inline = (i: number) =>
     snapshot.nodes[i].hostType === 'RCTVirtualText' && snapshot.nodes[i].text.kind === 'inline';
-  const anchors = new Map<number, number>();
+  const structural = new Map<number, number>();
   for (const host of snapshot.nodes) {
     if (inline(host.hostIndex)) continue;
     const id = evidence.hosts[host.hostIndex].testID;
@@ -115,24 +115,37 @@ export function associateHosts(
     if (matches.length !== 1) continue;
     const nativeIndex = matches[0];
     if (
-      positive(nativeIndex) &&
+      inWindow(nativeIndex) &&
       compatible(host.hostType, nodes[nativeIndex].type) &&
       sameFrame(host.rect, nodes[nativeIndex].rect, window)
     )
-      anchors.set(host.hostIndex, nativeIndex);
+      structural.set(host.hostIndex, nativeIndex);
   }
+  const anchors = new Map([...structural].filter(([, nativeIndex]) => positive(nativeIndex)));
+  // A host needs measured presence; each identified ancestor needs its own structural match.
+  // Covered containers are not hittable, and XCUI hoists nested identified views beside their
+  // descendants' native path, so an ancestor may sit on that path or hang off it, never elsewhere.
+  const onNativePath = (child: number, ancestor: number) => {
+    if (child === ancestor || nativePaths[ancestor].includes(child)) return false;
+    // Direct native ancestry proves itself, even when the child overflows its parent.
+    if (nativePaths[child].includes(ancestor)) return true;
+    const parent = nodes[ancestor].parentIndex;
+    return (
+      parent !== undefined &&
+      nativePaths[child].slice(1).includes(parent) &&
+      !!nodes[ancestor].rect &&
+      !!nodes[child].rect &&
+      contains(nodes[ancestor].rect!, nodes[child].rect!)
+    );
+  };
   const anchoredPath = (i: number): boolean => {
     const named = paths[i].filter((p) => !inline(p) && !!evidence.hosts[p].testID);
     return named.every((p, n) => {
-      const nativeIndex = anchors.get(p);
-      const parentIndex = n + 1 < named.length ? anchors.get(named[n + 1]) : undefined;
-      return (
-        nativeIndex !== undefined &&
-        (n + 1 === named.length ||
-          (parentIndex !== undefined &&
-            nativeIndex !== parentIndex &&
-            nativePaths[nativeIndex].includes(parentIndex)))
-      );
+      const nativeIndex = (p === i ? anchors : structural).get(p);
+      if (nativeIndex === undefined) return false;
+      if (n + 1 === named.length) return true;
+      const ancestor = structural.get(named[n + 1]);
+      return ancestor !== undefined && onNativePath(nativeIndex, ancestor);
     });
   };
   for (const host of snapshot.nodes) {
@@ -149,9 +162,10 @@ export function associateHosts(
       !compatible(host.hostType, 'StaticText')
     )
       continue;
-    const anchorHost = paths[host.hostIndex].slice(1).find((i) => anchors.has(i));
+    // The nearest identified ancestor scopes the search, even without measured presence.
+    const anchorHost = paths[host.hostIndex].slice(1).find((i) => structural.has(i));
     if (anchorHost === undefined) continue;
-    const anchorIndex = anchors.get(anchorHost)!;
+    const anchorIndex = structural.get(anchorHost)!;
     const ancestors = paths[host.hostIndex].slice(1).map((i) => snapshot.nodes[i]);
     if (
       ancestors.some(

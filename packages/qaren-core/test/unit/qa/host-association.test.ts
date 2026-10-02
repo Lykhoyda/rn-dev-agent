@@ -7,6 +7,7 @@ import { decideScreen } from '../../../dist/qa/resolve.js';
 import { inputValues, isPossibleInput } from '../../../dist/qa/privacy.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { join, semanticActionView, visibilityView } from '../../../dist/qa/screen.js';
+import { associateHosts } from '../../../dist/qa/host-association.js';
 import type { DigestEntry, ReactHostEvidence } from '../../../dist/qa/screen.js';
 import { nativeCapture } from './platform-presence-fixtures.ts';
 import { buildFiber, createSandbox } from '../helpers/inject-harness.js';
@@ -315,7 +316,7 @@ for (const [name, weaken] of unproven) {
   });
 }
 
-test('every named host ancestor must independently match native ancestry and measured presence', async () => {
+test('named host ancestors need their own structural match, not native nesting; only the host needs presence', async () => {
   for (const variant of ['proven', 'frame', 'unknown-presence', 'missing-ID', 'disconnected']) {
     const f = fixture();
     const control = f.native.nodes[2];
@@ -362,18 +363,25 @@ test('every named host ancestor must independently match native ancestry and mea
     const screen = await f.capture();
     assert.equal(
       screen.elements[3].semantic?.press,
-      variant === 'proven' ? 'supported' : 'unknown',
+      ['proven', 'unknown-presence', 'disconnected'].includes(variant) ? 'supported' : 'unknown',
       variant,
     );
     assert.equal(screen.elements.length, 4);
-    assert.ok(
-      'refuse' in semanticActionView(screen, 'press'),
-      'the generic ancestor remains an unknown competitor',
-    );
+    if (['proven', 'unknown-presence', 'disconnected'].includes(variant))
+      assert.deepEqual(
+        semanticActionView(screen, 'press'),
+        { elements: [screen.elements[3]] },
+        'with every interactive host accounted for, the handler-less panel is not pressable',
+      );
+    else
+      assert.ok(
+        'refuse' in semanticActionView(screen, 'press'),
+        `${variant}: an unassociated handler keeps the generic ancestor an unknown competitor`,
+      );
   }
 });
 
-test('real measured producer press reaches the walker without a role; absent handlers stay unknown', async () => {
+test('real measured producer press reaches the walker without a role; an accounted host without a handler is not pressable', async () => {
   for (const mode of ['press', 'none', 'disabled', 'readonly']) {
     const f = fixture();
     const fiber = buildFiber({
@@ -405,7 +413,7 @@ test('real measured producer press reaches the walker without a role; absent han
     });
     assert.equal(screen.elements[2].kind, 'other');
     assert.equal(screen.elements[2].semantic?.fill, 'unknown');
-    assert.equal(screen.elements[2].semantic?.press, mode === 'none' ? 'unknown' : 'supported');
+    assert.equal(screen.elements[2].semantic?.press, mode === 'none' ? 'unsupported' : 'supported');
     const judge = scriptedJudge((questions) => {
       assert.equal(mode, 'press', 'blocked controls never reach a model');
       return Object.fromEntries(
@@ -419,23 +427,49 @@ test('real measured producer press reaches the walker without a role; absent han
   }
 });
 
-test('generic and text competitors remain unknown for press and are never removed to make a choice', async () => {
+test('generic and text views leave the choice only while every interactive host is accounted for', async () => {
   for (const type of ['Other', 'StaticText']) {
-    const f = fixture();
-    f.native.nodes.push({
-      ...f.native.nodes[2],
-      ref: '@e3',
-      index: 3,
-      identifier: undefined,
-      type,
-      label: 'Other contribution',
-      presence: { ...f.native.nodes[2].presence, nodeIndex: 3 },
-    });
-    f.native.snapshotVerdict.nodeCount++;
-    const screen = await f.capture();
-    assert.equal(screen.elements.length, 4);
-    assert.equal(screen.elements[3].semantic?.press, 'unknown');
-    assert.ok('refuse' in semanticActionView(screen, 'press'));
+    for (const stray of [false, true]) {
+      const f = fixture();
+      f.native.nodes.push({
+        ...f.native.nodes[2],
+        ref: '@e3',
+        index: 3,
+        identifier: undefined,
+        type,
+        label: 'Other contribution',
+        presence: { ...f.native.nodes[2].presence, nodeIndex: 3 },
+      });
+      f.native.snapshotVerdict.nodeCount++;
+      if (stray) {
+        f.hostEvidence.hosts.push({
+          role: null,
+          roleSource: 'none',
+          capabilities: { press: true },
+        });
+        f.hostEvidence.typography!.nodes.push({
+          hostIndex: f.hostEvidence.hosts.length - 1,
+          parentHostIndex: null,
+          rootIndex: 0,
+          hostType: 'RCTView',
+          rect: { x: 0, y: 500, width: 40, height: 40 },
+          text: { kind: 'none' },
+        });
+      }
+      const screen = await f.capture();
+      assert.deepEqual(screen.coverage, { native: 'complete', react: 'complete' }, type);
+      assert.equal(screen.elements.length, 4);
+      assert.equal(screen.elements[3].semantic?.press, stray ? 'unknown' : 'unsupported', type);
+      if (stray) {
+        const refused = semanticActionView(screen, 'press');
+        assert.ok(
+          'refuse' in refused,
+          `${type}: an unassociated handler could be this view, so it is never removed`,
+        );
+        assert.match(refused.reason, /; 1 interactive React host unassociated\)$/);
+      } else
+        assert.deepEqual(semanticActionView(screen, 'press'), { elements: [screen.elements[2]] });
+    }
   }
 });
 
@@ -444,7 +478,7 @@ test('an admitted positive fill fact supports fill without inferring an input ki
   f.hostEvidence.hosts[0].capabilities = { fill: true };
   const screen = await f.capture();
   assert.equal(screen.elements[2].kind, 'other');
-  assert.equal(screen.elements[2].semantic?.press, 'unknown');
+  assert.equal(screen.elements[2].semantic?.press, 'unsupported');
   assert.deepEqual(semanticActionView(screen, 'fill'), { elements: [screen.elements[2]] });
 });
 
@@ -811,4 +845,194 @@ test('unassociated positive-fill observations retain privacy without acquiring n
     line: 1,
   });
   assert.equal(judge.requests.length, 1);
+});
+
+test('text under a structurally matched ancestor is searched only inside that ancestor', () => {
+  const rect = (x: number, y: number, width: number, height: number) => ({ x, y, width, height });
+  const node = (
+    index: number,
+    parentIndex: number | undefined,
+    depth: number,
+    type: string,
+    r: ReturnType<typeof rect>,
+    extra = {},
+  ) => ({
+    ref: `@e${index}`,
+    index,
+    parentIndex,
+    depth,
+    type,
+    rect: r,
+    enabled: true,
+    ...extra,
+  });
+  const nodes = [
+    node(0, undefined, 0, 'Application', rect(0, 0, 400, 800)),
+    node(1, 0, 1, 'Window', rect(0, 0, 400, 800)),
+    node(2, 1, 2, 'Other', rect(0, 0, 400, 800), { identifier: 'root' }),
+    node(3, 2, 3, 'Other', rect(0, 0, 200, 400), { identifier: 'panel' }),
+    node(4, 2, 3, 'Other', rect(200, 0, 200, 400), { identifier: 'other' }),
+    node(5, 4, 4, 'StaticText', rect(10, 10, 100, 20), { label: 'Title' }),
+  ];
+  const status = ['unknown', 'unknown', 'observed', 'unknown', 'observed', 'observed'] as const;
+  const presence = {
+    source: 'xcui-live' as const,
+    nodes: status.map((s) => ({ status: s, labelSource: 'direct' as const })),
+  };
+  const view = (hostIndex: number, parentHostIndex: number | null, r: ReturnType<typeof rect>) => ({
+    hostIndex,
+    parentHostIndex,
+    rootIndex: 0,
+    hostType: 'RCTView',
+    rect: r,
+    text: { kind: 'none' as const },
+  });
+  const evidence = {
+    complete: true,
+    hosts: [
+      { testID: 'root', role: null, roleSource: 'none' as const, capabilities: {} },
+      { testID: 'panel', role: null, roleSource: 'none' as const, capabilities: {} },
+      { role: null, roleSource: 'none' as const, capabilities: {} },
+      { testID: 'other', role: null, roleSource: 'none' as const, capabilities: {} },
+    ],
+    typography: {
+      version: 1 as const,
+      complete: true,
+      durationMs: 10,
+      coordinateSpace: 'window-points' as const,
+      nodes: [
+        view(0, null, rect(0, 0, 400, 800)),
+        view(1, 0, rect(0, 0, 200, 400)),
+        {
+          ...view(2, 1, rect(10, 10, 100, 20)),
+          hostType: 'RCTText',
+          text: { kind: 'block' as const, content: 'Title' },
+        },
+        view(3, 0, rect(200, 0, 200, 400)),
+      ],
+    },
+  };
+  const associations = associateHosts(nodes as never, evidence as never, presence as never);
+  assert.equal(
+    associations.get(1)?.nativeIndex,
+    undefined,
+    'the panel itself has no measured presence',
+  );
+  assert.equal(
+    associations.get(2),
+    undefined,
+    'text inside the panel never matches native text in a sibling subtree',
+  );
+});
+
+test('identified ancestors may be hoisted beside the native path but not sit in an unrelated subtree', () => {
+  type Rect = { x: number; y: number; width: number; height: number };
+  const rect = (x: number, y: number, width: number, height: number): Rect => ({
+    x,
+    y,
+    width,
+    height,
+  });
+  const other = (
+    index: number,
+    parentIndex: number,
+    depth: number,
+    r: Rect,
+    identifier?: string,
+  ) => ({
+    ref: `@e${index}`,
+    index,
+    parentIndex,
+    depth,
+    type: 'Other',
+    rect: r,
+    ...(identifier ? { identifier } : {}),
+  });
+  const saveRect = rect(10, 10, 100, 40);
+  const panel = (index: number, parentIndex: number, depth: number, r: Rect) =>
+    other(index, parentIndex, depth, r, 'panel');
+  const save = (index: number, parentIndex: number, depth: number) =>
+    other(index, parentIndex, depth, saveRect, 'save');
+  const base = [
+    { ref: '@e0', index: 0, depth: 0, type: 'Application', rect: rect(0, 0, 400, 800) },
+    { ref: '@e1', index: 1, parentIndex: 0, depth: 1, type: 'Window', rect: rect(0, 0, 400, 800) },
+  ];
+  const left = other(2, 1, 2, rect(0, 0, 400, 400));
+  const associate = (nodes: Array<Record<string, unknown>>, panelRect: Rect, saveIndex: number) => {
+    const presence = {
+      source: 'xcui-live' as const,
+      nodes: nodes.map((_, i) => ({
+        status: i === saveIndex ? 'observed' : 'unknown',
+        labelSource: 'none' as const,
+      })),
+    };
+    const view = (hostIndex: number, parentHostIndex: number | null, r: Rect) => ({
+      hostIndex,
+      parentHostIndex,
+      rootIndex: 0,
+      hostType: 'RCTView',
+      rect: r,
+      text: { kind: 'none' as const },
+    });
+    const evidence = {
+      complete: true,
+      hosts: [
+        { testID: 'panel', role: null, roleSource: 'none' as const, capabilities: {} },
+        { testID: 'save', role: null, roleSource: 'none' as const, capabilities: { press: true } },
+      ],
+      typography: {
+        version: 1 as const,
+        complete: true,
+        durationMs: 10,
+        coordinateSpace: 'window-points' as const,
+        nodes: [view(0, null, panelRect), view(1, 0, saveRect)],
+      },
+    };
+    return associateHosts(nodes as never, evidence as never, presence as never).get(1)?.nativeIndex;
+  };
+  const cases: Array<[string, Array<Record<string, unknown>>, Rect, number, number | undefined]> = [
+    [
+      'hoisted beside save and containing it',
+      [...base, left, panel(3, 2, 3, rect(0, 0, 400, 400)), save(4, 2, 3)],
+      rect(0, 0, 400, 400),
+      4,
+      4,
+    ],
+    [
+      'a direct native ancestor that save overflows',
+      [...base, panel(2, 1, 2, rect(0, 0, 100, 20)), save(3, 2, 3)],
+      rect(0, 0, 100, 20),
+      3,
+      3,
+    ],
+    [
+      'an overlay branch whose panel contains save but is off its native path',
+      [
+        ...base,
+        left,
+        other(3, 1, 2, rect(0, 0, 400, 800)),
+        panel(4, 3, 3, rect(0, 0, 400, 400)),
+        save(5, 2, 3),
+      ],
+      rect(0, 0, 400, 400),
+      5,
+      undefined,
+    ],
+    [
+      'panel is save’s native child (reversed ancestry)',
+      [...base, left, save(3, 2, 3), panel(4, 3, 4, saveRect)],
+      saveRect,
+      3,
+      undefined,
+    ],
+    [
+      'hoisted beside save without containing it',
+      [...base, left, panel(3, 2, 3, rect(200, 200, 100, 100)), save(4, 2, 3)],
+      rect(200, 200, 100, 100),
+      4,
+      undefined,
+    ],
+  ];
+  for (const [name, nodes, panelRect, saveIndex, expected] of cases)
+    assert.equal(associate(nodes, panelRect, saveIndex), expected, name);
 });
