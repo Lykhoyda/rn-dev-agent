@@ -73,11 +73,16 @@ The [screen projection](../qaren-core/src/qa/screen.ts) owns this policy.
 
 Private input capture is required before walking a screen. If it cannot be
 established safely, the walk refuses with `PRIVATE_INPUT_CAPTURE_UNKNOWN` without
-reinjection or a public-tree fallback. A React private-input read that misses
-its deadline triggers at most one complete fresh capture, including native
-and React evidence; the late first reply is discarded. A second timeout refuses
-without another retry. Malformed payloads and unbound private evidence refuse
-immediately; native and other failures do not trigger this retry. Capture deadlines,
+reinjection or a public-tree fallback. A React private-input deadline miss triggers
+at most one complete fresh capture, including native and React evidence, only
+when the failed attempt received no React private input values, observed no
+native input with a non-empty value or label, and observed no secure native node.
+Native input classification follows the [screen projection](../qaren-core/src/qa/screen.ts).
+Otherwise the timeout refuses immediately, preserving the privacy boundary.
+The late first reply is discarded; a second timeout refuses without another retry.
+Only an explicit deadline expiry is retryable: malformed payloads, unbound private
+evidence, validation and transport failures refuse immediately even if processing
+crosses the deadline. Native failures do not trigger this retry. Capture deadlines,
 budgets and item deadlines remain unchanged.
 
 Observed input values are masked before Jev requests; private values are also

@@ -2,4 +2,4 @@
 "qaren": patch
 ---
 
-A React private-input capture that misses its deadline once gets one fresh full capture before the step is refused, with deadlines and masking unchanged.
+Retry an eligible React private-input deadline miss with one fresh full capture, refusing immediately after input-value or secure-node evidence and preserving deadlines and masking.
