@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { captureScreen } from '../../../dist/qa/capture.js';
+import {
+  AppProcessGoneError,
+  NativeCaptureError,
+  captureScreen,
+} from '../../../dist/qa/capture.js';
 import { decideScreen } from '../../../dist/qa/resolve.js';
 import type { NativeObservation, ReactObservation } from '../../../dist/qa/capture.js';
 import { assertionView, visibilityView } from '../../../dist/qa/screen.js';
@@ -1136,4 +1140,17 @@ test('the runner-reported app process identifier reaches the screen only when it
     });
     assert.equal(screen.appProcessIdentifier, expected, String(reported));
   }
+});
+
+test('a gone app process passes through private capture; other native failures stay content-free', async () => {
+  const fail = (error: Error) =>
+    captureScreen({
+      requirePrivateInputs: true,
+      native: async () => {
+        throw error;
+      },
+      react: async () => ({ interactive, verdict, hostEvidence }),
+    });
+  await assert.rejects(fail(new AppProcessGoneError()), AppProcessGoneError);
+  await assert.rejects(fail(new Error('secret runner detail')), NativeCaptureError);
 });

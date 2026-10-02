@@ -135,10 +135,15 @@ extension RnFastRunnerTests {
 
   // MARK: - Command Handling
 
-  private func qaReadOnlyRefusal() -> Response {
-    Response(ok: false, error: ErrorPayload(
-      code: "ACTION_CONTEXT_CHANGED", message: "QA read requires the unchanged foreground target; no recovery attempted", mutation: "none"
-    ))
+  private func qaReadOnlyRefusal(appNotRunning: Bool = false) -> Response {
+    runnerQaReadOnlyRefusal(appNotRunning: appNotRunning)
+  }
+
+  // Reads the cached target's state only; a read never activates or relaunches the app.
+  private func qaReadOnlyTargetNotRunning(command: Command) -> Bool {
+    guard let bundleId = command.appBundleId?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !bundleId.isEmpty, currentBundleId == bundleId, let target = currentApp else { return false }
+    return target.state == .notRunning
   }
 
   private func qaReadOnlyTarget(command: Command) -> XCUIApplication? {
@@ -227,7 +232,9 @@ extension RnFastRunnerTests {
   private func executeOnMain(command: Command) throws -> Response {
     var readOnlyApp: XCUIApplication?
     if command.qaReadOnly == true {
-      guard let target = qaReadOnlyTarget(command: command) else { return qaReadOnlyRefusal() }
+      guard let target = qaReadOnlyTarget(command: command) else {
+        return qaReadOnlyRefusal(appNotRunning: qaReadOnlyTargetNotRunning(command: command))
+      }
       readOnlyApp = target
     }
     if command.platformPresence == true {

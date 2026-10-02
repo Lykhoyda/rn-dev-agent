@@ -23,7 +23,7 @@ import { compileFlow, FlowCompileError } from '../flow/compile.js';
 import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
 import type { ToolResult } from '../utils.js';
 import { HandlerError, adapt, describeError, unwrap } from './adapt.js';
-import { captureScreen, type NativeObservation } from './capture.js';
+import { AppProcessGoneError, captureScreen, type NativeObservation } from './capture.js';
 import { captureQaReact } from './react-capture.js';
 import type { LedgerRow } from './ledger.js';
 import { parsePlanWithJev, readPreparedPlan } from './plan.js';
@@ -353,7 +353,11 @@ async function openSession(
               options?.platformPresence,
               presenceBudgetMs,
               options?.timing ? { now, observe: options.timing } : undefined,
-            ),
+            ).catch((error: unknown) => {
+              if (error instanceof HandlerError && error.meta?.reason === 'app-not-running')
+                throw new AppProcessGoneError();
+              throw error;
+            }),
           react: () => captureQaReact(cdp, options?.platformPresence === true),
         }),
       ),

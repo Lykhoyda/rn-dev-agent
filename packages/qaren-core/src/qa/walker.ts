@@ -27,7 +27,7 @@ import {
 import { type Judge, type JevCall, JevError, unavailableJudge } from './questions.js';
 import { maskInputs, ObservedPrivacy } from './privacy.js';
 import { PrivateInputCaptureError } from './private-input.js';
-import { NativeCaptureError } from './capture.js';
+import { AppProcessGoneError, NativeCaptureError } from './capture.js';
 import { QaDispatchContext, QaDispatchError } from '../domain/qa-dispatch.js';
 import {
   admitObservation,
@@ -206,13 +206,18 @@ export async function walkBlock(
     });
     let admitted = false;
     try {
-      latest = await deps.captureScreen(
-        deps.timing
-          ? { ...(platformPresence ? { platformPresence: true } : {}), timing: timingObserver }
-          : platformPresence
-            ? { platformPresence: true }
-            : undefined,
-      );
+      try {
+        latest = await deps.captureScreen(
+          deps.timing
+            ? { ...(platformPresence ? { platformPresence: true } : {}), timing: timingObserver }
+            : platformPresence
+              ? { platformPresence: true }
+              : undefined,
+        );
+      } catch (error) {
+        if (error instanceof AppProcessGoneError) throw processChanged();
+        throw error;
+      }
       guardAppProcess(deps.appProcess, latest.appProcessIdentifier);
       const privacyStarted = deps.timing ? deps.now() : 0;
       privacy.observe(latest);
@@ -922,6 +927,12 @@ export async function walkBlock(
   return { block: { key: block.slug, outcome: 'pass', source: 'discovered' }, rows };
 }
 
+const processChanged = (): ResolutionError =>
+  new ResolutionError({
+    refuse: 'APP_PROCESS_CHANGED',
+    reason: 'the app restarted or crashed during the run',
+  });
+
 function guardAppProcess(guard: WalkerDeps['appProcess'], observed: number | undefined): void {
   if (!guard) return;
   if (guard.expected === undefined) {
@@ -934,11 +945,7 @@ function guardAppProcess(guard: WalkerDeps['appProcess'], observed: number | und
     guard.expected = observed;
     return;
   }
-  if (observed !== guard.expected)
-    throw new ResolutionError({
-      refuse: 'APP_PROCESS_CHANGED',
-      reason: 'the app restarted or crashed during the run',
-    });
+  if (observed !== guard.expected) throw processChanged();
 }
 
 export interface BlockStore {

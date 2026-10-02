@@ -26,6 +26,14 @@ export class NativeCaptureError extends Error {
   }
 }
 
+// The runner saw the app process gone; content-free, so it may leave capture unmasked.
+export class AppProcessGoneError extends Error {
+  constructor() {
+    super('the app process is not running');
+    this.name = 'AppProcessGoneError';
+  }
+}
+
 export interface NativeObservation {
   appProcessIdentifier?: unknown;
   presenceCapture?: unknown;
@@ -375,7 +383,7 @@ export async function captureScreen(deps: CaptureDeps): Promise<Screen> {
       return await capture(deps);
     }
   } catch (error) {
-    if (error instanceof NativeCaptureError) throw error;
+    if (error instanceof NativeCaptureError || error instanceof AppProcessGoneError) throw error;
     if (deps.requirePrivateInputs || error instanceof PrivateInputCaptureError)
       throw new PrivateInputCaptureError();
     throw error;
@@ -392,6 +400,7 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
       deps.native(presenceBudgetMs),
     );
   } catch (error) {
+    if (error instanceof AppProcessGoneError) throw error;
     if (deps.requirePrivateInputs) throw new NativeCaptureError();
     throw error;
   }

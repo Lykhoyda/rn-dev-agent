@@ -16,6 +16,7 @@ import type { Element, Screen } from '../../../dist/qa/screen.js';
 import { runPlan, type BlockStore } from '../../../dist/qa/walker.js';
 import type { Ledger, WalkResult } from '../../../dist/qa/ledger.js';
 import { element, scriptedJudge, walker } from './judgment-fixtures.ts';
+import { AppProcessGoneError } from '../../../dist/qa/capture.js';
 
 const literal = readFileSync(new URL('../../fixtures/plans/literal.md', import.meta.url), 'utf8');
 const literalLabel = literal.replace('2. Tap "onboarding-done"', '2. Tap "Done"');
@@ -279,4 +280,20 @@ test('without the guard (Android) captures need no process identifier', async ()
     await runPlan(blocks(literal), fake.deps, [], { ...store(root()), platform: 'android' }),
   );
   assert.equal(result.verdict, 'PASS');
+});
+
+test('a capture that finds the app process gone fails APP_PROCESS_CHANGED and writes nothing', async () => {
+  const dir = root();
+  const fake = app();
+  let captures = 0;
+  const capture = fake.deps.captureScreen;
+  fake.deps.captureScreen = async (options) => {
+    if (captures++ === 1) throw new AppProcessGoneError();
+    return { ...(await capture(options)), appProcessIdentifier: 41 };
+  };
+  fake.deps.appProcess = {};
+  const result = ledger(await runPlan(blocks(literal), fake.deps, [], store(dir)));
+  assert.equal(result.verdict, 'FAIL');
+  assert.match(result.failure?.seen ?? '', /APP_PROCESS_CHANGED/);
+  assert.equal(existsSync(actionFile(dir)), false);
 });
