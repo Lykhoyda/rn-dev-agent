@@ -65,7 +65,11 @@ test('iOS QA acquisition masks native values and derived labels without public v
             identifier: 'email',
             label,
             ...(hasValue ? { value: secret } : {}),
-            presence: { ...observed.presence, nodeIndex: 2 },
+            presence: {
+              ...observed.presence,
+              nodeIndex: 2,
+              labelSource: label === secret ? 'value' : 'direct',
+            },
           },
           {
             ...observed,

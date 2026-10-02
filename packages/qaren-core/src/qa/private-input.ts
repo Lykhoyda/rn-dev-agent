@@ -44,6 +44,8 @@ export function applyNativePrivateInputs(screen: Screen, nodes: readonly NativeN
       .map((element) => ({
         values: element.value ? [element.value] : [],
         secure: element.secure,
+        labelMayBeValue:
+          element.secure || element.semantic?.nativePresence?.labelSource === 'value',
         testID: element.testID,
         elements: [element],
         associationUnique: true,
