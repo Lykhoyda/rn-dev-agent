@@ -62,7 +62,9 @@ export function runtimeRunnerManifest(text: string, version: string): string {
     assets?: { ios?: unknown; android?: unknown };
   };
   if (manifest.version !== version) {
-    throw new Error(`the runner manifest vouches for v${String(manifest.version)}, not v${version}`);
+    throw new Error(
+      `the runner manifest vouches for v${String(manifest.version)}, not v${version}`,
+    );
   }
   const { ios, android } = manifest.assets ?? {};
   if (!Array.isArray(ios) || !Array.isArray(android)) {

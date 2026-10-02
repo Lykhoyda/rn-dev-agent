@@ -60,8 +60,12 @@ const VERSION = '0.76.7';
 const TAG = `v${VERSION}`;
 const IOS_ZIP = `rn-fast-runner-${VERSION}-sim.zip`;
 const ANDROID_ZIP = `rn-android-runner-${VERSION}.zip`;
+const QAREN_ARM64_TGZ = `qaren-${VERSION}-darwin-arm64.tar.gz`;
+const QAREN_X64_TGZ = `qaren-${VERSION}-darwin-x64.tar.gz`;
 const IOS_BYTES = 'ios-runner-zip-bytes';
 const ANDROID_BYTES = 'android-runner-zip-bytes';
+const QAREN_ARM64_BYTES = 'qaren-arm64-tarball-bytes';
+const QAREN_X64_BYTES = 'qaren-x64-tarball-bytes';
 const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);
 const REPO = 'Lykhoyda/rn-dev-agent';
@@ -74,12 +78,26 @@ function producer() {
   return {
     ios: { sha256: sha256(IOS_BYTES), bytes: IOS_BYTES.length },
     android: { sha256: sha256(ANDROID_BYTES), bytes: ANDROID_BYTES.length },
+    qaren: {
+      'darwin-arm64': { sha256: sha256(QAREN_ARM64_BYTES), bytes: QAREN_ARM64_BYTES.length },
+      'darwin-x64': { sha256: sha256(QAREN_X64_BYTES), bytes: QAREN_X64_BYTES.length },
+    },
   };
 }
 
 // The manifest scripts/build-runner-manifest.mts produces for the seeded zips,
 // serialised the way it writes the file.
-function manifestFor(version = VERSION, ios = IOS_BYTES, android = ANDROID_BYTES): string {
+function manifestFor(
+  version = VERSION,
+  ios = IOS_BYTES,
+  android = ANDROID_BYTES,
+  arm64 = QAREN_ARM64_BYTES,
+): string {
+  const tarball = (platform: string, bytes: string) => ({
+    name: `qaren-${version}-${platform}.tar.gz`,
+    sha256: sha256(bytes),
+    bytes: bytes.length,
+  });
   return (
     JSON.stringify(
       {
@@ -95,6 +113,10 @@ function manifestFor(version = VERSION, ios = IOS_BYTES, android = ANDROID_BYTES
               bytes: android.length,
             },
           ],
+          qaren: {
+            'darwin-arm64': tarball('darwin-arm64', arm64),
+            'darwin-x64': tarball('darwin-x64', QAREN_X64_BYTES),
+          },
         },
       },
       null,
@@ -102,6 +124,8 @@ function manifestFor(version = VERSION, ios = IOS_BYTES, android = ANDROID_BYTES
     ) + '\n'
   );
 }
+
+const ALL_ASSETS = [IOS_ZIP, ANDROID_ZIP, QAREN_ARM64_TGZ, QAREN_X64_TGZ];
 
 function candidate(overrides: Record<string, unknown> = {}) {
   const manifest = manifestFor();
@@ -123,7 +147,7 @@ function published(overrides: Record<string, unknown> = {}) {
       isDraft: false,
       targetCommitish: SHA_A,
       tagName: TAG,
-      assets: [{ name: IOS_ZIP }, { name: ANDROID_ZIP }, { name: 'runner-manifest.json' }],
+      assets: [...ALL_ASSETS.map((name) => ({ name })), { name: 'runner-manifest.json' }],
     },
     tagSha: SHA_A,
     publishedManifest: manifestFor(),
@@ -139,6 +163,7 @@ test('a self-consistent candidate matching the producer handoff is prepared', ()
   assert.deepEqual(prepared.expected, {
     ios: IOS_ZIP,
     android: ANDROID_ZIP,
+    qaren: { 'darwin-arm64': QAREN_ARM64_TGZ, 'darwin-x64': QAREN_X64_TGZ },
     manifest: 'runner-manifest.json',
   });
 });
@@ -185,8 +210,8 @@ test('the trust root must vouch for exactly the candidate version', () => {
 });
 
 test('the distributed plugin copy must be present and identical to the root', () => {
-  // GH #892: packages/claude-plugin is the one directory both marketplaces
-  // install, so it carries the single host copy of the trust root.
+  // packages/qaren-plugin is the one directory every host installs, so it
+  // carries the single host copy of the trust root.
   assert.throws(
     () => assertPreparedCandidate(candidate({ pluginManifest: manifestFor(VERSION, 'x') })),
     /plugin runner-manifest\.json copy .* differs/,
@@ -222,6 +247,36 @@ test('the full pair with exact names is required', () => {
   );
 });
 
+test('exactly one qaren tarball per macOS platform, with the exact name, is required', () => {
+  const parsed = JSON.parse(manifestFor());
+  const variant = (qaren: unknown) => {
+    const text = JSON.stringify({ ...parsed, assets: { ...parsed.assets, qaren } });
+    return candidate({ repoManifest: text, pluginManifest: text });
+  };
+  const { 'darwin-x64': _x64, ...arm64Only } = parsed.assets.qaren;
+  assert.throws(() => assertPreparedCandidate(variant(undefined)), /lists no qaren tarballs/);
+  assert.throws(() => assertPreparedCandidate(variant([])), /lists no qaren tarballs/);
+  assert.throws(
+    () => assertPreparedCandidate(variant(arm64Only)),
+    /exactly one qaren tarball per macOS platform .* got darwin-arm64$/,
+  );
+  assert.throws(
+    () =>
+      assertPreparedCandidate(
+        variant({ ...parsed.assets.qaren, 'linux-x64': parsed.assets.qaren['darwin-x64'] }),
+      ),
+    /exactly one qaren tarball per macOS platform/,
+  );
+  const renamed = {
+    ...parsed.assets.qaren,
+    'darwin-x64': { ...parsed.assets.qaren['darwin-x64'], name: 'qaren-latest-darwin-x64.tar.gz' },
+  };
+  assert.throws(
+    () => assertPreparedCandidate(variant(renamed)),
+    /qaren darwin-x64 asset is qaren-latest-darwin-x64\.tar\.gz, expected qaren-0\.76\.7-darwin-x64\.tar\.gz/,
+  );
+});
+
 test('the trust root must carry the producer handoff digests and lengths exactly', () => {
   const tampered = { ...producer(), ios: { sha256: sha256('other'), bytes: IOS_BYTES.length } };
   assert.throws(
@@ -239,6 +294,19 @@ test('the trust root must carry the producer handoff digests and lengths exactly
   assert.throws(
     () => assertPreparedCandidate(candidate({ producer: { ios: producer().ios } })),
     /no producer handoff identity for android/,
+  );
+  const rebuilt = {
+    ...producer(),
+    qaren: { ...producer().qaren, 'darwin-arm64': { sha256: sha256('rebuilt'), bytes: 7 } },
+  };
+  assert.throws(
+    () => assertPreparedCandidate(candidate({ producer: rebuilt })),
+    /qaren darwin-arm64 digest .* does not match the producer handoff/,
+  );
+  const { qaren: _qaren, ...runnersOnly } = producer();
+  assert.throws(
+    () => assertPreparedCandidate(candidate({ producer: runnersOnly })),
+    /no producer handoff identity for qaren darwin-arm64/,
   );
   assert.throws(
     () =>
@@ -278,6 +346,10 @@ test('expected release asset names stay pinned to the client download contract',
   assert.deepEqual(expectedRunnerAssets('1.0.9'), {
     ios: 'rn-fast-runner-1.0.9-sim.zip',
     android: 'rn-android-runner-1.0.9.zip',
+    qaren: {
+      'darwin-arm64': 'qaren-1.0.9-darwin-arm64.tar.gz',
+      'darwin-x64': 'qaren-1.0.9-darwin-x64.tar.gz',
+    },
     manifest: 'runner-manifest.json',
   });
 });
@@ -361,7 +433,26 @@ test('a published release that diverges is refused, never replaced', () => {
       /without both runner zips/,
     ],
     [
-      { release: { ...published().release, assets: [{ name: IOS_ZIP }, { name: ANDROID_ZIP }] } },
+      {
+        release: {
+          ...published().release,
+          assets: [
+            { name: IOS_ZIP },
+            { name: ANDROID_ZIP },
+            { name: QAREN_ARM64_TGZ },
+            { name: 'runner-manifest.json' },
+          ],
+        },
+      },
+      /without both qaren tarballs/,
+    ],
+    [
+      {
+        release: {
+          ...published().release,
+          assets: ALL_ASSETS.map((name) => ({ name })),
+        },
+      },
       /without its runner-manifest\.json/,
     ],
     [{ publishedManifest: null }, /could not be read/],
@@ -414,7 +505,7 @@ function write(root: string, relative: string, content: string): void {
   writeFileSync(path, content);
 }
 
-const MANIFEST_PATHS = ['runner-manifest.json', 'packages/claude-plugin/runner-manifest.json'];
+const MANIFEST_PATHS = ['runner-manifest.json', 'packages/qaren-plugin/runner-manifest.json'];
 
 type FixtureOptions = {
   // Also commit the generated trust root onto the candidate: the release head H.
@@ -434,17 +525,26 @@ function createFixture(options: FixtureOptions = {}): Fixture {
 
   mkdirSync(seed);
   git(seed, 'init', '--quiet', '--initial-branch=main');
-  write(seed, 'packages/claude-plugin/plugin.json', `{"version": "${ADVERTISED}"}\n`);
   write(seed, 'packages/qaren-plugin/.claude-plugin/plugin.json', `{"version": "${ADVERTISED}"}\n`);
   write(
     seed,
-    'packages/claude-plugin/package.json',
+    'packages/qaren-plugin/package.json',
     `{"name": "qaren", "version": "${ADVERTISED}"}\n`,
   );
   write(
     seed,
-    'packages/claude-plugin/CHANGELOG.md',
+    'packages/qaren-plugin/CHANGELOG.md',
     `# qaren\n\n## ${ADVERTISED}\n\n### Patch Changes\n\n- older change\n`,
+  );
+  write(
+    seed,
+    'packages/qaren-cli/Cargo.toml',
+    `[package]\nname = "qaren"\nversion = "${ADVERTISED}"\n`,
+  );
+  write(
+    seed,
+    'packages/qaren-cli/Cargo.lock',
+    `[[package]]\nname = "qaren"\nversion = "${ADVERTISED}"\n`,
   );
   for (const path of MANIFEST_PATHS)
     write(seed, path, manifestFor(ADVERTISED, 'old-ios', 'old-android'));
@@ -469,16 +569,21 @@ function createFixture(options: FixtureOptions = {}): Fixture {
 
   // What `corepack yarn version-packages` generates: one commit on top of main.
   git(seed, 'checkout', '--quiet', '-b', 'changeset-release/main');
-  write(seed, 'packages/claude-plugin/plugin.json', `{"version": "${VERSION}"}\n`);
   write(seed, 'packages/qaren-plugin/.claude-plugin/plugin.json', `{"version": "${VERSION}"}\n`);
+  write(seed, 'packages/qaren-plugin/package.json', `{"name": "qaren", "version": "${VERSION}"}\n`);
   write(
     seed,
-    'packages/claude-plugin/package.json',
-    `{"name": "qaren", "version": "${VERSION}"}\n`,
+    'packages/qaren-cli/Cargo.toml',
+    `[package]\nname = "qaren"\nversion = "${VERSION}"\n`,
   );
   write(
     seed,
-    'packages/claude-plugin/CHANGELOG.md',
+    'packages/qaren-cli/Cargo.lock',
+    `[[package]]\nname = "qaren"\nversion = "${VERSION}"\n`,
+  );
+  write(
+    seed,
+    'packages/qaren-plugin/CHANGELOG.md',
     `# qaren\n\n## ${VERSION}\n\n### Patch Changes\n\n- abc1234: A change.\n\n## ${ADVERTISED}\n\n### Patch Changes\n\n- older change\n`,
   );
   rmSync(join(seed, '.changeset/pending.md'));
@@ -572,6 +677,8 @@ function originRef(fixture: Fixture, ref: string): string | null {
 function handoff(dir: string, ios = IOS_BYTES, android = ANDROID_BYTES): void {
   write(dir, `handoff/${IOS_ZIP}`, ios);
   write(dir, `handoff/${ANDROID_ZIP}`, android);
+  write(dir, `handoff/${QAREN_ARM64_TGZ}`, QAREN_ARM64_BYTES);
+  write(dir, `handoff/${QAREN_X64_TGZ}`, QAREN_X64_BYTES);
 }
 
 function ghCalls(fixture: Fixture): string[] {
@@ -620,6 +727,10 @@ function releaseCtx(
     'needs.prepare.outputs.android-sha256': p.android.sha256,
     'needs.prepare.outputs.android-bytes': String(p.android.bytes),
     'needs.prepare.outputs.android-tree': '',
+    'needs.prepare.outputs.qaren-darwin-arm64-sha256': p.qaren['darwin-arm64'].sha256,
+    'needs.prepare.outputs.qaren-darwin-arm64-bytes': String(p.qaren['darwin-arm64'].bytes),
+    'needs.prepare.outputs.qaren-darwin-x64-sha256': p.qaren['darwin-x64'].sha256,
+    'needs.prepare.outputs.qaren-darwin-x64-bytes': String(p.qaren['darwin-x64'].bytes),
     ...overrides,
   };
 }
@@ -713,8 +824,7 @@ test('a published candidate whose tag is the PR head is resumed, never regenerat
     const state = fixture.gh.state();
     state.releases[TAG] = {
       assets: {
-        [IOS_ZIP]: { uploads: 1 },
-        [ANDROID_ZIP]: { uploads: 1 },
+        ...Object.fromEntries(ALL_ASSETS.map((name) => [name, { uploads: 1 }])),
         'runner-manifest.json': { uploads: 1 },
       },
       draft: false,
@@ -796,6 +906,27 @@ test('a candidate that is not one commit on top of the pushed main is refused', 
     });
     assert.equal(run.ok, false);
     assert.match(run.failed!.stderr, /not one generated commit on top of main/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('the qaren crate version bump is a generated path', () => {
+  const fixture = createFixture();
+  try {
+    const changed = git(
+      fixture.root,
+      '--git-dir',
+      fixture.origin,
+      'diff',
+      '--name-only',
+      fixture.base,
+      fixture.candidate,
+    );
+    assert.match(changed, /packages\/qaren-cli\/Cargo\.toml/);
+    assert.match(changed, /packages\/qaren-cli\/Cargo\.lock/);
+    const run = runVersionStep(fixture, CANDIDATE_STEP);
+    assert.ok(run.ok, run.failed?.stderr);
   } finally {
     fixture.cleanup();
   }
@@ -899,6 +1030,23 @@ test('a retained zip of the wrong length is refused', () => {
   }
 });
 
+test('a retained qaren tarball that does not match the producer identity stops finalize', () => {
+  const fixture = createFixture();
+  try {
+    const { run } = runFinalize(fixture, {
+      ctx: { 'needs.prepare.outputs.qaren-darwin-x64-sha256': sha256('substituted') },
+    });
+    assert.equal(run.ok, false);
+    assert.match(
+      run.failed!.stderr,
+      /qaren-0\.76\.7-darwin-x64\.tar\.gz: retained sha256 .* != producer/,
+    );
+    assert.equal(originRef(fixture, 'refs/heads/changeset-release/main'), fixture.candidate);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('a missing retained zip is a partial handoff and refuses', () => {
   const fixture = createFixture();
   try {
@@ -926,7 +1074,7 @@ test('finalize refuses to land on a version branch that moved away from its cand
     // The branch is regenerated underneath this run (main advanced).
     const other = fullClone(fixture);
     git(other, 'checkout', '--quiet', 'changeset-release/main');
-    write(other, 'packages/claude-plugin/CHANGELOG.md', 'regenerated\n');
+    write(other, 'packages/qaren-plugin/CHANGELOG.md', 'regenerated\n');
     git(other, 'commit', '--quiet', '-am', 'chore(release): version packages');
     git(other, 'push', '--quiet', 'origin', 'changeset-release/main');
     const moved = originRef(fixture, 'refs/heads/changeset-release/main');
@@ -1013,6 +1161,43 @@ test('validate refuses H when the producer built other native inputs or other by
     });
     assert.equal(otherBytes.ok, false);
     assert.match(otherBytes.failed!.stderr, /does not match the producer handoff/);
+    const otherTarball = runJobSteps({
+      workflow: release,
+      jobId: 'validate',
+      cwd: checkout(fixture, fixture.head!),
+      ctx: releaseCtx(fixture, {
+        ...trees,
+        'needs.prepare.outputs.qaren-darwin-arm64-bytes': '1',
+      }),
+      env: baseEnv(fixture),
+      only: [PREPARED_STEP],
+    });
+    assert.equal(otherTarball.ok, false);
+    assert.match(otherTarball.failed!.stderr, /qaren darwin-arm64 digest .* does not match/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('validate refuses a release head that is more than the candidate plus its trust root', () => {
+  const fixture = createFixture({ prepared: true });
+  try {
+    const dir = checkout(fixture, fixture.head!);
+    write(dir, 'README.md', 'slipped in after the producer built the tarballs\n');
+    git(dir, 'commit', '--quiet', '-am', 'extra');
+    const extra = runJobSteps({
+      workflow: release,
+      jobId: 'validate',
+      cwd: dir,
+      ctx: releaseCtx(fixture, {
+        ...treeCtx(fixture, fixture.candidate),
+        'needs.finalize.outputs.head-sha': git(dir, 'rev-parse', 'HEAD').trim(),
+      }),
+      env: baseEnv(fixture),
+      only: [PREPARED_STEP],
+    });
+    assert.equal(extra.ok, false);
+    assert.match(extra.failed!.stderr, /is not one commit on top of the candidate/);
   } finally {
     fixture.cleanup();
   }
@@ -1096,7 +1281,13 @@ test('first publication stages a draft targeting H, uploads the retained bytes o
       Object.fromEntries(
         Object.entries(state.releases[TAG].assets).map(([name, a]) => [name, a.uploads]),
       ),
-      { [IOS_ZIP]: 1, [ANDROID_ZIP]: 1, 'runner-manifest.json': 1 },
+      {
+        [IOS_ZIP]: 1,
+        [ANDROID_ZIP]: 1,
+        [QAREN_ARM64_TGZ]: 1,
+        [QAREN_X64_TGZ]: 1,
+        'runner-manifest.json': 1,
+      },
     );
     assert.equal(
       readFileSync(fixture.gh.assetPath(TAG, 'runner-manifest.json'), 'utf8'),
@@ -1181,6 +1372,8 @@ test('a release already published from another head refuses before any write', (
         assets: {
           [IOS_ZIP]: IOS_BYTES,
           [ANDROID_ZIP]: ANDROID_BYTES,
+          [QAREN_ARM64_TGZ]: QAREN_ARM64_BYTES,
+          [QAREN_X64_TGZ]: QAREN_X64_BYTES,
           'runner-manifest.json': manifestFor(),
         },
         draft: false,
@@ -1248,6 +1441,37 @@ test('a published release missing a zip is partial and refuses', () => {
   }
 });
 
+test('a published release missing a qaren tarball is partial and refuses', () => {
+  const fixture = createFixture({
+    prepared: true,
+    releases: {
+      [TAG]: {
+        assets: {
+          [IOS_ZIP]: IOS_BYTES,
+          [ANDROID_ZIP]: ANDROID_BYTES,
+          [QAREN_ARM64_TGZ]: QAREN_ARM64_BYTES,
+          'runner-manifest.json': manifestFor(),
+        },
+        draft: false,
+        target: SHA_A,
+      },
+    },
+  });
+  try {
+    const head = fixture.head!;
+    const state = fixture.gh.state();
+    state.releases[TAG].target = head;
+    state.tags[TAG] = head;
+    writeFileSync(join(fixture.root, 'gh-state', 'state.json'), JSON.stringify(state));
+    const run = runPublish(fixture, PUBLISH_PATH);
+    assert.equal(run.ok, false);
+    assert.equal(run.failed!.name, DECIDE_STEP);
+    assert.match(run.failed!.stderr, /without both qaren tarballs/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('tampered public bytes fail the read-back and are never re-published', () => {
   const fixture = createFixture({ prepared: true });
   try {
@@ -1274,7 +1498,7 @@ test('a staged draft whose bytes were swapped before publication never publishes
   try {
     const run = runPublish(fixture, [READ_STEP, HANDOFF_STEP, DECIDE_STEP, STAGE_STEP], {});
     assert.ok(run.ok, run.failed?.stderr);
-    writeFileSync(fixture.gh.assetPath(TAG, IOS_ZIP), 'swapped');
+    writeFileSync(fixture.gh.assetPath(TAG, QAREN_X64_TGZ), 'swapped');
     const readback = runPublish(fixture, [READ_STEP, READBACK_STEP, PUBLISH_STEP, CONFIRM_STEP]);
     assert.equal(readback.ok, false);
     assert.equal(readback.failed!.name, READBACK_STEP);
@@ -1401,8 +1625,7 @@ function publishedFixture(options: FixtureOptions = {}): Fixture {
   const state = fixture.gh.state();
   state.releases[TAG] = {
     assets: {
-      [IOS_ZIP]: { uploads: 1 },
-      [ANDROID_ZIP]: { uploads: 1 },
+      ...Object.fromEntries(ALL_ASSETS.map((name) => [name, { uploads: 1 }])),
       'runner-manifest.json': { uploads: 1 },
     },
     draft: false,
@@ -1413,6 +1636,8 @@ function publishedFixture(options: FixtureOptions = {}): Fixture {
   mkdirSync(dirname(fixture.gh.assetPath(TAG, IOS_ZIP)), { recursive: true });
   writeFileSync(fixture.gh.assetPath(TAG, IOS_ZIP), IOS_BYTES);
   writeFileSync(fixture.gh.assetPath(TAG, ANDROID_ZIP), ANDROID_BYTES);
+  writeFileSync(fixture.gh.assetPath(TAG, QAREN_ARM64_TGZ), QAREN_ARM64_BYTES);
+  writeFileSync(fixture.gh.assetPath(TAG, QAREN_X64_TGZ), QAREN_X64_BYTES);
   writeFileSync(fixture.gh.assetPath(TAG, 'runner-manifest.json'), manifestFor());
   return fixture;
 }
@@ -1698,6 +1923,20 @@ test('a stale root, tampered bytes, a wrong length, a missing zip, a draft or a 
       (f) => writeFileSync(f.gh.assetPath(TAG, 'runner-manifest.json'), manifestFor(VERSION, 'x')),
       /differs from the trust root/,
     ],
+    [
+      'tarball',
+      (f) => writeFileSync(f.gh.assetPath(TAG, QAREN_ARM64_TGZ), 'tampered-arm64-tarball-xx'),
+      /qaren-0\.76\.7-darwin-arm64\.tar\.gz: public sha256 .* != trust root/,
+    ],
+    [
+      'missing tarball',
+      (f) => {
+        const s = f.gh.state();
+        delete s.releases[TAG].assets[QAREN_X64_TGZ];
+        writeFileSync(join(f.root, 'gh-state', 'state.json'), JSON.stringify(s));
+      },
+      /carries no qaren-0\.76\.7-darwin-x64\.tar\.gz/,
+    ],
   ];
   for (const [label, mutate, expected] of cases) {
     const fixture = publishedFixture();
@@ -1713,6 +1952,16 @@ test('a stale root, tampered bytes, a wrong length, a missing zip, a draft or a 
     } finally {
       fixture.cleanup();
     }
+  }
+  const divergentCopy = createFixture({ prepared: true });
+  try {
+    const dir = checkout(divergentCopy, divergentCopy.head!);
+    write(dir, 'packages/qaren-plugin/runner-manifest.json', manifestFor(VERSION, 'other-ios'));
+    const run = runCi(divergentCopy, dir, { 'github.base_ref': 'main' });
+    assert.equal(run.ok, false);
+    assert.match(run.failed!.stderr, /qaren-plugin\/runner-manifest\.json is missing or differs/);
+  } finally {
+    divergentCopy.cleanup();
   }
   const stale = createFixture({ prepared: true });
   try {
@@ -1783,7 +2032,7 @@ test('the sweep fails on divergent public bytes instead of rebuilding or replaci
 // --- the producer ---
 
 test('the producer refuses anything but a full candidate SHA before checking out', () => {
-  for (const jobId of ['build-ios', 'build-android']) {
+  for (const jobId of ['build-ios', 'build-android', 'build-qaren']) {
     for (const [ref, ok] of [
       [SHA_A, true],
       ['main', false],
@@ -1842,9 +2091,9 @@ test('the producer is a read-only callable: no release writes, no branch pushes,
   // asking for more than the caller's contents: read rejects every release run.
   assert.deepEqual(
     Object.fromEntries(Object.entries(artifacts.jobs).map(([id, job]) => [id, job.permissions])),
-    { 'build-ios': undefined, 'build-android': undefined },
+    { 'build-ios': undefined, 'build-android': undefined, 'build-qaren': undefined },
   );
-  for (const jobId of ['build-ios', 'build-android']) {
+  for (const jobId of ['build-ios', 'build-android', 'build-qaren']) {
     const job = artifacts.jobs[jobId];
     const checkoutStep = (job.steps ?? []).find((s) => s.uses?.startsWith('actions/checkout@'));
     assert.equal(checkoutStep?.with?.ref, '${{ inputs.ref }}');
@@ -1938,7 +2187,7 @@ test('the release transaction is ordered: prepare -> finalize -> validate -> pub
   for (const step of artifactSteps) {
     assert.match(
       String(step.with?.['artifact-ids']),
-      /needs\.prepare\.outputs\.ios-artifact-id.*needs\.prepare\.outputs\.android-artifact-id/,
+      /needs\.prepare\.outputs\.ios-artifact-id.*needs\.prepare\.outputs\.android-artifact-id.*needs\.prepare\.outputs\.qaren-darwin-arm64-artifact-id.*needs\.prepare\.outputs\.qaren-darwin-x64-artifact-id/,
     );
   }
   for (const name of [RETIRE_STEP]) {
@@ -1995,7 +2244,7 @@ function advertisedVersion(fixture: Fixture, ref: string): string {
       '--git-dir',
       fixture.origin,
       'show',
-      `${ref}:packages/claude-plugin/plugin.json`,
+      `${ref}:packages/qaren-plugin/.claude-plugin/plugin.json`,
     ),
   ).version;
 }
@@ -2085,7 +2334,13 @@ test('end to end: the first main commit advertising V carries V’s trust root a
     const bundled = JSON.parse(
       git(fixture.root, '--git-dir', fixture.origin, 'show', `${head}:runner-manifest.json`),
     );
-    for (const asset of [bundled.assets.ios[0], bundled.assets.android[0]]) {
+    for (const asset of [
+      bundled.assets.ios[0],
+      bundled.assets.android[0],
+      ...Object.values(
+        bundled.assets.qaren as Record<string, { name: string; sha256: string; bytes: number }>,
+      ),
+    ]) {
       const bytes = readFileSync(fixture.gh.assetPath(TAG, asset.name));
       assert.equal(createHash('sha256').update(bytes).digest('hex'), asset.sha256, asset.name);
       assert.equal(bytes.length, asset.bytes, asset.name);

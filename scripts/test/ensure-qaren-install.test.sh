@@ -34,9 +34,9 @@ export PATH="$tmp/stubs:$PATH"
 
 # make_tarball <out> <kind>: good | dotdot | absolute | symlink | stray
 make_tarball() {
-  python3 - "$1" "$2" "$TOP" <<'PY'
+  python3 - "$1" "$2" "$TOP" "$tmp" <<'PY'
 import io, sys, tarfile
-out, kind, top = sys.argv[1:]
+out, kind, top, tmp = sys.argv[1:]
 def add(tar, name, data=b"", mode=0o644, kind=tarfile.REGTYPE, link=""):
     info = tarfile.TarInfo(name)
     info.type, info.mode, info.size, info.linkname = kind, mode, len(data), link
@@ -49,9 +49,10 @@ with tarfile.open(out, "w:gz", format=tarfile.USTAR_FORMAT) as tar:
     if kind == "dotdot":
         add(tar, f"{top}/../escaped", b"x")
     elif kind == "absolute":
-        add(tar, "/tmp/qaren-escaped", b"x")
+        add(tar, f"{tmp}/abs-escaped", b"x")
     elif kind == "symlink":
-        add(tar, f"{top}/runtime/out", kind=tarfile.SYMTYPE, link="../../../../outside")
+        add(tar, f"{top}/runtime/out", kind=tarfile.SYMTYPE, link=f"{tmp}/link-escaped")
+        add(tar, f"{top}/runtime/out/file", b"x")
     elif kind == "stray":
         add(tar, "elsewhere/file", b"x")
 PY
@@ -122,7 +123,11 @@ for kind in dotdot absolute symlink stray; do
   run_install "$tmp/$kind.tgz" >/dev/null; rc=$?
   check "$kind entry is refused" 1 "$rc"
   check "$kind: nothing installed" no "$([ -e "$DEST" ] && echo yes || echo no)"
-  check "$kind: nothing escaped" no "$([ -e "$tmp/home/.qaren/runtime/escaped" ] || [ -e "$tmp/outside" ] && echo yes || echo no)"
+  escaped=no
+  for path in "$tmp/home/.qaren/runtime/escaped" "$tmp/home/.qaren/escaped" "$tmp/abs-escaped" "$tmp/link-escaped"; do
+    [ -e "$path" ] || [ -L "$path" ] && escaped="yes: $path"
+  done
+  check "$kind: nothing escaped" no "$escaped"
   check "$kind: no staging left behind" 0 "$(leftovers)"
 done
 
@@ -144,15 +149,40 @@ check "killed install does not succeed" yes "$([ "$rc" -ne 0 ] && echo yes || ec
 check "killed install: no runtime" no "$([ -e "$DEST" ] && echo yes || echo no)"
 check "killed install: no staging left behind" 0 "$(leftovers)"
 
-# A runtime that does not match the manifest is replaced as a whole.
-reset_home
-mkdir -p "$DEST/bin"
-printf 'stale\n' > "$DEST/stale-file"
-printf '%s\n' "$(printf 0%.0s $(seq 64))" > "$DEST/.tarball-sha256"
+# A runtime whose recorded digest differs from the manifest is replaced as a whole.
+stale_runtime() {
+  reset_home
+  mkdir -p "$DEST/bin"
+  printf '#!/bin/sh\necho stale\n' > "$DEST/bin/qaren"
+  chmod +x "$DEST/bin/qaren"
+  printf 'stale\n' > "$DEST/stale-file"
+  printf '%s\n' "$(printf 0%.0s $(seq 64))" > "$DEST/.tarball-sha256"
+}
+stale_runtime
 out=$(run_install "$tmp/good.tgz"); rc=$?
 check "mismatched runtime is replaced" 0 "$rc"
+check "replaced runtime runs the new binary" qaren "$("$DEST/bin/qaren")"
+check "replaced runtime records the new digest" "$(shasum -a 256 "$tmp/good.tgz" | cut -d' ' -f1)" "$(cat "$DEST/.tarball-sha256")"
 check "replaced runtime drops stale files" no "$([ -e "$DEST/stale-file" ] && echo yes || echo no)"
 check "replaced runtime: no staging left behind" 0 "$(leftovers)"
+
+# Interrupting between moving the previous runtime aside and publishing the new one restores it.
+stale_runtime
+real_mv=$(command -v mv)
+cat > "$tmp/stubs/mv" <<SH
+#!/bin/sh
+case "\$1" in
+  */x/$TOP) kill -TERM \$PPID; exit 143 ;;
+esac
+exec "$real_mv" "\$@"
+SH
+chmod +x "$tmp/stubs/mv"
+run_install "$tmp/good.tgz" >/dev/null; rc=$?
+rm -f "$tmp/stubs/mv"
+check "interrupted replacement does not succeed" yes "$([ "$rc" -ne 0 ] && echo yes || echo no)"
+check "interrupted replacement keeps the previous runtime" stale "$("$DEST/bin/qaren")"
+check "interrupted replacement keeps the previous files" yes "$([ -e "$DEST/stale-file" ] && echo yes || echo no)"
+check "interrupted replacement: no staging left behind" 0 "$(leftovers)"
 
 # No qaren asset for this host refuses the install.
 reset_home

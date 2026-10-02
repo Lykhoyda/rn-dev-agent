@@ -86,7 +86,9 @@ install() {
 
   mkdir -p "$RUNTIME_ROOT"
   STAGING=$(mktemp -d "$RUNTIME_ROOT/.install.XXXXXX")
-  trap 'rm -rf "$STAGING"' EXIT
+  DEST="$dest"
+  # An interrupted replacement puts the previous runtime back before staging is removed.
+  trap '[ -e "$STAGING/previous" ] && [ ! -e "$DEST" ] && mv "$STAGING/previous" "$DEST"; rm -rf "$STAGING"' EXIT
   trap 'exit 130' INT TERM
   local tarball="$STAGING/$name" top="${name%.tar.gz}"
 
