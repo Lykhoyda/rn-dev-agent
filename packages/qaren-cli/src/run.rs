@@ -742,15 +742,10 @@ fn preflight_plan(
             "preflight",
             FailureCode::JevUnreachable,
             "the fixed Jev probe or plan judgments did not succeed",
-            "set a valid TYPESAFE_API_KEY in the environment and check TypeSafe reachability and the built runtime",
+            "this plan has phrase or unrecognised lines that need Jev: set a valid TYPESAFE_API_KEY, or quote every target and ✓ line",
         )
     };
-    if runner
-        .env_var("TYPESAFE_API_KEY")
-        .is_none_or(|key| key.trim().is_empty())
-    {
-        return Err(unavailable());
-    }
+    // The core decides whether the plan needs Jev; a missing key fails its probe before any device.
     let output = runner.run(&core::preflight_spec(node, runtime_dir, plan_file));
     let value = serde_json::from_str::<Value>(output.stdout.trim()).map_err(|_| unavailable())?;
     let jev = value
@@ -762,13 +757,16 @@ fn preflight_plan(
         let prepared = value
             .get("prepared")
             .filter(|p| p.get("blocks").is_some_and(Value::is_array));
+        // An absent or non-boolean jevRequired counts as required, so an older core cannot skip the probe.
+        let jev_required = value.get("jevRequired").and_then(Value::as_bool) != Some(false);
         if let (Some(prepared), Some(jev)) = (prepared, accounting.as_ref()) {
             if prepared.get("hash").and_then(Value::as_str)
                 == Some(&sha256_hex(read_plan(plan_file)?.as_bytes()))
-                && jev
-                    .call_details
-                    .iter()
-                    .any(|c| c.scope == "preflight" && c.outcome == "ok")
+                && (!jev_required
+                    || jev
+                        .call_details
+                        .iter()
+                        .any(|c| c.scope == "preflight" && c.outcome == "ok"))
             {
                 return Ok(prepared.clone());
             }

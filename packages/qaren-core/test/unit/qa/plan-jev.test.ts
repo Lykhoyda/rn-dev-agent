@@ -1,6 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePlanWithJev, preparePlan, readPreparedPlan } from '../../../dist/qa/plan.js';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import {
+  parsePlanWithJev,
+  planNeedsJev,
+  preparePlan,
+  readPreparedPlan,
+} from '../../../dist/qa/plan.js';
 import { preflightPlan } from '../../../dist/qa/preflight.js';
 import { JevError } from '../../../dist/qa/questions.js';
 import { choice, scriptedJudge } from './judgment-fixtures.ts';
@@ -153,15 +160,73 @@ test('safe fallback arguments are copied deterministically and values never go t
   }
 });
 
-test('fixed preflight probe is mandatory even for a literal plan and is included in accounting', async () => {
+const throwingJudge = () =>
+  scriptedJudge(() => {
+    throw new Error('a literal plan must not call Jev');
+  });
+
+test('planNeedsJev is true only for unrecognised verbs, phrase targets and phrase checks', () => {
+  const fixture = (name: string) =>
+    readFileSync(new URL(`../../fixtures/plans/${name}`, import.meta.url), 'utf8');
+  for (const [plan, needs] of [
+    [fixture('literal.md'), false],
+    [fixture('phrases.md'), true],
+    ['1. Visit profile', true],
+    ['1. Tap the save button', true],
+    ['✓ the header shows the name', true],
+    ['1. Scroll down', false],
+    ['1. Scroll down until "Footer"', false],
+    ['1. Scroll down until the footer', true],
+    ['1. Accept the dialog', false],
+    ['1. Go back', false],
+    ['1. Tap "A"\n2. Type "x" into "Name"\n3. Wait for "Done"\n✓ "Done"', false],
+    ['Not a numbered line', false],
+  ] as const)
+    assert.equal(planNeedsJev(plan), needs, plan);
+});
+
+test('a literal plan preflights without the probe or any Jev call', async () => {
+  const markdown = readFileSync(
+    new URL('../../fixtures/plans/literal.md', import.meta.url),
+    'utf8',
+  );
+  const judge = throwingJudge();
+  const result = await preflightPlan(markdown, judge);
+  assert.ok(result.ok);
+  assert.equal(result.jevRequired, false);
+  assert.equal(result.jev.calls, 0);
+  assert.equal(judge.requests.length, 0);
+  assert.equal(result.prepared.hash, createHash('sha256').update(markdown).digest('hex'));
+  const quoted = await preflightPlan('1. Tap "A"', throwingJudge());
+  assert.ok(quoted.ok && quoted.jevRequired === false && quoted.jev.calls === 0);
+});
+
+test('a grammar-refused literal plan reports PLAN_UNPARSEABLE without calling Jev', async () => {
+  const judge = throwingJudge();
+  const result = await preflightPlan('## QA\nTap "A" without a number', judge);
+  assert.ok(!result.ok && result.code === 'PLAN_UNPARSEABLE');
+  assert.equal(judge.requests.length, 0);
+});
+
+test('a plan that needs Jev keeps the fixed probe and reports jevRequired', async () => {
   const judge = scriptedJudge(() => ({ preflight: { type: 'noul', noul: 0.99 } }));
-  const result = await preflightPlan('1. Tap "A"', judge);
+  const result = await preflightPlan('1. Tap the save button', judge);
   assert.equal(result.ok, true);
+  assert.ok(result.ok && result.jevRequired === true);
   assert.equal(result.jev.calls, 1);
   assert.equal(result.jev.inputTokens, 10);
   assert.deepEqual(judge.requests[0].state, { readiness: 'ready' });
   assert.deepEqual(result.jev.callDetails[0].questionIds, ['preflight']);
   assert.equal(result.jev.callDetails[0].scope, 'preflight');
+});
+
+test('a plan that needs Jev refuses JEV_UNREACHABLE when the key is missing or rejected', async () => {
+  const judge = scriptedJudge(() => {
+    throw new JevError('JEV_AUTH_FAILED');
+  });
+  const result = await preflightPlan('✓ the header shows the name', judge);
+  assert.ok(!result.ok && result.code === 'JEV_UNREACHABLE');
+  assert.equal(judge.requests.length, 1);
 });
 
 test('preflight does one probe and one fallback batch, not a parse per line', async () => {

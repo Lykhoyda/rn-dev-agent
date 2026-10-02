@@ -18,8 +18,9 @@ cargo build --manifest-path packages/qaren-cli/Cargo.toml --locked
 Run these commands from the repository root. The binary is
 `packages/qaren-cli/target/debug/qaren`; its screen child uses the generated
 `packages/qaren-core/dist/`. Set `QAREN_RUNTIME` to its absolute path when running
-the binary from another location. Set `TYPESAFE_API_KEY` for Jev judgments;
-even a literal plan performs a live readiness judgment before device allocation.
+the binary from another location. Set `TYPESAFE_API_KEY` for plans with phrase
+or unrecognised lines: they make a live readiness judgment before device
+allocation. A plan with only quoted targets and quoted ✓ lines needs no key.
 
 ## Check a plan
 
