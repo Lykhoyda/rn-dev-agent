@@ -25,7 +25,7 @@ done
 [ -n "$MODE" ] || { echo "usage: ensure-qaren.sh --print-bin | --install [--from-file <tarball>]" >&2; exit 2; }
 
 # node and curl keep their own messages where they are needed.
-REQUIRED_TOOLS="uname dirname cat tar shasum wc cut tr head du mktemp mkdir mv cp rm find ls sleep perl"
+REQUIRED_TOOLS="uname dirname cat tar gzip shasum wc cut tr head du mktemp mkdir mv cp rm find ls sleep perl"
 for tool in $REQUIRED_TOOLS; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     [ "$MODE" = --print-bin ] && { echo "qaren: required tool not found: $tool"; exit 0; }
@@ -44,6 +44,7 @@ INSTALL_COMMAND="bash $(printf %q "$PLUGIN_ROOT/scripts/ensure-qaren.sh") --inst
 PRINT_BIN_BUDGET_SECONDS=1
 # Decompression-bomb ceiling for the unpacked runtime; the manifest digest stays the trust root.
 MAX_UNPACKED_BYTES=536870912
+MAX_ENTRIES=10000
 if [ "${QAREN_TEST_MODE:-}" = 1 ] && [ -n "${QAREN_MAX_UNPACKED_BYTES:-}" ]; then
   MAX_UNPACKED_BYTES="$QAREN_MAX_UNPACKED_BYTES"
 fi
@@ -151,8 +152,9 @@ print_bin() {
 
 refuse() { echo "ensure-qaren: $*" >&2; exit 1; }
 
-# Every child started while the install lock is held runs with fd 9 closed,
-# so a process outliving a killed installer never keeps the lock.
+# Read-only children run with fd 9 closed, so a reader outliving a killed installer never keeps
+# the lock. Children that change staging or the runtime keep it until they finish: nobody heals
+# while a killed installer's last write is still landing.
 nolock() { "$@" 9>&-; }
 
 # QAREN_TEST_MODE=1 with QAREN_TEST_PAUSE_AT=<stage> parks the installer at that stage.
@@ -190,11 +192,11 @@ heal() {
       { [ -d "$staging/previous" ] && [ ! -L "$staging/previous" ] && [ -O "$staging/previous" ]; } \
         || refuse "unexpected install state at $staging/previous; inspect it and remove it if it is not needed"
       if [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
-        nolock mv "$staging/previous" "$dest"
+        mv "$staging/previous" "$dest"
         echo "ensure-qaren: restored the qaren v$version runtime an interrupted install had moved aside" >&2
       fi
     fi
-    nolock rm -rf "$staging"
+    rm -rf "$staging"
   done
 }
 
@@ -216,17 +218,17 @@ install() {
   STAGING=""
   DEST="$dest"
   # An interrupted replacement puts the previous runtime back before staging goes.
-  trap '[ -n "$STAGING" ] && [ -e "$STAGING/previous" ] && [ ! -e "$DEST" ] && nolock mv "$STAGING/previous" "$DEST"; [ -n "$STAGING" ] && nolock rm -rf "$STAGING"' EXIT
+  trap '[ -n "$STAGING" ] && [ -e "$STAGING/previous" ] && [ ! -e "$DEST" ] && mv "$STAGING/previous" "$DEST"; [ -n "$STAGING" ] && rm -rf "$STAGING"' EXIT
   trap 'exit 130' INT TERM HUP
-  STAGING=$(exec 9>&-; mktemp -d "$RUNTIME_ROOT/.staging-$version.XXXXXX")
+  STAGING=$(mktemp -d "$RUNTIME_ROOT/.staging-$version.XXXXXX")
   local tarball="$STAGING/$name" top="${name%.tar.gz}"
 
   pause_at download
   if [ -n "$FROM_FILE" ]; then
-    nolock cp "$FROM_FILE" "$tarball" || refuse "cannot read $FROM_FILE"
+    cp "$FROM_FILE" "$tarball" || refuse "cannot read $FROM_FILE"
   else
     command -v curl >/dev/null 2>&1 || refuse "curl is required to download $name"
-    nolock curl -fsSL --retry 3 --proto '=https' --proto-redir '=https' --tlsv1.2 -o "$tarball" "$RELEASES/v$version/$name" \
+    curl -fsSL --retry 3 --proto '=https' --proto-redir '=https' --tlsv1.2 -o "$tarball" "$RELEASES/v$version/$name" \
       || refuse "could not download $RELEASES/v$version/$name"
   fi
 
@@ -236,9 +238,16 @@ install() {
   [ "$got" = "$bytes" ] || refuse "$name is $got bytes, the manifest vouches for $bytes; nothing installed"
   got=$(exec 9>&-; shasum -a 256 "$tarball" | cut -d' ' -f1)
   [ "$got" = "$sha" ] || refuse "$name sha256 $got does not match the manifest $sha; nothing installed"
+  # Bound the whole decompressed stream (headers and contents) before tar reads any of it,
+  # stopping one byte past the ceiling.
+  got=$(exec 9>&-; { gzip -dc "$tarball" 2>/dev/null || true; } | head -c $((MAX_UNPACKED_BYTES + 1)) | wc -c | tr -d ' ')
+  [ "$got" -le "$MAX_UNPACKED_BYTES" ] \
+    || refuse "$name would unpack to more than $MAX_UNPACKED_BYTES bytes, above the unpacked-size ceiling; nothing installed"
 
-  local entry
+  local entry entries=0
   while IFS= read -r entry; do
+    entries=$((entries + 1))
+    [ "$entries" -le "$MAX_ENTRIES" ] || refuse "$name carries more than $MAX_ENTRIES entries; nothing installed"
     case "$entry" in
       /* | .. | ../* | */.. | */../*) refuse "$name carries an unsafe path: $entry" ;;
       "$top" | "$top/" | "$top"/*) ;;
@@ -251,14 +260,10 @@ install() {
       *) refuse "$name carries a link or special file: $entry" ;;
     esac
   done < <(exec 9>&-; tar -tvzf "$tarball")
-  # Count the decompressed content itself, stopping one byte past the ceiling.
-  got=$(exec 9>&-; { tar -xzOf "$tarball" 2>/dev/null || true; } | head -c $((MAX_UNPACKED_BYTES + 1)) | wc -c | tr -d ' ')
-  [ "$got" -le "$MAX_UNPACKED_BYTES" ] \
-    || refuse "$name would unpack to more than $MAX_UNPACKED_BYTES bytes, above the unpacked-size ceiling; nothing installed"
 
   pause_at extract
-  nolock mkdir "$STAGING/x"
-  nolock tar -xzf "$tarball" -C "$STAGING/x" --no-same-owner
+  mkdir "$STAGING/x"
+  tar -xzf "$tarball" -C "$STAGING/x" --no-same-owner
   got=$(exec 9>&-; du -sk "$STAGING/x" | cut -f1)
   [ $((got * 1024)) -le "$MAX_UNPACKED_BYTES" ] \
     || refuse "$name unpacked to $((got * 1024)) bytes on disk, above the unpacked-size ceiling; nothing installed"
@@ -270,10 +275,10 @@ install() {
 
   pause_at move1
   if [ -e "$dest" ]; then
-    nolock mv "$dest" "$STAGING/previous"
+    mv "$dest" "$STAGING/previous"
   fi
   pause_at move2-before
-  nolock mv "$STAGING/x/$top" "$dest"
+  mv "$STAGING/x/$top" "$dest"
   pause_at move2-after
   echo "$dest/bin/qaren"
 }

@@ -33,7 +33,7 @@ printf '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; *) echo Dar
 printf '#!/bin/sh\necho $$ >> "%s/sleep-pids"\nexec "%s" "$@"\n' "$tmp" "$(command -v sleep)" > "$tmp/stubs/sleep"
 chmod +x "$tmp/stubs/uname" "$tmp/stubs/sleep"
 export PATH="$tmp/stubs:$PATH"
-REQUIRED_TOOLS="uname dirname cat tar shasum wc cut tr head du mktemp mkdir mv cp rm find ls sleep perl"
+REQUIRED_TOOLS="uname dirname cat tar gzip shasum wc cut tr head du mktemp mkdir mv cp rm find ls sleep perl"
 
 # make_tarball <out> <kind>: good | dotdot | absolute | symlink | stray | bomb | manyfiles
 make_tarball() {
@@ -68,6 +68,9 @@ with tarfile.open(out, "w:gz", format=tarfile.USTAR_FORMAT, compresslevel=1) as 
     elif kind == "manyfiles":
         for i in range(300):
             add(tar, f"{top}/runtime/many/{i}", b"x")
+    elif kind == "flood":
+        for i in range(10001):
+            add(tar, f"{top}/runtime/flood/{i}")
 PY
 }
 
@@ -243,6 +246,37 @@ check "after SIGKILL: the runtime is complete" "$(shasum -a 256 "$tmp/good.tgz" 
 check "the lock file is never removed" yes "$([ -f "$(LOCKFILE_PATH)" ] && echo yes || echo no)"
 check "the lock is released after an install" yes "$(lock_free)"
 
+# A child still changing staging keeps the lock after its installer is killed, until it finishes.
+reset_home
+real_cp=$(PATH="${PATH#"$tmp/stubs:"}" command -v cp)
+cat > "$tmp/stubs/cp" <<SH
+#!/bin/sh
+: > "$tmp/cp-started"
+"$real_cp" "\$@"
+"$(PATH="${PATH#"$tmp/stubs:"}" command -v sleep)" 2
+: > "$tmp/cp-done"
+SH
+chmod +x "$tmp/stubs/cp"
+rm -f "$tmp/cp-started" "$tmp/cp-done"
+HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --install --from-file "$tmp/good.tgz" >/dev/null 2>&1 &
+installer=$!
+waited=0
+while [ ! -e "$tmp/cp-started" ] && [ "$waited" -lt 200 ]; do sleep 0.05; waited=$((waited + 1)); done
+kill -9 "$installer" 2>/dev/null
+wait "$installer" 2>/dev/null
+check "a writing child of a killed installer keeps the lock" no "$(lock_free)"
+run_install "$tmp/good.tgz" >/dev/null; rc=$?
+check "while it writes, a new install is refused" 1 "$rc"
+waited=0
+while [ ! -e "$tmp/cp-done" ] && [ "$waited" -lt 200 ]; do sleep 0.05; waited=$((waited + 1)); done
+sleep 0.2
+check "the lock frees once the writing child finishes" yes "$(lock_free)"
+rm -f "$tmp/stubs/cp"
+out=$(run_install "$tmp/good.tgz"); rc=$?
+check "then the next install heals and succeeds" 0 "$rc"
+check "then the runtime is complete" "$(shasum -a 256 "$tmp/good.tgz" | cut -d' ' -f1)" "$(cat "$DEST/.tarball-sha256")"
+check "then no staging is left behind" 0 "$(leftovers)"
+
 # SIGKILL at every stage, upgrading (no runtime yet) and replacing (a stale runtime): the next
 # install heals what the killed one left and finishes, with no staging and the lock free.
 GOOD_SHA=$(shasum -a 256 "$tmp/good.tgz" | cut -d' ' -f1)
@@ -317,14 +351,22 @@ write_manifest "$tmp/bomb.tgz"
 run_install "$tmp/bomb.tgz" >/dev/null; rc=$?
 check "a 1 GiB entry is refused" 1 "$rc"
 check "1 GiB entry: names the ceiling" yes "$(grep -q 'above the unpacked-size ceiling' "$tmp/stderr" && echo yes || echo no)"
-check "1 GiB entry: refused before extraction" yes "$(grep -q 'would unpack to more than' "$tmp/stderr" && echo yes || echo no)"
+check "1 GiB entry: refused before tar reads it" yes "$(grep -q 'would unpack to more than' "$tmp/stderr" && echo yes || echo no)"
 check "1 GiB entry: the prior runtime is byte-identical" "$before" "$(runtime_snapshot)"
 check "1 GiB entry: no staging left behind" 0 "$(leftovers)"
 rm -f "$tmp/bomb.tgz"
 
+make_tarball "$tmp/flood.tgz" flood
+write_manifest "$tmp/flood.tgz"
+run_install "$tmp/flood.tgz" >/dev/null; rc=$?
+check "an entry flood is refused" 1 "$rc"
+check "entry flood: named" yes "$(grep -q 'more than 10000 entries' "$tmp/stderr" && echo yes || echo no)"
+check "entry flood: the prior runtime is byte-identical" "$before" "$(runtime_snapshot)"
+
+# Small enough as a stream, but each file occupies a disk block: only the on-disk check sees it.
 make_tarball "$tmp/many.tgz" manyfiles
 write_manifest "$tmp/many.tgz"
-QAREN_TEST_MODE=1 QAREN_MAX_UNPACKED_BYTES=200000 HOME="$tmp/home" \
+QAREN_TEST_MODE=1 QAREN_MAX_UNPACKED_BYTES=700000 HOME="$tmp/home" \
   bash "$tmp/plugin/scripts/ensure-qaren.sh" --install --from-file "$tmp/many.tgz" >/dev/null 2>"$tmp/stderr"; rc=$?
 check "on-disk size above the ceiling is refused after extraction" 1 "$rc"
 check "on-disk size: named" yes "$(grep -q 'bytes on disk, above the unpacked-size ceiling' "$tmp/stderr" && echo yes || echo no)"

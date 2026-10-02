@@ -31,7 +31,7 @@ printf '#!/bin/sh\ncase "$1" in -s) echo "${FAKE_OS:-Darwin}" ;; -m) echo arm64 
 printf '#!/bin/sh\necho "network touched" >> "%s/network"\nexit 7\n' "$tmp" > "$tmp/bin/curl"
 chmod +x "$tmp/bin/uname" "$tmp/bin/curl"
 # The installer's required tools plus node; curl is a tripwire, not a real client.
-for tool in bash cat cut dirname du find head ls mkdir mktemp mv node cp perl rm shasum sleep tar tr wc; do
+for tool in bash cat cut dirname du find gzip head ls mkdir mktemp mv node cp perl rm shasum sleep tar tr wc; do
   ln -sf "$(command -v "$tool")" "$tmp/bin/$tool"
 done
 # The same toolbox without even the curl tripwire.
