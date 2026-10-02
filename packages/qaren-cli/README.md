@@ -407,9 +407,9 @@ moment (the default `install` policy keeps today's behavior: prepare's own
 `pnpm install` may reach the network): run it while registry credentials
 are available; it runs `pnpm fetch` + `pnpm install
 --frozen-lockfile` (CI, stdin-null) and persists only
-`{worktree, project, lockfile sha256, timestamp}` — never a secret (failure
-summaries pass a credential redactor). A scenario with `deps.policy:
-require-prewarm` then refuses to prepare without a matching record
+`{worktree, project, lockfile sha256, timestamp}`; failure summaries follow the
+[diagnostic redaction contract](#preparation-ownership-and-safety-rules).
+A scenario with `deps.policy: require-prewarm` then refuses to prepare without a matching record
 (`DEPS_NOT_PREWARMED`) and installs with `--offline`, so no mid-run
 credential prompt can ever occur.
 
@@ -443,6 +443,17 @@ build_and_ready — so revisit this once live reuse is measurable.
   applicable to them. The emulator guest only trusts the farm host's adb key,
   so the private server authenticates with that key (`ADB_VENDOR_KEYS`),
   fetched once over ssh into the run directory and deleted at cleanup.
+- **Private key fetch output is withheld from diagnostics.** The farm key
+  fetch uses private capture: failure details in `run.json` and the receipt
+  report only exit status and timeout state with `[private output withheld]`,
+  and neither captured stream is written to durable logs. Only a successful,
+  nonempty fetch writes the cleanup-tracked, mode-0600 vendor key file.
+  Other command summaries redact complete stdout and stderr before selecting
+  the six-line diagnostic tail. Shared redaction masks PEM private-key bodies
+  as `<redacted private key>`, including unterminated blocks and fragments
+  ending in an orphan END header; header delimiters remain visible. Durable
+  subprocess logs retain block state across lines and withheld oversized lines,
+  including headers split across capture chunks.
 - **Local listeners are never adopted.** The farm-advertised adb port is
   preflighted free on this host *before* the lease is claimed (a local
   emulator commonly owns 5555), and a listener on the tunnel or private adb
