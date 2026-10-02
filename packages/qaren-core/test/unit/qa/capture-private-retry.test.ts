@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { captureScreen, NativeCaptureError } from '../../../dist/qa/capture.js';
 import type { ReactObservation } from '../../../dist/qa/capture.js';
+import type { NativeNode } from '../../../dist/qa/screen.js';
 import {
   bindPrivateInputs,
   PrivateInputCaptureError,
@@ -51,6 +52,48 @@ test('a second refusal refuses exactly as before, without a third attempt', asyn
   await assert.rejects(captureScreen(s.deps), PrivateInputCaptureError);
   assert.deepEqual(s.calls, { native: 2, react: 2 });
   assert.equal(refreshes(s.events), 1);
+});
+
+test('native input values, labels, and secure nodes refuse a React timeout without retrying', async () => {
+  const nodes: NativeNode[] = [
+    ...[
+      'TextField',
+      'SearchField',
+      'TextView',
+      'android.widget.EditText',
+      'android.widget.AutoCompleteTextView',
+    ].flatMap((type) => [
+      { ref: '@input', type, value: secret },
+      { ref: '@input', type, label: secret },
+    ]),
+    { ref: '@secure', type: 'StaticText', secure: true },
+    { ref: '@secure', type: 'SecureTextField' },
+  ];
+  for (const requirePrivateInputs of [false, true]) {
+    for (const node of nodes) {
+      const s = scripted([refusesOnce, () => assert.fail('no retry')]);
+      await assert.rejects(
+        captureScreen({
+          ...s.deps,
+          requirePrivateInputs,
+          native: async () => {
+            s.calls.native++;
+            return { nodes: [node] };
+          },
+        }),
+        (error) => {
+          assert.ok(error instanceof PrivateInputCaptureError);
+          assert.equal(error instanceof PrivateInputCaptureTimeout, false);
+          assert.equal(error.message, new PrivateInputCaptureError().message);
+          assert.equal(error.cause, undefined);
+          assert.equal(JSON.stringify(error).includes(secret), false);
+          return true;
+        },
+      );
+      assert.deepEqual(s.calls, { native: 1, react: 1 });
+      assert.equal(refreshes(s.events), 0);
+    }
+  }
 });
 
 test('an unknown private capture that did not time out refuses without a retry', async () => {
