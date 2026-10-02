@@ -346,7 +346,7 @@ extension RnFastRunnerTests {
 
   // Non-exact predicate bindings are read once per capture and shared by every group using them.
   private final class PresenceBindings {
-    var byPredicate: [PresencePredicate: [(element: XCUIElement, descriptor: PresenceDescriptor?)]] = [:]
+    var byPredicate: [PresencePredicate: [XCUIElement]] = [:]
   }
 
   func platformPresenceFailure() -> Response {
@@ -714,16 +714,15 @@ extension RnFastRunnerTests {
     if bound == nil {
       guard let elements = presenceRead(deadline: deadline, timing: timing, read: .allMatches, { query.allElementsBoundByAccessibilityElement })
       else { unknownReason?(.readUnavailable); return nil }
-      var candidates: [(element: XCUIElement, descriptor: PresenceDescriptor?)] = []
-      for element in elements {
-        guard let snapshot = presenceRead(deadline: deadline, timing: timing, read: .candidateSnapshot, { try element.snapshot() })
-        else { unknownReason?(.readUnavailable); return nil }
-        candidates.append((element, PresenceDescriptor(snapshot)))
-      }
-      bindings.byPredicate[predicate] = candidates
-      bound = candidates
+      bindings.byPredicate[predicate] = elements
+      bound = elements
     }
-    let matches = bound!.filter { $0.descriptor == descriptor }.map(\.element)
+    var matches: [XCUIElement] = []
+    for element in bound! {
+      guard let snapshot = presenceRead(deadline: deadline, timing: timing, read: .candidateSnapshot, { try element.snapshot() })
+      else { unknownReason?(.readUnavailable); return nil }
+      if PresenceDescriptor(snapshot) == descriptor { matches.append(element) }
+    }
     guard matches.count == count else { unknownReason?(.matchCountMismatch); return nil }
     var readUnavailable = false
     for element in matches {

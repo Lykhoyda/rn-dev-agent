@@ -87,6 +87,7 @@ final class Query {
   var elements: [XCUIElement] = []
   var unavailable = false
   var outerUnavailable = false
+  var onAll: () -> Void = {}
   var count: Int { 0 }
   func matching(_ predicate: NSPredicate) -> Query {
     reads.append("matching")
@@ -97,6 +98,7 @@ final class Query {
   var allElementsBoundByAccessibilityElement: [XCUIElement] {
     reads.append("all")
     if unavailable { RunnerObjCExceptionCatcher.failed = true }
+    onAll()
     return elements
   }
 }
@@ -239,19 +241,37 @@ for name in ["empty", "clipped", "ambiguous", "group-false", "group-nil", "group
   try emit(["name": name, "complete": capture.complete, "observations": observations, "reads": reads,
     "samples": capture.diagnostics!.preparationSamples!, "quietMs": capture.diagnostics!.preparationQuietElapsedMs!])
 }
-do {
+for moving in [false, true] {
   reads = []
   let h = Harness(), app = XCUIApplication(XCUIElementSnapshot())
   let elements = (0..<3).map { XCUIElement($0) }
   let descriptors = elements.map { element -> XCUIElementSnapshot in
     let snapshot = XCUIElementSnapshot()
     snapshot.frame.origin.x = CGFloat(element.ordinal * 100)
-    element.snapshots = [snapshot]
+    let live = XCUIElementSnapshot()
+    live.frame = snapshot.frame
+    element.snapshots = [live]
     return snapshot
   }
   app.query.elements = elements
-  let shared = h.observeShared(descriptors.map { ($0, 1) } + [(descriptors[0], 2)], app: app)
-  try emit(["name": "shared-predicate", "results": shared, "reads": reads])
+  if moving {
+    elements[0].onHit = { elements[1].snapshots[0].frame.origin.x = 200 }
+    elements[2].onHit = { elements[1].snapshots[0].frame.origin.x = 100 }
+  }
+  let groups = descriptors.map { ($0, 1) } + (moving ? [] : [(descriptors[0], 2)])
+  let shared = h.observeShared(groups, app: app)
+  elements[1].snapshots[0].frame.origin.x = 100
+  try emit(["name": moving ? "shared-moving-candidate" : "shared-predicate", "results": shared, "reads": reads])
+}
+do {
+  reads = []
+  let h = Harness(), descriptor = XCUIElementSnapshot()
+  let app = XCUIApplication(descriptor)
+  app.query.elements = [XCUIElement(0)]
+  app.query.unavailable = true
+  app.query.onAll = { app.query.unavailable = false }
+  let shared = h.observeShared([(descriptor, 1), (descriptor, 1)], app: app)
+  try emit(["name": "shared-binding-unavailable", "results": shared, "reads": reads])
 }
 let allowed = ["empty-frame", "clipped", "ambiguous-descriptor", "not-hittable", "read-unavailable", "match-count-mismatch", "post-hit-mismatch"]
 for raw in allowed {
@@ -330,8 +350,33 @@ precondition(decoded.unknownReason == nil)
     ]);
     for (const ordinal of [0, 1, 2]) {
       assert.equal(row.reads.filter((read: string) => read === `hit-${ordinal}`).length, 1);
-      assert.equal(row.reads.filter((read: string) => read === `snapshot-${ordinal}`).length, 2);
+      assert.equal(row.reads.filter((read: string) => read === `snapshot-${ordinal}`).length, 5);
     }
+  });
+  await t.test('shared bindings use fresh descriptors to refuse live multiplicity changes', () => {
+    const row = rows.find((row) => row.name === 'shared-moving-candidate');
+    assert.deepEqual(row.results, [
+      { observed: true, reasons: [] },
+      { observed: false, reasons: ['match-count-mismatch'] },
+      { observed: false, reasons: ['match-count-mismatch'] },
+    ]);
+    assert.equal(row.reads.filter((read: string) => read === 'all').length, 1);
+    assert.deepEqual(row.reads.filter((read: string) => read.startsWith('hit-')), ['hit-0']);
+    for (const ordinal of [0, 1, 2]) {
+      assert.equal(
+        row.reads.filter((read: string) => read === `snapshot-${ordinal}`).length,
+        ordinal === 0 ? 4 : 3,
+      );
+    }
+  });
+  await t.test('an unavailable binding read is not cached', () => {
+    const row = rows.find((row) => row.name === 'shared-binding-unavailable');
+    assert.deepEqual(row.results, [
+      { observed: false, reasons: ['read-unavailable'] },
+      { observed: true, reasons: [] },
+    ]);
+    assert.equal(row.reads.filter((read: string) => read === 'all').length, 2);
+    assert.deepEqual(row.reads.filter((read: string) => read.startsWith('hit-')), ['hit-0']);
   });
   for (const [name, reason, count, liveReads] of [
     ['empty', 'empty-frame', 1, []],
