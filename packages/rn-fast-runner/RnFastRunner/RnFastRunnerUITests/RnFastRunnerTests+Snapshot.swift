@@ -338,17 +338,6 @@ extension RnFastRunnerTests {
     let parentIndex: Int?
   }
 
-  private struct PresencePredicate: Hashable {
-    let type: XCUIElement.ElementType
-    let identifier: String
-    let label: String
-  }
-
-  // Non-exact predicate bindings are read once per capture and shared by every group using them.
-  private final class PresenceBindings {
-    var byPredicate: [PresencePredicate: [XCUIElement]] = [:]
-  }
-
   func platformPresenceFailure() -> Response {
     Response(ok: false, error: ErrorPayload(
       code: "PLATFORM_PRESENCE_FAILED", message: "native platform presence capture failed"
@@ -510,7 +499,6 @@ extension RnFastRunnerTests {
     if complete {
       timing.begin(.observation)
       var handled = Set<Int>()
-      let bindings = PresenceBindings()
       for index in nodes.indices where !handled.contains(index) {
         if timing.deadlineReached(deadline, read: .observationLoop, edge: .before) { break }
         // Observe association anchors; skip inert or clipped nodes.
@@ -544,8 +532,7 @@ extension RnFastRunnerTests {
         let observation = presenceRead(deadline: deadline, timing: timing, read: .observation) {
           self.observePresence(
             descriptor, count: group.count, predicateIsExact: predicateMatches == group.count,
-            app: app, deadline: deadline, timing: timing, unknownReason: { unknownReason = $0 },
-            bindings: bindings
+            app: app, deadline: deadline, timing: timing, unknownReason: { unknownReason = $0 }
           )
         }
         if let observed = observation ?? nil {
@@ -694,8 +681,7 @@ extension RnFastRunnerTests {
   private func observePresence(
     _ descriptor: PresenceDescriptor, count: Int, predicateIsExact: Bool,
     app: XCUIApplication, deadline: Double, timing: PresenceCaptureTiming,
-    unknownReason: ((PlatformPresenceObservation.UnknownReason) -> Void)? = nil,
-    bindings: PresenceBindings = PresenceBindings()
+    unknownReason: ((PlatformPresenceObservation.UnknownReason) -> Void)? = nil
   ) -> Double? {
     // Callers never pass application or window descriptors, so the app root cannot be a match.
     let query = app.descendants(matching: descriptor.type)
@@ -709,16 +695,10 @@ extension RnFastRunnerTests {
       }
       return presenceUptimeMs()
     }
-    let predicate = PresencePredicate(type: descriptor.type, identifier: descriptor.identifier, label: descriptor.label)
-    var bound = bindings.byPredicate[predicate]
-    if bound == nil {
-      guard let elements = presenceRead(deadline: deadline, timing: timing, read: .allMatches, { query.allElementsBoundByAccessibilityElement })
-      else { unknownReason?(.readUnavailable); return nil }
-      bindings.byPredicate[predicate] = elements
-      bound = elements
-    }
+    guard let elements = presenceRead(deadline: deadline, timing: timing, read: .allMatches, { query.allElementsBoundByAccessibilityElement })
+    else { unknownReason?(.readUnavailable); return nil }
     var matches: [XCUIElement] = []
-    for element in bound! {
+    for element in elements {
       guard let snapshot = presenceRead(deadline: deadline, timing: timing, read: .candidateSnapshot, { try element.snapshot() })
       else { unknownReason?(.readUnavailable); return nil }
       if PresenceDescriptor(snapshot) == descriptor { matches.append(element) }
