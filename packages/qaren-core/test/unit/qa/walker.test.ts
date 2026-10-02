@@ -201,7 +201,7 @@ test('a missing judge or target fails naming the line', async () => {
 test('an ambiguous quoted target without a judge is refused, not guessed', async () => {
   const f = fake([screen(['Save', 'Save'])]);
   const outcome = await walkBlock(block('1. Tap "Save"\n'), f.deps);
-  assert.match(outcome.failure?.seen ?? '', /JEV_UNAVAILABLE/);
+  assert.match(outcome.failure?.seen ?? '', /TARGET_AMBIGUOUS/);
   assert.ok(!f.calls.some((c) => c.startsWith('press')));
 
   const two: Screen = {
@@ -232,7 +232,7 @@ test('an ambiguous quoted target without a judge is refused, not guessed', async
   };
   const g = fake([two]);
   const twice = await walkBlock(block('1. Tap "more"\n'), g.deps);
-  assert.match(twice.failure?.seen ?? '', /JEV_UNAVAILABLE/);
+  assert.match(twice.failure?.seen ?? '', /TARGET_AMBIGUOUS/);
   assert.ok(!g.calls.some((c) => c.startsWith('scroll')));
 });
 

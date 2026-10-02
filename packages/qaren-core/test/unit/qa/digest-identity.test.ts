@@ -124,7 +124,7 @@ test('a warm version-76 runtime receives the new digest and subsequent injection
   assert.equal(vm.runInContext('__QAREN.getTree', sandbox), current);
 });
 
-test('separate native controls sharing a testID retain distinct positional choices and uncertainty', async () => {
+test('separate native controls sharing a testID remain distinct and refuse quoted ambiguity', async () => {
   const screen = joinScreen(
     [
       {
@@ -148,21 +148,15 @@ test('separate native controls sharing a testID retain distinct positional choic
     'app',
     { native: 'complete', react: 'complete' },
   );
-  const step = { kind: 'press' as const, target: { phrase: 'Save at the bottom', quoted: 'Save' } };
-  const judge = scriptedJudge((q) => ({ target_0: choice(q.target_0, 'e1') }));
+  const step = { kind: 'press' as const, target: { phrase: 'Save', quoted: 'Save' } };
+  const judge = scriptedJudge(() => assert.fail('quoted ambiguity must not ask Jev'));
   const resolved = await resolveTarget(step, screen, judge);
-  assert.ok('ref' in resolved);
-  assert.equal(resolved.ref, '@bottom');
+  assert.ok('refuse' in resolved && resolved.refuse === 'TARGET_AMBIGUOUS');
   assert.deepEqual(
     screen.elements.map((e) => e.ref),
     ['@top', '@bottom'],
   );
-  assert.match(judge.requests[0].questions.target_0.criteria!.e1, /bottom/);
-  const uncertain = scriptedJudge((q) => ({
-    target_0: choice(q.target_0, 'e1', { e0: 0.45, e1: 0.5, none: 0.05 }),
-  }));
-  const refused = await resolveTarget(step, screen, uncertain);
-  assert.ok('refuse' in refused && refused.refuse === 'TARGET_UNSURE');
+  assert.equal(judge.requests.length, 0);
 });
 
 test('separate unmatched React controls sharing a testID still refuse before asking or pressing', async () => {

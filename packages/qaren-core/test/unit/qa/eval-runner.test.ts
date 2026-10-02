@@ -94,9 +94,9 @@ test('frozen Screens preserve quoted targeting but refuse missing assertion cove
       assert.deepEqual(result, { pass: false, actual: assertionRefusal }, name);
       assert.equal(judge.requests.length, 0, name);
     } else {
-      assert.equal(result.pass, true, name);
       assert.equal(name, 'ambiguous-save.json');
-      assert.equal(judge.requests.length, 1);
+      assert.deepEqual(result, { pass: true, actual: fixture.expected }, name);
+      assert.equal(judge.requests.length, 0);
     }
     for (const value of fixture.typedValues ?? [])
       assert.ok(!JSON.stringify(judge.requests).includes(value), name);
@@ -150,6 +150,7 @@ test('synthetic authored targets do not grant frozen assertions provenance or by
       name,
     );
     assert.deepEqual(fixture.screen, before, `${name}: synthetic evaluation must not add evidence`);
+    if (name === 'ambiguous-save.json') assert.equal(judge.requests.length, 0, name);
     if (
       [
         'fill-name.json',

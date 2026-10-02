@@ -63,24 +63,42 @@ test('malformed, partial, nonfinite, out-of-range and inconsistent probability m
     assert.throws(() => confidentChoice(prepared.question, answer), /JEV_RESPONSE_INVALID/);
 });
 
-test('exact unique quoted targets and literal assertions are model-free; duplicate quotes use a tie-break', async () => {
-  const judge = scriptedJudge((q) => ({ target_0: choice(q.target_0, 'e1') }));
+test('unique quoted targets and literal assertions are model-free', async () => {
+  const judge = scriptedJudge(() => assert.fail('literal resolution must not ask Jev'));
   assert.equal((await resolveTarget(step('Tap "Save"'), save, judge)).ref, '@save');
   assert.equal(judgeCheck({ ...check, text: 'Save', literal: true }, save), 'pass');
   assert.equal(judge.requests.length, 0);
-  const duplicate = screen([
-    element('@top', 'Save', { where: 'top' }),
-    element('@bottom', 'Save', { where: 'bottom' }),
-    element('@other', 'Not Save'),
-  ]);
-  const result = await resolveTarget(step('Tap "Save" at the bottom'), duplicate, judge);
-  assert.equal(result.ref, '@bottom');
-  assert.deepEqual(Object.keys(judge.requests[0].questions.target_0.criteria!), [
-    'e0',
-    'e1',
-    'none',
-  ]);
-  assert.match(judge.requests[0].questions.target_0.instructions, /bottom/);
+});
+
+test('ambiguous quoted press and fill targets refuse locally without asking or acting', async () => {
+  for (const line of ['Tap "Save"', 'Type "x" into "Save"', 'Fill "Save" with "x"']) {
+    for (const identity of ['label', 'testID', 'placeholder'] as const) {
+      if (line.startsWith('Tap') && identity === 'placeholder') continue;
+      for (const visibility of ['onscreen', 'offscreen', 'mixed']) {
+        const observed = screen(
+          ['@top', '@bottom'].map((ref, i) =>
+            element(ref, '', {
+              kind: line.startsWith('Tap') ? 'button' : 'input',
+              [identity]: 'Save',
+              offscreen: visibility === 'offscreen' || (visibility === 'mixed' && i === 1),
+              hittable: visibility === 'onscreen' || (visibility === 'mixed' && i === 0),
+            }),
+          ),
+        );
+        const judge = scriptedJudge(() => assert.fail('ambiguous quotes must not ask Jev'));
+        const result = await resolveTarget(step(line), observed, judge);
+        assert.ok('refuse' in result && result.refuse === 'TARGET_AMBIGUOUS');
+        assert.match(result.reason, /multiple eligible elements/);
+        const f = walker([observed], judge);
+        const ledger = await runPlan(parsePlan(`1. ${line}\n✓ "Save"`).blocks!, f.deps);
+        assert.equal(ledger.verdict, 'FAIL');
+        assert.match(ledger.failure?.seen ?? '', /TARGET_AMBIGUOUS/);
+        assert.equal(ledger.jev.calls, 0);
+        assert.deepEqual(f.actions, []);
+        assert.equal(judge.requests.length, 0);
+      }
+    }
+  }
 });
 
 test('offscreen selections and none with offscreen evidence request a scroll, never a React ref press', async () => {
@@ -384,4 +402,17 @@ test('30 contributions support one whole-claim judgment, never an OR of fragment
     assert.deepEqual((await decideScreen(entries, judge, undefined, wait)).visibility, { verdict });
     assert.equal(judge.requests.length, 1);
   }
+});
+
+test('a mixed check evaluates its entire expectation rather than passing on the quoted fragment', async () => {
+  const payload = 'The screen shows "Welcome" and no error is visible';
+  const judge = scriptedJudge((questions) => {
+    assert.ok(questions.check_1.instructions.includes(payload));
+    return { check_1: { type: 'noul', noul: 0.1 } };
+  });
+  const f = walker([screen([element('@welcome', 'Welcome'), element('@error', 'Error')])], judge);
+  const ledger = await runPlan(parsePlan(`✓ ${payload}`).blocks!, f.deps);
+  assert.equal(ledger.verdict, 'FAIL');
+  assert.equal(judge.requests.length, 1);
+  assert.deepEqual(f.actions, []);
 });
