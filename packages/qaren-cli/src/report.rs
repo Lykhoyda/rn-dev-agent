@@ -1,6 +1,7 @@
-use crate::core::Ledger;
+use crate::core::{Ledger, Row};
 use crate::failure::{Failure, FailureCode};
-use crate::redact::redact_secrets;
+use crate::record::{Gap, VideoStatus};
+use crate::redact::{redact_machine, redact_secrets, MachineIdentity};
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 
@@ -77,6 +78,38 @@ fn screenshot_link(path: &str) -> Option<String> {
     (plain && redact_secrets(path) == path).then(|| path.to_string())
 }
 
+fn walked<'a>(input: &'a ReportInput<'_>) -> impl Iterator<Item = &'a Row> {
+    input.ledger.steps.iter().filter(|row| row.line != 0)
+}
+
+fn row_line(row: &Row, plan: &str) -> String {
+    let text = row
+        .text
+        .clone()
+        .or_else(|| {
+            plan.lines()
+                .nth(row.line as usize - 1)
+                .map(|l| l.trim().to_string())
+        })
+        .unwrap_or_default();
+    let mark = if row.outcome == "pass" { "✓" } else { "✗" };
+    let retry = if row.attempt > 1 {
+        format!(" (attempt {})", row.attempt)
+    } else {
+        String::new()
+    };
+    let reason = row
+        .reason
+        .as_deref()
+        .map(|r| format!(" — {}", prose(r)))
+        .unwrap_or_default();
+    format!(
+        "- {mark} line {}: {}{retry}{reason}\n",
+        row.line,
+        prose(&text)
+    )
+}
+
 pub fn render(input: &ReportInput<'_>) -> String {
     let summary = summarize(input.ledger);
     let mut out = String::new();
@@ -89,36 +122,8 @@ pub fn render(input: &ReportInput<'_>) -> String {
         prose(input.device)
     ));
     out.push_str("## What was walked\n\n");
-    let plan_lines: Vec<&str> = input.plan.lines().collect();
-    for row in &input.ledger.steps {
-        if row.line == 0 {
-            continue;
-        }
-        let text = row
-            .text
-            .clone()
-            .or_else(|| {
-                plan_lines
-                    .get(row.line as usize - 1)
-                    .map(|l| l.trim().to_string())
-            })
-            .unwrap_or_default();
-        let mark = if row.outcome == "pass" { "✓" } else { "✗" };
-        let retry = if row.attempt > 1 {
-            format!(" (attempt {})", row.attempt)
-        } else {
-            String::new()
-        };
-        let reason = row
-            .reason
-            .as_deref()
-            .map(|r| format!(" — {}", prose(r)))
-            .unwrap_or_default();
-        out.push_str(&format!(
-            "- {mark} line {}: {}{retry}{reason}\n",
-            row.line,
-            prose(&text)
-        ));
+    for row in walked(input) {
+        out.push_str(&row_line(row, input.plan));
         if let Some(shot) = row.screenshot.as_deref().and_then(screenshot_link) {
             out.push_str(&format!("  ![line {}]({shot})\n", row.line));
         }
@@ -186,4 +191,124 @@ pub fn write(run_dir: &Path, input: &ReportInput<'_>) -> Result<PathBuf, Failure
         )
     })?;
     Ok(path)
+}
+
+pub const MAX_VERDICT_CHARS: usize = 400;
+
+pub struct PrRun<'a> {
+    pub tested_sha: &'a str,
+    pub tested_older_commit: bool,
+    pub video: &'a VideoStatus,
+    pub plan_sha256: &'a str,
+    pub gaps: &'a [Gap],
+}
+
+// Public text must not carry internal transport vocabulary.
+fn public(text: &str) -> String {
+    text.replace("cdp_", "")
+        .replace("proofReplay", "replay")
+        .replace("transport", "connection")
+}
+
+// The marker lets a rerun find a comment whose creation outcome was lost.
+pub fn comment_marker(run_id: &str) -> String {
+    format!("<!-- qaren-run: {} -->", prose(run_id))
+}
+
+pub fn failing_screenshot(ledger: &Ledger) -> Option<String> {
+    let failure = ledger.failure.as_ref()?;
+    failure.screenshot.as_deref().and_then(screenshot_link)
+}
+
+fn verdict_sentence(verdict_md: &str) -> String {
+    let flat = prose(verdict_md);
+    if flat.chars().count() <= MAX_VERDICT_CHARS {
+        return flat;
+    }
+    let mut cut: String = flat.chars().take(MAX_VERDICT_CHARS - 1).collect();
+    // A cut must not leave a dangling escape.
+    if cut.ends_with('\\') {
+        cut.pop();
+    }
+    cut.push('…');
+    cut
+}
+
+fn seconds(ms: u64) -> String {
+    format!("{}.{}s", ms / 1000, (ms % 1000) / 100)
+}
+
+pub fn render_pr_comment(
+    input: &ReportInput<'_>,
+    verdict_md: &str,
+    pr: &PrRun<'_>,
+    machine: &MachineIdentity,
+) -> String {
+    let summary = summarize(input.ledger);
+    let short: String = pr.tested_sha.chars().take(7).collect();
+    let mut out = String::new();
+    out.push_str(&comment_marker(input.run_id));
+    out.push('\n');
+    out.push_str(&verdict_sentence(verdict_md));
+    out.push_str("\n\n");
+    out.push_str(&format!(
+        "Tested: commit `{}` on {}",
+        prose(&short),
+        prose(input.platform)
+    ));
+    if pr.tested_older_commit {
+        out.push_str(
+            " — this tested an older commit; the pull request moved on while the run was going",
+        );
+    }
+    out.push_str("\n\n");
+    match pr.video {
+        VideoStatus::Available => out.push_str("Video of the walk is attached below.\n\n"),
+        VideoStatus::TooLarge => out.push_str("Video: the recording was too large to attach.\n\n"),
+        VideoStatus::Unavailable(reason) => {
+            out.push_str(&format!("Video: unavailable ({}).\n\n", prose(reason)))
+        }
+    }
+    out.push_str("**Plan**\n\n");
+    for row in walked(input) {
+        out.push_str(&row_line(row, input.plan));
+    }
+    if let Some(failure) = &input.ledger.failure {
+        out.push_str(&format!(
+            "\n**Failing step** {}: {}\n",
+            failure.step,
+            prose(&failure.seen)
+        ));
+        if let Some(shot) = failing_screenshot(input.ledger) {
+            out.push_str(&format!("\n![Failing step](./{shot})\n"));
+        }
+    }
+    out.push_str(&format!("\nPlan sha256 `{}`\n\n", prose(pr.plan_sha256)));
+    out.push_str("<details><summary>Run details</summary>\n\n");
+    out.push_str(&format!(
+        "steps {} · jev.calls {} · jev.medianMs {} · llmTurns {} · escapes {} · recoveries {} · path {}\n",
+        summary.steps,
+        summary.jev_calls,
+        summary.jev_median_ms,
+        summary.llm_turns,
+        summary.escapes,
+        summary.recoveries,
+        prose(&summary.path)
+    ));
+    if !pr.gaps.is_empty() {
+        let gaps: Vec<String> = pr
+            .gaps
+            .iter()
+            .map(|g| {
+                format!(
+                    "{} missing after {}",
+                    seconds(g.gap_ms),
+                    seconds(g.after_ms)
+                )
+            })
+            .collect();
+        out.push_str(&format!("\nVideo gaps: {}\n", gaps.join("; ")));
+    }
+    out.push_str("\n</details>\n");
+    redact_machine(&public(&redact_machine(&out, machine)), machine)
 }

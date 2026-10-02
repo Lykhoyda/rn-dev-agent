@@ -76,6 +76,7 @@ fn request(repo: &Path, app: &Path, step_seconds: u64) -> RunRequest {
             walk_seconds: 600,
             step_seconds,
         },
+        pr: None,
     }
 }
 

@@ -10,17 +10,22 @@ use crate::config::CheckConfig;
 use crate::core::{self, Budgets, CoreRequest, CoreTarget, Verdict};
 use crate::exec::{CmdSpec, Runner};
 use crate::failure::{Failure, FailureCode};
+use crate::github::{self, PrInfo};
 use crate::lease;
+use crate::publish::PrRunRecord;
 use crate::receipt::{Receipt, ReceiptResult};
+use crate::record::{self, VideoStatus};
 use crate::report::{self, ReportInput};
 use crate::runrecord::{
-    capture_pid_identity, IosSimResource, Phase, Resources, RunRecord, RUN_SCHEMA,
+    capture_pid_identity, IosSimResource, Phase, PrWorktreeResource, RecorderKind, Resources,
+    RunRecord, RUN_SCHEMA,
 };
 use crate::scenario::{
     BuildSpec, CandidateSpec, Deadlines, DepsSpec, IosSpec, MetroSpec, Platform, Scenario,
     SCENARIO_SCHEMA,
 };
 use crate::timefmt;
+use crate::worktree;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -45,6 +50,18 @@ pub struct RunRequest {
     pub runs_root: PathBuf,
     pub android_home: Option<String>,
     pub budgets: Budgets,
+    // `qaren pr`: the run happens on a detached worktree at this PR's head.
+    pub pr: Option<PrTarget>,
+}
+
+pub struct PrTarget {
+    pub target: String,
+}
+
+struct PrState {
+    info: PrInfo,
+    repo_root: PathBuf,
+    app_rel: String,
 }
 
 struct Device {
@@ -91,7 +108,15 @@ pub fn validate_boot_device(
 pub fn run(runner: &mut dyn Runner, req: &RunRequest) -> Receipt {
     let started_ms = runner.now_epoch_ms();
     let mut preflight_jev = None;
-    let mut receipt = match run_inner(runner, req, started_ms, &mut preflight_jev) {
+    // A PR worktree created before the run record owns it; removed here if the run never got that far.
+    let mut unowned_worktree = None;
+    let mut receipt = match run_inner(
+        runner,
+        req,
+        started_ms,
+        &mut preflight_jev,
+        &mut unowned_worktree,
+    ) {
         Ok(receipt) => receipt,
         Err(failure) => {
             let result = if failure.code.is_refusal() {
@@ -100,7 +125,7 @@ pub fn run(runner: &mut dyn Runner, req: &RunRequest) -> Receipt {
                 ReceiptResult::Failed
             };
             let mut receipt = Receipt::new(
-                "check",
+                verb(req),
                 "none",
                 result,
                 &failure.phase.clone(),
@@ -112,8 +137,32 @@ pub fn run(runner: &mut dyn Runner, req: &RunRequest) -> Receipt {
             receipt
         }
     };
+    if let Some((repo_root, wt)) = unowned_worktree {
+        let outcome = worktree::remove(runner, &repo_root, &wt);
+        receipt
+            .cleanup
+            .insert("pr_worktree".to_string(), outcome.render());
+        receipt.commands_executed = runner.commands_executed();
+    }
     receipt.preflight_jev = preflight_jev;
     receipt
+}
+
+fn verb(req: &RunRequest) -> &'static str {
+    if req.pr.is_some() {
+        "pr"
+    } else {
+        "check"
+    }
+}
+
+fn pr_failure(detail: String) -> Failure {
+    Failure::new(
+        "pr",
+        FailureCode::PrWorktreeFailed,
+        detail,
+        "re-run qaren pr; the worktree must hold exactly the pull request head",
+    )
 }
 
 // Failures before the run record exists come back as Err; everything after is
@@ -123,6 +172,7 @@ fn run_inner(
     req: &RunRequest,
     started_ms: u64,
     preflight_jev: &mut Option<core::JevRollup>,
+    unowned_worktree: &mut Option<(PathBuf, PathBuf)>,
 ) -> Result<Receipt, Failure> {
     validate_boot_device(req.platform, req.device.as_deref(), req.boot_device)?;
     let (config, config_raw) = CheckConfig::load(&req.config_path)?;
@@ -159,10 +209,45 @@ fn run_inner(
         ));
     }
     let device = resolve_device(runner, req.platform, req.device.as_deref(), req.boot_device)?;
-    let (repo_root, project_rel) = locate_worktree(runner, &req.project_root)?;
+    let run_id = format!("check-{}", timefmt::compact_utc(started_ms));
+    let run_dir = RunRecord::run_dir(&req.runs_root, &run_id);
+    let mut project_root = req.project_root.clone();
+    let mut pr_state = None;
+    if let Some(target) = &req.pr {
+        let (repo_root, app_rel) = locate_worktree(runner, &req.project_root)?;
+        let info = github::pr_view(runner, &target.target, &repo_root)?;
+        claim_run_dir(&run_dir)?;
+        let wt = worktree::pr_worktree_path(&run_dir);
+        *unowned_worktree = Some((repo_root.clone(), wt.clone()));
+        worktree::add(runner, &repo_root, &info, &wt)?;
+        project_root = if app_rel == "." {
+            wt
+        } else {
+            wt.join(&app_rel)
+        };
+        if req.platform == Platform::Ios {
+            if let Some(workspace) = config.ios.as_ref().and_then(|ios| ios.build.as_ref()) {
+                ios::validate_workspace(&project_root, workspace)?;
+            }
+        }
+        pr_state = Some(PrState {
+            info,
+            repo_root,
+            app_rel,
+        });
+    }
+    let (repo_root, project_rel) = locate_worktree(runner, &project_root)?;
     let scenario = build_scenario(&config, req.platform, &device, &repo_root, &project_rel);
     scenario.validate()?;
-    let cand = candidate::resolve(runner, &scenario, &req.project_root)?;
+    let cand = candidate::resolve(runner, &scenario, &project_root)?;
+    if let Some(pr) = &pr_state {
+        if cand.git_sha != pr.info.head_ref_oid || cand.git_dirty {
+            return Err(pr_failure(format!(
+                "the worktree is at {} (dirty={}), not the clean pull request head {}",
+                cand.git_sha, cand.git_dirty, pr.info.head_ref_oid
+            )));
+        }
+    }
     prepare::check_prereqs(runner, &scenario, req.android_home.as_deref())?;
     std::fs::create_dir_all(&req.runs_root).map_err(|e| {
         Failure::new(
@@ -174,7 +259,6 @@ fn run_inner(
     })?;
     preflight_disk(runner, &req.runs_root)?;
 
-    let run_id = format!("check-{}", timefmt::compact_utc(started_ms));
     let identity = capture_pid_identity(runner, std::process::id() as i32);
     let mut recovered = None;
     let lease = match lease::try_acquire(
@@ -208,9 +292,10 @@ fn run_inner(
         return Err(lease::release_or_annotate(&lease, f));
     }
 
-    let run_dir = RunRecord::run_dir(&req.runs_root, &run_id);
-    if let Err(f) = claim_run_dir(&run_dir) {
-        return Err(lease::release_or_annotate(&lease, f));
+    if pr_state.is_none() {
+        if let Err(f) = claim_run_dir(&run_dir) {
+            return Err(lease::release_or_annotate(&lease, f));
+        }
     }
     let mut resources = Resources::default();
     resources.lease = Some(lease.clone());
@@ -223,6 +308,12 @@ fn run_inner(
             name: device.name.clone(),
             device_type: device_type.clone(),
             runtime: runtime.clone(),
+        });
+    resources.pr_worktree = unowned_worktree
+        .as_ref()
+        .map(|(repo_root, path)| PrWorktreeResource {
+            repo_root: repo_root.clone(),
+            path: path.clone(),
         });
     let record = RunRecord {
         schema: RUN_SCHEMA.to_string(),
@@ -243,6 +334,7 @@ fn run_inner(
     if let Err(f) = record.save(&req.runs_root) {
         return Err(lease::release_or_annotate(&lease, f));
     }
+    *unowned_worktree = None;
     let mut ctx = Ctx {
         runner,
         runs_root: req.runs_root.clone(),
@@ -250,7 +342,7 @@ fn run_inner(
         started_ms,
         timings: Vec::new(),
         notes: Vec::new(),
-        verb: "check",
+        verb: verb(req),
     };
     if let Some(earlier) = recovered {
         ctx.notes.push(("recovered_run".to_string(), earlier));
@@ -265,7 +357,7 @@ fn run_inner(
             ctx.runner,
             &node,
             &req.runtime_dir,
-            &req.project_root,
+            &project_root,
             &device.id,
         ) {
             return Ok(finish_failed(ctx, f));
@@ -288,7 +380,7 @@ fn run_inner(
             ctx.runner,
             &node,
             &req.runtime_dir,
-            &req.project_root,
+            &project_root,
             &device.id,
         ) {
             return Ok(finish_failed(ctx, f));
@@ -360,11 +452,30 @@ fn run_inner(
         return Ok(finish_failed(ctx, f));
     }
 
+    if pr_state.is_some() {
+        if let Err(detail) = candidate::verify_unchanged(ctx.runner, &ctx.record.candidate) {
+            let f = Failure::new(
+                "pr",
+                FailureCode::CandidateDrifted,
+                format!("the pull request worktree changed before the walk: {detail}"),
+                "re-run qaren pr; nothing may modify the run's worktree",
+            );
+            return Ok(finish_failed(ctx, f));
+        }
+    }
     ctx.record.phase = Phase::Walking;
     let at = timefmt::iso8601_utc(ctx.runner.now_epoch_ms());
     ctx.record.push_history(at, "walking");
     if let Err(f) = ctx.save() {
         return Ok(finish_failed(ctx, f));
+    }
+    // ⑧: the recording starts before the walk so it shows the first step.
+    let mut video = None;
+    if pr_state.is_some() {
+        let target = record::Target::Ios { udid: &device.id };
+        if let Err(status) = record::start(ctx.runner, &mut ctx.record, &ctx.runs_root, &target) {
+            video = Some(status);
+        }
     }
     let core_request = CoreRequest {
         run_id: run_id.clone(),
@@ -383,14 +494,14 @@ fn run_inner(
             device_id: device.id.clone(),
             metro_port: config.metro_port,
             metro_url_for_device: format!("http://127.0.0.1:{}", config.metro_port),
-            worktree: req.project_root.clone(),
+            worktree: project_root.clone(),
             adb: None,
         },
     };
     let spec = core::spawn_spec(
         &node,
         &req.runtime_dir,
-        &req.project_root,
+        &project_root,
         &lease.wire(),
         config.metro_port,
     );
@@ -429,8 +540,35 @@ fn run_inner(
             .push(("candidate_drift".to_string(), "none".to_string())),
         Err(detail) => ctx.notes.push(("candidate_drift".to_string(), detail)),
     }
+    // ⑫ then ⑬: the recording ends with the walk, and saved blocks leave the worktree before it goes.
+    let mut early_cleanup = Vec::new();
+    let mut blocks = Vec::new();
+    if pr_state.is_some() {
+        if ctx.record.resources.recorder.is_some() {
+            let outcome = record::stop(ctx.runner, &mut ctx.record, &ctx.runs_root);
+            if !outcome.clean() && video.is_none() {
+                video = Some(VideoStatus::Unavailable(
+                    "the recorder did not stop cleanly".into(),
+                ));
+            }
+            early_cleanup.push(("recorder".to_string(), outcome.render()));
+        }
+        let refused;
+        (blocks, refused) = worktree::copy_blocks(
+            &project_root,
+            &outcome.ledger.blocks_written,
+            &run_dir.join("blocks"),
+        );
+        if !refused.is_empty() {
+            ctx.notes.push((
+                "blocks_not_saved".to_string(),
+                format!("could not preserve {}", refused.join(", ")),
+            ));
+        }
+    }
 
-    let (cleanup, all_clean) = teardown(&mut ctx, outcome.group_survived);
+    let (mut cleanup, all_clean) = teardown(&mut ctx, outcome.group_survived);
+    cleanup.extend(early_cleanup);
     ctx.mark("teardown", t);
 
     let report_path = match report::write(
@@ -492,7 +630,50 @@ fn run_inner(
     if let Err(f) = ctx.save() {
         return Ok(ctx.fail(f));
     }
+    let mut tested_older_commit = None;
+    if let Some(pr) = &pr_state {
+        let video = video
+            .unwrap_or_else(|| record::finalize(ctx.runner, &run_dir, RecorderKind::IosSimulator));
+        ctx.notes.push(("video".to_string(), video.to_string()));
+        // ⑭: a head that moved during the run means an older commit was tested.
+        match github::pr_view(ctx.runner, &pr.info.url, &pr.repo_root) {
+            Ok(now) if now.head_ref_oid != pr.info.head_ref_oid => {
+                tested_older_commit = Some(pr.info.head_ref_oid.clone());
+            }
+            Ok(_) => {}
+            Err(f) => ctx
+                .notes
+                .push(("pr_head_recheck".to_string(), f.detail.clone())),
+        }
+        let pr_record = PrRunRecord {
+            number: pr.info.number,
+            url: pr.info.url.clone(),
+            head_ref_oid: pr.info.head_ref_oid.clone(),
+            head_ref_name: pr.info.head_ref_name.clone(),
+            is_cross_repository: pr.info.is_cross_repository,
+            repo_root: pr.repo_root.clone(),
+            app_rel: pr.app_rel.clone(),
+            platform: platform_str(req.platform).to_string(),
+            app_id: config.app_id.clone(),
+            device: device.name.clone(),
+            plan_sha256: sha256_hex(plan.as_bytes()),
+            video,
+            tested_older_commit: tested_older_commit.is_some(),
+            blocks,
+        };
+        let written = std::fs::write(run_dir.join("plan.md"), &plan).and_then(|()| {
+            std::fs::write(
+                run_dir.join("pr.json"),
+                serde_json::to_vec_pretty(&pr_record).unwrap_or_default(),
+            )
+        });
+        if let Err(e) = written {
+            ctx.notes
+                .push(("pr_record".to_string(), format!("could not persist: {e}")));
+        }
+    }
     let mut receipt = finish_receipt(ctx, result, failure);
+    receipt.tested_older_commit = tested_older_commit;
     receipt.ledger = Some(report::summarize(&outcome.ledger));
     receipt.artifacts.insert("report".to_string(), report_path);
     receipt.artifacts.insert("ledger".to_string(), ledger_path);
@@ -653,6 +834,11 @@ fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, boo
     if let Some(outcome) = crate::commands::cleanup::cleanup_runner_host(ctx.runner, &ctx.record) {
         outcomes.push(("runner_host".to_string(), outcome));
     }
+    // A live recorder still addresses the device, so it gates the lease like the hosts do.
+    if ctx.record.resources.recorder.is_some() {
+        let outcome = record::stop(ctx.runner, &mut ctx.record, &ctx.runs_root);
+        outcomes.push(("recorder".to_string(), outcome));
+    }
     prepare::release_build_lock(ctx);
     if ctx.record.resources.ios_simulator.is_some() {
         outcomes.push(("simulator".to_string(), Outcome::Kept));
@@ -669,6 +855,13 @@ fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, boo
             retained_lease_outcome(&unclean, &ctx.record.run_id)
         };
         outcomes.push(("device_lease".to_string(), outcome));
+    }
+    if let Some(wt) = ctx.record.resources.pr_worktree.clone() {
+        let outcome = worktree::remove(ctx.runner, &wt.repo_root, &wt.path);
+        if outcome.clean() {
+            ctx.record.resources.pr_worktree = None;
+        }
+        outcomes.push(("pr_worktree".to_string(), outcome));
     }
     let all_clean = outcomes.iter().all(|(_, o)| o.clean());
     let _ = ctx.save();

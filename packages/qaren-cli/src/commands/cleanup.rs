@@ -11,7 +11,7 @@ use std::path::Path;
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Outcome {
+pub enum Outcome {
     Removed,
     Absent,
     // A borrowed resource this run never owned; left exactly as found.
@@ -21,7 +21,7 @@ pub(crate) enum Outcome {
 }
 
 impl Outcome {
-    pub(crate) fn render(&self) -> String {
+    pub fn render(&self) -> String {
         match self {
             Outcome::Removed => "removed".to_string(),
             Outcome::Absent => "absent".to_string(),
@@ -31,7 +31,7 @@ impl Outcome {
         }
     }
 
-    pub(crate) fn clean(&self) -> bool {
+    pub fn clean(&self) -> bool {
         matches!(self, Outcome::Removed | Outcome::Absent | Outcome::Kept)
     }
 

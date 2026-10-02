@@ -19,6 +19,7 @@ pub enum ReceiptResult {
     Prewarmed,
     Pass,
     Fail,
+    Published,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +119,9 @@ pub struct Receipt {
     pub ledger: Option<crate::report::LedgerSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preflight_jev: Option<crate::core::JevRollup>,
+    // The PR head moved during a `qaren pr` run; this names the commit that was tested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tested_older_commit: Option<String>,
     pub next_action: String,
 }
 
@@ -152,6 +156,7 @@ impl Receipt {
             planned_commands: Vec::new(),
             ledger: None,
             preflight_jev: None,
+            tested_older_commit: None,
             next_action: String::new(),
         }
     }

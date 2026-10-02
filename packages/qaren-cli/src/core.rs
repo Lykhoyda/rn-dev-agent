@@ -71,6 +71,9 @@ pub struct Ledger {
     pub speed: Option<LedgerSpeed>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<LedgerFailure>,
+    // Slugs the core saved under `<appRoot>/.qaren/actions/<slug>.yaml` during this walk.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks_written: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -829,5 +832,6 @@ pub fn synthesized_ledger(rows: &[Row], verdict: &str, seen: &str) -> Ledger {
         escapes: 0,
         recoveries: 0,
         speed: None,
+        blocks_written: Vec::new(),
     }
 }

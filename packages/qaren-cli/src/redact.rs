@@ -154,9 +154,180 @@ pub fn redact_plain(raw: &str) -> String {
     redacted
 }
 
+// Public text leaves the machine: hostname, home, absolute paths, UUIDs and LAN addresses go.
+pub struct MachineIdentity {
+    pub hostname: Option<String>,
+    pub home: Option<String>,
+}
+
+impl MachineIdentity {
+    pub fn current() -> Self {
+        MachineIdentity {
+            hostname: hostname(),
+            home: std::env::var("HOME").ok().filter(|h| h.len() > 1),
+        }
+    }
+}
+
+fn hostname() -> Option<String> {
+    let mut buf = [0u8; 256];
+    // SAFETY: the buffer is valid for its length; gethostname NUL-terminates within it.
+    if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
+        return None;
+    }
+    let end = buf.iter().position(|b| *b == 0)?;
+    String::from_utf8(buf[..end].to_vec())
+        .ok()
+        .filter(|h| !h.is_empty())
+}
+
+pub fn redact_machine(raw: &str, machine: &MachineIdentity) -> String {
+    let mut text = redact_secrets(raw);
+    if let Some(home) = &machine.home {
+        text = text.replace(home.trim_end_matches('/'), "~");
+    }
+    text = redact_absolute_paths(&text);
+    if let Some(host) = &machine.hostname {
+        let short = host.split('.').next().unwrap_or(host);
+        for name in [host.as_str(), short] {
+            if name.len() >= 3 {
+                text = replace_ignore_ascii_case(&text, name, "<host>");
+            }
+        }
+    }
+    redact_lan_ipv4(&redact_uuids(&text))
+}
+
+fn replace_ignore_ascii_case(text: &str, needle: &str, with: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let needle = needle.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while let Some(i) = lower[at..].find(&needle) {
+        out.push_str(&text[at..at + i]);
+        out.push_str(with);
+        at += i + needle.len();
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
+fn is_path_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '~' | '/' | '@' | '+')
+}
+
+// A path starts at a '/' that opens a token and spans at least two segments.
+fn redact_absolute_paths(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let opens = i == 0
+            || matches!(
+                chars[i - 1],
+                ' ' | '\t' | '\n' | '(' | '"' | '\'' | '`' | '[' | '=' | ','
+            );
+        if chars[i] == '/'
+            && opens
+            && chars
+                .get(i + 1)
+                .is_some_and(|c| is_path_char(*c) && *c != '/')
+        {
+            let mut j = i + 1;
+            while j < chars.len() && is_path_char(chars[j]) {
+                j += 1;
+            }
+            if chars[i + 1..j].contains(&'/') {
+                out.push_str("<path>");
+                i = j;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+fn redact_uuids(text: &str) -> String {
+    const GROUPS: [usize; 5] = [8, 4, 4, 4, 12];
+    let bytes = text.as_bytes();
+    let is_uuid_at = |start: usize| {
+        let mut at = start;
+        for (n, len) in GROUPS.iter().enumerate() {
+            if at + len > bytes.len() || !bytes[at..at + len].iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            at += len;
+            if n < 4 {
+                if bytes.get(at) != Some(&b'-') {
+                    return None;
+                }
+                at += 1;
+            }
+        }
+        let bounded = |b: Option<&u8>| !b.is_some_and(|b| b.is_ascii_alphanumeric());
+        (bounded(start.checked_sub(1).and_then(|p| bytes.get(p))) && bounded(bytes.get(at)))
+            .then_some(at)
+    };
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(end) = is_uuid_at(i) {
+            out.push_str("<id>");
+            i = end;
+        } else {
+            let c = text[i..].chars().next().unwrap_or_default();
+            out.push(c);
+            i += c.len_utf8().max(1);
+        }
+    }
+    out
+}
+
+fn is_lan(octets: [u8; 4]) -> bool {
+    matches!(octets, [10, ..] | [192, 168, ..] | [169, 254, ..])
+        || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+}
+
+fn redact_lan_ipv4(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let starts = bytes[i].is_ascii_digit()
+            && !(i > 0 && (bytes[i - 1].is_ascii_digit() || bytes[i - 1] == b'.'));
+        if starts {
+            let end = i + bytes[i..]
+                .iter()
+                .take_while(|b| b.is_ascii_digit() || **b == b'.')
+                .count();
+            let candidate = text[i..end].trim_end_matches('.');
+            let octets: Vec<Option<u8>> = candidate.split('.').map(|p| p.parse().ok()).collect();
+            if octets.len() == 4 && octets.iter().all(Option::is_some) {
+                let o: Vec<u8> = octets.into_iter().flatten().collect();
+                if is_lan([o[0], o[1], o[2], o[3]]) {
+                    out.push_str("<lan>");
+                    i += candidate.len();
+                    continue;
+                }
+            }
+            out.push_str(&text[i..end]);
+            i = end;
+            continue;
+        }
+        let c = text[i..].chars().next().unwrap_or_default();
+        out.push(c);
+        i += c.len_utf8().max(1);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{redact_known_key, redact_secrets, PRIVATE_KEY_MASK};
+    use super::{
+        redact_known_key, redact_machine, redact_secrets, MachineIdentity, PRIVATE_KEY_MASK,
+    };
 
     #[test]
     fn typesafe_key_is_redacted_without_a_prefix_and_in_json() {
@@ -345,5 +516,35 @@ mod tests {
     fn plain_urls_survive_redaction() {
         let raw = "GET https://registry.npmjs.org/react 200";
         assert_eq!(redact_secrets(raw), raw);
+    }
+
+    #[test]
+    fn machine_identity_is_removed_from_public_text() {
+        let machine = MachineIdentity {
+            hostname: Some("Work-MacBook-Pro.local".into()),
+            home: Some("/Users/alice".into()),
+        };
+        let raw = "on work-macbook-pro at /Users/alice/app/plan.md and /private/var/x.log, sim 1DC408C4-51DA-4C4F-ACA1-39881C916FDD via 192.168.1.20:8081, 10.0.0.7, 172.20.1.1 and 169.254.3.4; keep 8.8.8.8, 172.32.0.1, https://github.com/o/r/pull/12, ./media/video.mp4 and 1.2.3.4.5";
+        let clean = redact_machine(raw, &machine);
+        for leak in [
+            "macbook", "alice", "/Users", "/private", "1DC408C4", "192.168", "10.0.0.7", "172.20",
+            "169.254",
+        ] {
+            assert!(
+                !clean
+                    .to_ascii_lowercase()
+                    .contains(&leak.to_ascii_lowercase()),
+                "{leak}: {clean}"
+            );
+        }
+        for kept in [
+            "8.8.8.8",
+            "172.32.0.1",
+            "https://github.com/o/r/pull/12",
+            "./media/video.mp4",
+        ] {
+            assert!(clean.contains(kept), "{kept}: {clean}");
+        }
+        assert_eq!(redact_machine(&clean, &machine), clean);
     }
 }

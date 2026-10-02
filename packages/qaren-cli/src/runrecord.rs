@@ -203,6 +203,35 @@ pub struct UsbDeviceResource {
     pub holder: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecorderKind {
+    IosSimulator,
+    AndroidAdb,
+}
+
+// Persisted before the spawn: a None pid means the spawn outcome is unproven.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecorderResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub birth: Option<PidIdentity>,
+    pub kind: RecorderKind,
+    pub device: String,
+    pub output: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adb: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrWorktreeResource {
+    pub repo_root: PathBuf,
+    pub path: PathBuf,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildLockResource {
     pub lock_dir: PathBuf,
@@ -264,6 +293,10 @@ pub struct Resources {
     pub core_cleanup: Option<CoreCleanupEvidence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fresh_install: Option<FreshInstallEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorder: Option<RecorderResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_worktree: Option<PrWorktreeResource>,
     // A borrowed device (the booted simulator `check` walks on) is never shut down or deleted.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub device_borrowed: bool,
@@ -343,6 +376,8 @@ impl Resources {
             || self.build_lock.is_some()
             || self.lease.is_some()
             || self.core.is_some()
+            || self.recorder.is_some()
+            || self.pr_worktree.is_some()
     }
 }
 

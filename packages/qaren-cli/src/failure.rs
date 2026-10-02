@@ -61,6 +61,9 @@ pub enum FailureCode {
     JevUnreachable,
     JevAuthFailed,
     JevRequestInvalid,
+    PrUnavailable,
+    PrWorktreeFailed,
+    PublishFailed,
 }
 
 impl FailureCode {
