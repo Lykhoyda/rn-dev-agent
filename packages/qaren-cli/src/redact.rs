@@ -62,22 +62,30 @@ pub fn redact_secrets(raw: &str) -> String {
     if !raw.contains("PRIVATE KEY") {
         return redact_plain(raw);
     }
-    let (begins, ends) = raw
+    let mut open = false;
+    for line in raw
         .split_inclusive(['\n', '\r'])
         .filter(|line| line.contains("PRIVATE KEY"))
-        .fold((0, 0), |(begins, ends), line| {
-            (
-                begins + line.matches("BEGIN").count(),
-                ends + line.matches("END").count(),
-            )
-        });
+    {
+        for index in 0..line.len() {
+            let remaining = &line.as_bytes()[index..];
+            if remaining.starts_with(b"BEGIN") {
+                open = true;
+            } else if remaining.starts_with(b"END") {
+                if !open {
+                    return PRIVATE_KEY_MASK.to_string();
+                }
+                open = false;
+            }
+        }
+    }
     let mut masker = KeyMasker::default();
     let kept: String = raw
         .split_inclusive(['\n', '\r'])
         .filter_map(|line| masker.line(0, line))
         .collect();
     // A body printed without its header can sit anywhere before an orphan END.
-    if masker.orphan_end || ends > begins {
+    if masker.orphan_end {
         return PRIVATE_KEY_MASK.to_string();
     }
     redact_plain(&kept)
@@ -246,6 +254,23 @@ mod tests {
                 "-----BEGIN PRIVATE KEY-----",
                 "BODY",
                 "-----END PRIVATE KEY----- -----END PRIVATE KEY-----",
+                "",
+            ]
+            .join(separator);
+            assert_eq!(redact_secrets(&raw), PRIVATE_KEY_MASK);
+        }
+    }
+
+    #[test]
+    fn a_later_begin_cannot_hide_an_orphan_end() {
+        for separator in ["\n", "\r", "\r\n", " "] {
+            let raw = [
+                "PREBODY",
+                "-----BEGIN PRIVATE KEY-----",
+                "BODY",
+                "-----END PRIVATE KEY----- -----END PRIVATE KEY-----",
+                "-----BEGIN PRIVATE KEY-----",
+                "TAILBODY",
                 "",
             ]
             .join(separator);
