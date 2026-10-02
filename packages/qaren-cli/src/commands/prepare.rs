@@ -911,8 +911,8 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
     let run_dir = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id);
     let key = ctx
         .runner
-        .run(&android::fetch_adbkey_spec(&android.ssh_host));
-    if !key.ok() || key.stdout.trim().is_empty() {
+        .run_private(&android::fetch_adbkey_spec(&android.ssh_host), &[]);
+    if key.timed_out() || key.exit_code() != Some(0) || key.stdout().trim().is_empty() {
         return Err(Failure::new(
             "allocate",
             FailureCode::AdbServerFailed,
@@ -924,7 +924,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
     // Record ownership before the write so a partial key is still cleanable.
     ctx.record.resources.adb_vendor_key = Some(vendor_key.clone());
     ctx.save()?;
-    if let Err(e) = write_private_file(&vendor_key, &key.stdout) {
+    if let Err(e) = write_private_file(&vendor_key, key.stdout()) {
         return Err(Failure::new(
             "allocate",
             FailureCode::AdbServerFailed,

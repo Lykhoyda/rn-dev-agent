@@ -83,30 +83,49 @@ impl Drop for LogDrain {
 struct Lines {
     pending: Vec<u8>,
     dropping: bool,
+    in_private_key: bool,
 }
 
 impl Lines {
     fn write(&mut self, bytes: &[u8], log: &mut impl Write) -> io::Result<()> {
         for &byte in bytes {
-            if !self.dropping {
-                self.pending.push(byte);
-                if self.pending.len() == MAX_LINE {
-                    self.pending.clear();
-                    self.dropping = true;
-                    log.write_all(b"[oversized log line withheld]\n")?;
-                }
+            self.pending.push(byte);
+            if !self.dropping && self.pending.len() == MAX_LINE {
+                self.track_withheld();
+                self.dropping = true;
+                log.write_all(b"[oversized log line withheld]\n")?;
+            }
+            // ponytail: only the withheld line's last 256 bytes reach key tracking.
+            if self.dropping && self.pending.len() == 512 {
+                self.pending.drain(..256);
             }
             if byte == b'\n' || byte == b'\r' {
                 self.finish(log)?;
-                self.dropping = false;
             }
         }
         Ok(())
     }
 
+    // A withheld line may still open or close a private-key block for the lines after it.
+    fn track_withheld(&mut self) {
+        crate::redact::redact_stream_line(
+            &String::from_utf8_lossy(&self.pending),
+            &mut self.in_private_key,
+        );
+        self.pending.clear();
+    }
+
     fn finish(&mut self, log: &mut impl Write) -> io::Result<()> {
+        if std::mem::take(&mut self.dropping) {
+            self.track_withheld();
+            return log.flush();
+        }
         log.write_all(
-            crate::redact::redact_secrets(&String::from_utf8_lossy(&self.pending)).as_bytes(),
+            crate::redact::redact_stream_line(
+                &String::from_utf8_lossy(&self.pending),
+                &mut self.in_private_key,
+            )
+            .as_bytes(),
         )?;
         self.pending.clear();
         log.flush()

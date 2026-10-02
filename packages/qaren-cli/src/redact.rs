@@ -11,8 +11,67 @@ pub fn redact_known_key(raw: &str, key: Option<&str>) -> String {
         .replace(key, "[REDACTED_SECRET]")
 }
 
+const PRIVATE_KEY_MASK: &str = "<redacted private key>";
+
+// The `-----BEGIN|END ...PRIVATE KEY-----` header nearest the start: (start, end).
+fn private_key_header(raw: &str, kind: &str) -> Option<(usize, usize)> {
+    let marker = format!("-----{kind} ");
+    let mut from = 0;
+    while let Some(found) = raw[from..].find(&marker) {
+        let label = from + found + marker.len();
+        let close = raw[label..].find("-----")?;
+        let end = label + close + 5;
+        if raw[label..label + close].contains("PRIVATE KEY") {
+            return Some((from + found, end));
+        }
+        from = end;
+    }
+    None
+}
+
+// `in_key` carries an open PEM block across log lines; an END before any BEGIN means
+// the start was cut off, so everything before it is key material.
+fn mask_private_keys(raw: &str, in_key: &mut bool) -> String {
+    if let Some((end, _)) = private_key_header(raw, "END") {
+        if private_key_header(raw, "BEGIN").is_none_or(|(begin, _)| end < begin) {
+            *in_key = true;
+        }
+    }
+    let mask = |span: &str, out: &mut String| {
+        let body = span.trim_end_matches(['\r', '\n']);
+        if !body.trim().is_empty() {
+            out.push_str(PRIVATE_KEY_MASK);
+        }
+        out.push_str(&span[body.len()..]);
+    };
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    loop {
+        if *in_key {
+            let Some((end, _)) = private_key_header(rest, "END") else {
+                mask(rest, &mut out);
+                return out;
+            };
+            mask(&rest[..end], &mut out);
+            rest = &rest[end..];
+            *in_key = false;
+        }
+        let Some((_, header_end)) = private_key_header(rest, "BEGIN") else {
+            out.push_str(rest);
+            return out;
+        };
+        out.push_str(&rest[..header_end]);
+        rest = &rest[header_end..];
+        *in_key = true;
+    }
+}
+
 pub fn redact_secrets(raw: &str) -> String {
-    let safe = redact_api_key(raw);
+    redact_stream_line(raw, &mut false)
+}
+
+pub fn redact_stream_line(raw: &str, in_private_key: &mut bool) -> String {
+    let safe = redact_api_key(&mask_private_keys(raw, in_private_key));
     let raw = safe.as_str();
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw;
@@ -104,6 +163,59 @@ mod tests {
             "{clean}"
         );
         assert!(clean.contains("registry.example.com"), "{clean}");
+    }
+
+    #[test]
+    fn private_key_bodies_are_masked_in_every_representation() {
+        let body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7";
+        let short = "Zq3=";
+        for raw in [
+            format!("exit=255 -----BEGIN PRIVATE KEY-----\n{body}\n{short}\n"),
+            format!("exit=255 -----BEGIN PRIVATE KEY----- | {body} | {short}"),
+            format!("{body} | {short} | -----END OPENSSH PRIVATE KEY----- tail"),
+            serde_json::to_string(&format!(
+                "-----BEGIN RSA PRIVATE KEY-----\n{body}\n{short}\n-----END RSA PRIVATE KEY-----\n"
+            ))
+            .unwrap(),
+        ] {
+            let clean = redact_secrets(&raw);
+            assert!(!clean.contains(body) && !clean.contains(short), "{clean}");
+            assert!(clean.contains("<redacted private key>"), "{clean}");
+        }
+        assert!(redact_secrets(&format!(
+            "x -----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY----- exit=1"
+        ))
+        .ends_with("-----END PRIVATE KEY----- exit=1"));
+        let plain =
+            "commit 0123456789abcdef0123456789abcdef01234567 -----BEGIN CERTIFICATE----- MIIB";
+        assert_eq!(redact_secrets(plain), plain);
+    }
+
+    #[test]
+    fn an_open_private_key_block_masks_following_stream_lines() {
+        let mut open = false;
+        let lines = [
+            "fetched -----BEGIN PRIVATE KEY-----\n",
+            "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj\n",
+            "Zq3=\n",
+            "-----END PRIVATE KEY-----\n",
+            "after\n",
+        ];
+        let out: Vec<_> = lines
+            .iter()
+            .map(|line| super::redact_stream_line(line, &mut open))
+            .collect();
+        assert_eq!(
+            out,
+            [
+                "fetched -----BEGIN PRIVATE KEY-----\n",
+                "<redacted private key>\n",
+                "<redacted private key>\n",
+                "-----END PRIVATE KEY-----\n",
+                "after\n",
+            ]
+        );
+        assert!(!open);
     }
 
     #[test]

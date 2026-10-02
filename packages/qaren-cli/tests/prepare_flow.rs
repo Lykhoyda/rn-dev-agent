@@ -817,6 +817,82 @@ fn android_prepare_refuses_foreign_listener_on_adb_server_port() {
 }
 
 #[test]
+fn android_prepare_never_records_key_bytes_from_a_failed_key_fetch() {
+    let repo = common::temp_repo();
+    let scenario_path = write_scenario(&repo, &common::android_scenario_yaml(8792));
+    let sdk = android_sdk(&repo);
+
+    let mut mock = MockRunner::new();
+    script_android_through_farm_status(&mut mock, &repo, FREE_SLOT_LINE);
+    mock.expect_run("lsof", free_port());
+    let expected_holder = format!(
+        "qaren-nuc-android-{}",
+        qaren::timefmt::compact_utc(1_770_000_000_000)
+    );
+    mock.expect_run(
+        "~/bin/android-farm start 1",
+        CmdOutput::success(&format!(
+            "started slot=1 serial=emulator-5554 adb_port=5555 lease={expected_holder}\n"
+        )),
+    );
+    mock.expect_spawn(
+        "ssh",
+        Spawned {
+            pid: 7000,
+            pgid: 7000,
+        },
+    );
+    mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
+    mock.expect_run("ps", CmdOutput::success("ssh -N\n"));
+    mock.expect_run("lsof", CmdOutput::success("7000\n"));
+    mock.expect_run("ps", CmdOutput::success("7000\n"));
+    // SSH delivers part of the key, then the connection drops.
+    let key_lines = [
+        "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7leakA",
+        "Zq3rT9vLmN2pQxW8yK4bH1cF6dJ0sE5gU7iO3aR2tY9wX1zV8nM4kLeakB",
+    ];
+    mock.expect_run(
+        "cat ~/.android/adbkey",
+        CmdOutput {
+            exit_code: Some(255),
+            stdout: format!(
+                "-----BEGIN PRIVATE KEY-----\n{}\n{}\n",
+                key_lines[0], key_lines[1]
+            ),
+            stderr: "Connection to farm closed by remote host.\n".to_string(),
+            ..Default::default()
+        },
+    );
+
+    let receipt = prepare(
+        &mut mock,
+        &prepare_args(
+            &scenario_path,
+            false,
+            Some(sdk.to_string_lossy().into_owned()),
+        ),
+    );
+    assert_eq!(receipt.result, ReceiptResult::Failed);
+    let failure = receipt.failure.as_ref().unwrap();
+    assert_eq!(failure.code, FailureCode::AdbServerFailed);
+    assert!(
+        failure.detail.contains("exit=Some(255)"),
+        "{}",
+        failure.detail
+    );
+    assert_eq!(mock.remaining(), 0);
+
+    let printed = serde_json::to_string(&receipt).unwrap();
+    let recorded = std::fs::read_to_string(RunRecord::path(&repo, &receipt.run_id)).unwrap();
+    for evidence in [&printed, &recorded] {
+        for line in key_lines {
+            assert!(!evidence.contains(line), "key bytes leaked: {evidence}");
+        }
+        assert!(!evidence.contains("PRIVATE KEY"), "{evidence}");
+    }
+}
+
+#[test]
 fn android_prepare_fails_fast_when_the_tunnel_dies_before_listening() {
     let repo = common::temp_repo();
     let scenario_path = write_scenario(&repo, &common::android_scenario_yaml(8792));

@@ -81,6 +81,70 @@ impl Drop for HelperGuard {
 }
 
 #[test]
+fn the_log_drain_masks_a_private_key_split_across_lines_and_writes() {
+    let (input, mut output) = UnixStream::pair().unwrap();
+    let (control, helper_control) = UnixStream::pair().unwrap();
+    let mut helper = HelperGuard(
+        Command::new(env!("CARGO_BIN_EXE_qaren"))
+            .arg(qaren::exec::log::HELPER_ARG)
+            .env_clear()
+            .stdin(Stdio::from(OwnedFd::from(input)))
+            .stdout(Stdio::from(OwnedFd::from(helper_control)))
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let body = [
+        "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj",
+        "Zq3=",
+        "c2Vjb25kIGtleQ",
+    ];
+    // The second block opens at the end of a line too long to log.
+    let oversized = format!("{} -----BEGIN PRIVATE KEY-----\n", "x".repeat(70 * 1024));
+    for chunk in [
+        "ssh: -----BEGIN PRIVATE KEY-----\n",
+        body[0],
+        "\n",
+        body[1],
+        "\n-----END PRIVATE KEY-----\nConnection closed\n",
+        &oversized,
+        body[2],
+        "\n-----END PRIVATE KEY-----\ndone\n",
+    ] {
+        output.write_all(chunk.as_bytes()).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    drop(output);
+    let mut stderr = helper.0.stderr.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut stored = String::new();
+        stderr.read_to_string(&mut stored).unwrap();
+        stored
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = helper.0.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "log helper did not exit at EOF");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    drop(control);
+    assert!(status.success());
+    let stored = reader.join().unwrap();
+    for line in body {
+        assert!(
+            !stored.contains(line),
+            "key bytes reached the log: {stored}"
+        );
+    }
+    assert!(
+        stored.contains("Connection closed") && stored.contains("done"),
+        "{stored}"
+    );
+}
+
+#[test]
 fn a_checkpoint_completes_while_four_writers_keep_the_helper_busy() {
     let deadline = Instant::now() + Duration::from_secs(12);
     let (input, output) = UnixStream::pair().unwrap();
