@@ -176,11 +176,23 @@ pub fn start(
         }
     };
     let birth = capture_pid_identity(runner, spawned.pid);
+    let proven = birth.is_some();
     if let Some(recorder) = record.resources.recorder.as_mut() {
         recorder.pid = Some(spawned.pid);
         recorder.birth = birth;
     }
-    let _ = record.save(runs_root);
+    // An identity cleanup cannot read back is no ownership: end our own unreaped child now.
+    if !proven || record.save(runs_root).is_err() {
+        runner.run(&CmdSpec::new(
+            "recorder-abort",
+            "/bin/kill",
+            &["-KILL", "--", &format!("-{}", spawned.pgid)],
+            10,
+        ));
+        record.resources.recorder = None;
+        let _ = record.save(runs_root);
+        return Err(unavailable("recorder identity was not persisted"));
+    }
     if kind == RecorderKind::AndroidAdb {
         return Ok(());
     }

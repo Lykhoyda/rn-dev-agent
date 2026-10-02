@@ -15,7 +15,7 @@ fn machine() -> MachineIdentity {
 fn failing_ledger() -> Ledger {
     serde_json::from_value(serde_json::json!({
         "verdict": "FAIL",
-        "path": "walk via cdp_tap and proofReplay transport",
+        "path": "walk via cdp_tap and proofReplay transport from /private_workspace/secret_dir/x.txt",
         "blocks": [{"key": "plan", "outcome": "fail", "source": "cdp_discovered"}],
         "steps": [
             {"block": "plan", "line": 1, "attempt": 1, "kind": "step", "resolvedBy": "cdp_exact",
@@ -63,6 +63,9 @@ fn the_comment_carries_no_machine_identity_or_internal_vocabulary() {
         "192.168",
         "10.1.2.3",
         "cdp_",
+        "cdp\\_",
+        "private_",
+        "secret",
         "proofReplay",
         "transport",
     ] {

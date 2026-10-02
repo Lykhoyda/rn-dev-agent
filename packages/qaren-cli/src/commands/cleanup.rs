@@ -172,12 +172,17 @@ pub fn cleanup_with(
     }
 
     // A live `qaren pr` still owns its recorder and worktree; only a dead owner's are reclaimed.
-    let owner_alive =
-        (record.resources.recorder.is_some() || record.resources.pr_worktree.is_some())
-            && record.prepare.as_ref().is_some_and(|owner| {
-                probe_pid_identity(runner, owner) == PidLiveness::AliveMatching
-            });
-    let owner_refusal = || Outcome::Refused("the run's qaren process is still alive".to_string());
+    // Only positive evidence that the owner is gone admits reclaiming; unknown keeps them.
+    let owner_alive = (record.resources.recorder.is_some()
+        || record.resources.pr_worktree.is_some())
+        && !record.prepare.as_ref().is_some_and(|owner| {
+            matches!(
+                probe_pid_identity(runner, owner),
+                PidLiveness::Dead | PidLiveness::AliveForeign
+            )
+        });
+    let owner_refusal =
+        || Outcome::Refused("the run's qaren process is alive or unproven gone".to_string());
     if record.resources.recorder.is_some() {
         let outcome = if owner_alive {
             owner_refusal()

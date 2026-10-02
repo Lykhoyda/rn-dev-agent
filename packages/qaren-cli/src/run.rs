@@ -218,6 +218,8 @@ fn run_inner(
         let info = github::pr_view(runner, &target.target, &repo_root)?;
         claim_run_dir(&run_dir)?;
         let wt = worktree::pr_worktree_path(&run_dir);
+        // ponytail: until run.json exists only this process knows the worktree; a SIGKILL here
+        // leaves it under the run directory for `git worktree prune`; add durable intent if that bites.
         *unowned_worktree = Some((repo_root.clone(), wt.clone()));
         worktree::add(runner, &repo_root, &info, &wt)?;
         project_root = if app_rel == "." {

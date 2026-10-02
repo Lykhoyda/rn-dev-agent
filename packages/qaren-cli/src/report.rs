@@ -83,6 +83,10 @@ fn walked<'a>(input: &'a ReportInput<'_>) -> impl Iterator<Item = &'a Row> {
 }
 
 fn row_line(row: &Row, plan: &str) -> String {
+    row_line_with(row, plan, &prose)
+}
+
+fn row_line_with(row: &Row, plan: &str, prose: &dyn Fn(&str) -> String) -> String {
     let text = row
         .text
         .clone()
@@ -245,11 +249,15 @@ pub fn render_pr_comment(
     machine: &MachineIdentity,
 ) -> String {
     let summary = summarize(input.ledger);
+    // Sanitize raw text before Markdown escaping, which would otherwise split `cdp_` or a path.
+    let clean = |raw: &str| prose(&public(&redact_machine(raw, machine)));
     let short: String = pr.tested_sha.chars().take(7).collect();
     let mut out = String::new();
     out.push_str(&comment_marker(input.run_id));
     out.push('\n');
-    out.push_str(&verdict_sentence(verdict_md));
+    out.push_str(&verdict_sentence(&public(&redact_machine(
+        verdict_md, machine,
+    ))));
     out.push_str("\n\n");
     out.push_str(&format!(
         "Tested: commit `{}` on {}",
@@ -266,18 +274,18 @@ pub fn render_pr_comment(
         VideoStatus::Available => out.push_str("Video of the walk is attached below.\n\n"),
         VideoStatus::TooLarge => out.push_str("Video: the recording was too large to attach.\n\n"),
         VideoStatus::Unavailable(reason) => {
-            out.push_str(&format!("Video: unavailable ({}).\n\n", prose(reason)))
+            out.push_str(&format!("Video: unavailable ({}).\n\n", clean(reason)))
         }
     }
     out.push_str("**Plan**\n\n");
     for row in walked(input) {
-        out.push_str(&row_line(row, input.plan));
+        out.push_str(&row_line_with(row, input.plan, &clean));
     }
     if let Some(failure) = &input.ledger.failure {
         out.push_str(&format!(
             "\n**Failing step** {}: {}\n",
             failure.step,
-            prose(&failure.seen)
+            clean(&failure.seen)
         ));
         if let Some(shot) = failing_screenshot(input.ledger) {
             out.push_str(&format!("\n![Failing step](./{shot})\n"));
@@ -293,7 +301,7 @@ pub fn render_pr_comment(
         summary.llm_turns,
         summary.escapes,
         summary.recoveries,
-        prose(&summary.path)
+        clean(&summary.path)
     ));
     if !pr.gaps.is_empty() {
         let gaps: Vec<String> = pr
