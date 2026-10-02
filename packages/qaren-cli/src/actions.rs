@@ -13,8 +13,7 @@ pub struct ActionEntry {
     pub status: Option<String>,
 }
 
-// The `# key: value` comment block above an action's commands, read like the core's M7 header.
-pub fn header(text: &str) -> BTreeMap<String, String> {
+pub fn header(text: &str, fallback_id: &str) -> Option<BTreeMap<String, String>> {
     let mut fields = BTreeMap::new();
     let mut in_comment = false;
     for line in text.lines() {
@@ -23,11 +22,24 @@ pub fn header(text: &str) -> BTreeMap<String, String> {
             let rest = rest.strip_prefix(' ').unwrap_or(rest).trim();
             if let Some((key, value)) = rest.split_once(':') {
                 let key = key.trim();
-                let valid = key.starts_with(|c: char| c.is_ascii_alphabetic())
-                    && key
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-                if valid && !value.trim().is_empty() {
+                if matches!(
+                    key,
+                    "id" | "intent"
+                        | "status"
+                        | "appId"
+                        | "createdAt"
+                        | "author"
+                        | "enginePin"
+                        | "plan"
+                        | "planHash"
+                        | "platform"
+                        | "tags"
+                        | "mutates"
+                        | "params"
+                        | "produces"
+                        | "expectedRouteSequence"
+                ) && !value.is_empty()
+                {
                     fields.insert(key.to_string(), value.trim().to_string());
                 }
             }
@@ -36,6 +48,17 @@ pub fn header(text: &str) -> BTreeMap<String, String> {
         }
     }
     fields
+        .entry("id".to_string())
+        .or_insert_with(|| fallback_id.to_string());
+    if fields.get("id").is_none_or(String::is_empty)
+        || fields.get("intent").is_none_or(String::is_empty)
+    {
+        return None;
+    }
+    fields
+        .entry("status".to_string())
+        .or_insert_with(|| "experimental".to_string());
+    Some(fields)
 }
 
 fn actions_dir(app_root: &Path) -> Result<PathBuf, String> {
@@ -106,10 +129,9 @@ pub fn list(app_root: &Path) -> Result<Vec<ActionEntry>, String> {
             }
             _ => continue,
         };
-        let mut fields = header(&read_action(&action_path(&dir, &slug)?)?);
-        if !fields.contains_key("id") {
+        let Some(mut fields) = header(&read_action(&action_path(&dir, &slug)?)?, &slug) else {
             continue;
-        }
+        };
         actions.push(ActionEntry {
             slug,
             platform: fields.remove("platform"),
@@ -133,7 +155,11 @@ pub fn show(app_root: &Path, slug: &str) -> Result<String, String> {
         return Err(format!("{slug:?} is not an action slug"));
     }
     let path = action_path(&actions_dir(app_root)?, slug)?;
-    read_action(&path)
+    let text = read_action(&path)?;
+    if header(&text, slug).is_none() {
+        return Err(format!("no valid action header for {slug}"));
+    }
+    Ok(text)
 }
 
 pub fn render(actions: &[ActionEntry]) -> String {

@@ -395,6 +395,7 @@ export async function walkBlock(
     const context = new (class extends QaDispatchContext {
       override authorize(): void {
         super.authorize();
+        mutationStarted = true;
         diagnostic(item, observation, 'dispatch', 'ACCEPTED', this.authorizations);
         if (deps.timing)
           metric('authorization', observation, {
@@ -406,7 +407,6 @@ export async function walkBlock(
     })(observationDeadline(observation.timing, deadline), deps.now, deps.cancelled);
     try {
       context.check();
-      mutationStarted = true;
       const result = await send(context);
       context.assertComplete();
       diagnostic(item, observation, 'dispatch', 'COMPLETED', context.authorizations);
@@ -1036,6 +1036,14 @@ export async function runPlan(
       if (store) ledger.blocksWritten = written;
       return outcome?.refusal ? { ...ledger, ...outcome.refusal, verdict: 'REFUSED' } : ledger;
     };
+    const withPrivateFills = (result: BlockResult, lines: number[] = []): BlockResult =>
+      lines.length
+        ? {
+            ...result,
+            saved: false,
+            unsavable: `line ${Math.min(...lines)}: fills a private input`,
+          }
+        : result;
     const save = (
       block: Block,
       rows: LedgerRow[],
@@ -1043,13 +1051,8 @@ export async function runPlan(
       store: BlockStore,
       privateFills: number[] = [],
     ): BlockResult => {
-      const result: BlockResult = { key: block.slug, outcome: 'pass', source };
-      if (privateFills.length)
-        return {
-          ...result,
-          saved: false,
-          unsavable: `line ${Math.min(...privateFills)}: fills a private input`,
-        };
+      const result = withPrivateFills({ key: block.slug, outcome: 'pass', source }, privateFills);
+      if (result.saved === false) return result;
       const serialized = serializeBlock(block, rows, store);
       if ('unsavable' in serialized)
         return { ...result, saved: false, unsavable: serialized.unsavable };
@@ -1071,7 +1074,12 @@ export async function runPlan(
         const replayed = await walk(replayBlock(block, stored), { mode: 'replay' });
         steps.push(...replayed.rows);
         if (!replayed.failure) {
-          results.push({ key: block.slug, outcome: 'pass', source: 'replayed' });
+          results.push(
+            withPrivateFills(
+              { key: block.slug, outcome: 'pass', source: 'replayed' },
+              replayed.privateFills,
+            ),
+          );
           continue;
         }
         if (replayed.miss === undefined) {

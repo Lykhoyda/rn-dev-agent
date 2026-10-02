@@ -495,6 +495,11 @@ test('an offscreen replay target lost after scrolling stays terminal', async () 
     ],
     scriptedJudge(() => assert.fail('exact replay cannot ask Jev')),
   );
+  const scroll = fake.deps.scroll;
+  fake.deps.scroll = async (direction, context) => {
+    context.authorize();
+    return scroll(direction, context);
+  };
   const result = await walkBlock(block, fake.deps, 0, [], undefined, undefined, { mode: 'replay' });
   assert.equal(result.miss, undefined);
   assert.ok(result.failure);
@@ -518,3 +523,117 @@ for (const occurrences of [1, 2]) {
     assert.deepEqual(fake.actions, []);
   });
 }
+
+for (const verb of [
+  'Tap "Target"',
+  'Fill "Target" with "Ada"',
+  'Scroll down until "Target"',
+  'Scroll up until "Target"',
+]) {
+  for (const phase of ['before', 'after', 'success']) {
+    test(`${verb} tracks successful authorization at ${phase}`, async () => {
+      const block = blocks(`1. ${verb}`)[0];
+      const item = block.items[0];
+      const target = { quoted: 'old-id', phrase: 'old-id', exact: 'id' as const };
+      block.items[0] = item.kind === 'scroll' ? { ...item, until: target } : { ...item, target };
+      let now = 0;
+      let drift = false;
+      let dispatched = 0;
+      const fake = walker(
+        [],
+        scriptedJudge(() => assert.fail('exact replay must not ask Jev')),
+      );
+      fake.deps.now = () => now;
+      fake.deps.captureScreen = async () =>
+        screen([
+          element('@target', 'Target', {
+            kind: item.kind === 'fill' ? 'input' : 'button',
+            testID: drift ? 'new-id' : 'old-id',
+            offscreen: item.kind === 'scroll' && dispatched === 0,
+          }),
+        ]);
+      const send = async (context: Parameters<typeof fake.deps.back>[0]) => {
+        if (phase !== 'before') {
+          context.authorize();
+          dispatched += 1;
+        }
+        if (phase !== 'success') {
+          drift = true;
+          now = context.deadline;
+          context.check();
+        }
+        return { ok: true, proven: true };
+      };
+      fake.deps.press = (_ref, context) => send(context);
+      fake.deps.fill = (_ref, _text, context) => send(context);
+      fake.deps.scroll = (_direction, context) => send(context);
+      const result = await walkBlock(block, fake.deps, 0, [], undefined, undefined, {
+        mode: 'replay',
+      });
+      assert.equal(dispatched, phase === 'before' ? 0 : 1);
+      assert.equal(result.miss, phase === 'before' ? item.line : undefined);
+      assert.equal(!!result.failure, phase !== 'success');
+      if (phase === 'after') assert.match(result.failure!.seen, /ACTION_OUTCOME_UNCERTAIN/);
+    });
+  }
+}
+
+test('private-input replay PASS reports withholding without changing the saved action', async () => {
+  const dir = root();
+  const ordinary = ledger(await runPlan(blocks(formPlan), form(false).deps, [], store(dir)));
+  assert.equal(ordinary.verdict, 'PASS');
+  const path = join(dir, '.qaren/actions/save-a-pin.yaml');
+  const before = readFileSync(path, 'utf8');
+  const replay = ledger(await runPlan(blocks(formPlan), form(true).deps, [], store(dir)));
+  assert.equal(replay.verdict, 'PASS');
+  assert.equal(replay.path, 'replay');
+  assert.deepEqual(replay.blocks, [
+    {
+      key: 'save-a-pin',
+      outcome: 'pass',
+      source: 'replayed',
+      saved: false,
+      unsavable: `line ${blocks(formPlan)[0].items[0].line}: fills a private input`,
+    },
+  ]);
+  assert.deepEqual(replay.blocksWritten, []);
+  assert.equal(readFileSync(path, 'utf8'), before);
+  assert.doesNotMatch(JSON.stringify(replay), /4711/);
+});
+
+test('stored fill refresh before authorization re-walks without repeating earlier actions', async () => {
+  const dir = root();
+  const plan = formPlan.replace(
+    '1. Type "4711" into "pin-input"',
+    '1. Back\n2. Type "4711" into "PIN"',
+  );
+  await runPlan(blocks(plan), form(false).deps, [], store(dir));
+  const fake = form(false);
+  const capture = fake.deps.captureScreen;
+  let drift = false;
+  let now = 0;
+  fake.deps.now = () => now;
+  fake.deps.captureScreen = async () => {
+    const observed = await capture();
+    return {
+      ...observed,
+      elements: observed.elements.map((e) =>
+        drift && e.testID === 'pin-input' ? { ...e, testID: 'new-pin' } : e,
+      ),
+    };
+  };
+  fake.deps.fill = async (ref, text, context) => {
+    if (!drift) {
+      drift = true;
+      now = context.deadline;
+      context.authorize();
+    }
+    context.authorize();
+    fake.actions.push(`fill ${ref} ${text}`);
+    return { ok: true, proven: true };
+  };
+  const replay = ledger(await runPlan(blocks(plan), fake.deps, [], store(dir)));
+  assert.equal(replay.verdict, 'PASS', replay.failure?.seen);
+  assert.equal(replay.path, `replay→walk@${blocks(plan)[0].items[1].line}`);
+  assert.deepEqual(fake.actions, ['back', 'fill @pin 4711', 'press @save']);
+});

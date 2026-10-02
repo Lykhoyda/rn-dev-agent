@@ -46,12 +46,12 @@ fn actions_list_reads_slug_platform_plan_hash_and_status() {
         serde_json::json!([
             {"slug": "checkout", "platform": "android", "planHash": "def456", "status": "active"},
             {"slug": "onboarding", "platform": "ios", "planHash": "abc123", "status": "active"},
-            {"slug": "recorded", "platform": null, "planHash": null, "status": null}
+            {"slug": "recorded", "platform": null, "planHash": null, "status": "experimental"}
         ])
     );
     assert_eq!(
         actions::render(&entries),
-        "checkout\tandroid\tdef456\tactive\nonboarding\tios\tabc123\tactive\nrecorded\t-\t-\t-\n"
+        "checkout\tandroid\tdef456\tactive\nonboarding\tios\tabc123\tactive\nrecorded\t-\t-\texperimental\n"
     );
     assert_eq!(
         actions::show(&root, "onboarding").unwrap(),
@@ -201,4 +201,36 @@ fn actions_refuse_a_symlinked_action_file_instead_of_skipping_it() {
     std::os::unix::fs::symlink(&outside, root.join(".qaren/actions/linked.yml")).unwrap();
     assert!(actions::show(&root, "linked").is_err());
     assert!(actions::list(&root).is_err());
+}
+
+#[test]
+fn action_headers_match_core_validity_fallback_and_status_defaults() {
+    for extension in ["yaml", "yml"] {
+        let root = temp_dir(&format!("headers-{extension}"));
+        let dir = root.join(".qaren/actions");
+        let explicit = "# id: explicit\n# intent: do something\n- launchApp\n";
+        let implicit = "# intent: do something\n- launchApp\n";
+        let invalid = "# id: invalid\n- launchApp\n";
+        for (slug, text) in [
+            ("explicit", explicit),
+            ("implicit", implicit),
+            ("invalid", invalid),
+        ] {
+            std::fs::write(dir.join(format!("{slug}.{extension}")), text).unwrap();
+        }
+        assert_eq!(
+            serde_json::to_value(actions::list(&root).unwrap()).unwrap(),
+            serde_json::json!([
+                {"slug":"explicit", "platform":null, "planHash":null, "status":"experimental"},
+                {"slug":"implicit", "platform":null, "planHash":null, "status":"experimental"}
+            ])
+        );
+        assert_eq!(actions::show(&root, "explicit").unwrap(), explicit);
+        assert_eq!(actions::show(&root, "implicit").unwrap(), implicit);
+        assert!(actions::show(&root, "invalid").is_err());
+        assert_eq!(
+            actions::header(implicit, "implicit").unwrap()["id"],
+            "implicit"
+        );
+    }
 }
