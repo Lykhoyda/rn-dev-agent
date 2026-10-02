@@ -570,7 +570,7 @@ fn run_inner(
     }
 
     let (mut cleanup, all_clean) = teardown(&mut ctx, outcome.group_survived);
-    cleanup.extend(early_cleanup);
+    cleanup.splice(..0, early_cleanup);
     ctx.mark("teardown", t);
 
     let report_path = match report::write(

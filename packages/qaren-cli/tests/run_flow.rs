@@ -3685,3 +3685,69 @@ fn a_fetched_head_that_is_not_the_viewed_head_refuses_and_leaves_no_worktree() {
     assert_eq!(mock.remaining(), 0);
     assert!(!labels(&mock).contains(&"git-worktree-add".to_string()));
 }
+
+#[test]
+fn pr_receipt_reports_the_final_recorder_cleanup_retry() {
+    for retry_succeeds in [true, false] {
+        let (repo, app) = app_repo();
+        let wt = repo.join("runs").join(run_id()).join("wt");
+        let mut runner = PrRunner {
+            inner: MockRunner::new(),
+            app: app.clone(),
+            recorder_persisted_before_spawn: None,
+            fail_core_spawn: false,
+        };
+        let mock = &mut runner.inner;
+        script_pr_preflight(mock, &repo, &wt);
+        script_provision(mock);
+        script_pr_provenance_recheck(mock);
+        script_recorder_start(mock);
+        mock.expect_spawn_piped("walk.js", 9000, &pr_pass_stdout(), Some(0));
+        script_core_identity(mock);
+        mock.expect_run("git", CmdOutput::success(&format!("{PR_HEAD}\n")));
+        mock.expect_run("git", CmdOutput::success(""));
+        mock.expect_run("ps -p 7100", CmdOutput::failed(1, ""));
+        mock.expect_run("ps -p 7100", CmdOutput::failed(1, ""));
+        mock.expect_run("ps -A", CmdOutput::failed(1, "inventory unavailable"));
+        script_teardown_after_drift(mock);
+        mock.expect_run("ps -p 7100", CmdOutput::failed(1, ""));
+        mock.expect_run("ps -p 7100", CmdOutput::failed(1, ""));
+        if retry_succeeds {
+            mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+        } else {
+            mock.expect_run("ps -A", CmdOutput::success("7101 7100 S\n"));
+            mock.expect_run("ps -p 7100", CmdOutput::failed(1, ""));
+            mock.expect_run("ps -A", CmdOutput::success("7101 7100 S\n"));
+        }
+        mock.expect_run("worktree remove --force", CmdOutput::success(""));
+        mock.expect_run(
+            "gh pr view https://github.com/o/r/pull/12",
+            pr_view_json(PR_HEAD),
+        );
+
+        let receipt = run(&mut runner, &pr_request(&repo, &app));
+
+        assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
+        assert_eq!(runner.inner.remaining(), 0);
+        let saved = RunRecord::load(&repo.join("runs"), &run_id()).unwrap();
+        if retry_succeeds {
+            assert_eq!(receipt.cleanup["recorder"], "removed");
+            assert_eq!(receipt.cleanup["device_lease"], "removed");
+            assert_eq!(saved.phase, Phase::Cleaned);
+            assert!(saved.resources.recorder.is_none());
+            assert!(saved.resources.lease.is_none());
+        } else {
+            assert_eq!(
+                receipt.cleanup["recorder"],
+                "unresolved: process group remains but its leader ownership is unproven"
+            );
+            assert_eq!(saved.phase, Phase::Walking);
+            assert!(saved.resources.recorder.is_some());
+            assert!(saved.resources.lease.is_some());
+            assert_eq!(
+                receipt.next_action,
+                format!("qaren cleanup {} --json", run_id())
+            );
+        }
+    }
+}
