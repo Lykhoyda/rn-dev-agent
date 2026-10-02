@@ -2,4 +2,4 @@
 "qaren": patch
 ---
 
-iOS steps run faster: the runner no longer waits a second for an app that already exists, and each row's screenshot comes from the runner instead of simctl.
+Speed up iOS steps by skipping existence waits for present apps and preferring runner screenshots with a simctl fallback under the existing privacy gate.

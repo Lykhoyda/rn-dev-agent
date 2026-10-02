@@ -78,6 +78,13 @@ Jev requests; private values are also masked in reporting. Once sensitive input
 pixels are observed, screenshots are withheld for the rest of the walk.
 Masks preserve identity for comparisons and do not prove unobserved value content.
 
+iOS interactions check app existence immediately and wait only when the app is
+missing; availability and foreground checks remain in place. When the privacy
+gate permits a row screenshot, the walk requests a full-screen image from the
+running iOS runner and copies it into the run evidence directory. Runner refusal,
+an invalid screenshot path or a failed copy falls back to `simctl` capture;
+if that also fails, the row has no screenshot and the failure is logged.
+
 ```text
 plan preflight -> device selection -> lease + durable run record
                -> app preparation -> screen proof -> walk -> teardown
