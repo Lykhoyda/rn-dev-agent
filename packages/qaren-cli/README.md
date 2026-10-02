@@ -160,14 +160,22 @@ comment, then the commands with the exact `testID` (or, without one, the label) 
 step used. On the next run a block whose plan lines, platform and app are unchanged
 is replayed by those stored identities through the same walk, without Jev for quoted
 targets or literal checks; phrase checks still ask Jev. A stored identity that no
-longer matches exactly one element before any mutation is dispatched re-walks
-the block from that line; on PASS only the commands under that line and later ones are
-rewritten, and every `✓` comment stays byte-identical. A failing check is a FAIL and
+longer matches exactly one element before that step authorizes any mutation re-walks
+the block from that line; earlier completed steps are kept. Once that step authorizes
+a mutation, its selector failure is terminal. On PASS only the commands under that
+line and later ones are rewritten, and every `✓` comment stays byte-identical. A failing check is a FAIL and
 is never re-walked or rewritten. Timeout and ambiguous screen-movement recovery
-remain deferred; app-process changes stay terminal. Failed walks write nothing. A step without a `testID`
+remain deferred; app-process changes stay terminal. A failing block is never saved;
+blocks that passed earlier in the run remain saved. A step without a `testID`
 or label, a phrase wait, or a fill into a secure or private input leaves the block
 unsaved and the ledger says why without naming any value; ordinary fills keep their
-plan literal in the saved block.
+plan literal in the saved block. A previously saved block replayed against a now-private
+input also reports withholding without rewriting or deleting the existing action.
+
+Replay requires the canonical block format emitted by
+[`serializeBlock`](../qaren-core/src/qa/blocks.ts); edited or incompatible files
+take the discovery path. Saving never overwrites an action belonging to another plan
+block; a collision or unsafe corpus leaves the passing block unsaved with a reason.
 
 The ledger's `path` is `walk`, `replay` or `replay→walk@<line>` (the first re-walked
 plan line), and each block reports `source` `discovered`, `replayed` or `patched`. The
@@ -175,7 +183,12 @@ receipt lists `blocks_written`, `blocks_not_saved` (block and reason) and, as a
 diagnostic that never changes the verdict,
 `worktree_drift`: app-root paths whose `git status` changed during the walk, outside
 `.qaren/actions`. `qaren actions list [--json]` and `qaren actions show <slug>` read the
-saved blocks of the current directory.
+action corpus of the current directory. Both `.yaml` and `.yml` are supported;
+existing files retain their extension when patched. A slug with both extensions
+refuses inspection and is not overwritten by `check`. Symlinked corpora and
+action files are refused. Inspection header validity and defaults follow the
+[core header parser](../qaren-core/src/domain/reusable-action.ts); `list` skips
+invalid headers and `show` refuses them.
 
 On iOS the walk also fails `APP_PROCESS_CHANGED` when the app's process changes between
 captures (a crash or restart), and refuses `APP_PROCESS_UNKNOWN` when the runner does

@@ -14,7 +14,7 @@ merges into `main` as 2.0.0 once the label path runs end to end. The QaReN
 structure outline and TDD that the phase PRs cite are the specification; each
 phase PR names its Linear issue in the QaReN project.
 
-The package cut and literal `qaren check` are merged into `develop`. The Phase 3 Jev seam adds phrase targets, checks and verb fallback; live model and device acceptance are separate from hermetic tests. Blocks, recovery, `qaren pr`, `qaren listen` and packaging arrive in Phases 4 to 8.
+The package cut, literal `qaren check`, Jev seam and Phase 4 blocks are implemented. For saved-block replay, persistence, recovery and action inspection, read the [saved-block contract](packages/qaren-cli/README.md#saved-blocks). Live model and device acceptance are separate from hermetic tests; `qaren pr`, `qaren listen` and packaging arrive in later phases.
 
 ## Repository Map
 
@@ -186,7 +186,7 @@ For a shutdown iOS target, explicitly pass `check --boot-device --device <UUID>`
 CLI-owned iOS builds require `devClientScheme`; use the default app-local Expo generic-build route or explicitly configure `ios.build` with an existing workspace and Xcode scheme for older Expo CLIs (see `packages/qaren-cli/README.md`, including native-dependency preparation limits). Both routes verify a finite simulator bundle before exact-device installation and separate managed Metro. Workspace builds bind route and selection into the native cache and retire run-local outputs only after verified publication and proven build-group shutdown; unknown cleanup retains the build lock and device lease for `qaren cleanup`.
 
 Every `cdp_run_action` RunRecord write goes through the proven-identity action
-write lock (`src/domain/atomic-writer.ts`) until Phase 4 removes RunRecords. A
+write lock (`src/domain/atomic-writer.ts`); `qaren check` uses its own ledger instead. A
 shell that cannot execute setuid `/bin/ps` or read `kern.bootsessionuuid`
 makes `probeProcessBirth` return `unknown`, so persistence throws and
 handler-driven tests report zero RunRecords. Run those tests from an
