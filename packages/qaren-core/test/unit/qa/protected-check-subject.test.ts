@@ -139,7 +139,8 @@ test('secure generic fields retain protected bounds even without input kind or f
     });
     if (type === 'Other') assert.equal(screen.elements[2].semantic?.fill, 'unknown');
     assert.equal(screen.elements[2].value, undefined);
-    assert.deepEqual(inputValues(screen), [typedEmail]);
+    // A secure node's label may be its value natively, so it is masked too (fail-closed).
+    assert.deepEqual(inputValues(screen), [typedEmail, 'Email']);
     const judge = scriptedJudge(() => assert.fail('hidden contents must not be judged'));
     for (const predicate of [
       `contains ${typedEmail}`,

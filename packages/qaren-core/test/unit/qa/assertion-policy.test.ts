@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { captureScreen } from '../../../dist/qa/capture.js';
-import { bindPrivateInputs } from '../../../dist/qa/private-input.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import { decideScreen } from '../../../dist/qa/resolve.js';
 import type { DigestEntry, NativeNode } from '../../../dist/qa/screen.js';
@@ -46,15 +45,11 @@ async function captureRows(
       nodes,
       snapshotVerdict: { ...source.snapshotVerdict, nodeCount: nodes.length },
     }),
-    react: async () =>
-      bindPrivateInputs(
-        {
-          interactive,
-          verdict: { state: 'ok', path: 'interactive', complete: true },
-          hostEvidence: { complete: true, hosts: [] },
-        },
-        { version: 1, complete: true, facts: [] },
-      ),
+    react: async () => ({
+      interactive,
+      verdict: { state: 'ok', path: 'interactive', complete: true },
+      hostEvidence: { complete: true, hosts: [] },
+    }),
   });
 }
 

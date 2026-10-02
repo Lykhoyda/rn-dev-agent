@@ -636,12 +636,9 @@ export function join(
         disabled: !presenceMode && d.disabled === true,
       },
     };
-    const label = nonEmpty(d.text ?? d.label);
-    if (label) element.label = label;
-    const placeholder = nonEmpty(d.placeholder);
-    if (placeholder) element.placeholder = placeholder;
+    // Screen text comes only from the native tree, so a React-only element shows no user-visible string;
+    // its value still joins the mask set, which can only reduce what is written.
     const value = digestValue(d.value);
-    if (value !== undefined) element.value = value;
     if (element.kind === 'input' || d.capabilities?.fill === true || hasPositiveHostFill(d.testID))
       captureInputPrivacy(element, {
         checkSubject: 'unknown',

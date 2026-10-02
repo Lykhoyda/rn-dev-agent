@@ -746,7 +746,7 @@ test('complete acquisition preserves legacy joins without claiming semantic enum
     screen.elements.map((element) => [element.ref, element.testID, element.label]),
     [
       ['@save', 'save', 'Save'],
-      ['react:later', 'later', 'Later'],
+      ['react:later', 'later', undefined],
     ],
   );
   assert.deepEqual(assertionView(screen), ['Save']);

@@ -10,7 +10,7 @@ import {
 } from './resolve.js';
 import { type Judge, type JevCall, JevError, unavailableJudge } from './questions.js';
 import { maskInputs, ObservedPrivacy } from './privacy.js';
-import { PrivateInputCaptureError } from './private-input.js';
+import { NativeSnapshotIncomplete, PrivateInputCaptureError } from './private-input.js';
 import { NativeCaptureError } from './capture.js';
 import { QaDispatchContext, QaDispatchError } from '../domain/qa-dispatch.js';
 import {
@@ -808,7 +808,11 @@ export async function walkBlock(
     } catch (error) {
       if (error instanceof PrivateInputCaptureError || error instanceof NativeCaptureError) {
         const nativeFailure = error instanceof NativeCaptureError;
-        const safe = nativeFailure ? new NativeCaptureError() : new PrivateInputCaptureError();
+        const safe = nativeFailure
+          ? new NativeCaptureError()
+          : error instanceof NativeSnapshotIncomplete
+            ? new NativeSnapshotIncomplete(error.nodes, error.causes)
+            : new PrivateInputCaptureError();
         const key = nativeFailure ? 'native-capture' : 'private-input-capture';
         emit({
           block: key,

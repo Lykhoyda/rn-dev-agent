@@ -4,9 +4,7 @@ import vm from 'node:vm';
 import { buildFiber, createSandbox, INJECTED_HELPERS } from '../helpers/inject-harness.js';
 import { captureQaReact } from '../../../dist/qa/react-capture.js';
 import { captureScreen } from '../../../dist/qa/capture.js';
-import { PrivateInputCaptureError } from '../../../dist/qa/private-input.js';
 import { decideScreen } from '../../../dist/qa/resolve.js';
-import type { Screen } from '../../../dist/qa/screen.js';
 import { inputValues, ObservedPrivacy } from '../../../dist/qa/privacy.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import { runPlan } from '../../../dist/qa/walker.js';
@@ -30,21 +28,20 @@ function plain<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
 }
 
-const inputCanary = 'uncontrolled-input-echo-canary';
+function assertNoInputs(reply: Record<string, unknown>, ...secrets: string[]) {
+  assert.equal('inputs' in reply, false);
+  for (const secret of secrets) assert.equal(JSON.stringify(reply).includes(secret), false, secret);
+}
 
-function inputPipeline(
-  props: Record<string, unknown>,
-  nativeValue: string | undefined,
-  typography: boolean,
-  echoText = inputCanary,
-  hostType = 'RCTSinglelineTextInputView',
-) {
+const inputCanary = 'native-input-echo-canary';
+
+function inputPipeline(props: Record<string, unknown>, typography: boolean, hostType: string) {
   const fixture = setup({}, 'RCTView');
   const input = buildFiber({ hostType, props: { testID: 'field', ...props } }, fixture.fiber);
   input.tag = 5;
   const echo = buildFiber({ hostType: 'RCTText' }, fixture.fiber);
   echo.tag = 5;
-  echo.child = buildFiber({ text: echoText }, echo);
+  echo.child = buildFiber({ text: inputCanary }, echo);
   echo.child.tag = 6;
   fixture.fiber.child = input;
   input.sibling = echo;
@@ -61,7 +58,7 @@ function inputPipeline(
         type: props.secureTextEntry ? 'SecureTextField' : 'TextField',
         identifier: 'field',
         label: 'Field',
-        value: nativeValue,
+        value: inputCanary,
         secure: props.secureTextEntry === true,
         hittable: true,
         enabled: true,
@@ -72,7 +69,7 @@ function inputPipeline(
         index: 2,
         identifier: undefined,
         type: 'StaticText',
-        label: echoText,
+        label: inputCanary,
         presence: { ...observed.presence, nodeIndex: 2 },
       },
     ],
@@ -95,184 +92,57 @@ function inputPipeline(
   return { ...fixture, capture };
 }
 
-for (const secureTextEntry of [false, true]) {
-  for (const hasDefault of [false, true]) {
-    for (const nativeValue of [undefined, '••••', inputCanary]) {
-      for (const typography of [false, true]) {
-        test(`uncontrolled input refuses before disclosure: secure=${secureTextEntry}, default=${hasDefault}, native=${nativeValue === undefined ? 'absent' : nativeValue === inputCanary ? 'plaintext' : 'masked'}, typography=${typography}`, async () => {
-          // RN 0.85 forwards value unchanged; host text uses value, then defaultValue, never lastNativeText.
+test('native input values mask their echo through decisions and walking, whatever the React props', async () => {
+  for (const hostType of ['RCTSinglelineTextInputView', 'AndroidTextInput']) {
+    for (const secureTextEntry of [false, true]) {
+      for (const reactProps of [
+        { value: inputCanary },
+        { defaultValue: inputCanary, text: inputCanary },
+        {},
+      ]) {
+        for (const typography of [false, true]) {
           const fixture = inputPipeline(
-            {
-              secureTextEntry,
-              text: hasDefault ? 'initial' : undefined,
-              ...(hasDefault ? { defaultValue: 'initial' } : {}),
-              onChange() {},
-              onChangeText() {},
-            },
-            nativeValue,
+            { ...reactProps, secureTextEntry, onChange() {}, onChangeText() {} },
             typography,
+            hostType,
           );
-          const judge = scriptedJudge(() => ({ check_1: { type: 'noul', noul: 0.01 } }));
-          for (const source of [
-            '✓ Welcome is visible',
-            '✓ "Absent confirmation"',
-            '1. Tap "Continue"',
+          assertNoInputs(fixture.api.beginQaCapture(typography));
+          const screen = await fixture.capture();
+          assert.ok(inputValues(screen).includes(inputCanary));
+          const judge = scriptedJudge((questions, _, state) => {
+            assert.equal(JSON.stringify({ questions, state }).includes(inputCanary), false);
+            return { check_1: { type: 'noul', noul: 0.99 } };
+          });
+          const decision = await decideScreen(screen, judge, {
+            kind: 'check',
+            literal: false,
+            text: 'Welcome is visible',
+            line: 1,
+          });
+          assert.equal(decision.check, 'pass');
+          assert.equal(judge.requests.length, 1);
+          const walk = walker([], judge);
+          walk.deps.captureScreen = fixture.capture;
+          walk.deps.screenshot = async () => assert.fail('private input pixels must be withheld');
+          for (const [source, verdict] of [
+            ['✓ Welcome is visible', 'PASS'],
+            ['✓ "Absent confirmation"', 'FAIL'],
           ]) {
-            const walk = walker([], judge);
-            let latest: Screen | undefined;
-            let screenshots = 0;
-            walk.deps.captureScreen = async () => {
-              latest = await fixture.capture();
-              return latest;
-            };
-            walk.deps.screenshot = async () => {
-              screenshots++;
-              return 'unexpected';
-            };
             const plan = parsePlan(source);
             assert.ok(plan.blocks);
             const result = await runPlan(plan.blocks, walk.deps);
+            assert.equal(result.verdict, verdict);
             assert.equal(
-              JSON.stringify({
-                result,
-                rows: walk.rows,
-                outbound: judge.requests,
-                latest,
-              }).includes(inputCanary),
+              JSON.stringify({ result, rows: walk.rows, outbound: judge.requests }).includes(
+                inputCanary,
+              ),
               false,
             );
-            assert.equal(result.verdict, 'REFUSED');
-            assert.equal('code' in result && result.code, 'PRIVATE_INPUT_CAPTURE_UNKNOWN');
-            assert.equal(result.failure?.seen, new PrivateInputCaptureError().message);
-            assert.equal(latest, undefined);
-            assert.equal(judge.requests.length, 0);
-            assert.deepEqual(walk.actions, []);
-            assert.equal(screenshots, 0);
-          }
-          await assert.rejects(
-            async () =>
-              decideScreen(await fixture.capture(), judge, {
-                kind: 'check',
-                literal: false,
-                text: 'Welcome is visible',
-                line: 1,
-              }),
-            PrivateInputCaptureError,
-          );
-          const begin = fixture.api.beginQaCapture(typography);
-          assert.equal(begin.state, 'refused');
-          assert.deepEqual(plain(begin.inputs), { version: 1, complete: false, facts: [] });
-          assert.equal(begin.tree, undefined);
-          assert.equal(JSON.stringify(begin).includes(inputCanary), false);
-          assert.equal(judge.requests.length, 0);
-        });
-      }
-    }
-  }
-}
-
-for (const value of [inputCanary, '']) {
-  test(`controlled ${value ? 'current' : 'explicit empty'} value remains admitted through decisions and walking`, async () => {
-    for (const hostType of ['RCTSinglelineTextInputView', 'AndroidTextInput']) {
-      for (const secureTextEntry of [false, true]) {
-        for (const typography of [false, true]) {
-          for (const nativeValue of [undefined, value ? '••••' : '']) {
-            const fixture = inputPipeline(
-              { value, text: value, secureTextEntry, onChange() {} },
-              nativeValue,
-              typography,
-              value || 'Welcome',
-              hostType,
-            );
-            const screen = await fixture.capture();
-            assert.equal(inputValues(screen).includes(inputCanary), value !== '');
-            const judge = scriptedJudge((questions, _, state) => {
-              assert.equal(JSON.stringify({ questions, state }).includes(inputCanary), false);
-              return { check_1: { type: 'noul', noul: 0.99 } };
-            });
-            const decision = await decideScreen(screen, judge, {
-              kind: 'check',
-              literal: false,
-              text: 'Welcome is visible',
-              line: 1,
-            });
-            assert.equal(decision.check, 'pass');
-            assert.equal(judge.requests.length, 1);
-            const walk = walker([], judge);
-            walk.deps.captureScreen = fixture.capture;
-            walk.deps.screenshot = async () => {
-              assert.equal(
-                secureTextEntry || value !== '',
-                false,
-                'private input pixels must be withheld',
-              );
-              return 'safe-empty';
-            };
-            for (const [source, verdict] of [
-              ['✓ Welcome is visible', 'PASS'],
-              ['✓ "Absent confirmation"', 'FAIL'],
-            ]) {
-              const plan = parsePlan(source);
-              assert.ok(plan.blocks);
-              const result = await runPlan(plan.blocks, walk.deps);
-              assert.equal(result.verdict, verdict);
-              assert.equal(
-                JSON.stringify({ result, rows: walk.rows, outbound: judge.requests }).includes(
-                  inputCanary,
-                ),
-                false,
-              );
-            }
           }
         }
       }
     }
-  });
-}
-
-test('native aliases and positive input hints require a current string value, not text or defaults', () => {
-  for (const hostType of [
-    'TextInput',
-    'RCTTextInput',
-    'RCTSinglelineTextInputView',
-    'RCTMultilineTextInputView',
-    'AndroidTextInput',
-  ]) {
-    for (const secureTextEntry of [undefined, false, true]) {
-      for (const value of [undefined, null, '']) {
-        const fixture = setup(
-          { value, text: value === '' ? '' : 'initial', defaultValue: 'initial', secureTextEntry },
-          hostType,
-        );
-        const begin = fixture.api.beginQaCapture();
-        assert.equal(begin.state, value === '' ? 'ready' : 'refused');
-        assert.equal(begin.inputs.complete, value === '');
-        if (value !== '') {
-          assert.deepEqual(plain(begin.inputs.facts), []);
-          assert.equal(begin.tree, undefined);
-        }
-      }
-    }
   }
-  for (const hint of [
-    { secureTextEntry: true },
-    { secureTextEntry: false },
-    { onChangeText() {} },
-    { text: 'initial' },
-    { defaultValue: 'initial' },
-  ]) {
-    const begin = setup(hint, 'CustomNativeHost').api.beginQaCapture();
-    assert.equal(begin.state, 'refused');
-    assert.deepEqual(plain(begin.inputs), { version: 1, complete: false, facts: [] });
-    assert.equal(begin.tree, undefined);
-  }
-  const generic = setup(
-    { value: inputCanary, text: 'initial' },
-    'CustomNativeHost',
-  ).api.beginQaCapture();
-  assert.equal(generic.state, 'ready');
-  assert.equal(generic.inputs.facts[0].values.includes(inputCanary), true);
-  assert.notEqual(JSON.parse(generic.tree).hostEvidence.hosts[0].capabilities.fill, true);
 });
 
 function wrappedInput(readOnly = false) {
@@ -312,6 +182,7 @@ function wrappedInput(readOnly = false) {
         type: 'Other',
         identifier: 'notes',
         label: 'Notes',
+        value: 'wrapped-input-private',
         hittable: true,
         enabled: true,
       },
@@ -403,7 +274,7 @@ test('readonly wrapped TextInput keeps input identity but quoted typing cannot a
   assert.equal(fixture.namesRead(), 0);
 });
 
-test('resolved wrapper names do not invent native roles in presence mode or bypass missing private capture', async () => {
+test('resolved wrapper names do not invent native roles in presence mode', async () => {
   const fixture = wrappedInput();
   const native = nativeCapture();
   Object.assign(native.nodes[1], {
@@ -428,25 +299,6 @@ test('resolved wrapper names do not invent native roles in presence mode or bypa
   const notes = observed.elements.find((element) => element.ref === '@notes');
   assert.equal(notes?.kind, 'other');
   assert.equal(notes?.semantic?.nativePresence?.kind, 'other');
-  const walk = walker(
-    [],
-    scriptedJudge(() => assert.fail('missing private capture must not be judged')),
-  );
-  walk.deps.captureScreen = () =>
-    captureScreen({
-      requirePrivateInputs: true,
-      native: fixture.native,
-      react: async () =>
-        JSON.parse(fixture.api.getTree({ interactiveOnly: true, semanticEvidence: true })),
-    });
-  walk.deps.screenshot = async () =>
-    assert.fail('missing private capture cannot authorize a screenshot');
-  const plan = parsePlan('1. Type "x" into "notes"');
-  assert.ok(plan.blocks);
-  const result = await runPlan(plan.blocks, walk.deps);
-  assert.equal(result.verdict, 'REFUSED');
-  assert.deepEqual(walk.actions, []);
-  assert.doesNotMatch(JSON.stringify(result), /wrapped-input-private/);
 });
 
 function privateNamedType(type: unknown) {
@@ -457,9 +309,7 @@ function privateNamedType(type: unknown) {
   fixture.fiber.return = fixture.root.current;
   const result = fixture.api.beginQaCapture();
   assert.equal(result.state, 'ready');
-  assert.deepEqual(plain(result.inputs.facts), [
-    { hostIndex: 0, values: ['wrapped-input-private'], secure: false },
-  ]);
+  assertNoInputs(result, 'wrapped-input-private');
   return JSON.parse(result.tree).interactive.find(
     (entry: { testID?: string }) => entry.testID === 'notes',
   );
@@ -612,10 +462,7 @@ test('private capture traverses React dev wrappers and symbols without reading t
       });
       const begin = api.beginQaCapture(typography);
       assert.equal(calls, 0);
-      assert.equal(begin.inputs.complete, true);
-      assert.deepEqual(plain(begin.inputs.facts), [
-        { hostIndex: 0, values: ['dev-private'], secure: false },
-      ]);
+      assertNoInputs(begin, 'dev-private');
       await tick();
       const result = begin.state === 'ready' ? begin : api.readQaCapture(begin.id);
       assert.equal(result.state, 'ready');
@@ -625,7 +472,7 @@ test('private capture traverses React dev wrappers and symbols without reading t
   }
 });
 
-test('React dev wrapper producer reaches private adapter and masks a native echo', async () => {
+test('React dev wrapper producer reaches the adapter and a native input value masks its echo', async () => {
   for (const typography of [false, true]) {
     const { sandbox } = devTree(() => assert.fail('type accessor executed'));
     const observation = await captureQaReact(
@@ -639,7 +486,12 @@ test('React dev wrapper producer reaches private adapter and masks a native echo
     const screen = await captureScreen({
       requirePrivateInputs: true,
       react: async () => observation,
-      native: async () => ({ nodes: [{ ref: '@echo', type: 'StaticText', label: 'dev-private' }] }),
+      native: async () => ({
+        nodes: [
+          { ref: '@field', type: 'TextField', label: 'Field', value: 'dev-private' },
+          { ref: '@echo', type: 'StaticText', label: 'dev-private' },
+        ],
+      }),
     });
     assert.ok(inputValues(screen).includes('dev-private'));
     const privacy = new ObservedPrivacy();
@@ -716,7 +568,7 @@ test('private captures retain fixed refusals for data-named error overlays', () 
     fixture.root.current = overlay;
     const capture = fixture.api.beginQaCapture();
     assert.equal(capture.state, 'refused');
-    assert.deepEqual(plain(capture.inputs), { version: 1, complete: false, facts: [] });
+    assertNoInputs(capture, 'overlay-private');
     assert.equal(capture.tree, undefined);
   }
 });
@@ -733,7 +585,7 @@ test('version 90 replaces a warm 89 helper and reinjection preserves the private
   assert.equal(sandbox.__QAREN, upgraded);
 });
 
-test('private begin captures anonymous disabled input bytes once without exposing the channel', () => {
+test('private begin over an anonymous disabled input exposes no input channel and consumes once', () => {
   const { api, sandbox } = setup({
     value: ' x ',
     text: '密',
@@ -746,13 +598,8 @@ test('private begin captures anonymous disabled input bytes once without exposin
   assert.equal(result.v, 1);
   assert.match(result.id, /^[a-f0-9]{1,32}$/);
   assert.equal(result.state, 'ready');
-  assert.deepEqual(plain(result.inputs), {
-    version: 1,
-    complete: true,
-    facts: [{ hostIndex: 0, values: [' x ', '密', '\t'], secure: true }],
-  });
+  assertNoInputs(result, '密', ' x ');
   assert.equal(typeof result.tree, 'string');
-  assert.equal(result.tree.includes('密'), false);
   assert.deepEqual(plain(api.readQaCapture(result.id)), {
     v: 1,
     id: result.id,
@@ -764,6 +611,12 @@ test('private begin captures anonymous disabled input bytes once without exposin
 });
 
 test('native aliases and Fabric canonical types use actual host props, never composite names', () => {
+  function hosts(api: { beginQaCapture(): { state: string; tree?: string } }) {
+    const result = api.beginQaCapture();
+    assert.equal(result.state, 'ready');
+    assertNoInputs(result, '密');
+    return JSON.parse(result.tree!).hostEvidence.hosts;
+  }
   for (const hostType of [
     'TextInput',
     'RCTTextInput',
@@ -778,20 +631,13 @@ test('native aliases and Fabric canonical types use actual host props, never com
         canonical: { viewConfig: { uiViewClassName: hostType } },
       };
     }
-    assert.deepEqual(plain(api.beginQaCapture().inputs), {
-      version: 1,
-      complete: true,
-      facts: [{ hostIndex: 0, values: [' a\n密 '], secure: false }],
-    });
+    assert.equal(hosts(api)[0].capabilities.fill, true, hostType);
   }
+  assert.notEqual(hosts(setup({ value: '密' }, 'CustomNativeHost').api)[0].capabilities.fill, true);
   const { api, fiber } = setup({ value: 'composite-only' });
   fiber.type = { displayName: 'TextInput' };
   fiber.tag = 0;
-  assert.deepEqual(plain(api.beginQaCapture().inputs), {
-    version: 1,
-    complete: true,
-    facts: [],
-  });
+  assert.deepEqual(hosts(api), []);
 });
 
 test('public default, semantic and typography trees cannot opt into private input props', async () => {
@@ -817,48 +663,6 @@ test('public default, semantic and typography trees cannot opt into private inpu
     assert.doesNotMatch(tree, /(?:value|text|default)-secret|"secureTextEntry"|"inputs"/);
   }
   assert.equal(api.__v, 90);
-});
-
-test('getter, inherited, opaque and invalid inputs refuse without executing getters or coercions', () => {
-  let calls = 0;
-  const evil = {
-    toString() {
-      calls++;
-      throw new Error('secret');
-    },
-  };
-  const fixtures = [
-    { value: evil },
-    { value: false },
-    { value: '', text: 12 },
-    { value: '', defaultValue: [] },
-    { secureTextEntry: 'true' },
-    Object.create({ value: 'secret' }),
-    Object.defineProperty({}, 'value', {
-      get() {
-        calls++;
-        throw new Error('secret');
-      },
-    }),
-    Object.defineProperty({}, 'secureTextEntry', {
-      get() {
-        calls++;
-        throw new Error('secret');
-      },
-    }),
-  ];
-  for (const props of fixtures) {
-    const result = setup(props).api.beginQaCapture();
-    assert.equal(result.state, 'refused');
-    assert.deepEqual(plain(result.inputs), {
-      version: 1,
-      complete: false,
-      facts: [],
-    });
-    assert.equal(result.tree, undefined);
-    assert.doesNotMatch(JSON.stringify(result), /secret/);
-  }
-  assert.equal(calls, 0);
 });
 
 test('RN dev-frozen host props and Fragment children props admit a complete capture', () => {
@@ -899,11 +703,7 @@ test('RN dev-frozen host props and Fragment children props admit a complete capt
     field.sibling = next;
     const result = fixture.api.beginQaCapture();
     assert.equal(result.state, 'ready');
-    assert.deepEqual(plain(result.inputs), {
-      version: 1,
-      complete: true,
-      facts: [{ hostIndex: 1, values: [''], secure: false }],
-    });
+    assertNoInputs(result);
     assert.ok(reads > 0);
     const tree = JSON.parse(result.tree);
     assert.equal(tree.hostEvidence.hosts[2].disabled, true);
@@ -933,39 +733,32 @@ test('dev-freeze lookalikes and dev-frozen input props refuse without invoking g
   ]) {
     const result = setup({ value: '', accessibilityState: state }).api.beginQaCapture();
     assert.equal(result.state, 'refused');
-    assert.equal(result.inputs.complete, false);
+    assertNoInputs(result);
   }
   for (const props of [{ value: 'secret' }, { value: '', secureTextEntry: true }]) {
     const result = setup(devFreeze(props, () => calls++)).api.beginQaCapture();
     assert.equal(result.state, 'refused');
-    assert.deepEqual(plain(result.inputs), { version: 1, complete: false, facts: [] });
-    assert.doesNotMatch(JSON.stringify(result), /secret/);
+    assertNoInputs(result, 'secret');
   }
   assert.equal(calls, 0);
 });
 
-test('complete empty differs from unknown coverage, and switches stay non-inputs', () => {
+test('a ready switch capture differs from refused unknown coverage, and switches stay non-inputs', () => {
   const { api, sandbox } = setup({ value: true, onChange() {} }, 'RCTSwitch');
-  assert.deepEqual(plain(api.beginQaCapture().inputs), {
-    version: 1,
-    complete: true,
-    facts: [],
-  });
+  const ready = api.beginQaCapture();
+  assert.equal(ready.state, 'ready');
+  assertNoInputs(ready);
+  assert.notEqual(JSON.parse(ready.tree).hostEvidence.hosts[0].capabilities.fill, true);
   sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers.set(2, {});
   const original = sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__.getFiberRoots;
   sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__.getFiberRoots = (id: number) => {
     if (id === 2) throw new Error('secret');
     return original(id);
   };
-  assert.equal(api.beginQaCapture().inputs.complete, false);
+  const unknown = api.beginQaCapture();
+  assert.equal(unknown.state, 'refused');
+  assertNoInputs(unknown, 'secret');
   assert.equal(createSandbox().__QAREN.beginQaCapture().state, 'refused');
-  const unknown = setup(
-    { value: 'private', onChange() {} },
-    'UnrecognizedNativeInput',
-  ).api.beginQaCapture();
-  assert.deepEqual(plain(unknown.inputs.facts), [
-    { hostIndex: 0, values: ['private'], secure: false },
-  ]);
 });
 
 function withChildren(count: number, props: Record<string, unknown>, hostType = 'RCTTextInput') {
@@ -981,7 +774,7 @@ function withChildren(count: number, props: Record<string, unknown>, hostType = 
   return fixture;
 }
 
-test('non-input numeric and opaque object values coexist with a private input without coercion', async () => {
+test('non-input numeric and opaque object values coexist with an input without coercion', async () => {
   let coercions = 0;
   const opaque = {
     toString() {
@@ -1002,68 +795,18 @@ test('non-input numeric and opaque object values coexist with a private input wi
       control.memoizedProps = { value, onChange() {} };
       control.sibling.memoizedProps = { value: 'input-next-to-slider', secureTextEntry: true };
       const begin = fixture.api.beginQaCapture(typography);
-      assert.equal(begin.inputs.complete, true, hostType);
-      assert.deepEqual(plain(begin.inputs.facts), [
-        { hostIndex: 2, values: ['input-next-to-slider'], secure: true },
-      ]);
+      assertNoInputs(begin, 'input-next-to-slider', 'object-canary');
       await tick();
       const result = begin.state === 'ready' ? begin : fixture.api.readQaCapture(begin.id);
-      assert.equal(result.state, 'ready');
-      const observation = await captureQaReact(
-        {
-          async withPrivateHelperWorld(run) {
-            return run(async (expression) => vm.runInContext(expression, fixture.sandbox));
-          },
-        },
-        typography,
-      );
-      const screen = await captureScreen({
-        requirePrivateInputs: true,
-        react: async () => observation,
-        native: async () => ({
-          nodes: [{ ref: '@echo', type: 'StaticText', label: 'input-next-to-slider' }],
-        }),
-      });
-      assert.deepEqual(inputValues(screen), ['input-next-to-slider']);
-      const privacy = new ObservedPrivacy();
-      privacy.observe(screen);
-      assert.equal(privacy.redact('input-next-to-slider'), '•••');
+      assert.equal(result.state, 'ready', hostType);
+      assert.doesNotMatch(result.tree, /input-next-to-slider|object-canary/);
     }
   }
   assert.equal(coercions, 0);
 });
 
-test('known inputs and positive private hints still refuse non-string input values', () => {
-  for (const value of [17, false, {}]) {
-    assert.equal(setup({ value }).api.beginQaCapture().state, 'refused');
-    for (const hint of [
-      { secureTextEntry: false },
-      { text: 'text' },
-      { defaultValue: 'initial' },
-      { onChangeText() {} },
-    ]) {
-      const result = setup({ ...hint, value }, 'UnrecognizedNativeControl').api.beginQaCapture();
-      assert.equal(result.state, 'refused');
-      assert.deepEqual(plain(result.inputs), { version: 1, complete: false, facts: [] });
-    }
-  }
-  const unknown = setup(
-    { value: 'unknown-private' },
-    'UnrecognizedNativeControl',
-  ).api.beginQaCapture();
-  assert.deepEqual(plain(unknown.inputs.facts), [
-    { hostIndex: 0, values: ['unknown-private'], secure: false },
-  ]);
-});
-
-test('value, aggregate, host and fiber bounds refuse instead of truncating complete facts', () => {
-  assert.equal(setup({ value: 'x'.repeat(4096) }).api.beginQaCapture().state, 'ready');
-  assert.equal(setup({ value: 'x'.repeat(4097) }).api.beginQaCapture().state, 'refused');
-  assert.equal(withChildren(4, { value: 'x'.repeat(4096) }).api.beginQaCapture().state, 'ready');
-  assert.equal(withChildren(5, { value: 'x'.repeat(4096) }).api.beginQaCapture().state, 'refused');
-  const { maxHosts, maxValues } = PRIVATE_INPUT_LIMITS;
-  assert.equal(withChildren(maxValues, { value: 'x' }).api.beginQaCapture().state, 'ready');
-  assert.equal(withChildren(maxValues + 1, { value: 'x' }).api.beginQaCapture().state, 'refused');
+test('host and fiber bounds refuse instead of truncating the capture', () => {
+  const { maxHosts } = PRIVATE_INPUT_LIMITS;
   assert.equal(withChildren(maxHosts - 2, {}, 'RCTView').api.beginQaCapture().state, 'ready');
   assert.equal(withChildren(maxHosts - 1, {}, 'RCTView').api.beginQaCapture().state, 'refused');
   const { api, fiber } = setup({ value: '' });
@@ -1088,11 +831,11 @@ function pendingCapture() {
   return { ...fixture, complete: () => complete(0, 0, 100, 30) };
 }
 
-test('pending capture carries facts only in begin and ready polling consumes once', async () => {
+test('pending capture carries no input values and ready polling consumes once', async () => {
   const { api, sandbox, complete } = pendingCapture();
   const begin = api.beginQaCapture(true);
   assert.equal(begin.state, 'pending');
-  assert.equal(begin.inputs.complete, true);
+  assertNoInputs(begin, 'private-secret');
   assert.deepEqual(plain(api.readQaCapture(begin.id)), {
     v: 1,
     id: begin.id,
@@ -1110,13 +853,10 @@ test('pending capture carries facts only in begin and ready polling consumes onc
   assert.equal(api.readQaCapture(begin.id).state, 'refused');
 });
 
-test('in-place input mutation and root replacement refuse after typography', async () => {
+test('in-place value prop mutation and root replacement refuse after typography', async () => {
   for (const mutate of [
     (f: ReturnType<typeof pendingCapture>) => {
       f.fiber.memoizedProps.value = 'changed';
-    },
-    (f: ReturnType<typeof pendingCapture>) => {
-      f.fiber.memoizedProps.secureTextEntry = false;
     },
     (f: ReturnType<typeof pendingCapture>) => {
       f.root.current = buildFiber({ hostType: 'RCTView' });
@@ -1206,12 +946,12 @@ test('ready-but-unread capture expires, while typography false never measures', 
   assert.equal(time.timers.size, 0);
 });
 
-test('unsupported typography style alone does not make private input coverage incomplete', async () => {
+test('unsupported typography style alone does not make the private capture incomplete', async () => {
   const fixture = withChildren(1, { value: 'private' });
   fixture.fiber.type = 'RCTText';
   fixture.fiber.memoizedProps.style = 123;
   const begin = fixture.api.beginQaCapture(true);
-  assert.equal(begin.inputs.complete, true);
+  assertNoInputs(begin);
   await tick();
   const result = fixture.api.readQaCapture(begin.id);
   assert.equal(result.state, 'ready');
@@ -1281,23 +1021,6 @@ test('root object replacement, renderer coverage drift and public host identity 
     await tick();
     assert.equal(fixture.api.readQaCapture(begin.id).state, 'refused');
   }
-});
-
-test('empty and absent strings preserve exact facts and unsupported anonymous inputs stay private', () => {
-  const { api, fiber } = setup({
-    value: '',
-    text: undefined,
-    defaultValue: null,
-    secureTextEntry: false,
-  });
-  assert.deepEqual(plain(api.beginQaCapture().inputs.facts), [
-    { hostIndex: 0, values: [''], secure: false },
-  ]);
-  fiber.type = null;
-  fiber.memoizedProps = { value: '密', secureTextEntry: true, readOnly: true };
-  assert.deepEqual(plain(api.beginQaCapture().inputs.facts), [
-    { hostIndex: 0, values: ['密'], secure: true },
-  ]);
 });
 
 test('public full tree omits Fabric input props even with an unrelated host display name', () => {
@@ -1394,16 +1117,6 @@ test('wide fiber enqueue and cyclic siblings terminate with fixed refusal', () =
   assert.equal(fixture.api.beginQaCapture().state, 'refused');
 });
 
-test('begin facts cannot be mutated to change later readiness or private stability', async () => {
-  const fixture = pendingCapture();
-  const begin = fixture.api.beginQaCapture(true);
-  begin.inputs.complete = false;
-  begin.inputs.facts[0].values[0] = 'edited';
-  fixture.complete();
-  await tick();
-  assert.equal(fixture.api.readQaCapture(begin.id).state, 'ready');
-});
-
 test('revalidation never invokes a newly installed private getter or exposes its error', async () => {
   const fixture = pendingCapture();
   let calls = 0;
@@ -1422,4 +1135,46 @@ test('revalidation never invokes a newly installed private getter or exposes its
     state: 'refused',
   });
   assert.equal(calls, 0);
+});
+
+test('the producer never executes TextInput text, default, secure or value props and returns no input channel', async () => {
+  for (const typography of [false, true]) {
+    for (const accessorValue of [false, true]) {
+      let calls = 0;
+      const props: Record<string, unknown> = { testID: 'field', onChangeText() {} };
+      for (const key of ['text', 'defaultValue', 'secureTextEntry', 'value']) {
+        if (key === 'value' && !accessorValue) {
+          props.value = 'value-canary';
+          continue;
+        }
+        Object.defineProperty(props, key, {
+          enumerable: true,
+          get() {
+            calls++;
+            throw new Error(`${key}-canary`);
+          },
+        });
+      }
+      const fixture = setup(props, 'RCTSinglelineTextInputView');
+      fixture.fiber.stateNode = {
+        measureInWindow(done: (...rect: number[]) => void) {
+          queueMicrotask(() => done(0, 0, 100, 30));
+        },
+      };
+      const begin = fixture.api.beginQaCapture(typography);
+      await tick();
+      const result = begin.state === 'pending' ? fixture.api.readQaCapture(begin.id) : begin;
+      // The digest stability check still compares `value` as own data, so an accessor refuses unread.
+      assert.equal(result.state, accessorValue ? 'refused' : 'ready');
+      assert.equal(calls, 0);
+      for (const reply of [begin, result])
+        assertNoInputs(
+          reply,
+          'value-canary',
+          'text-canary',
+          'defaultValue-canary',
+          'secureTextEntry-canary',
+        );
+    }
+  }
 });

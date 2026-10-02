@@ -33,6 +33,7 @@ export function capturePrivateScreen(
     testID?: string;
     elements: Element[];
     associationUnique: boolean;
+    labelMayBeValue?: boolean;
   }[],
 ): void {
   const values = new Set<string>();
@@ -64,7 +65,11 @@ export function capturePrivateScreen(
       if (uncertain) uncertainPrivateInputs.add(element);
       for (const value of inputPrivacy.get(element)?.values ?? []) add(value);
       if (element.value) add(element.value);
-      if ((fact.secure || nativeLabelMayBeValue(element)) && element.label) add(element.label);
+      if (
+        ((fact.labelMayBeValue ?? fact.secure) || nativeLabelMayBeValue(element)) &&
+        element.label
+      )
+        add(element.label);
     }
   }
   if (unassociatedSecure) {
