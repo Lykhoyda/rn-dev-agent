@@ -130,10 +130,11 @@ impl CmdOutput {
         let code = self
             .exit_code
             .map_or("signal".to_string(), |c| c.to_string());
-        let tail: String = self
-            .stderr
+        let stderr = crate::redact::redact_secrets(&self.stderr);
+        let stdout = crate::redact::redact_secrets(&self.stdout);
+        let tail: String = stderr
             .lines()
-            .chain(self.stdout.lines())
+            .chain(stdout.lines())
             .rev()
             .take(6)
             .collect::<Vec<_>>()

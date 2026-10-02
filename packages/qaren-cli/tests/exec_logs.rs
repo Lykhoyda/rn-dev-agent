@@ -1,6 +1,6 @@
 mod common;
 
-use qaren::exec::{CmdSpec, RealRunner, Runner};
+use qaren::exec::{CmdOutput, CmdSpec, RealRunner, Runner};
 use qaren::failure::{Failure, FailureCode};
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
@@ -12,6 +12,33 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const KEY: &str = "synthetic-phase3-typesafe-key";
+
+#[test]
+fn command_summary_redacts_complete_streams_before_selecting_the_tail() {
+    let body = (0..7)
+        .map(|line| format!("private-body-{line}\n"))
+        .collect::<String>();
+    let pem = format!("-----BEGIN PRIVATE KEY-----\n{body}");
+    for output in [
+        CmdOutput {
+            stdout: pem.clone(),
+            ..CmdOutput::failed(1, "install failed")
+        },
+        CmdOutput::failed(1, &pem),
+    ] {
+        let summary = output.summary();
+        assert!(!summary.contains("private-body"), "{summary}");
+        assert!(summary.contains("<redacted private key>"), "{summary}");
+    }
+    assert_eq!(
+        CmdOutput {
+            stdout: "one\ntwo\nthree\nfour\nfive\nsix\nseven\n".into(),
+            ..CmdOutput::failed(1, "stderr")
+        }
+        .summary(),
+        "exit=1 two | three | four | five | six | seven"
+    );
+}
 
 #[test]
 fn private_capture_passes_bounded_stdin_without_inventory_in_diagnostics_or_command_logs() {
@@ -98,8 +125,8 @@ fn the_log_drain_masks_a_private_key_split_across_lines_and_writes() {
         "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj",
         "Zq3=",
         "c2Vjb25kIGtleQ",
+        "MIIbody",
     ];
-    // The second block opens at the end of a line too long to log.
     let oversized = format!("{} -----BEGIN PRIVATE KEY-----\n", "x".repeat(70 * 1024));
     for chunk in [
         "ssh: -----BEGIN PRIVATE KEY-----\n",
@@ -113,6 +140,42 @@ fn the_log_drain_masks_a_private_key_split_across_lines_and_writes() {
     ] {
         output.write_all(chunk.as_bytes()).unwrap();
         std::thread::sleep(Duration::from_millis(20));
+    }
+    let dash_prefix = format!(
+        "{}------BEGIN PRIVATE KEY-----\nMIIbody\n-----END PRIVATE KEY-----\n",
+        "x".repeat(65_520)
+    );
+    output.write_all(dash_prefix.as_bytes()).unwrap();
+    for boundary in [64 * 1024, 128 * 1024, 192 * 1024] {
+        for kind in ["BEGIN", "END"] {
+            for (split, dashes) in [
+                (1, 0),
+                (11, 0),
+                (23, 0),
+                (26, 0),
+                (27, 0),
+                (16, 1),
+                (20, 8),
+                (1, 8),
+            ] {
+                if kind == "END" {
+                    output
+                        .write_all(b"-----BEGIN PRIVATE KEY-----\n")
+                        .unwrap();
+                }
+                let line = format!(
+                    "{}{}-----{kind} PRIVATE KEY-----{}\n",
+                    "x".repeat(boundary - split),
+                    "-".repeat(dashes),
+                    "x".repeat(128 * 1024)
+                );
+                output.write_all(line.as_bytes()).unwrap();
+                if kind == "BEGIN" {
+                    writeln!(output, "{}\n-----END PRIVATE KEY-----", body[2]).unwrap();
+                }
+                output.write_all(b"after oversized header\n").unwrap();
+            }
+        }
     }
     drop(output);
     let mut stderr = helper.0.stderr.take().unwrap();
@@ -142,6 +205,7 @@ fn the_log_drain_masks_a_private_key_split_across_lines_and_writes() {
         stored.contains("Connection closed") && stored.contains("done"),
         "{stored}"
     );
+    assert_eq!(stored.matches("after oversized header\n").count(), 48);
 }
 
 #[test]
