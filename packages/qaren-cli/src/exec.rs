@@ -131,7 +131,10 @@ impl CmdOutput {
             .exit_code
             .map_or("signal".to_string(), |c| c.to_string());
         // Captured streams lose their interleaving, so any key text withholds the whole tail.
-        if self.stdout.contains("PRIVATE KEY") || self.stderr.contains("PRIVATE KEY") {
+        if [&self.stdout, &self.stderr]
+            .iter()
+            .any(|stream| stream.to_ascii_lowercase().contains("private key"))
+        {
             return format!("exit={code} <output withheld: private key material>");
         }
         let stderr = crate::redact::redact_secrets(&self.stderr);

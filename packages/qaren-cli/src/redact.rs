@@ -62,13 +62,22 @@ pub fn redact_secrets(raw: &str) -> String {
     if !raw.contains("PRIVATE KEY") {
         return redact_plain(raw);
     }
+    let (begins, ends) = raw
+        .split_inclusive(['\n', '\r'])
+        .filter(|line| line.contains("PRIVATE KEY"))
+        .fold((0, 0), |(begins, ends), line| {
+            (
+                begins + line.matches("BEGIN").count(),
+                ends + line.matches("END").count(),
+            )
+        });
     let mut masker = KeyMasker::default();
     let kept: String = raw
         .split_inclusive(['\n', '\r'])
         .filter_map(|line| masker.line(0, line))
         .collect();
     // A body printed without its header can sit anywhere before an orphan END.
-    if masker.orphan_end {
+    if masker.orphan_end || ends > begins {
         return PRIVATE_KEY_MASK.to_string();
     }
     redact_plain(&kept)
@@ -225,6 +234,21 @@ mod tests {
                 BODY[0]
             ),
         ] {
+            assert_eq!(redact_secrets(&raw), PRIVATE_KEY_MASK);
+        }
+    }
+
+    #[test]
+    fn extra_private_key_ends_mask_the_whole_string_in_an_open_block() {
+        for separator in ["\n", "\r", "\r\n"] {
+            let raw = [
+                "PREBODY",
+                "-----BEGIN PRIVATE KEY-----",
+                "BODY",
+                "-----END PRIVATE KEY----- -----END PRIVATE KEY-----",
+                "",
+            ]
+            .join(separator);
             assert_eq!(redact_secrets(&raw), PRIVATE_KEY_MASK);
         }
     }

@@ -43,6 +43,41 @@ fn command_summary_withholds_output_naming_a_private_key() {
 const FAKE_BODY: &str = "FAKEKEYBODY";
 
 #[test]
+fn command_summary_withholds_a_private_key_mask_from_real_capture() {
+    let mut runner = RealRunner::new();
+    let output = runner.run(&CmdSpec::new(
+        "private-key-summary",
+        "sh",
+        &[
+            "-c",
+            "printf '%s\\n' '-----BEGIN PRIVATE KEY-----' >&2; printf 'FAKEKEYBODY\\n'; exit 1",
+        ],
+        5,
+    ));
+    assert_eq!(output.exit_code, Some(1));
+    assert_eq!(output.stderr, "<redacted private key>\n");
+    assert_eq!(output.stdout, "FAKEKEYBODY\n");
+    assert_eq!(
+        output.summary(),
+        "exit=1 <output withheld: private key material>"
+    );
+    assert!(!output.summary().contains(FAKE_BODY));
+    for marker in ["private key", "PrIvAtE KeY", "<redacted private key>"] {
+        for stderr in [false, true] {
+            let output = CmdOutput {
+                stdout: if stderr { FAKE_BODY } else { marker }.into(),
+                stderr: if stderr { marker } else { FAKE_BODY }.into(),
+                ..CmdOutput::failed(1, "")
+            };
+            assert_eq!(
+                output.summary(),
+                "exit=1 <output withheld: private key material>"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_marker_mention_cannot_blind_a_truncated_key_in_a_summary() {
     let failure = CmdOutput::failed(
         255,
