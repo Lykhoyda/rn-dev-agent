@@ -170,6 +170,7 @@ struct DataPayload: Codable {
   let verifyVerdict: String?
   let verifyStable: Bool?
   let textEntryRoute: String?
+  var appProcessIdentifier: Int? = nil
 
   init(
     message: String? = nil,

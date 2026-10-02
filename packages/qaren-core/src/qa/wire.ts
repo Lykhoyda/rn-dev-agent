@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { Ledger, LedgerRow, WalkResult } from './ledger.js';
 import { ledgerWithoutResult } from './ledger.js';
@@ -32,6 +33,7 @@ export interface WireRequest {
   preflightCalls?: JevCall[];
   platform: 'ios' | 'android';
   appId: string;
+  appRoot: string;
   runDir: string;
   lease: string;
   target: WireTarget;
@@ -160,6 +162,8 @@ export function parseRequest(line: string): WireRequest {
       (!Array.isArray(p.preflightCalls) || !p.preflightCalls.every(validCall))) ||
     (p.platform !== 'ios' && p.platform !== 'android') ||
     typeof p.appId !== 'string' ||
+    typeof p.appRoot !== 'string' ||
+    !isAbsolute(p.appRoot) ||
     typeof p.runDir !== 'string' ||
     typeof p.lease !== 'string' ||
     !target ||

@@ -1,4 +1,5 @@
 import type { Check, Step, Target } from './plan.js';
+import type { Selector } from './ledger.js';
 import {
   type Element,
   type Screen,
@@ -36,8 +37,11 @@ export type Resolution =
   | { refuse: string; reason: string };
 
 export class ResolutionError extends Error {
+  readonly code: string;
+
   constructor(refusal: { refuse: string; reason: string }) {
     super(`${refusal.refuse}: ${refusal.reason}`);
+    this.code = refusal.refuse;
   }
 }
 
@@ -51,7 +55,8 @@ export interface TargetQuestion {
   candidates: Element[];
 }
 
-function matches(e: Element, quoted: string, kind: Step['kind']): boolean {
+function matches(e: Element, quoted: string, kind: Step['kind'], exact?: Target['exact']): boolean {
+  if (exact) return exact === 'id' ? e.testID === quoted : e.label === quoted;
   if (kind === 'fill')
     return (
       e.kind === 'input' && (e.label === quoted || e.testID === quoted || e.placeholder === quoted)
@@ -97,9 +102,15 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
   );
   const candidates = eligible;
   if (target.quoted !== undefined) {
-    const exact = eligible.filter((e) => matches(e, target.quoted!, step.kind));
+    const exact = eligible.filter((e) => matches(e, target.quoted!, step.kind, target.exact));
     if (exact.length === 1)
       return exact[0].offscreen ? { scroll: 'down' } : { ref: exact[0].ref, element: exact[0] };
+    // A replayed selector names one element; anything else re-walks the step instead of asking Jev.
+    if (target.exact)
+      return {
+        refuse: 'REPLAY_SELECTOR',
+        reason: `${exact.length} eligible elements match the stored ${target.exact === 'id' ? 'testID' : 'label'} "${target.quoted}"`,
+      };
     return exact.length
       ? {
           refuse: 'TARGET_AMBIGUOUS',
@@ -247,11 +258,32 @@ function prepareAssertion(
 
 export function targetVisible(target: Target, screen: Screen): boolean {
   if (target.quoted === undefined) return false;
+  if (target.exact === 'id')
+    return screen.elements.some((e) => !e.offscreen && e.testID === target.quoted);
+  if (target.exact === 'text')
+    return (
+      screen.elements.some((e) => !e.offscreen && e.label === target.quoted) ||
+      assertionView(screen).some((t) => t === target.quoted)
+    );
   return (
     screen.elements.some(
       (e) => !e.offscreen && (e.label === target.quoted || e.testID === target.quoted),
     ) || assertionView(screen).some((t) => t === target.quoted)
   );
+}
+
+export function elementSelector(element: Element): Selector | undefined {
+  if (element.testID) return { id: element.testID };
+  return element.label ? { text: element.label } : undefined;
+}
+
+// The identity that made a literal visibility target visible, preferring a testID.
+export function visibleSelector(target: Target, screen: Screen): Selector | undefined {
+  const quoted = target.quoted;
+  if (quoted === undefined || !targetVisible(target, screen)) return undefined;
+  const shown = screen.elements.filter((e) => !e.offscreen);
+  if (target.exact !== 'text' && shown.some((e) => e.testID === quoted)) return { id: quoted };
+  return target.exact === 'id' ? undefined : { text: quoted };
 }
 
 export function checkQuestion(check: Check): Question {

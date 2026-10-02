@@ -61,6 +61,7 @@ export interface Screen {
   nativeCaptureCauses?: string[];
   pressEvidenceGap?: string;
   reactHostEvidence?: ReactHostEvidence;
+  appProcessIdentifier?: number;
 }
 
 const joinedDiagnosticFacts = new WeakMap<

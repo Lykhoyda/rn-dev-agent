@@ -1114,3 +1114,26 @@ test('native errors propagate unchanged without reading React or logging payload
   );
   assert.equal(reads, 1);
 });
+
+test('the runner-reported app process identifier reaches the screen only when it is a positive integer', async () => {
+  for (const [reported, expected] of [
+    [4242, 4242],
+    [0, undefined],
+    [-7, undefined],
+    [1.5, undefined],
+    ['4242', undefined],
+    [undefined, undefined],
+  ] as const) {
+    const screen = await captureScreen({
+      native: async () => ({
+        nodes,
+        truncated: false,
+        normalizationDroppedNodes: 0,
+        snapshotVerdict,
+        ...(reported === undefined ? {} : { appProcessIdentifier: reported }),
+      }),
+      react: async () => ({ interactive, verdict, hostEvidence }),
+    });
+    assert.equal(screen.appProcessIdentifier, expected, String(reported));
+  }
+});

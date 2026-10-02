@@ -2541,6 +2541,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       truncated?: boolean;
       snapshotGeneration?: number;
       keyboardVisible?: boolean;
+      appProcessIdentifier?: number;
     };
     const missingRefFreshness =
       presenceRequested &&
@@ -2577,6 +2578,9 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
             : {}),
           ...(typeof data.snapshotGeneration === 'number'
             ? { snapshotGeneration: data.snapshotGeneration }
+            : {}),
+          ...(typeof data.appProcessIdentifier === 'number'
+            ? { appProcessIdentifier: data.appProcessIdentifier }
             : {}),
         },
         { meta: { ...announce, snapshotVerdict, ...recoveryMeta } },

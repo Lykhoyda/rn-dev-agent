@@ -251,7 +251,10 @@ extension RnFastRunnerTests {
         : XCUIApplication(bundleIdentifier: bundleId)
       currentSnapshotGeneration += 1
       // Observation must not activate or relaunch the app to manufacture presence.
-      let payload = snapshotPlatformPresence(app: target, appId: bundleId, presenceBudgetMs: presenceBudgetMs)
+      let payload = runnerPayload(
+        snapshotPlatformPresence(app: target, appId: bundleId, presenceBudgetMs: presenceBudgetMs),
+        appProcessIdentifier: observedProcessIdentifier(target)
+      )
       retainSnapshotTargets(payload.nodes ?? [])
       needsPostSnapshotInteractionDelay = true
       return Response(ok: true, data: payload)
@@ -998,9 +1001,12 @@ extension RnFastRunnerTests {
         scope: command.scope,
         raw: command.raw ?? false
       )
-      let payload = options.raw
-        ? snapshotRaw(app: activeApp, options: options)
-        : snapshotFast(app: activeApp, options: options)
+      let payload = runnerPayload(
+        options.raw
+          ? snapshotRaw(app: activeApp, options: options)
+          : snapshotFast(app: activeApp, options: options),
+        appProcessIdentifier: observedProcessIdentifier(activeApp)
+      )
       retainSnapshotTargets(payload.nodes ?? [])
       needsPostSnapshotInteractionDelay = true
       return Response(ok: true, data: payload)

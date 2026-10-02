@@ -58,6 +58,7 @@ fn request() -> CoreRequest {
         preflight_calls: vec![],
         platform: "ios".to_string(),
         app_id: "com.rndevagent.testapp".to_string(),
+        app_root: PathBuf::from("/tmp/app"),
         run_dir: PathBuf::from("/tmp/qaren-runs/check"),
         lease: format!("{RUN}:abcdef0123456789abcdef0123456789"),
         target: CoreTarget {
@@ -930,4 +931,101 @@ fn a_group_member_that_outlives_the_kill_is_reported_as_a_survivor() {
     assert_eq!(outcome.verdict, Verdict::Pass, "{:?}", outcome.failure);
     assert!(*mock.piped_killed[0].lock().unwrap());
     assert!(outcome.group_survived);
+}
+
+fn block_ledger(path: &str, source: &str) -> serde_json::Value {
+    let mut step: serde_json::Value = serde_json::from_str(&row(10, 1, "pass")).unwrap();
+    step["selector"] = serde_json::json!({"id": "onboarding-finish"});
+    serde_json::json!({
+        "verdict": "PASS", "path": path,
+        "blocks": [{"key": "plan", "outcome": "pass", "source": source}],
+        "blocksWritten": ["plan"],
+        "steps": [step], "jev": {"calls": 0, "medianMs": 0},
+        "llmTurns": 0, "escapes": 0, "recoveries": 0
+    })
+}
+
+fn run_result(result: &serde_json::Value, exit: i32) -> core::CoreOutcome {
+    let repo = common::temp_repo();
+    let mut mock = MockRunner::new();
+    mock.expect_spawn_piped(
+        "walk.js",
+        9000,
+        &format!("{}\n", envelope(2, "result", &result.to_string())),
+        Some(exit),
+    );
+    run_child(&mut mock, &repo.join("core.log"))
+}
+
+#[test]
+fn the_request_names_the_app_root_and_replay_ledgers_are_typed() {
+    let repo = common::temp_repo();
+    let mut mock = MockRunner::new();
+    let result = block_ledger("replay→walk@10", "patched");
+    mock.expect_spawn_piped(
+        "walk.js",
+        9000,
+        &format!("{}\n", envelope(2, "result", &result.to_string())),
+        Some(0),
+    );
+    let outcome = run_child(&mut mock, &repo.join("core.log"));
+    let written: serde_json::Value = serde_json::from_str(mock.piped_stdin_text(0).trim()).unwrap();
+    assert_eq!(written["payload"]["appRoot"], "/tmp/app");
+    assert_eq!(outcome.verdict, Verdict::Pass);
+    assert_eq!(outcome.ledger.path, "replay→walk@10");
+    assert_eq!(outcome.ledger.blocks[0].source, "patched");
+    assert_eq!(
+        outcome.ledger.blocks_written,
+        Some(vec!["plan".to_string()])
+    );
+    assert_eq!(
+        outcome.ledger.steps[0]
+            .selector
+            .as_ref()
+            .and_then(|s| s.id.as_deref()),
+        Some("onboarding-finish")
+    );
+    for (path, source) in [("walk", "discovered"), ("replay", "replayed")] {
+        assert_eq!(
+            run_result(&block_ledger(path, source), 0).verdict,
+            Verdict::Pass
+        );
+    }
+}
+
+#[test]
+fn unknown_ledger_paths_and_block_sources_are_contract_violations() {
+    for (path, source) in [
+        ("replay→walk@", "patched"),
+        ("replay→walk@x", "patched"),
+        ("replay→walk@07", "patched"),
+        ("rewalk", "discovered"),
+        ("walk", "invented"),
+    ] {
+        let outcome = run_result(&block_ledger(path, source), 0);
+        assert_eq!(outcome.verdict, Verdict::Fail, "{path} {source}");
+        assert_eq!(
+            outcome.failure.unwrap().code,
+            FailureCode::CoreResultMissing,
+            "{path} {source}"
+        );
+    }
+    let mut saved = block_ledger("walk", "discovered");
+    saved["blocks"][0]["saved"] = serde_json::json!(true);
+    assert_eq!(run_result(&saved, 0).verdict, Verdict::Fail);
+}
+
+#[test]
+fn a_refusal_during_replay_keeps_its_path_and_written_blocks() {
+    let mut refusal = block_ledger("replay", "replayed");
+    refusal["verdict"] = serde_json::json!("REFUSED");
+    refusal["code"] = serde_json::json!("APP_PROCESS_UNKNOWN");
+    refusal["message"] = serde_json::json!("the runner does not report the app process");
+    let outcome = run_result(&refusal, 4);
+    assert!(matches!(outcome.verdict, Verdict::Refused { .. }));
+    assert_eq!(outcome.ledger.path, "replay");
+    assert_eq!(
+        outcome.ledger.blocks_written,
+        Some(vec!["plan".to_string()])
+    );
 }

@@ -27,6 +27,7 @@ export class NativeCaptureError extends Error {
 }
 
 export interface NativeObservation {
+  appProcessIdentifier?: unknown;
   presenceCapture?: unknown;
   snapshotGeneration?: unknown;
   nodes?: NativeNode[];
@@ -507,6 +508,11 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
     if (!withinBudget && !nativeCaptureCauses.includes('capture-over-budget'))
       nativeCaptureCauses.push('capture-over-budget');
     if (nativeCaptureCauses.length > 0) screen.nativeCaptureCauses = nativeCaptureCauses;
+    if (
+      Number.isSafeInteger(native.appProcessIdentifier) &&
+      (native.appProcessIdentifier as number) > 0
+    )
+      screen.appProcessIdentifier = native.appProcessIdentifier as number;
     joined = true;
     return screen;
   } finally {

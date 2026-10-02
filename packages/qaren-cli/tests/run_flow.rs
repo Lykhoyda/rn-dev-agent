@@ -122,6 +122,7 @@ fn workspace_check_uses_a_gated_finite_build_and_persists_the_verified_artifact(
     script_preflight(&mut mock, &repo);
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     script_provision_build(&mut mock, "xcodebuild", common::IOS_NATIVE_FILES);
+    script_drift_status(&mut mock);
     mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
     script_core_identity(&mut mock);
     script_teardown(&mut mock);
@@ -188,6 +189,7 @@ fn workspace_products_are_retained_when_cache_publication_fails() {
         script_preflight(&mut mock, &repo);
         mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
         script_provision_build(&mut mock, "xcodebuild", common::IOS_NATIVE_FILES);
+        script_drift_status(&mut mock);
         mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
         script_core_identity(&mut mock);
         script_teardown(&mut mock);
@@ -226,6 +228,7 @@ fn workspace_retirement_refuses_symlinked_roots_before_deleting_any_products() {
         script_preflight(&mut mock, &repo);
         mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
         script_provision_build(&mut mock, "xcodebuild", common::IOS_NATIVE_FILES);
+        script_drift_status(&mut mock);
         mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
         script_core_identity(&mut mock);
         script_teardown(&mut mock);
@@ -283,6 +286,7 @@ fn workspace_cache_persistence_reuses_only_the_same_workspace_and_scheme() {
         } else {
             script_provision_build(&mut mock, "xcodebuild", common::IOS_NATIVE_FILES);
         }
+        script_drift_status(&mut mock);
         mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
         script_core_identity(&mut mock);
         script_teardown(&mut mock);
@@ -919,6 +923,11 @@ fn script_ready_recheck(mock: &mut MockRunner, native_files: &str) {
     mock.expect_run("ls-files", CmdOutput::success(native_files)); // fingerprint recheck
 }
 
+// The app-root status the walk's worktree drift is measured against, before and after the core.
+fn script_drift_status(mock: &mut MockRunner) {
+    mock.expect_run("(exclude).qaren/actions", CmdOutput::success(""));
+}
+
 fn script_core_identity(mock: &mut MockRunner) {
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 16:02:00 2026\n")); // core lstart
     mock.expect_run("ps", CmdOutput::success("node walk.js\n")); // core command
@@ -947,6 +956,17 @@ fn script_teardown_core(mock: &mut MockRunner, inventory: CmdOutput, probe_dead_
 
 // After the core and Metro groups, observe both hosts on the exact leased simulator.
 fn script_teardown_core_host(
+    mock: &mut MockRunner,
+    inventory: CmdOutput,
+    probe_dead_leader: bool,
+    udid: &str,
+    runner_host: CmdOutput,
+) {
+    script_drift_status(mock);
+    script_teardown_after_drift(mock, inventory, probe_dead_leader, udid, runner_host);
+}
+
+fn script_teardown_after_drift(
     mock: &mut MockRunner,
     inventory: CmdOutput,
     probe_dead_leader: bool,
@@ -1056,11 +1076,62 @@ fn assert_direct_ios_launch(mock: &MockRunner) {
 }
 
 #[test]
+fn the_receipt_names_written_blocks_and_paths_the_walk_changed_outside_them() {
+    let (repo, app) = app_repo();
+    let mut mock = MockRunner::new();
+    script_preflight(&mut mock, &repo);
+    script_provision(&mut mock);
+    mock.expect_run(
+        "(exclude).qaren/actions",
+        CmdOutput::success(" M test-app/dirty.ts\n"),
+    );
+    let ledger = r#"{"verdict":"PASS","path":"replay","blocks":[{"key":"plan","outcome":"pass","source":"replayed"}],"blocksWritten":["plan"],"steps":[],"jev":{"calls":0,"medianMs":0},"llmTurns":0,"escapes":0,"recoveries":0}"#;
+    mock.expect_spawn_piped(
+        "walk.js",
+        9000,
+        &format!("{}\n", envelope(2, "result", ledger)),
+        Some(0),
+    );
+    script_core_identity(&mut mock);
+    mock.expect_run(
+        "(exclude).qaren/actions",
+        CmdOutput::success(" M test-app/dirty.ts\n?? test-app/src/new.ts\n"),
+    );
+    script_teardown_after_drift(
+        &mut mock,
+        CmdOutput::success("1 1 S\n6000 6000 S\n"),
+        false,
+        UDID,
+        hosts_absent(),
+    );
+
+    let receipt = run(&mut mock, &request(&repo, &app, 30));
+
+    assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
+    assert_eq!(mock.remaining(), 0);
+    assert_eq!(receipt.blocks_written, vec!["plan".to_string()]);
+    assert_eq!(
+        receipt.worktree_drift,
+        vec!["test-app/src/new.ts".to_string()]
+    );
+    assert_eq!(receipt.ledger.as_ref().unwrap().path, "replay");
+    let status = mock
+        .calls
+        .iter()
+        .find(|c| c.rendered().contains("(exclude).qaren/actions"))
+        .unwrap();
+    assert!(status
+        .rendered()
+        .contains(&app.canonicalize().unwrap().to_string_lossy().into_owned()));
+}
+
+#[test]
 fn check_runs_the_phases_in_order_and_ends_pass_with_a_report() {
     let (repo, app) = app_repo();
     let mut mock = MockRunner::new();
     script_preflight(&mut mock, &repo);
     script_provision(&mut mock);
+    script_drift_status(&mut mock);
     mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
     script_core_identity(&mut mock);
     script_teardown(&mut mock);
@@ -1202,6 +1273,7 @@ fn a_deadline_overrun_fails_naming_the_walk_phase_and_still_tears_down() {
     script_preflight(&mut mock, &repo);
     script_provision(&mut mock);
     let one_row = format!("{}\n", envelope(2, "row", &row(1, "step")));
+    script_drift_status(&mut mock);
     mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
     script_core_identity(&mut mock);
     script_teardown(&mut mock);
@@ -1235,6 +1307,7 @@ fn a_cancelled_walk_is_a_refusal_that_still_tears_down_and_releases_the_lease() 
     script_preflight(&mut mock, &repo);
     script_provision(&mut mock);
     let one_row = format!("{}\n", envelope(2, "row", &row(1, "step")));
+    script_drift_status(&mut mock);
     mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
     script_core_identity(&mut mock);
     script_teardown(&mut mock);
@@ -1269,6 +1342,7 @@ fn script_cancelled_walk(mock: &mut MockRunner, repo: &Path, runner_host: CmdOut
     script_preflight(mock, repo);
     script_provision(mock);
     let one_row = format!("{}\n", envelope(2, "row", &row(1, "step")));
+    script_drift_status(mock);
     mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
     script_core_identity(mock);
     script_teardown_core_host(
@@ -1744,6 +1818,7 @@ fn a_child_refusal_is_a_typed_refusal_with_the_child_code() {
     script_preflight(&mut mock, &repo);
     script_provision(&mut mock);
     let refusal = r#"{"verdict":"REFUSED","code":"METRO_ORIGIN_MISMATCH","message":"scriptURL port 8081 != 8791"}"#;
+    script_drift_status(&mut mock);
     mock.expect_spawn_piped(
         "walk.js",
         9000,
@@ -1773,9 +1848,11 @@ fn an_unresolved_metro_group_retains_the_device_lease_for_cleanup() {
     script_admission(&mut mock);
     script_app_presence(&mut mock, false);
     script_provision_after_deps(&mut mock);
+    script_drift_status(&mut mock);
     mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
     script_core_identity(&mut mock);
     // Drift report, then the Metro group: alive, TERM, KILL, and the leader survives both.
+    script_drift_status(&mut mock);
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
     mock.expect_run(
         "git",
@@ -1877,6 +1954,7 @@ fn a_core_group_survivor_retains_the_device_lease() {
     let mut mock = MockRunner::new();
     script_preflight(&mut mock, &repo);
     script_provision(&mut mock);
+    script_drift_status(&mut mock);
     mock.expect_spawn_piped_holding(
         "walk.js",
         9000,
@@ -1962,6 +2040,7 @@ fn two_booted_simulators_refuse_without_a_device_and_borrow_the_named_one_with_i
     mock.expect_run("ps", CmdOutput::success("qaren check\n"));
     mock.expect_run("lsof", free_port());
     script_provision(&mut mock);
+    script_drift_status(&mut mock);
     mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
     script_core_identity(&mut mock);
     script_teardown_core_host(
@@ -2132,6 +2211,7 @@ fn walk_jev_refusals_preserve_prior_passes_and_the_complete_failure_evidence() {
         let failure = serde_json::json!({"step":9,"seen":format!("{code}: distinct account screen evidence"),"screenshot":"screenshots/refusal-evidence.png"});
         let refusal = serde_json::json!({"verdict":"REFUSED","code":code,"message":"judgment refused","lease":"fixture-lease",
             "path":"walk","steps":steps,"blocks":blocks,"failure":failure,"jev":jev,"llmTurns":1,"escapes":2,"recoveries":3});
+        script_drift_status(&mut mock);
         mock.expect_spawn_piped(
             "walk.js",
             9000,
@@ -2500,6 +2580,7 @@ fn fresh_install_reset_build_readiness_walk_and_teardown_share_one_durable_lease
     );
     script_app_presence(&mut mock, false);
     script_provision_after_deps(&mut mock);
+    script_drift_status(&mut mock);
     mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
     script_core_identity(&mut mock);
     script_teardown(&mut mock);
@@ -2637,6 +2718,7 @@ fn fresh_install_resets_or_proves_absence_before_cached_install_under_the_same_l
             CmdOutput::success("512\t0\tUIKitApplication:com.rndevagent.testapp[abc]"),
         );
         mock.expect_run("ls-files", CmdOutput::success(""));
+        script_drift_status(&mut mock);
         mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
         script_core_identity(&mut mock);
         script_teardown(&mut mock);
@@ -3181,6 +3263,7 @@ fn boot_device_admission_boot_readback_and_walk_share_a_durable_borrowed_lease()
                 script_app_presence(&mut mock, false);
             }
             script_provision_after_deps(&mut mock);
+            script_drift_status(&mut mock);
             mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
             script_core_identity(&mut mock);
             script_teardown(&mut mock);
@@ -3304,6 +3387,7 @@ fn closed_stdout_and_dead_leader_do_not_release_an_unproven_core_group() {
         let mut mock = MockRunner::new();
         script_preflight(&mut mock, &repo);
         script_provision(&mut mock);
+        script_drift_status(&mut mock);
         mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
         script_core_identity(&mut mock);
         script_teardown_core(&mut mock, inventory, probe_dead_leader);

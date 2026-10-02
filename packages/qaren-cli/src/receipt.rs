@@ -118,6 +118,10 @@ pub struct Receipt {
     pub ledger: Option<crate::report::LedgerSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preflight_jev: Option<crate::core::JevRollup>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks_written: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worktree_drift: Vec<String>,
     pub next_action: String,
 }
 
@@ -152,6 +156,8 @@ impl Receipt {
             planned_commands: Vec::new(),
             ledger: None,
             preflight_jev: None,
+            blocks_written: Vec::new(),
+            worktree_drift: Vec::new(),
             next_action: String::new(),
         }
     }

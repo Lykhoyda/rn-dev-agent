@@ -1,13 +1,29 @@
-import type { Block, Item } from './plan.js';
-import { type Screen, type VisibilityBlockerDiagnostic, screenSignature } from './screen.js';
+import type { Block, Item, Target } from './plan.js';
+import {
+  type Element,
+  type Screen,
+  type VisibilityBlockerDiagnostic,
+  screenSignature,
+} from './screen.js';
 import {
   type ScreenDecision,
   CHECK,
   ResolutionError,
   decideScreen,
+  elementSelector,
   stepTarget,
   targetVisible,
+  visibleSelector,
 } from './resolve.js';
+import {
+  type BlockPlatform,
+  type StoredBlock,
+  loadBlock,
+  readBlock,
+  serializeBlock,
+  storedFits,
+  writeBlock,
+} from './blocks.js';
 import { type Judge, type JevCall, JevError, unavailableJudge } from './questions.js';
 import { maskInputs, ObservedPrivacy } from './privacy.js';
 import { PrivateInputCaptureError } from './private-input.js';
@@ -29,7 +45,9 @@ import {
   type BlockResult,
   type WalkResult,
   type LedgerFailure,
+  type LedgerPath,
   type LedgerRow,
+  type Selector,
   buildLedger,
   screenshotName,
 } from './ledger.js';
@@ -56,6 +74,8 @@ export interface WalkerDeps {
   diagnostic?(event: WalkerTimingDiagnostic): void;
   timing?: TimingObserver;
   rowTiming?(t: number): RowTiming;
+  // iOS only: the app process every capture must still belong to, set by the first capture.
+  appProcess?: { expected?: number };
 }
 
 export interface WalkerTimingDiagnostic {
@@ -100,6 +120,13 @@ export interface WalkOutcome {
   rows: LedgerRow[];
   failure?: LedgerFailure;
   refusal?: { code: string; message: string };
+  // Replay only: the line whose stored selector no longer resolves or moves the screen.
+  miss?: number;
+}
+
+export interface WalkOptions {
+  fromLine?: number;
+  mode?: 'walk' | 'replay';
 }
 
 function seenOn(screen: Screen): string {
@@ -114,7 +141,9 @@ export async function walkBlock(
   typed: string[] = [],
   privacy = new ObservedPrivacy(typed),
   sequence = { observation: 0 },
+  opts: WalkOptions = {},
 ): Promise<WalkOutcome> {
+  const replay = opts.mode === 'replay';
   const rows: LedgerRow[] = [];
   for (const item of block.items)
     if (item.kind === 'fill' && !typed.includes(item.text)) typed.push(item.text);
@@ -184,6 +213,7 @@ export async function walkBlock(
             ? { platformPresence: true }
             : undefined,
       );
+      guardAppProcess(deps.appProcess, latest.appProcessIdentifier);
       const privacyStarted = deps.timing ? deps.now() : 0;
       privacy.observe(latest);
       if (deps.timing)
@@ -421,6 +451,19 @@ export async function walkBlock(
     deps.row(timed);
   };
   const redact = (text: string): string => privacy.redact(text);
+  // A stored selector is written to the action file, so it must not carry a protected value.
+  const stored = (selector: Selector | undefined): { selector?: Selector } => {
+    const value = selector?.id ?? selector?.text;
+    return selector && value !== undefined && redact(value) === value ? { selector } : {};
+  };
+  const exactSelector = (target: Target): Selector | undefined =>
+    target.exact === 'id'
+      ? { id: target.quoted }
+      : target.exact === 'text'
+        ? { text: target.quoted }
+        : undefined;
+  const targetSelector = (target: Target, screen: Screen) =>
+    stored(exactSelector(target) ?? visibleSelector(target, screen));
   const base = (item: Item, attempt: number): Omit<LedgerRow, 'outcome'> => ({
     block: block.slug,
     line: item.line,
@@ -437,17 +480,19 @@ export async function walkBlock(
     screen: Screen,
     screenshot: string | undefined,
     ref?: string,
+    miss = false,
   ): WalkOutcome => {
     emit({
       ...base(item, attempt),
       ...(ref ? { ref } : {}),
       ...(screenshot ? { screenshot } : {}),
-      outcome: 'fail',
-      reason: redact(reason),
+      outcome: miss ? 'retry' : 'fail',
+      reason: redact(miss ? `${reason}; re-walking from this line` : reason),
     });
     return {
       block: { key: block.slug, outcome: 'fail', source: 'discovered' },
       rows,
+      ...(miss ? { miss: item.line } : {}),
       failure: {
         step: item.line,
         seen: redact(
@@ -547,9 +592,10 @@ export async function walkBlock(
   };
 
   for (const item of block.items) {
+    if (opts.fromLine !== undefined && item.line < opts.fromLine) continue;
     line = item.line;
     let currentAttempt = 1;
-    resolvedBy = item.source === 'jev' ? 'jev' : 'exact';
+    resolvedBy = item.source === 'jev' && !replay ? 'jev' : 'exact';
     if (item.kind === 'fill' && item.text && !typed.includes(item.text)) typed.push(item.text);
     try {
       if (item.kind === 'check') {
@@ -615,7 +661,12 @@ export async function walkBlock(
           throw new EvidenceExpired(true);
         }
         const shot = await shoot(item);
-        emit({ ...base(item, 1), ...(shot ? { screenshot: shot } : {}), outcome: 'pass' });
+        emit({
+          ...base(item, 1),
+          ...(shot ? { screenshot: shot } : {}),
+          ...targetSelector(item.target, observation.screen),
+          outcome: 'pass',
+        });
         continue;
       }
 
@@ -673,6 +724,7 @@ export async function walkBlock(
           emit({
             ...base(item, Math.max(attempts, 1)),
             ...(shot ? { screenshot: shot } : {}),
+            ...targetSelector(item.until, observation.screen),
             outcome: 'pass',
           });
           continue;
@@ -689,6 +741,7 @@ export async function walkBlock(
         let before = held?.observation ?? (await capture(item));
         cached = undefined;
         let ref: string | undefined;
+        let element: Element | undefined;
         let initial = held?.decision;
         let freshness = attempt === 1 ? 1 : 0;
         let scrolled = false;
@@ -739,6 +792,7 @@ export async function walkBlock(
                 continue;
               }
               ref = resolution.ref;
+              element = resolution.element;
             }
             act = await mutate(item, before, (context) =>
               item.kind === 'press'
@@ -770,10 +824,14 @@ export async function walkBlock(
         metric('readback', after);
         const shot = await shoot(item);
         if (act!.proven || changed) {
+          const target = stepTarget(item);
           emit({
             ...base(item, attempt),
             ...(ref ? { ref } : {}),
             ...(shot ? { screenshot: shot } : {}),
+            ...stored(
+              (target && exactSelector(target)) ?? (element ? elementSelector(element) : undefined),
+            ),
             outcome: 'pass',
           });
           break;
@@ -802,6 +860,7 @@ export async function walkBlock(
           after.screen,
           shot,
           ref,
+          replay,
         );
       }
       if (outcome) return outcome;
@@ -849,40 +908,163 @@ export async function walkBlock(
           : refusal
             ? await shoot(item).catch(() => undefined)
             : await shoot(item);
+      const miss = replay && error instanceof ResolutionError && error.code === 'REPLAY_SELECTOR';
+      const unknownProcess =
+        error instanceof ResolutionError && error.code === 'APP_PROCESS_UNKNOWN'
+          ? { code: error.code, message: error.message }
+          : undefined;
       return {
-        ...failed(item, currentAttempt, error.message, latest, shot),
-        ...(refusal ? { refusal } : {}),
+        ...failed(item, currentAttempt, error.message, latest, shot, undefined, miss),
+        ...(refusal || unknownProcess ? { refusal: refusal ?? unknownProcess } : {}),
       };
     }
   }
   return { block: { key: block.slug, outcome: 'pass', source: 'discovered' }, rows };
 }
 
+function guardAppProcess(guard: WalkerDeps['appProcess'], observed: number | undefined): void {
+  if (!guard) return;
+  if (guard.expected === undefined) {
+    if (observed === undefined)
+      throw new ResolutionError({
+        refuse: 'APP_PROCESS_UNKNOWN',
+        reason:
+          'the iOS runner does not report the app process; rebuild it from this checkout (RN_RUNNER_BUILD=local)',
+      });
+    guard.expected = observed;
+    return;
+  }
+  if (observed !== guard.expected)
+    throw new ResolutionError({
+      refuse: 'APP_PROCESS_CHANGED',
+      reason: 'the app restarted or crashed during the run',
+    });
+}
+
+export interface BlockStore {
+  appRoot: string;
+  platform: BlockPlatform;
+  appId: string;
+}
+
+function storedFor(block: Block, store: BlockStore): StoredBlock | undefined {
+  let text: string | null;
+  try {
+    text = loadBlock(store.appRoot, block.slug);
+  } catch {
+    return undefined;
+  }
+  const stored = text === null ? undefined : readBlock(text);
+  return stored && !('invalid' in stored) && storedFits(block, stored, text!, store)
+    ? stored
+    : undefined;
+}
+
+// Replay is the same walk over the stored identities, so a literal line never reaches Jev.
+export function replayBlock(block: Block, stored: StoredBlock): Block {
+  const exact = (selector: Selector): Target =>
+    selector.id !== undefined
+      ? { quoted: selector.id, phrase: selector.id, exact: 'id' }
+      : { quoted: selector.text!, phrase: selector.text!, exact: 'text' };
+  return {
+    ...block,
+    items: block.items.map((item, i): Item => {
+      const step = stored.steps[i];
+      if (item.kind === 'press' || item.kind === 'fill' || item.kind === 'wait')
+        return { ...item, target: exact(step.selector!) };
+      if (item.kind === 'scroll' && item.until) return { ...item, until: exact(step.until!) };
+      return item;
+    }),
+  };
+}
+
 export async function runPlan(
   blocks: Block[],
   deps: WalkerDeps,
   preflightCalls: readonly JevCall[] = [],
+  store?: BlockStore,
 ): Promise<WalkResult> {
   return measureTiming(deps.timing, deps.now, 'walk', async () => {
     const walking = withRowTiming(deps);
     const results: BlockResult[] = [];
     const steps: LedgerRow[] = [];
+    const written: string[] = [];
+    let patchedAt: number | undefined;
     const typed = blocks.flatMap((b) =>
       b.items.flatMap((i) => (i.kind === 'fill' ? [i.text] : [])),
     );
     const privacy = new ObservedPrivacy(typed);
     const calls = (): JevCall[] => [...preflightCalls, ...(deps.judge?.calls ?? [])];
     const sequence = { observation: 0 };
+    const walk = (block: Block, opts?: WalkOptions) =>
+      walkBlock(block, walking, steps.length, typed, privacy, sequence, opts);
+    const path = (): LedgerPath =>
+      patchedAt !== undefined
+        ? `replay→walk@${patchedAt}`
+        : results.length > 0 && results.every((r) => r.source === 'replayed')
+          ? 'replay'
+          : 'walk';
+    const finish = (outcome?: WalkOutcome): WalkResult => {
+      const ledger = buildLedger(results, steps, outcome?.failure, calls(), path());
+      if (store) ledger.blocksWritten = written;
+      return outcome?.refusal ? { ...ledger, ...outcome.refusal, verdict: 'REFUSED' } : ledger;
+    };
+    const save = (
+      block: Block,
+      rows: LedgerRow[],
+      source: BlockResult['source'],
+      store: BlockStore,
+    ): BlockResult => {
+      const result: BlockResult = { key: block.slug, outcome: 'pass', source };
+      const serialized = serializeBlock(block, rows, store);
+      if ('unsavable' in serialized)
+        return { ...result, saved: false, unsavable: serialized.unsavable };
+      try {
+        if (writeBlock(store.appRoot, block.slug, serialized.yaml) === 'written')
+          written.push(block.slug);
+      } catch (error) {
+        return {
+          ...result,
+          saved: false,
+          unsavable: privacy.redact(error instanceof Error ? error.message : String(error)),
+        };
+      }
+      return result;
+    };
     for (const block of blocks) {
-      const outcome = await walkBlock(block, walking, steps.length, typed, privacy, sequence);
-      results.push(outcome.block);
+      const stored = store && storedFor(block, store);
+      if (store && stored) {
+        const replayed = await walk(replayBlock(block, stored), { mode: 'replay' });
+        steps.push(...replayed.rows);
+        if (!replayed.failure) {
+          results.push({ key: block.slug, outcome: 'pass', source: 'replayed' });
+          continue;
+        }
+        if (replayed.miss === undefined) {
+          results.push({ ...replayed.block, source: 'replayed' });
+          return finish(replayed);
+        }
+        const k = replayed.miss;
+        patchedAt ??= k;
+        const rewalked = await walk(block, { fromLine: k });
+        steps.push(...rewalked.rows);
+        if (rewalked.failure) {
+          results.push({ ...rewalked.block, source: 'patched' });
+          return finish(rewalked);
+        }
+        const kept = replayed.rows.filter((row) => row.line < k && row.outcome === 'pass');
+        results.push(save(block, [...kept, ...rewalked.rows], 'patched', store));
+        continue;
+      }
+      const outcome = await walk(block);
       steps.push(...outcome.rows);
       if (outcome.failure) {
-        const ledger = buildLedger(results, steps, outcome.failure, calls());
-        return outcome.refusal ? { ...ledger, ...outcome.refusal, verdict: 'REFUSED' } : ledger;
+        results.push(outcome.block);
+        return finish(outcome);
       }
+      results.push(store ? save(block, outcome.rows, 'discovered', store) : outcome.block);
     }
-    return buildLedger(results, steps, undefined, calls());
+    return finish();
   });
 }
 

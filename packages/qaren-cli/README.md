@@ -150,6 +150,33 @@ holder is reclaimed only through that run's cleanup; a live or unprovable holder
 refuses `DEVICE_BUSY`. Recover a retained run with `qaren cleanup <run-id>`;
 do not delete locks to bypass unresolved ownership.
 
+### Saved blocks
+
+Each `###` block that passes is saved as `<app>/.qaren/actions/<slug>.yaml`, where
+`<app>` is the directory holding `.qaren/config.yaml` (with an external `--config`,
+the checked working tree). The file is a Maestro-shaped action: each plan line as a
+comment, then the commands with the exact `testID` (or, without one, the label) the
+step used. On the next run a block whose plan lines, platform and app are unchanged
+is replayed by those stored identities through the same walk, without Jev for quoted
+targets or literal checks; phrase checks still ask Jev. A stored identity that no
+longer matches exactly one element, or a step that does not move the screen, re-walks
+the block from that line; on PASS only the commands under that line and later ones are
+rewritten, and every `✓` comment stays byte-identical. A failing check is a FAIL and
+is never re-walked or rewritten. Failed walks write nothing. A step without a `testID`
+or label, or a phrase wait, leaves the block unsaved and the ledger says why.
+
+The ledger's `path` is `walk`, `replay` or `replay→walk@<line>` (the first re-walked
+plan line), and each block reports `source` `discovered`, `replayed` or `patched`. The
+receipt lists `blocks_written` and, as a diagnostic that never changes the verdict,
+`worktree_drift`: app-root paths whose `git status` changed during the walk, outside
+`.qaren/actions`. `qaren actions list [--json]` and `qaren actions show <slug>` read the
+saved blocks of the current directory.
+
+On iOS the walk also fails `APP_PROCESS_CHANGED` when the app's process changes between
+captures (a crash or restart), and refuses `APP_PROCESS_UNKNOWN` when the runner does
+not report the process; a runner built from an older checkout needs a rebuild
+(`RN_RUNNER_BUILD=local`).
+
 ### Walk timing
 
 `ledger.json` adds a `timing` object to each walked attempt row, in milliseconds.

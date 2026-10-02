@@ -6,6 +6,7 @@ import { modelMask } from './privacy.js';
 export interface Target {
   quoted?: string;
   phrase: string;
+  exact?: 'id' | 'text';
 }
 
 export type Step =

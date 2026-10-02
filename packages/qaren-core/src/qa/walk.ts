@@ -307,6 +307,7 @@ async function openSession(
       NativeObservation & { presenceCapture?: unknown; snapshotGeneration?: unknown }
     >(result);
     return {
+      appProcessIdentifier: data.appProcessIdentifier,
       nodes: data.nodes,
       presenceCapture: data.presenceCapture,
       snapshotGeneration: data.snapshotGeneration,
@@ -385,6 +386,7 @@ async function openSession(
     diagnostic: (event) => log(`timing ${JSON.stringify(event)}`),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     row: emitRow,
+    ...(platform === 'ios' ? { appProcess: {} } : {}),
   };
   return {
     deps,
@@ -477,7 +479,11 @@ async function main(): Promise<void> {
       opened.close(),
     );
   try {
-    const ledger = await runPlan(blocks, opened.deps, request.preflightCalls);
+    const ledger = await runPlan(blocks, opened.deps, request.preflightCalls, {
+      appRoot: request.appRoot,
+      platform: request.platform,
+      appId: request.appId,
+    });
     return finish(resultForWalk(ledger, request.lease), () => opened.close());
   } catch (error) {
     const { code, message } = describeError(error);

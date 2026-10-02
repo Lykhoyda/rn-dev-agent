@@ -8,7 +8,7 @@ use qaren::scenario::Platform;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: qaren check --plan-file <plan.md> [--platform ios|android] [--device <udid>] [--config .qaren/config.yaml] [--fresh-install] [--boot-device] [--json]\n       qaren prepare <scenario.yaml> [--json] [--dry-run]\n       qaren prewarm <scenario.yaml> [--json]\n       qaren status  <run-id> [--json]\n       qaren complete <run-id> <build-log> [--json]\n       qaren cleanup <run-id> [--json] [--remove-app --confirm-remove-app <run-id>/<remote-serial>/<app-id>]\n\ncheck walks the plan on the booted simulator against the working tree; runs land in ~/.qaren/runs/<run-id>/.\n--fresh-install opts into removing the selected app and its data under the check device lease before installation.\n--boot-device opts into booting an exact iOS simulator UUID selected by --device under the check lease; cleanup leaves it running.\n--remove-app also uninstalls the app (and its data) this run installed on its leased Android emulator;\nthe confirmation must name exactly this run, its recorded emulator serial and its app id.";
+const USAGE: &str = "usage: qaren check --plan-file <plan.md> [--platform ios|android] [--device <udid>] [--config .qaren/config.yaml] [--fresh-install] [--boot-device] [--json]\n       qaren prepare <scenario.yaml> [--json] [--dry-run]\n       qaren prewarm <scenario.yaml> [--json]\n       qaren status  <run-id> [--json]\n       qaren complete <run-id> <build-log> [--json]\n       qaren cleanup <run-id> [--json] [--remove-app --confirm-remove-app <run-id>/<remote-serial>/<app-id>]\n       qaren actions list [--json]\n       qaren actions show <slug>\n\ncheck walks the plan on the booted simulator against the working tree; runs land in ~/.qaren/runs/<run-id>/.\n--fresh-install opts into removing the selected app and its data under the check device lease before installation.\n--boot-device opts into booting an exact iOS simulator UUID selected by --device under the check lease; cleanup leaves it running.\n--remove-app also uninstalls the app (and its data) this run installed on its leased Android emulator;\nthe confirmation must name exactly this run, its recorded emulator serial and its app id.";
 
 fn qaren_home() -> Result<PathBuf, String> {
     match std::env::var_os("HOME") {
@@ -91,6 +91,38 @@ fn roots_failure(detail: String) -> Failure {
     )
 }
 
+// Saved plan blocks under the current app's .qaren/actions; read-only.
+fn actions(args: &[String], json: bool) -> ExitCode {
+    let app_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let result = match args {
+        [sub] if sub == "list" => qaren::actions::list(&app_root).map(|entries| {
+            if json {
+                format!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&entries).unwrap_or_else(|_| "[]".to_string())
+                )
+            } else {
+                qaren::actions::render(&entries)
+            }
+        }),
+        [sub, slug] if sub == "show" && !json => qaren::actions::show(&app_root, slug),
+        _ => {
+            eprintln!("usage: qaren actions list [--json] | qaren actions show <slug>\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    match result {
+        Ok(text) => {
+            print!("{text}");
+            ExitCode::from(0)
+        }
+        Err(detail) => {
+            eprintln!("qaren actions: {detail}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let raw_args: Vec<_> = std::env::args_os().skip(1).collect();
     if raw_args
@@ -116,6 +148,7 @@ fn main() -> ExitCode {
     let mut platform: Option<String> = None;
     let mut config: Option<String> = None;
     let mut device: Option<String> = None;
+    let mut json = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         let value_for = |flag: &str, iter: &mut std::slice::Iter<String>| -> Option<String> {
@@ -128,7 +161,7 @@ fn main() -> ExitCode {
             }
         };
         match arg.as_str() {
-            "--json" => {}
+            "--json" => json = true,
             "--dry-run" => dry_run = true,
             "--fresh-install" => fresh_install = true,
             "--boot-device" => boot_device = true,
@@ -171,6 +204,7 @@ fn main() -> ExitCode {
     let expected_positionals = match verb.as_str() {
         "check" => 1,
         "complete" => 3,
+        "actions" if positional.get(1).is_some_and(|sub| sub == "show") => 3,
         _ => 2,
     };
     if positional.len() != expected_positionals {
@@ -203,6 +237,9 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
 
+    if verb == "actions" {
+        return actions(&positional[1..], json);
+    }
     let mut runner = RealRunner::new();
     let receipt = match verb.as_str() {
         "check" => {

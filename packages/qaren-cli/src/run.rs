@@ -22,6 +22,7 @@ use crate::scenario::{
 };
 use crate::timefmt;
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_WALK_SECONDS: u64 = 1200;
@@ -366,6 +367,11 @@ fn run_inner(
     if let Err(f) = ctx.save() {
         return Ok(finish_failed(ctx, f));
     }
+    let app_root = match app_root_for(&req.config_path, &req.project_root) {
+        Ok(root) => root,
+        Err(f) => return Ok(finish_failed(ctx, f)),
+    };
+    let status_before = worktree_status(ctx.runner, &app_root);
     let core_request = CoreRequest {
         run_id: run_id.clone(),
         t0: ctx.runner.now_epoch_ms(),
@@ -377,6 +383,7 @@ fn run_inner(
             .unwrap_or_default(),
         platform: platform_str(req.platform).to_string(),
         app_id: config.app_id.clone(),
+        app_root: app_root.clone(),
         run_dir: run_dir.clone(),
         lease: lease.wire(),
         target: CoreTarget {
@@ -409,6 +416,10 @@ fn run_inner(
     }
     let outcome = core::wait(ctx.runner, core_child, req.budgets);
     let t = ctx.mark("walk", t);
+    let drift = match (status_before, worktree_status(ctx.runner, &app_root)) {
+        (Some(before), Some(after)) => worktree_drift(&before, &after),
+        _ => Vec::new(),
+    };
     if let Some(exit) = outcome.exit {
         ctx.notes.push(("core_exit".to_string(), exit.to_string()));
     }
@@ -494,6 +505,8 @@ fn run_inner(
     }
     let mut receipt = finish_receipt(ctx, result, failure);
     receipt.ledger = Some(report::summarize(&outcome.ledger));
+    receipt.blocks_written = outcome.ledger.blocks_written.clone().unwrap_or_default();
+    receipt.worktree_drift = drift;
     receipt.artifacts.insert("report".to_string(), report_path);
     receipt.artifacts.insert("ledger".to_string(), ledger_path);
     for (name, rendered) in cleanup {
@@ -503,6 +516,61 @@ fn run_inner(
         receipt.next_action = format!("qaren cleanup {run_id} --json");
     }
     Ok(receipt)
+}
+
+// Blocks are saved beside the config the run read; an external config saves under the checked tree.
+pub fn app_root_for(config_path: &Path, project_root: &Path) -> Result<PathBuf, Failure> {
+    let config_dir = config_path.parent();
+    let root = match config_dir {
+        Some(dir) if dir.file_name().is_some_and(|name| name == ".qaren") => {
+            dir.parent().unwrap_or(project_root)
+        }
+        _ => project_root,
+    };
+    std::fs::canonicalize(root).map_err(|e| {
+        Failure::new(
+            "config",
+            FailureCode::ScenarioUnreadable,
+            format!("cannot resolve the app root {}: {e}", root.display()),
+            "run check from the app directory that holds .qaren/config.yaml",
+        )
+    })
+}
+
+pub fn worktree_status(runner: &mut dyn Runner, app_root: &Path) -> Option<BTreeSet<String>> {
+    let output = runner.run(&CmdSpec::new(
+        "git-worktree-status",
+        "git",
+        &[
+            "-C",
+            &app_root.to_string_lossy(),
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            ".",
+            ":(exclude).qaren/actions",
+        ],
+        20,
+    ));
+    output.ok().then(|| {
+        output
+            .stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+}
+
+// Paths whose status changed during the walk, outside the block corpus; diagnostic only.
+pub fn worktree_drift(before: &BTreeSet<String>, after: &BTreeSet<String>) -> Vec<String> {
+    before
+        .symmetric_difference(after)
+        .map(|line| line.get(3..).unwrap_or(line).to_string())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn ensure_running(runner: &dyn Runner, next_phase: &str) -> Result<(), Failure> {

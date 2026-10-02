@@ -1,5 +1,12 @@
 export type RowOutcome = 'pass' | 'fail' | 'retry';
 
+export interface Selector {
+  id?: string;
+  text?: string;
+}
+
+export type LedgerPath = 'walk' | 'replay' | `replay→walk@${number}`;
+
 export interface LedgerRow {
   block: string;
   line: number;
@@ -13,6 +20,7 @@ export interface LedgerRow {
   outcome: RowOutcome;
   reason?: string;
   timing?: RowTiming;
+  selector?: Selector;
 }
 
 export interface LedgerFailure {
@@ -24,13 +32,16 @@ export interface LedgerFailure {
 export interface BlockResult {
   key: string;
   outcome: 'pass' | 'fail';
-  source: 'discovered';
+  source: 'discovered' | 'replayed' | 'patched';
+  saved?: false;
+  unsavable?: string;
 }
 
 export interface Ledger {
   verdict: 'PASS' | 'FAIL';
-  path: 'walk';
+  path: LedgerPath;
   blocks: BlockResult[];
+  blocksWritten?: string[];
   steps: LedgerRow[];
   jev: JevRollup;
   llmTurns: number;
@@ -54,6 +65,7 @@ export function buildLedger(
   steps: LedgerRow[],
   failure?: LedgerFailure,
   calls: readonly JevCall[] = [],
+  path: LedgerPath = 'walk',
 ): Ledger {
   const failedRow = [...steps].reverse().find((r) => r.outcome === 'fail');
   const failedBlock = blocks.find((b) => b.outcome === 'fail');
@@ -66,7 +78,7 @@ export function buildLedger(
   }
   const ledger: Ledger = {
     verdict: failure ? 'FAIL' : 'PASS',
-    path: 'walk',
+    path,
     blocks,
     steps,
     jev: summarizeJev(calls),

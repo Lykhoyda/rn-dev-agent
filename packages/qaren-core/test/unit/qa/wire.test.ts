@@ -23,6 +23,7 @@ const request: WireRequest = {
   plan: '1. Tap "A"\n',
   platform: 'ios',
   appId: 'com.example.app',
+  appRoot: '/tmp/qaren/app',
   runDir: '/tmp/qaren/runs/check-1',
   lease: 'check-1:0123456789abcdef0123456789abcdef',
   target: {
@@ -152,6 +153,20 @@ test('malformed envelopes and requests are rejected', () => {
       ),
     /missing required fields/,
   );
+  for (const appRoot of [undefined, 'relative/app'])
+    assert.throws(
+      () =>
+        parseRequest(
+          JSON.stringify({
+            v: 1,
+            runId: 'x',
+            seq: 1,
+            type: 'request',
+            payload: { ...request, appRoot },
+          }),
+        ),
+      /missing required fields/,
+    );
   assert.throws(
     () =>
       parseRequest(
