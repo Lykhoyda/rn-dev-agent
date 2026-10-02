@@ -67,10 +67,10 @@ jq -e '.draft == false' "$TMP/release.json" >/dev/null || fail "release v$V is s
 
 # Every asset the trust root names: both runner zips, plus the qaren tarballs
 # once the root lists them (runner-manifest-publication.mts requires them for a release).
+LISTING=$(jq -r '[.assets.ios[0], .assets.android[0]] + [(.assets.qaren // {})[]] | .[] | "\(.name) \(.sha256) \(.bytes)"' "$MANIFEST") \
+  || fail "runner-manifest.json does not list its assets as name/sha256/bytes entries"
 ASSETS=()
-while IFS= read -r A; do ASSETS+=("$A"); done < <(
-  jq -r '[.assets.ios[0], .assets.android[0]] + [(.assets.qaren // {})[]] | .[] | "\(.name) \(.sha256) \(.bytes)"' "$MANIFEST"
-)
+while IFS= read -r A; do ASSETS+=("$A"); done <<< "$LISTING"
 PATTERNS=()
 for A in "${ASSETS[@]}"; do
   NAME=${A%% *}

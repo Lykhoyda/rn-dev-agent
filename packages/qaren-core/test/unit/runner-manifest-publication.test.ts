@@ -1203,6 +1203,14 @@ test('validate refuses a release head that is more than the candidate plus its t
   }
 });
 
+test('validate fetches the candidate parent its trust-root check compares against', () => {
+  // The fixture clones fully; the hosted checkout is shallow unless told otherwise.
+  const checkoutStep = steps(release, 'validate').find((s) =>
+    s.uses?.startsWith('actions/checkout@'),
+  );
+  assert.ok(Number(checkoutStep?.with?.['fetch-depth']) >= 2);
+});
+
 test('validate reaches its verdict offline: no release asset is ever consulted', () => {
   const fixture = createFixture({ prepared: true });
   try {
