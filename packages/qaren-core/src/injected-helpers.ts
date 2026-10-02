@@ -1395,7 +1395,7 @@ export const INJECTED_HELPERS = `
       }
       // A failed safe read never skips: it only means this fiber is walked as before.
       function routeRead(object, key) {
-        try { return qaData(object, key); } catch (e) { return undefined; }
+        try { return qaData(object, key, true); } catch (e) { return undefined; }
       }
       function resolvedDisplay(style, depth) {
         if (!style || typeof style !== 'object' || depth > 16) return null;

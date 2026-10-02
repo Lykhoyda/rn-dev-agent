@@ -7,6 +7,7 @@ import { parsePlan } from '../../../dist/qa/plan.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { nativeCapture } from './platform-presence-fixtures.ts';
 import { choice, scriptedJudge, walker } from './judgment-fixtures.ts';
+import { devFreeze } from './rn-dev-freeze.ts';
 
 interface FiberSpec {
   name?: string;
@@ -62,10 +63,47 @@ test('an invisible navigator scene and a display-none host view are not walked',
 });
 
 test('a style that cannot be read safely never skips its subtree', () => {
+  let reads = 0;
   const style = {};
-  Object.defineProperty(style, 'display', { get: () => 'none', enumerable: true });
+  Object.defineProperty(style, 'display', {
+    get: () => {
+      reads++;
+      return 'none';
+    },
+    enumerable: true,
+  });
+  Object.freeze(style);
   const out = digest([{ hostType: 'RCTView', props: { style }, children: [button('kept')] }]);
   assert.deepEqual(ids(out), ['kept']);
+  assert.equal(reads, 0);
+});
+
+test('validated frozen route props and nested style arrays prune inactive subtrees', () => {
+  for (const qa of [false, true]) {
+    const out = digest(
+      [
+        { name: 'Screen', props: devFreeze({ activityState: 0 }), children: [button('behind')] },
+        { name: 'MaybeScreen', props: devFreeze({ visible: false }), children: [button('scene')] },
+        {
+          hostType: 'RCTView',
+          props: devFreeze({
+            style: devFreeze([devFreeze({ flex: 1 }), devFreeze([devFreeze({ display: 'none' })])]),
+          }),
+          children: [button('collapsed')],
+        },
+        {
+          hostType: 'RCTView',
+          props: {
+            style: devFreeze([devFreeze({ display: 'none' }), devFreeze({ display: 'flex' })]),
+          },
+          children: [button('shown')],
+        },
+      ],
+      qa,
+    );
+    assert.deepEqual(ids(out), ['shown']);
+    assert.equal(out.verdict.complete, true);
+  }
 });
 
 test('a large tree whose bulk is on inactive routes still yields a complete active digest', () => {
@@ -86,60 +124,63 @@ test('a large tree whose bulk is on inactive routes still yields a complete acti
 });
 
 test('inactive fibers with their own control identity cannot block a visible action', async () => {
-  for (const qa of [false, true]) {
-    const out = digest(
-      [
-        {
-          hostType: 'RCTView',
-          props: { testID: 'hidden-action', onPress, style: { display: 'none' } },
-          children: [{ text: 'Hidden action text' }],
-        },
-        {
-          name: 'Screen',
-          props: { activityState: 0, testID: 'inactive-action', onPress },
-          children: [{ text: 'Inactive route text' }],
-        },
-        {
-          hostType: 'RCTView',
-          props: { testID: 'save', onPress, accessibilityRole: 'button' },
-          children: [
-            { text: 'Save' },
-            {
-              hostType: 'RCTView',
-              props: { style: { display: 'none' } },
-              children: [{ text: 'Hidden descendant text' }],
-            },
-            {
-              name: 'Screen',
-              props: { activityState: 0 },
-              children: [{ text: 'Inactive descendant text' }],
-            },
-          ],
-        },
-      ],
-      qa,
-    );
-    assert.deepEqual(ids(out), ['save']);
-    assert.deepEqual(
-      out.hostEvidence.hosts.map((host) => host.testID),
-      ['save'],
-    );
-    assert.equal(out.interactive[0].text, 'Save');
-    const f = walker(
-      [],
-      scriptedJudge((questions) => ({
-        target_1: choice(questions.target_1),
-      })),
-    );
-    f.deps.captureScreen = () =>
-      captureScreen({
-        appId: 'com.test',
-        requirePrivateInputs: true,
-        native: async () => nativeCapture(),
-        react: async () => out,
-      });
-    const result = await runPlan(parsePlan('1. Tap the save button').blocks!, f.deps);
-    assert.equal(result.verdict, 'PASS', JSON.stringify(result));
-    assert.deepEqual(f.actions, ['press @e1']);
+  for (const frozen of [false, true]) {
+    const freeze = <T extends object>(value: T): T => (frozen ? devFreeze(value) : value);
+    for (const qa of [false, true]) {
+      const out = digest(
+        [
+          {
+            hostType: 'RCTView',
+            props: freeze({ testID: 'hidden-action', onPress, style: freeze({ display: 'none' }) }),
+            children: [{ text: 'Hidden action text' }],
+          },
+          {
+            name: 'Screen',
+            props: freeze({ activityState: 0, testID: 'inactive-action', onPress }),
+            children: [{ text: 'Inactive route text' }],
+          },
+          {
+            hostType: 'RCTView',
+            props: { testID: 'save', onPress, accessibilityRole: 'button' },
+            children: [
+              { text: 'Save' },
+              {
+                hostType: 'RCTView',
+                props: freeze({ style: freeze({ display: 'none' }) }),
+                children: [{ text: 'Hidden descendant text' }],
+              },
+              {
+                name: 'Screen',
+                props: freeze({ activityState: 0 }),
+                children: [{ text: 'Inactive descendant text' }],
+              },
+            ],
+          },
+        ],
+        qa,
+      );
+      assert.deepEqual(ids(out), ['save']);
+      assert.deepEqual(
+        out.hostEvidence.hosts.map((host) => host.testID),
+        ['save'],
+      );
+      assert.equal(out.interactive[0].text, 'Save');
+      const f = walker(
+        [],
+        scriptedJudge((questions) => ({
+          target_1: choice(questions.target_1),
+        })),
+      );
+      f.deps.captureScreen = () =>
+        captureScreen({
+          appId: 'com.test',
+          requirePrivateInputs: true,
+          native: async () => nativeCapture(),
+          react: async () => out,
+        });
+      const result = await runPlan(parsePlan('1. Tap the save button').blocks!, f.deps);
+      assert.equal(result.verdict, 'PASS', JSON.stringify(result));
+      assert.deepEqual(f.actions, ['press @e1']);
+    }
   }
 });

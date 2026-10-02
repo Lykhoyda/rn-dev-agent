@@ -86,6 +86,9 @@ Observed input values are masked before Jev requests; private values are also
 masked in reporting. Once sensitive input
 pixels are observed, screenshots are withheld for the rest of the walk.
 Masks preserve identity for comparisons and do not prove unobserved value content.
+Typed values shorter than three characters that were never observed as private
+input values can remain plaintext in unquoted reporting text; model masking
+matches them only as separate tokens. This known limitation is tracked in ANT-283.
 
 iOS interactions check app existence immediately and wait only when the app is
 missing; availability and foreground checks remain in place. When the privacy
