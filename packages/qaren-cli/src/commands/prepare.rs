@@ -69,7 +69,10 @@ impl<'a> Ctx<'a> {
 
     pub(crate) fn fail(mut self, mut failure: Failure) -> Receipt {
         if self.record.resources.any_owned() {
-            failure.next_action = format!("qaren cleanup {} --json", self.record.run_id);
+            failure.next_action = crate::redact::OutputText::from_output(&format!(
+                "qaren cleanup {} --json",
+                self.record.run_id
+            ));
         }
         // Contention is a refusal even after the run record exists: nothing
         // broke, qaren declined to take a claimed resource.
@@ -84,10 +87,10 @@ impl<'a> Ctx<'a> {
         self.record
             .push_history(at, &format!("failed: {}", failure.code_str()));
         if let Err(save_failure) = self.save() {
-            failure.detail = format!(
+            failure.detail = crate::redact::OutputText::from_output(&format!(
                 "{} — AND the run record could not be updated ({}); treat recorded ownership as stale",
                 failure.detail, save_failure.detail
-            );
+            ));
             self.record.failure = Some(failure.clone());
         }
         finish_receipt(self, result, Some(failure))
@@ -121,7 +124,7 @@ pub(crate) fn finish_receipt(ctx: Ctx, result: ReceiptResult, failure: Option<Fa
             "agents can attach now; later run: qaren cleanup {} --json",
             ctx.record.run_id
         ),
-        (_, Some(f)) => f.next_action.clone(),
+        (_, Some(f)) => f.next_action.to_string(),
         _ => String::new(),
     };
     let mut receipt = Receipt::new(
@@ -173,7 +176,7 @@ pub fn prepare(runner: &mut dyn Runner, args: &PrepareArgs) -> Receipt {
                 &failure.phase.clone(),
                 timefmt::iso8601_utc(runner.now_epoch_ms()),
             );
-            receipt.next_action = failure.next_action.clone();
+            receipt.next_action = failure.next_action.to_string();
             receipt.failure = Some(failure);
             receipt.commands_executed = runner.commands_executed();
             receipt
@@ -535,7 +538,11 @@ fn prepare_handoff(mut ctx: Ctx, args: &PrepareArgs, t: u64) -> Receipt {
         device: super::device_identity(&ctx.record),
         native_fingerprint: fp.value.clone(),
         fingerprint_complete: fp.complete,
-        fingerprint_incompleteness: fp.incompleteness.clone(),
+        fingerprint_incompleteness: fp
+            .incompleteness
+            .iter()
+            .map(|text| crate::redact::OutputText::from_output(text))
+            .collect(),
         expected_receipt: expected.clone(),
     };
     let document_sha256 = match handoff::save_document(&document_path, &document) {
@@ -911,8 +918,8 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
     let run_dir = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id);
     let key = ctx
         .runner
-        .run(&android::fetch_adbkey_spec(&android.ssh_host));
-    if !key.ok() || key.stdout.trim().is_empty() {
+        .run_private(&android::fetch_adbkey_spec(&android.ssh_host), &[]);
+    if key.timed_out() || key.exit_code() != Some(0) || key.stdout().trim().is_empty() {
         return Err(Failure::new(
             "allocate",
             FailureCode::AdbServerFailed,
@@ -924,7 +931,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
     // Record ownership before the write so a partial key is still cleanable.
     ctx.record.resources.adb_vendor_key = Some(vendor_key.clone());
     ctx.save()?;
-    if let Err(e) = write_private_file(&vendor_key, &key.stdout) {
+    if let Err(e) = write_private_file(&vendor_key, key.stdout()) {
         return Err(Failure::new(
             "allocate",
             FailureCode::AdbServerFailed,

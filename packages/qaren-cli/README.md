@@ -407,9 +407,9 @@ moment (the default `install` policy keeps today's behavior: prepare's own
 `pnpm install` may reach the network): run it while registry credentials
 are available; it runs `pnpm fetch` + `pnpm install
 --frozen-lockfile` (CI, stdin-null) and persists only
-`{worktree, project, lockfile sha256, timestamp}` — never a secret (failure
-summaries pass a credential redactor). A scenario with `deps.policy:
-require-prewarm` then refuses to prepare without a matching record
+`{worktree, project, lockfile sha256, timestamp}`; failure summaries follow the
+[diagnostic redaction contract](#preparation-ownership-and-safety-rules).
+A scenario with `deps.policy: require-prewarm` then refuses to prepare without a matching record
 (`DEPS_NOT_PREWARMED`) and installs with `--offline`, so no mid-run
 credential prompt can ever occur.
 
@@ -443,6 +443,22 @@ build_and_ready — so revisit this once live reuse is measurable.
   applicable to them. The emulator guest only trusts the farm host's adb key,
   so the private server authenticates with that key (`ADB_VENDOR_KEYS`),
   fetched once over ssh into the run directory and deleted at cleanup.
+- **Private key fetch output is withheld from diagnostics.** The farm key
+  fetch uses private capture: failure details in `run.json` and the receipt
+  report only exit status and timeout state with `[private output withheld]`,
+  and neither captured stream is written to durable logs. Only a successful,
+  nonempty fetch writes the cleanup-tracked, mode-0600 vendor key file.
+  Parser input stays raw in memory. Persisted operational identities
+  (paths, ids, pids, ports and lock directories) are written exactly;
+  output-derived record fields use `OutputText`, masked on construction and
+  load. Command summaries inspect both streams, and ledger and receipt
+  evidence strings keep whole-string withholding when they contain
+  `private key` (case-insensitive), using
+  `[output withheld: contained private key material]`. Command logs keep
+  per-byte whole-command withholding: a mention truncates that command's
+  output and drops subsequent bytes. API-key redaction still applies to
+  retained diagnostics and logs. Key bodies with no private-key mention,
+  or copied before the mention arrives, cannot be withheld by this rule.
 - **Local listeners are never adopted.** The farm-advertised adb port is
   preflighted free on this host *before* the lease is claimed (a local
   emulator commonly owns 5555), and a listener on the tunnel or private adb

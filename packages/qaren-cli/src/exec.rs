@@ -123,6 +123,11 @@ impl CmdOutput {
         }
     }
 
+    pub fn names_private_key(&self) -> bool {
+        crate::redact::names_private_key(&self.stdout)
+            || crate::redact::names_private_key(&self.stderr)
+    }
+
     pub fn summary(&self) -> String {
         if self.timed_out {
             return format!("timed out after {}ms", self.duration_ms);
@@ -130,10 +135,14 @@ impl CmdOutput {
         let code = self
             .exit_code
             .map_or("signal".to_string(), |c| c.to_string());
-        let tail: String = self
-            .stderr
+        if self.names_private_key() {
+            return format!("exit={code} {}", crate::redact::PRIVATE_KEY_WITHHELD);
+        }
+        let stderr = crate::redact::redact_secrets(&self.stderr);
+        let stdout = crate::redact::redact_secrets(&self.stdout);
+        let tail: String = stderr
             .lines()
-            .chain(self.stdout.lines())
+            .chain(stdout.lines())
             .rev()
             .take(6)
             .collect::<Vec<_>>()
@@ -300,8 +309,7 @@ impl Runner for RealRunner {
         use std::os::unix::process::CommandExt;
         self.executed += 1;
         crate::progress::started(&spec.label, true);
-        let (log_out, output) = log::LogDrain::spawn(&self.log_executable, log_path)?;
-        let (log_err, error) = log::LogDrain::spawn(&self.log_executable, log_path)?;
+        let (drain, output, error) = log::LogDrain::spawn_paired(&self.log_executable, log_path)?;
         let mut cmd = Command::new(&spec.program);
         cmd.args(&spec.args)
             .stdin(Stdio::null())
@@ -320,7 +328,7 @@ impl Runner for RealRunner {
         cmd.env_remove("TYPESAFE_API_KEY");
         let child = cmd.spawn()?;
         let pid = child.id() as i32;
-        self.logs.extend([log_out, log_err]);
+        self.logs.push(drain);
         Ok(Spawned { pid, pgid: pid })
     }
 
@@ -502,9 +510,8 @@ fn run_captured(
     }
     Ok(CmdOutput {
         exit_code: result?,
-        // Protocol stdout is memory-only; redact diagnostics at their persistence boundary.
         stdout: String::from_utf8_lossy(&out).into_owned(),
-        stderr: crate::redact::redact_secrets(&String::from_utf8_lossy(&err)),
+        stderr: String::from_utf8_lossy(&err).into_owned(),
         timed_out,
         duration_ms: started.elapsed().as_millis() as u64,
     })

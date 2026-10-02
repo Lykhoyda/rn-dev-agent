@@ -76,7 +76,7 @@ fn failed_receipt(verb: &str, failure: Failure, runner: &dyn Runner) -> Receipt 
         &failure.phase.clone(),
         qaren::timefmt::iso8601_utc(runner.now_epoch_ms()),
     );
-    receipt.next_action = failure.next_action.clone();
+    receipt.next_action = failure.next_action.to_string();
     receipt.failure = Some(failure);
     receipt.commands_executed = runner.commands_executed();
     receipt
@@ -101,7 +101,10 @@ fn main() -> ExitCode {
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args == [qaren::exec::log::HELPER_ARG] {
-        return ExitCode::from(u8::from(qaren::exec::log::run_helper().is_err()));
+        return ExitCode::from(u8::from(qaren::exec::log::run_helper(false).is_err()));
+    }
+    if args == [qaren::exec::log::HELPER_ARG, qaren::exec::log::PAIRED_ARG] {
+        return ExitCode::from(u8::from(qaren::exec::log::run_helper(true).is_err()));
     }
     let mut positional = Vec::new();
     let mut dry_run = false;
@@ -298,7 +301,7 @@ fn main() -> ExitCode {
                         "load",
                         qaren::timefmt::iso8601_utc(runner.now_epoch_ms()),
                     );
-                    receipt.next_action = failure.next_action.clone();
+                    receipt.next_action = failure.next_action.to_string();
                     receipt.failure = Some(failure);
                     receipt.commands_executed = runner.commands_executed();
                     receipt
