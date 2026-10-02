@@ -27,7 +27,7 @@ fn actions_list_reads_slug_platform_plan_hash_and_status() {
     )
     .unwrap();
     std::fs::write(
-        dir.join("checkout.yaml"),
+        dir.join("checkout.yml"),
         block("checkout", "android", "def456"),
     )
     .unwrap();
@@ -57,8 +57,26 @@ fn actions_list_reads_slug_platform_plan_hash_and_status() {
         actions::show(&root, "onboarding").unwrap(),
         block("onboarding", "ios", "abc123")
     );
+    assert_eq!(
+        actions::show(&root, "checkout").unwrap(),
+        block("checkout", "android", "def456")
+    );
     assert!(actions::show(&root, "../escape").is_err());
     assert!(actions::show(&root, "missing").is_err());
+}
+
+#[test]
+fn actions_list_and_show_refuse_yaml_yml_twins() {
+    let root = temp_dir("twins");
+    let dir = root.join(".qaren/actions");
+    std::fs::write(dir.join("login.yml"), block("login", "ios", "abc123")).unwrap();
+    for twin in [block("login", "ios", "def456"), "- launchApp\n".to_string()] {
+        std::fs::write(dir.join("login.yaml"), twin).unwrap();
+        assert!(actions::list(&root).unwrap_err().contains("ambiguous"));
+        assert!(actions::show(&root, "login")
+            .unwrap_err()
+            .contains("ambiguous"));
+    }
 }
 
 #[test]
@@ -177,6 +195,10 @@ fn actions_refuse_a_symlinked_action_file_instead_of_skipping_it() {
     let outside = temp_dir("outside").join("secret.yaml");
     std::fs::write(&outside, "# id: secret\n# intent: outside\n").unwrap();
     std::os::unix::fs::symlink(&outside, root.join(".qaren/actions/linked.yaml")).unwrap();
+    assert!(actions::show(&root, "linked").is_err());
+    assert!(actions::list(&root).is_err());
+    std::fs::remove_file(root.join(".qaren/actions/linked.yaml")).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join(".qaren/actions/linked.yml")).unwrap();
     assert!(actions::show(&root, "linked").is_err());
     assert!(actions::list(&root).is_err());
 }

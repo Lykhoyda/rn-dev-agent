@@ -68,6 +68,26 @@ fn read_action(path: &Path) -> Result<String, String> {
     Ok(text)
 }
 
+fn action_path(dir: &Path, slug: &str) -> Result<PathBuf, String> {
+    let mut found = None;
+    for extension in ["yaml", "yml"] {
+        let path = dir.join(format!("{slug}.{extension}"));
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => {
+                if found.is_some() {
+                    return Err(format!(
+                        "action {slug} is ambiguous because both {slug}.yaml and {slug}.yml exist; keep exactly one file before replay"
+                    ));
+                }
+                found = Some(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("cannot inspect {}: {e}", path.display())),
+        }
+    }
+    found.ok_or_else(|| format!("no saved action named {slug}"))
+}
+
 pub fn list(app_root: &Path) -> Result<Vec<ActionEntry>, String> {
     let dir = actions_dir(app_root)?;
     let entries = match std::fs::read_dir(&dir) {
@@ -81,10 +101,12 @@ pub fn list(app_root: &Path) -> Result<Vec<ActionEntry>, String> {
             .map_err(|e| format!("cannot read {}: {e}", dir.display()))?
             .path();
         let slug = match (path.file_stem(), path.extension()) {
-            (Some(stem), Some(ext)) if ext == "yaml" => stem.to_string_lossy().into_owned(),
+            (Some(stem), Some(ext)) if ext == "yaml" || ext == "yml" => {
+                stem.to_string_lossy().into_owned()
+            }
             _ => continue,
         };
-        let mut fields = header(&read_action(&path)?);
+        let mut fields = header(&read_action(&action_path(&dir, &slug)?)?);
         if !fields.contains_key("id") {
             continue;
         }
@@ -110,10 +132,7 @@ pub fn show(app_root: &Path, slug: &str) -> Result<String, String> {
     if !valid {
         return Err(format!("{slug:?} is not an action slug"));
     }
-    let path = actions_dir(app_root)?.join(format!("{slug}.yaml"));
-    if std::fs::symlink_metadata(&path).is_err() {
-        return Err(format!("no saved action named {slug}"));
-    }
+    let path = action_path(&actions_dir(app_root)?, slug)?;
     read_action(&path)
 }
 
