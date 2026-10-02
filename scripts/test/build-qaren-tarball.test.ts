@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -13,7 +16,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import test from 'node:test';
-import { packDirectory, runtimeRunnerManifest, tarballName } from '../build-qaren-tarball.ts';
+import {
+  copyDarwinNative,
+  packDirectory,
+  runtimeRunnerManifest,
+  tarballName,
+} from '../build-qaren-tarball.ts';
 
 function tree(files: Record<string, { body: string; mode: number }>, mtime: number): string {
   const dir = mkdtempSync(join(tmpdir(), 'qaren-pack-'));
@@ -100,6 +108,94 @@ test('anything but regular files and directories is refused', () => {
   try {
     symlinkSync('/etc/passwd', join(dir, 'top', 'link'));
     assert.throws(() => packDirectory(dir, 0), /only regular files and directories ship/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('both Darwin archives contain only Darwin helpers and pass offline install and verification', () => {
+  const root = join(import.meta.dirname, '..', '..');
+  const version = '1.2.3';
+  const dir = mkdtempSync(join(tmpdir(), 'qaren-darwin-pack-'));
+  try {
+    const plugin = join(dir, 'plugin');
+    const script = join(plugin, 'scripts', 'ensure-qaren.sh');
+    mkdirSync(join(plugin, 'scripts'), { recursive: true });
+    copyFileSync(join(root, 'packages', 'qaren-plugin', 'scripts', 'ensure-qaren.sh'), script);
+    const stubs = join(dir, 'stubs');
+    mkdirSync(stubs);
+    for (const platform of ['darwin-arm64', 'darwin-x64'] as const) {
+      const top = `qaren-${version}-${platform}`;
+      const stage = tree(
+        { [`${top}/bin/qaren`]: { body: '#!/bin/sh\necho qaren\n', mode: 0o755 } },
+        5,
+      );
+      try {
+        copyDarwinNative(
+          join(root, 'packages', 'qaren-core', 'native'),
+          join(stage, top, 'runtime'),
+        );
+        const tarball = packDirectory(stage, 1_700_000_000);
+        assert.deepEqual(tarball, packDirectory(stage, 1_700_000_000));
+        const archive = join(dir, tarballName(version, platform));
+        writeFileSync(archive, tarball);
+        const names = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' })
+          .trim()
+          .split('\n');
+        assert.deepEqual(
+          names.filter((name) => name.startsWith(`${top}/runtime/native/`)),
+          [
+            `${top}/runtime/native/`,
+            `${top}/runtime/native/darwin-process-birth`,
+            `${top}/runtime/native/darwin-process-birth.json`,
+          ],
+        );
+        assert.ok(names.every((name) => !name.includes('linux-conditional-publication-')));
+        const sha256 = createHash('sha256').update(tarball).digest('hex');
+        writeFileSync(
+          join(plugin, 'runner-manifest.json'),
+          JSON.stringify({
+            version,
+            assets: {
+              qaren: {
+                [platform]: { name: tarballName(version, platform), sha256, bytes: tarball.length },
+              },
+            },
+          }),
+        );
+        const uname = join(stubs, 'uname');
+        writeFileSync(
+          uname,
+          `#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo ${platform === 'darwin-arm64' ? 'arm64' : 'x86_64'} ;; esac\n`,
+        );
+        chmodSync(uname, 0o755);
+        const env = {
+          ...process.env,
+          HOME: join(dir, platform),
+          PATH: `${stubs}:${process.env.PATH}`,
+        };
+        const binary = join(env.HOME, '.qaren', 'runtime', version, 'bin', 'qaren');
+        assert.equal(
+          execFileSync('bash', [script, '--install', '--from-file', archive], {
+            env,
+            encoding: 'utf8',
+          }).trim(),
+          binary,
+        );
+        assert.equal(
+          execFileSync('bash', [script, '--print-bin'], { env, encoding: 'utf8' }).trim(),
+          binary,
+        );
+        for (const name of ['darwin-process-birth', 'darwin-process-birth.json']) {
+          assert.deepEqual(
+            readFileSync(join(env.HOME, '.qaren', 'runtime', version, 'runtime', 'native', name)),
+            readFileSync(join(root, 'packages', 'qaren-core', 'native', name)),
+          );
+        }
+      } finally {
+        rmSync(stage, { recursive: true, force: true });
+      }
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

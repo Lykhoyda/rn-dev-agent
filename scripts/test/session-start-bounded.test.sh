@@ -72,6 +72,18 @@ hook
 bounded "missing runtime"
 check "missing runtime: prints the install command" yes "$(contains "$out" "ensure-qaren.sh --install")"
 
+cp -R "$ROOT/packages/qaren-plugin" "$tmp/plugin with space"
+cp "$tmp/plugin/runner-manifest.json" "$tmp/plugin with space/runner-manifest.json"
+hook_command=$("$NODE" -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).hooks.SessionStart[0].hooks[0].command' "$tmp/plugin with space/hooks/hooks.json")
+start=$(now_ms)
+out=$(HOME="$tmp/home" PATH="$tmp/bin" CLAUDE_PLUGIN_ROOT="$tmp/plugin with space" \
+  "$PERL" -e 'alarm 5; exec @ARGV' /bin/sh -c "$hook_command" 2>&1)
+rc=$?
+ms=$(( $(now_ms) - start ))
+bounded "hook command with a space in the plugin path"
+check "hook command with a space: prints the exact install command" \
+  "qaren v$VERSION is not installed. Install it with: bash $(printf %q "$tmp/plugin with space/scripts/ensure-qaren.sh") --install" "$out"
+
 hook "$tmp/bin-no-curl"
 bounded "no curl on PATH"
 check "no curl on PATH: prints the install command" yes "$(contains "$out" "ensure-qaren.sh --install")"

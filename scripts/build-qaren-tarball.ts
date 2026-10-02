@@ -15,7 +15,6 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   copyFileSync,
-  cpSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -226,6 +225,14 @@ function copyTrackedRunnerSources(runtimeDir: string): void {
   }
 }
 
+export function copyDarwinNative(nativeDir: string, runtimeDir: string): void {
+  const dest = join(runtimeDir, 'native');
+  mkdirSync(dest, { recursive: true });
+  for (const name of ['darwin-process-birth', 'darwin-process-birth.json']) {
+    copyFileSync(join(nativeDir, name), join(dest, name));
+  }
+}
+
 function parseArgs(argv: string[]): Record<string, string> {
   const args: Record<string, string> = {};
   for (let i = 0; i < argv.length; i++) {
@@ -263,7 +270,7 @@ async function main(): Promise<void> {
     mkdirSync(join(top, 'bin'), { recursive: true });
     copyFileSync(binary, join(top, 'bin', 'qaren'));
     await bundleEntries(runtimeDir);
-    cpSync(join(CORE_DIST, 'native'), join(runtimeDir, 'native'), { recursive: true });
+    copyDarwinNative(join(CORE_DIST, 'native'), runtimeDir);
     copyTrackedRunnerSources(runtimeDir);
     // Bundled modules resolve <runtime>/runner-manifest.json and <runtime>/package.json
     // from import.meta.dirname (qaren-core/src/runners/runtime-paths.ts).
