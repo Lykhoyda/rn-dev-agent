@@ -674,7 +674,7 @@ extension RnFastRunnerTests {
     }
   }
 
-  // Descriptor and hierarchy stability is proven once for all nodes by the final whole-tree revalidation.
+  // Attribute hits only after full live descriptor and group-count checks, then recheck the hit element.
   private func observePresence(
     _ descriptor: PresenceDescriptor, count: Int,
     app: XCUIApplication, deadline: Double, timing: PresenceCaptureTiming,
