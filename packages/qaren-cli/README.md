@@ -448,23 +448,17 @@ build_and_ready — so revisit this once live reuse is measurable.
   report only exit status and timeout state with `[private output withheld]`,
   and neither captured stream is written to durable logs. Only a successful,
   nonempty fetch writes the cleanup-tracked, mode-0600 vendor key file.
-  Every other durable record follows one rule: if a command's captured
-  output (stdout and stderr together) contains `private key`
-  (case-insensitive) anywhere, its entire output is withheld and replaced by
-  `[output withheld: contained private key material]`; any single evidence
-  string containing it is withheld whole the same way. The rule applies at
-  capture, in command summaries and evidence tails, in the one serializer
-  behind `run.json`, receipts, ledgers, build plans and handoff documents, and in detached
-  command logs, where the helper truncates the log back to where that
-  command's output began and drops everything after the marker. The marker
-  itself contains the phrase, so re-checking it is stable. This is
-  deliberately fail-closed: harmless output that names a private key (an ssh
-  permissions warning, for example) is withheld too. Oversized log lines are
-  still withheld, and API-key redaction still applies to retained diagnostics
-  and log lines. The log helper checks every byte as it arrives and only
-  accepts a regular file. Key material cannot be recognized before something
-  mentions a private key, so a body printed with no such mention, or copied
-  out before its mention arrives, is not withheld.
+  Parser input stays raw in memory. Persisted operational identities
+  (paths, ids, pids, ports and lock directories) are written exactly;
+  output-derived record fields use `OutputText`, masked on construction and
+  load. Command summaries inspect both streams, and ledger and receipt
+  evidence strings keep whole-string withholding when they contain
+  `private key` (case-insensitive), using
+  `[output withheld: contained private key material]`. Command logs keep
+  per-byte whole-command withholding: a mention truncates that command's
+  output and drops subsequent bytes. API-key redaction still applies to
+  retained diagnostics and logs. Key bodies with no private-key mention,
+  or copied before the mention arrives, cannot be withheld by this rule.
 - **Local listeners are never adopted.** The farm-advertised adb port is
   preflighted free on this host *before* the lease is claimed (a local
   emulator commonly owns 5555), and a listener on the tunnel or private adb
