@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,7 +16,8 @@ import { REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES } from '../../../dist/runn
 
 const UDID = '9386B79E-DAB5-45A3-BC86-984F403B3CC1';
 const originalExecFile = childProcess.execFile;
-let container: string;
+// The client caches the container per device, so every test shares one.
+const container = mkdtempSync(join(tmpdir(), 'runner-container-'));
 let lookups: string[][];
 
 function runnerReturns(data: unknown, ok = true): void {
@@ -33,8 +34,8 @@ function runnerReturns(data: unknown, ok = true): void {
 }
 
 beforeEach(() => {
-  container = mkdtempSync(join(tmpdir(), 'runner-container-'));
-  mkdirSync(join(container, 'tmp'));
+  rmSync(container, { recursive: true, force: true });
+  mkdirSync(join(container, 'tmp'), { recursive: true });
   lookups = [];
   const fake = ((_: string, args: string[], __: unknown, done: (...r: unknown[]) => void) => {
     lookups.push(args);
@@ -88,11 +89,22 @@ test('a refused or unexpected runner screenshot reports false so the caller fall
   const destination = join(container, 'row.png');
   runnerReturns(undefined, false);
   assert.equal(await captureRunnerScreenshot(UDID, 'com.test', destination), false);
-  for (const message of ['../../escape.png', 'tmp/screenshot-1.png/../x', 42]) {
+  // Warm the container cache so a regression that follows a crafted path finds a real file.
+  writeFileSync(join(container, 'tmp', 'screenshot-2.png'), 'warm');
+  runnerReturns({ message: 'tmp/screenshot-2.png' });
+  assert.equal(await captureRunnerScreenshot(UDID, 'com.test', join(container, 'warm.png')), true);
+  writeFileSync(join(container, 'secret.png'), 'sentinel');
+  for (const message of [
+    'tmp/../secret.png',
+    'secret.png',
+    'tmp/screenshot-1.png/../../secret.png',
+    42,
+  ]) {
     runnerReturns({ message });
     assert.equal(await captureRunnerScreenshot(UDID, 'com.test', destination), false);
+    assert.equal(existsSync(destination), false, String(message));
   }
+  assert.equal(readFileSync(join(container, 'secret.png'), 'utf8'), 'sentinel');
   assert.equal(await captureRunnerScreenshot('not-a-simulator', 'com.test', destination), false);
   assert.equal(existsSync(destination), false);
-  assert.deepEqual(lookups, []);
 });
