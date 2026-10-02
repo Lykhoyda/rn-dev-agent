@@ -506,3 +506,99 @@ fn an_unreadable_publication_state_fails_closed() {
     assert_eq!(receipt.result, ReceiptResult::Failed);
     assert!(runner.0.calls.is_empty());
 }
+
+// Records what each `git add` stages, as the commit will contain it.
+struct Staged(Git, Vec<String>);
+
+impl Runner for Staged {
+    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+        if spec.label == "git-add-blocks" {
+            let cwd = spec.cwd.clone().unwrap();
+            for path in &spec.args[3..] {
+                self.1
+                    .push(std::fs::read_to_string(cwd.join(path)).unwrap());
+            }
+        }
+        self.0.run(spec)
+    }
+    fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        self.0.spawn_group(spec, log)
+    }
+    fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.0.spawn_piped(spec, log)
+    }
+    fn sleep(&mut self, d: std::time::Duration) {
+        self.0.sleep(d)
+    }
+    fn now_epoch_ms(&self) -> u64 {
+        self.0.now_epoch_ms()
+    }
+    fn commands_executed(&self) -> u64 {
+        self.0.commands_executed()
+    }
+}
+
+const TYPED_SECRET: &str = "ghp_typedSecretValue1234567890abcdef";
+
+fn block_with_typed_secret(dir: &Path) {
+    std::fs::write(
+        dir.join("blocks/tasks.yaml"),
+        format!(
+            "steps:\n  - type: \"token={TYPED_SECRET}\" into \"Token\"\n  - type: \"{TYPED_SECRET}\"\n  - note: /Users/qa/app on qa-mac\n"
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_typed_secret_never_lands_in_the_committed_block_yaml() {
+    let (runs, dir, verdict) = run_dir(false);
+    block_with_typed_secret(&dir);
+    let mut runner = Staged(Git(MockRunner::new()), Vec::new());
+    script_comment_and_label(&mut runner.0 .0);
+    script_commit(&mut runner.0 .0);
+    runner
+        .0
+         .0
+        .expect_run("git push origin", CmdOutput::success(""));
+
+    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Published,
+        "{:?}",
+        receipt.failure
+    );
+    assert_eq!(runner.1.len(), 1);
+    let committed = &runner.1[0];
+    for leak in [TYPED_SECRET, "/Users/qa", "qa-mac"] {
+        assert!(!committed.contains(leak), "{leak} committed:\n{committed}");
+    }
+    assert!(committed.starts_with("steps:\n"), "{committed}");
+}
+
+#[test]
+fn a_typed_secret_never_lands_in_the_posted_block_yaml() {
+    let (runs, dir, verdict) = run_dir(true);
+    block_with_typed_secret(&dir);
+    let mut runner = Git(MockRunner::new());
+    script_comment_and_label(&mut runner.0);
+    runner.0.expect_run(
+        "gh pr comment 12",
+        CmdOutput::success("https://github.com/o/r/pull/12#issuecomment-6\n"),
+    );
+
+    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Published,
+        "{:?}",
+        receipt.failure
+    );
+    let posted = std::fs::read_to_string(dir.join("blocks-comment.md")).unwrap();
+    for leak in [TYPED_SECRET, "/Users/qa", "qa-mac"] {
+        assert!(!posted.contains(leak), "{leak} posted:\n{posted}");
+    }
+}

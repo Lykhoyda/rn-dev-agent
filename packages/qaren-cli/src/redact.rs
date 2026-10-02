@@ -118,11 +118,27 @@ pub fn redact_plain(raw: &str) -> String {
     };
     let mut redacted = String::with_capacity(out.len());
     let mut redact_next = false;
+    // Quotes and brackets around a token are kept but never hide it.
+    let wrap = |c: char| {
+        matches!(
+            c,
+            '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
+        )
+    };
     for token in out.split_inclusive(char::is_whitespace) {
         let trimmed = token.trim_end();
         let ws = &token[trimmed.len()..];
+        let core = trimmed.trim_start_matches(wrap);
+        let pre = &trimmed[..trimmed.len() - core.len()];
+        // Unopened trailing quotes stay part of the value, as in `password="x"`.
+        let core = if pre.is_empty() {
+            core
+        } else {
+            core.trim_end_matches(wrap)
+        };
+        let suf = &trimmed[pre.len() + core.len()..];
         // npmrc-style assignments carry the value inline or as the next token.
-        let assignment = trimmed.split_once('=').filter(|(key, _)| {
+        let assignment = core.split_once('=').filter(|(key, _)| {
             let key = key.to_ascii_lowercase();
             key.ends_with("authtoken")
                 || key.ends_with("_auth")
@@ -130,20 +146,26 @@ pub fn redact_plain(raw: &str) -> String {
                 || key.ends_with("token")
                 || key.ends_with("api_key")
         });
-        if redact_next {
+        if redact_next && !core.is_empty() {
+            redacted.push_str(pre);
             redacted.push_str("<redacted>");
+            redacted.push_str(suf);
             redacted.push_str(ws);
             redact_next = false;
         } else if let Some((key, value)) = assignment {
+            redacted.push_str(pre);
             redacted.push_str(key);
             redacted.push('=');
             redacted.push_str(if value.is_empty() { "" } else { "<redacted>" });
+            redacted.push_str(suf);
             redact_next = value.is_empty();
             redacted.push_str(ws);
-        } else if token_like(trimmed) {
+        } else if token_like(core) {
+            redacted.push_str(pre);
             redacted.push_str("<redacted>");
+            redacted.push_str(suf);
             redacted.push_str(ws);
-        } else if matches!(trimmed.to_ascii_lowercase().as_str(), "bearer" | "basic") {
+        } else if matches!(core.to_ascii_lowercase().as_str(), "bearer" | "basic") {
             redacted.push_str(trimmed);
             redacted.push_str(ws);
             redact_next = true;
@@ -351,6 +373,15 @@ mod tests {
         assert_eq!(
             redact_secrets("TYPESAFE_API_KEY=secret"),
             "TYPESAFE_API_KEY=<redacted>"
+        );
+    }
+
+    #[test]
+    fn quoted_tokens_are_redacted_and_keep_their_quotes() {
+        let raw = r#"type: "ghp_abcdefghijklmnopqrstuvwxyz0123" ('token=hunter2') [github_pat_x1]"#;
+        assert_eq!(
+            redact_secrets(raw),
+            r#"type: "<redacted>" ('token=<redacted>') [<redacted>]"#
         );
     }
 

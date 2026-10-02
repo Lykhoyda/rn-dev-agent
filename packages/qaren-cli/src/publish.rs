@@ -192,8 +192,13 @@ fn post_once(
 
 use crate::worktree::git;
 
-// The blocks `qaren pr` preserved, read back in full; missing evidence fails rather than reads as none.
-fn saved_blocks(run_dir: &Path, pr: &PrRunRecord) -> Result<Vec<(String, String)>, Failure> {
+// The blocks `qaren pr` preserved, read back in full and redacted once, so neither the commit nor a
+// comment can carry a secret or machine identity; missing evidence fails rather than reads as none.
+fn saved_blocks(
+    run_dir: &Path,
+    pr: &PrRunRecord,
+    machine: &MachineIdentity,
+) -> Result<Vec<(String, String)>, Failure> {
     pr.blocks
         .iter()
         .map(|slug| {
@@ -203,7 +208,7 @@ fn saved_blocks(run_dir: &Path, pr: &PrRunRecord) -> Result<Vec<(String, String)
                 .then(|| std::fs::read_to_string(&path).ok())
                 .flatten()
             {
-                Some(yaml) => Ok((slug.clone(), yaml)),
+                Some(yaml) => Ok((slug.clone(), redact_machine(&yaml, machine))),
                 None => Err(failure(
                     format!("the saved block {slug} is missing or unreadable in the run directory"),
                     "re-run qaren pr to save the blocks again",
@@ -635,7 +640,7 @@ fn publish_inner(
     }
 
     if publication.writeback.is_none() {
-        let blocks = saved_blocks(&run_dir, &pr)?;
+        let blocks = saved_blocks(&run_dir, &pr, machine)?;
         let mut needs_comment = false;
         if blocks.is_empty() {
             publication.writeback = Some("none".to_string());
