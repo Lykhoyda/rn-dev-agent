@@ -18,8 +18,8 @@ cargo build --manifest-path packages/qaren-cli/Cargo.toml --locked
 Run these commands from the repository root. The binary is
 `packages/qaren-cli/target/debug/qaren`; its screen child uses the generated
 `packages/qaren-core/dist/`. Set `QAREN_RUNTIME` to its absolute path when running
-the binary from another location. Set `TYPESAFE_API_KEY` for Jev judgments;
-even a literal plan performs a live readiness judgment before device allocation.
+the binary from another location. See [Check a plan](#check-a-plan) for when
+`TYPESAFE_API_KEY` is required.
 
 ## Check a plan
 
@@ -39,8 +39,22 @@ Plans contain a `## QA` section, named `###` blocks, numbered actions and
 `✓` checks. See the executable
 [literal](../qaren-core/test/fixtures/plans/literal.md) and
 [phrase](../qaren-core/test/fixtures/plans/phrases.md) fixtures and the
-[parser](../qaren-core/src/qa/plan.ts) for accepted grammar. Quoted targets
-resolve observed identities; phrase targets and semantic checks use Jev.
+[parser](../qaren-core/src/qa/plan.ts) for accepted grammar. Quoted press and fill
+targets resolve observed labels or test IDs locally; multiple eligible matches
+refuse with `TARGET_AMBIGUOUS`, without a Jev tie-break, even if the target adds
+positional words such as `Tap "Save" at the bottom`.
+
+A check is literal only when its entire payload is one quoted string:
+`✓ "Welcome"`. Text outside the quotes, as in
+`✓ The heading shows "Welcome" and no error is visible`, makes the whole
+expectation a phrase check. Phrase press, fill and wait targets, phrase
+scroll-until targets, phrase checks and unrecognised verbs require
+`TYPESAFE_API_KEY`. They run the fixed Jev readiness probe even when another
+line is unparseable; a missing or rejected key refuses `JEV_UNREACHABLE` before
+device selection or leasing. Plans with only quoted targets and literal checks
+make no Jev calls and need no key; recognised back, dialog and fixed-scroll
+steps also stay model-free.
+
 Unparseable lines refuse before allocation; unresolved screen targets refuse during the walk.
 Native platform presence establishes observed presence, not complete visual exposure
 or an accessibility heading role. Heading predicates require qualified heading evidence;

@@ -2078,18 +2078,19 @@ fn missing_or_rejected_key_refuses_before_device_or_lease() {
         let (repo, app) = app_repo();
         let mut mock = MockRunner::new();
         mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
+        // The core decides whether the plan needs Jev; a missing or rejected key fails its probe.
         if supplied {
             mock.environment
                 .insert("TYPESAFE_API_KEY".into(), TEST_KEY.into());
-            mock.expect_run("walk.js --preflight", CmdOutput {
-                exit_code: Some(4),
-                stdout: serde_json::json!({"ok":false,"code":"JEV_UNREACHABLE","message":TEST_KEY,
-                    "jev":{"calls":1,"medianMs":5,"inputTokens":0,"callDetails":[{
-                        "scope":"preflight","questionIds":["preflight"],"inputTokens":null,"ms":5,"outcome":"http","status":401
-                    }]}}).to_string(),
-                ..Default::default()
-            });
         }
+        mock.expect_run("walk.js --preflight", CmdOutput {
+            exit_code: Some(4),
+            stdout: serde_json::json!({"ok":false,"code":"JEV_UNREACHABLE","message":TEST_KEY,
+                "jev":{"calls":1,"medianMs":5,"inputTokens":0,"callDetails":[{
+                    "scope":"preflight","questionIds":["preflight"],"inputTokens":null,"ms":5,"outcome":"http","status":401
+                }]}}).to_string(),
+            ..Default::default()
+        });
         let receipt = run(&mut mock, &request(&repo, &app, 30));
         assert_eq!(receipt.result, ReceiptResult::Refused);
         assert_eq!(
@@ -2190,6 +2191,58 @@ fn walk_jev_refusals_preserve_prior_passes_and_the_complete_failure_evidence() {
                 .code,
             expected
         );
+        assert_eq!(mock.remaining(), 0);
+    }
+}
+
+#[test]
+fn literal_plan_without_key_proceeds_past_preflight() {
+    let (repo, app) = app_repo();
+    let mut mock = MockRunner::new();
+    mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
+    let plan = std::fs::read(repo.join("test-app/plan.md")).unwrap();
+    let output = serde_json::json!({"ok":true,"jevRequired":false,"prepared":{
+        "hash":qaren::candidate::sha256_hex(&plan),"blocks":[]
+    },"jev":{"calls":0,"medianMs":0,"inputTokens":0,"callDetails":[]}});
+    mock.expect_run(
+        "walk.js --preflight",
+        CmdOutput::success(&output.to_string()),
+    );
+    // No booted simulator ends the run at device selection, just past preflight.
+    mock.expect_run(
+        "simctl list devices booted",
+        CmdOutput::success(r#"{"devices":{}}"#),
+    );
+    let receipt = run(&mut mock, &request(&repo, &app, 30));
+    assert!(labels(&mock).iter().any(|l| l == "simctl-list-booted"));
+    assert_eq!(mock.remaining(), 0);
+    assert_eq!(receipt.preflight_jev.as_ref().unwrap().calls, 0);
+    assert_ne!(
+        receipt.failure.as_ref().map(|f| f.code.clone()),
+        Some(FailureCode::JevUnreachable)
+    );
+}
+
+#[test]
+fn missing_jev_required_flag_is_treated_as_required() {
+    for required in [None, Some(true)] {
+        let (repo, app) = app_repo();
+        let mut mock = MockRunner::new();
+        mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
+        let plan = std::fs::read(repo.join("test-app/plan.md")).unwrap();
+        let mut output = serde_json::json!({"ok":true,"prepared":{
+            "hash":qaren::candidate::sha256_hex(&plan),"blocks":[]
+        },"jev":{"calls":0,"medianMs":0,"inputTokens":0,"callDetails":[]}});
+        if let Some(required) = required {
+            output["jevRequired"] = required.into();
+        }
+        mock.expect_run(
+            "walk.js --preflight",
+            CmdOutput::success(&output.to_string()),
+        );
+        let receipt = run(&mut mock, &request(&repo, &app, 30));
+        assert_eq!(receipt.failure.unwrap().code, FailureCode::JevUnreachable);
+        assert!(!repo.join(".locks").exists());
         assert_eq!(mock.remaining(), 0);
     }
 }

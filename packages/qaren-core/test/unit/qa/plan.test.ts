@@ -118,9 +118,11 @@ test('a plan splits into blocks by ### heading and hashes its item lines', () =>
       [13, 'check', 'grammar'],
     ],
   );
-  const literal = profile.items[4];
+  const mixed = profile.items[4];
   const phrase = profile.items[5];
-  assert.ok(literal.kind === 'check' && literal.literal && literal.text === 'Anton');
+  assert.ok(
+    mixed.kind === 'check' && !mixed.literal && mixed.text === 'The profile header shows "Anton"',
+  );
   assert.ok(
     phrase.kind === 'check' && !phrase.literal && phrase.text === 'The avatar is unchanged',
   );
