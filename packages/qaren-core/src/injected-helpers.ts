@@ -1448,6 +1448,37 @@ export const INJECTED_HELPERS = `
         if (hostEvidence.hosts.length === ${PRIVATE_INPUT_LIMITS.maxHosts}) hostEvidence.complete = false;
         return hostEvidence.hosts.length - 1;
       }
+      // A failed safe read never skips: it only means this fiber is walked as before.
+      function routeRead(object, key) {
+        try { return qaData(object, key); } catch (e) { return undefined; }
+      }
+      function resolvedDisplay(style, depth) {
+        if (!style || typeof style !== 'object' || depth > 16) return null;
+        if (Array.isArray(style)) {
+          var shown = null;
+          for (var di = 0; di < style.length && di < 64; di++) {
+            var part = resolvedDisplay(routeRead(style, String(di)), depth + 1);
+            if (part !== null) shown = part;
+          }
+          return shown;
+        }
+        var display = routeRead(style, 'display');
+        return display === undefined ? null : display;
+      }
+      // A provably inactive route is off the visible screen; skipping it only loses digest semantics.
+      function inactiveRoute(fiber) {
+        var props = routeRead(fiber, 'memoizedProps');
+        if (!props || typeof props !== 'object') return false;
+        var inactive = routeRead(props, 'activityState') === 0;
+        var invisible = routeRead(props, 'visible') === false;
+        if (inactive || invisible) {
+          var routeName = getName(fiber) || '';
+          var routeBase = routeName.slice(routeName.lastIndexOf('.') + 1);
+          if (inactive && (routeBase === 'Screen' || routeBase === 'InnerScreen' || routeBase === 'RNSScreen')) return true;
+          if (invisible && (routeBase === 'MaybeScreen' || routeBase === 'ScreenContainer')) return true;
+        }
+        return isHostFiber(fiber) && resolvedDisplay(routeRead(props, 'style'), 0) === 'none';
+      }
       var iRoots = findAllRootFibers(typography);
       var iBudget = Math.min(5000, 2000 * Math.max(1, iRoots.length));
       var iQueue = [];
@@ -1529,6 +1560,7 @@ export const INJECTED_HELPERS = `
           if (typographyRecord.hostType === 'RCTText') textOwnerHostIndex = hostIndex;
           else if (typographyRecord.hostType !== 'RCTVirtualText') textOwnerHostIndex = null;
         }
+        if (inactiveRoute(ifiber)) ich = null;
         while (ich) {
           if (typography && (++iEnqueued > iBudget || Date.now() >= typography.deadline)) { iEnqueueTruncated = true; break; }
           iQueue.push({ fiber: ich, forwarded: nextForwarded, wrapperCandidate: wrapperCandidate, parentFiber: ifiber, parentHostIndex: parentHostIndex, textOwnerHostIndex: textOwnerHostIndex, rootIndex: iframe.rootIndex, animatedTypography: typographyRecord && typographyRecord.animated, hidden: hidden });
