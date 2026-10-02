@@ -506,6 +506,16 @@ fn run_inner(
     let mut receipt = finish_receipt(ctx, result, failure);
     receipt.ledger = Some(report::summarize(&outcome.ledger));
     receipt.blocks_written = outcome.ledger.blocks_written.clone().unwrap_or_default();
+    receipt.blocks_not_saved = outcome
+        .ledger
+        .blocks
+        .iter()
+        .filter(|block| block.saved == Some(false))
+        .map(|block| crate::receipt::BlockNotSaved {
+            block: block.key.clone(),
+            reason: block.unsavable.clone().unwrap_or_default(),
+        })
+        .collect();
     receipt.worktree_drift = drift;
     receipt.artifacts.insert("report".to_string(), report_path);
     receipt.artifacts.insert("ledger".to_string(), ledger_path);

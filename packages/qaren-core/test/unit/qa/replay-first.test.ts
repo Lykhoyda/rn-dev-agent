@@ -17,6 +17,7 @@ import { runPlan, type BlockStore } from '../../../dist/qa/walker.js';
 import type { Ledger, WalkResult } from '../../../dist/qa/ledger.js';
 import { element, scriptedJudge, walker } from './judgment-fixtures.ts';
 import { AppProcessGoneError } from '../../../dist/qa/capture.js';
+import { captureInputPrivacy, isPrivateInput } from '../../../dist/qa/privacy.js';
 
 const literal = readFileSync(new URL('../../fixtures/plans/literal.md', import.meta.url), 'utf8');
 const literalLabel = literal.replace('2. Tap "onboarding-done"', '2. Tap "Done"');
@@ -323,4 +324,82 @@ test('a process change on a capture still records its concealed inputs before re
   assert.equal(result.verdict, 'FAIL');
   assert.match(result.failure?.seen ?? '', /APP_PROCESS_CHANGED/);
   assert.doesNotMatch(JSON.stringify(result), /hunter2/);
+});
+
+function form(secure: boolean) {
+  let saved = false;
+  const judge = scriptedJudge(() => assert.fail('a literal plan must never ask Jev'));
+  const fake = walker([], judge);
+  fake.deps.captureScreen = async () => {
+    const elements = saved
+      ? [element('@done', 'Saved', { kind: 'text' })]
+      : [
+          element('@pin', 'PIN', { kind: 'input', testID: 'pin-input', secure }),
+          element('@save', 'Save', { testID: 'save' }),
+        ];
+    return {
+      front: 'app',
+      elements,
+      visibleText: elements.map((e) => e.label ?? ''),
+      coverage: { native: 'complete', react: 'complete' },
+    };
+  };
+  fake.deps.press = async (ref) => {
+    fake.actions.push(`press ${ref}`);
+    if (ref === '@save') saved = true;
+    return { ok: true, proven: false };
+  };
+  return fake;
+}
+
+const formPlan =
+  '## QA\n\n### Save a PIN\n\n1. Type "4711" into "pin-input"\n2. Tap "Save"\n✓ "Saved"\n';
+
+test('a fill into a secure input leaves its block unsaved with a value-free reason', async () => {
+  const dir = root();
+  const result = ledger(await runPlan(blocks(formPlan), form(true).deps, [], store(dir)));
+  assert.equal(result.verdict, 'PASS', JSON.stringify(result.failure));
+  const fillLine = blocks(formPlan)[0].items[0].line;
+  assert.deepEqual(result.blocks, [
+    {
+      key: 'save-a-pin',
+      outcome: 'pass',
+      source: 'discovered',
+      saved: false,
+      unsavable: `line ${fillLine}: fills a private input`,
+    },
+  ]);
+  assert.deepEqual(result.blocksWritten, []);
+  assert.equal(existsSync(join(dir, '.qaren', 'actions', 'save-a-pin.yaml')), false);
+});
+
+test('an ordinary fill keeps its plan literal in the saved block', async () => {
+  const dir = root();
+  const result = ledger(await runPlan(blocks(formPlan), form(false).deps, [], store(dir)));
+  assert.equal(result.verdict, 'PASS', JSON.stringify(result.failure));
+  assert.deepEqual(result.blocksWritten, ['save-a-pin']);
+  assert.match(
+    readFileSync(join(dir, '.qaren', 'actions', 'save-a-pin.yaml'), 'utf8'),
+    /- tapOn: \{ id: "pin-input" \}\n- inputText: "4711"\n/,
+  );
+});
+
+test('the private-input predicate covers secure fields and inputs the privacy model cannot read safely', () => {
+  const plain = element('@a', 'Name', { kind: 'input' });
+  assert.equal(isPrivateInput(plain), false);
+  assert.equal(isPrivateInput(element('@b', 'PIN', { kind: 'input', secure: true })), true);
+  const unknown = element('@c', 'Code', { kind: 'input' });
+  captureInputPrivacy(unknown, {
+    values: [],
+    nativeLabelMayBeValue: false,
+    checkSubject: 'unknown',
+  });
+  assert.equal(isPrivateInput(unknown), true);
+  const labelValue = element('@d', 'ada@example.com', { kind: 'input' });
+  captureInputPrivacy(labelValue, {
+    values: [],
+    nativeLabelMayBeValue: true,
+    checkSubject: 'supported',
+  });
+  assert.equal(isPrivateInput(labelValue), true);
 });

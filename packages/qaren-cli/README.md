@@ -163,11 +163,14 @@ longer matches exactly one element, or a step that does not move the screen, re-
 the block from that line; on PASS only the commands under that line and later ones are
 rewritten, and every `✓` comment stays byte-identical. A failing check is a FAIL and
 is never re-walked or rewritten. Failed walks write nothing. A step without a `testID`
-or label, or a phrase wait, leaves the block unsaved and the ledger says why.
+or label, a phrase wait, or a fill into a secure or private input leaves the block
+unsaved and the ledger says why without naming any value; ordinary fills keep their
+plan literal in the saved block.
 
 The ledger's `path` is `walk`, `replay` or `replay→walk@<line>` (the first re-walked
 plan line), and each block reports `source` `discovered`, `replayed` or `patched`. The
-receipt lists `blocks_written` and, as a diagnostic that never changes the verdict,
+receipt lists `blocks_written`, `blocks_not_saved` (block and reason) and, as a
+diagnostic that never changes the verdict,
 `worktree_drift`: app-root paths whose `git status` changed during the walk, outside
 `.qaren/actions`. `qaren actions list [--json]` and `qaren actions show <slug>` read the
 saved blocks of the current directory.

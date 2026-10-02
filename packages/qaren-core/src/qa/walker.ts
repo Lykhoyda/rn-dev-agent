@@ -25,7 +25,7 @@ import {
   writeBlock,
 } from './blocks.js';
 import { type Judge, type JevCall, JevError, unavailableJudge } from './questions.js';
-import { maskInputs, ObservedPrivacy } from './privacy.js';
+import { isPrivateInput, maskInputs, ObservedPrivacy } from './privacy.js';
 import { PrivateInputCaptureError } from './private-input.js';
 import { AppProcessGoneError, NativeCaptureError } from './capture.js';
 import { QaDispatchContext, QaDispatchError } from '../domain/qa-dispatch.js';
@@ -122,6 +122,8 @@ export interface WalkOutcome {
   refusal?: { code: string; message: string };
   // Replay only: the line whose stored selector no longer resolves or moves the screen.
   miss?: number;
+  // Fill lines that typed into a private input; their block is never saved.
+  privateFills?: number[];
 }
 
 export interface WalkOptions {
@@ -145,6 +147,7 @@ export async function walkBlock(
 ): Promise<WalkOutcome> {
   const replay = opts.mode === 'replay';
   const rows: LedgerRow[] = [];
+  const privateFills: number[] = [];
   for (const item of block.items)
     if (item.kind === 'fill' && !typed.includes(item.text)) typed.push(item.text);
   const judge = deps.judge ?? unavailableJudge;
@@ -498,6 +501,7 @@ export async function walkBlock(
       block: { key: block.slug, outcome: 'fail', source: 'discovered' },
       rows,
       ...(miss ? { miss: item.line } : {}),
+      ...(privateFills.length ? { privateFills } : {}),
       failure: {
         step: item.line,
         seen: redact(
@@ -829,6 +833,8 @@ export async function walkBlock(
         metric('readback', after);
         const shot = await shoot(item);
         if (act!.proven || changed) {
+          if (item.kind === 'fill' && element && isPrivateInput(element))
+            privateFills.push(item.line);
           const target = stepTarget(item);
           emit({
             ...base(item, attempt),
@@ -924,7 +930,11 @@ export async function walkBlock(
       };
     }
   }
-  return { block: { key: block.slug, outcome: 'pass', source: 'discovered' }, rows };
+  return {
+    block: { key: block.slug, outcome: 'pass', source: 'discovered' },
+    rows,
+    ...(privateFills.length ? { privateFills } : {}),
+  };
 }
 
 const processChanged = (): ResolutionError =>
@@ -1021,8 +1031,15 @@ export async function runPlan(
       rows: LedgerRow[],
       source: BlockResult['source'],
       store: BlockStore,
+      privateFills: number[] = [],
     ): BlockResult => {
       const result: BlockResult = { key: block.slug, outcome: 'pass', source };
+      if (privateFills.length)
+        return {
+          ...result,
+          saved: false,
+          unsavable: `line ${Math.min(...privateFills)}: fills a private input`,
+        };
       const serialized = serializeBlock(block, rows, store);
       if ('unsavable' in serialized)
         return { ...result, saved: false, unsavable: serialized.unsavable };
@@ -1060,7 +1077,12 @@ export async function runPlan(
           return finish(rewalked);
         }
         const kept = replayed.rows.filter((row) => row.line < k && row.outcome === 'pass');
-        results.push(save(block, [...kept, ...rewalked.rows], 'patched', store));
+        results.push(
+          save(block, [...kept, ...rewalked.rows], 'patched', store, [
+            ...(replayed.privateFills ?? []).filter((line) => line < k),
+            ...(rewalked.privateFills ?? []),
+          ]),
+        );
         continue;
       }
       const outcome = await walk(block);
@@ -1069,7 +1091,11 @@ export async function runPlan(
         results.push(outcome.block);
         return finish(outcome);
       }
-      results.push(store ? save(block, outcome.rows, 'discovered', store) : outcome.block);
+      results.push(
+        store
+          ? save(block, outcome.rows, 'discovered', store, outcome.privateFills)
+          : outcome.block,
+      );
     }
     return finish();
   });

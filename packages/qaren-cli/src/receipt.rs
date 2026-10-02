@@ -79,6 +79,13 @@ pub struct MetroIdentity {
     pub identity: Option<crate::runrecord::PidIdentity>,
 }
 
+// A passed block the core did not save, with the core's value-free reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockNotSaved {
+    pub block: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Receipt {
     pub schema: String,
@@ -121,6 +128,8 @@ pub struct Receipt {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocks_written: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks_not_saved: Vec<BlockNotSaved>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub worktree_drift: Vec<String>,
     pub next_action: String,
 }
@@ -157,6 +166,7 @@ impl Receipt {
             ledger: None,
             preflight_jev: None,
             blocks_written: Vec::new(),
+            blocks_not_saved: Vec::new(),
             worktree_drift: Vec::new(),
             next_action: String::new(),
         }

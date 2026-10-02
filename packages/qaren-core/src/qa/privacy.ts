@@ -112,6 +112,13 @@ export function inputCheckSubject(element: Element): EvidenceStatus {
   );
 }
 
+// A field whose value is private evidence: native secure, or an input the screen model cannot read safely.
+export function isPrivateInput(element: Element): boolean {
+  return (
+    element.secure || inputCheckSubject(element) === 'unknown' || nativeLabelMayBeValue(element)
+  );
+}
+
 export function nativeLabelMayBeValue(element: Element): boolean {
   return inputPrivacy.get(element)?.nativeLabelMayBeValue ?? false;
 }

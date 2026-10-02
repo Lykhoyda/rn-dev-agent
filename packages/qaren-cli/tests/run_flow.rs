@@ -1085,7 +1085,7 @@ fn the_receipt_names_written_blocks_and_paths_the_walk_changed_outside_them() {
         "(exclude).qaren/actions",
         CmdOutput::success(" M test-app/dirty.ts\0"),
     );
-    let ledger = r#"{"verdict":"PASS","path":"replay","blocks":[{"key":"plan","outcome":"pass","source":"replayed"}],"blocksWritten":["plan"],"steps":[],"jev":{"calls":0,"medianMs":0},"llmTurns":0,"escapes":0,"recoveries":0}"#;
+    let ledger = r#"{"verdict":"PASS","path":"replay","blocks":[{"key":"plan","outcome":"pass","source":"replayed"},{"key":"pin","outcome":"pass","source":"discovered","saved":false,"unsavable":"line 4: fills a private input"}],"blocksWritten":["plan"],"steps":[],"jev":{"calls":0,"medianMs":0},"llmTurns":0,"escapes":0,"recoveries":0}"#;
     mock.expect_spawn_piped(
         "walk.js",
         9000,
@@ -1110,6 +1110,13 @@ fn the_receipt_names_written_blocks_and_paths_the_walk_changed_outside_them() {
     assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
     assert_eq!(mock.remaining(), 0);
     assert_eq!(receipt.blocks_written, vec!["plan".to_string()]);
+    assert_eq!(
+        receipt.blocks_not_saved,
+        vec![qaren::receipt::BlockNotSaved {
+            block: "pin".to_string(),
+            reason: "line 4: fills a private input".to_string(),
+        }]
+    );
     assert_eq!(
         receipt.worktree_drift,
         vec!["test-app/src/new.ts".to_string()]
