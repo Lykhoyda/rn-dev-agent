@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { captureScreen, NativeCaptureError } from '../../../dist/qa/capture.js';
 import type { ReactObservation } from '../../../dist/qa/capture.js';
-import { bindPrivateInputs, PrivateInputCaptureError } from '../../../dist/qa/private-input.js';
+import {
+  bindPrivateInputs,
+  PrivateInputCaptureError,
+  PrivateInputCaptureTimeout,
+} from '../../../dist/qa/private-input.js';
 import { ObservedPrivacy } from '../../../dist/qa/privacy.js';
 import type { TimingEvent } from '../../../dist/qa/timing.js';
 import { nativeCapture } from './platform-presence-fixtures.ts';
@@ -27,7 +31,7 @@ function scripted(reactAttempts: Array<() => Promise<ReactObservation>>) {
   };
 }
 
-const refusesOnce = () => Promise.reject(new PrivateInputCaptureError());
+const refusesOnce = () => Promise.reject(new PrivateInputCaptureTimeout());
 const refreshes = (events: TimingEvent[]) => events.filter((e) => e.stage === 'refresh').length;
 
 test('a private-input refusal gets one complete fresh capture and the second capture is returned', async () => {
@@ -47,6 +51,16 @@ test('a second refusal refuses exactly as before, without a third attempt', asyn
   await assert.rejects(captureScreen(s.deps), PrivateInputCaptureError);
   assert.deepEqual(s.calls, { native: 2, react: 2 });
   assert.equal(refreshes(s.events), 1);
+});
+
+test('an unknown private capture that did not time out refuses without a retry', async () => {
+  const s = scripted([
+    () => Promise.reject(new PrivateInputCaptureError()),
+    () => assert.fail('no retry'),
+  ]);
+  await assert.rejects(captureScreen(s.deps), PrivateInputCaptureError);
+  assert.deepEqual(s.calls, { native: 1, react: 1 });
+  assert.equal(refreshes(s.events), 0);
 });
 
 test('native and other failures are never retried', async () => {
@@ -97,7 +111,7 @@ test('a retried required capture still binds and masks private input values', as
     native: async () => echo,
     react: async () => {
       reads += 1;
-      if (reads === 1) throw new PrivateInputCaptureError();
+      if (reads === 1) throw new PrivateInputCaptureTimeout();
       return bindPrivateInputs(react, {
         version: 1,
         complete: true,
@@ -129,7 +143,7 @@ test('a tap whose post-act capture refuses once on private input still passes', 
       native: async () => ({ ...nativeCapture(), presenceCapture: undefined }),
       react: async () => {
         reads += 1;
-        if (reads === 2) throw new PrivateInputCaptureError();
+        if (reads === 2) throw new PrivateInputCaptureTimeout();
         return {
           interactive: [
             { role: 'button', testID: 'save', capabilities: { press: true, fill: false } },

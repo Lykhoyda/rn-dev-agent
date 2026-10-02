@@ -13,6 +13,7 @@ import {
 import {
   applyPrivateInputs,
   PrivateInputCaptureError,
+  PrivateInputCaptureTimeout,
   validatePrivateInputs,
 } from './private-input.js';
 
@@ -362,8 +363,8 @@ export async function captureScreen(deps: CaptureDeps): Promise<Screen> {
     try {
       return await capture(deps);
     } catch (error) {
-      if (!(error instanceof PrivateInputCaptureError)) throw error;
-      // One refusal cannot tell a busy JS thread from a broken read; a fresh full capture can.
+      if (!(error instanceof PrivateInputCaptureTimeout)) throw error;
+      // A missed deadline cannot tell a busy JS thread from a broken read; one fresh full capture can.
       observeTiming(deps.timing, {
         stage: 'refresh',
         edge: 'point',
@@ -413,6 +414,7 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
   try {
     react = await measureTiming(deps.timing, now, 'react-private', () => deps.react());
   } catch (error) {
+    if (error instanceof PrivateInputCaptureTimeout) throw new PrivateInputCaptureTimeout();
     if (deps.requirePrivateInputs || error instanceof PrivateInputCaptureError)
       throw new PrivateInputCaptureError();
     deps.warn?.('interactive digest unavailable; React coverage is unknown');

@@ -5,6 +5,7 @@ import {
   assertPrivateInputPayload,
   bindPrivateInputs,
   PrivateInputCaptureError,
+  PrivateInputCaptureTimeout,
 } from './private-input.js';
 import { validateReactHostEvidence } from './screen.js';
 import type { DigestEntry } from './screen.js';
@@ -167,7 +168,9 @@ export async function captureQaReact(
     remaining();
     return observation;
   } catch {
-    throw new PrivateInputCaptureError();
+    throw expired || performance.now() >= deadline
+      ? new PrivateInputCaptureTimeout()
+      : new PrivateInputCaptureError();
   } finally {
     expired = true;
     clearTimeout(timer);

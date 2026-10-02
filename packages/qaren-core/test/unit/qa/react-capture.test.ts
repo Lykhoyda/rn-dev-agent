@@ -7,7 +7,11 @@ import { createComponentTreeHandler } from '../../../dist/handlers/component-tre
 import { buildFiber, createSandbox } from '../helpers/inject-harness.js';
 import { captureQaReact } from '../../../dist/qa/react-capture.js';
 import { captureScreen } from '../../../dist/qa/capture.js';
-import { PrivateInputCaptureError, validatePrivateInputs } from '../../../dist/qa/private-input.js';
+import {
+  PrivateInputCaptureError,
+  PrivateInputCaptureTimeout,
+  validatePrivateInputs,
+} from '../../../dist/qa/private-input.js';
 import { inputValues } from '../../../dist/qa/privacy.js';
 import { decideScreen } from '../../../dist/qa/resolve.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
@@ -802,4 +806,27 @@ test('the hidden digest fact survives capture and a malformed one refuses', asyn
   const entry = { role: 'button', testID: 'home-btn', hidden: true };
   assert.deepEqual((await capture(entry)).interactive, [entry]);
   await assert.rejects(capture({ ...entry, hidden: 'yes' }), PrivateInputCaptureError);
+});
+
+test('only a missed deadline classifies as a private-capture timeout', async (t) => {
+  const broken: Pick<CDPClient, 'withPrivateHelperWorld'> = {
+    async withPrivateHelperWorld() {
+      throw new Error('beginQaCapture is not a function');
+    },
+  };
+  await assert.rejects(
+    captureQaReact(broken),
+    (error) =>
+      error instanceof PrivateInputCaptureError && !(error instanceof PrivateInputCaptureTimeout),
+  );
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const busy: Pick<CDPClient, 'withPrivateHelperWorld'> = {
+    withPrivateHelperWorld: () => new Promise(() => {}),
+  };
+  const result = assert.rejects(captureQaReact(busy), PrivateInputCaptureTimeout);
+  now = 1500;
+  t.mock.timers.tick(1500);
+  await result;
 });
