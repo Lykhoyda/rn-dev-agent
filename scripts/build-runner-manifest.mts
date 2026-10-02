@@ -1,8 +1,5 @@
 #!/usr/bin/env node
-// GH #382 (Story 01): generate runner-manifest.json — the SHA-256 + byte count of
-// each prebuilt runner zip for the release being cut. The client (runner-artifacts.ts)
-// reads this committed manifest offline as its trust root before downloading and
-// verifying the release assets.
+// Generates the offline SHA-256 and byte-length trust root for runner zips and optional qaren tarballs.
 //
 // Usage (CI, after building the zips):
 //   node scripts/build-runner-manifest.mts \

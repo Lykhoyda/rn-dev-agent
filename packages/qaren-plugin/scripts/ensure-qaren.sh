@@ -5,7 +5,7 @@
 #                                                 or the install command; always exits 0
 #   ensure-qaren.sh --install [--from-file <tgz>] downloads (or takes) the tarball, verifies its
 #                                                 sha256 and length against runner-manifest.json,
-#                                                 and installs it atomically into ~/.qaren/runtime/<v>/
+#                                                 and installs it into ~/.qaren/runtime/<v>/; rerun --install after interruption
 set -euo pipefail
 
 MODE=""
