@@ -123,11 +123,12 @@ export async function captureQaReact(
   typography = false,
 ): Promise<ReactObservation> {
   const deadline = performance.now() + 1500;
+  const deadlineSignal = Symbol();
   let expired = false;
   let receivedPrivateValues = false;
   const remaining = (): number => {
     const ms = deadline - performance.now();
-    if (expired || ms <= 0) throw new PrivateInputCaptureError();
+    if (expired || ms <= 0) throw deadlineSignal;
     return ms;
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -136,7 +137,7 @@ export async function captureQaReact(
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           expired = true;
-          reject(new PrivateInputCaptureError());
+          reject(deadlineSignal);
         }, remaining());
       }),
       client.withPrivateHelperWorld(async (evaluate) => {
@@ -169,8 +170,8 @@ export async function captureQaReact(
     ]);
     remaining();
     return observation;
-  } catch {
-    throw !receivedPrivateValues && (expired || performance.now() >= deadline)
+  } catch (error) {
+    throw error === deadlineSignal && !receivedPrivateValues
       ? new PrivateInputCaptureTimeout()
       : new PrivateInputCaptureError();
   } finally {

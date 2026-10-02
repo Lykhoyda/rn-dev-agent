@@ -768,6 +768,53 @@ test('port completion after the monotonic deadline cannot return an observation'
   });
 });
 
+test('malformed ready tree processing across the deadline remains a permanent refusal', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const parse = JSON.parse;
+  const parsing = t.mock.method(JSON, 'parse', (text: string) => {
+    now = 1501;
+    return parse(text);
+  });
+  const client: Pick<CDPClient, 'withPrivateHelperWorld'> = {
+    async withPrivateHelperWorld(operation) {
+      return operation(async () => {
+        now = 1499;
+        return {
+          ...ready(),
+          inputs: { version: 1, complete: true, facts: [] },
+          tree: `{"private":"${sentinel}" BROKEN`,
+        };
+      });
+    },
+  };
+  await assert.rejects(captureQaReact(client), (error) => {
+    sanitized(error);
+    assert.equal(error instanceof PrivateInputCaptureTimeout, false);
+    return true;
+  });
+  assert.equal(parsing.mock.callCount(), 1);
+  assert.equal(now, 1501);
+});
+
+test('a transport error after the deadline remains a permanent refusal', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const client: Pick<CDPClient, 'withPrivateHelperWorld'> = {
+    async withPrivateHelperWorld() {
+      now = 1501;
+      throw new Error(sentinel);
+    },
+  };
+  await assert.rejects(captureQaReact(client), (error) => {
+    sanitized(error);
+    assert.equal(error instanceof PrivateInputCaptureTimeout, false);
+    return true;
+  });
+});
+
 test('a hung private read retries only when begin supplied no private values', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let now = 0;
