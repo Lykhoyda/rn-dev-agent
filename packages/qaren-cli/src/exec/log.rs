@@ -122,13 +122,16 @@ impl Lines {
             (complete.max(raw.len().saturating_sub(64))..raw.len())
                 .find(|&start| {
                     raw.as_bytes()[start] == b'-'
-                        && (start == 0 || raw.as_bytes()[start - 1] != b'-')
                         && ["-----BEGIN ", "-----END "].iter().any(|marker| {
                             let tail = &raw[start..];
                             marker.starts_with(tail)
-                                || tail
-                                    .strip_prefix(*marker)
-                                    .is_some_and(|label| !label.contains("-----"))
+                                || tail.strip_prefix(*marker).is_some_and(|label| {
+                                    let text = label.trim_end_matches('-');
+                                    label.len() - text.len() < 5
+                                        && text.bytes().all(|byte| {
+                                            byte.is_ascii_uppercase() || byte == b' '
+                                        })
+                                })
                         })
                 })
                 .map_or(0, |start| raw.len() - start)

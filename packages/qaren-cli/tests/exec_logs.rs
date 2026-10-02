@@ -125,6 +125,7 @@ fn the_log_drain_masks_a_private_key_split_across_lines_and_writes() {
         "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj",
         "Zq3=",
         "c2Vjb25kIGtleQ",
+        "MIIbody",
     ];
     let oversized = format!("{} -----BEGIN PRIVATE KEY-----\n", "x".repeat(70 * 1024));
     for chunk in [
@@ -140,17 +141,32 @@ fn the_log_drain_masks_a_private_key_split_across_lines_and_writes() {
         output.write_all(chunk.as_bytes()).unwrap();
         std::thread::sleep(Duration::from_millis(20));
     }
+    let dash_prefix = format!(
+        "{}------BEGIN PRIVATE KEY-----\nMIIbody\n-----END PRIVATE KEY-----\n",
+        "x".repeat(65_520)
+    );
+    output.write_all(dash_prefix.as_bytes()).unwrap();
     for boundary in [64 * 1024, 128 * 1024, 192 * 1024] {
         for kind in ["BEGIN", "END"] {
-            for split in [1, 11, 26, 27] {
+            for (split, dashes) in [
+                (1, 0),
+                (11, 0),
+                (23, 0),
+                (26, 0),
+                (27, 0),
+                (16, 1),
+                (20, 8),
+                (1, 8),
+            ] {
                 if kind == "END" {
                     output
                         .write_all(b"-----BEGIN PRIVATE KEY-----\n")
                         .unwrap();
                 }
                 let line = format!(
-                    "{}-----{kind} PRIVATE KEY-----{}\n",
+                    "{}{}-----{kind} PRIVATE KEY-----{}\n",
                     "x".repeat(boundary - split),
+                    "-".repeat(dashes),
                     "x".repeat(128 * 1024)
                 );
                 output.write_all(line.as_bytes()).unwrap();
@@ -189,7 +205,7 @@ fn the_log_drain_masks_a_private_key_split_across_lines_and_writes() {
         stored.contains("Connection closed") && stored.contains("done"),
         "{stored}"
     );
-    assert_eq!(stored.matches("after oversized header\n").count(), 24);
+    assert_eq!(stored.matches("after oversized header\n").count(), 48);
 }
 
 #[test]
