@@ -71,19 +71,16 @@ switch or link does. Unknown capability or missing positive platform presence
 refuses with `SCREEN_EVIDENCE_INCOMPLETE` rather than guessing a target.
 The [screen projection](../qaren-core/src/qa/screen.ts) owns this policy.
 
-Private input capture is required before walking a screen. If it cannot be
-established safely, the walk refuses with `PRIVATE_INPUT_CAPTURE_UNKNOWN` without
-reinjection or a public-tree fallback. A React private-input deadline miss triggers
-at most one complete fresh capture, including native and React evidence, only
-when the failed attempt received no React private input values, observed no
-native input with a non-empty value or label, and observed no secure native node.
-Native input classification follows the [screen projection](../qaren-core/src/qa/screen.ts).
-Otherwise the timeout refuses immediately, preserving the privacy boundary.
-The late first reply is discarded; a second timeout refuses without another retry.
-Only an explicit deadline expiry is retryable: malformed payloads, unbound private
-evidence, validation and transport failures refuse immediately even if processing
-crosses the deadline. Native failures do not trigger this retry. Capture deadlines,
-budgets and item deadlines remain unchanged.
+The native snapshot is the privacy boundary before walking a screen. Capture
+refuses with `PRIVATE_INPUT_CAPTURE_UNKNOWN` unless native completeness is attested;
+the refusal reports only a value-free node count and fixed cause codes. Native
+acquisition failures also refuse without reinjection or a public-tree fallback.
+Native input classification follows the [screen projection](../qaren-core/src/qa/screen.ts),
+including Other or unknown nodes carrying nonempty values regardless of React evidence.
+The React digest adds semantics: a deadline, malformed-payload, validation or
+transport failure degrades React coverage to unknown without retrying capture.
+Operations requiring complete React evidence still refuse when that coverage is
+unavailable. Capture deadlines, budgets and item deadlines remain unchanged.
 
 Observed input values are masked before Jev requests; private values are also
 masked in reporting. Once sensitive input

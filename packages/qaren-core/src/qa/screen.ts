@@ -563,6 +563,7 @@ export function join(
     );
     if (
       nativeKind === 'input' ||
+      (nativeKind === 'other' && !!nonEmpty(n.value)) ||
       kind === 'input' ||
       element.secure ||
       possibleDigestInput ||

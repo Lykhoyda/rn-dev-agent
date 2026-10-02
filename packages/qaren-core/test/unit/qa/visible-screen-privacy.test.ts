@@ -146,6 +146,73 @@ test('a field value seen earlier stays masked when echoed after navigation', asy
   assert.equal(all.includes(secret), false, all);
 });
 
+test('generic native values stay private when React fails or reclassifies them', async () => {
+  const secret = 'wrapped-input-private';
+  for (const type of ['Other', 'UnrecognizedView', 'android.view.ViewGroup']) {
+    for (const reactState of ['failed', 'empty', 'text-role']) {
+      for (const history of [false, true]) {
+        const judge = scriptedJudge((questions) =>
+          Object.fromEntries(
+            Object.keys(questions).map((key) => [key, { type: 'noul', noul: 0.01 }]),
+          ),
+        );
+        const f = walker([], judge);
+        let captures = 0;
+        let shots = 0;
+        f.deps.screenshot = async (name) => {
+          shots++;
+          return name;
+        };
+        f.deps.captureScreen = () => {
+          const afterNavigation = history && captures++ > 0;
+          return captureScreen({
+            appId: 'com.test',
+            requirePrivateInputs: true,
+            native: async () =>
+              native(
+                [
+                  ...(!afterNavigation
+                    ? [
+                        {
+                          ref: '@wrapped',
+                          type,
+                          identifier: 'wrapped',
+                          label: 'Email',
+                          value: secret,
+                        },
+                      ]
+                    : []),
+                  { ref: '@echo', type: 'StaticText', label: `Echo: ${secret}` },
+                ],
+                afterNavigation,
+              ),
+            react: async () => {
+              if (afterNavigation) return digest();
+              if (reactState === 'failed') throw new Error('React transport failed');
+              return digest(
+                reactState === 'text-role' ? [{ role: 'text', testID: 'wrapped' }] : [],
+              );
+            },
+          });
+        };
+        const plan = history
+          ? '1. Tap "save"\n✓ The greeting shows an account\n✓ "Nothing like this"'
+          : '✓ "Nothing like this"';
+        const result = await runPlan(parsePlan(plan).blocks!, f.deps);
+        assert.equal(result.verdict, 'FAIL');
+        assert.match(result.failure!.seen, /Echo: •••/);
+        assert.equal(shots, 0);
+        if (history) {
+          assert.deepEqual(f.actions, ['press @e1']);
+          assert.ok(judge.requests.length > 0, 'the post-navigation check must reach the model');
+        }
+        const all = outputs(result, judge, f.rows);
+        assert.equal(all.includes(secret), false, `${type}/${reactState}/${history}: ${all}`);
+      }
+    }
+  }
+});
+
 test('filling an empty field then navigating to a native echo masks output and withholds screenshots', async () => {
   const typed = 'typed-c@example.test';
   const { f, judge, shots } = deps([
@@ -301,7 +368,7 @@ test('native pixel echoes withhold screenshots without changing short-token text
     });
     privacy.observe(screen);
     assert.equal(privacy.canScreenshot(), false);
-    assert.equal(privacy.redact('Echo x'), 'Echo x');
+    assert.equal(privacy.redact('Echo x'), echo.value ? '•••' : 'Echo x');
   }
   const privacy = new ObservedPrivacy(['absent-secret']);
   const screen = await captureScreen({

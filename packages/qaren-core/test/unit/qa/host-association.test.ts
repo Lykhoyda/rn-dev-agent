@@ -687,7 +687,6 @@ test('secure possible-input values stay out of model requests and durable failur
       if (variant === 'incomplete-native') f.native.truncated = true;
       if (variant === 'invalid-presence') f.native.presenceCapture.generation++;
       if (variant === 'missing-digest') f.produced.interactive = [];
-      if (!secure && variant === 'missing-digest') continue;
       const screen = await f.capture();
       assert.equal(screen.elements[2].kind, 'other');
       assert.equal(screen.elements[2].value, secure ? undefined : f.secret);
