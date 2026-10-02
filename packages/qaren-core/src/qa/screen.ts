@@ -7,6 +7,7 @@ import {
   duplicateNodes,
   navigationTitles,
   offscreenNodes,
+  outsideViewport,
   scrollChromeNodes,
   NATIVE_PRESENCE_UNKNOWN_REASONS,
 } from './native-presence.js';
@@ -331,7 +332,6 @@ function diagnosticHostKind(
   }
 }
 
-// Legacy offscreen flags are compatibility data, not semantic visibility evidence.
 export function join(
   nodes: NativeNode[],
   digest: DigestEntry[],
@@ -355,6 +355,7 @@ export function join(
     ) ??
       false);
   const offscreen = offscreenNodes(nodes, presence);
+  const viewport = outsideViewport(nodes);
   const chrome = scrollChromeNodes(nodes, presence);
   const associationDiagnostics = new Map<number, HostAssociationDiagnostic>();
   const associations = associateHosts(nodes, reactHostEvidence, presence, associationDiagnostics);
@@ -526,7 +527,7 @@ export function join(
       hittable: n.hittable === true,
       disabled: n.enabled === false || match?.disabled === true,
       secure: n.secure === true || n.type === 'SecureTextField',
-      offscreen: false,
+      offscreen: viewport.has(nodeIndex),
       semantic: {
         ...capabilities,
         ...(headings.has(nodeIndex) ? { heading: headings.get(nodeIndex)! } : {}),
@@ -662,7 +663,7 @@ export function join(
   // Image and container labels are accessibility-only, not assertion evidence.
   const visibleText: string[] = [];
   for (const { e, i } of ordered) {
-    if (duplicates.has(i) || e.kind === 'image' || e.kind === 'other') continue;
+    if (duplicates.has(i) || e.offscreen || e.kind === 'image' || e.kind === 'other') continue;
     const line =
       e.kind === 'input'
         ? e.value !== undefined

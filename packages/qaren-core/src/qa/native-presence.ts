@@ -227,13 +227,20 @@ export function offscreenNodes(
   nodes: NativeNode[],
   presence: NativePresence | undefined,
 ): Set<number> {
+  if (!presence) return new Set();
+  return new Set(
+    [...outsideViewport(nodes)].filter((i) => presence.nodes[i]?.status === 'unknown'),
+  );
+}
+
+// Only a single sized Window proves the viewport; without one nothing is claimed off screen.
+export function outsideViewport(nodes: NativeNode[]): Set<number> {
   const offscreen = new Set<number>();
   const windows = nodes.flatMap((node, i) => (node.type === 'Window' ? [i] : []));
   const window = windows.length === 1 ? nodes[windows[0]].rect : undefined;
-  if (!presence || !window || window.width <= 0 || window.height <= 0) return offscreen;
+  if (!window || window.width <= 0 || window.height <= 0) return offscreen;
   nodes.forEach((node, i) => {
-    if (presence.nodes[i]?.status !== 'unknown' || !node.rect) return;
-    if (node.rect.width <= 0 || node.rect.height <= 0) return;
+    if (!node.rect || node.rect.width <= 0 || node.rect.height <= 0) return;
     let visible = window;
     let parent = node.parentIndex;
     for (
