@@ -124,7 +124,7 @@ ${section(source, '  private func presenceRead<', '  private func presenceLabelS
       hiddenContentAbove: nil, hiddenContentBelow: nil)
   }
 ${section(source, '  func snapshotPlatformPresence(', '  // Descriptor and hierarchy stability')}
-  private func observePresence(_ descriptor: PresenceDescriptor, count: Int, predicateIsExact: Bool, app: XCUIApplication, deadline: Double, timing: PresenceCaptureTiming, unknownReason: ((PlatformPresenceObservation.UnknownReason) -> Void)? = nil) -> Double? {
+  private func observePresence(_ descriptor: PresenceDescriptor, count: Int, app: XCUIApplication, deadline: Double, timing: PresenceCaptureTiming, unknownReason: ((PlatformPresenceObservation.UnknownReason) -> Void)? = nil) -> Double? {
     observations += 1; now += observationMs; return now
   }
 }
