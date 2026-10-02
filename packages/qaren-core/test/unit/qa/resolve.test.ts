@@ -1,7 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parsePlan, parseStep } from '../../../dist/qa/plan.js';
-import { ACT, CHECK, judgeCheck, prepareTarget, resolveTarget } from '../../../dist/qa/resolve.js';
+import {
+  ACT,
+  CHECK,
+  decideScreen,
+  judgeCheck,
+  prepareTarget,
+  resolveTarget,
+} from '../../../dist/qa/resolve.js';
 import { JevError, confidentChoice } from '../../../dist/qa/questions.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { choice, element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
@@ -311,28 +318,70 @@ test('quoted visibility remains model-free even with duplicate labels in a batch
   assert.equal(ledger.steps[1].resolvedBy, 'exact');
 });
 
-test('uncertain visibility and candidate overflow name the resolution refusal, not an HTTP error', async () => {
+test('uncertain whole-claim visibility names the resolution refusal within the evidence bound', async () => {
   for (const line of ['1. Wait for Save', '1. Scroll until Save']) {
-    for (const overflow of [false, true]) {
+    for (const observed of [
+      save,
+      screen(Array.from({ length: 30 }, (_, i) => element(`@${i}`, `entry${i}`))),
+    ]) {
       const judge = scriptedJudge((q) => {
         assert.deepEqual(Object.keys(q), ['visibility_1']);
         assert.equal(q.visibility_1.type, 'noul');
         return { visibility_1: { type: 'noul', noul: 0.5 } };
       });
-      const f = walker(
-        [
-          overflow
-            ? screen(Array.from({ length: 31 }, (_, i) => element(`@${i}`, `entry${i}`)))
-            : save,
-        ],
-        judge,
-      );
+      const f = walker([observed], judge);
       const ledger = await runPlan(parsePlan(line).blocks!, f.deps);
       assert.equal(ledger.verdict, 'FAIL');
-      assert.match(ledger.failure?.seen ?? '', overflow ? /CANDIDATE_LIMIT/ : /VISIBILITY_UNSURE/);
+      assert.match(ledger.failure?.seen ?? '', /VISIBILITY_UNSURE/);
       assert.deepEqual(f.actions, []);
-      assert.equal(judge.requests.length, overflow ? 0 : 2);
-      assert.equal(f.captures(), overflow ? 1 : 2);
+      assert.equal(judge.requests.length, 2);
+      assert.equal(f.captures(), 2);
     }
+  }
+});
+
+test('whole-claim assertions refuse more than 30 contributions instead of splitting or truncating', async () => {
+  for (const count of [31, 65]) {
+    for (const line of ['✓ There are Save controls', '1. Wait for Save', '1. Scroll until Save']) {
+      const judge = scriptedJudge(() => assert.fail('overflow must not reach the model'));
+      const f = walker(
+        [screen(Array.from({ length: count }, (_, i) => element(`@${i}`, 'Save')))],
+        judge,
+      );
+      const result = await runPlan(parsePlan(line).blocks!, f.deps);
+      assert.equal(result.verdict, 'FAIL');
+      assert.match(result.steps[0].reason!, /^CANDIDATE_LIMIT:/);
+      assert.equal(f.captures(), 1);
+      assert.equal(judge.requests.length, 0);
+      assert.deepEqual(f.actions, []);
+    }
+  }
+});
+
+test('30 contributions support one whole-claim judgment, never an OR of fragment judgments', async () => {
+  const entries = screen(Array.from({ length: 30 }, (_, i) => element(`@${i}`, `entry${i}`)));
+  for (const [noul, verdict] of [
+    [0.99, 'present'],
+    [0.01, 'absent'],
+  ] as const) {
+    const judge = scriptedJudge((questions, _index, state) => {
+      assert.deepEqual(Object.keys(questions), ['visibility_1']);
+      assert.match(
+        questions.visibility_1.instructions,
+        /WHOLE expectation: both entry0 and entry29/,
+      );
+      assert.ok(state && typeof state === 'object' && 'assertionEvidence' in state);
+      const evidence = state.assertionEvidence as { observed: string[]; unknown: unknown[] };
+      assert.equal(evidence.observed.length, 30);
+      assert.equal(new Set(evidence.observed).size, 30);
+      assert.deepEqual(evidence.unknown, []);
+      assert.equal(evidence.observed[0], 'Button "entry0"');
+      assert.equal(evidence.observed[29], 'Button "entry29"');
+      assert.ok(!('visibilityEvidenceGroups' in state));
+      return { visibility_1: { type: 'noul', noul } };
+    });
+    const wait = { kind: 'wait' as const, target: { phrase: 'both entry0 and entry29' }, line: 1 };
+    assert.deepEqual((await decideScreen(entries, judge, undefined, wait)).visibility, { verdict });
+    assert.equal(judge.requests.length, 1);
   }
 });

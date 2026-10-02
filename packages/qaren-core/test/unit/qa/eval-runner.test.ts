@@ -4,7 +4,30 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { evaluateCase, evaluateSyntheticCase, type EvalCase } from '../../jev-evals/run.ts';
 import { choice, element, screen, scriptedJudge } from './judgment-fixtures.ts';
 
-test('frozen Screens retain literal/check coverage and refuse semantic actions without attested provenance', async () => {
+const missingCheckCoverage = new Set([
+  'failed-check.json',
+  'protected-greeting-other-value.json',
+  'protected-name-equal.json',
+  'protected-name-property.json',
+  'protected-name-unequal.json',
+  'protected-pin-equal.json',
+  'saved-check.json',
+]);
+const overBoundHeadings = new Set([
+  'home-injected-title.json',
+  'home-settings-heading.json',
+  'home-welcome-heading.json',
+  'home-wrong-title.json',
+]);
+
+function frozenAssertionRefusal(name: string) {
+  if (missingCheckCoverage.has(name))
+    return { kind: 'check', refuse: 'SCREEN_EVIDENCE_INCOMPLETE' };
+  if (overBoundHeadings.has(name)) return { kind: 'visibility', refuse: 'CANDIDATE_LIMIT' };
+  return undefined;
+}
+
+test('frozen Screens preserve quoted targeting but refuse missing assertion coverage and oversized evidence', async () => {
   const root = new URL('../../jev-evals/cases/', import.meta.url);
   const names = readdirSync(root).filter((n) => n.endsWith('.json'));
   const awaitingProvenance = new Set([
@@ -15,7 +38,11 @@ test('frozen Screens retain literal/check coverage and refuse semantic actions w
     'profile-target.json',
     'verb-fallback.json',
   ]);
-  assert.ok(names.length >= 11);
+  assert.equal(names.length, 18);
+  assert.equal(missingCheckCoverage.size, 7);
+  assert.equal(overBoundHeadings.size, 4);
+  for (const name of [...missingCheckCoverage, ...overBoundHeadings])
+    assert.ok(names.includes(name), name);
   for (const name of awaitingProvenance) assert.ok(names.includes(name), name);
   for (const name of names) {
     const fixture: EvalCase = JSON.parse(readFileSync(new URL(name, root), 'utf8'));
@@ -29,7 +56,8 @@ test('frozen Screens retain literal/check coverage and refuse semantic actions w
               {
                 type: 'noul',
                 noul:
-                  fixture.expected.kind === 'check' && fixture.expected.verdict === 'pass'
+                  (fixture.expected.kind === 'check' && fixture.expected.verdict === 'pass') ||
+                  (fixture.expected.kind === 'visibility' && fixture.expected.verdict === 'present')
                     ? 0.9
                     : 0.1,
               },
@@ -49,6 +77,7 @@ test('frozen Screens retain literal/check coverage and refuse semantic actions w
       ),
     );
     const result = await evaluateCase(fixture, judge);
+    const assertionRefusal = frozenAssertionRefusal(name);
     if (awaitingProvenance.has(name)) {
       assert.deepEqual(
         result,
@@ -61,24 +90,25 @@ test('frozen Screens retain literal/check coverage and refuse semantic actions w
         ),
         `${name}: only verb parsing may call Jev before screen provenance is established`,
       );
+    } else if (assertionRefusal) {
+      assert.deepEqual(result, { pass: false, actual: assertionRefusal }, name);
+      assert.equal(judge.requests.length, 0, name);
     } else {
       assert.equal(result.pass, true, name);
-      assert.ok(
-        judge.requests.length > 0 ||
-          (fixture.expected.kind === 'check' && fixture.expected.verdict === 'unsure'),
-      );
+      assert.equal(name, 'ambiguous-save.json');
+      assert.equal(judge.requests.length, 1);
     }
     for (const value of fixture.typedValues ?? [])
       assert.ok(!JSON.stringify(judge.requests).includes(value), name);
   }
 });
 
-test('all frozen authored Screens exercise a separate synthetic model contract without changing production admission', async () => {
+test('synthetic authored targets do not grant frozen assertions provenance or bypass the whole-claim bound', async () => {
   const root = new URL('../../jev-evals/cases/', import.meta.url);
   const names = readdirSync(root)
     .filter((name) => name.endsWith('.json'))
     .sort();
-  assert.equal(names.length, 14);
+  assert.equal(names.length, 18);
   for (const name of names) {
     const fixture: EvalCase = JSON.parse(readFileSync(new URL(name, root), 'utf8'));
     const before = structuredClone(fixture.screen);
@@ -92,7 +122,8 @@ test('all frozen authored Screens exercise a separate synthetic model contract w
               {
                 type: 'noul',
                 noul:
-                  fixture.expected.kind === 'check' && fixture.expected.verdict === 'pass'
+                  (fixture.expected.kind === 'check' && fixture.expected.verdict === 'pass') ||
+                  (fixture.expected.kind === 'visibility' && fixture.expected.verdict === 'present')
                     ? 0.9
                     : 0.1,
               },
@@ -113,7 +144,9 @@ test('all frozen authored Screens exercise a separate synthetic model contract w
     );
     assert.deepEqual(
       await evaluateSyntheticCase(fixture, judge),
-      { pass: true, actual: fixture.expected },
+      frozenAssertionRefusal(name)
+        ? { pass: false, actual: frozenAssertionRefusal(name) }
+        : { pass: true, actual: fixture.expected },
       name,
     );
     assert.deepEqual(fixture.screen, before, `${name}: synthetic evaluation must not add evidence`);
@@ -294,9 +327,9 @@ test('explicit synthetic evidence exercises semantic eval targets, fills, scroll
   }
 });
 
-test('eval mismatches are failures and an uncertain frozen check is re-asked only once', async () => {
+test('eval mismatches are failures and a complete empty-screen check is re-asked only once', async () => {
   const fixture: EvalCase = {
-    screen: { front: 'app', elements: [], visibleText: [] },
+    screen: screen([]),
     line: '✓ Ready',
     expected: { kind: 'check', verdict: 'pass' },
   };
@@ -308,4 +341,59 @@ test('eval mismatches are failures and an uncertain frozen check is re-asked onl
     actual: { kind: 'check', verdict: 'unsure' },
   });
   assert.equal(judge.requests.length, 2);
+});
+
+test('bounded qualified-heading evals compare the wait verdict and re-ask uncertainty once', async () => {
+  const fixture: EvalCase = {
+    screen: screen([
+      element('@title', 'Welcome', {
+        kind: 'text',
+        semantic: {
+          press: 'unsupported',
+          fill: 'unsupported',
+          visibility: 'visible',
+          nativePresence: { kind: 'text', labelSource: 'direct', structural: false },
+          heading: { kind: 'declared-heading', hostIndex: 0, anchorRef: '@title', bodyRefs: [] },
+        },
+      }),
+    ]),
+    line: 'Wait for the welcome heading',
+    expected: { kind: 'visibility', verdict: 'present' },
+  };
+  const answering = (nouls: number[]) => {
+    let call = 0;
+    return scriptedJudge((questions) =>
+      Object.fromEntries(
+        Object.keys(questions).map((id) => [id, { type: 'noul', noul: nouls[call++] ?? 0.5 }]),
+      ),
+    );
+  };
+  assert.deepEqual(await evaluateCase(fixture, answering([0.9])), {
+    pass: true,
+    actual: { kind: 'visibility', verdict: 'present' },
+  });
+  assert.deepEqual(await evaluateCase(fixture, answering([0.1])), {
+    pass: false,
+    actual: { kind: 'visibility', verdict: 'pending' },
+  });
+  const unsure = answering([0.5, 0.9]);
+  assert.deepEqual(await evaluateCase(fixture, unsure), {
+    pass: true,
+    actual: { kind: 'visibility', verdict: 'present' },
+  });
+  assert.equal(unsure.requests.length, 2);
+});
+
+test('eval check refusals stay refusals rather than becoming verdict objects or model re-asks', async () => {
+  const fixture: EvalCase = {
+    screen: { front: 'app', elements: [], visibleText: [] },
+    line: '✓ Ready',
+    expected: { kind: 'check', verdict: 'pass' },
+  };
+  const judge = scriptedJudge(() => assert.fail('missing coverage cannot reach the model'));
+  assert.deepEqual(await evaluateCase(fixture, judge), {
+    pass: false,
+    actual: { kind: 'check', refuse: 'SCREEN_EVIDENCE_INCOMPLETE' },
+  });
+  assert.equal(judge.requests.length, 0);
 });

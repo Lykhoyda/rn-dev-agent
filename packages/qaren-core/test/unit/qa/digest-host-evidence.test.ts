@@ -371,9 +371,87 @@ test('current helper replaces a warm version 77 producer and reinjection stays i
   const sandbox = createSandbox({ fiberRoot: buildFiber({ hostType: 'RCTView' }) });
   Object.assign(sandbox, { __QAREN: { __v: 77 } });
   vm.runInContext(INJECTED_HELPERS, sandbox);
-  assert.equal(vm.runInContext('__QAREN.__v', sandbox), 87);
+  assert.equal(vm.runInContext('__QAREN.__v', sandbox), 90);
   assert.equal(readDigest(sandbox).hostEvidence.complete, true);
   const producer = vm.runInContext('__QAREN.getTree', sandbox);
   vm.runInContext(INJECTED_HELPERS, sandbox);
   assert.equal(vm.runInContext('__QAREN.getTree', sandbox), producer);
+});
+
+test('one control identity forwards through a single identity-less wrapper view', () => {
+  const tab = (wrapperChildren: FiberSpec[]) =>
+    digest([
+      {
+        name: 'TabItem',
+        props: { testID: 'tab-home', onPress: handler },
+        children: [{ hostType: 'RCTView', props: {}, children: wrapperChildren }],
+      },
+    ]).interactive;
+  const pressable: FiberSpec = {
+    name: 'Pressable',
+    props: { testID: 'tab-home', onPress: handler },
+    children: [{ hostType: 'RCTView', props: { testID: 'tab-home', onClick: handler } }],
+  };
+  assert.deepEqual(
+    tab([pressable]).map((d: { testID?: string }) => d.testID),
+    ['tab-home'],
+  );
+  assert.equal(
+    tab([pressable, { hostType: 'RCTView', props: {} }]).length,
+    2,
+    'a wrapper with several children does not forward one identity',
+  );
+});
+
+test('a nativeID is reported as a nativeID, never as a testID', () => {
+  const [entry] = digest([
+    { name: 'Pressable', props: { nativeID: '17', onPress: handler } },
+  ]).interactive;
+  assert.equal(entry.testID, undefined);
+  assert.equal(entry.nativeID, '17');
+});
+
+test('an entry interactive only by role or component name is marked handlerless', () => {
+  const entries = digest([
+    { hostType: 'RCTView', props: { accessibilityRole: 'adjustable' } },
+    { name: 'Pressable', props: {} },
+    { name: 'Switch', props: { value: true, onValueChange: handler } },
+    { name: 'Pressable', props: { onLongPress: handler } },
+    { name: 'TextInput', props: {} },
+  ]).interactive;
+  assert.deepEqual(
+    entries.map((d: { handlerless?: boolean }) => d.handlerless === true),
+    [true, true, false, false, false],
+  );
+});
+
+test('observations under an accessibility-hidden host view are marked hidden', () => {
+  const pressable = (testID: string): FiberSpec => ({
+    name: 'Pressable',
+    props: { testID, onPress: handler },
+    children: [{ hostType: 'RCTView', props: { testID, onClick: handler } }],
+  });
+  for (const hiding of [
+    { 'aria-hidden': true },
+    { accessibilityElementsHidden: true },
+    { importantForAccessibility: 'no-hide-descendants' },
+  ]) {
+    const tree = digest([
+      { hostType: 'RCTView', props: hiding, children: [pressable('home-btn')] },
+      pressable('tasks-btn'),
+    ]);
+    assert.deepEqual(
+      Object.fromEntries(
+        tree.interactive.map((d: { testID?: string; hidden?: boolean }) => [
+          d.testID,
+          d.hidden === true,
+        ]),
+      ),
+      { 'home-btn': true, 'tasks-btn': false },
+    );
+    const host = (testID: string) =>
+      tree.hostEvidence.hosts.find((h: { testID?: string }) => h.testID === testID);
+    assert.equal(host('home-btn').hidden, true);
+    assert.equal(host('tasks-btn').hidden, undefined);
+  }
 });

@@ -79,6 +79,287 @@ fn request(repo: &Path, app: &Path, step_seconds: u64) -> RunRequest {
     }
 }
 
+fn configure_workspace(app: &Path, workspace: &str, scheme: &str) {
+    std::fs::write(
+        app.join(".qaren/config.yaml"),
+        format!(
+            "appId: com.rndevagent.testapp\nmetroPort: 8791\ndevClientScheme: rndatest\nios:\n  build:\n    workspace: {workspace}\n    scheme: {scheme}\n"
+        ),
+    )
+    .unwrap();
+}
+
+fn assert_xcode_products_retained(run_dir: &Path) {
+    assert_eq!(
+        std::fs::read_to_string(run_dir.join("ios-build/libNative.a")).unwrap(),
+        "library"
+    );
+    assert_eq!(
+        std::fs::read_to_string(
+            run_dir.join("ios-derived-data/Build/Intermediates.noindex/compile.o")
+        )
+        .unwrap(),
+        "intermediate"
+    );
+}
+
+#[test]
+fn workspace_check_uses_a_gated_finite_build_and_persists_the_verified_artifact() {
+    let (repo, app) = app_repo();
+    common::write_ios_workspace(&app, "ios/Native App.xcworkspace");
+    configure_workspace(&app, "ios/Native App.xcworkspace", "Native Debug");
+    let canaries = [
+        repo.join("runs/other-run/ios-build/canary"),
+        repo.join("runs/other-run/ios-derived-data/canary"),
+        app.join("ios/DerivedData/canary"),
+    ];
+    for path in &canaries {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "keep").unwrap();
+    }
+    let mut mock = MockRunner::new();
+    mock.build_log = Some("finite Xcode build log\n".into());
+    script_preflight(&mut mock, &repo);
+    mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+    script_provision_build(&mut mock, "xcodebuild", common::IOS_NATIVE_FILES);
+    mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
+    script_core_identity(&mut mock);
+    script_teardown(&mut mock);
+
+    let receipt = run(&mut mock, &request(&repo, &app, 30));
+
+    assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
+    assert_eq!(mock.remaining(), 0);
+    assert_direct_ios_launch(&mock);
+    let build = mock
+        .calls
+        .iter()
+        .find(|c| c.label == "xcodebuild-ios")
+        .unwrap();
+    assert_eq!(build.program, "/bin/bash");
+    assert!(build.args[3].ends_with("exec \"$@\" >&2"));
+    assert_eq!(mock.piped_stdin_text(0), "start\n");
+    assert!(build.args.iter().any(|a| a == "Native Debug"));
+    assert!(!labels(&mock)
+        .iter()
+        .any(|l| matches!(l.as_str(), "expo-run-ios" | "expo-ios-build-help")));
+    let record = RunRecord::load(&repo.join("runs"), &run_id()).unwrap();
+    assert_eq!(
+        record.scenario.build.ios_workspace.unwrap().workspace,
+        "ios/Native App.xcworkspace"
+    );
+    let artifact = record.build.unwrap().artifact.unwrap();
+    assert_eq!(
+        qaren::buildplan::hash_artifact(&artifact.path).unwrap(),
+        artifact.sha256
+    );
+    let run_dir = repo.join("runs").join(run_id());
+    assert!(!run_dir.join("ios-build").exists());
+    assert!(!run_dir.join("ios-derived-data").exists());
+    assert_eq!(
+        std::fs::read_to_string(run_dir.join("logs/xcodebuild-ios.log")).unwrap(),
+        "finite Xcode build log\n"
+    );
+    for path in canaries {
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "keep");
+    }
+    assert_eq!(receipt.cleanup["device_lease"], "removed");
+}
+
+#[test]
+fn workspace_products_are_retained_when_cache_publication_fails() {
+    for failure in ["copy", "state"] {
+        let (repo, app) = app_repo();
+        common::write_ios_workspace(&app, "ios/Native.xcworkspace");
+        configure_workspace(&app, "ios/Native.xcworkspace", "Native");
+        let cache = qaren::buildplan::cache_dir(&repo);
+        std::fs::create_dir_all(&cache).unwrap();
+        if failure == "copy" {
+            std::fs::write(cache.join("artifacts"), "block cache copy").unwrap();
+        } else {
+            std::fs::create_dir(qaren::buildplan::state_path(
+                &repo,
+                "ios",
+                "com.rndevagent.testapp",
+            ))
+            .unwrap();
+        }
+        let mut mock = MockRunner::new();
+        script_preflight(&mut mock, &repo);
+        mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+        script_provision_build(&mut mock, "xcodebuild", common::IOS_NATIVE_FILES);
+        mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
+        script_core_identity(&mut mock);
+        script_teardown(&mut mock);
+
+        let receipt = run(&mut mock, &request(&repo, &app, 30));
+
+        assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
+        assert_eq!(mock.remaining(), 0);
+        let note = if failure == "copy" {
+            "artifact_cache"
+        } else {
+            "native_cache_state"
+        };
+        assert!(receipt.outcomes[note].starts_with(if failure == "copy" {
+            "skipped:"
+        } else {
+            "could not persist"
+        }));
+        let run_dir = repo.join("runs").join(run_id());
+        assert!(run_dir.join("ios-build/testapp.app").is_dir());
+        assert_xcode_products_retained(&run_dir);
+    }
+}
+
+#[test]
+fn workspace_retirement_refuses_symlinked_roots_before_deleting_any_products() {
+    for root in ["ios-build", "ios-derived-data"] {
+        let (repo, app) = app_repo();
+        common::write_ios_workspace(&app, "ios/Native.xcworkspace");
+        configure_workspace(&app, "ios/Native.xcworkspace", "Native");
+        let outside = repo.join("runs/outside-build");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("canary"), "keep").unwrap();
+        let mut mock = MockRunner::new();
+        mock.symlink_build_root = Some(root);
+        script_preflight(&mut mock, &repo);
+        mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+        script_provision_build(&mut mock, "xcodebuild", common::IOS_NATIVE_FILES);
+        mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
+        script_core_identity(&mut mock);
+        script_teardown(&mut mock);
+
+        let receipt = run(&mut mock, &request(&repo, &app, 30));
+
+        assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
+        assert_eq!(mock.remaining(), 0);
+        assert!(receipt.outcomes["ios_build_output"].starts_with("retained:"));
+        let run_dir = repo.join("runs").join(run_id());
+        assert!(run_dir.join(root).is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(outside.join("canary")).unwrap(),
+            "keep"
+        );
+        assert!(run_dir.join("ios-build/testapp.app").is_dir());
+        assert_xcode_products_retained(&run_dir);
+        let record = RunRecord::load(&repo.join("runs"), &run_id()).unwrap();
+        let artifact = record.build.unwrap().artifact.unwrap();
+        assert_eq!(
+            qaren::buildplan::hash_artifact(&artifact.path).unwrap(),
+            artifact.sha256
+        );
+    }
+}
+
+#[test]
+fn workspace_cache_persistence_reuses_only_the_same_workspace_and_scheme() {
+    use qaren::buildplan::{self, BuildDecision, StateStatus};
+    let (repo, app) = app_repo();
+    for workspace in ["ios/First.xcworkspace", "ios/Second.xcworkspace"] {
+        common::write_ios_workspace(&app, workspace);
+    }
+    let mut fingerprints = Vec::new();
+    let mut artifacts = Vec::new();
+    for (index, (workspace, scheme, reuse)) in [
+        ("ios/First.xcworkspace", "Debug", false),
+        ("ios/First.xcworkspace", "Debug", true),
+        ("ios/First.xcworkspace", "Other Debug", false),
+        ("ios/Second.xcworkspace", "Other Debug", false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        configure_workspace(&app, workspace, scheme);
+        let mut req = request(&repo, &app, 30);
+        req.runs_root = repo.join(format!("runs-{index}"));
+        let mut mock = MockRunner::new();
+        script_preflight(&mut mock, &repo);
+        mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+        if reuse {
+            mock.expect_run("ls-files", CmdOutput::success(common::IOS_NATIVE_FILES));
+            common::script_ios_install_and_launch(&mut mock);
+            script_ready_recheck(&mut mock, common::IOS_NATIVE_FILES);
+        } else {
+            script_provision_build(&mut mock, "xcodebuild", common::IOS_NATIVE_FILES);
+        }
+        mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
+        script_core_identity(&mut mock);
+        script_teardown(&mut mock);
+
+        let receipt = run(&mut mock, &req);
+
+        assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
+        assert_eq!(mock.remaining(), 0);
+        let plan = receipt.build.unwrap();
+        assert_eq!(plan.decision == BuildDecision::Reuse, reuse);
+        let StateStatus::Loaded(state) =
+            buildplan::load_state(&repo, "ios", "com.rndevagent.testapp")
+        else {
+            panic!("successful build must persist reusable native state");
+        };
+        assert_eq!(state.fingerprint, plan.fingerprint);
+        let artifact = state.artifact.unwrap();
+        assert_eq!(
+            artifact.sha256,
+            buildplan::hash_artifact(&artifact.path).unwrap()
+        );
+        if reuse {
+            assert!(!mock.calls.iter().any(|c| matches!(
+                c.label.as_str(),
+                "xcodebuild-ios" | "expo-run-ios" | "expo-prebuild"
+            )));
+            let install = mock
+                .calls
+                .iter()
+                .find(|c| c.label == "simctl-install")
+                .unwrap();
+            assert_eq!(install.args[3], artifact.path.to_string_lossy());
+        }
+        fingerprints.push(state.fingerprint);
+        artifacts.push(artifact.path);
+    }
+    assert_eq!(fingerprints[0], fingerprints[1]);
+    assert_eq!(artifacts[0], artifacts[1]);
+    assert_ne!(fingerprints[1], fingerprints[2]);
+    assert_ne!(artifacts[1], artifacts[2]);
+    assert_ne!(fingerprints[2], fingerprints[3]);
+    assert_ne!(artifacts[2], artifacts[3]);
+}
+
+#[test]
+fn invalid_or_missing_workspace_refuses_before_boot_reset_or_any_command() {
+    for workspace in ["ios/Missing.xcworkspace", "../Escape.xcworkspace"] {
+        let (repo, app) = app_repo();
+        configure_workspace(&app, workspace, "Native Debug");
+        let mut req = request(&repo, &app, 30);
+        req.device = Some(UDID.into());
+        req.boot_device = true;
+        req.fresh_install = true;
+        let mut mock = MockRunner::new();
+        let receipt = run(&mut mock, &req);
+        assert_eq!(
+            receipt.result,
+            if workspace.starts_with("ios/") {
+                ReceiptResult::Refused
+            } else {
+                ReceiptResult::Failed
+            }
+        );
+        assert_eq!(
+            receipt.failure.unwrap().code,
+            if workspace.starts_with("ios/") {
+                FailureCode::IosBuildCapabilityUnavailable
+            } else {
+                FailureCode::ScenarioInvalid
+            }
+        );
+        assert!(mock.calls.is_empty());
+        assert!(!req.runs_root.exists());
+        assert!(!req.lock_root.exists());
+    }
+}
+
 #[test]
 fn missing_ios_launch_scheme_refuses_before_boot_reset_or_any_command() {
     let (repo, app) = app_repo();
@@ -239,8 +520,9 @@ fn failed_spawn_retirement_save_or_interruption_retains_pending_and_both_locks()
 
 #[test]
 fn finite_build_failures_never_install_or_walk_and_unproven_groups_retain_both_locks() {
-    for mode in [
+    let modes = [
         "missing",
+        "ambiguous",
         "wrong_bundle",
         "unsupported_launcher",
         "nonzero",
@@ -248,16 +530,40 @@ fn finite_build_failures_never_install_or_walk_and_unproven_groups_retain_both_l
         "unknown_group",
         "dead_leader",
         "unknown_identity",
-    ] {
+    ];
+    for (workspace, mode) in [false, true]
+        .into_iter()
+        .flat_map(|workspace| modes.map(|mode| (workspace, mode)))
+    {
         let (repo, app) = app_repo();
+        if workspace {
+            common::write_ios_workspace(&app, "ios/Native.xcworkspace");
+            configure_workspace(&app, "ios/Native.xcworkspace", "Native");
+        }
         let req = request(&repo, &app, 30);
         let mut mock = MockRunner::new();
         mock.omit_app = mode == "missing";
+        mock.ambiguous_app = mode == "ambiguous";
         script_preflight(&mut mock, &repo);
-        common::script_ios_deps(&mut mock);
-        mock.expect_run("ls-files", CmdOutput::success(""));
+        if workspace {
+            mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+        } else {
+            common::script_ios_deps(&mut mock);
+        }
+        mock.expect_run(
+            "ls-files",
+            CmdOutput::success(if workspace {
+                common::IOS_NATIVE_FILES
+            } else {
+                ""
+            }),
+        );
         mock.expect_spawn_piped(
-            "expo run:ios",
+            if workspace {
+                "xcodebuild"
+            } else {
+                "expo run:ios"
+            },
             5000,
             "",
             match mode {
@@ -325,6 +631,11 @@ fn finite_build_failures_never_install_or_walk_and_unproven_groups_retain_both_l
             c.label.as_str(),
             "simctl-install" | "simctl-launch" | "expo-start" | "core-walk"
         )));
+        if workspace {
+            assert!(!labels(&mock)
+                .iter()
+                .any(|l| matches!(l.as_str(), "expo-run-ios" | "expo-ios-build-help")));
+        }
         let record = RunRecord::load(&req.runs_root, &run_id()).unwrap();
         assert_eq!(
             record.resources.build_process().is_some(),
@@ -358,6 +669,57 @@ fn finite_build_failures_never_install_or_walk_and_unproven_groups_retain_both_l
             );
         }
         assert!(record.build.unwrap().artifact.is_none());
+        if workspace && mode != "unknown_identity" {
+            let run_dir = req.runs_root.join(run_id());
+            assert_xcode_products_retained(&run_dir);
+        }
+    }
+}
+
+#[test]
+fn workspace_changed_by_clean_prebuild_refuses_before_creating_output_or_building() {
+    for symlink in [false, true] {
+        let (repo, app) = app_repo();
+        common::write_ios_workspace(&app, "ios/Native.xcworkspace");
+        configure_workspace(&app, "ios/Native.xcworkspace", "Native");
+        let req = request(&repo, &app, 30);
+        let mut mock = MockRunner::new();
+        let path = app.join("ios/Native.xcworkspace");
+        mock.workspace_mutation = Some(if symlink {
+            common::WorkspaceMutation::Symlink(path)
+        } else {
+            common::WorkspaceMutation::Remove(path)
+        });
+        script_preflight(&mut mock, &repo);
+        mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+        mock.expect_run("ls-files", CmdOutput::success(""));
+        mock.expect_spawn_piped("expo prebuild", 5000, "", Some(0));
+        mock.expect_run("ps", CmdOutput::success(LSTART));
+        mock.expect_run("ps", CmdOutput::success("qaren-build"));
+        mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+
+        let receipt = run(&mut mock, &req);
+
+        assert_eq!(
+            receipt.result,
+            ReceiptResult::Refused,
+            "{:?}",
+            receipt.failure
+        );
+        assert_eq!(
+            receipt.failure.unwrap().code,
+            FailureCode::IosBuildCapabilityUnavailable
+        );
+        assert_eq!(mock.remaining(), 0);
+        assert_eq!(mock.piped_stdin_text(0), "start\n");
+        assert!(!req.runs_root.join(run_id()).join("ios-build").exists());
+        assert!(!labels(&mock).iter().any(|l| matches!(
+            l.as_str(),
+            "xcodebuild-ios" | "expo-run-ios" | "simctl-install" | "expo-start" | "simctl-launch"
+        )));
+        let record = RunRecord::load(&req.runs_root, &run_id()).unwrap();
+        assert!(record.resources.lease.is_none());
+        assert!(record.resources.build_lock.is_none());
     }
 }
 
@@ -427,7 +789,7 @@ fn installed_dependencies_can_replace_a_compatible_cli_and_refuse_before_boot_or
         "expo run:ios --help",
         CmdOutput::success(common::IOS_BUILD_HELP),
     );
-    qaren::adapters::ios::require_generic_build(&mut mock, &app).unwrap();
+    qaren::adapters::ios::require_build(&mut mock, &app, None).unwrap();
     script_preflight_inventory(
         &mut mock,
         &repo,
@@ -531,8 +893,16 @@ fn script_provision(mock: &mut MockRunner) {
 }
 
 fn script_provision_after_deps(mock: &mut MockRunner) {
-    mock.expect_run("ls-files", CmdOutput::success(""));
-    common::script_finite_ios_build(mock);
+    script_provision_build(mock, "expo run:ios", "");
+}
+
+fn script_provision_build(mock: &mut MockRunner, command: &str, native_files: &str) {
+    mock.expect_run("ls-files", CmdOutput::success(native_files));
+    common::script_finite_ios_build_with(mock, command);
+    script_ready_recheck(mock, native_files);
+}
+
+fn script_ready_recheck(mock: &mut MockRunner, native_files: &str) {
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n"))); // liveness probe
     mock.expect_run("ps", CmdOutput::success("S\n")); // not a zombie
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
@@ -546,7 +916,7 @@ fn script_provision_after_deps(mock: &mut MockRunner) {
         "simctl spawn",
         CmdOutput::success("512\t0\tUIKitApplication:com.rndevagent.testapp[abc]"),
     );
-    mock.expect_run("ls-files", CmdOutput::success("")); // fingerprint recheck
+    mock.expect_run("ls-files", CmdOutput::success(native_files)); // fingerprint recheck
 }
 
 fn script_core_identity(mock: &mut MockRunner) {
@@ -665,7 +1035,7 @@ fn assert_direct_ios_launch(mock: &MockRunner) {
             UDID,
             "com.rndevagent.testapp",
             "--initialUrl",
-            "http://127.0.0.1:8791"
+            "http://127.0.0.1:8791/?disableOnboarding=1"
         ]
     );
     assert_subsequence(
@@ -1677,6 +2047,29 @@ fn boot_device_requires_ios_and_an_exact_uuid_before_any_preflight() {
         assert!(!req.lock_root.exists());
         assert!(!req.runs_root.exists());
     }
+}
+
+#[test]
+fn android_check_does_not_require_the_shared_configs_ios_workspace() {
+    let (repo, app) = app_repo();
+    configure_workspace(&app, "ios/Missing.xcworkspace", "Native");
+    let mut req = request(&repo, &app, 30);
+    req.platform = Platform::Android;
+    let mut mock = MockRunner::new();
+    mock.expect_run("node --version", CmdOutput::success("v24.14.0\n"));
+    script_plan(&mut mock, &repo);
+
+    let receipt = run(&mut mock, &req);
+
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    assert_eq!(
+        receipt.failure.unwrap().code,
+        FailureCode::PlatformUnsupported
+    );
+    assert_eq!(mock.remaining(), 0);
+    assert_eq!(mock.calls.len(), 2);
+    assert!(!req.lock_root.exists());
+    assert!(!req.runs_root.exists());
 }
 
 #[test]

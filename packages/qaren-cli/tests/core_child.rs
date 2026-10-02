@@ -348,6 +348,107 @@ fn jev_refusal_accounting_is_optional_but_strict_when_present() {
 }
 
 #[test]
+fn jev_deadline_and_retry_backoff_diagnostic_roundtrip_in_results_and_refusals() {
+    let jev = serde_json::json!({
+        "calls": 2, "medianMs": 25, "inputTokens": 0, "callDetails": [
+            {"scope":"walk", "questionIds":["front"], "inputTokens":null, "ms":10, "outcome":"deadline"},
+            {"scope":"walk", "questionIds":["front"], "inputTokens":null, "ms":40, "outcome":"http", "status":429, "diagnostic":"retry-after-outside-window"}
+        ]
+    });
+    for (verdict, exit) in [("PASS", 0), ("FAIL", 1), ("REFUSED", 4)] {
+        let repo = common::temp_repo();
+        let mut result: serde_json::Value = serde_json::from_str(&pass_ledger(&[])).unwrap();
+        result["verdict"] = serde_json::json!(verdict);
+        result["jev"] = jev.clone();
+        result["code"] = serde_json::json!("JEV_DEADLINE_EXCEEDED");
+        result["message"] = serde_json::json!("the observation or item deadline expired");
+        let mut mock = MockRunner::new();
+        mock.expect_spawn_piped(
+            "walk.js",
+            9000,
+            &format!("{}\n", envelope(2, "result", &result.to_string())),
+            Some(exit),
+        );
+        let outcome = run_child(&mut mock, &repo.join("core.log"));
+        assert!(
+            outcome.failure.is_none(),
+            "{verdict}: {:?}",
+            outcome.failure
+        );
+        assert_eq!(outcome.ledger.verdict, verdict);
+        let expected = match verdict {
+            "PASS" => Verdict::Pass,
+            "FAIL" => Verdict::Fail,
+            _ => Verdict::Refused {
+                code: "JEV_DEADLINE_EXCEEDED".to_string(),
+                message: "the observation or item deadline expired".to_string(),
+            },
+        };
+        assert_eq!(outcome.verdict, expected);
+        assert_eq!(serde_json::to_value(outcome.ledger.jev).unwrap(), jev);
+    }
+}
+
+#[test]
+fn jev_optional_diagnostic_matches_status_missing_and_null_policy() {
+    let call = serde_json::json!({
+        "scope":"walk", "questionIds":[], "inputTokens":null, "ms":0, "outcome":"deadline"
+    });
+    for explicit_null in [false, true] {
+        let mut supplied = call.clone();
+        if explicit_null {
+            supplied["status"] = serde_json::Value::Null;
+            supplied["diagnostic"] = serde_json::Value::Null;
+        }
+        let parsed: core::JevCall = serde_json::from_value(supplied).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), call);
+    }
+}
+
+#[test]
+fn malformed_jev_diagnostics_are_rejected_in_results_and_refusals() {
+    use serde_json::json;
+    for diagnostic in [
+        json!("arbitrary"),
+        json!(""),
+        json!(42),
+        json!(true),
+        json!([]),
+        json!({}),
+        json!({"retry-after-outside-window": null}),
+    ] {
+        for (verdict, exit) in [("PASS", 0), ("FAIL", 1), ("REFUSED", 4)] {
+            let repo = common::temp_repo();
+            let mut result: serde_json::Value = serde_json::from_str(&pass_ledger(&[])).unwrap();
+            result["verdict"] = json!(verdict);
+            result["jev"] = json!({
+                "calls":1, "medianMs":0, "callDetails":[{
+                    "scope":"walk", "questionIds":[], "inputTokens":null, "ms":0,
+                    "outcome":"http", "status":429, "diagnostic":diagnostic
+                }]
+            });
+            let mut mock = MockRunner::new();
+            mock.expect_spawn_piped(
+                "walk.js",
+                9000,
+                &format!("{}\n", envelope(2, "result", &result.to_string())),
+                Some(exit),
+            );
+            let outcome = run_child(&mut mock, &repo.join("core.log"));
+            assert_eq!(outcome.verdict, Verdict::Fail, "{verdict}: {diagnostic}");
+            assert_eq!(
+                outcome
+                    .failure
+                    .expect("invalid diagnostic must not be silently dropped")
+                    .code,
+                FailureCode::CoreResultMissing,
+                "{verdict}: {diagnostic}"
+            );
+        }
+    }
+}
+
+#[test]
 fn default_step_budget_covers_reasks_and_the_bounded_scroll_schedule() {
     use qaren::run::{DEFAULT_STEP_SECONDS, DEFAULT_WALK_SECONDS};
     let judgment = 3 * 10 + 2 * 60;

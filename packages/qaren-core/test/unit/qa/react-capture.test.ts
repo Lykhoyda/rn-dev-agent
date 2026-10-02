@@ -751,3 +751,55 @@ test('port completion after the monotonic deadline cannot return an observation'
   };
   await assert.rejects(captureQaReact(client), sanitized);
 });
+
+test('the handlerless digest fact survives capture and a malformed one refuses', async () => {
+  const capture = (entry: Record<string, unknown>) =>
+    captureQaReact(
+      mockClient([
+        {
+          ...ready(),
+          tree: JSON.stringify({
+            ...publicTree(),
+            interactive: [entry],
+            hostEvidence: { complete: true, hosts: [] },
+          }),
+          inputs: { version: 1, complete: true, facts: [] },
+        },
+      ]).client,
+    );
+  const entry = {
+    role: 'adjustable',
+    capabilities: { press: false, fill: false },
+    handlerless: true,
+  };
+  assert.deepEqual((await capture(entry)).interactive, [entry]);
+  await assert.rejects(capture({ ...entry, handlerless: false }), PrivateInputCaptureError);
+  await assert.rejects(
+    capture({ ...entry, capabilities: { press: true, fill: false } }),
+    PrivateInputCaptureError,
+  );
+  await assert.rejects(
+    capture({ role: 'adjustable', handlerless: true }),
+    PrivateInputCaptureError,
+  );
+});
+
+test('the hidden digest fact survives capture and a malformed one refuses', async () => {
+  const capture = (entry: Record<string, unknown>) =>
+    captureQaReact(
+      mockClient([
+        {
+          ...ready(),
+          tree: JSON.stringify({
+            ...publicTree(),
+            interactive: [entry],
+            hostEvidence: { complete: true, hosts: [] },
+          }),
+          inputs: { version: 1, complete: true, facts: [] },
+        },
+      ]).client,
+    );
+  const entry = { role: 'button', testID: 'home-btn', hidden: true };
+  assert.deepEqual((await capture(entry)).interactive, [entry]);
+  await assert.rejects(capture({ ...entry, hidden: 'yes' }), PrivateInputCaptureError);
+});

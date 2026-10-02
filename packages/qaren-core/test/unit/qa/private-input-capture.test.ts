@@ -12,6 +12,28 @@ import { runPlan } from '../../../dist/qa/walker.js';
 import { exitCodeFor, resultForWalk } from '../../../dist/qa/wire.js';
 import { captureQaReact } from '../../../dist/qa/react-capture.js';
 import { PRIVATE_INPUT_LIMITS } from '../../../dist/qa/private-input-limits.js';
+import type { NativeNode } from '../../../dist/qa/screen.js';
+import { nativeCapture } from './platform-presence-fixtures.ts';
+
+function observedNative(nodes: NativeNode[]) {
+  const native = nativeCapture();
+  const observed = native.nodes[1];
+  return {
+    ...native,
+    nodes: [
+      native.nodes[0],
+      ...nodes.map((node, i) => ({
+        ...observed,
+        identifier: undefined,
+        label: undefined,
+        ...node,
+        index: i + 1,
+        presence: { ...observed.presence, nodeIndex: i + 1 },
+      })),
+    ],
+    snapshotVerdict: { ...native.snapshotVerdict, nodeCount: nodes.length + 1 },
+  };
+}
 
 const secret = 'private-rn-only@example.test';
 function observation(): ReactObservation {
@@ -35,12 +57,13 @@ test('anonymous readonly RN values mask native echoes without becoming assertion
   const before = structuredClone(react);
   const screen = await captureScreen({
     requirePrivateInputs: true,
-    native: async () => ({ nodes: [{ ref: '@echo', type: 'StaticText', label: secret }] }),
+    appId: 'com.test',
+    native: async () => observedNative([{ ref: '@echo', type: 'StaticText', label: secret }]),
     react: async () => bindPrivateInputs(react, payload()),
   });
   assert.deepEqual(react, before);
-  assert.equal(screen.elements.length, 1);
-  assert.equal(screen.elements[0].value, undefined);
+  assert.equal(screen.elements.length, 2);
+  assert.equal(screen.elements[1].value, undefined);
   const judge = scriptedJudge((questions, _, state) => {
     assert.equal(JSON.stringify({ questions, state }).includes(secret), false);
     return { check_1: { type: 'noul', noul: 0.99 } };
@@ -50,7 +73,7 @@ test('anonymous readonly RN values mask native echoes without becoming assertion
       await decideScreen(screen, judge, {
         kind: 'check',
         literal: false,
-        text: 'Welcome is visible',
+        text: `The message says ${secret}`,
         line: 1,
       })
     ).check,
@@ -59,6 +82,42 @@ test('anonymous readonly RN values mask native echoes without becoming assertion
   const privacy = new ObservedPrivacy();
   privacy.observe(screen);
   assert.equal(privacy.redact(secret), '•••');
+});
+
+test('private-only values cannot bypass missing assertion evidence, while native echoes remain judgeable', async (t) => {
+  for (const secure of [false, true]) {
+    for (const [label, expected, calls] of [
+      ['Welcome, Bob', 'unsure', 0],
+      ['Welcome, Anton', 'pass', 1],
+    ] as const) {
+      await t.test(`${secure ? 'secure' : 'readonly'} input with ${label}`, async () => {
+        const screen = await captureScreen({
+          requirePrivateInputs: true,
+          appId: 'com.test',
+          native: async () => observedNative([{ ref: '@greeting', type: 'StaticText', label }]),
+          react: async () => bindPrivateInputs(observation(), payload(['Anton'], secure)),
+        });
+        assert.deepEqual(screen.visibleText, [label]);
+        for (const typed of [[], ['Anton']]) {
+          const judge = scriptedJudge(() => ({ check_1: { type: 'noul', noul: 0.99 } }));
+          const decision = await decideScreen(
+            screen,
+            judge,
+            { kind: 'check', literal: false, text: 'The greeting says Welcome, Anton', line: 1 },
+            undefined,
+            typed,
+          );
+          assert.equal(decision.check, expected);
+          assert.equal(judge.requests.length, calls);
+          assert.equal(JSON.stringify(judge.requests).includes('Anton'), false);
+        }
+        const privacy = new ObservedPrivacy();
+        privacy.observe(screen);
+        assert.equal(privacy.redact('Anton'), '•••');
+        assert.equal(privacy.canScreenshot(), false);
+      });
+    }
+  }
 });
 
 test('hidden and uncertain private input contents are never proved by a model', async () => {
@@ -77,7 +136,7 @@ test('hidden and uncertain private input contents are never proved by a model', 
       'Password is filled',
       'Welcome heading is valid',
     ]) {
-      assert.equal(
+      assert.deepEqual(
         (
           await decideScreen(screen, judge, {
             kind: 'check',
@@ -86,7 +145,11 @@ test('hidden and uncertain private input contents are never proved by a model', 
             line: 1,
           })
         ).check,
-        'unsure',
+        {
+          refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
+          reason:
+            'semantic projection requires complete native and React coverage (capture native=unknown react=complete; projected native=unknown react=complete)',
+        },
         text,
       );
     }
@@ -396,10 +459,21 @@ test('RN secure facts taint generic native values without granting input capabil
       value: nativeSecret,
     };
     const screen = await captureScreen({
-      native: async () => ({ nodes: duplicate ? [node, { ...node, ref: '@duplicate' }] : [node] }),
+      appId: 'com.test',
+      native: async () =>
+        observedNative([
+          node,
+          ...(duplicate ? [{ ...node, ref: '@duplicate' }] : []),
+          { ref: '@welcome', type: 'StaticText', label: 'Welcome' },
+        ]),
       react: async () => bindPrivateInputs(react, payload([], true)),
     });
-    assert.ok(screen.elements.every((e) => e.kind === 'other' && e.semantic?.fill !== 'supported'));
+    assert.ok(
+      screen.elements
+        .filter((e) => e.testID === 'password')
+        .every((e) => e.kind === 'other' && e.semantic?.fill !== 'supported'),
+    );
+    assert.equal(screen.elements.filter((e) => e.testID === 'password').length, duplicate ? 2 : 1);
     const privacy = new ObservedPrivacy();
     privacy.observe(screen);
     assert.equal(privacy.redact(nativeSecret), '•••');
@@ -422,6 +496,7 @@ test('RN secure facts taint generic native values without granting input capabil
         'unsure',
       );
     }
+    assert.equal(judge.requests.length, 0);
     const unrelated = scriptedJudge(() => ({ check_1: { type: 'noul', noul: 0.99 } }));
     for (const text of ['Welcome is visible', 'Welcome heading is valid']) {
       assert.equal(
@@ -433,9 +508,10 @@ test('RN secure facts taint generic native values without granting input capabil
             line: 1,
           })
         ).check,
-        'pass',
+        text === 'Welcome is visible' ? 'pass' : 'unsure',
       );
     }
+    assert.equal(unrelated.requests.length, 1);
     assert.equal(JSON.stringify(unrelated.requests).includes(nativeSecret), false);
   }
 });
@@ -458,19 +534,19 @@ test('anonymous secure empty captures still withhold pixels and conceal uncertai
   assert.equal(emptyPrivacy.canScreenshot(), false);
 });
 
-test('nonsecure native equality remains authoritative without treating a static label as another input', async () => {
+test('nonsecure native values stay local and cannot authorize semantic equality', async () => {
   const react = observation();
   react.hostEvidence = {
     complete: true,
     hosts: [{ testID: 'email', role: null, roleSource: 'none', capabilities: {} }],
   };
   const screen = await captureScreen({
-    native: async () => ({
-      nodes: [
+    appId: 'com.test',
+    native: async () =>
+      observedNative([
         { ref: '@label', type: 'StaticText', label: 'Email' },
         { ref: '@email', identifier: 'email', type: 'TextField', label: 'Email', value: secret },
-      ],
-    }),
+      ]),
     react: async () => bindPrivateInputs(react, payload()),
   });
   const judge = scriptedJudge(() => ({ check_1: { type: 'noul', noul: 0.99 } }));
@@ -483,9 +559,9 @@ test('nonsecure native equality remains authoritative without treating a static 
         line: 1,
       })
     ).check,
-    'pass',
+    'unsure',
   );
-  assert.equal(judge.requests.length, 1);
+  assert.equal(judge.requests.length, 0);
   assert.equal(JSON.stringify(judge.requests).includes(secret), false);
   for (const [text, expected] of [
     [secret, 'pass'],
@@ -518,12 +594,13 @@ test('ambiguous secure associations without native names cannot delegate content
     hosts: [{ testID: 'opaque-id', role: null, roleSource: 'none', capabilities: {} }],
   };
   const screen = await captureScreen({
-    native: async () => ({
-      nodes: [
+    appId: 'com.test',
+    native: async () =>
+      observedNative([
         { ref: '@one', type: 'Other', identifier: 'opaque-id' },
         { ref: '@two', type: 'Other', identifier: 'opaque-id' },
-      ],
-    }),
+        { ref: '@welcome', type: 'StaticText', label: 'Welcome' },
+      ]),
     react: async () => bindPrivateInputs(react, payload([], true)),
   });
   const judge = scriptedJudge(() =>
@@ -547,11 +624,11 @@ test('duplicate React input identities cannot collapse into one authoritative na
   const host = { testID: 'email', role: null, roleSource: 'none', capabilities: {} };
   react.hostEvidence = { complete: true, hosts: [host, host] };
   const screen = await captureScreen({
-    native: async () => ({
-      nodes: [
+    appId: 'com.test',
+    native: async () =>
+      observedNative([
         { ref: '@email', identifier: 'email', type: 'TextField', label: 'Email', value: secret },
-      ],
-    }),
+      ]),
     react: async () =>
       bindPrivateInputs(react, {
         ...payload(),
@@ -650,13 +727,21 @@ test('private-capture short values mask concatenated echoes but never become loc
     const echo = `code=${value} x${value}x`;
     const screen = await captureScreen({
       requirePrivateInputs: true,
-      native: async () => ({ nodes: [{ ref: '@echo', type: 'StaticText', label: echo }] }),
+      appId: 'com.test',
+      native: async () => observedNative([{ ref: '@echo', type: 'StaticText', label: echo }]),
       react: async () => bindPrivateInputs(observation(), payload([value])),
     });
     const judge = scriptedJudge((_, __, state) => {
       assert.deepEqual(state, {
         front: 'app',
-        visibleText: ['code=[QAREN_VALUE_1] x[QAREN_VALUE_1]x'],
+        assertionEvidence: {
+          observed: [
+            'Text "code=[QAREN_VALUE_1] x[QAREN_VALUE_1]x" (native accessibility name; platform-observed presence)',
+          ],
+          unknown: [],
+          unassociatedReact: 0,
+          qualifiedHeadings: [],
+        },
       });
       return { check_1: { type: 'noul', noul: 0.99 } };
     });
@@ -699,13 +784,21 @@ test('short-value private provenance survives later captures without widening ty
   });
   const echo = 'code=7 x7x code=z xzx';
   const later = await captureScreen({
-    native: async () => ({ nodes: [{ ref: '@echo', type: 'StaticText', label: echo }] }),
+    appId: 'com.test',
+    native: async () => observedNative([{ ref: '@echo', type: 'StaticText', label: echo }]),
     react: async () => bindPrivateInputs(observation(), { version: 1, complete: true, facts: [] }),
   });
   const judge = scriptedJudge((_, __, state) => {
     assert.deepEqual(state, {
       front: 'app',
-      visibleText: ['code=[QAREN_VALUE_2] x[QAREN_VALUE_2]x code=[QAREN_VALUE_1] xzx'],
+      assertionEvidence: {
+        observed: [
+          'Text "code=[QAREN_VALUE_2] x[QAREN_VALUE_2]x code=[QAREN_VALUE_1] xzx" (native accessibility name; platform-observed presence)',
+        ],
+        unknown: [],
+        unassociatedReact: 0,
+        qualifiedHeadings: [],
+      },
     });
     return { check_4: { type: 'noul', noul: 0.99 } };
   });

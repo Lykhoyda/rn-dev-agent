@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { captureScreen } from '../../../dist/qa/capture.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import { decideScreen } from '../../../dist/qa/resolve.js';
-import { inputValues, isPossibleInput } from '../../../dist/qa/privacy.js';
+import { inputValues, isPossibleInput, ObservedPrivacy } from '../../../dist/qa/privacy.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { join, semanticActionView, visibilityView } from '../../../dist/qa/screen.js';
 import { associateHosts } from '../../../dist/qa/host-association.js';
@@ -73,11 +73,41 @@ function fixture() {
 test('measured exact host identity admits positive press without inventing a native role', async () => {
   const screen = await fixture().capture();
   assert.equal(screen.elements[2].semantic?.press, 'supported');
-  assert.equal(screen.elements[2].semantic?.fill, 'unknown');
+  assert.equal(
+    screen.elements[2].semantic?.fill,
+    'unsupported',
+    'a press handler offers no text entry',
+  );
   assert.equal(screen.elements[2].kind, 'other');
   assert.equal(screen.reactHostEvidence!.hosts[0].role, null);
   assert.deepEqual(semanticActionView(screen, 'press'), { elements: [screen.elements[2]] });
-  assert.deepEqual(visibilityView(screen), { elements: [screen.elements[2]] });
+  assert.deepEqual(visibilityView(screen), {
+    elements: [screen.elements[2]],
+    unknown: [],
+    unassociatedReact: 0,
+  });
+});
+
+test('an exact structural match below the window associates without presence; an unobserved one on screen does not', async () => {
+  const offscreen = fixture();
+  const host = offscreen.hostEvidence.typography!.nodes[0];
+  host.rect = { ...host.rect!, y: 900 };
+  offscreen.native.nodes[2].rect = { ...offscreen.native.nodes[2].rect, y: 940 };
+  const unknown = { ...offscreen.native.nodes[2].presence, status: 'unknown' };
+  delete (unknown as { observedUptimeMs?: number }).observedUptimeMs;
+  offscreen.native.nodes[2].presence = unknown;
+  const below = await offscreen.capture();
+  assert.equal(below.elements[2].semantic?.visibility, 'offscreen');
+  assert.equal(below.elements[2].semantic?.press, 'supported');
+  assert.equal(below.pressEvidenceGap, undefined);
+  assert.deepEqual(semanticActionView(below, 'press'), { elements: [below.elements[2]] });
+  assert.deepEqual(visibilityView(below), { elements: [], unknown: [], unassociatedReact: 0 });
+
+  const onScreen = fixture();
+  onScreen.native.nodes[2].presence = unknown;
+  const shown = await onScreen.capture();
+  assert.equal(shown.elements[2].semantic?.visibility, 'unknown');
+  assert.equal(shown.pressEvidenceGap, '1 interactive React host unassociated');
 });
 
 test('associated disabled and read-only facts block both operations without erasing positive capabilities', async () => {
@@ -90,7 +120,11 @@ test('associated disabled and read-only facts block both operations without eras
     assert.equal(screen.elements[2].semantic?.fill, 'supported');
     assert.deepEqual(semanticActionView(screen, 'press'), { elements: [] }, state);
     assert.deepEqual(semanticActionView(screen, 'fill'), { elements: [] }, state);
-    assert.deepEqual(visibilityView(screen), { elements: [screen.elements[2]] });
+    assert.deepEqual(visibilityView(screen), {
+      elements: [screen.elements[2]],
+      unknown: [],
+      unassociatedReact: 0,
+    });
   }
 });
 
@@ -208,7 +242,7 @@ const unproven: Array<[string, (f: ReturnType<typeof fixture>) => void]> = [
     },
   ],
   [
-    'unmapped input host type',
+    'input host with a generic native view',
     (f) => {
       f.hostEvidence.typography!.nodes[0].hostType = 'RCTSinglelineTextInputView';
     },
@@ -412,7 +446,7 @@ test('real measured producer press reaches the walker without a role; an account
       react: async () => produced,
     });
     assert.equal(screen.elements[2].kind, 'other');
-    assert.equal(screen.elements[2].semantic?.fill, 'unknown');
+    assert.equal(screen.elements[2].semantic?.fill, 'unsupported');
     assert.equal(screen.elements[2].semantic?.press, mode === 'none' ? 'unsupported' : 'supported');
     const judge = scriptedJudge((questions) => {
       assert.equal(mode, 'press', 'blocked controls never reach a model');
@@ -478,7 +512,11 @@ test('an admitted positive fill fact supports fill without inferring an input ki
   f.hostEvidence.hosts[0].capabilities = { fill: true };
   const screen = await f.capture();
   assert.equal(screen.elements[2].kind, 'other');
-  assert.equal(screen.elements[2].semantic?.press, 'unsupported');
+  assert.equal(
+    screen.elements[2].semantic?.press,
+    'unsupported',
+    'fill evidence alone opens no press',
+  );
   assert.deepEqual(semanticActionView(screen, 'fill'), { elements: [screen.elements[2]] });
 });
 
@@ -581,7 +619,7 @@ test('real inferred textinput digest masks a generic native control value and it
   const judge = scriptedJudge((questions, _, state) => {
     assert.equal(JSON.stringify({ questions, state }).includes(f.secret), false);
     assert.match(questions.check_1.instructions, /QAREN_VALUE/);
-    assert.match(state.visibleText.join(' '), /Echo: \[QAREN_VALUE_/);
+    assert.match(state.assertionEvidence.observed.join(' '), /Echo: \[QAREN_VALUE_/);
     return { check_1: { type: 'noul', noul: 0.99 } };
   });
   await decideScreen(screen, judge, {
@@ -613,17 +651,31 @@ test('possible-input privacy survives invalid presence and a greedy anonymous la
     assert.equal(screen.elements[2].semantic?.press, 'unknown');
     assert.ok('refuse' in semanticActionView(screen, 'fill'));
     const judge = scriptedJudge((questions, _, state) => {
+      assert.equal(variant, 'valid', 'incomplete captures cannot be judged');
       assert.equal(JSON.stringify({ questions, state }).includes(f.secret), false, variant);
-      assert.match(state.visibleText.join(' '), /Echo: \[QAREN_VALUE_/);
+      assert.match(state.assertionEvidence.observed.join(' '), /Echo: \[QAREN_VALUE_/);
       return { check_1: { type: 'noul', noul: 0.1 } };
     });
-    await decideScreen(screen, judge, {
+    const decision = await decideScreen(screen, judge, {
       kind: 'check',
       literal: false,
       text: 'The echo is correct',
       line: 1,
     });
-    assert.equal(judge.requests.length, 1);
+    assert.equal(judge.requests.length, variant === 'valid' ? 1 : 0);
+    if (variant !== 'valid') {
+      assert.ok(decision.check && typeof decision.check === 'object');
+      assert.equal(decision.check.refuse, 'SCREEN_EVIDENCE_INCOMPLETE');
+      assert.match(decision.check.reason, /requires complete native and React coverage/);
+    }
+    assert.ok(inputValues(screen).includes(f.secret), variant);
+    const privacy = new ObservedPrivacy();
+    privacy.observe(screen);
+    assert.equal(
+      privacy.maskForModel(inputValues(screen), []).apply(f.secret).includes(f.secret),
+      false,
+      variant,
+    );
   }
 });
 
@@ -649,7 +701,7 @@ test('secure possible-input values stay out of model requests and durable failur
       const before = JSON.stringify(screen);
       const judge = scriptedJudge((questions, _, state) => {
         assert.equal(JSON.stringify({ questions, state }).includes(f.secret), false, variant);
-        assert.match(state.visibleText.join(' '), /Echo: \[QAREN_VALUE_/);
+        assert.match(state.assertionEvidence.observed.join(' '), /Echo: \[QAREN_VALUE_/);
         return Object.fromEntries(
           Object.keys(questions).map((id) => [id, { type: 'noul', noul: 0.1 }]),
         );
@@ -657,7 +709,9 @@ test('secure possible-input values stay out of model requests and durable failur
       const w = walker([screen], judge);
       const result = await runPlan(parsePlan('✓ The echo is correct').blocks!, w.deps);
       assert.equal(result.verdict, 'FAIL');
-      assert.equal(judge.requests.length, 1);
+      const admitted = variant === 'valid' || variant === 'missing-digest';
+      assert.equal(judge.requests.length, admitted ? 2 : 0);
+      if (!admitted) assert.match(result.failure!.seen, /SCREEN_EVIDENCE_INCOMPLETE/);
       assert.equal(JSON.stringify({ result, rows: w.rows }).includes(f.secret), !secure, variant);
       if (secure) assert.match(result.failure!.seen, /Echo: •••/);
       assert.equal(JSON.stringify(screen), before);
@@ -734,17 +788,32 @@ test('real onChange-only host fill evidence conceals native values despite a leg
     assert.equal(screen.elements[2].semantic?.fill, 'unknown');
     assert.equal(screen.elements[2].semantic?.press, 'unknown');
     const judge = scriptedJudge((questions, _, state) => {
+      assert.ok(['valid', 'anonymous-label-first'].includes(variant));
       assert.equal(JSON.stringify({ questions, state }).includes(f.secret), false, variant);
-      assert.match(state.visibleText.join(' '), /Echo: \[QAREN_VALUE_/);
+      assert.match(state.assertionEvidence.observed.join(' '), /Echo: \[QAREN_VALUE_/);
       return { check_1: { type: 'noul', noul: 0.99 } };
     });
-    await decideScreen(screen, judge, {
+    const decision = await decideScreen(screen, judge, {
       kind: 'check',
       literal: false,
       text: 'The echo is correct',
       line: 1,
     });
-    assert.equal(judge.requests.length, 1);
+    const admitted = ['valid', 'anonymous-label-first'].includes(variant);
+    assert.equal(judge.requests.length, admitted ? 1 : 0);
+    if (!admitted) {
+      assert.ok(decision.check && typeof decision.check === 'object');
+      assert.equal(decision.check.refuse, 'SCREEN_EVIDENCE_INCOMPLETE');
+      assert.match(decision.check.reason, /requires complete native and React coverage/);
+    }
+    assert.ok(inputValues(screen).includes(f.secret), variant);
+    const privacy = new ObservedPrivacy();
+    privacy.observe(screen);
+    assert.equal(
+      privacy.maskForModel(inputValues(screen), []).apply(f.secret).includes(f.secret),
+      false,
+      variant,
+    );
   }
 });
 
@@ -772,7 +841,12 @@ test('possible-input value bounds use local identities before masking and never 
         text: `Email input ${predicate}`,
         line: 1,
       });
-      assert.equal(result.check, 'unsure', `${variant}: ${predicate}`);
+      if (variant === 'valid') assert.equal(result.check, 'unsure', predicate);
+      else {
+        assert.ok(result.check && typeof result.check === 'object');
+        assert.equal(result.check.refuse, 'SCREEN_EVIDENCE_INCOMPLETE');
+        assert.match(result.check.reason, /requires complete native and React coverage/);
+      }
     }
     assert.equal(screen.elements[2].testID, 'email');
     assert.equal(screen.elements[2].label, 'Email');
@@ -834,17 +908,20 @@ test('unassociated positive-fill observations retain privacy without acquiring n
   );
   assert.equal(screen.elements[1].kind, 'button');
   assert.equal(screen.elements[1].semantic?.fill, 'unknown');
-  const judge = scriptedJudge((questions, _, state) => {
-    assert.equal(JSON.stringify({ questions, state }).includes(secret), false);
-    return { check_1: { type: 'noul', noul: 0.99 } };
-  });
-  await decideScreen(screen, judge, {
+  const judge = scriptedJudge(() => assert.fail('unknown native coverage cannot be judged'));
+  const result = await decideScreen(screen, judge, {
     kind: 'check',
     literal: false,
     text: 'The echo is correct',
     line: 1,
   });
-  assert.equal(judge.requests.length, 1);
+  assert.ok(result.check && typeof result.check === 'object');
+  assert.equal(result.check.refuse, 'SCREEN_EVIDENCE_INCOMPLETE');
+  assert.match(result.check.reason, /requires complete native and React coverage/);
+  assert.equal(judge.requests.length, 0);
+  const privacy = new ObservedPrivacy();
+  privacy.observe(screen);
+  assert.equal(privacy.maskForModel(inputValues(screen), []).apply(secret).includes(secret), false);
 });
 
 test('text under a structurally matched ancestor is searched only inside that ancestor', () => {
@@ -1035,4 +1112,89 @@ test('identified ancestors may be hoisted beside the native path but not sit in 
   ];
   for (const [name, nodes, panelRect, saveIndex, expected] of cases)
     assert.equal(associate(nodes, panelRect, saveIndex), expected, name);
+});
+
+test('a React scroll view identified on its native container view anchors its descendants', () => {
+  const frame = { x: 0, y: 0, width: 400, height: 700 };
+  const saveRect = { x: 10, y: 100, width: 100, height: 40 };
+  const nodes = [
+    {
+      ref: '@e0',
+      index: 0,
+      depth: 0,
+      type: 'Application',
+      rect: { x: 0, y: 0, width: 400, height: 800 },
+    },
+    {
+      ref: '@e1',
+      index: 1,
+      parentIndex: 0,
+      depth: 1,
+      type: 'Window',
+      rect: { x: 0, y: 0, width: 400, height: 800 },
+    },
+    {
+      ref: '@e2',
+      index: 2,
+      parentIndex: 1,
+      depth: 2,
+      type: 'Other',
+      identifier: 'feed',
+      rect: frame,
+    },
+    { ref: '@e3', index: 3, parentIndex: 2, depth: 3, type: 'ScrollView', rect: frame },
+    {
+      ref: '@e4',
+      index: 4,
+      parentIndex: 3,
+      depth: 4,
+      type: 'Button',
+      identifier: 'save',
+      rect: saveRect,
+    },
+  ];
+  const presence = {
+    source: 'xcui-live' as const,
+    nodes: nodes.map((_, i) => ({
+      status: i === 4 ? ('observed' as const) : ('unknown' as const),
+      labelSource: 'none' as const,
+    })),
+  };
+  const host = (
+    hostIndex: number,
+    parentHostIndex: number | null,
+    hostType: string,
+    rect: typeof frame,
+  ) => ({
+    hostIndex,
+    parentHostIndex,
+    rootIndex: 0,
+    hostType,
+    rect,
+    text: { kind: 'none' as const },
+  });
+  const evidence: ReactHostEvidence = {
+    complete: true,
+    hosts: [
+      { testID: 'feed', role: null, roleSource: 'none', capabilities: {} },
+      { testID: 'save', role: null, roleSource: 'none', capabilities: { press: true } },
+    ],
+    typography: {
+      version: 1,
+      complete: true,
+      durationMs: 10,
+      coordinateSpace: 'window-points',
+      nodes: [host(0, null, 'RCTScrollView', frame), host(1, 0, 'RCTView', saveRect)],
+    },
+  };
+  assert.deepEqual(associateHosts(nodes, evidence, presence).get(1), {
+    nativeIndex: 4,
+    anchorIndex: 4,
+  });
+  const flat = nodes.map((n) => (n.type === 'ScrollView' ? { ...n, type: 'Other' } : n));
+  assert.equal(
+    associateHosts(flat, evidence, presence).get(1),
+    undefined,
+    'an identified Other stands for a scroll view only when a native ScrollView sits directly under it',
+  );
 });

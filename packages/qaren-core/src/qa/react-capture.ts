@@ -90,6 +90,23 @@ function publicObservation(tree: unknown): ReactObservation {
       }
       result.capabilities = { press: entry.capabilities.press, fill: entry.capabilities.fill };
     }
+    if (entry.hidden !== undefined) {
+      if (entry.hidden !== true) throw new PrivateInputCaptureError();
+      result.hidden = true;
+    }
+    if (entry.compositeWrapper !== undefined) {
+      if (entry.compositeWrapper !== true) throw new PrivateInputCaptureError();
+      result.compositeWrapper = true;
+    }
+    if (entry.handlerless !== undefined) {
+      if (
+        entry.handlerless !== true ||
+        result.capabilities?.press !== false ||
+        result.capabilities.fill !== false
+      )
+        throw new PrivateInputCaptureError();
+      result.handlerless = true;
+    }
     return result;
   });
   return {

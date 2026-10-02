@@ -27,6 +27,8 @@ import { captureQaReact } from './react-capture.js';
 import type { LedgerRow } from './ledger.js';
 import { parsePlanWithJev, readPreparedPlan } from './plan.js';
 import { createJev } from './jev.js';
+import { isRecord } from './questions.js';
+import { createTimingObserver, formatTimingEvent, type TimingContext } from './timing.js';
 import { preflightPlan } from './preflight.js';
 import { summarizeJev } from './ledger.js';
 import { redactApiKey } from '../util/redact.js';
@@ -157,18 +159,46 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
   return stop.track(handler).then(
     (result) => {
       try {
-        unwrap(result);
+        const { meta } = unwrap(result);
+        logActionSettle(meta);
         return { ok: true, proven };
       } catch (error) {
+        logActionSettle(error instanceof HandlerError ? error.meta : undefined);
         const { code, message } = describeError(error);
         return { ok: false, proven: false, error: `${code}: ${message}` };
       }
     },
     (error) => {
+      logActionSettle(error instanceof HandlerError ? error.meta : undefined);
       const { code, message } = describeError(error);
       return { ok: false, proven: false, error: `${code}: ${message}` };
     },
   );
+}
+
+function logActionSettle(meta?: Record<string, unknown>): void {
+  try {
+    const settle = isRecord(meta?.settle) ? meta.settle : {};
+    const ms = isRecord(meta?.timings_ms) ? meta.timings_ms.settle : undefined;
+    log(
+      `action-settle=${JSON.stringify({
+        method:
+          typeof settle.method === 'string' &&
+          ['window-gate', 'screen-static', 'snapshot-eq', 'timeout'].includes(settle.method)
+            ? settle.method
+            : 'unknown',
+        settled: typeof settle.settled === 'boolean' ? settle.settled : 'unknown',
+        hierarchyChanged:
+          typeof settle.hierarchyChanged === 'boolean' ? settle.hierarchyChanged : 'unknown',
+        ms:
+          typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 && ms <= Number.MAX_SAFE_INTEGER
+            ? ms
+            : 'unknown',
+      })}`,
+    );
+  } catch {
+    // Diagnostics cannot change an action's outcome.
+  }
 }
 
 // Attach over CDP, prove the bundle, open the device session, then hand the walker plain functions.
@@ -181,6 +211,10 @@ async function openSession(
   // Run-relative ms on a monotonic clock, anchored once to the CLI's t0.
   const runOffset = Date.now() - request.t0;
   const perfStart = performance.now();
+  const now = (): number => Math.round(runOffset + performance.now() - perfStart);
+  const timing = createTimingObserver((event) =>
+    process.stderr.write(redactApiKey(formatTimingEvent(event))),
+  );
   const cdp = new CDPClient(target.metroPort);
   const getClient = (): CDPClient => cdp;
   const snapshot: Handler<{
@@ -191,6 +225,9 @@ async function openSession(
     attachOnly?: boolean;
     sessionName?: string;
     platformPresence?: boolean;
+    presenceBudgetMs?: number;
+    qaReadOnly?: boolean;
+    qaTiming?: TimingContext;
   }> = createDeviceSnapshotHandler();
   let deviceOpen = false;
   let closing: Promise<void> | undefined;
@@ -252,10 +289,18 @@ async function openSession(
     `bundle proven: ${proof.scriptURL} (${proof.appModules} app modules under ${target.worktree})`,
   );
 
-  const rawSnapshot = async (platformPresence = false) => {
+  const rawSnapshot = async (
+    platformPresence = false,
+    presenceBudgetMs?: number,
+    qaTiming?: TimingContext,
+  ) => {
     const result = await snapshot({
       action: 'snapshot',
-      ...(platform === 'ios' && platformPresence ? { platformPresence: true } : {}),
+      qaReadOnly: true,
+      qaTiming,
+      ...(platform === 'ios' && platformPresence
+        ? { platformPresence: true, presenceBudgetMs }
+        : {}),
     });
     const { data, meta } = unwrap<
       NativeObservation & { presenceCapture?: unknown; snapshotGeneration?: unknown }
@@ -291,22 +336,36 @@ async function openSession(
   const dismiss = createDeviceDismissSystemDialogHandler();
 
   const deps: WalkerDeps = {
-    judge: createJev(),
+    judge: createJev({ now, timing }),
+    timing,
     captureScreen: (options) =>
       stop.track(() =>
         captureScreen({
           appId,
           requirePrivateInputs: true,
-          native: () => rawSnapshot(options?.platformPresence),
+          now,
+          timing: options?.timing,
+          warn: log,
+          native: (presenceBudgetMs) =>
+            rawSnapshot(
+              options?.platformPresence,
+              presenceBudgetMs,
+              options?.timing ? { now, observe: options.timing } : undefined,
+            ),
           react: () => captureQaReact(cdp, options?.platformPresence === true),
         }),
       ),
-    press: (ref) => act(() => press({ ref }), false),
-    fill: (ref, text) => act(() => fill({ ref, text }), true),
-    scroll: (direction) => act(() => scroll({ direction, amount: 0.6 }), false),
-    back: () => act(() => back({}), false),
-    dialog: (action) =>
-      act(() => (action === 'accept' ? accept({ platform }) : dismiss({ platform })), true),
+    press: (ref, qaContext) => act(() => press({ ref, qaContext }), false),
+    fill: (ref, text, qaContext) => act(() => fill({ ref, text, qaContext }), true),
+    scroll: (direction, qaContext) =>
+      act(() => scroll({ direction, amount: 0.6, qaContext }), false),
+    back: (qaContext) => act(() => back({ qaContext }), false),
+    dialog: (action, qaContext) =>
+      act(
+        () =>
+          action === 'accept' ? accept({ platform, qaContext }) : dismiss({ platform, qaContext }),
+        true,
+      ),
     async screenshot(name) {
       if (stop.stopping) return undefined;
       const shot = await stop.track(() =>
@@ -315,7 +374,9 @@ async function openSession(
       if (!shot.ok) log(`screenshot ${name} failed: ${shot.reason}`);
       return shot.ok ? name : undefined;
     },
-    now: () => Math.round(runOffset + performance.now() - perfStart),
+    now,
+    cancelled: () => stop.stopping,
+    diagnostic: (event) => log(`timing ${JSON.stringify(event)}`),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     row: emitRow,
   };

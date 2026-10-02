@@ -27,8 +27,9 @@ final class KeyboardGuardTests: XCTestCase {
     makePlatformPresencePayload(
       nodes: nodes, truncated: false,
       capture: PlatformPresenceCapture(
-        version: 1, source: "xcui-live", captureId: "capture", appId: "test.app", generation: 7,
-        startedUptimeMs: 1_000, endedUptimeMs: 1_100, enumeration: "raw-unfiltered", complete: complete
+        version: 2, source: "xcui-live", captureId: "capture", appId: "test.app", generation: 7,
+        startedUptimeMs: 1_000, endedUptimeMs: 1_100, enumeration: "raw-unfiltered", complete: complete,
+        appliedBudgetMs: 20_000
       )
     )
   }

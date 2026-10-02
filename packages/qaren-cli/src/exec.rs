@@ -19,6 +19,8 @@ pub struct CmdSpec {
     pub cwd: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<(String, String)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unset: Vec<String>,
     pub timeout_seconds: u64,
 }
 
@@ -30,6 +32,7 @@ impl CmdSpec {
             args: args.iter().map(|s| s.to_string()).collect(),
             cwd: None,
             env: Vec::new(),
+            unset: Vec::new(),
             timeout_seconds,
         }
     }
@@ -41,6 +44,12 @@ impl CmdSpec {
 
     pub fn env(mut self, key: &str, value: &str) -> Self {
         self.env.push((key.to_string(), value.to_string()));
+        self
+    }
+
+    // Removed after `env`, so neither the spec nor the inherited environment can supply it.
+    pub fn env_remove(mut self, key: &str) -> Self {
+        self.unset.push(key.to_string());
         self
     }
 
@@ -265,11 +274,14 @@ impl Runner for RealRunner {
     fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
         self.executed += 1;
         let started = Instant::now();
+        crate::progress::started(&spec.label, false);
         let output = run_captured(spec, &started, None)
             .unwrap_or_else(|e| io_failure(&started, format!("{}: {e}", spec.label)));
-        if let Err(e) = self.flush_logs() {
-            return io_failure(&started, format!("drain logs: {e}"));
-        }
+        let output = match self.flush_logs() {
+            Ok(()) => output,
+            Err(e) => io_failure(&started, format!("drain logs: {e}")),
+        };
+        crate::progress::finished(&spec.label, output.ok());
         output
     }
 
@@ -287,6 +299,7 @@ impl Runner for RealRunner {
     fn spawn_group(&mut self, spec: &CmdSpec, log_path: &Path) -> std::io::Result<Spawned> {
         use std::os::unix::process::CommandExt;
         self.executed += 1;
+        crate::progress::started(&spec.label, true);
         let (log_out, output) = log::LogDrain::spawn(&self.log_executable, log_path)?;
         let (log_err, error) = log::LogDrain::spawn(&self.log_executable, log_path)?;
         let mut cmd = Command::new(&spec.program);
@@ -301,6 +314,9 @@ impl Runner for RealRunner {
         for (k, v) in &spec.env {
             cmd.env(k, v);
         }
+        for k in &spec.unset {
+            cmd.env_remove(k);
+        }
         cmd.env_remove("TYPESAFE_API_KEY");
         let child = cmd.spawn()?;
         let pid = child.id() as i32;
@@ -311,6 +327,7 @@ impl Runner for RealRunner {
     fn spawn_piped(&mut self, spec: &CmdSpec, stderr_log: &Path) -> std::io::Result<PipedChild> {
         use std::os::unix::process::CommandExt;
         self.executed += 1;
+        crate::progress::started(&spec.label, true);
         let (log, stderr) = log::LogDrain::spawn(&self.log_executable, stderr_log)?;
         let mut cmd = Command::new(&spec.program);
         cmd.args(&spec.args)
@@ -323,6 +340,9 @@ impl Runner for RealRunner {
         }
         for (k, v) in &spec.env {
             cmd.env(k, v);
+        }
+        for k in &spec.unset {
+            cmd.env_remove(k);
         }
         let mut child = cmd.spawn()?;
         let stdin = child.stdin.take().expect("stdin is piped");
@@ -419,6 +439,9 @@ fn run_captured(
     }
     for (k, v) in &spec.env {
         cmd.env(k, v);
+    }
+    for k in &spec.unset {
+        cmd.env_remove(k);
     }
     if spec.label != "plan-preflight" {
         cmd.env_remove("TYPESAFE_API_KEY");
