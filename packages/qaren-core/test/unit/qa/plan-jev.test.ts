@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
+  parsePlan,
   parsePlanWithJev,
   planNeedsJev,
   preparePlan,
@@ -255,5 +256,37 @@ test('bad credentials and malformed probe answers refuse without parsing', async
     const result = await preflightPlan('1. Select profile', judge);
     assert.ok(!result.ok && result.code === 'JEV_UNREACHABLE');
     assert.equal(judge.requests.length, 1);
+  }
+});
+
+test('only a whole quoted check is literal; mixed expectations retain the readiness probe', async () => {
+  for (const payload of [
+    '"Welcome"',
+    '“Welcome”',
+    'The heading shows "Welcome" and no error is visible',
+    '"Welcome" and "Ready"',
+    '“Welcome” is visible',
+  ]) {
+    const markdown = `✓ ${payload}`;
+    const literal = payload === '"Welcome"' || payload === '“Welcome”';
+    const parsed = parsePlan(markdown);
+    assert.ok(parsed.blocks);
+    const item = parsed.blocks[0].items[0];
+    assert.ok(item.kind === 'check');
+    assert.equal(item.literal, literal);
+    assert.equal(item.text, literal ? 'Welcome' : payload);
+    assert.equal(planNeedsJev(markdown), !literal);
+    assert.deepEqual(
+      readPreparedPlan(markdown, preparePlan(markdown, parsed.blocks)),
+      parsed.blocks,
+    );
+    const judge = scriptedJudge(() => {
+      throw new JevError('JEV_AUTH_FAILED');
+    });
+    const result = await preflightPlan(markdown, judge);
+    assert.equal(result.ok, literal);
+    if (!result.ok) assert.equal(result.code, 'JEV_UNREACHABLE');
+    assert.equal(judge.requests.length, literal ? 0 : 1);
+    if (!literal) assert.deepEqual(judge.requests[0].state, { readiness: 'ready' });
   }
 });

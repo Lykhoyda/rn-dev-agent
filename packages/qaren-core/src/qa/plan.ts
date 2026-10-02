@@ -251,7 +251,8 @@ function scanPlan(
     }
     const block = current ?? open(title);
     if (check) {
-      const quoted = firstQuoted(check[1]);
+      const match = /^(?:"([^"]+)"|“([^”]+)”)$/.exec(check[1].trim());
+      const quoted = match ? (match[1] ?? match[2]) : undefined;
       block.items.push({
         kind: 'check',
         text: quoted ?? check[1].trim(),
