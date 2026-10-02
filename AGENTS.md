@@ -14,7 +14,7 @@ merges into `main` as 2.0.0 once the label path runs end to end. The QaReN
 structure outline and TDD that the phase PRs cite are the specification; each
 phase PR names its Linear issue in the QaReN project.
 
-The package cut and literal `qaren check` are merged into `develop`. The Phase 3 Jev seam adds phrase targets, checks and verb fallback; live model and device acceptance are separate from hermetic tests. Blocks, recovery, `qaren pr`, `qaren listen` and packaging arrive in Phases 4 to 8.
+The package cut, literal `qaren check`, Jev seam, and PR run/publication commands are implemented on this branch; live model and device acceptance are separate from hermetic tests. See the [CLI README](packages/qaren-cli/README.md) for current usage. `qaren listen` and packaging remain later phases.
 
 ## Repository Map
 
