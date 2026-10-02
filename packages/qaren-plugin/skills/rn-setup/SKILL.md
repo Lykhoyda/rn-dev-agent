@@ -16,6 +16,10 @@ This skill checks every prerequisite and installs missing dependencies.
 - When `device_*` tools fail with "session not open" or "command not found"
 - When the user runs `/rn-dev-agent:setup`
 
+For QaReN runtime setup, use the README pointer in check 2. The other checks
+below retain rn-dev-agent 1.x app setup guidance pending the Phase 8 skill
+migration; they require an existing 1.x installation and are not QaReN setup steps.
+
 ## Checklist — run each check in order
 
 Resolve `APP_ROOT` to the exact existing target React Native app directory before
@@ -52,18 +56,12 @@ If < 24: warn the user to install a supported Node release.
 - If `fnm` is installed: `fnm install 24 && fnm use 24`
 - Otherwise: download from https://nodejs.org/en/download/ or `brew install node@24`
 
-### 2. CDP bridge runtime
-```bash
-test -f ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/supervisor.js && \
-  test -f ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/rn-dev-agent-core/dist/index.js && echo OK
-```
-The packaged runtime is a self-contained esbuild bundle — no npm install step is
-needed at plugin-install time. If either file is missing:
-1. Installed plugin: the install is corrupt — reinstall: `/plugin install rn-dev-agent@rn-dev-agent`
-2. rn-dev-agent repo checkout: `corepack yarn install --immutable && corepack yarn build:host-runtimes`
+### 2. QaReN runtime
 
-If SessionStart reported a CDP-deps warning, run `bash ${CLAUDE_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}}/scripts/ensure-cdp-deps.sh`
-(only dev checkouts running the unbundled core actually need installed deps).
+Follow [README Install](../../../../README.md#install) in a source checkout, or
+[the repository README](https://github.com/Lykhoyda/rn-dev-agent/blob/develop/README.md#install)
+for an installed plugin. That is the owner of runtime verification, installation
+and prerequisites; the host package does not contain the old CDP bridge bundle.
 
 ### 3. rn-fast-runner (iOS — in-tree XCTest rig)
 

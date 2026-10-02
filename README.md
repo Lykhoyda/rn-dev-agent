@@ -1,13 +1,16 @@
 <div align="center">
 
-# rn-dev-agent
+# QaReN
 
 ### Your agent writes the code. This proves it runs.
 
-A plugin for **Claude Code**, **Codex**, and **Cursor** that turns your coding agent into a React Native
-development partner — one that reads your running app's component tree, store state, and
-navigation over the Chrome DevTools Protocol, taps real UI on iOS and Android, and **records the
-evidence** that the feature actually works.
+QaReN is a QA companion for React Native apps: a Rust CLI owns each run and a
+TypeScript child walks a plan on an iOS simulator or Android emulator, recording
+PASS/FAIL and evidence. The host plugin supplies skills and an offline runtime check.
+
+> This branch carries the 2.0 migration; `main` still ships rn-dev-agent 1.x.
+> [Install](#install) describes the QaReN package. The remaining MCP workflows and
+> demonstrations below describe 1.x and await the Phase 8 documentation migration.
 
 [![CI](https://github.com/Lykhoyda/rn-dev-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Lykhoyda/rn-dev-agent/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-lykhoyda.github.io%2Frn--dev--agent-blue)](https://lykhoyda.github.io/rn-dev-agent/)
@@ -23,26 +26,16 @@ evidence** that the feature actually works.
 
 ## See it in 60 seconds
 
-```text
-# 1. Install (Claude Code — Cursor and Codex below)
-/plugin marketplace add Lykhoyda/rn-dev-agent
-/plugin install rn-dev-agent@rn-dev-agent
-/reload-plugins
+Follow [Install](#install) to load the host plugin and install its verified runtime,
+then run the returned binary from your app checkout:
+
+```bash
+"$QAREN_BIN" check --plan-file /path/to/plan.md --platform ios --device <UDID> --json
 ```
 
-```text
-# 2. Onboard your app — checks the toolchain, writes the project config
-/rn-dev-agent:setup
-
-# 3. Ask for a feature. Get it back verified on the simulator.
-/rn-dev-agent:rn-feature-dev add a shopping cart with badge, item list, and checkout flow
-```
-
-The agent explores your codebase, designs the change, implements it — then connects to the running
-app, navigates to the screen, checks the component tree and store state, taps through the flow, and
-saves the walk as a replayable test. You get working code **and** the proof.
-
-Codex users: replace `/rn-dev-agent:<name>` with `$rn-dev-agent:<name>`. Cursor uses the Claude package (same slash commands). [Install steps →](#install)
+`QAREN_BIN` is the executable path returned by the installer below. Device execution
+also needs the app's toolchain, configuration and a simulator or emulator; installing
+the runtime does not provision those prerequisites.
 
 ---
 
@@ -248,86 +241,71 @@ Claude Code / Codex
 
 ## Install
 
-### Claude Code
+### Host plugin
+
+The marketplace name and plugin name are `qaren`; the GitHub repository remains
+`Lykhoyda/rn-dev-agent` during the migration.
 
 ```text
+# Claude Code
 /plugin marketplace add Lykhoyda/rn-dev-agent
-/plugin install rn-dev-agent@rn-dev-agent
+/plugin install qaren@qaren
 /reload-plugins
 ```
 
-Local checkout: `claude --plugin-dir /path/to/rn-dev-agent` (the root `.claude-plugin/marketplace.json`
-resolves the plugin package from `packages/claude-plugin/`).
+```bash
+# Codex
+codex plugin marketplace add Lykhoyda/rn-dev-agent
+codex plugin add qaren@qaren
+```
 
-### Cursor
+Cursor uses **Customize → Plugins** with this repository's marketplace. For a
+local checkout, load or register `/path/to/rn-dev-agent/packages/qaren-plugin`
+on every host; Claude can use `claude --plugin-dir` with that package path.
+The package carries the host manifests, skills, hook and trust root, with no
+bundled MCP server. External plugin changes require a host reload or restart.
 
-Install from **Customize → Plugins**. This repo's `.cursor-plugin/marketplace.json` resolves
-`packages/claude-plugin/`.
+### Verified runtime
 
-Local checkout: load `/path/to/rn-dev-agent/packages/claude-plugin` — not the repository root.
-Cursor starts `cdp` from `${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js`. Claude
-SessionStart hooks are not loaded. Requires Node.js >= 24.
+The installer supports **macOS arm64 and x64** and requires **Node.js >= 24** on
+PATH. It uses the host architecture to select
+`qaren-<version>-darwin-arm64.tar.gz` or `qaren-<version>-darwin-x64.tar.gz`.
+There is no Linux or Windows runtime asset in this packaging phase.
 
-### Codex
+Set `PLUGIN_ROOT` to the installed `qaren` plugin directory, then run:
 
 ```bash
-codex plugin marketplace add Lykhoyda/rn-dev-agent
-codex plugin add rn-dev-agent@rn-dev-agent
+bash "$PLUGIN_ROOT/scripts/ensure-qaren.sh" --print-bin
+bash "$PLUGIN_ROOT/scripts/ensure-qaren.sh" --install
 ```
 
-Local checkout: register the package directory `/path/to/rn-dev-agent/packages/claude-plugin` — the
-same directory Claude installs, not the repository root. Codex selects its own surface from it
-(`.codex-plugin/plugin.json`, `codex-skills/`, `codex.mcp.json`, `bin/cdp-supervisor.js`) and runs
-the one bundled MCP runtime under `rn-dev-agent-core/dist/`. A registration that still points at
-`packages/codex-plugin` must be re-added: that directory is now authoring material only.
-Codex does not load Claude Code hooks — `No plugin hooks` is expected. Codex 0.145.0 is the
-live-refresh floor; older hosts are restart-only. An external CLI or manual plugin change always
-requires exiting and relaunching Codex.
+`--print-bin` checks offline and always exits 0: it prints an installed binary
+path or a diagnostic. When the runtime is missing it prints the exact install
+command. Claude's SessionStart uses only this mode, finishes within two seconds
+and never downloads; Cursor and Codex require an explicit invocation.
 
-### Then set up your project
+`--install` downloads the exact release asset vouched for by the plugin's
+`runner-manifest.json`, checks its byte length and SHA-256, rejects unsafe archive
+paths, links and special files, and installs under `~/.qaren/runtime/<version>/`.
+A per-version lock prevents concurrent replacements, and interruptions handled by
+the installer restore the previous runtime. A failed verification installs nothing. `curl` is
+required for downloads; a local copy uses the same verification:
 
-```text
-cd /path/to/your-rn-app
-
-Claude: /rn-dev-agent:setup
-Cursor: /rn-dev-agent:setup
-Codex:  $rn-dev-agent:setup
+```bash
+bash "$PLUGIN_ROOT/scripts/ensure-qaren.sh" --install --from-file /path/to/qaren.tar.gz
 ```
 
-Claude setup manages `CLAUDE.md`; Codex setup manages an idempotent sentinel-bounded `AGENTS.md`
-block, runs strictly read-only package/recovery diagnostics first, and previews every later
-project write for consent. [Full setup guide →](https://lykhoyda.github.io/rn-dev-agent/getting-started/)
+The installer prints the absolute `bin/qaren` path; use it directly or put its
+parent directory on PATH yourself. It does not edit shell configuration. The
+binary resolves its adjacent `runtime/` automatically; `QAREN_RUNTIME` overrides
+that location. The tarball includes the bundled core entries, Darwin process-birth
+helper and manifest, native runner sources and a runner-only trust root. It does
+not include Node or the Linux conditional-publication helpers.
 
-<details>
-<summary><strong>What setup checks, and what it fixes for you</strong></summary>
-
-Claude hooks and normal runtime use can perform the automatic handling below; Codex setup keeps
-recovery diagnosis read-only and prints the exact commands for you to confirm and run.
-
-| Check | Required | Automatic handling |
-|-------|----------|--------------|
-| Node.js ≥ 24 | Yes | No |
-| CDP bridge deps | Yes | Yes |
-| rn-fast-runner (iOS) | iOS targets only | Prebuilt artifact on releases; one-time `xcodebuild build-for-testing` fallback |
-| rn-android-runner (Android) | Android targets only | Prebuilt artifact on releases; Gradle build fallback on first use |
-| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | Yes | Yes (pin-cache engine `>= 1.1.24`, attested 1.1.24 checksum-verified) |
-| iOS Simulator / Android Emulator | One platform | No |
-| Session-bound Metro | Yes | Project integration starts or validates it through literal `pnpm ios` / `pnpm android` |
-| CDP connection | Yes | `rn_session` owns the binding; `cdp_status` is passive and `cdp_connect` pins the exact target |
-| ffmpeg | Optional (proof videos; required for strict iOS proof) | Yes |
-| idb + idb-companion | Optional (smooth observe-UI mirroring) | Yes |
-
-Claude automation failures and Codex missing prerequisites are reported with step-by-step manual
-instructions.
-
-**Prebuilt runners:** on a released version, the device runners install from a verified prebuilt
-artifact (SHA-256-checked local cache, then the GitHub Release asset for your exact plugin
-version), so the first `device_snapshot action=open` skips the cold build. Resolution is fail-open
-— offline, a checksum mismatch, or a dev checkout falls back transparently to the on-machine build
-(the host's `doctor` workflow reports which one you got). Force local builds with
-`RN_RUNNER_BUILD=local`.
-
-</details>
+The plugin manifest is the authority for asset names and digests. An unpublished
+version without macOS asset entries cannot be installed; do not substitute assets
+from another version. For release mechanics, see
+[Branches, CI and Release](AGENTS.md#branches-ci-and-release).
 
 ### What your app needs
 
@@ -430,7 +408,7 @@ session. The command never updates the evidence store or uploads data.
 
 | Problem | Solution |
 |---------|----------|
-| Plugin not detected (Codex) | Inspect with `codex plugin list --json` and `/mcp verbose`; user-confirm `codex plugin add rn-dev-agent@rn-dev-agent --json`, then relaunch after external changes |
+| Plugin not detected (Codex) | Inspect with `codex plugin list --json` and `/mcp verbose`; user-confirm `codex plugin add qaren@qaren --json`, then relaunch after external changes |
 | Codex tools fail after upgrade | `/mcp verbose` inspects only. Relaunch Codex for external/manual changes or legacy hosts; never kill another host's bridge |
 | Blank white screen after many reloads | NativeWind stylesheet corruption after 5+ `cdp_reload` cycles — kill and restart Metro, relaunch the app |
 | `device_scroll` times out on Reanimated screens | A `waitForIdle` round-trip can deadlock against Reanimated worklets; scroll routes through the in-tree runner's HID synthesis instead. Ensure the runner is healthy via the device session |
@@ -451,50 +429,38 @@ session. The command never updates the evidence store or uploads data.
 Enable auto-update in the host plugin manager, or update manually:
 
 ```text
-Claude: /plugin update rn-dev-agent@rn-dev-agent
+Claude: /plugin update qaren@qaren
         /reload-plugins
 Cursor: Customize → Plugins, then Developer: Reload Window
-Codex:  codex plugin marketplace upgrade rn-dev-agent
-        codex plugin add rn-dev-agent@rn-dev-agent --json
+Codex:  codex plugin marketplace upgrade qaren
+        codex plugin add qaren@qaren --json
         # relaunch after this external mutation
 ```
 
-Release notes: [GitHub Releases](https://github.com/Lykhoyda/rn-dev-agent/releases) · [core changelog](packages/rn-dev-agent-core/CHANGELOG.md)
+Release notes: [GitHub Releases](https://github.com/Lykhoyda/rn-dev-agent/releases) · [core changelog](packages/qaren-core/CHANGELOG.md)
 
 <details>
 <summary><strong>Development — building from source</strong></summary>
 
-This is a Yarn workspace monorepo:
+Install workspace dependencies with `corepack yarn install --immutable`. Build the
+screen child with `corepack yarn build:core` and the CLI with
+`cargo build --manifest-path packages/qaren-cli/Cargo.toml --locked`.
+Host manifests and skills are edited directly in `packages/qaren-plugin`; there
+is no generated host package or `build:host-runtimes` step.
 
-| Package | What it is |
-|---------|------------|
-| `packages/rn-dev-agent-core` | The MCP server (CDP bridge, device control, actions, testing) — all TypeScript source and tests |
-| `packages/claude-plugin` | The one plugin package Claude, Cursor, and Codex install — Claude/Cursor manifests, commands, agents, skills, hooks, generated Codex adapters (`.codex-plugin/`, `codex-*`, `bin/`), one bundled runtime |
-| `packages/codex-plugin` | Codex authoring source (manifest, playbooks, adapted skills, launcher, health) generated into `packages/claude-plugin` |
-| `packages/shared-agent-knowledge` | [Canonical workflow knowledge and host adaptation guidance](packages/shared-agent-knowledge/README.md) |
-| `packages/rn-fast-runner` | In-tree iOS XCTest device runner |
-| `packages/rn-android-runner` | In-tree Android UiAutomator device runner |
-| `apps/docs-site` | Astro Starlight docs → [lykhoyda.github.io/rn-dev-agent](https://lykhoyda.github.io/rn-dev-agent/) |
-
-```bash
-git clone https://github.com/Lykhoyda/rn-dev-agent.git
-cd rn-dev-agent
-corepack enable
-corepack yarn install --immutable
-corepack yarn build:host-runtimes   # builds core + generates the distributed plugin package
-```
-
-Run locally: `claude --plugin-dir /path/to/rn-dev-agent` (Claude Code), load
-`packages/claude-plugin` (Cursor), or register `packages/claude-plugin` (Codex).
+To build a release tarball, use Node 24+, Cargo, Xcode's toolchain and the matching
+preinstalled Rust target (`aarch64-apple-darwin` or `x86_64-apple-darwin`). The version
+must match `packages/qaren-cli/Cargo.toml`, and the input runner manifest must vouch
+for that version's iOS and Android runner zips:
 
 ```bash
-corepack yarn test          # complete unit-test suite
-corepack yarn lint          # oxlint
-corepack yarn format:check  # oxfmt
+node scripts/build-qaren-tarball.ts --version <version> --platform darwin-arm64 \
+  --runner-manifest /path/to/runner-manifest.json --out-dir ./dist-qaren
 ```
 
-Versioning uses [changesets](https://github.com/changesets/changesets); every tool-surface change
-must update the golden registry (`node scripts/update-tool-registry.mjs`).
+The builder rebuilds the core and release CLI, then prints `name=`, `sha256=` and
+`bytes=`. With unchanged inputs and toolchain, repeated builds produce identical
+bytes. See [AGENTS.md](AGENTS.md) for contribution and validation mechanics.
 
 </details>
 
