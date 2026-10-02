@@ -55,19 +55,6 @@ final class KeyboardGuardTests: XCTestCase {
     }
   }
 
-  func testQaReadOnlyRefusalNamesAnAppThatIsNotRunning() throws {
-    for notRunning in [true, false] {
-      let json = try XCTUnwrap(
-        JSONSerialization.jsonObject(with: JSONEncoder().encode(runnerQaReadOnlyRefusal(appNotRunning: notRunning)))
-          as? [String: Any]
-      )
-      let error = try XCTUnwrap(json["error"] as? [String: Any])
-      XCTAssertEqual(error["code"] as? String, "ACTION_CONTEXT_CHANGED")
-      XCTAssertEqual(error["mutation"] as? String, "none")
-      XCTAssertEqual(error["reason"] as? String, notRunning ? "app-not-running" : nil)
-    }
-  }
-
   func testPresenceKeyboardStateUsesTypeAndNonemptyFrameNotLabelsOrHittability() {
     XCTAssertEqual(presencePayload(nodes: [presenceNode()]).keyboardVisible, true)
     XCTAssertEqual(presencePayload(nodes: [presenceNode(frame: .zero)]).keyboardVisible, false)

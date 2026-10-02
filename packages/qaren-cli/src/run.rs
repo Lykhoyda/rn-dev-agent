@@ -545,7 +545,8 @@ pub fn worktree_status(runner: &mut dyn Runner, app_root: &Path) -> Option<BTree
             "-C",
             &app_root.to_string_lossy(),
             "status",
-            "--porcelain",
+            "--porcelain=v1",
+            "-z",
             "--untracked-files=all",
             "--",
             ".",
@@ -553,21 +554,36 @@ pub fn worktree_status(runner: &mut dyn Runner, app_root: &Path) -> Option<BTree
         ],
         20,
     ));
-    output.ok().then(|| {
-        output
-            .stdout
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(str::to_string)
-            .collect()
-    })
+    output.ok().then(|| porcelain_entries(&output.stdout))
+}
+
+// One `XY path` entry per change; a rename or copy also names its source path.
+fn porcelain_entries(stdout: &str) -> BTreeSet<String> {
+    let mut entries = BTreeSet::new();
+    let mut records = stdout.split('\0').filter(|record| !record.is_empty());
+    while let Some(record) = records.next() {
+        let renamed = record.starts_with('R') || record.starts_with('C');
+        let source = if renamed { records.next() } else { None };
+        entries.insert(match source {
+            Some(source) => format!("{record}\0{source}"),
+            None => record.to_string(),
+        });
+    }
+    entries
 }
 
 // Paths whose status changed during the walk, outside the block corpus; diagnostic only.
 pub fn worktree_drift(before: &BTreeSet<String>, after: &BTreeSet<String>) -> Vec<String> {
     before
         .symmetric_difference(after)
-        .map(|line| line.get(3..).unwrap_or(line).to_string())
+        .flat_map(|entry| {
+            entry
+                .get(3..)
+                .unwrap_or(entry)
+                .split('\0')
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()

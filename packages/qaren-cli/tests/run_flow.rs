@@ -1083,7 +1083,7 @@ fn the_receipt_names_written_blocks_and_paths_the_walk_changed_outside_them() {
     script_provision(&mut mock);
     mock.expect_run(
         "(exclude).qaren/actions",
-        CmdOutput::success(" M test-app/dirty.ts\n"),
+        CmdOutput::success(" M test-app/dirty.ts\0"),
     );
     let ledger = r#"{"verdict":"PASS","path":"replay","blocks":[{"key":"plan","outcome":"pass","source":"replayed"}],"blocksWritten":["plan"],"steps":[],"jev":{"calls":0,"medianMs":0},"llmTurns":0,"escapes":0,"recoveries":0}"#;
     mock.expect_spawn_piped(
@@ -1095,7 +1095,7 @@ fn the_receipt_names_written_blocks_and_paths_the_walk_changed_outside_them() {
     script_core_identity(&mut mock);
     mock.expect_run(
         "(exclude).qaren/actions",
-        CmdOutput::success(" M test-app/dirty.ts\n?? test-app/src/new.ts\n"),
+        CmdOutput::success(" M test-app/dirty.ts\0?? test-app/src/new.ts\0"),
     );
     script_teardown_after_drift(
         &mut mock,

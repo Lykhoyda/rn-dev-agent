@@ -136,7 +136,10 @@ extension RnFastRunnerTests {
   // MARK: - Command Handling
 
   private func qaReadOnlyRefusal(appNotRunning: Bool = false) -> Response {
-    runnerQaReadOnlyRefusal(appNotRunning: appNotRunning)
+    Response(ok: false, error: ErrorPayload(
+      code: "ACTION_CONTEXT_CHANGED", message: "QA read requires the unchanged foreground target; no recovery attempted",
+      mutation: "none", reason: appNotRunning ? "app-not-running" : nil
+    ))
   }
 
   // Reads the cached target's state only; a read never activates or relaunches the app.
@@ -213,7 +216,9 @@ extension RnFastRunnerTests {
           userInfo: [NSLocalizedDescriptionKey: "command returned no response"]
         )
       }
-      if command.qaReadOnly == true, !response.ok { return qaReadOnlyRefusal() }
+      if command.qaReadOnly == true, !response.ok {
+        return qaReadOnlyRefusal(appNotRunning: response.error?.reason == "app-not-running")
+      }
       if !hasRetried, shouldRetryCommand(command), shouldRetryResponse(response) {
         NSLog(
           "RN_FAST_RUNNER_RETRY command=%@ reason=response_unavailable",

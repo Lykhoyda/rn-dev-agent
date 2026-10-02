@@ -68,8 +68,9 @@ test('actual Swift preparation and retry loop cannot activate, retarget or recov
 import Foundation
 ${section(read('Models'), 'enum CommandType:', 'struct Response:')}
 ${section(read('Models'), 'struct SnapshotRect:', 'struct SnapshotNode:')}
-struct ErrorPayload { var code: String? = nil; let message: String; var mutation: String? = nil }
+struct ErrorPayload { var code: String? = nil; let message: String; var mutation: String? = nil; var reason: String? = nil }
 struct DataPayload { var nodes: [Int]? = nil }
+func runnerPayload(_ payload: DataPayload, appProcessIdentifier: Int?) -> DataPayload { payload }
 struct Response { let ok: Bool; var data: DataPayload? = nil; var error: ErrorPayload? = nil }
 enum RunnerErrorDomain { static let exception = "exception"; static let general = "general" }
 enum RunnerErrorCode { static let objcException = 1; static let commandReturnedNoResponse = 2 }
@@ -118,6 +119,7 @@ class Harness {
   func platformPresenceFailure() -> Response { Response(ok: false) }
   func snapshotPlatformPresence(app: XCUIApplication, appId: String, presenceBudgetMs: Int) -> DataPayload { DataPayload() }
   func retainSnapshotTargets(_ nodes: [Int]) {}
+  func observedProcessIdentifier(_ target: XCUIApplication) -> Int? { 7 }
 ${helpers}
 ${safe}
 ${prepare}
@@ -132,16 +134,18 @@ func command(_ verb: String, qa: Bool = true, bundle: String = "qa.app") throws 
   try decoder.decode(Command.self, from: Data("{\\"command\\":\\"\\(verb)\\",\\"appBundleId\\":\\"\\(bundle)\\",\\"qaReadOnly\\":\\(qa)}".utf8))
 }
 for verb in ["snapshot", "verifyInput", "isScreenStatic"] {
-  for state in ["missing", "background", "changed", "gone"] {
+  for state in ["missing", "background", "changed", "gone", "stopped"] {
     let h = Harness()
     let original = h.currentApp
     if state == "missing" { h.currentApp = nil }
     if state == "background" { h.currentApp!.state = .runningBackground }
+    if state == "stopped" { h.currentApp!.state = .notRunning }
     if state == "changed" { h.currentBundleId = "other.app" }
     if state == "gone" { h.currentApp!.exists = false }
     let before = activations
     let result = try h.run(command(verb))
     precondition(!result.ok && result.error?.code == "ACTION_CONTEXT_CHANGED", "QA read admitted \\(verb) \\(state)")
+    precondition((result.error?.reason == "app-not-running") == (state == "stopped"), "app-not-running \\(verb) \\(state)")
     precondition(activations == before && h.sleeps == 0 && h.reads == 0)
     if state != "missing" { precondition(h.currentApp === original) }
   }
@@ -150,7 +154,7 @@ for verb in ["snapshot", "verifyInput", "isScreenStatic"] {
     RunnerObjCExceptionCatcher.failNext = failure == "exception"
     h.throwRead = failure == "swift"; h.refuseRead = failure == "response"
     let result = try h.run(command(verb))
-    precondition(!result.ok && result.error?.code == "ACTION_CONTEXT_CHANGED")
+    precondition(!result.ok && result.error?.code == "ACTION_CONTEXT_CHANGED" && result.error?.reason == nil)
     precondition(h.currentApp === original && h.currentBundleId == "qa.app" && h.sleeps == 0 && h.reads <= 1)
   }
   let h = Harness()

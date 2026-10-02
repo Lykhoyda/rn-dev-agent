@@ -218,9 +218,9 @@ export async function walkBlock(
         if (error instanceof AppProcessGoneError) throw processChanged();
         throw error;
       }
-      guardAppProcess(deps.appProcess, latest.appProcessIdentifier);
       const privacyStarted = deps.timing ? deps.now() : 0;
       privacy.observe(latest);
+      guardAppProcess(deps.appProcess, latest.appProcessIdentifier);
       if (deps.timing)
         observeTiming(timingObserver, {
           stage: 'privacy-history',

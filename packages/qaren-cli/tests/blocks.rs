@@ -135,6 +135,27 @@ fn worktree_drift_excludes_saved_blocks_and_reports_other_changed_paths() {
         vec!["app.ts".to_string(), "src/new.ts".to_string()]
     );
     assert!(worktree_drift(&after, &after).is_empty());
+
+    git(&root, &["add", "-A"]);
+    git(
+        &root,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "two",
+        ],
+    );
+    let clean = worktree_status(&mut runner, &root).unwrap();
+    git(&root, &["mv", "app.ts", "renamed file.ts"]);
+    let moved = worktree_status(&mut runner, &root).unwrap();
+    assert_eq!(
+        worktree_drift(&clean, &moved),
+        vec!["app.ts".to_string(), "renamed file.ts".to_string()]
+    );
 }
 
 #[test]

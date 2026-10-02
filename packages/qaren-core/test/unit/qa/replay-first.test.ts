@@ -98,7 +98,12 @@ test('first run walks, passes and writes the block', async () => {
   assert.equal(result.path, 'walk');
   assert.deepEqual(result.blocks, [{ key: SLUG, outcome: 'pass', source: 'discovered' }]);
   assert.deepEqual(result.blocksWritten, [SLUG]);
-  assert.match(readFileSync(actionFile(dir), 'utf8'), /- tapOn: \{ id: "onboarding-done" \}/);
+  const saved = readFileSync(actionFile(dir), 'utf8');
+  assert.match(saved, /- tapOn: \{ id: "onboarding-done" \}/);
+  assert.match(
+    saved,
+    /# 3\. Wait for "Welcome" to appear\n- extendedWaitUntil: \{ visible: \{ id: "home-title" \}, timeout: 15000 \}/,
+  );
 });
 
 test('second run replays the stored block without Jev and leaves the file unchanged', async () => {
@@ -296,4 +301,26 @@ test('a capture that finds the app process gone fails APP_PROCESS_CHANGED and wr
   assert.equal(result.verdict, 'FAIL');
   assert.match(result.failure?.seen ?? '', /APP_PROCESS_CHANGED/);
   assert.equal(existsSync(actionFile(dir)), false);
+});
+
+test('a process change on a capture still records its concealed inputs before reporting', async () => {
+  const fake = app();
+  let captures = 0;
+  const capture = fake.deps.captureScreen;
+  fake.deps.captureScreen = async (options) => {
+    const screen = await capture(options);
+    if (captures++ === 0) return { ...screen, appProcessIdentifier: 41 };
+    const secret = element('@pin', 'PIN', { kind: 'input', secure: true, value: 'hunter2' });
+    return {
+      ...screen,
+      elements: [...screen.elements, secret],
+      visibleText: [...screen.visibleText, 'hunter2'],
+      appProcessIdentifier: 77,
+    };
+  };
+  fake.deps.appProcess = {};
+  const result = ledger(await runPlan(blocks(literal), fake.deps, [], store(root())));
+  assert.equal(result.verdict, 'FAIL');
+  assert.match(result.failure?.seen ?? '', /APP_PROCESS_CHANGED/);
+  assert.doesNotMatch(JSON.stringify(result), /hunter2/);
 });

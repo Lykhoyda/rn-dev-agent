@@ -283,7 +283,11 @@ export function visibleSelector(target: Target, screen: Screen): Selector | unde
   if (quoted === undefined || !targetVisible(target, screen)) return undefined;
   const shown = screen.elements.filter((e) => !e.offscreen);
   if (target.exact !== 'text' && shown.some((e) => e.testID === quoted)) return { id: quoted };
-  return target.exact === 'id' ? undefined : { text: quoted };
+  if (target.exact === 'id') return undefined;
+  const labelled = shown.filter((e) => e.label === quoted);
+  return target.exact === undefined && labelled.length === 1 && labelled[0].testID
+    ? { id: labelled[0].testID }
+    : { text: quoted };
 }
 
 export function checkQuestion(check: Check): Question {

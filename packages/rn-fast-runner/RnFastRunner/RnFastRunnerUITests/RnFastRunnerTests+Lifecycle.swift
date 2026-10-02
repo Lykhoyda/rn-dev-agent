@@ -20,13 +20,6 @@ func runnerPayload(_ payload: DataPayload, appProcessIdentifier: Int?) -> DataPa
   return observed
 }
 
-func runnerQaReadOnlyRefusal(appNotRunning: Bool) -> Response {
-  Response(ok: false, error: ErrorPayload(
-    code: "ACTION_CONTEXT_CHANGED", message: "QA read requires the unchanged foreground target; no recovery attempted",
-    mutation: "none", reason: appNotRunning ? "app-not-running" : nil
-  ))
-}
-
 func runnerPngData(for image: RunnerImage) -> Data? {
 #if canImport(UIKit)
   return image.pngData()
