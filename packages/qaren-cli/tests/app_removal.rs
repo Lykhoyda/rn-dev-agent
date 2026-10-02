@@ -1270,3 +1270,52 @@ fn removal_evidence_redacts_dotenv_output_before_saving_the_record() {
     assert!(!receipt.to_json().contains("synthetic-removal-key"));
     assert_eq!(mock.remaining(), 0);
 }
+
+#[test]
+fn uninstall_probe_evidence_withholds_a_key_split_across_streams() {
+    let body: Vec<String> = (0..8).map(|n| format!("FAKEKEYBODY{n}")).collect();
+    for header in ["-----BEGIN PRIVATE KEY-----\n", "<redacted private key>\n"] {
+        let repo = common::temp_repo();
+        owned_record(&repo).save(&repo).unwrap();
+        let mut mock = MockRunner::new();
+        expect_ownership_proof(&mut mock);
+        expect_installed_matching(&mut mock);
+        mock.expect_run(
+            &format!("-s {SERIAL} uninstall {APP}"),
+            CmdOutput {
+                exit_code: Some(1),
+                stdout: body.join("\n") + "\n",
+                stderr: header.to_string(),
+                ..Default::default()
+            },
+        );
+        mock.expect_run(
+            &format!("-s {SERIAL} shell pm path {APP}"),
+            CmdOutput::success(&format!("package:{APK_PATH}\n")),
+        );
+        mock.expect_run(
+            &format!("-s {SERIAL} shell pm list packages {APP}"),
+            CmdOutput::success(&format!("package:{APP}\n")),
+        );
+        expect_teardown_alive(&mut mock);
+        let receipt = cleanup_with(&mut mock, &repo, "androidrun1", Some(CONFIRM));
+        assert_eq!(receipt.result, ReceiptResult::Failed);
+        let record = std::fs::read_to_string(repo.join("androidrun1/run.json")).unwrap();
+        for evidence in [&record, &receipt.to_json()] {
+            assert!(!evidence.contains("FAKEKEYBODY"), "{evidence}");
+        }
+        let removal = RunRecord::load(&repo, "androidrun1")
+            .unwrap()
+            .resources
+            .app_install
+            .unwrap()
+            .removal
+            .unwrap();
+        assert_eq!(
+            removal.uninstall,
+            qaren::redact::PRIVATE_KEY_WITHHELD,
+            "{header}"
+        );
+        assert_eq!(mock.remaining(), 0);
+    }
+}

@@ -416,7 +416,7 @@ fn run_inner(
     let ledger_path = run_dir.join("ledger.json");
     if let Err(e) = std::fs::write(
         &ledger_path,
-        serde_json::to_vec_pretty(&outcome.ledger).unwrap_or_default(),
+        crate::redact::durable_json(&outcome.ledger).unwrap_or_default(),
     ) {
         ctx.notes.push((
             "ledger".to_string(),

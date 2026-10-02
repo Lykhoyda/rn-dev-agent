@@ -410,7 +410,7 @@ impl RunRecord {
         let tmp = dir.join(format!(".run.json.tmp.{}", std::process::id()));
         let write = || -> std::io::Result<()> {
             std::fs::create_dir_all(&dir)?;
-            let body = serde_json::to_vec_pretty(self)
+            let body = crate::redact::durable_json(self)
                 .map_err(|e| std::io::Error::other(format!("serialize run record: {e}")))?;
             std::fs::write(&tmp, body)?;
             std::fs::rename(&tmp, &target)?;

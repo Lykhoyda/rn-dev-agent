@@ -2,6 +2,7 @@ mod common;
 
 use qaren::exec::{CmdOutput, CmdSpec, RealRunner, Runner};
 use qaren::failure::{Failure, FailureCode};
+use qaren::redact::PRIVATE_KEY_WITHHELD;
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
@@ -28,7 +29,7 @@ fn command_summary_withholds_output_naming_a_private_key() {
     ] {
         let summary = output.summary();
         assert!(!summary.contains("private-body"), "{summary}");
-        assert_eq!(summary, "exit=1 <output withheld: private key material>");
+        assert_eq!(summary, format!("exit=1 {PRIVATE_KEY_WITHHELD}"));
     }
     assert_eq!(
         CmdOutput {
@@ -43,25 +44,23 @@ fn command_summary_withholds_output_naming_a_private_key() {
 const FAKE_BODY: &str = "FAKEKEYBODY";
 
 #[test]
-fn command_summary_withholds_a_private_key_mask_from_real_capture() {
+fn real_capture_withholds_both_streams_when_either_names_a_private_key() {
     let mut runner = RealRunner::new();
-    let output = runner.run(&CmdSpec::new(
-        "private-key-summary",
-        "sh",
-        &[
-            "-c",
-            "printf '%s\\n' '-----BEGIN PRIVATE KEY-----' >&2; printf 'FAKEKEYBODY\\n'; exit 1",
-        ],
-        5,
-    ));
-    assert_eq!(output.exit_code, Some(1));
-    assert_eq!(output.stderr, "<redacted private key>\n");
-    assert_eq!(output.stdout, "FAKEKEYBODY\n");
-    assert_eq!(
-        output.summary(),
-        "exit=1 <output withheld: private key material>"
-    );
-    assert!(!output.summary().contains(FAKE_BODY));
+    for script in [
+        "printf '%s\\n' '-----BEGIN PRIVATE KEY-----' >&2; printf 'FAKEKEYBODY\\n'; exit 1",
+        "printf 'FAKEKEYBODY\\n' >&2; printf 'quoting a private key\\n'; exit 1",
+    ] {
+        let output = runner.run(&CmdSpec::new(
+            "private-key-summary",
+            "sh",
+            &["-c", script],
+            5,
+        ));
+        assert_eq!(output.exit_code, Some(1));
+        assert_eq!(output.stdout, PRIVATE_KEY_WITHHELD);
+        assert_eq!(output.stderr, PRIVATE_KEY_WITHHELD);
+        assert_eq!(output.summary(), format!("exit=1 {PRIVATE_KEY_WITHHELD}"));
+    }
     for marker in ["private key", "PrIvAtE KeY", "<redacted private key>"] {
         for stderr in [false, true] {
             let output = CmdOutput {
@@ -69,10 +68,7 @@ fn command_summary_withholds_a_private_key_mask_from_real_capture() {
                 stderr: if stderr { marker } else { FAKE_BODY }.into(),
                 ..CmdOutput::failed(1, "")
             };
-            assert_eq!(
-                output.summary(),
-                "exit=1 <output withheld: private key material>"
-            );
+            assert_eq!(output.summary(), format!("exit=1 {PRIVATE_KEY_WITHHELD}"));
         }
     }
 }
@@ -85,14 +81,17 @@ fn a_marker_mention_cannot_blind_a_truncated_key_in_a_summary() {
             "error: unterminated -----BEGIN marker\n-----BEGIN PRIVATE KEY-----\n{FAKE_BODY}1\n{FAKE_BODY}2\n{FAKE_BODY}3\n"
         ),
     );
-    let summary = failure.summary();
-    assert!(!summary.contains(FAKE_BODY), "{summary}");
-    assert_eq!(summary, "exit=255 <output withheld: private key material>");
+    assert_eq!(
+        failure.summary(),
+        format!("exit=255 {PRIVATE_KEY_WITHHELD}")
+    );
 }
 
+// Earlier log content belongs to other commands and survives; this command's output does not.
 fn spawned_log(script: &str) -> String {
     let dir = common::temp_repo();
     let log = dir.join("child.log");
+    std::fs::write(&log, "earlier command\n").unwrap();
     let mut runner = RealRunner::with_log_executable(env!("CARGO_BIN_EXE_qaren").into());
     runner
         .spawn_group(&shell(&format!("{script}\n: > done"), &dir), &log)
@@ -100,44 +99,71 @@ fn spawned_log(script: &str) -> String {
     until(|| dir.join("done").exists());
     until(|| {
         runner.flush_logs().unwrap();
-        std::fs::read_to_string(&log)
-            .unwrap_or_default()
-            .contains("tail line")
+        let stored = std::fs::read_to_string(&log).unwrap_or_default();
+        stored.contains("tail line") || stored.contains(PRIVATE_KEY_WITHHELD)
     });
+    std::thread::sleep(Duration::from_millis(100));
+    runner.flush_logs().unwrap();
     let stored = std::fs::read_to_string(&log).unwrap();
     std::fs::remove_dir_all(dir).unwrap();
     stored
 }
 
-#[test]
-fn a_key_header_on_stdout_masks_its_body_on_stderr_in_the_durable_log() {
-    let stored = spawned_log(&format!(
-        r#"printf 'starting\n'
-printf '%s\n' '-----BEGIN PRIVATE KEY-----'
-sleep 0.05
-n=0; while [ "$n" -lt 26 ]; do printf '{FAKE_BODY}%s\n' "$n" >&2; n=$((n+1)); done
-sleep 0.05
-printf '%s\n' '-----END PRIVATE KEY-----'
-printf 'tail line\n'"#
-    ));
-    assert!(!stored.contains(FAKE_BODY), "{stored}");
-    assert!(
-        stored.contains("starting\n<redacted private key>\n"),
-        "{stored}"
-    );
+fn withheld_log() -> String {
+    format!("earlier command\n{PRIVATE_KEY_WITHHELD}\n")
 }
 
 #[test]
-fn a_mention_on_the_header_line_cannot_blind_the_durable_log() {
-    let stored = spawned_log(&format!(
-        r#"printf '%s\n' 'quoting -----BEGIN unterminated -----BEGIN PRIVATE KEY-----' >&2
-printf '{FAKE_BODY}1\n{FAKE_BODY}2\n{FAKE_BODY}3\n' >&2
-printf '%s\n' '-----END PRIVATE KEY-----' >&2
-sleep 0.05
-printf 'tail line\n'"#
-    ));
-    assert!(!stored.contains(FAKE_BODY), "{stored}");
-    assert!(stored.starts_with("<redacted private key>\n"), "{stored}");
+fn a_private_key_on_either_stream_withholds_the_whole_command_log_in_any_arrival_order() {
+    let body = format!(
+        r#"n=0; while [ "$n" -lt 26 ]; do printf '{FAKE_BODY}%s\n' "$n"; n=$((n+1)); done"#
+    );
+    for script in [
+        format!("printf 'starting\\n'\nprintf '%s\\n' '-----BEGIN PRIVATE KEY-----' >&2\n{body}\nprintf 'tail line\\n'"),
+        format!("printf '%s\\n' '-----BEGIN PRIVATE KEY-----'\n{body} >&2\nprintf '%s\\n' '-----END PRIVATE KEY-----'\nprintf 'tail line\\n'"),
+        format!("{body}\nprintf '%s\\n' '-----end private key-----' >&2\nprintf 'tail line\\n'"),
+        format!("{body} >&2\nprintf '<redacted private key>\\n'\nprintf 'tail line\\n'"),
+        format!("printf -- '-----BEGIN PRIVATE' >&2\n{body}\nprintf ' KEY-----\\n' >&2\nprintf 'tail line\\n'"),
+    ] {
+        let stored = spawned_log(&script);
+        assert_eq!(stored, withheld_log(), "{script}");
+    }
+}
+
+#[test]
+fn a_log_without_a_private_key_keeps_every_line() {
+    let stored = spawned_log("printf 'starting\\n'\nprintf 'warn\\n' >&2\nprintf 'tail line\\n'");
+    assert!(stored.starts_with("earlier command\n"), "{stored}");
+    for line in ["starting\n", "warn\n", "tail line\n"] {
+        assert!(stored.contains(line), "{stored}");
+    }
+}
+
+#[test]
+fn an_evidence_tail_naming_a_private_key_never_reaches_run_json() {
+    let dir = common::temp_repo();
+    let log = dir.join("tunnel.log");
+    for mention in [
+        "<redacted private key>",
+        "-----end private key-----",
+        "-----END PRIVATE KEY-----",
+    ] {
+        let lines: String = (0..8).map(|n| format!("{FAKE_BODY}{n}\n")).collect();
+        std::fs::write(&log, format!("{lines}{mention}\nexit\n")).unwrap();
+        let failure = Failure::new(
+            "allocate",
+            FailureCode::TunnelFailed,
+            "ssh tunnel died".to_string(),
+            "inspect the tunnel log",
+        )
+        .with_evidence(vec![qaren::commands::log_tail(&log, 25)]);
+        persist_failure(&dir, "tailrun", failure.clone());
+        let recorded =
+            std::fs::read_to_string(qaren::runrecord::RunRecord::path(&dir, "tailrun")).unwrap();
+        assert!(!recorded.contains(FAKE_BODY), "{recorded}");
+        assert_eq!(failure.evidence, vec![PRIVATE_KEY_WITHHELD.to_string()]);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -207,8 +233,14 @@ impl Drop for HelperGuard {
     }
 }
 
-#[test]
-fn the_log_drain_masks_a_private_key_split_across_lines_and_writes() {
+fn helper_log(chunks: &[Vec<u8>]) -> String {
+    let dir = common::temp_repo();
+    let path = dir.join("helper.log");
+    std::fs::write(&path, "earlier command\n").unwrap();
+    let log = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
     let (input, mut output) = UnixStream::pair().unwrap();
     let (control, helper_control) = UnixStream::pair().unwrap();
     let mut helper = HelperGuard(
@@ -217,71 +249,15 @@ fn the_log_drain_masks_a_private_key_split_across_lines_and_writes() {
             .env_clear()
             .stdin(Stdio::from(OwnedFd::from(input)))
             .stdout(Stdio::from(OwnedFd::from(helper_control)))
-            .stderr(Stdio::piped())
+            .stderr(Stdio::from(log))
             .spawn()
             .unwrap(),
     );
-    let body = [
-        "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj",
-        "Zq3=",
-        "c2Vjb25kIGtleQ",
-        "MIIbody",
-    ];
-    let oversized = format!("{} -----BEGIN PRIVATE KEY-----\n", "x".repeat(70 * 1024));
-    for chunk in [
-        "ssh: -----BEGIN PRIVATE KEY-----\n",
-        body[0],
-        "\n",
-        body[1],
-        "\n-----END PRIVATE KEY-----\nConnection closed\n",
-        &oversized,
-        body[2],
-        "\n-----END PRIVATE KEY-----\ndone\n",
-    ] {
-        output.write_all(chunk.as_bytes()).unwrap();
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let dash_prefix = format!(
-        "{}------BEGIN PRIVATE KEY-----\nMIIbody\n-----END PRIVATE KEY-----\n",
-        "x".repeat(65_520)
-    );
-    output.write_all(dash_prefix.as_bytes()).unwrap();
-    for boundary in [64 * 1024, 128 * 1024, 192 * 1024] {
-        for kind in ["BEGIN", "END"] {
-            for (split, dashes) in [
-                (1, 0),
-                (11, 0),
-                (23, 0),
-                (26, 0),
-                (27, 0),
-                (16, 1),
-                (20, 8),
-                (1, 8),
-            ] {
-                if kind == "END" {
-                    output.write_all(b"-----BEGIN PRIVATE KEY-----\n").unwrap();
-                }
-                let line = format!(
-                    "{}{}-----{kind} PRIVATE KEY-----{}\n",
-                    "x".repeat(boundary - split),
-                    "-".repeat(dashes),
-                    "x".repeat(128 * 1024)
-                );
-                output.write_all(line.as_bytes()).unwrap();
-                if kind == "BEGIN" {
-                    writeln!(output, "{}\n-----END PRIVATE KEY-----", body[2]).unwrap();
-                }
-                output.write_all(b"after oversized header\n").unwrap();
-            }
-        }
+    for chunk in chunks {
+        output.write_all(chunk).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
     }
     drop(output);
-    let mut stderr = helper.0.stderr.take().unwrap();
-    let reader = std::thread::spawn(move || {
-        let mut stored = String::new();
-        stderr.read_to_string(&mut stored).unwrap();
-        stored
-    });
     let deadline = Instant::now() + Duration::from_secs(10);
     let status = loop {
         if let Some(status) = helper.0.try_wait().unwrap() {
@@ -292,19 +268,47 @@ fn the_log_drain_masks_a_private_key_split_across_lines_and_writes() {
     };
     drop(control);
     assert!(status.success());
-    let stored = reader.join().unwrap();
-    for line in body {
-        assert!(
-            !stored.contains(line),
-            "key bytes reached the log: {stored}"
+    let stored = std::fs::read_to_string(&path).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    stored
+}
+
+#[test]
+fn the_log_helper_withholds_a_mention_split_across_writes_or_oversized_lines() {
+    let body = format!("{FAKE_BODY}\n").into_bytes();
+    let mut cases = vec![vec![
+        b"ssh: -----BEGIN PRIV".to_vec(),
+        b"ATE KEY-----\n".to_vec(),
+        body.clone(),
+    ]];
+    for boundary in [64 * 1024, 128 * 1024] {
+        for split in [1, 5, 10, 11, 12] {
+            cases.push(vec![
+                body.clone(),
+                format!(
+                    "{}-----BEGIN PRIVATE KEY-----{}\n",
+                    "x".repeat(boundary - split),
+                    "x".repeat(70 * 1024)
+                )
+                .into_bytes(),
+                body.clone(),
+            ]);
+        }
+    }
+    for chunks in cases {
+        assert_eq!(
+            helper_log(&chunks),
+            format!("earlier command\n{PRIVATE_KEY_WITHHELD}\n")
         );
     }
-    assert!(
-        stored.contains("Connection closed") && stored.contains("done"),
-        "{stored}"
+    let plain = helper_log(&[
+        format!("{}\n", "x".repeat(130 * 1024)).into_bytes(),
+        b"after oversized\n".to_vec(),
+    ]);
+    assert_eq!(
+        plain,
+        "earlier command\n[oversized log line withheld]\nafter oversized\n"
     );
-    // A withheld line naming a key masks until the next END line, so only the BEGIN cases' trailers survive.
-    assert_eq!(stored.matches("after oversized header\n").count(), 24);
 }
 
 #[test]

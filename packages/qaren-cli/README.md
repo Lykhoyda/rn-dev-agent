@@ -448,23 +448,21 @@ build_and_ready — so revisit this once live reuse is measurable.
   report only exit status and timeout state with `[private output withheld]`,
   and neither captured stream is written to durable logs. Only a successful,
   nonempty fetch writes the cleanup-tracked, mode-0600 vendor key file.
-  Other command summaries withhold output if either stream contains
-  `private key` (case-insensitive), including `<redacted private key>` from
-  already-masked stderr. Otherwise, complete stdout and stderr are redacted
-  before selecting the six-line diagnostic tail; timeouts report only duration.
-  Shared redaction masks entire lines naming `PRIVATE KEY`, including header
-  delimiters, with `<redacted private key>` or suppresses them within an open
-  block. A `BEGIN` suppresses
-  following lines through a `PRIVATE KEY` line containing `-----END`; an
-  unterminated block suppresses the remainder. Whole-string redaction checks
-  literal `BEGIN` and `END` occurrences in order on lines naming `PRIVATE KEY`;
-  an unmatched `END` replaces the whole string with the mask.
-  Detached command logs use one helper for both streams. While a block is open,
-  subsequent processed lines on either stream are suppressed until each
-  opening stream closes its own block. Oversized log lines are withheld;
-  finding `PRIVATE KEY` anywhere in one, including across capture chunks,
-  conservatively opens that stream's block. API-key redaction still applies
-  to retained diagnostics and log lines.
+  Every other durable record follows one rule: if a command's captured
+  output (stdout and stderr together) contains `private key`
+  (case-insensitive) anywhere, its entire output is withheld and replaced by
+  `[output withheld: contained private key material]`; any single evidence
+  string containing it is withheld whole the same way. The rule applies at
+  capture, in command summaries and evidence tails, in the one serializer
+  behind `run.json`, receipts, ledgers, build plans and handoff documents, and in detached
+  command logs, where the helper truncates the log back to where that
+  command's output began and drops everything after the marker. The marker
+  itself contains the phrase, so re-checking it is stable. This is
+  deliberately fail-closed: harmless output that names a private key (an ssh
+  permissions warning, for example) is withheld too. Oversized log lines are
+  still withheld, and API-key redaction still applies to retained diagnostics
+  and log lines. Key material printed with no mention of a private key at all
+  cannot be recognized.
 - **Local listeners are never adopted.** The farm-advertised adb port is
   preflighted free on this host *before* the lease is claimed (a local
   emulator commonly owns 5555), and a listener on the tunnel or private adb

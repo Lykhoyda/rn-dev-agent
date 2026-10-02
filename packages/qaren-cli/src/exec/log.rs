@@ -7,7 +7,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub const HELPER_ARG: &str = "--internal-redact-log";
-// The helper also drains the child's stderr from fd 3, sharing one key state with stdout.
+// The helper also drains the child's stderr from fd 3 into the same log.
 pub const PAIRED_ARG: &str = "--stderr-fd3";
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_LINE: usize = 64 * 1024;
@@ -23,7 +23,7 @@ impl LogDrain {
         Ok((drain, output))
     }
 
-    // One helper for both streams of a child, so a key header on one masks a body on the other.
+    // One helper for both streams of a child, so a key mention on either withholds both.
     pub(super) fn spawn_paired(
         executable: &Path,
         path: &Path,
@@ -130,64 +130,74 @@ impl Drop for LogDrain {
     }
 }
 
+// The whole command's output is withheld once either stream names a private key.
+struct Sink {
+    file: std::fs::File,
+    start: u64,
+    withheld: bool,
+}
+
+impl Sink {
+    fn line(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if self.withheld {
+            return Ok(());
+        }
+        let text = String::from_utf8_lossy(bytes);
+        if crate::redact::names_private_key(&text) {
+            self.withheld = true;
+            self.file.set_len(self.start)?;
+            self.file
+                .write_all(crate::redact::PRIVATE_KEY_WITHHELD.as_bytes())?;
+            self.file.write_all(b"\n")?;
+        } else {
+            self.file
+                .write_all(crate::redact::redact_plain(&text).as_bytes())?;
+        }
+        self.file.flush()
+    }
+}
+
 #[derive(Default)]
 struct Lines {
-    stream: usize,
     pending: Vec<u8>,
-    dropping: bool,
-    window: Vec<u8>,
+    oversized: bool,
 }
 
 impl Lines {
-    fn write(
-        &mut self,
-        bytes: &[u8],
-        masker: &mut crate::redact::KeyMasker,
-        log: &mut impl Write,
-    ) -> io::Result<()> {
+    fn write(&mut self, bytes: &[u8], sink: &mut Sink) -> io::Result<()> {
         for &byte in bytes {
-            if self.dropping {
-                self.window.push(byte);
-                if self.window.len() > 16 {
-                    self.window.remove(0);
-                }
-                if self.window.ends_with(b"PRIVATE KEY") {
-                    masker.open(self.stream);
-                }
-            } else {
-                self.pending.push(byte);
-                if self.pending.len() == MAX_LINE {
-                    // A withheld line naming a private key may open a block for the lines after it.
-                    if self.pending.windows(11).any(|w| w == b"PRIVATE KEY") {
-                        masker.open(self.stream);
-                    }
-                    self.window = self.pending[MAX_LINE - 16..].to_vec();
-                    self.pending.clear();
-                    self.dropping = true;
-                    log.write_all(b"[oversized log line withheld]\n")?;
-                }
+            self.pending.push(byte);
+            if self.pending.len() == MAX_LINE {
+                self.withhold_oversized(sink)?;
             }
             if byte == b'\n' || byte == b'\r' {
-                self.finish(masker, log)?;
+                self.finish(sink)?;
             }
         }
         Ok(())
     }
 
-    fn finish(
-        &mut self,
-        masker: &mut crate::redact::KeyMasker,
-        log: &mut impl Write,
-    ) -> io::Result<()> {
-        if std::mem::take(&mut self.dropping) {
-            self.window.clear();
-            return log.flush();
+    // Keeps a phrase-length overlap so a mention split across the cut is still found.
+    fn withhold_oversized(&mut self, sink: &mut Sink) -> io::Result<()> {
+        if crate::redact::names_private_key(&String::from_utf8_lossy(&self.pending)) {
+            return sink.line(&self.pending);
         }
-        if let Some(line) = masker.line(self.stream, &String::from_utf8_lossy(&self.pending)) {
-            log.write_all(crate::redact::redact_plain(&line).as_bytes())?;
+        if !std::mem::replace(&mut self.oversized, true) {
+            sink.line(b"[oversized log line withheld]\n")?;
         }
-        self.pending.clear();
-        log.flush()
+        self.pending.drain(..self.pending.len() - 10);
+        Ok(())
+    }
+
+    fn finish(&mut self, sink: &mut Sink) -> io::Result<()> {
+        let pending = std::mem::take(&mut self.pending);
+        if !std::mem::take(&mut self.oversized) {
+            return sink.line(&pending);
+        }
+        if crate::redact::names_private_key(&String::from_utf8_lossy(&pending)) {
+            return sink.line(&pending);
+        }
+        Ok(())
     }
 }
 
@@ -206,22 +216,19 @@ pub fn run_helper(paired: bool) -> io::Result<()> {
     }
     let mut streams: Vec<(UnixStream, Lines, bool)> = inputs
         .into_iter()
-        .enumerate()
-        .map(|(stream, input)| {
-            let lines = Lines {
-                stream,
-                ..Lines::default()
-            };
-            (input, lines, false)
-        })
+        .map(|input| (input, Lines::default(), false))
         .collect();
     for (input, _, _) in &streams {
         input.set_nonblocking(true)?;
     }
     let mut control = UnixStream::from(std::io::stdout().as_fd().try_clone_to_owned()?);
     control.set_nonblocking(true)?;
-    let mut log = std::io::stderr().lock();
-    let mut masker = crate::redact::KeyMasker::default();
+    let file = std::fs::File::from(std::io::stderr().as_fd().try_clone_to_owned()?);
+    let mut log = Sink {
+        start: file.metadata()?.len(),
+        file,
+        withheld: false,
+    };
     let mut buf = [0; 8192];
     let mut checkpoint = false;
     loop {
@@ -235,17 +242,16 @@ pub fn run_helper(paired: bool) -> io::Result<()> {
             }
         }
         let mut progress = false;
-        // Alternate one read per stream so lines meet the shared masker near arrival order.
         for _ in 0..128 {
             let mut read_any = false;
             for (input, lines, eof) in streams.iter_mut().filter(|(_, _, eof)| !*eof) {
                 match input.read(&mut buf) {
                     Ok(0) => {
                         *eof = true;
-                        lines.finish(&mut masker, &mut log)?;
+                        lines.finish(&mut log)?;
                     }
                     Ok(n) => {
-                        lines.write(&buf[..n], &mut masker, &mut log)?;
+                        lines.write(&buf[..n], &mut log)?;
                         read_any = true;
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
@@ -261,7 +267,6 @@ pub fn run_helper(paired: bool) -> io::Result<()> {
         let done = streams.iter().all(|(_, _, eof)| *eof);
         // A checkpoint covers this bounded prefix, not eventual producer silence.
         if checkpoint {
-            log.flush()?;
             if let Err(e) = control.write_all(&[1]) {
                 if !matches!(
                     e.kind(),

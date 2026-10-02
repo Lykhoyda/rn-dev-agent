@@ -123,6 +123,20 @@ impl CmdOutput {
         }
     }
 
+    pub fn names_private_key(&self) -> bool {
+        crate::redact::names_private_key(&self.stdout)
+            || crate::redact::names_private_key(&self.stderr)
+    }
+
+    // Withholds both streams together: a header on one stream says the other may hold the body.
+    pub fn withhold_private_key(mut self) -> Self {
+        if self.names_private_key() {
+            self.stdout = crate::redact::PRIVATE_KEY_WITHHELD.to_string();
+            self.stderr = crate::redact::PRIVATE_KEY_WITHHELD.to_string();
+        }
+        self
+    }
+
     pub fn summary(&self) -> String {
         if self.timed_out {
             return format!("timed out after {}ms", self.duration_ms);
@@ -130,12 +144,8 @@ impl CmdOutput {
         let code = self
             .exit_code
             .map_or("signal".to_string(), |c| c.to_string());
-        // Captured streams lose their interleaving, so any key text withholds the whole tail.
-        if [&self.stdout, &self.stderr]
-            .iter()
-            .any(|stream| stream.to_ascii_lowercase().contains("private key"))
-        {
-            return format!("exit={code} <output withheld: private key material>");
+        if self.names_private_key() {
+            return format!("exit={code} {}", crate::redact::PRIVATE_KEY_WITHHELD);
         }
         let stderr = crate::redact::redact_secrets(&self.stderr);
         let stdout = crate::redact::redact_secrets(&self.stdout);
@@ -284,7 +294,8 @@ impl Runner for RealRunner {
         let started = Instant::now();
         crate::progress::started(&spec.label, false);
         let output = run_captured(spec, &started, None)
-            .unwrap_or_else(|e| io_failure(&started, format!("{}: {e}", spec.label)));
+            .unwrap_or_else(|e| io_failure(&started, format!("{}: {e}", spec.label)))
+            .withhold_private_key();
         let output = match self.flush_logs() {
             Ok(()) => output,
             Err(e) => io_failure(&started, format!("drain logs: {e}")),

@@ -98,7 +98,7 @@ pub fn save_json<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
-    let body = serde_json::to_vec_pretty(value)
+    let body = crate::redact::durable_json(value)
         .map_err(|e| std::io::Error::other(format!("serialize: {e}")))?;
     std::fs::write(&tmp, body)?;
     std::fs::rename(&tmp, path)
