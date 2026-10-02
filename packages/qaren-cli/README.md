@@ -448,12 +448,23 @@ build_and_ready — so revisit this once live reuse is measurable.
   report only exit status and timeout state with `[private output withheld]`,
   and neither captured stream is written to durable logs. Only a successful,
   nonempty fetch writes the cleanup-tracked, mode-0600 vendor key file.
-  Other command summaries redact complete stdout and stderr before selecting
-  the six-line diagnostic tail. Shared redaction masks PEM private-key bodies
-  as `<redacted private key>`, including unterminated blocks and fragments
-  ending in an orphan END header; header delimiters remain visible. Durable
-  subprocess logs retain block state across lines and withheld oversized lines,
-  including headers split across capture chunks.
+  Other command summaries withhold output if either stream contains
+  `private key` (case-insensitive), including `<redacted private key>` from
+  already-masked stderr. Otherwise, complete stdout and stderr are redacted
+  before selecting the six-line diagnostic tail; timeouts report only duration.
+  Shared redaction masks entire lines naming `PRIVATE KEY`, including header
+  delimiters, with `<redacted private key>` or suppresses them within an open
+  block. A `BEGIN` suppresses
+  following lines through a `PRIVATE KEY` line containing `-----END`; an
+  unterminated block suppresses the remainder. Whole-string redaction checks
+  literal `BEGIN` and `END` occurrences in order on lines naming `PRIVATE KEY`;
+  an unmatched `END` replaces the whole string with the mask.
+  Detached command logs use one helper for both streams. While a block is open,
+  subsequent processed lines on either stream are suppressed until each
+  opening stream closes its own block. Oversized log lines are withheld;
+  finding `PRIVATE KEY` anywhere in one, including across capture chunks,
+  conservatively opens that stream's block. API-key redaction still applies
+  to retained diagnostics and log lines.
 - **Local listeners are never adopted.** The farm-advertised adb port is
   preflighted free on this host *before* the lease is claimed (a local
   emulator commonly owns 5555), and a listener on the tunnel or private adb

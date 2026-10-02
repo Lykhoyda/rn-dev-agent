@@ -13,8 +13,7 @@ pub fn redact_known_key(raw: &str, key: Option<&str>) -> String {
 
 pub const PRIVATE_KEY_MASK: &str = "<redacted private key>";
 
-// One line at a time, in arrival order: any line naming a private key is masked. A block
-// opened on any stream suppresses every line until each stream closes its own with `-----END`.
+// Each stream must close its own block before either stream can resume logging.
 #[derive(Default)]
 pub struct KeyMasker {
     open: [bool; 2],
