@@ -712,8 +712,9 @@ test('secure possible-input values stay out of model requests and durable failur
       const admitted = variant === 'valid' || variant === 'missing-digest';
       assert.equal(judge.requests.length, admitted ? 2 : 0);
       if (!admitted) assert.match(result.failure!.seen, /SCREEN_EVIDENCE_INCOMPLETE/);
-      assert.equal(JSON.stringify({ result, rows: w.rows }).includes(f.secret), !secure, variant);
-      if (secure) assert.match(result.failure!.seen, /Echo: •••/);
+      // Native-first privacy masks every possible input's value, secure or not.
+      assert.equal(JSON.stringify({ result, rows: w.rows }).includes(f.secret), false, variant);
+      assert.match(result.failure!.seen, /Echo: •••/);
       assert.equal(JSON.stringify(screen), before);
       assert.deepEqual(w.actions, []);
     }

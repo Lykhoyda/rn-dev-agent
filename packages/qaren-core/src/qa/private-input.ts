@@ -1,5 +1,5 @@
 import type { NativeNode, Screen } from './screen.js';
-import { capturePrivateScreen, isPossibleInput } from './privacy.js';
+import { capturePrivateScreen, isPossibleInput, readableValue } from './privacy.js';
 
 export class PrivateInputCaptureError extends Error {
   readonly code = 'PRIVATE_INPUT_CAPTURE_UNKNOWN' as const;
@@ -27,8 +27,6 @@ export class NativeSnapshotIncomplete extends PrivateInputCaptureError {
   }
 }
 
-const BULLETS = /^[\s•●∙*]+$/u;
-
 // The native snapshot is the privacy boundary: every readable input or secure value it shows is private.
 export function applyNativePrivateInputs(screen: Screen, nodes: readonly NativeNode[]): Screen {
   const byRef = new Map(nodes.map((node) => [node.ref, node]));
@@ -39,9 +37,9 @@ export function applyNativePrivateInputs(screen: Screen, nodes: readonly NativeN
       .map((element) => {
         // Android reports an input's text as its label, so the label may be the value.
         const android = byRef.get(element.ref)?.type?.includes('.') === true;
-        const values = [element.value, ...(android ? [element.label] : [])].filter(
-          (value): value is string =>
-            !!value && value !== element.placeholder && !BULLETS.test(value),
+        const label = element.label !== element.placeholder ? element.label : undefined;
+        const values = [readableValue(element), ...(android ? [label] : [])].filter(
+          (value): value is string => !!value,
         );
         return {
           values,
