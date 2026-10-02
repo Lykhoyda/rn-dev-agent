@@ -175,6 +175,15 @@ jobs:
           [ "$(bash "$PLUGIN/scripts/ensure-qaren.sh" --print-bin)" = "$BIN" ]
           GOT=$(env -u QAREN_RUNTIME "$BIN" --version)
           [ "$GOT" = "qaren $V" ] || { echo "::error::qaren --version printed '$GOT'" >&2; exit 1; }
+          # Headroom under the installer's 512 MiB unpacked-size ceiling stays visible.
+          KIB=$(du -sk "$(dirname "$(dirname "$BIN")")" | cut -f1)
+          echo "installed runtime: $KIB KiB"
+          [ "$KIB" -lt 262144 ] || { echo "::error::the runtime unpacks to $KIB KiB, above half the 512 MiB ceiling" >&2; exit 1; }
+          # The release binary carries no builder home or toolchain paths.
+          if strings "$BIN" | grep -E '/Users/|lib/rustlib/src'; then
+            echo "::error::bin/qaren embeds builder paths" >&2
+            exit 1
+          fi
 
   test:
     name: Build & Test

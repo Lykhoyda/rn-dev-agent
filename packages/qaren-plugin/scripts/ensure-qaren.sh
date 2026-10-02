@@ -1,21 +1,12 @@
 #!/usr/bin/env bash
 # Verifies and installs the qaren runtime this plugin version vouches for.
 #
-#   ensure-qaren.sh --print-bin                   offline; prints the installed binary or the
-#                                                 install command; always exits 0
+#   ensure-qaren.sh --print-bin                   offline and read-only; prints the installed binary
+#                                                 or the install command; always exits 0
 #   ensure-qaren.sh --install [--from-file <tgz>] downloads (or takes) the tarball, verifies its
 #                                                 sha256 and length against runner-manifest.json,
 #                                                 and installs it atomically into ~/.qaren/runtime/<v>/
 set -euo pipefail
-
-PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MANIFEST="$PLUGIN_ROOT/runner-manifest.json"
-RELEASES="https://github.com/Lykhoyda/rn-dev-agent/releases/download"
-RUNTIME_ROOT="${HOME:-}/.qaren/runtime"
-RECORD=".tarball-sha256"
-INSTALL_COMMAND="bash $(printf %q "$PLUGIN_ROOT/scripts/ensure-qaren.sh") --install"
-# The SessionStart hook must answer within 2 s even if Node is slow to start.
-PRINT_BIN_BUDGET_SECONDS=1
 
 MODE=""
 FROM_FILE=""
@@ -32,6 +23,30 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "$MODE" ] || { echo "usage: ensure-qaren.sh --print-bin | --install [--from-file <tarball>]" >&2; exit 2; }
+
+# node and curl keep their own messages where they are needed.
+REQUIRED_TOOLS="uname dirname cat tar shasum wc cut tr head du mktemp mkdir mv cp rm find ls sleep perl"
+for tool in $REQUIRED_TOOLS; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    [ "$MODE" = --print-bin ] && { echo "qaren: required tool not found: $tool"; exit 0; }
+    echo "ensure-qaren: required tool not found: $tool" >&2
+    exit 1
+  fi
+done
+
+PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+MANIFEST="$PLUGIN_ROOT/runner-manifest.json"
+RELEASES="https://github.com/Lykhoyda/rn-dev-agent/releases/download"
+RUNTIME_ROOT="${HOME:-}/.qaren/runtime"
+RECORD=".tarball-sha256"
+INSTALL_COMMAND="bash $(printf %q "$PLUGIN_ROOT/scripts/ensure-qaren.sh") --install"
+# The SessionStart hook must answer within 2 s even if Node is slow to start.
+PRINT_BIN_BUDGET_SECONDS=1
+# Decompression-bomb ceiling for the unpacked runtime; the manifest digest stays the trust root.
+MAX_UNPACKED_BYTES=536870912
+if [ "${QAREN_TEST_MODE:-}" = 1 ] && [ -n "${QAREN_MAX_UNPACKED_BYTES:-}" ]; then
+  MAX_UNPACKED_BYTES="$QAREN_MAX_UNPACKED_BYTES"
+fi
 
 # Prints the expected asset as four lines: version, name, sha256, bytes.
 # Fails (with a reason on stderr) when this plugin carries no tarball for the host.
@@ -77,8 +92,26 @@ expected_asset() {
 
 installed_bin() {
   local dest="$RUNTIME_ROOT/$1" sha="$2"
-  [ -x "$dest/bin/qaren" ] && [ -f "$dest/$RECORD" ] && [ "$(cat "$dest/$RECORD")" = "$sha" ] \
-    && echo "$dest/bin/qaren"
+  [ ! -L "$dest" ] && [ -x "$dest/bin/qaren" ] && [ -f "$dest/$RECORD" ] \
+    && [ "$(exec 9>&-; cat "$dest/$RECORD")" = "$sha" ] && echo "$dest/bin/qaren"
+}
+
+has_staging() {
+  local staging
+  for staging in "$RUNTIME_ROOT/.staging-$1".*; do
+    { [ -e "$staging" ] || [ -L "$staging" ]; } && return 0
+  done
+  return 1
+}
+
+# An install killed between moving the old runtime aside and publishing the new one leaves it here.
+interrupted_install() {
+  local staging
+  [ -e "$RUNTIME_ROOT/$1" ] && return 1
+  for staging in "$RUNTIME_ROOT/.staging-$1".*; do
+    [ -d "$staging/previous" ] && return 0
+  done
+  return 1
 }
 
 print_bin() {
@@ -109,10 +142,61 @@ print_bin() {
   fi
   { read -r version; read -r name; read -r sha; read -r bytes; } <<< "$asset"
   installed_bin "$version" "$sha" && return 0
+  if interrupted_install "$version"; then
+    echo "qaren: an interrupted qaren v$version install was found; repair it with: $INSTALL_COMMAND"
+    return 0
+  fi
   echo "qaren v$version is not installed. Install it with: $INSTALL_COMMAND"
 }
 
 refuse() { echo "ensure-qaren: $*" >&2; exit 1; }
+
+# Every child started while the install lock is held runs with fd 9 closed,
+# so a process outliving a killed installer never keeps the lock.
+nolock() { "$@" 9>&-; }
+
+# QAREN_TEST_MODE=1 with QAREN_TEST_PAUSE_AT=<stage> parks the installer at that stage.
+pause_at() {
+  [ "${QAREN_TEST_MODE:-}" = 1 ] && [ "${QAREN_TEST_PAUSE_AT:-}" = "$1" ] || return 0
+  [ -n "${QAREN_TEST_PAUSE_FILE:-}" ] && : > "$QAREN_TEST_PAUSE_FILE"
+  nolock sleep 30
+}
+
+# The kernel holds this lock while fd 9 is open and releases it when the installer exits,
+# SIGKILL included. The lock file itself is never moved or deleted.
+take_lock() {
+  local lockfile="$RUNTIME_ROOT/.lock-$1" rc=0
+  { [ -L "$lockfile" ] || { [ -e "$lockfile" ] && [ ! -f "$lockfile" ]; }; } \
+    && refuse "unexpected install lock at $lockfile; inspect it and remove it if no install is running"
+  exec 9>>"$lockfile"
+  perl -MFcntl=:flock -e 'open(my $f, "<&=", 9) or exit 2; exit(flock($f, LOCK_EX | LOCK_NB) ? 0 : 1)' || rc=$?
+  case "$rc" in
+    0) ;;
+    1) refuse "another qaren v$1 install is running; retry when it finishes" ;;
+    *) refuse "could not take the install lock at $lockfile" ;;
+  esac
+}
+
+# With this version's lock held every .staging-<version>.* directory belongs to an install
+# that has exited. Put back a runtime it had moved aside, then remove it; refuse and touch
+# nothing whenever the state is not exactly what this script creates.
+heal() {
+  local version="$1" dest="$RUNTIME_ROOT/$1" staging
+  for staging in "$RUNTIME_ROOT/.staging-$version".*; do
+    [ -e "$staging" ] || [ -L "$staging" ] || continue
+    { [ -d "$staging" ] && [ ! -L "$staging" ] && [ -O "$staging" ]; } \
+      || refuse "unexpected install state at $staging; inspect it and remove it if it is not needed"
+    if [ -e "$staging/previous" ] || [ -L "$staging/previous" ]; then
+      { [ -d "$staging/previous" ] && [ ! -L "$staging/previous" ] && [ -O "$staging/previous" ]; } \
+        || refuse "unexpected install state at $staging/previous; inspect it and remove it if it is not needed"
+      if [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
+        nolock mv "$staging/previous" "$dest"
+        echo "ensure-qaren: restored the qaren v$version runtime an interrupted install had moved aside" >&2
+      fi
+    fi
+    nolock rm -rf "$staging"
+  done
+}
 
 install() {
   local asset version name sha bytes dest
@@ -120,32 +204,37 @@ install() {
   { read -r version; read -r name; read -r sha; read -r bytes; } <<< "$asset"
   dest="$RUNTIME_ROOT/$version"
   [[ "${HOME:-}" == /?* ]] || refuse "HOME is not an absolute path"
-  installed_bin "$version" "$sha" && return 0
+  # Leftover staging means a killed install to heal, even when the runtime itself is complete.
+  has_staging "$version" || ! installed_bin "$version" "$sha" || return 0
 
   mkdir -p "$RUNTIME_ROOT"
-  LOCK="$RUNTIME_ROOT/.install-$version.lock"
-  mkdir "$LOCK" 2>/dev/null || refuse "another qaren v$version install is running; if none is, remove $LOCK"
+  take_lock "$version"
+  heal "$version"
+  [ -L "$dest" ] && refuse "$dest is a symbolic link; inspect it and remove it before installing"
+  installed_bin "$version" "$sha" && return 0
+
   STAGING=""
   DEST="$dest"
-  # An interrupted replacement puts the previous runtime back before staging and the lock go.
-  trap '[ -n "$STAGING" ] && [ -e "$STAGING/previous" ] && [ ! -e "$DEST" ] && mv "$STAGING/previous" "$DEST"; [ -n "$STAGING" ] && rm -rf "$STAGING"; rmdir "$LOCK"' EXIT
-  trap 'exit 130' INT TERM
-  installed_bin "$version" "$sha" && return 0
-  STAGING=$(mktemp -d "$RUNTIME_ROOT/.install.XXXXXX")
+  # An interrupted replacement puts the previous runtime back before staging goes.
+  trap '[ -n "$STAGING" ] && [ -e "$STAGING/previous" ] && [ ! -e "$DEST" ] && nolock mv "$STAGING/previous" "$DEST"; [ -n "$STAGING" ] && nolock rm -rf "$STAGING"' EXIT
+  trap 'exit 130' INT TERM HUP
+  STAGING=$(exec 9>&-; mktemp -d "$RUNTIME_ROOT/.staging-$version.XXXXXX")
   local tarball="$STAGING/$name" top="${name%.tar.gz}"
 
+  pause_at download
   if [ -n "$FROM_FILE" ]; then
-    cp "$FROM_FILE" "$tarball" || refuse "cannot read $FROM_FILE"
+    nolock cp "$FROM_FILE" "$tarball" || refuse "cannot read $FROM_FILE"
   else
     command -v curl >/dev/null 2>&1 || refuse "curl is required to download $name"
-    curl -fsSL --retry 3 --proto '=https' --proto-redir '=https' --tlsv1.2 -o "$tarball" "$RELEASES/v$version/$name" \
+    nolock curl -fsSL --retry 3 --proto '=https' --proto-redir '=https' --tlsv1.2 -o "$tarball" "$RELEASES/v$version/$name" \
       || refuse "could not download $RELEASES/v$version/$name"
   fi
 
+  pause_at verify
   local got
-  got=$(wc -c < "$tarball" | tr -d ' ')
+  got=$(exec 9>&-; wc -c < "$tarball" | tr -d ' ')
   [ "$got" = "$bytes" ] || refuse "$name is $got bytes, the manifest vouches for $bytes; nothing installed"
-  got=$(shasum -a 256 "$tarball" | cut -d' ' -f1)
+  got=$(exec 9>&-; shasum -a 256 "$tarball" | cut -d' ' -f1)
   [ "$got" = "$sha" ] || refuse "$name sha256 $got does not match the manifest $sha; nothing installed"
 
   local entry
@@ -155,26 +244,37 @@ install() {
       "$top" | "$top/" | "$top"/*) ;;
       *) refuse "$name carries an entry outside $top/: $entry" ;;
     esac
-  done < <(tar -tzf "$tarball")
+  done < <(exec 9>&-; tar -tzf "$tarball")
   while IFS= read -r entry; do
     case "$entry" in
       [-d]*) ;;
       *) refuse "$name carries a link or special file: $entry" ;;
     esac
-  done < <(tar -tvzf "$tarball")
+  done < <(exec 9>&-; tar -tvzf "$tarball")
+  # Count the decompressed content itself, stopping one byte past the ceiling.
+  got=$(exec 9>&-; { tar -xzOf "$tarball" 2>/dev/null || true; } | head -c $((MAX_UNPACKED_BYTES + 1)) | wc -c | tr -d ' ')
+  [ "$got" -le "$MAX_UNPACKED_BYTES" ] \
+    || refuse "$name would unpack to more than $MAX_UNPACKED_BYTES bytes, above the unpacked-size ceiling; nothing installed"
 
-  mkdir "$STAGING/x"
-  tar -xzf "$tarball" -C "$STAGING/x" --no-same-owner
-  [ -z "$(find "$STAGING/x" ! -type f ! -type d -print -quit)" ] \
+  pause_at extract
+  nolock mkdir "$STAGING/x"
+  nolock tar -xzf "$tarball" -C "$STAGING/x" --no-same-owner
+  got=$(exec 9>&-; du -sk "$STAGING/x" | cut -f1)
+  [ $((got * 1024)) -le "$MAX_UNPACKED_BYTES" ] \
+    || refuse "$name unpacked to $((got * 1024)) bytes on disk, above the unpacked-size ceiling; nothing installed"
+  [ -z "$(exec 9>&-; find "$STAGING/x" ! -type f ! -type d -print -quit)" ] \
     || refuse "$name carries a link or special file; the runtime ships only files and directories"
-  [ "$(ls -A "$STAGING/x")" = "$top" ] || refuse "$name does not unpack to exactly $top/"
+  [ "$(exec 9>&-; ls -A "$STAGING/x")" = "$top" ] || refuse "$name does not unpack to exactly $top/"
   [ -x "$STAGING/x/$top/bin/qaren" ] || refuse "$name carries no executable bin/qaren"
   printf '%s\n' "$sha" > "$STAGING/x/$top/$RECORD"
 
+  pause_at move1
   if [ -e "$dest" ]; then
-    mv "$dest" "$STAGING/previous"
+    nolock mv "$dest" "$STAGING/previous"
   fi
-  mv "$STAGING/x/$top" "$dest"
+  pause_at move2-before
+  nolock mv "$STAGING/x/$top" "$dest"
+  pause_at move2-after
   echo "$dest/bin/qaren"
 }
 

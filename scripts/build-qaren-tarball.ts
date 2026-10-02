@@ -162,6 +162,15 @@ function cargoVersion(): string {
   return match[1];
 }
 
+// With rust-src installed rustc maps std back to the local sysroot; map it to rustc's own prefix.
+function rustSourceRemap(): string[] {
+  const rustc = process.env.RUSTC ?? 'rustc';
+  const sysroot = run(rustc, ['--print', 'sysroot']).trim();
+  const hash = /^commit-hash: ([0-9a-f]{40})$/m.exec(run(rustc, ['-vV']))?.[1];
+  if (!sysroot || !hash) return [];
+  return [`--remap-path-prefix=${join(sysroot, 'lib', 'rustlib', 'src', 'rust')}=/rustc/${hash}`];
+}
+
 function buildCli(platform: QarenPlatform): string {
   const target = RUST_TARGETS[platform];
   const targetDir = resolve(process.env.CARGO_TARGET_DIR ?? join(CLI_DIR, 'target'));
@@ -174,6 +183,7 @@ function buildCli(platform: QarenPlatform): string {
     `--remap-path-prefix=${ROOT}=/qaren`,
     `--remap-path-prefix=${cargoHome}=/cargo`,
     `--remap-path-prefix=${targetDir}=/target`,
+    ...rustSourceRemap(),
   ];
   const env = { ...process.env, CARGO_ENCODED_RUSTFLAGS: flags.join('\x1f') };
   delete env.RUSTFLAGS;

@@ -30,8 +30,8 @@ cp "$SCRIPT" "$tmp/plugin/scripts/ensure-qaren.sh"
 printf '#!/bin/sh\ncase "$1" in -s) echo "${FAKE_OS:-Darwin}" ;; -m) echo arm64 ;; esac\n' > "$tmp/bin/uname"
 printf '#!/bin/sh\necho "network touched" >> "%s/network"\nexit 7\n' "$tmp" > "$tmp/bin/curl"
 chmod +x "$tmp/bin/uname" "$tmp/bin/curl"
-# Only the tools the hook may use; curl is a tripwire, not a real client.
-for tool in bash cat cut dirname mktemp node rm shasum sleep tr wc; do
+# The installer's required tools plus node; curl is a tripwire, not a real client.
+for tool in bash cat cut dirname du find head ls mkdir mktemp mv node cp perl rm shasum sleep tar tr wc; do
   ln -sf "$(command -v "$tool")" "$tmp/bin/$tool"
 done
 # The same toolbox without even the curl tripwire.
@@ -87,6 +87,23 @@ check "hook command with a space: prints the exact install command" \
 hook "$tmp/bin-no-curl"
 bounded "no curl on PATH"
 check "no curl on PATH: prints the install command" yes "$(contains "$out" "ensure-qaren.sh --install")"
+
+# A runtime moved aside by a killed replacement is reported as repairable, read-only.
+mkdir -p "$tmp/home/.qaren/runtime/.staging-$VERSION.abc123/previous/bin"
+staged_before=$(cd "$tmp/home/.qaren/runtime" && find . | sort)
+hook
+bounded "interrupted install"
+check "interrupted install: names the repair command" yes "$(contains "$out" "interrupted qaren v$VERSION install was found; repair it with:")"
+check "interrupted install: nothing is touched" "$staged_before" "$(cd "$tmp/home/.qaren/runtime" && find . | sort)"
+rm -rf "$tmp/home/.qaren/runtime/.staging-$VERSION.abc123"
+
+for tool in tar perl du; do
+  rm "$tmp/bin/$tool"
+  hook
+  bounded "no $tool on PATH"
+  check "no $tool on PATH: names it" "qaren: required tool not found: $tool" "$out"
+  ln -sf "$(command -v "$tool")" "$tmp/bin/$tool"
+done
 
 mkdir -p "$DEST/bin"
 printf '#!/bin/sh\n' > "$DEST/bin/qaren"
