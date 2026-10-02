@@ -13,12 +13,24 @@ test('video eligibility follows the entire plan and sticky screenshot privacy', 
     ['1. Tap "Save"', true, 'withheld-privacy'],
     ['1. Wait for "Missing"\n2. Fill "Email" with "private-canary"', false, 'withheld-fill'],
   ] as const) {
-    const observed = screen([element('@save', 'Save'), element('@email', 'Email', { kind: 'input' })]);
-    if (sensitive) capturePrivateScreen(observed, [{
-      values: ['prefilled-canary'], secure: false, elements: [], associationUnique: false,
-    }]);
+    const observed = screen([
+      element('@save', 'Save'),
+      element('@email', 'Email', { kind: 'input' }),
+    ]);
+    if (sensitive)
+      capturePrivateScreen(observed, [
+        {
+          values: ['prefilled-canary'],
+          secure: false,
+          elements: [],
+          associationUnique: false,
+        },
+      ]);
     const cleared = screen(observed.elements);
-    const f = walker([observed, cleared], scriptedJudge(() => assert.fail('literal plan is model-free')));
+    const f = walker(
+      [observed, cleared],
+      scriptedJudge(() => assert.fail('literal plan is model-free')),
+    );
     const result = await runPlan(parsePlan(plan).blocks!, f.deps);
     assert.equal(result.videoPublication, expected);
     assert.equal(result.verdict, plan.includes('Missing') ? 'FAIL' : 'PASS');
