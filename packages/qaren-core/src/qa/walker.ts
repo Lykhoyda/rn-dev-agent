@@ -24,6 +24,7 @@ import {
   type TimingObserver,
   type TimingEvent,
 } from './timing.js';
+import { createRowTimer, type RowTiming } from './row-timing.js';
 import {
   type BlockResult,
   type WalkResult,
@@ -54,6 +55,7 @@ export interface WalkerDeps {
   cancelled?(): boolean;
   diagnostic?(event: WalkerTimingDiagnostic): void;
   timing?: TimingObserver;
+  rowTiming?(t: number): RowTiming;
 }
 
 export interface WalkerTimingDiagnostic {
@@ -408,8 +410,15 @@ export async function walkBlock(
   };
   let shots = shotIndex;
   const emit = (row: LedgerRow): void => {
-    rows.push(row);
-    deps.row(row);
+    let timing: RowTiming | undefined;
+    try {
+      timing = deps.rowTiming?.(row.t);
+    } catch {
+      // Row timing is passive; the row is recorded without it.
+    }
+    const timed = timing ? { ...row, timing } : row;
+    rows.push(timed);
+    deps.row(timed);
   };
   const redact = (text: string): string => privacy.redact(text);
   const base = (item: Item, attempt: number): Omit<LedgerRow, 'outcome'> => ({
@@ -855,6 +864,7 @@ export async function runPlan(
   preflightCalls: readonly JevCall[] = [],
 ): Promise<WalkResult> {
   return measureTiming(deps.timing, deps.now, 'walk', async () => {
+    const walking = withRowTiming(deps);
     const results: BlockResult[] = [];
     const steps: LedgerRow[] = [];
     const typed = blocks.flatMap((b) =>
@@ -864,7 +874,7 @@ export async function runPlan(
     const calls = (): JevCall[] => [...preflightCalls, ...(deps.judge?.calls ?? [])];
     const sequence = { observation: 0 };
     for (const block of blocks) {
-      const outcome = await walkBlock(block, deps, steps.length, typed, privacy, sequence);
+      const outcome = await walkBlock(block, walking, steps.length, typed, privacy, sequence);
       results.push(outcome.block);
       steps.push(...outcome.rows);
       if (outcome.failure) {
@@ -874,4 +884,34 @@ export async function runPlan(
     }
     return buildLedger(results, steps, undefined, calls());
   });
+}
+
+function withRowTiming(deps: WalkerDeps): WalkerDeps {
+  const observe = deps.timing;
+  if (!observe) return deps;
+  const timer = createRowTimer(deps.now());
+  let jevCalls = deps.judge?.calls.length ?? 0;
+  let jevElapsed = deps.judge?.elapsedMs ?? 0;
+  return {
+    ...deps,
+    timing: (event) => {
+      try {
+        timer.observe(event);
+      } catch {
+        // Row timing is passive and cannot change an operation's outcome.
+      }
+      observe(event);
+    },
+    rowTiming: (t) => {
+      const calls = deps.judge?.calls ?? [];
+      const elapsed = deps.judge?.elapsedMs;
+      const jevMs =
+        elapsed === undefined
+          ? calls.slice(jevCalls).reduce((sum, call) => sum + call.ms, 0)
+          : elapsed - jevElapsed;
+      jevCalls = calls.length;
+      jevElapsed = elapsed ?? 0;
+      return timer.take(t, jevMs);
+    },
+  };
 }

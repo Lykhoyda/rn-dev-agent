@@ -83,6 +83,7 @@ test('native HTTP contract and retry table through a local server, never the liv
           ),
         );
         assert.equal(judge.calls.length, hits);
+        assert.equal(judge.elapsedMs, clock);
         assert.ok(judge.calls.every((c) => c.ms === 23 && c.questionIds.join(',') === 'ready'));
         assert.equal(judge.calls.at(-1)?.inputTokens, expected ? null : 25);
         assert.ok(!JSON.stringify(judge.calls).includes(key));
@@ -92,6 +93,34 @@ test('native HTTP contract and retry table through a local server, never the liv
       }
     });
   }
+});
+
+test('elapsed Jev time accumulates whole asks including retry backoff', async () => {
+  let now = 0;
+  let attempts = 0;
+  const judge = createJev({
+    apiKey: key,
+    now: () => now,
+    sleep: async (ms) => {
+      now += ms;
+    },
+    fetch: async () => {
+      now += 100;
+      return attempts++ === 0
+        ? new Response('', { status: 429, headers: { 'Retry-After': '2' } })
+        : Response.json(valid);
+    },
+  });
+  assert.equal(judge.elapsedMs, 0);
+  await judge.ask({}, questions);
+  assert.equal(judge.elapsedMs, 2_200);
+  assert.deepEqual(
+    judge.calls.map((call) => call.ms),
+    [100, 100],
+  );
+  now += 500;
+  await judge.ask({}, questions);
+  assert.equal(judge.elapsedMs, 2_300);
 });
 
 test('timeout covers headers and streaming body and counts every attempt', async () => {

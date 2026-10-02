@@ -26,6 +26,7 @@ export interface Judge {
     deadline?: number,
   ): Promise<Answers>;
   readonly calls: JevCall[];
+  readonly elapsedMs?: number;
 }
 
 export type JevErrorCode =

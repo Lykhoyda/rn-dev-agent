@@ -80,6 +80,7 @@ impl Trace {
             reason: entry
                 .reason
                 .map(|reason| Privacy::bound(self.sanitize(&reason), REASON_CHARS)),
+            timing: None,
         });
     }
 }

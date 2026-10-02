@@ -303,6 +303,45 @@ fn a_typed_refusal_needs_exit_four() {
 }
 
 #[test]
+fn a_typed_refusal_keeps_its_walk_speed_and_drops_a_malformed_one() {
+    for (speed, expected) in [
+        (
+            serde_json::json!({"stepMedianMs": 250, "stepP95Ms": 400, "walkMs": 1900, "steps": 5, "passed": 4, "failed": 1}),
+            Some((Some(400), 5, 4, 1)),
+        ),
+        (
+            serde_json::json!({"walkMs": 0, "steps": 0, "passed": 0, "failed": 0}),
+            Some((None, 0, 0, 0)),
+        ),
+        (serde_json::Value::Null, None),
+        (serde_json::json!({"walkMs": "slow"}), None),
+    ] {
+        let repo = common::temp_repo();
+        let refusal = serde_json::json!({"verdict":"REFUSED","code":"METRO_ORIGIN_MISMATCH",
+            "message":"port","speed":speed});
+        let mut mock = MockRunner::new();
+        mock.expect_spawn_piped(
+            "walk.js",
+            9000,
+            &format!("{}\n", envelope(2, "result", &refusal.to_string())),
+            Some(4),
+        );
+        let outcome = run_child(&mut mock, &repo.join("core.log"));
+        assert!(matches!(outcome.verdict, Verdict::Refused { .. }));
+        assert!(outcome.failure.is_none());
+        assert_eq!(
+            outcome.ledger.speed.map(|speed| (
+                speed.step_p95_ms,
+                speed.steps,
+                speed.passed,
+                speed.failed
+            )),
+            expected
+        );
+    }
+}
+
+#[test]
 fn jev_refusal_accounting_is_optional_but_strict_when_present() {
     for jev in [
         None,

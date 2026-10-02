@@ -275,8 +275,9 @@ test('a throwing observer cannot change the functional ledger or action count', 
       f.deps.timing = () => {
         throw new Error('observer failure');
       };
+    const { speed: _speed, ...ledger } = await runPlan(parsePlan('1. Tap "Save"').blocks!, f.deps);
     outcomes.push({
-      ledger: await runPlan(parsePlan('1. Tap "Save"').blocks!, f.deps),
+      ledger: { ...ledger, steps: ledger.steps.map(({ timing: _timing, ...row }) => row) },
       actions: f.actions,
     });
   }
