@@ -12,7 +12,7 @@ export class PrivateInputCaptureError extends Error {
 
 // Built only from a node count and fixed cause codes, so it carries no screen content.
 const NATIVE_CAUSE =
-  /^(truncated|ref-map-not-updated|node-count-mismatch|dropped=\d{1,7}|verdict=(failed|degraded)|reason=(empty-capture|snapshot-ref-freshness-unknown|unrecognized))$/;
+  /^(unattested|truncated|ref-map-not-updated|node-count-mismatch|dropped=\d{1,7}|verdict=(failed|degraded)|reason=(empty-capture|snapshot-ref-freshness-unknown|unrecognized))$/;
 
 export class NativeSnapshotIncomplete extends PrivateInputCaptureError {
   readonly nodes: number;

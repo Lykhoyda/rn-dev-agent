@@ -11,7 +11,7 @@ import { parsePlan } from '../../../dist/qa/plan.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { exitCodeFor, resultForWalk } from '../../../dist/qa/wire.js';
 import type { NativeNode } from '../../../dist/qa/screen.js';
-import { nativeCapture } from './platform-presence-fixtures.ts';
+import { attested, nativeCapture } from './platform-presence-fixtures.ts';
 
 function observedNative(nodes: NativeNode[]) {
   const native = nativeCapture();
@@ -124,7 +124,7 @@ test('hidden and uncertain private input contents are never proved by a model', 
     const input = field(secret, { label: 'Email', ...(secure ? { type: 'SecureTextField' } : {}) });
     const screen = await captureScreen({
       requirePrivateInputs: true,
-      native: async () => ({ nodes: [input] }),
+      native: async () => attested([input]),
       react: async () => observation(),
     });
     const judge = scriptedJudge(() => assert.fail('private contents cannot be judged'));
@@ -146,7 +146,7 @@ test('hidden and uncertain private input contents are never proved by a model', 
         {
           refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
           reason:
-            'semantic projection requires complete native and React coverage (capture native=unknown react=complete; projected native=unknown react=complete)',
+            'semantic projection requires complete native and React coverage (capture native=complete react=complete; projected native=unknown react=complete)',
         },
         text,
       );
@@ -284,13 +284,11 @@ test('native acquisition failures refuse at their own boundary without inspectin
         requirePrivateInputs: true,
         native: async () => {
           if (afterSafeCapture && captures++ === 0)
-            return {
-              nodes: [
-                { ref: '@safe', type: 'StaticText', label: 'Welcome' },
-                field(secret),
-                { ref: '@echo', type: 'StaticText', label: secret },
-              ],
-            };
+            return attested([
+              { ref: '@safe', type: 'StaticText', label: 'Welcome' },
+              field(secret),
+              { ref: '@echo', type: 'StaticText', label: secret },
+            ]);
           throw raw;
         },
         react: async () => {
@@ -353,7 +351,7 @@ test('acquisition refusals use fresh safe errors and classify by acquisition bou
   }
   const degraded = await captureScreen({
     requirePrivateInputs: true,
-    native: async () => ({ nodes: [field(secret)] }),
+    native: async () => attested([field(secret)]),
     react: async () => {
       throw new NativeCaptureError();
     },

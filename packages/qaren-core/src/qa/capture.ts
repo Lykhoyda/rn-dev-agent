@@ -415,9 +415,12 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
       native: nativeCaptureCoverage(native),
       react: reactCaptureCoverage(react),
     };
-    // Privacy comes from the native tree, so a provably incomplete tree cannot be masked safely.
-    if (deps.requirePrivateInputs && captureCoverage.native === 'incomplete')
-      throw new NativeSnapshotIncomplete(nodes.length, nativeIncompleteCauses(native));
+    // Privacy comes from the native tree, so one not proven complete cannot be masked safely.
+    if (deps.requirePrivateInputs && captureCoverage.native !== 'complete')
+      throw new NativeSnapshotIncomplete(
+        nodes.length,
+        captureCoverage.native === 'unknown' ? ['unattested'] : nativeIncompleteCauses(native),
+      );
     const hostEvidence = validateReactHostEvidence(react.hostEvidence);
     const nativePresence =
       captureCoverage.native === 'complete'

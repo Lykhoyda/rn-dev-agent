@@ -9,7 +9,7 @@ import { inputValues, ObservedPrivacy } from '../../../dist/qa/privacy.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { scriptedJudge, walker } from './judgment-fixtures.ts';
-import { nativeCapture } from './platform-presence-fixtures.ts';
+import { attested, nativeCapture } from './platform-presence-fixtures.ts';
 import { devFreeze } from './rn-dev-freeze.ts';
 import { PRIVATE_INPUT_LIMITS } from '../../../dist/qa/private-input-limits.js';
 
@@ -175,8 +175,8 @@ function wrappedInput(readOnly = false) {
     fixture.root.current.return = wrapper;
     fixture.root.current = wrapper;
   }
-  const native = async () => ({
-    nodes: [
+  const native = async () =>
+    attested([
       {
         ref: '@notes',
         type: 'Other',
@@ -187,8 +187,7 @@ function wrappedInput(readOnly = false) {
         enabled: true,
       },
       { ref: '@echo', type: 'StaticText', label: 'wrapped-input-private', hittable: true },
-    ],
-  });
+    ]);
   const react = () =>
     captureQaReact({
       async withPrivateHelperWorld(run) {
@@ -486,12 +485,11 @@ test('React dev wrapper producer reaches the adapter and a native input value ma
     const screen = await captureScreen({
       requirePrivateInputs: true,
       react: async () => observation,
-      native: async () => ({
-        nodes: [
+      native: async () =>
+        attested([
           { ref: '@field', type: 'TextField', label: 'Field', value: 'dev-private' },
           { ref: '@echo', type: 'StaticText', label: 'dev-private' },
-        ],
-      }),
+        ]),
     });
     assert.ok(inputValues(screen).includes('dev-private'));
     const privacy = new ObservedPrivacy();

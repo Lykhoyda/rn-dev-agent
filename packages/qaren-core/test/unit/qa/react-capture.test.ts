@@ -313,7 +313,7 @@ test('legitimate switch booleans retain an empty private binding', async () => {
     assert.deepEqual(observation.interactive, tree.interactive);
     const screen = await captureScreen({
       requirePrivateInputs: true,
-      native: async () => ({ nodes: [] }),
+      native: async () => ({ ...nativeCapture(), presenceCapture: undefined }),
       react: async () => observation,
     });
     assert.deepEqual(inputValues(screen), []);
