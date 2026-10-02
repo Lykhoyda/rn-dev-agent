@@ -125,6 +125,18 @@ function overlaps(a: Rect, b: Rect): boolean {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
+// An empty clip shows nothing; a zero-size frame is shown only if its origin lies in the clip.
+function within(rect: Rect, visible: Rect): boolean {
+  if (visible.width <= 0 || visible.height <= 0) return false;
+  if (rect.width > 0 && rect.height > 0) return overlaps(rect, visible);
+  return (
+    rect.x >= visible.x &&
+    rect.x <= visible.x + visible.width &&
+    rect.y >= visible.y &&
+    rect.y <= visible.y + visible.height
+  );
+}
+
 function clip(a: Rect, b: Rect | undefined): Rect {
   if (!b) return a;
   const x = Math.max(a.x, b.x);
@@ -229,7 +241,12 @@ export function offscreenNodes(
 ): Set<number> {
   if (!presence) return new Set();
   return new Set(
-    [...outsideViewport(nodes)].filter((i) => presence.nodes[i]?.status === 'unknown'),
+    [...outsideViewport(nodes)].filter(
+      (i) =>
+        presence.nodes[i]?.status === 'unknown' &&
+        nodes[i].rect!.width > 0 &&
+        nodes[i].rect!.height > 0,
+    ),
   );
 }
 
@@ -240,7 +257,7 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
   const window = windows.length === 1 ? nodes[windows[0]].rect : undefined;
   if (!window || window.width <= 0 || window.height <= 0) return offscreen;
   nodes.forEach((node, i) => {
-    if (!node.rect || node.rect.width <= 0 || node.rect.height <= 0) return;
+    if (!node.rect) return;
     let visible = window;
     let parent = node.parentIndex;
     for (
@@ -251,7 +268,7 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
       if (nodes[parent]?.type === 'ScrollView') visible = clip(visible, nodes[parent].rect);
       parent = nodes[parent]?.parentIndex;
     }
-    if (parent === windows[0] && !overlaps(node.rect, visible)) offscreen.add(i);
+    if (parent === windows[0] && !within(node.rect, visible)) offscreen.add(i);
   });
   return offscreen;
 }

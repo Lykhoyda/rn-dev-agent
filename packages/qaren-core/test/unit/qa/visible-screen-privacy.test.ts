@@ -251,7 +251,10 @@ test('an open field showing its placeholder stays public, a secure one does not'
   assert.match(result.failure!.seen, /••• sent/);
 });
 
-function viewportTree(laterY: number, { window = true, scrollBottom = 0 } = {}) {
+function viewportTree(
+  laterY: number,
+  { window = true, scrollBottom = 0, scrollTop = 0, laterWidth = 200 } = {},
+) {
   const screen = { x: 0, y: 0, width: 390, height: 844 };
   const parent = scrollBottom ? 3 : 1;
   return attested([
@@ -272,7 +275,7 @@ function viewportTree(laterY: number, { window = true, scrollBottom = 0 } = {}) 
             ref: '@list',
             type: 'ScrollView',
             parentIndex: 1,
-            rect: { x: 0, y: 0, width: 390, height: scrollBottom },
+            rect: { x: 0, y: scrollTop, width: 390, height: scrollBottom - scrollTop },
           },
         ]
       : []),
@@ -282,7 +285,7 @@ function viewportTree(laterY: number, { window = true, scrollBottom = 0 } = {}) 
       type: 'StaticText',
       label: 'Later',
       parentIndex: parent,
-      rect: { x: 20, y: laterY, width: 200, height: 30 },
+      rect: { x: 20, y: laterY, width: laterWidth, height: 30 },
     },
   ]);
 }
@@ -304,7 +307,12 @@ async function walkViewport(plan: string, trees: ReturnType<typeof viewportTree>
 }
 
 test('text below the native viewport is not on screen until scrolled into it', async () => {
-  for (const tree of [viewportTree(1200), viewportTree(700, { scrollBottom: 600 })]) {
+  for (const tree of [
+    viewportTree(1200),
+    viewportTree(700, { scrollBottom: 600 }),
+    viewportTree(90, { scrollTop: 100, scrollBottom: 100 }),
+    viewportTree(1200, { laterWidth: 0 }),
+  ]) {
     const { result } = await walkViewport('✓ "Later"', [tree]);
     assert.equal(result.verdict, 'FAIL');
     assert.match(result.failure!.seen, /on screen: Welcome$/);
