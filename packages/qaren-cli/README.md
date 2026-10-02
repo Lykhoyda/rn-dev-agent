@@ -180,6 +180,36 @@ The [row timing implementation](../qaren-core/src/qa/row-timing.ts) owns
 aggregation; [CLI decoding](src/core.rs) and [report rendering](src/report.rs)
 own consumption.
 
+## Test a pull request
+
+```sh
+qaren pr <number|url> --plan-file plan.md --device <simulator-UUID> --json
+qaren publish <run-id> --verdict-file verdict.md --json
+```
+
+`qaren pr` runs the same pipeline as `check`, from the app's directory with the
+same `.qaren/config.yaml` and plan, but walks a detached worktree at the pull
+request head under `~/.qaren/runs/<run-id>/wt`. It refuses unless origin's
+`pull/<n>/head` is the head GitHub reports and the worktree is clean at that
+commit, both before the lease and again before the walk. On iOS the simulator
+screen is recorded from just before the walk to just after it and encoded to
+`media/video.mp4` (H.264, 30 fps); without `ffmpeg`, or when a capture cannot
+start, the run continues and the receipt's `video` outcome says why. Blocks the
+walk saved are copied to `blocks/` before the worktree is removed. If the pull
+request moved during the run, the receipt names the tested commit in
+`tested_older_commit`. A recording is not yet captured for Android runs.
+
+`qaren publish` posts one comment: the sentence from `--verdict-file`, the
+tested commit, the video, the plan with ✓/✗ per line, the failing screenshot
+and collapsed run details. The hostname, home directory, absolute paths, device
+UUIDs and private network addresses are removed from the comment. It then
+removes the `needs-qa` label and commits the saved blocks to the pull request
+branch with a `Qaren-Run: <run-id>` trailer, using your own git identity and a
+push lease on the tested commit. When the branch moved, the pull request comes
+from a fork, or origin is not the pull request's repository, nothing is pushed;
+a second comment carries the block YAML instead. Each step is recorded in
+`publication.json`, so a re-run resumes without posting again.
+
 ## Preparation verbs
 
 These scenario-based verbs retain the preparation receipt contract below;

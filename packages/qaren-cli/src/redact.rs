@@ -198,15 +198,25 @@ pub fn redact_machine(raw: &str, machine: &MachineIdentity) -> String {
     redact_lan_ipv4(&redact_uuids(&text))
 }
 
+// Whole-name matches only, so a short hostname cannot eat part of an ordinary word.
 fn replace_ignore_ascii_case(text: &str, needle: &str, with: &str) -> String {
     let lower = text.to_ascii_lowercase();
     let needle = needle.to_ascii_lowercase();
+    let word = |b: Option<&u8>| b.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'-');
+    let bytes = lower.as_bytes();
     let mut out = String::with_capacity(text.len());
-    let mut at = 0;
-    while let Some(i) = lower[at..].find(&needle) {
-        out.push_str(&text[at..at + i]);
+    let (mut at, mut from) = (0, 0);
+    while let Some(i) = lower[from..].find(&needle) {
+        let start = from + i;
+        let end = start + needle.len();
+        from = start + 1;
+        if word(start.checked_sub(1).and_then(|p| bytes.get(p))) || word(bytes.get(end)) {
+            continue;
+        }
+        out.push_str(&text[at..start]);
         out.push_str(with);
-        at += i + needle.len();
+        at = end;
+        from = end;
     }
     out.push_str(&text[at..]);
     out
@@ -546,5 +556,13 @@ mod tests {
             assert!(clean.contains(kept), "{kept}: {clean}");
         }
         assert_eq!(redact_machine(&clean, &machine), clean);
+        let short = MachineIdentity {
+            hostname: Some("mac.local".into()),
+            home: None,
+        };
+        assert_eq!(
+            redact_machine("macOS on mac, MAC.local", &short),
+            "macOS on <host>, <host>"
+        );
     }
 }
