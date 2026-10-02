@@ -74,13 +74,14 @@ struct Response { let ok: Bool; var data: DataPayload? = nil; var error: ErrorPa
 enum RunnerErrorDomain { static let exception = "exception"; static let general = "general" }
 enum RunnerErrorCode { static let objcException = 1; static let commandReturnedNoResponse = 2 }
 var activations = 0
+var existenceWaits = 0
 class XCUIApplication {
   enum State { case runningForeground, runningBackground, notRunning }
   var state: State = .runningForeground
   var exists = true
   init(bundleIdentifier: String = "qa.app") {}
   func activate() { activations += 1; state = .runningForeground; exists = true }
-  func waitForExistence(timeout: Double) -> Bool { exists }
+  func waitForExistence(timeout: Double) -> Bool { existenceWaits += 1; return exists }
 }
 enum RunnerObjCExceptionCatcher {
   static var failNext = false
@@ -165,6 +166,13 @@ let before = activations
 let legacyResult = try legacy.run(command("snapshot", qa: false))
 precondition(legacyResult.ok)
 precondition(activations == before + 1)
+existenceWaits = 0
+let present = Harness()
+let presentTap = try present.run(command("tap", qa: false))
+precondition(presentTap.ok && existenceWaits == 0, "a present app must not pay an existence wait")
+let gone = Harness(); gone.currentApp!.exists = false; gone.app.exists = false
+_ = try gone.run(command("tap", qa: false))
+precondition(existenceWaits > 0, "a missing app must still be waited for")
 `,
   });
   assert.equal(result.status, 0, result.stderr || String(result.error));
