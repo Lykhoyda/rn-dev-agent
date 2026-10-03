@@ -307,6 +307,7 @@ async function openSession(
     >(result);
     return {
       appProcessIdentifier: data.appProcessIdentifier,
+      keyboardVisible: data.keyboardVisible,
       nodes: data.nodes,
       presenceCapture: data.presenceCapture,
       snapshotGeneration: data.snapshotGeneration,
@@ -385,7 +386,24 @@ async function openSession(
     diagnostic: (event) => log(`timing ${JSON.stringify(event)}`),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     row: emitRow,
-    ...(platform === 'ios' ? { appProcess: {} } : {}),
+    ...(platform === 'ios'
+      ? {
+          appProcess: {},
+          typeFocused: (ref, text, testID, qaContext) =>
+            act(
+              () =>
+                fill({
+                  ref,
+                  text,
+                  ...(testID ? { testID } : {}),
+                  focused: true,
+                  vetoUnfocused: true,
+                  qaContext,
+                }),
+              false,
+            ),
+        }
+      : {}),
   };
   return {
     deps,

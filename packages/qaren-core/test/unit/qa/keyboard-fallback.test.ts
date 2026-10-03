@@ -1,0 +1,613 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { parsePlan } from '../../../dist/qa/plan.js';
+import type { Block, Step } from '../../../dist/qa/plan.js';
+import type { Element, Screen } from '../../../dist/qa/screen.js';
+import { keyboardFallbackTarget } from '../../../dist/qa/resolve.js';
+import { KEYBOARD_READY_CAPTURES, runPlan, walkBlock } from '../../../dist/qa/walker.js';
+import type { ActResult, BlockStore, WalkerDeps } from '../../../dist/qa/walker.js';
+import type { Ledger, LedgerRow, WalkResult } from '../../../dist/qa/ledger.js';
+import type { Questions } from '../../../dist/qa/questions.js';
+import { element, scriptedJudge } from './judgment-fixtures.ts';
+
+const WRAP = 'qa-hidden-email-pressable';
+const EMAIL = 'qa@example.test';
+
+const wrapper = (label = 'Email', extra: Partial<Element> = {}): Element =>
+  element('@wrap', label, { kind: 'other', testID: WRAP, ...extra });
+const submit = element('@submit', 'Submit', { testID: 'qa-hidden-submit' });
+
+function screenOf(elements: Element[], keyboardVisible?: boolean): Screen {
+  return {
+    front: 'app',
+    elements,
+    visibleText: elements.map((e) => e.label ?? ''),
+    coverage: { native: 'complete', react: 'complete' },
+    ...(keyboardVisible === undefined ? {} : { keyboardVisible }),
+  };
+}
+
+function blocks(markdown: string): Block[] {
+  const parsed = parsePlan(markdown);
+  assert.ok(parsed.blocks, JSON.stringify(parsed.refused));
+  return parsed.blocks;
+}
+
+const plan = (
+  value = EMAIL,
+  target = 'qa-hidden-email',
+  tail = '2. Tap "qa-hidden-submit"\n✓ "Form accepted"\n',
+) => `## QA\n\n### Hidden email\n\n1. Fill "${target}" with "${value}"\n${tail}`;
+
+interface AppOptions {
+  initial?: Element[];
+  initialKeyboard?: boolean | 'absent';
+  // Screens returned after the tap, one per capture; the last one repeats.
+  focused?: Screen[];
+  typedLabel?: string;
+  press?: ActResult;
+  type?: ActResult;
+  typeFocused?: false;
+  expireBeforeType?: boolean;
+  questions?: Questions[];
+}
+
+function app(options: AppOptions = {}) {
+  let state: 'idle' | 'focused' | 'typed' | 'accepted' = 'idle';
+  let focusedCaptures = 0;
+  let time = 0;
+  let expire = false;
+  const log: string[] = [];
+  const rows: LedgerRow[] = [];
+  const diagnostics: unknown[] = [];
+  const typed: { ref: string; text: string; testID?: string }[] = [];
+  const questions = options.questions ?? [];
+  const judge = scriptedJudge((q) => {
+    questions.push(structuredClone(q));
+    return Object.fromEntries(Object.keys(q).map((id) => [id, { type: 'noul', noul: 0.99 }]));
+  });
+  const initial = options.initial ?? [wrapper(), submit];
+  const current = (): Screen => {
+    if (state === 'idle')
+      return screenOf(
+        initial,
+        options.initialKeyboard === 'absent' ? undefined : (options.initialKeyboard ?? false),
+      );
+    if (state === 'focused') {
+      const screens = options.focused ?? [screenOf(initial, true)];
+      const next = screens[Math.min(focusedCaptures++, screens.length - 1)];
+      if (options.expireBeforeType && next.keyboardVisible) expire = true;
+      return next;
+    }
+    if (state === 'typed')
+      return screenOf(
+        options.typedLabel === undefined ? initial : [wrapper(options.typedLabel), submit],
+        true,
+      );
+    return screenOf([element('@accepted', 'Form accepted', { kind: 'text' })], false);
+  };
+  const deps: WalkerDeps = {
+    judge,
+    async captureScreen() {
+      log.push('capture');
+      return current();
+    },
+    async press(ref, context) {
+      context.authorize();
+      log.push(`press ${ref}`);
+      if (ref === '@wrap' && state === 'idle') state = 'focused';
+      if (ref === '@submit') state = 'accepted';
+      return options.press ?? { ok: true, proven: false };
+    },
+    async fill(ref, text, context) {
+      context.authorize();
+      log.push(`fill ${ref}`);
+      typed.push({ ref, text });
+      state = 'typed';
+      return { ok: true, proven: true };
+    },
+    ...(options.typeFocused === false
+      ? {}
+      : {
+          async typeFocused(ref: string, text: string, testID: string | undefined, context) {
+            context.authorize();
+            log.push(`type ${ref}`);
+            typed.push({ ref, text, ...(testID ? { testID } : {}) });
+            state = 'typed';
+            return options.type ?? { ok: true, proven: false };
+          },
+        }),
+    async scroll(direction) {
+      log.push(`scroll ${direction}`);
+      return { ok: true, proven: false };
+    },
+    async back() {
+      log.push('back');
+      return { ok: true, proven: false };
+    },
+    async dialog(action) {
+      log.push(`dialog ${action}`);
+      return { ok: true, proven: true };
+    },
+    async screenshot(name) {
+      log.push(`shot ${name}`);
+      return name;
+    },
+    now: () => time,
+    async sleep(ms) {
+      time += ms;
+    },
+    row: (row) => {
+      rows.push(structuredClone(row));
+    },
+    diagnostic: (event) => {
+      diagnostics.push(event);
+    },
+    timing: (event) => {
+      if (expire && event.stage === 'capture' && event.edge === 'end') {
+        expire = false;
+        time += 60_000;
+      }
+    },
+  };
+  return { deps, log, rows, typed, diagnostics, questions, state: () => state };
+}
+
+const steps = (log: string[]) => log.filter((entry) => entry !== 'capture');
+
+const strings = (value: unknown): string[] =>
+  typeof value === 'string'
+    ? [value]
+    : value && typeof value === 'object'
+      ? Object.values(value).flatMap(strings)
+      : [];
+
+test('U8: a field the snapshot cannot see is tapped, typed once, marked unverified, and the walk continues', async () => {
+  const fake = app();
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+  assert.deepEqual(steps(fake.log), ['press @wrap', 'type @wrap', 'press @submit']);
+  assert.deepEqual(fake.typed, [{ ref: '@wrap', text: EMAIL, testID: 'qa-hidden-email' }]);
+  const fill = fake.rows[0];
+  assert.equal(fill.outcome, 'pass');
+  assert.equal(fill.screenshot, undefined);
+  assert.equal(fill.selector, undefined);
+  assert.equal(
+    fill.reason,
+    'UNVERIFIED_FILL: typed with the keyboard after tapping "qa-hidden-email"; the field is not an observable native input, so its final value was not read back',
+  );
+  assert.deepEqual(outcome.privateFills, [fill.line]);
+  assert.deepEqual(
+    fake.rows.map((r) => [r.line, r.outcome]),
+    [
+      [fill.line, 'pass'],
+      [fill.line + 1, 'pass'],
+      [fill.line + 2, 'pass'],
+    ],
+  );
+  assert.ok(
+    !fake.log.some((entry) => entry.startsWith('shot')),
+    'pixels withheld from the fill on',
+  );
+});
+
+test('U8: a later failing check still fails the block after an unverified fill', async () => {
+  const fake = app();
+  const outcome = await walkBlock(
+    blocks(plan(EMAIL, 'qa-hidden-email', '2. Tap "qa-hidden-submit"\n✓ "Welcome home"\n'))[0],
+    fake.deps,
+  );
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(outcome.failure?.step, fake.rows.at(-1)?.line);
+  assert.equal(fake.typed.length, 1);
+  assert.equal(outcome.failure?.screenshot, undefined);
+});
+
+test('U8: the block of an unverified fill is never saved and video stays withheld', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qaren-fallback-'));
+  mkdirSync(join(dir, '.qaren'));
+  const store: BlockStore = { appRoot: dir, platform: 'ios', appId: 'com.example.app' };
+  const fake = app();
+  const result = (await runPlan(blocks(plan()), fake.deps, [], store)) as Ledger;
+  assert.equal(result.verdict, 'PASS', JSON.stringify(result.failure));
+  assert.deepEqual(result.blocks, [
+    {
+      key: 'hidden-email',
+      outcome: 'pass',
+      source: 'discovered',
+      saved: false,
+      unsavable: `line ${fake.rows[0].line}: fills a private input`,
+    },
+  ]);
+  assert.deepEqual(result.blocksWritten, []);
+  assert.equal(result.videoPublication, 'withheld-fill');
+  assert.equal(existsSync(join(dir, '.qaren', 'actions', 'hidden-email.yaml')), false);
+});
+
+test('U9: a React-confirmed append is still recorded as unverified and private', async () => {
+  const fake = app({ type: { ok: true, proven: true } });
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'pass');
+  assert.match(fake.rows[0].reason ?? '', /^UNVERIFIED_FILL: /);
+  assert.deepEqual(outcome.privateFills, [fake.rows[0].line]);
+});
+
+test('U14: without the focused-typing dep the strict refusal is unchanged', async () => {
+  const fake = app({ typeFocused: false });
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.match(outcome.failure?.seen ?? '', /^TARGET_NOT_FOUND: /);
+  assert.deepEqual(
+    steps(fake.log).filter((s) => !s.startsWith('shot')),
+    [],
+  );
+  assert.equal(outcome.privateFills, undefined);
+});
+
+for (const keyboard of [true, 'absent'] as const) {
+  test(`U4: keyboard ${keyboard === true ? 'already up' : 'state absent'} fails before any tap`, async () => {
+    const fake = app({ initialKeyboard: keyboard });
+    const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.match(
+      outcome.failure?.seen ?? '',
+      keyboard === true
+        ? /^the keyboard is already up before tapping "qa-hidden-email"; nothing was typed/
+        : /^the keyboard state before tapping "qa-hidden-email" is unknown; nothing was typed/,
+    );
+    assert.deepEqual(steps(fake.log), []);
+    assert.equal(fake.rows.length, 1);
+  });
+}
+
+test('U5: keyboard state comes from the decision observation; nothing is captured before the tap', async () => {
+  const fake = app();
+  await walkBlock(blocks(plan())[0], fake.deps);
+  assert.deepEqual(fake.log.slice(0, 3), ['capture', 'press @wrap', 'capture']);
+});
+
+test('U6: an input that appears after the tap takes the strict verified fill path', async () => {
+  const input = element('@input', 'Email', { kind: 'input', testID: 'qa-hidden-email' });
+  const fake = app({ focused: [screenOf([wrapper(), input, submit], true)] });
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+  assert.deepEqual(steps(fake.log), ['press @wrap', 'fill @input', 'press @submit']);
+  assert.equal(fake.rows[0].reason, undefined);
+  assert.equal(fake.rows[0].ref, '@input');
+  assert.deepEqual(fake.rows[0].selector, { id: 'qa-hidden-email' });
+});
+
+for (const [name, after, reason] of [
+  [
+    'target gone',
+    screenOf([submit], true),
+    /the tap on "qa-hidden-email" changed the screen; nothing was typed/,
+  ],
+  [
+    'target duplicated',
+    screenOf(
+      [wrapper(), element('@wrap2', 'Email', { kind: 'other', testID: WRAP }), submit],
+      true,
+    ),
+    /the tap on "qa-hidden-email" changed the screen; nothing was typed/,
+  ],
+  [
+    'no keyboard',
+    screenOf([wrapper(), submit], false),
+    /tapping "qa-hidden-email" raised no keyboard; nothing was typed/,
+  ],
+] as const) {
+  test(`U7: ${name} after the tap fails without typing or tapping again`, async () => {
+    const fake = app({ focused: [after] });
+    const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.match(outcome.failure?.seen ?? '', reason);
+    assert.deepEqual(steps(fake.log), ['press @wrap']);
+    assert.equal(fake.typed.length, 0);
+    assert.equal(
+      fake.log.filter((entry) => entry === 'capture').length,
+      name === 'no keyboard' ? 1 + KEYBOARD_READY_CAPTURES : 2,
+    );
+  });
+}
+
+test('U7: a keyboard that rises on the third capture is accepted', async () => {
+  const fake = app({
+    focused: [
+      screenOf([wrapper(), submit], false),
+      screenOf([wrapper(), submit], false),
+      screenOf([wrapper(), submit], true),
+    ],
+  });
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+  assert.equal(fake.typed.length, 1);
+});
+
+for (const type of [
+  {
+    ok: false,
+    proven: false,
+    error: 'NO_TEXT_INPUT_TARGET: the intended input is not focused; no text was entered.',
+  },
+  {
+    ok: false,
+    proven: false,
+    error: 'TEXT_ENTRY_UNVERIFIED: typed into the focused field but its React value differs',
+  },
+] as const) {
+  test(`U10/U11: a failed focused type (${type.error.split(':')[0]}) fails once and is never retried`, async () => {
+    const fake = app({ type });
+    const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.deepEqual(steps(fake.log), ['press @wrap', 'type @wrap']);
+    assert.match(outcome.failure?.seen ?? '', /was not retried/);
+    assert.deepEqual(outcome.privateFills, [fake.rows[0].line]);
+  });
+}
+
+test('U11: a failed tap fails without typing', async () => {
+  const fake = app({ press: { ok: false, proven: false, error: 'TAP_FAILED: no' } });
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(fake.typed.length, 0);
+  assert.deepEqual(steps(fake.log), ['press @wrap']);
+});
+
+test('U11: evidence that expires before the type fails without typing or tapping again', async () => {
+  const fake = app({ expireBeforeType: true });
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.match(outcome.failure?.seen ?? '', /evidence expired before typing/);
+  assert.deepEqual(steps(fake.log), ['press @wrap']);
+  assert.equal(fake.typed.length, 0);
+});
+
+for (const value of ['SECRET-MARKER-123', '12']) {
+  test(`U12: the typed value ${value} reaches no row, reason, failure, question or diagnostic`, async () => {
+    const fake = app({ typedLabel: `Code A${value}B` });
+    const outcome = await walkBlock(
+      blocks(
+        plan(
+          value,
+          'qa-hidden-email',
+          '✓ the code is shown\n2. Tap "qa-hidden-submit"\n✓ "Welcome home"\n',
+        ),
+      )[0],
+      fake.deps,
+    );
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.equal(fake.typed[0].text, value);
+    assert.ok(fake.questions.length > 0, 'Jev saw the screen after typing');
+    const surfaces = strings({
+      rows: fake.rows,
+      outcome,
+      questions: fake.questions,
+      diagnostics: fake.diagnostics,
+    });
+    assert.deepEqual(
+      surfaces.filter((text) => text.includes(value)),
+      [],
+    );
+  });
+}
+
+test('U12: a short value is masked inside a later aggregated label', async () => {
+  const fake = app({ typedLabel: 'Code A12B' });
+  const outcome = await walkBlock(
+    blocks(plan('12', 'qa-hidden-email', '2. Tap "qa-hidden-email-pressable"\n'))[0],
+    fake.deps,
+  );
+  assert.match(outcome.failure?.seen ?? '', /Code A•••B/);
+  assert.deepEqual(
+    strings({ rows: fake.rows, outcome }).filter((text) => text.includes('12')),
+    [],
+  );
+});
+
+test('U13: an earlier block is not written with a value a later fallback made private', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qaren-fallback-'));
+  mkdirSync(join(dir, '.qaren'));
+  const store: BlockStore = { appRoot: dir, platform: 'ios', appId: 'com.example.app' };
+  const fake = app({
+    initial: [wrapper(), submit, element('@code', `Code ${EMAIL}`, { kind: 'text' })],
+  });
+  const markdown = `## QA\n\n### Code shown\n\n✓ "${EMAIL}"\n\n### Hidden email\n\n1. Fill "qa-hidden-email" with "${EMAIL}"\n`;
+  const result = (await runPlan(blocks(markdown), fake.deps, [], store)) as Ledger;
+  assert.equal(result.verdict, 'PASS', JSON.stringify(result.failure));
+  assert.deepEqual(result.blocks[0], {
+    key: 'code-shown',
+    outcome: 'pass',
+    source: 'discovered',
+    saved: false,
+    unsavable: 'contains a protected plan-typed value',
+  });
+  assert.equal(result.blocks[1].saved, false);
+  assert.deepEqual(result.blocksWritten, []);
+  assert.equal(existsSync(join(dir, '.qaren', 'actions', 'code-shown.yaml')), false);
+});
+
+test('U13: deferred writes keep order and content for runs without a private fill', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qaren-fallback-'));
+  mkdirSync(join(dir, '.qaren'));
+  const store: BlockStore = { appRoot: dir, platform: 'ios', appId: 'com.example.app' };
+  const input = element('@name', 'Name', { kind: 'input', testID: 'name' });
+  const fake = app({ initial: [input, submit, element('@hello', 'Hello', { kind: 'text' })] });
+  const markdown =
+    '## QA\n\n### First\n\n✓ "Hello"\n\n### Second\n\n1. Type "Ada" into "name"\n\n### Third\n\n✓ "Hello"\n';
+  const result = (await runPlan(blocks(markdown), fake.deps, [], store)) as WalkResult;
+  assert.notEqual(result.verdict, 'REFUSED');
+  const ledger = result as Ledger;
+  assert.equal(ledger.verdict, 'PASS', JSON.stringify(ledger.failure));
+  assert.deepEqual(ledger.blocks, [
+    { key: 'first', outcome: 'pass', source: 'discovered' },
+    { key: 'second', outcome: 'pass', source: 'discovered' },
+    { key: 'third', outcome: 'pass', source: 'discovered' },
+  ]);
+  assert.deepEqual(ledger.blocksWritten, ['first', 'second', 'third']);
+  assert.match(
+    readFileSync(join(dir, '.qaren', 'actions', 'second.yaml'), 'utf8'),
+    /inputText: "Ada"/,
+  );
+});
+
+const fill = (target: string, extra: Partial<Step & { kind: 'fill' }> = {}): Step =>
+  ({ kind: 'fill', target: { quoted: target, phrase: target }, text: 'v', ...extra }) as Step;
+
+test('U1: phrase and exact replay fills never fall back', () => {
+  const s = screenOf([wrapper(), submit], false);
+  assert.equal(
+    keyboardFallbackTarget({ kind: 'fill', target: { phrase: 'email' }, text: 'v' }, s),
+    undefined,
+  );
+  assert.equal(
+    keyboardFallbackTarget(
+      { kind: 'fill', target: { quoted: WRAP, phrase: WRAP, exact: 'id' }, text: 'v' },
+      s,
+    ),
+    undefined,
+  );
+  assert.equal(
+    keyboardFallbackTarget({ kind: 'press', target: { quoted: WRAP, phrase: WRAP } }, s),
+    undefined,
+  );
+});
+
+test('U1: non-qualifying refusals keep the strict refusal with no tap or type', async () => {
+  const ambiguous = app({
+    initial: [
+      element('@a', 'Email', { kind: 'input', testID: 'qa-hidden-email' }),
+      element('@b', 'Email', { kind: 'input', testID: 'qa-hidden-email' }),
+    ],
+  });
+  const a = await walkBlock(blocks(plan())[0], ambiguous.deps);
+  assert.match(a.failure?.seen ?? '', /^TARGET_AMBIGUOUS: /);
+  assert.equal(ambiguous.typed.length, 0);
+  const incomplete = app();
+  const capture = incomplete.deps.captureScreen;
+  incomplete.deps.captureScreen = async (o) => ({
+    ...(await capture(o)),
+    coverage: { native: 'incomplete', react: 'complete' },
+  });
+  const i = await walkBlock(blocks(plan())[0], incomplete.deps);
+  assert.match(i.failure?.seen ?? '', /^SCREEN_EVIDENCE_INCOMPLETE: /);
+  const process = app();
+  process.deps.appProcess = {};
+  const p = await walkBlock(blocks(plan())[0], process.deps);
+  assert.match(p.failure?.seen ?? '', /^APP_PROCESS_UNKNOWN: /);
+  for (const fake of [ambiguous, incomplete, process])
+    assert.deepEqual(
+      steps(fake.log).filter((s) => !s.startsWith('shot')),
+      [],
+    );
+});
+
+test('U1: an exact replay fill misses instead of falling back', async () => {
+  const fake = app();
+  const block = blocks(plan())[0];
+  const item = block.items[0];
+  assert.equal(item.kind, 'fill');
+  const replayed: Block = {
+    ...block,
+    items: [
+      { ...item, target: { quoted: 'qa-hidden-email', phrase: 'qa-hidden-email', exact: 'id' } },
+    ],
+  };
+  const outcome = await walkBlock(replayed, fake.deps, 0, [], undefined, undefined, {
+    mode: 'replay',
+  });
+  assert.equal(outcome.miss, item.line);
+  assert.equal(fake.typed.length, 0);
+  assert.deepEqual(
+    steps(fake.log).filter((s) => !s.startsWith('shot')),
+    [],
+  );
+});
+
+for (const [name, observable] of [
+  ['the quoted id', element('@i', 'Other', { kind: 'input', testID: 'qa-hidden-email' })],
+  [
+    'the wrapper base',
+    element('@i', 'Other', { kind: 'input', testID: 'qa-hidden-email', disabled: true }),
+  ],
+  ['quoted-pressable', element('@i', 'Other', { kind: 'input', label: WRAP, offscreen: true })],
+  [
+    'a secure node',
+    element('@i', 'Other', { kind: 'other', secure: true, placeholder: 'qa-hidden-email' }),
+  ],
+] as const) {
+  test(`U2: an observable input or secure node matching ${name} blocks the fallback`, () => {
+    assert.equal(
+      keyboardFallbackTarget(fill('qa-hidden-email'), screenOf([wrapper(), observable], false)),
+      undefined,
+    );
+  });
+}
+
+test('U2: a quoted wrapper id resolves through its base', () => {
+  const s = screenOf([wrapper(), submit], false);
+  assert.deepEqual(keyboardFallbackTarget(fill(WRAP), s), {
+    element: s.elements[0],
+    oracleTestID: 'qa-hidden-email',
+  });
+  const input = element('@i', 'Other', {
+    kind: 'input',
+    testID: 'qa-hidden-email',
+    disabled: true,
+  });
+  assert.equal(keyboardFallbackTarget(fill(WRAP), screenOf([wrapper(), input], false)), undefined);
+});
+
+test('U3: zero or two candidates, or a semantically disabled one, keep the strict refusal', () => {
+  assert.equal(
+    keyboardFallbackTarget(fill('qa-hidden-email'), screenOf([submit], false)),
+    undefined,
+  );
+  assert.equal(
+    keyboardFallbackTarget(
+      fill('qa-hidden-email'),
+      screenOf([wrapper(), element('@w2', 'Email', { kind: 'other', testID: WRAP })], false),
+    ),
+    undefined,
+  );
+  assert.equal(
+    keyboardFallbackTarget(
+      fill('qa-hidden-email'),
+      screenOf(
+        [
+          wrapper('Email', {
+            semantic: {
+              press: 'supported',
+              fill: 'unsupported',
+              visibility: 'visible',
+              disabled: true,
+            },
+          }),
+        ],
+        false,
+      ),
+    ),
+    undefined,
+  );
+  assert.equal(
+    keyboardFallbackTarget(
+      fill('qa-hidden-email'),
+      screenOf([wrapper('Email', { offscreen: true })], false),
+    ),
+    undefined,
+  );
+  assert.equal(
+    keyboardFallbackTarget(
+      fill('Email'),
+      screenOf([wrapper(), element('@x', 'Email', { kind: 'text' })], false),
+    ),
+    undefined,
+  );
+  const labelled = screenOf([element('@l', 'Email', { kind: 'other' })], false);
+  assert.deepEqual(keyboardFallbackTarget(fill('Email'), labelled), {
+    element: labelled.elements[0],
+  });
+});

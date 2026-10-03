@@ -64,6 +64,7 @@ export interface Screen {
   pressEvidenceGap?: string;
   reactHostEvidence?: ReactHostEvidence;
   appProcessIdentifier?: number;
+  keyboardVisible?: boolean;
 }
 
 const joinedDiagnosticFacts = new WeakMap<

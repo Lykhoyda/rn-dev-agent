@@ -201,6 +201,13 @@ export class ObservedPrivacy {
     );
   }
 
+  // A value typed where the screen cannot show us the field: mask it everywhere, even as a substring.
+  concealFallback(value: string): void {
+    this.concealed.add(value);
+    this.substringValues.add(value);
+    this.sensitivePixels = true;
+  }
+
   canScreenshot(): boolean {
     return !this.sensitivePixels;
   }

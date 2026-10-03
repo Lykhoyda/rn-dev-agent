@@ -142,6 +142,41 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
   };
 }
 
+const PRESSABLE_SUFFIX = '-pressable';
+const withoutPressable = (id: string): string =>
+  id.endsWith(PRESSABLE_SUFFIX) ? id.slice(0, -PRESSABLE_SUFFIX.length) : id;
+
+// The one non-input element a quoted fill may tap before typing through the keyboard; undefined keeps the strict refusal.
+export function keyboardFallbackTarget(
+  step: Step,
+  screen: Screen,
+): { element: Element; oracleTestID?: string } | undefined {
+  if (step.kind !== 'fill' || step.target.quoted === undefined || step.target.exact) return;
+  const quoted = step.target.quoted;
+  const ids = new Set([quoted, withoutPressable(quoted), quoted + PRESSABLE_SUFFIX]);
+  const observable = screen.elements.some(
+    (e) =>
+      (e.kind === 'input' || e.secure) &&
+      [e.testID, e.label, e.placeholder].some((name) => name !== undefined && ids.has(name)),
+  );
+  if (observable) return;
+  const shown = actionView(screen);
+  const named = shown.filter((e) => e.testID === quoted || e.label === quoted);
+  const candidates = named.length
+    ? named
+    : shown.filter((e) => e.testID === quoted + PRESSABLE_SUFFIX);
+  if (candidates.length !== 1) return;
+  const element = candidates[0];
+  if (
+    element.offscreen ||
+    element.secure ||
+    element.kind === 'input' ||
+    element.semantic?.disabled === true
+  )
+    return;
+  return element.testID ? { element, oracleTestID: withoutPressable(element.testID) } : { element };
+}
+
 export function decideTarget(prepared: TargetQuestion, answer: Answer | undefined): Resolution {
   const top = confidentChoice(prepared.question, answer);
   if (!top)

@@ -938,6 +938,8 @@ export interface FillArgs {
   testID?: string;
   /** Type into the field that already has keyboard focus instead of binding an input. */
   focused?: boolean;
+  /** With focused: refuse before typing when the React read of the intended input reports it unfocused. */
+  vetoUnfocused?: boolean;
   /** Story 04 (#385): per-call settle budget override in ms. */
   settleTimeoutMs?: number;
 }
@@ -1446,6 +1448,12 @@ export async function performFocusedFill(
   }
   const oracleTestId = focusedFillOracleTestId(args);
   const beforeRead = await readReactInputValue(client, oracleTestId);
+  if (args.vetoUnfocused && beforeRead && !beforeRead.focused)
+    return fillFailure(
+      'NO_TEXT_INPUT_TARGET',
+      'device_fill focused: the intended input is not focused; no text was entered.',
+      { mutation: 'none', pathsTried },
+    );
   const before = controlledReactValue(beforeRead);
   const native = await runNative(['fill', args.ref, args.text], {
     qaContext: args.qaContext,
