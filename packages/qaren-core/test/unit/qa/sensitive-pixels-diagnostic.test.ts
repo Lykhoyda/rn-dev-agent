@@ -1,0 +1,443 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { captureScreen } from '../../../dist/qa/capture.js';
+import {
+  capturePrivateScreen,
+  formatSensitivePixels,
+  inputValues,
+  ObservedPrivacy,
+  sensitivePixelsReasons,
+} from '../../../dist/qa/privacy.js';
+import { parsePlan } from '../../../dist/qa/plan.js';
+import type { NativeNode, Screen } from '../../../dist/qa/screen.js';
+import { runPlan } from '../../../dist/qa/walker.js';
+import { scriptedJudge, walker } from './judgment-fixtures.ts';
+import { attested, nativeCapture } from './platform-presence-fixtures.ts';
+
+const SECRET = 'SECRET-MARKER-123';
+const SINK_PREFIX = 'qaren-core: ';
+const rect = { x: 0, y: 0, width: 400, height: 800 };
+const verdict = { state: 'ok', path: 'interactive', complete: true };
+const react = async () => ({
+  interactive: [],
+  verdict,
+  hostEvidence: { hosts: [], complete: true },
+});
+
+type Spec = Partial<NativeNode> & { type: string };
+
+function tree(specs: Spec[]): NativeNode[] {
+  return [
+    { type: 'Application', label: 'Test app' },
+    { type: 'Window', parentIndex: 0 },
+    ...specs.map((spec) => ({ parentIndex: 1, ...spec })),
+  ].map((spec, index) => ({ ref: `@e${index}`, index, rect, ...spec }) as NativeNode);
+}
+
+const parse = (line: string) => {
+  assert.ok(line.startsWith('sensitive-pixels {'), line);
+  return JSON.parse(line.slice('sensitive-pixels '.length));
+};
+
+function privacyView(screen: Screen) {
+  const privacy = new ObservedPrivacy();
+  privacy.observe(screen);
+  return {
+    canScreenshot: privacy.canScreenshot(),
+    modelValues: privacy.modelValues(),
+    redacted: privacy.redact(JSON.stringify(screen)),
+    inputValues: inputValues(screen),
+  };
+}
+
+const outcome = (value: unknown) => JSON.parse(JSON.stringify(value));
+
+async function capture(
+  nodes: NativeNode[],
+  options: {
+    observation?: unknown;
+    requirePrivateInputs?: boolean;
+    react?: typeof react;
+    warn?: (message: string) => void;
+  } = {},
+) {
+  try {
+    return await captureScreen({
+      appId: 'com.test',
+      requirePrivateInputs: options.requirePrivateInputs ?? true,
+      native: async () => options.observation ?? attested(nodes),
+      react: options.react ?? react,
+      warn: options.warn,
+    });
+  } catch (error) {
+    return { refused: (error as Error).name };
+  }
+}
+
+// Captures with and without a sink, proves the sink changed nothing, and returns every warning.
+async function observe(specs: Spec[], options: Parameters<typeof capture>[1] = {}) {
+  const nodes = tree(specs);
+  const lines: string[] = [];
+  const logged = await capture(nodes, { ...options, warn: (message) => lines.push(message) });
+  const silent = await capture(nodes, options);
+  assert.deepEqual(outcome(logged), outcome(silent));
+  if (!('refused' in logged))
+    assert.deepEqual(privacyView(logged as Screen), privacyView(silent as Screen));
+  const sensitive = lines.filter((line) => line.startsWith('sensitive-pixels'));
+  return {
+    nodes,
+    screen: logged,
+    lines,
+    line: sensitive.length === 1 ? parse(sensitive[0]) : undefined,
+    count: sensitive.length,
+    canScreenshot: 'refused' in logged ? undefined : privacyView(logged as Screen).canScreenshot,
+  };
+}
+
+const text = (label: string): Spec => ({ type: 'StaticText', label });
+
+test('a valued paging ScrollView is reported as the only carrier', async () => {
+  const run = await observe([
+    { type: 'ScrollView', value: 'page 1 of 3' },
+    text('Welcome'),
+    text('Next'),
+  ]);
+  assert.equal(run.canScreenshot, false);
+  assert.deepEqual(run.line, {
+    v: 1,
+    r1: 1,
+    secure: 0,
+    r3: 1,
+    types: [['ScrollView', 1]],
+    omittedTypes: 0,
+  });
+});
+
+test('an empty secure input is reported through the secure count alone', async () => {
+  const run = await observe([{ type: 'SecureTextField' }, text('Sign in')]);
+  assert.equal(run.canScreenshot, false);
+  assert.deepEqual(run.line, { v: 1, r1: 0, secure: 1, r3: 0, types: [], omittedTypes: 0 });
+});
+
+test('a real input value is reported as a TextField carrier', async () => {
+  const run = await observe([
+    { type: 'TextField', label: 'Email', value: 'person@example.test' },
+    text('Sign in'),
+  ]);
+  assert.equal(run.canScreenshot, false);
+  assert.equal(run.line.secure, 0);
+  assert.ok(run.line.r3 >= 1);
+  assert.deepEqual(run.line.types, [['TextField', 1]]);
+});
+
+test('a valued Other custom input is reported as an Other carrier', async () => {
+  const run = await observe([{ type: 'Other', value: '42 kg' }, text('Weight')]);
+  assert.equal(run.canScreenshot, false);
+  assert.deepEqual(run.line.types, [['Other', 1]]);
+  assert.equal(run.line.r1, 1);
+});
+
+test('one value on several carriers counts once in r1 and once per carrier in types', async () => {
+  const run = await observe([
+    { type: 'Other', value: 'same' },
+    { type: 'Other', value: '  same  ' },
+    { type: 'ScrollView', value: 'same' },
+    { type: 'Slider', value: '50%' },
+  ]);
+  assert.equal(run.canScreenshot, false);
+  assert.equal(run.line.r1, 2);
+  assert.deepEqual(run.line.types, [
+    ['Other', 2],
+    ['ScrollView', 1],
+    ['Slider', 1],
+  ]);
+
+  const screen = run.screen as Screen;
+  capturePrivateScreen(screen, [
+    {
+      values: [' padded '],
+      secure: false,
+      elements: [screen.elements[0]],
+      associationUnique: true,
+    },
+  ]);
+  const stored = parse(sensitivePixelsReasons(screen, run.nodes)!);
+  assert.equal(stored.r1, 2, 'a stored trimmed variant is its own unique string');
+  assert.deepEqual(stored.types, [], 'neither variant is shown by an element');
+});
+
+test('a texts-only screen is not sensitive and logs no line', async () => {
+  const run = await observe([text('Welcome'), { type: 'Button', label: 'Continue' }]);
+  assert.equal(run.canScreenshot, true);
+  assert.equal(run.count, 0);
+  assert.equal(sensitivePixelsReasons(run.screen as Screen, run.nodes), undefined);
+});
+
+test('incomplete or unattested native captures log no line, whatever requirePrivateInputs says', async () => {
+  const specs: Spec[] = [{ type: 'ScrollView', value: 'page 1 of 3' }];
+  const nodes = tree(specs);
+  for (const requirePrivateInputs of [true, false]) {
+    for (const observation of [{ ...attested(nodes), truncated: true }, { nodes }]) {
+      const run = await observe(specs, { observation, requirePrivateInputs });
+      assert.equal(run.count, 0, `require=${requirePrivateInputs}`);
+      if (requirePrivateInputs)
+        assert.deepEqual(run.screen, { refused: 'PrivateInputCaptureError' });
+      else assert.notEqual((run.screen as Screen).captureCoverage?.native, 'complete');
+    }
+  }
+});
+
+test('a complete snapshot whose presence validation failed still logs its line', async () => {
+  const source = nativeCapture();
+  const nodes = source.nodes.map((node) =>
+    node.type === 'Button' ? { ...node, type: 'ScrollView', value: 'page 2 of 3' } : node,
+  ) as unknown as NativeNode[];
+  const lines: string[] = [];
+  const screen = await captureScreen({
+    appId: 'com.test',
+    requirePrivateInputs: true,
+    native: async () => ({
+      ...source,
+      nodes,
+      presenceCapture: { ...source.presenceCapture, complete: false },
+    }),
+    react,
+    warn: (message) => lines.push(message),
+  });
+  assert.equal(screen.captureCoverage?.native, 'complete');
+  assert.equal(screen.coverage?.native, 'incomplete');
+  const sensitive = lines.filter((line) => line.startsWith('sensitive-pixels'));
+  // Without a presence verdict the label may be a value too: two stored strings, one carrier.
+  assert.deepEqual(sensitive.map(parse), [
+    { v: 1, r1: 2, secure: 0, r3: 2, types: [['ScrollView', 1]], omittedTypes: 0 },
+  ]);
+});
+
+test('a slow or throwing sink at the budget edge cannot change the capture', async () => {
+  for (const elapsed of [21_999, 22_001]) {
+    for (const sink of ['slow', 'throw'] as const) {
+      const run = async (logging: boolean) => {
+        let clock = 0;
+        const lines: string[] = [];
+        const screen = await captureScreen({
+          appId: 'com.test',
+          requirePrivateInputs: true,
+          now: () => clock,
+          native: async () => attested(tree([{ type: 'ScrollView', value: 'page 1 of 3' }])),
+          react: async () => {
+            clock = elapsed;
+            return react();
+          },
+          ...(logging
+            ? {
+                warn: (message: string) => {
+                  lines.push(message);
+                  clock += 10;
+                  if (sink === 'throw') throw new Error(SECRET);
+                },
+              }
+            : {}),
+        });
+        return { screen, lines, clock };
+      };
+      const silent = await run(false);
+      const logged = await run(true);
+      assert.deepEqual(outcome(logged.screen), outcome(silent.screen));
+      assert.deepEqual(privacyView(logged.screen), privacyView(silent.screen));
+      assert.equal(privacyView(logged.screen).canScreenshot, false);
+      const sensitive = logged.lines.filter((line) => line.startsWith('sensitive-pixels'));
+      if (elapsed < 22_000) {
+        assert.equal(logged.screen.nativeCaptureCauses, undefined);
+        assert.equal(logged.lines.length, 2, sink);
+        assert.equal(sensitive.length, 1);
+        assert.equal(logged.clock, elapsed + 20);
+      } else {
+        assert.equal(logged.screen.coverage?.native, 'incomplete');
+        assert.ok(logged.screen.nativeCaptureCauses?.includes('capture-over-budget'));
+        assert.deepEqual(logged.lines, []);
+        assert.equal(logged.clock, elapsed);
+      }
+    }
+  }
+});
+
+test('the full sink line stays within 512 UTF-8 bytes and trims whole keys deterministically', () => {
+  assert.equal(Buffer.byteLength(SINK_PREFIX, 'utf8'), 12);
+  const allowed = [
+    'Application',
+    'Window',
+    'Other',
+    'Group',
+    'StaticText',
+    'Button',
+    'Link',
+    'Image',
+    'Icon',
+    'Cell',
+    'Table',
+    'CollectionView',
+    'ScrollView',
+    'TextField',
+    'SecureTextField',
+    'SearchField',
+    'TextView',
+    'Switch',
+    'Toggle',
+    'Slider',
+    'Stepper',
+    'Picker',
+    'PickerWheel',
+    'DatePicker',
+    'SegmentedControl',
+    'PageIndicator',
+    'ProgressIndicator',
+    'ActivityIndicator',
+    'NavigationBar',
+    'TabBar',
+    'Toolbar',
+    'Keyboard',
+    'Key',
+    'WebView',
+    'Map',
+    'Alert',
+    'Sheet',
+  ];
+  const unknown = Array.from({ length: 50 }, (_, i) => [`Custom${i}${SECRET}`, 9_999_999]);
+  const max = Number.MAX_SAFE_INTEGER;
+  const histogram = [...allowed.map((type) => [type, 9_999_999]), ...unknown] as [string, number][];
+  const message = formatSensitivePixels(max, max, max, histogram);
+  assert.ok(Buffer.byteLength(`${SINK_PREFIX}${message}\n`, 'utf8') <= 512, message);
+  assert.equal(message.includes(SECRET) || message.includes('Custom'), false);
+  const line = parse(message);
+  assert.deepEqual([line.r1, line.secure, line.r3], [max, max, max]);
+  assert.deepEqual(line.types[0], ['Other', 9_999_999 * 51], 'unknown types collapse into Other');
+  assert.equal(line.omittedTypes, allowed.length - line.types.length, 'one per omitted key');
+  assert.ok(line.omittedTypes > 0);
+  const sorted = allowed.filter((type) => type !== 'Other').sort();
+  assert.deepEqual(
+    line.types.slice(1).map(([type]: [string]) => type),
+    sorted.slice(0, line.types.length - 1),
+  );
+  assert.equal(formatSensitivePixels(max, max, max, histogram), message);
+
+  const longest = [...allowed].sort((a, b) => b.length - a.length);
+  const wide = formatSensitivePixels(
+    max,
+    max,
+    max,
+    longest.map((type) => [type, max]),
+  );
+  assert.ok(Buffer.byteLength(`${SINK_PREFIX}${wide}\n`, 'utf8') <= 512, wide);
+  assert.equal(parse(wide).omittedTypes + parse(wide).types.length, allowed.length);
+
+  const empty = formatSensitivePixels(max, max, max, []);
+  assert.ok(Buffer.byteLength(`${SINK_PREFIX}${empty}\n`, 'utf8') <= 512);
+  assert.deepEqual(parse(empty).types, []);
+});
+
+test('no warning carries a value, label, identifier, testID, placeholder or raw native type', async () => {
+  const field = `${SECRET}-field`;
+  const run = await observe(
+    [
+      { type: 'SECRET-TYPE', value: SECRET, label: SECRET, identifier: `${SECRET}-custom` },
+      { type: 'TextField', value: SECRET, label: SECRET, identifier: field },
+      { type: 'SecureTextField', value: SECRET, label: SECRET, identifier: `${SECRET}-pin` },
+      { type: 'StaticText', label: SECRET, identifier: `${SECRET}-text` },
+    ],
+    {
+      react: async () => ({
+        ...(await react()),
+        interactive: [
+          {
+            role: 'textbox',
+            testID: field,
+            label: SECRET,
+            placeholder: SECRET,
+            value: SECRET,
+            capabilities: { press: false, fill: true },
+          },
+        ],
+      }),
+    },
+  );
+  const screen = run.screen as Screen;
+  assert.ok(screen.elements.some((element) => element.placeholder === SECRET));
+  assert.ok(screen.elements.some((element) => element.testID === field));
+  assert.equal(run.canScreenshot, false);
+  assert.ok(run.lines.length >= 2);
+  for (const line of run.lines) {
+    assert.equal(line.includes(SECRET), false, line);
+    assert.equal(line.includes('SECRET-TYPE'), false, line);
+  }
+  assert.equal(run.line.secure, 1);
+  for (const [type] of run.line.types)
+    assert.ok(['Other', 'TextField', 'SecureTextField'].includes(type));
+});
+
+test('a walk over a sensitive screen persists the same ledger and screenshots with or without the line', async () => {
+  const source = nativeCapture();
+  const observed = source.nodes[1];
+  const native = {
+    ...source,
+    snapshotVerdict: { ...source.snapshotVerdict, nodeCount: 3 },
+    nodes: [
+      source.nodes[0],
+      {
+        ...observed,
+        ref: '@pager',
+        type: 'ScrollView',
+        identifier: undefined,
+        label: undefined,
+        value: 'page 1 of 3',
+      },
+      {
+        ...observed,
+        ref: '@welcome',
+        index: 2,
+        type: 'StaticText',
+        identifier: undefined,
+        label: 'Welcome',
+        presence: { ...observed.presence, nodeIndex: 2 },
+      },
+    ],
+  };
+  for (const [source, expected] of [
+    ['✓ Welcome is visible', 'PASS'],
+    ['✓ "Absent confirmation"', 'FAIL'],
+  ]) {
+    const walkWith = async (warn?: (message: string) => void) => {
+      const judge = scriptedJudge(() => ({ check_1: { type: 'noul', noul: 0.99 } }));
+      const walk = walker([], judge);
+      const shots: string[] = [];
+      walk.deps.captureScreen = () =>
+        captureScreen({
+          appId: 'com.test',
+          requirePrivateInputs: true,
+          native: async () => native,
+          react,
+          warn,
+        });
+      walk.deps.screenshot = async (name) => {
+        shots.push(name);
+        return name;
+      };
+      const plan = parsePlan(source);
+      assert.ok(plan.blocks);
+      const result = await runPlan(plan.blocks, walk.deps);
+      return outcome({ result, rows: walk.rows, actions: walk.actions, shots });
+    };
+    const lines: string[] = [];
+    const logged = await walkWith((message) => lines.push(message));
+    assert.deepEqual(logged, await walkWith());
+    assert.equal(logged.result.verdict, expected, JSON.stringify(logged.result));
+    assert.deepEqual(logged.shots, []);
+    assert.deepEqual(lines.filter((line) => line.startsWith('sensitive-pixels')).map(parse)[0], {
+      v: 1,
+      r1: 1,
+      secure: 0,
+      r3: 1,
+      types: [['ScrollView', 1]],
+      omittedTypes: 0,
+    });
+  }
+});

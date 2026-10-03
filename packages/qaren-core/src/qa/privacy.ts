@@ -1,4 +1,4 @@
-import type { Element, EvidenceStatus, Screen } from './screen.js';
+import type { Element, EvidenceStatus, NativeNode, Screen } from './screen.js';
 
 export const MASK = '•••';
 
@@ -168,6 +168,100 @@ function maskEvidence(
     mask.apply(text),
   );
   return maskValues(projected, typed);
+}
+
+const NATIVE_TYPES = new Set([
+  'Application',
+  'Window',
+  'Other',
+  'Group',
+  'StaticText',
+  'Button',
+  'Link',
+  'Image',
+  'Icon',
+  'Cell',
+  'Table',
+  'CollectionView',
+  'ScrollView',
+  'TextField',
+  'SecureTextField',
+  'SearchField',
+  'TextView',
+  'Switch',
+  'Toggle',
+  'Slider',
+  'Stepper',
+  'Picker',
+  'PickerWheel',
+  'DatePicker',
+  'SegmentedControl',
+  'PageIndicator',
+  'ProgressIndicator',
+  'ActivityIndicator',
+  'NavigationBar',
+  'TabBar',
+  'Toolbar',
+  'Keyboard',
+  'Key',
+  'WebView',
+  'Map',
+  'Alert',
+  'Sheet',
+]);
+// The sink adds the 12-byte `qaren-core: ` prefix and a newline, keeping each line within 512 bytes.
+const SENSITIVE_PIXELS_LIMIT = 499;
+
+// Value-free counts behind a stored sensitive-pixels verdict; it observes and never decides anything.
+export function sensitivePixelsReasons(
+  screen: Screen,
+  nodes: readonly NativeNode[],
+): string | undefined {
+  const stored = privateScreens.get(screen);
+  if (stored?.sensitivePixels !== true) return undefined;
+  const values = new Set(stored.values);
+  const typeOf = new Map(nodes.map((node) => [node.ref, node.type]));
+  const carriers = new Map<string | undefined, number>();
+  for (const element of screen.elements) {
+    const carrier =
+      (element.value !== undefined && values.has(element.value)) ||
+      ((element.secure || nativeLabelMayBeValue(element)) &&
+        element.label !== undefined &&
+        values.has(element.label));
+    if (!carrier) continue;
+    const type = typeOf.get(element.ref);
+    carriers.set(type, (carriers.get(type) ?? 0) + 1);
+  }
+  return formatSensitivePixels(
+    stored.values.length,
+    screen.elements.filter((element) => element.secure).length,
+    inputValues(screen).length,
+    carriers,
+  );
+}
+
+export function formatSensitivePixels(
+  r1: number,
+  secure: number,
+  r3: number,
+  carriers: Iterable<readonly [string | undefined, number]>,
+): string {
+  const counts = new Map<string, number>();
+  for (const [raw, count] of carriers) {
+    const type = raw !== undefined && NATIVE_TYPES.has(raw) ? raw : 'Other';
+    counts.set(type, (counts.get(type) ?? 0) + count);
+  }
+  const types = [...counts].sort(([a, x], [b, y]) => y - x || (a < b ? -1 : a > b ? 1 : 0));
+  let omittedTypes = 0;
+  const line = () =>
+    `sensitive-pixels ${JSON.stringify({ v: 1, r1, secure, r3, types, omittedTypes })}`;
+  let text = line();
+  while (Buffer.byteLength(text, 'utf8') > SENSITIVE_PIXELS_LIMIT && types.length) {
+    types.pop();
+    omittedTypes++;
+    text = line();
+  }
+  return text;
 }
 
 export class ObservedPrivacy {

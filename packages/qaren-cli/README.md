@@ -81,6 +81,15 @@ evidence, not a root-cause or PASS claim, and changes no visibility, masking or
 ledger behavior. The [diagnostic implementation](../qaren-core/src/qa/native-presence.ts)
 owns its field layout.
 
+A complete native capture within the capture budget whose own privacy verdict marks
+its pixels sensitive also writes one value-free `sensitive-pixels` line, at most 512
+bytes including the log prefix, to `logs/core.log`. It counts the stored private strings, secure elements
+and input values, plus a histogram of the native types that show a stored value.
+Types outside a fixed public list, and elements without a native node, count as
+`Other`. It excludes values, labels, identifiers and testIDs, and changes no
+screenshot, masking, eligibility or ledger decision. The
+[diagnostic implementation](../qaren-core/src/qa/privacy.ts) owns its field layout.
+
 Phrase presses require complete native and React coverage and proven React-to-native
 associations. Native text, images and plain views are excluded from press candidates
 only when complete React host evidence accounts for every interactive host and no
