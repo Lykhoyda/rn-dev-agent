@@ -114,7 +114,7 @@ export function parseStep(rest: string): Grammar {
   return null;
 }
 
-function normalizedSlug(title: string): string {
+export function normalizedSlug(title: string): string {
   return (
     title
       .toLowerCase()

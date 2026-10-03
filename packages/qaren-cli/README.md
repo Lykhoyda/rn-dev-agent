@@ -263,7 +263,10 @@ reason is `contains a protected plan-typed value` in `blocks_not_saved`. This sa
 guard uses recorded private-fill facts only; prefilled secure values and values only
 observed on screen remain uncovered by it. It does not remove existing saved actions.
 
-For quoted waits and scroll-until steps, a stored text selector must match exactly
+For quoted waits and scroll-until steps, a testID is stored only when exactly one
+captured element carries it, including offscreen elements in that count. A shared
+testID falls back to unique painted text; without either unique identity the block
+remains unsaved. A stored text selector must match exactly
 one onscreen painted contribution. Equal text or button labels at different native
 rectangles count separately, even when consecutive equal lines appear only once
 in the assertion view. Identical native twins count once; container and image labels
@@ -274,8 +277,12 @@ stored text as a broken selector under the recovery rules above.
 
 Replay requires the canonical block format emitted by
 [`serializeBlock`](../qaren-core/src/qa/blocks.ts); edited or incompatible files
-take the discovery path. Saving never overwrites an action belonging to another plan
-block; a collision or unsafe corpus leaves the passing block unsaved with a reason.
+take the discovery path. Before overwriting an existing action, saving requires its
+`plan` header to match the block ID and its full normalized title to match the incoming
+title, using the normalization described above before length bounding. A colliding
+short and long title therefore leaves the existing file byte-identical; same-title
+patches remain allowed. A collision or unsafe corpus leaves the passing block unsaved
+with a reason in `blocks_not_saved`.
 
 The ledger's `path` is `walk`, `replay` or `replay→walk@<line>` (the first re-walked
 plan line), and each block reports `source` `discovered`, `replayed` or `patched`. The

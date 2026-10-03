@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parsePlan } from '../../../dist/qa/plan.js';
+import { parsePlan, slugify } from '../../../dist/qa/plan.js';
 import type { Block } from '../../../dist/qa/plan.js';
 import type { Element, Screen } from '../../../dist/qa/screen.js';
 import { join as joinScreen } from '../../../dist/qa/screen.js';
@@ -216,6 +216,30 @@ test('a symlinked corpus or a slug collision leaves the block unsaved and the ru
   assert.equal(collided.blocks[0].saved, false);
   assert.match(collided.blocks[0].unsavable ?? '', /BLOCK_SLUG_COLLISION/);
   assert.match(readFileSync(actionFile(taken), 'utf8'), /recorded/);
+});
+
+test('overflow title discovery passes but preserves the short-title action', async () => {
+  const dir = root();
+  const longTitle = 'a'.repeat(65);
+  const shortTitle = slugify(longTitle);
+  const withTitle = (title: string) =>
+    literal.replace('### Onboarding to the tasks tab', `### ${title}`);
+  const first = await run(withTitle(shortTitle), dir);
+  assert.equal(first.result.verdict, 'PASS');
+  assert.deepEqual(first.result.blocksWritten, [shortTitle]);
+  const path = join(dir, '.qaren/actions', `${shortTitle}.yaml`);
+  const before = readFileSync(path, 'utf8');
+  const { result } = await run(withTitle(longTitle), dir);
+  assert.equal(result.verdict, 'PASS');
+  assert.equal(result.path, 'walk');
+  assert.equal(result.blocks[0].source, 'discovered');
+  assert.equal(result.blocks[0].saved, false);
+  assert.match(result.blocks[0].unsavable ?? '', /BLOCK_SLUG_COLLISION/);
+  assert.deepEqual(result.blocksWritten, []);
+  assert.equal(readFileSync(path, 'utf8'), before);
+  const replayed = await run(withTitle(shortTitle), dir);
+  assert.equal(replayed.result.path, 'replay');
+  assert.equal(readFileSync(path, 'utf8'), before);
 });
 
 test('a block saved for another platform is walked, not replayed', async () => {
@@ -755,6 +779,60 @@ test('a text wait echoed by containers replays without re-walk', async () => {
   const before = readFileSync(actionFile(dir), 'utf8');
   assert.match(before, /- extendedWaitUntil: \{ visible: \{ text: "Welcome" \}, timeout: 15000 \}/);
   const fake = echoed();
+  const second = ledger(await runPlan(blocks(literal), fake.deps, [], store(dir)));
+  assert.equal(second.verdict, 'PASS', JSON.stringify(second.failure));
+  assert.equal(second.path, 'replay');
+  assert.deepEqual(second.blocks, [{ key: SLUG, outcome: 'pass', source: 'replayed' }]);
+  assert.equal(second.jev.calls, 0);
+  assert.equal(fake.judge.calls.length, 0);
+  assert.equal(readFileSync(actionFile(dir), 'utf8'), before);
+});
+
+test('a wait on a uniquely labelled control sharing its testID replays by text without re-walk', async () => {
+  const rect = (y: number) => ({ x: 16, y, width: 200, height: 20 });
+  const home = joinScreen(
+    [
+      { ref: '@window', index: 0, type: 'Window', rect: { x: 0, y: 0, width: 390, height: 844 } },
+      ...[
+        { ref: '@welcome', label: 'Welcome', identifier: 'qa-replay-siblings', y: 100 },
+        { ref: '@sibling', label: 'Sibling', identifier: 'qa-replay-siblings', y: 200 },
+        { ref: '@tasks', label: 'Tasks', identifier: 'tab-tasks', y: 800 },
+      ].map(({ y, ...button }, i) => ({
+        ...button,
+        index: i + 1,
+        parentIndex: 0,
+        type: 'Button',
+        hittable: true,
+        enabled: true,
+        rect: rect(y),
+      })),
+    ],
+    [],
+    'app',
+    { native: 'complete', react: 'complete' },
+  );
+  const siblings = () => {
+    const fake = app();
+    const capture = fake.deps.captureScreen;
+    fake.deps.captureScreen = async (...args) => {
+      const shown = await capture(...args);
+      return shown.elements.some((e) => e.ref === '@welcome')
+        ? {
+            ...shown,
+            elements: home.elements,
+            visibleText: home.visibleText,
+            paintedText: home.paintedText,
+          }
+        : shown;
+    };
+    return fake;
+  };
+  const dir = root();
+  const first = ledger(await runPlan(blocks(literal), siblings().deps, [], store(dir)));
+  assert.equal(first.verdict, 'PASS', JSON.stringify(first.failure));
+  const before = readFileSync(actionFile(dir), 'utf8');
+  assert.match(before, /- extendedWaitUntil: \{ visible: \{ text: "Welcome" \}, timeout: 15000 \}/);
+  const fake = siblings();
   const second = ledger(await runPlan(blocks(literal), fake.deps, [], store(dir)));
   assert.equal(second.verdict, 'PASS', JSON.stringify(second.failure));
   assert.equal(second.path, 'replay');
