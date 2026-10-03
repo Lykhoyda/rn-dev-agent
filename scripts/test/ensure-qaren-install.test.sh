@@ -29,9 +29,10 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/stubs" "$tmp/plugin/scripts"
 cp "$SCRIPT" "$tmp/plugin/scripts/ensure-qaren.sh"
 if [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
-  out=$(HOME="$tmp/home" PATH=/usr/bin:/bin /bin/bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
-  check "minimal PATH: native Apple silicon reaches manifest validation" "qaren: this plugin carries no runner-manifest.json
-runner-manifest.json is unreadable" "$out"
+  out=$(HOME="$tmp/home" PATH=/usr/bin:/bin /bin/bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin 2>"$tmp/stderr")
+  check "minimal PATH: missing manifest exits 0" 0 "$?"
+  check "minimal PATH: missing manifest leaves stdout empty" "" "$out"
+  check "minimal PATH: native Apple silicon reaches manifest validation" "qaren: this plugin carries no runner-manifest.json" "$(cat "$tmp/stderr")"
 fi
 # Substitute only the hardware adapter in the test copy for Intel/Rosetta cases.
 TEST_SYSCTL="$tmp/stubs/sysctl" perl -pi -e 's{/usr/sbin/sysctl}{$ENV{TEST_SYSCTL}}g' "$tmp/plugin/scripts/ensure-qaren.sh"
@@ -112,12 +113,14 @@ for hardware in 0 absent; do
   rc=$?
   check "Intel $hardware: install refuses" yes "$([ "$rc" != 0 ] && echo yes || echo no)"
   check "Intel $hardware: clear unsupported message" "qaren 2.0 supports Apple silicon Macs only" "$(cat "$tmp/stderr")"
-  out=$(FAKE_ARCH=x86_64 FAKE_ARM64="$hardware" HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
+  out=$(FAKE_ARCH=x86_64 FAKE_ARM64="$hardware" HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin 2>"$tmp/stderr")
   check "Intel $hardware: hook exits 0" 0 "$?"
-  check "Intel $hardware: hook prints one unsupported line" "qaren: qaren 2.0 supports Apple silicon Macs only" "$out"
-  out=$(FAKE_ARCH=x86_64 FAKE_ARM64="$hardware" HOME="$tmp/home" PATH="$tmp/stubs:/usr/bin:/bin" /bin/bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
+  check "Intel $hardware: hook leaves stdout empty" "" "$out"
+  check "Intel $hardware: hook prints one unsupported diagnostic" "qaren: qaren 2.0 supports Apple silicon Macs only" "$(cat "$tmp/stderr")"
+  out=$(FAKE_ARCH=x86_64 FAKE_ARM64="$hardware" HOME="$tmp/home" PATH="$tmp/stubs:/usr/bin:/bin" /bin/bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin 2>"$tmp/stderr")
   check "Intel $hardware with minimal PATH: hook exits 0" 0 "$?"
-  check "Intel $hardware with minimal PATH: unsupported" "qaren: qaren 2.0 supports Apple silicon Macs only" "$out"
+  check "Intel $hardware with minimal PATH: stdout empty" "" "$out"
+  check "Intel $hardware with minimal PATH: unsupported" "qaren: qaren 2.0 supports Apple silicon Macs only" "$(cat "$tmp/stderr")"
   FAKE_ARCH=x86_64 FAKE_ARM64="$hardware" PATH="$tmp/stubs:/usr/bin:/bin" run_install "$tmp/missing.tgz" > "$tmp/intel-stdout"
   check "Intel $hardware with minimal PATH: install refuses" yes "$([ "$?" != 0 ] && echo yes || echo no)"
   check "Intel $hardware with minimal PATH: unsupported" "qaren 2.0 supports Apple silicon Macs only" "$(cat "$tmp/stderr")"
@@ -360,7 +363,7 @@ for mode in upgrade replace; do
     check "$label: lock free while the parked child lives" yes "$(lock_free)"
     # A loaded host can blow the hook's Node budget; that answer says nothing about recovery.
     for attempt in 1 2 3; do
-      hint=$(HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
+      hint=$(HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin 2>&1)
       grep -q 'did not finish in time' <<< "$hint" || break
     done
     if [ "$mode" = replace ] && [ "$stage" = move2-before ]; then
@@ -725,7 +728,7 @@ mkdir -p "$FOREIGN_PARENT/$VERSION/bin"
 printf '#!/bin/sh\n' > "$FOREIGN_PARENT/$VERSION/bin/qaren"
 chmod +x "$FOREIGN_PARENT/$VERSION/bin/qaren"
 printf '%s\n' "$GOOD_SHA" > "$FOREIGN_PARENT/$VERSION/.tarball-sha256"
-hint=$(HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin); rc=$?
+hint=$(HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin 2>&1); rc=$?
 check "foreign parent: print-bin exits 0" 0 "$rc"
 check "foreign parent: print-bin refuses to hand out the planted binary" yes \
   "$(grep -q 'is not a directory you own' <<< "$hint" && ! grep -q "bin/qaren\$" <<< "$hint" && echo yes || echo "no: $hint")"

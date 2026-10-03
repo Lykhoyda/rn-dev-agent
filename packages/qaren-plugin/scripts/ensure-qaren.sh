@@ -2,7 +2,7 @@
 # Verifies and installs the qaren runtime this plugin version vouches for.
 #
 #   ensure-qaren.sh --print-bin                   offline verification; prints the installed binary,
-#                                                 an install command or a diagnostic; always exits 0
+#                                                 or an install command; diagnostics go to stderr; always exits 0
 #   ensure-qaren.sh --install [--from-file <tgz>] downloads (or takes) the tarball, verifies its
 #                                                 sha256 and length against runner-manifest.json,
 #                                                 and installs it into ~/.qaren/runtime/<v>/; rerun --install after interruption
@@ -28,7 +28,7 @@ done
 REQUIRED_TOOLS="uname dirname cat tar gzip shasum wc cut tr head du mktemp mkdir mv cp rm find ls sleep perl"
 for tool in $REQUIRED_TOOLS; do
   if ! command -v "$tool" >/dev/null 2>&1; then
-    [ "$MODE" = --print-bin ] && { echo "qaren: required tool not found: $tool"; exit 0; }
+    [ "$MODE" = --print-bin ] && { echo "qaren: required tool not found: $tool" >&2; exit 0; }
     echo "ensure-qaren: required tool not found: $tool" >&2
     exit 1
   fi
@@ -81,7 +81,7 @@ validate_asset() {
 
 expected_asset() {
   local out
-  out=$(read_asset) || { [ $? = 3 ] || echo "runner-manifest.json is unreadable" >&2; return 1; }
+  out=$(read_asset) || return 1
   validate_asset "$out"
 }
 
@@ -146,17 +146,17 @@ check_bin() {
   set +m
   local asset version name sha bytes
   if [ -e "$RUNTIME_ROOT" ] && ! real_root; then
-    echo "qaren: the qaren runtime directory $RUNTIME_ROOT is not a directory you own; inspect it"
+    echo "qaren: the qaren runtime directory $RUNTIME_ROOT is not a directory you own; inspect it" >&2
     return 0
   fi
   if ! asset=$(expected_asset 2>&1); then
-    echo "qaren: $asset"
+    echo "qaren: ${asset%%$'\n'*}" >&2
     return 0
   fi
   { read -r version; read -r name; read -r sha; read -r bytes; } <<< "$asset"
-  installed_bin "$version" "$sha" && return 0
+  installed_bin "$version" "$sha" 2>/dev/null && return 0
   if interrupted_install "$version"; then
-    echo "qaren: an interrupted qaren v$version install was found; repair it with: $INSTALL_COMMAND"
+    echo "qaren: an interrupted qaren v$version install was found; repair it with: $INSTALL_COMMAND" >&2
     return 0
   fi
   echo "qaren v$version is not installed. Install it with: $INSTALL_COMMAND"
@@ -164,10 +164,10 @@ check_bin() {
 
 print_bin() {
   local result pid watchdog rc=0
-  result=$(mktemp) || { echo "qaren: cannot create a temporary file"; return 0; }
+  result=$(mktemp 2>/dev/null) || { echo "qaren: cannot create a temporary file" >&2; return 0; }
   # Its own process group lets a timeout kill everything the check started; bash's launch noise is not hook output.
   set -m
-  { check_bin > "$result" 2>&1 & } 2>/dev/null
+  { check_bin > "$result" 2>&3 3>&- & } 3>&2 2>/dev/null
   pid=$!
   {
     (
@@ -182,7 +182,7 @@ print_bin() {
   kill -KILL -- "-$watchdog" 2>/dev/null || true
   wait "$watchdog" 2>/dev/null || true
   if [ "$rc" = 137 ]; then
-    echo "qaren: the runtime check did not finish in time; run: $INSTALL_COMMAND"
+    echo "qaren: the runtime check did not finish in time; run: $INSTALL_COMMAND" >&2
   else
     cat "$result"
   fi
