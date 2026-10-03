@@ -276,3 +276,99 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
   });
   return offscreen;
 }
+
+const DIAGNOSTIC_TYPES = new Set([
+  'Application',
+  'Window',
+  'Other',
+  'StaticText',
+  'Button',
+  'TextField',
+  'SecureTextField',
+  'TextView',
+  'SearchField',
+  'Switch',
+  'Image',
+  'Cell',
+  'Table',
+  'CollectionView',
+  'ScrollView',
+  'Keyboard',
+  'Key',
+  'Link',
+  'NavigationBar',
+  'TabBar',
+]);
+const DIAGNOSTIC_LIMIT = 2048;
+
+// Value-free viewport facts for one capture; it observes production geometry and never decides anything.
+export function viewportDiagnostic(nodes: NativeNode[], offscreen: Set<number>): string {
+  const box = (rect: Rect | undefined) =>
+    rect ? [rect.x, rect.y, rect.width, rect.height].map(Math.round) : [null, null, null, null];
+  const sized = (rect: Rect | undefined) => !!rect && rect.width > 0 && rect.height > 0;
+  const app = nodes.find((node) => node.type === 'Application')?.rect;
+  const windows = nodes.flatMap((node, i) =>
+    node.type === 'Window' ? [[i, ...box(node.rect)]] : [],
+  );
+  const known = sized(app);
+  const symptoms: Array<[number, string, number, number, number, number, number, number]> = [];
+  let outsideApp = 0;
+  nodes.forEach((node, i) => {
+    if (!known || !node.rect || within(node.rect, app!)) return;
+    outsideApp++;
+    if (offscreen.has(i)) return;
+    let w = -1;
+    let wv = -1;
+    let u = -1;
+    let s = -1;
+    let parent = node.parentIndex;
+    for (let hops = 0; parent !== undefined && hops < nodes.length; hops++) {
+      const ancestor = nodes[parent];
+      if (ancestor?.type === 'Window') {
+        if (w < 0) {
+          w = parent;
+          wv = sized(ancestor.rect) ? 1 : 0;
+        }
+        if (sized(ancestor.rect)) {
+          u = parent;
+          break;
+        }
+      }
+      if (s < 0 && ['ScrollView', 'Table', 'CollectionView'].includes(ancestor?.type ?? ''))
+        s = parent;
+      parent = ancestor?.parentIndex;
+    }
+    const type = DIAGNOSTIC_TYPES.has(node.type ?? '') ? node.type! : 'Other';
+    const [x, y] = box(node.rect) as number[];
+    symptoms.push([i, type, w, wv, u, s, x, y]);
+  });
+  const count = (test: (entry: (typeof symptoms)[number]) => boolean) =>
+    known ? symptoms.filter(test).length : null;
+  const line = (windowList: unknown[], sample: unknown[]) =>
+    `viewport-diagnostic ${JSON.stringify({
+      v: 1,
+      app: app ? box(app) : null,
+      windowCount: windows.length,
+      windows: windowList,
+      rectless: nodes.filter((node) => !node.rect).length,
+      outsideApp: known ? outsideApp : null,
+      symptom: known ? symptoms.length : null,
+      noWindow: count(([, , w]) => w < 0),
+      invalidWindowOnly: count(([, , w, , u]) => w >= 0 && u < 0),
+      scrollClipped: count(([, , , , , s]) => s >= 0),
+      sample,
+    })}`;
+  // Counts stay whole; only the listed entries shrink so the line keeps its 2 KB bound.
+  let windowList = windows.slice(0, 8);
+  let sample = symptoms.slice(0, 20);
+  let text = line(windowList, sample);
+  while (
+    Buffer.byteLength(text, 'utf8') > DIAGNOSTIC_LIMIT &&
+    (sample.length || windowList.length)
+  ) {
+    if (sample.length) sample = sample.slice(0, -1);
+    else windowList = windowList.slice(0, -1);
+    text = line(windowList, sample);
+  }
+  return text;
+}
