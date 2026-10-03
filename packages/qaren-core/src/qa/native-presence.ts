@@ -234,7 +234,7 @@ export function scrollChromeNodes(
   return chrome;
 }
 
-// Unobserved nodes of a verified capture lying wholly outside the window or a scroll view ancestor.
+// Unobserved nodes of a verified capture lying wholly outside the screen, the window or a scroll view ancestor.
 export function offscreenNodes(
   nodes: NativeNode[],
   presence: NativePresence | undefined,
@@ -252,8 +252,18 @@ export function offscreenNodes(
 
 export function outsideViewport(nodes: NativeNode[]): Set<number> {
   const offscreen = new Set<number>();
+  const root = nodes[0];
+  // The screen clips every node, whatever its ancestry; a keyboard can detach content from its Window.
+  const screen =
+    root?.type === 'Application' && root.rect && root.rect.width > 0 && root.rect.height > 0
+      ? root.rect
+      : undefined;
   nodes.forEach((node, i) => {
     if (!node.rect) return;
+    if (screen && !within(node.rect, screen)) {
+      offscreen.add(i);
+      return;
+    }
     let visible: Rect | undefined;
     let window: Rect | undefined;
     let parent = node.parentIndex;

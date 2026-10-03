@@ -453,8 +453,37 @@ test('text below the native viewport is not on screen until scrolled into it', a
   ]);
   assert.equal(result.verdict, 'PASS', result.failure?.seen);
   assert.deepEqual(f.actions, ['scroll down']);
-  const unproven = await walkViewport('✓ "Later"', [viewportTree(1200, { window: false })]);
-  assert.equal(unproven.result.verdict, 'PASS', 'without a Window nothing is claimed off screen');
+  const orphaned = await walkViewport('✓ "Later"', [viewportTree(1200, { window: false })]);
+  assert.equal(orphaned.result.verdict, 'FAIL', 'the screen clips text outside every Window');
+  assert.match(orphaned.result.failure!.seen, /on screen: Welcome$/);
+});
+
+test('keyboard-up text on a never-shown page is not seen, partly visible text is', async () => {
+  const screen = { x: 0, y: 0, width: 402, height: 874 };
+  const text = (index: number, parentIndex: number, label: string, x: number) => ({
+    index,
+    ref: `@t${index}`,
+    type: 'StaticText',
+    label,
+    parentIndex,
+    rect: { x, y: 120, width: 200, height: 30 },
+  });
+  const tree = attested([
+    { index: 0, ref: '@app', type: 'Application', rect: screen },
+    { index: 1, ref: '@win', type: 'Window', parentIndex: 0, rect: screen },
+    { index: 2, ref: '@keyboard-win', type: 'Window', parentIndex: 0, rect: screen },
+    text(3, 1, 'Welcome', 16),
+    text(4, 0, 'Peek', 300),
+    text(5, 0, 'Details', 402),
+    text(6, 0, 'Review & Create', 804),
+  ]);
+  for (const label of ['Details', 'Review & Create']) {
+    const { result } = await walkViewport(`✓ "${label}"`, [tree]);
+    assert.equal(result.verdict, 'FAIL', label);
+    assert.match(result.failure!.seen, /on screen: Welcome \| Peek$/);
+  }
+  const partly = await walkViewport('✓ "Peek"', [tree]);
+  assert.equal(partly.result.verdict, 'PASS');
 });
 
 test('each node uses its own sized Window ancestor when multiple windows exist', async () => {
@@ -467,7 +496,7 @@ test('each node uses its own sized Window ancestor when multiple windows exist',
       ref: '@aux',
       type: 'Window',
       parentIndex: 0,
-      rect: { x: 500, y: 100, width: 200, height: 200 },
+      rect: { x: 180, y: 100, width: 200, height: 200 },
     },
     {
       ref: '@later',
@@ -481,7 +510,7 @@ test('each node uses its own sized Window ancestor when multiple windows exist',
       type: 'StaticText',
       parentIndex: 3,
       label: 'Auxiliary',
-      rect: { x: 510, y: 120, width: 100, height: 30 },
+      rect: { x: 190, y: 120, width: 100, height: 30 },
     },
     {
       ref: '@aux-outside',
@@ -505,7 +534,7 @@ test('each node uses its own sized Window ancestor when multiple windows exist',
       rect: { x: 10, y: 1200, width: 100, height: 30 },
     },
   ];
-  assert.deepEqual([...outsideViewport(nodes)], [4, 6]);
+  assert.deepEqual([...outsideViewport(nodes)], [4, 6, 7, 9]);
   const initial = attested(nodes);
   const revealed = attested(
     nodes.map((node) =>
