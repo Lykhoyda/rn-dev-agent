@@ -756,3 +756,57 @@ test('a text wait echoed by containers replays without re-walk', async () => {
   assert.equal(fake.judge.calls.length, 0);
   assert.equal(readFileSync(actionFile(dir), 'utf8'), before);
 });
+
+test('a wait on a uniquely labelled control sharing its testID replays by text without re-walk', async () => {
+  const rect = (y: number) => ({ x: 16, y, width: 200, height: 20 });
+  const home = joinScreen(
+    [
+      { ref: '@window', index: 0, type: 'Window', rect: { x: 0, y: 0, width: 390, height: 844 } },
+      ...[
+        { ref: '@welcome', label: 'Welcome', identifier: 'qa-replay-siblings', y: 100 },
+        { ref: '@sibling', label: 'Sibling', identifier: 'qa-replay-siblings', y: 200 },
+        { ref: '@tasks', label: 'Tasks', identifier: 'tab-tasks', y: 800 },
+      ].map(({ y, ...button }, i) => ({
+        ...button,
+        index: i + 1,
+        parentIndex: 0,
+        type: 'Button',
+        hittable: true,
+        enabled: true,
+        rect: rect(y),
+      })),
+    ],
+    [],
+    'app',
+    { native: 'complete', react: 'complete' },
+  );
+  const siblings = () => {
+    const fake = app();
+    const capture = fake.deps.captureScreen;
+    fake.deps.captureScreen = async (...args) => {
+      const shown = await capture(...args);
+      return shown.elements.some((e) => e.ref === '@welcome')
+        ? {
+            ...shown,
+            elements: home.elements,
+            visibleText: home.visibleText,
+            paintedText: home.paintedText,
+          }
+        : shown;
+    };
+    return fake;
+  };
+  const dir = root();
+  const first = ledger(await runPlan(blocks(literal), siblings().deps, [], store(dir)));
+  assert.equal(first.verdict, 'PASS', JSON.stringify(first.failure));
+  const before = readFileSync(actionFile(dir), 'utf8');
+  assert.match(before, /- extendedWaitUntil: \{ visible: \{ text: "Welcome" \}, timeout: 15000 \}/);
+  const fake = siblings();
+  const second = ledger(await runPlan(blocks(literal), fake.deps, [], store(dir)));
+  assert.equal(second.verdict, 'PASS', JSON.stringify(second.failure));
+  assert.equal(second.path, 'replay');
+  assert.deepEqual(second.blocks, [{ key: SLUG, outcome: 'pass', source: 'replayed' }]);
+  assert.equal(second.jev.calls, 0);
+  assert.equal(fake.judge.calls.length, 0);
+  assert.equal(readFileSync(actionFile(dir), 'utf8'), before);
+});

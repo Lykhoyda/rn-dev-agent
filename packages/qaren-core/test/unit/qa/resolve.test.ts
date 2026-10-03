@@ -621,3 +621,20 @@ test('a visible text is stored only when replay would find exactly one identity'
     { id: 'home-title' },
   );
 });
+
+test('a visible label stores its testID only when no other identity shares it', () => {
+  const sibling = { quoted: 'Sibling A', phrase: 'Sibling A' };
+  const shared = painted([
+    node('Button', 'Sibling A', 100, { identifier: 'qa-replay-siblings' }),
+    node('Button', 'Sibling B', 200, { identifier: 'qa-replay-siblings' }),
+  ]);
+  assert.deepEqual(visibleSelector(sibling, shared), { text: 'Sibling A' });
+  const sharedId = { quoted: 'qa-replay-siblings', phrase: 'qa-replay-siblings' };
+  assert.equal(visibleSelector(sharedId, shared), undefined);
+  assert.equal(targetVisible(exactText('Sibling A'), shared), true);
+  const unique = painted([
+    node('Button', 'Sibling A', 100, { identifier: 'qa-replay-a' }),
+    node('Button', 'Sibling B', 200, { identifier: 'qa-replay-b' }),
+  ]);
+  assert.deepEqual(visibleSelector(sibling, unique), { id: 'qa-replay-a' });
+});

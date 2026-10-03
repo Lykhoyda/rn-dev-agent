@@ -295,11 +295,15 @@ export function visibleSelector(target: Target, screen: Screen): Selector | unde
   const quoted = target.quoted;
   if (quoted === undefined || !targetVisible(target, screen)) return undefined;
   const shown = screen.elements.filter((e) => !e.offscreen);
-  if (target.exact !== 'text' && shown.some((e) => e.testID === quoted)) return { id: quoted };
+  // Replay counts every element carrying a stored testID, so a shared one cannot be stored.
+  const uniqueId = (id: string | undefined) =>
+    !!id && screen.elements.filter((e) => e.testID === id).length === 1;
+  if (target.exact !== 'text' && shown.some((e) => e.testID === quoted) && uniqueId(quoted))
+    return { id: quoted };
   if (target.exact === 'id') return undefined;
   const labelled = shown.filter((e) => e.label === quoted);
-  return target.exact === undefined && labelled.length === 1 && labelled[0].testID
-    ? { id: labelled[0].testID }
+  return target.exact === undefined && labelled.length === 1 && uniqueId(labelled[0].testID)
+    ? { id: labelled[0].testID! }
     : textIdentities(quoted, screen) === 1
       ? { text: quoted }
       : undefined;
