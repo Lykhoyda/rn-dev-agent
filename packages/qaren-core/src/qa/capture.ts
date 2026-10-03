@@ -421,13 +421,6 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
         nodes.length,
         captureCoverage.native === 'unknown' ? ['unattested'] : nativeIncompleteCauses(native),
       );
-    if (deps.warn && captureCoverage.native === 'complete') {
-      try {
-        deps.warn(viewportDiagnostic(nodes, outsideViewport(nodes)));
-      } catch {
-        // Diagnostics cannot change capture admission or failure.
-      }
-    }
     const hostEvidence = validateReactHostEvidence(react.hostEvidence);
     const nativePresence =
       captureCoverage.native === 'complete'
@@ -495,6 +488,13 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
     if (!withinBudget && !nativeCaptureCauses.includes('capture-over-budget'))
       nativeCaptureCauses.push('capture-over-budget');
     if (nativeCaptureCauses.length > 0) screen.nativeCaptureCauses = nativeCaptureCauses;
+    if (deps.warn && captureCoverage.native === 'complete' && withinBudget) {
+      try {
+        deps.warn(viewportDiagnostic(nodes, outsideViewport(nodes)));
+      } catch {
+        // Diagnostics cannot change capture admission or failure.
+      }
+    }
     joined = true;
     return screen;
   } finally {

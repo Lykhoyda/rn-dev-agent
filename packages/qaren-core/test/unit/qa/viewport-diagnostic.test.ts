@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { captureScreen } from '../../../dist/qa/capture.js';
 import { outsideViewport, viewportDiagnostic } from '../../../dist/qa/native-presence.js';
 import type { NativeNode } from '../../../dist/qa/screen.js';
-import { attested } from './platform-presence-fixtures.ts';
+import { attested, nativeCapture } from './platform-presence-fixtures.ts';
 
 const SECRET = 'SECRET-MARKER-123';
 const screenRect = { x: 0, y: 0, width: 402, height: 874 };
@@ -248,4 +248,64 @@ test('only a complete native capture emits the line, and emitting changes nothin
   }
   const refused = await emitted(true, true);
   assert.deepEqual(refused.outcome, { refused: 'PrivateInputCaptureError' });
+});
+
+test('a slow diagnostic sink cannot change the capture budget verdict', async () => {
+  for (const elapsed of [21_999, 22_001]) {
+    const run = async (logging: boolean) => {
+      let clock = 0;
+      const lines: string[] = [];
+      const screen = await captureScreen({
+        appId: 'com.test',
+        requirePrivateInputs: true,
+        now: () => clock,
+        native: async () => nativeCapture(),
+        react: async () => {
+          clock = elapsed;
+          return {
+            interactive: [{ role: 'button', testID: 'save', capabilities: { press: true } }],
+            verdict: { state: 'ok', path: 'interactive', complete: true },
+            hostEvidence: {
+              hosts: [
+                {
+                  testID: 'save',
+                  role: 'button',
+                  roleSource: 'role',
+                  capabilities: { press: true },
+                },
+              ],
+              complete: true,
+            },
+          };
+        },
+        ...(logging
+          ? {
+              warn: (message: string) => {
+                lines.push(message);
+                clock += 10;
+              },
+            }
+          : {}),
+      });
+      return { screen, lines, clock };
+    };
+    const silent = await run(false);
+    const logged = await run(true);
+    assert.deepEqual(logged.screen, silent.screen);
+    assert.deepEqual(logged.screen.captureCoverage, { native: 'complete', react: 'complete' });
+    if (elapsed < 22_000) {
+      assert.deepEqual(logged.screen.coverage, { native: 'complete', react: 'complete' });
+      assert.equal(logged.screen.nativeCaptureCauses, undefined);
+      assert.ok(logged.screen.elements.some((element) => element.semantic));
+      assert.equal(logged.lines.length, 1);
+      parse(logged.lines[0]);
+      assert.equal(logged.clock, elapsed + 10);
+    } else {
+      assert.equal(logged.screen.coverage?.native, 'incomplete');
+      assert.ok(logged.screen.nativeCaptureCauses?.includes('capture-over-budget'));
+      assert.ok(logged.screen.elements.every((element) => element.semantic === undefined));
+      assert.deepEqual(logged.lines, []);
+      assert.equal(logged.clock, elapsed);
+    }
+  }
 });
