@@ -1142,6 +1142,28 @@ test('the runner-reported app process identifier reaches the screen only when it
   }
 });
 
+test('the runner-reported keyboard state reaches the screen only when it is a boolean', async () => {
+  for (const [reported, expected] of [
+    [true, true],
+    [false, false],
+    ['true', undefined],
+    [1, undefined],
+    [undefined, undefined],
+  ] as const) {
+    const screen = await captureScreen({
+      native: async () => ({
+        nodes,
+        truncated: false,
+        normalizationDroppedNodes: 0,
+        snapshotVerdict,
+        ...(reported === undefined ? {} : { keyboardVisible: reported }),
+      }),
+      react: async () => ({ interactive, verdict, hostEvidence }),
+    });
+    assert.equal(screen.keyboardVisible, expected, String(reported));
+  }
+});
+
 test('a gone app process passes through private capture; other native failures stay content-free', async () => {
   const fail = (error: Error) =>
     captureScreen({
