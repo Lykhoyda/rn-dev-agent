@@ -344,11 +344,9 @@ install() {
       || refuse "$name would unpack to at least $logical bytes, above the unpacked-size ceiling; nothing installed"
     frame=$((frame + 512 + (10#$size + 511) / 512 * 512))
   done < <(exec 9>&-; tar --numeric-owner -tvzf "$tarball")
-  # The qaren build writes one ustar header per entry and a 1024-byte end; Python's tarfile also
-  # pads to a 10240-byte record. Anything else (extended, sparse or long-name headers) is refused.
   frame=$((frame + 1024))
   [ "$got" = "$frame" ] || [ "$got" = $(((frame + 10239) / 10240 * 10240)) ] \
-    || refuse "$name carries tar headers the qaren build never writes (extended, sparse or long-name entries); nothing installed"
+    || refuse "$name has an unsupported tar framing size; nothing installed"
 
   pause_at extract
   mkdir "$STAGING/x"

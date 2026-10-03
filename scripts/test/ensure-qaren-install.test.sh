@@ -167,6 +167,18 @@ check "tarball with directory binary is refused" 1 "$rc"
 check "directory binary: nothing installed" no "$([ -e "$DEST" ] && echo yes || echo no)"
 check "directory binary: no staging left behind" 0 "$(leftovers)"
 
+write_manifest "$tmp/good.tgz"
+run_install "$tmp/good.tgz" >/dev/null; rc=$?
+check "directory replacement: prior runtime installs" 0 "$rc"
+cp -R "$DEST" "$tmp/previous-runtime"
+write_manifest "$tmp/binary-directory.tgz"
+run_install "$tmp/binary-directory.tgz" >/dev/null; rc=$?
+check "directory replacement: tarball is refused" 1 "$rc"
+check "directory replacement: names the invalid binary" yes "$(grep -q 'no executable bin/qaren' "$tmp/stderr" && echo yes || echo no)"
+check "directory replacement: prior runtime is byte-identical" yes "$(diff -r "$tmp/previous-runtime" "$DEST" >/dev/null && echo yes || echo no)"
+check "directory replacement: prior binary still runs" qaren "$("$DEST/bin/qaren")"
+check "directory replacement: no staging left behind" 0 "$(leftovers)"
+
 # A tampered byte is refused and nothing is installed.
 reset_home
 cp "$tmp/good.tgz" "$tmp/tampered.tgz"
@@ -493,7 +505,7 @@ sparse_tarball() {
 sparse_tarball "$tmp/sparse-big.tgz" $((8 << 30))
 refused_before_extract "an 8 GiB sparse entry" "$tmp/sparse-big.tgz" "would unpack to at least 85899"
 sparse_tarball "$tmp/sparse-small.tgz" $((16 << 20))
-refused_before_extract "a small sparse entry" "$tmp/sparse-small.tgz" "tar headers the qaren build never writes"
+refused_before_extract "a small sparse entry" "$tmp/sparse-small.tgz" "unsupported tar framing size"
 rm -f "$tmp/sparse-big.tgz" "$tmp/sparse-small.tgz"
 
 # A listing line this installer cannot read reliably stops the install instead of being guessed.
