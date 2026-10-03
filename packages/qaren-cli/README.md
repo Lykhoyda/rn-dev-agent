@@ -142,7 +142,10 @@ the byte limit. It excludes value text, label text, identifiers and testIDs. The
 Phrase presses require complete native and React coverage and proven React-to-native
 associations. Native text, images and plain views are excluded from press candidates
 only when complete React host evidence accounts for every interactive host and no
-associated React evidence suggests that node is interactive. A React role alone
+associated React evidence suggests that node is interactive. Only recognized
+control and input roles contribute interactive-role evidence; heading, image,
+`none`, `presentation`, text, summary and unknown roles do not. A positive host
+press handler still establishes press capability regardless of role. A React role alone
 does not grant press capability; a proven host press handler or native button,
 switch or link does. Unknown capability or missing positive platform presence
 refuses with `SCREEN_EVIDENCE_INCOMPLETE` rather than guessing a target.
@@ -398,10 +401,9 @@ changes.
 Preparation rechecks provenance before emitting `ready`; `check` and `pr`
 recheck it before and after the walk. Detected drift fails with
 `CANDIDATE_DRIFTED` and cannot return PASS; an already-cancelled walk retains
-`RUN_CANCELLED`. Passing blocks already saved remain available, but
-`qaren publish` refuses a run recorded as `CANDIDATE_DRIFTED` before posting,
-uploading, writing back blocks or removing labels. Re-run against an unchanged
-candidate to obtain attributable evidence.
+`RUN_CANCELLED`. Passing blocks already saved remain available. See the
+[publication refusal contract](#test-a-pull-request) before publishing; re-run
+against an unchanged candidate to obtain attributable evidence.
 
 ## Test a pull request
 
@@ -409,6 +411,10 @@ candidate to obtain attributable evidence.
 qaren pr <number|url> --plan-file plan.md --device <simulator-UUID> --json
 qaren publish <run-id> --verdict-file verdict.md --json
 ```
+
+`qaren publish` refuses runs whose persisted failure is `CANDIDATE_DRIFTED` or
+`RUN_CANCELLED`, before uploading, posting comments, removing `needs-qa` or
+writing back blocks. Saved actions already on disk remain untouched.
 
 `qaren pr` runs the same pipeline as `check`, from the app's directory with the
 same `.qaren/config.yaml` and plan, but walks a detached worktree at the pull
