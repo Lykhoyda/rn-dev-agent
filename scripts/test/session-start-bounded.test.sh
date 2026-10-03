@@ -175,6 +175,79 @@ if [ -s "$tmp/slow-perl.pid" ]; then
 fi
 ln -sf "$PERL" "$tmp/bin/perl"
 
+mkdir -p "$tmp/owned"
+printf '#!/bin/sh\n' > "$tmp/owned/qaren"
+chmod +x "$tmp/owned/qaren"
+printf '%s\n' "$SHA" > "$tmp/owned/record"
+mv "$DEST/bin/qaren" "$tmp/real-qaren"
+ln -s "$tmp/owned/qaren" "$DEST/bin/qaren"
+hook
+bounded "linked bin/qaren"
+check "linked bin/qaren: prints the install command" yes "$(contains "$out" "is not installed. Install it with:")"
+rm "$DEST/bin/qaren"
+mv "$tmp/real-qaren" "$DEST/bin/qaren"
+mv "$DEST/bin" "$tmp/real-bin"
+ln -s "$tmp/owned" "$DEST/bin"
+hook
+bounded "linked bin/"
+check "linked bin/: prints the install command" yes "$(contains "$out" "is not installed. Install it with:")"
+rm "$DEST/bin"
+mv "$tmp/real-bin" "$DEST/bin"
+rm "$DEST/.tarball-sha256"
+ln -s "$tmp/owned/record" "$DEST/.tarball-sha256"
+hook
+bounded "linked digest record"
+check "linked digest record: prints the install command" yes "$(contains "$out" "is not installed. Install it with:")"
+rm "$DEST/.tarball-sha256"
+printf '%s\n' "$SHA" > "$DEST/.tarball-sha256"
+
+SLEEP=$(command -v sleep)
+printf '#!/bin/sh\n"%s" 0.3\nexec "%s" "$@"\n' "$SLEEP" "$NODE" > "$tmp/cold-node"
+chmod +x "$tmp/cold-node"
+ln -sf "$tmp/cold-node" "$tmp/bin/node"
+cold_bin=0
+for _ in $(seq 20); do
+  hook
+  [ "$rc" = 0 ] && [ "$ms" -lt 2000 ] && [ "$out" = "$REAL_DEST/bin/qaren" ] && cold_bin=$((cold_bin + 1))
+done
+check "Node with 0.3 s startup: 20 of 20 calls print the binary within 2 s" 20 "$cold_bin"
+ln -sf "$NODE" "$tmp/bin/node"
+
+printf '#!/bin/sh\necho "$$" > "%s/slow-node.pid"\nexec "%s" -e '\''process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'\''\n' "$tmp" "$NODE" > "$tmp/slow-node"
+chmod +x "$tmp/slow-node"
+ln -sf "$tmp/slow-node" "$tmp/bin/node"
+printf '#!/bin/sh\necho tick >> "%s/ticks"\nexec "%s" "$@"\n' "$tmp" "$SLEEP" > "$tmp/counting-sleep"
+chmod +x "$tmp/counting-sleep"
+ln -sf "$tmp/counting-sleep" "$tmp/bin/sleep"
+rm -f "$tmp/ticks"
+hook
+bounded "stalled check, counted polls"
+check "stalled check: the timeout fires after exactly 10 polls" 10 "$(wc -l < "$tmp/ticks" | tr -d ' ')"
+ln -sf "$SLEEP" "$tmp/bin/sleep"
+
+quiet=0 one_line=0 in_time=0 survivors=0
+for _ in $(seq 200); do
+  rm -f "$tmp/slow-node.pid"
+  start=$(now_ms)
+  HOME="$tmp/home" PATH="$tmp/bin" "$PERL" -e 'alarm 5; exec @ARGV' \
+    "$tmp/bin/bash" "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin >"$tmp/hook-stdout" 2>"$tmp/hook-stderr"
+  rc=$?
+  ms=$(( $(now_ms) - start ))
+  [ ! -s "$tmp/hook-stderr" ] && quiet=$((quiet + 1))
+  [ "$(wc -l < "$tmp/hook-stdout" | tr -d ' ')" = 1 ] && grep -q 'did not finish in time' "$tmp/hook-stdout" \
+    && one_line=$((one_line + 1))
+  [ "$rc" = 0 ] && [ "$ms" -lt 2000 ] && in_time=$((in_time + 1))
+  if [ -s "$tmp/slow-node.pid" ] && kill -0 "$(cat "$tmp/slow-node.pid")" 2>/dev/null; then
+    survivors=$((survivors + 1))
+    kill -KILL "$(cat "$tmp/slow-node.pid")"
+  fi
+done
+check "200 stalled checks: stderr is empty every time" 200 "$quiet"
+check "200 stalled checks: stdout is exactly one line every time" 200 "$one_line"
+check "200 stalled checks: each exits 0 within 2 s" 200 "$in_time"
+check "200 stalled checks: no child survives" 0 "$survivors"
+ln -sf "$NODE" "$tmp/bin/node"
+
 printf '{"version":"%s","assets":{"ios":[],"android":[]}}\n' "$VERSION" > "$tmp/plugin/runner-manifest.json"
 hook
 bounded "no qaren asset"

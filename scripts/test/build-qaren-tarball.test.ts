@@ -104,6 +104,36 @@ test('the archive carries sorted entries, root ownership, normalised modes and t
   }
 });
 
+test('every header mode is one of the three the installer accepts, whatever the input modes', () => {
+  const dir = tree(
+    {
+      'top/private/run': { body: 'r', mode: 0o700 },
+      'top/private/secret': { body: 's', mode: 0o600 },
+      'top/readonly/tool': { body: 't', mode: 0o555 },
+      'top/readonly/data': { body: 'd', mode: 0o644 },
+    },
+    5,
+  );
+  chmodSync(join(dir, 'top', 'private'), 0o700);
+  chmodSync(join(dir, 'top', 'readonly'), 0o555);
+  try {
+    const tar = gunzipSync(packDirectory(dir, 1_700_000_000));
+    const seen = new Set<string>();
+    for (let offset = 0; tar[offset] !== 0; ) {
+      const field = (start: number, length: number) =>
+        tar.subarray(offset + start, offset + start + length).toString('ascii');
+      const entry = `${field(156, 1) === '5' ? 'directory' : 'file'} ${parseInt(field(100, 8), 8).toString(8)}`;
+      assert.ok(['directory 755', 'file 755', 'file 644'].includes(entry), entry);
+      seen.add(entry);
+      offset += 512 + Math.ceil(parseInt(field(124, 12), 8) / 512) * 512;
+    }
+    assert.deepEqual([...seen].sort(), ['directory 755', 'file 644', 'file 755']);
+  } finally {
+    chmodSync(join(dir, 'top', 'readonly'), 0o755);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('anything but regular files and directories is refused', () => {
   const dir = tree({ 'top/file': { body: 'x', mode: 0o644 } }, 5);
   try {

@@ -35,7 +35,7 @@ chmod +x "$tmp/stubs/uname" "$tmp/stubs/sleep"
 export PATH="$tmp/stubs:$PATH"
 REQUIRED_TOOLS="uname dirname cat tar gzip shasum wc cut tr head du mktemp mkdir mv cp rm find ls sleep perl"
 
-# make_tarball <out> <kind>: good | dotdot | absolute | symlink | stray | bomb | manyfiles
+# make_tarball <out> <kind>: good | dotdot | absolute | symlink | stray | bomb | manyfiles | large | flood | rodir | zerodir
 make_tarball() {
   python3 - "$1" "$2" "$TOP" "$tmp" <<'PY'
 import io, sys, tarfile
@@ -78,6 +78,9 @@ with tarfile.open(out, "w:gz", format=tarfile.USTAR_FORMAT, compresslevel=1) as 
     elif kind == "flood":
         for i in range(10001):
             add(tar, f"{top}/runtime/flood/{i}")
+    elif kind in ("rodir", "zerodir"):
+        add(tar, f"{top}/runtime/native/", kind=tarfile.DIRTYPE, mode=0o555 if kind == "rodir" else 0)
+        add(tar, f"{top}/runtime/native/helper", b"x")
 PY
 }
 
@@ -484,6 +487,54 @@ gzip -c "$tmp/bomb.tgz" > "$tmp/nestedbomb.tgz"
 rm -f "$tmp/bomb.tgz"
 refused_before_extract "a nested 1 GiB bomb" "$tmp/nestedbomb.tgz" "is not one gzip layer over a tar archive"
 rm -f "$tmp/nestedbomb.tgz"
+
+# A directory the installer could not later remove would wedge every following install.
+for kind in rodir zerodir; do
+  make_tarball "$tmp/$kind.tgz" "$kind"
+  refused_before_extract "a $kind archive" "$tmp/$kind.tgz" "carries an entry with permissions the qaren build never writes"
+  write_manifest "$tmp/good.tgz"
+  for attempt in 1 2; do
+    run_install "$tmp/good.tgz" >/dev/null; rc=$?
+    check "after a $kind archive: normal install $attempt exits 0" 0 "$rc"
+    check "after a $kind archive: normal install $attempt leaves no staging" 0 "$(leftovers)"
+  done
+  rm -f "$tmp/$kind.tgz"
+done
+
+# A link swapped into an installed runtime is never handed out, and --install replaces the runtime.
+owned_snapshot() { (cd "$tmp/owned" && ls -l qaren record | cut -c1-10 && cat qaren record) 2>&1; }
+for swap in binary bin-dir record; do
+  reset_home
+  write_manifest "$tmp/good.tgz"
+  run_install "$tmp/good.tgz" >/dev/null
+  rm -rf "$tmp/owned" "$tmp/substitute-ran"
+  mkdir -p "$tmp/owned"
+  printf '#!/bin/sh\ntouch "%s/substitute-ran"\n' "$tmp" > "$tmp/owned/qaren"
+  chmod +x "$tmp/owned/qaren"
+  cp "$DEST/.tarball-sha256" "$tmp/owned/record"
+  case "$swap" in
+    binary) rm "$DEST/bin/qaren"; ln -s "$tmp/owned/qaren" "$DEST/bin/qaren" ;;
+    bin-dir) rm -rf "${DEST:?}/bin"; ln -s "$tmp/owned" "$DEST/bin" ;;
+    record) rm "$DEST/.tarball-sha256"; ln -s "$tmp/owned/record" "$DEST/.tarball-sha256" ;;
+  esac
+  owned_before=$(owned_snapshot)
+  hint=$(HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
+  check "$swap link: print-bin prints the install command" yes \
+    "$(grep -q 'is not installed. Install it with:' <<< "$hint" && echo yes || echo "no: $hint")"
+  out=$(run_install "$tmp/good.tgz"); rc=$?
+  check "$swap link: install repairs the runtime" 0 "$rc"
+  check "$swap link: prints the real binary" "$REAL_DEST/bin/qaren" "$out"
+  check "$swap link: no link is left" yes \
+    "$([ ! -L "$DEST/bin" ] && [ ! -L "$DEST/bin/qaren" ] && [ ! -L "$DEST/.tarball-sha256" ] && [ -f "$DEST/bin/qaren" ] && [ -f "$DEST/.tarball-sha256" ] && echo yes || echo no)"
+  check "$swap link: the real binary runs" qaren "$("$DEST/bin/qaren")"
+  check "$swap link: no staging left behind" 0 "$(leftovers)"
+  check "$swap link: the lock is free" yes "$(lock_free)"
+  check "$swap link: print-bin now prints the real binary" "$REAL_DEST/bin/qaren" \
+    "$(HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)"
+  check "$swap link: the link target is byte-identical" "$owned_before" "$(owned_snapshot)"
+  check "$swap link: the substitute never ran" no "$([ -e "$tmp/substitute-ran" ] && echo yes || echo no)"
+done
+rm -rf "$tmp/owned"
 
 # sparse_tarball <out> <hole bytes>: the good tree plus a PAX-sparse file of that logical size.
 sparse_tarball() {

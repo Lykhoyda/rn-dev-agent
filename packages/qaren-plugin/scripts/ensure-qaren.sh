@@ -40,8 +40,8 @@ RELEASES="https://github.com/Lykhoyda/rn-dev-agent/releases/download"
 RUNTIME_ROOT="${HOME:-}/.qaren/runtime"
 RECORD=".tarball-sha256"
 INSTALL_COMMAND="bash $(printf %q "$PLUGIN_ROOT/scripts/ensure-qaren.sh") --install"
-# Bound the whole runtime check, including root resolution, Node and the digest record read.
-PRINT_BIN_BUDGET_SECONDS=1
+# Bound the whole runtime check, including root resolution, Node and the digest record read, in 0.1 s polls.
+PRINT_BIN_BUDGET_TICKS=10
 # Decompression-bomb ceiling for the unpacked runtime; the manifest digest stays the trust root.
 MAX_UNPACKED_BYTES=536870912
 MAX_ENTRIES=10000
@@ -94,8 +94,9 @@ expected_asset() {
 installed_bin() {
   local dest="$RUNTIME_ROOT/$1" sha="$2"
   # A runtime someone else put there is never handed out, whatever its record says.
-  [ ! -L "$dest" ] && [ -O "$dest" ] && [ -f "$dest/bin/qaren" ] && [ -x "$dest/bin/qaren" ] && [ -O "$dest/bin/qaren" ] \
-    && [ -f "$dest/$RECORD" ] && [ -O "$dest/$RECORD" ] \
+  [ ! -L "$dest" ] && [ -O "$dest" ] && [ ! -L "$dest/bin" ] && [ ! -L "$dest/bin/qaren" ] \
+    && [ -f "$dest/bin/qaren" ] && [ -x "$dest/bin/qaren" ] && [ -O "$dest/bin/qaren" ] \
+    && [ ! -L "$dest/$RECORD" ] && [ -f "$dest/$RECORD" ] && [ -O "$dest/$RECORD" ] \
     && (exec 9>&-; perl -e 'open(my $f, "<", $ARGV[0]) or exit 1; read($f, my $record, 66); exit($record eq $ARGV[1] || $record eq "$ARGV[1]\n" ? 0 : 1)' "$dest/$RECORD" "$sha") && echo "$dest/bin/qaren"
 }
 
@@ -168,24 +169,25 @@ check_bin() {
 }
 
 print_bin() {
-  local result pid deadline=$((SECONDS + PRINT_BIN_BUDGET_SECONDS))
+  local result pid ticks=0
   result=$(mktemp) || { echo "qaren: cannot create a temporary file"; return 0; }
+  # Its own process group lets a timeout kill everything the check started; bash's launch noise is not hook output.
   set -m
-  check_bin > "$result" 2>&1 &
+  { check_bin > "$result" 2>&1 & } 2>/dev/null
   pid=$!
+  set +m
   while kill -0 "$pid" 2>/dev/null; do
-    if [ "$SECONDS" -ge "$deadline" ]; then
+    if [ "$ticks" -ge "$PRINT_BIN_BUDGET_TICKS" ]; then
       kill -KILL -- "-$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
-      set +m
       rm -f "$result"
       echo "qaren: the runtime check did not finish in time; run: $INSTALL_COMMAND"
       return 0
     fi
     sleep 0.1
+    ticks=$((ticks + 1))
   done
   wait "$pid" 2>/dev/null || true
-  set +m
   cat "$result"
   rm -f "$result"
 }
@@ -329,7 +331,8 @@ install() {
   local gnu_line='^[-d][rwxsStT-]{9}[[:space:]]+[0-9]+/[0-9]+[[:space:]]+([0-9]+)[[:space:]]'
   while IFS= read -r entry; do
     case "$entry" in
-      [-d]*) ;;
+      drwxr-xr-x* | -rwxr-xr-x* | -rw-r--r--*) ;;
+      [-d]*) refuse "$name carries an entry with permissions the qaren build never writes: $entry" ;;
       *) refuse "$name carries a link or special file: $entry" ;;
     esac
     if [[ "$entry" =~ $bsd_line ]] || [[ "$entry" =~ $gnu_line ]]; then
