@@ -215,8 +215,9 @@ from the walk's own rows, never from the raw plan file, so typed values stay out
 The hostname, home directory, user name, absolute paths, device UUIDs, the run's
 device ids, serials and ports (recorded privately in `pr.json` as
 `identityValues`) and private network addresses are removed from the comment.
-Known values shorter than three characters are not masked, and a recorded port
-number also masks the same number elsewhere in the text. It then
+Known identity values shorter than three UTF-8 bytes are not masked. Matching
+ignores ASCII case and rejects matches next to ASCII letters, digits or hyphens;
+a recorded port number also masks the same number elsewhere in the text. It then
 removes the `needs-qa` label only if the current head is the tested head; otherwise
 `publication.json` and the receipt record `retained-head-changed`.
 
@@ -229,8 +230,12 @@ pull request branch with a `Qaren-Run: <run-id>` trailer, using your own git
 identity and a push lease on the tested commit. When the branch moved, the pull
 request comes from a fork, or origin is not the pull request's repository,
 nothing is pushed; a second comment carries the published blocks' YAML instead.
-Each step is recorded in `publication.json`, so a re-run resumes without posting
-again.
+Each step is recorded in `publication.json`. Before retrying an attempted post,
+publication looks for the run's comment marker and adopts an existing comment.
+If no comment was posted, it regenerates `comment.md` from the current verdict
+file and walk rows, or `blocks-comment.md` from blocks admitted by the current
+publication gate, applying current identity redaction before upload. Cached
+bodies are not reused. Already-posted comments are neither edited nor deleted.
 
 Publication holds an exclusive file-descriptor lock on `publish.lock`; a
 concurrent publisher fails until the holder exits. The file remains after release;
