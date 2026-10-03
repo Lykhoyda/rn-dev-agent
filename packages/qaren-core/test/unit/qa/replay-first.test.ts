@@ -415,6 +415,61 @@ test('an ordinary fill keeps its plan literal in the saved block', async () => {
   );
 });
 
+for (const representation of ['title', 'comment', 'assertion'] as const) {
+  for (const source of ['discovered', 'patched'] as const) {
+    test(`private fill history withholds later ${representation} content during ${source} save`, async () => {
+      const dir = root();
+      const echo = representation === 'assertion' ? '4711' : 'Saved';
+      const plan = blocks(
+        `## QA\n\n### Enter PIN\n1. Type "4711" into "pin-input"\n\n### Confirm\n1. Tap "Finish"\n✓ "${echo}"\n`,
+      );
+      const later = plan[1];
+      const check = later.items[1];
+      assert.equal(check.kind, 'check');
+      if (representation === 'title') later.title = 'Confirm 4711';
+      if (representation === 'comment') check.raw = '✓ "Saved" (4711)';
+      const fake = (finishId: string, secure = true) =>
+        walker(
+          [
+            screen([
+              element('@pin', 'PIN', { kind: 'input', testID: 'pin-input', secure }),
+              element('@finish', 'Finish', { testID: finishId }),
+              element('@saved', 'Saved', { kind: 'text' }),
+              element('@echo', '4711', { kind: 'text' }),
+            ]),
+          ],
+          scriptedJudge(() => assert.fail('literal resolution must not ask Jev')),
+        );
+      const path = join(dir, '.qaren', 'actions', `${later.slug}.yaml`);
+      let before: string | undefined;
+      if (source === 'patched') {
+        const initial = ledger(await runPlan(plan, fake('finish-old', false).deps, [], store(dir)));
+        assert.equal(initial.verdict, 'PASS');
+        assert.deepEqual(initial.blocksWritten, ['enter-pin', later.slug]);
+        before = readFileSync(path, 'utf8');
+      }
+      const result = ledger(await runPlan(plan, fake('finish-new').deps, [], store(dir)));
+      assert.equal(result.verdict, 'PASS', JSON.stringify(result.failure));
+      assert.equal(result.blocks[0].saved, false);
+      assert.deepEqual(result.blocks[1], {
+        key: later.slug,
+        outcome: 'pass',
+        source,
+        saved: false,
+        unsavable: 'contains a protected plan-typed value',
+      });
+      assert.deepEqual(result.blocksWritten, []);
+      if (source === 'patched') {
+        assert.equal(result.blocks[0].source, 'replayed');
+        assert.equal(result.path, `replay→walk@${later.items[0].line}`);
+        assert.equal(readFileSync(path, 'utf8'), before);
+      } else {
+        assert.equal(existsSync(path), false);
+      }
+    });
+  }
+}
+
 test('the private-input predicate covers secure fields and inputs the privacy model cannot read safely', () => {
   const plain = element('@a', 'Name', { kind: 'input' });
   assert.equal(isPrivateInput(plain), false);

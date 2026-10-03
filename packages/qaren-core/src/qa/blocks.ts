@@ -91,7 +91,12 @@ export function serializeBlock(
   block: Block,
   rows: readonly LedgerRow[],
   meta: { appId: string; platform: BlockPlatform },
+  protectedValues: readonly string[] = [],
 ): { yaml: string } | { unsavable: string } {
+  const protectedContent = (texts: string[]): boolean =>
+    protectedValues.some((value) => value.length > 0 && texts.some((text) => text.includes(value)));
+  const withheld = { unsavable: 'contains a protected plan-typed value' };
+  if (protectedContent([meta.appId, block.slug, block.title, block.planHash])) return withheld;
   const lines = [
     yaml.stringify({ appId: meta.appId }, { lineWidth: 0 }).trimEnd(),
     '---',
@@ -116,6 +121,14 @@ export function serializeBlock(
               : `line ${item.line}: element has no testID or label`,
         };
     }
+    if (
+      protectedContent([
+        item.raw,
+        ...(item.kind === 'fill' || (item.kind === 'check' && item.literal) ? [item.text] : []),
+        selector?.id ?? selector?.text ?? '',
+      ])
+    )
+      return withheld;
     lines.push(`# ${item.raw}`, ...commandsFor(item, selector, meta.platform));
   }
   return { yaml: `${lines.join('\n')}\n` };

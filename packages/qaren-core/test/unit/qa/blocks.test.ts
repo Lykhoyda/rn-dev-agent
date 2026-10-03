@@ -58,6 +58,19 @@ function serialized(block: Block, rows: LedgerRow[], meta = ios): string {
   return result.yaml;
 }
 
+test('serialization withholds protected semantic values before YAML escaping', () => {
+  for (const value of ['"quoted"', 'line\nbreak', '\\escaped', '7']) {
+    const block = blockOf('## QA\n\n### Confirm\n✓ "Saved"\n');
+    const check = block.items[0];
+    assert.equal(check.kind, 'check');
+    if (check.kind === 'check') check.text = value;
+    assert.deepEqual(serializeBlock(block, passRows(block, {}), ios, [value]), {
+      unsavable: 'contains a protected plan-typed value',
+    });
+    assert.ok('yaml' in serializeBlock(block, passRows(block, {}), ios));
+  }
+});
+
 test('literal.md round-trips: plan lines, planHash and selectors survive', () => {
   const block = blockOf(literal);
   const yaml = serialized(block, passRows(block, literalSelectors));

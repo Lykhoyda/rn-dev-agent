@@ -1027,8 +1027,15 @@ export async function runPlan(
     const privacy = new ObservedPrivacy(typed);
     const calls = (): JevCall[] => [...preflightCalls, ...(deps.judge?.calls ?? [])];
     const sequence = { observation: 0 };
-    const walk = (block: Block, opts?: WalkOptions) =>
-      walkBlock(block, walking, steps.length, typed, privacy, sequence, opts);
+    const protectedValues = new Set<string>();
+    const walk = async (block: Block, opts?: WalkOptions) => {
+      const outcome = await walkBlock(block, walking, steps.length, typed, privacy, sequence, opts);
+      for (const item of block.items) {
+        if (item.kind === 'fill' && outcome.privateFills?.includes(item.line))
+          protectedValues.add(item.text);
+      }
+      return outcome;
+    };
     const path = (): LedgerPath =>
       patchedAt !== undefined
         ? `replay→walk@${patchedAt}`
@@ -1057,7 +1064,7 @@ export async function runPlan(
     ): BlockResult => {
       const result = withPrivateFills({ key: block.slug, outcome: 'pass', source }, privateFills);
       if (result.saved === false) return result;
-      const serialized = serializeBlock(block, rows, store);
+      const serialized = serializeBlock(block, rows, store, [...protectedValues]);
       if ('unsavable' in serialized)
         return { ...result, saved: false, unsavable: serialized.unsavable };
       try {
