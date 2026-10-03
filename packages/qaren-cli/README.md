@@ -541,11 +541,12 @@ build_and_ready — so revisit this once live reuse is measurable.
   absence; a still-present package or unproven absence is `unresolved`.
   If both probes prove absence before uninstall, the leg is `absent` and
   records uninstall as `not issued`.
-  The attempt (timestamp, observed installed sha256, complete captured
-  exit/stdout/stderr and timeout evidence for uninstall / `pm path` /
-  package list) is persisted to `run.json` at `resources.app_install.removal`
-  before any lease release; a save failure makes the leg `unresolved` and
-  retains the farm lease while independent owned local cleanup continues.
+  The attempt (timestamp, observed installed sha256, and command evidence
+  for uninstall / `pm path` / package list) is persisted to `run.json` at
+  `resources.app_install.removal` before any lease release; command evidence
+  follows the diagnostic redaction contract above. A save failure makes the
+  leg `unresolved` and retains the farm lease while independent owned local
+  cleanup continues.
   The receipt echoes it in `outcomes.app_removal_*`, with the observed hash
   in `outcomes.app_installed_sha256`. The leg folds into the existing verdict:
   a refused or unresolved removal keeps the receipt off `cleaned` and the
