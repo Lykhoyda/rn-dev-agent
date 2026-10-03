@@ -6,6 +6,7 @@ import {
   type AssertionEvidence,
   type VisibilityBlockerDiagnostic,
   actionView,
+  isNativeInput,
   assertionView,
   describe,
   semanticActionView,
@@ -156,11 +157,11 @@ export function keyboardFallbackTarget(
   const ids = new Set([quoted, withoutPressable(quoted), quoted + PRESSABLE_SUFFIX]);
   const observable = screen.elements.some(
     (e) =>
-      (e.kind === 'input' || e.secure) &&
+      (isNativeInput(e) || e.secure) &&
       [e.testID, e.label, e.placeholder].some((name) => name !== undefined && ids.has(name)),
   );
   if (observable) return;
-  const shown = actionView(screen);
+  const shown = actionView(screen).filter((e) => !e.ref.startsWith('react:'));
   const named = shown.filter((e) => e.testID === quoted || e.label === quoted);
   const candidates = named.length
     ? named
@@ -170,7 +171,7 @@ export function keyboardFallbackTarget(
   if (
     element.offscreen ||
     element.secure ||
-    element.kind === 'input' ||
+    isNativeInput(element) ||
     element.semantic?.disabled === true
   )
     return;

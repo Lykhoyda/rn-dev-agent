@@ -23,6 +23,7 @@ export type Visibility = 'visible' | 'offscreen' | 'hidden' | 'unknown';
 export interface Element {
   ref: string;
   kind: Kind;
+  nativeKind?: Kind;
   label?: string;
   testID?: string;
   value?: string;
@@ -527,6 +528,7 @@ export function join(
     const element: Element = {
       ref: n.ref,
       kind,
+      nativeKind,
       hittable: n.hittable === true,
       disabled: n.enabled === false || match?.disabled === true,
       secure: n.secure === true || n.type === 'SecureTextField',
@@ -697,6 +699,10 @@ export function join(
     ...(reactHostEvidence ? { reactHostEvidence } : {}),
     ...(pressEvidenceGap ? { pressEvidenceGap } : {}),
   };
+}
+
+export function isNativeInput(element: Element): boolean {
+  return !element.ref.startsWith('react:') && element.nativeKind === 'input';
 }
 
 export function actionView(screen: Screen): Element[] {

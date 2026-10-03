@@ -654,7 +654,7 @@ export interface ExactFillBinding {
 
 export type ExactBindOutcome =
   | { ok: true; binding: ExactFillBinding }
-  | { ok: false; detail: string };
+  | { ok: false; detail: string; unobservable?: true };
 
 function cleanNodeRef(node: SnapshotNode): string {
   return node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
@@ -781,12 +781,14 @@ export function bindExactFillTarget(
       }
       return {
         ok: false,
+        unobservable: true,
         detail: `wrapper "${id}" has no recognized input with testID "${base}" in the current snapshot`,
       };
     }
   }
   return {
     ok: false,
+    unobservable: true,
     detail: `element @${cleanNodeRef(node)} (${node.type ?? 'unknown type'}) is not a recognized text input — pass the inner input's ref or testID`,
   };
 }
@@ -1205,7 +1207,7 @@ export async function performExactFill(
   }
   const bind = bindExactFillTarget(snap.nodes, args.ref, priorSignature);
   if (!bind.ok) {
-    args.qaContext?.invalidate();
+    if (!bind.unobservable) args.qaContext?.invalidate();
     const focusedHint =
       getActiveSession()?.platform !== 'android' &&
       (bind.detail.startsWith('wrapper "') ||

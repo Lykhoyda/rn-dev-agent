@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { NativeCaptureError } from '../../../dist/qa/capture.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import type { Block, Step } from '../../../dist/qa/plan.js';
+import { join as joinScreen } from '../../../dist/qa/screen.js';
 import type { Element, Screen } from '../../../dist/qa/screen.js';
 import { keyboardFallbackTarget } from '../../../dist/qa/resolve.js';
 import { KEYBOARD_READY_CAPTURES, runPlan, walkBlock } from '../../../dist/qa/walker.js';
@@ -271,7 +272,7 @@ test('U5: keyboard state comes from the decision observation; nothing is capture
 });
 
 test('U6: an input that appears after the tap takes the strict verified fill path', async () => {
-  const input = element('@input', 'Email', { kind: 'input', testID: 'qa-hidden-email' });
+  const input = element('@input', 'Email', { kind: 'input', nativeKind: 'input', testID: 'qa-hidden-email' });
   const fake = app({ focused: [screenOf([wrapper(), input, submit], true)] });
   const outcome = await walkBlock(blocks(plan())[0], fake.deps);
   assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
@@ -325,7 +326,7 @@ test('U7: a target replaced by another identity after the tap fails without typi
 });
 
 test('U11: a refreshed strict refusal after the fallback tap never taps again', async () => {
-  const input = element('@input', 'Email', { kind: 'input', testID: 'qa-hidden-email' });
+  const input = element('@input', 'Email', { kind: 'input', nativeKind: 'input', testID: 'qa-hidden-email' });
   const fake = app({
     expireBeforeType: true,
     focused: [screenOf([wrapper(), input, submit], true), screenOf([wrapper(), submit], false)],
@@ -457,7 +458,7 @@ test('U13: deferred writes keep order and content for runs without a private fil
   const dir = mkdtempSync(join(tmpdir(), 'qaren-fallback-'));
   mkdirSync(join(dir, '.qaren'));
   const store: BlockStore = { appRoot: dir, platform: 'ios', appId: 'com.example.app' };
-  const input = element('@name', 'Name', { kind: 'input', testID: 'name' });
+  const input = element('@name', 'Name', { kind: 'input', nativeKind: 'input', testID: 'name' });
   const fake = app({ initial: [input, submit, element('@hello', 'Hello', { kind: 'text' })] });
   const markdown =
     '## QA\n\n### First\n\n✓ "Hello"\n\n### Second\n\n1. Type "Ada" into "name"\n\n### Third\n\n✓ "Hello"\n';
@@ -502,8 +503,8 @@ test('U1: phrase and exact replay fills never fall back', () => {
 test('U1: non-qualifying refusals keep the strict refusal with no tap or type', async () => {
   const ambiguous = app({
     initial: [
-      element('@a', 'Email', { kind: 'input', testID: 'qa-hidden-email' }),
-      element('@b', 'Email', { kind: 'input', testID: 'qa-hidden-email' }),
+      element('@a', 'Email', { kind: 'input', nativeKind: 'input', testID: 'qa-hidden-email' }),
+      element('@b', 'Email', { kind: 'input', nativeKind: 'input', testID: 'qa-hidden-email' }),
     ],
   });
   const a = await walkBlock(blocks(plan())[0], ambiguous.deps);
@@ -551,12 +552,12 @@ test('U1: an exact replay fill misses instead of falling back', async () => {
 });
 
 for (const [name, observable] of [
-  ['the quoted id', element('@i', 'Other', { kind: 'input', testID: 'qa-hidden-email' })],
+  ['the quoted id', element('@i', 'Other', { kind: 'input', nativeKind: 'input', testID: 'qa-hidden-email' })],
   [
     'the wrapper base',
-    element('@i', 'Other', { kind: 'input', testID: 'qa-hidden-email', disabled: true }),
+    element('@i', 'Other', { kind: 'input', nativeKind: 'input', testID: 'qa-hidden-email', disabled: true }),
   ],
-  ['quoted-pressable', element('@i', 'Other', { kind: 'input', label: WRAP, offscreen: true })],
+  ['quoted-pressable', element('@i', 'Other', { kind: 'input', nativeKind: 'input', label: WRAP, offscreen: true })],
   [
     'a secure node',
     element('@i', 'Other', { kind: 'other', secure: true, placeholder: 'qa-hidden-email' }),
@@ -577,7 +578,7 @@ test('U2: a quoted wrapper id resolves through its base', () => {
     oracleTestID: 'qa-hidden-email',
   });
   const input = element('@i', 'Other', {
-    kind: 'input',
+    kind: 'input', nativeKind: 'input',
     testID: 'qa-hidden-email',
     disabled: true,
   });
@@ -637,7 +638,7 @@ test('U3: zero or two candidates, or a semantically disabled one, keep the stric
 
 for (const mutation of ['observed', 'possible', undefined] as const) {
   test(`strict Ada to Ad mismatch fails without retry (${mutation})`, async () => {
-    const input = element('@name', 'Name', { kind: 'input', testID: 'name' });
+    const input = element('@name', 'Name', { kind: 'input', nativeKind: 'input', testID: 'name' });
     const fake = app({ initial: [input, submit], typeFocused: false });
     let fills = 0;
     fake.deps.fill = async (_ref, text, context) => {
@@ -656,7 +657,7 @@ for (const mutation of ['observed', 'possible', undefined] as const) {
 }
 
 test('strict fill retries only a proven pre-mutation refusal', async () => {
-  const input = element('@name', 'Name', { kind: 'input', testID: 'name' });
+  const input = element('@name', 'Name', { kind: 'input', nativeKind: 'input', testID: 'name' });
   const fake = app({ initial: [input] });
   let fills = 0;
   fake.deps.fill = async (_ref, _text, context) => {
@@ -676,7 +677,7 @@ for (const strict of [false, true]) {
     const target = strict ? 'email' : 'qa-hidden-email';
     const initial = [
       ...(strict
-        ? [element('@email', 'Email', { kind: 'input', testID: target, secure: true })]
+        ? [element('@email', 'Email', { kind: 'input', nativeKind: 'input', testID: target, secure: true })]
         : [wrapper()]),
       submit,
       element('@code', `Code ${EMAIL}`, { kind: 'text' }),
@@ -753,3 +754,125 @@ test('a normalizing controlled fallback continues as unverified', async () => {
     _setActiveSessionForTest(null);
   }
 });
+
+for (const nativeType of ['Other', 'TextField']) {
+  test(`React input joined to native ${nativeType} uses the correct fill path`, async () => {
+    const { createDeviceFillHandler, extractMutationDisposition } =
+      await import('../../../dist/handlers/device-interact.js');
+    const { _setActiveSessionForTest, _setRunAgentDeviceForTest, markSnapshotDirty } =
+      await import('../../../dist/agent-device-wrapper.js');
+    const { updateRefMapFromFlat, clearRefMap } =
+      await import('../../../dist/fast-runner-ref-map.js');
+    const { okResult } = await import('../../../dist/utils.js');
+    const native = [{
+      ref: '@e1', identifier: 'qa-hidden-email', type: nativeType,
+      label: 'Email', hittable: true, rect: { x: 20, y: 100, width: 360, height: 60 },
+    }];
+    const joined = joinScreen(native, [{ role: 'textinput', testID: 'qa-hidden-email' }]);
+    assert.equal(joined.elements[0].kind, 'input');
+    assert.equal(joined.elements[0].nativeKind, nativeType === 'Other' ? 'other' : 'input');
+    const fake = app({ initial: [...joined.elements, submit] });
+    const press = fake.deps.press;
+    fake.deps.press = (ref, context) => press(ref === '@e1' ? '@wrap' : ref, context);
+    let strictCalls = 0;
+    let nativeFills = 0;
+    const handler = createDeviceFillHandler(() => null as never);
+    _setActiveSessionForTest({ platform: 'ios', deviceId: 'TEST-DEVICE', appId: 'com.test' });
+    clearRefMap();
+    markSnapshotDirty();
+    updateRefMapFromFlat(native as never, { snapshotGeneration: 7, keyboardVisible: false });
+    _setRunAgentDeviceForTest(async (args, opts) => {
+      if (args[0] === 'snapshot') {
+        updateRefMapFromFlat(native as never, { snapshotGeneration: 8, keyboardVisible: false });
+        return okResult({ nodes: native });
+      }
+      if (args[0] === 'fill') {
+        (opts as { qaContext?: { authorize(): void } } | undefined)?.qaContext?.authorize();
+        nativeFills += 1;
+        return okResult({ typed: true });
+      }
+      if (args[0] === 'verify-input')
+        return okResult({ verifyVerdict: 'exact', verifyStable: true });
+      throw new Error(`unexpected command ${args[0]}`);
+    });
+    fake.deps.fill = async (ref, text, context) => {
+      strictCalls += 1;
+      fake.log.push(`fill ${ref}`);
+      const result = await handler({ ref, text, qaContext: context });
+      const env = JSON.parse(result.content[0].text);
+      if (!env.ok) {
+        assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
+        return { ok: false, proven: false, mutation: extractMutationDisposition(result),
+          error: `${env.code}: ${env.error}` };
+      }
+      return { ok: true, proven: true };
+    };
+    try {
+      const result = await walkBlock(blocks(plan())[0], fake.deps);
+      assert.equal(result.block.outcome, 'pass', JSON.stringify(result.failure));
+      assert.equal(strictCalls, 1);
+      assert.equal(nativeFills, nativeType === 'Other' ? 0 : 1);
+      assert.equal(fake.typed.length, nativeType === 'Other' ? 1 : 0);
+      if (nativeType === 'Other') {
+        assert.match(fake.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
+        assert.deepEqual(steps(fake.log), ['fill @e1', 'press @wrap', 'type @e1', 'press @submit']);
+      } else {
+        assert.equal(fake.rows[0].reason, undefined);
+        assert.deepEqual(steps(fake.log).filter((step) => !step.startsWith('shot')), ['fill @e1', 'press @submit']);
+      }
+    } finally {
+      _setRunAgentDeviceForTest(null);
+      _setActiveSessionForTest(null);
+      clearRefMap();
+    }
+  });
+}
+
+for (const mutation of ['observed', 'possible', undefined] as const) {
+  test(`an unobservable target refusal with mutation ${mutation} never falls back`, async () => {
+    const joined = joinScreen([
+      { ref: '@wrap', identifier: 'qa-hidden-email', type: 'Other', label: 'Email', hittable: true },
+    ], [{ role: 'textinput', testID: 'qa-hidden-email' }]);
+    const fake = app({ initial: [...joined.elements, submit] });
+    fake.deps.fill = async (_ref, _text, context) => {
+      context.authorize();
+      fake.log.push('strict refusal');
+      return { ok: false, proven: false, mutation, error: 'NO_TEXT_INPUT_TARGET: refused' };
+    };
+    const result = await walkBlock(blocks(plan())[0], fake.deps);
+    assert.equal(result.block.outcome, 'fail');
+    assert.deepEqual(steps(fake.log).filter((step) => !step.startsWith('shot')), ['strict refusal']);
+    assert.equal(fake.typed.length, 0);
+  });
+}
+
+test('React-only inputs do not block or become keyboard fallback targets', () => {
+  const joined = joinScreen([
+    { ref: '@wrap', identifier: WRAP, type: 'Other', label: 'Email', hittable: true },
+  ], [{ role: 'textinput', testID: 'qa-hidden-email' }]);
+  assert.equal(keyboardFallbackTarget(fill('qa-hidden-email'), joined)?.element.ref, '@wrap');
+  const reactOnly = joinScreen([], [{ role: 'textinput', testID: 'qa-hidden-email' }]);
+  assert.equal(keyboardFallbackTarget(fill('qa-hidden-email'), reactOnly), undefined);
+});
+
+for (const guard of ['secure', 'ambiguous', 'unrelated refusal']) {
+  test(`${guard} still excludes the promoted input fallback`, async () => {
+    const joined = joinScreen([
+      { ref: '@wrap', identifier: 'qa-hidden-email', type: 'Other', label: 'Email',
+        hittable: true, secure: guard === 'secure' },
+      ...(guard === 'ambiguous' ? [{
+        ref: '@duplicate', identifier: 'qa-hidden-email', type: 'Other', label: 'Email', hittable: true,
+      }] : []),
+    ], [{ role: 'textinput', testID: 'qa-hidden-email' }]);
+    const fake = app({ initial: [...joined.elements, submit] });
+    fake.deps.fill = async (_ref, _text, context) => {
+      context.authorize();
+      return { ok: false, proven: false, mutation: 'none',
+        error: guard === 'unrelated refusal' ? 'FOCUS_TARGET_OCCLUDED: refused' : 'NO_TEXT_INPUT_TARGET: refused' };
+    };
+    const result = await walkBlock(blocks(plan())[0], fake.deps);
+    assert.equal(result.block.outcome, 'fail');
+    assert.equal(fake.typed.length, 0);
+    assert.equal(fake.log.some((entry) => entry.startsWith('press')), false);
+  });
+}

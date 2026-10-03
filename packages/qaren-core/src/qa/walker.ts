@@ -4,6 +4,7 @@ import {
   type Screen,
   type VisibilityBlockerDiagnostic,
   screenSignature,
+  isNativeInput,
 } from './screen.js';
 import {
   type Resolution,
@@ -652,7 +653,7 @@ export async function walkBlock(
     let after = await capture(item);
     const bound = (): { ref: string; element: Element } | undefined => {
       const strict = prepareTarget(item, after.screen);
-      return 'ref' in strict ? strict : undefined;
+      return 'ref' in strict && isNativeInput(strict.element) ? strict : undefined;
     };
     for (
       let captures = 1;
@@ -953,6 +954,29 @@ export async function walkBlock(
                       ? deps.back(context)
                       : deps.dialog(item.action, context),
             );
+            const fallback =
+              item.kind === 'fill' &&
+              !act.ok &&
+              act.mutation === 'none' &&
+              act.error?.startsWith('NO_TEXT_INPUT_TARGET:') &&
+              deps.typeFocused &&
+              !fellBack
+                ? keyboardFallbackTarget(item, before.screen)
+                : undefined;
+            if (fallback && item.kind === 'fill') {
+              fellBack = true;
+              const result = await keyboardFallback(item, attempt, before, fallback);
+              if (result === 'typed') {
+                typedUnverified = true;
+                break;
+              }
+              if ('block' in result) {
+                outcome = result;
+                break;
+              }
+              before = result.observation;
+              continue;
+            }
             break;
           } catch (error) {
             if (error instanceof EvidenceExpired && scrollNeedsReadback)
