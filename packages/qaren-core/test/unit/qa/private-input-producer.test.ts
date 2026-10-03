@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import vm from 'node:vm';
+import { HELPERS_VERSION } from '../../../dist/injected-helpers.js';
 import { buildFiber, createSandbox, INJECTED_HELPERS } from '../helpers/inject-harness.js';
 import { captureQaReact } from '../../../dist/qa/react-capture.js';
 import { captureScreen } from '../../../dist/qa/capture.js';
@@ -571,12 +572,12 @@ test('private captures retain fixed refusals for data-named error overlays', () 
   }
 });
 
-test('version 90 replaces a warm 89 helper and reinjection preserves the private API', () => {
+test('current helper replaces a warm 89 helper and reinjection preserves the private API', () => {
   const { sandbox } = setup({ value: '' });
   sandbox.__QAREN = { __v: 89 };
   vm.runInContext(INJECTED_HELPERS, sandbox);
   const upgraded = sandbox.__QAREN;
-  assert.equal(upgraded.__v, 90);
+  assert.equal(upgraded.__v, HELPERS_VERSION);
   assert.equal(typeof upgraded.beginQaCapture, 'function');
   assert.equal(typeof upgraded.readQaCapture, 'function');
   vm.runInContext(INJECTED_HELPERS, sandbox);
@@ -660,7 +661,7 @@ test('public default, semantic and typography trees cannot opt into private inpu
     );
     assert.doesNotMatch(tree, /(?:value|text|default)-secret|"secureTextEntry"|"inputs"/);
   }
-  assert.equal(api.__v, 90);
+  assert.equal(api.__v, HELPERS_VERSION);
 });
 
 test('RN dev-frozen host props and Fragment children props admit a complete capture', () => {
