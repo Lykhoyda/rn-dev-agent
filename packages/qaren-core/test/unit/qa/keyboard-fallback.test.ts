@@ -958,7 +958,10 @@ for (const reactKnown of [true, false]) {
       element: joined.elements[0],
       oracleTestID: 'custom-pressable',
     });
-    assert.equal(joined.elements.some((e) => e.ref.startsWith('react:')), reactKnown);
+    assert.equal(
+      joined.elements.some((e) => e.ref.startsWith('react:')),
+      reactKnown,
+    );
   });
 
   test(`joined hidden input walks without scrolling with React evidence ${reactKnown}`, async () => {
