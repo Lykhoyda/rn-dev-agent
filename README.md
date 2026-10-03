@@ -1,6 +1,7 @@
 This checkout develops **QaReN**, a CLI that checks Markdown QA plans, replays
 saved blocks and persists passing walks. For current build and usage instructions,
-read the [QaReN CLI guide](packages/qaren-cli/README.md). The rn-dev-agent product
+read the [QaReN CLI guide](packages/qaren-cli/README.md). QaReN 2.0.0 has no
+backward compatibility with rn-dev-agent 1.x. The rn-dev-agent product
 and marketplace instructions below describe the published 1.x release.
 
 <div align="center">

@@ -15,7 +15,9 @@ corepack yarn build:core
 cargo build --manifest-path packages/qaren-cli/Cargo.toml --locked
 ```
 
-Run these commands from the repository root. The binary is
+Run these commands from the repository root with Node satisfying the
+[core package's engines requirement](../qaren-core/package.json) and Rust/Cargo
+available. The binary is
 `packages/qaren-cli/target/debug/qaren`; its screen child uses the generated
 `packages/qaren-core/dist/`. Set `QAREN_RUNTIME` to its absolute path when running
 the binary from another location. See [Check a plan](#check-a-plan) for when
@@ -724,8 +726,9 @@ fingerprint, and building candidate sha:
    stale/missing/unverified, no scheme, incomplete fingerprint) but the
    worktree-keyed caches are provably this project's: the state binds this
    exact worktree/app and any generated native dir was created by a
-   recorded qaren build. `expo run:*` recompiles over the existing
-   `ios/`+Pods+`ios/build` / gradle caches.
+   recorded qaren build. iOS follows the
+   [CLI-owned build routes](#cli-owned-ios-build-routes); Android recompiles
+   with `expo run:android` over the existing Gradle caches.
 3. **Clean** — mandatory whenever compatibility is unprovable: no/corrupt
    state, cross-worktree state, unproven generated-dir provenance, or
    `build.strategy: clean`. A generated (git-ignored) native dir is
