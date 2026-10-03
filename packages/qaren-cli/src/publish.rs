@@ -420,6 +420,95 @@ fn commit_blocks(
     }
 }
 
+fn cached_blocks_match(
+    runner: &mut dyn Runner,
+    pr: &PrRunRecord,
+    commit: &str,
+    blocks: &[(String, String)],
+) -> bool {
+    let parents = git(
+        runner,
+        "git-blocks-parents",
+        &pr.repo_root,
+        &["rev-list", "--parents", "-n", "1", commit],
+        20,
+    );
+    if !parents.ok()
+        || parents.stdout.split_whitespace().collect::<Vec<_>>() != [commit, &pr.head_ref_oid]
+    {
+        return false;
+    }
+    let paths: Vec<_> = blocks
+        .iter()
+        .map(|(filename, _)| action_rel(&pr.app_rel, filename))
+        .collect();
+    let diff = git(
+        runner,
+        "git-blocks-diff",
+        &pr.repo_root,
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            &pr.head_ref_oid,
+            commit,
+            "--",
+        ],
+        20,
+    );
+    if !diff.ok()
+        || diff
+            .stdout
+            .split_terminator('\0')
+            .any(|path| !paths.iter().any(|p| p == path))
+    {
+        return false;
+    }
+    blocks.iter().zip(paths).all(|((_, yaml), path)| {
+        let sibling = Path::new(&path).with_extension(if path.ends_with(".yml") {
+            "yaml"
+        } else {
+            "yml"
+        });
+        let entry = git(
+            runner,
+            "git-blocks-entry",
+            &pr.repo_root,
+            &[
+                "ls-tree",
+                "-z",
+                commit,
+                "--",
+                &path,
+                &sibling.to_string_lossy(),
+            ],
+            20,
+        );
+        if !entry.ok()
+            || !entry
+                .stdout
+                .strip_suffix(&format!("\t{path}\0"))
+                .is_some_and(|meta| {
+                    let fields: Vec<_> = meta.split_whitespace().collect();
+                    fields.len() == 3
+                        && matches!(fields[0], "100644" | "100755")
+                        && fields[1] == "blob"
+                })
+        {
+            return false;
+        }
+        let content = git(
+            runner,
+            "git-blocks-content",
+            &pr.repo_root,
+            &["show", &format!("{commit}:{path}")],
+            20,
+        );
+        content.ok() && content.stdout == *yaml
+    })
+}
+
 fn push_with_lease(runner: &mut dyn Runner, pr: &PrRunRecord, commit: &str) -> bool {
     let refspec = format!("{commit}:refs/heads/{}", pr.head_ref_name);
     let lease = format!(
@@ -673,14 +762,22 @@ fn publish_inner(
             needs_comment = true;
         } else {
             let commit = match &publication.writeback_commit {
-                Some(commit) => Ok(commit.clone()),
+                Some(commit) if remote_head(runner, &pr).as_deref() == Some(commit.as_str()) => {
+                    publication.writeback = Some(format!("committed {commit}"));
+                    Ok(commit.clone())
+                }
+                Some(commit) if cached_blocks_match(runner, &pr, commit, &blocks) => {
+                    Ok(commit.clone())
+                }
+                Some(_) => commit_blocks(runner, run_id, &run_dir, &pr, &blocks),
                 None => commit_blocks(runner, run_id, &run_dir, &pr, &blocks),
             };
             match commit {
                 Ok(commit) => {
                     publication.writeback_commit = Some(commit.clone());
                     save(&run_dir, publication)?;
-                    let landed = remote_head(runner, &pr).as_deref() == Some(commit.as_str())
+                    let landed = publication.writeback.is_some()
+                        || remote_head(runner, &pr).as_deref() == Some(commit.as_str())
                         || push_with_lease(runner, &pr, &commit);
                     if landed {
                         publication.writeback = Some(format!("committed {commit}"));

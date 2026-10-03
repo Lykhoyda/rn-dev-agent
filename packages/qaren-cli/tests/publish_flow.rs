@@ -1203,3 +1203,253 @@ fn patched_blocks_keep_their_extension_through_preservation_and_publication() {
         }
     }
 }
+
+struct LocalPublication {
+    calls: Vec<CmdSpec>,
+    reject_push: bool,
+    reject_comment: bool,
+}
+
+fn local_git(repo: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{:?}: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+impl Runner for LocalPublication {
+    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+        self.calls.push(spec.clone());
+        match spec.label.as_str() {
+            "git-push-url" => CmdOutput::success("git@github.com:o/r.git\n"),
+            "git-push-blocks" if self.reject_push => CmdOutput::failed(1, "push unavailable"),
+            "gh-pr-comments" => CmdOutput::success("{\"comments\":[]}"),
+            "gh-pr-comment" if self.reject_comment => CmdOutput::failed(1, "post unavailable"),
+            "gh-pr-comment" => {
+                CmdOutput::success("https://github.com/o/r/pull/12#issuecomment-2\n")
+            }
+            _ => {
+                assert_eq!(spec.program, "git");
+                let output = std::process::Command::new("git")
+                    .args(&spec.args)
+                    .current_dir(spec.cwd.as_ref().unwrap())
+                    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                    .env("GIT_CONFIG_NOSYSTEM", "1")
+                    .output()
+                    .unwrap();
+                CmdOutput {
+                    exit_code: output.status.code(),
+                    stdout: String::from_utf8(output.stdout).unwrap(),
+                    stderr: String::from_utf8(output.stderr).unwrap(),
+                    ..Default::default()
+                }
+            }
+        }
+    }
+    fn spawn_group(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<Spawned> {
+        unreachable!()
+    }
+    fn spawn_piped(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<PipedChild> {
+        unreachable!()
+    }
+    fn sleep(&mut self, _: std::time::Duration) {}
+    fn now_epoch_ms(&self) -> u64 {
+        0
+    }
+    fn commands_executed(&self) -> u64 {
+        self.calls.len() as u64
+    }
+}
+
+#[test]
+fn cached_writeback_retries_apply_current_admission_without_rewriting_history() {
+    for mode in [
+        "stale",
+        "safe",
+        "landed",
+        "withheld",
+        "privacy-failure",
+        "fallback",
+        "ancestor",
+    ] {
+        let (runs, dir, verdict) = run_dir(false);
+        let repo = runs.parent().unwrap();
+        let remote = repo.join("remote.git");
+        std::fs::create_dir(&remote).unwrap();
+        local_git(&remote, &["init", "--bare"]);
+        local_git(repo, &["init"]);
+        local_git(repo, &["config", "user.name", "QA"]);
+        local_git(repo, &["config", "user.email", "qa@example.com"]);
+        std::fs::write(repo.join("product"), "approved product\n").unwrap();
+        local_git(repo, &["add", "product"]);
+        local_git(repo, &["commit", "-m", "product"]);
+        std::fs::write(repo.join("pipeline"), "approved pipeline fix\n").unwrap();
+        local_git(repo, &["add", "pipeline"]);
+        local_git(repo, &["commit", "-m", "pipeline fix"]);
+        let base = local_git(repo, &["rev-parse", "HEAD"]).trim().to_string();
+        local_git(repo, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        local_git(repo, &["push", "origin", "HEAD:refs/heads/feat/tasks"]);
+        let bytes = "# safe block\r\nsteps: []\r\n\n";
+        std::fs::rename(dir.join("blocks/tasks.yaml"), dir.join("blocks/tasks.yml")).unwrap();
+        std::fs::write(dir.join("blocks/tasks.yml"), bytes).unwrap();
+        std::fs::write(dir.join("blocks/private.yaml"), "# Alice\nsteps: []\n").unwrap();
+        edit_pr(&dir, |pr| {
+            pr["headRefOid"] = base.clone().into();
+            pr["blocks"] = if mode == "safe" {
+                serde_json::json!(["tasks"])
+            } else {
+                serde_json::json!(["tasks", "private"])
+            };
+        });
+        std::fs::write(
+            dir.join("publication.json"),
+            serde_json::to_vec(&Publication {
+                comment_url: Some("https://github.com/o/r/pull/12#issuecomment-1".into()),
+                label: Some("removed".into()),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let mut runner = LocalPublication {
+            calls: Vec::new(),
+            reject_push: true,
+            reject_comment: true,
+        };
+        assert_eq!(
+            publish(&mut runner, &runs, RUN, &verdict, &machine()).result,
+            ReceiptResult::Failed
+        );
+        let mut old = publication(&dir).writeback_commit.unwrap();
+        assert!(publication(&dir).blocks_comment_attempted);
+        if mode == "ancestor" {
+            let tree = local_git(repo, &["rev-parse", &format!("{old}^{{tree}}")]);
+            old = local_git(
+                repo,
+                &[
+                    "commit-tree",
+                    tree.trim(),
+                    "-p",
+                    &old,
+                    "-m",
+                    "cached descendant",
+                ],
+            )
+            .trim()
+            .into();
+            let mut state = publication(&dir);
+            state.writeback_commit = Some(old.clone());
+            std::fs::write(
+                dir.join("publication.json"),
+                serde_json::to_vec(&state).unwrap(),
+            )
+            .unwrap();
+        }
+        if mode == "landed" {
+            local_git(
+                repo,
+                &["push", "origin", &format!("{old}:refs/heads/feat/tasks")],
+            );
+        }
+        let mut current_machine = machine();
+        current_machine.username = Some("Alice".into());
+        if mode == "withheld" {
+            edit_pr(&dir, |pr| pr["videoPublication"] = "withheld".into());
+        }
+        if mode == "privacy-failure" {
+            std::fs::remove_file(dir.join("blocks/private.yaml")).unwrap();
+        }
+        runner.calls.clear();
+        runner.reject_push = mode == "fallback";
+        runner.reject_comment = false;
+        let receipt = publish(&mut runner, &runs, RUN, &verdict, &current_machine);
+        assert_eq!(
+            receipt.result,
+            if mode == "privacy-failure" {
+                ReceiptResult::Failed
+            } else {
+                ReceiptResult::Published
+            },
+            "{mode}: {:?}",
+            receipt.failure
+        );
+        let pushes: Vec<_> = runner
+            .calls
+            .iter()
+            .filter(|c| c.label == "git-push-blocks")
+            .collect();
+        if matches!(mode, "landed" | "withheld" | "privacy-failure") {
+            assert!(pushes.is_empty(), "{mode}");
+            assert!(!runner.calls.iter().any(|c| c.label == "gh-pr-comment"));
+        } else {
+            assert_eq!(pushes.len(), 1, "{mode}");
+            let new = pushes[0].args[2].split(':').next().unwrap();
+            assert_eq!(new == old, mode == "safe", "{mode}");
+            assert_eq!(
+                local_git(repo, &["rev-list", "--parents", "-n", "1", new]).trim(),
+                format!("{new} {base}")
+            );
+            assert_eq!(
+                local_git(
+                    repo,
+                    &["show", &format!("{new}:test-app/.qaren/actions/tasks.yml")]
+                ),
+                bytes
+            );
+            assert_eq!(
+                local_git(
+                    repo,
+                    &[
+                        "ls-tree",
+                        "--name-only",
+                        "-r",
+                        new,
+                        "--",
+                        "test-app/.qaren/actions"
+                    ]
+                ),
+                "test-app/.qaren/actions/tasks.yml\n"
+            );
+            assert_eq!(
+                local_git(repo, &["show", &format!("{new}:product")]),
+                "approved product\n"
+            );
+            assert_eq!(
+                local_git(repo, &["show", &format!("{new}:pipeline")]),
+                "approved pipeline fix\n"
+            );
+            if mode == "fallback" {
+                let body = std::fs::read_to_string(dir.join("blocks-comment.md")).unwrap();
+                assert!(body.contains(bytes));
+                assert!(body.contains("tasks.yml"));
+                assert!(!body.contains("Alice"));
+                assert!(!body.contains("private.yaml"));
+            } else {
+                assert_eq!(
+                    local_git(&remote, &["rev-parse", "refs/heads/feat/tasks"]).trim(),
+                    new
+                );
+            }
+        }
+        assert_eq!(local_git(repo, &["rev-parse", "HEAD"]).trim(), base);
+        assert!(local_git(repo, &["cat-file", "-t", &old]).starts_with("commit"));
+        if mode == "landed" {
+            assert_eq!(publication(&dir).writeback.unwrap(), format!("committed {old}; withheld private: the block carries a secret or machine identity"));
+            assert_eq!(
+                local_git(&remote, &["rev-parse", "refs/heads/feat/tasks"]).trim(),
+                old
+            );
+        }
+        std::fs::remove_dir_all(repo).unwrap();
+    }
+}
