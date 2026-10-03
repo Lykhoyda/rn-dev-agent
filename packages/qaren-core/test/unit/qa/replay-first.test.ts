@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parsePlan } from '../../../dist/qa/plan.js';
+import { parsePlan, slugify } from '../../../dist/qa/plan.js';
 import type { Block } from '../../../dist/qa/plan.js';
 import type { Element, Screen } from '../../../dist/qa/screen.js';
 import { join as joinScreen } from '../../../dist/qa/screen.js';
@@ -209,6 +209,30 @@ test('a symlinked corpus or a slug collision leaves the block unsaved and the ru
   assert.equal(collided.blocks[0].saved, false);
   assert.match(collided.blocks[0].unsavable ?? '', /BLOCK_SLUG_COLLISION/);
   assert.match(readFileSync(actionFile(taken), 'utf8'), /recorded/);
+});
+
+test('overflow title discovery passes but preserves the short-title action', async () => {
+  const dir = root();
+  const longTitle = 'a'.repeat(65);
+  const shortTitle = slugify(longTitle);
+  const withTitle = (title: string) =>
+    literal.replace('### Onboarding to the tasks tab', `### ${title}`);
+  const first = await run(withTitle(shortTitle), dir);
+  assert.equal(first.result.verdict, 'PASS');
+  assert.deepEqual(first.result.blocksWritten, [shortTitle]);
+  const path = join(dir, '.qaren/actions', `${shortTitle}.yaml`);
+  const before = readFileSync(path, 'utf8');
+  const { result } = await run(withTitle(longTitle), dir);
+  assert.equal(result.verdict, 'PASS');
+  assert.equal(result.path, 'walk');
+  assert.equal(result.blocks[0].source, 'discovered');
+  assert.equal(result.blocks[0].saved, false);
+  assert.match(result.blocks[0].unsavable ?? '', /BLOCK_SLUG_COLLISION/);
+  assert.deepEqual(result.blocksWritten, []);
+  assert.equal(readFileSync(path, 'utf8'), before);
+  const replayed = await run(withTitle(shortTitle), dir);
+  assert.equal(replayed.result.path, 'replay');
+  assert.equal(readFileSync(path, 'utf8'), before);
 });
 
 test('a block saved for another platform is walked, not replayed', async () => {

@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parsePlan } from '../../../dist/qa/plan.js';
+import { parsePlan, slugify } from '../../../dist/qa/plan.js';
 import type { Block } from '../../../dist/qa/plan.js';
 import type { LedgerRow, Selector } from '../../../dist/qa/ledger.js';
 import {
@@ -350,6 +350,31 @@ test('writeBlock refuses a symlinked corpus and a slug collision', () => {
 });
 
 for (const extension of ['yaml', 'yml']) {
+  test(`overflow title collision preserves the existing .${extension} action`, () => {
+    const root = appRoot();
+    mkdirSync(join(root, '.qaren/actions'));
+    const longTitle = 'a'.repeat(65);
+    const shortTitle = slugify(longTitle);
+    const short = blockOf(`### ${shortTitle}\n1. Tap "Save"\n✓ "Saved"\n`);
+    const long = blockOf(`### ${longTitle}\n1. Tap "Save"\n✓ "Saved"\n`);
+    assert.equal(short.slug, long.slug);
+    const before = serialized(short, passRows(short, { 2: { id: 'save' } }));
+    const incoming = serialized(long, passRows(long, { 2: { id: 'save' } }));
+    const path = join(root, '.qaren/actions', `${short.slug}.${extension}`);
+    writeFileSync(path, before);
+    const stored = readBlock(before);
+    assert.ok(!('invalid' in stored));
+    assert.equal(storedFits(long, stored, before, ios), false);
+    assert.throws(() => writeBlock(root, long.slug, incoming), /BLOCK_SLUG_COLLISION/);
+    assert.equal(readFileSync(path, 'utf8'), before);
+    const sameTitle = blockOf(
+      `### ${shortTitle.toUpperCase()}!\n1. Tap "Save"\n✓ "Saved"\n`,
+    );
+    const patched = serialized(sameTitle, passRows(sameTitle, { 2: { id: 'save-new' } }));
+    assert.equal(writeBlock(root, sameTitle.slug, patched), 'written');
+    assert.equal(readFileSync(path, 'utf8'), patched);
+  });
+
   test(`blocks load and update existing .${extension} without creating an alias`, () => {
     const root = appRoot();
     mkdirSync(join(root, '.qaren/actions'));

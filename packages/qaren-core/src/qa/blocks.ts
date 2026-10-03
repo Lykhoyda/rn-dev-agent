@@ -22,6 +22,7 @@ import {
 } from '../domain/action-store.js';
 import { parseM7Header, serializeM7Header } from '../domain/reusable-action.js';
 import type { Block, Item } from './plan.js';
+import { normalizedSlug } from './plan.js';
 import type { LedgerRow, Selector } from './ledger.js';
 
 export type BlockPlatform = 'ios' | 'android';
@@ -342,7 +343,14 @@ export function writeBlock(appRoot: string, slug: string, text: string): 'writte
   };
   const existing = readOwnedFile(path);
   if (existing === text) return 'unchanged';
-  if (existing !== null && parseM7Header(existing)?.plan !== slug)
+  const previous = existing !== null ? parseM7Header(existing) : null;
+  const incoming = parseM7Header(text);
+  if (
+    existing !== null &&
+    (previous?.plan !== slug ||
+      !incoming ||
+      normalizedSlug(previous.intent) !== normalizedSlug(incoming.intent))
+  )
     throw new BlockWriteError(
       'BLOCK_SLUG_COLLISION',
       `${path} already holds an action that is not this plan block`,
