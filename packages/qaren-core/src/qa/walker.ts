@@ -11,7 +11,7 @@ import {
 import { type Judge, type JevCall, JevError, unavailableJudge } from './questions.js';
 import { maskInputs, ObservedPrivacy } from './privacy.js';
 import { NativeSnapshotIncomplete, PrivateInputCaptureError } from './private-input.js';
-import { NativeCaptureError } from './capture.js';
+import { emitCaptureDiagnostics, NativeCaptureError } from './capture.js';
 import { QaDispatchContext, QaDispatchError } from '../domain/qa-dispatch.js';
 import {
   admitObservation,
@@ -216,6 +216,7 @@ export async function walkBlock(
           reason: 'NATIVE_PRESENCE_UNUSABLE',
         });
       admitted = true;
+      emitCaptureDiagnostics(latest);
       return { screen: latest, timing, id };
     } finally {
       if (deps.timing) {

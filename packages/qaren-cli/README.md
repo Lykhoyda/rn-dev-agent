@@ -70,16 +70,32 @@ Mounted text beyond those bounds cannot satisfy the plan until scrolling brings
 it into view. Offscreen inputs remain in the privacy inventory for masking.
 This geometric filter does not prove complete visual exposure or occlusion.
 
-Each complete native capture within the capture budget writes one value-free
+Passive capture diagnostics are computed and emitted for the same captured screen
+only after the walker establishes acquisition admission and passes the required
+native acquisition and presence checks. Incomplete, unattested, over-budget,
+acquisition-expired or presence-refused observations emit neither line. Each
+diagnostic is attempted once per admitted screen, with computation and sink errors
+contained independently. Diagnostic work does not consume acquisition-admission
+time or reset evidence freshness; later evidence-use deadlines still apply.
+Both lines are private investigative evidence, not a root-cause or PASS claim;
+they change no visibility, screenshot withholding, masking, eligibility or ledger
+decision.
+
+Each admitted complete native capture within the capture budget writes one value-free
 `viewport-diagnostic` line, bounded to 2 KB, to the private run log
 `logs/core.log`. It records integer-rounded Application and Window rectangles,
 counts and capped symptom samples with Window ancestry and origins; it excludes
-labels, identifiers, values and sizes of other nodes. Incomplete, unattested or
-over-budget captures emit no such line. Diagnostic work runs after the budget
-verdict and cannot change capture admission or failure. The line is investigative
-evidence, not a root-cause or PASS claim, and changes no visibility, masking or
-ledger behavior. The [diagnostic implementation](../qaren-core/src/qa/native-presence.ts)
+labels, identifiers, values and sizes of other nodes.
+The [diagnostic implementation](../qaren-core/src/qa/native-presence.ts)
 owns its field layout.
+
+A qualifying capture whose own privacy verdict marks its pixels sensitive also
+writes one value-free `sensitive-pixels` line, at most 512 bytes including the log
+prefix, to `logs/core.log`. It counts the stored private strings, secure elements
+and input values, plus a histogram of the native types that show a stored value.
+Types outside a fixed public list, and elements without a native node, count as
+`Other`. It excludes values, labels, identifiers and testIDs. The
+[diagnostic implementation](../qaren-core/src/qa/privacy.ts) owns its field layout.
 
 Phrase presses require complete native and React coverage and proven React-to-native
 associations. Native text, images and plain views are excluded from press candidates
