@@ -794,6 +794,7 @@ fn assert_core_only_refusal_with_metro(with_owner: bool) {
     mock.expect_run("/bin/kill -KILL -- -5000", CmdOutput::success(""));
     mock.expect_run("ps -p 5000 -o lstart=", CmdOutput::success(""));
     mock.expect_run("lsof", free_port());
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
 
     let receipt = cleanup(&mut mock, &repo, "core-run");
 
@@ -804,7 +805,7 @@ fn assert_core_only_refusal_with_metro(with_owner: bool) {
     );
     assert_eq!(receipt.cleanup["metro"], "removed");
     assert!(receipt.cleanup["device_lease"].starts_with("unresolved: retained"));
-    assert_eq!(mock.calls.len(), if with_owner { 8 } else { 7 });
+    assert_eq!(mock.calls.len(), if with_owner { 9 } else { 8 });
     assert_eq!(
         mock.calls
             .iter()
