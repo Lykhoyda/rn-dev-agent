@@ -367,9 +367,7 @@ for (const extension of ['yaml', 'yml']) {
     assert.equal(storedFits(long, stored, before, ios), false);
     assert.throws(() => writeBlock(root, long.slug, incoming), /BLOCK_SLUG_COLLISION/);
     assert.equal(readFileSync(path, 'utf8'), before);
-    const sameTitle = blockOf(
-      `### ${shortTitle.toUpperCase()}!\n1. Tap "Save"\n✓ "Saved"\n`,
-    );
+    const sameTitle = blockOf(`### ${shortTitle.toUpperCase()}!\n1. Tap "Save"\n✓ "Saved"\n`);
     const patched = serialized(sameTitle, passRows(sameTitle, { 2: { id: 'save-new' } }));
     assert.equal(writeBlock(root, sameTitle.slug, patched), 'written');
     assert.equal(readFileSync(path, 'utf8'), patched);
