@@ -62,13 +62,18 @@ unsupported visual or layout claims remain uncertain.
 Phrase waits capture fresh screen and presence evidence on every poll, even when the
 screen appears unchanged; prior observations do not establish current presence.
 
-When native window geometry is available, literal checks, quoted waits and quoted
-scroll-until targets exclude native text outside the window viewport or its
-ancestor scroll-container clips. iOS interactive snapshots retain content-less
-Window nodes with their real frames and ancestry to supply this geometry.
-Mounted text beyond those bounds cannot satisfy the plan until scrolling brings
-it into view. Offscreen inputs remain in the privacy inventory for masking.
-This geometric filter does not prove complete visual exposure or occlusion.
+Literal checks, quoted waits and quoted scroll-until targets exclude native text
+outside the intersection of the Application screen rectangle and every retained
+ScrollView, Table, CollectionView and Window ancestor rectangle, on both axes.
+Screen and scroll-container clipping apply even when a node has no Window
+ancestor, including captures with the keyboard up. Missing or invalid rectangles
+skip only that clip; Application and Window rectangles must also have positive
+size. Partly overlapping nodes remain eligible. iOS interactive snapshots retain
+content-less Window nodes with their real frames and ancestry to supply geometry.
+Mounted text beyond the cumulative bounds cannot satisfy the plan until it enters
+those bounds. Offscreen inputs remain in the privacy inventory for masking.
+This geometric filter does not prove complete visual exposure or occlusion; its
+implementation is owned by [native presence](../qaren-core/src/qa/native-presence.ts).
 
 Each complete native capture within the capture budget writes one value-free
 `viewport-diagnostic` line, bounded to 2 KB, to the private run log
