@@ -236,10 +236,12 @@ function kindOfRole(role: string): Kind {
     case 'link':
       return 'link';
     case 'image':
+    case 'img':
     case 'imagebutton':
       return 'image';
     case 'text':
     case 'header':
+    case 'heading':
       return 'text';
     default:
       return 'button';

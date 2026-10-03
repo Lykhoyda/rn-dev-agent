@@ -3,12 +3,90 @@ import { test } from 'node:test';
 import * as projection from '../../../dist/qa/screen.js';
 import type { DigestEntry, Element, ReactHostEvidence, Screen } from '../../../dist/qa/screen.js';
 import { inputValues, redactEvidence } from '../../../dist/qa/privacy.js';
-import { decideScreen, decideTarget, prepareTarget } from '../../../dist/qa/resolve.js';
-import { parsePlan } from '../../../dist/qa/plan.js';
+import {
+  decideScreen,
+  decideTarget,
+  prepareTarget,
+  resolveTarget,
+} from '../../../dist/qa/resolve.js';
+import { parsePlan, parseStep } from '../../../dist/qa/plan.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { choice, scriptedJudge, walker } from './judgment-fixtures.ts';
 
 const complete = { native: 'complete', react: 'complete' } as const;
+
+test('headings and normalized images do not block semantic button resolution', async () => {
+  const target = parseStep('Tap the save button');
+  assert.ok(target && !('refuse' in target));
+  for (const [role, type, kind] of [
+    ['heading', 'StaticText', 'text'],
+    ['img', 'Image', 'image'],
+  ] as const) {
+    for (const withPresence of [false, true]) {
+      for (const representation of ['host', 'digest', 'both']) {
+        const observed = projection.join(
+          [
+            { ref: '@content', type, identifier: 'content', label: 'Welcome', hittable: true },
+            { ref: '@save', type: 'Button', identifier: 'save', label: 'Save', hittable: true },
+          ],
+          representation === 'host' ? [] : [{ role, testID: 'content' }],
+          'app',
+          complete,
+          {
+            complete: true,
+            hosts:
+              representation === 'digest'
+                ? []
+                : [{ role, roleSource: 'role', testID: 'content', capabilities: {} }],
+          },
+          withPresence ? presenceOf(['observed', 'observed']) : undefined,
+        );
+        assert.equal(observed.elements[0].kind, kind);
+        assert.equal(observed.elements[0].semantic?.press, 'unsupported');
+        assert.equal(observed.pressEvidenceGap, undefined);
+        assert.deepEqual(projection.semanticActionView(observed, 'press'), {
+          elements: [observed.elements[1]],
+        });
+        const judge = scriptedJudge((q) => ({ target_0: choice(q.target_0) }));
+        const resolved = await resolveTarget(target, observed, judge);
+        assert.ok('ref' in resolved);
+        assert.equal(resolved.ref, '@save');
+        assert.equal(judge.requests.length, 1);
+      }
+    }
+  }
+});
+
+test('role-derived kinds retain button and input classification alongside static roles', () => {
+  const entries = [
+    { role: 'heading', testID: 'title' },
+    { role: 'img', testID: 'logo' },
+    { role: 'button', testID: 'save', capabilities: { press: true } },
+    { role: 'textinput', testID: 'email', capabilities: { fill: true } },
+  ];
+  for (const native of [false, true]) {
+    const observed = projection.join(
+      native
+        ? entries.map((entry) => ({
+            ref: `@${entry.testID}`,
+            type: 'Other',
+            identifier: entry.testID,
+            hittable: true,
+          }))
+        : [],
+      entries,
+      'app',
+      complete,
+      { hosts: [], complete: true },
+    );
+    assert.deepEqual(
+      observed.elements.map((e) => e.kind),
+      ['text', 'image', 'button', 'input'],
+    );
+    assert.equal(observed.elements[2].semantic?.press, 'supported');
+    assert.equal(observed.elements[3].semantic?.fill, 'supported');
+  }
+});
 
 function element(ref: string, overrides: Partial<Element> = {}): Element {
   return {
