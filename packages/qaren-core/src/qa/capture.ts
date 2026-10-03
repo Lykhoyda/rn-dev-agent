@@ -1,7 +1,7 @@
 import { isRecord } from './questions.js';
 import { frontFromSurface, join, validateReactHostEvidence } from './screen.js';
 import type { DigestEntry, NativeNode, ReactHostEvidence, Screen } from './screen.js';
-import { validateNativePresence } from './native-presence.js';
+import { outsideViewport, validateNativePresence, viewportDiagnostic } from './native-presence.js';
 import {
   CAPTURE_BUDGET_MS,
   NATIVE_PRESENCE_BUDGET_MS,
@@ -507,6 +507,13 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
       (native.appProcessIdentifier as number) > 0
     )
       screen.appProcessIdentifier = native.appProcessIdentifier as number;
+    if (deps.warn && captureCoverage.native === 'complete' && withinBudget) {
+      try {
+        deps.warn(viewportDiagnostic(nodes, outsideViewport(nodes)));
+      } catch {
+        // Diagnostics cannot change capture admission or failure.
+      }
+    }
     joined = true;
     return screen;
   } finally {
