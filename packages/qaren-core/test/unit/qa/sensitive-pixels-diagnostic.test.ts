@@ -301,7 +301,10 @@ test('walker admission precedes both passive diagnostics at the acquisition budg
             complete: scenario !== 'presence-refused',
           },
         };
-        const walk = walker([], scriptedJudge(() => ({ check_1: { type: 'noul', noul: 0.99 } })));
+        const walk = walker(
+          [],
+          scriptedJudge(() => ({ check_1: { type: 'noul', noul: 0.99 } })),
+        );
         walk.deps.now = () => clock;
         walk.deps.captureScreen = async () => {
           captured = await captureScreen({
@@ -337,8 +340,12 @@ test('walker admission precedes both passive diagnostics at the acquisition budg
       assert.equal(logged.result.verdict, silent.result.verdict);
       assert.deepEqual(logged.result.failure, silent.result.failure);
       assert.deepEqual(
-        logged.result.verdict === 'REFUSED' ? [logged.result.code, logged.result.message] : undefined,
-        silent.result.verdict === 'REFUSED' ? [silent.result.code, silent.result.message] : undefined,
+        logged.result.verdict === 'REFUSED'
+          ? [logged.result.code, logged.result.message]
+          : undefined,
+        silent.result.verdict === 'REFUSED'
+          ? [silent.result.code, silent.result.message]
+          : undefined,
       );
       assert.deepEqual(
         logged.captured && outcome(logged.captured),

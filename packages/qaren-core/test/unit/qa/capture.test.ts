@@ -454,11 +454,7 @@ test('first-mismatch diagnostics accept only bounded structural fields and never
     { kind: 'descriptor-count', fieldMask: 0, geometry },
     { kind: 'missing-node', index: 1, fieldMask: 0, ancestorTypes: [1], ancestorsTruncated: false },
   ]) {
-    assert.deepEqual(
-      (await capture(detail)).logs,
-      [safe.logs[0]],
-      JSON.stringify(detail),
-    );
+    assert.deepEqual((await capture(detail)).logs, [safe.logs[0]], JSON.stringify(detail));
   }
   const partial = { ...geometry, afterFiniteMask: 14, deltaFiniteMask: 14, dx: undefined };
   assert.ok(
@@ -1024,9 +1020,7 @@ test('digest errors preserve native literals and warn without logging private pa
       ['@save'],
     );
   }
-  assert.deepEqual(warnings, [
-    'interactive digest unavailable; React coverage is unknown',
-  ]);
+  assert.deepEqual(warnings, ['interactive digest unavailable; React coverage is unknown']);
 });
 
 test('non-array adapter data stays unknown rather than masquerading as a complete empty capture', async () => {
