@@ -2,7 +2,7 @@
 // Builds a reproducible macOS CLI runtime; copyDarwinNative owns its native-helper inventory.
 //
 // Usage:
-//   node scripts/build-qaren-tarball.ts --version <v> --platform darwin-arm64|darwin-x64 \
+//   node scripts/build-qaren-tarball.ts --version <v> --platform darwin-arm64 \
 //     [--runner-manifest <runner-manifest.json>] [--out-dir <dir>]
 //
 // Prints name=, sha256= and bytes= lines on stdout; build logs go to stderr.
@@ -32,7 +32,6 @@ const CLI_DIR = join(ROOT, 'packages', 'qaren-cli');
 
 export const RUST_TARGETS = {
   'darwin-arm64': 'aarch64-apple-darwin',
-  'darwin-x64': 'x86_64-apple-darwin',
 } as const;
 export type QarenPlatform = keyof typeof RUST_TARGETS;
 
@@ -259,7 +258,7 @@ async function main(): Promise<void> {
   const platform = args.platform as QarenPlatform;
   if (!version || !VERSION_RE.test(version) || !(platform in RUST_TARGETS)) {
     console.error(
-      'usage: build-qaren-tarball.ts --version <v> --platform darwin-arm64|darwin-x64 ' +
+      'usage: build-qaren-tarball.ts --version <v> --platform darwin-arm64 ' +
         '[--runner-manifest <path>] [--out-dir <dir>]',
     );
     process.exit(2);

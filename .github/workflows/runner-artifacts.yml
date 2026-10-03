@@ -1,7 +1,7 @@
 name: Runner artifacts
 
 # Producer for the release trust-root transaction: builds the two runner zips
-# and one qaren tarball per macOS architecture at the supplied, already
+# and the Apple silicon qaren tarball at the supplied, already
 # verified candidate SHA and hands them back as retained run artifacts together
 # with the digest and length the producer itself measured. Each tarball embeds a
 # runtime manifest of this run's own runner zips; it can never vouch for itself. The caller (trusted release.yml code on main) is the
@@ -49,12 +49,6 @@ on:
         value: ${{ jobs.build-qaren.outputs.darwin-arm64-bytes }}
       qaren-darwin-arm64-artifact-id:
         value: ${{ jobs.build-qaren.outputs.darwin-arm64-artifact-id }}
-      qaren-darwin-x64-sha256:
-        value: ${{ jobs.build-qaren.outputs.darwin-x64-sha256 }}
-      qaren-darwin-x64-bytes:
-        value: ${{ jobs.build-qaren.outputs.darwin-x64-bytes }}
-      qaren-darwin-x64-artifact-id:
-        value: ${{ jobs.build-qaren.outputs.darwin-x64-artifact-id }}
 
 permissions:
   contents: read
@@ -173,18 +167,13 @@ jobs:
 
 
   build-qaren:
-    name: Build qaren tarballs (macOS arm64 + x64)
+    name: Build qaren tarball (macOS arm64)
     needs: [build-ios, build-android]
-    # Both architectures come from one arm64 host (x64 is cross-built), so each
-    # architecture keeps its own named outputs instead of racing matrix outputs.
     runs-on: macos-15
     outputs:
       darwin-arm64-sha256: ${{ steps.pack.outputs.darwin-arm64-sha256 }}
       darwin-arm64-bytes: ${{ steps.pack.outputs.darwin-arm64-bytes }}
       darwin-arm64-artifact-id: ${{ steps.retain-arm64.outputs.artifact-id }}
-      darwin-x64-sha256: ${{ steps.pack.outputs.darwin-x64-sha256 }}
-      darwin-x64-bytes: ${{ steps.pack.outputs.darwin-x64-bytes }}
-      darwin-x64-artifact-id: ${{ steps.retain-x64.outputs.artifact-id }}
     steps:
       - name: Refuse anything but a full candidate SHA
         env:
@@ -203,8 +192,8 @@ jobs:
           node-version: 24
       - run: corepack enable
       - run: corepack yarn install --immutable
-      - name: Rust targets for both macOS architectures
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Rust target for Apple silicon
+        run: rustup target add aarch64-apple-darwin
       # Exact producer artifact IDs from this run's own runner jobs.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1 — SHA pin
         with:
@@ -235,33 +224,31 @@ jobs:
             --android "handoff/rn-android-runner-$VERSION.zip" \
             --out "$RUNNER_TEMP/runtime-runner-manifest.json"
       - id: pack
-        name: Build both tarballs and record the producer identity
+        name: Build the arm64 tarball and record the producer identity
         env:
           VERSION: ${{ inputs.version }}
           REF: ${{ inputs.ref }}
         run: |
           [ "$(git rev-parse HEAD)" = "$REF" ] || { echo "::error::checkout is not the candidate $REF" >&2; exit 1; }
-          for PLATFORM in darwin-arm64 darwin-x64; do
-            node scripts/build-qaren-tarball.ts --version "$VERSION" --platform "$PLATFORM" \
-              --runner-manifest "$RUNNER_TEMP/runtime-runner-manifest.json" --out-dir dist-qaren
-            TARBALL="dist-qaren/qaren-$VERSION-$PLATFORM.tar.gz"
-            {
-              echo "$PLATFORM-sha256=$(shasum -a 256 "$TARBALL" | cut -d' ' -f1)"
-              echo "$PLATFORM-bytes=$(wc -c < "$TARBALL" | tr -d ' ')"
-            } >> "$GITHUB_OUTPUT"
-          done
-      - name: Smoke the tarballs (extract, architecture, --version)
+          PLATFORM=darwin-arm64
+          node scripts/build-qaren-tarball.ts --version "$VERSION" --platform "$PLATFORM" \
+            --runner-manifest "$RUNNER_TEMP/runtime-runner-manifest.json" --out-dir dist-qaren
+          TARBALL="dist-qaren/qaren-$VERSION-$PLATFORM.tar.gz"
+          {
+            echo "$PLATFORM-sha256=$(shasum -a 256 "$TARBALL" | cut -d' ' -f1)"
+            echo "$PLATFORM-bytes=$(wc -c < "$TARBALL" | tr -d ' ')"
+          } >> "$GITHUB_OUTPUT"
+      - name: Smoke the arm64 tarball (extract, architecture, --version)
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          for PLATFORM in darwin-arm64 darwin-x64; do
-            DIR="$RUNNER_TEMP/smoke-$PLATFORM"
-            mkdir -p "$DIR"
-            tar -xzf "dist-qaren/qaren-$VERSION-$PLATFORM.tar.gz" -C "$DIR"
-            BIN="$DIR/qaren-$VERSION-$PLATFORM/bin/qaren"
-            case "$PLATFORM" in darwin-arm64) ARCH=arm64 ;; darwin-x64) ARCH=x86_64 ;; esac
-            [ "$(lipo -archs "$BIN")" = "$ARCH" ] || { echo "::error::$PLATFORM binary is $(lipo -archs "$BIN"), expected $ARCH" >&2; exit 1; }
-          done
+          PLATFORM=darwin-arm64
+          DIR="$RUNNER_TEMP/smoke-$PLATFORM"
+          mkdir -p "$DIR"
+          tar -xzf "dist-qaren/qaren-$VERSION-$PLATFORM.tar.gz" -C "$DIR"
+          BIN="$DIR/qaren-$VERSION-$PLATFORM/bin/qaren"
+          ARCH=arm64
+          [ "$(lipo -archs "$BIN")" = "$ARCH" ] || { echo "::error::$PLATFORM binary is $(lipo -archs "$BIN"), expected $ARCH" >&2; exit 1; }
           GOT=$(env -u QAREN_RUNTIME "$RUNNER_TEMP/smoke-darwin-arm64/qaren-$VERSION-darwin-arm64/bin/qaren" --version)
           [ "$GOT" = "qaren $VERSION" ] || { echo "::error::qaren --version printed '$GOT', expected 'qaren $VERSION'" >&2; exit 1; }
       - id: retain-arm64
@@ -270,15 +257,6 @@ jobs:
         with:
           name: qaren-${{ inputs.version }}-darwin-arm64
           path: dist-qaren/qaren-${{ inputs.version }}-darwin-arm64.tar.gz
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 7
-      - id: retain-x64
-        name: Retain the x64 tarball for the release transaction
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1 — SHA pin
-        with:
-          name: qaren-${{ inputs.version }}-darwin-x64
-          path: dist-qaren/qaren-${{ inputs.version }}-darwin-x64.tar.gz
           if-no-files-found: error
           compression-level: 0
           retention-days: 7

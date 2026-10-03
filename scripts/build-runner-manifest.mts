@@ -8,7 +8,6 @@
 //     --android path/to/rn-android-runner-0.62.3.zip \
 //     --xcode-build-version 15.4 \
 //     --qaren-darwin-arm64 path/to/qaren-0.62.3-darwin-arm64.tar.gz \
-//     --qaren-darwin-x64 path/to/qaren-0.62.3-darwin-x64.tar.gz \
 //     --out runner-manifest.json
 
 import { createHash } from 'node:crypto';
@@ -25,7 +24,7 @@ export function hashAsset(filePath) {
   };
 }
 
-export const QAREN_PLATFORMS = ['darwin-arm64', 'darwin-x64'];
+export const QAREN_PLATFORMS = ['darwin-arm64'];
 
 export function assembleManifest({
   version,
@@ -60,7 +59,7 @@ function main() {
   if (!args.version) {
     console.error(
       'usage: build-runner-manifest.mts --version <v> [--ios <zip>] [--android <zip>] ' +
-        '[--xcode-build-version <v>] [--qaren-darwin-arm64 <tgz>] [--qaren-darwin-x64 <tgz>] ' +
+        '[--xcode-build-version <v>] [--qaren-darwin-arm64 <tgz>] ' +
         '[--out <path>]',
     );
     process.exit(1);

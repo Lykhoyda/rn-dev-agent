@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
@@ -144,7 +144,7 @@ test('anything but regular files and directories is refused', () => {
   }
 });
 
-test('both Darwin archives contain only Darwin helpers and pass offline install and verification', () => {
+test('the Apple silicon archive contains only Darwin helpers and passes offline install and verification', () => {
   const root = join(import.meta.dirname, '..', '..');
   const version = '1.2.3';
   const dir = mkdtempSync(join(tmpdir(), 'qaren-darwin-pack-'));
@@ -155,7 +155,10 @@ test('both Darwin archives contain only Darwin helpers and pass offline install 
     copyFileSync(join(root, 'packages', 'qaren-plugin', 'scripts', 'ensure-qaren.sh'), script);
     const stubs = join(dir, 'stubs');
     mkdirSync(stubs);
-    for (const platform of ['darwin-arm64', 'darwin-x64'] as const) {
+    const sysctl = join(stubs, 'sysctl');
+    writeFileSync(sysctl, '#!/bin/sh\necho 1\n');
+    chmodSync(sysctl, 0o755);
+    for (const platform of ['darwin-arm64'] as const) {
       const top = `qaren-${version}-${platform}`;
       const stage = tree(
         { [`${top}/bin/qaren`]: { body: '#!/bin/sh\necho qaren\n', mode: 0o755 } },
@@ -197,7 +200,7 @@ test('both Darwin archives contain only Darwin helpers and pass offline install 
         const uname = join(stubs, 'uname');
         writeFileSync(
           uname,
-          `#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo ${platform === 'darwin-arm64' ? 'arm64' : 'x86_64'} ;; esac\n`,
+          `#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac\n`,
         );
         chmodSync(uname, 0o755);
         const env = {
@@ -245,6 +248,21 @@ test('both Darwin archives contain only Darwin helpers and pass offline install 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('the tarball builder refuses Intel before building a runtime', () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      join(import.meta.dirname, '..', 'build-qaren-tarball.ts'),
+      '--version', '1.2.3',
+      '--platform', 'darwin-x64',
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /usage: build-qaren-tarball/);
 });
 
 test('the runtime manifest names only the runner zips, never a qaren tarball', () => {

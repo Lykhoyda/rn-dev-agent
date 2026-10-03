@@ -28,7 +28,10 @@ trap 'rm -rf "$tmp"' EXIT
 
 mkdir -p "$tmp/stubs" "$tmp/plugin/scripts"
 cp "$SCRIPT" "$tmp/plugin/scripts/ensure-qaren.sh"
-printf '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; *) echo Darwin ;; esac\n' > "$tmp/stubs/uname"
+printf '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo "${FAKE_ARCH:-arm64}" ;; *) echo Darwin ;; esac\n' > "$tmp/stubs/uname"
+printf '#!/bin/sh\n[ "${FAKE_ARM64:-1}" = absent ] && exit 1\necho "${FAKE_ARM64:-1}"\n' > "$tmp/stubs/sysctl"
+printf '#!/bin/sh\necho touched >> "%s/network"\nexit 7\n' "$tmp" > "$tmp/stubs/curl"
+chmod +x "$tmp/stubs/sysctl" "$tmp/stubs/curl"
 # sleep records its pid so the parked children of killed installers can be cleaned up.
 printf '#!/bin/sh\necho $$ >> "%s/sleep-pids"\nexec "%s" "$@"\n' "$tmp" "$(command -v sleep)" > "$tmp/stubs/sleep"
 chmod +x "$tmp/stubs/uname" "$tmp/stubs/sleep"
@@ -97,6 +100,17 @@ run_install() {
   HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --install --from-file "$1" 2>"$tmp/stderr"
 }
 
+for hardware in 0 absent; do
+  FAKE_ARCH=x86_64 FAKE_ARM64="$hardware" run_install "$tmp/missing.tgz" > "$tmp/intel-stdout"
+  rc=$?
+  check "Intel $hardware: install refuses" yes "$([ "$rc" != 0 ] && echo yes || echo no)"
+  check "Intel $hardware: clear unsupported message" "qaren 2.0 supports Apple silicon Macs only" "$(cat "$tmp/stderr")"
+  out=$(FAKE_ARCH=x86_64 FAKE_ARM64="$hardware" HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
+  check "Intel $hardware: hook exits 0" 0 "$?"
+  check "Intel $hardware: hook prints one unsupported line" "qaren: qaren 2.0 supports Apple silicon Macs only" "$out"
+done
+check "Intel never downloads" no "$([ -e "$tmp/network" ] && echo yes || echo no)"
+
 leftovers() {
   find "$tmp/home/.qaren/runtime" -mindepth 1 -maxdepth 1 -name '.staging-*' 2>/dev/null | wc -l | tr -d ' '
 }
@@ -148,6 +162,11 @@ check "prints the installed binary" "$REAL_DEST/bin/qaren" "$out"
 check "installed binary runs" qaren "$("$DEST/bin/qaren")"
 check "digest is recorded" "$(shasum -a 256 "$tmp/good.tgz" | cut -d' ' -f1)" "$(cat "$DEST/.tarball-sha256")"
 check "no staging left behind" 0 "$(leftovers)"
+
+out=$(FAKE_ARCH=x86_64 FAKE_ARM64=1 run_install "$tmp/does-not-exist.tgz"); rc=$?
+check "Rosetta: install selects the arm64 runtime" "0 $REAL_DEST/bin/qaren" "$rc $out"
+hint=$(FAKE_ARCH=x86_64 FAKE_ARM64=1 HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
+check "Rosetta: hook selects the arm64 runtime" "$REAL_DEST/bin/qaren" "$hint"
 
 # Re-install is idempotent and needs no tarball at all.
 before=$(ls -lTR "$DEST" 2>/dev/null || ls -l --full-time -R "$DEST")
@@ -437,6 +456,7 @@ check "on-disk size: no staging left behind" 0 "$(leftovers)"
 write_manifest "$tmp/good.tgz"
 mkdir -p "$tmp/toolbox"
 ln -sf "$tmp/stubs/uname" "$tmp/toolbox/uname"
+ln -sf "$tmp/stubs/sysctl" "$tmp/toolbox/sysctl"
 for t in $REQUIRED_TOOLS node; do
   [ "$t" = uname ] || ln -sf "$(PATH="${PATH#"$tmp/stubs:"}" command -v "$t")" "$tmp/toolbox/$t"
 done

@@ -50,13 +50,9 @@ fi
 # Prints the expected asset as four lines: version, name, sha256, bytes.
 # Fails (with a reason on stderr) when this plugin carries no tarball for the host.
 read_asset() {
-  local platform
+  local platform=darwin-arm64
   [ "$(uname -s)" = Darwin ] || { echo "qaren ships a macOS runtime only; this host is $(uname -s)" >&2; return 1; }
-  case "$(uname -m)" in
-    arm64) platform=darwin-arm64 ;;
-    x86_64) platform=darwin-x64 ;;
-    *) echo "qaren ships no runtime for $(uname -m)" >&2; return 1 ;;
-  esac
+  [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ] || { echo "qaren 2.0 supports Apple silicon Macs only" >&2; return 3; }
   [ -f "$MANIFEST" ] || { echo "this plugin carries no runner-manifest.json" >&2; return 1; }
   command -v node >/dev/null 2>&1 || { echo "qaren needs Node 24 or newer on PATH" >&2; return 1; }
   exec node -e '
@@ -73,7 +69,7 @@ read_asset() {
 
 validate_asset() {
   local out="$1" version name sha bytes platform
-  case "$(uname -m)" in arm64) platform=darwin-arm64 ;; x86_64) platform=darwin-x64 ;; esac
+  platform=darwin-arm64
   { read -r version; read -r name; read -r sha; read -r bytes; } <<< "$out"
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "runner-manifest.json has no release version" >&2; return 1; }
   [ -n "$name" ] || { echo "qaren v$version has no $platform tarball in runner-manifest.json" >&2; return 1; }

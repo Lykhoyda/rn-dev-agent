@@ -227,7 +227,7 @@ Suite records and redacted logs live under `~/.qaren/native-suites/<run-id>`. Un
   `develop`; `release.yml` and `deploy-docs.yml` trigger on `main` only, so
   nothing releases or deploys from `develop`.
 - `release.yml` and `scripts/runner-manifest-publication.mts` ship the runner
-  zips and one `qaren` tarball per macOS architecture through the
+  zips and one Apple silicon `qaren` tarball through the
   retained-bytes transaction, with `packages/qaren-plugin/runner-manifest.json`
   as the plugin's copy of the trust root. On `develop` only
   `scripts/check-public-runner-assets.sh` runs; it reads the advertised version

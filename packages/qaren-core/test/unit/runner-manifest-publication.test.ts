@@ -62,11 +62,9 @@ const TAG = `v${VERSION}`;
 const IOS_ZIP = `rn-fast-runner-${VERSION}-sim.zip`;
 const ANDROID_ZIP = `rn-android-runner-${VERSION}.zip`;
 const QAREN_ARM64_TGZ = `qaren-${VERSION}-darwin-arm64.tar.gz`;
-const QAREN_X64_TGZ = `qaren-${VERSION}-darwin-x64.tar.gz`;
 const IOS_BYTES = 'ios-runner-zip-bytes';
 const ANDROID_BYTES = 'android-runner-zip-bytes';
 const QAREN_ARM64_BYTES = 'qaren-arm64-tarball-bytes';
-const QAREN_X64_BYTES = 'qaren-x64-tarball-bytes';
 const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);
 const REPO = 'Lykhoyda/rn-dev-agent';
@@ -81,7 +79,6 @@ function producer() {
     android: { sha256: sha256(ANDROID_BYTES), bytes: ANDROID_BYTES.length },
     qaren: {
       'darwin-arm64': { sha256: sha256(QAREN_ARM64_BYTES), bytes: QAREN_ARM64_BYTES.length },
-      'darwin-x64': { sha256: sha256(QAREN_X64_BYTES), bytes: QAREN_X64_BYTES.length },
     },
   };
 }
@@ -116,7 +113,6 @@ function manifestFor(
           ],
           qaren: {
             'darwin-arm64': tarball('darwin-arm64', arm64),
-            'darwin-x64': tarball('darwin-x64', QAREN_X64_BYTES),
           },
         },
       },
@@ -126,7 +122,7 @@ function manifestFor(
   );
 }
 
-const ALL_ASSETS = [IOS_ZIP, ANDROID_ZIP, QAREN_ARM64_TGZ, QAREN_X64_TGZ];
+const ALL_ASSETS = [IOS_ZIP, ANDROID_ZIP, QAREN_ARM64_TGZ];
 
 function candidate(overrides: Record<string, unknown> = {}) {
   const manifest = manifestFor();
@@ -164,7 +160,7 @@ test('a self-consistent candidate matching the producer handoff is prepared', ()
   assert.deepEqual(prepared.expected, {
     ios: IOS_ZIP,
     android: ANDROID_ZIP,
-    qaren: { 'darwin-arm64': QAREN_ARM64_TGZ, 'darwin-x64': QAREN_X64_TGZ },
+    qaren: { 'darwin-arm64': QAREN_ARM64_TGZ },
     manifest: 'runner-manifest.json',
   });
 });
@@ -248,33 +244,36 @@ test('the full pair with exact names is required', () => {
   );
 });
 
-test('exactly one qaren tarball per macOS platform, with the exact name, is required', () => {
+test('only the Apple silicon qaren tarball with the exact name is required', () => {
   const parsed = JSON.parse(manifestFor());
   const variant = (qaren: unknown) => {
     const text = JSON.stringify({ ...parsed, assets: { ...parsed.assets, qaren } });
     return candidate({ repoManifest: text, pluginManifest: text });
   };
-  const { 'darwin-x64': _x64, ...arm64Only } = parsed.assets.qaren;
   assert.throws(() => assertPreparedCandidate(variant(undefined)), /lists no qaren tarballs/);
   assert.throws(() => assertPreparedCandidate(variant([])), /lists no qaren tarballs/);
   assert.throws(
-    () => assertPreparedCandidate(variant(arm64Only)),
-    /exactly one qaren tarball per macOS platform .* got darwin-arm64$/,
+    () => assertPreparedCandidate(variant({})),
+    /exactly the Apple silicon qaren tarball/,
   );
-  assert.throws(
-    () =>
-      assertPreparedCandidate(
-        variant({ ...parsed.assets.qaren, 'linux-x64': parsed.assets.qaren['darwin-x64'] }),
-      ),
-    /exactly one qaren tarball per macOS platform/,
-  );
+  for (const unsupported of ['darwin-x64', 'linux-x64']) {
+    assert.throws(
+      () =>
+        assertPreparedCandidate(
+          variant({ ...parsed.assets.qaren, [unsupported]: parsed.assets.qaren['darwin-arm64'] }),
+        ),
+      /exactly the Apple silicon qaren tarball/,
+    );
+  }
   const renamed = {
-    ...parsed.assets.qaren,
-    'darwin-x64': { ...parsed.assets.qaren['darwin-x64'], name: 'qaren-latest-darwin-x64.tar.gz' },
+    'darwin-arm64': {
+      ...parsed.assets.qaren['darwin-arm64'],
+      name: 'qaren-latest-darwin-arm64.tar.gz',
+    },
   };
   assert.throws(
     () => assertPreparedCandidate(variant(renamed)),
-    /qaren darwin-x64 asset is qaren-latest-darwin-x64\.tar\.gz, expected qaren-0\.76\.7-darwin-x64\.tar\.gz/,
+    /qaren darwin-arm64 asset is qaren-latest-darwin-arm64\.tar\.gz, expected qaren-0\.76\.7-darwin-arm64\.tar\.gz/,
   );
 });
 
@@ -349,7 +348,6 @@ test('expected release asset names stay pinned to the client download contract',
     android: 'rn-android-runner-1.0.9.zip',
     qaren: {
       'darwin-arm64': 'qaren-1.0.9-darwin-arm64.tar.gz',
-      'darwin-x64': 'qaren-1.0.9-darwin-x64.tar.gz',
     },
     manifest: 'runner-manifest.json',
   });
@@ -440,12 +438,11 @@ test('a published release that diverges is refused, never replaced', () => {
           assets: [
             { name: IOS_ZIP },
             { name: ANDROID_ZIP },
-            { name: QAREN_ARM64_TGZ },
             { name: 'runner-manifest.json' },
           ],
         },
       },
-      /without both qaren tarballs/,
+      /without the Apple silicon qaren tarball/,
     ],
     [
       {
@@ -679,7 +676,6 @@ function handoff(dir: string, ios = IOS_BYTES, android = ANDROID_BYTES): void {
   write(dir, `handoff/${IOS_ZIP}`, ios);
   write(dir, `handoff/${ANDROID_ZIP}`, android);
   write(dir, `handoff/${QAREN_ARM64_TGZ}`, QAREN_ARM64_BYTES);
-  write(dir, `handoff/${QAREN_X64_TGZ}`, QAREN_X64_BYTES);
 }
 
 function ghCalls(fixture: Fixture): string[] {
@@ -730,8 +726,6 @@ function releaseCtx(
     'needs.prepare.outputs.android-tree': '',
     'needs.prepare.outputs.qaren-darwin-arm64-sha256': p.qaren['darwin-arm64'].sha256,
     'needs.prepare.outputs.qaren-darwin-arm64-bytes': String(p.qaren['darwin-arm64'].bytes),
-    'needs.prepare.outputs.qaren-darwin-x64-sha256': p.qaren['darwin-x64'].sha256,
-    'needs.prepare.outputs.qaren-darwin-x64-bytes': String(p.qaren['darwin-x64'].bytes),
     ...overrides,
   };
 }
@@ -1035,12 +1029,12 @@ test('a retained qaren tarball that does not match the producer identity stops f
   const fixture = createFixture();
   try {
     const { run } = runFinalize(fixture, {
-      ctx: { 'needs.prepare.outputs.qaren-darwin-x64-sha256': sha256('substituted') },
+      ctx: { 'needs.prepare.outputs.qaren-darwin-arm64-sha256': sha256('substituted') },
     });
     assert.equal(run.ok, false);
     assert.match(
       run.failed!.stderr,
-      /qaren-0\.76\.7-darwin-x64\.tar\.gz: retained sha256 .* != producer/,
+      /qaren-0\.76\.7-darwin-arm64\.tar\.gz: retained sha256 .* != producer/,
     );
     assert.equal(originRef(fixture, 'refs/heads/changeset-release/main'), fixture.candidate);
   } finally {
@@ -1294,7 +1288,6 @@ test('first publication stages a draft targeting H, uploads the retained bytes o
         [IOS_ZIP]: 1,
         [ANDROID_ZIP]: 1,
         [QAREN_ARM64_TGZ]: 1,
-        [QAREN_X64_TGZ]: 1,
         'runner-manifest.json': 1,
       },
     );
@@ -1382,7 +1375,6 @@ test('a release already published from another head refuses before any write', (
           [IOS_ZIP]: IOS_BYTES,
           [ANDROID_ZIP]: ANDROID_BYTES,
           [QAREN_ARM64_TGZ]: QAREN_ARM64_BYTES,
-          [QAREN_X64_TGZ]: QAREN_X64_BYTES,
           'runner-manifest.json': manifestFor(),
         },
         draft: false,
@@ -1458,7 +1450,6 @@ test('a published release missing a qaren tarball is partial and refuses', () =>
         assets: {
           [IOS_ZIP]: IOS_BYTES,
           [ANDROID_ZIP]: ANDROID_BYTES,
-          [QAREN_ARM64_TGZ]: QAREN_ARM64_BYTES,
           'runner-manifest.json': manifestFor(),
         },
         draft: false,
@@ -1475,7 +1466,7 @@ test('a published release missing a qaren tarball is partial and refuses', () =>
     const run = runPublish(fixture, PUBLISH_PATH);
     assert.equal(run.ok, false);
     assert.equal(run.failed!.name, DECIDE_STEP);
-    assert.match(run.failed!.stderr, /without both qaren tarballs/);
+    assert.match(run.failed!.stderr, /without the Apple silicon qaren tarball/);
   } finally {
     fixture.cleanup();
   }
@@ -1507,7 +1498,7 @@ test('a staged draft whose bytes were swapped before publication never publishes
   try {
     const run = runPublish(fixture, [READ_STEP, HANDOFF_STEP, DECIDE_STEP, STAGE_STEP], {});
     assert.ok(run.ok, run.failed?.stderr);
-    writeFileSync(fixture.gh.assetPath(TAG, QAREN_X64_TGZ), 'swapped');
+    writeFileSync(fixture.gh.assetPath(TAG, QAREN_ARM64_TGZ), 'swapped');
     const readback = runPublish(fixture, [READ_STEP, READBACK_STEP, PUBLISH_STEP, CONFIRM_STEP]);
     assert.equal(readback.ok, false);
     assert.equal(readback.failed!.name, READBACK_STEP);
@@ -1646,7 +1637,6 @@ function publishedFixture(options: FixtureOptions = {}): Fixture {
   writeFileSync(fixture.gh.assetPath(TAG, IOS_ZIP), IOS_BYTES);
   writeFileSync(fixture.gh.assetPath(TAG, ANDROID_ZIP), ANDROID_BYTES);
   writeFileSync(fixture.gh.assetPath(TAG, QAREN_ARM64_TGZ), QAREN_ARM64_BYTES);
-  writeFileSync(fixture.gh.assetPath(TAG, QAREN_X64_TGZ), QAREN_X64_BYTES);
   writeFileSync(fixture.gh.assetPath(TAG, 'runner-manifest.json'), manifestFor());
   return fixture;
 }
@@ -1941,10 +1931,10 @@ test('a stale root, tampered bytes, a wrong length, a missing zip, a draft or a 
       'missing tarball',
       (f) => {
         const s = f.gh.state();
-        delete s.releases[TAG].assets[QAREN_X64_TGZ];
+        delete s.releases[TAG].assets[QAREN_ARM64_TGZ];
         writeFileSync(join(f.root, 'gh-state', 'state.json'), JSON.stringify(s));
       },
-      /carries no qaren-0\.76\.7-darwin-x64\.tar\.gz/,
+      /carries no qaren-0\.76\.7-darwin-arm64\.tar\.gz/,
     ],
   ];
   for (const [label, mutate, expected] of cases) {
@@ -2197,14 +2187,12 @@ test('the release transaction is ordered: prepare -> finalize -> validate -> pub
     'ios-artifact-id': '101',
     'android-artifact-id': '102',
     'qaren-darwin-arm64-artifact-id': '103',
-    'qaren-darwin-x64-artifact-id': '104',
   };
   const producerIds = {
     'jobs.build-ios.outputs.artifact-id': expectedIds['ios-artifact-id'],
     'jobs.build-android.outputs.artifact-id': expectedIds['android-artifact-id'],
     'jobs.build-qaren.outputs.darwin-arm64-artifact-id':
       expectedIds['qaren-darwin-arm64-artifact-id'],
-    'jobs.build-qaren.outputs.darwin-x64-artifact-id': expectedIds['qaren-darwin-x64-artifact-id'],
   };
   const exposedOutputs = (
     artifacts as unknown as {

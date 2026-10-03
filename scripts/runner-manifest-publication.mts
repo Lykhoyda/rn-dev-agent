@@ -20,7 +20,6 @@
 //     --plugin-manifest packages/qaren-plugin/runner-manifest.json \
 //     --ios-sha256 <hex> --ios-bytes <n> --android-sha256 <hex> --android-bytes <n> \
 //     --qaren-darwin-arm64-sha256 <hex> --qaren-darwin-arm64-bytes <n> \
-//     --qaren-darwin-x64-sha256 <hex> --qaren-darwin-x64-bytes <n> \
 //     [--release release.json --tag-sha <sha-or-empty> --published-manifest published.json]
 
 import { readFileSync, appendFileSync } from 'node:fs';
@@ -41,7 +40,7 @@ export function assertVersion(version) {
   return version;
 }
 
-export const QAREN_PLATFORMS = ['darwin-arm64', 'darwin-x64'];
+export const QAREN_PLATFORMS = ['darwin-arm64'];
 
 export function expectedRunnerAssets(version) {
   assertVersion(version);
@@ -141,9 +140,6 @@ function assertBytes(label, value) {
   return n;
 }
 
-// The candidate is only ever accepted as a whole: version, exact asset names,
-// both runner platforms, one qaren tarball per macOS platform, an identical
-// packages/qaren-plugin copy and the producer's own digests.
 export function assertPreparedCandidate(input) {
   const candidateSha = assertSha('candidate SHA', input.candidateSha);
   const version = assertVersion(input.pluginVersion);
@@ -193,7 +189,7 @@ export function assertPreparedCandidate(input) {
   const platforms = Object.keys(qaren).sort();
   if (canonical(platforms) !== canonical([...QAREN_PLATFORMS].sort())) {
     refuse(
-      'the candidate trust root must list exactly one qaren tarball per macOS platform ' +
+      'the candidate trust root must list exactly the Apple silicon qaren tarball ' +
         `(${QAREN_PLATFORMS.join(', ')}), got ${platforms.join(', ') || 'none'}`,
     );
   }
@@ -256,7 +252,7 @@ export function decideRunnerPublication(input) {
       : !names.has(expected.ios) || !names.has(expected.android)
         ? `release v${version} is published without both runner zips`
         : Object.values(expected.qaren).some((name) => !names.has(name))
-          ? `release v${version} is published without both qaren tarballs`
+          ? `release v${version} is published without the Apple silicon qaren tarball`
           : !names.has(expected.manifest)
             ? `release v${version} is published without its runner-manifest.json`
             : published === null

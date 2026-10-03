@@ -144,8 +144,8 @@ jobs:
           cache-dependency-path: yarn.lock
       - run: corepack enable
       - run: corepack yarn install --immutable
-      - name: Rust targets for both macOS architectures
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Rust target for Apple silicon
+        run: rustup target add aarch64-apple-darwin
       - name: Two builds of one commit are byte-identical, the second with a relocated toolchain
         run: |
           V=$(jq -r '.version' packages/qaren-plugin/.claude-plugin/plugin.json)
@@ -161,12 +161,6 @@ jobs:
           RUSTC="$RELOCATED" CARGO_TARGET_DIR="$RUNNER_TEMP/fresh-target" \
             node scripts/build-qaren-tarball.ts --version "$V" --platform darwin-arm64 --out-dir "$RUNNER_TEMP/second"
           cmp "$RUNNER_TEMP/first/qaren-$V-darwin-arm64.tar.gz" "$RUNNER_TEMP/second/qaren-$V-darwin-arm64.tar.gz"
-      - name: x64 cross-build carries an x86_64 binary
-        run: |
-          node scripts/build-qaren-tarball.ts --version "$V" --platform darwin-x64 --out-dir "$RUNNER_TEMP/x64"
-          mkdir "$RUNNER_TEMP/x64/x"
-          tar -xzf "$RUNNER_TEMP/x64/qaren-$V-darwin-x64.tar.gz" -C "$RUNNER_TEMP/x64/x"
-          [ "$(lipo -archs "$RUNNER_TEMP/x64/x/qaren-$V-darwin-x64/bin/qaren")" = x86_64 ]
       - name: SessionStart hook, verified install, then qaren --version (no device)
         run: |
           TARBALL="$RUNNER_TEMP/first/qaren-$V-darwin-arm64.tar.gz"

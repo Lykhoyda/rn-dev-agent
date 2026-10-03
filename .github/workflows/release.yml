@@ -12,7 +12,7 @@ name: Release
 #
 #   version   -> retire any armed auto-merge, create/update the Version PR,
 #                pin the generated candidate P (one commit on top of main B)
-#   prepare   -> build both runner zips and both macOS qaren tarballs at P
+#   prepare   -> build both runner zips and the Apple silicon qaren tarball at P
 #                (runner-artifacts.yml, read-only, no persisted credential) and
 #                retain them with producer digests
 #   finalize  -> generate runner-manifest.json + its packages/qaren-plugin
@@ -224,8 +224,6 @@ jobs:
       ANDROID_BYTES: ${{ needs.prepare.outputs.android-bytes }}
       QAREN_ARM64_SHA256: ${{ needs.prepare.outputs.qaren-darwin-arm64-sha256 }}
       QAREN_ARM64_BYTES: ${{ needs.prepare.outputs.qaren-darwin-arm64-bytes }}
-      QAREN_X64_SHA256: ${{ needs.prepare.outputs.qaren-darwin-x64-sha256 }}
-      QAREN_X64_BYTES: ${{ needs.prepare.outputs.qaren-darwin-x64-bytes }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — same pin as ci.yml
         with:
@@ -239,7 +237,7 @@ jobs:
       # never a name lookup that another run could satisfy.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1 — SHA pin
         with:
-          artifact-ids: ${{ needs.prepare.outputs.ios-artifact-id }},${{ needs.prepare.outputs.android-artifact-id }},${{ needs.prepare.outputs.qaren-darwin-arm64-artifact-id }},${{ needs.prepare.outputs.qaren-darwin-x64-artifact-id }}
+          artifact-ids: ${{ needs.prepare.outputs.ios-artifact-id }},${{ needs.prepare.outputs.android-artifact-id }},${{ needs.prepare.outputs.qaren-darwin-arm64-artifact-id }}
           path: handoff
           merge-multiple: true
 
@@ -257,7 +255,6 @@ jobs:
           check "rn-fast-runner-$VERSION-sim.zip" "$IOS_SHA256" "$IOS_BYTES"
           check "rn-android-runner-$VERSION.zip" "$ANDROID_SHA256" "$ANDROID_BYTES"
           check "qaren-$VERSION-darwin-arm64.tar.gz" "$QAREN_ARM64_SHA256" "$QAREN_ARM64_BYTES"
-          check "qaren-$VERSION-darwin-x64.tar.gz" "$QAREN_X64_SHA256" "$QAREN_X64_BYTES"
 
       - name: Generate the trust root and its distributed copy from the retained bytes
         run: |
@@ -266,7 +263,6 @@ jobs:
             --ios "handoff/rn-fast-runner-$VERSION-sim.zip" \
             --android "handoff/rn-android-runner-$VERSION.zip" \
             --qaren-darwin-arm64 "handoff/qaren-$VERSION-darwin-arm64.tar.gz" \
-            --qaren-darwin-x64 "handoff/qaren-$VERSION-darwin-x64.tar.gz" \
             --out runner-manifest.json
           # packages/qaren-plugin is the one directory every host installs.
           cp runner-manifest.json packages/qaren-plugin/runner-manifest.json
@@ -294,7 +290,7 @@ jobs:
             echo "## Release candidate v$VERSION"
             echo "- main: $CANDIDATE^ · generated candidate: $CANDIDATE · release head: $H"
             echo "- iOS zip: $IOS_SHA256 ($IOS_BYTES bytes) · Android zip: $ANDROID_SHA256 ($ANDROID_BYTES bytes)"
-            echo "- qaren arm64: $QAREN_ARM64_SHA256 ($QAREN_ARM64_BYTES bytes) · qaren x64: $QAREN_X64_SHA256 ($QAREN_X64_BYTES bytes)"
+            echo "- qaren arm64: $QAREN_ARM64_SHA256 ($QAREN_ARM64_BYTES bytes)"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # GH #292: offline pre-merge validation of the release head H. Mirrors
@@ -336,8 +332,6 @@ jobs:
           ANDROID_TREE: ${{ needs.prepare.outputs.android-tree }}
           QAREN_ARM64_SHA256: ${{ needs.prepare.outputs.qaren-darwin-arm64-sha256 }}
           QAREN_ARM64_BYTES: ${{ needs.prepare.outputs.qaren-darwin-arm64-bytes }}
-          QAREN_X64_SHA256: ${{ needs.prepare.outputs.qaren-darwin-x64-sha256 }}
-          QAREN_X64_BYTES: ${{ needs.prepare.outputs.qaren-darwin-x64-bytes }}
         run: |
           [ "$(git rev-parse HEAD)" = "$HEAD" ] || { echo "::error::checkout is not the release head $HEAD" >&2; exit 1; }
           # The tarballs are built from the whole candidate, so H must be exactly P plus its trust root.
@@ -354,8 +348,7 @@ jobs:
             --plugin-manifest packages/qaren-plugin/runner-manifest.json \
             --ios-sha256 "$IOS_SHA256" --ios-bytes "$IOS_BYTES" \
             --android-sha256 "$ANDROID_SHA256" --android-bytes "$ANDROID_BYTES" \
-            --qaren-darwin-arm64-sha256 "$QAREN_ARM64_SHA256" --qaren-darwin-arm64-bytes "$QAREN_ARM64_BYTES" \
-            --qaren-darwin-x64-sha256 "$QAREN_X64_SHA256" --qaren-darwin-x64-bytes "$QAREN_X64_BYTES"
+            --qaren-darwin-arm64-sha256 "$QAREN_ARM64_SHA256" --qaren-darwin-arm64-bytes "$QAREN_ARM64_BYTES"
 
       # GH#439: same single-entrypoint rule as ci.yml — globs live in
       # package.json only (plain `yarn test`, no coverage: this job gates the
@@ -414,7 +407,7 @@ jobs:
       - if: needs.version.outputs.resume != 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1 — SHA pin
         with:
-          artifact-ids: ${{ needs.prepare.outputs.ios-artifact-id }},${{ needs.prepare.outputs.android-artifact-id }},${{ needs.prepare.outputs.qaren-darwin-arm64-artifact-id }},${{ needs.prepare.outputs.qaren-darwin-x64-artifact-id }}
+          artifact-ids: ${{ needs.prepare.outputs.ios-artifact-id }},${{ needs.prepare.outputs.android-artifact-id }},${{ needs.prepare.outputs.qaren-darwin-arm64-artifact-id }}
           path: handoff
           merge-multiple: true
 
@@ -427,8 +420,6 @@ jobs:
           ANDROID_BYTES: ${{ needs.prepare.outputs.android-bytes }}
           QAREN_ARM64_SHA256: ${{ needs.prepare.outputs.qaren-darwin-arm64-sha256 }}
           QAREN_ARM64_BYTES: ${{ needs.prepare.outputs.qaren-darwin-arm64-bytes }}
-          QAREN_X64_SHA256: ${{ needs.prepare.outputs.qaren-darwin-x64-sha256 }}
-          QAREN_X64_BYTES: ${{ needs.prepare.outputs.qaren-darwin-x64-bytes }}
         run: |
           # check <jq path of the asset> <producer sha256> <producer bytes>
           check() {
@@ -446,7 +437,6 @@ jobs:
           check '.assets.ios[0]' "$IOS_SHA256" "$IOS_BYTES"
           check '.assets.android[0]' "$ANDROID_SHA256" "$ANDROID_BYTES"
           check '.assets.qaren["darwin-arm64"]' "$QAREN_ARM64_SHA256" "$QAREN_ARM64_BYTES"
-          check '.assets.qaren["darwin-x64"]' "$QAREN_X64_SHA256" "$QAREN_X64_BYTES"
 
       - id: decide
         name: Decide against the release state for this version
@@ -461,8 +451,6 @@ jobs:
           ANDROID_BYTES: ${{ needs.prepare.outputs.android-bytes }}
           QAREN_ARM64_SHA256: ${{ needs.prepare.outputs.qaren-darwin-arm64-sha256 }}
           QAREN_ARM64_BYTES: ${{ needs.prepare.outputs.qaren-darwin-arm64-bytes }}
-          QAREN_X64_SHA256: ${{ needs.prepare.outputs.qaren-darwin-x64-sha256 }}
-          QAREN_X64_BYTES: ${{ needs.prepare.outputs.qaren-darwin-x64-bytes }}
         run: |
           # `gh release view` resolves drafts too; only GitHub's own 404 on the
           # tag lookup may then stand for "no release", never a failed listing.
@@ -498,7 +486,6 @@ jobs:
             --ios-sha256 "$IOS_SHA256" --ios-bytes "$IOS_BYTES" \
             --android-sha256 "$ANDROID_SHA256" --android-bytes "$ANDROID_BYTES" \
             --qaren-darwin-arm64-sha256 "$QAREN_ARM64_SHA256" --qaren-darwin-arm64-bytes "$QAREN_ARM64_BYTES" \
-            --qaren-darwin-x64-sha256 "$QAREN_X64_SHA256" --qaren-darwin-x64-bytes "$QAREN_X64_BYTES" \
             --release release.json \
             --tag-sha "$TAG" \
             --published-manifest published-manifest.json
@@ -516,13 +503,12 @@ jobs:
           IOS: ${{ steps.decide.outputs.ios }}
           ANDROID: ${{ steps.decide.outputs.android }}
           QAREN_ARM64: ${{ steps.decide.outputs.qaren-darwin-arm64 }}
-          QAREN_X64: ${{ steps.decide.outputs.qaren-darwin-x64 }}
           RUN_ID: ${{ github.run_id }}
         run: |
           bash scripts/release-notes-from-changelog.sh "$VERSION" candidate/CHANGELOG.md > release-notes.md
           printf '\nRelease source: %s (Version Packages PR #%s, prepared by workflow run %s).\n' "$HEAD" "$PR_NUMBER" "$RUN_ID" >> release-notes.md
           gh release create "v$VERSION" --draft --target "$HEAD" --title "v$VERSION" --notes-file release-notes.md
-          gh release upload "v$VERSION" "handoff/$IOS" "handoff/$ANDROID" "handoff/$QAREN_ARM64" "handoff/$QAREN_X64" candidate/runner-manifest.json
+          gh release upload "v$VERSION" "handoff/$IOS" "handoff/$ANDROID" "handoff/$QAREN_ARM64" candidate/runner-manifest.json
 
       # Runs for every path — a freshly staged draft, an already published
       # release on rerun, and a resumed candidate — so no release byte is ever
@@ -531,7 +517,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ASSETS=('.assets.ios[0]' '.assets.android[0]' '.assets.qaren["darwin-arm64"]' '.assets.qaren["darwin-x64"]')
+          ASSETS=('.assets.ios[0]' '.assets.android[0]' '.assets.qaren["darwin-arm64"]')
           mkdir -p readback
           PATTERNS=()
           for A in "${ASSETS[@]}"; do PATTERNS+=(--pattern "$(jq -r "${A}.name" candidate/runner-manifest.json)"); done
