@@ -242,6 +242,16 @@ function nonEmpty(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+// iOS's own scroll-bar position is not app data; the indicator keeps its label.
+function nativeValue(n: NativeNode): string | undefined {
+  const value = nonEmpty(n.value);
+  return n.type === 'Other' &&
+    /^(vertical|horizontal)\s+scroll\s+bar(?:,?\s*\d+\s+pages?)?$/i.test(n.label?.trim() ?? '') &&
+    /^\d{1,3}%$/.test(value ?? '')
+    ? undefined
+    : value;
+}
+
 function norm(value: string | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
@@ -481,6 +491,7 @@ export function join(
     }
     let kind = kindOf(n.type);
     const nativeKind = kind;
+    const nodeValue = nativeValue(n);
     const host = associatedHosts.get(nodeIndex);
     // Over-associated on purpose: any React hint of interactivity keeps press unknown.
     const reactCandidates = digest.filter(
@@ -563,7 +574,7 @@ export function join(
     );
     if (
       nativeKind === 'input' ||
-      (nativeKind === 'other' && !!nonEmpty(n.value)) ||
+      (nativeKind === 'other' && !!nodeValue) ||
       kind === 'input' ||
       element.secure ||
       possibleDigestInput ||
@@ -582,7 +593,7 @@ export function join(
               ? 'unsupported'
               : 'unknown',
         values: [
-          nonEmpty(n.value),
+          nodeValue,
           digestValue(match?.value),
           ...reactCandidates.map((d) => digestValue(d.value)),
           ...(privateNativeLabel ? [label] : []),
@@ -592,7 +603,7 @@ export function join(
           ANDROID_KINDS.some(([suffix, kind]) => kind === 'input' && n.type?.endsWith(suffix)),
       });
     // Secure values stay in private boundary data, never in the public value property.
-    const value = element.secure ? undefined : (digestValue(match?.value) ?? nonEmpty(n.value));
+    const value = element.secure ? undefined : (digestValue(match?.value) ?? nodeValue);
     if (value !== undefined) element.value = value;
     const placeholder = nonEmpty(match?.placeholder);
     if (placeholder) element.placeholder = placeholder;

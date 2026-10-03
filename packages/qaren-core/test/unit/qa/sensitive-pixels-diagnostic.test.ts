@@ -548,3 +548,58 @@ test('a walk over a sensitive screen persists the same ledger and screenshots wi
     });
   }
 });
+
+// Accepted residual: an app element mimicking this label with a bare percent shows it.
+test('iOS system scroll-bar indicators with a bare percent value do not withhold pixels', async () => {
+  for (const specs of [
+    [{ type: 'Other', label: 'Vertical scroll bar, 1 page', value: '0%' }, text('Welcome')],
+    [
+      { type: 'Other', label: 'Vertical scroll bar, 3 pages', value: '0%' },
+      { type: 'Other', label: ' Horizontal scroll bar, 2 pages ', value: ' 0% ' },
+      { type: 'Other', label: 'vertical scroll bar', value: '100%' },
+      text('Home'),
+    ],
+  ] as Spec[][]) {
+    const run = await observe(specs);
+    assert.equal(run.canScreenshot, true, JSON.stringify(specs));
+    assert.equal(run.count, 0);
+    assert.equal(sensitivePixelsReasons(run.screen as Screen, run.nodes), undefined);
+    const bar = (run.screen as Screen).elements.find((e) => e.label?.includes('scroll bar'));
+    assert.ok(bar?.label, 'the system label is kept');
+    assert.equal(bar.value, undefined);
+  }
+});
+
+test('anything short of an exact system scroll-bar Other with a bare percent stays withheld', async () => {
+  for (const spec of [
+    { type: 'Other', label: 'Vertical scroll bar, 1 page', value: SECRET },
+    { type: 'Other', label: 'Progress', value: '42%' },
+    { type: 'Other', value: '42%' },
+    { type: 'Other', value: '42 kg' },
+    { type: 'Other', label: 'Vertical scroll bar, 2 pages done', value: '42%' },
+    { type: 'Other', label: 'My vertical scroll bar', value: '42%' },
+    { type: 'Other', label: 'Diagonal scroll bar', value: '42%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '42 %' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '42.5%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '%42' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '1000%' },
+    { type: 'Element(35)', label: 'Vertical scroll bar, 1 page', value: '50%' },
+    { type: 'Slider', label: 'Vertical scroll bar, 1 page', value: '50%' },
+    { type: 'TextField', label: 'Vertical scroll bar, 1 page', value: '50%' },
+  ] as Spec[]) {
+    const run = await observe([spec, text('Welcome')]);
+    assert.equal(run.canScreenshot, false, JSON.stringify(spec));
+    assert.equal(run.count, 1, JSON.stringify(spec));
+  }
+});
+
+test('a scroll-bar indicator beside a secure field or a real input leaves them withheld', async () => {
+  const bar: Spec = { type: 'Other', label: 'Vertical scroll bar, 1 page', value: '0%' };
+  const secure = await observe([bar, { type: 'SecureTextField' }]);
+  assert.equal(secure.canScreenshot, false);
+  assert.deepEqual(secure.line, { v: 1, r1: 0, secure: 1, r3: 0, types: [], omittedTypes: 0 });
+  const input = await observe([bar, { type: 'TextField', label: 'Email', value: 'a@b.test' }]);
+  assert.equal(input.canScreenshot, false);
+  assert.deepEqual(input.line.types, [['TextField', 1]]);
+  assert.equal(input.line.r1, 1);
+});
