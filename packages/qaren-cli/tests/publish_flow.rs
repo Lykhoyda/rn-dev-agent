@@ -217,7 +217,7 @@ fn cancelled_runs_refuse_new_and_resumed_publication_without_side_effects() {
         }
         let mut runner = Git(MockRunner::new());
         let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
-        assert_eq!(receipt.result, ReceiptResult::Failed);
+        assert_eq!(receipt.result, ReceiptResult::Refused);
         let failure = receipt.failure.unwrap();
         assert_eq!(failure.code, qaren::failure::FailureCode::RunCancelled);
         assert!(failure.code.is_refusal());

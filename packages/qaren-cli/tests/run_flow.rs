@@ -3714,7 +3714,7 @@ fn cancelled_pr_walks_with_or_without_source_drift_cannot_publish() {
             &repo.join("verdict.md"),
             &qaren::redact::MachineIdentity::default(),
         );
-        assert_eq!(published.result, ReceiptResult::Failed);
+        assert_eq!(published.result, ReceiptResult::Refused);
         assert_eq!(published.failure.unwrap().code, FailureCode::RunCancelled);
         assert!(publisher.calls.is_empty());
         assert!(!dir.join("publication.json").exists());

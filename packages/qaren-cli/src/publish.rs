@@ -647,6 +647,7 @@ pub fn publish(
     );
     let (result, failure) = match outcome {
         Ok(()) => (ReceiptResult::Published, None),
+        Err(f) if f.code.is_refusal() => (ReceiptResult::Refused, Some(f)),
         Err(f) => (ReceiptResult::Failed, Some(f)),
     };
     let mut receipt = Receipt::new(

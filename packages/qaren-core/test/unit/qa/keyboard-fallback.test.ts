@@ -8,7 +8,7 @@ import { parsePlan } from '../../../dist/qa/plan.js';
 import type { Block, Step } from '../../../dist/qa/plan.js';
 import { join as joinScreen } from '../../../dist/qa/screen.js';
 import type { Element, Screen } from '../../../dist/qa/screen.js';
-import { keyboardFallbackTarget } from '../../../dist/qa/resolve.js';
+import { keyboardFallbackTarget, prepareTarget } from '../../../dist/qa/resolve.js';
 import { KEYBOARD_READY_CAPTURES, runPlan, walkBlock } from '../../../dist/qa/walker.js';
 import type { ActResult, BlockStore, WalkerDeps } from '../../../dist/qa/walker.js';
 import type { Ledger, LedgerRow, WalkResult } from '../../../dist/qa/ledger.js';
@@ -926,6 +926,89 @@ test('React-only inputs do not block or become keyboard fallback targets', () =>
   assert.equal(keyboardFallbackTarget(fill('qa-hidden-email'), joined)?.element.ref, '@wrap');
   const reactOnly = joinScreen([], [{ role: 'textinput', testID: 'qa-hidden-email' }]);
   assert.equal(keyboardFallbackTarget(fill('qa-hidden-email'), reactOnly), undefined);
+});
+
+function hiddenInputScreen(reactKnown = true): Screen {
+  return joinScreen(
+    [
+      {
+        ref: '@wrap',
+        identifier: 'custom-pressable-pressable',
+        type: 'Other',
+        hittable: true,
+        rect: { x: 20, y: 100, width: 360, height: 60 },
+      },
+    ],
+    reactKnown
+      ? [{ role: 'textinput', testID: 'custom-pressable', capabilities: { fill: true } }]
+      : [],
+    'app',
+    { native: 'complete', react: reactKnown ? 'complete' : 'unknown' },
+  );
+}
+
+for (const reactKnown of [true, false]) {
+  test(`strict hidden fill reaches keyboard fallback with React evidence ${reactKnown}`, () => {
+    const joined = hiddenInputScreen(reactKnown);
+    const step = fill('custom-pressable');
+    const strict = prepareTarget(step, joined);
+    assert.ok('refuse' in strict);
+    assert.equal(strict.refuse, 'TARGET_NOT_FOUND');
+    assert.deepEqual(keyboardFallbackTarget(step, joined), {
+      element: joined.elements[0],
+      oracleTestID: 'custom-pressable',
+    });
+    assert.equal(joined.elements.some((e) => e.ref.startsWith('react:')), reactKnown);
+  });
+
+  test(`joined hidden input walks without scrolling with React evidence ${reactKnown}`, async () => {
+    const joined = hiddenInputScreen(reactKnown);
+    const fake = app({ initial: joined.elements, initialKeyboard: false });
+    const result = await walkBlock(blocks(plan(EMAIL, 'custom-pressable', ''))[0], fake.deps);
+    assert.equal(result.block.outcome, 'pass', JSON.stringify(result.failure));
+    assert.deepEqual(steps(fake.log), ['press @wrap', 'type @wrap']);
+    assert.deepEqual(fake.typed, [{ ref: '@wrap', text: EMAIL, testID: 'custom-pressable' }]);
+    assert.equal(fake.rows[0].outcome, 'pass');
+    assert.match(fake.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
+  });
+}
+
+for (const belowFold of [true, false]) {
+  test(`native input ${belowFold ? 'below the fold scrolls' : 'on screen resolves strictly'}`, () => {
+    const joined = joinScreen(
+      [
+        {
+          ref: '@window',
+          type: 'Application',
+          rect: { x: 0, y: 0, width: 400, height: 800 },
+        },
+        {
+          ref: '@input',
+          identifier: 'custom-pressable',
+          type: 'TextField',
+          hittable: !belowFold,
+          rect: { x: 20, y: belowFold ? 900 : 100, width: 360, height: 60 },
+        },
+      ],
+      [{ role: 'textinput', testID: 'custom-pressable', capabilities: { fill: true } }],
+    );
+    assert.deepEqual(
+      prepareTarget(fill('custom-pressable'), joined),
+      belowFold ? { scroll: 'down' } : { ref: '@input', element: joined.elements[1] },
+    );
+    assert.equal(keyboardFallbackTarget(fill('custom-pressable'), joined), undefined);
+  });
+}
+
+test('pressing a React-only input still requests scrolling', () => {
+  const joined = hiddenInputScreen();
+  assert.deepEqual(
+    prepareTarget(
+      { kind: 'press', target: { quoted: 'custom-pressable', phrase: 'custom-pressable' } },
+      joined,
+    ),
+    { scroll: 'down' },
+  );
 });
 
 for (const guard of ['secure', 'ambiguous', 'unrelated refusal']) {

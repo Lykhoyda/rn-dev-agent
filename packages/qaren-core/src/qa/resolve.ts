@@ -99,7 +99,9 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
   if ('refuse' in projected) return projected;
   const eligible = projected.elements.filter(
     (e) =>
-      semantic || ((visibility || !e.disabled) && (step.kind !== 'fill' || e.kind === 'input')),
+      semantic ||
+      ((visibility || !e.disabled) &&
+        (step.kind !== 'fill' || (e.kind === 'input' && !e.ref.startsWith('react:')))),
   );
   const candidates = eligible;
   if (target.quoted !== undefined) {
