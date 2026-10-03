@@ -44,6 +44,36 @@ targets resolve observed labels or test IDs locally; multiple eligible matches
 refuse with `TARGET_AMBIGUOUS`, without a Jev tie-break, even if the target adds
 positional words such as `Tap "Save" at the bottom`.
 
+### Fill verification and keyboard fallback
+
+Fills use strict native value verification first. During discovery, a quoted
+iOS fill can use keyboard fallback when no observable native input resolves, or
+strict binding refuses `NO_TEXT_INPUT_TARGET` before any text mutation for a
+non-native-input target. Phrase fills and stored replay selectors do not use
+this fallback; ambiguous targets and potentially mutated fills still fail.
+
+Fallback requires one onscreen, enabled, nonsecure native element carrying a
+unique testID, with no matching observable native input or secure node. The
+keyboard must be proven hidden before the single tap. Every binding after the
+tap, including refreshed strict bindings, must uniquely resolve the original
+testID or its `-pressable` wrapper-base identity; a matching label cannot
+substitute for that identity. If the same input becomes natively observable,
+strict verification resumes. Otherwise the keyboard must become visible and
+the target must remain eligible. React evidence that the intended input is
+unfocused vetoes typing; unavailable React focus evidence does not prove focus.
+
+QaReN then types once into the focused field without final value validation.
+A successful keyboard step records a passing row with reason `UNVERIFIED_FILL`,
+allowing later plan steps to continue; it does not establish the field's final
+value. Failed keyboard typing is not retried. Before the tap, the value is
+protected from reporting and model requests, including substring echoes, and
+screenshots are withheld for the rest of the walk. The block remains unsaved,
+including when the tap leads back to strict verification. The eligibility and
+identity rules are owned by the [resolver](../qaren-core/src/qa/resolve.ts) and
+covered by the [fallback tests](../qaren-core/test/unit/qa/keyboard-fallback.test.ts).
+
+### Plan checks and screen evidence
+
 A check is literal only when its entire payload is one quoted string:
 `✓ "Welcome"`. Text outside the quotes, as in
 `✓ The heading shows "Welcome" and no error is visible`, makes the whole
@@ -159,8 +189,9 @@ subject to the short-value limitation below. Once sensitive input pixels or a
 protected value's visible echo are observed, screenshots are withheld for the
 rest of the walk.
 Masks preserve identity for comparisons and do not prove unobserved value content.
-Typed values shorter than three characters that were never observed as private
-input values can remain plaintext in unquoted reporting text; model masking
+Typed values outside protected fills that are shorter than three characters
+and were never observed as private input values can remain plaintext in
+unquoted reporting text; model masking
 matches them only as separate tokens. This known limitation is tracked in ANT-283.
 
 iOS interactions check app existence immediately and wait only when the app is
@@ -252,12 +283,14 @@ line and later ones are rewritten, and every `✓` comment stays byte-identical.
 is never re-walked or rewritten. Timeout and ambiguous screen-movement recovery
 remain deferred; app-process changes stay terminal. A failing block is never saved;
 blocks that passed earlier in the run remain saved. A step without a `testID`
-or label, a phrase wait, or a fill into a secure or private input leaves the block
+or label, a phrase wait, a fill into a secure or private input, or an attempt at
+[keyboard fallback](#fill-verification-and-keyboard-fallback) leaves the block
 unsaved and the ledger says why without naming any value; ordinary fills keep their
 plan literal in the saved block. A previously saved block replayed against a now-private
 input also reports withholding without rewriting or deleting the existing action.
-When saving a discovered or patched block, exact substrings of values typed by
-earlier private fills in the same run withhold the block if present in header fields,
+Discovered or patched block writes are deferred until the walk finishes. Exact
+substrings of values protected by private fills anywhere in the same run
+withhold the block if present in header fields,
 raw comments, fill literals, literal assertions or stored selectors. The value-free
 reason is `contains a protected plan-typed value` in `blocks_not_saved`. This save
 guard uses recorded private-fill facts only; prefilled secure values and values only

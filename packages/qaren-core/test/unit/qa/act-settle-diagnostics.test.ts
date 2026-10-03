@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
+import { extractMutationDisposition } from '../../../dist/handlers/device-interact.js';
 import { HandlerError, describeError, unwrap } from '../../../dist/qa/adapt.js';
 import { isRecord } from '../../../dist/qa/questions.js';
 import { createStop } from '../../../dist/qa/stop.js';
@@ -19,6 +20,7 @@ function fixture(throwSink = false) {
   const act: (handler: () => Promise<ToolResult>, proven: boolean) => Promise<ActResult> =
     runInNewContext(`${source.slice(from, to)}; act`, {
       HandlerError,
+      extractMutationDisposition,
       describeError,
       unwrap,
       isRecord,

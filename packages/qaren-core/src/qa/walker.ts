@@ -4,13 +4,17 @@ import {
   type Screen,
   type VisibilityBlockerDiagnostic,
   screenSignature,
+  isNativeInput,
 } from './screen.js';
 import {
+  type Resolution,
   type ScreenDecision,
   CHECK,
   ResolutionError,
   decideScreen,
   elementSelector,
+  keyboardFallbackTarget,
+  bindFillIdentity,
   stepTarget,
   targetVisible,
   visibleSelector,
@@ -56,6 +60,7 @@ export interface ActResult {
   ok: boolean;
   proven: boolean;
   error?: string;
+  mutation?: 'none' | 'observed' | 'possible';
 }
 
 export interface WalkerDeps {
@@ -63,6 +68,13 @@ export interface WalkerDeps {
   captureScreen(options?: { platformPresence?: boolean; timing?: TimingObserver }): Promise<Screen>;
   press(ref: string, context: QaDispatchContext): Promise<ActResult>;
   fill(ref: string, text: string, context: QaDispatchContext): Promise<ActResult>;
+  // iOS only: type without final validation; testID identifies the pre-dispatch focus veto.
+  typeFocused?(
+    ref: string,
+    text: string,
+    testID: string | undefined,
+    context: QaDispatchContext,
+  ): Promise<ActResult>;
   scroll(direction: 'down' | 'up', context: QaDispatchContext): Promise<ActResult>;
   back(context: QaDispatchContext): Promise<ActResult>;
   dialog(action: 'accept' | 'dismiss', context: QaDispatchContext): Promise<ActResult>;
@@ -114,6 +126,8 @@ class EvidenceExpired extends Error {
 export const WAIT_BUDGET_MS = 15_000;
 export const WAIT_POLL_MS = 500;
 export const SCROLL_ATTEMPTS = 6;
+export const KEYBOARD_READY_MS = 1_500;
+export const KEYBOARD_READY_CAPTURES = 3;
 
 export interface WalkOutcome {
   block: BlockResult;
@@ -602,6 +616,95 @@ export async function walkBlock(
       });
     };
   };
+  // Best effort: the field is not an observable native input, so only the tap and the keyboard prove anything.
+  const keyboardFallback = async (
+    item: Item & { kind: 'fill' },
+    attempt: number,
+    before: Observation,
+    target: { element: Element; oracleTestID: string },
+  ): Promise<
+    | WalkOutcome
+    | { ref: string; element: Element; observation: Observation; identity: string }
+    | 'typed'
+  > => {
+    const quoted = item.target.quoted!;
+    const nothingTyped = (reason: string, screen: Screen): WalkOutcome =>
+      failed(item, attempt, `${reason}; nothing was typed`, screen, undefined);
+    if (before.screen.keyboardVisible !== false)
+      return nothingTyped(
+        before.screen.keyboardVisible
+          ? `the keyboard is already up before tapping "${quoted}"`
+          : `the keyboard state before tapping "${quoted}" is unknown`,
+        before.screen,
+      );
+    privacy.concealFallback(item.text);
+    privateFills.push(item.line);
+    let tap: ActResult;
+    try {
+      tap = await mutate(item, before, (context) => deps.press(target.element.ref, context));
+    } catch (error) {
+      if (error instanceof EvidenceExpired)
+        return nothingTyped(`the evidence expired before tapping "${quoted}"`, before.screen);
+      throw error;
+    }
+    if (!tap.ok)
+      return nothingTyped(
+        `${tap.error ?? 'the tap was not dispatched'}; tapping "${quoted}" failed`,
+        before.screen,
+      );
+    const readyBy = deps.now() + KEYBOARD_READY_MS;
+    let after = await capture(item);
+    const bound = () => bindFillIdentity(item, after.screen, target.oracleTestID);
+    for (
+      let captures = 1;
+      after.screen.keyboardVisible !== true &&
+      bound()?.kind !== 'strict' &&
+      captures < KEYBOARD_READY_CAPTURES &&
+      deps.now() < readyBy;
+      captures += 1
+    ) {
+      await pause(Math.min(WAIT_POLL_MS, Math.max(0, readyBy - deps.now())));
+      after = await capture(item);
+    }
+    const binding = bound();
+    if (binding?.kind === 'strict')
+      return { ...binding.strict, observation: after, identity: target.oracleTestID };
+    if (after.screen.keyboardVisible !== true)
+      return nothingTyped(`tapping "${quoted}" raised no keyboard`, after.screen);
+    const again = binding?.kind === 'fallback' ? binding.fallback : undefined;
+    if (!again) return nothingTyped(`the tap on "${quoted}" changed the screen`, after.screen);
+    let entry: ActResult;
+    try {
+      entry = await mutate(item, after, (context) =>
+        deps.typeFocused!(again.element.ref, item.text, again.oracleTestID, context),
+      );
+    } catch (error) {
+      if (error instanceof EvidenceExpired)
+        return nothingTyped(
+          `the evidence expired before typing after tapping "${quoted}"`,
+          after.screen,
+        );
+      throw error;
+    }
+    if (!entry.ok)
+      return failed(
+        item,
+        attempt,
+        `${entry.error ?? 'typing was not dispatched'}; typing after tapping "${quoted}" was not retried`,
+        after.screen,
+        undefined,
+      );
+    await capture(item);
+    emit({
+      ...base(item, attempt),
+      ref: again.element.ref,
+      outcome: 'pass',
+      reason: redact(
+        `UNVERIFIED_FILL: typed with the keyboard after tapping "${quoted}"; the field is not an observable native input, so its final value was not validated`,
+      ),
+    });
+    return 'typed';
+  };
 
   for (const item of block.items) {
     if (opts.fromLine !== undefined && item.line < opts.fromLine) continue;
@@ -748,6 +851,9 @@ export async function walkBlock(
 
       // press · fill · back · dialog: snapshot → resolve → act → read-back → snapshot → diff rule
       let outcome: WalkOutcome | undefined;
+      let fellBack = false;
+      let fillIdentity: string | undefined;
+      let typedUnverified = false;
       for (let attempt = 1; attempt <= 2 && !outcome; attempt += 1) {
         currentAttempt = attempt;
         const held = cached?.item === item ? cached : undefined;
@@ -769,8 +875,43 @@ export async function walkBlock(
               const decision = await decide(before, undefined, item, Infinity, initial);
               initial = undefined;
               resolvedBy = decision.resolvedBy === 'jev' ? 'jev' : resolvedBy;
-              const resolution = decision.target!;
-              if ('refuse' in resolution) throw new ResolutionError(resolution);
+              const binding =
+                item.kind === 'fill' && fillIdentity !== undefined
+                  ? bindFillIdentity(item, before.screen, fillIdentity)
+                  : undefined;
+              const decided =
+                fillIdentity !== undefined
+                  ? binding?.kind === 'strict'
+                    ? binding.strict
+                    : {
+                        refuse: 'TARGET_NOT_FOUND',
+                        reason: 'the original input identity no longer resolves uniquely',
+                      }
+                  : decision.target!;
+              let resolution: Exclude<Resolution, { refuse: string }>;
+              if ('refuse' in decided) {
+                const fallback =
+                  decided.refuse === 'TARGET_NOT_FOUND' &&
+                  item.kind === 'fill' &&
+                  deps.typeFocused &&
+                  !fellBack
+                    ? keyboardFallbackTarget(item, before.screen)
+                    : undefined;
+                if (!fallback || item.kind !== 'fill') throw new ResolutionError(decided);
+                fellBack = true;
+                const result = await keyboardFallback(item, attempt, before, fallback);
+                if (result === 'typed') {
+                  typedUnverified = true;
+                  break;
+                }
+                if ('block' in result) {
+                  outcome = result;
+                  break;
+                }
+                before = result.observation;
+                fillIdentity = result.identity;
+                resolution = result;
+              } else resolution = decided;
               if ('scroll' in resolution) {
                 if (scrolled) {
                   outcome = failed(
@@ -807,6 +948,10 @@ export async function walkBlock(
               ref = resolution.ref;
               element = resolution.element;
             }
+            if (item.kind === 'fill' && element && isPrivateInput(element)) {
+              privacy.concealFallback(item.text);
+              if (!privateFills.includes(item.line)) privateFills.push(item.line);
+            }
             act = await mutate(item, before, (context) =>
               item.kind === 'press'
                 ? deps.press(ref!, context)
@@ -818,6 +963,57 @@ export async function walkBlock(
                       ? deps.back(context)
                       : deps.dialog(item.action, context),
             );
+            if (
+              item.kind === 'fill' &&
+              item.target.quoted !== undefined &&
+              !item.target.exact &&
+              element !== undefined &&
+              !isNativeInput(element) &&
+              !act.ok &&
+              act.mutation === 'none' &&
+              act.error?.startsWith('NO_TEXT_INPUT_TARGET:') &&
+              deps.typeFocused &&
+              !fellBack
+            ) {
+              fellBack = true;
+              const targetID = element?.testID;
+              if (
+                !targetID ||
+                before.screen.elements.filter((e) => e.testID === targetID).length !== 1
+              ) {
+                outcome = failed(item, attempt, act.error, before.screen, undefined);
+                break;
+              }
+              before = await capture(item);
+              const binding = bindFillIdentity(
+                item,
+                before.screen,
+                targetID.replace(/-pressable$/, ''),
+              );
+              const fallback = binding?.kind === 'fallback' ? binding.fallback : undefined;
+              if (!fallback) {
+                outcome = failed(
+                  item,
+                  attempt,
+                  `${act.error}; no unique eligible keyboard fallback target after the strict refusal; nothing was typed`,
+                  before.screen,
+                  undefined,
+                );
+                break;
+              }
+              const result = await keyboardFallback(item, attempt, before, fallback);
+              if (result === 'typed') {
+                typedUnverified = true;
+                break;
+              }
+              if ('block' in result) {
+                outcome = result;
+                break;
+              }
+              before = result.observation;
+              fillIdentity = result.identity;
+              continue;
+            }
             break;
           } catch (error) {
             if (error instanceof EvidenceExpired && scrollNeedsReadback)
@@ -828,7 +1024,7 @@ export async function walkBlock(
             initial = undefined;
           }
         }
-        if (outcome) break;
+        if (outcome || typedUnverified) break;
         const after = await capture(item);
         // NOTE: a not-ok result is not a verdict; an act that timed out may still have landed.
         const changed = screenSignature(after.screen) !== screenSignature(before.screen);
@@ -836,9 +1032,7 @@ export async function walkBlock(
         diagnostic(item, after, 'decision', 'ACCEPTED');
         metric('readback', after);
         const shot = await shoot(item);
-        if (act!.proven || changed) {
-          if (item.kind === 'fill' && element && isPrivateInput(element))
-            privateFills.push(item.line);
+        if (item.kind === 'fill' ? act!.ok && act!.proven : act!.proven || changed) {
           const target = stepTarget(item);
           emit({
             ...base(item, attempt),
@@ -849,6 +1043,17 @@ export async function walkBlock(
             ),
             outcome: 'pass',
           });
+          break;
+        }
+        if (item.kind === 'fill' && act!.mutation !== 'none') {
+          outcome = failed(
+            item,
+            attempt,
+            `${act!.error ?? 'TEXT_ENTRY_UNVERIFIED: the fill was not verified'}; the fill may have mutated the field; not retrying`,
+            after.screen,
+            shot,
+            ref,
+          );
           break;
         }
         if (attempt === 1) {
@@ -901,6 +1106,7 @@ export async function walkBlock(
         return {
           block: { key, outcome: 'fail', source: 'discovered' },
           rows,
+          ...(privateFills.length ? { privateFills } : {}),
           failure: { step: item.line, seen: safe.message },
           refusal: { code: safe.code, message: safe.message },
         };
@@ -1049,7 +1255,10 @@ export async function runPlan(
         : results.length > 0 && results.every((r) => r.source === 'replayed')
           ? 'replay'
           : 'walk';
+    // Saved after the last block, so an earlier block cannot keep a value a later fill made private.
+    const pending: { index: number; write: () => BlockResult }[] = [];
     const finish = (outcome?: WalkOutcome): WalkResult => {
+      for (const { index, write } of pending.splice(0)) results[index] = write();
       const ledger: WalkResult = {
         ...buildLedger(results, steps, outcome?.failure, calls(), path()),
         videoPublication: videoPublication(),
@@ -1079,6 +1288,19 @@ export async function runPlan(
       source: BlockResult['source'],
       store: BlockStore,
       privateFills: number[] = [],
+    ): BlockResult => {
+      pending.push({
+        index: results.length,
+        write: () => write(block, rows, source, store, privateFills),
+      });
+      return { key: block.slug, outcome: 'pass', source };
+    };
+    const write = (
+      block: Block,
+      rows: LedgerRow[],
+      source: BlockResult['source'],
+      store: BlockStore,
+      privateFills: number[],
     ): BlockResult => {
       const result = withPrivateFills({ key: block.slug, outcome: 'pass', source }, privateFills);
       if (result.saved === false) return result;

@@ -36,6 +36,7 @@ export class AppProcessGoneError extends Error {
 
 export interface NativeObservation {
   appProcessIdentifier?: unknown;
+  keyboardVisible?: unknown;
   presenceCapture?: unknown;
   snapshotGeneration?: unknown;
   nodes?: NativeNode[];
@@ -516,6 +517,8 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
       (native.appProcessIdentifier as number) > 0
     )
       screen.appProcessIdentifier = native.appProcessIdentifier as number;
+    if (typeof native.keyboardVisible === 'boolean')
+      screen.keyboardVisible = native.keyboardVisible;
     if (deps.warn && captureCoverage.native === 'complete' && withinBudget) {
       const warn = deps.warn;
       captureDiagnostics.set(screen, () => {

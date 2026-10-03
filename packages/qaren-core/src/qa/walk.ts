@@ -8,6 +8,7 @@ import { createDevSettingsHandler } from '../handlers/dev-settings.js';
 import {
   createDeviceBackHandler,
   createDeviceFillHandler,
+  extractMutationDisposition,
   createDevicePressHandler,
   createDeviceScrollHandler,
 } from '../handlers/device-interact.js';
@@ -154,6 +155,7 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
     return Promise.resolve({
       ok: false,
       proven: false,
+      mutation: 'none',
       error: 'RUN_CANCELLED: the device session is closing',
     });
   return stop.track(handler).then(
@@ -165,13 +167,28 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
       } catch (error) {
         logActionSettle(error instanceof HandlerError ? error.meta : undefined);
         const { code, message } = describeError(error);
-        return { ok: false, proven: false, error: `${code}: ${message}` };
+        return {
+          ok: false,
+          proven: false,
+          mutation: extractMutationDisposition(result),
+          error: `${code}: ${message}`,
+        };
       }
     },
     (error) => {
       logActionSettle(error instanceof HandlerError ? error.meta : undefined);
       const { code, message } = describeError(error);
-      return { ok: false, proven: false, error: `${code}: ${message}` };
+      return {
+        ok: false,
+        proven: false,
+        mutation:
+          error instanceof HandlerError && error.meta?.mutation === 'none'
+            ? 'none'
+            : error instanceof HandlerError && error.meta?.mutation === 'observed'
+              ? 'observed'
+              : 'possible',
+        error: `${code}: ${message}`,
+      };
     },
   );
 }
@@ -307,6 +324,7 @@ async function openSession(
     >(result);
     return {
       appProcessIdentifier: data.appProcessIdentifier,
+      keyboardVisible: data.keyboardVisible,
       nodes: data.nodes,
       presenceCapture: data.presenceCapture,
       snapshotGeneration: data.snapshotGeneration,
@@ -385,7 +403,25 @@ async function openSession(
     diagnostic: (event) => log(`timing ${JSON.stringify(event)}`),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     row: emitRow,
-    ...(platform === 'ios' ? { appProcess: {} } : {}),
+    ...(platform === 'ios'
+      ? {
+          appProcess: {},
+          typeFocused: (ref, text, testID, qaContext) =>
+            act(
+              () =>
+                fill({
+                  ref,
+                  text,
+                  ...(testID ? { testID } : {}),
+                  focused: true,
+                  vetoUnfocused: true,
+                  skipFinalValidation: true,
+                  qaContext,
+                }),
+              false,
+            ),
+        }
+      : {}),
   };
   return {
     deps,

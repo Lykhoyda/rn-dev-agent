@@ -654,7 +654,7 @@ export interface ExactFillBinding {
 
 export type ExactBindOutcome =
   | { ok: true; binding: ExactFillBinding }
-  | { ok: false; detail: string };
+  | { ok: false; detail: string; unobservable?: true };
 
 function cleanNodeRef(node: SnapshotNode): string {
   return node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
@@ -781,12 +781,14 @@ export function bindExactFillTarget(
       }
       return {
         ok: false,
+        unobservable: true,
         detail: `wrapper "${id}" has no recognized input with testID "${base}" in the current snapshot`,
       };
     }
   }
   return {
     ok: false,
+    unobservable: true,
     detail: `element @${cleanNodeRef(node)} (${node.type ?? 'unknown type'}) is not a recognized text input — pass the inner input's ref or testID`,
   };
 }
@@ -938,6 +940,9 @@ export interface FillArgs {
   testID?: string;
   /** Type into the field that already has keyboard focus instead of binding an input. */
   focused?: boolean;
+  /** With focused: refuse before typing when the React read of the intended input reports it unfocused. */
+  vetoUnfocused?: boolean;
+  skipFinalValidation?: boolean;
   /** Story 04 (#385): per-call settle budget override in ms. */
   settleTimeoutMs?: number;
 }
@@ -1202,7 +1207,7 @@ export async function performExactFill(
   }
   const bind = bindExactFillTarget(snap.nodes, args.ref, priorSignature);
   if (!bind.ok) {
-    args.qaContext?.invalidate();
+    if (!bind.unobservable) args.qaContext?.invalidate();
     const focusedHint =
       getActiveSession()?.platform !== 'android' &&
       (bind.detail.startsWith('wrapper "') ||
@@ -1446,6 +1451,12 @@ export async function performFocusedFill(
   }
   const oracleTestId = focusedFillOracleTestId(args);
   const beforeRead = await readReactInputValue(client, oracleTestId);
+  if (args.vetoUnfocused && beforeRead && !beforeRead.focused)
+    return fillFailure(
+      'NO_TEXT_INPUT_TARGET',
+      'device_fill focused: the intended input is not focused; no text was entered.',
+      { mutation: 'none', pathsTried },
+    );
   const before = controlledReactValue(beforeRead);
   const native = await runNative(['fill', args.ref, args.text], {
     qaContext: args.qaContext,
@@ -1483,7 +1494,8 @@ export async function performFocusedFill(
       },
       'Typed into the focused field; the value could not be confirmed. Confirm with device_screenshot or expect_text before relying on it.',
     );
-  if (before === null || beforeRead?.focused !== true) return unverified();
+  if (args.skipFinalValidation || before === null || beforeRead?.focused !== true)
+    return unverified();
   const verification = await awaitReactInputValue(
     () => readReactInputValue(client, oracleTestId),
     before + args.text,

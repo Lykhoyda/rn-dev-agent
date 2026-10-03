@@ -9,6 +9,7 @@ import { captureScreen, type NativeObservation } from '../../../dist/qa/capture.
 import type { QaDispatchContext } from '../../../dist/domain/qa-dispatch.js';
 import type { Questions } from '../../../dist/qa/questions.js';
 import { captureQaReact } from '../../../dist/qa/react-capture.js';
+import { createDeviceFillHandler } from '../../../dist/handlers/device-interact.js';
 import { createDeviceSnapshotHandler } from '../../../dist/handlers/device-session.js';
 import { unwrap } from '../../../dist/qa/adapt.js';
 import { runPlan } from '../../../dist/qa/walker.js';
@@ -91,6 +92,15 @@ async function fixedPlanPipeline() {
       });
     const command = JSON.parse(String(init?.body));
     assert.ok(!Object.keys(command).some((key) => /timing|observe|now/i.test(key)));
+    if (command.command === 'verifyInput')
+      return Response.json({
+        ok: true,
+        v: 2,
+        data: {
+          verifyVerdict: command.text === value ? 'exact' : 'mismatch',
+          verifyStable: true,
+        },
+      });
     if (command.command !== 'snapshot') {
       changes++;
       if (command.command === 'tap') presses++;
@@ -165,6 +175,7 @@ async function fixedPlanPipeline() {
     },
   });
   const handler = createDeviceSnapshotHandler();
+  const fill = createDeviceFillHandler(() => null as never);
   const act = async (args: string[], context?: QaDispatchContext) => {
     const result = await runNative(args, { qaContext: context, settle: { enabled: false } });
     return { ok: !result.isError, proven: false };
@@ -229,7 +240,10 @@ async function fixedPlanPipeline() {
           }),
       }),
     press: (ref, context) => act(['press', ref], context),
-    fill: (ref, text, context) => act(['fill', ref, text], context),
+    fill: async (ref, text, qaContext) => {
+      unwrap(await fill({ ref, text, qaContext }));
+      return { ok: true, proven: true };
+    },
     scroll: (_direction, context) => act(['scroll', '10', '100', '10', '50'], context),
     back: () => assert.fail('not scheduled'),
     dialog: () => assert.fail('not scheduled'),

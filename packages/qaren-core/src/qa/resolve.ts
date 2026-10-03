@@ -6,6 +6,7 @@ import {
   type AssertionEvidence,
   type VisibilityBlockerDiagnostic,
   actionView,
+  isNativeInput,
   assertionView,
   describe,
   semanticActionView,
@@ -140,6 +141,76 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
       criteria,
     },
   };
+}
+
+const PRESSABLE_SUFFIX = '-pressable';
+const withoutPressable = (id: string): string =>
+  id.endsWith(PRESSABLE_SUFFIX) ? id.slice(0, -PRESSABLE_SUFFIX.length) : id;
+
+// The one non-input element a quoted fill may tap before typing through the keyboard; undefined keeps the strict refusal.
+export function keyboardFallbackTarget(
+  step: Step,
+  screen: Screen,
+): { element: Element; oracleTestID: string } | undefined {
+  if (step.kind !== 'fill' || step.target.quoted === undefined || step.target.exact) return;
+  const quoted = step.target.quoted;
+  const ids = new Set([quoted, withoutPressable(quoted), quoted + PRESSABLE_SUFFIX]);
+  const observable = screen.elements.some(
+    (e) =>
+      (isNativeInput(e) || e.secure) &&
+      [e.testID, e.label, e.placeholder].some((name) => name !== undefined && ids.has(name)),
+  );
+  if (observable) return;
+  const shown = actionView(screen).filter((e) => !e.ref.startsWith('react:'));
+  const named = shown.filter((e) => e.testID === quoted || e.label === quoted);
+  const candidates = named.length
+    ? named
+    : shown.filter((e) => e.testID === quoted + PRESSABLE_SUFFIX);
+  if (candidates.length !== 1) return;
+  const element = candidates[0];
+  if (
+    !element.testID ||
+    !withoutPressable(element.testID) ||
+    screen.elements.filter((e) => e.testID === element.testID).length !== 1 ||
+    element.offscreen ||
+    element.secure ||
+    isNativeInput(element) ||
+    element.semantic?.disabled === true
+  )
+    return;
+  return { element, oracleTestID: withoutPressable(element.testID) };
+}
+
+export function bindFillIdentity(
+  step: Step & { kind: 'fill' },
+  screen: Screen,
+  identity: string,
+):
+  | { kind: 'strict'; strict: { ref: string; element: Element } }
+  | { kind: 'fallback'; fallback: { element: Element; oracleTestID: string } }
+  | undefined {
+  const elements = screen.elements.filter(
+    (e) => e.testID !== undefined && withoutPressable(e.testID) === identity,
+  );
+  if (
+    !identity ||
+    elements.some((e) => elements.filter((other) => other.testID === e.testID).length !== 1)
+  )
+    return;
+  const native = elements.filter(isNativeInput);
+  if (native.length) {
+    if (native.length !== 1) return;
+    const strict = prepareTarget(
+      { ...step, target: { quoted: native[0].testID!, phrase: identity, exact: 'id' } },
+      { ...screen, elements },
+    );
+    return 'ref' in strict ? { kind: 'strict', strict } : undefined;
+  }
+  const fallback = keyboardFallbackTarget(
+    { ...step, target: { quoted: identity, phrase: identity } },
+    { ...screen, elements },
+  );
+  return fallback ? { kind: 'fallback', fallback } : undefined;
 }
 
 export function decideTarget(prepared: TargetQuestion, answer: Answer | undefined): Resolution {
