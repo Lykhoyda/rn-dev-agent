@@ -139,18 +139,15 @@ fn a_surviving_group_member_keeps_the_recorder_unresolved_and_owned() {
 
 #[test]
 fn a_zombie_leader_is_not_a_release_for_a_runner_that_does_not_own_it() {
-    use std::io::BufRead;
-    // set -m puts the background job in its own group; it exits after the exec, and sleep never reaps it.
-    let mut helper = std::process::Command::new("/bin/sh")
-        .args(["-c", "set -m; (sleep 0.3; exit 0) & echo $!; exec sleep 30"])
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut line = String::new();
-    std::io::BufReader::new(helper.stdout.take().unwrap())
-        .read_line(&mut line)
-        .unwrap();
-    let zombie: i32 = line.trim().parse().unwrap();
+    let (root, mut record) = walking_record();
+    let mut owner = runner();
+    let zombie = own_recorder(&mut owner, &mut record, &root, CLEAN_RECORDER);
+    assert_eq!(unsafe { libc::getpgid(zombie) }, zombie);
+    assert!(std::process::Command::new("/bin/kill")
+        .args(["-INT", &zombie.to_string()])
+        .status()
+        .unwrap()
+        .success());
     for _ in 0..100 {
         if ps_stat(zombie).starts_with('Z') {
             break;
@@ -161,20 +158,10 @@ fn a_zombie_leader_is_not_a_release_for_a_runner_that_does_not_own_it() {
         ps_stat(zombie).starts_with('Z'),
         "fixture must leave a zombie leader"
     );
-    let (root, mut record) = walking_record();
     let mut runner = runner();
-    let birth = capture_pid_identity(&mut runner, zombie).expect("a zombie keeps its lstart");
-    record.resources.recorder = Some(RecorderResource {
-        pid: Some(zombie),
-        birth: Some(birth),
-        kind: RecorderKind::IosSimulator,
-        device: "fixture-device".into(),
-        output: PathBuf::from("raw.mov"),
-    });
 
     let outcome = record::stop(&mut runner, &mut record, &root);
-    let _ = helper.kill();
-    let _ = helper.wait();
+    assert!(owner.try_reap(zombie));
 
     assert!(matches!(outcome, Outcome::Unresolved(_)), "{outcome:?}");
     assert!(record.resources.recorder.is_some());
