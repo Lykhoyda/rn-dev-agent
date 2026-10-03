@@ -495,10 +495,7 @@ const realMultiple = painted([
 ]);
 
 test('adjacent equal painted text refuses ambiguous replay and discovery', () => {
-  const joined = painted([
-    node('StaticText', 'Welcome', 100),
-    node('StaticText', 'Welcome', 140),
-  ]);
+  const joined = painted([node('StaticText', 'Welcome', 100), node('StaticText', 'Welcome', 140)]);
   assert.deepEqual(joined.visibleText, ['Welcome']);
   assert.deepEqual(joined.paintedText, ['Welcome', 'Welcome']);
   assert.throws(

@@ -258,7 +258,9 @@ function prepareAssertion(
 
 // Stored text is identified by its painted occurrences; container and image labels only echo them.
 function textIdentities(quoted: string, screen: Screen): number {
-  const painted = (screen.paintedText ?? assertionView(screen)).filter((text) => text === quoted).length;
+  const painted = (screen.paintedText ?? assertionView(screen)).filter(
+    (text) => text === quoted,
+  ).length;
   return painted || screen.elements.filter((e) => !e.offscreen && e.label === quoted).length;
 }
 
