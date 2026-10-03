@@ -8,7 +8,11 @@ import {
   judgeCheck,
   prepareTarget,
   resolveTarget,
+  targetVisible,
+  visibleSelector,
 } from '../../../dist/qa/resolve.js';
+import { join as joinScreen } from '../../../dist/qa/screen.js';
+import type { NativeNode, Screen } from '../../../dist/qa/screen.js';
 import { JevError, confidentChoice } from '../../../dist/qa/questions.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { choice, element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
@@ -457,4 +461,113 @@ test('two exact matches refuse REPLAY_SELECTOR without asking Jev', async () => 
     assert.equal('refuse' in result && result.refuse, 'REPLAY_SELECTOR');
   }
   assert.equal(judge.calls.length, 0);
+});
+
+// Native nodes under one window, joined by the product screen builder.
+function painted(nodes: Array<Omit<NativeNode, 'index'>>): Screen {
+  const window = { ref: '@window', type: 'Window', rect: { x: 0, y: 0, width: 390, height: 844 } };
+  return joinScreen(
+    [window, ...nodes].map((n, index) => ({ parentIndex: index ? 0 : undefined, ...n, index })),
+    [],
+    'app',
+    { native: 'complete', react: 'complete' },
+  );
+}
+const node = (type: string, label: string, y: number, extra: Partial<NativeNode> = {}) => ({
+  ref: `@${type}${y}`,
+  type,
+  label,
+  rect: { x: 16, y, width: 200, height: 20 },
+  ...extra,
+});
+const exactText = (quoted: string) => ({ quoted, phrase: quoted, exact: 'text' as const });
+const exactId = (quoted: string) => ({ quoted, phrase: quoted, exact: 'id' as const });
+const containerEcho = painted([
+  ...[1, 2, 3, 4].map((parentIndex) =>
+    node('Other', 'Welcome', 100 + parentIndex, { parentIndex: parentIndex - 1 || 0 }),
+  ),
+  node('StaticText', 'Welcome', 120, { parentIndex: 4 }),
+]);
+const realMultiple = painted([
+  node('StaticText', 'Welcome', 100),
+  node('StaticText', 'Body', 200),
+  node('StaticText', 'Welcome', 300),
+]);
+
+test('a stored text echoed by its container labels is one identity', () => {
+  assert.equal(targetVisible(exactText('Welcome'), containerEcho), true);
+  const sheet = painted([
+    { ...node('Other', 'Sheet title', 400), rect: { x: 0, y: 400, width: 386, height: 395 } },
+    node('StaticText', 'Sheet title', 420, { parentIndex: 1 }),
+  ]);
+  assert.equal(targetVisible(exactText('Sheet title'), sheet), true);
+});
+
+test('real visible multiples, zero matches and an offscreen twin keep their replay counts', () => {
+  assert.throws(
+    () => targetVisible(exactText('Welcome'), realMultiple),
+    /REPLAY_SELECTOR: 2 identities match the stored text "Welcome"/,
+  );
+  assert.throws(
+    () => targetVisible(exactText('Welcome'), painted([node('StaticText', 'Body', 100)])),
+    /REPLAY_SELECTOR: 0 identities match the stored text "Welcome"/,
+  );
+  const twin = painted([node('StaticText', 'Welcome', 100), node('StaticText', 'Welcome', 1000)]);
+  assert.equal(twin.elements.filter((e) => e.offscreen).length, 1);
+  assert.equal(targetVisible(exactText('Welcome'), twin), true);
+});
+
+test('an onscreen carrier without a painted line still identifies its text', () => {
+  const carrier = (y: number) => node('Other', 'Continue', y, { hittable: true });
+  assert.deepEqual(painted([carrier(100)]).visibleText, []);
+  assert.equal(targetVisible(exactText('Continue'), painted([carrier(100)])), true);
+  assert.throws(
+    () => targetVisible(exactText('Continue'), painted([carrier(100), carrier(200)])),
+    /REPLAY_SELECTOR: 2 identities/,
+  );
+  assert.equal(
+    targetVisible(exactText('Continue'), painted([node('Button', 'Continue', 100)])),
+    true,
+  );
+  assert.throws(
+    () =>
+      targetVisible(
+        exactText('Continue'),
+        painted([
+          node('Button', 'Continue', 100),
+          node('StaticText', 'Body', 200),
+          node('Button', 'Continue', 300),
+        ]),
+      ),
+    /REPLAY_SELECTOR: 2 identities/,
+  );
+});
+
+test('stored testIDs keep counting every element that carries them', () => {
+  assert.throws(
+    () =>
+      targetVisible(
+        exactId('save'),
+        painted([
+          node('Button', 'Save', 100, { identifier: 'save' }),
+          node('Button', 'Save draft', 200, { identifier: 'save' }),
+        ]),
+      ),
+    /REPLAY_SELECTOR: 2 identities match the stored id "save"/,
+  );
+  const far = painted([node('Button', 'Save', 1000, { identifier: 'save' })]);
+  assert.equal(targetVisible(exactId('save'), far), false);
+});
+
+test('a visible text is stored only when replay would find exactly one identity', () => {
+  const welcome = { quoted: 'Welcome', phrase: 'Welcome' };
+  assert.deepEqual(visibleSelector(welcome, containerEcho), { text: 'Welcome' });
+  assert.equal(visibleSelector(welcome, realMultiple), undefined);
+  assert.deepEqual(
+    visibleSelector(
+      welcome,
+      painted([node('StaticText', 'Welcome', 100, { identifier: 'home-title' })]),
+    ),
+    { id: 'home-title' },
+  );
 });
