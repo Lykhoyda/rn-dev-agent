@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { captureScreen } from '../../../dist/qa/capture.js';
+import { captureScreen, emitCaptureDiagnostics } from '../../../dist/qa/capture.js';
 import {
   capturePrivateScreen,
   formatSensitivePixels,
@@ -62,13 +62,15 @@ async function capture(
   } = {},
 ) {
   try {
-    return await captureScreen({
+    const screen = await captureScreen({
       appId: 'com.test',
       requirePrivateInputs: options.requirePrivateInputs ?? true,
       native: async () => options.observation ?? attested(nodes),
       react: options.react ?? react,
       warn: options.warn,
     });
+    emitCaptureDiagnostics(screen);
+    return screen;
   } catch (error) {
     return { refused: (error as Error).name };
   }
@@ -204,6 +206,7 @@ test('a complete snapshot whose presence validation failed still logs its line',
     react,
     warn: (message) => lines.push(message),
   });
+  emitCaptureDiagnostics(screen);
   assert.equal(screen.captureCoverage?.native, 'complete');
   assert.equal(screen.coverage?.native, 'incomplete');
   const sensitive = lines.filter((line) => line.startsWith('sensitive-pixels'));
@@ -238,6 +241,7 @@ test('a slow or throwing sink at the budget edge cannot change the capture', asy
               }
             : {}),
         });
+        emitCaptureDiagnostics(screen);
         return { screen, lines, clock };
       };
       const silent = await run(false);
@@ -256,6 +260,102 @@ test('a slow or throwing sink at the budget edge cannot change the capture', asy
         assert.ok(logged.screen.nativeCaptureCauses?.includes('capture-over-budget'));
         assert.deepEqual(logged.lines, []);
         assert.equal(logged.clock, elapsed);
+      }
+    }
+  }
+});
+
+test('walker admission precedes both passive diagnostics at the acquisition budget edge', async () => {
+  for (const scenario of [
+    'admitted',
+    'capture-expired',
+    'admission-expired',
+    'incomplete',
+    'presence-refused',
+  ] as const) {
+    for (const sink of ['slow', 'throw'] as const) {
+      const run = async (logging: boolean) => {
+        let clock = 0;
+        const lines: string[] = [];
+        let captured: Screen | undefined;
+        const source = nativeCapture();
+        const native = {
+          ...source,
+          truncated: scenario === 'incomplete',
+          snapshotVerdict: { ...source.snapshotVerdict, nodeCount: 3 },
+          nodes: [
+            ...source.nodes,
+            {
+              ...source.nodes[1],
+              ref: '@pager',
+              index: 2,
+              type: 'ScrollView',
+              identifier: undefined,
+              label: undefined,
+              value: 'page 1 of 3',
+              presence: { ...source.nodes[1].presence, nodeIndex: 2 },
+            },
+          ],
+          presenceCapture: {
+            ...source.presenceCapture,
+            complete: scenario !== 'presence-refused',
+          },
+        };
+        const walk = walker([], scriptedJudge(() => ({ check_1: { type: 'noul', noul: 0.99 } })));
+        walk.deps.now = () => clock;
+        walk.deps.captureScreen = async () => {
+          captured = await captureScreen({
+            appId: 'com.test',
+            requirePrivateInputs: true,
+            now: () => clock,
+            native: async () => native,
+            react: async () => {
+              clock = scenario === 'capture-expired' ? 22_001 : 21_999;
+              return react();
+            },
+            ...(logging
+              ? {
+                  warn: (message: string) => {
+                    lines.push(message);
+                    clock += 10;
+                    if (sink === 'throw') throw new Error(SECRET);
+                  },
+                }
+              : {}),
+          });
+          assert.deepEqual(lines, [], 'capture itself must not compute or emit diagnostics');
+          if (scenario === 'admission-expired') clock += 1;
+          return captured;
+        };
+        const plan = parsePlan(scenario === 'presence-refused' ? '✓ Save is visible' : '✓ "Save"');
+        assert.ok(plan.blocks);
+        const result = await runPlan(plan.blocks, walk.deps);
+        return { result, captured, lines, clock };
+      };
+      const silent = await run(false);
+      const logged = await run(true);
+      assert.equal(logged.result.verdict, silent.result.verdict);
+      assert.deepEqual(logged.result.failure, silent.result.failure);
+      assert.deepEqual(
+        logged.result.verdict === 'REFUSED' ? [logged.result.code, logged.result.message] : undefined,
+        silent.result.verdict === 'REFUSED' ? [silent.result.code, silent.result.message] : undefined,
+      );
+      assert.deepEqual(
+        logged.captured && outcome(logged.captured),
+        silent.captured && outcome(silent.captured),
+      );
+      if (scenario === 'admitted') {
+        assert.equal(logged.result.verdict, 'PASS');
+        assert.equal(logged.captured?.nativeCaptureCauses, undefined);
+        assert.equal(logged.lines.length, 2);
+        assert.ok(logged.lines[0].startsWith('viewport-diagnostic '));
+        assert.ok(logged.lines[1].startsWith('sensitive-pixels '));
+        assert.equal(logged.clock, 22_019);
+        emitCaptureDiagnostics(logged.captured!);
+        assert.equal(logged.lines.length, 2, 'the same screen emits only once');
+      } else {
+        assert.notEqual(logged.result.verdict, 'PASS', scenario);
+        assert.deepEqual(logged.lines, [], scenario);
       }
     }
   }

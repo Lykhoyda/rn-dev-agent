@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { captureScreen } from '../../../dist/qa/capture.js';
+import { captureScreen, emitCaptureDiagnostics } from '../../../dist/qa/capture.js';
 import { outsideViewport, viewportDiagnostic } from '../../../dist/qa/native-presence.js';
 import type { NativeNode } from '../../../dist/qa/screen.js';
 import { attested, nativeCapture } from './platform-presence-fixtures.ts';
@@ -201,14 +201,17 @@ async function emitted(truncated: boolean | undefined, requirePrivateInputs: boo
     verdict: { state: 'ok', path: 'interactive', complete: true },
     hostEvidence: { hosts: [], complete: true },
   });
-  const capture = (warn?: (message: string) => void) =>
-    captureScreen({
+  const capture = async (warn?: (message: string) => void) => {
+    const screen = await captureScreen({
       appId: 'com.test',
       requirePrivateInputs,
       native: async () => observation,
       react,
       warn,
     });
+    emitCaptureDiagnostics(screen);
+    return screen;
+  };
   let outcome: unknown;
   let silent: unknown;
   try {
@@ -287,6 +290,7 @@ test('a slow diagnostic sink cannot change the capture budget verdict', async ()
             }
           : {}),
       });
+      emitCaptureDiagnostics(screen);
       return { screen, lines, clock };
     };
     const silent = await run(false);

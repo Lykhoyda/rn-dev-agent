@@ -53,6 +53,14 @@ export interface CaptureDeps {
   warn?(message: string): void;
 }
 
+const captureDiagnostics = new WeakMap<Screen, () => void>();
+
+export function emitCaptureDiagnostics(screen: Screen): void {
+  const emit = captureDiagnostics.get(screen);
+  captureDiagnostics.delete(screen);
+  emit?.();
+}
+
 type Coverage = NonNullable<Screen['coverage']>;
 
 function nativeIncompleteCauses(observation: NativeObservation): string[] {
@@ -490,19 +498,16 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
       nativeCaptureCauses.push('capture-over-budget');
     if (nativeCaptureCauses.length > 0) screen.nativeCaptureCauses = nativeCaptureCauses;
     if (deps.warn && captureCoverage.native === 'complete' && withinBudget) {
-      try {
-        deps.warn(viewportDiagnostic(nodes, outsideViewport(nodes)));
-      } catch {
-        // Diagnostics cannot change capture admission or failure.
-      }
-    }
-    if (deps.warn && captureCoverage.native === 'complete' && withinBudget) {
-      try {
-        const reasons = sensitivePixelsReasons(screen, nodes);
-        if (reasons) deps.warn(reasons);
-      } catch {
-        // Diagnostics cannot change capture admission or failure.
-      }
+      const warn = deps.warn;
+      captureDiagnostics.set(screen, () => {
+        try {
+          warn(viewportDiagnostic(nodes, outsideViewport(nodes)));
+        } catch {}
+        try {
+          const reasons = sensitivePixelsReasons(screen, nodes);
+          if (reasons) warn(reasons);
+        } catch {}
+      });
     }
     joined = true;
     return screen;
