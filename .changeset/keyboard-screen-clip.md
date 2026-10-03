@@ -2,4 +2,4 @@
 "qaren": patch
 ---
 
-Text lying outside the screen no longer satisfies literal checks when the keyboard is up, because every native node is now clipped against the screen regardless of which window contains it.
+Text outside the cumulative screen, scroll-container and window bounds no longer satisfies literal checks, quoted waits or scroll-until when the keyboard is up or window ancestry is missing.

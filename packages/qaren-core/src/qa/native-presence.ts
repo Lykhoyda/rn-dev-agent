@@ -121,6 +121,10 @@ export function validateNativePresence(
 
 type Rect = NonNullable<NativeNode['rect']>;
 
+function validRect(rect: Rect | undefined): rect is Rect {
+  return !!rect && [rect.x, rect.y, rect.width, rect.height].every(finite) && rect.width >= 0 && rect.height >= 0;
+}
+
 function overlaps(a: Rect, b: Rect): boolean {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
@@ -255,34 +259,28 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
   const root = nodes[0];
   // The screen clips every node, whatever its ancestry; a keyboard can detach content from its Window.
   const screen =
-    root?.type === 'Application' && root.rect && root.rect.width > 0 && root.rect.height > 0
+    root?.type === 'Application' && validRect(root.rect) && root.rect.width > 0 && root.rect.height > 0
       ? root.rect
       : undefined;
   nodes.forEach((node, i) => {
     if (!node.rect) return;
-    if (screen && !within(node.rect, screen)) {
-      offscreen.add(i);
-      return;
-    }
-    let visible: Rect | undefined;
-    let window: Rect | undefined;
+    let visible = screen;
     let parent = node.parentIndex;
     for (let hops = 0; parent !== undefined && hops < nodes.length; hops++) {
       const ancestor = nodes[parent];
       if (
         ancestor?.type === 'Window' &&
-        ancestor.rect &&
+        validRect(ancestor.rect) &&
         ancestor.rect.width > 0 &&
         ancestor.rect.height > 0
       ) {
-        window = clip(ancestor.rect, visible);
-        break;
+        visible = clip(ancestor.rect, visible);
       }
-      if (ancestor?.rect && ['ScrollView', 'Table', 'CollectionView'].includes(ancestor.type ?? ''))
+      if (validRect(ancestor?.rect) && ['ScrollView', 'Table', 'CollectionView'].includes(ancestor.type ?? ''))
         visible = clip(ancestor.rect, visible);
       parent = ancestor?.parentIndex;
     }
-    if (window && !within(node.rect, window)) offscreen.add(i);
+    if (visible && !within(node.rect, visible)) offscreen.add(i);
   });
   return offscreen;
 }
