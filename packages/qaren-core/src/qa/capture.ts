@@ -1,5 +1,5 @@
 import { isRecord } from './questions.js';
-import { frontFromSurface, join, validateReactHostEvidence } from './screen.js';
+import { frontFromSurface, join, kindOf, validateReactHostEvidence } from './screen.js';
 import type { DigestEntry, NativeNode, ReactHostEvidence, Screen } from './screen.js';
 import { validateNativePresence } from './native-presence.js';
 import {
@@ -13,6 +13,7 @@ import {
 import {
   applyPrivateInputs,
   PrivateInputCaptureError,
+  PrivateInputCaptureTimeout,
   validatePrivateInputs,
 } from './private-input.js';
 
@@ -359,7 +360,19 @@ function reactCoverage(
 
 export async function captureScreen(deps: CaptureDeps): Promise<Screen> {
   try {
-    return await capture(deps);
+    try {
+      return await capture(deps);
+    } catch (error) {
+      if (!(error instanceof PrivateInputCaptureTimeout)) throw error;
+      // A missed deadline cannot tell a busy JS thread from a broken read; one fresh full capture can.
+      observeTiming(deps.timing, {
+        stage: 'refresh',
+        edge: 'point',
+        outcome: 'ok',
+        at: (deps.now ?? (() => performance.now()))(),
+      });
+      return await capture(deps);
+    }
   } catch (error) {
     if (error instanceof NativeCaptureError) throw error;
     if (deps.requirePrivateInputs || error instanceof PrivateInputCaptureError)
@@ -401,6 +414,20 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
   try {
     react = await measureTiming(deps.timing, now, 'react-private', () => deps.react());
   } catch (error) {
+    if (error instanceof PrivateInputCaptureTimeout) {
+      const nodes = Array.isArray(native.nodes) ? native.nodes : [];
+      if (
+        nodes.some(
+          (node) =>
+            node.secure === true ||
+            node.type === 'SecureTextField' ||
+            (kindOf(node.type) === 'input' &&
+              ((node.value?.length ?? 0) > 0 || (node.label?.length ?? 0) > 0)),
+        )
+      )
+        throw new PrivateInputCaptureError();
+      throw new PrivateInputCaptureTimeout();
+    }
     if (deps.requirePrivateInputs || error instanceof PrivateInputCaptureError)
       throw new PrivateInputCaptureError();
     deps.warn?.('interactive digest unavailable; React coverage is unknown');

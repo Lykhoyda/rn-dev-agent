@@ -13,6 +13,9 @@ export class PrivateInputCaptureError extends Error {
   }
 }
 
+// Only a missed deadline may be a busy JS thread; malformed or unbound captures never are.
+export class PrivateInputCaptureTimeout extends PrivateInputCaptureError {}
+
 interface PrivateFact {
   hostIndex: number;
   values: string[];

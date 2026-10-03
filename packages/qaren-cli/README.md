@@ -73,8 +73,20 @@ The [screen projection](../qaren-core/src/qa/screen.ts) owns this policy.
 
 Private input capture is required before walking a screen. If it cannot be
 established safely, the walk refuses with `PRIVATE_INPUT_CAPTURE_UNKNOWN` without
-reinjection or a public-tree fallback. Observed input values are masked before
-Jev requests; private values are also masked in reporting. Once sensitive input
+reinjection or a public-tree fallback. A React private-input deadline miss triggers
+at most one complete fresh capture, including native and React evidence, only
+when the failed attempt received no React private input values, observed no
+native input with a non-empty value or label, and observed no secure native node.
+Native input classification follows the [screen projection](../qaren-core/src/qa/screen.ts).
+Otherwise the timeout refuses immediately, preserving the privacy boundary.
+The late first reply is discarded; a second timeout refuses without another retry.
+Only an explicit deadline expiry is retryable: malformed payloads, unbound private
+evidence, validation and transport failures refuse immediately even if processing
+crosses the deadline. Native failures do not trigger this retry. Capture deadlines,
+budgets and item deadlines remain unchanged.
+
+Observed input values are masked before Jev requests; private values are also
+masked in reporting. Once sensitive input
 pixels are observed, screenshots are withheld for the rest of the walk.
 Masks preserve identity for comparisons and do not prove unobserved value content.
 
@@ -529,11 +541,12 @@ build_and_ready — so revisit this once live reuse is measurable.
   absence; a still-present package or unproven absence is `unresolved`.
   If both probes prove absence before uninstall, the leg is `absent` and
   records uninstall as `not issued`.
-  The attempt (timestamp, observed installed sha256, complete captured
-  exit/stdout/stderr and timeout evidence for uninstall / `pm path` /
-  package list) is persisted to `run.json` at `resources.app_install.removal`
-  before any lease release; a save failure makes the leg `unresolved` and
-  retains the farm lease while independent owned local cleanup continues.
+  The attempt (timestamp, observed installed sha256, and command evidence
+  for uninstall / `pm path` / package list) is persisted to `run.json` at
+  `resources.app_install.removal` before any lease release; command evidence
+  follows the diagnostic redaction contract above. A save failure makes the
+  leg `unresolved` and retains the farm lease while independent owned local
+  cleanup continues.
   The receipt echoes it in `outcomes.app_removal_*`, with the observed hash
   in `outcomes.app_installed_sha256`. The leg folds into the existing verdict:
   a refused or unresolved removal keeps the receipt off `cleaned` and the

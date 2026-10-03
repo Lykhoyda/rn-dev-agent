@@ -5,6 +5,7 @@ import {
   assertPrivateInputPayload,
   bindPrivateInputs,
   PrivateInputCaptureError,
+  PrivateInputCaptureTimeout,
 } from './private-input.js';
 import { validateReactHostEvidence } from './screen.js';
 import type { DigestEntry } from './screen.js';
@@ -122,10 +123,12 @@ export async function captureQaReact(
   typography = false,
 ): Promise<ReactObservation> {
   const deadline = performance.now() + 1500;
+  const deadlineSignal = Symbol();
   let expired = false;
+  let receivedPrivateValues = false;
   const remaining = (): number => {
     const ms = deadline - performance.now();
-    if (expired || ms <= 0) throw new PrivateInputCaptureError();
+    if (expired || ms <= 0) throw deadlineSignal;
     return ms;
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -134,7 +137,7 @@ export async function captureQaReact(
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           expired = true;
-          reject(new PrivateInputCaptureError());
+          reject(deadlineSignal);
         }, remaining());
       }),
       client.withPrivateHelperWorld(async (evaluate) => {
@@ -145,9 +148,10 @@ export async function captureQaReact(
           ),
           true,
         );
-        remaining();
         const inputs = start.inputs;
         assertPrivateInputPayload(inputs);
+        receivedPrivateValues = inputs.facts.some((fact) => fact.values.length > 0);
+        remaining();
         const id = start.id as string;
         let current = start;
         while (current.state === 'pending') {
@@ -166,8 +170,10 @@ export async function captureQaReact(
     ]);
     remaining();
     return observation;
-  } catch {
-    throw new PrivateInputCaptureError();
+  } catch (error) {
+    throw error === deadlineSignal && !receivedPrivateValues
+      ? new PrivateInputCaptureTimeout()
+      : new PrivateInputCaptureError();
   } finally {
     expired = true;
     clearTimeout(timer);
