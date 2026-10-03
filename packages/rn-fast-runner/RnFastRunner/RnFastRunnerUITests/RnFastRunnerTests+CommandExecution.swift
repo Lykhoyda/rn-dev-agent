@@ -279,10 +279,11 @@ extension RnFastRunnerTests {
         activeApp = app
       }
 
-      if !activeApp.waitForExistence(timeout: appExistenceTimeout) {
+      // waitForExistence costs a ~1 s poll even for a present app, so check exists first.
+      if !(activeApp.exists || activeApp.waitForExistence(timeout: appExistenceTimeout)) {
         if let bundleId = requestedBundleId {
           activeApp = activateTarget(bundleId: bundleId, reason: "missing_after_wait")
-          guard activeApp.waitForExistence(timeout: appExistenceTimeout) else {
+          guard activeApp.exists || activeApp.waitForExistence(timeout: appExistenceTimeout) else {
             return Response(ok: false, error: ErrorPayload(message: "app '\(bundleId)' is not available"))
           }
         } else {
@@ -297,7 +298,7 @@ extension RnFastRunnerTests {
           app.activate()
           activeApp = app
         }
-        if !activeApp.waitForExistence(timeout: 2) {
+        if !(activeApp.exists || activeApp.waitForExistence(timeout: 2)) {
           if let bundleId = requestedBundleId {
             return Response(ok: false, error: ErrorPayload(message: "app '\(bundleId)' is not available"))
           }

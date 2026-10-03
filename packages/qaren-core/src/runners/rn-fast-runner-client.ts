@@ -9,6 +9,7 @@ import type { ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import {
+  copyFileSync,
   existsSync,
   readdirSync,
   mkdirSync,
@@ -951,6 +952,50 @@ export async function terminateRunnerHost(deviceId?: string): Promise<void> {
   }).catch((error: { stderr?: unknown }) => {
     if (!/found nothing to terminate/.test(String(error?.stderr ?? ''))) throw error;
   });
+}
+
+const RUNNER_TEST_BUNDLE_ID = `${RUNNER_HOST_BUNDLE_ID}.uitests.xctrunner`;
+const runnerDataContainers = new Map<string, string>();
+
+// The runner writes into its own data container; false lets the caller fall back to simctl.
+export async function captureRunnerScreenshot(
+  deviceId: string,
+  appId: string,
+  destination: string,
+): Promise<boolean> {
+  if (!isIosSimulatorUdid(deviceId)) return false;
+  try {
+    const result = await runIOS({
+      command: 'screenshot',
+      bundleId: appId,
+      deviceId,
+      qaReadOnly: true,
+    });
+    if (result.isError) return false;
+    const relative = (JSON.parse(result.content[0].text) as { data?: { message?: unknown } }).data
+      ?.message;
+    if (typeof relative !== 'string' || !/^tmp\/screenshot-\d+\.png$/.test(relative)) return false;
+    let container = runnerDataContainers.get(deviceId);
+    if (!container) {
+      const { stdout } = await promisify(execFile)(
+        'xcrun',
+        ['simctl', 'get_app_container', deviceId, RUNNER_TEST_BUNDLE_ID, 'data'],
+        { timeout: 10_000 },
+      );
+      container = stdout.trim();
+      runnerDataContainers.set(deviceId, container);
+    }
+    const source = join(container, relative);
+    try {
+      copyFileSync(source, destination);
+    } finally {
+      rmSync(source, { force: true });
+    }
+    return statSync(destination).size > 0;
+  } catch {
+    runnerDataContainers.delete(deviceId);
+    return false;
+  }
 }
 
 export function clearFastRunnerAfterVerifiedStop(binding: Record<string, unknown>): void {
