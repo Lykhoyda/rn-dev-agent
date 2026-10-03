@@ -437,6 +437,8 @@ pub fn cleanup_with(
         let expected = crate::worktree::pr_worktree_path(&RunRecord::run_dir(runs_root, run_id));
         let outcome = if owner_alive {
             owner_refusal()
+        } else if !producers_quiescent(&outcomes) {
+            Outcome::Unresolved("producer cleanup is unproven; PR worktree retained".into())
         } else if wt.path != expected {
             Outcome::Refused(format!(
                 "recorded worktree {} is not this run's; not removing it",
@@ -1008,6 +1010,13 @@ pub(crate) fn cleanup_runner_host(runner: &mut dyn Runner, record: &RunRecord) -
         return None;
     }
     Some(cleanup_scoped_runner_hosts(runner, &sim.udid))
+}
+
+pub(crate) fn producers_quiescent(outcomes: &[(String, Outcome)]) -> bool {
+    outcomes
+        .iter()
+        .filter(|(name, _)| matches!(name.as_str(), "build_process" | "core" | "metro"))
+        .all(|(_, outcome)| matches!(outcome, Outcome::Removed | Outcome::Absent))
 }
 
 pub(crate) fn unclean_legs(outcomes: &[(String, Outcome)]) -> Vec<String> {

@@ -345,3 +345,82 @@ fn failed_persistence_and_abort_keep_the_proven_recorder_for_teardown() {
         .is_none());
     assert_eq!(runner.0.remaining(), 0);
 }
+
+#[test]
+fn dead_owner_worktrees_wait_for_each_producer_then_retry_removal() {
+    for producer in ["build", "core", "metro"] {
+        let (root, mut record, wt) = pr_run_record();
+        record.resources.recorder = None;
+        match producer {
+            "build" => {
+                record.resources.begin_build().unwrap();
+                record.resources.record_build_spawned(5000, None).unwrap();
+            }
+            "core" => {
+                record.resources.core = Some(qaren::runrecord::CoreResource {
+                    pgid: 5000,
+                    identity: None,
+                })
+            }
+            "metro" => {
+                record.resources.metro = Some(qaren::runrecord::MetroResource {
+                    spawned: Spawned {
+                        pid: 5000,
+                        pgid: 5000,
+                    },
+                    identity: Some(common::identity(5000, LSTART)),
+                    port: 8791,
+                    endpoint: "http://localhost:8791".into(),
+                    log: root.join("metro.log"),
+                })
+            }
+            _ => unreachable!(),
+        }
+        record.save(&root).unwrap();
+        let mut mock = MockRunner::new();
+        if producer == "metro" {
+            mock.expect_run("ps -p 5000", CmdOutput::failed(1, ""));
+            mock.expect_run("lsof", CmdOutput::failed(2, "inventory unavailable"));
+        } else {
+            mock.expect_run("ps -A", CmdOutput::failed(1, "inventory unavailable"));
+        }
+        mock.expect_run("ps -p 999", CmdOutput::failed(1, ""));
+        let mut runner = GitRemoves(mock, None);
+        let receipt = qaren::commands::cleanup::cleanup(&mut runner, &root, &record.run_id);
+        assert!(
+            receipt.cleanup["pr_worktree"].contains("retained"),
+            "{producer}"
+        );
+        assert!(wt.exists());
+        assert!(RunRecord::load(&root, &record.run_id)
+            .unwrap()
+            .resources
+            .pr_worktree
+            .is_some());
+        assert!(!runner
+            .0
+            .calls
+            .iter()
+            .any(|c| c.label == "git-worktree-remove"));
+        assert_eq!(runner.0.remaining(), 0);
+        let mut mock = MockRunner::new();
+        if producer == "metro" {
+            mock.expect_run("ps -p 5000", CmdOutput::failed(1, ""));
+            mock.expect_run("lsof", CmdOutput::failed(1, ""));
+        } else {
+            mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+        }
+        mock.expect_run("ps -p 999", CmdOutput::failed(1, ""));
+        mock.expect_run("worktree remove --force", CmdOutput::success(""));
+        let mut runner = GitRemoves(mock, None);
+        let receipt = qaren::commands::cleanup::cleanup(&mut runner, &root, &record.run_id);
+        assert_eq!(receipt.cleanup["pr_worktree"], "removed", "{producer}");
+        assert!(!wt.exists());
+        assert!(RunRecord::load(&root, &record.run_id)
+            .unwrap()
+            .resources
+            .pr_worktree
+            .is_none());
+        assert_eq!(runner.0.remaining(), 0);
+    }
+}

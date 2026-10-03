@@ -994,7 +994,11 @@ fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, boo
         outcomes.push(("device_lease".to_string(), outcome));
     }
     if let Some(wt) = ctx.record.resources.pr_worktree.clone() {
-        let outcome = worktree::remove(ctx.runner, &wt.repo_root, &wt.path);
+        let outcome = if crate::commands::cleanup::producers_quiescent(&outcomes) {
+            worktree::remove(ctx.runner, &wt.repo_root, &wt.path)
+        } else {
+            Outcome::Unresolved("producer cleanup is unproven; PR worktree retained".into())
+        };
         if outcome.clean() {
             ctx.record.resources.pr_worktree = None;
         }

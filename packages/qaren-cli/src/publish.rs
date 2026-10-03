@@ -279,11 +279,17 @@ fn origin_is_pr_repo(runner: &mut dyn Runner, pr: &PrRunRecord) -> bool {
         runner,
         "git-push-url",
         &pr.repo_root,
-        &["remote", "get-url", "--push", "origin"],
+        &["remote", "get-url", "--push", "--all", "origin"],
         20,
     );
     let expected = pr_info(pr).repo().map(|r| r.to_ascii_lowercase());
-    output.ok() && expected.is_some() && remote_repo(output.stdout.trim()) == expected
+    output.ok()
+        && expected.is_some()
+        && !output.stdout.trim().is_empty()
+        && output
+            .stdout
+            .lines()
+            .all(|url| remote_repo(url.trim()) == expected)
 }
 
 // Every existing component must be a real directory; missing ones are created. A PR controls this tree.
@@ -407,7 +413,11 @@ fn commit_blocks(
         if !head.ok() {
             return Err(format!("git rev-parse failed: {}", head.summary()));
         }
-        Ok(head.stdout.trim().to_string())
+        let commit = head.stdout.trim().to_string();
+        if !cached_blocks_match(runner, pr, &commit, blocks) {
+            return Err("the writeback commit does not preserve the admitted blocks".into());
+        }
+        Ok(commit)
     })();
     let removed = worktree::remove(runner, repo, &tmp);
     match (result, removed.clean()) {

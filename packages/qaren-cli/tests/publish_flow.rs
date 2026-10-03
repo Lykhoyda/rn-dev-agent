@@ -119,12 +119,12 @@ fn script_comment_and_label(mock: &mut MockRunner) {
 }
 
 fn script_commit(mock: &mut MockRunner) {
-    script_commit_extension(mock, "yaml");
+    script_commit_extension(mock, "yaml", "steps: []\n");
 }
 
-fn script_commit_extension(mock: &mut MockRunner, extension: &str) {
+fn script_commit_extension(mock: &mut MockRunner, extension: &str, bytes: &str) {
     mock.expect_run(
-        "git remote get-url --push origin",
+        "git remote get-url --push --all origin",
         CmdOutput::success("git@github.com:o/r.git\n"),
     );
     mock.expect_run(
@@ -144,11 +144,31 @@ fn script_commit_extension(mock: &mut MockRunner, extension: &str) {
         "git rev-parse HEAD",
         CmdOutput::success(&format!("{COMMIT}\n")),
     );
+    script_blob_check(mock, &format!("tasks.{extension}"), bytes);
     mock.expect_run("git worktree remove --force", CmdOutput::success(""));
     mock.expect_run(
         "git ls-remote origin refs/heads/feat/tasks",
         CmdOutput::success(&format!("{TESTED}\trefs/heads/feat/tasks\n")),
     );
+}
+
+fn script_blob_check(mock: &mut MockRunner, filename: &str, bytes: &str) {
+    mock.expect_run(
+        "git rev-list --parents",
+        CmdOutput::success(&format!("{COMMIT} {TESTED}\n")),
+    );
+    mock.expect_run(
+        "git diff --name-only",
+        CmdOutput::success(&format!("test-app/.qaren/actions/{filename}\0")),
+    );
+    mock.expect_run(
+        "git ls-tree",
+        CmdOutput::success(&format!(
+            "100644 blob {}\ttest-app/.qaren/actions/{filename}\0",
+            "a".repeat(40)
+        )),
+    );
+    mock.expect_run("git show", CmdOutput::success(bytes));
 }
 
 fn publication(dir: &Path) -> Publication {
@@ -393,7 +413,7 @@ fn an_origin_that_is_not_the_pr_repository_gets_the_yaml_comment_and_no_push() {
     let mut runner = Git(MockRunner::new());
     script_comment_and_label(&mut runner.0);
     runner.0.expect_run(
-        "git remote get-url --push origin",
+        "git remote get-url --push --all origin",
         CmdOutput::success("git@github.com:someone/else.git\n"),
     );
     runner.0.expect_run(
@@ -455,7 +475,7 @@ fn a_symlinked_corpus_in_the_pr_tree_is_refused_and_the_yaml_is_attached() {
     let mock = &mut runner.0 .0;
     script_comment_and_label(mock);
     mock.expect_run(
-        "git remote get-url --push origin",
+        "git remote get-url --push --all origin",
         CmdOutput::success("https://github.com/o/r\n"),
     );
     mock.expect_run(
@@ -649,7 +669,7 @@ fn an_eligible_parameterised_block_is_committed_byte_identical() {
     std::fs::write(dir.join("blocks/tasks.yaml"), source).unwrap();
     let mut runner = Staged(Git(MockRunner::new()), Vec::new());
     script_comment_and_label(&mut runner.0 .0);
-    script_commit(&mut runner.0 .0);
+    script_commit_extension(&mut runner.0 .0, "yaml", source);
     runner
         .0
          .0
@@ -1054,7 +1074,7 @@ fn a_block_in_the_producers_format_from_an_eligible_walk_is_committed_byte_ident
     script_comment_and_label(&mut runner.0 .0);
     let mock = &mut runner.0 .0;
     mock.expect_run(
-        "git remote get-url --push origin",
+        "git remote get-url --push --all origin",
         CmdOutput::success("git@github.com:o/r.git\n"),
     );
     mock.expect_run(
@@ -1074,6 +1094,7 @@ fn a_block_in_the_producers_format_from_an_eligible_walk_is_committed_byte_ident
         "git rev-parse HEAD",
         CmdOutput::success(&format!("{COMMIT}\n")),
     );
+    script_blob_check(mock, &format!("{slug}.yaml"), &source);
     mock.expect_run("git worktree remove --force", CmdOutput::success(""));
     mock.expect_run(
         "git ls-remote origin refs/heads/feat/tasks",
@@ -1174,7 +1195,11 @@ fn patched_blocks_keep_their_extension_through_preservation_and_publication() {
                     CmdOutput::success("https://github.com/o/r/pull/12#issuecomment-2\n"),
                 );
             } else {
-                script_commit_extension(&mut runner.git.0, extension);
+                script_commit_extension(
+                    &mut runner.git.0,
+                    extension,
+                    std::str::from_utf8(bytes).unwrap(),
+                );
                 runner
                     .git
                     .0
@@ -1208,6 +1233,7 @@ struct LocalPublication {
     calls: Vec<CmdSpec>,
     reject_push: bool,
     reject_comment: bool,
+    real_urls: bool,
 }
 
 fn local_git(repo: &Path, args: &[&str]) -> String {
@@ -1231,7 +1257,7 @@ impl Runner for LocalPublication {
     fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
         self.calls.push(spec.clone());
         match spec.label.as_str() {
-            "git-push-url" => CmdOutput::success("git@github.com:o/r.git\n"),
+            "git-push-url" if !self.real_urls => CmdOutput::success("git@github.com:o/r.git\n"),
             "git-push-blocks" if self.reject_push => CmdOutput::failed(1, "push unavailable"),
             "gh-pr-comments" => CmdOutput::success("{\"comments\":[]}"),
             "gh-pr-comment" if self.reject_comment => CmdOutput::failed(1, "post unavailable"),
@@ -1325,6 +1351,7 @@ fn cached_writeback_retries_apply_current_admission_without_rewriting_history() 
             calls: Vec::new(),
             reject_push: true,
             reject_comment: true,
+            real_urls: false,
         };
         assert_eq!(
             publish(&mut runner, &runs, RUN, &verdict, &machine()).result,
@@ -1450,6 +1477,154 @@ fn cached_writeback_retries_apply_current_admission_without_rewriting_history() 
                 old
             );
         }
+        std::fs::remove_dir_all(repo).unwrap();
+    }
+}
+
+fn local_publication_fixture() -> (PathBuf, PathBuf, PathBuf, String) {
+    let (runs, dir, verdict) = run_dir(false);
+    let repo = runs.parent().unwrap();
+    let remote = repo.join("remote.git");
+    std::fs::create_dir(&remote).unwrap();
+    local_git(&remote, &["init", "--bare"]);
+    local_git(repo, &["init"]);
+    local_git(repo, &["config", "user.name", "QA"]);
+    local_git(repo, &["config", "user.email", "qa@example.com"]);
+    std::fs::write(repo.join("product"), "approved product\n").unwrap();
+    local_git(repo, &["add", "product"]);
+    local_git(repo, &["commit", "-m", "product"]);
+    let base = local_git(repo, &["rev-parse", "HEAD"]).trim().to_string();
+    local_git(repo, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    local_git(repo, &["push", "origin", "HEAD:refs/heads/feat/tasks"]);
+    edit_pr(&dir, |pr| pr["headRefOid"] = base.clone().into());
+    std::fs::write(
+        dir.join("publication.json"),
+        serde_json::to_vec(&Publication {
+            comment_url: Some("https://github.com/o/r/pull/12#issuecomment-1".into()),
+            label: Some("removed".into()),
+            ..Default::default()
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    (runs, dir, verdict, base)
+}
+
+#[test]
+fn effective_push_urls_must_all_be_the_pr_repository() {
+    for urls in [
+        vec!["git@github.com:o/r.git", "https://github.com/O/r.git"],
+        vec!["git@github.com:o/r.git", "git@github.com:other/repo.git"],
+        vec!["git@github.com:o/r.git", "unproved-local-path"],
+        vec!["git@github.com:other/repo.git", "git@github.com:o/r.git"],
+    ] {
+        let (runs, dir, verdict, base) = local_publication_fixture();
+        let repo = runs.parent().unwrap();
+        for url in &urls {
+            local_git(repo, &["config", "--add", "remote.origin.pushurl", url]);
+        }
+        let mut runner = LocalPublication {
+            calls: Vec::new(),
+            reject_push: true,
+            reject_comment: false,
+            real_urls: true,
+        };
+        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+        assert_eq!(
+            receipt.result,
+            ReceiptResult::Published,
+            "{:?}",
+            receipt.failure
+        );
+        let pushes = runner
+            .calls
+            .iter()
+            .filter(|c| c.label == "git-push-blocks")
+            .count();
+        assert_eq!(pushes, usize::from(urls[1] == "https://github.com/O/r.git"));
+        assert!(publication(&dir).writeback.unwrap().starts_with("attached"));
+        assert_eq!(
+            local_git(
+                &repo.join("remote.git"),
+                &["rev-parse", "refs/heads/feat/tasks"]
+            )
+            .trim(),
+            base
+        );
+        std::fs::remove_dir_all(repo).unwrap();
+    }
+}
+
+#[test]
+fn new_and_replacement_commits_with_converted_bytes_fall_back_without_pushing() {
+    for replacement in [false, true] {
+        let (runs, dir, verdict, _) = local_publication_fixture();
+        let repo = runs.parent().unwrap();
+        std::fs::rename(dir.join("blocks/tasks.yaml"), dir.join("blocks/tasks.yml")).unwrap();
+        std::fs::write(dir.join("blocks/tasks.yml"), "steps: []\n").unwrap();
+        let mut runner = LocalPublication {
+            calls: Vec::new(),
+            reject_push: true,
+            reject_comment: true,
+            real_urls: false,
+        };
+        if replacement {
+            assert_eq!(
+                publish(&mut runner, &runs, RUN, &verdict, &machine()).result,
+                ReceiptResult::Failed
+            );
+            assert!(publication(&dir).writeback_commit.is_some());
+        }
+        std::fs::write(repo.join(".gitattributes"), "*.yml text eol=lf\n").unwrap();
+        local_git(repo, &["add", ".gitattributes"]);
+        local_git(repo, &["commit", "-m", "declare block EOL"]);
+        let base = local_git(repo, &["rev-parse", "HEAD"]).trim().to_string();
+        edit_pr(&dir, |pr| pr["headRefOid"] = base.clone().into());
+        local_git(repo, &["push", "origin", "HEAD:refs/heads/feat/tasks"]);
+        let bytes = "# block\r\nsteps: []\r\n";
+        std::fs::write(dir.join("blocks/tasks.yml"), bytes).unwrap();
+        runner.calls.clear();
+        runner.reject_push = false;
+        runner.reject_comment = false;
+        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+        assert_eq!(
+            receipt.result,
+            ReceiptResult::Published,
+            "{:?}",
+            receipt.failure
+        );
+        assert!(!runner.calls.iter().any(|c| c.label == "git-push-blocks"));
+        let commit = runner
+            .calls
+            .iter()
+            .find(|c| c.label == "git-blocks-content")
+            .unwrap()
+            .args[1]
+            .split(':')
+            .next()
+            .unwrap();
+        assert_eq!(
+            local_git(
+                repo,
+                &[
+                    "show",
+                    &format!("{commit}:test-app/.qaren/actions/tasks.yml")
+                ]
+            ),
+            "# block\nsteps: []\n"
+        );
+        assert!(std::fs::read_to_string(dir.join("blocks-comment.md"))
+            .unwrap()
+            .contains(bytes));
+        assert_eq!(
+            local_git(
+                &repo.join("remote.git"),
+                &["rev-parse", "refs/heads/feat/tasks"]
+            )
+            .trim(),
+            base
+        );
+        assert!(!dir.join("writeback-wt").exists());
         std::fs::remove_dir_all(repo).unwrap();
     }
 }

@@ -3748,6 +3748,50 @@ fn a_core_failure_on_a_pr_run_still_stops_the_recorder_and_removes_the_worktree(
 }
 
 #[test]
+fn a_pr_run_retains_its_worktree_when_metro_cleanup_is_unproven() {
+    let (repo, app) = app_repo();
+    let wt = repo.join("runs").join(run_id()).join("wt");
+    let mut runner = PrRunner {
+        inner: MockRunner::new(),
+        app: app.clone(),
+        recorder_persisted_before_spawn: None,
+        fail_core_spawn: true,
+    };
+    let mock = &mut runner.inner;
+    script_pr_preflight(mock, &repo, &wt);
+    script_provision(mock);
+    script_pr_provenance_recheck(mock);
+    script_drift_status(mock);
+    script_recorder_start(mock);
+    mock.expect_run("ps", CmdOutput::failed(1, ""));
+    mock.expect_run("lsof", CmdOutput::failed(2, "inventory unavailable"));
+    script_recorder_stop(mock);
+
+    let receipt = run(&mut runner, &pr_request(&repo, &app));
+
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Failed,
+        "{:?}",
+        receipt.failure
+    );
+    assert_eq!(
+        receipt.failure.as_ref().unwrap().code,
+        FailureCode::CoreSpawnFailed
+    );
+    assert_eq!(runner.inner.remaining(), 0);
+    assert_eq!(receipt.cleanup["recorder"], "removed");
+    assert!(receipt.cleanup["pr_worktree"].contains("retained"));
+    assert!(receipt.cleanup["device_lease"].contains("retained"));
+    assert!(wt.exists());
+    assert!(RunRecord::load(&repo.join("runs"), &run_id())
+        .unwrap()
+        .resources
+        .pr_worktree
+        .is_some());
+}
+
+#[test]
 fn a_fetched_head_that_is_not_the_viewed_head_refuses_and_leaves_no_worktree() {
     let (repo, app) = app_repo();
     let mut mock = MockRunner::new();
