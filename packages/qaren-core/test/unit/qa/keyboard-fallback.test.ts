@@ -1558,7 +1558,10 @@ test('no-target focus proof preserves a quoted ID ending in -pressable', async (
   assert.deepEqual(fake.focusReads, ['custom-pressable']);
   assert.deepEqual(fake.typed, []);
   assert.deepEqual(mutations(fake.log), []);
-  assert.equal(fake.rows.some((row) => row.outcome === 'pass'), false);
+  assert.equal(
+    fake.rows.some((row) => row.outcome === 'pass'),
+    false,
+  );
 });
 
 for (const blocker of ['secure', 'disabled'] as const) {
