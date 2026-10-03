@@ -2494,7 +2494,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (!resp.ok) {
     const message = resp.error?.message ?? 'runner returned !ok with no error';
     const code = resp.error?.code;
-    if (presenceRequested) {
+    if (presenceRequested && resp.error?.reason !== 'app-not-running') {
       return presenceCaptureUnavailable(message, 'RN_FAST_RUNNER_DOWN', true);
     }
     if (code === 'RUNNER_TIMEOUT') {
