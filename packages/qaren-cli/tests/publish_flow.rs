@@ -119,6 +119,10 @@ fn script_comment_and_label(mock: &mut MockRunner) {
 }
 
 fn script_commit(mock: &mut MockRunner) {
+    script_commit_extension(mock, "yaml");
+}
+
+fn script_commit_extension(mock: &mut MockRunner, extension: &str) {
     mock.expect_run(
         "git remote get-url --push origin",
         CmdOutput::success("git@github.com:o/r.git\n"),
@@ -129,7 +133,7 @@ fn script_commit(mock: &mut MockRunner) {
     );
     mock.expect_run("git worktree add --detach", CmdOutput::success(""));
     mock.expect_run(
-        "git add -f -- test-app/.qaren/actions/tasks.yaml",
+        &format!("git add -f -- test-app/.qaren/actions/tasks.{extension}"),
         CmdOutput::success(""),
     );
     mock.expect_run(
@@ -1087,4 +1091,115 @@ fn a_block_in_the_producers_format_from_an_eligible_walk_is_committed_byte_ident
     );
     assert_eq!(runner.1, [source]);
     assert_eq!(receipt.outcomes["writeback"], format!("committed {COMMIT}"));
+}
+
+#[test]
+fn patched_blocks_keep_their_extension_through_preservation_and_publication() {
+    struct ExistingBlock {
+        git: Git,
+        extension: &'static str,
+        bytes: Vec<u8>,
+        written: bool,
+    }
+    impl Runner for ExistingBlock {
+        fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+            if spec.label == "git-worktree-add" {
+                let actions = Path::new(&spec.args[3]).join("test-app/.qaren/actions");
+                std::fs::create_dir_all(&actions).unwrap();
+                std::fs::write(
+                    actions.join(format!("tasks.{}", self.extension)),
+                    "old block",
+                )
+                .unwrap();
+            }
+            if spec.label == "git-add-blocks" {
+                let actions = spec.cwd.as_ref().unwrap().join("test-app/.qaren/actions");
+                assert_eq!(
+                    std::fs::read(actions.join(format!("tasks.{}", self.extension))).unwrap(),
+                    self.bytes
+                );
+                let other = if self.extension == "yml" {
+                    "yaml"
+                } else {
+                    "yml"
+                };
+                assert!(!actions.join(format!("tasks.{other}")).exists());
+                self.written = true;
+            }
+            self.git.run(spec)
+        }
+        fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+            self.git.spawn_group(spec, log)
+        }
+        fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+            self.git.spawn_piped(spec, log)
+        }
+        fn sleep(&mut self, d: std::time::Duration) {
+            self.git.sleep(d)
+        }
+        fn now_epoch_ms(&self) -> u64 {
+            self.git.now_epoch_ms()
+        }
+        fn commands_executed(&self) -> u64 {
+            self.git.commands_executed()
+        }
+    }
+    for extension in ["yml", "yaml"] {
+        for fallback in [false, true] {
+            let (runs, dir, verdict) = run_dir(fallback);
+            let app = runs.parent().unwrap().join("patched-app");
+            let actions = app.join(".qaren/actions");
+            std::fs::create_dir_all(&actions).unwrap();
+            let bytes = b"# patched block\r\nsteps: []\r\n\n";
+            std::fs::write(actions.join(format!("tasks.{extension}")), bytes).unwrap();
+            std::fs::remove_file(dir.join("blocks/tasks.yaml")).unwrap();
+            let (copied, refused) =
+                qaren::worktree::copy_blocks(&app, &["tasks".into()], &dir.join("blocks"));
+            assert_eq!(copied, ["tasks"]);
+            assert!(refused.is_empty());
+            assert_eq!(
+                std::fs::read(dir.join(format!("blocks/tasks.{extension}"))).unwrap(),
+                bytes
+            );
+            let mut runner = ExistingBlock {
+                git: Git(MockRunner::new()),
+                extension,
+                bytes: bytes.to_vec(),
+                written: false,
+            };
+            script_comment_and_label(&mut runner.git.0);
+            if fallback {
+                runner.git.0.expect_run(
+                    "gh pr comment 12",
+                    CmdOutput::success("https://github.com/o/r/pull/12#issuecomment-2\n"),
+                );
+            } else {
+                script_commit_extension(&mut runner.git.0, extension);
+                runner
+                    .git
+                    .0
+                    .expect_run("git push origin", CmdOutput::success(""));
+            }
+            let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+            assert_eq!(
+                receipt.result,
+                ReceiptResult::Published,
+                "{:?}",
+                receipt.failure
+            );
+            assert_eq!(runner.git.0.remaining(), 0);
+            if fallback {
+                let comment = std::fs::read_to_string(dir.join("blocks-comment.md")).unwrap();
+                assert!(comment.contains(&format!("` test-app/.qaren/actions/tasks.{extension} `")));
+                assert!(comment.contains("# patched block\r\nsteps: []"));
+                assert!(!runner.written);
+            } else {
+                assert!(runner.written);
+                assert_eq!(
+                    publication(&dir).writeback.as_deref(),
+                    Some(format!("committed {COMMIT}").as_str())
+                );
+            }
+        }
+    }
 }

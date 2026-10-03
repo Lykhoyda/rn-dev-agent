@@ -91,7 +91,7 @@ fn read_action(path: &Path) -> Result<String, String> {
     Ok(text)
 }
 
-fn action_path(dir: &Path, slug: &str) -> Result<PathBuf, String> {
+pub(crate) fn action_path(dir: &Path, slug: &str) -> Result<Option<PathBuf>, String> {
     let mut found = None;
     for extension in ["yaml", "yml"] {
         let path = dir.join(format!("{slug}.{extension}"));
@@ -108,7 +108,7 @@ fn action_path(dir: &Path, slug: &str) -> Result<PathBuf, String> {
             Err(e) => return Err(format!("cannot inspect {}: {e}", path.display())),
         }
     }
-    found.ok_or_else(|| format!("no saved action named {slug}"))
+    Ok(found)
 }
 
 pub fn list(app_root: &Path) -> Result<Vec<ActionEntry>, String> {
@@ -129,7 +129,13 @@ pub fn list(app_root: &Path) -> Result<Vec<ActionEntry>, String> {
             }
             _ => continue,
         };
-        let Some(mut fields) = header(&read_action(&action_path(&dir, &slug)?)?, &slug) else {
+        let Some(mut fields) = header(
+            &read_action(
+                &action_path(&dir, &slug)?
+                    .ok_or_else(|| format!("no saved action named {slug}"))?,
+            )?,
+            &slug,
+        ) else {
             continue;
         };
         actions.push(ActionEntry {
@@ -154,7 +160,8 @@ pub fn show(app_root: &Path, slug: &str) -> Result<String, String> {
     if !valid {
         return Err(format!("{slug:?} is not an action slug"));
     }
-    let path = action_path(&actions_dir(app_root)?, slug)?;
+    let path = action_path(&actions_dir(app_root)?, slug)?
+        .ok_or_else(|| format!("no saved action named {slug}"))?;
     let text = read_action(&path)?;
     if header(&text, slug).is_none() {
         return Err(format!("no valid action header for {slug}"));

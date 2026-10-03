@@ -121,6 +121,9 @@ test('an earlier display none prunes only when every later style override was ex
   for (let i = 0; i < 17; i++) deep = [deep];
   const cases: Array<[string, unknown, boolean]> = [
     ['none then flex', [{ display: 'none' }, { display: 'flex' }], true],
+    ['none then undefined', [{ display: 'none' }, { display: undefined }], true],
+    ['none then null', [{ display: 'none' }, { display: null }], true],
+    ['none then missing', [{ display: 'none' }, {}], false],
     ['none alone', { display: 'none' }, false],
     ['flex then none', [{ display: 'flex' }, { display: 'none' }], false],
     ['unreadable alone', unreadable, true],
@@ -218,6 +221,36 @@ test('inactive fibers with their own control identity cannot block a visible act
       const result = await runPlan(parsePlan('1. Tap the save button').blocks!, f.deps);
       assert.equal(result.verdict, 'PASS', JSON.stringify(result));
       assert.deepEqual(f.actions, ['press @e1']);
+    }
+  }
+});
+
+test('display resets retain visible host controls and descendant text', () => {
+  for (const reset of [undefined, null]) {
+    for (const frozen of [false, true]) {
+      const freeze = <T extends object>(value: T): T => (frozen ? devFreeze(value) : value);
+      const style = freeze([freeze({ display: 'none' }), freeze([freeze({ display: reset })])]);
+      for (const qa of [false, true]) {
+        const out = digest(
+          [
+            {
+              hostType: 'RCTView',
+              props: { testID: 'save', onPress, style },
+              children: [
+                { hostType: 'RCTView', props: { style }, children: [{ text: 'Save changes' }] },
+              ],
+            },
+          ],
+          qa,
+        );
+        assert.deepEqual(ids(out), ['save']);
+        assert.equal(out.interactive[0].text, 'Save changes');
+        assert.deepEqual(
+          out.hostEvidence.hosts.map((host) => host.testID),
+          ['save', undefined],
+        );
+        assert.equal(out.verdict.complete, true);
+      }
     }
   }
 });

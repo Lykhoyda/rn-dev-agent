@@ -165,8 +165,6 @@ fn is_real(path: &Path, dir: bool) -> bool {
     })
 }
 
-// Copies each saved block out of the PR worktree before it is removed. A PR controls that tree,
-// so a symlinked `.qaren`, `actions` or block file is refused rather than followed.
 pub fn copy_blocks(app_root: &Path, slugs: &[String], dest: &Path) -> (Vec<String>, Vec<String>) {
     let qaren = app_root.join(".qaren");
     let actions = qaren.join("actions");
@@ -174,12 +172,14 @@ pub fn copy_blocks(app_root: &Path, slugs: &[String], dest: &Path) -> (Vec<Strin
     let mut copied = Vec::new();
     let mut refused = Vec::new();
     for slug in slugs {
-        let source = actions.join(format!("{slug}.yaml"));
-        let ok = safe_slug(slug)
-            && corpus_ok
-            && is_real(&source, false)
-            && std::fs::create_dir_all(dest).is_ok()
-            && std::fs::copy(&source, dest.join(format!("{slug}.yaml"))).is_ok();
+        let source = (safe_slug(slug) && corpus_ok)
+            .then(|| crate::actions::action_path(&actions, slug).ok().flatten())
+            .flatten();
+        let ok = source.is_some_and(|source| {
+            is_real(&source, false)
+                && std::fs::create_dir_all(dest).is_ok()
+                && std::fs::copy(&source, dest.join(source.file_name().unwrap())).is_ok()
+        });
         if ok {
             copied.push(slug.clone());
         } else {
@@ -367,6 +367,34 @@ mod tests {
         for bad in ["", "../x", "a/b", ".hidden", "x y"] {
             assert!(!safe_slug(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn copied_blocks_keep_the_unique_extension_and_exact_bytes() {
+        let root = std::env::temp_dir().join(format!("qaren-block-ext-{}", std::process::id()));
+        let app = root.join("app");
+        let actions = app.join(".qaren/actions");
+        std::fs::create_dir_all(&actions).unwrap();
+        let bytes = b"# patched block\r\nsteps: []\r\n\n";
+        for (slug, ext) in [("tasks", "yml"), ("control", "yaml")] {
+            std::fs::write(actions.join(format!("{slug}.{ext}")), bytes).unwrap();
+        }
+        for ext in ["yaml", "yml"] {
+            std::fs::write(actions.join(format!("ambiguous.{ext}")), bytes).unwrap();
+        }
+        let dest = root.join("blocks");
+        let (copied, refused) = copy_blocks(
+            &app,
+            &["tasks".into(), "control".into(), "ambiguous".into()],
+            &dest,
+        );
+        assert_eq!(copied, ["tasks", "control"]);
+        assert_eq!(refused, ["ambiguous"]);
+        assert_eq!(std::fs::read(dest.join("tasks.yml")).unwrap(), bytes);
+        assert_eq!(std::fs::read(dest.join("control.yaml")).unwrap(), bytes);
+        assert!(!dest.join("tasks.yaml").exists());
+        assert!(!dest.join("control.yml").exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]

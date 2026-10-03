@@ -1397,26 +1397,25 @@ export const INJECTED_HELPERS = `
       function routeRead(object, key) {
         try { return qaData(object, key, true); } catch (e) { return undefined; }
       }
-      // Null means no override; UNKNOWN_DISPLAY means an override could not be read or was past a scan cap.
       var UNKNOWN_DISPLAY = {};
+      var MISSING_DISPLAY = {};
       function styleRead(object, key) {
-        try { return qaData(object, key, true); } catch (e) { return UNKNOWN_DISPLAY; }
+        try { return key in object ? qaData(object, key, true) : MISSING_DISPLAY; } catch (e) { return UNKNOWN_DISPLAY; }
       }
       function resolvedDisplay(style, depth) {
         if (style === UNKNOWN_DISPLAY) return UNKNOWN_DISPLAY;
-        if (!style || typeof style !== 'object') return null;
+        if (style === MISSING_DISPLAY || !style || typeof style !== 'object') return MISSING_DISPLAY;
         if (depth > 16) return UNKNOWN_DISPLAY;
         if (Array.isArray(style)) {
-          var shown = null;
+          var shown = MISSING_DISPLAY;
           for (var di = 0; di < style.length; di++) {
             if (di >= 64) return UNKNOWN_DISPLAY;
             var part = resolvedDisplay(styleRead(style, String(di)), depth + 1);
-            if (part !== null) shown = part;
+            if (part !== MISSING_DISPLAY) shown = part;
           }
           return shown;
         }
-        var display = styleRead(style, 'display');
-        return display === undefined ? null : display;
+        return styleRead(style, 'display');
       }
       // A provably inactive route is off the visible screen; skipping it only loses digest semantics.
       function inactiveRoute(fiber) {
@@ -4992,25 +4991,20 @@ export const INJECTED_HELPERS = `
     return joined ? joined : undefined;
   }
 
-  // ── Task 5: accessibility "hidden" port (RNTL isHiddenFromAccessibility +
-  // isSubtreeInaccessible). Read the two predicate keys directly — enumerating
-  // exotic style objects with hasOwnProperty throws and aborts the frontmost
-  // walk (GH #1057). Walks fiber.return (live fibers) not instance.parent.
-  // opacity:0 is NOT hidden (RNTL accessibility.ts:73).
-  // ponytail: last non-undefined wins; an entry whose key is explicitly undefined no longer overrides an earlier value
+  var MISSING_STYLE_VALUE = {};
   function styleValue(style, key) {
-    if (style == null) return undefined;
+    if (style == null) return MISSING_STYLE_VALUE;
     try {
       if (Array.isArray(style)) {
         for (var i = style.length - 1; i >= 0; i--) {
           var v = styleValue(style[i], key);
-          if (v !== undefined) return v;
+          if (v !== MISSING_STYLE_VALUE) return v;
         }
-        return undefined;
+        return MISSING_STYLE_VALUE;
       }
-      if (typeof style === 'object') return style[key];
+      if (typeof style === 'object' && key in style) return style[key];
     } catch (_) {}
-    return undefined;
+    return MISSING_STYLE_VALUE;
   }
 
   // True if \`fiber\` itself is an inaccessible-subtree root.

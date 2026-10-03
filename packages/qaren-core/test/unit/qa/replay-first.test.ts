@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -138,32 +139,38 @@ test('an edited plan line changes planHash, so the block is walked and rewritten
   );
 });
 
-test('a stored id missing at line k re-walks from k and patches only that line', async () => {
-  const dir = root();
-  await run(literalLabel, dir);
-  const before = readFileSync(actionFile(dir), 'utf8');
-  const doneLine = blocks(literalLabel)[0].items[1].line;
-  const { result, fake } = await run(literalLabel, dir, { doneId: 'onboarding-finish' });
-  assert.equal(result.verdict, 'PASS', JSON.stringify(result.failure));
-  assert.equal(result.path, `replay→walk@${doneLine}`);
-  assert.deepEqual(result.blocks, [{ key: SLUG, outcome: 'pass', source: 'patched' }]);
-  assert.deepEqual(result.blocksWritten, [SLUG]);
-  assert.equal(result.jev.calls, 0);
-  assert.equal(fake.judge.calls.length, 0);
-  const miss = result.steps.find((row) => row.line === doneLine && row.outcome !== 'pass');
-  assert.equal(miss?.outcome, 'retry');
-  assert.match(miss?.reason ?? '', /REPLAY_SELECTOR/);
-  assert.ok(!result.steps.some((row) => row.outcome === 'fail'));
-  const after = readFileSync(actionFile(dir), 'utf8');
-  const a = before.split('\n');
-  const b = after.split('\n');
-  assert.equal(a.length, b.length);
-  const differing = a.flatMap((line, i) => (line === b[i] ? [] : [[line, b[i]]]));
-  assert.deepEqual(differing, [
-    ['- tapOn: { id: "onboarding-done" }', '- tapOn: { id: "onboarding-finish" }'],
-  ]);
-  for (const line of a.filter((l) => l.startsWith('# ✓'))) assert.ok(b.includes(line));
-});
+for (const extension of ['yaml', 'yml']) {
+  test(`a stored .${extension} id missing at line k re-walks and patches only that line`, async () => {
+    const dir = root();
+    await run(literalLabel, dir);
+    const savedPath = join(dir, '.qaren', 'actions', `${SLUG}.${extension}`);
+    if (extension === 'yml') renameSync(actionFile(dir), savedPath);
+    const before = readFileSync(savedPath, 'utf8');
+    const doneLine = blocks(literalLabel)[0].items[1].line;
+    const { result, fake } = await run(literalLabel, dir, { doneId: 'onboarding-finish' });
+    assert.equal(result.verdict, 'PASS', JSON.stringify(result.failure));
+    assert.equal(result.path, `replay→walk@${doneLine}`);
+    assert.deepEqual(result.blocks, [{ key: SLUG, outcome: 'pass', source: 'patched' }]);
+    assert.deepEqual(result.blocksWritten, [SLUG]);
+    assert.equal(result.jev.calls, 0);
+    assert.equal(fake.judge.calls.length, 0);
+    const miss = result.steps.find((row) => row.line === doneLine && row.outcome !== 'pass');
+    assert.equal(miss?.outcome, 'retry');
+    assert.match(miss?.reason ?? '', /REPLAY_SELECTOR/);
+    assert.ok(!result.steps.some((row) => row.outcome === 'fail'));
+    const after = readFileSync(savedPath, 'utf8');
+    const other = extension === 'yml' ? 'yaml' : 'yml';
+    assert.equal(existsSync(join(dir, '.qaren', 'actions', `${SLUG}.${other}`)), false);
+    const a = before.split('\n');
+    const b = after.split('\n');
+    assert.equal(a.length, b.length);
+    const differing = a.flatMap((line, i) => (line === b[i] ? [] : [[line, b[i]]]));
+    assert.deepEqual(differing, [
+      ['- tapOn: { id: "onboarding-done" }', '- tapOn: { id: "onboarding-finish" }'],
+    ]);
+    for (const line of a.filter((l) => l.startsWith('# ✓'))) assert.ok(b.includes(line));
+  });
+}
 
 test('a failed walk writes nothing', async () => {
   const dir = root();

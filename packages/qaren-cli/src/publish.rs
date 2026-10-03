@@ -221,12 +221,21 @@ fn saved_blocks(
     let mut published = Vec::new();
     let mut withheld = Vec::new();
     for slug in &pr.blocks {
-        let path = run_dir.join("blocks").join(format!("{slug}.yaml"));
+        let path = worktree::safe_slug(slug)
+            .then(|| {
+                crate::actions::action_path(&run_dir.join("blocks"), slug)
+                    .ok()
+                    .flatten()
+            })
+            .flatten();
+        let Some(path) = path else {
+            return Err(failure(
+                format!("the saved block {slug} is missing or ambiguous in the run directory"),
+                "re-run qaren pr to save the blocks again",
+            ));
+        };
         let real = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_file());
-        let Some(yaml) = (worktree::safe_slug(slug) && real)
-            .then(|| std::fs::read_to_string(&path).ok())
-            .flatten()
-        else {
+        let Some(yaml) = real.then(|| std::fs::read_to_string(&path).ok()).flatten() else {
             return Err(failure(
                 format!("the saved block {slug} is missing or unreadable in the run directory"),
                 "re-run qaren pr to save the blocks again",
@@ -240,7 +249,10 @@ fn saved_blocks(
                 "the block carries a secret or machine identity",
             ));
         } else {
-            published.push((slug.clone(), yaml));
+            published.push((
+                path.file_name().unwrap().to_string_lossy().into_owned(),
+                yaml,
+            ));
         }
     }
     Ok((published, withheld))
@@ -299,8 +311,8 @@ fn fence(content: &str, min: usize) -> String {
     "`".repeat(min.max(longest + 1))
 }
 
-fn action_rel(app_rel: &str, slug: &str) -> String {
-    let rel = format!(".qaren/actions/{slug}.yaml");
+fn action_rel(app_rel: &str, filename: &str) -> String {
+    let rel = format!(".qaren/actions/{filename}");
     if app_rel == "." {
         rel
     } else {
@@ -353,17 +365,26 @@ fn commit_blocks(
             return Err(format!("git worktree add failed: {}", added.summary()));
         }
         let mut paths = Vec::new();
-        for (slug, yaml) in blocks {
-            let rel = action_rel(&pr.app_rel, slug);
+        for (filename, yaml) in blocks {
+            let rel = action_rel(&pr.app_rel, filename);
             let dir = real_dir_under(&tmp, Path::new(&rel).parent().unwrap_or(Path::new("")))?;
-            let dest = dir.join(format!("{slug}.yaml"));
+            let slug = Path::new(filename).file_stem().unwrap().to_string_lossy();
+            if let Some(existing) = crate::actions::action_path(&dir, &slug)? {
+                if existing.file_name() != Some(std::ffi::OsStr::new(filename)) {
+                    return Err(format!("{rel} would create an ambiguous action"));
+                }
+            }
+            let dest = dir.join(filename);
             if std::fs::symlink_metadata(&dest).is_ok_and(|m| !m.file_type().is_file()) {
                 return Err(format!("{rel} exists and is not a regular file"));
             }
             std::fs::write(&dest, yaml).map_err(|e| e.to_string())?;
             paths.push(rel);
         }
-        let slugs: Vec<&str> = blocks.iter().map(|(slug, _)| slug.as_str()).collect();
+        let slugs: Vec<_> = blocks
+            .iter()
+            .map(|(filename, _)| Path::new(filename).file_stem().unwrap().to_string_lossy())
+            .collect();
         let mut add_args = vec!["add", "-f", "--"];
         add_args.extend(paths.iter().map(String::as_str));
         let added = git(runner, "git-add-blocks", &tmp, &add_args, 60);
@@ -443,13 +464,14 @@ fn blocks_comment(
     out.push_str("These blocks were saved by the QA run but could not be pushed to the branch. Commit them to replay the walk next time.\n\n");
     out.push_str("<details><summary>Saved blocks to commit</summary>\n\n");
     // YAML is committable content, so it is fenced verbatim rather than rewritten.
-    for (slug, yaml) in blocks {
-        let path = action_rel(&pr.app_rel, slug);
+    for (filename, yaml) in blocks {
+        let path = action_rel(&pr.app_rel, filename);
         let tick = fence(&path, 1);
         let block = fence(yaml, 3);
         out.push_str(&format!(
-            "{tick} {path} {tick}\n\n{block}yaml\n{}\n{block}\n\n",
-            yaml.trim_end()
+            "{tick} {path} {tick}\n\n{block}yaml\n{}{}{block}\n\n",
+            yaml,
+            if yaml.ends_with('\n') { "" } else { "\n" }
         ));
     }
     out.push_str("</details>\n");
