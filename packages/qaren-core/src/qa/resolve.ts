@@ -181,6 +181,38 @@ export function keyboardFallbackTarget(
   return { element, oracleTestID: withoutPressable(element.testID) };
 }
 
+export function bindFillIdentity(
+  step: Step & { kind: 'fill' },
+  screen: Screen,
+  identity: string,
+):
+  | { kind: 'strict'; strict: { ref: string; element: Element } }
+  | { kind: 'fallback'; fallback: { element: Element; oracleTestID: string } }
+  | undefined {
+  const elements = screen.elements.filter(
+    (e) => e.testID !== undefined && withoutPressable(e.testID) === identity,
+  );
+  if (
+    !identity ||
+    elements.some((e) => elements.filter((other) => other.testID === e.testID).length !== 1)
+  )
+    return;
+  const native = elements.filter(isNativeInput);
+  if (native.length) {
+    if (native.length !== 1) return;
+    const strict = prepareTarget(
+      { ...step, target: { quoted: native[0].testID!, phrase: identity, exact: 'id' } },
+      { ...screen, elements },
+    );
+    return 'ref' in strict ? { kind: 'strict', strict } : undefined;
+  }
+  const fallback = keyboardFallbackTarget(
+    { ...step, target: { quoted: identity, phrase: identity } },
+    { ...screen, elements },
+  );
+  return fallback ? { kind: 'fallback', fallback } : undefined;
+}
+
 export function decideTarget(prepared: TargetQuestion, answer: Answer | undefined): Resolution {
   const top = confidentChoice(prepared.question, answer);
   if (!top)

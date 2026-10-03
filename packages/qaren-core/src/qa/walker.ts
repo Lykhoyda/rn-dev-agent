@@ -14,7 +14,7 @@ import {
   decideScreen,
   elementSelector,
   keyboardFallbackTarget,
-  prepareTarget,
+  bindFillIdentity,
   stepTarget,
   targetVisible,
   visibleSelector,
@@ -622,7 +622,9 @@ export async function walkBlock(
     before: Observation,
     target: { element: Element; oracleTestID: string },
   ): Promise<
-    WalkOutcome | { ref: string; element: Element; observation: Observation } | 'typed'
+    | WalkOutcome
+    | { ref: string; element: Element; observation: Observation; identity: string }
+    | 'typed'
   > => {
     const quoted = item.target.quoted!;
     const nothingTyped = (reason: string, screen: Screen): WalkOutcome =>
@@ -651,14 +653,11 @@ export async function walkBlock(
       );
     const readyBy = deps.now() + KEYBOARD_READY_MS;
     let after = await capture(item);
-    const bound = (): { ref: string; element: Element } | undefined => {
-      const strict = prepareTarget(item, after.screen);
-      return 'ref' in strict && isNativeInput(strict.element) ? strict : undefined;
-    };
+    const bound = () => bindFillIdentity(item, after.screen, target.oracleTestID);
     for (
       let captures = 1;
       after.screen.keyboardVisible !== true &&
-      !bound() &&
+      bound()?.kind !== 'strict' &&
       captures < KEYBOARD_READY_CAPTURES &&
       deps.now() < readyBy;
       captures += 1
@@ -666,14 +665,13 @@ export async function walkBlock(
       await pause(Math.min(WAIT_POLL_MS, Math.max(0, readyBy - deps.now())));
       after = await capture(item);
     }
-    const strict = bound();
-    if (strict) return { ...strict, observation: after };
+    const binding = bound();
+    if (binding?.kind === 'strict')
+      return { ...binding.strict, observation: after, identity: target.oracleTestID };
     if (after.screen.keyboardVisible !== true)
       return nothingTyped(`tapping "${quoted}" raised no keyboard`, after.screen);
-    const again = keyboardFallbackTarget(item, after.screen);
-    const same = again && again.oracleTestID === target.oracleTestID;
-    if (!again || !same)
-      return nothingTyped(`the tap on "${quoted}" changed the screen`, after.screen);
+    const again = binding?.kind === 'fallback' ? binding.fallback : undefined;
+    if (!again) return nothingTyped(`the tap on "${quoted}" changed the screen`, after.screen);
     let entry: ActResult;
     try {
       entry = await mutate(item, after, (context) =>
@@ -853,6 +851,7 @@ export async function walkBlock(
       // press · fill · back · dialog: snapshot → resolve → act → read-back → snapshot → diff rule
       let outcome: WalkOutcome | undefined;
       let fellBack = false;
+      let fillIdentity: string | undefined;
       let typedUnverified = false;
       for (let attempt = 1; attempt <= 2 && !outcome; attempt += 1) {
         currentAttempt = attempt;
@@ -875,7 +874,19 @@ export async function walkBlock(
               const decision = await decide(before, undefined, item, Infinity, initial);
               initial = undefined;
               resolvedBy = decision.resolvedBy === 'jev' ? 'jev' : resolvedBy;
-              const decided = decision.target!;
+              const binding =
+                item.kind === 'fill' && fillIdentity !== undefined
+                  ? bindFillIdentity(item, before.screen, fillIdentity)
+                  : undefined;
+              const decided =
+                fillIdentity !== undefined
+                  ? binding?.kind === 'strict'
+                    ? binding.strict
+                    : {
+                        refuse: 'TARGET_NOT_FOUND',
+                        reason: 'the original input identity no longer resolves uniquely',
+                      }
+                  : decision.target!;
               let resolution: Exclude<Resolution, { refuse: string }>;
               if ('refuse' in decided) {
                 const fallback =
@@ -897,6 +908,7 @@ export async function walkBlock(
                   break;
                 }
                 before = result.observation;
+                fillIdentity = result.identity;
                 resolution = result;
               } else resolution = decided;
               if ('scroll' in resolution) {
@@ -972,8 +984,13 @@ export async function walkBlock(
                 break;
               }
               before = await capture(item);
-              const fallback = keyboardFallbackTarget(item, before.screen);
-              if (!fallback || fallback.oracleTestID !== targetID.replace(/-pressable$/, '')) {
+              const binding = bindFillIdentity(
+                item,
+                before.screen,
+                targetID.replace(/-pressable$/, ''),
+              );
+              const fallback = binding?.kind === 'fallback' ? binding.fallback : undefined;
+              if (!fallback) {
                 outcome = failed(
                   item,
                   attempt,
@@ -993,6 +1010,7 @@ export async function walkBlock(
                 break;
               }
               before = result.observation;
+              fillIdentity = result.identity;
               continue;
             }
             break;

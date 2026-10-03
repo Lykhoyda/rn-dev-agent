@@ -1176,3 +1176,145 @@ test('a labelled target with a unique ID remains eligible', () => {
     undefined,
   );
 });
+
+for (const refusal of ['resolution', 'native binding']) {
+  for (const kind of ['input', 'other'] as const) {
+    for (const matching of [false, true]) {
+      test(`post-tap ${kind} preserves original identity after ${refusal} refusal (${matching})`, async () => {
+        const initial =
+          refusal === 'resolution'
+            ? wrapper('Email', { testID: 'original-email-pressable' })
+            : joinScreen(
+                [
+                  {
+                    ref: '@wrap',
+                    identifier: 'original-email-pressable',
+                    type: 'Other',
+                    label: 'Email',
+                    hittable: true,
+                  },
+                ],
+                [{ role: 'textinput', testID: 'original-email-pressable' }],
+              ).elements[0];
+        const input = element('@input', 'Email', {
+          kind,
+          nativeKind: kind,
+          testID: matching ? 'original-email' : 'replacement-email',
+        });
+        const fake = app({ initial: [initial], focused: [screenOf([input], true)] });
+        const fill = fake.deps.fill;
+        fake.deps.fill = async (ref, text, context) => {
+          if (ref === '@wrap') {
+            context.check();
+            fake.log.push('strict refusal');
+            return {
+              ok: false,
+              proven: false,
+              mutation: 'none',
+              error: 'NO_TEXT_INPUT_TARGET: refused',
+            };
+          }
+          return fill(ref, text, context);
+        };
+        const result = await walkBlock(blocks(plan(EMAIL, 'Email', ''))[0], fake.deps);
+        assert.equal(result.block.outcome, matching ? 'pass' : 'fail');
+        assert.equal(fake.typed.length, matching ? 1 : 0);
+        if (!matching) {
+          assert.equal(
+            fake.rows.some((row) => row.outcome === 'pass'),
+            false,
+          );
+          assert.equal(
+            fake.log.some((entry) => entry === 'fill @input'),
+            false,
+          );
+        } else {
+          assert.equal(fake.typed[0].ref, '@input');
+          assert.equal(
+            fake.rows[0].reason?.startsWith('UNVERIFIED_FILL:') ?? false,
+            kind === 'other',
+          );
+        }
+      });
+    }
+  }
+}
+
+for (const refusal of ['resolution', 'native binding']) {
+  for (const matching of [false, true]) {
+    test(`freshness refresh retains post-tap identity after ${refusal} refusal (${matching})`, async () => {
+      const initial =
+        refusal === 'resolution'
+          ? wrapper('Email', { testID: 'original-email-pressable' })
+          : joinScreen(
+              [
+                {
+                  ref: '@wrap',
+                  identifier: 'original-email-pressable',
+                  type: 'Other',
+                  label: 'Email',
+                  hittable: true,
+                },
+              ],
+              [{ role: 'textinput', testID: 'original-email-pressable' }],
+            ).elements[0];
+      const input = element('@input', 'Email', {
+        kind: 'input',
+        nativeKind: 'input',
+        testID: 'original-email',
+      });
+      const replacement = element('@replacement', matching ? 'Renamed field' : 'Email', {
+        kind: 'input',
+        nativeKind: 'input',
+        testID: matching ? 'original-email' : 'replacement-email',
+      });
+      const fake = app({
+        initial: [initial],
+        focused: [screenOf([input], true), screenOf([replacement], true)],
+      });
+      let time = 0;
+      let expired = false;
+      fake.deps.now = () => time;
+      fake.deps.timing = (event) => {
+        if (
+          !expired &&
+          fake.state() === 'focused' &&
+          event.stage === 'capture' &&
+          event.edge === 'end'
+        ) {
+          expired = true;
+          time += 60_000;
+        }
+      };
+      const fill = fake.deps.fill;
+      fake.deps.fill = async (ref, text, context) => {
+        if (ref === '@wrap') {
+          context.check();
+          return {
+            ok: false,
+            proven: false,
+            mutation: 'none',
+            error: 'NO_TEXT_INPUT_TARGET: refused',
+          };
+        }
+        return fill(ref, text, context);
+      };
+      const result = await walkBlock(blocks(plan(EMAIL, 'Email', ''))[0], fake.deps);
+      assert.equal(expired, true);
+      assert.equal(
+        result.block.outcome,
+        matching ? 'pass' : 'fail',
+        JSON.stringify(result.failure),
+      );
+      assert.equal(fake.typed.length, matching ? 1 : 0);
+      if (matching) assert.equal(fake.typed[0].ref, '@replacement');
+      else {
+        assert.equal(
+          fake.rows.some((row) => row.outcome === 'pass'),
+          false,
+        );
+        assert.match(result.failure?.seen ?? '', /^TARGET_NOT_FOUND:/);
+      }
+    });
+  }
+}
