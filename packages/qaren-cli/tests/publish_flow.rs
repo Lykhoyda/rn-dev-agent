@@ -188,6 +188,57 @@ fn publication(dir: &Path) -> Publication {
 }
 
 #[test]
+fn cancelled_runs_refuse_new_and_resumed_publication_without_side_effects() {
+    for resumed in [false, true] {
+        let (runs, dir, verdict) = run_dir(false);
+        let mut record = qaren::runrecord::RunRecord::load(&runs, RUN).unwrap();
+        record.failure = Some(qaren::failure::Failure::new(
+            "walk",
+            qaren::failure::FailureCode::RunCancelled,
+            "received SIGTERM",
+            "re-run the check",
+        ));
+        record.save(&runs).unwrap();
+        let actions = record
+            .candidate
+            .project_root
+            .join(".qaren/actions/tasks.yaml");
+        std::fs::create_dir_all(actions.parent().unwrap()).unwrap();
+        std::fs::write(&actions, "steps: []\n").unwrap();
+        let prior = serde_json::to_vec(&Publication {
+            rendered: true,
+            comment_attempted: true,
+            comment_url: Some("https://github.com/o/r/pull/12#issuecomment-1".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        if resumed {
+            std::fs::write(dir.join("publication.json"), &prior).unwrap();
+        }
+        let mut runner = Git(MockRunner::new());
+        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+        assert_eq!(receipt.result, ReceiptResult::Failed);
+        let failure = receipt.failure.unwrap();
+        assert_eq!(failure.code, qaren::failure::FailureCode::RunCancelled);
+        assert!(failure.code.is_refusal());
+        assert!(runner.0.calls.is_empty());
+        assert!(receipt.outcomes.is_empty());
+        assert!(!dir.join("comment.md").exists());
+        assert!(!dir.join("blocks-comment.md").exists());
+        assert_eq!(std::fs::read_to_string(&actions).unwrap(), "steps: []\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("blocks/tasks.yaml")).unwrap(),
+            "steps: []\n"
+        );
+        if resumed {
+            assert_eq!(std::fs::read(dir.join("publication.json")).unwrap(), prior);
+        } else {
+            assert!(!dir.join("publication.json").exists());
+        }
+    }
+}
+
+#[test]
 fn publish_comments_removes_the_label_and_pushes_the_blocks_with_the_exact_lease() {
     let (runs, dir, verdict) = run_dir(false);
     let mut runner = Git(MockRunner::new());

@@ -227,6 +227,8 @@ function kindOfRole(role: string): Kind {
   switch (role.toLowerCase()) {
     case 'textinput':
     case 'search':
+    case 'textbox':
+    case 'searchbox':
       return 'input';
     case 'switch':
     case 'checkbox':
@@ -243,8 +245,15 @@ function kindOfRole(role: string): Kind {
     case 'header':
     case 'heading':
       return 'text';
-    default:
+    case 'button':
+    case 'tab':
+    case 'menuitem':
+    case 'combobox':
+    case 'adjustable':
+    case 'slider':
       return 'button';
+    default:
+      return 'other';
   }
 }
 
@@ -392,7 +401,7 @@ export function join(
     ...associateHeadings(nodes, reactHostEvidence, presence, associations),
   ]);
   const interactiveRole = (role: string | null | undefined) =>
-    !!role && kindOfRole(role) !== 'text' && kindOfRole(role) !== 'image';
+    !!role && ['button', 'input', 'switch', 'link'].includes(kindOfRole(role));
   const inputRole = (role: string | null | undefined) => !!role && kindOfRole(role) === 'input';
   // Native type may rule out an operation only while every React host offering it is accounted for.
   const unassociated = (offers: (host: ReactHostObservation) => boolean) =>

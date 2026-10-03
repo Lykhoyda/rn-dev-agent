@@ -3663,6 +3663,64 @@ fn candidate_drift_during_a_pr_walk_fails_and_withholds_publication() {
     pr_walk_result(true);
 }
 
+#[test]
+fn cancelled_pr_walks_with_or_without_source_drift_cannot_publish() {
+    for source_drift in [false, true] {
+        let (repo, app) = app_repo();
+        if source_drift {
+            std::fs::write(app.join("App.tsx"), "export default original;\n").unwrap();
+        }
+        let wt = repo.join("runs").join(run_id()).join("wt");
+        let mut runner = PrRunner {
+            inner: MockRunner::new(),
+            app: app.clone(),
+            recorder_persisted_before_spawn: None,
+            fail_core_spawn: false,
+        };
+        let mock = &mut runner.inner;
+        script_pr_preflight(mock, &repo, &wt);
+        script_provision(mock);
+        script_pr_provenance_recheck(mock);
+        script_drift_status(mock);
+        script_recorder_start(mock);
+        let one_row = format!("{}\n", envelope(2, "row", &row(1, "step")));
+        mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
+        script_core_identity(mock);
+        mock.cancel_after = Some(("-p 9000".into(), "received SIGTERM".into()));
+        script_recorder_stop(mock);
+        script_teardown_resources(
+            mock,
+            CmdOutput::success("1 1 S\n6000 6000 S\n"),
+            false,
+            UDID,
+            hosts_absent(),
+        );
+        mock.expect_run("worktree remove --force", CmdOutput::success(""));
+
+        let receipt = run(&mut runner, &pr_request(&repo, &app));
+        assert_eq!(receipt.result, ReceiptResult::Refused);
+        assert_eq!(receipt.failure.unwrap().code, FailureCode::RunCancelled);
+        assert_eq!(runner.inner.remaining(), 0);
+        let runs = repo.join("runs");
+        let record = RunRecord::load(&runs, &run_id()).unwrap();
+        assert_eq!(record.failure.unwrap().code, FailureCode::RunCancelled);
+        let dir = runs.join(run_id());
+        assert!(dir.join("pr.json").is_file());
+        let mut publisher = qaren::exec::MockRunner::new();
+        let published = qaren::publish::publish(
+            &mut publisher,
+            &runs,
+            &run_id(),
+            &repo.join("verdict.md"),
+            &qaren::redact::MachineIdentity::default(),
+        );
+        assert_eq!(published.result, ReceiptResult::Failed);
+        assert_eq!(published.failure.unwrap().code, FailureCode::RunCancelled);
+        assert!(publisher.calls.is_empty());
+        assert!(!dir.join("publication.json").exists());
+    }
+}
+
 fn pr_walk_result(candidate_drift: bool) {
     let (repo, app) = app_repo();
     if candidate_drift {

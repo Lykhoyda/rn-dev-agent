@@ -21,6 +21,10 @@ test('headings and normalized images do not block semantic button resolution', a
   for (const [role, type, kind] of [
     ['heading', 'StaticText', 'text'],
     ['img', 'Image', 'image'],
+    ['none', 'Other', 'other'],
+    ['presentation', 'Other', 'other'],
+    ['summary', 'Other', 'other'],
+    ['unknown', 'Other', 'other'],
   ] as const) {
     for (const withPresence of [false, true]) {
       for (const representation of ['host', 'digest', 'both']) {
@@ -54,6 +58,104 @@ test('headings and normalized images do not block semantic button resolution', a
         assert.equal(judge.requests.length, 1);
       }
     }
+  }
+});
+
+test('associated static RCTViews remain inert unless a positive press handler is observed', async () => {
+  const target = parseStep('Tap the save button');
+  assert.ok(target && !('refuse' in target));
+  const rect = { x: 10, y: 20, width: 100, height: 40 };
+  for (const role of ['none', 'presentation', 'summary', 'unknown']) {
+    for (const press of [false, true]) {
+      const observed = projection.join(
+        [
+          { ref: '@window', type: 'Window', rect: { x: 0, y: 0, width: 400, height: 800 } },
+          {
+            ref: '@content',
+            type: 'Other',
+            identifier: 'content',
+            parentIndex: 0,
+            rect,
+            hittable: true,
+          },
+          { ref: '@save', type: 'Button', label: 'Save', parentIndex: 0, rect, hittable: true },
+        ],
+        [{ role, testID: 'content', capabilities: { press, fill: false } }],
+        'app',
+        complete,
+        {
+          complete: true,
+          hosts: [
+            {
+              role,
+              roleSource: 'role',
+              testID: 'content',
+              capabilities: press ? { press: true } : {},
+            },
+          ],
+          typography: {
+            version: 1,
+            complete: true,
+            durationMs: 1,
+            coordinateSpace: 'window-points',
+            nodes: [
+              {
+                hostIndex: 0,
+                parentHostIndex: null,
+                rootIndex: 0,
+                hostType: 'RCTView',
+                rect,
+                text: { kind: 'none' },
+              },
+            ],
+          },
+        },
+        presenceOf(['unknown', 'observed', 'observed']),
+      );
+      assert.equal(observed.elements[1].semantic?.press, press ? 'supported' : 'unsupported');
+      assert.equal(observed.pressEvidenceGap, undefined);
+      assert.deepEqual(projection.semanticActionView(observed, 'press'), {
+        elements: press ? observed.elements.slice(1) : [observed.elements[2]],
+      });
+      const judge = scriptedJudge((q) => ({ target_0: choice(q.target_0, press ? 'e1' : 'e0') }));
+      const resolved = await resolveTarget(target, observed, judge);
+      assert.ok('ref' in resolved);
+      assert.equal(resolved.ref, '@save');
+    }
+  }
+});
+
+test('explicit interactive roles retain press gaps and input roles retain fill gaps', () => {
+  for (const role of [
+    'button',
+    'link',
+    'switch',
+    'checkbox',
+    'radio',
+    'togglebutton',
+    'tab',
+    'menuitem',
+    'combobox',
+    'adjustable',
+    'slider',
+    'textinput',
+    'search',
+    'textbox',
+    'searchbox',
+  ]) {
+    const observed = projection.join(
+      [{ ref: '@container', type: 'Other', hittable: true }],
+      [],
+      'app',
+      complete,
+      {
+        complete: true,
+        hosts: [{ role, roleSource: 'role', testID: 'unassociated', capabilities: {} }],
+      },
+    );
+    refused(projection.semanticActionView(observed, 'press'), 'SCREEN_EVIDENCE_INCOMPLETE');
+    if (['textinput', 'search', 'textbox', 'searchbox'].includes(role))
+      refused(projection.semanticActionView(observed, 'fill'), 'SCREEN_EVIDENCE_INCOMPLETE');
   }
 });
 

@@ -688,10 +688,12 @@ fn publish_inner(
     let run_dir = RunRecord::run_dir(runs_root, run_id);
     let _lock = PublishLock::acquire(&run_dir)?;
     let run = RunRecord::load(runs_root, run_id)?;
-    if let Some(failure) = run
-        .failure
-        .filter(|f| f.code == FailureCode::CandidateDrifted)
-    {
+    if let Some(failure) = run.failure.filter(|f| {
+        matches!(
+            f.code,
+            FailureCode::CandidateDrifted | FailureCode::RunCancelled
+        )
+    }) {
         return Err(failure);
     }
     let pr: PrRunRecord = read_json(&run_dir.join("pr.json"))?;
