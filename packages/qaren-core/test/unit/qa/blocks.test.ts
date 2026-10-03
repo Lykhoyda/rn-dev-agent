@@ -10,6 +10,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fork } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
 import { parsePlan, slugify } from '../../../dist/qa/plan.js';
 import type { Block } from '../../../dist/qa/plan.js';
 import type { LedgerRow, Selector } from '../../../dist/qa/ledger.js';
@@ -301,6 +303,78 @@ function appRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'qaren-blocks-'));
   mkdirSync(join(root, '.qaren'));
   return root;
+}
+
+function concurrentWriter(appRoot: string, slug: string, text: string, pause: boolean) {
+  const child = fork(
+    new URL('./block-write-child.ts', import.meta.url),
+    [JSON.stringify({ appRoot, slug, text, pause })],
+    { execArgv: [], stdio: ['ignore', 'ignore', 'pipe', 'ipc'] },
+  );
+  let stderr = '';
+  child.stderr?.on('data', (data) => {
+    stderr += data;
+  });
+  const message = (kind: string): Promise<string> =>
+    new Promise((resolve, reject) => {
+      child.on('message', (data: { kind: string; value?: string }) => {
+        if (data.kind === kind) resolve(data.value ?? '');
+      });
+      child.on('error', reject);
+      child.on('exit', (code) => {
+        reject(new Error(`writer exited ${code} before ${kind}: ${stderr}`));
+      });
+    });
+  return {
+    child,
+    ready: message('ready'),
+    publishing: pause ? message('publishing') : Promise.resolve(''),
+    result: message('result'),
+  };
+}
+
+for (const extension of ['yaml', 'yml']) {
+  test(
+    `concurrent colliding saves serialize ownership and publication for .${extension}`,
+    { timeout: 5000 },
+    async (t) => {
+      const root = appRoot();
+      const longTitle = 'a'.repeat(65);
+      const short = blockOf(`### ${slugify(longTitle)}\n1. Tap "Save"\n✓ "Saved"\n`);
+      const long = blockOf(`### ${longTitle}\n1. Tap "Save"\n✓ "Saved"\n`);
+      const winner = serialized(short, passRows(short, { 2: { id: 'save' } }));
+      const loser = serialized(long, passRows(long, { 2: { id: 'save' } }));
+      const path = join(root, '.qaren/actions', `${short.slug}.${extension}`);
+      if (extension === 'yml') {
+        mkdirSync(join(root, '.qaren/actions'));
+        writeFileSync(path, winner.replace('id: "save"', 'id: "old-save"'));
+      }
+      const first = concurrentWriter(root, short.slug, winner, true);
+      t.after(() => first.child.kill());
+      await first.publishing;
+      const second = concurrentWriter(root, long.slug, loser, false);
+      t.after(() => second.child.kill());
+      let finishedWhilePublishing: boolean;
+      try {
+        await second.ready;
+        finishedWhilePublishing = await Promise.race([
+          second.result.then(() => true),
+          delay(200).then(() => false),
+        ]);
+      } finally {
+        writeFileSync(join(root, 'release'), '');
+      }
+      const results = await Promise.all([first.result, second.result]);
+      assert.equal(finishedWhilePublishing, false);
+      assert.equal(results[0], 'written');
+      assert.match(results[1], /BLOCK_SLUG_COLLISION/);
+      assert.equal(readFileSync(path, 'utf8'), winner);
+      assert.deepEqual(readdirSync(join(root, '.qaren/actions')), [`${short.slug}.${extension}`]);
+      const patched = serialized(short, passRows(short, { 2: { id: 'new-save' } }));
+      assert.equal(writeBlock(root, short.slug, patched), 'written');
+      assert.equal(readFileSync(path, 'utf8'), patched);
+    },
+  );
 }
 
 test('overflowing headings use one ID for the saved path, M7 header and replay lookup', () => {

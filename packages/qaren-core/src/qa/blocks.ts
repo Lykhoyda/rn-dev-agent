@@ -3,7 +3,6 @@ import {
   constants,
   fstatSync,
   fsyncSync,
-  mkdirSync,
   openSync,
   readFileSync,
   renameSync,
@@ -21,6 +20,7 @@ import {
   resolveActionPath,
 } from '../domain/action-store.js';
 import { parseM7Header, serializeM7Header } from '../domain/reusable-action.js';
+import { atomicWriter } from '../domain/atomic-writer.js';
 import type { Block, Item } from './plan.js';
 import { normalizedSlug } from './plan.js';
 import type { LedgerRow, Selector } from './ledger.js';
@@ -333,46 +333,51 @@ export function storedFits(
 }
 
 export function writeBlock(appRoot: string, slug: string, text: string): 'written' | 'unchanged' {
-  assertOwnedActionCorpus(appRoot);
-  const path = resolveActionPath(appRoot, slug) ?? actionPathFor(appRoot, slug);
-  mkdirSync(dirname(path), { recursive: true });
-  const identity = captureOwnedActionPathIdentity(appRoot);
-  const owned = (): void => {
-    if (!ownedActionPathIdentityMatches(identity))
-      throw new BlockWriteError('BLOCK_WRITE_REFUSED', `${dirname(path)} changed during the write`);
-  };
-  const existing = readOwnedFile(path);
-  if (existing === text) return 'unchanged';
-  const previous = existing !== null ? parseM7Header(existing) : null;
-  const incoming = parseM7Header(text);
-  if (
-    existing !== null &&
-    (previous?.plan !== slug ||
-      !incoming ||
-      normalizedSlug(previous.intent) !== normalizedSlug(incoming.intent))
-  )
-    throw new BlockWriteError(
-      'BLOCK_SLUG_COLLISION',
-      `${path} already holds an action that is not this plan block`,
-    );
-  const tmp = `${path}.tmp-${process.pid}`;
-  try {
-    const fd = openSync(
-      tmp,
-      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-      0o644,
-    );
+  const canonicalPath = actionPathFor(appRoot, slug);
+  return atomicWriter.withLock(canonicalPath, () => {
+    assertOwnedActionCorpus(appRoot);
+    const path = resolveActionPath(appRoot, slug) ?? canonicalPath;
+    const identity = captureOwnedActionPathIdentity(appRoot);
+    const owned = (): void => {
+      if (!ownedActionPathIdentityMatches(identity))
+        throw new BlockWriteError(
+          'BLOCK_WRITE_REFUSED',
+          `${dirname(path)} changed during the write`,
+        );
+    };
+    const existing = readOwnedFile(path);
+    if (existing === text) return 'unchanged';
+    const previous = existing !== null ? parseM7Header(existing) : null;
+    const incoming = parseM7Header(text);
+    if (
+      existing !== null &&
+      (previous?.plan !== slug ||
+        !incoming ||
+        normalizedSlug(previous.intent) !== normalizedSlug(incoming.intent))
+    )
+      throw new BlockWriteError(
+        'BLOCK_SLUG_COLLISION',
+        `${path} already holds an action that is not this plan block`,
+      );
+    const tmp = `${path}.tmp-${process.pid}`;
     try {
-      writeFileSync(fd, text);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
+      const fd = openSync(
+        tmp,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o644,
+      );
+      try {
+        writeFileSync(fd, text);
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      owned();
+      renameSync(tmp, path);
+    } catch (error) {
+      rmSync(tmp, { force: true });
+      throw error;
     }
-    owned();
-    renameSync(tmp, path);
-  } catch (error) {
-    rmSync(tmp, { force: true });
-    throw error;
-  }
-  return 'written';
+    return 'written';
+  });
 }
