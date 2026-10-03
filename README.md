@@ -189,9 +189,7 @@ phases also apply a bundled set of React Native and React
 | **Testing** | E2E replay and PR-ready proof | `proof_step`, `cross_platform_verify`, `maestro_run`, `maestro_test_all` (`cdp_auto_login` is legacy per-call recovery, not a failed-login fallback or PR proof) |
 | **Macro-Asserts** | State-assertive replays — internal state, not pixels | `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` |
 
-The committed tool surface is asserted in CI against a golden registry
-(`packages/rn-dev-agent-core/test/fixtures/tool-registry.json`), so tool additions and removals
-can't silently drift. [Full tool reference →](https://lykhoyda.github.io/rn-dev-agent/tools/)
+[Published 1.x tool reference →](https://lykhoyda.github.io/rn-dev-agent/tools/)
 
 </details>
 
@@ -414,7 +412,7 @@ session. The command never updates the evidence store or uploads data.
 | CDP rejected (1006) | Close React Native DevTools, Flipper, or Chrome DevTools |
 | Zustand store error | Add `global.__ZUSTAND_STORES__` ([setup](https://lykhoyda.github.io/rn-dev-agent/getting-started/#zustand-stores-one-bridge-call)) |
 | Plugin not detected (Claude) | `/plugin install rn-dev-agent@rn-dev-agent` then `/reload-plugins` |
-| Plugin not detected (Cursor) | Customize → Plugins; local path is `packages/claude-plugin`. Reload the window. Requires Node.js >= 24 |
+| Plugin not detected (Cursor) | Customize → Plugins. Reload the window. Requires Node.js >= 24 |
 | Subagent says "MCP tools unavailable" | Never spawn `rn-tester`/`rn-pr-qa`/`rn-debugger` via the Task tool — use `/rn-dev-agent:test-feature`, `/rn-dev-agent:qa-pr`, or `/rn-dev-agent:debug-screen` instead (GH #31) |
 
 <details>

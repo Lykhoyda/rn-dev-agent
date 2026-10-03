@@ -336,6 +336,13 @@ qaren pr <number|url> --plan-file plan.md --device <simulator-UUID> --json
 qaren publish <run-id> --verdict-file verdict.md --json
 ```
 
+Company material must never reach public product surfaces. Keep staging-app
+plans, saved blocks, logs and media private; public product evidence must come
+from the Test App. Before `qaren publish`, verify that the verdict and every
+publishable artifact contain only public material. The automatic privacy and
+machine-identity filters below do not classify company content or authorize
+its publication.
+
 `qaren pr` runs the same pipeline as `check`, from the app's directory with the
 same `.qaren/config.yaml` and plan, but walks a detached worktree at the pull
 request head under `~/.qaren/runs/<run-id>/wt`. It refuses unless origin's

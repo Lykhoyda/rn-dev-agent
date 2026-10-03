@@ -84,22 +84,19 @@ Use `storeType: 'react-query'` explicitly. React Query state is read from the Qu
 ### Plugin not detected
 
 **Claude:** run `/plugin install rn-dev-agent@rn-dev-agent`, then
-`/reload-plugins`. Local development uses
-`claude --plugin-dir /path/to/rn-dev-agent`.
+`/reload-plugins` for the published 1.x plugin. For the current development
+checkout, follow the [QaReN CLI guide](https://github.com/Lykhoyda/rn-dev-agent/blob/develop/packages/qaren-cli/README.md#build).
 
-**Cursor:** install from Customize → Plugins. Local development uses
-`/path/to/rn-dev-agent/packages/claude-plugin` (`.cursor-plugin/plugin.json` +
-`mcp.json`), not the repository root. Reload the window after install. Requires
-Node.js >= 24. If MCP reports Connection closed, check the MCP log first: a
+**Cursor:** install the published 1.x plugin from Customize → Plugins.
+Reload the window after install. Requires Node.js >= 24. If MCP reports
+Connection closed, check the MCP log first: a
 `Another rn-dev-agent MCP already owns this project root` line with exit code 11
 is the process lock refusing a second server for the same root, described under
 [Another MCP already owns this project root](#another-mcp-already-owns-this-project-root).
 
 **Codex:** inspect `codex plugin list --json` and `/mcp verbose`. The latter is
-inventory only, never reconnect. Local development uses
-`/path/to/rn-dev-agent/packages/claude-plugin` (the same directory Claude
-installs; `packages/codex-plugin` is authoring only). If materialization is absent,
-user-confirm:
+inventory only, never reconnect. For the published 1.x plugin, if materialization
+is absent, user-confirm:
 
 ```bash
 codex plugin marketplace upgrade rn-dev-agent
