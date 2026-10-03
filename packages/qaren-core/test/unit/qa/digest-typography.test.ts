@@ -1034,8 +1034,7 @@ test('early refusal is still a Promise carrying incomplete typography', async ()
   }
 });
 
-test('version 90 replaces a warm 89 producer and reinjection remains idempotent', async () => {
-  assert.equal(HELPERS_VERSION, 90);
+test('current helper replaces a warm 89 producer and reinjection remains idempotent', async () => {
   const { sandbox } = fixture(text());
   Object.assign(sandbox, {
     __QAREN: {
@@ -1046,7 +1045,7 @@ test('version 90 replaces a warm 89 producer and reinjection remains idempotent'
     },
   });
   vm.runInContext(INJECTED_HELPERS, sandbox);
-  assert.equal(sandbox.__QAREN.__v, 90);
+  assert.equal(sandbox.__QAREN.__v, HELPERS_VERSION);
   const producer = sandbox.__QAREN.getTree;
   assert.equal((await digest(sandbox)).hostEvidence.typography.version, 1);
   vm.runInContext(INJECTED_HELPERS, sandbox);

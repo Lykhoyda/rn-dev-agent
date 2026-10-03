@@ -27,6 +27,7 @@ use crate::scenario::{
 use crate::timefmt;
 use crate::worktree;
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_WALK_SECONDS: u64 = 1200;
@@ -131,7 +132,7 @@ pub fn run(runner: &mut dyn Runner, req: &RunRequest) -> Receipt {
                 &failure.phase.clone(),
                 timefmt::iso8601_utc(runner.now_epoch_ms()),
             );
-            receipt.next_action = failure.next_action.clone();
+            receipt.next_action = failure.next_action.to_string();
             receipt.failure = Some(failure);
             receipt.commands_executed = runner.commands_executed();
             receipt
@@ -471,6 +472,12 @@ fn run_inner(
     if let Err(f) = ctx.save() {
         return Ok(finish_failed(ctx, f));
     }
+    // In `qaren pr` the app root is the PR worktree's, so blocks replay and save there.
+    let app_root = match app_root_for(&req.config_path, &project_root) {
+        Ok(root) => root,
+        Err(f) => return Ok(finish_failed(ctx, f)),
+    };
+    let status_before = worktree_status(ctx.runner, &app_root);
     // ⑧: the recording starts before the walk so it shows the first step.
     let mut video = None;
     if pr_state.is_some() {
@@ -490,6 +497,7 @@ fn run_inner(
             .unwrap_or_default(),
         platform: platform_str(req.platform).to_string(),
         app_id: config.app_id.clone(),
+        app_root: app_root.clone(),
         run_dir: run_dir.clone(),
         lease: lease.wire(),
         target: CoreTarget {
@@ -522,6 +530,10 @@ fn run_inner(
     }
     let outcome = core::wait(ctx.runner, core_child, req.budgets);
     let t = ctx.mark("walk", t);
+    let drift = match (status_before, worktree_status(ctx.runner, &app_root)) {
+        (Some(before), Some(after)) => worktree_drift(&before, &after),
+        _ => Vec::new(),
+    };
     if let Some(exit) = outcome.exit {
         ctx.notes.push(("core_exit".to_string(), exit.to_string()));
     }
@@ -529,7 +541,7 @@ fn run_inner(
     let ledger_path = run_dir.join("ledger.json");
     if let Err(e) = std::fs::write(
         &ledger_path,
-        serde_json::to_vec_pretty(&outcome.ledger).unwrap_or_default(),
+        crate::redact::durable_json(&outcome.ledger).unwrap_or_default(),
     ) {
         ctx.notes.push((
             "ledger".to_string(),
@@ -558,7 +570,7 @@ fn run_inner(
         let refused;
         (blocks, refused) = worktree::copy_blocks(
             &project_root,
-            &outcome.ledger.blocks_written,
+            outcome.ledger.blocks_written.as_deref().unwrap_or_default(),
             &run_dir.join("blocks"),
         );
         if !refused.is_empty() {
@@ -644,7 +656,7 @@ fn run_inner(
             Ok(_) => {}
             Err(f) => ctx
                 .notes
-                .push(("pr_head_recheck".to_string(), f.detail.clone())),
+                .push(("pr_head_recheck".to_string(), f.detail.to_string())),
         }
         let video_publication = outcome.ledger.video_publication.clone().unwrap_or_default();
         let pr_record = PrRunRecord {
@@ -680,6 +692,18 @@ fn run_inner(
     let mut receipt = finish_receipt(ctx, result, failure);
     receipt.tested_older_commit = tested_older_commit;
     receipt.ledger = Some(report::summarize(&outcome.ledger));
+    receipt.blocks_written = outcome.ledger.blocks_written.clone().unwrap_or_default();
+    receipt.blocks_not_saved = outcome
+        .ledger
+        .blocks
+        .iter()
+        .filter(|block| block.saved == Some(false))
+        .map(|block| crate::receipt::BlockNotSaved {
+            block: block.key.clone(),
+            reason: block.unsavable.clone().unwrap_or_default(),
+        })
+        .collect();
+    receipt.worktree_drift = drift;
     receipt.artifacts.insert("report".to_string(), report_path);
     receipt.artifacts.insert("ledger".to_string(), ledger_path);
     for (name, rendered) in cleanup {
@@ -723,6 +747,80 @@ fn identity_values(device: &Device, metro_port: u16, resources: &Resources) -> V
     values.sort();
     values.dedup();
     values
+}
+
+pub fn app_root_for(config_path: &Path, project_root: &Path) -> Result<PathBuf, Failure> {
+    let project = std::fs::canonicalize(project_root).map_err(|e| {
+        Failure::new(
+            "config",
+            FailureCode::ScenarioUnreadable,
+            format!(
+                "cannot resolve the app root {}: {e}",
+                project_root.display()
+            ),
+            "run check from the app directory that holds .qaren/config.yaml",
+        )
+    })?;
+    let root = config_path
+        .parent()
+        .filter(|dir| dir.file_name().is_some_and(|name| name == ".qaren"))
+        .and_then(Path::parent)
+        .and_then(|dir| std::fs::canonicalize(dir).ok())
+        .filter(|dir| dir.starts_with(&project))
+        .unwrap_or(project);
+    Ok(root)
+}
+
+pub fn worktree_status(runner: &mut dyn Runner, app_root: &Path) -> Option<BTreeSet<String>> {
+    let output = runner.run(&CmdSpec::new(
+        "git-worktree-status",
+        "git",
+        &[
+            "-C",
+            &app_root.to_string_lossy(),
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--",
+            ".",
+            ":(exclude).qaren/actions",
+        ],
+        20,
+    ));
+    output.ok().then(|| porcelain_entries(&output.stdout))
+}
+
+// One `XY path` entry per change; a rename or copy also names its source path.
+fn porcelain_entries(stdout: &str) -> BTreeSet<String> {
+    let mut entries = BTreeSet::new();
+    let mut records = stdout.split('\0').filter(|record| !record.is_empty());
+    while let Some(record) = records.next() {
+        let renamed = record.starts_with('R') || record.starts_with('C');
+        let source = if renamed { records.next() } else { None };
+        entries.insert(match source {
+            Some(source) => format!("{record}\0{source}"),
+            None => record.to_string(),
+        });
+    }
+    entries
+}
+
+// Paths whose status changed during the walk, outside the block corpus; diagnostic only.
+pub fn worktree_drift(before: &BTreeSet<String>, after: &BTreeSet<String>) -> Vec<String> {
+    before
+        .symmetric_difference(after)
+        .flat_map(|entry| {
+            entry
+                .get(3..)
+                .unwrap_or(entry)
+                .split('\0')
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn ensure_running(runner: &dyn Runner, next_phase: &str) -> Result<(), Failure> {

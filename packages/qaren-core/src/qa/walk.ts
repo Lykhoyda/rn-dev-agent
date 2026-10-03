@@ -11,8 +11,7 @@ import {
   createDevicePressHandler,
   createDeviceScrollHandler,
 } from '../handlers/device-interact.js';
-import { tryRawScreenshot } from '../handlers/device-screenshot-raw.js';
-import { captureRunnerScreenshot } from '../runners/rn-fast-runner-client.js';
+import { captureQaScreenshot } from './screenshot.js';
 import { createDeviceSnapshotHandler } from '../handlers/device-session.js';
 import {
   createDeviceAcceptSystemDialogHandler,
@@ -23,7 +22,7 @@ import { compileFlow, FlowCompileError } from '../flow/compile.js';
 import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
 import type { ToolResult } from '../utils.js';
 import { HandlerError, adapt, describeError, unwrap } from './adapt.js';
-import { captureScreen, type NativeObservation } from './capture.js';
+import { AppProcessGoneError, captureScreen, type NativeObservation } from './capture.js';
 import { captureQaReact } from './react-capture.js';
 import type { LedgerRow } from './ledger.js';
 import { parsePlanWithJev, readPreparedPlan } from './plan.js';
@@ -307,6 +306,7 @@ async function openSession(
       NativeObservation & { presenceCapture?: unknown; snapshotGeneration?: unknown }
     >(result);
     return {
+      appProcessIdentifier: data.appProcessIdentifier,
       nodes: data.nodes,
       presenceCapture: data.presenceCapture,
       snapshotGeneration: data.snapshotGeneration,
@@ -352,7 +352,11 @@ async function openSession(
               options?.platformPresence,
               presenceBudgetMs,
               options?.timing ? { now, observe: options.timing } : undefined,
-            ),
+            ).catch((error: unknown) => {
+              if (error instanceof HandlerError && error.meta?.reason === 'app-not-running')
+                throw new AppProcessGoneError();
+              throw error;
+            }),
           react: () => captureQaReact(cdp, options?.platformPresence === true),
         }),
       ),
@@ -370,13 +374,9 @@ async function openSession(
     async screenshot(name) {
       if (stop.stopping) return undefined;
       const path = join(request.runDir, name);
-      if (
-        platform === 'ios' &&
-        target.deviceId &&
-        (await stop.track(() => captureRunnerScreenshot(target.deviceId!, appId, path)))
-      )
-        return name;
-      const shot = await stop.track(() => tryRawScreenshot(platform, path, target.deviceId));
+      const shot = await stop.track(() =>
+        captureQaScreenshot(platform, path, target.deviceId, appId),
+      );
       if (!shot.ok) log(`screenshot ${name} failed: ${shot.reason}`);
       return shot.ok ? name : undefined;
     },
@@ -385,6 +385,7 @@ async function openSession(
     diagnostic: (event) => log(`timing ${JSON.stringify(event)}`),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     row: emitRow,
+    ...(platform === 'ios' ? { appProcess: {} } : {}),
   };
   return {
     deps,
@@ -477,7 +478,11 @@ async function main(): Promise<void> {
       opened.close(),
     );
   try {
-    const ledger = await runPlan(blocks, opened.deps, request.preflightCalls);
+    const ledger = await runPlan(blocks, opened.deps, request.preflightCalls, {
+      appRoot: request.appRoot,
+      platform: request.platform,
+      appId: request.appId,
+    });
     return finish(resultForWalk(ledger, request.lease), () => opened.close());
   } catch (error) {
     const { code, message } = describeError(error);

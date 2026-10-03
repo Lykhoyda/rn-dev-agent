@@ -1,3 +1,4 @@
+use crate::redact::OutputText;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,10 +103,10 @@ impl FailureCode {
 pub struct Failure {
     pub phase: String,
     pub code: FailureCode,
-    pub detail: String,
+    pub detail: OutputText,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub evidence: Vec<String>,
-    pub next_action: String,
+    pub evidence: Vec<OutputText>,
+    pub next_action: OutputText,
 }
 
 impl Failure {
@@ -118,9 +119,9 @@ impl Failure {
         Failure {
             phase: phase.to_string(),
             code,
-            detail: crate::redact::redact_secrets(&detail.into()),
+            detail: OutputText::from_output(&detail.into()),
             evidence: Vec::new(),
-            next_action: crate::redact::redact_secrets(&next_action.into()),
+            next_action: OutputText::from_output(&next_action.into()),
         }
     }
 
@@ -136,7 +137,7 @@ impl Failure {
     pub fn with_evidence(mut self, evidence: Vec<String>) -> Self {
         self.evidence = evidence
             .into_iter()
-            .map(|line| crate::redact::redact_secrets(&line))
+            .map(|line| OutputText::from_output(&line))
             .collect();
         self
     }

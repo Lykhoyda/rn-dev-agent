@@ -416,3 +416,45 @@ test('a mixed check evaluates its entire expectation rather than passing on the 
   assert.equal(judge.requests.length, 1);
   assert.deepEqual(f.actions, []);
 });
+
+test('an exact id target ignores an element whose label equals the id', () => {
+  const tap = (quoted: string, exact: 'id' | 'text') =>
+    ({ kind: 'press', target: { quoted, phrase: quoted, exact } }) as const;
+  const decoy = screen([
+    element('@decoy', 'onboarding-done'),
+    element('@done', 'Done', { testID: 'onboarding-done' }),
+  ]);
+  assert.deepEqual(prepareTarget(tap('onboarding-done', 'id'), decoy), {
+    ref: '@done',
+    element: decoy.elements[1],
+  });
+  assert.deepEqual(prepareTarget(tap('Done', 'text'), decoy), {
+    ref: '@done',
+    element: decoy.elements[1],
+  });
+  const missing = prepareTarget(
+    tap('onboarding-done', 'id'),
+    screen([element('@x', 'onboarding-done')]),
+  );
+  assert.equal('refuse' in missing && missing.refuse, 'REPLAY_SELECTOR');
+  const offscreen = screen([element('@far', 'Far', { testID: 'far', offscreen: true })]);
+  assert.deepEqual(prepareTarget(tap('far', 'id'), offscreen), { scroll: 'down' });
+});
+
+test('two exact matches refuse REPLAY_SELECTOR without asking Jev', async () => {
+  const judge = scriptedJudge(() => assert.fail('replay must never ask Jev'));
+  const twins = screen([
+    element('@a', 'Save', { testID: 'save' }),
+    element('@b', 'Save', { testID: 'save' }),
+  ]);
+  for (const exact of ['id', 'text'] as const) {
+    const quoted = exact === 'id' ? 'save' : 'Save';
+    const result = await resolveTarget(
+      { kind: 'press', target: { quoted, phrase: quoted, exact } },
+      twins,
+      judge,
+    );
+    assert.equal('refuse' in result && result.refuse, 'REPLAY_SELECTOR');
+  }
+  assert.equal(judge.calls.length, 0);
+});

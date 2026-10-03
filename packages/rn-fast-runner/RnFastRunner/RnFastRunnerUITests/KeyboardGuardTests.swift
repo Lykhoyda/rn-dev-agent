@@ -45,6 +45,16 @@ final class KeyboardGuardTests: XCTestCase {
     }
   }
 
+  func testSnapshotPayloadReportsOnlyAPositiveAppProcessIdentifier() throws {
+    for (raw, expected) in [(4242, 4242 as Int?), (0, nil), (-1, nil), (nil, nil)] as [(Int?, Int?)] {
+      let payload = runnerPayload(presencePayload(nodes: []), appProcessIdentifier: raw)
+      let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as? [String: Any])
+      XCTAssertEqual(json["appProcessIdentifier"] as? Int, expected)
+      XCTAssertEqual(json["appProcessIdentifier"] == nil, expected == nil)
+      XCTAssertEqual(json["snapshotGeneration"] as? Int, 7)
+    }
+  }
+
   func testPresenceKeyboardStateUsesTypeAndNonemptyFrameNotLabelsOrHittability() {
     XCTAssertEqual(presencePayload(nodes: [presenceNode()]).keyboardVisible, true)
     XCTAssertEqual(presencePayload(nodes: [presenceNode(frame: .zero)]).keyboardVisible, false)

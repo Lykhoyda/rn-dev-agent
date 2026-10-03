@@ -62,6 +62,12 @@ unsupported visual or layout claims remain uncertain.
 Phrase waits capture fresh screen and presence evidence on every poll, even when the
 screen appears unchanged; prior observations do not establish current presence.
 
+When native window geometry is available, literal checks, quoted waits and quoted
+scroll-until targets exclude native text outside the window viewport or its
+ancestor scroll-container clips. Mounted text
+beyond those bounds cannot satisfy the plan until scrolling brings it into view.
+This geometric filter does not prove complete visual exposure or occlusion.
+
 Phrase presses require complete native and React coverage and proven React-to-native
 associations. Native text, images and plain views are excluded from press candidates
 only when complete React host evidence accounts for every interactive host and no
@@ -71,31 +77,45 @@ switch or link does. Unknown capability or missing positive platform presence
 refuses with `SCREEN_EVIDENCE_INCOMPLETE` rather than guessing a target.
 The [screen projection](../qaren-core/src/qa/screen.ts) owns this policy.
 
-Private input capture is required before walking a screen. If it cannot be
-established safely, the walk refuses with `PRIVATE_INPUT_CAPTURE_UNKNOWN` without
-reinjection or a public-tree fallback. A React private-input deadline miss triggers
-at most one complete fresh capture, including native and React evidence, only
-when the failed attempt received no React private input values, observed no
-native input with a non-empty value or label, and observed no secure native node.
-Native input classification follows the [screen projection](../qaren-core/src/qa/screen.ts).
-Otherwise the timeout refuses immediately, preserving the privacy boundary.
-The late first reply is discarded; a second timeout refuses without another retry.
-Only an explicit deadline expiry is retryable: malformed payloads, unbound private
-evidence, validation and transport failures refuse immediately even if processing
-crosses the deadline. Native failures do not trigger this retry. Capture deadlines,
-budgets and item deadlines remain unchanged.
+The native snapshot is the privacy boundary before walking a screen. Capture
+refuses with `PRIVATE_INPUT_CAPTURE_UNKNOWN` unless native completeness is attested;
+the refusal reports only a value-free node count and fixed cause codes. Native
+acquisition failures also refuse without reinjection or a public-tree fallback.
+Native input classification follows the [screen projection](../qaren-core/src/qa/screen.ts),
+including Other or unknown nodes carrying nonempty values regardless of React evidence.
+iOS fast snapshots retain nodes with distinct readable values even when their type,
+label, identifier and origin match; deduplication compares those fields separately.
+The React digest adds semantics: a deadline, malformed-payload, validation or
+transport failure degrades React coverage to unknown without retrying capture.
+Operations requiring complete React evidence still refuse when that coverage is
+unavailable. Capture deadlines, budgets and item deadlines remain unchanged.
+
+React-only elements expose no label, placeholder or value strings in the screen
+projection. The React walk excludes provably inactive screen routes and native
+hosts with `display: none` before collecting their semantic or descendant text
+evidence. Validated React Native frozen descriptors remain readable; arbitrary
+getters are not invoked, and an unreadable inactivity flag does not prune a subtree.
+Unreadable display overrides or styles beyond the array or nesting scan budgets
+resolve as unknown and do not establish `display: none`; later readable overrides
+within the budgets still determine display.
 
 Observed input values are masked before Jev requests; private values are also
-masked in reporting. Once sensitive input
-pixels are observed, screenshots are withheld for the rest of the walk.
+masked in reporting, including echoes of typed and previously observed values
+subject to the short-value limitation below. Once sensitive input pixels or a
+protected value's visible echo are observed, screenshots are withheld for the
+rest of the walk.
 Masks preserve identity for comparisons and do not prove unobserved value content.
+Typed values shorter than three characters that were never observed as private
+input values can remain plaintext in unquoted reporting text; model masking
+matches them only as separate tokens. This known limitation is tracked in ANT-283.
 
 iOS interactions check app existence immediately and wait only when the app is
 missing; availability and foreground checks remain in place. When the privacy
 gate permits a row screenshot, the walk requests a full-screen image from the
-running iOS runner and copies it into the run evidence directory. Runner refusal,
-an invalid screenshot path or a failed copy falls back to `simctl` capture;
-if that also fails, the row has no screenshot and the failure is logged.
+running iOS runner and copies it into the run evidence directory. Lost or unknown
+app-process identity withholds screenshots. Runner refusal, an invalid screenshot
+path or a failed copy leaves the row without a screenshot and logs a value-free
+unavailable reason; iOS QA never falls back to unrestricted simulator capture.
 
 ```text
 plan preflight -> device selection -> lease + durable run record
@@ -149,6 +169,68 @@ before releasing the lease. Present or unknown hosts retain it. A dead lease
 holder is reclaimed only through that run's cleanup; a live or unprovable holder
 refuses `DEVICE_BUSY`. Recover a retained run with `qaren cleanup <run-id>`;
 do not delete locks to bypass unresolved ownership.
+
+### Saved blocks
+
+Block IDs come from their `###` titles; a headingless block uses the plan's `#`
+title, or `plan` when absent. The [parser's `slugify`](../qaren-core/src/qa/plan.ts)
+lowercases the title, replaces runs outside `a-z` and `0-9` with hyphens, trims
+edge hyphens and uses `plan` if empty. Slugs within the
+[action-store length limit](../qaren-core/src/domain/path-safety.ts) stay unchanged.
+Longer slugs use a prefix followed by a hyphen and the first 16 hexadecimal
+characters of the full normalized slug's SHA-256, fitting that same limit.
+The title stays unchanged; the filename, M7 `id`, `plan` header and replay lookup
+use the same bounded ID. Existing valid actions are not renamed. Duplicate full
+normalized slugs or distinct titles producing the same bounded ID refuse the
+whole plan during preflight, before device allocation or action writes.
+
+Each `###` block that passes is saved as `<app>/.qaren/actions/<slug>.yaml`, where
+`<app>` is the directory holding `.qaren/config.yaml` (with an external `--config`,
+the checked working tree). The file is a Maestro-shaped action: each plan line as a
+comment, then the commands with the exact `testID` (or, without one, the label) the
+step used. On the next run a block whose plan lines, platform and app are unchanged
+is replayed by those stored identities through the same walk, without Jev for quoted
+targets or literal checks; phrase checks still ask Jev. A stored identity that no
+longer matches exactly one element before that step authorizes any mutation re-walks
+the block from that line; earlier completed steps are kept. Once that step authorizes
+a mutation, its selector failure is terminal. On PASS only the commands under that
+line and later ones are rewritten, and every `✓` comment stays byte-identical. A failing check is a FAIL and
+is never re-walked or rewritten. Timeout and ambiguous screen-movement recovery
+remain deferred; app-process changes stay terminal. A failing block is never saved;
+blocks that passed earlier in the run remain saved. A step without a `testID`
+or label, a phrase wait, or a fill into a secure or private input leaves the block
+unsaved and the ledger says why without naming any value; ordinary fills keep their
+plan literal in the saved block. A previously saved block replayed against a now-private
+input also reports withholding without rewriting or deleting the existing action.
+When saving a discovered or patched block, exact substrings of values typed by
+earlier private fills in the same run withhold the block if present in header fields,
+raw comments, fill literals, literal assertions or stored selectors. The value-free
+reason is `contains a protected plan-typed value` in `blocks_not_saved`. This save
+guard uses recorded private-fill facts only; prefilled secure values and values only
+observed on screen remain uncovered by it. It does not remove existing saved actions.
+
+Replay requires the canonical block format emitted by
+[`serializeBlock`](../qaren-core/src/qa/blocks.ts); edited or incompatible files
+take the discovery path. Saving never overwrites an action belonging to another plan
+block; a collision or unsafe corpus leaves the passing block unsaved with a reason.
+
+The ledger's `path` is `walk`, `replay` or `replay→walk@<line>` (the first re-walked
+plan line), and each block reports `source` `discovered`, `replayed` or `patched`. The
+receipt lists `blocks_written`, `blocks_not_saved` (block and reason) and, as a
+diagnostic that never changes the verdict,
+`worktree_drift`: app-root paths whose `git status` changed during the walk, outside
+`.qaren/actions`. `qaren actions list [--json]` and `qaren actions show <slug>` read the
+action corpus of the current directory. Both `.yaml` and `.yml` are supported;
+existing files retain their extension when patched. A slug with both extensions
+refuses inspection and is not overwritten by `check`. Symlinked corpora and
+action files are refused. Inspection header validity and defaults follow the
+[core header parser](../qaren-core/src/domain/reusable-action.ts); `list` skips
+invalid headers and `show` refuses them.
+
+On iOS the walk also fails `APP_PROCESS_CHANGED` when the app's process changes between
+captures (a crash or restart), and refuses `APP_PROCESS_UNKNOWN` when the runner does
+not report the process; a runner built from an older checkout needs a rebuild
+(`RN_RUNNER_BUILD=local`).
 
 ### Walk timing
 
@@ -537,23 +619,17 @@ build_and_ready — so revisit this once live reuse is measurable.
   report only exit status and timeout state with `[private output withheld]`,
   and neither captured stream is written to durable logs. Only a successful,
   nonempty fetch writes the cleanup-tracked, mode-0600 vendor key file.
-  Other command summaries withhold output if either stream contains
-  `private key` (case-insensitive), including `<redacted private key>` from
-  already-masked stderr. Otherwise, complete stdout and stderr are redacted
-  before selecting the six-line diagnostic tail; timeouts report only duration.
-  Shared redaction masks entire lines naming `PRIVATE KEY`, including header
-  delimiters, with `<redacted private key>` or suppresses them within an open
-  block. A `BEGIN` suppresses
-  following lines through a `PRIVATE KEY` line containing `-----END`; an
-  unterminated block suppresses the remainder. Whole-string redaction checks
-  literal `BEGIN` and `END` occurrences in order on lines naming `PRIVATE KEY`;
-  an unmatched `END` replaces the whole string with the mask.
-  Detached command logs use one helper for both streams. While a block is open,
-  subsequent processed lines on either stream are suppressed until each
-  opening stream closes its own block. Oversized log lines are withheld;
-  finding `PRIVATE KEY` anywhere in one, including across capture chunks,
-  conservatively opens that stream's block. API-key redaction still applies
-  to retained diagnostics and log lines.
+  Parser input stays raw in memory. Persisted operational identities
+  (paths, ids, pids, ports and lock directories) are written exactly;
+  output-derived record fields use `OutputText`, masked on construction and
+  load. Command summaries inspect both streams, and ledger and receipt
+  evidence strings keep whole-string withholding when they contain
+  `private key` (case-insensitive), using
+  `[output withheld: contained private key material]`. Command logs keep
+  per-byte whole-command withholding: a mention truncates that command's
+  output and drops subsequent bytes. API-key redaction still applies to
+  retained diagnostics and logs. Key bodies with no private-key mention,
+  or copied before the mention arrives, cannot be withheld by this rule.
 - **Local listeners are never adopted.** The farm-advertised adb port is
   preflighted free on this host *before* the lease is claimed (a local
   emulator commonly owns 5555), and a listener on the tunnel or private adb

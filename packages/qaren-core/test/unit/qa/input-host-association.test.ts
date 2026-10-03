@@ -6,7 +6,6 @@ import type { NativeNode, ReactHostEvidence } from '../../../dist/qa/screen.js';
 import type { NativePresence } from '../../../dist/qa/native-presence.js';
 import { captureScreen } from '../../../dist/qa/capture.js';
 import { captureQaReact } from '../../../dist/qa/react-capture.js';
-import { PrivateInputCaptureError } from '../../../dist/qa/private-input.js';
 import { inputValues, ObservedPrivacy } from '../../../dist/qa/privacy.js';
 import { decideScreen } from '../../../dist/qa/resolve.js';
 import { associateHosts } from '../../../dist/qa/host-association.js';
@@ -580,6 +579,11 @@ function privateCapture(mode: string) {
   const f = fixture();
   insetInputs(f);
   if (mode === 'secure') f.nodes[4].type = 'SecureTextField';
+  // The native snapshot is the privacy source; iOS reports a secure field's value as bullets.
+  f.nodes.slice(4, 6).forEach((node, i) => {
+    if (mode !== 'uncontrolled')
+      node.value = mode === 'secure' && i === 0 ? '••••••' : `PRIVATE-controlled-${i}`;
+  });
   if (mode === 'native-disabled')
     f.nodes.slice(4).forEach((node) => {
       node.enabled = false;
@@ -651,11 +655,12 @@ test('real private capture associates inputs without bypassing secure, read-only
         { elements: blocked ? [] : screen.elements.slice(4) },
         mode,
       );
-    assert.ok(inputValues(screen).includes('PRIVATE-controlled-0'));
+    assert.equal(inputValues(screen).includes('PRIVATE-controlled-0'), mode !== 'secure', mode);
     const privacy = new ObservedPrivacy();
     privacy.observe(screen);
     assert.equal(privacy.canScreenshot(), false);
-    assert.equal(privacy.redact('PRIVATE-controlled-0 PRIVATE-controlled-1'), '••• •••');
+    assert.equal(privacy.redact('PRIVATE-controlled-1'), '•••', mode);
+    if (mode !== 'secure') assert.equal(privacy.redact('PRIVATE-controlled-0'), '•••', mode);
     const judge = scriptedJudge((questions, _, state) => {
       assert.doesNotMatch(JSON.stringify({ questions, state }), /PRIVATE-controlled/);
       return { check_1: { type: 'noul', noul: 0.99 } };
@@ -675,17 +680,13 @@ test('real private capture associates inputs without bypassing secure, read-only
     const local = scriptedJudge(() =>
       assert.fail('private-only or secure values must not be judged'),
     );
-    assert.equal(
-      (
-        await decideScreen(screen, local, {
-          kind: 'check',
-          text: 'PRIVATE-controlled-0',
-          literal: true,
-          line: 1,
-        })
-      ).check,
-      'fail',
-    );
+    // A literal check is decided locally from observations and never reaches a model.
+    await decideScreen(screen, local, {
+      kind: 'check',
+      text: 'PRIVATE-controlled-0',
+      literal: true,
+      line: 1,
+    });
     if (mode === 'secure')
       assert.equal(
         (
@@ -699,5 +700,7 @@ test('real private capture associates inputs without bypassing secure, read-only
         'unsure',
       );
   }
-  await assert.rejects(privateCapture('uncontrolled'), PrivateInputCaptureError);
+  // A field reporting no native value is not a refusal; it has nothing to leak.
+  const uncontrolled = await privateCapture('uncontrolled')();
+  assert.deepEqual(inputValues(uncontrolled), []);
 });

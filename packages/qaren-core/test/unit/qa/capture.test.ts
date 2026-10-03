@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { captureScreen } from '../../../dist/qa/capture.js';
+import {
+  AppProcessGoneError,
+  NativeCaptureError,
+  captureScreen,
+} from '../../../dist/qa/capture.js';
 import { decideScreen } from '../../../dist/qa/resolve.js';
 import type { NativeObservation, ReactObservation } from '../../../dist/qa/capture.js';
 import { assertionView, visibilityView } from '../../../dist/qa/screen.js';
@@ -746,7 +750,7 @@ test('complete acquisition preserves legacy joins without claiming semantic enum
     screen.elements.map((element) => [element.ref, element.testID, element.label]),
     [
       ['@save', 'save', 'Save'],
-      ['react:later', 'later', 'Later'],
+      ['react:later', 'later', undefined],
     ],
   );
   assert.deepEqual(assertionView(screen), ['Save']);
@@ -1113,4 +1117,40 @@ test('native errors propagate unchanged without reading React or logging payload
     (error) => error === failure,
   );
   assert.equal(reads, 1);
+});
+
+test('the runner-reported app process identifier reaches the screen only when it is a positive integer', async () => {
+  for (const [reported, expected] of [
+    [4242, 4242],
+    [0, undefined],
+    [-7, undefined],
+    [1.5, undefined],
+    ['4242', undefined],
+    [undefined, undefined],
+  ] as const) {
+    const screen = await captureScreen({
+      native: async () => ({
+        nodes,
+        truncated: false,
+        normalizationDroppedNodes: 0,
+        snapshotVerdict,
+        ...(reported === undefined ? {} : { appProcessIdentifier: reported }),
+      }),
+      react: async () => ({ interactive, verdict, hostEvidence }),
+    });
+    assert.equal(screen.appProcessIdentifier, expected, String(reported));
+  }
+});
+
+test('a gone app process passes through private capture; other native failures stay content-free', async () => {
+  const fail = (error: Error) =>
+    captureScreen({
+      requirePrivateInputs: true,
+      native: async () => {
+        throw error;
+      },
+      react: async () => ({ interactive, verdict, hostEvidence }),
+    });
+  await assert.rejects(fail(new AppProcessGoneError()), AppProcessGoneError);
+  await assert.rejects(fail(new Error('secret runner detail')), NativeCaptureError);
 });

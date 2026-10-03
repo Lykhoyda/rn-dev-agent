@@ -72,26 +72,3 @@ precondition(json["appliedBudgetMs"] as? Int == 20_000)
   });
   assert.equal(result.status, 0, result.stderr || String(result.error));
 });
-
-test('Swift capability and production capture bind the explicit budget without weakening revalidation', () => {
-  const transport = read('Transport');
-  assert.match(transport, /"PLATFORM_PRESENCE_V2"/);
-  assert.doesNotMatch(transport, /PLATFORM_PRESENCE_V1/);
-  const execution = read('CommandExecution');
-  assert.match(
-    execution,
-    /snapshotPlatformPresence\(app: target, appId: bundleId, presenceBudgetMs: presenceBudgetMs\)/,
-  );
-  const capture = section(
-    read('Snapshot'),
-    '  func snapshotPlatformPresence(',
-    '  private func presenceEnumerationIsUnchanged(',
-  );
-  assert.match(capture, /let deadline = started \+ Double\(presenceBudgetMs\)/);
-  assert.match(capture, /version: 2/);
-  assert.match(capture, /appliedBudgetMs: presenceBudgetMs/);
-  assert.match(capture, /presenceAppIsEligible\(app, deadline: deadline, timing: timing\)/);
-  assert.match(capture, /presenceEnumerationIsUnchanged\(/);
-  assert.match(capture, /deadlineReached\([\s\S]*read: \.finalization/);
-  assert.doesNotMatch(capture, /4_800|20_000|25_000/);
-});

@@ -183,6 +183,7 @@ func run(_ name: String, _ trees: [XCUIElementSnapshot], budget: Int = 20_000, c
   print(String(data: try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys]), encoding: .utf8)!)
 }
 try run("stable", [tree()])
+try run("explicit-budget", [tree()], budget: 1234)
 try run("first-read-cost", [tree()], readDelay: [1: 500])
 try run("first-traversal-cost", [tree()], traversalDelay: 500)
 try run("slow-second-sample", [tree()], readDelay: [2: 500])
@@ -231,6 +232,8 @@ try run("final-ineligible", [tree()], backgroundAt: 2)
         return [row.name, row];
       }),
   );
+  assert.equal(rows.get('explicit-budget').budget, 1234);
+  assert.equal(rows.get('explicit-budget').complete, true);
   for (const name of [
     'stable',
     'frame',

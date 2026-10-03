@@ -1,6 +1,76 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePlan, parseStep, slugify } from '../../../dist/qa/plan.js';
+import { createHash } from 'node:crypto';
+import {
+  parsePlan,
+  parseStep,
+  preparePlan,
+  readPreparedPlan,
+  slugify,
+} from '../../../dist/qa/plan.js';
+import { ACTION_ID_MAX_LEN, isValidActionId } from '../../../dist/domain/path-safety.js';
+
+test('generated IDs preserve valid slugs and bound overflowing headings deterministically', () => {
+  for (const title of [
+    '  Hello, World!  ',
+    '!!!',
+    'a'.repeat(64),
+    'a'.repeat(65),
+    'a'.repeat(4000),
+  ]) {
+    const full =
+      title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'plan';
+    const expected =
+      full.length <= ACTION_ID_MAX_LEN
+        ? full
+        : `${full.slice(0, 47)}-${createHash('sha256').update(full).digest('hex').slice(0, 16)}`;
+    assert.equal(slugify(title), expected);
+    assert.ok(isValidActionId(expected));
+    for (const heading of ['#', '###']) {
+      const markdown = `${heading} ${title}\n1. Tap "A"\n`;
+      const parsed = parsePlan(markdown);
+      assert.ok(parsed.blocks, JSON.stringify(parsed.refused));
+      assert.equal(parsed.blocks[0].slug, expected);
+      assert.equal(parsed.blocks[0].title, title.trim());
+      assert.deepEqual(
+        readPreparedPlan(markdown, preparePlan(markdown, parsed.blocks)),
+        parsed.blocks,
+      );
+    }
+  }
+});
+
+test('long headings keep full-slug duplicate detection and distinguish equal prefixes', () => {
+  const prefix = 'a'.repeat(80);
+  const parsed = parsePlan(`### ${prefix} one\n1. Tap "A"\n### ${prefix} two\n1. Tap "B"\n`);
+  assert.ok(parsed.blocks);
+  assert.notEqual(parsed.blocks[0].slug, parsed.blocks[1].slug);
+  const duplicate = parsePlan(`### ${prefix} ONE\n1. Tap "A"\n### ${prefix}---one!\n1. Tap "B"\n`);
+  assert.equal(duplicate.blocks, undefined);
+  assert.match(duplicate.refused?.[0].reason ?? '', /another block is already named/);
+});
+
+test('bounded-ID collisions refuse the whole plan in either order and with a headingless block', () => {
+  const long = 'a'.repeat(65);
+  const bounded = slugify(long);
+  for (const [first, second] of [
+    [long, bounded],
+    [bounded, long],
+  ]) {
+    for (const heading of ['#', '###']) {
+      const markdown = `${heading} ${first}\n1. Tap "A"\n### ${second}\n1. Tap "B"\n`;
+      const parsed = parsePlan(markdown);
+      assert.equal(parsed.blocks, undefined);
+      assert.match(
+        parsed.refused?.[0].reason ?? '',
+        /distinct block titles produce the same action ID/,
+      );
+    }
+  }
+});
 
 test('every grammar shape parses to its step kind', () => {
   const cases: Array<[string, unknown]> = [

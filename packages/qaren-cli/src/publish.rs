@@ -179,6 +179,7 @@ fn find_marked_comment(
         .map(|c| c.url))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn post_once(
     runner: &mut dyn Runner,
     pr: &PrInfo,
@@ -526,7 +527,7 @@ pub fn publish(
             .insert("writeback".into(), writeback.clone());
     }
     receipt.next_action = match &failure {
-        Some(f) => f.next_action.clone(),
+        Some(f) => f.next_action.to_string(),
         None => "nothing left; the pull request has the QA comment".to_string(),
     };
     receipt.failure = failure;

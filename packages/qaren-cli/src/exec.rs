@@ -123,6 +123,11 @@ impl CmdOutput {
         }
     }
 
+    pub fn names_private_key(&self) -> bool {
+        crate::redact::names_private_key(&self.stdout)
+            || crate::redact::names_private_key(&self.stderr)
+    }
+
     pub fn summary(&self) -> String {
         if self.timed_out {
             return format!("timed out after {}ms", self.duration_ms);
@@ -130,12 +135,8 @@ impl CmdOutput {
         let code = self
             .exit_code
             .map_or("signal".to_string(), |c| c.to_string());
-        // Captured streams lose their interleaving, so any key text withholds the whole tail.
-        if [&self.stdout, &self.stderr]
-            .iter()
-            .any(|stream| stream.to_ascii_lowercase().contains("private key"))
-        {
-            return format!("exit={code} <output withheld: private key material>");
+        if self.names_private_key() {
+            return format!("exit={code} {}", crate::redact::PRIVATE_KEY_WITHHELD);
         }
         let stderr = crate::redact::redact_secrets(&self.stderr);
         let stdout = crate::redact::redact_secrets(&self.stdout);
@@ -528,9 +529,8 @@ fn run_captured(
     }
     Ok(CmdOutput {
         exit_code: result?,
-        // Protocol stdout is memory-only; redact diagnostics at their persistence boundary.
         stdout: String::from_utf8_lossy(&out).into_owned(),
-        stderr: crate::redact::redact_secrets(&String::from_utf8_lossy(&err)),
+        stderr: String::from_utf8_lossy(&err).into_owned(),
         timed_out,
         duration_ms: started.elapsed().as_millis() as u64,
     })

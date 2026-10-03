@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, test } from 'node:test';
 import { captureScreen } from '../../../dist/qa/capture.js';
-import { bindPrivateInputs } from '../../../dist/qa/private-input.js';
+import { NativeSnapshotIncomplete } from '../../../dist/qa/private-input.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import {
@@ -85,15 +84,11 @@ async function capture(data: unknown) {
       assert.equal(result.ok, true);
       return { ...result.data, snapshotVerdict: result.meta.snapshotVerdict };
     },
-    react: async () =>
-      bindPrivateInputs(
-        {
-          interactive: [],
-          verdict: { state: 'ok', path: 'interactive', complete: true },
-          hostEvidence: { hosts: [], complete: true },
-        },
-        { version: 1, complete: true, facts: [] },
-      ),
+    react: async () => ({
+      interactive: [],
+      verdict: { state: 'ok', path: 'interactive', complete: true },
+      hostEvidence: { hosts: [], complete: true },
+    }),
   });
 }
 
@@ -139,7 +134,14 @@ test('Android producer or host normalization losses never become usable literal 
     ].map((invalid) => ({ ...complete(), nodes: [node, invalid] })),
     { ...complete(), nodes: [] },
   ]) {
-    const screen = await capture(data);
+    let screen;
+    try {
+      screen = await capture(data);
+    } catch (error) {
+      // A provably incomplete tree refuses at capture, which is never usable either.
+      assert.ok(error instanceof NativeSnapshotIncomplete, JSON.stringify(data));
+      continue;
+    }
     assert.notEqual(screen.captureCoverage?.native, 'complete', JSON.stringify(data));
     for (const plan of ['1. Back', '1. Tap "Save"', '1. Wait for "Save"']) {
       const judge = scriptedJudge(() => assert.fail('unusable acquisition must not call Jev'));
@@ -153,40 +155,49 @@ test('Android producer or host normalization losses never become usable literal 
 });
 
 test('Android acquisition reports producer and host losses together', async () => {
-  const screen = await capture({
-    ...complete(),
-    normalizationDroppedNodes: 2,
-    nodes: [node, { index: 1, type: 'android.widget.TextView' }],
-  });
-  assert.equal(screen.captureCoverage?.native, 'incomplete');
-  assert.ok(screen.nativeCaptureCauses?.includes('dropped=3'));
+  await assert.rejects(
+    capture({
+      ...complete(),
+      normalizationDroppedNodes: 2,
+      nodes: [node, { index: 1, type: 'android.widget.TextView' }],
+    }),
+    (error) => error instanceof NativeSnapshotIncomplete && error.causes.includes('dropped=3'),
+  );
 });
 
-test('Android producer counts skipped XML nodes and attests only after end-of-document', () => {
-  const source = readFileSync(
-    new URL(
-      '../../../../rn-android-runner/app/src/androidTest/java/dev/lykhoyda/rndevagent/androidrunner/CommandDispatcher.kt',
-      import.meta.url,
-    ),
-    'utf8',
+test('Android incomplete producer reply never permits a mutation', async () => {
+  for (const data of [
+    { ...complete(), normalizationDroppedNodes: 2 },
+    { ...complete(), truncated: true },
+  ]) {
+    const judge = scriptedJudge(() => assert.fail('incomplete capture must not ask Jev'));
+    const f = walker([], judge);
+    f.deps.captureScreen = () => capture(data);
+    const result = await runPlan(parsePlan('1. Tap "Save"').blocks!, f.deps);
+    assert.equal(result.verdict, 'REFUSED');
+    assert.equal((result as { code?: string }).code, 'PRIVATE_INPUT_CAPTURE_UNKNOWN');
+    assert.deepEqual(f.actions, []);
+    assert.equal(judge.calls.length, 0);
+  }
+});
+
+test('Android input text reported as a label stays masked with its echo', async () => {
+  const secret = 'prefilled-c@example.test';
+  const data = {
+    ...complete(),
+    nodes: [
+      node,
+      { ...node, index: 1, type: 'android.widget.EditText', label: secret, identifier: 'email' },
+      { ...node, index: 2, type: 'android.widget.TextView', label: `Sent to ${secret}` },
+    ],
+  };
+  const f = walker(
+    [],
+    scriptedJudge(() => assert.fail('literal plans must not call Jev')),
   );
-  const snapshot = source.slice(
-    source.indexOf('    private fun snapshot('),
-    source.indexOf('    private fun tap('),
-  );
-  assert.match(snapshot, /var normalizationDroppedNodes = 0/);
-  assert.match(snapshot, /while \(parser\.eventType != XmlPullParser\.END_DOCUMENT\)/);
-  assert.match(
-    snapshot,
-    /if \(bounds != null\) \{[\s\S]*nodes\.put\(node\)[\s\S]*\} else \{\s*normalizationDroppedNodes \+= 1/,
-  );
-  assert.match(
-    snapshot,
-    /catch \(e: XmlPullParserException\) \{[\s\S]*throw SnapshotParseException/,
-  );
-  assert.match(
-    snapshot,
-    /return JSONObject\(\)\s*\.put\("nodes", nodes\)\s*\.put\("truncated", false\)\s*\.put\("normalizationDroppedNodes", normalizationDroppedNodes\)/,
-  );
-  assert.doesNotMatch(snapshot, /\bbreak\b|nodes\.take\(/);
+  f.deps.captureScreen = () => capture(data);
+  const result = await runPlan(parsePlan('✓ "Nothing like this"').blocks!, f.deps);
+  assert.equal(result.verdict, 'FAIL');
+  assert.match(result.failure!.seen, /Sent to •••/);
+  assert.equal(JSON.stringify({ result, rows: f.rows }).includes(secret), false);
 });

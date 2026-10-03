@@ -1,6 +1,6 @@
 # M7 Metadata Header — Field Reference
 
-The M7 header lives as `# key: value` comment lines above the Maestro YAML body. Maestro ignores comments; `packages/rn-dev-agent-core/src/learned-actions.ts` (compiled to `dist/learned-actions.js`, inventory CLI), `cdp_run_action` (replay pre-flight), and `cdp_repair_action` (self-repair) parse them. Single source of truth for the schema: `packages/rn-dev-agent-core/src/domain/reusable-action.ts` (`M7Metadata`, `parseM7Header`, `serializeM7Header`).
+The M7 header lives as `# key: value` comment lines above the Maestro YAML body. Maestro ignores comments. The schema owner is [`M7Metadata`, `parseM7Header` and `serializeM7Header`](../../../../qaren-core/src/domain/reusable-action.ts). For QaReN-generated plan blocks and their replay contract, read [Saved blocks](../../../../qaren-cli/README.md#saved-blocks); the legacy authoring guidance below describes handler-driven actions.
 
 ## Parser behavior (what the header may and may not contain)
 

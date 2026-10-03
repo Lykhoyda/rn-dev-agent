@@ -14,7 +14,7 @@ merges into `main` as 2.0.0 once the label path runs end to end. The QaReN
 structure outline and TDD that the phase PRs cite are the specification; each
 phase PR names its Linear issue in the QaReN project.
 
-The package cut, literal `qaren check`, Jev seam, and PR run/publication commands are implemented on this branch; live model and device acceptance are separate from hermetic tests. See the [CLI README](packages/qaren-cli/README.md) for current usage. `qaren listen` and packaging remain later phases.
+The package cut, literal `qaren check`, Jev seam, Phase 4 blocks, and PR run/publication commands are implemented. For saved-block replay, persistence, recovery and action inspection, read the [saved-block contract](packages/qaren-cli/README.md#saved-blocks); for `qaren pr` and `qaren publish`, the [CLI README](packages/qaren-cli/README.md#test-a-pull-request). Live model and device acceptance are separate from hermetic tests; `qaren listen` and packaging arrive in later phases.
 
 ## Repository Map
 
@@ -116,7 +116,7 @@ Doctrine for the kept handlers, each with one owner:
   passes its own from Phase 2; nothing else re-implements authority inline.
 - Native runner launches require `QAREN_DEVICE_LEASE`; `runners/lease-env.ts` adapts the CLI lease to the runners' internal protocol.
 - Jev decisions use `qa/questions.ts` thresholds and `qa/resolve.ts` policy; `qa/jev.ts` owns HTTP only. Keep observed identities and local literal assertions separate from outbound masking in `qa/privacy.ts`; generated masks are never assertion evidence.
-- When changing private QA capture, follow the [capture and privacy contract](packages/qaren-cli/README.md#check-a-plan). `beginQaCapture`/`readQaCapture` use the context-pinned `qa/react-capture.ts` adapter; `qa/private-input.ts` owns admission, `qa/private-input-limits.ts` owns input bounds, and `qa/privacy.ts` owns masking history and sensitive screenshot withholding. Keep raw facts out of public tree envelopes, async result slots and logs.
+- When changing private QA capture, follow the [capture and privacy contract](packages/qaren-cli/README.md#check-a-plan). `beginQaCapture`/`readQaCapture` use the context-pinned `qa/react-capture.ts` adapter; `qa/private-input.ts` owns native privacy admission, `qa/private-input-limits.ts` bounds React host evidence, and `qa/privacy.ts` owns masking history and sensitive screenshot withholding. Keep raw facts out of public tree envelopes, async result slots and logs.
 - Login replay refusal is owned by `handlers/run-action.ts` using attested
   install provenance and `containsClearState` in `domain/maestro-validator.ts`.
   Flow-relaunch attribution is owned by `createFlowRelaunchTracker` in
@@ -186,7 +186,7 @@ For a shutdown iOS target, explicitly pass `check --boot-device --device <UUID>`
 CLI-owned iOS builds require `devClientScheme`; use the default app-local Expo generic-build route or explicitly configure `ios.build` with an existing workspace and Xcode scheme for older Expo CLIs (see `packages/qaren-cli/README.md`, including native-dependency preparation limits). Both routes verify a finite simulator bundle before exact-device installation and separate managed Metro. Workspace builds bind route and selection into the native cache and retire run-local outputs only after verified publication and proven build-group shutdown; unknown cleanup retains the build lock and device lease for `qaren cleanup`.
 
 Every `cdp_run_action` RunRecord write goes through the proven-identity action
-write lock (`src/domain/atomic-writer.ts`) until Phase 4 removes RunRecords. A
+write lock (`src/domain/atomic-writer.ts`); `qaren check` uses its own ledger instead. A
 shell that cannot execute setuid `/bin/ps` or read `kern.bootsessionuuid`
 makes `probeProcessBirth` return `unknown`, so persistence throws and
 handler-driven tests report zero RunRecords. Run those tests from an

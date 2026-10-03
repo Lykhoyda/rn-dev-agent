@@ -125,6 +125,18 @@ function overlaps(a: Rect, b: Rect): boolean {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
+// An empty clip shows nothing; a zero-size frame is shown only if its origin lies in the clip.
+function within(rect: Rect, visible: Rect): boolean {
+  if (visible.width <= 0 || visible.height <= 0) return false;
+  if (rect.width > 0 && rect.height > 0) return overlaps(rect, visible);
+  return (
+    rect.x >= visible.x &&
+    rect.x <= visible.x + visible.width &&
+    rect.y >= visible.y &&
+    rect.y <= visible.y + visible.height
+  );
+}
+
 function clip(a: Rect, b: Rect | undefined): Rect {
   if (!b) return a;
   const x = Math.max(a.x, b.x);
@@ -227,24 +239,40 @@ export function offscreenNodes(
   nodes: NativeNode[],
   presence: NativePresence | undefined,
 ): Set<number> {
+  if (!presence) return new Set();
+  return new Set(
+    [...outsideViewport(nodes)].filter(
+      (i) =>
+        presence.nodes[i]?.status === 'unknown' &&
+        nodes[i].rect!.width > 0 &&
+        nodes[i].rect!.height > 0,
+    ),
+  );
+}
+
+export function outsideViewport(nodes: NativeNode[]): Set<number> {
   const offscreen = new Set<number>();
-  const windows = nodes.flatMap((node, i) => (node.type === 'Window' ? [i] : []));
-  const window = windows.length === 1 ? nodes[windows[0]].rect : undefined;
-  if (!presence || !window || window.width <= 0 || window.height <= 0) return offscreen;
   nodes.forEach((node, i) => {
-    if (presence.nodes[i]?.status !== 'unknown' || !node.rect) return;
-    if (node.rect.width <= 0 || node.rect.height <= 0) return;
-    let visible = window;
+    if (!node.rect) return;
+    let visible: Rect | undefined;
+    let window: Rect | undefined;
     let parent = node.parentIndex;
-    for (
-      let hops = 0;
-      parent !== undefined && parent !== windows[0] && hops < nodes.length;
-      hops++
-    ) {
-      if (nodes[parent]?.type === 'ScrollView') visible = clip(visible, nodes[parent].rect);
-      parent = nodes[parent]?.parentIndex;
+    for (let hops = 0; parent !== undefined && hops < nodes.length; hops++) {
+      const ancestor = nodes[parent];
+      if (
+        ancestor?.type === 'Window' &&
+        ancestor.rect &&
+        ancestor.rect.width > 0 &&
+        ancestor.rect.height > 0
+      ) {
+        window = clip(ancestor.rect, visible);
+        break;
+      }
+      if (ancestor?.rect && ['ScrollView', 'Table', 'CollectionView'].includes(ancestor.type ?? ''))
+        visible = clip(ancestor.rect, visible);
+      parent = ancestor?.parentIndex;
     }
-    if (parent === windows[0] && !overlaps(node.rect, visible)) offscreen.add(i);
+    if (window && !within(node.rect, window)) offscreen.add(i);
   });
   return offscreen;
 }

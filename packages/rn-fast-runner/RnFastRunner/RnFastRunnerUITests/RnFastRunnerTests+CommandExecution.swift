@@ -135,10 +135,18 @@ extension RnFastRunnerTests {
 
   // MARK: - Command Handling
 
-  private func qaReadOnlyRefusal() -> Response {
+  private func qaReadOnlyRefusal(appNotRunning: Bool = false) -> Response {
     Response(ok: false, error: ErrorPayload(
-      code: "ACTION_CONTEXT_CHANGED", message: "QA read requires the unchanged foreground target; no recovery attempted", mutation: "none"
+      code: "ACTION_CONTEXT_CHANGED", message: "QA read requires the unchanged foreground target; no recovery attempted",
+      mutation: "none", reason: appNotRunning ? "app-not-running" : nil
     ))
+  }
+
+  // Reads the cached target's state only; a read never activates or relaunches the app.
+  private func qaReadOnlyTargetNotRunning(command: Command) -> Bool {
+    guard let bundleId = command.appBundleId?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !bundleId.isEmpty, currentBundleId == bundleId, let target = currentApp else { return false }
+    return target.state == .notRunning
   }
 
   private func qaReadOnlyTarget(command: Command) -> XCUIApplication? {
@@ -208,7 +216,9 @@ extension RnFastRunnerTests {
           userInfo: [NSLocalizedDescriptionKey: "command returned no response"]
         )
       }
-      if command.qaReadOnly == true, !response.ok { return qaReadOnlyRefusal() }
+      if command.qaReadOnly == true, !response.ok {
+        return qaReadOnlyRefusal(appNotRunning: response.error?.reason == "app-not-running")
+      }
       if !hasRetried, shouldRetryCommand(command), shouldRetryResponse(response) {
         NSLog(
           "RN_FAST_RUNNER_RETRY command=%@ reason=response_unavailable",
@@ -227,7 +237,9 @@ extension RnFastRunnerTests {
   private func executeOnMain(command: Command) throws -> Response {
     var readOnlyApp: XCUIApplication?
     if command.qaReadOnly == true {
-      guard let target = qaReadOnlyTarget(command: command) else { return qaReadOnlyRefusal() }
+      guard let target = qaReadOnlyTarget(command: command) else {
+        return qaReadOnlyRefusal(appNotRunning: qaReadOnlyTargetNotRunning(command: command))
+      }
       readOnlyApp = target
     }
     if command.platformPresence == true {
@@ -251,7 +263,10 @@ extension RnFastRunnerTests {
         : XCUIApplication(bundleIdentifier: bundleId)
       currentSnapshotGeneration += 1
       // Observation must not activate or relaunch the app to manufacture presence.
-      let payload = snapshotPlatformPresence(app: target, appId: bundleId, presenceBudgetMs: presenceBudgetMs)
+      let payload = runnerPayload(
+        snapshotPlatformPresence(app: target, appId: bundleId, presenceBudgetMs: presenceBudgetMs),
+        appProcessIdentifier: observedProcessIdentifier(target)
+      )
       retainSnapshotTargets(payload.nodes ?? [])
       needsPostSnapshotInteractionDelay = true
       return Response(ok: true, data: payload)
@@ -998,9 +1013,12 @@ extension RnFastRunnerTests {
         scope: command.scope,
         raw: command.raw ?? false
       )
-      let payload = options.raw
-        ? snapshotRaw(app: activeApp, options: options)
-        : snapshotFast(app: activeApp, options: options)
+      let payload = runnerPayload(
+        options.raw
+          ? snapshotRaw(app: activeApp, options: options)
+          : snapshotFast(app: activeApp, options: options),
+        appProcessIdentifier: observedProcessIdentifier(activeApp)
+      )
       retainSnapshotTargets(payload.nodes ?? [])
       needsPostSnapshotInteractionDelay = true
       return Response(ok: true, data: payload)

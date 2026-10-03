@@ -688,12 +688,37 @@ fn unsupported_simulators_and_non_exact_selectors_never_get_a_lease() {
 
 #[test]
 fn fixed_native_script_keeps_serial_execution_and_existing_skips() {
-    let script = include_str!("../../../scripts/test-native-ios.sh");
-    assert!(script.contains("DEST=\"$RN_IOS_TEST_DESTINATION\""));
-    assert!(script.contains("-destination \"$DEST\""));
-    assert!(script.contains("-parallel-testing-enabled NO"));
-    assert!(script.contains("-skip-testing:RnFastRunnerUITests/RnFastRunnerTests"));
-    assert!(script.contains("-skip-testing:RnFastRunnerUITests/SnapshotForegroundRegressionTest"));
+    use std::os::unix::fs::PermissionsExt;
+    let root = common::temp_repo();
+    let bin = root.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let stub = bin.join("xcodebuild");
+    std::fs::write(&stub, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGS_FILE\"\n").unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let args_file = root.join("args");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/test-native-ios.sh");
+    let status = std::process::Command::new("bash")
+        .arg(script)
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .env("ARGS_FILE", &args_file)
+        .env("RN_IOS_TEST_DESTINATION", format!("id={DEVICE}"))
+        .env("RN_IOS_TEST_RESULTS", root.join("results"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let output = std::fs::read_to_string(args_file).unwrap();
+    let args: Vec<_> = output.lines().collect();
+    assert!(args
+        .windows(2)
+        .any(|pair| pair == ["-destination", &format!("id={DEVICE}")]));
+    assert!(args
+        .windows(2)
+        .any(|pair| pair == ["-parallel-testing-enabled", "NO"]));
+    assert!(args.contains(&"-skip-testing:RnFastRunnerUITests/RnFastRunnerTests"));
+    assert!(args.contains(&"-skip-testing:RnFastRunnerUITests/SnapshotForegroundRegressionTest"));
 }
 
 #[test]

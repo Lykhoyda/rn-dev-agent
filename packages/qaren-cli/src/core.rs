@@ -27,6 +27,7 @@ pub struct CoreRequest {
     pub preflight_calls: Vec<JevCall>,
     pub platform: String,
     pub app_id: String,
+    pub app_root: PathBuf,
     pub run_dir: PathBuf,
     pub lease: String,
     pub target: CoreTarget,
@@ -64,6 +65,8 @@ pub struct Ledger {
     pub video_publication: Option<crate::record::VideoPublication>,
     pub path: String,
     pub blocks: Vec<BlockResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocks_written: Option<Vec<String>>,
     pub steps: Vec<Row>,
     pub jev: JevRollup,
     pub llm_turns: u64,
@@ -77,9 +80,6 @@ pub struct Ledger {
     pub speed: Option<LedgerSpeed>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<LedgerFailure>,
-    // Slugs the core saved under `<appRoot>/.qaren/actions/<slug>.yaml` during this walk.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub blocks_written: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -87,6 +87,35 @@ pub struct BlockResult {
     pub key: String,
     pub outcome: String,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsavable: Option<String>,
+}
+
+// The identity a passed step used, stored in the block's action file.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Selector {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+pub fn valid_ledger_path(path: &str) -> bool {
+    path == "walk"
+        || path == "replay"
+        || path.strip_prefix("replay→walk@").is_some_and(|line| {
+            !line.is_empty() && line.bytes().all(|b| b.is_ascii_digit()) && !line.starts_with('0')
+        })
+}
+
+fn valid_blocks(blocks: &[BlockResult]) -> bool {
+    blocks.iter().all(|block| {
+        matches!(block.outcome.as_str(), "pass" | "fail")
+            && matches!(block.source.as_str(), "discovered" | "replayed" | "patched")
+            && block.saved != Some(true)
+    })
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -155,6 +184,8 @@ pub struct Row {
         deserialize_with = "passive"
     )]
     pub timing: Option<RowTiming>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<Selector>,
 }
 
 // Timing is diagnostics only: a malformed value is dropped, never a reason to reject the row or ledger.
@@ -667,7 +698,7 @@ fn interpret(
         );
     }
     if let Some(failure) = deadline_failure {
-        let seen = failure.detail.clone();
+        let seen = failure.detail.to_string();
         if failure.code == FailureCode::RunCancelled {
             return (
                 synthesized_ledger(&inbox.rows, "REFUSED", &seen),
@@ -734,6 +765,11 @@ fn interpret(
         };
     }
     match serde_json::from_value::<Ledger>(result) {
+        Ok(ledger) if !valid_ledger_path(&ledger.path) || !valid_blocks(&ledger.blocks) => missing(
+            &inbox.rows,
+            "result line has an invalid ledger path or block".to_string(),
+            FailureCode::CoreResultMissing,
+        ),
         Ok(ledger) => {
             let verdict = if verdict == "PASS" {
                 Verdict::Pass
@@ -767,6 +803,7 @@ fn refusal_ledger(result: &Value, rows: &[Row], seen: &str) -> Result<Ledger, St
         "escapes",
         "recoveries",
         "failure",
+        "blocksWritten",
     ] {
         if let Some(value) = result.get(field) {
             if value.is_null() {
@@ -784,12 +821,10 @@ fn refusal_ledger(result: &Value, rows: &[Row], seen: &str) -> Result<Ledger, St
     }
     let mut ledger: Ledger =
         serde_json::from_value(normalized).map_err(|error| error.to_string())?;
-    if ledger.path != "walk" {
-        return Err("path must be walk".into());
+    if !valid_ledger_path(&ledger.path) {
+        return Err("path must be walk, replay or replay→walk@<line>".into());
     }
-    if ledger.blocks.iter().any(|block| {
-        !matches!(block.outcome.as_str(), "pass" | "fail") || block.source != "discovered"
-    }) {
+    if !valid_blocks(&ledger.blocks) {
         return Err("invalid block outcome or source".into());
     }
     if ledger.steps.len() > MAX_ROWS
@@ -835,6 +870,7 @@ pub fn synthesized_ledger(rows: &[Row], verdict: &str, seen: &str) -> Ledger {
         video_publication: None,
         path: "walk".to_string(),
         blocks: Vec::new(),
+        blocks_written: None,
         failure: Some(synthesized_failure(&steps, seen)),
         steps,
         jev: JevRollup::default(),
@@ -842,6 +878,5 @@ pub fn synthesized_ledger(rows: &[Row], verdict: &str, seen: &str) -> Ledger {
         escapes: 0,
         recoveries: 0,
         speed: None,
-        blocks_written: Vec::new(),
     }
 }

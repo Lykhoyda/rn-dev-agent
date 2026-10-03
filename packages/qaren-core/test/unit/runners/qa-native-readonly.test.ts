@@ -200,3 +200,26 @@ test('Android ordinary accessibility-action rejection is not identity invalidati
   assert.equal(result.isError, true);
   assert.doesNotThrow(() => context.assertComplete());
 });
+
+for (const platform of ['ios', 'android'] as const) {
+  for (const command of ['snapshot', 'verifyInput'] as const) {
+    test(`${platform} refused QA ${command} neither retries nor activates`, async () => {
+      const { requests, run } = fixture(platform, true, {
+        ok: false,
+        error: { code: 'ACTION_CONTEXT_CHANGED', message: 'app is backgrounded' },
+      });
+      const context = new QaDispatchContext(10, () => 1);
+      await assert.rejects(
+        run({ command, bundleId: 'qa.app', qaContext: context }),
+        /ACTION_CONTEXT_CHANGED/,
+      );
+      assert.deepEqual(
+        requests.map((request) => request.command),
+        [command],
+      );
+      assert.equal(requests[0].qaReadOnly, true);
+      assert.equal(context.authorizations, 0);
+      assert.throws(() => context.assertComplete(), /ACTION_CONTEXT_CHANGED/);
+    });
+  }
+}

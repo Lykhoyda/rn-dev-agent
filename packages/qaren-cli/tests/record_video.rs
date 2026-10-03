@@ -95,7 +95,7 @@ fn stop_sends_sigint_and_waits_for_exit() {
         birth: Some(PidIdentity {
             pid: 7100,
             started_at: LSTART.into(),
-            command: "xcrun".into(),
+            command: qaren::redact::OutputText::from_output("xcrun"),
         }),
         kind: RecorderKind::IosSimulator,
         device: "U".into(),
@@ -192,7 +192,7 @@ fn pr_run_record() -> (PathBuf, RunRecord, PathBuf) {
         birth: Some(PidIdentity {
             pid: 7100,
             started_at: LSTART.into(),
-            command: "xcrun".into(),
+            command: qaren::redact::OutputText::from_output("xcrun"),
         }),
         kind: RecorderKind::IosSimulator,
         device: "U".into(),

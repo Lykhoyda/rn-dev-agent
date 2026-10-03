@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { captureScreen } from '../../../dist/qa/capture.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
-import { bindPrivateInputs } from '../../../dist/qa/private-input.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { scriptedJudge, walker } from './judgment-fixtures.ts';
 import { nativeCapture } from './platform-presence-fixtures.ts';
@@ -41,36 +40,30 @@ function captureInput(platformPresence: boolean) {
       ].map(({ presence, ...node }) => (platformPresence ? { ...node, presence } : node)),
       snapshotVerdict: { ...native.snapshotVerdict, nodeCount: 3 },
     }),
-    react: async () =>
-      bindPrivateInputs(
-        {
-          interactive: [{ testID: 'email', role: 'textinput', capabilities: { fill: true } }],
-          verdict: { state: 'ok', path: 'interactive', complete: true },
-          hostEvidence: {
-            complete: true,
-            hosts: [
-              { testID: 'email', role: null, roleSource: 'none', capabilities: { fill: true } },
-            ],
-            typography: {
-              version: 1,
-              complete: true,
-              durationMs: 10,
-              coordinateSpace: 'window-points',
-              nodes: [
-                {
-                  hostIndex: 0,
-                  parentHostIndex: null,
-                  rootIndex: 0,
-                  hostType: 'RCTView',
-                  rect: { x: 10, y: 20, width: 100, height: 40 },
-                  text: { kind: 'none' },
-                },
-              ],
+    react: async () => ({
+      interactive: [{ testID: 'email', role: 'textinput', capabilities: { fill: true } }],
+      verdict: { state: 'ok', path: 'interactive', complete: true },
+      hostEvidence: {
+        complete: true,
+        hosts: [{ testID: 'email', role: null, roleSource: 'none', capabilities: { fill: true } }],
+        typography: {
+          version: 1,
+          complete: true,
+          durationMs: 10,
+          coordinateSpace: 'window-points',
+          nodes: [
+            {
+              hostIndex: 0,
+              parentHostIndex: null,
+              rootIndex: 0,
+              hostType: 'RCTView',
+              rect: { x: 10, y: 20, width: 100, height: 40 },
+              text: { kind: 'none' },
             },
-          },
+          ],
         },
-        { version: 1, complete: true, facts: [{ hostIndex: 0, values: [], secure: false }] },
-      ),
+      },
+    }),
   });
 }
 

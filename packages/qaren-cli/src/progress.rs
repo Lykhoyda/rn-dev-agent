@@ -213,6 +213,7 @@ mod tests {
             text: Some(text.into()),
             reason: None,
             timing: None,
+            selector: None,
         }
     }
 

@@ -1003,3 +1003,88 @@ fn retry_regenerates_unposted_blocks_through_the_current_block_gate() {
     );
     assert!(again.0.calls.is_empty());
 }
+
+// The exact shape Phase 4's serializer writes for an eligible walk (qaren-core blocks.test.ts golden).
+fn producer_block(plan_hash: &str) -> String {
+    [
+        "appId: com.example.app",
+        "---",
+        "# id: onboarding-to-the-tasks-tab",
+        "# intent: Onboarding to the tasks tab",
+        "# status: active",
+        "# appId: com.example.app",
+        "# plan: onboarding-to-the-tasks-tab",
+        &format!("# planHash: {plan_hash}"),
+        "# platform: ios",
+        "",
+        "# 1. Tap \"onboarding-skip\"",
+        "- tapOn: { id: \"onboarding-skip\" }",
+        "# 2. Tap \"onboarding-done\"",
+        "- tapOn: { id: \"onboarding-done\" }",
+        "# 3. Wait for \"Welcome\" to appear",
+        "- extendedWaitUntil: { visible: { text: \"Welcome\" }, timeout: 15000 }",
+        "# ✓ \"Welcome\"",
+        "- assertVisible: { text: \"Welcome\" }",
+        "# 4. Tap \"tab-tasks\"",
+        "- tapOn: { id: \"tab-tasks\" }",
+        "",
+    ]
+    .join("\n")
+}
+
+#[test]
+fn a_block_in_the_producers_format_from_an_eligible_walk_is_committed_byte_identical() {
+    let (runs, dir, verdict) = run_dir(false);
+    let slug = "onboarding-to-the-tasks-tab";
+    let source = producer_block(&"3f".repeat(32));
+    std::fs::write(dir.join(format!("blocks/{slug}.yaml")), &source).unwrap();
+    edit_pr(&dir, |pr| {
+        pr["blocks"] = serde_json::json!([slug]);
+        pr["identityValues"] = serde_json::json!([
+            "qaren-check",
+            "1DC408C4-51DA-4C4F-ACA1-39881C916FDD",
+            "8081"
+        ]);
+    });
+    let mut runner = Staged(Git(MockRunner::new()), Vec::new());
+    script_comment_and_label(&mut runner.0 .0);
+    let mock = &mut runner.0 .0;
+    mock.expect_run(
+        "git remote get-url --push origin",
+        CmdOutput::success("git@github.com:o/r.git\n"),
+    );
+    mock.expect_run(
+        &format!("git fetch origin {TESTED}"),
+        CmdOutput::success(""),
+    );
+    mock.expect_run("git worktree add --detach", CmdOutput::success(""));
+    mock.expect_run(
+        &format!("git add -f -- test-app/.qaren/actions/{slug}.yaml"),
+        CmdOutput::success(""),
+    );
+    mock.expect_run(
+        &format!("git commit -m qaren: save block {slug}"),
+        CmdOutput::success(""),
+    );
+    mock.expect_run(
+        "git rev-parse HEAD",
+        CmdOutput::success(&format!("{COMMIT}\n")),
+    );
+    mock.expect_run("git worktree remove --force", CmdOutput::success(""));
+    mock.expect_run(
+        "git ls-remote origin refs/heads/feat/tasks",
+        CmdOutput::success(&format!("{TESTED}\trefs/heads/feat/tasks\n")),
+    );
+    mock.expect_run("git push origin", CmdOutput::success(""));
+
+    let receipt = publish(&mut runner, &runs, RUN, &verdict, &fixture_machine());
+
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Published,
+        "{:?}",
+        receipt.failure
+    );
+    assert_eq!(runner.1, [source]);
+    assert_eq!(receipt.outcomes["writeback"], format!("committed {COMMIT}"));
+}

@@ -80,6 +80,13 @@ pub struct MetroIdentity {
     pub identity: Option<crate::runrecord::PidIdentity>,
 }
 
+// A passed block the core did not save, with the core's value-free reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockNotSaved {
+    pub block: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Receipt {
     pub schema: String,
@@ -122,6 +129,12 @@ pub struct Receipt {
     // The PR head moved during a `qaren pr` run; this names the commit that was tested.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tested_older_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks_written: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks_not_saved: Vec<BlockNotSaved>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worktree_drift: Vec<String>,
     pub next_action: String,
 }
 
@@ -157,12 +170,15 @@ impl Receipt {
             ledger: None,
             preflight_jev: None,
             tested_older_commit: None,
+            blocks_written: Vec::new(),
+            blocks_not_saved: Vec::new(),
+            worktree_drift: Vec::new(),
             next_action: String::new(),
         }
     }
 
     pub fn to_json(&self) -> String {
-        crate::redact::redact_api_key(&serde_json::to_string_pretty(self).unwrap_or_else(|e| {
+        crate::redact::redact_api_key(&crate::redact::durable_json(self).unwrap_or_else(|e| {
             let fallback = serde_json::json!({
                 "schema": RECEIPT_SCHEMA,
                 "verb": self.verb,
@@ -179,7 +195,7 @@ impl Receipt {
                 },
                 "next_action": "inspect the run directory manually"
             });
-            serde_json::to_string_pretty(&fallback).expect("fallback receipt is plain strings")
+            crate::redact::durable_json(&fallback).expect("fallback receipt is plain strings")
         }))
     }
 }

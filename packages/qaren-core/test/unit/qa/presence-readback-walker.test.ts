@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { captureScreen } from '../../../dist/qa/capture.js';
-import { bindPrivateInputs } from '../../../dist/qa/private-input.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { createTimingObserver, formatTimingEvent } from '../../../dist/qa/timing.js';
@@ -47,15 +46,11 @@ function fixture(fault: keyof typeof faults, changed: boolean, badInitial = fals
               : { ...source.presenceCapture, ...(invalid ? faults[fault] : {}) },
         };
       },
-      react: async () =>
-        bindPrivateInputs(
-          {
-            interactive: [],
-            verdict: { state: 'ok', path: 'interactive', complete: true },
-            hostEvidence: { hosts: [], complete: true },
-          },
-          { version: 1, complete: true, facts: [] },
-        ),
+      react: async () => ({
+        interactive: [],
+        verdict: { state: 'ok', path: 'interactive', complete: true },
+        hostEvidence: { hosts: [], complete: true },
+      }),
     });
     assert.equal(observed.captureCoverage?.native, 'complete');
     assert.equal(
@@ -295,19 +290,20 @@ test('under-budget native readback rejection retains only allowlisted failure di
             }
             return source;
           },
-          react: async () =>
-            bindPrivateInputs(
-              {
-                interactive: [],
-                verdict: { state: 'ok', path: 'interactive', complete: true },
-                hostEvidence: { hosts: [], complete: true },
-              },
-              { version: 1, complete: true, facts: [] },
-            ),
+          react: async () => ({
+            interactive: [],
+            verdict: { state: 'ok', path: 'interactive', complete: true },
+            hostEvidence: { hosts: [], complete: true },
+          }),
         });
       const result = await runPlan(parsePlan('1. Tap the save button').blocks!, f.deps);
-      assert.equal(result.verdict, 'FAIL');
-      assert.match(result.failure!.seen, /NATIVE_ACQUISITION_UNUSABLE/);
+      // A provably incomplete native tree refuses at capture; the refusal names only counts and causes.
+      assert.equal(result.verdict, 'REFUSED');
+      assert.equal('code' in result && result.code, 'PRIVATE_INPUT_CAPTURE_UNKNOWN');
+      assert.match(
+        'message' in result ? result.message : '',
+        /native snapshot was incomplete \(nodes=\d+; causes=/,
+      );
       assert.equal(captures, 2);
       assert.equal(judge.calls.length, 1);
       assert.deepEqual(f.actions, ['press @e1']);

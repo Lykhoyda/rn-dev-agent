@@ -278,7 +278,7 @@ interface OwnedActionPathEntry {
   kind: 'directory' | 'file';
 }
 
-function captureOwnedActionPathIdentity(
+export function captureOwnedActionPathIdentity(
   projectRoot: string,
   filePath?: string,
 ): OwnedActionPathEntry[] {
@@ -296,7 +296,7 @@ function captureOwnedActionPathIdentity(
   });
 }
 
-function ownedActionPathIdentityMatches(entries: readonly OwnedActionPathEntry[]): boolean {
+export function ownedActionPathIdentityMatches(entries: readonly OwnedActionPathEntry[]): boolean {
   try {
     return entries.every((entry) => {
       const stat = lstatSync(entry.path);
