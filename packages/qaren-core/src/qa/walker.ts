@@ -120,7 +120,7 @@ export interface WalkOutcome {
   rows: LedgerRow[];
   failure?: LedgerFailure;
   refusal?: { code: string; message: string };
-  // Replay only: the line whose stored selector no longer resolves or moves the screen.
+  // Replay only: the line whose stored selector failed before mutation authorization.
   miss?: number;
   // Fill lines that typed into a private input; their block is never saved.
   privateFills?: number[];

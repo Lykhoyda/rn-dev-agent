@@ -283,6 +283,9 @@ title, using the normalization described above before length bounding. A collidi
 short and long title therefore leaves the existing file byte-identical; same-title
 patches remain allowed. A collision or unsafe corpus leaves the passing block unsaved
 with a reason in `blocks_not_saved`.
+Saving holds the existing action-write lock across extension selection, title ownership
+checking and publication, so concurrent saves of colliding titles preserve the winner's
+file. Both `.yaml` and `.yml` identities share this lock.
 
 The ledger's `path` is `walk`, `replay` or `replay→walk@<line>` (the first re-walked
 plan line), and each block reports `source` `discovered`, `replayed` or `patched`. The
@@ -302,8 +305,10 @@ extension and bytes. See [Test a pull request](#test-a-pull-request) for branch
 writeback validation and fallback comments.
 
 On iOS the walk also fails `APP_PROCESS_CHANGED` when the app's process changes between
-captures (a crash or restart), and refuses `APP_PROCESS_UNKNOWN` when the runner does
-not report the process; a runner built from an older checkout needs a rebuild
+captures (a crash or restart), or a snapshot or platform-presence capture reports
+`app-not-running`. Generic platform-presence runner failures retain the
+`NATIVE_CAPTURE_UNAVAILABLE` refusal. An initial capture that does not report the process
+refuses `APP_PROCESS_UNKNOWN`; a runner built from an older checkout needs a rebuild
 (`RN_RUNNER_BUILD=local`).
 
 ### Walk timing
