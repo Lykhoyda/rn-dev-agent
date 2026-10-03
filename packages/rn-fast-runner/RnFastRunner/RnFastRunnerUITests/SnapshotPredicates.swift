@@ -36,6 +36,8 @@ func shouldIncludeSnapshotNode(
       if !visible && type != .application { return false }
     #endif
     if isInteractiveType { return true }
+    // The window frame anchors visible-screen geometry, so it is kept even without content.
+    if type == .window { return true }
     return hasContent
   }
   if compact { return hasContent }

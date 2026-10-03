@@ -101,6 +101,11 @@ final class SnapshotInclusionTests: XCTestCase {
     XCTAssertTrue(include(type: .staticText, hasContent: true, interactiveOnly: true))
   }
 
+  // QA capture measures the visible screen against the window frame, so the content-less window stays.
+  func testInteractiveOnlyKeepsContentlessWindow() {
+    XCTAssertTrue(include(type: .window, interactiveOnly: true))
+  }
+
   func testInteractiveOnlyExcludesContentlessNonInteractive() {
     XCTAssertFalse(include(type: .image, interactiveOnly: true))
     XCTAssertFalse(include(interactiveOnly: true))
