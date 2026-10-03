@@ -83,6 +83,8 @@ the refusal reports only a value-free node count and fixed cause codes. Native
 acquisition failures also refuse without reinjection or a public-tree fallback.
 Native input classification follows the [screen projection](../qaren-core/src/qa/screen.ts),
 including Other or unknown nodes carrying nonempty values regardless of React evidence.
+iOS fast snapshots retain nodes with distinct readable values even when their type,
+label, identifier and origin match; deduplication compares those fields separately.
 The React digest adds semantics: a deadline, malformed-payload, validation or
 transport failure degrades React coverage to unknown without retrying capture.
 Operations requiring complete React evidence still refuse when that coverage is
@@ -93,6 +95,9 @@ projection. The React walk excludes provably inactive screen routes and native
 hosts with `display: none` before collecting their semantic or descendant text
 evidence. Validated React Native frozen descriptors remain readable; arbitrary
 getters are not invoked, and an unreadable inactivity flag does not prune a subtree.
+Unreadable display overrides or styles beyond the array or nesting scan budgets
+resolve as unknown and do not establish `display: none`; later readable overrides
+within the budgets still determine display.
 
 Observed input values are masked before Jev requests; private values are also
 masked in reporting, including echoes of typed and previously observed values

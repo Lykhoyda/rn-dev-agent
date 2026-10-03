@@ -123,7 +123,7 @@ extension RnFastRunnerTests {
       truncated = truncated || didTruncateFallback
     }
 
-    var seen = Set<String>()
+    var seen = Set<SnapshotDedupeKey>()
     var stack: [(XCUIElementSnapshot, Int, Int, Int?)] = context.rootSnapshot.children.map {
       ($0, 1, 1, 0)
     }
@@ -145,7 +145,13 @@ extension RnFastRunnerTests {
         visible: evaluation.visible
       )
 
-      let key = "\(snapshot.elementType)-\(evaluation.label)-\(evaluation.identifier)-\(snapshot.frame.origin.x)-\(snapshot.frame.origin.y)"
+      let key = snapshotDedupeKey(
+        type: snapshot.elementType,
+        label: evaluation.label,
+        identifier: evaluation.identifier,
+        value: evaluation.valueText,
+        origin: snapshot.frame.origin
+      )
       let isDuplicate = seen.contains(key)
       if !isDuplicate {
         seen.insert(key)

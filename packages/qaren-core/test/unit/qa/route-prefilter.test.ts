@@ -106,6 +106,43 @@ test('validated frozen route props and nested style arrays prune inactive subtre
   }
 });
 
+test('an earlier display none prunes only when every later style override was examined', () => {
+  let reads = 0;
+  const unreadable = Object.freeze(
+    Object.defineProperty({}, 'display', {
+      enumerable: true,
+      get: () => {
+        reads++;
+        return 'flex';
+      },
+    }),
+  );
+  let deep: unknown = { display: 'flex' };
+  for (let i = 0; i < 17; i++) deep = [deep];
+  const cases: Array<[string, unknown, boolean]> = [
+    ['none then flex', [{ display: 'none' }, { display: 'flex' }], true],
+    ['none alone', { display: 'none' }, false],
+    ['flex then none', [{ display: 'flex' }, { display: 'none' }], false],
+    ['unreadable alone', unreadable, true],
+    [
+      'none, 63 empty, then flex past the scan cap',
+      [{ display: 'none' }, ...Array.from({ length: 63 }, () => ({})), { display: 'flex' }],
+      true,
+    ],
+    ['none then an unreadable override', [{ display: 'none' }, unreadable], true],
+    ['none then flex past the depth cap', [{ display: 'none' }, deep], true],
+  ];
+  for (const qa of [false, true])
+    for (const [name, style, shown] of cases) {
+      const out = digest(
+        [{ hostType: 'RCTView', props: { style }, children: [button('save')] }],
+        qa,
+      );
+      assert.equal(ids(out).includes('save'), shown, `${name} (qa=${qa})`);
+    }
+  assert.equal(reads, 0);
+});
+
 test('a large tree whose bulk is on inactive routes still yields a complete active digest', () => {
   const filler = (n: number): FiberSpec[] =>
     Array.from({ length: n }, (_, i) => ({ hostType: 'RCTView', props: { testID: `f${i}` } }));

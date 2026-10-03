@@ -3,7 +3,7 @@ import { TYPOGRAPHY_TEXT_LIMITS } from './qa/host-typography.js';
 import { INPUT_HOST_TYPES } from './qa/input-host-types.js';
 
 // Bump when the injected surface changes so warm runtimes replace stale helpers.
-export const HELPERS_VERSION = 90;
+export const HELPERS_VERSION = 91;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -1397,17 +1397,25 @@ export const INJECTED_HELPERS = `
       function routeRead(object, key) {
         try { return qaData(object, key, true); } catch (e) { return undefined; }
       }
+      // Null means no override; UNKNOWN_DISPLAY means an override could not be read or was past a scan cap.
+      var UNKNOWN_DISPLAY = {};
+      function styleRead(object, key) {
+        try { return qaData(object, key, true); } catch (e) { return UNKNOWN_DISPLAY; }
+      }
       function resolvedDisplay(style, depth) {
-        if (!style || typeof style !== 'object' || depth > 16) return null;
+        if (style === UNKNOWN_DISPLAY) return UNKNOWN_DISPLAY;
+        if (!style || typeof style !== 'object') return null;
+        if (depth > 16) return UNKNOWN_DISPLAY;
         if (Array.isArray(style)) {
           var shown = null;
-          for (var di = 0; di < style.length && di < 64; di++) {
-            var part = resolvedDisplay(routeRead(style, String(di)), depth + 1);
+          for (var di = 0; di < style.length; di++) {
+            if (di >= 64) return UNKNOWN_DISPLAY;
+            var part = resolvedDisplay(styleRead(style, String(di)), depth + 1);
             if (part !== null) shown = part;
           }
           return shown;
         }
-        var display = routeRead(style, 'display');
+        var display = styleRead(style, 'display');
         return display === undefined ? null : display;
       }
       // A provably inactive route is off the visible screen; skipping it only loses digest semantics.

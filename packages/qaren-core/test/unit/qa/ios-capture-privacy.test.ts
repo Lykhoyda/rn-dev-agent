@@ -301,3 +301,69 @@ test('a container label built from a prefilled child value is masked when comple
     }
   }
 });
+
+test('twin fields that differ only by value keep both values masked on a literal capture', async () => {
+  const [first, second] = ['first@example.test', 'second@example.test'];
+  const screen = { rect: { x: 0, y: 0, width: 390, height: 844 } };
+  const field = (index: number, value: string) =>
+    iosNode(index, 'TextField', {
+      identifier: 'email',
+      label: 'Email',
+      value,
+      parentIndex: 1,
+      rect: { x: 10, y: 100, width: 200, height: 40 },
+    });
+  const nodes = [
+    iosNode(0, 'Application', screen),
+    iosNode(1, 'Window', screen),
+    field(2, first),
+    field(3, second),
+    iosNode(4, 'StaticText', {
+      label: `Echo ${second}`,
+      parentIndex: 1,
+      rect: { x: 10, y: 200, width: 300, height: 40 },
+    }),
+  ];
+  _setFetchForTest(async (url, init) => {
+    if (String(url).endsWith('/health'))
+      return Response.json({
+        ok: true,
+        protocolVersion: 2,
+        commands: REQUIRED_IOS_COMMANDS,
+        capabilities: [...REQUIRED_IOS_FEATURES, 'QA_READ_ONLY_V1'],
+      });
+    const body = JSON.parse(String(init?.body));
+    assert.notEqual(body.platformPresence, true);
+    return Response.json({ ok: true, data: { nodes, truncated: false } });
+  });
+  const snapshot = createDeviceSnapshotHandler();
+  const f = walker(
+    [],
+    scriptedJudge(() => assert.fail('literal plans must not call Jev')),
+  );
+  let shots = 0;
+  f.deps.screenshot = async (name) => {
+    shots++;
+    return name;
+  };
+  f.deps.captureScreen = () =>
+    captureScreen({
+      appId: 'com.test',
+      requirePrivateInputs: true,
+      native: async () => {
+        const result = parseEnvelope(await snapshot({ action: 'snapshot', qaReadOnly: true }));
+        return { ...result.data, snapshotVerdict: result.meta.snapshotVerdict };
+      },
+      react: async () => ({
+        interactive: [],
+        verdict: { state: 'ok', path: 'interactive', complete: true },
+        hostEvidence: { hosts: [], complete: true },
+      }),
+    });
+  const result = await runPlan(parsePlan('✓ "Nothing like this"').blocks!, f.deps);
+  assert.equal(result.verdict, 'FAIL');
+  assert.match(result.failure!.seen, /Echo •••/);
+  const all = JSON.stringify({ result, rows: f.rows });
+  assert.equal(all.includes(first) || all.includes(second), false, all);
+  assert.equal(shots, 0);
+});
