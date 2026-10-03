@@ -68,7 +68,7 @@ NODE=$(command -v node)
 export TEST_UPTIME="$(command -v uptime)"
 export TEST_LOAD_CEILING=10
 timed_hook_attempt() {
-  "$PERL" -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -MPOSIX=dup2 -e '
+  "$PERL" -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
     my $record = shift @ARGV;
     my $load = sub {
       my $value = qx{$ENV{TEST_UPTIME}};
@@ -76,17 +76,12 @@ timed_hook_attempt() {
       return 0 + $1;
     };
     my $before = $load->();
-    pipe(my $ready, my $notify) or die "pipe: $!";
     my $start = clock_gettime(CLOCK_MONOTONIC);
     my $pid = fork();
     defined($pid) or die "fork: $!";
     if (!$pid) {
-      close $ready;
-      dup2(fileno($notify), 3) >= 0 or die "dup2: $!";
-      $^F = 3;
       alarm 5; exec @ARGV; die "exec: $!";
     }
-    close $notify;
     my $killed_at;
     if ($ENV{TEST_KILL_HOOK}) {
       open(my $h, ">", "$record.pid") or die $!;
@@ -95,10 +90,6 @@ timed_hook_attempt() {
       $killed_at = clock_gettime(CLOCK_MONOTONIC);
       kill 9, $pid;
     }
-    # The wrapper signals only after its PID bookkeeping, before starting sleep.
-    my $bookkeeping = <$ready>;
-    $start = clock_gettime(CLOCK_MONOTONIC) if defined($bookkeeping) && !$ENV{TEST_KILL_HOOK};
-    close $ready;
     waitpid($pid, 0);
     my $status = $?;
     my $ms = (clock_gettime(CLOCK_MONOTONIC) - $start) * 1000;
@@ -214,7 +205,7 @@ timed_hook() {
 
 export TEST_CHECK_PIDS="$tmp/check-pids"
 SLEEP=$(command -v sleep)
-printf '#!/bin/sh\nprintf "%%s sleep\\n" "$$" >> "$TEST_CHECK_PIDS"\n/bin/ps -o ppid= -p $$ | while read -r pid; do printf "%%s watchdog\\n" "$pid" >> "$TEST_CHECK_PIDS"; done\n[ "$1" != 1 ] || printf "ready\\n" >&3\nexec "%s" "$@"\n' "$SLEEP" > "$tmp/record-sleep"
+printf '#!/bin/sh\nprintf "%%s sleep\\n" "$$" >> "$TEST_CHECK_PIDS"\n/bin/ps -o ppid= -p $$ | while read -r pid; do printf "%%s watchdog\\n" "$pid" >> "$TEST_CHECK_PIDS"; done\nexec "%s" "$@"\n' "$SLEEP" > "$tmp/record-sleep"
 chmod +x "$tmp/record-sleep"
 ln -sf "$tmp/record-sleep" "$tmp/bin/sleep"
 
@@ -478,7 +469,7 @@ check "real Node paused by the debugger: child started" yes "$([ -s "$tmp/slow-n
 printf '#!/bin/sh\nprintf "%%s node\\n" "$$" >> "$TEST_CHECK_PIDS"\n/bin/ps -o pgid= -p $$ | while read -r pid; do printf "%%s check\\n" "$pid" >> "$TEST_CHECK_PIDS"; done\necho "$$" > "%s/slow-node.pid"\nexec "%s" -e '\''process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'\''\n' "$tmp" "$NODE" > "$tmp/slow-node"
 chmod +x "$tmp/slow-node"
 ln -sf "$tmp/slow-node" "$tmp/bin/node"
-printf '#!/bin/sh\nprintf "%%s sleep\\n" "$$" >> "$TEST_CHECK_PIDS"\n/bin/ps -o ppid= -p $$ | while read -r pid; do printf "%%s watchdog\\n" "$pid" >> "$TEST_CHECK_PIDS"; done\nprintf "ready\\n" >&3\n"%s" 0.15\nexec "%s" "$@"\n' "$SLEEP" "$SLEEP" > "$tmp/slow-sleep"
+printf '#!/bin/sh\nprintf "%%s sleep\\n" "$$" >> "$TEST_CHECK_PIDS"\n/bin/ps -o ppid= -p $$ | while read -r pid; do printf "%%s watchdog\\n" "$pid" >> "$TEST_CHECK_PIDS"; done\n"%s" 0.15\nexec "%s" "$@"\n' "$SLEEP" "$SLEEP" > "$tmp/slow-sleep"
 chmod +x "$tmp/slow-sleep"
 ln -sf "$tmp/slow-sleep" "$tmp/bin/sleep"
 TEST_REQUIRE_NODE=1 hook "slow timer startup"
@@ -487,6 +478,11 @@ bounded "stalled check with slow timer startup"
 echo "timings: slow timer startup $ms ms"
 check "stalled check with slow timer startup: names the install command" yes "$(contains "$out" "did not finish in time; run:")"
 ln -sf "$tmp/record-sleep" "$tmp/bin/sleep"
+
+printf '"%s" 1.2\n' "$SLEEP" > "$tmp/hook-startup.bash"
+BASH_ENV="$tmp/hook-startup.bash" TEST_REQUIRE_NODE=1 hook "timing includes hook startup"
+check "timing includes hook startup: at least 2200 ms" yes "$([ "$ms" -ge 2200 ] && echo yes || echo "no (${ms} ms)")"
+check "timing includes hook startup: returns the timeout answer" yes "$(contains "$out" "did not finish in time; run:")"
 
 ln -sf "$tmp/debug-node" "$tmp/bin/node"
 TEST_KILL_HOOK=1 NODE_OPTIONS=--inspect-brk=127.0.0.1:0 hook "external SIGKILL"
