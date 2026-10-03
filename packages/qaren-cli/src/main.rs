@@ -76,7 +76,7 @@ fn failed_receipt(verb: &str, failure: Failure, runner: &dyn Runner) -> Receipt 
         &failure.phase.clone(),
         qaren::timefmt::iso8601_utc(runner.now_epoch_ms()),
     );
-    receipt.next_action = failure.next_action.clone();
+    receipt.next_action = failure.next_action.to_string();
     receipt.failure = Some(failure);
     receipt.commands_executed = runner.commands_executed();
     receipt
@@ -301,7 +301,7 @@ fn main() -> ExitCode {
                         "load",
                         qaren::timefmt::iso8601_utc(runner.now_epoch_ms()),
                     );
-                    receipt.next_action = failure.next_action.clone();
+                    receipt.next_action = failure.next_action.to_string();
                     receipt.failure = Some(failure);
                     receipt.commands_executed = runner.commands_executed();
                     receipt

@@ -171,17 +171,17 @@ pub fn release_or_annotate(lease: &Lease, mut failure: Failure) -> Failure {
     match release(lease) {
         ReleaseOutcome::Removed | ReleaseOutcome::Absent | ReleaseOutcome::Foreign(_) => failure,
         ReleaseOutcome::Refused(reason) | ReleaseOutcome::Unresolved(reason) => {
-            failure.detail = format!(
+            failure.detail = crate::redact::OutputText::from_output(&format!(
                 "{}; the device lease at {} could not be released: {reason}",
                 failure.detail,
                 lease.lock_dir.display()
-            );
+            ));
             let lock_root = lease.lock_dir.parent().unwrap_or(&lease.lock_dir);
-            failure.next_action = format!(
+            failure.next_action = crate::redact::OutputText::from_output(&format!(
                 "{}; then clear the leftover named above under {} once no qaren run holds it",
                 failure.next_action,
                 lock_root.display()
-            );
+            ));
             failure
         }
     }

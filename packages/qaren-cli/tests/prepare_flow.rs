@@ -668,7 +668,7 @@ fn a_failing_farm_status_never_records_a_truncated_key_after_a_marker_mention() 
         assert!(!evidence.contains("FAKEKEYBODY"), "{evidence}");
     }
     assert!(
-        printed.contains("output withheld: private key material"),
+        printed.contains(qaren::redact::PRIVATE_KEY_WITHHELD),
         "{printed}"
     );
 }
