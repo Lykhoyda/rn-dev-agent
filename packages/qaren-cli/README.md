@@ -132,7 +132,11 @@ writes one value-free `sensitive-pixels` line, at most 512 bytes including the l
 prefix, to `logs/core.log`. It counts the stored private strings, secure elements
 and input values, plus a histogram of the native types that show a stored value.
 Types outside a fixed public list, and elements without a native node, count as
-`Other`. It excludes values, labels, identifiers and testIDs. The
+`Other`. It also samples up to four carriers as value-free shapes: type code,
+scroll-bar label class, value class and length bucket, rounded width and height,
+parent type code, identifier presence and value source. Unlisted type names are
+not emitted. Samples are dropped before histogram entries to keep the line within
+the byte limit. It excludes value text, label text, identifiers and testIDs. The
 [diagnostic implementation](../qaren-core/src/qa/privacy.ts) owns its field layout.
 
 Phrase presses require complete native and React coverage and proven React-to-native
@@ -151,15 +155,18 @@ acquisition failures also refuse without reinjection or a public-tree fallback.
 Native input classification follows the [screen projection](../qaren-core/src/qa/screen.ts),
 including Other or unknown nodes carrying nonempty values regardless of React evidence,
 with one exception: native `Other` elements matching the iOS system vertical or
-horizontal scroll-bar label and carrying a bare integer percentage, such as
+horizontal scroll-bar label and carrying a percentage, such as
 `Vertical scroll bar, 3 pages` with `42%`. The label match is case-insensitive,
 allows an optional page count, and trims surrounding whitespace; the percentage
-has one to three digits immediately followed by `%`. The projection keeps the
+has one to three digits, an optional single decimal digit after `.` or `,`, an
+optional single whitespace character such as the no-break space iOS may insert,
+then `%`. The projection keeps the
 label and omits this native value, so the indicator alone does not trigger
 screenshot withholding. Other valued generic elements, malformed lookalikes,
 React input evidence and secure fields remain protected. The accepted residual
 risk is that an app element mimicking both patterns can expose its percentage
-in captured pixels. The matcher in the screen projection owns the exact rule;
+in captured pixels. The shared patterns in
+[privacy.ts](../qaren-core/src/qa/privacy.ts) own the exact matching rule;
 [regression cases](../qaren-core/test/unit/qa/sensitive-pixels-diagnostic.test.ts)
 cover indicators, lookalikes and adjacent protected fields.
 iOS fast snapshots retain nodes with distinct readable values even when their type,

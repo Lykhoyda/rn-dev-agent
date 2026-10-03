@@ -50,6 +50,10 @@ function privacyView(screen: Screen) {
   };
 }
 
+// The fields every line carried before per-carrier shapes were added.
+const legacy = ({ shapes: _shapes, omittedShapes: _omitted, ...rest }: Record<string, unknown>) =>
+  rest;
+
 const outcome = (value: unknown) => JSON.parse(JSON.stringify(value));
 
 async function capture(
@@ -112,13 +116,24 @@ test('a valued paging ScrollView is reported as the only carrier', async () => {
     r3: 1,
     types: [['ScrollView', 1]],
     omittedTypes: 0,
+    shapes: [['ScrollView', 'none', 'text', '9+', 400, 800, 'Window', 0, 'native']],
+    omittedShapes: 0,
   });
 });
 
 test('an empty secure input is reported through the secure count alone', async () => {
   const run = await observe([{ type: 'SecureTextField' }, text('Sign in')]);
   assert.equal(run.canScreenshot, false);
-  assert.deepEqual(run.line, { v: 1, r1: 0, secure: 1, r3: 0, types: [], omittedTypes: 0 });
+  assert.deepEqual(run.line, {
+    v: 1,
+    r1: 0,
+    secure: 1,
+    r3: 0,
+    types: [],
+    omittedTypes: 0,
+    shapes: [],
+    omittedShapes: 0,
+  });
 });
 
 test('a real input value is reported as a TextField carrier', async () => {
@@ -211,7 +226,7 @@ test('a complete snapshot whose presence validation failed still logs its line',
   assert.equal(screen.coverage?.native, 'incomplete');
   const sensitive = lines.filter((line) => line.startsWith('sensitive-pixels'));
   // Without a presence verdict the label may be a value too: two stored strings, one carrier.
-  assert.deepEqual(sensitive.map(parse), [
+  assert.deepEqual(sensitive.map(parse).map(legacy), [
     { v: 1, r1: 2, secure: 0, r3: 2, types: [['ScrollView', 1]], omittedTypes: 0 },
   ]);
 });
@@ -538,21 +553,30 @@ test('a walk over a sensitive screen persists the same ledger and screenshots wi
     assert.deepEqual(logged, await walkWith());
     assert.equal(logged.result.verdict, expected, JSON.stringify(logged.result));
     assert.deepEqual(logged.shots, []);
-    assert.deepEqual(lines.filter((line) => line.startsWith('sensitive-pixels')).map(parse)[0], {
-      v: 1,
-      r1: 1,
-      secure: 0,
-      r3: 1,
-      types: [['ScrollView', 1]],
-      omittedTypes: 0,
-    });
+    assert.deepEqual(
+      lines
+        .filter((line) => line.startsWith('sensitive-pixels'))
+        .map(parse)
+        .map(legacy)[0],
+      {
+        v: 1,
+        r1: 1,
+        secure: 0,
+        r3: 1,
+        types: [['ScrollView', 1]],
+        omittedTypes: 0,
+      },
+    );
   }
 });
 
 // Accepted residual: an app element mimicking this label with a bare percent shows it.
-test('iOS system scroll-bar indicators with a bare percent value do not withhold pixels', async () => {
+test('iOS system scroll-bar indicators with a percent value do not withhold pixels', async () => {
   for (const specs of [
     [{ type: 'Other', label: 'Vertical scroll bar, 1 page', value: '0%' }, text('Welcome')],
+    ...['5\u00a0%', '5\u202f%', '50 %', '100\u00a0%', '12.5%', '0,5%', '12.5\u202f%'].map(
+      (value) => [{ type: 'Other', label: 'Vertical scroll bar, 1 page', value }, text('Welcome')],
+    ),
     [
       { type: 'Other', label: 'Vertical scroll bar, 3 pages', value: '0%' },
       { type: 'Other', label: ' Horizontal scroll bar, 2 pages ', value: ' 0% ' },
@@ -579,8 +603,17 @@ test('anything short of an exact system scroll-bar Other with a bare percent sta
     { type: 'Other', label: 'Vertical scroll bar, 2 pages done', value: '42%' },
     { type: 'Other', label: 'My vertical scroll bar', value: '42%' },
     { type: 'Other', label: 'Diagonal scroll bar', value: '42%' },
-    { type: 'Other', label: 'Vertical scroll bar', value: '42 %' },
-    { type: 'Other', label: 'Vertical scroll bar', value: '42.5%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '42  %' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '50 %x' },
+    { type: 'Other', label: 'Vertical scroll bar', value: 'abc %' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '5x%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '1000\u00a0%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '4\u00a02%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '42.55%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '42.%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '.5%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '1000.5%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '4.5.%' },
     { type: 'Other', label: 'Vertical scroll bar', value: '%42' },
     { type: 'Other', label: 'Vertical scroll bar', value: '1000%' },
     { type: 'Element(35)', label: 'Vertical scroll bar, 1 page', value: '50%' },
@@ -597,9 +630,138 @@ test('a scroll-bar indicator beside a secure field or a real input leaves them w
   const bar: Spec = { type: 'Other', label: 'Vertical scroll bar, 1 page', value: '0%' };
   const secure = await observe([bar, { type: 'SecureTextField' }]);
   assert.equal(secure.canScreenshot, false);
-  assert.deepEqual(secure.line, { v: 1, r1: 0, secure: 1, r3: 0, types: [], omittedTypes: 0 });
+  assert.deepEqual(legacy(secure.line), {
+    v: 1,
+    r1: 0,
+    secure: 1,
+    r3: 0,
+    types: [],
+    omittedTypes: 0,
+  });
   const input = await observe([bar, { type: 'TextField', label: 'Email', value: 'a@b.test' }]);
   assert.equal(input.canScreenshot, false);
   assert.deepEqual(input.line.types, [['TextField', 1]]);
   assert.equal(input.line.r1, 1);
+});
+
+const shapesOf = async (specs: Spec[], options: Parameters<typeof capture>[1] = {}) =>
+  (await observe(specs, options)).line?.shapes;
+
+test('each carrier is described by a value-free shape', async () => {
+  const bar = 'Vertical scroll bar, 1 page';
+  const cases: [Spec, unknown[]][] = [
+    [
+      {
+        type: 'Other',
+        label: 'Weight',
+        value: '0\u00a0%',
+        rect: { x: 397, y: 9, width: 2.6, height: 779.4 },
+      },
+      ['Other', 'other', 'pct-loose', '2-3', 3, 779, 'Window', 0, 'native'],
+    ],
+    [
+      { type: 'Other', label: 'Vertical Scroll Bar', value: '0' },
+      ['Other', 'sb-exact', 'int', '1', 400, 800, 'Window', 0, 'native'],
+    ],
+    [
+      { type: 'Other', label: 'Progress', value: '12.5%' },
+      ['Other', 'other', 'pct-loose', '4-8', 400, 800, 'Window', 0, 'native'],
+    ],
+    [
+      { type: 'Other', label: 'Scrollbar', value: '0.5' },
+      ['Other', 'sb-loose', 'dec', '2-3', 400, 800, 'Window', 0, 'native'],
+    ],
+    [
+      { type: 'Other', label: 'Weight', value: '42 kg', identifier: 'weight' },
+      ['Other', 'other', 'text', '4-8', 400, 800, 'Window', 1, 'native'],
+    ],
+    [
+      { type: 'Element(47)', label: bar, value: '0%' },
+      ['Element(47)', 'sb-exact', 'pct', '2-3', 400, 800, 'Window', 0, 'native'],
+    ],
+    [
+      { type: 'Element(35)', value: '50%' },
+      ['Element(35)', 'none', 'pct', '2-3', 400, 800, 'Window', 0, 'native'],
+    ],
+    [
+      { type: 'com.vendor.Gauge', value: 'abcdefghijk' },
+      ['unlisted', 'none', 'text', '9+', 400, 800, 'Window', 0, 'native'],
+    ],
+  ];
+  for (const [spec, shape] of cases)
+    assert.deepEqual(await shapesOf([spec, text('Welcome')]), [shape], JSON.stringify(spec));
+});
+
+test('a carrier shape names its parent type and whether React supplied the value', async () => {
+  for (const [parent, code] of [
+    ['ScrollView', 'ScrollView'],
+    ['Element(99)', 'Element(99)'],
+    ['SECRET-PARENT', 'unlisted'],
+  ])
+    assert.deepEqual(
+      await shapesOf([{ type: parent }, { type: 'Other', parentIndex: 2, value: '0' }]),
+      [['Other', 'none', 'int', '1', 400, 800, code, 0, 'native']],
+    );
+
+  const toggle = await shapesOf([{ type: 'Other', identifier: 'toggle', value: '1' }], {
+    react: async () => ({
+      ...(await react()),
+      interactive: [{ role: 'switch', testID: 'toggle', value: true }],
+    }),
+  });
+  assert.deepEqual(toggle, [['Other', 'none', 'text', '2-3', 400, 800, 'Window', 1, 'react']]);
+});
+
+test('shapes never carry label, value or type text', async () => {
+  const run = await observe([
+    { type: 'Other', label: `Vertical scroll bar ${SECRET}`, value: `${SECRET}%` },
+    { type: 'Element(47)', label: SECRET, value: `12${SECRET}` },
+    { type: `${SECRET}-TYPE`, label: SECRET, value: SECRET, identifier: SECRET },
+  ]);
+  assert.equal(run.line.shapes.length, 3);
+  for (const line of run.lines) assert.equal(line.includes(SECRET), false, line);
+});
+
+test('at most four shapes are listed and the rest are counted', async () => {
+  const run = await observe(
+    Array.from({ length: 10 }, (_, i) => ({ type: 'Element(47)', value: `value-${i}` })),
+  );
+  assert.equal(run.line.shapes.length, 4);
+  assert.equal(run.line.omittedShapes, 6);
+  for (const line of run.lines)
+    assert.ok(Buffer.byteLength(`${SINK_PREFIX}${line}\n`, 'utf8') <= 512, line);
+});
+
+test('the byte cap drops shapes before any type key', () => {
+  const max = Number.MAX_SAFE_INTEGER;
+  const wide = [
+    'Element(999)',
+    'sb-loose',
+    'pct-loose',
+    '2-3',
+    max,
+    max,
+    'Element(999)',
+    1,
+    'native',
+  ];
+  const shapes = [wide, wide, wide, wide];
+  const few: [string, number][] = [
+    ['Other', max],
+    ['ScrollView', max],
+  ];
+  const kept = parse(formatSensitivePixels(max, max, max, few, shapes));
+  assert.deepEqual(kept.types, few);
+  assert.equal(kept.omittedTypes, 0);
+  assert.ok(kept.shapes.length >= 1 && kept.shapes.length < 4, JSON.stringify(kept));
+  assert.equal(kept.shapes.length + kept.omittedShapes, 4);
+
+  const many = ['Application', 'Window', 'Group', 'StaticText', 'Button', 'Link', 'Image', 'Icon']
+    .concat(['Cell', 'Table', 'CollectionView', 'TextField', 'SecureTextField', 'SearchField'])
+    .map((type) => [type, max] as [string, number]);
+  const message = formatSensitivePixels(max, max, max, many, shapes);
+  assert.ok(Buffer.byteLength(`${SINK_PREFIX}${message}\n`, 'utf8') <= 512, message);
+  const line = parse(message);
+  assert.deepEqual([line.shapes, line.omittedShapes], [[], 4]);
+  assert.ok(line.omittedTypes > 0);
 });

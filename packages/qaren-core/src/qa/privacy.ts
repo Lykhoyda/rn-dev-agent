@@ -216,10 +216,41 @@ const NATIVE_TYPES = new Set([
   'Alert',
   'Sheet',
 ]);
+export const SYSTEM_SCROLL_BAR_LABEL =
+  /^(vertical|horizontal)\s+scroll\s+bar(?:,?\s*\d+\s+pages?)?$/i;
+const BARE_PERCENT = /^\d{1,3}%$/;
+// iOS may add one decimal digit and a (narrow) no-break space before %.
+export const SCROLL_BAR_PERCENT = /^\d{1,3}(?:[.,]\d)?\s?%$/;
 // The sink adds the 12-byte `qaren-core: ` prefix and a newline, keeping each line within 512 bytes.
 const SENSITIVE_PIXELS_LIMIT = 499;
+const SHAPE_LIMIT = 4;
 
-// Value-free counts behind a stored sensitive-pixels verdict; it observes and never decides anything.
+const shapeType = (type: string | undefined): string =>
+  type !== undefined && (NATIVE_TYPES.has(type) || /^Element\(\d{1,3}\)$/.test(type))
+    ? type
+    : 'unlisted';
+
+function labelClass(label: string | undefined): string {
+  const text = label?.trim();
+  if (!text) return 'none';
+  if (SYSTEM_SCROLL_BAR_LABEL.test(text)) return 'sb-exact';
+  return /scroll\s*bar/i.test(text) ? 'sb-loose' : 'other';
+}
+
+function valueClass(value: string | undefined): string {
+  if (value === undefined) return 'none';
+  if (BARE_PERCENT.test(value)) return 'pct';
+  if (/^\d{1,3}(?:[.,]\d+)?\s*%$/.test(value)) return 'pct-loose';
+  if (/^[-+]?\d+$/.test(value)) return 'int';
+  return /^[-+]?\d*[.,]\d+$/.test(value) ? 'dec' : 'text';
+}
+
+function lengthBucket(length: number): string {
+  if (length <= 1) return String(length);
+  return length <= 3 ? '2-3' : length <= 8 ? '4-8' : '9+';
+}
+
+// Value-free counts and shapes observe the stored verdict without changing privacy decisions.
 export function sensitivePixelsReasons(
   screen: Screen,
   nodes: readonly NativeNode[],
@@ -227,8 +258,10 @@ export function sensitivePixelsReasons(
   const stored = privateScreens.get(screen);
   if (stored?.sensitivePixels !== true) return undefined;
   const values = new Set(stored.values);
-  const typeOf = new Map(nodes.map((node) => [node.ref, node.type]));
+  const nodeOf = new Map(nodes.map((node) => [node.ref, node]));
+  const nodeAt = new Map(nodes.map((node) => [node.index, node]));
   const carriers = new Map<string | undefined, number>();
+  const shapes: unknown[][] = [];
   for (const element of screen.elements) {
     const carrier =
       (element.value !== undefined && values.has(element.value)) ||
@@ -236,14 +269,31 @@ export function sensitivePixelsReasons(
         element.label !== undefined &&
         values.has(element.label));
     if (!carrier) continue;
-    const type = typeOf.get(element.ref);
-    carriers.set(type, (carriers.get(type) ?? 0) + 1);
+    const node = nodeOf.get(element.ref);
+    carriers.set(node?.type, (carriers.get(node?.type) ?? 0) + 1);
+    const parent = node?.parentIndex === undefined ? undefined : nodeAt.get(node.parentIndex);
+    shapes.push([
+      shapeType(node?.type),
+      labelClass(node?.label),
+      valueClass(element.value),
+      lengthBucket(element.value?.length ?? 0),
+      node?.rect ? Math.round(node.rect.width) : null,
+      node?.rect ? Math.round(node.rect.height) : null,
+      parent ? shapeType(parent.type) : 'none',
+      element.testID ? 1 : 0,
+      element.value === undefined
+        ? 'label'
+        : element.value === node?.value?.trim()
+          ? 'native'
+          : 'react',
+    ]);
   }
   return formatSensitivePixels(
     stored.values.length,
     screen.elements.filter((element) => element.secure).length,
     inputValues(screen).length,
     carriers,
+    shapes,
   );
 }
 
@@ -252,6 +302,7 @@ export function formatSensitivePixels(
   secure: number,
   r3: number,
   carriers: Iterable<readonly [string | undefined, number]>,
+  allShapes: readonly (readonly unknown[])[] = [],
 ): string {
   const counts = new Map<string, number>();
   for (const [raw, count] of carriers) {
@@ -260,12 +311,28 @@ export function formatSensitivePixels(
   }
   const types = [...counts].sort(([a, x], [b, y]) => y - x || (a < b ? -1 : a > b ? 1 : 0));
   let omittedTypes = 0;
+  const shapes = allShapes.slice(0, SHAPE_LIMIT);
   const line = () =>
-    `sensitive-pixels ${JSON.stringify({ v: 1, r1, secure, r3, types, omittedTypes })}`;
+    `sensitive-pixels ${JSON.stringify({
+      v: 1,
+      r1,
+      secure,
+      r3,
+      types,
+      omittedTypes,
+      shapes,
+      omittedShapes: allShapes.length - shapes.length,
+    })}`;
   let text = line();
-  while (Buffer.byteLength(text, 'utf8') > SENSITIVE_PIXELS_LIMIT && types.length) {
-    types.pop();
-    omittedTypes++;
+  while (
+    Buffer.byteLength(text, 'utf8') > SENSITIVE_PIXELS_LIMIT &&
+    (shapes.length || types.length)
+  ) {
+    if (shapes.length) shapes.pop();
+    else {
+      types.pop();
+      omittedTypes++;
+    }
     text = line();
   }
   return text;
