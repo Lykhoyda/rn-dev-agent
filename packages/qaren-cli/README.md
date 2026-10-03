@@ -292,7 +292,9 @@ plan line), and each block reports `source` `discovered`, `replayed` or `patched
 receipt lists `blocks_written`, `blocks_not_saved` (block and reason) and, as a
 diagnostic that never changes the verdict,
 `worktree_drift`: app-root paths whose `git status` changed during the walk, outside
-`.qaren/actions`. `qaren actions list [--json]` and `qaren actions show <slug>` read the
+`.qaren/actions`. This status-only diagnostic is separate from the
+[candidate provenance check](#candidate-provenance), which can fail the run.
+`qaren actions list [--json]` and `qaren actions show <slug>` read the
 action corpus of the current directory. Both `.yaml` and `.yml` are supported;
 existing files retain their extension when patched. A slug with both extensions
 refuses inspection and is not overwritten by `check`. Symlinked corpora and
@@ -340,6 +342,26 @@ budgets, and the CLI drops malformed timing rather than rejecting the ledger.
 The [row timing implementation](../qaren-core/src/qa/row-timing.ts) owns
 aggregation; [CLI decoding](src/core.rs) and [report rendering](src/report.rs)
 own consumption.
+
+### Candidate provenance
+
+The shared [candidate comparison](src/candidate.rs) rechecks the commit,
+lockfile hash and worktree fingerprint. The fingerprint hashes normalized
+NUL-delimited Git status records plus affected file contents, symlink targets,
+absence and executable permission bits, so editing an already-dirty file is
+still detected. Repository-root `.qaren/` state is excluded, as are direct
+`.yaml` and `.yml` action files under the selected app root's `.qaren/actions/`.
+Changes outside these exclusions, including a nested app's `.qaren/config.yaml`
+or source files, and renames crossing the excluded boundary remain candidate
+changes.
+
+Preparation rechecks provenance before emitting `ready`; `check` and `pr`
+recheck it before and after the walk. Detected drift fails with
+`CANDIDATE_DRIFTED` and cannot return PASS; an already-cancelled walk retains
+`RUN_CANCELLED`. Passing blocks already saved remain available, but
+`qaren publish` refuses a run recorded as `CANDIDATE_DRIFTED` before posting,
+uploading, writing back blocks or removing labels. Re-run against an unchanged
+candidate to obtain attributable evidence.
 
 ## Test a pull request
 
@@ -848,12 +870,9 @@ build_and_ready — so revisit this once live reuse is measurable.
   process group. The cross-process cooperative handoff uses its persisted
   UTC `issued_at` plus `build_seconds` as one wall-clock validity window;
   retries never reset it, and an unprovable backwards clock refuses.
-- **Provenance is rechecked at readiness.** The candidate sha, worktree
-  cleanliness, the worktree fingerprint (sha256 of `git status --porcelain`
-  with entries under qaren's own `.qaren/` state directory excluded),
-  and lockfile hash are re-verified immediately before `ready`;
-  drift during the build fails the run (`CANDIDATE_DRIFTED`) instead of
-  emitting a receipt that misattributes the built app.
+- **Provenance is rechecked at readiness.** See the shared
+  [candidate provenance contract](#candidate-provenance) for fingerprint
+  inputs, output exclusions and drift failures.
 - `cleanup` is idempotent: a second run re-probes, finds everything absent,
   and returns `cleaned` again without signalling anything after successful
   cleanup; app-removal retries follow the persisted-evidence rules above.
