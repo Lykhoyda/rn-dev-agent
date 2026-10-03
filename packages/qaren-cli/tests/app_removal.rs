@@ -151,6 +151,7 @@ fn expect_local_teardown_alive(mock: &mut MockRunner) {
         mock.expect_run("/bin/kill", CmdOutput::success(""));
         mock.expect_run("ps", CmdOutput::failed(1, ""));
         mock.expect_run("lsof", free_port());
+        mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     }
 }
 
@@ -159,8 +160,10 @@ fn expect_teardown_dead(mock: &mut MockRunner) {
     mock.expect_run("ps", CmdOutput::failed(1, "")); // connection: server dead
     mock.expect_run("ps", CmdOutput::failed(1, "")); // server group
     mock.expect_run("lsof", free_port());
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     mock.expect_run("ps", CmdOutput::failed(1, "")); // tunnel group
     mock.expect_run("lsof", free_port());
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     mock.expect_run("~/bin/android-farm status", CmdOutput::success(FARM_FREE));
 }
 
@@ -706,6 +709,7 @@ fn foreign_lease_refuses_removal_with_no_device_command() {
         mock.expect_run("/bin/kill", CmdOutput::success(""));
         mock.expect_run("ps", CmdOutput::failed(1, ""));
         mock.expect_run("lsof", free_port());
+        mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     }
     mock.expect_run(
         "~/bin/android-farm status",
@@ -761,6 +765,7 @@ fn foreign_adb_server_identity_refuses_removal() {
     mock.expect_run("ps", CmdOutput::success(&format!("{FOREIGN_LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success(&format!("{FOREIGN_LSTART}\n")));
     mock.expect_run("lsof", free_port());
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     // tunnel alive -> killed
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n"));
@@ -770,6 +775,7 @@ fn foreign_adb_server_identity_refuses_removal() {
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     mock.expect_run("~/bin/android-farm status", CmdOutput::success(FARM_OURS));
     mock.expect_run(
         "~/bin/android-farm stop 1",

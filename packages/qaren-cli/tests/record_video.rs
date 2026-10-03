@@ -407,6 +407,7 @@ fn dead_owner_worktrees_wait_for_each_producer_then_retry_removal() {
         if producer == "metro" {
             mock.expect_run("ps -p 5000", CmdOutput::failed(1, ""));
             mock.expect_run("lsof", CmdOutput::failed(1, ""));
+            mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
         } else {
             mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
         }
@@ -422,5 +423,82 @@ fn dead_owner_worktrees_wait_for_each_producer_then_retry_removal() {
             .pr_worktree
             .is_none());
         assert_eq!(runner.0.remaining(), 0);
+    }
+}
+
+#[test]
+fn unbound_metro_groups_retain_worktrees_and_leases_until_positive_absence() {
+    for signaled in [false, true] {
+        for inventory in [
+            CmdOutput::success("1 1 S\n5001 5000 S\n"),
+            CmdOutput::failed(1, "inventory denied"),
+            CmdOutput::success("malformed\n"),
+        ] {
+            let (root, mut record, wt) = pr_run_record();
+            record.resources.recorder = None;
+            record.resources.metro = Some(qaren::runrecord::MetroResource {
+                spawned: Spawned {
+                    pid: 5000,
+                    pgid: 5000,
+                },
+                identity: Some(common::identity(5000, LSTART)),
+                port: 8791,
+                endpoint: "http://localhost:8791".into(),
+                log: root.join("metro.log"),
+            });
+            record.resources.lease = Some(
+                qaren::lease::acquire(
+                    &mut MockRunner::new(),
+                    &root.join("locks"),
+                    qaren::scenario::Platform::Ios,
+                    "fixture-device",
+                    &record.run_id,
+                    None,
+                )
+                .unwrap(),
+            );
+            let lock = record.resources.lease.as_ref().unwrap().lock_dir.clone();
+            record.save(&root).unwrap();
+            for attempt in 0..2 {
+                let mut mock = MockRunner::new();
+                if signaled && attempt == 0 {
+                    mock.expect_run("ps -p 5000", CmdOutput::success(&format!("{LSTART}\n")));
+                    mock.expect_run("ps -p 5000", CmdOutput::success("S\n"));
+                    mock.expect_run("lsof", CmdOutput::failed(1, ""));
+                    mock.expect_run("/bin/kill", CmdOutput::success(""));
+                    mock.expect_run("/bin/kill", CmdOutput::success(""));
+                }
+                mock.expect_run("ps -p 5000", CmdOutput::failed(1, ""));
+                mock.expect_run("lsof", CmdOutput::failed(1, ""));
+                mock.expect_run("ps -A", inventory.clone());
+                mock.expect_run("ps -p 999", CmdOutput::failed(1, ""));
+                let mut runner = GitRemoves(mock, None);
+                let receipt = qaren::commands::cleanup::cleanup(&mut runner, &root, &record.run_id);
+                assert!(receipt.cleanup["metro"].starts_with("unresolved"));
+                assert!(receipt.cleanup["pr_worktree"].contains("retained"));
+                assert!(receipt.cleanup["device_lease"].contains("retained"));
+                assert!(wt.exists());
+                assert!(lock.exists());
+                let saved = RunRecord::load(&root, &record.run_id).unwrap();
+                assert_eq!(saved.resources.metro.unwrap().identity.unwrap().pid, 5000);
+                assert!(saved.resources.pr_worktree.is_some());
+                assert!(saved.resources.lease.is_some());
+                assert_eq!(runner.0.remaining(), 0);
+            }
+            let mut mock = MockRunner::new();
+            mock.expect_run("ps -p 5000", CmdOutput::failed(1, ""));
+            mock.expect_run("lsof", CmdOutput::failed(1, ""));
+            mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+            mock.expect_run("ps -p 999", CmdOutput::failed(1, ""));
+            mock.expect_run("worktree remove --force", CmdOutput::success(""));
+            let mut runner = GitRemoves(mock, None);
+            let receipt = qaren::commands::cleanup::cleanup(&mut runner, &root, &record.run_id);
+            assert_eq!(receipt.cleanup["metro"], "absent");
+            assert_eq!(receipt.cleanup["pr_worktree"], "removed");
+            assert_eq!(receipt.cleanup["device_lease"], "removed");
+            assert!(!wt.exists());
+            assert!(!lock.exists());
+            assert_eq!(runner.0.remaining(), 0);
+        }
     }
 }

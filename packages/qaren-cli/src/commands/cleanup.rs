@@ -1197,7 +1197,7 @@ pub(crate) fn cleanup_process_group(
 
     let proven_ours =
         leader == Some(PidLiveness::AliveMatching) || group_live_via_port.flatten() == Some(true);
-    if proven_ours {
+    let outcome = if proven_ours {
         kill_group(runner, pgid, "-TERM");
         runner.sleep(Duration::from_millis(1500));
         kill_group(runner, pgid, "-KILL");
@@ -1206,8 +1206,6 @@ pub(crate) fn cleanup_process_group(
         if leader_after == Some(PidLiveness::AliveMatching) {
             return Outcome::Unresolved("group leader survived TERM and KILL".to_string());
         }
-        // Survival must be positively excluded: only a free port or a port
-        // owned by a provably foreign group counts as gone.
         if let Some(p) = port {
             let output = runner.run(&metro::port_owner_spec(p));
             match metro::parse_port_owner(&output) {
@@ -1237,29 +1235,42 @@ pub(crate) fn cleanup_process_group(
                 }
             }
         }
-        return Outcome::Removed;
-    }
-
-    match leader {
-        // No recorded identity: a free or foreign port proves nothing about a
-        // group that may still be starting up; never guess absent.
-        None => Outcome::Unresolved(
-            "no recorded identity and the recorded port does not prove the group; \
+        Outcome::Removed
+    } else {
+        match leader {
+            // No recorded identity: a free or foreign port proves nothing about a
+            // group that may still be starting up; never guess absent.
+            None => Outcome::Unresolved(
+                "no recorded identity and the recorded port does not prove the group; \
              resolve the process group manually"
-                .to_string(),
-        ),
-        Some(PidLiveness::Dead) => match group_live_via_port {
-            Some(Some(false)) | None => Outcome::Absent,
-            Some(Some(true)) => unreachable!("proven_ours handled above"),
-            Some(None) => {
-                Outcome::Unresolved("port owner pgid could not be determined".to_string())
+                    .to_string(),
+            ),
+            Some(PidLiveness::Dead) => match group_live_via_port {
+                Some(Some(false)) | None => Outcome::Absent,
+                Some(Some(true)) => unreachable!("proven_ours handled above"),
+                Some(None) => {
+                    Outcome::Unresolved("port owner pgid could not be determined".to_string())
+                }
+            },
+            Some(PidLiveness::AliveForeign) => Outcome::Absent,
+            Some(PidLiveness::Unknown) => {
+                Outcome::Unresolved("pid liveness probe was inconclusive".to_string())
             }
-        },
-        Some(PidLiveness::AliveForeign) => Outcome::Absent,
-        Some(PidLiveness::Unknown) => {
-            Outcome::Unresolved("pid liveness probe was inconclusive".to_string())
+            Some(PidLiveness::AliveMatching) => unreachable!("proven_ours handled above"),
         }
-        Some(PidLiveness::AliveMatching) => unreachable!("proven_ours handled above"),
+    };
+    if !matches!(outcome, Outcome::Absent | Outcome::Removed) {
+        return outcome;
+    }
+    runner.try_reap(pgid);
+    match metro::group_presence(runner, pgid) {
+        metro::GroupPresence::Absent => outcome,
+        metro::GroupPresence::Present => {
+            Outcome::Unresolved("process group remains present".into())
+        }
+        metro::GroupPresence::Unknown => {
+            Outcome::Unresolved("process-group inventory is unknown".into())
+        }
     }
 }
 

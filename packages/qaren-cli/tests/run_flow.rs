@@ -992,6 +992,7 @@ fn script_teardown_after_drift(
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     script_host_probe(mock, udid, runner_host);
 }
 
@@ -3585,6 +3586,7 @@ fn script_pr_teardown_after_drift(mock: &mut MockRunner) {
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     script_host_probe(mock, UDID, hosts_absent());
 }
 
@@ -3725,6 +3727,7 @@ fn a_core_failure_on_a_pr_run_still_stops_the_recorder_and_removes_the_worktree(
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     script_recorder_stop(mock);
     mock.expect_run("worktree remove --force", CmdOutput::success(""));
 
@@ -3765,6 +3768,51 @@ fn a_pr_run_retains_its_worktree_when_metro_cleanup_is_unproven() {
     script_recorder_start(mock);
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", CmdOutput::failed(2, "inventory unavailable"));
+    script_recorder_stop(mock);
+
+    let receipt = run(&mut runner, &pr_request(&repo, &app));
+
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Failed,
+        "{:?}",
+        receipt.failure
+    );
+    assert_eq!(
+        receipt.failure.as_ref().unwrap().code,
+        FailureCode::CoreSpawnFailed
+    );
+    assert_eq!(runner.inner.remaining(), 0);
+    assert_eq!(receipt.cleanup["recorder"], "removed");
+    assert!(receipt.cleanup["pr_worktree"].contains("retained"));
+    assert!(receipt.cleanup["device_lease"].contains("retained"));
+    assert!(wt.exists());
+    assert!(RunRecord::load(&repo.join("runs"), &run_id())
+        .unwrap()
+        .resources
+        .pr_worktree
+        .is_some());
+}
+
+#[test]
+fn a_pr_run_keeps_the_unbound_metros_surviving_child_worktree() {
+    let (repo, app) = app_repo();
+    let wt = repo.join("runs").join(run_id()).join("wt");
+    let mut runner = PrRunner {
+        inner: MockRunner::new(),
+        app: app.clone(),
+        recorder_persisted_before_spawn: None,
+        fail_core_spawn: true,
+    };
+    let mock = &mut runner.inner;
+    script_pr_preflight(mock, &repo, &wt);
+    script_provision(mock);
+    script_pr_provenance_recheck(mock);
+    script_drift_status(mock);
+    script_recorder_start(mock);
+    mock.expect_run("ps", CmdOutput::failed(1, ""));
+    mock.expect_run("lsof", free_port());
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n6001 6000 S\n"));
     script_recorder_stop(mock);
 
     let receipt = run(&mut runner, &pr_request(&repo, &app));
