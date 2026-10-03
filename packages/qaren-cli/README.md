@@ -47,8 +47,8 @@ unconfirmed app removal, or rejected cooperative-handoff evidence).
 on `cleanup`; a missing flag or confirmation value, or use on another verb,
 is a usage error (exit `2`, no receipt).
 
-`status` and `cleanup` locate the run under `<repo>/.qaren/runs/<run-id>/`
-from the git toplevel of the current directory. `--dry-run` on `prepare`
+`status` and `cleanup` locate the run under `~/.qaren/runs/<run-id>/`,
+independently of the current directory. `--dry-run` on `prepare`
 validates the scenario + candidate and emits the planned command sequence
 (listener/readiness poll probes elided) without allocating anything.
 
@@ -74,7 +74,7 @@ prepare ──► validate (scenario schema, candidate git sha, lockfile sha256)
                              one-device server) --port <port>   (CI=1)
         ──► verify   port owner pgid == spawned pgid, /status responds,
                      app installed + running on the owned device
-        ──► ready    receipt + durable .qaren/runs/<run-id>/run.json
+        ──► ready    receipt + durable run.json in the run directory above
 
 (With `build.owner: qaren` the chain branches after `allocate`: no
 build+launch — prepare re-verifies the candidate, issues `handoff.json`, and
