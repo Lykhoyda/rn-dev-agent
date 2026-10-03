@@ -63,30 +63,38 @@ returns `TARGET_NOT_FOUND`, allowing the guarded native-wrapper fallback without
 scrolling. A genuine offscreen native input still requests scrolling; an onscreen
 native input resolves strictly.
 
-Fallback requires one onscreen, enabled, nonsecure native element carrying a
-unique testID, with no matching observable native input or secure node. The
-keyboard must be proven hidden before the single tap. Every binding after the
-tap, including refreshed strict bindings, must uniquely resolve the original
-testID or its `-pressable` wrapper-base identity; a matching label cannot
+Tap-based fallback requires one onscreen, enabled, nonsecure native element
+carrying a unique testID, with no matching observable native input or secure node.
+The keyboard-down path requires proof that the keyboard is hidden before the
+single tap. Every binding after the tap, including refreshed strict bindings,
+must uniquely resolve the original testID or its `-pressable` wrapper-base
+identity; a matching label cannot
 substitute for that identity. If the same input becomes natively observable,
 strict verification resumes. Otherwise the keyboard must become visible and
 the target must remain eligible. React evidence that the intended input is
-unfocused vetoes typing; unavailable React focus evidence does not prove focus.
+unfocused vetoes typing; an unavailable React focus read does not veto this
+keyboard-down transition path.
 
 When the keyboard is already up, iOS fallback types only with positive React
 proof that the intended input is focused. With an eligible target, QaReN taps it,
 recaptures once, rebinds the same identity and then requires that proof. Without
-a target, it types into the focused field only when no secure or disabled element
-carries the field's testID and React reports that input focused. A false,
-unbound, unreadable or failed focus read types nothing; an unknown keyboard state
-still refuses. Each such decision logs one value-free `fallback-focus` line.
+a target, it requires that no secure or disabled element carries the quoted
+testID and React reports that exact input focused. The guard and proof use the
+quoted ID unchanged, including a literal `-pressable` suffix. Only an
+observed wrapper in the tap path establishes a wrapper-to-base identity mapping.
+Both keyboard-up paths require a second positive React focus read immediately
+before native typing. A false, unbound, unreadable or failed read at either proof
+stage types nothing; failure of the pre-dispatch read returns
+`NO_TEXT_INPUT_TARGET` with no mutation. An unknown keyboard state still refuses.
+Each walker focus decision logs one value-free `fallback-focus` line.
 
 QaReN then types once into the focused field without final value validation.
 A successful keyboard step records a passing row with reason `UNVERIFIED_FILL`,
 allowing later plan steps to continue; it does not establish the field's final
-value. Failed keyboard typing is not retried. Before the tap, the value is
-protected from reporting and model requests, including substring echoes, and
-screenshots are withheld for the rest of the walk. The block remains unsaved,
+value. Failed keyboard typing is not retried. Before the fallback tap or
+no-target typing dispatch, the value is protected from reporting and model
+requests, including substring echoes, and screenshots are withheld for the rest
+of the walk. The block remains unsaved,
 including when the tap leads back to strict verification. The eligibility and
 identity rules are owned by the [resolver](../qaren-core/src/qa/resolve.ts) and
 covered by the [fallback tests](../qaren-core/test/unit/qa/keyboard-fallback.test.ts).
