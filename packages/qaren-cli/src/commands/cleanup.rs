@@ -120,7 +120,7 @@ pub fn cleanup_with(
                 "load",
                 timefmt::iso8601_utc(runner.now_epoch_ms()),
             );
-            receipt.next_action = failure.next_action.clone();
+            receipt.next_action = failure.next_action.to_string();
             receipt.failure = Some(failure);
             receipt.commands_executed = runner.commands_executed();
             return receipt;
@@ -487,24 +487,25 @@ pub fn cleanup_with(
         receipt
             .outcomes
             .insert("app_removal_at".to_string(), removal.at.clone());
-        receipt
-            .outcomes
-            .insert("app_removal_outcome".to_string(), removal.outcome.clone());
+        receipt.outcomes.insert(
+            "app_removal_outcome".to_string(),
+            removal.outcome.to_string(),
+        );
         receipt.outcomes.insert(
             "app_installed_sha256".to_string(),
             removal.installed_sha256.clone(),
         );
         receipt.outcomes.insert(
             "app_removal_uninstall".to_string(),
-            removal.uninstall.clone(),
+            removal.uninstall.to_string(),
         );
         receipt.outcomes.insert(
             "app_removal_pm_path".to_string(),
-            removal.pm_path_after.clone(),
+            removal.pm_path_after.to_string(),
         );
         receipt.outcomes.insert(
             "app_removal_package_list".to_string(),
-            removal.package_list_after.clone(),
+            removal.package_list_after.to_string(),
         );
     }
     receipt.failure = match result {
@@ -558,7 +559,7 @@ pub fn cleanup_with(
         _ => receipt
             .failure
             .as_ref()
-            .map(|f| f.next_action.clone())
+            .map(|f| f.next_action.to_string())
             .unwrap_or_default(),
     };
     receipt.commands_executed = runner.commands_executed();
@@ -658,11 +659,11 @@ fn removal_confirmed(record: &RunRecord, confirmation: &str) -> Result<(), Strin
     }
 }
 
-fn probe_evidence(output: &CmdOutput) -> String {
+fn probe_evidence(output: &CmdOutput) -> crate::redact::OutputText {
     let code = output
         .exit_code
         .map_or("none".to_string(), |c| c.to_string());
-    crate::redact::redact_secrets(&format!(
+    crate::redact::OutputText::from_output(&format!(
         "exit={code} timed_out={} stdout={:?} stderr={:?}",
         output.timed_out, output.stdout, output.stderr
     ))
@@ -848,9 +849,9 @@ fn remove_app_install(
                     Outcome::Absent,
                     Some(AppRemoval {
                         at: timefmt::iso8601_utc(runner.now_epoch_ms()),
-                        outcome: "absent".to_string(),
+                        outcome: crate::redact::OutputText::from_output("absent"),
                         installed_sha256: String::new(),
-                        uninstall: "not issued: package absent before removal".to_string(),
+                        uninstall: crate::redact::OutputText::from_output("not issued: package absent before removal"),
                         pm_path_after: probe_evidence(&path_before),
                         package_list_after: probe_evidence(&list),
                     }),
@@ -934,7 +935,7 @@ fn remove_app_install(
     };
     let removal = AppRemoval {
         at,
-        outcome: outcome.render(),
+        outcome: crate::redact::OutputText::from_output(&outcome.render()),
         installed_sha256: installed_sha,
         uninstall: probe_evidence(&uninstall),
         pm_path_after: probe_evidence(&path_after),

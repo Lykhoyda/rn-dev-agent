@@ -77,9 +77,7 @@ impl Privacy {
         out
     }
 
-    // Redaction and masking see the same clean raw text: a private range maps onto the redacted
-    // text through the ASCII-whitespace tokens (which redaction never adds or removes) and covers
-    // whole the tokens redaction changed, so neither rule can hide a match from the other.
+    // Map private ranges across changed tokens; withhold private content when token counts differ.
     fn guard(&self, raw: &str, whole_field: bool) -> String {
         let raw = clean(raw);
         let redacted = redact_secrets(&raw);
