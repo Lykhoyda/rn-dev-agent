@@ -18,8 +18,10 @@ import {
   readBlock,
   serializeBlock,
   storedMatches,
+  storedFits,
   writeBlock,
 } from '../../../dist/qa/blocks.js';
+import { parseM7Header } from '../../../dist/domain/reusable-action.js';
 
 const literal = readFileSync(new URL('../../fixtures/plans/literal.md', import.meta.url), 'utf8');
 
@@ -300,6 +302,27 @@ function appRoot(): string {
   mkdirSync(join(root, '.qaren'));
   return root;
 }
+
+test('overflowing headings use one ID for the saved path, M7 header and replay lookup', () => {
+  const root = appRoot();
+  const title = 'Verify the payment confirmation screen after selecting a different policy';
+  for (const heading of ['#', '###']) {
+    const markdown = `${heading} ${title}\n1. Tap "Save"\n✓ "Saved"\n`;
+    const block = blockOf(markdown);
+    const yaml = serialized(block, passRows(block, { [block.items[0].line]: { id: 'save' } }));
+    assert.equal(block.slug.length, 64);
+    assert.equal(writeBlock(root, block.slug, yaml), heading === '#' ? 'written' : 'unchanged');
+    assert.deepEqual(readdirSync(join(root, '.qaren', 'actions')), [`${block.slug}.yaml`]);
+    assert.equal(readFileSync(join(root, '.qaren', 'actions', `${block.slug}.yaml`), 'utf8'), yaml);
+    assert.equal(parseM7Header(yaml)?.id, block.slug);
+    assert.equal(parseM7Header(yaml)?.plan, block.slug);
+    const rerun = blockOf(markdown);
+    assert.equal(loadBlock(root, rerun.slug), yaml);
+    const stored = readBlock(yaml);
+    assert.ok(!('invalid' in stored));
+    assert.ok(storedFits(rerun, stored, yaml, ios));
+  }
+});
 
 test('writeBlock writes once, then reports unchanged', () => {
   const root = appRoot();

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { ACTION_ID_MAX_LEN } from '../domain/path-safety.js';
 import { type Judge, type Questions, confidentChoice, isRecord } from './questions.js';
 import { modelMask } from './privacy.js';
 
@@ -113,13 +114,20 @@ export function parseStep(rest: string): Grammar {
   return null;
 }
 
-export function slugify(title: string): string {
+function normalizedSlug(title: string): string {
   return (
     title
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'plan'
   );
+}
+
+export function slugify(title: string): string {
+  const slug = normalizedSlug(title);
+  if (slug.length <= ACTION_ID_MAX_LEN) return slug;
+  const suffix = createHash('sha256').update(slug).digest('hex').slice(0, 16);
+  return `${slug.slice(0, ACTION_ID_MAX_LEN - suffix.length - 1)}-${suffix}`;
 }
 
 export function planHash(items: Item[]): string {
@@ -208,8 +216,21 @@ function scanPlan(
   const refused: RefusedLine[] = [];
   let current: Block | null = null;
   let declaredAt: number | null = null;
-  const open = (heading: string): Block => {
-    current = { slug: slugify(heading), title: heading, items: [], planHash: '' };
+  const fullSlugs = new Set<string>();
+  const open = (heading: string, line: number, text: string): Block => {
+    const fullSlug = normalizedSlug(heading);
+    const slug = slugify(heading);
+    if (fullSlugs.has(fullSlug)) {
+      refused.push({ line, text, reason: `another block is already named "${slug}"` });
+    } else if (blocks.some((b) => b.slug === slug)) {
+      refused.push({
+        line,
+        text,
+        reason: `distinct block titles produce the same action ID "${slug}"`,
+      });
+    }
+    fullSlugs.add(fullSlug);
+    current = { slug, title: heading, items: [], planHash: '' };
     blocks.push(current);
     return current;
   };
@@ -231,17 +252,14 @@ function scanPlan(
     if (heading) {
       closeDeclared();
       const title = heading[1].trim();
-      if (blocks.some((b) => b.slug === slugify(title))) {
-        refused.push({ line, text, reason: `another block is already named "${slugify(title)}"` });
-      }
-      open(title);
+      open(title, line, text);
       declaredAt = line;
       continue;
     }
     if (text.startsWith('#')) continue;
     const startsOn = STARTS_ON.exec(text);
     if (startsOn) {
-      (current ?? open(title)).startsOn = startsOn[1].trim();
+      (current ?? open(title, line, text)).startsOn = startsOn[1].trim();
       continue;
     }
     const check = CHECK.exec(text);
@@ -250,7 +268,7 @@ function scanPlan(
       refused.push({ line, text, reason: 'not a numbered step or a ✓ line' });
       continue;
     }
-    const block = current ?? open(title);
+    const block = current ?? open(title, line, text);
     if (check) {
       const match = /^(?:"([^"]+)"|“([^”]+)”)$/.exec(check[1].trim());
       const quoted = match ? (match[1] ?? match[2]) : undefined;
