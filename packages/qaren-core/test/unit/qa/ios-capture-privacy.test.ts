@@ -369,13 +369,13 @@ test('twin fields that differ only by value keep both values masked on a literal
 });
 
 // Producer-shaped interactive QA snapshot: Window is emitted because the runner keeps it for geometry.
-function carousel(scrollX: number, window = true) {
+function carousel(scrollX: number) {
   const screen = { x: 0, y: 0, width: 402, height: 874 };
   const page = (index: number, x: number, type: string, extra: Record<string, unknown>) => ({
     index,
     type,
     depth: 3,
-    parentIndex: window ? 2 : 1,
+    parentIndex: 2,
     rect: { x: x - scrollX, y: 300, width: 300, height: 40 },
     enabled: true,
     hittable: x - scrollX >= 0 && x - scrollX < 402,
@@ -383,24 +383,20 @@ function carousel(scrollX: number, window = true) {
   });
   const nodes = [
     { index: 0, type: 'Application', depth: 0, rect: screen, enabled: true, hittable: true },
-    ...(window
-      ? [
-          {
-            index: 1,
-            type: 'Window',
-            depth: 1,
-            parentIndex: 0,
-            rect: screen,
-            enabled: true,
-            hittable: true,
-          },
-        ]
-      : []),
     {
-      index: window ? 2 : 1,
+      index: 1,
+      type: 'Window',
+      depth: 1,
+      parentIndex: 0,
+      rect: screen,
+      enabled: true,
+      hittable: true,
+    },
+    {
+      index: 2,
       type: 'ScrollView',
       depth: 2,
-      parentIndex: window ? 1 : 0,
+      parentIndex: 1,
       rect: screen,
       enabled: true,
       hittable: true,
@@ -420,8 +416,7 @@ function carousel(scrollX: number, window = true) {
   ];
 }
 
-async function literal(plan: string, trees: unknown[][]) {
-  let captures = 0;
+async function literal(plan: string, tree: unknown[]) {
   _setFetchForTest(async (url) => {
     if (String(url).endsWith('/health'))
       return Response.json({
@@ -432,7 +427,7 @@ async function literal(plan: string, trees: unknown[][]) {
       });
     return Response.json({
       ok: true,
-      data: { nodes: trees[Math.min(captures++, trees.length - 1)], truncated: false },
+      data: { nodes: tree, truncated: false },
     });
   });
   const snapshot = createDeviceSnapshotHandler();
@@ -465,10 +460,10 @@ async function literal(plan: string, trees: unknown[][]) {
 test('pages outside the native window satisfy no literal check or wait until scrolled into it', async () => {
   const start = carousel(0);
   const scrolled = carousel(804);
-  assert.equal(await literal('✓ "Page one"', [start]), 'PASS');
-  assert.equal(await literal('✓ "Page three"', [start]), 'FAIL');
-  assert.equal(await literal('1. Wait for "Page three"', [start]), 'FAIL');
-  assert.equal(await literal('✓ "Not in this app"', [start]), 'FAIL');
-  assert.equal(await literal('✓ "Page three"', [scrolled]), 'PASS');
-  assert.equal(await literal('✓ "Page one"', [scrolled]), 'FAIL');
+  assert.equal(await literal('✓ "Page one"', start), 'PASS');
+  assert.equal(await literal('✓ "Page three"', start), 'FAIL');
+  assert.equal(await literal('1. Wait for "Page three"', start), 'FAIL');
+  assert.equal(await literal('✓ "Not in this app"', start), 'FAIL');
+  assert.equal(await literal('✓ "Page three"', scrolled), 'PASS');
+  assert.equal(await literal('✓ "Page one"', scrolled), 'FAIL');
 });
