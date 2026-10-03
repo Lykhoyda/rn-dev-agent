@@ -1,4 +1,6 @@
 import { execFile as execFileCb } from 'node:child_process';
+import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
+import type { TimingContext } from '../qa/timing.js';
 import { promisify } from 'node:util';
 import {
   runNative,
@@ -56,6 +58,9 @@ const execFile = promisify(execFileCb);
 type SnapshotAction = 'open' | 'close' | 'snapshot';
 
 interface SnapshotArgs {
+  qaTiming?: TimingContext;
+  qaContext?: QaDispatchContext;
+  qaReadOnly?: boolean;
   action: SnapshotAction;
   appId?: string;
   /** Exact authority-bound iOS UDID or Android serial. */
@@ -65,6 +70,7 @@ interface SnapshotArgs {
   /** Attach to the exact already-running app process without relaunching it. */
   attachOnly?: boolean;
   platformPresence?: boolean;
+  presenceBudgetMs?: number;
 }
 
 /**
@@ -200,6 +206,10 @@ export function createDeviceSnapshotHandler(
   const reapAndroidRunner = deps.reapAndroidRunner ?? reapActiveAndroidRunner;
   return async (args) => {
     const action = args.action ?? 'snapshot';
+    if ((args.qaContext || args.qaReadOnly) && action !== 'snapshot') {
+      if (args.qaContext) args.qaContext.invalidate();
+      throw new QaDispatchError('ACTION_CONTEXT_CHANGED');
+    }
 
     if (action === 'open') {
       let appId = args.appId;
@@ -551,6 +561,8 @@ export function createDeviceSnapshotHandler(
 
     // action === 'snapshot'
     if (!getActiveSession()) {
+      if (args.qaContext) args.qaContext.invalidate();
+      if (args.qaReadOnly) throw new QaDispatchError('ACTION_CONTEXT_CHANGED');
       if (args.platformPresence === true) {
         return failResult(
           'Platform presence requires an existing device session.',
@@ -567,10 +579,18 @@ export function createDeviceSnapshotHandler(
       });
     }
 
-    const result = await rawSnapshot(args.platformPresence);
+    const result = await rawSnapshot(
+      args.platformPresence,
+      args.qaContext,
+      args.qaReadOnly,
+      args.presenceBudgetMs,
+      args.qaTiming,
+    );
     const nodes = parseSnapshotNodes(result);
 
     if (!result.isError && nodes && isAgentDeviceRunnerSentinel(nodes)) {
+      if (args.qaContext) args.qaContext.invalidate();
+      if (args.qaReadOnly) throw new QaDispatchError('ACTION_CONTEXT_CHANGED');
       const session = getActiveSession();
       if (args.platformPresence === true && session?.platform === 'ios') {
         return failResult(
@@ -609,7 +629,14 @@ export function createDeviceSnapshotHandler(
           },
           openSession: ({ appId, platform, deviceId, attachOnly }) =>
             reopenSessionForRecovery(appId, platform, attachOnly, deviceId, deps),
-          resnapshot: () => rawSnapshot(args.platformPresence),
+          resnapshot: () =>
+            rawSnapshot(
+              args.platformPresence,
+              args.qaContext,
+              args.qaReadOnly,
+              args.presenceBudgetMs,
+              args.qaTiming,
+            ),
           parseNodes: parseSnapshotNodes,
           reacquire:
             session?.platform === 'ios' &&
@@ -653,7 +680,8 @@ export function createDeviceSnapshotHandler(
       });
     }
 
-    cacheSnapshotIfPossible(result, args.platformPresence === true);
+    if (!args.qaContext && !args.qaReadOnly)
+      cacheSnapshotIfPossible(result, args.platformPresence === true);
     return attachForegroundSurfaceDiscovery(
       result,
       getActiveSession()?.appId,
@@ -727,11 +755,18 @@ export async function reacquireIosTargetApp(
   }
 }
 
-async function rawSnapshot(platformPresence?: boolean): Promise<ToolResult> {
+async function rawSnapshot(
+  platformPresence?: boolean,
+  qaContext?: QaDispatchContext,
+  qaReadOnly?: boolean,
+  presenceBudgetMs?: number,
+  qaTiming?: TimingContext,
+): Promise<ToolResult> {
   return runNative(
     platformPresence === true && getActiveSession()?.platform === 'ios'
       ? ['snapshot', '--platform-presence']
       : ['snapshot', '-i'],
+    { qaContext, qaReadOnly, presenceBudgetMs, qaTiming },
   );
 }
 

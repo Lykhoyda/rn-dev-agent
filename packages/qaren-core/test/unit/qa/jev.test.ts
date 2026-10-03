@@ -83,6 +83,7 @@ test('native HTTP contract and retry table through a local server, never the liv
           ),
         );
         assert.equal(judge.calls.length, hits);
+        assert.equal(judge.elapsedMs, clock);
         assert.ok(judge.calls.every((c) => c.ms === 23 && c.questionIds.join(',') === 'ready'));
         assert.equal(judge.calls.at(-1)?.inputTokens, expected ? null : 25);
         assert.ok(!JSON.stringify(judge.calls).includes(key));
@@ -92,6 +93,34 @@ test('native HTTP contract and retry table through a local server, never the liv
       }
     });
   }
+});
+
+test('elapsed Jev time accumulates whole asks including retry backoff', async () => {
+  let now = 0;
+  let attempts = 0;
+  const judge = createJev({
+    apiKey: key,
+    now: () => now,
+    sleep: async (ms) => {
+      now += ms;
+    },
+    fetch: async () => {
+      now += 100;
+      return attempts++ === 0
+        ? new Response('', { status: 429, headers: { 'Retry-After': '2' } })
+        : Response.json(valid);
+    },
+  });
+  assert.equal(judge.elapsedMs, 0);
+  await judge.ask({}, questions);
+  assert.equal(judge.elapsedMs, 2_200);
+  assert.deepEqual(
+    judge.calls.map((call) => call.ms),
+    [100, 100],
+  );
+  now += 500;
+  await judge.ask({}, questions);
+  assert.equal(judge.elapsedMs, 2_300);
 });
 
 test('timeout covers headers and streaming body and counts every attempt', async () => {
@@ -238,6 +267,55 @@ test('the pinned model honors Retry-After through 60 seconds and caps longer sec
     assert.deepEqual(
       judge.calls.map((call) => call.ms),
       [7, 7],
+    );
+  }
+});
+
+test('retry-after-ms takes precedence and falls back to Retry-After or backoff when invalid', async (t) => {
+  for (const [milliseconds, seconds, delay] of [
+    ['1500', null, 1500],
+    ['125.5', null, 125.5],
+    ['1500', '7', 1500],
+    ['0', '7', 0],
+    ['60000', '7', 60_000],
+    ['999999', '7', 60_000],
+    ['', '2', 2000],
+    ['   ', '2', 2000],
+    ['garbage', '2', 2000],
+    ['100ms', '2', 2000],
+    ['-1', '2', 2000],
+    ['NaN', '2', 2000],
+    ['Infinity', '2', 2000],
+    ['1e309', '2', 2000],
+    ['garbage', 'Thu, 01 Jan 2026 00:00:03 GMT', 3000],
+    ['garbage', null, 500],
+    ['-1', 'garbage', 500],
+  ] as const) {
+    await t.test(
+      `${JSON.stringify(milliseconds)} ms, ${JSON.stringify(seconds)} seconds`,
+      async () => {
+        const slept: number[] = [];
+        let attempts = 0;
+        const judge = createJev({
+          apiKey: key,
+          wallNow: () => Date.parse('2026-01-01T00:00:00Z'),
+          random: () => 0.5,
+          sleep: async (ms) => {
+            slept.push(ms);
+          },
+          fetch: async () => {
+            attempts++;
+            const headers = new Headers({ 'retry-after-ms': milliseconds });
+            if (seconds !== null) headers.set('Retry-After', seconds);
+            return attempts === 1
+              ? new Response('', { status: 429, headers })
+              : Response.json(valid);
+          },
+        });
+        assert.deepEqual(await judge.ask({}, questions), valid.answers);
+        assert.deepEqual(slept, [delay]);
+        assert.equal(attempts, 2);
+      },
     );
   }
 });

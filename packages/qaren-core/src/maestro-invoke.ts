@@ -1,4 +1,5 @@
 import { writeFileSync } from 'node:fs';
+import type { QaDispatchContext } from './domain/qa-dispatch.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveBundleId, readExpoSlug } from './project-config.js';
@@ -45,6 +46,7 @@ import {
 import { failResult, type ToolResult } from './utils.js';
 
 export interface MaestroInvokeOptions {
+  qaContext?: QaDispatchContext;
   platform: 'ios' | 'android';
   appId?: string;
   timeoutMs?: number;
@@ -250,6 +252,7 @@ export async function runMaestroInline(
           runnerPath,
           [...prefixArgs, ...finalArgs],
           {
+            ...(opts.qaContext ? { beforeSpawn: () => opts.qaContext!.authorize() } : {}),
             timeoutMs: remainingTimeout,
             platform: opts.platform,
             deviceId: requestedDeviceId,
@@ -270,6 +273,7 @@ export async function runMaestroInline(
     try {
       execution = await execute();
     } catch (err) {
+      if (opts.qaContext) opts.qaContext.refuse('ACTION_OUTCOME_UNCERTAIN');
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof RunnerCacheUnavailableError) {
         return {

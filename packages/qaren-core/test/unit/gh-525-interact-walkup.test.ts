@@ -1006,3 +1006,23 @@ test('#525 tool layer omits walkUp when not requested (default unchanged)', asyn
   const opts = JSON.parse(evaluated.replace(/^__QAREN\.interact\(/, '').replace(/\)$/, ''));
   assert.ok(!('walkUp' in opts));
 });
+
+test('style resets preserve exact-ID press eligibility on hosts and ancestors', () => {
+  for (const key of ['display', 'pointerEvents']) {
+    for (const target of ['host', 'outerHost'] as const) {
+      for (const reset of [undefined, null, 'missing']) {
+        const fixture = forwardedPressTree();
+        fixture[target].memoizedProps.style = [
+          { [key]: 'none' },
+          [reset === 'missing' ? {} : { [key]: reset }],
+        ];
+        const result = pressFixture(fixture);
+        assert.equal(result.success === true, reset !== 'missing', `${key} ${target} ${reset}`);
+        assert.deepEqual(fixture.calls, {
+          wrapper: reset === 'missing' ? 0 : 1,
+          navigation: reset === 'missing' ? 0 : 1,
+        });
+      }
+    }
+  }
+});

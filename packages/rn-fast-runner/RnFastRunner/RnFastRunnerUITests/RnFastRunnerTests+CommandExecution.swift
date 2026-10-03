@@ -135,6 +135,28 @@ extension RnFastRunnerTests {
 
   // MARK: - Command Handling
 
+  private func qaReadOnlyRefusal(appNotRunning: Bool = false) -> Response {
+    Response(ok: false, error: ErrorPayload(
+      code: "ACTION_CONTEXT_CHANGED", message: "QA read requires the unchanged foreground target; no recovery attempted",
+      mutation: "none", reason: appNotRunning ? "app-not-running" : nil
+    ))
+  }
+
+  // Reads the cached target's state only; a read never activates or relaunches the app.
+  private func qaReadOnlyTargetNotRunning(command: Command) -> Bool {
+    guard let bundleId = command.appBundleId?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !bundleId.isEmpty, currentBundleId == bundleId, let target = currentApp else { return false }
+    return target.state == .notRunning
+  }
+
+  private func qaReadOnlyTarget(command: Command) -> XCUIApplication? {
+    guard [.snapshot, .verifyInput, .isScreenStatic, .interactionFrame, .findText, .readText, .screenshot, .uptime, .status].contains(command.command),
+          let bundleId = command.appBundleId?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !bundleId.isEmpty, currentBundleId == bundleId,
+          let target = currentApp, target.state == .runningForeground, target.exists else { return nil }
+    return target
+  }
+
   private func executeOnMainSafely(command: Command) throws -> Response {
 #if RN_FAST_RUNNER_TEST_FAULTS
     // Deterministic, test-only wedge. The branch is compile-time absent from
@@ -159,6 +181,7 @@ extension RnFastRunnerTests {
       })
 
       if let exceptionMessage {
+        if command.qaReadOnly == true { return qaReadOnlyRefusal() }
         if command.platformPresence == true {
           return platformPresenceFailure()
         }
@@ -180,6 +203,7 @@ extension RnFastRunnerTests {
         )
       }
       if let swiftError {
+        if command.qaReadOnly == true { return qaReadOnlyRefusal() }
         if command.platformPresence == true {
           return platformPresenceFailure()
         }
@@ -191,6 +215,9 @@ extension RnFastRunnerTests {
           code: RunnerErrorCode.commandReturnedNoResponse,
           userInfo: [NSLocalizedDescriptionKey: "command returned no response"]
         )
+      }
+      if command.qaReadOnly == true, !response.ok {
+        return qaReadOnlyRefusal(appNotRunning: response.error?.reason == "app-not-running")
       }
       if !hasRetried, shouldRetryCommand(command), shouldRetryResponse(response) {
         NSLog(
@@ -208,16 +235,26 @@ extension RnFastRunnerTests {
   }
 
   private func executeOnMain(command: Command) throws -> Response {
+    var readOnlyApp: XCUIApplication?
+    if command.qaReadOnly == true {
+      guard let target = qaReadOnlyTarget(command: command) else {
+        return qaReadOnlyRefusal(appNotRunning: qaReadOnlyTargetNotRunning(command: command))
+      }
+      readOnlyApp = target
+    }
     if command.platformPresence == true {
       // Presence adapters must omit filters; this mode always enumerates the raw app tree.
       guard command.command == .snapshot,
+            let presenceBudgetMs = command.presenceBudgetMs,
+            presenceBudgetMs > 0,
+            presenceBudgetMs <= Int(mainThreadExecutionTimeout * 1000) - 5_000,
             command.raw != false, command.compact != true, command.interactiveOnly != true,
             command.depth == nil, command.scope == nil,
             let appId = command.appBundleId,
             !appId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         return Response(ok: false, error: ErrorPayload(
           code: "INVALID_ARGUMENT",
-          message: "platformPresence requires an explicit appBundleId and an unfiltered raw snapshot"
+          message: "platformPresence requires an explicit supported presenceBudgetMs, appBundleId and an unfiltered raw snapshot"
         ))
       }
       let bundleId = appId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -226,13 +263,16 @@ extension RnFastRunnerTests {
         : XCUIApplication(bundleIdentifier: bundleId)
       currentSnapshotGeneration += 1
       // Observation must not activate or relaunch the app to manufacture presence.
-      let payload = snapshotPlatformPresence(app: target, appId: bundleId)
+      let payload = runnerPayload(
+        snapshotPlatformPresence(app: target, appId: bundleId, presenceBudgetMs: presenceBudgetMs),
+        appProcessIdentifier: observedProcessIdentifier(target)
+      )
       retainSnapshotTargets(payload.nodes ?? [])
       needsPostSnapshotInteractionDelay = true
       return Response(ok: true, data: payload)
     }
-    var activeApp = currentApp ?? app
-    if !isRunnerLifecycleCommand(command.command) {
+    var activeApp = readOnlyApp ?? currentApp ?? app
+    if readOnlyApp == nil, !isRunnerLifecycleCommand(command.command) {
       let normalizedBundleId = command.appBundleId?
         .trimmingCharacters(in: .whitespacesAndNewlines)
       let requestedBundleId = (normalizedBundleId?.isEmpty == true) ? nil : normalizedBundleId
@@ -254,10 +294,11 @@ extension RnFastRunnerTests {
         activeApp = app
       }
 
-      if !activeApp.waitForExistence(timeout: appExistenceTimeout) {
+      // waitForExistence costs a ~1 s poll even for a present app, so check exists first.
+      if !(activeApp.exists || activeApp.waitForExistence(timeout: appExistenceTimeout)) {
         if let bundleId = requestedBundleId {
           activeApp = activateTarget(bundleId: bundleId, reason: "missing_after_wait")
-          guard activeApp.waitForExistence(timeout: appExistenceTimeout) else {
+          guard activeApp.exists || activeApp.waitForExistence(timeout: appExistenceTimeout) else {
             return Response(ok: false, error: ErrorPayload(message: "app '\(bundleId)' is not available"))
           }
         } else {
@@ -272,7 +313,7 @@ extension RnFastRunnerTests {
           app.activate()
           activeApp = app
         }
-        if !activeApp.waitForExistence(timeout: 2) {
+        if !(activeApp.exists || activeApp.waitForExistence(timeout: 2)) {
           if let bundleId = requestedBundleId {
             return Response(ok: false, error: ErrorPayload(message: "app '\(bundleId)' is not available"))
           }
@@ -972,9 +1013,12 @@ extension RnFastRunnerTests {
         scope: command.scope,
         raw: command.raw ?? false
       )
-      let payload = options.raw
-        ? snapshotRaw(app: activeApp, options: options)
-        : snapshotFast(app: activeApp, options: options)
+      let payload = runnerPayload(
+        options.raw
+          ? snapshotRaw(app: activeApp, options: options)
+          : snapshotFast(app: activeApp, options: options),
+        appProcessIdentifier: observedProcessIdentifier(activeApp)
+      )
       retainSnapshotTargets(payload.nodes ?? [])
       needsPostSnapshotInteractionDelay = true
       return Response(ok: true, data: payload)
@@ -982,7 +1026,7 @@ extension RnFastRunnerTests {
       let screenshot: XCUIScreenshot
 #if os(macOS)
       // macOS keeps the app-targeted capture behavior for window-level screenshots.
-      if let bundleId = command.appBundleId, !bundleId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      if command.qaReadOnly != true, let bundleId = command.appBundleId, !bundleId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         let targetApp = XCUIApplication(bundleIdentifier: bundleId)
         targetApp.activate()
         activeApp = targetApp

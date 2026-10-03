@@ -6,12 +6,12 @@ import { nativeCapture } from './platform-presence-fixtures.ts';
 
 test('native presence requires a complete app/generation-bound unfiltered observation interval', () => {
   const source = nativeCapture();
-  const valid = validateNativePresence(source.presenceCapture, source.nodes, 7, 'com.test');
+  const valid = validateNativePresence(source.presenceCapture, source.nodes, 7, 'com.test', 20_000);
   assert.ok(valid);
   assert.equal(valid.nodes[1].status, 'observed');
   assert.equal(valid.nodes[0].status, 'unknown');
   for (const patch of [
-    { version: 2 },
+    { version: 1 },
     { source: 'geometry' },
     { enumeration: 'filtered' },
     { complete: false },
@@ -21,20 +21,26 @@ test('native presence requires a complete app/generation-bound unfiltered observ
     { captureId: '' },
     { startedUptimeMs: -1 },
     { endedUptimeMs: 99 },
-    { endedUptimeMs: 5100 },
+    { endedUptimeMs: 20_100 },
     { endedUptimeMs: Infinity },
   ])
     assert.equal(
-      validateNativePresence({ ...source.presenceCapture, ...patch }, source.nodes, 7, 'com.test'),
+      validateNativePresence(
+        { ...source.presenceCapture, ...patch },
+        source.nodes,
+        7,
+        'com.test',
+        20_000,
+      ),
       undefined,
     );
   for (const generation of [undefined, '7', 8])
     assert.equal(
-      validateNativePresence(source.presenceCapture, source.nodes, generation, 'com.test'),
+      validateNativePresence(source.presenceCapture, source.nodes, generation, 'com.test', 20_000),
       undefined,
     );
   assert.equal(
-    validateNativePresence(source.presenceCapture, source.nodes, 7, undefined),
+    validateNativePresence(source.presenceCapture, source.nodes, 7, undefined, 20_000),
     undefined,
   );
 });
@@ -58,7 +64,10 @@ test('node evidence cannot be reused for a different capture, generation, index 
       source.nodes[0],
       { ...source.nodes[1], presence: { ...source.nodes[1].presence, ...patch } },
     ];
-    assert.equal(validateNativePresence(source.presenceCapture, nodes, 7, 'com.test'), undefined);
+    assert.equal(
+      validateNativePresence(source.presenceCapture, nodes, 7, 'com.test', 20_000),
+      undefined,
+    );
   }
 });
 
@@ -77,7 +86,10 @@ test('complete native enumeration rejects lost hierarchy, bad geometry and dupli
     [source.nodes[0], { ...source.nodes[1], rect: { x: 0, y: 0, width: 0, height: 1 } }],
     [source.nodes[0], { ...source.nodes[1], presence: undefined }],
   ])
-    assert.equal(validateNativePresence(source.presenceCapture, nodes, 7, 'com.test'), undefined);
+    assert.equal(
+      validateNativePresence(source.presenceCapture, nodes, 7, 'com.test', 20_000),
+      undefined,
+    );
 });
 
 test('negative or unavailable native hittability is retained as unknown, never absence', () => {
@@ -87,7 +99,49 @@ test('negative or unavailable native hittability is retained as unknown, never a
     source.nodes[0],
     { ...source.nodes[1], presence: { ...observation, status: 'unknown' } },
   ];
-  const valid = validateNativePresence(source.presenceCapture, nodes, 7, 'com.test');
+  const valid = validateNativePresence(source.presenceCapture, nodes, 7, 'com.test', 20_000);
   assert.ok(valid);
   assert.equal(valid.nodes[1].status, 'unknown');
+});
+
+test('unknown reasons are allowlisted diagnostics, not visibility evidence', () => {
+  for (const reason of [
+    'empty-frame',
+    'clipped',
+    'ambiguous-descriptor',
+    'not-hittable',
+    'read-unavailable',
+    'match-count-mismatch',
+    'post-hit-mismatch',
+  ]) {
+    const source = nativeCapture();
+    Object.assign(source.nodes[0].presence, { unknownReason: reason });
+    Object.assign(source.nodes[1].presence, { unknownReason: reason });
+    const valid = validateNativePresence(
+      source.presenceCapture,
+      source.nodes,
+      7,
+      'com.test',
+      20_000,
+    )!;
+    assert.deepEqual(valid.nodes[0], {
+      status: 'unknown',
+      labelSource: 'direct',
+      unknownReason: reason,
+    });
+    assert.deepEqual(valid.nodes[1], { status: 'observed', labelSource: 'direct' });
+  }
+  for (const unknownReason of [undefined, null, 42, {}, 'PRIVATE-reason']) {
+    const source = nativeCapture();
+    Object.assign(source.nodes[0].presence, { unknownReason });
+    const valid = validateNativePresence(
+      source.presenceCapture,
+      source.nodes,
+      7,
+      'com.test',
+      20_000,
+    )!;
+    assert.deepEqual(valid.nodes[0], { status: 'unknown', labelSource: 'direct' });
+    assert.doesNotMatch(JSON.stringify(valid), /PRIVATE-/);
+  }
 });

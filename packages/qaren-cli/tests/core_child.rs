@@ -58,6 +58,7 @@ fn request() -> CoreRequest {
         preflight_calls: vec![],
         platform: "ios".to_string(),
         app_id: "com.rndevagent.testapp".to_string(),
+        app_root: PathBuf::from("/tmp/app"),
         run_dir: PathBuf::from("/tmp/qaren-runs/check"),
         lease: format!("{RUN}:abcdef0123456789abcdef0123456789"),
         target: CoreTarget {
@@ -303,6 +304,45 @@ fn a_typed_refusal_needs_exit_four() {
 }
 
 #[test]
+fn a_typed_refusal_keeps_its_walk_speed_and_drops_a_malformed_one() {
+    for (speed, expected) in [
+        (
+            serde_json::json!({"stepMedianMs": 250, "stepP95Ms": 400, "walkMs": 1900, "steps": 5, "passed": 4, "failed": 1}),
+            Some((Some(400), 5, 4, 1)),
+        ),
+        (
+            serde_json::json!({"walkMs": 0, "steps": 0, "passed": 0, "failed": 0}),
+            Some((None, 0, 0, 0)),
+        ),
+        (serde_json::Value::Null, None),
+        (serde_json::json!({"walkMs": "slow"}), None),
+    ] {
+        let repo = common::temp_repo();
+        let refusal = serde_json::json!({"verdict":"REFUSED","code":"METRO_ORIGIN_MISMATCH",
+            "message":"port","speed":speed});
+        let mut mock = MockRunner::new();
+        mock.expect_spawn_piped(
+            "walk.js",
+            9000,
+            &format!("{}\n", envelope(2, "result", &refusal.to_string())),
+            Some(4),
+        );
+        let outcome = run_child(&mut mock, &repo.join("core.log"));
+        assert!(matches!(outcome.verdict, Verdict::Refused { .. }));
+        assert!(outcome.failure.is_none());
+        assert_eq!(
+            outcome.ledger.speed.map(|speed| (
+                speed.step_p95_ms,
+                speed.steps,
+                speed.passed,
+                speed.failed
+            )),
+            expected
+        );
+    }
+}
+
+#[test]
 fn jev_refusal_accounting_is_optional_but_strict_when_present() {
     for jev in [
         None,
@@ -343,6 +383,107 @@ fn jev_refusal_accounting_is_optional_but_strict_when_present() {
             } else {
                 assert_eq!(outcome.ledger.jev, Default::default());
             }
+        }
+    }
+}
+
+#[test]
+fn jev_deadline_and_retry_backoff_diagnostic_roundtrip_in_results_and_refusals() {
+    let jev = serde_json::json!({
+        "calls": 2, "medianMs": 25, "inputTokens": 0, "callDetails": [
+            {"scope":"walk", "questionIds":["front"], "inputTokens":null, "ms":10, "outcome":"deadline"},
+            {"scope":"walk", "questionIds":["front"], "inputTokens":null, "ms":40, "outcome":"http", "status":429, "diagnostic":"retry-after-outside-window"}
+        ]
+    });
+    for (verdict, exit) in [("PASS", 0), ("FAIL", 1), ("REFUSED", 4)] {
+        let repo = common::temp_repo();
+        let mut result: serde_json::Value = serde_json::from_str(&pass_ledger(&[])).unwrap();
+        result["verdict"] = serde_json::json!(verdict);
+        result["jev"] = jev.clone();
+        result["code"] = serde_json::json!("JEV_DEADLINE_EXCEEDED");
+        result["message"] = serde_json::json!("the observation or item deadline expired");
+        let mut mock = MockRunner::new();
+        mock.expect_spawn_piped(
+            "walk.js",
+            9000,
+            &format!("{}\n", envelope(2, "result", &result.to_string())),
+            Some(exit),
+        );
+        let outcome = run_child(&mut mock, &repo.join("core.log"));
+        assert!(
+            outcome.failure.is_none(),
+            "{verdict}: {:?}",
+            outcome.failure
+        );
+        assert_eq!(outcome.ledger.verdict, verdict);
+        let expected = match verdict {
+            "PASS" => Verdict::Pass,
+            "FAIL" => Verdict::Fail,
+            _ => Verdict::Refused {
+                code: "JEV_DEADLINE_EXCEEDED".to_string(),
+                message: "the observation or item deadline expired".to_string(),
+            },
+        };
+        assert_eq!(outcome.verdict, expected);
+        assert_eq!(serde_json::to_value(outcome.ledger.jev).unwrap(), jev);
+    }
+}
+
+#[test]
+fn jev_optional_diagnostic_matches_status_missing_and_null_policy() {
+    let call = serde_json::json!({
+        "scope":"walk", "questionIds":[], "inputTokens":null, "ms":0, "outcome":"deadline"
+    });
+    for explicit_null in [false, true] {
+        let mut supplied = call.clone();
+        if explicit_null {
+            supplied["status"] = serde_json::Value::Null;
+            supplied["diagnostic"] = serde_json::Value::Null;
+        }
+        let parsed: core::JevCall = serde_json::from_value(supplied).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), call);
+    }
+}
+
+#[test]
+fn malformed_jev_diagnostics_are_rejected_in_results_and_refusals() {
+    use serde_json::json;
+    for diagnostic in [
+        json!("arbitrary"),
+        json!(""),
+        json!(42),
+        json!(true),
+        json!([]),
+        json!({}),
+        json!({"retry-after-outside-window": null}),
+    ] {
+        for (verdict, exit) in [("PASS", 0), ("FAIL", 1), ("REFUSED", 4)] {
+            let repo = common::temp_repo();
+            let mut result: serde_json::Value = serde_json::from_str(&pass_ledger(&[])).unwrap();
+            result["verdict"] = json!(verdict);
+            result["jev"] = json!({
+                "calls":1, "medianMs":0, "callDetails":[{
+                    "scope":"walk", "questionIds":[], "inputTokens":null, "ms":0,
+                    "outcome":"http", "status":429, "diagnostic":diagnostic
+                }]
+            });
+            let mut mock = MockRunner::new();
+            mock.expect_spawn_piped(
+                "walk.js",
+                9000,
+                &format!("{}\n", envelope(2, "result", &result.to_string())),
+                Some(exit),
+            );
+            let outcome = run_child(&mut mock, &repo.join("core.log"));
+            assert_eq!(outcome.verdict, Verdict::Fail, "{verdict}: {diagnostic}");
+            assert_eq!(
+                outcome
+                    .failure
+                    .expect("invalid diagnostic must not be silently dropped")
+                    .code,
+                FailureCode::CoreResultMissing,
+                "{verdict}: {diagnostic}"
+            );
         }
     }
 }
@@ -790,4 +931,101 @@ fn a_group_member_that_outlives_the_kill_is_reported_as_a_survivor() {
     assert_eq!(outcome.verdict, Verdict::Pass, "{:?}", outcome.failure);
     assert!(*mock.piped_killed[0].lock().unwrap());
     assert!(outcome.group_survived);
+}
+
+fn block_ledger(path: &str, source: &str) -> serde_json::Value {
+    let mut step: serde_json::Value = serde_json::from_str(&row(10, 1, "pass")).unwrap();
+    step["selector"] = serde_json::json!({"id": "onboarding-finish"});
+    serde_json::json!({
+        "verdict": "PASS", "path": path,
+        "blocks": [{"key": "plan", "outcome": "pass", "source": source}],
+        "blocksWritten": ["plan"],
+        "steps": [step], "jev": {"calls": 0, "medianMs": 0},
+        "llmTurns": 0, "escapes": 0, "recoveries": 0
+    })
+}
+
+fn run_result(result: &serde_json::Value, exit: i32) -> core::CoreOutcome {
+    let repo = common::temp_repo();
+    let mut mock = MockRunner::new();
+    mock.expect_spawn_piped(
+        "walk.js",
+        9000,
+        &format!("{}\n", envelope(2, "result", &result.to_string())),
+        Some(exit),
+    );
+    run_child(&mut mock, &repo.join("core.log"))
+}
+
+#[test]
+fn the_request_names_the_app_root_and_replay_ledgers_are_typed() {
+    let repo = common::temp_repo();
+    let mut mock = MockRunner::new();
+    let result = block_ledger("replay→walk@10", "patched");
+    mock.expect_spawn_piped(
+        "walk.js",
+        9000,
+        &format!("{}\n", envelope(2, "result", &result.to_string())),
+        Some(0),
+    );
+    let outcome = run_child(&mut mock, &repo.join("core.log"));
+    let written: serde_json::Value = serde_json::from_str(mock.piped_stdin_text(0).trim()).unwrap();
+    assert_eq!(written["payload"]["appRoot"], "/tmp/app");
+    assert_eq!(outcome.verdict, Verdict::Pass);
+    assert_eq!(outcome.ledger.path, "replay→walk@10");
+    assert_eq!(outcome.ledger.blocks[0].source, "patched");
+    assert_eq!(
+        outcome.ledger.blocks_written,
+        Some(vec!["plan".to_string()])
+    );
+    assert_eq!(
+        outcome.ledger.steps[0]
+            .selector
+            .as_ref()
+            .and_then(|s| s.id.as_deref()),
+        Some("onboarding-finish")
+    );
+    for (path, source) in [("walk", "discovered"), ("replay", "replayed")] {
+        assert_eq!(
+            run_result(&block_ledger(path, source), 0).verdict,
+            Verdict::Pass
+        );
+    }
+}
+
+#[test]
+fn unknown_ledger_paths_and_block_sources_are_contract_violations() {
+    for (path, source) in [
+        ("replay→walk@", "patched"),
+        ("replay→walk@x", "patched"),
+        ("replay→walk@07", "patched"),
+        ("rewalk", "discovered"),
+        ("walk", "invented"),
+    ] {
+        let outcome = run_result(&block_ledger(path, source), 0);
+        assert_eq!(outcome.verdict, Verdict::Fail, "{path} {source}");
+        assert_eq!(
+            outcome.failure.unwrap().code,
+            FailureCode::CoreResultMissing,
+            "{path} {source}"
+        );
+    }
+    let mut saved = block_ledger("walk", "discovered");
+    saved["blocks"][0]["saved"] = serde_json::json!(true);
+    assert_eq!(run_result(&saved, 0).verdict, Verdict::Fail);
+}
+
+#[test]
+fn a_refusal_during_replay_keeps_its_path_and_written_blocks() {
+    let mut refusal = block_ledger("replay", "replayed");
+    refusal["verdict"] = serde_json::json!("REFUSED");
+    refusal["code"] = serde_json::json!("APP_PROCESS_UNKNOWN");
+    refusal["message"] = serde_json::json!("the runner does not report the app process");
+    let outcome = run_result(&refusal, 4);
+    assert!(matches!(outcome.verdict, Verdict::Refused { .. }));
+    assert_eq!(outcome.ledger.path, "replay");
+    assert_eq!(
+        outcome.ledger.blocks_written,
+        Some(vec!["plan".to_string()])
+    );
 }

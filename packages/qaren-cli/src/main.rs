@@ -8,7 +8,7 @@ use qaren::scenario::Platform;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: qaren check --plan-file <plan.md> [--platform ios|android] [--device <udid>] [--config .qaren/config.yaml] [--fresh-install] [--boot-device] [--json]\n       qaren prepare <scenario.yaml> [--json] [--dry-run]\n       qaren prewarm <scenario.yaml> [--json]\n       qaren status  <run-id> [--json]\n       qaren complete <run-id> <build-log> [--json]\n       qaren cleanup <run-id> [--json] [--remove-app --confirm-remove-app <run-id>/<remote-serial>/<app-id>]\n\ncheck walks the plan on the booted simulator against the working tree; runs land in ~/.qaren/runs/<run-id>/.\n--fresh-install opts into removing the selected app and its data under the check device lease before installation.\n--boot-device opts into booting an exact iOS simulator UUID selected by --device under the check lease; cleanup leaves it running.\n--remove-app also uninstalls the app (and its data) this run installed on its leased Android emulator;\nthe confirmation must name exactly this run, its recorded emulator serial and its app id.";
+const USAGE: &str = "usage: qaren check --plan-file <plan.md> [--platform ios|android] [--device <udid>] [--config .qaren/config.yaml] [--fresh-install] [--boot-device] [--json]\n       qaren pr <number|url> --plan-file <plan.md> [--platform ios|android] [--device <udid>] [--config .qaren/config.yaml] [--fresh-install] [--boot-device] [--json]\n       qaren publish <run-id> --verdict-file <verdict.md> [--json]\n       qaren prepare <scenario.yaml> [--json] [--dry-run]\n       qaren prewarm <scenario.yaml> [--json]\n       qaren status  <run-id> [--json]\n       qaren complete <run-id> <build-log> [--json]\n       qaren cleanup <run-id> [--json] [--remove-app --confirm-remove-app <run-id>/<remote-serial>/<app-id>]\n       qaren actions list [--json]\n       qaren actions show <slug>\n\ncheck walks the plan on the booted simulator against the working tree; runs land in ~/.qaren/runs/<run-id>/.\npr walks the plan on a detached worktree at the pull request head, recording the screen; publish posts the reviewer comment and saves discovered blocks to the PR branch.\n--fresh-install opts into removing the selected app and its data under the check device lease before installation.\n--boot-device opts into booting an exact iOS simulator UUID selected by --device under the check lease; cleanup leaves it running.\n--remove-app also uninstalls the app (and its data) this run installed on its leased Android emulator;\nthe confirmation must name exactly this run, its recorded emulator serial and its app id.";
 
 fn qaren_home() -> Result<PathBuf, String> {
     match std::env::var_os("HOME") {
@@ -76,7 +76,7 @@ fn failed_receipt(verb: &str, failure: Failure, runner: &dyn Runner) -> Receipt 
         &failure.phase.clone(),
         qaren::timefmt::iso8601_utc(runner.now_epoch_ms()),
     );
-    receipt.next_action = failure.next_action.clone();
+    receipt.next_action = failure.next_action.to_string();
     receipt.failure = Some(failure);
     receipt.commands_executed = runner.commands_executed();
     receipt
@@ -91,6 +91,38 @@ fn roots_failure(detail: String) -> Failure {
     )
 }
 
+// Saved plan blocks under the current app's .qaren/actions; read-only.
+fn actions(args: &[String], json: bool) -> ExitCode {
+    let app_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let result = match args {
+        [sub] if sub == "list" => qaren::actions::list(&app_root).map(|entries| {
+            if json {
+                format!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&entries).unwrap_or_else(|_| "[]".to_string())
+                )
+            } else {
+                qaren::actions::render(&entries)
+            }
+        }),
+        [sub, slug] if sub == "show" && !json => qaren::actions::show(&app_root, slug),
+        _ => {
+            eprintln!("usage: qaren actions list [--json] | qaren actions show <slug>\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    match result {
+        Ok(text) => {
+            print!("{text}");
+            ExitCode::from(0)
+        }
+        Err(detail) => {
+            eprintln!("qaren actions: {detail}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let raw_args: Vec<_> = std::env::args_os().skip(1).collect();
     if raw_args
@@ -101,7 +133,10 @@ fn main() -> ExitCode {
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args == [qaren::exec::log::HELPER_ARG] {
-        return ExitCode::from(u8::from(qaren::exec::log::run_helper().is_err()));
+        return ExitCode::from(u8::from(qaren::exec::log::run_helper(false).is_err()));
+    }
+    if args == [qaren::exec::log::HELPER_ARG, qaren::exec::log::PAIRED_ARG] {
+        return ExitCode::from(u8::from(qaren::exec::log::run_helper(true).is_err()));
     }
     let mut positional = Vec::new();
     let mut dry_run = false;
@@ -113,6 +148,8 @@ fn main() -> ExitCode {
     let mut platform: Option<String> = None;
     let mut config: Option<String> = None;
     let mut device: Option<String> = None;
+    let mut verdict_file: Option<String> = None;
+    let mut json = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         let value_for = |flag: &str, iter: &mut std::slice::Iter<String>| -> Option<String> {
@@ -125,7 +162,7 @@ fn main() -> ExitCode {
             }
         };
         match arg.as_str() {
-            "--json" => {}
+            "--json" => json = true,
             "--dry-run" => dry_run = true,
             "--fresh-install" => fresh_install = true,
             "--boot-device" => boot_device = true,
@@ -150,6 +187,10 @@ fn main() -> ExitCode {
                 Some(v) => device = Some(v),
                 None => return ExitCode::from(2),
             },
+            "--verdict-file" => match value_for("--verdict-file", &mut iter) {
+                Some(v) => verdict_file = Some(v),
+                None => return ExitCode::from(2),
+            },
             "-h" | "--help" => {
                 eprintln!("{USAGE}");
                 return ExitCode::from(0);
@@ -167,7 +208,9 @@ fn main() -> ExitCode {
     };
     let expected_positionals = match verb.as_str() {
         "check" => 1,
+        "pr" | "publish" => 2,
         "complete" => 3,
+        "actions" if positional.get(1).is_some_and(|sub| sub == "show") => 3,
         _ => 2,
     };
     if positional.len() != expected_positionals {
@@ -193,18 +236,26 @@ fn main() -> ExitCode {
         || fresh_install
         || boot_device)
         && verb != "check"
+        && verb != "pr"
     {
         eprintln!(
-            "--plan-file, --platform, --config, --device, --fresh-install and --boot-device are only valid for check\n{USAGE}"
+            "--plan-file, --platform, --config, --device, --fresh-install and --boot-device are only valid for check and pr\n{USAGE}"
         );
         return ExitCode::from(2);
     }
+    if verdict_file.is_some() != (verb == "publish") {
+        eprintln!("publish requires --verdict-file, and only publish takes it\n{USAGE}");
+        return ExitCode::from(2);
+    }
 
+    if verb == "actions" {
+        return actions(&positional[1..], json);
+    }
     let mut runner = RealRunner::new();
     let receipt = match verb.as_str() {
-        "check" => {
+        "check" | "pr" => {
             let Some(plan_file) = plan_file else {
-                eprintln!("check requires --plan-file <plan.md>\n{USAGE}");
+                eprintln!("{verb} requires --plan-file <plan.md>\n{USAGE}");
                 return ExitCode::from(2);
             };
             let platform = match platform.as_deref() {
@@ -223,6 +274,7 @@ fn main() -> ExitCode {
             }
             qaren::cancel::install();
             runner.watch_caller();
+            qaren::progress::enable();
             match lock_root().and_then(|lock| runs_root().map(|runs| (lock, runs))) {
                 Ok((lock_root, runs_root)) => {
                     let project_root =
@@ -245,12 +297,25 @@ fn main() -> ExitCode {
                         runs_root,
                         android_home: std::env::var("ANDROID_HOME").ok(),
                         budgets: check_budgets(),
+                        pr: (verb == "pr").then(|| run::PrTarget {
+                            target: positional[1].clone(),
+                        }),
                     };
                     run::run(&mut runner, &request)
                 }
-                Err(detail) => failed_receipt("check", roots_failure(detail), &runner),
+                Err(detail) => failed_receipt(&verb, roots_failure(detail), &runner),
             }
         }
+        "publish" => match runs_root() {
+            Ok(runs_root) => qaren::publish::publish(
+                &mut runner,
+                &runs_root,
+                &positional[1],
+                std::path::Path::new(verdict_file.as_deref().unwrap_or_default()),
+                &qaren::redact::MachineIdentity::current(),
+            ),
+            Err(detail) => failed_receipt("publish", roots_failure(detail), &runner),
+        },
         "prepare" => match lock_root().and_then(|lock| runs_root().map(|runs| (lock, runs))) {
             Ok((lock_root, runs_root)) => {
                 let prepare_args = prepare::PrepareArgs {
@@ -297,7 +362,7 @@ fn main() -> ExitCode {
                         "load",
                         qaren::timefmt::iso8601_utc(runner.now_epoch_ms()),
                     );
-                    receipt.next_action = failure.next_action.clone();
+                    receipt.next_action = failure.next_action.to_string();
                     receipt.failure = Some(failure);
                     receipt.commands_executed = runner.commands_executed();
                     receipt
@@ -310,6 +375,7 @@ fn main() -> ExitCode {
         }
     };
 
+    qaren::progress::close();
     let receipt_delivered = {
         use std::io::Write;
         writeln!(std::io::stdout(), "{}", receipt.to_json()).is_ok()
@@ -346,7 +412,8 @@ fn receipt_exit_code(result: ReceiptResult) -> u8 {
         | ReceiptResult::Planned
         | ReceiptResult::Prewarmed
         | ReceiptResult::Working
-        | ReceiptResult::Pass => 0,
+        | ReceiptResult::Pass
+        | ReceiptResult::Published => 0,
         ReceiptResult::Failed | ReceiptResult::Fail => 1,
         ReceiptResult::Unknown => 3,
         ReceiptResult::Refused => 4,
@@ -365,6 +432,7 @@ fn result_str(result: ReceiptResult) -> &'static str {
         ReceiptResult::Prewarmed => "prewarmed",
         ReceiptResult::Pass => "pass",
         ReceiptResult::Fail => "fail",
+        ReceiptResult::Published => "published",
     }
 }
 

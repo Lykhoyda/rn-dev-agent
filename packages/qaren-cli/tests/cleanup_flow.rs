@@ -636,6 +636,7 @@ fn ios_happy_cleanup_then_idempotent_rerun() {
             ..Default::default()
         },
     );
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     // simulator: present with matching name, booted -> shutdown + delete
     mock.expect_run(
         "simctl list",
@@ -663,6 +664,7 @@ fn ios_happy_cleanup_then_idempotent_rerun() {
             ..Default::default()
         },
     );
+    mock2.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     mock2.expect_run(
         "simctl list",
         CmdOutput::success(r#"{"devices":{"rt":[]}}"#),
@@ -726,6 +728,7 @@ fn refuses_pid_with_changed_birth_identity() {
             ..Default::default()
         },
     );
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     let receipt = cleanup(&mut mock, &repo, "iosrun1");
     assert_eq!(receipt.result, ReceiptResult::Cleaned);
     assert_eq!(receipt.cleanup.get("metro").unwrap(), "absent");
@@ -761,6 +764,7 @@ fn kills_group_via_port_when_leader_died_but_children_own_port() {
             ..Default::default()
         },
     ); // port now free
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     let receipt = cleanup(&mut mock, &repo, "iosrun1");
     assert_eq!(receipt.cleanup.get("metro").unwrap(), "removed");
     assert_eq!(receipt.result, ReceiptResult::Cleaned);
@@ -855,6 +859,7 @@ fn android_cleanup_stops_only_own_lease() {
             ..Default::default()
         },
     );
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     // tunnel: alive matching, port owned by the group -> TERM/KILL -> dead, port free
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n")); // not a zombie
@@ -870,6 +875,7 @@ fn android_cleanup_stops_only_own_lease() {
             ..Default::default()
         },
     );
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     // farm: lease is ours -> stop
     mock.expect_run("~/bin/android-farm status", CmdOutput::success(
         "slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=qaren-androidrun1 claimed_at=x state=device\nslot=2 avd=Pixel_10_Pro serial=emulator-5556 adb_port=5557 lease=free state=down\n",
@@ -930,6 +936,7 @@ fn tunnel_cleanup_reaps_live_forward_via_local_port_when_identity_missing() {
             ..Default::default()
         },
     ); // port free after kill
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     let receipt = cleanup(&mut mock, &repo, "androidrun4");
     assert_eq!(
         receipt.result,
@@ -1176,6 +1183,7 @@ fn farm_lease_is_released_after_the_recorded_group_owning_the_port_is_killed() {
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("lsof", free_port()); // post-kill verification
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     mock.expect_run(
         "~/bin/android-farm status",
         farm_status_leased_by("androidrun21"),
@@ -1338,6 +1346,7 @@ fn cleanup_save_failure_downgrades_cleaned_to_failed() {
             ..Default::default()
         },
     );
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     let receipt = cleanup(&mut mock, &repo, "iosrun1");
     std::fs::set_permissions(&run_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
 
@@ -1538,6 +1547,7 @@ fn cleanup_retains_the_device_lease_until_the_metro_group_is_proven_gone() {
             ..Default::default()
         },
     );
+    mock2.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     let receipt2 = cleanup(&mut mock2, &repo, "iosrun1");
     assert_eq!(
         receipt2.result,

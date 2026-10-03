@@ -106,7 +106,10 @@ in any ASCII-case variant (Unicode case folding is not applied). Overlapping or
 adjacent values render as one `<private>`; a value of at least three characters
 can mask engine punctuation too. Values shorter than three characters are
 masked only as whole quoted strings, so `Save` stays readable when `a` was
-typed. Token redaction runs on the same text and neither hides the other. Row
+typed. Diagnostic redaction follows the
+[CLI diagnostic contract](https://github.com/Lykhoyda/rn-dev-agent/blob/develop/packages/qaren-cli/README.md#preparation-ownership-and-safety-rules).
+If redaction changes the token count, a text segment containing a private value
+renders wholly as `<private>`. Row
 reasons and failure text are bounded to 2,048 characters and row text to 512,
 cut after masking, so a cut can only shorten a `<private>` marker. Indexes,
 counts, and coordinates may also be masked when they contain a private value of

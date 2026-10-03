@@ -1,4 +1,5 @@
 use crate::exec::Runner;
+use crate::redact::OutputText;
 use crate::runrecord::{probe_pid_identity, PidIdentity, PidLiveness};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -98,7 +99,7 @@ pub fn save_json<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
-    let body = serde_json::to_vec_pretty(value)
+    let body = serde_json::to_string_pretty(value)
         .map_err(|e| std::io::Error::other(format!("serialize: {e}")))?;
     std::fs::write(&tmp, body)?;
     std::fs::rename(&tmp, path)
@@ -132,9 +133,9 @@ impl BuildDecision {
 pub struct BuildPlan {
     pub decision: BuildDecision,
     pub fingerprint: String,
-    pub reason: String,
+    pub reason: OutputText,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub evidence: Vec<String>,
+    pub evidence: Vec<OutputText>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<CachedArtifact>,
     // Clean over a generated (git-ignored) native dir must regenerate it via
@@ -174,8 +175,11 @@ pub fn decide(
     let clean = |reason: String, evidence: Vec<String>| BuildPlan {
         decision: BuildDecision::Clean,
         fingerprint: inputs.fingerprint.to_string(),
-        reason,
-        evidence,
+        reason: OutputText::from_output(&reason),
+        evidence: evidence
+            .iter()
+            .map(|text| OutputText::from_output(text))
+            .collect(),
         artifact: None,
         regenerate_native_dir: regenerate,
     };
@@ -244,8 +248,11 @@ pub fn decide(
         BuildPlan {
             decision: BuildDecision::Incremental,
             fingerprint: inputs.fingerprint.to_string(),
-            reason,
-            evidence,
+            reason: OutputText::from_output(&reason),
+            evidence: evidence
+                .iter()
+                .map(|text| OutputText::from_output(text))
+                .collect(),
             artifact: None,
             regenerate_native_dir: false,
         }
@@ -298,10 +305,9 @@ pub fn decide(
                 Some(scheme) => BuildPlan {
                     decision: BuildDecision::Reuse,
                     fingerprint: inputs.fingerprint.to_string(),
-                    reason:
-                        "native inputs are unchanged and the cached dev client is content-verified; reusing it with fresh candidate JS via Metro"
-                            .to_string(),
-                    evidence: vec![
+                    reason: crate::redact::OutputText::from_output("native inputs are unchanged and the cached dev client is content-verified; reusing it with fresh candidate JS via Metro"
+                            ),
+                    evidence: [
                         match_evidence,
                         sha_evidence,
                         format!(
@@ -310,7 +316,7 @@ pub fn decide(
                             artifact.sha256
                         ),
                         format!("dev client launch scheme {scheme:?} is configured"),
-                    ],
+                    ].iter().map(|text| crate::redact::OutputText::from_output(text)).collect(),
                     artifact: Some(artifact.clone()),
                     regenerate_native_dir: false,
                 },

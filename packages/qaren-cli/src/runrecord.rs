@@ -1,6 +1,7 @@
 use crate::candidate::Candidate;
 use crate::exec::{CmdSpec, Runner, Spawned};
 use crate::failure::{Failure, FailureCode};
+use crate::redact::OutputText;
 use crate::scenario::Scenario;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -41,7 +42,7 @@ impl Phase {
 pub struct PidIdentity {
     pub pid: i32,
     pub started_at: String,
-    pub command: String,
+    pub command: OutputText,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,7 +62,7 @@ enum StoredCoreResource {
     Original {
         pid: i32,
         started_at: String,
-        command: String,
+        command: OutputText,
     },
 }
 
@@ -173,11 +174,11 @@ pub struct AppInstallResource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppRemoval {
     pub at: String,
-    pub outcome: String,
+    pub outcome: OutputText,
     pub installed_sha256: String,
-    pub uninstall: String,
-    pub pm_path_after: String,
-    pub package_list_after: String,
+    pub uninstall: OutputText,
+    pub pm_path_after: OutputText,
+    pub package_list_after: OutputText,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,6 +202,30 @@ pub struct UsbDeviceResource {
     pub serial: String,
     pub lock_dir: PathBuf,
     pub holder: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecorderKind {
+    IosSimulator,
+}
+
+// Persisted before the spawn: a None pid means the spawn outcome is unproven.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecorderResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub birth: Option<PidIdentity>,
+    pub kind: RecorderKind,
+    pub device: String,
+    pub output: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrWorktreeResource {
+    pub repo_root: PathBuf,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -264,6 +289,10 @@ pub struct Resources {
     pub core_cleanup: Option<CoreCleanupEvidence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fresh_install: Option<FreshInstallEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorder: Option<RecorderResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_worktree: Option<PrWorktreeResource>,
     // A borrowed device (the booted simulator `check` walks on) is never shut down or deleted.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub device_borrowed: bool,
@@ -343,6 +372,8 @@ impl Resources {
             || self.build_lock.is_some()
             || self.lease.is_some()
             || self.core.is_some()
+            || self.recorder.is_some()
+            || self.pr_worktree.is_some()
     }
 }
 
@@ -350,7 +381,7 @@ impl Resources {
 pub struct HistoryEntry {
     pub at: String,
     pub phase: String,
-    pub note: String,
+    pub note: OutputText,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -410,7 +441,7 @@ impl RunRecord {
         let tmp = dir.join(format!(".run.json.tmp.{}", std::process::id()));
         let write = || -> std::io::Result<()> {
             std::fs::create_dir_all(&dir)?;
-            let body = serde_json::to_vec_pretty(self)
+            let body = serde_json::to_string_pretty(self)
                 .map_err(|e| std::io::Error::other(format!("serialize run record: {e}")))?;
             std::fs::write(&tmp, body)?;
             std::fs::rename(&tmp, &target)?;
@@ -488,7 +519,7 @@ impl RunRecord {
         self.history.push(HistoryEntry {
             at,
             phase: self.phase.as_str().to_string(),
-            note: note.to_string(),
+            note: crate::redact::OutputText::from_output(note),
         });
     }
 }
@@ -516,7 +547,7 @@ pub fn capture_pid_identity(runner: &mut dyn Runner, pid: i32) -> Option<PidIden
     Some(PidIdentity {
         pid,
         started_at: started.stdout.trim().to_string(),
-        command: command.stdout.trim().to_string(),
+        command: crate::redact::OutputText::from_output(command.stdout.trim()),
     })
 }
 

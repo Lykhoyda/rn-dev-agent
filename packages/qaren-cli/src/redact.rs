@@ -11,7 +11,104 @@ pub fn redact_known_key(raw: &str, key: Option<&str>) -> String {
         .replace(key, "[REDACTED_SECRET]")
 }
 
+// Contains the phrase itself, so withholding is a fixed point for every later check.
+pub const PRIVATE_KEY_WITHHELD: &str = "[output withheld: contained private key material]";
+
+pub fn names_private_key(text: &str) -> bool {
+    text.as_bytes()
+        .windows(11)
+        .any(|w| w.eq_ignore_ascii_case(b"private key"))
+}
+
+#[derive(Debug, Clone, Eq, serde::Serialize)]
+#[serde(transparent)]
+pub struct OutputText(String);
+
+impl OutputText {
+    pub fn from_output(raw: &str) -> Self {
+        Self(redact_secrets(raw))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for OutputText {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = <String as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(Self::from_output(&raw))
+    }
+}
+
+impl std::ops::Deref for OutputText {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for OutputText {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<T: AsRef<str> + ?Sized> PartialEq<T> for OutputText {
+    fn eq(&self, other: &T) -> bool {
+        self.0 == other.as_ref()
+    }
+}
+
+impl std::fmt::Display for OutputText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 pub fn redact_secrets(raw: &str) -> String {
+    if names_private_key(raw) {
+        return PRIVATE_KEY_WITHHELD.to_string();
+    }
+    redact_plain(raw)
+}
+
+// Ledger and receipt evidence only; operational records must preserve exact identities.
+pub fn durable_json<T: serde::Serialize>(value: &T) -> serde_json::Result<String> {
+    let text = serde_json::to_string_pretty(value)?;
+    if !names_private_key(&text) {
+        return Ok(text);
+    }
+    fn withhold(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::String(s) if names_private_key(s) => {
+                *s = PRIVATE_KEY_WITHHELD.to_string();
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(withhold),
+            serde_json::Value::Object(map) => {
+                *map = std::mem::take(map)
+                    .into_iter()
+                    .map(|(key, mut item)| {
+                        withhold(&mut item);
+                        let key = if names_private_key(&key) {
+                            PRIVATE_KEY_WITHHELD.to_string()
+                        } else {
+                            key
+                        };
+                        (key, item)
+                    })
+                    .collect();
+            }
+            _ => {}
+        }
+    }
+    let mut value = serde_json::to_value(value)?;
+    withhold(&mut value);
+    serde_json::to_string_pretty(&value)
+}
+
+pub fn redact_plain(raw: &str) -> String {
     let safe = redact_api_key(raw);
     let raw = safe.as_str();
     let mut out = String::with_capacity(raw.len());
@@ -39,11 +136,27 @@ pub fn redact_secrets(raw: &str) -> String {
     };
     let mut redacted = String::with_capacity(out.len());
     let mut redact_next = false;
+    // Quotes and brackets around a token are kept but never hide it.
+    let wrap = |c: char| {
+        matches!(
+            c,
+            '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
+        )
+    };
     for token in out.split_inclusive(char::is_whitespace) {
         let trimmed = token.trim_end();
         let ws = &token[trimmed.len()..];
+        let core = trimmed.trim_start_matches(wrap);
+        let pre = &trimmed[..trimmed.len() - core.len()];
+        // Unopened trailing quotes stay part of the value, as in `password="x"`.
+        let core = if pre.is_empty() {
+            core
+        } else {
+            core.trim_end_matches(wrap)
+        };
+        let suf = &trimmed[pre.len() + core.len()..];
         // npmrc-style assignments carry the value inline or as the next token.
-        let assignment = trimmed.split_once('=').filter(|(key, _)| {
+        let assignment = core.split_once('=').filter(|(key, _)| {
             let key = key.to_ascii_lowercase();
             key.ends_with("authtoken")
                 || key.ends_with("_auth")
@@ -51,20 +164,26 @@ pub fn redact_secrets(raw: &str) -> String {
                 || key.ends_with("token")
                 || key.ends_with("api_key")
         });
-        if redact_next {
+        if redact_next && !core.is_empty() {
+            redacted.push_str(pre);
             redacted.push_str("<redacted>");
+            redacted.push_str(suf);
             redacted.push_str(ws);
             redact_next = false;
         } else if let Some((key, value)) = assignment {
+            redacted.push_str(pre);
             redacted.push_str(key);
             redacted.push('=');
             redacted.push_str(if value.is_empty() { "" } else { "<redacted>" });
+            redacted.push_str(suf);
             redact_next = value.is_empty();
             redacted.push_str(ws);
-        } else if token_like(trimmed) {
+        } else if token_like(core) {
+            redacted.push_str(pre);
             redacted.push_str("<redacted>");
+            redacted.push_str(suf);
             redacted.push_str(ws);
-        } else if matches!(trimmed.to_ascii_lowercase().as_str(), "bearer" | "basic") {
+        } else if matches!(core.to_ascii_lowercase().as_str(), "bearer" | "basic") {
             redacted.push_str(trimmed);
             redacted.push_str(ws);
             redact_next = true;
@@ -75,9 +194,232 @@ pub fn redact_secrets(raw: &str) -> String {
     redacted
 }
 
+// Public text leaves the machine: hostname, home, absolute paths, UUIDs and LAN addresses go.
+#[derive(Debug, Clone, Default)]
+pub struct MachineIdentity {
+    pub hostname: Option<String>,
+    pub home: Option<String>,
+    pub username: Option<String>,
+    // The run's own device ids, serials and ports, recorded by `qaren pr`.
+    pub values: Vec<String>,
+}
+
+impl MachineIdentity {
+    pub fn current() -> Self {
+        MachineIdentity {
+            hostname: hostname(),
+            home: std::env::var("HOME").ok().filter(|h| h.len() > 1),
+            username: username(),
+            values: Vec::new(),
+        }
+    }
+
+    pub fn with_values(&self, values: &[String]) -> Self {
+        let mut machine = self.clone();
+        machine.values.extend(values.iter().cloned());
+        machine
+    }
+}
+
+fn username() -> Option<String> {
+    // SAFETY: getpwuid returns a pointer into static storage or null; the name is copied at once.
+    unsafe {
+        let entry = libc::getpwuid(libc::getuid());
+        if entry.is_null() || (*entry).pw_name.is_null() {
+            return None;
+        }
+        std::ffi::CStr::from_ptr((*entry).pw_name)
+            .to_str()
+            .ok()
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+    }
+}
+
+fn hostname() -> Option<String> {
+    let mut buf = [0u8; 256];
+    // SAFETY: the buffer is valid for its length; gethostname NUL-terminates within it.
+    if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
+        return None;
+    }
+    let end = buf.iter().position(|b| *b == 0)?;
+    String::from_utf8(buf[..end].to_vec())
+        .ok()
+        .filter(|h| !h.is_empty())
+}
+
+pub fn redact_machine(raw: &str, machine: &MachineIdentity) -> String {
+    let mut text = redact_secrets(raw);
+    if let Some(home) = &machine.home {
+        text = text.replace(home.trim_end_matches('/'), "~");
+    }
+    text = redact_absolute_paths(&text);
+    // Known values are replaced as whole words only; shorter than 3 characters is not masked.
+    for value in &machine.values {
+        if value.len() >= 3 {
+            let label = if value.bytes().all(|b| b.is_ascii_digit()) {
+                "<port>"
+            } else {
+                "<device>"
+            };
+            text = replace_ignore_ascii_case(&text, value, label);
+        }
+    }
+    if let Some(user) = machine.username.as_ref().filter(|u| u.len() >= 3) {
+        text = replace_ignore_ascii_case(&text, user, "<user>");
+    }
+    if let Some(host) = &machine.hostname {
+        let short = host.split('.').next().unwrap_or(host);
+        for name in [host.as_str(), short] {
+            if name.len() >= 3 {
+                text = replace_ignore_ascii_case(&text, name, "<host>");
+            }
+        }
+    }
+    redact_lan_ipv4(&redact_uuids(&text))
+}
+
+// Whole-name matches only, so a short hostname cannot eat part of an ordinary word.
+fn replace_ignore_ascii_case(text: &str, needle: &str, with: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let needle = needle.to_ascii_lowercase();
+    let word = |b: Option<&u8>| b.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'-');
+    let bytes = lower.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let (mut at, mut from) = (0, 0);
+    while let Some(i) = lower[from..].find(&needle) {
+        let start = from + i;
+        let end = start + needle.len();
+        from = start + lower[start..].chars().next().unwrap().len_utf8();
+        if word(start.checked_sub(1).and_then(|p| bytes.get(p))) || word(bytes.get(end)) {
+            continue;
+        }
+        out.push_str(&text[at..start]);
+        out.push_str(with);
+        at = end;
+        from = end;
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
+fn is_path_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '~' | '/' | '@' | '+')
+}
+
+// A path starts at a '/' that opens a token and spans at least two segments.
+fn redact_absolute_paths(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let opens = i == 0
+            || matches!(
+                chars[i - 1],
+                ' ' | '\t' | '\n' | '(' | '"' | '\'' | '`' | '[' | '=' | ','
+            );
+        if chars[i] == '/'
+            && opens
+            && chars
+                .get(i + 1)
+                .is_some_and(|c| is_path_char(*c) && *c != '/')
+        {
+            let mut j = i + 1;
+            while j < chars.len() && is_path_char(chars[j]) {
+                j += 1;
+            }
+            if chars[i + 1..j].contains(&'/') {
+                out.push_str("<path>");
+                i = j;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+fn redact_uuids(text: &str) -> String {
+    const GROUPS: [usize; 5] = [8, 4, 4, 4, 12];
+    let bytes = text.as_bytes();
+    let is_uuid_at = |start: usize| {
+        let mut at = start;
+        for (n, len) in GROUPS.iter().enumerate() {
+            if at + len > bytes.len() || !bytes[at..at + len].iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            at += len;
+            if n < 4 {
+                if bytes.get(at) != Some(&b'-') {
+                    return None;
+                }
+                at += 1;
+            }
+        }
+        let bounded = |b: Option<&u8>| !b.is_some_and(|b| b.is_ascii_alphanumeric());
+        (bounded(start.checked_sub(1).and_then(|p| bytes.get(p))) && bounded(bytes.get(at)))
+            .then_some(at)
+    };
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(end) = is_uuid_at(i) {
+            out.push_str("<id>");
+            i = end;
+        } else {
+            let c = text[i..].chars().next().unwrap_or_default();
+            out.push(c);
+            i += c.len_utf8().max(1);
+        }
+    }
+    out
+}
+
+fn is_lan(octets: [u8; 4]) -> bool {
+    matches!(octets, [10, ..] | [192, 168, ..] | [169, 254, ..])
+        || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+}
+
+fn redact_lan_ipv4(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let starts = bytes[i].is_ascii_digit()
+            && !(i > 0 && (bytes[i - 1].is_ascii_digit() || bytes[i - 1] == b'.'));
+        if starts {
+            let end = i + bytes[i..]
+                .iter()
+                .take_while(|b| b.is_ascii_digit() || **b == b'.')
+                .count();
+            let candidate = text[i..end].trim_end_matches('.');
+            let octets: Vec<Option<u8>> = candidate.split('.').map(|p| p.parse().ok()).collect();
+            if octets.len() == 4 && octets.iter().all(Option::is_some) {
+                let o: Vec<u8> = octets.into_iter().flatten().collect();
+                if is_lan([o[0], o[1], o[2], o[3]]) {
+                    out.push_str("<lan>");
+                    i += candidate.len();
+                    continue;
+                }
+            }
+            out.push_str(&text[i..end]);
+            i = end;
+            continue;
+        }
+        let c = text[i..].chars().next().unwrap_or_default();
+        out.push(c);
+        i += c.len_utf8().max(1);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{redact_known_key, redact_secrets};
+    use super::{
+        durable_json, redact_known_key, redact_machine, redact_secrets, MachineIdentity,
+        PRIVATE_KEY_WITHHELD,
+    };
 
     #[test]
     fn typesafe_key_is_redacted_without_a_prefix_and_in_json() {
@@ -95,6 +437,15 @@ mod tests {
     }
 
     #[test]
+    fn quoted_tokens_are_redacted_and_keep_their_quotes() {
+        let raw = r#"type: "ghp_abcdefghijklmnopqrstuvwxyz0123" ('token=hunter2') [github_pat_x1]"#;
+        assert_eq!(
+            redact_secrets(raw),
+            r#"type: "<redacted>" ('token=<redacted>') [<redacted>]"#
+        );
+    }
+
+    #[test]
     fn redacts_url_userinfo_and_npm_tokens() {
         let raw = "fetch https://user:hunter2@registry.example.com/pkg failed npm_abcdefghijklmnopqrstuvwx123456789012 end";
         let clean = redact_secrets(raw);
@@ -107,8 +458,122 @@ mod tests {
     }
 
     #[test]
+    fn any_mention_of_a_private_key_withholds_the_whole_string() {
+        for raw in [
+            "-----BEGIN PRIVATE KEY-----\nFAKEKEYBODY\n-----END PRIVATE KEY-----\n",
+            "FAKEKEYBODY\n-----END OPENSSH PRIVATE KEY----- tail",
+            "FAKEKEYBODY\n<redacted private key>\n",
+            "warning: this Private Key is ignored\nFAKEKEYBODY",
+            PRIVATE_KEY_WITHHELD,
+        ] {
+            assert_eq!(redact_secrets(raw), PRIVATE_KEY_WITHHELD);
+        }
+    }
+
+    #[test]
+    fn durable_json_withholds_nested_strings_and_keys_only_when_named() {
+        let plain = serde_json::json!({"b": 1, "a": ["x"]});
+        assert_eq!(
+            durable_json(&plain).unwrap(),
+            serde_json::to_string_pretty(&plain).unwrap()
+        );
+        let leaky = serde_json::json!({
+            "evidence": ["ok", "FAKEKEYBODY -----END private key-----"],
+            "nested": {"PRIVATE KEY FAKEKEYBODY": "v", "keep": "plain"},
+        });
+        let text = durable_json(&leaky).unwrap();
+        assert!(!text.contains("FAKEKEYBODY"), "{text}");
+        assert!(text.contains("\"plain\""), "{text}");
+    }
+
+    #[test]
+    fn non_key_text_passes_byte_identical() {
+        for plain in [
+            "commit 0123456789abcdef0123456789abcdef01234567 built\n",
+            "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIU\n-----END CERTIFICATE-----\n",
+            "BUILD SUCCEEDED\r\n[1/3] Compiling\n",
+        ] {
+            assert_eq!(redact_secrets(plain), plain);
+        }
+    }
+
+    #[test]
     fn plain_urls_survive_redaction() {
         let raw = "GET https://registry.npmjs.org/react 200";
         assert_eq!(redact_secrets(raw), raw);
+    }
+
+    #[test]
+    fn rejected_multibyte_names_preserve_boundaries_and_later_matches() {
+        let machine = MachineIdentity {
+            values: vec!["Антон".into(), "设备".into()],
+            username: Some("用户".into()),
+            hostname: Some("主机.local".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            redact_machine(
+                "Антон-ios Антон; 设备-ios 设备; 用户-ios 用户; 主机.local-ios 主机.local 主机-ios 主机",
+                &machine,
+            ),
+            "Антон-ios <device>; 设备-ios <device>; 用户-ios <user>; <host>.local-ios <host> 主机-ios <host>"
+        );
+    }
+
+    #[test]
+    fn identity_matching_keeps_ascii_case_and_word_boundaries() {
+        let machine = MachineIdentity {
+            values: vec!["Device".into()],
+            username: Some("Alice".into()),
+            hostname: Some("Mac.local".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            redact_machine(
+                "Device-ios DEVICE xDevice Alice-ios ALICE Mac-ios MAC.local macOS MAC",
+                &machine
+            ),
+            "Device-ios <device> xDevice Alice-ios <user> Mac-ios <host> macOS <host>"
+        );
+    }
+
+    #[test]
+    fn machine_identity_is_removed_from_public_text() {
+        let machine = MachineIdentity {
+            hostname: Some("Work-MacBook-Pro.local".into()),
+            home: Some("/Users/alice".into()),
+            ..Default::default()
+        };
+        let raw = "on work-macbook-pro at /Users/alice/app/plan.md and /private/var/x.log, sim 1DC408C4-51DA-4C4F-ACA1-39881C916FDD via 192.168.1.20:8081, 10.0.0.7, 172.20.1.1 and 169.254.3.4; keep 8.8.8.8, 172.32.0.1, https://github.com/o/r/pull/12, ./media/video.mp4 and 1.2.3.4.5";
+        let clean = redact_machine(raw, &machine);
+        for leak in [
+            "macbook", "alice", "/Users", "/private", "1DC408C4", "192.168", "10.0.0.7", "172.20",
+            "169.254",
+        ] {
+            assert!(
+                !clean
+                    .to_ascii_lowercase()
+                    .contains(&leak.to_ascii_lowercase()),
+                "{leak}: {clean}"
+            );
+        }
+        for kept in [
+            "8.8.8.8",
+            "172.32.0.1",
+            "https://github.com/o/r/pull/12",
+            "./media/video.mp4",
+        ] {
+            assert!(clean.contains(kept), "{kept}: {clean}");
+        }
+        assert_eq!(redact_machine(&clean, &machine), clean);
+        let short = MachineIdentity {
+            hostname: Some("mac.local".into()),
+            home: None,
+            ..Default::default()
+        };
+        assert_eq!(
+            redact_machine("macOS on mac, MAC.local", &short),
+            "macOS on <host>, <host>"
+        );
     }
 }

@@ -1,4 +1,5 @@
 import type { ToolResult } from '../utils.js';
+import type { QaDispatchContext } from '../domain/qa-dispatch.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { maestroRefusalResult, runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { detectPlatform } from './platform-utils.js';
@@ -45,6 +46,7 @@ const ACCEPT_LABELS_ANDROID = [
 const DISMISS_LABELS_ANDROID = ['Deny', 'DENY', 'Cancel', 'CANCEL', 'No', 'Not now'];
 
 export interface SystemDialogArgs {
+  qaContext?: QaDispatchContext;
   label?: string;
   platform?: 'ios' | 'android';
   timeoutMs?: number;
@@ -100,42 +102,52 @@ export interface RunnerDialogOutcome {
   availableButtons?: string[];
 }
 
-/**
- * GH #545: Maestro's iOS driver only sees the app under test, so a
- * SpringBoard-owned dialog (the deeplink "Open in <app>?" confirmation,
- * permission prompts) never matches a tapOn probe — every label times out at
- * ~4s and the tool reports DIALOG_NOT_FOUND while the dialog sits on screen.
- * The rn-fast-runner CAN see it: when a blocking SpringBoard modal is up, its
- * snapshot returns that modal exclusively as an Alert-rooted payload
- * (RnFastRunnerTests+SystemModal.swift), and press resolves to a coordinate
- * tap that lands on whatever owns the pixels.
- *
- * Returns null when the runner path does not apply (no open iOS session,
- * snapshot failed, or no blocking SpringBoard modal) — callers fall back to
- * the Maestro probe, which still covers Android and in-app alerts. Returns
- * tapped:false with the dialog's actual buttons when the modal is up but no
- * probed label matched, so the agent can retry with an exact label instead
- * of burning the Maestro timeout on a dialog Maestro cannot reach.
- */
+// SpringBoard modals require the native runner; QA snapshot uncertainty never permits fallback.
 export async function tapSystemDialogViaRunner(
   labels: string[],
+  qaContext?: QaDispatchContext,
 ): Promise<RunnerDialogOutcome | null> {
-  if (!iosSessionActiveFn()) return null;
-  let snap: SnapshotFetchResult;
-  try {
-    snap = await fetchSnapshotNodesFn(false);
-  } catch {
+  qaContext?.check();
+  if (!iosSessionActiveFn()) {
+    qaContext?.invalidate();
     return null;
   }
-  if (!snap.ok) return null;
+  let snap: SnapshotFetchResult;
+  try {
+    snap = await fetchSnapshotNodesFn(false, qaContext);
+  } catch {
+    qaContext?.invalidate();
+    return null;
+  }
+  if (!snap.ok) {
+    qaContext?.invalidate();
+    return null;
+  }
   const root = snap.nodes[0];
+  if (qaContext && (!root?.type || snap.recoveredTier)) qaContext.invalidate();
   if (!root || root.type !== 'Alert') return null;
   const buttons = snap.nodes.slice(1);
   for (const label of labels) {
     const match = buttons.find((n) => n.label === label || n.identifier === label);
     if (!match) continue;
-    const press = await pressCandidateFn({ ref: match.ref, label: match.label }, 'click');
-    if (press.isError) continue;
+    let press: ToolResult;
+    try {
+      press = await pressCandidateFn(
+        { ref: match.ref, label: match.label },
+        'click',
+        undefined,
+        false,
+        qaContext,
+      );
+    } catch (error) {
+      qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
+      throw error;
+    }
+    qaContext?.assertComplete();
+    if (press.isError) {
+      qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
+      continue;
+    }
     return { tapped: true, matchedLabel: label, dialogTitle: root.label };
   }
   return {
@@ -176,18 +188,30 @@ async function tapSystemDialog(
   platform: 'ios' | 'android',
   totalTimeoutMs: number,
   slug: string,
+  qaContext?: QaDispatchContext,
 ): Promise<ToolResult> {
+  const session = getActiveSession();
+  if (qaContext && (session?.platform !== platform || !session.deviceId || !session.appId)) {
+    qaContext.invalidate();
+  }
   // One non-optional regex selector keeps correctness (a miss exits non-zero)
   // without paying a fresh iOS WDA cold start for every candidate label.
   const selector = `^(?:${labels.map(regexEscape).join('|')})$`;
   const yaml = `- tapOn:\n    text: "${yamlEscape(selector)}"`;
   const result = await runMaestroInlineFn(yaml, {
+    qaContext,
+    ...(qaContext ? { deviceId: session!.deviceId, appId: session!.appId } : {}),
     platform,
     timeoutMs: totalTimeoutMs,
     slug,
   });
+  qaContext?.assertComplete();
   if (result.passed) {
     return okResult({ tapped: true, platform, triedLabels: labels, selector });
+  }
+  if (qaContext) {
+    if (qaContext.authorizations > 0) qaContext.refuse('ACTION_OUTCOME_UNCERTAIN');
+    qaContext.invalidate();
   }
   if (result.deviceAuthority && shouldRejectMaestroDeviceAuthority(result.deviceAuthority)) {
     return failResult(
@@ -240,6 +264,7 @@ async function handleSystemDialog(
   androidDefaults: string[],
   slug: string,
 ): Promise<ToolResult> {
+  args.qaContext?.check();
   const platform = args.platform ?? (await detectPlatform());
   if (!platform) {
     return failResult('No device detected. Pass platform or boot a device first.', {
@@ -249,7 +274,7 @@ async function handleSystemDialog(
   const defaults = platform === 'ios' ? iosDefaults : androidDefaults;
   const labels = pickLabels(args.label, defaults);
   if (platform === 'ios') {
-    const runner = await tapSystemDialogViaRunner(labels);
+    const runner = await tapSystemDialogViaRunner(labels, args.qaContext);
     if (runner?.tapped) {
       return okResult({
         tapped: true,
@@ -276,7 +301,13 @@ async function handleSystemDialog(
       );
     }
   }
-  return tapSystemDialog(labels, platform, args.timeoutMs ?? DEFAULT_DIALOG_TIMEOUT_MS, slug);
+  return tapSystemDialog(
+    labels,
+    platform,
+    args.timeoutMs ?? DEFAULT_DIALOG_TIMEOUT_MS,
+    slug,
+    args.qaContext,
+  );
 }
 
 export function createDeviceAcceptSystemDialogHandler(): (

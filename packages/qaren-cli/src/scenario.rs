@@ -118,6 +118,58 @@ pub struct BuildSpec {
     pub strategy: BuildStrategy,
     #[serde(default = "d_owner")]
     pub owner: BuildOwner,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ios_workspace: Option<IosWorkspaceBuild>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IosWorkspaceBuild {
+    pub workspace: String,
+    pub scheme: String,
+}
+
+impl IosWorkspaceBuild {
+    pub(crate) fn validate_for(
+        &self,
+        platform: Platform,
+        owner: BuildOwner,
+    ) -> Result<(), Failure> {
+        if platform != Platform::Ios || owner != BuildOwner::Cli {
+            return Err(Failure::new(
+                "validate",
+                FailureCode::ScenarioInvalid,
+                "explicit iOS workspace builds require platform ios and build.owner cli",
+                "remove the workspace build opt-in for Android or handoff runs",
+            ));
+        }
+        self.validate()
+    }
+
+    pub fn validate(&self) -> Result<(), Failure> {
+        let workspace_ok = self.workspace.starts_with("ios/")
+            && self.workspace.ends_with(".xcworkspace")
+            && !self.workspace.contains('\\')
+            && !self.workspace.chars().any(char::is_control)
+            && self
+                .workspace
+                .split('/')
+                .all(|part| !matches!(part, "" | "." | ".."));
+        let scheme_ok = !self.scheme.is_empty()
+            && self.scheme == self.scheme.trim()
+            && self.scheme.len() <= 256
+            && !self.scheme.starts_with('-')
+            && !self.scheme.chars().any(char::is_control);
+        if !workspace_ok || !scheme_ok {
+            return Err(Failure::new(
+                "validate",
+                FailureCode::ScenarioInvalid,
+                "iOS workspace build requires a normal project-relative ios/*.xcworkspace path and a trimmed 1–256-byte scheme without controls or a leading hyphen",
+                "set the explicit workspace and scheme in ios.build (build.ios_workspace for prepare)",
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn d_strategy() -> BuildStrategy {
@@ -133,6 +185,7 @@ impl Default for BuildSpec {
         BuildSpec {
             strategy: BuildStrategy::Auto,
             owner: BuildOwner::Cli,
+            ios_workspace: None,
         }
     }
 }
@@ -232,6 +285,9 @@ impl Scenario {
                 format!("scenario schema {:?} is not {SCENARIO_SCHEMA}", self.schema),
                 "use a scenario with schema qaren/1",
             ));
+        }
+        if let Some(workspace) = &self.build.ios_workspace {
+            workspace.validate_for(self.platform, self.build.owner)?;
         }
         if self.name.is_empty()
             || !self

@@ -1,15 +1,11 @@
 import { isRecord } from './questions.js';
 import type { CDPClient } from '../cdp-client.js';
 import type { ReactObservation } from './capture.js';
-import {
-  assertPrivateInputPayload,
-  bindPrivateInputs,
-  PrivateInputCaptureError,
-} from './private-input.js';
+import { PrivateInputCaptureError } from './private-input.js';
 import { validateReactHostEvidence } from './screen.js';
 import type { DigestEntry } from './screen.js';
 
-function completion(value: unknown, start: boolean, id?: string): Record<string, unknown> {
+function completion(value: unknown, id?: string): Record<string, unknown> {
   if (
     !isRecord(value) ||
     value.v !== 1 ||
@@ -17,9 +13,7 @@ function completion(value: unknown, start: boolean, id?: string): Record<string,
     !/^[a-f0-9]{1,64}$/.test(value.id) ||
     (id !== undefined && value.id !== id) ||
     (value.state !== 'pending' && value.state !== 'ready') ||
-    Object.keys(value).some(
-      (key) => !['v', 'id', 'state', 'tree', ...(start ? ['inputs'] : [])].includes(key),
-    ) ||
+    Object.keys(value).some((key) => !['v', 'id', 'state', 'tree'].includes(key)) ||
     (value.state === 'pending' && value.tree !== undefined)
   ) {
     throw new PrivateInputCaptureError();
@@ -90,6 +84,23 @@ function publicObservation(tree: unknown): ReactObservation {
       }
       result.capabilities = { press: entry.capabilities.press, fill: entry.capabilities.fill };
     }
+    if (entry.hidden !== undefined) {
+      if (entry.hidden !== true) throw new PrivateInputCaptureError();
+      result.hidden = true;
+    }
+    if (entry.compositeWrapper !== undefined) {
+      if (entry.compositeWrapper !== true) throw new PrivateInputCaptureError();
+      result.compositeWrapper = true;
+    }
+    if (entry.handlerless !== undefined) {
+      if (
+        entry.handlerless !== true ||
+        result.capabilities?.press !== false ||
+        result.capabilities.fill !== false
+      )
+        throw new PrivateInputCaptureError();
+      result.handlerless = true;
+    }
     return result;
   });
   return {
@@ -126,23 +137,19 @@ export async function captureQaReact(
             `globalThis.__QAREN.beginQaCapture(${typography === true ? 'true' : 'false'})`,
             remaining(),
           ),
-          true,
         );
         remaining();
-        const inputs = start.inputs;
-        assertPrivateInputPayload(inputs);
         const id = start.id as string;
         let current = start;
         while (current.state === 'pending') {
           await new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining())));
           current = completion(
             await evaluate(`globalThis.__QAREN.readQaCapture(${JSON.stringify(id)})`, remaining()),
-            false,
             id,
           );
           remaining();
         }
-        const observation = bindPrivateInputs(publicObservation(current.tree), inputs);
+        const observation = publicObservation(current.tree);
         remaining();
         return observation;
       }),

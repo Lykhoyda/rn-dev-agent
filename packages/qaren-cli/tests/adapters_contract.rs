@@ -305,8 +305,14 @@ fn ios_generic_build_capability_is_app_local_bounded_private_and_fail_closed() {
         let supported =
             output.ok() && output.stderr.is_empty() && output.stdout == common::IOS_BUILD_HELP;
         let mut mock = qaren::exec::MockRunner::new();
-        mock.expect_run("pnpm exec expo run:ios --help", output);
-        let result = ios::require_generic_build(&mut mock, root);
+        mock.expect_run(
+            &format!(
+                "{} run:ios --help",
+                root.join("node_modules/.bin/expo").display()
+            ),
+            output,
+        );
+        let result = ios::require_build(&mut mock, root, None);
         assert_eq!(result.is_ok(), supported);
         if let Err(failure) = result {
             assert!(failure.code.is_refusal());
@@ -322,11 +328,17 @@ fn ios_generic_build_capability_is_app_local_bounded_private_and_fail_closed() {
         assert_eq!(mock.private_inputs, vec![Vec::<u8>::new()]);
         let spec = &mock.calls[0];
         assert_eq!(spec.cwd.as_deref(), Some(root));
-        assert_eq!(spec.args, ["exec", "expo", "run:ios", "--help"]);
+        assert_eq!(
+            spec.program,
+            root.join("node_modules/.bin/expo").to_string_lossy()
+        );
+        assert_eq!(spec.args, ["run:ios", "--help"]);
         assert_eq!(spec.timeout_seconds, 15);
-        for key in ["CI", "EXPO_NO_TELEMETRY", "NO_COLOR"] {
+        for key in ["EXPO_NO_TELEMETRY", "NO_COLOR"] {
             assert!(spec.env.contains(&(key.into(), "1".into())));
         }
+        assert_eq!(spec.unset, ["CI"]);
+        assert!(!spec.env.iter().any(|(k, _)| k == "CI"));
     }
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(
@@ -335,7 +347,7 @@ fn ios_generic_build_capability_is_app_local_bounded_private_and_fail_closed() {
     )
     .unwrap();
     let mut mock = qaren::exec::MockRunner::new();
-    assert!(ios::require_generic_build(&mut mock, root)
+    assert!(ios::require_build(&mut mock, root, None)
         .unwrap_err()
         .code
         .is_refusal());
@@ -345,7 +357,7 @@ fn ios_generic_build_capability_is_app_local_bounded_private_and_fail_closed() {
     );
     std::fs::remove_file(root.join("node_modules/.bin/expo")).unwrap();
     let mut mock = qaren::exec::MockRunner::new();
-    assert!(ios::require_generic_build(&mut mock, root)
+    assert!(ios::require_build(&mut mock, root, None)
         .unwrap_err()
         .code
         .is_refusal());
@@ -368,7 +380,7 @@ fn ios_launch_targets_the_verified_bundle_without_scheme_approval() {
             "EXACT-UDID",
             "com.x.y",
             "--initialUrl",
-            "http://127.0.0.1:8791"
+            "http://127.0.0.1:8791/?disableOnboarding=1"
         ]
     );
     assert_eq!(spec.timeout_seconds, 60);
@@ -380,6 +392,7 @@ fn ios_build_command_is_finite_generic_and_writes_only_to_the_run_output() {
         Path::new("/repo/test-app"),
         Path::new("/runs/check/ios-build"),
         2400,
+        None,
     );
     assert_eq!(
         spec.args,
@@ -394,8 +407,201 @@ fn ios_build_command_is_finite_generic_and_writes_only_to_the_run_output() {
             "/runs/check/ios-build"
         ]
     );
-    assert!(spec.env.contains(&("CI".to_string(), "1".to_string())));
+    assert_eq!(spec.unset, ["CI"]);
+    assert!(!spec.env.iter().any(|(k, _)| k == "CI"));
     assert_eq!(spec.timeout_seconds, 2400);
+}
+
+#[test]
+fn explicit_ios_workspace_build_is_finite_generic_and_preserves_literal_names() {
+    let workspace = qaren::scenario::IosWorkspaceBuild {
+        workspace: "ios/Native Projects/Unrelated App.xcworkspace".into(),
+        scheme: "Arbitrary App (Debug)".into(),
+    };
+    let spec = ios::build_spec(
+        Path::new("/repo/My Project"),
+        Path::new("/runs/check one/ios-build"),
+        1234,
+        Some(&workspace),
+    );
+    assert_eq!(spec.program, "xcrun");
+    assert_eq!(
+        spec.args,
+        [
+            "xcodebuild",
+            "-workspace",
+            "/repo/My Project/ios/Native Projects/Unrelated App.xcworkspace",
+            "-scheme",
+            "Arbitrary App (Debug)",
+            "-configuration",
+            "Debug",
+            "-sdk",
+            "iphonesimulator",
+            "-destination",
+            "generic/platform=iOS Simulator",
+            "-derivedDataPath",
+            "/runs/check one/ios-derived-data",
+            "CODE_SIGNING_ALLOWED=NO",
+            "CODE_SIGNING_REQUIRED=NO",
+            "build"
+        ]
+    );
+    assert_eq!(spec.cwd.as_deref(), Some(Path::new("/repo/My Project")));
+    assert_eq!(spec.timeout_seconds, 1234);
+    assert_eq!(
+        spec.env,
+        [
+            ("EXPO_NO_TELEMETRY".into(), "1".into()),
+            ("RCT_NO_LAUNCH_PACKAGER".into(), "1".into()),
+        ]
+    );
+    assert_eq!(spec.unset, ["CI"]);
+}
+
+#[test]
+fn explicit_workspace_admission_and_revalidation_refuse_non_plain_paths_without_probes() {
+    use std::os::unix::fs::symlink;
+    for case in [
+        "missing-root",
+        "root-symlink",
+        "missing-ios",
+        "ios-file",
+        "ios-symlink",
+        "ancestor-file",
+        "ancestor-symlink",
+        "missing-workspace",
+        "workspace-file",
+        "workspace-symlink",
+        "missing-data",
+        "data-directory",
+        "data-symlink",
+        "data-dangling",
+    ] {
+        let repo = common::temp_repo();
+        let mut root = repo.join("test-app");
+        let spec = qaren::scenario::IosWorkspaceBuild {
+            workspace: "ios/PRIVATE_NESTED/PRIVATE_APP.xcworkspace".into(),
+            scheme: "PRIVATE_SCHEME".into(),
+        };
+        let workspace = root.join(&spec.workspace);
+        let data = workspace.join("contents.xcworkspacedata");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(&data, "PRIVATE_OPAQUE_CONTENT").unwrap();
+        let mut runner = qaren::exec::MockRunner::new();
+        ios::require_build(&mut runner, &root, Some(&spec)).unwrap();
+        match case {
+            "missing-root" => std::fs::remove_dir_all(&root).unwrap(),
+            "root-symlink" => {
+                let alias = repo.join("PRIVATE_ROOT");
+                symlink(&root, &alias).unwrap();
+                root = alias;
+            }
+            "missing-ios" | "ios-file" | "ios-symlink" => {
+                let path = root.join("ios");
+                let saved = repo.join("PRIVATE_SAVED_IOS");
+                std::fs::rename(&path, &saved).unwrap();
+                if case == "ios-file" {
+                    std::fs::write(&path, "file").unwrap();
+                }
+                if case == "ios-symlink" {
+                    symlink(&saved, &path).unwrap();
+                }
+            }
+            "ancestor-file" | "ancestor-symlink" => {
+                let path = workspace.parent().unwrap();
+                let saved = repo.join("PRIVATE_SAVED_ANCESTOR");
+                std::fs::rename(path, &saved).unwrap();
+                if case == "ancestor-file" {
+                    std::fs::write(path, "file").unwrap();
+                } else {
+                    symlink(&saved, path).unwrap();
+                }
+            }
+            "missing-workspace" | "workspace-file" | "workspace-symlink" => {
+                let saved = repo.join("PRIVATE_SAVED_WORKSPACE");
+                std::fs::rename(&workspace, &saved).unwrap();
+                if case == "workspace-file" {
+                    std::fs::write(&workspace, "file").unwrap();
+                }
+                if case == "workspace-symlink" {
+                    symlink(&saved, &workspace).unwrap();
+                }
+            }
+            "missing-data" | "data-directory" | "data-symlink" | "data-dangling" => {
+                let saved = repo.join("PRIVATE_SAVED_DATA");
+                std::fs::rename(&data, &saved).unwrap();
+                match case {
+                    "data-directory" => std::fs::create_dir(&data).unwrap(),
+                    "data-symlink" => symlink(&saved, &data).unwrap(),
+                    "data-dangling" => symlink(repo.join("PRIVATE_ABSENT"), &data).unwrap(),
+                    _ => {}
+                }
+            }
+            _ => unreachable!(),
+        }
+        for result in [
+            ios::validate_workspace(&root, &spec),
+            ios::require_build(&mut runner, &root, Some(&spec)),
+        ] {
+            let failure = result.expect_err(case);
+            assert_eq!(
+                failure.code,
+                qaren::failure::FailureCode::IosBuildCapabilityUnavailable
+            );
+            assert!(failure.evidence.is_empty());
+            let public = serde_json::to_string(&failure).unwrap();
+            assert!(!public.contains("PRIVATE_"), "{case}: {public}");
+            assert!(!public.contains(&root.to_string_lossy().to_string()));
+        }
+        assert!(runner.calls.is_empty(), "{case}");
+        assert!(runner.private_inputs.is_empty(), "{case}");
+    }
+}
+
+#[test]
+fn explicit_workspace_admission_refuses_lexical_escape_even_when_target_exists() {
+    let repo = common::temp_repo();
+    let root = repo.join("test-app");
+    std::fs::create_dir_all(root.join("ios")).unwrap();
+    let outside = root.join("PRIVATE_OUTSIDE.xcworkspace");
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("contents.xcworkspacedata"), "opaque").unwrap();
+    for workspace in [
+        "ios/../PRIVATE_OUTSIDE.xcworkspace".to_string(),
+        outside.to_string_lossy().to_string(),
+    ] {
+        let spec = qaren::scenario::IosWorkspaceBuild {
+            workspace,
+            scheme: "App".into(),
+        };
+        let failure = ios::validate_workspace(&root, &spec).unwrap_err();
+        assert_eq!(
+            failure.code,
+            qaren::failure::FailureCode::IosBuildCapabilityUnavailable
+        );
+        assert!(!serde_json::to_string(&failure)
+            .unwrap()
+            .contains("PRIVATE_"));
+    }
+}
+
+#[test]
+fn ios_output_accepts_one_direct_app_with_extra_build_products() {
+    let repo = common::temp_repo();
+    let output = repo.join("ios-build");
+    let app = output.join("Arbitrary App Name.app");
+    common::write_ios_app(&app);
+    for product in [
+        "Pods.framework",
+        "Resources.bundle",
+        "Arbitrary App Name.app.dSYM",
+        "Nested/Other.app",
+    ] {
+        std::fs::create_dir_all(output.join(product)).unwrap();
+    }
+    std::fs::write(output.join("libPods.a"), "library").unwrap();
+    assert_eq!(ios::built_app(&output).unwrap(), app);
+    assert!(output.join("Pods.framework").is_dir());
 }
 
 #[test]
@@ -457,6 +663,8 @@ fn ios_launcher_verification_checks_the_linked_image_and_argument_and_refuses_lo
             assert!(!format!("{result:?}").contains("PRIVATE_BINARY_CONTENT"));
             for spec in &mock.calls[3..] {
                 assert_eq!(spec.args.last().unwrap(), &image.to_string_lossy());
+                assert_eq!(spec.program, "/bin/bash");
+                assert!(spec.args.iter().any(|a| a.contains("| grep ")));
             }
             assert_eq!(mock.private_inputs.len(), 5);
             assert_eq!(mock.remaining(), 0);
@@ -492,11 +700,14 @@ fn ios_launcher_verification_accepts_a_linked_debug_image_with_spaces_in_its_nam
         CmdOutput::success("My App.app/My App:\n\t@rpath/My App.debug.dylib (compatibility version 0.0.0, current version 0.0.0)\n"),
     );
     mock.expect_run(
-        &format!("nm -j -U {}", image.display()),
+        &format!(
+            "grep -F EXDevLauncherController qaren-probe {}",
+            image.display()
+        ),
         CmdOutput::success(common::IOS_LAUNCHER_SYMBOLS),
     );
     mock.expect_run(
-        &format!("otool -v -s __TEXT __cstring {}", image.display()),
+        &format!("--initialUrl$' qaren-probe {}", image.display()),
         CmdOutput::success("0000000100012345  --initialUrl\n"),
     );
 
@@ -735,6 +946,157 @@ fn launchctl_parsing_requires_live_pid_and_exact_label() {
 }
 
 #[test]
+fn runner_host_inventory_is_bounded_complete_and_tri_state() {
+    use ios::RunnerHostPresence::{Absent, Present, Unknown};
+    let app = "dev.lykhoyda.rndevagent.fastrunner";
+    let test = format!("{app}.uitests.xctrunner");
+    for (rows, expected) in [
+        ("1 0 com.apple.SpringBoard\n".into(), Absent),
+        (
+            format!("42 0 UIKitApplication:{app}[abc][rb-legacy]\n"),
+            Present,
+        ),
+        (format!("43 0 UIKitApplication:{test}[abc]\n"), Present),
+        (
+            format!("- -9 UIKitApplication:{app}[abc]\n- 0 UIKitApplication:{test}[def]\n"),
+            Absent,
+        ),
+        (
+            format!(
+                "42 0 UIKitApplication:{app}.other[abc]\n43 0 UIKitApplication:other.{app}[def]\n"
+            ),
+            Absent,
+        ),
+        (format!("42 0 {test}\n"), Present),
+        (
+            format!("42 0 UIKitApplication:{app}[abc]\nbroken\n"),
+            Unknown,
+        ),
+        (format!("42 0 UIKitApplication:{app}\n"), Unknown),
+        (format!("42 0 UIKitApplication:{app}[abc\n"), Unknown),
+        (format!("42 0 UIKitApplication:{app}[]\n"), Unknown),
+        (format!("42 0 UIKitApplication:{app}[abc]junk\n"), Unknown),
+        ("".into(), Unknown),
+        ("1 0 com.apple.SpringBoard".into(), Unknown),
+        ("1 0 com.apple.SpringBoard\n\n".into(), Unknown),
+        (
+            "1 0 com.apple.SpringBoard\n1 0 com.apple.SpringBoard\n".into(),
+            Unknown,
+        ),
+        ("1 0\n".into(), Unknown),
+        ("1 0 com.apple.SpringBoard extra\n".into(), Unknown),
+        ("-1 0 com.apple.SpringBoard\n".into(), Unknown),
+        ("0 0 com.apple.SpringBoard\n".into(), Unknown),
+        ("+1 0 com.apple.SpringBoard\n".into(), Unknown),
+        ("1 status com.apple.SpringBoard\n".into(), Unknown),
+        ("1 0 com.apple.\0SpringBoard\n".into(), Unknown),
+        ("1 0 com.apple.\u{fffd}SpringBoard\n".into(), Unknown),
+        ("1 0 com.apple.SpringBoard\r\n".into(), Unknown),
+        (format!("1 0 {}\n", "x".repeat(1024 * 1024)), Unknown),
+        (
+            (1..=16_385)
+                .map(|i| format!("{i} 0 service.{i}\n"))
+                .collect(),
+            Unknown,
+        ),
+    ] {
+        assert_eq!(
+            ios::parse_runner_hosts(&format!("PID\tStatus\tLabel\n{rows}")),
+            expected,
+            "rows: {:?}",
+            &rows[..rows.len().min(150)]
+        );
+    }
+    for raw in [
+        "",
+        "1 0 com.apple.SpringBoard\n",
+        "pid status label\n1 0 com.apple.SpringBoard\n",
+    ] {
+        assert_eq!(ios::parse_runner_hosts(raw), Unknown);
+    }
+    let prefix = "PID Status Label\n1 0 ";
+    let at_capture_boundary = format!("{prefix}{}\n", "x".repeat(1024 * 1024 - prefix.len() - 1));
+    assert_eq!(ios::parse_runner_hosts(&at_capture_boundary), Unknown);
+}
+
+#[test]
+fn runner_host_probe_requires_exact_inventory_and_clean_scoped_output() {
+    use ios::RunnerHostPresence::{Absent, Unknown};
+    let udid = "AAAABBBB-1111-2222-3333-444455556666";
+    let sim = serde_json::json!({"udid":udid,"state":"Booted","isAvailable":true,
+        "name":"selected","deviceTypeIdentifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17"});
+    let inventory = |sims: Vec<serde_json::Value>| {
+        serde_json::json!({"devices":{
+            "com.apple.CoreSimulator.SimRuntime.iOS-26-4":sims
+        }})
+        .to_string()
+    };
+    let mut shutdown = sim.clone();
+    shutdown["state"] = "Shutdown".into();
+    let mut other = sim.clone();
+    other["udid"] = "BBBBBBBB-1111-2222-3333-444455556666".into();
+    for (raw, expected) in [
+        (inventory(vec![shutdown.clone(), other.clone()]), Absent),
+        (inventory(vec![other]), Unknown),
+        (inventory(vec![shutdown.clone(), shutdown]), Unknown),
+        (
+            inventory(vec![sim.clone()]).replace("Booted", "Booting"),
+            Unknown,
+        ),
+        (
+            inventory(vec![sim.clone()]).replace("true", "false"),
+            Unknown,
+        ),
+        (
+            inventory(vec![sim.clone()]).replace("iOS-26-4", "tvOS-26-4"),
+            Unknown,
+        ),
+        (
+            inventory(vec![sim.clone()]).replace(udid, &udid.to_ascii_lowercase()),
+            Unknown,
+        ),
+        ("{\"devices\":{}}".into(), Unknown),
+        ("{\"devices\":".into(), Unknown),
+    ] {
+        let mut mock = qaren::exec::MockRunner::new();
+        mock.expect_run("simctl list devices -j", CmdOutput::success(&raw));
+        assert_eq!(ios::probe_runner_hosts(&mut mock, udid), expected);
+        assert_eq!(mock.remaining(), 0);
+        assert_eq!(mock.calls.len(), 1);
+    }
+    let clear = "PID Status Label\n1 0 com.apple.SpringBoard\n";
+    for output in [
+        CmdOutput::failed(1, ""),
+        CmdOutput {
+            timed_out: true,
+            ..CmdOutput::success(clear)
+        },
+        CmdOutput {
+            stderr: "warning".into(),
+            ..CmdOutput::success(clear)
+        },
+        CmdOutput {
+            exit_code: None,
+            ..CmdOutput::success(clear)
+        },
+    ] {
+        let mut mock = qaren::exec::MockRunner::new();
+        mock.expect_run(
+            "simctl list devices -j",
+            CmdOutput::success(&inventory(vec![sim.clone()])),
+        );
+        mock.expect_run(&format!("simctl spawn {udid} launchctl list"), output);
+        assert_eq!(ios::probe_runner_hosts(&mut mock, udid), Unknown);
+        assert_eq!(mock.remaining(), 0);
+    }
+    for invalid in ["booted", "", "other", &udid.to_ascii_lowercase()] {
+        let mut mock = qaren::exec::MockRunner::new();
+        assert_eq!(ios::probe_runner_hosts(&mut mock, invalid), Unknown);
+        assert!(mock.calls.is_empty());
+    }
+}
+
+#[test]
 fn port_owner_parsing_is_strict() {
     let free = CmdOutput {
         exit_code: Some(1),
@@ -903,4 +1265,24 @@ fn app_removal_parsers_are_strict() {
         "",
         "com.rndevagent.testapp"
     ));
+}
+
+#[test]
+fn metro_never_passes_ci_into_app_config_evaluation() {
+    let spec = metro::start_spec(Path::new("/repo/app"), 8791);
+    assert_eq!(spec.unset, ["CI"]);
+    assert!(!spec.env.iter().any(|(k, _)| k == "CI"));
+}
+
+#[test]
+fn an_unset_variable_wins_over_the_spec_and_the_parent_environment() {
+    use qaren::exec::{CmdSpec, RealRunner, Runner};
+    let spec = CmdSpec::new("env", "/usr/bin/env", &[], 10)
+        .env("CI", "1")
+        .env("KEEP", "1")
+        .env_remove("CI");
+    let output = RealRunner::new().run(&spec);
+    assert!(output.ok());
+    assert!(output.stdout.lines().any(|l| l == "KEEP=1"));
+    assert!(!output.stdout.lines().any(|l| l.starts_with("CI=")));
 }
