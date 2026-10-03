@@ -115,10 +115,10 @@ for hardware in 0 absent; do
   out=$(FAKE_ARCH=x86_64 FAKE_ARM64="$hardware" HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
   check "Intel $hardware: hook exits 0" 0 "$?"
   check "Intel $hardware: hook prints one unsupported line" "qaren: qaren 2.0 supports Apple silicon Macs only" "$out"
-  out=$(FAKE_ARM64="$hardware" HOME="$tmp/home" PATH=/usr/bin:/bin /bin/bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
+  out=$(FAKE_ARCH=x86_64 FAKE_ARM64="$hardware" HOME="$tmp/home" PATH="$tmp/stubs:/usr/bin:/bin" /bin/bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
   check "Intel $hardware with minimal PATH: hook exits 0" 0 "$?"
   check "Intel $hardware with minimal PATH: unsupported" "qaren: qaren 2.0 supports Apple silicon Macs only" "$out"
-  FAKE_ARM64="$hardware" PATH=/usr/bin:/bin run_install "$tmp/missing.tgz" > "$tmp/intel-stdout"
+  FAKE_ARCH=x86_64 FAKE_ARM64="$hardware" PATH="$tmp/stubs:/usr/bin:/bin" run_install "$tmp/missing.tgz" > "$tmp/intel-stdout"
   check "Intel $hardware with minimal PATH: install refuses" yes "$([ "$?" != 0 ] && echo yes || echo no)"
   check "Intel $hardware with minimal PATH: unsupported" "qaren 2.0 supports Apple silicon Macs only" "$(cat "$tmp/stderr")"
 done
