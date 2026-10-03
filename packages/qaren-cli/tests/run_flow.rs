@@ -3501,8 +3501,6 @@ impl PrRunner {
         if self.app.join("App.tsx").is_file() {
             std::fs::copy(self.app.join("App.tsx"), app.join("App.tsx")).unwrap();
         }
-        std::fs::create_dir_all(app.join(".qaren/actions")).unwrap();
-        std::fs::write(app.join(".qaren/actions/tasks.yaml"), "steps: []\n").unwrap();
     }
 }
 
@@ -3547,6 +3545,11 @@ impl Runner for PrRunner {
         if self.fail_core_spawn && spec.label == "core-walk" {
             self.inner.calls.push(spec.clone());
             return Err(std::io::Error::other("node vanished"));
+        }
+        if spec.label == "core-walk" {
+            let app = spec.cwd.as_ref().unwrap();
+            std::fs::create_dir_all(app.join(".qaren/actions")).unwrap();
+            std::fs::write(app.join(".qaren/actions/tasks.yaml"), "steps: []\n").unwrap();
         }
         self.inner.spawn_piped_unchecked(spec, log)
     }
@@ -3685,9 +3688,9 @@ fn pr_walk_result(candidate_drift: bool) {
     mock.expect_run(
         "git",
         CmdOutput::success(if candidate_drift {
-            " M test-app/App.tsx\0"
+            " M test-app/App.tsx\0?? test-app/.qaren/actions/tasks.yaml\0"
         } else {
-            ""
+            "?? test-app/.qaren/actions/tasks.yaml\0"
         }),
     );
     script_recorder_stop(mock);

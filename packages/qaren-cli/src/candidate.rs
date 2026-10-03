@@ -190,15 +190,30 @@ fn serialize_porcelain_z<'a>(entries: impl IntoIterator<Item = PorcelainEntry<'a
     serialized
 }
 
-pub fn porcelain_without_qaren_state(porcelain_stdout: &str) -> String {
+pub fn porcelain_without_qaren_state(
+    porcelain_stdout: &str,
+    repo_root: &Path,
+    project_root: &Path,
+) -> String {
+    let actions = project_root
+        .strip_prefix(repo_root)
+        .ok()
+        .map(|relative| relative.join(".qaren/actions"));
     let Some(entries) = parse_porcelain_z(porcelain_stdout) else {
         return porcelain_stdout.to_string();
     };
-    serialize_porcelain_z(
-        entries
-            .into_iter()
-            .filter(|entry| !entry.paths().all(is_qaren_state_path)),
-    )
+    serialize_porcelain_z(entries.into_iter().filter(|entry| {
+        !entry.paths().all(|path| {
+            let path_ref = Path::new(path);
+            is_qaren_state_path(path)
+                || actions.as_deref().is_some_and(|actions| {
+                    path_ref.parent() == Some(actions)
+                        && path_ref
+                            .extension()
+                            .is_some_and(|extension| extension == "yaml" || extension == "yml")
+                })
+        })
+    }))
 }
 
 fn is_qaren_state_path(path: &str) -> bool {
@@ -497,7 +512,11 @@ fn verify_unchanged_inner(
             porcelain.summary()
         ));
     }
-    let project_state = porcelain_without_qaren_state(&porcelain.stdout);
+    let project_state = porcelain_without_qaren_state(
+        &porcelain.stdout,
+        &recorded.repo_root,
+        &recorded.project_root,
+    );
     let project_state = if tolerate_integration {
         filter_integration_entries(
             runner,
@@ -662,7 +681,7 @@ pub fn resolve(
             ))
         }
     };
-    let project_state = porcelain_without_qaren_state(&porcelain.stdout);
+    let project_state = porcelain_without_qaren_state(&porcelain.stdout, &repo_root, &project_root);
     // Handoff-mode baselines are normalized through the integration filter so
     // the same comparison holds before and after the session applies (or has
     // left applied) its declared integration surface.
@@ -692,7 +711,55 @@ pub fn resolve(
 
 #[cfg(test)]
 mod tests {
-    use super::porcelain_without_qaren_state;
+    fn porcelain_without_qaren_state(porcelain: &str) -> String {
+        super::porcelain_without_qaren_state(
+            porcelain,
+            std::path::Path::new("repo"),
+            std::path::Path::new("repo"),
+        )
+    }
+
+    #[test]
+    fn app_actions_are_outputs_but_cross_boundary_renames_are_changes() {
+        for (porcelain, expected) in [
+            ("?? test-app/.qaren/actions/tasks.yaml\0", ""),
+            (" M test-app/.qaren/actions/tasks.yml\0", ""),
+            (" D test-app/.qaren/actions/tasks.yaml\0", ""),
+            (
+                "R  test-app/.qaren/actions/new.yml\0test-app/.qaren/actions/old.yaml\0",
+                "",
+            ),
+            (
+                "R  test-app/.qaren/actions/tasks.yaml\0test-app/App.tsx\0",
+                "R  test-app/.qaren/actions/tasks.yaml\0test-app/App.tsx\0",
+            ),
+            (
+                "R  test-app/App.tsx\0test-app/.qaren/actions/tasks.yaml\0",
+                "R  test-app/App.tsx\0test-app/.qaren/actions/tasks.yaml\0",
+            ),
+            (
+                " M other-app/.qaren/actions/tasks.yaml\0",
+                " M other-app/.qaren/actions/tasks.yaml\0",
+            ),
+            (
+                " M test-app/.qaren/config.yaml\0",
+                " M test-app/.qaren/config.yaml\0",
+            ),
+            (
+                " M test-app/.qaren/actions/source.ts\0",
+                " M test-app/.qaren/actions/source.ts\0",
+            ),
+        ] {
+            assert_eq!(
+                super::porcelain_without_qaren_state(
+                    porcelain,
+                    std::path::Path::new("repo"),
+                    std::path::Path::new("repo/test-app"),
+                ),
+                expected,
+            );
+        }
+    }
 
     #[test]
     fn drops_the_untracked_qaren_dir_entry() {

@@ -59,14 +59,21 @@ fn check_integration_drift(extra_path: Option<&str>, tracked: bool) -> bool {
 }
 
 #[test]
-fn only_untracked_integration_files_are_tolerated_in_a_real_checkout() {
+fn integration_and_saved_actions_are_tolerated_in_a_real_checkout() {
     let accepted = [
         check_integration_drift(None, false),
         check_integration_drift(Some(".qaren/actions/new-flow.yaml"), false),
         check_integration_drift(Some(".qaren/config.yaml"), false),
         check_integration_drift(Some(".qaren/actions/existing.yaml"), true),
+        check_integration_drift(Some(".qaren/actions/new-flow.yml"), false),
+        check_integration_drift(Some(".qaren/actions/existing.yml"), true),
+        check_integration_drift(Some(".qaren/actions/source.ts"), false),
+        check_integration_drift(Some("App.tsx"), true),
     ];
-    assert_eq!(accepted, [true, false, false, false]);
+    assert_eq!(
+        accepted,
+        [true, true, false, true, true, true, false, false]
+    );
 }
 
 #[test]
