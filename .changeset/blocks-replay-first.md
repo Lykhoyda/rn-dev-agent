@@ -2,4 +2,4 @@
 "qaren": minor
 ---
 
-`qaren check` saves each passed block under `.qaren/actions/` and replays it on the next run without Jev, re-walking from the first step that no longer resolves.
+`qaren check` persists eligible passing blocks and replays compatible saved actions before discovery, recovering from selector misses before mutation authorization as described in the CLI guide's Saved blocks section.

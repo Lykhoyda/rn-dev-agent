@@ -185,10 +185,12 @@ or label, a phrase wait, or a fill into a secure or private input leaves the blo
 unsaved and the ledger says why without naming any value; ordinary fills keep their
 plan literal in the saved block. A previously saved block replayed against a now-private
 input also reports withholding without rewriting or deleting the existing action.
-Values typed by earlier private fills in the same run also withhold later blocks
-that contain them in headers, raw comments, or literal assertions, with a value-free
-reason in `blocks_not_saved`. This save guard uses recorded private-fill facts only;
-prefilled secure values and values only observed on screen remain uncovered by it.
+When saving a discovered or patched block, exact substrings of values typed by
+earlier private fills in the same run withhold the block if present in header fields,
+raw comments, fill literals, literal assertions or stored selectors. The value-free
+reason is `contains a protected plan-typed value` in `blocks_not_saved`. This save
+guard uses recorded private-fill facts only; prefilled secure values and values only
+observed on screen remain uncovered by it. It does not remove existing saved actions.
 
 Replay requires the canonical block format emitted by
 [`serializeBlock`](../qaren-core/src/qa/blocks.ts); edited or incompatible files
