@@ -3498,6 +3498,9 @@ impl PrRunner {
         for file in ["package.json", "pnpm-lock.yaml", "node_modules/.bin/expo"] {
             std::fs::copy(self.app.join(file), app.join(file)).unwrap();
         }
+        if self.app.join("App.tsx").is_file() {
+            std::fs::copy(self.app.join("App.tsx"), app.join("App.tsx")).unwrap();
+        }
         std::fs::create_dir_all(app.join(".qaren/actions")).unwrap();
         std::fs::write(app.join(".qaren/actions/tasks.yaml"), "steps: []\n").unwrap();
     }
@@ -3535,6 +3538,12 @@ impl Runner for PrRunner {
         self.inner.spawn_group_unchecked(spec, log)
     }
     fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        if spec.label == "core-walk" {
+            let app = spec.cwd.as_ref().unwrap();
+            if app.join("App.tsx").is_file() {
+                std::fs::write(app.join("App.tsx"), "export default changed;\n").unwrap();
+            }
+        }
         if self.fail_core_spawn && spec.label == "core-walk" {
             self.inner.calls.push(spec.clone());
             return Err(std::io::Error::other("node vanished"));
@@ -3643,7 +3652,19 @@ fn pr_request(repo: &Path, app: &Path) -> RunRequest {
 
 #[test]
 fn pr_runs_the_walk_on_a_worktree_at_the_head_with_a_recording_in_order() {
+    pr_walk_result(false);
+}
+
+#[test]
+fn candidate_drift_during_a_pr_walk_fails_and_withholds_publication() {
+    pr_walk_result(true);
+}
+
+fn pr_walk_result(candidate_drift: bool) {
     let (repo, app) = app_repo();
+    if candidate_drift {
+        std::fs::write(app.join("App.tsx"), "export default original;\n").unwrap();
+    }
     let wt = repo.join("runs").join(run_id()).join("wt");
     let mut runner = PrRunner {
         inner: MockRunner::new(),
@@ -3661,7 +3682,14 @@ fn pr_runs_the_walk_on_a_worktree_at_the_head_with_a_recording_in_order() {
     script_core_identity(mock);
     script_drift_status(mock);
     mock.expect_run("git", CmdOutput::success(&format!("{PR_HEAD}\n"))); // drift report
-    mock.expect_run("git", CmdOutput::success(""));
+    mock.expect_run(
+        "git",
+        CmdOutput::success(if candidate_drift {
+            " M test-app/App.tsx\0"
+        } else {
+            ""
+        }),
+    );
     script_recorder_stop(mock);
     script_pr_teardown_after_drift(mock);
     mock.expect_run("worktree remove --force", CmdOutput::success(""));
@@ -3673,7 +3701,30 @@ fn pr_runs_the_walk_on_a_worktree_at_the_head_with_a_recording_in_order() {
 
     let receipt = run(&mut runner, &pr_request(&repo, &app));
 
-    assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
+    if candidate_drift {
+        assert_eq!(receipt.result, ReceiptResult::Fail);
+        assert_eq!(
+            receipt.failure.as_ref().unwrap().code,
+            FailureCode::CandidateDrifted
+        );
+        assert_eq!(receipt.ledger.as_ref().unwrap().verdict, "FAIL");
+        let mut publisher = qaren::exec::MockRunner::new();
+        let published = qaren::publish::publish(
+            &mut publisher,
+            &repo.join("runs"),
+            &run_id(),
+            &repo.join("verdict.md"),
+            &qaren::redact::MachineIdentity::default(),
+        );
+        assert_eq!(published.result, ReceiptResult::Failed);
+        assert_eq!(
+            published.failure.unwrap().code,
+            FailureCode::CandidateDrifted
+        );
+        assert!(publisher.calls.is_empty());
+    } else {
+        assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
+    }
     assert_eq!(receipt.verb, "pr");
     assert_eq!(runner.inner.remaining(), 0);
     assert_eq!(runner.recorder_persisted_before_spawn, Some(true));

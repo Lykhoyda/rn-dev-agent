@@ -538,7 +538,7 @@ fn run_inner(
         core::abort(core_child);
         return Ok(finish_failed(ctx, f));
     }
-    let outcome = core::wait(ctx.runner, core_child, req.budgets);
+    let mut outcome = core::wait(ctx.runner, core_child, req.budgets);
     let t = ctx.mark("walk", t);
     let drift = match (status_before, worktree_status(ctx.runner, &app_root)) {
         (Some(before), Some(after)) => worktree_drift(&before, &after),
@@ -548,6 +548,30 @@ fn run_inner(
         ctx.notes.push(("core_exit".to_string(), exit.to_string()));
     }
 
+    match candidate::verify_unchanged(ctx.runner, &ctx.record.candidate) {
+        Ok(()) => ctx
+            .notes
+            .push(("candidate_drift".to_string(), "none".to_string())),
+        Err(detail)
+            if outcome
+                .failure
+                .as_ref()
+                .is_some_and(|failure| failure.code == FailureCode::RunCancelled) =>
+        {
+            ctx.notes.push(("candidate_drift".to_string(), detail));
+        }
+        Err(detail) => {
+            outcome.verdict = Verdict::Fail;
+            outcome.ledger.verdict = "FAIL".to_string();
+            outcome.failure = Some(Failure::new(
+                "verify",
+                FailureCode::CandidateDrifted,
+                format!("the candidate changed during the walk: {detail}"),
+                "re-run the check against an unchanged candidate",
+            ));
+            ctx.notes.push(("candidate_drift".to_string(), detail));
+        }
+    }
     let ledger_path = run_dir.join("ledger.json");
     if let Err(e) = std::fs::write(
         &ledger_path,
@@ -557,12 +581,6 @@ fn run_inner(
             "ledger".to_string(),
             format!("could not persist {}: {e}", ledger_path.display()),
         ));
-    }
-    match candidate::verify_unchanged(ctx.runner, &ctx.record.candidate) {
-        Ok(()) => ctx
-            .notes
-            .push(("candidate_drift".to_string(), "none".to_string())),
-        Err(detail) => ctx.notes.push(("candidate_drift".to_string(), detail)),
     }
     // ⑫ then ⑬: the recording ends with the walk, and saved blocks leave the worktree before it goes.
     let mut early_cleanup = Vec::new();

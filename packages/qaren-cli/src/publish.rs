@@ -687,6 +687,13 @@ fn publish_inner(
     validate_run_id(run_id)?;
     let run_dir = RunRecord::run_dir(runs_root, run_id);
     let _lock = PublishLock::acquire(&run_dir)?;
+    let run = RunRecord::load(runs_root, run_id)?;
+    if let Some(failure) = run
+        .failure
+        .filter(|f| f.code == FailureCode::CandidateDrifted)
+    {
+        return Err(failure);
+    }
     let pr: PrRunRecord = read_json(&run_dir.join("pr.json"))?;
     let machine = &machine.with_values(&pr.identity_values);
     let info = pr_info(&pr);

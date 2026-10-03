@@ -56,6 +56,14 @@ fn run_dir(cross_repository: bool) -> (PathBuf, PathBuf, PathBuf) {
     for sub in ["blocks", "media", "screenshots"] {
         std::fs::create_dir_all(dir.join(sub)).unwrap();
     }
+    common::base_record(
+        &repo,
+        &common::ios_scenario_yaml(8081),
+        RUN,
+        qaren::runrecord::Phase::Cleaned,
+    )
+    .save(&runs)
+    .unwrap();
     let pr = PrRunRecord {
         number: 12,
         url: "https://github.com/o/r/pull/12".into(),
