@@ -455,23 +455,17 @@ build_and_ready — so revisit this once live reuse is measurable.
   report only exit status and timeout state with `[private output withheld]`,
   and neither captured stream is written to durable logs. Only a successful,
   nonempty fetch writes the cleanup-tracked, mode-0600 vendor key file.
-  Other command summaries withhold output if either stream contains
-  `private key` (case-insensitive), including `<redacted private key>` from
-  already-masked stderr. Otherwise, complete stdout and stderr are redacted
-  before selecting the six-line diagnostic tail; timeouts report only duration.
-  Shared redaction masks entire lines naming `PRIVATE KEY`, including header
-  delimiters, with `<redacted private key>` or suppresses them within an open
-  block. A `BEGIN` suppresses
-  following lines through a `PRIVATE KEY` line containing `-----END`; an
-  unterminated block suppresses the remainder. Whole-string redaction checks
-  literal `BEGIN` and `END` occurrences in order on lines naming `PRIVATE KEY`;
-  an unmatched `END` replaces the whole string with the mask.
-  Detached command logs use one helper for both streams. While a block is open,
-  subsequent processed lines on either stream are suppressed until each
-  opening stream closes its own block. Oversized log lines are withheld;
-  finding `PRIVATE KEY` anywhere in one, including across capture chunks,
-  conservatively opens that stream's block. API-key redaction still applies
-  to retained diagnostics and log lines.
+  Parser input stays raw in memory. Persisted operational identities
+  (paths, ids, pids, ports and lock directories) are written exactly;
+  output-derived record fields use `OutputText`, masked on construction and
+  load. Command summaries inspect both streams, and ledger and receipt
+  evidence strings keep whole-string withholding when they contain
+  `private key` (case-insensitive), using
+  `[output withheld: contained private key material]`. Command logs keep
+  per-byte whole-command withholding: a mention truncates that command's
+  output and drops subsequent bytes. API-key redaction still applies to
+  retained diagnostics and logs. Key bodies with no private-key mention,
+  or copied before the mention arrives, cannot be withheld by this rule.
 - **Local listeners are never adopted.** The farm-advertised adb port is
   preflighted free on this host *before* the lease is claimed (a local
   emulator commonly owns 5555), and a listener on the tunnel or private adb

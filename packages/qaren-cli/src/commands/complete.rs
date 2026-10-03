@@ -41,7 +41,7 @@ pub fn complete(
             ReceiptResult::Failed
         };
         receipt.phase = failure.phase.clone();
-        receipt.next_action = failure.next_action.clone();
+        receipt.next_action = failure.next_action.to_string();
         receipt.failure = Some(failure);
         receipt
     };
