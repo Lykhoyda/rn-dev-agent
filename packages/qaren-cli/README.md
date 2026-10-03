@@ -243,10 +243,9 @@ action files are refused. Inspection header validity and defaults follow the
 [core header parser](../qaren-core/src/domain/reusable-action.ts); `list` skips
 invalid headers and `show` refuses them.
 
-For PR runs, copying to the run's `blocks/` directory, branch writeback and
-fallback-comment paths preserve that extension and the saved content verbatim.
-Writeback refuses an ambiguous slug or a destination with the other extension
-instead of creating a second sibling; publication uses the fallback comment.
+PR runs copy saved blocks to the run's `blocks/` directory with their original
+extension and bytes. See [Test a pull request](#test-a-pull-request) for branch
+writeback validation and fallback comments.
 
 On iOS the walk also fails `APP_PROCESS_CHANGED` when the app's process changes between
 captures (a crash or restart), and refuses `APP_PROCESS_UNKNOWN` when the runner does
@@ -305,6 +304,13 @@ request moved during the run, the receipt names the tested commit in
 `tested_older_commit`. Like `check`, `pr` currently refuses Android with
 `PLATFORM_UNSUPPORTED`.
 
+Normal teardown and dead-owner recovery remove the PR worktree only after
+cleanup proves the recorded build, core and Metro producers removed or absent.
+Any retained, refused or unresolved producer outcome keeps the worktree recorded
+for `qaren cleanup <run-id>`. Metro cleanup requires proven process-group absence
+after reaping owned children; a free port or dead launcher alone is insufficient.
+Present or unknown group evidence retains Metro ownership and any applicable lease.
+
 An unproven recorder shutdown retains recorder ownership and the device lease,
 including when recording startup fails. Teardown retries an unresolved stop;
 the receipt's `cleanup.recorder` reports that final outcome. If shutdown remains
@@ -330,21 +336,31 @@ machine redaction would leave the block unchanged. Any other block stays in the
 run's `blocks/` directory and is never rewritten; `publication.json` and the
 receipt record `withheld <slug>: <reason>`. Published blocks are committed to the
 pull request branch with a `Qaren-Run: <run-id>` trailer, using your own git
-identity and a push lease on the tested commit. When the branch moved, the pull
-request comes from a fork, or origin is not the pull request's repository,
-nothing is pushed; a second comment carries the published blocks' YAML instead.
+identity and a push lease on the tested commit. Every effective origin push URL
+reported by Git must match the pull request's repository. Mixed, unknown or
+unproved destinations prevent a push. When the branch moved, the pull request
+comes from a fork, or destination verification fails, a second comment carries
+the admitted blocks' YAML instead. Writeback refuses an ambiguous slug or a
+destination with the other extension rather than creating a second sibling.
 
 Before retrying an unpushed block commit, publication verifies that its sole
 parent is the tested commit, its changes affect only currently admitted block
 paths, and those files contain the admitted verbatim bytes without ambiguous
 `.yaml`/`.yml` siblings. A matching cached commit is reused; otherwise a new
 commit is built from the tested head using only currently admitted blocks.
-The replacement does not descend from the rejected cached commit. The same push
-lease still applies; a failed commit or push falls back to the blocks comment.
+The replacement does not descend from the rejected cached commit. Every newly
+created commit, including a replacement, passes the same parent, path and exact
+Git-blob byte checks before it can be pushed. Git filters or line-ending conversion
+that change the saved bytes cause fallback to the verbatim blocks comment; QaReN
+does not normalize the bytes or change `.gitattributes`. The same push lease
+still applies; a failed commit or push falls back to the blocks comment.
 When all blocks are withheld or privacy admission fails, no block commit is
 pushed. A cached commit already at the remote branch head is reconciled as
-published without rewriting history or claiming its earlier content passed
-the current privacy gate.
+published only when Git's effective origin fetch URL also matches the pull
+request's repository and readback succeeds. A mirror, unknown destination or
+failed lookup cannot prove publication; the verified push or fallback path
+remains available. Reconciliation neither rewrites history nor claims earlier
+content passed the current privacy gate.
 
 Each step is recorded in `publication.json`. Before retrying an attempted post,
 publication looks for the run's comment marker and adopts an existing comment.
