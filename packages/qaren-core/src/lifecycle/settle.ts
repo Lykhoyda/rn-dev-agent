@@ -1,4 +1,5 @@
 import type { ToolResult } from '../utils.js';
+import type { QaDispatchContext } from '../domain/qa-dispatch.js';
 import type { FlatNode } from '../fast-runner-ref-map.js';
 import { hashSnapshotNodes } from './settle-hash.js';
 import { runIOS } from '../runners/rn-fast-runner-client.js';
@@ -6,6 +7,7 @@ import {
   androidIsWindowUpdatingProbe,
   androidSnapshotNodesViaProbe,
   getAndroidRunnerHostPort,
+  runAndroid,
 } from '../runners/rn-android-runner-client.js';
 
 export type SettleMethod = 'window-gate' | 'screen-static' | 'snapshot-eq' | 'timeout';
@@ -164,12 +166,12 @@ function envelopeData(result: ToolResult): unknown {
 
 const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-export function buildIosProbes(bundleId?: string): SettleProbes {
+export function buildIosProbes(bundleId?: string, qaContext?: QaDispatchContext): SettleProbes {
   return {
     isScreenStatic: async () => {
       try {
         const data = envelopeData(
-          await runIOS({ command: 'isScreenStatic', ...(bundleId ? { bundleId } : {}) }),
+          await runIOS({ command: 'isScreenStatic', qaContext, ...(bundleId ? { bundleId } : {}) }),
         );
         const s = (data as { static?: unknown } | null)?.static;
         return typeof s === 'boolean' ? s : null;
@@ -182,6 +184,7 @@ export function buildIosProbes(bundleId?: string): SettleProbes {
         const data = envelopeData(
           await runIOS({
             command: 'snapshot',
+            qaContext,
             interactiveOnly: true,
             ...(bundleId ? { bundleId } : {}),
           }),
@@ -205,13 +208,32 @@ export function hashAndroidAppSnapshotNodes(
   return hashSnapshotNodes(nodes.filter((node) => node.packageName === bundleId));
 }
 
-export function buildAndroidProbes(bundleId?: string): SettleProbes {
+export function buildAndroidProbes(bundleId?: string, qaContext?: QaDispatchContext): SettleProbes {
   const pinnedHostPort = getAndroidRunnerHostPort() ?? undefined;
+  const qaRead = async (
+    command: 'snapshot' | 'isWindowUpdating',
+    timeoutMs?: number,
+  ): Promise<unknown> => {
+    try {
+      if (pinnedHostPort === undefined || getAndroidRunnerHostPort() !== pinnedHostPort)
+        qaContext!.invalidate();
+      return envelopeData(
+        await runAndroid({ command, bundleId, qaContext, timeoutMs, interactiveOnly: true }),
+      );
+    } catch {
+      return null;
+    }
+  };
   return {
-    isWindowUpdating: (timeoutMs) =>
-      androidIsWindowUpdatingProbe(timeoutMs, bundleId, pinnedHostPort),
+    isWindowUpdating: async (timeoutMs) => {
+      if (!qaContext) return androidIsWindowUpdatingProbe(timeoutMs, bundleId, pinnedHostPort);
+      const data = (await qaRead('isWindowUpdating', timeoutMs)) as { updating?: unknown } | null;
+      return typeof data?.updating === 'boolean' ? data.updating : null;
+    },
     snapshotHash: async () => {
-      const nodes = await androidSnapshotNodesViaProbe(bundleId, pinnedHostPort);
+      const nodes = qaContext
+        ? ((await qaRead('snapshot')) as { nodes?: FlatNode[] } | null)?.nodes
+        : await androidSnapshotNodesViaProbe(bundleId, pinnedHostPort);
       return nodes ? hashAndroidAppSnapshotNodes(nodes, bundleId) : null;
     },
     sleep: realSleep,

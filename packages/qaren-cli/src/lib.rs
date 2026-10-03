@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod adapters;
 pub mod buildplan;
 pub mod cancel;
@@ -14,6 +15,7 @@ pub mod lease;
 pub mod native;
 pub mod native_suite;
 pub mod process_observation;
+pub mod progress;
 pub mod receipt;
 pub mod redact;
 pub mod report;

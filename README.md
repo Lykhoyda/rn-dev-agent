@@ -1,3 +1,8 @@
+This checkout develops **QaReN**, a CLI that checks Markdown QA plans, replays
+saved blocks and persists passing walks. For current build and usage instructions,
+read the [QaReN CLI guide](packages/qaren-cli/README.md). The rn-dev-agent product
+and marketplace instructions below describe the published 1.x release.
+
 <div align="center">
 
 # rn-dev-agent
@@ -256,17 +261,9 @@ Claude Code / Codex
 /reload-plugins
 ```
 
-Local checkout: `claude --plugin-dir /path/to/rn-dev-agent` (the root `.claude-plugin/marketplace.json`
-resolves the plugin package from `packages/claude-plugin/`).
-
 ### Cursor
 
-Install from **Customize → Plugins**. This repo's `.cursor-plugin/marketplace.json` resolves
-`packages/claude-plugin/`.
-
-Local checkout: load `/path/to/rn-dev-agent/packages/claude-plugin` — not the repository root.
-Cursor starts `cdp` from `${CURSOR_PLUGIN_ROOT}/rn-dev-agent-core/dist/supervisor.js`. Claude
-SessionStart hooks are not loaded. Requires Node.js >= 24.
+Install the published rn-dev-agent release from **Customize → Plugins**.
 
 ### Codex
 
@@ -275,11 +272,6 @@ codex plugin marketplace add Lykhoyda/rn-dev-agent
 codex plugin add rn-dev-agent@rn-dev-agent
 ```
 
-Local checkout: register the package directory `/path/to/rn-dev-agent/packages/claude-plugin` — the
-same directory Claude installs, not the repository root. Codex selects its own surface from it
-(`.codex-plugin/plugin.json`, `codex-skills/`, `codex.mcp.json`, `bin/cdp-supervisor.js`) and runs
-the one bundled MCP runtime under `rn-dev-agent-core/dist/`. A registration that still points at
-`packages/codex-plugin` must be re-added: that directory is now authoring material only.
 Codex does not load Claude Code hooks — `No plugin hooks` is expected. Codex 0.145.0 is the
 live-refresh floor; older hosts are restart-only. An external CLI or manual plugin change always
 requires exiting and relaunching Codex.
@@ -459,42 +451,14 @@ Codex:  codex plugin marketplace upgrade rn-dev-agent
         # relaunch after this external mutation
 ```
 
-Release notes: [GitHub Releases](https://github.com/Lykhoyda/rn-dev-agent/releases) · [core changelog](packages/rn-dev-agent-core/CHANGELOG.md)
+Release notes: [GitHub Releases](https://github.com/Lykhoyda/rn-dev-agent/releases) · [core changelog](packages/qaren-core/CHANGELOG.md)
 
 <details>
 <summary><strong>Development — building from source</strong></summary>
 
-This is a Yarn workspace monorepo:
-
-| Package | What it is |
-|---------|------------|
-| `packages/rn-dev-agent-core` | The MCP server (CDP bridge, device control, actions, testing) — all TypeScript source and tests |
-| `packages/claude-plugin` | The one plugin package Claude, Cursor, and Codex install — Claude/Cursor manifests, commands, agents, skills, hooks, generated Codex adapters (`.codex-plugin/`, `codex-*`, `bin/`), one bundled runtime |
-| `packages/codex-plugin` | Codex authoring source (manifest, playbooks, adapted skills, launcher, health) generated into `packages/claude-plugin` |
-| `packages/shared-agent-knowledge` | [Canonical workflow knowledge and host adaptation guidance](packages/shared-agent-knowledge/README.md) |
-| `packages/rn-fast-runner` | In-tree iOS XCTest device runner |
-| `packages/rn-android-runner` | In-tree Android UiAutomator device runner |
-| `apps/docs-site` | Astro Starlight docs → [lykhoyda.github.io/rn-dev-agent](https://lykhoyda.github.io/rn-dev-agent/) |
-
-```bash
-git clone https://github.com/Lykhoyda/rn-dev-agent.git
-cd rn-dev-agent
-corepack enable
-corepack yarn install --immutable
-corepack yarn build:host-runtimes   # builds core + generates the distributed plugin package
-```
-
-Run locally: `claude --plugin-dir /path/to/rn-dev-agent` (Claude Code), load
-`packages/claude-plugin` (Cursor), or register `packages/claude-plugin` (Codex).
-
-```bash
-corepack yarn test          # complete unit-test suite
-corepack yarn lint          # oxlint
-corepack yarn format:check  # oxfmt
-```
-
-Versioning uses [changesets](https://github.com/changesets/changesets); every tool-surface change
-must update the golden registry (`node scripts/update-tool-registry.mjs`).
+See the [CLI build instructions](packages/qaren-cli/README.md#build) for the
+current checkout and [repository guide](AGENTS.md) for package ownership,
+validation commands and changeset mechanics.
 
 </details>
 

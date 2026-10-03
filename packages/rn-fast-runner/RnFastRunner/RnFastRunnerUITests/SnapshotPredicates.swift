@@ -41,3 +41,29 @@ func shouldIncludeSnapshotNode(
   if compact { return hasContent }
   return true
 }
+
+struct SnapshotDedupeKey: Hashable {
+  let type: XCUIElement.ElementType.RawValue
+  let label: String
+  let identifier: String
+  let value: String?
+  let x: CGFloat
+  let y: CGFloat
+}
+
+func snapshotDedupeKey(
+  type: XCUIElement.ElementType,
+  label: String,
+  identifier: String,
+  value: String?,
+  origin: CGPoint
+) -> SnapshotDedupeKey {
+  SnapshotDedupeKey(
+    type: type.rawValue,
+    label: label,
+    identifier: identifier,
+    value: value,
+    x: origin.x,
+    y: origin.y
+  )
+}

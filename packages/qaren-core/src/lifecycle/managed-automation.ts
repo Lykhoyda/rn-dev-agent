@@ -31,6 +31,7 @@ interface ChildTerminalResult {
 }
 
 interface SpawnManagedOptions {
+  beforeSpawn?: () => void;
   timeoutMs: number;
   platform: 'ios' | 'android';
   deviceId?: string;
@@ -200,6 +201,7 @@ export async function spawnManagedProcessGroup(
 
   let child: ChildProcessWithoutNullStreams;
   try {
+    options.beforeSpawn?.();
     child = spawnProcess(bin, args, {
       detached: process.platform !== 'win32',
       env: options.env ?? process.env,

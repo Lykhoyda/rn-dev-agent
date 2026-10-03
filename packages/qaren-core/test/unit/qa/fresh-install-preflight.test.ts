@@ -123,7 +123,7 @@ test('strict detector includes foreign, own and generic test drivers without cha
     assert.equal(
       await probeIosExternalRunnerStrict(fakePs(driver(name, OTHER)), UDID),
       'unknown',
-      name,
+      `${name}: a container path in process text is not kernel evidence`,
     );
     assert.equal(
       await probeIosExternalRunnerStrict(fakePs(`20 /tmp/${name}\n`), UDID),
@@ -188,6 +188,122 @@ test('CLI, shell, Java and xcodebuild signatures are conservative, not arbitrary
   );
 });
 
+test('only kernel evidence scopes a driver away to other simulators', async () => {
+  const SECOND = 'CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD';
+  const xcodebuild = '/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild';
+  const maestro = '/opt/bin/maestro';
+  const java = '/Library/Java/bin/java';
+  const inOther = `/Users/t/Library/Developer/CoreSimulator/Devices/${OTHER}/data/X.app/XCTRunner`;
+  const run = ['xcodebuild', 'test-without-building', '-scheme', 'RnFastRunner'];
+  const cases: Array<[string, string, string[], 'clear' | 'busy' | 'unknown', string?]> = [
+    ['runner app in another simulator', inOther, ['XCTRunner'], 'clear'],
+    [
+      'destination id',
+      xcodebuild,
+      [...run, '-destination', `platform=iOS Simulator,id=${OTHER}`],
+      'clear',
+    ],
+    [
+      'two destination ids',
+      xcodebuild,
+      [...run, '-destination', `id=${OTHER}`, '-destination', `id=${SECOND}`],
+      'clear',
+    ],
+    ['our destination', xcodebuild, [...run, '-destination', `id=${UDID}`], 'busy'],
+    [
+      'name destination',
+      xcodebuild,
+      [...run, '-destination', 'platform=iOS Simulator,name=iPhone 17'],
+      'unknown',
+    ],
+    [
+      'generic destination',
+      xcodebuild,
+      [...run, '-destination', 'generic/platform=iOS Simulator'],
+      'unknown',
+    ],
+    [
+      'mixed destinations',
+      xcodebuild,
+      [...run, '-destination', `id=${OTHER}`, '-destination', 'name=iPhone 17'],
+      'unknown',
+    ],
+    ['no destination', xcodebuild, [...run, '-xctestrun', '/tmp/x.xctestrun'], 'unknown'],
+    [
+      'destination words inside one argument',
+      xcodebuild,
+      [...run, '-resultBundlePath', `/tmp/x -destination id=${OTHER}`],
+      'unknown',
+    ],
+    ['maestro device flag', maestro, ['maestro', '--device', OTHER, 'test', 'flow.yaml'], 'clear'],
+    ['maestro device list', maestro, ['maestro', 'test', `--device=${OTHER},${SECOND}`], 'clear'],
+    [
+      'maestro partial list',
+      maestro,
+      ['maestro', 'test', '--device', `${OTHER},not-a-udid`],
+      'unknown',
+    ],
+    ['maestro without device', maestro, ['maestro', 'test', '--log', OTHER], 'unknown'],
+    [
+      'jvm maestro device flag',
+      java,
+      ['java', '-classpath', 'lib', 'maestro.cli.AppKt', '--device', OTHER, 'test'],
+      'clear',
+    ],
+    [
+      'executable contradicts argv',
+      '/usr/bin/python3',
+      [...run, '-destination', `id=${OTHER}`],
+      'unknown',
+      xcodebuild,
+    ],
+  ];
+  for (const [name, executable, argv, expected, shown = executable] of cases) {
+    const observe = async (pid: number, _timeout: number, withArgv?: boolean) => {
+      assert.equal(withArgv, true, name);
+      return { v: 1, pid, birth: { seconds: 1, micros: 0 }, executable, argv };
+    };
+    const line = `20 ${shown} ${argv.slice(1).join(' ')}`.trimEnd();
+    assert.equal(
+      await probeIosExternalRunnerStrict(fakePs(`${ordinary}${line}\n`), UDID, observe),
+      expected,
+      name,
+    );
+  }
+  const unscoped = async (pid: number) => ({
+    v: 1,
+    pid,
+    birth: { seconds: 1, micros: 0 },
+    executable: pid === 20 ? inOther : maestro,
+    argv: pid === 20 ? ['XCTRunner'] : ['maestro', 'test', 'flow.yaml'],
+  });
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      fakePs(`20 ${inOther}\n21 ${maestro} test flow.yaml\n`),
+      UDID,
+      unscoped,
+    ),
+    'unknown',
+    'a scoped driver does not excuse an unscoped one',
+  );
+  const shell = async (pid: number) => ({
+    v: 1,
+    pid,
+    birth: { seconds: 1, micros: 0 },
+    executable: '/bin/sh',
+    argv: ['/bin/sh', maestro, '--device', OTHER, 'test'],
+  });
+  assert.equal(
+    await probeIosExternalRunnerStrict(
+      fakePs(`20 /bin/sh ${maestro} --device ${OTHER} test\n`),
+      UDID,
+      shell,
+    ),
+    'unknown',
+    'a shell-wrapped Maestro stays unresolved even with a device flag',
+  );
+});
+
 test('attested unscoped MCP controls coexist while observed device automation still blocks', async () => {
   const controls =
     '20 /usr/bin/java -classpath lib maestro.cli.AppKt mcp\n' +
@@ -197,6 +313,13 @@ test('attested unscoped MCP controls coexist while observed device automation st
     pid,
     birth: { seconds: 1, micros: 0 },
     executable: pid === 20 ? '/usr/bin/java' : '/opt/jdk/bin/java',
+    argv: [
+      pid === 20 ? '/usr/bin/java' : '/opt/jdk/bin/java',
+      '-classpath',
+      'lib',
+      'maestro.cli.AppKt',
+      'mcp',
+    ],
   });
   assert.equal(await probeIosExternalRunnerStrict(fakePs(ordinary + controls), UDID), 'unknown');
   assert.equal(
@@ -210,7 +333,7 @@ test('attested unscoped MCP controls coexist while observed device automation st
   for (const invalid of [
     { v: 1, pid: 99, birth: { seconds: 1, micros: 0 }, executable: '/usr/bin/java' },
     { v: 1, pid: 20, birth: { seconds: 1, micros: 0 }, executable: '/usr/bin/node' },
-    { v: 1, pid: 20, birth: { seconds: 1, micros: 0 }, executable: '/opt/jdk/bin/java' },
+    { v: 2, pid: 20, birth: { seconds: 1, micros: 0 }, executable: '/usr/bin/java' },
     {
       v: 1,
       pid: 20,
@@ -219,7 +342,10 @@ test('attested unscoped MCP controls coexist while observed device automation st
     },
   ]) {
     assert.equal(
-      await probeIosExternalRunnerStrict(fakePs(ordinary + controls), UDID, async () => invalid),
+      await probeIosExternalRunnerStrict(fakePs(ordinary + controls), UDID, async () => ({
+        ...invalid,
+        argv: ['/usr/bin/java', '-classpath', 'lib', 'maestro.cli.AppKt', 'mcp'],
+      })),
       'unknown',
     );
   }
@@ -255,6 +381,79 @@ test('attested unscoped MCP controls coexist while observed device automation st
     ),
     'busy',
   );
+});
+
+test('MCP admission uses attested argv rather than kernel-path spelling', async () => {
+  for (const launched of ['java', '/opt/java/current/bin/java', ambiguousJvms[0]]) {
+    const argv = [launched, '-classpath', '/Users/Test User/lib/*', 'maestro.cli.AppKt', 'mcp'];
+    let calls = 0;
+    const observe = async (pid: number, timeout: number, withArgv?: boolean) => {
+      calls++;
+      assert.equal(withArgv, true);
+      assert.ok(timeout > 0 && timeout <= 1_000);
+      return {
+        v: 1,
+        pid,
+        birth: { seconds: 1, micros: 0 },
+        executable: '/opt/java/versions/21/bin/java',
+        argv,
+      };
+    };
+    assert.equal(
+      await probeIosExternalRunnerStrict(fakePs(`20 ${argv.join(' ')}\n`), UDID, observe),
+      'clear',
+      launched,
+    );
+    assert.equal(calls, 1);
+  }
+});
+
+test('controller coexistence requires complete consistent native argv, not just Java identity', async () => {
+  const argv = ['/usr/bin/java', '-classpath', 'lib', 'maestro.cli.AppKt', 'mcp'];
+  const scan = fakePs(`20 ${argv.join(' ')}\n`);
+  const identity = { v: 1, pid: 20, birth: { seconds: 1, micros: 0 }, executable: '/usr/bin/java' };
+  for (const invalid of [
+    undefined,
+    null,
+    [],
+    'mcp',
+    [null, ...argv.slice(1)],
+    [...argv.slice(0, 4), 'test'],
+    [...argv, '--device', UDID],
+    [argv[0], '-classpath', 'lib maestro.cli.AppKt mcp'],
+    [argv[0], '-classpath', '', 'maestro.cli.AppKt', 'mcp'],
+    [argv[0], '-classpath', 'lib\0', 'maestro.cli.AppKt', 'mcp'],
+    [argv[0], '-classpath', 'lib', 'other.Main', 'mcp'],
+    [argv[0], '-classpath', 'lib', 'maestro.cli.AppKt', 'mcp', ''],
+    [argv[0], '-classpath', 'x'.repeat(16_384), 'maestro.cli.AppKt', 'mcp'],
+    [argv[0], '-classpath', 'lib', 'maestro.cli.Other', 'mcp'],
+  ]) {
+    assert.equal(
+      await probeIosExternalRunnerStrict(scan, UDID, async () => ({ ...identity, argv: invalid })),
+      'unknown',
+    );
+  }
+});
+
+test('attested aliased controllers do not excuse target drivers or unresolved automation', async () => {
+  const argv = ['/opt/java/current/bin/java', '-classpath', 'lib', 'maestro.cli.AppKt', 'mcp'];
+  const controller = `20 ${argv.join(' ')}\n`;
+  const observe = async (pid: number) => ({
+    v: 1,
+    pid,
+    birth: { seconds: 1, micros: 0 },
+    executable: '/opt/java/versions/21/bin/java',
+    argv: pid === 20 ? argv : ['java', '-classpath', 'lib', 'maestro.cli.AppKt', 'test'],
+  });
+  for (const [other, expected] of [
+    [driver('XCTRunner').replace(/^20 /, '21 '), 'busy'],
+    ['21 java -classpath lib maestro.cli.AppKt test\n', 'unknown'],
+  ]) {
+    assert.equal(
+      await probeIosExternalRunnerStrict(fakePs(controller + other), UDID, observe),
+      expected,
+    );
+  }
 });
 
 test('ambiguous JVM paths preserve the Java/Maestro conjunction for CLI and MCP', async () => {
@@ -706,7 +905,62 @@ else {
       );
     }
     for (const call of (await readFile(observerMarker, 'utf8')).trim().split('\n'))
-      assert.deepEqual(JSON.parse(call), ['--internal-process-observation', '20']);
+      assert.deepEqual(JSON.parse(call), [
+        '--internal-process-observation',
+        '20',
+        '--inspect-ios-paths',
+      ]);
+    const inspected = {
+      ...output,
+      executable: '/usr/local/bin/node',
+      iosPathInspection: { status: 'complete', unresolvedPath: 'absent' },
+    };
+    const inspectedEnv = { ...env, FAKE_PS_STDOUT: `20 node -e ${'x'.repeat(35_000)}${secret}\n` };
+    for (const [observation, status] of [
+      [inspected, 'clear'],
+      [{ ...inspected, iosPathInspection: undefined }, 'unknown'],
+      [
+        { ...inspected, iosPathInspection: { status: 'complete', unresolvedPath: 'present' } },
+        'unknown',
+      ],
+    ] as const) {
+      assertResult(
+        await invoke(root, marker, [...args, '--process-observer', observer], {
+          ...inspectedEnv,
+          FAKE_OBSERVER_OUTPUT: JSON.stringify(observation),
+        }),
+        status,
+      );
+    }
+    const controllerArgv = [
+      '/opt/java/current/bin/java',
+      '-classpath',
+      secret,
+      'maestro.cli.AppKt',
+      'mcp',
+    ];
+    const controllerEnv = {
+      ...env,
+      FAKE_PS_STDOUT: `20 ${controllerArgv.join(' ')}\n`,
+      FAKE_OBSERVER_OUTPUT: JSON.stringify({
+        ...output,
+        executable: '/opt/java/21/bin/java',
+        argv: controllerArgv,
+      }),
+    };
+    assertResult(
+      await invoke(root, marker, [...args, '--process-observer', observer], controllerEnv),
+      'clear',
+    );
+    const calls = (await readFile(observerMarker, 'utf8')).trim().split('\n');
+    assert.deepEqual(JSON.parse(calls.at(-1)!), ['--internal-process-observation', '20', '--argv']);
+    assertResult(
+      await invoke(root, marker, [...args, '--process-observer', observer], {
+        ...controllerEnv,
+        FAKE_OBSERVER_OUTPUT: JSON.stringify({ ...output, executable: '/opt/java/21/bin/java' }),
+      }),
+      'unknown',
+    );
     await rm(observer);
     assertResult(
       await invoke(root, marker, [...args, '--process-observer', observer], env),

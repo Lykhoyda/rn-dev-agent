@@ -119,7 +119,7 @@ test('an unchanged screen retries the press exactly once, then fails at that lin
   assert.equal(outcome.failure?.step, 1);
   assert.match(
     outcome.failure?.seen ?? '',
-    /did not change after two attempts; on screen: Settings/,
+    /did not change after two attempts; historical context, previously on screen: Settings/,
   );
   assert.equal(outcome.failure?.screenshot, 'screenshots/02-line1.png');
 });
@@ -186,8 +186,8 @@ test('a missing judge or target fails naming the line', async () => {
   assert.match(phrase.failure?.seen ?? '', /JEV_UNAVAILABLE/);
 
   const check = await walkBlock(
-    block('✓ The header looks right\n'),
-    fake([screen(['Header'])]).deps,
+    block('✓ The confirmation is visible\n'),
+    fake([screen(['Saved'])]).deps,
   );
   assert.equal(check.failure?.step, 1);
   assert.match(check.failure?.seen ?? '', /JEV_UNAVAILABLE/);
@@ -201,7 +201,7 @@ test('a missing judge or target fails naming the line', async () => {
 test('an ambiguous quoted target without a judge is refused, not guessed', async () => {
   const f = fake([screen(['Save', 'Save'])]);
   const outcome = await walkBlock(block('1. Tap "Save"\n'), f.deps);
-  assert.match(outcome.failure?.seen ?? '', /JEV_UNAVAILABLE/);
+  assert.match(outcome.failure?.seen ?? '', /TARGET_AMBIGUOUS/);
   assert.ok(!f.calls.some((c) => c.startsWith('press')));
 
   const two: Screen = {
@@ -232,7 +232,7 @@ test('an ambiguous quoted target without a judge is refused, not guessed', async
   };
   const g = fake([two]);
   const twice = await walkBlock(block('1. Tap "more"\n'), g.deps);
-  assert.match(twice.failure?.seen ?? '', /JEV_UNAVAILABLE/);
+  assert.match(twice.failure?.seen ?? '', /TARGET_AMBIGUOUS/);
   assert.ok(!g.calls.some((c) => c.startsWith('scroll')));
 });
 
@@ -411,7 +411,10 @@ test('scroll-until stops after one not-ok scroll that moved nothing, with fresh 
   const outcome = await walkBlock(block('1. Scroll until you see "Footer"\n'), f.deps);
   assert.equal(outcome.block.outcome, 'fail');
   assert.equal(f.calls.filter((c) => c.startsWith('scroll')).length, 1);
-  assert.match(outcome.failure?.seen ?? '', /scroll timed out; on screen: Top/);
+  assert.match(
+    outcome.failure?.seen ?? '',
+    /scroll timed out; historical context, previously on screen: Top/,
+  );
 });
 
 test('a not-ok preliminary scroll that brought the target into view still leads to the press', async () => {

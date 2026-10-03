@@ -1,5 +1,12 @@
 export type RowOutcome = 'pass' | 'fail' | 'retry';
 
+export interface Selector {
+  id?: string;
+  text?: string;
+}
+
+export type LedgerPath = 'walk' | 'replay' | `replay→walk@${number}`;
+
 export interface LedgerRow {
   block: string;
   line: number;
@@ -12,6 +19,8 @@ export interface LedgerRow {
   t: number;
   outcome: RowOutcome;
   reason?: string;
+  timing?: RowTiming;
+  selector?: Selector;
 }
 
 export interface LedgerFailure {
@@ -23,18 +32,22 @@ export interface LedgerFailure {
 export interface BlockResult {
   key: string;
   outcome: 'pass' | 'fail';
-  source: 'discovered';
+  source: 'discovered' | 'replayed' | 'patched';
+  saved?: false;
+  unsavable?: string;
 }
 
 export interface Ledger {
   verdict: 'PASS' | 'FAIL';
-  path: 'walk';
+  path: LedgerPath;
   blocks: BlockResult[];
+  blocksWritten?: string[];
   steps: LedgerRow[];
   jev: JevRollup;
   llmTurns: number;
   escapes: number;
   recoveries: number;
+  speed?: LedgerSpeed;
   failure?: LedgerFailure;
 }
 
@@ -52,6 +65,7 @@ export function buildLedger(
   steps: LedgerRow[],
   failure?: LedgerFailure,
   calls: readonly JevCall[] = [],
+  path: LedgerPath = 'walk',
 ): Ledger {
   const failedRow = [...steps].reverse().find((r) => r.outcome === 'fail');
   const failedBlock = blocks.find((b) => b.outcome === 'fail');
@@ -64,7 +78,7 @@ export function buildLedger(
   }
   const ledger: Ledger = {
     verdict: failure ? 'FAIL' : 'PASS',
-    path: 'walk',
+    path,
     blocks,
     steps,
     jev: summarizeJev(calls),
@@ -72,6 +86,8 @@ export function buildLedger(
     escapes: 0,
     recoveries: 0,
   };
+  const speed = summarizeSpeed(steps);
+  if (speed) ledger.speed = speed;
   if (failure) ledger.failure = failure;
   return ledger;
 }
@@ -99,17 +115,19 @@ export function summarizeJev(calls: readonly JevCall[]): JevRollup {
   };
 }
 
-// A walk that ended without a verdict is a FAIL attributed to its last row.
+// A walk that ended without a verdict is a FAIL attributed to its last row; its rows cannot give a walk time.
 export function ledgerWithoutResult(steps: LedgerRow[], seen: string): Ledger {
   const last = steps[steps.length - 1];
-  return buildLedger([], steps, {
+  const { speed: _speed, ...ledger } = buildLedger([], steps, {
     step: last?.line ?? 0,
     seen,
     ...(last?.screenshot ? { screenshot: last.screenshot } : {}),
   });
+  return ledger;
 }
 
 export function screenshotName(index: number, line: number): string {
   return `screenshots/${String(index).padStart(2, '0')}-line${line}.png`;
 }
 import type { JevCall } from './questions.js';
+import { summarizeSpeed, type LedgerSpeed, type RowTiming } from './row-timing.js';

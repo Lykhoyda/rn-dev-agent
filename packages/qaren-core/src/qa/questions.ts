@@ -13,17 +13,25 @@ export interface JevCall {
   scope: JudgmentScope;
   inputTokens: number | null;
   ms: number;
-  outcome: 'ok' | 'timeout' | 'network' | 'http' | 'invalid';
+  outcome: 'ok' | 'timeout' | 'deadline' | 'network' | 'http' | 'invalid';
   status?: number;
+  diagnostic?: 'retry-after-outside-window';
 }
 
 export interface Judge {
-  ask(state: unknown, questions: Questions, scope?: JudgmentScope): Promise<Answers>;
+  ask(
+    state: unknown,
+    questions: Questions,
+    scope?: JudgmentScope,
+    deadline?: number,
+  ): Promise<Answers>;
   readonly calls: JevCall[];
+  readonly elapsedMs?: number;
 }
 
 export type JevErrorCode =
   | 'JEV_UNAVAILABLE'
+  | 'JEV_DEADLINE_EXCEEDED'
   | 'JEV_AUTH_FAILED'
   | 'JEV_REQUEST_INVALID'
   | 'JEV_RESPONSE_INVALID';
@@ -41,6 +49,7 @@ export class JevError extends Error {
 
 const JEV_MESSAGES: Record<JevErrorCode, string> = {
   JEV_UNAVAILABLE: 'the judgment service is unavailable',
+  JEV_DEADLINE_EXCEEDED: 'the observation or item deadline expired',
   JEV_AUTH_FAILED: 'TYPESAFE_API_KEY is missing or rejected',
   JEV_REQUEST_INVALID: 'the judgment request is invalid or exceeds its budget',
   JEV_RESPONSE_INVALID: 'the judgment response is incomplete or invalid',

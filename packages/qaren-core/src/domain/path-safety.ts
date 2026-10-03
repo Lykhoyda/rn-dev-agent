@@ -36,7 +36,7 @@ export class PathTraversalError extends Error {
 // `\`, and control characters so the ID can never escape its parent directory.
 
 const ACTION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
-const ACTION_ID_MAX_LEN = 64;
+export const ACTION_ID_MAX_LEN = 64;
 
 export function isValidActionId(s: unknown): s is string {
   if (typeof s !== 'string') return false;

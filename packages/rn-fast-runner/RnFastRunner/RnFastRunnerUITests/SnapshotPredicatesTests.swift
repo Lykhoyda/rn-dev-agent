@@ -105,4 +105,33 @@ final class SnapshotInclusionTests: XCTestCase {
     XCTAssertFalse(include(type: .image, interactiveOnly: true))
     XCTAssertFalse(include(interactiveOnly: true))
   }
+
+  func testDedupeKeyKeepsTwinFieldsWithDifferentValues() {
+    let origin = CGPoint(x: 10, y: 100)
+    let first = snapshotDedupeKey(
+      type: .textField, label: "Email", identifier: "email", value: "first@example.test", origin: origin)
+    let second = snapshotDedupeKey(
+      type: .textField, label: "Email", identifier: "email", value: "second@example.test", origin: origin)
+    XCTAssertNotEqual(first, second)
+  }
+
+  func testDedupeKeyKeepsFieldsWithDelimiterCollisions() {
+    let origin = CGPoint(x: 10, y: 100)
+    let first = snapshotDedupeKey(
+      type: .textField, label: "Email", identifier: "otp", value: "prefix-654321", origin: origin)
+    let second = snapshotDedupeKey(
+      type: .textField, label: "Email", identifier: "otp-prefix", value: "654321", origin: origin)
+    XCTAssertNotEqual(first, second)
+    XCTAssertEqual(Set([first, second]).count, 2)
+  }
+
+  func testDedupeKeyStillCollapsesIdenticalNodes() {
+    let origin = CGPoint(x: 10, y: 100)
+    XCTAssertEqual(
+      snapshotDedupeKey(type: .textField, label: "Email", identifier: "email", value: "same", origin: origin),
+      snapshotDedupeKey(type: .textField, label: "Email", identifier: "email", value: "same", origin: origin))
+    XCTAssertEqual(
+      snapshotDedupeKey(type: .staticText, label: "Title", identifier: "", value: nil, origin: origin),
+      snapshotDedupeKey(type: .staticText, label: "Title", identifier: "", value: nil, origin: origin))
+  }
 }

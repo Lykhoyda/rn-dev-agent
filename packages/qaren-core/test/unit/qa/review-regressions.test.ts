@@ -81,6 +81,19 @@ test('protected equality still requires the noul threshold rather than a matchin
   }
 });
 
+test('a protected value in an identifier is not observed assertion text', async () => {
+  const judge = alwaysYes();
+  const result = await decideScreen(
+    screen([element('@greeting', 'Welcome', { kind: 'text', testID: 'Anton' })]),
+    judge,
+    { kind: 'check', literal: false, text: 'The greeting says Welcome, Anton', line: 2 },
+    undefined,
+    ['Anton'],
+  );
+  assert.equal(result.check, 'unsure');
+  assert.equal(judge.requests.length, 0);
+});
+
 test('review P1: an unparsed check cannot pass on a protected value the screen does not show', async () => {
   const greeting = {
     kind: 'check' as const,
@@ -93,7 +106,13 @@ test('review P1: an unparsed check cannot pass on a protected value the screen d
     ['Welcome, Bob', 'unsure', 0],
   ] as const) {
     const judge = alwaysYes();
-    const decision = await decideScreen(screen([], [text]), judge, greeting, undefined, ['Anton']);
+    const decision = await decideScreen(
+      screen([element('@greeting', text, { kind: 'text' })]),
+      judge,
+      greeting,
+      undefined,
+      ['Anton'],
+    );
     assert.equal(decision.check, expected, text);
     assert.equal(judge.requests.length, asked, text);
   }
@@ -139,10 +158,10 @@ test('adding unrelated filled or secure inputs never disables banner checks or c
         assert.equal(q.check_2.type, 'noul');
         return { check_2: { type: 'noul', noul } };
       });
-      const observed = screen(inputs, [
-        ...inputs.map((e) => `${e.label}: ${e.value ?? ''}`),
-        'Saved',
-      ]);
+      const observed = screen(
+        [...inputs, element('@saved', 'Saved', { kind: 'text' })],
+        [...inputs.map((e) => `${e.label}: ${e.value ?? ''}`), 'Saved'],
+      );
       const result = await decideScreen(observed, judge, {
         ...nameCheck,
         text: 'The saved confirmation is visible',
@@ -168,7 +187,11 @@ test('banner checks with unrelated private inputs retain check-target batching a
       return { check_1: { type: 'noul', noul }, target_2: choice(q.target_2, 'e0') };
     });
     const observed = screen(
-      [element('@name', 'Name', { kind: 'input', value: 'Anton' }), element('@done', 'Done')],
+      [
+        element('@name', 'Name', { kind: 'input', value: 'Anton' }),
+        element('@saved', 'Saved', { kind: 'text' }),
+        element('@done', 'Done'),
+      ],
       ['Name: Anton', 'Saved', 'Done'],
     );
     const f = walker([observed], judge);

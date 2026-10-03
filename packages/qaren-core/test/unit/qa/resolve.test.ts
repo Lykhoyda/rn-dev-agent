@@ -1,7 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parsePlan, parseStep } from '../../../dist/qa/plan.js';
-import { ACT, CHECK, judgeCheck, prepareTarget, resolveTarget } from '../../../dist/qa/resolve.js';
+import {
+  ACT,
+  CHECK,
+  decideScreen,
+  judgeCheck,
+  prepareTarget,
+  resolveTarget,
+  targetVisible,
+  visibleSelector,
+} from '../../../dist/qa/resolve.js';
+import { join as joinScreen } from '../../../dist/qa/screen.js';
+import type { NativeNode, Screen } from '../../../dist/qa/screen.js';
 import { JevError, confidentChoice } from '../../../dist/qa/questions.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import { choice, element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
@@ -56,24 +67,42 @@ test('malformed, partial, nonfinite, out-of-range and inconsistent probability m
     assert.throws(() => confidentChoice(prepared.question, answer), /JEV_RESPONSE_INVALID/);
 });
 
-test('exact unique quoted targets and literal assertions are model-free; duplicate quotes use a tie-break', async () => {
-  const judge = scriptedJudge((q) => ({ target_0: choice(q.target_0, 'e1') }));
+test('unique quoted targets and literal assertions are model-free', async () => {
+  const judge = scriptedJudge(() => assert.fail('literal resolution must not ask Jev'));
   assert.equal((await resolveTarget(step('Tap "Save"'), save, judge)).ref, '@save');
   assert.equal(judgeCheck({ ...check, text: 'Save', literal: true }, save), 'pass');
   assert.equal(judge.requests.length, 0);
-  const duplicate = screen([
-    element('@top', 'Save', { where: 'top' }),
-    element('@bottom', 'Save', { where: 'bottom' }),
-    element('@other', 'Not Save'),
-  ]);
-  const result = await resolveTarget(step('Tap "Save" at the bottom'), duplicate, judge);
-  assert.equal(result.ref, '@bottom');
-  assert.deepEqual(Object.keys(judge.requests[0].questions.target_0.criteria!), [
-    'e0',
-    'e1',
-    'none',
-  ]);
-  assert.match(judge.requests[0].questions.target_0.instructions, /bottom/);
+});
+
+test('ambiguous quoted press and fill targets refuse locally without asking or acting', async () => {
+  for (const line of ['Tap "Save"', 'Type "x" into "Save"', 'Fill "Save" with "x"']) {
+    for (const identity of ['label', 'testID', 'placeholder'] as const) {
+      if (line.startsWith('Tap') && identity === 'placeholder') continue;
+      for (const visibility of ['onscreen', 'offscreen', 'mixed']) {
+        const observed = screen(
+          ['@top', '@bottom'].map((ref, i) =>
+            element(ref, '', {
+              kind: line.startsWith('Tap') ? 'button' : 'input',
+              [identity]: 'Save',
+              offscreen: visibility === 'offscreen' || (visibility === 'mixed' && i === 1),
+              hittable: visibility === 'onscreen' || (visibility === 'mixed' && i === 0),
+            }),
+          ),
+        );
+        const judge = scriptedJudge(() => assert.fail('ambiguous quotes must not ask Jev'));
+        const result = await resolveTarget(step(line), observed, judge);
+        assert.ok('refuse' in result && result.refuse === 'TARGET_AMBIGUOUS');
+        assert.match(result.reason, /multiple eligible elements/);
+        const f = walker([observed], judge);
+        const ledger = await runPlan(parsePlan(`1. ${line}\n✓ "Save"`).blocks!, f.deps);
+        assert.equal(ledger.verdict, 'FAIL');
+        assert.match(ledger.failure?.seen ?? '', /TARGET_AMBIGUOUS/);
+        assert.equal(ledger.jev.calls, 0);
+        assert.deepEqual(f.actions, []);
+        assert.equal(judge.requests.length, 0);
+      }
+    }
+  }
 });
 
 test('offscreen selections and none with offscreen evidence request a scroll, never a React ref press', async () => {
@@ -311,28 +340,284 @@ test('quoted visibility remains model-free even with duplicate labels in a batch
   assert.equal(ledger.steps[1].resolvedBy, 'exact');
 });
 
-test('uncertain visibility and candidate overflow name the resolution refusal, not an HTTP error', async () => {
+test('uncertain whole-claim visibility names the resolution refusal within the evidence bound', async () => {
   for (const line of ['1. Wait for Save', '1. Scroll until Save']) {
-    for (const overflow of [false, true]) {
+    for (const observed of [
+      save,
+      screen(Array.from({ length: 30 }, (_, i) => element(`@${i}`, `entry${i}`))),
+    ]) {
       const judge = scriptedJudge((q) => {
         assert.deepEqual(Object.keys(q), ['visibility_1']);
         assert.equal(q.visibility_1.type, 'noul');
         return { visibility_1: { type: 'noul', noul: 0.5 } };
       });
-      const f = walker(
-        [
-          overflow
-            ? screen(Array.from({ length: 31 }, (_, i) => element(`@${i}`, `entry${i}`)))
-            : save,
-        ],
-        judge,
-      );
+      const f = walker([observed], judge);
       const ledger = await runPlan(parsePlan(line).blocks!, f.deps);
       assert.equal(ledger.verdict, 'FAIL');
-      assert.match(ledger.failure?.seen ?? '', overflow ? /CANDIDATE_LIMIT/ : /VISIBILITY_UNSURE/);
+      assert.match(ledger.failure?.seen ?? '', /VISIBILITY_UNSURE/);
       assert.deepEqual(f.actions, []);
-      assert.equal(judge.requests.length, overflow ? 0 : 2);
-      assert.equal(f.captures(), overflow ? 1 : 2);
+      assert.equal(judge.requests.length, 2);
+      assert.equal(f.captures(), 2);
     }
   }
+});
+
+test('whole-claim assertions refuse more than 30 contributions instead of splitting or truncating', async () => {
+  for (const count of [31, 65]) {
+    for (const line of ['✓ There are Save controls', '1. Wait for Save', '1. Scroll until Save']) {
+      const judge = scriptedJudge(() => assert.fail('overflow must not reach the model'));
+      const f = walker(
+        [screen(Array.from({ length: count }, (_, i) => element(`@${i}`, 'Save')))],
+        judge,
+      );
+      const result = await runPlan(parsePlan(line).blocks!, f.deps);
+      assert.equal(result.verdict, 'FAIL');
+      assert.match(result.steps[0].reason!, /^CANDIDATE_LIMIT:/);
+      assert.equal(f.captures(), 1);
+      assert.equal(judge.requests.length, 0);
+      assert.deepEqual(f.actions, []);
+    }
+  }
+});
+
+test('30 contributions support one whole-claim judgment, never an OR of fragment judgments', async () => {
+  const entries = screen(Array.from({ length: 30 }, (_, i) => element(`@${i}`, `entry${i}`)));
+  for (const [noul, verdict] of [
+    [0.99, 'present'],
+    [0.01, 'absent'],
+  ] as const) {
+    const judge = scriptedJudge((questions, _index, state) => {
+      assert.deepEqual(Object.keys(questions), ['visibility_1']);
+      assert.match(
+        questions.visibility_1.instructions,
+        /WHOLE expectation: both entry0 and entry29/,
+      );
+      assert.ok(state && typeof state === 'object' && 'assertionEvidence' in state);
+      const evidence = state.assertionEvidence as { observed: string[]; unknown: unknown[] };
+      assert.equal(evidence.observed.length, 30);
+      assert.equal(new Set(evidence.observed).size, 30);
+      assert.deepEqual(evidence.unknown, []);
+      assert.equal(evidence.observed[0], 'Button "entry0"');
+      assert.equal(evidence.observed[29], 'Button "entry29"');
+      assert.ok(!('visibilityEvidenceGroups' in state));
+      return { visibility_1: { type: 'noul', noul } };
+    });
+    const wait = { kind: 'wait' as const, target: { phrase: 'both entry0 and entry29' }, line: 1 };
+    assert.deepEqual((await decideScreen(entries, judge, undefined, wait)).visibility, { verdict });
+    assert.equal(judge.requests.length, 1);
+  }
+});
+
+test('a mixed check evaluates its entire expectation rather than passing on the quoted fragment', async () => {
+  const payload = 'The screen shows "Welcome" and no error is visible';
+  const judge = scriptedJudge((questions) => {
+    assert.ok(questions.check_1.instructions.includes(payload));
+    return { check_1: { type: 'noul', noul: 0.1 } };
+  });
+  const f = walker([screen([element('@welcome', 'Welcome'), element('@error', 'Error')])], judge);
+  const ledger = await runPlan(parsePlan(`✓ ${payload}`).blocks!, f.deps);
+  assert.equal(ledger.verdict, 'FAIL');
+  assert.equal(judge.requests.length, 1);
+  assert.deepEqual(f.actions, []);
+});
+
+test('an exact id target ignores an element whose label equals the id', () => {
+  const tap = (quoted: string, exact: 'id' | 'text') =>
+    ({ kind: 'press', target: { quoted, phrase: quoted, exact } }) as const;
+  const decoy = screen([
+    element('@decoy', 'onboarding-done'),
+    element('@done', 'Done', { testID: 'onboarding-done' }),
+  ]);
+  assert.deepEqual(prepareTarget(tap('onboarding-done', 'id'), decoy), {
+    ref: '@done',
+    element: decoy.elements[1],
+  });
+  assert.deepEqual(prepareTarget(tap('Done', 'text'), decoy), {
+    ref: '@done',
+    element: decoy.elements[1],
+  });
+  const missing = prepareTarget(
+    tap('onboarding-done', 'id'),
+    screen([element('@x', 'onboarding-done')]),
+  );
+  assert.equal('refuse' in missing && missing.refuse, 'REPLAY_SELECTOR');
+  const offscreen = screen([element('@far', 'Far', { testID: 'far', offscreen: true })]);
+  assert.deepEqual(prepareTarget(tap('far', 'id'), offscreen), { scroll: 'down' });
+});
+
+test('two exact matches refuse REPLAY_SELECTOR without asking Jev', async () => {
+  const judge = scriptedJudge(() => assert.fail('replay must never ask Jev'));
+  const twins = screen([
+    element('@a', 'Save', { testID: 'save' }),
+    element('@b', 'Save', { testID: 'save' }),
+  ]);
+  for (const exact of ['id', 'text'] as const) {
+    const quoted = exact === 'id' ? 'save' : 'Save';
+    const result = await resolveTarget(
+      { kind: 'press', target: { quoted, phrase: quoted, exact } },
+      twins,
+      judge,
+    );
+    assert.equal('refuse' in result && result.refuse, 'REPLAY_SELECTOR');
+  }
+  assert.equal(judge.calls.length, 0);
+});
+
+// Native nodes under one window, joined by the product screen builder.
+function painted(nodes: Array<Omit<NativeNode, 'index'>>): Screen {
+  const window = { ref: '@window', type: 'Window', rect: { x: 0, y: 0, width: 390, height: 844 } };
+  return joinScreen(
+    [window, ...nodes].map((n, index) => ({ parentIndex: index ? 0 : undefined, ...n, index })),
+    [],
+    'app',
+    { native: 'complete', react: 'complete' },
+  );
+}
+const node = (type: string, label: string, y: number, extra: Partial<NativeNode> = {}) => ({
+  ref: `@${type}${y}`,
+  type,
+  label,
+  rect: { x: 16, y, width: 200, height: 20 },
+  ...extra,
+});
+const exactText = (quoted: string) => ({ quoted, phrase: quoted, exact: 'text' as const });
+const exactId = (quoted: string) => ({ quoted, phrase: quoted, exact: 'id' as const });
+const containerEcho = painted([
+  ...[1, 2, 3, 4].map((parentIndex) =>
+    node('Other', 'Welcome', 100 + parentIndex, { parentIndex: parentIndex - 1 || 0 }),
+  ),
+  node('StaticText', 'Welcome', 120, { parentIndex: 4 }),
+]);
+const realMultiple = painted([
+  node('StaticText', 'Welcome', 100),
+  node('StaticText', 'Body', 200),
+  node('StaticText', 'Welcome', 300),
+]);
+
+test('adjacent equal painted text refuses ambiguous replay and discovery', () => {
+  const joined = painted([node('StaticText', 'Welcome', 100), node('StaticText', 'Welcome', 140)]);
+  assert.deepEqual(joined.visibleText, ['Welcome']);
+  assert.deepEqual(joined.paintedText, ['Welcome', 'Welcome']);
+  assert.throws(
+    () => targetVisible(exactText('Welcome'), joined),
+    /REPLAY_SELECTOR: 2 identities match the stored text "Welcome"/,
+  );
+  assert.equal(visibleSelector({ quoted: 'Welcome', phrase: 'Welcome' }, joined), undefined);
+});
+
+test('equal painted buttons at different horizontal positions remain ambiguous', () => {
+  const joined = painted([
+    node('Button', 'Delete', 100),
+    node('Button', 'Delete', 100, {
+      ref: '@delete-right',
+      rect: { x: 230, y: 100, width: 100, height: 20 },
+    }),
+  ]);
+  assert.deepEqual(joined.visibleText, ['Delete']);
+  assert.deepEqual(joined.paintedText, ['Delete', 'Delete']);
+  assert.throws(
+    () => targetVisible(exactText('Delete'), joined),
+    /REPLAY_SELECTOR: 2 identities match the stored text "Delete"/,
+  );
+  assert.equal(visibleSelector({ quoted: 'Delete', phrase: 'Delete' }, joined), undefined);
+});
+
+test('a presence-less XCUI parent and child twin contributes one painted identity', () => {
+  const joined = painted([
+    node('StaticText', 'Welcome', 100),
+    node('StaticText', 'Welcome', 100, { ref: '@welcome-child', parentIndex: 1 }),
+  ]);
+  assert.deepEqual(joined.visibleText, ['Welcome']);
+  assert.deepEqual(joined.paintedText, ['Welcome']);
+  assert.equal(targetVisible(exactText('Welcome'), joined), true);
+  assert.deepEqual(visibleSelector({ quoted: 'Welcome', phrase: 'Welcome' }, joined), {
+    text: 'Welcome',
+  });
+});
+
+test('four container ancestors echoing one text contribute one painted identity', () => {
+  assert.deepEqual(containerEcho.visibleText, ['Welcome']);
+  assert.deepEqual(containerEcho.paintedText, ['Welcome']);
+  assert.equal(targetVisible(exactText('Welcome'), containerEcho), true);
+  assert.deepEqual(visibleSelector({ quoted: 'Welcome', phrase: 'Welcome' }, containerEcho), {
+    text: 'Welcome',
+  });
+});
+
+test('a stored text echoed by its container labels is one identity', () => {
+  assert.equal(targetVisible(exactText('Welcome'), containerEcho), true);
+  const sheet = painted([
+    { ...node('Other', 'Sheet title', 400), rect: { x: 0, y: 400, width: 386, height: 395 } },
+    node('StaticText', 'Sheet title', 420, { parentIndex: 1 }),
+  ]);
+  assert.equal(targetVisible(exactText('Sheet title'), sheet), true);
+});
+
+test('real visible multiples, zero matches and an offscreen twin keep their replay counts', () => {
+  assert.throws(
+    () => targetVisible(exactText('Welcome'), realMultiple),
+    /REPLAY_SELECTOR: 2 identities match the stored text "Welcome"/,
+  );
+  assert.throws(
+    () => targetVisible(exactText('Welcome'), painted([node('StaticText', 'Body', 100)])),
+    /REPLAY_SELECTOR: 0 identities match the stored text "Welcome"/,
+  );
+  const twin = painted([node('StaticText', 'Welcome', 100), node('StaticText', 'Welcome', 1000)]);
+  assert.equal(twin.elements.filter((e) => e.offscreen).length, 1);
+  assert.equal(targetVisible(exactText('Welcome'), twin), true);
+});
+
+test('an onscreen carrier without a painted line still identifies its text', () => {
+  const carrier = (y: number) => node('Other', 'Continue', y, { hittable: true });
+  assert.deepEqual(painted([carrier(100)]).visibleText, []);
+  assert.equal(targetVisible(exactText('Continue'), painted([carrier(100)])), true);
+  assert.throws(
+    () => targetVisible(exactText('Continue'), painted([carrier(100), carrier(200)])),
+    /REPLAY_SELECTOR: 2 identities/,
+  );
+  assert.equal(
+    targetVisible(exactText('Continue'), painted([node('Button', 'Continue', 100)])),
+    true,
+  );
+  assert.throws(
+    () =>
+      targetVisible(
+        exactText('Continue'),
+        painted([
+          node('Button', 'Continue', 100),
+          node('StaticText', 'Body', 200),
+          node('Button', 'Continue', 300),
+        ]),
+      ),
+    /REPLAY_SELECTOR: 2 identities/,
+  );
+});
+
+test('stored testIDs keep counting every element that carries them', () => {
+  assert.throws(
+    () =>
+      targetVisible(
+        exactId('save'),
+        painted([
+          node('Button', 'Save', 100, { identifier: 'save' }),
+          node('Button', 'Save draft', 200, { identifier: 'save' }),
+        ]),
+      ),
+    /REPLAY_SELECTOR: 2 identities match the stored id "save"/,
+  );
+  const far = painted([node('Button', 'Save', 1000, { identifier: 'save' })]);
+  assert.equal(targetVisible(exactId('save'), far), false);
+});
+
+test('a visible text is stored only when replay would find exactly one identity', () => {
+  const welcome = { quoted: 'Welcome', phrase: 'Welcome' };
+  assert.deepEqual(visibleSelector(welcome, containerEcho), { text: 'Welcome' });
+  assert.equal(visibleSelector(welcome, realMultiple), undefined);
+  assert.deepEqual(
+    visibleSelector(
+      welcome,
+      painted([node('StaticText', 'Welcome', 100, { identifier: 'home-title' })]),
+    ),
+    { id: 'home-title' },
+  );
 });

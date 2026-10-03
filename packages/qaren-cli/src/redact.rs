@@ -11,7 +11,104 @@ pub fn redact_known_key(raw: &str, key: Option<&str>) -> String {
         .replace(key, "[REDACTED_SECRET]")
 }
 
+// Contains the phrase itself, so withholding is a fixed point for every later check.
+pub const PRIVATE_KEY_WITHHELD: &str = "[output withheld: contained private key material]";
+
+pub fn names_private_key(text: &str) -> bool {
+    text.as_bytes()
+        .windows(11)
+        .any(|w| w.eq_ignore_ascii_case(b"private key"))
+}
+
+#[derive(Debug, Clone, Eq, serde::Serialize)]
+#[serde(transparent)]
+pub struct OutputText(String);
+
+impl OutputText {
+    pub fn from_output(raw: &str) -> Self {
+        Self(redact_secrets(raw))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for OutputText {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = <String as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(Self::from_output(&raw))
+    }
+}
+
+impl std::ops::Deref for OutputText {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for OutputText {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<T: AsRef<str> + ?Sized> PartialEq<T> for OutputText {
+    fn eq(&self, other: &T) -> bool {
+        self.0 == other.as_ref()
+    }
+}
+
+impl std::fmt::Display for OutputText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 pub fn redact_secrets(raw: &str) -> String {
+    if names_private_key(raw) {
+        return PRIVATE_KEY_WITHHELD.to_string();
+    }
+    redact_plain(raw)
+}
+
+// Ledger and receipt evidence only; operational records must preserve exact identities.
+pub fn durable_json<T: serde::Serialize>(value: &T) -> serde_json::Result<String> {
+    let text = serde_json::to_string_pretty(value)?;
+    if !names_private_key(&text) {
+        return Ok(text);
+    }
+    fn withhold(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::String(s) if names_private_key(s) => {
+                *s = PRIVATE_KEY_WITHHELD.to_string();
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(withhold),
+            serde_json::Value::Object(map) => {
+                *map = std::mem::take(map)
+                    .into_iter()
+                    .map(|(key, mut item)| {
+                        withhold(&mut item);
+                        let key = if names_private_key(&key) {
+                            PRIVATE_KEY_WITHHELD.to_string()
+                        } else {
+                            key
+                        };
+                        (key, item)
+                    })
+                    .collect();
+            }
+            _ => {}
+        }
+    }
+    let mut value = serde_json::to_value(value)?;
+    withhold(&mut value);
+    serde_json::to_string_pretty(&value)
+}
+
+pub fn redact_plain(raw: &str) -> String {
     let safe = redact_api_key(raw);
     let raw = safe.as_str();
     let mut out = String::with_capacity(raw.len());
@@ -77,7 +174,7 @@ pub fn redact_secrets(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{redact_known_key, redact_secrets};
+    use super::{durable_json, redact_known_key, redact_secrets, PRIVATE_KEY_WITHHELD};
 
     #[test]
     fn typesafe_key_is_redacted_without_a_prefix_and_in_json() {
@@ -104,6 +201,46 @@ mod tests {
             "{clean}"
         );
         assert!(clean.contains("registry.example.com"), "{clean}");
+    }
+
+    #[test]
+    fn any_mention_of_a_private_key_withholds_the_whole_string() {
+        for raw in [
+            "-----BEGIN PRIVATE KEY-----\nFAKEKEYBODY\n-----END PRIVATE KEY-----\n",
+            "FAKEKEYBODY\n-----END OPENSSH PRIVATE KEY----- tail",
+            "FAKEKEYBODY\n<redacted private key>\n",
+            "warning: this Private Key is ignored\nFAKEKEYBODY",
+            PRIVATE_KEY_WITHHELD,
+        ] {
+            assert_eq!(redact_secrets(raw), PRIVATE_KEY_WITHHELD);
+        }
+    }
+
+    #[test]
+    fn durable_json_withholds_nested_strings_and_keys_only_when_named() {
+        let plain = serde_json::json!({"b": 1, "a": ["x"]});
+        assert_eq!(
+            durable_json(&plain).unwrap(),
+            serde_json::to_string_pretty(&plain).unwrap()
+        );
+        let leaky = serde_json::json!({
+            "evidence": ["ok", "FAKEKEYBODY -----END private key-----"],
+            "nested": {"PRIVATE KEY FAKEKEYBODY": "v", "keep": "plain"},
+        });
+        let text = durable_json(&leaky).unwrap();
+        assert!(!text.contains("FAKEKEYBODY"), "{text}");
+        assert!(text.contains("\"plain\""), "{text}");
+    }
+
+    #[test]
+    fn non_key_text_passes_byte_identical() {
+        for plain in [
+            "commit 0123456789abcdef0123456789abcdef01234567 built\n",
+            "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIU\n-----END CERTIFICATE-----\n",
+            "BUILD SUCCEEDED\r\n[1/3] Compiling\n",
+        ] {
+            assert_eq!(redact_secrets(plain), plain);
+        }
     }
 
     #[test]

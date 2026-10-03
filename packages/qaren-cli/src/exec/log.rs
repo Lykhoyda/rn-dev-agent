@@ -1,5 +1,5 @@
 use std::io::{self, Read, Write};
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -7,6 +7,8 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub const HELPER_ARG: &str = "--internal-redact-log";
+// The helper also drains the child's stderr from fd 3 into the same log.
+pub const PAIRED_ARG: &str = "--stderr-fd3";
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_LINE: usize = 64 * 1024;
 
@@ -17,28 +19,81 @@ pub(super) struct LogDrain {
 
 impl LogDrain {
     pub(super) fn spawn(executable: &Path, path: &Path) -> io::Result<(Self, UnixStream)> {
+        let (drain, output, _) = Self::start(executable, path, false)?;
+        Ok((drain, output))
+    }
+
+    // One helper for both streams of a child, so a key mention on either withholds both.
+    pub(super) fn spawn_paired(
+        executable: &Path,
+        path: &Path,
+    ) -> io::Result<(Self, UnixStream, UnixStream)> {
+        let (drain, output, error) = Self::start(executable, path, true)?;
+        Ok((
+            drain,
+            output,
+            error.expect("paired drain has a stderr input"),
+        ))
+    }
+
+    fn start(
+        executable: &Path,
+        path: &Path,
+        paired: bool,
+    ) -> io::Result<(Self, UnixStream, Option<UnixStream>)> {
         let log = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)?;
+        // Withholding truncates this command's output away, which only a regular file allows.
+        if !log.metadata()?.is_file() {
+            return Err(io::Error::other("command log must be a regular file"));
+        }
         let (input, output) = UnixStream::pair()?;
         let (control, child_control) = UnixStream::pair()?;
         control.set_read_timeout(Some(DRAIN_TIMEOUT))?;
         control.set_write_timeout(Some(DRAIN_TIMEOUT))?;
+        let second = if paired {
+            Some(UnixStream::pair()?)
+        } else {
+            None
+        };
         // A separate group drains through target SIGKILL and survives a detached prepare.
-        let child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .arg(HELPER_ARG)
             .stdin(Stdio::from(OwnedFd::from(input)))
             .stdout(Stdio::from(OwnedFd::from(child_control)))
             .stderr(log)
-            .process_group(0)
-            .spawn()?;
-        let mut drain = Self { child, control };
-        if let Err(error) = drain.flush() {
-            drop(output);
-            return Err(error);
+            .process_group(0);
+        if let Some((stderr_input, _)) = &second {
+            let fd = stderr_input.as_raw_fd();
+            command.arg(PAIRED_ARG);
+            // SAFETY: only async-signal-safe dup2/fcntl run between fork and exec.
+            unsafe {
+                command.pre_exec(move || {
+                    if fd == 3 {
+                        if libc::fcntl(3, libc::F_SETFD, 0) < 0 {
+                            return Err(io::Error::last_os_error());
+                        }
+                    } else if libc::dup2(fd, 3) < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
         }
-        Ok((drain, output))
+        let child = command.spawn()?;
+        let error = second.map(|(stderr_input, stderr_output)| {
+            drop(stderr_input);
+            stderr_output
+        });
+        let mut drain = Self { child, control };
+        if let Err(failure) = drain.flush() {
+            drop(output);
+            return Err(failure);
+        }
+        Ok((drain, output, error))
     }
 
     pub(super) fn flush(&mut self) -> io::Result<()> {
@@ -79,52 +134,100 @@ impl Drop for LogDrain {
     }
 }
 
+// The whole command's output is withheld once either stream names a private key.
+struct Sink {
+    file: std::fs::File,
+    start: u64,
+    withheld: bool,
+}
+
+impl Sink {
+    fn withhold(&mut self) -> io::Result<()> {
+        self.withheld = true;
+        self.file.set_len(self.start)?;
+        self.file
+            .write_all(crate::redact::PRIVATE_KEY_WITHHELD.as_bytes())?;
+        self.file.write_all(b"\n")
+    }
+
+    fn line(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if self.withheld {
+            return Ok(());
+        }
+        self.file
+            .write_all(crate::redact::redact_plain(&String::from_utf8_lossy(bytes)).as_bytes())
+    }
+}
+
 #[derive(Default)]
 struct Lines {
     pending: Vec<u8>,
-    dropping: bool,
+    oversized: bool,
 }
 
 impl Lines {
-    fn write(&mut self, bytes: &[u8], log: &mut impl Write) -> io::Result<()> {
+    // Checked per byte, so a mention still waiting for its newline withholds before any checkpoint.
+    fn write(&mut self, bytes: &[u8], sink: &mut Sink) -> io::Result<()> {
         for &byte in bytes {
-            if !self.dropping {
-                self.pending.push(byte);
-                if self.pending.len() == MAX_LINE {
-                    self.pending.clear();
-                    self.dropping = true;
-                    log.write_all(b"[oversized log line withheld]\n")?;
+            if sink.withheld {
+                return Ok(());
+            }
+            self.pending.push(byte);
+            if self.pending.len() >= 11
+                && self.pending[self.pending.len() - 11..].eq_ignore_ascii_case(b"private key")
+            {
+                return sink.withhold();
+            }
+            if self.pending.len() == MAX_LINE {
+                if !std::mem::replace(&mut self.oversized, true) {
+                    sink.line(b"[oversized log line withheld]\n")?;
                 }
+                self.pending.drain(..MAX_LINE - 10);
             }
             if byte == b'\n' || byte == b'\r' {
-                self.finish(log)?;
-                self.dropping = false;
+                self.finish(sink)?;
             }
         }
         Ok(())
     }
 
-    fn finish(&mut self, log: &mut impl Write) -> io::Result<()> {
-        log.write_all(
-            crate::redact::redact_secrets(&String::from_utf8_lossy(&self.pending)).as_bytes(),
-        )?;
-        self.pending.clear();
-        log.flush()
+    fn finish(&mut self, sink: &mut Sink) -> io::Result<()> {
+        let pending = std::mem::take(&mut self.pending);
+        if std::mem::take(&mut self.oversized) {
+            return Ok(());
+        }
+        sink.line(&pending)
     }
 }
 
-pub fn run_helper() -> io::Result<()> {
+pub fn run_helper(paired: bool) -> io::Result<()> {
     if std::env::var("TYPESAFE_API_KEY").is_ok_and(|key| key.contains(['\r', '\n'])) {
         return Err(io::Error::other(
             "cannot stream-redact a multiline configured key",
         ));
     }
-    let mut input = UnixStream::from(std::io::stdin().as_fd().try_clone_to_owned()?);
+    let mut inputs = vec![UnixStream::from(
+        std::io::stdin().as_fd().try_clone_to_owned()?,
+    )];
+    if paired {
+        // SAFETY: the paired drain's parent installs the child's stderr pipe as fd 3.
+        inputs.push(UnixStream::from(unsafe { OwnedFd::from_raw_fd(3) }));
+    }
+    let mut streams: Vec<(UnixStream, Lines, bool)> = inputs
+        .into_iter()
+        .map(|input| (input, Lines::default(), false))
+        .collect();
+    for (input, _, _) in &streams {
+        input.set_nonblocking(true)?;
+    }
     let mut control = UnixStream::from(std::io::stdout().as_fd().try_clone_to_owned()?);
-    input.set_nonblocking(true)?;
     control.set_nonblocking(true)?;
-    let mut log = std::io::stderr().lock();
-    let mut lines = Lines::default();
+    let file = std::fs::File::from(std::io::stderr().as_fd().try_clone_to_owned()?);
+    let mut log = Sink {
+        start: file.metadata()?.len(),
+        file,
+        withheld: false,
+    };
     let mut buf = [0; 8192];
     let mut checkpoint = false;
     loop {
@@ -137,29 +240,32 @@ pub fn run_helper() -> io::Result<()> {
                 Err(e) => return Err(e),
             }
         }
-        let mut eof = false;
         let mut progress = false;
         for _ in 0..128 {
-            match input.read(&mut buf) {
-                Ok(0) => {
-                    eof = true;
-                    break;
+            let mut read_any = false;
+            for (input, lines, eof) in streams.iter_mut().filter(|(_, _, eof)| !*eof) {
+                match input.read(&mut buf) {
+                    Ok(0) => {
+                        *eof = true;
+                        lines.finish(&mut log)?;
+                    }
+                    Ok(n) => {
+                        lines.write(&buf[..n], &mut log)?;
+                        read_any = true;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => read_any = true,
+                    Err(e) => return Err(e),
                 }
-                Ok(n) => {
-                    lines.write(&buf[..n], &mut log)?;
-                    progress = true;
-                }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e),
+            }
+            progress |= read_any;
+            if !read_any {
+                break;
             }
         }
-        if eof {
-            lines.finish(&mut log)?;
-        }
+        let done = streams.iter().all(|(_, _, eof)| *eof);
         // A checkpoint covers this bounded prefix, not eventual producer silence.
         if checkpoint {
-            log.flush()?;
             if let Err(e) = control.write_all(&[1]) {
                 if !matches!(
                     e.kind(),
@@ -170,7 +276,7 @@ pub fn run_helper() -> io::Result<()> {
             }
             checkpoint = false;
         }
-        if eof {
+        if done {
             return Ok(());
         }
         if progress {

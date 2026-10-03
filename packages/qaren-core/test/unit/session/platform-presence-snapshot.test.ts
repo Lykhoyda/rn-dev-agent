@@ -25,6 +25,7 @@ import {
 import { REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES } from '../../../dist/runners/protocol.js';
 import { clearRefMap, hasRefMap } from '../../../dist/fast-runner-ref-map.js';
 import { parseEnvelope } from '../../helpers/result-helpers.js';
+import { QaDispatchContext } from '../../../dist/domain/qa-dispatch.js';
 
 beforeEach(() => {
   clearRefMap();
@@ -66,7 +67,7 @@ test('device snapshot forwards the opt-in through the wrapper using the actual h
         capabilities: [
           ...REQUIRED_IOS_FEATURES,
           'HONEST_HITTABLE',
-          ...(capable ? ['PLATFORM_PRESENCE_V1'] : []),
+          ...(capable ? ['PLATFORM_PRESENCE_V2'] : []),
         ],
       });
     }
@@ -94,11 +95,14 @@ test('device snapshot forwards the opt-in through the wrapper using the actual h
     });
   });
   const snapshot = createDeviceSnapshotHandler();
-  const presence = parseEnvelope(await snapshot({ action: 'snapshot', platformPresence: true }));
+  const presence = parseEnvelope(
+    await snapshot({ action: 'snapshot', platformPresence: true, presenceBudgetMs: 20_000 }),
+  );
   assert.deepEqual(requests.pop(), {
     command: 'snapshot',
     appBundleId: 'com.test',
     platformPresence: true,
+    presenceBudgetMs: 20_000,
   });
   assert.deepEqual(presence.data.presenceCapture, { opaqueCaptureEvidence: true });
   assert.deepEqual(presence.data.nodes[0].presence, { opaqueNodeEvidence: true });
@@ -115,7 +119,9 @@ test('device snapshot forwards the opt-in through the wrapper using the actual h
   assert.equal(Object.hasOwn(generic.data.nodes[0], 'presence'), false);
 
   capable = false;
-  const legacy = parseEnvelope(await snapshot({ action: 'snapshot', platformPresence: true }));
+  const legacy = parseEnvelope(
+    await snapshot({ action: 'snapshot', platformPresence: true, presenceBudgetMs: 20_000 }),
+  );
   assert.equal(legacy.ok, false);
   assert.equal(legacy.code, 'RN_FAST_RUNNER_STALE');
   assert.equal(legacy.meta?.mutation, 'none');
@@ -131,6 +137,59 @@ test('device snapshot forwards the opt-in through the wrapper using the actual h
   });
   assert.equal(Object.hasOwn(genericLegacy.data, 'presenceCapture'), false);
   assert.equal(Object.hasOwn(genericLegacy.data.nodes[0], 'presence'), false);
+});
+
+test('presence budget forwarding preserves QA read-only and context guards through handler and wrapper', async () => {
+  const requests: Record<string, unknown>[] = [];
+  _setFetchForTest(async (url, init) => {
+    if (String(url).endsWith('/health'))
+      return Response.json({
+        ok: true,
+        protocolVersion: 2,
+        commands: REQUIRED_IOS_COMMANDS,
+        capabilities: [
+          ...REQUIRED_IOS_FEATURES,
+          'HONEST_HITTABLE',
+          'PLATFORM_PRESENCE_V2',
+          'QA_READ_ONLY_V1',
+        ],
+      });
+    requests.push(JSON.parse(String(init?.body)));
+    return Response.json({
+      ok: true,
+      data: {
+        nodes: [{ index: 0, type: 'Button', rect: { x: 0, y: 0, width: 10, height: 10 } }],
+        snapshotGeneration: 1,
+        keyboardVisible: false,
+      },
+    });
+  });
+  const snapshot = createDeviceSnapshotHandler();
+  const state = getFastRunnerState();
+  for (const qa of [{ qaReadOnly: true }, { qaContext: new QaDispatchContext(100, () => 0) }]) {
+    _setRunnerStateForTest(state);
+    for (const read of [
+      (presenceBudgetMs?: number) =>
+        snapshot({ action: 'snapshot', platformPresence: true, presenceBudgetMs, ...qa }),
+      (presenceBudgetMs?: number) =>
+        runNative(['snapshot', '--platform-presence'], { presenceBudgetMs, ...qa }),
+    ]) {
+      const count = requests.length;
+      assert.equal(parseEnvelope(await read(12_345)).ok, true);
+      assert.equal(requests.length, count + 1);
+      assert.equal(requests.at(-1)?.presenceBudgetMs, 12_345);
+      assert.equal(requests.at(-1)?.qaReadOnly, true);
+      assert.equal(parseEnvelope(await read()).code, 'INVALID_ARGUMENT');
+      assert.equal(requests.length, count + 1, 'missing budgets must not be defaulted');
+      assert.equal(qa.qaContext?.authorizations ?? 0, 0, 'snapshot remains non-mutating');
+    }
+    _setRunnerStateForTest(null);
+    await assert.rejects(
+      snapshot({ action: 'snapshot', platformPresence: true, presenceBudgetMs: 12_345, ...qa }),
+      /ACTION_CONTEXT_CHANGED/,
+    );
+    if (qa.qaContext) assert.throws(() => qa.qaContext!.assertComplete(), /ACTION_CONTEXT_CHANGED/);
+  }
 });
 
 test('unavailable presence reads never enter runner ensure or spawn, through handler or wrapper', async (t) => {
@@ -160,8 +219,8 @@ test('unavailable presence reads never enter runner ensure or spawn, through han
   });
   const snapshot = createDeviceSnapshotHandler();
   for (const read of [
-    () => snapshot({ action: 'snapshot', platformPresence: true }),
-    () => runNative(['snapshot', '--platform-presence']),
+    () => snapshot({ action: 'snapshot', platformPresence: true, presenceBudgetMs: 20_000 }),
+    () => runNative(['snapshot', '--platform-presence'], { presenceBudgetMs: 20_000 }),
   ]) {
     const result = parseEnvelope(await read());
     assert.equal(result.ok, false);
@@ -180,8 +239,8 @@ test('unavailable presence reads never enter runner ensure or spawn, through han
   const state = getFastRunnerState();
   _setRunnerStateForTest(null);
   for (const read of [
-    () => snapshot({ action: 'snapshot', platformPresence: true }),
-    () => runNative(['snapshot', '--platform-presence']),
+    () => snapshot({ action: 'snapshot', platformPresence: true, presenceBudgetMs: 20_000 }),
+    () => runNative(['snapshot', '--platform-presence'], { presenceBudgetMs: 20_000 }),
   ]) {
     const missing = parseEnvelope(await read());
     assert.equal(missing.code, 'RN_FAST_RUNNER_DOWN');
@@ -215,7 +274,7 @@ test('presence capture refuses runner-leak evidence without implicit session rec
         ok: true,
         protocolVersion: 2,
         commands: REQUIRED_IOS_COMMANDS,
-        capabilities: [...REQUIRED_IOS_FEATURES, 'HONEST_HITTABLE', 'PLATFORM_PRESENCE_V1'],
+        capabilities: [...REQUIRED_IOS_FEATURES, 'HONEST_HITTABLE', 'PLATFORM_PRESENCE_V2'],
       });
     }
     commands.push(JSON.parse(String(init?.body)).command);
@@ -249,7 +308,9 @@ test('presence capture refuses runner-leak evidence without implicit session rec
     },
   });
   const state = getFastRunnerState();
-  const result = parseEnvelope(await snapshot({ action: 'snapshot', platformPresence: true }));
+  const result = parseEnvelope(
+    await snapshot({ action: 'snapshot', platformPresence: true, presenceBudgetMs: 20_000 }),
+  );
   assert.equal(result.ok, false);
   assert.equal(result.meta?.capture, 'unknown');
   assert.equal(result.meta?.mutation, 'none');
@@ -268,7 +329,11 @@ test('presence without a session refuses without looking for or starting a runne
     assert.fail('an absent session cannot dispatch');
   });
   const result = parseEnvelope(
-    await createDeviceSnapshotHandler()({ action: 'snapshot', platformPresence: true }),
+    await createDeviceSnapshotHandler()({
+      action: 'snapshot',
+      platformPresence: true,
+      presenceBudgetMs: 20_000,
+    }),
   );
   assert.equal(result.code, 'RN_FAST_RUNNER_DOWN');
   assert.equal(result.meta?.dispatched, false);
@@ -312,7 +377,7 @@ test('incomplete presence invalidates targeting cache and the next find refreshe
           ok: true,
           protocolVersion: 2,
           commands: REQUIRED_IOS_COMMANDS,
-          capabilities: [...REQUIRED_IOS_FEATURES, 'HONEST_HITTABLE', 'PLATFORM_PRESENCE_V1'],
+          capabilities: [...REQUIRED_IOS_FEATURES, 'HONEST_HITTABLE', 'PLATFORM_PRESENCE_V2'],
         });
       }
       const body = JSON.parse(String(init?.body));
@@ -347,8 +412,13 @@ test('incomplete presence invalidates targeting cache and the next find refreshe
 
     const result = parseEnvelope(
       await (entry === 'handler'
-        ? snapshot({ action: 'snapshot', platformPresence: true })
-        : runIOS({ command: 'snapshot', bundleId: 'com.test', platformPresence: true })),
+        ? snapshot({ action: 'snapshot', platformPresence: true, presenceBudgetMs: 20_000 })
+        : runIOS({
+            command: 'snapshot',
+            bundleId: 'com.test',
+            platformPresence: true,
+            presenceBudgetMs: 20_000,
+          })),
     );
     assert.equal(result.ok, true);
     assert.equal(result.meta?.snapshotVerdict.refMapUpdated, false);

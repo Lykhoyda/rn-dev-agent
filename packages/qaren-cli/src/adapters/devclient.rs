@@ -17,7 +17,9 @@ fn percent_encode(raw: &str) -> String {
 pub fn launch_url(scheme: &str, metro_port: u16) -> String {
     format!(
         "{scheme}://expo-development-client/?url={}",
-        percent_encode(&format!("http://127.0.0.1:{metro_port}"))
+        percent_encode(&format!(
+            "http://127.0.0.1:{metro_port}/?disableOnboarding=1"
+        ))
     )
 }
 
@@ -29,7 +31,7 @@ mod tests {
     fn launch_url_pins_the_run_metro() {
         assert_eq!(
             launch_url("rndatest", 8791),
-            "rndatest://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8791"
+            "rndatest://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8791%2F%3FdisableOnboarding%3D1"
         );
     }
 }

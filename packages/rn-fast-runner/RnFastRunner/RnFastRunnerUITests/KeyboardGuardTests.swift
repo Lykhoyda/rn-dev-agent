@@ -27,8 +27,9 @@ final class KeyboardGuardTests: XCTestCase {
     makePlatformPresencePayload(
       nodes: nodes, truncated: false,
       capture: PlatformPresenceCapture(
-        version: 1, source: "xcui-live", captureId: "capture", appId: "test.app", generation: 7,
-        startedUptimeMs: 1_000, endedUptimeMs: 1_100, enumeration: "raw-unfiltered", complete: complete
+        version: 2, source: "xcui-live", captureId: "capture", appId: "test.app", generation: 7,
+        startedUptimeMs: 1_000, endedUptimeMs: 1_100, enumeration: "raw-unfiltered", complete: complete,
+        appliedBudgetMs: 20_000
       )
     )
   }
@@ -41,6 +42,16 @@ final class KeyboardGuardTests: XCTestCase {
       XCTAssertEqual(json["keyboardVisible"] as? Bool, visible)
       XCTAssertEqual(json["snapshotGeneration"] as? Int, 7)
       XCTAssertEqual(capture["generation"] as? Int, 7)
+    }
+  }
+
+  func testSnapshotPayloadReportsOnlyAPositiveAppProcessIdentifier() throws {
+    for (raw, expected) in [(4242, 4242 as Int?), (0, nil), (-1, nil), (nil, nil)] as [(Int?, Int?)] {
+      let payload = runnerPayload(presencePayload(nodes: []), appProcessIdentifier: raw)
+      let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as? [String: Any])
+      XCTAssertEqual(json["appProcessIdentifier"] as? Int, expected)
+      XCTAssertEqual(json["appProcessIdentifier"] == nil, expected == nil)
+      XCTAssertEqual(json["snapshotGeneration"] as? Int, 7)
     }
   }
 
