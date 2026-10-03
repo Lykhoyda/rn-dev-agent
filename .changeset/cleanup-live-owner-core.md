@@ -2,4 +2,4 @@
 "qaren": patch
 ---
 
-`qaren cleanup` now refuses, without touching or saving anything, while a walking run's qaren process is still alive.
+`qaren cleanup` now refuses before resource teardown and leaves the run record unchanged when a core is recorded and its qaren owner's process identity is proven still alive.
