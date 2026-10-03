@@ -1,5 +1,6 @@
 use crate::adapters::ios;
 use crate::buildplan::BuildDecision;
+use crate::cancel::ensure_running;
 use crate::candidate::{self, sha256_hex};
 use crate::commands::cleanup::{
     cleanup_core, cleanup_process_group, release_lease_outcome, retained_lease_outcome,
@@ -823,13 +824,6 @@ pub fn worktree_drift(before: &BTreeSet<String>, after: &BTreeSet<String>) -> Ve
         .collect()
 }
 
-fn ensure_running(runner: &dyn Runner, next_phase: &str) -> Result<(), Failure> {
-    match runner.cancellation() {
-        Some(reason) => Err(Failure::cancelled(next_phase, &reason)),
-        None => Ok(()),
-    }
-}
-
 fn refusal_code(code: &str) -> FailureCode {
     match code {
         "METRO_ORIGIN_MISMATCH" => FailureCode::MetroOriginMismatch,
@@ -843,6 +837,7 @@ fn refusal_code(code: &str) -> FailureCode {
 }
 
 fn reset_app(ctx: &mut Ctx, udid: &str, app_id: &str) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "fresh_install")?;
     let unknown = || {
         Failure::new(
             "fresh_install",
@@ -861,6 +856,7 @@ fn reset_app(ctx: &mut Ctx, udid: &str, app_id: &str) -> Result<(), Failure> {
                 "fresh install: reset admitted, uninstalling selected app",
             );
             ctx.save()?;
+            ensure_running(ctx.runner, "fresh_install")?;
             let output = ctx.runner.run(&ios::uninstall_app_spec(udid, app_id));
             if !output.ok() {
                 return Err(Failure::new(
@@ -901,6 +897,7 @@ fn reset_app(ctx: &mut Ctx, udid: &str, app_id: &str) -> Result<(), Failure> {
 }
 
 fn boot_selected_device(ctx: &mut Ctx, device: &Device) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "boot_device")?;
     let failed = |detail| {
         Failure::new(
             "boot_device",
@@ -914,6 +911,7 @@ fn boot_selected_device(ctx: &mut Ctx, device: &Device) -> Result<(), Failure> {
             &device.id,
             ctx.record.scenario.deadlines.device_boot_seconds,
         ));
+        ensure_running(ctx.runner, "boot_device")?;
         if !output.ok() {
             return Err(failed(
                 "bootstatus did not complete successfully for the selected simulator",
@@ -936,6 +934,9 @@ fn boot_selected_device(ctx: &mut Ctx, device: &Device) -> Result<(), Failure> {
 }
 
 fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
+    let failure = ensure_running(ctx.runner, &failure.phase)
+        .err()
+        .unwrap_or(failure);
     let (cleanup, _) = teardown(&mut ctx, false);
     let mut receipt = ctx.fail(failure);
     for (name, rendered) in cleanup {

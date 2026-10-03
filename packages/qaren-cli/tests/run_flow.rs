@@ -3943,3 +3943,32 @@ fn pr_receipt_reports_the_final_recorder_cleanup_retry() {
         }
     }
 }
+
+#[test]
+fn cancellation_during_successful_dependency_install_skips_fresh_reset_and_cleans_up() {
+    let (repo, app) = app_repo();
+    let mut req = request(&repo, &app, 30);
+    req.fresh_install = true;
+    let mut mock = MockRunner::new();
+    script_preflight(&mut mock, &repo);
+    script_admission(&mut mock);
+    mock.expect_run(
+        "pnpm install --frozen-lockfile",
+        CmdOutput::success("installed"),
+    );
+    mock.cancel_after = Some(("pnpm install".into(), "received SIGTERM".into()));
+    let receipt = run(&mut mock, &req);
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    assert_eq!(
+        receipt.failure.as_ref().unwrap().code,
+        FailureCode::RunCancelled
+    );
+    assert_eq!(receipt.cleanup["device_lease"], "removed");
+    assert!(mock.calls.iter().any(|c| c.label == "pnpm-install"));
+    assert!(!mock.calls.iter().any(|c| c.label == "simctl-uninstall"));
+    assert!(mock.spawned_logs.is_empty());
+    let record = RunRecord::load(&req.runs_root, &run_id()).unwrap();
+    assert!(record.resources.fresh_install.is_none());
+    assert!(record.resources.lease.is_none());
+    assert_eq!(mock.remaining(), 0);
+}

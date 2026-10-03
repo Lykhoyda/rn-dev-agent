@@ -1246,8 +1246,8 @@ pub(crate) fn cleanup_process_group(
         }
     });
 
-    let proven_ours =
-        leader == Some(PidLiveness::AliveMatching) || group_live_via_port.flatten() == Some(true);
+    let proven_ours = identity.is_some_and(|recorded| recorded.pid == pgid)
+        && leader == Some(PidLiveness::AliveMatching);
     let outcome = if proven_ours {
         kill_group(runner, pgid, "-TERM");
         runner.sleep(Duration::from_millis(1500));
@@ -1292,22 +1292,28 @@ pub(crate) fn cleanup_process_group(
             // No recorded identity: a free or foreign port proves nothing about a
             // group that may still be starting up; never guess absent.
             None => Outcome::Unresolved(
-                "no recorded identity and the recorded port does not prove the group; \
+                "no recorded leader identity; \
              resolve the process group manually"
                     .to_string(),
             ),
             Some(PidLiveness::Dead) => match group_live_via_port {
                 Some(Some(false)) | None => Outcome::Absent,
-                Some(Some(true)) => unreachable!("proven_ours handled above"),
+                Some(Some(true)) => Outcome::Unresolved(
+                    "process group remains but its leader ownership is unproven".into(),
+                ),
                 Some(None) => {
                     Outcome::Unresolved("port owner pgid could not be determined".to_string())
                 }
             },
-            Some(PidLiveness::AliveForeign) => Outcome::Absent,
+            Some(PidLiveness::AliveForeign) => Outcome::Unresolved(
+                "recorded leader birth identity belongs to another process".into(),
+            ),
             Some(PidLiveness::Unknown) => {
                 Outcome::Unresolved("pid liveness probe was inconclusive".to_string())
             }
-            Some(PidLiveness::AliveMatching) => unreachable!("proven_ours handled above"),
+            Some(PidLiveness::AliveMatching) => {
+                Outcome::Unresolved("recorded leader does not match the process group".into())
+            }
         }
     };
     if !matches!(outcome, Outcome::Absent | Outcome::Removed) {

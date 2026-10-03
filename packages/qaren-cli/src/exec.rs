@@ -291,7 +291,7 @@ impl Runner for RealRunner {
         self.executed += 1;
         let started = Instant::now();
         crate::progress::started(&spec.label, false);
-        let output = run_captured(spec, &started, None)
+        let output = run_captured(spec, &started, None, || self.cancellation())
             .unwrap_or_else(|e| io_failure(&started, format!("{}: {e}", spec.label)));
         let output = match self.flush_logs() {
             Ok(()) => output,
@@ -304,7 +304,7 @@ impl Runner for RealRunner {
     fn run_private(&mut self, spec: &CmdSpec, input: &[u8]) -> PrivateOutput {
         self.executed += 1;
         let started = Instant::now();
-        let output = run_captured(spec, &started, Some(input))
+        let output = run_captured(spec, &started, Some(input), || self.cancellation())
             .unwrap_or_else(|_| CmdOutput::failed(1, "private capture failed"));
         if self.flush_logs().is_err() {
             return PrivateOutput(CmdOutput::failed(1, "log drain failed"));
@@ -437,6 +437,7 @@ fn run_captured(
     spec: &CmdSpec,
     started: &Instant,
     input: Option<&[u8]>,
+    cancellation: impl Fn() -> Option<String>,
 ) -> std::io::Result<CmdOutput> {
     use std::os::unix::process::CommandExt;
     if input.is_some_and(|bytes| bytes.len() > MAX_CAPTURE_BYTES) {
@@ -473,6 +474,7 @@ fn run_captured(
     if spec.label != "plan-preflight" {
         cmd.env_remove("TYPESAFE_API_KEY");
     }
+    let interruptible = cancellation().is_none();
     let mut child = cmd.spawn()?;
     drop(cmd);
     let mut out = Vec::new();
@@ -480,6 +482,11 @@ fn run_captured(
     let mut timed_out = false;
     let mut stopped = false;
     let result: std::io::Result<Option<i32>> = (|| loop {
+        if interruptible {
+            if let Some(reason) = cancellation() {
+                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, reason));
+            }
+        }
         if let Some(writer) = &mut stdin {
             if written < input.len() {
                 match writer.write(&input[written..input.len().min(written + 8192)]) {

@@ -3,6 +3,7 @@ use crate::buildplan::{
     self, ArtifactKind, ArtifactStatus, BuildDecision, BuildPlan, CachedArtifact, LockHolder,
     LockOutcome, LockPolicy, StateStatus,
 };
+use crate::cancel::ensure_running;
 use crate::candidate;
 use crate::exec::{CmdSpec, Runner};
 use crate::failure::{Failure, FailureCode};
@@ -68,6 +69,9 @@ impl<'a> Ctx<'a> {
     }
 
     pub(crate) fn fail(mut self, mut failure: Failure) -> Receipt {
+        failure = ensure_running(self.runner, &failure.phase)
+            .err()
+            .unwrap_or(failure);
         if self.record.resources.any_owned() {
             failure.next_action = crate::redact::OutputText::from_output(&format!(
                 "qaren cleanup {} --json",
@@ -587,6 +591,7 @@ fn prepare_handoff(mut ctx: Ctx, args: &PrepareArgs, t: u64) -> Receipt {
 }
 
 pub(crate) fn install_deps(ctx: &mut Ctx) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "deps")?;
     let offline = ctx.record.scenario.deps.policy == DepsPolicy::RequirePrewarm;
     let mut deps_args = vec!["install", "--frozen-lockfile"];
     if offline {
@@ -603,6 +608,7 @@ pub(crate) fn install_deps(ctx: &mut Ctx) -> Result<(), Failure> {
         )
         .cwd(&ctx.record.candidate.project_root.clone()),
     );
+    ensure_running(ctx.runner, "deps")?;
     if !deps.ok() {
         return Err(Failure::new(
             "deps",
@@ -703,6 +709,7 @@ pub(crate) fn check_port_free(runner: &mut dyn Runner, port: u16) -> Result<(), 
 }
 
 fn allocate_ios(ctx: &mut Ctx) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "allocate")?;
     let ios = ctx
         .record
         .scenario
@@ -719,6 +726,7 @@ fn allocate_ios(ctx: &mut Ctx) -> Result<(), Failure> {
         runtime: ios.runtime.clone(),
     });
     ctx.save()?;
+    ensure_running(ctx.runner, "allocate")?;
     let created = ctx
         .runner
         .run(&ios::create_spec(&name, &ios.device_type, &ios.runtime));
@@ -744,6 +752,7 @@ fn allocate_ios(ctx: &mut Ctx) -> Result<(), Failure> {
     }
     ctx.save()?;
 
+    ensure_running(ctx.runner, "allocate")?;
     let boot = ctx.runner.run(&ios::bootstatus_spec(
         &udid,
         ctx.record.scenario.deadlines.device_boot_seconds,
@@ -760,6 +769,7 @@ fn allocate_ios(ctx: &mut Ctx) -> Result<(), Failure> {
 }
 
 fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "allocate")?;
     let android = ctx
         .record
         .scenario
@@ -838,6 +848,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
         adb_port: slot_status.adb_port,
     });
     ctx.save()?;
+    ensure_running(ctx.runner, "allocate")?;
     let started = ctx.runner.run(&android::farm_start_spec(
         &android.ssh_host,
         &android.farm_path,
@@ -868,6 +879,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
         .join("logs")
         .join("tunnel.log");
     let tunnel_spec = android::tunnel_spec(&android.ssh_host, slot_status.adb_port);
+    ensure_running(ctx.runner, "allocate")?;
     let spawned = ctx
         .runner
         .spawn_group(&tunnel_spec, &tunnel_log)
@@ -931,6 +943,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
     // Record ownership before the write so a partial key is still cleanable.
     ctx.record.resources.adb_vendor_key = Some(vendor_key.clone());
     ctx.save()?;
+    ensure_running(ctx.runner, "allocate")?;
     if let Err(e) = write_private_file(&vendor_key, key.stdout()) {
         return Err(Failure::new(
             "allocate",
@@ -944,6 +957,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
     let serial = android::local_serial(slot_status.adb_port);
     let server_log = run_dir.join("logs").join("adb-server.log");
     let server_spec = android::adb_server_spec(&adb, server_port, &serial, &vendor_key);
+    ensure_running(ctx.runner, "allocate")?;
     let server = ctx
         .runner
         .spawn_group(&server_spec, &server_log)
@@ -986,6 +1000,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
         FailureCode::AdbServerFailed,
     )?;
 
+    ensure_running(ctx.runner, "allocate")?;
     let connect = ctx
         .runner
         .run(&android::adb_connect_spec(&adb, server_port, &serial));
@@ -1069,6 +1084,7 @@ fn lock_holder_for(ctx: &mut Ctx) -> LockHolder {
 }
 
 pub(crate) fn claim_build_lock(ctx: &mut Ctx, lock_root: &Path) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "build")?;
     let name = format!(
         "native-build-{}",
         platform_dir(ctx.record.scenario.platform)
@@ -1185,6 +1201,7 @@ fn allocate_usb(
     android_home: Option<&str>,
     lock_root: &Path,
 ) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "allocate")?;
     let usb = ctx
         .record
         .scenario
@@ -1213,6 +1230,7 @@ fn allocate_usb(
     let server_log = run_dir.join("logs").join("adb-server.log");
     let server_spec =
         android::usb_adb_server_spec(&adb, usb_adb_server_port, &usb.serial, &host_key);
+    ensure_running(ctx.runner, "allocate")?;
     let server = ctx
         .runner
         .spawn_group(&server_spec, &server_log)
@@ -1285,6 +1303,7 @@ fn native_build_output_dirs(platform: &str) -> &'static [&'static str] {
 }
 
 pub(crate) fn run_clean_preparation(ctx: &mut Ctx, plan: &BuildPlan) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "build")?;
     let platform = platform_dir(ctx.record.scenario.platform);
     let project_root = ctx.record.candidate.project_root.clone();
     if plan.regenerate_native_dir {
@@ -1335,6 +1354,7 @@ pub(crate) fn run_clean_preparation(ctx: &mut Ctx, plan: &BuildPlan) -> Result<(
         if !path.exists() {
             continue;
         }
+        ensure_running(ctx.runner, "build")?;
         std::fs::remove_dir_all(&path).map_err(|e| {
             Failure::new(
                 "build",
@@ -1363,6 +1383,7 @@ fn spawn_metro_only(ctx: &mut Ctx) -> Result<(), Failure> {
     let metro_log = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id)
         .join("logs")
         .join("metro.log");
+    ensure_running(ctx.runner, "build")?;
     let spawned = ctx.runner.spawn_group(&spec, &metro_log).map_err(|e| {
         Failure::new(
             "build",
@@ -1401,6 +1422,7 @@ fn wait_metro_responding(ctx: &mut Ctx) -> Result<(), Failure> {
     let metro_resource = ctx.record.resources.metro.clone().expect("metro spawned");
     let identity = metro_resource.identity.clone().expect("identity captured");
     loop {
+        ensure_running(ctx.runner, "build")?;
         if probe_pid_identity(ctx.runner, &identity) == PidLiveness::Dead {
             return Err(Failure::new(
                 "build",
@@ -1421,6 +1443,7 @@ fn wait_metro_responding(ctx: &mut Ctx) -> Result<(), Failure> {
             _ => false,
         };
         if port_ours && metro::metro_responding(ctx.runner, metro_resource.port) {
+            ensure_running(ctx.runner, "build")?;
             return Ok(());
         }
         if ctx.runner.monotonic_ms() >= deadline {
@@ -1443,6 +1466,7 @@ fn wait_metro_responding(ctx: &mut Ctx) -> Result<(), Failure> {
 }
 
 pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<u64, Failure> {
+    ensure_running(ctx.runner, "build")?;
     let artifact = plan.artifact.clone().expect("reuse carries an artifact");
     let metro_port = qaren_metro_port(&ctx.record.scenario);
     match ctx.record.scenario.platform {
@@ -1472,6 +1496,7 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
                 .ios_simulator
                 .clone()
                 .expect("ios allocated");
+            ensure_running(ctx.runner, "build")?;
             let installed = ctx
                 .runner
                 .run(&ios::install_app_spec(&sim.udid, &artifact.path));
@@ -1498,6 +1523,7 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
                 .as_ref()
                 .expect("allocated")
                 .server_port;
+            ensure_running(ctx.runner, "build")?;
             let installed = ctx.runner.run(&android::adb_install_spec(
                 &adb,
                 server_port,
@@ -1524,6 +1550,7 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
             // may exist on the device.
             ctx.record.resources.adb_reverse_port = Some(metro_port);
             ctx.save()?;
+            ensure_running(ctx.runner, "build")?;
             let reversed = ctx.runner.run(&android::adb_reverse_spec(
                 &adb,
                 server_port,
@@ -1549,6 +1576,7 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
     wait_metro_responding(ctx)?;
     let t = ctx.mark("metro_ready", t);
 
+    ensure_running(ctx.runner, "build")?;
     let launched = match ctx.record.scenario.platform {
         Platform::Ios => {
             let sim = ctx
@@ -1954,10 +1982,14 @@ fn wait_for_local_listener(
 ) -> Result<(), Failure> {
     let deadline = ctx.runner.monotonic_ms() + deadline_seconds * 1000;
     loop {
+        ensure_running(ctx.runner, "allocate")?;
         let output = ctx.runner.run(&metro::port_owner_spec(port));
         match metro::parse_port_owner(&output) {
             metro::PortOwners::Owned(pid) => match metro::pgid_of(ctx.runner, pid) {
-                Some(pgid) if pgid == expected_pgid => return Ok(()),
+                Some(pgid) if pgid == expected_pgid => {
+                    ensure_running(ctx.runner, "allocate")?;
+                    return Ok(());
+                }
                 Some(foreign_pgid) => {
                     return Err(Failure::new(
                         "allocate",
@@ -2024,6 +2056,7 @@ fn build_failure(ctx: &Ctx, detail: impl Into<String>) -> Failure {
 }
 
 fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "build")?;
     use crate::runrecord::BuildCompletionEvidence;
     use std::io::Write;
     let log = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id)
@@ -2046,6 +2079,13 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
     ctx.record.resources.begin_build()?;
     ctx.record.phase = Phase::Building;
     ctx.save()?;
+    if let Err(failure) = ensure_running(ctx.runner, "build") {
+        ctx.record
+            .resources
+            .finish_build(BuildCompletionEvidence::NotSpawned)?;
+        ctx.save()?;
+        return Err(failure);
+    }
     let mut child = match ctx.runner.spawn_piped(&gated, &log) {
         Ok(child) => child,
         Err(error) => {
@@ -2068,6 +2108,7 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
         .record_build_spawned(child.pid, identity)?;
     ctx.save()?;
     let started = known
+        && ctx.runner.cancellation().is_none()
         && child
             .stdin
             .write_all(b"start\n")
@@ -2076,13 +2117,17 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
     drop(child.stdin);
     drop(child.stdout);
     let mut exit = None;
-    let mut cancelled = None;
+    let mut cancelled = ctx.runner.cancellation();
     if started {
         let deadline = ctx
             .runner
             .monotonic_ms()
             .saturating_add(spec.timeout_seconds.saturating_mul(1000));
         loop {
+            if let Some(reason) = ctx.runner.cancellation() {
+                cancelled = Some(reason);
+                break;
+            }
             match child.handle.try_wait() {
                 Ok(Some(code)) => {
                     exit = Some(code);
@@ -2090,13 +2135,7 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
                 }
                 Err(_) => break,
                 Ok(None) if ctx.runner.monotonic_ms() >= deadline => break,
-                Ok(None) => match ctx.runner.cancellation() {
-                    Some(reason) => {
-                        cancelled = Some(reason);
-                        break;
-                    }
-                    None => ctx.runner.sleep(Duration::from_millis(100)),
-                },
+                Ok(None) => ctx.runner.sleep(Duration::from_millis(100)),
             }
         }
     }
@@ -2112,7 +2151,7 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
         spec.label.clone(),
         format!("exit={exit:?}; group={}", outcome.render()),
     ));
-    if let Some(reason) = cancelled {
+    if let Some(reason) = cancelled.or_else(|| ctx.runner.cancellation()) {
         return Err(Failure::cancelled("build", &reason));
     }
     if !started || exit != Some(0) || !matches!(outcome, super::cleanup::Outcome::Absent) {
@@ -2131,6 +2170,7 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
 }
 
 pub(crate) fn build_and_ready(ctx: &mut Ctx) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "build")?;
     let port = qaren_metro_port(&ctx.record.scenario);
     let deadline = ctx.record.scenario.deadlines.build_seconds;
     let project_root = ctx.record.candidate.project_root.clone();
@@ -2203,6 +2243,7 @@ pub(crate) fn build_and_ready(ctx: &mut Ctx) -> Result<(), Failure> {
     let build_log = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id)
         .join("logs")
         .join("build.log");
+    ensure_running(ctx.runner, "build")?;
     let spawned = ctx.runner.spawn_group(&spec, &build_log).map_err(|e| {
         Failure::new(
             "build",
@@ -2244,6 +2285,7 @@ pub(crate) fn wait_ready(ctx: &mut Ctx) -> Result<(), Failure> {
     let metro_resource = ctx.record.resources.metro.clone().expect("metro spawned");
     let identity = metro_resource.identity.clone().expect("identity captured");
     loop {
+        ensure_running(ctx.runner, "build")?;
         if probe_pid_identity(ctx.runner, &identity) == PidLiveness::Dead {
             return Err(Failure::new(
                 "build",
@@ -2260,6 +2302,7 @@ pub(crate) fn wait_ready(ctx: &mut Ctx) -> Result<(), Failure> {
             .with_evidence(vec![super::log_tail(&metro_resource.log, 25)]));
         }
         if ready_probes_pass(ctx, &metro_resource) {
+            ensure_running(ctx.runner, "build")?;
             return Ok(());
         }
         if ctx.runner.monotonic_ms() >= deadline {
