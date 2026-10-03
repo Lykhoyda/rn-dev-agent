@@ -54,43 +54,98 @@ const parse = (line: string) => {
   return JSON.parse(line.slice('viewport-diagnostic '.length));
 };
 const diagnose = (nodes: NativeNode[]) => parse(viewportDiagnostic(nodes, outsideViewport(nodes)));
+// The diagnostic alone, as if nothing were clipped, so its categories stay testable.
+const unclipped = (nodes: NativeNode[]) => parse(viewportDiagnostic(nodes, new Set()));
 const offscreenTitles = (nodes: NativeNode[]) =>
   [...outsideViewport(nodes)].map((i) => nodes[i].rect!.x).sort((a, b) => a - b);
 
-test('production offscreen sets are unchanged for counterfactual fixtures A-F', () => {
+test('the Application rect clips fixtures A-F regardless of Window ancestry', () => {
   const inside = [title(16), title(30), title(60)];
   assert.deepEqual(offscreenTitles(pager({})), [418, 820]);
   assert.deepEqual(offscreenTitles(pager({ keyboardWindow: true })), [418, 820]);
-  assert.deepEqual(offscreenTitles(pager({ pagesUnder: 'application' })), []);
-  assert.deepEqual(offscreenTitles(pager({ windowRect: null })), []);
+  assert.deepEqual(offscreenTitles(pager({ pagesUnder: 'application' })), [418, 820]);
+  assert.deepEqual(offscreenTitles(pager({ windowRect: null })), [418, 820]);
   assert.deepEqual(
     offscreenTitles(pager({ windowRect: { x: 0, y: 0, width: 1206, height: 874 } })),
-    [],
+    [418, 820],
   );
   assert.deepEqual(offscreenTitles(pager({ pageRects: inside })), []);
 });
 
+test('keyboard-up capture: later pages chained to no Window are offscreen', () => {
+  // Two app-sized Windows (app, keyboard); page 1 under the app Window, pages 2-3 orphaned from both.
+  const nodes = tree([
+    { type: 'Application', rect: screenRect },
+    { type: 'Window', parent: 0, rect: screenRect },
+    { type: 'Window', parent: 0, rect: screenRect },
+    { type: 'Other', parent: 0, rect: { x: 0, y: 100, width: 1206, height: 700 } },
+    { type: 'StaticText', parent: 1, rect: { x: 16, y: 120, width: 300, height: 30 } },
+    { type: 'StaticText', parent: 3, rect: { x: 402, y: 120, width: 300, height: 30 } },
+    { type: 'Button', parent: 3, rect: { x: 418, y: 600, width: 200, height: 44 } },
+    { type: 'StaticText', parent: 3, rect: { x: 804, y: 120, width: 300, height: 30 } },
+    { type: 'Button', parent: 0, rect: { x: 820, y: 600, width: 200, height: 44 } },
+    { type: 'Keyboard', parent: 2, rect: { x: 0, y: 538, width: 402, height: 336 } },
+  ]);
+  assert.deepEqual([...outsideViewport(nodes)], [5, 6, 7, 8]);
+  assert.equal(diagnose(nodes).symptom, 0);
+});
+
+test('a partly visible node outside every Window still counts as on screen', () => {
+  const nodes = tree([
+    { type: 'Application', rect: screenRect },
+    { type: 'StaticText', parent: 0, rect: { x: 390, y: 120, width: 300, height: 30 } },
+    { type: 'StaticText', parent: 0, rect: { x: -290, y: 120, width: 300, height: 30 } },
+    { type: 'StaticText', parent: 0, rect: { x: 10, y: 860, width: 300, height: 30 } },
+    { type: 'StaticText', parent: 0, rect: { x: 402, y: 120, width: 300, height: 30 } },
+    { type: 'StaticText', parent: 0, rect: { x: -300, y: 120, width: 300, height: 30 } },
+    { type: 'StaticText', parent: 0, rect: { x: 10, y: 874, width: 300, height: 30 } },
+  ]);
+  assert.deepEqual([...outsideViewport(nodes)], [4, 5, 6]);
+});
+
+test('a missing or invalid Application rect keeps the Window-only clip', () => {
+  const orphaned = (app: Spec) => tree([app, { type: 'StaticText', parent: 0, rect: title(820) }]);
+  for (const app of [
+    { type: 'Application' },
+    { type: 'Application', rect: { x: 0, y: 0, width: 0, height: 874 } },
+    { type: 'Application', rect: { x: 0, y: 0, width: 402, height: 0 } },
+    { type: 'Other', rect: screenRect },
+  ])
+    assert.deepEqual([...outsideViewport(orphaned(app))], [], JSON.stringify(app));
+  const noApp = pager({}).map((node) =>
+    node.type === 'Application' ? { ...node, rect: undefined } : node,
+  );
+  assert.deepEqual(offscreenTitles(noApp), [418, 820]);
+});
+
 test('the line tells apart missing, invalid and wider Window anchors', () => {
-  const underApp = diagnose(pager({ pagesUnder: 'application' }));
+  const underApp = unclipped(pager({ pagesUnder: 'application' }));
   assert.equal(underApp.symptom, 2);
   assert.equal(underApp.noWindow, 2);
 
-  const noWindow = diagnose(pager({ windowRect: null }));
+  const noWindow = unclipped(pager({ windowRect: null }));
   assert.equal(noWindow.windowCount, 0);
   assert.equal(noWindow.noWindow, 2);
 
-  const invalid = diagnose(pager({ windowRect: { x: 0, y: 0, width: 0, height: 874 } }));
+  const invalid = unclipped(pager({ windowRect: { x: 0, y: 0, width: 0, height: 874 } }));
   assert.equal(invalid.invalidWindowOnly, 2);
   assert.deepEqual(invalid.windows, [[1, 0, 0, 0, 874]]);
 
-  const wider = diagnose(pager({ windowRect: { x: 0, y: 0, width: 1206, height: 874 } }));
+  const wider = unclipped(pager({ windowRect: { x: 0, y: 0, width: 1206, height: 874 } }));
   assert.equal(wider.symptom, 2);
   assert.deepEqual(wider.windows, [[1, 0, 0, 1206, 874]]);
   assert.deepEqual(wider.app, [0, 0, 402, 874]);
   for (const [, , w, wv, u] of wider.sample) assert.deepEqual([w, wv, u], [1, 1, 1]);
 
-  assert.equal(diagnose(pager({})).symptom, 0);
-  assert.equal(diagnose(pager({ keyboardWindow: true })).symptom, 0);
+  for (const fixture of [
+    pager({}),
+    pager({ keyboardWindow: true }),
+    pager({ pagesUnder: 'application' }),
+    pager({ windowRect: null }),
+    pager({ windowRect: { x: 0, y: 0, width: 0, height: 874 } }),
+    pager({ windowRect: { x: 0, y: 0, width: 1206, height: 874 } }),
+  ])
+    assert.equal(diagnose(fixture).symptom, 0);
 });
 
 test('the observed keyboard-up order alone does not produce a symptom', () => {
@@ -106,9 +161,10 @@ test('the observed keyboard-up order alone does not produce a symptom', () => {
   ]);
   assert.equal(diagnose(nodes).symptom, 0);
   const detached = nodes.map((node, i) => (i >= 3 && i <= 5 ? { ...node, parentIndex: 0 } : node));
-  const shape = diagnose(detached);
+  const shape = unclipped(detached);
   assert.equal(shape.symptom, 2);
   assert.equal(shape.noWindow, 2);
+  assert.equal(diagnose(detached).symptom, 0);
 });
 
 test('a scroll-clipped symptom node names its clip ancestor and the raw Window', () => {
@@ -118,7 +174,7 @@ test('a scroll-clipped symptom node names its clip ancestor and the raw Window',
     { type: 'ScrollView', parent: 1, rect: { x: 0, y: 0, width: 1206, height: 874 } },
     { type: 'StaticText', parent: 2, rect: title(820) },
   ]);
-  const line = diagnose(nodes);
+  const line = unclipped(nodes);
   assert.equal(line.scrollClipped, 1);
   assert.deepEqual(line.sample, [[3, 'StaticText', 1, 1, 1, 2, 820, 120]]);
   assert.deepEqual(line.windows, [[1, 0, 0, 1206, 874]]);
@@ -149,7 +205,7 @@ test('counts stay whole while listed Windows and samples are capped within 2 KB'
   for (let i = 0; i < 50; i++) specs.push({ type: 'Window', parent: 0, rect: screenRect });
   for (let i = 0; i < 50; i++) specs.push({ type: 'StaticText', parent: 0, rect: title(1000 + i) });
   const nodes = tree(specs);
-  const raw = viewportDiagnostic(nodes, outsideViewport(nodes));
+  const raw = viewportDiagnostic(nodes, new Set());
   const line = parse(raw);
   assert.equal(line.windowCount, 50);
   assert.equal(line.windows.length, 8);
@@ -169,7 +225,7 @@ test('counts stay whole while listed Windows and samples are capped within 2 KB'
       rect: { x: 1e20, y: 1e20, width: 1, height: 1 },
     })),
   ]);
-  const bounded = viewportDiagnostic(huge, outsideViewport(huge));
+  const bounded = viewportDiagnostic(huge, new Set());
   assert.ok(
     Buffer.byteLength(bounded, 'utf8') <= 2048,
     `${Buffer.byteLength(bounded, 'utf8')} bytes`,
@@ -185,7 +241,7 @@ test('an unknown element type is written as Other', () => {
     { type: 'Application', rect: screenRect },
     { type: `Custom${SECRET}`, parent: 0, rect: title(820) },
   ]);
-  assert.deepEqual(diagnose(nodes).sample[0].slice(0, 2), [1, 'Other']);
+  assert.deepEqual(unclipped(nodes).sample[0].slice(0, 2), [1, 'Other']);
 });
 
 async function emitted(truncated: boolean | undefined, requirePrivateInputs: boolean) {
