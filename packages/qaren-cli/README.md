@@ -70,6 +70,17 @@ Mounted text beyond those bounds cannot satisfy the plan until scrolling brings
 it into view. Offscreen inputs remain in the privacy inventory for masking.
 This geometric filter does not prove complete visual exposure or occlusion.
 
+Each complete native capture within the capture budget writes one value-free
+`viewport-diagnostic` line, bounded to 2 KB, to the private run log
+`logs/core.log`. It records integer-rounded Application and Window rectangles,
+counts and capped symptom samples with Window ancestry and origins; it excludes
+labels, identifiers, values and sizes of other nodes. Incomplete, unattested or
+over-budget captures emit no such line. Diagnostic work runs after the budget
+verdict and cannot change capture admission or failure. The line is investigative
+evidence, not a root-cause or PASS claim, and changes no visibility, masking or
+ledger behavior. The [diagnostic implementation](../qaren-core/src/qa/native-presence.ts)
+owns its field layout.
+
 Phrase presses require complete native and React coverage and proven React-to-native
 associations. Native text, images and plain views are excluded from press candidates
 only when complete React host evidence accounts for every interactive host and no
