@@ -304,7 +304,11 @@ build_and_ready — so revisit this once live reuse is measurable.
   forwarded port cannot expose the next lease. A `cleaned`
   verdict that cannot be persisted downgrades to `failed` with a retry.
   Anything unprovable is a structured refusal (`OWNERSHIP_UNPROVEN`, exit 4)
-  — never a guess.
+  — never a guess. While a walking run's qaren process is still running
+  (its core is recorded and its recorded owner is proven alive), `cleanup`
+  refuses the whole run and neither signals nor writes anything; finish or
+  stop that run first. Runs still preparing or building, and runs whose owner
+  cannot be proven gone, are not covered by this refusal.
 - **App removal is opt-in, confirmed, and bound to the run record.** Plain
   Android `cleanup` never touches the installed app: stopping the farm AVD
   keeps its userdata, so the dev client this run installed survives the lease (and a
