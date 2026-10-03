@@ -930,19 +930,46 @@ fn complete_tolerates_the_sessions_applied_integration_surface() {
 }
 
 #[test]
-fn complete_refuses_rn_agent_changes_outside_untracked_integration_files() {
+fn complete_allows_saved_actions_and_refuses_other_non_integration_changes() {
     let cases = [
-        "?? test-app/.qaren/\0",
-        "?? test-app/.qaren/integration/\0",
-        "?? test-app/.qaren/actions/new.yaml\0",
-        "?? test-app/.qaren/config.yaml\0",
-        " M test-app/.qaren/actions/existing.yaml\0",
-        " M test-app/.qaren/integration/tracked.cjs\0",
-        "A  test-app/.qaren/integration/tracked.cjs\0",
-        " D test-app/.qaren/integration/tracked.cjs\0",
-        "R  test-app/.qaren/integration/new.cjs\0test-app/.qaren/integration/old.cjs\0",
+        ("?? test-app/.qaren/\0", ReceiptResult::Refused),
+        ("?? test-app/.qaren/integration/\0", ReceiptResult::Refused),
+        (
+            "?? test-app/.qaren/actions/new.yaml\0",
+            ReceiptResult::Ready,
+        ),
+        ("?? test-app/.qaren/actions/new.yml\0", ReceiptResult::Ready),
+        ("?? test-app/.qaren/config.yaml\0", ReceiptResult::Refused),
+        (
+            " M test-app/.qaren/actions/existing.yaml\0",
+            ReceiptResult::Ready,
+        ),
+        (
+            " M test-app/.qaren/actions/existing.yml\0",
+            ReceiptResult::Ready,
+        ),
+        (
+            " M test-app/.qaren/actions/source.ts\0",
+            ReceiptResult::Refused,
+        ),
+        (
+            " M test-app/.qaren/integration/tracked.cjs\0",
+            ReceiptResult::Refused,
+        ),
+        (
+            "A  test-app/.qaren/integration/tracked.cjs\0",
+            ReceiptResult::Refused,
+        ),
+        (
+            " D test-app/.qaren/integration/tracked.cjs\0",
+            ReceiptResult::Refused,
+        ),
+        (
+            "R  test-app/.qaren/integration/new.cjs\0test-app/.qaren/integration/old.cjs\0",
+            ReceiptResult::Refused,
+        ),
     ];
-    for change in cases {
+    for (change, expected) in cases {
         let repo = common::temp_repo();
         seed_handoff_record(&repo, "integration-drift");
         let evidence = write_evidence(&repo, "build.log", &receipt_line(&receipt_payload(&repo)));
@@ -956,8 +983,12 @@ fn complete_refuses_rn_agent_changes_outside_untracked_integration_files() {
             )),
         );
         let receipt = complete(&mut mock, &repo, "integration-drift", &evidence);
-        assert_eq!(receipt.result, ReceiptResult::Refused, "{change:?}");
-        assert_eq!(receipt.failure.unwrap().code, FailureCode::CandidateDrifted);
+        assert_eq!(receipt.result, expected, "{change:?}");
+        if expected == ReceiptResult::Refused {
+            assert_eq!(receipt.failure.unwrap().code, FailureCode::CandidateDrifted);
+        } else {
+            assert!(receipt.failure.is_none());
+        }
         assert_eq!(mock.remaining(), 0);
         std::fs::remove_dir_all(repo).unwrap();
     }

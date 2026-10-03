@@ -760,12 +760,11 @@ fn foreign_adb_server_identity_refuses_removal() {
     mock.expect_run("~/bin/android-farm status", CmdOutput::success(FARM_OURS));
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n"))); // tunnel ok
     mock.expect_run("ps", CmdOutput::success("S\n"));
-    mock.expect_run("ps", CmdOutput::success(&format!("{FOREIGN_LSTART}\n"))); // server pid reused
-                                                                               // teardown: connection sees the foreign server -> absent; server group foreign -> absent
+    mock.expect_run("ps", CmdOutput::success(&format!("{FOREIGN_LSTART}\n")));
+    // Teardown leaves the foreign server untouched and unresolved.
     mock.expect_run("ps", CmdOutput::success(&format!("{FOREIGN_LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success(&format!("{FOREIGN_LSTART}\n")));
     mock.expect_run("lsof", free_port());
-    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     // tunnel alive -> killed
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n"));
@@ -791,6 +790,12 @@ fn foreign_adb_server_identity_refuses_removal() {
         !mock.calls.iter().any(|c| c.label == "adb-get-state") && !touches_package(&mock.calls),
         "without the run's own server there is no owned path to the device"
     );
+    assert!(receipt.cleanup["adb_server"].starts_with("unresolved"));
+    assert_eq!(receipt.cleanup["tunnel"], "removed");
+    assert!(!mock
+        .calls
+        .iter()
+        .any(|c| c.label == "kill-group" && c.args.last().is_some_and(|arg| arg == "-7100")));
     assert_eq!(receipt.result, ReceiptResult::Refused);
     assert_eq!(mock.remaining(), 0);
 }
