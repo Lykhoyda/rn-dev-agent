@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { NativeCaptureError } from '../../../dist/qa/capture.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import type { Block, Step } from '../../../dist/qa/plan.js';
 import type { Element, Screen } from '../../../dist/qa/screen.js';
@@ -177,7 +178,7 @@ test('U8: a field the snapshot cannot see is tapped, typed once, marked unverifi
   assert.equal(fill.selector, undefined);
   assert.equal(
     fill.reason,
-    'UNVERIFIED_FILL: typed with the keyboard after tapping "qa-hidden-email"; the field is not an observable native input, so its final value was not read back',
+    'UNVERIFIED_FILL: typed with the keyboard after tapping "qa-hidden-email"; the field is not an observable native input, so its final value was not validated',
   );
   assert.deepEqual(outcome.privateFills, [fill.line]);
   assert.deepEqual(
@@ -632,4 +633,123 @@ test('U3: zero or two candidates, or a semantically disabled one, keep the stric
   assert.deepEqual(keyboardFallbackTarget(fill('Email'), labelled), {
     element: labelled.elements[0],
   });
+});
+
+for (const mutation of ['observed', 'possible', undefined] as const) {
+  test(`strict Ada to Ad mismatch fails without retry (${mutation})`, async () => {
+    const input = element('@name', 'Name', { kind: 'input', testID: 'name' });
+    const fake = app({ initial: [input, submit], typeFocused: false });
+    let fills = 0;
+    fake.deps.fill = async (_ref, text, context) => {
+      context.authorize();
+      assert.equal(text, 'Ada');
+      fills += 1;
+      fake.deps.captureScreen = async () => screenOf([{ ...input, value: 'Ad' }, submit], true);
+      return { ok: false, proven: false, mutation, error: 'TEXT_ENTRY_UNVERIFIED: mismatch' };
+    };
+    const result = await walkBlock(blocks(plan('Ada', 'name', ''))[0], fake.deps);
+    assert.equal(result.block.outcome, 'fail');
+    assert.equal(fills, 1);
+    assert.match(result.failure?.seen ?? '', /TEXT_ENTRY_UNVERIFIED/);
+    assert.equal(fake.rows.some((row) => row.outcome === 'pass'), false);
+  });
+}
+
+test('strict fill retries only a proven pre-mutation refusal', async () => {
+  const input = element('@name', 'Name', { kind: 'input', testID: 'name' });
+  const fake = app({ initial: [input] });
+  let fills = 0;
+  fake.deps.fill = async (_ref, _text, context) => {
+    context.authorize();
+    fills += 1;
+    return fills === 1
+      ? { ok: false, proven: false, mutation: 'none', error: 'NO_TEXT_INPUT_TARGET: refused' }
+      : { ok: true, proven: true };
+  };
+  const result = await walkBlock(blocks(plan('Ada', 'name', ''))[0], fake.deps);
+  assert.equal(result.block.outcome, 'pass');
+  assert.equal(fills, 2);
+});
+
+for (const strict of [false, true]) {
+  test(`capture failure after ${strict ? 'strict private' : 'fallback'} fill preserves action protection`, async () => {
+    const target = strict ? 'email' : 'qa-hidden-email';
+    const initial = [
+      ...(strict
+        ? [element('@email', 'Email', { kind: 'input', testID: target, secure: true })]
+        : [wrapper()]),
+      submit,
+      element('@code', `Code ${EMAIL}`, { kind: 'text' }),
+      element('@hello', 'Hello', { kind: 'text' }),
+    ];
+    const create = () => {
+      const fake = app({ initial });
+      const capture = fake.deps.captureScreen;
+      fake.deps.captureScreen = async (opts) => {
+        if (fake.state() === 'typed') throw new NativeCaptureError();
+        return capture(opts);
+      };
+      return fake;
+    };
+    const markdown = `## QA\n\n### Safe\n\n✓ "Hello"\n\n### Code shown\n\n✓ "${EMAIL}"\n\n### Private email\n\n1. Fill "${target}" with "${EMAIL}"\n`;
+    const parsed = blocks(markdown);
+    const outcome = await walkBlock(parsed[2], create().deps);
+    assert.deepEqual(outcome.privateFills, [parsed[2].items[0].line]);
+    assert.equal(outcome.refusal?.code, 'NATIVE_CAPTURE_UNAVAILABLE');
+    const dir = mkdtempSync(join(tmpdir(), 'qaren-fallback-'));
+    mkdirSync(join(dir, '.qaren'));
+    const result = await runPlan(parsed, create().deps, [], {
+      appRoot: dir, platform: 'ios', appId: 'com.example.app',
+    });
+    assert.equal(result.verdict, 'REFUSED');
+    assert.deepEqual(result.blocksWritten, ['safe']);
+    assert.equal(result.blocks[1].saved, false);
+    assert.equal(existsSync(join(dir, '.qaren', 'actions', 'code-shown.yaml')), false);
+    assert.equal(readFileSync(join(dir, '.qaren', 'actions', 'safe.yaml'), 'utf8').includes(EMAIL), false);
+  });
+}
+
+test('a normalizing controlled fallback continues as unverified', async () => {
+  const { performFocusedFill } = await import('../../../dist/handlers/device-interact.js');
+  const { _setActiveSessionForTest, _setRunAgentDeviceForTest } =
+    await import('../../../dist/agent-device-wrapper.js');
+  const { okResult } = await import('../../../dist/utils.js');
+  const { unwrap } = await import('../../../dist/qa/adapt.js');
+  const fake = app({ typedLabel: 'normalized@example.test' });
+  const type = fake.deps.typeFocused!;
+  let reads = 0;
+  let fills = 0;
+  const client = {
+    isConnected: true,
+    evaluate: async () => {
+      reads += 1;
+      return { value: JSON.stringify({
+        value: reads === 1 ? '' : 'normalized@example.test', controlled: true, focused: true,
+      }) };
+    },
+  } as never;
+  _setActiveSessionForTest({ platform: 'ios', deviceId: 'TEST-DEVICE', appId: 'com.test' });
+  _setRunAgentDeviceForTest(async () => {
+    fills += 1;
+    return okResult({ typed: true });
+  });
+  fake.deps.typeFocused = async (ref, text, testID, context) => {
+    await type(ref, text, testID, context);
+    const { data } = unwrap<{ verified: boolean }>(await performFocusedFill({
+      ref, text, testID, focused: true, vetoUnfocused: true, skipFinalValidation: true,
+    }, client));
+    assert.equal(data.verified, false);
+    return { ok: true, proven: false };
+  };
+  try {
+    const result = await walkBlock(blocks(plan())[0], fake.deps);
+    assert.equal(result.block.outcome, 'pass');
+    assert.match(fake.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
+    assert.equal(reads, 1);
+    assert.equal(fills, 1);
+    assert.equal(fake.state(), 'accepted');
+  } finally {
+    _setRunAgentDeviceForTest(null);
+    _setActiveSessionForTest(null);
+  }
 });

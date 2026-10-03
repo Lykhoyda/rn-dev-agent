@@ -59,6 +59,7 @@ export interface ActResult {
   ok: boolean;
   proven: boolean;
   error?: string;
+  mutation?: 'none' | 'observed' | 'possible';
 }
 
 export interface WalkerDeps {
@@ -66,7 +67,7 @@ export interface WalkerDeps {
   captureScreen(options?: { platformPresence?: boolean; timing?: TimingObserver }): Promise<Screen>;
   press(ref: string, context: QaDispatchContext): Promise<ActResult>;
   fill(ref: string, text: string, context: QaDispatchContext): Promise<ActResult>;
-  // iOS only: type into whatever field has keyboard focus; testID names the input React may confirm.
+  // iOS only: type without final validation; testID identifies the pre-dispatch focus veto.
   typeFocused?(
     ref: string,
     text: string,
@@ -703,7 +704,7 @@ export async function walkBlock(
       ref: again.element.ref,
       outcome: 'pass',
       reason: redact(
-        `UNVERIFIED_FILL: typed with the keyboard after tapping "${quoted}"; the field is not an observable native input, so its final value was not read back`,
+        `UNVERIFIED_FILL: typed with the keyboard after tapping "${quoted}"; the field is not an observable native input, so its final value was not validated`,
       ),
     });
     return 'typed';
@@ -937,6 +938,10 @@ export async function walkBlock(
               ref = resolution.ref;
               element = resolution.element;
             }
+            if (item.kind === 'fill' && element && isPrivateInput(element)) {
+              privacy.concealFallback(item.text);
+              if (!privateFills.includes(item.line)) privateFills.push(item.line);
+            }
             act = await mutate(item, before, (context) =>
               item.kind === 'press'
                 ? deps.press(ref!, context)
@@ -966,9 +971,7 @@ export async function walkBlock(
         diagnostic(item, after, 'decision', 'ACCEPTED');
         metric('readback', after);
         const shot = await shoot(item);
-        if (act!.proven || changed) {
-          if (item.kind === 'fill' && element && isPrivateInput(element))
-            privateFills.push(item.line);
+        if (item.kind === 'fill' ? act!.ok && act!.proven : act!.proven || changed) {
           const target = stepTarget(item);
           emit({
             ...base(item, attempt),
@@ -979,6 +982,17 @@ export async function walkBlock(
             ),
             outcome: 'pass',
           });
+          break;
+        }
+        if (item.kind === 'fill' && act!.mutation !== 'none') {
+          outcome = failed(
+            item,
+            attempt,
+            `${act!.error ?? 'TEXT_ENTRY_UNVERIFIED: the fill was not verified'}; the fill may have mutated the field; not retrying`,
+            after.screen,
+            shot,
+            ref,
+          );
           break;
         }
         if (attempt === 1) {
@@ -1031,6 +1045,7 @@ export async function walkBlock(
         return {
           block: { key, outcome: 'fail', source: 'discovered' },
           rows,
+          ...(privateFills.length ? { privateFills } : {}),
           failure: { step: item.line, seen: safe.message },
           refusal: { code: safe.code, message: safe.message },
         };

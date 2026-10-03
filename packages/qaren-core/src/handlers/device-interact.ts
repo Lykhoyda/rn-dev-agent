@@ -940,6 +940,7 @@ export interface FillArgs {
   focused?: boolean;
   /** With focused: refuse before typing when the React read of the intended input reports it unfocused. */
   vetoUnfocused?: boolean;
+  skipFinalValidation?: boolean;
   /** Story 04 (#385): per-call settle budget override in ms. */
   settleTimeoutMs?: number;
 }
@@ -1491,7 +1492,8 @@ export async function performFocusedFill(
       },
       'Typed into the focused field; the value could not be confirmed. Confirm with device_screenshot or expect_text before relying on it.',
     );
-  if (before === null || beforeRead?.focused !== true) return unverified();
+  if (args.skipFinalValidation || before === null || beforeRead?.focused !== true)
+    return unverified();
   const verification = await awaitReactInputValue(
     () => readReactInputValue(client, oracleTestId),
     before + args.text,

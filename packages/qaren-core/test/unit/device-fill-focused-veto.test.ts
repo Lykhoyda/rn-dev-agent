@@ -107,3 +107,32 @@ test('U9: a focused React input types once and verifies through the React tree',
   assert.equal(fills, 1);
   assert.equal(envelope(result).meta.verifiedOracle, 'react-tree');
 });
+
+for (const focused of [true, false]) {
+  test(`fallback skips final validation while retaining focus veto (${focused})`, async () => {
+    let reads = 0;
+    const normalizingClient = {
+      isConnected: true,
+      evaluate: async () => {
+        reads += 1;
+        return {
+          value: JSON.stringify({ value: reads === 1 ? '' : 'normalized', controlled: true, focused }),
+        };
+      },
+    } as never;
+    const { result, fills } = await withSeam(() =>
+      performFocusedFill({ ...args, skipFinalValidation: true }, normalizingClient),
+    );
+    assert.equal(reads, 1);
+    assert.equal(fills, focused ? 1 : 0);
+    const env = envelope(result);
+    if (focused) {
+      assert.equal(env.ok, true);
+      assert.equal(env.data.verified, false);
+      assert.equal(env.data.verifiedOracle, 'none');
+    } else {
+      assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
+      assert.equal(env.meta.mutation, 'none');
+    }
+  });
+}
