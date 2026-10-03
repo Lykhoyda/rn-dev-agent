@@ -44,6 +44,8 @@ trap cleanup EXIT
 
 mkdir -p "$tmp/plugin/scripts" "$tmp/bin" "$tmp/home"
 cp "$SCRIPT" "$tmp/plugin/scripts/ensure-qaren.sh"
+# Substitute the hardware adapter only in the test copy.
+TEST_SYSCTL="$tmp/bin/sysctl" perl -pi -e 's{/usr/sbin/sysctl}{$ENV{TEST_SYSCTL}}g' "$tmp/plugin/scripts/ensure-qaren.sh"
 printf '#!/bin/sh\ncase "$1" in -s) echo "${FAKE_OS:-Darwin}" ;; -m) echo "${FAKE_ARCH:-arm64}" ;; esac\n' > "$tmp/bin/uname"
 printf '#!/bin/sh\necho "network touched" >> "%s/network"\nexit 7\n' "$tmp" > "$tmp/bin/curl"
 printf '#!/bin/sh\n[ "${FAKE_ARM64:-1}" = absent ] && exit 1\necho "${FAKE_ARM64:-1}"\n' > "$tmp/bin/sysctl"
@@ -295,6 +297,7 @@ bounded "missing runtime"
 check "missing runtime: prints the install command" yes "$(contains "$out" "ensure-qaren.sh --install")"
 
 cp -R "$ROOT/packages/qaren-plugin" "$tmp/plugin with space"
+TEST_SYSCTL="$tmp/bin/sysctl" perl -pi -e 's{/usr/sbin/sysctl}{$ENV{TEST_SYSCTL}}g' "$tmp/plugin with space/scripts/ensure-qaren.sh"
 cp "$tmp/plugin/runner-manifest.json" "$tmp/plugin with space/runner-manifest.json"
 hook_command=$("$NODE" -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).hooks.SessionStart[0].hooks[0].command' "$tmp/plugin with space/hooks/hooks.json")
 : > "$TEST_CHECK_PIDS"

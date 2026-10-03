@@ -156,6 +156,8 @@ test('the Apple silicon archive contains only Darwin helpers and passes offline 
     const stubs = join(dir, 'stubs');
     mkdirSync(stubs);
     const sysctl = join(stubs, 'sysctl');
+    // Substitute the hardware adapter only in the test copy.
+    writeFileSync(script, readFileSync(script, 'utf8').replace('/usr/sbin/sysctl', sysctl));
     writeFileSync(sysctl, '#!/bin/sh\necho 1\n');
     chmodSync(sysctl, 0o755);
     for (const platform of ['darwin-arm64'] as const) {

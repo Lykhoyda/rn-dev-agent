@@ -52,7 +52,7 @@ fi
 read_asset() {
   local platform=darwin-arm64
   [ "$(uname -s)" = Darwin ] || { echo "qaren ships a macOS runtime only; this host is $(uname -s)" >&2; return 1; }
-  [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ] || { echo "qaren 2.0 supports Apple silicon Macs only" >&2; return 3; }
+  [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ] || { echo "qaren 2.0 supports Apple silicon Macs only" >&2; return 3; }
   [ -f "$MANIFEST" ] || { echo "this plugin carries no runner-manifest.json" >&2; return 1; }
   command -v node >/dev/null 2>&1 || { echo "qaren needs Node 24 or newer on PATH" >&2; return 1; }
   exec node -e '

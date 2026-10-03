@@ -28,6 +28,13 @@ trap 'rm -rf "$tmp"' EXIT
 
 mkdir -p "$tmp/stubs" "$tmp/plugin/scripts"
 cp "$SCRIPT" "$tmp/plugin/scripts/ensure-qaren.sh"
+if [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
+  out=$(HOME="$tmp/home" PATH=/usr/bin:/bin /bin/bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
+  check "minimal PATH: native Apple silicon reaches manifest validation" "qaren: this plugin carries no runner-manifest.json
+runner-manifest.json is unreadable" "$out"
+fi
+# Substitute only the hardware adapter in the test copy for Intel/Rosetta cases.
+TEST_SYSCTL="$tmp/stubs/sysctl" perl -pi -e 's{/usr/sbin/sysctl}{$ENV{TEST_SYSCTL}}g' "$tmp/plugin/scripts/ensure-qaren.sh"
 printf '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo "${FAKE_ARCH:-arm64}" ;; *) echo Darwin ;; esac\n' > "$tmp/stubs/uname"
 printf '#!/bin/sh\n[ "${FAKE_ARM64:-1}" = absent ] && exit 1\necho "${FAKE_ARM64:-1}"\n' > "$tmp/stubs/sysctl"
 printf '#!/bin/sh\necho touched >> "%s/network"\nexit 7\n' "$tmp" > "$tmp/stubs/curl"
@@ -108,6 +115,12 @@ for hardware in 0 absent; do
   out=$(FAKE_ARCH=x86_64 FAKE_ARM64="$hardware" HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
   check "Intel $hardware: hook exits 0" 0 "$?"
   check "Intel $hardware: hook prints one unsupported line" "qaren: qaren 2.0 supports Apple silicon Macs only" "$out"
+  out=$(FAKE_ARM64="$hardware" HOME="$tmp/home" PATH=/usr/bin:/bin /bin/bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
+  check "Intel $hardware with minimal PATH: hook exits 0" 0 "$?"
+  check "Intel $hardware with minimal PATH: unsupported" "qaren: qaren 2.0 supports Apple silicon Macs only" "$out"
+  FAKE_ARM64="$hardware" PATH=/usr/bin:/bin run_install "$tmp/missing.tgz" > "$tmp/intel-stdout"
+  check "Intel $hardware with minimal PATH: install refuses" yes "$([ "$?" != 0 ] && echo yes || echo no)"
+  check "Intel $hardware with minimal PATH: unsupported" "qaren 2.0 supports Apple silicon Macs only" "$(cat "$tmp/stderr")"
 done
 check "Intel never downloads" no "$([ -e "$tmp/network" ] && echo yes || echo no)"
 
