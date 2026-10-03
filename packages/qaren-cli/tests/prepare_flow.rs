@@ -1066,35 +1066,36 @@ struct RecordProbeRunner {
 }
 
 impl qaren::exec::Runner for RecordProbeRunner {
-    fn run(&mut self, spec: &qaren::exec::CmdSpec) -> CmdOutput {
+    fn execute(&mut self, spec: &qaren::exec::CmdSpec, interruptible: bool) -> CmdOutput {
         if spec.label == self.probe_label {
             self.observed = std::fs::read_to_string(RunRecord::path(&self.repo, &self.run_id)).ok();
             if let Some(probe) = self.at_probe.take() {
                 probe(&RunRecord::run_dir(&self.repo, &self.run_id));
             }
         }
-        self.inner.run(spec)
+        self.inner.execute(spec, interruptible)
     }
-    fn run_private(
+    fn execute_private(
         &mut self,
         spec: &qaren::exec::CmdSpec,
         input: &[u8],
+        interruptible: bool,
     ) -> qaren::exec::PrivateOutput {
-        self.inner.run_private(spec, input)
+        self.inner.execute_private(spec, input, interruptible)
     }
-    fn spawn_group(
+    fn spawn_group_unchecked(
         &mut self,
         spec: &qaren::exec::CmdSpec,
         log_path: &std::path::Path,
     ) -> std::io::Result<Spawned> {
-        self.inner.spawn_group(spec, log_path)
+        self.inner.spawn_group_unchecked(spec, log_path)
     }
-    fn spawn_piped(
+    fn spawn_piped_unchecked(
         &mut self,
         spec: &qaren::exec::CmdSpec,
         stderr_log: &std::path::Path,
     ) -> std::io::Result<qaren::exec::PipedChild> {
-        self.inner.spawn_piped(spec, stderr_log)
+        self.inner.spawn_piped_unchecked(spec, stderr_log)
     }
     fn sleep(&mut self, duration: std::time::Duration) {
         self.inner.sleep(duration)

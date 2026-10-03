@@ -111,40 +111,12 @@ fn prewarm_validated(
 
     // The install ran arbitrary lifecycle scripts; the receipt may only claim
     // the pre-install candidate if the checkout provably did not move.
-    let head_now = runner.run(&CmdSpec::new(
-        "git-head",
-        "git",
-        &["-C", &cand.repo_root.to_string_lossy(), "rev-parse", "HEAD"],
-        20,
-    ));
-    let porcelain_now = runner.run(&CmdSpec::new(
-        "git-dirty",
-        "git",
-        &[
-            "-C",
-            &cand.repo_root.to_string_lossy(),
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-        ],
-        30,
-    ));
-    let project_state = candidate::porcelain_without_qaren_state(&porcelain_now.stdout);
-    let project_state = if scenario.build.owner == crate::scenario::BuildOwner::Qaren {
-        candidate::filter_integration_entries(
-            runner,
-            &cand.repo_root,
-            &cand.project_root,
-            &project_state,
-        )
-    } else {
-        project_state
-    };
-    let unchanged = head_now.ok()
-        && head_now.stdout.trim() == cand.git_sha
-        && porcelain_now.ok()
-        && Some(candidate::worktree_fingerprint(&project_state)) == cand.worktree_fingerprint;
+    let unchanged = candidate::verify_unchanged_with(
+        runner,
+        &cand,
+        scenario.build.owner == crate::scenario::BuildOwner::Qaren,
+    )
+    .is_ok();
     if !unchanged {
         return Err(Box::new((
             Failure::new(

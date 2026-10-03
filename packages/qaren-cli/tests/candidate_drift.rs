@@ -121,3 +121,98 @@ fn phrase_named_files_preserve_native_fingerprints_and_drift_detection() {
         std::fs::remove_dir_all(repo).unwrap();
     }
 }
+
+struct InstallMutation {
+    inner: RealRunner,
+    path: std::path::PathBuf,
+}
+
+impl Runner for InstallMutation {
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> qaren::exec::CmdOutput {
+        match spec.label.as_str() {
+            "pnpm-fetch" => qaren::exec::CmdOutput::success("fetched"),
+            "pnpm-install" => {
+                std::fs::write(&self.path, "changed during install").unwrap();
+                qaren::exec::CmdOutput::success("installed")
+            }
+            _ => self.inner.execute(spec, interruptible),
+        }
+    }
+    fn spawn_group_unchecked(
+        &mut self,
+        _: &CmdSpec,
+        _: &Path,
+    ) -> std::io::Result<qaren::exec::Spawned> {
+        unreachable!()
+    }
+    fn spawn_piped_unchecked(
+        &mut self,
+        _: &CmdSpec,
+        _: &Path,
+    ) -> std::io::Result<qaren::exec::PipedChild> {
+        unreachable!()
+    }
+    fn sleep(&mut self, d: std::time::Duration) {
+        self.inner.sleep(d);
+    }
+    fn now_epoch_ms(&self) -> u64 {
+        self.inner.now_epoch_ms()
+    }
+    fn commands_executed(&self) -> u64 {
+        self.inner.commands_executed()
+    }
+}
+
+#[test]
+fn same_status_dirty_and_untracked_content_changes_during_install_are_rejected() {
+    use qaren::commands::prewarm::{prewarm, PrewarmArgs};
+    for tracked in [true, false] {
+        let repo = common::temp_repo();
+        let file = repo.join("test-app/App.tsx");
+        let scenario_path = repo.join("scenario.yaml");
+        std::fs::write(&scenario_path, common::ios_scenario_yaml(8793)).unwrap();
+        if tracked {
+            std::fs::write(&file, "original").unwrap();
+        }
+        git(&repo, &["init", "-q"]);
+        git(&repo, &["add", "."]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "baseline",
+            ],
+        );
+        std::fs::write(&file, "dirty before install").unwrap();
+        let status = CmdSpec::new(
+            "git-status",
+            "git",
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            20,
+        )
+        .cwd(&repo);
+        let before = RealRunner::new().run(&status).stdout;
+        let scenario = common::scenario_from(&common::ios_scenario_yaml(8793));
+        let baseline = resolve(&mut RealRunner::new(), &scenario, &repo).unwrap();
+        assert!(verify_unchanged_with(&mut RealRunner::new(), &baseline, false).is_ok());
+        let mut runner = InstallMutation {
+            inner: RealRunner::new(),
+            path: file,
+        };
+        let receipt = prewarm(&mut runner, &PrewarmArgs { scenario_path });
+        assert_eq!(before, RealRunner::new().run(&status).stdout);
+        assert_eq!(
+            receipt.failure.unwrap().code,
+            qaren::failure::FailureCode::CandidateDrifted
+        );
+        assert!(verify_unchanged_with(&mut RealRunner::new(), &baseline, false).is_err());
+        std::fs::remove_dir_all(repo).unwrap();
+    }
+}

@@ -388,6 +388,7 @@ pub fn spawn(
     stderr_log: &Path,
     request: &CoreRequest,
 ) -> Result<CoreChild, Failure> {
+    crate::cancel::ensure_running(runner, "core")?;
     let mut child = runner.spawn_piped(spec, stderr_log).map_err(|e| {
         Failure::new(
             "core",
@@ -396,6 +397,10 @@ pub fn spawn(
             "check the node path and the qaren runtime directory, then re-run",
         )
     })?;
+    if let Err(failure) = crate::cancel::ensure_running(runner, "core") {
+        child.handle.kill_group();
+        return Err(failure);
+    }
     let envelope = json!({
         "v": WIRE_VERSION,
         "runId": request.run_id,
@@ -553,6 +558,13 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
     let mut cancel_deadline: Option<u64> = None;
     // Kill before reaping to keep the pgid from being recycled under us.
     loop {
+        if killed_at.is_none() && cancel_deadline.is_none() {
+            if let Some(reason) = runner.cancellation() {
+                deadline_failure = Some(Failure::cancelled("walk", &reason));
+                child.handle.terminate();
+                cancel_deadline = Some(runner.monotonic_ms() + CANCEL_GRACE_MS);
+            }
+        }
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(Msg::Line(line)) => {
                 if inbox.accept(&crate::redact::redact_api_key(&line)) {
@@ -598,14 +610,6 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
                 killed_at = Some(now);
             }
             continue;
-        }
-        if result_at.is_none() {
-            if let Some(reason) = runner.cancellation() {
-                deadline_failure = Some(Failure::cancelled("walk", &reason));
-                child.handle.terminate();
-                cancel_deadline = Some(now + CANCEL_GRACE_MS);
-                continue;
-            }
         }
         // Setup uses only the walk budget; a held result uses only the exit grace.
         let walking = inbox.rows.iter().any(|r| r.line > 0);

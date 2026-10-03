@@ -145,7 +145,7 @@ fn a_recorder_with_an_unproven_spawn_is_unresolved() {
 struct GitRemoves(MockRunner, Option<PathBuf>);
 
 impl qaren::exec::Runner for GitRemoves {
-    fn run(&mut self, spec: &qaren::exec::CmdSpec) -> CmdOutput {
+    fn execute(&mut self, spec: &qaren::exec::CmdSpec, interruptible: bool) -> CmdOutput {
         if spec.args.starts_with(&["worktree".into(), "remove".into()]) {
             let _ = std::fs::remove_dir_all(spec.args.last().unwrap());
         }
@@ -158,21 +158,21 @@ impl qaren::exec::Runner for GitRemoves {
                 std::fs::rename(path.with_extension("backup"), path).unwrap();
             }
         }
-        self.0.run(spec)
+        self.0.execute(spec, interruptible)
     }
-    fn spawn_group(
+    fn spawn_group_unchecked(
         &mut self,
         spec: &qaren::exec::CmdSpec,
         log: &std::path::Path,
     ) -> std::io::Result<Spawned> {
-        self.0.spawn_group(spec, log)
+        self.0.spawn_group_unchecked(spec, log)
     }
-    fn spawn_piped(
+    fn spawn_piped_unchecked(
         &mut self,
         spec: &qaren::exec::CmdSpec,
         log: &std::path::Path,
     ) -> std::io::Result<qaren::exec::PipedChild> {
-        self.0.spawn_piped(spec, log)
+        self.0.spawn_piped_unchecked(spec, log)
     }
     fn sleep(&mut self, d: std::time::Duration) {
         self.0.sleep(d)
@@ -507,4 +507,34 @@ fn unbound_metro_groups_retain_worktrees_and_leases_until_positive_absence() {
             assert_eq!(runner.0.remaining(), 0);
         }
     }
+}
+
+#[test]
+fn cancellation_during_recorder_readiness_stops_and_retires_the_recorder() {
+    let (root, mut record) = walking_record();
+    let mut mock = MockRunner::new();
+    mock.expect_spawn_with_log(
+        "recordVideo",
+        Spawned {
+            pid: 7100,
+            pgid: 7100,
+        },
+        "booting\n",
+    );
+    script_identity(&mut mock);
+    mock.cancel_after = Some(("-o command=".into(), "received SIGTERM".into()));
+    mock.expect_run("ps", CmdOutput::success(LSTART));
+    mock.expect_run("ps", CmdOutput::success("S"));
+    mock.expect_run("/bin/kill -INT 7100", CmdOutput::success(""));
+    mock.expect_run("ps", CmdOutput::failed(1, ""));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+    let status = record::start(&mut mock, &mut record, &root, "U").unwrap_err();
+    assert!(matches!(status, VideoStatus::Unavailable(reason) if reason.contains("SIGTERM")));
+    assert!(record.resources.recorder.is_none());
+    assert!(RunRecord::load(&root, &record.run_id)
+        .unwrap()
+        .resources
+        .recorder
+        .is_none());
+    assert_eq!(mock.remaining(), 0);
 }

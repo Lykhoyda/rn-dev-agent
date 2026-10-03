@@ -37,12 +37,28 @@ fn the_first_signal_is_recorded_instead_of_ending_the_process() {
     assert!(start.elapsed() < Duration::from_secs(5));
     assert_eq!(cancel::caught(), libc::SIGTERM);
     assert_eq!(runner.cancellation().as_deref(), Some("received SIGTERM"));
-    let cleanup = runner.run(&CmdSpec::new(
-        "cleanup",
+    let executed = runner.commands_executed();
+    let blocked = runner.run(&CmdSpec::new(
+        "forward",
         "/bin/sh",
-        &["-c", "printf cleaned"],
+        &["-c", "printf forbidden"],
         5,
     ));
+    assert!(!blocked.ok());
+    assert!(blocked.stdout.is_empty());
+    let spec = CmdSpec::new("forward-spawn", "/bin/sh", &["-c", "printf forbidden"], 5);
+    assert!(runner
+        .spawn_group(&spec, std::path::Path::new("unused.log"))
+        .is_err());
+    assert!(runner
+        .spawn_piped(&spec, std::path::Path::new("unused.log"))
+        .is_err());
+    assert!(!runner.run_private(&spec, b"input").clean());
+    assert_eq!(runner.commands_executed(), executed);
+    let cleanup = runner.execute(
+        &CmdSpec::new("cleanup", "/bin/sh", &["-c", "printf cleaned"], 5),
+        false,
+    );
     assert!(cleanup.ok());
     assert_eq!(cleanup.stdout, "cleaned");
 }

@@ -167,11 +167,11 @@ impl Runner for Witness {
     fn env_var(&self, name: &str) -> Option<String> {
         self.mock.env_var(name)
     }
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
         if spec.label == "fresh-install-admission" {
             self.assert_lease();
         }
-        let output = self.mock.run(spec);
+        let output = self.mock.execute(spec, interruptible);
         if (self.fault == Fault::PendingSave && spec.label == "fresh-install-admission")
             || (self.fault == Fault::CleanupSave && spec.label == "simctl-launchctl")
         {
@@ -179,10 +179,10 @@ impl Runner for Witness {
         }
         output
     }
-    fn spawn_group(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<Spawned> {
+    fn spawn_group_unchecked(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<Spawned> {
         panic!("native suite must use a stdin-gated child")
     }
-    fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
         self.assert_lease();
         assert_eq!(self.record()["process"]["state"], "spawn_pending");
         let mut contender = MockRunner::new();
@@ -198,7 +198,7 @@ impl Runner for Witness {
         )
         .unwrap_err();
         assert_eq!(error.code, qaren::failure::FailureCode::DeviceBusy);
-        let mut child = self.mock.spawn_piped(spec, log)?;
+        let mut child = self.mock.spawn_piped_unchecked(spec, log)?;
         if self.fault == Fault::SpawnGap {
             return Err(std::io::Error::other("lost spawn acknowledgement"));
         }
@@ -1033,9 +1033,11 @@ impl Runner for HybridRunner {
         self.mock.env_var(name)
     }
 
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
         match spec.label.as_str() {
-            "simctl-list" | "simctl-launchctl" | "fresh-install-admission" => self.mock.run(spec),
+            "simctl-list" | "simctl-launchctl" | "fresh-install-admission" => {
+                self.mock.execute(spec, interruptible)
+            }
             "ps-lstart" | "ps-command" | "ps-stat" | "ps-groups" | "kill-group" => {
                 assert!(matches!(spec.program.as_str(), "ps" | "/bin/kill"));
                 if spec.label == "ps-groups" && self.reaped.load(Ordering::SeqCst) {
@@ -1055,7 +1057,7 @@ impl Runner for HybridRunner {
                 if spec.label == "kill-group" {
                     self.signals += 1;
                 }
-                let mut output = self.real.run(spec);
+                let mut output = self.real.execute(spec, interruptible);
                 if spec.label == "ps-groups" {
                     // Isolate real fixture-group rows from unrelated host process churn.
                     if output.ok() && output.stdout.ends_with('\n') {
@@ -1087,11 +1089,11 @@ impl Runner for HybridRunner {
         }
     }
 
-    fn spawn_group(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<Spawned> {
+    fn spawn_group_unchecked(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<Spawned> {
         panic!("native suite must use piped spawn")
     }
 
-    fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
         assert_eq!(spec.program, "/bin/bash");
         assert_eq!(
             &spec.args[..5],
@@ -1107,7 +1109,7 @@ impl Runner for HybridRunner {
         let script = harmless.args.last_mut().unwrap();
         assert!(script.ends_with("/scripts/test-native-ios.sh"));
         *script = self.home.join("harmless-suite.sh").display().to_string();
-        let mut child = self.real.spawn_piped(&harmless, log)?;
+        let mut child = self.real.spawn_piped_unchecked(&harmless, log)?;
         self.pid = child.pid;
         let handle = Arc::new(Mutex::new(child.handle));
         self.child = Some(handle.clone());

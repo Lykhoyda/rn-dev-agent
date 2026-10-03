@@ -68,14 +68,14 @@ fn kill_group(pgid: i32) {
 struct NeverReaps(RealRunner);
 
 impl Runner for NeverReaps {
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
-        self.0.run(spec)
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
+        self.0.execute(spec, interruptible)
     }
-    fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
-        self.0.spawn_group(spec, log)
+    fn spawn_group_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        self.0.spawn_group_unchecked(spec, log)
     }
-    fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
-        self.0.spawn_piped(spec, log)
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.0.spawn_piped_unchecked(spec, log)
     }
     fn sleep(&mut self, d: Duration) {
         self.0.sleep(d)

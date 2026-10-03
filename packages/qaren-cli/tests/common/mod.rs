@@ -96,7 +96,7 @@ pub fn base_record(
             git_sha: "b".repeat(40),
             git_dirty: false,
             lockfile_sha256: Some("c".repeat(64)),
-            worktree_fingerprint: Some(qaren::candidate::worktree_fingerprint("")),
+            worktree_fingerprint: Some(qaren::candidate::worktree_fingerprint(repo_root, "").unwrap()),
         },
         phase,
         prepare: Some(identity(999, "Wed Aug 12 15:00:00 2026")),
@@ -330,17 +330,18 @@ impl qaren::exec::Runner for IosBuildRunner {
     fn env_var(&self, name: &str) -> Option<String> {
         self.inner.env_var(name)
     }
-    fn run(&mut self, spec: &qaren::exec::CmdSpec) -> CmdOutput {
-        self.inner.run(spec)
+    fn execute(&mut self, spec: &qaren::exec::CmdSpec, interruptible: bool) -> CmdOutput {
+        self.inner.execute(spec, interruptible)
     }
-    fn run_private(
+    fn execute_private(
         &mut self,
         spec: &qaren::exec::CmdSpec,
         input: &[u8],
+        interruptible: bool,
     ) -> qaren::exec::PrivateOutput {
-        self.inner.run_private(spec, input)
+        self.inner.execute_private(spec, input, interruptible)
     }
-    fn spawn_group(
+    fn spawn_group_unchecked(
         &mut self,
         spec: &qaren::exec::CmdSpec,
         log: &std::path::Path,
@@ -354,9 +355,9 @@ impl qaren::exec::Runner for IosBuildRunner {
                 std::os::unix::fs::symlink(&outside, &source).unwrap();
             }
         }
-        self.inner.spawn_group(spec, log)
+        self.inner.spawn_group_unchecked(spec, log)
     }
-    fn spawn_piped(
+    fn spawn_piped_unchecked(
         &mut self,
         spec: &qaren::exec::CmdSpec,
         log: &std::path::Path,
@@ -388,7 +389,7 @@ impl qaren::exec::Runner for IosBuildRunner {
                 "build executable unavailable",
             ));
         }
-        let mut child = self.inner.spawn_piped(spec, log)?;
+        let mut child = self.inner.spawn_piped_unchecked(spec, log)?;
         if matches!(
             spec.label.as_str(),
             "expo-run-ios" | "xcodebuild-ios" | "expo-prebuild"

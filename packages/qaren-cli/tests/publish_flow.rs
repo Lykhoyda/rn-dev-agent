@@ -15,20 +15,20 @@ const COMMIT: &str = "beef0000beef0000beef0000beef0000beef0000";
 struct Git(MockRunner);
 
 impl Runner for Git {
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
         if spec.args.starts_with(&["worktree".into(), "add".into()]) {
             std::fs::create_dir_all(&spec.args[3]).unwrap();
         }
         if spec.args.starts_with(&["worktree".into(), "remove".into()]) {
             let _ = std::fs::remove_dir_all(spec.args.last().unwrap());
         }
-        self.0.run(spec)
+        self.0.execute(spec, interruptible)
     }
-    fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
-        self.0.spawn_group(spec, log)
+    fn spawn_group_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        self.0.spawn_group_unchecked(spec, log)
     }
-    fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
-        self.0.spawn_piped(spec, log)
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.0.spawn_piped_unchecked(spec, log)
     }
     fn sleep(&mut self, d: std::time::Duration) {
         self.0.sleep(d)
@@ -444,8 +444,8 @@ fn an_origin_that_is_not_the_pr_repository_gets_the_yaml_comment_and_no_push() {
 struct SymlinkedCorpus(Git);
 
 impl Runner for SymlinkedCorpus {
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
-        let output = self.0.run(spec);
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
+        let output = self.0.execute(spec, interruptible);
         if spec.args.starts_with(&["worktree".into(), "add".into()]) {
             let wt = PathBuf::from(&spec.args[3]);
             let outside = wt.parent().unwrap().join("outside");
@@ -455,11 +455,11 @@ impl Runner for SymlinkedCorpus {
         }
         output
     }
-    fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
-        self.0.spawn_group(spec, log)
+    fn spawn_group_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        self.0.spawn_group_unchecked(spec, log)
     }
-    fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
-        self.0.spawn_piped(spec, log)
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.0.spawn_piped_unchecked(spec, log)
     }
     fn sleep(&mut self, d: std::time::Duration) {
         self.0.sleep(d)
@@ -550,7 +550,7 @@ fn an_unreadable_publication_state_fails_closed() {
 struct Staged(Git, Vec<String>);
 
 impl Runner for Staged {
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
         if spec.label == "git-add-blocks" {
             let cwd = spec.cwd.clone().unwrap();
             for path in &spec.args[3..] {
@@ -558,13 +558,13 @@ impl Runner for Staged {
                     .push(std::fs::read_to_string(cwd.join(path)).unwrap());
             }
         }
-        self.0.run(spec)
+        self.0.execute(spec, interruptible)
     }
-    fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
-        self.0.spawn_group(spec, log)
+    fn spawn_group_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        self.0.spawn_group_unchecked(spec, log)
     }
-    fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
-        self.0.spawn_piped(spec, log)
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.0.spawn_piped_unchecked(spec, log)
     }
     fn sleep(&mut self, d: std::time::Duration) {
         self.0.sleep(d)
@@ -880,7 +880,7 @@ struct Uploads {
 }
 
 impl Runner for Uploads {
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
         if spec.label == "gh-pr-comment" {
             let at = spec
                 .args
@@ -891,13 +891,13 @@ impl Runner for Uploads {
             let body = std::fs::read_to_string(spec.cwd.as_ref().unwrap().join(file)).unwrap();
             self.bodies.push((file.clone(), body));
         }
-        self.runner.run(spec)
+        self.runner.execute(spec, interruptible)
     }
-    fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
-        self.runner.spawn_group(spec, log)
+    fn spawn_group_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        self.runner.spawn_group_unchecked(spec, log)
     }
-    fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
-        self.runner.spawn_piped(spec, log)
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.runner.spawn_piped_unchecked(spec, log)
     }
     fn sleep(&mut self, d: std::time::Duration) {
         self.runner.sleep(d)
@@ -1131,7 +1131,7 @@ fn patched_blocks_keep_their_extension_through_preservation_and_publication() {
         written: bool,
     }
     impl Runner for ExistingBlock {
-        fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+        fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
             if spec.label == "git-worktree-add" {
                 let actions = Path::new(&spec.args[3]).join("test-app/.qaren/actions");
                 std::fs::create_dir_all(&actions).unwrap();
@@ -1155,13 +1155,21 @@ fn patched_blocks_keep_their_extension_through_preservation_and_publication() {
                 assert!(!actions.join(format!("tasks.{other}")).exists());
                 self.written = true;
             }
-            self.git.run(spec)
+            self.git.execute(spec, interruptible)
         }
-        fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
-            self.git.spawn_group(spec, log)
+        fn spawn_group_unchecked(
+            &mut self,
+            spec: &CmdSpec,
+            log: &Path,
+        ) -> std::io::Result<Spawned> {
+            self.git.spawn_group_unchecked(spec, log)
         }
-        fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
-            self.git.spawn_piped(spec, log)
+        fn spawn_piped_unchecked(
+            &mut self,
+            spec: &CmdSpec,
+            log: &Path,
+        ) -> std::io::Result<PipedChild> {
+            self.git.spawn_piped_unchecked(spec, log)
         }
         fn sleep(&mut self, d: std::time::Duration) {
             self.git.sleep(d)
@@ -1262,7 +1270,7 @@ fn local_git(repo: &Path, args: &[&str]) -> String {
 }
 
 impl Runner for LocalPublication {
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+    fn execute(&mut self, spec: &CmdSpec, _interruptible: bool) -> CmdOutput {
         self.calls.push(spec.clone());
         match spec.label.as_str() {
             "git-push-url" | "git-fetch-url" if !self.real_urls => {
@@ -1293,10 +1301,10 @@ impl Runner for LocalPublication {
             }
         }
     }
-    fn spawn_group(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<Spawned> {
+    fn spawn_group_unchecked(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<Spawned> {
         unreachable!()
     }
-    fn spawn_piped(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<PipedChild> {
+    fn spawn_piped_unchecked(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<PipedChild> {
         unreachable!()
     }
     fn sleep(&mut self, _: std::time::Duration) {}
@@ -1648,14 +1656,14 @@ struct LocalFetchForge {
 }
 
 impl Runner for LocalFetchForge {
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
         if (self.fetch_failure && spec.label == "git-fetch-url")
             || (self.read_failure && spec.label == "git-ls-remote")
         {
             self.git.calls.push(spec.clone());
             return CmdOutput::failed(1, "fixture lookup unavailable");
         }
-        self.git.run(
+        self.git.execute(
             &spec
                 .clone()
                 .env(
@@ -1663,12 +1671,13 @@ impl Runner for LocalFetchForge {
                     &format!("/bin/sh {}", self.ssh.display()),
                 )
                 .env("GIT_SSH_VARIANT", "ssh"),
+            interruptible,
         )
     }
-    fn spawn_group(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<Spawned> {
+    fn spawn_group_unchecked(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<Spawned> {
         unreachable!()
     }
-    fn spawn_piped(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<PipedChild> {
+    fn spawn_piped_unchecked(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<PipedChild> {
         unreachable!()
     }
     fn sleep(&mut self, _: std::time::Duration) {}

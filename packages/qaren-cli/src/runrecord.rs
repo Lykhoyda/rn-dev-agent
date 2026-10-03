@@ -525,6 +525,8 @@ impl RunRecord {
 }
 
 pub fn capture_pid_identity(runner: &mut dyn Runner, pid: i32) -> Option<PidIdentity> {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     let started = runner.run(&CmdSpec::new(
         "ps-lstart",
         "ps",

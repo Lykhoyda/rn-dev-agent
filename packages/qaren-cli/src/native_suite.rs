@@ -212,6 +212,7 @@ fn execute(runner: &mut dyn Runner, dir: &Path, record: &mut NativeSuite) -> Res
     };
     save(dir, record)?;
     let started = known
+        && runner.cancellation().is_none()
         && child
             .stdin
             .write_all(b"start\n")
@@ -222,6 +223,9 @@ fn execute(runner: &mut dyn Runner, dir: &Path, record: &mut NativeSuite) -> Res
     if started {
         let deadline = runner.monotonic_ms().saturating_add(1_200_000);
         loop {
+            if runner.cancellation().is_some() {
+                break;
+            }
             match child.handle.try_wait() {
                 Ok(Some(code)) => {
                     record.suite_exit = Some(code);
@@ -237,6 +241,9 @@ fn execute(runner: &mut dyn Runner, dir: &Path, record: &mut NativeSuite) -> Res
     let cleaned = finish(runner, dir, record, Some(child.handle.as_mut()));
     let _ = child.handle.try_wait();
     cleaned?;
+    if let Some(reason) = runner.cancellation() {
+        return Err(reason);
+    }
     if !started {
         return Err("suite was not admitted through the start gate".into());
     }

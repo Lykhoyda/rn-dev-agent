@@ -776,7 +776,7 @@ fn script_preflight_inventory_until_lease(
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
     mock.expect_run(
         "git",
-        CmdOutput::success("?? test-app/.qaren/\0?? test-app/plan.md\0"),
+        CmdOutput::success("?? test-app/.qaren/config.yaml\0?? test-app/plan.md\0"),
     );
     for tool in IOS_TOOLS {
         mock.expect_run("which", CmdOutput::success(&format!("/usr/bin/{tool}\n")));
@@ -977,13 +977,27 @@ fn script_teardown_after_drift(
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
     mock.expect_run(
         "git",
-        CmdOutput::success("?? test-app/.qaren/\0?? test-app/plan.md\0"),
+        CmdOutput::success("?? test-app/.qaren/config.yaml\0?? test-app/plan.md\0"),
     );
+    script_teardown_resources(mock, inventory, probe_dead_leader, udid, runner_host);
+}
+
+fn script_teardown_resources(
+    mock: &mut MockRunner,
+    inventory: CmdOutput,
+    probe_dead_leader: bool,
+    udid: &str,
+    runner_host: CmdOutput,
+) {
     mock.expect_run("ps -A", inventory.clone());
     if probe_dead_leader {
         mock.expect_run("ps -p 9000", CmdOutput::failed(1, ""));
         mock.expect_run("ps -A", inventory);
     }
+    script_metro_teardown(mock, udid, Some(runner_host));
+}
+
+fn script_metro_teardown(mock: &mut MockRunner, udid: &str, runner_host: Option<CmdOutput>) {
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
@@ -993,7 +1007,9 @@ fn script_teardown_after_drift(
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
-    script_host_probe(mock, udid, runner_host);
+    if let Some(runner_host) = runner_host {
+        script_host_probe(mock, udid, runner_host);
+    }
 }
 
 fn envelope(seq: u64, kind: &str, payload: &str) -> String {
@@ -1319,7 +1335,13 @@ fn a_cancelled_walk_is_a_refusal_that_still_tears_down_and_releases_the_lease() 
     script_drift_status(&mut mock);
     mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
     script_core_identity(&mut mock);
-    script_teardown(&mut mock);
+    script_teardown_resources(
+        &mut mock,
+        CmdOutput::success("1 1 S\n6000 6000 S\n"),
+        false,
+        UDID,
+        hosts_absent(),
+    );
     mock.cancel_after = Some(("-p 9000".into(), "received SIGTERM".into()));
 
     let receipt = run(&mut mock, &request(&repo, &app, 30));
@@ -1354,7 +1376,7 @@ fn script_cancelled_walk(mock: &mut MockRunner, repo: &Path, runner_host: CmdOut
     script_drift_status(mock);
     mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
     script_core_identity(mock);
-    script_teardown_core_host(
+    script_teardown_resources(
         mock,
         CmdOutput::success("1 1 S\n6000 6000 S\n"),
         false,
@@ -1865,7 +1887,7 @@ fn an_unresolved_metro_group_retains_the_device_lease_for_cleanup() {
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
     mock.expect_run(
         "git",
-        CmdOutput::success("?? test-app/.qaren/\0?? test-app/plan.md\0"),
+        CmdOutput::success("?? test-app/.qaren/config.yaml\0?? test-app/plan.md\0"),
     );
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n6000 6000 S\n"));
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
@@ -1931,7 +1953,7 @@ fn an_unreadable_disk_budget_fails_closed_before_any_claim() {
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
     mock.expect_run(
         "git",
-        CmdOutput::success("?? test-app/.qaren/\0?? test-app/plan.md\0"),
+        CmdOutput::success("?? test-app/.qaren/config.yaml\0?? test-app/plan.md\0"),
     );
     for tool in IOS_TOOLS {
         mock.expect_run("which", CmdOutput::success(&format!("/usr/bin/{tool}\n")));
@@ -2039,7 +2061,7 @@ fn two_booted_simulators_refuse_without_a_device_and_borrow_the_named_one_with_i
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
     mock.expect_run(
         "git",
-        CmdOutput::success("?? test-app/.qaren/\0?? test-app/plan.md\0"),
+        CmdOutput::success("?? test-app/.qaren/config.yaml\0?? test-app/plan.md\0"),
     );
     for tool in IOS_TOOLS {
         mock.expect_run("which", CmdOutput::success(&format!("/usr/bin/{tool}\n")));
@@ -2437,24 +2459,29 @@ impl Runner for LeaseObservedRunner {
     fn env_var(&self, name: &str) -> Option<String> {
         self.mock.env_var(name)
     }
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
         self.observe(spec);
-        self.mock.run(spec)
+        self.mock.execute(spec, interruptible)
     }
-    fn run_private(&mut self, spec: &CmdSpec, input: &[u8]) -> qaren::exec::PrivateOutput {
+    fn execute_private(
+        &mut self,
+        spec: &CmdSpec,
+        input: &[u8],
+        interruptible: bool,
+    ) -> qaren::exec::PrivateOutput {
         self.observe(spec);
         assert!(!RunRecord::run_dir(&self.repo.join("runs"), &run_id())
             .join("installed-apps.plist")
             .exists());
-        self.mock.run_private(spec, input)
+        self.mock.execute_private(spec, input, interruptible)
     }
-    fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+    fn spawn_group_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
         self.observe(spec);
-        self.mock.spawn_group(spec, log)
+        self.mock.spawn_group_unchecked(spec, log)
     }
-    fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
         self.observe(spec);
-        self.mock.spawn_piped(spec, log)
+        self.mock.spawn_piped_unchecked(spec, log)
     }
     fn sleep(&mut self, duration: std::time::Duration) {
         self.mock.sleep(duration);
@@ -3480,8 +3507,8 @@ impl Runner for PrRunner {
     fn env_var(&self, name: &str) -> Option<String> {
         self.inner.env_var(name)
     }
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
-        let output = self.inner.run(spec);
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
+        let output = self.inner.execute(spec, interruptible);
         match spec.label.as_str() {
             "git-worktree-add" => self.materialize(Path::new(&spec.args[3])),
             "git-worktree-remove" => std::fs::remove_dir_all(&spec.args[3]).unwrap(),
@@ -3489,10 +3516,15 @@ impl Runner for PrRunner {
         }
         output
     }
-    fn run_private(&mut self, spec: &CmdSpec, input: &[u8]) -> qaren::exec::PrivateOutput {
-        self.inner.run_private(spec, input)
+    fn execute_private(
+        &mut self,
+        spec: &CmdSpec,
+        input: &[u8],
+        interruptible: bool,
+    ) -> qaren::exec::PrivateOutput {
+        self.inner.execute_private(spec, input, interruptible)
     }
-    fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+    fn spawn_group_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
         if spec.label == "simctl-record-video" {
             let run_dir = log.parent().unwrap().parent().unwrap();
             let record: RunRecord =
@@ -3500,14 +3532,14 @@ impl Runner for PrRunner {
             self.recorder_persisted_before_spawn =
                 Some(record.resources.recorder.is_some_and(|r| r.pid.is_none()));
         }
-        self.inner.spawn_group(spec, log)
+        self.inner.spawn_group_unchecked(spec, log)
     }
-    fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
         if self.fail_core_spawn && spec.label == "core-walk" {
             self.inner.calls.push(spec.clone());
             return Err(std::io::Error::other("node vanished"));
         }
-        self.inner.spawn_piped(spec, log)
+        self.inner.spawn_piped_unchecked(spec, log)
     }
     fn sleep(&mut self, d: std::time::Duration) {
         self.inner.sleep(d)
@@ -3971,4 +4003,51 @@ fn cancellation_during_successful_dependency_install_skips_fresh_reset_and_clean
     assert!(record.resources.fresh_install.is_none());
     assert!(record.resources.lease.is_none());
     assert_eq!(mock.remaining(), 0);
+}
+
+#[test]
+fn cancelled_pr_startup_never_dispatches_the_core_and_cleans_up() {
+    for recorder_started in [false, true] {
+        let (repo, app) = app_repo();
+        let wt = repo.join("runs").join(run_id()).join("wt");
+        let mut runner = PrRunner {
+            inner: MockRunner::new(),
+            app: app.clone(),
+            recorder_persisted_before_spawn: None,
+            fail_core_spawn: false,
+        };
+        let mock = &mut runner.inner;
+        script_pr_preflight(mock, &repo, &wt);
+        script_provision(mock);
+        script_pr_provenance_recheck(mock);
+        if recorder_started {
+            script_drift_status(mock);
+            script_recorder_start(mock);
+            mock.cancel_after = Some(("-p 7100 -o command=".into(), "received SIGTERM".into()));
+            script_recorder_stop(mock);
+        } else {
+            mock.expect_run(
+                "(exclude).qaren/actions",
+                CmdOutput::failed(1, "interrupted"),
+            );
+            mock.cancel_after = Some(("(exclude).qaren/actions".into(), "received SIGTERM".into()));
+        }
+        script_metro_teardown(mock, UDID, None);
+        mock.expect_run("worktree remove --force", CmdOutput::success(""));
+        let receipt = run(&mut runner, &pr_request(&repo, &app));
+        assert_eq!(receipt.result, ReceiptResult::Refused);
+        assert_eq!(
+            receipt.failure.as_ref().unwrap().code,
+            FailureCode::RunCancelled
+        );
+        assert_eq!(receipt.cleanup["metro"], "removed");
+        assert_eq!(receipt.cleanup["device_lease"], "removed");
+        assert!(!runner.inner.calls.iter().any(|c| c.label == "core-walk"));
+        assert_eq!(
+            runner.recorder_persisted_before_spawn,
+            recorder_started.then_some(true)
+        );
+        assert!(!wt.exists());
+        assert_eq!(runner.inner.remaining(), 0);
+    }
 }

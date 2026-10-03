@@ -61,12 +61,13 @@ pub fn add(
         20,
     );
     git(
-        runner,
+        &mut crate::exec::CleanupRunner(runner),
         "git-fetch-ref-remove",
         repo_root,
         &["update-ref", "-d", &run_ref],
         20,
     );
+    crate::cancel::ensure_running(runner, "pr")?;
     if !fetched.ok() || fetched.stdout.trim() != pr.head_ref_oid {
         return Err(failed(format!(
             "origin's {refspec} is {}, not the head gh reported ({}); the pull request moved or origin is another repository",
@@ -105,6 +106,8 @@ fn presence(path: &Path) -> Presence {
 }
 
 pub fn remove(runner: &mut dyn Runner, repo_root: &Path, wt: &Path) -> Outcome {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     let Some(wt_arg) = wt.to_str() else {
         return Outcome::Unresolved(format!("{} is not a UTF-8 path", wt.display()));
     };
@@ -249,10 +252,29 @@ mod tests {
         assert_eq!(mock.calls.len(), 3);
     }
 
+    #[test]
+    fn cancellation_during_ref_cleanup_prevents_worktree_creation() {
+        let mut mock = MockRunner::new();
+        mock.expect_run("fetch", CmdOutput::success(""));
+        mock.expect_run("rev-parse", CmdOutput::success(&"a".repeat(40)));
+        mock.expect_run("update-ref -d", CmdOutput::success(""));
+        mock.cancel_after = Some(("update-ref -d".into(), "received SIGTERM".into()));
+        let failure = add(
+            &mut mock,
+            Path::new("/repo"),
+            &pr(),
+            Path::new("/runs/r/wt"),
+        )
+        .unwrap_err();
+        assert_eq!(failure.code, FailureCode::RunCancelled);
+        assert_eq!(mock.calls.len(), 3);
+        assert_eq!(mock.remaining(), 0);
+    }
+
     struct ConcurrentFetch(std::sync::Arc<std::sync::Barrier>);
 
     impl Runner for ConcurrentFetch {
-        fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+        fn execute(&mut self, spec: &CmdSpec, _interruptible: bool) -> CmdOutput {
             let output = std::process::Command::new(&spec.program)
                 .args(&spec.args)
                 .current_dir(spec.cwd.as_ref().unwrap())
@@ -268,10 +290,14 @@ mod tests {
                 ..Default::default()
             }
         }
-        fn spawn_group(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<crate::exec::Spawned> {
+        fn spawn_group_unchecked(
+            &mut self,
+            _: &CmdSpec,
+            _: &Path,
+        ) -> std::io::Result<crate::exec::Spawned> {
             unreachable!()
         }
-        fn spawn_piped(
+        fn spawn_piped_unchecked(
             &mut self,
             _: &CmdSpec,
             _: &Path,

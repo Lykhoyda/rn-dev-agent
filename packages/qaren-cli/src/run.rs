@@ -121,6 +121,9 @@ pub fn run(runner: &mut dyn Runner, req: &RunRequest) -> Receipt {
     ) {
         Ok(receipt) => receipt,
         Err(failure) => {
+            let failure = ensure_running(runner, &failure.phase)
+                .err()
+                .unwrap_or(failure);
             let result = if failure.code.is_refusal() {
                 ReceiptResult::Refused
             } else {
@@ -479,6 +482,9 @@ fn run_inner(
         Err(f) => return Ok(finish_failed(ctx, f)),
     };
     let status_before = worktree_status(ctx.runner, &app_root);
+    if let Err(f) = ensure_running(ctx.runner, "walk") {
+        return Ok(finish_failed(ctx, f));
+    }
     // ⑧: the recording starts before the walk so it shows the first step.
     let mut video = None;
     if pr_state.is_some() {
@@ -486,6 +492,9 @@ fn run_inner(
         {
             video = Some(status);
         }
+    }
+    if let Err(f) = ensure_running(ctx.runner, "walk") {
+        return Ok(finish_failed(ctx, f));
     }
     let core_request = CoreRequest {
         run_id: run_id.clone(),

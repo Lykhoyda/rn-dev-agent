@@ -55,6 +55,8 @@ pub fn reclaim_dead_holder(
     runs_root: &Path,
     busy: &crate::lease::Busy,
 ) -> Result<String, Failure> {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     let (Some(holder), Some(PidLiveness::Dead | PidLiveness::AliveForeign)) =
         (busy.holder.as_ref(), busy.liveness)
     else {
@@ -110,6 +112,8 @@ pub fn cleanup_with(
     run_id: &str,
     remove_app: Option<&str>,
 ) -> Receipt {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     let mut record = match RunRecord::load(runs_root, run_id) {
         Ok(record) => record,
         Err(failure) => {
@@ -1038,6 +1042,8 @@ fn remove_app_install(
 
 // Neither record carries exact host PID/birth ownership, so observation cannot authorize signals.
 pub(crate) fn cleanup_scoped_runner_hosts(runner: &mut dyn Runner, udid: &str) -> Outcome {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     match ios::probe_runner_hosts(runner, udid) {
         ios::RunnerHostPresence::Absent => Outcome::Absent,
         ios::RunnerHostPresence::Present => Outcome::Unresolved(
@@ -1050,6 +1056,8 @@ pub(crate) fn cleanup_scoped_runner_hosts(runner: &mut dyn Runner, udid: &str) -
 }
 
 pub(crate) fn cleanup_runner_host(runner: &mut dyn Runner, record: &RunRecord) -> Option<Outcome> {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     let sim = record.resources.ios_simulator.as_ref()?;
     if record.resources.core.is_none() && record.resources.core_cleanup.is_none() {
         return None;
@@ -1110,6 +1118,8 @@ pub(crate) fn cleanup_build(
     record: &mut RunRecord,
     runs_root: &Path,
 ) -> Option<Outcome> {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     use crate::runrecord::{BuildCompletionEvidence, BuildProcess};
     let (pgid, outcome) = match record.resources.build_process()? {
         BuildProcess::SpawnPending => {
@@ -1147,6 +1157,8 @@ pub(crate) fn cleanup_core(
     runs_root: &Path,
     wait_unresolved: bool,
 ) -> Option<Outcome> {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     use crate::runrecord::CoreCleanupEvidence;
     let core = record.resources.core.clone()?;
     let mut outcome = cleanup_process_group(runner, core.identity.as_ref(), core.pgid, None);
@@ -1185,6 +1197,8 @@ pub(crate) fn cleanup_process_group(
     pgid: i32,
     port: Option<u16>,
 ) -> Outcome {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     // kill -pgid with 0/1/negative has catastrophic special semantics; a record
     // carrying such a value is corrupt and must be refused.
     if pgid < 2 {

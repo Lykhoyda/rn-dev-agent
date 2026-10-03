@@ -511,14 +511,14 @@ struct ScheduleRunner {
 }
 
 impl Runner for ScheduleRunner {
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
-        self.inner.run(spec)
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
+        self.inner.execute(spec, interruptible)
     }
-    fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
-        self.inner.spawn_group(spec, log)
+    fn spawn_group_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        self.inner.spawn_group_unchecked(spec, log)
     }
-    fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
-        self.inner.spawn_piped(spec, log)
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.inner.spawn_piped_unchecked(spec, log)
     }
     fn sleep(&mut self, duration: Duration) {
         if *self.inner.piped_killed[0].lock().unwrap() {
@@ -1028,4 +1028,21 @@ fn a_refusal_during_replay_keeps_its_path_and_written_blocks() {
         outcome.ledger.blocks_written,
         Some(vec!["plan".to_string()])
     );
+}
+
+#[test]
+fn cancellation_after_core_spawn_prevents_request_dispatch() {
+    let mut mock = MockRunner::new();
+    mock.expect_spawn_piped("walk.js", 9000, "", None);
+    mock.cancel_after = Some(("walk.js".into(), "received SIGTERM".into()));
+    let result = core::spawn(
+        &mut mock,
+        &CmdSpec::new("core-walk", "node", &["walk.js"], 60),
+        Path::new("unused.log"),
+        &request(),
+    );
+    assert_eq!(result.err().unwrap().code, FailureCode::RunCancelled);
+    assert!(mock.piped_stdin_text(0).is_empty());
+    assert!(*mock.piped_killed[0].lock().unwrap());
+    assert_eq!(mock.remaining(), 0);
 }

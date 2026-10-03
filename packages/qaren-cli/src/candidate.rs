@@ -75,8 +75,62 @@ fn resolve_explicit_worktree(runner: &mut dyn Runner, worktree: &str) -> Result<
     Ok(canonical)
 }
 
-pub fn worktree_fingerprint(porcelain_stdout: &str) -> String {
-    sha256_hex(porcelain_stdout.as_bytes())
+pub fn worktree_fingerprint(repo_root: &Path, porcelain: &str) -> Result<String, String> {
+    use std::os::unix::ffi::OsStrExt;
+    let entries = parse_porcelain_z(porcelain).ok_or("invalid git status records")?;
+    let mut hasher = Sha256::new();
+    hasher.update(porcelain.as_bytes());
+    let mut paths: Vec<_> = entries
+        .into_iter()
+        .flat_map(PorcelainEntry::paths)
+        .collect();
+    paths.sort_unstable();
+    paths.dedup();
+    for path in paths {
+        let relative = Path::new(path);
+        if relative
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            return Err("git status path escapes the candidate".into());
+        }
+        let full = repo_root.join(relative);
+        let mut parent = repo_root.to_path_buf();
+        for component in relative.parent().into_iter().flat_map(Path::components) {
+            parent.push(component);
+            if std::fs::symlink_metadata(&parent).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err("git status path has a symlinked parent".into());
+            }
+        }
+        hasher.update((path.len() as u64).to_le_bytes());
+        hasher.update(path.as_bytes());
+        let metadata = match std::fs::symlink_metadata(&full) {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                hasher.update(b"absent");
+                continue;
+            }
+            Err(_) => return Err("cannot inspect dirty candidate file".into()),
+        };
+        let content = if metadata.file_type().is_symlink() {
+            hasher.update(b"symlink");
+            std::fs::read_link(&full)
+                .map_err(|_| "cannot read candidate symlink")?
+                .as_os_str()
+                .as_bytes()
+                .to_vec()
+        } else if metadata.is_file() {
+            hasher.update(b"file");
+            std::fs::read(&full).map_err(|_| "cannot read dirty candidate file")?
+        } else {
+            return Err("git status entry is not a candidate file".into());
+        };
+        hasher.update((content.len() as u64).to_le_bytes());
+        hasher.update(&content);
+        use std::os::unix::fs::PermissionsExt;
+        hasher.update((metadata.permissions().mode() & 0o111).to_le_bytes());
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 #[derive(Clone, Copy)]
@@ -461,7 +515,7 @@ fn verify_unchanged_inner(
             recorded.git_dirty
         ));
     }
-    let fingerprint_now = worktree_fingerprint(&project_state);
+    let fingerprint_now = worktree_fingerprint(&recorded.repo_root, &project_state)?;
     if let Some(fp) = recorded.worktree_fingerprint.as_deref() {
         if fp != fingerprint_now {
             return Err(format!(
@@ -617,6 +671,14 @@ pub fn resolve(
     } else {
         project_state
     };
+    let fingerprint = worktree_fingerprint(&repo_root, &project_state).map_err(|detail| {
+        Failure::new(
+            "validate",
+            FailureCode::CandidatePathInvalid,
+            detail,
+            "restore readable candidate files and retry",
+        )
+    })?;
     Ok(Candidate {
         repo_root,
         project_root,
@@ -624,7 +686,7 @@ pub fn resolve(
         git_sha,
         git_dirty: !project_state.trim().is_empty(),
         lockfile_sha256,
-        worktree_fingerprint: Some(worktree_fingerprint(&project_state)),
+        worktree_fingerprint: Some(fingerprint),
     })
 }
 

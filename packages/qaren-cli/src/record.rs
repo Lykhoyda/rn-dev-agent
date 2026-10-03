@@ -123,6 +123,9 @@ pub fn start(
     runs_root: &Path,
     udid: &str,
 ) -> Result<(), VideoStatus> {
+    if let Some(reason) = runner.cancellation() {
+        return Err(VideoStatus::Unavailable(reason));
+    }
     let run_dir = RunRecord::run_dir(runs_root, &record.run_id);
     let unavailable = |why: &str| VideoStatus::Unavailable(why.to_string());
     std::fs::create_dir_all(media_dir(&run_dir)).map_err(|_| unavailable("media directory"))?;
@@ -155,7 +158,7 @@ pub fn start(
         recorder.birth = birth;
     }
     if !proven || record.save(runs_root).is_err() {
-        runner.run(&CmdSpec::new(
+        crate::exec::CleanupRunner(runner).run(&CmdSpec::new(
             "recorder-abort",
             "/bin/kill",
             &["-KILL", "--", &format!("-{}", spawned.pgid)],
@@ -180,6 +183,10 @@ pub fn start(
     }
     let deadline = now_ms(runner) + START_WAIT_MS;
     loop {
+        if let Some(reason) = runner.cancellation() {
+            stop(runner, record, runs_root);
+            return Err(unavailable(&reason));
+        }
         if std::fs::read_to_string(&log).is_ok_and(|l| l.contains("Recording started")) {
             return Ok(());
         }
@@ -214,6 +221,8 @@ fn wait_gone(runner: &mut dyn Runner, birth: &crate::runrecord::PidIdentity, bud
 
 // ⑫: SIGINT so the container is finalized; the group is killed only if it will not exit.
 pub fn stop(runner: &mut dyn Runner, record: &mut RunRecord, runs_root: &Path) -> Outcome {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     let Some(recorder) = record.resources.recorder.clone() else {
         return Outcome::Absent;
     };
@@ -400,23 +409,27 @@ mod tests {
     }
 
     impl Runner for SizedEncodes {
-        fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+        fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
             if spec.label == "ffmpeg-encode" {
                 let out = PathBuf::from(spec.args.last().unwrap());
                 let file = std::fs::File::create(&out).unwrap();
                 file.set_len(self.sizes.remove(0)).unwrap();
             }
-            self.mock.run(spec)
+            self.mock.execute(spec, interruptible)
         }
-        fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
-            self.mock.spawn_group(spec, log)
+        fn spawn_group_unchecked(
+            &mut self,
+            spec: &CmdSpec,
+            log: &Path,
+        ) -> std::io::Result<Spawned> {
+            self.mock.spawn_group_unchecked(spec, log)
         }
-        fn spawn_piped(
+        fn spawn_piped_unchecked(
             &mut self,
             spec: &CmdSpec,
             log: &Path,
         ) -> std::io::Result<crate::exec::PipedChild> {
-            self.mock.spawn_piped(spec, log)
+            self.mock.spawn_piped_unchecked(spec, log)
         }
         fn sleep(&mut self, d: Duration) {
             self.mock.sleep(d)
