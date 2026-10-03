@@ -454,6 +454,23 @@ pub fn verify_app(
     })
 }
 
+// Large debug images print tens of MB of symbols; filter in the child so the capture stays bounded.
+fn filtered_probe(label: &str, pipeline: &str, image: &Path) -> CmdSpec {
+    CmdSpec::new(
+        label,
+        "/bin/bash",
+        &[
+            "-o",
+            "pipefail",
+            "-c",
+            pipeline,
+            "qaren-probe",
+            &image.to_string_lossy(),
+        ],
+        20,
+    )
+}
+
 fn verify_initial_url_launcher(
     runner: &mut dyn Runner,
     app: &Path,
@@ -493,11 +510,10 @@ fn verify_initial_url_launcher(
         return Err(refused.into());
     }
     let symbols = runner.run_private(
-        &CmdSpec::new(
+        &filtered_probe(
             "ios-app-launcher-symbols",
-            "xcrun",
-            &["nm", "-j", "-U", &image.to_string_lossy()],
-            10,
+            "xcrun nm -j -U \"$1\" | grep -F EXDevLauncherController",
+            &image,
         ),
         &[],
     );
@@ -513,18 +529,10 @@ fn verify_initial_url_launcher(
         return Err(refused.into());
     }
     let strings = runner.run_private(
-        &CmdSpec::new(
+        &filtered_probe(
             "ios-app-launcher-arguments",
-            "xcrun",
-            &[
-                "otool",
-                "-v",
-                "-s",
-                "__TEXT",
-                "__cstring",
-                &image.to_string_lossy(),
-            ],
-            10,
+            "xcrun otool -v -s __TEXT __cstring \"$1\" | grep -E '[[:space:]]--initialUrl$'",
+            &image,
         ),
         &[],
     );
@@ -634,4 +642,95 @@ pub fn app_running_in_launchctl(launchctl_output: &str, app_id: &str) -> bool {
             .is_some_and(|label| label.starts_with(&label_prefix));
         pid_ok && label_ok
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::filtered_probe;
+    use crate::exec::{CmdSpec, RealRunner, Runner};
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+
+    const FAKE_XCRUN: &str = r#"#!/bin/bash
+filler() { head -c 20971520 /dev/zero | tr '\0' 'x' | fold -w 63; }
+case "$1" in
+  nm)
+    filler
+    [ "$QAREN_FAKE_MODE" = "filler" ] && exit 0
+    printf '%s\n' '+[EXDevLauncherController initialUrlFromProcessInfo]' \
+      '-[EXDevLauncherController start:launchOptions:]' \
+      '-[EXDevLauncherController loadApp:withProjectUrl:onSuccess:onError:]'
+    [ "$QAREN_FAKE_MODE" = "fail" ] && exit 1
+    exit 0 ;;
+  otool)
+    filler
+    printf '0000000100012345  --initialUrl\n' ;;
+esac
+"#;
+
+    fn fake_tools(mode: &str) -> (PathBuf, String) {
+        let dir =
+            std::env::temp_dir().join(format!("qaren-fake-xcrun-{}-{mode}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let xcrun = dir.join("xcrun");
+        std::fs::write(&xcrun, FAKE_XCRUN).unwrap();
+        std::fs::set_permissions(&xcrun, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = format!("{}:/usr/bin:/bin", dir.display());
+        (dir, path)
+    }
+
+    fn probes(image: &Path, path: &str, mode: &str) -> [CmdSpec; 2] {
+        [
+            filtered_probe(
+                "ios-app-launcher-symbols",
+                "xcrun nm -j -U \"$1\" | grep -F EXDevLauncherController",
+                image,
+            ),
+            filtered_probe(
+                "ios-app-launcher-arguments",
+                "xcrun otool -v -s __TEXT __cstring \"$1\" | grep -E '[[:space:]]--initialUrl$'",
+                image,
+            ),
+        ]
+        .map(|spec| spec.env("PATH", path).env("QAREN_FAKE_MODE", mode))
+    }
+
+    #[test]
+    fn filtered_launcher_probes_stay_under_the_capture_cap_for_a_20_mib_table() {
+        let (dir, path) = fake_tools("ok");
+        let image = dir.join("App.debug.dylib");
+        let mut runner = RealRunner::new();
+        let [symbols, strings] = probes(&image, &path, "ok");
+        let symbols = runner.run_private(&symbols, &[]);
+        let strings = runner.run_private(&strings, &[]);
+        assert!(symbols.clean() && strings.clean());
+        assert!(symbols.stdout().len() < 64 * 1024 && strings.stdout().len() < 64 * 1024);
+        assert!(symbols
+            .stdout()
+            .lines()
+            .any(|l| l == "-[EXDevLauncherController start:launchOptions:]"));
+        assert!(strings.stdout().contains("--initialUrl"));
+        let unfiltered = CmdSpec::new(
+            "unfiltered-symbols",
+            "xcrun",
+            &["nm", "-j", "-U", &image.to_string_lossy()],
+            20,
+        )
+        .env("PATH", &path)
+        .env("QAREN_FAKE_MODE", "ok");
+        assert!(!runner.run_private(&unfiltered, &[]).clean());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failing_or_empty_symbol_probe_is_not_clean() {
+        for mode in ["fail", "filler"] {
+            let (dir, path) = fake_tools(mode);
+            let image = dir.join("App.debug.dylib");
+            let mut runner = RealRunner::new();
+            let [symbols, _] = probes(&image, &path, mode);
+            assert!(!runner.run_private(&symbols, &[]).clean(), "{mode}");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
 }
