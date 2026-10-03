@@ -241,7 +241,7 @@ function lengthBucket(length: number): string {
   return length <= 3 ? '2-3' : length <= 8 ? '4-8' : '9+';
 }
 
-// Value-free counts behind a stored sensitive-pixels verdict; it observes and never decides anything.
+// Value-free counts and shapes observe the stored verdict without changing privacy decisions.
 export function sensitivePixelsReasons(
   screen: Screen,
   nodes: readonly NativeNode[],
