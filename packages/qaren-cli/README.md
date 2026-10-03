@@ -324,6 +324,19 @@ pull request branch with a `Qaren-Run: <run-id>` trailer, using your own git
 identity and a push lease on the tested commit. When the branch moved, the pull
 request comes from a fork, or origin is not the pull request's repository,
 nothing is pushed; a second comment carries the published blocks' YAML instead.
+
+Before retrying an unpushed block commit, publication verifies that its sole
+parent is the tested commit, its changes affect only currently admitted block
+paths, and those files contain the admitted verbatim bytes without ambiguous
+`.yaml`/`.yml` siblings. A matching cached commit is reused; otherwise a new
+commit is built from the tested head using only currently admitted blocks.
+The replacement does not descend from the rejected cached commit. The same push
+lease still applies; a failed commit or push falls back to the blocks comment.
+When all blocks are withheld or privacy admission fails, no block commit is
+pushed. A cached commit already at the remote branch head is reconciled as
+published without rewriting history or claiming its earlier content passed
+the current privacy gate.
+
 Each step is recorded in `publication.json`. Before retrying an attempted post,
 publication looks for the run's comment marker and adopts an existing comment.
 If no comment was posted, it regenerates `comment.md` from the current verdict
