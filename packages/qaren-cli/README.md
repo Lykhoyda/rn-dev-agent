@@ -111,7 +111,19 @@ refuses with `PRIVATE_INPUT_CAPTURE_UNKNOWN` unless native completeness is attes
 the refusal reports only a value-free node count and fixed cause codes. Native
 acquisition failures also refuse without reinjection or a public-tree fallback.
 Native input classification follows the [screen projection](../qaren-core/src/qa/screen.ts),
-including Other or unknown nodes carrying nonempty values regardless of React evidence.
+including Other or unknown nodes carrying nonempty values regardless of React evidence,
+with one exception: native `Other` elements matching the iOS system vertical or
+horizontal scroll-bar label and carrying a bare integer percentage, such as
+`Vertical scroll bar, 3 pages` with `42%`. The label match is case-insensitive,
+allows an optional page count, and trims surrounding whitespace; the percentage
+has one to three digits immediately followed by `%`. The projection keeps the
+label and omits this native value, so the indicator alone does not trigger
+screenshot withholding. Other valued generic elements, malformed lookalikes,
+React input evidence and secure fields remain protected. The accepted residual
+risk is that an app element mimicking both patterns can expose its percentage
+in captured pixels. The matcher in the screen projection owns the exact rule;
+[regression cases](../qaren-core/test/unit/qa/sensitive-pixels-diagnostic.test.ts)
+cover indicators, lookalikes and adjacent protected fields.
 iOS fast snapshots retain nodes with distinct readable values even when their type,
 label, identifier and origin match; deduplication compares those fields separately.
 The React digest adds semantics: a deadline, malformed-payload, validation or
