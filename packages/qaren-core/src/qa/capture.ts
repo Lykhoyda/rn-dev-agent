@@ -2,6 +2,7 @@ import { isRecord } from './questions.js';
 import { frontFromSurface, join, validateReactHostEvidence } from './screen.js';
 import type { DigestEntry, NativeNode, ReactHostEvidence, Screen } from './screen.js';
 import { outsideViewport, validateNativePresence, viewportDiagnostic } from './native-presence.js';
+import { sensitivePixelsReasons } from './privacy.js';
 import {
   CAPTURE_BUDGET_MS,
   NATIVE_PRESENCE_BUDGET_MS,
@@ -59,6 +60,14 @@ export interface CaptureDeps {
   native(presenceBudgetMs: number): Promise<NativeObservation>;
   react(): Promise<ReactObservation>;
   warn?(message: string): void;
+}
+
+const captureDiagnostics = new WeakMap<Screen, () => void>();
+
+export function emitCaptureDiagnostics(screen: Screen): void {
+  const emit = captureDiagnostics.get(screen);
+  captureDiagnostics.delete(screen);
+  emit?.();
 }
 
 type Coverage = NonNullable<Screen['coverage']>;
@@ -508,11 +517,16 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
     )
       screen.appProcessIdentifier = native.appProcessIdentifier as number;
     if (deps.warn && captureCoverage.native === 'complete' && withinBudget) {
-      try {
-        deps.warn(viewportDiagnostic(nodes, outsideViewport(nodes)));
-      } catch {
-        // Diagnostics cannot change capture admission or failure.
-      }
+      const warn = deps.warn;
+      captureDiagnostics.set(screen, () => {
+        try {
+          warn(viewportDiagnostic(nodes, outsideViewport(nodes)));
+        } catch {}
+        try {
+          const reasons = sensitivePixelsReasons(screen, nodes);
+          if (reasons) warn(reasons);
+        } catch {}
+      });
     }
     joined = true;
     return screen;
