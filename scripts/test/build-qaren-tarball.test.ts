@@ -200,10 +200,7 @@ test('the Apple silicon archive contains only Darwin helpers and passes offline 
           }),
         );
         const uname = join(stubs, 'uname');
-        writeFileSync(
-          uname,
-          `#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac\n`,
-        );
+        writeFileSync(uname, `#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac\n`);
         chmodSync(uname, 0o755);
         const env = {
           ...process.env,
@@ -257,8 +254,10 @@ test('the tarball builder refuses Intel before building a runtime', () => {
     process.execPath,
     [
       join(import.meta.dirname, '..', 'build-qaren-tarball.ts'),
-      '--version', '1.2.3',
-      '--platform', 'darwin-x64',
+      '--version',
+      '1.2.3',
+      '--platform',
+      'darwin-x64',
     ],
     { encoding: 'utf8' },
   );

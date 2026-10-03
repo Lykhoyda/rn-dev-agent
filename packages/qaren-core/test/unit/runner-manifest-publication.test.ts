@@ -435,11 +435,7 @@ test('a published release that diverges is refused, never replaced', () => {
       {
         release: {
           ...published().release,
-          assets: [
-            { name: IOS_ZIP },
-            { name: ANDROID_ZIP },
-            { name: 'runner-manifest.json' },
-          ],
+          assets: [{ name: IOS_ZIP }, { name: ANDROID_ZIP }, { name: 'runner-manifest.json' }],
         },
       },
       /without the Apple silicon qaren tarball/,
