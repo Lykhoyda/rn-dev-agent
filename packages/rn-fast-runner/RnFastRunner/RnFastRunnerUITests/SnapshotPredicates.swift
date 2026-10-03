@@ -41,3 +41,14 @@ func shouldIncludeSnapshotNode(
   if compact { return hasContent }
   return true
 }
+
+// Readable values are part of a node's identity, so twin fields with different values are both emitted.
+func snapshotDedupeKey(
+  type: XCUIElement.ElementType,
+  label: String,
+  identifier: String,
+  value: String?,
+  origin: CGPoint
+) -> String {
+  "\(type)-\(label)-\(identifier)-\(value ?? "")-\(origin.x)-\(origin.y)"
+}
