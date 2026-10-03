@@ -61,6 +61,7 @@ export interface ActResult {
   proven: boolean;
   error?: string;
   mutation?: 'none' | 'observed' | 'possible';
+  secureMasked?: boolean;
 }
 
 export interface WalkerDeps {
@@ -1032,7 +1033,9 @@ export async function walkBlock(
         diagnostic(item, after, 'decision', 'ACCEPTED');
         metric('readback', after);
         const shot = await shoot(item);
-        if (item.kind === 'fill' ? act!.ok && act!.proven : act!.proven || changed) {
+        const filled =
+          (act!.ok && act!.proven) || (act!.secureMasked === true && element?.secure === true);
+        if (item.kind === 'fill' ? filled : act!.proven || changed) {
           const target = stepTarget(item);
           emit({
             ...base(item, attempt),

@@ -1318,3 +1318,34 @@ for (const refusal of ['resolution', 'native binding']) {
     });
   }
 }
+
+for (const secure of [true, false]) {
+  test(`a stable secure-masked strict fill ${secure ? 'passes on a secure target' : 'still fails on a non-secure target'}`, async () => {
+    const input = element('@pw', 'Password', {
+      kind: 'input',
+      nativeKind: 'input',
+      testID: 'login_password',
+      secure,
+    });
+    const fake = app({ initial: [input, submit], typeFocused: false });
+    let fills = 0;
+    fake.deps.fill = async (_ref, text, context) => {
+      context.authorize();
+      assert.equal(text, 'hunter22');
+      fills += 1;
+      fake.deps.captureScreen = async () => screenOf([input, submit], true);
+      return {
+        ok: false,
+        proven: false,
+        mutation: 'possible',
+        error:
+          'TEXT_ENTRY_UNVERIFIED: device_fill typed but the retained native target could not be verified',
+        secureMasked: true,
+      };
+    };
+    const result = await walkBlock(blocks(plan('hunter22', 'login_password', ''))[0], fake.deps);
+    assert.equal(fills, 1);
+    assert.equal(result.block.outcome, secure ? 'pass' : 'fail');
+    if (!secure) assert.match(result.failure?.seen ?? '', /TEXT_ENTRY_UNVERIFIED/);
+  });
+}

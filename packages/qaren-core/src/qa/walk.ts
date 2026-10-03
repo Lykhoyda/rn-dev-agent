@@ -22,7 +22,7 @@ import { foregroundSurfaceFromSnapshot } from '../handlers/expo-dev-menu.js';
 import { compileFlow, FlowCompileError } from '../flow/compile.js';
 import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
 import type { ToolResult } from '../utils.js';
-import { HandlerError, adapt, describeError, unwrap } from './adapt.js';
+import { HandlerError, adapt, describeError, secureMaskedFill, unwrap } from './adapt.js';
 import { AppProcessGoneError, captureScreen, type NativeObservation } from './capture.js';
 import { captureQaReact } from './react-capture.js';
 import type { LedgerRow } from './ledger.js';
@@ -172,6 +172,7 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
           proven: false,
           mutation: extractMutationDisposition(result),
           error: `${code}: ${message}`,
+          ...(secureMaskedFill(error) ? { secureMasked: true } : {}),
         };
       }
     },
@@ -188,6 +189,7 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
               ? 'observed'
               : 'possible',
         error: `${code}: ${message}`,
+        ...(secureMaskedFill(error) ? { secureMasked: true } : {}),
       };
     },
   );
