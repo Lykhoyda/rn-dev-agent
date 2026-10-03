@@ -106,8 +106,6 @@ final class SnapshotInclusionTests: XCTestCase {
     XCTAssertFalse(include(interactiveOnly: true))
   }
 
-  // Two attached fields sharing type, label, identifier and origin but holding different values
-  // must both survive deduplication, or the second value never reaches privacy masking.
   func testDedupeKeyKeepsTwinFieldsWithDifferentValues() {
     let origin = CGPoint(x: 10, y: 100)
     let first = snapshotDedupeKey(
@@ -115,6 +113,16 @@ final class SnapshotInclusionTests: XCTestCase {
     let second = snapshotDedupeKey(
       type: .textField, label: "Email", identifier: "email", value: "second@example.test", origin: origin)
     XCTAssertNotEqual(first, second)
+  }
+
+  func testDedupeKeyKeepsFieldsWithDelimiterCollisions() {
+    let origin = CGPoint(x: 10, y: 100)
+    let first = snapshotDedupeKey(
+      type: .textField, label: "Email", identifier: "otp", value: "prefix-654321", origin: origin)
+    let second = snapshotDedupeKey(
+      type: .textField, label: "Email", identifier: "otp-prefix", value: "654321", origin: origin)
+    XCTAssertNotEqual(first, second)
+    XCTAssertEqual(Set([first, second]).count, 2)
   }
 
   func testDedupeKeyStillCollapsesIdenticalNodes() {

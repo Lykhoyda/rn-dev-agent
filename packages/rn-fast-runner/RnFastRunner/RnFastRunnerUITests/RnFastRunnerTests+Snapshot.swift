@@ -123,7 +123,7 @@ extension RnFastRunnerTests {
       truncated = truncated || didTruncateFallback
     }
 
-    var seen = Set<String>()
+    var seen = Set<SnapshotDedupeKey>()
     var stack: [(XCUIElementSnapshot, Int, Int, Int?)] = context.rootSnapshot.children.map {
       ($0, 1, 1, 0)
     }
