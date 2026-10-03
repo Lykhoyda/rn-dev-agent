@@ -172,6 +172,18 @@ do not delete locks to bypass unresolved ownership.
 
 ### Saved blocks
 
+Block IDs come from their `###` titles; a headingless block uses the plan's `#`
+title, or `plan` when absent. The [parser's `slugify`](../qaren-core/src/qa/plan.ts)
+lowercases the title, replaces runs outside `a-z` and `0-9` with hyphens, trims
+edge hyphens and uses `plan` if empty. Slugs within the
+[action-store length limit](../qaren-core/src/domain/path-safety.ts) stay unchanged.
+Longer slugs use a prefix followed by a hyphen and the first 16 hexadecimal
+characters of the full normalized slug's SHA-256, fitting that same limit.
+The title stays unchanged; the filename, M7 `id`, `plan` header and replay lookup
+use the same bounded ID. Existing valid actions are not renamed. Duplicate full
+normalized slugs or distinct titles producing the same bounded ID refuse the
+whole plan during preflight, before device allocation or action writes.
+
 Each `###` block that passes is saved as `<app>/.qaren/actions/<slug>.yaml`, where
 `<app>` is the directory holding `.qaren/config.yaml` (with an external `--config`,
 the checked working tree). The file is a Maestro-shaped action: each plan line as a
