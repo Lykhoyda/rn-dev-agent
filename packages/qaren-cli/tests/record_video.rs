@@ -378,6 +378,9 @@ fn dead_owner_worktrees_wait_for_each_producer_then_retry_removal() {
         }
         record.save(&root).unwrap();
         let mut mock = MockRunner::new();
+        if producer == "core" {
+            mock.expect_run("ps -p 999", CmdOutput::failed(1, ""));
+        }
         if producer == "metro" {
             mock.expect_run("ps -p 5000", CmdOutput::failed(1, ""));
             mock.expect_run("lsof", CmdOutput::failed(2, "inventory unavailable"));
@@ -404,6 +407,9 @@ fn dead_owner_worktrees_wait_for_each_producer_then_retry_removal() {
             .any(|c| c.label == "git-worktree-remove"));
         assert_eq!(runner.0.remaining(), 0);
         let mut mock = MockRunner::new();
+        if producer == "core" {
+            mock.expect_run("ps -p 999", CmdOutput::failed(1, ""));
+        }
         if producer == "metro" {
             mock.expect_run("ps -p 5000", CmdOutput::failed(1, ""));
             mock.expect_run("lsof", CmdOutput::failed(1, ""));
