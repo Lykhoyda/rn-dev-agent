@@ -590,7 +590,7 @@ fn blocks_comment(
 }
 
 struct PublishLock {
-    _file: std::fs::File,
+    file: std::fs::File,
 }
 
 impl PublishLock {
@@ -617,7 +617,15 @@ impl PublishLock {
                 "wait for it to finish, then re-run qaren publish",
             ));
         }
-        Ok(Self { _file: file })
+        Ok(Self { file })
+    }
+}
+
+impl Drop for PublishLock {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        // A concurrent fork may retain this file description until exec.
+        unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
     }
 }
 
@@ -854,6 +862,26 @@ mod tests {
         let second = PublishLock::acquire(&dir).unwrap();
         assert!(PublishLock::acquire(&dir).is_err());
         drop(second);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn descriptor_inherited_by_a_child_does_not_extend_publication_ownership() {
+        let dir = std::env::temp_dir().join(format!(
+            "qaren-publish-inherited-lock-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = PublishLock::acquire(&dir).unwrap();
+        // dup shares the open file description, just as inheritance across fork does.
+        let inherited = first.file.try_clone().unwrap();
+        assert!(PublishLock::acquire(&dir).is_err());
+        drop(first);
+        let next = PublishLock::acquire(&dir);
+        drop(inherited);
+        let next = next.expect("an inherited descriptor must not retain publication ownership");
+        assert!(PublishLock::acquire(&dir).is_err());
+        drop(next);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
