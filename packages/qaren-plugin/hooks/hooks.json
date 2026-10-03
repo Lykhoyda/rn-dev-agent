@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qaren.sh --print-bin",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qaren.sh\" --print-bin",
             "timeout": 30
           }
         ]

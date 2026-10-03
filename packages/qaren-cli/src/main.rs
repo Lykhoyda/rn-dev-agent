@@ -8,7 +8,7 @@ use qaren::scenario::Platform;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: qaren check --plan-file <plan.md> [--platform ios|android] [--device <udid>] [--config .qaren/config.yaml] [--fresh-install] [--boot-device] [--json]\n       qaren pr <number|url> --plan-file <plan.md> [--platform ios|android] [--device <udid>] [--config .qaren/config.yaml] [--fresh-install] [--boot-device] [--json]\n       qaren publish <run-id> --verdict-file <verdict.md> [--json]\n       qaren prepare <scenario.yaml> [--json] [--dry-run]\n       qaren prewarm <scenario.yaml> [--json]\n       qaren status  <run-id> [--json]\n       qaren complete <run-id> <build-log> [--json]\n       qaren cleanup <run-id> [--json] [--remove-app --confirm-remove-app <run-id>/<remote-serial>/<app-id>]\n       qaren actions list [--json]\n       qaren actions show <slug>\n\ncheck walks the plan on the booted simulator against the working tree; runs land in ~/.qaren/runs/<run-id>/.\npr walks the plan on a detached worktree at the pull request head, recording the screen; publish posts the reviewer comment and saves discovered blocks to the PR branch.\n--fresh-install opts into removing the selected app and its data under the check device lease before installation.\n--boot-device opts into booting an exact iOS simulator UUID selected by --device under the check lease; cleanup leaves it running.\n--remove-app also uninstalls the app (and its data) this run installed on its leased Android emulator;\nthe confirmation must name exactly this run, its recorded emulator serial and its app id.";
+const USAGE: &str = "usage: qaren check --plan-file <plan.md> [--platform ios|android] [--device <udid>] [--config .qaren/config.yaml] [--fresh-install] [--boot-device] [--json]\n       qaren pr <number|url> --plan-file <plan.md> [--platform ios|android] [--device <udid>] [--config .qaren/config.yaml] [--fresh-install] [--boot-device] [--json]\n       qaren publish <run-id> --verdict-file <verdict.md> [--json]\n       qaren prepare <scenario.yaml> [--json] [--dry-run]\n       qaren prewarm <scenario.yaml> [--json]\n       qaren status  <run-id> [--json]\n       qaren complete <run-id> <build-log> [--json]\n       qaren cleanup <run-id> [--json] [--remove-app --confirm-remove-app <run-id>/<remote-serial>/<app-id>]\n       qaren actions list [--json]\n       qaren actions show <slug>\n       qaren --version\n\ncheck walks the plan on the booted simulator against the working tree; runs land in ~/.qaren/runs/<run-id>/.\npr walks the plan on a detached worktree at the pull request head, recording the screen; publish posts the reviewer comment and saves discovered blocks to the PR branch.\n--fresh-install opts into removing the selected app and its data under the check device lease before installation.\n--boot-device opts into booting an exact iOS simulator UUID selected by --device under the check lease; cleanup leaves it running.\n--remove-app also uninstalls the app (and its data) this run installed on its leased Android emulator;\nthe confirmation must name exactly this run, its recorded emulator serial and its app id.";
 
 fn qaren_home() -> Result<PathBuf, String> {
     match std::env::var_os("HOME") {
@@ -37,16 +37,27 @@ fn runs_root() -> Result<PathBuf, String> {
     qaren_home().map(|home| home.join("runs"))
 }
 
-// The core runtime: QAREN_RUNTIME, else the source checkout beside this binary.
+// The core runtime: QAREN_RUNTIME, else the installed <exe>/../runtime, else the source checkout.
 fn runtime_dir() -> PathBuf {
-    if let Some(explicit) = std::env::var_os("QAREN_RUNTIME") {
+    runtime_dir_from(
+        std::env::var_os("QAREN_RUNTIME"),
+        std::env::current_exe().ok(),
+    )
+}
+
+fn runtime_dir_from(explicit: Option<std::ffi::OsString>, exe: Option<PathBuf>) -> PathBuf {
+    if let Some(explicit) = explicit.filter(|value| !value.is_empty()) {
         return PathBuf::from(explicit);
     }
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|p| p.join("../../../qaren-core/dist")))
-        .map(|p| p.canonicalize().unwrap_or(p))
-        .unwrap_or_else(|| PathBuf::from("packages/qaren-core/dist"))
+    let Some(bin_dir) = exe.as_deref().and_then(|exe| exe.parent()) else {
+        return PathBuf::from("packages/qaren-core/dist");
+    };
+    let installed = bin_dir.join("../runtime");
+    if installed.join("qa").join("walk.js").is_file() {
+        return installed.canonicalize().unwrap_or(installed);
+    }
+    let checkout = bin_dir.join("../../../qaren-core/dist");
+    checkout.canonicalize().unwrap_or(checkout)
 }
 
 fn env_seconds(name: &str, default: u64) -> u64 {
@@ -137,6 +148,10 @@ fn main() -> ExitCode {
     }
     if args == [qaren::exec::log::HELPER_ARG, qaren::exec::log::PAIRED_ARG] {
         return ExitCode::from(u8::from(qaren::exec::log::run_helper(true).is_err()));
+    }
+    if args == ["--version"] {
+        println!("qaren {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
     }
     let mut positional = Vec::new();
     let mut dry_run = false;
@@ -465,6 +480,33 @@ mod tests {
                 None => std::env::remove_var(name),
             }
         }
+    }
+
+    #[test]
+    fn runtime_dir_prefers_the_env_var_then_the_installed_layout_then_the_checkout() {
+        let root = std::env::temp_dir().join(format!("qaren-runtime-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let install = root.join("install");
+        std::fs::create_dir_all(install.join("bin")).unwrap();
+        std::fs::create_dir_all(install.join("runtime/qa")).unwrap();
+        let exe = install.join("bin/qaren");
+
+        assert_eq!(
+            super::runtime_dir_from(Some("/explicit".into()), Some(exe.clone())),
+            std::path::PathBuf::from("/explicit")
+        );
+
+        let checkout = install.join("bin/../../../qaren-core/dist");
+        assert_eq!(super::runtime_dir_from(None, Some(exe.clone())), checkout);
+
+        std::fs::write(install.join("runtime/qa/walk.js"), "").unwrap();
+        let installed = install.join("runtime").canonicalize().unwrap();
+        assert_eq!(super::runtime_dir_from(None, Some(exe.clone())), installed);
+        assert_eq!(
+            super::runtime_dir_from(Some("".into()), Some(exe)),
+            installed
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

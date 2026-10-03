@@ -301,7 +301,7 @@ test('CI exposes five non-cancelling unit-test batches behind Build & Test', () 
 
   assert.ok(aggregate);
   assert.equal(aggregate.name, 'Build & Test');
-  assert.deepEqual(aggregate.needs, ['core-tests', 'unit-tests', 'cargo-test']);
+  assert.deepEqual(aggregate.needs, ['core-tests', 'unit-tests', 'cargo-test', 'qaren-tarball']);
   assert.equal(aggregate.if, '${{ always() }}');
 });
 
