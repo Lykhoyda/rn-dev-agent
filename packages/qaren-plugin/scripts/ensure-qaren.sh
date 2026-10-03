@@ -93,7 +93,9 @@ expected_asset() {
 
 installed_bin() {
   local dest="$RUNTIME_ROOT/$1" sha="$2"
-  [ ! -L "$dest" ] && [ -x "$dest/bin/qaren" ] && [ -f "$dest/$RECORD" ] \
+  # A runtime someone else put there is never handed out, whatever its record says.
+  [ ! -L "$dest" ] && [ -O "$dest" ] && [ -x "$dest/bin/qaren" ] && [ -O "$dest/bin/qaren" ] \
+    && [ -f "$dest/$RECORD" ] && [ -O "$dest/$RECORD" ] \
     && [ "$(exec 9>&-; cat "$dest/$RECORD")" = "$sha" ] && echo "$dest/bin/qaren"
 }
 
@@ -271,8 +273,12 @@ install() {
     command -v curl >/dev/null 2>&1 || refuse "curl is required to download $name"
     # The shell opens the file, so a download stalled after its installer died can never create
     # anything later; only curl drops the lock, because only a network read can stall unbounded.
-    nolock curl -fsSL --retry 3 --proto '=https' --proto-redir '=https' --tlsv1.2 "$RELEASES/v$version/$name" > "$tarball" \
-      || refuse "could not download $RELEASES/v$version/$name"
+    # Each attempt reopens and truncates the file, so a retry never appends to a partial transfer.
+    local attempt=1
+    until nolock curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 "$RELEASES/v$version/$name" > "$tarball"; do
+      [ "$attempt" -lt 3 ] || refuse "could not download $RELEASES/v$version/$name"
+      attempt=$((attempt + 1))
+    done
   fi
 
   pause_at verify
@@ -286,10 +292,22 @@ install() {
   got=$(exec 9>&-; { gzip -dc "$tarball" 2>/dev/null || true; } | head -c $((MAX_UNPACKED_BYTES + 1)) | wc -c | tr -d ' ')
   [ "$got" -le "$MAX_UNPACKED_BYTES" ] \
     || refuse "$name would unpack to more than $MAX_UNPACKED_BYTES bytes, above the unpacked-size ceiling; nothing installed"
-  # Exactly one gzip layer over a ustar archive, checked before tar peels any layer itself.
-  [ "$(exec 9>&-; { gzip -dc "$tarball" 2>/dev/null || true; } | head -c 512 \
-      | perl -e 'read STDIN, $b, 512; print substr($b, 257, 5)')" = ustar ] \
-    || refuse "$name is not one gzip layer over a tar archive; nothing installed"
+  # Exactly one gzip layer over a tar archive, checked before tar peels any layer itself: the first
+  # header must be a checksummed ustar header named for this archive's top directory or a PAX
+  # header, which no compressed stream can also be (each begins with its own magic).
+  (exec 9>&-; { gzip -dc "$tarball" 2>/dev/null || true; } | head -c 512 | perl -e '
+    read STDIN, my $b, 512;
+    exit 1 unless length($b) == 512;
+    my $start = substr($b, 0, 100);
+    exit 1 unless index($start, "$ARGV[0]/") == 0 || index($start, "PaxHeader/") == 0
+      || index($start, "./PaxHeaders") == 0;
+    exit 1 unless substr($b, 257, 5) eq "ustar";
+    (my $sum = substr($b, 148, 8)) =~ s/^ +|[\0 ]+$//g;
+    exit 1 unless $sum =~ /^[0-7]+$/;
+    my $total = 0;
+    $total += ($_ >= 148 && $_ < 156) ? 32 : ord(substr($b, $_, 1)) for 0 .. 511;
+    exit($total == oct($sum) ? 0 : 1);
+  ' "$top") || refuse "$name is not one gzip layer over a tar archive; nothing installed"
 
   local entry entries=0
   while IFS= read -r entry; do

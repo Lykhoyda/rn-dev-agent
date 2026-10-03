@@ -493,6 +493,42 @@ chmod +x "$tmp/stubs/tar"
 refused_before_extract "an unreadable listing line" "$tmp/good.tgz" "cannot read reliably"
 rm -f "$tmp/stubs/tar"
 
+# An inner gzip can carry "ustar" at offset 257 in its FEXTRA field; it is still refused before
+# tar peels the second layer.
+python3 - "$tmp/good.tgz" "$tmp/fextra.tgz" <<'PY'
+import gzip, struct, sys, zlib
+payload = gzip.decompress(open(sys.argv[1], "rb").read())
+extra = bytearray(300)
+extra[257 - 12:257 - 12 + 5] = b"ustar"
+deflate = zlib.compressobj(9, zlib.DEFLATED, -15)
+inner = (b"\x1f\x8b\x08\x04" + b"\0" * 4 + b"\0\x03" + struct.pack("<H", len(extra)) + bytes(extra)
+         + deflate.compress(payload) + deflate.flush()
+         + struct.pack("<II", zlib.crc32(payload), len(payload) & 0xFFFFFFFF))
+assert inner[257:262] == b"ustar"
+open(sys.argv[2], "wb").write(gzip.compress(inner))
+PY
+refused_before_extract "a nested gzip carrying ustar in its extra field" "$tmp/fextra.tgz" "is not one gzip layer over a tar archive"
+rm -f "$tmp/fextra.tgz"
+
+# A download retried after a partial transfer starts over instead of appending to it.
+reset_home
+write_manifest "$tmp/good.tgz"
+cat > "$tmp/stubs/curl" <<SH
+#!/bin/sh
+if [ ! -e "$tmp/curl-attempted" ]; then
+  : > "$tmp/curl-attempted"
+  head -c 1000 "$tmp/good.tgz"
+  exit 28
+fi
+cat "$tmp/good.tgz"
+SH
+chmod +x "$tmp/stubs/curl"
+rm -f "$tmp/curl-attempted"
+out=$(HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --install 2>"$tmp/stderr"); rc=$?
+rm -f "$tmp/stubs/curl" "$tmp/curl-attempted"
+check "a download retried after a partial transfer installs" 0 "$rc"
+check "retried download: the runtime is complete" "$GOOD_SHA" "$(cat "$DEST/.tarball-sha256" 2>&1)"
+
 # A legitimate large entry under the ceiling still installs.
 stale_runtime
 make_tarball "$tmp/large.tgz" large
