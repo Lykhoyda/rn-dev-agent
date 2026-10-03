@@ -276,6 +276,17 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
     let parent = node.parentIndex;
     for (let hops = 0; parent !== undefined && hops < nodes.length; hops++) {
       const ancestor = nodes[parent];
+      // A child frame that contradicts its wholly off-screen container is stale; trust the container.
+      if (
+        screen &&
+        validRect(ancestor?.rect) &&
+        ancestor.rect.width > 0 &&
+        ancestor.rect.height > 0 &&
+        !within(ancestor.rect, screen)
+      ) {
+        offscreen.add(i);
+        return;
+      }
       if (
         ancestor?.type === 'Window' &&
         validRect(ancestor.rect) &&

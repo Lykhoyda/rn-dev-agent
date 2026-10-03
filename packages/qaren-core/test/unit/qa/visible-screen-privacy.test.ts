@@ -732,3 +732,138 @@ test('nested ScrollView clips intersect Table and CollectionView clips on both a
     assert.ok(outsideViewport(empty).has(9), `${type}: an empty clip hides zero-size frames`);
   }
 });
+
+function wizardTree(pageX: number) {
+  const screen = { x: 0, y: 0, width: 402, height: 874 };
+  return attested([
+    { index: 0, ref: '@app', type: 'Application', rect: screen },
+    { index: 1, ref: '@win', type: 'Window', parentIndex: 0, rect: screen },
+    {
+      index: 2,
+      ref: '@pager',
+      type: 'Other',
+      parentIndex: 1,
+      rect: { x: pageX, y: 0, width: 1206, height: 874 },
+    },
+    {
+      index: 3,
+      ref: '@step-1',
+      type: 'Other',
+      identifier: 'wizard-step-1',
+      parentIndex: 2,
+      rect: { x: pageX, y: 0, width: 402, height: 874 },
+    },
+    {
+      index: 4,
+      ref: '@step-label',
+      type: 'StaticText',
+      label: 'STEP 1 OF 3',
+      parentIndex: 3,
+      rect: { x: pageX + 24, y: 80, width: 120, height: 20 },
+    },
+    {
+      index: 5,
+      ref: '@desc',
+      type: 'TextView',
+      label: 'Add details (optional)',
+      parentIndex: 3,
+      rect: { x: 24, y: 20, width: 354, height: 100 },
+    },
+    {
+      index: 6,
+      ref: '@step-2',
+      type: 'Other',
+      parentIndex: 2,
+      rect: { x: pageX + 402, y: 0, width: 402, height: 874 },
+    },
+    {
+      index: 7,
+      ref: '@step-2-label',
+      type: 'StaticText',
+      label: 'STEP 2 OF 3',
+      parentIndex: 6,
+      rect: { x: pageX + 426, y: 80, width: 120, height: 20 },
+    },
+  ]);
+}
+
+test('a node whose page slid wholly off screen is off screen despite its own on-screen frame', async () => {
+  const hidden = wizardTree(-402);
+  assert.deepEqual([...outsideViewport(hidden.nodes)], [3, 4, 5]);
+  const observed = await captureScreen({
+    appId: 'com.test',
+    requirePrivateInputs: true,
+    native: async () => hidden,
+    react: async () => digest(),
+  });
+  assert.equal(observed.elements.find((e) => e.ref === '@desc')!.offscreen, true);
+  assert.deepEqual(observed.visibleText, ['STEP 2 OF 3']);
+  for (const label of ['Add details (optional)', 'STEP 1 OF 3']) {
+    const { result } = await walkViewport(`✓ "${label}"`, [hidden]);
+    assert.equal(result.verdict, 'FAIL', label);
+    assert.match(result.failure!.seen, /on screen: STEP 2 OF 3$/);
+  }
+});
+
+test('the same page shown on screen keeps its placeholder text visible', async () => {
+  const shown = wizardTree(0);
+  assert.deepEqual([...outsideViewport(shown.nodes)], [6, 7]);
+  const { result } = await walkViewport('✓ "Add details (optional)"', [shown]);
+  assert.equal(result.verdict, 'PASS', result.failure?.seen);
+});
+
+test('an on-screen parent does not clip its overflowing child', () => {
+  const screen = { x: 0, y: 0, width: 402, height: 874 };
+  const nodes: NativeNode[] = [
+    { ref: '@app', type: 'Application', rect: screen },
+    { ref: '@win', type: 'Window', parentIndex: 0, rect: screen },
+    {
+      ref: '@parent',
+      type: 'Other',
+      parentIndex: 1,
+      rect: { x: 0, y: 100, width: 100, height: 100 },
+    },
+    {
+      ref: '@overflow',
+      type: 'StaticText',
+      label: 'Overflow',
+      parentIndex: 2,
+      rect: { x: 150, y: 100, width: 50, height: 50 },
+    },
+  ];
+  assert.deepEqual([...outsideViewport(nodes)], []);
+});
+
+test('a React placeholder never joins a native node with a different identifier', async () => {
+  const screen = { x: 0, y: 0, width: 402, height: 874 };
+  const observed = await captureScreen({
+    appId: 'com.test',
+    requirePrivateInputs: true,
+    native: async () =>
+      attested([
+        { index: 0, ref: '@app', type: 'Application', rect: screen },
+        { index: 1, ref: '@win', type: 'Window', parentIndex: 0, rect: screen },
+        {
+          index: 2,
+          ref: '@title',
+          type: 'TextField',
+          identifier: 'wizard-title-input',
+          label: 'Add details (optional)',
+          parentIndex: 1,
+          rect: { x: 24, y: 100, width: 354, height: 44 },
+        },
+      ]),
+    react: async () =>
+      digest([
+        {
+          role: 'textbox',
+          testID: 'wizard-desc-input',
+          placeholder: 'Add details (optional)',
+          capabilities: { fill: true },
+        },
+      ]),
+  });
+  const title = observed.elements.find((e) => e.ref === '@title')!;
+  assert.equal(title.testID, 'wizard-title-input');
+  assert.equal(title.placeholder, undefined);
+});
