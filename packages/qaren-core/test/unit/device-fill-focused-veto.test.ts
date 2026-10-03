@@ -116,7 +116,11 @@ for (const focused of [true, false]) {
       evaluate: async () => {
         reads += 1;
         return {
-          value: JSON.stringify({ value: reads === 1 ? '' : 'normalized', controlled: true, focused }),
+          value: JSON.stringify({
+            value: reads === 1 ? '' : 'normalized',
+            controlled: true,
+            focused,
+          }),
         };
       },
     } as never;
