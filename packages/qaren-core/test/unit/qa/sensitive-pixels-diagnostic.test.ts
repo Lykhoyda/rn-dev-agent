@@ -571,9 +571,12 @@ test('a walk over a sensitive screen persists the same ledger and screenshots wi
 });
 
 // Accepted residual: an app element mimicking this label with a bare percent shows it.
-test('iOS system scroll-bar indicators with a bare percent value do not withhold pixels', async () => {
+test('iOS system scroll-bar indicators with a percent value do not withhold pixels', async () => {
   for (const specs of [
     [{ type: 'Other', label: 'Vertical scroll bar, 1 page', value: '0%' }, text('Welcome')],
+    ...['5\u00a0%', '5\u202f%', '50 %', '100\u00a0%', '12.5%', '0,5%', '12.5\u202f%'].map(
+      (value) => [{ type: 'Other', label: 'Vertical scroll bar, 1 page', value }, text('Welcome')],
+    ),
     [
       { type: 'Other', label: 'Vertical scroll bar, 3 pages', value: '0%' },
       { type: 'Other', label: ' Horizontal scroll bar, 2 pages ', value: ' 0% ' },
@@ -600,8 +603,17 @@ test('anything short of an exact system scroll-bar Other with a bare percent sta
     { type: 'Other', label: 'Vertical scroll bar, 2 pages done', value: '42%' },
     { type: 'Other', label: 'My vertical scroll bar', value: '42%' },
     { type: 'Other', label: 'Diagonal scroll bar', value: '42%' },
-    { type: 'Other', label: 'Vertical scroll bar', value: '42 %' },
-    { type: 'Other', label: 'Vertical scroll bar', value: '42.5%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '42  %' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '50 %x' },
+    { type: 'Other', label: 'Vertical scroll bar', value: 'abc %' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '5x%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '1000\u00a0%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '4\u00a02%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '42.55%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '42.%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '.5%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '1000.5%' },
+    { type: 'Other', label: 'Vertical scroll bar', value: '4.5.%' },
     { type: 'Other', label: 'Vertical scroll bar', value: '%42' },
     { type: 'Other', label: 'Vertical scroll bar', value: '1000%' },
     { type: 'Element(35)', label: 'Vertical scroll bar, 1 page', value: '50%' },
@@ -641,19 +653,19 @@ test('each carrier is described by a value-free shape', async () => {
     [
       {
         type: 'Other',
-        label: bar,
+        label: 'Weight',
         value: '0\u00a0%',
         rect: { x: 397, y: 9, width: 2.6, height: 779.4 },
       },
-      ['Other', 'sb-exact', 'pct-loose', '2-3', 3, 779, 'Window', 0, 'native'],
+      ['Other', 'other', 'pct-loose', '2-3', 3, 779, 'Window', 0, 'native'],
     ],
     [
       { type: 'Other', label: 'Vertical Scroll Bar', value: '0' },
       ['Other', 'sb-exact', 'int', '1', 400, 800, 'Window', 0, 'native'],
     ],
     [
-      { type: 'Other', label: 'Horizontal scroll bar, 2 pages', value: '12.5%' },
-      ['Other', 'sb-exact', 'pct-loose', '4-8', 400, 800, 'Window', 0, 'native'],
+      { type: 'Other', label: 'Progress', value: '12.5%' },
+      ['Other', 'other', 'pct-loose', '4-8', 400, 800, 'Window', 0, 'native'],
     ],
     [
       { type: 'Other', label: 'Scrollbar', value: '0.5' },

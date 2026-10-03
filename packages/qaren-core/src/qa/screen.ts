@@ -1,9 +1,9 @@
 import { isRecord } from './questions.js';
 import { createHash } from 'node:crypto';
 import {
-  BARE_PERCENT,
   captureInputPrivacy,
   nativeLabelMayBeValue,
+  SCROLL_BAR_PERCENT,
   SYSTEM_SCROLL_BAR_LABEL,
 } from './privacy.js';
 import { PRIVATE_INPUT_LIMITS } from './private-input-limits.js';
@@ -252,7 +252,7 @@ function nativeValue(n: NativeNode): string | undefined {
   const value = nonEmpty(n.value);
   return n.type === 'Other' &&
     SYSTEM_SCROLL_BAR_LABEL.test(n.label?.trim() ?? '') &&
-    BARE_PERCENT.test(value ?? '')
+    SCROLL_BAR_PERCENT.test(value ?? '')
     ? undefined
     : value;
 }

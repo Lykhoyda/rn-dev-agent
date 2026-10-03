@@ -117,10 +117,12 @@ acquisition failures also refuse without reinjection or a public-tree fallback.
 Native input classification follows the [screen projection](../qaren-core/src/qa/screen.ts),
 including Other or unknown nodes carrying nonempty values regardless of React evidence,
 with one exception: native `Other` elements matching the iOS system vertical or
-horizontal scroll-bar label and carrying a bare integer percentage, such as
+horizontal scroll-bar label and carrying a percentage, such as
 `Vertical scroll bar, 3 pages` with `42%`. The label match is case-insensitive,
 allows an optional page count, and trims surrounding whitespace; the percentage
-has one to three digits immediately followed by `%`. The projection keeps the
+has one to three digits, an optional single decimal digit after `.` or `,`, an
+optional single whitespace character such as the no-break space iOS may insert,
+then `%`. The projection keeps the
 label and omits this native value, so the indicator alone does not trigger
 screenshot withholding. Other valued generic elements, malformed lookalikes,
 React input evidence and secure fields remain protected. The accepted residual

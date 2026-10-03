@@ -211,7 +211,9 @@ const NATIVE_TYPES = new Set([
 ]);
 export const SYSTEM_SCROLL_BAR_LABEL =
   /^(vertical|horizontal)\s+scroll\s+bar(?:,?\s*\d+\s+pages?)?$/i;
-export const BARE_PERCENT = /^\d{1,3}%$/;
+const BARE_PERCENT = /^\d{1,3}%$/;
+// iOS may add one decimal digit and a (narrow) no-break space before %.
+export const SCROLL_BAR_PERCENT = /^\d{1,3}(?:[.,]\d)?\s?%$/;
 // The sink adds the 12-byte `qaren-core: ` prefix and a newline, keeping each line within 512 bytes.
 const SENSITIVE_PIXELS_LIMIT = 499;
 const SHAPE_LIMIT = 4;
