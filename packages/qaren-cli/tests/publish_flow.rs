@@ -45,6 +45,7 @@ fn machine() -> MachineIdentity {
     MachineIdentity {
         hostname: Some("qa-mac".into()),
         home: Some("/Users/qa".into()),
+        ..Default::default()
     }
 }
 
@@ -72,6 +73,7 @@ fn run_dir(cross_repository: bool) -> (PathBuf, PathBuf, PathBuf) {
         video_withholding_reason: None,
         tested_older_commit: false,
         blocks: vec!["tasks".into()],
+        identity_values: Vec::new(),
     };
     std::fs::write(dir.join("pr.json"), serde_json::to_vec(&pr).unwrap()).unwrap();
     std::fs::write(
@@ -545,22 +547,100 @@ impl Runner for Staged {
     }
 }
 
-const TYPED_SECRET: &str = "ghp_typedSecretValue1234567890abcdef";
+const SECRET: &str = "Hunter2Fixture!Synth";
 
-fn block_with_typed_secret(dir: &Path) {
-    std::fs::write(
-        dir.join("blocks/tasks.yaml"),
-        format!(
-            "steps:\n  - type: \"token={TYPED_SECRET}\" into \"Token\"\n  - type: \"{TYPED_SECRET}\"\n  - note: /Users/qa/app on qa-mac\n"
-        ),
-    )
-    .unwrap();
+fn edit_pr(dir: &Path, change: impl FnOnce(&mut serde_json::Value)) {
+    let path = dir.join("pr.json");
+    let mut pr: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    change(&mut pr);
+    std::fs::write(path, serde_json::to_vec(&pr).unwrap()).unwrap();
+}
+
+fn calls_named(runner: &MockRunner, label: &str) -> usize {
+    runner.calls.iter().filter(|c| c.label == label).count()
 }
 
 #[test]
-fn a_typed_secret_never_lands_in_the_committed_block_yaml() {
+fn the_raw_plan_is_never_published() {
     let (runs, dir, verdict) = run_dir(false);
-    block_with_typed_secret(&dir);
+    std::fs::write(
+        dir.join("plan.md"),
+        format!("fill password with \"{SECRET}\"\n"),
+    )
+    .unwrap();
+    edit_pr(&dir, |pr| pr["blocks"] = serde_json::json!([]));
+    let mut runner = Git(MockRunner::new());
+    script_comment_and_label(&mut runner.0);
+
+    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Published,
+        "{:?}",
+        receipt.failure
+    );
+    let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
+    assert!(!body.contains(SECRET), "{body}");
+    assert!(body.contains("- ✗ line 1: \n"), "{body}");
+}
+
+#[test]
+fn blocks_from_a_walk_that_is_not_eligible_are_withheld() {
+    for eligibility in [
+        Some(serde_json::json!("withheld-fill")),
+        Some(serde_json::json!("withheld-privacy")),
+        Some(serde_json::json!("unknown")),
+        None,
+    ] {
+        let (runs, dir, verdict) = run_dir(false);
+        std::fs::write(
+            dir.join("blocks/tasks.yaml"),
+            format!("steps:\n  - inputText: \"{SECRET}\"\n"),
+        )
+        .unwrap();
+        edit_pr(&dir, |pr| match &eligibility {
+            Some(value) => pr["videoPublication"] = value.clone(),
+            None => {
+                pr.as_object_mut().unwrap().remove("videoPublication");
+            }
+        });
+        let mut runner = Git(MockRunner::new());
+        script_comment_and_label(&mut runner.0);
+
+        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+
+        assert_eq!(
+            receipt.result,
+            ReceiptResult::Published,
+            "{eligibility:?}: {:?}",
+            receipt.failure
+        );
+        assert_eq!(runner.0.remaining(), 0, "{eligibility:?}");
+        assert_eq!(calls_named(&runner.0, "git-commit-blocks"), 0);
+        assert_eq!(calls_named(&runner.0, "git-push-blocks"), 0);
+        assert_eq!(
+            calls_named(&runner.0, "gh-pr-comment"),
+            1,
+            "only the QA comment"
+        );
+        assert!(!dir.join("blocks-comment.md").exists());
+        assert_eq!(
+            receipt.outcomes["writeback"],
+            "withheld tasks: the walk was not eligible for publication"
+        );
+        assert!(
+            dir.join("blocks/tasks.yaml").is_file(),
+            "kept for the operator"
+        );
+    }
+}
+
+#[test]
+fn an_eligible_parameterised_block_is_committed_byte_identical() {
+    let (runs, dir, verdict) = run_dir(false);
+    let source = "steps:\n  - inputText: ${PASSWORD}\n    into: \"Password\"\n";
+    std::fs::write(dir.join("blocks/tasks.yaml"), source).unwrap();
     let mut runner = Staged(Git(MockRunner::new()), Vec::new());
     script_comment_and_label(&mut runner.0 .0);
     script_commit(&mut runner.0 .0);
@@ -577,26 +657,63 @@ fn a_typed_secret_never_lands_in_the_committed_block_yaml() {
         "{:?}",
         receipt.failure
     );
-    assert_eq!(runner.1.len(), 1);
-    let committed = &runner.1[0];
-    for leak in [TYPED_SECRET, "/Users/qa", "qa-mac"] {
-        assert!(!committed.contains(leak), "{leak} committed:\n{committed}");
-    }
-    assert!(committed.starts_with("steps:\n"), "{committed}");
+    assert_eq!(runner.1, [source]);
+    assert_eq!(receipt.outcomes["writeback"], format!("committed {COMMIT}"));
 }
 
 #[test]
-fn a_typed_secret_never_lands_in_the_posted_block_yaml() {
-    let (runs, dir, verdict) = run_dir(true);
-    block_with_typed_secret(&dir);
+fn a_block_the_redaction_would_change_is_withheld_never_rewritten() {
+    for content in [
+        "steps:\n  - open: /Users/qa-fixture-user/x\n".to_string(),
+        "steps:\n  - device: emulator-5554\n".to_string(),
+        "steps:\n  - key: |\n      -----BEGIN PRIVATE KEY-----\n      FAKEFIXTUREBODY\n      -----END PRIVATE KEY-----\n".to_string(),
+    ] {
+        let (runs, dir, verdict) = run_dir(false);
+        std::fs::write(dir.join("blocks/tasks.yaml"), &content).unwrap();
+        edit_pr(&dir, |pr| pr["identityValues"] = serde_json::json!(["emulator-5554"]));
+        let mut runner = Staged(Git(MockRunner::new()), Vec::new());
+        script_comment_and_label(&mut runner.0 .0);
+
+        let receipt = publish(&mut runner, &runs, RUN, &verdict, &fixture_machine());
+
+        assert_eq!(receipt.result, ReceiptResult::Published, "{:?}", receipt.failure);
+        assert!(runner.1.is_empty(), "nothing staged for {content}");
+        assert_eq!(calls_named(&runner.0 .0, "git-commit-blocks"), 0);
+        assert!(!dir.join("blocks-comment.md").exists());
+        assert_eq!(
+            receipt.outcomes["writeback"],
+            "withheld tasks: the block carries a secret or machine identity"
+        );
+        assert_eq!(std::fs::read_to_string(dir.join("blocks/tasks.yaml")).unwrap(), content);
+    }
+}
+
+fn fixture_machine() -> MachineIdentity {
+    MachineIdentity {
+        hostname: Some("qa-fixture-host".into()),
+        home: Some("/Users/qa-fixture-user".into()),
+        username: Some("qa-fixture-user".into()),
+        values: Vec::new(),
+    }
+}
+
+#[test]
+fn the_runs_identity_values_and_tool_vocabulary_never_reach_the_comment() {
+    let (runs, dir, verdict) = run_dir(false);
+    edit_pr(&dir, |pr| {
+        pr["blocks"] = serde_json::json!([]);
+        pr["identityValues"] = serde_json::json!(["emulator-5554", "R58M00SYNTH0", "8081", "8791"]);
+    });
+    let mut ledger: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("ledger.json")).unwrap()).unwrap();
+    ledger["failure"]["seen"] = serde_json::json!(
+        "qa-fixture-user saw emulator-5554 and R58M00SYNTH0 via 127.0.0.1:8081 on port 8791 using xcrun simctl and adb -s; build 180812 kept"
+    );
+    std::fs::write(dir.join("ledger.json"), ledger.to_string()).unwrap();
     let mut runner = Git(MockRunner::new());
     script_comment_and_label(&mut runner.0);
-    runner.0.expect_run(
-        "gh pr comment 12",
-        CmdOutput::success("https://github.com/o/r/pull/12#issuecomment-6\n"),
-    );
 
-    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut runner, &runs, RUN, &verdict, &fixture_machine());
 
     assert_eq!(
         receipt.result,
@@ -604,10 +721,26 @@ fn a_typed_secret_never_lands_in_the_posted_block_yaml() {
         "{:?}",
         receipt.failure
     );
-    let posted = std::fs::read_to_string(dir.join("blocks-comment.md")).unwrap();
-    for leak in [TYPED_SECRET, "/Users/qa", "qa-mac"] {
-        assert!(!posted.contains(leak), "{leak} posted:\n{posted}");
+    let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
+    let tokens: Vec<&str> = body
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .collect();
+    for leak in [
+        "qa-fixture-user",
+        "emulator-5554",
+        "R58M00SYNTH0",
+        "8081",
+        "8791",
+    ] {
+        assert!(!tokens.contains(&leak), "{leak} leaked:\n{body}");
     }
+    for phrase in ["xcrun simctl", "adb -s"] {
+        assert!(!body.contains(phrase), "{phrase} leaked:\n{body}");
+    }
+    assert!(
+        body.contains("180812"),
+        "a longer token is left alone:\n{body}"
+    );
 }
 
 #[test]

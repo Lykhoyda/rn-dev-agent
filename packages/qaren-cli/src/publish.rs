@@ -36,6 +36,8 @@ pub struct PrRunRecord {
     pub tested_older_commit: bool,
     #[serde(default)]
     pub blocks: Vec<String>,
+    #[serde(default)]
+    pub identity_values: Vec<String>,
 }
 
 fn video_publication<'de, D: serde::Deserializer<'de>>(d: D) -> Result<VideoPublication, D::Error> {
@@ -204,30 +206,42 @@ fn post_once(
 
 use crate::worktree::git;
 
-// The blocks `qaren pr` preserved, read back in full and redacted once, so neither the commit nor a
-// comment can carry a secret or machine identity; missing evidence fails rather than reads as none.
+type Blocks = Vec<(String, String)>;
+type Withheld = Vec<(String, &'static str)>;
+
+// Blocks leave the machine verbatim, and only when the walk itself was eligible for publication and
+// the machine redaction would not change them; anything else stays in the run directory, never rewritten.
 fn saved_blocks(
     run_dir: &Path,
     pr: &PrRunRecord,
     machine: &MachineIdentity,
-) -> Result<Vec<(String, String)>, Failure> {
-    pr.blocks
-        .iter()
-        .map(|slug| {
-            let path = run_dir.join("blocks").join(format!("{slug}.yaml"));
-            let real = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_file());
-            match (worktree::safe_slug(slug) && real)
-                .then(|| std::fs::read_to_string(&path).ok())
-                .flatten()
-            {
-                Some(yaml) => Ok((slug.clone(), redact_machine(&yaml, machine))),
-                None => Err(failure(
-                    format!("the saved block {slug} is missing or unreadable in the run directory"),
-                    "re-run qaren pr to save the blocks again",
-                )),
-            }
-        })
-        .collect()
+) -> Result<(Blocks, Withheld), Failure> {
+    let mut published = Vec::new();
+    let mut withheld = Vec::new();
+    for slug in &pr.blocks {
+        let path = run_dir.join("blocks").join(format!("{slug}.yaml"));
+        let real = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_file());
+        let Some(yaml) = (worktree::safe_slug(slug) && real)
+            .then(|| std::fs::read_to_string(&path).ok())
+            .flatten()
+        else {
+            return Err(failure(
+                format!("the saved block {slug} is missing or unreadable in the run directory"),
+                "re-run qaren pr to save the blocks again",
+            ));
+        };
+        if pr.video_publication != VideoPublication::Eligible {
+            withheld.push((slug.clone(), "the walk was not eligible for publication"));
+        } else if redact_machine(&yaml, machine) != yaml {
+            withheld.push((
+                slug.clone(),
+                "the block carries a secret or machine identity",
+            ));
+        } else {
+            published.push((slug.clone(), yaml));
+        }
+    }
+    Ok((published, withheld))
 }
 
 // `[HOST/]OWNER/REPO` a remote URL points at, for https, ssh and scp-style forms.
@@ -531,6 +545,7 @@ fn publish_inner(
     let run_dir = RunRecord::run_dir(runs_root, run_id);
     let _lock = PublishLock::acquire(&run_dir)?;
     let pr: PrRunRecord = read_json(&run_dir.join("pr.json"))?;
+    let machine = &machine.with_values(&pr.identity_values);
     let info = pr_info(&pr);
     let state = run_dir.join(PUBLICATION);
     if std::fs::symlink_metadata(&state).is_ok() {
@@ -548,14 +563,14 @@ fn publish_inner(
                 )
             })?;
         let ledger: Ledger = read_json(&run_dir.join("ledger.json"))?;
-        let plan = std::fs::read_to_string(run_dir.join("plan.md")).unwrap_or_default();
+        // The raw plan holds typed values; the public comment renders only the walk's projected rows.
         let body = report::render_pr_comment(
             &ReportInput {
                 run_id,
                 platform: &pr.platform,
                 app_id: &pr.app_id,
                 device: &pr.device,
-                plan: &plan,
+                plan: "",
                 ledger: &ledger,
             },
             &verdict,
@@ -625,10 +640,19 @@ fn publish_inner(
     }
 
     if publication.writeback.is_none() {
-        let blocks = saved_blocks(&run_dir, &pr, machine)?;
+        let (blocks, withheld) = saved_blocks(&run_dir, &pr, machine)?;
+        let withheld_note = withheld
+            .iter()
+            .map(|(slug, reason)| format!("withheld {slug}: {reason}"))
+            .collect::<Vec<_>>()
+            .join("; ");
         let mut needs_comment = false;
         if blocks.is_empty() {
-            publication.writeback = Some("none".to_string());
+            publication.writeback = Some(if withheld_note.is_empty() {
+                "none".to_string()
+            } else {
+                withheld_note.clone()
+            });
         } else if pr.is_cross_repository || !origin_is_pr_repo(runner, &pr) {
             needs_comment = true;
         } else {
@@ -675,6 +699,12 @@ fn publish_inner(
                 },
             )?;
             publication.writeback = Some(format!("attached {url}"));
+        }
+        if !blocks.is_empty() && !withheld_note.is_empty() {
+            if let Some(writeback) = publication.writeback.as_mut() {
+                writeback.push_str("; ");
+                writeback.push_str(&withheld_note);
+            }
         }
         save(&run_dir, publication)?;
     }

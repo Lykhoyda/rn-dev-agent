@@ -664,6 +664,7 @@ fn run_inner(
             video_publication,
             tested_older_commit: tested_older_commit.is_some(),
             blocks,
+            identity_values: identity_values(&device, config.metro_port, &ctx.record.resources),
         };
         let written = std::fs::write(run_dir.join("plan.md"), &plan).and_then(|()| {
             std::fs::write(
@@ -688,6 +689,40 @@ fn run_inner(
         receipt.next_action = format!("qaren cleanup {run_id} --json");
     }
     Ok(receipt)
+}
+
+// The run's own identifiers, kept privately in pr.json so publication can redact them as whole words.
+fn identity_values(device: &Device, metro_port: u16, resources: &Resources) -> Vec<String> {
+    let mut values = vec![
+        device.name.clone(),
+        device.id.clone(),
+        metro_port.to_string(),
+    ];
+    values.extend(resources.adb_local_serial.clone());
+    values.extend(resources.usb_device.as_ref().map(|usb| usb.serial.clone()));
+    values.extend(
+        resources
+            .app_install
+            .as_ref()
+            .map(|install| install.serial.clone()),
+    );
+    values.extend(
+        resources
+            .adb_server
+            .as_ref()
+            .map(|srv| srv.server_port.to_string()),
+    );
+    values.extend(
+        resources
+            .tunnel
+            .as_ref()
+            .map(|tunnel| tunnel.local_port.to_string()),
+    );
+    values.extend(resources.adb_reverse_port.map(|port| port.to_string()));
+    values.retain(|value| !value.is_empty());
+    values.sort();
+    values.dedup();
+    values
 }
 
 fn ensure_running(runner: &dyn Runner, next_phase: &str) -> Result<(), Failure> {

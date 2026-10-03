@@ -212,6 +212,8 @@ fn public(text: &str) -> String {
     text.replace("cdp_", "")
         .replace("proofReplay", "replay")
         .replace("transport", "connection")
+        .replace("xcrun simctl", "simulator tooling")
+        .replace("adb -s", "device tooling")
 }
 
 // The marker lets a rerun find a comment whose creation outcome was lost.

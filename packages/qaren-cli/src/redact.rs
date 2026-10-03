@@ -177,9 +177,13 @@ pub fn redact_plain(raw: &str) -> String {
 }
 
 // Public text leaves the machine: hostname, home, absolute paths, UUIDs and LAN addresses go.
+#[derive(Debug, Clone, Default)]
 pub struct MachineIdentity {
     pub hostname: Option<String>,
     pub home: Option<String>,
+    pub username: Option<String>,
+    // The run's own device ids, serials and ports, recorded by `qaren pr`.
+    pub values: Vec<String>,
 }
 
 impl MachineIdentity {
@@ -187,7 +191,30 @@ impl MachineIdentity {
         MachineIdentity {
             hostname: hostname(),
             home: std::env::var("HOME").ok().filter(|h| h.len() > 1),
+            username: username(),
+            values: Vec::new(),
         }
+    }
+
+    pub fn with_values(&self, values: &[String]) -> Self {
+        let mut machine = self.clone();
+        machine.values.extend(values.iter().cloned());
+        machine
+    }
+}
+
+fn username() -> Option<String> {
+    // SAFETY: getpwuid returns a pointer into static storage or null; the name is copied at once.
+    unsafe {
+        let entry = libc::getpwuid(libc::getuid());
+        if entry.is_null() || (*entry).pw_name.is_null() {
+            return None;
+        }
+        std::ffi::CStr::from_ptr((*entry).pw_name)
+            .to_str()
+            .ok()
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
     }
 }
 
@@ -209,6 +236,20 @@ pub fn redact_machine(raw: &str, machine: &MachineIdentity) -> String {
         text = text.replace(home.trim_end_matches('/'), "~");
     }
     text = redact_absolute_paths(&text);
+    // Known values are replaced as whole words only; shorter than 3 characters is not masked.
+    for value in &machine.values {
+        if value.len() >= 3 {
+            let label = if value.bytes().all(|b| b.is_ascii_digit()) {
+                "<port>"
+            } else {
+                "<device>"
+            };
+            text = replace_ignore_ascii_case(&text, value, label);
+        }
+    }
+    if let Some(user) = machine.username.as_ref().filter(|u| u.len() >= 3) {
+        text = replace_ignore_ascii_case(&text, user, "<user>");
+    }
     if let Some(host) = &machine.hostname {
         let short = host.split('.').next().unwrap_or(host);
         for name in [host.as_str(), short] {
@@ -564,6 +605,7 @@ mod tests {
         let machine = MachineIdentity {
             hostname: Some("Work-MacBook-Pro.local".into()),
             home: Some("/Users/alice".into()),
+            ..Default::default()
         };
         let raw = "on work-macbook-pro at /Users/alice/app/plan.md and /private/var/x.log, sim 1DC408C4-51DA-4C4F-ACA1-39881C916FDD via 192.168.1.20:8081, 10.0.0.7, 172.20.1.1 and 169.254.3.4; keep 8.8.8.8, 172.32.0.1, https://github.com/o/r/pull/12, ./media/video.mp4 and 1.2.3.4.5";
         let clean = redact_machine(raw, &machine);
@@ -590,6 +632,7 @@ mod tests {
         let short = MachineIdentity {
             hostname: Some("mac.local".into()),
             home: None,
+            ..Default::default()
         };
         assert_eq!(
             redact_machine("macOS on mac, MAC.local", &short),

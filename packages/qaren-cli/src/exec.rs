@@ -234,6 +234,10 @@ pub trait Runner {
     fn cancellation(&self) -> Option<String> {
         None
     }
+    // Reaps an exited spawn_group child this process owns; never blocks or signals.
+    fn try_reap(&mut self, _pid: i32) -> bool {
+        false
+    }
 }
 
 pub struct RealRunner {
@@ -242,6 +246,8 @@ pub struct RealRunner {
     log_executable: PathBuf,
     logs: Vec<log::LogDrain>,
     caller: Option<u32>,
+    // Only the spawning process can reap a group leader; dropping the Child leaves a zombie.
+    children: std::collections::HashMap<i32, std::process::Child>,
 }
 
 impl RealRunner {
@@ -256,6 +262,7 @@ impl RealRunner {
             log_executable: executable,
             logs: Vec::new(),
             caller: None,
+            children: std::collections::HashMap::new(),
         }
     }
 
@@ -328,7 +335,19 @@ impl Runner for RealRunner {
         let child = cmd.spawn()?;
         let pid = child.id() as i32;
         self.logs.push(drain);
+        self.children.insert(pid, child);
         Ok(Spawned { pid, pgid: pid })
+    }
+
+    fn try_reap(&mut self, pid: i32) -> bool {
+        let reaped = self
+            .children
+            .get_mut(&pid)
+            .is_some_and(|child| matches!(child.try_wait(), Ok(Some(_))));
+        if reaped {
+            self.children.remove(&pid);
+        }
+        reaped
     }
 
     fn spawn_piped(&mut self, spec: &CmdSpec, stderr_log: &Path) -> std::io::Result<PipedChild> {

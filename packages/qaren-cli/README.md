@@ -210,15 +210,27 @@ unresolved, recover with `qaren cleanup <run-id>` as described under
 
 `qaren publish` posts one comment: the sentence from `--verdict-file`, the
 tested commit, an eligible available video, the plan with ✓/✗ per walked line,
-an available failing screenshot and collapsed run details. The hostname, home
-directory, absolute paths, device UUIDs and private network addresses are removed from the comment. It then
+an available failing screenshot and collapsed run details. Plan lines come only
+from the walk's own rows, never from the raw plan file, so typed values stay out.
+The hostname, home directory, user name, absolute paths, device UUIDs, the run's
+device ids, serials and ports (recorded privately in `pr.json` as
+`identityValues`) and private network addresses are removed from the comment.
+Known values shorter than three characters are not masked, and a recorded port
+number also masks the same number elsewhere in the text. It then
 removes the `needs-qa` label only if the current head is the tested head; otherwise
-`publication.json` and the receipt record `retained-head-changed`. It commits
-the saved blocks to the pull request branch with a `Qaren-Run: <run-id>` trailer,
-using your own git identity and a push lease on the tested commit. When the branch moved, the pull request comes
-from a fork, or origin is not the pull request's repository, nothing is pushed;
-a second comment carries the block YAML instead. Each step is recorded in
-`publication.json`, so a re-run resumes without posting again.
+`publication.json` and the receipt record `retained-head-changed`.
+
+A saved block is published only verbatim, and only when the walk was eligible
+for publication (no fill/type step and no private value observed) and the
+machine redaction would leave the block unchanged. Any other block stays in the
+run's `blocks/` directory and is never rewritten; `publication.json` and the
+receipt record `withheld <slug>: <reason>`. Published blocks are committed to the
+pull request branch with a `Qaren-Run: <run-id>` trailer, using your own git
+identity and a push lease on the tested commit. When the branch moved, the pull
+request comes from a fork, or origin is not the pull request's repository,
+nothing is pushed; a second comment carries the published blocks' YAML instead.
+Each step is recorded in `publication.json`, so a re-run resumes without posting
+again.
 
 Publication holds an exclusive file-descriptor lock on `publish.lock`; a
 concurrent publisher fails until the holder exits. The file remains after release;

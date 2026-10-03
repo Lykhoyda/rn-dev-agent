@@ -1133,6 +1133,8 @@ pub(crate) fn cleanup_process_group(
     }
     if port.is_none() {
         use metro::GroupPresence;
+        // An unreaped leader keeps the group present; its owner reaps it first (never a release by itself).
+        runner.try_reap(pgid);
         match metro::group_presence(runner, pgid) {
             GroupPresence::Absent => return Outcome::Absent,
             GroupPresence::Unknown => {
@@ -1145,6 +1147,7 @@ pub(crate) fn cleanup_process_group(
         }) {
             // Observation only: 10.3s additional budget (300ms settle + one 10s inventory probe).
             runner.sleep(Duration::from_millis(300));
+            runner.try_reap(pgid);
             return match metro::group_presence(runner, pgid) {
                 GroupPresence::Absent => Outcome::Absent,
                 GroupPresence::Present => Outcome::Unresolved(
@@ -1159,6 +1162,7 @@ pub(crate) fn cleanup_process_group(
         runner.sleep(Duration::from_millis(1500));
         kill_group(runner, pgid, "-KILL");
         runner.sleep(Duration::from_millis(300));
+        runner.try_reap(pgid);
         return match metro::group_presence(runner, pgid) {
             GroupPresence::Absent => Outcome::Removed,
             GroupPresence::Present => {

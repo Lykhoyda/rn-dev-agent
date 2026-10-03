@@ -9,6 +9,7 @@ fn machine() -> MachineIdentity {
     MachineIdentity {
         hostname: Some("qa-mac-mini.local".into()),
         home: Some("/Users/qa".into()),
+        ..Default::default()
     }
 }
 
