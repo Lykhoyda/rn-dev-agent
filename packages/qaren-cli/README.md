@@ -98,6 +98,11 @@ getters are not invoked, and an unreadable inactivity flag does not prune a subt
 Unreadable display overrides or styles beyond the array or nesting scan budgets
 resolve as unknown and do not establish `display: none`; later readable overrides
 within the budgets still determine display.
+Style arrays use the last present property: an explicit `undefined` or `null`
+resets an earlier `display: none`, while an absent property leaves it unchanged.
+The reset preserves descendant text evidence. The same distinction applies to
+`display` and style-based `pointerEvents` in exact-ID interaction eligibility;
+a reset clears the earlier style restriction without proving native visibility.
 
 Observed input values are masked before Jev requests; private values are also
 masked in reporting, including echoes of typed and previously observed values
@@ -184,7 +189,7 @@ use the same bounded ID. Existing valid actions are not renamed. Duplicate full
 normalized slugs or distinct titles producing the same bounded ID refuse the
 whole plan during preflight, before device allocation or action writes.
 
-Each `###` block that passes is saved as `<app>/.qaren/actions/<slug>.yaml`, where
+New files for passing `###` blocks use `<app>/.qaren/actions/<slug>.yaml`, where
 `<app>` is the directory holding `.qaren/config.yaml` (with an external `--config`,
 the checked working tree). The file is a Maestro-shaped action: each plan line as a
 comment, then the commands with the exact `testID` (or, without one, the label) the
@@ -226,6 +231,11 @@ refuses inspection and is not overwritten by `check`. Symlinked corpora and
 action files are refused. Inspection header validity and defaults follow the
 [core header parser](../qaren-core/src/domain/reusable-action.ts); `list` skips
 invalid headers and `show` refuses them.
+
+For PR runs, copying to the run's `blocks/` directory, branch writeback and
+fallback-comment paths preserve that extension and the saved content verbatim.
+Writeback refuses an ambiguous slug or a destination with the other extension
+instead of creating a second sibling; publication uses the fallback comment.
 
 On iOS the walk also fails `APP_PROCESS_CHANGED` when the app's process changes between
 captures (a crash or restart), and refuses `APP_PROCESS_UNKNOWN` when the runner does
