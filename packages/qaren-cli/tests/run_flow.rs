@@ -2821,6 +2821,10 @@ fn closed_stdout_and_dead_leader_do_not_release_an_unproven_core_group() {
         assert!(lease.lock_dir.exists());
 
         let mut cleanup = MockRunner::new();
+        cleanup.expect_run(
+            &format!("ps -p {} -o lstart=", std::process::id()),
+            CmdOutput::success(""),
+        );
         cleanup.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
         cleanup.expect_run("simctl terminate", nothing_to_terminate());
         let receipt = qaren::commands::cleanup::cleanup(&mut cleanup, &req.runs_root, &run_id());

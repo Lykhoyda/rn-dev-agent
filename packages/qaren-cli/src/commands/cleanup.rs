@@ -157,8 +157,24 @@ pub fn cleanup_with(
         outcomes.push(("build_process".to_string(), outcome));
     }
 
-    if let Some(outcome) = cleanup_core(runner, &mut record, runs_root, false) {
-        outcomes.push(("core".to_string(), outcome));
+    if record.resources.core.is_some() {
+        // The owner's own teardown stops its core; any other caller needs proof the owner is gone.
+        let owner_gone = record.prepare.as_ref().is_some_and(|owner| {
+            matches!(
+                probe_pid_identity(runner, owner),
+                PidLiveness::Dead | PidLiveness::AliveForeign
+            )
+        });
+        let outcome = if owner_gone {
+            cleanup_core(runner, &mut record, runs_root, false)
+        } else {
+            Some(Outcome::Refused(
+                "the run's qaren process is alive or unproven gone".to_string(),
+            ))
+        };
+        if let Some(outcome) = outcome {
+            outcomes.push(("core".to_string(), outcome));
+        }
     }
     if let Some(m) = record.resources.metro.clone() {
         outcomes.push((
