@@ -457,6 +457,8 @@ fn ios_launcher_verification_checks_the_linked_image_and_argument_and_refuses_lo
             assert!(!format!("{result:?}").contains("PRIVATE_BINARY_CONTENT"));
             for spec in &mock.calls[3..] {
                 assert_eq!(spec.args.last().unwrap(), &image.to_string_lossy());
+                assert_eq!(spec.program, "/bin/bash");
+                assert!(spec.args.iter().any(|a| a.contains("| grep ")));
             }
             assert_eq!(mock.private_inputs.len(), 5);
             assert_eq!(mock.remaining(), 0);
@@ -492,11 +494,14 @@ fn ios_launcher_verification_accepts_a_linked_debug_image_with_spaces_in_its_nam
         CmdOutput::success("My App.app/My App:\n\t@rpath/My App.debug.dylib (compatibility version 0.0.0, current version 0.0.0)\n"),
     );
     mock.expect_run(
-        &format!("nm -j -U {}", image.display()),
+        &format!(
+            "grep -F EXDevLauncherController qaren-probe {}",
+            image.display()
+        ),
         CmdOutput::success(common::IOS_LAUNCHER_SYMBOLS),
     );
     mock.expect_run(
-        &format!("otool -v -s __TEXT __cstring {}", image.display()),
+        &format!("--initialUrl$' qaren-probe {}", image.display()),
         CmdOutput::success("0000000100012345  --initialUrl\n"),
     );
 

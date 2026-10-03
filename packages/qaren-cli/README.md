@@ -47,8 +47,8 @@ unconfirmed app removal, or rejected cooperative-handoff evidence).
 on `cleanup`; a missing flag or confirmation value, or use on another verb,
 is a usage error (exit `2`, no receipt).
 
-`status` and `cleanup` locate the run under `<repo>/.qaren/runs/<run-id>/`
-from the git toplevel of the current directory. `--dry-run` on `prepare`
+`status` and `cleanup` locate the run under `~/.qaren/runs/<run-id>/`,
+independently of the current directory. `--dry-run` on `prepare`
 validates the scenario + candidate and emits the planned command sequence
 (listener/readiness poll probes elided) without allocating anything.
 
@@ -74,7 +74,7 @@ prepare ──► validate (scenario schema, candidate git sha, lockfile sha256)
                              one-device server) --port <port>   (CI=1)
         ──► verify   port owner pgid == spawned pgid, /status responds,
                      app installed + running on the owned device
-        ──► ready    receipt + durable .qaren/runs/<run-id>/run.json
+        ──► ready    receipt + durable run.json in the run directory above
 
 (With `build.owner: qaren` the chain branches after `allocate`: no
 build+launch — prepare re-verifies the candidate, issues `handoff.json`, and
@@ -304,7 +304,15 @@ build_and_ready — so revisit this once live reuse is measurable.
   forwarded port cannot expose the next lease. A `cleaned`
   verdict that cannot be persisted downgrades to `failed` with a retry.
   Anything unprovable is a structured refusal (`OWNERSHIP_UNPROVEN`, exit 4)
-  — never a guess.
+  — never a guess. When a core is recorded and the recorded qaren owner's
+  process identity is proven still alive, `cleanup` refuses the whole run
+  before any resource teardown and leaves `run.json` unchanged; finish or
+  stop that run first. If the owner identity is unknown or missing, only
+  core cleanup is refused; other cleanup legs and record persistence proceed
+  under their existing ownership checks. A dead owner or reused owner PID
+  permits core cleanup under its existing process-group proofs. Runs without
+  a recorded core retain their existing cleanup behavior, including build
+  cleanup.
 - **App removal is opt-in, confirmed, and bound to the run record.** Plain
   Android `cleanup` never touches the installed app: stopping the farm AVD
   keeps its userdata, so the dev client this run installed survives the lease (and a
