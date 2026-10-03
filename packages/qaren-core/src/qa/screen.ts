@@ -1,6 +1,11 @@
 import { isRecord } from './questions.js';
 import { createHash } from 'node:crypto';
-import { captureInputPrivacy, nativeLabelMayBeValue } from './privacy.js';
+import {
+  BARE_PERCENT,
+  captureInputPrivacy,
+  nativeLabelMayBeValue,
+  SYSTEM_SCROLL_BAR_LABEL,
+} from './privacy.js';
 import { PRIVATE_INPUT_LIMITS } from './private-input-limits.js';
 import { INPUT_HOST_TYPES } from './input-host-types.js';
 import {
@@ -246,8 +251,8 @@ function nonEmpty(value: string | undefined): string | undefined {
 function nativeValue(n: NativeNode): string | undefined {
   const value = nonEmpty(n.value);
   return n.type === 'Other' &&
-    /^(vertical|horizontal)\s+scroll\s+bar(?:,?\s*\d+\s+pages?)?$/i.test(n.label?.trim() ?? '') &&
-    /^\d{1,3}%$/.test(value ?? '')
+    SYSTEM_SCROLL_BAR_LABEL.test(n.label?.trim() ?? '') &&
+    BARE_PERCENT.test(value ?? '')
     ? undefined
     : value;
 }
