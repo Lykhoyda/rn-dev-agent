@@ -173,9 +173,9 @@ timed_hook() {
       while read -r pid kind; do
         case "$kind" in node) node=1 ;; watchdog) watchdog=1 ;; sleep) sleep=1 ;; check) check_pid=1 ;; esac
       done < "$TEST_CHECK_PIDS"
-      if [ "$status" != 0 ] || [ -s "$tmp/attempt-stdout" ] \
-        || [ "$(wc -l < "$tmp/attempt-stderr" | tr -d ' ')" != 1 ] \
-        || [ "$(contains "$(cat "$tmp/attempt-stderr")" 'did not finish in time')" != yes ]; then
+      if [ "$status" != 0 ] || [ -s "$tmp/attempt-stderr" ] \
+        || [ "$(wc -l < "$tmp/attempt-stdout" | tr -d ' ')" != 1 ] \
+        || [ "$(contains "$(cat "$tmp/attempt-stdout")" 'did not finish in time')" != yes ]; then
         echo "FAIL: $TEST_CASE attempt $attempt: stalled output contract" >> "$tmp/attempt-failures"
       fi
       if [ "$node$check_pid$watchdog$sleep" != 1111 ]; then
@@ -196,8 +196,7 @@ timed_hook() {
   case "${TEST_CASE:-hook}" in
     healthy-*|cold-*)
       answer=$(cat "$tmp/attempt-stdout")
-      if [ "$answer" != "$REAL_DEST/bin/qaren" ] \
-        && { [ -n "$answer" ] || [ "$(contains "$(cat "$tmp/attempt-stderr")" 'did not finish in time')" != yes ]; }; then
+      if [ "$answer" != "$REAL_DEST/bin/qaren" ] && [ "$(contains "$answer" 'did not finish in time')" != yes ]; then
         echo "FAIL: $TEST_CASE attempt $attempt: unexpected runtime output" >> "$tmp/attempt-failures"
       fi
       ;;
@@ -316,6 +315,8 @@ staged_before=$(cd "$tmp/home/.qaren/runtime" && find . | sort)
 hook "interrupted install"
 bounded "interrupted install"
 check "interrupted install: names the repair command" yes "$(contains "$out" "interrupted qaren v$VERSION install was found; repair it with:")"
+check "interrupted install: stdout has one repair line" 1 "$(wc -l < "$tmp/attempt-stdout" | tr -d ' ')"
+check "interrupted install: stderr is empty" no "$([ -s "$tmp/attempt-stderr" ] && echo yes || echo no)"
 check "interrupted install: nothing is touched" "$staged_before" "$(cd "$tmp/home/.qaren/runtime" && find . | sort)"
 rm -rf "$tmp/home/.qaren/runtime/.staging-$VERSION.abc123"
 
@@ -523,8 +524,8 @@ for call in $(seq 200); do
   ms=$(cat "$tmp/hook-ms")
   [ "$ms" -ge "$stalled_min" ] || stalled_min=$ms
   [ "$ms" -le "$stalled_max" ] || stalled_max=$ms
-  [ ! -s "$tmp/hook-stdout" ] && quiet=$((quiet + 1))
-  [ "$(wc -l < "$tmp/hook-stderr" | tr -d ' ')" = 1 ] && grep -q 'did not finish in time' "$tmp/hook-stderr" \
+  [ ! -s "$tmp/hook-stderr" ] && quiet=$((quiet + 1))
+  [ "$(wc -l < "$tmp/hook-stdout" | tr -d ' ')" = 1 ] && grep -q 'did not finish in time' "$tmp/hook-stdout" \
     && one_line=$((one_line + 1))
   check "stalled-$call: exits 0" 0 "$rc"
   if [ "$(cat "$tmp/hook-ms.envelope")" = 0 ]; then
@@ -542,8 +543,8 @@ for call in $(seq 200); do
 done
 unset stalled_deadline
 check "$stalled_calls stalled checks: every in-envelope Node, check and watchdog sleep recorded" "$stalled_eligible" "$recorded"
-check "$stalled_calls stalled checks: stdout is empty every time" "$stalled_calls" "$quiet"
-check "$stalled_calls stalled checks: stderr is exactly one diagnostic every time" "$stalled_calls" "$one_line"
+check "$stalled_calls stalled checks: stderr is empty every time" "$stalled_calls" "$quiet"
+check "$stalled_calls stalled checks: stdout is exactly one actionable line every time" "$stalled_calls" "$one_line"
 if [ "$stalled_eligible" -gt 0 ]; then
   check "$stalled_calls stalled checks: all $stalled_eligible in-envelope calls exit 0 within 2 s" "$stalled_eligible" "$in_time"
 else

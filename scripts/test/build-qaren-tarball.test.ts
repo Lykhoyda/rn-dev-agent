@@ -219,18 +219,25 @@ test('the Apple silicon archive contains only Darwin helpers and passes offline 
         );
         let verified = false;
         for (let attempt = 0; attempt < 3; attempt++) {
-          const output = execFileSync('bash', [script, '--print-bin'], {
-            env,
+          const result = spawnSync('bash', [script, '--print-bin'], {
+            env: {
+              ...env,
+              NODE_OPTIONS: attempt === 0 ? '--inspect-brk=127.0.0.1:0' : process.env.NODE_OPTIONS,
+            },
             encoding: 'utf8',
             timeout: 2_000,
-          }).trim();
-          if (output === binary) {
+          });
+          assert.ifError(result.error);
+          assert.equal(result.status, 0);
+          assert.equal(result.stderr, '');
+          if (attempt === 0) assert.notEqual(result.stdout, `${binary}\n`);
+          if (result.stdout === `${binary}\n`) {
             verified = true;
             break;
           }
           assert.equal(
-            output,
-            `qaren: the runtime check did not finish in time; run: bash ${script} --install`,
+            result.stdout,
+            `qaren: the runtime check did not finish in time; run: bash ${script} --install\n`,
           );
         }
         assert.ok(verified, 'the installed runtime verifies within three bounded attempts');

@@ -156,7 +156,7 @@ check_bin() {
   { read -r version; read -r name; read -r sha; read -r bytes; } <<< "$asset"
   installed_bin "$version" "$sha" 2>/dev/null && return 0
   if interrupted_install "$version"; then
-    echo "qaren: an interrupted qaren v$version install was found; repair it with: $INSTALL_COMMAND" >&2
+    echo "qaren: an interrupted qaren v$version install was found; repair it with: $INSTALL_COMMAND"
     return 0
   fi
   echo "qaren v$version is not installed. Install it with: $INSTALL_COMMAND"
@@ -182,7 +182,7 @@ print_bin() {
   kill -KILL -- "-$watchdog" 2>/dev/null || true
   wait "$watchdog" 2>/dev/null || true
   if [ "$rc" = 137 ]; then
-    echo "qaren: the runtime check did not finish in time; run: $INSTALL_COMMAND" >&2
+    echo "qaren: the runtime check did not finish in time; run: $INSTALL_COMMAND"
   else
     cat "$result"
   fi
