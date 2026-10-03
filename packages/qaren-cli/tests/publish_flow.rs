@@ -287,6 +287,8 @@ fn a_lost_comment_outcome_is_adopted_by_its_marker_not_reposted() {
         ReceiptResult::Failed
     );
     assert!(publication(&dir).comment_attempted);
+    std::fs::remove_file(&verdict).unwrap();
+    std::fs::remove_file(dir.join("comment.md")).unwrap();
 
     let mut second = Git(MockRunner::new());
     second.0.expect_run(
@@ -842,4 +844,162 @@ fn an_abandoned_empty_or_partial_lock_does_not_block_publication() {
             content
         );
     }
+}
+
+struct Uploads {
+    runner: Git,
+    bodies: Vec<(String, String)>,
+}
+
+impl Runner for Uploads {
+    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+        if spec.label == "gh-pr-comment" {
+            let at = spec
+                .args
+                .iter()
+                .position(|arg| arg == "--body-file")
+                .unwrap();
+            let file = &spec.args[at + 1];
+            let body = std::fs::read_to_string(spec.cwd.as_ref().unwrap().join(file)).unwrap();
+            self.bodies.push((file.clone(), body));
+        }
+        self.runner.run(spec)
+    }
+    fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        self.runner.spawn_group(spec, log)
+    }
+    fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.runner.spawn_piped(spec, log)
+    }
+    fn sleep(&mut self, d: std::time::Duration) {
+        self.runner.sleep(d)
+    }
+    fn now_epoch_ms(&self) -> u64 {
+        self.runner.now_epoch_ms()
+    }
+    fn commands_executed(&self) -> u64 {
+        self.runner.commands_executed()
+    }
+}
+
+#[test]
+fn retry_regenerates_an_unposted_walk_comment_with_current_privacy() {
+    let (runs, dir, verdict) = run_dir(false);
+    edit_pr(&dir, |pr| pr["blocks"] = serde_json::json!([]));
+    std::fs::write(&verdict, "qa-fixture-user saw the missing Tasks tab.").unwrap();
+    let mut first = Git(MockRunner::new());
+    first
+        .0
+        .expect_run("gh pr comment", CmdOutput::failed(1, "offline"));
+    assert_eq!(
+        publish(
+            &mut first,
+            &runs,
+            RUN,
+            &verdict,
+            &MachineIdentity::default()
+        )
+        .result,
+        ReceiptResult::Failed
+    );
+    assert!(publication(&dir).rendered);
+    assert!(std::fs::read_to_string(dir.join("comment.md"))
+        .unwrap()
+        .contains("qa-fixture-user"));
+    std::fs::write(dir.join("plan.md"), "Fill password with raw-plan-secret").unwrap();
+    let mut second = Uploads {
+        runner: Git(MockRunner::new()),
+        bodies: Vec::new(),
+    };
+    second
+        .runner
+        .0
+        .expect_run("gh pr view 12", CmdOutput::success(r#"{"comments":[]}"#));
+    script_comment_and_label(&mut second.runner.0);
+    let receipt = publish(&mut second, &runs, RUN, &verdict, &fixture_machine());
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Published,
+        "{:?}",
+        receipt.failure
+    );
+    assert_eq!(second.runner.0.remaining(), 0);
+    assert_eq!(second.bodies.len(), 1);
+    let (file, body) = &second.bodies[0];
+    assert_eq!(file, "comment.md");
+    assert!(body.starts_with(&format!("<!-- qaren-run: {RUN} -->")));
+    assert!(body.contains(r"\<user\> saw the missing Tasks tab."));
+    assert!(!body.contains("qa-fixture-user"));
+    assert!(!body.contains("raw-plan-secret"));
+}
+
+#[test]
+fn retry_regenerates_unposted_blocks_through_the_current_block_gate() {
+    let (runs, dir, verdict) = run_dir(true);
+    edit_pr(&dir, |pr| {
+        pr["blocks"] = serde_json::json!(["tasks", "safe"])
+    });
+    std::fs::write(
+        dir.join("blocks/tasks.yaml"),
+        "name: qa-fixture-user\nsteps: []\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("blocks/safe.yaml"), "name: Safe\nsteps: []\n").unwrap();
+    let mut first = Git(MockRunner::new());
+    script_comment_and_label(&mut first.0);
+    first
+        .0
+        .expect_run("gh pr comment", CmdOutput::failed(1, "offline"));
+    assert_eq!(
+        publish(
+            &mut first,
+            &runs,
+            RUN,
+            &verdict,
+            &MachineIdentity::default()
+        )
+        .result,
+        ReceiptResult::Failed
+    );
+    assert!(publication(&dir).blocks_comment_attempted);
+    assert!(std::fs::read_to_string(dir.join("blocks-comment.md"))
+        .unwrap()
+        .contains("qa-fixture-user"));
+    let posted_walk = std::fs::read(dir.join("comment.md")).unwrap();
+    let mut second = Uploads {
+        runner: Git(MockRunner::new()),
+        bodies: Vec::new(),
+    };
+    second
+        .runner
+        .0
+        .expect_run("gh pr view 12", CmdOutput::success(r#"{"comments":[]}"#));
+    second.runner.0.expect_run(
+        "gh pr comment",
+        CmdOutput::success("https://github.com/o/r/pull/12#issuecomment-2"),
+    );
+    let receipt = publish(&mut second, &runs, RUN, &verdict, &fixture_machine());
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Published,
+        "{:?}",
+        receipt.failure
+    );
+    assert_eq!(second.runner.0.remaining(), 0);
+    assert_eq!(second.bodies.len(), 1);
+    let (file, body) = &second.bodies[0];
+    assert_eq!(file, "blocks-comment.md");
+    assert!(body.starts_with(&format!("<!-- qaren-run: {RUN} blocks -->")));
+    assert!(body.contains("name: Safe\nsteps: []"));
+    assert!(!body.contains("tasks.yaml"));
+    assert!(!body.contains("qa-fixture-user"));
+    assert_eq!(std::fs::read(dir.join("comment.md")).unwrap(), posted_walk);
+    assert!(receipt.outcomes["writeback"].contains("withheld tasks"));
+
+    let mut again = Git(MockRunner::new());
+    assert_eq!(
+        publish(&mut again, &runs, RUN, &verdict, &fixture_machine()).result,
+        ReceiptResult::Published
+    );
+    assert!(again.0.calls.is_empty());
 }

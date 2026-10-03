@@ -186,20 +186,21 @@ fn post_once(
     body_file: &str,
     attachments: &[(PathBuf, Option<String>)],
     attempted: bool,
+    marker: &str,
+    render_body: &mut dyn FnMut() -> Result<String, Failure>,
     mark_attempted: &mut dyn FnMut() -> Result<(), Failure>,
 ) -> Result<String, Failure> {
-    let body = std::fs::read_to_string(run_dir.join(body_file)).map_err(|e| {
-        failure(
-            format!("cannot read {body_file}: {e}"),
-            "re-run qaren publish",
-        )
-    })?;
-    let marker = body.lines().next().unwrap_or_default().to_string();
     if attempted {
-        if let Some(url) = find_marked_comment(runner, pr, &marker, run_dir)? {
+        if let Some(url) = find_marked_comment(runner, pr, marker, run_dir)? {
             return Ok(url);
         }
     }
+    std::fs::write(run_dir.join(body_file), render_body()?).map_err(|e| {
+        failure(
+            format!("cannot write {body_file}: {e}"),
+            "fix the run directory permissions, then re-run",
+        )
+    })?;
     mark_attempted()?;
     github::comment_create(runner, pr, Path::new(body_file), attachments, run_dir)
 }
@@ -552,47 +553,6 @@ fn publish_inner(
         *publication = read_json(&state)?;
     }
 
-    if !publication.rendered {
-        let verdict = std::fs::read_to_string(verdict_file)
-            .ok()
-            .filter(|v| !v.trim().is_empty())
-            .ok_or_else(|| {
-                failure(
-                    format!("{} is missing or empty", verdict_file.display()),
-                    "write the verdict sentence to the --verdict-file, then re-run",
-                )
-            })?;
-        let ledger: Ledger = read_json(&run_dir.join("ledger.json"))?;
-        // The raw plan holds typed values; the public comment renders only the walk's projected rows.
-        let body = report::render_pr_comment(
-            &ReportInput {
-                run_id,
-                platform: &pr.platform,
-                app_id: &pr.app_id,
-                device: &pr.device,
-                plan: "",
-                ledger: &ledger,
-            },
-            &verdict,
-            &PrRun {
-                tested_sha: &pr.head_ref_oid,
-                tested_older_commit: pr.tested_older_commit,
-                video: &pr.video,
-                plan_sha256: &pr.plan_sha256,
-                video_publication: &pr.video_publication,
-            },
-            machine,
-        );
-        std::fs::write(run_dir.join(COMMENT_BODY), body).map_err(|e| {
-            failure(
-                format!("cannot write the comment body: {e}"),
-                "fix the run directory permissions, then re-run",
-            )
-        })?;
-        publication.rendered = true;
-        save(&run_dir, publication)?;
-    }
-
     if publication.comment_url.is_none() {
         let mut attachments = Vec::new();
         if pr.video_publication == VideoPublication::Eligible
@@ -619,7 +579,40 @@ fn publish_inner(
             COMMENT_BODY,
             &attachments,
             attempted,
+            &format!("<!-- qaren-run: {run_id} -->"),
             &mut || {
+                let verdict = std::fs::read_to_string(verdict_file)
+                    .ok()
+                    .filter(|v| !v.trim().is_empty())
+                    .ok_or_else(|| {
+                        failure(
+                            format!("{} is missing or empty", verdict_file.display()),
+                            "write the verdict sentence to the --verdict-file, then re-run",
+                        )
+                    })?;
+                let ledger: Ledger = read_json(&run_dir.join("ledger.json"))?;
+                Ok(report::render_pr_comment(
+                    &ReportInput {
+                        run_id,
+                        platform: &pr.platform,
+                        app_id: &pr.app_id,
+                        device: &pr.device,
+                        plan: "",
+                        ledger: &ledger,
+                    },
+                    &verdict,
+                    &PrRun {
+                        tested_sha: &pr.head_ref_oid,
+                        tested_older_commit: pr.tested_older_commit,
+                        video: &pr.video,
+                        plan_sha256: &pr.plan_sha256,
+                        video_publication: &pr.video_publication,
+                    },
+                    machine,
+                ))
+            },
+            &mut || {
+                publication.rendered = true;
                 publication.comment_attempted = true;
                 save(&run_dir, publication)
             },
@@ -676,15 +669,6 @@ fn publish_inner(
             }
         }
         if needs_comment {
-            if !run_dir.join(BLOCKS_BODY).is_file() {
-                let body = blocks_comment(run_id, &pr, &blocks, machine);
-                std::fs::write(run_dir.join(BLOCKS_BODY), body).map_err(|e| {
-                    failure(
-                        format!("cannot write the blocks comment: {e}"),
-                        "fix the run directory permissions, then re-run",
-                    )
-                })?;
-            }
             let attempted = publication.blocks_comment_attempted;
             let url = post_once(
                 runner,
@@ -693,6 +677,8 @@ fn publish_inner(
                 BLOCKS_BODY,
                 &[],
                 attempted,
+                &format!("<!-- qaren-run: {run_id} blocks -->"),
+                &mut || Ok(blocks_comment(run_id, &pr, &blocks, machine)),
                 &mut || {
                     publication.blocks_comment_attempted = true;
                     save(&run_dir, publication)

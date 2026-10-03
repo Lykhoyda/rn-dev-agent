@@ -272,7 +272,7 @@ fn replace_ignore_ascii_case(text: &str, needle: &str, with: &str) -> String {
     while let Some(i) = lower[from..].find(&needle) {
         let start = from + i;
         let end = start + needle.len();
-        from = start + 1;
+        from = start + lower[start..].chars().next().unwrap().len_utf8();
         if word(start.checked_sub(1).and_then(|p| bytes.get(p))) || word(bytes.get(end)) {
             continue;
         }
@@ -598,6 +598,40 @@ mod tests {
     fn plain_urls_survive_redaction() {
         let raw = "GET https://registry.npmjs.org/react 200";
         assert_eq!(redact_secrets(raw), raw);
+    }
+
+    #[test]
+    fn rejected_multibyte_names_preserve_boundaries_and_later_matches() {
+        let machine = MachineIdentity {
+            values: vec!["Антон".into(), "设备".into()],
+            username: Some("用户".into()),
+            hostname: Some("主机.local".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            redact_machine(
+                "Антон-ios Антон; 设备-ios 设备; 用户-ios 用户; 主机.local-ios 主机.local 主机-ios 主机",
+                &machine,
+            ),
+            "Антон-ios <device>; 设备-ios <device>; 用户-ios <user>; <host>.local-ios <host> 主机-ios <host>"
+        );
+    }
+
+    #[test]
+    fn identity_matching_keeps_ascii_case_and_word_boundaries() {
+        let machine = MachineIdentity {
+            values: vec!["Device".into()],
+            username: Some("Alice".into()),
+            hostname: Some("Mac.local".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            redact_machine(
+                "Device-ios DEVICE xDevice Alice-ios ALICE Mac-ios MAC.local macOS MAC",
+                &machine
+            ),
+            "Device-ios <device> xDevice Alice-ios <user> Mac-ios <host> macOS <host>"
+        );
     }
 
     #[test]
