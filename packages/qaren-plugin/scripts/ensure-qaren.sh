@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Verifies and installs the qaren runtime this plugin version vouches for.
 #
-#   ensure-qaren.sh --print-bin                   offline and read-only; prints the installed binary
-#                                                 or the install command; always exits 0
+#   ensure-qaren.sh --print-bin                   offline verification; prints the installed binary,
+#                                                 an install command or a diagnostic; always exits 0
 #   ensure-qaren.sh --install [--from-file <tgz>] downloads (or takes) the tarball, verifies its
 #                                                 sha256 and length against runner-manifest.json,
 #                                                 and installs it into ~/.qaren/runtime/<v>/; rerun --install after interruption

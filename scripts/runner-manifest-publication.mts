@@ -2,7 +2,7 @@
 // Decision seam for the release trust-root transaction (.github/workflows/release.yml).
 //
 // A release candidate H is a Version Packages commit whose runner-manifest.json
-// already vouches for the runner zips and qaren tarballs retained from the
+// already vouches for the runner zips and Apple silicon qaren tarball retained from the
 // producer that built them.
 // Every decision here compares mutable state (release assets, drafts, tags)
 // against that immutable candidate, never the other way round: nothing that is

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Generates the offline SHA-256 and byte-length trust root for runner zips and optional qaren tarballs.
+// Generates the offline SHA-256 and byte-length trust root for runner zips and an optional qaren tarball.
 //
 // Usage (CI, after building the zips):
 //   node scripts/build-runner-manifest.mts \

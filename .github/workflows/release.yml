@@ -334,7 +334,7 @@ jobs:
           QAREN_ARM64_BYTES: ${{ needs.prepare.outputs.qaren-darwin-arm64-bytes }}
         run: |
           [ "$(git rev-parse HEAD)" = "$HEAD" ] || { echo "::error::checkout is not the release head $HEAD" >&2; exit 1; }
-          # The tarballs are built from the whole candidate, so H must be exactly P plus its trust root.
+          # The tarball is built from the whole candidate, so H must be exactly P plus its trust root.
           [ "$(git rev-parse HEAD^)" = "$CANDIDATE" ] || { echo "::error::release head $HEAD is not one commit on top of the candidate $CANDIDATE" >&2; exit 1; }
           DELTA=$(git diff --name-only HEAD^ HEAD | sort | tr '\n' ' ')
           [ "$DELTA" = "packages/qaren-plugin/runner-manifest.json runner-manifest.json " ] || { echo "::error::release head $HEAD changes '$DELTA' beyond the trust root" >&2; exit 1; }
