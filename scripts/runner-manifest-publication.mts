@@ -1,12 +1,8 @@
 #!/usr/bin/env node
 // Decision seam for the release trust-root transaction (.github/workflows/release.yml).
 //
-// A release candidate H is a Version Packages commit whose runner-manifest.json
-// already vouches for the runner zips and Apple silicon qaren tarball retained from the
-// producer that built them.
-// Every decision here compares mutable state (release assets, drafts, tags)
-// against that immutable candidate, never the other way round: nothing that is
-// already public may become the authority for what gets published.
+// release.yml binds finalized head H to producer candidate P by allowing only the trust-root delta.
+// Retained producer digests are the authority; public assets never redefine what gets published.
 //
 // Stages:
 //   prepared  H is self-consistent and matches the producer handoff (offline).
