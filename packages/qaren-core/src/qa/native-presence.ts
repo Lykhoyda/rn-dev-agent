@@ -122,7 +122,12 @@ export function validateNativePresence(
 type Rect = NonNullable<NativeNode['rect']>;
 
 function validRect(rect: Rect | undefined): rect is Rect {
-  return !!rect && [rect.x, rect.y, rect.width, rect.height].every(finite) && rect.width >= 0 && rect.height >= 0;
+  return (
+    !!rect &&
+    [rect.x, rect.y, rect.width, rect.height].every(finite) &&
+    rect.width >= 0 &&
+    rect.height >= 0
+  );
 }
 
 function overlaps(a: Rect, b: Rect): boolean {
@@ -259,7 +264,10 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
   const root = nodes[0];
   // The screen clips every node, whatever its ancestry; a keyboard can detach content from its Window.
   const screen =
-    root?.type === 'Application' && validRect(root.rect) && root.rect.width > 0 && root.rect.height > 0
+    root?.type === 'Application' &&
+    validRect(root.rect) &&
+    root.rect.width > 0 &&
+    root.rect.height > 0
       ? root.rect
       : undefined;
   nodes.forEach((node, i) => {
@@ -276,7 +284,10 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
       ) {
         visible = clip(ancestor.rect, visible);
       }
-      if (validRect(ancestor?.rect) && ['ScrollView', 'Table', 'CollectionView'].includes(ancestor.type ?? ''))
+      if (
+        validRect(ancestor?.rect) &&
+        ['ScrollView', 'Table', 'CollectionView'].includes(ancestor.type ?? '')
+      )
         visible = clip(ancestor.rect, visible);
       parent = ancestor?.parentIndex;
     }

@@ -490,20 +490,33 @@ test('scroll clips exclude detached text from checks, waits and scroll-until on 
   const rect = { x: 0, y: 0, width: 402, height: 874 };
   for (const type of ['ScrollView', 'Table', 'CollectionView']) {
     for (const window of [false, true]) {
-      for (const [x, y] of [[20, 500], [20, 50], [350, 120], [0, 120]]) {
+      for (const [x, y] of [
+        [20, 500],
+        [20, 50],
+        [350, 120],
+        [0, 120],
+      ]) {
         const nodes: NativeNode[] = [
           { ref: '@app', type: 'Application', rect },
           { ref: '@window', type: window ? 'Window' : 'Other', parentIndex: 0, rect },
           {
-            ref: '@list', type, parentIndex: 1,
+            ref: '@list',
+            type,
+            parentIndex: 1,
             rect: { x: 50, y: 100, width: 250, height: 300 },
           },
           {
-            ref: '@later', type: 'StaticText', label: 'Later', parentIndex: 2,
+            ref: '@later',
+            type: 'StaticText',
+            label: 'Later',
+            parentIndex: 2,
             rect: { x, y, width: x === 0 ? 30 : 200, height: 30 },
           },
           {
-            ref: '@partial', type: 'StaticText', label: 'Partial', parentIndex: 2,
+            ref: '@partial',
+            type: 'StaticText',
+            label: 'Partial',
+            parentIndex: 2,
             rect: { x: 40, y: 390, width: 100, height: 30 },
           },
         ];
@@ -511,8 +524,10 @@ test('scroll clips exclude detached text from checks, waits and scroll-until on 
         assert.deepEqual([...outsideViewport(nodes)], [3]);
         const initial = attested(nodes);
         const observed = await captureScreen({
-          appId: 'com.test', requirePrivateInputs: true,
-          native: async () => initial, react: async () => digest(),
+          appId: 'com.test',
+          requirePrivateInputs: true,
+          native: async () => initial,
+          react: async () => digest(),
         });
         assert.equal(observed.elements.find((e) => e.ref === '@later')!.offscreen, true);
         assert.deepEqual(observed.visibleText, ['Partial']);
@@ -520,8 +535,13 @@ test('scroll clips exclude detached text from checks, waits and scroll-until on 
         assert.equal(failed.result.verdict, 'FAIL');
         const partial = await walkViewport('✓ "Partial"', [initial]);
         assert.equal(partial.result.verdict, 'PASS');
-        const revealed = attested(nodes.map((node) => node.ref === '@later'
-          ? { ...node, rect: { x: 60, y: 200, width: 200, height: 30 } } : node));
+        const revealed = attested(
+          nodes.map((node) =>
+            node.ref === '@later'
+              ? { ...node, rect: { x: 60, y: 200, width: 200, height: 30 } }
+              : node,
+          ),
+        );
         const waited = await walkViewport('1. Wait for "Later"', [initial, revealed]);
         assert.equal(waited.result.verdict, 'PASS');
         assert.ok(waited.captures() > 1);
@@ -538,13 +558,23 @@ test('screen and nested container clips remain cumulative across missing and inv
   const nodes: NativeNode[] = [
     { ref: '@app', type: 'Application', rect },
     { ref: '@window', type: 'Window', parentIndex: 0, rect },
-    { ref: '@outer', type: 'Table', parentIndex: 1, rect: { x: 0, y: 100, width: 402, height: 300 } },
+    {
+      ref: '@outer',
+      type: 'Table',
+      parentIndex: 1,
+      rect: { x: 0, y: 100, width: 402, height: 300 },
+    },
     { ref: '@inner', type: 'CollectionView', parentIndex: 2, rect },
-    { ref: '@later', type: 'StaticText', parentIndex: 3, rect: { x: 20, y: 500, width: 200, height: 30 } },
+    {
+      ref: '@later',
+      type: 'StaticText',
+      parentIndex: 3,
+      rect: { x: 20, y: 500, width: 200, height: 30 },
+    },
   ];
   for (const invalid of [undefined, { ...rect, x: NaN }, { ...rect, width: -1 }]) {
     for (const index of [0, 1, 3]) {
-      const patched = nodes.map((node, i) => i === index ? { ...node, rect: invalid } : node);
+      const patched = nodes.map((node, i) => (i === index ? { ...node, rect: invalid } : node));
       assert.ok(outsideViewport(patched).has(4));
     }
   }
