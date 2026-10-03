@@ -40,8 +40,6 @@ RELEASES="https://github.com/Lykhoyda/rn-dev-agent/releases/download"
 RUNTIME_ROOT="${HOME:-}/.qaren/runtime"
 RECORD=".tarball-sha256"
 INSTALL_COMMAND="bash $(printf %q "$PLUGIN_ROOT/scripts/ensure-qaren.sh") --install"
-# Bound the whole runtime check, including root resolution, Node and the digest record read, in 0.1 s polls.
-PRINT_BIN_BUDGET_TICKS=10
 # Decompression-bomb ceiling for the unpacked runtime; the manifest digest stays the trust root.
 MAX_UNPACKED_BYTES=536870912
 MAX_ENTRIES=10000
@@ -169,26 +167,29 @@ check_bin() {
 }
 
 print_bin() {
-  local result pid ticks=0
+  local result pid watchdog rc=0
   result=$(mktemp) || { echo "qaren: cannot create a temporary file"; return 0; }
   # Its own process group lets a timeout kill everything the check started; bash's launch noise is not hook output.
   set -m
   { check_bin > "$result" 2>&1 & } 2>/dev/null
   pid=$!
-  set +m
-  while kill -0 "$pid" 2>/dev/null; do
-    if [ "$ticks" -ge "$PRINT_BIN_BUDGET_TICKS" ]; then
+  {
+    (
+      set +m
+      sleep 1
       kill -KILL -- "-$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
-      rm -f "$result"
-      echo "qaren: the runtime check did not finish in time; run: $INSTALL_COMMAND"
-      return 0
-    fi
-    sleep 0.1
-    ticks=$((ticks + 1))
-  done
-  wait "$pid" 2>/dev/null || true
-  cat "$result"
+    ) &
+  } 2>/dev/null
+  watchdog=$!
+  set +m
+  wait "$pid" 2>/dev/null || rc=$?
+  kill -KILL -- "-$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  if [ "$rc" = 137 ]; then
+    echo "qaren: the runtime check did not finish in time; run: $INSTALL_COMMAND"
+  else
+    cat "$result"
+  fi
   rm -f "$result"
 }
 

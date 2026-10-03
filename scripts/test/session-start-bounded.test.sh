@@ -52,19 +52,31 @@ write_manifest() {
 
 PERL=$(command -v perl)
 NODE=$(command -v node)
-now_ms() { "$PERL" -MTime::HiRes=time -e 'printf "%.0f\n", time() * 1000'; }
+timed_hook() {
+  "$PERL" -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+    my $record = shift @ARGV;
+    my $start = clock_gettime(CLOCK_MONOTONIC);
+    my $pid = fork();
+    defined($pid) or die "fork: $!";
+    if (!$pid) { alarm 5; exec @ARGV; die "exec: $!"; }
+    waitpid($pid, 0);
+    my $status = $?;
+    my $ms = (clock_gettime(CLOCK_MONOTONIC) - $start) * 1000;
+    open(my $f, ">", $record) or die "timing record: $!";
+    printf $f "%.0f\n", $ms;
+    exit(($status & 127) ? 128 + ($status & 127) : $status >> 8);
+  ' "$tmp/hook-ms" "$@"
+}
 
 contains() { case "$1" in *"$2"*) echo yes ;; *) echo "no: $1" ;; esac; }
 
 # hook [PATH]: runs --print-bin like the SessionStart hook; sets out, rc, ms.
 # perl's alarm kills a hook that hangs, so a regression fails instead of stalling the suite.
 hook() {
-  local start
-  start=$(now_ms)
-  out=$(HOME="$tmp/home" PATH="${1:-$tmp/bin}" "$PERL" -e 'alarm 5; exec @ARGV' \
+  out=$(HOME="$tmp/home" PATH="${1:-$tmp/bin}" timed_hook \
     "$tmp/bin/bash" "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin 2>&1)
   rc=$?
-  ms=$(( $(now_ms) - start ))
+  ms=$(cat "$tmp/hook-ms")
 }
 
 bounded() {
@@ -84,11 +96,10 @@ check "missing runtime: prints the install command" yes "$(contains "$out" "ensu
 cp -R "$ROOT/packages/qaren-plugin" "$tmp/plugin with space"
 cp "$tmp/plugin/runner-manifest.json" "$tmp/plugin with space/runner-manifest.json"
 hook_command=$("$NODE" -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).hooks.SessionStart[0].hooks[0].command' "$tmp/plugin with space/hooks/hooks.json")
-start=$(now_ms)
 out=$(HOME="$tmp/home" PATH="$tmp/bin" CLAUDE_PLUGIN_ROOT="$tmp/plugin with space" \
-  "$PERL" -e 'alarm 5; exec @ARGV' /bin/sh -c "$hook_command" 2>&1)
+  timed_hook /bin/sh -c "$hook_command" 2>&1)
 rc=$?
-ms=$(( $(now_ms) - start ))
+ms=$(cat "$tmp/hook-ms")
 bounded "hook command with a space in the plugin path"
 check "hook command with a space: prints the exact install command" \
   "qaren v$VERSION is not installed. Install it with: bash $(printf %q "$tmp/plugin with space/scripts/ensure-qaren.sh") --install" "$out"
@@ -213,30 +224,43 @@ done
 check "Node with 0.3 s startup: 20 of 20 calls print the binary within 2 s" 20 "$cold_bin"
 ln -sf "$NODE" "$tmp/bin/node"
 
+printf '#!/bin/sh\necho "$$" > "%s/slow-node.pid"\nexec "%s" "$@"\n' "$tmp" "$NODE" > "$tmp/debug-node"
+chmod +x "$tmp/debug-node"
+ln -sf "$tmp/debug-node" "$tmp/bin/node"
+NODE_OPTIONS=--inspect-brk=127.0.0.1:0 hook
+bounded "real Node paused by the debugger"
+check "real Node paused by the debugger: names the install command" yes "$(contains "$out" "did not finish in time; run:")"
+check "real Node paused by the debugger: child started" yes "$([ -s "$tmp/slow-node.pid" ] && echo yes || echo no)"
+if [ -s "$tmp/slow-node.pid" ]; then
+  check "real Node paused by the debugger: child is gone" no "$(kill -0 "$(cat "$tmp/slow-node.pid")" 2>/dev/null && echo yes || echo no)"
+fi
+
 printf '#!/bin/sh\necho "$$" > "%s/slow-node.pid"\nexec "%s" -e '\''process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'\''\n' "$tmp" "$NODE" > "$tmp/slow-node"
 chmod +x "$tmp/slow-node"
 ln -sf "$tmp/slow-node" "$tmp/bin/node"
-printf '#!/bin/sh\necho tick >> "%s/ticks"\nexec "%s" "$@"\n' "$tmp" "$SLEEP" > "$tmp/counting-sleep"
-chmod +x "$tmp/counting-sleep"
-ln -sf "$tmp/counting-sleep" "$tmp/bin/sleep"
-rm -f "$tmp/ticks"
+printf '#!/bin/sh\n"%s" 0.15\nexec "%s" "$@"\n' "$SLEEP" "$SLEEP" > "$tmp/slow-sleep"
+chmod +x "$tmp/slow-sleep"
+ln -sf "$tmp/slow-sleep" "$tmp/bin/sleep"
 hook
-bounded "stalled check, counted polls"
-check "stalled check: the timeout fires after exactly 10 polls" 10 "$(wc -l < "$tmp/ticks" | tr -d ' ')"
+bounded "stalled check with slow timer startup"
+check "stalled check with slow timer startup: names the install command" yes "$(contains "$out" "did not finish in time; run:")"
 ln -sf "$SLEEP" "$tmp/bin/sleep"
 
 quiet=0 one_line=0 in_time=0 survivors=0
 for _ in $(seq 200); do
   rm -f "$tmp/slow-node.pid"
-  start=$(now_ms)
-  HOME="$tmp/home" PATH="$tmp/bin" "$PERL" -e 'alarm 5; exec @ARGV' \
+  HOME="$tmp/home" PATH="$tmp/bin" timed_hook \
     "$tmp/bin/bash" "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin >"$tmp/hook-stdout" 2>"$tmp/hook-stderr"
   rc=$?
-  ms=$(( $(now_ms) - start ))
+  ms=$(cat "$tmp/hook-ms")
   [ ! -s "$tmp/hook-stderr" ] && quiet=$((quiet + 1))
   [ "$(wc -l < "$tmp/hook-stdout" | tr -d ' ')" = 1 ] && grep -q 'did not finish in time' "$tmp/hook-stdout" \
     && one_line=$((one_line + 1))
-  [ "$rc" = 0 ] && [ "$ms" -lt 2000 ] && in_time=$((in_time + 1))
+  if [ "$rc" = 0 ] && [ "$ms" -lt 2000 ]; then
+    in_time=$((in_time + 1))
+  else
+    echo "FAIL: stalled check took $ms ms and exited $rc"
+  fi
   if [ -s "$tmp/slow-node.pid" ] && kill -0 "$(cat "$tmp/slow-node.pid")" 2>/dev/null; then
     survivors=$((survivors + 1))
     kill -KILL "$(cat "$tmp/slow-node.pid")"
