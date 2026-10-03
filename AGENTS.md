@@ -9,10 +9,9 @@ notes here.
 The repository is mid-pivot from rn-dev-agent (an MCP server plus host plugins
 that drive React Native apps on simulators) to QaReN: a Rust CLI that owns the
 run and spawns a TypeScript child that reads the screen. `main` still ships
-rn-dev-agent 1.0.x; the QaReN fixes are combined into one integration PR targeting
-`develop`. See [Branches, CI And Release](#branches-ci-and-release) for acceptance
-and merge requirements. The QaReN structure outline and TDD that the phase PRs
-cite are the specification; each
+rn-dev-agent 1.0.x; `develop` carries the migration as one PR per phase and
+merges into `main` as 2.0.0 once the label path runs end to end. The QaReN
+structure outline and TDD that the phase PRs cite are the specification; each
 phase PR names its Linear issue in the QaReN project.
 
 The package cut, literal `qaren check`, Jev seam, Phase 4 blocks, and PR run/publication commands are implemented. For saved-block replay, persistence, recovery and action inspection, read the [saved-block contract](packages/qaren-cli/README.md#saved-blocks); for `qaren pr` and `qaren publish`, the [CLI README](packages/qaren-cli/README.md#test-a-pull-request). Live model and device acceptance are separate from hermetic tests; `qaren listen` and packaging arrive in later phases.
@@ -223,12 +222,6 @@ Suite records and redacted logs live under `~/.qaren/native-suites/<run-id>`. Un
 
 ## Branches, CI And Release
 
-- The integration PR into `develop` is the single candidate for CI and
-  independent QA. Completion requires independent QA to pass both the Test App
-  baseline and the complex staging app at that exact integration head. Merge
-  into `develop` only after those passes; merging `develop` into `main` for
-  2.0.0 requires approval. Green CI or a working publication path alone does
-  not establish acceptance.
 - `main` is protected and its only required check is `Build & Test`
   (`ci.yml`), which now requires `cargo-test` as well. Nothing reaches `main`
   except a PR carrying that check green.
