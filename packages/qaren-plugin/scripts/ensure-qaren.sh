@@ -94,9 +94,9 @@ expected_asset() {
 installed_bin() {
   local dest="$RUNTIME_ROOT/$1" sha="$2"
   # A runtime someone else put there is never handed out, whatever its record says.
-  [ ! -L "$dest" ] && [ -O "$dest" ] && [ -x "$dest/bin/qaren" ] && [ -O "$dest/bin/qaren" ] \
+  [ ! -L "$dest" ] && [ -O "$dest" ] && [ -f "$dest/bin/qaren" ] && [ -x "$dest/bin/qaren" ] && [ -O "$dest/bin/qaren" ] \
     && [ -f "$dest/$RECORD" ] && [ -O "$dest/$RECORD" ] \
-    && [ "$(exec 9>&-; cat "$dest/$RECORD")" = "$sha" ] && echo "$dest/bin/qaren"
+    && (exec 9>&-; perl -e 'open(my $f, "<", $ARGV[0]) or exit 1; read($f, my $record, 66); exit($record eq $ARGV[1] || $record eq "$ARGV[1]\n" ? 0 : 1)' "$dest/$RECORD" "$sha") && echo "$dest/bin/qaren"
 }
 
 # Staging names are .staging-<version>.<six mktemp characters>; matching exactly six keeps
@@ -147,34 +147,14 @@ make_root() {
   real_root
 }
 
-print_bin() {
-  local result pid deadline=$((SECONDS + PRINT_BIN_BUDGET_SECONDS)) asset version name sha bytes
-  # Never hand out a binary from a root this user does not own.
+check_bin() {
+  set +m
+  local asset version name sha bytes
   if [ -e "$RUNTIME_ROOT" ] && ! real_root; then
     echo "qaren: the qaren runtime directory $RUNTIME_ROOT is not a directory you own; inspect it"
     return 0
   fi
-  result=$(mktemp) || { echo "qaren: cannot create a temporary file"; return 0; }
-  read_asset > "$result" 2>&1 &
-  pid=$!
-  while kill -0 "$pid" 2>/dev/null; do
-    if [ "$SECONDS" -ge "$deadline" ]; then
-      kill -KILL "$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
-      rm -f "$result"
-      echo "qaren: the runtime check did not finish in time; run: $INSTALL_COMMAND"
-      return 0
-    fi
-    sleep 0.1
-  done
-  if ! wait "$pid"; then
-    echo "qaren: $(cat "$result")"
-    rm -f "$result"
-    return 0
-  fi
-  asset=$(cat "$result")
-  rm -f "$result"
-  if ! asset=$(validate_asset "$asset" 2>&1); then
+  if ! asset=$(expected_asset 2>&1); then
     echo "qaren: $asset"
     return 0
   fi
@@ -185,6 +165,29 @@ print_bin() {
     return 0
   fi
   echo "qaren v$version is not installed. Install it with: $INSTALL_COMMAND"
+}
+
+print_bin() {
+  local result pid deadline=$((SECONDS + PRINT_BIN_BUDGET_SECONDS))
+  result=$(mktemp) || { echo "qaren: cannot create a temporary file"; return 0; }
+  set -m
+  check_bin > "$result" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      kill -KILL -- "-$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      set +m
+      rm -f "$result"
+      echo "qaren: the runtime check did not finish in time; run: $INSTALL_COMMAND"
+      return 0
+    fi
+    sleep 0.1
+  done
+  wait "$pid" 2>/dev/null || true
+  set +m
+  cat "$result"
+  rm -f "$result"
 }
 
 refuse() { echo "ensure-qaren: $*" >&2; exit 1; }
@@ -356,7 +359,7 @@ install() {
   [ -z "$(exec 9>&-; find "$STAGING/x" ! -type f ! -type d -print -quit)" ] \
     || refuse "$name carries a link or special file; the runtime ships only files and directories"
   [ "$(exec 9>&-; ls -A "$STAGING/x")" = "$top" ] || refuse "$name does not unpack to exactly $top/"
-  [ -x "$STAGING/x/$top/bin/qaren" ] || refuse "$name carries no executable bin/qaren"
+  [ -f "$STAGING/x/$top/bin/qaren" ] && [ -x "$STAGING/x/$top/bin/qaren" ] || refuse "$name carries no executable bin/qaren"
   printf '%s\n' "$sha" > "$STAGING/x/$top/$RECORD"
 
   pause_at move1

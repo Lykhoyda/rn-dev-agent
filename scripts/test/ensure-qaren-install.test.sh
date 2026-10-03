@@ -50,7 +50,10 @@ def add(tar, name, data=b"", mode=0o644, kind=tarfile.REGTYPE, link=""):
 with tarfile.open(out, "w:gz", format=tarfile.USTAR_FORMAT, compresslevel=1) as tar:
     add(tar, f"{top}/", kind=tarfile.DIRTYPE, mode=0o755)
     add(tar, f"{top}/bin/", kind=tarfile.DIRTYPE, mode=0o755)
-    add(tar, f"{top}/bin/qaren", b"#!/bin/sh\necho qaren\n", 0o755)
+    if kind == "binary-directory":
+        add(tar, f"{top}/bin/qaren/", kind=tarfile.DIRTYPE, mode=0o755)
+    else:
+        add(tar, f"{top}/bin/qaren", b"#!/bin/sh\necho qaren\n", 0o755)
     add(tar, f"{top}/runtime/qa/walk.js", b"// walk\n" * 4096)
     if kind == "dotdot":
         add(tar, f"{top}/../escaped", b"x")
@@ -149,6 +152,20 @@ out=$(run_install "$tmp/does-not-exist.tgz"); rc=$?
 check "re-install exits 0" 0 "$rc"
 check "re-install prints the same binary" "$REAL_DEST/bin/qaren" "$out"
 check "re-install leaves the runtime untouched" "$before" "$(ls -lTR "$DEST" 2>/dev/null || ls -l --full-time -R "$DEST")"
+
+rm "$DEST/bin/qaren"
+mkdir "$DEST/bin/qaren"
+out=$(run_install "$tmp/good.tgz"); rc=$?
+check "directory binary is replaced" 0 "$rc"
+check "replacement binary runs" qaren "$("$DEST/bin/qaren")"
+
+reset_home
+make_tarball "$tmp/binary-directory.tgz" binary-directory
+write_manifest "$tmp/binary-directory.tgz"
+run_install "$tmp/binary-directory.tgz" >/dev/null; rc=$?
+check "tarball with directory binary is refused" 1 "$rc"
+check "directory binary: nothing installed" no "$([ -e "$DEST" ] && echo yes || echo no)"
+check "directory binary: no staging left behind" 0 "$(leftovers)"
 
 # A tampered byte is refused and nothing is installed.
 reset_home

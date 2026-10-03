@@ -23,7 +23,14 @@ check() {
 }
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+cleanup() {
+  local pidfile
+  for pidfile in "$tmp/slow-root.pid" "$tmp/slow-perl.pid" "$tmp/slow-node.pid"; do
+    [ ! -s "$pidfile" ] || kill -KILL "$(cat "$pidfile")" 2>/dev/null || true
+  done
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
 
 mkdir -p "$tmp/plugin/scripts" "$tmp/bin" "$tmp/home"
 cp "$SCRIPT" "$tmp/plugin/scripts/ensure-qaren.sh"
@@ -45,7 +52,7 @@ write_manifest() {
 
 PERL=$(command -v perl)
 NODE=$(command -v node)
-now_ms() { "$NODE" -p 'Date.now()'; }
+now_ms() { "$PERL" -MTime::HiRes=time -e 'printf "%.0f\n", time() * 1000'; }
 
 contains() { case "$1" in *"$2"*) echo yes ;; *) echo "no: $1" ;; esac; }
 
@@ -123,6 +130,51 @@ hook
 bounded "verified runtime"
 check "verified runtime: prints the binary" "$REAL_DEST/bin/qaren" "$out"
 
+rm "$DEST/bin/qaren"
+mkdir "$DEST/bin/qaren"
+hook
+bounded "directory at bin/qaren"
+check "directory at bin/qaren: prints the install command" yes "$(contains "$out" "--install")"
+rmdir "$DEST/bin/qaren"
+printf '#!/bin/sh\n' > "$DEST/bin/qaren"
+chmod +x "$DEST/bin/qaren"
+
+"$NODE" -e 'require("fs").writeFileSync(process.argv[1], "a".repeat(8 * 1024 * 1024))' "$DEST/.tarball-sha256"
+hook
+bounded "oversized digest record"
+check "oversized digest record: prints the install command" yes "$(contains "$out" "--install")"
+printf '%s\n' "$SHA" > "$DEST/.tarball-sha256"
+
+cat > "$tmp/stall-root.bash" <<'SH'
+cd() {
+  case "$*" in
+    *"/.qaren/runtime")
+      "$STALL_PERL" -e 'open(my $f, ">", $ENV{STALL_PID}) or die $!; print $f $$; close $f; sleep 30'
+      ;;
+    *) builtin cd "$@" ;;
+  esac
+}
+SH
+BASH_ENV="$tmp/stall-root.bash" STALL_PERL="$PERL" STALL_PID="$tmp/slow-root.pid" hook
+bounded "stalled root resolution"
+check "stalled root resolution: names the install command" yes "$(contains "$out" "did not finish in time")"
+check "stalled root resolution: child started" yes "$([ -s "$tmp/slow-root.pid" ] && echo yes || echo no)"
+if [ -s "$tmp/slow-root.pid" ]; then
+  check "stalled root resolution: child is gone" no "$(kill -0 "$(cat "$tmp/slow-root.pid")" 2>/dev/null && echo yes || echo no)"
+fi
+
+printf '#!/bin/sh\necho "$$" > "%s/slow-perl.pid"\nexec "%s" -e '\''process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'\''\n' "$tmp" "$NODE" > "$tmp/slow-perl"
+chmod +x "$tmp/slow-perl"
+ln -sf "$tmp/slow-perl" "$tmp/bin/perl"
+hook
+bounded "stalled digest reader"
+check "stalled digest reader: names the install command" yes "$(contains "$out" "did not finish in time")"
+check "stalled digest reader: child started" yes "$([ -s "$tmp/slow-perl.pid" ] && echo yes || echo no)"
+if [ -s "$tmp/slow-perl.pid" ]; then
+  check "stalled digest reader: child is gone" no "$(kill -0 "$(cat "$tmp/slow-perl.pid")" 2>/dev/null && echo yes || echo no)"
+fi
+ln -sf "$PERL" "$tmp/bin/perl"
+
 printf '{"version":"%s","assets":{"ios":[],"android":[]}}\n' "$VERSION" > "$tmp/plugin/runner-manifest.json"
 hook
 bounded "no qaren asset"
@@ -143,7 +195,10 @@ ln -sf "$tmp/slow-node" "$tmp/bin/node"
 hook
 bounded "Node that never starts"
 check "Node that never starts: names the install command" yes "$(contains "$out" "did not finish in time")"
-check "Node that never starts: child is gone" no "$(kill -0 "$(cat "$tmp/slow-node.pid")" 2>/dev/null && echo yes || echo no)"
+check "Node that never starts: child started" yes "$([ -s "$tmp/slow-node.pid" ] && echo yes || echo no)"
+if [ -s "$tmp/slow-node.pid" ]; then
+  check "Node that never starts: child is gone" no "$(kill -0 "$(cat "$tmp/slow-node.pid")" 2>/dev/null && echo yes || echo no)"
+fi
 
 printf '#!/bin/sh\nexec "%s" --import "data:text/javascript,Object.defineProperty(process.versions,\\"node\\",{value:\\"22.1.0\\"})" "$@"\n' "$NODE" > "$tmp/old-node"
 chmod +x "$tmp/old-node"
