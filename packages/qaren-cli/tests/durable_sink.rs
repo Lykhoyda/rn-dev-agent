@@ -366,6 +366,7 @@ fn evidence_documents_and_reports_still_withhold_opaque_output() {
         verdict: "FAIL".into(),
         path: "walk".into(),
         blocks: Vec::new(),
+        blocks_written: None,
         steps: Vec::new(),
         jev: Default::default(),
         llm_turns: 0,
