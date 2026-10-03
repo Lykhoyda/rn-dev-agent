@@ -64,8 +64,10 @@ screen appears unchanged; prior observations do not establish current presence.
 
 When native window geometry is available, literal checks, quoted waits and quoted
 scroll-until targets exclude native text outside the window viewport or its
-ancestor scroll-container clips. Mounted text
-beyond those bounds cannot satisfy the plan until scrolling brings it into view.
+ancestor scroll-container clips. iOS interactive snapshots retain content-less
+Window nodes with their real frames and ancestry to supply this geometry.
+Mounted text beyond those bounds cannot satisfy the plan until scrolling brings
+it into view. Offscreen inputs remain in the privacy inventory for masking.
 This geometric filter does not prove complete visual exposure or occlusion.
 
 Phrase presses require complete native and React coverage and proven React-to-native

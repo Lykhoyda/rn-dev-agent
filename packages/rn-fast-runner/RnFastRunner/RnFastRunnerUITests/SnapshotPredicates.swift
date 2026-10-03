@@ -17,10 +17,7 @@ func computeSnapshotHittable(enabled: Bool, frame: CGRect, viewport: CGRect) -> 
     && center.y >= viewport.minY && center.y < viewport.maxY
 }
 
-// GH #395: snapshot filtering deliberately ignores `hittable`. Under the old
-// always-false computation these rules were de-facto content/type-based;
-// keeping them that way pins snapshot sizes while `hittable` gains its new
-// meaning. The signature having no hittable parameter is the contract.
+// Snapshot inclusion is content/type-based, independent of the tappability hint.
 func shouldIncludeSnapshotNode(
   type: XCUIElement.ElementType,
   hasContent: Bool,
