@@ -51,85 +51,85 @@ afterEach(() => {
 });
 
 for (const terminated of [true, false]) {
-  test(
-    `presence failure after successful capture ${terminated ? 'fails for app termination' : 'refuses for a generic error'}`,
-    async () => {
-      let captures = 0;
-      _setFetchForTest(async (url, init) => {
-        if (String(url).endsWith('/health'))
-          return Response.json({
-            ok: true,
-            protocolVersion: 2,
-            commands: REQUIRED_IOS_COMMANDS,
-            capabilities: [...REQUIRED_IOS_FEATURES, 'QA_READ_ONLY_V1', 'PLATFORM_PRESENCE_V2'],
-          });
-        const request = JSON.parse(String(init?.body));
-        assert.equal(request.platformPresence, true);
-        assert.equal(request.qaReadOnly, true);
-        if (captures++ === 0)
-          return Response.json({ ok: true, data: { ...nativeCapture(), appProcessIdentifier: 41 } });
+  test(`presence failure after successful capture ${terminated ? 'fails for app termination' : 'refuses for a generic error'}`, async () => {
+    let captures = 0;
+    _setFetchForTest(async (url, init) => {
+      if (String(url).endsWith('/health'))
         return Response.json({
-          ok: false,
-          error: {
-            code: 'ACTION_CONTEXT_CHANGED',
-            message: 'native capture failed',
-            mutation: 'none',
-            ...(terminated ? { reason: 'app-not-running' } : {}),
-          },
+          ok: true,
+          protocolVersion: 2,
+          commands: REQUIRED_IOS_COMMANDS,
+          capabilities: [...REQUIRED_IOS_FEATURES, 'QA_READ_ONLY_V1', 'PLATFORM_PRESENCE_V2'],
         });
+      const request = JSON.parse(String(init?.body));
+      assert.equal(request.platformPresence, true);
+      assert.equal(request.qaReadOnly, true);
+      if (captures++ === 0)
+        return Response.json({ ok: true, data: { ...nativeCapture(), appProcessIdentifier: 41 } });
+      return Response.json({
+        ok: false,
+        error: {
+          code: 'ACTION_CONTEXT_CHANGED',
+          message: 'native capture failed',
+          mutation: 'none',
+          ...(terminated ? { reason: 'app-not-running' } : {}),
+        },
       });
-      const snapshot = createDeviceSnapshotHandler();
-      const f = walker([], scriptedJudge(() => assert.fail('failed capture must not reach Jev')));
-      f.deps.appProcess = {};
-      f.deps.captureScreen = (options) =>
-        captureScreen({
-          appId: 'com.test',
-          requirePrivateInputs: true,
-          native: async (presenceBudgetMs) => {
-            const result = await snapshot({
-              action: 'snapshot',
-              qaReadOnly: true,
-              platformPresence: options?.platformPresence,
-              presenceBudgetMs,
-            });
-            if (captures > 1) {
-              const envelope = parseEnvelope(result);
-              assert.equal(envelope.ok, false);
-              assert.equal(envelope.meta.reason, terminated ? 'app-not-running' : undefined);
-              if (!terminated) {
-                assert.equal(envelope.meta.capture, 'unknown');
-                assert.equal(envelope.meta.dispatched, true);
-              }
+    });
+    const snapshot = createDeviceSnapshotHandler();
+    const f = walker(
+      [],
+      scriptedJudge(() => assert.fail('failed capture must not reach Jev')),
+    );
+    f.deps.appProcess = {};
+    f.deps.captureScreen = (options) =>
+      captureScreen({
+        appId: 'com.test',
+        requirePrivateInputs: true,
+        native: async (presenceBudgetMs) => {
+          const result = await snapshot({
+            action: 'snapshot',
+            qaReadOnly: true,
+            platformPresence: options?.platformPresence,
+            presenceBudgetMs,
+          });
+          if (captures > 1) {
+            const envelope = parseEnvelope(result);
+            assert.equal(envelope.ok, false);
+            assert.equal(envelope.meta.reason, terminated ? 'app-not-running' : undefined);
+            if (!terminated) {
+              assert.equal(envelope.meta.capture, 'unknown');
+              assert.equal(envelope.meta.dispatched, true);
             }
-            try {
-              const { data, meta } = unwrap<NativeObservation>(result);
-              return { ...data, snapshotVerdict: meta?.snapshotVerdict };
-            } catch (error) {
-              if (error instanceof HandlerError && error.meta?.reason === 'app-not-running')
-                throw new AppProcessGoneError();
-              throw error;
-            }
-          },
-          react: async () => ({
-            interactive: [],
-            verdict: { state: 'ok', path: 'interactive', complete: true },
-            hostEvidence: { hosts: [], complete: true },
-          }),
-        });
-      const initial = await f.deps.captureScreen({ platformPresence: true });
-      assert.equal(initial.appProcessIdentifier, 41);
-      const result = await runPlan(parsePlan('✓ The save control is shown').blocks!, f.deps);
-      assert.equal(captures, 2);
-      assert.deepEqual(f.actions, []);
-      if (terminated) {
-        assert.equal(result.verdict, 'FAIL');
-        assert.match(result.failure!.seen, /APP_PROCESS_CHANGED/);
-      } else {
-        assert.equal(result.verdict, 'REFUSED');
-        assert.equal('code' in result && result.code, 'NATIVE_CAPTURE_UNAVAILABLE');
-      }
-    },
-  );
+          }
+          try {
+            const { data, meta } = unwrap<NativeObservation>(result);
+            return { ...data, snapshotVerdict: meta?.snapshotVerdict };
+          } catch (error) {
+            if (error instanceof HandlerError && error.meta?.reason === 'app-not-running')
+              throw new AppProcessGoneError();
+            throw error;
+          }
+        },
+        react: async () => ({
+          interactive: [],
+          verdict: { state: 'ok', path: 'interactive', complete: true },
+          hostEvidence: { hosts: [], complete: true },
+        }),
+      });
+    const initial = await f.deps.captureScreen({ platformPresence: true });
+    assert.equal(initial.appProcessIdentifier, 41);
+    const result = await runPlan(parsePlan('✓ The save control is shown').blocks!, f.deps);
+    assert.equal(captures, 2);
+    assert.deepEqual(f.actions, []);
+    if (terminated) {
+      assert.equal(result.verdict, 'FAIL');
+      assert.match(result.failure!.seen, /APP_PROCESS_CHANGED/);
+    } else {
+      assert.equal(result.verdict, 'REFUSED');
+      assert.equal('code' in result && result.code, 'NATIVE_CAPTURE_UNAVAILABLE');
+    }
+  });
 }
 
 test('iOS QA acquisition masks native values and derived labels without public values or caching', async () => {

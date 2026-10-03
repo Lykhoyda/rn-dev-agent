@@ -19,7 +19,10 @@ if (request.pause) {
 const { writeBlock } = await import('../../../dist/qa/blocks.js');
 process.send?.({ kind: 'ready' });
 try {
-  process.send?.({ kind: 'result', value: writeBlock(request.appRoot, request.slug, request.text) });
+  process.send?.({
+    kind: 'result',
+    value: writeBlock(request.appRoot, request.slug, request.text),
+  });
 } catch (error) {
   process.send?.({ kind: 'result', value: error instanceof Error ? error.message : String(error) });
 }
