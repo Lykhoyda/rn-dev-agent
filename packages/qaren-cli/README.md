@@ -57,6 +57,12 @@ strict binding refuses `NO_TEXT_INPUT_TARGET` before any text mutation for a
 non-native-input target. Phrase fills and stored replay selectors do not use
 this fallback; ambiguous targets and potentially mutated fills still fail.
 
+React-only input projections are excluded from quoted strict fill resolution.
+An accessibility-hidden input represented only in React evidence therefore
+returns `TARGET_NOT_FOUND`, allowing the guarded native-wrapper fallback without
+scrolling. A genuine offscreen native input still requests scrolling; an onscreen
+native input resolves strictly.
+
 Fallback requires one onscreen, enabled, nonsecure native element carrying a
 unique testID, with no matching observable native input or secure node. The
 keyboard must be proven hidden before the single tap. Every binding after the
@@ -417,9 +423,11 @@ qaren pr <number|url> --plan-file plan.md --device <simulator-UUID> --json
 qaren publish <run-id> --verdict-file verdict.md --json
 ```
 
-`qaren publish` refuses runs whose persisted failure is `CANDIDATE_DRIFTED` or
+`qaren publish` rejects runs whose persisted failure is `CANDIDATE_DRIFTED` or
 `RUN_CANCELLED`, before uploading, posting comments, removing `needs-qa` or
-writing back blocks. Saved actions already on disk remain untouched.
+writing back blocks. `RUN_CANCELLED` returns `result: refused` with exit 4;
+`CANDIDATE_DRIFTED` returns `result: failed` with exit 1. Saved actions already
+on disk remain untouched.
 
 `qaren pr` runs the same pipeline as `check`, from the app's directory with the
 same `.qaren/config.yaml` and plan, but walks a detached worktree at the pull
