@@ -494,6 +494,59 @@ const realMultiple = painted([
   node('StaticText', 'Welcome', 300),
 ]);
 
+test('adjacent equal painted text refuses ambiguous replay and discovery', () => {
+  const joined = painted([
+    node('StaticText', 'Welcome', 100),
+    node('StaticText', 'Welcome', 140),
+  ]);
+  assert.deepEqual(joined.visibleText, ['Welcome']);
+  assert.deepEqual(joined.paintedText, ['Welcome', 'Welcome']);
+  assert.throws(
+    () => targetVisible(exactText('Welcome'), joined),
+    /REPLAY_SELECTOR: 2 identities match the stored text "Welcome"/,
+  );
+  assert.equal(visibleSelector({ quoted: 'Welcome', phrase: 'Welcome' }, joined), undefined);
+});
+
+test('equal painted buttons at different horizontal positions remain ambiguous', () => {
+  const joined = painted([
+    node('Button', 'Delete', 100),
+    node('Button', 'Delete', 100, {
+      ref: '@delete-right',
+      rect: { x: 230, y: 100, width: 100, height: 20 },
+    }),
+  ]);
+  assert.deepEqual(joined.visibleText, ['Delete']);
+  assert.deepEqual(joined.paintedText, ['Delete', 'Delete']);
+  assert.throws(
+    () => targetVisible(exactText('Delete'), joined),
+    /REPLAY_SELECTOR: 2 identities match the stored text "Delete"/,
+  );
+  assert.equal(visibleSelector({ quoted: 'Delete', phrase: 'Delete' }, joined), undefined);
+});
+
+test('a presence-less XCUI parent and child twin contributes one painted identity', () => {
+  const joined = painted([
+    node('StaticText', 'Welcome', 100),
+    node('StaticText', 'Welcome', 100, { ref: '@welcome-child', parentIndex: 1 }),
+  ]);
+  assert.deepEqual(joined.visibleText, ['Welcome']);
+  assert.deepEqual(joined.paintedText, ['Welcome']);
+  assert.equal(targetVisible(exactText('Welcome'), joined), true);
+  assert.deepEqual(visibleSelector({ quoted: 'Welcome', phrase: 'Welcome' }, joined), {
+    text: 'Welcome',
+  });
+});
+
+test('four container ancestors echoing one text contribute one painted identity', () => {
+  assert.deepEqual(containerEcho.visibleText, ['Welcome']);
+  assert.deepEqual(containerEcho.paintedText, ['Welcome']);
+  assert.equal(targetVisible(exactText('Welcome'), containerEcho), true);
+  assert.deepEqual(visibleSelector({ quoted: 'Welcome', phrase: 'Welcome' }, containerEcho), {
+    text: 'Welcome',
+  });
+});
+
 test('a stored text echoed by its container labels is one identity', () => {
   assert.equal(targetVisible(exactText('Welcome'), containerEcho), true);
   const sheet = painted([
