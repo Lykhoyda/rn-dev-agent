@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
 import { captureScreen } from '../../../dist/qa/capture.js';
-import { bindPrivateInputs } from '../../../dist/qa/private-input.js';
+import { NativeSnapshotIncomplete } from '../../../dist/qa/private-input.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import {
@@ -84,15 +84,11 @@ async function capture(data: unknown) {
       assert.equal(result.ok, true);
       return { ...result.data, snapshotVerdict: result.meta.snapshotVerdict };
     },
-    react: async () =>
-      bindPrivateInputs(
-        {
-          interactive: [],
-          verdict: { state: 'ok', path: 'interactive', complete: true },
-          hostEvidence: { hosts: [], complete: true },
-        },
-        { version: 1, complete: true, facts: [] },
-      ),
+    react: async () => ({
+      interactive: [],
+      verdict: { state: 'ok', path: 'interactive', complete: true },
+      hostEvidence: { hosts: [], complete: true },
+    }),
   });
 }
 
@@ -138,7 +134,14 @@ test('Android producer or host normalization losses never become usable literal 
     ].map((invalid) => ({ ...complete(), nodes: [node, invalid] })),
     { ...complete(), nodes: [] },
   ]) {
-    const screen = await capture(data);
+    let screen;
+    try {
+      screen = await capture(data);
+    } catch (error) {
+      // A provably incomplete tree refuses at capture, which is never usable either.
+      assert.ok(error instanceof NativeSnapshotIncomplete, JSON.stringify(data));
+      continue;
+    }
     assert.notEqual(screen.captureCoverage?.native, 'complete', JSON.stringify(data));
     for (const plan of ['1. Back', '1. Tap "Save"', '1. Wait for "Save"']) {
       const judge = scriptedJudge(() => assert.fail('unusable acquisition must not call Jev'));
@@ -152,13 +155,14 @@ test('Android producer or host normalization losses never become usable literal 
 });
 
 test('Android acquisition reports producer and host losses together', async () => {
-  const screen = await capture({
-    ...complete(),
-    normalizationDroppedNodes: 2,
-    nodes: [node, { index: 1, type: 'android.widget.TextView' }],
-  });
-  assert.equal(screen.captureCoverage?.native, 'incomplete');
-  assert.ok(screen.nativeCaptureCauses?.includes('dropped=3'));
+  await assert.rejects(
+    capture({
+      ...complete(),
+      normalizationDroppedNodes: 2,
+      nodes: [node, { index: 1, type: 'android.widget.TextView' }],
+    }),
+    (error) => error instanceof NativeSnapshotIncomplete && error.causes.includes('dropped=3'),
+  );
 });
 
 test('Android incomplete producer reply never permits a mutation', async () => {
@@ -176,4 +180,25 @@ test('Android incomplete producer reply never permits a mutation', async () => {
     assert.match(result.failure!.seen, /NATIVE_ACQUISITION_UNUSABLE/);
     assert.deepEqual(f.actions, []);
   }
+});
+
+test('Android input text reported as a label stays masked with its echo', async () => {
+  const secret = 'prefilled-c@example.test';
+  const data = {
+    ...complete(),
+    nodes: [
+      node,
+      { ...node, index: 1, type: 'android.widget.EditText', label: secret, identifier: 'email' },
+      { ...node, index: 2, type: 'android.widget.TextView', label: `Sent to ${secret}` },
+    ],
+  };
+  const f = walker(
+    [],
+    scriptedJudge(() => assert.fail('literal plans must not call Jev')),
+  );
+  f.deps.captureScreen = () => capture(data);
+  const result = await runPlan(parsePlan('✓ "Nothing like this"').blocks!, f.deps);
+  assert.equal(result.verdict, 'FAIL');
+  assert.match(result.failure!.seen, /Sent to •••/);
+  assert.equal(JSON.stringify({ result, rows: f.rows }).includes(secret), false);
 });

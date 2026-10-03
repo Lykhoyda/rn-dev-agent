@@ -1644,6 +1644,7 @@ interface RunnerSnapshotNode {
   depth?: number;
   type?: string;
   label?: string;
+  value?: string;
   identifier?: string;
   rect?: { x: number; y: number; width: number; height: number };
   enabled?: boolean;
@@ -2055,14 +2056,17 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
-function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
-  const out: FlatNode[] = [];
+function mapRunnerNodesToFlat(
+  nodes: RunnerSnapshotNode[],
+  privateValues = false,
+): (FlatNode & { value?: string })[] {
+  const out: (FlatNode & { value?: string })[] = [];
   const nativeIndices = new Set<number>();
   let synthCounter = 0;
   for (const n of nodes) {
     if (!n.rect) continue;
     const refId = n.index !== undefined ? `e${n.index}` : `e${synthCounter++}`;
-    const flat: FlatNode = {
+    const flat: FlatNode & { value?: string } = {
       ref: `@${refId}`,
       type: n.type ?? '',
       rect: n.rect,
@@ -2080,6 +2084,7 @@ function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
     if (flat.index !== undefined) nativeIndices.add(flat.index);
     if (Object.hasOwn(n, 'presence')) flat.presence = n.presence;
     if (n.label !== undefined) flat.label = n.label;
+    if (privateValues && typeof n.value === 'string') flat.value = n.value;
     if (n.identifier !== undefined) flat.identifier = n.identifier;
     if (n.enabled !== undefined) flat.enabled = n.enabled;
     if (n.hittable !== undefined) flat.hittable = n.hittable;
@@ -2566,7 +2571,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       const snapshotVerdict = buildSnapshotVerdict('rn-fast-runner', flat.length, outcome);
       return okResult(
         {
-          nodes: flat,
+          nodes: qaReadOnly ? mapRunnerNodesToFlat(data.nodes, true) : flat,
           ...(Object.hasOwn(data, 'presenceCapture')
             ? { presenceCapture: data.presenceCapture }
             : {}),

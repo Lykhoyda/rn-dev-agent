@@ -33,6 +33,7 @@ export function capturePrivateScreen(
     testID?: string;
     elements: Element[];
     associationUnique: boolean;
+    labelMayBeValue?: boolean;
   }[],
 ): void {
   const values = new Set<string>();
@@ -64,7 +65,11 @@ export function capturePrivateScreen(
       if (uncertain) uncertainPrivateInputs.add(element);
       for (const value of inputPrivacy.get(element)?.values ?? []) add(value);
       if (element.value) add(element.value);
-      if ((fact.secure || nativeLabelMayBeValue(element)) && element.label) add(element.label);
+      if (
+        ((fact.labelMayBeValue ?? fact.secure) || nativeLabelMayBeValue(element)) &&
+        element.label
+      )
+        add(element.label);
     }
   }
   if (unassociatedSecure) {
@@ -132,7 +137,7 @@ export function inputValues(screen: Screen, evidenceOnly = false): string[] {
         const data = inputPrivacy.get(e);
         return [
           ...(!evidenceOnly || e.secure
-            ? [...(data?.values ?? []), ...(e.value ? [e.value] : [])]
+            ? [...(data?.values ?? []).filter(Boolean), ...(e.value ? [e.value] : [])]
             : []),
           ...(data?.nativeLabelMayBeValue && e.label ? [e.label] : []),
         ];
@@ -185,6 +190,15 @@ export class ObservedPrivacy {
     for (const value of privateScreens.get(screen)?.values ?? []) this.substringValues.add(value);
     for (const value of inputValues(screen)) this.observed.add(value);
     for (const value of inputValues(screen, true)) this.concealed.add(value);
+    const text = [
+      ...screen.visibleText,
+      ...screen.elements
+        .filter((element) => !element.offscreen && !element.ref.startsWith('react:'))
+        .flatMap((element) => [element.label ?? '', element.value ?? '']),
+    ];
+    this.sensitivePixels ||= this.modelValues().some(
+      (value) => !!value && text.some((line) => line.includes(value)),
+    );
   }
 
   canScreenshot(): boolean {

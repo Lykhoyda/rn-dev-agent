@@ -116,7 +116,7 @@ Doctrine for the kept handlers, each with one owner:
   passes its own from Phase 2; nothing else re-implements authority inline.
 - Native runner launches require `QAREN_DEVICE_LEASE`; `runners/lease-env.ts` adapts the CLI lease to the runners' internal protocol.
 - Jev decisions use `qa/questions.ts` thresholds and `qa/resolve.ts` policy; `qa/jev.ts` owns HTTP only. Keep observed identities and local literal assertions separate from outbound masking in `qa/privacy.ts`; generated masks are never assertion evidence.
-- When changing private QA capture, follow the [capture and privacy contract](packages/qaren-cli/README.md#check-a-plan). `beginQaCapture`/`readQaCapture` use the context-pinned `qa/react-capture.ts` adapter; `qa/private-input.ts` owns admission, `qa/private-input-limits.ts` owns input bounds, and `qa/privacy.ts` owns masking history and sensitive screenshot withholding. Keep raw facts out of public tree envelopes, async result slots and logs.
+- When changing private QA capture, follow the [capture and privacy contract](packages/qaren-cli/README.md#check-a-plan). `beginQaCapture`/`readQaCapture` use the context-pinned `qa/react-capture.ts` adapter; `qa/private-input.ts` owns native privacy admission, `qa/private-input-limits.ts` bounds React host evidence, and `qa/privacy.ts` owns masking history and sensitive screenshot withholding. Keep raw facts out of public tree envelopes, async result slots and logs.
 - Login replay refusal is owned by `handlers/run-action.ts` using attested
   install provenance and `containsClearState` in `domain/maestro-validator.ts`.
   Flow-relaunch attribution is owned by `createFlowRelaunchTracker` in

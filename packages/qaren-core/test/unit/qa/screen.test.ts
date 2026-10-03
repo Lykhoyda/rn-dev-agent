@@ -64,15 +64,16 @@ test('unmatched interactive digest entries become react:<testID> off-screen cand
   assert.deepEqual(
     offscreen.map((e) => [e.ref, e.kind, e.label, e.value, e.hittable]),
     [
-      ['react:fixture_hidden_cta', 'button', 'Load more', undefined, false],
-      ['react:fixture_hidden_toggle', 'switch', undefined, 'on', false],
+      // React-only elements keep identity and capability, never user-visible strings.
+      ['react:fixture_hidden_cta', 'button', undefined, undefined, false],
+      ['react:fixture_hidden_toggle', 'switch', undefined, undefined, false],
     ],
     'entries without a testID cannot be addressed and are dropped',
   );
   const action = actionView(screen);
   assert.ok(action.some((e) => e.ref === 'react:fixture_hidden_cta'));
   assert.ok(action.every((e) => e.offscreen || (e.hittable && !e.disabled)));
-  assert.equal(describe(offscreen[0]), 'Button "Load more" [testID fixture_hidden_cta] off screen');
+  assert.equal(describe(offscreen[0]), 'Button [testID fixture_hidden_cta] off screen');
   assert.equal(
     describe(screen.elements.find((e) => e.ref === '@e53')!),
     'Button "Tap" [testID fixture_bottom_button] bottom-right',

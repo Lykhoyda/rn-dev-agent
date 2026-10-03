@@ -62,6 +62,12 @@ unsupported visual or layout claims remain uncertain.
 Phrase waits capture fresh screen and presence evidence on every poll, even when the
 screen appears unchanged; prior observations do not establish current presence.
 
+When native window geometry is available, literal checks, quoted waits and quoted
+scroll-until targets exclude native text outside the window viewport or its
+ancestor scroll-container clips. Mounted text
+beyond those bounds cannot satisfy the plan until scrolling brings it into view.
+This geometric filter does not prove complete visual exposure or occlusion.
+
 Phrase presses require complete native and React coverage and proven React-to-native
 associations. Native text, images and plain views are excluded from press candidates
 only when complete React host evidence accounts for every interactive host and no
@@ -71,24 +77,32 @@ switch or link does. Unknown capability or missing positive platform presence
 refuses with `SCREEN_EVIDENCE_INCOMPLETE` rather than guessing a target.
 The [screen projection](../qaren-core/src/qa/screen.ts) owns this policy.
 
-Private input capture is required before walking a screen. If it cannot be
-established safely, the walk refuses with `PRIVATE_INPUT_CAPTURE_UNKNOWN` without
-reinjection or a public-tree fallback. A React private-input deadline miss triggers
-at most one complete fresh capture, including native and React evidence, only
-when the failed attempt received no React private input values, observed no
-native input with a non-empty value or label, and observed no secure native node.
-Native input classification follows the [screen projection](../qaren-core/src/qa/screen.ts).
-Otherwise the timeout refuses immediately, preserving the privacy boundary.
-The late first reply is discarded; a second timeout refuses without another retry.
-Only an explicit deadline expiry is retryable: malformed payloads, unbound private
-evidence, validation and transport failures refuse immediately even if processing
-crosses the deadline. Native failures do not trigger this retry. Capture deadlines,
-budgets and item deadlines remain unchanged.
+The native snapshot is the privacy boundary before walking a screen. Capture
+refuses with `PRIVATE_INPUT_CAPTURE_UNKNOWN` unless native completeness is attested;
+the refusal reports only a value-free node count and fixed cause codes. Native
+acquisition failures also refuse without reinjection or a public-tree fallback.
+Native input classification follows the [screen projection](../qaren-core/src/qa/screen.ts),
+including Other or unknown nodes carrying nonempty values regardless of React evidence.
+The React digest adds semantics: a deadline, malformed-payload, validation or
+transport failure degrades React coverage to unknown without retrying capture.
+Operations requiring complete React evidence still refuse when that coverage is
+unavailable. Capture deadlines, budgets and item deadlines remain unchanged.
+
+React-only elements expose no label, placeholder or value strings in the screen
+projection. The React walk excludes provably inactive screen routes and native
+hosts with `display: none` before collecting their semantic or descendant text
+evidence. Validated React Native frozen descriptors remain readable; arbitrary
+getters are not invoked, and an unreadable inactivity flag does not prune a subtree.
 
 Observed input values are masked before Jev requests; private values are also
-masked in reporting. Once sensitive input
-pixels are observed, screenshots are withheld for the rest of the walk.
+masked in reporting, including echoes of typed and previously observed values
+subject to the short-value limitation below. Once sensitive input pixels or a
+protected value's visible echo are observed, screenshots are withheld for the
+rest of the walk.
 Masks preserve identity for comparisons and do not prove unobserved value content.
+Typed values shorter than three characters that were never observed as private
+input values can remain plaintext in unquoted reporting text; model masking
+matches them only as separate tokens. This known limitation is tracked in ANT-283.
 
 iOS interactions check app existence immediately and wait only when the app is
 missing; availability and foreground checks remain in place. When the privacy

@@ -93,19 +93,17 @@ test('capture stages reuse producer diagnostics without changing screen evidence
   );
 });
 
-test('capture failures retain native timings and close the private acquisition span', async () => {
+test('a degraded digest retains native timings and closes the React acquisition span', async () => {
   const events: TimingEvent[] = [];
-  await assert.rejects(
-    captureScreen({
-      native: async () => nativeCapture(),
-      react: async () => {
-        throw new Error('SECRET');
-      },
-      requirePrivateInputs: true,
-      now: () => 10,
-      timing: (event) => events.push(event),
-    }),
-  );
+  await captureScreen({
+    native: async () => nativeCapture(),
+    react: async () => {
+      throw new Error('SECRET');
+    },
+    requirePrivateInputs: true,
+    now: () => 10,
+    timing: (event) => events.push(event),
+  });
   assert.ok(events.some((e) => e.stage === 'native-production'));
   assert.ok(
     events.some((e) => e.stage === 'react-private' && e.edge === 'end' && e.outcome === 'failed'),
