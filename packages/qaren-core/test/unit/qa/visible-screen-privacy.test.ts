@@ -433,7 +433,7 @@ async function walkViewport(plan: string, trees: ReturnType<typeof viewportTree>
       native: async () => trees[Math.min(captures++, trees.length - 1)],
       react: async () => digest(),
     });
-  return { result: await runPlan(parsePlan(plan).blocks!, f.deps), f };
+  return { result: await runPlan(parsePlan(plan).blocks!, f.deps), f, captures: () => captures };
 }
 
 test('text below the native viewport is not on screen until scrolled into it', async () => {
@@ -453,8 +453,142 @@ test('text below the native viewport is not on screen until scrolled into it', a
   ]);
   assert.equal(result.verdict, 'PASS', result.failure?.seen);
   assert.deepEqual(f.actions, ['scroll down']);
-  const unproven = await walkViewport('✓ "Later"', [viewportTree(1200, { window: false })]);
-  assert.equal(unproven.result.verdict, 'PASS', 'without a Window nothing is claimed off screen');
+  const orphaned = await walkViewport('✓ "Later"', [viewportTree(1200, { window: false })]);
+  assert.equal(orphaned.result.verdict, 'FAIL', 'the screen clips text outside every Window');
+  assert.match(orphaned.result.failure!.seen, /on screen: Welcome$/);
+});
+
+test('keyboard-up text on a never-shown page is not seen, partly visible text is', async () => {
+  const screen = { x: 0, y: 0, width: 402, height: 874 };
+  const text = (index: number, parentIndex: number, label: string, x: number) => ({
+    index,
+    ref: `@t${index}`,
+    type: 'StaticText',
+    label,
+    parentIndex,
+    rect: { x, y: 120, width: 200, height: 30 },
+  });
+  const tree = attested([
+    { index: 0, ref: '@app', type: 'Application', rect: screen },
+    { index: 1, ref: '@win', type: 'Window', parentIndex: 0, rect: screen },
+    { index: 2, ref: '@keyboard-win', type: 'Window', parentIndex: 0, rect: screen },
+    text(3, 1, 'Welcome', 16),
+    text(4, 0, 'Peek', 300),
+    text(5, 0, 'Details', 402),
+    text(6, 0, 'Review & Create', 804),
+  ]);
+  for (const label of ['Details', 'Review & Create']) {
+    const { result } = await walkViewport(`✓ "${label}"`, [tree]);
+    assert.equal(result.verdict, 'FAIL', label);
+    assert.match(result.failure!.seen, /on screen: Welcome \| Peek$/);
+  }
+  const partly = await walkViewport('✓ "Peek"', [tree]);
+  assert.equal(partly.result.verdict, 'PASS');
+});
+
+test('scroll clips exclude detached text from checks, waits and scroll-until on every axis', async () => {
+  const rect = { x: 0, y: 0, width: 402, height: 874 };
+  for (const type of ['ScrollView', 'Table', 'CollectionView']) {
+    for (const window of [false, true]) {
+      for (const [x, y] of [
+        [20, 500],
+        [20, 50],
+        [350, 120],
+        [0, 120],
+      ]) {
+        const nodes: NativeNode[] = [
+          { ref: '@app', type: 'Application', rect },
+          { ref: '@window', type: window ? 'Window' : 'Other', parentIndex: 0, rect },
+          {
+            ref: '@list',
+            type,
+            parentIndex: 1,
+            rect: { x: 50, y: 100, width: 250, height: 300 },
+          },
+          {
+            ref: '@later',
+            type: 'StaticText',
+            label: 'Later',
+            parentIndex: 2,
+            rect: { x, y, width: x === 0 ? 30 : 200, height: 30 },
+          },
+          {
+            ref: '@partial',
+            type: 'StaticText',
+            label: 'Partial',
+            parentIndex: 2,
+            rect: { x: 40, y: 390, width: 100, height: 30 },
+          },
+        ];
+        if (x === 20 && y === 500) nodes[2].rect = { x: 0, y: 100, width: 402, height: 300 };
+        assert.deepEqual([...outsideViewport(nodes)], [3]);
+        const initial = attested(nodes);
+        const observed = await captureScreen({
+          appId: 'com.test',
+          requirePrivateInputs: true,
+          native: async () => initial,
+          react: async () => digest(),
+        });
+        assert.equal(observed.elements.find((e) => e.ref === '@later')!.offscreen, true);
+        assert.deepEqual(observed.visibleText, ['Partial']);
+        const failed = await walkViewport('✓ "Later"', [initial]);
+        assert.equal(failed.result.verdict, 'FAIL');
+        const partial = await walkViewport('✓ "Partial"', [initial]);
+        assert.equal(partial.result.verdict, 'PASS');
+        const revealed = attested(
+          nodes.map((node) =>
+            node.ref === '@later'
+              ? { ...node, rect: { x: 60, y: 200, width: 200, height: 30 } }
+              : node,
+          ),
+        );
+        const waited = await walkViewport('1. Wait for "Later"', [initial, revealed]);
+        assert.equal(waited.result.verdict, 'PASS');
+        assert.ok(waited.captures() > 1);
+        const scrolled = await walkViewport('1. Scroll until you see "Later"', [initial, revealed]);
+        assert.equal(scrolled.result.verdict, 'PASS');
+        assert.deepEqual(scrolled.f.actions, ['scroll down']);
+      }
+    }
+  }
+});
+
+test('screen and nested container clips remain cumulative across missing and invalid anchors', () => {
+  const rect = { x: 0, y: 0, width: 402, height: 874 };
+  const nodes: NativeNode[] = [
+    { ref: '@app', type: 'Application', rect },
+    { ref: '@window', type: 'Window', parentIndex: 0, rect },
+    {
+      ref: '@outer',
+      type: 'Table',
+      parentIndex: 1,
+      rect: { x: 0, y: 100, width: 402, height: 300 },
+    },
+    { ref: '@inner', type: 'CollectionView', parentIndex: 2, rect },
+    {
+      ref: '@later',
+      type: 'StaticText',
+      parentIndex: 3,
+      rect: { x: 20, y: 500, width: 200, height: 30 },
+    },
+  ];
+  for (const invalid of [undefined, { ...rect, x: NaN }, { ...rect, width: -1 }]) {
+    for (const index of [0, 1, 3]) {
+      const patched = nodes.map((node, i) => (i === index ? { ...node, rect: invalid } : node));
+      assert.ok(outsideViewport(patched).has(4));
+    }
+  }
+  const overlapping = nodes.map((node, i) => {
+    if (i === 2) return { ...node, rect: { x: 0, y: 800, width: 402, height: 200 } };
+    if (i === 4) return { ...node, rect: { x: 20, y: 870, width: 200, height: 30 } };
+    return node;
+  });
+  assert.equal(outsideViewport(overlapping).has(4), false);
+  overlapping[4].rect!.y = 874;
+  assert.equal(outsideViewport(overlapping).has(4), true);
+  overlapping[3].rect = { x: 0, y: 0, width: 402, height: 800 };
+  overlapping[4].rect!.y = 790;
+  assert.equal(outsideViewport(overlapping).has(4), true);
 });
 
 test('each node uses its own sized Window ancestor when multiple windows exist', async () => {
@@ -467,7 +601,7 @@ test('each node uses its own sized Window ancestor when multiple windows exist',
       ref: '@aux',
       type: 'Window',
       parentIndex: 0,
-      rect: { x: 500, y: 100, width: 200, height: 200 },
+      rect: { x: 180, y: 100, width: 200, height: 200 },
     },
     {
       ref: '@later',
@@ -481,7 +615,7 @@ test('each node uses its own sized Window ancestor when multiple windows exist',
       type: 'StaticText',
       parentIndex: 3,
       label: 'Auxiliary',
-      rect: { x: 510, y: 120, width: 100, height: 30 },
+      rect: { x: 190, y: 120, width: 100, height: 30 },
     },
     {
       ref: '@aux-outside',
@@ -505,7 +639,7 @@ test('each node uses its own sized Window ancestor when multiple windows exist',
       rect: { x: 10, y: 1200, width: 100, height: 30 },
     },
   ];
-  assert.deepEqual([...outsideViewport(nodes)], [4, 6]);
+  assert.deepEqual([...outsideViewport(nodes)], [4, 6, 7, 9]);
   const initial = attested(nodes);
   const revealed = attested(
     nodes.map((node) =>
