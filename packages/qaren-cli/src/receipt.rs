@@ -173,7 +173,7 @@ impl Receipt {
     }
 
     pub fn to_json(&self) -> String {
-        crate::redact::redact_api_key(&serde_json::to_string_pretty(self).unwrap_or_else(|e| {
+        crate::redact::redact_api_key(&crate::redact::durable_json(self).unwrap_or_else(|e| {
             let fallback = serde_json::json!({
                 "schema": RECEIPT_SCHEMA,
                 "verb": self.verb,
@@ -190,7 +190,7 @@ impl Receipt {
                 },
                 "next_action": "inspect the run directory manually"
             });
-            serde_json::to_string_pretty(&fallback).expect("fallback receipt is plain strings")
+            crate::redact::durable_json(&fallback).expect("fallback receipt is plain strings")
         }))
     }
 }

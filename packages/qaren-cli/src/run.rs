@@ -107,7 +107,7 @@ pub fn run(runner: &mut dyn Runner, req: &RunRequest) -> Receipt {
                 &failure.phase.clone(),
                 timefmt::iso8601_utc(runner.now_epoch_ms()),
             );
-            receipt.next_action = failure.next_action.clone();
+            receipt.next_action = failure.next_action.to_string();
             receipt.failure = Some(failure);
             receipt.commands_executed = runner.commands_executed();
             receipt
@@ -427,7 +427,7 @@ fn run_inner(
     let ledger_path = run_dir.join("ledger.json");
     if let Err(e) = std::fs::write(
         &ledger_path,
-        serde_json::to_vec_pretty(&outcome.ledger).unwrap_or_default(),
+        crate::redact::durable_json(&outcome.ledger).unwrap_or_default(),
     ) {
         ctx.notes.push((
             "ledger".to_string(),

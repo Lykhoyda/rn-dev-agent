@@ -692,7 +692,7 @@ fn interpret(
         );
     }
     if let Some(failure) = deadline_failure {
-        let seen = failure.detail.clone();
+        let seen = failure.detail.to_string();
         if failure.code == FailureCode::RunCancelled {
             return (
                 synthesized_ledger(&inbox.rows, "REFUSED", &seen),
