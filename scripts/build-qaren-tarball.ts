@@ -1,7 +1,5 @@
 #!/usr/bin/env node
-// Builds one reproducible qaren tarball per macOS architecture: the release CLI,
-// an esbuild bundle of every core entry the CLI spawns, the native helpers, the
-// native runner sources and the runtime runner manifest.
+// Builds a reproducible macOS CLI runtime; copyDarwinNative owns its native-helper inventory.
 //
 // Usage:
 //   node scripts/build-qaren-tarball.ts --version <v> --platform darwin-arm64|darwin-x64 \

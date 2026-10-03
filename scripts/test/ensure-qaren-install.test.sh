@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ensure-qaren.sh --install --from-file: a verified tarball installs atomically,
+# ensure-qaren.sh --install --from-file: a verified tarball installs under a lock,
 # and anything that differs from the plugin's runner-manifest.json or could
 # write outside the runtime directory is refused with nothing installed.
 #

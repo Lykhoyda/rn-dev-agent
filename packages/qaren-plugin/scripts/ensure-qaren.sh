@@ -40,7 +40,7 @@ RELEASES="https://github.com/Lykhoyda/rn-dev-agent/releases/download"
 RUNTIME_ROOT="${HOME:-}/.qaren/runtime"
 RECORD=".tarball-sha256"
 INSTALL_COMMAND="bash $(printf %q "$PLUGIN_ROOT/scripts/ensure-qaren.sh") --install"
-# The SessionStart hook must answer within 2 s even if Node is slow to start.
+# Bound the whole runtime check, including root resolution, Node and the digest record read.
 PRINT_BIN_BUDGET_SECONDS=1
 # Decompression-bomb ceiling for the unpacked runtime; the manifest digest stays the trust root.
 MAX_UNPACKED_BYTES=536870912
