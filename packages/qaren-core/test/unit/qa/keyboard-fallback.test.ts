@@ -67,6 +67,7 @@ function app(options: AppOptions = {}) {
   const rows: LedgerRow[] = [];
   const diagnostics: unknown[] = [];
   const typed: { ref: string; text: string; testID?: string }[] = [];
+  const focusRequirements: Array<boolean | undefined> = [];
   const focusReads: string[] = [];
   const notes: string[] = [];
   const questions = options.questions ?? [];
@@ -117,8 +118,15 @@ function app(options: AppOptions = {}) {
     ...(options.typeFocused === false
       ? {}
       : {
-          async typeFocused(ref: string, text: string, testID: string | undefined, context) {
+          async typeFocused(
+            ref: string,
+            text: string,
+            testID: string | undefined,
+            context,
+            requireFocused?: boolean,
+          ) {
             context.authorize();
+            focusRequirements.push(requireFocused);
             log.push(`type ${ref}`);
             typed.push({ ref, text, ...(testID ? { testID } : {}) });
             state = 'typed';
@@ -170,7 +178,18 @@ function app(options: AppOptions = {}) {
       }
     },
   };
-  return { deps, log, rows, typed, diagnostics, questions, focusReads, notes, state: () => state };
+  return {
+    deps,
+    log,
+    rows,
+    typed,
+    diagnostics,
+    questions,
+    focusReads,
+    focusRequirements,
+    notes,
+    state: () => state,
+  };
 }
 
 const steps = (log: string[]) => log.filter((entry) => entry !== 'capture');
@@ -1464,6 +1483,7 @@ test('P1: keyboard up with a wrapper types once after the tap when React proves 
   assert.deepEqual(steps(fake.log), ['press @wrap', 'type @wrap', 'press @submit']);
   assert.deepEqual(fake.typed, [{ ref: '@wrap', text: EMAIL, testID: 'qa-hidden-email' }]);
   assert.deepEqual(fake.focusReads, ['qa-hidden-email']);
+  assert.deepEqual(fake.focusRequirements, [true]);
   assert.deepEqual(fake.notes, [FOCUS_NOTE('tap', 'focused')]);
   assert.equal(fake.rows[0].outcome, 'pass');
   assert.match(
@@ -1499,6 +1519,7 @@ test('P3: keyboard up with no tappable target types once into the field React re
   assert.deepEqual(steps(fake.log), ['type qa-otp-code', 'press @submit']);
   assert.deepEqual(fake.typed, [{ ref: 'qa-otp-code', text: '1234', testID: 'qa-otp-code' }]);
   assert.deepEqual(fake.focusReads, ['qa-otp-code']);
+  assert.deepEqual(fake.focusRequirements, [true]);
   assert.deepEqual(fake.notes, [FOCUS_NOTE('none', 'focused')]);
   assert.match(
     fake.rows[0].reason ?? '',
@@ -1518,6 +1539,27 @@ for (const focus of [false, 'throw'] as const) {
     assert.equal(outcome.privateFills, undefined);
   });
 }
+
+test('no-target focus proof preserves a quoted ID ending in -pressable', async () => {
+  const sibling = element('@sibling', 'Sibling', { kind: 'input', testID: 'custom' });
+  const hidden = element('react:custom-pressable', 'Hidden', {
+    kind: 'input',
+    testID: 'custom-pressable',
+    offscreen: true,
+    hittable: false,
+  });
+  const fake = app({ initial: [sibling, hidden, submit], initialKeyboard: true });
+  fake.deps.reactFocused = async (id) => {
+    fake.focusReads.push(id);
+    return id === 'custom';
+  };
+  const outcome = await walkBlock(blocks(plan(EMAIL, 'custom-pressable', ''))[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.deepEqual(fake.focusReads, ['custom-pressable']);
+  assert.deepEqual(fake.typed, []);
+  assert.deepEqual(mutations(fake.log), []);
+  assert.equal(fake.rows.some((row) => row.outcome === 'pass'), false);
+});
 
 for (const blocker of ['secure', 'disabled'] as const) {
   test(`P5: a ${blocker} element carrying the field id blocks typing without a target`, async () => {
@@ -1564,6 +1606,7 @@ test('P7: keyboard down keeps the transition path and never reads focus', async 
   assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
   assert.deepEqual(steps(fake.log), ['press @wrap', 'type @wrap', 'press @submit']);
   assert.deepEqual(fake.focusReads, []);
+  assert.deepEqual(fake.focusRequirements, [false]);
   assert.deepEqual(fake.notes, []);
   assert.match(
     fake.rows[0].reason ?? '',

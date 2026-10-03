@@ -94,6 +94,29 @@ test('U10: an unreadable React input is not vetoed; the type is reported unverif
   assert.equal(envelope(result).data.verified, false);
 });
 
+for (const read of [null, { value: '', focused: false }]) {
+  test(`proof-mode fill refuses ${read ? 'unfocused' : 'unavailable'} pre-dispatch evidence`, async () => {
+    const { result, fills, commands } = await withSeam(() =>
+      performFocusedFill({ ...args, requireFocused: true }, client([read])),
+    );
+    assert.deepEqual(commands, []);
+    assert.equal(fills, 0);
+    assert.equal(envelope(result).code, 'NO_TEXT_INPUT_TARGET');
+    assert.equal(envelope(result).meta.mutation, 'none');
+  });
+}
+
+test('proof-mode fill types once with positive pre-dispatch focus evidence', async () => {
+  const { result, fills } = await withSeam(() =>
+    performFocusedFill(
+      { ...args, requireFocused: true, skipFinalValidation: true },
+      client([{ value: '', focused: true }]),
+    ),
+  );
+  assert.equal(fills, 1);
+  assert.equal(envelope(result).ok, true);
+});
+
 test('U9: a focused React input types once and verifies through the React tree', async () => {
   const { result, fills } = await withSeam(() =>
     performFocusedFill(

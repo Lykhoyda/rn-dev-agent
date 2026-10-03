@@ -15,7 +15,6 @@ import {
   elementSelector,
   keyboardFallbackTarget,
   bindFillIdentity,
-  withoutPressable,
   stepTarget,
   targetVisible,
   visibleSelector,
@@ -76,6 +75,7 @@ export interface WalkerDeps {
     text: string,
     testID: string | undefined,
     context: QaDispatchContext,
+    requireFocused?: boolean,
   ): Promise<ActResult>;
   // iOS only: positive React proof that the input with this testID is focused.
   reactFocused?(testID: string): Promise<boolean>;
@@ -703,7 +703,7 @@ export async function walkBlock(
     let entry: ActResult;
     try {
       entry = await mutate(item, after, (context) =>
-        deps.typeFocused!(again.element.ref, item.text, again.oracleTestID, context),
+        deps.typeFocused!(again.element.ref, item.text, again.oracleTestID, context, proofMode),
       );
     } catch (error) {
       if (error instanceof EvidenceExpired)
@@ -741,21 +741,20 @@ export async function walkBlock(
     before: Observation,
   ): Promise<WalkOutcome | 'typed' | undefined> => {
     const quoted = item.target.quoted!;
-    const id = withoutPressable(quoted);
-    if (!id || /^@|^e\d+$/.test(id)) return;
+    if (!quoted || /^@|^e\d+$/.test(quoted)) return;
     if (
       before.screen.elements.some(
-        (e) => e.testID === id && (e.secure || e.semantic?.disabled === true),
+        (e) => e.testID === quoted && (e.secure || e.semantic?.disabled === true),
       )
     )
       return;
-    if (!(await focusProven('none', id))) return;
+    if (!(await focusProven('none', quoted))) return;
     privacy.concealFallback(item.text);
     privateFills.push(item.line);
     let entry: ActResult;
     try {
       entry = await mutate(item, before, (context) =>
-        deps.typeFocused!(id, item.text, id, context),
+        deps.typeFocused!(quoted, item.text, quoted, context, true),
       );
     } catch (error) {
       if (error instanceof EvidenceExpired)
