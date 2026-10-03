@@ -464,7 +464,9 @@ test('rect and host/role categories are closed facts, including zero, unknown an
       mode === 'zero' ? 'zero' : mode === 'unknown-host' ? 'positive' : 'unknown',
     );
     assert.equal(row.hostKind, mode === 'unknown-host' ? 'unknown' : 'view');
-    assert.equal(row.roleCategory, 'interactive');
+    assert.equal(row.roleCategory, 'noninteractive');
+    assert.equal(row.capabilities.press, true);
+    assert.equal(row.pressGap, true);
   }
 });
 
