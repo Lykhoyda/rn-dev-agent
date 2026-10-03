@@ -536,6 +536,18 @@ fn push_with_lease(runner: &mut dyn Runner, pr: &PrRunRecord, commit: &str) -> b
 }
 
 fn remote_head(runner: &mut dyn Runner, pr: &PrRunRecord) -> Option<String> {
+    let destination = git(
+        runner,
+        "git-fetch-url",
+        &pr.repo_root,
+        &["remote", "get-url", "origin"],
+        20,
+    );
+    let expected = pr_info(pr).repo().map(|repo| repo.to_ascii_lowercase());
+    if !destination.ok() || expected.is_none() || remote_repo(destination.stdout.trim()) != expected
+    {
+        return None;
+    }
     let output = git(
         runner,
         "git-ls-remote",

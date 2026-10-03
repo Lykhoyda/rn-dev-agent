@@ -147,6 +147,10 @@ fn script_commit_extension(mock: &mut MockRunner, extension: &str, bytes: &str) 
     script_blob_check(mock, &format!("tasks.{extension}"), bytes);
     mock.expect_run("git worktree remove --force", CmdOutput::success(""));
     mock.expect_run(
+        "git remote get-url origin",
+        CmdOutput::success("git@github.com:o/r.git\n"),
+    );
+    mock.expect_run(
         "git ls-remote origin refs/heads/feat/tasks",
         CmdOutput::success(&format!("{TESTED}\trefs/heads/feat/tasks\n")),
     );
@@ -1097,6 +1101,10 @@ fn a_block_in_the_producers_format_from_an_eligible_walk_is_committed_byte_ident
     script_blob_check(mock, &format!("{slug}.yaml"), &source);
     mock.expect_run("git worktree remove --force", CmdOutput::success(""));
     mock.expect_run(
+        "git remote get-url origin",
+        CmdOutput::success("git@github.com:o/r.git\n"),
+    );
+    mock.expect_run(
         "git ls-remote origin refs/heads/feat/tasks",
         CmdOutput::success(&format!("{TESTED}\trefs/heads/feat/tasks\n")),
     );
@@ -1257,7 +1265,9 @@ impl Runner for LocalPublication {
     fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
         self.calls.push(spec.clone());
         match spec.label.as_str() {
-            "git-push-url" if !self.real_urls => CmdOutput::success("git@github.com:o/r.git\n"),
+            "git-push-url" | "git-fetch-url" if !self.real_urls => {
+                CmdOutput::success("git@github.com:o/r.git\n")
+            }
             "git-push-blocks" if self.reject_push => CmdOutput::failed(1, "push unavailable"),
             "gh-pr-comments" => CmdOutput::success("{\"comments\":[]}"),
             "gh-pr-comment" if self.reject_comment => CmdOutput::failed(1, "post unavailable"),
@@ -1269,6 +1279,7 @@ impl Runner for LocalPublication {
                 let output = std::process::Command::new("git")
                     .args(&spec.args)
                     .current_dir(spec.cwd.as_ref().unwrap())
+                    .envs(spec.env.iter().cloned())
                     .env("GIT_CONFIG_GLOBAL", "/dev/null")
                     .env("GIT_CONFIG_NOSYSTEM", "1")
                     .output()
@@ -1625,6 +1636,192 @@ fn new_and_replacement_commits_with_converted_bytes_fall_back_without_pushing() 
             base
         );
         assert!(!dir.join("writeback-wt").exists());
+        std::fs::remove_dir_all(repo).unwrap();
+    }
+}
+
+struct LocalFetchForge {
+    git: LocalPublication,
+    ssh: PathBuf,
+    fetch_failure: bool,
+    read_failure: bool,
+}
+
+impl Runner for LocalFetchForge {
+    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+        if (self.fetch_failure && spec.label == "git-fetch-url")
+            || (self.read_failure && spec.label == "git-ls-remote")
+        {
+            self.git.calls.push(spec.clone());
+            return CmdOutput::failed(1, "fixture lookup unavailable");
+        }
+        self.git.run(
+            &spec
+                .clone()
+                .env(
+                    "GIT_SSH_COMMAND",
+                    &format!("/bin/sh {}", self.ssh.display()),
+                )
+                .env("GIT_SSH_VARIANT", "ssh"),
+        )
+    }
+    fn spawn_group(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<Spawned> {
+        unreachable!()
+    }
+    fn spawn_piped(&mut self, _: &CmdSpec, _: &Path) -> std::io::Result<PipedChild> {
+        unreachable!()
+    }
+    fn sleep(&mut self, _: std::time::Duration) {}
+    fn now_epoch_ms(&self) -> u64 {
+        0
+    }
+    fn commands_executed(&self) -> u64 {
+        self.git.commands_executed()
+    }
+}
+
+#[test]
+fn real_git_readback_requires_the_pr_fetch_destination_with_a_fake_forge() {
+    for mode in [
+        "mirror",
+        "landed",
+        "unknown",
+        "lookup-failure",
+        "read-failure",
+        "fallback",
+        "rewrite",
+    ] {
+        let (runs, dir, verdict, base) = local_publication_fixture();
+        let repo = runs.parent().unwrap();
+        let mut old_runner = LocalPublication {
+            calls: Vec::new(),
+            reject_push: true,
+            reject_comment: true,
+            real_urls: false,
+        };
+        assert_eq!(
+            publish(&mut old_runner, &runs, RUN, &verdict, &machine()).result,
+            ReceiptResult::Failed
+        );
+        let cached = publication(&dir).writeback_commit.unwrap();
+        let mirror = repo.join("mirror.git");
+        std::fs::create_dir(&mirror).unwrap();
+        local_git(&mirror, &["init", "--bare"]);
+        local_git(
+            repo,
+            &[
+                "push",
+                mirror.to_str().unwrap(),
+                &format!("{cached}:refs/heads/feat/tasks"),
+            ],
+        );
+        if mode == "landed" {
+            local_git(
+                repo,
+                &["push", "origin", &format!("{cached}:refs/heads/feat/tasks")],
+            );
+        }
+        edit_pr(&dir, |pr| pr["url"] = "https://fixture/o/r/pull/12".into());
+        let fetch = match mode {
+            "mirror" | "fallback" => "git@fixture:mirror/r.git",
+            "unknown" => mirror.to_str().unwrap(),
+            _ => "git@fixture:o/r.git",
+        };
+        local_git(repo, &["remote", "set-url", "origin", fetch]);
+        local_git(
+            repo,
+            &[
+                "remote",
+                "set-url",
+                "--push",
+                "origin",
+                "ssh://git@fixture/o/r.git",
+            ],
+        );
+        if mode == "rewrite" {
+            local_git(
+                repo,
+                &[
+                    "config",
+                    "url.git@fixture:mirror/.insteadOf",
+                    "git@fixture:o/",
+                ],
+            );
+        }
+        let ssh = repo.join("local-ssh.sh");
+        std::fs::write(&ssh, format!(
+            "for arg do request=$arg; done\ncase \"$request\" in\n  *mirror/r.git*) destination='{}';;\n  *o/r.git*) destination='{}';;\n  *) exit 1;;\nesac\ncase \"$request\" in\n  git-upload-pack*) exec git-upload-pack \"$destination\";;\n  git-receive-pack*) exec git-receive-pack \"$destination\";;\n  *) exit 1;;\nesac\n",
+            mirror.display(), repo.join("remote.git").display(),
+        )).unwrap();
+        let mut runner = LocalFetchForge {
+            git: LocalPublication {
+                calls: Vec::new(),
+                reject_push: mode == "fallback",
+                reject_comment: false,
+                real_urls: true,
+            },
+            ssh,
+            fetch_failure: mode == "lookup-failure",
+            read_failure: mode == "read-failure",
+        };
+        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+        assert_eq!(
+            receipt.result,
+            ReceiptResult::Published,
+            "{mode}: {:?}",
+            receipt.failure
+        );
+        let pushes: Vec<_> = runner
+            .git
+            .calls
+            .iter()
+            .filter(|call| call.label == "git-push-blocks")
+            .collect();
+        assert_eq!(pushes.len(), usize::from(mode != "landed"), "{mode}");
+        if matches!(
+            mode,
+            "mirror" | "unknown" | "lookup-failure" | "fallback" | "rewrite"
+        ) {
+            assert!(
+                !runner
+                    .git
+                    .calls
+                    .iter()
+                    .any(|call| call.label == "git-ls-remote"),
+                "{mode}"
+            );
+        }
+        let remote = local_git(
+            &repo.join("remote.git"),
+            &["rev-parse", "refs/heads/feat/tasks"],
+        );
+        assert_eq!(
+            remote.trim(),
+            if mode == "fallback" { &base } else { &cached },
+            "{mode}"
+        );
+        assert_eq!(
+            local_git(&mirror, &["rev-parse", "refs/heads/feat/tasks"]).trim(),
+            cached
+        );
+        if mode == "fallback" {
+            assert!(receipt.outcomes["writeback"].starts_with("attached "));
+            assert!(std::fs::read_to_string(dir.join("blocks-comment.md"))
+                .unwrap()
+                .contains("steps: []\n"));
+        } else {
+            assert_eq!(receipt.outcomes["writeback"], format!("committed {cached}"));
+            assert!(!runner
+                .git
+                .calls
+                .iter()
+                .any(|call| call.label == "gh-pr-comment"));
+        }
+        assert_eq!(
+            publication(&dir).writeback_commit.as_deref(),
+            Some(cached.as_str())
+        );
+        assert_eq!(local_git(repo, &["rev-parse", "HEAD"]).trim(), base);
         std::fs::remove_dir_all(repo).unwrap();
     }
 }
