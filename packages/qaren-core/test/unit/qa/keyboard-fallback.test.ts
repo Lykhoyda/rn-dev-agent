@@ -314,6 +314,28 @@ for (const [name, after, reason] of [
   });
 }
 
+test('U7: a target replaced by another identity after the tap fails without typing', async () => {
+  const other = element('@other', 'qa-hidden-email', { kind: 'other', testID: 'something-else' });
+  const fake = app({ focused: [screenOf([other, submit], true)] });
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.match(outcome.failure?.seen ?? '', /the tap on "qa-hidden-email" changed the screen/);
+  assert.deepEqual(steps(fake.log), ['press @wrap']);
+});
+
+test('U11: a refreshed strict refusal after the fallback tap never taps again', async () => {
+  const input = element('@input', 'Email', { kind: 'input', testID: 'qa-hidden-email' });
+  const fake = app({
+    expireBeforeType: true,
+    focused: [screenOf([wrapper(), input, submit], true), screenOf([wrapper(), submit], false)],
+  });
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.match(outcome.failure?.seen ?? '', /^TARGET_NOT_FOUND: /);
+  assert.deepEqual(steps(fake.log), ['press @wrap']);
+  assert.equal(fake.typed.length, 0);
+});
+
 test('U7: a keyboard that rises on the third capture is accepted', async () => {
   const fake = app({
     focused: [
