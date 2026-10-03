@@ -18,13 +18,17 @@ const WRAPPER_ONLY = [
   },
 ];
 
-async function withSeam<T>(run: () => Promise<T>): Promise<{ result: T; fills: number }> {
+async function withSeam<T>(
+  run: () => Promise<T>,
+): Promise<{ result: T; fills: number; commands: string[] }> {
   _setActiveSessionForTest({ platform: 'ios', deviceId: 'TEST-DEVICE', appId: 'com.test' });
   clearRefMap();
   markSnapshotDirty();
   updateRefMapFromFlat(WRAPPER_ONLY as never, { snapshotGeneration: 7, keyboardVisible: true });
   let fills = 0;
+  const commands: string[] = [];
   _setRunAgentDeviceForTest(async (cliArgs: string[]) => {
+    commands.push(cliArgs[0]);
     if (cliArgs[0] === 'fill') {
       fills += 1;
       return okResult({ typed: true, textEntryRoute: 'synthesized-first-responder' });
@@ -32,7 +36,7 @@ async function withSeam<T>(run: () => Promise<T>): Promise<{ result: T; fills: n
     return okResult({ nodes: WRAPPER_ONLY });
   });
   try {
-    return { result: await run(), fills };
+    return { result: await run(), fills, commands };
   } finally {
     _setRunAgentDeviceForTest(null);
     _setActiveSessionForTest(null);
@@ -44,7 +48,8 @@ function client(reads: Array<{ value: string; focused: boolean } | null>) {
   let index = 0;
   return {
     isConnected: true,
-    evaluate: async () => {
+    evaluate: async (expr: string) => {
+      assert.equal(expr, '__QAREN.readInputValue("qa-hidden-email")');
       const read = reads[Math.min(index++, reads.length - 1)];
       return read
         ? { value: JSON.stringify({ value: read.value, controlled: true, focused: read.focused }) }
@@ -65,9 +70,10 @@ const args = {
 };
 
 test('U10: an unfocused React input vetoes the type with no mutation', async () => {
-  const { result, fills } = await withSeam(() =>
+  const { result, fills, commands } = await withSeam(() =>
     performFocusedFill(args, client([{ value: '', focused: false }])),
   );
+  assert.deepEqual(commands, []);
   const env = envelope(result);
   assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
   assert.equal(env.meta.mutation, 'none');
