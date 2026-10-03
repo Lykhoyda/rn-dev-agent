@@ -151,7 +151,7 @@ const withoutPressable = (id: string): string =>
 export function keyboardFallbackTarget(
   step: Step,
   screen: Screen,
-): { element: Element; oracleTestID?: string } | undefined {
+): { element: Element; oracleTestID: string } | undefined {
   if (step.kind !== 'fill' || step.target.quoted === undefined || step.target.exact) return;
   const quoted = step.target.quoted;
   const ids = new Set([quoted, withoutPressable(quoted), quoted + PRESSABLE_SUFFIX]);
@@ -169,13 +169,16 @@ export function keyboardFallbackTarget(
   if (candidates.length !== 1) return;
   const element = candidates[0];
   if (
+    !element.testID ||
+    !withoutPressable(element.testID) ||
+    screen.elements.filter((e) => e.testID === element.testID).length !== 1 ||
     element.offscreen ||
     element.secure ||
     isNativeInput(element) ||
     element.semantic?.disabled === true
   )
     return;
-  return element.testID ? { element, oracleTestID: withoutPressable(element.testID) } : { element };
+  return { element, oracleTestID: withoutPressable(element.testID) };
 }
 
 export function decideTarget(prepared: TargetQuestion, answer: Answer | undefined): Resolution {

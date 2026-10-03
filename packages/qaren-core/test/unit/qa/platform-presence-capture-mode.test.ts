@@ -189,7 +189,7 @@ test('a literal check does not opt in or batch the following phrase step', async
   assert.equal(result.jev.calls, 1);
 });
 
-test('phrase press and fill keep presence mode through read-back and bounded retries', async () => {
+test('phrase actions keep presence mode through read-back and safe retries', async () => {
   for (const kind of ['press', 'fill']) {
     const f = walker(
       [screen([element('@save', 'Save', kind === 'fill' ? { kind: 'input' } : {})])],
@@ -204,14 +204,16 @@ test('phrase press and fill keep presence mode through read-back and bounded ret
       f.deps,
     );
     assert.equal(result.verdict, 'FAIL');
-    assert.deepEqual(modes, [true, true, true, true]);
-    assert.equal(f.actions.length, 2);
+    assert.deepEqual(modes, kind === 'fill' ? [true, true] : [true, true, true, true]);
+    assert.equal(f.actions.length, kind === 'fill' ? 1 : 2);
     assert.deepEqual(
       result.steps.map((row) => [row.attempt, row.outcome]),
-      [
-        [1, 'retry'],
-        [2, 'fail'],
-      ],
+      kind === 'fill'
+        ? [[1, 'fail']]
+        : [
+            [1, 'retry'],
+            [2, 'fail'],
+          ],
     );
     assert.equal(JSON.stringify(result).includes('private-value'), false);
   }

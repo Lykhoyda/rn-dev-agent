@@ -272,7 +272,11 @@ test('U5: keyboard state comes from the decision observation; nothing is capture
 });
 
 test('U6: an input that appears after the tap takes the strict verified fill path', async () => {
-  const input = element('@input', 'Email', { kind: 'input', nativeKind: 'input', testID: 'qa-hidden-email' });
+  const input = element('@input', 'Email', {
+    kind: 'input',
+    nativeKind: 'input',
+    testID: 'qa-hidden-email',
+  });
   const fake = app({ focused: [screenOf([wrapper(), input, submit], true)] });
   const outcome = await walkBlock(blocks(plan())[0], fake.deps);
   assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
@@ -326,7 +330,11 @@ test('U7: a target replaced by another identity after the tap fails without typi
 });
 
 test('U11: a refreshed strict refusal after the fallback tap never taps again', async () => {
-  const input = element('@input', 'Email', { kind: 'input', nativeKind: 'input', testID: 'qa-hidden-email' });
+  const input = element('@input', 'Email', {
+    kind: 'input',
+    nativeKind: 'input',
+    testID: 'qa-hidden-email',
+  });
   const fake = app({
     expireBeforeType: true,
     focused: [screenOf([wrapper(), input, submit], true), screenOf([wrapper(), submit], false)],
@@ -552,12 +560,23 @@ test('U1: an exact replay fill misses instead of falling back', async () => {
 });
 
 for (const [name, observable] of [
-  ['the quoted id', element('@i', 'Other', { kind: 'input', nativeKind: 'input', testID: 'qa-hidden-email' })],
+  [
+    'the quoted id',
+    element('@i', 'Other', { kind: 'input', nativeKind: 'input', testID: 'qa-hidden-email' }),
+  ],
   [
     'the wrapper base',
-    element('@i', 'Other', { kind: 'input', nativeKind: 'input', testID: 'qa-hidden-email', disabled: true }),
+    element('@i', 'Other', {
+      kind: 'input',
+      nativeKind: 'input',
+      testID: 'qa-hidden-email',
+      disabled: true,
+    }),
   ],
-  ['quoted-pressable', element('@i', 'Other', { kind: 'input', nativeKind: 'input', label: WRAP, offscreen: true })],
+  [
+    'quoted-pressable',
+    element('@i', 'Other', { kind: 'input', nativeKind: 'input', label: WRAP, offscreen: true }),
+  ],
   [
     'a secure node',
     element('@i', 'Other', { kind: 'other', secure: true, placeholder: 'qa-hidden-email' }),
@@ -578,7 +597,8 @@ test('U2: a quoted wrapper id resolves through its base', () => {
     oracleTestID: 'qa-hidden-email',
   });
   const input = element('@i', 'Other', {
-    kind: 'input', nativeKind: 'input',
+    kind: 'input',
+    nativeKind: 'input',
     testID: 'qa-hidden-email',
     disabled: true,
   });
@@ -631,9 +651,7 @@ test('U3: zero or two candidates, or a semantically disabled one, keep the stric
     undefined,
   );
   const labelled = screenOf([element('@l', 'Email', { kind: 'other' })], false);
-  assert.deepEqual(keyboardFallbackTarget(fill('Email'), labelled), {
-    element: labelled.elements[0],
-  });
+  assert.equal(keyboardFallbackTarget(fill('Email'), labelled), undefined);
 });
 
 for (const mutation of ['observed', 'possible', undefined] as const) {
@@ -652,7 +670,10 @@ for (const mutation of ['observed', 'possible', undefined] as const) {
     assert.equal(result.block.outcome, 'fail');
     assert.equal(fills, 1);
     assert.match(result.failure?.seen ?? '', /TEXT_ENTRY_UNVERIFIED/);
-    assert.equal(fake.rows.some((row) => row.outcome === 'pass'), false);
+    assert.equal(
+      fake.rows.some((row) => row.outcome === 'pass'),
+      false,
+    );
   });
 }
 
@@ -677,7 +698,14 @@ for (const strict of [false, true]) {
     const target = strict ? 'email' : 'qa-hidden-email';
     const initial = [
       ...(strict
-        ? [element('@email', 'Email', { kind: 'input', nativeKind: 'input', testID: target, secure: true })]
+        ? [
+            element('@email', 'Email', {
+              kind: 'input',
+              nativeKind: 'input',
+              testID: target,
+              secure: true,
+            }),
+          ]
         : [wrapper()]),
       submit,
       element('@code', `Code ${EMAIL}`, { kind: 'text' }),
@@ -700,13 +728,18 @@ for (const strict of [false, true]) {
     const dir = mkdtempSync(join(tmpdir(), 'qaren-fallback-'));
     mkdirSync(join(dir, '.qaren'));
     const result = await runPlan(parsed, create().deps, [], {
-      appRoot: dir, platform: 'ios', appId: 'com.example.app',
+      appRoot: dir,
+      platform: 'ios',
+      appId: 'com.example.app',
     });
     assert.equal(result.verdict, 'REFUSED');
     assert.deepEqual(result.blocksWritten, ['safe']);
     assert.equal(result.blocks[1].saved, false);
     assert.equal(existsSync(join(dir, '.qaren', 'actions', 'code-shown.yaml')), false);
-    assert.equal(readFileSync(join(dir, '.qaren', 'actions', 'safe.yaml'), 'utf8').includes(EMAIL), false);
+    assert.equal(
+      readFileSync(join(dir, '.qaren', 'actions', 'safe.yaml'), 'utf8').includes(EMAIL),
+      false,
+    );
   });
 }
 
@@ -724,9 +757,13 @@ test('a normalizing controlled fallback continues as unverified', async () => {
     isConnected: true,
     evaluate: async () => {
       reads += 1;
-      return { value: JSON.stringify({
-        value: reads === 1 ? '' : 'normalized@example.test', controlled: true, focused: true,
-      }) };
+      return {
+        value: JSON.stringify({
+          value: reads === 1 ? '' : 'normalized@example.test',
+          controlled: true,
+          focused: true,
+        }),
+      };
     },
   } as never;
   _setActiveSessionForTest({ platform: 'ios', deviceId: 'TEST-DEVICE', appId: 'com.test' });
@@ -736,9 +773,19 @@ test('a normalizing controlled fallback continues as unverified', async () => {
   });
   fake.deps.typeFocused = async (ref, text, testID, context) => {
     await type(ref, text, testID, context);
-    const { data } = unwrap<{ verified: boolean }>(await performFocusedFill({
-      ref, text, testID, focused: true, vetoUnfocused: true, skipFinalValidation: true,
-    }, client));
+    const { data } = unwrap<{ verified: boolean }>(
+      await performFocusedFill(
+        {
+          ref,
+          text,
+          testID,
+          focused: true,
+          vetoUnfocused: true,
+          skipFinalValidation: true,
+        },
+        client,
+      ),
+    );
     assert.equal(data.verified, false);
     return { ok: true, proven: false };
   };
@@ -764,10 +811,16 @@ for (const nativeType of ['Other', 'TextField']) {
     const { updateRefMapFromFlat, clearRefMap } =
       await import('../../../dist/fast-runner-ref-map.js');
     const { okResult } = await import('../../../dist/utils.js');
-    const native = [{
-      ref: '@e1', identifier: 'qa-hidden-email', type: nativeType,
-      label: 'Email', hittable: true, rect: { x: 20, y: 100, width: 360, height: 60 },
-    }];
+    const native = [
+      {
+        ref: '@e1',
+        identifier: 'qa-hidden-email',
+        type: nativeType,
+        label: 'Email',
+        hittable: true,
+        rect: { x: 20, y: 100, width: 360, height: 60 },
+      },
+    ];
     const joined = joinScreen(native, [{ role: 'textinput', testID: 'qa-hidden-email' }]);
     assert.equal(joined.elements[0].kind, 'input');
     assert.equal(joined.elements[0].nativeKind, nativeType === 'Other' ? 'other' : 'input');
@@ -802,8 +855,12 @@ for (const nativeType of ['Other', 'TextField']) {
       const env = JSON.parse(result.content[0].text);
       if (!env.ok) {
         assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
-        return { ok: false, proven: false, mutation: extractMutationDisposition(result),
-          error: `${env.code}: ${env.error}` };
+        return {
+          ok: false,
+          proven: false,
+          mutation: extractMutationDisposition(result),
+          error: `${env.code}: ${env.error}`,
+        };
       }
       return { ok: true, proven: true };
     };
@@ -818,7 +875,10 @@ for (const nativeType of ['Other', 'TextField']) {
         assert.deepEqual(steps(fake.log), ['fill @e1', 'press @wrap', 'type @e1', 'press @submit']);
       } else {
         assert.equal(fake.rows[0].reason, undefined);
-        assert.deepEqual(steps(fake.log).filter((step) => !step.startsWith('shot')), ['fill @e1', 'press @submit']);
+        assert.deepEqual(
+          steps(fake.log).filter((step) => !step.startsWith('shot')),
+          ['fill @e1', 'press @submit'],
+        );
       }
     } finally {
       _setRunAgentDeviceForTest(null);
@@ -830,9 +890,18 @@ for (const nativeType of ['Other', 'TextField']) {
 
 for (const mutation of ['observed', 'possible', undefined] as const) {
   test(`an unobservable target refusal with mutation ${mutation} never falls back`, async () => {
-    const joined = joinScreen([
-      { ref: '@wrap', identifier: 'qa-hidden-email', type: 'Other', label: 'Email', hittable: true },
-    ], [{ role: 'textinput', testID: 'qa-hidden-email' }]);
+    const joined = joinScreen(
+      [
+        {
+          ref: '@wrap',
+          identifier: 'qa-hidden-email',
+          type: 'Other',
+          label: 'Email',
+          hittable: true,
+        },
+      ],
+      [{ role: 'textinput', testID: 'qa-hidden-email' }],
+    );
     const fake = app({ initial: [...joined.elements, submit] });
     fake.deps.fill = async (_ref, _text, context) => {
       context.authorize();
@@ -841,15 +910,19 @@ for (const mutation of ['observed', 'possible', undefined] as const) {
     };
     const result = await walkBlock(blocks(plan())[0], fake.deps);
     assert.equal(result.block.outcome, 'fail');
-    assert.deepEqual(steps(fake.log).filter((step) => !step.startsWith('shot')), ['strict refusal']);
+    assert.deepEqual(
+      steps(fake.log).filter((step) => !step.startsWith('shot')),
+      ['strict refusal'],
+    );
     assert.equal(fake.typed.length, 0);
   });
 }
 
 test('React-only inputs do not block or become keyboard fallback targets', () => {
-  const joined = joinScreen([
-    { ref: '@wrap', identifier: WRAP, type: 'Other', label: 'Email', hittable: true },
-  ], [{ role: 'textinput', testID: 'qa-hidden-email' }]);
+  const joined = joinScreen(
+    [{ ref: '@wrap', identifier: WRAP, type: 'Other', label: 'Email', hittable: true }],
+    [{ role: 'textinput', testID: 'qa-hidden-email' }],
+  );
   assert.equal(keyboardFallbackTarget(fill('qa-hidden-email'), joined)?.element.ref, '@wrap');
   const reactOnly = joinScreen([], [{ role: 'textinput', testID: 'qa-hidden-email' }]);
   assert.equal(keyboardFallbackTarget(fill('qa-hidden-email'), reactOnly), undefined);
@@ -857,23 +930,50 @@ test('React-only inputs do not block or become keyboard fallback targets', () =>
 
 for (const guard of ['secure', 'ambiguous', 'unrelated refusal']) {
   test(`${guard} still excludes the promoted input fallback`, async () => {
-    const joined = joinScreen([
-      { ref: '@wrap', identifier: 'qa-hidden-email', type: 'Other', label: 'Email',
-        hittable: true, secure: guard === 'secure' },
-      ...(guard === 'ambiguous' ? [{
-        ref: '@duplicate', identifier: 'qa-hidden-email', type: 'Other', label: 'Email', hittable: true,
-      }] : []),
-    ], [{ role: 'textinput', testID: 'qa-hidden-email' }]);
+    const joined = joinScreen(
+      [
+        {
+          ref: '@wrap',
+          identifier: 'qa-hidden-email',
+          type: 'Other',
+          label: 'Email',
+          hittable: true,
+          secure: guard === 'secure',
+        },
+        ...(guard === 'ambiguous'
+          ? [
+              {
+                ref: '@duplicate',
+                identifier: 'qa-hidden-email',
+                type: 'Other',
+                label: 'Email',
+                hittable: true,
+              },
+            ]
+          : []),
+      ],
+      [{ role: 'textinput', testID: 'qa-hidden-email' }],
+    );
     const fake = app({ initial: [...joined.elements, submit] });
     fake.deps.fill = async (_ref, _text, context) => {
       context.authorize();
-      return { ok: false, proven: false, mutation: 'none',
-        error: guard === 'unrelated refusal' ? 'FOCUS_TARGET_OCCLUDED: refused' : 'NO_TEXT_INPUT_TARGET: refused' };
+      return {
+        ok: false,
+        proven: false,
+        mutation: 'none',
+        error:
+          guard === 'unrelated refusal'
+            ? 'FOCUS_TARGET_OCCLUDED: refused'
+            : 'NO_TEXT_INPUT_TARGET: refused',
+      };
     };
     const result = await walkBlock(blocks(plan())[0], fake.deps);
     assert.equal(result.block.outcome, 'fail');
     assert.equal(fake.typed.length, 0);
-    assert.equal(fake.log.some((entry) => entry.startsWith('press')), false);
+    assert.equal(
+      fake.log.some((entry) => entry.startsWith('press')),
+      false,
+    );
   });
 }
 
@@ -882,21 +982,32 @@ for (const identity of ['qa-hidden-email', WRAP]) {
     test(`strict refusal refreshes ${identity} before fallback (${freshState})`, async () => {
       const { bindExactFillTarget } = await import('../../../dist/handlers/device-interact.js');
       const original = {
-        ref: '@e1', identifier: identity, type: 'Other', label: 'Email', hittable: true,
+        ref: '@e1',
+        identifier: identity,
+        type: 'Other',
+        label: 'Email',
+        hittable: true,
         rect: { x: 20, y: 100, width: 360, height: 60 },
       };
       const moved = { ...original, ref: '@e2' };
       const other = {
-        ref: '@e1', identifier: 'unrelated-control', type: 'Button', label: 'Other', hittable: true,
+        ref: '@e1',
+        identifier: 'unrelated-control',
+        type: 'Button',
+        label: 'Other',
+        hittable: true,
         rect: { x: 20, y: 300, width: 360, height: 60 },
       };
       const digest = [{ role: 'textinput', testID: identity }];
       const initial = joinScreen([original], digest).elements;
-      const fresh = joinScreen([
-        other,
-        ...(freshState === 'missing' ? [] : [moved]),
-        ...(freshState === 'duplicate' ? [{ ...moved, ref: '@e3' }] : []),
-      ], digest).elements;
+      const fresh = joinScreen(
+        [
+          other,
+          ...(freshState === 'missing' ? [] : [moved]),
+          ...(freshState === 'duplicate' ? [{ ...moved, ref: '@e3' }] : []),
+        ],
+        digest,
+      ).elements;
       const fake = app({ initial: [...initial, submit] });
       let refreshed = false;
       let strictCalls = 0;
@@ -909,7 +1020,9 @@ for (const identity of ['qa-hidden-email', WRAP]) {
           [...(refreshed ? fresh : initial), submit],
           fake.state() !== 'idle' || (refreshed && freshState === 'keyboard up')
             ? true
-            : refreshed && freshState === 'keyboard unknown' ? undefined : false,
+            : refreshed && freshState === 'keyboard unknown'
+              ? undefined
+              : false,
         );
       };
       fake.deps.fill = async (ref, _text, context) => {
@@ -917,15 +1030,23 @@ for (const identity of ['qa-hidden-email', WRAP]) {
         strictCalls += 1;
         assert.equal(ref, '@e1');
         const bound = bindExactFillTarget([other, moved], ref, {
-          type: original.type, identifier: original.identifier, label: original.label,
-          rect: original.rect, flatIndex: 0, nodeCount: 1,
+          type: original.type,
+          identifier: original.identifier,
+          label: original.label,
+          rect: original.rect,
+          flatIndex: 0,
+          nodeCount: 1,
         });
         assert.equal(bound.ok, false);
         if (bound.ok) throw new Error('expected an unobservable input');
         assert.equal(bound.unobservable, true);
         refreshed = true;
-        return { ok: false, proven: false, mutation: 'none',
-          error: `NO_TEXT_INPUT_TARGET: ${bound.detail}` };
+        return {
+          ok: false,
+          proven: false,
+          mutation: 'none',
+          error: `NO_TEXT_INPUT_TARGET: ${bound.detail}`,
+        };
       };
       const press = fake.deps.press;
       fake.deps.press = (ref, context) => {
@@ -952,12 +1073,22 @@ for (const identity of ['qa-hidden-email', WRAP]) {
 }
 
 test('fresh fallback cannot substitute another identity with the same label', async () => {
-  const original = joinScreen([
-    { ref: '@e1', identifier: 'original-email', type: 'Other', label: 'Email', hittable: true },
-  ], [{ role: 'textinput', testID: 'original-email' }]).elements;
-  const replacement = joinScreen([
-    { ref: '@e2', identifier: 'replacement-email', type: 'Other', label: 'Email', hittable: true },
-  ], [{ role: 'textinput', testID: 'replacement-email' }]).elements;
+  const original = joinScreen(
+    [{ ref: '@e1', identifier: 'original-email', type: 'Other', label: 'Email', hittable: true }],
+    [{ role: 'textinput', testID: 'original-email' }],
+  ).elements;
+  const replacement = joinScreen(
+    [
+      {
+        ref: '@e2',
+        identifier: 'replacement-email',
+        type: 'Other',
+        label: 'Email',
+        hittable: true,
+      },
+    ],
+    [{ role: 'textinput', testID: 'replacement-email' }],
+  ).elements;
   const fake = app({ initial: original });
   let refused = false;
   fake.deps.captureScreen = async () => screenOf(refused ? replacement : original, false);
@@ -968,6 +1099,80 @@ test('fresh fallback cannot substitute another identity with the same label', as
   };
   const result = await walkBlock(blocks(plan(EMAIL, 'Email', ''))[0], fake.deps);
   assert.equal(result.block.outcome, 'fail');
-  assert.equal(fake.log.some((entry) => entry.startsWith('press')), false);
+  assert.equal(
+    fake.log.some((entry) => entry.startsWith('press')),
+    false,
+  );
   assert.equal(fake.typed.length, 0);
+});
+
+for (const replacementHasId of [false, true]) {
+  test(`an anonymous strict target never falls back to a replacement (id: ${replacementHasId})`, async () => {
+    const original = joinScreen(
+      [{ ref: '@e1', type: 'Other', label: 'Email', hittable: true }],
+      [{ role: 'textinput', text: 'Email' }],
+    ).elements;
+    assert.equal(original[0].kind, 'input');
+    assert.equal(original[0].testID, undefined);
+    const replacement = element('@e2', 'Email', {
+      kind: 'other',
+      ...(replacementHasId ? { testID: 'replacement-email' } : {}),
+    });
+    const fake = app({ initial: original });
+    let fills = 0;
+    let captures = 0;
+    fake.deps.captureScreen = async () => {
+      captures += 1;
+      return screenOf(fills ? [replacement] : original, false);
+    };
+    fake.deps.fill = async (_ref, _text, context) => {
+      context.check();
+      fills += 1;
+      return {
+        ok: false,
+        proven: false,
+        mutation: 'none',
+        error: 'NO_TEXT_INPUT_TARGET: unobservable input',
+      };
+    };
+    const result = await walkBlock(blocks(plan(EMAIL, 'Email', ''))[0], fake.deps);
+    assert.equal(result.block.outcome, 'fail');
+    assert.match(result.failure?.seen ?? '', /^NO_TEXT_INPUT_TARGET: unobservable input/);
+    assert.equal(fills, 1);
+    assert.equal(captures, 1);
+    assert.equal(
+      fake.log.some((entry) => entry.startsWith('press')),
+      false,
+    );
+    assert.equal(fake.typed.length, 0);
+  });
+}
+
+test('a label-only unresolved target keeps its strict resolution refusal', async () => {
+  const fake = app({ initial: [element('@label', 'Email', { kind: 'other' })] });
+  const result = await walkBlock(blocks(plan(EMAIL, 'Email', ''))[0], fake.deps);
+  assert.equal(result.block.outcome, 'fail');
+  assert.match(result.failure?.seen ?? '', /^TARGET_NOT_FOUND:/);
+  assert.equal(
+    fake.log.some((entry) => entry.startsWith('press')),
+    false,
+  );
+  assert.equal(fake.typed.length, 0);
+});
+
+test('a labelled target with a unique ID remains eligible', () => {
+  const identified = element('@email', 'Email', { kind: 'other', testID: 'email' });
+  assert.deepEqual(keyboardFallbackTarget(fill('Email'), screenOf([identified], false)), {
+    element: identified,
+    oracleTestID: 'email',
+  });
+  const duplicate = element('@duplicate', 'Elsewhere', {
+    kind: 'other',
+    testID: 'email',
+    offscreen: true,
+  });
+  assert.equal(
+    keyboardFallbackTarget(fill('Email'), screenOf([identified, duplicate], false)),
+    undefined,
+  );
 });

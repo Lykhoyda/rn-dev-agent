@@ -620,7 +620,7 @@ export async function walkBlock(
     item: Item & { kind: 'fill' },
     attempt: number,
     before: Observation,
-    target: { element: Element; oracleTestID?: string },
+    target: { element: Element; oracleTestID: string },
   ): Promise<
     WalkOutcome | { ref: string; element: Element; observation: Observation } | 'typed'
   > => {
@@ -671,11 +671,7 @@ export async function walkBlock(
     if (after.screen.keyboardVisible !== true)
       return nothingTyped(`tapping "${quoted}" raised no keyboard`, after.screen);
     const again = keyboardFallbackTarget(item, after.screen);
-    const same =
-      again &&
-      (target.element.testID !== undefined
-        ? again.element.testID === target.element.testID
-        : again.element.testID === undefined && again.element.label === target.element.label);
+    const same = again && again.oracleTestID === target.oracleTestID;
     if (!again || !same)
       return nothingTyped(`the tap on "${quoted}" changed the screen`, after.screen);
     let entry: ActResult;
@@ -958,6 +954,8 @@ export async function walkBlock(
               item.kind === 'fill' &&
               item.target.quoted !== undefined &&
               !item.target.exact &&
+              element !== undefined &&
+              !isNativeInput(element) &&
               !act.ok &&
               act.mutation === 'none' &&
               act.error?.startsWith('NO_TEXT_INPUT_TARGET:') &&
@@ -965,13 +963,17 @@ export async function walkBlock(
               !fellBack
             ) {
               fellBack = true;
+              const targetID = element?.testID;
+              if (
+                !targetID ||
+                before.screen.elements.filter((e) => e.testID === targetID).length !== 1
+              ) {
+                outcome = failed(item, attempt, act.error, before.screen, undefined);
+                break;
+              }
               before = await capture(item);
               const fallback = keyboardFallbackTarget(item, before.screen);
-              if (
-                !fallback ||
-                (element?.testID &&
-                  fallback.oracleTestID !== element.testID.replace(/-pressable$/, ''))
-              ) {
+              if (!fallback || fallback.oracleTestID !== targetID.replace(/-pressable$/, '')) {
                 outcome = failed(
                   item,
                   attempt,
