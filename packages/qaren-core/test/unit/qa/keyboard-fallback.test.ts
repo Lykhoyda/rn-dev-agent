@@ -876,3 +876,98 @@ for (const guard of ['secure', 'ambiguous', 'unrelated refusal']) {
     assert.equal(fake.log.some((entry) => entry.startsWith('press')), false);
   });
 }
+
+for (const identity of ['qa-hidden-email', WRAP]) {
+  for (const freshState of ['unique', 'duplicate', 'missing', 'keyboard up', 'keyboard unknown']) {
+    test(`strict refusal refreshes ${identity} before fallback (${freshState})`, async () => {
+      const { bindExactFillTarget } = await import('../../../dist/handlers/device-interact.js');
+      const original = {
+        ref: '@e1', identifier: identity, type: 'Other', label: 'Email', hittable: true,
+        rect: { x: 20, y: 100, width: 360, height: 60 },
+      };
+      const moved = { ...original, ref: '@e2' };
+      const other = {
+        ref: '@e1', identifier: 'unrelated-control', type: 'Button', label: 'Other', hittable: true,
+        rect: { x: 20, y: 300, width: 360, height: 60 },
+      };
+      const digest = [{ role: 'textinput', testID: identity }];
+      const initial = joinScreen([original], digest).elements;
+      const fresh = joinScreen([
+        other,
+        ...(freshState === 'missing' ? [] : [moved]),
+        ...(freshState === 'duplicate' ? [{ ...moved, ref: '@e3' }] : []),
+      ], digest).elements;
+      const fake = app({ initial: [...initial, submit] });
+      let refreshed = false;
+      let strictCalls = 0;
+      const taps: string[] = [];
+      const capture = fake.deps.captureScreen;
+      fake.deps.captureScreen = async (options) => {
+        if (fake.state() === 'accepted') return capture(options);
+        fake.log.push('capture');
+        return screenOf(
+          [...(refreshed ? fresh : initial), submit],
+          fake.state() !== 'idle' || (refreshed && freshState === 'keyboard up')
+            ? true
+            : refreshed && freshState === 'keyboard unknown' ? undefined : false,
+        );
+      };
+      fake.deps.fill = async (ref, _text, context) => {
+        context.check();
+        strictCalls += 1;
+        assert.equal(ref, '@e1');
+        const bound = bindExactFillTarget([other, moved], ref, {
+          type: original.type, identifier: original.identifier, label: original.label,
+          rect: original.rect, flatIndex: 0, nodeCount: 1,
+        });
+        assert.equal(bound.ok, false);
+        if (bound.ok) throw new Error('expected an unobservable input');
+        assert.equal(bound.unobservable, true);
+        refreshed = true;
+        return { ok: false, proven: false, mutation: 'none',
+          error: `NO_TEXT_INPUT_TARGET: ${bound.detail}` };
+      };
+      const press = fake.deps.press;
+      fake.deps.press = (ref, context) => {
+        taps.push(ref);
+        return press(ref === '@e2' ? '@wrap' : ref, context);
+      };
+      const result = await walkBlock(blocks(plan(EMAIL, identity))[0], fake.deps);
+      assert.equal(strictCalls, 1);
+      if (freshState === 'unique') {
+        assert.equal(result.block.outcome, 'pass', JSON.stringify(result.failure));
+        assert.deepEqual(taps, ['@e2', '@submit']);
+        assert.equal(fake.typed.length, 1);
+        assert.equal(fake.typed[0].ref, '@e2');
+        assert.match(fake.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
+      } else {
+        assert.equal(result.block.outcome, 'fail');
+        assert.deepEqual(taps, []);
+        assert.equal(fake.typed.length, 0);
+        assert.match(result.failure?.seen ?? '', /nothing was typed/);
+      }
+      assert.equal(taps.includes('@e1'), false);
+    });
+  }
+}
+
+test('fresh fallback cannot substitute another identity with the same label', async () => {
+  const original = joinScreen([
+    { ref: '@e1', identifier: 'original-email', type: 'Other', label: 'Email', hittable: true },
+  ], [{ role: 'textinput', testID: 'original-email' }]).elements;
+  const replacement = joinScreen([
+    { ref: '@e2', identifier: 'replacement-email', type: 'Other', label: 'Email', hittable: true },
+  ], [{ role: 'textinput', testID: 'replacement-email' }]).elements;
+  const fake = app({ initial: original });
+  let refused = false;
+  fake.deps.captureScreen = async () => screenOf(refused ? replacement : original, false);
+  fake.deps.fill = async (_ref, _text, context) => {
+    context.check();
+    refused = true;
+    return { ok: false, proven: false, mutation: 'none', error: 'NO_TEXT_INPUT_TARGET: refused' };
+  };
+  const result = await walkBlock(blocks(plan(EMAIL, 'Email', ''))[0], fake.deps);
+  assert.equal(result.block.outcome, 'fail');
+  assert.equal(fake.log.some((entry) => entry.startsWith('press')), false);
+  assert.equal(fake.typed.length, 0);
+});

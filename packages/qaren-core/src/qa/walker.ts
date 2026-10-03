@@ -954,17 +954,33 @@ export async function walkBlock(
                       ? deps.back(context)
                       : deps.dialog(item.action, context),
             );
-            const fallback =
+            if (
               item.kind === 'fill' &&
+              item.target.quoted !== undefined &&
+              !item.target.exact &&
               !act.ok &&
               act.mutation === 'none' &&
               act.error?.startsWith('NO_TEXT_INPUT_TARGET:') &&
               deps.typeFocused &&
               !fellBack
-                ? keyboardFallbackTarget(item, before.screen)
-                : undefined;
-            if (fallback && item.kind === 'fill') {
+            ) {
               fellBack = true;
+              before = await capture(item);
+              const fallback = keyboardFallbackTarget(item, before.screen);
+              if (
+                !fallback ||
+                (element?.testID &&
+                  fallback.oracleTestID !== element.testID.replace(/-pressable$/, ''))
+              ) {
+                outcome = failed(
+                  item,
+                  attempt,
+                  `${act.error}; no unique eligible keyboard fallback target after the strict refusal; nothing was typed`,
+                  before.screen,
+                  undefined,
+                );
+                break;
+              }
               const result = await keyboardFallback(item, attempt, before, fallback);
               if (result === 'typed') {
                 typedUnverified = true;
