@@ -2,7 +2,7 @@ mod common;
 
 use qaren::commands::cleanup::cleanup;
 use qaren::exec::Spawned;
-use qaren::exec::{CmdOutput, MockRunner, Runner};
+use qaren::exec::{CmdOutput, MockRunner, RealRunner, Runner};
 use qaren::failure::FailureCode;
 use qaren::receipt::ReceiptResult;
 use qaren::runrecord::{
@@ -137,6 +137,10 @@ fn core_record(repo: &std::path::Path) -> RunRecord {
     record
 }
 
+fn owner_gone(mock: &mut MockRunner) {
+    mock.expect_run("ps -p 999 -o lstart=", CmdOutput::success(""));
+}
+
 fn write_original_core_record(repo: &std::path::Path, core: serde_json::Value) -> RunRecord {
     let record = core_record(repo);
     record.save(repo).unwrap();
@@ -171,6 +175,7 @@ fn original_schema_core_identity_loads_in_status_and_recovers_via_owned_group_cl
     assert!(lock.exists());
 
     let mut mock = MockRunner::new();
+    owner_gone(&mut mock);
     mock.expect_run(
         "ps -A",
         CmdOutput::success("1 1 S\n9000 9000 S\n9001 9000 S\n"),
@@ -241,6 +246,7 @@ fn original_schema_core_never_adopts_reused_or_unknown_process_ownership() {
         let mut mock = MockRunner::new();
         let settles = birth.is_some();
         let settled_inventory = inventory.clone();
+        owner_gone(&mut mock);
         mock.expect_run("ps -A", inventory);
         if let Some(birth) = birth {
             mock.expect_run("ps -p 9000 -o lstart=", birth);
@@ -281,6 +287,7 @@ fn original_schema_core_never_adopts_reused_or_unknown_process_ownership() {
         assert!(json["resources"]["core"].get("pid").is_none());
 
         let mut retry = MockRunner::new();
+        owner_gone(&mut retry);
         retry.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
         assert_eq!(
             cleanup(&mut retry, &repo, "core-run").result,
@@ -303,11 +310,13 @@ fn original_schema_core_invalid_group_ids_refuse_without_probing_or_signaling() 
         );
         let lock = record.resources.lease.unwrap().lock_dir;
         let mut mock = MockRunner::new();
+        owner_gone(&mut mock);
         let receipt = cleanup(&mut mock, &repo, "core-run");
         assert_eq!(receipt.result, ReceiptResult::Refused);
         assert!(receipt.cleanup["core"].starts_with("refused"));
         assert!(receipt.cleanup["device_lease"].starts_with("unresolved: retained: core"));
-        assert!(mock.calls.is_empty());
+        assert_eq!(mock.calls.len(), 1);
+        assert_eq!(mock.calls[0].rendered(), "ps -p 999 -o lstart=");
         assert!(lock.exists());
     }
 }
@@ -343,6 +352,7 @@ fn core_group_settles_absent_in_one_cleanup_without_signaling_a_dead_leader() {
     let lock = record.resources.lease.as_ref().unwrap().lock_dir.clone();
     record.save(&repo).unwrap();
     let mut mock = MockRunner::new();
+    owner_gone(&mut mock);
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n9001 9000 S\n"));
     mock.expect_run("ps -p 9000 -o lstart=", CmdOutput::failed(1, ""));
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
@@ -370,9 +380,10 @@ fn core_group_settles_absent_in_one_cleanup_without_signaling_a_dead_leader() {
         serde_json::to_value(stored.resources.core_cleanup).unwrap()
     );
     assert_eq!(mock.now_epoch_ms() - started, 300);
-    assert_eq!(mock.calls.len(), 3);
-    assert_eq!(mock.calls[2].label, "ps-groups");
-    assert_eq!(mock.calls[2].timeout_seconds, 10);
+    assert_eq!(mock.calls.len(), 4);
+    assert_eq!(mock.calls[0].rendered(), "ps -p 999 -o lstart=");
+    assert_eq!(mock.calls[3].label, "ps-groups");
+    assert_eq!(mock.calls[3].timeout_seconds, 10);
     assert!(mock.calls.iter().all(|spec| spec.label != "kill-group"));
     assert_eq!(mock.remaining(), 0);
 }
@@ -394,6 +405,7 @@ fn core_group_settle_retains_ownership_when_still_present_or_inventory_unknown()
         let lease = record.resources.lease.as_ref().unwrap().clone();
         record.save(&repo).unwrap();
         let mut mock = MockRunner::new();
+        owner_gone(&mut mock);
         mock.expect_run("ps -A", CmdOutput::success("1 1 S\n9001 9000 S\n"));
         mock.expect_run("ps -p 9000 -o lstart=", CmdOutput::failed(1, ""));
         mock.expect_run("ps -A", after);
@@ -420,9 +432,10 @@ fn core_group_settle_retains_ownership_when_still_present_or_inventory_unknown()
             serde_json::to_value(stored.resources.core_cleanup).unwrap()
         );
         assert_eq!(mock.now_epoch_ms() - started, 300);
-        assert_eq!(mock.calls.len(), 3);
-        assert_eq!(mock.calls[2].label, "ps-groups");
-        assert_eq!(mock.calls[2].timeout_seconds, 10);
+        assert_eq!(mock.calls.len(), 4);
+        assert_eq!(mock.calls[0].rendered(), "ps -p 999 -o lstart=");
+        assert_eq!(mock.calls[3].label, "ps-groups");
+        assert_eq!(mock.calls[3].timeout_seconds, 10);
         assert!(mock.calls.iter().all(|spec| spec.label != "kill-group"));
         assert_eq!(mock.remaining(), 0);
     }
@@ -435,6 +448,7 @@ fn core_group_inventory_reads_a_process_whose_state_ps_cannot_report() {
     let lock = record.resources.lease.as_ref().unwrap().lock_dir.clone();
     record.save(&repo).unwrap();
     let mut mock = MockRunner::new();
+    owner_gone(&mut mock);
     mock.expect_run(
         "ps -A",
         CmdOutput::success("1 1 S\n715 54753 ?\n725 34131 ?+\n726 34131 ?E\n"),
@@ -447,6 +461,7 @@ fn core_group_inventory_reads_a_process_whose_state_ps_cannot_report() {
     let record = core_record(&repo);
     record.save(&repo).unwrap();
     let mut mock = MockRunner::new();
+    owner_gone(&mut mock);
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n9001 9000 ?\n"));
     mock.expect_run("ps -p 9000 -o lstart=", CmdOutput::failed(1, ""));
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n9001 9000 ?\n"));
@@ -474,6 +489,7 @@ fn core_group_unknown_initial_inventory_is_not_retried() {
         let lock = record.resources.lease.as_ref().unwrap().lock_dir.clone();
         record.save(&repo).unwrap();
         let mut mock = MockRunner::new();
+        owner_gone(&mut mock);
         mock.expect_run("ps -A", inventory);
         let started = mock.now_epoch_ms();
 
@@ -494,8 +510,9 @@ fn core_group_unknown_initial_inventory_is_not_retried() {
             qaren::runrecord::GroupCleanupResult::Unresolved
         );
         assert_eq!(mock.now_epoch_ms(), started);
-        assert_eq!(mock.calls.len(), 1);
-        assert_eq!(mock.calls[0].label, "ps-groups");
+        assert_eq!(mock.calls.len(), 2);
+        assert_eq!(mock.calls[0].rendered(), "ps -p 999 -o lstart=");
+        assert_eq!(mock.calls[1].label, "ps-groups");
         assert_eq!(mock.remaining(), 0);
     }
 }
@@ -513,6 +530,7 @@ fn core_group_cleanup_requires_positive_inventory_after_kill_not_just_leader_exi
         let lock = record.resources.lease.as_ref().unwrap().lock_dir.clone();
         record.save(&repo).unwrap();
         let mut mock = MockRunner::new();
+        owner_gone(&mut mock);
         mock.expect_run(
             "ps -A",
             CmdOutput::success("1 1 S\n9000 9000 S\n9001 9000 S\n"),
@@ -553,6 +571,7 @@ fn core_cleanup_evidence_save_failure_retains_resource_and_lease_until_retry() {
         RunRecord::run_dir(&repo, "core-run").join(format!(".run.json.tmp.{}", std::process::id()));
     std::fs::create_dir(&blocked).unwrap();
     let mut mock = MockRunner::new();
+    owner_gone(&mut mock);
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n9001 9000 S\n"));
     mock.expect_run("ps -p 9000 -o lstart=", CmdOutput::failed(1, ""));
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
@@ -569,12 +588,391 @@ fn core_cleanup_evidence_save_failure_retains_resource_and_lease_until_retry() {
     assert_eq!(mock.remaining(), 0);
     std::fs::remove_dir(blocked).unwrap();
     let mut retry = MockRunner::new();
+    owner_gone(&mut retry);
     retry.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     assert_eq!(
         cleanup(&mut retry, &repo, "core-run").result,
         ReceiptResult::Cleaned
     );
     assert!(!lock.exists());
+}
+
+#[test]
+fn a_live_owner_keeps_its_core_and_no_signal_is_sent() {
+    let mut owner = MockRunner::new();
+    owner.expect_run(
+        "ps -p 999 -o lstart=",
+        CmdOutput::success("Wed Aug 12 15:00:00 2026"),
+    );
+    owner.expect_run("ps -p 999 -o stat=", CmdOutput::success("S"));
+    assert_core_kept_for(owner, |_| {}, true);
+}
+
+#[test]
+fn an_unknown_owner_keeps_its_core() {
+    let mut owner = MockRunner::new();
+    owner.expect_run("ps -p 999 -o lstart=", CmdOutput::failed(1, "ps denied"));
+    assert_core_kept_for(owner, |_| {}, false);
+}
+
+#[test]
+fn a_record_without_owner_identity_keeps_its_core() {
+    assert_core_kept_for(MockRunner::new(), |record| record.prepare = None, false);
+}
+
+fn assert_core_kept_for(mut mock: MockRunner, edit: impl FnOnce(&mut RunRecord), live_owner: bool) {
+    let repo = common::temp_repo();
+    let mut record = core_record(&repo);
+    edit(&mut record);
+    let lock = record.resources.lease.as_ref().unwrap().lock_dir.clone();
+    record.save(&repo).unwrap();
+
+    let before = std::fs::read(RunRecord::run_dir(&repo, "core-run").join("run.json")).unwrap();
+    let receipt = cleanup(&mut mock, &repo, "core-run");
+
+    assert_eq!(
+        receipt.cleanup["core"],
+        "refused: the run's qaren process is alive or unproven gone"
+    );
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    assert!(!mock
+        .calls
+        .iter()
+        .any(|spec| spec.rendered().contains("/bin/kill")));
+    assert!(!mock.calls.iter().any(|spec| spec.label == "ps-groups"));
+    if live_owner {
+        assert_live_owner_refusal(&receipt, &record, &mock, &repo, &before);
+    } else {
+        assert!(receipt.cleanup["device_lease"].starts_with("unresolved: retained"));
+    }
+    assert!(lock.exists());
+    let stored = RunRecord::load(&repo, "core-run").unwrap();
+    assert_eq!(stored.resources.core.unwrap().pgid, 9000);
+    assert!(stored.resources.core_cleanup.is_none());
+    assert_eq!(mock.remaining(), 0);
+}
+
+fn assert_live_owner_refusal(
+    receipt: &qaren::receipt::Receipt,
+    record: &RunRecord,
+    mock: &MockRunner,
+    repo: &std::path::Path,
+    before: &[u8],
+) {
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    assert_eq!(receipt.phase, record.phase.as_str());
+    assert_eq!(
+        receipt.cleanup,
+        std::collections::BTreeMap::from([(
+            "core".to_string(),
+            "refused: the run's qaren process is alive or unproven gone".to_string(),
+        )])
+    );
+    let failure = receipt.failure.as_ref().unwrap();
+    assert_eq!(failure.code, FailureCode::OwnershipUnproven);
+    assert_eq!(failure.detail, "not proven ours or unresolved: core (refused: the run's qaren process is alive or unproven gone)");
+    assert_eq!(
+        receipt.next_action,
+        "resolve the listed resources manually; qaren will not touch them"
+    );
+    assert_eq!(failure.next_action, receipt.next_action);
+    assert!(!receipt.outcomes.contains_key("record_saved"));
+    let scenario = receipt.scenario.as_ref().unwrap();
+    assert_eq!(scenario.name, record.scenario.name);
+    assert_eq!(scenario.platform, "ios");
+    assert_eq!(scenario.path, record.scenario_path);
+    assert_eq!(scenario.sha256, record.scenario_sha256);
+    assert_eq!(
+        serde_json::to_value(&receipt.candidate).unwrap(),
+        serde_json::to_value(Some(&record.candidate)).unwrap()
+    );
+    let device = receipt.device.as_ref().unwrap();
+    assert_eq!(
+        device.ios_udid,
+        record
+            .resources
+            .ios_simulator
+            .as_ref()
+            .map(|s| s.udid.clone())
+    );
+    assert_eq!(
+        device.ios_name,
+        record
+            .resources
+            .ios_simulator
+            .as_ref()
+            .map(|s| s.name.clone())
+    );
+    assert_eq!(
+        device.ios_device_type,
+        record
+            .resources
+            .ios_simulator
+            .as_ref()
+            .map(|s| s.device_type.clone())
+    );
+    assert_eq!(
+        device.ios_runtime,
+        record
+            .resources
+            .ios_simulator
+            .as_ref()
+            .map(|s| s.runtime.clone())
+    );
+    assert_eq!(
+        serde_json::to_value(&receipt.build).unwrap(),
+        serde_json::to_value(&record.build).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&receipt.core_cleanup).unwrap(),
+        serde_json::to_value(&record.resources.core_cleanup).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&receipt.fresh_install).unwrap(),
+        serde_json::to_value(&record.resources.fresh_install).unwrap()
+    );
+    assert_eq!(mock.calls.len(), 2);
+    assert_eq!(mock.calls[0].rendered(), "ps -p 999 -o lstart=");
+    assert_eq!(mock.calls[1].rendered(), "ps -p 999 -o stat=");
+    assert_eq!(receipt.commands_executed, 2);
+    assert_eq!(mock.remaining(), 0);
+    assert_eq!(
+        std::fs::read(RunRecord::run_dir(repo, "core-run").join("run.json")).unwrap(),
+        before
+    );
+    assert!(record.resources.lease.as_ref().unwrap().lock_dir.exists());
+}
+
+#[test]
+fn a_live_walking_owner_refuses_the_whole_cleanup_without_commands_or_save() {
+    let repo = common::temp_repo();
+    let mut record = core_record(&repo);
+    let siblings = ios_ready_record(&repo);
+    record.resources.ios_simulator = siblings.resources.ios_simulator;
+    record.resources.metro = siblings.resources.metro;
+    record.save(&repo).unwrap();
+    let before = std::fs::read(RunRecord::run_dir(&repo, "core-run").join("run.json")).unwrap();
+    let mut mock = MockRunner::new();
+    mock.expect_run(
+        "ps -p 999 -o lstart=",
+        CmdOutput::success("Wed Aug 12 15:00:00 2026"),
+    );
+    mock.expect_run("ps -p 999 -o stat=", CmdOutput::success("S"));
+
+    let receipt = cleanup(&mut mock, &repo, "core-run");
+
+    assert_live_owner_refusal(&receipt, &record, &mock, &repo, &before);
+}
+
+#[test]
+fn an_unknown_owner_refuses_only_the_core_and_other_legs_still_run() {
+    assert_core_only_refusal_with_metro(true);
+}
+
+#[test]
+fn a_record_without_owner_identity_keeps_core_only_refusal() {
+    assert_core_only_refusal_with_metro(false);
+}
+
+fn assert_core_only_refusal_with_metro(with_owner: bool) {
+    let repo = common::temp_repo();
+    let mut record = core_record(&repo);
+    record.resources.metro = ios_ready_record(&repo).resources.metro;
+    if !with_owner {
+        record.prepare = None;
+    }
+    record.save(&repo).unwrap();
+    let before = std::fs::read(RunRecord::run_dir(&repo, "core-run").join("run.json")).unwrap();
+    let mut mock = MockRunner::new();
+    if with_owner {
+        mock.expect_run("ps -p 999 -o lstart=", CmdOutput::failed(1, "ps denied"));
+    }
+    mock.expect_run("ps -p 5000 -o lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("ps -p 5000 -o stat=", CmdOutput::success("S"));
+    mock.expect_run("lsof", free_port());
+    mock.expect_run("/bin/kill -TERM -- -5000", CmdOutput::success(""));
+    mock.expect_run("/bin/kill -KILL -- -5000", CmdOutput::success(""));
+    mock.expect_run("ps -p 5000 -o lstart=", CmdOutput::success(""));
+    mock.expect_run("lsof", free_port());
+
+    let receipt = cleanup(&mut mock, &repo, "core-run");
+
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    assert_eq!(
+        receipt.cleanup["core"],
+        "refused: the run's qaren process is alive or unproven gone"
+    );
+    assert_eq!(receipt.cleanup["metro"], "removed");
+    assert!(receipt.cleanup["device_lease"].starts_with("unresolved: retained"));
+    assert_eq!(mock.calls.len(), if with_owner { 8 } else { 7 });
+    assert_eq!(
+        mock.calls
+            .iter()
+            .filter(|spec| spec.rendered() == "ps -p 999 -o lstart=")
+            .count(),
+        usize::from(with_owner)
+    );
+    assert_eq!(mock.remaining(), 0);
+    let stored = RunRecord::load(&repo, "core-run").unwrap();
+    assert_eq!(stored.resources.core.unwrap().pgid, 9000);
+    assert!(stored.resources.core_cleanup.is_none());
+    assert_eq!(stored.history.len(), record.history.len() + 1);
+    assert_ne!(
+        std::fs::read(RunRecord::run_dir(&repo, "core-run").join("run.json")).unwrap(),
+        before
+    );
+    assert!(record.resources.lease.as_ref().unwrap().lock_dir.exists());
+}
+
+#[test]
+fn a_reused_owner_pid_counts_as_gone() {
+    let repo = common::temp_repo();
+    let record = core_record(&repo);
+    let lock = record.resources.lease.as_ref().unwrap().lock_dir.clone();
+    record.save(&repo).unwrap();
+    let mut mock = MockRunner::new();
+    mock.expect_run(
+        "ps -p 999 -o lstart=",
+        CmdOutput::success("Thu Aug 13 09:00:00 2026"),
+    );
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n9001 9000 S\n"));
+    mock.expect_run("ps -p 9000 -o lstart=", CmdOutput::failed(1, ""));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+
+    let receipt = cleanup(&mut mock, &repo, "core-run");
+
+    assert_eq!(receipt.cleanup["core"], "absent");
+    assert_eq!(receipt.cleanup["device_lease"], "removed");
+    assert!(!lock.exists());
+    assert_eq!(mock.remaining(), 0);
+}
+
+struct TestProcesses {
+    owner: std::process::Child,
+    groups: Vec<qaren::runrecord::PidIdentity>,
+}
+
+impl Drop for TestProcesses {
+    fn drop(&mut self) {
+        let _ = self.owner.kill();
+        let _ = self.owner.wait();
+        for core in &self.groups {
+            let live = qaren::runrecord::probe_pid_identity(&mut RealRunner::new(), core);
+            if live == qaren::runrecord::PidLiveness::AliveMatching {
+                let _ = std::process::Command::new("/bin/kill")
+                    .args(["-KILL", "--", &format!("-{}", core.pid)])
+                    .status();
+            }
+        }
+    }
+}
+
+fn process_exists(pid: i32) -> bool {
+    std::process::Command::new("/bin/kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+#[test]
+fn a_live_owner_keeps_a_real_core_group_alive_until_the_owner_is_gone() {
+    let mut processes = TestProcesses {
+        owner: std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap(),
+        groups: Vec::new(),
+    };
+    let owner_pid = processes.owner.id() as i32;
+    let prepare = qaren::runrecord::capture_pid_identity(&mut RealRunner::new(), owner_pid);
+    assert!(prepare.is_some());
+
+    let core_identity = spawn_test_group(&mut processes);
+    let core_pid = core_identity.pid;
+    let metro_identity = spawn_test_group(&mut processes);
+    let metro_pid = metro_identity.pid;
+    let port_reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let metro_port = port_reservation.local_addr().unwrap().port();
+
+    let repo = common::temp_repo();
+    let mut record = common::base_record(
+        &repo,
+        &common::ios_scenario_yaml(8791),
+        "core-run",
+        Phase::Walking,
+    );
+    record.prepare = prepare;
+    record.resources.core = Some(qaren::runrecord::CoreResource {
+        pgid: core_pid,
+        identity: Some(core_identity),
+    });
+    record.resources.metro = Some(MetroResource {
+        port: metro_port,
+        endpoint: format!("http://127.0.0.1:{metro_port}"),
+        spawned: Spawned {
+            pid: metro_pid,
+            pgid: metro_pid,
+        },
+        identity: Some(metro_identity),
+        log: repo.join("metro.log"),
+    });
+    record.save(&repo).unwrap();
+    let before = std::fs::read(RunRecord::run_dir(&repo, "core-run").join("run.json")).unwrap();
+    drop(port_reservation);
+
+    let receipt = cleanup(&mut RealRunner::new(), &repo, "core-run");
+    assert_eq!(
+        receipt.cleanup["core"],
+        "refused: the run's qaren process is alive or unproven gone"
+    );
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    assert!(process_exists(core_pid));
+    assert!(process_exists(metro_pid));
+    assert_eq!(
+        std::fs::read(RunRecord::run_dir(&repo, "core-run").join("run.json")).unwrap(),
+        before
+    );
+
+    processes.owner.kill().unwrap();
+    processes.owner.wait().unwrap();
+    let receipt = cleanup(&mut RealRunner::new(), &repo, "core-run");
+    assert_eq!(receipt.cleanup["core"], "removed", "{:?}", receipt.cleanup);
+    assert_eq!(receipt.cleanup["metro"], "removed", "{:?}", receipt.cleanup);
+    assert!(!process_exists(core_pid));
+    assert!(!process_exists(metro_pid));
+}
+
+fn spawn_test_group(processes: &mut TestProcesses) -> qaren::runrecord::PidIdentity {
+    let spawned = std::process::Command::new("sh")
+        .args([
+            "-c",
+            "perl -e 'setpgrp(0,0); exec q(sleep), 30' </dev/null >/dev/null 2>&1 & echo $!",
+        ])
+        .output()
+        .unwrap();
+    let pid: i32 = String::from_utf8(spawned.stdout)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let identity = qaren::runrecord::capture_pid_identity(&mut RealRunner::new(), pid).unwrap();
+    processes.groups.push(identity.clone());
+    let leads_group = || {
+        std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "pgid="])
+            .output()
+            .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).trim() == pid.to_string())
+    };
+    for _ in 0..100 {
+        if leads_group() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(leads_group());
+    identity
 }
 
 fn ios_ready_record(repo: &std::path::Path) -> RunRecord {

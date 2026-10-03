@@ -151,14 +151,40 @@ pub fn cleanup_with(
         }
     }
 
+    let owner_refusal =
+        || Outcome::Refused("the run's qaren process is alive or unproven gone".to_string());
+    let owner = match (&record.resources.core, &record.prepare) {
+        (Some(_), Some(prepare)) => Some(probe_pid_identity(runner, prepare)),
+        _ => None,
+    };
+    if owner == Some(PidLiveness::AliveMatching) {
+        return finish_cleanup(
+            runner,
+            runs_root,
+            run_id,
+            remove_app,
+            &mut record,
+            vec![("core".to_string(), owner_refusal())],
+            false,
+        );
+    }
+
     let mut outcomes: Vec<(String, Outcome)> = Vec::new();
 
     if let Some(outcome) = cleanup_build(runner, &mut record, runs_root) {
         outcomes.push(("build_process".to_string(), outcome));
     }
 
-    if let Some(outcome) = cleanup_core(runner, &mut record, runs_root, false) {
-        outcomes.push(("core".to_string(), outcome));
+    if record.resources.core.is_some() {
+        let owner_gone = matches!(owner, Some(PidLiveness::Dead | PidLiveness::AliveForeign));
+        let outcome = if owner_gone {
+            cleanup_core(runner, &mut record, runs_root, false)
+        } else {
+            Some(owner_refusal())
+        };
+        if let Some(outcome) = outcome {
+            outcomes.push(("core".to_string(), outcome));
+        }
     }
     if let Some(m) = record.resources.metro.clone() {
         outcomes.push((
@@ -471,6 +497,27 @@ pub fn cleanup_with(
         outcomes.push(("build_lock".to_string(), outcome));
     }
 
+    finish_cleanup(
+        runner,
+        runs_root,
+        run_id,
+        remove_app,
+        &mut record,
+        outcomes,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_cleanup(
+    runner: &mut dyn Runner,
+    runs_root: &Path,
+    run_id: &str,
+    remove_app: Option<&str>,
+    record: &mut RunRecord,
+    outcomes: Vec<(String, Outcome)>,
+    persist: bool,
+) -> Receipt {
     let all_clean = outcomes.iter().all(|(_, o)| o.clean());
     let any_refused = outcomes
         .iter()
@@ -484,18 +531,22 @@ pub fn cleanup_with(
     };
 
     let at = timefmt::iso8601_utc(runner.now_epoch_ms());
-    let note: Vec<String> = outcomes
-        .iter()
-        .map(|(n, o)| format!("{n}={}", o.render()))
-        .collect();
-    record.push_history(at.clone(), &format!("cleanup: {}", note.join(" ")));
     let prev_phase = record.phase;
-    if all_clean {
-        record.phase = Phase::Cleaned;
-    } else if remove_app.is_some() && record.phase == Phase::Cleaned {
-        record.phase = Phase::Failed;
-    }
-    let save_result = record.save(runs_root);
+    let save_result = if persist {
+        let note: Vec<String> = outcomes
+            .iter()
+            .map(|(n, o)| format!("{n}={}", o.render()))
+            .collect();
+        record.push_history(at.clone(), &format!("cleanup: {}", note.join(" ")));
+        if all_clean {
+            record.phase = Phase::Cleaned;
+        } else if remove_app.is_some() && record.phase == Phase::Cleaned {
+            record.phase = Phase::Failed;
+        }
+        record.save(runs_root)
+    } else {
+        Ok(())
+    };
     // A cleaned verdict that could not be made durable is not a cleaned run:
     // the next status would read the stale phase and contradict this receipt.
     // The receipt must also carry the durable phase, not the in-memory one.
