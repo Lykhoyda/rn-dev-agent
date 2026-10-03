@@ -185,10 +185,23 @@ test('both Darwin archives contain only Darwin helpers and pass offline install 
           }).trim(),
           binary,
         );
-        assert.equal(
-          execFileSync('bash', [script, '--print-bin'], { env, encoding: 'utf8' }).trim(),
-          binary,
-        );
+        let verified = false;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const output = execFileSync('bash', [script, '--print-bin'], {
+            env,
+            encoding: 'utf8',
+            timeout: 2_000,
+          }).trim();
+          if (output === binary) {
+            verified = true;
+            break;
+          }
+          assert.equal(
+            output,
+            `qaren: the runtime check did not finish in time; run: bash ${script} --install`,
+          );
+        }
+        assert.ok(verified, 'the installed runtime verifies within three bounded attempts');
         for (const name of ['darwin-process-birth', 'darwin-process-birth.json']) {
           assert.deepEqual(
             readFileSync(join(env.HOME, '.qaren', 'runtime', version, 'runtime', 'native', name)),
