@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -174,7 +175,9 @@ test('both Darwin archives contain only Darwin helpers and pass offline install 
           HOME: join(dir, platform),
           PATH: `${stubs}:${process.env.PATH}`,
         };
-        const binary = join(env.HOME, '.qaren', 'runtime', version, 'bin', 'qaren');
+        mkdirSync(env.HOME);
+        // The installer resolves the runtime root to its real path (/var is /private/var on macOS).
+        const binary = join(realpathSync(env.HOME), '.qaren', 'runtime', version, 'bin', 'qaren');
         assert.equal(
           execFileSync('bash', [script, '--install', '--from-file', archive], {
             env,

@@ -184,6 +184,10 @@ function buildCli(platform: QarenPlatform): string {
     `--remap-path-prefix=${cargoHome}=/cargo`,
     `--remap-path-prefix=${targetDir}=/target`,
     ...rustSourceRemap(),
+    // The linker's debug map names std's rlibs by absolute path and LC_UUID is hashed over it,
+    // so drop that map: the UUID then no longer depends on where the toolchain is installed.
+    '-C',
+    'link-arg=-Wl,-S',
   ];
   const env = { ...process.env, CARGO_ENCODED_RUSTFLAGS: flags.join('\x1f') };
   delete env.RUSTFLAGS;

@@ -68,6 +68,10 @@ with tarfile.open(out, "w:gz", format=tarfile.USTAR_FORMAT, compresslevel=1) as 
     elif kind == "manyfiles":
         for i in range(300):
             add(tar, f"{top}/runtime/many/{i}", b"x")
+    elif kind == "large":
+        info = tarfile.TarInfo(f"{top}/runtime/zeros")
+        info.size = 128 << 20
+        tar.addfile(info, Zeros())
     elif kind == "flood":
         for i in range(10001):
             add(tar, f"{top}/runtime/flood/{i}")
@@ -125,6 +129,8 @@ kill_paused() {
 reset_home() { rm -rf "$tmp/home"; mkdir -p "$tmp/home"; }
 
 DEST="$tmp/home/.qaren/runtime/$VERSION"
+# The installer resolves the runtime root to its real path (/var is /private/var on macOS).
+REAL_DEST="$(cd -P "$tmp" && pwd -P)/home/.qaren/runtime/$VERSION"
 
 # A good tarball installs and records its digest.
 reset_home
@@ -132,7 +138,7 @@ make_tarball "$tmp/good.tgz" good
 write_manifest "$tmp/good.tgz"
 out=$(run_install "$tmp/good.tgz"); rc=$?
 check "good tarball installs" 0 "$rc"
-check "prints the installed binary" "$DEST/bin/qaren" "$out"
+check "prints the installed binary" "$REAL_DEST/bin/qaren" "$out"
 check "installed binary runs" qaren "$("$DEST/bin/qaren")"
 check "digest is recorded" "$(shasum -a 256 "$tmp/good.tgz" | cut -d' ' -f1)" "$(cat "$DEST/.tarball-sha256")"
 check "no staging left behind" 0 "$(leftovers)"
@@ -141,7 +147,7 @@ check "no staging left behind" 0 "$(leftovers)"
 before=$(ls -lTR "$DEST" 2>/dev/null || ls -l --full-time -R "$DEST")
 out=$(run_install "$tmp/does-not-exist.tgz"); rc=$?
 check "re-install exits 0" 0 "$rc"
-check "re-install prints the same binary" "$DEST/bin/qaren" "$out"
+check "re-install prints the same binary" "$REAL_DEST/bin/qaren" "$out"
 check "re-install leaves the runtime untouched" "$before" "$(ls -lTR "$DEST" 2>/dev/null || ls -l --full-time -R "$DEST")"
 
 # A tampered byte is refused and nothing is installed.
@@ -363,7 +369,7 @@ check "the longer version's staging is untouched" other "$(cat "$OTHER/previous/
 check "nothing of it is restored into this version" "$GOOD_SHA" "$(cat "$DEST/.tarball-sha256" 2>&1)"
 rm -rf "$OTHER"
 hint=$(HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
-check "after it, print-bin sees this version installed" "$DEST/bin/qaren" "$hint"
+check "after it, print-bin sees this version installed" "$REAL_DEST/bin/qaren" "$hint"
 
 # The unpacked size is bounded before extraction and checked again on disk after it.
 stale_runtime
@@ -426,6 +432,164 @@ printf '{"version":"%s","assets":{"ios":[],"android":[]}}\n' "$VERSION" > "$tmp/
 run_install "$tmp/good.tgz" >/dev/null; rc=$?
 check "no asset for this host refuses" 1 "$rc"
 check "no asset: nothing installed" no "$([ -e "$DEST" ] && echo yes || echo no)"
+
+# Archive shapes the qaren build never writes are refused before tar unpacks anything.
+GOOD_SHA=$(shasum -a 256 "$tmp/good.tgz" | cut -d' ' -f1)
+refused_before_extract() {  # <label> <tarball> <message>
+  stale_runtime
+  local before
+  before=$(runtime_snapshot)
+  write_manifest "$2"
+  run_install "$2" >/dev/null; rc=$?
+  check "$1 is refused" 1 "$rc"
+  check "$1: says why" yes "$(grep -q "$3" "$tmp/stderr" && echo yes || echo "no: $(cat "$tmp/stderr")")"
+  check "$1: refused before extraction" no "$(grep -q 'bytes on disk' "$tmp/stderr" && echo yes || echo no)"
+  check "$1: the prior runtime is byte-identical" "$before" "$(runtime_snapshot)"
+  check "$1: no staging left behind" 0 "$(leftovers)"
+  check "$1: the lock is free" yes "$(lock_free)"
+}
+gzip -c "$tmp/good.tgz" > "$tmp/nested.tgz"
+refused_before_extract "a gzip nested in a gzip" "$tmp/nested.tgz" "is not one gzip layer over a tar archive"
+make_tarball "$tmp/bomb.tgz" bomb
+gzip -c "$tmp/bomb.tgz" > "$tmp/nestedbomb.tgz"
+rm -f "$tmp/bomb.tgz"
+refused_before_extract "a nested 1 GiB bomb" "$tmp/nestedbomb.tgz" "is not one gzip layer over a tar archive"
+rm -f "$tmp/nestedbomb.tgz"
+
+# sparse_tarball <out> <hole bytes>: the good tree plus a PAX-sparse file of that logical size.
+sparse_tarball() {
+  local tree="$tmp/sparse-tree"
+  rm -rf "$tree"
+  mkdir -p "$tree"
+  tar -xzf "$tmp/good.tgz" -C "$tree"
+  python3 -c 'import sys; f = open(sys.argv[1], "wb"); f.seek(int(sys.argv[2])); f.write(b"x"); f.close()' \
+    "$tree/$TOP/runtime/hole" "$2"
+  if command -v bsdtar >/dev/null 2>&1; then
+    COPYFILE_DISABLE=1 bsdtar --format pax --read-sparse --no-mac-metadata --no-xattrs -czf "$1" -C "$tree" "$TOP"
+  else
+    tar --sparse --format=pax -czf "$1" -C "$tree" "$TOP"
+  fi
+  rm -rf "$tree"
+  check "fixture $(basename "$1") really is sparse" yes \
+    "$(gzip -dc "$1" | LC_ALL=C grep -a -q 'GNU.sparse' && echo yes || echo no)"
+}
+sparse_tarball "$tmp/sparse-big.tgz" $((8 << 30))
+refused_before_extract "an 8 GiB sparse entry" "$tmp/sparse-big.tgz" "would unpack to at least 85899"
+sparse_tarball "$tmp/sparse-small.tgz" $((16 << 20))
+refused_before_extract "a small sparse entry" "$tmp/sparse-small.tgz" "tar headers the qaren build never writes"
+rm -f "$tmp/sparse-big.tgz" "$tmp/sparse-small.tgz"
+
+# A listing line this installer cannot read reliably stops the install instead of being guessed.
+real_tar=$(PATH="${PATH#"$tmp/stubs:"}" command -v tar)
+cat > "$tmp/stubs/tar" <<SH
+#!/bin/sh
+if [ "\$1" = --numeric-owner ]; then
+  echo "-rw-r--r--  0 some owner 0 1 Jan  1  1970 $TOP/bin/qaren"
+  exit 0
+fi
+exec "$real_tar" "\$@"
+SH
+chmod +x "$tmp/stubs/tar"
+refused_before_extract "an unreadable listing line" "$tmp/good.tgz" "cannot read reliably"
+rm -f "$tmp/stubs/tar"
+
+# A legitimate large entry under the ceiling still installs.
+stale_runtime
+make_tarball "$tmp/large.tgz" large
+write_manifest "$tmp/large.tgz"
+out=$(run_install "$tmp/large.tgz"); rc=$?
+check "a 128 MiB entry under the ceiling installs" 0 "$rc"
+check "128 MiB entry: the runtime records its digest" "$(shasum -a 256 "$tmp/large.tgz" | cut -d' ' -f1)" "$(cat "$DEST/.tarball-sha256" 2>&1)"
+rm -f "$tmp/large.tgz"
+
+# A download that stalls after its installer is killed never holds the lock or lands anywhere.
+reset_home
+write_manifest "$tmp/good.tgz"
+cat > "$tmp/stubs/curl" <<SH
+#!/bin/sh
+echo \$\$ >> "$tmp/sleep-pids"
+head -c 102400 /dev/zero
+: > "$tmp/curl-started"
+exec "$(PATH="${PATH#"$tmp/stubs:"}" command -v sleep)" 30
+SH
+chmod +x "$tmp/stubs/curl"
+rm -f "$tmp/curl-started"
+HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --install >/dev/null 2>&1 &
+installer=$!
+waited=0
+while [ ! -e "$tmp/curl-started" ] && [ "$waited" -lt 200 ]; do sleep 0.05; waited=$((waited + 1)); done
+kill -9 "$installer" 2>/dev/null
+wait "$installer" 2>/dev/null
+check "a stalled download leaves the lock free at once" yes "$(lock_free)"
+rm -f "$tmp/stubs/curl"
+out=$(run_install "$tmp/good.tgz"); rc=$?
+check "after a stalled download the next install heals and succeeds" 0 "$rc"
+check "after a stalled download: the runtime is complete" "$GOOD_SHA" "$(cat "$DEST/.tarball-sha256" 2>&1)"
+check "after a stalled download: no staging left behind" 0 "$(leftovers)"
+check "the stalled download's bytes land nowhere" 0 \
+  "$(find "$tmp/home/.qaren" -type f -size 102400c 2>/dev/null | wc -l | tr -d ' ')"
+
+# ~/.qaren or its runtime directory may point at storage the user owns; anything else is refused.
+root_case() {  # <label> sets up $tmp/home, then installs
+  out=$(HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --install --from-file "$tmp/good.tgz" 2>"$tmp/stderr"); rc=$?
+}
+reset_home
+mkdir -p "$tmp/home/.qaren" "$tmp/store1"
+ln -s "$tmp/store1" "$tmp/home/.qaren/runtime"
+root_case
+STORE1=$(cd -P "$tmp/store1" && pwd -P)
+check "runtime linked to owned storage installs" 0 "$rc"
+check "owned storage: the runtime lands in the real directory" "$GOOD_SHA" "$(cat "$STORE1/$VERSION/.tarball-sha256" 2>&1)"
+check "owned storage: the lock lives in the real directory" yes "$([ -f "$STORE1/.lock-$VERSION" ] && echo yes || echo no)"
+hint=$(HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin)
+check "owned storage: print-bin hands out the installed binary" "$STORE1/$VERSION/bin/qaren" "$hint"
+
+reset_home
+rm -rf "$tmp/store2"
+mkdir -p "$tmp/store2"
+ln -s "$tmp/store2" "$tmp/home/.qaren"
+root_case
+check "~/.qaren linked to owned storage installs" 0 "$rc"
+check "linked ~/.qaren: the runtime lands under it" "$GOOD_SHA" \
+  "$(cat "$(cd -P "$tmp/store2" && pwd -P)/runtime/$VERSION/.tarball-sha256" 2>&1)"
+
+ROOT_OWNED_DIR=/usr
+reset_home
+mkdir -p "$tmp/home/.qaren"
+ln -s "$ROOT_OWNED_DIR" "$tmp/home/.qaren/runtime"
+root_case
+check "a runtime linked to a directory owned by someone else is refused" 1 "$rc"
+check "foreign root: says so" yes "$(grep -q 'resolves to a directory you do not own' "$tmp/stderr" && echo yes || echo no)"
+
+FOREIGN_PARENT="/tmp/qaren-root-test-$$"
+rm -rf "$FOREIGN_PARENT"
+mkdir -p "$FOREIGN_PARENT"
+reset_home
+mkdir -p "$tmp/home/.qaren"
+ln -s "$FOREIGN_PARENT" "$tmp/home/.qaren/runtime"
+root_case
+check "a runtime inside a directory owned by someone else is refused" 1 "$rc"
+check "foreign parent: says so" yes "$(grep -q 'resolves to a directory you do not own' "$tmp/stderr" && echo yes || echo no)"
+check "foreign parent: nothing is written" "" "$(ls -A "$FOREIGN_PARENT")"
+# A planted, complete runtime there is never handed out by the hook.
+mkdir -p "$FOREIGN_PARENT/$VERSION/bin"
+printf '#!/bin/sh\n' > "$FOREIGN_PARENT/$VERSION/bin/qaren"
+chmod +x "$FOREIGN_PARENT/$VERSION/bin/qaren"
+printf '%s\n' "$GOOD_SHA" > "$FOREIGN_PARENT/$VERSION/.tarball-sha256"
+hint=$(HOME="$tmp/home" bash "$tmp/plugin/scripts/ensure-qaren.sh" --print-bin); rc=$?
+check "foreign parent: print-bin exits 0" 0 "$rc"
+check "foreign parent: print-bin refuses to hand out the planted binary" yes \
+  "$(grep -q 'is not a directory you own' <<< "$hint" && ! grep -q "bin/qaren\$" <<< "$hint" && echo yes || echo "no: $hint")"
+rm -rf "$FOREIGN_PARENT"
+
+reset_home
+mkdir -p "$tmp/home/.qaren"
+ln -s "$tmp/nowhere" "$tmp/home/.qaren/runtime"
+root_case
+check "a dangling runtime link is refused" 1 "$rc"
+check "dangling root: an ensure-qaren message, not a raw tool error" yes \
+  "$(grep -q '^ensure-qaren: cannot use' "$tmp/stderr" && ! grep -q '^mkdir' "$tmp/stderr" && echo yes || echo "no: $(cat "$tmp/stderr")")"
+check "dangling root: the link target is never created" no "$([ -e "$tmp/nowhere" ] && echo yes || echo no)"
 
 [ -f "$tmp/sleep-pids" ] && kill $(cat "$tmp/sleep-pids") 2>/dev/null
 exit "$fail"

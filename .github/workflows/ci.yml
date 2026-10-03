@@ -146,12 +146,19 @@ jobs:
       - run: corepack yarn install --immutable
       - name: Rust targets for both macOS architectures
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
-      - name: Two builds of one commit are byte-identical
+      - name: Two builds of one commit are byte-identical, the second with a relocated toolchain
         run: |
           V=$(jq -r '.version' packages/qaren-plugin/.claude-plugin/plugin.json)
           echo "V=$V" >> "$GITHUB_ENV"
           node scripts/build-qaren-tarball.ts --version "$V" --platform darwin-arm64 --out-dir "$RUNNER_TEMP/first"
-          CARGO_TARGET_DIR="$RUNNER_TEMP/fresh-target" \
+          cp -Rp "$(rustc --print sysroot)" "$RUNNER_TEMP/relocated-toolchain"
+          RELOCATED="$RUNNER_TEMP/relocated-toolchain/bin/rustc"
+          echo "global sysroot: $(rustc --print sysroot)"
+          echo "relocated sysroot: $("$RELOCATED" --print sysroot)"
+          # Equal sysroots would make the comparison below prove nothing.
+          [ "$(rustc --print sysroot)" != "$("$RELOCATED" --print sysroot)" ] \
+            || { echo "::error::the relocated toolchain reports the global sysroot" >&2; exit 1; }
+          RUSTC="$RELOCATED" CARGO_TARGET_DIR="$RUNNER_TEMP/fresh-target" \
             node scripts/build-qaren-tarball.ts --version "$V" --platform darwin-arm64 --out-dir "$RUNNER_TEMP/second"
           cmp "$RUNNER_TEMP/first/qaren-$V-darwin-arm64.tar.gz" "$RUNNER_TEMP/second/qaren-$V-darwin-arm64.tar.gz"
       - name: x64 cross-build carries an x86_64 binary

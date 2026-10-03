@@ -66,6 +66,8 @@ bounded() {
 }
 
 DEST="$tmp/home/.qaren/runtime/$VERSION"
+# The installer resolves the runtime root to its real path (/var is /private/var on macOS).
+REAL_DEST="$(cd -P "$tmp" && pwd -P)/home/.qaren/runtime/$VERSION"
 
 write_manifest
 hook
@@ -119,7 +121,7 @@ check "mismatched runtime stays byte-identical" "$before" "$(snapshot)"
 printf '%s\n' "$SHA" > "$DEST/.tarball-sha256"
 hook
 bounded "verified runtime"
-check "verified runtime: prints the binary" "$DEST/bin/qaren" "$out"
+check "verified runtime: prints the binary" "$REAL_DEST/bin/qaren" "$out"
 
 printf '{"version":"%s","assets":{"ios":[],"android":[]}}\n' "$VERSION" > "$tmp/plugin/runner-manifest.json"
 hook

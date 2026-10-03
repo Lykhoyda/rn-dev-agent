@@ -117,8 +117,41 @@ interrupted_install() {
   return 1
 }
 
+# ~/.qaren or its runtime directory may link to other storage you own. Resolve the root once and
+# work only on the real directory; returns 1 when it is not a directory, 2 when you do not own it
+# or the directory holding it.
+real_root() {
+  local real
+  real=$(cd -P "$RUNTIME_ROOT" 2>/dev/null && pwd -P) || return 1
+  [ -O "$real" ] && [ -O "${real%/*}" ] || return 2
+  RUNTIME_ROOT="$real"
+}
+
+# Creates the missing parts of ~/.qaren/runtime only inside a directory already proven to be yours.
+make_root() {
+  local parent="${RUNTIME_ROOT%/*}" real_parent
+  if [ ! -e "$RUNTIME_ROOT" ] && [ ! -L "$RUNTIME_ROOT" ]; then
+    if [ -e "$parent" ] || [ -L "$parent" ]; then
+      real_parent=$(cd -P "$parent" 2>/dev/null && pwd -P) || return 1
+    else
+      real_parent=$(cd -P "$HOME" 2>/dev/null && pwd -P) || return 1
+      [ -O "$real_parent" ] || return 2
+      mkdir "$real_parent/${parent##*/}" 2>/dev/null || [ -d "$real_parent/${parent##*/}" ] || return 1
+      real_parent="$real_parent/${parent##*/}"
+    fi
+    [ -O "$real_parent" ] || return 2
+    mkdir "$real_parent/${RUNTIME_ROOT##*/}" 2>/dev/null || [ -d "$real_parent/${RUNTIME_ROOT##*/}" ] || return 1
+  fi
+  real_root
+}
+
 print_bin() {
   local result pid deadline=$((SECONDS + PRINT_BIN_BUDGET_SECONDS)) asset version name sha bytes
+  # Never hand out a binary from a root this user does not own.
+  if [ -e "$RUNTIME_ROOT" ] && ! real_root; then
+    echo "qaren: the qaren runtime directory $RUNTIME_ROOT is not a directory you own; inspect it"
+    return 0
+  fi
   result=$(mktemp) || { echo "qaren: cannot create a temporary file"; return 0; }
   read_asset > "$result" 2>&1 &
   pid=$!
@@ -206,12 +239,18 @@ install() {
   local asset version name sha bytes dest
   asset=$(expected_asset) || exit 1
   { read -r version; read -r name; read -r sha; read -r bytes; } <<< "$asset"
-  dest="$RUNTIME_ROOT/$version"
   [[ "${HOME:-}" == /?* ]] || refuse "HOME is not an absolute path"
+  local root_rc=0
+  make_root || root_rc=$?
+  case "$root_rc" in
+    0) ;;
+    1) refuse "cannot use $RUNTIME_ROOT: it or a parent is a dangling link or not a directory" ;;
+    *) refuse "the qaren runtime directory $RUNTIME_ROOT resolves to a directory you do not own, or inside one; point it at storage you own" ;;
+  esac
+  dest="$RUNTIME_ROOT/$version"
   # Leftover staging means a killed install to heal, even when the runtime itself is complete.
   has_staging "$version" || ! installed_bin "$version" "$sha" || return 0
 
-  mkdir -p "$RUNTIME_ROOT"
   take_lock "$version"
   [ -L "$dest" ] && refuse "$dest is a symbolic link; inspect it and remove it before installing"
   heal "$version"
@@ -230,7 +269,9 @@ install() {
     cp "$FROM_FILE" "$tarball" || refuse "cannot read $FROM_FILE"
   else
     command -v curl >/dev/null 2>&1 || refuse "curl is required to download $name"
-    curl -fsSL --retry 3 --proto '=https' --proto-redir '=https' --tlsv1.2 -o "$tarball" "$RELEASES/v$version/$name" \
+    # The shell opens the file, so a download stalled after its installer died can never create
+    # anything later; only curl drops the lock, because only a network read can stall unbounded.
+    nolock curl -fsSL --retry 3 --proto '=https' --proto-redir '=https' --tlsv1.2 "$RELEASES/v$version/$name" > "$tarball" \
       || refuse "could not download $RELEASES/v$version/$name"
   fi
 
@@ -245,6 +286,10 @@ install() {
   got=$(exec 9>&-; { gzip -dc "$tarball" 2>/dev/null || true; } | head -c $((MAX_UNPACKED_BYTES + 1)) | wc -c | tr -d ' ')
   [ "$got" -le "$MAX_UNPACKED_BYTES" ] \
     || refuse "$name would unpack to more than $MAX_UNPACKED_BYTES bytes, above the unpacked-size ceiling; nothing installed"
+  # Exactly one gzip layer over a ustar archive, checked before tar peels any layer itself.
+  [ "$(exec 9>&-; { gzip -dc "$tarball" 2>/dev/null || true; } | head -c 512 \
+      | perl -e 'read STDIN, $b, 512; print substr($b, 257, 5)')" = ustar ] \
+    || refuse "$name is not one gzip layer over a tar archive; nothing installed"
 
   local entry entries=0
   while IFS= read -r entry; do
@@ -256,12 +301,33 @@ install() {
       *) refuse "$name carries an entry outside $top/: $entry" ;;
     esac
   done < <(exec 9>&-; tar -tzf "$tarball")
+  # Each listed size is the logical size tar will write, sparse holes included. Owners are listed
+  # numerically so no name can shift a column; any line outside these two shapes stops the install.
+  local size logical=0 frame=0
+  local bsd_line='^[-d][rwxsStT-]{9}[@+]?[[:space:]]+[0-9]+[[:space:]]+[0-9]+[[:space:]]+[0-9]+[[:space:]]+([0-9]+)[[:space:]]'
+  local gnu_line='^[-d][rwxsStT-]{9}[[:space:]]+[0-9]+/[0-9]+[[:space:]]+([0-9]+)[[:space:]]'
   while IFS= read -r entry; do
     case "$entry" in
       [-d]*) ;;
       *) refuse "$name carries a link or special file: $entry" ;;
     esac
-  done < <(exec 9>&-; tar -tvzf "$tarball")
+    if [[ "$entry" =~ $bsd_line ]] || [[ "$entry" =~ $gnu_line ]]; then
+      size="${BASH_REMATCH[1]}"
+    else
+      refuse "$name lists an entry this installer cannot read reliably: $entry"
+    fi
+    # Twelve digits keep every sum below bash's 64-bit limit; the ceiling check runs per entry.
+    [ "${#size}" -le 12 ] || refuse "$name lists an entry size too large to be real: $entry"
+    logical=$((logical + 10#$size))
+    [ "$logical" -le "$MAX_UNPACKED_BYTES" ] \
+      || refuse "$name would unpack to at least $logical bytes, above the unpacked-size ceiling; nothing installed"
+    frame=$((frame + 512 + (10#$size + 511) / 512 * 512))
+  done < <(exec 9>&-; tar --numeric-owner -tvzf "$tarball")
+  # The qaren build writes one ustar header per entry and a 1024-byte end; Python's tarfile also
+  # pads to a 10240-byte record. Anything else (extended, sparse or long-name headers) is refused.
+  frame=$((frame + 1024))
+  [ "$got" = "$frame" ] || [ "$got" = $(((frame + 10239) / 10240 * 10240)) ] \
+    || refuse "$name carries tar headers the qaren build never writes (extended, sparse or long-name entries); nothing installed"
 
   pause_at extract
   mkdir "$STAGING/x"
