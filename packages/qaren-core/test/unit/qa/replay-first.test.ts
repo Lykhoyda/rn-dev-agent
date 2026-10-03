@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import type { Block } from '../../../dist/qa/plan.js';
 import type { Element, Screen } from '../../../dist/qa/screen.js';
+import { join as joinScreen } from '../../../dist/qa/screen.js';
 import { runPlan, walkBlock, type BlockStore } from '../../../dist/qa/walker.js';
 import type { Ledger, WalkResult } from '../../../dist/qa/ledger.js';
 import { element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
@@ -698,4 +699,67 @@ test('stored fill refresh before authorization re-walks without repeating earlie
   assert.equal(replay.verdict, 'PASS', replay.failure?.seen);
   assert.equal(replay.path, `replay→walk@${blocks(plan)[0].items[1].line}`);
   assert.deepEqual(fake.actions, ['back', 'fill @pin 4711', 'press @save']);
+});
+
+test('a text wait echoed by containers replays without re-walk', async () => {
+  const rect = (y: number, height = 20) => ({ x: 16, y, width: 200, height });
+  const home = joinScreen(
+    [
+      { ref: '@window', index: 0, type: 'Window', rect: { x: 0, y: 0, width: 390, height: 844 } },
+      ...[1, 2, 3, 4].map((index) => ({
+        ref: `@container${index}`,
+        index,
+        parentIndex: index - 1,
+        type: 'Other',
+        label: 'Welcome',
+        rect: rect(100, 400),
+      })),
+      {
+        ref: '@welcome',
+        index: 5,
+        parentIndex: 4,
+        type: 'StaticText',
+        label: 'Welcome',
+        rect: rect(120),
+      },
+      {
+        ref: '@tasks',
+        index: 6,
+        parentIndex: 0,
+        type: 'Button',
+        label: 'Tasks',
+        identifier: 'tab-tasks',
+        hittable: true,
+        enabled: true,
+        rect: rect(800),
+      },
+    ],
+    [],
+    'app',
+    { native: 'complete', react: 'complete' },
+  );
+  const echoed = () => {
+    const fake = app({ welcomeId: '' });
+    const capture = fake.deps.captureScreen;
+    fake.deps.captureScreen = async (...args) => {
+      const shown = await capture(...args);
+      return shown.elements.some((e) => e.ref === '@welcome')
+        ? { ...shown, elements: home.elements, visibleText: home.visibleText }
+        : shown;
+    };
+    return fake;
+  };
+  const dir = root();
+  const first = ledger(await runPlan(blocks(literal), echoed().deps, [], store(dir)));
+  assert.equal(first.verdict, 'PASS', JSON.stringify(first.failure));
+  const before = readFileSync(actionFile(dir), 'utf8');
+  assert.match(before, /- extendedWaitUntil: \{ visible: \{ text: "Welcome" \}, timeout: 15000 \}/);
+  const fake = echoed();
+  const second = ledger(await runPlan(blocks(literal), fake.deps, [], store(dir)));
+  assert.equal(second.verdict, 'PASS', JSON.stringify(second.failure));
+  assert.equal(second.path, 'replay');
+  assert.deepEqual(second.blocks, [{ key: SLUG, outcome: 'pass', source: 'replayed' }]);
+  assert.equal(second.jev.calls, 0);
+  assert.equal(fake.judge.calls.length, 0);
+  assert.equal(readFileSync(actionFile(dir), 'utf8'), before);
 });

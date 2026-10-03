@@ -52,6 +52,7 @@ export type Front = 'app' | 'dev-menu' | 'picker' | 'dialog';
 export interface Screen {
   elements: Element[];
   visibleText: string[];
+  paintedText?: string[];
   front: Front;
   semanticUnassociatedReact?: number;
   coverage?: {
@@ -664,7 +665,9 @@ export function join(
     });
   // Image and container labels are accessibility-only, not assertion evidence.
   const visibleText: string[] = [];
-  for (const { e, i } of ordered) {
+  const paintedText: string[] = [];
+  const paintedKeys = new Set<string>();
+  for (const { n, e, i } of ordered) {
     if (duplicates.has(i) || e.offscreen || e.kind === 'image' || e.kind === 'other') continue;
     const line =
       e.kind === 'input'
@@ -672,11 +675,21 @@ export function join(
           ? `${e.label ?? e.placeholder ?? e.testID ?? 'input'}: ${e.value}`
           : e.label
         : e.label;
-    if (line && visibleText[visibleText.length - 1] !== line) visibleText.push(line);
+    if (!line) continue;
+    const key = JSON.stringify([
+      line,
+      n.rect ? [n.rect.x, n.rect.y, n.rect.width, n.rect.height] : null,
+    ]);
+    if (!paintedKeys.has(key)) {
+      paintedKeys.add(key);
+      paintedText.push(line);
+    }
+    if (visibleText[visibleText.length - 1] !== line) visibleText.push(line);
   }
   return {
     elements: elements.filter((_, i) => !duplicates.has(i)),
     visibleText,
+    paintedText,
     front,
     semanticUnassociatedReact,
     ...(coverage ? { coverage } : {}),

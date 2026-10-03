@@ -256,23 +256,27 @@ function prepareAssertion(
   };
 }
 
+// Stored text is identified by its painted occurrences; container and image labels only echo them.
+function textIdentities(quoted: string, screen: Screen): number {
+  const painted = (screen.paintedText ?? assertionView(screen)).filter(
+    (text) => text === quoted,
+  ).length;
+  return painted || screen.elements.filter((e) => !e.offscreen && e.label === quoted).length;
+}
+
 export function targetVisible(target: Target, screen: Screen): boolean {
   if (target.quoted === undefined) return false;
   if (target.exact) {
     const matches = screen.elements.filter((e) =>
       target.exact === 'id' ? e.testID === target.quoted : e.label === target.quoted,
     );
-    const painted =
-      target.exact === 'text'
-        ? assertionView(screen).filter((text) => text === target.quoted).length
-        : 0;
-    const count = Math.max(matches.length, painted);
+    const count = target.exact === 'text' ? textIdentities(target.quoted, screen) : matches.length;
     if (count !== 1)
       throw new ResolutionError({
         refuse: 'REPLAY_SELECTOR',
         reason: `${count} identities match the stored ${target.exact} "${target.quoted}"`,
       });
-    return matches.length ? !matches[0].offscreen : painted === 1;
+    return target.exact === 'text' ? true : !matches[0].offscreen;
   }
   return (
     screen.elements.some(
@@ -296,7 +300,9 @@ export function visibleSelector(target: Target, screen: Screen): Selector | unde
   const labelled = shown.filter((e) => e.label === quoted);
   return target.exact === undefined && labelled.length === 1 && labelled[0].testID
     ? { id: labelled[0].testID }
-    : { text: quoted };
+    : textIdentities(quoted, screen) === 1
+      ? { text: quoted }
+      : undefined;
 }
 
 export function checkQuestion(check: Check): Question {

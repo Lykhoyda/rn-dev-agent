@@ -198,7 +198,7 @@ comment, then the commands with the exact `testID` (or, without one, the label) 
 step used. On the next run a block whose plan lines, platform and app are unchanged
 is replayed by those stored identities through the same walk, without Jev for quoted
 targets or literal checks; phrase checks still ask Jev. A stored identity that no
-longer matches exactly one element before that step authorizes any mutation re-walks
+longer resolves uniquely before that step authorizes any mutation re-walks
 the block from that line; earlier completed steps are kept. Once that step authorizes
 a mutation, its selector failure is terminal. On PASS only the commands under that
 line and later ones are rewritten, and every `✓` comment stays byte-identical. A failing check is a FAIL and
@@ -215,6 +215,15 @@ raw comments, fill literals, literal assertions or stored selectors. The value-f
 reason is `contains a protected plan-typed value` in `blocks_not_saved`. This save
 guard uses recorded private-fill facts only; prefilled secure values and values only
 observed on screen remain uncovered by it. It does not remove existing saved actions.
+
+For quoted waits and scroll-until steps, a stored text selector must match exactly
+one onscreen painted contribution. Equal text or button labels at different native
+rectangles count separately, even when consecutive equal lines appear only once
+in the assertion view. Identical native twins count once; container and image labels
+do not add painted contributions. When no painted contribution matches, uniqueness
+falls back to onscreen label carriers. An ambiguous target without a unique testID
+can satisfy discovery but leaves the block unsaved; replay treats the ambiguous
+stored text as a broken selector under the recovery rules above.
 
 Replay requires the canonical block format emitted by
 [`serializeBlock`](../qaren-core/src/qa/blocks.ts); edited or incompatible files
