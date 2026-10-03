@@ -64,8 +64,10 @@ screen appears unchanged; prior observations do not establish current presence.
 
 When native window geometry is available, literal checks, quoted waits and quoted
 scroll-until targets exclude native text outside the window viewport or its
-ancestor scroll-container clips. Mounted text
-beyond those bounds cannot satisfy the plan until scrolling brings it into view.
+ancestor scroll-container clips. iOS interactive snapshots retain content-less
+Window nodes with their real frames and ancestry to supply this geometry.
+Mounted text beyond those bounds cannot satisfy the plan until scrolling brings
+it into view. Offscreen inputs remain in the privacy inventory for masking.
 This geometric filter does not prove complete visual exposure or occlusion.
 
 Phrase presses require complete native and React coverage and proven React-to-native
@@ -703,11 +705,12 @@ build_and_ready — so revisit this once live reuse is measurable.
   absence; a still-present package or unproven absence is `unresolved`.
   If both probes prove absence before uninstall, the leg is `absent` and
   records uninstall as `not issued`.
-  The attempt (timestamp, observed installed sha256, complete captured
-  exit/stdout/stderr and timeout evidence for uninstall / `pm path` /
-  package list) is persisted to `run.json` at `resources.app_install.removal`
-  before any lease release; a save failure makes the leg `unresolved` and
-  retains the farm lease while independent owned local cleanup continues.
+  The attempt (timestamp, observed installed sha256, and command evidence
+  for uninstall / `pm path` / package list) is persisted to `run.json` at
+  `resources.app_install.removal` before any lease release; command evidence
+  follows the diagnostic redaction contract above. A save failure makes the
+  leg `unresolved` and retains the farm lease while independent owned local
+  cleanup continues.
   The receipt echoes it in `outcomes.app_removal_*`, with the observed hash
   in `outcomes.app_installed_sha256`. The leg folds into the existing verdict:
   a refused or unresolved removal keeps the receipt off `cleaned` and the

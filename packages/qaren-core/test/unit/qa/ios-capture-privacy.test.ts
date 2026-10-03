@@ -367,3 +367,103 @@ test('twin fields that differ only by value keep both values masked on a literal
   assert.equal(all.includes(first) || all.includes(second), false, all);
   assert.equal(shots, 0);
 });
+
+// Producer-shaped interactive QA snapshot: Window is emitted because the runner keeps it for geometry.
+function carousel(scrollX: number) {
+  const screen = { x: 0, y: 0, width: 402, height: 874 };
+  const page = (index: number, x: number, type: string, extra: Record<string, unknown>) => ({
+    index,
+    type,
+    depth: 3,
+    parentIndex: 2,
+    rect: { x: x - scrollX, y: 300, width: 300, height: 40 },
+    enabled: true,
+    hittable: x - scrollX >= 0 && x - scrollX < 402,
+    ...extra,
+  });
+  const nodes = [
+    { index: 0, type: 'Application', depth: 0, rect: screen, enabled: true, hittable: true },
+    {
+      index: 1,
+      type: 'Window',
+      depth: 1,
+      parentIndex: 0,
+      rect: screen,
+      enabled: true,
+      hittable: true,
+    },
+    {
+      index: 2,
+      type: 'ScrollView',
+      depth: 2,
+      parentIndex: 1,
+      rect: screen,
+      enabled: true,
+      hittable: true,
+    },
+  ];
+  const base = nodes.length;
+  return [
+    ...nodes,
+    page(base, 20, 'StaticText', { label: 'Page one' }),
+    page(base + 1, 20 + 804, 'StaticText', { label: 'Page three' }),
+    page(base + 2, 20 + 804, 'TextField', {
+      identifier: 'email',
+      label: 'Email',
+      value: 'offscreen-e@example.test',
+    }),
+    page(base + 3, 20, 'StaticText', { label: 'Signed in as offscreen-e@example.test' }),
+  ];
+}
+
+async function literal(plan: string, tree: unknown[]) {
+  _setFetchForTest(async (url) => {
+    if (String(url).endsWith('/health'))
+      return Response.json({
+        ok: true,
+        protocolVersion: 2,
+        commands: REQUIRED_IOS_COMMANDS,
+        capabilities: [...REQUIRED_IOS_FEATURES, 'QA_READ_ONLY_V1'],
+      });
+    return Response.json({
+      ok: true,
+      data: { nodes: tree, truncated: false },
+    });
+  });
+  const snapshot = createDeviceSnapshotHandler();
+  const f = walker(
+    [],
+    scriptedJudge(() => assert.fail('literal plans must not call Jev')),
+  );
+  f.deps.captureScreen = () =>
+    captureScreen({
+      appId: 'com.test',
+      requirePrivateInputs: true,
+      native: async () => {
+        const result = parseEnvelope(await snapshot({ action: 'snapshot', qaReadOnly: true }));
+        return { ...result.data, snapshotVerdict: result.meta.snapshotVerdict };
+      },
+      react: async () => ({
+        interactive: [],
+        verdict: { state: 'ok', path: 'interactive', complete: true },
+        hostEvidence: { hosts: [], complete: true },
+      }),
+    });
+  const result = await runPlan(parsePlan(plan).blocks!, f.deps);
+  assert.equal(
+    JSON.stringify({ result, rows: f.rows }).includes('offscreen-e@example.test'),
+    false,
+  );
+  return result.verdict;
+}
+
+test('pages outside the native window satisfy no literal check or wait until scrolled into it', async () => {
+  const start = carousel(0);
+  const scrolled = carousel(804);
+  assert.equal(await literal('✓ "Page one"', start), 'PASS');
+  assert.equal(await literal('✓ "Page three"', start), 'FAIL');
+  assert.equal(await literal('1. Wait for "Page three"', start), 'FAIL');
+  assert.equal(await literal('✓ "Not in this app"', start), 'FAIL');
+  assert.equal(await literal('✓ "Page three"', scrolled), 'PASS');
+  assert.equal(await literal('✓ "Page one"', scrolled), 'FAIL');
+});
