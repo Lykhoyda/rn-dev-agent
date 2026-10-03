@@ -1350,7 +1350,7 @@ export async function performExactFill(
   );
 }
 
-async function readReactInputValue(
+export async function readReactInputValue(
   client: CDPClient | null,
   testID: string | null | undefined,
 ): Promise<{ value: string | null; controlled: boolean; focused: boolean } | null> {

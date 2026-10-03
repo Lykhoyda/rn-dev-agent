@@ -146,7 +146,7 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
 }
 
 const PRESSABLE_SUFFIX = '-pressable';
-const withoutPressable = (id: string): string =>
+export const withoutPressable = (id: string): string =>
   id.endsWith(PRESSABLE_SUFFIX) ? id.slice(0, -PRESSABLE_SUFFIX.length) : id;
 
 // The one non-input element a quoted fill may tap before typing through the keyboard; undefined keeps the strict refusal.

@@ -6,11 +6,13 @@ import { waitForExactPortTargets } from '../cdp/discovery.js';
 import { REACT_READY_POLL_MS, REACT_READY_TIMEOUT_MS } from '../cdp/setup.js';
 import { createDevSettingsHandler } from '../handlers/dev-settings.js';
 import {
+  cdpClientOrNull,
   createDeviceBackHandler,
   createDeviceFillHandler,
   extractMutationDisposition,
   createDevicePressHandler,
   createDeviceScrollHandler,
+  readReactInputValue,
 } from '../handlers/device-interact.js';
 import { captureQaScreenshot } from './screenshot.js';
 import { createDeviceSnapshotHandler } from '../handlers/device-session.js';
@@ -408,6 +410,9 @@ async function openSession(
     ...(platform === 'ios'
       ? {
           appProcess: {},
+          reactFocused: async (testID: string) =>
+            (await readReactInputValue(cdpClientOrNull(getClient), testID))?.focused === true,
+          note: log,
           typeFocused: (ref, text, testID, qaContext) =>
             act(
               () =>

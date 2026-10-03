@@ -73,6 +73,14 @@ strict verification resumes. Otherwise the keyboard must become visible and
 the target must remain eligible. React evidence that the intended input is
 unfocused vetoes typing; unavailable React focus evidence does not prove focus.
 
+When the keyboard is already up, iOS fallback types only with positive React
+proof that the intended input is focused. With an eligible target, QaReN taps it,
+recaptures once, rebinds the same identity and then requires that proof. Without
+a target, it types into the focused field only when no secure or disabled element
+carries the field's testID and React reports that input focused. A false,
+unbound, unreadable or failed focus read types nothing; an unknown keyboard state
+still refuses. Each such decision logs one value-free `fallback-focus` line.
+
 QaReN then types once into the focused field without final value validation.
 A successful keyboard step records a passing row with reason `UNVERIFIED_FILL`,
 allowing later plan steps to continue; it does not establish the field's final

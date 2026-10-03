@@ -15,6 +15,7 @@ import {
   elementSelector,
   keyboardFallbackTarget,
   bindFillIdentity,
+  withoutPressable,
   stepTarget,
   targetVisible,
   visibleSelector,
@@ -76,6 +77,10 @@ export interface WalkerDeps {
     testID: string | undefined,
     context: QaDispatchContext,
   ): Promise<ActResult>;
+  // iOS only: positive React proof that the input with this testID is focused.
+  reactFocused?(testID: string): Promise<boolean>;
+  // A value-free diagnostic line for the run log.
+  note?(line: string): void;
   scroll(direction: 'down' | 'up', context: QaDispatchContext): Promise<ActResult>;
   back(context: QaDispatchContext): Promise<ActResult>;
   dialog(action: 'accept' | 'dismiss', context: QaDispatchContext): Promise<ActResult>;
@@ -617,6 +622,20 @@ export async function walkBlock(
       });
     };
   };
+  const focusProven = async (path: 'tap' | 'none', testID: string): Promise<boolean> => {
+    let focused = false;
+    try {
+      focused = (await deps.reactFocused!(testID)) === true;
+    } catch {
+      focused = false;
+    }
+    deps.note?.(
+      `fallback-focus ${JSON.stringify({ v: 1, path, keyboard: true, proof: focused ? 'focused' : 'not-proven' })}`,
+    );
+    return focused;
+  };
+  const focusedReason = (quoted: string) =>
+    `UNVERIFIED_FILL: typed with the keyboard into the field React reports focused ("${quoted}"); its final value was not validated`;
   // Best effort: the field is not an observable native input, so only the tap and the keyboard prove anything.
   const keyboardFallback = async (
     item: Item & { kind: 'fill' },
@@ -631,7 +650,8 @@ export async function walkBlock(
     const quoted = item.target.quoted!;
     const nothingTyped = (reason: string, screen: Screen): WalkOutcome =>
       failed(item, attempt, `${reason}; nothing was typed`, screen, undefined);
-    if (before.screen.keyboardVisible !== false)
+    const proofMode = before.screen.keyboardVisible === true && deps.reactFocused !== undefined;
+    if (before.screen.keyboardVisible !== false && !proofMode)
       return nothingTyped(
         before.screen.keyboardVisible
           ? `the keyboard is already up before tapping "${quoted}"`
@@ -658,6 +678,7 @@ export async function walkBlock(
     const bound = () => bindFillIdentity(item, after.screen, target.oracleTestID);
     for (
       let captures = 1;
+      !proofMode &&
       after.screen.keyboardVisible !== true &&
       bound()?.kind !== 'strict' &&
       captures < KEYBOARD_READY_CAPTURES &&
@@ -674,6 +695,11 @@ export async function walkBlock(
       return nothingTyped(`tapping "${quoted}" raised no keyboard`, after.screen);
     const again = binding?.kind === 'fallback' ? binding.fallback : undefined;
     if (!again) return nothingTyped(`the tap on "${quoted}" changed the screen`, after.screen);
+    if (proofMode && !(await focusProven('tap', again.oracleTestID)))
+      return nothingTyped(
+        `the keyboard was already up and focus on "${quoted}" is not proven`,
+        after.screen,
+      );
     let entry: ActResult;
     try {
       entry = await mutate(item, after, (context) =>
@@ -701,9 +727,57 @@ export async function walkBlock(
       ref: again.element.ref,
       outcome: 'pass',
       reason: redact(
-        `UNVERIFIED_FILL: typed with the keyboard after tapping "${quoted}"; the field is not an observable native input, so its final value was not validated`,
+        proofMode
+          ? focusedReason(quoted)
+          : `UNVERIFIED_FILL: typed with the keyboard after tapping "${quoted}"; the field is not an observable native input, so its final value was not validated`,
       ),
     });
+    return 'typed';
+  };
+  // Keyboard already up and no tappable target: type only into the field React reports focused.
+  const typeIntoProvenFocus = async (
+    item: Item & { kind: 'fill' },
+    attempt: number,
+    before: Observation,
+  ): Promise<WalkOutcome | 'typed' | undefined> => {
+    const quoted = item.target.quoted!;
+    const id = withoutPressable(quoted);
+    if (!id || /^@|^e\d+$/.test(id)) return;
+    if (
+      before.screen.elements.some(
+        (e) => e.testID === id && (e.secure || e.semantic?.disabled === true),
+      )
+    )
+      return;
+    if (!(await focusProven('none', id))) return;
+    privacy.concealFallback(item.text);
+    privateFills.push(item.line);
+    let entry: ActResult;
+    try {
+      entry = await mutate(item, before, (context) =>
+        deps.typeFocused!(id, item.text, id, context),
+      );
+    } catch (error) {
+      if (error instanceof EvidenceExpired)
+        return failed(
+          item,
+          attempt,
+          `the evidence expired before typing into "${quoted}"; nothing was typed`,
+          before.screen,
+          undefined,
+        );
+      throw error;
+    }
+    if (!entry.ok)
+      return failed(
+        item,
+        attempt,
+        `${entry.error ?? 'typing was not dispatched'}; typing into "${quoted}" was not retried`,
+        before.screen,
+        undefined,
+      );
+    await capture(item);
+    emit({ ...base(item, attempt), outcome: 'pass', reason: redact(focusedReason(quoted)) });
     return 'typed';
   };
 
@@ -898,6 +972,28 @@ export async function walkBlock(
                   !fellBack
                     ? keyboardFallbackTarget(item, before.screen)
                     : undefined;
+                if (
+                  !fallback &&
+                  item.kind === 'fill' &&
+                  decided.refuse === 'TARGET_NOT_FOUND' &&
+                  item.target.quoted !== undefined &&
+                  !item.target.exact &&
+                  before.screen.keyboardVisible === true &&
+                  deps.typeFocused &&
+                  deps.reactFocused &&
+                  !fellBack
+                ) {
+                  fellBack = true;
+                  const proven = await typeIntoProvenFocus(item, attempt, before);
+                  if (proven === 'typed') {
+                    typedUnverified = true;
+                    break;
+                  }
+                  if (proven) {
+                    outcome = proven;
+                    break;
+                  }
+                }
                 if (!fallback || item.kind !== 'fill') throw new ResolutionError(decided);
                 fellBack = true;
                 const result = await keyboardFallback(item, attempt, before, fallback);

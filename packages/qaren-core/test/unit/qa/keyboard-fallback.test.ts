@@ -55,6 +55,7 @@ interface AppOptions {
   typeFocused?: false;
   expireBeforeType?: boolean;
   questions?: Questions[];
+  reactFocused?: boolean | 'throw';
 }
 
 function app(options: AppOptions = {}) {
@@ -66,6 +67,8 @@ function app(options: AppOptions = {}) {
   const rows: LedgerRow[] = [];
   const diagnostics: unknown[] = [];
   const typed: { ref: string; text: string; testID?: string }[] = [];
+  const focusReads: string[] = [];
+  const notes: string[] = [];
   const questions = options.questions ?? [];
   const judge = scriptedJudge((q) => {
     questions.push(structuredClone(q));
@@ -122,6 +125,18 @@ function app(options: AppOptions = {}) {
             return options.type ?? { ok: true, proven: false };
           },
         }),
+    ...(options.reactFocused === undefined
+      ? {}
+      : {
+          async reactFocused(testID: string) {
+            focusReads.push(testID);
+            if (options.reactFocused === 'throw') throw new Error('PRIVATE-read-failure');
+            return options.reactFocused === true;
+          },
+        }),
+    note: (line: string) => {
+      notes.push(line);
+    },
     async scroll(direction) {
       log.push(`scroll ${direction}`);
       return { ok: true, proven: false };
@@ -155,7 +170,7 @@ function app(options: AppOptions = {}) {
       }
     },
   };
-  return { deps, log, rows, typed, diagnostics, questions, state: () => state };
+  return { deps, log, rows, typed, diagnostics, questions, focusReads, notes, state: () => state };
 }
 
 const steps = (log: string[]) => log.filter((entry) => entry !== 'capture');
@@ -1433,5 +1448,168 @@ for (const secure of [true, false]) {
     assert.equal(fills, 1);
     assert.equal(result.block.outcome, secure ? 'pass' : 'fail');
     if (!secure) assert.match(result.failure?.seen ?? '', /TEXT_ENTRY_UNVERIFIED/);
+  });
+}
+
+const mutations = (log: string[]) =>
+  log.filter((entry) => /^(press|type|fill|scroll) /.test(entry));
+
+const FOCUS_NOTE = (path: 'tap' | 'none', proof: 'focused' | 'not-proven') =>
+  `fallback-focus {"v":1,"path":"${path}","keyboard":true,"proof":"${proof}"}`;
+
+test('P1: keyboard up with a wrapper types once after the tap when React proves focus', async () => {
+  const fake = app({ initialKeyboard: true, reactFocused: true });
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+  assert.deepEqual(steps(fake.log), ['press @wrap', 'type @wrap', 'press @submit']);
+  assert.deepEqual(fake.typed, [{ ref: '@wrap', text: EMAIL, testID: 'qa-hidden-email' }]);
+  assert.deepEqual(fake.focusReads, ['qa-hidden-email']);
+  assert.deepEqual(fake.notes, [FOCUS_NOTE('tap', 'focused')]);
+  assert.equal(fake.rows[0].outcome, 'pass');
+  assert.match(
+    fake.rows[0].reason ?? '',
+    /^UNVERIFIED_FILL: typed with the keyboard into the field React reports focused \("qa-hidden-email"\)/,
+  );
+  assert.deepEqual(outcome.privateFills, [fake.rows[0].line]);
+});
+
+for (const focus of [false, 'throw'] as const) {
+  test(`P2: keyboard up with a wrapper taps but types nothing when focus is ${focus === false ? 'not reported' : 'unreadable'}`, async () => {
+    const fake = app({ initialKeyboard: true, reactFocused: focus });
+    const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.deepEqual(steps(fake.log), ['press @wrap']);
+    assert.deepEqual(fake.typed, []);
+    assert.match(
+      outcome.failure?.seen ?? '',
+      /^the keyboard was already up and focus on "qa-hidden-email" is not proven; nothing was typed/,
+    );
+    assert.deepEqual(fake.notes, [FOCUS_NOTE('tap', 'not-proven')]);
+    assert.deepEqual(outcome.privateFills, [fake.rows[0].line]);
+  });
+}
+
+const otpPlan = (value = '1234') =>
+  `## QA\n\n### Code\n\n1. Fill "qa-otp-code" with "${value}"\n2. Tap "qa-hidden-submit"\n`;
+
+test('P3: keyboard up with no tappable target types once into the field React reports focused', async () => {
+  const fake = app({ initial: [submit], initialKeyboard: true, reactFocused: true });
+  const outcome = await walkBlock(blocks(otpPlan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+  assert.deepEqual(steps(fake.log), ['type qa-otp-code', 'press @submit']);
+  assert.deepEqual(fake.typed, [{ ref: 'qa-otp-code', text: '1234', testID: 'qa-otp-code' }]);
+  assert.deepEqual(fake.focusReads, ['qa-otp-code']);
+  assert.deepEqual(fake.notes, [FOCUS_NOTE('none', 'focused')]);
+  assert.match(
+    fake.rows[0].reason ?? '',
+    /^UNVERIFIED_FILL: typed with the keyboard into the field React reports focused \("qa-otp-code"\)/,
+  );
+  assert.deepEqual(outcome.privateFills, [fake.rows[0].line]);
+});
+
+for (const focus of [false, 'throw'] as const) {
+  test(`P4: keyboard up with no target and focus ${focus === false ? 'not reported' : 'unreadable'} keeps the strict refusal`, async () => {
+    const fake = app({ initial: [submit], initialKeyboard: true, reactFocused: focus });
+    const outcome = await walkBlock(blocks(otpPlan())[0], fake.deps);
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.match(outcome.failure?.seen ?? '', /^TARGET_NOT_FOUND:/);
+    assert.deepEqual(mutations(fake.log), []);
+    assert.deepEqual(fake.notes, [FOCUS_NOTE('none', 'not-proven')]);
+    assert.equal(outcome.privateFills, undefined);
+  });
+}
+
+for (const blocker of ['secure', 'disabled'] as const) {
+  test(`P5: a ${blocker} element carrying the field id blocks typing without a target`, async () => {
+    const field = element('@code', 'Code', {
+      kind: 'other',
+      testID: 'qa-otp-code',
+      ...(blocker === 'secure'
+        ? { secure: true }
+        : {
+            semantic: {
+              press: 'unsupported',
+              fill: 'unsupported',
+              visibility: 'visible',
+              disabled: true,
+            },
+          }),
+    } as Partial<Element>);
+    const fake = app({ initial: [field, submit], initialKeyboard: true, reactFocused: true });
+    const outcome = await walkBlock(blocks(otpPlan())[0], fake.deps);
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.deepEqual(mutations(fake.log), []);
+    assert.deepEqual(fake.typed, []);
+    assert.deepEqual(fake.focusReads, []);
+  });
+}
+
+for (const shape of ['wrapper', 'none'] as const) {
+  test(`P6: unknown keyboard state never reads focus (${shape})`, async () => {
+    const fake = app({
+      ...(shape === 'none' ? { initial: [submit] } : {}),
+      initialKeyboard: 'absent',
+      reactFocused: true,
+    });
+    const outcome = await walkBlock(blocks(shape === 'none' ? otpPlan() : plan())[0], fake.deps);
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.deepEqual(mutations(fake.log), []);
+    assert.deepEqual(fake.focusReads, []);
+  });
+}
+
+test('P7: keyboard down keeps the transition path and never reads focus', async () => {
+  const fake = app({ reactFocused: false });
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+  assert.deepEqual(steps(fake.log), ['press @wrap', 'type @wrap', 'press @submit']);
+  assert.deepEqual(fake.focusReads, []);
+  assert.deepEqual(fake.notes, []);
+  assert.match(
+    fake.rows[0].reason ?? '',
+    /^UNVERIFIED_FILL: typed with the keyboard after tapping/,
+  );
+});
+
+for (const secret of ['SECRET-MARKER-123', '12']) {
+  test(`P8: the typed value ${secret.length > 2 ? 'marker' : 'short value'} never reaches rows or notes`, async () => {
+    for (const shape of ['wrapper', 'none'] as const) {
+      const fake = app({
+        ...(shape === 'none' ? { initial: [submit] } : {}),
+        initialKeyboard: true,
+        reactFocused: true,
+      });
+      const outcome = await walkBlock(
+        blocks(shape === 'none' ? otpPlan(secret) : plan(secret))[0],
+        fake.deps,
+      );
+      assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+      const exposed = [...strings(fake.rows), ...fake.notes, ...strings(outcome.block)];
+      assert.equal(
+        exposed.some((text) => text.includes(secret)),
+        false,
+        `${shape}: ${exposed.filter((text) => text.includes(secret)).join(' | ')}`,
+      );
+    }
+  });
+}
+
+for (const shape of ['wrapper', 'none'] as const) {
+  test(`P9: a failed proven-focus type is not retried (${shape})`, async () => {
+    const fake = app({
+      ...(shape === 'none' ? { initial: [submit] } : {}),
+      initialKeyboard: true,
+      reactFocused: true,
+      type: {
+        ok: false,
+        proven: false,
+        mutation: 'possible',
+        error: 'TEXT_ENTRY_UNVERIFIED: failed',
+      },
+    });
+    const outcome = await walkBlock(blocks(shape === 'none' ? otpPlan() : plan())[0], fake.deps);
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.equal(fake.typed.length, 1);
+    assert.match(outcome.failure?.seen ?? '', /not retried/);
   });
 }
