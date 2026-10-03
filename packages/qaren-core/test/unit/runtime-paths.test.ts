@@ -42,3 +42,20 @@ test('plugin manifest candidates include the qaren-plugin manifest and the core 
   );
   assert.ok(candidates.includes(join('/repo', 'packages', 'qaren-core', 'package.json')));
 });
+
+test('a bundled entry in the installed tarball finds the runtime files the tarball ships', () => {
+  // scripts/build-qaren-tarball.ts bundles every spawned entry into <root>/runtime/qa/.
+  const bundled = join('/install', 'runtime', 'qa');
+  assert.equal(
+    candidateRunnerManifestFiles(bundled).find((path) => path.startsWith('/install')),
+    join('/install', 'runtime', 'runner-manifest.json'),
+  );
+  assert.ok(
+    candidateNativeRunnerDirs('rn-fast-runner', bundled).includes(
+      join('/install', 'runtime', 'runners', 'rn-fast-runner'),
+    ),
+  );
+  assert.ok(
+    candidatePluginManifestFiles(bundled).includes(join('/install', 'runtime', 'package.json')),
+  );
+});

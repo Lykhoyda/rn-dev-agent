@@ -1,4 +1,6 @@
 import { unlinkSync, rmSync } from 'node:fs';
+import { QaDispatchError, type QaDispatchContext } from './domain/qa-dispatch.js';
+import type { TimingContext } from './qa/timing.js';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { ToolResult } from './utils.js';
@@ -1460,6 +1462,7 @@ export interface SettlePerCallOpts {
 }
 
 export interface SettleContext {
+  qaContext?: QaDispatchContext;
   platform: 'ios' | 'android';
   verb: string;
   appId?: string;
@@ -1526,8 +1529,8 @@ export async function settleAfterMutationWithOutcome(
     const probes = deps.probes
       ? deps.probes(ctx.platform, ctx.appId)
       : ctx.platform === 'ios'
-        ? settle.buildIosProbes(ctx.appId)
-        : settle.buildAndroidProbes(ctx.appId);
+        ? settle.buildIosProbes(ctx.appId, ctx.qaContext)
+        : settle.buildAndroidProbes(ctx.appId, ctx.qaContext);
     const wait = deps.wait ?? settle.waitForSettle;
     const outcome = await wait({
       platform: ctx.platform,
@@ -1643,7 +1646,12 @@ async function effectVerificationEnabled(
 // Any preceding mutating verb invalidates the baseline, so re-establish it
 // before dispatch instead of failing the next tap as unverifiable.
 export async function establishInteractionBaseline(
-  ctx: { platform: 'ios' | 'android'; appId?: string; settle?: SettlePerCallOpts },
+  ctx: {
+    platform: 'ios' | 'android';
+    appId?: string;
+    settle?: SettlePerCallOpts;
+    qaContext?: QaDispatchContext;
+  },
   policy: TapRetryPolicy,
   deps: SettleAfterMutationDeps = {},
 ): Promise<string | undefined> {
@@ -1659,8 +1667,8 @@ export async function establishInteractionBaseline(
     const probes = deps.probes
       ? deps.probes(ctx.platform, ctx.appId)
       : ctx.platform === 'ios'
-        ? settle.buildIosProbes(ctx.appId)
-        : settle.buildAndroidProbes(ctx.appId);
+        ? settle.buildIosProbes(ctx.appId, ctx.qaContext)
+        : settle.buildAndroidProbes(ctx.appId, ctx.qaContext);
     return (await probes.snapshotHash()) ?? undefined;
   } catch {
     return undefined;
@@ -1838,6 +1846,10 @@ export interface ExactTargetOpts {
 export async function runNative(
   cliArgs: string[],
   opts: {
+    qaTiming?: TimingContext;
+    qaContext?: QaDispatchContext;
+    qaReadOnly?: boolean;
+    presenceBudgetMs?: number;
     skipSession?: boolean;
     platform?: 'ios' | 'android' | null;
     settle?: SettlePerCallOpts;
@@ -1851,6 +1863,14 @@ export async function runNative(
     focusedType?: boolean;
   } = {},
 ): Promise<ToolResult> {
+  const qa = opts.qaContext !== undefined || opts.qaReadOnly === true;
+  if (qa) {
+    opts.qaContext?.assertComplete();
+    if (!activeSession?.deviceId || !activeSession.appId) {
+      if (opts.qaContext) opts.qaContext.invalidate();
+      throw new QaDispatchError('ACTION_CONTEXT_CHANGED');
+    }
+  }
   if (_runAgentDeviceOverrideForTest) {
     return _runAgentDeviceOverrideForTest(cliArgs, opts);
   }
@@ -1880,12 +1900,19 @@ export async function runNative(
     const appId = activeSession?.appId ?? resolveBundleId('ios') ?? undefined;
     if (cliArgs[0] === 'snapshot' && cliArgs.includes('--platform-presence')) {
       const { runIOS } = await import('./runners/rn-fast-runner-client.js');
-      return runIOS(buildRunIOSArgs(cliArgs, appId));
+      return runIOS({
+        ...buildRunIOSArgs(cliArgs, appId),
+        presenceBudgetMs: opts.presenceBudgetMs,
+        qaContext: opts.qaContext,
+        qaReadOnly: opts.qaReadOnly,
+        qaTiming: opts.qaTiming,
+        deviceId: activeSession?.deviceId,
+      });
     }
     // A2/#210: device_screenshot has its own simctl fallback (device-list.ts) — never block
     // it here; the gate is only for verbs that genuinely require the XCUITest runner.
     let upgradeNote: string | undefined;
-    if (cliArgs[0] !== 'screenshot') {
+    if (cliArgs[0] !== 'screenshot' && !qa) {
       const deviceId = activeSession?.deviceId ?? (await resolveBootedIosUdid());
       const ready = await ensureRunnerForCommand(deviceId ?? null, appId ?? '');
       if (!ready.ok) {
@@ -1900,6 +1927,10 @@ export async function runNative(
     const { runIOS, captureFastRunnerCommandAuthority, verifyTypeResultAfterSettle } =
       await import('./runners/rn-fast-runner-client.js');
     let ios = buildRunIOSArgs(cliArgs, appId);
+    ios.qaContext = opts.qaContext;
+    ios.qaReadOnly = opts.qaReadOnly;
+    ios.qaTiming = opts.qaTiming;
+    ios.deviceId = activeSession?.deviceId;
     if (ios.command === 'type' && opts.verifyTypeReadback) {
       ios._verifyExactReadback = opts.verifyTypeReadback;
     }
@@ -1908,7 +1939,10 @@ export async function runNative(
       delete ios._staleRef;
     } else if ((ios.command === 'type' || ios.command === 'verifyInput') && opts.exactTarget) {
       const decorated = decorateExactTargetIOS(ios, opts.exactTarget);
-      if (decorated) return decorated;
+      if (decorated) {
+        opts.qaContext?.invalidate();
+        return decorated;
+      }
     }
     if (ios.command === 'verifyInput' && !opts.exactTarget) {
       return failResult(
@@ -1921,6 +1955,7 @@ export async function runNative(
     if (ios._staleRef) {
       const cachedTarget = getCachedMetadata(ios._staleRef);
       if (cachedTarget?.type === 'Key' || cachedTarget?.type === 'Keyboard') {
+        opts.qaContext?.invalidate();
         return failResult(
           'KEYBOARD_TARGET_STALE: the latest-snapshot keyboard target is stale; no gesture was performed. Refresh the snapshot and retry.',
           'KEYBOARD_TARGET_STALE',
@@ -1928,7 +1963,7 @@ export async function runNative(
         );
       }
     }
-    if (ios._staleRef && selfHealEnabled(process.env)) {
+    if (ios._staleRef && selfHealEnabled(process.env) && !qa) {
       const healed = await healStaleRef(ios._staleRef, () =>
         runIOS({
           command: 'snapshot',
@@ -1966,12 +2001,14 @@ export async function runNative(
       () => runIOS(ios),
       {
         platform: 'ios',
+        qaContext: opts.qaContext,
         verb: cliArgs[0],
         ...(appId ? { appId } : {}),
         ...(opts.settle ? { settle: opts.settle } : {}),
       },
       iosPolicy,
     );
+    opts.qaContext?.assertComplete();
     result = await verifyTypeResultAfterSettle(ios, result, runnerAuthorityBefore);
     if (healMeta) result = attachMeta(result, healMeta);
     return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
@@ -2024,7 +2061,7 @@ export async function runNative(
     // a cold device_* gets a clear RN_ANDROID_RUNNER_DOWN rather than a buried
     // "fetch failed" from runAndroid's internal catch. screenshot has its own adb
     // fallback (like iOS simctl) — don't gate it on the runner.
-    if (cliArgs[0] !== 'screenshot') {
+    if (cliArgs[0] !== 'screenshot' && !qa) {
       const { resolveAndroidSerial, startAndroidRunner, consumePendingAndroidUpgradeNote } =
         await import('./runners/rn-android-runner-client.js');
       const serial = activeSession?.deviceId ?? (await resolveAndroidSerial());
@@ -2060,11 +2097,19 @@ export async function runNative(
     const { runAndroid, consumePendingAndroidUpgradeNote } =
       await import('./runners/rn-android-runner-client.js');
     const outsideApp = androidOutsideAppWindowRefusal(cliArgs, appId);
-    if (outsideApp) return outsideAppWindowFailResult(outsideApp);
+    if (outsideApp) {
+      opts.qaContext?.invalidate();
+      return outsideAppWindowFailResult(outsideApp);
+    }
     let android = buildRunAndroidArgs(cliArgs, appId);
+    android.qaContext = opts.qaContext;
+    android.qaReadOnly = opts.qaReadOnly;
     if ((android.command === 'type' || android.command === 'verifyInput') && opts.exactTarget) {
       const decorated = decorateExactTargetAndroid(android, opts.exactTarget);
-      if (decorated) return decorated;
+      if (decorated) {
+        opts.qaContext?.invalidate();
+        return decorated;
+      }
     }
     if (android.command === 'verifyInput' && !opts.exactTarget) {
       return failResult(
@@ -2074,7 +2119,7 @@ export async function runNative(
       );
     }
     let healMeta: Record<string, unknown> | null = null;
-    if (android._staleRef && selfHealEnabled(process.env)) {
+    if (android._staleRef && selfHealEnabled(process.env) && !qa) {
       const healed = await healStaleRef(android._staleRef, () =>
         runAndroid({
           command: 'snapshot',
@@ -2114,6 +2159,7 @@ export async function runNative(
     const androidBaseline = await establishInteractionBaseline(
       {
         platform: 'android',
+        qaContext: opts.qaContext,
         ...(appId ? { appId } : {}),
         ...(opts.settle ? { settle: opts.settle } : {}),
       },
@@ -2125,6 +2171,7 @@ export async function runNative(
       () => runAndroid({ ...android, deviceId: activeSession?.deviceId }),
       {
         platform: 'android',
+        qaContext: opts.qaContext,
         verb: cliArgs[0],
         ...(appId ? { appId } : {}),
         ...(opts.settle ? { settle: opts.settle } : {}),
@@ -2134,6 +2181,7 @@ export async function runNative(
     );
     if (healMeta) result = attachMeta(result, healMeta);
     const note = consumePendingAndroidUpgradeNote();
+    opts.qaContext?.assertComplete();
     return note ? attachMetaNote(result, note) : result;
   }
 

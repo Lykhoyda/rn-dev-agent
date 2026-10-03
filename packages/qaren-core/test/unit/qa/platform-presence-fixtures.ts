@@ -1,6 +1,7 @@
 export function nativeCapture() {
   const presenceCapture = {
-    version: 1,
+    version: 2,
+    appliedBudgetMs: 20_000,
     source: 'xcui-live',
     captureId: 'capture-7',
     appId: 'com.test',
@@ -57,5 +58,14 @@ export function nativeCapture() {
     truncated: false,
     normalizationDroppedNodes: 0,
     snapshotVerdict: { state: 'ok', nodeCount: 2, refMapUpdated: true, reasons: [] },
+  };
+}
+
+export function attested<T>(nodes: T[]) {
+  return {
+    nodes,
+    truncated: false,
+    normalizationDroppedNodes: 0,
+    snapshotVerdict: { state: 'ok', nodeCount: nodes.length, refMapUpdated: true, reasons: [] },
   };
 }

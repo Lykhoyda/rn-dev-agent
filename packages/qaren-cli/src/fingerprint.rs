@@ -18,6 +18,22 @@ pub struct NativeFingerprint {
     pub incompleteness: Vec<String>,
 }
 
+impl NativeFingerprint {
+    pub fn with_ios_workspace(mut self, spec: Option<&crate::scenario::IosWorkspaceBuild>) -> Self {
+        if let Some(spec) = spec {
+            let bytes = serde_json::to_vec(&(
+                "qaren-ios-workspace-build/1",
+                &self.value,
+                &spec.workspace,
+                &spec.scheme,
+            ))
+            .expect("fingerprint and workspace strings serialize to JSON");
+            self.value = format!("{FINGERPRINT_VERSION}:{}", sha256_hex(&bytes));
+        }
+        self
+    }
+}
+
 // Native inputs are the files git considers part of the candidate (tracked or
 // untracked-but-not-ignored); generated dirs like a CNG ios/ are ignored by
 // git and therefore excluded — they are build outputs, not inputs.

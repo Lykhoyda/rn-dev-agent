@@ -281,7 +281,7 @@ fn strict_claim_refuses_even_a_dead_holder() {
     let dead = PidIdentity {
         pid: 4242,
         started_at: "Wed Aug 13 10:00:00 2026".to_string(),
-        command: "qaren prepare".to_string(),
+        command: qaren::redact::OutputText::from_output("qaren prepare"),
     };
     assert!(matches!(
         claim_lock(
@@ -315,7 +315,7 @@ fn adopt_dead_policy_takes_over_a_dead_holder_but_not_a_live_one() {
     let identity = PidIdentity {
         pid: 4242,
         started_at: "Wed Aug 13 10:00:00 2026".to_string(),
-        command: "qaren prepare".to_string(),
+        command: qaren::redact::OutputText::from_output("qaren prepare"),
     };
     assert!(matches!(
         claim_lock(

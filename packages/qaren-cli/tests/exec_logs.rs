@@ -1,9 +1,11 @@
 mod common;
 
-use qaren::exec::{CmdSpec, RealRunner, Runner};
+use qaren::exec::{CmdOutput, CmdSpec, RealRunner, Runner};
 use qaren::failure::{Failure, FailureCode};
+use qaren::redact::PRIVATE_KEY_WITHHELD;
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -12,6 +14,166 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const KEY: &str = "synthetic-phase3-typesafe-key";
+
+#[test]
+fn command_summary_withholds_output_naming_a_private_key() {
+    let body = (0..7)
+        .map(|line| format!("private-body-{line}\n"))
+        .collect::<String>();
+    let pem = format!("-----BEGIN PRIVATE KEY-----\n{body}");
+    for output in [
+        CmdOutput {
+            stdout: pem.clone(),
+            ..CmdOutput::failed(1, "install failed")
+        },
+        CmdOutput::failed(1, &pem),
+    ] {
+        let summary = output.summary();
+        assert!(!summary.contains("private-body"), "{summary}");
+        assert_eq!(summary, format!("exit=1 {PRIVATE_KEY_WITHHELD}"));
+    }
+    assert_eq!(
+        CmdOutput {
+            stdout: "one\ntwo\nthree\nfour\nfive\nsix\nseven\n".into(),
+            ..CmdOutput::failed(1, "stderr")
+        }
+        .summary(),
+        "exit=1 two | three | four | five | six | seven"
+    );
+}
+
+const FAKE_BODY: &str = "FAKEKEYBODY";
+
+#[test]
+fn real_capture_preserves_protocol_bytes_and_withholds_summaries() {
+    let mut runner = RealRunner::new();
+    for (script, stdout, stderr) in [
+        (
+            "printf '%s\\n' '-----BEGIN PRIVATE KEY-----' >&2; printf 'FAKEKEYBODY\\n'; exit 1",
+            "FAKEKEYBODY\n",
+            "-----BEGIN PRIVATE KEY-----\n",
+        ),
+        (
+            "printf 'FAKEKEYBODY\\n' >&2; printf 'quoting a private key\\n'; exit 1",
+            "quoting a private key\n",
+            "FAKEKEYBODY\n",
+        ),
+    ] {
+        let output = runner.run(&CmdSpec::new(
+            "private-key-summary",
+            "sh",
+            &["-c", script],
+            5,
+        ));
+        assert_eq!(output.exit_code, Some(1));
+        assert_eq!(output.stdout, stdout);
+        assert_eq!(output.stderr, stderr);
+        assert_eq!(output.summary(), format!("exit=1 {PRIVATE_KEY_WITHHELD}"));
+    }
+    for marker in ["private key", "PrIvAtE KeY", "<redacted private key>"] {
+        for stderr in [false, true] {
+            let output = CmdOutput {
+                stdout: if stderr { FAKE_BODY } else { marker }.into(),
+                stderr: if stderr { marker } else { FAKE_BODY }.into(),
+                ..CmdOutput::failed(1, "")
+            };
+            assert_eq!(output.summary(), format!("exit=1 {PRIVATE_KEY_WITHHELD}"));
+        }
+    }
+}
+
+#[test]
+fn a_marker_mention_cannot_blind_a_truncated_key_in_a_summary() {
+    let failure = CmdOutput::failed(
+        255,
+        &format!(
+            "error: unterminated -----BEGIN marker\n-----BEGIN PRIVATE KEY-----\n{FAKE_BODY}1\n{FAKE_BODY}2\n{FAKE_BODY}3\n"
+        ),
+    );
+    assert_eq!(
+        failure.summary(),
+        format!("exit=255 {PRIVATE_KEY_WITHHELD}")
+    );
+}
+
+// Earlier log content belongs to other commands and survives; this command's output does not.
+fn spawned_log(script: &str) -> String {
+    let dir = common::temp_repo();
+    let log = dir.join("child.log");
+    std::fs::write(&log, "earlier command\n").unwrap();
+    let mut runner = RealRunner::with_log_executable(env!("CARGO_BIN_EXE_qaren").into());
+    runner
+        .spawn_group(&shell(&format!("{script}\n: > done"), &dir), &log)
+        .unwrap();
+    until(|| dir.join("done").exists());
+    until(|| {
+        runner.flush_logs().unwrap();
+        let stored = std::fs::read_to_string(&log).unwrap_or_default();
+        stored.contains("tail line") || stored.contains(PRIVATE_KEY_WITHHELD)
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    runner.flush_logs().unwrap();
+    let stored = std::fs::read_to_string(&log).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    stored
+}
+
+fn withheld_log() -> String {
+    format!("earlier command\n{PRIVATE_KEY_WITHHELD}\n")
+}
+
+#[test]
+fn a_private_key_on_either_stream_withholds_the_whole_command_log_in_any_arrival_order() {
+    let body = format!(
+        r#"n=0; while [ "$n" -lt 26 ]; do printf '{FAKE_BODY}%s\n' "$n"; n=$((n+1)); done"#
+    );
+    for script in [
+        format!("printf 'starting\\n'\nprintf '%s\\n' '-----BEGIN PRIVATE KEY-----' >&2\n{body}\nprintf 'tail line\\n'"),
+        format!("printf '%s\\n' '-----BEGIN PRIVATE KEY-----'\n{body} >&2\nprintf '%s\\n' '-----END PRIVATE KEY-----'\nprintf 'tail line\\n'"),
+        format!("{body}\nprintf '%s\\n' '-----end private key-----' >&2\nprintf 'tail line\\n'"),
+        format!("{body} >&2\nprintf '<redacted private key>\\n'\nprintf 'tail line\\n'"),
+        format!("printf -- '-----BEGIN PRIVATE' >&2\n{body}\nprintf ' KEY-----\\n' >&2\nprintf 'tail line\\n'"),
+    ] {
+        let stored = spawned_log(&script);
+        assert_eq!(stored, withheld_log(), "{script}");
+    }
+}
+
+#[test]
+fn a_log_without_a_private_key_keeps_every_line() {
+    let stored = spawned_log("printf 'starting\\n'\nprintf 'warn\\n' >&2\nprintf 'tail line\\n'");
+    assert!(stored.starts_with("earlier command\n"), "{stored}");
+    for line in ["starting\n", "warn\n", "tail line\n"] {
+        assert!(stored.contains(line), "{stored}");
+    }
+}
+
+#[test]
+fn an_evidence_tail_naming_a_private_key_never_reaches_run_json() {
+    let dir = common::temp_repo();
+    let log = dir.join("tunnel.log");
+    for mention in [
+        "<redacted private key>",
+        "-----end private key-----",
+        "-----END PRIVATE KEY-----",
+    ] {
+        let lines: String = (0..8).map(|n| format!("{FAKE_BODY}{n}\n")).collect();
+        std::fs::write(&log, format!("{lines}{mention}\nexit\n")).unwrap();
+        let failure = Failure::new(
+            "allocate",
+            FailureCode::TunnelFailed,
+            "ssh tunnel died".to_string(),
+            "inspect the tunnel log",
+        )
+        .with_evidence(vec![qaren::commands::log_tail(&log, 25)]);
+        persist_failure(&dir, "tailrun", failure.clone());
+        let recorded =
+            std::fs::read_to_string(qaren::runrecord::RunRecord::path(&dir, "tailrun")).unwrap();
+        assert!(!recorded.contains(FAKE_BODY), "{recorded}");
+        assert_eq!(failure.evidence, vec![PRIVATE_KEY_WITHHELD.to_string()]);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
 
 #[test]
 fn private_capture_passes_bounded_stdin_without_inventory_in_diagnostics_or_command_logs() {
@@ -78,6 +240,84 @@ impl Drop for HelperGuard {
             let _ = self.0.wait();
         }
     }
+}
+
+fn helper_log(chunks: &[Vec<u8>]) -> String {
+    let dir = common::temp_repo();
+    let path = dir.join("helper.log");
+    std::fs::write(&path, "earlier command\n").unwrap();
+    let log = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    let (input, mut output) = UnixStream::pair().unwrap();
+    let (control, helper_control) = UnixStream::pair().unwrap();
+    let mut helper = HelperGuard(
+        Command::new(env!("CARGO_BIN_EXE_qaren"))
+            .arg(qaren::exec::log::HELPER_ARG)
+            .env_clear()
+            .stdin(Stdio::from(OwnedFd::from(input)))
+            .stdout(Stdio::from(OwnedFd::from(helper_control)))
+            .stderr(Stdio::from(log))
+            .spawn()
+            .unwrap(),
+    );
+    for chunk in chunks {
+        output.write_all(chunk).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    drop(output);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = helper.0.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "log helper did not exit at EOF");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    drop(control);
+    assert!(status.success());
+    let stored = std::fs::read_to_string(&path).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    stored
+}
+
+#[test]
+fn the_log_helper_withholds_a_mention_split_across_writes_or_oversized_lines() {
+    let body = format!("{FAKE_BODY}\n").into_bytes();
+    let mut cases = vec![vec![
+        b"ssh: -----BEGIN PRIV".to_vec(),
+        b"ATE KEY-----\n".to_vec(),
+        body.clone(),
+    ]];
+    for boundary in [64 * 1024, 128 * 1024] {
+        for split in [1, 5, 10, 11, 12] {
+            cases.push(vec![
+                body.clone(),
+                format!(
+                    "{}-----BEGIN PRIVATE KEY-----{}\n",
+                    "x".repeat(boundary - split),
+                    "x".repeat(70 * 1024)
+                )
+                .into_bytes(),
+                body.clone(),
+            ]);
+        }
+    }
+    for chunks in cases {
+        assert_eq!(
+            helper_log(&chunks),
+            format!("earlier command\n{PRIVATE_KEY_WITHHELD}\n")
+        );
+    }
+    let plain = helper_log(&[
+        format!("{}\n", "x".repeat(130 * 1024)).into_bytes(),
+        b"after oversized\n".to_vec(),
+    ]);
+    assert_eq!(
+        plain,
+        "earlier command\n[oversized log line withheld]\nafter oversized\n"
+    );
 }
 
 #[test]
@@ -304,7 +544,8 @@ fn subprocess_fixture_worker() {
         dir,
     ));
     assert_eq!(output.exit_code, Some(2));
-    assert!(!output.stderr.contains(KEY));
+    assert_eq!(output.stdout, format!("captured stdout {KEY}\n"));
+    assert_eq!(output.stderr, format!("captured stderr {KEY}\n"));
     assert!(!output.summary().contains(KEY));
     let failure = Failure::new(
         "deps",
@@ -337,7 +578,8 @@ fn subprocess_fixture_worker() {
     timeout.timeout_seconds = 1;
     let output = runner.run(&timeout);
     assert!(output.timed_out);
-    assert_eq!(output.stderr, "[REDACTED_SECRET]");
+    assert_eq!(output.stderr, KEY);
+    assert!(!output.summary().contains(KEY));
     let mut overflowing = shell("head -c 17825792 /dev/zero", dir);
     overflowing.timeout_seconds = 30;
     let output = runner.run(&overflowing);
@@ -390,4 +632,51 @@ fn subprocess_fixture_worker() {
             &dir.join("detached.log"),
         )
         .unwrap();
+}
+
+#[test]
+fn a_live_tail_never_copies_a_body_whose_mention_awaits_its_newline() {
+    let dir = common::temp_repo();
+    let log = dir.join("live.log");
+    let mut runner = RealRunner::with_log_executable(env!("CARGO_BIN_EXE_qaren").into());
+    let script = format!(
+        "printf -- '-----BEGIN PRIVATE KEY-----' >&2\nprintf '{FAKE_BODY}1\\n{FAKE_BODY}2\\n'\n: > done\nsleep 30"
+    );
+    let spawned = runner.spawn_group(&shell(&script, &dir), &log).unwrap();
+    until(|| dir.join("done").exists());
+    runner.flush_logs().unwrap();
+    let failure = Failure::new(
+        "metro",
+        FailureCode::TunnelFailed,
+        "not ready".to_string(),
+        "inspect the log",
+    )
+    .with_evidence(vec![qaren::commands::log_tail(&log, 25)]);
+    persist_failure(&dir, "liverun", failure);
+    unsafe { libc::kill(-spawned.pgid, libc::SIGKILL) };
+    let recorded =
+        std::fs::read_to_string(qaren::runrecord::RunRecord::path(&dir, "liverun")).unwrap();
+    assert!(!recorded.contains(FAKE_BODY), "{recorded}");
+    assert!(recorded.contains(PRIVATE_KEY_WITHHELD), "{recorded}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_command_log_that_cannot_be_truncated_is_refused() {
+    let dir = common::temp_repo();
+    let fifo = dir.join("collector.fifo");
+    assert!(Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap()
+        .success());
+    let mut runner = RealRunner::with_log_executable(env!("CARGO_BIN_EXE_qaren").into());
+    let reader = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&fifo)
+        .unwrap();
+    assert!(runner.spawn_group(&shell("true", &dir), &fifo).is_err());
+    drop(reader);
+    std::fs::remove_dir_all(dir).unwrap();
 }

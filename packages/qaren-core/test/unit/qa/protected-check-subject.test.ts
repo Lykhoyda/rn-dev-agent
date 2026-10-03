@@ -54,7 +54,7 @@ const emailCheck = {
   line: 1,
 };
 
-test('a visible Email label does not become a second field subject through broad input masking', async () => {
+test('a visible Email label does not become a second field subject or make native values assertion evidence', async () => {
   const screen = await emailCapture();
   assert.equal(screen.coverage?.native, 'complete');
   assert.equal(screen.elements[1].semantic?.visibility, 'visible');
@@ -65,30 +65,21 @@ test('a visible Email label does not become a second field subject through broad
   assert.equal(isPossibleInput(screen.elements[2]), true);
   assert.deepEqual(inputValues(screen), [typedEmail]);
   assert.deepEqual(screen.visibleText, ['Email', `Email: ${typedEmail}`]);
-  const judge = scriptedJudge((questions, _, state) => {
-    assert.equal(JSON.stringify({ questions, state }).includes(typedEmail), false);
-    assert.match(JSON.stringify(state), /Email: \[QAREN_VALUE_1\]/);
-    return { check_1: { type: 'noul', noul: 0.99 } };
-  });
+  const judge = scriptedJudge(() => assert.fail('native input values cannot prove equality'));
   const decision = await decideScreen(screen, judge, emailCheck, undefined, [typedEmail]);
-  assert.equal(decision.check, 'pass');
-  assert.equal(judge.requests.length, 1);
+  assert.equal(decision.check, 'unsure');
+  assert.equal(judge.requests.length, 0);
 });
 
-test('typed equality still needs a confident judgment and a mismatching native value cannot pass', async () => {
-  for (const [value, noul, expected] of [
-    [typedEmail, 0.99, 'pass'],
-    [typedEmail, 0.5, 'unsure'],
-    [typedEmail, 0.1, 'fail'],
-    ['different@example.test', 0.99, 'fail'],
-  ] as const) {
+test('matching and mismatching native values cannot delegate equality to an optimistic judge', async () => {
+  for (const value of [typedEmail, 'different@example.test']) {
     const screen = await emailCapture((nodes) => {
       nodes[2].value = value;
     });
-    const judge = scriptedJudge(() => ({ check_1: { type: 'noul', noul } }));
+    const judge = scriptedJudge(() => ({ check_1: { type: 'noul', noul: 0.99 } }));
     const decision = await decideScreen(screen, judge, emailCheck, undefined, [typedEmail]);
-    assert.equal(decision.check, expected);
-    assert.equal(judge.requests.length, 1);
+    assert.equal(decision.check, 'unsure');
+    assert.equal(judge.requests.length, 0);
     assert.equal(JSON.stringify(judge.requests).includes(value), false);
     assert.equal(JSON.stringify(judge.requests).includes(typedEmail), false);
   }
@@ -148,7 +139,8 @@ test('secure generic fields retain protected bounds even without input kind or f
     });
     if (type === 'Other') assert.equal(screen.elements[2].semantic?.fill, 'unknown');
     assert.equal(screen.elements[2].value, undefined);
-    assert.deepEqual(inputValues(screen), [typedEmail]);
+    // A secure node's label may be its value natively, so it is masked too (fail-closed).
+    assert.deepEqual(inputValues(screen), [typedEmail, 'Email']);
     const judge = scriptedJudge(() => assert.fail('hidden contents must not be judged'));
     for (const predicate of [
       `contains ${typedEmail}`,
@@ -210,7 +202,7 @@ test('default quoted fill and literal checks use local observations, never gener
   }
 });
 
-test('only uniquely associated positive fill evidence admits a generic check subject', async () => {
+test('positive fill evidence for a generic subject does not supply missing assertion text', async () => {
   for (const complete of [true, false]) {
     const screen = await emailCapture((nodes, react) => {
       nodes[1] = {
@@ -245,10 +237,16 @@ test('only uniquely associated positive fill evidence admits a generic check sub
     });
     assert.equal(screen.elements[2].kind, 'other');
     assert.equal(screen.elements[2].semantic?.fill, complete ? 'supported' : 'unknown');
-    const judge = scriptedJudge(() => ({ check_1: { type: 'noul', noul: 0.1 } }));
+    assert.deepEqual(screen.visibleText, []);
+    const judge = scriptedJudge(() => assert.fail('missing assertion text must not be judged'));
     const decision = await decideScreen(screen, judge, emailCheck, undefined, [typedEmail]);
-    assert.equal(decision.check, complete ? 'fail' : 'unsure');
-    assert.equal(judge.requests.length, complete ? 1 : 0);
-    assert.equal(JSON.stringify(judge.requests).includes(typedEmail), false);
+    if (complete) assert.equal(decision.check, 'unsure');
+    else
+      assert.deepEqual(decision.check, {
+        refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
+        reason:
+          'semantic projection requires complete native and React coverage (capture native=complete react=complete; projected native=complete react=incomplete)',
+      });
+    assert.equal(judge.requests.length, 0);
   }
 });

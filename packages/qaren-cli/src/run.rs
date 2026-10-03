@@ -1,5 +1,6 @@
 use crate::adapters::ios;
 use crate::buildplan::BuildDecision;
+use crate::cancel::ensure_running;
 use crate::candidate::{self, sha256_hex};
 use crate::commands::cleanup::{
     cleanup_core, cleanup_process_group, release_lease_outcome, retained_lease_outcome,
@@ -10,18 +11,24 @@ use crate::config::CheckConfig;
 use crate::core::{self, Budgets, CoreRequest, CoreTarget, Verdict};
 use crate::exec::{CmdSpec, Runner};
 use crate::failure::{Failure, FailureCode};
+use crate::github::{self, PrInfo};
 use crate::lease;
+use crate::publish::PrRunRecord;
 use crate::receipt::{Receipt, ReceiptResult};
+use crate::record::{self, VideoStatus};
 use crate::report::{self, ReportInput};
 use crate::runrecord::{
-    capture_pid_identity, IosSimResource, Phase, Resources, RunRecord, RUN_SCHEMA,
+    capture_pid_identity, IosSimResource, Phase, PrWorktreeResource, Resources, RunRecord,
+    RUN_SCHEMA,
 };
 use crate::scenario::{
     BuildSpec, CandidateSpec, Deadlines, DepsSpec, IosSpec, MetroSpec, Platform, Scenario,
     SCENARIO_SCHEMA,
 };
 use crate::timefmt;
+use crate::worktree;
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_WALK_SECONDS: u64 = 1200;
@@ -45,6 +52,18 @@ pub struct RunRequest {
     pub runs_root: PathBuf,
     pub android_home: Option<String>,
     pub budgets: Budgets,
+    // `qaren pr`: the run happens on a detached worktree at this PR's head.
+    pub pr: Option<PrTarget>,
+}
+
+pub struct PrTarget {
+    pub target: String,
+}
+
+struct PrState {
+    info: PrInfo,
+    repo_root: PathBuf,
+    app_rel: String,
 }
 
 struct Device {
@@ -91,29 +110,64 @@ pub fn validate_boot_device(
 pub fn run(runner: &mut dyn Runner, req: &RunRequest) -> Receipt {
     let started_ms = runner.now_epoch_ms();
     let mut preflight_jev = None;
-    let mut receipt = match run_inner(runner, req, started_ms, &mut preflight_jev) {
+    // A PR worktree created before the run record owns it; removed here if the run never got that far.
+    let mut unowned_worktree = None;
+    let mut receipt = match run_inner(
+        runner,
+        req,
+        started_ms,
+        &mut preflight_jev,
+        &mut unowned_worktree,
+    ) {
         Ok(receipt) => receipt,
         Err(failure) => {
+            let failure = ensure_running(runner, &failure.phase)
+                .err()
+                .unwrap_or(failure);
             let result = if failure.code.is_refusal() {
                 ReceiptResult::Refused
             } else {
                 ReceiptResult::Failed
             };
             let mut receipt = Receipt::new(
-                "check",
+                verb(req),
                 "none",
                 result,
                 &failure.phase.clone(),
                 timefmt::iso8601_utc(runner.now_epoch_ms()),
             );
-            receipt.next_action = failure.next_action.clone();
+            receipt.next_action = failure.next_action.to_string();
             receipt.failure = Some(failure);
             receipt.commands_executed = runner.commands_executed();
             receipt
         }
     };
+    if let Some((repo_root, wt)) = unowned_worktree {
+        let outcome = worktree::remove(runner, &repo_root, &wt);
+        receipt
+            .cleanup
+            .insert("pr_worktree".to_string(), outcome.render());
+        receipt.commands_executed = runner.commands_executed();
+    }
     receipt.preflight_jev = preflight_jev;
     receipt
+}
+
+fn verb(req: &RunRequest) -> &'static str {
+    if req.pr.is_some() {
+        "pr"
+    } else {
+        "check"
+    }
+}
+
+fn pr_failure(detail: String) -> Failure {
+    Failure::new(
+        "pr",
+        FailureCode::PrWorktreeFailed,
+        detail,
+        "re-run qaren pr; the worktree must hold exactly the pull request head",
+    )
 }
 
 // Failures before the run record exists come back as Err; everything after is
@@ -123,10 +177,16 @@ fn run_inner(
     req: &RunRequest,
     started_ms: u64,
     preflight_jev: &mut Option<core::JevRollup>,
+    unowned_worktree: &mut Option<(PathBuf, PathBuf)>,
 ) -> Result<Receipt, Failure> {
     validate_boot_device(req.platform, req.device.as_deref(), req.boot_device)?;
     let (config, config_raw) = CheckConfig::load(&req.config_path)?;
     config.validate_for_platform(req.platform)?;
+    if req.platform == Platform::Ios {
+        if let Some(workspace) = config.ios.as_ref().and_then(|ios| ios.build.as_ref()) {
+            ios::validate_workspace(&req.project_root, workspace)?;
+        }
+    }
     let node = req
         .node
         .clone()
@@ -154,10 +214,47 @@ fn run_inner(
         ));
     }
     let device = resolve_device(runner, req.platform, req.device.as_deref(), req.boot_device)?;
-    let (repo_root, project_rel) = locate_worktree(runner, &req.project_root)?;
+    let run_id = format!("check-{}", timefmt::compact_utc(started_ms));
+    let run_dir = RunRecord::run_dir(&req.runs_root, &run_id);
+    let mut project_root = req.project_root.clone();
+    let mut pr_state = None;
+    if let Some(target) = &req.pr {
+        let (repo_root, app_rel) = locate_worktree(runner, &req.project_root)?;
+        let info = github::pr_view(runner, &target.target, &repo_root)?;
+        claim_run_dir(&run_dir)?;
+        let wt = worktree::pr_worktree_path(&run_dir);
+        // ponytail: until run.json exists only this process knows the worktree; a SIGKILL here
+        // leaves it under the run directory for `git worktree prune`; add durable intent if that bites.
+        *unowned_worktree = Some((repo_root.clone(), wt.clone()));
+        worktree::add(runner, &repo_root, &info, &wt)?;
+        project_root = if app_rel == "." {
+            wt
+        } else {
+            wt.join(&app_rel)
+        };
+        if req.platform == Platform::Ios {
+            if let Some(workspace) = config.ios.as_ref().and_then(|ios| ios.build.as_ref()) {
+                ios::validate_workspace(&project_root, workspace)?;
+            }
+        }
+        pr_state = Some(PrState {
+            info,
+            repo_root,
+            app_rel,
+        });
+    }
+    let (repo_root, project_rel) = locate_worktree(runner, &project_root)?;
     let scenario = build_scenario(&config, req.platform, &device, &repo_root, &project_rel);
     scenario.validate()?;
-    let cand = candidate::resolve(runner, &scenario, &req.project_root)?;
+    let cand = candidate::resolve(runner, &scenario, &project_root)?;
+    if let Some(pr) = &pr_state {
+        if cand.git_sha != pr.info.head_ref_oid || cand.git_dirty {
+            return Err(pr_failure(format!(
+                "the worktree is at {} (dirty={}), not the clean pull request head {}",
+                cand.git_sha, cand.git_dirty, pr.info.head_ref_oid
+            )));
+        }
+    }
     prepare::check_prereqs(runner, &scenario, req.android_home.as_deref())?;
     std::fs::create_dir_all(&req.runs_root).map_err(|e| {
         Failure::new(
@@ -169,7 +266,6 @@ fn run_inner(
     })?;
     preflight_disk(runner, &req.runs_root)?;
 
-    let run_id = format!("check-{}", timefmt::compact_utc(started_ms));
     let identity = capture_pid_identity(runner, std::process::id() as i32);
     let mut recovered = None;
     let lease = match lease::try_acquire(
@@ -203,9 +299,10 @@ fn run_inner(
         return Err(lease::release_or_annotate(&lease, f));
     }
 
-    let run_dir = RunRecord::run_dir(&req.runs_root, &run_id);
-    if let Err(f) = claim_run_dir(&run_dir) {
-        return Err(lease::release_or_annotate(&lease, f));
+    if pr_state.is_none() {
+        if let Err(f) = claim_run_dir(&run_dir) {
+            return Err(lease::release_or_annotate(&lease, f));
+        }
     }
     let mut resources = Resources::default();
     resources.lease = Some(lease.clone());
@@ -218,6 +315,12 @@ fn run_inner(
             name: device.name.clone(),
             device_type: device_type.clone(),
             runtime: runtime.clone(),
+        });
+    resources.pr_worktree = unowned_worktree
+        .as_ref()
+        .map(|(repo_root, path)| PrWorktreeResource {
+            repo_root: repo_root.clone(),
+            path: path.clone(),
         });
     let record = RunRecord {
         schema: RUN_SCHEMA.to_string(),
@@ -238,6 +341,7 @@ fn run_inner(
     if let Err(f) = record.save(&req.runs_root) {
         return Err(lease::release_or_annotate(&lease, f));
     }
+    *unowned_worktree = None;
     let mut ctx = Ctx {
         runner,
         runs_root: req.runs_root.clone(),
@@ -245,7 +349,7 @@ fn run_inner(
         started_ms,
         timings: Vec::new(),
         notes: Vec::new(),
-        verb: "check",
+        verb: verb(req),
     };
     if let Some(earlier) = recovered {
         ctx.notes.push(("recovered_run".to_string(), earlier));
@@ -260,7 +364,7 @@ fn run_inner(
             ctx.runner,
             &node,
             &req.runtime_dir,
-            &req.project_root,
+            &project_root,
             &device.id,
         ) {
             return Ok(finish_failed(ctx, f));
@@ -270,7 +374,11 @@ fn run_inner(
         if let Err(f) = prepare::install_deps(&mut ctx) {
             return Ok(finish_failed(ctx, f));
         }
-        if let Err(f) = ios::require_generic_build(ctx.runner, &ctx.record.candidate.project_root) {
+        if let Err(f) = ios::require_build(
+            ctx.runner,
+            &ctx.record.candidate.project_root,
+            ctx.record.scenario.build.ios_workspace.as_ref(),
+        ) {
             return Ok(finish_failed(ctx, f));
         }
     }
@@ -279,7 +387,7 @@ fn run_inner(
             ctx.runner,
             &node,
             &req.runtime_dir,
-            &req.project_root,
+            &project_root,
             &device.id,
         ) {
             return Ok(finish_failed(ctx, f));
@@ -351,10 +459,41 @@ fn run_inner(
         return Ok(finish_failed(ctx, f));
     }
 
+    if pr_state.is_some() {
+        if let Err(detail) = candidate::verify_unchanged(ctx.runner, &ctx.record.candidate) {
+            let f = Failure::new(
+                "pr",
+                FailureCode::CandidateDrifted,
+                format!("the pull request worktree changed before the walk: {detail}"),
+                "re-run qaren pr; nothing may modify the run's worktree",
+            );
+            return Ok(finish_failed(ctx, f));
+        }
+    }
     ctx.record.phase = Phase::Walking;
     let at = timefmt::iso8601_utc(ctx.runner.now_epoch_ms());
     ctx.record.push_history(at, "walking");
     if let Err(f) = ctx.save() {
+        return Ok(finish_failed(ctx, f));
+    }
+    // In `qaren pr` the app root is the PR worktree's, so blocks replay and save there.
+    let app_root = match app_root_for(&req.config_path, &project_root) {
+        Ok(root) => root,
+        Err(f) => return Ok(finish_failed(ctx, f)),
+    };
+    let status_before = worktree_status(ctx.runner, &app_root);
+    if let Err(f) = ensure_running(ctx.runner, "walk") {
+        return Ok(finish_failed(ctx, f));
+    }
+    // ⑧: the recording starts before the walk so it shows the first step.
+    let mut video = None;
+    if pr_state.is_some() {
+        if let Err(status) = record::start(ctx.runner, &mut ctx.record, &ctx.runs_root, &device.id)
+        {
+            video = Some(status);
+        }
+    }
+    if let Err(f) = ensure_running(ctx.runner, "walk") {
         return Ok(finish_failed(ctx, f));
     }
     let core_request = CoreRequest {
@@ -368,20 +507,21 @@ fn run_inner(
             .unwrap_or_default(),
         platform: platform_str(req.platform).to_string(),
         app_id: config.app_id.clone(),
+        app_root: app_root.clone(),
         run_dir: run_dir.clone(),
         lease: lease.wire(),
         target: CoreTarget {
             device_id: device.id.clone(),
             metro_port: config.metro_port,
             metro_url_for_device: format!("http://127.0.0.1:{}", config.metro_port),
-            worktree: req.project_root.clone(),
+            worktree: project_root.clone(),
             adb: None,
         },
     };
     let spec = core::spawn_spec(
         &node,
         &req.runtime_dir,
-        &req.project_root,
+        &project_root,
         &lease.wire(),
         config.metro_port,
     );
@@ -398,30 +538,79 @@ fn run_inner(
         core::abort(core_child);
         return Ok(finish_failed(ctx, f));
     }
-    let outcome = core::wait(ctx.runner, core_child, req.budgets);
+    let mut outcome = core::wait(ctx.runner, core_child, req.budgets);
     let t = ctx.mark("walk", t);
+    let drift = match (status_before, worktree_status(ctx.runner, &app_root)) {
+        (Some(before), Some(after)) => worktree_drift(&before, &after),
+        _ => Vec::new(),
+    };
     if let Some(exit) = outcome.exit {
         ctx.notes.push(("core_exit".to_string(), exit.to_string()));
     }
 
+    match candidate::verify_unchanged(ctx.runner, &ctx.record.candidate) {
+        Ok(()) => ctx
+            .notes
+            .push(("candidate_drift".to_string(), "none".to_string())),
+        Err(detail)
+            if outcome
+                .failure
+                .as_ref()
+                .is_some_and(|failure| failure.code == FailureCode::RunCancelled) =>
+        {
+            ctx.notes.push(("candidate_drift".to_string(), detail));
+        }
+        Err(detail) => {
+            outcome.verdict = Verdict::Fail;
+            outcome.ledger.verdict = "FAIL".to_string();
+            outcome.failure = Some(Failure::new(
+                "verify",
+                FailureCode::CandidateDrifted,
+                format!("the candidate changed during the walk: {detail}"),
+                "re-run the check against an unchanged candidate",
+            ));
+            ctx.notes.push(("candidate_drift".to_string(), detail));
+        }
+    }
     let ledger_path = run_dir.join("ledger.json");
     if let Err(e) = std::fs::write(
         &ledger_path,
-        serde_json::to_vec_pretty(&outcome.ledger).unwrap_or_default(),
+        crate::redact::durable_json(&outcome.ledger).unwrap_or_default(),
     ) {
         ctx.notes.push((
             "ledger".to_string(),
             format!("could not persist {}: {e}", ledger_path.display()),
         ));
     }
-    match candidate::verify_unchanged(ctx.runner, &ctx.record.candidate) {
-        Ok(()) => ctx
-            .notes
-            .push(("candidate_drift".to_string(), "none".to_string())),
-        Err(detail) => ctx.notes.push(("candidate_drift".to_string(), detail)),
+    // ⑫ then ⑬: the recording ends with the walk, and saved blocks leave the worktree before it goes.
+    let mut early_cleanup = Vec::new();
+    let mut blocks = Vec::new();
+    if pr_state.is_some() {
+        if ctx.record.resources.recorder.is_some() {
+            let outcome = record::stop(ctx.runner, &mut ctx.record, &ctx.runs_root);
+            if !outcome.clean() && video.is_none() {
+                video = Some(VideoStatus::Unavailable(
+                    "the recorder did not stop cleanly".into(),
+                ));
+            }
+            early_cleanup.push(("recorder".to_string(), outcome.render()));
+        }
+        let refused;
+        (blocks, refused) = worktree::copy_blocks(
+            &project_root,
+            outcome.ledger.blocks_written.as_deref().unwrap_or_default(),
+            &run_dir.join("blocks"),
+        );
+        if !refused.is_empty() {
+            ctx.notes.push((
+                "blocks_not_saved".to_string(),
+                format!("could not preserve {}", refused.join(", ")),
+            ));
+        }
     }
 
-    let (cleanup, all_clean) = teardown(&mut ctx, outcome.group_survived);
+    let (mut cleanup, all_clean) = teardown(&mut ctx, outcome.group_survived);
+    cleanup.splice(..0, early_cleanup);
     ctx.mark("teardown", t);
 
     let report_path = match report::write(
@@ -483,8 +672,66 @@ fn run_inner(
     if let Err(f) = ctx.save() {
         return Ok(ctx.fail(f));
     }
+    let mut tested_older_commit = None;
+    if let Some(pr) = &pr_state {
+        let video = video.unwrap_or_else(|| record::finalize(ctx.runner, &run_dir));
+        ctx.notes.push(("video".to_string(), video.to_string()));
+        // ⑭: a head that moved during the run means an older commit was tested.
+        match github::pr_view(ctx.runner, &pr.info.url, &pr.repo_root) {
+            Ok(now) if now.head_ref_oid != pr.info.head_ref_oid => {
+                tested_older_commit = Some(pr.info.head_ref_oid.clone());
+            }
+            Ok(_) => {}
+            Err(f) => ctx
+                .notes
+                .push(("pr_head_recheck".to_string(), f.detail.to_string())),
+        }
+        let video_publication = outcome.ledger.video_publication.clone().unwrap_or_default();
+        let pr_record = PrRunRecord {
+            number: pr.info.number,
+            url: pr.info.url.clone(),
+            head_ref_oid: pr.info.head_ref_oid.clone(),
+            head_ref_name: pr.info.head_ref_name.clone(),
+            is_cross_repository: pr.info.is_cross_repository,
+            repo_root: pr.repo_root.clone(),
+            app_rel: pr.app_rel.clone(),
+            platform: platform_str(req.platform).to_string(),
+            app_id: config.app_id.clone(),
+            device: device.name.clone(),
+            plan_sha256: sha256_hex(plan.as_bytes()),
+            video,
+            video_withholding_reason: video_publication.withholding_reason().map(str::to_string),
+            video_publication,
+            tested_older_commit: tested_older_commit.is_some(),
+            blocks,
+            identity_values: identity_values(&device, config.metro_port, &ctx.record.resources),
+        };
+        let written = std::fs::write(run_dir.join("plan.md"), &plan).and_then(|()| {
+            std::fs::write(
+                run_dir.join("pr.json"),
+                serde_json::to_vec_pretty(&pr_record).unwrap_or_default(),
+            )
+        });
+        if let Err(e) = written {
+            ctx.notes
+                .push(("pr_record".to_string(), format!("could not persist: {e}")));
+        }
+    }
     let mut receipt = finish_receipt(ctx, result, failure);
+    receipt.tested_older_commit = tested_older_commit;
     receipt.ledger = Some(report::summarize(&outcome.ledger));
+    receipt.blocks_written = outcome.ledger.blocks_written.clone().unwrap_or_default();
+    receipt.blocks_not_saved = outcome
+        .ledger
+        .blocks
+        .iter()
+        .filter(|block| block.saved == Some(false))
+        .map(|block| crate::receipt::BlockNotSaved {
+            block: block.key.clone(),
+            reason: block.unsavable.clone().unwrap_or_default(),
+        })
+        .collect();
+    receipt.worktree_drift = drift;
     receipt.artifacts.insert("report".to_string(), report_path);
     receipt.artifacts.insert("ledger".to_string(), ledger_path);
     for (name, rendered) in cleanup {
@@ -496,11 +743,112 @@ fn run_inner(
     Ok(receipt)
 }
 
-fn ensure_running(runner: &dyn Runner, next_phase: &str) -> Result<(), Failure> {
-    match runner.cancellation() {
-        Some(reason) => Err(Failure::cancelled(next_phase, &reason)),
-        None => Ok(()),
+// The run's own identifiers, kept privately in pr.json so publication can redact them as whole words.
+fn identity_values(device: &Device, metro_port: u16, resources: &Resources) -> Vec<String> {
+    let mut values = vec![
+        device.name.clone(),
+        device.id.clone(),
+        metro_port.to_string(),
+    ];
+    values.extend(resources.adb_local_serial.clone());
+    values.extend(resources.usb_device.as_ref().map(|usb| usb.serial.clone()));
+    values.extend(
+        resources
+            .app_install
+            .as_ref()
+            .map(|install| install.serial.clone()),
+    );
+    values.extend(
+        resources
+            .adb_server
+            .as_ref()
+            .map(|srv| srv.server_port.to_string()),
+    );
+    values.extend(
+        resources
+            .tunnel
+            .as_ref()
+            .map(|tunnel| tunnel.local_port.to_string()),
+    );
+    values.extend(resources.adb_reverse_port.map(|port| port.to_string()));
+    values.retain(|value| !value.is_empty());
+    values.sort();
+    values.dedup();
+    values
+}
+
+pub fn app_root_for(config_path: &Path, project_root: &Path) -> Result<PathBuf, Failure> {
+    let project = std::fs::canonicalize(project_root).map_err(|e| {
+        Failure::new(
+            "config",
+            FailureCode::ScenarioUnreadable,
+            format!(
+                "cannot resolve the app root {}: {e}",
+                project_root.display()
+            ),
+            "run check from the app directory that holds .qaren/config.yaml",
+        )
+    })?;
+    let root = config_path
+        .parent()
+        .filter(|dir| dir.file_name().is_some_and(|name| name == ".qaren"))
+        .and_then(Path::parent)
+        .and_then(|dir| std::fs::canonicalize(dir).ok())
+        .filter(|dir| dir.starts_with(&project))
+        .unwrap_or(project);
+    Ok(root)
+}
+
+pub fn worktree_status(runner: &mut dyn Runner, app_root: &Path) -> Option<BTreeSet<String>> {
+    let output = runner.run(&CmdSpec::new(
+        "git-worktree-status",
+        "git",
+        &[
+            "-C",
+            &app_root.to_string_lossy(),
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--",
+            ".",
+            ":(exclude).qaren/actions",
+        ],
+        20,
+    ));
+    output.ok().then(|| porcelain_entries(&output.stdout))
+}
+
+// One `XY path` entry per change; a rename or copy also names its source path.
+fn porcelain_entries(stdout: &str) -> BTreeSet<String> {
+    let mut entries = BTreeSet::new();
+    let mut records = stdout.split('\0').filter(|record| !record.is_empty());
+    while let Some(record) = records.next() {
+        let renamed = record.starts_with('R') || record.starts_with('C');
+        let source = if renamed { records.next() } else { None };
+        entries.insert(match source {
+            Some(source) => format!("{record}\0{source}"),
+            None => record.to_string(),
+        });
     }
+    entries
+}
+
+// Paths whose status changed during the walk, outside the block corpus; diagnostic only.
+pub fn worktree_drift(before: &BTreeSet<String>, after: &BTreeSet<String>) -> Vec<String> {
+    before
+        .symmetric_difference(after)
+        .flat_map(|entry| {
+            entry
+                .get(3..)
+                .unwrap_or(entry)
+                .split('\0')
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn refusal_code(code: &str) -> FailureCode {
@@ -516,6 +864,7 @@ fn refusal_code(code: &str) -> FailureCode {
 }
 
 fn reset_app(ctx: &mut Ctx, udid: &str, app_id: &str) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "fresh_install")?;
     let unknown = || {
         Failure::new(
             "fresh_install",
@@ -534,6 +883,7 @@ fn reset_app(ctx: &mut Ctx, udid: &str, app_id: &str) -> Result<(), Failure> {
                 "fresh install: reset admitted, uninstalling selected app",
             );
             ctx.save()?;
+            ensure_running(ctx.runner, "fresh_install")?;
             let output = ctx.runner.run(&ios::uninstall_app_spec(udid, app_id));
             if !output.ok() {
                 return Err(Failure::new(
@@ -574,6 +924,7 @@ fn reset_app(ctx: &mut Ctx, udid: &str, app_id: &str) -> Result<(), Failure> {
 }
 
 fn boot_selected_device(ctx: &mut Ctx, device: &Device) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "boot_device")?;
     let failed = |detail| {
         Failure::new(
             "boot_device",
@@ -587,6 +938,7 @@ fn boot_selected_device(ctx: &mut Ctx, device: &Device) -> Result<(), Failure> {
             &device.id,
             ctx.record.scenario.deadlines.device_boot_seconds,
         ));
+        ensure_running(ctx.runner, "boot_device")?;
         if !output.ok() {
             return Err(failed(
                 "bootstatus did not complete successfully for the selected simulator",
@@ -609,6 +961,9 @@ fn boot_selected_device(ctx: &mut Ctx, device: &Device) -> Result<(), Failure> {
 }
 
 fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
+    let failure = ensure_running(ctx.runner, &failure.phase)
+        .err()
+        .unwrap_or(failure);
     let (cleanup, _) = teardown(&mut ctx, false);
     let mut receipt = ctx.fail(failure);
     for (name, rendered) in cleanup {
@@ -644,6 +999,11 @@ fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, boo
     if let Some(outcome) = crate::commands::cleanup::cleanup_runner_host(ctx.runner, &ctx.record) {
         outcomes.push(("runner_host".to_string(), outcome));
     }
+    // A live recorder still addresses the device, so it gates the lease like the hosts do.
+    if ctx.record.resources.recorder.is_some() {
+        let outcome = record::stop(ctx.runner, &mut ctx.record, &ctx.runs_root);
+        outcomes.push(("recorder".to_string(), outcome));
+    }
     prepare::release_build_lock(ctx);
     if ctx.record.resources.ios_simulator.is_some() {
         outcomes.push(("simulator".to_string(), Outcome::Kept));
@@ -660,6 +1020,17 @@ fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, boo
             retained_lease_outcome(&unclean, &ctx.record.run_id)
         };
         outcomes.push(("device_lease".to_string(), outcome));
+    }
+    if let Some(wt) = ctx.record.resources.pr_worktree.clone() {
+        let outcome = if crate::commands::cleanup::producers_quiescent(&outcomes) {
+            worktree::remove(ctx.runner, &wt.repo_root, &wt.path)
+        } else {
+            Outcome::Unresolved("producer cleanup is unproven; PR worktree retained".into())
+        };
+        if outcome.clean() {
+            ctx.record.resources.pr_worktree = None;
+        }
+        outcomes.push(("pr_worktree".to_string(), outcome));
     }
     let all_clean = outcomes.iter().all(|(_, o)| o.clean());
     let _ = ctx.save();
@@ -733,15 +1104,10 @@ fn preflight_plan(
             "preflight",
             FailureCode::JevUnreachable,
             "the fixed Jev probe or plan judgments did not succeed",
-            "set a valid TYPESAFE_API_KEY in the environment and check TypeSafe reachability and the built runtime",
+            "this plan has phrase or unrecognised lines that need Jev: set a valid TYPESAFE_API_KEY, or quote every target and ✓ line",
         )
     };
-    if runner
-        .env_var("TYPESAFE_API_KEY")
-        .is_none_or(|key| key.trim().is_empty())
-    {
-        return Err(unavailable());
-    }
+    // The core decides whether the plan needs Jev; a missing key fails its probe before any device.
     let output = runner.run(&core::preflight_spec(node, runtime_dir, plan_file));
     let value = serde_json::from_str::<Value>(output.stdout.trim()).map_err(|_| unavailable())?;
     let jev = value
@@ -753,13 +1119,16 @@ fn preflight_plan(
         let prepared = value
             .get("prepared")
             .filter(|p| p.get("blocks").is_some_and(Value::is_array));
+        // An absent or non-boolean jevRequired counts as required, so an older core cannot skip the probe.
+        let jev_required = value.get("jevRequired").and_then(Value::as_bool) != Some(false);
         if let (Some(prepared), Some(jev)) = (prepared, accounting.as_ref()) {
             if prepared.get("hash").and_then(Value::as_str)
                 == Some(&sha256_hex(read_plan(plan_file)?.as_bytes()))
-                && jev
-                    .call_details
-                    .iter()
-                    .any(|c| c.scope == "preflight" && c.outcome == "ok")
+                && (!jev_required
+                    || jev
+                        .call_details
+                        .iter()
+                        .any(|c| c.scope == "preflight" && c.outcome == "ok"))
             {
                 return Ok(prepared.clone());
             }
@@ -1014,7 +1383,14 @@ fn build_scenario(
         }),
         android: None,
         android_usb: None,
-        build: BuildSpec::default(),
+        build: BuildSpec {
+            ios_workspace: config
+                .ios
+                .as_ref()
+                .filter(|_| platform == Platform::Ios)
+                .and_then(|ios| ios.build.clone()),
+            ..BuildSpec::default()
+        },
         deps: DepsSpec::default(),
         deadlines: Deadlines::default(),
     }

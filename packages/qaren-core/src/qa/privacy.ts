@@ -1,4 +1,4 @@
-import type { Element, EvidenceStatus, Screen } from './screen.js';
+import type { Element, EvidenceStatus, NativeNode, Screen } from './screen.js';
 
 export const MASK = '•••';
 
@@ -33,6 +33,7 @@ export function capturePrivateScreen(
     testID?: string;
     elements: Element[];
     associationUnique: boolean;
+    labelMayBeValue?: boolean;
   }[],
 ): void {
   const values = new Set<string>();
@@ -64,7 +65,11 @@ export function capturePrivateScreen(
       if (uncertain) uncertainPrivateInputs.add(element);
       for (const value of inputPrivacy.get(element)?.values ?? []) add(value);
       if (element.value) add(element.value);
-      if ((fact.secure || nativeLabelMayBeValue(element)) && element.label) add(element.label);
+      if (
+        ((fact.labelMayBeValue ?? fact.secure) || nativeLabelMayBeValue(element)) &&
+        element.label
+      )
+        add(element.label);
     }
   }
   if (unassociatedSecure) {
@@ -112,6 +117,13 @@ export function inputCheckSubject(element: Element): EvidenceStatus {
   );
 }
 
+// A field whose value is private evidence: native secure, or an input the screen model cannot read safely.
+export function isPrivateInput(element: Element): boolean {
+  return (
+    element.secure || inputCheckSubject(element) === 'unknown' || nativeLabelMayBeValue(element)
+  );
+}
+
 export function nativeLabelMayBeValue(element: Element): boolean {
   return inputPrivacy.get(element)?.nativeLabelMayBeValue ?? false;
 }
@@ -125,7 +137,7 @@ export function inputValues(screen: Screen, evidenceOnly = false): string[] {
         const data = inputPrivacy.get(e);
         return [
           ...(!evidenceOnly || e.secure
-            ? [...(data?.values ?? []), ...(e.value ? [e.value] : [])]
+            ? [...(data?.values ?? []).filter(Boolean), ...(e.value ? [e.value] : [])]
             : []),
           ...(data?.nativeLabelMayBeValue && e.label ? [e.label] : []),
         ];
@@ -165,6 +177,167 @@ function maskEvidence(
   return maskValues(projected, typed);
 }
 
+const NATIVE_TYPES = new Set([
+  'Application',
+  'Window',
+  'Other',
+  'Group',
+  'StaticText',
+  'Button',
+  'Link',
+  'Image',
+  'Icon',
+  'Cell',
+  'Table',
+  'CollectionView',
+  'ScrollView',
+  'TextField',
+  'SecureTextField',
+  'SearchField',
+  'TextView',
+  'Switch',
+  'Toggle',
+  'Slider',
+  'Stepper',
+  'Picker',
+  'PickerWheel',
+  'DatePicker',
+  'SegmentedControl',
+  'PageIndicator',
+  'ProgressIndicator',
+  'ActivityIndicator',
+  'NavigationBar',
+  'TabBar',
+  'Toolbar',
+  'Keyboard',
+  'Key',
+  'WebView',
+  'Map',
+  'Alert',
+  'Sheet',
+]);
+export const SYSTEM_SCROLL_BAR_LABEL =
+  /^(vertical|horizontal)\s+scroll\s+bar(?:,?\s*\d+\s+pages?)?$/i;
+const BARE_PERCENT = /^\d{1,3}%$/;
+// iOS may add one decimal digit and a (narrow) no-break space before %.
+export const SCROLL_BAR_PERCENT = /^\d{1,3}(?:[.,]\d)?\s?%$/;
+// The sink adds the 12-byte `qaren-core: ` prefix and a newline, keeping each line within 512 bytes.
+const SENSITIVE_PIXELS_LIMIT = 499;
+const SHAPE_LIMIT = 4;
+
+const shapeType = (type: string | undefined): string =>
+  type !== undefined && (NATIVE_TYPES.has(type) || /^Element\(\d{1,3}\)$/.test(type))
+    ? type
+    : 'unlisted';
+
+function labelClass(label: string | undefined): string {
+  const text = label?.trim();
+  if (!text) return 'none';
+  if (SYSTEM_SCROLL_BAR_LABEL.test(text)) return 'sb-exact';
+  return /scroll\s*bar/i.test(text) ? 'sb-loose' : 'other';
+}
+
+function valueClass(value: string | undefined): string {
+  if (value === undefined) return 'none';
+  if (BARE_PERCENT.test(value)) return 'pct';
+  if (/^\d{1,3}(?:[.,]\d+)?\s*%$/.test(value)) return 'pct-loose';
+  if (/^[-+]?\d+$/.test(value)) return 'int';
+  return /^[-+]?\d*[.,]\d+$/.test(value) ? 'dec' : 'text';
+}
+
+function lengthBucket(length: number): string {
+  if (length <= 1) return String(length);
+  return length <= 3 ? '2-3' : length <= 8 ? '4-8' : '9+';
+}
+
+// Value-free counts and shapes observe the stored verdict without changing privacy decisions.
+export function sensitivePixelsReasons(
+  screen: Screen,
+  nodes: readonly NativeNode[],
+): string | undefined {
+  const stored = privateScreens.get(screen);
+  if (stored?.sensitivePixels !== true) return undefined;
+  const values = new Set(stored.values);
+  const nodeOf = new Map(nodes.map((node) => [node.ref, node]));
+  const nodeAt = new Map(nodes.map((node) => [node.index, node]));
+  const carriers = new Map<string | undefined, number>();
+  const shapes: unknown[][] = [];
+  for (const element of screen.elements) {
+    const carrier =
+      (element.value !== undefined && values.has(element.value)) ||
+      ((element.secure || nativeLabelMayBeValue(element)) &&
+        element.label !== undefined &&
+        values.has(element.label));
+    if (!carrier) continue;
+    const node = nodeOf.get(element.ref);
+    carriers.set(node?.type, (carriers.get(node?.type) ?? 0) + 1);
+    const parent = node?.parentIndex === undefined ? undefined : nodeAt.get(node.parentIndex);
+    shapes.push([
+      shapeType(node?.type),
+      labelClass(node?.label),
+      valueClass(element.value),
+      lengthBucket(element.value?.length ?? 0),
+      node?.rect ? Math.round(node.rect.width) : null,
+      node?.rect ? Math.round(node.rect.height) : null,
+      parent ? shapeType(parent.type) : 'none',
+      element.testID ? 1 : 0,
+      element.value === undefined
+        ? 'label'
+        : element.value === node?.value?.trim()
+          ? 'native'
+          : 'react',
+    ]);
+  }
+  return formatSensitivePixels(
+    stored.values.length,
+    screen.elements.filter((element) => element.secure).length,
+    inputValues(screen).length,
+    carriers,
+    shapes,
+  );
+}
+
+export function formatSensitivePixels(
+  r1: number,
+  secure: number,
+  r3: number,
+  carriers: Iterable<readonly [string | undefined, number]>,
+  allShapes: readonly (readonly unknown[])[] = [],
+): string {
+  const counts = new Map<string, number>();
+  for (const [raw, count] of carriers) {
+    const type = raw !== undefined && NATIVE_TYPES.has(raw) ? raw : 'Other';
+    counts.set(type, (counts.get(type) ?? 0) + count);
+  }
+  const types = [...counts].sort(([a, x], [b, y]) => y - x || (a < b ? -1 : a > b ? 1 : 0));
+  let omittedTypes = 0;
+  const shapes = allShapes.slice(0, SHAPE_LIMIT);
+  const line = () =>
+    `sensitive-pixels ${JSON.stringify({
+      v: 1,
+      r1,
+      secure,
+      r3,
+      types,
+      omittedTypes,
+      shapes,
+      omittedShapes: allShapes.length - shapes.length,
+    })}`;
+  let text = line();
+  while (
+    Buffer.byteLength(text, 'utf8') > SENSITIVE_PIXELS_LIMIT &&
+    (shapes.length || types.length)
+  ) {
+    if (shapes.length) shapes.pop();
+    else {
+      types.pop();
+      omittedTypes++;
+    }
+    text = line();
+  }
+  return text;
+}
+
 export class ObservedPrivacy {
   private readonly observed = new Set<string>();
   private readonly concealed = new Set<string>();
@@ -178,6 +351,22 @@ export class ObservedPrivacy {
     for (const value of privateScreens.get(screen)?.values ?? []) this.substringValues.add(value);
     for (const value of inputValues(screen)) this.observed.add(value);
     for (const value of inputValues(screen, true)) this.concealed.add(value);
+    const text = [
+      ...screen.visibleText,
+      ...screen.elements
+        .filter((element) => !element.offscreen && !element.ref.startsWith('react:'))
+        .flatMap((element) => [element.label ?? '', element.value ?? '']),
+    ];
+    this.sensitivePixels ||= this.modelValues().some(
+      (value) => !!value && text.some((line) => line.includes(value)),
+    );
+  }
+
+  // A value typed where the screen cannot show us the field: mask it everywhere, even as a substring.
+  concealFallback(value: string): void {
+    this.concealed.add(value);
+    this.substringValues.add(value);
+    this.sensitivePixels = true;
   }
 
   canScreenshot(): boolean {

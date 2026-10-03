@@ -23,6 +23,7 @@ const request: WireRequest = {
   plan: '1. Tap "A"\n',
   platform: 'ios',
   appId: 'com.example.app',
+  appRoot: '/tmp/qaren/app',
   runDir: '/tmp/qaren/runs/check-1',
   lease: 'check-1:0123456789abcdef0123456789abcdef',
   target: {
@@ -152,6 +153,20 @@ test('malformed envelopes and requests are rejected', () => {
       ),
     /missing required fields/,
   );
+  for (const appRoot of [undefined, 'relative/app'])
+    assert.throws(
+      () =>
+        parseRequest(
+          JSON.stringify({
+            v: 1,
+            runId: 'x',
+            seq: 1,
+            type: 'request',
+            payload: { ...request, appRoot },
+          }),
+        ),
+      /missing required fields/,
+    );
   assert.throws(
     () =>
       parseRequest(
@@ -216,6 +231,10 @@ test('preflight accounting round-trips and rejects malformed or walk-scoped entr
       payload: { ...request, preflightCalls: calls },
     });
   assert.deepEqual(parseRequest(encoded(preflightCalls)).preflightCalls, preflightCalls);
+  const bounded = [
+    { ...preflightCalls[0], outcome: 'deadline', diagnostic: 'retry-after-outside-window' },
+  ];
+  assert.deepEqual(parseRequest(encoded(bounded)).preflightCalls, bounded);
   for (const calls of [
     null,
     {},
@@ -224,6 +243,8 @@ test('preflight accounting round-trips and rejects malformed or walk-scoped entr
     [{ ...preflightCalls[0], scope: 'walk' }],
     [{ ...preflightCalls[0], questionIds: ['private text not an id'] }],
     [{ ...preflightCalls[0], inputTokens: -5 }],
+    [{ ...preflightCalls[0], diagnostic: 'private transport message' }],
+    [{ ...preflightCalls[0], diagnostic: 42 }],
   ])
     assert.throws(() => parseRequest(encoded(calls)), /missing required fields/);
 });

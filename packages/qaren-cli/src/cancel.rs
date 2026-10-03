@@ -34,3 +34,13 @@ pub fn reason(caught: i32, parent_at_start: u32, parent_now: u32) -> Option<Stri
         other => Some(format!("received signal {other}")),
     }
 }
+
+pub(crate) fn ensure_running(
+    runner: &dyn crate::exec::Runner,
+    next_phase: &str,
+) -> Result<(), crate::failure::Failure> {
+    match runner.cancellation() {
+        Some(reason) => Err(crate::failure::Failure::cancelled(next_phase, &reason)),
+        None => Ok(()),
+    }
+}

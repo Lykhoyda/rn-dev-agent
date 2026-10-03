@@ -56,7 +56,7 @@ test('literal-only plans keep legacy captures for checks, targets, and targetles
   assert.equal(JSON.stringify(result).includes('private-value'), false);
 });
 
-test('standalone semantic checks and checks batched with targetless steps stay legacy on re-ask', async () => {
+test('standalone semantic checks and checks batched with targetless steps retain presence on re-ask', async () => {
   for (const next of ['', '\n1. Back', '\n1. Scroll down', '\n1. Accept the dialog']) {
     const judge = scriptedJudge((questions, index) => {
       assert.deepEqual(Object.keys(questions), ['check_1']);
@@ -66,12 +66,12 @@ test('standalone semantic checks and checks batched with targetless steps stay l
     const modes = traceCaptures(f);
     const result = await runPlan(parsePlan(`✓ The screen is ready${next}`).blocks!, f.deps);
     assert.equal(result.verdict, 'PASS');
-    assert.deepEqual(modes, next ? [false, false, false] : [false, false]);
+    assert.deepEqual(modes, next ? [true, true, false] : [true, true]);
     assert.equal(f.deps.now(), WAIT_POLL_MS);
   }
 });
 
-test('check batching and re-asks choose the next target mode and reuse only the fresh decision', async () => {
+test('semantic checks retain presence while quoted next steps take independent legacy captures', async () => {
   for (const quoted of [false, true]) {
     for (const kind of ['press', 'fill', 'wait', 'scroll']) {
       const target = quoted ? '"Save"' : 'the save control';
@@ -102,7 +102,16 @@ test('check batching and re-asks choose the next target mode and reuse only the 
       const result = await runPlan(parsePlan(`✓ The screen is ready\n1. ${line}`).blocks!, f.deps);
       assert.equal(result.verdict, 'PASS', `${quoted ? 'quoted' : 'phrase'} ${kind}`);
       const mutates = kind === 'press' || kind === 'fill';
-      assert.deepEqual(modes, Array(mutates ? 3 : 2).fill(!quoted));
+      assert.deepEqual(
+        modes,
+        quoted
+          ? mutates
+            ? [true, true, false, false]
+            : [true, true, false]
+          : mutates
+            ? [true, true, true]
+            : [true, true],
+      );
       assert.deepEqual(
         f.actions,
         kind === 'press' ? ['press @fresh'] : kind === 'fill' ? ['fill @fresh private-value'] : [],
@@ -111,6 +120,62 @@ test('check batching and re-asks choose the next target mode and reuse only the 
       assert.equal(f.deps.now(), WAIT_POLL_MS);
       assert.equal(JSON.stringify(result).includes('private-value'), false);
       assert.equal(JSON.stringify(judge.requests).includes('private-value'), false);
+    }
+  }
+});
+
+test('semantic checks retain presence through independent freshness refreshes and re-asks', async () => {
+  for (const next of ['', '\n1. Back', '\n1. Tap "Save"']) {
+    for (const expiryFirst of [false, true]) {
+      let now = 0;
+      const judge = scriptedJudge((_questions, index) => {
+        if (index === Number(!expiryFirst)) now += 10_000;
+        return { check_1: { type: 'noul', noul: index < 2 ? 0.5 : 0.9 } };
+      });
+      const f = walker([screen([element('@save', 'Save')])], judge);
+      f.deps.now = () => now;
+      f.deps.sleep = async (ms) => {
+        now += ms;
+      };
+      const modes = traceCaptures(f);
+      const result = await runPlan(parsePlan(`✓ The screen is ready${next}`).blocks!, f.deps);
+      assert.equal(result.verdict, 'PASS');
+      assert.deepEqual(
+        modes,
+        next.includes('Tap')
+          ? [true, true, true, false, false]
+          : next
+            ? [true, true, true, false]
+            : [true, true, true],
+      );
+      assert.equal(judge.requests.length, 3);
+      assert.equal(now, 10_000 + WAIT_POLL_MS);
+      assert.deepEqual(f.actions, next.includes('Tap') ? ['press @save'] : next ? ['back'] : []);
+    }
+  }
+});
+
+test('semantic checks require raw acquisition and semantic presence admission before judgment', async () => {
+  for (const next of ['', '\n1. Back', '\n1. Tap "Save"']) {
+    for (const rawIncomplete of [false, true]) {
+      const captured = screen([element('@save', 'Save')]);
+      captured.captureCoverage = {
+        native: rawIncomplete ? 'incomplete' : 'complete',
+        react: 'complete',
+      };
+      captured.coverage!.native = rawIncomplete ? 'complete' : 'incomplete';
+      const judge = passingJudge();
+      const f = walker([captured], judge);
+      const modes = traceCaptures(f);
+      const result = await runPlan(parsePlan(`✓ The screen is ready${next}`).blocks!, f.deps);
+      assert.equal(result.verdict, 'FAIL');
+      assert.equal(
+        result.steps[0].reason,
+        `SCREEN_EVIDENCE_INCOMPLETE: ${rawIncomplete ? 'NATIVE_ACQUISITION_UNUSABLE' : 'NATIVE_PRESENCE_UNUSABLE'}`,
+      );
+      assert.deepEqual(modes, [true]);
+      assert.equal(judge.requests.length, 0);
+      assert.deepEqual(f.actions, []);
     }
   }
 });
@@ -124,7 +189,7 @@ test('a literal check does not opt in or batch the following phrase step', async
   assert.equal(result.jev.calls, 1);
 });
 
-test('phrase press and fill keep presence mode through read-back and bounded retries', async () => {
+test('phrase actions keep presence mode through read-back and safe retries', async () => {
   for (const kind of ['press', 'fill']) {
     const f = walker(
       [screen([element('@save', 'Save', kind === 'fill' ? { kind: 'input' } : {})])],
@@ -139,14 +204,16 @@ test('phrase press and fill keep presence mode through read-back and bounded ret
       f.deps,
     );
     assert.equal(result.verdict, 'FAIL');
-    assert.deepEqual(modes, [true, true, true, true]);
-    assert.equal(f.actions.length, 2);
+    assert.deepEqual(modes, kind === 'fill' ? [true, true] : [true, true, true, true]);
+    assert.equal(f.actions.length, kind === 'fill' ? 1 : 2);
     assert.deepEqual(
       result.steps.map((row) => [row.attempt, row.outcome]),
-      [
-        [1, 'retry'],
-        [2, 'fail'],
-      ],
+      kind === 'fill'
+        ? [[1, 'fail']]
+        : [
+            [1, 'retry'],
+            [2, 'fail'],
+          ],
     );
     assert.equal(JSON.stringify(result).includes('private-value'), false);
   }
@@ -184,7 +251,7 @@ test('phrase waits and scroll-until retain presence mode for re-asks and subsequ
     assert.equal(result.verdict, 'PASS');
     assert.deepEqual(modes, [true, true, true]);
     assert.deepEqual(f.actions, kind === 'scroll' ? ['scroll down'] : []);
-    assert.equal(f.deps.now(), WAIT_POLL_MS * (kind === 'wait' ? 2 : 1));
+    assert.equal(f.deps.now(), WAIT_POLL_MS * 2);
   }
 });
 

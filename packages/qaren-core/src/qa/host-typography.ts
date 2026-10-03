@@ -38,12 +38,14 @@ export interface HostTypography {
   }>;
 }
 
-export type HeadingEvidence = {
-  kind: 'declared-heading' | 'typographic-title';
-  hostIndex: number;
-  anchorRef: string;
-  bodyRefs: string[];
-};
+export type HeadingEvidence =
+  | {
+      kind: 'declared-heading' | 'typographic-title';
+      hostIndex: number;
+      anchorRef: string;
+      bodyRefs: string[];
+    }
+  | { kind: 'navigation-title'; barRef: string };
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
@@ -196,7 +198,7 @@ export function associateHeadings(
       );
   for (const host of snapshot.nodes) {
     const association = associations.get(host.hostIndex);
-    if (!association) continue;
+    if (!association || presence.nodes[association.nativeIndex]?.status !== 'observed') continue;
     const identity = evidence.hosts[host.hostIndex];
     const base = {
       hostIndex: host.hostIndex,

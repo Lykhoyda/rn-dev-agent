@@ -52,6 +52,15 @@ export function adapt<A, T = unknown>(
   return async (args) => unwrap<T>(await handler(args));
 }
 
+// A secure field reads back only as masked; a stable masked read is its strongest fill evidence.
+export function secureMaskedFill(error: unknown): boolean {
+  if (!(error instanceof HandlerError) || error.code !== 'TEXT_ENTRY_UNVERIFIED') return false;
+  const verification = error.meta?.verification as
+    | { native?: unknown; nativeStable?: unknown }
+    | undefined;
+  return verification?.native === 'secure-masked' && verification.nativeStable === true;
+}
+
 export function describeError(error: unknown): { code: string; message: string } {
   if (error instanceof HandlerError) return { code: error.code, message: error.message };
   const message = error instanceof Error ? error.message : String(error);

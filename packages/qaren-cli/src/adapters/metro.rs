@@ -11,7 +11,7 @@ pub fn start_spec(project_root: &Path, port: u16) -> CmdSpec {
         0,
     )
     .cwd(project_root)
-    .env("CI", "1")
+    .env_remove("CI")
     .env("EXPO_NO_TELEMETRY", "1")
 }
 

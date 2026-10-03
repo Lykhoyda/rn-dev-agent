@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import vm from 'node:vm';
 import { captureScreen } from '../../../dist/qa/capture.js';
+import { visibilityView } from '../../../dist/qa/screen.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import { decideScreen } from '../../../dist/qa/resolve.js';
 import { runPlan } from '../../../dist/qa/walker.js';
@@ -34,17 +35,18 @@ async function capture(source = nativeCapture(), elapsed = 0, hostType = 'RCTVie
     bundleId: 'com.test',
     startedAt: 'now',
   });
-  _setCapabilitiesForTest(['PLATFORM_PRESENCE_V1']);
+  _setCapabilitiesForTest(['PLATFORM_PRESENCE_V2']);
   _setFetchForTest(async (url, init) => {
     if (String(url).endsWith('/health'))
       return Response.json({
         ok: true,
         protocolVersion: 2,
         commands: REQUIRED_IOS_COMMANDS,
-        capabilities: [...REQUIRED_IOS_FEATURES, 'HONEST_HITTABLE', 'PLATFORM_PRESENCE_V1'],
+        capabilities: [...REQUIRED_IOS_FEATURES, 'HONEST_HITTABLE', 'PLATFORM_PRESENCE_V2'],
       });
     const request = JSON.parse(String(init?.body));
     assert.equal(request.platformPresence, true);
+    assert.equal(request.presenceBudgetMs, 20_000);
     assert.equal(request.appBundleId, 'com.test');
     assert.equal(request.interactiveOnly, undefined);
     return Response.json({ ok: true, data: source });
@@ -56,9 +58,14 @@ async function capture(source = nativeCapture(), elapsed = 0, hostType = 'RCTVie
   return captureScreen({
     appId: 'com.test',
     now: () => clock,
-    native: async () => {
+    native: async (presenceBudgetMs) => {
       const { data, meta } = parseEnvelope(
-        await runIOS({ command: 'snapshot', bundleId: 'com.test', platformPresence: true }),
+        await runIOS({
+          command: 'snapshot',
+          bundleId: 'com.test',
+          platformPresence: true,
+          presenceBudgetMs,
+        }),
       );
       return { ...data, snapshotVerdict: meta.snapshotVerdict };
     },
@@ -82,9 +89,17 @@ test('native wire through normalization, real React producer and capture reaches
   const judge = scriptedJudge((questions, _index, state) => {
     assert.equal(questions.visibility_1.type, 'noul');
     assert.match(questions.visibility_1.instructions, /not complete visual exposure/);
-    assert.deepEqual(state.visibilityEvidence, [
-      'Button "Save" [testID save] (native accessibility name; platform-observed presence)',
-    ]);
+    assert.deepEqual(state, {
+      front: 'app',
+      assertionEvidence: {
+        observed: [
+          'Button "Save" [testID save] (native accessibility name; platform-observed presence)',
+        ],
+        unknown: [],
+        unassociatedReact: 0,
+        qualifiedHeadings: [],
+      },
+    });
     return { visibility_1: { type: 'noul', noul: 0.99 } };
   });
   const f = walker([screen], judge);
@@ -143,6 +158,89 @@ test('unknown native observations refuse instead of authorizing absence, polling
   }
 });
 
+test('native wire preserves only allowlisted unknown reasons through capture to the private blocker', async () => {
+  for (const unknownReason of ['not-hittable', 'read-unavailable', 'PRIVATE-reason']) {
+    const source = nativeCapture();
+    source.nodes[1].presence.status = 'unknown';
+    delete source.nodes[1].presence.observedUptimeMs;
+    Object.assign(source.nodes[1].presence, { unknownReason });
+    const screen = await capture(source);
+    const projection = visibilityView(screen, true);
+    assert.ok('elements' in projection);
+    assert.deepEqual(projection.elements, []);
+    assert.deepEqual(projection.unknown, [{ element: screen.elements[1], reason: 'visibility' }]);
+    assert.equal(projection.unassociatedReact, 0);
+    assert.equal(projection.diagnostic?.nativeStatus, 'unknown');
+    assert.equal(
+      projection.diagnostic?.nativeUnknownReason,
+      unknownReason === 'PRIVATE-reason' ? undefined : unknownReason,
+    );
+    assert.doesNotMatch(JSON.stringify(screen), /unknownReason|nativeUnknownReason|PRIVATE-/);
+    assert.doesNotMatch(JSON.stringify(projection), /PRIVATE-/);
+    const judge = scriptedJudge(() => assert.fail('unknown-only evidence cannot be judged'));
+    const result = await decideScreen(screen, judge, {
+      kind: 'check',
+      literal: false,
+      text: 'Save appeared',
+      line: 1,
+    });
+    assert.deepEqual(result.check, {
+      refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
+      reason: 'no established assertion contribution is available',
+    });
+    assert.equal(judge.requests.length, 0);
+  }
+});
+
+test('established presence and unknown private inputs share a bounded, sanitized assertion packet', async () => {
+  const source = nativeCapture();
+  source.nodes.push({
+    ...source.nodes[1],
+    ref: '@email',
+    index: 2,
+    type: 'TextField',
+    identifier: 'email',
+    label: 'Email',
+    value: 'private-input-value',
+    presence: { ...source.nodes[1].presence, nodeIndex: 2, status: 'unknown' },
+  });
+  delete source.nodes[2].presence.observedUptimeMs;
+  Object.assign(source.nodes[2].presence, { unknownReason: 'not-hittable' });
+  const screen = await capture(source);
+  const judge = scriptedJudge((questions, _, state) => {
+    assert.deepEqual(Object.keys(questions), ['check_1', 'visibility_2']);
+    assert.deepEqual(questions.check_1, questions.visibility_2);
+    assert.deepEqual(state, {
+      front: 'app',
+      assertionEvidence: {
+        observed: [
+          'Button "Save" [testID save] (native accessibility name; platform-observed presence)',
+        ],
+        unknown: [{ description: 'Input "Email" [testID email]', reason: 'visibility' }],
+        unassociatedReact: 0,
+        qualifiedHeadings: [],
+      },
+    });
+    return {
+      check_1: { type: 'noul', noul: 0.99 },
+      visibility_2: { type: 'noul', noul: 0.99 },
+    };
+  });
+  const decision = await decideScreen(
+    screen,
+    judge,
+    { kind: 'check', literal: false, text: 'the save control', line: 1 },
+    { kind: 'wait', target: { phrase: 'the save control' }, line: 2 },
+    [],
+    undefined,
+    undefined,
+    true,
+  );
+  assert.equal(decision.check, 'pass');
+  assert.deepEqual(decision.visibility, { verdict: 'present' });
+  assert.equal(judge.requests.length, 1);
+});
+
 test('old, partial, wrong-app and over-budget evidence cannot become positive presence', async () => {
   for (const patch of [
     { presenceCapture: undefined },
@@ -150,7 +248,7 @@ test('old, partial, wrong-app and over-budget evidence cannot become positive pr
     { presenceCapture: { ...nativeCapture().presenceCapture, complete: false } },
     { snapshotGeneration: 8 },
     { truncated: true },
-    { presenceCapture: { ...nativeCapture().presenceCapture, endedUptimeMs: 5100 } },
+    { presenceCapture: { ...nativeCapture().presenceCapture, endedUptimeMs: 20_100 } },
   ]) {
     const screen = await capture({ ...nativeCapture(), ...patch });
     assert.notEqual(screen.coverage?.native, 'complete');
@@ -162,7 +260,7 @@ test('old, partial, wrong-app and over-budget evidence cannot become positive pr
     });
     assert.ok(result.visibility && 'refuse' in result.visibility);
   }
-  for (const elapsed of [5000, 5001, -1, NaN]) {
+  for (const elapsed of [22_000, 22_001, -1, NaN]) {
     const screen = await capture(nativeCapture(), elapsed);
     assert.equal(screen.coverage?.native, 'incomplete');
   }
@@ -264,21 +362,19 @@ test('rejected native evidence still protects value-derived input names in check
     if (failure === 'malformed-node') source.nodes[1].presence.status = 'bad';
     if (failure === 'missing-node') delete source.nodes[1].presence;
     if (failure === 'missing-envelope') delete source.presenceCapture;
-    const screen = await capture(source, failure === 'expired' ? 5000 : 0, 'AndroidTextInput');
+    const screen = await capture(source, failure === 'expired' ? 22_000 : 0, 'AndroidTextInput');
     assert.notEqual(screen.coverage?.native, 'complete');
     assert.ok(inputValues(screen).includes(privateValue), failure);
     assert.equal(redactEvidence(screen, privateValue), '•••', failure);
-    const judge = scriptedJudge((questions, _index, state) => {
-      assert.deepEqual(Object.keys(questions), ['check_1']);
-      assert.equal(JSON.stringify({ state, questions }).includes(privateValue), false, failure);
-      return { check_1: { type: 'noul', noul: 0.99 } };
-    });
+    const judge = scriptedJudge(() => assert.fail('rejected capture must not reach the judge'));
     const f = walker([screen], judge);
     const result = await runPlan(
       parsePlan('✓ Save appeared\n1. Wait for the save control').blocks!,
       f.deps,
     );
     assert.equal(result.verdict, 'FAIL');
+    assert.match(result.failure!.seen, /SCREEN_EVIDENCE_INCOMPLETE/);
+    assert.equal(judge.requests.length, 0);
     assert.equal(JSON.stringify(result).includes(privateValue), false, failure);
     assert.deepEqual(f.actions, []);
   }
@@ -304,8 +400,13 @@ test('native presence cannot authorize positional actions without layout evidenc
   }
 });
 
-test('independent native names retain the unchanged 30-contribution limit', async () => {
-  for (const count of [30, 31]) {
+test('native names use one whole-expectation judgment up to 30 contributions and refuse above it', async () => {
+  for (const [count, unknown] of [
+    [30, 0],
+    [31, 0],
+    [30, 1],
+    [31, 1],
+  ]) {
     const source = nativeCapture();
     for (let index = 2; index <= count; index++) {
       source.nodes.push({
@@ -317,9 +418,17 @@ test('independent native names retain the unchanged 30-contribution limit', asyn
         presence: { ...source.nodes[1].presence, nodeIndex: index },
       });
     }
+    if (unknown) {
+      source.nodes[count].presence.status = 'unknown';
+      delete source.nodes[count].presence.observedUptimeMs;
+    }
     const screen = await capture(source);
-    const judge = scriptedJudge((_questions, _index, state) => {
-      assert.equal(state.visibilityEvidence.length, 30);
+    const judge = scriptedJudge((questions, _index, state) => {
+      assert.equal(count, 30, 'overflow must not be split into independent groups');
+      assert.deepEqual(Object.keys(questions), ['visibility_1']);
+      assert.equal(state.assertionEvidence.observed.length, 30 - unknown);
+      assert.equal(state.assertionEvidence.unknown.length, unknown);
+      assert.deepEqual(Object.keys(state), ['front', 'assertionEvidence']);
       return { visibility_1: { type: 'noul', noul: 0.99 } };
     });
     const result = await decideScreen(screen, judge, undefined, {
@@ -327,10 +436,16 @@ test('independent native names retain the unchanged 30-contribution limit', asyn
       target: { phrase: 'Save' },
       line: 1,
     });
-    if (count === 30) assert.deepEqual(result.visibility, { verdict: 'present' });
-    else {
-      assert.equal(result.visibility.refuse, 'CANDIDATE_LIMIT');
-      assert.equal(judge.requests.length, 0);
-    }
+    assert.deepEqual(
+      result.visibility,
+      count === 30
+        ? { verdict: 'present' }
+        : {
+            refuse: 'CANDIDATE_LIMIT',
+            reason:
+              'more than 30 assertion contributions; the whole expectation cannot be judged within the evidence bound',
+          },
+    );
+    assert.equal(judge.requests.length, count === 30 ? 1 : 0);
   }
 });

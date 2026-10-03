@@ -2,7 +2,6 @@
 # gate:qaren-check — device-bound, not run in hosted CI.
 #   QAREN_TEST_APP   app root to check (required; the workspace test-app)
 #   QAREN_PLAN_FILE  plan to walk (default: packages/qaren-core/test/fixtures/plans/literal.md)
-#   TYPESAFE_API_KEY required for the fixed preflight probe, including literal plans
 #   QAREN_REQUIRE_JEV_WALK=1 requires walk judgments, not merely the preflight probe
 set -euo pipefail
 
@@ -15,7 +14,6 @@ if [ "$#" -gt 0 ]; then
 fi
 case "$PLAN" in /*) ;; *) PLAN="$ROOT/$PLAN" ;; esac
 if [ "$(basename "$PLAN")" = "phrases.md" ]; then export QAREN_REQUIRE_JEV_WALK=1; fi
-[ -n "${TYPESAFE_API_KEY:-}" ] || { echo "gate:qaren-check: set TYPESAFE_API_KEY in the environment" >&2; exit 1; }
 CONFIG="$APP/.qaren/config.yaml"
 
 [ -f "$CONFIG" ] || { echo "gate:qaren-check: $CONFIG is missing (needs at least appId)"; exit 1; }

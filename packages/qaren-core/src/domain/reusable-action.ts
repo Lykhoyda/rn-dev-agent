@@ -157,6 +157,10 @@ export interface M7Metadata {
   expectedRouteSequence?: string[];
   /** `maestro-runner@<semver>`; replay refuses any other value. */
   enginePin?: string;
+  /** Slug of the plan block this action was discovered from. */
+  plan?: string;
+  planHash?: string;
+  platform?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -560,7 +564,10 @@ export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata
         key === 'appId' ||
         key === 'createdAt' ||
         key === 'author' ||
-        key === 'enginePin'
+        key === 'enginePin' ||
+        key === 'plan' ||
+        key === 'planHash' ||
+        key === 'platform'
       ) {
         meta[key] = raw;
       }
@@ -588,6 +595,9 @@ export function parseM7Header(yamlText: string, fallbackId?: string): M7Metadata
     produces: meta.produces as Record<string, string | number | boolean> | undefined,
     expectedRouteSequence: meta.expectedRouteSequence as string[] | undefined,
     enginePin: meta.enginePin as string | undefined,
+    ...(meta.plan ? { plan: meta.plan as string } : {}),
+    ...(meta.planHash ? { planHash: meta.planHash as string } : {}),
+    ...(meta.platform ? { platform: meta.platform as string } : {}),
   };
 }
 

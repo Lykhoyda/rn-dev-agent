@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { QaDispatchContext } from '../domain/qa-dispatch.js';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -51,6 +52,17 @@ import {
 
 const execFile = promisify(execFileCb);
 const IME_PROBE_TIMEOUT_MS = 5_000;
+
+function withQaSession<T extends { qaContext?: QaDispatchContext }>(
+  handler: (args: T) => Promise<ToolResult>,
+): (args: T) => Promise<ToolResult> {
+  const wrapped = withSession(handler);
+  return async (args) => {
+    args.qaContext?.check();
+    if (!getActiveSession()) args.qaContext?.invalidate();
+    return wrapped(args);
+  };
+}
 
 export interface SnapshotNode {
   ref: string;
@@ -183,17 +195,26 @@ interface SnapshotProvenance {
   originAuthority: 'proven' | 'not-proven';
 }
 
-export async function fetchSnapshotNodes(allowCache = false): Promise<SnapshotFetchResult> {
+export async function fetchSnapshotNodes(
+  allowCache = false,
+  qaContext?: QaDispatchContext,
+): Promise<SnapshotFetchResult> {
+  if (qaContext) return fetchSnapshotNodesForSameScreenProof(qaContext);
   return fetchSnapshotNodesWithPolicy(allowCache, true);
 }
 
-export async function fetchSnapshotNodesForSameScreenProof(): Promise<SnapshotFetchResult> {
-  return fetchSnapshotNodesWithPolicy(false, false);
+export async function fetchSnapshotNodesForSameScreenProof(
+  qaContext?: QaDispatchContext,
+): Promise<SnapshotFetchResult> {
+  const result = await fetchSnapshotNodesWithPolicy(false, false, qaContext);
+  if (!result.ok) qaContext?.invalidate();
+  return result;
 }
 
 async function fetchSnapshotNodesWithPolicy(
   allowCache = false,
   recoverRunnerLeak = true,
+  qaContext?: QaDispatchContext,
 ): Promise<SnapshotFetchResult> {
   // GH #321 (live-sim speedup): serve device_find from the snapshot we already
   // captured when it's still a faithful picture of the screen (clean + fresh),
@@ -216,7 +237,10 @@ async function fetchSnapshotNodesWithPolicy(
     }
   }
 
-  const first = await runNative(['snapshot', '-i']);
+  const first = await runNative(['snapshot', '-i'], {
+    qaContext,
+    qaReadOnly: qaContext !== undefined,
+  });
   const initialNodes = parseSnapshotEnvelope(first);
   if (initialNodes === null) return { ok: false, reason: 'fetch-failed' };
   // GH #409: a zero-node capture cannot support any "element absent" verdict —
@@ -369,14 +393,20 @@ export async function pressCandidate(
   action?: string,
   getClient?: () => CDPClient,
   includeSystemUi = false,
+  qaContext?: QaDispatchContext,
 ): Promise<ToolResult> {
   const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
   if (action === 'click') {
     const tapArgs = ['press', ref, ...(includeSystemUi ? ['--include-system-ui'] : [])];
-    const tap = async (): Promise<ToolResult> => surfaceKeyboardGuard(await runNative(tapArgs));
+    const tap = async (): Promise<ToolResult> =>
+      surfaceKeyboardGuard(await runNative(tapArgs, { qaContext }));
     const first = await tap();
-    return first.isError && getClient
-      ? healKeyboardOccludedTap(first, keyboardHealDeps(getClient, tap))
+    return first.isError
+      ? healKeyboardOccludedTap(
+          first,
+          getClient ? keyboardHealDeps(getClient, tap, qaContext) : null,
+          qaContext,
+        )
       : first;
   }
   return okResult({
@@ -624,7 +654,7 @@ export interface ExactFillBinding {
 
 export type ExactBindOutcome =
   | { ok: true; binding: ExactFillBinding }
-  | { ok: false; detail: string };
+  | { ok: false; detail: string; unobservable?: true };
 
 function cleanNodeRef(node: SnapshotNode): string {
   return node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
@@ -751,12 +781,14 @@ export function bindExactFillTarget(
       }
       return {
         ok: false,
+        unobservable: true,
         detail: `wrapper "${id}" has no recognized input with testID "${base}" in the current snapshot`,
       };
     }
   }
   return {
     ok: false,
+    unobservable: true,
     detail: `element @${cleanNodeRef(node)} (${node.type ?? 'unknown type'}) is not a recognized text input — pass the inner input's ref or testID`,
   };
 }
@@ -764,6 +796,7 @@ export function bindExactFillTarget(
 // --- Press (enhanced with doubleTap, count, holdMs, waitForFocusMs) ---
 
 interface PressArgs {
+  qaContext?: QaDispatchContext;
   ref?: string;
   x?: number;
   y?: number;
@@ -776,14 +809,23 @@ interface PressArgs {
 }
 
 // Story 04 (#385): thread a caller-supplied settle budget into runNative.
-function settleOpts(args: { settleTimeoutMs?: number }): {
+function settleOpts(args: { settleTimeoutMs?: number; qaContext?: QaDispatchContext }): {
+  qaContext?: QaDispatchContext;
   settle?: { timeoutMs: number };
 } {
-  return args.settleTimeoutMs !== undefined ? { settle: { timeoutMs: args.settleTimeoutMs } } : {};
+  return {
+    ...(args.qaContext ? { qaContext: args.qaContext } : {}),
+    ...(args.settleTimeoutMs !== undefined ? { settle: { timeoutMs: args.settleTimeoutMs } } : {}),
+  };
 }
 
 // Story 05 (#386): thread caller-supplied settle and retryIfNoChange into runNative opts.
-function interactOpts(args: { settleTimeoutMs?: number; retryIfNoChange?: boolean }): {
+function interactOpts(args: {
+  settleTimeoutMs?: number;
+  retryIfNoChange?: boolean;
+  qaContext?: QaDispatchContext;
+}): {
+  qaContext?: QaDispatchContext;
   settle?: { timeoutMs: number };
   retryIfNoChange?: boolean;
 } {
@@ -793,19 +835,16 @@ function interactOpts(args: { settleTimeoutMs?: number; retryIfNoChange?: boolea
   };
 }
 
-// #379: build the KEYBOARD_OCCLUDED auto-heal deps. JS-first per D1250 —
-// dismiss via the injected helper (deterministic, no gestures), refresh the
-// snapshot because targets relayout when the keyboard lifts (measured live:
-// wizard-next-btn moved y=790→571), then retry the raw tap exactly once.
-// Opportunistic: no CDP → null deps → the refusal surfaces unchanged.
 function keyboardHealDeps(
   getClient: () => CDPClient,
   retryTap: () => Promise<ToolResult>,
+  qaContext?: QaDispatchContext,
 ): KeyboardAutoHealDeps | null {
   const client = cdpClientOrNull(getClient);
   if (!client) return null;
   return {
     dismissViaJs: async () => {
+      qaContext?.authorize();
       const r = await client.evaluate('__QAREN.dismissKeyboard()');
       if (typeof r.value !== 'string') return false;
       try {
@@ -815,7 +854,8 @@ function keyboardHealDeps(
         return false;
       }
     },
-    refreshSnapshot: () => runNative(['snapshot']),
+    refreshSnapshot: () =>
+      runNative(['snapshot'], { qaContext, qaReadOnly: qaContext !== undefined }),
     retryTap,
   };
 }
@@ -823,7 +863,7 @@ function keyboardHealDeps(
 export function createDevicePressHandler(
   getClient: () => CDPClient,
 ): (args: PressArgs) => Promise<ToolResult> {
-  return withSession(async (args) => {
+  return withQaSession(async (args) => {
     const hasRef = typeof args.ref === 'string' && args.ref.length > 0;
     const hasCoordinates = args.x !== undefined && args.y !== undefined;
     if (hasRef === hasCoordinates) {
@@ -841,7 +881,11 @@ export function createDevicePressHandler(
       surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
     let result = await tap();
     if (result.isError) {
-      result = await healKeyboardOccludedTap(result, keyboardHealDeps(getClient, tap));
+      result = await healKeyboardOccludedTap(
+        result,
+        keyboardHealDeps(getClient, tap, args.qaContext),
+        args.qaContext,
+      );
     }
     if (!result.isError && args.waitForFocusMs && args.waitForFocusMs > 0) {
       await new Promise((r) => setTimeout(r, args.waitForFocusMs));
@@ -887,6 +931,7 @@ export function createDeviceLongPressHandler(
 // --- Fill (exact target + final verification — GH #581) ---
 
 export interface FillArgs {
+  qaContext?: QaDispatchContext;
   ref: string;
   text: string;
   /** Bounded in-operation focus wait forwarded to the runner (default 1500ms). */
@@ -895,6 +940,10 @@ export interface FillArgs {
   testID?: string;
   /** Type into the field that already has keyboard focus instead of binding an input. */
   focused?: boolean;
+  /** With focused: refuse before typing when the React read of the intended input reports it unfocused. */
+  vetoUnfocused?: boolean;
+  requireFocused?: boolean;
+  skipFinalValidation?: boolean;
   /** Story 04 (#385): per-call settle budget override in ms. */
   settleTimeoutMs?: number;
 }
@@ -1003,8 +1052,10 @@ async function runNativeVerifyInput(
   binding: ExactFillBinding,
   text: string,
   operationToken?: string,
+  qaContext?: QaDispatchContext,
 ): Promise<{ verdict: NativeVerifyVerdict; stable: boolean }> {
   const result = await runNative(['verify-input', binding.inputRef, text], {
+    qaContext,
     settle: { enabled: false },
     exactTarget: {
       inputRef: binding.inputRef,
@@ -1031,8 +1082,9 @@ async function finalVerification(
   binding: ExactFillBinding,
   text: string,
   operationToken: string,
+  qaContext?: QaDispatchContext,
 ): Promise<NativeVerification> {
-  const native = await runNativeVerifyInput(binding, text, operationToken);
+  const native = await runNativeVerifyInput(binding, text, operationToken, qaContext);
   return classifyNativeVerification(native.verdict, native.stable);
 }
 
@@ -1137,7 +1189,9 @@ export async function performExactFill(
   const priorSignature =
     cachedSignature && cachedRect ? { ...cachedSignature, rect: cachedRect } : cachedSignature;
 
-  const snap = await fetchSnapshotNodes(true);
+  const snap = args.qaContext
+    ? await fetchSnapshotNodesForSameScreenProof(args.qaContext)
+    : await fetchSnapshotNodes(true);
   if (!snap.ok) {
     if (snap.reason === 'runner-leak-unrecovered') {
       return attachFillFailureDisposition(
@@ -1154,6 +1208,7 @@ export async function performExactFill(
   }
   const bind = bindExactFillTarget(snap.nodes, args.ref, priorSignature);
   if (!bind.ok) {
+    if (!bind.unobservable) args.qaContext?.invalidate();
     const focusedHint =
       getActiveSession()?.platform !== 'android' &&
       (bind.detail.startsWith('wrapper "') ||
@@ -1209,7 +1264,12 @@ export async function performExactFill(
       }
       if (mutation === 'observed') {
         mutationSeen = 'observed';
-        const verification = await finalVerification(binding, args.text, operationToken);
+        const verification = await finalVerification(
+          binding,
+          args.text,
+          operationToken,
+          args.qaContext,
+        );
         if (verification.verified) {
           return verifiedFillResult('native', args.text.length, {
             textEntryPath: 'native',
@@ -1242,7 +1302,12 @@ export async function performExactFill(
         { mutation: 'none', pathsTried },
       );
     }
-    const verification = await finalVerification(binding, args.text, operationToken);
+    const verification = await finalVerification(
+      binding,
+      args.text,
+      operationToken,
+      args.qaContext,
+    );
     if (verification.verified) {
       return verifiedFillResult('native', args.text.length, {
         textEntryPath: 'native',
@@ -1260,7 +1325,7 @@ export async function performExactFill(
   mutationSeen = 'observed';
   const primarySettle = extractSettleMeta(primary);
   const primaryTyping = extractTypingMeta(primary);
-  const verification = await finalVerification(binding, args.text, operationToken);
+  const verification = await finalVerification(binding, args.text, operationToken, args.qaContext);
   if (verification.verified) {
     return verifiedFillResult('native', args.text.length, {
       textEntryPath: 'native',
@@ -1286,7 +1351,7 @@ export async function performExactFill(
   );
 }
 
-async function readReactInputValue(
+export async function readReactInputValue(
   client: CDPClient | null,
   testID: string | null | undefined,
 ): Promise<{ value: string | null; controlled: boolean; focused: boolean } | null> {
@@ -1387,8 +1452,18 @@ export async function performFocusedFill(
   }
   const oracleTestId = focusedFillOracleTestId(args);
   const beforeRead = await readReactInputValue(client, oracleTestId);
+  if (
+    (args.requireFocused && beforeRead?.focused !== true) ||
+    (args.vetoUnfocused && beforeRead && !beforeRead.focused)
+  )
+    return fillFailure(
+      'NO_TEXT_INPUT_TARGET',
+      'device_fill focused: the intended input is not focused; no text was entered.',
+      { mutation: 'none', pathsTried },
+    );
   const before = controlledReactValue(beforeRead);
   const native = await runNative(['fill', args.ref, args.text], {
+    qaContext: args.qaContext,
     focusedType: true,
     settle: { enabled: false },
   });
@@ -1423,7 +1498,8 @@ export async function performFocusedFill(
       },
       'Typed into the focused field; the value could not be confirmed. Confirm with device_screenshot or expect_text before relying on it.',
     );
-  if (before === null || beforeRead?.focused !== true) return unverified();
+  if (args.skipFinalValidation || before === null || beforeRead?.focused !== true)
+    return unverified();
   const verification = await awaitReactInputValue(
     () => readReactInputValue(client, oracleTestId),
     before + args.text,
@@ -1619,7 +1695,7 @@ export async function performReactTreeInput(
 export function createDeviceFillHandler(
   getClient: () => CDPClient,
 ): (args: FillArgs) => Promise<ToolResult> {
-  return withSession(async (args) =>
+  return withQaSession(async (args) =>
     args.focused === true
       ? performFocusedFill(args, cdpClientOrNull(getClient))
       : performExactFill(args, null, {}),
@@ -1629,6 +1705,7 @@ export function createDeviceFillHandler(
 // --- Swipe (coordinate-based with direction shortcut) ---
 
 interface SwipeArgs {
+  qaContext?: QaDispatchContext;
   direction?: 'up' | 'down' | 'left' | 'right';
   x1?: number;
   y1?: number;
@@ -1754,16 +1831,20 @@ export function exactModeRejectionMessage(
 }
 
 export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolResult> {
-  return withSession(async (args) => {
+  return withQaSession(async (args) => {
     // GH #383: a respawned worker starts with empty in-memory runner state, so
     // adopt the persisted per-device file before the isFastRunnerAvailable()
     // gates below (else they false-report "unavailable" after a respawn).
-    adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
+    if (!args.qaContext) adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
     // B106 fix: use fast-runner's HID-level synthesis to bypass XCTest
     // `waitForIdle` hangs on Reanimated-driven screens. Only applies when
     // fast-runner is available (iOS) and count/pattern are not used (those
     // are daemon-specific features — fall back to agent-device for them).
-    const canUseFastRunner = isFastRunnerAvailable() && !args.count && !args.pattern;
+    const canUseFastRunner =
+      (!args.qaContext || getActiveSession()?.platform === 'ios') &&
+      isFastRunnerAvailable() &&
+      !args.count &&
+      !args.pattern;
 
     // B123: exact: true requires fast-runner. Fail loud if unavailable instead
     // of silently degrading to a 60ms-capped daemon swipe.
@@ -1792,6 +1873,8 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
             args.y2,
             args.durationMs,
             getActiveSession()?.appId ?? resolveBundleId('ios') ?? undefined,
+            args.qaContext,
+            getActiveSession()?.deviceId,
           );
           if (resp.ok) {
             return okResult({
@@ -1803,6 +1886,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
               method: 'fast-runner',
             });
           }
+          args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
           if (args.exact === true) {
             return failResult(
               'fast-runner swipe call failed and exact: true forbids daemon fallback',
@@ -1810,6 +1894,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
             );
           }
         } catch (err) {
+          args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
           if (args.exact === true) {
             return failResult(
               `fast-runner swipe call threw and exact: true forbids daemon fallback: ${err instanceof Error ? err.message : String(err)}`,
@@ -1823,7 +1908,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
       if (args.durationMs) cliArgs.push(String(args.durationMs));
       if (args.count && args.count > 1) cliArgs.push('--count', String(args.count));
       if (args.pattern) cliArgs.push('--pattern', args.pattern);
-      return runNative(cliArgs);
+      return runNative(cliArgs, { qaContext: args.qaContext });
     }
     if (args.direction) {
       // B-Tier3 fix: Use real swipe gesture (not scroll) for direction-based swipes.
@@ -1839,6 +1924,8 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
             coords.y2,
             duration,
             getActiveSession()?.appId ?? resolveBundleId('ios') ?? undefined,
+            args.qaContext,
+            getActiveSession()?.deviceId,
           );
           if (resp.ok) {
             return okResult({
@@ -1848,6 +1935,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
               ...coords,
             });
           }
+          args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
           if (args.exact === true) {
             return failResult(
               'fast-runner swipe call failed and exact: true forbids daemon fallback',
@@ -1855,6 +1943,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
             );
           }
         } catch (err) {
+          args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
           if (args.exact === true) {
             return failResult(
               `fast-runner swipe call threw and exact: true forbids daemon fallback: ${err instanceof Error ? err.message : String(err)}`,
@@ -1874,7 +1963,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
       ];
       if (args.count && args.count > 1) cliArgs.push('--count', String(args.count));
       if (args.pattern) cliArgs.push('--pattern', args.pattern);
-      return runNative(cliArgs);
+      return runNative(cliArgs, { qaContext: args.qaContext });
     }
     return failResult('Provide either direction or x1,y1,x2,y2 coordinates');
   });
@@ -1883,12 +1972,13 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
 // --- Scroll ---
 
 interface ScrollArgs {
+  qaContext?: QaDispatchContext;
   direction: 'up' | 'down' | 'left' | 'right';
   amount?: number;
 }
 
 export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolResult> {
-  return withSession(async (args) => {
+  return withQaSession(async (args) => {
     // B106 fix: Route iOS scroll through fast-runner's direct HID synthesis
     // when available. The agent-device daemon path uses XCTest's high-level
     // gesture API which calls `waitForIdle` after the drag — this hangs
@@ -1901,8 +1991,8 @@ export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolR
     const { x1, y1, x2, y2 } = computeScrollFromDirection(args.direction, amount, screen);
     // GH #383: adopt persisted per-device state so a respawned worker sees a
     // live runner before this fast-path gate.
-    adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
-    if (isFastRunnerAvailable()) {
+    if (!args.qaContext) adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
+    if ((!args.qaContext || getActiveSession()?.platform === 'ios') && isFastRunnerAvailable()) {
       try {
         const resp = await fastSwipe(
           x1,
@@ -1911,6 +2001,8 @@ export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolR
           y2,
           DEFAULT_SWIPE_DURATION_MS,
           getActiveSession()?.appId ?? resolveBundleId('ios') ?? undefined,
+          args.qaContext,
+          getActiveSession()?.deviceId,
         );
         if (resp.ok) {
           return okResult({
@@ -1923,15 +2015,17 @@ export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolR
             y2,
           });
         }
-        // Fall through to daemon on fast-runner failure
+        args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
       } catch {
-        // Fall through to daemon on fast-runner error
+        args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
       }
     }
     // Daemon / Android fallthrough: dispatch the COORDINATE form. The arg
     // builders throw on the raw direction form, so this previously crashed on
     // Android (always) and on the iOS fast-runner fallback.
-    return runNative(buildDirectionalScrollCliArgs(args.direction, args.amount));
+    return runNative(buildDirectionalScrollCliArgs(args.direction, args.amount), {
+      qaContext: args.qaContext,
+    });
   });
 }
 
@@ -2091,8 +2185,10 @@ export function createDevicePinchHandler(): (args: PinchArgs) => Promise<ToolRes
 
 // --- Back ---
 
-export function createDeviceBackHandler(): (args: Record<string, never>) => Promise<ToolResult> {
-  return withSession(() => runNative(['back']));
+export function createDeviceBackHandler(): (args: {
+  qaContext?: QaDispatchContext;
+}) => Promise<ToolResult> {
+  return withQaSession((args) => runNative(['back'], { qaContext: args.qaContext }));
 }
 
 // --- Focus Next (keyboard Next/Return button) ---
