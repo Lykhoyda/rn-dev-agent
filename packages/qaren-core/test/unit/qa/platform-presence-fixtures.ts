@@ -60,3 +60,12 @@ export function nativeCapture() {
     snapshotVerdict: { state: 'ok', nodeCount: 2, refMapUpdated: true, reasons: [] },
   };
 }
+
+export function attested<T>(nodes: T[]) {
+  return {
+    nodes,
+    truncated: false,
+    normalizationDroppedNodes: 0,
+    snapshotVerdict: { state: 'ok', nodeCount: nodes.length, refMapUpdated: true, reasons: [] },
+  };
+}

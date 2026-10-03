@@ -219,11 +219,6 @@ async function fixedPlanPipeline() {
                   v: 1,
                   id: 'a1',
                   state: 'ready',
-                  inputs: {
-                    version: 1,
-                    complete: true,
-                    facts: hosts.length ? [{ hostIndex: 0, values: [value], secure: false }] : [],
-                  },
                   tree: JSON.stringify({
                     interactive: [],
                     verdict: { state: 'ok', path: 'interactive', complete: true },

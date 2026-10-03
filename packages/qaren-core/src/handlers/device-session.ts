@@ -680,7 +680,8 @@ export function createDeviceSnapshotHandler(
       });
     }
 
-    cacheSnapshotIfPossible(result, args.platformPresence === true);
+    if (!args.qaContext && !args.qaReadOnly)
+      cacheSnapshotIfPossible(result, args.platformPresence === true);
     return attachForegroundSurfaceDiscovery(
       result,
       getActiveSession()?.appId,

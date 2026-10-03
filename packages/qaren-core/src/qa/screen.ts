@@ -7,6 +7,7 @@ import {
   duplicateNodes,
   navigationTitles,
   offscreenNodes,
+  outsideViewport,
   scrollChromeNodes,
   NATIVE_PRESENCE_UNKNOWN_REASONS,
 } from './native-presence.js';
@@ -331,7 +332,6 @@ function diagnosticHostKind(
   }
 }
 
-// Legacy offscreen flags are compatibility data, not semantic visibility evidence.
 export function join(
   nodes: NativeNode[],
   digest: DigestEntry[],
@@ -355,6 +355,7 @@ export function join(
     ) ??
       false);
   const offscreen = offscreenNodes(nodes, presence);
+  const viewport = outsideViewport(nodes);
   const chrome = scrollChromeNodes(nodes, presence);
   const associationDiagnostics = new Map<number, HostAssociationDiagnostic>();
   const associations = associateHosts(nodes, reactHostEvidence, presence, associationDiagnostics);
@@ -526,7 +527,7 @@ export function join(
       hittable: n.hittable === true,
       disabled: n.enabled === false || match?.disabled === true,
       secure: n.secure === true || n.type === 'SecureTextField',
-      offscreen: false,
+      offscreen: viewport.has(nodeIndex),
       semantic: {
         ...capabilities,
         ...(headings.has(nodeIndex) ? { heading: headings.get(nodeIndex)! } : {}),
@@ -562,6 +563,7 @@ export function join(
     );
     if (
       nativeKind === 'input' ||
+      (nativeKind === 'other' && !!nonEmpty(n.value)) ||
       kind === 'input' ||
       element.secure ||
       possibleDigestInput ||
@@ -636,12 +638,9 @@ export function join(
         disabled: !presenceMode && d.disabled === true,
       },
     };
-    const label = nonEmpty(d.text ?? d.label);
-    if (label) element.label = label;
-    const placeholder = nonEmpty(d.placeholder);
-    if (placeholder) element.placeholder = placeholder;
+    // Screen text comes only from the native tree, so a React-only element shows no user-visible string;
+    // its value still joins the mask set, which can only reduce what is written.
     const value = digestValue(d.value);
-    if (value !== undefined) element.value = value;
     if (element.kind === 'input' || d.capabilities?.fill === true || hasPositiveHostFill(d.testID))
       captureInputPrivacy(element, {
         checkSubject: 'unknown',
@@ -665,7 +664,7 @@ export function join(
   // Image and container labels are accessibility-only, not assertion evidence.
   const visibleText: string[] = [];
   for (const { e, i } of ordered) {
-    if (duplicates.has(i) || e.kind === 'image' || e.kind === 'other') continue;
+    if (duplicates.has(i) || e.offscreen || e.kind === 'image' || e.kind === 'other') continue;
     const line =
       e.kind === 'input'
         ? e.value !== undefined

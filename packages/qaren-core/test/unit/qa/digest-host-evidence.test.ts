@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import { HELPERS_VERSION } from '../../../dist/injected-helpers.js';
 import { buildFiber, createSandbox, INJECTED_HELPERS } from '../helpers/inject-harness.js';
 import { PRIVATE_INPUT_LIMITS } from '../../../dist/qa/private-input-limits.js';
 
@@ -371,7 +372,7 @@ test('current helper replaces a warm version 77 producer and reinjection stays i
   const sandbox = createSandbox({ fiberRoot: buildFiber({ hostType: 'RCTView' }) });
   Object.assign(sandbox, { __QAREN: { __v: 77 } });
   vm.runInContext(INJECTED_HELPERS, sandbox);
-  assert.equal(vm.runInContext('__QAREN.__v', sandbox), 90);
+  assert.equal(vm.runInContext('__QAREN.__v', sandbox), HELPERS_VERSION);
   assert.equal(readDigest(sandbox).hostEvidence.complete, true);
   const producer = vm.runInContext('__QAREN.getTree', sandbox);
   vm.runInContext(INJECTED_HELPERS, sandbox);

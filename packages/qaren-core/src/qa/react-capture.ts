@@ -1,16 +1,11 @@
 import { isRecord } from './questions.js';
 import type { CDPClient } from '../cdp-client.js';
 import type { ReactObservation } from './capture.js';
-import {
-  assertPrivateInputPayload,
-  bindPrivateInputs,
-  PrivateInputCaptureError,
-  PrivateInputCaptureTimeout,
-} from './private-input.js';
+import { PrivateInputCaptureError } from './private-input.js';
 import { validateReactHostEvidence } from './screen.js';
 import type { DigestEntry } from './screen.js';
 
-function completion(value: unknown, start: boolean, id?: string): Record<string, unknown> {
+function completion(value: unknown, id?: string): Record<string, unknown> {
   if (
     !isRecord(value) ||
     value.v !== 1 ||
@@ -18,9 +13,7 @@ function completion(value: unknown, start: boolean, id?: string): Record<string,
     !/^[a-f0-9]{1,64}$/.test(value.id) ||
     (id !== undefined && value.id !== id) ||
     (value.state !== 'pending' && value.state !== 'ready') ||
-    Object.keys(value).some(
-      (key) => !['v', 'id', 'state', 'tree', ...(start ? ['inputs'] : [])].includes(key),
-    ) ||
+    Object.keys(value).some((key) => !['v', 'id', 'state', 'tree'].includes(key)) ||
     (value.state === 'pending' && value.tree !== undefined)
   ) {
     throw new PrivateInputCaptureError();
@@ -123,12 +116,10 @@ export async function captureQaReact(
   typography = false,
 ): Promise<ReactObservation> {
   const deadline = performance.now() + 1500;
-  const deadlineSignal = Symbol();
   let expired = false;
-  let receivedPrivateValues = false;
   const remaining = (): number => {
     const ms = deadline - performance.now();
-    if (expired || ms <= 0) throw deadlineSignal;
+    if (expired || ms <= 0) throw new PrivateInputCaptureError();
     return ms;
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -137,7 +128,7 @@ export async function captureQaReact(
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           expired = true;
-          reject(deadlineSignal);
+          reject(new PrivateInputCaptureError());
         }, remaining());
       }),
       client.withPrivateHelperWorld(async (evaluate) => {
@@ -146,11 +137,7 @@ export async function captureQaReact(
             `globalThis.__QAREN.beginQaCapture(${typography === true ? 'true' : 'false'})`,
             remaining(),
           ),
-          true,
         );
-        const inputs = start.inputs;
-        assertPrivateInputPayload(inputs);
-        receivedPrivateValues = inputs.facts.some((fact) => fact.values.length > 0);
         remaining();
         const id = start.id as string;
         let current = start;
@@ -158,22 +145,19 @@ export async function captureQaReact(
           await new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining())));
           current = completion(
             await evaluate(`globalThis.__QAREN.readQaCapture(${JSON.stringify(id)})`, remaining()),
-            false,
             id,
           );
           remaining();
         }
-        const observation = bindPrivateInputs(publicObservation(current.tree), inputs);
+        const observation = publicObservation(current.tree);
         remaining();
         return observation;
       }),
     ]);
     remaining();
     return observation;
-  } catch (error) {
-    throw error === deadlineSignal && !receivedPrivateValues
-      ? new PrivateInputCaptureTimeout()
-      : new PrivateInputCaptureError();
+  } catch {
+    throw new PrivateInputCaptureError();
   } finally {
     expired = true;
     clearTimeout(timer);

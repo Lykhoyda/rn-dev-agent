@@ -3,7 +3,6 @@ import { test } from 'node:test';
 import { captureScreen } from '../../../dist/qa/capture.js';
 import { validateNativePresence } from '../../../dist/qa/native-presence.js';
 import { CAPTURE_BUDGET_MS, NATIVE_PRESENCE_BUDGET_MS } from '../../../dist/qa/timing.js';
-import { bindPrivateInputs, PrivateInputCaptureError } from '../../../dist/qa/private-input.js';
 import { ObservedPrivacy } from '../../../dist/qa/privacy.js';
 import { visibilityView } from '../../../dist/qa/screen.js';
 import { nativeCapture } from './platform-presence-fixtures.ts';
@@ -77,33 +76,21 @@ test('capture passes the domain budget and starts before native preparation', as
 });
 
 test('late join/private finalization strips semantic facts without losing private observations', async () => {
-  for (const expireDuring of ['join', 'private', 'react'] as const) {
+  for (const expireDuring of ['join', 'react'] as const) {
     let now = 100;
     const secret = 'late-private@example.test';
     const source = nativeCapture();
-    const react = bindPrivateInputs(
-      {
-        interactive: [],
-        verdict: { state: 'ok', path: 'interactive', complete: true },
-        hostEvidence: {
-          hosts: [
-            { testID: 'save', role: 'button', roleSource: 'role', capabilities: { press: true } },
-          ],
-          complete: true,
-        },
-      },
-      { version: 1, complete: true, facts: [{ hostIndex: 0, values: [secret], secure: true }] },
-    );
-    let hostReads = 0;
-    const evidence = react.hostEvidence;
-    Object.defineProperty(react, 'hostEvidence', {
-      get() {
-        hostReads += 1;
-        // validatePrivateInputs, capture validation, then applyPrivateInputs validation.
-        if (expireDuring === 'private' && hostReads >= 3) now = 100 + CAPTURE_BUDGET_MS;
-        return evidence;
-      },
+    source.nodes.push({
+      ...source.nodes[1],
+      ref: '@email',
+      index: 2,
+      type: 'TextField',
+      identifier: 'email',
+      label: 'Email',
+      value: secret,
+      presence: { ...source.nodes[1].presence, nodeIndex: 2 },
     });
+    source.snapshotVerdict.nodeCount = source.nodes.length;
     const label = source.nodes[1].label;
     Object.defineProperty(source.nodes[1], 'label', {
       get() {
@@ -118,7 +105,16 @@ test('late join/private finalization strips semantic facts without losing privat
       native: async () => source,
       react: async () => {
         if (expireDuring === 'react') now = 100 + CAPTURE_BUDGET_MS;
-        return react;
+        return {
+          interactive: [],
+          verdict: { state: 'ok', path: 'interactive', complete: true },
+          hostEvidence: {
+            hosts: [
+              { testID: 'save', role: 'button', roleSource: 'role', capabilities: { press: true } },
+            ],
+            complete: true,
+          },
+        };
       },
     });
     assert.equal(screen.captureCoverage?.native, 'complete', expireDuring);
@@ -131,25 +127,24 @@ test('late join/private finalization strips semantic facts without losing privat
     assert.ok('refuse' in visibilityView(screen), expireDuring);
     const privacy = new ObservedPrivacy();
     privacy.observe(screen);
-    assert.equal(privacy.redact(secret), '•••', expireDuring);
+    assert.equal(privacy.redact(`seen ${secret}`), 'seen •••', expireDuring);
     assert.equal(privacy.canScreenshot(), false, expireDuring);
-    assert.equal(JSON.stringify(screen).includes(secret), false, expireDuring);
   }
 });
 
-test('expired acquisition never bypasses unknown private-input refusal', async () => {
+test('expired acquisition is never usable even without a React digest', async () => {
   let now = 0;
-  await assert.rejects(
-    captureScreen({
-      now: () => now,
-      appId: 'com.test',
-      requirePrivateInputs: true,
-      native: async () => {
-        now = CAPTURE_BUDGET_MS;
-        return nativeCapture();
-      },
-      react: async () => ({}),
-    }),
-    PrivateInputCaptureError,
-  );
+  const screen = await captureScreen({
+    now: () => now,
+    appId: 'com.test',
+    requirePrivateInputs: true,
+    native: async () => {
+      now = CAPTURE_BUDGET_MS;
+      return nativeCapture();
+    },
+    react: async () => ({}),
+  });
+  assert.equal(screen.coverage?.native, 'incomplete');
+  assert.ok(screen.nativeCaptureCauses?.includes('capture-over-budget'));
+  assert.ok('refuse' in visibilityView(screen));
 });

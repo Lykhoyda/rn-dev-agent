@@ -3,7 +3,7 @@ import { TYPOGRAPHY_TEXT_LIMITS } from './qa/host-typography.js';
 import { INPUT_HOST_TYPES } from './qa/input-host-types.js';
 
 // Bump when the injected surface changes so warm runtimes replace stale helpers.
-export const HELPERS_VERSION = 90;
+export const HELPERS_VERSION = 91;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -590,7 +590,8 @@ export const INJECTED_HELPERS = `
     var start = Date.now();
     var slot = { id: start.toString(16) + qaCaptureCounter.toString(16), state: 'pending', expires: start + 1500 };
     qaCaptureSlot = slot;
-    var inputs = { version: 1, complete: false, facts: [] };
+    // Marks a strict QA capture; it carries no input values.
+    var inputs = { complete: false };
     function completed(tree) {
       if (qaCaptureSlot !== slot || !slot.capture) return;
       slot.state = slot.capture.accepted && typeof tree === 'string' && Date.now() < slot.capture.deadline ? 'ready' : 'refused';
@@ -605,18 +606,16 @@ export const INJECTED_HELPERS = `
       if (tree && typeof tree.then === 'function') tree.then(completed, function() { completed(null); });
       else completed(tree);
       if (!inputs.complete) {
-        inputs.facts = [];
         slot.state = 'refused';
         releaseQaCapture(slot);
       }
     } catch (_) {
       inputs.complete = false;
-      inputs.facts = [];
       slot.state = 'refused';
       releaseQaCapture(slot);
     }
-    if (slot.state === 'refused') { inputs.complete = false; inputs.facts = []; releaseQaCapture(slot); }
-    var reply = { v: 1, id: slot.id, inputs: JSON.parse(JSON.stringify(inputs)), state: slot.state };
+    if (slot.state === 'refused') { inputs.complete = false; releaseQaCapture(slot); }
+    var reply = { v: 1, id: slot.id, state: slot.state };
     if (slot.state === 'ready') { reply.tree = slot.tree; releaseQaCapture(slot); }
     return reply;
   }
@@ -634,9 +633,6 @@ export const INJECTED_HELPERS = `
     var rendererExport;
     var rendererSearched = false;
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-    var inputChars = 0;
-    var inputCount = 0;
-    var inputSnapshots = [];
     var released = false;
     var cancel;
     var capture;
@@ -687,55 +683,11 @@ export const INJECTED_HELPERS = `
       return null;
     }
 
-    function inputFacts(fiber, hostIndex) {
-      var props = qaData(fiber, 'memoizedProps');
-      if (!props || typeof props !== 'object' || Array.isArray(props)) throw new Error('Capture refused');
-      var proto = Object.getPrototypeOf(props);
-      if (proto !== null && Object.getPrototypeOf(proto) !== null) throw new Error('Capture refused');
-      var name = qaHostType(fiber);
-      var known = ${JSON.stringify(INPUT_HOST_TYPES)}.indexOf(name) !== -1;
-      var secure = qaData(props, 'secureTextEntry');
-      var value = qaData(props, 'value');
-      var text = qaData(props, 'text');
-      var fallback = qaData(props, 'defaultValue');
-      var changeText = qaData(props, 'onChangeText');
-      var change = qaData(props, 'onChange');
-      var input = known || secure != null || changeText != null || text != null || fallback != null
-        || typeof value === 'string';
-      var candidates = [value, text, fallback];
-      var snapshot = candidates.concat([secure, changeText, change, name]);
-      if (!input) return { snapshot: snapshot, fact: null };
-      if (secure != null && typeof secure !== 'boolean') throw new Error('Capture refused');
-      // RN forwards controlled value; text/defaultValue can stay stale after native edits.
-      if (typeof value !== 'string') throw new Error('Capture refused');
-      var values = [];
-      for (var vi = 0; vi < candidates.length; vi++) {
-        var candidate = candidates[vi];
-        if (candidate == null) continue;
-        if (typeof candidate !== 'string' || candidate.length > ${PRIVATE_INPUT_LIMITS.maxValueChars} || values.length >= ${PRIVATE_INPUT_LIMITS.maxValuesPerHost}) throw new Error('Capture refused');
-        values.push(candidate);
-      }
-      return { snapshot: snapshot, fact: { hostIndex: hostIndex, values: values, secure: secure === true } };
-    }
-
-    function observeInput(fiber, hostIndex) {
-      if (!privateInputs || hostIndex === null) return;
-      var input = inputFacts(fiber, hostIndex);
-      inputSnapshots.push({ fiber: fiber, hostIndex: hostIndex, values: input.snapshot });
-      if (!input.fact) return;
-      for (var vi = 0; vi < input.fact.values.length; vi++) {
-        inputChars += input.fact.values[vi].length;
-        if (++inputCount > ${PRIVATE_INPUT_LIMITS.maxValues} || inputChars > ${PRIVATE_INPUT_LIMITS.maxTotalChars}) throw new Error('Capture refused');
-      }
-      privateInputs.facts.push(input.fact);
-    }
-
     function release() {
       released = true;
       if (cancel) { var stop = cancel; cancel = null; stop(); }
       captured.length = 0;
       hostRecords.length = 0;
-      inputSnapshots.length = 0;
       records = new WeakMap();
       privateInputs = null;
       hook = null;
@@ -858,7 +810,6 @@ export const INJECTED_HELPERS = `
     }
 
     function observe(fiber, frame, hostIndex) {
-      observeInput(fiber, hostIndex);
       var record = {
         fiber: fiber, props: fiber.memoizedProps, parent: fiber.return,
         child: fiber.child, sibling: fiber.sibling, state: fiber.stateNode,
@@ -1040,12 +991,6 @@ export const INJECTED_HELPERS = `
           || (r.sibling && (r.sibling.return !== r.siblingParent || (r.siblingParent !== r.parent && !sameFiber(r.siblingParent, r.parent))))
           || (f.stateNode && f.stateNode.canonical) !== r.canonical || typographyHostType(f) !== r.hostType) return false;
         if (r.node && r.node.accessibility && JSON.stringify(accessibilityFacts(r.props)) !== JSON.stringify(r.node.accessibility)) return false;
-      }
-      for (var ii = 0; ii < inputSnapshots.length; ii++) {
-        if (Date.now() >= deadline) return false;
-        var prior = inputSnapshots[ii];
-        var now = inputFacts(prior.fiber, prior.hostIndex).snapshot;
-        for (var pi = 0; pi < now.length; pi++) if (now[pi] !== prior.values[pi]) return false;
       }
       return true;
     }
@@ -1401,7 +1346,7 @@ export const INJECTED_HELPERS = `
       // Gather descendant text (capped), NOT recursing into nested interactive
       // nodes (they each get their own entry).
       var collectText = function(fiber, depth, acc) {
-        if (!fiber || depth > 8 || acc.s.length >= 120) return;
+        if (!fiber || depth > 8 || acc.s.length >= 120 || inactiveRoute(fiber)) return;
         if (typography && (++typographyDigestVisits > 5000 || Date.now() >= typography.deadline)) { typography.evidence.complete = false; return; }
         if (fiber.tag === 6 && typeof fiber.memoizedProps === 'string') {
           var t = fiber.memoizedProps.trim();
@@ -1448,6 +1393,45 @@ export const INJECTED_HELPERS = `
         if (hostEvidence.hosts.length === ${PRIVATE_INPUT_LIMITS.maxHosts}) hostEvidence.complete = false;
         return hostEvidence.hosts.length - 1;
       }
+      // A failed safe read never skips: it only means this fiber is walked as before.
+      function routeRead(object, key) {
+        try { return qaData(object, key, true); } catch (e) { return undefined; }
+      }
+      // Null means no override; UNKNOWN_DISPLAY means an override could not be read or was past a scan cap.
+      var UNKNOWN_DISPLAY = {};
+      function styleRead(object, key) {
+        try { return qaData(object, key, true); } catch (e) { return UNKNOWN_DISPLAY; }
+      }
+      function resolvedDisplay(style, depth) {
+        if (style === UNKNOWN_DISPLAY) return UNKNOWN_DISPLAY;
+        if (!style || typeof style !== 'object') return null;
+        if (depth > 16) return UNKNOWN_DISPLAY;
+        if (Array.isArray(style)) {
+          var shown = null;
+          for (var di = 0; di < style.length; di++) {
+            if (di >= 64) return UNKNOWN_DISPLAY;
+            var part = resolvedDisplay(styleRead(style, String(di)), depth + 1);
+            if (part !== null) shown = part;
+          }
+          return shown;
+        }
+        var display = styleRead(style, 'display');
+        return display === undefined ? null : display;
+      }
+      // A provably inactive route is off the visible screen; skipping it only loses digest semantics.
+      function inactiveRoute(fiber) {
+        var props = routeRead(fiber, 'memoizedProps');
+        if (!props || typeof props !== 'object') return false;
+        var inactive = routeRead(props, 'activityState') === 0;
+        var invisible = routeRead(props, 'visible') === false;
+        if (inactive || invisible) {
+          var routeName = getName(fiber) || '';
+          var routeBase = routeName.slice(routeName.lastIndexOf('.') + 1);
+          if (inactive && (routeBase === 'Screen' || routeBase === 'InnerScreen' || routeBase === 'RNSScreen')) return true;
+          if (invisible && (routeBase === 'MaybeScreen' || routeBase === 'ScreenContainer')) return true;
+        }
+        return isHostFiber(fiber) && resolvedDisplay(routeRead(props, 'style'), 0) === 'none';
+      }
       var iRoots = findAllRootFibers(typography);
       var iBudget = Math.min(5000, 2000 * Math.max(1, iRoots.length));
       var iQueue = [];
@@ -1463,6 +1447,7 @@ export const INJECTED_HELPERS = `
         if (!ifiber || iSeen.has(ifiber)) continue;
         iSeen.add(ifiber);
         iScanned++;
+        if (inactiveRoute(ifiber)) continue;
         if (typography) typography.prepare(ifiber);
         var hostIndex = collectHostEvidence(ifiber);
         var typographyRecord = typography ? typography.observe(ifiber, iframe, hostIndex) : null;

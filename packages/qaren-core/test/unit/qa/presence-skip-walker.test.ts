@@ -108,7 +108,7 @@ test('geometry-only scroll clipping changes are observed on the next phrase poll
   };
   const clipped = geometry(210);
   const visible = geometry(150);
-  assert.equal(screenSignature(clipped.plain), screenSignature(visible.plain));
+  assert.notEqual(screenSignature(clipped.plain), screenSignature(visible.plain));
   assert.equal(clipped.observed.elements[3].semantic?.visibility, 'offscreen');
   assert.equal(visible.observed.elements[3].semantic?.visibility, 'visible');
   const { f, judge, modes } = fixture(clipped.observed);

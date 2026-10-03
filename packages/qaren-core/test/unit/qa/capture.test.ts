@@ -271,6 +271,8 @@ test('native diagnostic strings and timings are bounded and allowlisted', async 
 test('first-mismatch diagnostics accept only bounded structural fields and never change admission', async () => {
   const secret = 'PRIVATE-mismatch-canary';
   const mismatch = { kind: 'node', index: 1, fieldMask: 16, beforeType: 9, afterType: 48 };
+  const viewport =
+    'viewport-diagnostic {"v":1,"app":[0,0,400,800],"windowCount":0,"windows":[],"rectless":0,"outsideApp":0,"symptom":0,"noWindow":0,"invalidWindowOnly":0,"scrollClipped":0,"sample":[]}';
   const capture = async (detail: unknown, reason = 'enumeration-changed', throwSink = false) => {
     const logs: string[] = [];
     const source = nativeCapture();
@@ -310,6 +312,7 @@ test('first-mismatch diagnostics accept only bounded structural fields and never
   assert.deepEqual(safe.logs, [
     'presence-failure=revalidation:enumeration-changed',
     'presence-mismatch=kind=node,index=1,fieldMask=16,beforeType=9,afterType=48',
+    viewport,
   ]);
   assert.ok(safe.screen.nativeCaptureCauses?.includes(safe.logs[1]));
   assert.deepEqual(await capture(mismatch, 'enumeration-changed', true), safe);
@@ -333,7 +336,7 @@ test('first-mismatch diagnostics accept only bounded structural fields and never
     { ...mismatch, afterType: 65536 },
   ]) {
     const { logs } = await capture(detail);
-    assert.deepEqual(logs, ['presence-failure=revalidation:enumeration-changed']);
+    assert.deepEqual(logs, ['presence-failure=revalidation:enumeration-changed', viewport]);
   }
   for (const kind of ['descriptor-count', 'added-node', 'missing-node']) {
     const detail = { kind, fieldMask: 0, ...(kind === 'descriptor-count' ? {} : { index: 1 }) };
@@ -347,6 +350,7 @@ test('first-mismatch diagnostics accept only bounded structural fields and never
   assert.equal(logs[1], 'presence-mismatch=kind=node,index=599,fieldMask=511,afterType=65535');
   assert.deepEqual((await capture(mismatch, 'read-unavailable')).logs, [
     'presence-failure=revalidation:read-unavailable',
+    viewport,
   ]);
   const geometry = {
     changedMask: 15,
@@ -389,6 +393,7 @@ test('first-mismatch diagnostics accept only bounded structural fields and never
   assert.deepEqual(enriched.logs, [
     safe.logs[0],
     `${safe.logs[1]},geometry=${JSON.stringify(geometry)},ancestorTypes=[1],ancestorsTruncated=false`,
+    viewport,
   ]);
   assert.deepEqual(await capture(detailed, 'enumeration-changed', true), enriched);
   assert.ok(enriched.screen.nativeCaptureCauses?.includes(enriched.logs[1]));
@@ -454,7 +459,11 @@ test('first-mismatch diagnostics accept only bounded structural fields and never
     { kind: 'descriptor-count', fieldMask: 0, geometry },
     { kind: 'missing-node', index: 1, fieldMask: 0, ancestorTypes: [1], ancestorsTruncated: false },
   ]) {
-    assert.deepEqual((await capture(detail)).logs, [safe.logs[0]], JSON.stringify(detail));
+    assert.deepEqual(
+      (await capture(detail)).logs,
+      [safe.logs[0], viewport],
+      JSON.stringify(detail),
+    );
   }
   const partial = { ...geometry, afterFiniteMask: 14, deltaFiniteMask: 14, dx: undefined };
   assert.ok(
@@ -746,7 +755,7 @@ test('complete acquisition preserves legacy joins without claiming semantic enum
     screen.elements.map((element) => [element.ref, element.testID, element.label]),
     [
       ['@save', 'save', 'Save'],
-      ['react:later', 'later', 'Later'],
+      ['react:later', 'later', undefined],
     ],
   );
   assert.deepEqual(assertionView(screen), ['Save']);
@@ -1020,7 +1029,10 @@ test('digest errors preserve native literals and warn without logging private pa
       ['@save'],
     );
   }
-  assert.deepEqual(warnings, ['interactive digest unavailable; React coverage is unknown']);
+  assert.deepEqual(warnings, [
+    'interactive digest unavailable; React coverage is unknown',
+    'viewport-diagnostic {"v":1,"app":null,"windowCount":0,"windows":[],"rectless":1,"outsideApp":null,"symptom":null,"noWindow":null,"invalidWindowOnly":null,"scrollClipped":null,"sample":[]}',
+  ]);
 });
 
 test('non-array adapter data stays unknown rather than masquerading as a complete empty capture', async () => {

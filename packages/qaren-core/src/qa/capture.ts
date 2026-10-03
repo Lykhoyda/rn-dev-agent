@@ -1,7 +1,7 @@
 import { isRecord } from './questions.js';
-import { frontFromSurface, join, kindOf, validateReactHostEvidence } from './screen.js';
+import { frontFromSurface, join, validateReactHostEvidence } from './screen.js';
 import type { DigestEntry, NativeNode, ReactHostEvidence, Screen } from './screen.js';
-import { validateNativePresence } from './native-presence.js';
+import { outsideViewport, validateNativePresence, viewportDiagnostic } from './native-presence.js';
 import {
   CAPTURE_BUDGET_MS,
   NATIVE_PRESENCE_BUDGET_MS,
@@ -11,10 +11,9 @@ import {
   type TimingStage,
 } from './timing.js';
 import {
-  applyPrivateInputs,
+  applyNativePrivateInputs,
+  NativeSnapshotIncomplete,
   PrivateInputCaptureError,
-  PrivateInputCaptureTimeout,
-  validatePrivateInputs,
 } from './private-input.js';
 
 export class NativeCaptureError extends Error {
@@ -360,21 +359,10 @@ function reactCoverage(
 
 export async function captureScreen(deps: CaptureDeps): Promise<Screen> {
   try {
-    try {
-      return await capture(deps);
-    } catch (error) {
-      if (!(error instanceof PrivateInputCaptureTimeout)) throw error;
-      // A missed deadline cannot tell a busy JS thread from a broken read; one fresh full capture can.
-      observeTiming(deps.timing, {
-        stage: 'refresh',
-        edge: 'point',
-        outcome: 'ok',
-        at: (deps.now ?? (() => performance.now()))(),
-      });
-      return await capture(deps);
-    }
+    return await capture(deps);
   } catch (error) {
-    if (error instanceof NativeCaptureError) throw error;
+    if (error instanceof NativeCaptureError || error instanceof NativeSnapshotIncomplete)
+      throw error;
     if (deps.requirePrivateInputs || error instanceof PrivateInputCaptureError)
       throw new PrivateInputCaptureError();
     throw error;
@@ -413,36 +401,26 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
   let react: ReactObservation = {};
   try {
     react = await measureTiming(deps.timing, now, 'react-private', () => deps.react());
-  } catch (error) {
-    if (error instanceof PrivateInputCaptureTimeout) {
-      const nodes = Array.isArray(native.nodes) ? native.nodes : [];
-      if (
-        nodes.some(
-          (node) =>
-            node.secure === true ||
-            node.type === 'SecureTextField' ||
-            (kindOf(node.type) === 'input' &&
-              ((node.value?.length ?? 0) > 0 || (node.label?.length ?? 0) > 0)),
-        )
-      )
-        throw new PrivateInputCaptureError();
-      throw new PrivateInputCaptureTimeout();
-    }
-    if (deps.requirePrivateInputs || error instanceof PrivateInputCaptureError)
-      throw new PrivateInputCaptureError();
+  } catch {
+    // The native snapshot carries privacy, so a missing digest only loses semantics.
     deps.warn?.('interactive digest unavailable; React coverage is unknown');
   }
   const joinedAt = deps.timing ? now() : 0;
   observeTiming(deps.timing, { stage: 'join-private', edge: 'start', outcome: 'ok', at: joinedAt });
   let joined = false;
   try {
-    validatePrivateInputs(react, deps.requirePrivateInputs);
     const nodes = Array.isArray(native.nodes) ? native.nodes : [];
     const digest = Array.isArray(react.interactive) ? react.interactive : [];
     const captureCoverage: Coverage = {
       native: nativeCaptureCoverage(native),
       react: reactCaptureCoverage(react),
     };
+    // Privacy comes from the native tree, so one not proven complete cannot be masked safely.
+    if (deps.requirePrivateInputs && captureCoverage.native !== 'complete')
+      throw new NativeSnapshotIncomplete(
+        nodes.length,
+        captureCoverage.native === 'unknown' ? ['unattested'] : nativeIncompleteCauses(native),
+      );
     const hostEvidence = validateReactHostEvidence(react.hostEvidence);
     const nativePresence =
       captureCoverage.native === 'complete'
@@ -466,24 +444,27 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
           : {}),
       });
     }
-    const screen = applyPrivateInputs(react, {
-      ...join(
-        nodes,
-        digest,
-        frontFromSurface(native.surface, nodes),
-        {
-          native: nativePresence
-            ? 'complete'
-            : captureCoverage.native === 'incomplete' || native.presenceCapture !== undefined
-              ? 'incomplete'
-              : 'unknown',
-          react: reactCoverage(react, captureCoverage.react, hostEvidence),
-        },
-        hostEvidence,
-        nativePresence ?? (native.presenceCapture !== undefined ? 'unknown' : undefined),
-      ),
-      captureCoverage,
-    });
+    const screen = applyNativePrivateInputs(
+      {
+        ...join(
+          nodes,
+          digest,
+          frontFromSurface(native.surface, nodes),
+          {
+            native: nativePresence
+              ? 'complete'
+              : captureCoverage.native === 'incomplete' || native.presenceCapture !== undefined
+                ? 'incomplete'
+                : 'unknown',
+            react: reactCoverage(react, captureCoverage.react, hostEvidence),
+          },
+          hostEvidence,
+          nativePresence ?? (native.presenceCapture !== undefined ? 'unknown' : undefined),
+        ),
+        captureCoverage,
+      },
+      nodes,
+    );
     const elapsed = now() - started;
     const withinBudget =
       Number.isFinite(started) && started >= 0 && elapsed >= 0 && elapsed < CAPTURE_BUDGET_MS;
@@ -507,6 +488,13 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
     if (!withinBudget && !nativeCaptureCauses.includes('capture-over-budget'))
       nativeCaptureCauses.push('capture-over-budget');
     if (nativeCaptureCauses.length > 0) screen.nativeCaptureCauses = nativeCaptureCauses;
+    if (deps.warn && captureCoverage.native === 'complete' && withinBudget) {
+      try {
+        deps.warn(viewportDiagnostic(nodes, outsideViewport(nodes)));
+      } catch {
+        // Diagnostics cannot change capture admission or failure.
+      }
+    }
     joined = true;
     return screen;
   } finally {
