@@ -66,6 +66,8 @@ export interface ActResult {
   mutation?: 'none' | 'observed' | 'possible';
   // What a refused fill still proved; masked and unavailable pass unverified, mismatch fails.
   evidence?: 'masked' | 'unavailable' | 'mismatch';
+  // The handler found more than one element for the target at dispatch: terminal, never retried.
+  ambiguous?: boolean;
 }
 
 export interface WalkerDeps {
@@ -1166,6 +1168,17 @@ export async function walkBlock(
                         ? deps.back(context)
                         : deps.dialog(item.action, context),
               );
+              if (!act.ok && act.ambiguous) {
+                outcome = failed(
+                  item,
+                  attempt,
+                  act.error ?? 'TARGET_AMBIGUOUS',
+                  before.screen,
+                  undefined,
+                  ref,
+                );
+                break;
+              }
               if (
                 item.kind === 'fill' &&
                 item.target.quoted !== undefined &&

@@ -191,6 +191,7 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
           mutation: extractMutationDisposition(result),
           error: `${code}: ${message}`,
           ...(fillEvidence(error) ? { evidence: fillEvidence(error) } : {}),
+          ...(code === 'TARGET_AMBIGUOUS' ? { ambiguous: true } : {}),
         };
       }
     },
@@ -208,6 +209,7 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
               : 'possible',
         error: `${code}: ${message}`,
         ...(fillEvidence(error) ? { evidence: fillEvidence(error) } : {}),
+        ...(code === 'TARGET_AMBIGUOUS' ? { ambiguous: true } : {}),
       };
     },
   );
