@@ -4271,3 +4271,83 @@ fn a_late_cancellation_is_the_terminal_result_and_publication_refuses() {
         assert!(publisher.calls.is_empty());
     }
 }
+
+// R1: a cancel caught at a pre-walk forward-effect boundary stops that effect and every later one.
+#[test]
+fn a_cancel_at_each_pre_walk_effect_boundary_runs_nothing_after_it_and_never_resets_the_app() {
+    for hint in [
+        "fresh-install-preflight.js",
+        "pnpm install",
+        "expo run:ios --help",
+        "simctl bootstatus",
+        "plutil -convert json",
+        "simctl uninstall",
+    ] {
+        let (repo, app) = app_repo();
+        let mut mock = MockRunner::new();
+        script_preflight_inventory(
+            &mut mock,
+            &repo,
+            "simctl list devices -j",
+            &available_inventory("Shutdown"),
+        );
+        script_admission(&mut mock);
+        common::script_ios_deps(&mut mock);
+        script_admission(&mut mock);
+        mock.expect_run(
+            &format!("simctl bootstatus {UDID} -b"),
+            CmdOutput::success(""),
+        );
+        mock.expect_run(
+            "simctl list devices -j",
+            CmdOutput::success(&available_inventory("Booted")),
+        );
+        script_app_presence(&mut mock, true);
+        mock.expect_run(
+            &format!("simctl uninstall {UDID} com.rndevagent.testapp"),
+            CmdOutput::success(""),
+        );
+        script_app_presence(&mut mock, false);
+        mock.cancel_after = Some((hint.into(), "received SIGTERM".into()));
+        let mut req = request(&repo, &app, 30);
+        req.device = Some(UDID.into());
+        req.boot_device = true;
+        req.fresh_install = true;
+
+        let receipt = run(&mut mock, &req);
+
+        assert_eq!(receipt.result, ReceiptResult::Refused, "{hint}");
+        assert_eq!(receipt.failure.unwrap().code, FailureCode::RunCancelled);
+        let last = mock.calls.last().unwrap().rendered();
+        assert!(last.contains(hint), "{hint}: the last effect was {last:?}");
+        let uninstalled = labels(&mock).iter().any(|l| l == "simctl-uninstall");
+        assert_eq!(uninstalled, hint == "simctl uninstall", "{hint}");
+        assert!(!labels(&mock).iter().any(|l| l == "expo-run-ios" || l == "core-walk"));
+        assert_eq!(receipt.cleanup["device_lease"], "removed", "{hint}");
+        let record = RunRecord::load(&req.runs_root, &run_id()).unwrap();
+        assert!(record.resources.fresh_install.is_none(), "{hint}");
+    }
+}
+
+// QA scenario: a cancel during the pre-record Git probes leaves no run, lease or forward effect.
+#[test]
+fn a_cancel_during_the_git_probes_claims_nothing_and_runs_nothing_after_it() {
+    let (repo, app) = app_repo();
+    let mut mock = MockRunner::new();
+    mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
+    script_plan(&mut mock, &repo);
+    mock.expect_run("simctl list devices booted", CmdOutput::success(&booted_json()));
+    mock.expect_run("rev-parse --show-toplevel", CmdOutput::failed(1, "interrupted"));
+    mock.cancel_after = Some(("rev-parse --show-toplevel".into(), "received SIGTERM".into()));
+    let req = request(&repo, &app, 30);
+
+    let receipt = run(&mut mock, &req);
+
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    assert_eq!(receipt.failure.unwrap().code, FailureCode::RunCancelled);
+    assert_eq!(receipt.run_id, "none");
+    assert_eq!(mock.remaining(), 0);
+    assert!(mock.calls.last().unwrap().rendered().contains("rev-parse --show-toplevel"));
+    assert!(!req.lock_root.exists());
+    assert!(!req.runs_root.exists());
+}
