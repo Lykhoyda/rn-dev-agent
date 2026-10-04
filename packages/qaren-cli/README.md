@@ -144,8 +144,16 @@ steps also stay model-free.
 
 Unparseable lines refuse before allocation; unresolved screen targets refuse during the walk.
 Native platform presence establishes observed presence, not complete visual exposure
-or an accessibility heading role. Heading predicates require qualified heading evidence;
-unsupported visual or layout claims remain uncertain.
+or an accessibility heading role. Heading predicates require qualified evidence:
+an associated declared heading role, a platform-observed typographic title larger
+than and above its body siblings, or an observed iOS navigation bar title. The
+navigation bar itself remains a plain container. Requests for an accessibility
+or declared heading require the declared role; typography and navigation titles
+cannot satisfy that requirement. Qualification is owned by
+[React heading association](../qaren-core/src/qa/host-typography.ts) and
+[native navigation titles](../qaren-core/src/qa/native-presence.ts), with predicate
+eligibility in the [resolver](../qaren-core/src/qa/resolve.ts).
+Unsupported visual or layout claims remain uncertain.
 Phrase waits capture fresh screen and presence evidence on every poll, even when the
 screen appears unchanged; prior observations do not establish current presence.
 
