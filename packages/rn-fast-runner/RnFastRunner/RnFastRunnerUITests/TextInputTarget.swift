@@ -126,7 +126,7 @@ enum TextInputTarget {
   // Secret-free read classification. An empty XCUI text field reports its
   // placeholder as `value`, so a placeholder-equal read cannot prove either
   // emptiness or a typed value — both cases classify `ambiguous`; secure
-  // fields expose bullets, so any non-empty expectation is `secure-masked`.
+  // fields expose bullets, so a non-empty expectation is at best `secure-masked`.
   static func classifyValue(
     expected: String,
     rawValue: String?,
@@ -141,7 +141,10 @@ enum TextInputTarget {
         if rawValue.isEmpty { return .exact }
         return placeholderEqual ? .ambiguous : .mismatch
       }
-      return .secureMasked
+      // An empty or placeholder read, or a mask of another length, proves the value did not land.
+      if rawValue.isEmpty || placeholderEqual { return .mismatch }
+      let maskedLength = rawValue.allSatisfy { $0 == "\u{2022}" } && expected.count == expected.utf16.count
+      return maskedLength && rawValue.count != expected.count ? .mismatch : .secureMasked
     }
     if expected.isEmpty {
       if rawValue.isEmpty { return .exact }

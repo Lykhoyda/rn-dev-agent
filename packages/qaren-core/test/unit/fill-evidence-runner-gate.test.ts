@@ -1,0 +1,88 @@
+// FILL_EVIDENCE_V1: a lagging runner is rebuilt, and never asked to replace a focused field it would append to.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  _setCapabilitiesForTest,
+  _setFastRunnerStateForTest,
+  _setFetchForTest,
+  runIOS,
+} from '../../dist/runners/rn-fast-runner-client.js';
+import {
+  classifyRunnerCompatibility,
+  REQUIRED_ANDROID_COMMANDS,
+  REQUIRED_ANDROID_FEATURES,
+  REQUIRED_IOS_COMMANDS,
+  REQUIRED_IOS_FEATURES,
+} from '../../dist/runners/protocol.js';
+
+const state = {
+  schemaVersion: 1,
+  pid: process.pid,
+  port: 22657,
+  deviceId: 'fill-evidence-device',
+  bundleId: 'dev.fixture',
+  startedAt: new Date(0).toISOString(),
+  protocolVersion: 2,
+} as never;
+
+test('a runner without FILL_EVIDENCE_V1 is incompatible on both platforms', () => {
+  for (const [commands, features, others] of [
+    [REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES, ['EXACT_KEYBOARD_TARGET_GUARD']],
+    [REQUIRED_ANDROID_COMMANDS, REQUIRED_ANDROID_FEATURES, ['APP_SCOPED_EXACT_INTERACTION']],
+  ] as const) {
+    const health = { protocolVersion: 2, commands: [...commands], capabilities: [...others] };
+    assert.deepEqual(classifyRunnerCompatibility(health, null, commands, features), {
+      compatible: false,
+      reason: 'missing-features',
+      missing: ['FILL_EVIDENCE_V1'],
+    });
+    assert.deepEqual(
+      classifyRunnerCompatibility(
+        { ...health, capabilities: [...others, 'FILL_EVIDENCE_V1'] },
+        null,
+        commands,
+        features,
+      ),
+      { compatible: true },
+    );
+  }
+});
+
+for (const capable of [false, true]) {
+  test(`a focused replace ${capable ? 'reaches' : 'never reaches'} a runner ${capable ? 'with' : 'without'} FILL_EVIDENCE_V1`, async () => {
+    _setFastRunnerStateForTest(state);
+    _setCapabilitiesForTest(capable ? ['EXACT_KEYBOARD_TARGET_GUARD', 'FILL_EVIDENCE_V1'] : []);
+    const bodies: Record<string, unknown>[] = [];
+    _setFetchForTest(async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(JSON.stringify({ ok: true, v: 2, data: { message: 'typed' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    try {
+      const result = await runIOS({
+        command: 'type',
+        text: 'replacement',
+        focused: true,
+        clearFirst: true,
+      } as never);
+      if (!capable) {
+        assert.equal(result.isError, true);
+        const envelope = JSON.parse(result.content[0]!.text);
+        assert.equal(envelope.code, 'RN_FAST_RUNNER_STALE');
+        assert.equal(envelope.meta.mutation, 'none');
+        assert.deepEqual(bodies, []);
+        return;
+      }
+      assert.equal(result.isError, undefined);
+      assert.equal(bodies.length, 1);
+      assert.equal(bodies[0].focused, true);
+      assert.equal(bodies[0].clearFirst, true);
+    } finally {
+      _setFetchForTest(globalThis.fetch);
+      _setFastRunnerStateForTest(null);
+      _setCapabilitiesForTest([]);
+    }
+  });
+}

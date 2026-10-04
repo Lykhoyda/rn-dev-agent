@@ -2329,6 +2329,20 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     );
   }
 
+  // A runner without the replace sequence would append to a focused field instead of replacing it.
+  if (
+    args.command === 'type' &&
+    args.focused === true &&
+    args.clearFirst === true &&
+    !lastKnownCapabilities.includes('FILL_EVIDENCE_V1')
+  ) {
+    return failResult(
+      'RN_FAST_RUNNER_STALE: the active iOS runner cannot replace a focused field; reopen the device session to rebuild before retrying.',
+      'RN_FAST_RUNNER_STALE',
+      { missingFeatures: ['FILL_EVIDENCE_V1'], dispatched: false, mutation: 'none' },
+    );
+  }
+
   let keyboardRelayoutRecovered = false;
   // Protocol-v1 runners ignore fresh-geometry fields. Enforce the corrected
   // policy client-side instead of silently downgrading to point containment.

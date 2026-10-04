@@ -1,4 +1,4 @@
-// Focused (keyboard fallback) fill replaces: a proven-focused field is cleared and read back empty before typing.
+// Focused (keyboard fallback) fill replaces in the runner and proves focus immediately before dispatch.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -21,20 +21,20 @@ type Read = { value: string | null; focused: boolean } | null;
 
 async function run(
   reads: Read[],
-  replacementMutation?: 'none' | 'possible',
-): Promise<{ env: any; typed: string[] }> {
+  options: { mutation?: 'none' | 'possible'; requireFocused?: boolean } = {},
+): Promise<{ env: any; dispatched: string[][] }> {
   _setActiveSessionForTest({ platform: 'ios', deviceId: 'TEST-DEVICE', appId: 'com.test' });
   clearRefMap();
   markSnapshotDirty();
   updateRefMapFromFlat(WRAPPER_ONLY as never, { snapshotGeneration: 7, keyboardVisible: true });
-  const typed: string[] = [];
+  const dispatched: string[][] = [];
   let index = 0;
   _setRunAgentDeviceForTest(async (cliArgs: string[]) => {
     if (cliArgs[0] !== 'fill') return okResult({ nodes: WRAPPER_ONLY });
-    typed.push(cliArgs[2]);
-    if (replacementMutation && cliArgs[2] === 'real@example.test')
+    dispatched.push(cliArgs.slice(2));
+    if (options.mutation)
       return failResult('Replacement refused', 'TEXT_SYNTHESIS_UNAVAILABLE', {
-        mutation: replacementMutation,
+        mutation: options.mutation,
       });
     return okResult({ typed: true, textEntryRoute: 'synthesized-first-responder' });
   });
@@ -61,12 +61,13 @@ async function run(
         testID: 'qa-hidden-email',
         focused: true,
         vetoUnfocused: true,
+        ...(options.requireFocused ? { requireFocused: true } : {}),
         skipFinalValidation: true,
         clearFirst: true,
       },
       client,
     );
-    return { env: JSON.parse(result.content[0].text), typed };
+    return { env: JSON.parse(result.content[0].text), dispatched };
   } finally {
     _setRunAgentDeviceForTest(null);
     _setActiveSessionForTest(null);
@@ -74,92 +75,51 @@ async function run(
   }
 }
 
-test('a fallback refill clears the decoy and types exactly the second value', async () => {
-  const decoy = 'decoy@example.test';
-  const { env, typed } = await run([
-    { value: decoy, focused: true },
-    { value: '', focused: true },
-  ]);
+const REPLACE = ['real@example.test', '--clear-first'];
+
+test('a fallback refill replaces the decoy in one runner dispatch, never appends', async () => {
+  const { env, dispatched } = await run([{ value: 'decoy@example.test', focused: true }]);
   assert.equal(env.ok, true);
-  assert.deepEqual(typed, ['\b'.repeat(decoy.length), 'real@example.test']);
+  assert.deepEqual(dispatched, [REPLACE]);
 });
 
-test('a fallback fill into an empty field types once with no clearing keystrokes', async () => {
-  const { env, typed } = await run([{ value: '', focused: true }]);
-  assert.equal(env.ok, true);
-  assert.deepEqual(typed, ['real@example.test']);
-});
-
-for (const mutation of ['none', 'possible'] as const) {
-  test(`replacement failure with mutation ${mutation} retains the observed clear`, async () => {
-    const { env, typed } = await run(
-      [
-        { value: 'decoy', focused: true },
-        { value: '', focused: true },
-      ],
-      mutation,
-    );
-    assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
-    assert.equal(env.meta.mutation, 'observed');
-    assert.match(env.meta.hint, /do not blindly re-run device_fill/);
-    assert.doesNotMatch(env.meta.hint, /No text was entered|cannot synthesize text/);
-    assert.deepEqual(typed, ['\b'.repeat(5), 'real@example.test']);
-  });
-
-  test(`replacement failure with mutation ${mutation} in an empty field keeps its disposition`, async () => {
-    const { env, typed } = await run([{ value: '', focused: true }], mutation);
-    assert.equal(env.code, mutation === 'none' ? 'NO_TEXT_INPUT_TARGET' : 'TEXT_ENTRY_UNVERIFIED');
-    assert.equal(env.meta.mutation, mutation);
-    assert.equal(typeof env.meta.hint, 'string');
-    assert.match(
-      env.meta.hint,
-      mutation === 'none' ? /No text was entered/ : /do not blindly re-run device_fill/,
-    );
-    assert.deepEqual(typed, ['real@example.test']);
-  });
-}
-
-test('a field still non-empty after the clear refuses before typing', async () => {
-  const { env, typed } = await run([
-    { value: 'decoy', focused: true },
-    { value: 'de', focused: true },
-  ]);
-  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
-  assert.deepEqual(typed, ['\b'.repeat(5)]);
-  assert.ok(!JSON.stringify(env).includes('real@example.test'));
-  assert.ok(!JSON.stringify(env).includes('decoy'));
-});
-
-test('a field that loses focus after clearing refuses before replacement typing', async () => {
-  const { env, typed } = await run([
-    { value: 'decoy', focused: true },
-    { value: '', focused: false },
-  ]);
-  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
-  assert.equal(env.meta.mutation, 'observed');
-  assert.deepEqual(typed, ['\b'.repeat(5)]);
-});
-
-test('focus lost after empty-value confirmation refuses before replacement typing', async () => {
-  const { env, typed } = await run([
-    { value: 'decoy', focused: true },
-    { value: '', focused: true },
-    { value: '', focused: true },
-    { value: '', focused: false },
-  ]);
-  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
-  assert.equal(env.meta.mutation, 'observed');
-  assert.deepEqual(typed, ['\b'.repeat(5)]);
+test('an unreadable field on the keyboard-down transition path still replaces', async () => {
+  for (const read of [null, { value: null, focused: true }] as const) {
+    const { env, dispatched } = await run([read]);
+    assert.equal(env.ok, true);
+    assert.deepEqual(dispatched, [REPLACE]);
+  }
 });
 
 for (const [name, read] of [
   ['unreadable', null],
-  ['uncontrolled', { value: null, focused: true }],
+  ['unfocused', { value: '', focused: false }],
 ] as const) {
-  test(`an ${name} field cannot be cleared, so nothing is typed`, async () => {
-    const { env, typed } = await run([read]);
+  test(`keyboard-up focus that is ${name} at dispatch types nothing`, async () => {
+    const { env, dispatched } = await run([read], { requireFocused: true });
     assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
     assert.equal(env.meta.mutation, 'none');
-    assert.deepEqual(typed, []);
+    assert.deepEqual(dispatched, []);
+  });
+}
+
+test('I2: a contradictory read at dispatch time vetoes typing on the transition path', async () => {
+  const { env, dispatched } = await run([{ value: 'decoy', focused: false }]);
+  assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
+  assert.equal(env.meta.mutation, 'none');
+  assert.deepEqual(dispatched, []);
+});
+
+for (const mutation of ['none', 'possible'] as const) {
+  test(`a refused replacement with mutation ${mutation} keeps its disposition`, async () => {
+    const { env, dispatched } = await run([{ value: 'decoy', focused: true }], { mutation });
+    assert.equal(env.code, mutation === 'none' ? 'NO_TEXT_INPUT_TARGET' : 'TEXT_ENTRY_UNVERIFIED');
+    assert.equal(env.meta.mutation, mutation);
+    assert.match(
+      env.meta.hint,
+      mutation === 'none' ? /No text was entered/ : /do not blindly re-run device_fill/,
+    );
+    assert.deepEqual(dispatched, [REPLACE]);
+    assert.ok(!JSON.stringify(env).includes('decoy'));
   });
 }

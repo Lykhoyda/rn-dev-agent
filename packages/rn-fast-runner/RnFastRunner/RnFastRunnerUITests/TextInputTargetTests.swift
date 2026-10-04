@@ -294,6 +294,25 @@ final class TextInputTargetTests: XCTestCase {
     )
   }
 
+  func testSecureReadsThatProveTheValueDidNotLand() {
+    for raw in ["", "Password"] {
+      XCTAssertEqual(
+        TextInputTarget.classifyValue(expected: "value-a", rawValue: raw, placeholder: "Password", isSecure: true),
+        .mismatch,
+        raw
+      )
+    }
+    XCTAssertEqual(
+      TextInputTarget.classifyValue(expected: "value-a", rawValue: "•••", placeholder: nil, isSecure: true),
+      .mismatch
+    )
+    // A length the platform obscures is not a proven mismatch.
+    XCTAssertEqual(
+      TextInputTarget.classifyValue(expected: "pässwörd👍🏽", rawValue: "••••", placeholder: nil, isSecure: true),
+      .secureMasked
+    )
+  }
+
   func testEmptyClearVerification() {
     XCTAssertEqual(
       TextInputTarget.classifyValue(expected: "", rawValue: "", placeholder: nil, isSecure: false),

@@ -196,6 +196,10 @@ class TextInputRecipeTest {
     fun classifyVerifySecureNeverProvesContent() {
         assertEquals("secure-masked", TextInputRecipe.classifyVerify("value-a", "•••••••", "Password", true, secure = true))
         assertEquals("secure-masked", TextInputRecipe.classifyVerify("value-a", "value-a", "Password", true, secure = true))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("value-a", "", "Password", true, secure = true))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("value-a", "Password", "Password", true, secure = true))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("value-a", "•••", "Password", true, secure = true))
+        assertEquals("secure-masked", TextInputRecipe.classifyVerify("pass👍", "••••", "Password", true, secure = true))
         assertEquals("exact", TextInputRecipe.classifyVerify("", "", "Password", true, secure = true))
         assertEquals("ambiguous", TextInputRecipe.classifyVerify("", "Password", "Password", true, secure = true))
         assertEquals("mismatch", TextInputRecipe.classifyVerify("", "•••", "Password", true, secure = true))

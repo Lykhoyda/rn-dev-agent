@@ -26,7 +26,7 @@ extension RnFastRunnerTests {
     }
   }
 
-  private func executeFocusedType(app: XCUIApplication, text: String) -> Response {
+  private func executeFocusedType(app: XCUIApplication, text: String, replace: Bool) -> Response {
     var keyboardVisible = false
     withTemporaryScrollIdleTimeoutIfSupported(app) {
       keyboardVisible = app.keyboards.count > 0
@@ -53,7 +53,9 @@ extension RnFastRunnerTests {
     case .type:
       var synthesis: RunnerSynthesizedTextEntryResult?
       withTemporaryScrollIdleTimeoutIfSupported(app) {
-        synthesis = RunnerSynthesizedTextEntry.synthesizeText(withApplication: app, text: text)
+        synthesis = replace
+          ? RunnerSynthesizedTextEntry.replaceText(withApplication: app, text: text)
+          : RunnerSynthesizedTextEntry.synthesizeText(withApplication: app, text: text)
       }
       let result = synthesis!
       switch TypingRecipe.focusedTypeOutcome(
@@ -715,7 +717,9 @@ extension RnFastRunnerTests {
         return Response(ok: false, error: ErrorPayload(message: "type requires text"))
       }
       let delaySeconds = Double(max(command.delayMs ?? 0, 0)) / 1000.0
-      if command.focused == true { return executeFocusedType(app: activeApp, text: text) }
+      if command.focused == true {
+        return executeFocusedType(app: activeApp, text: text, replace: command.clearFirst == true)
+      }
       // GH #581: one exact operation — bind the declared input (never an
       // ambient-focused substitute), skip the focus tap only when THAT input
       // is proven focused, otherwise tap the declared focus target and prove

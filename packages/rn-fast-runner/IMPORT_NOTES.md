@@ -85,5 +85,5 @@ files imported once:
 - `RunnerSynthesizedTextEntry.m`
 
 See `LICENSE` for the required attribution. Event-record names were rewritten
-to the `rn-dev-agent-*` prefix. Not called: `replaceTextWithApplication:text:`.
+to the `rn-dev-agent-*` prefix. `replaceTextWithApplication:text:` backs focused fills that replace a field.
 No upstream-sync relationship is maintained.
