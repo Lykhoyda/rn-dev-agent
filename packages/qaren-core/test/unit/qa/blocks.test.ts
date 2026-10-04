@@ -75,6 +75,49 @@ test('serialization withholds protected semantic values before YAML escaping', (
   }
 });
 
+test('serialization withholds protected fragments in metadata, plan text and selectors', () => {
+  for (const field of ['appId', 'slug', 'title', 'planHash', 'raw', 'text', 'id', 'label']) {
+    for (const [secret, fragment] of [
+      ['existing-secret', 'secr'],
+      ['1234', '2'],
+    ]) {
+      const block = blockOf('## QA\n\n### Confirm\n1. Tap "Save"\n✓ "Saved"\n');
+      const meta = { ...ios };
+      const rows = passRows(block, { [block.items[0].line]: { id: 'save-button' } });
+      if (field === 'appId') meta.appId = fragment;
+      else if (field === 'slug' || field === 'title' || field === 'planHash') block[field] = fragment;
+      else if (field === 'raw') block.items[0].raw = fragment;
+      else if (field === 'text') {
+        const check = block.items[1];
+        assert.equal(check.kind, 'check');
+        if (check.kind === 'check') check.text = fragment;
+      } else rows[0].selector = field === 'id' ? { id: fragment } : { text: fragment };
+      const before = structuredClone({ block, rows, meta });
+      assert.deepEqual(
+        serializeBlock(block, rows, meta, [secret]),
+        { unsavable: 'contains a protected plan-typed value' },
+        `${field}: ${secret}`,
+      );
+      assert.deepEqual({ block, rows, meta }, before);
+      assert.ok('yaml' in serializeBlock(block, rows, meta));
+    }
+  }
+});
+
+test('serialization admission checks the final emitted YAML', () => {
+  const block = blockOf('## QA\n\n### Confirm\n1. Wait for "Saved" to appear\n');
+  const rows = passRows(block, { [block.items[0].line]: { text: 'Saved' } });
+  assert.deepEqual(serializeBlock(block, rows, ios, ['15000']), {
+    unsavable: 'contains a protected plan-typed value',
+  });
+  assert.ok('yaml' in serializeBlock(block, rows, ios));
+});
+
+test('serialization preserves isolated short fragments of long secrets', () => {
+  const block = blockOf('## QA\n\n### is\n✓ "is"\n');
+  assert.ok('yaml' in serializeBlock(block, passRows(block, {}), ios, ['existing-secret']));
+});
+
 test('literal.md round-trips: plan lines, planHash and selectors survive', () => {
   const block = blockOf(literal);
   const yaml = serialized(block, passRows(block, literalSelectors));

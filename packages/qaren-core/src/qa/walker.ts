@@ -479,7 +479,7 @@ export async function walkBlock(
     }
     const timed = timing ? { ...row, timing } : row;
     rows.push(timed);
-    deps.row(timed);
+    deps.row({ ...timed, block: privacy.redactIdentifier(timed.block) });
   };
   const redact = (text: string): string => privacy.redact(text);
   // A stored selector is written to the action file, so it must not carry a protected value.
@@ -521,7 +521,7 @@ export async function walkBlock(
       reason: redact(miss ? `${reason}; re-walking from this line` : reason),
     });
     return {
-      block: { key: block.slug, outcome: 'fail', source: 'discovered' },
+      block: { key: privacy.redactIdentifier(block.slug), outcome: 'fail', source: 'discovered' },
       rows,
       ...(miss ? { miss: item.line } : {}),
       ...(privateFills.length ? { privateFills } : {}),
@@ -1250,7 +1250,7 @@ export async function walkBlock(
     }
   }
   return {
-    block: { key: block.slug, outcome: 'pass', source: 'discovered' },
+    block: { key: privacy.redactIdentifier(block.slug), outcome: 'pass', source: 'discovered' },
     rows,
     ...(privateFills.length ? { privateFills } : {}),
   };
@@ -1338,15 +1338,8 @@ export async function runPlan(
           : 'withheld-privacy';
     const calls = (): JevCall[] => [...preflightCalls, ...(deps.judge?.calls ?? [])];
     const sequence = { observation: 0 };
-    const protectedValues = new Set<string>();
-    const walk = async (block: Block, opts?: WalkOptions) => {
-      const outcome = await walkBlock(block, walking, steps.length, typed, privacy, sequence, opts);
-      for (const item of block.items) {
-        if (item.kind === 'fill' && outcome.privateFills?.includes(item.line))
-          protectedValues.add(item.text);
-      }
-      return outcome;
-    };
+    const walk = (block: Block, opts?: WalkOptions) =>
+      walkBlock(block, walking, steps.length, typed, privacy, sequence, opts);
     const path = (): LedgerPath =>
       patchedAt !== undefined
         ? `replay→walk@${patchedAt}`
@@ -1358,10 +1351,23 @@ export async function runPlan(
     const finish = (outcome?: WalkOutcome): WalkResult => {
       for (const { index, write } of pending.splice(0)) results[index] = write();
       const ledger: WalkResult = {
-        ...buildLedger(results, steps, outcome?.failure, calls(), path()),
+        ...buildLedger(
+          results.map((result) => ({ ...result, key: privacy.redactIdentifier(result.key) })),
+          steps.map((row) => ({
+            ...row,
+            block: privacy.redactIdentifier(row.block),
+            text: privacy.redact(row.text),
+            ...(row.reason !== undefined ? { reason: privacy.redact(row.reason) } : {}),
+          })),
+          outcome?.failure
+            ? { ...outcome.failure, seen: privacy.redact(outcome.failure.seen) }
+            : undefined,
+          calls(),
+          path(),
+        ),
         videoPublication: videoPublication(),
       };
-      if (store) ledger.blocksWritten = written;
+      if (store) ledger.blocksWritten = written.map((key) => privacy.redactIdentifier(key));
       return outcome?.refusal
         ? {
             ...ledger,
@@ -1402,7 +1408,7 @@ export async function runPlan(
     ): BlockResult => {
       const result = withPrivateFills({ key: block.slug, outcome: 'pass', source }, privateFills);
       if (result.saved === false) return result;
-      const serialized = serializeBlock(block, rows, store, [...protectedValues]);
+      const serialized = serializeBlock(block, rows, store, privacy.protectedValues());
       if ('unsavable' in serialized)
         return { ...result, saved: false, unsavable: serialized.unsavable };
       try {

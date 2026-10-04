@@ -24,6 +24,7 @@ import { atomicWriter } from '../domain/atomic-writer.js';
 import type { Block, Item } from './plan.js';
 import { normalizedSlug } from './plan.js';
 import type { LedgerRow, Selector } from './ledger.js';
+import { modelMask } from './privacy.js';
 
 export type BlockPlatform = 'ios' | 'android';
 
@@ -94,8 +95,20 @@ export function serializeBlock(
   meta: { appId: string; platform: BlockPlatform },
   protectedValues: readonly string[] = [],
 ): { yaml: string } | { unsavable: string } {
+  const source = [
+    meta.appId,
+    block.slug,
+    block.title,
+    block.planHash,
+    ...block.items.flatMap((item) => [
+      item.raw,
+      ...(item.kind === 'fill' || (item.kind === 'check' && item.literal) ? [item.text] : []),
+    ]),
+    ...rows.flatMap((row) => [row.selector?.id ?? row.selector?.text ?? '']),
+  ];
+  const mask = modelMask(protectedValues, source, new Set(protectedValues));
   const protectedContent = (texts: string[]): boolean =>
-    protectedValues.some((value) => value.length > 0 && texts.some((text) => text.includes(value)));
+    texts.some((text) => mask.apply(text) !== text);
   const withheld = { unsavable: 'contains a protected plan-typed value' };
   if (protectedContent([meta.appId, block.slug, block.title, block.planHash])) return withheld;
   const lines = [
@@ -132,7 +145,8 @@ export function serializeBlock(
       return withheld;
     lines.push(`# ${item.raw}`, ...commandsFor(item, selector, meta.platform));
   }
-  return { yaml: `${lines.join('\n')}\n` };
+  const serialized = `${lines.join('\n')}\n`;
+  return protectedContent([serialized]) ? withheld : { yaml: serialized };
 }
 
 function selectorFrom(value: unknown): Selector | undefined {

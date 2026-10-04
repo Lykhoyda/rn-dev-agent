@@ -429,6 +429,10 @@ export class ObservedPrivacy {
     return !this.sensitivePixels;
   }
 
+  protectedValues(): string[] {
+    return [...new Set([...this.concealed, ...this.substringValues])];
+  }
+
   modelValues(): string[] {
     return [...this.typed, ...this.observed];
   }
@@ -438,6 +442,16 @@ export class ObservedPrivacy {
       values,
       [...source, ...this.fragmentSource],
       new Set([...this.concealed, ...this.substringValues]),
+    );
+  }
+
+  redactIdentifier(text: string): string {
+    return maskEvidence(
+      text,
+      [...this.typed, ...this.concealed],
+      [],
+      this.substringValues,
+      this.fragmentSource,
     );
   }
 

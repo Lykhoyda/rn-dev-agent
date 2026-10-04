@@ -530,6 +530,49 @@ test('U13: an earlier block is not written with a value a later fallback made pr
   assert.equal(existsSync(join(dir, '.qaren', 'actions', 'code-shown.yaml')), false);
 });
 
+test('a later private fill withholds earlier fragment titles and masks final identifiers', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qaren-fallback-'));
+  mkdirSync(join(dir, '.qaren'));
+  const fake = app({ initial: [wrapper(), submit, element('@hello', 'Hello', { kind: 'text' })] });
+  const parsed = blocks(
+    '## QA\n\n### secr\n✓ "Hello"\n\n### Hidden email\n1. Fill "qa-hidden-email" with "existing-secret"\n',
+  );
+  const result = await runPlan(parsed, fake.deps, [], {
+    appRoot: dir,
+    platform: 'ios',
+    appId: 'com.example.app',
+  });
+  assert.equal(result.verdict, 'PASS', JSON.stringify(result));
+  assert.equal(result.blocks[0].key, '•••');
+  assert.equal(result.blocks[0].saved, false);
+  assert.equal(result.steps[0].block, '•••');
+  assert.equal(fake.rows[0].block, '•••');
+  assert.deepEqual(result.blocksWritten, []);
+  assert.equal(existsSync(join(dir, '.qaren', 'actions', 'secr.yaml')), false);
+  assert.equal(parsed[0].slug, 'secr');
+});
+
+for (const suffix of ['', '2. Tap "missing"\n']) {
+  test(`private PIN block identifiers are masked on ${suffix ? 'failure' : 'success'}`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'qaren-fallback-'));
+    mkdirSync(join(dir, '.qaren'));
+    const fake = app();
+    const parsed = blocks(
+      `## QA\n\n### PIN 1234\n1. Fill "qa-hidden-email" with "1234"\n${suffix}`,
+    );
+    const result = await runPlan(parsed, fake.deps, [], {
+      appRoot: dir,
+      platform: 'ios',
+      appId: 'com.example.app',
+    });
+    assert.equal(result.verdict, suffix ? 'FAIL' : 'PASS');
+    assert.equal(JSON.stringify({ result, streamed: fake.rows }).includes('1234'), false);
+    assert.deepEqual(result.blocksWritten, []);
+    assert.equal(existsSync(join(dir, '.qaren', 'actions', 'pin-1234.yaml')), false);
+    assert.equal(parsed[0].slug, 'pin-1234');
+  });
+}
+
 test('U13: deferred writes keep order and content for runs without a private fill', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'qaren-fallback-'));
   mkdirSync(join(dir, '.qaren'));
