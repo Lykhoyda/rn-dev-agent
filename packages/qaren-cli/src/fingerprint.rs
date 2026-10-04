@@ -146,28 +146,56 @@ fn is_executable_module(rel: &str) -> bool {
     rel.ends_with(".js") || rel.ends_with(".ts") || rel.ends_with(".mjs") || rel.ends_with(".cjs")
 }
 
-fn import_specifiers(source: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for marker in [
-        "from \"",
-        "from '",
-        "require(\"",
-        "require('",
-        "import(\"",
-        "import('",
-        "import \"",
-        "import '",
-    ] {
-        let quote = marker.chars().last().expect("marker ends with a quote");
-        let mut rest = source;
-        while let Some(idx) = rest.find(marker) {
-            let after = &rest[idx + marker.len()..];
-            match after.find(quote) {
-                Some(end) => {
-                    out.push(after[..end].to_string());
-                    rest = &after[end..];
+#[derive(Debug, Default, PartialEq)]
+struct Specifiers {
+    found: Vec<String>,
+    // `require(…)`/`import(…)` whose argument is not one plain string literal.
+    unparseable: Vec<String>,
+}
+
+fn import_specifiers(source: &str) -> Specifiers {
+    let mut out = Specifiers::default();
+    let bytes = source.as_bytes();
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+    let skip_ws = |mut i: usize| {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        i
+    };
+    let literal = |i: usize| -> Option<(String, usize)> {
+        let quote = *bytes.get(i)?;
+        if quote != b'\'' && quote != b'"' {
+            return None;
+        }
+        let end = source[i + 1..].find(quote as char)? + i + 1;
+        let text = &source[i + 1..end];
+        (!text.contains('\n')).then(|| (text.to_string(), end + 1))
+    };
+    for keyword in ["require", "import", "from"] {
+        for (at, _) in source.match_indices(keyword) {
+            let end = at + keyword.len();
+            if (at > 0 && (ident(bytes[at - 1]) || bytes[at - 1] == b'.'))
+                || bytes.get(end).is_some_and(|&b| ident(b))
+            {
+                continue;
+            }
+            let next = skip_ws(end);
+            if keyword != "from" && bytes.get(next) == Some(&b'(') {
+                let arg = skip_ws(next + 1);
+                match literal(arg) {
+                    Some((text, after)) if bytes.get(skip_ws(after)) == Some(&b')') => {
+                        out.found.push(text)
+                    }
+                    _ => {
+                        let line = source[..at].matches('\n').count() + 1;
+                        out.unparseable.push(format!("{keyword}(…) at line {line}"));
+                    }
                 }
-                None => break,
+            } else if keyword != "require" {
+                if let Some((text, _)) = literal(next) {
+                    out.found.push(text);
+                }
             }
         }
     }
@@ -216,7 +244,13 @@ fn trace_local_imports(
             continue;
         };
         let base_dir = rel.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
-        for specifier in import_specifiers(&source) {
+        let specifiers = import_specifiers(&source);
+        for site in &specifiers.unparseable {
+            incompleteness.push(format!(
+                "{site} in {rel} is not a plain string literal; its import cannot be enumerated"
+            ));
+        }
+        for specifier in specifiers.found {
             if !specifier.starts_with('.') {
                 continue;
             }
@@ -724,6 +758,8 @@ mod tests {
             import pkg from 'expo-build-properties';
         "#;
         let specs = import_specifiers(source);
+        assert!(specs.unparseable.is_empty(), "{specs:?}");
+        let specs = specs.found;
         assert!(specs.contains(&"./helper".to_string()));
         assert!(specs.contains(&"../lib/y".to_string()));
         assert!(specs.contains(&"./z.json".to_string()));

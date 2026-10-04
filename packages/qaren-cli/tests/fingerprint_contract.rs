@@ -126,3 +126,68 @@ fn default_expo_backend_keeps_the_legacy_cache_key() {
     );
     assert_eq!(prior.clone().with_ios_workspace(None), prior);
 }
+
+fn plugin_project(plugin: &str) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let root = std::env::temp_dir().join(format!(
+        "qaren-fp-scan-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("plugins")).unwrap();
+    std::fs::create_dir_all(root.join("config")).unwrap();
+    std::fs::write(
+        root.join("app.json"),
+        r#"{"expo":{"plugins":["./plugins/withX.js"]}}"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("plugins/withX.js"), plugin).unwrap();
+    std::fs::write(root.join("config/x.json"), r#"{"a":1}"#).unwrap();
+    root
+}
+
+fn fingerprint(root: &Path) -> NativeFingerprint {
+    let mut runner = MockRunner::new();
+    runner.expect_run(
+        "ls-files",
+        CmdOutput::success("app.json\0plugins/withX.js\0config/x.json\0"),
+    );
+    compute(&mut runner, root, root, "ios").unwrap()
+}
+
+#[test]
+fn a_spaced_static_require_is_traced_into_the_fingerprint() {
+    let root =
+        plugin_project("const x = require( '../config/x.json' );\nmodule.exports = (c) => c;\n");
+    let before = fingerprint(&root);
+    assert!(before.complete, "{:?}", before.incompleteness);
+    std::fs::write(root.join("config/x.json"), r#"{"a":2}"#).unwrap();
+    let after = fingerprint(&root);
+    assert_ne!(
+        before.value, after.value,
+        "a traced input change must invalidate reuse"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn an_unparseable_require_or_import_makes_the_fingerprint_incomplete() {
+    for plugin in [
+        "const name = '../config/x.json';\nconst x = require(name);\n",
+        "const x = require(`../config/${'x'}.json`);\n",
+        "const x = await import( name );\n",
+    ] {
+        let root = plugin_project(plugin);
+        let fp = fingerprint(&root);
+        assert!(!fp.complete, "{plugin:?} must not claim completeness");
+        assert!(
+            fp.incompleteness
+                .iter()
+                .any(|reason| reason.contains("plugins/withX.js")),
+            "{:?}",
+            fp.incompleteness
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
