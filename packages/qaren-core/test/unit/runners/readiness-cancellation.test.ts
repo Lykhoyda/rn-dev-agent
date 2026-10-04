@@ -35,14 +35,14 @@ test('native startup settles cancellation and rejects buffered readiness without
     spawns.push(child);
     return child;
   });
-  const execute = t.mock.method(childProcess, 'execFile', (_command, args, ...rest) => {
+  const originalExecFile = childProcess.execFile;
+  const execute = (_command, args, ...rest) => {
     const callback = rest.at(-1);
     const stdout = args.includes('get-state') ? 'device' :
       args.includes('instrumentation') ? 'instrumentation:dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner' : '';
     queueMicrotask(() => callback(null, stdout, ''));
     return new EventEmitter();
-  });
-  const originalPromisified = execute[promisify.custom];
+  };
   Object.defineProperty(execute, promisify.custom, {
     configurable: true,
     value: async (command, args, options) => new Promise((resolve, reject) => {
@@ -50,7 +50,8 @@ test('native startup settles cancellation and rejects buffered readiness without
         error ? reject(error) : resolve({ stdout, stderr }));
     }),
   });
-  t.after(() => Object.defineProperty(execute, promisify.custom, { configurable: true, value: originalPromisified }));
+  childProcess.execFile = execute;
+  t.after(() => { childProcess.execFile = originalExecFile; });
   syncBuiltinESMExports();
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
   const { withCancellation, RunCancelledError } = await import('../../../dist/domain/cancellation.js');

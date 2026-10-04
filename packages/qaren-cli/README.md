@@ -349,6 +349,17 @@ probes filter output before capture, allowing large debug images without raising
 the 16 MiB capture limit; failed probes or missing required evidence still refuse.
 The verification contract is owned by [`src/adapters/ios.rs`](src/adapters/ios.rs).
 
+Signals or a vanished caller stop the run with `RUN_CANCELLED`. The CLI checks
+cancellation before forward operations, including Git probes, recorder start,
+installation, fresh-install data removal, simulator boot, Metro/core launch,
+video finalization and publication. The core uses one walk-scoped AbortSignal
+through interruptible I/O and waits; aborts stop setup, walking, readiness
+persistence and saved-action writes. Ownership-gated teardown still runs.
+See the [CLI cancellation boundary](src/cancel.rs) and
+[core cancellation mechanism](../qaren-core/src/domain/cancellation.ts).
+A second signal exits immediately; the next run must recover retained resources
+through their recorded ownership proofs.
+
 Before each iOS launch, `prepare` writes the app's Expo dev-menu preferences with
 `simctl spawn <udid> defaults write <app-id>`: no floating action button, no menu
 at launch, onboarding finished. A failed write is recorded as
@@ -548,6 +559,15 @@ The [row timing implementation](../qaren-core/src/qa/row-timing.ts) owns
 aggregation; [CLI decoding](src/core.rs) and [report rendering](src/report.rs)
 own consumption.
 
+Launch admission shares the remaining walk deadline across target readiness,
+WebSocket handshakes, probes and retry sleeps. A timeout with measured 1-minute
+host load above 10 is an environment refusal (`CDP_NOT_CONNECTED`), rather than
+a product FAIL. It retries attachment once only if the remaining budget can
+cover a full readiness wait; otherwise it refuses immediately. Deterministic
+attachment rejections are neither retried nor classified as environmental.
+The refusal carries the measured load; the
+[admission implementation](../qaren-core/src/qa/admission.ts) owns this policy.
+
 ### Candidate provenance
 
 The shared [candidate comparison](src/candidate.rs) rechecks the commit,
@@ -574,11 +594,19 @@ qaren pr <number|url> --plan-file plan.md --device <simulator-UUID> --json
 qaren publish <run-id> --verdict-file verdict.md --json
 ```
 
-`qaren publish` rejects runs whose persisted failure is `CANDIDATE_DRIFTED` or
-`RUN_CANCELLED`, before uploading, posting comments, removing `needs-qa` or
-writing back blocks. `RUN_CANCELLED` returns `result: refused` with exit 4;
-`CANDIDATE_DRIFTED` returns `result: failed` with exit 1. Saved actions already
-on disk remain untouched.
+`qaren publish` admits only a persisted `run.json` terminal result: no
+cancellation, matching final candidate verification, and proven teardown
+ownership, including the recorder and runner host as well as build, core and
+Metro producers. The final verification is captured before teardown removes
+the candidate worktree; the terminal result is persisted once after teardown
+and video finalization. A missing terminal result refuses `RUN_RECORD_INVALID`.
+Cancellation refuses `RUN_CANCELLED` (exit 4), candidate mismatch fails
+`CANDIDATE_DRIFTED` (exit 1), and unproven ownership refuses
+`OWNERSHIP_UNPROVEN` (exit 4), before uploads, comments, label changes or block
+write-back. A plain QA FAIL can still be published as a report when these
+conditions hold. Later recovery does not upgrade the original terminal result;
+re-run `qaren pr` to obtain publishable evidence. Saved actions already on disk
+remain untouched.
 
 `qaren pr` runs the same pipeline as `check`, from the app's directory with the
 same `.qaren/config.yaml` and plan, but walks a detached worktree at the pull
@@ -602,11 +630,16 @@ request moved during the run, the receipt names the tested commit in
 `PLATFORM_UNSUPPORTED`.
 
 Normal teardown and dead-owner recovery remove the PR worktree only after
-cleanup proves the recorded build, core and Metro producers removed or absent.
+cleanup proves the recorded build, core, Metro, recorder and runner-host
+outcomes removed or absent.
 Any retained, refused or unresolved producer outcome keeps the worktree recorded
 for `qaren cleanup <run-id>`. Metro cleanup requires proven process-group absence
 after reaping owned children; a free port or dead launcher alone is insufficient.
 Present or unknown group evidence retains Metro ownership and any applicable lease.
+Successful PR worktree removal reports measured reclaimed bytes, or explicitly
+reports that the byte count is unknown, including dead-owner recovery. Once a
+playable local video replaces `media/raw.mov`, the raw capture is retired and
+its reclaimed size is reported; failed finalization retains it.
 
 An unproven recorder shutdown retains recorder ownership and the device lease,
 including when recording startup fails. Teardown retries an unresolved stop;
@@ -862,16 +895,22 @@ outputs, not inputs): `package.json`, `pnpm-lock.yaml`, `app.json`,
 `assets/**`, `patches/**`, tracked platform dirs (minus build outputs),
 files referenced by relative path from a static `app.json` (icons, splash,
 service files, local config plugins), the traced transitive relative-import
-closure of those local plugins (common static `import`/`require` forms; the
-scan is a declared best-effort contract, not a JS parser), and the native
+closure of those local plugins and supported `react-native.config.js`/`.ts`
+entry points, and the native
 surfaces (`package.json`, `*.podspec`, `expo-module.config.json`, `ios/`,
 `android/`) of `file:`/`link:` local dependencies inside the worktree.
-Symlinks hash their link text plus in-worktree target content. Anything
-that cannot be enumerated or bound — dynamic `app.config.*`, unresolvable
-local refs, out-of-worktree symlink targets, `workspace:` deps — marks the
-fingerprint **incomplete**, which forbids cached reuse (visible in the
-decision evidence). qaren is pnpm-only; other package managers' lockfiles
-are out of contract.
+Static plain-string `import` and `require` forms, including whitespace around
+`require` arguments, are traced. Each module dependency must name an existing
+regular file directly, with no symlink in its path, and be recursively scanned
+as `.js`, `.ts`, `.mjs`, `.cjs` or parsed as `.json`. Extension inference,
+directory indexes, package `main`/`exports` resolution, extensionless modules,
+dynamic or template-literal arguments, escaped literals and other unsupported
+syntax make the fingerprint **incomplete**, forbidding cached reuse (visible
+in decision evidence). Dynamic `app.config.*`, unresolvable local refs and
+`workspace:` dependencies also make it incomplete. Other native-input symlinks
+hash link text plus in-worktree target content; out-of-worktree targets make
+the fingerprint incomplete. The scanner is conservative, not a full JS parser.
+qaren is pnpm-only; other package managers' lockfiles are out of contract.
 
 **Decision.** Cache state lives at
 `<worktree>/.qaren/native-cache/<platform>-<app_id>.json`
@@ -988,10 +1027,11 @@ build_and_ready — so revisit this once live reuse is measurable.
   run-scoped name (`qaren-<run-id>`) both match (a pending allocation whose
   create crashed before the UDID was learned is recovered by its unique
   run-scoped name, refusing on ambiguity). A process group is signalled only
-  when the recorded leader's birth time (`ps lstart`) still matches, or the
-  recorded port (Metro, tunnel, or private adb server) is owned by a pid whose
-  pgid equals the recorded group (the leader-died-children-live case); a group
-  recorded without identity is `unresolved`, never guessed absent, and after a
+  when the recorded leader's birth time (`ps lstart`) still matches immediately
+  before each signal, including escalation after the grace wait. A matching
+  port and group alone never authorize signalling after the leader dies or
+  its PID is reused. A present group without proven leader identity remains
+  `unresolved`; proven group absence can retire it without a signal. After a
   kill the port must be positively free or foreign before `removed` is
   claimed. The farm slot is stopped only when the live lease holder equals
   this run's holder *and* the forward is proven gone — either the tunnel
@@ -1009,6 +1049,12 @@ build_and_ready — so revisit this once live reuse is measurable.
   permits core cleanup under its existing process-group proofs. Runs without
   a recorded core retain their existing cleanup behavior, including build
   cleanup.
+- **Storage accounting preserves ownership.** Successful owned simulator
+  deletion reports its measured data-directory bytes, or an unknown byte count
+  if measurement was unavailable, including pending-allocation recovery.
+  Borrowed simulators are kept. `check`/`pr` refuse `DISK_BUDGET_EXCEEDED` before
+  installation when the run storage has less than 1 GiB free. Worktree and
+  recording retirement follow the [PR teardown contract](#test-a-pull-request).
 - **App removal is opt-in, confirmed, and bound to the run record.** Plain
   Android `cleanup` never touches the installed app: stopping the farm AVD
   keeps its userdata, so the dev client this run installed survives the lease (and a
@@ -1238,10 +1284,9 @@ now encoded once and replayed deterministically.
   practice because `android-farm start` refuses while any lease file exists,
   so no legitimate actor can re-lease between the check and the stop. A
   compare-and-stop verb would need a farm-side change, out of scope here.
-- **PID identity is birth time (`ps lstart`), not command line.** pnpm shims
-  exec-transition (`sh` → `node`) after capture, so command-line comparison
-  would misclassify our own Metro as foreign and strand resources. Same-second
-  pid reuse on macOS is the accepted residual risk.
+- **Process-birth precision:** the [cleanup contract](#preparation-ownership-and-safety-rules)
+  uses `ps lstart` for CLI process groups, allowing owned launcher exec
+  transitions; same-second PID reuse on macOS remains a residual risk.
 - **ANDROID_HOME is an environment prerequisite.** The resolved adb path is
   validated at prepare time and recorded in the run record; status/cleanup
   reuse the recorded path, never the ambient env.

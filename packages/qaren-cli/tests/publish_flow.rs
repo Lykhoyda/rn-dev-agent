@@ -1361,10 +1361,13 @@ impl Runner for LocalPublication {
                 CmdOutput::success("https://github.com/o/r/pull/12#issuecomment-2\n")
             }
             _ => {
-                assert_eq!(spec.program, "git");
-                let output = std::process::Command::new("git")
+                assert!(matches!(spec.program.as_str(), "git" | "du"));
+                let mut command = std::process::Command::new(&spec.program);
+                if let Some(cwd) = &spec.cwd {
+                    command.current_dir(cwd);
+                }
+                let output = command
                     .args(&spec.args)
-                    .current_dir(spec.cwd.as_ref().unwrap())
                     .envs(spec.env.iter().cloned())
                     .env("GIT_CONFIG_GLOBAL", "/dev/null")
                     .env("GIT_CONFIG_NOSYSTEM", "1")
