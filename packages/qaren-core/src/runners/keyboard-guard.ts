@@ -1,3 +1,4 @@
+import { sleep as cancellableSleep } from '../domain/cancellation.js';
 import { failResult, okResult, type ToolResult } from '../utils.js';
 import type { QaDispatchContext } from '../domain/qa-dispatch.js';
 
@@ -116,7 +117,7 @@ export type KeyboardHiddenObservation = 'hidden' | 'visible' | 'unknown';
 
 export async function waitForKeyboardHidden(
   refreshSnapshot: () => Promise<unknown>,
-  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  sleep: (ms: number) => Promise<void> = cancellableSleep,
 ): Promise<KeyboardHiddenObservation> {
   let last: KeyboardHiddenObservation = 'unknown';
   for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {

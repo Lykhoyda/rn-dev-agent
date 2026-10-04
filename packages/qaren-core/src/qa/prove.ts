@@ -1,3 +1,4 @@
+import { interruptible } from '../domain/cancellation.js';
 import { existsSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 
@@ -54,7 +55,7 @@ function mismatch(message: string): ProveOutcome {
 // dev module registry must name app modules that exist under the run's worktree.
 export async function prove(deps: ProveDeps, target: ProveTarget): Promise<ProveOutcome> {
   const fileExists = deps.fileExists ?? existsSync;
-  const scriptResult = await deps.evaluate(SCRIPT_URL_EXPRESSION);
+  const scriptResult = await interruptible(() => deps.evaluate(SCRIPT_URL_EXPRESSION));
   if (scriptResult.error || typeof scriptResult.value !== 'string') {
     return mismatch(
       `the dev client exposes no scriptURL (${scriptResult.error ?? 'SourceCode unavailable'})`,
@@ -73,7 +74,7 @@ export async function prove(deps: ProveDeps, target: ProveTarget): Promise<Prove
   if (port !== target.metroPort) {
     return mismatch(`scriptURL ${host}:${port} is not the run's Metro port ${target.metroPort}`);
   }
-  const registry = await deps.evaluate(MODULE_NAMES_EXPRESSION);
+  const registry = await interruptible(() => deps.evaluate(MODULE_NAMES_EXPRESSION));
   if (registry.error || typeof registry.value !== 'string') {
     return mismatch(`the module registry could not be read (${registry.error ?? 'no value'})`);
   }

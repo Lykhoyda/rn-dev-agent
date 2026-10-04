@@ -67,6 +67,4 @@ export function clearActiveFlag(): void {
   }
 }
 
-export function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
+export { sleep } from '../domain/cancellation.js';

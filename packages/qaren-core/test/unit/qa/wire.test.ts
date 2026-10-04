@@ -21,6 +21,7 @@ import type { LedgerRow } from '../../../dist/qa/ledger.js';
 const request: WireRequest = {
   runId: 'check-1',
   t0: 1_770_000_000_000,
+  walkBudgetMs: 300_000,
   plan: '1. Tap "A"\n',
   platform: 'ios',
   appId: 'com.example.app',
@@ -52,19 +53,21 @@ test('envelopes round-trip with increasing seq after the request', async () => {
   const lines: string[] = [];
   const writer = createWriter((line) => lines.push(line), 'check-1');
   writer.row(startupRow());
+  writer.admitted();
   writer.row(row(1));
   const exit = writer.result(
     buildLedger([{ key: 'plan', outcome: 'pass', source: 'discovered' }], [row(1)]),
   );
   assert.equal(exit, 0);
-  assert.equal(writer.seq, 4);
+  assert.equal(writer.seq, 5);
   const parsed = lines.map((l) => parseEnvelope(l.trim()));
   assert.deepEqual(
     parsed.map((e) => [e?.v, e?.runId, e?.seq, e?.type]),
     [
       [WIRE_VERSION, 'check-1', 2, 'row'],
-      [WIRE_VERSION, 'check-1', 3, 'row'],
-      [WIRE_VERSION, 'check-1', 4, 'result'],
+      [WIRE_VERSION, 'check-1', 3, 'admitted'],
+      [WIRE_VERSION, 'check-1', 4, 'row'],
+      [WIRE_VERSION, 'check-1', 5, 'result'],
     ],
   );
   assert.ok(

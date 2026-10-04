@@ -85,6 +85,7 @@ fn is_dynamic_config(rel: &str) -> bool {
 #[derive(Debug, Default)]
 struct ReferencedInputs {
     files: BTreeSet<String>,
+    modules: Vec<String>,
     incompleteness: Vec<String>,
 }
 
@@ -104,6 +105,19 @@ fn referenced_paths(app_json: &str, project_root: &Path) -> ReferencedInputs {
             return out;
         }
     };
+    if let Some(plugins) = parsed.pointer("/expo/plugins").and_then(|v| v.as_array()) {
+        for plugin in plugins {
+            let reference = plugin
+                .as_str()
+                .or_else(|| plugin.as_array()?.first()?.as_str());
+            if let Some(reference) = reference {
+                out.modules.push(reference.strip_prefix("./").unwrap_or(reference).to_string());
+                if !reference.starts_with('.') && !project_root.join(reference).is_file() {
+                    out.incompleteness.push(format!("plugin {reference:?} in app.json requires module resolution; its native inputs cannot be proven complete"));
+                }
+            }
+        }
+    }
     collect_strings(&parsed, &mut |s| {
         let explicit_local = s.starts_with("./") || s.starts_with("../");
         let candidate = s.strip_prefix("./").unwrap_or(s);
@@ -115,23 +129,9 @@ fn referenced_paths(app_json: &str, project_root: &Path) -> ReferencedInputs {
             }
             return;
         }
-        // Approximate Node resolution for extensionless local module refs.
-        let attempts = [
-            candidate.to_string(),
-            format!("{candidate}.js"),
-            format!("{candidate}.ts"),
-            format!("{candidate}.mjs"),
-            format!("{candidate}.cjs"),
-            format!("{candidate}.json"),
-            format!("{candidate}/index.js"),
-            format!("{candidate}/index.ts"),
-        ];
-        for attempt in &attempts {
-            let path = project_root.join(attempt);
-            if path.is_file() || path.is_symlink() {
-                out.files.insert(attempt.clone());
-                return;
-            }
+        if project_root.join(candidate).is_file() {
+            out.files.insert(candidate.to_string());
+            return;
         }
         if explicit_local {
             out.incompleteness.push(format!(
@@ -146,28 +146,83 @@ fn is_executable_module(rel: &str) -> bool {
     rel.ends_with(".js") || rel.ends_with(".ts") || rel.ends_with(".mjs") || rel.ends_with(".cjs")
 }
 
-fn import_specifiers(source: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for marker in [
-        "from \"",
-        "from '",
-        "require(\"",
-        "require('",
-        "import(\"",
-        "import('",
-        "import \"",
-        "import '",
-    ] {
-        let quote = marker.chars().last().expect("marker ends with a quote");
-        let mut rest = source;
-        while let Some(idx) = rest.find(marker) {
-            let after = &rest[idx + marker.len()..];
-            match after.find(quote) {
-                Some(end) => {
-                    out.push(after[..end].to_string());
-                    rest = &after[end..];
+#[derive(Debug, Default, PartialEq)]
+struct Specifiers {
+    found: Vec<String>,
+    // `require(…)`/`import(…)` whose argument is not one plain string literal.
+    unparseable: Vec<String>,
+}
+
+fn import_specifiers(source: &str) -> Specifiers {
+    let mut out = Specifiers::default();
+    let bytes = source.as_bytes();
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+    let skip_ws = |mut i: usize| {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        i
+    };
+    let literal = |i: usize| -> Option<(String, usize)> {
+        let quote = *bytes.get(i)?;
+        if quote != b'\'' && quote != b'"' {
+            return None;
+        }
+        let end = source[i + 1..].find(quote as char)? + i + 1;
+        let text = &source[i + 1..end];
+        (!text.contains(['\n', '\r', '\\'])).then(|| (text.to_string(), end + 1))
+    };
+    for keyword in ["require", "import", "from"] {
+        for (at, _) in source.match_indices(keyword) {
+            let end = at + keyword.len();
+            if (at > 0 && ident(bytes[at - 1])) || bytes.get(end).is_some_and(|&b| ident(b)) {
+                continue;
+            }
+            let next = skip_ws(end);
+            if source[..at].trim_end().ends_with('.') {
+                let line = source[..at].matches('\n').count() + 1;
+                out.unparseable
+                    .push(format!("property {keyword} at line {line}"));
+                continue;
+            }
+            if keyword != "from" && bytes.get(next) == Some(&b'(') {
+                let arg = skip_ws(next + 1);
+                match literal(arg) {
+                    Some((text, after)) if bytes.get(skip_ws(after)) == Some(&b')') => {
+                        out.found.push(text)
+                    }
+                    _ => {
+                        let line = source[..at].matches('\n').count() + 1;
+                        out.unparseable.push(format!("{keyword}(…) at line {line}"));
+                    }
                 }
-                None => break,
+            } else if keyword != "require" {
+                if let Some((text, _)) = literal(next) {
+                    out.found.push(text);
+                } else {
+                    let static_import = keyword == "import"
+                        && source[next..].find("from").is_some_and(|offset| {
+                            let binding = &source[next..next + offset];
+                            !binding.trim().is_empty()
+                                && binding.bytes().all(|b| {
+                                    ident(b)
+                                        || b.is_ascii_whitespace()
+                                        || matches!(b, b'{' | b'}' | b',' | b'*')
+                                })
+                                && literal(skip_ws(next + offset + 4)).is_some()
+                        });
+                    if !static_import {
+                        out.unparseable.push(format!(
+                            "{keyword} at line {}",
+                            source[..at].matches('\n').count() + 1
+                        ));
+                    }
+                }
+            } else {
+                out.unparseable.push(format!(
+                    "{keyword} at line {}",
+                    source[..at].matches('\n').count() + 1
+                ));
             }
         }
     }
@@ -209,15 +264,41 @@ fn trace_local_imports(
         if !visited.insert(rel.clone()) {
             continue;
         }
+        if !Path::new(&rel).components().all(|component| matches!(component, std::path::Component::Normal(_))) {
+            incompleteness.push(format!("local module {rel} is not a project-relative file"));
+            continue;
+        }
+        let mut path = project_root.to_path_buf();
+        let regular = Path::new(&rel).components().all(|component| {
+            path.push(component);
+            std::fs::symlink_metadata(&path).is_ok_and(|metadata| !metadata.file_type().is_symlink())
+        }) && path.is_file();
+        if !regular || !(is_executable_module(&rel) || rel.ends_with(".json")) {
+            incompleteness.push(format!("local module {rel} is not a regular non-symlink file with a recognized extension; its dependencies cannot be proven complete"));
+            continue;
+        }
         let Ok(source) = std::fs::read_to_string(project_root.join(&rel)) else {
             incompleteness.push(format!(
                 "local module {rel} could not be read; its imports cannot be enumerated"
             ));
             continue;
         };
+        if rel.ends_with(".json") {
+            if serde_json::from_str::<serde_json::Value>(&source).is_err() {
+                incompleteness.push(format!("local module {rel} does not parse as JSON"));
+            }
+            continue;
+        }
         let base_dir = rel.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
-        for specifier in import_specifiers(&source) {
+        let specifiers = import_specifiers(&source);
+        for site in &specifiers.unparseable {
+            incompleteness.push(format!(
+                "{site} in {rel} is not a plain string literal; its import cannot be enumerated"
+            ));
+        }
+        for specifier in specifiers.found {
             if !specifier.starts_with('.') {
+                incompleteness.push(format!("import {specifier:?} in {rel} requires package resolution; its native inputs cannot be proven complete"));
                 continue;
             }
             let Some(normalized) = normalize_rel(base_dir, &specifier) else {
@@ -226,28 +307,12 @@ fn trace_local_imports(
                 ));
                 continue;
             };
-            let attempts = [
-                normalized.clone(),
-                format!("{normalized}.js"),
-                format!("{normalized}.ts"),
-                format!("{normalized}.mjs"),
-                format!("{normalized}.cjs"),
-                format!("{normalized}.json"),
-                format!("{normalized}/index.js"),
-                format!("{normalized}/index.ts"),
-            ];
-            let resolved = attempts.iter().find(|attempt| {
-                let path = project_root.join(attempt);
-                path.is_file() || path.is_symlink()
-            });
-            match resolved {
-                Some(found) => {
-                    inputs.insert(found.clone());
-                    if is_executable_module(found) {
-                        worklist.push(found.clone());
-                    }
+            match project_root.join(&normalized).is_file() {
+                true => {
+                    inputs.insert(normalized.clone());
+                    worklist.push(normalized);
                 }
-                None => incompleteness.push(format!(
+                false => incompleteness.push(format!(
                     "import {specifier:?} in {rel} does not resolve to a project file; the input set is unprovably complete"
                 )),
             }
@@ -553,12 +618,9 @@ pub fn compute(
             Ok(app_json) => {
                 let referenced = referenced_paths(&app_json, project_root);
                 incompleteness.extend(referenced.incompleteness);
-                let executable_seeds: Vec<String> = referenced
-                    .files
-                    .iter()
-                    .filter(|rel| is_executable_module(rel))
-                    .cloned()
-                    .collect();
+                let executable_seeds = referenced.modules.into_iter().chain(
+                    referenced.files.iter().filter(|rel| is_executable_module(rel)).cloned()
+                ).collect();
                 inputs.extend(referenced.files);
                 trace_local_imports(
                     project_root,
@@ -574,6 +636,17 @@ pub fn compute(
             }
         }
     }
+    let config_seeds = inputs
+        .iter()
+        .filter(|rel| {
+            matches!(
+                rel.as_str(),
+                "react-native.config.js" | "react-native.config.ts"
+            )
+        })
+        .cloned()
+        .collect();
+    trace_local_imports(project_root, config_seeds, &mut inputs, &mut incompleteness);
     if inputs.contains("package.json") {
         match std::fs::read_to_string(project_root.join("package.json")) {
             Ok(package_json) => local_dependency_manifest(
@@ -724,6 +797,8 @@ mod tests {
             import pkg from 'expo-build-properties';
         "#;
         let specs = import_specifiers(source);
+        assert!(specs.unparseable.is_empty(), "{specs:?}");
+        let specs = specs.found;
         assert!(specs.contains(&"./helper".to_string()));
         assert!(specs.contains(&"../lib/y".to_string()));
         assert!(specs.contains(&"./z.json".to_string()));
@@ -737,7 +812,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("lib")).unwrap();
         std::fs::write(
             dir.join("plugins").join("withThing.ts"),
-            "import { helper } from '../lib/helper';\nimport missing from './gone';\n",
+            "import { helper } from '../lib/helper.ts';\nimport missing from './gone';\n",
         )
         .unwrap();
         std::fs::write(

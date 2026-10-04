@@ -117,6 +117,7 @@ pub fn base_record(
         resources: Default::default(),
         failure: None,
         history: Vec::new(),
+        terminal: None,
     }
 }
 

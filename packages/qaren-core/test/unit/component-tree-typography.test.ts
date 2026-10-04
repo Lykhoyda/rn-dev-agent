@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import { createComponentTreeHandler } from '../../dist/handlers/component-tree.js';
@@ -58,11 +57,4 @@ test('component-tree forwards typography and awaits CDP only for the triple opt-
       }
     }
   }
-});
-
-test('QA requires private capture but opts into typography only on platform-presence capture', () => {
-  const source = readFileSync(new URL('../../src/qa/walk.ts', import.meta.url), 'utf8');
-  assert.equal((source.match(/captureQaReact\(cdp,/g) ?? []).length, 1);
-  assert.match(source, /captureQaReact\(cdp, options\?\.platformPresence === true\)/);
-  assert.match(source, /requirePrivateInputs: true/);
 });

@@ -2,7 +2,16 @@ import { DEVICE_LEASE_REQUIRED, leaseFromEnvironment } from './lease-env.js';
 import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
 import { measureTiming, observeTiming, type TimingContext } from '../qa/timing.js';
 import { QA_READ_ONLY_CAPABILITY, checkQaNativeOutcome } from './qa-native-policy.js';
-import { execFile, spawn } from 'node:child_process';
+import {
+  execFile,
+  spawn,
+  cancellableFetch,
+  sleep as cancellableSleep,
+  interruptible,
+  cancellationSignal,
+  throwIfCancelled,
+  isAbort,
+} from '../domain/cancellation.js';
 import { promisify } from 'node:util';
 import { isIosSimulatorUdid } from './external-runner-detect.js';
 import type { ChildProcess } from 'node:child_process';
@@ -697,7 +706,7 @@ function runXcodebuildToExit(args: string[], timeoutMs: number): Promise<void> {
     });
     child.on('error', (err) => {
       clearTimeout(timer);
-      reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
+      reject(isAbort(err) ? err : new Error(`Failed to spawn xcodebuild: ${err.message}`));
     });
     child.on('exit', (code) => {
       clearTimeout(timer);
@@ -725,10 +734,9 @@ export async function startFastRunner(
   deviceId: string,
   bundleId: string,
   port?: number,
-  // GH #382 (Codex P1): the #418 stale-command recovery forces a source rebuild
-  // by bypassing the prebuilt artifact tier.
   opts: { forceLocalBuild?: boolean; attachOnly?: boolean } = {},
 ): Promise<FastRunnerState> {
+  throwIfCancelled();
   adoptPersistedFastRunnerState(deviceId);
   if (shouldReuseRunner(runnerState, deviceId)) return runnerState!;
   if (runnerState) await stopFastRunner(deviceId);
@@ -741,17 +749,13 @@ export async function startFastRunner(
     throw new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`);
   }
 
-  // GH #382: resolve a prebuilt artifact (verified cache → release download)
-  // before the local build. When prebuilt, derivedDataPath points at the cached
-  // DerivedData layout so hasBuiltTestProduct is true and the plan skips
-  // build-for-testing — no xcodebuild build on the user's machine. Fail-open:
-  // build-local returns the local DerivedData path (unchanged cold path).
   const artifacts = await resolveIosRunnerArtifacts(
     getPluginVersion(),
     derivedDataPathForRunner(),
     undefined,
     opts.forceLocalBuild,
   );
+  throwIfCancelled();
   const derivedDataPath = artifacts.derivedDataPath;
   if (artifacts.note) pendingFastRunnerArtifactNote = artifacts.note;
   const plan = resolveRunnerStartPlan({
@@ -774,6 +778,7 @@ export async function startFastRunner(
   const launch = plan[plan.length - 1];
   const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
 
+  const signal = cancellationSignal();
   return new Promise((resolve, reject) => {
     const child = spawn('xcodebuild', launch.args, {
       env: {
@@ -797,6 +802,12 @@ export async function startFastRunner(
     const parser = createReadySignalParser();
     let resolved = false;
     const timer = setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
       child.kill('SIGTERM');
       reject(new Error(`Fast runner did not become ready within ${READY_TIMEOUT_MS / 1000}s`));
     }, READY_TIMEOUT_MS);
@@ -804,6 +815,13 @@ export async function startFastRunner(
     const handleChunk = (chunk: string, stream: 'stdout' | 'stderr'): void => {
       appendRunnerOutput(stream, chunk);
       if (resolved) return;
+      if (signal?.aborted) {
+        resolved = true;
+        clearTimeout(timer);
+        if (runnerProcess === child) clearStateFile();
+        reject(signal.reason);
+        return;
+      }
       const result = parser.feed(chunk);
       if (!result) return;
       resolved = true;
@@ -855,14 +873,16 @@ export async function startFastRunner(
     child.stderr!.on('data', (chunk: string) => handleChunk(chunk, 'stderr'));
 
     child.on('error', (err) => {
+      resolved = true;
       clearTimeout(timer);
       if (runnerProcess === child) {
         clearStateFile();
       }
-      reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
+      reject(isAbort(err) ? err : new Error(`Failed to spawn xcodebuild: ${err.message}`));
     });
 
     child.on('exit', (code, signal) => {
+      resolved = true;
       lastRunnerPostMortem = {
         available: true,
         provenance: 'spawned',
@@ -1080,6 +1100,7 @@ export async function fastSwipe(
     }
     return resp as unknown as FastRunnerResponse;
   } catch (error) {
+    throwIfCancelled();
     if (error instanceof QaDispatchError) throw error;
     if (qaContext) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1099,8 +1120,7 @@ export async function fastHealthCheck(): Promise<boolean> {
     const result = await defaultHttpProbe(runnerState.port, 2000);
     return result.ok && result.status === 200 && result.bodyOk === true;
   } catch {
-    // Preserve the original contract: any network/abort/parse error → false.
-    // (The probe helper throws on fetch errors; M7 review caught this regression.)
+    throwIfCancelled();
     return false;
   }
 }
@@ -1230,7 +1250,7 @@ async function defaultHttpProbe(
     // probe like every other client call — production default is globalThis.fetch.
     const capability =
       capabilityOverride ?? (runnerState?.port === port ? runnerState.capability : undefined);
-    const res = await fetchImpl(url, {
+    const res = await cancellableFetch(fetchImpl, url, {
       signal: controller.signal,
       headers: capability ? { authorization: `Bearer ${capability}` } : {},
     });
@@ -1273,6 +1293,7 @@ async function defaultHttpProbe(
       if (typeof body.deviceId === 'string') deviceId = body.deviceId;
       if (typeof body.appId === 'string') appId = body.appId;
     } catch {
+      throwIfCancelled();
       bodyOk = false;
     }
     return {
@@ -1447,6 +1468,7 @@ export async function probeFastRunnerLivenessDetailed(
       ...(res.capabilities !== undefined ? { capabilities: res.capabilities } : {}),
     };
   } catch {
+    throwIfCancelled();
     lastKnownCapabilities = [];
     return { liveness: 'stale', staleReason: 'health' };
   }
@@ -1461,7 +1483,7 @@ export async function probeFastRunnerLiveness(
 export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
   const getState = deps.getState ?? (() => runnerState);
   const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
-  const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const sleep = deps.sleep ?? cancellableSleep;
   const clearState = deps.clearState ?? clearStateFileIfMatches;
   const graceMs = deps.graceMs ?? 500;
 
@@ -1518,7 +1540,7 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
   } catch {
     /* already dead */
   }
-  await reapDelay(sleep, graceMs, deps.signal);
+  await interruptible(() => reapDelay(sleep, graceMs, deps.signal));
   const afterTerm = probeExpected();
   if (afterTerm === 'unknown') {
     throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
@@ -1693,7 +1715,7 @@ async function sendCommandOnce(
     const now = qaTiming?.now ?? (() => performance.now());
     const resp = await measureTiming(qaTiming?.observe, now, 'native-transport', async () => {
       if (isMutatingCommand(body.command)) qaContext?.authorize();
-      return fetchImpl(`http://127.0.0.1:${port}/command`, {
+      return cancellableFetch(fetchImpl, `http://127.0.0.1:${port}/command`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -1719,6 +1741,7 @@ async function sendCommandOnce(
     }
     return parsed;
   } catch (err) {
+    throwIfCancelled();
     if ((err as { name?: string } | undefined)?.name === 'AbortError') {
       throw new Error(
         `RUNNER_TIMEOUT: rn-fast-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms — listener may be wedged`,
@@ -1752,6 +1775,7 @@ async function probeCommandStatus(
     );
     return parseStatusProbeReply(resp, commandId);
   } catch {
+    throwIfCancelled();
     return null;
   }
 }
@@ -1795,6 +1819,7 @@ async function postCommandWithRecovery(
       ),
     };
   } catch (err) {
+    throwIfCancelled();
     if (err instanceof QaDispatchError) throw err;
     const message = err instanceof Error ? err.message : String(err);
     if (!isAmbiguousTransportFailure(message)) throw err;
@@ -2003,7 +2028,7 @@ export async function verifyTypeResultAfterSettle(
       const health = await probeFastRunnerLivenessDetailed();
       if (health.liveness === 'alive') return result;
       if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
-        await new Promise((resolve) => setTimeout(resolve, POST_SETTLE_HEALTH_RETRY_MS));
+        await cancellableSleep(POST_SETTLE_HEALTH_RETRY_MS);
       }
     }
   }
@@ -2356,6 +2381,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       }
       if (data.wasVisible && data.dismissed) keyboardRelayoutRecovered = true;
     } catch (err) {
+      throwIfCancelled();
       const mapped = mapRunnerDispatchError(err);
       if (mapped) return mapped;
       throw err;
@@ -2377,6 +2403,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         ...(args.bundleId ? { appBundleId: args.bundleId } : {}),
       });
     } catch (err) {
+      throwIfCancelled();
       refreshFailure.result = mapRunnerDispatchError(err);
       if (refreshFailure.result) return false;
       throw err;
@@ -2440,6 +2467,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       ));
     }
   } catch (err) {
+    throwIfCancelled();
     if (presenceRequested) {
       return presenceCaptureUnavailable(
         err instanceof Error ? err.message : String(err),
@@ -2476,6 +2504,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         args.qaTiming,
       ));
     } catch (err) {
+      throwIfCancelled();
       const mapped = mapRunnerDispatchError(err);
       if (mapped) return mapped;
       const message = err instanceof Error ? err.message : String(err);

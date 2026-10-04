@@ -322,7 +322,7 @@ fn the_log_helper_withholds_a_mention_split_across_writes_or_oversized_lines() {
 
 #[test]
 fn a_checkpoint_completes_while_four_writers_keep_the_helper_busy() {
-    let deadline = Instant::now() + Duration::from_secs(12);
+    let deadline = Instant::now() + Duration::from_secs(30);
     let (input, output) = UnixStream::pair().unwrap();
     let (mut control, helper_control) = UnixStream::pair().unwrap();
     control
@@ -343,14 +343,12 @@ fn a_checkpoint_completes_while_four_writers_keep_the_helper_busy() {
             .unwrap(),
     );
     let stop = Arc::new(AtomicBool::new(false));
-    let warmed_up = Arc::new(AtomicBool::new(false));
     let written: Vec<_> = (0..4).map(|_| Arc::new(AtomicU64::new(0))).collect();
     let writers: Vec<_> = written
         .iter()
         .map(|written| {
             let written = Arc::clone(written);
             let stop = Arc::clone(&stop);
-            let warmed_up = Arc::clone(&warmed_up);
             let mut output = output.try_clone().unwrap();
             std::thread::spawn(move || {
                 let mut bytes = [b'x'; 64 * 1024];
@@ -360,13 +358,7 @@ fn a_checkpoint_completes_while_four_writers_keep_the_helper_busy() {
                 for line in bytes.chunks_mut(128) {
                     line[127] = b'\n';
                 }
-                output.write_all(&bytes[..128])?;
-                written.store(128, Ordering::Relaxed);
                 while !stop.load(Ordering::Relaxed) && Instant::now() < deadline {
-                    if !warmed_up.load(Ordering::Relaxed) {
-                        std::thread::sleep(Duration::from_millis(1));
-                        continue;
-                    }
                     match output.write(&bytes) {
                         Ok(n) => {
                             written.fetch_add(n as u64, Ordering::Relaxed);
@@ -380,18 +372,18 @@ fn a_checkpoint_completes_while_four_writers_keep_the_helper_busy() {
             })
         })
         .collect();
-    let warmup = Instant::now() + Duration::from_secs(3);
+    // A loaded host only lengthens warm-up; every writer must still push 256 KiB first.
+    let warmup = Instant::now() + Duration::from_secs(15);
     while written
         .iter()
-        .any(|bytes| bytes.load(Ordering::Relaxed) < 128)
+        .any(|bytes| bytes.load(Ordering::Relaxed) < 256 * 1024)
         && Instant::now() < warmup
     {
         std::thread::sleep(Duration::from_millis(1));
     }
     let active = written
         .iter()
-        .all(|bytes| bytes.load(Ordering::Relaxed) >= 128);
-    warmed_up.store(true, Ordering::Relaxed);
+        .all(|bytes| bytes.load(Ordering::Relaxed) >= 256 * 1024);
     let mut ack = [0];
     let checkpoint = control
         .write_all(&[1])

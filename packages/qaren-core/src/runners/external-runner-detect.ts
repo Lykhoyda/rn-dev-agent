@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile } from '../domain/cancellation.js';
 import { promisify } from 'node:util';
 
 export interface AndroidExternalRunnerWarning {

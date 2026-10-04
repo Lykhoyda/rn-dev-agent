@@ -1,4 +1,9 @@
 import {
+  cancellableFetch,
+  sleep as cancellableSleep,
+  interruptible,
+} from '../domain/cancellation.js';
+import {
   type Answers,
   type Judge,
   type JevCall,
@@ -120,7 +125,7 @@ export function createJev(options: JevOptions = {}): Judge {
   const fetcher = options.fetch ?? fetch;
   const now = options.now ?? (() => performance.now());
   const wallNow = options.wallNow ?? Date.now;
-  const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const sleep = options.sleep ?? cancellableSleep;
   const calls: JevCall[] = [];
   let elapsedMs = 0;
   return {
@@ -173,7 +178,7 @@ export function createJev(options: JevOptions = {}): Judge {
           });
           try {
             const operation = async (): Promise<Answers> => {
-              const response = await fetcher(JEV_ENDPOINT, {
+              const response = await cancellableFetch(fetcher, JEV_ENDPOINT, {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
                 body,
@@ -206,7 +211,7 @@ export function createJev(options: JevOptions = {}): Judge {
               });
               let validated = false;
               try {
-                const data = await readResponse(response);
+                const data = await interruptible(() => readResponse(response));
                 if (
                   !isRecord(data) ||
                   data.model !== JEV_MODEL ||
@@ -306,7 +311,9 @@ export function createJev(options: JevOptions = {}): Judge {
               });
             throw new JevError('JEV_UNAVAILABLE');
           }
-          await measureTiming(options.timing, now, 'jev-backoff', () => sleep(delay));
+          await measureTiming(options.timing, now, 'jev-backoff', () =>
+            interruptible(() => sleep(delay)),
+          );
         }
         throw new JevError('JEV_UNAVAILABLE');
       } finally {

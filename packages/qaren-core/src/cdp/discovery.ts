@@ -1,3 +1,9 @@
+import {
+  cancellationSignal,
+  cancellableFetch,
+  interruptible,
+  sleep,
+} from '../domain/cancellation.js';
 import { execFileSync } from 'node:child_process';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { logger } from '../logger.js';
@@ -111,7 +117,9 @@ export async function discoverAllMetroPorts(ports: number[], timeout: number): P
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeout);
       try {
-        const resp = await fetch(`http://127.0.0.1:${p}/status`, { signal: ctrl.signal });
+        const resp = await cancellableFetch(fetch, `http://127.0.0.1:${p}/status`, {
+          signal: ctrl.signal,
+        });
         const text = await resp.text();
         return text.includes('packager-status:running') ? p : null;
       } catch {
@@ -124,16 +132,29 @@ export async function discoverAllMetroPorts(ports: number[], timeout: number): P
   return checks.filter((p): p is number => p !== null);
 }
 
-export async function fetchTargets(port: number, timeout: number): Promise<HermesTarget[]> {
+export class TargetReadinessTimeoutError extends Error {}
+
+export async function fetchTargets(
+  port: number,
+  timeout: number,
+  signal?: AbortSignal,
+): Promise<HermesTarget[]> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
   try {
-    const resp = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: ctrl.signal });
-    return (await resp.json()) as HermesTarget[];
+    // Only the run's cancellation preempts the read; the request timeout aborts the fetch itself.
+    const cancel = cancellationSignal(signal);
+    return await interruptible(async () => {
+      const resp = await fetch(`http://127.0.0.1:${port}/json/list`, {
+        signal: cancel ? AbortSignal.any([ctrl.signal, cancel]) : ctrl.signal,
+      });
+      return (await resp.json()) as HermesTarget[];
+    }, cancel);
   } catch (err) {
-    throw new Error(
-      `Failed to list CDP targets on port ${port}: ${err instanceof Error ? err.message : err}`,
-    );
+    cancellationSignal(signal);
+    const message = `Failed to list CDP targets on port ${port}: ${err instanceof Error ? err.message : err}`;
+    if (ctrl.signal.aborted) throw new TargetReadinessTimeoutError(message);
+    throw new Error(message);
   } finally {
     clearTimeout(timer);
   }
@@ -144,6 +165,7 @@ export async function waitForExactPortTargets(
   port: number,
   timeoutMs: number,
   pollMs: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new RangeError('port must be an integer between 1 and 65535');
@@ -157,20 +179,27 @@ export async function waitForExactPortTargets(
     }
   }
 
+  signal = cancellationSignal(signal);
   const deadline = performance.now() + timeoutMs;
   let remaining = deadline - performance.now();
   while (remaining > 0) {
-    const raw = await fetchTargets(port, Math.min(DISCOVERY_TIMEOUT_MS * 2, remaining));
+    signal?.throwIfAborted();
+    const raw = await interruptible(
+      () => fetchTargets(port, Math.min(DISCOVERY_TIMEOUT_MS * 2, remaining), signal),
+      signal,
+    );
     if (!Array.isArray(raw)) {
       throw new Error(`Invalid CDP target list on port ${port}: expected an array`);
     }
     remaining = deadline - performance.now();
     if (remaining <= 0) break;
     if (raw.length > 0) return;
-    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(pollMs, remaining)));
+    await sleep(Math.min(pollMs, remaining), signal);
     remaining = deadline - performance.now();
   }
-  throw new Error(`Timed out waiting for CDP targets on port ${port} after ${timeoutMs}ms`);
+  throw new TargetReadinessTimeoutError(
+    `Timed out waiting for CDP targets on port ${port} after ${timeoutMs}ms`,
+  );
 }
 
 export function filterValidTargets(targets: HermesTarget[]): HermesTarget[] {

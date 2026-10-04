@@ -405,6 +405,66 @@ pub struct RunRecord {
     pub failure: Option<Failure>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<TerminalResult>,
+}
+
+// Written once, after video finalization and teardown; publication trusts nothing else.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalResult {
+    pub verdict: String,
+    pub cancelled: bool,
+    pub final_verification: FinalVerification,
+    pub ownership_proven: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinalVerification {
+    pub tested: String,
+    #[serde(rename = "match")]
+    pub matched: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+impl TerminalResult {
+    pub fn publication_refusal(&self) -> Option<Failure> {
+        let refuse = |code, detail: &str, next: &str| {
+            Some(Failure::new(
+                "publish",
+                code,
+                detail.to_string(),
+                next.to_string(),
+            ))
+        };
+        if self.cancelled {
+            return refuse(
+                FailureCode::RunCancelled,
+                "the run was cancelled before its result was final",
+                "re-run qaren pr; a cancelled run is never published",
+            );
+        }
+        if !self.final_verification.matched {
+            return refuse(
+                FailureCode::CandidateDrifted,
+                &format!(
+                    "the tested candidate {} did not verify unchanged at the end of the run",
+                    self.final_verification.tested
+                ),
+                "re-run qaren pr against an unchanged candidate",
+            );
+        }
+        if !self.ownership_proven {
+            return refuse(
+                FailureCode::OwnershipUnproven,
+                "the run's build, core or Metro processes were not proven gone at teardown",
+                "run qaren cleanup for this run, then re-run qaren pr",
+            );
+        }
+        None
+    }
 }
 
 pub fn validate_run_id(run_id: &str) -> Result<(), Failure> {
@@ -562,6 +622,11 @@ pub enum PidLiveness {
 }
 
 pub fn probe_pid_identity(runner: &mut dyn Runner, recorded: &PidIdentity) -> PidLiveness {
+    probe_pid_birth(runner, recorded).0
+}
+
+// Also reports whether the recorded birth still holds the pid, alive or as an unreaped zombie, so it cannot be reused.
+pub fn probe_pid_birth(runner: &mut dyn Runner, recorded: &PidIdentity) -> (PidLiveness, bool) {
     let started = runner.run(&CmdSpec::new(
         "ps-lstart",
         "ps",
@@ -569,30 +634,29 @@ pub fn probe_pid_identity(runner: &mut dyn Runner, recorded: &PidIdentity) -> Pi
         10,
     ));
     if started.timed_out || started.exit_code.is_none() || !started.stderr.trim().is_empty() {
-        return PidLiveness::Unknown;
+        return (PidLiveness::Unknown, false);
     }
     if !started.ok() || started.stdout.trim().is_empty() {
-        return PidLiveness::Dead;
+        return (PidLiveness::Dead, false);
     }
     // lstart is the birth identity; the command line is advisory only, because
     // pnpm shims exec-transition (sh -> node) after our capture.
-    if started.stdout.trim() == recorded.started_at {
-        // A zombie keeps its lstart but is dead: unreaped child of a live
-        // parent (e.g. a build that exited while prepare still polls it).
-        let stat = runner.run(&CmdSpec::new(
-            "ps-stat",
-            "ps",
-            &["-p", &recorded.pid.to_string(), "-o", "stat="],
-            10,
-        ));
-        if !stat.ok() {
-            return PidLiveness::Unknown;
-        }
-        if stat.stdout.trim_start().starts_with('Z') {
-            return PidLiveness::Dead;
-        }
-        PidLiveness::AliveMatching
-    } else {
-        PidLiveness::AliveForeign
+    if started.stdout.trim() != recorded.started_at {
+        return (PidLiveness::AliveForeign, false);
     }
+    // A zombie keeps its lstart but is dead: unreaped child of a live
+    // parent (e.g. a build that exited while prepare still polls it).
+    let stat = runner.run(&CmdSpec::new(
+        "ps-stat",
+        "ps",
+        &["-p", &recorded.pid.to_string(), "-o", "stat="],
+        10,
+    ));
+    if !stat.ok() {
+        return (PidLiveness::Unknown, false);
+    }
+    if stat.stdout.trim_start().starts_with('Z') {
+        return (PidLiveness::Dead, true);
+    }
+    (PidLiveness::AliveMatching, true)
 }

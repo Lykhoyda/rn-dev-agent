@@ -1,3 +1,4 @@
+import { isAbort, cancellationSignal } from '../domain/cancellation.js';
 import type { Block, Item, Target } from './plan.js';
 import {
   type Element,
@@ -216,6 +217,7 @@ export async function walkBlock(
     });
   };
   const assertActive = (): void => {
+    cancellationSignal();
     if (deps.cancelled?.()) throw new QaDispatchError('RUN_CANCELLED');
   };
   const pause = async (ms: number): Promise<void> => {
@@ -257,6 +259,7 @@ export async function walkBlock(
               : undefined,
         );
       } catch (error) {
+        if (isAbort(error)) throw error;
         if (error instanceof AppProcessGoneError) throw processChanged();
         throw error;
       }
@@ -298,6 +301,7 @@ export async function walkBlock(
       emitCaptureDiagnostics(latest);
       return { screen: latest, timing, id };
     } catch (error) {
+      if (isAbort(error)) throw error;
       if (error instanceof ResolutionError && error.code === 'APP_PROCESS_CHANGED')
         sequence.publicationInterrupted = true;
       throw error;
@@ -335,7 +339,8 @@ export async function walkBlock(
         ...(authorizations === undefined ? {} : { authorizations }),
         ...(visibilityBlocker ? { observation: observation.id, visibilityBlocker } : {}),
       });
-    } catch {
+    } catch (error) {
+      if (isAbort(error)) throw error;
       // Diagnostics cannot change a decision or dispatch outcome.
     }
   };
@@ -387,6 +392,7 @@ export async function walkBlock(
             deps.diagnostic !== undefined,
           ));
       } catch (error) {
+        if (isAbort(error)) throw error;
         assertActive();
         if (error instanceof JevError && error.code === 'JEV_DEADLINE_EXCEEDED') {
           metric('expiry', observation, { outcome: 'failed' });
@@ -458,6 +464,7 @@ export async function walkBlock(
       completed = true;
       return result;
     } catch (error) {
+      if (isAbort(error)) throw error;
       if (context.refusal || error instanceof QaDispatchError) {
         const refusal = context.refusal ?? (error as QaDispatchError);
         if (refusal.code === 'EVIDENCE_EXPIRED')
@@ -498,7 +505,8 @@ export async function walkBlock(
     let timing: RowTiming | undefined;
     try {
       timing = deps.rowTiming?.(row.t);
-    } catch {
+    } catch (error) {
+      if (isAbort(error)) throw error;
       // Row timing is passive; the row is recorded without it.
     }
     const timed = timing ? { ...row, timing } : row;
@@ -597,6 +605,7 @@ export async function walkBlock(
         try {
           decision = await decide(observation, undefined, item, deadline, decision);
         } catch (error) {
+          if (isAbort(error)) throw error;
           if (!(error instanceof EvidenceExpired)) throw error;
           if (error.itemExpired) throw error;
           metric('refresh', observation);
@@ -651,7 +660,8 @@ export async function walkBlock(
     let focused = false;
     try {
       focused = (await deps.reactFocused!(testID)) === true;
-    } catch {
+    } catch (error) {
+      if (isAbort(error)) throw error;
       focused = false;
     }
     deps.note?.(
@@ -689,6 +699,7 @@ export async function walkBlock(
     try {
       tap = await mutate(item, before, (context) => deps.press(target.element.ref, context));
     } catch (error) {
+      if (isAbort(error)) throw error;
       if (error instanceof EvidenceExpired)
         return nothingTyped(`the evidence expired before tapping "${quoted}"`, before.screen);
       throw error;
@@ -731,6 +742,7 @@ export async function walkBlock(
         deps.typeFocused!(again.element.ref, item.text, again.oracleTestID, context, proofMode),
       );
     } catch (error) {
+      if (isAbort(error)) throw error;
       if (error instanceof EvidenceExpired)
         return nothingTyped(
           `the evidence expired before typing after tapping "${quoted}"`,
@@ -782,6 +794,7 @@ export async function walkBlock(
         deps.typeFocused!(quoted, item.text, quoted, context, true),
       );
     } catch (error) {
+      if (isAbort(error)) throw error;
       if (error instanceof EvidenceExpired)
         return failed(
           item,
@@ -894,6 +907,7 @@ export async function walkBlock(
             try {
               decision = await decide(before, item, nextStep);
             } catch (error) {
+              if (isAbort(error)) throw error;
               if (!(error instanceof EvidenceExpired) || freshness-- <= 0) throw error;
               metric('refresh', before);
               before = await capture(nextStep, !item.literal);
@@ -981,6 +995,7 @@ export async function walkBlock(
                 deadline,
               );
             } catch (error) {
+              if (isAbort(error)) throw error;
               if (!(error instanceof EvidenceExpired) || error.itemExpired) throw error;
               metric('refresh', observation);
               await pause(Math.min(WAIT_POLL_MS, Math.max(0, deadline - deps.now())));
@@ -1216,6 +1231,7 @@ export async function walkBlock(
               }
               break;
             } catch (error) {
+              if (isAbort(error)) throw error;
               if (error instanceof EvidenceExpired && scrollNeedsReadback)
                 throw new QaDispatchError('ACTION_OUTCOME_UNCERTAIN');
               if (!(error instanceof EvidenceExpired) || freshness-- <= 0) throw error;
@@ -1290,6 +1306,7 @@ export async function walkBlock(
         if (outcome) return outcome;
         continue items;
       } catch (caught) {
+        if (isAbort(caught)) throw caught;
         let error = caught;
         if (
           error instanceof ResolutionError &&
@@ -1301,6 +1318,7 @@ export async function walkBlock(
             if (recovering === 'retry') continue attempts;
             if (recovering) return recovering;
           } catch (recoveryError) {
+            if (isAbort(recoveryError)) throw recoveryError;
             error = recoveryError;
           }
         }
@@ -1356,7 +1374,10 @@ export async function walkBlock(
           deps.cancelled?.()
             ? undefined
             : refusal
-              ? await shoot(item).catch(() => undefined)
+              ? await shoot(item).catch((error) => {
+                  if (isAbort(error)) throw error;
+                  return undefined;
+                })
               : await shoot(item);
         const miss =
           replay &&
@@ -1420,7 +1441,8 @@ function storedFor(block: Block, store: BlockStore): StoredBlock | undefined {
   let text: string | null;
   try {
     text = loadBlock(store.appRoot, block.slug);
-  } catch {
+  } catch (error) {
+    if (isAbort(error)) throw error;
     return undefined;
   }
   const stored = text === null ? undefined : readBlock(text);
@@ -1523,7 +1545,10 @@ export async function runPlan(
     // Saved after the last block, so an earlier block cannot keep a value a later fill made private.
     const pending: { index: number; write: () => BlockResult }[] = [];
     const finish = (outcome?: WalkOutcome): WalkResult => {
-      for (const { index, write } of pending.splice(0)) results[index] = write();
+      if (!deps.cancelled?.()) {
+        cancellationSignal();
+        for (const { index, write } of pending.splice(0)) results[index] = write();
+      }
       const ledger: WalkResult = {
         ...buildLedger(
           results.map((result) => ({ ...result, key: privacy.redactIdentifier(result.key) })),
@@ -1589,9 +1614,12 @@ export async function runPlan(
       if ('unsavable' in serialized)
         return { ...result, saved: false, unsavable: serialized.unsavable };
       try {
+        cancellationSignal();
+        if (deps.cancelled?.()) throw new QaDispatchError('RUN_CANCELLED');
         if (writeBlock(store.appRoot, block.slug, serialized.yaml) === 'written')
           written.push(block.slug);
       } catch (error) {
+        if (isAbort(error)) throw error;
         return {
           ...result,
           saved: false,
@@ -1662,7 +1690,8 @@ function withRowTiming(deps: WalkerDeps): WalkerDeps {
     timing: (event) => {
       try {
         timer.observe(event);
-      } catch {
+      } catch (error) {
+        if (isAbort(error)) throw error;
         // Row timing is passive and cannot change an operation's outcome.
       }
       observe(event);

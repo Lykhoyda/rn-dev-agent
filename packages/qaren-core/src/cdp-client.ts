@@ -1,3 +1,4 @@
+import { withDeadline } from './domain/cancellation.js';
 import WebSocket from 'ws';
 import { RingBuffer, DeviceBufferManager, makeDeviceKey } from './ring-buffer.js';
 import { getNetworkBufferManager } from './cdp/network-buffer-manager.js';
@@ -34,6 +35,7 @@ import {
 import {
   autoConnect as autoConnectFn,
   ConnectionSetupSupersededError,
+  CDPProbeTimeoutError,
   discoverAndConnect as discoverAndConnectFn,
 } from './cdp/connect.js';
 import type { ConnectContext, ConnectFilters, ConnectIntent } from './cdp/connect.js';
@@ -689,10 +691,15 @@ export class CDPClient {
     intent: ConnectIntent = 'default',
     targetRetries = 5,
     awaitWithinBoundary?: AwaitWithinBoundary,
+    deadline?: number,
   ): Promise<string> {
     this._reconnectDiscover = discoverExactPort;
     this._exactDiscoveryPort = port;
-    return this.connectWithCurrentPolicy(port, filters, intent, targetRetries, awaitWithinBoundary);
+    const connect = () =>
+      this.connectWithCurrentPolicy(port, filters, intent, targetRetries, awaitWithinBoundary);
+    return deadline === undefined
+      ? connect()
+      : withDeadline(deadline, new CDPProbeTimeoutError('CDP attach deadline exceeded'), connect);
   }
 
   async listTargetsExact(port: number): Promise<{ port: number; targets: HermesTarget[] }> {

@@ -53,6 +53,7 @@ fn request() -> CoreRequest {
     CoreRequest {
         run_id: RUN.to_string(),
         t0: 1_770_000_000_000,
+        walk_budget_ms: 300_000,
         plan: "1. Tap \"Tasks\"\n✓ \"Tasks\"\n".to_string(),
         prepared: serde_json::json!({"hash":"test","blocks":[]}),
         preflight_calls: vec![],
@@ -160,9 +161,10 @@ fn a_child_without_a_result_line_fails_at_its_last_row() {
     let repo = common::temp_repo();
     let rows = [row(1, 1, "pass"), row(2, 2, "pass")];
     let stdout = format!(
-        "{}\n{}\n",
-        envelope(2, "row", &rows[0]),
-        envelope(3, "row", &rows[1])
+        "{}\n{}\n{}\n",
+        envelope(2, "admitted", "{}"),
+        envelope(3, "row", &rows[0]),
+        envelope(4, "row", &rows[1])
     );
     let mut mock = MockRunner::new();
     mock.expect_spawn_piped("walk.js", 9000, &stdout, Some(1));
@@ -548,7 +550,11 @@ fn drive_schedule(intervals: Vec<u64>, budgets: Budgets) -> (core::CoreOutcome, 
     inner.expect_spawn_piped(
         "walk.js",
         9000,
-        &format!("{}\n", envelope(2, "row", &row(1, 1, "pass"))),
+        &format!(
+            "{}\n{}\n",
+            envelope(2, "admitted", "{}"),
+            envelope(3, "row", &row(1, 1, "pass"))
+        ),
         None,
     );
     let mut runner = ScheduleRunner {
@@ -759,9 +765,10 @@ fn a_stuck_child_is_killed_at_the_step_budget_naming_the_last_row() {
     let repo = common::temp_repo();
     let rows = [row(1, 1, "pass"), row(2, 1, "pass")];
     let stdout = format!(
-        "{}\n{}\n",
-        envelope(2, "row", &rows[0]),
-        envelope(3, "row", &rows[1])
+        "{}\n{}\n{}\n",
+        envelope(2, "admitted", "{}"),
+        envelope(3, "row", &rows[0]),
+        envelope(4, "row", &rows[1])
     );
     let mut mock = MockRunner::new();
     mock.expect_spawn_piped("walk.js", 9000, &stdout, None);
@@ -1047,4 +1054,50 @@ fn cancellation_after_core_spawn_prevents_request_dispatch() {
     assert!(mock.piped_stdin_text(0).is_empty());
     assert!(*mock.piped_killed[0].lock().unwrap());
     assert_eq!(mock.remaining(), 0);
+}
+
+#[test]
+fn deadline_before_admission_refuses_but_after_admission_fails() {
+    for (admitted, stdout) in [
+        (false, String::new()),
+        (
+            false,
+            format!("{}\n", envelope(2, "row", &row(0, 1, "pass"))),
+        ),
+        (true, format!("{}\n", envelope(2, "admitted", "{}"))),
+    ] {
+        let repo = common::temp_repo();
+        let mut mock = MockRunner::new();
+        mock.expect_spawn_piped_holding("walk.js", 9000, &stdout, None, HoldStdout::UntilKill);
+        let child = core::spawn(&mut mock, &spec(), &repo.join("core.log"), &request()).unwrap();
+        let outcome = core::wait(
+            &mut mock,
+            child,
+            Budgets {
+                walk_seconds: 1,
+                step_seconds: 10,
+            },
+        );
+        let failure = outcome.failure.unwrap();
+        assert_eq!(
+            failure.code,
+            if admitted {
+                FailureCode::WalkDeadlineExceeded
+            } else {
+                FailureCode::CoreRefused
+            }
+        );
+        if admitted {
+            assert_eq!(outcome.verdict, Verdict::Fail);
+            assert_eq!(outcome.ledger.verdict, "FAIL");
+        } else {
+            assert!(
+                matches!(outcome.verdict, Verdict::Refused { code, .. } if code == "CDP_NOT_CONNECTED")
+            );
+            assert_eq!(outcome.ledger.verdict, "REFUSED");
+            assert!(failure.detail.contains("environment refusal"));
+            assert!(failure.detail.contains("host"));
+        }
+        assert!(*mock.piped_killed[0].lock().unwrap());
+    }
 }

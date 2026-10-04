@@ -1,3 +1,10 @@
+import { readProcessBirth } from '../lifecycle/process-birth.js';
+import {
+  isAbort,
+  cancellationSignal,
+  interruptible,
+  sleep as cancellableSleep,
+} from '../domain/cancellation.js';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -15,12 +22,6 @@ export const LEGACY_BUNDLE_IDS = [
   'com.callstack.agentdevice.runner.uitests.xctrunner',
 ] as const;
 
-/**
- * GH#202 Phase 4: filter `installed` to only the known legacy bundle IDs.
- * iOS relaunches an installed XCUITest runner to the foreground during WDA
- * sessions, so killing processes (Phase 1) is insufficient — the only correct
- * end-state on iOS (where agent-device is retired, D1219) is "not installed".
- */
 export function selectInstalledLegacyApps(installed: Set<string>): string[] {
   return LEGACY_BUNDLE_IDS.filter((id) => installed.has(id));
 }
@@ -45,8 +46,10 @@ export async function eradicateLegacyRunnerApps(
   const warnings: string[] = [];
   let installed: Set<string>;
   try {
+    cancellationSignal();
     installed = parseSimctlListapps(deps.listApps(udid));
   } catch (err) {
+    if (isAbort(err)) throw err;
     return { removedApps, warnings: [`listapps failed: ${msg(err)}`] };
   }
   // A booted simulator always carries built-in system apps; zero parsed ids
@@ -59,9 +62,11 @@ export async function eradicateLegacyRunnerApps(
   }
   for (const id of selectInstalledLegacyApps(installed)) {
     try {
+      cancellationSignal();
       deps.uninstallApp(udid, id);
       removedApps.push(id);
     } catch (err) {
+      if (isAbort(err)) throw err;
       warnings.push(
         `uninstall ${id} failed: ${msg(err)} — remove manually: xcrun simctl uninstall ${udid} ${id}`,
       );
@@ -70,13 +75,6 @@ export async function eradicateLegacyRunnerApps(
   return { removedApps, warnings };
 }
 
-/**
- * GH#202: parse `ps -A -o pid=,args=` output and return the PIDs of stale
- * legacy `AgentDeviceRunner*` processes bound to `udid`. Conservative by
- * design: a line must reference both the legacy runner AND the target UDID,
- * and must NOT be our own RnFastRunner. A leak whose argv omits the UDID
- * matches nothing here (no false kill) rather than being guessed at.
- */
 export function selectLegacyRunnerPids(psOutput: string, udid: string): number[] {
   const pids: number[] = [];
   for (const line of psOutput.split('\n')) {
@@ -89,7 +87,6 @@ export function selectLegacyRunnerPids(psOutput: string, udid: string): number[]
   return pids;
 }
 
-/** GH#202: remove orphaned daemon files only when their PID is dead or absent. */
 export function shouldRemoveDaemonFiles(
   daemonPid: number | null,
   isAlive: (pid: number) => boolean,
@@ -108,6 +105,7 @@ export interface EnsureSingleRunnerResult {
 
 export interface EnsureSingleRunnerDeps {
   listProcesses: () => string;
+  readBirth: (pid: number) => string | null;
   kill: (pid: number, signal: NodeJS.Signals) => void;
   isAlive: (pid: number) => boolean;
   readDaemonPid: () => number | null;
@@ -126,12 +124,14 @@ function defaultDeps(): EnsureSingleRunnerDeps {
     // with no operator signal — exactly when the machine is busy.
     listProcesses: () =>
       execFileSync('ps', ['-A', '-o', 'pid=,args='], { encoding: 'utf8', timeout: 3_000 }),
+    readBirth: (pid) => readProcessBirth(pid)?.token ?? null,
     kill: (pid, signal) => process.kill(pid, signal),
     isAlive: (pid) => {
       try {
         process.kill(pid, 0);
         return true;
-      } catch {
+      } catch (error) {
+        if (isAbort(error)) throw error;
         return false;
       }
     },
@@ -139,13 +139,14 @@ function defaultDeps(): EnsureSingleRunnerDeps {
       try {
         const parsed = JSON.parse(readFileSync(DAEMON_JSON, 'utf8')) as { pid?: unknown };
         return typeof parsed.pid === 'number' ? parsed.pid : null;
-      } catch {
+      } catch (error) {
+        if (isAbort(error)) throw error;
         return null;
       }
     },
     fileExists: (path) => existsSync(path),
     removeFile: (path) => unlinkSync(path),
-    delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    delay: cancellableSleep,
     listApps: (udid) =>
       execFileSync('xcrun', ['simctl', 'listapps', udid], {
         encoding: 'utf8',
@@ -162,15 +163,6 @@ function defaultDeps(): EnsureSingleRunnerDeps {
   };
 }
 
-/**
- * GH#202 Phase 1: enforce a single iOS interaction runner.
- *  - With `udid` (device-open): SIGTERM/SIGKILL stale AgentDeviceRunner procs
- *    scoped to that simulator.
- *  - Always: remove orphaned ~/.agent-device/daemon.{json,lock} when the
- *    daemon PID is dead. A live daemon is left alone (it may belong to a
- *    different project's Android session).
- * Never touches a live process at startup (no udid -> no process scan).
- */
 export async function ensureSingleRunner(
   opts: { udid?: string } = {},
   deps: EnsureSingleRunnerDeps = defaultDeps(),
@@ -185,17 +177,36 @@ export async function ensureSingleRunner(
     const t = Date.now();
     let psOut = '';
     try {
+      cancellationSignal();
       psOut = deps.listProcesses();
     } catch (err) {
+      if (isAbort(err)) throw err;
       warnings.push(`ps failed: ${msg(err)}`);
     }
     for (const pid of selectLegacyRunnerPids(psOut, opts.udid)) {
       try {
-        deps.kill(pid, 'SIGTERM');
-        await deps.delay(SIGKILL_GRACE_MS);
-        if (deps.isAlive(pid)) deps.kill(pid, 'SIGKILL');
+        const birth = deps.readBirth(pid);
+        const signal = (kind: NodeJS.Signals): void => {
+          cancellationSignal();
+          if (
+            !birth ||
+            !selectLegacyRunnerPids(deps.listProcesses(), opts.udid!).includes(pid) ||
+            deps.readBirth(pid) !== birth
+          ) {
+            throw new Error(
+              'PROCESS_OWNERSHIP_UNPROVEN: legacy runner identity changed or is unavailable',
+            );
+          }
+          cancellationSignal();
+          deps.kill(pid, kind);
+        };
+        signal('SIGTERM');
+        await interruptible(() => deps.delay(SIGKILL_GRACE_MS));
+        cancellationSignal();
+        if (deps.isAlive(pid)) signal('SIGKILL');
         killedPids.push(pid);
       } catch (err) {
+        if (isAbort(err)) throw err;
         warnings.push(`kill ${pid} failed: ${msg(err)}`);
       }
     }
@@ -217,16 +228,19 @@ export async function ensureSingleRunner(
     let daemonPid: number | null = null;
     try {
       daemonPid = deps.readDaemonPid();
-    } catch {
+    } catch (error) {
+      if (isAbort(error)) throw error;
       daemonPid = null;
     }
     if (shouldRemoveDaemonFiles(daemonPid, deps.isAlive)) {
       for (const f of DAEMON_FILES) {
         if (!deps.fileExists(f)) continue;
         try {
+          cancellationSignal();
           deps.removeFile(f);
           removedFiles.push(f);
         } catch (err) {
+          if (isAbort(err)) throw err;
           warnings.push(`rm ${f} failed: ${msg(err)}`);
         }
       }

@@ -591,7 +591,11 @@ fn finite_build_failures_never_install_or_walk_and_unproven_groups_retain_both_l
             mock.expect_run("ps -A", CmdOutput::success("1 1 S\n5000 5000 S\n"));
             mock.expect_run("ps -p 5000 -o lstart=", CmdOutput::success(LSTART));
             mock.expect_run("ps -p 5000 -o stat=", CmdOutput::success("S"));
+            mock.expect_run("lstart=", CmdOutput::success(LSTART));
+            mock.expect_run("stat=", CmdOutput::success("S"));
             mock.expect_run("/bin/kill -TERM -- -5000", CmdOutput::success(""));
+            mock.expect_run("lstart=", CmdOutput::success(LSTART));
+            mock.expect_run("stat=", CmdOutput::success("S"));
             mock.expect_run("/bin/kill -KILL -- -5000", CmdOutput::success(""));
             mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
         } else if mode == "dead_leader" {
@@ -1002,7 +1006,11 @@ fn script_metro_teardown(mock: &mut MockRunner, udid: &str, runner_host: Option<
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("6000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
@@ -1297,7 +1305,11 @@ fn a_deadline_overrun_fails_naming_the_walk_phase_and_still_tears_down() {
     let mut mock = MockRunner::new();
     script_preflight(&mut mock, &repo);
     script_provision(&mut mock);
-    let one_row = format!("{}\n", envelope(2, "row", &row(1, "step")));
+    let one_row = format!(
+        "{}\n{}\n",
+        envelope(2, "admitted", "{}"),
+        envelope(3, "row", &row(1, "step"))
+    );
     script_drift_status(&mut mock);
     mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
     script_core_identity(&mut mock);
@@ -1513,7 +1525,11 @@ fn a_cancel_during_the_build_stops_it_with_proof_and_releases_both_locks() {
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n5000 5000 S\n"));
     mock.expect_run("ps -p 5000 -o lstart=", CmdOutput::success(LSTART));
     mock.expect_run("ps -p 5000 -o stat=", CmdOutput::success("S"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill -TERM -- -5000", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill -KILL -- -5000", CmdOutput::success(""));
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     mock.cancel_after = Some(("-p 5000".into(), "received SIGINT".into()));
@@ -1894,7 +1910,11 @@ fn an_unresolved_metro_group_retains_the_device_lease_for_cleanup() {
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("6000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n"))); // leader survived
     mock.expect_run("ps", CmdOutput::success("S\n"));
@@ -3631,7 +3651,11 @@ fn script_pr_teardown_after_drift(mock: &mut MockRunner) {
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("6000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
@@ -3696,6 +3720,7 @@ fn cancelled_pr_walks_with_or_without_source_drift_cannot_publish() {
             UDID,
             hosts_absent(),
         );
+        mock.expect_run("du -sk", CmdOutput::success("4\n"));
         mock.expect_run("worktree remove --force", CmdOutput::success(""));
 
         let receipt = run(&mut runner, &pr_request(&repo, &app));
@@ -3706,7 +3731,7 @@ fn cancelled_pr_walks_with_or_without_source_drift_cannot_publish() {
         let record = RunRecord::load(&runs, &run_id()).unwrap();
         assert_eq!(record.failure.unwrap().code, FailureCode::RunCancelled);
         let dir = runs.join(run_id());
-        assert!(dir.join("pr.json").is_file());
+        assert!(!dir.join("pr.json").exists());
         let mut publisher = qaren::exec::MockRunner::new();
         let published = qaren::publish::publish(
             &mut publisher,
@@ -3754,6 +3779,7 @@ fn pr_walk_result(candidate_drift: bool) {
     );
     script_recorder_stop(mock);
     script_pr_teardown_after_drift(mock);
+    mock.expect_run("du -sk", CmdOutput::success("4\n"));
     mock.expect_run("worktree remove --force", CmdOutput::success(""));
     mock.expect_run("which ffmpeg", CmdOutput::failed(1, ""));
     mock.expect_run(
@@ -3770,6 +3796,12 @@ fn pr_walk_result(candidate_drift: bool) {
             FailureCode::CandidateDrifted
         );
         assert_eq!(receipt.ledger.as_ref().unwrap().verdict, "FAIL");
+        let terminal = RunRecord::load(&repo.join("runs"), &run_id())
+            .unwrap()
+            .terminal
+            .unwrap();
+        assert!(!terminal.final_verification.matched);
+        assert!(!terminal.cancelled);
         let mut publisher = qaren::exec::MockRunner::new();
         let published = qaren::publish::publish(
             &mut publisher,
@@ -3822,7 +3854,10 @@ fn pr_walk_result(candidate_drift: bool) {
     assert_eq!(receipt.tested_older_commit.as_deref(), Some(PR_HEAD));
     assert_eq!(receipt.outcomes["video"], "unavailable(ffmpeg)");
     assert_eq!(receipt.cleanup["recorder"], "removed");
-    assert_eq!(receipt.cleanup["pr_worktree"], "removed");
+    assert_eq!(
+        receipt.cleanup["pr_worktree"],
+        "removed (reclaimed 4096 bytes)"
+    );
     assert_eq!(receipt.cleanup["device_lease"], "removed");
     assert!(!wt.exists());
     let run_dir = repo.join("runs").join(run_id());
@@ -3872,12 +3907,17 @@ fn a_core_failure_on_a_pr_run_still_stops_the_recorder_and_removes_the_worktree(
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("6000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     script_recorder_stop(mock);
+    mock.expect_run("du -sk", CmdOutput::success("4\n"));
     mock.expect_run("worktree remove --force", CmdOutput::success(""));
 
     let receipt = run(&mut runner, &pr_request(&repo, &app));
@@ -3894,7 +3934,10 @@ fn a_core_failure_on_a_pr_run_still_stops_the_recorder_and_removes_the_worktree(
     );
     assert_eq!(runner.inner.remaining(), 0);
     assert_eq!(receipt.cleanup["recorder"], "removed");
-    assert_eq!(receipt.cleanup["pr_worktree"], "removed");
+    assert_eq!(
+        receipt.cleanup["pr_worktree"],
+        "removed (reclaimed 4096 bytes)"
+    );
     assert_eq!(receipt.cleanup["device_lease"], "removed");
     assert!(!wt.exists());
 }
@@ -4056,7 +4099,10 @@ fn pr_receipt_reports_the_final_recorder_cleanup_retry() {
             mock.expect_run("ps -p 7100", CmdOutput::failed(1, ""));
             mock.expect_run("ps -A", CmdOutput::success("7101 7100 S\n"));
         }
-        mock.expect_run("worktree remove --force", CmdOutput::success(""));
+        if retry_succeeds {
+            mock.expect_run("du -sk", CmdOutput::success("4\n"));
+            mock.expect_run("worktree remove --force", CmdOutput::success(""));
+        }
         mock.expect_run(
             "gh pr view https://github.com/o/r/pull/12",
             pr_view_json(PR_HEAD),
@@ -4067,6 +4113,19 @@ fn pr_receipt_reports_the_final_recorder_cleanup_retry() {
         assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
         assert_eq!(runner.inner.remaining(), 0);
         let saved = RunRecord::load(&repo.join("runs"), &run_id()).unwrap();
+        assert_eq!(
+            saved.terminal.as_ref().unwrap().ownership_proven,
+            retry_succeeds
+        );
+        if !retry_succeeds {
+            assert!(saved
+                .terminal
+                .as_ref()
+                .unwrap()
+                .publication_refusal()
+                .is_some());
+            assert!(saved.resources.pr_worktree.is_some());
+        }
         if retry_succeeds {
             assert_eq!(receipt.cleanup["recorder"], "removed");
             assert_eq!(receipt.cleanup["device_lease"], "removed");
@@ -4146,6 +4205,7 @@ fn cancelled_pr_startup_never_dispatches_the_core_and_cleans_up() {
             mock.cancel_after = Some(("(exclude).qaren/actions".into(), "received SIGTERM".into()));
         }
         script_metro_teardown(mock, UDID, None);
+        mock.expect_run("du -sk", CmdOutput::success("4\n"));
         mock.expect_run("worktree remove --force", CmdOutput::success(""));
         let receipt = run(&mut runner, &pr_request(&repo, &app));
         assert_eq!(receipt.result, ReceiptResult::Refused);
@@ -4196,4 +4256,383 @@ fn login_keys_reach_the_core() {
         request["payload"]["loginMarker"],
         serde_json::json!({"id": "login-screen"})
     );
+}
+
+// R2: a cancel caught after the walk (video finalization, teardown) still decides the one terminal result.
+#[test]
+fn a_late_cancellation_is_the_terminal_result_and_publication_refuses() {
+    for (late_hint, ffmpeg_probed) in [("which ffmpeg", true), ("/bin/kill", false)] {
+        let (repo, app) = app_repo();
+        let wt = repo.join("runs").join(run_id()).join("wt");
+        let mut runner = PrRunner {
+            inner: MockRunner::new(),
+            app: app.clone(),
+            recorder_persisted_before_spawn: None,
+            fail_core_spawn: false,
+        };
+        let mock = &mut runner.inner;
+        script_pr_preflight(mock, &repo, &wt);
+        script_provision(mock);
+        script_pr_provenance_recheck(mock);
+        script_drift_status(mock);
+        script_recorder_start(mock);
+        mock.expect_spawn_piped("walk.js", 9000, &pr_pass_stdout(), Some(0));
+        script_core_identity(mock);
+        script_drift_status(mock);
+        mock.expect_run("git", CmdOutput::success(&format!("{PR_HEAD}\n")));
+        mock.expect_run(
+            "git",
+            CmdOutput::success("?? test-app/.qaren/actions/tasks.yaml\0"),
+        );
+        script_recorder_stop(mock);
+        script_pr_teardown_after_drift(mock);
+        mock.expect_run("du -sk", CmdOutput::success("4\n"));
+        mock.expect_run("worktree remove --force", CmdOutput::success(""));
+        if ffmpeg_probed {
+            mock.expect_run("which ffmpeg", CmdOutput::failed(1, ""));
+        }
+        mock.cancel_after = Some((late_hint.into(), "received SIGTERM".into()));
+
+        let receipt = run(&mut runner, &pr_request(&repo, &app));
+
+        assert_eq!(receipt.result, ReceiptResult::Refused, "{late_hint}");
+        assert_eq!(receipt.failure.unwrap().code, FailureCode::RunCancelled);
+        assert_eq!(runner.inner.remaining(), 0, "{late_hint}");
+        assert_eq!(
+            labels(&runner.inner)
+                .iter()
+                .filter(|label| label.as_str() == "gh-pr-view")
+                .count(),
+            1,
+            "no forward forge call after the cancel"
+        );
+        let runs = repo.join("runs");
+        let record = RunRecord::load(&runs, &run_id()).unwrap();
+        let terminal = record.terminal.expect("the terminal result is persisted");
+        assert!(terminal.cancelled, "{late_hint}");
+        assert_eq!(terminal.verdict, "PASS");
+        assert!(terminal.final_verification.matched);
+        assert_eq!(terminal.final_verification.tested, PR_HEAD);
+        assert_eq!(record.failure.unwrap().code, FailureCode::RunCancelled);
+        let mut publisher = qaren::exec::MockRunner::new();
+        let published = qaren::publish::publish(
+            &mut publisher,
+            &runs,
+            &run_id(),
+            &repo.join("verdict.md"),
+            &qaren::redact::MachineIdentity::default(),
+        );
+        assert_eq!(published.failure.unwrap().code, FailureCode::RunCancelled);
+        assert!(publisher.calls.is_empty());
+    }
+}
+
+// R1: a cancel caught at a pre-walk forward-effect boundary stops that effect and every later one.
+#[test]
+fn a_cancel_at_each_pre_walk_effect_boundary_runs_nothing_after_it_and_never_resets_the_app() {
+    for hint in [
+        "fresh-install-preflight.js",
+        "pnpm install",
+        "expo run:ios --help",
+        "simctl bootstatus",
+        "plutil -convert json",
+        "simctl uninstall",
+    ] {
+        let (repo, app) = app_repo();
+        let mut mock = MockRunner::new();
+        script_preflight_inventory(
+            &mut mock,
+            &repo,
+            "simctl list devices -j",
+            &available_inventory("Shutdown"),
+        );
+        script_admission(&mut mock);
+        common::script_ios_deps(&mut mock);
+        script_admission(&mut mock);
+        mock.expect_run(
+            &format!("simctl bootstatus {UDID} -b"),
+            CmdOutput::success(""),
+        );
+        mock.expect_run(
+            "simctl list devices -j",
+            CmdOutput::success(&available_inventory("Booted")),
+        );
+        script_app_presence(&mut mock, true);
+        mock.expect_run(
+            &format!("simctl uninstall {UDID} com.rndevagent.testapp"),
+            CmdOutput::success(""),
+        );
+        script_app_presence(&mut mock, false);
+        mock.cancel_after = Some((hint.into(), "received SIGTERM".into()));
+        let mut req = request(&repo, &app, 30);
+        req.device = Some(UDID.into());
+        req.boot_device = true;
+        req.fresh_install = true;
+
+        let receipt = run(&mut mock, &req);
+
+        assert_eq!(receipt.result, ReceiptResult::Refused, "{hint}");
+        assert_eq!(receipt.failure.unwrap().code, FailureCode::RunCancelled);
+        let last = mock.calls.last().unwrap().rendered();
+        assert!(last.contains(hint), "{hint}: the last effect was {last:?}");
+        let uninstalled = labels(&mock).iter().any(|l| l == "simctl-uninstall");
+        assert_eq!(uninstalled, hint == "simctl uninstall", "{hint}");
+        assert!(!labels(&mock)
+            .iter()
+            .any(|l| l == "expo-run-ios" || l == "core-walk"));
+        assert_eq!(receipt.cleanup["device_lease"], "removed", "{hint}");
+        let record = RunRecord::load(&req.runs_root, &run_id()).unwrap();
+        assert!(record.resources.fresh_install.is_none(), "{hint}");
+    }
+}
+
+// QA scenario: a cancel during the pre-record Git probes leaves no run, lease or forward effect.
+#[test]
+fn a_cancel_during_the_git_probes_claims_nothing_and_runs_nothing_after_it() {
+    let (repo, app) = app_repo();
+    let mut mock = MockRunner::new();
+    mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
+    script_plan(&mut mock, &repo);
+    mock.expect_run(
+        "simctl list devices booted",
+        CmdOutput::success(&booted_json()),
+    );
+    mock.expect_run(
+        "rev-parse --show-toplevel",
+        CmdOutput::failed(1, "interrupted"),
+    );
+    mock.cancel_after = Some((
+        "rev-parse --show-toplevel".into(),
+        "received SIGTERM".into(),
+    ));
+    let req = request(&repo, &app, 30);
+
+    let receipt = run(&mut mock, &req);
+
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    assert_eq!(receipt.failure.unwrap().code, FailureCode::RunCancelled);
+    assert_eq!(receipt.run_id, "none");
+    assert_eq!(mock.remaining(), 0);
+    assert!(mock
+        .calls
+        .last()
+        .unwrap()
+        .rendered()
+        .contains("rev-parse --show-toplevel"));
+    assert!(!req.lock_root.exists());
+    assert!(!req.runs_root.exists());
+}
+
+// Writes the recorder's raw capture and each encode's output, as the real tools would.
+struct Encoding(PrRunner);
+
+impl Runner for Encoding {
+    fn env_var(&self, name: &str) -> Option<String> {
+        self.0.env_var(name)
+    }
+    fn execute_private(
+        &mut self,
+        spec: &CmdSpec,
+        input: &[u8],
+        interruptible: bool,
+    ) -> qaren::exec::PrivateOutput {
+        self.0.execute_private(spec, input, interruptible)
+    }
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
+        if spec.label == "ffmpeg-encode" {
+            std::fs::write(spec.args.last().unwrap(), vec![0u8; 64]).unwrap();
+        }
+        self.0.execute(spec, interruptible)
+    }
+    fn spawn_group_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        if spec.label == "simctl-record-video" {
+            let raw = PathBuf::from(spec.args.last().unwrap());
+            std::fs::write(&raw, vec![0u8; 4096]).unwrap();
+            let other = raw
+                .ancestors()
+                .nth(3)
+                .unwrap()
+                .join("check-other/media/raw.mov");
+            std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+            std::fs::write(other, b"foreign").unwrap();
+        }
+        self.0.spawn_group_unchecked(spec, log)
+    }
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.0.spawn_piped_unchecked(spec, log)
+    }
+    fn sleep(&mut self, d: std::time::Duration) {
+        self.0.sleep(d)
+    }
+    fn now_epoch_ms(&self) -> u64 {
+        self.0.now_epoch_ms()
+    }
+    fn commands_executed(&self) -> u64 {
+        self.0.commands_executed()
+    }
+    fn cancellation(&self) -> Option<String> {
+        self.0.cancellation()
+    }
+}
+
+// R8: only this run's own raw capture is reclaimed, and only once a playable encode replaces it.
+#[test]
+fn a_playable_encode_reclaims_the_runs_raw_capture_and_reports_the_bytes() {
+    for encodes in [true, false] {
+        let (repo, app) = app_repo();
+        let wt = repo.join("runs").join(run_id()).join("wt");
+        let mut runner = Encoding(PrRunner {
+            inner: MockRunner::new(),
+            app: app.clone(),
+            recorder_persisted_before_spawn: None,
+            fail_core_spawn: false,
+        });
+        let mock = &mut runner.0.inner;
+        script_pr_preflight(mock, &repo, &wt);
+        script_provision(mock);
+        script_pr_provenance_recheck(mock);
+        script_drift_status(mock);
+        script_recorder_start(mock);
+        mock.expect_spawn_piped("walk.js", 9000, &pr_pass_stdout(), Some(0));
+        script_core_identity(mock);
+        script_drift_status(mock);
+        mock.expect_run("git", CmdOutput::success(&format!("{PR_HEAD}\n")));
+        mock.expect_run(
+            "git",
+            CmdOutput::success("?? test-app/.qaren/actions/tasks.yaml\0"),
+        );
+        script_recorder_stop(mock);
+        script_pr_teardown_after_drift(mock);
+        mock.expect_run("du -sk", CmdOutput::success("4\n"));
+        mock.expect_run("worktree remove --force", CmdOutput::success(""));
+        mock.expect_run("which ffmpeg", CmdOutput::success("/opt/ffmpeg\n"));
+        if encodes {
+            mock.expect_run("ffmpeg", CmdOutput::success(""));
+            mock.expect_run("ffprobe", CmdOutput::success("3.5\n"));
+        } else {
+            mock.expect_run("ffmpeg", CmdOutput::failed(1, "encode failed"));
+        }
+        mock.expect_run(
+            "gh pr view https://github.com/o/r/pull/12",
+            pr_view_json(PR_HEAD),
+        );
+        let other = repo.join("runs/check-other/media/raw.mov");
+
+        let receipt = run(&mut runner, &pr_request(&repo, &app));
+
+        assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
+        assert_eq!(runner.0.inner.remaining(), 0);
+        let media = repo.join("runs").join(run_id()).join("media");
+        assert_eq!(
+            !media.join("raw.mov").exists(),
+            encodes,
+            "encodes={encodes}"
+        );
+        assert!(other.exists(), "another run's capture is never touched");
+        if encodes {
+            assert!(media.join("video.mp4").is_file());
+            assert_eq!(receipt.outcomes["reclaimed"], "media/raw.mov: 4096 bytes");
+        } else {
+            assert!(!receipt.outcomes.contains_key("reclaimed"));
+        }
+    }
+}
+
+struct CancelAfterTerminalSave(PrRunner, PathBuf);
+
+impl Runner for CancelAfterTerminalSave {
+    fn env_var(&self, name: &str) -> Option<String> {
+        self.0.env_var(name)
+    }
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
+        self.0.execute(spec, interruptible)
+    }
+    fn execute_private(
+        &mut self,
+        spec: &CmdSpec,
+        input: &[u8],
+        interruptible: bool,
+    ) -> qaren::exec::PrivateOutput {
+        self.0.execute_private(spec, input, interruptible)
+    }
+    fn spawn_group_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        self.0.spawn_group_unchecked(spec, log)
+    }
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.0.spawn_piped_unchecked(spec, log)
+    }
+    fn sleep(&mut self, d: std::time::Duration) {
+        self.0.sleep(d)
+    }
+    fn now_epoch_ms(&self) -> u64 {
+        self.0.now_epoch_ms()
+    }
+    fn commands_executed(&self) -> u64 {
+        self.0.commands_executed()
+    }
+    fn cancellation(&self) -> Option<String> {
+        if RunRecord::load(&self.1, &run_id())
+            .ok()
+            .is_some_and(|record| record.terminal.is_some())
+        {
+            Some("received SIGTERM".into())
+        } else {
+            self.0.cancellation()
+        }
+    }
+}
+
+#[test]
+fn cancellation_during_terminal_save_withholds_the_publish_handoff() {
+    let (repo, app) = app_repo();
+    let wt = repo.join("runs").join(run_id()).join("wt");
+    let mut runner = CancelAfterTerminalSave(
+        PrRunner {
+            inner: MockRunner::new(),
+            app: app.clone(),
+            recorder_persisted_before_spawn: None,
+            fail_core_spawn: false,
+        },
+        repo.join("runs"),
+    );
+    let mock = &mut runner.0.inner;
+    script_pr_preflight(mock, &repo, &wt);
+    script_provision(mock);
+    script_pr_provenance_recheck(mock);
+    script_drift_status(mock);
+    script_recorder_start(mock);
+    mock.expect_spawn_piped("walk.js", 9000, &pr_pass_stdout(), Some(0));
+    script_core_identity(mock);
+    script_drift_status(mock);
+    mock.expect_run("git", CmdOutput::success(&format!("{PR_HEAD}\n")));
+    mock.expect_run(
+        "git",
+        CmdOutput::success("?? test-app/.qaren/actions/tasks.yaml\0"),
+    );
+    script_recorder_stop(mock);
+    script_pr_teardown_after_drift(mock);
+    mock.expect_run("du -sk", CmdOutput::success("4\n"));
+    mock.expect_run("worktree remove --force", CmdOutput::success(""));
+    mock.expect_run("which ffmpeg", CmdOutput::failed(1, ""));
+    mock.expect_run("gh", pr_view_json(PR_HEAD));
+
+    let receipt = run(&mut runner, &pr_request(&repo, &app));
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    assert_eq!(receipt.failure.unwrap().code, FailureCode::RunCancelled);
+    assert_eq!(runner.0.inner.remaining(), 0);
+    let record = RunRecord::load(&repo.join("runs"), &run_id()).unwrap();
+    assert!(record.terminal.unwrap().cancelled);
+    assert_eq!(record.failure.unwrap().code, FailureCode::RunCancelled);
+    assert!(!repo.join("runs").join(run_id()).join("pr.json").exists());
+    assert!(!repo.join("runs").join(run_id()).join("plan.md").exists());
+    let mut publisher = qaren::exec::MockRunner::new();
+    let receipt = qaren::publish::publish(
+        &mut publisher,
+        &repo.join("runs"),
+        &run_id(),
+        &repo.join("verdict.md"),
+        &qaren::redact::MachineIdentity::default(),
+    );
+    assert_eq!(receipt.failure.unwrap().code, FailureCode::RunCancelled);
+    assert!(publisher.calls.is_empty());
 }

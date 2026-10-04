@@ -182,7 +182,11 @@ fn original_schema_core_identity_loads_in_status_and_recovers_via_owned_group_cl
     );
     mock.expect_run("ps -p 9000 -o lstart=", CmdOutput::success(LSTART));
     mock.expect_run("ps -p 9000 -o stat=", CmdOutput::success("S"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill -TERM -- -9000", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill -KILL -- -9000", CmdOutput::success(""));
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     let receipt = cleanup(&mut mock, &repo, "core-run");
@@ -537,7 +541,11 @@ fn core_group_cleanup_requires_positive_inventory_after_kill_not_just_leader_exi
         );
         mock.expect_run("ps -p 9000", CmdOutput::success(LSTART));
         mock.expect_run("ps -p 9000", CmdOutput::success("S"));
+        mock.expect_run("lstart=", CmdOutput::success(LSTART));
+        mock.expect_run("stat=", CmdOutput::success("S"));
         mock.expect_run("/bin/kill -TERM -- -9000", CmdOutput::success(""));
+        mock.expect_run("lstart=", CmdOutput::success(LSTART));
+        mock.expect_run("stat=", CmdOutput::success("S"));
         mock.expect_run("/bin/kill -KILL -- -9000", CmdOutput::success(""));
         mock.expect_run("ps -A", after);
         let receipt = cleanup(&mut mock, &repo, "core-run");
@@ -790,7 +798,11 @@ fn assert_core_only_refusal_with_metro(with_owner: bool) {
     mock.expect_run("ps -p 5000 -o lstart=", CmdOutput::success(LSTART));
     mock.expect_run("ps -p 5000 -o stat=", CmdOutput::success("S"));
     mock.expect_run("lsof", free_port());
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill -TERM -- -5000", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill -KILL -- -5000", CmdOutput::success(""));
     mock.expect_run("ps -p 5000 -o lstart=", CmdOutput::success(""));
     mock.expect_run("lsof", free_port());
@@ -805,7 +817,7 @@ fn assert_core_only_refusal_with_metro(with_owner: bool) {
     );
     assert_eq!(receipt.cleanup["metro"], "removed");
     assert!(receipt.cleanup["device_lease"].starts_with("unresolved: retained"));
-    assert_eq!(mock.calls.len(), if with_owner { 9 } else { 8 });
+    assert_eq!(mock.calls.len(), if with_owner { 13 } else { 12 });
     assert_eq!(
         mock.calls
             .iter()
@@ -1025,7 +1037,11 @@ fn ios_happy_cleanup_then_idempotent_rerun() {
     mock.expect_run("ps", CmdOutput::success("S\n")); // not a zombie
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("5000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run(
@@ -1047,7 +1063,10 @@ fn ios_happy_cleanup_then_idempotent_rerun() {
     let receipt = cleanup(&mut mock, &repo, "iosrun1");
     assert_eq!(receipt.result, ReceiptResult::Cleaned);
     assert_eq!(receipt.cleanup.get("metro").unwrap(), "removed");
-    assert_eq!(receipt.cleanup.get("simulator").unwrap(), "removed");
+    assert_eq!(
+        receipt.cleanup.get("simulator").unwrap(),
+        "removed (reclaimed bytes unknown)"
+    );
     assert_eq!(mock.remaining(), 0);
 
     let reloaded = RunRecord::load(&repo, "iosrun1").unwrap();
@@ -1214,7 +1233,11 @@ fn android_cleanup_stops_only_own_lease() {
     mock.expect_run("ps", CmdOutput::success("S\n")); // not a zombie
     mock.expect_run("lsof", CmdOutput::success("7100\n"));
     mock.expect_run("ps", CmdOutput::success("7100\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run(
@@ -1230,7 +1253,11 @@ fn android_cleanup_stops_only_own_lease() {
     mock.expect_run("ps", CmdOutput::success("S\n")); // not a zombie
     mock.expect_run("lsof", CmdOutput::success("7000\n"));
     mock.expect_run("ps", CmdOutput::success("7000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run(
@@ -1532,7 +1559,11 @@ fn farm_lease_is_released_after_the_recorded_group_owning_the_port_is_killed() {
     mock.expect_run("ps", CmdOutput::success("S"));
     mock.expect_run("lsof", CmdOutput::success("7050\n"));
     mock.expect_run("ps", CmdOutput::success("7000\n")); // listener is in our group
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
@@ -1605,7 +1636,11 @@ fn post_kill_indeterminate_port_probe_is_unresolved() {
     mock.expect_run("ps", CmdOutput::success("S\n")); // not a zombie
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("5000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, "")); // leader gone
     mock.expect_run(
@@ -1644,7 +1679,10 @@ fn cleanup_recovers_pending_simulator_by_run_scoped_name() {
     mock.expect_run("simctl shutdown AAAA-1111", CmdOutput::success(""));
     mock.expect_run("simctl delete AAAA-1111", CmdOutput::success(""));
     let receipt = cleanup(&mut mock, &repo, "iosrun1");
-    assert_eq!(receipt.cleanup.get("simulator").unwrap(), "removed");
+    assert_eq!(
+        receipt.cleanup.get("simulator").unwrap(),
+        "removed (reclaimed bytes unknown)"
+    );
     assert_eq!(receipt.result, ReceiptResult::Cleaned);
 }
 
@@ -1870,7 +1908,11 @@ fn cleanup_retains_the_device_lease_until_the_metro_group_is_proven_gone() {
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("5000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n"));

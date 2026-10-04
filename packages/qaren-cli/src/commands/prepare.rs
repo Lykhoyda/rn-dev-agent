@@ -328,6 +328,7 @@ fn prepare_validated(
         resources: Default::default(),
         failure: None,
         history: Vec::new(),
+        terminal: None,
     };
     record.save(&args.runs_root)?;
 
@@ -422,7 +423,9 @@ fn prepare_validated(
     let t = ctx.mark("verify", t);
 
     if plan.decision != BuildDecision::Reuse {
-        record_build_result(&mut ctx, &fp);
+        if let Err(f) = record_build_result(&mut ctx, &fp) {
+            return Ok(ctx.fail(f));
+        }
         release_build_lock(&mut ctx);
     }
     ctx.mark("cache_record", t);
@@ -1727,12 +1730,11 @@ fn prune_stale_artifacts(platform_dir: &Path, app_id: &str, keep_fp_key: &str) -
     pruned
 }
 
-pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
+pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) -> Result<(), Failure> {
     let platform = platform_dir(ctx.record.scenario.platform);
     let repo_root = ctx.record.candidate.repo_root.clone();
     let project_root = ctx.record.candidate.project_root.clone();
     let app_id = ctx.record.candidate.app_id.clone();
-    let mut artifact = None;
     let verified = ctx.record.build.as_ref().and_then(|p| p.artifact.clone());
     let source = if platform == "ios" {
         verified
@@ -1742,83 +1744,53 @@ pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
     } else {
         locate_built_apk(&project_root)
     };
-    match source {
-        Ok((src, kind)) => {
-            let fp_key: String = fp
-                .value
-                .chars()
-                .filter(|c| c.is_ascii_hexdigit())
-                .take(16)
-                .collect();
-            let dest_dir = buildplan::cache_dir(&repo_root)
-                .join("artifacts")
-                .join(platform)
-                .join(format!("{app_id}-{fp_key}"));
-            let _ = std::fs::remove_dir_all(&dest_dir);
-            let dest = dest_dir.join(src.file_name().unwrap_or_default());
-            let copied = buildplan::copy_artifact(&src, &dest)
-                .and_then(|()| buildplan::hash_artifact(&dest))
-                .and_then(|hash| {
-                    if verified.as_ref().is_some_and(|a| a.sha256 != hash) {
-                        let _ = std::fs::remove_dir_all(&dest_dir);
-                        Err("cache copy did not match the verified build artifact".into())
-                    } else {
-                        Ok(hash)
-                    }
-                });
-            match copied {
-                Ok(sha256) => {
-                    artifact = Some(CachedArtifact {
-                        path: dest,
-                        sha256,
-                        kind,
-                    });
-                    // Bind the ready installation to hashed bytes for later owned removal.
-                    if let (ArtifactKind::Apk, Some(serial), Some(server)) = (
-                        kind,
-                        ctx.record.resources.adb_local_serial.clone(),
-                        ctx.record.resources.adb_server.as_ref(),
-                    ) {
-                        ctx.record.resources.app_install = Some(AppInstallResource {
-                            app_id: app_id.clone(),
-                            serial,
-                            server_port: server.server_port,
-                            artifact: artifact.clone().expect("just set"),
-                            via: "expo-run-android".to_string(),
-                            installed_at: timefmt::iso8601_utc(ctx.runner.now_epoch_ms()),
-                            removal: None,
-                        });
-                    }
-                    ctx.notes.push((
-                        "artifact_cache".to_string(),
-                        "cached the built dev client for fingerprint-matched reuse".to_string(),
-                    ));
-                    let pruned = prune_stale_artifacts(
-                        &buildplan::cache_dir(&repo_root)
-                            .join("artifacts")
-                            .join(platform),
-                        &app_id,
-                        &fp_key,
-                    );
-                    if pruned > 0 {
-                        ctx.notes.push((
-                            "artifact_cache".to_string(),
-                            format!(
-                                "pruned {pruned} artifact director{} for older native fingerprints",
-                                if pruned == 1 { "y" } else { "ies" }
-                            ),
-                        ));
-                    }
-                }
-                Err(reason) => ctx
-                    .notes
-                    .push(("artifact_cache".to_string(), format!("skipped: {reason}"))),
-            }
+    let (src, kind) = match source {
+        Ok(source) => source,
+        Err(reason) => {
+            ensure_running(ctx.runner, "native_cache")?;
+            ctx.notes
+                .push(("artifact_cache".into(), format!("skipped: {reason}")));
+            return Ok(());
         }
-        Err(reason) => ctx
-            .notes
-            .push(("artifact_cache".to_string(), format!("skipped: {reason}"))),
-    }
+    };
+    let fp_key: String = fp
+        .value
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .take(16)
+        .collect();
+    let bucket = buildplan::cache_dir(&repo_root)
+        .join("artifacts")
+        .join(platform)
+        .join(format!("{app_id}-{fp_key}"));
+    let staging = bucket.join(format!(".staging-{}", ctx.record.run_id));
+    let dest_dir = bucket.join(&ctx.record.run_id);
+    let staged = staging.join(src.file_name().unwrap_or_default());
+    let dest = dest_dir.join(src.file_name().unwrap_or_default());
+    let copied = buildplan::copy_artifact(ctx.runner, &src, &staged)
+        .and_then(|()| buildplan::hash_artifact(&staged))
+        .and_then(|hash| {
+            if verified.as_ref().is_some_and(|a| a.sha256 != hash) {
+                Err("cache copy did not match the verified build artifact".into())
+            } else {
+                Ok(hash)
+            }
+        });
+    let sha256 = match copied {
+        Ok(hash) => hash,
+        Err(reason) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            ensure_running(ctx.runner, "native_cache")?;
+            ctx.notes
+                .push(("artifact_cache".into(), format!("skipped: {reason}")));
+            return Ok(());
+        }
+    };
+    let artifact = Some(CachedArtifact {
+        path: dest,
+        sha256,
+        kind,
+    });
     let generated =
         ctx.record.candidate.project_root.join(platform).is_dir() && !fp.native_dir_in_candidate;
     let state = buildplan::NativeCacheState {
@@ -1843,25 +1815,65 @@ pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
         artifact,
     };
     let path = buildplan::state_path(&repo_root, platform, &app_id);
+    if let Err(f) = ensure_running(ctx.runner, "native_cache") {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(f);
+    }
+    if let Err(e) = std::fs::rename(&staging, &dest_dir) {
+        let _ = std::fs::remove_dir_all(&staging);
+        ctx.notes
+            .push(("artifact_cache".into(), format!("skipped: {e}")));
+        return Ok(());
+    }
     if let Err(e) = buildplan::save_json(&path, &state) {
+        let _ = std::fs::remove_dir_all(&dest_dir);
         ctx.notes.push((
             "native_cache_state".to_string(),
             format!("could not persist {}: {e}", path.display()),
         ));
-        return;
+        return Ok(());
+    }
+    if let (ArtifactKind::Apk, Some(serial), Some(server)) = (
+        kind,
+        ctx.record.resources.adb_local_serial.clone(),
+        ctx.record.resources.adb_server.as_ref(),
+    ) {
+        ctx.record.resources.app_install = Some(AppInstallResource {
+            app_id: app_id.clone(),
+            serial,
+            server_port: server.server_port,
+            artifact: state.artifact.clone().expect("published artifact"),
+            via: "expo-run-android".into(),
+            installed_at: timefmt::iso8601_utc(ctx.runner.now_epoch_ms()),
+            removal: None,
+        });
+    }
+    ctx.notes.push((
+        "artifact_cache".into(),
+        "cached the built dev client for fingerprint-matched reuse".into(),
+    ));
+    let pruned = prune_stale_artifacts(bucket.parent().expect("platform cache"), &app_id, &fp_key);
+    if pruned > 0 {
+        ctx.notes.push((
+            "artifact_cache".into(),
+            format!(
+                "pruned {pruned} artifact director{} for older native fingerprints",
+                if pruned == 1 { "y" } else { "ies" }
+            ),
+        ));
     }
     if platform != "ios" || !ctx.record.resources.can_release_build_ownership() {
-        return;
+        return Ok(());
     }
     let (Some(source), Some(cached)) = (verified, state.artifact) else {
-        return;
+        return Ok(());
     };
     ctx.record.build.as_mut().expect("build planned").artifact = Some(cached);
     if let Err(e) = ctx.save() {
         ctx.record.build.as_mut().expect("build planned").artifact = Some(source);
         ctx.notes
             .push(("ios_build_output".into(), format!("retained: {}", e.detail)));
-        return;
+        return Ok(());
     }
     let run_dir = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id);
     let output = run_dir.join("ios-build");
@@ -1876,7 +1888,7 @@ pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
             "ios_build_output".into(),
             "retained: source is not a run-owned app directory".into(),
         ));
-        return;
+        return Ok(());
     }
     if ctx.record.scenario.build.ios_workspace.is_some() {
         let derived = run_dir.join("ios-derived-data");
@@ -1888,7 +1900,7 @@ pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
                     "ios_build_output".into(),
                     "retained: derived data is not a plain run-owned directory".into(),
                 ));
-                return;
+                return Ok(());
             }
         };
         if std::fs::remove_dir_all(&output)
@@ -1906,7 +1918,7 @@ pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
                 "retirement incomplete: could not remove run-owned build products".into(),
             ));
         }
-        return;
+        return Ok(());
     }
     if let Err(e) =
         std::fs::remove_dir_all(&source.path).and_then(|()| std::fs::remove_dir(&output))
@@ -1916,6 +1928,7 @@ pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
             format!("could not retire output: {e}"),
         ));
     }
+    Ok(())
 }
 
 fn write_private_file(path: &Path, content: &str) -> std::io::Result<()> {

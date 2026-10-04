@@ -9,7 +9,7 @@ import { isValidActionId } from '../domain/path-safety.js';
 
 export const WIRE_VERSION = 1 as const;
 
-export type EnvelopeType = 'request' | 'row' | 'result' | 'cancel';
+export type EnvelopeType = 'request' | 'admitted' | 'row' | 'result' | 'cancel';
 
 export interface Envelope<T = unknown> {
   v: typeof WIRE_VERSION;
@@ -30,6 +30,7 @@ export interface WireTarget {
 export interface WireRequest {
   runId: string;
   t0: number;
+  walkBudgetMs: number;
   plan: string;
   prepared?: PreparedPlan;
   preflightCalls?: JevCall[];
@@ -114,7 +115,7 @@ export function startupRow(): LedgerRow {
   };
 }
 
-const TYPES: ReadonlySet<string> = new Set(['request', 'row', 'result', 'cancel']);
+const TYPES: ReadonlySet<string> = new Set(['request', 'admitted', 'row', 'result', 'cancel']);
 
 function validCall(value: unknown): boolean {
   return (
@@ -173,6 +174,8 @@ export function parseRequest(line: string): WireRequest {
     typeof p.runId !== 'string' ||
     !p.runId ||
     !Number.isSafeInteger(p.t0) ||
+    !Number.isSafeInteger(p.walkBudgetMs) ||
+    (p.walkBudgetMs as number) < 1 ||
     typeof p.plan !== 'string' ||
     (p.preflightCalls !== undefined &&
       (!Array.isArray(p.preflightCalls) || !p.preflightCalls.every(validCall))) ||
@@ -215,6 +218,7 @@ export async function readRequest(input: AsyncIterable<Buffer | string>): Promis
 }
 
 export interface WireWriter {
+  admitted(): void;
   row(payload: LedgerRow): void;
   result(payload: ResultPayload): 0 | 1 | 4;
   readonly seq: number;
@@ -231,6 +235,7 @@ export function createWriter(write: (line: string) => void, runId: string): Wire
     write(`${JSON.stringify(envelope)}\n`);
   };
   return {
+    admitted: () => send('admitted', {}),
     row: (payload) => send('row', payload),
     result: (payload) => {
       send('result', payload);

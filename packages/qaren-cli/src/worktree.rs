@@ -111,9 +111,11 @@ pub fn remove(runner: &mut dyn Runner, repo_root: &Path, wt: &Path) -> Outcome {
     let Some(wt_arg) = wt.to_str() else {
         return Outcome::Unresolved(format!("{} is not a UTF-8 path", wt.display()));
     };
+    let bytes;
     match presence(wt) {
         Presence::Unknown(why) => return Outcome::Unresolved(why),
         Presence::Present => {
+            bytes = crate::commands::cleanup::reclaimed_bytes(runner, wt);
             let removed = git(
                 runner,
                 "git-worktree-remove",
@@ -147,7 +149,7 @@ pub fn remove(runner: &mut dyn Runner, repo_root: &Path, wt: &Path) -> Outcome {
         }
     }
     match presence(wt) {
-        Presence::Absent => Outcome::Removed,
+        Presence::Absent => Outcome::RemovedBytes(bytes),
         Presence::Present => Outcome::Unresolved(format!("{} still exists", wt.display())),
         Presence::Unknown(why) => Outcome::Unresolved(why),
     }
@@ -397,7 +399,8 @@ mod tests {
 
     #[test]
     fn failed_walks_preserve_saved_actions_using_canonical_wire_identifiers() {
-        let root = std::env::temp_dir().join(format!("qaren-canonical-block-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("qaren-canonical-block-{}", std::process::id()));
         let app = root.join("app");
         let actions = app.join(".qaren/actions");
         std::fs::create_dir_all(&actions).unwrap();
@@ -412,8 +415,7 @@ mod tests {
         }))
         .unwrap();
         let dest = root.join("blocks");
-        let (copied, refused) =
-            copy_blocks(&app, ledger.blocks_written.as_deref().unwrap(), &dest);
+        let (copied, refused) = copy_blocks(&app, ledger.blocks_written.as_deref().unwrap(), &dest);
         assert_eq!(copied, ["alice"]);
         assert!(refused.is_empty());
         std::fs::remove_dir_all(&app).unwrap();

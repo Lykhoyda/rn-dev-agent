@@ -1,3 +1,10 @@
+import {
+  cancellationSignal,
+  interruptible,
+  withCancellation,
+  sleep,
+  isAbort,
+} from '../domain/cancellation.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -42,6 +49,7 @@ import { summarizeJev } from './ledger.js';
 import { redactApiKey } from '../util/redact.js';
 import { createStop, watchParent } from './stop.js';
 import { prove } from './prove.js';
+import { admit } from './admission.js';
 import { type ActResult, type WalkerDeps, loginBlock, runPlan } from './walker.js';
 import { loadBlock, readBlock } from './blocks.js';
 import {
@@ -284,61 +292,60 @@ async function openSession(
   let deviceOpen = false;
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> =>
-    (closing ??= (async () => {
+    (closing ??= withCancellation(undefined, async () => {
       if (deviceOpen) await snapshot({ action: 'close' }).catch(() => undefined);
       await cdp.disconnect().catch(() => undefined);
-    })());
+    }));
   onClose(close);
-  const cancelled = async (): Promise<void> => {
-    if (!stop.stopping) return;
-    await close();
-    throw new HandlerError(
-      'RUN_CANCELLED',
-      'the run was cancelled while opening the device session',
-    );
-  };
-  try {
-    await waitForExactPortTargets(target.metroPort, REACT_READY_TIMEOUT_MS, REACT_READY_POLL_MS);
-    await cdp.connectExact(target.metroPort, { platform, bundleId: appId });
-  } catch (error) {
-    throw new HandlerError(
-      'CDP_NOT_CONNECTED',
-      `cannot attach to the dev client through Metro ${target.metroPort}: ${describeError(error).message}`,
-    );
-  }
-  await cancelled();
-  // The lease coordinates qaren processes only; a foreign Maestro or XCUITest driver is a probe.
-  if (platform === 'ios') {
-    const foreign = await foreignFlowGate.check(target.deviceId);
-    if (foreign.active) {
-      await cdp.disconnect().catch(() => undefined);
-      throw new HandlerError(
-        'BUSY_FOREIGN_FLOW',
-        foreign.warning?.message ?? 'another automation driver holds the device',
-      );
-    }
-  }
-  await cancelled();
-
-  deviceOpen = true;
-  await adapt(snapshot)({
-    action: 'open',
-    appId,
-    deviceId: target.deviceId,
-    platform,
-    attachOnly: false,
-    sessionName: `qaren-${request.runId}`,
-  });
-  await cancelled();
-  // Opening the session may have relaunched the app: prove the bundle the walk will see.
-  const proof = await prove({ evaluate: (expr) => cdp.evaluate(expr) }, target);
-  if (!proof.ok) {
-    await close();
-    throw new HandlerError(proof.code, proof.message);
-  }
+  const proof = await admit(
+    {
+      metroPort: target.metroPort,
+      readinessMs: REACT_READY_TIMEOUT_MS,
+      remainingMs: () => Math.max(0, request.walkBudgetMs - now() - 1000),
+      attach: async (deadline) => {
+        await waitForExactPortTargets(
+          target.metroPort,
+          Math.max(1, Math.min(REACT_READY_TIMEOUT_MS, request.walkBudgetMs - now() - 1000)),
+          REACT_READY_POLL_MS,
+          stop.signal,
+        );
+        await cdp.connectExact(
+          target.metroPort,
+          { platform, bundleId: appId },
+          'default',
+          5,
+          undefined,
+          deadline,
+        );
+      },
+      // The lease coordinates qaren processes only; a foreign Maestro or XCUITest driver is a probe.
+      foreignDriver: async () => {
+        if (platform !== 'ios') return undefined;
+        const foreign = await interruptible(() => foreignFlowGate.check(target.deviceId));
+        return foreign.active
+          ? (foreign.warning?.message ?? 'another automation driver holds the device')
+          : undefined;
+      },
+      open: async () => {
+        deviceOpen = true;
+        await adapt(snapshot)({
+          action: 'open',
+          appId,
+          deviceId: target.deviceId,
+          platform,
+          attachOnly: false,
+          sessionName: `qaren-${request.runId}`,
+        });
+      },
+      // Opening the session may have relaunched the app: prove the bundle the walk will see.
+      prove: () => prove({ evaluate: (expr) => cdp.evaluate(expr) }, target),
+      close,
+    },
+    stop,
+  );
   const admittedAtMs = Date.now();
   const admittedSnapshots = postAdmissionSnapshots(snapshot, appId);
-  await cancelled();
+  cancellationSignal();
   log(
     `bundle proven: ${proof.scriptURL} (${proof.appModules} app modules under ${target.worktree})`,
   );
@@ -379,13 +386,16 @@ async function openSession(
       ),
   });
   for (const action of WALK_DEV_SETTINGS) {
+    cancellationSignal();
     try {
       unwrap(await devSettings({ action }));
     } catch (error) {
+      if (isAbort(error)) throw error;
+      cancellationSignal();
       log(`${action}: ${describeError(error).message}`);
     }
   }
-  await cancelled();
+  cancellationSignal();
 
   const press = createDevicePressHandler(getClient);
   const fill = createDeviceFillHandler(getClient);
@@ -449,7 +459,7 @@ async function openSession(
     diagnostic: (event) => log(`timing ${JSON.stringify(event)}`),
     hideDevMenu: () => act(() => devSettings({ action: 'hideDevMenu' }), false),
     ...(login ? { login } : {}),
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    sleep,
     row: emitRow,
     ...(platform === 'ios'
       ? {
@@ -556,9 +566,11 @@ async function main(): Promise<void> {
   );
   let opened: Session;
   try {
-    opened = await openSession(request, emitRow, (close) => {
-      release = close;
-    });
+    opened = await stop.track(() =>
+      openSession(request, emitRow, (close) => {
+        release = close;
+      }),
+    );
   } catch (error) {
     const { code, message } = describeError(error);
     return refuse(code, message);
@@ -567,12 +579,15 @@ async function main(): Promise<void> {
     return refuse('RUN_CANCELLED', 'the run was cancelled before the walk started', () =>
       opened.close(),
     );
+  writer.admitted();
   try {
-    const ledger = await runPlan(blocks, opened.deps, request.preflightCalls, {
-      appRoot: request.appRoot,
-      platform: request.platform,
-      appId: request.appId,
-    });
+    const ledger = await stop.track(() =>
+      runPlan(blocks, opened.deps, request.preflightCalls, {
+        appRoot: request.appRoot,
+        platform: request.platform,
+        appId: request.appId,
+      }),
+    );
     return finish(
       resultForWalk({ ...ledger, admittedAtMs: opened.admittedAtMs }, request.lease),
       () => opened.close(),

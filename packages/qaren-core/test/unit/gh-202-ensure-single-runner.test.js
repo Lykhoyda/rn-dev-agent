@@ -56,6 +56,7 @@ test('GH#202 shouldRemoveDaemonFiles: remove only when daemon PID is dead or abs
 function baseDeps(over = {}) {
   return {
     listProcesses: () => PS,
+    readBirth: (pid) => `birth-${pid}`,
     kill: () => {},
     isAlive: () => false,
     readDaemonPid: () => null,

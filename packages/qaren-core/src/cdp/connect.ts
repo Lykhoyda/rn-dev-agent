@@ -1,3 +1,4 @@
+import { isAbort, cancellationSignal, interruptible } from '../domain/cancellation.js';
 import WebSocket from 'ws';
 import { logger } from '../logger.js';
 import { metroOrigin } from '../ws-origin.js';
@@ -47,6 +48,13 @@ export class ConnectionSetupSupersededError extends Error {
   constructor() {
     super('Connection setup superseded');
     this.name = 'ConnectionSetupSupersededError';
+  }
+}
+
+export class CDPHandshakeTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CDPHandshakeTimeoutError';
   }
 }
 
@@ -171,8 +179,9 @@ export async function discoverAndConnect(
 
   let result;
   try {
-    result = await discoverFn(ctx.getPort(), filtersForDiscover);
+    result = await interruptible(() => discoverFn(ctx.getPort(), filtersForDiscover));
   } catch (err) {
+    if (isAbort(err)) throw err;
     ctx.setState('disconnected');
     throw err;
   }
@@ -204,7 +213,9 @@ export async function discoverAndConnect(
     const isLast = idx === sorted.length - 1;
     try {
       await connectToTarget(ctx, candidate, targetRetries, intent);
-      const devCheck = await ctx.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true');
+      const devCheck = await interruptible(() =>
+        ctx.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true'),
+      );
       if (devCheck.value === true) {
         connectedTarget = candidate;
         break;
@@ -222,6 +233,7 @@ export async function discoverAndConnect(
       console.error('CDP: no target with __DEV__=true found, using last available target');
       connectedTarget = candidate;
     } catch (err) {
+      if (isAbort(err)) throw err;
       // GH #184: picker-blocking affects the whole bundle — every other
       // candidate is the same stale C++ target, so don't waste a probe on each.
       if (err instanceof ConnectionSetupSupersededError) throw err;
@@ -352,7 +364,8 @@ async function connectToTarget(
   let lastError: Error | null = null;
   // GH #105 / B154: track per-attempt outcome (handshake ok vs probe timeout).
   // Fed into formatConnectFailureMessage at the end.
-  const attempts: { handshakeOk: boolean; probeTimedOut: boolean }[] = [];
+  const attempts: { handshakeOk: boolean; probeTimedOut: boolean; handshakeTimedOut: boolean }[] =
+    [];
   for (let i = 0; i < retries; i++) {
     if (ctx.isDisposed() || ctx.isSoftReconnectRequested()) {
       throw new Error('Client disposed or preempted during connection');
@@ -372,15 +385,18 @@ async function connectToTarget(
       handshakeOk = true;
       // D594: Early stale-target detection — quick probe before full setup
       try {
-        await ctx.sendWithTimeout(
-          'Runtime.evaluate',
-          {
-            expression: '1+1',
-            returnByValue: true,
-          },
-          CDP_TIMEOUT_FAST,
+        await interruptible(() =>
+          ctx.sendWithTimeout(
+            'Runtime.evaluate',
+            {
+              expression: '1+1',
+              returnByValue: true,
+            },
+            CDP_TIMEOUT_FAST,
+          ),
         );
-      } catch {
+      } catch (error) {
+        if (isAbort(error)) throw error;
         probeTimedOut = true;
         throw new Error('Target failed pre-flight probe (1+1) — likely a dead JS context');
       }
@@ -400,10 +416,15 @@ async function connectToTarget(
         );
         if (!reachable) throw new PickerBlockingBundleError(target);
       }
-      await ctx.setup();
+      await interruptible(() => ctx.setup());
       if (ctx.isDisposed()) throw new ConnectionSetupSupersededError();
       return;
     } catch (err) {
+      if (isAbort(err)) {
+        closeConnectionAttempt(ctx, attemptWs);
+        throw err;
+      }
+      cancellationSignal();
       if (err instanceof ConnectionSetupSupersededError) {
         closeConnectionAttempt(ctx, attemptWs);
         throw err;
@@ -419,7 +440,11 @@ async function connectToTarget(
         throw err;
       }
       lastError = err instanceof Error ? err : new Error(String(err));
-      attempts.push({ handshakeOk, probeTimedOut });
+      attempts.push({
+        handshakeOk,
+        probeTimedOut,
+        handshakeTimedOut: err instanceof CDPHandshakeTimeoutError,
+      });
       if (!closeConnectionAttempt(ctx, attemptWs)) {
         if (err instanceof ConnectionSetupSupersededError) throw err;
         throw new ConnectionSetupSupersededError();
@@ -438,12 +463,14 @@ async function connectToTarget(
     target.description ?? null,
     lastError?.message ?? null,
   );
+  if (attempts.length > 0 && attempts.every((attempt) => attempt.probeTimedOut)) {
+    throw new CDPProbeTimeoutError(failureMessage);
+  }
   if (
     attempts.length > 0 &&
-    attempts.every((attempt) => attempt.handshakeOk) &&
-    attempts.some((attempt) => attempt.probeTimedOut)
+    attempts.every((attempt) => attempt.handshakeTimedOut || attempt.probeTimedOut)
   ) {
-    throw new CDPProbeTimeoutError(failureMessage);
+    throw new CDPHandshakeTimeoutError(failureMessage);
   }
   throw new Error(failureMessage);
 }
@@ -460,70 +487,92 @@ export function connectWebSocket(
       headers: { Origin: metroOrigin(socketUrl) },
     }),
 ): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = createSocket(url);
-    let settled = false;
-    // Backstop: handshakeTimeout should emit 'error', but if the socket ever
-    // wedges without firing open/error/close it would leak with its listeners.
-    // Terminate it after a grace window so it can't linger.
-    const guard = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      try {
-        ws.terminate();
-      } catch {
-        /* already gone */
-      }
-      reject(new Error('WebSocket connect timed out'));
-    }, 7000);
+  return interruptible(
+    (signal) =>
+      new Promise((resolve, reject) => {
+        const ws = createSocket(url);
+        let settled = false;
+        // Backstop: handshakeTimeout should emit 'error', but if the socket ever
+        // wedges without firing open/error/close it would leak with its listeners.
+        // Terminate it after a grace window so it can't linger.
+        const guard = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          try {
+            ws.terminate();
+          } catch (error) {
+            if (isAbort(error)) throw error;
+            /* already gone */
+          }
+          reject(new CDPHandshakeTimeoutError('WebSocket connect timed out'));
+        }, 7000);
 
-    ws.on('open', () => {
-      settled = true;
-      clearTimeout(guard);
-      if (ctx.isDisposed()) {
-        try {
+        const abort = () => {
+          clearTimeout(guard);
+          settled = true;
           ws.terminate();
-        } catch {}
-        reject(new ConnectionSetupSupersededError());
-        return;
-      }
-      ctx.setWs(ws);
-      ctx.setState('connected');
-      resolve(ws);
-    });
+          reject(signal?.reason);
+        };
+        signal?.addEventListener('abort', abort, { once: true });
+        ws.on('open', () => {
+          if (signal?.aborted) return abort();
+          signal?.removeEventListener('abort', abort);
+          settled = true;
+          clearTimeout(guard);
+          if (ctx.isDisposed()) {
+            try {
+              ws.terminate();
+            } catch (error) {
+              if (isAbort(error)) throw error;
+            }
+            reject(new ConnectionSetupSupersededError());
+            return;
+          }
+          ctx.setWs(ws);
+          ctx.setState('connected');
+          resolve(ws);
+        });
 
-    ws.on('error', (err) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(guard);
-        try {
-          ws.terminate();
-        } catch {
-          /* already closing */
-        }
-        reject(err);
-      } else {
-        console.error('CDP WebSocket error:', err instanceof Error ? err.message : err);
-      }
-    });
+        ws.on('error', (err) => {
+          signal?.removeEventListener('abort', abort);
+          if (!settled) {
+            settled = true;
+            clearTimeout(guard);
+            try {
+              ws.terminate();
+            } catch (error) {
+              if (isAbort(error)) throw error;
+              /* already closing */
+            }
+            reject(
+              err.message === 'Opening handshake has timed out'
+                ? new CDPHandshakeTimeoutError(err.message)
+                : err,
+            );
+          } else {
+            console.error('CDP WebSocket error:', err instanceof Error ? err.message : err);
+          }
+        });
 
-    ws.on('message', (data) => {
-      ctx.handleMessage(data);
-    });
+        ws.on('message', (data) => {
+          ctx.handleMessage(data);
+        });
 
-    ws.on('close', (code) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(guard);
-        reject(new Error(`WebSocket closed before connecting: ${code}`));
-        return;
-      }
-      if (ctx.getWs() === ws) {
-        ctx.rejectAllPending(new Error(`WebSocket closed: ${code}`));
-        ctx.handleClose(code);
-      }
-    });
-  });
+        ws.on('close', (code) => {
+          signal?.removeEventListener('abort', abort);
+          if (!settled) {
+            settled = true;
+            clearTimeout(guard);
+            reject(new Error(`WebSocket closed before connecting: ${code}`));
+            return;
+          }
+          if (ctx.getWs() === ws) {
+            ctx.rejectAllPending(new Error(`WebSocket closed: ${code}`));
+            ctx.handleClose(code);
+          }
+        });
+      }),
+  );
 }
 
 function closeAndResetWs(ctx: ConnectContext): void {

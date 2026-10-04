@@ -114,7 +114,7 @@ fn real_unbound_group_survives_launcher_exit_and_cleanup_retries() {
     assert!(member.0.wait().unwrap().success());
     let receipt = cleanup(&mut runner, &runs, &record.run_id);
     assert_eq!(receipt.cleanup["metro"], "absent");
-    assert_eq!(receipt.cleanup["pr_worktree"], "removed");
+    assert!(receipt.cleanup["pr_worktree"].starts_with("removed (reclaimed "));
     assert!(!wt.exists());
 }
 
@@ -155,4 +155,82 @@ fn real_owned_metro_shutdown_reaps_before_proving_group_absence() {
     assert_eq!(receipt.cleanup["metro"], "removed");
     let receipt = cleanup(&mut runner, &runs, &record.run_id);
     assert_eq!(receipt.cleanup["metro"], "absent");
+}
+
+// R4: a reused PGID that now owns the recorded port is foreign; cleanup must not signal it.
+#[test]
+fn a_reused_pgid_owning_the_recorded_port_is_never_signalled() {
+    let root = common::temp_repo();
+    let mut record = common::base_record(
+        &root,
+        &common::ios_scenario_yaml(8791),
+        "metro-reused",
+        Phase::Walking,
+    );
+    let runs = root.join("runs");
+    let dir = RunRecord::run_dir(&runs, &record.run_id);
+    std::fs::create_dir_all(dir.join("logs")).unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let mut runner = RealRunner::with_log_executable(env!("CARGO_BIN_EXE_qaren").into());
+    let listen = format!(
+        "import socket,time\ns=socket.socket()\ns.bind(('127.0.0.1',{port}))\ns.listen()\ntime.sleep(30)"
+    );
+    let foreign = runner
+        .spawn_group(
+            &CmdSpec::new("foreign-listener", "/usr/bin/python3", &["-c", &listen], 0),
+            &dir.join("logs/metro.log"),
+        )
+        .unwrap();
+    let guard = scopeguard_kill(foreign.pgid);
+    for _ in 0..200 {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut stale = capture_pid_identity(&mut runner, foreign.pid).unwrap();
+    stale.started_at = "Wed Aug 12 15:00:00 2026".into();
+    record.resources.metro = Some(MetroResource {
+        port,
+        endpoint: format!("http://localhost:{port}"),
+        spawned: foreign.clone(),
+        identity: Some(stale),
+        log: dir.join("logs/metro.log"),
+    });
+    record.save(&runs).unwrap();
+
+    let receipt = cleanup(&mut runner, &runs, &record.run_id);
+
+    assert!(
+        receipt.cleanup["metro"].contains("ownership unproven"),
+        "{:?}",
+        receipt.cleanup
+    );
+    assert_eq!(
+        unsafe { libc::kill(foreign.pid, 0) },
+        0,
+        "the foreign group must still be alive"
+    );
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+    let saved = RunRecord::load(&runs, &record.run_id).unwrap();
+    assert!(
+        saved.resources.metro.is_some(),
+        "the record keeps the resource"
+    );
+    drop(guard);
+}
+
+struct KillGroup(i32);
+impl Drop for KillGroup {
+    fn drop(&mut self) {
+        unsafe { libc::kill(-self.0, libc::SIGKILL) };
+    }
+}
+
+fn scopeguard_kill(pgid: i32) -> KillGroup {
+    KillGroup(pgid)
 }

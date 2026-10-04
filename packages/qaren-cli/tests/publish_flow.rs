@@ -5,6 +5,7 @@ use qaren::publish::{publish, PrRunRecord, Publication};
 use qaren::receipt::ReceiptResult;
 use qaren::record::{VideoPublication, VideoStatus};
 use qaren::redact::MachineIdentity;
+use qaren::runrecord::{FinalVerification, TerminalResult};
 use std::path::{Path, PathBuf};
 
 const RUN: &str = "check-20261002T101500Z";
@@ -56,14 +57,14 @@ fn run_dir(cross_repository: bool) -> (PathBuf, PathBuf, PathBuf) {
     for sub in ["blocks", "media", "screenshots"] {
         std::fs::create_dir_all(dir.join(sub)).unwrap();
     }
-    common::base_record(
+    let mut record = common::base_record(
         &repo,
         &common::ios_scenario_yaml(8081),
         RUN,
         qaren::runrecord::Phase::Cleaned,
-    )
-    .save(&runs)
-    .unwrap();
+    );
+    record.terminal = Some(final_terminal());
+    record.save(&runs).unwrap();
     let pr = PrRunRecord {
         number: 12,
         url: "https://github.com/o/r/pull/12".into(),
@@ -104,6 +105,19 @@ fn run_dir(cross_repository: bool) -> (PathBuf, PathBuf, PathBuf) {
     let verdict = repo.join("verdict.md");
     std::fs::write(&verdict, "The Tasks tab is missing after the change.\n").unwrap();
     (runs, dir, verdict)
+}
+
+fn final_terminal() -> TerminalResult {
+    TerminalResult {
+        verdict: "FAIL".into(),
+        cancelled: false,
+        final_verification: FinalVerification {
+            tested: TESTED.into(),
+            matched: true,
+            detail: None,
+        },
+        ownership_proven: true,
+    }
 }
 
 fn view(labels: &str) -> CmdOutput {
@@ -154,6 +168,7 @@ fn script_commit_extension(mock: &mut MockRunner, extension: &str, bytes: &str) 
         CmdOutput::success(&format!("{COMMIT}\n")),
     );
     script_blob_check(mock, &format!("tasks.{extension}"), bytes);
+    mock.expect_run("du -sk", CmdOutput::success("4\n"));
     mock.expect_run("git worktree remove --force", CmdOutput::success(""));
     mock.expect_run(
         "git remote get-url origin",
@@ -193,12 +208,10 @@ fn cancelled_runs_refuse_new_and_resumed_publication_without_side_effects() {
     for resumed in [false, true] {
         let (runs, dir, verdict) = run_dir(false);
         let mut record = qaren::runrecord::RunRecord::load(&runs, RUN).unwrap();
-        record.failure = Some(qaren::failure::Failure::new(
-            "walk",
-            qaren::failure::FailureCode::RunCancelled,
-            "received SIGTERM",
-            "re-run the check",
-        ));
+        record.terminal = Some(TerminalResult {
+            cancelled: true,
+            ..final_terminal()
+        });
         record.save(&runs).unwrap();
         let actions = record
             .candidate
@@ -550,6 +563,7 @@ fn a_symlinked_corpus_in_the_pr_tree_is_refused_and_the_yaml_is_attached() {
         CmdOutput::success(""),
     );
     mock.expect_run("git worktree add --detach", CmdOutput::success(""));
+    mock.expect_run("du -sk", CmdOutput::success("4\n"));
     mock.expect_run("git worktree remove --force", CmdOutput::success(""));
     mock.expect_run(
         "gh pr comment 12",
@@ -1162,6 +1176,7 @@ fn a_block_in_the_producers_format_from_an_eligible_walk_is_committed_byte_ident
         CmdOutput::success(&format!("{COMMIT}\n")),
     );
     script_blob_check(mock, &format!("{slug}.yaml"), &source);
+    mock.expect_run("du -sk", CmdOutput::success("4\n"));
     mock.expect_run("git worktree remove --force", CmdOutput::success(""));
     mock.expect_run(
         "git remote get-url origin",
@@ -1346,10 +1361,13 @@ impl Runner for LocalPublication {
                 CmdOutput::success("https://github.com/o/r/pull/12#issuecomment-2\n")
             }
             _ => {
-                assert_eq!(spec.program, "git");
-                let output = std::process::Command::new("git")
+                assert!(matches!(spec.program.as_str(), "git" | "du"));
+                let mut command = std::process::Command::new(&spec.program);
+                if let Some(cwd) = &spec.cwd {
+                    command.current_dir(cwd);
+                }
+                let output = command
                     .args(&spec.args)
-                    .current_dir(spec.cwd.as_ref().unwrap())
                     .envs(spec.env.iter().cloned())
                     .env("GIT_CONFIG_GLOBAL", "/dev/null")
                     .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -1971,4 +1989,41 @@ fn a_post_admission_interruption_withholds_the_copy_and_upload() {
         .iter()
         .any(|arg| arg.contains("video-published")));
     assert!(dir.join("media/video.mp4").is_file());
+}
+
+#[test]
+fn only_a_final_uncancelled_verified_owned_terminal_result_admits_publication() {
+    use qaren::failure::FailureCode;
+    let unverified = TerminalResult {
+        final_verification: FinalVerification {
+            matched: false,
+            detail: Some("checkout HEAD moved".into()),
+            ..final_terminal().final_verification
+        },
+        ..final_terminal()
+    };
+    let unowned = TerminalResult {
+        ownership_proven: false,
+        ..final_terminal()
+    };
+    let cancelled_and_changed = TerminalResult {
+        cancelled: true,
+        ..unverified.clone()
+    };
+    for (terminal, code) in [
+        (None, FailureCode::RunRecordInvalid),
+        (Some(cancelled_and_changed), FailureCode::RunCancelled),
+        (Some(unverified), FailureCode::CandidateDrifted),
+        (Some(unowned), FailureCode::OwnershipUnproven),
+    ] {
+        let (runs, dir, verdict) = run_dir(false);
+        let mut record = qaren::runrecord::RunRecord::load(&runs, RUN).unwrap();
+        record.terminal = terminal;
+        record.save(&runs).unwrap();
+        let mut runner = Git(MockRunner::new());
+        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+        assert_eq!(receipt.failure.as_ref().map(|f| f.code), Some(code));
+        assert!(runner.0.calls.is_empty(), "no forge or git effect may run");
+        assert!(!dir.join("publication.json").exists());
+    }
 }
