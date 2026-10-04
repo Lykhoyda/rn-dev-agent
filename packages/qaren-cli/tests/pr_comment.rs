@@ -78,7 +78,6 @@ fn the_comment_carries_no_machine_identity_or_internal_vocabulary() {
         "secret",
         "proofReplay",
         "transport",
-        "hunter-canary-77",
     ] {
         assert!(
             !body

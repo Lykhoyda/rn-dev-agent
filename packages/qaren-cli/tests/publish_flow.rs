@@ -1961,12 +1961,94 @@ fn a_post_admission_interruption_withholds_the_copy_and_upload() {
 fn publication_uses_only_the_projected_ledger_and_structured_verdict() {
     let (runs, dir) = run_dir(false);
     edit_pr(&dir, |pr| pr["blocks"] = serde_json::json!([]));
+    let output = std::process::Command::new("node")
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../qaren-core"))
+        .args(["--input-type=module", "--eval", r#"
+import assert from 'node:assert/strict';
+import { parsePlan } from './dist/qa/plan.js';
+import { runPlan } from './dist/qa/walker.js';
+import { join } from './dist/qa/screen.js';
+import { element, screen, scriptedJudge, walker } from './test/unit/qa/judgment-fixtures.ts';
+const values = ['CanaryAlpha77', '1234567890', ' Café ', 'pw', '47'];
+const plan = values.map((value, i) => `${i + 1}. Type "${value}" into "field${i}"`).join('\n')
+  + '\n✓ "Readable ready"\n✓ "Missing banner"';
+const blocks = parsePlan(plan).blocks;
+assert.ok(blocks);
+const actions = [];
+let filled = false;
+const observe = () => screen([
+  element('@ready', 'Readable ready', { kind: 'text' }),
+  ...values.map((value, i) => element(`@input${i}`, `Field ${i}`, {
+    kind: 'input', testID: `field${i}`, value: i === 3 ? 'pw' : i === 4 ? '47' : '', secure: i === 3,
+  })),
+  element('@prefilled', 'Account', { kind: 'input', value: '654321' }),
+  ...(filled ? [
+    element('@echo', 'CanaryAlpha77', { kind: 'text' }),
+    element('@digits', '1234 5678 90', { kind: 'text', testID: 'account-1234-5678-90' }),
+    element('@normalized', 'Café', { kind: 'text' }),
+    ...['4815', '1122'].flatMap((code, row) => join([...code].flatMap((label, i) => [
+      { ref: `@group${row}${i}`, type: 'Group' },
+      { ref: `@box${row}${i}`, type: 'StaticText', label,
+        rect: { x: i * 48, y: 100 + row * 60, width: 32, height: 40 } },
+    ]), []).elements),
+  ] : []),
+]);
+const f = walker([], scriptedJudge(() => assert.fail('literal plan must not ask a model')));
+f.deps.captureScreen = async () => observe();
+f.deps.fill = async (ref, value) => {
+  actions.push(value);
+  filled = true;
+  return { ok: true, proven: true };
+};
+f.deps.screenshot = async () => assert.fail('private screenshots must be withheld');
+const ledger = await runPlan(blocks, f.deps);
+assert.deepEqual(actions, values);
+assert.equal(ledger.verdict, 'FAIL');
+assert.equal(ledger.steps.filter(row => row.outcome === 'pass').length, 6);
+assert.match(ledger.failure.seen, /\[code\]/);
+assert.equal(observe().elements.filter(e => e.kind === 'text' && e.label?.length === 1).length, 8);
+process.stdout.write(JSON.stringify(ledger));
+"#])
+        .output()
+        .expect("node on PATH is required to execute core privacy projection");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ledger: qaren::core::Ledger = serde_json::from_slice(&output.stdout).unwrap();
+    std::fs::write(dir.join("ledger.json"), &output.stdout).unwrap();
+    qaren::report::write(
+        &dir,
+        &qaren::report::ReportInput {
+            run_id: RUN,
+            platform: "ios",
+            app_id: "com.rndevagent.testapp",
+            device: "qaren-check",
+            ledger: &ledger,
+        },
+    )
+    .unwrap();
+
     let mut runner = Git(MockRunner::new());
     script_comment_and_label(&mut runner.0);
     let receipt = publish(&mut runner, &runs, RUN, &machine());
     assert_eq!(receipt.result, ReceiptResult::Published);
+    std::fs::write(
+        dir.join("receipt.json"),
+        serde_json::to_vec(&receipt).unwrap(),
+    )
+    .unwrap();
     let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
     assert!(body.starts_with(&format!("<!-- qaren-run: {RUN} -->\nFAIL")));
+    assert!(body.contains("Readable ready"), "{body}");
+    assert!(body.contains("•••"), "{body}");
+    let report = std::fs::read_to_string(dir.join("report.md")).unwrap();
+    assert!(report.contains("Readable ready"), "{report}");
+    assert!(report.contains("Missing banner"), "{report}");
+    let saved_receipt: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("receipt.json")).unwrap()).unwrap();
+    assert_eq!(saved_receipt["run_id"], RUN);
     fn scan(dir: &Path) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
@@ -1980,9 +2062,13 @@ fn publication_uses_only_the_projected_ledger_and_structured_verdict() {
                 "CanaryAlpha77",
                 "1234567890",
                 "1234 5678 90",
+                "Café",
                 "Café",
+                "654321",
                 "4815",
                 "1122",
+                "4 | 8 | 1 | 5",
+                "1 | 1 | 2 | 2",
                 "account-1234-5678-90",
                 "pw",
                 "47",
