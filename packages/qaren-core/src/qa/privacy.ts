@@ -227,7 +227,7 @@ export function matchPrivate(
   if (!rules.length) return { text, hit: false };
   let hit = false;
   const pattern = new RegExp(rules.map((rule) => `(${rule.pattern})`).join('|'), 'gu');
-  const projected = text.replace(pattern, (match, ...groups) => {
+  const projected = text.replace(pattern, (_match, ...groups) => {
     hit = true;
     const index = rules.findIndex((_, i) => groups[i] !== undefined);
     return policy === 'model' ? (token?.(rules[index].value) ?? MASK) : MASK;
