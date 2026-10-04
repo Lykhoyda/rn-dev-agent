@@ -622,7 +622,7 @@ export function buildRunIOSArgs(
         command: 'snapshot',
         ...(cliArgs.includes('--platform-presence')
           ? { platformPresence: true }
-          : { interactiveOnly: cliArgs.includes('-i') }),
+          : { interactiveOnly: !cliArgs.includes('--full') }),
         ...(bundleId ? { bundleId } : {}),
       };
     case 'back':
@@ -876,7 +876,7 @@ export function buildRunAndroidArgs(
     }
 
     case 'snapshot':
-      return { command: 'snapshot', interactiveOnly: cliArgs.includes('-i'), ...withBundle };
+      return { command: 'snapshot', interactiveOnly: !cliArgs.includes('--full'), ...withBundle };
 
     case 'back':
       return { command: 'back', ...withBundle };

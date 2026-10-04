@@ -244,7 +244,9 @@ for (const exact of [undefined, 'id', 'text'] as const) {
             : { kind, target };
       assert.equal(outcome(prepareTarget(step, observed)), 'TARGET_AMBIGUOUS');
     }
-    assert.throws(() => targetVisible(target, observed), { code: 'TARGET_AMBIGUOUS' });
+    // Stored selectors are terminal on duplicates; a plain quoted wait keeps the visibility rule S-VIS owns.
+    if (exact) assert.throws(() => targetVisible(target, observed), { code: 'TARGET_AMBIGUOUS' });
+    else assert.equal(targetVisible(target, observed), true);
   });
 }
 

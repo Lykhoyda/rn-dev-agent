@@ -875,7 +875,8 @@ function keyboardHealDeps(
       }
     },
     refreshSnapshot: async () =>
-      (refreshed = await runNative(['snapshot'], {
+      // Identity re-resolution counts every node, not only interactive ones.
+      (refreshed = await runNative(['snapshot', '--full'], {
         qaContext,
         qaReadOnly: qaContext !== undefined,
       })),

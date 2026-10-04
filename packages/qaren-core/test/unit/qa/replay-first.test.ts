@@ -732,69 +732,6 @@ test('stored fill refresh before authorization re-walks without repeating earlie
   assert.deepEqual(fake.actions, ['back', 'fill @pin 4711', 'press @save']);
 });
 
-test('nested labelled containers remain distinct visibility identities', async () => {
-  const rect = (y: number, height = 20) => ({ x: 16, y, width: 200, height });
-  const home = joinScreen(
-    [
-      { ref: '@window', index: 0, type: 'Window', rect: { x: 0, y: 0, width: 390, height: 844 } },
-      ...[1, 2, 3, 4].map((index) => ({
-        ref: `@container${index}`,
-        index,
-        parentIndex: index - 1,
-        type: 'Other',
-        label: 'Welcome',
-        rect: rect(100, 400),
-      })),
-      {
-        ref: '@welcome',
-        index: 5,
-        parentIndex: 4,
-        type: 'StaticText',
-        label: 'Welcome',
-        rect: rect(120),
-      },
-      {
-        ref: '@tasks',
-        index: 6,
-        parentIndex: 0,
-        type: 'Button',
-        label: 'Tasks',
-        identifier: 'tab-tasks',
-        hittable: true,
-        enabled: true,
-        rect: rect(800),
-      },
-    ],
-    [],
-    'app',
-    { native: 'complete', react: 'complete' },
-  );
-  const echoed = () => {
-    const fake = app({ welcomeId: '' });
-    const capture = fake.deps.captureScreen;
-    fake.deps.captureScreen = async (...args) => {
-      const shown = await capture(...args);
-      return shown.elements.some((e) => e.ref === '@welcome')
-        ? { ...shown, elements: home.elements, visibleText: home.visibleText }
-        : shown;
-    };
-    return fake;
-  };
-  const dir = root();
-  try {
-    const fake = echoed();
-    const result = ledger(await runPlan(blocks(literal), fake.deps, [], store(dir)));
-    assert.equal(result.verdict, 'FAIL');
-    assert.match(result.failure?.seen ?? '', /TARGET_AMBIGUOUS/);
-    assert.deepEqual(result.blocksWritten, []);
-    assert.equal(existsSync(actionFile(dir)), false);
-    assert.deepEqual(fake.actions, ['press @skip', 'press @done']);
-    assert.equal(fake.judge.calls.length, 0);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test('a wait on a uniquely labelled control sharing its testID replays by text without re-walk', async () => {
   const rect = (y: number) => ({ x: 16, y, width: 200, height: 20 });
   const home = joinScreen(

@@ -443,3 +443,20 @@ for (const [plan, method] of [
     assert.match(outcome.failure?.seen ?? '', /did not change after recovery/);
   });
 }
+
+for (const front of ['app', 'dialog', 'dev-menu'] as const) {
+  test(`S9: an ambiguous target on a ${front} front is terminal: no recovery, login replay or retry`, async () => {
+    const twins = screen(['Save', 'Save'], front, { Save: 'login-screen' });
+    const f = fake([twins], {
+      login: { marker: { id: 'login-screen' }, block: block('### Login\n1. Tap "Sign in"\n') },
+    });
+    const ledger = await runPlan([block('1. Tap "Save"\n')], f.deps);
+    assert.equal(ledger.verdict, 'FAIL');
+    assert.match(ledger.failure?.seen ?? '', /TARGET_AMBIGUOUS/);
+    assert.equal(ledger.recoveries ?? 0, 0);
+    assert.deepEqual(
+      f.calls.filter((c) => c !== 'capture'),
+      [],
+    );
+  });
+}

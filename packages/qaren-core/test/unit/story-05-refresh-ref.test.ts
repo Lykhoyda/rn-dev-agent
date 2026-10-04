@@ -95,3 +95,14 @@ test('refresh collapses a contained text echo through the shared identity model'
   assert.equal(result.kind, 'unique');
   assert.equal(result.node.ref, '@a');
 });
+
+test('S11: an Android blank identifier falls back to the label, never to an empty id', () => {
+  const nodes = [btn('@e0', 'Other', 'x', 0), btn('@e1', 'Save', '', 50)];
+  for (const identifier of ['', '   ']) {
+    const out = refreshRef(sig({ identifier }), nodes);
+    assert.equal(out.kind, 'unique', identifier);
+    assert.equal(out.node.ref, '@e1');
+  }
+  const twins = [btn('@e0', 'Save', '', 0), btn('@e1', 'Save', '', 50)];
+  assert.equal(refreshRef(sig({ identifier: '' }), twins).kind, 'ambiguous');
+});

@@ -536,11 +536,13 @@ export type RefreshOutcome =
   | { kind: 'absent' };
 
 export function refreshRef(sig: RefSignature, nodes: FlatNode[]): RefreshOutcome {
-  const quoted = sig.identifier ?? sig.label;
+  // Android reports identifier="" for nodes without a resource id; join treats that as no id.
+  const identifier = sig.identifier?.trim() ? sig.identifier : undefined;
+  const quoted = identifier ?? sig.label;
   if (quoted === undefined) return { kind: 'absent' };
   const identities = exactIdentities(
     join(nodes, []),
-    { quoted, phrase: quoted, exact: sig.identifier !== undefined ? 'id' : 'text' },
+    { quoted, phrase: quoted, exact: identifier !== undefined ? 'id' : 'text' },
     'press',
   );
   const matches = identities.map(({ element }) => nodes.find((node) => node.ref === element.ref)!);

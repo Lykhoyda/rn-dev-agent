@@ -446,7 +446,7 @@ test('an exact id target ignores an element whose label equals the id', () => {
   assert.deepEqual(prepareTarget(tap('far', 'id'), offscreen), { scroll: 'down' });
 });
 
-test('two exact matches refuse REPLAY_SELECTOR without asking Jev', async () => {
+test('two exact matches refuse TARGET_AMBIGUOUS terminally without asking Jev', async () => {
   const judge = scriptedJudge(() => assert.fail('replay must never ask Jev'));
   const twins = screen([
     element('@a', 'Save', { testID: 'save' }),
@@ -459,7 +459,7 @@ test('two exact matches refuse REPLAY_SELECTOR without asking Jev', async () => 
       twins,
       judge,
     );
-    assert.equal('refuse' in result && result.refuse, 'REPLAY_SELECTOR');
+    assert.equal('refuse' in result && result.refuse, 'TARGET_AMBIGUOUS');
   }
   assert.equal(judge.calls.length, 0);
 });
@@ -501,7 +501,7 @@ test('adjacent equal painted text refuses ambiguous replay and discovery', () =>
   assert.deepEqual(joined.paintedText, ['Welcome', 'Welcome']);
   assert.throws(
     () => targetVisible(exactText('Welcome'), joined),
-    /REPLAY_SELECTOR: 2 identities match the stored text "Welcome"/,
+    /TARGET_AMBIGUOUS: 2 identities match the stored text "Welcome"/,
   );
   assert.equal(visibleSelector({ quoted: 'Welcome', phrase: 'Welcome' }, joined), undefined);
 });
@@ -518,7 +518,7 @@ test('equal painted buttons at different horizontal positions remain ambiguous',
   assert.deepEqual(joined.paintedText, ['Delete', 'Delete']);
   assert.throws(
     () => targetVisible(exactText('Delete'), joined),
-    /REPLAY_SELECTOR: 2 identities match the stored text "Delete"/,
+    /TARGET_AMBIGUOUS: 2 identities match the stored text "Delete"/,
   );
   assert.equal(visibleSelector({ quoted: 'Delete', phrase: 'Delete' }, joined), undefined);
 });
@@ -557,7 +557,7 @@ test('a stored text echoed by its container labels is one identity', () => {
 test('real visible multiples, zero matches and an offscreen twin keep their replay counts', () => {
   assert.throws(
     () => targetVisible(exactText('Welcome'), realMultiple),
-    /REPLAY_SELECTOR: 2 identities match the stored text "Welcome"/,
+    /TARGET_AMBIGUOUS: 2 identities match the stored text "Welcome"/,
   );
   assert.throws(
     () => targetVisible(exactText('Welcome'), painted([node('StaticText', 'Body', 100)])),
@@ -574,7 +574,7 @@ test('an onscreen carrier without a painted line still identifies its text', () 
   assert.equal(targetVisible(exactText('Continue'), painted([carrier(100)])), true);
   assert.throws(
     () => targetVisible(exactText('Continue'), painted([carrier(100), carrier(200)])),
-    /REPLAY_SELECTOR: 2 identities/,
+    /TARGET_AMBIGUOUS: 2 identities/,
   );
   assert.equal(
     targetVisible(exactText('Continue'), painted([node('Button', 'Continue', 100)])),
@@ -590,7 +590,7 @@ test('an onscreen carrier without a painted line still identifies its text', () 
           node('Button', 'Continue', 300),
         ]),
       ),
-    /REPLAY_SELECTOR: 2 identities/,
+    /TARGET_AMBIGUOUS: 2 identities/,
   );
 });
 
@@ -604,7 +604,7 @@ test('stored testIDs keep counting every element that carries them', () => {
           node('Button', 'Save draft', 200, { identifier: 'save' }),
         ]),
       ),
-    /REPLAY_SELECTOR: 2 identities match the stored id "save"/,
+    /TARGET_AMBIGUOUS: 2 identities match the stored id "save"/,
   );
   const far = painted([node('Button', 'Save', 1000, { identifier: 'save' })]);
   assert.equal(targetVisible(exactId('save'), far), false);

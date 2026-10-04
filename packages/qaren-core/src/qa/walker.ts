@@ -161,9 +161,10 @@ export interface WalkOptions {
   recover?: boolean;
 }
 
-// Capture and process refusals and the replay-miss path are never recovered.
+// Capture and process refusals, ambiguity and the replay-miss path are never recovered.
 const UNRECOVERABLE = new Set([
   'REPLAY_SELECTOR',
+  'TARGET_AMBIGUOUS',
   'SCREEN_EVIDENCE_INCOMPLETE',
   'APP_PROCESS_CHANGED',
   'APP_PROCESS_UNKNOWN',

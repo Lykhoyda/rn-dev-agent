@@ -359,15 +359,25 @@ function textIdentities(quoted: string, screen: Screen): number {
 
 export function targetVisible(target: Target, screen: Screen): boolean {
   if (target.quoted === undefined) return false;
-  const matches = exactIdentities(screen, target, 'wait');
-  const count =
-    matches.length || (target.exact !== 'id' ? textIdentities(target.quoted, screen) : 0);
-  if (count > 1 || (target.exact && count === 0))
-    throw new ResolutionError({
-      refuse: count > 1 ? 'TARGET_AMBIGUOUS' : 'REPLAY_SELECTOR',
-      reason: `${count} identities match "${target.quoted}"`,
-    });
-  return matches.length === 1 ? !matches[0].element.offscreen : count === 1;
+  if (target.exact) {
+    const matches =
+      target.exact === 'id'
+        ? exactIdentities(screen, target, 'wait').map(({ element }) => element)
+        : screen.elements.filter((e) => e.label === target.quoted);
+    const count = target.exact === 'text' ? textIdentities(target.quoted, screen) : matches.length;
+    // Duplicates are terminal; only a stored selector that no longer resolves re-walks.
+    if (count !== 1)
+      throw new ResolutionError({
+        refuse: count > 1 ? 'TARGET_AMBIGUOUS' : 'REPLAY_SELECTOR',
+        reason: `${count} identities match the stored ${target.exact} "${target.quoted}"`,
+      });
+    return target.exact === 'text' ? true : !matches[0].offscreen;
+  }
+  return (
+    screen.elements.some(
+      (e) => !e.offscreen && (e.label === target.quoted || e.testID === target.quoted),
+    ) || assertionView(screen).some((t) => t === target.quoted)
+  );
 }
 
 export function elementSelector(element: Element): Selector | undefined {

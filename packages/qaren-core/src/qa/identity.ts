@@ -19,8 +19,24 @@ export function named(
   exact?: Target['exact'],
 ): boolean {
   if (exact) return exact === 'id' ? e.testID === quoted : e.label === quoted;
-  if (kind === 'fill') return e.label === quoted || e.testID === quoted || e.placeholder === quoted;
+  // A fill names a text-entry candidate, or any element carrying the target's testID.
+  if (kind === 'fill')
+    return (
+      e.testID === quoted ||
+      (e.kind === 'input' && (e.label === quoted || e.placeholder === quoted))
+    );
   return e.label === quoted || e.testID === quoted;
+}
+
+// A React-only non-input carrying the testID of exactly one native input forwards that input.
+function forwardsInput(element: Element, matched: readonly Element[]): boolean {
+  if (!element.ref.startsWith('react:') || element.kind === 'input' || !element.testID)
+    return false;
+  return (
+    matched.filter(
+      (e) => !e.ref.startsWith('react:') && e.kind === 'input' && e.testID === element.testID,
+    ).length === 1
+  );
 }
 
 const nested = (a: Element, b: Element): boolean => {
@@ -66,7 +82,7 @@ export function exactIdentities(screen: Screen, target: Target, kind: Step['kind
   return matched
     .filter((e) => {
       const control = echoControl(e);
-      return !control || !matched.includes(control);
+      return (!control || !matched.includes(control)) && !forwardsInput(e, matched);
     })
     .map((element) => ({
       element,
