@@ -48,7 +48,7 @@ function fake(
       calls.push('capture');
       const next = queue.length > 1 ? queue.shift()! : queue[0];
       if (next instanceof Error) throw next;
-      return next;
+      return redBox ? { ...next, renderError: true } : next;
     },
     async press(ref) {
       calls.push(`press ${ref}`);
@@ -69,10 +69,6 @@ function fake(
     async dialog(action) {
       calls.push(`dialog ${action}`);
       return { ok: true, proven: true };
-    },
-    async redBox() {
-      calls.push('redBox');
-      return redBox;
     },
     async hideDevMenu() {
       calls.push('hideDevMenu');
@@ -117,7 +113,7 @@ test('an unchanged screen with a dialog in front recovers once and the retry pas
   assert.equal(ledger.llmTurns, 0);
   assert.deepEqual(
     f.calls.filter((c) => !c.startsWith('capture')),
-    ['press @e0', 'press @e0', 'redBox', 'dialog accept', 'press @e0'],
+    ['press @e0', 'press @e0', 'dialog accept', 'press @e0'],
   );
   const recovered = ledger.steps.find((r) => r.reason?.includes('recovered: dialog'));
   assert.equal(recovered?.outcome, 'retry');
@@ -130,7 +126,6 @@ test('a second failure of the same item fails without a second recovery', async 
   assert.equal(ledger.verdict, 'FAIL');
   assert.equal(ledger.recoveries, 1);
   assert.equal(f.calls.filter((c) => c === 'dialog accept').length, 1);
-  assert.equal(f.calls.filter((c) => c === 'redBox').length, 1);
   assert.match(ledger.failure?.seen ?? '', /did not change after two attempts/);
 });
 
@@ -191,19 +186,19 @@ test('a capture error or a Jev error never recovers', async () => {
   const capture = fake([new NativeCaptureError()]);
   const failedCapture = await walkBlock(block('1. Tap "Settings"\n'), capture.deps);
   assert.equal(failedCapture.refusal?.code, 'NATIVE_CAPTURE_UNAVAILABLE');
-  assert.ok(!capture.calls.includes('redBox'));
+  assert.ok(!capture.calls.includes('hideDevMenu'));
 
   const incomplete = fake([
     { ...screen(['Settings']), coverage: { native: 'incomplete', react: 'complete' } },
   ]);
   const unusable = await walkBlock(block('1. Tap "Settings"\n'), incomplete.deps);
   assert.match(unusable.failure?.seen ?? '', /SCREEN_EVIDENCE_INCOMPLETE/);
-  assert.ok(!incomplete.calls.includes('redBox'));
+  assert.ok(!incomplete.calls.includes('hideDevMenu'));
 
   const jev = fake([screen(['Settings'], 'dialog')]);
   const phrase = await walkBlock(block('1. Tap the settings button\n'), jev.deps);
   assert.match(phrase.failure?.seen ?? '', /JEV_UNAVAILABLE/);
-  assert.ok(!jev.calls.includes('redBox'));
+  assert.ok(!jev.calls.includes('hideDevMenu'));
 });
 
 test('a login wall replays the login block, then the step retries and passes', async () => {
@@ -235,7 +230,6 @@ test('no recovery runs inside the login replay', async () => {
   });
   const outcome = await walkBlock(block('1. Tap "Settings"\n'), f.deps);
   assert.equal(outcome.block.outcome, 'fail');
-  assert.equal(f.calls.filter((c) => c === 'redBox').length, 1);
   assert.match(outcome.failure?.seen ?? '', /the login block did not pass/);
   assert.deepEqual(
     outcome.rows.map((r) => [r.block, r.outcome]),
@@ -369,4 +363,56 @@ test('a stale login selector fails the login plainly and reports the screen afte
   );
   assert.ok(!outcome.rows[0].reason?.includes('re-walking'));
   assert.match(outcome.failure?.seen ?? '', /login block did not pass.*Password required/);
+});
+
+for (const plan of ['1. Tap "Settings"\n', '✓ "Render Error"\n', '✓ The home screen is shown\n']) {
+  test(`render error terminates before accepting ${plan.trim()}`, async () => {
+    const overlay = {
+      ...screen(['Render Error', 'boom']),
+      renderError: true,
+      coverage: { native: 'incomplete', react: 'unknown' } as const,
+    };
+    const f = fake([overlay]);
+    const outcome = await walkBlock(block(plan), f.deps);
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.equal(outcome.refusal, undefined);
+    assert.match(outcome.failure?.seen ?? '', /boom/);
+    assert.equal(outcome.recoveries, undefined);
+    assert.ok(!f.calls.some((c) => c.startsWith('press') || c === 'hideDevMenu'));
+  });
+}
+
+test('a press opening a render error fails instead of accepting screen change', async () => {
+  const f = fake([
+    screen(['Settings']),
+    { ...screen(['Render Error', 'boom']), renderError: true },
+  ]);
+  const outcome = await walkBlock(block('1. Tap "Settings"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.match(outcome.failure?.seen ?? '', /boom/);
+  assert.equal(outcome.recoveries, undefined);
+});
+
+test('a render error inside login replay terminates login and the parent step', async () => {
+  const wall = screen(['Sign in'], 'app', { 'Sign in': 'login-screen' });
+  const overlay = { ...screen(['Render Error', 'login boom']), renderError: true };
+  const f = fake([wall, wall, wall, overlay], {
+    login: { marker: { id: 'login-screen' }, block: block('### Login\n1. Tap "Sign in"\n') },
+  });
+  const outcome = await walkBlock(block('1. Tap "Settings"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.ok(outcome.rows.some((r) => r.block === 'login' && r.outcome === 'fail'));
+  assert.match(outcome.failure?.seen ?? '', /login boom/);
+  assert.equal(outcome.recoveries, undefined);
+});
+
+test('a dev-menu no-op never counts as hidden or recovered', async () => {
+  const f = fake([screen(['Reload'], 'dev-menu')], {
+    hideDevMenu: async () => ({ ok: true, proven: false, executed: false }),
+  });
+  const outcome = await walkBlock(block('1. Tap "Settings"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.match(outcome.failure?.seen ?? '', /dev menu in front could not be hidden/);
+  assert.equal(outcome.recoveries, undefined);
+  assert.ok(outcome.rows.every((row) => row.outcome !== 'retry'));
 });

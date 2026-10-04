@@ -4,7 +4,6 @@ import { parseArgs } from 'node:util';
 import { CDPClient } from '../cdp-client.js';
 import { waitForExactPortTargets } from '../cdp/discovery.js';
 import { REACT_READY_POLL_MS, REACT_READY_TIMEOUT_MS } from '../cdp/setup.js';
-import { createComponentTreeHandler } from '../handlers/component-tree.js';
 import { createDevSettingsHandler, WALK_DEV_SETTINGS } from '../handlers/dev-settings.js';
 import {
   cdpClientOrNull,
@@ -165,9 +164,9 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
   return stop.track(handler).then(
     (result) => {
       try {
-        const { meta } = unwrap(result);
+        const { data, meta } = unwrap<{ executed?: boolean }>(result);
         logActionSettle(meta);
-        return { ok: true, proven };
+        return { ok: true, proven, ...(data?.executed === false ? { executed: false } : {}) };
       } catch (error) {
         logActionSettle(error instanceof HandlerError ? error.meta : undefined);
         const { code, message } = describeError(error);
@@ -374,7 +373,6 @@ async function openSession(
   const back = createDeviceBackHandler();
   const accept = createDeviceAcceptSystemDialogHandler();
   const dismiss = createDeviceDismissSystemDialogHandler();
-  const tree = adapt(createComponentTreeHandler(getClient));
   const login = request.loginMarker
     ? { marker: request.loginMarker, block: readLoginBlock(request) }
     : undefined;
@@ -428,17 +426,6 @@ async function openSession(
     now,
     cancelled: () => stop.stopping,
     diagnostic: (event) => log(`timing ${JSON.stringify(event)}`),
-    // Read only inside a recovery; a probe that cannot answer is no red box.
-    redBox: () =>
-      stop.track(() =>
-        tree({ depth: 1, interactiveOnly: true }).then(
-          ({ meta }) => meta?.warning === 'APP_HAS_REDBOX',
-          (error: unknown) => {
-            log(`red-box probe: ${describeError(error).message}`);
-            return false;
-          },
-        ),
-      ),
     hideDevMenu: () => act(() => devSettings({ action: 'hideDevMenu' }), false),
     ...(login ? { login } : {}),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

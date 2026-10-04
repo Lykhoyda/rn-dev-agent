@@ -58,6 +58,7 @@ import {
 } from './ledger.js';
 
 export interface ActResult {
+  executed?: boolean;
   ok: boolean;
   proven: boolean;
   error?: string;
@@ -95,8 +96,6 @@ export interface WalkerDeps {
   rowTiming?(t: number): RowTiming;
   // iOS only: the app process every capture must still belong to, set by the first capture.
   appProcess?: { expected?: number };
-  // One recovery per failed item runs only with the red-box probe wired.
-  redBox?(): Promise<boolean>;
   hideDevMenu?(): Promise<ActResult>;
   // A configured login wall; an absent block means it was missing or unreadable.
   login?: { marker: LoginMarker; block?: Block };
@@ -262,6 +261,7 @@ export async function walkBlock(
       }
       const privacyStarted = deps.timing ? deps.now() : 0;
       privacy.observe(latest);
+      if (latest.renderError) throw new RenderError();
       guardAppProcess(deps.appProcess, latest.appProcessIdentifier);
       if (deps.timing)
         observeTiming(timingObserver, {
@@ -819,7 +819,9 @@ export async function walkBlock(
     shots += taken;
     rows.push(...nested.rows);
     if (nested.refusal) return { refuse: nested.refusal };
-    return nested.failure ? ('fail' as const) : ('pass' as const);
+    return nested.failure
+      ? { fail: `the login block did not pass: ${nested.failure.seen}` }
+      : ('pass' as const);
   };
   // At most one recovery per item; 'retry' re-runs the item from a fresh capture.
   const recovery = async (
@@ -827,15 +829,13 @@ export async function walkBlock(
     attempt: number,
     reason: string,
   ): Promise<'retry' | WalkOutcome | undefined> => {
-    if (opts.recover === false || !deps.redBox || !deps.hideDevMenu || recovered.has(item))
-      return undefined;
+    if (opts.recover === false || !deps.hideDevMenu || recovered.has(item)) return undefined;
     recovered.add(item);
     loginReplayed = false;
     const fresh = await capture();
     const result = await recover(
       fresh.screen,
       {
-        redBox: deps.redBox,
         hideDevMenu: deps.hideDevMenu,
         dialog: () => mutate(item, fresh, (context) => deps.dialog('accept', context)),
         ...(deps.login ? { replayLogin } : {}),
@@ -1295,6 +1295,8 @@ export async function walkBlock(
             error = recoveryError;
           }
         }
+        if (error instanceof RenderError)
+          return failed(item, currentAttempt, error.message, latest, undefined);
         if (error instanceof PrivateInputCaptureError || error instanceof NativeCaptureError) {
           const nativeFailure = error instanceof NativeCaptureError;
           const safe = nativeFailure
@@ -1370,6 +1372,12 @@ export async function walkBlock(
     ...(privateFills.length ? { privateFills } : {}),
     ...(recoveries ? { recoveries } : {}),
   };
+}
+
+class RenderError extends Error {
+  constructor() {
+    super('the app is showing a React Native error screen');
+  }
 }
 
 const processChanged = (): ResolutionError =>

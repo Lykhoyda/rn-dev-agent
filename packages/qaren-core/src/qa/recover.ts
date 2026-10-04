@@ -6,10 +6,13 @@ export interface LoginMarker {
   text?: string;
 }
 
-export type LoginReplay = 'pass' | 'fail' | { refuse: { code: string; message: string } };
+export type LoginReplay =
+  | 'pass'
+  | 'fail'
+  | { fail: string }
+  | { refuse: { code: string; message: string } };
 
 export interface RecoverDeps {
-  redBox(): Promise<boolean>;
   dialog(): Promise<ActResult>;
   hideDevMenu(): Promise<ActResult>;
   replayLogin?(): Promise<LoginReplay>;
@@ -26,8 +29,6 @@ export async function recover(
   deps: RecoverDeps,
   marker?: LoginMarker,
 ): Promise<Recovery | undefined> {
-  // The overlay's own text is what the step's seen text then shows.
-  if (await deps.redBox()) return { fail: 'the app is showing a React Native error screen' };
   if (screen.front === 'dialog') {
     const accepted = await deps.dialog();
     return accepted.ok
@@ -38,7 +39,7 @@ export async function recover(
   }
   if (screen.front === 'dev-menu') {
     const hidden = await deps.hideDevMenu();
-    return hidden.ok
+    return hidden.ok && hidden.executed !== false
       ? { handled: 'dev-menu' }
       : { fail: `the dev menu in front could not be hidden: ${hidden.error ?? 'not dispatched'}` };
   }

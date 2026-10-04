@@ -55,6 +55,7 @@ export interface Element {
 export type Front = 'app' | 'dev-menu' | 'picker' | 'dialog';
 
 export interface Screen {
+  renderError?: boolean;
   elements: Element[];
   visibleText: string[];
   paintedText?: string[];

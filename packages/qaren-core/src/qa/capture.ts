@@ -47,6 +47,7 @@ export interface NativeObservation {
 }
 
 export interface ReactObservation {
+  renderError?: boolean;
   interactive?: DigestEntry[];
   truncated?: unknown;
   verdict?: unknown;
@@ -486,6 +487,7 @@ async function capture(deps: CaptureDeps): Promise<Screen> {
           nativePresence ?? (native.presenceCapture !== undefined ? 'unknown' : undefined),
         ),
         captureCoverage,
+        ...(react.renderError === true ? { renderError: true } : {}),
       },
       nodes,
     );

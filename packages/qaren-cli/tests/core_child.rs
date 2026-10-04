@@ -1048,3 +1048,48 @@ fn cancellation_after_core_spawn_prevents_request_dispatch() {
     assert!(*mock.piped_killed[0].lock().unwrap());
     assert_eq!(mock.remaining(), 0);
 }
+
+#[test]
+fn protected_values_preserve_wire_controls_and_redact_evidence() {
+    if std::env::var_os("QAREN_REDACTION_TEST_CHILD").is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "protected_values_preserve_wire_controls_and_redact_evidence",
+            ])
+            .env("QAREN_REDACTION_TEST_CHILD", "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    qaren::redact::protect_values(["false", "PASS", "walk"]);
+    let mut result = block_ledger("walk", "discovered");
+    result["blocks"][0]["saved"] = serde_json::json!(false);
+    result["steps"][0]["text"] = serde_json::json!("false PASS walk");
+    result["steps"][0]["reason"] = serde_json::json!("false PASS walk");
+    let outcome = run_result(&result, 0);
+    assert_eq!(outcome.verdict, Verdict::Pass);
+    assert_eq!(outcome.ledger.verdict, "PASS");
+    assert_eq!(outcome.ledger.path, "walk");
+    assert_eq!(outcome.ledger.blocks[0].saved, Some(false));
+    assert_eq!(
+        outcome.ledger.steps[0].text.as_deref(),
+        Some("[REDACTED_SECRET] [REDACTED_SECRET] [REDACTED_SECRET]")
+    );
+    assert_eq!(outcome.ledger.steps[0].reason, outcome.ledger.steps[0].text);
+    result["verdict"] = serde_json::json!("FAIL");
+    result["failure"] = serde_json::json!({"step": 1, "seen": "false PASS walk"});
+    let failed = run_result(&result, 1);
+    assert_eq!(failed.verdict, Verdict::Fail);
+    assert_eq!(
+        failed.ledger.failure.unwrap().seen,
+        "[REDACTED_SECRET] [REDACTED_SECRET] [REDACTED_SECRET]"
+    );
+    result["verdict"] = serde_json::json!("REFUSED");
+    result["code"] = serde_json::json!("SCREEN_EVIDENCE_INCOMPLETE");
+    result["message"] = serde_json::json!("false PASS walk");
+    let refused = run_result(&result, 4);
+    assert!(matches!(refused.verdict, Verdict::Refused { code, message }
+        if code == "SCREEN_EVIDENCE_INCOMPLETE" && message == "[REDACTED_SECRET] [REDACTED_SECRET] [REDACTED_SECRET]"));
+}

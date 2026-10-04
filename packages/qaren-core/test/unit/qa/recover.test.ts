@@ -28,10 +28,6 @@ function deps(overrides: Partial<RecoverDeps> = {}): { deps: RecoverDeps; calls:
   return {
     calls,
     deps: {
-      async redBox() {
-        calls.push('redBox');
-        return false;
-      },
       async dialog() {
         calls.push('dialog');
         return { ok: true, proven: true };
@@ -49,24 +45,10 @@ function deps(overrides: Partial<RecoverDeps> = {}): { deps: RecoverDeps; calls:
   };
 }
 
-test('a red box fails and calls no other recovery', async () => {
-  const d = deps({
-    async redBox() {
-      d.calls.push('redBox');
-      return true;
-    },
-  });
-  const result = await recover(screen('dialog', marker('login')), d.deps, { id: 'login' });
-  assert.deepEqual(result, {
-    fail: 'the app is showing a React Native error screen',
-  });
-  assert.deepEqual(d.calls, ['redBox']);
-});
-
 test('a system dialog in front is accepted', async () => {
   const d = deps();
   assert.deepEqual(await recover(screen('dialog'), d.deps), { handled: 'dialog' });
-  assert.deepEqual(d.calls, ['redBox', 'dialog']);
+  assert.deepEqual(d.calls, ['dialog']);
 });
 
 test('a dialog that cannot be accepted fails with the reason', async () => {
@@ -79,7 +61,7 @@ test('a dialog that cannot be accepted fails with the reason', async () => {
 test('the dev menu in front is hidden', async () => {
   const d = deps();
   assert.deepEqual(await recover(screen('dev-menu'), d.deps), { handled: 'dev-menu' });
-  assert.deepEqual(d.calls, ['redBox', 'hideDevMenu']);
+  assert.deepEqual(d.calls, ['hideDevMenu']);
 });
 
 test('the dev-client picker in front fails without recovering', async () => {
@@ -87,7 +69,7 @@ test('the dev-client picker in front fails without recovering', async () => {
   assert.deepEqual(await recover(screen('picker', marker('login')), d.deps, { id: 'login' }), {
     fail: 'the dev-client picker or first-run screen is in front: the app did not load its bundle from Metro',
   });
-  assert.deepEqual(d.calls, ['redBox']);
+  assert.deepEqual(d.calls, []);
 });
 
 test('the login marker on screen replays the login block', async () => {
@@ -95,7 +77,7 @@ test('the login marker on screen replays the login block', async () => {
   assert.deepEqual(await recover(screen('app', marker('login')), d.deps, { id: 'login' }), {
     handled: 'login',
   });
-  assert.deepEqual(d.calls, ['redBox', 'replayLogin']);
+  assert.deepEqual(d.calls, ['replayLogin']);
 });
 
 test('the login marker matches by label too, and never off screen', async () => {
@@ -127,11 +109,11 @@ test('a refused login replay is returned as the refusal', async () => {
 test('the marker without a login block recovers nothing', async () => {
   const d = deps({ replayLogin: undefined });
   assert.equal(await recover(screen('app', marker('login')), d.deps, { id: 'login' }), undefined);
-  assert.deepEqual(d.calls, ['redBox']);
+  assert.deepEqual(d.calls, []);
 });
 
 test('a plain app screen recovers nothing', async () => {
   const d = deps();
   assert.equal(await recover(screen('app'), d.deps, { id: 'login' }), undefined);
-  assert.deepEqual(d.calls, ['redBox']);
+  assert.deepEqual(d.calls, []);
 });
