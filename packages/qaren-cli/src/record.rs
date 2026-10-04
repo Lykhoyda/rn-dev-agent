@@ -515,6 +515,24 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_publication_withholds_the_copy_even_with_admission() {
+        let run_dir = temp_run_dir();
+        std::fs::write(video_path(&run_dir), "complete").unwrap();
+        std::fs::write(published_video_path(&run_dir), "stale").unwrap();
+        let mut mock = MockRunner::new();
+        assert!(matches!(
+            publication_copy(&mut mock, &run_dir, Some(12_345), true),
+            VideoStatus::Unavailable(_)
+        ));
+        assert!(mock.calls.is_empty());
+        assert!(!published_video_path(&run_dir).exists());
+        assert_eq!(
+            std::fs::read_to_string(video_path(&run_dir)).unwrap(),
+            "complete"
+        );
+    }
+
+    #[test]
     fn without_an_admission_time_nothing_is_publishable() {
         let run_dir = temp_run_dir();
         std::fs::write(video_path(&run_dir), "complete").unwrap();

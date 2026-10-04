@@ -103,3 +103,39 @@ test('post-admission startup observations remain in the ledger after normal walk
     assert.equal(forwarded.at(-1)?.qaReadOnly, true);
   }
 });
+
+test('dev chrome interrupts publication even when recovery hides it and the retry passes', async () => {
+  for (const front of ['dev-fab', 'dev-menu'] as const) {
+    const app = screen([element('@save', 'Save')]);
+    const overlay = { ...screen([]), front };
+    const f = walker([], scriptedJudge(() => assert.fail('literal plan is model-free')));
+    let current = screen([element('@open', 'Open')]);
+    let presses = 0;
+    let hides = 0;
+    f.deps.captureScreen = async () => current;
+    f.deps.press = async (ref) => {
+      f.actions.push(`press ${ref}`);
+      presses += 1;
+      current = hides === 0 ? overlay : screen([element('@done', 'Done')]);
+      return { ok: true, proven: true };
+    };
+    f.deps.hideDevMenu = async () => {
+      hides += 1;
+      current = app;
+      return { ok: true, proven: true };
+    };
+    const result = await runPlan(
+      parsePlan('1. Tap "Open"\n2. Tap "Save"\n3. Tap "Done"').blocks!,
+      f.deps,
+    );
+    assert.equal(result.verdict, 'PASS', front);
+    assert.equal(result.recoveries, 1, front);
+    assert.equal(hides, 1, front);
+    assert.equal(presses, 3, front);
+    assert.deepEqual(f.actions, ['press @open', 'press @save', 'press @done'], front);
+    assert.ok(result.steps.some((row) => row.reason?.includes(`recovered: ${front}`)), front);
+    assert.equal(result.steps.at(-1)?.outcome, 'pass', front);
+    assert.equal(current.front, 'app', front);
+    assert.equal(result.publicationInterrupted, true, front);
+  }
+});
