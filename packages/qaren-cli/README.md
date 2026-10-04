@@ -82,11 +82,14 @@ remains a twin, as covered by the
 input keeps its placeholder for quoted fill resolution. The refusal is terminal:
 it is never recovered, retried or re-walked,
 including for stored replay selectors and for a handler that finds twins at dispatch. A text element
-that is the sole text descendant of matching labelled controls links to the
-nearest one. When that control is among the matches and contains the text
-inside its frame, the text collapses into it. Separate controls
-in distinct subtrees with the same label still refuse as ambiguous. The
-[label-echo tests](../qaren-core/test/unit/qa/label-echo.test.ts) cover both cases.
+that is the sole text descendant of matching labelled ancestors links to the
+nearest action candidate: enabled and either hittable or offscreen for scrolling.
+When that candidate is among the matches, the text and other same-label ancestors
+collapse into it, including layout and press-capable but non-hittable wrappers.
+This applies to quoted presses and stored text-selector replay; it does not grant
+native tap eligibility to a wrapper. Separate controls in distinct subtrees with
+the same label still refuse as ambiguous. The
+[label-echo tests](../qaren-core/test/unit/qa/label-echo.test.ts) cover these cases.
 The refusal lists
 each candidate without its label or value: kind, testID or `no-id`, and the
 rounded frame.
@@ -572,9 +575,10 @@ the partition and must not be added to `total`. Post-action captures start
 after an authorized dispatch; captures after a dispatch refused before
 authorization remain in `captureMs`.
 
-The ledger's `speed` summary groups timed action/check rows by plan line and
-kind, summing every retry, passing and failing attempt into one logical-step
-duration, even when a capture refusal changes the block name. `stepMedianMs`
+The ledger's `speed` summary groups timed action/check rows by operation, keeping
+login-replay steps separate from plan steps that share a line and kind. Every retry,
+passing and failing attempt of one operation sums into one logical-step duration,
+even when a capture refusal changes the block name. `stepMedianMs`
 and nearest-rank `stepP95Ms` cover all those logical steps; `steps`, `passed`
 and `failed` count them, with the last attempt determining whether a step
 passed. `walkMs` sums all timed row windows, not app preparation or teardown.
@@ -734,11 +738,16 @@ remains available. Reconciliation neither rewrites history nor claims earlier
 content passed the current privacy gate.
 
 Each step is recorded in `publication.json`. Before retrying an attempted post,
-publication looks for the run's comment marker and adopts an existing comment.
-If no comment was posted, it regenerates `comment.md` from the current verdict
-file and walk rows, or `blocks-comment.md` from blocks admitted by the current
-publication gate, applying current identity redaction before upload. Cached
-bodies are not reused. Already-posted comments are neither edited nor deleted.
+publication regenerates the QA report from the current verdict file and walk rows,
+or the saved-block report from blocks admitted by the current publication gate,
+applying current identity redaction. It adopts an existing comment only when its
+author is the authenticated GitHub user and its first-line marker matches the
+run ID and SHA-256 fingerprint of that rendered body, excluding the marker line
+and before attachment rewriting. QA reports and saved-block comments each use
+their own fingerprint, so a lost attachment-post result can be reconciled without
+duplicating the report. Without a matching comment it writes `comment.md` or
+`blocks-comment.md` and posts the regenerated body.
+Cached bodies are not reused. Already-posted comments are neither edited nor deleted.
 
 Publication holds an exclusive file-descriptor lock on `publish.lock`; a
 concurrent publisher fails until the holder exits. The file remains after release;
