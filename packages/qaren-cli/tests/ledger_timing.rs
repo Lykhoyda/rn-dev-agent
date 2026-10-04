@@ -3,7 +3,7 @@ use qaren::report::{render, ReportInput};
 use serde_json::json;
 
 fn ledger(steps: serde_json::Value, speed: serde_json::Value) -> serde_json::Value {
-    json!({"verdict":"PASS","path":"walk","blocks":[],"steps":steps,
+    json!({"verdict":"PASS","path":"walk","publicationInterrupted":false,"blocks":[],"steps":steps,
         "jev":{"calls":0,"medianMs":0,"inputTokens":0,"callDetails":[]},"llmTurns":0,"escapes":0,"recoveries":0,"speed":speed})
 }
 
@@ -36,6 +36,27 @@ fn explicit_video_publication_survives_ledger_round_trip() {
         let parsed: Ledger = serde_json::from_value(raw.clone()).unwrap();
         assert_eq!(serde_json::to_value(parsed).unwrap(), raw);
     }
+}
+
+#[test]
+fn publication_interruption_survives_ledger_round_trip_and_defaults_to_false() {
+    let mut raw = ledger(
+        json!([]),
+        json!({"walkMs":0,"steps":0,"passed":0,"failed":0}),
+    );
+    for interrupted in [false, true] {
+        raw["publicationInterrupted"] = json!(interrupted);
+        let parsed: Ledger = serde_json::from_value(raw.clone()).unwrap();
+        assert_eq!(parsed.publication_interrupted, interrupted);
+        assert_eq!(serde_json::to_value(parsed).unwrap(), raw);
+    }
+    raw.as_object_mut()
+        .unwrap()
+        .remove("publicationInterrupted");
+    let parsed: Ledger = serde_json::from_value(raw.clone()).unwrap();
+    assert!(!parsed.publication_interrupted);
+    raw["publicationInterrupted"] = json!(false);
+    assert_eq!(serde_json::to_value(parsed).unwrap(), raw);
 }
 
 #[test]
