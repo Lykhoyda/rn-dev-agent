@@ -9,7 +9,7 @@ import { isValidActionId } from '../domain/path-safety.js';
 
 export const WIRE_VERSION = 1 as const;
 
-export type EnvelopeType = 'request' | 'row' | 'result' | 'cancel';
+export type EnvelopeType = 'request' | 'admitted' | 'row' | 'result' | 'cancel';
 
 export interface Envelope<T = unknown> {
   v: typeof WIRE_VERSION;
@@ -115,7 +115,7 @@ export function startupRow(): LedgerRow {
   };
 }
 
-const TYPES: ReadonlySet<string> = new Set(['request', 'row', 'result', 'cancel']);
+const TYPES: ReadonlySet<string> = new Set(['request', 'admitted', 'row', 'result', 'cancel']);
 
 function validCall(value: unknown): boolean {
   return (
@@ -218,6 +218,7 @@ export async function readRequest(input: AsyncIterable<Buffer | string>): Promis
 }
 
 export interface WireWriter {
+  admitted(): void;
   row(payload: LedgerRow): void;
   result(payload: ResultPayload): 0 | 1 | 4;
   readonly seq: number;
@@ -234,6 +235,7 @@ export function createWriter(write: (line: string) => void, runId: string): Wire
     write(`${JSON.stringify(envelope)}\n`);
   };
   return {
+    admitted: () => send('admitted', {}),
     row: (payload) => send('row', payload),
     result: (payload) => {
       send('result', payload);

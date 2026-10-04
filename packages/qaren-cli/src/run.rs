@@ -764,15 +764,20 @@ fn run_inner(
             blocks,
             identity_values: identity_values(&device, config.metro_port, &ctx.record.resources),
         };
-        let written = std::fs::write(run_dir.join("plan.md"), &plan).and_then(|()| {
-            std::fs::write(
-                run_dir.join("pr.json"),
-                serde_json::to_vec_pretty(&pr_record).unwrap_or_default(),
-            )
-        });
-        if let Err(e) = written {
-            ctx.notes
-                .push(("pr_record".to_string(), format!("could not persist: {e}")));
+        let bytes = serde_json::to_vec_pretty(&pr_record).unwrap_or_default();
+        if let Err(late) = ensure_running(ctx.runner, "publish") {
+            result = ReceiptResult::Refused;
+            failure = Some(late);
+            ctx.record.terminal.as_mut().unwrap().cancelled = true;
+            ctx.record.failure = failure.clone();
+            if let Err(f) = ctx.save() {
+                return Ok(ctx.fail(f));
+            }
+        } else if !ctx.record.terminal.as_ref().unwrap().cancelled {
+            if let Err(e) = std::fs::write(run_dir.join("pr.json"), bytes) {
+                ctx.notes
+                    .push(("pr_record".to_string(), format!("could not persist: {e}")));
+            }
         }
     }
     let mut receipt = finish_receipt(ctx, result, failure);

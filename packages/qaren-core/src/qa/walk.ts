@@ -579,6 +579,7 @@ async function main(): Promise<void> {
     return refuse('RUN_CANCELLED', 'the run was cancelled before the walk started', () =>
       opened.close(),
     );
+  writer.admitted();
   try {
     const ledger = await stop.track(() =>
       runPlan(blocks, opened.deps, request.preflightCalls, {

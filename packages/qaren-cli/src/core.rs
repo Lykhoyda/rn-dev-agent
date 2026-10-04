@@ -497,6 +497,7 @@ struct Inbox {
     run_id: String,
     last_seq: u64,
     rows: Vec<Row>,
+    admitted: bool,
     result: Option<Value>,
     violation: Option<String>,
 }
@@ -530,6 +531,12 @@ impl Inbox {
             }
         }
         match (kind, value.get("payload")) {
+            (Some("admitted"), Some(payload))
+                if !self.admitted && payload.as_object().is_some_and(|p| p.is_empty()) =>
+            {
+                self.admitted = true;
+                true
+            }
             (Some("row"), Some(payload)) => {
                 if self.rows.len() >= MAX_ROWS {
                     self.violation = Some(format!("more than {MAX_ROWS} rows"));
@@ -585,6 +592,7 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
         run_id,
         last_seq: 1,
         rows: Vec::new(),
+        admitted: false,
         result: None,
         violation: None,
     };
@@ -677,8 +685,21 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
         if let Some(reason) = reason {
             let code = if inbox.violation.is_some() {
                 FailureCode::CoreResultMissing
+            } else if !inbox.admitted {
+                FailureCode::CoreRefused
             } else {
                 FailureCode::WalkDeadlineExceeded
+            };
+            let reason = if code == FailureCode::CoreRefused {
+                let mut load = 0.0;
+                let measured = if unsafe { libc::getloadavg(&mut load, 1) } == 1 {
+                    format!("host 1-minute load {load:.1}")
+                } else {
+                    "host load unavailable".to_string()
+                };
+                format!("cannot attach to the dev client before the walk deadline ({measured}; an environment refusal): {reason}")
+            } else {
+                reason
             };
             deadline_failure = Some(Failure::new(
                 "walk",
@@ -743,11 +764,19 @@ fn interpret(
     }
     if let Some(failure) = deadline_failure {
         let seen = failure.detail.to_string();
-        if failure.code == FailureCode::RunCancelled {
+        if matches!(
+            failure.code,
+            FailureCode::RunCancelled | FailureCode::CoreRefused
+        ) {
             return (
                 synthesized_ledger(&inbox.rows, "REFUSED", &seen),
                 Verdict::Refused {
-                    code: "RUN_CANCELLED".to_string(),
+                    code: if failure.code == FailureCode::RunCancelled {
+                        "RUN_CANCELLED"
+                    } else {
+                        "CDP_NOT_CONNECTED"
+                    }
+                    .to_string(),
                     message: seen,
                 },
                 Some(failure),

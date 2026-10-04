@@ -1305,7 +1305,11 @@ fn a_deadline_overrun_fails_naming_the_walk_phase_and_still_tears_down() {
     let mut mock = MockRunner::new();
     script_preflight(&mut mock, &repo);
     script_provision(&mut mock);
-    let one_row = format!("{}\n", envelope(2, "row", &row(1, "step")));
+    let one_row = format!(
+        "{}\n{}\n",
+        envelope(2, "admitted", "{}"),
+        envelope(3, "row", &row(1, "step"))
+    );
     script_drift_status(&mut mock);
     mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
     script_core_identity(&mut mock);
@@ -3727,7 +3731,7 @@ fn cancelled_pr_walks_with_or_without_source_drift_cannot_publish() {
         let record = RunRecord::load(&runs, &run_id()).unwrap();
         assert_eq!(record.failure.unwrap().code, FailureCode::RunCancelled);
         let dir = runs.join(run_id());
-        assert!(dir.join("pr.json").is_file());
+        assert!(!dir.join("pr.json").exists());
         let mut publisher = qaren::exec::MockRunner::new();
         let published = qaren::publish::publish(
             &mut publisher,
@@ -4532,4 +4536,103 @@ fn a_playable_encode_reclaims_the_runs_raw_capture_and_reports_the_bytes() {
             assert!(!receipt.outcomes.contains_key("reclaimed"));
         }
     }
+}
+
+struct CancelAfterTerminalSave(PrRunner, PathBuf);
+
+impl Runner for CancelAfterTerminalSave {
+    fn env_var(&self, name: &str) -> Option<String> {
+        self.0.env_var(name)
+    }
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
+        self.0.execute(spec, interruptible)
+    }
+    fn execute_private(
+        &mut self,
+        spec: &CmdSpec,
+        input: &[u8],
+        interruptible: bool,
+    ) -> qaren::exec::PrivateOutput {
+        self.0.execute_private(spec, input, interruptible)
+    }
+    fn spawn_group_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        self.0.spawn_group_unchecked(spec, log)
+    }
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.0.spawn_piped_unchecked(spec, log)
+    }
+    fn sleep(&mut self, d: std::time::Duration) {
+        self.0.sleep(d)
+    }
+    fn now_epoch_ms(&self) -> u64 {
+        self.0.now_epoch_ms()
+    }
+    fn commands_executed(&self) -> u64 {
+        self.0.commands_executed()
+    }
+    fn cancellation(&self) -> Option<String> {
+        if RunRecord::load(&self.1, &run_id())
+            .ok()
+            .is_some_and(|record| record.terminal.is_some())
+        {
+            Some("received SIGTERM".into())
+        } else {
+            self.0.cancellation()
+        }
+    }
+}
+
+#[test]
+fn cancellation_during_terminal_save_withholds_the_publish_handoff() {
+    let (repo, app) = app_repo();
+    let wt = repo.join("runs").join(run_id()).join("wt");
+    let mut runner = CancelAfterTerminalSave(
+        PrRunner {
+            inner: MockRunner::new(),
+            app: app.clone(),
+            recorder_persisted_before_spawn: None,
+            fail_core_spawn: false,
+        },
+        repo.join("runs"),
+    );
+    let mock = &mut runner.0.inner;
+    script_pr_preflight(mock, &repo, &wt);
+    script_provision(mock);
+    script_pr_provenance_recheck(mock);
+    script_drift_status(mock);
+    script_recorder_start(mock);
+    mock.expect_spawn_piped("walk.js", 9000, &pr_pass_stdout(), Some(0));
+    script_core_identity(mock);
+    script_drift_status(mock);
+    mock.expect_run("git", CmdOutput::success(&format!("{PR_HEAD}\n")));
+    mock.expect_run(
+        "git",
+        CmdOutput::success("?? test-app/.qaren/actions/tasks.yaml\0"),
+    );
+    script_recorder_stop(mock);
+    script_pr_teardown_after_drift(mock);
+    mock.expect_run("du -sk", CmdOutput::success("4\n"));
+    mock.expect_run("worktree remove --force", CmdOutput::success(""));
+    mock.expect_run("which ffmpeg", CmdOutput::failed(1, ""));
+    mock.expect_run("gh", pr_view_json(PR_HEAD));
+
+    let receipt = run(&mut runner, &pr_request(&repo, &app));
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    assert_eq!(receipt.failure.unwrap().code, FailureCode::RunCancelled);
+    assert_eq!(runner.0.inner.remaining(), 0);
+    let record = RunRecord::load(&repo.join("runs"), &run_id()).unwrap();
+    assert!(record.terminal.unwrap().cancelled);
+    assert_eq!(record.failure.unwrap().code, FailureCode::RunCancelled);
+    assert!(!repo.join("runs").join(run_id()).join("pr.json").exists());
+    assert!(!repo.join("runs").join(run_id()).join("plan.md").exists());
+    let mut publisher = qaren::exec::MockRunner::new();
+    let receipt = qaren::publish::publish(
+        &mut publisher,
+        &repo.join("runs"),
+        &run_id(),
+        &repo.join("verdict.md"),
+        &qaren::redact::MachineIdentity::default(),
+    );
+    assert_eq!(receipt.failure.unwrap().code, FailureCode::RunCancelled);
+    assert!(publisher.calls.is_empty());
 }
