@@ -1,0 +1,117 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import childProcess from 'node:child_process';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { promisify } from 'node:util';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { setImmediate } from 'node:timers/promises';
+
+test('native startup settles cancellation and rejects buffered readiness without persistence', async (t) => {
+  const originalExists = fs.existsSync;
+  const originalReadDir = fs.readdirSync;
+  const originalLstat = fs.lstatSync;
+  t.mock.method(fs, 'lstatSync', (path, options) => {
+    if (/runner-state|session-|\/tmp\/(?:rn-(?:fast|android)-runner-state|qaren-session)\.json/.test(String(path))) {
+      throw Object.assign(new Error('fixture state is absent'), { code: 'ENOENT' });
+    }
+    return originalLstat(path, options);
+  });
+  const writes: unknown[] = [];
+  const spawns: Array<EventEmitter & { stdout: PassThrough; stderr: PassThrough; pid: number; kill(): boolean }> = [];
+  t.mock.method(fs, 'existsSync', (path) =>
+    String(path).endsWith('.xcodeproj') || String(path).endsWith('/Build/Products') || originalExists(path));
+  t.mock.method(fs, 'readdirSync', (path, options) =>
+    String(path).endsWith('/Build/Products') ? ['fixture.xctestrun'] : originalReadDir(path, options));
+  t.mock.method(fs, 'writeFileSync', (...args) => { writes.push(args); });
+  t.mock.method(fs, 'renameSync', () => {});
+  t.mock.method(fs, 'unlinkSync', () => {});
+  t.mock.method(childProcess, 'spawn', () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(), stderr: new PassThrough(), pid: 12345,
+      kill: () => true,
+    });
+    spawns.push(child);
+    return child;
+  });
+  const execute = t.mock.method(childProcess, 'execFile', (_command, args, ...rest) => {
+    const callback = rest.at(-1);
+    const stdout = args.includes('get-state') ? 'device' :
+      args.includes('instrumentation') ? 'instrumentation:dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner' : '';
+    queueMicrotask(() => callback(null, stdout, ''));
+    return new EventEmitter();
+  });
+  const originalPromisified = execute[promisify.custom];
+  Object.defineProperty(execute, promisify.custom, {
+    configurable: true,
+    value: async (command, args, options) => new Promise((resolve, reject) => {
+      execute(command, args, options, (error, stdout, stderr) =>
+        error ? reject(error) : resolve({ stdout, stderr }));
+    }),
+  });
+  t.after(() => Object.defineProperty(execute, promisify.custom, { configurable: true, value: originalPromisified }));
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const { withCancellation, RunCancelledError } = await import('../../../dist/domain/cancellation.js');
+  const ios = await import('../../../dist/runners/rn-fast-runner-client.js');
+  const android = await import('../../../dist/runners/rn-android-runner-client.js');
+  const previousLease = process.env.QAREN_DEVICE_LEASE;
+  process.env.QAREN_DEVICE_LEASE = 'test:abcdefghijklmnop';
+  t.after(() => {
+    if (previousLease === undefined) delete process.env.QAREN_DEVICE_LEASE;
+    else process.env.QAREN_DEVICE_LEASE = previousLease;
+  });
+
+  for (const terminal of ['abort-with-buffered-output', 'error', 'exit'] as const) {
+    ios._setFastRunnerStateForTest(null);
+    const controller = new AbortController();
+    const spawnCount = spawns.length;
+    const pending = withCancellation(controller.signal, () => ios.startFastRunner(
+      '00000000-0000-0000-0000-000000000001', 'com.example.app', 22087, { forceLocalBuild: true },
+    ));
+    const rejected = assert.rejects(pending);
+    await setImmediate();
+    assert.equal(spawns.length, spawnCount + 1);
+    const child = spawns.at(-1)!;
+    assert.ok(child);
+    if (terminal === 'abort-with-buffered-output') controller.abort(new RunCancelledError());
+    else if (terminal === 'error') child.emit('error', new Error('launch failed'));
+    else child.emit('exit', 1, null);
+    child.stdout.write('RN_FAST_RUNNER_LISTENER_READY\nRN_FAST_RUNNER_PORT=22087\n');
+    child.stderr.write('RN_FAST_RUNNER_LISTENER_READY\nRN_FAST_RUNNER_PORT=22087\n');
+    if (terminal === 'abort-with-buffered-output') child.emit('error', new RunCancelledError());
+    await rejected;
+    assert.equal(ios.getFastRunnerState(), null);
+    assert.deepEqual(writes, []);
+  }
+
+  for (const phase of ['polling', 'success-continuation'] as const) {
+    android._setAndroidRunnerStateForTest(null);
+    const controller = new AbortController();
+    let healthCalls = 0;
+    let notify!: () => void;
+    const reached = new Promise<void>((resolve) => { notify = resolve; });
+    android._setFetchForTest(async () => {
+      healthCalls++;
+      if (phase === 'success-continuation' && healthCalls === 2) {
+        controller.abort(new RunCancelledError());
+        notify();
+        throw controller.signal.reason;
+      }
+      notify();
+      return Response.json({ ok: phase === 'success-continuation' });
+    });
+    const pending = withCancellation(controller.signal, () => android.startAndroidRunner(
+      'emulator-test', 'com.example.app', 0, { _forceLocalBuild: true },
+    ));
+    const rejected = assert.rejects(pending);
+    await reached;
+    await setImmediate();
+    if (phase === 'polling') controller.abort(new RunCancelledError());
+    await rejected;
+    await setImmediate();
+    assert.equal(android.getAndroidRunnerState(), null);
+    assert.deepEqual(writes, []);
+  }
+});

@@ -21,6 +21,7 @@ test('abort during legacy runner grace sleep prevents further kills, removal and
   const ready = new Promise<void>((resolve) => { started = resolve; });
   const pending = withCancellation(controller.signal, () => ensureSingleRunner({ udid: 'device' }, {
     listProcesses: () => '101 AgentDeviceRunner device\n102 AgentDeviceRunner device',
+    readBirth: (pid) => `birth-${pid}`,
     kill: (pid, signal) => { calls.push(`${pid}:${signal}`); },
     isAlive: () => true,
     readDaemonPid: () => null,
@@ -64,7 +65,7 @@ for (const platform of ['ios', 'android'] as const) {
 test('cancelling a later block never flushes an earlier saved action', async () => {
   const root = mkdtempSync(join(tmpdir(), 'qaren-cancel-blocks-'));
   try {
-    const parsed = parsePlan('# First\n1. Wait for "Ready" to appear\n\n# Second\n1. Wait for "Missing" to appear');
+    const parsed = parsePlan('## QA\n### First\n1. Wait for "Ready" to appear\n\n### Second\n1. Wait for "Missing" to appear');
     assert.ok(parsed.blocks);
     const controller = new AbortController();
     const fake = walker([screen([element('@ready', 'Ready', { testID: 'ready' })])], scriptedJudge(() => assert.fail('literal plan')));
@@ -73,6 +74,7 @@ test('cancelling a later block never flushes an earlier saved action', async () 
     await assert.rejects(withCancellation(controller.signal, () => runPlan(parsed.blocks!, fake.deps, [], {
       appRoot: root, platform: 'ios', appId: 'com.example.app',
     })), { code: 'RUN_CANCELLED' });
+    assert.ok(fake.rows.some((row) => row.block === 'first' && row.outcome === 'pass'));
     assert.equal(existsSync(join(root, '.qaren', 'actions')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -98,4 +100,61 @@ test('the attach deadline interrupts a stalled connect and keeps loaded refusal 
   await assert.rejects(pending, /host 1-minute load 42.0.*environment refusal/);
   await setImmediate();
   assert.deepEqual(calls, ['attach', 'cleanup']);
+});
+
+for (const replacement of ['different-birth', null]) {
+  test(`legacy escalation refuses ${replacement ?? 'unknown'} birth identity`, async () => {
+    let birth: string | null = 'original';
+    const signals: string[] = [];
+    const result = await ensureSingleRunner({ udid: 'device' }, {
+      listProcesses: () => '101 AgentDeviceRunner device',
+      readBirth: () => birth,
+      kill: (_pid, signal) => { signals.push(signal); },
+      isAlive: () => true,
+      readDaemonPid: () => null,
+      fileExists: () => false,
+      removeFile: () => assert.fail('unexpected removal'),
+      delay: async () => { birth = replacement; },
+      listApps: () => '{"com.example.app" = { ApplicationType = User; };}',
+      uninstallApp: () => assert.fail('unexpected uninstall'),
+    });
+    assert.deepEqual(signals, ['SIGTERM']);
+    assert.deepEqual(result.killedPids, []);
+    assert.match(result.warnings.join(' '), /PROCESS_OWNERSHIP_UNPROVEN/);
+  });
+}
+
+test('legacy TERM refuses unknown identity before signaling', async () => {
+  const result = await ensureSingleRunner({ udid: 'device' }, {
+    listProcesses: () => '101 AgentDeviceRunner device',
+    readBirth: () => null,
+    kill: () => assert.fail('unproven PID must not be signaled'),
+    isAlive: () => true,
+    readDaemonPid: () => null,
+    fileExists: () => false,
+    removeFile: () => assert.fail('unexpected removal'),
+    delay: async () => assert.fail('unexpected grace sleep'),
+    listApps: () => '{"com.example.app" = { ApplicationType = User; };}',
+    uninstallApp: () => assert.fail('unexpected uninstall'),
+  });
+  assert.deepEqual(result.killedPids, []);
+  assert.match(result.warnings.join(' '), /PROCESS_OWNERSHIP_UNPROVEN/);
+});
+
+test('a live legacy Android daemon keeps its unproven PID and files', async () => {
+  const { releaseAndroidInteractionSlot } = await import('../../../dist/runners/release-android-slot.js');
+  const result = await releaseAndroidInteractionSlot({ deviceId: 'device' }, {
+    stopOwnRunner: async () => {},
+    adbForceStop: async () => {},
+    resolveSerial: () => ['-s', 'device'],
+    readDaemonPid: () => 101,
+    isAlive: () => true,
+    fileExists: () => true,
+    removeFile: () => assert.fail('unproven daemon record must be retained'),
+    cleanupLegacy: () => true,
+    now: () => 0,
+  });
+  assert.deepEqual(result.killedDaemonPids, []);
+  assert.deepEqual(result.removedFiles, []);
+  assert.match(result.warnings.join(' '), /PROCESS_OWNERSHIP_UNPROVEN/);
 });

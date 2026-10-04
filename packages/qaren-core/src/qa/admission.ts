@@ -1,7 +1,7 @@
 import { loadavg } from 'node:os';
 import { interruptible, withCancellation, withDeadline, isAbort } from '../domain/cancellation.js';
 import { TargetReadinessTimeoutError } from '../cdp/discovery.js';
-import { CDPProbeTimeoutError } from '../cdp/connect.js';
+import { CDPProbeTimeoutError, CDPHandshakeTimeoutError } from '../cdp/connect.js';
 import { HandlerError, describeError } from './adapt.js';
 import type { ProveOutcome } from './prove.js';
 
@@ -51,7 +51,7 @@ async function attach(steps: AdmissionSteps): Promise<void> {
   }
   const load = (steps.load ?? (() => loadavg()[0]))();
   const loaded = load > LOAD_ENVELOPE;
-  const timedOut = (error: unknown) => error instanceof TargetReadinessTimeoutError || error instanceof CDPProbeTimeoutError;
+  const timedOut = (error: unknown) => error instanceof TargetReadinessTimeoutError || error instanceof CDPProbeTimeoutError || error instanceof CDPHandshakeTimeoutError;
   const retry = loaded && timedOut(failure) && steps.remainingMs() >= steps.readinessMs;
   if (retry) {
     try {

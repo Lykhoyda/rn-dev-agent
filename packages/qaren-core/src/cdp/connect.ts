@@ -51,6 +51,13 @@ export class ConnectionSetupSupersededError extends Error {
   }
 }
 
+export class CDPHandshakeTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CDPHandshakeTimeoutError';
+  }
+}
+
 export class CDPProbeTimeoutError extends Error {
   constructor(message: string) {
     super(message);
@@ -355,7 +362,7 @@ async function connectToTarget(
   let lastError: Error | null = null;
   // GH #105 / B154: track per-attempt outcome (handshake ok vs probe timeout).
   // Fed into formatConnectFailureMessage at the end.
-  const attempts: { handshakeOk: boolean; probeTimedOut: boolean }[] = [];
+  const attempts: { handshakeOk: boolean; probeTimedOut: boolean; handshakeTimedOut: boolean }[] = [];
   for (let i = 0; i < retries; i++) {
     if (ctx.isDisposed() || ctx.isSoftReconnectRequested()) {
       throw new Error('Client disposed or preempted during connection');
@@ -425,7 +432,7 @@ async function connectToTarget(
         throw err;
       }
       lastError = err instanceof Error ? err : new Error(String(err));
-      attempts.push({ handshakeOk, probeTimedOut });
+      attempts.push({ handshakeOk, probeTimedOut, handshakeTimedOut: err instanceof CDPHandshakeTimeoutError });
       if (!closeConnectionAttempt(ctx, attemptWs)) {
         if (err instanceof ConnectionSetupSupersededError) throw err;
         throw new ConnectionSetupSupersededError();
@@ -446,10 +453,12 @@ async function connectToTarget(
   );
   if (
     attempts.length > 0 &&
-    attempts.every((attempt) => attempt.handshakeOk) &&
-    attempts.some((attempt) => attempt.probeTimedOut)
+    attempts.every((attempt) => attempt.probeTimedOut)
   ) {
     throw new CDPProbeTimeoutError(failureMessage);
+  }
+  if (attempts.length > 0 && attempts.every((attempt) => attempt.handshakeTimedOut || attempt.probeTimedOut)) {
+    throw new CDPHandshakeTimeoutError(failureMessage);
   }
   throw new Error(failureMessage);
 }
@@ -481,7 +490,7 @@ export function connectWebSocket(
         if (isAbort(error)) throw error;
         /* already gone */
       }
-      reject(new Error('WebSocket connect timed out'));
+      reject(new CDPHandshakeTimeoutError('WebSocket connect timed out'));
     }, 7000);
 
     const abort = () => {
@@ -521,7 +530,9 @@ export function connectWebSocket(
           if (isAbort(error)) throw error;
           /* already closing */
         }
-        reject(err);
+        reject(err.message === 'Opening handshake has timed out'
+          ? new CDPHandshakeTimeoutError(err.message)
+          : err);
       } else {
         console.error('CDP WebSocket error:', err instanceof Error ? err.message : err);
       }

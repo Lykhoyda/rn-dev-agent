@@ -1,3 +1,4 @@
+import { readProcessBirth } from '../lifecycle/process-birth.js';
 import { isAbort, cancellationSignal, interruptible, sleep as cancellableSleep } from '../domain/cancellation.js';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
@@ -99,6 +100,7 @@ export interface EnsureSingleRunnerResult {
 
 export interface EnsureSingleRunnerDeps {
   listProcesses: () => string;
+  readBirth: (pid: number) => string | null;
   kill: (pid: number, signal: NodeJS.Signals) => void;
   isAlive: (pid: number) => boolean;
   readDaemonPid: () => number | null;
@@ -117,6 +119,7 @@ function defaultDeps(): EnsureSingleRunnerDeps {
     // with no operator signal — exactly when the machine is busy.
     listProcesses: () =>
       execFileSync('ps', ['-A', '-o', 'pid=,args='], { encoding: 'utf8', timeout: 3_000 }),
+    readBirth: (pid) => readProcessBirth(pid)?.token ?? null,
     kill: (pid, signal) => process.kill(pid, signal),
     isAlive: (pid) => {
       try {
@@ -177,11 +180,20 @@ export async function ensureSingleRunner(
     }
     for (const pid of selectLegacyRunnerPids(psOut, opts.udid)) {
       try {
-        cancellationSignal();
-        deps.kill(pid, 'SIGTERM');
+        const birth = deps.readBirth(pid);
+        const signal = (kind: NodeJS.Signals): void => {
+          cancellationSignal();
+          if (!birth || !selectLegacyRunnerPids(deps.listProcesses(), opts.udid!).includes(pid) ||
+              deps.readBirth(pid) !== birth) {
+            throw new Error('PROCESS_OWNERSHIP_UNPROVEN: legacy runner identity changed or is unavailable');
+          }
+          cancellationSignal();
+          deps.kill(pid, kind);
+        };
+        signal('SIGTERM');
         await interruptible(() => deps.delay(SIGKILL_GRACE_MS));
         cancellationSignal();
-        if (deps.isAlive(pid)) deps.kill(pid, 'SIGKILL');
+        if (deps.isAlive(pid)) signal('SIGKILL');
         killedPids.push(pid);
       } catch (err) {
         if (isAbort(err)) throw err;

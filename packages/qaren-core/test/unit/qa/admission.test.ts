@@ -217,3 +217,15 @@ test('abort during each awaited admission primitive rejects before any later eff
     assert.deepEqual(calls, [...order.slice(0, order.indexOf(effect)), 'close']);
   }
 });
+
+test('loaded handshake timeout retries once and remains an environment refusal', async () => {
+  const { CDPHandshakeTimeoutError } = await import('../../../dist/cdp/connect.js');
+  let attempts = 0;
+  const { calls, stop, steps } = harness({
+    load: () => 42,
+    attach: async () => { attempts++; throw new CDPHandshakeTimeoutError('handshake timed out'); },
+  });
+  await assert.rejects(admit(steps, stop), /host 1-minute load 42.0.*environment refusal after one retry/);
+  assert.equal(attempts, 2);
+  assert.deepEqual(calls, ['close']);
+});

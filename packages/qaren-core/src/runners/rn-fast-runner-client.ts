@@ -2,7 +2,7 @@ import { DEVICE_LEASE_REQUIRED, leaseFromEnvironment } from './lease-env.js';
 import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
 import { measureTiming, observeTiming, type TimingContext } from '../qa/timing.js';
 import { QA_READ_ONLY_CAPABILITY, checkQaNativeOutcome } from './qa-native-policy.js';
-import { execFile, spawn, cancellableFetch, sleep as cancellableSleep, interruptible } from '../domain/cancellation.js';
+import { execFile, spawn, cancellableFetch, sleep as cancellableSleep, interruptible, cancellationSignal, isAbort } from '../domain/cancellation.js';
 import { promisify } from 'node:util';
 import { isIosSimulatorUdid } from './external-runner-detect.js';
 import type { ChildProcess } from 'node:child_process';
@@ -697,7 +697,7 @@ function runXcodebuildToExit(args: string[], timeoutMs: number): Promise<void> {
     });
     child.on('error', (err) => {
       clearTimeout(timer);
-      reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
+      reject(isAbort(err) ? err : new Error(`Failed to spawn xcodebuild: ${err.message}`));
     });
     child.on('exit', (code) => {
       clearTimeout(timer);
@@ -774,6 +774,7 @@ export async function startFastRunner(
   const launch = plan[plan.length - 1];
   const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
 
+  const signal = cancellationSignal();
   return new Promise((resolve, reject) => {
     const child = spawn('xcodebuild', launch.args, {
       env: {
@@ -797,6 +798,12 @@ export async function startFastRunner(
     const parser = createReadySignalParser();
     let resolved = false;
     const timer = setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
       child.kill('SIGTERM');
       reject(new Error(`Fast runner did not become ready within ${READY_TIMEOUT_MS / 1000}s`));
     }, READY_TIMEOUT_MS);
@@ -804,6 +811,13 @@ export async function startFastRunner(
     const handleChunk = (chunk: string, stream: 'stdout' | 'stderr'): void => {
       appendRunnerOutput(stream, chunk);
       if (resolved) return;
+      if (signal?.aborted) {
+        resolved = true;
+        clearTimeout(timer);
+        if (runnerProcess === child) clearStateFile();
+        reject(signal.reason);
+        return;
+      }
       const result = parser.feed(chunk);
       if (!result) return;
       resolved = true;
@@ -855,14 +869,16 @@ export async function startFastRunner(
     child.stderr!.on('data', (chunk: string) => handleChunk(chunk, 'stderr'));
 
     child.on('error', (err) => {
+      resolved = true;
       clearTimeout(timer);
       if (runnerProcess === child) {
         clearStateFile();
       }
-      reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
+      reject(isAbort(err) ? err : new Error(`Failed to spawn xcodebuild: ${err.message}`));
     });
 
     child.on('exit', (code, signal) => {
+      resolved = true;
       lastRunnerPostMortem = {
         available: true,
         provenance: 'spawned',

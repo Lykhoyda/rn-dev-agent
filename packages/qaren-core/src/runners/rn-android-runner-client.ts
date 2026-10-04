@@ -5,7 +5,7 @@
 import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
 import { QA_READ_ONLY_CAPABILITY, checkQaNativeOutcome } from './qa-native-policy.js';
 import { DEVICE_LEASE_REQUIRED, leaseFromEnvironment } from './lease-env.js';
-import { spawn, execFile, cancellableFetch, sleep } from '../domain/cancellation.js';
+import { spawn, execFile, cancellableFetch, sleep, cancellationSignal, isAbort, withCancellation } from '../domain/cancellation.js';
 import type { ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
@@ -594,7 +594,7 @@ export function shouldReapAndroidRunnerBeforeStart(
  * fixed port) fired readiness before the new ServerSocket bound, so the first
  * post-flow POST /command hit a dead port ("fetch failed"). Poll the runner's own
  * GET /health, which is true only once the socket is accepting. Bounded by timeoutMs
- * (defaults to the cold-start ready budget); never throws — returns false on timeout.
+ * (defaults to the cold-start ready budget); returns false on timeout.
  */
 export async function waitForAndroidRunnerHealth(
   port: number,
@@ -617,7 +617,9 @@ export async function waitForAndroidRunnerHealth(
         const body = (await resp.json()) as { ok?: boolean };
         if (body?.ok === true) return true;
       }
-    } catch {
+    } catch (error) {
+      cancellationSignal();
+      if (isAbort(error) && !controller.signal.aborted) throw error;
       // server not accepting yet — keep polling
     } finally {
       clearTimeout(timer);
@@ -1509,13 +1511,14 @@ async function startAndroidRunnerAttempt(
     });
   }
 
+  const signal = cancellationSignal(opts._rebuildSignal);
   return new Promise((resolve, reject) => {
     let resolved = false;
     let forwardRemoved = false;
     const removeForward = () => {
       if (forwardRemoved) return;
       forwardRemoved = true;
-      void execFileAsync('adb', buildAdbForwardRemoveArgs(serial, hostPort)).catch(() => {});
+      void withCancellation(undefined, () => execFileAsync('adb', buildAdbForwardRemoveArgs(serial, hostPort))).catch(() => {});
     };
 
     const child = spawn(
@@ -1555,10 +1558,9 @@ async function startAndroidRunnerAttempt(
 
     const finishReady = () => {
       if (resolved) return;
-      if (opts._rebuildSignal?.aborted) {
+      if (signal?.aborted) {
         resolved = true;
-        child.kill('SIGTERM');
-        reject(opts._rebuildSignal.reason);
+        reject(signal.reason);
         return;
       }
       resolved = true;
@@ -1602,7 +1604,7 @@ async function startAndroidRunnerAttempt(
       removeForward();
       if (resolved) return;
       resolved = true;
-      reject(new Error(`Failed to spawn Android runner instrumentation: ${err.message}`));
+      reject(isAbort(err) ? err : new Error(`Failed to spawn Android runner instrumentation: ${err.message}`));
     });
 
     child.on('exit', (code) => {
@@ -1622,58 +1624,66 @@ async function startAndroidRunnerAttempt(
 
     // GH#243: readiness is the runner's own /health, not the (stale-prone) logcat
     // ring buffer. /health is true only once the ServerSocket is actually accepting.
-    void waitForAndroidRunnerHealth(hostPort, { capability: authority.capability }).then(
-      async (healthy) => {
+    void withCancellation(signal, async () => {
+      const healthy = await waitForAndroidRunnerHealth(hostPort, { capability: authority.capability });
+      if (resolved) return;
+      signal?.throwIfAborted();
+      if (healthy) {
+        const info = await probeAndroidRunnerHealthInfo(hostPort, authority.capability);
         if (resolved) return;
-        if (healthy) {
-          const info = await probeAndroidRunnerHealthInfo(hostPort, authority.capability);
-          if (
-            !androidHealthMatchesAuthority(info, {
-              instanceId: authority.instanceId,
-              sessionId: authority.sessionId,
-              claimEpoch: authority.claimEpoch,
-              deviceId: authority.deviceId,
-              appId: authority.appId,
-            })
-          ) {
-            resolved = true;
-            child.kill('SIGTERM');
-            reject(new AndroidAuthorityStaleError(serial));
-            return;
-          }
-          const compat = classifyAndroidHealth(info);
-          if (!compat.compatible) {
-            resolved = true;
-            pendingUpgradeNote = undefined; // review amendment: never report an upgrade that failed
-            child.kill('SIGTERM');
-            if (compat.reason === 'missing-commands') {
-              // GH #418: typed — the wrapper's retry-once invalidates the APKs
-              // at open; mid-flow callers surface RUNNER_COMMANDS_STALE.
-              reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId, serial));
-              return;
-            }
-            reject(
-              new Error(
-                `RUNNER_PROTOCOL_MISMATCH: installed rn-android-runner speaks protocol ` +
-                  `${info.protocolVersion ?? 'none'} (bridge expects ${RUNNER_PROTOCOL_VERSION}). ` +
-                  `Rebuild + reinstall the runner APKs: cd ${RN_ANDROID_RUNNER_DIR} && ` +
-                  `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest, then adb install -r both APKs.`,
-              ),
-            );
-            return;
-          }
-          finishReady();
+        signal?.throwIfAborted();
+        if (
+          !androidHealthMatchesAuthority(info, {
+            instanceId: authority.instanceId,
+            sessionId: authority.sessionId,
+            claimEpoch: authority.claimEpoch,
+            deviceId: authority.deviceId,
+            appId: authority.appId,
+          })
+        ) {
+          resolved = true;
+          child.kill('SIGTERM');
+          reject(new AndroidAuthorityStaleError(serial));
           return;
         }
-        resolved = true;
-        child.kill('SIGTERM');
-        reject(
-          new Error(
-            `Android runner did not become ready within ${READY_TIMEOUT_MS / 1000}s (no /health on port ${hostPort})${diag ? `\n${diag.trim()}` : ''}`,
-          ),
-        );
-      },
-    );
+        const compat = classifyAndroidHealth(info);
+        if (!compat.compatible) {
+          resolved = true;
+          pendingUpgradeNote = undefined; // review amendment: never report an upgrade that failed
+          child.kill('SIGTERM');
+          if (compat.reason === 'missing-commands') {
+            // GH #418: typed — the wrapper's retry-once invalidates the APKs
+            // at open; mid-flow callers surface RUNNER_COMMANDS_STALE.
+            reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId, serial));
+            return;
+          }
+          reject(
+            new Error(
+              `RUNNER_PROTOCOL_MISMATCH: installed rn-android-runner speaks protocol ` +
+                `${info.protocolVersion ?? 'none'} (bridge expects ${RUNNER_PROTOCOL_VERSION}). ` +
+                `Rebuild + reinstall the runner APKs: cd ${RN_ANDROID_RUNNER_DIR} && ` +
+                `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest, then adb install -r both APKs.`,
+            ),
+          );
+          return;
+        }
+        finishReady();
+        return;
+      }
+      resolved = true;
+      child.kill('SIGTERM');
+      reject(
+        new Error(
+          `Android runner did not become ready within ${READY_TIMEOUT_MS / 1000}s (no /health on port ${hostPort})${diag ? `\n${diag.trim()}` : ''}`,
+        ),
+      );
+    }).catch((error: unknown) => {
+      removeForward();
+      if (resolved) return;
+      resolved = true;
+      if (!signal?.aborted && !isAbort(error)) child.kill('SIGTERM');
+      reject(error);
+    });
   });
 }
 

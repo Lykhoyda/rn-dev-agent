@@ -1,4 +1,4 @@
-import { sleep as cancellableSleep } from '../domain/cancellation.js';
+import { cancellationSignal, isAbort, interruptible } from '../domain/cancellation.js';
 import { execFile as execFileCb } from '../domain/cancellation.js';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
@@ -12,7 +12,6 @@ const execFile = promisify(execFileCb);
 const DAEMON_JSON = join(homedir(), '.agent-device', 'daemon.json');
 const DAEMON_LOCK = join(homedir(), '.agent-device', 'daemon.lock');
 const DAEMON_FILES = [DAEMON_JSON, DAEMON_LOCK];
-const SIGKILL_GRACE_MS = 500;
 const ADB_TIMEOUT_MS = 5_000;
 
 // The two packages our in-tree Android runner installs (see
@@ -24,16 +23,6 @@ export const OWNED_PACKAGES = [
   'dev.lykhoyda.rndevagent.androidrunner.test',
   'dev.lykhoyda.rndevagent.androidrunner',
 ] as const;
-
-/**
- * Self-kill guard: never SIGTERM/SIGKILL our own process or our parent. The
- * legacy daemon PID is read from ~/.agent-device/daemon.json, which can hold a
- * stale, OS-recycled PID — without this guard a recycled PID matching our own
- * tree would kill the MCP server (the exact collateral of `pkill -f agent-device`).
- */
-export function isProtectedPid(pid: number, selfPid: number, parentPid: number): boolean {
-  return pid === selfPid || pid === parentPid;
-}
 
 export interface ReleaseAndroidSlotResult {
   deviceId: string;
@@ -51,12 +40,9 @@ export interface ReleaseAndroidSlotDeps {
   resolveSerial: (deviceId?: string) => string[];
   readDaemonPid: () => number | null;
   isAlive: (pid: number) => boolean;
-  protectedPids: () => { selfPid: number; parentPid: number };
-  kill: (pid: number, sig: NodeJS.Signals) => void;
   fileExists: (p: string) => boolean;
   removeFile: (p: string) => void;
-  delay: (ms: number) => Promise<void>;
-  killLegacy: () => boolean;
+  cleanupLegacy: () => boolean;
   now: () => number;
 }
 
@@ -87,12 +73,9 @@ function defaultDeps(): ReleaseAndroidSlotDeps {
         return false;
       }
     },
-    protectedPids: () => ({ selfPid: process.pid, parentPid: process.ppid }),
-    kill: (pid, sig) => process.kill(pid, sig),
     fileExists: (p) => existsSync(p),
     removeFile: (p) => unlinkSync(p),
-    delay: cancellableSleep,
-    killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== '0',
+    cleanupLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== '0',
     now: () => Date.now(),
   };
 }
@@ -118,6 +101,7 @@ function resolveExactSerialArgs(
   try {
     return deps.resolveSerial(deviceId);
   } catch (err) {
+    if (isAbort(err)) throw err;
     throw new ExactAndroidDeviceRequiredError(err);
   }
 }
@@ -148,7 +132,7 @@ export async function releaseAndroidInteractionSlot(
   opts: { deviceId?: string; includeLegacy?: boolean; signal?: AbortSignal } = {},
   deps: ReleaseAndroidSlotDeps = defaultDeps(),
 ): Promise<ReleaseAndroidSlotResult> {
-  opts.signal?.throwIfAborted();
+  const signal = cancellationSignal(opts.signal);
   const serialArgs = resolveExactSerialArgs(deps, opts.deviceId);
   const deviceId = exactSerial(opts.deviceId, serialArgs);
   const timings: Record<string, number> = {};
@@ -163,11 +147,12 @@ export async function releaseAndroidInteractionSlot(
   // reliably free the device-side slot on its own (system_server keeps it).
   const tStop = deps.now();
   try {
-    await deps.stopOwnRunner(deviceId, opts.signal);
-    opts.signal?.throwIfAborted();
+    await interruptible(() => deps.stopOwnRunner(deviceId, signal), signal);
+    signal?.throwIfAborted();
     stoppedOwnRunner = true;
   } catch (err) {
-    opts.signal?.throwIfAborted();
+    if (isAbort(err)) throw err;
+    signal?.throwIfAborted();
     warnings.push(`stopping the Android runner failed: ${msg(err)}`);
   }
   timings.stopOwnRunner = deps.now() - tStop;
@@ -176,57 +161,44 @@ export async function releaseAndroidInteractionSlot(
   // tears down the device-side instrumentation the SIGTERM left alive.
   const tForceStop = deps.now();
   for (const pkg of OWNED_PACKAGES) {
-    opts.signal?.throwIfAborted();
+    signal?.throwIfAborted();
     try {
-      await deps.adbForceStop(pkg, serialArgs, opts.signal);
-      opts.signal?.throwIfAborted();
+      await interruptible(() => deps.adbForceStop(pkg, serialArgs, signal), signal);
+      signal?.throwIfAborted();
       forceStoppedPackages.push(pkg);
     } catch (err) {
-      opts.signal?.throwIfAborted();
+      if (isAbort(err)) throw err;
+      signal?.throwIfAborted();
       warnings.push(`am force-stop ${pkg} failed: ${msg(err)}`);
     }
   }
   timings.forceStop = deps.now() - tForceStop;
 
-  // Step 3 — legacy agent-device daemon (gated by RN_DEVICE_KILL_LEGACY; may
-  // belong to another project, so kill by SPECIFIC pid, never pkill, guarded
-  // against our own process tree).
   const tLegacy = deps.now();
-  if (opts.includeLegacy !== false && deps.killLegacy()) {
+  if (opts.includeLegacy !== false && deps.cleanupLegacy()) {
     try {
       const pid = deps.readDaemonPid();
       let keepFiles = false;
       if (pid !== null && deps.isAlive(pid)) {
-        const { selfPid, parentPid } = deps.protectedPids();
-        if (isProtectedPid(pid, selfPid, parentPid)) {
-          warnings.push(
-            `Refusing to kill agent-device daemon PID ${pid} — it is our own process/parent.`,
-          );
-          keepFiles = true;
-        } else {
-          try {
-            deps.kill(pid, 'SIGTERM');
-            await deps.delay(SIGKILL_GRACE_MS);
-            if (deps.isAlive(pid)) deps.kill(pid, 'SIGKILL');
-            killedDaemonPids.push(pid);
-          } catch (err) {
-            warnings.push(`kill daemon ${pid} failed: ${msg(err)}`);
-            keepFiles = true;
-          }
-        }
+        warnings.push(`PROCESS_OWNERSHIP_UNPROVEN: retaining live legacy daemon PID ${pid} and its files because its record has no process-birth identity`);
+        keepFiles = true;
       }
       if (!keepFiles) {
         for (const f of DAEMON_FILES) {
           if (!deps.fileExists(f)) continue;
           try {
+            signal?.throwIfAborted();
+            cancellationSignal();
             deps.removeFile(f);
             removedFiles.push(f);
           } catch (err) {
+            if (isAbort(err)) throw err;
             warnings.push(`rm ${f} failed: ${msg(err)}`);
           }
         }
       }
     } catch (err) {
+      if (isAbort(err)) throw err;
       warnings.push(`legacy daemon cleanup failed: ${msg(err)}`);
     }
   }
