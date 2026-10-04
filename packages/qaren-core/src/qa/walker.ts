@@ -68,6 +68,7 @@ export interface ActResult {
 
 export interface WalkerDeps {
   judge?: Judge;
+  publicationInterrupted?(): boolean;
   captureScreen(options?: { platformPresence?: boolean; timing?: TimingObserver }): Promise<Screen>;
   press(ref: string, context: QaDispatchContext): Promise<ActResult>;
   fill(ref: string, text: string, context: QaDispatchContext): Promise<ActResult>;
@@ -1540,7 +1541,8 @@ export async function runPlan(
           recoveries,
         ),
         videoPublication: videoPublication(),
-        publicationInterrupted: sequence.publicationInterrupted,
+        publicationInterrupted:
+          sequence.publicationInterrupted || deps.publicationInterrupted?.() === true,
       };
       if (store) ledger.blocksWritten = written;
       return outcome?.refusal

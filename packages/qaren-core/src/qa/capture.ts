@@ -1,3 +1,5 @@
+import type { ToolResult } from '../utils.js';
+import { foregroundSurfaceFromSnapshot } from '../handlers/expo-dev-menu.js';
 import { isRecord } from './questions.js';
 import { frontFromSurface, join, validateReactHostEvidence } from './screen.js';
 import type { DigestEntry, NativeNode, ReactHostEvidence, Screen } from './screen.js';
@@ -44,6 +46,45 @@ export interface NativeObservation {
   normalizationDroppedNodes?: unknown;
   surface?: string;
   snapshotVerdict?: unknown;
+}
+
+export function postAdmissionSnapshots<A>(
+  snapshot: (args: A) => Promise<ToolResult>,
+  appId: string,
+) {
+  let interrupted = false;
+  let appProcess: number | undefined;
+  return {
+    interrupted: () => interrupted,
+    async snapshot(args: A): Promise<ToolResult> {
+      const result = await snapshot(args);
+      let envelope: unknown;
+      try {
+        envelope = JSON.parse(result.content[0]?.text ?? '');
+      } catch {
+        return result;
+      }
+      if (!isRecord(envelope)) return result;
+      const meta = isRecord(envelope.meta) ? envelope.meta : undefined;
+      const data = isRecord(envelope.data) ? envelope.data : undefined;
+      const surface = meta?.foregroundSurface ?? foregroundSurfaceFromSnapshot(result, appId);
+      if (
+        surface === 'dev_client_picker' ||
+        surface === 'first_run_tutorial' ||
+        meta?.recovered !== undefined ||
+        meta?.recoveryTier !== undefined ||
+        meta?.recoveryReason !== undefined ||
+        meta?.code === 'RUNNER_LEAK' ||
+        meta?.reason === 'app-not-running'
+      )
+        interrupted = true;
+      const observed = data?.appProcessIdentifier;
+      if (appProcess !== undefined && observed !== appProcess) interrupted = true;
+      if (typeof observed === 'number' && Number.isSafeInteger(observed) && observed > 0)
+        appProcess = observed;
+      return result;
+    },
+  };
 }
 
 export interface ReactObservation {

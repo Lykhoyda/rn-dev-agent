@@ -25,7 +25,12 @@ import { compileFlow, FlowCompileError } from '../flow/compile.js';
 import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
 import type { ToolResult } from '../utils.js';
 import { HandlerError, adapt, describeError, secureMaskedFill, unwrap } from './adapt.js';
-import { AppProcessGoneError, captureScreen, type NativeObservation } from './capture.js';
+import {
+  AppProcessGoneError,
+  captureScreen,
+  postAdmissionSnapshots,
+  type NativeObservation,
+} from './capture.js';
 import { captureQaReact } from './react-capture.js';
 import type { LedgerRow } from './ledger.js';
 import { parsePlanWithJev, readPreparedPlan } from './plan.js';
@@ -332,6 +337,7 @@ async function openSession(
     throw new HandlerError(proof.code, proof.message);
   }
   const admittedAtMs = Date.now();
+  const admittedSnapshots = postAdmissionSnapshots(snapshot, appId);
   await cancelled();
   log(
     `bundle proven: ${proof.scriptURL} (${proof.appModules} app modules under ${target.worktree})`,
@@ -342,7 +348,7 @@ async function openSession(
     presenceBudgetMs?: number,
     qaTiming?: TimingContext,
   ) => {
-    const result = await snapshot({
+    const result = await admittedSnapshots.snapshot({
       action: 'snapshot',
       qaReadOnly: true,
       qaTiming,
@@ -367,7 +373,10 @@ async function openSession(
   };
   const devSettings = createDevSettingsHandler(getClient, {
     probeForegroundSurface: async () =>
-      foregroundSurfaceFromSnapshot(await snapshot({ action: 'snapshot' }), appId),
+      foregroundSurfaceFromSnapshot(
+        await admittedSnapshots.snapshot({ action: 'snapshot' }),
+        appId,
+      ),
   });
   for (const action of WALK_DEV_SETTINGS) {
     try {
@@ -393,6 +402,7 @@ async function openSession(
   const deps: WalkerDeps = {
     judge: createJev({ now, timing }),
     timing,
+    publicationInterrupted: admittedSnapshots.interrupted,
     captureScreen: (options) =>
       stop.track(() =>
         captureScreen({
@@ -575,6 +585,7 @@ async function main(): Promise<void> {
       ...(opened.deps.judge?.calls ?? []),
     ]);
     ledger.admittedAtMs = opened.admittedAtMs;
+    ledger.publicationInterrupted = opened.deps.publicationInterrupted?.() === true;
     return finish(ledger, () => opened.close());
   }
 }
