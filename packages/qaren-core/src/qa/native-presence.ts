@@ -325,6 +325,29 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
   return offscreen;
 }
 
+// Contradicted frames: a wholly off-screen node holding an on-screen descendant, plus such text inputs.
+export function frameContradictions(nodes: NativeNode[]): Set<number> {
+  const contradicted = new Set<number>();
+  const root = nodes[0]?.rect;
+  if (nodes[0]?.type !== 'Application' || !validRect(root) || !root.width || !root.height)
+    return contradicted;
+  const sized = (rect: Rect | undefined): rect is Rect =>
+    validRect(rect) && rect.width > 0 && rect.height > 0;
+  nodes.forEach((node, i) => {
+    if (!validRect(node.rect) || !within(node.rect, root)) return;
+    let parent = node.parentIndex;
+    for (let hops = 0; parent !== undefined && hops < nodes.length; hops++) {
+      const ancestor = nodes[parent];
+      if (ancestor && sized(ancestor.rect) && !within(ancestor.rect, root)) {
+        contradicted.add(parent);
+        if (TEXT_INPUT_TYPES.has(node.type ?? '')) contradicted.add(i);
+      }
+      parent = ancestor?.parentIndex;
+    }
+  });
+  return contradicted;
+}
+
 const DIAGNOSTIC_TYPES = new Set([
   'Application',
   'Window',

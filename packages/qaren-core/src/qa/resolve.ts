@@ -38,6 +38,7 @@ import {
   nativeLabelMayBeValue,
   privateCheckSubjects,
 } from './privacy.js';
+import { literalEvidence, visibilityEvidenceOf, type LiteralVerdict } from './evidence.js';
 
 export { ACT, CHECK } from './questions.js';
 export const MAX_CANDIDATES = 30;
@@ -362,7 +363,10 @@ function prepareAssertion(
 }
 
 function textIdentities(quoted: string, screen: Screen): number {
-  const visible = { ...screen, elements: screen.elements.filter((e) => !e.offscreen) };
+  const visible = {
+    ...screen,
+    elements: screen.elements.filter((e) => visibilityEvidenceOf(e) === 'visible'),
+  };
   const identities = exactIdentities(
     visible,
     { quoted, phrase: quoted, exact: 'text' },
@@ -374,27 +378,34 @@ function textIdentities(quoted: string, screen: Screen): number {
   return painted ? Math.min(painted, identities || painted) : identities;
 }
 
-export function targetVisible(target: Target, screen: Screen): boolean {
-  if (target.quoted === undefined) return false;
+export function targetEvidence(target: Target, screen: Screen): LiteralVerdict {
+  if (target.quoted === undefined) return 'fail';
+  const text = literalEvidence(screen, target.quoted, 'equals').verdict;
   if (target.exact) {
     const matches =
       target.exact === 'id'
         ? exactIdentities(screen, target, 'wait').map(({ element }) => element)
         : screen.elements.filter((e) => e.label === target.quoted);
     const count = target.exact === 'text' ? textIdentities(target.quoted, screen) : matches.length;
+    // Text on an unresolved frame is not yet a missing selector.
+    if (target.exact === 'text' && count === 0 && text === 'unsure') return 'unsure';
     // Duplicates are terminal; only a stored selector that no longer resolves re-walks.
     if (count !== 1)
       throw new ResolutionError({
         refuse: count > 1 ? 'TARGET_AMBIGUOUS' : 'REPLAY_SELECTOR',
         reason: `${count} identities match the stored ${target.exact} "${target.quoted}"`,
       });
-    return target.exact === 'text' ? true : !matches[0].offscreen;
+    return target.exact === 'text' || !matches[0].offscreen ? 'pass' : 'fail';
   }
-  return (
-    screen.elements.some(
-      (e) => !e.offscreen && (e.label === target.quoted || e.testID === target.quoted),
-    ) || assertionView(screen).some((t) => t === target.quoted)
-  );
+  const named = screen.elements
+    .filter((e) => e.label === target.quoted || e.testID === target.quoted)
+    .map(visibilityEvidenceOf);
+  if (text === 'pass' || named.includes('visible')) return 'pass';
+  return text === 'unsure' || named.includes('unresolved') ? 'unsure' : 'fail';
+}
+
+export function targetVisible(target: Target, screen: Screen): boolean {
+  return targetEvidence(target, screen) === 'pass';
 }
 
 export function elementSelector(element: Element): Selector | undefined {
@@ -440,9 +451,7 @@ export function judgeCheck(
   answer?: Answer,
 ): 'pass' | 'fail' | 'unsure' {
   return check.literal
-    ? assertionView(screen).some((t) => t.includes(check.text))
-      ? 'pass'
-      : 'fail'
+    ? literalEvidence(screen, check.text, 'contains').verdict
     : checkVerdict(checkQuestion(check), answer);
 }
 
