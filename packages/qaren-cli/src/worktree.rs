@@ -396,6 +396,32 @@ mod tests {
     }
 
     #[test]
+    fn failed_walks_preserve_saved_actions_using_canonical_wire_identifiers() {
+        let root = std::env::temp_dir().join(format!("qaren-canonical-block-{}", std::process::id()));
+        let app = root.join("app");
+        let actions = app.join(".qaren/actions");
+        std::fs::create_dir_all(&actions).unwrap();
+        let bytes = b"appId: com.example.app\n---\n# id: alice\n# intent: alice\n- assertVisible: { text: Hello }\n";
+        std::fs::write(actions.join("alice.yaml"), bytes).unwrap();
+        let ledger: crate::core::Ledger = serde_json::from_value(serde_json::json!({
+            "verdict": "FAIL", "path": "walk",
+            "blocks": [{"key": "•••", "outcome": "pass", "source": "discovered"}],
+            "blocksWritten": ["alice"], "steps": [],
+            "jev": {"calls": 0, "medianMs": 0},
+            "llmTurns": 0, "escapes": 0, "recoveries": 0
+        }))
+        .unwrap();
+        let dest = root.join("blocks");
+        let (copied, refused) =
+            copy_blocks(&app, ledger.blocks_written.as_deref().unwrap(), &dest);
+        assert_eq!(copied, ["alice"]);
+        assert!(refused.is_empty());
+        std::fs::remove_dir_all(&app).unwrap();
+        assert_eq!(std::fs::read(dest.join("alice.yaml")).unwrap(), bytes);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn copied_blocks_keep_the_unique_extension_and_exact_bytes() {
         let root = std::env::temp_dir().join(format!("qaren-block-ext-{}", std::process::id()));
         let app = root.join("app");

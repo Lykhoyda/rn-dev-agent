@@ -573,6 +573,27 @@ for (const suffix of ['', '2. Tap "missing"\n']) {
   });
 }
 
+test('saved block machine identifiers remain canonical after a later fill fails before dispatch', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qaren-fallback-'));
+  mkdirSync(join(dir, '.qaren'));
+  const fake = app({ initial: [element('@hello', 'Hello', { kind: 'text' })] });
+  const parsed = blocks(
+    '## QA\n\n### alice\n✓ "Hello"\n\n### Later\n1. Fill "missing" with "alice"\n',
+  );
+  const result = await runPlan(parsed, fake.deps, [], {
+    appRoot: dir,
+    platform: 'ios',
+    appId: 'com.example.app',
+  });
+  assert.equal(result.verdict, 'FAIL');
+  assert.deepEqual(fake.typed, []);
+  assert.deepEqual(result.blocksWritten, ['alice']);
+  assert.equal(result.blocks[0].key, '•••');
+  assert.equal(result.blocks[0].saved, undefined);
+  assert.equal(parsed[0].slug, 'alice');
+  assert.equal(existsSync(join(dir, '.qaren', 'actions', `${result.blocksWritten![0]}.yaml`)), true);
+});
+
 test('U13: deferred writes keep order and content for runs without a private fill', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'qaren-fallback-'));
   mkdirSync(join(dir, '.qaren'));

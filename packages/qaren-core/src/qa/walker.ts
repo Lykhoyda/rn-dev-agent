@@ -1367,7 +1367,7 @@ export async function runPlan(
         ),
         videoPublication: videoPublication(),
       };
-      if (store) ledger.blocksWritten = written.map((key) => privacy.redactIdentifier(key));
+      if (store) ledger.blocksWritten = written;
       return outcome?.refusal
         ? {
             ...ledger,
