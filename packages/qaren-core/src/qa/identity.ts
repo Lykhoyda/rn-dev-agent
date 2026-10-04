@@ -41,7 +41,8 @@ function forwardsInput(screen: Screen, element: Element, matched: readonly Eleme
       (host.capabilities.fill === true ||
         ['textinput', 'search', 'textbox', 'searchbox'].includes(host.role?.toLowerCase() ?? '')),
   );
-  return hosts ? hosts.length <= 1 : element.kind !== 'input';
+  // A React-only input is the native input's own host only on positive single-host evidence.
+  return element.kind === 'input' ? hosts?.length === 1 : (hosts?.length ?? 0) <= 1;
 }
 
 const nested = (a: Element, b: Element): boolean => {

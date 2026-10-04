@@ -335,3 +335,21 @@ test('gh-581 bind: positional ref with a shifted identity rebinds by signature o
   const tieBroken = bindExactFillTarget(sameCount as never, '@e11', sameCountSig as never);
   assert.ok(!tieBroken.ok, 'flat-index tie-breaking must never bind a fill target');
 });
+
+test('S8: a different-kind twin carrying the bound testID is ambiguous at bind time', () => {
+  const button = {
+    ref: '@e40',
+    identifier: 'email',
+    type: 'Button',
+    rect: { x: 0, y: 90, width: 10, height: 10 },
+  };
+  for (const [ref, signature] of [
+    ['email', undefined],
+    ['@e11', { type: 'TextField', identifier: 'email' }],
+    ['@e10', signatureFor('@e10')],
+  ] as const) {
+    const out = bindExactFillTarget([...NODES, button] as never, ref, signature as never);
+    assert.ok(!out.ok, ref);
+    assert.equal((out as { ambiguous?: boolean }).ambiguous, true, ref);
+  }
+});

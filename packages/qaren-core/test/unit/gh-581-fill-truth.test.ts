@@ -225,7 +225,7 @@ test('gh-581: duplicate wrapper mapping rejects without mutation', async () => {
     performExactFill({ ref: '@e1', text: 'Anna' }, null, NATIVE_ONLY),
   );
   const env = envelope(result as never);
-  assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
+  assert.equal(env.code, 'TARGET_AMBIGUOUS');
   assert.equal(env.meta.mutation, 'none');
   assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'), 'no mutation dispatched');
 });
@@ -243,7 +243,7 @@ test('gh-581: duplicate direct testIDs reject without mutation', async () => {
   const { result, calls } = await withFillSeam({ nodes }, () =>
     performExactFill({ ref: 'last-name', text: 'x' }, null, NATIVE_ONLY),
   );
-  assert.equal(envelope(result as never).code, 'NO_TEXT_INPUT_TARGET');
+  assert.equal(envelope(result as never).code, 'TARGET_AMBIGUOUS');
   assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'));
 });
 

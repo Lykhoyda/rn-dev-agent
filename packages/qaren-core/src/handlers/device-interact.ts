@@ -36,6 +36,8 @@ import type { RecoveryTier } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
 import type { FlatNode } from '../fast-runner-ref-map.js';
 import type { CDPClient } from '../cdp-client.js';
+import { exactIdentities } from '../qa/identity.js';
+import { join, type NativeNode } from '../qa/screen.js';
 import {
   getCachedSignature,
   isRefMapFresh,
@@ -659,7 +661,7 @@ export interface ExactFillBinding {
 
 export type ExactBindOutcome =
   | { ok: true; binding: ExactFillBinding }
-  | { ok: false; detail: string; unobservable?: true };
+  | { ok: false; detail: string; unobservable?: true; ambiguous?: true };
 
 function cleanNodeRef(node: SnapshotNode): string {
   return node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
@@ -691,6 +693,15 @@ function rectsMatch(
   );
 }
 
+// Every node carrying the testID counts, whatever its type; proven XCUI echoes collapse in the shared identity model.
+function nodesWithTestID(nodes: SnapshotNode[], id: string): SnapshotNode[] {
+  return exactIdentities(
+    join(nodes as unknown as NativeNode[], []),
+    { quoted: id, phrase: id, exact: 'id' },
+    'fill',
+  ).flatMap(({ element }) => nodes.filter((n) => n.ref === element.ref));
+}
+
 // A positional @eN may only bind when its identity still matches the
 // signature captured BEFORE this binding snapshot; a shifted generation
 // rebinds by unique identity or rejects — never by recycled position.
@@ -717,29 +728,34 @@ export function bindExactFillTarget(
     }
     const signature = priorSignature as RefSignature;
     const signatureIdentifier = inputTestId(signature.identifier);
-    const matches = nodes.filter((n) => {
-      if ((n.type ?? '') !== signature.type) return false;
-      if (signatureIdentifier !== null) return n.identifier === signatureIdentifier;
-      if (signature.rect !== undefined && n.rect !== undefined) {
-        return rectsMatch(n.rect, signature.rect);
-      }
-      return n.label === signature.label && inputTestId(n.identifier) === null;
-    });
+    // An id-less input is rebound by type and frame: its label is the typed value on Android.
+    const matches =
+      signatureIdentifier !== null
+        ? nodesWithTestID(nodes, signatureIdentifier)
+        : nodes.filter((n) => {
+            if ((n.type ?? '') !== signature.type) return false;
+            if (signature.rect !== undefined && n.rect !== undefined) {
+              return rectsMatch(n.rect, signature.rect);
+            }
+            return n.label === signature.label && inputTestId(n.identifier) === null;
+          });
     if (matches.length !== 1) {
       return {
         ok: false,
+        ...(matches.length > 1 ? { ambiguous: true as const } : {}),
         detail: `ref @${clean} identity ${matches.length > 1 ? 'matches multiple elements' : 'is absent'} in the current snapshot`,
       };
     }
     node = matches[0];
   } else {
-    const matches = nodes.filter((n) => n.identifier === clean);
+    const matches = nodesWithTestID(nodes, clean);
     if (matches.length === 0) {
       return { ok: false, detail: `no element with testID "${clean}" in the current snapshot` };
     }
     if (matches.length > 1) {
       return {
         ok: false,
+        ambiguous: true,
         detail: `testID "${clean}" matches ${matches.length} elements — duplicate identifiers cannot bind an exact input`,
       };
     }
@@ -762,7 +778,14 @@ export function bindExactFillTarget(
   if (id?.endsWith(PRESSABLE_SUFFIX)) {
     const base = id.slice(0, -PRESSABLE_SUFFIX.length);
     if (base) {
-      const inputs = nodes.filter((n) => n.identifier === base && isRecognizedInputType(n.type));
+      const named = nodesWithTestID(nodes, base);
+      if (named.length > 1)
+        return {
+          ok: false,
+          ambiguous: true,
+          detail: `wrapper "${id}" maps to ${named.length} elements with testID "${base}" — ambiguous`,
+        };
+      const inputs = named.filter((n) => isRecognizedInputType(n.type));
       if (inputs.length === 1) {
         return {
           ok: true,
@@ -774,12 +797,6 @@ export function bindExactFillTarget(
             wrapper: true,
             secure: isSecureInputNode(inputs[0]),
           },
-        };
-      }
-      if (inputs.length > 1) {
-        return {
-          ok: false,
-          detail: `wrapper "${id}" maps to ${inputs.length} inputs with testID "${base}" — ambiguous`,
         };
       }
       return {
@@ -1272,6 +1289,12 @@ export async function performExactFill(
         bind.detail.includes('is not a recognized text input'))
         ? ' If you already tapped this field and the software keyboard is up, retry with focused: true.'
         : '';
+    if (bind.ambiguous)
+      return failResult(
+        `TARGET_AMBIGUOUS: device_fill found more than one element for the target: ${bind.detail}. No text was entered.`,
+        'TARGET_AMBIGUOUS',
+        { mutation: 'none', pathsTried },
+      );
     return fillFailure(
       'NO_TEXT_INPUT_TARGET',
       `device_fill could not bind an exact input: ${bind.detail}. No text was entered.${focusedHint}`,
