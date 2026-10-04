@@ -1659,3 +1659,43 @@ for (const shape of ['wrapper', 'none'] as const) {
     assert.match(outcome.failure?.seen ?? '', /not retried/);
   });
 }
+
+function twinScreen(): Screen {
+  return joinScreen(
+    [
+      { ref: '@window', type: 'Application', rect: { x: 0, y: 0, width: 400, height: 800 } },
+      {
+        ref: '@twin',
+        identifier: 'qa-twin-same',
+        type: 'TextField',
+        hittable: true,
+        rect: { x: 20, y: 100, width: 360, height: 60 },
+      },
+    ],
+    [
+      { role: 'textinput', testID: 'qa-twin-same', capabilities: { fill: true } },
+      { role: 'textinput', testID: 'qa-twin-same', capabilities: { fill: true } },
+    ],
+  );
+}
+
+test('a native input and its React-only twin with the same testID refuse as ambiguous', () => {
+  const joined = twinScreen();
+  assert.equal(
+    joined.elements.some((e) => e.ref.startsWith('react:')),
+    true,
+  );
+  const strict = prepareTarget(fill('qa-twin-same'), joined);
+  assert.ok('refuse' in strict);
+  assert.equal(strict.refuse, 'TARGET_AMBIGUOUS');
+});
+
+test('twin inputs are refused before any tap or typing', async () => {
+  const joined = twinScreen();
+  const fake = app({ initial: joined.elements, initialKeyboard: false });
+  const result = await walkBlock(blocks(plan(EMAIL, 'qa-twin-same', ''))[0], fake.deps);
+  assert.equal(result.block.outcome, 'fail');
+  assert.match(result.failure?.seen ?? '', /^TARGET_AMBIGUOUS:/);
+  assert.deepEqual(mutations(fake.log), []);
+  assert.deepEqual(fake.typed, []);
+});

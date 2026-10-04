@@ -97,15 +97,22 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
       ? semanticActionView(screen, step.kind)
       : { elements: visibility ? screen.elements : actionView(screen) };
   if ('refuse' in projected) return projected;
-  const eligible = projected.elements.filter(
+  const matchable = projected.elements.filter(
     (e) =>
-      semantic ||
-      ((visibility || !e.disabled) &&
-        (step.kind !== 'fill' || (e.kind === 'input' && !e.ref.startsWith('react:')))),
+      semantic || ((visibility || !e.disabled) && (step.kind !== 'fill' || e.kind === 'input')),
   );
+  // A strict fill acts only on a native input; React-only inputs still count toward ambiguity.
+  const reactOnlyFill = (e: Element) =>
+    !semantic && step.kind === 'fill' && e.ref.startsWith('react:');
+  const eligible = matchable.filter((e) => !reactOnlyFill(e));
   const candidates = eligible;
   if (target.quoted !== undefined) {
-    const exact = eligible.filter((e) => matches(e, target.quoted!, step.kind, target.exact));
+    const exact = matchable.filter((e) => matches(e, target.quoted!, step.kind, target.exact));
+    if (exact.length === 1 && reactOnlyFill(exact[0]))
+      return {
+        refuse: 'TARGET_NOT_FOUND',
+        reason: `no eligible element labelled or identified "${target.quoted}" is on screen`,
+      };
     if (exact.length === 1)
       return exact[0].offscreen ? { scroll: 'down' } : { ref: exact[0].ref, element: exact[0] };
     // A replayed selector names one element; anything else re-walks the step instead of asking Jev.

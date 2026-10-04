@@ -85,10 +85,12 @@ strict binding refuses `NO_TEXT_INPUT_TARGET` before any text mutation for a
 non-native-input target. Phrase fills and stored replay selectors do not use
 this fallback; ambiguous targets and potentially mutated fills still fail.
 
-React-only input projections are excluded from quoted strict fill resolution.
-An accessibility-hidden input represented only in React evidence therefore
-returns `TARGET_NOT_FOUND`, allowing the guarded native-wrapper fallback without
-scrolling. A genuine offscreen native input still requests scrolling; an onscreen
+React-only input projections still count when matching a quoted strict fill,
+so a native input and a React-only input sharing its testID refuse as
+`TARGET_AMBIGUOUS` before any tap. A strict fill never acts on a React-only
+input: when one is the only match, an accessibility-hidden input represented
+only in React evidence returns `TARGET_NOT_FOUND`, allowing the guarded
+native-wrapper fallback without scrolling. A genuine offscreen native input still requests scrolling; an onscreen
 native input resolves strictly.
 
 Tap-based fallback requires one onscreen, enabled, nonsecure native element
