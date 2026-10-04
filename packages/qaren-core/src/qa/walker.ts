@@ -30,8 +30,7 @@ import {
 } from './blocks.js';
 import { type Judge, type JevCall, JevError, unavailableJudge } from './questions.js';
 import { type LoginMarker, recover } from './recover.js';
-import { persistRunPolicy } from './privacy-projection.js';
-import { isPrivateInput, MASK, ObservedPrivacy } from './privacy.js';
+import { isPrivateInput, MASK, ObservedPrivacy, matchPrivate, projectPlanLine } from './privacy.js';
 import { NativeSnapshotIncomplete, PrivateInputCaptureError } from './private-input.js';
 import { AppProcessGoneError, emitCaptureDiagnostics, NativeCaptureError } from './capture.js';
 import { QaDispatchContext, QaDispatchError } from '../domain/qa-dispatch.js';
@@ -492,6 +491,11 @@ export async function walkBlock(
   };
   let shots = shotIndex;
   const emit = (row: LedgerRow): void => {
+    if (
+      block.items.some((item) => item.line === row.line && item.kind === 'fill') &&
+      (row.outcome === 'pass' || row.reason?.includes('UNVERIFIED_FILL'))
+    )
+      privacy.didFill();
     let timing: RowTiming | undefined;
     try {
       timing = deps.rowTiming?.(row.t);
@@ -506,7 +510,11 @@ export async function walkBlock(
   // A stored selector is written to the action file, so it must not carry a protected value.
   const stored = (selector: Selector | undefined): { selector?: Selector } => {
     const value = selector?.id ?? selector?.text;
-    return selector && value !== undefined && redact(value) === value ? { selector } : {};
+    return selector &&
+      value !== undefined &&
+      !matchPrivate(value, privacy.privateSet(), 'persisted').hit
+      ? { selector }
+      : {};
   };
   const exactSelector = (target: Target): Selector | undefined =>
     target.exact === 'id'
@@ -519,7 +527,7 @@ export async function walkBlock(
   const base = (item: Item, attempt: number): Omit<LedgerRow, 'outcome'> => ({
     block: block.slug,
     line: item.line,
-    text: redact(item.raw),
+    text: projectPlanLine(item.raw, privacy.privateSet()).text,
     attempt,
     kind: item.kind === 'check' ? 'check' : 'step',
     resolvedBy,
@@ -1537,10 +1545,10 @@ export async function runPlan(
     const pending: { index: number; write: () => BlockResult }[] = [];
     // The slug stays the operational file name (blocksWritten); a display copy that hits is withheld whole.
     const display = (slug: string): string =>
-      privacy.redactIdentifier(slug) === slug ? slug : MASK;
-    const unprotected = (value: string): boolean => privacy.redact(value) === value;
+      matchPrivate(slug, privacy.privateSet(), 'identifier').hit ? MASK : slug;
+    const unprotected = (value: string): boolean =>
+      !matchPrivate(value, privacy.privateSet(), 'persisted').hit;
     const finish = (outcome?: WalkOutcome): WalkResult => {
-      persistRunPolicy(privacy.privateSet());
       for (const { index, write } of pending.splice(0)) results[index] = write();
       const ledger: WalkResult = {
         ...buildLedger(
@@ -1548,7 +1556,7 @@ export async function runPlan(
           steps.map(({ selector, ...row }) => ({
             ...row,
             block: display(row.block),
-            text: privacy.redact(row.text),
+            text: projectPlanLine(row.text, privacy.privateSet()).text,
             ...(row.reason !== undefined ? { reason: privacy.redact(row.reason) } : {}),
             ...(selector && unprotected(selector.id ?? selector.text ?? '') ? { selector } : {}),
           })),

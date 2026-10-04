@@ -3725,7 +3725,6 @@ fn cancelled_pr_walks_with_or_without_source_drift_cannot_publish() {
             &mut publisher,
             &runs,
             &run_id(),
-            &repo.join("verdict.md"),
             &qaren::redact::MachineIdentity::default(),
         );
         assert_eq!(published.result, ReceiptResult::Refused);
@@ -3788,7 +3787,6 @@ fn pr_walk_result(candidate_drift: bool) {
             &mut publisher,
             &repo.join("runs"),
             &run_id(),
-            &repo.join("verdict.md"),
             &qaren::redact::MachineIdentity::default(),
         );
         assert_eq!(published.result, ReceiptResult::Failed);

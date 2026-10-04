@@ -582,7 +582,7 @@ export async function decideScreen(
     text: string,
   ) => {
     if (!assertion || !('question' in assertion)) return undefined;
-    if (mask.apply(text).includes(MASK) || privacy.namesProtectedBox(text, screen)) return 'unsure';
+    if (mask.apply(text).includes(MASK)) return 'unsure';
     const elements = assertion.evidence.elements;
     return (
       protectedCheckBound({ kind: 'check', text, literal: false }, screen, values) ??
@@ -614,7 +614,7 @@ export async function decideScreen(
     questions[visibilityId] = presence.question;
   const sanitize = mask.apply;
   for (const q of Object.values(questions)) {
-    q.instructions = `${sanitize(q.instructions)} Each opaque QAREN_VALUE token represents one original value. The same token in the expectation and observed text is evidence of the same value; different tokens represent different values. Text equal to a protected value is always shown as its token, so unmasked text never equals a token's value. Tokens disclose no content, length, format, order or validity. ${MASK} conceals fragments and is never assertion evidence.`;
+    q.instructions = `${sanitize(q.instructions)} Each opaque QAREN_VALUE token represents one original value. The same token in the expectation and observed text is evidence of the same value; different tokens represent different values. Text equal to a protected value is always shown as its token, so unmasked text never equals a token's value. Tokens disclose no content, length, format, order or validity. ${MASK} hides private input values and is never assertion evidence.`;
     if (q.criteria)
       q.criteria = Object.fromEntries(
         Object.entries(q.criteria).map(([key, text]) => {

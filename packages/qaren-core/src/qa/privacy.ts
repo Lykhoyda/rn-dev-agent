@@ -20,6 +20,7 @@ const privateScreens = new WeakMap<
   Screen,
   {
     values: string[];
+    secrets: string[];
     subjects: PrivateSubject[];
     sensitivePixels: boolean;
   }
@@ -42,10 +43,12 @@ export function capturePrivateScreen(
     if (value) values.add(value);
     if (value.trim()) values.add(value.trim());
   };
+  const secrets = new Set<string>();
   const subjects: PrivateSubject[] = [];
   let unassociatedSecure = false;
   for (const fact of facts) {
     fact.values.forEach(add);
+    if (fact.secure) fact.values.filter(Boolean).forEach((value) => secrets.add(value));
     const uncertain =
       fact.secure || !fact.associationUnique || inputCheckSubject(fact.elements[0]) !== 'supported';
     subjects.push({
@@ -61,6 +64,17 @@ export function capturePrivateScreen(
         fact.elements.length === 0 ||
         (!fact.associationUnique && !fact.elements.some((e) => e.label || e.placeholder)),
     });
+    if (fact.secure) {
+      for (const element of fact.elements) {
+        for (const value of inputPrivacy.get(element)?.values ?? []) if (value) secrets.add(value);
+        if (element.value) secrets.add(element.value);
+        if (
+          element.label &&
+          ((fact.labelMayBeValue ?? fact.secure) || nativeLabelMayBeValue(element))
+        )
+          secrets.add(element.label);
+      }
+    }
     if (fact.secure && !fact.associationUnique) unassociatedSecure = true;
     for (const element of fact.elements) {
       if (uncertain) uncertainPrivateInputs.add(element);
@@ -85,6 +99,7 @@ export function capturePrivateScreen(
   }
   privateScreens.set(screen, {
     values: [...values],
+    secrets: [...secrets],
     subjects,
     sensitivePixels:
       values.size > 0 ||
@@ -164,29 +179,16 @@ export interface PrivateValue {
   provenance: Provenance;
 }
 
-// Adjacent single-character boxes that render part of a protected value; the key is structural.
-export interface FragmentContext {
-  key: string;
-  boxes: readonly string[];
-}
-
 export interface PrivateSet {
   values: readonly PrivateValue[];
-  contexts?: readonly FragmentContext[];
-  boxElements?: WeakSet<Element>;
 }
 
-// model: opaque tokens; durable: masked text; identifier: durable with typed values always masked;
-// persisted: no rewrite, any hit withholds the whole artifact.
 export type Policy = 'model' | 'durable' | 'identifier' | 'persisted';
 
 const WORD = '\\p{L}\\p{M}\\p{N}_';
-const TOKEN = /[\p{L}\p{M}\p{N}_.@-]+/gu;
 const SHORT = 3;
 const escape = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const coreOf = (token: string): string => token.replace(/^[_.@-]+|[_.@-]+$/g, '');
 const chars = (text: string): number => [...text].length;
-// A short non-secret value matches only between word boundaries.
 const whole = (pattern: string): string => `(?<![${WORD}])${pattern}(?![${WORD}])`;
 
 function forms(value: string): string[] {
@@ -197,68 +199,101 @@ function forms(value: string): string[] {
   ].filter(Boolean);
 }
 
-// Digits shown with or without grouping separators (`1234 5678 90` for `1234567890`).
-const DIGIT_GAP = '[\\s.\\-\\u00a0\\u202f]';
+const DIGIT_GAP = '[ .\\-/]';
 function digitForm(value: string): string | undefined {
-  const digits = value.replace(new RegExp(DIGIT_GAP, 'gu'), '');
+  const digits = value.trim().replace(new RegExp(DIGIT_GAP, 'gu'), '');
   if (!/^\d{4,}$/.test(digits)) return undefined;
-  return `(?<!\\p{N})${[...digits].join(`${DIGIT_GAP}?`)}(?!\\p{N})`;
+  return [...digits].join(`${DIGIT_GAP}?`);
 }
 
-interface Rule {
-  pattern: string;
-}
-
-function rulesOf(value: PrivateValue, policy: Policy): Rule[] {
-  return forms(value.text).map((form): Rule => {
-    const escaped = escape(form);
-    if (policy === 'identifier' && chars(form) < SHORT) return { pattern: whole(escaped) };
-    if (
-      value.provenance === 'secret' ||
-      value.provenance === 'concealed' ||
-      (value.provenance === 'typed' && policy === 'identifier')
-    )
-      return { pattern: `[${WORD}.@-]*${escaped}[${WORD}.@-]*` };
-    return { pattern: chars(form) < SHORT ? whole(escaped) : escaped };
-  });
-}
-
-function rulesFor(set: PrivateSet, policy: Policy): Rule[] {
-  return set.values
-    .flatMap((value) => {
-      const rules = rulesOf(value, policy);
-      const digits = digitForm(value.text);
-      return rules.length && digits ? [...rules, { pattern: digits }] : rules;
-    })
-    .sort((a, b) => b.pattern.length - a.pattern.length);
-}
-
-function maskFragments(text: string, set: PrivateSet): string {
-  let out = text;
-  for (const context of set.contexts ?? []) {
-    const row = context.boxes.map(escape).join('\\s*\\|\\s*');
-    out = out.replace(
-      new RegExp(`(?<![${WORD}])${row}(?![${WORD}])`, 'gu'),
-      context.boxes.map(() => MASK).join(' | '),
-    );
-  }
-  return out;
-}
-
-// The one matcher every sink calls; `token` names the opaque replacement of an exact model value.
 export function matchPrivate(
   text: string,
   set: PrivateSet,
   policy: Policy,
   token?: (value: string) => string | undefined,
 ): { text: string; hit: boolean } {
-  const rules = rulesFor(set, policy);
-  let out = maskFragments(text, set);
-  if (rules.length) {
-    const pattern = new RegExp(rules.map((rule) => `(${rule.pattern})`).join('|'), 'gu');
-    out = out.replace(pattern, (match) => token?.(match) ?? MASK);
+  const rules = set.values
+    .flatMap((value) => {
+      const length = chars(value.text.trim());
+      if (length < SHORT && value.provenance !== 'secret') return [];
+      const patterns = forms(value.text).map((form) =>
+        value.provenance === 'secret' && length === 1 ? whole(escape(form)) : escape(form),
+      );
+      const digits = digitForm(value.text);
+      if (digits) patterns.push(digits);
+      return patterns.map((pattern) => ({ pattern, value: value.text }));
+    })
+    .sort((a, b) => b.pattern.length - a.pattern.length);
+  if (!rules.length) return { text, hit: false };
+  let hit = false;
+  const pattern = new RegExp(rules.map((rule) => `(${rule.pattern})`).join('|'), 'gu');
+  const projected = text.replace(pattern, (match, ...groups) => {
+    hit = true;
+    const index = rules.findIndex((_, i) => groups[i] !== undefined);
+    return policy === 'model' ? (token?.(rules[index].value) ?? MASK) : MASK;
+  });
+  return { text: projected, hit };
+}
+
+export function projectPlanLine(
+  text: string,
+  set: PrivateSet,
+  policy: Policy = 'durable',
+): { text: string; hit: boolean } {
+  const prefix = text.match(/^\s*\d+\.\s+/)?.[0] ?? '';
+  let hit = false;
+  const body = text.slice(prefix.length).replace(/"([^"\n]*)"/g, (quoted, value: string) => {
+    if (
+      !set.values.some(
+        (entry) =>
+          entry.provenance === 'typed' &&
+          chars(entry.text.trim()) < SHORT &&
+          forms(entry.text).includes(value),
+      )
+    )
+      return quoted;
+    hit = true;
+    return `"${MASK}"`;
+  });
+  const projected = matchPrivate(body, set, policy);
+  return { text: prefix + projected.text, hit: hit || projected.hit };
+}
+
+export function codeBoxRows(screen: Screen): Element[][] {
+  const candidates = screen.elements.filter(
+    (element) =>
+      !element.offscreen &&
+      element.kind === 'text' &&
+      (chars(element.label ?? '') === 1 || chars(element.value ?? '') === 1) &&
+      (elementFrame(element)?.width ?? 0) > 0,
+  );
+  const bands: Element[][] = [];
+  for (const element of candidates.sort((a, b) => elementFrame(a)!.y - elementFrame(b)!.y)) {
+    const frame = elementFrame(element)!;
+    const band = bands.find((row) => {
+      const first = elementFrame(row[0])!;
+      return Math.abs(frame.y + frame.height / 2 - first.y - first.height / 2) <= 4;
+    });
+    if (band) band.push(element);
+    else bands.push([element]);
   }
-  return { text: out, hit: out !== text };
+  return bands.flatMap((band) => {
+    band.sort((a, b) => elementFrame(a)!.x - elementFrame(b)!.x);
+    const widths = band.map((element) => elementFrame(element)!.width).sort((a, b) => a - b);
+    const middle = Math.floor(widths.length / 2);
+    const median = widths.length % 2 ? widths[middle] : (widths[middle - 1] + widths[middle]) / 2;
+    const rows: Element[][] = [[]];
+    for (const element of band) {
+      const row = rows[rows.length - 1];
+      const previous = row[row.length - 1];
+      const frame = elementFrame(element)!;
+      const before = previous && elementFrame(previous)!;
+      if (before && (frame.x <= before.x || frame.x - before.x - before.width > 1.5 * median))
+        rows.push([element]);
+      else row.push(element);
+    }
+    return rows.filter((row) => row.length >= 3);
+  });
 }
 
 const NATIVE_TYPES = new Set([
@@ -427,8 +462,9 @@ export class ObservedPrivacy {
   private readonly concealed = new Set<string>();
   private readonly secret = new Set<string>();
   private readonly preclassified: string[] = [];
-  private readonly contexts = new Map<string, FragmentContext>();
-  private readonly boxElements = new WeakSet<Element>();
+  private filled = false;
+  private readonly codeRows = new WeakMap<Screen, Element[][]>();
+  private readonly codeElements = new WeakSet<Element>();
   private sensitivePixels = false;
 
   constructor(private readonly typed: readonly string[] = []) {}
@@ -440,10 +476,20 @@ export class ObservedPrivacy {
 
   observe(screen: Screen): void {
     this.sensitivePixels ||= privateScreens.get(screen)?.sensitivePixels === true;
-    for (const value of privateScreens.get(screen)?.values ?? []) this.secret.add(value);
+    for (const value of privateScreens.get(screen)?.secrets ?? []) this.secret.add(value);
     for (const value of inputValues(screen)) this.observed.add(value);
     for (const value of inputValues(screen, true)) this.concealed.add(value);
-    this.retainFragments(screen);
+    if (this.filled) {
+      const rows = codeBoxRows(screen);
+      this.codeRows.set(screen, rows);
+      for (const element of rows.flat()) this.codeElements.add(element);
+      this.sensitivePixels ||= rows.length > 0;
+    }
+    for (const element of screen.elements)
+      if (element.secure) {
+        for (const value of inputPrivacy.get(element)?.values ?? []) this.secret.add(value);
+        if (element.value) this.secret.add(element.value);
+      }
     const text = [
       ...screen.visibleText,
       ...screen.elements
@@ -455,39 +501,12 @@ export class ObservedPrivacy {
     );
   }
 
-  // Contexts accumulate across observations: a later screen never releases an earlier box.
-  private retainFragments(screen: Screen): void {
-    const values = [...this.concealed, ...this.secret].flatMap(forms);
-    if (!values.length) return;
-    let run: Element[] = [];
-    const flush = (): void => {
-      for (let a = 0; a < run.length; a++)
-        for (let b = run.length - 1; b > a; b--) {
-          const window = run.slice(a, b + 1);
-          const boxes = window.map((element) => element.label!.trim());
-          if (!values.some((value) => value.includes(boxes.join('')))) continue;
-          const key = window.map((element) => element.ref).join(',');
-          this.contexts.set(`${key}\u0000${boxes.join('')}`, { key, boxes });
-          for (const element of window) this.boxElements.add(element);
-          a = b;
-          break;
-        }
-      run = [];
-    };
-    for (const element of screen.elements) {
-      const box = !element.offscreen && chars(element.label?.trim() ?? '') === 1;
-      const previous = run[run.length - 1];
-      if (box && previous && !sameRow(previous, element)) flush();
-      if (box) run.push(element);
-      else flush();
-    }
-    flush();
+  didFill(): void {
+    this.filled = true;
   }
 
-  // A value typed where the screen cannot show us the field: mask it everywhere, even as a substring.
   concealFallback(value: string): void {
     this.concealed.add(value);
-    this.secret.add(value);
     this.sensitivePixels = true;
   }
 
@@ -505,8 +524,6 @@ export class ObservedPrivacy {
         ...tagged([...this.typed, ...this.preclassified], 'typed'),
         ...tagged(this.observed, 'observed'),
       ],
-      contexts: [...this.contexts.values()],
-      boxElements: this.boxElements,
     };
   }
 
@@ -515,7 +532,7 @@ export class ObservedPrivacy {
   }
 
   maskForModel(values: readonly string[], source: readonly string[]): ModelMask {
-    return modelMask(values, source, this.privateSet());
+    return modelMask(values, source, this.privateSet(), this.codeElements);
   }
 
   redactIdentifier(text: string): string {
@@ -527,7 +544,10 @@ export class ObservedPrivacy {
   }
 
   screenText(screen: Screen): string[] {
-    const original: string[] = [];
+    const rows = this.codeRows.get(screen) ?? [];
+    const hidden = new Set(rows.flat());
+    const first = new Set(rows.map((row) => row[0]));
+    const represented = new Set<string>();
     const projected: string[] = [];
     for (const element of screen.elements) {
       if (
@@ -537,44 +557,32 @@ export class ObservedPrivacy {
         element.kind === 'other'
       )
         continue;
+      if (element.label) represented.add(element.label);
+      if (element.value) represented.add(element.value);
+      if (isPossibleInput(element) && element.value !== undefined)
+        represented.add(
+          `${element.label ?? element.placeholder ?? element.testID ?? 'input'}: ${element.value}`,
+        );
+      if (hidden.has(element)) {
+        if (first.has(element)) projected.push('[code]');
+        continue;
+      }
+      const label = nativeLabelMayBeValue(element)
+        ? MASK
+        : (element.label ?? element.placeholder ?? element.testID ?? 'input');
       const text =
         isPossibleInput(element) && element.value !== undefined
-          ? `${element.label ?? element.placeholder ?? element.testID ?? 'input'}: ${element.value}`
+          ? `${label}: ${MASK}`
           : element.label;
-      if (!text) continue;
-      original.push(text);
-      projected.push(this.boxElements.has(element) ? MASK : this.redact(text));
+      if (text) projected.push(this.redact(text));
     }
     return [
       ...projected,
       ...screen.visibleText
-        .filter((text) => !original.includes(text))
+        .filter((text) => !represented.has(text))
         .map((text) => this.redact(text)),
     ];
   }
-
-  // A check whose only on-screen evidence for a named character is a protected box cannot be judged.
-  namesProtectedBox(text: string, screen: Screen): boolean {
-    const boxes = screen.elements.filter((element) => this.boxElements.has(element));
-    if (!boxes.length) return false;
-    const named = new Set((text.match(TOKEN) ?? []).map(coreOf));
-    const elsewhere = new Set(
-      screen.elements
-        .filter((element) => !this.boxElements.has(element))
-        .flatMap((element) => (element.label?.match(TOKEN) ?? []).map(coreOf)),
-    );
-    return boxes.some((box) => {
-      const char = box.label!.trim();
-      return named.has(char) && !elsewhere.has(char);
-    });
-  }
-}
-
-function sameRow(a: Element, b: Element): boolean {
-  const x = elementFrame(a);
-  const y = elementFrame(b);
-  if (!x || !y) return true;
-  return Math.abs(x.y + x.height / 2 - (y.y + y.height / 2)) <= Math.max(x.height, y.height) / 2;
 }
 
 export interface ModelMask {
@@ -587,8 +595,11 @@ export function modelMask(
   values: readonly string[],
   source: readonly string[],
   set: PrivateSet = { values: [] },
+  codeElements = new WeakSet<Element>(),
 ): ModelMask {
-  const unique = [...new Set(values.filter(Boolean))];
+  const unique = [
+    ...new Set([...values, ...set.values.map((value) => value.text)].filter(Boolean)),
+  ];
   let prefix = 'QAREN_VALUE';
   while (source.some((text) => text.includes(`[${prefix}_`))) prefix += '_';
   const tokens = unique.map((_, i) => `[${prefix}_${i + 1}]`);
@@ -623,8 +634,13 @@ export function modelMask(
     tokens,
     apply: maskText,
     describeElement: (element, render) => {
-      const shown = set.boxElements?.has(element)
-        ? { ...element, label: MASK, value: undefined }
+      if (codeElements.has(element)) return 'box (hidden)';
+      const shown = isPossibleInput(element)
+        ? {
+            ...element,
+            value: element.value === undefined ? undefined : MASK,
+            label: nativeLabelMayBeValue(element) ? MASK : element.label,
+          }
         : element;
       const testID = element.testID;
       if (!testID) return maskText(render(shown));
@@ -645,14 +661,4 @@ export function maskValues(text: string, values: readonly string[]): string {
     { values: values.filter(Boolean).map((value) => ({ text: value, provenance: 'typed' })) },
     'durable',
   ).text;
-}
-
-// An input shown as `name: value` whose value was typed or is secure.
-export function maskInputs(screen: Screen, text: string, values?: readonly string[]): string {
-  const shown = screen.elements.flatMap((el) =>
-    isPossibleInput(el) && el.value && (!values || el.secure || values.includes(el.value))
-      ? [{ text: el.value, provenance: 'concealed' as const }]
-      : [],
-  );
-  return matchPrivate(text, { values: shown }, 'durable').text;
 }

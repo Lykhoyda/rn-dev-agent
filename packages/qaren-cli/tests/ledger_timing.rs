@@ -96,7 +96,6 @@ fn report_run_details_print_speed_only_when_present() {
             platform: "ios",
             app_id: "com.example",
             device: "sim",
-            plan: "",
             ledger,
         })
     };

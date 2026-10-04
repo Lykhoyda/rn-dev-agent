@@ -5,10 +5,6 @@ use qaren::report::{render_pr_comment, PrRun, ReportInput};
 
 const UDID: &str = "1DC408C4-51DA-4C4F-ACA1-39881C916FDD";
 
-fn projected(text: &str) -> qaren::report::ProjectedVerdict {
-    serde_json::from_value(serde_json::json!({"text": text})).unwrap()
-}
-
 fn machine() -> MachineIdentity {
     MachineIdentity {
         hostname: Some("qa-mac-mini.local".into()),
@@ -48,10 +44,9 @@ fn render(
             platform: "ios",
             app_id: "com.rndevagent.testapp",
             device: "qaren-check",
-            plan: "1. Fill \"pin\" with \"hunter-canary-77\"\n✓ \"Tasks\"\n",
             ledger,
         },
-        &projected("The Tasks tab does not open: the check on line 2 failed on the simulator at /Users/qa/x."),
+        None,
         &PrRun {
             tested_sha: &"a1b2c3d".repeat(6)[..40],
             tested_older_commit: older,
@@ -92,9 +87,7 @@ fn the_comment_carries_no_machine_identity_or_internal_vocabulary() {
             "{leak} leaked:\n{body}"
         );
     }
-    assert!(
-        body.starts_with("<!-- qaren-run: check-20261002T101500Z -->\nThe Tasks tab does not open")
-    );
+    assert!(body.starts_with("<!-- qaren-run: check-20261002T101500Z -->\nFAIL"));
     assert!(body.contains("Tested: commit `a1b2c3d` on ios\n"), "{body}");
     assert!(body.contains("Video of the walk is attached below."));
     // Rows carry no projected text here, so only the line is shown; the plan is never read.
@@ -145,18 +138,16 @@ fn run_details_list_every_field() {
 }
 
 #[test]
-fn the_verdict_sentence_is_bounded() {
-    let long = "word ".repeat(200);
+fn the_verdict_is_structured() {
     let body = render_pr_comment(
         &ReportInput {
             run_id: "r",
             platform: "ios",
             app_id: "a",
             device: "d",
-            plan: "",
             ledger: &failing_ledger(),
         },
-        &projected(&long),
+        None,
         &PrRun {
             tested_sha: &"a".repeat(40),
             tested_older_commit: false,

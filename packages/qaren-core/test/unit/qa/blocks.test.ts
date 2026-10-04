@@ -23,9 +23,8 @@ import {
   storedFits,
   writeBlock,
 } from '../../../dist/qa/blocks.js';
-import { element, screen } from './judgment-fixtures.ts';
 import { parseM7Header } from '../../../dist/domain/reusable-action.js';
-import { ObservedPrivacy, capturePrivateScreen, type PrivateSet } from '../../../dist/qa/privacy.js';
+import { ObservedPrivacy, type PrivateSet } from '../../../dist/qa/privacy.js';
 
 const secrets = (...values: string[]): PrivateSet => ({
   values: values.map((text) => ({ text, provenance: 'secret' })),
@@ -101,7 +100,10 @@ test('serialization preserves unrelated fragments in metadata, plan text and sel
       } else rows[0].selector = field === 'id' ? { id: fragment } : { text: fragment };
       if (field === 'slug') rows.forEach((row) => (row.block = block.slug));
       const before = structuredClone({ block, rows, meta });
-      assert.ok('yaml' in serializeBlock(block, rows, meta, secrets(secret)), `${field}: ${secret}`);
+      assert.ok(
+        'yaml' in serializeBlock(block, rows, meta, secrets(secret)),
+        `${field}: ${secret}`,
+      );
       assert.deepEqual({ block, rows, meta }, before);
       assert.ok('yaml' in serializeBlock(block, rows, meta), `${field}: ${secret}`);
     }
@@ -527,8 +529,10 @@ for (const extension of ['yaml', 'yml']) {
 }
 
 test('preclassified fills withhold every semantic block field before typing', () => {
-  for (const value of ['47', 'hunter-canary-77', 'Cafe\u0301']) {
-    const privateSet: PrivateSet = { values: [{ text: value === 'Cafe\u0301' ? ' Café ' : value, provenance: 'typed' }] };
+  for (const value of ['hunter-canary-77', 'Cafe\u0301']) {
+    const privateSet: PrivateSet = {
+      values: [{ text: value === 'Cafe\u0301' ? ' Café ' : value, provenance: 'typed' }],
+    };
     for (const field of ['appId', 'slug', 'title', 'planHash', 'raw', 'text', 'id', 'label']) {
       const block = blockOf('## QA\n\n### Confirm\n1. Tap "Save"\n✓ "Saved"\n');
       const rows = passRows(block, { [block.items[0].line]: { id: 'save-button' } });
@@ -546,23 +550,24 @@ test('preclassified fills withhold every semantic block field before typing', ()
   }
 });
 
-test('retained box containers withhold their rendered line but admit unrelated fragments', () => {
+test('box characters do not affect admission of unrelated blocks', () => {
   const privacy = new ObservedPrivacy();
-  const observed = screen([
-    element('@heading', 'Enter code', { kind: 'text' }),
-    ...['4', '8', '1', '5'].map((digit, i) => element(`@box${i}`, digit, { kind: 'text' })),
-    element('@separator', 'Next code', { kind: 'text' }),
-    ...['1', '2', '3', '4'].map((digit, i) => element(`@next${i}`, digit, { kind: 'text' })),
-  ]);
-  capturePrivateScreen(observed, [{ values: ['4815', '1234'], secure: true, elements: [], associationUnique: true }]);
-  privacy.observe(observed);
-  privacy.observe(screen([element('@done', 'Done', { kind: 'text' })]));
-  const line = observed.visibleText.join(' | ');
-  const masked = privacy.redact(line);
-  assert.equal(masked, 'Enter code | ••• | ••• | ••• | ••• | Next code | ••• | ••• | ••• | •••');
-  for (const text of ['8', '4 | 8', 'Step 1 of 2', line]) {
+  privacy.concealFallback('4815');
+  privacy.concealFallback('1234');
+  for (const text of ['8', '4 | 8', 'Step 1 of 2', '4 | 8 | 1 | 5']) {
     const block = blockOf(`## QA\n\n### Confirm\n✓ "${text}"\n`);
     const result = serializeBlock(block, passRows(block, {}), ios, privacy.privateSet());
-    assert.equal('unsavable' in result, text === line);
+    assert.ok('yaml' in result);
+  }
+});
+
+test('short preclassified fills withhold quoted plan slots only', () => {
+  const privateSet: PrivateSet = { values: [{ text: '47', provenance: 'typed' }] };
+  for (const text of ['47', 'Step 47 of 50']) {
+    const block = blockOf(`## QA\n\n### Confirm\n✓ "${text}"\n`);
+    assert.equal(
+      'unsavable' in serializeBlock(block, passRows(block, {}), ios, privateSet),
+      text === '47',
+    );
   }
 });

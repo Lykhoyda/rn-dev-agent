@@ -624,7 +624,6 @@ fn run_inner(
             platform: platform_str(req.platform),
             app_id: &config.app_id,
             device: &device.name,
-            plan: &plan,
             ledger: &outcome.ledger,
         },
     ) {
@@ -725,12 +724,10 @@ fn run_inner(
             blocks,
             identity_values: identity_values(&device, config.metro_port, &ctx.record.resources),
         };
-        let written = std::fs::write(run_dir.join("plan.md"), &plan).and_then(|()| {
-            std::fs::write(
-                run_dir.join("pr.json"),
-                serde_json::to_vec_pretty(&pr_record).unwrap_or_default(),
-            )
-        });
+        let written = std::fs::write(
+            run_dir.join("pr.json"),
+            serde_json::to_vec_pretty(&pr_record).unwrap_or_default(),
+        );
         if let Err(e) = written {
             ctx.notes
                 .push(("pr_record".to_string(), format!("could not persist: {e}")));

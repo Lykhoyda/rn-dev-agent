@@ -633,18 +633,10 @@ pub fn publish(
     runner: &mut dyn Runner,
     runs_root: &Path,
     run_id: &str,
-    verdict_file: &Path,
     machine: &MachineIdentity,
 ) -> Receipt {
     let mut publication = Publication::default();
-    let outcome = publish_inner(
-        runner,
-        runs_root,
-        run_id,
-        verdict_file,
-        machine,
-        &mut publication,
-    );
+    let outcome = publish_inner(runner, runs_root, run_id, machine, &mut publication);
     let (result, failure) = match outcome {
         Ok(()) => (ReceiptResult::Published, None),
         Err(f) if f.code.is_refusal() => (ReceiptResult::Refused, Some(f)),
@@ -681,7 +673,6 @@ fn publish_inner(
     runner: &mut dyn Runner,
     runs_root: &Path,
     run_id: &str,
-    verdict_file: &Path,
     machine: &MachineIdentity,
     publication: &mut Publication,
 ) -> Result<(), Failure> {
@@ -689,13 +680,13 @@ fn publish_inner(
     let run_dir = RunRecord::run_dir(runs_root, run_id);
     let _lock = PublishLock::acquire(&run_dir)?;
     let run = RunRecord::load(runs_root, run_id)?;
-    if let Some(failure) = run.failure.filter(|f| {
+    if let Some(failure) = run.failure.as_ref().filter(|f| {
         matches!(
             f.code,
             FailureCode::CandidateDrifted | FailureCode::RunCancelled
         )
     }) {
-        return Err(failure);
+        return Err(failure.clone());
     }
     let pr: PrRunRecord = read_json(&run_dir.join("pr.json"))?;
     let machine = &machine.with_values(&pr.identity_values);
@@ -724,7 +715,6 @@ fn publish_inner(
         }
         // ponytail: a publisher killed mid-upload can leave gh running; a rerun inside that window may repost.
         let attempted = publication.comment_attempted;
-        let verdict = report::project_verdict(runner, &run_dir, verdict_file);
         let url = post_once(
             runner,
             &info,
@@ -741,10 +731,9 @@ fn publish_inner(
                         platform: &pr.platform,
                         app_id: &pr.app_id,
                         device: &pr.device,
-                        plan: "",
                         ledger: &ledger,
                     },
-                    &verdict,
+                    run.failure.as_ref(),
                     &PrRun {
                         tested_sha: &pr.head_ref_oid,
                         tested_older_commit: pr.tested_older_commit,

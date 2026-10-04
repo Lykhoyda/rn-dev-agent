@@ -24,7 +24,7 @@ import { atomicWriter } from '../domain/atomic-writer.js';
 import type { Block, Item } from './plan.js';
 import { normalizedSlug } from './plan.js';
 import type { LedgerRow, Selector } from './ledger.js';
-import { type PrivateSet, matchPrivate } from './privacy.js';
+import { type PrivateSet, matchPrivate, projectPlanLine } from './privacy.js';
 
 export type BlockPlatform = 'ios' | 'android';
 
@@ -124,6 +124,7 @@ export function serializeBlock(
         };
     }
     if (
+      projectPlanLine(item.raw, privateSet, 'persisted').hit ||
       protectedContent([
         item.raw,
         ...(item.kind === 'fill' || (item.kind === 'check' && item.literal) ? [item.text] : []),

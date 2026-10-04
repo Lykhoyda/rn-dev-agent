@@ -306,14 +306,14 @@ tokens disclose no content, length, format, order or validity. Concealed fragmen
 (`•••`) never count as assertion evidence, and a phrase check or visibility
 expectation containing one remains uncertain. The
 [privacy implementation](../qaren-core/src/qa/privacy.ts) owns masking, with
-[fragment regression cases](../qaren-core/test/unit/qa/split-digit-privacy.test.ts).
+[structural privacy regression cases](../qaren-core/test/unit/qa/split-digit-privacy.test.ts).
 Once sensitive input pixels or a protected value's visible echo are observed,
 screenshots are withheld for the rest of the walk. Masks do not prove unobserved
 value content.
-Typed values outside protected fills that are shorter than three characters
-and were never observed as private input values can remain plaintext in
-unquoted reporting text; model masking
-matches them only as separate tokens. This known limitation is tracked in ANT-283.
+Short typed values (one or two characters) are protected in quoted plan values,
+input value slots and code rows, but remain readable in free text elsewhere.
+After the first fill, geometric rows of at least three single-character text boxes
+render as `[code]`; model descriptions show each as `box (hidden)`.
 
 iOS interactions check app existence immediately and wait only when the app is
 missing; availability and foreground checks remain in place. When the privacy
@@ -571,7 +571,7 @@ against an unchanged candidate to obtain attributable evidence.
 
 ```sh
 qaren pr <number|url> --plan-file plan.md --device <simulator-UUID> --json
-qaren publish <run-id> --verdict-file verdict.md --json
+qaren publish <run-id> --json
 ```
 
 `qaren publish` rejects runs whose persisted failure is `CANDIDATE_DRIFTED` or
@@ -614,7 +614,7 @@ the receipt's `cleanup.recorder` reports that final outcome. If shutdown remains
 unresolved, recover with `qaren cleanup <run-id>` as described under
 [iOS admission and cleanup](#ios-admission-and-cleanup).
 
-`qaren publish` posts one comment: the sentence from `--verdict-file`, the
+`qaren publish` posts one comment: the structured PASS/FAIL/REFUSED verdict and refusal code, the
 tested commit, an eligible available video, the plan with ✓/✗ per walked line,
 an available failing screenshot and collapsed run details. Plan lines come only
 from the walk's own rows, never from the raw plan file, so typed values stay out.

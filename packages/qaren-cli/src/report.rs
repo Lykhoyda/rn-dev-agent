@@ -1,5 +1,4 @@
 use crate::core::{Ledger, Row};
-use crate::exec::{CmdSpec, Runner};
 use crate::failure::{Failure, FailureCode};
 use crate::record::{VideoPublication, VideoStatus};
 use crate::redact::{redact_machine, redact_secrets, MachineIdentity};
@@ -43,7 +42,6 @@ pub struct ReportInput<'a> {
     pub platform: &'a str,
     pub app_id: &'a str,
     pub device: &'a str,
-    pub plan: &'a str,
     pub ledger: &'a Ledger,
 }
 
@@ -192,8 +190,6 @@ pub fn write(run_dir: &Path, input: &ReportInput<'_>) -> Result<PathBuf, Failure
     Ok(path)
 }
 
-pub const MAX_VERDICT_CHARS: usize = 400;
-
 pub struct PrRun<'a> {
     pub tested_sha: &'a str,
     pub tested_older_commit: bool,
@@ -221,72 +217,9 @@ pub fn failing_screenshot(ledger: &Ledger) -> Option<String> {
     failure.screenshot.as_deref().and_then(screenshot_link)
 }
 
-fn verdict_sentence(verdict_md: &str) -> String {
-    let flat = prose(verdict_md);
-    if flat.chars().count() <= MAX_VERDICT_CHARS {
-        return flat;
-    }
-    let mut cut: String = flat.chars().take(MAX_VERDICT_CHARS - 1).collect();
-    // A cut must not leave a dangling escape.
-    if cut.ends_with('\\') {
-        cut.pop();
-    }
-    cut.push('…');
-    cut
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProjectedVerdict {
-    text: String,
-}
-
-pub fn project_verdict(
-    runner: &mut dyn Runner,
-    run_dir: &Path,
-    verdict_file: &Path,
-) -> ProjectedVerdict {
-    let withheld = || ProjectedVerdict {
-        text: "Verdict text withheld: privacy policy unavailable.".to_string(),
-    };
-    let policy = run_dir.join("privacy-policy.json");
-    if !policy.is_file() {
-        return withheld();
-    }
-    let runtime = runner
-        .env_var("QAREN_RUNTIME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            let installed = std::env::current_exe()
-                .ok()
-                .and_then(|exe| exe.parent().map(|dir| dir.join("../runtime")));
-            installed
-                .filter(|dir| dir.join("qa/walk.js").is_file())
-                .unwrap_or_else(|| {
-                    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../qaren-core/dist")
-                })
-        });
-    let spec = CmdSpec::new(
-        "privacy-projection",
-        "node",
-        &[
-            &runtime.join("qa/walk.js").to_string_lossy(),
-            "--project-verdict",
-            &policy.to_string_lossy(),
-            &verdict_file.to_string_lossy(),
-        ],
-        10,
-    );
-    let output = runner.run_private(&spec, &[]);
-    if !output.clean() {
-        return withheld();
-    }
-    serde_json::from_str(output.stdout()).unwrap_or_else(|_| withheld())
-}
-
 pub fn render_pr_comment(
     input: &ReportInput<'_>,
-    verdict: &ProjectedVerdict,
+    refusal: Option<&Failure>,
     pr: &PrRun<'_>,
     machine: &MachineIdentity,
 ) -> String {
@@ -297,10 +230,19 @@ pub fn render_pr_comment(
     let mut out = String::new();
     out.push_str(&comment_marker(input.run_id));
     out.push('\n');
-    out.push_str(&verdict_sentence(&public(&redact_machine(
-        &verdict.text,
-        machine,
-    ))));
+    let verdict = match input.ledger.verdict.as_str() {
+        "PASS" => "PASS",
+        "FAIL" => "FAIL",
+        _ => "REFUSED",
+    };
+    out.push_str(verdict);
+    if verdict == "REFUSED" {
+        if let Some(failure) = refusal {
+            if let Ok(serde_json::Value::String(code)) = serde_json::to_value(&failure.code) {
+                out.push_str(&format!(": {}", prose(&code)));
+            }
+        }
+    }
     out.push_str("\n\n");
     out.push_str(&format!(
         "Tested: commit `{}` on {}",

@@ -250,9 +250,15 @@ test('a phrase check after a qa-otp fallback fill sends no protected digit boxes
       ? screenOf(
           [
             element('@heading', 'Enter the code', { kind: 'text' }),
-            ...['1', '2', '3', '4'].map((digit) =>
-              element(`@digit${digit}`, digit, { kind: 'text' }),
-            ),
+            ...joinScreen(
+              ['1', '2', '3', '4'].map((label, i) => ({
+                ref: `@digit${i}`,
+                type: 'StaticText',
+                label,
+                rect: { x: i * 48, y: 100, width: 32, height: 40 },
+              })),
+              [],
+            ).elements,
             element('@verify', 'Verify'),
           ],
           true,

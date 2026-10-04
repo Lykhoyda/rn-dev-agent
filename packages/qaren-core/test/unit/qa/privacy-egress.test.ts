@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parsePlan } from '../../../dist/qa/plan.js';
-import type { Element, Screen } from '../../../dist/qa/screen.js';
+import { join as joinScreen, type Element, type Screen } from '../../../dist/qa/screen.js';
 import { capturePrivateScreen, ObservedPrivacy } from '../../../dist/qa/privacy.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import type { LedgerRow } from '../../../dist/qa/ledger.js';
@@ -66,11 +66,23 @@ function codeScreen(after: boolean): Screen {
   const s = view([
     text('@heading', after ? 'Almost done' : 'Enter the code'),
     text('@step', 'Step 1 of 2'),
-    ...OTP.split('').map((digit, i) => text(`@box${i}`, digit)),
+    ...(after
+      ? joinScreen(
+          [...OTP].flatMap((label, i) => [
+            { ref: `@group${i}`, type: 'Group' },
+            {
+              ref: `@box${i}`,
+              type: 'StaticText',
+              label,
+              rect: { x: i * 48, y: 100, width: 32, height: 40 },
+            },
+          ]),
+          [],
+        ).elements
+      : []),
     text('@card', '1234 5678 90'),
     text('@shown', `Account ${PREFILLED}`),
     text('@echoText', ECHOED),
-    text('@ageText', SHORT),
     pin,
     account,
     card,
@@ -80,7 +92,6 @@ function codeScreen(after: boolean): Screen {
     element('@verify', 'Verify', { testID: 'qa-otp-verify' }),
   ]);
   capturePrivateScreen(s, [
-    { values: [OTP], secure: true, elements: [], associationUnique: true },
     { values: [SECURE], secure: true, testID: 'qa-pin', elements: [pin], associationUnique: true },
     { values: [PREFILLED], secure: false, elements: [account], associationUnique: true },
     { values: [GROUPED], secure: false, elements: [card], associationUnique: true },
@@ -142,6 +153,10 @@ async function walk() {
     state = ref === '@start' ? 1 : ref === '@verify' ? 2 : state;
     return { ok: true, proven: true };
   };
+  f.deps.fill = async () => {
+    state = 2;
+    return { ok: true, proven: true };
+  };
   const appRoot = mkdtempSync(join(tmpdir(), 'qaren-egress-'));
   const ledger = await runPlan(blocks, f.deps, [], {
     appRoot,
@@ -200,7 +215,7 @@ test('the projected ledger stays readable and ordinary blocks are saved', async 
   );
 });
 
-test('a future short fill protects an earlier failure screen before typing', async () => {
+test('a future short fill leaves unquoted diagnostics readable', async () => {
   const blocks = parsePlan(
     '## QA\n\n### Fail early\n✓ "Missing"\n\n### Fill later\n1. Fill "qa-input" with "47"\n',
   ).blocks;
@@ -211,11 +226,8 @@ test('a future short fill protects an earlier failure screen before typing', asy
   );
   const ledger = await runPlan(blocks, f.deps);
   assert.equal(ledger.verdict, 'FAIL');
-  assert.equal(ledger.failure?.seen?.includes('47'), false);
-  assert.match(
-    ledger.failure?.seen ?? '',
-    /Missing.*historical context, previously on screen: •••/,
-  );
+  assert.equal(ledger.failure?.seen?.includes('47'), true);
+  assert.match(ledger.failure?.seen ?? '', /Missing.*historical context, previously on screen: 47/);
   assert.equal(f.actions.length, 0);
 });
 
@@ -240,26 +252,32 @@ test('a future fill withholds an earlier passing block even if it never types', 
   assert.deepEqual(ledger.blocksWritten, []);
 });
 
-for (const code of ['4815', '4415']) {
-  test(`failure diagnostics project original boxes ${code} before masking an adjacent input`, async () => {
-    const input = element('@name', 'Name', { kind: 'input', value: 'Ada' });
-    const observed = view([
-      text('@heading', 'Enter code'),
-      ...[...code].map((digit, i) => text(`@box${i}`, digit)),
-      input,
-      text('@step', 'Step 1 of 2'),
-    ]);
-    observed.visibleText = [
-      'Enter code',
-      ...[...code].filter((digit, i) => i === 0 || digit !== code[i - 1]),
-      'Name: Ada',
-      'Step 1 of 2',
-    ];
-    capturePrivateScreen(observed, [
-      { values: [code], secure: true, elements: [], associationUnique: true },
-    ]);
+for (const code of ['4815', '1122']) {
+  test(`failure diagnostics hide structural boxes ${code} after a fill`, async () => {
+    const observed = joinScreen(
+      [
+        { ref: '@name', type: 'TextField', identifier: 'qa-name', label: 'Name', value: 'Ada' },
+        { ref: '@heading', type: 'StaticText', label: 'Enter code' },
+        ...[...code].flatMap((label, i) => [
+          { ref: `@group${i}`, type: 'Group' },
+          {
+            ref: `@box${i}`,
+            type: 'StaticText',
+            label,
+            rect: { x: i * 48, y: 100, width: 32, height: 40 },
+          },
+        ]),
+      ],
+      [],
+    );
+    observed.coverage = { native: 'complete', react: 'complete' };
+    observed.elements[0] = element('@name', 'Name', {
+      kind: 'input',
+      testID: 'qa-name',
+      value: 'Ada',
+    });
     const blocks = parsePlan(
-      '## QA\n\n### Fail early\n✓ "Missing"\n\n### Fill later\n1. Fill "qa-name" with "Ada"\n',
+      '## QA\n\n### Fill\n1. Fill "qa-name" with "Ada"\n✓ "Missing"\n',
     ).blocks;
     assert.ok(blocks);
     const f = walker(
@@ -267,25 +285,27 @@ for (const code of ['4815', '4415']) {
       scriptedJudge(() => ({})),
     );
     const ledger = await runPlan(blocks, f.deps);
-    const seen = ledger.failure?.seen ?? '';
-    assert.match(seen, /Enter code \| ••• \| ••• \| ••• \| ••• \| Name: ••• \| Step 1 of 2/);
-    assert.equal(seen.includes('Ada'), false);
-    for (const digit of new Set(code))
-      assert.equal(
-        (seen.match(/\b\d+\b/g) ?? []).filter(
-          (value) => value === digit && !['1', '2'].includes(value),
-        ).length,
-        0,
-      );
-    assert.equal(input.value, 'Ada');
-    assert.deepEqual(
-      observed.elements.slice(1, 5).map((item) => item.label),
-      [...code],
-    );
-    const privacy = new ObservedPrivacy();
-    privacy.observe(observed);
-    privacy.observe(view([text('@done', 'Done')]));
-    assert.equal(privacy.redact([...code].join(' | ')), '••• | ••• | ••• | •••');
-    assert.equal(privacy.redact('4 | 8'), '4 | 8');
+    assert.match(ledger.failure?.seen ?? '', /\[code\]/);
+    assert.equal(ledger.failure?.seen.includes('Ada'), false);
+    assert.equal(ledger.failure?.seen.includes([...code].join(' | ')), false);
   });
 }
+
+test('a protected value equal to the mask withholds an earlier block', async () => {
+  const blocks = parsePlan(
+    '## QA\n\n### Confirm\n✓ "•••"\n\n### Fill later\n1. Fill "missing" with "•••"\n',
+  ).blocks;
+  assert.ok(blocks);
+  const f = walker(
+    [view([text('@shown', '•••')])],
+    scriptedJudge(() => ({})),
+  );
+  const appRoot = mkdtempSync(join(tmpdir(), 'qaren-mask-hit-'));
+  const ledger = await runPlan(blocks, f.deps, [], {
+    appRoot,
+    platform: 'ios',
+    appId: 'com.example',
+  });
+  assert.equal(ledger.blocks[0].saved, false);
+  assert.deepEqual(ledger.blocksWritten, []);
+});
