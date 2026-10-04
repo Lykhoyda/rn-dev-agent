@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util';
 import { CDPClient } from '../cdp-client.js';
 import { waitForExactPortTargets } from '../cdp/discovery.js';
 import { REACT_READY_POLL_MS, REACT_READY_TIMEOUT_MS } from '../cdp/setup.js';
-import { createDevSettingsHandler } from '../handlers/dev-settings.js';
+import { createDevSettingsHandler, WALK_DEV_SETTINGS } from '../handlers/dev-settings.js';
 import {
   cdpClientOrNull,
   createDeviceBackHandler,
@@ -342,7 +342,7 @@ async function openSession(
     probeForegroundSurface: async () =>
       foregroundSurfaceFromSnapshot(await snapshot({ action: 'snapshot' }), appId),
   });
-  for (const action of ['disableDevMenu', 'hideDevMenu'] as const) {
+  for (const action of WALK_DEV_SETTINGS) {
     try {
       unwrap(await devSettings({ action }));
     } catch (error) {

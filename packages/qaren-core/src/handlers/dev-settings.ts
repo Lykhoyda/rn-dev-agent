@@ -12,7 +12,19 @@ type DevAction =
   | 'togglePerfMonitor'
   | 'dismissRedBox'
   | 'disableDevMenu'
-  | 'hideDevMenu';
+  | 'hideDevMenu'
+  | 'hideDevMenuFab';
+
+// Walk start: hide Expo's floating dev-menu button first, then shake and any open menu.
+export const WALK_DEV_SETTINGS = ['hideDevMenuFab', 'disableDevMenu', 'hideDevMenu'] as const;
+
+const HIDE_DEV_MENU_FAB = `(async function () {
+  var m = globalThis.expo && globalThis.expo.modules && globalThis.expo.modules.DevMenuPreferences;
+  if (!m || typeof m.setPreferencesAsync !== 'function') return "no_method_available";
+  await m.setPreferencesAsync({ showFloatingActionButton: false, showsAtLaunch: false, motionGestureEnabled: false, touchGestureEnabled: false });
+  var p = typeof m.getPreferencesAsync === 'function' ? await m.getPreferencesAsync() : null;
+  return p && p.showFloatingActionButton === false ? "ok" : "unverified";
+})()`;
 
 const RESOLVE_DEV_SETTINGS = `(function() {
   if (typeof __turboModuleProxy === 'function') try { var ds = __turboModuleProxy("DevSettings"); if (ds) return ds; } catch(e) {}
@@ -22,7 +34,7 @@ const RESOLVE_DEV_SETTINGS = `(function() {
   return null;
 })()`;
 
-const ACTION_EXPRESSIONS: Record<Exclude<DevAction, 'hideDevMenu'>, string> = {
+const ACTION_EXPRESSIONS: Record<Exclude<DevAction, 'hideDevMenu' | 'hideDevMenuFab'>, string> = {
   reload: `(function() { var ds = ${RESOLVE_DEV_SETTINGS}; if (!ds || !ds.reload) throw new Error("DevSettings not available"); ds.reload(); return "ok"; })()`,
   toggleInspector: `(function() { var ds = ${RESOLVE_DEV_SETTINGS}; if (!ds || !ds.toggleElementInspector) throw new Error("DevSettings not available"); ds.toggleElementInspector(); return "ok"; })()`,
   togglePerfMonitor: `(function() { var ds = ${RESOLVE_DEV_SETTINGS}; if (!ds) throw new Error("DevSettings not available"); if (ds.togglePerformanceMonitor) { ds.togglePerformanceMonitor(); } else if (ds.togglePerfMonitor) { ds.togglePerfMonitor(); } else { return "no_method_available"; } return "ok"; })()`,
@@ -119,6 +131,24 @@ export function createDevSettingsHandler(
       return unverifiedHideResult(call, before, after);
     }
 
+    if (args.action === 'hideDevMenuFab') {
+      const result = await client.evaluate(HIDE_DEV_MENU_FAB, true);
+      if (result.value === 'no_method_available')
+        return warnResult(
+          { action: args.action, executed: false },
+          'hideDevMenuFab not available — no Expo dev-menu preferences module.',
+        );
+      if (result.error || result.value !== 'ok')
+        return failResult(
+          'The Expo dev-client floating button could not be confirmed hidden.',
+          'DEV_MENU_HIDE_UNVERIFIED',
+          { action: args.action, outcome: 'DEV_MENU_HIDE_UNVERIFIED' },
+        );
+      await (dependencies.settleAfterHide?.() ??
+        new Promise<void>((resolve) => setTimeout(resolve, 300)));
+      return okResult({ action: args.action, executed: true, outcome: 'hidden' });
+    }
+
     const expression = ACTION_EXPRESSIONS[args.action];
 
     try {
@@ -150,5 +180,7 @@ export function createDevSettingsHandler(
   const helperIndependent = withConnection(getClient, handler, { requireHelpers: false });
   const helperAware = withConnection(getClient, handler);
   return (args: { action: DevAction }) =>
-    args.action === 'hideDevMenu' ? helperIndependent(args) : helperAware(args);
+    args.action === 'hideDevMenu' || args.action === 'hideDevMenuFab'
+      ? helperIndependent(args)
+      : helperAware(args);
 }

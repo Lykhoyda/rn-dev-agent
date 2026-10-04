@@ -1585,6 +1585,15 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
                 .ios_simulator
                 .clone()
                 .expect("ios allocated");
+            let defaults = ios::devmenu_defaults_specs(&sim.udid, &ctx.record.candidate.app_id);
+            let failed = defaults
+                .iter()
+                .filter(|spec| !ctx.runner.run(spec).ok())
+                .count();
+            if failed > 0 {
+                ctx.notes
+                    .push(("dev_menu_defaults".to_string(), "unconfirmed".to_string()));
+            }
             ctx.runner.run(&ios::launch_spec(
                 &sim.udid,
                 &ctx.record.candidate.app_id,
@@ -2529,6 +2538,7 @@ fn dry_run_receipt(
                 Path::new("<run_dir>/ios-build/<verified-app>.app"),
             ));
             planned.push(metro::start_spec(&cand.project_root, port));
+            planned.extend(ios::devmenu_defaults_specs("<udid>", &cand.app_id));
             planned.push(ios::launch_spec("<udid>", &cand.app_id, port));
             planned.push(ios::app_container_spec("<udid>", &cand.app_id));
             planned.push(ios::launchctl_list_spec("<udid>"));
@@ -2629,6 +2639,7 @@ fn dry_run_receipt(
             Platform::Ios => {
                 planned.push(ios::install_app_spec("<udid>", &artifact_path));
                 planned.push(metro::start_spec(&cand.project_root, port));
+                planned.extend(ios::devmenu_defaults_specs("<udid>", &cand.app_id));
                 planned.push(ios::launch_spec("<udid>", &cand.app_id, port));
                 planned.push(ios::app_container_spec("<udid>", &cand.app_id));
                 planned.push(ios::launchctl_list_spec("<udid>"));

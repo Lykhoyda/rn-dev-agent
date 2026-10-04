@@ -176,15 +176,29 @@ pub fn script_finite_ios_build(mock: &mut MockRunner) {
 }
 
 pub fn script_finite_ios_build_with(mock: &mut MockRunner, command: &str) {
+    script_finite_ios_build_defaults(mock, command, CmdOutput::success(""));
+}
+
+pub fn script_finite_ios_build_defaults(mock: &mut MockRunner, command: &str, defaults: CmdOutput) {
     mock.expect_spawn_piped(command, 5000, "", Some(0));
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 16:00:00 2026"));
     mock.expect_run("ps", CmdOutput::success("qaren-build"));
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     script_ios_app_verification(mock);
-    script_ios_install_and_launch(mock);
+    script_ios_install_and_launch_with(mock, defaults);
 }
 
 pub fn script_ios_install_and_launch(mock: &mut MockRunner) {
+    script_ios_install_and_launch_with(mock, CmdOutput::success(""));
+}
+
+pub fn script_devmenu_defaults(mock: &mut MockRunner, result: CmdOutput) {
+    for _ in 0..3 {
+        mock.expect_run("defaults write", result.clone());
+    }
+}
+
+pub fn script_ios_install_and_launch_with(mock: &mut MockRunner, defaults: CmdOutput) {
     script_ios_app_verification(mock);
     mock.expect_run("simctl install", CmdOutput::success(""));
     mock.expect_spawn(
@@ -201,6 +215,7 @@ pub fn script_ios_install_and_launch(mock: &mut MockRunner) {
     mock.expect_run("lsof", CmdOutput::success("6001"));
     mock.expect_run("ps", CmdOutput::success("6000"));
     mock.expect_run("curl", CmdOutput::success("packager-status:running"));
+    script_devmenu_defaults(mock, defaults);
     mock.expect_run(
         "simctl launch --terminate-running-process",
         CmdOutput::success(""),

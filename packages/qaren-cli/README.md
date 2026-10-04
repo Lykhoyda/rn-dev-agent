@@ -263,7 +263,10 @@ a reset clears the earlier style restriction without proving native visibility.
 
 Observed input values are masked before Jev requests; private values are also
 masked in reporting, including echoes of typed and previously observed values
-subject to the short-value limitation below. Once sensitive input pixels or a
+subject to the short-value limitation below. A protected value can appear split
+across separate on-screen boxes, so in reporting any token that is part of a
+protected value, including a single character, is masked; tokens joined by `-`,
+`_`, `.` or `@` are judged whole, so identifiers stay readable. Once sensitive input pixels or a
 protected value's visible echo are observed, screenshots are withheld for the
 rest of the walk.
 Masks preserve identity for comparisons and do not prove unobserved value content.
@@ -305,6 +308,14 @@ iOS artifact verification requires an Expo Dev Launcher image supporting
 probes filter output before capture, allowing large debug images without raising
 the 16 MiB capture limit; failed probes or missing required evidence still refuse.
 The verification contract is owned by [`src/adapters/ios.rs`](src/adapters/ios.rs).
+
+Before each iOS launch, `prepare` writes the app's Expo dev-menu preferences with
+`simctl spawn <udid> defaults write <app-id>`: no floating action button, no menu
+at launch, onboarding finished. A failed write is recorded as
+`dev_menu_defaults: unconfirmed` and the launch continues. At walk start the core
+also hides the floating button through Expo's `DevMenuPreferences` module and
+reads the setting back; apps without that module are unaffected, and an
+unconfirmed hide is logged as `DEV_MENU_HIDE_UNVERIFIED` without stopping the walk.
 
 ### iOS admission and cleanup
 

@@ -186,18 +186,84 @@ fn ios_prepare_happy_path_produces_ready_receipt_and_record() {
     let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
 
     let mut mock = MockRunner::new();
-    script_validation(&mut mock, &repo, IOS_TOOLS);
+    script_ios_prepare(&mut mock, &repo, CmdOutput::success(""));
+    let receipt = prepare(&mut mock, &prepare_args(&scenario_path, false, None));
+    assert_ios_ready(&mock, &repo, receipt);
+}
+
+#[test]
+fn ios_prepare_writes_dev_menu_defaults_on_the_app_domain_before_launch() {
+    let repo = common::temp_repo();
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
+    let mut mock = MockRunner::new();
+    script_ios_prepare(&mut mock, &repo, CmdOutput::success(""));
+    let receipt = prepare(&mut mock, &prepare_args(&scenario_path, false, None));
+    assert_eq!(receipt.result, ReceiptResult::Ready);
+    let labels: Vec<&str> = mock.calls.iter().map(|c| c.label.as_str()).collect();
+    let launch = labels.iter().position(|l| *l == "simctl-launch").unwrap();
+    let writes: Vec<_> = mock
+        .calls
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.label == "simctl-devmenu-defaults")
+        .collect();
+    assert_eq!(writes.len(), 3);
+    assert!(writes.iter().all(|(i, _)| *i < launch));
+    let expected = [
+        ("EXDevMenuShowFloatingActionButton", "NO"),
+        ("EXDevMenuShowsAtLaunch", "NO"),
+        ("EXDevMenuIsOnboardingFinished", "YES"),
+    ];
+    for ((_, call), (key, value)) in writes.iter().zip(expected) {
+        assert_eq!(
+            call.args,
+            vec![
+                "simctl",
+                "spawn",
+                UDID,
+                "defaults",
+                "write",
+                "com.rndevagent.testapp",
+                key,
+                "-bool",
+                value
+            ]
+        );
+    }
+    assert!(!receipt.outcomes.contains_key("dev_menu_defaults"));
+}
+
+#[test]
+fn ios_prepare_continues_with_a_note_when_dev_menu_defaults_fail() {
+    let repo = common::temp_repo();
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
+    let mut mock = MockRunner::new();
+    script_ios_prepare(&mut mock, &repo, CmdOutput::failed(1, "defaults failed"));
+    let receipt = prepare(&mut mock, &prepare_args(&scenario_path, false, None));
+    assert_eq!(receipt.result, ReceiptResult::Ready);
+    assert!(mock.calls.iter().any(|c| c.label == "simctl-launch"));
+    assert_eq!(
+        receipt
+            .outcomes
+            .get("dev_menu_defaults")
+            .map(String::as_str),
+        Some("unconfirmed")
+    );
+}
+
+fn script_ios_prepare(mock: &mut MockRunner, repo: &std::path::Path, defaults: CmdOutput) {
+    script_validation(mock, repo, IOS_TOOLS);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n")); // self lstart
     mock.expect_run("ps", CmdOutput::success("qaren prepare\n")); // self command
-    common::script_ios_deps(&mut mock);
+    common::script_ios_deps(mock);
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
     mock.expect_run(
         "simctl bootstatus",
         CmdOutput::success("Boot status: finished\n"),
     );
-    common::script_finite_ios_build(&mut mock);
+    common::script_finite_ios_build_defaults(mock, "expo run:ios", defaults);
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n"))); // liveness probe
     mock.expect_run("ps", CmdOutput::success("S\n")); // not a zombie
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
@@ -215,9 +281,9 @@ fn ios_prepare_happy_path_produces_ready_receipt_and_record() {
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
     mock.expect_run("git", CmdOutput::success(""));
     mock.expect_run("ls-files", CmdOutput::success(""));
+}
 
-    let receipt = prepare(&mut mock, &prepare_args(&scenario_path, false, None));
-
+fn assert_ios_ready(mock: &MockRunner, repo: &std::path::Path, receipt: qaren::receipt::Receipt) {
     assert_eq!(
         receipt.result,
         ReceiptResult::Ready,
@@ -402,6 +468,10 @@ fn android_prepare_happy_path_leases_tunnels_and_pins_serial() {
             Some(sdk.to_string_lossy().into_owned()),
         ),
     );
+    assert!(!mock
+        .calls
+        .iter()
+        .any(|c| c.label == "simctl-devmenu-defaults"));
     assert_eq!(
         receipt.result,
         ReceiptResult::Ready,

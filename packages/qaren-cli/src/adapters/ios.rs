@@ -415,6 +415,27 @@ pub fn uninstall_app_spec(udid: &str, app_id: &str) -> CmdSpec {
     )
 }
 
+// Expo dev-client preferences written before launch: no floating gear, launch menu or onboarding sheet.
+pub fn devmenu_defaults_specs(udid: &str, app_id: &str) -> Vec<CmdSpec> {
+    [
+        ("EXDevMenuShowFloatingActionButton", "NO"),
+        ("EXDevMenuShowsAtLaunch", "NO"),
+        ("EXDevMenuIsOnboardingFinished", "YES"),
+    ]
+    .into_iter()
+    .map(|(key, value)| {
+        CmdSpec::new(
+            "simctl-devmenu-defaults",
+            "xcrun",
+            &[
+                "simctl", "spawn", udid, "defaults", "write", app_id, key, "-bool", value,
+            ],
+            20,
+        )
+    })
+    .collect()
+}
+
 pub fn launch_spec(udid: &str, app_id: &str, metro_port: u16) -> CmdSpec {
     CmdSpec::new(
         "simctl-launch",
