@@ -354,9 +354,13 @@ Before each iOS launch, `prepare` writes the app's Expo dev-menu preferences wit
 at launch, onboarding finished. A failed write is recorded as
 `dev_menu_defaults: unconfirmed` and the launch continues. At walk start the core
 also hides the floating button through Expo's `DevMenuPreferences` module and
-reads the setting back; apps without that module are unaffected. A native
-snapshot then confirms the button is gone. An unconfirmed hide or a button still
-on screen refuses the walk with `DEV_MENU_HIDE_UNVERIFIED` before the first step.
+reads the setting back, disables the shake gesture, and closes an open menu.
+Apps without the preferences module skip that setting change but still require
+native clearance evidence. The shared clearance mechanism accepts only a complete
+native snapshot with neither a floating button nor an open dev menu in front,
+briefly re-reading while overlays settle. An unconfirmed floating-button hide
+or failure to obtain complete clearance evidence within those reads refuses
+the walk with `DEV_MENU_HIDE_UNVERIFIED` before the first step.
 
 ### iOS admission and cleanup
 
@@ -495,7 +499,8 @@ An action whose screen did not change after its one retry, a step target that
 does not resolve, or a phrase check still unsure after its re-ask
 gets at most one deterministic recovery, then the step runs once more from a fresh
 capture. The order is owned by [`recover.ts`](../qaren-core/src/qa/recover.ts): a
-recognized system dialog in front is accepted; the dev menu in front is hidden;
+recognized system dialog in front is accepted; a dev menu or floating button in
+front is cleared through the shared [overlay clearance mechanism](#check-a-plan);
 and when `loginMarker`
 (`{ id: <testID> }` or `{ text: <label> }`) is on screen, the
 saved block `loginBlock` (`.qaren/actions/<loginBlock>.yaml`, saved for this app and
@@ -514,10 +519,8 @@ best-effort. Android dialog recovery is not supported by `qaren check` in this
 release (see [Check a plan](#check-a-plan)). An action reporting `tapped: false`
 or `executed: false` establishes no action proof and cannot count as a recovery.
 
-Before walking, QaReN attempts to hide the Expo floating gear, disable the dev
-menu and hide an open menu. Setup failures, including unverified gear hiding,
-are logged and walking continues; this does not prove that developer UI is absent
-from captured evidence. A non-executing menu hide during recovery fails the step.
+Dev-overlay recovery must re-prove clearance before retrying the step. A failed
+clearance or a non-executing hide with no overlay to clear fails the step.
 
 ### Walk timing
 
@@ -593,11 +596,13 @@ screen is recorded from just before the walk to just after it and encoded to
 start, the run continues and the receipt's `video` outcome says why. The local
 recording stays complete; `qaren publish` uploads only
 `media/video-published.mp4`, a copy that starts when the walk proved the app's
-bundle and cleared its dev overlays, so launcher, server-picker, relaunch and
-dev-menu button frames before admission never reach the pull request. Without an admission time or a successful trim, or when
-an app process change or launcher/server-picker fallback is observed after
-admission, no video is uploaded. Blocks the
-walk saved are copied to `blocks/` before the worktree is removed. If the pull
+bundle and passed [overlay clearance](#check-a-plan), so launcher, server-picker,
+relaunch and dev chrome frames before admission never reach the pull request.
+Without an admission time or a successful trim, or when an app process change,
+launcher/server-picker fallback, floating button or open dev menu is observed
+after admission, no video is uploaded, even if recovery clears the overlay and
+the retry passes. Blocks the walk saved are copied to `blocks/` before the
+worktree is removed. If the pull
 request moved during the run, the receipt names the tested commit in
 `tested_older_commit`. Like `check`, `pr` currently refuses Android with
 `PLATFORM_UNSUPPORTED`.
