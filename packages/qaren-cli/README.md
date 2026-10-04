@@ -287,14 +287,16 @@ Planned fill values are classified before progress streams. The shared
 [privacy matcher](../qaren-core/src/qa/privacy.ts) protects complete values of
 three or more characters after trimming, using case-sensitive substring matches
 for raw and trimmed NFC/NFD forms. Numbers with at least four digits also match
-with an optional space, hyphen, dot or slash between digits. Model requests use
+with an optional Unicode whitespace character (including nonbreaking spaces),
+hyphen, dot or slash between digits. Model requests use
 opaque identity tokens; durable text uses `•••`; a match withholds saved blocks.
 Displayed identifiers use the same matcher while operational identifiers remain
 usable. Partial fragments of a longer value remain readable.
 
 Short typed values (one or two characters) are protected in straight or curly
-quoted plan slots, including parsing requests, and in input value slots, but
-remain readable in free text elsewhere. Secure-field values have a separate
+quoted plan slots, including parsing requests, input value slots and structural
+code rows. They are not masked elsewhere, including a short value shown as free
+text before its fill. Secure-field values have a separate
 exception: two or more characters match as substrings; a single character
 matches only as a whole token. Structural step numbers remain readable.
 

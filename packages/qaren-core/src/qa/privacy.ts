@@ -199,7 +199,7 @@ function forms(value: string): string[] {
   ].filter(Boolean);
 }
 
-const DIGIT_GAP = '[ .\\-/]';
+const DIGIT_GAP = '[\\s\\p{White_Space}.\\-/]';
 function digitForm(value: string): string | undefined {
   const digits = value.trim().replace(new RegExp(DIGIT_GAP, 'gu'), '');
   if (!/^\d{4,}$/.test(digits)) return undefined;

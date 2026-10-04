@@ -103,3 +103,37 @@ test('a protected mask still reports a persisted hit', () => {
     { text: MASK, hit: true },
   );
 });
+
+test('Unicode digit grouping matches both directions at every policy', () => {
+  for (const separator of ['\u00a0', '\u202f', '\u0085', '\ufeff', '\t', '\n', '.', '-', '/']) {
+    const grouped = `1234${separator}5678${separator}90`;
+    for (const [privateValue, echo] of [
+      [grouped, '1234567890'],
+      ['1234567890', grouped],
+    ]) {
+      for (const provenance of ['typed', 'observed', 'concealed', 'secret'] as const) {
+        const set = { values: [{ text: privateValue, provenance }] };
+        for (const policy of ['model', 'durable', 'identifier', 'persisted'] as const) {
+          const projected = matchPrivate(`Account ${echo} ready`, set, policy, () => '[opaque]');
+          assert.deepEqual(projected, {
+            text: `Account ${policy === 'model' ? '[opaque]' : MASK} ready`,
+            hit: true,
+          });
+        }
+      }
+      const privacy = new ObservedPrivacy();
+      privacy.observe({
+        front: 'app',
+        visibleText: [],
+        elements: [element('@input', 'Account', { kind: 'input', value: privateValue })],
+      });
+      const label = element('@echo', `Account ${echo} ready`, { kind: 'text' });
+      const later = { front: 'app' as const, visibleText: [label.label!], elements: [label] };
+      privacy.observe(later);
+      assert.deepEqual(privacy.screenText(later), [`Account ${MASK} ready`]);
+      const mask = privacy.maskForModel([], []);
+      assert.equal(mask.describeElement(label, describe).includes(echo), false);
+      assert.equal(privacy.redactIdentifier(`account-${echo}`), `account-${MASK}`);
+    }
+  }
+});
