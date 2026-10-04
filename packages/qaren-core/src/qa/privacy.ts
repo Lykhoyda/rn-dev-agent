@@ -391,7 +391,7 @@ export class ObservedPrivacy {
   }
 
   maskForModel(values: readonly string[], source: readonly string[]): ModelMask {
-    return modelMask(values, source, this.substringValues);
+    return modelMask(values, source, new Set([...this.concealed, ...this.substringValues]));
   }
 
   redact(text: string): string {
@@ -425,7 +425,11 @@ export function modelMask(
   const pattern = alternatives.length ? new RegExp(alternatives.join('|'), 'gu') : undefined;
   return {
     tokens,
-    apply: (text) => (pattern ? text.replace(pattern, (value) => replacements.get(value)!) : text),
+    apply: (text) =>
+      maskProtectedFragments(
+        pattern ? text.replace(pattern, (value) => replacements.get(value)!) : text,
+        [...substringValues],
+      ),
   };
 }
 

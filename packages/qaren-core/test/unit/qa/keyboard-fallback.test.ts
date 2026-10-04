@@ -242,6 +242,40 @@ test('U8: a later failing check still fails the block after an unverified fill',
   assert.equal(outcome.failure?.screenshot, undefined);
 });
 
+test('a phrase check after a qa-otp fallback fill sends no protected digit boxes', async () => {
+  const fake = app({ initial: [wrapper('Code', { testID: 'qa-otp-pressable' })] });
+  const capture = fake.deps.captureScreen;
+  fake.deps.captureScreen = async () =>
+    fake.state() === 'typed'
+      ? screenOf(
+          [
+            element('@heading', 'Enter the code', { kind: 'text' }),
+            ...['1', '2', '3', '4'].map((digit) =>
+              element(`@digit${digit}`, digit, { kind: 'text' }),
+            ),
+            element('@verify', 'Verify'),
+          ],
+          true,
+        )
+      : capture();
+  const judge = scriptedJudge((questions) =>
+    Object.fromEntries(Object.keys(questions).map((id) => [id, { type: 'noul', noul: 0.99 }])),
+  );
+  fake.deps.judge = judge;
+  const outcome = await walkBlock(
+    blocks(plan('1234', 'qa-otp', '✓ The Verify button is visible\n'))[0],
+    fake.deps,
+  );
+  assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+  assert.deepEqual(fake.typed, [{ ref: '@wrap', text: '1234', testID: 'qa-otp' }]);
+  assert.deepEqual(steps(fake.log), ['press @wrap', 'type @wrap']);
+  assert.equal(judge.requests.length, 1);
+  const request = JSON.stringify(judge.requests[0]);
+  assert.equal(/[1-4]/.test(request), false, request);
+  assert.ok(request.includes('Enter the code'));
+  assert.ok(request.includes('Verify'));
+});
+
 test('U8: the block of an unverified fill is never saved and video stays withheld', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'qaren-fallback-'));
   mkdirSync(join(dir, '.qaren'));
