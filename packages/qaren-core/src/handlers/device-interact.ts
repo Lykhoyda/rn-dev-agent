@@ -944,6 +944,8 @@ export interface FillArgs {
   vetoUnfocused?: boolean;
   requireFocused?: boolean;
   skipFinalValidation?: boolean;
+  /** With focused: clear first and refuse before typing unless the field reads back empty. */
+  clearFirst?: boolean;
   /** Story 04 (#385): per-call settle budget override in ms. */
   settleTimeoutMs?: number;
 }
@@ -1463,6 +1465,32 @@ export async function performFocusedFill(
       { mutation: 'none', pathsTried },
     );
   const before = controlledReactValue(beforeRead);
+  // Fill replaces: only a proven-focused field with a readable value can be cleared and read back empty.
+  if (args.clearFirst && (beforeRead?.focused !== true || before === null))
+    return fillFailure(
+      'NO_TEXT_INPUT_TARGET',
+      'device_fill focused: the focused input value is not readable, so it cannot be cleared first; no text was entered.',
+      { mutation: 'none', pathsTried },
+    );
+  if (args.clearFirst && before) {
+    const cleared = await runNative(['fill', args.ref, '\b'.repeat(before.length)], {
+      qaContext: args.qaContext,
+      focusedType: true,
+      settle: { enabled: false },
+    });
+    if (
+      cleared.isError ||
+      (await awaitReactInputValue(() => readReactInputValue(client, oracleTestId), '')) !== 'exact'
+    )
+      return fillFailure(
+        'TEXT_ENTRY_UNVERIFIED',
+        'device_fill focused: the field was not empty after clearing; no text was entered.',
+        {
+          mutation: cleared.isError ? extractMutationDisposition(cleared) : 'observed',
+          pathsTried,
+        },
+      );
+  }
   const native = await runNative(['fill', args.ref, args.text], {
     qaContext: args.qaContext,
     focusedType: true,
@@ -1503,7 +1531,7 @@ export async function performFocusedFill(
     return unverified();
   const verification = await awaitReactInputValue(
     () => readReactInputValue(client, oracleTestId),
-    before + args.text,
+    (args.clearFirst ? '' : before) + args.text,
   );
   if (verification === 'exact') {
     return verifiedFillResult('native', args.text.length, {

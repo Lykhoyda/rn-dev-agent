@@ -75,7 +75,7 @@ positional words such as `Tap "Save" at the bottom`.
 
 Fills use strict native value verification first. A strict fill replaces the
 field's content: the bound input is cleared before typing, and verification
-expects exactly the plan text. Keyboard fallback typing does not clear the field.
+expects exactly the plan text. Keyboard fallback typing also replaces: see below.
 A secure field reads back
 only as masked, so a fill into a secure target passes on the runner's stable
 `secure-masked` verdict; every other strict fill requires an exact read-back,
@@ -102,8 +102,8 @@ identity; a matching label cannot
 substitute for that identity. If the same input becomes natively observable,
 strict verification resumes. Otherwise the keyboard must become visible and
 the target must remain eligible. React evidence that the intended input is
-unfocused vetoes typing; an unavailable React focus read does not veto this
-keyboard-down transition path.
+unfocused vetoes typing, and so does an unavailable React read, because the
+field must be cleared first (below).
 
 When the keyboard is already up, iOS fallback types only with positive React
 proof that the intended input is focused. With an eligible target, QaReN taps it,
@@ -118,7 +118,12 @@ stage types nothing; failure of the pre-dispatch read returns
 `NO_TEXT_INPUT_TARGET` with no mutation. An unknown keyboard state still refuses.
 Each walker focus decision logs one value-free `fallback-focus` line.
 
-QaReN then types once into the focused field without final value validation.
+QaReN then clears the focused field and types once without final value validation.
+Clearing needs a readable React value on the proven-focused input: a non-empty
+value is deleted with keystrokes and must read back empty before typing. An
+unreadable or uncontrolled value, or a field that is not empty after clearing,
+types nothing (`NO_TEXT_INPUT_TARGET` or `TEXT_ENTRY_UNVERIFIED`). Secure fields
+clear the same way.
 A successful keyboard step records a passing row with reason `UNVERIFIED_FILL`,
 allowing later plan steps to continue; it does not establish the field's final
 value. Failed keyboard typing is not retried. Before the fallback tap or

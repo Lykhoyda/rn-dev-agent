@@ -424,6 +424,7 @@ async function openSession(
                   vetoUnfocused: true,
                   requireFocused,
                   skipFinalValidation: true,
+                  clearFirst: true,
                   qaContext,
                 }),
               false,
