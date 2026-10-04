@@ -120,10 +120,17 @@ Each walker focus decision logs one value-free `fallback-focus` line.
 
 QaReN then clears the focused field and types once without final value validation.
 Clearing needs a readable React value on the proven-focused input: a non-empty
-value is deleted with keystrokes and must read back empty before typing. An
-unreadable or uncontrolled value, or a field that is not empty after clearing,
-types nothing (`NO_TEXT_INPUT_TARGET` or `TEXT_ENTRY_UNVERIFIED`). Secure fields
-clear the same way.
+value is deleted with keystrokes. Immediately before replacement typing, a
+React read of the same testID must report both an empty value and positive focus.
+An unreadable or uncontrolled value refuses before clearing with
+`NO_TEXT_INPUT_TARGET`. Failed clearing or a missing empty-and-focused proof
+refuses with `TEXT_ENTRY_UNVERIFIED` and sends no replacement text. Successful
+clearing records an observed mutation; any later replacement failure retains
+`mutation: observed` and returns `TEXT_ENTRY_UNVERIFIED`, without safe-retry
+guidance, even if the runner reports no replacement mutation or only a possible
+one. Fields already empty keep the existing typing-failure behavior. Secure fields
+clear the same way. The [focused replacement tests](../qaren-core/test/unit/device-fill-focused-replace.test.ts)
+cover these guards and mutation reporting.
 A successful keyboard step records a passing row with reason `UNVERIFIED_FILL`,
 allowing later plan steps to continue; it does not establish the field's final
 value. Failed keyboard typing is not retried. Before the fallback tap or

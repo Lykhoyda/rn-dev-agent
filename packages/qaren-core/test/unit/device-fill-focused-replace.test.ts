@@ -101,7 +101,8 @@ for (const mutation of ['none', 'possible'] as const) {
     );
     assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
     assert.equal(env.meta.mutation, 'observed');
-    assert.equal(env.meta.hint, undefined);
+    assert.match(env.meta.hint, /do not blindly re-run device_fill/);
+    assert.doesNotMatch(env.meta.hint, /No text was entered|cannot synthesize text/);
     assert.deepEqual(typed, ['\b'.repeat(5), 'real@example.test']);
   });
 
@@ -109,7 +110,11 @@ for (const mutation of ['none', 'possible'] as const) {
     const { env, typed } = await run([{ value: '', focused: true }], mutation);
     assert.equal(env.code, mutation === 'none' ? 'NO_TEXT_INPUT_TARGET' : 'TEXT_ENTRY_UNVERIFIED');
     assert.equal(env.meta.mutation, mutation);
-    assert.equal(typeof env.meta.hint, mutation === 'none' ? 'string' : 'undefined');
+    assert.equal(typeof env.meta.hint, 'string');
+    assert.match(
+      env.meta.hint,
+      mutation === 'none' ? /No text was entered/ : /do not blindly re-run device_fill/,
+    );
     assert.deepEqual(typed, ['real@example.test']);
   });
 }
