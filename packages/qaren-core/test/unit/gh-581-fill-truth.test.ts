@@ -12,7 +12,7 @@ const { _setMaestroInlineObserverForTest, runMaestroInline } =
   await import('../../dist/maestro-invoke.js');
 const { updateRefMapFromFlat, clearRefMap } = await import('../../dist/fast-runner-ref-map.js');
 const { okResult, failResult } = await import('../../dist/utils.js');
-const { HandlerError, secureMaskedFill, unwrap } = await import('../../dist/qa/adapt.js');
+const { HandlerError, fillEvidence, unwrap } = await import('../../dist/qa/adapt.js');
 
 const NODES = [
   {
@@ -380,12 +380,15 @@ test('gh-581: secure uncontrolled masked value hard-fails and is not retried', a
   assert.equal((verify.opts.exactTarget as { secure?: boolean }).secure, true);
 });
 
-test('gh-581: only a stable secure-masked fill failure is the secure-fill success signal', async () => {
+test('I5: the real fill envelope carries the evidence class the walker maps', async () => {
   const cases = [
-    { verdict: 'secure-masked', stable: true, expected: true },
-    { verdict: 'secure-masked', stable: false, expected: false },
-    { verdict: 'mismatch', stable: true, expected: false },
-    { verdict: 'ambiguous', stable: true, expected: false },
+    { verdict: 'secure-masked', stable: true, expected: 'masked' },
+    { verdict: 'secure-masked', stable: false, expected: 'unavailable' },
+    { verdict: 'mismatch', stable: true, expected: 'mismatch' },
+    { verdict: 'mismatch', stable: false, expected: 'unavailable' },
+    { verdict: 'ambiguous', stable: true, expected: 'unavailable' },
+    { verdict: 'target-lost', stable: false, expected: 'unavailable' },
+    { verdict: 'unreadable', stable: true, expected: 'unavailable' },
   ];
   for (const { verdict, stable, expected } of cases) {
     const { result } = await withFillSeam(
@@ -399,9 +402,9 @@ test('gh-581: only a stable secure-masked fill failure is the secure-fill succes
       caught = error;
     }
     assert.ok(caught instanceof HandlerError, verdict);
-    assert.equal(secureMaskedFill(caught), expected, `${verdict} stable=${stable}`);
+    assert.equal(fillEvidence(caught), expected, `${verdict} stable=${stable}`);
   }
-  assert.equal(secureMaskedFill(new Error('TEXT_ENTRY_UNVERIFIED: x')), false);
+  assert.equal(fillEvidence(new Error('TEXT_ENTRY_UNVERIFIED: x')), undefined);
 });
 
 test('gh-581: ambiguous and target-lost verdicts hard-fail without retype', async () => {

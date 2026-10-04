@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { extractMutationDisposition } from '../../../dist/handlers/device-interact.js';
-import { HandlerError, describeError, secureMaskedFill, unwrap } from '../../../dist/qa/adapt.js';
+import { HandlerError, describeError, fillEvidence, unwrap } from '../../../dist/qa/adapt.js';
+import { classifyNativeVerification } from '../../../dist/handlers/fill-verify.js';
 import { isRecord } from '../../../dist/qa/questions.js';
 import { recover } from '../../../dist/qa/recover.js';
 import { createStop } from '../../../dist/qa/stop.js';
@@ -23,7 +24,7 @@ function fixture(throwSink = false) {
       HandlerError,
       extractMutationDisposition,
       describeError,
-      secureMaskedFill,
+      fillEvidence,
       unwrap,
       isRecord,
       stop,
@@ -152,7 +153,7 @@ test('cancelled act does not dispatch or manufacture settle diagnostics', async 
   assert.deepEqual(f.logs, []);
 });
 
-test('act marks only a stable secure-masked unverified fill as secure evidence', async () => {
+test('act carries the fill evidence class of an unverified fill, never for other refusals', async () => {
   const fill = (
     native: string,
     nativeStable: boolean,
@@ -166,22 +167,25 @@ test('act marks only a stable secure-masked unverified fill as secure evidence',
           ok: false,
           code,
           error: 'device_fill typed but the retained native target could not be verified',
-          meta: { mutation: 'possible', verification: { native, nativeStable } },
+          meta: {
+            mutation: 'possible',
+            verification: classifyNativeVerification(native as never, nativeStable),
+          },
         }),
       },
     ],
   });
-  const cases: [ToolResult, boolean][] = [
-    [fill('secure-masked', true), true],
-    [fill('secure-masked', false), false],
-    [fill('mismatch', true), false],
-    [fill('secure-masked', true, 'FOCUS_TARGET_OCCLUDED'), false],
+  const cases: [ToolResult, string | undefined][] = [
+    [fill('secure-masked', true), 'masked'],
+    [fill('secure-masked', false), 'unavailable'],
+    [fill('mismatch', true), 'mismatch'],
+    [fill('secure-masked', true, 'FOCUS_TARGET_OCCLUDED'), undefined],
   ];
   for (const [toolResult, expected] of cases) {
     const outcome = await fixture().act(async () => toolResult, true);
     assert.equal(outcome.ok, false);
     assert.equal(outcome.proven, false);
-    assert.equal(outcome.secureMasked === true, expected);
+    assert.equal(outcome.evidence, expected);
   }
 });
 

@@ -1574,13 +1574,13 @@ for (const refusal of ['resolution', 'native binding']) {
   }
 }
 
-for (const secure of [true, false]) {
-  test(`a stable secure-masked strict fill ${secure ? 'passes on a secure target' : 'still fails on a non-secure target'}`, async () => {
+for (const evidence of ['masked', 'unavailable', 'mismatch'] as const) {
+  test(`I5: a strict fill with ${evidence} evidence ${evidence === 'mismatch' ? 'fails' : 'passes unverified'} and is never retried`, async () => {
     const input = element('@pw', 'Password', {
       kind: 'input',
       nativeKind: 'input',
       testID: 'login_password',
-      secure,
+      secure: evidence === 'masked',
     });
     const fake = app({ initial: [input, submit], typeFocused: false });
     let fills = 0;
@@ -1595,13 +1595,21 @@ for (const secure of [true, false]) {
         mutation: 'possible',
         error:
           'TEXT_ENTRY_UNVERIFIED: device_fill typed but the retained native target could not be verified',
-        secureMasked: true,
+        evidence,
       };
     };
     const result = await walkBlock(blocks(plan('hunter22', 'login_password', ''))[0], fake.deps);
     assert.equal(fills, 1);
-    assert.equal(result.block.outcome, secure ? 'pass' : 'fail');
-    if (!secure) assert.match(result.failure?.seen ?? '', /TEXT_ENTRY_UNVERIFIED/);
+    assert.equal(fake.rows.filter((row) => row.outcome === 'retry').length, 0);
+    if (evidence === 'mismatch') {
+      assert.equal(result.block.outcome, 'fail');
+      assert.match(result.failure?.seen ?? '', /TEXT_ENTRY_UNVERIFIED/);
+      return;
+    }
+    assert.equal(result.block.outcome, 'pass', JSON.stringify(result.failure));
+    assert.equal(fake.rows[0].outcome, 'pass');
+    assert.match(fake.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
+    assert.equal(JSON.stringify(fake.rows).includes('hunter22'), false);
   });
 }
 

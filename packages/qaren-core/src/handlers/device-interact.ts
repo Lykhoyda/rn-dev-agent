@@ -1122,6 +1122,7 @@ function fillFailure(
     ...(opts.verification
       ? {
           verification: {
+            evidence: opts.verification.evidence,
             native: opts.verification.native,
             nativeStable: opts.verification.nativeStable,
           },

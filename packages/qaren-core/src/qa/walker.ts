@@ -64,7 +64,8 @@ export interface ActResult {
   proven: boolean;
   error?: string;
   mutation?: 'none' | 'observed' | 'possible';
-  secureMasked?: boolean;
+  // What a refused fill still proved; masked and unavailable pass unverified, mismatch fails.
+  evidence?: 'masked' | 'unavailable' | 'mismatch';
 }
 
 export interface WalkerDeps {
@@ -1231,9 +1232,13 @@ export async function walkBlock(
           diagnostic(item, after, 'decision', 'ACCEPTED');
           metric('readback', after);
           const shot = await shoot(item);
-          const filled =
-            (act!.ok && act!.proven) || (act!.secureMasked === true && element?.secure === true);
-          if (item.kind === 'fill' ? filled : act!.proven || changed) {
+          const unverified =
+            item.kind === 'fill' &&
+            !(act!.ok && act!.proven) &&
+            (act!.evidence === 'masked' || act!.evidence === 'unavailable');
+          if (
+            item.kind === 'fill' ? (act!.ok && act!.proven) || unverified : act!.proven || changed
+          ) {
             const target = stepTarget(item);
             emit({
               ...base(item, attempt),
@@ -1244,6 +1249,13 @@ export async function walkBlock(
                   (element ? elementSelector(element) : undefined),
               ),
               outcome: 'pass',
+              ...(unverified
+                ? {
+                    reason: redact(
+                      `UNVERIFIED_FILL: the field's final value ${act!.evidence === 'masked' ? 'reads back masked' : 'could not be read back'}, so the fill was not verified`,
+                    ),
+                  }
+                : {}),
             });
             break;
           }
