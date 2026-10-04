@@ -506,7 +506,13 @@ export class ObservedPrivacy {
         .flatMap((element) => [element.label ?? '', element.value ?? '']),
     ];
     const values = this.privateSet();
-    this.sensitivePixels ||= text.some((line) => matchPrivate(line, values, 'persisted').hit);
+    this.sensitivePixels ||=
+      text.some((line) => matchPrivate(line, values, 'persisted').hit) ||
+      values.values.some(
+        (value) =>
+          chars(value.text.trim()) < SHORT &&
+          forms(value.text).some((form) => text.some((line) => line.includes(form))),
+      );
   }
 
   didFill(): void {
@@ -611,9 +617,13 @@ export function modelMask(
   ];
   let prefix = 'QAREN_VALUE';
   while (source.some((text) => text.includes(`[${prefix}_`))) prefix += '_';
-  const tokens = unique.map((_, i) => `[${prefix}_${i + 1}]`);
+  const owner = (value: string): string => value.trim().normalize('NFC');
+  const owners = [...new Set(unique.map(owner))];
+  const tokens = owners.map((_, i) => `[${prefix}_${i + 1}]`);
   const replacements = new Map(
-    unique.flatMap((value, i) => forms(value).map((form) => [form, tokens[i]])),
+    unique.flatMap((value) =>
+      forms(value).map((form) => [form, tokens[owners.indexOf(owner(value))]]),
+    ),
   );
   const listed = new Set(set.values.map((value) => value.text));
   const all: PrivateSet = {
@@ -640,7 +650,7 @@ export function modelMask(
     return opaque.reduce((out, token, i) => out.split(guard(i)).join(token), masked);
   };
   return {
-    tokens: [...new Set(values.filter(Boolean))].map((value) => tokens[unique.indexOf(value)]),
+    tokens: [...new Set(values.filter(Boolean).map((value) => replacements.get(value)!))],
     apply: maskText,
     applyPlanLine: (text) =>
       projectPlanLine(
