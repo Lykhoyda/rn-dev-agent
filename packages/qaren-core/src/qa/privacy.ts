@@ -239,24 +239,28 @@ export function projectPlanLine(
   text: string,
   set: PrivateSet,
   policy: Policy = 'durable',
+  token?: (value: string) => string | undefined,
 ): { text: string; hit: boolean } {
   const prefix = text.match(/^\s*\d+\.\s+/)?.[0] ?? '';
-  let hit = false;
-  const body = text.slice(prefix.length).replace(/"([^"\n]*)"/g, (quoted, value: string) => {
-    if (
-      !set.values.some(
+  const projected = matchPrivate(text.slice(prefix.length), set, policy, token);
+  let hit = projected.hit;
+  const body = projected.text.replace(
+    /"([^"\n]*)"|“([^”\n]*)”/g,
+    (quoted, straight: string | undefined, curly: string | undefined) => {
+      const value = straight ?? curly;
+      const entry = set.values.find(
         (entry) =>
           entry.provenance === 'typed' &&
           chars(entry.text.trim()) < SHORT &&
-          forms(entry.text).includes(value),
-      )
-    )
-      return quoted;
-    hit = true;
-    return `"${MASK}"`;
-  });
-  const projected = matchPrivate(body, set, policy);
-  return { text: prefix + projected.text, hit: hit || projected.hit };
+          forms(entry.text).includes(value!),
+      );
+      if (!entry) return quoted;
+      hit = true;
+      const replacement = policy === 'model' ? (token?.(entry.text) ?? MASK) : MASK;
+      return quoted[0] + replacement + quoted[quoted.length - 1];
+    },
+  );
+  return { text: prefix + body, hit };
 }
 
 export function codeBoxRows(screen: Screen): Element[][] {
@@ -588,6 +592,7 @@ export class ObservedPrivacy {
 export interface ModelMask {
   tokens: string[];
   apply(text: string): string;
+  applyPlanLine(text: string): string;
   describeElement(element: Element, render: (element: Element) => string): string;
 }
 
@@ -631,8 +636,19 @@ export function modelMask(
     return opaque.reduce((out, token, i) => out.split(guard(i)).join(token), masked);
   };
   return {
-    tokens,
+    tokens: [...new Set(values.filter(Boolean))].map((value) => tokens[unique.indexOf(value)]),
     apply: maskText,
+    applyPlanLine: (text) =>
+      projectPlanLine(
+        text,
+        {
+          values: all.values.map((entry) =>
+            entry.provenance === 'secret' ? entry : { ...entry, provenance: 'typed' as const },
+          ),
+        },
+        'model',
+        (value) => replacements.get(value),
+      ).text,
     describeElement: (element, render) => {
       if (codeElements.has(element)) return 'box (hidden)';
       const shown = isPossibleInput(element)

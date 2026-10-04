@@ -352,3 +352,20 @@ test('refused plans without active phrase lines still skip readiness', async () 
     assert.equal(judge.requests.length, 0);
   }
 });
+
+test('verb parsing protects short straight and curly quoted slots while retaining operational values', async () => {
+  for (const quoted of ['"47"', '“47”']) {
+    const judge = scriptedJudge((questions) =>
+      Object.fromEntries(Object.entries(questions).map(([id, q]) => [id, choice(q, 'fill')])),
+    );
+    const parsed = await parsePlanWithJev(`1. Put ${quoted} into age`, judge);
+    assert.ok(parsed.blocks, JSON.stringify(parsed));
+    const item = parsed.blocks[0].items[0];
+    assert.ok(item.kind === 'fill');
+    assert.equal(item.text, '47');
+    assert.equal(judge.requests.length, 1);
+    const request = JSON.stringify(judge.requests);
+    assert.equal(request.includes('47'), false);
+    assert.match(request, /QAREN_VALUE_/);
+  }
+});

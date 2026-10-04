@@ -283,37 +283,34 @@ a reset clears the earlier style restriction without proving native visibility.
 
 ### Input value masking
 
-Observed input values are masked before Jev requests. Private observed values and
-concealed fallback values also receive fragment protection in reporting and every
-outbound model request. A visible token is concealed when it contains a protected
-value, is a substring of at least four characters, belongs to adjacent
-single-character boxes whose concatenation matches at least two characters of a
-protected value. A lone single character is never masked by itself, so plan list
-numbers such as `3.` stay readable. The current screen's box context also applies when masking individual
-output fields. Tokens joined by `-`, `_`, `.` or `@` are judged whole. In model
-requests only a real element's structured testID is exempt from fragment masking;
-marker-looking text in labels, values, placeholders, instructions and criteria is
-masked normally. Short values and
-fragments never rewrite it, so `address1` stays readable when `1` is protected,
-but a testID containing a whole protected value of three or more characters is
-concealed. For saved-action admission, see [Saved blocks](#saved-blocks).
-Isolated shorter fragments of long
-secrets remain readable: `is` stays visible for `existing-secret`, while `secr`
-is concealed. A protected `1234` masks each of the four digit boxes shown side by side.
+Planned fill values are classified before progress streams. The shared
+[privacy matcher](../qaren-core/src/qa/privacy.ts) protects complete values of
+three or more characters after trimming, using case-sensitive substring matches
+for raw and trimmed NFC/NFD forms. Numbers with at least four digits also match
+with an optional space, hyphen, dot or slash between digits. Model requests use
+opaque identity tokens; durable text uses `•••`; a match withholds saved blocks.
+Displayed identifiers use the same matcher while operational identifiers remain
+usable. Partial fragments of a longer value remain readable.
 
-Complete values can retain opaque identity tokens for model comparisons; these
-tokens disclose no content, length, format, order or validity. Concealed fragments
-(`•••`) never count as assertion evidence, and a phrase check or visibility
-expectation containing one remains uncertain. The
-[privacy implementation](../qaren-core/src/qa/privacy.ts) owns masking, with
-[structural privacy regression cases](../qaren-core/test/unit/qa/split-digit-privacy.test.ts).
-Once sensitive input pixels or a protected value's visible echo are observed,
-screenshots are withheld for the rest of the walk. Masks do not prove unobserved
-value content.
-Short typed values (one or two characters) are protected in quoted plan values,
-input value slots and code rows, but remain readable in free text elsewhere.
-After the first fill, geometric rows of at least three single-character text boxes
-render as `[code]`; model descriptions show each as `box (hidden)`.
+Short typed values (one or two characters) are protected in straight or curly
+quoted plan slots, including parsing requests, and in input value slots, but
+remain readable in free text elsewhere. Secure-field values have a separate
+exception: two or more characters match as substrings; a single character
+matches only as a whole token. Structural step numbers remain readable.
+
+From the first fill dispatch, geometric rows of at least three visible,
+single-character text boxes render as one `[code]` token; model descriptions
+show each box as `box (hidden)`. Rows share a horizontal band within four points
+and have gaps no greater than 1.5 times the median box width. Wrappers and
+repeated characters do not affect grouping; buttons and inputs are not code
+boxes. Their characters are never retained as free-text matching rules.
+
+Opaque tokens preserve complete-value identity for model comparisons. An
+unobserved protected value or hidden input content cannot prove an assertion.
+Once sensitive input pixels, code rows or a protected value's visible echo are
+observed, screenshots are withheld for the rest of the walk. See the
+[structural privacy regression cases](../qaren-core/test/unit/qa/split-digit-privacy.test.ts)
+and [Saved blocks](#saved-blocks).
 
 iOS interactions check app existence immediately and wait only when the app is
 missing; availability and foreground checks remain in place. When the privacy

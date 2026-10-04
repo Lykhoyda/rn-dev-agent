@@ -448,6 +448,7 @@ export async function walkBlock(
     })(observationDeadline(observation.timing, deadline), deps.now, deps.cancelled);
     try {
       context.check();
+      if (item.kind === 'fill') privacy.didFill();
       const result = await send(context);
       context.assertComplete();
       diagnostic(item, observation, 'dispatch', 'COMPLETED', context.authorizations);
@@ -491,11 +492,6 @@ export async function walkBlock(
   };
   let shots = shotIndex;
   const emit = (row: LedgerRow): void => {
-    if (
-      block.items.some((item) => item.line === row.line && item.kind === 'fill') &&
-      (row.outcome === 'pass' || row.reason?.includes('UNVERIFIED_FILL'))
-    )
-      privacy.didFill();
     let timing: RowTiming | undefined;
     try {
       timing = deps.rowTiming?.(row.t);

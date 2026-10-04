@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import { join as joinScreen, type Element, type Screen } from '../../../dist/qa/screen.js';
 import { capturePrivateScreen, ObservedPrivacy } from '../../../dist/qa/privacy.js';
+import { decideScreen } from '../../../dist/qa/resolve.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import type { LedgerRow } from '../../../dist/qa/ledger.js';
 import { element, scriptedJudge, walker } from './judgment-fixtures.ts';
@@ -308,4 +309,88 @@ test('a protected value equal to the mask withholds an earlier block', async () 
   });
   assert.equal(ledger.blocks[0].saved, false);
   assert.deepEqual(ledger.blocksWritten, []);
+});
+
+for (const proven of [true, false]) {
+  test(`first dispatched fill protects OTP readback and screenshots when proven=${proven}`, async () => {
+    const before = view([element('@email', 'Email', { kind: 'input', testID: 'email' })]);
+    const after = joinScreen(
+      [...'9382'].flatMap((label, i) => [
+        { ref: `@group${i}`, type: 'Group' },
+        {
+          ref: `@box${i}`,
+          type: 'StaticText',
+          label,
+          rect: { x: i * 48, y: 100, width: 32, height: 40 },
+        },
+      ]),
+      [],
+    );
+    after.coverage = { native: 'complete', react: 'complete' };
+    const blocks = parsePlan('1. Type "mail-canary" into "email"\n✓ "Missing"').blocks;
+    assert.ok(blocks);
+    const f = walker(
+      [before],
+      scriptedJudge(() => ({})),
+      { ok: true, proven },
+    );
+    let dispatched = false;
+    let screenshots = 0;
+    f.deps.captureScreen = async () => (dispatched ? after : before);
+    const fill = f.deps.fill;
+    f.deps.fill = async (...args) => {
+      dispatched = true;
+      return fill(...args);
+    };
+    f.deps.screenshot = async (name) => {
+      screenshots++;
+      return name;
+    };
+    const ledger = await runPlan(blocks, f.deps);
+    assert.equal(dispatched, true);
+    assert.equal(screenshots, 0);
+    assert.match(ledger.failure?.seen ?? '', /\[code\]/);
+    assert.equal(ledger.failure?.seen.includes('9 | 3 | 8 | 2'), false);
+    assert.equal(ledger.steps[0].outcome, proven ? 'pass' : 'fail');
+  });
+}
+
+test('curly quoted short slots project the ledger and withhold earlier blocks', async () => {
+  const blocks = parsePlan('### Confirm\n✓ “47”\n### Fill\n1. Type “47” into "age"').blocks;
+  assert.ok(blocks);
+  const f = walker(
+    [view([text('@shown', '47'), element('@age', 'Age', { kind: 'input', testID: 'age' })])],
+    scriptedJudge(() => ({})),
+  );
+  const appRoot = mkdtempSync(join(tmpdir(), 'qaren-curly-slots-'));
+  const ledger = await runPlan(blocks, f.deps, [], {
+    appRoot,
+    platform: 'ios',
+    appId: 'com.example',
+  });
+  assert.equal(ledger.blocks[0].saved, false);
+  assert.equal(ledger.steps[0].text, '✓ “•••”');
+  assert.equal(ledger.steps[1].text, '1. Type “•••” into "age"');
+  assert.deepEqual(f.actions, ['fill @age 47']);
+  assert.deepEqual(ledger.blocksWritten, []);
+});
+
+test('unrelated retained tokens cannot prove another private value in checks or visibility', async () => {
+  const observed = view([text('@beta', 'BetaSecret')]);
+  const privacy = new ObservedPrivacy(['AlphaSecret']);
+  privacy.observe(view([element('@prior', 'Previous', { kind: 'input', value: 'BetaSecret' })]));
+  for (const kind of ['check', 'wait', 'scroll'] as const) {
+    const judge = scriptedJudge(() => assert.fail('an unobserved private value must stay unsure'));
+    const claim = 'AlphaSecret is visible';
+    const check = kind === 'check' ? { kind, text: claim, literal: false, line: 1 } : undefined;
+    const step =
+      kind === 'wait'
+        ? { kind, target: { phrase: claim }, line: 1 }
+        : kind === 'scroll'
+          ? { kind, direction: 'down' as const, until: { phrase: claim }, line: 1 }
+          : undefined;
+    const decision = await decideScreen(observed, judge, check, step, ['AlphaSecret'], privacy);
+    assert.equal(kind === 'check' ? decision.check : decision.visibility?.verdict, 'unsure');
+    assert.equal(judge.requests.length, 0);
+  }
 });
