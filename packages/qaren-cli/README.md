@@ -48,7 +48,10 @@ positional words such as `Tap "Save" at the bottom`.
 
 ### Fill verification and keyboard fallback
 
-Fills use strict native value verification first. A secure field reads back
+Fills use strict native value verification first. A strict fill replaces the
+field's content: the bound input is cleared before typing, and verification
+expects exactly the plan text. Keyboard fallback typing does not clear the field.
+A secure field reads back
 only as masked, so a fill into a secure target passes on the runner's stable
 `secure-masked` verdict; every other strict fill requires an exact read-back,
 and a screen change alone never verifies a fill. During discovery, a quoted

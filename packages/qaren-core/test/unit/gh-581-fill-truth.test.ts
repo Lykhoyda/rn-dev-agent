@@ -492,6 +492,34 @@ test('gh-581: empty text is a verified clear (clear-first dispatch + exact empty
   assert.equal(verify.cliArgs[2], '');
 });
 
+test('a strict fill replaces an already-filled field and verifies the exact plan text', async () => {
+  for (const [initial, text] of [
+    ['Ada', 'Grace'],
+    ['', 'Grace'],
+    ['Ada', ''],
+  ]) {
+    let field = initial;
+    const { result, calls } = await withFillSeam(
+      {
+        fill: (call) => {
+          const typed = call.cliArgs[2];
+          field = call.cliArgs.includes('--clear-first') ? typed : field + typed;
+          return okResult({ typed: true, focusTap: 'performed', inputResolution: 'descriptor' });
+        },
+        verify: (call) =>
+          okResult({
+            verifyVerdict: call.cliArgs[2] === field ? 'exact' : 'mismatch',
+            verifyStable: true,
+          }),
+      },
+      () => performExactFill({ ref: '@e3', text }, null, NATIVE_ONLY),
+    );
+    assert.ok(!(result as { isError?: boolean }).isError, `${initial} -> ${text}`);
+    assert.equal(field, text, `${initial} -> ${text}`);
+    assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 1);
+  }
+});
+
 test('gh-581: rejected native A never rebinds to replacement B with the same testID', async () => {
   const replacement = NODES.map((node) =>
     node.identifier === 'last-name' ? { ...node, ref: '@e8' } : node,

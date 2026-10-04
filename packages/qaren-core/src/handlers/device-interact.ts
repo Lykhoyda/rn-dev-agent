@@ -1246,7 +1246,8 @@ export async function performExactFill(
   const tNative = Date.now();
   const operationToken = randomUUID();
   const primary = await runNative(
-    ['fill', binding.inputRef, args.text, ...(args.text.length === 0 ? ['--clear-first'] : [])],
+    // A fill replaces the field's content; verification expects exactly args.text.
+    ['fill', binding.inputRef, args.text, '--clear-first'],
     {
       ...settleOpts(args),
       exactTarget: { ...exactTarget, operationToken },
