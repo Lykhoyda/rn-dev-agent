@@ -101,33 +101,7 @@ fn login_config_refuses_half_pairs_bad_slugs_and_ambiguous_markers() {
 }
 
 #[test]
-fn config_env_takes_plain_keys_and_never_echoes_values() {
-    let config = load("appId: a\nenv: { ENVIRONMENT: staging, _X1: 'yyyy' }\n").unwrap();
-    assert_eq!(
-        config.env_pairs(),
-        vec![
-            ("ENVIRONMENT".to_string(), "staging".to_string()),
-            ("_X1".to_string(), "yyyy".to_string())
-        ]
-    );
-    for key in [
-        "environment",
-        "1X",
-        "A-B",
-        "TYPESAFE_API_KEY",
-        "CI",
-        "PATH",
-        "EXPO_NO_TELEMETRY",
-        "QAREN_ANYTHING",
-    ] {
-        let failure = load(&format!("appId: a\nenv: {{ {key}: secret-value }}\n")).unwrap_err();
-        assert_eq!(failure.code, FailureCode::ScenarioInvalid, "{key}");
-        assert!(!failure.detail.to_string().contains("secret-value"));
-    }
-    for value in ["\"secret\\nvalue\"", "abc", "''"] {
-        let failure = load(&format!("appId: a\nenv: {{ ENVIRONMENT: {value} }}\n")).unwrap_err();
-        assert_eq!(failure.code, FailureCode::ScenarioInvalid, "{value}");
-        assert!(!failure.detail.to_string().contains("secret"));
-        assert!(!failure.detail.to_string().contains("abc"));
-    }
+fn check_config_rejects_unsupported_environment_injection() {
+    let failure = load("appId: a\nenv: { ENVIRONMENT: staging }\n").unwrap_err();
+    assert_eq!(failure.code, FailureCode::ScenarioInvalid);
 }

@@ -1,28 +1,5 @@
 pub fn redact_api_key(raw: &str) -> String {
-    let mut out = redact_known_key(raw, std::env::var("TYPESAFE_API_KEY").ok().as_deref());
-    for value in protected_values() {
-        out = redact_known_key(&out, Some(&value));
-    }
-    out
-}
-
-// Configured env values, redacted like the API key; the log helper receives them through this variable.
-pub const PROTECTED_VALUES_ENV: &str = "QAREN_PROTECTED_VALUES";
-static PROTECTED: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
-
-pub fn protect_values<'a>(values: impl IntoIterator<Item = &'a str>) {
-    let mut held = PROTECTED.write().unwrap_or_else(|e| e.into_inner());
-    for value in values {
-        if !value.is_empty() && !held.iter().any(|v| v == value) {
-            held.push(value.to_string());
-        }
-    }
-    // Longest first, so a value that contains another is replaced whole.
-    held.sort_by_key(|v| std::cmp::Reverse(v.len()));
-}
-
-pub fn protected_values() -> Vec<String> {
-    PROTECTED.read().unwrap_or_else(|e| e.into_inner()).clone()
+    redact_known_key(raw, std::env::var("TYPESAFE_API_KEY").ok().as_deref())
 }
 
 pub fn redact_known_key(raw: &str, key: Option<&str>) -> String {

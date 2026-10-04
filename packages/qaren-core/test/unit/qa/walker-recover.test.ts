@@ -176,13 +176,6 @@ test('a red box fails at the step with its text and no recovery row', async () =
   assert.ok(!f.calls.some((c) => c.startsWith('dialog') || c === 'hideDevMenu'));
 });
 
-test('the dev-client picker fails at the step without recovering', async () => {
-  const f = fake([screen(['Development servers'], 'picker')]);
-  const outcome = await walkBlock(block('1. Tap "Settings"\n'), f.deps);
-  assert.equal(outcome.refusal, undefined);
-  assert.match(outcome.failure?.seen ?? '', /dev-client picker or first-run screen is in front/);
-});
-
 test('a capture error or a Jev error never recovers', async () => {
   const capture = fake([new NativeCaptureError()]);
   const failedCapture = await walkBlock(block('1. Tap "Settings"\n'), capture.deps);

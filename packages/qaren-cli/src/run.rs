@@ -181,7 +181,6 @@ fn run_inner(
 ) -> Result<Receipt, Failure> {
     validate_boot_device(req.platform, req.device.as_deref(), req.boot_device)?;
     let (config, config_raw) = CheckConfig::load(&req.config_path)?;
-    crate::redact::protect_values(config.env.values().map(String::as_str));
     config.validate_for_platform(req.platform)?;
     if req.platform == Platform::Ios {
         if let Some(workspace) = config.ios.as_ref().and_then(|ios| ios.build.as_ref()) {
@@ -351,12 +350,7 @@ fn run_inner(
         timings: Vec::new(),
         notes: Vec::new(),
         verb: verb(req),
-        env: config.env_pairs(),
     };
-    if !config.env.is_empty() {
-        let keys: Vec<&str> = config.env.keys().map(String::as_str).collect();
-        ctx.notes.push(("config_env".to_string(), keys.join(",")));
-    }
     if let Some(earlier) = recovered {
         ctx.notes.push(("recovered_run".to_string(), earlier));
     }

@@ -54,17 +54,9 @@ pub(crate) struct Ctx<'a> {
     pub(crate) timings: Vec<(String, u64)>,
     pub(crate) notes: Vec<(String, String)>,
     pub(crate) verb: &'static str,
-    // `.qaren/config.yaml` env: only the native build and Metro receive it; never serialized.
-    pub(crate) env: Vec<(String, String)>,
 }
 
 impl<'a> Ctx<'a> {
-    fn with_env(&self, spec: CmdSpec) -> CmdSpec {
-        self.env
-            .iter()
-            .fold(spec, |spec, (key, value)| spec.env(key, value))
-    }
-
     pub(crate) fn mark(&mut self, label: &str, phase_start_ms: u64) -> u64 {
         let now = self.runner.now_epoch_ms();
         self.timings
@@ -346,7 +338,6 @@ fn prepare_validated(
         started_ms,
         timings: Vec::new(),
         notes: Vec::new(),
-        env: Vec::new(),
         verb: "prepare",
     };
     let t = ctx.mark("validate", started_ms);
@@ -1045,8 +1036,7 @@ pub(crate) fn plan_build(ctx: &mut Ctx) -> Result<BuildPlan, Failure> {
     let repo_root = ctx.record.candidate.repo_root.clone();
     let project_root = ctx.record.candidate.project_root.clone();
     let fp = fingerprint::compute(ctx.runner, &repo_root, &project_root, platform)?
-        .with_ios_workspace(ctx.record.scenario.build.ios_workspace.as_ref())
-        .with_env(&ctx.env);
+        .with_ios_workspace(ctx.record.scenario.build.ios_workspace.as_ref());
     let state = buildplan::load_state(&repo_root, platform, &ctx.record.candidate.app_id);
     // The artifact is content-verified only when it could authorize reuse.
     let artifact_status = match &state {
@@ -1333,7 +1323,6 @@ pub(crate) fn run_clean_preparation(ctx: &mut Ctx, plan: &BuildPlan) -> Result<(
         .cwd(&project_root)
         .env_remove("CI")
         .env("EXPO_NO_TELEMETRY", "1");
-        let spec = ctx.with_env(spec);
         let prebuild = if ctx.record.scenario.platform == Platform::Ios {
             run_finite_build(ctx, &spec)?;
             crate::exec::CmdOutput::success("")
@@ -1390,7 +1379,7 @@ pub(crate) fn run_clean_preparation(ctx: &mut Ctx, plan: &BuildPlan) -> Result<(
 fn spawn_metro_only(ctx: &mut Ctx) -> Result<(), Failure> {
     let port = qaren_metro_port(&ctx.record.scenario);
     let project_root = ctx.record.candidate.project_root.clone();
-    let spec = ctx.with_env(metro::start_spec(&project_root, port));
+    let spec = metro::start_spec(&project_root, port);
     let metro_log = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id)
         .join("logs")
         .join("metro.log");
@@ -1682,8 +1671,7 @@ pub(crate) fn recheck_fingerprint(
     let repo_root = ctx.record.candidate.repo_root.clone();
     let project_root = ctx.record.candidate.project_root.clone();
     let fp = fingerprint::compute(ctx.runner, &repo_root, &project_root, platform)?
-        .with_ios_workspace(ctx.record.scenario.build.ios_workspace.as_ref())
-        .with_env(&ctx.env);
+        .with_ios_workspace(ctx.record.scenario.build.ios_workspace.as_ref());
     if fp.value != plan.fingerprint {
         return Err(candidate_drift(
             &ctx.record.run_id,
@@ -2204,12 +2192,12 @@ pub(crate) fn build_and_ready(ctx: &mut Ctx) -> Result<(), Failure> {
             std::fs::create_dir(&output).map_err(|_| {
                 build_failure(ctx, "cannot exclusively create iOS build output directory")
             })?;
-            let build = ctx.with_env(ios::build_spec(
+            let build = ios::build_spec(
                 &project_root,
                 &output,
                 deadline,
                 ctx.record.scenario.build.ios_workspace.as_ref(),
-            ));
+            );
             run_finite_build(ctx, &build)?;
             if ctx.record.scenario.build.ios_workspace.is_some() {
                 let built = ios::built_app(&ios::workspace_products(&output))
@@ -2256,13 +2244,7 @@ pub(crate) fn build_and_ready(ctx: &mut Ctx) -> Result<(), Failure> {
                 .as_ref()
                 .expect("android allocated")
                 .server_port;
-            ctx.with_env(android::build_spec(
-                &project_root,
-                &serial,
-                server_port,
-                port,
-                deadline,
-            ))
+            android::build_spec(&project_root, &serial, server_port, port, deadline)
         }
     };
     let build_log = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id)

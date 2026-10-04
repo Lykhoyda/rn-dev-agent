@@ -32,16 +32,6 @@ impl NativeFingerprint {
         }
         self
     }
-
-    // A build made with other config env values is a different binary; only the hash is kept.
-    pub fn with_env(mut self, env: &[(String, String)]) -> Self {
-        if !env.is_empty() {
-            let bytes = serde_json::to_vec(&("qaren-config-env/1", &self.value, env))
-                .expect("fingerprint and env strings serialize to JSON");
-            self.value = format!("{FINGERPRINT_VERSION}:{}", sha256_hex(&bytes));
-        }
-        self
-    }
 }
 
 // Native inputs are the files git considers part of the candidate (tracked or

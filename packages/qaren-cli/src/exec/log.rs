@@ -60,13 +60,6 @@ impl LogDrain {
         };
         // A separate group drains through target SIGKILL and survives a detached prepare.
         let mut command = Command::new(executable);
-        let protected = crate::redact::protected_values();
-        if !protected.is_empty() {
-            command.env(
-                crate::redact::PROTECTED_VALUES_ENV,
-                serde_json::to_string(&protected).expect("strings serialize"),
-            );
-        }
         command
             .arg(HELPER_ARG)
             .stdin(Stdio::from(OwnedFd::from(input)))
@@ -208,11 +201,6 @@ impl Lines {
 }
 
 pub fn run_helper(paired: bool) -> io::Result<()> {
-    if let Ok(raw) = std::env::var(crate::redact::PROTECTED_VALUES_ENV) {
-        let values: Vec<String> = serde_json::from_str(&raw)
-            .map_err(|_| io::Error::other("unreadable protected values"))?;
-        crate::redact::protect_values(values.iter().map(String::as_str));
-    }
     if std::env::var("TYPESAFE_API_KEY").is_ok_and(|key| key.contains(['\r', '\n'])) {
         return Err(io::Error::other(
             "cannot stream-redact a multiline configured key",

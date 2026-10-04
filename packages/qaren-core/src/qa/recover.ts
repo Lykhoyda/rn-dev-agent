@@ -43,10 +43,6 @@ export async function recover(
       ? { handled: 'dev-menu' }
       : { fail: `the dev menu in front could not be hidden: ${hidden.error ?? 'not dispatched'}` };
   }
-  if (screen.front === 'picker')
-    return {
-      fail: 'the dev-client picker or first-run screen is in front: the app did not load its bundle from Metro',
-    };
   if (!deps.replayLogin || !marker || !loginWall(screen, marker)) return undefined;
   const replayed = await deps.replayLogin();
   if (replayed === 'pass') return { handled: 'login' };

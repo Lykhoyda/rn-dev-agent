@@ -64,14 +64,6 @@ test('the dev menu in front is hidden', async () => {
   assert.deepEqual(d.calls, ['hideDevMenu']);
 });
 
-test('the dev-client picker in front fails without recovering', async () => {
-  const d = deps();
-  assert.deepEqual(await recover(screen('picker', marker('login')), d.deps, { id: 'login' }), {
-    fail: 'the dev-client picker or first-run screen is in front: the app did not load its bundle from Metro',
-  });
-  assert.deepEqual(d.calls, []);
-});
-
 test('the login marker on screen replays the login block', async () => {
   const d = deps();
   assert.deepEqual(await recover(screen('app', marker('login')), d.deps, { id: 'login' }), {
