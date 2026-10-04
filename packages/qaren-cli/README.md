@@ -283,8 +283,11 @@ a reset clears the earlier style restriction without proving native visibility.
 
 ### Input value masking
 
-Planned fill values are classified before progress streams. The shared
-[privacy matcher](../qaren-core/src/qa/privacy.ts) protects complete values of
+Planned fill values are classified before progress streams. Streamed rows contain
+only value-free progress metadata and eligible screenshot paths; plan text,
+reasons, selectors and block names appear only in the final projected ledger.
+CLI progress shows the line, outcome, resolver and attempt without plan text.
+The shared [privacy matcher](../qaren-core/src/qa/privacy.ts) protects complete values of
 three or more characters after trimming, using case-sensitive substring matches
 for raw and trimmed NFC/NFD forms. Numbers with at least four digits also match
 with an optional Unicode whitespace character (including nonbreaking spaces),
@@ -298,7 +301,9 @@ quoted plan slots, including parsing requests, input value slots and structural
 code rows. They are not masked elsewhere, including a short value shown as free
 text before its fill. Secure-field values have a separate
 exception: two or more characters match as substrings; a single character
-matches only as a whole token. Structural step numbers remain readable.
+matches only as a whole token. This includes native labels classified as possible
+values on secure inputs, even when no readable value is supplied.
+Structural step numbers remain readable.
 
 From the first fill dispatch, geometric rows of at least three visible,
 single-character text boxes render as one `[code]` token; model descriptions
@@ -413,16 +418,19 @@ is never re-walked or rewritten. Timeout recovery remains deferred (see
 blocks that passed earlier in the run remain saved. A step without a `testID`
 or label, a phrase wait, a fill into a secure or private input, or an attempt at
 [keyboard fallback](#fill-verification-and-keyboard-fallback) leaves the block
-unsaved and the ledger says why without naming any value; ordinary fills keep their
-plan literal in the saved block. A previously saved block replayed against a now-private
+unsaved and the ledger says why without naming any value. Planned fill literals
+also undergo the [shared masking rules](#input-value-masking), so a protected
+literal withholds a newly discovered or patched block even for an ordinary input.
+A previously saved block replayed against a now-private
 input also reports withholding without rewriting or deleting the existing action.
 Discovered or patched block writes are deferred until the walk finishes. Values
-protected by private observations or keyboard fallback anywhere in the same run
-are checked under the [shared masking rules](#input-value-masking), including
-fragment protection. A matching block title, header field, raw comment, fill
+preclassified from the plan or protected by private observations or keyboard
+fallback anywhere in the same run are checked under those rules.
+A matching block title, header field, raw comment, fill
 literal, literal assertion, stored selector or serialized YAML withholds the
-block rather than rewriting its bytes. Admission derives adjacent-character
-context from the block's serialization inputs. The value-free reason is
+block rather than rewriting its bytes. Structural plan numbering is excluded
+from matching; code-box characters are not retained as fragment admission rules.
+The value-free reason is
 `contains a protected plan-typed value` in `blocks_not_saved`, including when the
 value was observed rather than typed. Existing saved actions are not removed.
 
@@ -459,8 +467,9 @@ diagnostic that never changes the verdict,
 [candidate provenance check](#candidate-provenance), which can fail the run.
 
 Block names in final ledger rows, block results, reports and `blocks_not_saved`
-use display masking. Machine fields `blocksWritten` in the core result and
-`blocks_written` in the receipt retain canonical slugs for file lookup and PR
+withhold the whole displayed name as `•••` when either the original title or
+its slug matches a protected value. Machine fields `blocksWritten` in the core
+result and `blocks_written` in the receipt retain canonical slugs for file lookup and PR
 block preservation; replay identifiers also remain unchanged.
 
 `qaren actions list [--json]` and `qaren actions show <slug>` read the

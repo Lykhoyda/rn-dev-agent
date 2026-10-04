@@ -2,4 +2,4 @@
 "qaren": patch
 ---
 
-Mask private values through one shared matcher that keeps code-box context across screens, streams only value-free progress rows, and never renders raw plan text into reports or comments.
+Centralize value matching and stream value-free progress while rendering reports and comments from the projected ledger.
