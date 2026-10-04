@@ -457,7 +457,10 @@ test('short planned values suppress failing-check screenshots without masking fr
     assert.equal(privacy.canScreenshot(), false);
     const blocks = parsePlan(`✓ "Missing"\n1. Type "${value}" into "missing"`).blocks;
     assert.ok(blocks);
-    const fixture = walker([screen], scriptedJudge(() => assert.fail('literal check needs no model')));
+    const fixture = walker(
+      [screen],
+      scriptedJudge(() => assert.fail('literal check needs no model')),
+    );
     let screenshots = 0;
     fixture.deps.screenshot = async () => {
       screenshots++;
@@ -472,7 +475,10 @@ test('short planned values suppress failing-check screenshots without masking fr
 });
 
 test('equivalent normalized planned values keep phrase assertions and visibility unsure', async () => {
-  for (const values of [['Café', 'Cafe\u0301'], ['Cafe\u0301', 'Café']]) {
+  for (const values of [
+    ['Café', 'Cafe\u0301'],
+    ['Cafe\u0301', 'Café'],
+  ]) {
     const privacy = new ObservedPrivacy(values);
     const screen = view([text('@ready', 'Ready')]);
     const mask = privacy.maskForModel(values, []);
@@ -485,7 +491,9 @@ test('equivalent normalized planned values keep phrase assertions and visibility
     }
     for (const claim of values.map((value) => `${value} is visible`)) {
       for (const kind of ['check', 'wait', 'scroll'] as const) {
-        const judge = scriptedJudge(() => assert.fail('an unobserved private value must stay unsure'));
+        const judge = scriptedJudge(() =>
+          assert.fail('an unobserved private value must stay unsure'),
+        );
         const check = kind === 'check' ? { kind, text: claim, literal: false, line: 1 } : undefined;
         const step =
           kind === 'wait'
@@ -511,12 +519,18 @@ test('equivalent normalized planned values keep phrase assertions and visibility
     );
     assert.equal(visible.check, 'pass');
     assert.equal(visibleJudge.requests.length, 1);
-    assert.equal(mask.describeElement(text('@cafe', values[1]), (element) => element.label ?? ''), mask.tokens[0]);
+    assert.equal(
+      mask.describeElement(text('@cafe', values[1]), (element) => element.label ?? ''),
+      mask.tokens[0],
+    );
     const blocks = parsePlan(
       `✓ Café is visible\n1. Type "${values[0]}" into "first"\n2. Type "${values[1]}" into "second"`,
     ).blocks;
     assert.ok(blocks);
-    const fixture = walker([screen], scriptedJudge(() => assert.fail('protected check stays unsure')));
+    const fixture = walker(
+      [screen],
+      scriptedJudge(() => assert.fail('protected check stays unsure')),
+    );
     const ledger = await runPlan(blocks, fixture.deps);
     assert.equal(ledger.verdict, 'FAIL');
     assert.match(ledger.steps[0].reason ?? '', /UNSURE/);
