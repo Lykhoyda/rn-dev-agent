@@ -9,6 +9,8 @@ import {
   isNativeInput,
   assertionView,
   describe,
+  elementFrame,
+  labelEchoOf,
   semanticActionView,
   semanticDisabled,
   visibilityView,
@@ -66,6 +68,14 @@ function matches(e: Element, quoted: string, kind: Step['kind'], exact?: Target[
   return e.label === quoted || e.testID === quoted;
 }
 
+// Value-free: kind, testID or its absence, and the rounded native frame; never a label or value.
+function describeCandidate(e: Element): string {
+  const frame = elementFrame(e);
+  return `${e.kind} ${e.testID ? `id=${e.testID}` : 'no-id'} frame=${
+    frame ? [frame.x, frame.y, frame.width, frame.height].map(Math.round).join(',') : 'unknown'
+  }`;
+}
+
 export function stepTarget(step: Step): Target | undefined {
   return step.kind === 'back' || step.kind === 'dialog'
     ? undefined
@@ -108,7 +118,9 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
   const eligible = matchable.filter((e) => !reactOnlyFill(e));
   const candidates = eligible;
   if (target.quoted !== undefined) {
-    const exact = matchable.filter((e) => matches(e, target.quoted!, step.kind, target.exact));
+    const matched = matchable.filter((e) => matches(e, target.quoted!, step.kind, target.exact));
+    // A pressable and the single text child that echoes its label are one control.
+    const exact = matched.filter((e) => !matched.includes(labelEchoOf(e)!));
     if (exact.length === 1 && reactOnlyFill(exact[0]))
       return {
         refuse: 'TARGET_NOT_FOUND',
@@ -125,7 +137,7 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
     return exact.length
       ? {
           refuse: 'TARGET_AMBIGUOUS',
-          reason: `multiple eligible elements labelled or identified "${target.quoted}" match the target`,
+          reason: `multiple eligible elements labelled or identified "${target.quoted}" match the target; candidates: ${exact.map(describeCandidate).join('; ')}`,
         }
       : {
           refuse: 'TARGET_NOT_FOUND',

@@ -69,7 +69,10 @@ Plans contain a `## QA` section, named `###` blocks, numbered actions and
 [parser](../qaren-core/src/qa/plan.ts) for accepted grammar. Quoted press and fill
 targets resolve observed labels or test IDs locally; multiple eligible matches
 refuse with `TARGET_AMBIGUOUS`, without a Jev tie-break, even if the target adds
-positional words such as `Tap "Save" at the bottom`.
+positional words such as `Tap "Save" at the bottom`. A control whose label only
+repeats its single text descendant counts once, as the control. The refusal lists
+each candidate without its label or value: kind, testID or `no-id`, and the
+rounded frame.
 
 ### Fill verification and keyboard fallback
 

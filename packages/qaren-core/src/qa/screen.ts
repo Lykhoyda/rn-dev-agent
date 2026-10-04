@@ -72,6 +72,18 @@ export interface Screen {
   keyboardVisible?: boolean;
 }
 
+const labelEchoes = new WeakMap<Element, Element>();
+const elementFrames = new WeakMap<Element, NonNullable<NativeNode['rect']>>();
+
+// The labelled control a text element merely repeats as its single text descendant.
+export function labelEchoOf(element: Element): Element | undefined {
+  return labelEchoes.get(element);
+}
+
+export function elementFrame(element: Element): NativeNode['rect'] {
+  return elementFrames.get(element);
+}
+
 const joinedDiagnosticFacts = new WeakMap<
   Element,
   {
@@ -715,6 +727,24 @@ export function join(
     }
     if (visibleText[visibleText.length - 1] !== line) visibleText.push(line);
   }
+  const textDescendants = new Map<number, number[]>();
+  nodes.forEach((n, i) => {
+    if (n.rect) elementFrames.set(elements[i], n.rect);
+    if (duplicates.has(i) || elements[i].kind !== 'text') return;
+    for (let p = n.parentIndex; p !== undefined && p >= 0 && p < i; p = nodes[p].parentIndex)
+      textDescendants.set(p, [...(textDescendants.get(p) ?? []), i]);
+  });
+  textDescendants.forEach(([only, ...more], p) => {
+    const control = elements[p];
+    if (
+      !more.length &&
+      control.label !== undefined &&
+      control.kind !== 'text' &&
+      control.kind !== 'input' &&
+      elements[only].label === control.label
+    )
+      labelEchoes.set(elements[only], control);
+  });
   return {
     elements: elements.filter((_, i) => !duplicates.has(i)),
     visibleText,
