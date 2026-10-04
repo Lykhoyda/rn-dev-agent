@@ -174,7 +174,20 @@ function maskEvidence(
         .join(privateValues.includes(values[i]) || values[i].length >= 3 ? MASK : values[i]),
     mask.apply(text),
   );
-  return maskValues(projected, typed);
+  return maskProtectedFragments(maskValues(projected, typed), [
+    ...privateValues,
+    ...substringValues,
+  ]);
+}
+
+// A protected value can be shown split across boxes, so any token that is part of one is masked.
+function maskProtectedFragments(text: string, protectedValues: readonly string[]): string {
+  const values = protectedValues.filter(Boolean);
+  if (!values.length) return text;
+  return text.replace(/[\p{L}\p{M}\p{N}_.@-]+/gu, (token) => {
+    const core = token.replace(/^[_.@-]+|[_.@-]+$/g, '');
+    return core && values.some((value) => value.includes(core)) ? MASK : token;
+  });
 }
 
 const NATIVE_TYPES = new Set([

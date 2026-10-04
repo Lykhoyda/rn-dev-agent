@@ -1699,3 +1699,21 @@ test('twin inputs are refused before any tap or typing', async () => {
   assert.deepEqual(mutations(fake.log), []);
   assert.deepEqual(fake.typed, []);
 });
+
+test('split digit boxes never reveal a concealed code in any evidence sink', async () => {
+  const boxes = ['1', '2', '3', '4'].map((digit, i) =>
+    element(`@box${i}`, digit, { kind: 'text' }),
+  );
+  const fake = app({ initial: [...boxes, submit], initialKeyboard: true, reactFocused: true });
+  const outcome = await walkBlock(
+    blocks('## QA\n\n### Code\n\n1. Fill "qa-otp-code" with "1234"\n✓ "Code accepted"\n')[0],
+    fake.deps,
+  );
+  assert.equal(outcome.block.outcome, 'fail');
+  const exposed = [...strings(fake.rows), ...strings(outcome.block), ...strings(outcome.failure)];
+  assert.equal(
+    exposed.some((text) => /[1-4]/.test(text.replace(/line|\d+-line\d+|\.png/g, ''))),
+    false,
+    exposed.filter((text) => /[1-4]/.test(text)).join(' | '),
+  );
+});
