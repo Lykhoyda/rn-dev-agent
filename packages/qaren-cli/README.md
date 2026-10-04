@@ -465,19 +465,38 @@ refuses `APP_PROCESS_UNKNOWN`; a runner built from an older checkout needs a reb
 
 ### Step recovery
 
+An observed React Native red box fails the current step immediately, including
+during login replay, with safely masked visible error-screen text in `failure.seen`.
+It is checked before accepting a step or refusing incomplete semantic evidence,
+and never triggers recovery.
+
 An action whose screen did not change after its one retry, a step target that
 does not resolve, or a phrase check still unsure after its re-ask
-gets one deterministic recovery, then the step runs once more from a fresh capture
-(source: [`recover.ts`](../qaren-core/src/qa/recover.ts)). In order: a React Native
-red box fails the step at once with the overlay's text in `failure.seen`; a system
-dialog in front is accepted; the dev menu in front is hidden; and when `loginMarker`
+gets at most one deterministic recovery, then the step runs once more from a fresh
+capture. The order is owned by [`recover.ts`](../qaren-core/src/qa/recover.ts): a
+recognized system dialog in front is accepted; the dev menu in front is hidden;
+and when `loginMarker`
 (`{ id: <testID> }` or `{ text: <label> }`) is on screen, the
 saved block `loginBlock` (`.qaren/actions/<loginBlock>.yaml`, saved for this app and
-platform) replays by its stored identities. The two keys are set together. A second
+platform) replays by its stored identities. The two keys are set together, with
+exactly one nonempty marker `id` or `text`. A missing, unreadable or incompatible
+login block fails when login recovery is needed. A second
 failure of the same step fails it, recovery never runs inside the login replay, and
 capture, Jev, process, replay-miss and cancellation refusals are never recovered. The
 ledger's `recoveries` counts recoveries that let the step retry; `escapes` and `llmTurns`
 stay `0`. Login fills are masked like plan fills and withhold the video.
+
+Recovery requires admitted screen evidence. iOS phrase steps behind a system or
+permission alert can refuse `SCREEN_EVIDENCE_INCOMPLETE` before recovery because
+platform presence excludes that system surface; phrase-step dialog recovery is
+best-effort. Android dialog recovery is not supported by `qaren check` in this
+release (see [Check a plan](#check-a-plan)). An action reporting `tapped: false`
+or `executed: false` establishes no action proof and cannot count as a recovery.
+
+Before walking, QaReN attempts to hide the Expo floating gear, disable the dev
+menu and hide an open menu. Setup failures, including unverified gear hiding,
+are logged and walking continues; this does not prove that developer UI is absent
+from captured evidence. A non-executing menu hide during recovery fails the step.
 
 ### Walk timing
 
