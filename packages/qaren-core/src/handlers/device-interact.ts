@@ -1478,13 +1478,14 @@ export async function performFocusedFill(
       focusedType: true,
       settle: { enabled: false },
     });
-    if (
-      cleared.isError ||
-      (await awaitReactInputValue(() => readReactInputValue(client, oracleTestId), '')) !== 'exact'
-    )
+    const clearVerified =
+      !cleared.isError &&
+      (await awaitReactInputValue(() => readReactInputValue(client, oracleTestId), '')) === 'exact';
+    const afterClear = clearVerified ? await readReactInputValue(client, oracleTestId) : null;
+    if (!clearVerified || afterClear?.focused !== true || afterClear.value !== '')
       return fillFailure(
         'TEXT_ENTRY_UNVERIFIED',
-        'device_fill focused: the field was not empty after clearing; no text was entered.',
+        'device_fill focused: the field was not empty and focused after clearing; no replacement text was entered.',
         {
           mutation: cleared.isError ? extractMutationDisposition(cleared) : 'observed',
           pathsTried,

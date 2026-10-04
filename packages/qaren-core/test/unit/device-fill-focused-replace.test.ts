@@ -94,6 +94,28 @@ test('a field still non-empty after the clear refuses before typing', async () =
   assert.ok(!JSON.stringify(env).includes('decoy'));
 });
 
+test('a field that loses focus after clearing refuses before replacement typing', async () => {
+  const { env, typed } = await run([
+    { value: 'decoy', focused: true },
+    { value: '', focused: false },
+  ]);
+  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
+  assert.equal(env.meta.mutation, 'observed');
+  assert.deepEqual(typed, ['\b'.repeat(5)]);
+});
+
+test('focus lost after empty-value confirmation refuses before replacement typing', async () => {
+  const { env, typed } = await run([
+    { value: 'decoy', focused: true },
+    { value: '', focused: true },
+    { value: '', focused: true },
+    { value: '', focused: false },
+  ]);
+  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
+  assert.equal(env.meta.mutation, 'observed');
+  assert.deepEqual(typed, ['\b'.repeat(5)]);
+});
+
 for (const [name, read] of [
   ['unreadable', null],
   ['uncontrolled', { value: null, focused: true }],
