@@ -1,4 +1,4 @@
-import { cancellationSignal, interruptible, withCancellation } from '../domain/cancellation.js';
+import { cancellationSignal, interruptible, withCancellation, sleep, isAbort } from '../domain/cancellation.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -296,14 +296,14 @@ async function openSession(
       metroPort: target.metroPort,
       readinessMs: REACT_READY_TIMEOUT_MS,
       remainingMs: () => Math.max(0, request.walkBudgetMs - now() - 1000),
-      attach: async () => {
+      attach: async (deadline) => {
         await waitForExactPortTargets(
           target.metroPort,
           Math.max(1, Math.min(REACT_READY_TIMEOUT_MS, request.walkBudgetMs - now() - 1000)),
           REACT_READY_POLL_MS,
           stop.signal,
         );
-        await cdp.connectExact(target.metroPort, { platform, bundleId: appId });
+        await cdp.connectExact(target.metroPort, { platform, bundleId: appId }, 'default', 5, undefined, deadline);
       },
       // The lease coordinates qaren processes only; a foreign Maestro or XCUITest driver is a probe.
       foreignDriver: async () => {
@@ -377,6 +377,7 @@ async function openSession(
     try {
       unwrap(await devSettings({ action }));
     } catch (error) {
+      if (isAbort(error)) throw error;
       cancellationSignal();
       log(`${action}: ${describeError(error).message}`);
     }
@@ -445,7 +446,7 @@ async function openSession(
     diagnostic: (event) => log(`timing ${JSON.stringify(event)}`),
     hideDevMenu: () => act(() => devSettings({ action: 'hideDevMenu' }), false),
     ...(login ? { login } : {}),
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    sleep,
     row: emitRow,
     ...(platform === 'ios'
       ? {

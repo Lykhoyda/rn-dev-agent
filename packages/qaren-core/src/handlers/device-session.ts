@@ -1,4 +1,4 @@
-import { execFile as execFileCb, interruptible, cancellationSignal, withCancellation } from '../domain/cancellation.js';
+import { isAbort, execFile as execFileCb, interruptible, cancellationSignal, withCancellation } from '../domain/cancellation.js';
 import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
 import type { TimingContext } from '../qa/timing.js';
 import { promisify } from 'node:util';
@@ -107,7 +107,8 @@ async function defaultIOSProbe(bundleId: string, deviceId: string): Promise<bool
     });
     // launchctl list outputs lines like "<pid>  <status>  UIKitApplication:<bundleId>[...]"
     return stdout.includes(`UIKitApplication:${bundleId}`);
-  } catch {
+  } catch (error) {
+    if (isAbort(error)) throw error;
     return false;
   }
 }
@@ -123,7 +124,8 @@ async function defaultAndroidProbe(bundleId: string, deviceId?: string): Promise
       encoding: 'utf8',
     });
     return stdout.trim().length > 0;
-  } catch {
+  } catch (error) {
+    if (isAbort(error)) throw error;
     return false;
   }
 }
@@ -163,6 +165,7 @@ interface DeviceSnapshotDependencies {
   ) => Promise<boolean>;
   isAppRunning?: (platform: string, appId: string, deviceId: string) => Promise<boolean>;
   startAndroidRunner?: (deviceId: string, appId: string) => Promise<unknown>;
+  launchIosApp?: (deviceId: string, appId: string) => Promise<unknown>;
   launchAndroidApp?: (deviceId: string, appId: string) => Promise<void>;
   bindRunner?: (
     platform: 'ios' | 'android',
@@ -312,11 +315,11 @@ export function createDeviceSnapshotHandler(
           // Full-open foregrounding may be best-effort; attach-only activation
           // is performed by XCTest under target process-identity checks.
           if (!args.attachOnly) {
-            await execFile('xcrun', ['simctl', 'launch', deviceId, appId], {
-              timeout: 10_000,
-              encoding: 'utf8',
-            }).catch(() => {
-              /* already frontmost is OK */
+            await interruptible(() => deps.launchIosApp
+              ? deps.launchIosApp(deviceId, appId)
+              : execFile('xcrun', ['simctl', 'launch', deviceId, appId], { timeout: 10_000, encoding: 'utf8' })
+            ).catch((error) => {
+              if (isAbort(error)) throw error;
             });
           }
         } else {
@@ -327,6 +330,7 @@ export function createDeviceSnapshotHandler(
             try {
               await interruptible(() => launchAndroidApp(deviceId, appId));
             } catch (err) {
+              if (isAbort(err)) throw err;
               throw new AndroidAppLaunchError(
                 `Failed to launch ${appId} on ${deviceId}: ${err instanceof Error ? err.message : String(err)}`,
               );
@@ -343,7 +347,7 @@ export function createDeviceSnapshotHandler(
             );
           }
           reactNativeUiReady = deps.probeReactNativeUi
-            ? await interruptible(() => deps.probeReactNativeUi!('android', deviceId, appId)).catch(() => { cancellationSignal(); return false; })
+            ? await interruptible(() => deps.probeReactNativeUi!('android', deviceId, appId)).catch((error) => { if (isAbort(error)) throw error; cancellationSignal(); return false; })
             : null;
         }
       } catch (err) {
@@ -352,6 +356,7 @@ export function createDeviceSnapshotHandler(
           if (lockPlatform === 'ios') await withCancellation(undefined, () => stopIosRunner(deviceId));
           else await withCancellation(undefined, () => reapAndroidRunner(deviceId));
         } catch (cleanupErr) {
+          if (isAbort(cleanupErr)) throw cleanupErr;
           cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
         }
         // GH #383: startAndroidRunner may have set a pending upgrade note (reap
@@ -359,6 +364,8 @@ export function createDeviceSnapshotHandler(
         // forward race, exit-before-ready, spawn error). Discard it here so it
         // doesn't leak onto the next successful Android result.
         consumePendingAndroidUpgradeNote();
+        if (isAbort(err)) throw err;
+        cancellationSignal();
         const rawMsg = err instanceof Error ? err.message : String(err);
         const msg = cleanupFailure
           ? `${rawMsg}; runner cleanup also failed: ${cleanupFailure}`
@@ -384,6 +391,7 @@ export function createDeviceSnapshotHandler(
       }
 
       // Set session LAST — only after runner + launch both succeeded.
+      cancellationSignal();
       setActiveSession({
         name: sessionName,
         platform,
@@ -399,10 +407,13 @@ export function createDeviceSnapshotHandler(
           if (lockPlatform === 'ios') await withCancellation(undefined, () => stopIosRunner(deviceId));
           else await withCancellation(undefined, () => reapAndroidRunner(deviceId));
         } catch (cleanupErr) {
+          if (isAbort(cleanupErr)) throw cleanupErr;
           cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
         } finally {
           clearActiveSession();
         }
+        if (isAbort(error)) throw error;
+        cancellationSignal();
         const rawMessage = error instanceof Error ? error.message : String(error);
         const code = /^([A-Z][A-Z0-9_]+):/.exec(rawMessage)?.[1] ?? 'RUNNER_OWNERSHIP_MISMATCH';
         const message = cleanupFailure
@@ -440,6 +451,7 @@ export function createDeviceSnapshotHandler(
           }
           for (const w of r.warnings) logger.warn('rn-device', w);
         } catch (err) {
+          if (isAbort(err)) throw err;
           logger.warn(
             'rn-device',
             `ensureSingleRunner failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -452,7 +464,7 @@ export function createDeviceSnapshotHandler(
       // our rn-android-runner. Fires by default (Task 11 flipped the
       // runner default-on); opt-out via RN_ANDROID_RUNNER=0.
       if (platform === 'android' && process.env.RN_ANDROID_RUNNER !== '0') {
-        detectAndroidExternalRunner(undefined, getAdbSerial())
+        await detectAndroidExternalRunner(undefined, getAdbSerial())
           .then((warning) => {
             if (!warning) return;
             logger.warn('rn-device', warning.message);
@@ -460,23 +472,21 @@ export function createDeviceSnapshotHandler(
               logger.warn('rn-device', `  ${line.trim()}`);
             }
           })
-          .catch(() => {
-            /* non-fatal */
+          .catch((error) => {
+            if (isAbort(error)) throw error;
           });
       }
 
       if (platform === 'ios') {
         // #191 prong 3 — best-effort predictive-keyboard suppression. Gated on
         // iOS+udid only (NOT the kill-legacy opt-out — orthogonal concern).
-        // Fire-and-forget: a hung simctl must never stall session-open (up to
-        // 3×5s timeouts), and the result is consumed only for warning logs.
-        suppressIOSAutocorrect(deviceId)
+        await suppressIOSAutocorrect(deviceId)
           .then((sup) => {
             if (sup.warnings.length)
               logger.info('rn-device', `suppressIOSAutocorrect: ${sup.warnings.join('; ')}`);
           })
-          .catch(() => {
-            /* fail-open: never block session-open on keyboard prefs */
+          .catch((error) => {
+            if (isAbort(error)) throw error;
           });
       }
 
@@ -748,6 +758,7 @@ export async function reacquireIosTargetApp(
     await dependencies.bindRunner('ios', deviceId, appId);
     return okResult({ reacquired: true, appId });
   } catch (error) {
+    if (isAbort(error)) throw error;
     return failResult(
       `Runner authority reacquire failed: ${error instanceof Error ? error.message : String(error)}`,
       'RUNNER_OWNERSHIP_MISMATCH',
@@ -779,7 +790,8 @@ function parseSnapshotNodes(result: ToolResult): RunnerLeakNode[] | null {
     };
     if (!envelope.ok || !envelope.data?.nodes) return null;
     return envelope.data.nodes;
-  } catch {
+  } catch (error) {
+    if (isAbort(error)) throw error;
     return null;
   }
 }
@@ -813,7 +825,8 @@ function cacheSnapshotIfPossible(result: ToolResult, platformPresence = false): 
     if (platform && envelope.ok && envelope.data?.nodes) {
       cacheSnapshot(platform, envelope.data.nodes);
     }
-  } catch {
+  } catch (error) {
+    if (isAbort(error)) throw error;
     /* best-effort cache */
   }
 }
@@ -828,7 +841,8 @@ function wrapWithMeta(result: ToolResult, meta: Record<string, unknown>): ToolRe
     };
     envelope.meta = { ...envelope.meta, ...meta };
     return { content: [{ type: 'text' as const, text: JSON.stringify(envelope) }] };
-  } catch {
+  } catch (error) {
+    if (isAbort(error)) throw error;
     return result;
   }
 }

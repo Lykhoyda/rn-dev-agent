@@ -270,3 +270,46 @@ fn only_direct_file_dependencies_can_claim_completeness() {
     assert!(!fingerprint(&root).complete);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn extensionless_plugin_seeds_and_dependencies_forbid_reuse() {
+    for seed in [true, false] {
+        let root = plugin_project("require('../config/native')");
+        std::fs::write(root.join("config/native"), "require('./x.json')").unwrap();
+        if seed {
+            std::fs::write(root.join("app.json"), r#"{"expo":{"plugins":["./config/native"]}}"#).unwrap();
+        }
+        let fp = fingerprint(&root);
+        assert!(!fp.complete);
+        assert!(fp.incompleteness.iter().any(|reason| reason.contains("recognized extension")));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_plugin_seeds_dependencies_and_parent_directories_forbid_reuse() {
+    use std::os::unix::fs::symlink;
+    for site in ["seed", "dependency", "parent"] {
+        let root = plugin_project("require('../config/value.js')");
+        std::fs::write(root.join("config/value.js"), "require('./x.json')").unwrap();
+        match site {
+            "seed" => {
+                std::fs::remove_file(root.join("plugins/withX.js")).unwrap();
+                symlink("../config/value.js", root.join("plugins/withX.js")).unwrap();
+            }
+            "dependency" => {
+                symlink("value.js", root.join("config/linked.js")).unwrap();
+                std::fs::write(root.join("plugins/withX.js"), "require('../config/linked.js')").unwrap();
+            }
+            _ => {
+                symlink("config", root.join("linked")).unwrap();
+                std::fs::write(root.join("plugins/withX.js"), "require('../linked/value.js')").unwrap();
+            }
+        }
+        let fp = fingerprint(&root);
+        assert!(!fp.complete, "{site}");
+        assert!(fp.incompleteness.iter().any(|reason| reason.contains("non-symlink")));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

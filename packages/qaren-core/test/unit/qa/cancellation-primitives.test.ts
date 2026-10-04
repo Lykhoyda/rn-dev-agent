@@ -84,3 +84,21 @@ test('ordinary primitive completion preserves results and child-process options'
     await sleep(1);
   });
 });
+
+test('one deadline interrupts every connect primitive before its continuation', async () => {
+  const { withDeadline } = await import('../../../src/domain/cancellation.ts');
+  for (const primitive of ['discovery', 'handshake', 'probe', 'setup', 'retry sleep']) {
+    const timeout = new Error('attach deadline exceeded');
+    const effects: string[] = [];
+    let release!: () => void;
+    const pending = withDeadline(performance.now() + 20, timeout, async () => {
+      effects.push(primitive);
+      await interruptible(() => new Promise<void>((resolve) => { release = resolve; }));
+      effects.push('next effect');
+    });
+    await assert.rejects(pending, (error) => error === timeout);
+    release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(effects, [primitive]);
+  }
+});

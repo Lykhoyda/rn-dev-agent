@@ -1,4 +1,4 @@
-import { cancellationSignal, interruptible } from '../domain/cancellation.js';
+import { isAbort, cancellationSignal, interruptible } from '../domain/cancellation.js';
 import WebSocket from 'ws';
 import { logger } from '../logger.js';
 import { metroOrigin } from '../ws-origin.js';
@@ -174,6 +174,7 @@ export async function discoverAndConnect(
   try {
     result = await interruptible(() => discoverFn(ctx.getPort(), filtersForDiscover));
   } catch (err) {
+    if (isAbort(err)) throw err;
     ctx.setState('disconnected');
     throw err;
   }
@@ -205,7 +206,7 @@ export async function discoverAndConnect(
     const isLast = idx === sorted.length - 1;
     try {
       await connectToTarget(ctx, candidate, targetRetries, intent);
-      const devCheck = await ctx.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true');
+      const devCheck = await interruptible(() => ctx.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true'));
       if (devCheck.value === true) {
         connectedTarget = candidate;
         break;
@@ -223,6 +224,7 @@ export async function discoverAndConnect(
       console.error('CDP: no target with __DEV__=true found, using last available target');
       connectedTarget = candidate;
     } catch (err) {
+      if (isAbort(err)) throw err;
       // GH #184: picker-blocking affects the whole bundle — every other
       // candidate is the same stale C++ target, so don't waste a probe on each.
       if (err instanceof ConnectionSetupSupersededError) throw err;
@@ -373,15 +375,16 @@ async function connectToTarget(
       handshakeOk = true;
       // D594: Early stale-target detection — quick probe before full setup
       try {
-        await ctx.sendWithTimeout(
+        await interruptible(() => ctx.sendWithTimeout(
           'Runtime.evaluate',
           {
             expression: '1+1',
             returnByValue: true,
           },
           CDP_TIMEOUT_FAST,
-        );
-      } catch {
+        ));
+      } catch (error) {
+        if (isAbort(error)) throw error;
         probeTimedOut = true;
         throw new Error('Target failed pre-flight probe (1+1) — likely a dead JS context');
       }
@@ -401,10 +404,11 @@ async function connectToTarget(
         );
         if (!reachable) throw new PickerBlockingBundleError(target);
       }
-      await ctx.setup();
+      await interruptible(() => ctx.setup());
       if (ctx.isDisposed()) throw new ConnectionSetupSupersededError();
       return;
     } catch (err) {
+      if (isAbort(err)) { closeConnectionAttempt(ctx, attemptWs); throw err; }
       cancellationSignal();
       if (err instanceof ConnectionSetupSupersededError) {
         closeConnectionAttempt(ctx, attemptWs);
@@ -473,7 +477,8 @@ export function connectWebSocket(
       settled = true;
       try {
         ws.terminate();
-      } catch {
+      } catch (error) {
+        if (isAbort(error)) throw error;
         /* already gone */
       }
       reject(new Error('WebSocket connect timed out'));
@@ -494,7 +499,9 @@ export function connectWebSocket(
       if (ctx.isDisposed()) {
         try {
           ws.terminate();
-        } catch {}
+        } catch (error) {
+          if (isAbort(error)) throw error;
+        }
         reject(new ConnectionSetupSupersededError());
         return;
       }
@@ -510,7 +517,8 @@ export function connectWebSocket(
         clearTimeout(guard);
         try {
           ws.terminate();
-        } catch {
+        } catch (error) {
+          if (isAbort(error)) throw error;
           /* already closing */
         }
         reject(err);

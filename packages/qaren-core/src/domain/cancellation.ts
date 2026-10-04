@@ -18,7 +18,7 @@ export function withCancellation<T>(signal: AbortSignal | undefined, operation: 
 
 export class RunCancelledError extends Error {
   readonly code = 'RUN_CANCELLED';
-  constructor() { super('RUN_CANCELLED: the run is stopping'); }
+  constructor() { super('RUN_CANCELLED: the run is stopping'); this.name = 'AbortError'; }
 }
 
 export function interruptible<T>(operation: (signal?: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -72,3 +72,22 @@ Object.defineProperty(execFile, promisify.custom, {
 });
 
 export const spawn = ((...args: unknown[]) => Reflect.apply(nativeSpawn, undefined, processArguments(args))) as typeof nativeSpawn;
+
+export function isAbort(error: unknown): boolean {
+  const candidate = error as { name?: string; code?: string } | null;
+  return candidate?.name === 'AbortError' || candidate?.code === 'RUN_CANCELLED' ||
+    (scope.getStore()?.aborted === true && scope.getStore()?.reason === error);
+}
+
+export async function withDeadline<T>(deadline: number, reason: Error, operation: () => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const remaining = deadline - performance.now();
+  if (remaining <= 0) controller.abort(reason);
+  const timer = remaining > 0 ? setTimeout(() => controller.abort(reason), remaining) : undefined;
+  try {
+    const signal = cancellationSignal(controller.signal);
+    return await withCancellation(signal, () => interruptible(operation));
+  } finally {
+    clearTimeout(timer);
+  }
+}

@@ -1,5 +1,5 @@
 import { loadavg } from 'node:os';
-import { interruptible, withCancellation } from '../domain/cancellation.js';
+import { interruptible, withCancellation, withDeadline, isAbort } from '../domain/cancellation.js';
 import { TargetReadinessTimeoutError } from '../cdp/discovery.js';
 import { CDPProbeTimeoutError } from '../cdp/connect.js';
 import { HandlerError, describeError } from './adapt.js';
@@ -11,7 +11,7 @@ export interface AdmissionSteps {
   metroPort: number;
   readinessMs: number;
   remainingMs(): number;
-  attach(): Promise<void>;
+  attach(deadline: number): Promise<void>;
   foreignDriver(): Promise<string | undefined>;
   open(): Promise<void>;
   prove(): Promise<ProveOutcome>;
@@ -42,9 +42,11 @@ export async function admit(steps: AdmissionSteps, stop: { readonly signal: Abor
 async function attach(steps: AdmissionSteps): Promise<void> {
   let failure: unknown;
   try {
-    await interruptible(steps.attach);
+    const deadline = performance.now() + steps.remainingMs();
+    await withDeadline(deadline, new CDPProbeTimeoutError('CDP attach deadline exceeded'), () => steps.attach(deadline));
     return;
   } catch (error) {
+    if (isAbort(error)) throw error;
     failure = error;
   }
   const load = (steps.load ?? (() => loadavg()[0]))();
@@ -53,9 +55,11 @@ async function attach(steps: AdmissionSteps): Promise<void> {
   const retry = loaded && timedOut(failure) && steps.remainingMs() >= steps.readinessMs;
   if (retry) {
     try {
-      await interruptible(steps.attach);
+      const deadline = performance.now() + steps.remainingMs();
+      await withDeadline(deadline, new CDPProbeTimeoutError('CDP attach deadline exceeded'), () => steps.attach(deadline));
       return;
     } catch (error) {
+      if (isAbort(error)) throw error;
       failure = error;
     }
   }

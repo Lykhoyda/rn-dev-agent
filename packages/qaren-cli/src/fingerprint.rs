@@ -85,6 +85,7 @@ fn is_dynamic_config(rel: &str) -> bool {
 #[derive(Debug, Default)]
 struct ReferencedInputs {
     files: BTreeSet<String>,
+    modules: Vec<String>,
     incompleteness: Vec<String>,
 }
 
@@ -110,6 +111,7 @@ fn referenced_paths(app_json: &str, project_root: &Path) -> ReferencedInputs {
                 .as_str()
                 .or_else(|| plugin.as_array()?.first()?.as_str());
             if let Some(reference) = reference {
+                out.modules.push(reference.strip_prefix("./").unwrap_or(reference).to_string());
                 if !reference.starts_with('.') && !project_root.join(reference).is_file() {
                     out.incompleteness.push(format!("plugin {reference:?} in app.json requires module resolution; its native inputs cannot be proven complete"));
                 }
@@ -262,12 +264,31 @@ fn trace_local_imports(
         if !visited.insert(rel.clone()) {
             continue;
         }
+        if !Path::new(&rel).components().all(|component| matches!(component, std::path::Component::Normal(_))) {
+            incompleteness.push(format!("local module {rel} is not a project-relative file"));
+            continue;
+        }
+        let mut path = project_root.to_path_buf();
+        let regular = Path::new(&rel).components().all(|component| {
+            path.push(component);
+            std::fs::symlink_metadata(&path).is_ok_and(|metadata| !metadata.file_type().is_symlink())
+        }) && path.is_file();
+        if !regular || !(is_executable_module(&rel) || rel.ends_with(".json")) {
+            incompleteness.push(format!("local module {rel} is not a regular non-symlink file with a recognized extension; its dependencies cannot be proven complete"));
+            continue;
+        }
         let Ok(source) = std::fs::read_to_string(project_root.join(&rel)) else {
             incompleteness.push(format!(
                 "local module {rel} could not be read; its imports cannot be enumerated"
             ));
             continue;
         };
+        if rel.ends_with(".json") {
+            if serde_json::from_str::<serde_json::Value>(&source).is_err() {
+                incompleteness.push(format!("local module {rel} does not parse as JSON"));
+            }
+            continue;
+        }
         let base_dir = rel.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
         let specifiers = import_specifiers(&source);
         for site in &specifiers.unparseable {
@@ -289,9 +310,7 @@ fn trace_local_imports(
             match project_root.join(&normalized).is_file() {
                 true => {
                     inputs.insert(normalized.clone());
-                    if is_executable_module(&normalized) {
-                        worklist.push(normalized);
-                    }
+                    worklist.push(normalized);
                 }
                 false => incompleteness.push(format!(
                     "import {specifier:?} in {rel} does not resolve to a project file; the input set is unprovably complete"
@@ -599,12 +618,9 @@ pub fn compute(
             Ok(app_json) => {
                 let referenced = referenced_paths(&app_json, project_root);
                 incompleteness.extend(referenced.incompleteness);
-                let executable_seeds: Vec<String> = referenced
-                    .files
-                    .iter()
-                    .filter(|rel| is_executable_module(rel))
-                    .cloned()
-                    .collect();
+                let executable_seeds = referenced.modules.into_iter().chain(
+                    referenced.files.iter().filter(|rel| is_executable_module(rel)).cloned()
+                ).collect();
                 inputs.extend(referenced.files);
                 trace_local_imports(
                     project_root,
