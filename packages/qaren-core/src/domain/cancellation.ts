@@ -87,20 +87,22 @@ function processArguments(args: unknown[]): unknown[] {
 
 export const execFile = ((...args: unknown[]) =>
   Reflect.apply(nativeExecFile, undefined, processArguments(args))) as typeof nativeExecFile;
-const nativeExecAsync = promisify(nativeExecFile);
+// Promisified per call so the live builtin binding (and any swapped-in implementation) is used.
 Object.defineProperty(execFile, promisify.custom, {
   value: (...args: unknown[]) =>
-    interruptible(() => Reflect.apply(nativeExecAsync, undefined, processArguments(args))),
+    interruptible(() =>
+      Reflect.apply(promisify(nativeExecFile), undefined, processArguments(args)),
+    ),
 });
 
 export const spawn = ((...args: unknown[]) =>
   Reflect.apply(nativeSpawn, undefined, processArguments(args))) as typeof nativeSpawn;
 
+// Only a signal abort; a domain RUN_CANCELLED refusal (QaDispatchError) is handled by its own owner.
 export function isAbort(error: unknown): boolean {
-  const candidate = error as { name?: string; code?: string } | null;
+  const candidate = error as { name?: string } | null;
   return (
     candidate?.name === 'AbortError' ||
-    candidate?.code === 'RUN_CANCELLED' ||
     (scope.getStore()?.aborted === true && scope.getStore()?.reason === error)
   );
 }
