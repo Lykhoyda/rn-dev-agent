@@ -4,7 +4,7 @@ Runs from a fresh install of the dedicated workspace test-app, starting at onboa
 
 The fixture renders two simultaneously visible, enabled, accessible native buttons labelled `Save`. The lower button, `qa-choice-b`, displays `Choice B saved`; the upper `qa-choice-a` displays `Choice A saved`. Their neutral IDs do not describe position. The screen initially shows neither result.
 
-Under the [plan resolution contract](../../../../qaren-cli/README.md#check-a-plan), step 8 has a quoted target and must refuse `TARGET_AMBIGUOUS` locally when both buttons are eligible. The positional suffix does not request a Jev tie-break; the following result check is not reached. Unit tests establish rendering and independent outcomes, not live device acceptance.
+Step 8 expects `TARGET_AMBIGUOUS` under the [plan resolution contract](../../../../qaren-cli/README.md#check-a-plan); the following result check is not reached. Unit tests establish rendering and independent outcomes, not live device acceptance.
 
 ## QA
 

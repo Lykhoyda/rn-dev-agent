@@ -73,8 +73,11 @@ or more refuse with `TARGET_AMBIGUOUS`, without a Jev tie-break, even if the
 target adds positional words such as `Tap "Save" at the bottom`. A fill counts
 text-entry candidates plus every element carrying its testID, so a form label
 naming an input is not a twin, while a button sharing the input's testID is. A
-React-only composite that forwards its testID to the one native input is that
-input. The refusal is terminal: it is never recovered, retried or re-walked,
+React-only composite collapses into the one native input only when React host
+and digest ancestry prove it is that input's ancestor forwarding the same
+testID; a separate element sharing the ID remains a twin. A merged composite
+input keeps its placeholder for quoted fill resolution. The refusal is terminal:
+it is never recovered, retried or re-walked,
 including for stored replay selectors and for a handler that finds twins at dispatch. A text element
 that is the sole text descendant of matching labelled controls links to the
 nearest one. When that control is among the matches and contains the text
@@ -90,6 +93,8 @@ rounded frame.
 Fills use strict native value verification first. A strict fill replaces the
 field's content: the bound input is cleared before typing, and verification
 expects exactly the plan text. Keyboard fallback typing also replaces: see below.
+Rebinding an input without a testID requires its original label and native type;
+the same frame alone cannot substitute a different input.
 Only a stable exact read-back
 verifies a fill. A masked secure read-back or an unreadable one records a
 passing row with reason `UNVERIFIED_FILL`, never a verified pass; an empty or
@@ -101,7 +106,7 @@ strict binding refuses `NO_TEXT_INPUT_TARGET` before any text mutation for a
 non-native-input target. Phrase fills and stored replay selectors do not use
 this fallback; ambiguous targets and potentially mutated fills still fail.
 
-React-only input projections still count when matching a quoted strict fill,
+Separate React-only input projections still count when matching a quoted strict fill,
 so a native input and a React-only input sharing its testID refuse as
 `TARGET_AMBIGUOUS` before any tap. A strict fill never acts on a React-only
 input: when one is the only match, an accessibility-hidden input represented
@@ -129,16 +134,21 @@ a target, it requires that no secure or disabled element carries the quoted
 testID and React reports that exact input focused. The guard and proof use the
 quoted ID unchanged, including a literal `-pressable` suffix. Only an
 observed wrapper in the tap path establishes a wrapper-to-base identity mapping.
-Both keyboard-up paths require a second positive React focus read immediately
-before native typing. A false, unbound, unreadable or failed read at either proof
-stage types nothing; failure of the pre-dispatch read returns
+The final focus read runs after runner readiness and health checks, in the
+call that sends the native typing command. Both keyboard-up paths require this
+read to be positive; the keyboard-down transition path vetoes a contradictory
+unfocused read. A false, unbound, unreadable or failed read at either proof stage
+on a keyboard-up path types nothing; failure of the pre-dispatch read returns
 `NO_TEXT_INPUT_TARGET` with no mutation. An unknown keyboard state still refuses.
 Each walker focus decision logs one value-free `fallback-focus` line.
 
 QaReN then replaces the focused field's content and types once without final
 value validation: the runner selects the whole field and types the plan text in
 one synthesized sequence, so no readable React value is needed. A runner
-without the `FILL_EVIDENCE_V1` capability refuses with `RN_FAST_RUNNER_STALE`
+must advertise `FILL_EVIDENCE_V1` on both iOS and Android. Session startup routes
+a missing capability through the bounded source-rebuild path instead of
+accepting the released artifact. An active iOS runner missing it refuses focused
+replacement with `RN_FAST_RUNNER_STALE`
 and no mutation instead of appending. A refused replacement keeps the runner's
 mutation disposition. The [focused replacement tests](../qaren-core/test/unit/device-fill-focused-replace.test.ts)
 cover these guards and mutation reporting.
@@ -148,8 +158,9 @@ value. Failed keyboard typing is not retried. Before the fallback tap or
 no-target typing dispatch, the value is protected under the
 [shared masking rules](#input-value-masking), and screenshots are withheld for the rest
 of the walk. The block remains unsaved,
-including when the tap leads back to strict verification. The eligibility and
-identity rules are owned by the [resolver](../qaren-core/src/qa/resolve.ts) and
+including when the tap leads back to strict verification. Eligibility is owned
+by the [resolver](../qaren-core/src/qa/resolve.ts), exact identity counting by
+the [shared identity model](../qaren-core/src/qa/identity.ts), and both are
 covered by the [fallback tests](../qaren-core/test/unit/qa/keyboard-fallback.test.ts).
 
 ### Plan checks and screen evidence
