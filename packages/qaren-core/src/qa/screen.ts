@@ -80,10 +80,15 @@ export function forwardedInputOf(element: Element): string | undefined {
 }
 
 const labelEchoes = new WeakMap<Element, Element>();
+const soleLabelTexts = new WeakMap<Element, Element>();
 const elementFrames = new WeakMap<Element, NonNullable<NativeNode['rect']>>();
 
 export function labelEchoOf(element: Element): Element | undefined {
   return labelEchoes.get(element);
+}
+
+export function soleLabelTextOf(element: Element): Element | undefined {
+  return soleLabelTexts.get(element);
 }
 
 export function elementFrame(element: Element): NativeNode['rect'] {
@@ -771,6 +776,7 @@ export function join(
       control.kind !== 'input' &&
       elements[only].label === control.label
     ) {
+      soleLabelTexts.set(control, elements[only]);
       if (!labelEchoes.has(elements[only])) labelEchoes.set(elements[only], control);
     }
   });

@@ -2,7 +2,7 @@ import type { Step, Target } from './plan.js';
 import {
   type Element,
   type Screen,
-  elementFrame,
+  soleLabelTextOf,
   labelEchoOf,
   forwardedInputOf,
 } from './screen.js';
@@ -41,22 +41,10 @@ function forwardsInput(element: Element, matched: readonly Element[]): boolean {
   return native.length === 1 && native[0].testID === id;
 }
 
-const nested = (a: Element, b: Element): boolean => {
-  const inner = elementFrame(a);
-  const outer = elementFrame(b);
-  const within = (i: typeof inner, o: typeof inner) =>
-    !!i &&
-    !!o &&
-    i.x >= o.x - 1 &&
-    i.y >= o.y - 1 &&
-    i.x + i.width <= o.x + o.width + 1 &&
-    i.y + i.height <= o.y + o.height + 1;
-  return within(inner, outer);
-};
-
 export function echoControl(element: Element): Element | undefined {
-  const control = labelEchoOf(element);
-  return element.kind === 'text' && control && nested(element, control) ? control : undefined;
+  const text = element.kind === 'text' ? element : soleLabelTextOf(element);
+  const control = text && labelEchoOf(text);
+  return control !== element ? control : undefined;
 }
 
 // The wrapper `id-pressable` stands for `id` only while both ends are observed.

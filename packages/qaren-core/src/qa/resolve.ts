@@ -361,12 +361,17 @@ function prepareAssertion(
   };
 }
 
-// Stored text is identified by its painted occurrences; container and image labels only echo them.
 function textIdentities(quoted: string, screen: Screen): number {
+  const visible = { ...screen, elements: screen.elements.filter((e) => !e.offscreen) };
+  const identities = exactIdentities(
+    visible,
+    { quoted, phrase: quoted, exact: 'text' },
+    'wait',
+  ).length;
   const painted = (screen.paintedText ?? assertionView(screen)).filter(
     (text) => text === quoted,
   ).length;
-  return painted || screen.elements.filter((e) => !e.offscreen && e.label === quoted).length;
+  return painted ? Math.min(painted, identities || painted) : identities;
 }
 
 export function targetVisible(target: Target, screen: Screen): boolean {
@@ -402,13 +407,14 @@ export function visibleSelector(target: Target, screen: Screen): Selector | unde
   const quoted = target.quoted;
   if (quoted === undefined || !targetVisible(target, screen)) return undefined;
   const shown = screen.elements.filter((e) => !e.offscreen);
-  // Replay counts every element carrying a stored testID, so a shared one cannot be stored.
   const uniqueId = (id: string | undefined) =>
-    !!id && screen.elements.filter((e) => e.testID === id).length === 1;
+    !!id && exactIdentities(screen, { quoted: id, phrase: id, exact: 'id' }, 'wait').length === 1;
   if (target.exact !== 'text' && shown.some((e) => e.testID === quoted) && uniqueId(quoted))
     return { id: quoted };
   if (target.exact === 'id') return undefined;
-  const labelled = shown.filter((e) => e.label === quoted);
+  const labelled = exactIdentities(screen, { quoted, phrase: quoted, exact: 'text' }, 'wait')
+    .map(({ element }) => element)
+    .filter((e) => !e.offscreen);
   return target.exact === undefined && labelled.length === 1 && uniqueId(labelled[0].testID)
     ? { id: labelled[0].testID! }
     : textIdentities(quoted, screen) === 1

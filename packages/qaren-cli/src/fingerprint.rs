@@ -320,10 +320,6 @@ fn trace_local_imports(
     }
 }
 
-// A local dependency (file:/link:) can autolink native code into the app;
-// when it carries a native surface, that surface is hashed into its own
-// manifest entries so edits to it invalidate reuse. Unresolvable or
-// workspace:-resolved local deps leave the set unprovably complete.
 fn local_dependency_manifest(
     project_root: &Path,
     repo_root: &Path,
@@ -371,19 +367,12 @@ fn local_dependency_manifest(
             ));
             continue;
         }
-        let has_native_surface = resolved.join("ios").is_dir()
-            || resolved.join("android").is_dir()
-            || resolved.join("expo-module.config.json").is_file()
-            || std::fs::read_dir(&resolved).is_ok_and(|entries| {
-                entries
-                    .flatten()
-                    .any(|e| e.file_name().to_string_lossy().ends_with(".podspec"))
-            });
-        if !has_native_surface {
-            continue;
-        }
         let mut files = Vec::new();
-        collect_dep_surface(&resolved, &resolved, &mut files);
+        if let Err(detail) = collect_dep_surface(&resolved, &resolved, &mut files) {
+            incompleteness.push(format!(
+                "native inputs of local dependency {name} could not be enumerated: {detail}"
+            ));
+        }
         files.sort();
         for file_rel in files {
             let path = resolved.join(&file_rel);
@@ -402,49 +391,43 @@ fn local_dependency_manifest(
     }
 }
 
-fn collect_dep_surface(base: &Path, dir: &Path, files: &mut Vec<String>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
+fn collect_dep_surface(base: &Path, dir: &Path, files: &mut Vec<String>) -> Result<(), String> {
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| format!("cannot enumerate {}: {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("cannot enumerate {}: {e}", dir.display()))?;
         let path = entry.path();
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let rel_ok = path.strip_prefix(base).is_ok();
-        if !rel_ok {
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
+        let name = entry.file_name();
+        if name == ".git"
+            || (file_type.is_dir()
+                && matches!(
+                    name.to_str(),
+                    Some("node_modules" | "build" | ".gradle" | ".cxx" | "Pods" | "DerivedData")
+                ))
+        {
             continue;
         }
-        let is_dir = path.is_dir() && !path.is_symlink();
-        let rel = path
-            .strip_prefix(base)
-            .expect("checked above")
-            .to_string_lossy()
-            .into_owned();
-        let top = rel.split('/').next().unwrap_or("");
-        let excluded = matches!(name.as_str(), "node_modules" | ".git" | "build")
-            || (top == "android" && (rel.contains("/.gradle") || rel.contains("/build")))
-            || (top == "ios" && (rel.contains("/Pods") || rel.contains("/build")));
-        if excluded {
-            continue;
-        }
-        if is_dir {
-            let relevant_root = matches!(top, "ios" | "android")
-                || name == "expo-module.config.json"
-                || top.is_empty();
-            let nested = rel.contains('/');
-            if relevant_root || nested || matches!(name.as_str(), "ios" | "android") {
-                collect_dep_surface(base, &path, files);
-            }
-            continue;
-        }
-        let relevant = rel == "package.json"
-            || rel == "expo-module.config.json"
-            || name.ends_with(".podspec")
-            || top == "ios"
-            || top == "android";
-        if relevant {
-            files.push(rel);
+        if file_type.is_dir() {
+            collect_dep_surface(base, &path, files)?;
+        } else if file_type.is_file() || file_type.is_symlink() {
+            let rel = path
+                .strip_prefix(base)
+                .map_err(|e| format!("cannot bind {}: {e}", path.display()))?;
+            let rel = rel
+                .to_str()
+                .ok_or_else(|| format!("cannot encode dependency path {}", path.display()))?;
+            files.push(rel.to_string());
+        } else {
+            return Err(format!(
+                "dependency input {} is not a plain file",
+                path.display()
+            ));
         }
     }
+    Ok(())
 }
 
 // A regular file reached through a symlinked ancestor can resolve outside the

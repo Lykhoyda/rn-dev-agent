@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { join } from '../../../dist/qa/screen.js';
 import type { NativeNode } from '../../../dist/qa/screen.js';
-import { prepareTarget } from '../../../dist/qa/resolve.js';
+import { prepareTarget, targetVisible, visibleSelector } from '../../../dist/qa/resolve.js';
+import { exactIdentities } from '../../../dist/qa/identity.js';
 
 const app = (): NativeNode[] => [
   { ref: '@app', index: 0, type: 'Application', rect: { x: 0, y: 0, width: 402, height: 874 } },
@@ -65,7 +66,7 @@ test('the echo collapses without a testID too, and its text stays visible', () =
 });
 
 for (const hittable of [true, false]) {
-  test(`nested controls remain distinct with outer hittable=${hittable}`, () => {
+  test(`nested label wrappers resolve to the nearest control with outer hittable=${hittable}`, () => {
     const nodes = pressable(app(), { y: 700, texts: [] });
     nodes[2].hittable = hittable;
     nodes.push(
@@ -88,11 +89,10 @@ for (const hittable of [true, false]) {
         rect: { x: 150, y: 712, width: 60, height: 24 },
       },
     );
+    for (const node of nodes.slice(2)) node.identifier = 'Skip';
     const resolved = prepareTarget(press, join(nodes, []));
-    assert.ok(
-      'refuse' in resolved && resolved.refuse === 'TARGET_AMBIGUOUS',
-      JSON.stringify(resolved),
-    );
+    assert.ok('ref' in resolved, JSON.stringify(resolved));
+    assert.equal(resolved.ref, '@button');
 
     const wrapped = nodes.map((node, i) => ({
       ...node,
@@ -113,10 +113,28 @@ for (const hittable of [true, false]) {
     });
     wrapped[3].parentIndex = 2;
     const multiplyWrapped = prepareTarget(press, join(wrapped, []));
-    assert.ok(
-      'refuse' in multiplyWrapped && multiplyWrapped.refuse === 'TARGET_AMBIGUOUS',
-      JSON.stringify(multiplyWrapped),
-    );
+    assert.ok('ref' in multiplyWrapped, JSON.stringify(multiplyWrapped));
+    assert.equal(multiplyWrapped.ref, '@button');
+    wrapped[2].identifier = 'Skip';
+    for (const exact of [undefined, 'id', 'text'] as const) {
+      const target = { ...press.target, exact };
+      const screen = join(wrapped, []);
+      assert.equal(exactIdentities(screen, target, 'press').length, 1);
+      for (const kind of ['press', 'wait', 'scroll'] as const) {
+        const step =
+          kind === 'scroll'
+            ? { kind, until: target, direction: 'down' as const }
+            : { kind, target };
+        const resolution = prepareTarget(step, screen);
+        assert.ok('ref' in resolution, JSON.stringify(resolution));
+        assert.equal(resolution.ref, '@button');
+      }
+      assert.equal(targetVisible(target, screen), true);
+      assert.deepEqual(
+        visibleSelector(target, screen),
+        exact === 'text' ? { text: 'Skip' } : { id: 'Skip' },
+      );
+    }
   });
 }
 

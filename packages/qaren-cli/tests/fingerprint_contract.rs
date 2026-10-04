@@ -313,3 +313,98 @@ fn symlinked_plugin_seeds_dependencies_and_parent_directories_forbid_reuse() {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+fn local_dependency_project(spec: &str) -> std::path::PathBuf {
+    let root = plugin_project("module.exports = (c) => c;");
+    std::fs::write(
+        root.join("package.json"),
+        serde_json::json!({"dependencies": {"foo": format!("{spec}./foo")}}).to_string(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("foo/cpp")).unwrap();
+    std::fs::write(root.join("foo/package.json"), r#"{"name":"foo"}"#).unwrap();
+    std::fs::write(
+        root.join("foo/Foo.podspec"),
+        "Pod::Spec.new { |s| s.source_files = 'ios/**', 'cpp/**/*.{cpp,h}' }",
+    )
+    .unwrap();
+    std::fs::write(root.join("foo/cpp/Foo.cpp"), "int foo = 1;").unwrap();
+    root
+}
+
+fn local_fingerprint(root: &Path, platform: &str) -> NativeFingerprint {
+    let mut runner = MockRunner::new();
+    runner.expect_run("ls-files", CmdOutput::success("package.json\0"));
+    compute(&mut runner, root, root, platform).unwrap()
+}
+
+#[test]
+fn local_dependency_cpp_inputs_invalidate_both_platform_fingerprints() {
+    for spec in ["file:", "link:"] {
+        let root = local_dependency_project(spec);
+        let before: Vec<_> = ["ios", "android"]
+            .map(|platform| local_fingerprint(&root, platform))
+            .into();
+        for fp in &before {
+            assert!(fp.complete, "{:?}", fp.incompleteness);
+        }
+        std::fs::write(root.join("foo/cpp/Foo.cpp"), "int foo = 2;").unwrap();
+        for (platform, before) in ["ios", "android"].into_iter().zip(before) {
+            let after = local_fingerprint(&root, platform);
+            assert!(after.complete, "{:?}", after.incompleteness);
+            assert_ne!(before.value, after.value, "{spec} {platform}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn local_dependency_build_outputs_do_not_invalidate_fingerprints() {
+    let root = local_dependency_project("file:");
+    let before = local_fingerprint(&root, "ios");
+    for excluded in [
+        "node_modules",
+        "build",
+        ".gradle",
+        "Pods",
+        "DerivedData",
+        "android/app/build",
+        "ios/Pods",
+        "ios/DerivedData",
+        "cpp/build",
+        ".cxx",
+    ] {
+        let dir = root.join("foo").join(excluded);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("generated"), "output").unwrap();
+    }
+    let after = local_fingerprint(&root, "ios");
+    assert!(after.complete, "{:?}", after.incompleteness);
+    assert_eq!(before.value, after.value);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn local_dependency_unreadable_files_and_directories_forbid_reuse() {
+    use std::os::unix::fs::PermissionsExt;
+    for spec in ["file:", "link:"] {
+        for site in ["cpp/Foo.cpp", "cpp"] {
+            let root = local_dependency_project(spec);
+            let path = root.join("foo").join(site);
+            let permissions = std::fs::metadata(&path).unwrap().permissions();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0)).unwrap();
+            let fp = local_fingerprint(&root, "ios");
+            std::fs::set_permissions(&path, permissions).unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+            assert!(!fp.complete, "{spec} {site} must forbid reuse");
+            assert!(
+                fp.incompleteness
+                    .iter()
+                    .any(|reason| reason.contains("local dependency foo")),
+                "{:?}",
+                fp.incompleteness
+            );
+        }
+    }
+}

@@ -69,7 +69,6 @@ const shapes = (): Shape[] => {
     hittable: true,
     rect: { x: 150, y: 610, width: 60, height: 24 },
   });
-  // The same text child drawn outside its control's frame is not a proven duplicate.
   const detached = echo.map((n) =>
     n.ref === '@echo-text' ? { ...n, rect: { x: 150, y: 700, width: 60, height: 24 } } : n,
   );
@@ -111,12 +110,12 @@ const shapes = (): Shape[] => {
       replay: '@n2',
     },
     {
-      name: 'an echo drawn outside its control',
+      name: 'a descendant echo drawn outside its control',
       screen: join(detached, []),
       quoted: 'Skip',
-      identities: 2,
-      press: 'TARGET_AMBIGUOUS',
-      replay: 'TARGET_AMBIGUOUS',
+      identities: 1,
+      press: '@n2',
+      replay: '@n2',
     },
   ];
 };
@@ -250,7 +249,7 @@ for (const exact of [undefined, 'id', 'text'] as const) {
   });
 }
 
-test('text enclosing a control does not prove a label echo', () => {
+test('descendant evidence proves a label echo even with an enclosing text frame', () => {
   const nodes = node(root(), { label: 'Save', y: 100 });
   nodes.push({
     ref: '@text',
@@ -262,8 +261,8 @@ test('text enclosing a control does not prove a label echo', () => {
   });
   const observed = join(nodes, []);
   const target = { quoted: 'Save', phrase: 'Save' };
-  assert.equal(exactIdentities(observed, target, 'press').length, 2);
-  assert.equal(outcome(prepareTarget({ kind: 'press', target }, observed)), 'TARGET_AMBIGUOUS');
+  assert.equal(exactIdentities(observed, target, 'press').length, 1);
+  assert.equal(outcome(prepareTarget({ kind: 'press', target }, observed)), '@n2');
 });
 
 test('B: a visible form label is not a fill twin of the input it names', () => {
