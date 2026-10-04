@@ -573,11 +573,6 @@ the receipt's `cleanup.recorder` reports that final outcome. If shutdown remains
 unresolved, recover with `qaren cleanup <run-id>` as described under
 [iOS admission and cleanup](#ios-admission-and-cleanup).
 
-Company material must stay private: do not publish staging-app runs, recordings,
-screenshots, plans, verdicts or saved blocks to public product surfaces. Use
-Test App evidence for public product QA. Automated value and machine-identity
-redaction does not establish that company content is safe to publish.
-
 `qaren publish` posts one comment: the sentence from `--verdict-file`, the
 tested commit, an eligible available video, the plan with ✓/✗ per walked line,
 an available failing screenshot and collapsed run details. Plan lines come only
