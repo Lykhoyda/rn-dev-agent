@@ -358,3 +358,51 @@ for (const [name, digest, hosts, expected] of [
     assert.equal(outcome(prepareTarget(fill, screen)), expected);
   });
 }
+
+const notesHost = {
+  testID: 'notes',
+  role: null,
+  roleSource: 'none',
+  capabilities: { fill: true },
+} as const;
+for (const [name, digest, hosts, expected] of [
+  [
+    'the input host left beside its joined composite ancestor',
+    [
+      { role: 'textinput', testID: 'notes', inputHostIndices: [0] },
+      { role: 'button', testID: 'notes', inputHostIndices: [0] },
+    ],
+    [notesHost],
+    '@n2',
+  ],
+  [
+    'an unrelated React element sharing the testID',
+    [
+      { role: 'textinput', testID: 'notes', inputHostIndices: [0] },
+      { role: 'button', testID: 'notes' },
+    ],
+    [notesHost],
+    'TARGET_AMBIGUOUS',
+  ],
+  [
+    'a second input host under another ancestor',
+    [
+      { role: 'textinput', testID: 'notes', inputHostIndices: [0] },
+      { role: 'button', testID: 'notes', inputHostIndices: [1] },
+    ],
+    [notesHost, notesHost],
+    'TARGET_AMBIGUOUS',
+  ],
+] as const) {
+  test(`forwarding proof: ${name}`, () => {
+    const screen = join(
+      node(root(), { type: 'Other', identifier: 'notes', y: 100 }),
+      digest as unknown as DigestEntry[],
+      'app',
+      undefined,
+      { hosts: hosts as never, complete: true },
+    );
+    const fill: Step = { kind: 'fill', target: { quoted: 'notes', phrase: 'notes' }, text: 'x' };
+    assert.equal(outcome(prepareTarget(fill, screen)), expected);
+  });
+}

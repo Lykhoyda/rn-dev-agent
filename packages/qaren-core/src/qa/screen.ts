@@ -699,13 +699,24 @@ export function join(
         nativeLabelMayBeValue: false,
       });
     const inputHosts = d.inputHostIndices?.map((index) => reactHostEvidence?.hosts[index]);
-    if (
-      d.compositeWrapper &&
+    const provenHost =
       reactHostEvidence?.complete === true &&
       inputHosts?.length === 1 &&
       inputHosts[0]?.capabilities.fill === true &&
-      inputHosts[0].testID === d.testID
-    )
+      inputHosts[0].testID === d.testID;
+    // Either the composite ancestor of its input host, or that host's own entry left over after
+    // the native input joined a composite ancestor proven to contain the same host.
+    const hostOfJoinedAncestor =
+      provenHost &&
+      !d.compositeWrapper &&
+      digest.some(
+        (other, j) =>
+          used.has(j) &&
+          other.testID === d.testID &&
+          other.inputHostIndices?.length === 1 &&
+          other.inputHostIndices[0] === d.inputHostIndices![0],
+      );
+    if (provenHost && (d.compositeWrapper || hostOfJoinedAncestor))
       forwardedInputs.set(element, d.testID);
     joinedDiagnosticFacts.set(element, diagnosticFacts);
     elements.push(element);

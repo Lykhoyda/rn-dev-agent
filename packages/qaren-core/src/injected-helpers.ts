@@ -1515,7 +1515,8 @@ export const INJECTED_HELPERS = `
             var baseName = componentName && componentName.slice(componentName.lastIndexOf('.') + 1);
             wrapperCandidate = !isHostFiber(ifiber) && baseName && baseName !== 'View' && baseName !== 'RCTView'
               && !HOST_KIND_LOOKUP[baseName] && !INTERACTIVE_NAMES[baseName] && !iprops.role && !iprops.accessibilityRole ? entry : null;
-            if (wrapperCandidate) inputAncestors = inputAncestors.concat([wrapperCandidate]);
+            if (wrapperCandidate || (!isHostFiber(ifiber) && itid)) inputAncestors = inputAncestors.concat([entry]);
+            if (hostIndex !== null && hostEvidence.hosts[hostIndex].capabilities.fill === true) entry.inputHostIndices = [hostIndex];
           }
         }
         var ich = ifiber.child;
