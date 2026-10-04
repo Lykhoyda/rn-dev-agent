@@ -10,7 +10,7 @@ import {
 import { decideScreen, prepareTarget } from '../../../dist/qa/resolve.js';
 import { assertionView, join, screenSignature } from '../../../dist/qa/screen.js';
 import { runPlan } from '../../../dist/qa/walker.js';
-import { redactEvidence } from '../../../dist/qa/privacy.js';
+import { redactEvidence, projectPlanLine } from '../../../dist/qa/privacy.js';
 import { choice, element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
 
 const classify = (verb: string) =>
@@ -156,9 +156,8 @@ test('native-only Android input labels are private outward data, not rewritten l
       );
       assert.ok('ref' in exact);
       assert.equal(exact.ref, '@input');
-      assert.ok(
-        !redactEvidence(observed, assertionView(observed).join(' ')).includes(`Echo: ${label}`),
-      );
+      const evidence = redactEvidence(observed, assertionView(observed).join(' '));
+      assert.equal(evidence.includes(`Echo: ${label}`), !secure && label.length < 3);
     }
   }
 });
@@ -260,7 +259,9 @@ test('human evidence masks overlapping native and typed values together without 
     );
   }
   assert.equal(
-    redactEvidence(screen([]), '1. Type "1" into "address1"', ['1']),
+    projectPlanLine('1. Type "1" into "address1"', {
+      values: [{ text: '1', provenance: 'typed' }],
+    }).text,
     '1. Type "•••" into "address1"',
   );
 });

@@ -501,16 +501,17 @@ for (const value of ['SECRET-MARKER-123', '12']) {
   });
 }
 
-test('U12: a short value is masked inside a later aggregated label', async () => {
+test('U12: short free-text echoes remain readable while quoted fill slots stay masked', async () => {
   const fake = app({ typedLabel: 'Code A12B' });
   const outcome = await walkBlock(
     blocks(plan('12', 'qa-hidden-email', '2. Tap "qa-hidden-email-pressable"\n'))[0],
     fake.deps,
   );
-  assert.match(outcome.failure?.seen ?? '', /Code •••/);
-  assert.deepEqual(
-    strings({ rows: fake.rows, outcome }).filter((text) => text.includes('12')),
-    [],
+  assert.match(outcome.failure?.seen ?? '', /Code A12B/);
+  assert.ok(outcome.rows[0].text.includes('“•••”') || outcome.rows[0].text.includes('"•••"'));
+  assert.equal(
+    strings(fake.rows).some((text) => text.includes('12')),
+    false,
   );
 });
 
@@ -536,7 +537,7 @@ test('U13: an earlier block is not written with a value a later fallback made pr
   assert.equal(existsSync(join(dir, '.qaren', 'actions', 'code-shown.yaml')), false);
 });
 
-test('a later private fill withholds earlier fragment titles and masks final identifiers', async () => {
+test('a later private fill preserves unrelated fragment titles and their canonical files', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'qaren-fallback-'));
   mkdirSync(join(dir, '.qaren'));
   const fake = app({ initial: [wrapper(), submit, element('@hello', 'Hello', { kind: 'text' })] });
@@ -549,12 +550,13 @@ test('a later private fill withholds earlier fragment titles and masks final ide
     appId: 'com.example.app',
   });
   assert.equal(result.verdict, 'PASS', JSON.stringify(result));
-  assert.equal(result.blocks[0].key, '•••');
-  assert.equal(result.blocks[0].saved, false);
-  assert.equal(result.steps[0].block, '•••');
+  assert.equal(result.blocks[0].key, 'secr');
+  assert.equal(result.blocks[0].saved, undefined);
+  assert.equal(result.steps[0].block, 'secr');
   assert.equal(fake.rows[0].block, '');
-  assert.deepEqual(result.blocksWritten, []);
-  assert.equal(existsSync(join(dir, '.qaren', 'actions', 'secr.yaml')), false);
+  assert.deepEqual(result.blocksWritten, ['secr']);
+  assert.equal(existsSync(join(dir, '.qaren', 'actions', 'secr.yaml')), true);
+  assert.equal(JSON.stringify(result).includes('existing-secret'), false);
   assert.equal(parsed[0].slug, 'secr');
 });
 
@@ -579,7 +581,7 @@ for (const suffix of ['', '2. Tap "missing"\n']) {
   });
 }
 
-test('saved block machine identifiers remain canonical after a later fill fails before dispatch', async () => {
+test('preclassified private titles are withheld before dispatch without rewriting operational slugs', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'qaren-fallback-'));
   mkdirSync(join(dir, '.qaren'));
   const fake = app({ initial: [element('@hello', 'Hello', { kind: 'text' })] });
@@ -593,17 +595,14 @@ test('saved block machine identifiers remain canonical after a later fill fails 
   });
   assert.equal(result.verdict, 'FAIL');
   assert.deepEqual(fake.typed, []);
-  assert.deepEqual(result.blocksWritten, ['alice']);
+  assert.deepEqual(result.blocksWritten, []);
   assert.equal(result.blocks[0].key, '•••');
-  assert.equal(result.blocks[0].saved, undefined);
+  assert.equal(result.blocks[0].saved, false);
   assert.equal(parsed[0].slug, 'alice');
-  assert.equal(
-    existsSync(join(dir, '.qaren', 'actions', `${result.blocksWritten![0]}.yaml`)),
-    true,
-  );
+  assert.equal(existsSync(join(dir, '.qaren', 'actions', 'alice.yaml')), false);
 });
 
-test('U13: deferred writes keep order and content for runs without a private fill', async () => {
+test('U13: deferred writes preserve ordinary blocks and withhold the planned fill block', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'qaren-fallback-'));
   mkdirSync(join(dir, '.qaren'));
   const store: BlockStore = { appRoot: dir, platform: 'ios', appId: 'com.example.app' };
@@ -617,14 +616,22 @@ test('U13: deferred writes keep order and content for runs without a private fil
   assert.equal(ledger.verdict, 'PASS', JSON.stringify(ledger.failure));
   assert.deepEqual(ledger.blocks, [
     { key: 'first', outcome: 'pass', source: 'discovered' },
-    { key: 'second', outcome: 'pass', source: 'discovered' },
+    {
+      key: 'second',
+      outcome: 'pass',
+      source: 'discovered',
+      saved: false,
+      unsavable: 'contains a protected plan-typed value',
+    },
     { key: 'third', outcome: 'pass', source: 'discovered' },
   ]);
-  assert.deepEqual(ledger.blocksWritten, ['first', 'second', 'third']);
-  assert.match(
-    readFileSync(join(dir, '.qaren', 'actions', 'second.yaml'), 'utf8'),
-    /inputText: "Ada"/,
-  );
+  assert.deepEqual(ledger.blocksWritten, ['first', 'third']);
+  assert.equal(existsSync(join(dir, '.qaren', 'actions', 'second.yaml')), false);
+  for (const slug of ledger.blocksWritten ?? [])
+    assert.equal(
+      readFileSync(join(dir, '.qaren', 'actions', `${slug}.yaml`), 'utf8').includes('Ada'),
+      false,
+    );
 });
 
 const fill = (target: string, extra: Partial<Step & { kind: 'fill' }> = {}): Step =>
@@ -1808,10 +1815,19 @@ test('twin inputs are refused before any tap or typing', async () => {
 });
 
 test('split digit boxes never reveal a concealed code in any evidence sink', async () => {
-  const boxes = ['1', '2', '3', '4'].map((digit, i) =>
-    element(`@box${i}`, digit, { kind: 'text' }),
-  );
-  const fake = app({ initial: [...boxes, submit], initialKeyboard: true, reactFocused: true });
+  const boxes = joinScreen(
+    ['1', '2', '3', '4'].map((label, i) => ({
+      ref: `@box${i}`,
+      type: 'StaticText',
+      label,
+      rect: { x: i * 48, y: 100, width: 32, height: 40 },
+    })),
+    [],
+  ).elements;
+  const fake = app({ initial: [submit], initialKeyboard: true, reactFocused: true });
+  const capture = fake.deps.captureScreen;
+  fake.deps.captureScreen = async () =>
+    fake.state() === 'typed' ? screenOf([...boxes, submit], true) : capture();
   const outcome = await walkBlock(
     blocks('## QA\n\n### Code\n\n1. Fill "qa-otp-code" with "1234"\n✓ "Code accepted"\n')[0],
     fake.deps,

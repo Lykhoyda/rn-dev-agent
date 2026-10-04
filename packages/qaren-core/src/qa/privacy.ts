@@ -498,6 +498,7 @@ export class ObservedPrivacy {
       if (element.secure) {
         for (const value of inputPrivacy.get(element)?.values ?? []) this.secret.add(value);
         if (element.value) this.secret.add(element.value);
+        if (nativeLabelMayBeValue(element) && element.label) this.secret.add(element.label);
       }
     const text = [
       ...screen.visibleText,

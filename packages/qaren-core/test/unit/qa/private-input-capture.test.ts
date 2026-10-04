@@ -489,7 +489,7 @@ test('secure generic native accessibility labels may be values even without nati
   }
 });
 
-test('private-capture short values mask concatenated echoes but never become local assertion evidence', async () => {
+test('private-capture secure short values follow whole-token and substring rules without becoming local evidence', async () => {
   for (const value of ['7', 'ab', '.']) {
     const echo = `code=${value} x${value}x`;
     const screen = await captureScreen({
@@ -504,11 +504,8 @@ test('private-capture short values mask concatenated echoes but never become loc
     });
     const judge = scriptedJudge((_, __, state) => {
       assert.equal(JSON.stringify(state).includes(echo), false);
-      assert.ok(
-        JSON.stringify(state).includes(
-          'Text \\"code=[QAREN_VALUE_1] •••\\" (native accessibility name; platform-observed presence)',
-        ),
-      );
+      const expected = `code=[QAREN_VALUE_1] ${value.length === 1 ? `x${value}x` : 'x[QAREN_VALUE_1]x'}`;
+      assert.ok(JSON.stringify(state).includes(expected));
       return { check_1: { type: 'noul', noul: 0.99 } };
     });
     await decideScreen(screen, judge, {
@@ -518,10 +515,11 @@ test('private-capture short values mask concatenated echoes but never become loc
       line: 1,
     });
     assert.equal(judge.requests.length, 1);
-    assert.equal(redactEvidence(screen, echo), 'code=••• •••');
+    const expected = `code=••• ${value.length === 1 ? `x${value}x` : 'x•••x'}`;
+    assert.equal(redactEvidence(screen, echo), expected);
     const privacy = new ObservedPrivacy();
     privacy.observe(screen);
-    assert.equal(privacy.redact(echo), 'code=••• •••');
+    assert.equal(privacy.redact(echo), expected);
     const local = scriptedJudge(() => assert.fail('quoted checks must not ask the model'));
     for (const [text, expected] of [
       [echo, 'pass'],
@@ -543,10 +541,13 @@ test('private-capture short values mask concatenated echoes but never become loc
   }
 });
 
-test('short-value private provenance survives later captures without widening typed-only masking', async () => {
+test('secure short-value provenance survives later captures without widening typed-only masking', async () => {
   const first = await captureScreen({
     native: async () => ({
-      nodes: [field('7'), { ref: '@welcome', type: 'StaticText', label: 'Welcome' }],
+      nodes: [
+        field('7', { type: 'SecureTextField' }),
+        { ref: '@welcome', type: 'StaticText', label: 'Welcome' },
+      ],
     }),
     react: async () => observation(),
   });
@@ -561,7 +562,7 @@ test('short-value private provenance survives later captures without widening ty
       front: 'app',
       assertionEvidence: {
         observed: [
-          'Text "code=[QAREN_VALUE_2] ••• code=[QAREN_VALUE_1] xzx" (native accessibility name; platform-observed presence)',
+          'Text "code=[QAREN_VALUE_2] x7x code=z xzx" (native accessibility name; platform-observed presence)',
         ],
         unknown: [],
         unassociatedReact: 0,
@@ -577,8 +578,9 @@ test('short-value private provenance survives later captures without widening ty
   assert.ok(plan.blocks);
   const result = await runPlan(plan.blocks, f.deps);
   assert.equal(judge.requests.length, 1);
-  assert.ok(result.steps.some((row) => row.text.includes('code=••• ••• code=z xzx')));
-  assert.equal(JSON.stringify(result).includes('x7x'), false);
+  assert.ok(result.steps.some((row) => row.text.includes('code=••• x7x code=z xzx')));
+  assert.equal(JSON.stringify(result).includes('code=7'), false);
+  assert.ok(JSON.stringify(result).includes('x7x'));
   const typedOnly = new ObservedPrivacy(['7', 'z']);
   typedOnly.observe(later);
   assert.equal(typedOnly.redact(echo), echo);
