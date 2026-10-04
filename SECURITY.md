@@ -1,14 +1,28 @@
 # Lykhoyda/rn-dev-agent security
 
-**rn-dev-agent** is the Claude Code, Codex, and Cursor plugin (`rn-dev-agent-plugin` / `rn-dev-agent-core`) for local React Native / Expo development. It is not a hosted SaaS and not a generic Node library.
+This checkout develops **QaReN**, a local React Native / Expo QA CLI with a
+TypeScript screen child, host plugin, and packaged native runners. Build and
+installation instructions live in the [CLI guide](packages/qaren-cli/README.md).
+It is not a hosted SaaS and not a generic Node library.
 
-Install it from the Claude Code, Codex, or Cursor marketplace. It runs on the operator's machine: the MCP supervisor, managed Metro, and packaged iOS/Android runners drive a local simulator, emulator, or a bound physical device.
+## Local development limits
+
+Run only against trusted development apps, never production builds, store-signed
+apps, or apps holding real user data. Runtime introspection through CDP has access
+to the component tree, store state, persistent storage and in-memory secrets;
+it is not a sandbox. Treat the agent as a developer with shell access and trust
+its prompts accordingly. The CLI's run and device ownership checks bind the
+intended app and Metro; ambient discovery does not grant authority.
+
+For company evidence and publication limits, follow the
+[publication contract](packages/qaren-cli/README.md#test-a-pull-request).
 
 ## Report scope
 
-**In scope:** vulnerabilities in this plugin, `rn-dev-agent-core`, the packaged native runners, and the local Observe UI as shipped from this repo.
+**In scope:** vulnerabilities in the CLI, `qaren-core`, the host plugin, packaged
+native runners, and local Observe UI as shipped from this repo.
 
-**Out of scope:** a cloud backend (this repo has none) and operator-driven use of these local tools against an app the operator chose. Operator limits such as `cdp_evaluate` are in [README Security](README.md#security).
+**Out of scope:** a cloud backend (this repo has none) and operator-driven use of these local tools against an app the operator chose. Operator limits are described above.
 
 ## Support
 

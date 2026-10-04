@@ -69,8 +69,13 @@ Plans contain a `## QA` section, named `###` blocks, numbered actions and
 [parser](../qaren-core/src/qa/plan.ts) for accepted grammar. Quoted press and fill
 targets resolve observed labels or test IDs locally; multiple eligible matches
 refuse with `TARGET_AMBIGUOUS`, without a Jev tie-break, even if the target adds
-positional words such as `Tap "Save" at the bottom`. A control whose label only
-repeats its single text descendant counts once, as the control. The refusal lists
+positional words such as `Tap "Save" at the bottom`. A text element that is the
+sole text descendant of matching labelled controls links to the nearest one.
+When that control is among the matches, the text and matching outer wrappers
+collapse into it, whether an outer wrapper is hittable or not. Separate controls
+in distinct subtrees with the same label still refuse as ambiguous. The
+[label-echo tests](../qaren-core/test/unit/qa/label-echo.test.ts) cover both cases.
+The refusal lists
 each candidate without its label or value: kind, testID or `no-id`, and the
 rounded frame.
 
@@ -567,6 +572,11 @@ including when recording startup fails. Teardown retries an unresolved stop;
 the receipt's `cleanup.recorder` reports that final outcome. If shutdown remains
 unresolved, recover with `qaren cleanup <run-id>` as described under
 [iOS admission and cleanup](#ios-admission-and-cleanup).
+
+Company material must stay private: do not publish staging-app runs, recordings,
+screenshots, plans, verdicts or saved blocks to public product surfaces. Use
+Test App evidence for public product QA. Automated value and machine-identity
+redaction does not establish that company content is safe to publish.
 
 `qaren publish` posts one comment: the sentence from `--verdict-file`, the
 tested commit, an eligible available video, the plan with ✓/✗ per walked line,
