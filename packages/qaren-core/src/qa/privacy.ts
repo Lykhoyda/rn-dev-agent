@@ -455,6 +455,7 @@ export class ObservedPrivacy {
 export interface ModelMask {
   tokens: string[];
   apply(text: string): string;
+  describeElement(element: Element, render: (element: Element) => string): string;
 }
 
 export function modelMask(
@@ -490,14 +491,18 @@ export function modelMask(
     );
   return {
     tokens,
-    // A testID is a selector: short values and fragments never rewrite it, but a whole long value inside it would leak.
-    apply: (text) =>
-      text
-        .split(/(\[testID [^\]]*\])/)
-        .map((part, i) =>
-          i % 2 && !longValues.some((value) => part.includes(value)) ? part : maskText(part),
-        )
-        .join(''),
+    apply: maskText,
+    describeElement: (element, render) => {
+      const testID = element.testID;
+      if (!testID) return maskText(render(element));
+      const placeholder = '\uE000';
+      const rendered = render({ ...element, testID: placeholder });
+      const masked = maskText(rendered);
+      if (rendered.split(placeholder).length !== 2 || masked.split(placeholder).length !== 2)
+        return maskText(render(element));
+      const identifier = longValues.some((value) => testID.includes(value)) ? MASK : testID;
+      return masked.replace(placeholder, () => identifier);
+    },
   };
 }
 

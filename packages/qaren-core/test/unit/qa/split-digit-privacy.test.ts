@@ -6,6 +6,7 @@ import {
   capturePrivateScreen,
   redactEvidence,
 } from '../../../dist/qa/privacy.js';
+import { describe } from '../../../dist/qa/screen.js';
 import { decideScreen } from '../../../dist/qa/resolve.js';
 import { element, screen, scriptedJudge } from './judgment-fixtures.ts';
 
@@ -184,12 +185,59 @@ test('outbound masking keeps testIDs readable unless they contain a whole long p
   privacy.concealFallback('1');
   privacy.concealFallback('existing-secret');
   const mask = privacy.maskForModel(['1', 'existing-secret'], []);
-  const sent = mask.apply(
-    'textbox "Echo: 1" [testID address1] | "A1B" | [testID existing-secret-field] | existing-secret-value',
-  );
+  const sent = [
+    mask.describeElement(element('@input', 'Echo: 1', { testID: 'address1' }), describe),
+    mask.describeElement(element('@secret', 'A1B', { testID: 'existing-secret-field' }), describe),
+    mask.apply('existing-secret-value'),
+  ].join(' | ');
   assert.ok(sent.includes('[testID address1]'), sent);
   assert.equal(sent.includes('existing-secret-field'), false, sent);
   assert.equal(sent.includes('Echo: 1'), false, sent);
   assert.equal(sent.includes('A1B'), false, sent);
   assert.equal(sent.includes('existing-secret-value'), false, sent);
+});
+
+for (const [secret, text] of [
+  ['1234', '[testID 1234]'],
+  ['1234', '[testID 1] | [testID 2] | [testID 3] | [testID 4]'],
+  ['42', 'Echo: [testID 42]'],
+  ['existing-secret', '[testID secr]'],
+]) {
+  test(`marker-looking free text is masked for ${secret}`, async () => {
+    const privacy = new ObservedPrivacy();
+    privacy.concealFallback(secret);
+    const mask = privacy.maskForModel([], [text]);
+    const expected = text.replace(/1234|42|[1-4]|secr/g, MASK);
+    assert.equal(mask.apply(text), expected);
+    assert.equal(
+      mask.describeElement(element('@copy', text, { testID: 'copy' }), describe),
+      describe(element('@copy', expected, { testID: 'copy' })),
+    );
+    const judge = scriptedJudge(() => ({ check_0: { type: 'noul', noul: 0.99 } }));
+    await decideScreen(
+      screen([element('@copy', text, { kind: 'text' })], [text]),
+      judge,
+      { kind: 'check', text: 'The confirmation is visible', literal: false, line: 0 },
+      undefined,
+      [],
+      privacy,
+    );
+    assert.equal(judge.requests.length, 1);
+    const request = JSON.stringify(judge.requests[0]);
+    assert.equal(request.includes(text), false, request);
+    assert.ok(request.includes(MASK), request);
+  });
+}
+
+test('structured identifier masking fails closed on placeholder collisions or omission', () => {
+  const privacy = new ObservedPrivacy();
+  privacy.concealFallback('1');
+  const mask = privacy.maskForModel([], []);
+  for (const label of ['Echo: 1 \uE000', 'Echo: 1']) {
+    const input = element('@input', label, { testID: 'address1' });
+    const render = label.includes('\uE000')
+      ? describe
+      : (e: Parameters<typeof describe>[0]) => e.label!;
+    assert.equal(mask.describeElement(input, render), mask.apply(render(input)));
+  }
 });

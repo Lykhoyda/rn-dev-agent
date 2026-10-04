@@ -599,7 +599,13 @@ export async function decideScreen(
     q.instructions = `${sanitize(q.instructions)} Each opaque QAREN_VALUE token represents one original value. The same token in the expectation and observed text is evidence of the same value; different tokens represent different values. Text equal to a protected value is always shown as its token, so unmasked text never equals a token's value. Tokens disclose no content, length, format, order or validity. ${MASK} conceals fragments and is never assertion evidence.`;
     if (q.criteria)
       q.criteria = Object.fromEntries(
-        Object.entries(q.criteria).map(([key, text]) => [key, sanitize(text)]),
+        Object.entries(q.criteria).map(([key, text]) => {
+          const candidate =
+            prepared && 'question' in prepared && q === prepared.question
+              ? prepared.candidates.find((_, i) => key === `e${i}`)
+              : undefined;
+          return [key, candidate ? mask.describeElement(candidate, describeSemantic) : sanitize(text)];
+        }),
       );
   }
   const assertion =
@@ -615,15 +621,15 @@ export async function decideScreen(
           front: screen.front,
           ...(prepared && 'question' in prepared
             ? {
-                elements: prepared.candidates.map((e) => sanitize(describeSemantic(e))),
+                elements: prepared.candidates.map((e) => mask.describeElement(e, describeSemantic)),
               }
             : {}),
           ...(evidence && (questions[checkId] || questions[visibilityId])
             ? {
                 assertionEvidence: {
-                  observed: evidence.elements.map((e) => sanitize(describeSemantic(e))),
+                  observed: evidence.elements.map((e) => mask.describeElement(e, describeSemantic)),
                   unknown: evidence.unknown.map(({ element: e, reason }) => ({
-                    description: sanitize(
+                    description: mask.describeElement(e, (e) =>
                       describe({
                         ...e,
                         kind: e.semantic?.nativePresence?.kind ?? e.kind,
