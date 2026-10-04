@@ -156,6 +156,7 @@ export function redactEvidence(
     inputValues(screen, true),
     typed,
     new Set(privateScreens.get(screen)?.values),
+    screen.visibleText,
   );
 }
 
@@ -164,9 +165,14 @@ function maskEvidence(
   privateValues: readonly string[],
   typed: readonly string[],
   substringValues: ReadonlySet<string> = new Set(),
+  source: readonly string[] = [],
 ): string {
   const values = [...new Set([...privateValues, ...typed].filter(Boolean))];
-  const mask = modelMask(values, [text], substringValues);
+  const mask = modelMask(
+    values,
+    [text, ...source],
+    new Set([...privateValues, ...substringValues]),
+  );
   const projected = mask.tokens.reduce(
     (out, token, i) =>
       out
@@ -180,13 +186,48 @@ function maskEvidence(
   ]);
 }
 
-// A protected value can be shown split across boxes, so any token that is part of one is masked.
-function maskProtectedFragments(text: string, protectedValues: readonly string[]): string {
+function maskProtectedFragments(
+  text: string,
+  protectedValues: readonly string[],
+  source: readonly string[] = [],
+  opaqueTokens: readonly string[] = [],
+): string {
   const values = protectedValues.filter(Boolean);
   if (!values.length) return text;
-  return text.replace(/[\p{L}\p{M}\p{N}_.@-]+/gu, (token) => {
-    const core = token.replace(/^[_.@-]+|[_.@-]+$/g, '');
-    return core && values.some((value) => value.includes(core)) ? MASK : token;
+  const pattern = /[\p{L}\p{M}\p{N}_.@-]+/gu;
+  const coreOf = (token: string) => token.replace(/^[_.@-]+|[_.@-]+$/g, '');
+  const boxes = new Set<string>();
+  for (const line of [text, source.join(' | ')]) {
+    const tokens = [...line.matchAll(pattern)];
+    for (let i = 1; i < tokens.length; i++) {
+      const previous = tokens[i - 1];
+      const current = tokens[i];
+      const left = coreOf(previous[0]);
+      const right = coreOf(current[0]);
+      if (
+        [...left].length === 1 &&
+        [...right].length === 1 &&
+        /^[\s|,;:"'()[\]]*$/.test(line.slice(previous.index + previous[0].length, current.index)) &&
+        values.some((value) => value.includes(left + right))
+      ) {
+        boxes.add(left);
+        boxes.add(right);
+      }
+    }
+  }
+  return text.replace(pattern, (token) => {
+    if (opaqueTokens.includes(`[${token}]`)) return token;
+    const core = coreOf(token);
+    const length = [...core].length;
+    return core &&
+      (boxes.has(core) ||
+        values.some(
+          (value) =>
+            core.includes(value) ||
+            (value.includes(core) && (length >= 4 || (length === 1 && [...value].length <= 8))),
+        ))
+      ? MASK
+      : token;
   });
 }
 
@@ -355,11 +396,13 @@ export class ObservedPrivacy {
   private readonly observed = new Set<string>();
   private readonly concealed = new Set<string>();
   private readonly substringValues = new Set<string>();
+  private fragmentSource: readonly string[] = [];
   private sensitivePixels = false;
 
   constructor(private readonly typed: readonly string[] = []) {}
 
   observe(screen: Screen): void {
+    this.fragmentSource = screen.visibleText;
     this.sensitivePixels ||= privateScreens.get(screen)?.sensitivePixels === true;
     for (const value of privateScreens.get(screen)?.values ?? []) this.substringValues.add(value);
     for (const value of inputValues(screen)) this.observed.add(value);
@@ -391,11 +434,21 @@ export class ObservedPrivacy {
   }
 
   maskForModel(values: readonly string[], source: readonly string[]): ModelMask {
-    return modelMask(values, source, new Set([...this.concealed, ...this.substringValues]));
+    return modelMask(
+      values,
+      [...source, ...this.fragmentSource],
+      new Set([...this.concealed, ...this.substringValues]),
+    );
   }
 
   redact(text: string): string {
-    return maskEvidence(text, [...this.concealed], this.typed, this.substringValues);
+    return maskEvidence(
+      text,
+      [...this.concealed],
+      this.typed,
+      this.substringValues,
+      this.fragmentSource,
+    );
   }
 }
 
@@ -418,17 +471,21 @@ export function modelMask(
     .sort((a, b) => b.length - a.length)
     .map((value) => {
       const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return value.length < 3 && !substringValues.has(value)
-        ? `(?<![\\p{L}\\p{M}\\p{N}_])${escaped}(?![\\p{L}\\p{M}\\p{N}_])`
-        : escaped;
+      return substringValues.has(value)
+        ? `[\\p{L}\\p{M}\\p{N}_.@-]*${escaped}[\\p{L}\\p{M}\\p{N}_.@-]*`
+        : value.length < 3
+          ? `(?<![\\p{L}\\p{M}\\p{N}_])${escaped}(?![\\p{L}\\p{M}\\p{N}_])`
+          : escaped;
     });
   const pattern = alternatives.length ? new RegExp(alternatives.join('|'), 'gu') : undefined;
   return {
     tokens,
     apply: (text) =>
       maskProtectedFragments(
-        pattern ? text.replace(pattern, (value) => replacements.get(value)!) : text,
+        pattern ? text.replace(pattern, (value) => replacements.get(value) ?? MASK) : text,
         [...substringValues],
+        source,
+        tokens,
       ),
   };
 }

@@ -501,7 +501,7 @@ test('U12: a short value is masked inside a later aggregated label', async () =>
     blocks(plan('12', 'qa-hidden-email', '2. Tap "qa-hidden-email-pressable"\n'))[0],
     fake.deps,
   );
-  assert.match(outcome.failure?.seen ?? '', /Code A•••B/);
+  assert.match(outcome.failure?.seen ?? '', /Code •••/);
   assert.deepEqual(
     strings({ rows: fake.rows, outcome }).filter((text) => text.includes('12')),
     [],

@@ -1,16 +1,24 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MASK, ObservedPrivacy, capturePrivateScreen } from '../../../dist/qa/privacy.js';
+import {
+  MASK,
+  ObservedPrivacy,
+  capturePrivateScreen,
+  redactEvidence,
+} from '../../../dist/qa/privacy.js';
 import { decideScreen } from '../../../dist/qa/resolve.js';
 import { element, screen, scriptedJudge } from './judgment-fixtures.ts';
 
-test('a protected value never leaks through single-character or split substrings', () => {
+test('short codes mask single characters while isolated short substrings stay readable', () => {
   const privacy = new ObservedPrivacy();
   privacy.concealFallback('1234');
   const masked = privacy.redact(
     'on screen: Enter the code | 1 | 2 | 3 | 4 | 12 | 34 | Verify | 56 | 9',
   );
-  assert.equal(/[1-4]/.test(masked), false, masked);
+  assert.equal(
+    masked,
+    `on screen: Enter the code | ${MASK} | ${MASK} | ${MASK} | ${MASK} | 12 | 34 | Verify | 56 | 9`,
+  );
   assert.match(masked, /Enter the code/);
   assert.match(masked, /Verify/);
   assert.match(masked, /\| 56 \|/);
@@ -115,6 +123,58 @@ test('outbound masking preserves whole-value equality and ordinary typed fragmen
     privacy
       .maskForModel(['Ada', '1234'], [])
       .apply('4. | qa-hidden-email | qa-hidden_email | qa.hidden | qa@example.test-extra'),
-    `${MASK} | qa-hidden-email | qa-hidden_email | qa.hidden | qa@example.test-extra`,
+    `${MASK} | qa-hidden-email | qa-hidden_email | qa.hidden | ${MASK}`,
   );
+});
+
+test('long secrets preserve isolated short substrings and mask long fragments at every boundary', () => {
+  const privacy = new ObservedPrivacy();
+  privacy.concealFallback('existing-secret');
+  const text =
+    'The name field is filled | e | exi | existing | secr | prefix-existing-secret-suffix';
+  const expected = `The name field is filled | e | exi | ${MASK} | ${MASK} | ${MASK}`;
+  assert.equal(privacy.redact(text), expected);
+  assert.equal(privacy.maskForModel([], [text]).apply(text), expected);
+});
+
+test('adjacent character boxes from long secrets are masked in reports and model projections', () => {
+  const privacy = new ObservedPrivacy();
+  privacy.concealFallback('existing-secret');
+  assert.equal(
+    privacy.redact('Boxes: e | x | i | s | q'),
+    `Boxes: ${MASK} | ${MASK} | ${MASK} | ${MASK} | q`,
+  );
+  const mask = privacy.maskForModel([], ['Code', 'e', 'x', 'i', 's', 'Verify']);
+  for (const char of ['e', 'x', 'i', 's'])
+    assert.equal(mask.apply(`Text "${char}"`), `Text "${MASK}"`);
+  assert.equal(mask.apply('Text "is"'), 'Text "is"');
+  assert.equal(mask.apply('Text "q"'), 'Text "q"');
+  assert.equal(new ObservedPrivacy().maskForModel([], []).apply('e | x'), 'e | x');
+});
+
+test('protected values inside identifiers are fully masked while exact values retain opaque identity', () => {
+  const privacy = new ObservedPrivacy();
+  for (const value of ['1', 'existing-secret']) privacy.concealFallback(value);
+  const mask = privacy.maskForModel(['1', 'existing-secret'], []);
+  assert.equal(mask.apply('1'), mask.tokens[0]);
+  assert.equal(mask.apply('existing-secret'), mask.tokens[1]);
+  assert.equal(mask.apply('field1 | prefix-existing-secret-suffix'), `${MASK} | ${MASK}`);
+  assert.equal(privacy.redact('field1 | prefix-existing-secret-suffix'), `${MASK} | ${MASK}`);
+});
+
+test('individual output fields retain the adjacent-box context of the observed screen', () => {
+  const observed = screen(
+    ['e', 'x', 'i', 's'].map((label) => element(`@${label}`, label, { kind: 'text' })),
+  );
+  capturePrivateScreen(observed, [
+    { values: ['existing-secret'], secure: true, elements: [], associationUnique: false },
+  ]);
+  const privacy = new ObservedPrivacy();
+  privacy.observe(observed);
+  for (const label of observed.visibleText) {
+    assert.equal(privacy.redact(label), MASK);
+    assert.equal(redactEvidence(observed, label), MASK);
+    assert.equal(privacy.maskForModel([], []).apply(label), MASK);
+  }
+  assert.equal(privacy.redact('The name field is filled'), 'The name field is filled');
 });

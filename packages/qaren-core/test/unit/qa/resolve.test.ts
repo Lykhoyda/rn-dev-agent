@@ -259,12 +259,13 @@ test('phrase mutation retries obey the unchanged-screen rule, never a timeout al
 
 test('typed and secure values are masked in all projected questions and screens, not mutation arguments', async () => {
   const secret = 'private-fill-text';
+  const secureValue = 'protected-password';
   const input = screen(
     [
       element('@input', 'Name', { kind: 'input', value: secret }),
-      element('@secure', 'Password', { kind: 'input', secure: true, value: 'existing-secret' }),
+      element('@secure', 'Password', { kind: 'input', secure: true, value: secureValue }),
     ],
-    [`Name: ${secret}`, 'Password: existing-secret'],
+    [`Name: ${secret}`, `Password: ${secureValue}`],
   );
   const judge = scriptedJudge((q) =>
     Object.fromEntries(
@@ -283,7 +284,7 @@ test('typed and secure values are masked in all projected questions and screens,
   assert.deepEqual(f.actions, [`fill @input ${secret}`]);
   const dump = JSON.stringify({ requests: judge.requests, ledger });
   assert.ok(!dump.includes(secret), dump);
-  assert.ok(!dump.includes('existing-secret'), dump);
+  assert.ok(!dump.includes(secureValue), dump);
 });
 
 test('Jev unavailable is a line-attributed failure, with no mutation or recovery', async () => {

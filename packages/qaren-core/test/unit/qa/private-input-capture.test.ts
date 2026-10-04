@@ -506,7 +506,7 @@ test('private-capture short values mask concatenated echoes but never become loc
       assert.equal(JSON.stringify(state).includes(echo), false);
       assert.ok(
         JSON.stringify(state).includes(
-          'Text \\"code=[QAREN_VALUE_1] x[QAREN_VALUE_1]x\\" (native accessibility name; platform-observed presence)',
+          'Text \\"code=[QAREN_VALUE_1] •••\\" (native accessibility name; platform-observed presence)',
         ),
       );
       return { check_1: { type: 'noul', noul: 0.99 } };
@@ -518,10 +518,10 @@ test('private-capture short values mask concatenated echoes but never become loc
       line: 1,
     });
     assert.equal(judge.requests.length, 1);
-    assert.equal(redactEvidence(screen, echo), 'code=••• x•••x');
+    assert.equal(redactEvidence(screen, echo), 'code=••• •••');
     const privacy = new ObservedPrivacy();
     privacy.observe(screen);
-    assert.equal(privacy.redact(echo), 'code=••• x•••x');
+    assert.equal(privacy.redact(echo), 'code=••• •••');
     const local = scriptedJudge(() => assert.fail('quoted checks must not ask the model'));
     for (const [text, expected] of [
       [echo, 'pass'],
@@ -561,7 +561,7 @@ test('short-value private provenance survives later captures without widening ty
       front: 'app',
       assertionEvidence: {
         observed: [
-          'Text "code=[QAREN_VALUE_2] x[QAREN_VALUE_2]x code=[QAREN_VALUE_1] xzx" (native accessibility name; platform-observed presence)',
+          'Text "code=[QAREN_VALUE_2] ••• code=[QAREN_VALUE_1] xzx" (native accessibility name; platform-observed presence)',
         ],
         unknown: [],
         unassociatedReact: 0,
@@ -577,7 +577,7 @@ test('short-value private provenance survives later captures without widening ty
   assert.ok(plan.blocks);
   const result = await runPlan(plan.blocks, f.deps);
   assert.equal(judge.requests.length, 1);
-  assert.ok(result.steps.some((row) => row.text.includes('code=••• x•••x code=z xzx')));
+  assert.ok(result.steps.some((row) => row.text.includes('code=••• ••• code=z xzx')));
   assert.equal(JSON.stringify(result).includes('x7x'), false);
   const typedOnly = new ObservedPrivacy(['7', 'z']);
   typedOnly.observe(later);
