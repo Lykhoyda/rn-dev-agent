@@ -164,9 +164,17 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
   return stop.track(handler).then(
     (result) => {
       try {
-        const { data, meta } = unwrap<{ executed?: boolean }>(result);
+        const { data, meta } = unwrap<{ executed?: boolean; tapped?: boolean }>(result);
         logActionSettle(meta);
-        return { ok: true, proven, ...(data?.executed === false ? { executed: false } : {}) };
+        if (data?.executed === false || data?.tapped === false)
+          return {
+            ok: false,
+            proven: false,
+            executed: false,
+            mutation: 'none',
+            error: 'the action did not execute',
+          };
+        return { ok: true, proven };
       } catch (error) {
         logActionSettle(error instanceof HandlerError ? error.meta : undefined);
         const { code, message } = describeError(error);

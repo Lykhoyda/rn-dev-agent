@@ -126,7 +126,8 @@ test('a second failure of the same item fails without a second recovery', async 
   assert.equal(ledger.verdict, 'FAIL');
   assert.equal(ledger.recoveries, 1);
   assert.equal(f.calls.filter((c) => c === 'dialog accept').length, 1);
-  assert.match(ledger.failure?.seen ?? '', /did not change after two attempts/);
+  assert.match(ledger.failure?.seen ?? '', /did not change after recovery/);
+  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 3);
 });
 
 test('a target missing behind a dialog recovers once', async () => {
@@ -416,3 +417,36 @@ test('a dev-menu no-op never counts as hidden or recovered', async () => {
   assert.equal(outcome.recoveries, undefined);
   assert.ok(outcome.rows.every((row) => row.outcome !== 'retry'));
 });
+
+for (const [plan, method] of [
+  ['1. Tap "Settings"\n', 'press'],
+  ['1. Go back\n', 'back'],
+  ['1. Scroll down\n', 'scroll'],
+  ['1. Accept the dialog\n', 'dialog'],
+  ['1. Dismiss the dialog\n', 'dialog'],
+  ['1. Type "hello" into "Settings"\n', 'fill'],
+] as const) {
+  test(`recovery permits only one additional dispatch: ${plan.trim()}`, async () => {
+    const covered = screen(['Settings'], 'dev-menu');
+    if (method === 'fill') {
+      covered.elements[0].kind = 'input';
+      covered.elements[0].semantic = {
+        press: 'unsupported',
+        fill: 'supported',
+        visibility: 'visible',
+      };
+    }
+    let dispatches = 0;
+    const f = fake([covered], {
+      [method]: async () => {
+        dispatches++;
+        return { ok: false, proven: false, mutation: 'none' };
+      },
+    });
+    const outcome = await walkBlock(block(plan), f.deps);
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.equal(outcome.recoveries, 1);
+    assert.equal(dispatches, 3);
+    assert.match(outcome.failure?.seen ?? '', /did not change after recovery/);
+  });
+}

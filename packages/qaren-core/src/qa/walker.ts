@@ -1019,7 +1019,8 @@ export async function walkBlock(
         let fillIdentity: string | undefined;
         let typedUnverified = false;
         let again = false;
-        for (let attempt = 1; attempt <= 2 && !outcome; attempt += 1) {
+        const maxAttempts = recovered.has(item) ? 1 : 2;
+        for (let attempt = 1; attempt <= maxAttempts && !outcome; attempt += 1) {
           currentAttempt = attempt;
           const held = cached?.item === item ? cached : undefined;
           let before = held?.observation ?? (await capture(item));
@@ -1252,7 +1253,7 @@ export async function walkBlock(
             );
             break;
           }
-          if (attempt === 1) {
+          if (attempt < maxAttempts) {
             metric('replay', after);
             emit({
               ...base(item, attempt),
@@ -1267,9 +1268,11 @@ export async function walkBlock(
             });
             continue;
           }
-          const unchanged = act!.error
-            ? `${act!.error}; the screen did not change after two attempts`
-            : 'the screen did not change after two attempts';
+          const unchangedScreen =
+            maxAttempts === 1
+              ? 'the screen did not change after recovery'
+              : 'the screen did not change after two attempts';
+          const unchanged = act!.error ? `${act!.error}; ${unchangedScreen}` : unchangedScreen;
           const recovering = await recovery(item, attempt, unchanged);
           if (recovering === 'retry') {
             again = true;

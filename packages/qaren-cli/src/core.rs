@@ -194,6 +194,11 @@ pub struct Row {
 
 impl Row {
     fn redact_evidence(&mut self) {
+        if let Some(selector) = &mut self.selector {
+            for text in [&mut selector.id, &mut selector.text].into_iter().flatten() {
+                *text = redact_secrets(text);
+            }
+        }
         for text in [&mut self.text, &mut self.reason].into_iter().flatten() {
             *text = redact_secrets(text);
         }

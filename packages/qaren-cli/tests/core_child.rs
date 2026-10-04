@@ -1063,11 +1063,12 @@ fn protected_values_preserve_wire_controls_and_redact_evidence() {
         assert!(status.success());
         return;
     }
-    qaren::redact::protect_values(["false", "PASS", "walk"]);
+    qaren::redact::protect_values(["false", "PASS", "walk", "staging"]);
     let mut result = block_ledger("walk", "discovered");
     result["blocks"][0]["saved"] = serde_json::json!(false);
     result["steps"][0]["text"] = serde_json::json!("false PASS walk");
     result["steps"][0]["reason"] = serde_json::json!("false PASS walk");
+    result["steps"][0]["selector"] = serde_json::json!({"id": "staging-button", "text": "staging"});
     let outcome = run_result(&result, 0);
     assert_eq!(outcome.verdict, Verdict::Pass);
     assert_eq!(outcome.ledger.verdict, "PASS");
@@ -1078,10 +1079,33 @@ fn protected_values_preserve_wire_controls_and_redact_evidence() {
         Some("[REDACTED_SECRET] [REDACTED_SECRET] [REDACTED_SECRET]")
     );
     assert_eq!(outcome.ledger.steps[0].reason, outcome.ledger.steps[0].text);
+    let selector = outcome.ledger.steps[0].selector.as_ref().unwrap();
+    assert_eq!(selector.id.as_deref(), Some("[REDACTED_SECRET]-button"));
+    assert_eq!(selector.text.as_deref(), Some("[REDACTED_SECRET]"));
+    assert_eq!(result["steps"][0]["selector"]["text"], "staging");
+    assert_eq!(outcome.ledger.steps[0].r#ref, Some("@e3".into()));
+    let repo = common::temp_repo();
+    let mut mock = MockRunner::new();
+    mock.expect_spawn_piped(
+        "walk.js",
+        9000,
+        &format!("{}\n", envelope(2, "row", &result["steps"][0].to_string())),
+        Some(1),
+    );
+    let streamed = run_child(&mut mock, &repo.join("core.log"));
+    assert_eq!(
+        streamed.ledger.steps[0].selector,
+        outcome.ledger.steps[0].selector
+    );
+
     result["verdict"] = serde_json::json!("FAIL");
     result["failure"] = serde_json::json!({"step": 1, "seen": "false PASS walk"});
     let failed = run_result(&result, 1);
     assert_eq!(failed.verdict, Verdict::Fail);
+    assert_eq!(
+        failed.ledger.steps[0].selector,
+        outcome.ledger.steps[0].selector
+    );
     assert_eq!(
         failed.ledger.failure.unwrap().seen,
         "[REDACTED_SECRET] [REDACTED_SECRET] [REDACTED_SECRET]"
@@ -1090,6 +1114,10 @@ fn protected_values_preserve_wire_controls_and_redact_evidence() {
     result["code"] = serde_json::json!("SCREEN_EVIDENCE_INCOMPLETE");
     result["message"] = serde_json::json!("false PASS walk");
     let refused = run_result(&result, 4);
+    assert_eq!(
+        refused.ledger.steps[0].selector,
+        outcome.ledger.steps[0].selector
+    );
     assert!(matches!(refused.verdict, Verdict::Refused { code, message }
         if code == "SCREEN_EVIDENCE_INCOMPLETE" && message == "[REDACTED_SECRET] [REDACTED_SECRET] [REDACTED_SECRET]"));
 }
