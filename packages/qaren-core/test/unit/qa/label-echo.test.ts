@@ -179,22 +179,54 @@ for (const wrapper of ['layout', 'disabled', 'press-capable'] as const) {
         ? [{ testID: 'layout', role: 'button', capabilities: { press: true } }]
         : [],
     );
-    const representative = wrapper === 'press-capable' ? '@layout' : '@button';
     for (const exact of [undefined, 'text'] as const) {
       const target = { ...press.target, exact };
       const identities = exactIdentities(screen, target, 'press');
       assert.equal(identities.length, 1);
-      assert.equal(identities[0].element.ref, representative);
-      if (wrapper !== 'press-capable') {
-        const resolved = prepareTarget({ ...press, target }, screen);
-        assert.ok('ref' in resolved, JSON.stringify(resolved));
-        assert.equal(resolved.ref, '@button');
-        assert.equal(targetVisible(target, screen), true);
-        assert.deepEqual(
-          visibleSelector(target, screen),
-          exact === 'text' ? { text: 'Skip' } : { id: 'Skip' },
-        );
-      }
+      assert.equal(identities[0].element.ref, '@button');
+      const resolved = prepareTarget({ ...press, target }, screen);
+      assert.ok('ref' in resolved, JSON.stringify(resolved));
+      assert.equal(resolved.ref, '@button');
+      assert.equal(targetVisible(target, screen), true);
+      assert.deepEqual(
+        visibleSelector(target, screen),
+        exact === 'text' ? { text: 'Skip' } : { id: 'Skip' },
+      );
+    }
+  });
+}
+
+for (const [y, direction] of [
+  [-100, 'up'],
+  [1000, 'down'],
+] as const) {
+  test(`a nearest offscreen label ancestor remains reachable by scrolling ${direction}`, () => {
+    const nodes = pressable(app(), { y: 700, texts: [] });
+    nodes.push(
+      {
+        ref: '@offscreen',
+        index: 3,
+        parentIndex: 2,
+        type: 'Other',
+        label: 'Skip',
+        hittable: false,
+        rect: { x: 30, y, width: 320, height: 40 },
+      },
+      {
+        ref: '@text',
+        index: 4,
+        parentIndex: 3,
+        type: 'StaticText',
+        label: 'Skip',
+        hittable: false,
+        rect: { x: 150, y: y + 12, width: 60, height: 24 },
+      },
+    );
+    const screen = join(nodes, []);
+    for (const exact of [undefined, 'text'] as const) {
+      const target = { ...press.target, exact };
+      assert.equal(exactIdentities(screen, target, 'press')[0].element.ref, '@offscreen');
+      assert.deepEqual(prepareTarget({ ...press, target }, screen), { scroll: direction });
     }
   });
 }

@@ -796,7 +796,7 @@ export function isNativeInput(element: Element): boolean {
   return !element.ref.startsWith('react:') && element.nativeKind === 'input';
 }
 
-export function actionView(screen: Screen): Element[] {
+export function actionView(screen: Pick<Screen, 'elements'>): Element[] {
   return screen.elements.filter((e) => !e.disabled && (e.offscreen || e.hittable));
 }
 

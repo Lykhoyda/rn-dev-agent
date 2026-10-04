@@ -4,7 +4,7 @@ import {
   type Screen,
   soleLabelTextOf,
   labelAncestorsOf,
-  semanticDisabled,
+  actionView,
   forwardedInputOf,
 } from './screen.js';
 
@@ -44,13 +44,7 @@ function forwardsInput(element: Element, matched: readonly Element[]): boolean {
 
 export function echoControl(element: Element): Element | undefined {
   const text = element.kind === 'text' ? element : soleLabelTextOf(element);
-  const control =
-    text &&
-    labelAncestorsOf(text).find(
-      (ancestor) =>
-        !semanticDisabled(ancestor) &&
-        (ancestor.hittable || ancestor.semantic?.press === 'supported'),
-    );
+  const control = text && actionView({ elements: [...labelAncestorsOf(text)] })[0];
   return control !== element ? control : undefined;
 }
 

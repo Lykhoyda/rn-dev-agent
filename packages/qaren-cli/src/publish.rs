@@ -54,7 +54,6 @@ fn withholding_reason<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<S
 pub struct Publication {
     #[serde(default)]
     pub rendered: bool,
-    // Set before the create call: a lost outcome is reconciled by the comment marker, never re-posted blind.
     #[serde(default)]
     pub comment_attempted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -118,17 +117,22 @@ fn pr_info(pr: &PrRunRecord) -> PrInfo {
     }
 }
 
-// Finds an earlier comment carrying this run's marker, so a lost create is adopted, not repeated.
-fn find_marked_comment(
+fn find_own_comment(
     runner: &mut dyn Runner,
     pr: &PrInfo,
-    marker: &str,
+    body: &str,
+    actor: &str,
     cwd: &Path,
 ) -> Result<Option<String>, Failure> {
+    #[derive(Deserialize)]
+    struct Author {
+        login: String,
+    }
     #[derive(Deserialize)]
     struct Comment {
         body: String,
         url: String,
+        author: Option<Author>,
     }
     #[derive(Deserialize)]
     struct Comments {
@@ -175,8 +179,20 @@ fn find_marked_comment(
     Ok(comments
         .comments
         .into_iter()
-        .find(|c| c.body.starts_with(marker))
+        .find(|c| c.body == body && c.author.as_ref().is_some_and(|a| a.login == actor))
         .map(|c| c.url))
+}
+
+fn authenticated_login(runner: &mut dyn Runner, cwd: &Path) -> Result<String, Failure> {
+    let output =
+        runner.run(&CmdSpec::new("gh-user", "gh", &["api", "user", "--jq", ".login"], 60).cwd(cwd));
+    if !output.ok() || output.stdout.trim().is_empty() {
+        return Err(failure(
+            "could not identify the authenticated publishing user",
+            "check gh authentication, then re-run qaren publish",
+        ));
+    }
+    Ok(output.stdout.trim().to_string())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -187,16 +203,21 @@ fn post_once(
     body_file: &str,
     attachments: &[(PathBuf, Option<String>)],
     attempted: bool,
-    marker: &str,
+    actor: &mut Option<String>,
     render_body: &mut dyn FnMut() -> Result<String, Failure>,
     mark_attempted: &mut dyn FnMut() -> Result<(), Failure>,
 ) -> Result<String, Failure> {
+    let body = render_body()?;
     if attempted {
-        if let Some(url) = find_marked_comment(runner, pr, marker, run_dir)? {
+        if actor.is_none() {
+            *actor = Some(authenticated_login(runner, run_dir)?);
+        }
+        if let Some(url) = find_own_comment(runner, pr, &body, actor.as_deref().unwrap(), run_dir)?
+        {
             return Ok(url);
         }
     }
-    std::fs::write(run_dir.join(body_file), render_body()?).map_err(|e| {
+    std::fs::write(run_dir.join(body_file), body).map_err(|e| {
         failure(
             format!("cannot write {body_file}: {e}"),
             "fix the run directory permissions, then re-run",
@@ -699,6 +720,7 @@ fn publish_inner(
         *publication = read_json(&state)?;
     }
 
+    let mut publishing_actor = None;
     if publication.comment_url.is_none() {
         let mut attachments = Vec::new();
         if pr.video_publication == VideoPublication::Eligible
@@ -725,7 +747,7 @@ fn publish_inner(
             COMMENT_BODY,
             &attachments,
             attempted,
-            &format!("<!-- qaren-run: {run_id} -->"),
+            &mut publishing_actor,
             &mut || {
                 let ledger: Ledger = read_json(&run_dir.join("ledger.json"))?;
                 Ok(report::render_pr_comment(
@@ -821,7 +843,7 @@ fn publish_inner(
                 BLOCKS_BODY,
                 &[],
                 attempted,
-                &format!("<!-- qaren-run: {run_id} blocks -->"),
+                &mut publishing_actor,
                 &mut || Ok(blocks_comment(run_id, &pr, &blocks, machine)),
                 &mut || {
                     publication.blocks_comment_attempted = true;

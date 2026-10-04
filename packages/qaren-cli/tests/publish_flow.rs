@@ -371,7 +371,7 @@ fn a_rerun_after_the_comment_posts_no_second_comment() {
 }
 
 #[test]
-fn a_lost_comment_outcome_is_adopted_by_its_marker_not_reposted() {
+fn a_lost_comment_outcome_is_adopted_only_with_matching_author_and_body() {
     let (runs, dir) = run_dir(false);
     let mut first = Git(MockRunner::new());
     first.0.expect_run(
@@ -386,14 +386,18 @@ fn a_lost_comment_outcome_is_adopted_by_its_marker_not_reposted() {
         ReceiptResult::Failed
     );
     assert!(publication(&dir).comment_attempted);
+    let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
     std::fs::remove_file(dir.join("comment.md")).unwrap();
 
     let mut second = Git(MockRunner::new());
+    second
+        .0
+        .expect_run("gh api user", CmdOutput::success("publisher\n"));
     second.0.expect_run(
         "gh pr view 12 -R github.com/o/r --json comments",
         CmdOutput::success(&serde_json::json!({"comments": [
             {"body": "unrelated", "url": "https://github.com/o/r/pull/12#issuecomment-0"},
-            {"body": format!("<!-- qaren-run: {RUN} -->\nThe Tasks tab"), "url": "https://github.com/o/r/pull/12#issuecomment-7"}
+            {"body": body, "author": {"login": "publisher"}, "url": "https://github.com/o/r/pull/12#issuecomment-7"}
         ]}).to_string()),
     );
     second
@@ -1010,6 +1014,10 @@ fn retry_regenerates_an_unposted_walk_comment_with_current_privacy() {
     second
         .runner
         .0
+        .expect_run("gh api user", CmdOutput::success("publisher\n"));
+    second
+        .runner
+        .0
         .expect_run("gh pr view 12", CmdOutput::success(r#"{"comments":[]}"#));
     script_comment_and_label(&mut second.runner.0);
     let receipt = publish(&mut second, &runs, RUN, &fixture_machine());
@@ -1059,6 +1067,10 @@ fn retry_regenerates_unposted_blocks_through_the_current_block_gate() {
         runner: Git(MockRunner::new()),
         bodies: Vec::new(),
     };
+    second
+        .runner
+        .0
+        .expect_run("gh api user", CmdOutput::success("publisher\n"));
     second
         .runner
         .0
@@ -1339,6 +1351,7 @@ impl Runner for LocalPublication {
                 CmdOutput::success("git@github.com:o/r.git\n")
             }
             "git-push-blocks" if self.reject_push => CmdOutput::failed(1, "push unavailable"),
+            "gh-user" => CmdOutput::success("publisher\n"),
             "gh-pr-comments" => CmdOutput::success("{\"comments\":[]}"),
             "gh-pr-comment" if self.reject_comment => CmdOutput::failed(1, "post unavailable"),
             "gh-pr-comment" => {
@@ -2134,4 +2147,93 @@ process.stdout.write(JSON.stringify(ledger));
     }
     scan(&dir);
     assert_eq!(runner.0.remaining(), 0);
+}
+
+#[test]
+fn both_comment_paths_reconcile_only_the_authenticated_authors_exact_report() {
+    for variant in ["other-author", "other-body", "missing-author", "matching"] {
+        let (runs, dir) = run_dir(true);
+        let mut first = Git(MockRunner::new());
+        script_comment_and_label(&mut first.0);
+        first
+            .0
+            .expect_run("gh pr comment", CmdOutput::failed(1, "offline"));
+        assert_eq!(
+            publish(&mut first, &runs, RUN, &machine()).result,
+            ReceiptResult::Failed
+        );
+        let bodies = ["comment.md", "blocks-comment.md"]
+            .map(|file| std::fs::read_to_string(dir.join(file)).unwrap());
+        let pending = Publication {
+            comment_attempted: true,
+            blocks_comment_attempted: true,
+            ..Default::default()
+        };
+        std::fs::write(
+            dir.join("publication.json"),
+            serde_json::to_vec(&pending).unwrap(),
+        )
+        .unwrap();
+        let mut second = Git(MockRunner::new());
+        second
+            .0
+            .expect_run("gh api user", CmdOutput::success("publisher\n"));
+        for (index, body) in bodies.iter().enumerate() {
+            let candidate = serde_json::json!({
+                "body": if variant == "other-body" { format!("{body}altered") } else { body.clone() },
+                "author": match variant {
+                    "other-author" => serde_json::json!({"login": "someone-else"}),
+                    "missing-author" => serde_json::Value::Null,
+                    _ => serde_json::json!({"login": "publisher"}),
+                },
+                "url": format!("https://github.com/o/r/pull/12#issuecomment-adopted-{index}"),
+            });
+            second.0.expect_run(
+                "gh pr view 12",
+                CmdOutput::success(&serde_json::json!({"comments": [candidate]}).to_string()),
+            );
+            if variant != "matching" {
+                second.0.expect_run(
+                    "gh pr comment",
+                    CmdOutput::success(&format!(
+                        "https://github.com/o/r/pull/12#issuecomment-new-{index}"
+                    )),
+                );
+            }
+            if index == 0 {
+                second
+                    .0
+                    .expect_run("gh pr view https://github.com/o/r/pull/12", view(""));
+            }
+        }
+        let receipt = publish(&mut second, &runs, RUN, &machine());
+        assert_eq!(
+            receipt.result,
+            ReceiptResult::Published,
+            "{variant}: {:?}",
+            receipt.failure
+        );
+        assert_eq!(calls_named(&second.0, "gh-user"), 1);
+        assert_eq!(
+            calls_named(&second.0, "gh-pr-comment"),
+            if variant == "matching" { 0 } else { 2 }
+        );
+        let suffix = if variant == "matching" {
+            "adopted"
+        } else {
+            "new"
+        };
+        assert_eq!(
+            receipt.outcomes["comment"],
+            format!("https://github.com/o/r/pull/12#issuecomment-{suffix}-0")
+        );
+        assert_eq!(
+            receipt.outcomes["writeback"],
+            format!("attached https://github.com/o/r/pull/12#issuecomment-{suffix}-1")
+        );
+        for (file, expected) in ["comment.md", "blocks-comment.md"].into_iter().zip(bodies) {
+            assert_eq!(std::fs::read_to_string(dir.join(file)).unwrap(), expected);
+        }
+        assert_eq!(second.0.remaining(), 0);
+    }
 }
