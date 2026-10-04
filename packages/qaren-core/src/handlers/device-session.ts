@@ -336,7 +336,7 @@ export function createDeviceSnapshotHandler(
           }
         } else {
           // GH #418: open may invalidate stale runner APKs + Gradle-rebuild.
-          await interruptible(() => startAndroidRunnerFn(deviceId, appId));
+          await startAndroidRunnerFn(deviceId, appId);
           upgradeNote = consumePendingAndroidUpgradeNote();
           if (!args.attachOnly) {
             try {
