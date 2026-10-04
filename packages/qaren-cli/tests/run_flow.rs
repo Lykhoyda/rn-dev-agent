@@ -4322,7 +4322,9 @@ fn a_cancel_at_each_pre_walk_effect_boundary_runs_nothing_after_it_and_never_res
         assert!(last.contains(hint), "{hint}: the last effect was {last:?}");
         let uninstalled = labels(&mock).iter().any(|l| l == "simctl-uninstall");
         assert_eq!(uninstalled, hint == "simctl uninstall", "{hint}");
-        assert!(!labels(&mock).iter().any(|l| l == "expo-run-ios" || l == "core-walk"));
+        assert!(!labels(&mock)
+            .iter()
+            .any(|l| l == "expo-run-ios" || l == "core-walk"));
         assert_eq!(receipt.cleanup["device_lease"], "removed", "{hint}");
         let record = RunRecord::load(&req.runs_root, &run_id()).unwrap();
         assert!(record.resources.fresh_install.is_none(), "{hint}");
@@ -4336,9 +4338,18 @@ fn a_cancel_during_the_git_probes_claims_nothing_and_runs_nothing_after_it() {
     let mut mock = MockRunner::new();
     mock.expect_run("node --version", CmdOutput::success("v26.8.1\n"));
     script_plan(&mut mock, &repo);
-    mock.expect_run("simctl list devices booted", CmdOutput::success(&booted_json()));
-    mock.expect_run("rev-parse --show-toplevel", CmdOutput::failed(1, "interrupted"));
-    mock.cancel_after = Some(("rev-parse --show-toplevel".into(), "received SIGTERM".into()));
+    mock.expect_run(
+        "simctl list devices booted",
+        CmdOutput::success(&booted_json()),
+    );
+    mock.expect_run(
+        "rev-parse --show-toplevel",
+        CmdOutput::failed(1, "interrupted"),
+    );
+    mock.cancel_after = Some((
+        "rev-parse --show-toplevel".into(),
+        "received SIGTERM".into(),
+    ));
     let req = request(&repo, &app, 30);
 
     let receipt = run(&mut mock, &req);
@@ -4347,7 +4358,126 @@ fn a_cancel_during_the_git_probes_claims_nothing_and_runs_nothing_after_it() {
     assert_eq!(receipt.failure.unwrap().code, FailureCode::RunCancelled);
     assert_eq!(receipt.run_id, "none");
     assert_eq!(mock.remaining(), 0);
-    assert!(mock.calls.last().unwrap().rendered().contains("rev-parse --show-toplevel"));
+    assert!(mock
+        .calls
+        .last()
+        .unwrap()
+        .rendered()
+        .contains("rev-parse --show-toplevel"));
     assert!(!req.lock_root.exists());
     assert!(!req.runs_root.exists());
+}
+
+// Writes the recorder's raw capture and each encode's output, as the real tools would.
+struct Encoding(PrRunner);
+
+impl Runner for Encoding {
+    fn env_var(&self, name: &str) -> Option<String> {
+        self.0.env_var(name)
+    }
+    fn execute_private(
+        &mut self,
+        spec: &CmdSpec,
+        input: &[u8],
+        interruptible: bool,
+    ) -> qaren::exec::PrivateOutput {
+        self.0.execute_private(spec, input, interruptible)
+    }
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
+        if spec.label == "ffmpeg-encode" {
+            std::fs::write(spec.args.last().unwrap(), vec![0u8; 64]).unwrap();
+        }
+        self.0.execute(spec, interruptible)
+    }
+    fn spawn_group_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        if spec.label == "simctl-record-video" {
+            let raw = PathBuf::from(spec.args.last().unwrap());
+            std::fs::write(&raw, vec![0u8; 4096]).unwrap();
+            let other = raw
+                .ancestors()
+                .nth(3)
+                .unwrap()
+                .join("check-other/media/raw.mov");
+            std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+            std::fs::write(other, b"foreign").unwrap();
+        }
+        self.0.spawn_group_unchecked(spec, log)
+    }
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.0.spawn_piped_unchecked(spec, log)
+    }
+    fn sleep(&mut self, d: std::time::Duration) {
+        self.0.sleep(d)
+    }
+    fn now_epoch_ms(&self) -> u64 {
+        self.0.now_epoch_ms()
+    }
+    fn commands_executed(&self) -> u64 {
+        self.0.commands_executed()
+    }
+    fn cancellation(&self) -> Option<String> {
+        self.0.cancellation()
+    }
+}
+
+// R8: only this run's own raw capture is reclaimed, and only once a playable encode replaces it.
+#[test]
+fn a_playable_encode_reclaims_the_runs_raw_capture_and_reports_the_bytes() {
+    for encodes in [true, false] {
+        let (repo, app) = app_repo();
+        let wt = repo.join("runs").join(run_id()).join("wt");
+        let mut runner = Encoding(PrRunner {
+            inner: MockRunner::new(),
+            app: app.clone(),
+            recorder_persisted_before_spawn: None,
+            fail_core_spawn: false,
+        });
+        let mock = &mut runner.0.inner;
+        script_pr_preflight(mock, &repo, &wt);
+        script_provision(mock);
+        script_pr_provenance_recheck(mock);
+        script_drift_status(mock);
+        script_recorder_start(mock);
+        mock.expect_spawn_piped("walk.js", 9000, &pr_pass_stdout(), Some(0));
+        script_core_identity(mock);
+        script_drift_status(mock);
+        mock.expect_run("git", CmdOutput::success(&format!("{PR_HEAD}\n")));
+        mock.expect_run(
+            "git",
+            CmdOutput::success("?? test-app/.qaren/actions/tasks.yaml\0"),
+        );
+        script_recorder_stop(mock);
+        script_pr_teardown_after_drift(mock);
+        mock.expect_run("worktree remove --force", CmdOutput::success(""));
+        mock.expect_run("which ffmpeg", CmdOutput::success("/opt/ffmpeg\n"));
+        if encodes {
+            mock.expect_run("ffmpeg", CmdOutput::success(""));
+            mock.expect_run("ffprobe", CmdOutput::success("3.5\n"));
+        } else {
+            mock.expect_run("ffmpeg", CmdOutput::failed(1, "encode failed"));
+        }
+        mock.expect_run(
+            "gh pr view https://github.com/o/r/pull/12",
+            pr_view_json(PR_HEAD),
+        );
+        let other = repo.join("runs/check-other/media/raw.mov");
+
+        let receipt = run(&mut runner, &pr_request(&repo, &app));
+
+        assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
+        assert_eq!(runner.0.inner.remaining(), 0);
+        let media = repo.join("runs").join(run_id()).join("media");
+        assert_eq!(
+            !media.join("raw.mov").exists(),
+            encodes,
+            "encodes={encodes}"
+        );
+        assert!(other.exists(), "another run's capture is never touched");
+        if encodes {
+            assert!(media.join("video.mp4").is_file());
+            assert_eq!(receipt.outcomes["reclaimed"], "media/raw.mov: 4096 bytes");
+        } else {
+            assert!(!receipt.outcomes.contains_key("reclaimed"));
+        }
+    }
 }

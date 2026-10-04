@@ -676,6 +676,14 @@ fn run_inner(
     if let Some(pr) = &pr_state {
         let video = video.unwrap_or_else(|| record::finalize(ctx.runner, &run_dir));
         ctx.notes.push(("video".to_string(), video.to_string()));
+        if video == VideoStatus::Available {
+            if let Some(bytes) = reclaim_raw_capture(&run_dir) {
+                ctx.notes.push((
+                    "reclaimed".to_string(),
+                    format!("media/raw.mov: {bytes} bytes"),
+                ));
+            }
+        }
         // Only the uploaded copy starts at the admitted app; the local recording stays complete.
         let video = if video == VideoStatus::Available || outcome.ledger.publication_interrupted {
             let offset = outcome
@@ -790,6 +798,15 @@ fn run_inner(
         receipt.next_action = format!("qaren cleanup {run_id} --json");
     }
     Ok(receipt)
+}
+
+// The raw capture in this run's own directory is redundant once a playable video.mp4 replaces it.
+fn reclaim_raw_capture(run_dir: &Path) -> Option<u64> {
+    let raw = run_dir.join("media").join("raw.mov");
+    let meta = std::fs::symlink_metadata(&raw)
+        .ok()
+        .filter(|m| m.is_file())?;
+    std::fs::remove_file(&raw).ok().map(|()| meta.len())
 }
 
 // The run's own identifiers, kept privately in pr.json so publication can redact them as whole words.

@@ -1320,7 +1320,8 @@ pub(crate) fn cleanup_process_group(
                 }
             },
             Some(PidLiveness::AliveForeign) => Outcome::Unresolved(
-                "ownership unproven: the recorded leader birth identity belongs to another process".into(),
+                "ownership unproven: the recorded leader birth identity belongs to another process"
+                    .into(),
             ),
             Some(PidLiveness::Unknown) => {
                 Outcome::Unresolved("pid liveness probe was inconclusive".to_string())

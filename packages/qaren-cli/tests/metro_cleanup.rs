@@ -217,7 +217,10 @@ fn a_reused_pgid_owning_the_recorded_port_is_never_signalled() {
     );
     assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
     let saved = RunRecord::load(&runs, &record.run_id).unwrap();
-    assert!(saved.resources.metro.is_some(), "the record keeps the resource");
+    assert!(
+        saved.resources.metro.is_some(),
+        "the record keeps the resource"
+    );
     drop(guard);
 }
 
