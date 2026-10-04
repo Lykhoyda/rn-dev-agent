@@ -265,3 +265,78 @@ test('text enclosing a control does not prove a label echo', () => {
   assert.equal(exactIdentities(observed, target, 'press').length, 2);
   assert.equal(outcome(prepareTarget({ kind: 'press', target }, observed)), 'TARGET_AMBIGUOUS');
 });
+
+test('B: a visible form label is not a fill twin of the input it names', () => {
+  const nodes = node(node(root(), { type: 'StaticText', label: 'Email', y: 100 }), {
+    type: 'TextField',
+    label: 'Email',
+    y: 140,
+  });
+  const screen = join(nodes, []);
+  const fill: Step = { kind: 'fill', target: { quoted: 'Email', phrase: 'Email' }, text: 'x' };
+  assert.equal(exactIdentities(screen, fill.target, 'fill').length, 1);
+  assert.equal(outcome(prepareTarget(fill, screen)), '@n3');
+  // A press still counts both.
+  assert.equal(
+    outcome(prepareTarget({ kind: 'press', target: fill.target }, screen)),
+    'TARGET_AMBIGUOUS',
+  );
+});
+
+test('B: a non-input carrying the fill target testID is a twin', () => {
+  const nodes = node(node(root(), { type: 'Button', identifier: 'email', y: 100 }), {
+    type: 'TextField',
+    identifier: 'email',
+    y: 140,
+  });
+  const fill: Step = { kind: 'fill', target: { quoted: 'email', phrase: 'email' }, text: 'x' };
+  assert.equal(outcome(prepareTarget(fill, join(nodes, []))), 'TARGET_AMBIGUOUS');
+});
+
+const inputHost = {
+  testID: 'notes',
+  role: 'textinput',
+  roleSource: 'role',
+  capabilities: { fill: true },
+} as const;
+for (const [name, digest, hosts, expected] of [
+  [
+    'a forwarding composite joined first',
+    [
+      { role: 'button', testID: 'notes' },
+      { role: 'textinput', testID: 'notes' },
+    ],
+    [inputHost],
+    '@n2',
+  ],
+  [
+    'a forwarding composite left over',
+    [
+      { role: 'textinput', testID: 'notes' },
+      { role: 'button', testID: 'notes' },
+    ],
+    [inputHost],
+    '@n2',
+  ],
+  [
+    'a second React input host',
+    [
+      { role: 'textinput', testID: 'notes' },
+      { role: 'textinput', testID: 'notes' },
+    ],
+    [inputHost, inputHost],
+    'TARGET_AMBIGUOUS',
+  ],
+] as const) {
+  test(`C: ${name} ${expected === '@n2' ? 'collapses into the one native input' : 'stays a twin'}`, () => {
+    const screen = join(
+      node(root(), { type: 'TextField', identifier: 'notes', y: 100 }),
+      digest as unknown as DigestEntry[],
+      'app',
+      undefined,
+      { hosts: hosts as never, complete: true },
+    );
+    const fill: Step = { kind: 'fill', target: { quoted: 'notes', phrase: 'notes' }, text: 'x' };
+    assert.equal(outcome(prepareTarget(fill, screen)), expected);
+  });
+}

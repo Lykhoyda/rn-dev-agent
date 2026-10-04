@@ -147,8 +147,9 @@ enum TextInputTarget {
       if rawValue.isEmpty { return .exact }
       return placeholderEqual ? .ambiguous : .mismatch
     }
+    // A placeholder read cannot prove a typed value, even one equal to the placeholder.
     if rawValue == expected {
-      return placeholderEqual ? .ambiguous : .exact
+      return placeholderEqual ? .mismatch : .exact
     }
     return .mismatch
   }

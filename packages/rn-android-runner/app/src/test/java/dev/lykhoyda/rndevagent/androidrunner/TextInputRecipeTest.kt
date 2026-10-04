@@ -213,7 +213,9 @@ class TextInputRecipeTest {
         assertEquals("exact", TextInputRecipe.classifyVerify("", "", "Enter name", true, secure = false))
         assertEquals("ambiguous", TextInputRecipe.classifyVerify("", "Enter name", "Enter name", true, secure = false))
         assertEquals("mismatch", TextInputRecipe.classifyVerify("", "stale", "Enter name", true, secure = false))
-        assertEquals("ambiguous", TextInputRecipe.classifyVerify("Search", "Search", "Search", true, secure = false))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("Search", "Search", "Search", true, secure = false))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("Search", "", "Search", true, secure = false))
+        assertEquals("ambiguous", TextInputRecipe.classifyVerify("Search", "Search", null, false, secure = false))
     }
 
     @Test

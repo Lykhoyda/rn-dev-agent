@@ -77,7 +77,8 @@ object TextInputRecipe {
             if (raw.isEmpty()) return "exact"
             return if (!hintKnown || placeholderEqual) "ambiguous" else "mismatch"
         }
-        if (raw == expected) return if (!hintKnown || placeholderEqual) "ambiguous" else "exact"
+        // A placeholder read cannot prove a typed value, even one equal to the placeholder.
+        if (raw == expected) return if (placeholderEqual) "mismatch" else if (!hintKnown) "ambiguous" else "exact"
         return "mismatch"
     }
 

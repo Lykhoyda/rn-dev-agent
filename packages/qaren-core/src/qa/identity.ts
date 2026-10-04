@@ -28,15 +28,20 @@ export function named(
   return e.label === quoted || e.testID === quoted;
 }
 
-// A React-only non-input carrying the testID of exactly one native input forwards that input.
-function forwardsInput(element: Element, matched: readonly Element[]): boolean {
-  if (!element.ref.startsWith('react:') || element.kind === 'input' || !element.testID)
-    return false;
-  return (
-    matched.filter(
-      (e) => !e.ref.startsWith('react:') && e.kind === 'input' && e.testID === element.testID,
-    ).length === 1
+// React-only entries forward the one native input with their testID when React reports at most
+// one text-entry host for it: a composite wrapper, or the input's own host when the wrapper joined.
+function forwardsInput(screen: Screen, element: Element, matched: readonly Element[]): boolean {
+  const id = element.testID;
+  if (!element.ref.startsWith('react:') || !id) return false;
+  const native = matched.filter((e) => !e.ref.startsWith('react:') && e.kind === 'input');
+  if (native.length !== 1 || native[0].testID !== id) return false;
+  const hosts = screen.reactHostEvidence?.hosts.filter(
+    (host) =>
+      host.testID === id &&
+      (host.capabilities.fill === true ||
+        ['textinput', 'search', 'textbox', 'searchbox'].includes(host.role?.toLowerCase() ?? '')),
   );
+  return hosts ? hosts.length <= 1 : element.kind !== 'input';
 }
 
 const nested = (a: Element, b: Element): boolean => {
@@ -82,7 +87,7 @@ export function exactIdentities(screen: Screen, target: Target, kind: Step['kind
   return matched
     .filter((e) => {
       const control = echoControl(e);
-      return (!control || !matched.includes(control)) && !forwardsInput(e, matched);
+      return (!control || !matched.includes(control)) && !forwardsInput(screen, e, matched);
     })
     .map((element) => ({
       element,

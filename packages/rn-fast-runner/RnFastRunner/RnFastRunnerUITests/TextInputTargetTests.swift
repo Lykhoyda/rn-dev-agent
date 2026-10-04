@@ -341,11 +341,14 @@ final class TextInputTargetTests: XCTestCase {
     )
   }
 
-  func testPlaceholderEqualTypedValueIsAmbiguous() {
-    XCTAssertEqual(
-      TextInputTarget.classifyValue(expected: "Enter name", rawValue: "Enter name", placeholder: "Enter name", isSecure: false),
-      .ambiguous
-    )
+  func testPlaceholderOrEmptyReadNeverProvesATypedValue() {
+    for raw in ["Enter name", ""] {
+      XCTAssertEqual(
+        TextInputTarget.classifyValue(expected: "Enter name", rawValue: raw, placeholder: "Enter name", isSecure: false),
+        .mismatch,
+        raw
+      )
+    }
   }
 
   func testVerifyObservationIncludesPlaceholderAndVerdict() {
