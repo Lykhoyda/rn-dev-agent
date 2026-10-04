@@ -3,7 +3,8 @@ import {
   type Element,
   type Screen,
   soleLabelTextOf,
-  labelEchoOf,
+  labelAncestorsOf,
+  semanticDisabled,
   forwardedInputOf,
 } from './screen.js';
 
@@ -43,7 +44,13 @@ function forwardsInput(element: Element, matched: readonly Element[]): boolean {
 
 export function echoControl(element: Element): Element | undefined {
   const text = element.kind === 'text' ? element : soleLabelTextOf(element);
-  const control = text && labelEchoOf(text);
+  const control =
+    text &&
+    labelAncestorsOf(text).find(
+      (ancestor) =>
+        !semanticDisabled(ancestor) &&
+        (ancestor.hittable || ancestor.semantic?.press === 'supported'),
+    );
   return control !== element ? control : undefined;
 }
 

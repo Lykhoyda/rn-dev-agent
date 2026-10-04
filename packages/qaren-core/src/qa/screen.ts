@@ -79,12 +79,12 @@ export function forwardedInputOf(element: Element): string | undefined {
   return forwardedInputs.get(element);
 }
 
-const labelEchoes = new WeakMap<Element, Element>();
+const labelAncestors = new WeakMap<Element, Element[]>();
 const soleLabelTexts = new WeakMap<Element, Element>();
 const elementFrames = new WeakMap<Element, NonNullable<NativeNode['rect']>>();
 
-export function labelEchoOf(element: Element): Element | undefined {
-  return labelEchoes.get(element);
+export function labelAncestorsOf(element: Element): readonly Element[] {
+  return labelAncestors.get(element) ?? [];
 }
 
 export function soleLabelTextOf(element: Element): Element | undefined {
@@ -777,7 +777,7 @@ export function join(
       elements[only].label === control.label
     ) {
       soleLabelTexts.set(control, elements[only]);
-      if (!labelEchoes.has(elements[only])) labelEchoes.set(elements[only], control);
+      labelAncestors.set(elements[only], [...labelAncestorsOf(elements[only]), control]);
     }
   });
   return {

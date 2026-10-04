@@ -138,6 +138,67 @@ for (const hittable of [true, false]) {
   });
 }
 
+for (const wrapper of ['layout', 'disabled', 'press-capable'] as const) {
+  test(`a Button around a ${wrapper} wrapper retains the nearest actionable identity`, () => {
+    const nodes: NativeNode[] = [
+      ...app(),
+      {
+        ref: '@button',
+        index: 2,
+        parentIndex: 1,
+        type: 'Button',
+        label: 'Skip',
+        identifier: 'Skip',
+        hittable: true,
+        rect: { x: 20, y: 700, width: 350, height: 48 },
+      },
+      {
+        ref: '@layout',
+        index: 3,
+        parentIndex: 2,
+        type: 'Other',
+        label: 'Skip',
+        identifier: 'layout',
+        hittable: wrapper === 'disabled',
+        enabled: wrapper !== 'disabled',
+        rect: { x: 30, y: 705, width: 320, height: 40 },
+      },
+      {
+        ref: '@text',
+        index: 4,
+        parentIndex: 3,
+        type: 'StaticText',
+        label: 'Skip',
+        hittable: true,
+        rect: { x: 150, y: 712, width: 60, height: 24 },
+      },
+    ];
+    const screen = join(
+      nodes,
+      wrapper === 'press-capable'
+        ? [{ testID: 'layout', role: 'button', capabilities: { press: true } }]
+        : [],
+    );
+    const representative = wrapper === 'press-capable' ? '@layout' : '@button';
+    for (const exact of [undefined, 'text'] as const) {
+      const target = { ...press.target, exact };
+      const identities = exactIdentities(screen, target, 'press');
+      assert.equal(identities.length, 1);
+      assert.equal(identities[0].element.ref, representative);
+      if (wrapper !== 'press-capable') {
+        const resolved = prepareTarget({ ...press, target }, screen);
+        assert.ok('ref' in resolved, JSON.stringify(resolved));
+        assert.equal(resolved.ref, '@button');
+        assert.equal(targetVisible(target, screen), true);
+        assert.deepEqual(
+          visibleSelector(target, screen),
+          exact === 'text' ? { text: 'Skip' } : { id: 'Skip' },
+        );
+      }
+    }
+  });
+}
+
 test('a Skip pressable and a separate inline Skip link stay ambiguous', () => {
   const nodes = pressable(app(), { id: 'consent-skip', y: 700, texts: ['Skip'] });
   nodes.push({
