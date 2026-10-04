@@ -39,6 +39,7 @@ import type { CDPClient } from '../cdp-client.js';
 import {
   getCachedSignature,
   isRefMapFresh,
+  refreshRef,
   lookupRef,
   pinnedElementRef,
   refCenter,
@@ -397,14 +398,18 @@ export async function pressCandidate(
 ): Promise<ToolResult> {
   const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
   if (action === 'click') {
-    const tapArgs = ['press', ref, ...(includeSystemUi ? ['--include-system-ui'] : [])];
-    const tap = async (): Promise<ToolResult> =>
-      surfaceKeyboardGuard(await runNative(tapArgs, { qaContext }));
+    const identity = getCachedSignature(ref);
+    const tap = async (at = ref): Promise<ToolResult> =>
+      surfaceKeyboardGuard(
+        await runNative(['press', at, ...(includeSystemUi ? ['--include-system-ui'] : [])], {
+          qaContext,
+        }),
+      );
     const first = await tap();
     return first.isError
       ? healKeyboardOccludedTap(
           first,
-          getClient ? keyboardHealDeps(getClient, tap, qaContext) : null,
+          getClient ? keyboardHealDeps(getClient, tap, qaContext, { ref, identity }) : null,
           qaContext,
         )
       : first;
@@ -835,13 +840,30 @@ function interactOpts(args: {
   };
 }
 
+function snapshotNodes(result: unknown): FlatNode[] | null {
+  try {
+    const envelope = JSON.parse((result as ToolResult).content[0].text) as {
+      ok?: boolean;
+      data?: { nodes?: FlatNode[] };
+    };
+    return envelope.ok !== false && Array.isArray(envelope.data?.nodes)
+      ? envelope.data.nodes
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+// The heal retries the identity the refused tap named, never whatever its refreshed ref now names.
 function keyboardHealDeps(
   getClient: () => CDPClient,
-  retryTap: () => Promise<ToolResult>,
+  tapAt: (ref?: string) => Promise<ToolResult>,
   qaContext?: QaDispatchContext,
+  target?: { ref: string; identity: RefSignature | null },
 ): KeyboardAutoHealDeps | null {
   const client = cdpClientOrNull(getClient);
   if (!client) return null;
+  let refreshed: unknown;
   return {
     dismissViaJs: async () => {
       qaContext?.authorize();
@@ -854,9 +876,23 @@ function keyboardHealDeps(
         return false;
       }
     },
-    refreshSnapshot: () =>
-      runNative(['snapshot'], { qaContext, qaReadOnly: qaContext !== undefined }),
-    retryTap,
+    refreshSnapshot: async () =>
+      (refreshed = await runNative(['snapshot'], {
+        qaContext,
+        qaReadOnly: qaContext !== undefined,
+      })),
+    retryTap: async () => {
+      if (!target) return tapAt();
+      const nodes = snapshotNodes(refreshed);
+      const outcome =
+        target.identity && nodes ? refreshRef(target.identity, nodes) : { kind: 'absent' as const };
+      if (outcome.kind === 'unique') return tapAt(outcome.node.ref);
+      return failResult(
+        `Element at ref ${target.ref} did not re-resolve to exactly one element after the keyboard was dismissed — refusing to guess-tap`,
+        'STALE_REF',
+        { reResolution: outcome.kind, mutation: 'none' },
+      );
+    },
   };
 }
 
@@ -873,17 +909,28 @@ export function createDevicePressHandler(
       );
     }
     const target = hasRef ? (args.ref!.startsWith('@') ? args.ref! : `@${args.ref!}`) : undefined;
-    const cliArgs = hasRef ? ['press', target!] : ['press', String(args.x!), String(args.y!)];
-    if (args.doubleTap) cliArgs.push('--double-tap');
-    if (args.count && args.count > 1) cliArgs.push('--count', String(args.count));
-    if (args.holdMs && args.holdMs > 0) cliArgs.push('--hold-ms', String(args.holdMs));
-    const tap = async (): Promise<ToolResult> =>
-      surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+    const flags: string[] = [];
+    if (args.doubleTap) flags.push('--double-tap');
+    if (args.count && args.count > 1) flags.push('--count', String(args.count));
+    if (args.holdMs && args.holdMs > 0) flags.push('--hold-ms', String(args.holdMs));
+    const identity = target ? getCachedSignature(target) : null;
+    const tap = async (ref = target): Promise<ToolResult> =>
+      surfaceKeyboardGuard(
+        await runNative(
+          [...(ref ? ['press', ref] : ['press', String(args.x!), String(args.y!)]), ...flags],
+          interactOpts(args),
+        ),
+      );
     let result = await tap();
     if (result.isError) {
       result = await healKeyboardOccludedTap(
         result,
-        keyboardHealDeps(getClient, tap, args.qaContext),
+        keyboardHealDeps(
+          getClient,
+          tap,
+          args.qaContext,
+          target ? { ref: target, identity } : undefined,
+        ),
         args.qaContext,
       );
     }
@@ -908,21 +955,29 @@ export function createDeviceLongPressHandler(
   getClient: () => CDPClient,
 ): (args: LongPressArgs) => Promise<ToolResult> {
   return withSession(async (args) => {
-    let cliArgs: string[];
-    if (args.ref) {
-      const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
-      cliArgs = ['press', ref, '--hold-ms', String(args.durationMs ?? 1000)];
+    const target = args.ref ? (args.ref.startsWith('@') ? args.ref : `@${args.ref}`) : undefined;
+    let cliArgs: (ref?: string) => string[];
+    if (target) {
+      cliArgs = (ref = target) => ['press', ref, '--hold-ms', String(args.durationMs ?? 1000)];
     } else if (args.x != null && args.y != null) {
-      cliArgs = ['longpress', String(args.x), String(args.y)];
-      if (args.durationMs) cliArgs.push(String(args.durationMs));
+      cliArgs = () => [
+        'longpress',
+        String(args.x),
+        String(args.y),
+        ...(args.durationMs ? [String(args.durationMs)] : []),
+      ];
     } else {
       return failResult('Provide either ref or x+y coordinates');
     }
-    const tap = async (): Promise<ToolResult> =>
-      surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+    const identity = target ? getCachedSignature(target) : null;
+    const tap = async (ref?: string): Promise<ToolResult> =>
+      surfaceKeyboardGuard(await runNative(cliArgs(ref), interactOpts(args)));
     const result = await tap();
     if (result.isError) {
-      return healKeyboardOccludedTap(result, keyboardHealDeps(getClient, tap));
+      return healKeyboardOccludedTap(
+        result,
+        keyboardHealDeps(getClient, tap, undefined, target ? { ref: target, identity } : undefined),
+      );
     }
     return result;
   });
