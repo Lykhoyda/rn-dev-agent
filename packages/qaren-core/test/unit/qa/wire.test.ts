@@ -21,6 +21,7 @@ import type { LedgerRow } from '../../../dist/qa/ledger.js';
 const request: WireRequest = {
   runId: 'check-1',
   t0: 1_770_000_000_000,
+  walkBudgetMs: 300_000,
   plan: '1. Tap "A"\n',
   platform: 'ios',
   appId: 'com.example.app',

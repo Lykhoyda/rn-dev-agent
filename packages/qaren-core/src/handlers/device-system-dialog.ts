@@ -1,3 +1,4 @@
+import { sleep as cancellableSleep } from '../domain/cancellation.js';
 import type { ToolResult } from '../utils.js';
 import type { QaDispatchContext } from '../domain/qa-dispatch.js';
 import { okResult, failResult, warnResult } from '../utils.js';
@@ -55,7 +56,7 @@ export interface SystemDialogArgs {
 // GH #545 test seams — same pattern as dev-client-picker.ts: production code
 // calls through these indirections so unit tests can swap mocks without
 // touching the fast-runner or a live session.
-const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const realSleep = cancellableSleep;
 
 let fetchSnapshotNodesFn: typeof fetchSnapshotNodes = fetchSnapshotNodes;
 let pressCandidateFn: typeof pressCandidate = pressCandidate;

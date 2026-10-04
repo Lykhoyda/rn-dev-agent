@@ -5,7 +5,7 @@
 import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
 import { QA_READ_ONLY_CAPABILITY, checkQaNativeOutcome } from './qa-native-policy.js';
 import { DEVICE_LEASE_REQUIRED, leaseFromEnvironment } from './lease-env.js';
-import { spawn, execFile } from 'node:child_process';
+import { spawn, execFile, cancellableFetch, sleep } from '../domain/cancellation.js';
 import type { ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
@@ -609,7 +609,7 @@ export async function waitForAndroidRunnerHealth(
     try {
       const capability =
         opts.capability ?? (runnerState?.hostPort === port ? runnerState.capability : undefined);
-      const resp = await fetchImpl(`http://127.0.0.1:${port}/health`, {
+      const resp = await cancellableFetch(fetchImpl, `http://127.0.0.1:${port}/health`, {
         signal: controller.signal,
         headers: capability ? { authorization: `Bearer ${capability}` } : {},
       });
@@ -622,7 +622,7 @@ export async function waitForAndroidRunnerHealth(
     } finally {
       clearTimeout(timer);
     }
-    await new Promise((r) => setTimeout(r, intervalMs));
+    await sleep(intervalMs);
   }
   return false;
 }
@@ -679,7 +679,7 @@ export async function probeAndroidRunnerHealthInfo(
   try {
     const capability =
       capabilityOverride ?? (runnerState?.hostPort === port ? runnerState.capability : undefined);
-    const resp = await fetchImpl(`http://127.0.0.1:${port}/health`, {
+    const resp = await cancellableFetch(fetchImpl, `http://127.0.0.1:${port}/health`, {
       signal: controller.signal,
       headers: capability ? { authorization: `Bearer ${capability}` } : {},
     });
@@ -1727,7 +1727,7 @@ async function sendCommandOnce(
     }
     const serialized = JSON.stringify(body);
     if (isMutatingCommand(body.command)) qaContext?.authorize();
-    resp = await fetchImpl(`http://127.0.0.1:${hostPort}/command`, {
+    resp = await cancellableFetch(fetchImpl, `http://127.0.0.1:${hostPort}/command`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json; charset=UTF-8',

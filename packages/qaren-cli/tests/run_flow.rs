@@ -4095,8 +4095,10 @@ fn pr_receipt_reports_the_final_recorder_cleanup_retry() {
             mock.expect_run("ps -p 7100", CmdOutput::failed(1, ""));
             mock.expect_run("ps -A", CmdOutput::success("7101 7100 S\n"));
         }
-        mock.expect_run("du -sk", CmdOutput::success("4\n"));
-        mock.expect_run("worktree remove --force", CmdOutput::success(""));
+        if retry_succeeds {
+            mock.expect_run("du -sk", CmdOutput::success("4\n"));
+            mock.expect_run("worktree remove --force", CmdOutput::success(""));
+        }
         mock.expect_run(
             "gh pr view https://github.com/o/r/pull/12",
             pr_view_json(PR_HEAD),
@@ -4107,6 +4109,19 @@ fn pr_receipt_reports_the_final_recorder_cleanup_retry() {
         assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
         assert_eq!(runner.inner.remaining(), 0);
         let saved = RunRecord::load(&repo.join("runs"), &run_id()).unwrap();
+        assert_eq!(
+            saved.terminal.as_ref().unwrap().ownership_proven,
+            retry_succeeds
+        );
+        if !retry_succeeds {
+            assert!(saved
+                .terminal
+                .as_ref()
+                .unwrap()
+                .publication_refusal()
+                .is_some());
+            assert!(saved.resources.pr_worktree.is_some());
+        }
         if retry_succeeds {
             assert_eq!(receipt.cleanup["recorder"], "removed");
             assert_eq!(receipt.cleanup["device_lease"], "removed");

@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { execFile } from 'node:child_process';
+import { execFile } from '../domain/cancellation.js';
 import { isAbsolute } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';

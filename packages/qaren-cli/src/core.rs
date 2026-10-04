@@ -22,6 +22,7 @@ const CANCEL_GRACE_MS: u64 = 10_000;
 pub struct CoreRequest {
     pub run_id: String,
     pub t0: u64,
+    pub walk_budget_ms: u64,
     pub plan: String,
     pub prepared: Value,
     pub preflight_calls: Vec<JevCall>,

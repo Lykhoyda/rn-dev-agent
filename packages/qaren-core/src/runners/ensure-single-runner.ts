@@ -1,3 +1,4 @@
+import { sleep as cancellableSleep } from '../domain/cancellation.js';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -145,7 +146,7 @@ function defaultDeps(): EnsureSingleRunnerDeps {
     },
     fileExists: (path) => existsSync(path),
     removeFile: (path) => unlinkSync(path),
-    delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    delay: cancellableSleep,
     listApps: (udid) =>
       execFileSync('xcrun', ['simctl', 'listapps', udid], {
         encoding: 'utf8',

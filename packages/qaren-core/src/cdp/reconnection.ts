@@ -1,3 +1,4 @@
+import { cancellableFetch } from '../domain/cancellation.js';
 import { logger } from '../logger.js';
 import { resetState, clearActiveFlag, sleep } from './state.js';
 import type { ResettableState } from './state.js';
@@ -245,7 +246,7 @@ export function startBackgroundPoll(ctx: ReconnectContext): void {
         return;
       }
       try {
-        const res = await fetch(`http://127.0.0.1:${ctx.getPort()}/status`, {
+        const res = await cancellableFetch(fetch, `http://127.0.0.1:${ctx.getPort()}/status`, {
           signal: AbortSignal.timeout(2000),
         });
         const text = await res.text();

@@ -1,3 +1,4 @@
+import { interruptible, sleep, cancellationSignal } from '../domain/cancellation.js';
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from '../utils.js';
 import {
@@ -102,7 +103,7 @@ export function createDevSettingsHandler(
   const handler = async (args: { action: DevAction }, client: CDPClient) => {
     if (args.action === 'hideDevMenu') {
       const probe = dependencies.probeForegroundSurface;
-      const before = probe ? await probe().catch(() => 'unknown' as const) : 'unknown';
+      const before = probe ? await interruptible(probe).catch(() => { cancellationSignal(); return 'unknown' as const; }) : 'unknown';
       if (before !== 'unknown' && before !== 'expo_dev_menu') {
         return okResult({
           action: args.action,
@@ -115,9 +116,8 @@ export function createDevSettingsHandler(
       const call = await hideExpoDevMenu(client, { retries: 1 });
       if (!call.callSent) return failedHideResult(call, before);
 
-      await (dependencies.settleAfterHide?.() ??
-        new Promise<void>((resolve) => setTimeout(resolve, 300)));
-      const after = probe ? await probe().catch(() => 'unknown' as const) : 'unknown';
+      await interruptible(() => dependencies.settleAfterHide?.() ?? sleep(300));
+      const after = probe ? await interruptible(probe).catch(() => { cancellationSignal(); return 'unknown' as const; }) : 'unknown';
       if (before === 'expo_dev_menu' && after === 'app') {
         return okResult({
           action: args.action,
@@ -132,7 +132,7 @@ export function createDevSettingsHandler(
     }
 
     if (args.action === 'hideDevMenuFab') {
-      const result = await client.evaluate(HIDE_DEV_MENU_FAB, true);
+      const result = await interruptible(() => client.evaluate(HIDE_DEV_MENU_FAB, true));
       if (result.value === 'no_method_available')
         return warnResult(
           { action: args.action, executed: false },
@@ -144,15 +144,14 @@ export function createDevSettingsHandler(
           'DEV_MENU_HIDE_UNVERIFIED',
           { action: args.action, outcome: 'DEV_MENU_HIDE_UNVERIFIED' },
         );
-      await (dependencies.settleAfterHide?.() ??
-        new Promise<void>((resolve) => setTimeout(resolve, 300)));
+      await interruptible(() => dependencies.settleAfterHide?.() ?? sleep(300));
       return okResult({ action: args.action, executed: true, outcome: 'hidden' });
     }
 
     const expression = ACTION_EXPRESSIONS[args.action];
 
     try {
-      const result = await client.evaluate(expression);
+      const result = await interruptible(() => client.evaluate(expression));
       if (result.error) {
         return failResult(`Dev settings error: ${result.error}`);
       }

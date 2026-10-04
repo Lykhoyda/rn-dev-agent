@@ -1,3 +1,4 @@
+import { cancellationSignal, interruptible, withCancellation } from '../domain/cancellation.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -285,36 +286,29 @@ async function openSession(
   let deviceOpen = false;
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> =>
-    (closing ??= (async () => {
+    (closing ??= withCancellation(undefined, async () => {
       if (deviceOpen) await snapshot({ action: 'close' }).catch(() => undefined);
       await cdp.disconnect().catch(() => undefined);
-    })());
+    }));
   onClose(close);
-  const cancelled = async (): Promise<void> => {
-    if (!stop.stopping) return;
-    await close();
-    throw new HandlerError(
-      'RUN_CANCELLED',
-      'the run was cancelled while opening the device session',
-    );
-  };
   const proof = await admit(
     {
       metroPort: target.metroPort,
+      readinessMs: REACT_READY_TIMEOUT_MS,
+      remainingMs: () => Math.max(0, request.walkBudgetMs - now() - 1000),
       attach: async () => {
         await waitForExactPortTargets(
           target.metroPort,
-          REACT_READY_TIMEOUT_MS,
+          Math.max(1, Math.min(REACT_READY_TIMEOUT_MS, request.walkBudgetMs - now() - 1000)),
           REACT_READY_POLL_MS,
-          stop,
+          stop.signal,
         );
-        await cancelled();
         await cdp.connectExact(target.metroPort, { platform, bundleId: appId });
       },
       // The lease coordinates qaren processes only; a foreign Maestro or XCUITest driver is a probe.
       foreignDriver: async () => {
         if (platform !== 'ios') return undefined;
-        const foreign = await foreignFlowGate.check(target.deviceId);
+        const foreign = await interruptible(() => foreignFlowGate.check(target.deviceId));
         return foreign.active
           ? (foreign.warning?.message ?? 'another automation driver holds the device')
           : undefined;
@@ -338,7 +332,7 @@ async function openSession(
   );
   const admittedAtMs = Date.now();
   const admittedSnapshots = postAdmissionSnapshots(snapshot, appId);
-  await cancelled();
+  cancellationSignal();
   log(
     `bundle proven: ${proof.scriptURL} (${proof.appModules} app modules under ${target.worktree})`,
   );
@@ -379,14 +373,15 @@ async function openSession(
       ),
   });
   for (const action of WALK_DEV_SETTINGS) {
-    await cancelled();
+    cancellationSignal();
     try {
       unwrap(await devSettings({ action }));
     } catch (error) {
+      cancellationSignal();
       log(`${action}: ${describeError(error).message}`);
     }
   }
-  await cancelled();
+  cancellationSignal();
 
   const press = createDevicePressHandler(getClient);
   const fill = createDeviceFillHandler(getClient);
@@ -557,9 +552,9 @@ async function main(): Promise<void> {
   );
   let opened: Session;
   try {
-    opened = await openSession(request, emitRow, (close) => {
+    opened = await stop.track(() => openSession(request, emitRow, (close) => {
       release = close;
-    });
+    }));
   } catch (error) {
     const { code, message } = describeError(error);
     return refuse(code, message);
@@ -569,11 +564,11 @@ async function main(): Promise<void> {
       opened.close(),
     );
   try {
-    const ledger = await runPlan(blocks, opened.deps, request.preflightCalls, {
+    const ledger = await stop.track(() => runPlan(blocks, opened.deps, request.preflightCalls, {
       appRoot: request.appRoot,
       platform: request.platform,
       appId: request.appId,
-    });
+    }));
     return finish(
       resultForWalk({ ...ledger, admittedAtMs: opened.admittedAtMs }, request.lease),
       () => opened.close(),

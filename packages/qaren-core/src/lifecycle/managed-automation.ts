@@ -1,4 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn } from '../domain/cancellation.js';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { readdirSync, readFileSync, unlinkSync } from 'node:fs';
 
 const OUTPUT_LIMIT = 10 * 1024 * 1024;

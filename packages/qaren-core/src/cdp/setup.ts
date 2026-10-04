@@ -206,7 +206,7 @@ export async function probeNetworkDomain(opts: {
   for (let attempt = 0; attempt < waits.length; attempt++) {
     const bufSizeBefore = networkManager.size(deviceKey);
     await evaluate(`void fetch('http://localhost:${port}/status').catch(function(){})`);
-    await new Promise((r) => setTimeout(r, waits[attempt]));
+    await sleep(waits[attempt]);
     if (networkManager.size(deviceKey) > bufSizeBefore) {
       return 'cdp';
     }

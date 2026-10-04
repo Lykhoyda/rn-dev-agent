@@ -1,3 +1,4 @@
+import { interruptible, sleep, cancellationSignal } from '../domain/cancellation.js';
 import type { CDPClient } from '../cdp-client.js';
 import type { ForegroundSurface } from '../domain/foreground-surface-remedy.js';
 import type { ToolResult } from '../utils.js';
@@ -342,11 +343,11 @@ export async function hideExpoDevMenu(
   for (let attempt = 0; attempt <= retries; attempt++) {
     const attempts = attempt + 1;
     try {
-      const result = await client.evaluate(
+      const result = await interruptible(() => client.evaluate(
         HIDE_EXPO_DEV_MENU_EXPRESSION,
         true,
         evaluationTimeoutMs,
-      );
+      ));
       const startOutcome = parseSentinel(result.value, attempts);
       const attemptOutcome = result.error
         ? startOutcome.callSent
@@ -369,6 +370,7 @@ export async function hideExpoDevMenu(
       outcome = attemptOutcome;
       if (attemptOutcome.callSent) successfulCall = attemptOutcome;
     } catch (error) {
+      cancellationSignal();
       outcome = {
         callSent: false,
         reason: `Dev menu hide evaluation threw: ${error instanceof Error ? error.message : String(error)}`,
@@ -380,7 +382,7 @@ export async function hideExpoDevMenu(
       if (!successfulCall) return outcome;
       break;
     }
-    if (attempt < retries) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    if (attempt < retries) await sleep(retryDelayMs);
   }
 
   return successfulCall ? { ...successfulCall, attempts: outcome.attempts } : outcome;

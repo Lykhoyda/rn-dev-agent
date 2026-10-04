@@ -1083,7 +1083,12 @@ pub(crate) fn cleanup_runner_host(runner: &mut dyn Runner, record: &RunRecord) -
 pub(crate) fn producers_quiescent(outcomes: &[(String, Outcome)]) -> bool {
     outcomes
         .iter()
-        .filter(|(name, _)| matches!(name.as_str(), "build_process" | "core" | "metro"))
+        .filter(|(name, _)| {
+            matches!(
+                name.as_str(),
+                "build_process" | "core" | "metro" | "recorder" | "runner_host"
+            )
+        })
         .all(|(_, outcome)| matches!(outcome, Outcome::Removed | Outcome::Absent))
 }
 

@@ -1,3 +1,4 @@
+import { cancellationSignal, interruptible } from '../domain/cancellation.js';
 import WebSocket from 'ws';
 import { logger } from '../logger.js';
 import { metroOrigin } from '../ws-origin.js';
@@ -171,7 +172,7 @@ export async function discoverAndConnect(
 
   let result;
   try {
-    result = await discoverFn(ctx.getPort(), filtersForDiscover);
+    result = await interruptible(() => discoverFn(ctx.getPort(), filtersForDiscover));
   } catch (err) {
     ctx.setState('disconnected');
     throw err;
@@ -404,6 +405,7 @@ async function connectToTarget(
       if (ctx.isDisposed()) throw new ConnectionSetupSupersededError();
       return;
     } catch (err) {
+      cancellationSignal();
       if (err instanceof ConnectionSetupSupersededError) {
         closeConnectionAttempt(ctx, attemptWs);
         throw err;
@@ -460,7 +462,7 @@ export function connectWebSocket(
       headers: { Origin: metroOrigin(socketUrl) },
     }),
 ): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
+  return interruptible((signal) => new Promise((resolve, reject) => {
     const ws = createSocket(url);
     let settled = false;
     // Backstop: handshakeTimeout should emit 'error', but if the socket ever
@@ -477,7 +479,16 @@ export function connectWebSocket(
       reject(new Error('WebSocket connect timed out'));
     }, 7000);
 
+    const abort = () => {
+      clearTimeout(guard);
+      settled = true;
+      ws.terminate();
+      reject(signal?.reason);
+    };
+    signal?.addEventListener('abort', abort, { once: true });
     ws.on('open', () => {
+      if (signal?.aborted) return abort();
+      signal?.removeEventListener('abort', abort);
       settled = true;
       clearTimeout(guard);
       if (ctx.isDisposed()) {
@@ -493,6 +504,7 @@ export function connectWebSocket(
     });
 
     ws.on('error', (err) => {
+      signal?.removeEventListener('abort', abort);
       if (!settled) {
         settled = true;
         clearTimeout(guard);
@@ -512,6 +524,7 @@ export function connectWebSocket(
     });
 
     ws.on('close', (code) => {
+      signal?.removeEventListener('abort', abort);
       if (!settled) {
         settled = true;
         clearTimeout(guard);
@@ -523,7 +536,7 @@ export function connectWebSocket(
         ctx.handleClose(code);
       }
     });
-  });
+  }));
 }
 
 function closeAndResetWs(ctx: ConnectContext): void {

@@ -1,14 +1,17 @@
 import { loadavg } from 'node:os';
+import { interruptible, withCancellation } from '../domain/cancellation.js';
+import { TargetReadinessTimeoutError } from '../cdp/discovery.js';
+import { CDPProbeTimeoutError } from '../cdp/connect.js';
 import { HandlerError, describeError } from './adapt.js';
 import type { ProveOutcome } from './prove.js';
 
-// A timed case counts only at a 1-minute host load at or below this (captain's 2026-10-03 rule).
 export const LOAD_ENVELOPE = 10;
 
 export interface AdmissionSteps {
   metroPort: number;
+  readinessMs: number;
+  remainingMs(): number;
   attach(): Promise<void>;
-  // The message of a foreign automation driver holding the device, if any.
   foreignDriver(): Promise<string | undefined>;
   open(): Promise<void>;
   prove(): Promise<ProveOutcome>;
@@ -18,69 +21,48 @@ export interface AdmissionSteps {
 
 type Proven = Extract<ProveOutcome, { ok: true }>;
 
-// Every setup effect runs only while the run is not stopping; a stop closes what was opened.
-export async function admit(
-  steps: AdmissionSteps,
-  stop: { readonly stopping: boolean },
-): Promise<Proven> {
-  const halt = async (): Promise<void> => {
-    if (!stop.stopping) return;
-    await steps.close();
-    throw new HandlerError(
-      'RUN_CANCELLED',
-      'the run was cancelled while opening the device session',
-    );
-  };
-  await halt();
-  await attach(steps, halt);
-  await halt();
-  const foreign = await steps.foreignDriver();
-  await halt();
-  if (foreign !== undefined) {
-    await steps.close();
-    throw new HandlerError('BUSY_FOREIGN_FLOW', foreign);
+export async function admit(steps: AdmissionSteps, stop: { readonly signal: AbortSignal }): Promise<Proven> {
+  try {
+    return await withCancellation(stop.signal, async () => {
+      await attach(steps);
+      const foreign = await interruptible(steps.foreignDriver);
+      if (foreign !== undefined) throw new HandlerError('BUSY_FOREIGN_FLOW', foreign);
+      await interruptible(steps.open);
+      const proof = await interruptible(steps.prove);
+      if (!proof.ok) throw new HandlerError(proof.code, proof.message);
+      return proof;
+    });
+  } catch (error) {
+    await withCancellation(undefined, steps.close);
+    stop.signal.throwIfAborted();
+    throw error;
   }
-  await steps.open();
-  await halt();
-  const proof = await steps.prove();
-  await halt();
-  if (!proof.ok) {
-    await steps.close();
-    throw new HandlerError(proof.code, proof.message);
-  }
-  return proof;
 }
 
-async function attach(
-  steps: AdmissionSteps,
-  halt: () => Promise<void>,
-): Promise<void> {
-  const attempt = async (): Promise<string | undefined> => {
-    await halt();
-    try {
-      await steps.attach();
-      return undefined;
-    } catch (error) {
-      return describeError(error).message;
-    }
-  };
-  let failure = await attempt();
-  if (failure === undefined) return;
-  await halt();
+async function attach(steps: AdmissionSteps): Promise<void> {
+  let failure: unknown;
+  try {
+    await interruptible(steps.attach);
+    return;
+  } catch (error) {
+    failure = error;
+  }
   const load = (steps.load ?? (() => loadavg()[0]))();
   const loaded = load > LOAD_ENVELOPE;
-  if (loaded) {
-    failure = await attempt();
-    if (failure === undefined) return;
-    await halt();
+  const timedOut = (error: unknown) => error instanceof TargetReadinessTimeoutError || error instanceof CDPProbeTimeoutError;
+  const retry = loaded && timedOut(failure) && steps.remainingMs() >= steps.readinessMs;
+  if (retry) {
+    try {
+      await interruptible(steps.attach);
+      return;
+    } catch (error) {
+      failure = error;
+    }
   }
-  await steps.close();
+  const environment = loaded && timedOut(failure);
   const measured = `host 1-minute load ${load.toFixed(1)} is ${loaded ? 'above' : 'within'} the envelope ${LOAD_ENVELOPE}`;
   throw new HandlerError(
     'CDP_NOT_CONNECTED',
-    `cannot attach to the dev client through Metro ${steps.metroPort}: ${failure} (${
-      loaded ? `${measured}; an environment refusal after one retry` : measured
-    })`,
+    `cannot attach to the dev client through Metro ${steps.metroPort}: ${describeError(failure).message} (${measured}${environment ? `; an environment refusal ${retry ? 'after one retry' : 'without enough budget for another readiness wait'}` : ''})`,
   );
 }
-

@@ -1,6 +1,7 @@
+import { sleep as cancellableSleep } from '../domain/cancellation.js';
 import { randomUUID } from 'node:crypto';
 import type { QaDispatchContext } from '../domain/qa-dispatch.js';
-import { execFile as execFileCb } from 'node:child_process';
+import { execFile as execFileCb } from '../domain/cancellation.js';
 import { promisify } from 'node:util';
 
 import {
@@ -888,7 +889,7 @@ export function createDevicePressHandler(
       );
     }
     if (!result.isError && args.waitForFocusMs && args.waitForFocusMs > 0) {
-      await new Promise((r) => setTimeout(r, args.waitForFocusMs));
+      await cancellableSleep(args.waitForFocusMs);
     }
     return result;
   });
@@ -1392,7 +1393,7 @@ async function awaitReactInputValue(
     if (signal?.aborted) break;
     const read = await readInput();
     if (read?.controlled && read.value === expected) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 150));
+      await cancellableSleep(150);
       if (signal?.aborted) return 'unreadable';
       const confirm = await readInput();
       return confirm?.controlled === true && confirm.value === expected ? 'exact' : 'unreadable';
@@ -1404,7 +1405,7 @@ async function awaitReactInputValue(
       previous = null;
       last = null;
     }
-    if (attempt < 5) await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    if (attempt < 5) await cancellableSleep(100);
   }
   return last?.controlled === true &&
     previous?.controlled === true &&

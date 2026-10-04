@@ -1,3 +1,4 @@
+import { sleep as cancellableSleep } from '../domain/cancellation.js';
 import type { ToolResult } from '../utils.js';
 
 export interface RunnerLeakNode {
@@ -79,7 +80,7 @@ export interface RecoveryDeps {
 
 const DAEMON_SETTLE_MS = 600;
 
-const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const defaultSleep = cancellableSleep;
 
 export type RecoveryTier = 'reacquire' | 'attach-only' | 'full-relaunch';
 

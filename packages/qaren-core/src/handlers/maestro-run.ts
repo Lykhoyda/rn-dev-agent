@@ -3,7 +3,7 @@ import {
   createRunnerFailureEvidence,
   type RunnerFailureEvidence,
 } from '../domain/runner-failure-evidence.js';
-import { execFile as execFileCb } from 'node:child_process';
+import { execFile as execFileCb } from '../domain/cancellation.js';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

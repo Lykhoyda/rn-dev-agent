@@ -30,6 +30,7 @@ export interface WireTarget {
 export interface WireRequest {
   runId: string;
   t0: number;
+  walkBudgetMs: number;
   plan: string;
   prepared?: PreparedPlan;
   preflightCalls?: JevCall[];
@@ -173,6 +174,8 @@ export function parseRequest(line: string): WireRequest {
     typeof p.runId !== 'string' ||
     !p.runId ||
     !Number.isSafeInteger(p.t0) ||
+    !Number.isSafeInteger(p.walkBudgetMs) ||
+    (p.walkBudgetMs as number) < 1 ||
     typeof p.plan !== 'string' ||
     (p.preflightCalls !== undefined &&
       (!Array.isArray(p.preflightCalls) || !p.preflightCalls.every(validCall))) ||

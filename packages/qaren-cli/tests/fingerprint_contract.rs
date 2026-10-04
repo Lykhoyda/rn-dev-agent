@@ -224,3 +224,49 @@ fn react_native_config_imports_are_traced() {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[test]
+fn only_direct_file_dependencies_can_claim_completeness() {
+    for specifier in ["../config/native", "../config/native/value", "some-package"] {
+        let root = plugin_project(&format!("const native = require({specifier:?});"));
+        std::fs::create_dir_all(root.join("config/native")).unwrap();
+        std::fs::write(
+            root.join("config/native/package.json"),
+            r#"{"main":"values.json"}"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("config/native/index.js"), "module.exports = 1;").unwrap();
+        std::fs::write(root.join("config/native/values.json"), "1").unwrap();
+        std::fs::write(root.join("config/native/value.ts"), "export default 1;").unwrap();
+        std::fs::write(root.join("config/native/value.json"), "1").unwrap();
+        assert!(!fingerprint(&root).complete, "{specifier}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    let root = plugin_project("module.exports = 1;");
+    std::fs::create_dir_all(root.join("config/native")).unwrap();
+    std::fs::write(
+        root.join("config/native/package.json"),
+        r#"{"main":"values.json"}"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("config/native/index.js"), "module.exports = 1;").unwrap();
+    std::fs::write(
+        root.join("app.json"),
+        r#"{"expo":{"plugins":["./config/native"]}}"#,
+    )
+    .unwrap();
+    assert!(!fingerprint(&root).complete);
+    std::fs::write(
+        root.join("app.json"),
+        r#"{"expo":{"plugins":["./plugins/withX"]}}"#,
+    )
+    .unwrap();
+    assert!(!fingerprint(&root).complete);
+    std::fs::write(
+        root.join("app.json"),
+        r#"{"expo":{"plugins":["some-package"]}}"#,
+    )
+    .unwrap();
+    assert!(!fingerprint(&root).complete);
+    std::fs::remove_dir_all(root).unwrap();
+}

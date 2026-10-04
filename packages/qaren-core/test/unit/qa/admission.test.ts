@@ -1,3 +1,6 @@
+import { interruptible } from '../../../dist/domain/cancellation.js';
+import { createStop } from '../../../dist/qa/stop.js';
+import { TargetReadinessTimeoutError } from '../../../dist/cdp/discovery.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { LOAD_ENVELOPE, admit, type AdmissionSteps } from '../../../dist/qa/admission.js';
@@ -10,7 +13,7 @@ const PROVEN = {
 
 function harness(overrides: Partial<AdmissionSteps> = {}) {
   const calls: string[] = [];
-  const stop = { stopping: false };
+  const stop = createStop();
   const step =
     <T>(name: string, result: () => T) =>
     async (): Promise<T> => {
@@ -19,6 +22,8 @@ function harness(overrides: Partial<AdmissionSteps> = {}) {
     };
   const steps: AdmissionSteps = {
     metroPort: 8081,
+    readinessMs: 30_000,
+    remainingMs: () => 90_000,
     attach: step('attach', () => undefined),
     foreignDriver: step('foreignDriver', () => undefined),
     open: step('open', () => undefined),
@@ -47,9 +52,9 @@ test('a stop raised before each setup effect runs neither that effect nor any la
       const original = steps[raise as 'attach'];
       steps[raise as 'attach'] = async () => {
         await original();
-        stop.stopping = true;
+        stop.begin();
       };
-    } else stop.stopping = true;
+    } else stop.begin();
     await assert.rejects(admit(steps, stop), (error: Error & { code?: string }) => {
       assert.equal(error.code, 'RUN_CANCELLED');
       return true;
@@ -60,13 +65,13 @@ test('a stop raised before each setup effect runs neither that effect nor any la
 });
 
 test('a stop during the attach wait ends the wait instead of running to its timeout', async () => {
-  const stop = { stopping: false };
+  const stop = createStop();
   const calls: string[] = [];
   const steps: AdmissionSteps = {
     ...harness().steps,
     attach: async () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
-      stop.stopping = true;
+      stop.begin();
       throw new Error("the readiness wait was cancelled");
     },
     open: async () => void calls.push('open'),
@@ -84,7 +89,7 @@ test('an attach timeout under host load is retried once and refused as environme
     load: () => 42.25,
     attach: async () => {
       attempts++;
-      throw new Error('Timed out waiting for CDP targets on port 8081 after 30000ms');
+      throw new TargetReadinessTimeoutError('Timed out waiting for CDP targets on port 8081 after 30000ms');
     },
   });
   await assert.rejects(admit(steps, stop), (error: Error & { code?: string }) => {
@@ -122,7 +127,7 @@ test('a retried attach that connects under load continues the admission', async 
   const { calls, stop, steps } = harness({
     load: () => 50,
     attach: async () => {
-      if (++attempts === 1) throw new Error('no target yet');
+      if (++attempts === 1) throw new TargetReadinessTimeoutError('no target yet');
     },
   });
   assert.deepEqual(await admit(steps, stop), PROVEN);
@@ -148,9 +153,67 @@ test('a foreign automation driver refuses before the session opens', async () =>
 test('cancellation during bundle proof refuses the proven result', async () => {
   const { calls, steps, stop } = harness();
   steps.prove = async () => {
-    stop.stopping = true;
+    stop.begin();
     return PROVEN;
   };
   await assert.rejects(admit(steps, stop), { code: 'RUN_CANCELLED' });
   assert.equal(calls.at(-1), 'close');
+});
+
+
+test('a loaded timeout with only 15 seconds left refuses without a second 30-second wait', async () => {
+  let attempts = 0;
+  const { stop, steps } = harness({
+    load: () => 42,
+    remainingMs: () => 15_000,
+    attach: async () => {
+      attempts++;
+      throw new TargetReadinessTimeoutError('readiness timeout');
+    },
+  });
+  await assert.rejects(admit(steps, stop), /environment refusal without enough budget/);
+  assert.equal(attempts, 1);
+});
+
+test('a deterministic rejection under load is never retried or called environmental', async () => {
+  let attempts = 0;
+  const { stop, steps } = harness({
+    load: () => 42,
+    attach: async () => {
+      attempts++;
+      throw new Error('PLATFORM_TARGET_NOT_FOUND: wrong app');
+    },
+  });
+  await assert.rejects(admit(steps, stop), (error: Error) => {
+    assert.doesNotMatch(error.message, /environment refusal/);
+    return true;
+  });
+  assert.equal(attempts, 1);
+});
+
+
+test('abort during each awaited admission primitive rejects before any later effect', async () => {
+  const order = ['attach', 'foreignDriver', 'open', 'prove'] as const;
+  for (const effect of order) {
+    const { calls, stop, steps } = harness();
+    const original = steps[effect];
+    let ready!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { ready = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    steps[effect as 'attach'] = (async () => {
+      ready();
+      await interruptible(() => blocked);
+      return original();
+    }) as typeof steps.attach;
+    const admitted = admit(steps, stop);
+    const refused = assert.rejects(admitted, /RUN_CANCELLED/);
+    await started;
+    stop.begin();
+    await refused;
+    assert.deepEqual(calls, [...order.slice(0, order.indexOf(effect)), 'close']);
+    release();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, [...order.slice(0, order.indexOf(effect)), 'close']);
+  }
 });

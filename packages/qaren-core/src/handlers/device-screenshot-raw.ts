@@ -18,7 +18,7 @@
  * precedent — allow unit tests to inject resolver/capturer fakes without
  * spawning real `xcrun`/`adb` subprocesses.
  */
-import { execFile, spawn } from 'node:child_process';
+import { execFile, spawn } from '../domain/cancellation.js';
 import { createWriteStream, renameSync, statSync, unlinkSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';

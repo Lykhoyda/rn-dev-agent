@@ -1,4 +1,5 @@
-import { execFile as execFileCb } from 'node:child_process';
+import { sleep as cancellableSleep } from '../domain/cancellation.js';
+import { execFile as execFileCb } from '../domain/cancellation.js';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -90,7 +91,7 @@ function defaultDeps(): ReleaseAndroidSlotDeps {
     kill: (pid, sig) => process.kill(pid, sig),
     fileExists: (p) => existsSync(p),
     removeFile: (p) => unlinkSync(p),
-    delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    delay: cancellableSleep,
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== '0',
     now: () => Date.now(),
   };

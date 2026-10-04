@@ -1,3 +1,4 @@
+import { sleep as cancellableSleep } from '../domain/cancellation.js';
 import type { CDPClient } from '../cdp-client.js';
 import type { EvaluateResult } from '../types.js';
 
@@ -102,5 +103,5 @@ async function probeDev(
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+  return cancellableSleep(ms);
 }

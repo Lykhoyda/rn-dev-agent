@@ -122,3 +122,33 @@ test('a registry name that escapes the worktree through an embedded .. is a mism
   assert.equal(outcome.ok, false);
   assert.match(String((outcome as { message?: string }).message), /not under \/work\/app/);
 });
+
+test('cancellation during either proof evaluation rejects without another read', async () => {
+  const { createStop } = await import('../../../dist/qa/stop.js');
+  for (const cancelAt of [1, 2]) {
+    const stop = createStop();
+    let reads = 0;
+    let ready!: () => void;
+    let release!: (value: { value: string }) => void;
+    const started = new Promise<void>((resolve) => { ready = resolve; });
+    const deps = {
+      fileExists,
+      evaluate: async () => {
+        reads++;
+        if (reads === cancelAt) {
+          ready();
+          return new Promise<{ value: string }>((resolve) => { release = resolve; });
+        }
+        return { value: 'http://localhost:8081/index.bundle' };
+      },
+    };
+    const pending = stop.track(() => prove(deps, { metroPort: 8081, worktree: WORKTREE }));
+    const refused = assert.rejects(pending, /RUN_CANCELLED/);
+    await started;
+    stop.begin();
+    release({ value: cancelAt === 1 ? 'http://localhost:8081/index.bundle' : JSON.stringify({ count: 1, names: ['index.js'] }) });
+    await refused;
+    await stop.drained(1000);
+    assert.equal(reads, cancelAt);
+  }
+});

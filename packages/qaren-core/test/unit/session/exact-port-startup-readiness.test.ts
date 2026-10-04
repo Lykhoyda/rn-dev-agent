@@ -1,3 +1,4 @@
+import { createStop } from '../../../dist/qa/stop.js';
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
@@ -402,37 +403,37 @@ test('invalid ports and unsafe timer arguments are rejected before any request',
 
 
 test('cancellation during a pending target response prevents the attach continuation', async (t) => {
-  const stop = { stopping: false };
+  const stop = createStop();
   let respond: (response: Response) => void = () => {};
   t.mock.method(globalThis, 'fetch', () => new Promise<Response>((resolve) => { respond = resolve; }));
   let connected = false;
   const waiting = (async () => {
-    await waitForExactPortTargets(managedPort, 30_000, 500, stop);
+    await waitForExactPortTargets(managedPort, 30_000, 500, stop.signal);
     connected = true;
   })();
-  stop.stopping = true;
+  stop.begin();
   respond(Response.json([target()]));
-  await assert.rejects(waiting, /stopping/);
+  await assert.rejects(waiting, /RUN_CANCELLED/);
   assert.equal(connected, false);
 });
 
 test('cancellation aborts a pending readiness fetch and makes no later request', async (t) => {
-  const stop = { stopping: false };
+  const stop = createStop();
   const reads = t.mock.method(globalThis, 'fetch', (_url, options) => new Promise<Response>((_resolve, reject) => {
     options?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
   }));
-  const waiting = waitForExactPortTargets(managedPort, 30_000, 500, stop);
-  stop.stopping = true;
-  await assert.rejects(waiting, /aborted/);
+  const waiting = waitForExactPortTargets(managedPort, 30_000, 500, stop.signal);
+  stop.begin();
+  await assert.rejects(waiting, /RUN_CANCELLED/);
   assert.equal(reads.mock.callCount(), 1);
 });
 
 test('cancellation interrupts the polling sleep before another readiness request', async (t) => {
-  const stop = { stopping: false };
+  const stop = createStop();
   const reads = t.mock.method(globalThis, 'fetch', async () => Response.json([]));
-  const waiting = waitForExactPortTargets(managedPort, 30_000, 10_000, stop);
+  const waiting = waitForExactPortTargets(managedPort, 30_000, 10_000, stop.signal);
   await setImmediate();
-  stop.stopping = true;
-  await assert.rejects(waiting, /stopping/);
+  stop.begin();
+  await assert.rejects(waiting, /RUN_CANCELLED/);
   assert.equal(reads.mock.callCount(), 1);
 });

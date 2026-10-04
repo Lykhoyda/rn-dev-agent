@@ -28,6 +28,7 @@ test('teardown waits for the operation already in flight, but not forever', asyn
   const stop = createStop();
   let finish!: () => void;
   const pending = stop.track(() => new Promise<void>((resolve) => (finish = resolve)));
+  const rejected = assert.rejects(pending, /RUN_CANCELLED/);
   stop.begin();
   let drained = false;
   const waiting = stop.drained(1000).then(() => {
@@ -36,18 +37,20 @@ test('teardown waits for the operation already in flight, but not forever', asyn
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(drained, false, 'the in-flight capture is still running');
   finish();
-  await pending;
+  await rejected;
   await waiting;
   assert.equal(drained, true);
 
   const overlapping = createStop();
   let slowDone = false;
-  void overlapping.track(
+  const slow = overlapping.track(
     () => new Promise<void>((resolve) => setTimeout(() => ((slowDone = true), resolve()), 30)),
   );
+  const slowRejected = assert.rejects(slow, /RUN_CANCELLED/);
   await overlapping.track(async () => undefined);
   overlapping.begin();
   await overlapping.drained(1000);
+  await slowRejected;
   assert.equal(slowDone, true, 'every outstanding operation is drained, not just the latest');
 
   const stuck = createStop();

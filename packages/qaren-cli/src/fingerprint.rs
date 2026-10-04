@@ -104,6 +104,18 @@ fn referenced_paths(app_json: &str, project_root: &Path) -> ReferencedInputs {
             return out;
         }
     };
+    if let Some(plugins) = parsed.pointer("/expo/plugins").and_then(|v| v.as_array()) {
+        for plugin in plugins {
+            let reference = plugin
+                .as_str()
+                .or_else(|| plugin.as_array()?.first()?.as_str());
+            if let Some(reference) = reference {
+                if !reference.starts_with('.') && !project_root.join(reference).is_file() {
+                    out.incompleteness.push(format!("plugin {reference:?} in app.json requires module resolution; its native inputs cannot be proven complete"));
+                }
+            }
+        }
+    }
     collect_strings(&parsed, &mut |s| {
         let explicit_local = s.starts_with("./") || s.starts_with("../");
         let candidate = s.strip_prefix("./").unwrap_or(s);
@@ -115,23 +127,9 @@ fn referenced_paths(app_json: &str, project_root: &Path) -> ReferencedInputs {
             }
             return;
         }
-        // Approximate Node resolution for extensionless local module refs.
-        let attempts = [
-            candidate.to_string(),
-            format!("{candidate}.js"),
-            format!("{candidate}.ts"),
-            format!("{candidate}.mjs"),
-            format!("{candidate}.cjs"),
-            format!("{candidate}.json"),
-            format!("{candidate}/index.js"),
-            format!("{candidate}/index.ts"),
-        ];
-        for attempt in &attempts {
-            let path = project_root.join(attempt);
-            if path.is_file() || path.is_symlink() {
-                out.files.insert(attempt.clone());
-                return;
-            }
+        if project_root.join(candidate).is_file() {
+            out.files.insert(candidate.to_string());
+            return;
         }
         if explicit_local {
             out.incompleteness.push(format!(
@@ -279,6 +277,7 @@ fn trace_local_imports(
         }
         for specifier in specifiers.found {
             if !specifier.starts_with('.') {
+                incompleteness.push(format!("import {specifier:?} in {rel} requires package resolution; its native inputs cannot be proven complete"));
                 continue;
             }
             let Some(normalized) = normalize_rel(base_dir, &specifier) else {
@@ -287,28 +286,14 @@ fn trace_local_imports(
                 ));
                 continue;
             };
-            let attempts = [
-                normalized.clone(),
-                format!("{normalized}.js"),
-                format!("{normalized}.ts"),
-                format!("{normalized}.mjs"),
-                format!("{normalized}.cjs"),
-                format!("{normalized}.json"),
-                format!("{normalized}/index.js"),
-                format!("{normalized}/index.ts"),
-            ];
-            let resolved = attempts.iter().find(|attempt| {
-                let path = project_root.join(attempt);
-                path.is_file() || path.is_symlink()
-            });
-            match resolved {
-                Some(found) => {
-                    inputs.insert(found.clone());
-                    if is_executable_module(found) {
-                        worklist.push(found.clone());
+            match project_root.join(&normalized).is_file() {
+                true => {
+                    inputs.insert(normalized.clone());
+                    if is_executable_module(&normalized) {
+                        worklist.push(normalized);
                     }
                 }
-                None => incompleteness.push(format!(
+                false => incompleteness.push(format!(
                     "import {specifier:?} in {rel} does not resolve to a project file; the input set is unprovably complete"
                 )),
             }
@@ -811,7 +796,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("lib")).unwrap();
         std::fs::write(
             dir.join("plugins").join("withThing.ts"),
-            "import { helper } from '../lib/helper';\nimport missing from './gone';\n",
+            "import { helper } from '../lib/helper.ts';\nimport missing from './gone';\n",
         )
         .unwrap();
         std::fs::write(

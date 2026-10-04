@@ -2,7 +2,7 @@ import { DEVICE_LEASE_REQUIRED, leaseFromEnvironment } from './lease-env.js';
 import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
 import { measureTiming, observeTiming, type TimingContext } from '../qa/timing.js';
 import { QA_READ_ONLY_CAPABILITY, checkQaNativeOutcome } from './qa-native-policy.js';
-import { execFile, spawn } from 'node:child_process';
+import { execFile, spawn, cancellableFetch, sleep as cancellableSleep, interruptible } from '../domain/cancellation.js';
 import { promisify } from 'node:util';
 import { isIosSimulatorUdid } from './external-runner-detect.js';
 import type { ChildProcess } from 'node:child_process';
@@ -1230,7 +1230,7 @@ async function defaultHttpProbe(
     // probe like every other client call — production default is globalThis.fetch.
     const capability =
       capabilityOverride ?? (runnerState?.port === port ? runnerState.capability : undefined);
-    const res = await fetchImpl(url, {
+    const res = await cancellableFetch(fetchImpl, url, {
       signal: controller.signal,
       headers: capability ? { authorization: `Bearer ${capability}` } : {},
     });
@@ -1461,7 +1461,7 @@ export async function probeFastRunnerLiveness(
 export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
   const getState = deps.getState ?? (() => runnerState);
   const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
-  const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const sleep = deps.sleep ?? cancellableSleep;
   const clearState = deps.clearState ?? clearStateFileIfMatches;
   const graceMs = deps.graceMs ?? 500;
 
@@ -1518,7 +1518,7 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
   } catch {
     /* already dead */
   }
-  await reapDelay(sleep, graceMs, deps.signal);
+  await interruptible(() => reapDelay(sleep, graceMs, deps.signal));
   const afterTerm = probeExpected();
   if (afterTerm === 'unknown') {
     throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
@@ -1693,7 +1693,7 @@ async function sendCommandOnce(
     const now = qaTiming?.now ?? (() => performance.now());
     const resp = await measureTiming(qaTiming?.observe, now, 'native-transport', async () => {
       if (isMutatingCommand(body.command)) qaContext?.authorize();
-      return fetchImpl(`http://127.0.0.1:${port}/command`, {
+      return cancellableFetch(fetchImpl, `http://127.0.0.1:${port}/command`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -2003,7 +2003,7 @@ export async function verifyTypeResultAfterSettle(
       const health = await probeFastRunnerLivenessDetailed();
       if (health.liveness === 'alive') return result;
       if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
-        await new Promise((resolve) => setTimeout(resolve, POST_SETTLE_HEALTH_RETRY_MS));
+        await cancellableSleep(POST_SETTLE_HEALTH_RETRY_MS);
       }
     }
   }

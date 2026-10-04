@@ -1,4 +1,4 @@
-import { execFile as execFileCb } from 'node:child_process';
+import { execFile as execFileCb, interruptible, cancellationSignal, withCancellation } from '../domain/cancellation.js';
 import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
 import type { TimingContext } from '../qa/timing.js';
 import { promisify } from 'node:util';
@@ -273,7 +273,7 @@ export function createDeviceSnapshotHandler(
       // the app is already running. Avoids the unconditional relaunch that
       // invalidates CDP sessions and can race Metro bundle loading.
       if (args.attachOnly) {
-        const running = await isAppRunningFn(platform, appId, deviceId);
+        const running = await interruptible(() => isAppRunningFn(platform, appId, deviceId));
         if (!running) {
           return failResult(
             `attachOnly=true but ${appId} is not running on ${platform}. Launch it manually or drop attachOnly.`,
@@ -295,12 +295,12 @@ export function createDeviceSnapshotHandler(
           // GH #383: propagate its typed code (RUNNER_PROTOCOL_MISMATCH) when set.
           // GH #418: open is the only entry allowed to invalidate a stale
           // runner artifact and pay the cold rebuild (mid-flow refuses fast).
-          const ready = await ensureIosRunner(deviceId, appId, {
+          const ready = await interruptible(() => ensureIosRunner(deviceId, appId, {
             allowArtifactRebuild: true,
             attachOnly: args.attachOnly === true,
-          });
+          }));
           if (!ready.ok) {
-            await stopIosRunner(deviceId);
+            await withCancellation(undefined, () => stopIosRunner(deviceId));
             // GH #382: a failed start may have left a pending artifact note —
             // discard it so it never leaks onto a later successful result.
             consumePendingFastRunnerArtifactNote();
@@ -321,18 +321,18 @@ export function createDeviceSnapshotHandler(
           }
         } else {
           // GH #418: open may invalidate stale runner APKs + Gradle-rebuild.
-          await startAndroidRunnerFn(deviceId, appId);
+          await interruptible(() => startAndroidRunnerFn(deviceId, appId));
           upgradeNote = consumePendingAndroidUpgradeNote();
           if (!args.attachOnly) {
             try {
-              await launchAndroidApp(deviceId, appId);
+              await interruptible(() => launchAndroidApp(deviceId, appId));
             } catch (err) {
               throw new AndroidAppLaunchError(
                 `Failed to launch ${appId} on ${deviceId}: ${err instanceof Error ? err.message : String(err)}`,
               );
             }
           }
-          const readiness = await probeAndroidUi(deviceId, appId);
+          const readiness = await interruptible(() => probeAndroidUi(deviceId, appId));
           if (readiness.isError) {
             const envelope = JSON.parse(readiness.content[0]?.text ?? '{}') as {
               error?: string;
@@ -343,14 +343,14 @@ export function createDeviceSnapshotHandler(
             );
           }
           reactNativeUiReady = deps.probeReactNativeUi
-            ? await deps.probeReactNativeUi('android', deviceId, appId).catch(() => false)
+            ? await interruptible(() => deps.probeReactNativeUi!('android', deviceId, appId)).catch(() => { cancellationSignal(); return false; })
             : null;
         }
       } catch (err) {
         let cleanupFailure: string | undefined;
         try {
-          if (lockPlatform === 'ios') await stopIosRunner(deviceId);
-          else await reapAndroidRunner(deviceId);
+          if (lockPlatform === 'ios') await withCancellation(undefined, () => stopIosRunner(deviceId));
+          else await withCancellation(undefined, () => reapAndroidRunner(deviceId));
         } catch (cleanupErr) {
           cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
         }
@@ -392,12 +392,12 @@ export function createDeviceSnapshotHandler(
         appId,
       });
       try {
-        await deps.bindRunner?.(lockPlatform, deviceId, appId);
+        await interruptible(async () => { await deps.bindRunner?.(lockPlatform, deviceId, appId); });
       } catch (error) {
         let cleanupFailure: string | undefined;
         try {
-          if (lockPlatform === 'ios') await stopIosRunner(deviceId);
-          else await reapAndroidRunner(deviceId);
+          if (lockPlatform === 'ios') await withCancellation(undefined, () => stopIosRunner(deviceId));
+          else await withCancellation(undefined, () => reapAndroidRunner(deviceId));
         } catch (cleanupErr) {
           cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
         } finally {
