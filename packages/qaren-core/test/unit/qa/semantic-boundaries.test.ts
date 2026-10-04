@@ -146,9 +146,16 @@ test('native-only Android input labels are private outward data, not rewritten l
       assert.ok(!request.includes(`Echo: ${label}`));
       assert.ok(!request.includes(`"${label}"`));
       if (label.length > 2) assert.ok(!request.includes(label));
-      assert.ok(request.includes('address1'));
+      assert.equal(request.includes('address1'), label !== '1');
       assert.equal(JSON.stringify(observed.elements), before);
       assert.equal(observed.elements[0].label, label);
+      assert.equal(observed.elements[0].testID, 'address1');
+      const exact = prepareTarget(
+        { kind: 'fill', target: { quoted: 'address1', phrase: 'address1' }, text: 'replacement' },
+        observed,
+      );
+      assert.ok('ref' in exact);
+      assert.equal(exact.ref, '@input');
       assert.ok(
         !redactEvidence(observed, assertionView(observed).join(' ')).includes(`Echo: ${label}`),
       );
