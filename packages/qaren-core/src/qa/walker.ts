@@ -47,7 +47,7 @@ import {
   type TimingObserver,
   type TimingEvent,
 } from './timing.js';
-import { createRowTimer, type RowTiming } from './row-timing.js';
+import { createRowTimer, separateRowOperations, type RowTiming } from './row-timing.js';
 import {
   type BlockResult,
   type WalkResult,
@@ -839,6 +839,7 @@ export async function walkBlock(
       recover: false,
     });
     shots += taken;
+    separateRowOperations(nested.rows);
     rows.push(...nested.rows);
     if (nested.refusal) return { refuse: nested.refusal };
     return nested.failure

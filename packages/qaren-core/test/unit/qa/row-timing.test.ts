@@ -4,7 +4,11 @@ import { buildLedger, ledgerWithoutResult, type LedgerRow } from '../../../dist/
 import { parsePlan } from '../../../dist/qa/plan.js';
 import { createJev, JEV_MODEL } from '../../../dist/qa/jev.js';
 import type { Questions } from '../../../dist/qa/questions.js';
-import { createRowTimer, summarizeSpeed } from '../../../dist/qa/row-timing.js';
+import {
+  createRowTimer,
+  separateRowOperations,
+  summarizeSpeed,
+} from '../../../dist/qa/row-timing.js';
 import type { TimingEvent } from '../../../dist/qa/timing.js';
 import { runPlan, walkBlock } from '../../../dist/qa/walker.js';
 import { choice, element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
@@ -336,4 +340,78 @@ test('a ledger synthesized after the walk stopped carries no speed', () => {
   assert.equal(ledger.verdict, 'FAIL');
   assert.equal('speed' in ledger, false);
   assert.deepEqual(ledger.steps, [timed]);
+});
+
+test('login operation timings stay separate from plan lines and retain diagnostic retries', () => {
+  for (const kind of ['step', 'check'] as const) {
+    const login = [
+      timed(1, 100, { block: 'login', kind, outcome: 'retry' }),
+      timed(1, 200, { block: 'native-capture', kind, outcome: 'fail', attempt: 2 }),
+    ];
+    separateRowOperations(login);
+    const rows = [...login, timed(1, 700, { block: 'plan', kind })];
+    assert.deepEqual(
+      buildLedger(
+        [],
+        rows.map((row) => ({ ...row, block: '<private>' })),
+      ).speed,
+      {
+        stepMedianMs: 500,
+        stepP95Ms: 700,
+        walkMs: 1000,
+        steps: 2,
+        passed: 1,
+        failed: 1,
+      },
+    );
+  }
+});
+
+test('login recovery and the retried plan step produce separate ledger speed statistics', async () => {
+  const loginScreen = screen([element('@login', 'Sign in')]);
+  const planScreen = screen([element('@save', 'Save')]);
+  const f = walker(
+    [],
+    scriptedJudge(() => assert.fail('quoted steps never ask Jev')),
+  );
+  let loggedIn = false;
+  let clock = 0;
+  f.deps.now = () => clock;
+  f.deps.timing = () => {};
+  f.deps.captureScreen = async () => {
+    clock += 10;
+    return loggedIn ? planScreen : loginScreen;
+  };
+  f.deps.press = async (ref, context) => {
+    context.authorize();
+    clock += ref === '@login' ? 100 : 300;
+    loggedIn = true;
+    return { ok: true, proven: true };
+  };
+  f.deps.hideDevMenu = async () => ({ ok: true, proven: true });
+  f.deps.login = {
+    marker: { text: 'Sign in' },
+    block: parsePlan('1. Tap "Sign in"').blocks![0],
+  };
+  const ledger = await runPlan(parsePlan('1. Tap "Save"').blocks!, f.deps);
+  assert.equal(ledger.verdict, 'PASS');
+  assert.equal(ledger.recoveries, 1);
+  assert.deepEqual(
+    ledger.steps.map((row) => [row.line, row.kind, row.outcome]),
+    [
+      [1, 'step', 'pass'],
+      [1, 'step', 'retry'],
+      [1, 'step', 'pass'],
+    ],
+  );
+  const loginMs = ledger.steps[0].timing!.total;
+  const planMs = ledger.steps.slice(1).reduce((total, row) => total + row.timing!.total, 0);
+  assert.deepEqual(ledger.speed, {
+    stepMedianMs: Math.round((loginMs + planMs) / 2),
+    stepP95Ms: Math.max(loginMs, planMs),
+    walkMs: loginMs + planMs,
+    steps: 2,
+    passed: 2,
+    failed: 0,
+  });
 });

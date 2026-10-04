@@ -118,17 +118,32 @@ export function createRowTimer(startedAt: number): RowTimer {
   };
 }
 
+const operationIdentities = new WeakMap<RowTiming, object>();
+
+export function separateRowOperations(
+  rows: readonly { line: number; kind: string; timing?: RowTiming }[],
+): void {
+  const identities = new Map<string, object>();
+  for (const row of rows) {
+    if (!row.timing) continue;
+    const key = JSON.stringify([row.line, row.kind]);
+    const identity = identities.get(key) ?? {};
+    identities.set(key, identity);
+    operationIdentities.set(row.timing, identity);
+  }
+}
+
 export function summarizeSpeed(
   rows: readonly { line: number; kind: string; outcome: string; timing?: RowTiming }[],
 ): LedgerSpeed | undefined {
   if (!rows.some((row) => row.timing)) return undefined;
-  const steps = new Map<string, { total: number; outcome: string }>();
+  const steps = new Map<string | object, { total: number; outcome: string }>();
   let walkMs = 0;
   for (const row of rows) {
     if (!row.timing) continue;
     walkMs += row.timing.total;
     if (row.kind !== 'step' && row.kind !== 'check') continue;
-    const key = JSON.stringify([row.line, row.kind]);
+    const key = operationIdentities.get(row.timing) ?? JSON.stringify([row.line, row.kind]);
     steps.set(key, {
       total: (steps.get(key)?.total ?? 0) + row.timing.total,
       outcome: row.outcome,
