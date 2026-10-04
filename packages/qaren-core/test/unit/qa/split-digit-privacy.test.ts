@@ -8,7 +8,9 @@ import {
   codeBoxRows,
 } from '../../../dist/qa/privacy.js';
 import { join, describe } from '../../../dist/qa/screen.js';
-import { element } from './judgment-fixtures.ts';
+import { element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
+import { parsePlan, parsePlanWithJev } from '../../../dist/qa/plan.js';
+import { runPlan } from '../../../dist/qa/walker.js';
 
 for (const code of ['4815', '1122', '9382']) {
   test(`structural code row ${code} ignores wrappers and repeated text`, () => {
@@ -134,6 +136,45 @@ test('Unicode digit grouping matches both directions at every policy', () => {
       const mask = privacy.maskForModel([], []);
       assert.equal(mask.describeElement(label, describe).includes(echo), false);
       assert.equal(privacy.redactIdentifier(`account-${echo}`), `account-${MASK}`);
+    }
+  }
+});
+
+test('both structural prefixes survive model, refusal and ledger projection', async () => {
+  for (const prefix of ['123.', '123)']) {
+    const privacy = new ObservedPrivacy(['123']);
+    const raw = `${prefix} Type "123" into "pin"`;
+    assert.equal(
+      projectPlanLine(raw, privacy.privateSet()).text,
+      `${prefix} Type "•••" into "pin"`,
+    );
+    assert.equal(projectPlanLine(raw, privacy.privateSet(), 'persisted').hit, true);
+    const model = privacy.maskForModel(['123'], [raw]);
+    assert.equal(model.applyPlanLine(raw), `${prefix} Type "${model.tokens[0]}" into "pin"`);
+    const observed = screen([
+      element('@pin', 'PIN', { kind: 'input', testID: 'pin' }),
+      element('@ready', 'Ready', { kind: 'text' }),
+    ]);
+    const f = walker(
+      [observed],
+      scriptedJudge(() => assert.fail('literal plan is model-free')),
+    );
+    const blocks = parsePlan(`${raw}\n✓ "Ready"`).blocks;
+    assert.ok(blocks);
+    const ledger = await runPlan(blocks, f.deps);
+    assert.equal(ledger.verdict, 'PASS');
+    assert.equal(ledger.steps[0].text, `${prefix} Type "•••" into "pin"`);
+    assert.deepEqual(f.actions, ['fill @pin 123']);
+    const refused = await parsePlanWithJev(
+      `${prefix} Type "123"\n124. Type "123" into "pin"`,
+      f.deps.judge!,
+    );
+    assert.ok(refused.refused);
+    assert.equal(refused.refused[0].text, `${prefix} Type "•••"`);
+    const secure = { values: [{ text: '1', provenance: 'secret' as const }] };
+    for (const punctuation of ['.', ')']) {
+      const line = `1${punctuation} Tap "Continue"`;
+      assert.deepEqual(projectPlanLine(line, secure, 'persisted'), { text: line, hit: false });
     }
   }
 });

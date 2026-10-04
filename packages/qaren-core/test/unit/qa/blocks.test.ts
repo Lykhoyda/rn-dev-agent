@@ -571,3 +571,22 @@ test('short preclassified fills withhold quoted plan slots only', () => {
     );
   }
 });
+
+test('secure single-character values never withhold structural step numbers', () => {
+  for (const prefix of ['1.', '1)']) {
+    const block = blockOf(`### Ordinary\n${prefix} Tap "Continue"\n✓ "Ready"`);
+    const rows = passRows(block, { [block.items[0].line]: { id: 'continue' } });
+    const result = serializeBlock(block, rows, ios, secrets('1'));
+    assert.ok('yaml' in result, JSON.stringify(result));
+    const stored = readBlock(result.yaml);
+    assert.ok(!('invalid' in stored));
+    assert.equal(stored.steps[0].raw, `${prefix} Tap "Continue"`);
+    assert.deepEqual(stored.steps[0].selector, { id: 'continue' });
+    rows[0].selector = { text: '1' };
+    assert.ok('unsavable' in serializeBlock(block, rows, ios, secrets('1')));
+    rows[0].selector = { id: 'continue' };
+    const check = block.items[1];
+    if (check.kind === 'check') check.text = '1';
+    assert.ok('unsavable' in serializeBlock(block, rows, ios, secrets('1')));
+  }
+});

@@ -24,7 +24,7 @@ import { atomicWriter } from '../domain/atomic-writer.js';
 import type { Block, Item } from './plan.js';
 import { normalizedSlug } from './plan.js';
 import type { LedgerRow, Selector } from './ledger.js';
-import { type PrivateSet, matchPrivate, projectPlanLine } from './privacy.js';
+import { type PrivateSet, matchPrivate, planLineBody, projectPlanLine } from './privacy.js';
 
 export type BlockPlatform = 'ios' | 'android';
 
@@ -126,7 +126,6 @@ export function serializeBlock(
     if (
       projectPlanLine(item.raw, privateSet, 'persisted').hit ||
       protectedContent([
-        item.raw,
         ...(item.kind === 'fill' || (item.kind === 'check' && item.literal) ? [item.text] : []),
         selector?.id ?? selector?.text ?? '',
       ])
@@ -135,7 +134,10 @@ export function serializeBlock(
     lines.push(`# ${item.raw}`, ...commandsFor(item, selector, meta.platform));
   }
   const serialized = `${lines.join('\n')}\n`;
-  return protectedContent([serialized]) ? withheld : { yaml: serialized };
+  const admission = lines
+    .map((line) => (line.startsWith('# ') ? `# ${planLineBody(line.slice(2))}` : line))
+    .join('\n');
+  return protectedContent([admission]) ? withheld : { yaml: serialized };
 }
 
 function selectorFrom(value: unknown): Selector | undefined {

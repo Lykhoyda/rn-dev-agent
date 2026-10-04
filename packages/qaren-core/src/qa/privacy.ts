@@ -235,14 +235,19 @@ export function matchPrivate(
   return { text: projected, hit };
 }
 
+export function planLineBody(text: string): string {
+  return text.replace(/^\s*\d+[.)]\s+/, '');
+}
+
 export function projectPlanLine(
   text: string,
   set: PrivateSet,
   policy: Policy = 'durable',
   token?: (value: string) => string | undefined,
 ): { text: string; hit: boolean } {
-  const prefix = text.match(/^\s*\d+\.\s+/)?.[0] ?? '';
-  const projected = matchPrivate(text.slice(prefix.length), set, policy, token);
+  const content = planLineBody(text);
+  const prefix = text.slice(0, text.length - content.length);
+  const projected = matchPrivate(content, set, policy, token);
   let hit = projected.hit;
   const body = projected.text.replace(
     /"([^"\n]*)"|“([^”\n]*)”/g,
