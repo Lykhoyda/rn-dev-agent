@@ -365,9 +365,13 @@ pub fn publication_copy(
     runner: &mut dyn Runner,
     run_dir: &Path,
     admitted_offset_ms: Option<u64>,
+    publication_interrupted: bool,
 ) -> VideoStatus {
     let out = published_video_path(run_dir);
     let _ = std::fs::remove_file(&out);
+    if publication_interrupted {
+        return VideoStatus::Unavailable("app continuity was interrupted after admission".into());
+    }
     let Some(offset) = admitted_offset_ms else {
         return VideoStatus::Unavailable("no admitted app frame was recorded".into());
     };
@@ -488,7 +492,7 @@ mod tests {
             .mock
             .expect_run("ffprobe", CmdOutput::success("20.0\n"));
         assert_eq!(
-            publication_copy(&mut runner, &run_dir, Some(12_345)),
+            publication_copy(&mut runner, &run_dir, Some(12_345), false),
             VideoStatus::Available
         );
         let args = &runner.mock.calls[0].args;
@@ -517,7 +521,7 @@ mod tests {
         std::fs::write(published_video_path(&run_dir), "stale").unwrap();
         let mut mock = MockRunner::new();
         assert!(matches!(
-            publication_copy(&mut mock, &run_dir, None),
+            publication_copy(&mut mock, &run_dir, None, false),
             VideoStatus::Unavailable(_)
         ));
         assert!(mock.calls.is_empty());
@@ -538,7 +542,7 @@ mod tests {
             .mock
             .expect_run("ffprobe", CmdOutput::failed(1, "no duration"));
         assert!(matches!(
-            publication_copy(&mut runner, &run_dir, Some(90_000)),
+            publication_copy(&mut runner, &run_dir, Some(90_000), false),
             VideoStatus::Unavailable(_)
         ));
         assert!(!published_video_path(&run_dir).exists());

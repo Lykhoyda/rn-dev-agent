@@ -126,7 +126,7 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
         reason: `no eligible element labelled or identified "${target.quoted}" is on screen`,
       };
     if (exact.length === 1)
-      return exact[0].offscreen ? { scroll: 'down' } : { ref: exact[0].ref, element: exact[0] };
+      return exact[0].offscreen ? scrollTo(exact[0]) : { ref: exact[0].ref, element: exact[0] };
     // A replayed selector names one element; anything else re-walks the step instead of asking Jev.
     if (target.exact)
       return {
@@ -234,6 +234,11 @@ export function bindFillIdentity(
   return fallback ? { kind: 'fallback', fallback } : undefined;
 }
 
+function scrollTo(element: Element): Resolution {
+  const frame = elementFrame(element);
+  return { scroll: frame && frame.y + frame.height <= 0 ? 'up' : 'down' };
+}
+
 export function decideTarget(prepared: TargetQuestion, answer: Answer | undefined): Resolution {
   const top = confidentChoice(prepared.question, answer);
   if (!top)
@@ -242,12 +247,14 @@ export function decideTarget(prepared: TargetQuestion, answer: Answer | undefine
       reason: 'target probabilities did not meet the act threshold and margin',
     };
   const offscreen = (e: Element): boolean => e.semantic?.visibility === 'offscreen';
-  if (top === 'none')
-    return prepared.candidates.some(offscreen)
-      ? { scroll: 'down' }
+  if (top === 'none') {
+    const candidate = prepared.candidates.find(offscreen);
+    return candidate
+      ? scrollTo(candidate)
       : { refuse: 'TARGET_NOT_FOUND', reason: 'no candidate matches the target' };
+  }
   const element = prepared.candidates[Number(top.slice(1))];
-  return offscreen(element) ? { scroll: 'down' } : { ref: element.ref, element };
+  return offscreen(element) ? scrollTo(element) : { ref: element.ref, element };
 }
 
 function describeSemantic(element: Element): string {

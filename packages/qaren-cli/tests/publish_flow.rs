@@ -1924,3 +1924,51 @@ fn only_the_admission_trimmed_copy_is_ever_uploaded() {
     assert!(!comment.args.iter().any(|arg| arg.contains("video")));
     assert!(dir.join("media/video.mp4").is_file());
 }
+
+#[test]
+fn a_post_admission_interruption_withholds_the_copy_and_upload() {
+    let (runs, dir, verdict) = run_dir(false);
+    let mut ledger: qaren::core::Ledger =
+        serde_json::from_slice(&std::fs::read(dir.join("ledger.json")).unwrap()).unwrap();
+    ledger.publication_interrupted = true;
+    let mut encoder = MockRunner::new();
+    let status = qaren::record::publication_copy(
+        &mut encoder,
+        &dir,
+        Some(12_345),
+        ledger.publication_interrupted,
+    );
+    assert_eq!(
+        status,
+        VideoStatus::Unavailable("app continuity was interrupted after admission".into())
+    );
+    assert!(!qaren::record::published_video_path(&dir).exists());
+    assert!(encoder.calls.is_empty());
+    edit_pr(&dir, |pr| {
+        pr["video"] = serde_json::to_value(&status).unwrap()
+    });
+    let mut runner = Git(MockRunner::new());
+    script_comment_and_label(&mut runner.0);
+    script_commit(&mut runner.0);
+    runner
+        .0
+        .expect_run("git push origin", CmdOutput::success(""));
+    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Published,
+        "{:?}",
+        receipt.failure
+    );
+    let comment = runner
+        .0
+        .calls
+        .iter()
+        .find(|c| c.label == "gh-pr-comment")
+        .unwrap();
+    assert!(!comment
+        .args
+        .iter()
+        .any(|arg| arg.contains("video-published")));
+    assert!(dir.join("media/video.mp4").is_file());
+}

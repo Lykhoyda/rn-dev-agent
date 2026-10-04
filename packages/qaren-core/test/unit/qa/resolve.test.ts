@@ -639,3 +639,46 @@ test('a visible label stores its testID only when no other identity shares it', 
   ]);
   assert.deepEqual(visibleSelector(sibling, unique), { id: 'qa-replay-a' });
 });
+
+test('native offscreen target frames choose up above the viewport and down otherwise', async () => {
+  for (const [y, expected] of [
+    [-50, 'up'],
+    [900, 'down'],
+    [-10, 'down'],
+  ] as const) {
+    const observed = joinScreen(
+      [
+        { ref: '@app', type: 'Application', rect: { x: 0, y: 0, width: 400, height: 800 } },
+        {
+          ref: '@button',
+          type: 'Button',
+          identifier: 'save',
+          label: 'Save',
+          hittable: false,
+          rect: { x: y === -10 ? -150 : 20, y, width: 100, height: 30 },
+        },
+      ],
+      [],
+      'app',
+      { native: 'complete', react: 'complete' },
+      undefined,
+      {
+        source: 'xcui-live',
+        nodes: [
+          { status: 'unknown', labelSource: 'none', unknownReason: 'not-hittable' },
+          { status: 'unknown', labelSource: 'direct', unknownReason: 'clipped' },
+        ],
+      },
+    );
+    for (const target of [
+      { phrase: 'Save', quoted: 'Save' },
+      { phrase: 'save', quoted: 'save', exact: 'id' as const },
+      { phrase: 'the Save button' },
+    ]) {
+      const judge = scriptedJudge((q) => ({ target_0: choice(q.target_0) }));
+      assert.deepEqual(await resolveTarget({ kind: 'press', target }, observed, judge), {
+        scroll: expected,
+      });
+    }
+  }
+});

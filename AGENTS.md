@@ -204,7 +204,7 @@ Suite records and redacted logs live under `~/.qaren/native-suites/<run-id>`. Un
 
 - A changeset must land in the same PR as the change it describes
   (`scripts/require-changeset.sh` watches `packages/qaren-core/src`,
-  `packages/qaren-cli/src` and `packages/qaren-plugin/{commands,skills,hooks}`).
+  `packages/qaren-cli/src` and `packages/qaren-plugin/{commands,skills,hooks,scripts}`).
   The frontmatter key is `qaren`; `qaren-core`, both runners and `qaren-docs`
   are ignored in `.changeset/config.json`.
 - `packages/qaren-plugin/package.json` is the version source.

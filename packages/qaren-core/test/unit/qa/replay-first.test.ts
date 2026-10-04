@@ -302,6 +302,7 @@ test('the iOS process guard: a changed or missing identifier fails the step; not
     fake.deps.appProcess = {};
     const result = ledger(await runPlan(blocks(literal), fake.deps, [], store(dir)));
     assert.equal(result.verdict, expected, label);
+    assert.equal(result.publicationInterrupted, expected !== 'PASS', label);
     if (expected === 'PASS') continue;
     assert.equal(result.failure?.step, blocks(literal)[0].items[0].line, label);
     assert.match(result.failure?.seen ?? '', /APP_PROCESS_CHANGED: the app restarted or crashed/);
@@ -361,13 +362,14 @@ test('a capture that finds the app process gone fails APP_PROCESS_CHANGED and wr
   const result = ledger(await runPlan(blocks(literal), fake.deps, [], store(dir)));
   assert.equal(result.verdict, 'FAIL');
   assert.match(result.failure?.seen ?? '', /APP_PROCESS_CHANGED/);
+  assert.equal(result.publicationInterrupted, true);
   assert.equal(existsSync(actionFile(dir)), false);
   assert.equal(shots, 0);
   assert.equal(existsSync(path), false);
   assert.equal(result.failure?.screenshot, undefined);
 });
 
-test('a process change on a capture still records its concealed inputs before reporting', async () => {
+test('a process change on an error screen still records its concealed inputs before reporting', async () => {
   const fake = app();
   let captures = 0;
   const capture = fake.deps.captureScreen;
@@ -380,12 +382,14 @@ test('a process change on a capture still records its concealed inputs before re
       elements: [...screen.elements, secret],
       visibleText: [...screen.visibleText, 'hunter2'],
       appProcessIdentifier: 77,
+      renderError: true,
     };
   };
   fake.deps.appProcess = {};
   const result = ledger(await runPlan(blocks(literal), fake.deps, [], store(root())));
   assert.equal(result.verdict, 'FAIL');
   assert.match(result.failure?.seen ?? '', /APP_PROCESS_CHANGED/);
+  assert.equal(result.publicationInterrupted, true);
   assert.doesNotMatch(JSON.stringify(result), /hunter2/);
 });
 
@@ -840,4 +844,18 @@ test('a wait on a uniquely labelled control sharing its testID replays by text w
   assert.equal(second.jev.calls, 0);
   assert.equal(fake.judge.calls.length, 0);
   assert.equal(readFileSync(actionFile(dir), 'utf8'), before);
+});
+
+test('a post-admission picker remains flagged after the app returns', async () => {
+  const fake = app();
+  let captures = 0;
+  const capture = fake.deps.captureScreen;
+  fake.deps.captureScreen = async (options) => ({
+    ...(await capture(options)),
+    front: captures++ === 0 ? 'picker' : 'app',
+  });
+  const result = await runPlan(blocks(literal), fake.deps);
+  assert.equal(result.verdict, 'PASS');
+  assert.equal(result.publicationInterrupted, true);
+  assert.ok(captures > 1);
 });

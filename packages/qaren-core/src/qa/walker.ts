@@ -177,7 +177,7 @@ export async function walkBlock(
   shotIndex = 0,
   typed: string[] = [],
   privacy = new ObservedPrivacy(typed),
-  sequence = { observation: 0 },
+  sequence: { observation: number; publicationInterrupted?: boolean } = { observation: 0 },
   opts: WalkOptions = {},
 ): Promise<WalkOutcome> {
   const replay = opts.mode === 'replay';
@@ -259,10 +259,11 @@ export async function walkBlock(
         if (error instanceof AppProcessGoneError) throw processChanged();
         throw error;
       }
+      if (latest.front === 'picker') sequence.publicationInterrupted = true;
       const privacyStarted = deps.timing ? deps.now() : 0;
       privacy.observe(latest);
-      if (latest.renderError) throw new RenderError();
       guardAppProcess(deps.appProcess, latest.appProcessIdentifier);
+      if (latest.renderError) throw new RenderError();
       if (deps.timing)
         observeTiming(timingObserver, {
           stage: 'privacy-history',
@@ -295,6 +296,10 @@ export async function walkBlock(
       admitted = true;
       emitCaptureDiagnostics(latest);
       return { screen: latest, timing, id };
+    } catch (error) {
+      if (error instanceof ResolutionError && error.code === 'APP_PROCESS_CHANGED')
+        sequence.publicationInterrupted = true;
+      throw error;
     } finally {
       if (deps.timing) {
         const at = deps.now();
@@ -1502,7 +1507,7 @@ export async function runPlan(
           ? 'eligible'
           : 'withheld-privacy';
     const calls = (): JevCall[] => [...preflightCalls, ...(deps.judge?.calls ?? [])];
-    const sequence = { observation: 0 };
+    const sequence = { observation: 0, publicationInterrupted: false };
     const walk = async (block: Block, opts?: WalkOptions) => {
       const outcome = await walkBlock(block, walking, steps.length, typed, privacy, sequence, opts);
       recoveries += outcome.recoveries ?? 0;
@@ -1535,6 +1540,7 @@ export async function runPlan(
           recoveries,
         ),
         videoPublication: videoPublication(),
+        publicationInterrupted: sequence.publicationInterrupted,
       };
       if (store) ledger.blocksWritten = written;
       return outcome?.refusal

@@ -681,12 +681,17 @@ fn run_inner(
         let video = video.unwrap_or_else(|| record::finalize(ctx.runner, &run_dir));
         ctx.notes.push(("video".to_string(), video.to_string()));
         // Only the uploaded copy starts at the admitted app; the local recording stays complete.
-        let video = if video == VideoStatus::Available {
+        let video = if video == VideoStatus::Available || outcome.ledger.publication_interrupted {
             let offset = outcome
                 .ledger
                 .admitted_at_ms
                 .map(|at| at.saturating_sub(recording_from));
-            record::publication_copy(ctx.runner, &run_dir, offset)
+            record::publication_copy(
+                ctx.runner,
+                &run_dir,
+                offset,
+                outcome.ledger.publication_interrupted,
+            )
         } else {
             video
         };
