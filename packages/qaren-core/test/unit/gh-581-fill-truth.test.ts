@@ -273,7 +273,10 @@ for (const [name, ref, duplicateIndex] of [
     assert.equal(env.code, 'TARGET_AMBIGUOUS');
     assert.equal(env.meta.mutation, 'none');
     assert.deepEqual(env.meta.pathsTried, []);
-    assert.deepEqual(calls.map((call) => call.cliArgs[0]), ['snapshot']);
+    assert.deepEqual(
+      calls.map((call) => call.cliArgs[0]),
+      ['snapshot'],
+    );
     assert.doesNotThrow(() => context.assertComplete());
   });
 }
@@ -285,7 +288,10 @@ test('gh-581: QA unique bindings still fill and verify without invalidation', as
       createDeviceFillHandler(() => null as never)({ ref, text: 'x', qaContext: context }),
     );
     assert.equal(envelope(result).ok, true, ref);
-    assert.deepEqual(calls.map((call) => call.cliArgs[0]), ['snapshot', 'fill', 'verify-input']);
+    assert.deepEqual(
+      calls.map((call) => call.cliArgs[0]),
+      ['snapshot', 'fill', 'verify-input'],
+    );
     assert.doesNotThrow(() => context.assertComplete());
   }
 });
