@@ -23,8 +23,9 @@ import {
   storedFits,
   writeBlock,
 } from '../../../dist/qa/blocks.js';
+import { element, screen } from './judgment-fixtures.ts';
 import { parseM7Header } from '../../../dist/domain/reusable-action.js';
-import type { PrivateSet } from '../../../dist/qa/privacy.js';
+import { ObservedPrivacy, capturePrivateScreen, type PrivateSet } from '../../../dist/qa/privacy.js';
 
 const secrets = (...values: string[]): PrivateSet => ({
   values: values.map((text) => ({ text, provenance: 'secret' })),
@@ -80,7 +81,7 @@ test('serialization withholds protected semantic values before YAML escaping', (
   }
 });
 
-test('serialization withholds protected fragments in metadata, plan text and selectors', () => {
+test('serialization preserves unrelated fragments in metadata, plan text and selectors', () => {
   for (const field of ['appId', 'slug', 'title', 'planHash', 'raw', 'text', 'id', 'label']) {
     for (const [secret, fragment] of [
       ['existing-secret', 'secr'],
@@ -100,11 +101,7 @@ test('serialization withholds protected fragments in metadata, plan text and sel
       } else rows[0].selector = field === 'id' ? { id: fragment } : { text: fragment };
       if (field === 'slug') rows.forEach((row) => (row.block = block.slug));
       const before = structuredClone({ block, rows, meta });
-      assert.deepEqual(
-        serializeBlock(block, rows, meta, secrets(secret)),
-        { unsavable: 'contains a protected plan-typed value' },
-        `${field}: ${secret}`,
-      );
+      assert.ok('yaml' in serializeBlock(block, rows, meta, secrets(secret)), `${field}: ${secret}`);
       assert.deepEqual({ block, rows, meta }, before);
       assert.ok('yaml' in serializeBlock(block, rows, meta), `${field}: ${secret}`);
     }
@@ -528,3 +525,44 @@ for (const extension of ['yaml', 'yml']) {
     assert.equal(readFileSync(path, 'utf8'), '# id: unrelated\n- launchApp\n');
   });
 }
+
+test('preclassified fills withhold every semantic block field before typing', () => {
+  for (const value of ['47', 'hunter-canary-77', 'Cafe\u0301']) {
+    const privateSet: PrivateSet = { values: [{ text: value === 'Cafe\u0301' ? ' Café ' : value, provenance: 'typed' }] };
+    for (const field of ['appId', 'slug', 'title', 'planHash', 'raw', 'text', 'id', 'label']) {
+      const block = blockOf('## QA\n\n### Confirm\n1. Tap "Save"\n✓ "Saved"\n');
+      const rows = passRows(block, { [block.items[0].line]: { id: 'save-button' } });
+      const meta = { ...ios };
+      if (field === 'appId') meta.appId = value;
+      else if (field === 'slug' || field === 'title' || field === 'planHash') block[field] = value;
+      else if (field === 'raw') block.items[0].raw = value;
+      else if (field === 'text') {
+        const check = block.items[1];
+        if (check.kind === 'check') check.text = value;
+      } else rows[0].selector = field === 'id' ? { id: value } : { text: value };
+      if (field === 'slug') rows.forEach((row) => (row.block = block.slug));
+      assert.ok('unsavable' in serializeBlock(block, rows, meta, privateSet), field);
+    }
+  }
+});
+
+test('retained box containers withhold their rendered line but admit unrelated fragments', () => {
+  const privacy = new ObservedPrivacy();
+  const observed = screen([
+    element('@heading', 'Enter code', { kind: 'text' }),
+    ...['4', '8', '1', '5'].map((digit, i) => element(`@box${i}`, digit, { kind: 'text' })),
+    element('@separator', 'Next code', { kind: 'text' }),
+    ...['1', '2', '3', '4'].map((digit, i) => element(`@next${i}`, digit, { kind: 'text' })),
+  ]);
+  capturePrivateScreen(observed, [{ values: ['4815', '1234'], secure: true, elements: [], associationUnique: true }]);
+  privacy.observe(observed);
+  privacy.observe(screen([element('@done', 'Done', { kind: 'text' })]));
+  const line = observed.visibleText.join(' | ');
+  const masked = privacy.redact(line);
+  assert.equal(masked, 'Enter code | ••• | ••• | ••• | ••• | Next code | ••• | ••• | ••• | •••');
+  for (const text of ['8', '4 | 8', 'Step 1 of 2', line]) {
+    const block = blockOf(`## QA\n\n### Confirm\n✓ "${text}"\n`);
+    const result = serializeBlock(block, passRows(block, {}), ios, privacy.privateSet());
+    assert.equal('unsavable' in result, text === line);
+  }
+});

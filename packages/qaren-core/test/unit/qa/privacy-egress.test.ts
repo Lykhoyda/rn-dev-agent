@@ -199,3 +199,25 @@ test('the projected ledger stays readable and ordinary blocks are saved', async 
     JSON.stringify(ledger.blocks),
   );
 });
+
+test('a future short fill protects an earlier failure screen before typing', async () => {
+  const blocks = parsePlan('## QA\n\n### Fail early\n✓ "Missing"\n\n### Fill later\n1. Fill "qa-input" with "47"\n').blocks;
+  assert.ok(blocks);
+  const f = walker([view([text('@shown', '47')])], scriptedJudge(() => ({})));
+  const ledger = await runPlan(blocks, f.deps);
+  assert.equal(ledger.verdict, 'FAIL');
+  assert.equal(ledger.failure?.seen, '•••');
+  assert.equal(f.actions.length, 0);
+});
+
+test('a future fill withholds an earlier passing block even if it never types', async () => {
+  const blocks = parsePlan(`## QA\n\n### Confirm\n✓ "${TYPED}"\n\n### Fill later\n1. Fill "missing-input" with "${TYPED}"\n`).blocks;
+  assert.ok(blocks);
+  const f = walker([view([text('@shown', TYPED)])], scriptedJudge(() => ({})));
+  const appRoot = mkdtempSync(join(tmpdir(), 'qaren-preclassified-'));
+  const ledger = await runPlan(blocks, f.deps, [], { appRoot, platform: 'ios', appId: 'com.example' });
+  assert.equal(ledger.verdict, 'FAIL');
+  assert.equal(ledger.blocks[0].saved, false);
+  assert.equal(JSON.stringify(ledger).includes(TYPED), false);
+  assert.deepEqual(ledger.blocksWritten, []);
+});

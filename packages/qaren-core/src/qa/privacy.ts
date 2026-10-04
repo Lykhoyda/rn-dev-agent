@@ -168,6 +168,7 @@ export interface PrivateValue {
 export interface FragmentContext {
   key: string;
   boxes: readonly string[];
+  line: string;
 }
 
 export interface PrivateSet {
@@ -182,7 +183,6 @@ export type Policy = 'model' | 'durable' | 'identifier' | 'persisted';
 
 const WORD = '\\p{L}\\p{M}\\p{N}_';
 const TOKEN = /[\p{L}\p{M}\p{N}_.@-]+/gu;
-const BOX_GAP = /^[\s|,;:"'()[\]]*$/;
 const SHORT = 3;
 const escape = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const coreOf = (token: string): string => token.replace(/^[_.@-]+|[_.@-]+$/g, '');
@@ -191,9 +191,15 @@ const chars = (text: string): number => [...text].length;
 const whole = (pattern: string): string => `(?<![${WORD}])${pattern}(?![${WORD}])`;
 
 function forms(value: string): string[] {
-  return [...new Set([value, value.trim(), value.normalize('NFC'), value.normalize('NFD')])].filter(
-    Boolean,
-  );
+  return [
+    ...new Set(
+      [value, value.trim()].flatMap((form) => [
+        form,
+        form.normalize('NFC'),
+        form.normalize('NFD'),
+      ]),
+    ),
+  ].filter(Boolean);
 }
 
 // Digits shown with or without grouping separators (`1234 5678 90` for `1234567890`).
@@ -206,89 +212,44 @@ function digitForm(value: string): string | undefined {
 
 interface Rule {
   pattern: string;
-  quoted?: true;
 }
 
-// Which form of a value each policy matches: a protected value takes its whole token, even echoed
-// inside a word; typed text in durable output masks only when quoted or long; blocks keep typed values.
-function rulesOf(value: PrivateValue, policy: Policy, tokenized: ReadonlySet<string>): Rule[] {
-  return forms(value.text).flatMap((form): Rule[] => {
+function rulesOf(value: PrivateValue, policy: Policy): Rule[] {
+  return forms(value.text).map((form): Rule => {
     const escaped = escape(form);
-    const exact = { pattern: chars(form) < SHORT ? whole(escaped) : escaped };
-    const token = { pattern: `[${WORD}.@-]*${escaped}[${WORD}.@-]*` };
-    if (value.provenance === 'secret' || value.provenance === 'concealed') return [token];
-    if (value.provenance === 'typed' && policy === 'identifier') return [token];
-    if (value.provenance === 'typed' && policy === 'durable')
-      return [
-        { pattern: `"${escaped}"`, quoted: true },
-        { pattern: `“${escaped}”`, quoted: true },
-        ...(chars(form) < SHORT ? [] : [{ pattern: escaped }]),
-      ];
-    return policy === 'model' && tokenized.has(value.text) ? [exact] : [];
+    if (
+      value.provenance === 'secret' ||
+      value.provenance === 'concealed' ||
+      (value.provenance === 'typed' && policy === 'identifier')
+    )
+      return { pattern: `[${WORD}.@-]*${escaped}[${WORD}.@-]*` };
+    return { pattern: chars(form) < SHORT ? whole(escaped) : escaped };
   });
 }
 
-function rulesFor(set: PrivateSet, policy: Policy, tokenized: ReadonlySet<string>): Rule[] {
+function rulesFor(set: PrivateSet, policy: Policy): Rule[] {
   return set.values
     .flatMap((value) => {
-      const rules = rulesOf(value, policy, tokenized);
+      const rules = rulesOf(value, policy);
       const digits = digitForm(value.text);
       return rules.length && digits ? [...rules, { pattern: digits }] : rules;
     })
     .sort((a, b) => b.pattern.length - a.pattern.length);
 }
 
-function fragmentValues(set: PrivateSet, policy: Policy): string[] {
-  return set.values
-    .filter(
-      (v) =>
-        v.provenance === 'secret' ||
-        v.provenance === 'concealed' ||
-        (policy === 'identifier' && v.provenance === 'typed'),
-    )
-    .map((v) => v.text);
-}
-
-// A box run is >=2 adjacent one-character tokens forming part of a protected value; a lone
-// character is masked only when the whole field is one retained box, never as a free token.
-function maskFragments(text: string, set: PrivateSet, policy: Policy): string {
-  const values = fragmentValues(set, policy);
-  const single = new Set((set.contexts ?? []).flatMap((context) => context.boxes));
-  if (single.has(text.trim())) return MASK;
-  if (!values.length) return text;
-  const tokens = [...text.matchAll(TOKEN)];
-  const masked = new Set<number>();
-  tokens.forEach((token, i) => {
-    const core = coreOf(token[0]);
-    if (chars(core) >= 4 && values.some((value) => value.includes(core))) masked.add(i);
-  });
-  let start = 0;
-  for (let i = 0; i <= tokens.length; i++) {
-    const continues =
-      i < tokens.length &&
-      chars(coreOf(tokens[i][0])) === 1 &&
-      (i === start ||
-        BOX_GAP.test(text.slice(tokens[i - 1].index + tokens[i - 1][0].length, tokens[i].index)));
-    if (continues) continue;
-    for (let a = start; a < i; a++)
-      for (let b = a + 1; b < i; b++) {
-        const run = tokens
-          .slice(a, b + 1)
-          .map((token) => coreOf(token[0]))
-          .join('');
-        if (values.some((value) => value.includes(run))) for (let k = a; k <= b; k++) masked.add(k);
-      }
-    start = i < tokens.length && chars(coreOf(tokens[i][0])) === 1 ? i : i + 1;
+function maskFragments(text: string, set: PrivateSet): string {
+  const lines = new Map<string, string>();
+  for (const context of set.contexts ?? []) {
+    if (!context.line) continue;
+    const projected = lines.get(context.line) ?? context.line;
+    lines.set(
+      context.line,
+      projected.replace(context.boxes.join(' | '), context.boxes.map(() => MASK).join(' | ')),
+    );
   }
-  if (!masked.size) return text;
-  let out = '';
-  let at = 0;
-  tokens.forEach((token, i) => {
-    if (!masked.has(i)) return;
-    out += text.slice(at, token.index) + MASK;
-    at = token.index + token[0].length;
-  });
-  return out + text.slice(at);
+  let out = text;
+  for (const [line, projected] of lines) out = out.split(line).join(projected);
+  return out;
 }
 
 // The one matcher every sink calls; `token` names the opaque replacement of an exact model value.
@@ -297,19 +258,13 @@ export function matchPrivate(
   set: PrivateSet,
   policy: Policy,
   token?: (value: string) => string | undefined,
-  tokenized: ReadonlySet<string> = new Set(),
 ): { text: string; hit: boolean } {
-  const rules = rulesFor(set, policy, tokenized);
-  let out = text;
+  const rules = rulesFor(set, policy);
+  let out = maskFragments(text, set);
   if (rules.length) {
     const pattern = new RegExp(rules.map((rule) => `(${rule.pattern})`).join('|'), 'gu');
-    out = text.replace(pattern, (match, ...groups) => {
-      const rule = rules[groups.findIndex((group, i) => i < rules.length && group !== undefined)];
-      if (rule?.quoted) return `${match[0]}${MASK}${match[match.length - 1]}`;
-      return token?.(match) ?? MASK;
-    });
+    out = out.replace(pattern, (match) => token?.(match) ?? MASK);
   }
-  out = maskFragments(out, set, policy);
   return { text: out, hit: out !== text };
 }
 
@@ -509,7 +464,7 @@ export class ObservedPrivacy {
 
   // Contexts accumulate across observations: a later screen never releases an earlier box.
   private retainFragments(screen: Screen): void {
-    const values = [...this.concealed, ...this.secret];
+    const values = [...this.concealed, ...this.secret].flatMap(forms);
     if (!values.length) return;
     let run: Element[] = [];
     const flush = (): void => {
@@ -519,7 +474,8 @@ export class ObservedPrivacy {
           const boxes = window.map((element) => element.label!.trim());
           if (!values.some((value) => value.includes(boxes.join('')))) continue;
           const key = window.map((element) => element.ref).join(',');
-          this.contexts.set(`${key}\u0000${boxes.join('\u0000')}`, { key, boxes });
+          const line = screen.visibleText.slice(0, 40).join(' | ');
+          this.contexts.set(`${key}\u0000${line}`, { key, boxes, line });
           for (const element of window) this.boxElements.add(element);
           break;
         }
@@ -616,7 +572,9 @@ export function modelMask(
   let prefix = 'QAREN_VALUE';
   while (source.some((text) => text.includes(`[${prefix}_`))) prefix += '_';
   const tokens = unique.map((_, i) => `[${prefix}_${i + 1}]`);
-  const replacements = new Map(unique.map((value, i) => [value, tokens[i]]));
+  const replacements = new Map(
+    unique.flatMap((value, i) => forms(value).map((form) => [form, tokens[i]])),
+  );
   const listed = new Set(set.values.map((value) => value.text));
   const all: PrivateSet = {
     ...set,
@@ -635,7 +593,7 @@ export function modelMask(
         value.provenance === 'concealed' ||
         tokenized.has(value.text),
     )
-    .map((value) => value.text)
+    .flatMap((value) => forms(value.text))
     .filter((value) => chars(value) >= SHORT);
   // Tokens already in the text are shielded by digit-free placeholders so no value rule rewrites them.
   const guard = (i: number): string => String.fromCharCode(0xe001, 0xe100 + i, 0xe001);
@@ -648,7 +606,6 @@ export function modelMask(
       all,
       'model',
       (match) => replacements.get(match) ?? replacements.get(match.trim()),
-      tokenized,
     ).text;
     return opaque.reduce((out, token, i) => out.split(guard(i)).join(token), masked);
   };

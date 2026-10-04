@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   MASK,
+  matchPrivate,
   ObservedPrivacy,
   capturePrivateScreen,
   redactEvidence,
@@ -10,50 +11,20 @@ import { describe } from '../../../dist/qa/screen.js';
 import { decideScreen } from '../../../dist/qa/resolve.js';
 import { element, screen, scriptedJudge } from './judgment-fixtures.ts';
 
-test('short codes mask single characters while isolated short substrings stay readable', () => {
+test('free character runs and long fragments stay readable without a retained container', () => {
   const privacy = new ObservedPrivacy();
   privacy.concealFallback('1234');
-  const masked = privacy.redact(
-    'on screen: Enter the code | 1 | 2 | 3 | 4 | 12 | 34 | Verify | 56 | 9',
-  );
-  assert.equal(
-    masked,
-    `on screen: Enter the code | ${MASK} | ${MASK} | ${MASK} | ${MASK} | 12 | 34 | Verify | 56 | 9`,
-  );
-  assert.match(masked, /Enter the code/);
-  assert.match(masked, /Verify/);
-  assert.match(masked, /\| 56 \|/);
-  assert.match(masked, /\| 9$/);
-  assert.ok(masked.includes(MASK));
+  privacy.concealFallback('existing-secret');
+  for (const text of ['1 | 2 | 3 | 4', 'last boxes 3 4.', 'secr', 'existing', 'step 4 of 5']) {
+    assert.equal(privacy.redact(text), text);
+    assert.equal(privacy.maskForModel([], []).apply(text), text);
+  }
+  assert.equal(privacy.redact('existing-secret'), MASK);
 });
 
-test('a lone single character is not masked by itself; adjacent boxes still are', () => {
-  const privacy = new ObservedPrivacy();
-  privacy.concealFallback('1234');
-  assert.equal(privacy.redact('3. Tap "qa-otp-verify"'), '3. Tap "qa-otp-verify"');
-  assert.equal(privacy.redact('step 4 of 5'), 'step 4 of 5');
-  assert.equal(
-    privacy.redact('on screen: Enter the code | 1 | 2 | 3 | 4 | Verify'),
-    `on screen: Enter the code | ${MASK} | ${MASK} | ${MASK} | ${MASK} | Verify`,
-  );
-});
-
-test('substring masking applies only to protected values, not ordinary typed text', () => {
+test('ordinary typed fragments remain readable while the whole value is masked', () => {
   const privacy = new ObservedPrivacy(['Ada']);
-  assert.equal(
-    privacy.redact('on screen: a | d | Ada Lovelace'),
-    'on screen: a | d | ••• Lovelace',
-  );
-});
-
-test('a protected fragment with trailing punctuation is still masked; identifiers stay whole', () => {
-  const privacy = new ObservedPrivacy();
-  privacy.concealFallback('1234');
-  privacy.concealFallback('qa@example.test');
-  assert.equal(
-    privacy.redact('last boxes 3 4. near qa-hidden-email'),
-    'last boxes ••• ••• near qa-hidden-email',
-  );
+  assert.equal(privacy.redact('on screen: a | d | Ada Lovelace'), `on screen: a | d | ${MASK} Lovelace`);
 });
 
 for (const origin of ['fallback', 'private observation'] as const) {
@@ -135,18 +106,8 @@ test('outbound masking preserves whole-value equality and ordinary typed fragmen
     privacy
       .maskForModel(['Ada', '1234'], [])
       .apply('3 4. | qa-hidden-email | qa-hidden_email | qa.hidden | qa@example.test-extra'),
-    `${MASK} ${MASK} | qa-hidden-email | qa-hidden_email | qa.hidden | ${MASK}`,
+    `3 4. | qa-hidden-email | qa-hidden_email | qa.hidden | ${MASK}`,
   );
-});
-
-test('long secrets preserve isolated short substrings and mask long fragments at every boundary', () => {
-  const privacy = new ObservedPrivacy();
-  privacy.concealFallback('existing-secret');
-  const text =
-    'The name field is filled | e | exi | existing | secr | prefix-existing-secret-suffix';
-  const expected = `The name field is filled | e | exi | ${MASK} | ${MASK} | ${MASK}`;
-  assert.equal(privacy.redact(text), expected);
-  assert.equal(privacy.maskForModel([], [text]).apply(text), expected);
 });
 
 test('adjacent character boxes from long secrets are masked in reports and model projections', () => {
@@ -154,7 +115,7 @@ test('adjacent character boxes from long secrets are masked in reports and model
   privacy.concealFallback('existing-secret');
   assert.equal(
     privacy.redact('Boxes: e | x | i | s | q'),
-    `Boxes: ${MASK} | ${MASK} | ${MASK} | ${MASK} | q`,
+    'Boxes: e | x | i | s | q',
   );
   const boxes = ['e', 'x', 'i', 's'].map((char) => element(`@${char}`, char, { kind: 'text' }));
   const observed = screen([
@@ -166,7 +127,7 @@ test('adjacent character boxes from long secrets are masked in reports and model
   const mask = privacy.maskForModel([], observed.visibleText);
   for (const box of boxes) {
     assert.equal(mask.describeElement(box, describe), describe({ ...box, label: MASK }));
-    assert.equal(mask.apply(box.label!), MASK);
+    assert.equal(mask.apply(box.label!), box.label);
   }
   // A box character elsewhere is free text, not the box.
   assert.equal(mask.apply('Text "e"'), 'Text "e"');
@@ -189,7 +150,7 @@ test('protected values inside identifiers are fully masked while exact values re
   assert.equal(privacy.redact('field1 | prefix-existing-secret-suffix'), `${MASK} | ${MASK}`);
 });
 
-test('individual output fields retain the adjacent-box context of the observed screen', () => {
+test('individual output fields do not inherit a container merely by sharing characters', () => {
   const observed = screen(
     ['e', 'x', 'i', 's'].map((label) => element(`@${label}`, label, { kind: 'text' })),
   );
@@ -199,9 +160,9 @@ test('individual output fields retain the adjacent-box context of the observed s
   const privacy = new ObservedPrivacy();
   privacy.observe(observed);
   for (const label of observed.visibleText) {
-    assert.equal(privacy.redact(label), MASK);
-    assert.equal(redactEvidence(observed, label), MASK);
-    assert.equal(privacy.maskForModel([], []).apply(label), MASK);
+    assert.equal(privacy.redact(label), label);
+    assert.equal(redactEvidence(observed, label), label);
+    assert.equal(privacy.maskForModel([], []).apply(label), label);
   }
   assert.equal(privacy.redact('The name field is filled'), 'The name field is filled');
 });
@@ -225,9 +186,7 @@ test('outbound masking keeps testIDs readable unless they contain a whole long p
 
 for (const [secret, text] of [
   ['1234', '[testID 1234]'],
-  ['1234', '[testID 1 2] | [testID 3 4]'],
   ['42', 'Echo: [testID 42]'],
-  ['existing-secret', '[testID secr]'],
 ]) {
   test(`marker-looking free text is masked for ${secret}`, async () => {
     const privacy = new ObservedPrivacy();
@@ -280,10 +239,13 @@ test('box context is retained across observations and only ever masks the box li
   privacy.observe(boxes);
   privacy.observe(screen([element('@done', 'Step 1 of 2', { kind: 'text' })]));
   assert.equal(
-    privacy.redact('previously on screen: 4 | 8 | 1 | 5'),
-    `previously on screen: ${MASK} | ${MASK} | ${MASK} | ${MASK}`,
+    privacy.redact('previously on screen: Enter the code | 4 | 8 | 1 | 5'),
+    `previously on screen: Enter the code | ${MASK} | ${MASK} | ${MASK} | ${MASK}`,
   );
-  assert.equal(privacy.redact('8'), MASK);
+  assert.equal(privacy.redact('8'), '8');
+  assert.equal(privacy.redact('4 | 8'), '4 | 8');
+  assert.equal(privacy.maskForModel([], []).apply('8'), '8');
+  assert.equal(privacy.maskForModel([], []).apply('4 | 8'), '4 | 8');
   assert.equal(privacy.redact('Step 1 of 2'), 'Step 1 of 2');
   assert.equal(privacy.redact('line 4: tap 1'), 'line 4: tap 1');
   const set = privacy.privateSet();
@@ -326,4 +288,17 @@ test('opaque model tokens survive a short protected digit value equal to their p
   const mask = privacy.maskForModel(values, []);
   const text = mask.tokens.join(' ');
   assert.equal(mask.apply(text), text);
+});
+
+test('trimmed normalized forms protect all shared policies', () => {
+  const privacy = new ObservedPrivacy();
+  privacy.concealFallback(' Café ');
+  for (const value of ['Café', 'Cafe\u0301', ' Café ', ' Cafe\u0301 ']) {
+    const text = `confirmation: ${value}`;
+    assert.equal(privacy.redact(text).includes(value.trim()), false);
+    assert.equal(privacy.maskForModel([], []).apply(text).includes(value.trim()), false);
+    assert.equal(matchPrivate(text, privacy.privateSet(), 'persisted').hit, true);
+    const input = element('@normalized', 'Name', { testID: value.trim() });
+    assert.equal(privacy.maskForModel([], []).describeElement(input, describe), 'Button \"Name\" [testID •••]');
+  }
 });
