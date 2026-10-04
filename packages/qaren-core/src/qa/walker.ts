@@ -1540,8 +1540,14 @@ export async function runPlan(
     // Saved after the last block, so an earlier block cannot keep a value a later fill made private.
     const pending: { index: number; write: () => BlockResult }[] = [];
     // The slug stays the operational file name (blocksWritten); a display copy that hits is withheld whole.
-    const display = (slug: string): string =>
-      matchPrivate(slug, privacy.privateSet(), 'identifier').hit ? MASK : slug;
+    const display = (slug: string): string => {
+      const values = privacy.privateSet();
+      const origins = deps.login?.block ? [...blocks, deps.login.block] : blocks;
+      const privateTitle = origins.some(
+        (block) => block.slug === slug && matchPrivate(block.title, values, 'identifier').hit,
+      );
+      return privateTitle || matchPrivate(slug, values, 'identifier').hit ? MASK : slug;
+    };
     const unprotected = (value: string): boolean =>
       !matchPrivate(value, privacy.privateSet(), 'persisted').hit;
     const finish = (outcome?: WalkOutcome): WalkResult => {

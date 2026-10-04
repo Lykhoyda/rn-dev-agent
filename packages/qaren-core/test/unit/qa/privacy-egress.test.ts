@@ -523,3 +523,39 @@ test('equivalent normalized planned values keep phrase assertions and visibility
     assert.deepEqual(fixture.actions, []);
   }
 });
+
+test('final ledger withholds normalized and hashed slugs from private block titles', async () => {
+  const value = 'Alice@Example.com';
+  for (const title of [value, `Account ${value}`, `${'Account overview '.repeat(15)}${value}`]) {
+    for (const check of ['Ready', 'Missing']) {
+      const blocks = parsePlan(
+        `### ${title}\n✓ "${check}"\n### Fill later\n1. Type "${value}" into "missing"`,
+      ).blocks;
+      assert.ok(blocks);
+      const slug = blocks[0].slug;
+      const fixture = walker(
+        [view([text('@ready', 'Ready')])],
+        scriptedJudge(() => assert.fail('literal checks need no model')),
+      );
+      const ledger = await runPlan(blocks, fixture.deps);
+      assert.equal(ledger.blocks[0].outcome, check === 'Ready' ? 'pass' : 'fail');
+      assert.equal(ledger.blocks[0].key, '•••');
+      assert.equal(ledger.steps[0].block, '•••');
+      assert.equal(JSON.stringify(ledger).includes(slug), false);
+      assert.equal(JSON.stringify(ledger).includes('alice-example-com'), false);
+      assert.equal(blocks[0].slug, slug);
+      assert.equal(blocks[0].title, title);
+    }
+  }
+  const blocks = parsePlan(
+    `### Account overview\n✓ "Ready"\n### Fill later\n1. Type "${value}" into "missing"`,
+  ).blocks;
+  assert.ok(blocks);
+  const fixture = walker(
+    [view([text('@ready', 'Ready')])],
+    scriptedJudge(() => assert.fail('literal checks need no model')),
+  );
+  const ledger = await runPlan(blocks, fixture.deps);
+  assert.equal(ledger.blocks[0].key, 'account-overview');
+  assert.equal(ledger.steps[0].block, 'account-overview');
+});
