@@ -604,7 +604,7 @@ export const INJECTED_HELPERS = `
       slot.timer = setTimeout(function() { releaseQaCapture(slot); }, 1500);
       var tree = getTree({ interactiveOnly: true, semanticEvidence: true, typographyEvidence: typography === true }, slot.capture);
       if (slot.capture.renderError === true) {
-        var terminal = { v: 1, id: slot.id, state: 'ready', tree: JSON.stringify({ warning: 'APP_HAS_REDBOX' }) };
+        var terminal = { v: 1, id: slot.id, state: 'refused', reason: 'render-error' };
         releaseQaCapture(slot);
         return terminal;
       }

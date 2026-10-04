@@ -12,9 +12,10 @@ function completion(value: unknown, id?: string): Record<string, unknown> {
     typeof value.id !== 'string' ||
     !/^[a-f0-9]{1,64}$/.test(value.id) ||
     (id !== undefined && value.id !== id) ||
-    (value.state !== 'pending' && value.state !== 'ready') ||
-    Object.keys(value).some((key) => !['v', 'id', 'state', 'tree'].includes(key)) ||
-    (value.state === 'pending' && value.tree !== undefined)
+    (value.state !== 'pending' && value.state !== 'ready' && value.state !== 'refused') ||
+    Object.keys(value).some((key) => !['v', 'id', 'state', 'tree', 'reason'].includes(key)) ||
+    (value.state !== 'ready' && value.tree !== undefined) ||
+    (value.state === 'refused') !== (value.reason === 'render-error')
   ) {
     throw new PrivateInputCaptureError();
   }
@@ -24,7 +25,6 @@ function completion(value: unknown, id?: string): Record<string, unknown> {
 function publicObservation(tree: unknown): ReactObservation {
   if (typeof tree !== 'string' || tree.length > 999999) throw new PrivateInputCaptureError();
   const value: unknown = JSON.parse(tree);
-  if (isRecord(value) && value.warning === 'APP_HAS_REDBOX') return { renderError: true };
   if (
     !isRecord(value) ||
     !Array.isArray(value.interactive) ||
@@ -150,7 +150,9 @@ export async function captureQaReact(
           );
           remaining();
         }
-        const observation = publicObservation(current.tree);
+        // The producer's fixed render-error refusal carries no tree and no input values.
+        const observation =
+          current.state === 'refused' ? { renderError: true } : publicObservation(current.tree);
         remaining();
         return observation;
       }),

@@ -612,15 +612,7 @@ test('the hidden digest fact survives capture and a malformed one refuses', asyn
 test('a QA render-error observation survives capture without exporting private helper fields', async () => {
   const observation = await captureQaReact({
     async withPrivateHelperWorld(read) {
-      return read(async () => ({
-        v: 1,
-        id,
-        state: 'ready',
-        tree: JSON.stringify({
-          warning: 'APP_HAS_REDBOX',
-          message: sentinel,
-        }),
-      }));
+      return read(async () => ({ v: 1, id, state: 'refused', reason: 'render-error' }));
     },
   });
   assert.deepEqual(observation, { renderError: true });
@@ -650,5 +642,25 @@ test('the injected producer reports a render error in literal and phrase capture
       typography,
     );
     assert.deepEqual(observation, { renderError: true });
+  }
+});
+
+test('only the fixed render-error refusal maps to a render error; other refusal shapes fail closed', async () => {
+  for (const reply of [
+    { v: 1, id, state: 'refused' },
+    { v: 1, id, state: 'refused', reason: 'other' },
+    { v: 1, id, state: 'refused', reason: 'render-error', tree: '{}' },
+    { v: 1, id, state: 'ready', reason: 'render-error', tree: '{}' },
+    { v: 1, id, state: 'ready', tree: JSON.stringify({ warning: 'APP_HAS_REDBOX' }) },
+  ]) {
+    await assert.rejects(
+      captureQaReact({
+        async withPrivateHelperWorld(read) {
+          return read(async () => reply);
+        },
+      }),
+      PrivateInputCaptureError,
+      JSON.stringify(reply),
+    );
   }
 });

@@ -567,6 +567,7 @@ test('private captures retain fixed refusals for data-named error overlays', () 
     fixture.root.current = overlay;
     const capture = fixture.api.beginQaCapture();
     assert.equal(capture.state, 'refused');
+    assert.equal(capture.reason, 'render-error');
     assertNoInputs(capture, 'overlay-private');
     assert.equal(capture.tree, undefined);
   }
