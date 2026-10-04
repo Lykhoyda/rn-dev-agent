@@ -67,7 +67,7 @@ pub struct Ledger {
         deserialize_with = "passive"
     )]
     pub video_publication: Option<crate::record::VideoPublication>,
-    // Epoch ms at which the walk proved the app's bundle; earlier recorded frames are never published.
+    // Epoch ms at which the walk proved the app's bundle and cleared its dev overlays; earlier recorded frames are never published.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admitted_at_ms: Option<u64>,
     #[serde(default)]

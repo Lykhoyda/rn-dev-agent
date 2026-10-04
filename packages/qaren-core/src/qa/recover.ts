@@ -19,7 +19,7 @@ export interface RecoverDeps {
 }
 
 export type Recovery =
-  | { handled: 'dialog' | 'dev-menu' | 'login' }
+  | { handled: 'dialog' | 'dev-menu' | 'dev-fab' | 'login' }
   | { fail: string }
   | { refuse: { code: string; message: string } };
 
@@ -37,10 +37,10 @@ export async function recover(
           fail: `the system dialog in front could not be accepted: ${accepted.error ?? 'not dispatched'}`,
         };
   }
-  if (screen.front === 'dev-menu') {
+  if (screen.front === 'dev-menu' || screen.front === 'dev-fab') {
     const hidden = await deps.hideDevMenu();
     return hidden.ok && hidden.executed !== false
-      ? { handled: 'dev-menu' }
+      ? { handled: screen.front }
       : { fail: `the dev menu in front could not be hidden: ${hidden.error ?? 'not dispatched'}` };
   }
   if (!deps.replayLogin || !marker || !loginWall(screen, marker)) return undefined;

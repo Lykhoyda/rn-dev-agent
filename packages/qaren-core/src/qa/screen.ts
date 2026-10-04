@@ -52,7 +52,7 @@ export interface Element {
   };
 }
 
-export type Front = 'app' | 'dev-menu' | 'picker' | 'dialog';
+export type Front = 'app' | 'dev-menu' | 'dev-fab' | 'picker' | 'dialog';
 
 export interface Screen {
   renderError?: boolean;
@@ -1034,6 +1034,43 @@ export function frontFromSurface(surface: string | undefined, nodes: NativeNode[
     case 'first_run_tutorial':
       return 'picker';
     default:
-      return 'app';
+      return devFabWindow(nodes) ? 'dev-fab' : 'app';
   }
+}
+
+const DEV_FAB_MAX_PT = 96;
+const NOT_DEV_FAB_CONTENT = new Set([
+  'Keyboard',
+  'Key',
+  'TextField',
+  'SecureTextField',
+  'TextView',
+  'SearchField',
+]);
+
+// Expo's floating dev-menu button: an extra Window whose only content is one small pill (value-free).
+function devFabWindow(nodes: NativeNode[]): boolean {
+  const windows = new Set(nodes.flatMap((node, i) => (node.type === 'Window' ? [i] : [])));
+  if (windows.size < 2) return false;
+  const content = new Map<number, { x0: number; y0: number; x1: number; y1: number } | null>();
+  nodes.forEach((node) => {
+    if (node.type === 'Window' || node.type === 'Other') return;
+    let window = node.parentIndex;
+    for (let hops = 0; window !== undefined && !windows.has(window) && hops < nodes.length; hops++)
+      window = nodes[window]?.parentIndex;
+    if (window === undefined || !windows.has(window) || content.get(window) === null) return;
+    const r = node.rect;
+    if (NOT_DEV_FAB_CONTENT.has(node.type ?? '') || !r) return void content.set(window, null);
+    if (!(r.width > 0) || !(r.height > 0)) return;
+    const box = content.get(window);
+    content.set(window, {
+      x0: Math.min(box?.x0 ?? r.x, r.x),
+      y0: Math.min(box?.y0 ?? r.y, r.y),
+      x1: Math.max(box?.x1 ?? r.x + r.width, r.x + r.width),
+      y1: Math.max(box?.y1 ?? r.y + r.height, r.y + r.height),
+    });
+  });
+  return [...content.values()].some(
+    (box) => !!box && box.x1 - box.x0 <= DEV_FAB_MAX_PT && box.y1 - box.y0 <= DEV_FAB_MAX_PT,
+  );
 }

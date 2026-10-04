@@ -4,7 +4,11 @@ import { parseArgs } from 'node:util';
 import { CDPClient } from '../cdp-client.js';
 import { waitForExactPortTargets } from '../cdp/discovery.js';
 import { REACT_READY_POLL_MS, REACT_READY_TIMEOUT_MS } from '../cdp/setup.js';
-import { createDevSettingsHandler, WALK_DEV_SETTINGS } from '../handlers/dev-settings.js';
+import {
+  clearDevOverlays,
+  createDevSettingsHandler,
+  recoverDevOverlays,
+} from '../handlers/dev-settings.js';
 import {
   cdpClientOrNull,
   createDeviceBackHandler,
@@ -28,10 +32,12 @@ import { HandlerError, adapt, describeError, secureMaskedFill, unwrap } from './
 import {
   AppProcessGoneError,
   captureScreen,
+  nativeCaptureCoverage,
   postAdmissionSnapshots,
   type NativeObservation,
 } from './capture.js';
 import { captureQaReact } from './react-capture.js';
+import { frontFromSurface } from './screen.js';
 import type { LedgerRow } from './ledger.js';
 import { parsePlanWithJev, readPreparedPlan } from './plan.js';
 import { createJev } from './jev.js';
@@ -152,7 +158,7 @@ function compileOnly(args: string[]): Promise<never> {
 interface Session {
   deps: WalkerDeps;
   close(): Promise<void>;
-  // Epoch ms of the bundle proof; recorded frames before it are never published.
+  // Epoch ms once the bundle is proven and dev overlays are cleared; earlier frames are never published.
   admittedAtMs: number;
 }
 
@@ -336,7 +342,6 @@ async function openSession(
     await close();
     throw new HandlerError(proof.code, proof.message);
   }
-  const admittedAtMs = Date.now();
   const admittedSnapshots = postAdmissionSnapshots(snapshot, appId);
   await cancelled();
   log(
@@ -378,13 +383,20 @@ async function openSession(
         appId,
       ),
   });
-  for (const action of WALK_DEV_SETTINGS) {
-    try {
-      unwrap(await devSettings({ action }));
-    } catch (error) {
-      log(`${action}: ${describeError(error).message}`);
-    }
+  const devFab = async (): Promise<boolean> => {
+    const native = await rawSnapshot();
+    return (
+      nativeCaptureCoverage(native) !== 'complete' ||
+      frontFromSurface(native.surface, native.nodes ?? []) === 'dev-fab'
+    );
+  };
+  try {
+    unwrap(await clearDevOverlays({ devSettings, devFab, cancelled, log }));
+  } catch (error) {
+    await close();
+    throw error;
   }
+  const admittedAtMs = Date.now();
   await cancelled();
 
   const press = createDevicePressHandler(getClient);
@@ -447,7 +459,19 @@ async function openSession(
     now,
     cancelled: () => stop.stopping,
     diagnostic: (event) => log(`timing ${JSON.stringify(event)}`),
-    hideDevMenu: () => act(() => devSettings({ action: 'hideDevMenu' }), false),
+    hideDevMenu: () =>
+      act(
+        () =>
+          recoverDevOverlays({
+            devSettings,
+            devFab,
+            log,
+            async cancelled() {
+              if (stop.stopping) throw new HandlerError('RUN_CANCELLED', 'the run is stopping');
+            },
+          }),
+        false,
+      ),
     ...(login ? { login } : {}),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     row: emitRow,

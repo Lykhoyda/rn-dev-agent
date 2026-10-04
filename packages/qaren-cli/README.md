@@ -354,8 +354,9 @@ Before each iOS launch, `prepare` writes the app's Expo dev-menu preferences wit
 at launch, onboarding finished. A failed write is recorded as
 `dev_menu_defaults: unconfirmed` and the launch continues. At walk start the core
 also hides the floating button through Expo's `DevMenuPreferences` module and
-reads the setting back; apps without that module are unaffected, and an
-unconfirmed hide is logged as `DEV_MENU_HIDE_UNVERIFIED` without stopping the walk.
+reads the setting back; apps without that module are unaffected. A native
+snapshot then confirms the button is gone. An unconfirmed hide or a button still
+on screen refuses the walk with `DEV_MENU_HIDE_UNVERIFIED` before the first step.
 
 ### iOS admission and cleanup
 
@@ -592,8 +593,8 @@ screen is recorded from just before the walk to just after it and encoded to
 start, the run continues and the receipt's `video` outcome says why. The local
 recording stays complete; `qaren publish` uploads only
 `media/video-published.mp4`, a copy that starts when the walk proved the app's
-bundle, so launcher, server-picker and relaunch frames before admission never
-reach the pull request. Without an admission time or a successful trim, or when
+bundle and cleared its dev overlays, so launcher, server-picker, relaunch and
+dev-menu button frames before admission never reach the pull request. Without an admission time or a successful trim, or when
 an app process change or launcher/server-picker fallback is observed after
 admission, no video is uploaded. Blocks the
 walk saved are copied to `blocks/` before the worktree is removed. If the pull

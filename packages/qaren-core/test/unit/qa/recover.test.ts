@@ -109,3 +109,22 @@ test('a plain app screen recovers nothing', async () => {
   assert.equal(await recover(screen('app'), d.deps, { id: 'login' }), undefined);
   assert.deepEqual(d.calls, []);
 });
+
+test('the floating dev-menu button in front re-runs the dev-overlay clearing', async () => {
+  const d = deps();
+  assert.deepEqual(await recover(screen('dev-fab'), d.deps), { handled: 'dev-fab' });
+  assert.deepEqual(d.calls, ['hideDevMenu']);
+});
+
+test('a floating dev-menu button that stays fails with the reason', async () => {
+  const d = deps({
+    hideDevMenu: async () => ({
+      ok: false,
+      proven: false,
+      error: 'DEV_MENU_HIDE_UNVERIFIED: still on screen',
+    }),
+  });
+  assert.deepEqual(await recover(screen('dev-fab'), d.deps), {
+    fail: 'the dev menu in front could not be hidden: DEV_MENU_HIDE_UNVERIFIED: still on screen',
+  });
+});

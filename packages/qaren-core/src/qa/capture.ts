@@ -368,7 +368,7 @@ function presenceCauses(
   ];
 }
 
-function nativeCaptureCoverage(observation: NativeObservation): Coverage['native'] {
+export function nativeCaptureCoverage(observation: NativeObservation): Coverage['native'] {
   const verdict = isRecord(observation.snapshotVerdict) ? observation.snapshotVerdict : undefined;
   if (nativeIncompleteCauses(observation).length > 0) return 'incomplete';
   return Array.isArray(observation.nodes) &&
