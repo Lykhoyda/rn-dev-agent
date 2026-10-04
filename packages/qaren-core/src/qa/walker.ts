@@ -30,7 +30,7 @@ import {
 } from './blocks.js';
 import { type Judge, type JevCall, JevError, unavailableJudge } from './questions.js';
 import { type LoginMarker, recover } from './recover.js';
-import { isPrivateInput, maskInputs, ObservedPrivacy } from './privacy.js';
+import { isPrivateInput, MASK, maskInputs, ObservedPrivacy } from './privacy.js';
 import { NativeSnapshotIncomplete, PrivateInputCaptureError } from './private-input.js';
 import { AppProcessGoneError, emitCaptureDiagnostics, NativeCaptureError } from './capture.js';
 import { QaDispatchContext, QaDispatchError } from '../domain/qa-dispatch.js';
@@ -503,7 +503,7 @@ export async function walkBlock(
     }
     const timed = timing ? { ...row, timing } : row;
     rows.push(timed);
-    deps.row({ ...timed, block: privacy.redactIdentifier(timed.block) });
+    deps.row(valueFree(timed));
   };
   const redact = (text: string): string => privacy.redact(text);
   // A stored selector is written to the action file, so it must not carry a protected value.
@@ -1389,6 +1389,23 @@ class RenderError extends Error {
   }
 }
 
+// The streamed row channel cannot be retracted, so it carries no text, reason, selector or identifier.
+function valueFree(row: LedgerRow): LedgerRow {
+  const { line, attempt, kind, resolvedBy, t, outcome, screenshot, timing } = row;
+  return {
+    block: '',
+    line,
+    text: '',
+    attempt,
+    kind,
+    resolvedBy,
+    t,
+    outcome,
+    ...(screenshot ? { screenshot } : {}),
+    ...(timing ? { timing } : {}),
+  };
+}
+
 const processChanged = (): ResolutionError =>
   new ResolutionError({
     refuse: 'APP_PROCESS_CHANGED',
@@ -1498,6 +1515,9 @@ export async function runPlan(
     );
     const planTyped = typed.length;
     const privacy = new ObservedPrivacy(typed);
+    privacy.classify(
+      deps.login?.block?.items.flatMap((i) => (i.kind === 'fill' ? [i.text] : [])) ?? [],
+    );
     let recoveries = 0;
     // A login replay adds its own fills to `typed`.
     const videoPublication = (): NonNullable<WalkResult['videoPublication']> =>
@@ -1522,16 +1542,21 @@ export async function runPlan(
           : 'walk';
     // Saved after the last block, so an earlier block cannot keep a value a later fill made private.
     const pending: { index: number; write: () => BlockResult }[] = [];
+    // The slug stays the operational file name (blocksWritten); a display copy that hits is withheld whole.
+    const display = (slug: string): string =>
+      privacy.redactIdentifier(slug) === slug ? slug : MASK;
+    const unprotected = (value: string): boolean => privacy.redact(value) === value;
     const finish = (outcome?: WalkOutcome): WalkResult => {
       for (const { index, write } of pending.splice(0)) results[index] = write();
       const ledger: WalkResult = {
         ...buildLedger(
-          results.map((result) => ({ ...result, key: privacy.redactIdentifier(result.key) })),
-          steps.map((row) => ({
+          results.map((result) => ({ ...result, key: display(result.key) })),
+          steps.map(({ selector, ...row }) => ({
             ...row,
-            block: privacy.redactIdentifier(row.block),
+            block: display(row.block),
             text: privacy.redact(row.text),
             ...(row.reason !== undefined ? { reason: privacy.redact(row.reason) } : {}),
+            ...(selector && unprotected(selector.id ?? selector.text ?? '') ? { selector } : {}),
           })),
           outcome?.failure
             ? { ...outcome.failure, seen: privacy.redact(outcome.failure.seen) }
@@ -1585,7 +1610,7 @@ export async function runPlan(
     ): BlockResult => {
       const result = withPrivateFills({ key: block.slug, outcome: 'pass', source }, privateFills);
       if (result.saved === false) return result;
-      const serialized = serializeBlock(block, rows, store, privacy.protectedValues());
+      const serialized = serializeBlock(block, rows, store, privacy.privateSet());
       if ('unsavable' in serialized)
         return { ...result, saved: false, unsavable: serialized.unsavable };
       try {

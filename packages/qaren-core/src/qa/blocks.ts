@@ -24,7 +24,7 @@ import { atomicWriter } from '../domain/atomic-writer.js';
 import type { Block, Item } from './plan.js';
 import { normalizedSlug } from './plan.js';
 import type { LedgerRow, Selector } from './ledger.js';
-import { modelMask } from './privacy.js';
+import { type PrivateSet, matchPrivate } from './privacy.js';
 
 export type BlockPlatform = 'ios' | 'android';
 
@@ -93,22 +93,10 @@ export function serializeBlock(
   block: Block,
   rows: readonly LedgerRow[],
   meta: { appId: string; platform: BlockPlatform },
-  protectedValues: readonly string[] = [],
+  privateSet: PrivateSet = { values: [] },
 ): { yaml: string } | { unsavable: string } {
-  const source = [
-    meta.appId,
-    block.slug,
-    block.title,
-    block.planHash,
-    ...block.items.flatMap((item) => [
-      item.raw,
-      ...(item.kind === 'fill' || (item.kind === 'check' && item.literal) ? [item.text] : []),
-    ]),
-    ...rows.flatMap((row) => [row.selector?.id ?? row.selector?.text ?? '']),
-  ];
-  const mask = modelMask(protectedValues, source, new Set(protectedValues));
   const protectedContent = (texts: string[]): boolean =>
-    texts.some((text) => mask.apply(text) !== text);
+    texts.some((text) => matchPrivate(text, privateSet, 'persisted').hit);
   const withheld = { unsavable: 'contains a protected plan-typed value' };
   if (protectedContent([meta.appId, block.slug, block.title, block.planHash])) return withheld;
   const lines = [

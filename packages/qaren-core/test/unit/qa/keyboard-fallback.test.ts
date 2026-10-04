@@ -207,7 +207,7 @@ test('U8: a field the snapshot cannot see is tapped, typed once, marked unverifi
   assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
   assert.deepEqual(steps(fake.log), ['press @wrap', 'type @wrap', 'press @submit']);
   assert.deepEqual(fake.typed, [{ ref: '@wrap', text: EMAIL, testID: 'qa-hidden-email' }]);
-  const fill = fake.rows[0];
+  const fill = outcome.rows[0];
   assert.equal(fill.outcome, 'pass');
   assert.equal(fill.screenshot, undefined);
   assert.equal(fill.selector, undefined);
@@ -301,7 +301,7 @@ test('U9: a React-confirmed append is still recorded as unverified and private',
   const fake = app({ type: { ok: true, proven: true } });
   const outcome = await walkBlock(blocks(plan())[0], fake.deps);
   assert.equal(outcome.block.outcome, 'pass');
-  assert.match(fake.rows[0].reason ?? '', /^UNVERIFIED_FILL: /);
+  assert.match(outcome.rows[0].reason ?? '', /^UNVERIFIED_FILL: /);
   assert.deepEqual(outcome.privateFills, [fake.rows[0].line]);
 });
 
@@ -349,9 +349,9 @@ test('U6: an input that appears after the tap takes the strict verified fill pat
   const outcome = await walkBlock(blocks(plan())[0], fake.deps);
   assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
   assert.deepEqual(steps(fake.log), ['press @wrap', 'fill @input', 'press @submit']);
-  assert.equal(fake.rows[0].reason, undefined);
-  assert.equal(fake.rows[0].ref, '@input');
-  assert.deepEqual(fake.rows[0].selector, { id: 'qa-hidden-email' });
+  assert.equal(outcome.rows[0].reason, undefined);
+  assert.equal(outcome.rows[0].ref, '@input');
+  assert.deepEqual(outcome.rows[0].selector, { id: 'qa-hidden-email' });
 });
 
 for (const [name, after, reason] of [
@@ -546,7 +546,7 @@ test('a later private fill withholds earlier fragment titles and masks final ide
   assert.equal(result.blocks[0].key, '•••');
   assert.equal(result.blocks[0].saved, false);
   assert.equal(result.steps[0].block, '•••');
-  assert.equal(fake.rows[0].block, '•••');
+  assert.equal(fake.rows[0].block, '');
   assert.deepEqual(result.blocksWritten, []);
   assert.equal(existsSync(join(dir, '.qaren', 'actions', 'secr.yaml')), false);
   assert.equal(parsed[0].slug, 'secr');
@@ -927,7 +927,7 @@ test('a normalizing controlled fallback continues as unverified', async () => {
   try {
     const result = await walkBlock(blocks(plan())[0], fake.deps);
     assert.equal(result.block.outcome, 'pass');
-    assert.match(fake.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
+    assert.match(result.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
     assert.equal(reads, 1);
     assert.equal(fills, 1);
     assert.equal(fake.state(), 'accepted');
@@ -1006,10 +1006,10 @@ for (const nativeType of ['Other', 'TextField']) {
       assert.equal(nativeFills, nativeType === 'Other' ? 0 : 1);
       assert.equal(fake.typed.length, nativeType === 'Other' ? 1 : 0);
       if (nativeType === 'Other') {
-        assert.match(fake.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
+        assert.match(result.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
         assert.deepEqual(steps(fake.log), ['fill @e1', 'press @wrap', 'type @e1', 'press @submit']);
       } else {
-        assert.equal(fake.rows[0].reason, undefined);
+        assert.equal(result.rows[0].reason, undefined);
         assert.deepEqual(
           steps(fake.log).filter((step) => !step.startsWith('shot')),
           ['fill @e1', 'press @submit'],
@@ -1107,7 +1107,7 @@ for (const reactKnown of [true, false]) {
     assert.deepEqual(steps(fake.log), ['press @wrap', 'type @wrap']);
     assert.deepEqual(fake.typed, [{ ref: '@wrap', text: EMAIL, testID: 'custom-pressable' }]);
     assert.equal(fake.rows[0].outcome, 'pass');
-    assert.match(fake.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
+    assert.match(result.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
   });
 }
 
@@ -1281,7 +1281,7 @@ for (const identity of ['qa-hidden-email', WRAP]) {
         assert.deepEqual(taps, ['@e2', '@submit']);
         assert.equal(fake.typed.length, 1);
         assert.equal(fake.typed[0].ref, '@e2');
-        assert.match(fake.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
+        assert.match(result.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
       } else {
         assert.equal(result.block.outcome, 'fail');
         assert.deepEqual(taps, []);
@@ -1452,7 +1452,7 @@ for (const refusal of ['resolution', 'native binding']) {
         } else {
           assert.equal(fake.typed[0].ref, '@input');
           assert.equal(
-            fake.rows[0].reason?.startsWith('UNVERIFIED_FILL:') ?? false,
+            result.rows[0].reason?.startsWith('UNVERIFIED_FILL:') ?? false,
             kind === 'other',
           );
         }
@@ -1588,7 +1588,7 @@ test('P1: keyboard up with a wrapper types once after the tap when React proves 
   assert.deepEqual(fake.notes, [FOCUS_NOTE('tap', 'focused')]);
   assert.equal(fake.rows[0].outcome, 'pass');
   assert.match(
-    fake.rows[0].reason ?? '',
+    outcome.rows[0].reason ?? '',
     /^UNVERIFIED_FILL: typed with the keyboard into the field React reports focused \("qa-hidden-email"\)/,
   );
   assert.deepEqual(outcome.privateFills, [fake.rows[0].line]);
@@ -1623,7 +1623,7 @@ test('P3: keyboard up with no tappable target types once into the field React re
   assert.deepEqual(fake.focusRequirements, [true]);
   assert.deepEqual(fake.notes, [FOCUS_NOTE('none', 'focused')]);
   assert.match(
-    fake.rows[0].reason ?? '',
+    outcome.rows[0].reason ?? '',
     /^UNVERIFIED_FILL: typed with the keyboard into the field React reports focused \("qa-otp-code"\)/,
   );
   assert.deepEqual(outcome.privateFills, [fake.rows[0].line]);
@@ -1713,7 +1713,7 @@ test('P7: keyboard down keeps the transition path and never reads focus', async 
   assert.deepEqual(fake.focusRequirements, [false]);
   assert.deepEqual(fake.notes, []);
   assert.match(
-    fake.rows[0].reason ?? '',
+    outcome.rows[0].reason ?? '',
     /^UNVERIFIED_FILL: typed with the keyboard after tapping/,
   );
 });

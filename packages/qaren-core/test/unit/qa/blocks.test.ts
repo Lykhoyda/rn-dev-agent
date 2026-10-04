@@ -24,6 +24,11 @@ import {
   writeBlock,
 } from '../../../dist/qa/blocks.js';
 import { parseM7Header } from '../../../dist/domain/reusable-action.js';
+import type { PrivateSet } from '../../../dist/qa/privacy.js';
+
+const secrets = (...values: string[]): PrivateSet => ({
+  values: values.map((text) => ({ text, provenance: 'secret' })),
+});
 
 const literal = readFileSync(new URL('../../fixtures/plans/literal.md', import.meta.url), 'utf8');
 
@@ -68,7 +73,7 @@ test('serialization withholds protected semantic values before YAML escaping', (
     const check = block.items[0];
     assert.equal(check.kind, 'check');
     if (check.kind === 'check') check.text = value;
-    assert.deepEqual(serializeBlock(block, passRows(block, {}), ios, [value]), {
+    assert.deepEqual(serializeBlock(block, passRows(block, {}), ios, secrets(value)), {
       unsavable: 'contains a protected plan-typed value',
     });
     assert.ok('yaml' in serializeBlock(block, passRows(block, {}), ios));
@@ -96,7 +101,7 @@ test('serialization withholds protected fragments in metadata, plan text and sel
       if (field === 'slug') rows.forEach((row) => (row.block = block.slug));
       const before = structuredClone({ block, rows, meta });
       assert.deepEqual(
-        serializeBlock(block, rows, meta, [secret]),
+        serializeBlock(block, rows, meta, secrets(secret)),
         { unsavable: 'contains a protected plan-typed value' },
         `${field}: ${secret}`,
       );
@@ -109,7 +114,7 @@ test('serialization withholds protected fragments in metadata, plan text and sel
 test('serialization admission checks the final emitted YAML', () => {
   const block = blockOf('## QA\n\n### Confirm\n1. Wait for "Saved" to appear\n');
   const rows = passRows(block, { [block.items[0].line]: { text: 'Saved' } });
-  assert.deepEqual(serializeBlock(block, rows, ios, ['15000']), {
+  assert.deepEqual(serializeBlock(block, rows, ios, secrets('15000')), {
     unsavable: 'contains a protected plan-typed value',
   });
   assert.ok('yaml' in serializeBlock(block, rows, ios));
@@ -117,7 +122,7 @@ test('serialization admission checks the final emitted YAML', () => {
 
 test('serialization preserves isolated short fragments of long secrets', () => {
   const block = blockOf('## QA\n\n### is\n✓ "is"\n');
-  assert.ok('yaml' in serializeBlock(block, passRows(block, {}), ios, ['existing-secret']));
+  assert.ok('yaml' in serializeBlock(block, passRows(block, {}), ios, secrets('existing-secret')));
 });
 
 test('plan list numbers that are digits of a protected code do not withhold the block', () => {
@@ -127,7 +132,7 @@ test('plan list numbers that are digits of a protected code do not withhold the 
   const selectors = Object.fromEntries(
     block.items.map((item) => [item.line, { text: item.kind === 'wait' ? 'Enter the code' : 'x' }]),
   );
-  const result = serializeBlock(block, passRows(block, selectors), ios, ['12345']);
+  const result = serializeBlock(block, passRows(block, selectors), ios, secrets('12345'));
   assert.ok('yaml' in result, JSON.stringify(result));
   assert.match(result.yaml, /# 3\. Tap "qa-otp-continue"/);
 });

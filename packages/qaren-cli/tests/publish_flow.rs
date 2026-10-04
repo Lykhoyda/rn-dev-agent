@@ -675,7 +675,7 @@ fn the_raw_plan_is_never_published() {
     );
     let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
     assert!(!body.contains(SECRET), "{body}");
-    assert!(body.contains("- ✗ line 1: \n"), "{body}");
+    assert!(body.contains("- ✗ line 1\n"), "{body}");
 }
 
 #[test]

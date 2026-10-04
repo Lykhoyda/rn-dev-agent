@@ -44,7 +44,7 @@ fn render(
             platform: "ios",
             app_id: "com.rndevagent.testapp",
             device: "qaren-check",
-            plan: "1. Tap \"Tasks\"\n✓ \"Tasks\"\n",
+            plan: "1. Fill \"pin\" with \"hunter-canary-77\"\n✓ \"Tasks\"\n",
             ledger,
         },
         "The Tasks tab does not open: the check on line 2 failed on the simulator at /Users/qa/x.",
@@ -79,6 +79,7 @@ fn the_comment_carries_no_machine_identity_or_internal_vocabulary() {
         "secret",
         "proofReplay",
         "transport",
+        "hunter-canary-77",
     ] {
         assert!(
             !body
@@ -92,11 +93,9 @@ fn the_comment_carries_no_machine_identity_or_internal_vocabulary() {
     );
     assert!(body.contains("Tested: commit `a1b2c3d` on ios\n"), "{body}");
     assert!(body.contains("Video of the walk is attached below."));
-    assert!(body.contains("- ✓ line 1: 1. Tap \"Tasks\"\n"), "{body}");
-    assert!(
-        body.contains("- ✗ line 2: ✓ \"Tasks\" (attempt 2) — "),
-        "{body}"
-    );
+    // Rows carry no projected text here, so only the line is shown; the plan is never read.
+    assert!(body.contains("- ✓ line 1\n"), "{body}");
+    assert!(body.contains("- ✗ line 2 (attempt 2) — "), "{body}");
     assert!(
         body.contains("![Failing step](./screenshots/02.png)"),
         "{body}"

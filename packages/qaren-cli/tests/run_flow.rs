@@ -4197,3 +4197,36 @@ fn login_keys_reach_the_core() {
         serde_json::json!({"id": "login-screen"})
     );
 }
+
+#[test]
+fn a_walk_without_a_result_never_renders_plan_text_into_durable_sinks() {
+    let (repo, app) = app_repo();
+    std::fs::write(
+        app.join("plan.md"),
+        "1. Fill \"pin\" with \"hunter-canary-77\"\n✓ \"Tasks\"\n",
+    )
+    .unwrap();
+    let mut mock = MockRunner::new();
+    script_preflight(&mut mock, &repo);
+    script_provision(&mut mock);
+    let one_row = format!("{}\n", envelope(2, "row", &row(1, "step")));
+    script_drift_status(&mut mock);
+    mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
+    script_core_identity(&mut mock);
+    script_teardown(&mut mock);
+
+    let receipt = run(&mut mock, &request(&repo, &app, 5));
+
+    assert_eq!(receipt.result, ReceiptResult::Fail);
+    let run_dir = repo.join("runs").join(run_id());
+    let report = std::fs::read_to_string(run_dir.join("report.md")).unwrap();
+    let ledger = std::fs::read_to_string(run_dir.join("ledger.json")).unwrap();
+    for sink in [&report, &ledger, &receipt.to_json()] {
+        assert!(!sink.contains("hunter-canary-77"), "{sink}");
+        assert!(!sink.contains("Fill \\\"pin\\\""), "{sink}");
+    }
+    assert!(
+        report.contains("- ✗ line 1\n") || report.contains("- ✓ line 1\n"),
+        "{report}"
+    );
+}

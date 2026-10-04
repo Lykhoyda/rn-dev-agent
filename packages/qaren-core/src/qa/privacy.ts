@@ -1,4 +1,5 @@
 import type { Element, EvidenceStatus, NativeNode, Screen } from './screen.js';
+import { elementFrame } from './screen.js';
 
 export const MASK = '•••';
 
@@ -151,80 +152,173 @@ export function redactEvidence(
   text: string,
   typed: readonly string[] = [],
 ): string {
-  return maskEvidence(
-    text,
-    inputValues(screen, true),
-    typed,
-    new Set(privateScreens.get(screen)?.values),
-    screen.visibleText,
+  const privacy = new ObservedPrivacy(typed);
+  privacy.observe(screen);
+  return privacy.redact(text);
+}
+
+export type Provenance = 'typed' | 'observed' | 'concealed' | 'secret';
+
+export interface PrivateValue {
+  text: string;
+  provenance: Provenance;
+}
+
+// Adjacent single-character boxes that render part of a protected value; the key is structural.
+export interface FragmentContext {
+  key: string;
+  boxes: readonly string[];
+}
+
+export interface PrivateSet {
+  values: readonly PrivateValue[];
+  contexts?: readonly FragmentContext[];
+  boxElements?: WeakSet<Element>;
+}
+
+// model: opaque tokens; durable: masked text; identifier: durable with typed values always masked;
+// persisted: no rewrite, any hit withholds the whole artifact.
+export type Policy = 'model' | 'durable' | 'identifier' | 'persisted';
+
+const WORD = '\\p{L}\\p{M}\\p{N}_';
+const TOKEN = /[\p{L}\p{M}\p{N}_.@-]+/gu;
+const BOX_GAP = /^[\s|,;:"'()[\]]*$/;
+const SHORT = 3;
+const escape = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const coreOf = (token: string): string => token.replace(/^[_.@-]+|[_.@-]+$/g, '');
+const chars = (text: string): number => [...text].length;
+// A short non-secret value matches only between word boundaries.
+const whole = (pattern: string): string => `(?<![${WORD}])${pattern}(?![${WORD}])`;
+
+function forms(value: string): string[] {
+  return [...new Set([value, value.trim(), value.normalize('NFC'), value.normalize('NFD')])].filter(
+    Boolean,
   );
 }
 
-function maskEvidence(
-  text: string,
-  privateValues: readonly string[],
-  typed: readonly string[],
-  substringValues: ReadonlySet<string> = new Set(),
-  source: readonly string[] = [],
-): string {
-  const values = [...new Set([...privateValues, ...typed].filter(Boolean))];
-  const mask = modelMask(
-    values,
-    [text, ...source],
-    new Set([...privateValues, ...substringValues]),
-  );
-  const projected = mask.tokens.reduce(
-    (out, token, i) =>
-      out
-        .split(token)
-        .join(privateValues.includes(values[i]) || values[i].length >= 3 ? MASK : values[i]),
-    mask.apply(text),
-  );
-  return maskProtectedFragments(maskValues(projected, typed), [
-    ...privateValues,
-    ...substringValues,
-  ]);
+// Digits shown with or without grouping separators (`1234 5678 90` for `1234567890`).
+const DIGIT_GAP = '[\\s.\\-\\u00a0\\u202f]';
+function digitForm(value: string): string | undefined {
+  const digits = value.replace(new RegExp(DIGIT_GAP, 'gu'), '');
+  if (!/^\d{4,}$/.test(digits)) return undefined;
+  return `(?<!\\p{N})${[...digits].join(`${DIGIT_GAP}?`)}(?!\\p{N})`;
 }
 
-function maskProtectedFragments(
-  text: string,
-  protectedValues: readonly string[],
-  source: readonly string[] = [],
-  opaqueTokens: readonly string[] = [],
-): string {
-  const values = protectedValues.filter(Boolean);
-  if (!values.length) return text;
-  const pattern = /[\p{L}\p{M}\p{N}_.@-]+/gu;
-  const coreOf = (token: string) => token.replace(/^[_.@-]+|[_.@-]+$/g, '');
-  const boxes = new Set<string>();
-  for (const line of [text, source.join(' | ')]) {
-    const tokens = [...line.matchAll(pattern)];
-    for (let i = 1; i < tokens.length; i++) {
-      const previous = tokens[i - 1];
-      const current = tokens[i];
-      const left = coreOf(previous[0]);
-      const right = coreOf(current[0]);
-      if (
-        [...left].length === 1 &&
-        [...right].length === 1 &&
-        /^[\s|,;:"'()[\]]*$/.test(line.slice(previous.index + previous[0].length, current.index)) &&
-        values.some((value) => value.includes(left + right))
-      ) {
-        boxes.add(left);
-        boxes.add(right);
-      }
+interface Rule {
+  pattern: string;
+  quoted?: true;
+}
+
+// Which form of a value each policy matches: a secret takes its whole token, even echoed inside a
+// word; typed text in durable output masks only when quoted or long; persisted blocks keep typed values.
+function rulesOf(value: PrivateValue, policy: Policy, tokenized: ReadonlySet<string>): Rule[] {
+  return forms(value.text).flatMap((form): Rule[] => {
+    const escaped = escape(form);
+    const exact = { pattern: chars(form) < SHORT ? whole(escaped) : escaped };
+    const token = { pattern: `[${WORD}.@-]*${escaped}[${WORD}.@-]*` };
+    switch (value.provenance) {
+      case 'secret':
+        return [token];
+      case 'concealed':
+        return policy === 'durable' || policy === 'identifier' ? [exact] : [token];
+      case 'typed':
+        if (policy === 'identifier') return [exact];
+        if (policy === 'durable')
+          return [
+            { pattern: `"${escaped}"`, quoted: true },
+            { pattern: `“${escaped}”`, quoted: true },
+            ...(chars(form) < SHORT ? [] : [{ pattern: escaped }]),
+          ];
+        return policy === 'model' && tokenized.has(value.text) ? [exact] : [];
+      case 'observed':
+        return policy === 'model' && tokenized.has(value.text) ? [exact] : [];
     }
-  }
-  return text.replace(pattern, (token) => {
-    if (opaqueTokens.includes(`[${token}]`)) return token;
-    const core = coreOf(token);
-    const length = [...core].length;
-    return core &&
-      (boxes.has(core) ||
-        values.some((value) => core.includes(value) || (value.includes(core) && length >= 4)))
-      ? MASK
-      : token;
   });
+}
+
+function rulesFor(set: PrivateSet, policy: Policy, tokenized: ReadonlySet<string>): Rule[] {
+  return set.values
+    .flatMap((value) => {
+      const rules = rulesOf(value, policy, tokenized);
+      const digits = digitForm(value.text);
+      return rules.length && digits ? [...rules, { pattern: digits }] : rules;
+    })
+    .sort((a, b) => b.pattern.length - a.pattern.length);
+}
+
+function fragmentValues(set: PrivateSet, policy: Policy): string[] {
+  return set.values
+    .filter(
+      (v) =>
+        v.provenance === 'secret' ||
+        v.provenance === 'concealed' ||
+        (policy === 'identifier' && v.provenance === 'typed'),
+    )
+    .map((v) => v.text);
+}
+
+// A box run is >=2 adjacent one-character tokens forming part of a protected value; a lone
+// character is masked only when the whole field is one retained box, never as a free token.
+function maskFragments(text: string, set: PrivateSet, policy: Policy): string {
+  const values = fragmentValues(set, policy);
+  const single = new Set((set.contexts ?? []).flatMap((context) => context.boxes));
+  if (single.has(text.trim())) return MASK;
+  if (!values.length) return text;
+  const tokens = [...text.matchAll(TOKEN)];
+  const masked = new Set<number>();
+  tokens.forEach((token, i) => {
+    const core = coreOf(token[0]);
+    if (chars(core) >= 4 && values.some((value) => value.includes(core))) masked.add(i);
+  });
+  let start = 0;
+  for (let i = 0; i <= tokens.length; i++) {
+    const continues =
+      i < tokens.length &&
+      chars(coreOf(tokens[i][0])) === 1 &&
+      (i === start ||
+        BOX_GAP.test(text.slice(tokens[i - 1].index + tokens[i - 1][0].length, tokens[i].index)));
+    if (continues) continue;
+    for (let a = start; a < i; a++)
+      for (let b = a + 1; b < i; b++) {
+        const run = tokens
+          .slice(a, b + 1)
+          .map((token) => coreOf(token[0]))
+          .join('');
+        if (values.some((value) => value.includes(run))) for (let k = a; k <= b; k++) masked.add(k);
+      }
+    start = i < tokens.length && chars(coreOf(tokens[i][0])) === 1 ? i : i + 1;
+  }
+  if (!masked.size) return text;
+  let out = '';
+  let at = 0;
+  tokens.forEach((token, i) => {
+    if (!masked.has(i)) return;
+    out += text.slice(at, token.index) + MASK;
+    at = token.index + token[0].length;
+  });
+  return out + text.slice(at);
+}
+
+// The one matcher every sink calls; `token` names the opaque replacement of an exact model value.
+export function matchPrivate(
+  text: string,
+  set: PrivateSet,
+  policy: Policy,
+  token?: (value: string) => string | undefined,
+  tokenized: ReadonlySet<string> = new Set(),
+): { text: string; hit: boolean } {
+  const rules = rulesFor(set, policy, tokenized);
+  let out = text;
+  if (rules.length) {
+    const pattern = new RegExp(rules.map((rule) => `(${rule.pattern})`).join('|'), 'gu');
+    out = text.replace(pattern, (match, ...groups) => {
+      const rule = rules[groups.findIndex((group, i) => i < rules.length && group !== undefined)];
+      if (rule?.quoted) return `${match[0]}${MASK}${match[match.length - 1]}`;
+      return token?.(match) ?? MASK;
+    });
+  }
+  out = maskFragments(out, set, policy);
+  return { text: out, hit: out !== text };
 }
 
 const NATIVE_TYPES = new Set([
@@ -391,18 +485,25 @@ export function formatSensitivePixels(
 export class ObservedPrivacy {
   private readonly observed = new Set<string>();
   private readonly concealed = new Set<string>();
-  private readonly substringValues = new Set<string>();
-  private fragmentSource: readonly string[] = [];
+  private readonly secret = new Set<string>();
+  private readonly preclassified: string[] = [];
+  private readonly contexts = new Map<string, FragmentContext>();
+  private readonly boxElements = new WeakSet<Element>();
   private sensitivePixels = false;
 
   constructor(private readonly typed: readonly string[] = []) {}
 
+  // Plan values known before the walk (fills, a configured login block) are typed before anything streams.
+  classify(values: readonly string[]): void {
+    this.preclassified.push(...values.filter(Boolean));
+  }
+
   observe(screen: Screen): void {
-    this.fragmentSource = screen.visibleText;
     this.sensitivePixels ||= privateScreens.get(screen)?.sensitivePixels === true;
-    for (const value of privateScreens.get(screen)?.values ?? []) this.substringValues.add(value);
+    for (const value of privateScreens.get(screen)?.values ?? []) this.secret.add(value);
     for (const value of inputValues(screen)) this.observed.add(value);
     for (const value of inputValues(screen, true)) this.concealed.add(value);
+    this.retainFragments(screen);
     const text = [
       ...screen.visibleText,
       ...screen.elements
@@ -414,10 +515,38 @@ export class ObservedPrivacy {
     );
   }
 
+  // Contexts accumulate across observations: a later screen never releases an earlier box.
+  private retainFragments(screen: Screen): void {
+    const values = [...this.concealed, ...this.secret];
+    if (!values.length) return;
+    let run: Element[] = [];
+    const flush = (): void => {
+      for (let a = 0; a < run.length; a++)
+        for (let b = run.length - 1; b > a; b--) {
+          const window = run.slice(a, b + 1);
+          const boxes = window.map((element) => element.label!.trim());
+          if (!values.some((value) => value.includes(boxes.join('')))) continue;
+          const key = window.map((element) => element.ref).join(',');
+          this.contexts.set(`${key}\u0000${boxes.join('\u0000')}`, { key, boxes });
+          for (const element of window) this.boxElements.add(element);
+          break;
+        }
+      run = [];
+    };
+    for (const element of screen.elements) {
+      const box = !element.offscreen && chars(element.label?.trim() ?? '') === 1;
+      const previous = run[run.length - 1];
+      if (box && previous && !sameRow(previous, element)) flush();
+      if (box) run.push(element);
+      else flush();
+    }
+    flush();
+  }
+
   // A value typed where the screen cannot show us the field: mask it everywhere, even as a substring.
   concealFallback(value: string): void {
     this.concealed.add(value);
-    this.substringValues.add(value);
+    this.secret.add(value);
     this.sensitivePixels = true;
   }
 
@@ -425,41 +554,59 @@ export class ObservedPrivacy {
     return !this.sensitivePixels;
   }
 
-  protectedValues(): string[] {
-    return [...new Set([...this.concealed, ...this.substringValues])];
+  privateSet(): PrivateSet {
+    const tagged = (values: Iterable<string>, provenance: Provenance): PrivateValue[] =>
+      [...new Set(values)].filter(Boolean).map((text) => ({ text, provenance }));
+    return {
+      values: [
+        ...tagged(this.secret, 'secret'),
+        ...tagged(this.concealed, 'concealed'),
+        ...tagged([...this.typed, ...this.preclassified], 'typed'),
+        ...tagged(this.observed, 'observed'),
+      ],
+      contexts: [...this.contexts.values()],
+      boxElements: this.boxElements,
+    };
   }
 
   modelValues(): string[] {
-    return [...this.typed, ...this.observed];
+    return [...this.typed, ...this.preclassified, ...this.observed];
   }
 
   maskForModel(values: readonly string[], source: readonly string[]): ModelMask {
-    return modelMask(
-      values,
-      [...source, ...this.fragmentSource],
-      new Set([...this.concealed, ...this.substringValues]),
-    );
+    return modelMask(values, source, this.privateSet());
   }
 
   redactIdentifier(text: string): string {
-    return maskEvidence(
-      text,
-      [...this.typed, ...this.concealed],
-      [],
-      this.substringValues,
-      this.fragmentSource,
-    );
+    return matchPrivate(text, this.privateSet(), 'identifier').text;
   }
 
   redact(text: string): string {
-    return maskEvidence(
-      text,
-      [...this.concealed],
-      this.typed,
-      this.substringValues,
-      this.fragmentSource,
-    );
+    return matchPrivate(text, this.privateSet(), 'durable').text;
   }
+
+  // A check whose only on-screen evidence for a named character is a protected box cannot be judged.
+  namesProtectedBox(text: string, screen: Screen): boolean {
+    const boxes = screen.elements.filter((element) => this.boxElements.has(element));
+    if (!boxes.length) return false;
+    const named = new Set((text.match(TOKEN) ?? []).map(coreOf));
+    const elsewhere = new Set(
+      screen.elements
+        .filter((element) => !this.boxElements.has(element))
+        .flatMap((element) => (element.label?.match(TOKEN) ?? []).map(coreOf)),
+    );
+    return boxes.some((box) => {
+      const char = box.label!.trim();
+      return named.has(char) && !elsewhere.has(char);
+    });
+  }
+}
+
+function sameRow(a: Element, b: Element): boolean {
+  const x = elementFrame(a);
+  const y = elementFrame(b);
+  if (!x || !y) return true;
+  return Math.abs(x.y + x.height / 2 - (y.y + y.height / 2)) <= Math.max(x.height, y.height) / 2;
 }
 
 export interface ModelMask {
@@ -471,41 +618,55 @@ export interface ModelMask {
 export function modelMask(
   values: readonly string[],
   source: readonly string[],
-  substringValues: ReadonlySet<string> = new Set(),
+  set: PrivateSet = { values: [] },
 ): ModelMask {
   const unique = [...new Set(values.filter(Boolean))];
   let prefix = 'QAREN_VALUE';
   while (source.some((text) => text.includes(`[${prefix}_`))) prefix += '_';
   const tokens = unique.map((_, i) => `[${prefix}_${i + 1}]`);
   const replacements = new Map(unique.map((value, i) => [value, tokens[i]]));
-  const alternatives = unique
-    .sort((a, b) => b.length - a.length)
-    .map((value) => {
-      const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return substringValues.has(value)
-        ? `[\\p{L}\\p{M}\\p{N}_.@-]*${escaped}[\\p{L}\\p{M}\\p{N}_.@-]*`
-        : value.length < 3
-          ? `(?<![\\p{L}\\p{M}\\p{N}_])${escaped}(?![\\p{L}\\p{M}\\p{N}_])`
-          : escaped;
-    });
-  const pattern = alternatives.length ? new RegExp(alternatives.join('|'), 'gu') : undefined;
-  const longValues = [...new Set([...unique, ...substringValues])].filter(
-    (value) => [...value].length >= 3,
-  );
-  const maskText = (text: string) =>
-    maskProtectedFragments(
-      pattern ? text.replace(pattern, (value) => replacements.get(value) ?? MASK) : text,
-      [...substringValues],
-      source,
-      tokens,
-    );
+  const listed = new Set(set.values.map((value) => value.text));
+  const all: PrivateSet = {
+    ...set,
+    values: [
+      ...set.values,
+      ...unique
+        .filter((value) => !listed.has(value))
+        .map((text) => ({ text, provenance: 'observed' as const })),
+    ],
+  };
+  const tokenized = new Set(unique);
+  const longValues = all.values
+    .filter(
+      (value) =>
+        value.provenance === 'secret' ||
+        value.provenance === 'concealed' ||
+        tokenized.has(value.text),
+    )
+    .map((value) => value.text)
+    .filter((value) => chars(value) >= SHORT);
+  const maskText = (text: string): string => {
+    const opaque = tokens.filter((token) => text.includes(token));
+    let guarded = text;
+    opaque.forEach((token, i) => (guarded = guarded.split(token).join(`${i}`)));
+    const masked = matchPrivate(
+      guarded,
+      all,
+      'model',
+      (match) => replacements.get(match) ?? replacements.get(match.trim()),
+      tokenized,
+    ).text;
+    return opaque.reduce((out, token, i) => out.split(`${i}`).join(token), masked);
+  };
   return {
     tokens,
     apply: maskText,
     describeElement: (element, render) => {
+      if (set.boxElements?.has(element))
+        return maskText(render({ ...element, label: MASK, value: undefined }));
       const testID = element.testID;
       if (!testID) return maskText(render(element));
-      const placeholder = '\uE000';
+      const placeholder = '';
       const rendered = render({ ...element, testID: placeholder });
       const masked = maskText(rendered);
       if (rendered.split(placeholder).length !== 2 || masked.split(placeholder).length !== 2)
@@ -517,25 +678,19 @@ export function modelMask(
 }
 
 export function maskValues(text: string, values: readonly string[]): string {
-  return [...values]
-    .filter(Boolean)
-    .sort((a, b) => b.length - a.length)
-    .reduce((masked, value) => {
-      for (const [open, close] of [
-        ['"', '"'],
-        ['“', '”'],
-      ]) {
-        masked = masked.split(`${open}${value}${close}`).join(`${open}${MASK}${close}`);
-      }
-      return value.length >= 3 ? masked.split(value).join(MASK) : masked;
-    }, text);
+  return matchPrivate(
+    text,
+    { values: values.filter(Boolean).map((value) => ({ text: value, provenance: 'typed' })) },
+    'durable',
+  ).text;
 }
 
+// An input shown as `name: value` whose value was typed or is secure.
 export function maskInputs(screen: Screen, text: string, values?: readonly string[]): string {
-  return screen.elements.reduce((masked, el) => {
-    if (!isPossibleInput(el) || !el.value || (values && !el.secure && !values.includes(el.value)))
-      return masked;
-    const name = el.label ?? el.placeholder ?? el.testID ?? 'input';
-    return masked.split(`${name}: ${el.value}`).join(`${name}: ${MASK}`);
-  }, text);
+  const shown = screen.elements.flatMap((el) =>
+    isPossibleInput(el) && el.value && (!values || el.secure || values.includes(el.value))
+      ? [{ text: el.value, provenance: 'concealed' as const }]
+      : [],
+  );
+  return matchPrivate(text, { values: shown }, 'durable').text;
 }

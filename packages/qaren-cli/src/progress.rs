@@ -66,25 +66,14 @@ impl Progress {
             "fail" => '✗',
             _ => '↻',
         };
-        let text: String = crate::redact::redact_secrets(row.text.as_deref().unwrap_or(""))
-            .chars()
-            .flat_map(|c| {
-                let escaped: Vec<char> = if c.is_control() {
-                    c.escape_debug().collect()
-                } else {
-                    vec![c]
-                };
-                escaped
-            })
-            .take(160)
-            .collect();
         let retry = if row.attempt > 1 {
             format!(" attempt {}", row.attempt)
         } else {
             String::new()
         };
+        // Streamed rows are value-free; plan text reaches only the projected report.
         self.commit(&format!(
-            "  {glyph} {:>3}  {text}  ({}{retry})",
+            "  {glyph} {:>3}  ({}{retry})",
             row.line, row.resolved_by
         ));
         self.redraw(now);
@@ -240,20 +229,17 @@ mod tests {
             "✓ pnpm-install  1:04\n\
              ▸ xcodebuild-ios\n\
              ✗ xcodebuild-ios  5.0s\n  \
-             ✓   9  Wait for \"Welcome\"  (exact)\n"
+             ✓   9  (exact)\n"
         );
     }
 
     #[test]
-    fn plan_rows_are_redacted_single_line_and_escape_free() {
+    fn streamed_row_text_never_reaches_the_terminal() {
         let sink = Sink::default();
         let mut p = Progress::new(false, Box::new(sink.clone()));
-        let text = "Open https://user:pw@example.test\n✓ forged\u{1b}[2J";
+        let text = "Fill \"pin\" with \"hunter-canary-77\"\n✓ forged\u{1b}[2J";
         p.row(&row(4, "pass", text), Instant::now());
         let out = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
-        assert_eq!(out.lines().count(), 1);
-        assert!(!out.contains("user:pw"));
-        assert!(!out.contains('\u{1b}'));
-        assert!(out.contains("\\n✓ forged"));
+        assert_eq!(out, "  ✓   4  (exact)\n");
     }
 }

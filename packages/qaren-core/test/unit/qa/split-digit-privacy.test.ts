@@ -156,11 +156,26 @@ test('adjacent character boxes from long secrets are masked in reports and model
     privacy.redact('Boxes: e | x | i | s | q'),
     `Boxes: ${MASK} | ${MASK} | ${MASK} | ${MASK} | q`,
   );
-  const mask = privacy.maskForModel([], ['Code', 'e', 'x', 'i', 's', 'Verify']);
-  for (const char of ['e', 'x', 'i', 's'])
-    assert.equal(mask.apply(`Text "${char}"`), `Text "${MASK}"`);
+  const boxes = ['e', 'x', 'i', 's'].map((char) => element(`@${char}`, char, { kind: 'text' }));
+  const observed = screen([
+    element('@code', 'Code', { kind: 'text' }),
+    ...boxes,
+    element('@q', 'q', { kind: 'text' }),
+  ]);
+  privacy.observe(observed);
+  const mask = privacy.maskForModel([], observed.visibleText);
+  for (const box of boxes) {
+    assert.equal(mask.describeElement(box, describe), describe({ ...box, label: MASK }));
+    assert.equal(mask.apply(box.label!), MASK);
+  }
+  // A box character elsewhere is free text, not the box.
+  assert.equal(mask.apply('Text "e"'), 'Text "e"');
+  assert.equal(privacy.redact('step 1 of 2: s'), 'step 1 of 2: s');
   assert.equal(mask.apply('Text "is"'), 'Text "is"');
-  assert.equal(mask.apply('Text "q"'), 'Text "q"');
+  assert.equal(
+    mask.describeElement(observed.elements[5], describe),
+    describe(observed.elements[5]),
+  );
   assert.equal(new ObservedPrivacy().maskForModel([], []).apply('e | x'), 'e | x');
 });
 
@@ -251,4 +266,43 @@ test('structured identifier masking fails closed on placeholder collisions or om
       : (e: Parameters<typeof describe>[0]) => e.label!;
     assert.equal(mask.describeElement(input, render), mask.apply(render(input)));
   }
+});
+
+test('box context is retained across observations and only ever masks the box line', () => {
+  const boxes = screen([
+    element('@title', 'Enter the code', { kind: 'text' }),
+    ...['4', '8', '1', '5'].map((digit) => element(`@d${digit}`, digit, { kind: 'text' })),
+  ]);
+  capturePrivateScreen(boxes, [
+    { values: ['4815'], secure: true, elements: [], associationUnique: false },
+  ]);
+  const privacy = new ObservedPrivacy();
+  privacy.observe(boxes);
+  privacy.observe(screen([element('@done', 'Step 1 of 2', { kind: 'text' })]));
+  assert.equal(
+    privacy.redact('previously on screen: 4 | 8 | 1 | 5'),
+    `previously on screen: ${MASK} | ${MASK} | ${MASK} | ${MASK}`,
+  );
+  assert.equal(privacy.redact('8'), MASK);
+  assert.equal(privacy.redact('Step 1 of 2'), 'Step 1 of 2');
+  assert.equal(privacy.redact('line 4: tap 1'), 'line 4: tap 1');
+  const set = privacy.privateSet();
+  assert.equal(
+    set.contexts?.some((context) => context.boxes.join('') === '4815'),
+    true,
+  );
+  assert.ok(
+    set.contexts?.some((context) => context.key === '@d4,@d8,@d1,@d5'),
+    "context keys are the boxes' structural refs",
+  );
+});
+
+test('derived forms of a protected value are masked: grouped digits and Unicode normalization', () => {
+  const privacy = new ObservedPrivacy();
+  privacy.concealFallback('1234567890');
+  privacy.concealFallback('Café');
+  assert.equal(privacy.redact('card 1234 5678 90 ok'), `card ${MASK} ok`);
+  assert.equal(privacy.redact('card 12-34-56-78-90'), `card ${MASK}`);
+  assert.equal(privacy.redact(`name ${'Café'.normalize('NFD')}`), `name ${MASK}`);
+  assert.equal(privacy.redact('order 98765 of 77'), 'order 98765 of 77');
 });

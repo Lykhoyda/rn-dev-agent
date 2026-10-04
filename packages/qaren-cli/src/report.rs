@@ -82,19 +82,17 @@ fn walked<'a>(input: &'a ReportInput<'_>) -> impl Iterator<Item = &'a Row> {
     input.ledger.steps.iter().filter(|row| row.line != 0)
 }
 
-fn row_line(row: &Row, plan: &str) -> String {
-    row_line_with(row, plan, &prose)
+fn row_line(row: &Row) -> String {
+    row_line_with(row, &prose)
 }
 
-fn row_line_with(row: &Row, plan: &str, prose: &dyn Fn(&str) -> String) -> String {
+// Only the core's projected text is rendered; a row without it (a synthesized ledger) shows its line alone.
+fn row_line_with(row: &Row, prose: &dyn Fn(&str) -> String) -> String {
     let text = row
         .text
-        .clone()
-        .or_else(|| {
-            plan.lines()
-                .nth(row.line as usize - 1)
-                .map(|l| l.trim().to_string())
-        })
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+        .map(|text| format!(": {}", prose(text)))
         .unwrap_or_default();
     let mark = if row.outcome == "pass" { "✓" } else { "✗" };
     let retry = if row.attempt > 1 {
@@ -107,11 +105,7 @@ fn row_line_with(row: &Row, plan: &str, prose: &dyn Fn(&str) -> String) -> Strin
         .as_deref()
         .map(|r| format!(" — {}", prose(r)))
         .unwrap_or_default();
-    format!(
-        "- {mark} line {}: {}{retry}{reason}\n",
-        row.line,
-        prose(&text)
-    )
+    format!("- {mark} line {}{text}{retry}{reason}\n", row.line)
 }
 
 pub fn render(input: &ReportInput<'_>) -> String {
@@ -127,7 +121,7 @@ pub fn render(input: &ReportInput<'_>) -> String {
     ));
     out.push_str("## What was walked\n\n");
     for row in walked(input) {
-        out.push_str(&row_line(row, input.plan));
+        out.push_str(&row_line(row));
         if let Some(shot) = row.screenshot.as_deref().and_then(screenshot_link) {
             out.push_str(&format!("  ![line {}]({shot})\n", row.line));
         }
@@ -283,7 +277,7 @@ pub fn render_pr_comment(
     }
     out.push_str("**Plan**\n\n");
     for row in walked(input) {
-        out.push_str(&row_line_with(row, input.plan, &clean));
+        out.push_str(&row_line_with(row, &clean));
     }
     if let Some(failure) = &input.ledger.failure {
         out.push_str(&format!(

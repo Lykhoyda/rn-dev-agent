@@ -582,7 +582,7 @@ export async function decideScreen(
     text: string,
   ) => {
     if (!assertion || !('question' in assertion)) return undefined;
-    if (mask.apply(text).includes(MASK)) return 'unsure';
+    if (mask.apply(text).includes(MASK) || privacy.namesProtectedBox(text, screen)) return 'unsure';
     const elements = assertion.evidence.elements;
     return (
       protectedCheckBound({ kind: 'check', text, literal: false }, screen, values) ??
