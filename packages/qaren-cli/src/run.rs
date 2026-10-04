@@ -715,7 +715,6 @@ fn run_inner(
         published_video = Some(video);
     }
 
-    // The one terminal result: decided after video finalization and teardown, persisted once.
     let cancelled = match ensure_running(ctx.runner, "finalize") {
         Err(late) => {
             if failure.as_ref().map(|f| f.code) != Some(FailureCode::RunCancelled) {

@@ -352,9 +352,11 @@ The verification contract is owned by [`src/adapters/ios.rs`](src/adapters/ios.r
 Signals or a vanished caller stop the run with `RUN_CANCELLED`. The CLI checks
 cancellation before forward operations, including Git probes, recorder start,
 installation, fresh-install data removal, simulator boot, Metro/core launch,
-video finalization and publication. The core uses one walk-scoped AbortSignal
-through interruptible I/O and waits; aborts stop setup, walking, readiness
-persistence and saved-action writes. Ownership-gated teardown still runs.
+video finalization and publication. The core's cancellation helpers inherit the
+walk-scoped AbortSignal when callers omit an explicit signal and combine it
+with supplied signals for interruptible I/O and waits; aborts stop setup,
+walking, readiness persistence and saved-action writes. Ownership-gated teardown
+still runs.
 See the [CLI cancellation boundary](src/cancel.rs) and
 [core cancellation mechanism](../qaren-core/src/domain/cancellation.ts).
 A second signal exits immediately; the next run must recover retained resources
@@ -565,8 +567,13 @@ host load above 10 is an environment refusal (`CDP_NOT_CONNECTED`), rather than
 a product FAIL. It retries attachment once only if the remaining budget can
 cover a full readiness wait; otherwise it refuses immediately. Deterministic
 attachment rejections are neither retried nor classified as environmental.
+If the CLI's walk deadline expires before the core reports admission, the CLI
+also returns `CDP_NOT_CONNECTED` with measured host load (or an explicit
+unavailable measurement), regardless of load. After admission, deadline
+expiry remains `WALK_DEADLINE_EXCEEDED`.
 The refusal carries the measured load; the
-[admission implementation](../qaren-core/src/qa/admission.ts) owns this policy.
+[admission implementation](../qaren-core/src/qa/admission.ts) owns attachment
+retry policy; the [CLI core boundary](src/core.rs) owns deadline classification.
 
 ### Candidate provenance
 
@@ -598,8 +605,11 @@ qaren publish <run-id> --verdict-file verdict.md --json
 cancellation, matching final candidate verification, and proven teardown
 ownership, including the recorder and runner host as well as build, core and
 Metro producers. The final verification is captured before teardown removes
-the candidate worktree; the terminal result is persisted once after teardown
-and video finalization. A missing terminal result refuses `RUN_RECORD_INVALID`.
+the candidate worktree; the terminal result is persisted after teardown
+and video finalization. Immediately before writing the `pr.json` publication
+handoff, the CLI rechecks cancellation; a late cancel marks that terminal result
+cancelled, persists it and withholds the handoff. A missing terminal result
+refuses `RUN_RECORD_INVALID`.
 Cancellation refuses `RUN_CANCELLED` (exit 4), candidate mismatch fails
 `CANDIDATE_DRIFTED` (exit 1), and unproven ownership refuses
 `OWNERSHIP_UNPROVEN` (exit 4), before uploads, comments, label changes or block
@@ -942,14 +952,19 @@ fingerprint, and building candidate sha:
    `android/build`, `android/app/build`, `android/.gradle`).
 
 After a successful build the dev client (single `.app` bundle / debug apk)
-is content-hashed and copied under
-`.qaren/native-cache/artifacts/<platform>/`, and the state is refreshed
-with the readiness-rechecked fingerprint (native-input drift during the
-build fails the run as `CANDIDATE_DRIFTED`). An ambiguous artifact (zero or
-several bundles) skips caching with a recorded reason — never a guess. The
-artifact cache is bounded: recording a new build prunes the same
-platform+app's directories for older fingerprints, so only the latest
-reusable dev client is kept on disk.
+is copied and content-hashed in a staging directory under
+`.qaren/native-cache/artifacts/<platform>/<app_id>-<fingerprint-key>/`.
+Copying checks cancellation between entries and file chunks. A final
+cancellation check precedes renaming staging to a run-specific generation and
+atomically saving cache state with the readiness-rechecked fingerprint
+(native-input drift during the build fails the run as `CANDIDATE_DRIFTED`).
+Cancellation before that publication removes staging and preserves the previous
+artifact and state without pruning or rebinding installation ownership. A failed
+state save removes the new generation and retains the previous state. An
+ambiguous artifact (zero or several bundles) skips caching with a recorded
+reason — never a guess. Only successful publication permits ownership rebinding
+and pruning the same platform+app's directories for older fingerprints;
+generations within the current fingerprint bucket are retained.
 
 **Build serialization.** Native builds (incremental and clean) take a
 host-level `native-build-<platform>` lock before allocation. A live holder
@@ -1029,9 +1044,11 @@ build_and_ready — so revisit this once live reuse is measurable.
   run-scoped name, refusing on ambiguity). A process group is signalled only
   when the recorded leader's birth time (`ps lstart`) still matches immediately
   before each signal, including escalation after the grace wait. A matching
-  port and group alone never authorize signalling after the leader dies or
-  its PID is reused. A present group without proven leader identity remains
-  `unresolved`; proven group absence can retire it without a signal. After a
+  port and group alone never authorize signalling after the leader's birth
+  identity is lost or its PID is reused. An unreaped zombie with the recorded
+  birth still pins the leader PID and can authorize group escalation. A present
+  group without proven leader identity remains `unresolved`; proven group
+  absence can retire it without a signal. After a
   kill the port must be positively free or foreign before `removed` is
   claimed. The farm slot is stopped only when the live lease holder equals
   this run's holder *and* the forward is proven gone — either the tunnel
