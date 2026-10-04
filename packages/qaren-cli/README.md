@@ -23,6 +23,31 @@ available. The binary is
 the binary from another location. See [Check a plan](#check-a-plan) for when
 `TYPESAFE_API_KEY` is required.
 
+### Plugin runtime installation
+
+The plugin's [runtime installer](../qaren-plugin/scripts/ensure-qaren.sh)
+supports Apple silicon Macs with Node 24 or newer on PATH. Once the matching
+release asset is available, run it from the installed plugin directory:
+
+```sh
+bash scripts/ensure-qaren.sh --install
+bash scripts/ensure-qaren.sh --print-bin
+```
+
+`--install` verifies the tarball's SHA-256 and byte length against the plugin's
+[`runner-manifest.json`](../qaren-plugin/runner-manifest.json) before installing
+under `~/.qaren/runtime/<version>/`. `--install --from-file <tarball>` uses a
+local asset with the same verification. Re-run `--install` to recover an
+interrupted installation. The installed binary discovers its adjacent runtime;
+it does not require the source checkout's `dist/` or `QAREN_RUNTIME` override.
+
+The SessionStart hook only runs `--print-bin`; it never downloads. That mode
+always exits 0 and prints either the verified binary path, an install or repair
+instruction, or nothing, so its exit status alone does not prove installation.
+Use the reported binary path for CLI commands; installation does not add it to PATH.
+This development checkout's manifest does not imply that a QaReN release asset
+has been published; use the source build above while that asset is unavailable.
+
 ## Check a plan
 
 From the app's directory, supply `.qaren/config.yaml` and a Markdown plan:
