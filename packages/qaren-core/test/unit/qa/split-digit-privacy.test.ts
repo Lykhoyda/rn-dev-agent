@@ -24,7 +24,10 @@ test('free character runs and long fragments stay readable without a retained co
 
 test('ordinary typed fragments remain readable while the whole value is masked', () => {
   const privacy = new ObservedPrivacy(['Ada']);
-  assert.equal(privacy.redact('on screen: a | d | Ada Lovelace'), `on screen: a | d | ${MASK} Lovelace`);
+  assert.equal(
+    privacy.redact('on screen: a | d | Ada Lovelace'),
+    `on screen: a | d | ${MASK} Lovelace`,
+  );
 });
 
 for (const origin of ['fallback', 'private observation'] as const) {
@@ -113,10 +116,7 @@ test('outbound masking preserves whole-value equality and ordinary typed fragmen
 test('adjacent character boxes from long secrets are masked in reports and model projections', () => {
   const privacy = new ObservedPrivacy();
   privacy.concealFallback('existing-secret');
-  assert.equal(
-    privacy.redact('Boxes: e | x | i | s | q'),
-    'Boxes: e | x | i | s | q',
-  );
+  assert.equal(privacy.redact('Boxes: e | x | i | s | q'), 'Boxes: e | x | i | s | q');
   const boxes = ['e', 'x', 'i', 's'].map((char) => element(`@${char}`, char, { kind: 'text' }));
   const observed = screen([
     element('@code', 'Code', { kind: 'text' }),
@@ -299,6 +299,38 @@ test('trimmed normalized forms protect all shared policies', () => {
     assert.equal(privacy.maskForModel([], []).apply(text).includes(value.trim()), false);
     assert.equal(matchPrivate(text, privacy.privateSet(), 'persisted').hit, true);
     const input = element('@normalized', 'Name', { testID: value.trim() });
-    assert.equal(privacy.maskForModel([], []).describeElement(input, describe), 'Button \"Name\" [testID •••]');
+    assert.equal(
+      privacy.maskForModel([], []).describeElement(input, describe),
+      'Button \"Name\" [testID •••]',
+    );
   }
+});
+
+test('grouped and normalized testIDs use shared projection without changing their operational value', async () => {
+  const privacy = new ObservedPrivacy();
+  privacy.concealFallback('1234567890');
+  privacy.concealFallback(' Café ');
+  const inputs = [
+    element('@card', 'Account', { testID: 'account-1234-5678-90' }),
+    element('@name', 'Name', { testID: 'profile-Cafe\u0301' }),
+  ];
+  const ids = inputs.map((item) => item.testID);
+  const mask = privacy.maskForModel([], []);
+  for (const item of inputs) assert.match(mask.describeElement(item, describe), /\[testID •••\]/);
+  const judge = scriptedJudge(() => ({ check_0: { type: 'noul', noul: 0.99 } }));
+  await decideScreen(
+    screen(inputs),
+    judge,
+    { kind: 'check', text: 'The account and name controls are visible', literal: false, line: 0 },
+    undefined,
+    [],
+    privacy,
+  );
+  assert.equal(judge.requests.length, 1);
+  const request = JSON.stringify(judge.requests[0]);
+  for (const id of ids) assert.equal(request.includes(id!), false);
+  assert.deepEqual(
+    inputs.map((item) => item.testID),
+    ids,
+  );
 });

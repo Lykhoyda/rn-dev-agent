@@ -5,6 +5,10 @@ use qaren::report::{render_pr_comment, PrRun, ReportInput};
 
 const UDID: &str = "1DC408C4-51DA-4C4F-ACA1-39881C916FDD";
 
+fn projected(text: &str) -> qaren::report::ProjectedVerdict {
+    serde_json::from_value(serde_json::json!({"text": text})).unwrap()
+}
+
 fn machine() -> MachineIdentity {
     MachineIdentity {
         hostname: Some("qa-mac-mini.local".into()),
@@ -47,7 +51,7 @@ fn render(
             plan: "1. Fill \"pin\" with \"hunter-canary-77\"\n✓ \"Tasks\"\n",
             ledger,
         },
-        "The Tasks tab does not open: the check on line 2 failed on the simulator at /Users/qa/x.",
+        &projected("The Tasks tab does not open: the check on line 2 failed on the simulator at /Users/qa/x."),
         &PrRun {
             tested_sha: &"a1b2c3d".repeat(6)[..40],
             tested_older_commit: older,
@@ -152,7 +156,7 @@ fn the_verdict_sentence_is_bounded() {
             plan: "",
             ledger: &failing_ledger(),
         },
-        &long,
+        &projected(&long),
         &PrRun {
             tested_sha: &"a".repeat(40),
             tested_older_commit: false,

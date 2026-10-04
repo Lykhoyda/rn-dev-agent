@@ -724,6 +724,7 @@ fn publish_inner(
         }
         // ponytail: a publisher killed mid-upload can leave gh running; a rerun inside that window may repost.
         let attempted = publication.comment_attempted;
+        let verdict = report::project_verdict(runner, &run_dir, verdict_file);
         let url = post_once(
             runner,
             &info,
@@ -733,15 +734,6 @@ fn publish_inner(
             attempted,
             &format!("<!-- qaren-run: {run_id} -->"),
             &mut || {
-                let verdict = std::fs::read_to_string(verdict_file)
-                    .ok()
-                    .filter(|v| !v.trim().is_empty())
-                    .ok_or_else(|| {
-                        failure(
-                            format!("{} is missing or empty", verdict_file.display()),
-                            "write the verdict sentence to the --verdict-file, then re-run",
-                        )
-                    })?;
                 let ledger: Ledger = read_json(&run_dir.join("ledger.json"))?;
                 Ok(report::render_pr_comment(
                     &ReportInput {

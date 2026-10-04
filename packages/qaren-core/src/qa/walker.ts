@@ -30,7 +30,8 @@ import {
 } from './blocks.js';
 import { type Judge, type JevCall, JevError, unavailableJudge } from './questions.js';
 import { type LoginMarker, recover } from './recover.js';
-import { isPrivateInput, MASK, maskInputs, ObservedPrivacy } from './privacy.js';
+import { persistRunPolicy } from './privacy-projection.js';
+import { isPrivateInput, MASK, ObservedPrivacy } from './privacy.js';
 import { NativeSnapshotIncomplete, PrivateInputCaptureError } from './private-input.js';
 import { AppProcessGoneError, emitCaptureDiagnostics, NativeCaptureError } from './capture.js';
 import { QaDispatchContext, QaDispatchError } from '../domain/qa-dispatch.js';
@@ -166,10 +167,6 @@ const UNRECOVERABLE = new Set([
   'APP_PROCESS_CHANGED',
   'APP_PROCESS_UNKNOWN',
 ]);
-
-function seenOn(screen: Screen): string {
-  return screen.visibleText.slice(0, 40).join(' | ');
-}
 
 // Retry a mutation once only when read-back failed and the screen provably did not move.
 export async function walkBlock(
@@ -553,11 +550,7 @@ export async function walkBlock(
       failure: {
         step: item.line,
         seen: redact(
-          maskInputs(
-            screen,
-            `${reason}; historical context, previously on screen: ${seenOn(screen)}`,
-            typed,
-          ),
+          `${reason}; historical context, previously on screen: ${privacy.screenText(screen).slice(0, 40).join(' | ')}`,
         ),
         ...(screenshot ? { screenshot } : {}),
       },
@@ -1547,6 +1540,7 @@ export async function runPlan(
       privacy.redactIdentifier(slug) === slug ? slug : MASK;
     const unprotected = (value: string): boolean => privacy.redact(value) === value;
     const finish = (outcome?: WalkOutcome): WalkResult => {
+      persistRunPolicy(privacy.privateSet());
       for (const { index, write } of pending.splice(0)) results[index] = write();
       const ledger: WalkResult = {
         ...buildLedger(

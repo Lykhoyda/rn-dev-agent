@@ -274,7 +274,7 @@ fn publish_comments_removes_the_label_and_pushes_the_blocks_with_the_exact_lease
         .contains(&"./screenshots/01.png#Failing step".to_string()));
     let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
     assert!(body.starts_with(&format!(
-        "<!-- qaren-run: {RUN} -->\nThe Tasks tab is missing"
+        "<!-- qaren-run: {RUN} -->\nVerdict text withheld: privacy policy unavailable."
     )));
     let commit = runner
         .0
@@ -446,7 +446,7 @@ fn a_rejected_lease_attaches_the_yaml_in_a_second_comment() {
     );
     assert!(std::fs::read_to_string(dir.join("comment.md"))
         .unwrap()
-        .contains("The Tasks tab is missing"));
+        .contains("Verdict text withheld: privacy policy unavailable."));
 }
 
 #[test]
@@ -978,6 +978,11 @@ fn retry_regenerates_an_unposted_walk_comment_with_current_privacy() {
     let (runs, dir, verdict) = run_dir(false);
     edit_pr(&dir, |pr| pr["blocks"] = serde_json::json!([]));
     std::fs::write(&verdict, "qa-fixture-user saw the missing Tasks tab.").unwrap();
+    let ledger_path = dir.join("ledger.json");
+    let mut ledger: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&ledger_path).unwrap()).unwrap();
+    ledger["failure"]["seen"] = serde_json::json!("qa-fixture-user saw the missing Tasks tab.");
+    std::fs::write(ledger_path, serde_json::to_vec(&ledger).unwrap()).unwrap();
     let mut first = Git(MockRunner::new());
     first
         .0
@@ -1971,4 +1976,101 @@ fn a_post_admission_interruption_withholds_the_copy_and_upload() {
         .iter()
         .any(|arg| arg.contains("video-published")));
     assert!(dir.join("media/video.mp4").is_file());
+}
+
+struct CoreProjector {
+    commands: Git,
+    core: qaren::exec::RealRunner,
+}
+
+impl Runner for CoreProjector {
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
+        self.commands.execute(spec, interruptible)
+    }
+
+    fn execute_private(
+        &mut self,
+        spec: &CmdSpec,
+        input: &[u8],
+        interruptible: bool,
+    ) -> qaren::exec::PrivateOutput {
+        self.core.execute_private(spec, input, interruptible)
+    }
+
+    fn spawn_group_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        self.commands.spawn_group_unchecked(spec, log)
+    }
+
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.commands.spawn_piped_unchecked(spec, log)
+    }
+
+    fn sleep(&mut self, duration: std::time::Duration) {
+        self.commands.sleep(duration)
+    }
+
+    fn now_epoch_ms(&self) -> u64 {
+        self.commands.now_epoch_ms()
+    }
+
+    fn commands_executed(&self) -> u64 {
+        self.commands.commands_executed() + self.core.commands_executed()
+    }
+}
+
+#[test]
+fn verdict_prose_reaches_the_comment_only_through_the_core_projection() {
+    use std::os::unix::fs::PermissionsExt;
+    for policy in [None, Some("corrupt"), Some("valid")] {
+        let (runs, dir, verdict) = run_dir(false);
+        std::fs::write(&verdict, "Fill with hunter-canary-77 failed; code 47, name Café, account 1234 5678 90. Step 1 of 2.").unwrap();
+        if let Some(policy) = policy {
+            let path = dir.join("privacy-policy.json");
+            std::fs::write(
+                &path,
+                if policy == "valid" {
+                    serde_json::json!({
+                        "schema": "qaren-privacy/1",
+                        "values": [
+                            {"text": "hunter-canary-77", "provenance": "typed"},
+                            {"text": "47", "provenance": "typed"},
+                            {"text": " Café ", "provenance": "concealed"},
+                            {"text": "1234567890", "provenance": "secret"}
+                        ],
+                        "contexts": []
+                    })
+                    .to_string()
+                } else {
+                    "{".into()
+                },
+            )
+            .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        edit_pr(&dir, |pr| pr["blocks"] = serde_json::json!([]));
+        let mut commands = Git(MockRunner::new());
+        script_comment_and_label(&mut commands.0);
+        let mut runner = CoreProjector {
+            commands,
+            core: qaren::exec::RealRunner::new(),
+        };
+        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+        assert_eq!(
+            receipt.result,
+            ReceiptResult::Published,
+            "{:?}",
+            receipt.failure
+        );
+        let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
+        for canary in ["hunter-canary-77", "47", "Café", "1234 5678 90"] {
+            assert!(!body.contains(canary), "{body}");
+        }
+        if policy == Some("valid") {
+            assert!(body.contains("Fill with ••• failed"), "{body}");
+            assert!(body.contains("Step 1 of 2"), "{body}");
+        } else {
+            assert!(body.contains("Verdict text withheld"), "{body}");
+        }
+        assert_eq!(runner.commands.0.remaining(), 0);
+    }
 }

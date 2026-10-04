@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import type { Element, Screen } from '../../../dist/qa/screen.js';
-import { capturePrivateScreen } from '../../../dist/qa/privacy.js';
+import { capturePrivateScreen, ObservedPrivacy } from '../../../dist/qa/privacy.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import type { LedgerRow } from '../../../dist/qa/ledger.js';
 import { element, scriptedJudge, walker } from './judgment-fixtures.ts';
@@ -201,23 +201,91 @@ test('the projected ledger stays readable and ordinary blocks are saved', async 
 });
 
 test('a future short fill protects an earlier failure screen before typing', async () => {
-  const blocks = parsePlan('## QA\n\n### Fail early\n✓ "Missing"\n\n### Fill later\n1. Fill "qa-input" with "47"\n').blocks;
+  const blocks = parsePlan(
+    '## QA\n\n### Fail early\n✓ "Missing"\n\n### Fill later\n1. Fill "qa-input" with "47"\n',
+  ).blocks;
   assert.ok(blocks);
-  const f = walker([view([text('@shown', '47')])], scriptedJudge(() => ({})));
+  const f = walker(
+    [view([text('@shown', '47')])],
+    scriptedJudge(() => ({})),
+  );
   const ledger = await runPlan(blocks, f.deps);
   assert.equal(ledger.verdict, 'FAIL');
-  assert.equal(ledger.failure?.seen, '•••');
+  assert.equal(ledger.failure?.seen?.includes('47'), false);
+  assert.match(
+    ledger.failure?.seen ?? '',
+    /Missing.*historical context, previously on screen: •••/,
+  );
   assert.equal(f.actions.length, 0);
 });
 
 test('a future fill withholds an earlier passing block even if it never types', async () => {
-  const blocks = parsePlan(`## QA\n\n### Confirm\n✓ "${TYPED}"\n\n### Fill later\n1. Fill "missing-input" with "${TYPED}"\n`).blocks;
+  const blocks = parsePlan(
+    `## QA\n\n### Confirm\n✓ "${TYPED}"\n\n### Fill later\n1. Fill "missing-input" with "${TYPED}"\n`,
+  ).blocks;
   assert.ok(blocks);
-  const f = walker([view([text('@shown', TYPED)])], scriptedJudge(() => ({})));
+  const f = walker(
+    [view([text('@shown', TYPED)])],
+    scriptedJudge(() => ({})),
+  );
   const appRoot = mkdtempSync(join(tmpdir(), 'qaren-preclassified-'));
-  const ledger = await runPlan(blocks, f.deps, [], { appRoot, platform: 'ios', appId: 'com.example' });
+  const ledger = await runPlan(blocks, f.deps, [], {
+    appRoot,
+    platform: 'ios',
+    appId: 'com.example',
+  });
   assert.equal(ledger.verdict, 'FAIL');
   assert.equal(ledger.blocks[0].saved, false);
   assert.equal(JSON.stringify(ledger).includes(TYPED), false);
   assert.deepEqual(ledger.blocksWritten, []);
 });
+
+for (const code of ['4815', '4415']) {
+  test(`failure diagnostics project original boxes ${code} before masking an adjacent input`, async () => {
+    const input = element('@name', 'Name', { kind: 'input', value: 'Ada' });
+    const observed = view([
+      text('@heading', 'Enter code'),
+      ...[...code].map((digit, i) => text(`@box${i}`, digit)),
+      input,
+      text('@step', 'Step 1 of 2'),
+    ]);
+    observed.visibleText = [
+      'Enter code',
+      ...[...code].filter((digit, i) => i === 0 || digit !== code[i - 1]),
+      'Name: Ada',
+      'Step 1 of 2',
+    ];
+    capturePrivateScreen(observed, [
+      { values: [code], secure: true, elements: [], associationUnique: true },
+    ]);
+    const blocks = parsePlan(
+      '## QA\n\n### Fail early\n✓ "Missing"\n\n### Fill later\n1. Fill "qa-name" with "Ada"\n',
+    ).blocks;
+    assert.ok(blocks);
+    const f = walker(
+      [observed],
+      scriptedJudge(() => ({})),
+    );
+    const ledger = await runPlan(blocks, f.deps);
+    const seen = ledger.failure?.seen ?? '';
+    assert.match(seen, /Enter code \| ••• \| ••• \| ••• \| ••• \| Name: ••• \| Step 1 of 2/);
+    assert.equal(seen.includes('Ada'), false);
+    for (const digit of new Set(code))
+      assert.equal(
+        (seen.match(/\b\d+\b/g) ?? []).filter(
+          (value) => value === digit && !['1', '2'].includes(value),
+        ).length,
+        0,
+      );
+    assert.equal(input.value, 'Ada');
+    assert.deepEqual(
+      observed.elements.slice(1, 5).map((item) => item.label),
+      [...code],
+    );
+    const privacy = new ObservedPrivacy();
+    privacy.observe(observed);
+    privacy.observe(view([text('@done', 'Done')]));
+    assert.equal(privacy.redact([...code].join(' | ')), '••• | ••• | ••• | •••');
+    assert.equal(privacy.redact('4 | 8'), '4 | 8');
+  });
+}
