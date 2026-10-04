@@ -62,11 +62,14 @@ export function focusIdentityOf(screen: Screen, element: Element): string | unde
   return base !== id && wrapperEquivalence(screen, base) === element ? base : id;
 }
 
-// Distinct identities an exact target names, counted before any eligibility filter.
+// Distinct identities an exact target names, counted before disabled, offscreen or React-only filters.
 export function exactIdentities(screen: Screen, target: Target, kind: Step['kind']): Identity[] {
   const quoted = target.quoted;
   if (quoted === undefined) return [];
-  const matched = screen.elements.filter((e) => named(e, quoted, kind, target.exact));
+  // A covered, non-hittable onscreen element is not addressable, so it is not a twin.
+  const matched = screen.elements.filter(
+    (e) => (e.offscreen || e.hittable) && named(e, quoted, kind, target.exact),
+  );
   return matched
     .filter((e) => {
       const control = echoControl(e);

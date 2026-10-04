@@ -156,6 +156,17 @@ for (const shape of shapes()) {
   });
 }
 
+test('I1 a covered non-hittable twin under a sheet is not a second identity', () => {
+  const covered = node(node(root(), { label: 'Continue', hittable: false, y: 400 }), {
+    label: 'Continue',
+    y: 700,
+  });
+  const screen = join(covered, []);
+  const target = { quoted: 'Continue', phrase: 'Continue' };
+  assert.equal(exactIdentities(screen, target, 'press').length, 1);
+  assert.equal(outcome(prepareTarget({ kind: 'press', target }, screen)), '@n3');
+});
+
 test('I1 input twins refuse fill, fallback and rebind alike', () => {
   const inputs = node(node(root(), { type: 'TextField', identifier: 'email', y: 100 }), {
     type: 'TextField',
