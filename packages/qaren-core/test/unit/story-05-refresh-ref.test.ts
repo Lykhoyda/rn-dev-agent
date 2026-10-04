@@ -35,9 +35,9 @@ test('absent: zero matches (element truly gone)', () => {
   assert.deepEqual(refreshRef(sig(), nodes), { kind: 'absent' });
 });
 
-test('label changed but testID same → absent (exact attrs, never fuzzy)', () => {
+test('label changed but testID same preserves identity', () => {
   const nodes = [btn('@e0', 'Saving…', 'save-btn', 0)];
-  assert.equal(refreshRef(sig(), nodes).kind, 'absent');
+  assert.equal(refreshRef(sig(), nodes).kind, 'unique');
 });
 
 test('testID changed but label same → absent', () => {
@@ -52,15 +52,14 @@ test('ambiguous: two identical siblings, tree shape changed → candidates, no g
   assert.equal(out.candidates.length, 2);
 });
 
-test('index tie-break: identical siblings, tree shape UNCHANGED → unique at cached flatIndex', () => {
+test('identical siblings refuse even when tree shape is unchanged', () => {
   const nodes = [
     btn('@e0', 'Save', 'save-btn', 0),
     btn('@e1', 'Save', 'save-btn', 50),
     btn('@e2', 'Other', 'x', 100),
   ];
   const out = refreshRef(sig({ flatIndex: 1, nodeCount: 3 }), nodes);
-  assert.equal(out.kind, 'unique');
-  assert.equal(out.node.ref, '@e1');
+  assert.equal(out.kind, 'ambiguous');
 });
 
 test('index-shift trap: shape unchanged but no candidate at cached index → ambiguous', () => {
@@ -73,9 +72,37 @@ test('index-shift trap: shape unchanged but no candidate at cached index → amb
   assert.equal(out.kind, 'ambiguous');
 });
 
-test('optional attrs: undefined label matches only undefined label', () => {
+test('same id with different labels still counts two identities', () => {
   const nodes = [btn('@e0', undefined, 'save-btn', 0), btn('@e1', 'Save', 'save-btn', 50)];
   const out = refreshRef(sig({ label: undefined }), nodes);
-  assert.equal(out.kind, 'unique');
-  assert.equal(out.node.ref, '@e0');
+  assert.equal(out.kind, 'ambiguous');
+});
+
+test('label-only identities count every type before eligibility', () => {
+  const nodes = [
+    btn('@a', 'Save', undefined, 0),
+    { ...btn('@b', 'Save', undefined, 50), type: 'StaticText', hittable: false, enabled: false },
+  ];
+  assert.equal(refreshRef(sig({ identifier: undefined }), nodes).kind, 'ambiguous');
+});
+
+test('refresh collapses a contained text echo through the shared identity model', () => {
+  const nodes = [
+    { ...btn('@a', 'Save', undefined, 0), index: 0 },
+    { ...btn('@b', 'Save', undefined, 0), type: 'StaticText', index: 1, parentIndex: 0 },
+  ];
+  const result = refreshRef(sig({ identifier: undefined }), nodes);
+  assert.equal(result.kind, 'unique');
+  assert.equal(result.node.ref, '@a');
+});
+
+test('S11: an Android blank identifier falls back to the label, never to an empty id', () => {
+  const nodes = [btn('@e0', 'Other', 'x', 0), btn('@e1', 'Save', '', 50)];
+  for (const identifier of ['', '   ']) {
+    const out = refreshRef(sig({ identifier }), nodes);
+    assert.equal(out.kind, 'unique', identifier);
+    assert.equal(out.node.ref, '@e1');
+  }
+  const twins = [btn('@e0', 'Save', '', 0), btn('@e1', 'Save', '', 50)];
+  assert.equal(refreshRef(sig({ identifier: '' }), twins).kind, 'ambiguous');
 });

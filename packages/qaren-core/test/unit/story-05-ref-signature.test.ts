@@ -20,20 +20,16 @@ const nodes = [
 
 beforeEach(() => clearRefMap());
 
-test('getCachedSignature returns identity attrs + flatIndex + nodeCount', () => {
+test('getCachedSignature returns identity attributes', () => {
   updateRefMapFromFlat(nodes);
   assert.deepEqual(getCachedSignature('@e1'), {
     type: 'Button',
     label: 'Cancel',
-    flatIndex: 1,
-    nodeCount: 3,
   });
   assert.deepEqual(getCachedSignature('e0'), {
     type: 'Button',
     label: 'Save',
     identifier: 'save-btn',
-    flatIndex: 0,
-    nodeCount: 3,
   });
 });
 
@@ -76,19 +72,13 @@ test('retains signatures for non-colliding ids across updates', () => {
   const sparse = [{ ref: '@e0', type: 'Other', label: 'Header', rect: rect(0, 0) }];
   updateRefMapFromFlat(sparse); // gen 2: only @e0, nodeCount 1
 
-  // @e2 has no key in gen 2 → retained with its ORIGIN generation's counts
   assert.deepEqual(getCachedSignature('@e2'), {
     type: 'TextField',
     identifier: 'name-input',
-    flatIndex: 2,
-    nodeCount: 3,
   });
-  // @e0 collides → overwritten with the NEW identity + new generation's counts
   assert.deepEqual(getCachedSignature('@e0'), {
     type: 'Other',
     label: 'Header',
-    flatIndex: 0,
-    nodeCount: 1,
   });
   // Coordinates are NOT retained — only the CURRENT snapshot is tappable
   assert.equal(lookupRef('@e2'), null);
@@ -104,13 +94,13 @@ test('clearRefMap drops retained signatures too', () => {
   assert.equal(getCachedSignature('@e0'), null); // current entry gone
 });
 
-test('flatIndex is the raw array position when skipped entries are interleaved; hash is guarded', () => {
+test('malformed entries do not replace valid signatures or break hashing', () => {
   const withMalformed = [
     { ref: '@e0', type: 'Button', label: 'Save', rect: rect(0, 0) },
     { ref: '', type: 'Other', rect: undefined },
     { ref: '@e1', type: 'Button', label: 'Cancel', rect: rect(0, 50) },
   ];
   updateRefMapFromFlat(withMalformed);
-  assert.equal(getCachedSignature('@e1').flatIndex, 2); // raw position, not filtered position
+  assert.equal(getCachedSignature('@e1').label, 'Cancel');
   assert.equal(typeof getLastSnapshotHash(), 'string'); // hash of the two valid nodes, no throw
 });

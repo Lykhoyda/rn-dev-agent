@@ -37,9 +37,12 @@ import type { RecoveryTier } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
 import type { FlatNode } from '../fast-runner-ref-map.js';
 import type { CDPClient } from '../cdp-client.js';
+import { exactIdentities } from '../qa/identity.js';
+import { join, type NativeNode } from '../qa/screen.js';
 import {
   getCachedSignature,
   isRefMapFresh,
+  refreshRef,
   lookupRef,
   pinnedElementRef,
   refCenter,
@@ -398,14 +401,18 @@ export async function pressCandidate(
 ): Promise<ToolResult> {
   const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
   if (action === 'click') {
-    const tapArgs = ['press', ref, ...(includeSystemUi ? ['--include-system-ui'] : [])];
-    const tap = async (): Promise<ToolResult> =>
-      surfaceKeyboardGuard(await runNative(tapArgs, { qaContext }));
+    const identity = getCachedSignature(ref);
+    const tap = async (at = ref): Promise<ToolResult> =>
+      surfaceKeyboardGuard(
+        await runNative(['press', at, ...(includeSystemUi ? ['--include-system-ui'] : [])], {
+          qaContext,
+        }),
+      );
     const first = await tap();
     return first.isError
       ? healKeyboardOccludedTap(
           first,
-          getClient ? keyboardHealDeps(getClient, tap, qaContext) : null,
+          getClient ? keyboardHealDeps(getClient, tap, qaContext, { ref, identity }) : null,
           qaContext,
         )
       : first;
@@ -655,7 +662,7 @@ export interface ExactFillBinding {
 
 export type ExactBindOutcome =
   | { ok: true; binding: ExactFillBinding }
-  | { ok: false; detail: string; unobservable?: true };
+  | { ok: false; detail: string; unobservable?: true; ambiguous?: true };
 
 function cleanNodeRef(node: SnapshotNode): string {
   return node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
@@ -665,14 +672,12 @@ function inputTestId(identifier: string | undefined): string | null {
   return identifier && identifier.trim().length > 0 ? identifier : null;
 }
 
-function signatureForNode(nodes: SnapshotNode[], node: SnapshotNode): RefSignature {
+function signatureForNode(node: SnapshotNode): RefSignature {
   return {
     type: node.type ?? '',
     label: node.label,
     identifier: node.identifier,
     rect: node.rect,
-    flatIndex: nodes.indexOf(node),
-    nodeCount: nodes.length,
   };
 }
 
@@ -687,6 +692,15 @@ function rectsMatch(
     Math.abs(a.width - b.width) <= tolerance &&
     Math.abs(a.height - b.height) <= tolerance
   );
+}
+
+// Every node carrying the testID counts, whatever its type; proven XCUI echoes collapse in the shared identity model.
+function nodesWithTestID(nodes: SnapshotNode[], id: string): SnapshotNode[] {
+  return exactIdentities(
+    join(nodes as unknown as NativeNode[], []),
+    { quoted: id, phrase: id, exact: 'id' },
+    'fill',
+  ).flatMap(({ element }) => nodes.filter((n) => n.ref === element.ref));
 }
 
 // A positional @eN may only bind when its identity still matches the
@@ -705,8 +719,7 @@ export function bindExactFillTarget(
       priorSignature !== null &&
       priorSignature !== undefined &&
       ((priorSignature.identifier?.trim().length ?? 0) > 0 ||
-        (priorSignature.label?.trim().length ?? 0) > 0 ||
-        priorSignature.rect !== undefined);
+        (priorSignature.label?.trim().length ?? 0) > 0);
     if (!hasRobustIdentity) {
       return {
         ok: false,
@@ -715,29 +728,38 @@ export function bindExactFillTarget(
     }
     const signature = priorSignature as RefSignature;
     const signatureIdentifier = inputTestId(signature.identifier);
-    const matches = nodes.filter((n) => {
-      if ((n.type ?? '') !== signature.type) return false;
-      if (signatureIdentifier !== null) return n.identifier === signatureIdentifier;
-      if (signature.rect !== undefined && n.rect !== undefined) {
-        return rectsMatch(n.rect, signature.rect);
-      }
-      return n.label === signature.label && inputTestId(n.identifier) === null;
-    });
+    const matches =
+      signatureIdentifier !== null
+        ? nodesWithTestID(nodes, signatureIdentifier)
+        : nodes.filter((n) => {
+            if (
+              (n.type ?? '') !== signature.type ||
+              n.label !== signature.label ||
+              inputTestId(n.identifier) !== null
+            )
+              return false;
+            if (signature.rect !== undefined && n.rect !== undefined) {
+              return rectsMatch(n.rect, signature.rect);
+            }
+            return n.label === signature.label && inputTestId(n.identifier) === null;
+          });
     if (matches.length !== 1) {
       return {
         ok: false,
+        ...(matches.length > 1 ? { ambiguous: true as const } : {}),
         detail: `ref @${clean} identity ${matches.length > 1 ? 'matches multiple elements' : 'is absent'} in the current snapshot`,
       };
     }
     node = matches[0];
   } else {
-    const matches = nodes.filter((n) => n.identifier === clean);
+    const matches = nodesWithTestID(nodes, clean);
     if (matches.length === 0) {
       return { ok: false, detail: `no element with testID "${clean}" in the current snapshot` };
     }
     if (matches.length > 1) {
       return {
         ok: false,
+        ambiguous: true,
         detail: `testID "${clean}" matches ${matches.length} elements — duplicate identifiers cannot bind an exact input`,
       };
     }
@@ -749,7 +771,7 @@ export function bindExactFillTarget(
       binding: {
         inputRef: `@${cleanNodeRef(node)}`,
         inputTestId: inputTestId(node.identifier),
-        inputSignature: signatureForNode(nodes, node),
+        inputSignature: signatureForNode(node),
         focusRef: `@${cleanNodeRef(node)}`,
         wrapper: false,
         secure: isSecureInputNode(node),
@@ -760,24 +782,25 @@ export function bindExactFillTarget(
   if (id?.endsWith(PRESSABLE_SUFFIX)) {
     const base = id.slice(0, -PRESSABLE_SUFFIX.length);
     if (base) {
-      const inputs = nodes.filter((n) => n.identifier === base && isRecognizedInputType(n.type));
+      const named = nodesWithTestID(nodes, base);
+      if (named.length > 1)
+        return {
+          ok: false,
+          ambiguous: true,
+          detail: `wrapper "${id}" maps to ${named.length} elements with testID "${base}" — ambiguous`,
+        };
+      const inputs = named.filter((n) => isRecognizedInputType(n.type));
       if (inputs.length === 1) {
         return {
           ok: true,
           binding: {
             inputRef: `@${cleanNodeRef(inputs[0])}`,
             inputTestId: base,
-            inputSignature: signatureForNode(nodes, inputs[0]),
+            inputSignature: signatureForNode(inputs[0]),
             focusRef: `@${cleanNodeRef(node)}`,
             wrapper: true,
             secure: isSecureInputNode(inputs[0]),
           },
-        };
-      }
-      if (inputs.length > 1) {
-        return {
-          ok: false,
-          detail: `wrapper "${id}" maps to ${inputs.length} inputs with testID "${base}" — ambiguous`,
         };
       }
       return {
@@ -836,13 +859,30 @@ function interactOpts(args: {
   };
 }
 
+function snapshotNodes(result: unknown): FlatNode[] | null {
+  try {
+    const envelope = JSON.parse((result as ToolResult).content[0].text) as {
+      ok?: boolean;
+      data?: { nodes?: FlatNode[] };
+    };
+    return envelope.ok !== false && Array.isArray(envelope.data?.nodes)
+      ? envelope.data.nodes
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+// The heal retries the identity the refused tap named, never whatever its refreshed ref now names.
 function keyboardHealDeps(
   getClient: () => CDPClient,
-  retryTap: () => Promise<ToolResult>,
+  tapAt: (ref?: string) => Promise<ToolResult>,
   qaContext?: QaDispatchContext,
+  target?: { ref: string; identity: RefSignature | null },
 ): KeyboardAutoHealDeps | null {
   const client = cdpClientOrNull(getClient);
   if (!client) return null;
+  let refreshed: unknown;
   return {
     dismissViaJs: async () => {
       qaContext?.authorize();
@@ -855,9 +895,24 @@ function keyboardHealDeps(
         return false;
       }
     },
-    refreshSnapshot: () =>
-      runNative(['snapshot'], { qaContext, qaReadOnly: qaContext !== undefined }),
-    retryTap,
+    refreshSnapshot: async () =>
+      // Identity re-resolution counts every node, not only interactive ones.
+      (refreshed = await runNative(['snapshot', '--full'], {
+        qaContext,
+        qaReadOnly: qaContext !== undefined,
+      })),
+    retryTap: async () => {
+      if (!target) return tapAt();
+      const nodes = snapshotNodes(refreshed);
+      const outcome =
+        target.identity && nodes ? refreshRef(target.identity, nodes) : { kind: 'absent' as const };
+      if (outcome.kind === 'unique') return tapAt(outcome.node.ref);
+      return failResult(
+        `Element at ref ${target.ref} did not re-resolve to exactly one element after the keyboard was dismissed — refusing to guess-tap`,
+        outcome.kind === 'ambiguous' ? 'TARGET_AMBIGUOUS' : 'STALE_REF',
+        { reResolution: outcome.kind, mutation: 'none' },
+      );
+    },
   };
 }
 
@@ -874,17 +929,28 @@ export function createDevicePressHandler(
       );
     }
     const target = hasRef ? (args.ref!.startsWith('@') ? args.ref! : `@${args.ref!}`) : undefined;
-    const cliArgs = hasRef ? ['press', target!] : ['press', String(args.x!), String(args.y!)];
-    if (args.doubleTap) cliArgs.push('--double-tap');
-    if (args.count && args.count > 1) cliArgs.push('--count', String(args.count));
-    if (args.holdMs && args.holdMs > 0) cliArgs.push('--hold-ms', String(args.holdMs));
-    const tap = async (): Promise<ToolResult> =>
-      surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+    const flags: string[] = [];
+    if (args.doubleTap) flags.push('--double-tap');
+    if (args.count && args.count > 1) flags.push('--count', String(args.count));
+    if (args.holdMs && args.holdMs > 0) flags.push('--hold-ms', String(args.holdMs));
+    const identity = target ? getCachedSignature(target) : null;
+    const tap = async (ref = target): Promise<ToolResult> =>
+      surfaceKeyboardGuard(
+        await runNative(
+          [...(ref ? ['press', ref] : ['press', String(args.x!), String(args.y!)]), ...flags],
+          interactOpts(args),
+        ),
+      );
     let result = await tap();
     if (result.isError) {
       result = await healKeyboardOccludedTap(
         result,
-        keyboardHealDeps(getClient, tap, args.qaContext),
+        keyboardHealDeps(
+          getClient,
+          tap,
+          args.qaContext,
+          target ? { ref: target, identity } : undefined,
+        ),
         args.qaContext,
       );
     }
@@ -909,21 +975,29 @@ export function createDeviceLongPressHandler(
   getClient: () => CDPClient,
 ): (args: LongPressArgs) => Promise<ToolResult> {
   return withSession(async (args) => {
-    let cliArgs: string[];
-    if (args.ref) {
-      const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
-      cliArgs = ['press', ref, '--hold-ms', String(args.durationMs ?? 1000)];
+    const target = args.ref ? (args.ref.startsWith('@') ? args.ref : `@${args.ref}`) : undefined;
+    let cliArgs: (ref?: string) => string[];
+    if (target) {
+      cliArgs = (ref = target) => ['press', ref, '--hold-ms', String(args.durationMs ?? 1000)];
     } else if (args.x != null && args.y != null) {
-      cliArgs = ['longpress', String(args.x), String(args.y)];
-      if (args.durationMs) cliArgs.push(String(args.durationMs));
+      cliArgs = () => [
+        'longpress',
+        String(args.x),
+        String(args.y),
+        ...(args.durationMs ? [String(args.durationMs)] : []),
+      ];
     } else {
       return failResult('Provide either ref or x+y coordinates');
     }
-    const tap = async (): Promise<ToolResult> =>
-      surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+    const identity = target ? getCachedSignature(target) : null;
+    const tap = async (ref?: string): Promise<ToolResult> =>
+      surfaceKeyboardGuard(await runNative(cliArgs(ref), interactOpts(args)));
     const result = await tap();
     if (result.isError) {
-      return healKeyboardOccludedTap(result, keyboardHealDeps(getClient, tap));
+      return healKeyboardOccludedTap(
+        result,
+        keyboardHealDeps(getClient, tap, undefined, target ? { ref: target, identity } : undefined),
+      );
     }
     return result;
   });
@@ -945,7 +1019,7 @@ export interface FillArgs {
   vetoUnfocused?: boolean;
   requireFocused?: boolean;
   skipFinalValidation?: boolean;
-  /** With focused: clear first and refuse before typing unless the field reads back empty. */
+  /** Replace the field's content instead of appending (focused: the runner's select-all sequence). */
   clearFirst?: boolean;
   /** Story 04 (#385): per-call settle budget override in ms. */
   settleTimeoutMs?: number;
@@ -1113,7 +1187,11 @@ interface FillFailureOpts {
 }
 
 function fillFailure(
-  code: 'NO_TEXT_INPUT_TARGET' | 'FOCUS_TARGET_OCCLUDED' | 'TEXT_ENTRY_UNVERIFIED',
+  code:
+    | 'NO_TEXT_INPUT_TARGET'
+    | 'FOCUS_TARGET_OCCLUDED'
+    | 'TEXT_ENTRY_UNVERIFIED'
+    | 'TARGET_AMBIGUOUS',
   message: string,
   opts: FillFailureOpts,
 ): ToolResult {
@@ -1123,6 +1201,7 @@ function fillFailure(
     ...(opts.verification
       ? {
           verification: {
+            evidence: opts.verification.evidence,
             native: opts.verification.native,
             nativeStable: opts.verification.nativeStable,
           },
@@ -1130,9 +1209,11 @@ function fillFailure(
       : {}),
     hint:
       opts.hint ??
-      (opts.mutation === 'none'
-        ? 'No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying.'
-        : 'The field may have been mutated. Read the field state with device_snapshot before any manual retry — do not blindly re-run device_fill.'),
+      (code === 'TARGET_AMBIGUOUS'
+        ? 'The target identity is ambiguous; do not retry this fill.'
+        : opts.mutation === 'none'
+          ? 'No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying.'
+          : 'The field may have been mutated. Read the field state with device_snapshot before any manual retry — do not blindly re-run device_fill.'),
   });
 }
 
@@ -1211,6 +1292,12 @@ export async function performExactFill(
   }
   const bind = bindExactFillTarget(snap.nodes, args.ref, priorSignature);
   if (!bind.ok) {
+    if (bind.ambiguous)
+      return failResult(
+        `TARGET_AMBIGUOUS: device_fill found more than one element for the target: ${bind.detail}. No text was entered.`,
+        'TARGET_AMBIGUOUS',
+        { mutation: 'none', pathsTried },
+      );
     if (!bind.unobservable) args.qaContext?.invalidate();
     const focusedHint =
       getActiveSession()?.platform !== 'android' &&
@@ -1301,7 +1388,9 @@ export async function performExactFill(
     if (mutation === 'none') {
       const code = extractErrorCode(primary);
       return fillFailure(
-        code === 'FOCUS_TARGET_OCCLUDED' ? 'FOCUS_TARGET_OCCLUDED' : 'NO_TEXT_INPUT_TARGET',
+        code === 'FOCUS_TARGET_OCCLUDED' || code === 'TARGET_AMBIGUOUS'
+          ? code
+          : 'NO_TEXT_INPUT_TARGET',
         `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`,
         { mutation: 'none', pathsTried },
       );
@@ -1415,11 +1504,11 @@ async function awaitReactInputValue(
     : 'unreadable';
 }
 
+// The requested identity itself; a wrapper id is never rewritten to an unobserved inner id.
 function focusedFillOracleTestId(args: FillArgs): string | null {
   if (args.testID) return args.testID;
   const clean = args.ref.replace(/^@/, '');
-  if (/^e\d+$/.test(clean)) return null;
-  return clean.endsWith(PRESSABLE_SUFFIX) ? clean.slice(0, -PRESSABLE_SUFFIX.length) : clean;
+  return /^e\d+$/.test(clean) ? null : clean;
 }
 
 function extractTextEntryRoute(result: ToolResult): string | undefined {
@@ -1455,66 +1544,40 @@ export async function performFocusedFill(
     );
   }
   const oracleTestId = focusedFillOracleTestId(args);
-  const beforeRead = await readReactInputValue(client, oracleTestId);
-  if (
-    (args.requireFocused && beforeRead?.focused !== true) ||
-    (args.vetoUnfocused && beforeRead && !beforeRead.focused)
-  )
-    return fillFailure(
-      'NO_TEXT_INPUT_TARGET',
-      'device_fill focused: the intended input is not focused; no text was entered.',
-      { mutation: 'none', pathsTried },
+  let before: string | null = null;
+  let beforeFocused = false;
+  const focusedProof = async (): Promise<boolean> => {
+    const read = await readReactInputValue(client, oracleTestId);
+    before = controlledReactValue(read);
+    beforeFocused = read?.focused === true;
+    return !(
+      (args.requireFocused && read?.focused !== true) ||
+      (args.vetoUnfocused && read && !read.focused)
     );
-  const before = controlledReactValue(beforeRead);
-  // Fill replaces: only a proven-focused field with a readable value can be cleared and read back empty.
-  if (args.clearFirst && (beforeRead?.focused !== true || before === null))
-    return fillFailure(
-      'NO_TEXT_INPUT_TARGET',
-      'device_fill focused: the focused input value is not readable, so it cannot be cleared first; no text was entered.',
-      { mutation: 'none', pathsTried },
-    );
-  if (args.clearFirst && before) {
-    const cleared = await runNative(['fill', args.ref, '\b'.repeat(before.length)], {
-      qaContext: args.qaContext,
-      focusedType: true,
-      settle: { enabled: false },
-    });
-    const clearVerified =
-      !cleared.isError &&
-      (await awaitReactInputValue(() => readReactInputValue(client, oracleTestId), '')) === 'exact';
-    const afterClear = clearVerified ? await readReactInputValue(client, oracleTestId) : null;
-    if (!clearVerified || afterClear?.focused !== true || afterClear.value !== '')
-      return fillFailure(
-        'TEXT_ENTRY_UNVERIFIED',
-        'device_fill focused: the field was not empty and focused after clearing; no replacement text was entered.',
-        {
-          mutation: cleared.isError ? extractMutationDisposition(cleared) : 'observed',
-          pathsTried,
-        },
-      );
-  }
-  const native = await runNative(['fill', args.ref, args.text], {
-    qaContext: args.qaContext,
-    focusedType: true,
-    settle: { enabled: false },
-  });
+  };
+  // clearFirst replaces in the runner: one select-all and text sequence, never an append.
+  const native = await runNative(
+    ['fill', args.ref, args.text, ...(args.clearFirst ? ['--clear-first'] : [])],
+    { qaContext: args.qaContext, focusedType: true, focusedProof, settle: { enabled: false } },
+  );
   if (native.isError) {
-    if (args.clearFirst && before)
-      return fillFailure('TEXT_ENTRY_UNVERIFIED', extractErrorText(native), {
-        mutation: 'observed',
-        pathsTried,
-      });
     const mutation = extractMutationDisposition(native);
     if (mutation === 'none') {
-      return fillFailure('NO_TEXT_INPUT_TARGET', extractErrorText(native), {
-        mutation: 'none',
-        pathsTried,
-        ...(extractErrorCode(native) === 'TEXT_SYNTHESIS_UNAVAILABLE'
-          ? {
-              hint: 'No text was entered. This Xcode cannot synthesize text, so device_fill focused: true cannot type here. Do not retry focused: true.',
-            }
-          : {}),
-      });
+      return fillFailure(
+        extractErrorCode(native) === 'TARGET_AMBIGUOUS'
+          ? 'TARGET_AMBIGUOUS'
+          : 'NO_TEXT_INPUT_TARGET',
+        extractErrorText(native),
+        {
+          mutation: 'none',
+          pathsTried,
+          ...(extractErrorCode(native) === 'TEXT_SYNTHESIS_UNAVAILABLE'
+            ? {
+                hint: 'No text was entered. This Xcode cannot synthesize text, so device_fill focused: true cannot type here. Do not retry focused: true.',
+              }
+            : {}),
+        },
+      );
     }
     return fillFailure('TEXT_ENTRY_UNVERIFIED', extractErrorText(native), {
       mutation: 'possible',
@@ -1534,8 +1597,7 @@ export async function performFocusedFill(
       },
       'Typed into the focused field; the value could not be confirmed. Confirm with device_screenshot or expect_text before relying on it.',
     );
-  if (args.skipFinalValidation || before === null || beforeRead?.focused !== true)
-    return unverified();
+  if (args.skipFinalValidation || before === null || !beforeFocused) return unverified();
   const verification = await awaitReactInputValue(
     () => readReactInputValue(client, oracleTestId),
     (args.clearFirst ? '' : before) + args.text,

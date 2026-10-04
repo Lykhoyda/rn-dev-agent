@@ -59,8 +59,6 @@ function signatureFor(ref: string, nodes = NODES) {
     ? {
         type: node.type,
         identifier: node.identifier,
-        flatIndex: index,
-        nodeCount: nodes.length,
       }
     : null;
 }
@@ -76,8 +74,6 @@ test('gh-581 bind: wrapper maps to its unique inner input, focus stays on the wr
       label: undefined,
       identifier: 'email',
       rect: { x: 0, y: 10, width: 10, height: 10 },
-      flatIndex: 1,
-      nodeCount: NODES.length,
     },
     focusRef: '@e10',
     wrapper: true,
@@ -100,7 +96,7 @@ test('gh-581 bind: direct input ref and bare testID both bind', () => {
   assert.equal((byTestId as { binding: { inputRef: string } }).binding.inputRef, '@e30');
 });
 
-test('gh-581 bind: blank Android identifiers rebind by type and frame', () => {
+test('gh-581 bind: blank Android identifiers retain their named identity', () => {
   const original = [
     {
       ref: '@e1',
@@ -115,8 +111,6 @@ test('gh-581 bind: blank Android identifiers rebind by type and frame', () => {
     identifier: '',
     label: 'Search',
     rect: { x: 0, y: 0, width: 10, height: 10 },
-    flatIndex: 0,
-    nodeCount: 1,
   });
   assert.ok(bound.ok);
   const binding = (
@@ -132,8 +126,13 @@ test('gh-581 bind: blank Android identifiers rebind by type and frame', () => {
     binding.inputTestId ?? binding.inputRef,
     binding.inputSignature as never,
   );
-  assert.ok(rebound.ok);
-  assert.equal((rebound as { binding: { inputRef: string } }).binding.inputRef, '@e2');
+  assert.ok(!rebound.ok, 'a changed label cannot retain an id-less identity');
+  const unchanged = bindExactFillTarget(
+    [{ ...original[0], ref: '@e2' }] as never,
+    binding.inputRef,
+    binding.inputSignature as never,
+  );
+  assert.ok(unchanged.ok);
 
   const replacement = [{ ...typed[0], rect: { x: 100, y: 100, width: 10, height: 10 } }];
   const replaced = bindExactFillTarget(
@@ -224,7 +223,7 @@ test('gh-581 bind: non-input, non-wrapper elements are rejected', () => {
 });
 
 test('gh-581 bind: a positional ref absent from the snapshot is rejected', () => {
-  const signature = { type: 'TextField', identifier: 'missing', flatIndex: 99, nodeCount: 100 };
+  const signature = { type: 'TextField', identifier: 'missing' };
   const out = bindExactFillTarget(NODES as never, '@e99', signature as never);
   assert.ok(!out.ok);
 });
@@ -240,7 +239,7 @@ test('gh-581 bind: positional refs reject missing or type-only prior identity', 
   const typeOnly = bindExactFillTarget(
     [{ ref: '@e1', type: 'TextField', rect: { x: 0, y: 0, width: 10, height: 10 } }] as never,
     '@e1',
-    { type: 'TextField', flatIndex: 0, nodeCount: 1 } as never,
+    { type: 'TextField' } as never,
   );
   assert.ok(!missing.ok);
   assert.ok(!typeOnly.ok);
@@ -260,8 +259,6 @@ test('gh-581 bind: an unchanged positional slot still requires unique identity',
   const signature = {
     type: 'TextField',
     identifier: 'plain-input',
-    flatIndex: 5,
-    nodeCount: NODES.length,
   };
   const out = bindExactFillTarget(duplicated as never, '@e30', signature as never);
   assert.ok(!out.ok);
@@ -285,7 +282,7 @@ test('gh-581 bind: positional ref with a shifted identity rebinds by signature o
       rect: { x: 0, y: 10, width: 10, height: 10 },
     },
   ];
-  const signature = { type: 'TextField', identifier: 'email', flatIndex: 1, nodeCount: 7 };
+  const signature = { type: 'TextField', identifier: 'email' };
   const rebound = bindExactFillTarget(shifted as never, '@e11', signature as never);
   assert.ok(rebound.ok, (rebound as { detail?: string }).detail);
   assert.equal((rebound as { binding: { inputRef: string } }).binding.inputRef, '@e13');
@@ -319,8 +316,6 @@ test('gh-581 bind: positional ref with a shifted identity rebinds by signature o
     '@e13',
   );
 
-  // Same node count as the signature: the shared refreshRef flat-index
-  // tie-breaker must NOT license mutation — duplicates stay ambiguous.
   const sameCount = [
     {
       ref: '@e11',
@@ -341,7 +336,36 @@ test('gh-581 bind: positional ref with a shifted identity rebinds by signature o
       rect: { x: 0, y: 20, width: 10, height: 10 },
     },
   ];
-  const sameCountSig = { type: 'TextField', identifier: 'email', flatIndex: 1, nodeCount: 3 };
+  const sameCountSig = { type: 'TextField', identifier: 'email' };
   const tieBroken = bindExactFillTarget(sameCount as never, '@e11', sameCountSig as never);
   assert.ok(!tieBroken.ok, 'flat-index tie-breaking must never bind a fill target');
 });
+
+test('S8: a different-kind twin carrying the bound testID is ambiguous at bind time', () => {
+  const button = {
+    ref: '@e40',
+    identifier: 'email',
+    type: 'Button',
+    rect: { x: 0, y: 90, width: 10, height: 10 },
+  };
+  for (const [ref, signature] of [
+    ['email', undefined],
+    ['@e11', { type: 'TextField', identifier: 'email' }],
+    ['@e10', signatureFor('@e10')],
+  ] as const) {
+    const out = bindExactFillTarget([...NODES, button] as never, ref, signature as never);
+    assert.ok(!out.ok, ref);
+    assert.equal((out as { ambiguous?: boolean }).ambiguous, true, ref);
+  }
+});
+
+for (const identifier of [undefined, '']) {
+  test(`id-less Search never rebinds to Chat at the same frame (${identifier ?? 'absent'})`, () => {
+    const rect = { x: 0, y: 0, width: 100, height: 40 };
+    const prior = { type: 'TextField', identifier, label: 'Search', rect };
+    const nodes = [{ ref: '@e1', type: 'TextField', identifier, label: 'Chat', rect }];
+    assert.equal(bindExactFillTarget(nodes, '@e1', prior).ok, false);
+    assert.equal(bindExactFillTarget([{ ...nodes[0], label: 'Search' }], '@e1', prior).ok, true);
+    assert.equal(bindExactFillTarget(nodes, '@e1', { ...prior, label: undefined }).ok, false);
+  });
+}

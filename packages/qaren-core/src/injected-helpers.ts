@@ -1463,6 +1463,14 @@ export const INJECTED_HELPERS = `
         var itid = iprops.testID || iprops.nativeID;
         var forwarded = iframe.forwarded;
         var wrapperCandidate = iframe.wrapperCandidate;
+        var inputAncestors = iframe.inputAncestors || [];
+        if (hostIndex !== null && hostEvidence.hosts[hostIndex].capabilities.fill === true) {
+          for (var ai = 0; ai < inputAncestors.length; ai++) {
+            var ancestor = inputAncestors[ai];
+            if (!ancestor.inputHostIndices) ancestor.inputHostIndices = [];
+            ancestor.inputHostIndices.push(hostIndex);
+          }
+        }
         if (forwarded && itid && (forwarded.testID || forwarded.nativeID) !== itid) forwarded = null;
         var interactive = isInteractiveFiber(ifiber);
         if (interactive) {
@@ -1507,6 +1515,8 @@ export const INJECTED_HELPERS = `
             var baseName = componentName && componentName.slice(componentName.lastIndexOf('.') + 1);
             wrapperCandidate = !isHostFiber(ifiber) && baseName && baseName !== 'View' && baseName !== 'RCTView'
               && !HOST_KIND_LOOKUP[baseName] && !INTERACTIVE_NAMES[baseName] && !iprops.role && !iprops.accessibilityRole ? entry : null;
+            if (wrapperCandidate || (!isHostFiber(ifiber) && itid)) inputAncestors = inputAncestors.concat([entry]);
+            if (hostIndex !== null && hostEvidence.hosts[hostIndex].capabilities.fill === true) entry.inputHostIndices = [hostIndex];
           }
         }
         var ich = ifiber.child;
@@ -1521,7 +1531,7 @@ export const INJECTED_HELPERS = `
         }
         while (ich) {
           if (typography && (++iEnqueued > iBudget || Date.now() >= typography.deadline)) { iEnqueueTruncated = true; break; }
-          iQueue.push({ fiber: ich, forwarded: nextForwarded, wrapperCandidate: wrapperCandidate, parentFiber: ifiber, parentHostIndex: parentHostIndex, textOwnerHostIndex: textOwnerHostIndex, rootIndex: iframe.rootIndex, animatedTypography: typographyRecord && typographyRecord.animated, hidden: hidden });
+          iQueue.push({ fiber: ich, forwarded: nextForwarded, wrapperCandidate: wrapperCandidate, inputAncestors: inputAncestors, parentFiber: ifiber, parentHostIndex: parentHostIndex, textOwnerHostIndex: textOwnerHostIndex, rootIndex: iframe.rootIndex, animatedTypography: typographyRecord && typographyRecord.animated, hidden: hidden });
           ich = ich.sibling;
         }
       }

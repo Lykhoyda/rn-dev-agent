@@ -443,3 +443,53 @@ for (const [plan, method] of [
     assert.match(outcome.failure?.seen ?? '', /did not change after recovery/);
   });
 }
+
+for (const front of ['app', 'dialog', 'dev-menu'] as const) {
+  test(`S9: an ambiguous target on a ${front} front is terminal: no recovery, login replay or retry`, async () => {
+    const twins = screen(['Save', 'Save'], front, { Save: 'login-screen' });
+    const f = fake([twins], {
+      login: { marker: { id: 'login-screen' }, block: block('### Login\n1. Tap "Sign in"\n') },
+    });
+    const ledger = await runPlan([block('1. Tap "Save"\n')], f.deps);
+    assert.equal(ledger.verdict, 'FAIL');
+    assert.match(ledger.failure?.seen ?? '', /TARGET_AMBIGUOUS/);
+    assert.equal(ledger.recoveries ?? 0, 0);
+    assert.deepEqual(
+      f.calls.filter((c) => c !== 'capture'),
+      [],
+    );
+  });
+}
+
+for (const kind of ['press', 'fill'] as const) {
+  test(`S8: a ${kind} the handler refuses as ambiguous at dispatch is terminal, never retried`, async () => {
+    const calls: string[] = [];
+    const refusal: ActResult = {
+      ok: false,
+      proven: false,
+      mutation: 'none',
+      error: 'TARGET_AMBIGUOUS: more than one element carries the target',
+      ambiguous: true,
+    };
+    const f = fake([screen(['Save'])], {
+      async press(ref) {
+        calls.push(`press ${ref}`);
+        return refusal;
+      },
+      async fill(ref) {
+        calls.push(`fill ${ref}`);
+        return refusal;
+      },
+      login: { marker: { id: 'login-screen' }, block: block('### Login\n1. Tap "Sign in"\n') },
+    });
+    const line = kind === 'press' ? '1. Tap "Save"\n' : '1. Type "x" into "Save"\n';
+    const s = screen(['Save']);
+    if (kind === 'fill') s.elements[0].kind = 'input';
+    f.deps.captureScreen = async () => s;
+    const ledger = await runPlan([block(line)], f.deps);
+    assert.equal(ledger.verdict, 'FAIL');
+    assert.match(ledger.failure?.seen ?? '', /TARGET_AMBIGUOUS/);
+    assert.equal(calls.length, 1);
+    assert.equal(ledger.steps.filter((r) => r.outcome === 'retry').length, 0);
+  });
+}

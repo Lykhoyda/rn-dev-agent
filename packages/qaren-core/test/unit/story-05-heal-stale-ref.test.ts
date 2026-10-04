@@ -48,7 +48,7 @@ test('unique re-resolution → healed with recomputed center + new ref', async (
   assert.equal(typeof out.ms, 'number');
 });
 
-test('ambiguous → failed STALE_REF with candidates (≤5) and pre-snapshot cachedMetadata', async () => {
+test('ambiguous → failed TARGET_AMBIGUOUS with candidates (≤5) and pre-snapshot cachedMetadata', async () => {
   updateRefMapFromFlat(oldNodes);
   const dupe = (ref, y) => ({
     ref,
@@ -74,7 +74,7 @@ test('ambiguous → failed STALE_REF with candidates (≤5) and pre-snapshot cac
   const env = parse(out.result);
   // Envelope shape (src/utils.ts failResult): { ok:false, error, code, meta }.
   // reResolution/candidates/cachedMetadata live under meta, not data.
-  assert.equal(env.code, 'STALE_REF');
+  assert.equal(env.code, 'TARGET_AMBIGUOUS');
   assert.equal(env.meta.reResolution, 'ambiguous');
   assert.equal(env.meta.candidates.length, 5);
   assert.deepEqual(env.meta.cachedMetadata, {

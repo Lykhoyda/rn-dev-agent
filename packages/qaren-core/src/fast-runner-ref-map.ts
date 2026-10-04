@@ -1,3 +1,5 @@
+import { exactIdentities } from './qa/identity.js';
+import { join } from './qa/screen.js';
 import { hashSnapshotNodes } from './lifecycle/settle-hash.js';
 
 export interface ElementRect {
@@ -58,15 +60,11 @@ export interface RefSignature {
   label?: string;
   identifier?: string;
   rect?: ElementRect;
-  flatIndex: number;
-  nodeCount: number;
 }
 
 interface StoredRefRecord extends RefMetadata {
   packageName?: string;
-  flatIndex: number;
   snapshotNodeIndex: number;
-  nodeCount: number;
   snapshotGeneration: number;
   keyboardStateAtSnapshot: boolean | null;
 }
@@ -350,13 +348,6 @@ export function updateRefMapFromFlat(
     return { applied: false, reason: 'empty-capture' };
   }
 
-  // refMap IS cleared (coordinates must never be served across generations —
-  // only the CURRENT snapshot is tappable), but metadataMap is NOT: ref ids are
-  // positional, so ids absent from this snapshot cannot collide with current
-  // ones; retaining their signatures (with their ORIGIN generation's
-  // flatIndex/nodeCount) lets a later stale tap heal by identity after a
-  // re-render (Story 05 acceptance: dense→sparse→tap-original-ref, #386).
-  // Colliding keys are overwritten by metadataMap.set below.
   refMap.clear();
   screenRect = null;
   snapshotGeneration = freshness.snapshotGeneration ?? snapshotGeneration + 1;
@@ -376,9 +367,7 @@ export function updateRefMapFromFlat(
     const numericRef = /^e(\d+)$/.exec(key);
     const meta: StoredRefRecord = {
       type: node.type,
-      flatIndex: i,
       snapshotNodeIndex: numericRef ? Number(numericRef[1]) : i,
-      nodeCount: nodes.length,
       snapshotGeneration,
       keyboardStateAtSnapshot,
     };
@@ -475,8 +464,6 @@ export function getCachedSignature(ref: string): RefSignature | null {
   if (!rec) return null;
   const sig: RefSignature = {
     type: rec.type,
-    flatIndex: rec.flatIndex,
-    nodeCount: rec.nodeCount,
   };
   if (rec.label !== undefined) sig.label = rec.label;
   if (rec.identifier !== undefined) sig.identifier = rec.identifier;
@@ -548,24 +535,18 @@ export type RefreshOutcome =
   | { kind: 'ambiguous'; candidates: FlatNode[] }
   | { kind: 'absent' };
 
-function identityMatches(sig: RefSignature, node: FlatNode): boolean {
-  return node.type === sig.type && node.label === sig.label && node.identifier === sig.identifier;
-}
-
-// Story 05 (#386): re-bind a stale ref to the live tree by identity attrs
-// (type/label/identifier — bounds excluded; enabled/hittable are state, not
-// identity). Maestro's rule: tap only on a UNIQUE match. The flat index is a
-// tie-breaker only when the tree shape is unchanged — never a primary key.
 export function refreshRef(sig: RefSignature, nodes: FlatNode[]): RefreshOutcome {
-  const matches: { node: FlatNode; index: number }[] = [];
-  for (let i = 0; i < nodes.length; i++) {
-    if (identityMatches(sig, nodes[i])) matches.push({ node: nodes[i], index: i });
-  }
+  // Android reports identifier="" for nodes without a resource id; join treats that as no id.
+  const identifier = sig.identifier?.trim() ? sig.identifier : undefined;
+  const quoted = identifier ?? sig.label;
+  if (quoted === undefined) return { kind: 'absent' };
+  const identities = exactIdentities(
+    join(nodes, []),
+    { quoted, phrase: quoted, exact: identifier !== undefined ? 'id' : 'text' },
+    'press',
+  );
+  const matches = identities.map(({ element }) => nodes.find((node) => node.ref === element.ref)!);
   if (matches.length === 0) return { kind: 'absent' };
-  if (matches.length === 1) return { kind: 'unique', node: matches[0].node };
-  if (nodes.length === sig.nodeCount) {
-    const atSameIndex = matches.filter((m) => m.index === sig.flatIndex);
-    if (atSameIndex.length === 1) return { kind: 'unique', node: atSameIndex[0].node };
-  }
-  return { kind: 'ambiguous', candidates: matches.map((m) => m.node) };
+  if (matches.length === 1) return { kind: 'unique', node: matches[0] };
+  return { kind: 'ambiguous', candidates: matches };
 }

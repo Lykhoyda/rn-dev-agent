@@ -12,7 +12,8 @@ const { _setMaestroInlineObserverForTest, runMaestroInline } =
   await import('../../dist/maestro-invoke.js');
 const { updateRefMapFromFlat, clearRefMap } = await import('../../dist/fast-runner-ref-map.js');
 const { okResult, failResult } = await import('../../dist/utils.js');
-const { HandlerError, secureMaskedFill, unwrap } = await import('../../dist/qa/adapt.js');
+const { HandlerError, fillEvidence, unwrap } = await import('../../dist/qa/adapt.js');
+const { QaDispatchContext } = await import('../../dist/domain/qa-dispatch.js');
 
 const NODES = [
   {
@@ -225,7 +226,7 @@ test('gh-581: duplicate wrapper mapping rejects without mutation', async () => {
     performExactFill({ ref: '@e1', text: 'Anna' }, null, NATIVE_ONLY),
   );
   const env = envelope(result as never);
-  assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
+  assert.equal(env.code, 'TARGET_AMBIGUOUS');
   assert.equal(env.meta.mutation, 'none');
   assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'), 'no mutation dispatched');
 });
@@ -243,8 +244,56 @@ test('gh-581: duplicate direct testIDs reject without mutation', async () => {
   const { result, calls } = await withFillSeam({ nodes }, () =>
     performExactFill({ ref: 'last-name', text: 'x' }, null, NATIVE_ONLY),
   );
-  assert.equal(envelope(result as never).code, 'NO_TEXT_INPUT_TARGET');
+  assert.equal(envelope(result as never).code, 'TARGET_AMBIGUOUS');
   assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'));
+});
+
+for (const [name, ref, duplicateIndex] of [
+  ['positional input', '@e3', 2],
+  ['direct input ID', 'last-name', 2],
+  ['positional wrapper', '@e1', 0],
+  ['wrapper inner input', 'first-name-pressable', 1],
+] as const) {
+  test(`gh-581: QA ${name} preserves ambiguity when a twin appears at binding`, async () => {
+    const context = new QaDispatchContext(10, () => 1);
+    const { result, calls } = await withFillSeam(
+      {
+        snapshot: () => [
+          ...NODES,
+          {
+            ...NODES[duplicateIndex],
+            ref: '@e9',
+            rect: { x: 40, y: 400, width: 320, height: 40 },
+          },
+        ],
+      },
+      () => createDeviceFillHandler(() => null as never)({ ref, text: 'x', qaContext: context }),
+    );
+    const env = envelope(result);
+    assert.equal(env.code, 'TARGET_AMBIGUOUS');
+    assert.equal(env.meta.mutation, 'none');
+    assert.deepEqual(env.meta.pathsTried, []);
+    assert.deepEqual(
+      calls.map((call) => call.cliArgs[0]),
+      ['snapshot'],
+    );
+    assert.doesNotThrow(() => context.assertComplete());
+  });
+}
+
+test('gh-581: QA unique bindings still fill and verify without invalidation', async () => {
+  for (const ref of ['@e3', 'last-name', '@e1', 'first-name-pressable']) {
+    const context = new QaDispatchContext(10, () => 1);
+    const { result, calls } = await withFillSeam({}, () =>
+      createDeviceFillHandler(() => null as never)({ ref, text: 'x', qaContext: context }),
+    );
+    assert.equal(envelope(result).ok, true, ref);
+    assert.deepEqual(
+      calls.map((call) => call.cliArgs[0]),
+      ['snapshot', 'fill', 'verify-input'],
+    );
+    assert.doesNotThrow(() => context.assertComplete());
+  }
 });
 
 test('gh-581: a non-input ref rejects instead of typing into ambient focus', async () => {
@@ -380,12 +429,15 @@ test('gh-581: secure uncontrolled masked value hard-fails and is not retried', a
   assert.equal((verify.opts.exactTarget as { secure?: boolean }).secure, true);
 });
 
-test('gh-581: only a stable secure-masked fill failure is the secure-fill success signal', async () => {
+test('I5: the real fill envelope carries the evidence class the walker maps', async () => {
   const cases = [
-    { verdict: 'secure-masked', stable: true, expected: true },
-    { verdict: 'secure-masked', stable: false, expected: false },
-    { verdict: 'mismatch', stable: true, expected: false },
-    { verdict: 'ambiguous', stable: true, expected: false },
+    { verdict: 'secure-masked', stable: true, expected: 'masked' },
+    { verdict: 'secure-masked', stable: false, expected: 'unavailable' },
+    { verdict: 'mismatch', stable: true, expected: 'mismatch' },
+    { verdict: 'mismatch', stable: false, expected: 'unavailable' },
+    { verdict: 'ambiguous', stable: true, expected: 'unavailable' },
+    { verdict: 'target-lost', stable: false, expected: 'unavailable' },
+    { verdict: 'unreadable', stable: true, expected: 'unavailable' },
   ];
   for (const { verdict, stable, expected } of cases) {
     const { result } = await withFillSeam(
@@ -399,9 +451,9 @@ test('gh-581: only a stable secure-masked fill failure is the secure-fill succes
       caught = error;
     }
     assert.ok(caught instanceof HandlerError, verdict);
-    assert.equal(secureMaskedFill(caught), expected, `${verdict} stable=${stable}`);
+    assert.equal(fillEvidence(caught), expected, `${verdict} stable=${stable}`);
   }
-  assert.equal(secureMaskedFill(new Error('TEXT_ENTRY_UNVERIFIED: x')), false);
+  assert.equal(fillEvidence(new Error('TEXT_ENTRY_UNVERIFIED: x')), undefined);
 });
 
 test('gh-581: ambiguous and target-lost verdicts hard-fail without retype', async () => {

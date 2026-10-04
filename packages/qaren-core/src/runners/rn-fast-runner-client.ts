@@ -36,6 +36,8 @@ import {
   clearRefMap,
   buildSnapshotVerdict,
   getCachedMetadata,
+  getCachedSignature,
+  refreshRef,
   getFreshRefTarget,
   type FlatNode,
   type RefMapUpdateOutcome,
@@ -1645,6 +1647,7 @@ export interface RunIOSArgs {
   focusWaitMs?: number;
   /** Type into the first responder instead of binding an input. */
   focused?: boolean;
+  _focusedProof?: () => Promise<boolean>;
   operationToken?: string;
   /** Independent CDP/helper readback; never serialized onto the runner wire. */
   _verifyExactReadback?: (
@@ -1703,6 +1706,7 @@ async function sendCommandOnce(
   timeoutMs: number,
   qaContext?: QaDispatchContext,
   qaTiming?: TimingContext,
+  focusedProof?: () => Promise<boolean>,
 ): Promise<RunnerResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -1714,6 +1718,7 @@ async function sendCommandOnce(
     const serialized = JSON.stringify(body);
     const now = qaTiming?.now ?? (() => performance.now());
     const resp = await measureTiming(qaTiming?.observe, now, 'native-transport', async () => {
+      if (focusedProof && !(await focusedProof())) return undefined;
       if (isMutatingCommand(body.command)) qaContext?.authorize();
       return cancellableFetch(fetchImpl, `http://127.0.0.1:${port}/command`, {
         method: 'POST',
@@ -1725,6 +1730,16 @@ async function sendCommandOnce(
         signal: controller.signal,
       });
     });
+    if (!resp)
+      return {
+        ok: false,
+        error: {
+          code: 'NO_TEXT_INPUT_TARGET',
+          message: 'The intended input is not focused; no text was entered.',
+          mutation: 'none',
+          reason: 'focus-proof-refused',
+        },
+      };
     const parsed = (await measureTiming(qaTiming?.observe, now, 'native-decode', () =>
       resp.json(),
     )) as RunnerResponse;
@@ -1793,6 +1808,7 @@ async function postCommandWithRecovery(
   },
   qaContext?: QaDispatchContext,
   qaTiming?: TimingContext,
+  focusedProof?: () => Promise<boolean>,
 ): Promise<{ resp: RunnerResponse; recovery?: TransportRecovery }> {
   if (runnerPoisoned && body.command !== 'status') {
     throw new Error(
@@ -1816,6 +1832,7 @@ async function postCommandWithRecovery(
         timeoutMs,
         qaContext,
         qaTiming,
+        focusedProof,
       ),
     };
   } catch (err) {
@@ -1840,6 +1857,7 @@ async function postCommandWithRecovery(
         timeoutMs,
         qaContext,
         qaTiming,
+        focusedProof,
       );
       return { resp: resent, recovery: { commandId, outcome: 'resent' } };
     }
@@ -2039,42 +2057,6 @@ export async function verifyTypeResultAfterSettle(
   );
   args.qaContext?.invalidate();
   return contained;
-}
-
-function sameRefIdentity(
-  before: ReturnType<typeof getCachedMetadata>,
-  after: ReturnType<typeof getCachedMetadata>,
-): boolean {
-  if (!before || !after) return false;
-  if (before.identifier !== undefined || after.identifier !== undefined) {
-    return before.identifier === after.identifier && before.type === after.type;
-  }
-  if (before.label !== undefined || after.label !== undefined) {
-    return before.label === after.label && before.type === after.type;
-  }
-  // Type alone is not an identity: a positional id can rebind to a different
-  // element of the same type once the keyboard leaves the tree.
-  return false;
-}
-
-// Same rule refreshRef enforces: a positional ref may only be re-served when
-// its identity resolves to exactly ONE node in the new tree. Equality at the
-// same key is not enough — sibling rows sharing a testID satisfy it after the
-// index set shifts.
-function countIdentityMatches(
-  before: NonNullable<ReturnType<typeof getCachedMetadata>>,
-  nodes: FlatNode[],
-): number {
-  let matches = 0;
-  for (const node of nodes) {
-    const candidate = {
-      type: node.type,
-      ...(node.label !== undefined ? { label: node.label } : {}),
-      ...(node.identifier !== undefined ? { identifier: node.identifier } : {}),
-    };
-    if (sameRefIdentity(before, candidate)) matches++;
-  }
-  return matches;
 }
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
@@ -2354,6 +2336,20 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     );
   }
 
+  // A runner without the replace sequence would append to a focused field instead of replacing it.
+  if (
+    args.command === 'type' &&
+    args.focused === true &&
+    args.clearFirst === true &&
+    !lastKnownCapabilities.includes('FILL_EVIDENCE_V1')
+  ) {
+    return failResult(
+      'RN_FAST_RUNNER_STALE: the active iOS runner cannot replace a focused field; reopen the device session to rebuild before retrying.',
+      'RN_FAST_RUNNER_STALE',
+      { missingFeatures: ['FILL_EVIDENCE_V1'], dispatched: false, mutation: 'none' },
+    );
+  }
+
   let keyboardRelayoutRecovered = false;
   // Protocol-v1 runners ignore fresh-geometry fields. Enforce the corrected
   // policy client-side instead of silently downgrading to point containment.
@@ -2391,15 +2387,12 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   const refreshFailure: { result: ToolResult | null } = { result: null };
   const refreshTargetAfterKeyboard = async (): Promise<boolean> => {
     if (!args._targetRef) return true; // raw coordinates remain meaningful after dismissal
-    // Ref ids are positional: the keyboard leaving the tree shifts the index
-    // set, so the same id can denote a different element. Only an identity
-    // match may be re-served under the original ref.
-    const before = getCachedMetadata(args._targetRef);
+    const signature = getCachedSignature(args._targetRef);
     let snapshot: RunnerResponse;
     try {
       snapshot = await postCommand({
         command: 'snapshot',
-        interactiveOnly: true,
+        interactiveOnly: false,
         ...(args.bundleId ? { appBundleId: args.bundleId } : {}),
       });
     } catch (err) {
@@ -2424,8 +2417,17 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         ? { keyboardVisible: data.keyboardVisible }
         : {}),
     });
-    if (!sameRefIdentity(before, getCachedMetadata(args._targetRef))) return false;
-    if (!before || countIdentityMatches(before, flat) !== 1) return false;
+    if (!signature) return false;
+    const refreshed = refreshRef(signature, flat);
+    if (refreshed.kind === 'ambiguous') {
+      refreshFailure.result = failResult(
+        'Multiple identities match the keyboard target',
+        'TARGET_AMBIGUOUS',
+        { mutation: 'none' },
+      );
+      return false;
+    }
+    if (refreshed.kind !== 'unique' || refreshed.node.ref !== args._targetRef) return false;
     const target = getFreshRefTarget(args._targetRef, { allowUnknownKeyboardState: true });
     if (!target) return false;
     body.x = Math.round(target.rect.x + target.rect.width / 2);
@@ -2464,6 +2466,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
         args.qaContext,
         args.qaTiming,
+        args.command === 'type' && args.focused ? args._focusedProof : undefined,
       ));
     }
   } catch (err) {
@@ -2502,6 +2505,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
         args.qaContext,
         args.qaTiming,
+        args.command === 'type' && args.focused ? args._focusedProof : undefined,
       ));
     } catch (err) {
       throwIfCancelled();
@@ -2518,7 +2522,8 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     keyboardRelayoutRecovered = true;
   }
   const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
-  checkQaNativeOutcome(args.qaContext, resp.error?.code, resp.data, resp.error?.reason);
+  if (resp.error?.reason !== 'focus-proof-refused')
+    checkQaNativeOutcome(args.qaContext, resp.error?.code, resp.data, resp.error?.reason);
   const announce = resp.ok ? takeQuiescenceAnnouncement() : null;
   if (!resp.ok) {
     const message = resp.error?.message ?? 'runner returned !ok with no error';

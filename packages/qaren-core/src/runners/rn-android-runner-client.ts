@@ -1474,12 +1474,7 @@ async function startAndroidRunnerAttempt(
       } else {
         const compat = classifyAndroidHealth(info);
         if (compat.compatible) return runnerState!;
-        if (compat.reason === 'missing-commands') {
-          // GH #418: reinstalling the SAME APK can't add commands — artifact
-          // staleness. Always throw the typed error: the retry-once wrapper is
-          // the SINGLE rebuild owner (one Gradle build even on a checkout whose
-          // fresh build still misses commands — multi-review advisory); mid-flow
-          // callers surface the typed refusal.
+        if (compat.reason === 'missing-commands' || compat.reason === 'missing-features') {
           throw new AndroidCommandsStaleError(
             compat.missing ?? [],
             bundleId,
@@ -1676,9 +1671,7 @@ async function startAndroidRunnerAttempt(
           resolved = true;
           pendingUpgradeNote = undefined; // review amendment: never report an upgrade that failed
           child.kill('SIGTERM');
-          if (compat.reason === 'missing-commands') {
-            // GH #418: typed — the wrapper's retry-once invalidates the APKs
-            // at open; mid-flow callers surface RUNNER_COMMANDS_STALE.
+          if (compat.reason === 'missing-commands' || compat.reason === 'missing-features') {
             reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId, serial));
             return;
           }

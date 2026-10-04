@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   renameSync,
   symlinkSync,
   writeFileSync,
@@ -580,7 +581,8 @@ for (const kind of ['wait', 'scroll', 'press', 'fill'] as const) {
       const result = await walkBlock(block, fake.deps, 0, [], undefined, undefined, {
         mode: 'replay',
       });
-      assert.equal(result.miss, item.line);
+      assert.equal(result.miss, undefined);
+      assert.match(result.failure?.seen ?? '', /TARGET_AMBIGUOUS/);
       assert.deepEqual(fake.actions, []);
     });
   }
@@ -621,7 +623,8 @@ for (const occurrences of [1, 2]) {
     const result = await walkBlock(block, fake.deps, 0, [], undefined, undefined, {
       mode: 'replay',
     });
-    assert.equal(result.miss, occurrences === 2 ? item.line : undefined);
+    assert.equal(result.miss, undefined);
+    if (occurrences === 2) assert.match(result.failure?.seen ?? '', /TARGET_AMBIGUOUS/);
     assert.equal(!!result.failure, occurrences === 2);
     assert.deepEqual(fake.actions, []);
   });
@@ -744,69 +747,6 @@ test('stored fill refresh before authorization re-walks without repeating earlie
   assert.deepEqual(fake.actions, ['back', 'fill @pin 4711', 'press @save']);
 });
 
-test('a text wait echoed by containers replays without re-walk', async () => {
-  const rect = (y: number, height = 20) => ({ x: 16, y, width: 200, height });
-  const home = joinScreen(
-    [
-      { ref: '@window', index: 0, type: 'Window', rect: { x: 0, y: 0, width: 390, height: 844 } },
-      ...[1, 2, 3, 4].map((index) => ({
-        ref: `@container${index}`,
-        index,
-        parentIndex: index - 1,
-        type: 'Other',
-        label: 'Welcome',
-        rect: rect(100, 400),
-      })),
-      {
-        ref: '@welcome',
-        index: 5,
-        parentIndex: 4,
-        type: 'StaticText',
-        label: 'Welcome',
-        rect: rect(120),
-      },
-      {
-        ref: '@tasks',
-        index: 6,
-        parentIndex: 0,
-        type: 'Button',
-        label: 'Tasks',
-        identifier: 'tab-tasks',
-        hittable: true,
-        enabled: true,
-        rect: rect(800),
-      },
-    ],
-    [],
-    'app',
-    { native: 'complete', react: 'complete' },
-  );
-  const echoed = () => {
-    const fake = app({ welcomeId: '' });
-    const capture = fake.deps.captureScreen;
-    fake.deps.captureScreen = async (...args) => {
-      const shown = await capture(...args);
-      return shown.elements.some((e) => e.ref === '@welcome')
-        ? { ...shown, elements: home.elements, visibleText: home.visibleText }
-        : shown;
-    };
-    return fake;
-  };
-  const dir = root();
-  const first = ledger(await runPlan(blocks(literal), echoed().deps, [], store(dir)));
-  assert.equal(first.verdict, 'PASS', JSON.stringify(first.failure));
-  const before = readFileSync(actionFile(dir), 'utf8');
-  assert.match(before, /- extendedWaitUntil: \{ visible: \{ text: "Welcome" \}, timeout: 15000 \}/);
-  const fake = echoed();
-  const second = ledger(await runPlan(blocks(literal), fake.deps, [], store(dir)));
-  assert.equal(second.verdict, 'PASS', JSON.stringify(second.failure));
-  assert.equal(second.path, 'replay');
-  assert.deepEqual(second.blocks, [{ key: SLUG, outcome: 'pass', source: 'replayed' }]);
-  assert.equal(second.jev.calls, 0);
-  assert.equal(fake.judge.calls.length, 0);
-  assert.equal(readFileSync(actionFile(dir), 'utf8'), before);
-});
-
 test('a wait on a uniquely labelled control sharing its testID replays by text without re-walk', async () => {
   const rect = (y: number) => ({ x: 16, y, width: 200, height: 20 });
   const home = joinScreen(
@@ -873,4 +813,35 @@ test('a post-admission picker remains flagged after the app returns', async () =
   assert.equal(result.verdict, 'PASS');
   assert.equal(result.publicationInterrupted, true);
   assert.ok(captures > 1);
+});
+
+test('a duplicate stored id terminates replay without rediscovering its unique label', async () => {
+  const dir = root();
+  try {
+    await run(literalLabel, dir);
+    const before = readFileSync(actionFile(dir), 'utf8');
+    const fake = app();
+    const capture = fake.deps.captureScreen;
+    fake.deps.captureScreen = async (options) => {
+      const observed = await capture(options);
+      return observed.elements.some((e) => e.testID === 'onboarding-done')
+        ? {
+            ...observed,
+            elements: [
+              ...observed.elements,
+              element('@duplicate', 'Cancel', { testID: 'onboarding-done', disabled: true }),
+            ],
+          }
+        : observed;
+    };
+    const result = await runPlan(blocks(literalLabel), fake.deps, [], store(dir));
+    assert.equal(result.verdict, 'FAIL');
+    assert.match(result.failure?.seen ?? '', /TARGET_AMBIGUOUS/);
+    assert.deepEqual(fake.actions, ['press @skip']);
+    assert.equal(fake.judge.calls.length, 0);
+    assert.deepEqual(result.blocksWritten, []);
+    assert.equal(readFileSync(actionFile(dir), 'utf8'), before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

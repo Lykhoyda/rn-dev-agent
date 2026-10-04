@@ -73,6 +73,12 @@ export interface Screen {
   keyboardVisible?: boolean;
 }
 
+const forwardedInputs = new WeakMap<Element, string>();
+
+export function forwardedInputOf(element: Element): string | undefined {
+  return forwardedInputs.get(element);
+}
+
 const labelEchoes = new WeakMap<Element, Element>();
 const elementFrames = new WeakMap<Element, NonNullable<NativeNode['rect']>>();
 
@@ -124,6 +130,7 @@ export interface DigestEntry {
   handlerless?: boolean;
   // Custom composite with a separately emitted interactive descendant, not a view or declared control.
   compositeWrapper?: true;
+  inputHostIndices?: number[];
   // Under a host view that hides its subtree from accessibility.
   hidden?: boolean;
 }
@@ -508,6 +515,7 @@ export function join(
     for (let i = 0; !duplicates.has(nodeIndex) && i < digest.length; i += 1) {
       if (used.has(i) || digest[i].hidden) continue;
       const d = digest[i];
+      if (kindOf(n.type) === 'input' && d.compositeWrapper) continue;
       const byId = testID !== undefined && d.testID === testID;
       const byLabel =
         !byId &&
@@ -690,6 +698,26 @@ export function join(
         values: value ? [value] : [],
         nativeLabelMayBeValue: false,
       });
+    const inputHosts = d.inputHostIndices?.map((index) => reactHostEvidence?.hosts[index]);
+    const provenHost =
+      reactHostEvidence?.complete === true &&
+      inputHosts?.length === 1 &&
+      inputHosts[0]?.capabilities.fill === true &&
+      inputHosts[0].testID === d.testID;
+    // Either the composite ancestor of its input host, or that host's own entry left over after
+    // the native input joined a composite ancestor proven to contain the same host.
+    const hostOfJoinedAncestor =
+      provenHost &&
+      !d.compositeWrapper &&
+      digest.some(
+        (other, j) =>
+          used.has(j) &&
+          other.testID === d.testID &&
+          other.inputHostIndices?.length === 1 &&
+          other.inputHostIndices[0] === d.inputHostIndices![0],
+      );
+    if (provenHost && (d.compositeWrapper || hostOfJoinedAncestor))
+      forwardedInputs.set(element, d.testID);
     joinedDiagnosticFacts.set(element, diagnosticFacts);
     elements.push(element);
   });
@@ -743,9 +771,7 @@ export function join(
       control.kind !== 'input' &&
       elements[only].label === control.label
     ) {
-      const nearest = labelEchoes.get(elements[only]);
-      if (nearest) labelEchoes.set(control, nearest);
-      else labelEchoes.set(elements[only], control);
+      if (!labelEchoes.has(elements[only])) labelEchoes.set(elements[only], control);
     }
   });
   return {

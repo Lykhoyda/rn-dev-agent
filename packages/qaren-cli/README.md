@@ -67,12 +67,24 @@ Plans contain a `## QA` section, named `###` blocks, numbered actions and
 [literal](../qaren-core/test/fixtures/plans/literal.md) and
 [phrase](../qaren-core/test/fixtures/plans/phrases.md) fixtures and the
 [parser](../qaren-core/src/qa/plan.ts) for accepted grammar. Quoted press and fill
-targets resolve observed labels or test IDs locally; multiple eligible matches
-refuse with `TARGET_AMBIGUOUS`, without a Jev tie-break, even if the target adds
-positional words such as `Tap "Save" at the bottom`. A text element that is the
-sole text descendant of matching labelled controls links to the nearest one.
-When that control is among the matches, the text and matching outer wrappers
-collapse into it, whether an outer wrapper is hittable or not. Separate controls
+targets resolve observed labels or test IDs locally. Distinct matches are
+counted before kind, disabled, hittability, offscreen or React-only filters, so two
+or more refuse with `TARGET_AMBIGUOUS`, without a Jev tie-break, even if the
+target adds positional words such as `Tap "Save" at the bottom`. A fill counts
+text-entry candidates plus every element carrying its testID, so a form label
+naming an input is not a twin, while a button sharing the input's testID is. A
+React-only projection collapses into the one native input only when complete
+React host evidence and digest ancestry prove it represents the same input host:
+either its composite ancestor forwarding the same testID, or the host entry left
+after the native input joined that ancestor. A separate element sharing the ID
+remains a twin, as covered by the
+[forwarding-proof tests](../qaren-core/test/unit/qa/identity.test.ts). A merged composite
+input keeps its placeholder for quoted fill resolution. The refusal is terminal:
+it is never recovered, retried or re-walked,
+including for stored replay selectors and for a handler that finds twins at dispatch. A text element
+that is the sole text descendant of matching labelled controls links to the
+nearest one. When that control is among the matches and contains the text
+inside its frame, the text collapses into it. Separate controls
 in distinct subtrees with the same label still refuse as ambiguous. The
 [label-echo tests](../qaren-core/test/unit/qa/label-echo.test.ts) cover both cases.
 The refusal lists
@@ -84,16 +96,20 @@ rounded frame.
 Fills use strict native value verification first. A strict fill replaces the
 field's content: the bound input is cleared before typing, and verification
 expects exactly the plan text. Keyboard fallback typing also replaces: see below.
-A secure field reads back
-only as masked, so a fill into a secure target passes on the runner's stable
-`secure-masked` verdict; every other strict fill requires an exact read-back,
-and a screen change alone never verifies a fill. During discovery, a quoted
+Rebinding an input without a testID requires its original label and native type;
+the same frame alone cannot substitute a different input.
+Only a stable exact read-back
+verifies a fill. A masked secure read-back or an unreadable one records a
+passing row with reason `UNVERIFIED_FILL`, never a verified pass; an empty or
+placeholder read-back of a non-empty fill on any field, a secure mask whose
+length matches neither the character nor the UTF-16 count, or any other
+mismatch fails without retry. A screen change alone never verifies a fill. During discovery, a quoted
 iOS fill can use keyboard fallback when no observable native input resolves, or
 strict binding refuses `NO_TEXT_INPUT_TARGET` before any text mutation for a
 non-native-input target. Phrase fills and stored replay selectors do not use
 this fallback; ambiguous targets and potentially mutated fills still fail.
 
-React-only input projections still count when matching a quoted strict fill,
+Separate React-only input projections still count when matching a quoted strict fill,
 so a native input and a React-only input sharing its testID refuse as
 `TARGET_AMBIGUOUS` before any tap. A strict fill never acts on a React-only
 input: when one is the only match, an accessibility-hidden input represented
@@ -103,6 +119,8 @@ native input resolves strictly.
 
 Tap-based fallback requires one onscreen, enabled, nonsecure native element
 carrying a unique testID, with no matching observable native input or secure node.
+A quoted base testID reaches its `-pressable` wrapper only while an element or
+React host carrying the base testID is also observed; no suffix is assumed.
 The keyboard-down path requires proof that the keyboard is hidden before the
 single tap. Every binding after the tap, including refreshed strict bindings,
 must uniquely resolve the original testID or its `-pressable` wrapper-base
@@ -110,8 +128,7 @@ identity; a matching label cannot
 substitute for that identity. If the same input becomes natively observable,
 strict verification resumes. Otherwise the keyboard must become visible and
 the target must remain eligible. React evidence that the intended input is
-unfocused vetoes typing, and so does an unavailable React read, because the
-field must be cleared first (below).
+unfocused vetoes typing.
 
 When the keyboard is already up, iOS fallback types only with positive React
 proof that the intended input is focused. With an eligible target, QaReN taps it,
@@ -120,24 +137,23 @@ a target, it requires that no secure or disabled element carries the quoted
 testID and React reports that exact input focused. The guard and proof use the
 quoted ID unchanged, including a literal `-pressable` suffix. Only an
 observed wrapper in the tap path establishes a wrapper-to-base identity mapping.
-Both keyboard-up paths require a second positive React focus read immediately
-before native typing. A false, unbound, unreadable or failed read at either proof
-stage types nothing; failure of the pre-dispatch read returns
+The final focus read runs after runner readiness and health checks, in the
+call that sends the native typing command. Both keyboard-up paths require this
+read to be positive; the keyboard-down transition path vetoes a contradictory
+unfocused read. A false, unbound, unreadable or failed read at either proof stage
+on a keyboard-up path types nothing; failure of the pre-dispatch read returns
 `NO_TEXT_INPUT_TARGET` with no mutation. An unknown keyboard state still refuses.
 Each walker focus decision logs one value-free `fallback-focus` line.
 
-QaReN then clears the focused field and types once without final value validation.
-Clearing needs a readable React value on the proven-focused input: a non-empty
-value is deleted with keystrokes. Immediately before replacement typing, a
-React read of the same testID must report both an empty value and positive focus.
-An unreadable or uncontrolled value refuses before clearing with
-`NO_TEXT_INPUT_TARGET`. Failed clearing or a missing empty-and-focused proof
-refuses with `TEXT_ENTRY_UNVERIFIED` and sends no replacement text. Successful
-clearing records an observed mutation; any later replacement failure retains
-`mutation: observed` and returns `TEXT_ENTRY_UNVERIFIED`, without safe-retry
-guidance, even if the runner reports no replacement mutation or only a possible
-one. Fields already empty keep the existing typing-failure behavior. Secure fields
-clear the same way. The [focused replacement tests](../qaren-core/test/unit/device-fill-focused-replace.test.ts)
+QaReN then replaces the focused field's content and types once without final
+value validation: the runner selects the whole field and types the plan text in
+one synthesized sequence, so no readable React value is needed. A runner
+must advertise `FILL_EVIDENCE_V1` on both iOS and Android. Session startup routes
+a missing capability through the bounded source-rebuild path instead of
+accepting the released artifact. An active iOS runner missing it refuses focused
+replacement with `RN_FAST_RUNNER_STALE`
+and no mutation instead of appending. A refused replacement keeps the runner's
+mutation disposition. The [focused replacement tests](../qaren-core/test/unit/device-fill-focused-replace.test.ts)
 cover these guards and mutation reporting.
 A successful keyboard step records a passing row with reason `UNVERIFIED_FILL`,
 allowing later plan steps to continue; it does not establish the field's final
@@ -145,8 +161,9 @@ value. Failed keyboard typing is not retried. Before the fallback tap or
 no-target typing dispatch, the value is protected under the
 [shared masking rules](#input-value-masking), and screenshots are withheld for the rest
 of the walk. The block remains unsaved,
-including when the tap leads back to strict verification. The eligibility and
-identity rules are owned by the [resolver](../qaren-core/src/qa/resolve.ts) and
+including when the tap leads back to strict verification. Eligibility is owned
+by the [resolver](../qaren-core/src/qa/resolve.ts), exact identity counting by
+the [shared identity model](../qaren-core/src/qa/identity.ts), and both are
 covered by the [fallback tests](../qaren-core/test/unit/qa/keyboard-fallback.test.ts).
 
 ### Plan checks and screen evidence

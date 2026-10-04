@@ -189,8 +189,6 @@ test('ref healing and reused generations never inherit earlier presence proof', 
   assert.deepEqual(getCachedSignature('@e3'), {
     type: 'Button',
     label: 'Continue',
-    flatIndex: 0,
-    nodeCount: 1,
   });
   assert.equal(Object.hasOwn(getFreshRefTarget('@e3')!, 'presence'), false);
 
