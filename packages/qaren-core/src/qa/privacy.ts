@@ -209,30 +209,22 @@ interface Rule {
   quoted?: true;
 }
 
-// Which form of a value each policy matches: a secret takes its whole token, even echoed inside a
-// word; typed text in durable output masks only when quoted or long; persisted blocks keep typed values.
+// Which form of a value each policy matches: a protected value takes its whole token, even echoed
+// inside a word; typed text in durable output masks only when quoted or long; blocks keep typed values.
 function rulesOf(value: PrivateValue, policy: Policy, tokenized: ReadonlySet<string>): Rule[] {
   return forms(value.text).flatMap((form): Rule[] => {
     const escaped = escape(form);
     const exact = { pattern: chars(form) < SHORT ? whole(escaped) : escaped };
     const token = { pattern: `[${WORD}.@-]*${escaped}[${WORD}.@-]*` };
-    switch (value.provenance) {
-      case 'secret':
-        return [token];
-      case 'concealed':
-        return policy === 'durable' || policy === 'identifier' ? [exact] : [token];
-      case 'typed':
-        if (policy === 'identifier') return [exact];
-        if (policy === 'durable')
-          return [
-            { pattern: `"${escaped}"`, quoted: true },
-            { pattern: `“${escaped}”`, quoted: true },
-            ...(chars(form) < SHORT ? [] : [{ pattern: escaped }]),
-          ];
-        return policy === 'model' && tokenized.has(value.text) ? [exact] : [];
-      case 'observed':
-        return policy === 'model' && tokenized.has(value.text) ? [exact] : [];
-    }
+    if (value.provenance === 'secret' || value.provenance === 'concealed') return [token];
+    if (value.provenance === 'typed' && policy === 'identifier') return [token];
+    if (value.provenance === 'typed' && policy === 'durable')
+      return [
+        { pattern: `"${escaped}"`, quoted: true },
+        { pattern: `“${escaped}”`, quoted: true },
+        ...(chars(form) < SHORT ? [] : [{ pattern: escaped }]),
+      ];
+    return policy === 'model' && tokenized.has(value.text) ? [exact] : [];
   });
 }
 
@@ -645,10 +637,12 @@ export function modelMask(
     )
     .map((value) => value.text)
     .filter((value) => chars(value) >= SHORT);
+  // Tokens already in the text are shielded by digit-free placeholders so no value rule rewrites them.
+  const guard = (i: number): string => String.fromCharCode(0xe001, 0xe100 + i, 0xe001);
   const maskText = (text: string): string => {
     const opaque = tokens.filter((token) => text.includes(token));
     let guarded = text;
-    opaque.forEach((token, i) => (guarded = guarded.split(token).join(`${i}`)));
+    opaque.forEach((token, i) => (guarded = guarded.split(token).join(guard(i))));
     const masked = matchPrivate(
       guarded,
       all,
@@ -656,7 +650,7 @@ export function modelMask(
       (match) => replacements.get(match) ?? replacements.get(match.trim()),
       tokenized,
     ).text;
-    return opaque.reduce((out, token, i) => out.split(`${i}`).join(token), masked);
+    return opaque.reduce((out, token, i) => out.split(guard(i)).join(token), masked);
   };
   return {
     tokens,

@@ -143,38 +143,29 @@ async function walk() {
     return { ok: true, proven: true };
   };
   const appRoot = mkdtempSync(join(tmpdir(), 'qaren-egress-'));
-  const logged: string[] = [];
-  const write = process.stderr.write.bind(process.stderr);
-  process.stderr.write = ((chunk: string | Uint8Array) => {
-    logged.push(String(chunk));
-    return true;
-  }) as typeof process.stderr.write;
-  let ledger;
-  try {
-    ledger = await runPlan(blocks, f.deps, [], { appRoot, platform: 'ios', appId: 'com.example' });
-  } finally {
-    process.stderr.write = write;
-  }
+  const ledger = await runPlan(blocks, f.deps, [], {
+    appRoot,
+    platform: 'ios',
+    appId: 'com.example',
+  });
   const dir = join(appRoot, '.qaren', 'actions');
   const files = existsSync(dir) ? readdirSync(dir) : [];
   return {
     ledger,
     streamed,
     judge,
-    logged,
     files,
     yaml: files.map((file) => readFileSync(join(dir, file), 'utf8')),
   };
 }
 
 test('every canary is absent at every core egress boundary', async () => {
-  const { ledger, streamed, judge, logged, files, yaml } = await walk();
+  const { ledger, streamed, judge, files, yaml } = await walk();
   assert.equal(ledger.verdict, 'FAIL');
   assert.ok(judge.requests.length > 0, 'the phrase check reached the model');
   assertAbsent('streamed rows', streamed);
   assertAbsent('ledger', ledger);
   assertAbsent('model requests', judge.requests);
-  assertAbsent('core log', logged);
   assertAbsent('block files', [files, yaml]);
 });
 

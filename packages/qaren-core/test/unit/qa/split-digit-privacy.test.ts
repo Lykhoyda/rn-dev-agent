@@ -306,3 +306,24 @@ test('derived forms of a protected value are masked: grouped digits and Unicode 
   assert.equal(privacy.redact(`name ${'Café'.normalize('NFD')}`), `name ${MASK}`);
   assert.equal(privacy.redact('order 98765 of 77'), 'order 98765 of 77');
 });
+
+test('a concealed input value echoed inside a word is masked with its whole token in every sink', () => {
+  const observed = screen([
+    element('@pin', 'PIN', { kind: 'input', secure: true, value: '7' }),
+    element('@echo', 'code x7x', { kind: 'text' }),
+  ]);
+  const privacy = new ObservedPrivacy(['hunter2']);
+  privacy.observe(observed);
+  assert.equal(privacy.redact('seen: code x7x'), `seen: code ${MASK}`);
+  assert.equal(privacy.redactIdentifier('login-hunter2x'), MASK);
+  assert.equal(privacy.maskForModel([], []).apply('code x7x'), `code ${MASK}`);
+});
+
+test('opaque model tokens survive a short protected digit value equal to their position', () => {
+  const privacy = new ObservedPrivacy();
+  privacy.concealFallback('1');
+  const values = Array.from({ length: 12 }, (_, i) => `value-${String.fromCharCode(97 + i)}`);
+  const mask = privacy.maskForModel(values, []);
+  const text = mask.tokens.join(' ');
+  assert.equal(mask.apply(text), text);
+});

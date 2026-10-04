@@ -1026,11 +1026,24 @@ fn row(line: u64, kind: &str) -> String {
     )
 }
 
+// Streamed rows are value-free; only the result ledger carries the core's projected text.
+fn projected(row: &str, text: &str) -> String {
+    format!(
+        "{},\"text\":{}}}",
+        row.trim_end_matches('}'),
+        serde_json::to_string(text).unwrap()
+    )
+}
+
 fn pass_stdout() -> String {
     let rows = [row(1, "step"), row(2, "check")];
+    let steps = [
+        projected(&rows[0], "1. Tap \"Tasks\""),
+        projected(&rows[1], "✓ \"Tasks\""),
+    ];
     let ledger = format!(
         r#"{{"verdict":"PASS","path":"walk","blocks":[{{"key":"plan","outcome":"pass","source":"discovered"}}],"steps":[{}],"jev":{{"calls":0,"medianMs":0}},"llmTurns":0,"escapes":0,"recoveries":0}}"#,
-        rows.join(",")
+        steps.join(",")
     );
     format!(
         "{}\n{}\n{}\n",
