@@ -5,6 +5,8 @@ import {
   cancellableFetch,
   execFile,
   interruptible,
+  isAbort,
+  throwIfCancelled,
   RunCancelledError,
   sleep,
   spawn,
@@ -140,4 +142,28 @@ test('one deadline interrupts every connect primitive before its continuation', 
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(effects, [primitive]);
   }
+});
+
+test('ambient cancellation survives wrapped errors and explicit signal omission', () => {
+  const controller = new AbortController();
+  const extra = new AbortController();
+  const reason = new Error('walk stopped');
+  withCancellation(controller.signal, () => {
+    assert.equal(isAbort(new Error('ordinary failure')), false);
+    assert.doesNotThrow(() => throwIfCancelled());
+    controller.abort(reason);
+    assert.equal(isAbort(new Error('wrapped failure')), true);
+    assert.throws(
+      () => throwIfCancelled(),
+      (error) => error === reason,
+    );
+    assert.throws(
+      () => throwIfCancelled(extra.signal),
+      (error) => error === reason,
+    );
+    withCancellation(undefined, () => {
+      assert.equal(isAbort(new Error('cleanup failure')), false);
+      assert.doesNotThrow(() => throwIfCancelled());
+    });
+  });
 });

@@ -11,6 +11,7 @@ import {
   cancellableFetch,
   sleep,
   cancellationSignal,
+  throwIfCancelled,
   isAbort,
   withCancellation,
 } from '../domain/cancellation.js';
@@ -338,6 +339,7 @@ export async function resolveAndroidSerial(explicit?: string): Promise<string | 
     const serials = parseAdbDevicesSerials(stdout);
     return serials.length === 1 ? serials[0] : undefined;
   } catch {
+    throwIfCancelled();
     return undefined;
   }
 }
@@ -448,19 +450,11 @@ export function resolveAndroidInstallAction(opts: {
   return 'build-then-install';
 }
 
-/**
- * Self-install the in-tree runner on first use (parity with rn-fast-runner's cold build):
- * if the instrumentation isn't registered on the device, install the prebuilt APKs — and
- * if those don't exist yet, cold-build them via Gradle first. Throws an actionable error
- * (surfaced as RN_ANDROID_RUNNER_DOWN by the caller) when the SDK/Gradle/adb step fails.
- */
 async function ensureAndroidRunnerInstalled(
   deviceId?: string,
   opts: { forceReinstall?: boolean; forceLocalBuild?: boolean; signal?: AbortSignal } = {},
 ): Promise<'prebuilt' | 'local'> {
-  opts.signal?.throwIfAborted();
-  // Fail fast if the target isn't online — never start a multi-minute cold build (or an
-  // install) against an offline/absent device. (Codex review: avoid the build-then-fail trap.)
+  throwIfCancelled(opts.signal);
   try {
     const { stdout } = await execFileAsync('adb', [...adbSerialArgs(deviceId), 'get-state'], {
       timeout: 5_000,
@@ -468,7 +462,8 @@ async function ensureAndroidRunnerInstalled(
     });
     if (stdout.trim() !== 'device') throw new Error(`adb state is "${stdout.trim()}"`);
   } catch (err) {
-    opts.signal?.throwIfAborted();
+    throwIfCancelled(opts.signal);
+    if (isAbort(err)) throw err;
     throw new Error(
       `rn-android-runner: target device not online (adb get-state) — boot the emulator / connect the device. ` +
         `${err instanceof Error ? err.message : String(err)}`,
@@ -486,21 +481,20 @@ async function ensureAndroidRunnerInstalled(
         },
       )
     ).stdout;
-  } catch {
-    opts.signal?.throwIfAborted();
+  } catch (error) {
+    throwIfCancelled(opts.signal);
+    if (isAbort(error)) throw error;
     // adb/pm unavailable → treat as not registered; the install/adb step below surfaces the real error.
   }
-  // GH #382: resolve prebuilt APKs (verified cache → release download) before the
-  // local Gradle build. When prebuilt, the resolved paths point at the cache and
-  // the build-then-install branch is skipped (no gradlew on the user's machine).
-  // Fail-open: build-local returns the Gradle output paths (unchanged cold path).
-  const artifacts = await resolveAndroidRunnerArtifacts(
-    getPluginVersion(),
-    { appApk: APK_APP, testApk: APK_TEST },
-    undefined,
-    opts.forceLocalBuild,
+  const artifacts = await withCancellation(cancellationSignal(opts.signal), () =>
+    resolveAndroidRunnerArtifacts(
+      getPluginVersion(),
+      { appApk: APK_APP, testApk: APK_TEST },
+      undefined,
+      opts.forceLocalBuild,
+    ),
   );
-  opts.signal?.throwIfAborted();
+  throwIfCancelled(opts.signal);
   const provenance = artifactProvenanceToState(artifacts.provenance);
   if (artifacts.note) pendingUpgradeNote = artifacts.note;
 
@@ -520,7 +514,8 @@ async function ensureAndroidRunnerInstalled(
         signal: opts.signal,
       });
     } catch (err) {
-      opts.signal?.throwIfAborted();
+      throwIfCancelled(opts.signal);
+      if (isAbort(err)) throw err;
       throw new Error(
         `rn-android-runner cold build failed (gradlew assembleDebug assembleDebugAndroidTest in ${RN_ANDROID_RUNNER_DIR}). ` +
           `Ensure the Android SDK + a JDK are installed and on PATH. ${err instanceof Error ? err.message : String(err)}`,
@@ -533,13 +528,14 @@ async function ensureAndroidRunnerInstalled(
       timeout: ADB_INSTALL_TIMEOUT_MS,
       signal: opts.signal,
     });
-    opts.signal?.throwIfAborted();
+    throwIfCancelled(opts.signal);
     await execFileAsync('adb', buildAdbInstallArgs(deviceId, artifacts.testApk), {
       timeout: ADB_INSTALL_TIMEOUT_MS,
       signal: opts.signal,
     });
   } catch (err) {
-    opts.signal?.throwIfAborted();
+    throwIfCancelled(opts.signal);
+    if (isAbort(err)) throw err;
     throw new Error(
       `rn-android-runner APK install failed (adb install -r). Is the emulator/device online? ` +
         `${err instanceof Error ? err.message : String(err)}`,
@@ -756,6 +752,7 @@ export async function probeAndroidRunnerHealthInfo(
           : {}),
     };
   } catch {
+    throwIfCancelled();
     if (runnerState?.hostPort === port) lastKnownCapabilities = [];
     return { reachable: false };
   } finally {
@@ -793,7 +790,7 @@ export async function reapMismatchedAndroidRunner(
   ) => Promise<void>,
   signal?: AbortSignal,
 ): Promise<void> {
-  signal?.throwIfAborted();
+  throwIfCancelled(signal);
   const deviceId = state?.deviceId;
   if (!deviceId) {
     throw new Error(
@@ -807,7 +804,7 @@ export async function reapMismatchedAndroidRunner(
       return releaseAndroidInteractionSlot({ ...opts, signal });
     });
   const receipt = await releaseSlot({ deviceId, includeLegacy: false });
-  signal?.throwIfAborted();
+  throwIfCancelled(signal);
   const requiredPackages = [
     'dev.lykhoyda.rndevagent.androidrunner.test',
     'dev.lykhoyda.rndevagent.androidrunner',
@@ -868,7 +865,7 @@ export async function reapMismatchedAndroidRunner(
     },
     signal,
   );
-  signal?.throwIfAborted();
+  throwIfCancelled(signal);
 }
 
 export async function reapActiveAndroidRunner(deviceId?: string): Promise<void> {
@@ -1169,6 +1166,7 @@ export async function runBoundedAndroidRunnerRebuild<T>(
   cleanup: (signal: AbortSignal) => Promise<void>,
   dependencies: AndroidRunnerRebuildDependencies = {},
 ): Promise<T> {
+  throwIfCancelled();
   const pluginVersion = getPluginVersion() ?? 'unknown';
   const acquire = dependencies.acquire ?? acquireAndroidRunnerRebuildLock;
   const claim = acquire(pluginVersion);
@@ -1235,23 +1233,23 @@ export async function runBoundedAndroidRunnerRebuild<T>(
   };
   try {
     const result = await rebuild(controller.signal);
-    controller.signal.throwIfAborted();
+    throwIfCancelled(controller.signal);
     for (let attempt = 0; attempt < transitionAttempts; attempt += 1) {
-      controller.signal.throwIfAborted();
+      throwIfCancelled(controller.signal);
       try {
         if (complete(lock)) {
-          controller.signal.throwIfAborted();
+          throwIfCancelled(controller.signal);
           clearInterval(heartbeatTimer);
           return result;
         }
-      } catch {}
+      } catch {
+        throwIfCancelled(controller.signal);
+      }
       if (attempt + 1 < transitionAttempts) {
-        await new Promise<void>((resolve) => {
-          setTimeout(
-            resolve,
-            dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS,
-          );
-        });
+        await sleep(
+          dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS,
+          controller.signal,
+        );
       }
     }
     if (!controller.signal.aborted) {
@@ -1259,7 +1257,7 @@ export async function runBoundedAndroidRunnerRebuild<T>(
         androidRebuildRefusal(error, 'runner artifact rebuild completion was not durable'),
       );
     }
-    controller.signal.throwIfAborted();
+    throwIfCancelled(controller.signal);
     throw androidRebuildRefusal(error, 'runner artifact rebuild completion was not durable');
   } catch (cause) {
     if (leaseAuthorityLost) {
@@ -1282,7 +1280,7 @@ export async function runBoundedAndroidRunnerRebuild<T>(
     );
     let cleanupVerified = false;
     try {
-      await cleanup(cleanupController.signal);
+      await withCancellation(undefined, () => cleanup(cleanupController!.signal));
       cleanupController.signal.throwIfAborted();
       cleanupVerified = true;
     } catch {}
@@ -1329,6 +1327,7 @@ export function invalidateAndroidRunnerApks(
   rm: (path: string) => void = (p) => rmSync(p, { force: true }),
 ): void {
   for (const apk of RUNNER_APK_PATHS) {
+    throwIfCancelled();
     try {
       rm(apk);
     } catch {
@@ -1363,6 +1362,8 @@ export async function startAndroidRunner(
   try {
     return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
   } catch (err) {
+    throwIfCancelled(opts._rebuildSignal);
+    if (isAbort(err)) throw err;
     if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
       const state = await runBoundedAndroidRunnerRebuild(
         err,
@@ -1390,6 +1391,7 @@ export async function startAndroidRunner(
           );
         },
       );
+      throwIfCancelled();
       pendingUpgradeNote = 'runner artifact rebuilt (authority identity mismatch)';
       return state;
     }
@@ -1423,6 +1425,7 @@ export async function startAndroidRunner(
           );
         },
       );
+      throwIfCancelled();
       pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${err.missing.join(', ') || 'unknown'})`;
       return state;
     }
@@ -1436,7 +1439,7 @@ async function startAndroidRunnerAttempt(
   devicePort = DEFAULT_PORT,
   opts: StartAndroidRunnerOpts = {},
 ): Promise<AndroidRunnerState> {
-  opts._rebuildSignal?.throwIfAborted();
+  throwIfCancelled(opts._rebuildSignal);
   const serial =
     deviceId ??
     (testAuthorityState ? runnerState?.deviceId : undefined) ??
@@ -1485,6 +1488,7 @@ async function startAndroidRunnerAttempt(
         }
         // GH #383: a reachable-but-incompatible runner is reaped (force-stop +
         // state clear) and force-reinstalled so the fresh APK supersedes it.
+        throwIfCancelled();
         pendingUpgradeNote = 'runner upgraded (protocol/version mismatch)';
         forceReinstall = true;
         await reapMismatchedAndroidRunner(reusableState);
@@ -1495,7 +1499,7 @@ async function startAndroidRunnerAttempt(
     }
   }
 
-  opts._rebuildSignal?.throwIfAborted();
+  throwIfCancelled(opts._rebuildSignal);
   // Self-install on first use (no external CLI) — resolve prebuilt (or build/install)
   // the in-tree runner APKs if the instrumentation isn't on the device yet.
   const provenance = await ensureAndroidRunnerInstalled(deviceId, {
@@ -1504,16 +1508,21 @@ async function startAndroidRunnerAttempt(
     signal: opts._rebuildSignal,
   });
 
-  let hostPort = await findFreePort(devicePort);
-  opts._rebuildSignal?.throwIfAborted();
+  let hostPort = await withCancellation(cancellationSignal(opts._rebuildSignal), () =>
+    findFreePort(devicePort),
+  );
+  throwIfCancelled(opts._rebuildSignal);
   try {
     await execFileAsync('adb', buildAdbForwardArgs(deviceId, hostPort, devicePort), {
       signal: opts._rebuildSignal,
     });
-  } catch {
-    opts._rebuildSignal?.throwIfAborted();
+  } catch (error) {
+    throwIfCancelled(opts._rebuildSignal);
+    if (isAbort(error)) throw error;
     // host port raced between probe and forward → re-probe once with any free port
-    hostPort = await findFreePort(0);
+    hostPort = await withCancellation(cancellationSignal(opts._rebuildSignal), () =>
+      findFreePort(0),
+    );
     await execFileAsync('adb', buildAdbForwardArgs(deviceId, hostPort, devicePort), {
       signal: opts._rebuildSignal,
     });
@@ -1643,11 +1652,11 @@ async function startAndroidRunnerAttempt(
         capability: authority.capability,
       });
       if (resolved) return;
-      signal?.throwIfAborted();
+      throwIfCancelled(signal);
       if (healthy) {
         const info = await probeAndroidRunnerHealthInfo(hostPort, authority.capability);
         if (resolved) return;
-        signal?.throwIfAborted();
+        throwIfCancelled(signal);
         if (
           !androidHealthMatchesAuthority(info, {
             instanceId: authority.instanceId,
@@ -1704,7 +1713,7 @@ async function startAndroidRunnerAttempt(
 }
 
 export async function stopAndroidRunner(deviceId?: string, signal?: AbortSignal): Promise<void> {
-  signal?.throwIfAborted();
+  throwIfCancelled(signal);
   // GH #383 (review amendment): adopt first so a post-respawn stop finds the
   // persisted runner (empty in-memory state would otherwise leak the forward).
   adoptPersistedAndroidState(deviceId ?? undefined);
@@ -1763,6 +1772,7 @@ async function sendCommandOnce(
       signal: controller.signal,
     });
   } catch (err) {
+    throwIfCancelled();
     if ((err as { name?: string } | undefined)?.name === 'AbortError') {
       throw new Error(
         `RUNNER_TIMEOUT: rn-android-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms`,
@@ -1776,6 +1786,7 @@ async function sendCommandOnce(
   try {
     parsed = (await resp.json()) as RunnerResponse;
   } catch {
+    throwIfCancelled();
     throw new Error('rn-android-runner returned a non-JSON response body');
   }
   // GH #383: mirror the iOS /command v-stamp check — a runner hot-swapped to an
@@ -1811,6 +1822,7 @@ async function probeCommandStatus(
     );
     return parseStatusProbeReply(resp, commandId);
   } catch {
+    throwIfCancelled();
     return null;
   }
 }
@@ -1837,6 +1849,7 @@ async function postCommandWithRecovery(
       resp: await sendCommandOnce(state.hostPort, { ...body, commandId }, timeoutMs, qaContext),
     };
   } catch (err) {
+    throwIfCancelled();
     if (err instanceof QaDispatchError) throw err;
     const message = err instanceof Error ? err.message : String(err);
     if (!isAmbiguousTransportFailure(message)) throw err;
@@ -1890,6 +1903,7 @@ export async function androidIsWindowUpdatingProbe(
     const updating = (resp.data as { updating?: unknown } | undefined)?.updating;
     return resp.ok && typeof updating === 'boolean' ? updating : null;
   } catch {
+    throwIfCancelled();
     return null;
   }
 }
@@ -1910,6 +1924,7 @@ export async function androidSnapshotNodesViaProbe(
     updateRefMapFromFlat(flat);
     return flat;
   } catch {
+    throwIfCancelled();
     return null;
   }
 }
@@ -2034,6 +2049,7 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
       args.qaContext,
     ));
   } catch (err) {
+    throwIfCancelled();
     if (args.qaContext) args.qaContext.refuse('ACTION_OUTCOME_UNCERTAIN');
     const m = errMessage(err);
     // GH #383: a protocol mismatch (reuse-gate reject, post-start verify, or the

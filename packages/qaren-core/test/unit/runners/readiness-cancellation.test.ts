@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import childProcess from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import { syncBuiltinESMExports } from 'node:module';
 import { promisify } from 'node:util';
 import { EventEmitter } from 'node:events';
@@ -23,6 +24,21 @@ test('native startup settles cancellation and rejects buffered readiness without
     return originalLstat(path, options);
   });
   const writes: unknown[] = [];
+  const mutations: unknown[] = [];
+  t.mock.method(fs, 'mkdirSync', (...args) => {
+    mutations.push(['mkdir', ...args]);
+  });
+  t.mock.method(fs, 'rmSync', (...args) => {
+    mutations.push(['rm', ...args]);
+  });
+  const originalCreateServer = net.createServer;
+  let bindings = 0;
+  t.mock.method(net, 'createServer', (...args) => {
+    bindings++;
+    return Reflect.apply(originalCreateServer, net, args);
+  });
+  let pmWait: (() => Promise<{ stdout: string; stderr: string }>) | undefined;
+  const commands: string[][] = [];
   const spawns: Array<
     EventEmitter & { stdout: PassThrough; stderr: PassThrough; pid: number; kill(): boolean }
   > = [];
@@ -67,12 +83,15 @@ test('native startup settles cancellation and rejects buffered readiness without
   };
   Object.defineProperty(execute, promisify.custom, {
     configurable: true,
-    value: async (command, args, options) =>
-      new Promise((resolve, reject) => {
+    value: async (command, args, options) => {
+      commands.push(args);
+      if (pmWait && args.includes('instrumentation')) return pmWait();
+      return new Promise((resolve, reject) => {
         execute(command, args, options, (error, stdout, stderr) =>
           error ? reject(error) : resolve({ stdout, stderr }),
         );
-      }),
+      });
+    },
   });
   childProcess.execFile = execute;
   t.after(() => {
@@ -93,6 +112,43 @@ test('native startup settles cancellation and rejects buffered readiness without
     if (previousLease === undefined) delete process.env.QAREN_DEVICE_LEASE;
     else process.env.QAREN_DEVICE_LEASE = previousLease;
   });
+
+  android._setAndroidRunnerStateForTest(null);
+  android.consumePendingAndroidUpgradeNote();
+  const pmController = new AbortController();
+  let notifyPm!: () => void;
+  const pmStarted = new Promise<void>((resolve) => {
+    notifyPm = resolve;
+  });
+  let releasePm!: () => void;
+  pmWait = () => {
+    notifyPm();
+    return new Promise((resolve) => {
+      releasePm = () => resolve({ stdout: '', stderr: '' });
+    });
+  };
+  const pmPending = withCancellation(pmController.signal, () =>
+    android.startAndroidRunner('emulator-test', 'com.example.app', 0),
+  );
+  const pmReason = new RunCancelledError();
+  const pmRejected = assert.rejects(pmPending, (error) => error === pmReason);
+  await pmStarted;
+  const beforeAbort = commands.length;
+  const beforeMutations = mutations.length;
+  const beforeBindings = bindings;
+  const beforeSpawns = spawns.length;
+  pmController.abort(pmReason);
+  await pmRejected;
+  releasePm();
+  await setImmediate();
+  assert.equal(commands.length, beforeAbort);
+  assert.equal(mutations.length, beforeMutations);
+  assert.equal(bindings, beforeBindings);
+  assert.equal(spawns.length, beforeSpawns);
+  assert.equal(android.consumePendingAndroidUpgradeNote(), undefined);
+  assert.equal(android.getAndroidRunnerState(), null);
+  assert.deepEqual(writes, []);
+  pmWait = undefined;
 
   for (const terminal of ['abort-with-buffered-output', 'error', 'exit'] as const) {
     ios._setFastRunnerStateForTest(null);

@@ -1,16 +1,10 @@
-import { cancellableFetch } from '../domain/cancellation.js';
-// GH #382 (Story 01): prebuilt runner artifacts — resolve a runner from a
-// verified cache/download before falling back to the multi-minute local build.
-//
-// The resolution is fail-open: any problem (offline, 404, checksum mismatch,
-// corrupt/unsafe zip, oversize, missing manifest) falls through to `build-local`
-// with a diagnostic note. A broken artifact can only make a session slower,
-// never blocked.
-//
-// Split by design: pure decision functions (no IO — unit-tested directly) and an
-// injected `ArtifactDeps` IO port (`defaultArtifactDeps()` in production; fakes in
-// tests). Mirrors resolveRunnerStartPlan / resolveAndroidInstallAction style.
-
+import {
+  cancellableFetch,
+  interruptible,
+  isAbort,
+  throwIfCancelled,
+  withCancellation,
+} from '../domain/cancellation.js';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -152,6 +146,7 @@ async function acquireArtifact(
   deps: ArtifactDeps,
   extractedOk: (productsDir: string) => boolean,
 ): Promise<AcquireResult> {
+  throwIfCancelled();
   if (deps.env.RN_RUNNER_BUILD === 'local') return { provenance: 'build-local' };
 
   const manifest = deps.readManifest();
@@ -173,6 +168,7 @@ async function acquireArtifact(
       try {
         actualByName[a.name] = deps.sha256File(zp);
       } catch {
+        throwIfCancelled();
         allZipsPresent = false;
       }
     } else {
@@ -190,20 +186,25 @@ async function acquireArtifact(
   if (decision === 'cache') return { provenance: 'cache', productsDir };
 
   // decision === 'download' — verify BEFORE unzip, unzip with a traversal guard.
+  throwIfCancelled();
   try {
     deps.mkdirp(cacheDir);
     for (const a of assets) {
       const zp = join(cacheDir, a.name);
-      await deps.fetchToFile(releaseAssetUrl(RUNNER_REPO, version, a.name), zp, {
-        timeoutMs: DOWNLOAD_TIMEOUT_MS,
-        maxBytes: a.bytes + DOWNLOAD_SIZE_SLACK_BYTES,
-      });
+      await interruptible(() =>
+        deps.fetchToFile(releaseAssetUrl(RUNNER_REPO, version, a.name), zp, {
+          timeoutMs: DOWNLOAD_TIMEOUT_MS,
+          maxBytes: a.bytes + DOWNLOAD_SIZE_SLACK_BYTES,
+        }),
+      );
       const got = deps.sha256File(zp);
       if (got !== a.sha256) {
         throw new Error(`checksum mismatch for ${a.name} (expected ${a.sha256}, got ${got})`);
       }
+      throwIfCancelled();
       deps.unzip(zp, productsDir);
     }
+    throwIfCancelled();
     if (!extractedOk(productsDir)) {
       throw new Error('prebuilt archive missing expected runner products after unzip');
     }
@@ -215,10 +216,12 @@ async function acquireArtifact(
     };
   } catch (err) {
     try {
-      deps.rm(productsDir);
+      withCancellation(undefined, () => deps.rm(productsDir));
     } catch {
       /* best-effort cleanup of a partial extract */
     }
+    throwIfCancelled();
+    if (isAbort(err)) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     return {
       provenance: 'build-local',
@@ -242,16 +245,14 @@ export async function resolveIosRunnerArtifacts(
   version: string | null,
   localDerivedDataPath: string,
   deps: ArtifactDeps = defaultArtifactDeps(),
-  // GH #382 (Codex P1): the #418 stale-command recovery deletes the local build
-  // product to force a cold rebuild from source. It must bypass the prebuilt tier
-  // — otherwise a version-matched-but-stale prebuilt is re-selected and the heal
-  // (guaranteed only by a source rebuild) never happens.
   forceLocalBuild = false,
 ): Promise<ResolvedIosArtifacts> {
+  throwIfCancelled();
   if (forceLocalBuild) {
     return { provenance: 'build-local', derivedDataPath: localDerivedDataPath };
   }
   const r = await acquireArtifact('ios', version, deps, iosExtractedOk(deps));
+  throwIfCancelled();
   const derivedDataPath = r.provenance === 'build-local' ? localDerivedDataPath : r.productsDir!;
   return { provenance: r.provenance, derivedDataPath, note: r.note };
 }
@@ -260,13 +261,14 @@ export async function resolveAndroidRunnerArtifacts(
   version: string | null,
   local: { appApk: string; testApk: string },
   deps: ArtifactDeps = defaultArtifactDeps(),
-  // GH #382 (Codex P1): recovery path bypasses prebuilt — see resolveIosRunnerArtifacts.
   forceLocalBuild = false,
 ): Promise<ResolvedAndroidArtifacts> {
+  throwIfCancelled();
   if (forceLocalBuild) {
     return { provenance: 'build-local', appApk: local.appApk, testApk: local.testApk };
   }
   const r = await acquireArtifact('android', version, deps, androidExtractedOk(deps));
+  throwIfCancelled();
   if (r.provenance === 'build-local') {
     return { provenance: r.provenance, appApk: local.appApk, testApk: local.testApk, note: r.note };
   }
@@ -302,7 +304,10 @@ async function fetchToFile(
   opts: { timeoutMs: number; maxBytes: number },
 ): Promise<void> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+  const timer = setTimeout(
+    () => controller.abort(new Error('artifact download timed out')),
+    opts.timeoutMs,
+  );
   try {
     const res = await cancellableFetch(fetch, url, {
       signal: controller.signal,
@@ -310,12 +315,13 @@ async function fetchToFile(
     });
     if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
     if (!res.body) throw new Error(`empty response body for ${url}`);
+    throwIfCancelled();
     mkdirSync(dirname(dest), { recursive: true });
     const reader = res.body.getReader();
     const chunks: Buffer[] = [];
     let total = 0;
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await interruptible(() => reader.read(), controller.signal);
       if (done) break;
       total += value.byteLength;
       if (total > opts.maxBytes) {
@@ -323,6 +329,7 @@ async function fetchToFile(
       }
       chunks.push(Buffer.from(value));
     }
+    throwIfCancelled(controller.signal);
     writeFileSync(dest, Buffer.concat(chunks));
   } finally {
     clearTimeout(timer);
@@ -330,12 +337,14 @@ async function fetchToFile(
 }
 
 function unzipWithGuard(zipPath: string, destDir: string): void {
+  throwIfCancelled();
   const listing = execFileSync('unzip', ['-Z1', zipPath], { encoding: 'utf-8' });
   const entries = listing
     .split('\n')
     .map((s) => s.trim())
     .filter(Boolean);
   assertNoTraversal(entries);
+  throwIfCancelled();
   mkdirSync(destDir, { recursive: true });
   execFileSync('unzip', ['-o', '-qq', zipPath, '-d', destDir], { stdio: 'ignore' });
 }

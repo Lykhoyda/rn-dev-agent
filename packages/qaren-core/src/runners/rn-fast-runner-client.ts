@@ -9,6 +9,7 @@ import {
   sleep as cancellableSleep,
   interruptible,
   cancellationSignal,
+  throwIfCancelled,
   isAbort,
 } from '../domain/cancellation.js';
 import { promisify } from 'node:util';
@@ -733,10 +734,9 @@ export async function startFastRunner(
   deviceId: string,
   bundleId: string,
   port?: number,
-  // GH #382 (Codex P1): the #418 stale-command recovery forces a source rebuild
-  // by bypassing the prebuilt artifact tier.
   opts: { forceLocalBuild?: boolean; attachOnly?: boolean } = {},
 ): Promise<FastRunnerState> {
+  throwIfCancelled();
   adoptPersistedFastRunnerState(deviceId);
   if (shouldReuseRunner(runnerState, deviceId)) return runnerState!;
   if (runnerState) await stopFastRunner(deviceId);
@@ -749,17 +749,13 @@ export async function startFastRunner(
     throw new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`);
   }
 
-  // GH #382: resolve a prebuilt artifact (verified cache → release download)
-  // before the local build. When prebuilt, derivedDataPath points at the cached
-  // DerivedData layout so hasBuiltTestProduct is true and the plan skips
-  // build-for-testing — no xcodebuild build on the user's machine. Fail-open:
-  // build-local returns the local DerivedData path (unchanged cold path).
   const artifacts = await resolveIosRunnerArtifacts(
     getPluginVersion(),
     derivedDataPathForRunner(),
     undefined,
     opts.forceLocalBuild,
   );
+  throwIfCancelled();
   const derivedDataPath = artifacts.derivedDataPath;
   if (artifacts.note) pendingFastRunnerArtifactNote = artifacts.note;
   const plan = resolveRunnerStartPlan({
@@ -1104,6 +1100,7 @@ export async function fastSwipe(
     }
     return resp as unknown as FastRunnerResponse;
   } catch (error) {
+    throwIfCancelled();
     if (error instanceof QaDispatchError) throw error;
     if (qaContext) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1123,8 +1120,7 @@ export async function fastHealthCheck(): Promise<boolean> {
     const result = await defaultHttpProbe(runnerState.port, 2000);
     return result.ok && result.status === 200 && result.bodyOk === true;
   } catch {
-    // Preserve the original contract: any network/abort/parse error → false.
-    // (The probe helper throws on fetch errors; M7 review caught this regression.)
+    throwIfCancelled();
     return false;
   }
 }
@@ -1297,6 +1293,7 @@ async function defaultHttpProbe(
       if (typeof body.deviceId === 'string') deviceId = body.deviceId;
       if (typeof body.appId === 'string') appId = body.appId;
     } catch {
+      throwIfCancelled();
       bodyOk = false;
     }
     return {
@@ -1471,6 +1468,7 @@ export async function probeFastRunnerLivenessDetailed(
       ...(res.capabilities !== undefined ? { capabilities: res.capabilities } : {}),
     };
   } catch {
+    throwIfCancelled();
     lastKnownCapabilities = [];
     return { liveness: 'stale', staleReason: 'health' };
   }
@@ -1743,6 +1741,7 @@ async function sendCommandOnce(
     }
     return parsed;
   } catch (err) {
+    throwIfCancelled();
     if ((err as { name?: string } | undefined)?.name === 'AbortError') {
       throw new Error(
         `RUNNER_TIMEOUT: rn-fast-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms — listener may be wedged`,
@@ -1776,6 +1775,7 @@ async function probeCommandStatus(
     );
     return parseStatusProbeReply(resp, commandId);
   } catch {
+    throwIfCancelled();
     return null;
   }
 }
@@ -1819,6 +1819,7 @@ async function postCommandWithRecovery(
       ),
     };
   } catch (err) {
+    throwIfCancelled();
     if (err instanceof QaDispatchError) throw err;
     const message = err instanceof Error ? err.message : String(err);
     if (!isAmbiguousTransportFailure(message)) throw err;
@@ -2380,6 +2381,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       }
       if (data.wasVisible && data.dismissed) keyboardRelayoutRecovered = true;
     } catch (err) {
+      throwIfCancelled();
       const mapped = mapRunnerDispatchError(err);
       if (mapped) return mapped;
       throw err;
@@ -2401,6 +2403,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         ...(args.bundleId ? { appBundleId: args.bundleId } : {}),
       });
     } catch (err) {
+      throwIfCancelled();
       refreshFailure.result = mapRunnerDispatchError(err);
       if (refreshFailure.result) return false;
       throw err;
@@ -2464,6 +2467,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       ));
     }
   } catch (err) {
+    throwIfCancelled();
     if (presenceRequested) {
       return presenceCaptureUnavailable(
         err instanceof Error ? err.message : String(err),
@@ -2500,6 +2504,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         args.qaTiming,
       ));
     } catch (err) {
+      throwIfCancelled();
       const mapped = mapRunnerDispatchError(err);
       if (mapped) return mapped;
       const message = err instanceof Error ? err.message : String(err);

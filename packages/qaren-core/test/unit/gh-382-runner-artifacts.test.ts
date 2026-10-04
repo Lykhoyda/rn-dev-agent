@@ -373,3 +373,38 @@ test('Android: forceLocalBuild bypasses a valid cache -> build-local, uses local
   assert.equal(r.testApk, LOCAL_APKS.testApk);
   assert.equal(calls.fetch.length, 0);
 });
+
+test('both artifact resolvers stop ambient cancellation before mutation and after download', async () => {
+  const { withCancellation, RunCancelledError } = await import('../../dist/domain/cancellation.js');
+  for (const platform of ['ios', 'android'] as const) {
+    for (const phase of ['before', 'download'] as const) {
+      const controller = new AbortController();
+      const reason = new RunCancelledError();
+      const { deps, calls, files } = makeDeps({
+        manifest: IOS_MANIFEST,
+        fetchImpl: async () => {
+          controller.abort(reason);
+          throw new Error('wrapped fetch failure');
+        },
+      });
+      let mutations = 0;
+      const mkdirp = deps.mkdirp;
+      deps.mkdirp = (path) => {
+        mutations++;
+        mkdirp(path);
+      };
+      if (phase === 'before') controller.abort(reason);
+      const pending = withCancellation(controller.signal, () =>
+        platform === 'ios'
+          ? resolveIosRunnerArtifacts('0.62.3', LOCAL_DD, deps)
+          : resolveAndroidRunnerArtifacts('0.62.3', LOCAL_APKS, deps),
+      );
+      await assert.rejects(pending, (error) => error === reason);
+      assert.equal(mutations, phase === 'before' ? 0 : 1);
+      assert.equal(calls.fetch.length, phase === 'before' ? 0 : 1);
+      assert.deepEqual(calls.unzip, []);
+      assert.equal(calls.rm.length, phase === 'before' ? 0 : 1);
+      assert.ok(![...files].some((path) => path.includes('/products/')));
+    }
+  }
+});

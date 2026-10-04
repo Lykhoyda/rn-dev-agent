@@ -14,6 +14,10 @@ export function cancellationSignal(signal?: AbortSignal): AbortSignal | undefine
     : (current ?? signal);
 }
 
+export function throwIfCancelled(signal?: AbortSignal): void {
+  cancellationSignal(signal);
+}
+
 export function withCancellation<T>(signal: AbortSignal | undefined, operation: () => T): T {
   return scope.run(signal, operation);
 }
@@ -101,10 +105,7 @@ export const spawn = ((...args: unknown[]) =>
 // Only a signal abort; a domain RUN_CANCELLED refusal (QaDispatchError) is handled by its own owner.
 export function isAbort(error: unknown): boolean {
   const candidate = error as { name?: string } | null;
-  return (
-    candidate?.name === 'AbortError' ||
-    (scope.getStore()?.aborted === true && scope.getStore()?.reason === error)
-  );
+  return candidate?.name === 'AbortError' || scope.getStore()?.aborted === true;
 }
 
 export async function withDeadline<T>(
