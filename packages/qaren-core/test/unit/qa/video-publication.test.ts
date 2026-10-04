@@ -108,7 +108,10 @@ test('dev chrome interrupts publication even when recovery hides it and the retr
   for (const front of ['dev-fab', 'dev-menu'] as const) {
     const app = screen([element('@save', 'Save')]);
     const overlay = { ...screen([]), front };
-    const f = walker([], scriptedJudge(() => assert.fail('literal plan is model-free')));
+    const f = walker(
+      [],
+      scriptedJudge(() => assert.fail('literal plan is model-free')),
+    );
     let current = screen([element('@open', 'Open')]);
     let presses = 0;
     let hides = 0;
@@ -133,7 +136,10 @@ test('dev chrome interrupts publication even when recovery hides it and the retr
     assert.equal(hides, 1, front);
     assert.equal(presses, 3, front);
     assert.deepEqual(f.actions, ['press @open', 'press @save', 'press @done'], front);
-    assert.ok(result.steps.some((row) => row.reason?.includes(`recovered: ${front}`)), front);
+    assert.ok(
+      result.steps.some((row) => row.reason?.includes(`recovered: ${front}`)),
+      front,
+    );
     assert.equal(result.steps.at(-1)?.outcome, 'pass', front);
     assert.equal(current.front, 'app', front);
     assert.equal(result.publicationInterrupted, true, front);
