@@ -6,7 +6,7 @@ const { _setActiveSessionForTest, _setRunAgentDeviceForTest, markSnapshotDirty }
   await import('../../dist/agent-device-wrapper.js');
 const { performFocusedFill } = await import('../../dist/handlers/device-interact.js');
 const { updateRefMapFromFlat, clearRefMap } = await import('../../dist/fast-runner-ref-map.js');
-const { okResult } = await import('../../dist/utils.js');
+const { okResult, failResult } = await import('../../dist/utils.js');
 
 const WRAPPER_ONLY = [
   {
@@ -19,7 +19,10 @@ const WRAPPER_ONLY = [
 
 type Read = { value: string | null; focused: boolean } | null;
 
-async function run(reads: Read[]): Promise<{ env: any; typed: string[] }> {
+async function run(
+  reads: Read[],
+  replacementMutation?: 'none' | 'possible',
+): Promise<{ env: any; typed: string[] }> {
   _setActiveSessionForTest({ platform: 'ios', deviceId: 'TEST-DEVICE', appId: 'com.test' });
   clearRefMap();
   markSnapshotDirty();
@@ -29,6 +32,10 @@ async function run(reads: Read[]): Promise<{ env: any; typed: string[] }> {
   _setRunAgentDeviceForTest(async (cliArgs: string[]) => {
     if (cliArgs[0] !== 'fill') return okResult({ nodes: WRAPPER_ONLY });
     typed.push(cliArgs[2]);
+    if (replacementMutation && cliArgs[2] === 'real@example.test')
+      return failResult('Replacement refused', 'TEXT_SYNTHESIS_UNAVAILABLE', {
+        mutation: replacementMutation,
+      });
     return okResult({ typed: true, textEntryRoute: 'synthesized-first-responder' });
   });
   const client = {
@@ -82,6 +89,30 @@ test('a fallback fill into an empty field types once with no clearing keystrokes
   assert.equal(env.ok, true);
   assert.deepEqual(typed, ['real@example.test']);
 });
+
+for (const mutation of ['none', 'possible'] as const) {
+  test(`replacement failure with mutation ${mutation} retains the observed clear`, async () => {
+    const { env, typed } = await run(
+      [
+        { value: 'decoy', focused: true },
+        { value: '', focused: true },
+      ],
+      mutation,
+    );
+    assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
+    assert.equal(env.meta.mutation, 'observed');
+    assert.equal(env.meta.hint, undefined);
+    assert.deepEqual(typed, ['\b'.repeat(5), 'real@example.test']);
+  });
+
+  test(`replacement failure with mutation ${mutation} in an empty field keeps its disposition`, async () => {
+    const { env, typed } = await run([{ value: '', focused: true }], mutation);
+    assert.equal(env.code, mutation === 'none' ? 'NO_TEXT_INPUT_TARGET' : 'TEXT_ENTRY_UNVERIFIED');
+    assert.equal(env.meta.mutation, mutation);
+    assert.equal(typeof env.meta.hint, mutation === 'none' ? 'string' : 'undefined');
+    assert.deepEqual(typed, ['real@example.test']);
+  });
+}
 
 test('a field still non-empty after the clear refuses before typing', async () => {
   const { env, typed } = await run([

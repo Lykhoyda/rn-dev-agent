@@ -1498,6 +1498,11 @@ export async function performFocusedFill(
     settle: { enabled: false },
   });
   if (native.isError) {
+    if (args.clearFirst && before)
+      return fillFailure('TEXT_ENTRY_UNVERIFIED', extractErrorText(native), {
+        mutation: 'observed',
+        pathsTried,
+      });
     const mutation = extractMutationDisposition(native);
     if (mutation === 'none') {
       return fillFailure('NO_TEXT_INPUT_TARGET', extractErrorText(native), {
