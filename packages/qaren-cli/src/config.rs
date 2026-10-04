@@ -209,9 +209,10 @@ impl CheckConfig {
                     RESERVED_ENV.join(", ")
                 )));
             }
-            if value.contains(['\0', '\r', '\n']) {
+            // Every value is redacted from logs, so a short one would shred them.
+            if value.len() < 4 || value.contains(['\0', '\r', '\n']) {
                 return Err(invalid(format!(
-                    "env value for {key} must be one line without NUL"
+                    "env value for {key} must be one line of at least 4 bytes without NUL"
                 )));
             }
         }

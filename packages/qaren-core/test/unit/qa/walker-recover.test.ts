@@ -328,3 +328,45 @@ test('a stored login block becomes exact-target items', () => {
     ],
   );
 });
+
+test('a selector miss after a replay recovery is terminal, not a second re-walk', async () => {
+  const covered = screen(['Settings'], 'dialog', { Settings: 'settings' });
+  const f = fake([covered, covered, covered, covered, covered, screen(['Other'])]);
+  const replayed = block('1. Tap "settings"\n');
+  const exact: Block = {
+    ...replayed,
+    items: replayed.items.map((item) =>
+      item.kind === 'press'
+        ? { ...item, target: { quoted: 'settings', phrase: 'settings', exact: 'id' } }
+        : item,
+    ),
+  };
+  const outcome = await walkBlock(exact, f.deps, 0, [], undefined, undefined, { mode: 'replay' });
+  assert.equal(outcome.recoveries, 1);
+  assert.equal(outcome.miss, undefined);
+  assert.match(outcome.failure?.seen ?? '', /REPLAY_SELECTOR/);
+});
+
+test('a stale login selector fails the login plainly and reports the screen after it', async () => {
+  const wall = screen(['Welcome'], 'app', { Welcome: 'login-screen' });
+  const after = screen(['Password required']);
+  const f = fake([wall, wall, after, after], {
+    login: {
+      marker: { id: 'login-screen' },
+      block: loginBlock('login', {
+        header: { appId: 'app', plan: 'login', planHash: 'h', platform: 'ios' },
+        steps: [{ raw: '1. Tap the sign in button', kind: 'press', selector: { id: 'sign-in' } }],
+      }),
+    },
+  });
+  const outcome = await walkBlock(block('1. Tap "Settings"\n'), f.deps);
+  assert.deepEqual(
+    outcome.rows.map((r) => [r.block, r.outcome]),
+    [
+      ['login', 'fail'],
+      ['plan', 'fail'],
+    ],
+  );
+  assert.ok(!outcome.rows[0].reason?.includes('re-walking'));
+  assert.match(outcome.failure?.seen ?? '', /login block did not pass.*Password required/);
+});

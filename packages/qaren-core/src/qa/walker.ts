@@ -799,9 +799,11 @@ export async function walkBlock(
     return 'typed';
   };
   // The login block walks with this walk's privacy, so its typed values stay masked.
+  let loginReplayed = false;
   const replayLogin = async () => {
     const login = deps.login?.block;
     if (!login) return 'fail' as const;
+    loginReplayed = true;
     let taken = 0;
     const counted: WalkerDeps = {
       ...deps,
@@ -810,8 +812,8 @@ export async function walkBlock(
         return deps.screenshot(name);
       },
     };
+    // Walk mode: a stale stored selector fails the login instead of asking for a re-walk.
     const nested = await walkBlock(login, counted, shots, typed, privacy, sequence, {
-      mode: 'replay',
       recover: false,
     });
     shots += taken;
@@ -828,6 +830,7 @@ export async function walkBlock(
     if (opts.recover === false || !deps.redBox || !deps.hideDevMenu || recovered.has(item))
       return undefined;
     recovered.add(item);
+    loginReplayed = false;
     const fresh = await capture();
     const result = await recover(
       fresh.screen,
@@ -842,6 +845,8 @@ export async function walkBlock(
     if (!result) return undefined;
     if ('handled' in result) {
       recoveries += 1;
+      // The recovery acted on the device, so a later selector miss is not a pre-mutation re-walk.
+      mutationStarted = true;
       emit({
         ...base(item, attempt),
         outcome: 'retry',
@@ -849,9 +854,10 @@ export async function walkBlock(
       });
       return 'retry';
     }
+    const shown = loginReplayed ? (await capture()).screen : fresh.screen;
     const shot = await shoot(item);
     return 'fail' in result
-      ? failed(item, attempt, result.fail, fresh.screen, shot)
+      ? failed(item, attempt, result.fail, shown, shot)
       : {
           ...failed(item, attempt, result.refuse.message, fresh.screen, shot),
           refusal: result.refuse,
@@ -860,9 +866,9 @@ export async function walkBlock(
 
   items: for (const item of block.items) {
     if (opts.fromLine !== undefined && item.line < opts.fromLine) continue;
+    mutationStarted = false;
     attempts: for (;;) {
       line = item.line;
-      mutationStarted = false;
       let currentAttempt = 1;
       resolvedBy = item.source === 'jev' && !replay ? 'jev' : 'exact';
       if (item.kind === 'fill' && item.text && !typed.includes(item.text)) typed.push(item.text);

@@ -483,8 +483,8 @@ stay `0`. Login fills are masked like plan fills and withhold the video.
 `env: { KEY: value }` in `.qaren/config.yaml` reaches only the native build
 (including `expo prebuild`) and Metro, so app selection such as a staging
 environment does not depend on the caller's shell. Keys match `^[A-Z_][A-Z0-9_]*$`
-and may not be `QAREN_*` or a variable qaren sets itself; values are one line. The
-values change the native fingerprint, are redacted (from 4 bytes) from logs and
+and may not be `QAREN_*` or a variable qaren sets itself; values are one line of at
+least 4 bytes. The values change the native fingerprint, are redacted from logs and
 receipts, and the receipt's `config_env` outcome names only the keys.
 
 ### Walk timing
