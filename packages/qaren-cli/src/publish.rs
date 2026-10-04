@@ -120,7 +120,7 @@ fn pr_info(pr: &PrRunRecord) -> PrInfo {
 fn find_own_comment(
     runner: &mut dyn Runner,
     pr: &PrInfo,
-    body: &str,
+    marker: &str,
     actor: &str,
     cwd: &Path,
 ) -> Result<Option<String>, Failure> {
@@ -179,7 +179,10 @@ fn find_own_comment(
     Ok(comments
         .comments
         .into_iter()
-        .find(|c| c.body == body && c.author.as_ref().is_some_and(|a| a.login == actor))
+        .find(|c| {
+            c.body.lines().next() == Some(marker)
+                && c.author.as_ref().is_some_and(|a| a.login == actor)
+        })
         .map(|c| c.url))
 }
 
@@ -207,12 +210,24 @@ fn post_once(
     render_body: &mut dyn FnMut() -> Result<String, Failure>,
     mark_attempted: &mut dyn FnMut() -> Result<(), Failure>,
 ) -> Result<String, Failure> {
-    let body = render_body()?;
+    let rendered = render_body()?;
+    let (marker, content) = rendered
+        .split_once('\n')
+        .ok_or_else(|| failure("report has no marker line", "re-run qaren publish"))?;
+    let prefix = marker
+        .strip_suffix(" -->")
+        .ok_or_else(|| failure("report has an invalid marker", "re-run qaren publish"))?;
+    let marker = format!(
+        "{prefix} report={} -->",
+        crate::candidate::sha256_hex(content.as_bytes())
+    );
+    let body = format!("{marker}\n{content}");
     if attempted {
         if actor.is_none() {
             *actor = Some(authenticated_login(runner, run_dir)?);
         }
-        if let Some(url) = find_own_comment(runner, pr, &body, actor.as_deref().unwrap(), run_dir)?
+        if let Some(url) =
+            find_own_comment(runner, pr, &marker, actor.as_deref().unwrap(), run_dir)?
         {
             return Ok(url);
         }

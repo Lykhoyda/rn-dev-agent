@@ -12,6 +12,16 @@ const RUN: &str = "check-20261002T101500Z";
 const TESTED: &str = "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00";
 const COMMIT: &str = "beef0000beef0000beef0000beef0000beef0000";
 
+fn report_content<'a>(body: &'a str, kind: &str) -> &'a str {
+    let (marker, content) = body.split_once('\n').unwrap();
+    let digest = qaren::candidate::sha256_hex(content.as_bytes());
+    assert_eq!(
+        marker,
+        format!("<!-- qaren-run: {RUN}{kind} report={digest} -->")
+    );
+    content
+}
+
 // Plays git's worktree add/remove on disk.
 struct Git(MockRunner);
 
@@ -283,7 +293,7 @@ fn publish_comments_removes_the_label_and_pushes_the_blocks_with_the_exact_lease
         .args
         .contains(&"./screenshots/01.png#Failing step".to_string()));
     let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
-    assert!(body.starts_with(&format!("<!-- qaren-run: {RUN} -->\nFAIL")));
+    assert!(report_content(&body, "").starts_with("FAIL"));
     let commit = runner
         .0
         .calls
@@ -371,7 +381,7 @@ fn a_rerun_after_the_comment_posts_no_second_comment() {
 }
 
 #[test]
-fn a_lost_comment_outcome_is_adopted_only_with_matching_author_and_body() {
+fn a_lost_attached_comment_is_adopted_after_github_rewrites_its_body() {
     let (runs, dir) = run_dir(false);
     let mut first = Git(MockRunner::new());
     first.0.expect_run(
@@ -387,6 +397,15 @@ fn a_lost_comment_outcome_is_adopted_only_with_matching_author_and_body() {
     );
     assert!(publication(&dir).comment_attempted);
     let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
+    report_content(&body, "");
+    let posted = format!(
+        "{}\n<video src=\"https://github.com/user-attachments/video\"></video>",
+        body.replace(
+            "./screenshots/01.png",
+            "https://github.com/user-attachments/image"
+        )
+    );
+    assert_ne!(body, posted);
     std::fs::remove_file(dir.join("comment.md")).unwrap();
 
     let mut second = Git(MockRunner::new());
@@ -397,7 +416,7 @@ fn a_lost_comment_outcome_is_adopted_only_with_matching_author_and_body() {
         "gh pr view 12 -R github.com/o/r --json comments",
         CmdOutput::success(&serde_json::json!({"comments": [
             {"body": "unrelated", "url": "https://github.com/o/r/pull/12#issuecomment-0"},
-            {"body": body, "author": {"login": "publisher"}, "url": "https://github.com/o/r/pull/12#issuecomment-7"}
+            {"body": posted, "author": {"login": "publisher"}, "url": "https://github.com/o/r/pull/12#issuecomment-7"}
         ]}).to_string()),
     );
     second
@@ -1031,7 +1050,7 @@ fn retry_regenerates_an_unposted_walk_comment_with_current_privacy() {
     assert_eq!(second.bodies.len(), 1);
     let (file, body) = &second.bodies[0];
     assert_eq!(file, "comment.md");
-    assert!(body.starts_with(&format!("<!-- qaren-run: {RUN} -->")));
+    report_content(body, "");
     assert!(body.contains(r"\<user\> saw the missing Tasks tab."));
     assert!(!body.contains("qa-fixture-user"));
     assert!(!body.contains("raw-plan-secret"));
@@ -1090,7 +1109,7 @@ fn retry_regenerates_unposted_blocks_through_the_current_block_gate() {
     assert_eq!(second.bodies.len(), 1);
     let (file, body) = &second.bodies[0];
     assert_eq!(file, "blocks-comment.md");
-    assert!(body.starts_with(&format!("<!-- qaren-run: {RUN} blocks -->")));
+    report_content(body, " blocks");
     assert!(body.contains("name: Safe\nsteps: []"));
     assert!(!body.contains("tasks.yaml"));
     assert!(!body.contains("qa-fixture-user"));
@@ -2108,7 +2127,7 @@ process.stdout.write(JSON.stringify(ledger));
     )
     .unwrap();
     let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
-    assert!(body.starts_with(&format!("<!-- qaren-run: {RUN} -->\nFAIL")));
+    assert!(report_content(&body, "").starts_with("FAIL"));
     assert!(body.contains("Readable ready"), "{body}");
     assert!(body.contains("•••"), "{body}");
     let report = std::fs::read_to_string(dir.join("report.md")).unwrap();
@@ -2126,6 +2145,11 @@ process.stdout.write(JSON.stringify(ledger));
             }
             let bytes = std::fs::read(&path).unwrap();
             let text = String::from_utf8_lossy(&bytes);
+            let text = if path.file_name().is_some_and(|name| name == "comment.md") {
+                report_content(&text, "")
+            } else {
+                &text
+            };
             for value in [
                 "CanaryAlpha77",
                 "1234567890",
@@ -2150,8 +2174,14 @@ process.stdout.write(JSON.stringify(ledger));
 }
 
 #[test]
-fn both_comment_paths_reconcile_only_the_authenticated_authors_exact_report() {
-    for variant in ["other-author", "other-body", "missing-author", "matching"] {
+fn both_comment_paths_reconcile_only_the_authenticated_authors_report_fingerprint() {
+    for variant in [
+        "other-author",
+        "other-fingerprint",
+        "other-run",
+        "missing-author",
+        "matching",
+    ] {
         let (runs, dir) = run_dir(true);
         let mut first = Git(MockRunner::new());
         script_comment_and_label(&mut first.0);
@@ -2180,7 +2210,15 @@ fn both_comment_paths_reconcile_only_the_authenticated_authors_exact_report() {
             .expect_run("gh api user", CmdOutput::success("publisher\n"));
         for (index, body) in bodies.iter().enumerate() {
             let candidate = serde_json::json!({
-                "body": if variant == "other-body" { format!("{body}altered") } else { body.clone() },
+                "body": match variant {
+                    "other-fingerprint" => {
+                        let (marker, content) = body.split_once('\n').unwrap();
+                        let (prefix, _) = marker.split_once(" report=").unwrap();
+                        format!("{prefix} report={} -->\n{content}", "0".repeat(64))
+                    },
+                    "other-run" => body.replacen(RUN, "another-run", 1),
+                    _ => format!("{}\nAttachment markup", body.lines().next().unwrap()),
+                },
                 "author": match variant {
                     "other-author" => serde_json::json!({"login": "someone-else"}),
                     "missing-author" => serde_json::Value::Null,
