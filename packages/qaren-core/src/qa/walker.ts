@@ -546,7 +546,7 @@ export async function walkBlock(
       reason: redact(miss ? `${reason}; re-walking from this line` : reason),
     });
     return {
-      block: { key: privacy.redactIdentifier(block.slug), outcome: 'fail', source: 'discovered' },
+      block: { key: block.slug, outcome: 'fail', source: 'discovered' },
       rows,
       ...(miss ? { miss: item.line } : {}),
       ...(privateFills.length ? { privateFills } : {}),
@@ -1373,7 +1373,7 @@ export async function walkBlock(
     }
   }
   return {
-    block: { key: privacy.redactIdentifier(block.slug), outcome: 'pass', source: 'discovered' },
+    block: { key: block.slug, outcome: 'pass', source: 'discovered' },
     rows,
     ...(privateFills.length ? { privateFills } : {}),
     ...(recoveries ? { recoveries } : {}),

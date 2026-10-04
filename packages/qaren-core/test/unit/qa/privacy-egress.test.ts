@@ -394,3 +394,54 @@ test('unrelated retained tokens cannot prove another private value in checks or 
     assert.equal(judge.requests.length, 0);
   }
 });
+
+test('derived private echoes suppress walk screenshots and remain sticky after navigation', async () => {
+  for (const [value, echo] of [
+    ['1234567890', '1234\u202f5678\u00a090'],
+    ['1234\u00a05678\u202f90', '1234567890'],
+    ['1234567890', '1234/5678-90'],
+    [' Café ', 'Cafe\u0301'],
+    [' Cafe\u0301 ', 'Café'],
+  ]) {
+    const screen = view([text('@echo', echo), text('@ready', 'Ready')]);
+    const privacy = new ObservedPrivacy();
+    privacy.classify([value]);
+    privacy.observe(screen);
+    assert.equal(privacy.canScreenshot(), false, echo);
+    privacy.observe(view([text('@clean', 'Ready')]));
+    assert.equal(privacy.canScreenshot(), false, 'navigation must not reopen pixel admission');
+    const blocks = parsePlan(`✓ "Ready"\n1. Type "${value}" into "missing"`).blocks;
+    assert.ok(blocks);
+    const judge = scriptedJudge(() => assert.fail('literal checks need no model'));
+    const fixture = walker([screen], judge);
+    let screenshots = 0;
+    fixture.deps.screenshot = async () => {
+      screenshots++;
+      return 'unsafe.png';
+    };
+    const ledger = await runPlan(blocks, fixture.deps);
+    assert.equal(ledger.verdict, 'FAIL');
+    assert.equal(ledger.steps[0].outcome, 'pass');
+    assert.equal(screenshots, 0, echo);
+    assert.equal(JSON.stringify(ledger).includes(echo), false);
+  }
+});
+
+test('final ledger withholds whole private block identifiers on pass and fail', async () => {
+  for (const check of ['Ready', 'Missing']) {
+    const blocks = parsePlan(
+      `### account-${TYPED}\n✓ "${check}"\n### Fill later\n1. Type "${TYPED}" into "missing"`,
+    ).blocks;
+    assert.ok(blocks);
+    const fixture = walker(
+      [view([text('@ready', 'Ready')])],
+      scriptedJudge(() => assert.fail('literal checks need no model')),
+    );
+    const ledger = await runPlan(blocks, fixture.deps);
+    assert.equal(ledger.blocks[0].outcome, check === 'Ready' ? 'pass' : 'fail');
+    assert.equal(ledger.blocks[0].key, '•••');
+    assert.equal(ledger.steps[0].block, '•••');
+    assert.equal(blocks[0].slug, `account-${TYPED}`);
+    assert.equal(JSON.stringify(ledger).includes(`account-•••`), false);
+  }
+});

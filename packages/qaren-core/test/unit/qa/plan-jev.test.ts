@@ -402,3 +402,28 @@ test('parser and preflight refusals project planned values in heading text and r
     }
   }
 });
+
+test('parser and preflight withhold private heading slugs while preserving operational names', async () => {
+  for (const canary of ['Alice@Example.com', `Alice@Example.com-${'long-title-'.repeat(12)}`]) {
+    for (const duplicate of [canary, canary.replace(/[@.]/g, ' ')]) {
+      const markdown = `### ${canary}\n1. Type "${canary}" into "email"\n### ${duplicate}\n✓ "Ready"`;
+      const judge = scriptedJudge(() => assert.fail('grammar refusals need no model'));
+      const parsed = parsePlan(markdown);
+      const preflight = await preflightPlan(markdown, judge);
+      assert.ok(parsed.refused);
+      assert.ok(!preflight.ok && preflight.refused);
+      for (const refused of [parsed.refused, preflight.refused]) {
+        const collision = refused.find((entry) => entry.reason.includes('already named'));
+        assert.ok(collision);
+        assert.equal(collision.reason, 'another block is already named "•••"');
+        assert.equal(JSON.stringify(refused).includes(canary), false);
+        assert.equal(JSON.stringify(refused).includes('alice-example-com'), false);
+      }
+    }
+    const accepted = parsePlan(`### ${canary}\n1. Type "${canary}" into "email"`);
+    assert.ok(accepted.blocks);
+    assert.ok(accepted.blocks[0].slug.startsWith('alice-example-com'));
+  }
+  const ordinary = parsePlan('### Account\n✓ "Ready"\n### Account\n✓ "Ready"');
+  assert.equal(ordinary.refused?.[0].reason, 'another block is already named "account"');
+});

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { ACTION_ID_MAX_LEN } from '../domain/path-safety.js';
 import { type Judge, type Questions, confidentChoice, isRecord } from './questions.js';
-import { matchPrivate, modelMask, projectPlanLine } from './privacy.js';
+import { MASK, matchPrivate, modelMask, projectPlanLine } from './privacy.js';
 
 export interface Target {
   quoted?: string;
@@ -193,12 +193,26 @@ export function planNeedsJev(markdown: string): boolean {
   );
 }
 
-function projectRefusals(refused: RefusedLine[], values: string[]): RefusedLine[] {
+function projectRefusals(
+  refused: RefusedLine[],
+  values: string[],
+  headings: string[] = [],
+): RefusedLine[] {
   const set = { values: values.map((text) => ({ text, provenance: 'typed' as const })) };
+  const identifiers = headings
+    .filter((heading) => matchPrivate(heading, set, 'identifier').hit)
+    .map(slugify);
   return refused.map((entry) => ({
     ...entry,
     text: projectPlanLine(entry.text, set).text,
-    reason: matchPrivate(entry.reason, set, 'durable').text,
+    reason: matchPrivate(
+      identifiers.reduce(
+        (reason, identifier) => reason.split(`"${identifier}"`).join(`"${MASK}"`),
+        entry.reason,
+      ),
+      set,
+      'durable',
+    ).text,
   }));
 }
 
@@ -317,6 +331,7 @@ function scanPlan(
         blocks.flatMap((block) =>
           block.items.flatMap((item) => (item.kind === 'fill' ? [item.text] : [])),
         ),
+        blocks.map((block) => block.title),
       ),
     };
   const filled = blocks.filter((b) => b.items.length > 0);

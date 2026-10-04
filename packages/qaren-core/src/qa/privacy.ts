@@ -505,9 +505,8 @@ export class ObservedPrivacy {
         .filter((element) => !element.offscreen && !element.ref.startsWith('react:'))
         .flatMap((element) => [element.label ?? '', element.value ?? '']),
     ];
-    this.sensitivePixels ||= this.modelValues().some(
-      (value) => !!value && text.some((line) => line.includes(value)),
-    );
+    const values = this.privateSet();
+    this.sensitivePixels ||= text.some((line) => matchPrivate(line, values, 'persisted').hit);
   }
 
   didFill(): void {
