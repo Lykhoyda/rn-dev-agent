@@ -42,6 +42,7 @@ import { summarizeJev } from './ledger.js';
 import { redactApiKey } from '../util/redact.js';
 import { createStop, watchParent } from './stop.js';
 import { prove } from './prove.js';
+import { admit } from './admission.js';
 import { type ActResult, type WalkerDeps, loginBlock, runPlan } from './walker.js';
 import { loadBlock, readBlock } from './blocks.js';
 import {
@@ -297,45 +298,42 @@ async function openSession(
       'the run was cancelled while opening the device session',
     );
   };
-  try {
-    await waitForExactPortTargets(target.metroPort, REACT_READY_TIMEOUT_MS, REACT_READY_POLL_MS);
-    await cdp.connectExact(target.metroPort, { platform, bundleId: appId });
-  } catch (error) {
-    throw new HandlerError(
-      'CDP_NOT_CONNECTED',
-      `cannot attach to the dev client through Metro ${target.metroPort}: ${describeError(error).message}`,
-    );
-  }
-  await cancelled();
-  // The lease coordinates qaren processes only; a foreign Maestro or XCUITest driver is a probe.
-  if (platform === 'ios') {
-    const foreign = await foreignFlowGate.check(target.deviceId);
-    if (foreign.active) {
-      await cdp.disconnect().catch(() => undefined);
-      throw new HandlerError(
-        'BUSY_FOREIGN_FLOW',
-        foreign.warning?.message ?? 'another automation driver holds the device',
-      );
-    }
-  }
-  await cancelled();
-
-  deviceOpen = true;
-  await adapt(snapshot)({
-    action: 'open',
-    appId,
-    deviceId: target.deviceId,
-    platform,
-    attachOnly: false,
-    sessionName: `qaren-${request.runId}`,
-  });
-  await cancelled();
-  // Opening the session may have relaunched the app: prove the bundle the walk will see.
-  const proof = await prove({ evaluate: (expr) => cdp.evaluate(expr) }, target);
-  if (!proof.ok) {
-    await close();
-    throw new HandlerError(proof.code, proof.message);
-  }
+  const proof = await admit(
+    {
+      metroPort: target.metroPort,
+      attach: async () => {
+        await waitForExactPortTargets(
+          target.metroPort,
+          REACT_READY_TIMEOUT_MS,
+          REACT_READY_POLL_MS,
+        );
+        await cdp.connectExact(target.metroPort, { platform, bundleId: appId });
+      },
+      // The lease coordinates qaren processes only; a foreign Maestro or XCUITest driver is a probe.
+      foreignDriver: async () => {
+        if (platform !== 'ios') return undefined;
+        const foreign = await foreignFlowGate.check(target.deviceId);
+        return foreign.active
+          ? (foreign.warning?.message ?? 'another automation driver holds the device')
+          : undefined;
+      },
+      open: async () => {
+        deviceOpen = true;
+        await adapt(snapshot)({
+          action: 'open',
+          appId,
+          deviceId: target.deviceId,
+          platform,
+          attachOnly: false,
+          sessionName: `qaren-${request.runId}`,
+        });
+      },
+      // Opening the session may have relaunched the app: prove the bundle the walk will see.
+      prove: () => prove({ evaluate: (expr) => cdp.evaluate(expr) }, target),
+      close,
+    },
+    stop,
+  );
   const admittedAtMs = Date.now();
   const admittedSnapshots = postAdmissionSnapshots(snapshot, appId);
   await cancelled();
