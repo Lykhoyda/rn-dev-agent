@@ -544,6 +544,7 @@ export function refreshRef(sig: RefSignature, nodes: FlatNode[]): RefreshOutcome
     join(nodes, []),
     { quoted, phrase: quoted, exact: identifier !== undefined ? 'id' : 'text' },
     'press',
+    'refresh',
   );
   const matches = identities.map(({ element }) => nodes.find((node) => node.ref === element.ref)!);
   if (matches.length === 0) return { kind: 'absent' };

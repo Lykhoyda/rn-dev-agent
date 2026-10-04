@@ -42,9 +42,16 @@ function forwardsInput(element: Element, matched: readonly Element[]): boolean {
   return native.length === 1 && native[0].testID === id;
 }
 
-export function echoControl(element: Element): Element | undefined {
+export function echoControl(
+  element: Element,
+  purpose: 'action' | 'refresh' = 'action',
+): Element | undefined {
   const text = element.kind === 'text' ? element : soleLabelTextOf(element);
-  const control = text && actionView({ elements: [...labelAncestorsOf(text)] })[0];
+  const ancestors = text ? [...labelAncestorsOf(text)] : [];
+  const control =
+    purpose === 'refresh'
+      ? ancestors.find((e) => e.semantic?.press === 'supported')
+      : actionView({ elements: ancestors })[0];
   return control !== element ? control : undefined;
 }
 
@@ -66,13 +73,18 @@ export function focusIdentityOf(screen: Screen, element: Element): string | unde
 }
 
 // Distinct identities an exact target names, counted before disabled, offscreen or React-only filters.
-export function exactIdentities(screen: Screen, target: Target, kind: Step['kind']): Identity[] {
+export function exactIdentities(
+  screen: Screen,
+  target: Target,
+  kind: Step['kind'],
+  purpose: 'action' | 'refresh' = 'action',
+): Identity[] {
   const quoted = target.quoted;
   if (quoted === undefined) return [];
   const matched = screen.elements.filter((e) => named(e, quoted, kind, target.exact));
   return matched
     .filter((e) => {
-      const control = echoControl(e);
+      const control = echoControl(e, purpose);
       return (!control || !matched.includes(control)) && !forwardsInput(e, matched);
     })
     .map((element) => ({

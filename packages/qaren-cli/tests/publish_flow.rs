@@ -2136,15 +2136,16 @@ process.stdout.write(JSON.stringify(ledger));
     let saved_receipt: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.join("receipt.json")).unwrap()).unwrap();
     assert_eq!(saved_receipt["run_id"], RUN);
-    fn scan(dir: &Path) {
+    fn scan(dir: &Path, repo: &Path) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
             if path.is_dir() {
-                scan(&path);
+                scan(&path, repo);
                 continue;
             }
             let bytes = std::fs::read(&path).unwrap();
             let text = String::from_utf8_lossy(&bytes);
+            let text = text.replace(repo.to_str().unwrap(), "[fixture-root]");
             let text = if path.file_name().is_some_and(|name| name == "comment.md") {
                 report_content(&text, "")
             } else {
@@ -2169,7 +2170,7 @@ process.stdout.write(JSON.stringify(ledger));
             }
         }
     }
-    scan(&dir);
+    scan(&dir, runs.parent().unwrap());
     assert_eq!(runner.0.remaining(), 0);
 }
 
