@@ -142,17 +142,19 @@ export async function fetchTargets(
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
   try {
-    const resp = await cancellableFetch(fetch, `http://127.0.0.1:${port}/json/list`, {
-      signal: signal ? AbortSignal.any([ctrl.signal, signal]) : ctrl.signal,
-    });
-    return (await resp.json()) as HermesTarget[];
+    // Only the run's cancellation preempts the read; the request timeout aborts the fetch itself.
+    const cancel = cancellationSignal(signal);
+    return await interruptible(async () => {
+      const resp = await fetch(`http://127.0.0.1:${port}/json/list`, {
+        signal: cancel ? AbortSignal.any([ctrl.signal, cancel]) : ctrl.signal,
+      });
+      return (await resp.json()) as HermesTarget[];
+    }, cancel);
   } catch (err) {
     cancellationSignal(signal);
-    if (ctrl.signal.aborted)
-      throw new TargetReadinessTimeoutError(`CDP target read timed out on port ${port}`);
-    throw new Error(
-      `Failed to list CDP targets on port ${port}: ${err instanceof Error ? err.message : err}`,
-    );
+    const message = `Failed to list CDP targets on port ${port}: ${err instanceof Error ? err.message : err}`;
+    if (ctrl.signal.aborted) throw new TargetReadinessTimeoutError(message);
+    throw new Error(message);
   } finally {
     clearTimeout(timer);
   }
