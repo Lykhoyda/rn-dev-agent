@@ -22,6 +22,7 @@ import {
   createDeviceSwipeHandler,
   createDevicePressHandler,
   createDeviceFillHandler,
+  performFocusedFill,
 } from '../../../dist/handlers/device-interact.js';
 import { createDeviceSnapshotHandler } from '../../../dist/handlers/device-session.js';
 import { createDeviceAcceptSystemDialogHandler } from '../../../dist/handlers/device-system-dialog.js';
@@ -44,7 +45,10 @@ afterEach(() => {
   clearRefMap();
 });
 
-function runner(reply: (body: Record<string, unknown>) => unknown, health = () => {}) {
+function runner(
+  reply: (body: Record<string, unknown>) => unknown,
+  health: () => void | Promise<void> = () => {},
+) {
   _setFastRunnerStateForTest({
     pid: process.pid,
     port: 12345,
@@ -56,7 +60,7 @@ function runner(reply: (body: Record<string, unknown>) => unknown, health = () =
   const sends: string[] = [];
   _setFetchForTest(async (url, init) => {
     if (String(url).endsWith('/health')) {
-      health();
+      await health();
       return Response.json({
         ok: true,
         protocolVersion: RUNNER_PROTOCOL_VERSION,
@@ -440,4 +444,93 @@ test('actual dialog preparation is read-only and its native identity refusal sta
   assert.deepEqual(sends, ['snapshot', 'tap']);
   assert.equal(context.authorizations, 1);
   assert.throws(() => context.assertComplete(), /ACTION_CONTEXT_CHANGED/);
+});
+
+for (const mode of ['proof', 'transition'] as const) {
+  for (const focused of [true, false, null]) {
+    test(`focused ${mode} fill checks focus after awaited health (${focused})`, async () => {
+      session();
+      const events: string[] = [];
+      let currentFocus: boolean | null = true;
+      const sends = runner(
+        () => {
+          events.push('type');
+          return { ok: true, data: { typed: true, textEntryRoute: 'synthesized-first-responder' } };
+        },
+        async () => {
+          await Promise.resolve();
+          currentFocus = focused;
+          events.push('health');
+        },
+      );
+      const client = {
+        isConnected: true,
+        evaluate: async () => {
+          events.push('focus');
+          return currentFocus === null
+            ? { error: 'unavailable' }
+            : {
+                value: JSON.stringify({ value: '', controlled: true, focused: currentFocus }),
+              };
+        },
+      } as never;
+      const context = new QaDispatchContext(100, () => 1);
+      const result = await performFocusedFill(
+        {
+          ref: 'email-pressable',
+          testID: 'email',
+          text: 'replacement',
+          qaContext: context,
+          requireFocused: mode === 'proof',
+          vetoUnfocused: true,
+          skipFinalValidation: true,
+          clearFirst: true,
+        },
+        client,
+      );
+      const env = JSON.parse(result.content[0].text);
+      const allowed = focused === true || (mode === 'transition' && focused === null);
+      assert.deepEqual(
+        events,
+        allowed ? ['health', 'focus', 'type', 'health'] : ['health', 'focus'],
+      );
+      assert.deepEqual(sends, allowed ? ['type'] : []);
+      assert.equal(context.authorizations, allowed ? 1 : 0);
+      assert.equal(env.ok, allowed);
+      if (!allowed) {
+        assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
+        assert.equal(env.meta.mutation, 'none');
+      }
+    });
+  }
+}
+
+test('focused proof cannot bypass expiry while awaiting its final read', async () => {
+  session();
+  const sends = runner(() => ({ ok: true }));
+  let now = 1;
+  const context = new QaDispatchContext(10, () => now);
+  const client = {
+    isConnected: true,
+    evaluate: async () => {
+      now = 10;
+      return { value: JSON.stringify({ value: '', controlled: true, focused: true }) };
+    },
+  } as never;
+  await assert.rejects(
+    performFocusedFill(
+      {
+        ref: 'email-pressable',
+        testID: 'email',
+        text: 'replacement',
+        qaContext: context,
+        requireFocused: true,
+        skipFinalValidation: true,
+      },
+      client,
+    ),
+    /EVIDENCE_EXPIRED/,
+  );
+  assert.deepEqual(sends, []);
+  assert.equal(context.authorizations, 0);
 });

@@ -1625,6 +1625,7 @@ export interface RunIOSArgs {
   focusWaitMs?: number;
   /** Type into the first responder instead of binding an input. */
   focused?: boolean;
+  _focusedProof?: () => Promise<boolean>;
   operationToken?: string;
   /** Independent CDP/helper readback; never serialized onto the runner wire. */
   _verifyExactReadback?: (
@@ -1683,6 +1684,7 @@ async function sendCommandOnce(
   timeoutMs: number,
   qaContext?: QaDispatchContext,
   qaTiming?: TimingContext,
+  focusedProof?: () => Promise<boolean>,
 ): Promise<RunnerResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -1694,6 +1696,7 @@ async function sendCommandOnce(
     const serialized = JSON.stringify(body);
     const now = qaTiming?.now ?? (() => performance.now());
     const resp = await measureTiming(qaTiming?.observe, now, 'native-transport', async () => {
+      if (focusedProof && !(await focusedProof())) return undefined;
       if (isMutatingCommand(body.command)) qaContext?.authorize();
       return fetchImpl(`http://127.0.0.1:${port}/command`, {
         method: 'POST',
@@ -1705,6 +1708,16 @@ async function sendCommandOnce(
         signal: controller.signal,
       });
     });
+    if (!resp)
+      return {
+        ok: false,
+        error: {
+          code: 'NO_TEXT_INPUT_TARGET',
+          message: 'The intended input is not focused; no text was entered.',
+          mutation: 'none',
+          reason: 'focus-proof-refused',
+        },
+      };
     const parsed = (await measureTiming(qaTiming?.observe, now, 'native-decode', () =>
       resp.json(),
     )) as RunnerResponse;
@@ -1771,6 +1784,7 @@ async function postCommandWithRecovery(
   },
   qaContext?: QaDispatchContext,
   qaTiming?: TimingContext,
+  focusedProof?: () => Promise<boolean>,
 ): Promise<{ resp: RunnerResponse; recovery?: TransportRecovery }> {
   if (runnerPoisoned && body.command !== 'status') {
     throw new Error(
@@ -1794,6 +1808,7 @@ async function postCommandWithRecovery(
         timeoutMs,
         qaContext,
         qaTiming,
+        focusedProof,
       ),
     };
   } catch (err) {
@@ -1817,6 +1832,7 @@ async function postCommandWithRecovery(
         timeoutMs,
         qaContext,
         qaTiming,
+        focusedProof,
       );
       return { resp: resent, recovery: { commandId, outcome: 'resent' } };
     }
@@ -2423,6 +2439,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
         args.qaContext,
         args.qaTiming,
+        args.command === 'type' && args.focused ? args._focusedProof : undefined,
       ));
     }
   } catch (err) {
@@ -2460,6 +2477,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
         args.qaContext,
         args.qaTiming,
+        args.command === 'type' && args.focused ? args._focusedProof : undefined,
       ));
     } catch (err) {
       const mapped = mapRunnerDispatchError(err);
@@ -2475,7 +2493,8 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     keyboardRelayoutRecovered = true;
   }
   const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
-  checkQaNativeOutcome(args.qaContext, resp.error?.code, resp.data, resp.error?.reason);
+  if (resp.error?.reason !== 'focus-proof-refused')
+    checkQaNativeOutcome(args.qaContext, resp.error?.code, resp.data, resp.error?.reason);
   const announce = resp.ok ? takeQuiescenceAnnouncement() : null;
   if (!resp.ok) {
     const message = resp.error?.message ?? 'runner returned !ok with no error';

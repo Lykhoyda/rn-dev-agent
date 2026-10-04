@@ -1467,7 +1467,6 @@ export const INJECTED_HELPERS = `
         if (hostIndex !== null && hostEvidence.hosts[hostIndex].capabilities.fill === true) {
           for (var ai = 0; ai < inputAncestors.length; ai++) {
             var ancestor = inputAncestors[ai];
-            ancestor.compositeWrapper = true;
             if (!ancestor.inputHostIndices) ancestor.inputHostIndices = [];
             ancestor.inputHostIndices.push(hostIndex);
           }

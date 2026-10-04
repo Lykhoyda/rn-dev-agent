@@ -1543,22 +1543,21 @@ export async function performFocusedFill(
     );
   }
   const oracleTestId = focusedFillOracleTestId(args);
-  // Dispatch-time focus proof: nothing sits between this read and the one native dispatch.
-  const beforeRead = await readReactInputValue(client, oracleTestId);
-  if (
-    (args.requireFocused && beforeRead?.focused !== true) ||
-    (args.vetoUnfocused && beforeRead && !beforeRead.focused)
-  )
-    return fillFailure(
-      'NO_TEXT_INPUT_TARGET',
-      'device_fill focused: the intended input is not focused; no text was entered.',
-      { mutation: 'none', pathsTried },
+  let before: string | null = null;
+  let beforeFocused = false;
+  const focusedProof = async (): Promise<boolean> => {
+    const read = await readReactInputValue(client, oracleTestId);
+    before = controlledReactValue(read);
+    beforeFocused = read?.focused === true;
+    return !(
+      (args.requireFocused && read?.focused !== true) ||
+      (args.vetoUnfocused && read && !read.focused)
     );
-  const before = controlledReactValue(beforeRead);
+  };
   // clearFirst replaces in the runner: one select-all and text sequence, never an append.
   const native = await runNative(
     ['fill', args.ref, args.text, ...(args.clearFirst ? ['--clear-first'] : [])],
-    { qaContext: args.qaContext, focusedType: true, settle: { enabled: false } },
+    { qaContext: args.qaContext, focusedType: true, focusedProof, settle: { enabled: false } },
   );
   if (native.isError) {
     const mutation = extractMutationDisposition(native);
@@ -1597,8 +1596,7 @@ export async function performFocusedFill(
       },
       'Typed into the focused field; the value could not be confirmed. Confirm with device_screenshot or expect_text before relying on it.',
     );
-  if (args.skipFinalValidation || before === null || beforeRead?.focused !== true)
-    return unverified();
+  if (args.skipFinalValidation || before === null || !beforeFocused) return unverified();
   const verification = await awaitReactInputValue(
     () => readReactInputValue(client, oracleTestId),
     (args.clearFirst ? '' : before) + args.text,

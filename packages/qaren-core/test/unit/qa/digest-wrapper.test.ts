@@ -6,6 +6,7 @@ import { captureQaReact } from '../../../dist/qa/react-capture.js';
 import { captureScreen } from '../../../dist/qa/capture.js';
 import { PrivateInputCaptureError } from '../../../dist/qa/private-input.js';
 import { join, semanticActionView, visibilityView } from '../../../dist/qa/screen.js';
+import { prepareTarget } from '../../../dist/qa/resolve.js';
 import { exactIdentities } from '../../../dist/qa/identity.js';
 import { nativeCapture } from './platform-presence-fixtures.ts';
 
@@ -191,3 +192,34 @@ for (const ancestor of [true, false]) {
     assert.deepEqual(react.interactive![0].inputHostIndices, ancestor ? [0] : undefined);
   });
 }
+
+test('merged EmailField input retains its placeholder for Fill Email', async () => {
+  const props = { testID: 'email', onChangeText: handler, placeholder: 'Email' };
+  const react = await observe([
+    {
+      name: 'EmailField',
+      props,
+      children: [{ name: 'TextInput', props, children: [{ hostType: 'RCTTextInput', props }] }],
+    },
+  ]);
+  assert.equal(react.interactive!.length, 1);
+  assert.equal(react.interactive![0].compositeWrapper, undefined);
+  const screen = join(
+    [{ ref: '@email', type: 'TextField', identifier: 'email', label: '', hittable: true }],
+    react.interactive!,
+    'app',
+    undefined,
+    react.hostEvidence,
+  );
+  const target = prepareTarget(
+    { kind: 'fill', target: { quoted: 'Email', phrase: 'Email' }, text: 'qa@example.test' },
+    screen,
+  );
+  assert.ok('ref' in target, JSON.stringify(target));
+  assert.equal(target.ref, '@email');
+  assert.equal(target.element.placeholder, 'Email');
+  assert.equal(
+    exactIdentities(screen, { quoted: 'email', phrase: 'email', exact: 'id' }, 'fill').length,
+    1,
+  );
+});
