@@ -122,8 +122,8 @@ QaReN then types once into the focused field without final value validation.
 A successful keyboard step records a passing row with reason `UNVERIFIED_FILL`,
 allowing later plan steps to continue; it does not establish the field's final
 value. Failed keyboard typing is not retried. Before the fallback tap or
-no-target typing dispatch, the value is protected from reporting and model
-requests, including substring echoes, and screenshots are withheld for the rest
+no-target typing dispatch, the value is protected under the
+[shared masking rules](#input-value-masking), and screenshots are withheld for the rest
 of the walk. The block remains unsaved,
 including when the tap leads back to strict verification. The eligibility and
 identity rules are owned by the [resolver](../qaren-core/src/qa/resolve.ts) and
@@ -261,15 +261,29 @@ The reset preserves descendant text evidence. The same distinction applies to
 `display` and style-based `pointerEvents` in exact-ID interaction eligibility;
 a reset clears the earlier style restriction without proving native visibility.
 
-Observed input values are masked before Jev requests; private values are also
-masked in reporting, including echoes of typed and previously observed values
-subject to the short-value limitation below. A protected value can appear split
-across separate on-screen boxes, so in reporting any token that is part of a
-protected value, including a single character, is masked; tokens joined by `-`,
-`_`, `.` or `@` are judged whole, so identifiers stay readable. Once sensitive input pixels or a
-protected value's visible echo are observed, screenshots are withheld for the
-rest of the walk.
-Masks preserve identity for comparisons and do not prove unobserved value content.
+### Input value masking
+
+Observed input values are masked before Jev requests. Private observed values and
+concealed fallback values also receive fragment protection in reporting and every
+outbound model request. A visible token is concealed when it contains a protected
+value, is a substring of at least four characters, belongs to adjacent
+single-character boxes whose concatenation matches at least two characters of a
+protected value, or is a single character from a protected code of at most eight
+characters. The current screen's box context also applies when masking individual
+output fields. Tokens joined by `-`, `_`, `.` or `@` are judged whole; an identifier
+containing a protected value is concealed too. Isolated shorter fragments of long
+secrets remain readable: `is` stays visible for `existing-secret`, while `secr`
+is concealed. A protected `1234` masks each of the four digit boxes.
+
+Complete values can retain opaque identity tokens for model comparisons; these
+tokens disclose no content, length, format, order or validity. Concealed fragments
+(`•••`) never count as assertion evidence, and a phrase check or visibility
+expectation containing one remains uncertain. The
+[privacy implementation](../qaren-core/src/qa/privacy.ts) owns masking, with
+[fragment regression cases](../qaren-core/test/unit/qa/split-digit-privacy.test.ts).
+Once sensitive input pixels or a protected value's visible echo are observed,
+screenshots are withheld for the rest of the walk. Masks do not prove unobserved
+value content.
 Typed values outside protected fills that are shorter than three characters
 and were never observed as private input values can remain plaintext in
 unquoted reporting text; model masking
