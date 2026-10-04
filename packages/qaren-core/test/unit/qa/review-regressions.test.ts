@@ -409,7 +409,11 @@ test('secure input copies keep their local identities but stay out of outward ev
   assert.equal(observed.elements[0].testID, `pin-${secret}`);
   assert.equal(observed.elements[0].placeholder, `Replace ${secret}`);
   assert.ok(!redactEvidence(observed, assertionView(observed).join(' ')).includes(secret));
-  assert.ok(!screenSignature(observed).includes(secret));
+  const signature = JSON.parse(screenSignature(observed));
+  assert.equal(signature.elements[0][1], null);
+  assert.equal(signature.elements[0][3], null);
+  assert.equal(signature.elements[0][2], `pin-${secret}`);
+  assert.ok(signature.text.includes(`Copy: ${secret}`));
   const judge = alwaysYes();
   await decideScreen(
     observed,

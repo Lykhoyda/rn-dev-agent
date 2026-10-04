@@ -245,3 +245,32 @@ test('the screen signature changes with every user-visible difference and only t
     'a 2px shift inside the same band is not a change',
   );
 });
+
+test('the screen signature returns canonical content without hashing', () => {
+  const screen = joinScreen(
+    [
+      { ref: '@e0', type: 'Button', label: 'Save', identifier: 'save', hittable: true },
+      { ref: '@e1', type: 'SecureTextField', label: 'Password', value: 'hunter2' },
+    ],
+    [],
+  );
+  const signature = screenSignature(screen);
+  const content = JSON.parse(signature);
+  assert.equal(content.front, 'app');
+  assert.deepEqual(content.text, ['Save']);
+  assert.deepEqual(content.elements[0], [
+    'button',
+    'Save',
+    'save',
+    null,
+    true,
+    false,
+    false,
+    null,
+    null,
+  ]);
+  assert.equal(content.elements[1][3], null);
+  assert.ok(!signature.includes('hunter2'));
+  assert.equal(signature, screenSignature(structuredClone(screen)));
+  assert.notEqual(signature, screenSignature({ ...screen, front: 'dialog' }));
+});

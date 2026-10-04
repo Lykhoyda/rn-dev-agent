@@ -192,7 +192,9 @@ test('secure value collisions never destroy exact labels, IDs, or placeholders',
     assert.ok('ref' in target, key);
     assert.equal(target.ref, '@password');
     assert.ok(!redactEvidence(observed, assertionView(observed).join(' ')).includes('Password'));
-    assert.ok(!screenSignature(observed).includes('Password'));
+    const signature = JSON.parse(screenSignature(observed));
+    assert.equal(signature.elements[0][3], null);
+    assert.equal(signature.elements[0][2], observed.elements[0].testID);
     observed.captureCoverage = { native: 'complete', react: 'unknown' };
     const f = walker([observed], noulJudge(0.9));
     const result = await runPlan(
@@ -223,7 +225,7 @@ test('screen signatures ignore secure contents but still detect ordinary input a
       );
     const before = observe('private-one');
     const after = observe('private-two');
-    assert.ok(!screenSignature(before).includes('private-one'));
+    assert.equal(screenSignature(before).includes('private-one'), !secure);
     assert.equal(screenSignature(before) === screenSignature(after), secure);
     after.elements[0].disabled = true;
     assert.notEqual(screenSignature(before), screenSignature(after));

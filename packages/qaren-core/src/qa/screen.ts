@@ -1,5 +1,4 @@
 import { isRecord } from './questions.js';
-import { createHash } from 'node:crypto';
 import {
   captureInputPrivacy,
   nativeLabelMayBeValue,
@@ -973,7 +972,7 @@ export function screenSignature(screen: Screen): string {
         `${e.label ?? e.placeholder ?? e.testID ?? 'input'}: ${e.value ?? ''}`,
       ]),
   );
-  const signature = JSON.stringify({
+  return JSON.stringify({
     front: screen.front,
     text: screen.visibleText.filter((text) => !secureLines.has(text)),
     elements: screen.elements
@@ -990,7 +989,6 @@ export function screenSignature(screen: Screen): string {
         e.side ?? null,
       ]),
   });
-  return createHash('sha256').update(signature).digest('hex');
 }
 
 export function frontFromSurface(surface: string | undefined, nodes: NativeNode[]): Front {
