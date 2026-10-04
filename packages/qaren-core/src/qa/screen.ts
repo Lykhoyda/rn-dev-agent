@@ -75,7 +75,6 @@ export interface Screen {
 const labelEchoes = new WeakMap<Element, Element>();
 const elementFrames = new WeakMap<Element, NonNullable<NativeNode['rect']>>();
 
-// The labelled control a text element merely repeats as its single text descendant.
 export function labelEchoOf(element: Element): Element | undefined {
   return labelEchoes.get(element);
 }
@@ -742,8 +741,11 @@ export function join(
       control.kind !== 'text' &&
       control.kind !== 'input' &&
       elements[only].label === control.label
-    )
-      labelEchoes.set(elements[only], control);
+    ) {
+      const nearest = labelEchoes.get(elements[only]);
+      if (nearest) labelEchoes.set(control, nearest);
+      else labelEchoes.set(elements[only], control);
+    }
   });
   return {
     elements: elements.filter((_, i) => !duplicates.has(i)),

@@ -64,6 +64,81 @@ test('the echo collapses without a testID too, and its text stays visible', () =
   assert.ok(screen.visibleText.includes('Skip'));
 });
 
+for (const hittable of [true, false]) {
+  test(`nested label echoes resolve to the nearest Button with outer hittable=${hittable}`, () => {
+    const nodes = pressable(app(), { y: 700, texts: [] });
+    nodes[2].hittable = hittable;
+    nodes.push(
+      {
+        ref: '@button',
+        index: 3,
+        parentIndex: 2,
+        type: 'Button',
+        label: 'Skip',
+        hittable: true,
+        rect: { x: 30, y: 705, width: 320, height: 40 },
+      },
+      {
+        ref: '@text',
+        index: 4,
+        parentIndex: 3,
+        type: 'StaticText',
+        label: 'Skip',
+        hittable: true,
+        rect: { x: 150, y: 712, width: 60, height: 24 },
+      },
+    );
+    const resolved = prepareTarget(press, join(nodes, []));
+    assert.ok('ref' in resolved, JSON.stringify(resolved));
+    assert.equal(resolved.ref, '@button');
+
+    const wrapped = nodes.map((node, i) => ({
+      ...node,
+      index: i >= 2 ? i + 1 : i,
+      parentIndex:
+        node.parentIndex !== undefined && node.parentIndex >= 2
+          ? node.parentIndex + 1
+          : node.parentIndex,
+    }));
+    wrapped.splice(2, 0, {
+      ref: '@outer',
+      index: 2,
+      parentIndex: 1,
+      type: 'Other',
+      label: 'Skip',
+      hittable: true,
+      rect: { x: 10, y: 695, width: 380, height: 60 },
+    });
+    wrapped[3].parentIndex = 2;
+    const multiplyWrapped = prepareTarget(press, join(wrapped, []));
+    assert.ok('ref' in multiplyWrapped, JSON.stringify(multiplyWrapped));
+    assert.equal(multiplyWrapped.ref, '@button');
+  });
+}
+
+test('a Skip pressable and a separate inline Skip link stay ambiguous', () => {
+  const nodes = pressable(app(), { id: 'consent-skip', y: 700, texts: ['Skip'] });
+  nodes.push({
+    ref: '@link',
+    index: nodes.length,
+    parentIndex: 1,
+    type: 'Link',
+    label: 'Skip',
+    hittable: true,
+    rect: { x: 150, y: 780, width: 60, height: 24 },
+  });
+  const resolved = prepareTarget(press, join(nodes, []));
+  assert.ok(
+    'refuse' in resolved && resolved.refuse === 'TARGET_AMBIGUOUS',
+    JSON.stringify(resolved),
+  );
+  const listed = resolved.reason.slice(resolved.reason.indexOf('candidates: '));
+  assert.equal(
+    listed,
+    'candidates: other id=consent-skip frame=20,700,350,48; link no-id frame=150,780,60,24',
+  );
+});
+
 test('two distinct Skip controls stay ambiguous and list value-free candidates', () => {
   const nodes = pressable(pressable(app(), { id: 'consent-skip', y: 700, texts: ['Skip'] }), {
     y: 780,

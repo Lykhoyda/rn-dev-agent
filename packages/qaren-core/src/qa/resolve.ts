@@ -119,7 +119,6 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
   const candidates = eligible;
   if (target.quoted !== undefined) {
     const matched = matchable.filter((e) => matches(e, target.quoted!, step.kind, target.exact));
-    // A pressable and the single text child that echoes its label are one control.
     const exact = matched.filter((e) => !matched.includes(labelEchoOf(e)!));
     if (exact.length === 1 && reactOnlyFill(exact[0]))
       return {
