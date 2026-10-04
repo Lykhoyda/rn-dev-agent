@@ -259,8 +259,15 @@ export function offscreenNodes(
   );
 }
 
+const TEXT_INPUT_TYPES = new Set(['TextView', 'TextField', 'SecureTextField', 'SearchField']);
+type Exclusion = { rule: 'anc' | 'scroll' | 'window'; ancestor: number };
+// Diagnostic only: which rule and ancestor removed an in-app node; never read by decisions.
+const exclusions = new WeakMap<Set<number>, Map<number, Exclusion>>();
+
 export function outsideViewport(nodes: NativeNode[]): Set<number> {
   const offscreen = new Set<number>();
+  const decided = new Map<number, Exclusion>();
+  exclusions.set(offscreen, decided);
   const root = nodes[0];
   // The screen clips every node, whatever its ancestry; a keyboard can detach content from its Window.
   const screen =
@@ -274,17 +281,20 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
     if (!node.rect) return;
     let visible = screen;
     let parent = node.parentIndex;
+    let decider: Exclusion | undefined;
     for (let hops = 0; parent !== undefined && hops < nodes.length; hops++) {
       const ancestor = nodes[parent];
-      // A child frame that contradicts its wholly off-screen container is stale; trust the container.
+      // A text input frame that contradicts its wholly off-screen container is stale; trust the container.
       if (
         screen &&
+        TEXT_INPUT_TYPES.has(node.type ?? '') &&
         validRect(ancestor?.rect) &&
         ancestor.rect.width > 0 &&
         ancestor.rect.height > 0 &&
         !within(ancestor.rect, screen)
       ) {
         offscreen.add(i);
+        decided.set(i, { rule: 'anc', ancestor: parent });
         return;
       }
       if (
@@ -294,15 +304,23 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
         ancestor.rect.height > 0
       ) {
         visible = clip(ancestor.rect, visible);
+        if (!decider && !within(node.rect, ancestor.rect))
+          decider = { rule: 'window', ancestor: parent };
       }
       if (
         validRect(ancestor?.rect) &&
         ['ScrollView', 'Table', 'CollectionView'].includes(ancestor.type ?? '')
-      )
+      ) {
         visible = clip(ancestor.rect, visible);
+        if (!decider && !within(node.rect, ancestor.rect))
+          decider = { rule: 'scroll', ancestor: parent };
+      }
       parent = ancestor?.parentIndex;
     }
-    if (visible && !within(node.rect, visible)) offscreen.add(i);
+    if (visible && !within(node.rect, visible)) {
+      offscreen.add(i);
+      if (decider) decided.set(i, decider);
+    }
   });
   return offscreen;
 }
@@ -374,7 +392,28 @@ export function viewportDiagnostic(nodes: NativeNode[], offscreen: Set<number>):
   });
   const count = (test: (entry: (typeof symptoms)[number]) => boolean) =>
     known ? symptoms.filter(test).length : null;
-  const line = (windowList: unknown[], sample: unknown[]) =>
+  const decided = exclusions.get(offscreen);
+  const excludedAll = known
+    ? [...offscreen]
+        .filter((i) => nodes[i]?.rect && within(nodes[i].rect!, app!))
+        .sort((a, b) => a - b)
+    : [];
+  const excludedEntries = excludedAll.map((i) => {
+    const node = nodes[i];
+    const exclusion = decided?.get(i);
+    const ancestor = exclusion ? nodes[exclusion.ancestor] : undefined;
+    const typeOf = (type: string | undefined) =>
+      DIAGNOSTIC_TYPES.has(type ?? '') ? type! : 'Other';
+    return [
+      i,
+      typeOf(node.type),
+      exclusion?.rule ?? null,
+      exclusion?.ancestor ?? null,
+      ancestor ? typeOf(ancestor.type) : null,
+      ...box(ancestor?.rect),
+    ];
+  });
+  const line = (windowList: unknown[], sample: unknown[], excluded: unknown[]) =>
     `viewport-diagnostic ${JSON.stringify({
       v: 1,
       app: app ? box(app) : null,
@@ -387,18 +426,22 @@ export function viewportDiagnostic(nodes: NativeNode[], offscreen: Set<number>):
       invalidWindowOnly: count(([, , w, , u]) => w >= 0 && u < 0),
       scrollClipped: count(([, , , , , s]) => s >= 0),
       sample,
+      excludedCount: known ? excludedAll.length : null,
+      excluded,
     })}`;
   // Counts stay whole; only the listed entries shrink so the line keeps its 2 KB bound.
   let windowList = windows.slice(0, 8);
   let sample = symptoms.slice(0, 20);
-  let text = line(windowList, sample);
+  let excluded = excludedEntries.slice(0, 10);
+  let text = line(windowList, sample, excluded);
   while (
     Buffer.byteLength(text, 'utf8') > DIAGNOSTIC_LIMIT &&
-    (sample.length || windowList.length)
+    (sample.length || windowList.length || excluded.length)
   ) {
     if (sample.length) sample = sample.slice(0, -1);
+    else if (excluded.length) excluded = excluded.slice(0, -1);
     else windowList = windowList.slice(0, -1);
-    text = line(windowList, sample);
+    text = line(windowList, sample, excluded);
   }
   return text;
 }

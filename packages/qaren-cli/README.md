@@ -153,10 +153,11 @@ ScrollView, Table, CollectionView and Window ancestor rectangle, on both axes.
 Screen and scroll-container clipping apply even when a node has no Window
 ancestor, including captures with the keyboard up. Missing or invalid rectangles
 skip only that clip; Application and Window rectangles must also have positive
-size. A node with any positive-size ancestor wholly outside the screen is
-offscreen even when its own frame reports on-screen geometry, so content painted
-outside such a container also reads offscreen; on-screen ancestors do not clip
-overflowing children. Partly overlapping nodes remain eligible. iOS interactive snapshots retain
+size. A text input (`TextView`, `TextField`, `SecureTextField` or `SearchField`)
+with any positive-size ancestor wholly outside the screen is offscreen even when
+its own frame reports on-screen geometry. Other nodes follow only the screen,
+Window and scroll clips, so on-screen rows under a stale off-screen container stay
+visible; on-screen ancestors do not clip overflowing children. Partly overlapping nodes remain eligible. iOS interactive snapshots retain
 content-less Window nodes with their real frames and ancestry to supply geometry.
 Mounted text beyond the cumulative bounds cannot satisfy the plan until it enters
 those bounds. Offscreen inputs remain in the privacy inventory for masking.
@@ -177,8 +178,10 @@ decision.
 Each admitted complete native capture within the capture budget writes one value-free
 `viewport-diagnostic` line, bounded to 2 KB, to the private run log
 `logs/core.log`. It records integer-rounded Application and Window rectangles,
-counts and capped symptom samples with Window ancestry and origins; it excludes
-labels, identifiers, values and sizes of other nodes.
+counts and capped symptom samples with Window ancestry and origins, and the count
+plus up to ten in-app nodes the visibility rules excluded, each with its rule
+(`anc`, `scroll` or `window`) and the deciding ancestor's type and rectangle; it
+excludes labels, identifiers, values and other nodes' sizes.
 The [diagnostic implementation](../qaren-core/src/qa/native-presence.ts)
 owns its field layout.
 

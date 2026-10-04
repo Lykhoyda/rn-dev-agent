@@ -369,3 +369,96 @@ test('a slow diagnostic sink cannot change the capture budget verdict', async ()
     }
   }
 });
+
+// Application, Window, a container wholly below the screen, then two children at on-screen rects.
+function homeShape(childType: string): NativeNode[] {
+  return tree([
+    { type: 'Application', rect: screenRect },
+    { type: 'Window', parent: 0, rect: screenRect },
+    { type: 'Other', parent: 1, rect: { x: 0, y: 900, width: 402, height: 600 } },
+    { type: childType, parent: 2, rect: { x: 16, y: 300, width: 370, height: 44 } },
+    { type: childType, parent: 2, rect: { x: 16, y: 350, width: 370, height: 44 } },
+  ]);
+}
+
+test('on-screen rows under a stale off-screen container stay visible', () => {
+  const nodes = homeShape('StaticText');
+  assert.deepEqual([...outsideViewport(nodes)], [2]);
+  const line = diagnose(nodes);
+  assert.deepEqual(line.excluded, []);
+  assert.equal(line.excludedCount, 0);
+});
+
+test('text inputs under a wholly off-screen container are offscreen', () => {
+  for (const type of ['TextView', 'TextField', 'SecureTextField', 'SearchField']) {
+    const nodes = homeShape(type);
+    assert.deepEqual([...outsideViewport(nodes)], [2, 3, 4], type);
+    const line = diagnose(nodes);
+    assert.equal(line.excludedCount, 2, type);
+    assert.deepEqual(
+      line.excluded.map((entry: unknown[]) => entry.slice(0, 5)),
+      [
+        [3, type, 'anc', 2, 'Other'],
+        [4, type, 'anc', 2, 'Other'],
+      ],
+      type,
+    );
+    assert.deepEqual(line.excluded[0].slice(5), [0, 900, 402, 600], type);
+  }
+});
+
+test('rows below the fold of a long list stay offscreen', () => {
+  const nodes = tree([
+    { type: 'Application', rect: screenRect },
+    { type: 'Window', parent: 0, rect: screenRect },
+    { type: 'Other', parent: 1, rect: { x: 0, y: 0, width: 402, height: 3000 } },
+    { type: 'StaticText', parent: 2, rect: { x: 16, y: 300, width: 370, height: 44 } },
+    { type: 'StaticText', parent: 2, rect: { x: 16, y: 1200, width: 370, height: 44 } },
+  ]);
+  assert.deepEqual([...outsideViewport(nodes)], [4]);
+  assert.deepEqual(diagnose(nodes).excluded, []);
+});
+
+test('excluded names the scroll or Window clip that removed an in-app node', () => {
+  const nodes = tree([
+    { type: 'Application', rect: screenRect },
+    { type: 'Window', parent: 0, rect: { x: 0, y: 0, width: 402, height: 400 } },
+    { type: 'ScrollView', parent: 1, rect: { x: 0, y: 100, width: 402, height: 100 } },
+    { type: 'StaticText', parent: 2, rect: { x: 16, y: 300, width: 200, height: 30 } },
+    { type: 'StaticText', parent: 1, rect: { x: 16, y: 600, width: 200, height: 30 } },
+  ]);
+  assert.deepEqual([...outsideViewport(nodes)], [3, 4]);
+  const raw = viewportDiagnostic(nodes, outsideViewport(nodes));
+  assert.equal(raw.includes(SECRET), false);
+  const line = parse(raw);
+  assert.equal(line.excludedCount, 2);
+  assert.deepEqual(line.excluded, [
+    [3, 'StaticText', 'scroll', 2, 'ScrollView', 0, 100, 402, 100],
+    [4, 'StaticText', 'window', 1, 'Window', 0, 0, 402, 400],
+  ]);
+});
+
+test('excluded lists at most ten entries while the count stays whole within 2 KB', () => {
+  const specs: Spec[] = [
+    { type: 'Application', rect: screenRect },
+    { type: 'Window', parent: 0, rect: screenRect },
+    { type: 'Other', parent: 1, rect: { x: 0, y: 900, width: 402, height: 600 } },
+  ];
+  for (let i = 0; i < 50; i++)
+    specs.push({
+      type: 'TextField',
+      parent: 2,
+      rect: { x: 16, y: 100 + i, width: 300, height: 30 },
+    });
+  const nodes = tree(specs);
+  const raw = viewportDiagnostic(nodes, outsideViewport(nodes));
+  const line = parse(raw);
+  assert.equal(line.excludedCount, 50);
+  assert.equal(line.excluded.length, 10);
+  assert.deepEqual(
+    line.excluded.map((entry: unknown[]) => entry[0]),
+    [3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  );
+  assert.equal(raw.includes(SECRET), false);
+  assert.ok(Buffer.byteLength(raw, 'utf8') <= 2048, `${Buffer.byteLength(raw, 'utf8')} bytes`);
+});
