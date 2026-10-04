@@ -3,7 +3,6 @@ import {
   interruptible,
   withCancellation,
   sleep,
-  isAbort,
 } from '../domain/cancellation.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
