@@ -101,8 +101,11 @@ pub fn save_json<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
     ));
     let body = serde_json::to_string_pretty(value)
         .map_err(|e| std::io::Error::other(format!("serialize: {e}")))?;
-    std::fs::write(&tmp, body)?;
-    std::fs::rename(&tmp, path)
+    let saved = std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, path));
+    if saved.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    saved
 }
 
 pub fn load_prewarm(worktree_root: &Path) -> Option<DepsPrewarm> {
@@ -430,7 +433,9 @@ fn walk_artifact(
     Ok(())
 }
 
-pub fn copy_artifact(src: &Path, dest: &Path) -> Result<(), String> {
+pub fn copy_artifact(runner: &dyn Runner, src: &Path, dest: &Path) -> Result<(), String> {
+    use std::io::{Read, Write};
+    crate::cancel::ensure_running(runner, "native_cache").map_err(|e| e.detail.to_string())?;
     let meta = std::fs::symlink_metadata(src)
         .map_err(|e| format!("cannot stat {}: {e}", src.display()))?;
     if let Some(parent) = dest.parent() {
@@ -445,8 +450,23 @@ pub fn copy_artifact(src: &Path, dest: &Path) -> Result<(), String> {
         return Ok(());
     }
     if meta.is_file() {
-        std::fs::copy(src, dest)
-            .map_err(|e| format!("cannot copy {} to {}: {e}", src.display(), dest.display()))?;
+        let copied = (|| -> std::io::Result<()> {
+            let mut source = std::fs::File::open(src)?;
+            let mut target = std::fs::File::create(dest)?;
+            let mut buffer = [0u8; 64 * 1024];
+            loop {
+                if let Some(reason) = runner.cancellation() {
+                    return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, reason));
+                }
+                let bytes = source.read(&mut buffer)?;
+                if bytes == 0 {
+                    break;
+                }
+                target.write_all(&buffer[..bytes])?;
+            }
+            target.set_permissions(meta.permissions())
+        })();
+        copied.map_err(|e| format!("cannot copy {} to {}: {e}", src.display(), dest.display()))?;
         return Ok(());
     }
     if meta.is_dir() {
@@ -456,7 +476,7 @@ pub fn copy_artifact(src: &Path, dest: &Path) -> Result<(), String> {
             std::fs::read_dir(src).map_err(|e| format!("cannot list {}: {e}", src.display()))?;
         for entry in listed {
             let entry = entry.map_err(|e| format!("cannot list {}: {e}", src.display()))?;
-            copy_artifact(&entry.path(), &dest.join(entry.file_name()))?;
+            copy_artifact(runner, &entry.path(), &dest.join(entry.file_name()))?;
         }
         return Ok(());
     }

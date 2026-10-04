@@ -452,7 +452,9 @@ fn run_inner(
         Err(f) => return Ok(finish_failed(ctx, f)),
     };
     if plan_decision.decision != BuildDecision::Reuse {
-        prepare::record_build_result(&mut ctx, &fp);
+        if let Err(f) = prepare::record_build_result(&mut ctx, &fp) {
+            return Ok(finish_failed(ctx, f));
+        }
         prepare::release_build_lock(&mut ctx);
     }
     let t = ctx.mark("verify", t);

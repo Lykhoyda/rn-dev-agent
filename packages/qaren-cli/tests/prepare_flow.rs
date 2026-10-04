@@ -1132,10 +1132,26 @@ struct RecordProbeRunner {
     run_id: String,
     probe_label: String,
     observed: Option<String>,
+    cancel_copy: Option<std::rc::Rc<std::cell::RefCell<std::path::PathBuf>>>,
+    copied_bytes: std::cell::Cell<u64>,
     at_probe: Option<Box<dyn FnOnce(&std::path::Path)>>,
 }
 
 impl qaren::exec::Runner for RecordProbeRunner {
+    fn cancellation(&self) -> Option<String> {
+        if let Some(path) = &self.cancel_copy {
+            let bytes = std::fs::metadata(&*path.borrow())
+                .map(|m| m.len())
+                .unwrap_or(0);
+            if bytes > 0 {
+                self.copied_bytes.set(bytes);
+            }
+            if self.copied_bytes.get() > 0 {
+                return Some("received SIGTERM".into());
+            }
+        }
+        None
+    }
     fn execute(&mut self, spec: &qaren::exec::CmdSpec, interruptible: bool) -> CmdOutput {
         if spec.label == self.probe_label {
             self.observed = std::fs::read_to_string(RunRecord::path(&self.repo, &self.run_id)).ok();
@@ -1234,6 +1250,8 @@ fn farm_lease_is_recorded_before_start_command() {
         run_id: run_id.clone(),
         probe_label: "farm-start".to_string(),
         observed: None,
+        cancel_copy: None,
+        copied_bytes: std::cell::Cell::new(0),
         at_probe: None,
     };
     let receipt = prepare(
@@ -1289,6 +1307,8 @@ fn simulator_allocation_is_recorded_before_create() {
         run_id: run_id.clone(),
         probe_label: "simctl-create".to_string(),
         observed: None,
+        cancel_copy: None,
+        copied_bytes: std::cell::Cell::new(0),
         at_probe: None,
     };
     let receipt = prepare(&mut probing, &prepare_args(&scenario_path, false, None));
@@ -1778,6 +1798,8 @@ fn recording_a_build_retires_run_output_and_prunes_only_older_artifacts_for_the_
         ),
         probe_label: "simctl-install".into(),
         observed: None,
+        cancel_copy: None,
+        copied_bytes: std::cell::Cell::new(0),
         at_probe: Some(Box::new(|run_dir| {
             let record: RunRecord =
                 serde_json::from_slice(&std::fs::read(run_dir.join("run.json")).unwrap()).unwrap();
@@ -1865,6 +1887,8 @@ fn recording_a_build_retains_source_on_cache_or_evidence_publication_failure() {
             ),
             probe_label: "simctl-launchctl".into(),
             observed: None,
+            cancel_copy: None,
+            copied_bytes: std::cell::Cell::new(0),
             at_probe: Some(Box::new(move |run_dir| {
                 let repo = run_dir.parent().unwrap();
                 let cache = qaren::buildplan::cache_dir(repo);
@@ -1951,6 +1975,8 @@ fn recording_a_build_does_not_retire_symlinked_paths() {
             ),
             probe_label: "simctl-launchctl".into(),
             observed: None,
+            cancel_copy: None,
+            copied_bytes: std::cell::Cell::new(0),
             at_probe: Some(Box::new(move |run_dir| {
                 let path = match target {
                     "run" => run_dir.to_path_buf(),
@@ -2020,6 +2046,8 @@ fn unproven_or_unpersisted_build_group_absence_retains_run_output() {
             ),
             probe_label: "ps-groups".into(),
             observed: None,
+            cancel_copy: None,
+            copied_bytes: std::cell::Cell::new(0),
             at_probe: Some(Box::new(move |run_dir| {
                 if fault == "retirement_save" {
                     std::fs::create_dir(
@@ -2197,4 +2225,118 @@ fn android_build_route_records_install_provenance_from_the_hashed_apk() {
     assert_eq!(install.artifact.kind, qaren::buildplan::ArtifactKind::Apk);
     assert!(!install.installed_at.is_empty());
     assert!(install.removal.is_none());
+}
+
+#[test]
+fn recording_a_build_cancelled_mid_copy_preserves_previous_cache() {
+    let repo = common::temp_repo();
+    let scenario = write_scenario(&repo, &ios_scenario_yaml(8791));
+    let run_id = format!(
+        "ios-simulator-{}",
+        qaren::timefmt::compact_utc(1_770_000_000_000)
+    );
+    let staged_binary = std::rc::Rc::new(std::cell::RefCell::new(std::path::PathBuf::new()));
+    let copy_path = staged_binary.clone();
+    let artifacts = qaren::buildplan::cache_dir(&repo).join("artifacts/ios");
+    let stale = artifacts.join(format!("com.rndevagent.testapp-{}", "a".repeat(16)));
+    std::fs::create_dir_all(&stale).unwrap();
+    std::fs::write(stale.join("old.app"), b"pruning canary").unwrap();
+    let previous = std::rc::Rc::new(std::cell::RefCell::new(std::path::PathBuf::new()));
+    let previous_path = previous.clone();
+    let saved_state = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let expected_state = saved_state.clone();
+    let state_path = qaren::buildplan::state_path(&repo, "ios", "com.rndevagent.testapp");
+    let mut mock = MockRunner::new();
+    script_prepare_to_recheck(&mut mock, &repo, "", "");
+    mock.expect_run("ls-files", CmdOutput::success(""));
+    let mut probing = RecordProbeRunner {
+        inner: mock,
+        repo: repo.clone(),
+        run_id: run_id.clone(),
+        probe_label: "simctl-launchctl".into(),
+        observed: None,
+        cancel_copy: Some(staged_binary),
+        copied_bytes: std::cell::Cell::new(0),
+        at_probe: Some(Box::new(move |run_dir| {
+            let record: RunRecord =
+                serde_json::from_slice(&std::fs::read(run_dir.join("run.json")).unwrap()).unwrap();
+            let fp = record.build.as_ref().unwrap().fingerprint.clone();
+            let key: String = fp
+                .chars()
+                .filter(|c| c.is_ascii_hexdigit())
+                .take(16)
+                .collect();
+            let root = record.candidate.repo_root.clone();
+            *copy_path.borrow_mut() = qaren::buildplan::cache_dir(&root)
+                .join("artifacts/ios")
+                .join(format!("com.rndevagent.testapp-{key}"))
+                .join(format!(".staging-{}", record.run_id))
+                .join("testapp.app/binary");
+            std::fs::write(
+                run_dir.join("ios-build/testapp.app/binary"),
+                vec![7u8; 2 * 1024 * 1024],
+            )
+            .unwrap();
+            let old = copy_path
+                .borrow()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("testapp.app");
+            std::fs::create_dir_all(&old).unwrap();
+            std::fs::write(old.join("binary"), b"previous build").unwrap();
+            let state = qaren::buildplan::NativeCacheState {
+                schema: qaren::buildplan::CACHE_SCHEMA.into(),
+                platform: "ios".into(),
+                app_id: "com.rndevagent.testapp".into(),
+                worktree_root: root.clone(),
+                fingerprint: fp,
+                built_at: "previous".into(),
+                candidate_sha: record.candidate.git_sha,
+                lockfile_sha256: String::new(),
+                generated_native_dirs: Vec::new(),
+                artifact: Some(qaren::buildplan::CachedArtifact {
+                    sha256: qaren::buildplan::hash_artifact(&old).unwrap(),
+                    path: old.clone(),
+                    kind: qaren::buildplan::ArtifactKind::AppBundle,
+                }),
+            };
+            let path = qaren::buildplan::state_path(&root, "ios", "com.rndevagent.testapp");
+            qaren::buildplan::save_json(&path, &state).unwrap();
+            *expected_state.borrow_mut() = std::fs::read(path).unwrap();
+            *previous_path.borrow_mut() = old;
+        })),
+    };
+    let receipt = prepare(&mut probing, &prepare_args(&scenario, false, None));
+    assert_eq!(receipt.result, ReceiptResult::Refused);
+    assert_eq!(
+        receipt.failure.as_ref().unwrap().code,
+        FailureCode::RunCancelled
+    );
+    assert!(probing.copied_bytes.get() > 0 && probing.copied_bytes.get() < 2 * 1024 * 1024);
+    assert_eq!(
+        std::fs::read(previous.borrow().join("binary")).unwrap(),
+        b"previous build"
+    );
+    assert_eq!(std::fs::read(&state_path).unwrap(), *saved_state.borrow());
+    assert_eq!(
+        std::fs::read(stale.join("old.app")).unwrap(),
+        b"pruning canary"
+    );
+    let staged = probing.cancel_copy.as_ref().unwrap().borrow();
+    let staging_dir = staged.parent().unwrap().parent().unwrap();
+    assert!(!staging_dir.exists());
+    assert!(!staging_dir.parent().unwrap().join(&run_id).exists());
+    let record = RunRecord::load(&repo, &run_id).unwrap();
+    assert!(record
+        .build
+        .unwrap()
+        .artifact
+        .unwrap()
+        .path
+        .starts_with(RunRecord::run_dir(&repo, &run_id)));
+    assert_eq!(probing.inner.remaining(), 0);
 }
