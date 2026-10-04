@@ -384,7 +384,7 @@ for (const [name, after, reason] of [
       [wrapper(), element('@wrap2', 'Email', { kind: 'other', testID: WRAP }), submit],
       true,
     ),
-    /the tap on "qa-hidden-email" changed the screen; nothing was typed/,
+    /^TARGET_AMBIGUOUS:/,
   ],
   [
     'no keyboard',
@@ -1315,7 +1315,10 @@ for (const identity of ['qa-hidden-email', WRAP]) {
         assert.equal(result.block.outcome, 'fail');
         assert.deepEqual(taps, []);
         assert.equal(fake.typed.length, 0);
-        assert.match(result.failure?.seen ?? '', /nothing was typed/);
+        assert.match(
+          result.failure?.seen ?? '',
+          freshState === 'duplicate' ? /^TARGET_AMBIGUOUS:/ : /nothing was typed/,
+        );
       }
       assert.equal(taps.includes('@e1'), false);
     });
@@ -1859,4 +1862,29 @@ test('split digit boxes never reveal a concealed code in any evidence sink', asy
     false,
     exposed.filter((text) => /[1-4]/.test(text)).join(' | '),
   );
+});
+
+test('twins appearing after the fallback tap remain terminal during rebinding', async () => {
+  const fake = app({
+    focused: [
+      screenOf(
+        [
+          element('@one', 'Email', { kind: 'input', testID: 'qa-hidden-email' }),
+          element('@two', 'Email', { kind: 'input', testID: 'qa-hidden-email' }),
+        ],
+        true,
+      ),
+    ],
+  });
+  let recoveries = 0;
+  fake.deps.hideDevMenu = async () => {
+    recoveries += 1;
+    return { ok: true, proven: true };
+  };
+  const result = await walkBlock(blocks(plan(EMAIL, 'qa-hidden-email', ''))[0], fake.deps);
+  assert.equal(result.block.outcome, 'fail');
+  assert.match(result.failure?.seen ?? '', /^TARGET_AMBIGUOUS:/);
+  assert.equal(fake.typed.length, 0);
+  assert.equal(recoveries, 0);
+  assert.equal(fake.log.filter((entry) => entry.startsWith('press')).length, 1);
 });

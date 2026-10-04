@@ -118,7 +118,9 @@ for (const [name, nodes] of Object.entries(fixtures)) {
     // Keyboard fallback never resolves a target that is ambiguous or already an observable input.
     assert.equal(keyboardFallbackTarget(fill, screen), undefined);
     // Rebind after a fallback tap.
-    assert.equal(bindFillIdentity(fill, screen, 'email')?.kind, twin ? undefined : 'strict');
+    if (twin)
+      assert.throws(() => bindFillIdentity(fill, screen, 'email'), { code: 'TARGET_AMBIGUOUS' });
+    else assert.equal(bindFillIdentity(fill, screen, 'email')?.kind, 'strict');
     // Replay of a stored id: terminal ambiguity, never a selector miss.
     const stored = { ...target, exact: 'id' as const };
     assert.equal(

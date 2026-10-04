@@ -1,5 +1,11 @@
 import type { Step, Target } from './plan.js';
-import { type Element, type Screen, elementFrame, labelEchoOf } from './screen.js';
+import {
+  type Element,
+  type Screen,
+  elementFrame,
+  labelEchoOf,
+  forwardedInputOf,
+} from './screen.js';
 
 export type IdentityTag = 'native' | 'react-only' | 'wrapper';
 
@@ -28,21 +34,11 @@ export function named(
   return e.label === quoted || e.testID === quoted;
 }
 
-// React-only entries forward the one native input with their testID when React reports at most
-// one text-entry host for it: a composite wrapper, or the input's own host when the wrapper joined.
-function forwardsInput(screen: Screen, element: Element, matched: readonly Element[]): boolean {
-  const id = element.testID;
-  if (!element.ref.startsWith('react:') || !id) return false;
+function forwardsInput(element: Element, matched: readonly Element[]): boolean {
+  const id = forwardedInputOf(element);
+  if (!id) return false;
   const native = matched.filter((e) => !e.ref.startsWith('react:') && e.kind === 'input');
-  if (native.length !== 1 || native[0].testID !== id) return false;
-  const hosts = screen.reactHostEvidence?.hosts.filter(
-    (host) =>
-      host.testID === id &&
-      (host.capabilities.fill === true ||
-        ['textinput', 'search', 'textbox', 'searchbox'].includes(host.role?.toLowerCase() ?? '')),
-  );
-  // A React-only input is the native input's own host only on positive single-host evidence.
-  return element.kind === 'input' ? hosts?.length === 1 : (hosts?.length ?? 0) <= 1;
+  return native.length === 1 && native[0].testID === id;
 }
 
 const nested = (a: Element, b: Element): boolean => {
@@ -88,7 +84,7 @@ export function exactIdentities(screen: Screen, target: Target, kind: Step['kind
   return matched
     .filter((e) => {
       const control = echoControl(e);
-      return (!control || !matched.includes(control)) && !forwardsInput(screen, e, matched);
+      return (!control || !matched.includes(control)) && !forwardsInput(e, matched);
     })
     .map((element) => ({
       element,

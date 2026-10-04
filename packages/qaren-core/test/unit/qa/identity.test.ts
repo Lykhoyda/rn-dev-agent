@@ -182,7 +182,7 @@ test('I1 input twins refuse fill, fallback and rebind alike', () => {
   assert.equal(exactIdentities(screen, fill.target, 'fill').length, 2);
   assert.equal(outcome(prepareTarget(fill, screen)), 'TARGET_AMBIGUOUS');
   assert.equal(keyboardFallbackTarget(fill, screen), undefined);
-  assert.equal(bindFillIdentity(fill, screen, 'email'), undefined);
+  assert.throws(() => bindFillIdentity(fill, screen, 'email'), { code: 'TARGET_AMBIGUOUS' });
 });
 
 for (const inner of [true, false]) {
@@ -303,7 +303,7 @@ for (const [name, digest, hosts, expected] of [
   [
     'a forwarding composite joined first',
     [
-      { role: 'button', testID: 'notes' },
+      { role: 'button', testID: 'notes', compositeWrapper: true, inputHostIndices: [0] },
       { role: 'textinput', testID: 'notes' },
     ],
     [inputHost],
@@ -313,10 +313,28 @@ for (const [name, digest, hosts, expected] of [
     'a forwarding composite left over',
     [
       { role: 'textinput', testID: 'notes' },
-      { role: 'button', testID: 'notes' },
+      { role: 'button', testID: 'notes', compositeWrapper: true, inputHostIndices: [0] },
     ],
     [inputHost],
     '@n2',
+  ],
+  [
+    'an unrelated React button with the same id',
+    [
+      { role: 'textinput', testID: 'notes' },
+      { role: 'button', testID: 'notes' },
+    ],
+    [inputHost],
+    'TARGET_AMBIGUOUS',
+  ],
+  [
+    'a composite without ancestry evidence',
+    [
+      { role: 'textinput', testID: 'notes' },
+      { role: 'button', testID: 'notes', compositeWrapper: true },
+    ],
+    [],
+    'TARGET_AMBIGUOUS',
   ],
   [
     'a second React input host',

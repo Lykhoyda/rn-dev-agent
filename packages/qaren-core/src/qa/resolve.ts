@@ -205,13 +205,25 @@ export function bindFillIdentity(
   | { kind: 'strict'; strict: { ref: string; element: Element } }
   | { kind: 'fallback'; fallback: { element: Element; oracleTestID: string } }
   | undefined {
+  if (!identity) return;
+  const target = { quoted: identity, phrase: identity, exact: 'id' as const };
+  const identities = exactIdentities(screen, target, 'fill');
+  const wrappers = exactIdentities(
+    screen,
+    { ...target, quoted: identity + PRESSABLE_SUFFIX },
+    'fill',
+  );
+  const innerObserved =
+    identities.length > 0 ||
+    screen.reactHostEvidence?.hosts.some((host) => host.testID === identity);
+  if (identities.length > 1 || (innerObserved && wrappers.length > 1))
+    throw new ResolutionError({
+      refuse: 'TARGET_AMBIGUOUS',
+      reason: 'the original input identity matches multiple elements',
+    });
   const wrapper = wrapperEquivalence(screen, identity);
-  const elements = screen.elements.filter((e) => e.testID === identity || e === wrapper);
-  if (
-    !identity ||
-    elements.some((e) => elements.filter((other) => other.testID === e.testID).length !== 1)
-  )
-    return;
+  const elements = identities.map(({ element }) => element);
+  if (wrapper && !elements.includes(wrapper)) elements.push(wrapper);
   const native = elements.filter(isNativeInput);
   if (native.length) {
     if (native.length !== 1) return;

@@ -93,6 +93,20 @@ function publicObservation(tree: unknown): ReactObservation {
       if (entry.compositeWrapper !== true) throw new PrivateInputCaptureError();
       result.compositeWrapper = true;
     }
+    if (entry.inputHostIndices !== undefined) {
+      if (
+        !Array.isArray(entry.inputHostIndices) ||
+        entry.inputHostIndices.length > hostEvidence.hosts.length ||
+        entry.inputHostIndices.some(
+          (index: unknown) =>
+            !Number.isInteger(index) ||
+            Number(index) < 0 ||
+            Number(index) >= hostEvidence.hosts.length,
+        )
+      )
+        throw new PrivateInputCaptureError();
+      result.inputHostIndices = [...entry.inputHostIndices];
+    }
     if (entry.handlerless !== undefined) {
       if (
         entry.handlerless !== true ||

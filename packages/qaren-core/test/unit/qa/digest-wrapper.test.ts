@@ -6,6 +6,7 @@ import { captureQaReact } from '../../../dist/qa/react-capture.js';
 import { captureScreen } from '../../../dist/qa/capture.js';
 import { PrivateInputCaptureError } from '../../../dist/qa/private-input.js';
 import { join, semanticActionView, visibilityView } from '../../../dist/qa/screen.js';
+import { exactIdentities } from '../../../dist/qa/identity.js';
 import { nativeCapture } from './platform-presence-fixtures.ts';
 
 interface FiberSpec {
@@ -162,3 +163,31 @@ test('capture rejects malformed composite-wrapper facts rather than dropping the
     );
   }
 });
+
+for (const ancestor of [true, false]) {
+  test(`input forwarding requires captured ancestry: ${ancestor}`, async () => {
+    const input = {
+      name: 'TextInput',
+      props: { testID: 'notes', onChangeText: handler },
+      children: [{ hostType: 'RCTTextInput', props: { testID: 'notes', onChangeText: handler } }],
+    };
+    const composite = {
+      name: 'NotesField',
+      props: { testID: 'notes', onPress: handler },
+      children: ancestor ? [input] : [],
+    };
+    const react = await observe(ancestor ? [composite] : [composite, input]);
+    const screen = join(
+      [{ ref: '@input', type: 'TextField', identifier: 'notes', hittable: true }],
+      react.interactive!,
+      'app',
+      undefined,
+      react.hostEvidence,
+    );
+    assert.equal(
+      exactIdentities(screen, { quoted: 'notes', phrase: 'notes', exact: 'id' }, 'fill').length,
+      ancestor ? 1 : 2,
+    );
+    assert.deepEqual(react.interactive![0].inputHostIndices, ancestor ? [0] : undefined);
+  });
+}

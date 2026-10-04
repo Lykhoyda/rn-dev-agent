@@ -718,8 +718,7 @@ export function bindExactFillTarget(
       priorSignature !== null &&
       priorSignature !== undefined &&
       ((priorSignature.identifier?.trim().length ?? 0) > 0 ||
-        (priorSignature.label?.trim().length ?? 0) > 0 ||
-        priorSignature.rect !== undefined);
+        (priorSignature.label?.trim().length ?? 0) > 0);
     if (!hasRobustIdentity) {
       return {
         ok: false,
@@ -728,12 +727,16 @@ export function bindExactFillTarget(
     }
     const signature = priorSignature as RefSignature;
     const signatureIdentifier = inputTestId(signature.identifier);
-    // An id-less input is rebound by type and frame: its label is the typed value on Android.
     const matches =
       signatureIdentifier !== null
         ? nodesWithTestID(nodes, signatureIdentifier)
         : nodes.filter((n) => {
-            if ((n.type ?? '') !== signature.type) return false;
+            if (
+              (n.type ?? '') !== signature.type ||
+              n.label !== signature.label ||
+              inputTestId(n.identifier) !== null
+            )
+              return false;
             if (signature.rect !== undefined && n.rect !== undefined) {
               return rectsMatch(n.rect, signature.rect);
             }
@@ -1183,7 +1186,11 @@ interface FillFailureOpts {
 }
 
 function fillFailure(
-  code: 'NO_TEXT_INPUT_TARGET' | 'FOCUS_TARGET_OCCLUDED' | 'TEXT_ENTRY_UNVERIFIED',
+  code:
+    | 'NO_TEXT_INPUT_TARGET'
+    | 'FOCUS_TARGET_OCCLUDED'
+    | 'TEXT_ENTRY_UNVERIFIED'
+    | 'TARGET_AMBIGUOUS',
   message: string,
   opts: FillFailureOpts,
 ): ToolResult {
@@ -1201,9 +1208,11 @@ function fillFailure(
       : {}),
     hint:
       opts.hint ??
-      (opts.mutation === 'none'
-        ? 'No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying.'
-        : 'The field may have been mutated. Read the field state with device_snapshot before any manual retry — do not blindly re-run device_fill.'),
+      (code === 'TARGET_AMBIGUOUS'
+        ? 'The target identity is ambiguous; do not retry this fill.'
+        : opts.mutation === 'none'
+          ? 'No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying.'
+          : 'The field may have been mutated. Read the field state with device_snapshot before any manual retry — do not blindly re-run device_fill.'),
   });
 }
 
@@ -1378,7 +1387,9 @@ export async function performExactFill(
     if (mutation === 'none') {
       const code = extractErrorCode(primary);
       return fillFailure(
-        code === 'FOCUS_TARGET_OCCLUDED' ? 'FOCUS_TARGET_OCCLUDED' : 'NO_TEXT_INPUT_TARGET',
+        code === 'FOCUS_TARGET_OCCLUDED' || code === 'TARGET_AMBIGUOUS'
+          ? code
+          : 'NO_TEXT_INPUT_TARGET',
         `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`,
         { mutation: 'none', pathsTried },
       );
@@ -1552,15 +1563,21 @@ export async function performFocusedFill(
   if (native.isError) {
     const mutation = extractMutationDisposition(native);
     if (mutation === 'none') {
-      return fillFailure('NO_TEXT_INPUT_TARGET', extractErrorText(native), {
-        mutation: 'none',
-        pathsTried,
-        ...(extractErrorCode(native) === 'TEXT_SYNTHESIS_UNAVAILABLE'
-          ? {
-              hint: 'No text was entered. This Xcode cannot synthesize text, so device_fill focused: true cannot type here. Do not retry focused: true.',
-            }
-          : {}),
-      });
+      return fillFailure(
+        extractErrorCode(native) === 'TARGET_AMBIGUOUS'
+          ? 'TARGET_AMBIGUOUS'
+          : 'NO_TEXT_INPUT_TARGET',
+        extractErrorText(native),
+        {
+          mutation: 'none',
+          pathsTried,
+          ...(extractErrorCode(native) === 'TEXT_SYNTHESIS_UNAVAILABLE'
+            ? {
+                hint: 'No text was entered. This Xcode cannot synthesize text, so device_fill focused: true cannot type here. Do not retry focused: true.',
+              }
+            : {}),
+        },
+      );
     }
     return fillFailure('TEXT_ENTRY_UNVERIFIED', extractErrorText(native), {
       mutation: 'possible',

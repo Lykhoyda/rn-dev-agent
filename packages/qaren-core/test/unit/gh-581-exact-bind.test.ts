@@ -96,7 +96,7 @@ test('gh-581 bind: direct input ref and bare testID both bind', () => {
   assert.equal((byTestId as { binding: { inputRef: string } }).binding.inputRef, '@e30');
 });
 
-test('gh-581 bind: blank Android identifiers rebind by type and frame', () => {
+test('gh-581 bind: blank Android identifiers retain their named identity', () => {
   const original = [
     {
       ref: '@e1',
@@ -126,8 +126,13 @@ test('gh-581 bind: blank Android identifiers rebind by type and frame', () => {
     binding.inputTestId ?? binding.inputRef,
     binding.inputSignature as never,
   );
-  assert.ok(rebound.ok);
-  assert.equal((rebound as { binding: { inputRef: string } }).binding.inputRef, '@e2');
+  assert.ok(!rebound.ok, 'a changed label cannot retain an id-less identity');
+  const unchanged = bindExactFillTarget(
+    [{ ...original[0], ref: '@e2' }] as never,
+    binding.inputRef,
+    binding.inputSignature as never,
+  );
+  assert.ok(unchanged.ok);
 
   const replacement = [{ ...typed[0], rect: { x: 100, y: 100, width: 10, height: 10 } }];
   const replaced = bindExactFillTarget(
@@ -353,3 +358,14 @@ test('S8: a different-kind twin carrying the bound testID is ambiguous at bind t
     assert.equal((out as { ambiguous?: boolean }).ambiguous, true, ref);
   }
 });
+
+for (const identifier of [undefined, '']) {
+  test(`id-less Search never rebinds to Chat at the same frame (${identifier ?? 'absent'})`, () => {
+    const rect = { x: 0, y: 0, width: 100, height: 40 };
+    const prior = { type: 'TextField', identifier, label: 'Search', rect };
+    const nodes = [{ ref: '@e1', type: 'TextField', identifier, label: 'Chat', rect }];
+    assert.equal(bindExactFillTarget(nodes, '@e1', prior).ok, false);
+    assert.equal(bindExactFillTarget([{ ...nodes[0], label: 'Search' }], '@e1', prior).ok, true);
+    assert.equal(bindExactFillTarget(nodes, '@e1', { ...prior, label: undefined }).ok, false);
+  });
+}
