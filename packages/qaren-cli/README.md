@@ -276,8 +276,8 @@ marker-looking text in labels, values, placeholders, instructions and criteria i
 masked normally. Short values and
 fragments never rewrite it, so `address1` stays readable when `1` is protected,
 but a testID containing a whole protected value of three or more characters is
-concealed. Saved actions are never rewritten; blocks that would carry a protected
-value are withheld instead. Isolated shorter fragments of long
+concealed. For saved-action admission, see [Saved blocks](#saved-blocks).
+Isolated shorter fragments of long
 secrets remain readable: `is` stays visible for `existing-secret`, while `secr`
 is concealed. A protected `1234` masks each of the four digit boxes.
 
@@ -397,13 +397,15 @@ or label, a phrase wait, a fill into a secure or private input, or an attempt at
 unsaved and the ledger says why without naming any value; ordinary fills keep their
 plan literal in the saved block. A previously saved block replayed against a now-private
 input also reports withholding without rewriting or deleting the existing action.
-Discovered or patched block writes are deferred until the walk finishes. Exact
-substrings of values protected by private fills anywhere in the same run
-withhold the block if present in header fields,
-raw comments, fill literals, literal assertions or stored selectors. The value-free
-reason is `contains a protected plan-typed value` in `blocks_not_saved`. This save
-guard uses recorded private-fill facts only; prefilled secure values and values only
-observed on screen remain uncovered by it. It does not remove existing saved actions.
+Discovered or patched block writes are deferred until the walk finishes. Values
+protected by private observations or keyboard fallback anywhere in the same run
+are checked under the [shared masking rules](#input-value-masking), including
+fragment protection. A matching block title, header field, raw comment, fill
+literal, literal assertion, stored selector or serialized YAML withholds the
+block rather than rewriting its bytes. Admission derives adjacent-character
+context from the block's serialization inputs. The value-free reason is
+`contains a protected plan-typed value` in `blocks_not_saved`, including when the
+value was observed rather than typed. Existing saved actions are not removed.
 
 For quoted waits and scroll-until steps, a testID is stored only when exactly one
 captured element carries it, including offscreen elements in that count. A shared
@@ -436,6 +438,12 @@ diagnostic that never changes the verdict,
 `worktree_drift`: app-root paths whose `git status` changed during the walk, outside
 `.qaren/actions`. This status-only diagnostic is separate from the
 [candidate provenance check](#candidate-provenance), which can fail the run.
+
+Block names in final ledger rows, block results, reports and `blocks_not_saved`
+use display masking. Machine fields `blocksWritten` in the core result and
+`blocks_written` in the receipt retain canonical slugs for file lookup and PR
+block preservation; replay identifiers also remain unchanged.
+
 `qaren actions list [--json]` and `qaren actions show <slug>` read the
 action corpus of the current directory. Both `.yaml` and `.yml` are supported;
 existing files retain their extension when patched. A slug with both extensions

@@ -92,6 +92,7 @@ test('serialization withholds protected fragments in metadata, plan text and sel
         assert.equal(check.kind, 'check');
         if (check.kind === 'check') check.text = fragment;
       } else rows[0].selector = field === 'id' ? { id: fragment } : { text: fragment };
+      if (field === 'slug') rows.forEach((row) => (row.block = block.slug));
       const before = structuredClone({ block, rows, meta });
       assert.deepEqual(
         serializeBlock(block, rows, meta, [secret]),
@@ -99,7 +100,7 @@ test('serialization withholds protected fragments in metadata, plan text and sel
         `${field}: ${secret}`,
       );
       assert.deepEqual({ block, rows, meta }, before);
-      assert.ok('yaml' in serializeBlock(block, rows, meta));
+      assert.ok('yaml' in serializeBlock(block, rows, meta), `${field}: ${secret}`);
     }
   }
 });
