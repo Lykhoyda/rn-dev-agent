@@ -10,7 +10,6 @@ import {
   assertionView,
   describe,
   elementFrame,
-  labelEchoOf,
   semanticActionView,
   semanticDisabled,
   visibilityView,
@@ -23,6 +22,14 @@ import {
   checkVerdict,
   confidentChoice,
 } from './questions.js';
+import {
+  PRESSABLE_SUFFIX,
+  echoControl,
+  exactIdentities,
+  focusIdentityOf,
+  withoutPressable,
+  wrapperEquivalence,
+} from './identity.js';
 import {
   inputCheckSubject,
   inputValues,
@@ -57,15 +64,6 @@ export function resolutionVisible(resolution: Resolution | undefined): boolean {
 export interface TargetQuestion {
   question: Question;
   candidates: Element[];
-}
-
-function matches(e: Element, quoted: string, kind: Step['kind'], exact?: Target['exact']): boolean {
-  if (exact) return exact === 'id' ? e.testID === quoted : e.label === quoted;
-  if (kind === 'fill')
-    return (
-      e.kind === 'input' && (e.label === quoted || e.testID === quoted || e.placeholder === quoted)
-    );
-  return e.label === quoted || e.testID === quoted;
 }
 
 // Value-free: kind, testID or its absence, and the rounded native frame; never a label or value.
@@ -108,41 +106,41 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
       ? semanticActionView(screen, step.kind)
       : { elements: visibility ? screen.elements : actionView(screen) };
   if ('refuse' in projected) return projected;
-  const matchable = projected.elements.filter(
-    (e) =>
-      semantic || ((visibility || !e.disabled) && (step.kind !== 'fill' || e.kind === 'input')),
-  );
-  // A strict fill acts only on a native input; React-only inputs still count toward ambiguity.
-  const reactOnlyFill = (e: Element) =>
-    !semantic && step.kind === 'fill' && e.ref.startsWith('react:');
-  const eligible = matchable.filter((e) => !reactOnlyFill(e));
-  const candidates = eligible;
   if (target.quoted !== undefined) {
-    const matched = matchable.filter((e) => matches(e, target.quoted!, step.kind, target.exact));
-    const exact = matched.filter((e) => !matched.includes(labelEchoOf(e)!));
-    if (exact.length === 1 && reactOnlyFill(exact[0]))
+    const identities = exactIdentities(screen, target, step.kind);
+    const only = identities.length === 1 ? identities[0].element : undefined;
+    // A strict fill acts only on a native input; React-only inputs still count toward ambiguity.
+    if (only && step.kind === 'fill' && only.ref.startsWith('react:'))
       return {
         refuse: 'TARGET_NOT_FOUND',
         reason: `no eligible element labelled or identified "${target.quoted}" is on screen`,
       };
-    if (exact.length === 1)
-      return exact[0].offscreen ? scrollTo(exact[0]) : { ref: exact[0].ref, element: exact[0] };
-    // A replayed selector names one element; anything else re-walks the step instead of asking Jev.
-    if (target.exact)
-      return {
-        refuse: 'REPLAY_SELECTOR',
-        reason: `${exact.length} eligible elements match the stored ${target.exact === 'id' ? 'testID' : 'label'} "${target.quoted}"`,
-      };
-    return exact.length
-      ? {
-          refuse: 'TARGET_AMBIGUOUS',
-          reason: `multiple eligible elements labelled or identified "${target.quoted}" match the target; candidates: ${exact.map(describeCandidate).join('; ')}`,
-        }
-      : {
-          refuse: 'TARGET_NOT_FOUND',
-          reason: `no eligible element labelled or identified "${target.quoted}" is on screen`,
+    const eligible =
+      only &&
+      projected.elements.includes(only) &&
+      (visibility || !only.disabled) &&
+      (step.kind !== 'fill' || only.kind === 'input');
+    if (!eligible) {
+      const count = only ? 0 : identities.length;
+      // A replayed selector names one element; anything else re-walks the step instead of asking Jev.
+      if (target.exact)
+        return {
+          refuse: 'REPLAY_SELECTOR',
+          reason: `${count} eligible elements match the stored ${target.exact === 'id' ? 'testID' : 'label'} "${target.quoted}"`,
         };
+      return count > 1
+        ? {
+            refuse: 'TARGET_AMBIGUOUS',
+            reason: `multiple elements labelled or identified "${target.quoted}" match the target; candidates: ${identities.map(({ element }) => describeCandidate(element)).join('; ')}`,
+          }
+        : {
+            refuse: 'TARGET_NOT_FOUND',
+            reason: `no eligible element labelled or identified "${target.quoted}" is on screen`,
+          };
+    }
+    return only.offscreen ? scrollTo(only) : { ref: only.ref, element: only };
   }
+  const candidates = projected.elements;
   if (!candidates.length)
     return { refuse: 'TARGET_NOT_FOUND', reason: 'the screen has no eligible candidates' };
   if (candidates.length > MAX_CANDIDATES)
@@ -164,10 +162,6 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
   };
 }
 
-const PRESSABLE_SUFFIX = '-pressable';
-export const withoutPressable = (id: string): string =>
-  id.endsWith(PRESSABLE_SUFFIX) ? id.slice(0, -PRESSABLE_SUFFIX.length) : id;
-
 // The one non-input element a quoted fill may tap before typing through the keyboard; undefined keeps the strict refusal.
 export function keyboardFallbackTarget(
   step: Step,
@@ -182,16 +176,19 @@ export function keyboardFallbackTarget(
       [e.testID, e.label, e.placeholder].some((name) => name !== undefined && ids.has(name)),
   );
   if (observable) return;
-  const shown = actionView(screen).filter((e) => !e.ref.startsWith('react:'));
-  const named = shown.filter((e) => e.testID === quoted || e.label === quoted);
-  const candidates = named.length
-    ? named
-    : shown.filter((e) => e.testID === quoted + PRESSABLE_SUFFIX);
-  if (candidates.length !== 1) return;
-  const element = candidates[0];
+  const identities = exactIdentities(screen, step.target, 'press');
+  if (identities.length > 1) return;
+  // A field observed only in React is reached through its observed wrapper.
+  const element =
+    identities.length && identities[0].tag !== 'react-only'
+      ? identities[0].element
+      : wrapperEquivalence(screen, quoted);
+  const oracleTestID = element && focusIdentityOf(screen, element);
   if (
-    !element.testID ||
-    !withoutPressable(element.testID) ||
+    !element ||
+    !oracleTestID ||
+    !actionView(screen).includes(element) ||
+    element.ref.startsWith('react:') ||
     screen.elements.filter((e) => e.testID === element.testID).length !== 1 ||
     element.offscreen ||
     element.secure ||
@@ -199,7 +196,7 @@ export function keyboardFallbackTarget(
     element.semantic?.disabled === true
   )
     return;
-  return { element, oracleTestID: withoutPressable(element.testID) };
+  return { element, oracleTestID };
 }
 
 export function bindFillIdentity(
@@ -210,9 +207,8 @@ export function bindFillIdentity(
   | { kind: 'strict'; strict: { ref: string; element: Element } }
   | { kind: 'fallback'; fallback: { element: Element; oracleTestID: string } }
   | undefined {
-  const elements = screen.elements.filter(
-    (e) => e.testID !== undefined && withoutPressable(e.testID) === identity,
-  );
+  const wrapper = wrapperEquivalence(screen, identity);
+  const elements = screen.elements.filter((e) => e.testID === identity || e === wrapper);
   if (
     !identity ||
     elements.some((e) => elements.filter((other) => other.testID === e.testID).length !== 1)
@@ -253,7 +249,10 @@ export function decideTarget(prepared: TargetQuestion, answer: Answer | undefine
       ? scrollTo(candidate)
       : { refuse: 'TARGET_NOT_FOUND', reason: 'no candidate matches the target' };
   }
-  const element = prepared.candidates[Number(top.slice(1))];
+  const chosen = prepared.candidates[Number(top.slice(1))];
+  // A chosen text that echoes its control is that control's identity.
+  const control = echoControl(chosen);
+  const element = control && prepared.candidates.includes(control) ? control : chosen;
   return offscreen(element) ? scrollTo(element) : { ref: element.ref, element };
 }
 

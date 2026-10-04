@@ -19,6 +19,7 @@ import {
   targetVisible,
   visibleSelector,
 } from './resolve.js';
+import { focusIdentityOf } from './identity.js';
 import {
   type BlockPlatform,
   type StoredBlock,
@@ -1177,19 +1178,17 @@ export async function walkBlock(
               ) {
                 fellBack = true;
                 const targetID = element?.testID;
+                const identity = focusIdentityOf(before.screen, element);
                 if (
                   !targetID ||
+                  !identity ||
                   before.screen.elements.filter((e) => e.testID === targetID).length !== 1
                 ) {
                   outcome = failed(item, attempt, act.error, before.screen, undefined);
                   break;
                 }
                 before = await capture(item);
-                const binding = bindFillIdentity(
-                  item,
-                  before.screen,
-                  targetID.replace(/-pressable$/, ''),
-                );
+                const binding = bindFillIdentity(item, before.screen, identity);
                 const fallback = binding?.kind === 'fallback' ? binding.fallback : undefined;
                 if (!fallback) {
                   outcome = failed(

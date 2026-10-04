@@ -7,7 +7,7 @@ import { NativeCaptureError } from '../../../dist/qa/capture.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import type { Block, Step } from '../../../dist/qa/plan.js';
 import { join as joinScreen } from '../../../dist/qa/screen.js';
-import type { Element, Screen } from '../../../dist/qa/screen.js';
+import type { Element, ReactHostObservation, Screen } from '../../../dist/qa/screen.js';
 import { keyboardFallbackTarget, prepareTarget } from '../../../dist/qa/resolve.js';
 import { KEYBOARD_READY_CAPTURES, runPlan, walkBlock } from '../../../dist/qa/walker.js';
 import type { ActResult, BlockStore, WalkerDeps } from '../../../dist/qa/walker.js';
@@ -22,12 +22,25 @@ const wrapper = (label = 'Email', extra: Partial<Element> = {}): Element =>
   element('@wrap', label, { kind: 'other', testID: WRAP, ...extra });
 const submit = element('@submit', 'Submit', { testID: 'qa-hidden-submit' });
 
-function screenOf(elements: Element[], keyboardVisible?: boolean): Screen {
+// The hidden field itself is observed only as a React host, as a real capture reports it.
+const INNER = {
+  testID: 'qa-hidden-email',
+  role: null,
+  roleSource: 'none',
+  capabilities: { fill: true },
+} as const;
+
+function screenOf(
+  elements: Element[],
+  keyboardVisible?: boolean,
+  hosts: ReactHostObservation[] = [INNER],
+): Screen {
   return {
     front: 'app',
     elements,
     visibleText: elements.map((e) => e.label ?? ''),
     coverage: { native: 'complete', react: 'complete' },
+    reactHostEvidence: { hosts, complete: true },
     ...(keyboardVisible === undefined ? {} : { keyboardVisible }),
   };
 }
@@ -56,6 +69,7 @@ interface AppOptions {
   expireBeforeType?: boolean;
   questions?: Questions[];
   reactFocused?: boolean | 'throw';
+  hosts?: ReactHostObservation[];
 }
 
 function app(options: AppOptions = {}) {
@@ -81,9 +95,10 @@ function app(options: AppOptions = {}) {
       return screenOf(
         initial,
         options.initialKeyboard === 'absent' ? undefined : (options.initialKeyboard ?? false),
+        options.hosts,
       );
     if (state === 'focused') {
-      const screens = options.focused ?? [screenOf(initial, true)];
+      const screens = options.focused ?? [screenOf(initial, true, options.hosts)];
       const next = screens[Math.min(focusedCaptures++, screens.length - 1)];
       if (options.expireBeforeType && next.keyboardVisible) expire = true;
       return next;
@@ -243,7 +258,10 @@ test('U8: a later failing check still fails the block after an unverified fill',
 });
 
 test('a phrase check after a qa-otp fallback fill sends no protected digit boxes', async () => {
-  const fake = app({ initial: [wrapper('Code', { testID: 'qa-otp-pressable' })] });
+  const fake = app({
+    initial: [wrapper('Code', { testID: 'qa-otp-pressable' })],
+    hosts: [{ ...INNER, testID: 'qa-otp' }],
+  });
   const capture = fake.deps.captureScreen;
   fake.deps.captureScreen = async () =>
     fake.state() === 'typed'
@@ -1089,20 +1107,31 @@ for (const reactKnown of [true, false]) {
     const strict = prepareTarget(step, joined);
     assert.ok('refuse' in strict);
     assert.equal(strict.refuse, 'TARGET_NOT_FOUND');
-    assert.deepEqual(keyboardFallbackTarget(step, joined), {
-      element: joined.elements[0],
-      oracleTestID: 'custom-pressable',
-    });
+    // Without an observed inner field the wrapper is never assumed to stand for it.
+    assert.deepEqual(
+      keyboardFallbackTarget(step, joined),
+      reactKnown ? { element: joined.elements[0], oracleTestID: 'custom-pressable' } : undefined,
+    );
     assert.equal(
       joined.elements.some((e) => e.ref.startsWith('react:')),
       reactKnown,
     );
   });
 
-  test(`joined hidden input walks without scrolling with React evidence ${reactKnown}`, async () => {
+  test(`joined hidden input ${reactKnown ? 'walks without scrolling' : 'refuses without an observed inner field'} (React evidence ${reactKnown})`, async () => {
     const joined = hiddenInputScreen(reactKnown);
     const fake = app({ initial: joined.elements, initialKeyboard: false });
     const result = await walkBlock(blocks(plan(EMAIL, 'custom-pressable', ''))[0], fake.deps);
+    if (!reactKnown) {
+      assert.equal(result.block.outcome, 'fail');
+      assert.match(result.failure?.seen ?? '', /TARGET_NOT_FOUND/);
+      assert.deepEqual(
+        steps(fake.log).filter((s) => !s.startsWith('shot')),
+        [],
+      );
+      assert.deepEqual(fake.typed, []);
+      return;
+    }
     assert.equal(result.block.outcome, 'pass', JSON.stringify(result.failure));
     assert.deepEqual(steps(fake.log), ['press @wrap', 'type @wrap']);
     assert.deepEqual(fake.typed, [{ ref: '@wrap', text: EMAIL, testID: 'custom-pressable' }]);
@@ -1422,7 +1451,11 @@ for (const refusal of ['resolution', 'native binding']) {
           nativeKind: kind,
           testID: matching ? 'original-email' : 'replacement-email',
         });
-        const fake = app({ initial: [initial], focused: [screenOf([input], true)] });
+        const fake = app({
+          initial: [initial],
+          focused: [screenOf([input], true)],
+          hosts: [{ ...INNER, testID: 'original-email' }],
+        });
         const fill = fake.deps.fill;
         fake.deps.fill = async (ref, text, context) => {
           if (ref === '@wrap') {
@@ -1492,6 +1525,7 @@ for (const refusal of ['resolution', 'native binding']) {
       const fake = app({
         initial: [initial],
         focused: [screenOf([input], true), screenOf([replacement], true)],
+        hosts: [{ ...INNER, testID: 'original-email' }],
       });
       let time = 0;
       let expired = false;

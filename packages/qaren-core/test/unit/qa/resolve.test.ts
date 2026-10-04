@@ -92,7 +92,7 @@ test('ambiguous quoted press and fill targets refuse locally without asking or a
         const judge = scriptedJudge(() => assert.fail('ambiguous quotes must not ask Jev'));
         const result = await resolveTarget(step(line), observed, judge);
         assert.ok('refuse' in result && result.refuse === 'TARGET_AMBIGUOUS');
-        assert.match(result.reason, /multiple eligible elements/);
+        assert.match(result.reason, /multiple elements/);
         const f = walker([observed], judge);
         const ledger = await runPlan(parsePlan(`1. ${line}\n✓ "Save"`).blocks!, f.deps);
         assert.equal(ledger.verdict, 'FAIL');
