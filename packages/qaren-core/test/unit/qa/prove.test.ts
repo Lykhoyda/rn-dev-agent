@@ -130,14 +130,18 @@ test('cancellation during either proof evaluation rejects without another read',
     let reads = 0;
     let ready!: () => void;
     let release!: (value: { value: string }) => void;
-    const started = new Promise<void>((resolve) => { ready = resolve; });
+    const started = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
     const deps = {
       fileExists,
       evaluate: async () => {
         reads++;
         if (reads === cancelAt) {
           ready();
-          return new Promise<{ value: string }>((resolve) => { release = resolve; });
+          return new Promise<{ value: string }>((resolve) => {
+            release = resolve;
+          });
         }
         return { value: 'http://localhost:8081/index.bundle' };
       },
@@ -146,7 +150,12 @@ test('cancellation during either proof evaluation rejects without another read',
     const refused = assert.rejects(pending, /RUN_CANCELLED/);
     await started;
     stop.begin();
-    release({ value: cancelAt === 1 ? 'http://localhost:8081/index.bundle' : JSON.stringify({ count: 1, names: ['index.js'] }) });
+    release({
+      value:
+        cancelAt === 1
+          ? 'http://localhost:8081/index.bundle'
+          : JSON.stringify({ count: 1, names: ['index.js'] }),
+    });
     await refused;
     await stop.drained(1000);
     assert.equal(reads, cancelAt);

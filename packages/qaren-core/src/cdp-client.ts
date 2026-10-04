@@ -695,8 +695,11 @@ export class CDPClient {
   ): Promise<string> {
     this._reconnectDiscover = discoverExactPort;
     this._exactDiscoveryPort = port;
-    const connect = () => this.connectWithCurrentPolicy(port, filters, intent, targetRetries, awaitWithinBoundary);
-    return deadline === undefined ? connect() : withDeadline(deadline, new CDPProbeTimeoutError('CDP attach deadline exceeded'), connect);
+    const connect = () =>
+      this.connectWithCurrentPolicy(port, filters, intent, targetRetries, awaitWithinBoundary);
+    return deadline === undefined
+      ? connect()
+      : withDeadline(deadline, new CDPProbeTimeoutError('CDP attach deadline exceeded'), connect);
   }
 
   async listTargetsExact(port: number): Promise<{ port: number; targets: HermesTarget[] }> {

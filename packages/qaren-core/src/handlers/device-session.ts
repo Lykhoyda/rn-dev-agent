@@ -1,4 +1,10 @@
-import { isAbort, execFile as execFileCb, interruptible, cancellationSignal, withCancellation } from '../domain/cancellation.js';
+import {
+  isAbort,
+  execFile as execFileCb,
+  interruptible,
+  cancellationSignal,
+  withCancellation,
+} from '../domain/cancellation.js';
 import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
 import type { TimingContext } from '../qa/timing.js';
 import { promisify } from 'node:util';
@@ -298,10 +304,12 @@ export function createDeviceSnapshotHandler(
           // GH #383: propagate its typed code (RUNNER_PROTOCOL_MISMATCH) when set.
           // GH #418: open is the only entry allowed to invalidate a stale
           // runner artifact and pay the cold rebuild (mid-flow refuses fast).
-          const ready = await interruptible(() => ensureIosRunner(deviceId, appId, {
-            allowArtifactRebuild: true,
-            attachOnly: args.attachOnly === true,
-          }));
+          const ready = await interruptible(() =>
+            ensureIosRunner(deviceId, appId, {
+              allowArtifactRebuild: true,
+              attachOnly: args.attachOnly === true,
+            }),
+          );
           if (!ready.ok) {
             await withCancellation(undefined, () => stopIosRunner(deviceId));
             // GH #382: a failed start may have left a pending artifact note —
@@ -315,9 +323,13 @@ export function createDeviceSnapshotHandler(
           // Full-open foregrounding may be best-effort; attach-only activation
           // is performed by XCTest under target process-identity checks.
           if (!args.attachOnly) {
-            await interruptible(() => deps.launchIosApp
-              ? deps.launchIosApp(deviceId, appId)
-              : execFile('xcrun', ['simctl', 'launch', deviceId, appId], { timeout: 10_000, encoding: 'utf8' })
+            await interruptible(() =>
+              deps.launchIosApp
+                ? deps.launchIosApp(deviceId, appId)
+                : execFile('xcrun', ['simctl', 'launch', deviceId, appId], {
+                    timeout: 10_000,
+                    encoding: 'utf8',
+                  }),
             ).catch((error) => {
               if (isAbort(error)) throw error;
             });
@@ -347,13 +359,20 @@ export function createDeviceSnapshotHandler(
             );
           }
           reactNativeUiReady = deps.probeReactNativeUi
-            ? await interruptible(() => deps.probeReactNativeUi!('android', deviceId, appId)).catch((error) => { if (isAbort(error)) throw error; cancellationSignal(); return false; })
+            ? await interruptible(() => deps.probeReactNativeUi!('android', deviceId, appId)).catch(
+                (error) => {
+                  if (isAbort(error)) throw error;
+                  cancellationSignal();
+                  return false;
+                },
+              )
             : null;
         }
       } catch (err) {
         let cleanupFailure: string | undefined;
         try {
-          if (lockPlatform === 'ios') await withCancellation(undefined, () => stopIosRunner(deviceId));
+          if (lockPlatform === 'ios')
+            await withCancellation(undefined, () => stopIosRunner(deviceId));
           else await withCancellation(undefined, () => reapAndroidRunner(deviceId));
         } catch (cleanupErr) {
           if (isAbort(cleanupErr)) throw cleanupErr;
@@ -400,11 +419,14 @@ export function createDeviceSnapshotHandler(
         appId,
       });
       try {
-        await interruptible(async () => { await deps.bindRunner?.(lockPlatform, deviceId, appId); });
+        await interruptible(async () => {
+          await deps.bindRunner?.(lockPlatform, deviceId, appId);
+        });
       } catch (error) {
         let cleanupFailure: string | undefined;
         try {
-          if (lockPlatform === 'ios') await withCancellation(undefined, () => stopIosRunner(deviceId));
+          if (lockPlatform === 'ios')
+            await withCancellation(undefined, () => stopIosRunner(deviceId));
           else await withCancellation(undefined, () => reapAndroidRunner(deviceId));
         } catch (cleanupErr) {
           if (isAbort(cleanupErr)) throw cleanupErr;

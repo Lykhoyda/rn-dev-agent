@@ -1,4 +1,9 @@
-import { cancellationSignal, cancellableFetch, interruptible, sleep } from '../domain/cancellation.js';
+import {
+  cancellationSignal,
+  cancellableFetch,
+  interruptible,
+  sleep,
+} from '../domain/cancellation.js';
 import { execFileSync } from 'node:child_process';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { logger } from '../logger.js';
@@ -112,7 +117,9 @@ export async function discoverAllMetroPorts(ports: number[], timeout: number): P
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeout);
       try {
-        const resp = await cancellableFetch(fetch, `http://127.0.0.1:${p}/status`, { signal: ctrl.signal });
+        const resp = await cancellableFetch(fetch, `http://127.0.0.1:${p}/status`, {
+          signal: ctrl.signal,
+        });
         const text = await resp.text();
         return text.includes('packager-status:running') ? p : null;
       } catch {
@@ -127,15 +134,22 @@ export async function discoverAllMetroPorts(ports: number[], timeout: number): P
 
 export class TargetReadinessTimeoutError extends Error {}
 
-export async function fetchTargets(port: number, timeout: number, signal?: AbortSignal): Promise<HermesTarget[]> {
+export async function fetchTargets(
+  port: number,
+  timeout: number,
+  signal?: AbortSignal,
+): Promise<HermesTarget[]> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
   try {
-    const resp = await cancellableFetch(fetch, `http://127.0.0.1:${port}/json/list`, { signal: signal ? AbortSignal.any([ctrl.signal, signal]) : ctrl.signal });
+    const resp = await cancellableFetch(fetch, `http://127.0.0.1:${port}/json/list`, {
+      signal: signal ? AbortSignal.any([ctrl.signal, signal]) : ctrl.signal,
+    });
     return (await resp.json()) as HermesTarget[];
   } catch (err) {
     cancellationSignal(signal);
-    if (ctrl.signal.aborted) throw new TargetReadinessTimeoutError(`CDP target read timed out on port ${port}`);
+    if (ctrl.signal.aborted)
+      throw new TargetReadinessTimeoutError(`CDP target read timed out on port ${port}`);
     throw new Error(
       `Failed to list CDP targets on port ${port}: ${err instanceof Error ? err.message : err}`,
     );
@@ -168,7 +182,10 @@ export async function waitForExactPortTargets(
   let remaining = deadline - performance.now();
   while (remaining > 0) {
     signal?.throwIfAborted();
-    const raw = await interruptible(() => fetchTargets(port, Math.min(DISCOVERY_TIMEOUT_MS * 2, remaining), signal), signal);
+    const raw = await interruptible(
+      () => fetchTargets(port, Math.min(DISCOVERY_TIMEOUT_MS * 2, remaining), signal),
+      signal,
+    );
     if (!Array.isArray(raw)) {
       throw new Error(`Invalid CDP target list on port ${port}: expected an array`);
     }
@@ -178,7 +195,9 @@ export async function waitForExactPortTargets(
     await sleep(Math.min(pollMs, remaining), signal);
     remaining = deadline - performance.now();
   }
-  throw new TargetReadinessTimeoutError(`Timed out waiting for CDP targets on port ${port} after ${timeoutMs}ms`);
+  throw new TargetReadinessTimeoutError(
+    `Timed out waiting for CDP targets on port ${port} after ${timeoutMs}ms`,
+  );
 }
 
 export function filterValidTargets(targets: HermesTarget[]): HermesTarget[] {

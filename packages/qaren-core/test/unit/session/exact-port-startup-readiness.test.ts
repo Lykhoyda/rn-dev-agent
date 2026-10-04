@@ -401,11 +401,17 @@ test('invalid ports and unsafe timer arguments are rejected before any request',
   assert.equal(clock.subprocess.mock.callCount(), 0);
 });
 
-
 test('cancellation during a pending target response prevents the attach continuation', async (t) => {
   const stop = createStop();
   let respond: (response: Response) => void = () => {};
-  t.mock.method(globalThis, 'fetch', () => new Promise<Response>((resolve) => { respond = resolve; }));
+  t.mock.method(
+    globalThis,
+    'fetch',
+    () =>
+      new Promise<Response>((resolve) => {
+        respond = resolve;
+      }),
+  );
   let connected = false;
   const waiting = (async () => {
     await waitForExactPortTargets(managedPort, 30_000, 500, stop.signal);
@@ -419,9 +425,16 @@ test('cancellation during a pending target response prevents the attach continua
 
 test('cancellation aborts a pending readiness fetch and makes no later request', async (t) => {
   const stop = createStop();
-  const reads = t.mock.method(globalThis, 'fetch', (_url, options) => new Promise<Response>((_resolve, reject) => {
-    options?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
-  }));
+  const reads = t.mock.method(
+    globalThis,
+    'fetch',
+    (_url, options) =>
+      new Promise<Response>((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(new Error('aborted')), {
+          once: true,
+        });
+      }),
+  );
   const waiting = waitForExactPortTargets(managedPort, 30_000, 500, stop.signal);
   stop.begin();
   await assert.rejects(waiting, /RUN_CANCELLED/);

@@ -5,7 +5,15 @@
 import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
 import { QA_READ_ONLY_CAPABILITY, checkQaNativeOutcome } from './qa-native-policy.js';
 import { DEVICE_LEASE_REQUIRED, leaseFromEnvironment } from './lease-env.js';
-import { spawn, execFile, cancellableFetch, sleep, cancellationSignal, isAbort, withCancellation } from '../domain/cancellation.js';
+import {
+  spawn,
+  execFile,
+  cancellableFetch,
+  sleep,
+  cancellationSignal,
+  isAbort,
+  withCancellation,
+} from '../domain/cancellation.js';
 import type { ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
@@ -1518,7 +1526,9 @@ async function startAndroidRunnerAttempt(
     const removeForward = () => {
       if (forwardRemoved) return;
       forwardRemoved = true;
-      void withCancellation(undefined, () => execFileAsync('adb', buildAdbForwardRemoveArgs(serial, hostPort))).catch(() => {});
+      void withCancellation(undefined, () =>
+        execFileAsync('adb', buildAdbForwardRemoveArgs(serial, hostPort)),
+      ).catch(() => {});
     };
 
     const child = spawn(
@@ -1604,7 +1614,11 @@ async function startAndroidRunnerAttempt(
       removeForward();
       if (resolved) return;
       resolved = true;
-      reject(isAbort(err) ? err : new Error(`Failed to spawn Android runner instrumentation: ${err.message}`));
+      reject(
+        isAbort(err)
+          ? err
+          : new Error(`Failed to spawn Android runner instrumentation: ${err.message}`),
+      );
     });
 
     child.on('exit', (code) => {
@@ -1625,7 +1639,9 @@ async function startAndroidRunnerAttempt(
     // GH#243: readiness is the runner's own /health, not the (stale-prone) logcat
     // ring buffer. /health is true only once the ServerSocket is actually accepting.
     void withCancellation(signal, async () => {
-      const healthy = await waitForAndroidRunnerHealth(hostPort, { capability: authority.capability });
+      const healthy = await waitForAndroidRunnerHealth(hostPort, {
+        capability: authority.capability,
+      });
       if (resolved) return;
       signal?.throwIfAborted();
       if (healthy) {

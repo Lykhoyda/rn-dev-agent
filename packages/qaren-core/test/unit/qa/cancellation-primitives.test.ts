@@ -2,17 +2,31 @@ import assert from 'node:assert/strict';
 import { promisify } from 'node:util';
 import { test } from 'node:test';
 import {
-  cancellableFetch, execFile, interruptible, RunCancelledError, sleep, spawn, withCancellation,
+  cancellableFetch,
+  execFile,
+  interruptible,
+  RunCancelledError,
+  sleep,
+  spawn,
+  withCancellation,
 } from '../../../src/domain/cancellation.ts';
 
 const execute = promisify(execFile);
 
 test('abort at each I/O primitive blocks the next forward effect', async () => {
-  for (const primitive of ['HTTP request', 'CDP or runner response', 'polling sleep', 'exec', 'spawn'] as const) {
+  for (const primitive of [
+    'HTTP request',
+    'CDP or runner response',
+    'polling sleep',
+    'exec',
+    'spawn',
+  ] as const) {
     const controller = new AbortController();
     const calls: string[] = [];
     let ready!: () => void;
-    const started = new Promise<void>((resolve) => { ready = resolve; });
+    const started = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
     let release: () => void = () => {};
     let exit: Promise<unknown> | undefined;
     const pending = withCancellation(controller.signal, async () => {
@@ -23,7 +37,9 @@ test('abort at each I/O primitive blocks the next forward effect', async () => {
             ready();
             return new Promise<Response>((resolve, reject) => {
               release = () => resolve(Response.json({ ok: true }));
-              options?.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
+              options?.signal?.addEventListener('abort', () => reject(options.signal?.reason), {
+                once: true,
+              });
             });
           }, 'http://localhost/command');
           break;
@@ -31,7 +47,9 @@ test('abort at each I/O primitive blocks the next forward effect', async () => {
           await interruptible((signal) => {
             assert.equal(signal, controller.signal);
             ready();
-            return new Promise<void>((resolve) => { release = resolve; });
+            return new Promise<void>((resolve) => {
+              release = resolve;
+            });
           });
           break;
         case 'polling sleep': {
@@ -65,21 +83,37 @@ test('abort at each I/O primitive blocks the next forward effect', async () => {
     await refused;
     if (exit) await exit;
     assert.deepEqual(calls, [primitive]);
-    const resumed = withCancellation(controller.signal, () => interruptible(async () => { calls.push('late retry'); }));
+    const resumed = withCancellation(controller.signal, () =>
+      interruptible(async () => {
+        calls.push('late retry');
+      }),
+    );
     await assert.rejects(resumed);
     assert.deepEqual(calls, [primitive]);
-    await withCancellation(undefined, () => execute(process.execPath, ['-e', 'process.stdout.write("cleaned")']))
-      .then(({ stdout }) => assert.equal(stdout, 'cleaned'));
+    await withCancellation(undefined, () =>
+      execute(process.execPath, ['-e', 'process.stdout.write("cleaned")']),
+    ).then(({ stdout }) => assert.equal(stdout, 'cleaned'));
   }
 });
 
 test('ordinary primitive completion preserves results and child-process options', async () => {
   const controller = new AbortController();
   await withCancellation(controller.signal, async () => {
-    assert.equal(await interruptible(async (signal) => { assert.equal(signal, controller.signal); return 7; }), 7);
-    const { stdout } = await execute(process.execPath, ['-e', 'process.stdout.write(process.env.CANCEL_TEST)'], {
-      env: { ...process.env, CANCEL_TEST: 'result' }, encoding: 'utf8',
-    });
+    assert.equal(
+      await interruptible(async (signal) => {
+        assert.equal(signal, controller.signal);
+        return 7;
+      }),
+      7,
+    );
+    const { stdout } = await execute(
+      process.execPath,
+      ['-e', 'process.stdout.write(process.env.CANCEL_TEST)'],
+      {
+        env: { ...process.env, CANCEL_TEST: 'result' },
+        encoding: 'utf8',
+      },
+    );
     assert.equal(stdout, 'result');
     await sleep(1);
   });
@@ -93,7 +127,12 @@ test('one deadline interrupts every connect primitive before its continuation', 
     let release!: () => void;
     const pending = withDeadline(performance.now() + 20, timeout, async () => {
       effects.push(primitive);
-      await interruptible(() => new Promise<void>((resolve) => { release = resolve; }));
+      await interruptible(
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+      );
       effects.push('next effect');
     });
     await assert.rejects(pending, (error) => error === timeout);

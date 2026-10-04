@@ -1,4 +1,8 @@
-import { cancellableFetch, sleep as cancellableSleep, interruptible } from '../domain/cancellation.js';
+import {
+  cancellableFetch,
+  sleep as cancellableSleep,
+  interruptible,
+} from '../domain/cancellation.js';
 import {
   type Answers,
   type Judge,
@@ -307,7 +311,9 @@ export function createJev(options: JevOptions = {}): Judge {
               });
             throw new JevError('JEV_UNAVAILABLE');
           }
-          await measureTiming(options.timing, now, 'jev-backoff', () => interruptible(() => sleep(delay)));
+          await measureTiming(options.timing, now, 'jev-backoff', () =>
+            interruptible(() => sleep(delay)),
+          );
         }
         throw new JevError('JEV_UNAVAILABLE');
       } finally {

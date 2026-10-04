@@ -2,7 +2,15 @@ import { DEVICE_LEASE_REQUIRED, leaseFromEnvironment } from './lease-env.js';
 import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
 import { measureTiming, observeTiming, type TimingContext } from '../qa/timing.js';
 import { QA_READ_ONLY_CAPABILITY, checkQaNativeOutcome } from './qa-native-policy.js';
-import { execFile, spawn, cancellableFetch, sleep as cancellableSleep, interruptible, cancellationSignal, isAbort } from '../domain/cancellation.js';
+import {
+  execFile,
+  spawn,
+  cancellableFetch,
+  sleep as cancellableSleep,
+  interruptible,
+  cancellationSignal,
+  isAbort,
+} from '../domain/cancellation.js';
 import { promisify } from 'node:util';
 import { isIosSimulatorUdid } from './external-runner-detect.js';
 import type { ChildProcess } from 'node:child_process';

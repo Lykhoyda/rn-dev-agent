@@ -343,11 +343,9 @@ export async function hideExpoDevMenu(
   for (let attempt = 0; attempt <= retries; attempt++) {
     const attempts = attempt + 1;
     try {
-      const result = await interruptible(() => client.evaluate(
-        HIDE_EXPO_DEV_MENU_EXPRESSION,
-        true,
-        evaluationTimeoutMs,
-      ));
+      const result = await interruptible(() =>
+        client.evaluate(HIDE_EXPO_DEV_MENU_EXPRESSION, true, evaluationTimeoutMs),
+      );
       const startOutcome = parseSentinel(result.value, attempts);
       const attemptOutcome = result.error
         ? startOutcome.callSent

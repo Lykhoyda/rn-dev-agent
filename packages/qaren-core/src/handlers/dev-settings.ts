@@ -103,7 +103,12 @@ export function createDevSettingsHandler(
   const handler = async (args: { action: DevAction }, client: CDPClient) => {
     if (args.action === 'hideDevMenu') {
       const probe = dependencies.probeForegroundSurface;
-      const before = probe ? await interruptible(probe).catch(() => { cancellationSignal(); return 'unknown' as const; }) : 'unknown';
+      const before = probe
+        ? await interruptible(probe).catch(() => {
+            cancellationSignal();
+            return 'unknown' as const;
+          })
+        : 'unknown';
       if (before !== 'unknown' && before !== 'expo_dev_menu') {
         return okResult({
           action: args.action,
@@ -117,7 +122,12 @@ export function createDevSettingsHandler(
       if (!call.callSent) return failedHideResult(call, before);
 
       await interruptible(() => dependencies.settleAfterHide?.() ?? sleep(300));
-      const after = probe ? await interruptible(probe).catch(() => { cancellationSignal(); return 'unknown' as const; }) : 'unknown';
+      const after = probe
+        ? await interruptible(probe).catch(() => {
+            cancellationSignal();
+            return 'unknown' as const;
+          })
+        : 'unknown';
       if (before === 'expo_dev_menu' && after === 'app') {
         return okResult({
           action: args.action,

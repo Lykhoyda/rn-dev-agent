@@ -304,7 +304,10 @@ async function fetchToFile(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
   try {
-    const res = await cancellableFetch(fetch, url, { signal: controller.signal, redirect: 'follow' });
+    const res = await cancellableFetch(fetch, url, {
+      signal: controller.signal,
+      redirect: 'follow',
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
     if (!res.body) throw new Error(`empty response body for ${url}`);
     mkdirSync(dirname(dest), { recursive: true });

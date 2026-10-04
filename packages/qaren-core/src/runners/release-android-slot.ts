@@ -180,7 +180,9 @@ export async function releaseAndroidInteractionSlot(
       const pid = deps.readDaemonPid();
       let keepFiles = false;
       if (pid !== null && deps.isAlive(pid)) {
-        warnings.push(`PROCESS_OWNERSHIP_UNPROVEN: retaining live legacy daemon PID ${pid} and its files because its record has no process-birth identity`);
+        warnings.push(
+          `PROCESS_OWNERSHIP_UNPROVEN: retaining live legacy daemon PID ${pid} and its files because its record has no process-birth identity`,
+        );
         keepFiles = true;
       }
       if (!keepFiles) {

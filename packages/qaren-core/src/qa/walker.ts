@@ -1374,7 +1374,10 @@ export async function walkBlock(
           deps.cancelled?.()
             ? undefined
             : refusal
-              ? await shoot(item).catch((error) => { if (isAbort(error)) throw error; return undefined; })
+              ? await shoot(item).catch((error) => {
+                  if (isAbort(error)) throw error;
+                  return undefined;
+                })
               : await shoot(item);
         const miss =
           replay &&

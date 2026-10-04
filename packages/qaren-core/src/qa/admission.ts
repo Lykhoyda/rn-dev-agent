@@ -21,7 +21,10 @@ export interface AdmissionSteps {
 
 type Proven = Extract<ProveOutcome, { ok: true }>;
 
-export async function admit(steps: AdmissionSteps, stop: { readonly signal: AbortSignal }): Promise<Proven> {
+export async function admit(
+  steps: AdmissionSteps,
+  stop: { readonly signal: AbortSignal },
+): Promise<Proven> {
   try {
     return await withCancellation(stop.signal, async () => {
       await attach(steps);
@@ -43,7 +46,9 @@ async function attach(steps: AdmissionSteps): Promise<void> {
   let failure: unknown;
   try {
     const deadline = performance.now() + steps.remainingMs();
-    await withDeadline(deadline, new CDPProbeTimeoutError('CDP attach deadline exceeded'), () => steps.attach(deadline));
+    await withDeadline(deadline, new CDPProbeTimeoutError('CDP attach deadline exceeded'), () =>
+      steps.attach(deadline),
+    );
     return;
   } catch (error) {
     if (isAbort(error)) throw error;
@@ -51,12 +56,17 @@ async function attach(steps: AdmissionSteps): Promise<void> {
   }
   const load = (steps.load ?? (() => loadavg()[0]))();
   const loaded = load > LOAD_ENVELOPE;
-  const timedOut = (error: unknown) => error instanceof TargetReadinessTimeoutError || error instanceof CDPProbeTimeoutError || error instanceof CDPHandshakeTimeoutError;
+  const timedOut = (error: unknown) =>
+    error instanceof TargetReadinessTimeoutError ||
+    error instanceof CDPProbeTimeoutError ||
+    error instanceof CDPHandshakeTimeoutError;
   const retry = loaded && timedOut(failure) && steps.remainingMs() >= steps.readinessMs;
   if (retry) {
     try {
       const deadline = performance.now() + steps.remainingMs();
-      await withDeadline(deadline, new CDPProbeTimeoutError('CDP attach deadline exceeded'), () => steps.attach(deadline));
+      await withDeadline(deadline, new CDPProbeTimeoutError('CDP attach deadline exceeded'), () =>
+        steps.attach(deadline),
+      );
       return;
     } catch (error) {
       if (isAbort(error)) throw error;

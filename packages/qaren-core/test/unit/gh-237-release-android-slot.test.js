@@ -9,7 +9,6 @@ test('GH#237 OWNED_PACKAGES: exactly our two in-tree runner packages', () => {
   ]);
 });
 
-
 import { releaseAndroidInteractionSlot } from '../../dist/runners/release-android-slot.js';
 
 function baseDeps(over = {}) {
@@ -85,8 +84,6 @@ test('GH#237 release: cleanupLegacy()=false skips daemon cleanup but still does 
   assert.equal(r.killedDaemonPids.length, 0);
 });
 
-
-
 test('GH#237 release: removes orphaned daemon files when the daemon PID is dead', async () => {
   const removed = [];
   const r = await releaseAndroidInteractionSlot(
@@ -114,8 +111,6 @@ test('GH#237 release: never throws when stopOwnRunner fails (idempotent/best-eff
   assert.equal(r.stoppedOwnRunner, false);
   assert.ok(r.warnings.some((w) => /stopping the Android runner failed/.test(w)));
 });
-
-
 
 test('GH#653 release: multi-target/no-exact refusal is actionable and non-mutating', async () => {
   const mutations = [];

@@ -15,13 +15,15 @@ export function createStop() {
     },
     track<T>(op: () => Promise<T>): Promise<T> {
       if (controller.signal.aborted) return Promise.reject(controller.signal.reason);
-      const pending = withCancellation(controller.signal, () => interruptible(() => {
-        const operation = op();
-        const settled = operation.catch(() => undefined);
-        inFlight.add(settled);
-        void settled.finally(() => inFlight.delete(settled));
-        return operation;
-      }));
+      const pending = withCancellation(controller.signal, () =>
+        interruptible(() => {
+          const operation = op();
+          const settled = operation.catch(() => undefined);
+          inFlight.add(settled);
+          void settled.finally(() => inFlight.delete(settled));
+          return operation;
+        }),
+      );
       return pending;
     },
     // The deadline stays referenced so teardown runs even if the work never settles.

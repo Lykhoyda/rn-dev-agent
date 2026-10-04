@@ -13,23 +13,42 @@ test('native startup settles cancellation and rejects buffered readiness without
   const originalReadDir = fs.readdirSync;
   const originalLstat = fs.lstatSync;
   t.mock.method(fs, 'lstatSync', (path, options) => {
-    if (/runner-state|session-|\/tmp\/(?:rn-(?:fast|android)-runner-state|qaren-session)\.json/.test(String(path))) {
+    if (
+      /runner-state|session-|\/tmp\/(?:rn-(?:fast|android)-runner-state|qaren-session)\.json/.test(
+        String(path),
+      )
+    ) {
       throw Object.assign(new Error('fixture state is absent'), { code: 'ENOENT' });
     }
     return originalLstat(path, options);
   });
   const writes: unknown[] = [];
-  const spawns: Array<EventEmitter & { stdout: PassThrough; stderr: PassThrough; pid: number; kill(): boolean }> = [];
-  t.mock.method(fs, 'existsSync', (path) =>
-    String(path).endsWith('.xcodeproj') || String(path).endsWith('/Build/Products') || originalExists(path));
+  const spawns: Array<
+    EventEmitter & { stdout: PassThrough; stderr: PassThrough; pid: number; kill(): boolean }
+  > = [];
+  t.mock.method(
+    fs,
+    'existsSync',
+    (path) =>
+      String(path).endsWith('.xcodeproj') ||
+      String(path).endsWith('/Build/Products') ||
+      originalExists(path),
+  );
   t.mock.method(fs, 'readdirSync', (path, options) =>
-    String(path).endsWith('/Build/Products') ? ['fixture.xctestrun'] : originalReadDir(path, options));
-  t.mock.method(fs, 'writeFileSync', (...args) => { writes.push(args); });
+    String(path).endsWith('/Build/Products')
+      ? ['fixture.xctestrun']
+      : originalReadDir(path, options),
+  );
+  t.mock.method(fs, 'writeFileSync', (...args) => {
+    writes.push(args);
+  });
   t.mock.method(fs, 'renameSync', () => {});
   t.mock.method(fs, 'unlinkSync', () => {});
   t.mock.method(childProcess, 'spawn', () => {
     const child = Object.assign(new EventEmitter(), {
-      stdout: new PassThrough(), stderr: new PassThrough(), pid: 12345,
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      pid: 12345,
       kill: () => true,
     });
     spawns.push(child);
@@ -38,23 +57,34 @@ test('native startup settles cancellation and rejects buffered readiness without
   const originalExecFile = childProcess.execFile;
   const execute = (_command, args, ...rest) => {
     const callback = rest.at(-1);
-    const stdout = args.includes('get-state') ? 'device' :
-      args.includes('instrumentation') ? 'instrumentation:dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner' : '';
+    const stdout = args.includes('get-state')
+      ? 'device'
+      : args.includes('instrumentation')
+        ? 'instrumentation:dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner'
+        : '';
     queueMicrotask(() => callback(null, stdout, ''));
     return new EventEmitter();
   };
   Object.defineProperty(execute, promisify.custom, {
     configurable: true,
-    value: async (command, args, options) => new Promise((resolve, reject) => {
-      execute(command, args, options, (error, stdout, stderr) =>
-        error ? reject(error) : resolve({ stdout, stderr }));
-    }),
+    value: async (command, args, options) =>
+      new Promise((resolve, reject) => {
+        execute(command, args, options, (error, stdout, stderr) =>
+          error ? reject(error) : resolve({ stdout, stderr }),
+        );
+      }),
   });
   childProcess.execFile = execute;
-  t.after(() => { childProcess.execFile = originalExecFile; });
+  t.after(() => {
+    childProcess.execFile = originalExecFile;
+  });
   syncBuiltinESMExports();
-  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-  const { withCancellation, RunCancelledError } = await import('../../../dist/domain/cancellation.js');
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  const { withCancellation, RunCancelledError } =
+    await import('../../../dist/domain/cancellation.js');
   const ios = await import('../../../dist/runners/rn-fast-runner-client.js');
   const android = await import('../../../dist/runners/rn-android-runner-client.js');
   const previousLease = process.env.QAREN_DEVICE_LEASE;
@@ -68,9 +98,11 @@ test('native startup settles cancellation and rejects buffered readiness without
     ios._setFastRunnerStateForTest(null);
     const controller = new AbortController();
     const spawnCount = spawns.length;
-    const pending = withCancellation(controller.signal, () => ios.startFastRunner(
-      '00000000-0000-0000-0000-000000000001', 'com.example.app', 22087, { forceLocalBuild: true },
-    ));
+    const pending = withCancellation(controller.signal, () =>
+      ios.startFastRunner('00000000-0000-0000-0000-000000000001', 'com.example.app', 22087, {
+        forceLocalBuild: true,
+      }),
+    );
     const rejected = assert.rejects(pending);
     await setImmediate();
     assert.equal(spawns.length, spawnCount + 1);
@@ -92,7 +124,9 @@ test('native startup settles cancellation and rejects buffered readiness without
     const controller = new AbortController();
     let healthCalls = 0;
     let notify!: () => void;
-    const reached = new Promise<void>((resolve) => { notify = resolve; });
+    const reached = new Promise<void>((resolve) => {
+      notify = resolve;
+    });
     android._setFetchForTest(async () => {
       healthCalls++;
       if (phase === 'success-continuation' && healthCalls === 2) {
@@ -103,9 +137,9 @@ test('native startup settles cancellation and rejects buffered readiness without
       notify();
       return Response.json({ ok: phase === 'success-continuation' });
     });
-    const pending = withCancellation(controller.signal, () => android.startAndroidRunner(
-      'emulator-test', 'com.example.app', 0, { _forceLocalBuild: true },
-    ));
+    const pending = withCancellation(controller.signal, () =>
+      android.startAndroidRunner('emulator-test', 'com.example.app', 0, { _forceLocalBuild: true }),
+    );
     const rejected = assert.rejects(pending);
     await reached;
     await setImmediate();

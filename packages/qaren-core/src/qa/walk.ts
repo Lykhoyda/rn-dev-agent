@@ -1,4 +1,10 @@
-import { cancellationSignal, interruptible, withCancellation, sleep, isAbort } from '../domain/cancellation.js';
+import {
+  cancellationSignal,
+  interruptible,
+  withCancellation,
+  sleep,
+  isAbort,
+} from '../domain/cancellation.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -303,7 +309,14 @@ async function openSession(
           REACT_READY_POLL_MS,
           stop.signal,
         );
-        await cdp.connectExact(target.metroPort, { platform, bundleId: appId }, 'default', 5, undefined, deadline);
+        await cdp.connectExact(
+          target.metroPort,
+          { platform, bundleId: appId },
+          'default',
+          5,
+          undefined,
+          deadline,
+        );
       },
       // The lease coordinates qaren processes only; a foreign Maestro or XCUITest driver is a probe.
       foreignDriver: async () => {
@@ -553,9 +566,11 @@ async function main(): Promise<void> {
   );
   let opened: Session;
   try {
-    opened = await stop.track(() => openSession(request, emitRow, (close) => {
-      release = close;
-    }));
+    opened = await stop.track(() =>
+      openSession(request, emitRow, (close) => {
+        release = close;
+      }),
+    );
   } catch (error) {
     const { code, message } = describeError(error);
     return refuse(code, message);
@@ -565,11 +580,13 @@ async function main(): Promise<void> {
       opened.close(),
     );
   try {
-    const ledger = await stop.track(() => runPlan(blocks, opened.deps, request.preflightCalls, {
-      appRoot: request.appRoot,
-      platform: request.platform,
-      appId: request.appId,
-    }));
+    const ledger = await stop.track(() =>
+      runPlan(blocks, opened.deps, request.preflightCalls, {
+        appRoot: request.appRoot,
+        platform: request.platform,
+        appId: request.appId,
+      }),
+    );
     return finish(
       resultForWalk({ ...ledger, admittedAtMs: opened.admittedAtMs }, request.lease),
       () => opened.close(),

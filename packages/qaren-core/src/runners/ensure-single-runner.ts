@@ -1,5 +1,10 @@
 import { readProcessBirth } from '../lifecycle/process-birth.js';
-import { isAbort, cancellationSignal, interruptible, sleep as cancellableSleep } from '../domain/cancellation.js';
+import {
+  isAbort,
+  cancellationSignal,
+  interruptible,
+  sleep as cancellableSleep,
+} from '../domain/cancellation.js';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -183,9 +188,14 @@ export async function ensureSingleRunner(
         const birth = deps.readBirth(pid);
         const signal = (kind: NodeJS.Signals): void => {
           cancellationSignal();
-          if (!birth || !selectLegacyRunnerPids(deps.listProcesses(), opts.udid!).includes(pid) ||
-              deps.readBirth(pid) !== birth) {
-            throw new Error('PROCESS_OWNERSHIP_UNPROVEN: legacy runner identity changed or is unavailable');
+          if (
+            !birth ||
+            !selectLegacyRunnerPids(deps.listProcesses(), opts.udid!).includes(pid) ||
+            deps.readBirth(pid) !== birth
+          ) {
+            throw new Error(
+              'PROCESS_OWNERSHIP_UNPROVEN: legacy runner identity changed or is unavailable',
+            );
           }
           cancellationSignal();
           deps.kill(pid, kind);

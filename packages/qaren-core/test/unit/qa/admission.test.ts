@@ -72,7 +72,7 @@ test('a stop during the attach wait ends the wait instead of running to its time
     attach: async () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
       stop.begin();
-      throw new Error("the readiness wait was cancelled");
+      throw new Error('the readiness wait was cancelled');
     },
     open: async () => void calls.push('open'),
     close: async () => void calls.push('close'),
@@ -89,7 +89,9 @@ test('an attach timeout under host load is retried once and refused as environme
     load: () => 42.25,
     attach: async () => {
       attempts++;
-      throw new TargetReadinessTimeoutError('Timed out waiting for CDP targets on port 8081 after 30000ms');
+      throw new TargetReadinessTimeoutError(
+        'Timed out waiting for CDP targets on port 8081 after 30000ms',
+      );
     },
   });
   await assert.rejects(admit(steps, stop), (error: Error & { code?: string }) => {
@@ -149,7 +151,6 @@ test('a foreign automation driver refuses before the session opens', async () =>
   assert.ok(!calls.includes('open'));
 });
 
-
 test('cancellation during bundle proof refuses the proven result', async () => {
   const { calls, steps, stop } = harness();
   steps.prove = async () => {
@@ -159,7 +160,6 @@ test('cancellation during bundle proof refuses the proven result', async () => {
   await assert.rejects(admit(steps, stop), { code: 'RUN_CANCELLED' });
   assert.equal(calls.at(-1), 'close');
 });
-
 
 test('a loaded timeout with only 15 seconds left refuses without a second 30-second wait', async () => {
   let attempts = 0;
@@ -191,7 +191,6 @@ test('a deterministic rejection under load is never retried or called environmen
   assert.equal(attempts, 1);
 });
 
-
 test('abort during each awaited admission primitive rejects before any later effect', async () => {
   const order = ['attach', 'foreignDriver', 'open', 'prove'] as const;
   for (const effect of order) {
@@ -199,8 +198,12 @@ test('abort during each awaited admission primitive rejects before any later eff
     const original = steps[effect];
     let ready!: () => void;
     let release!: () => void;
-    const started = new Promise<void>((resolve) => { ready = resolve; });
-    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     steps[effect as 'attach'] = (async () => {
       ready();
       await interruptible(() => blocked);
@@ -223,9 +226,15 @@ test('loaded handshake timeout retries once and remains an environment refusal',
   let attempts = 0;
   const { calls, stop, steps } = harness({
     load: () => 42,
-    attach: async () => { attempts++; throw new CDPHandshakeTimeoutError('handshake timed out'); },
+    attach: async () => {
+      attempts++;
+      throw new CDPHandshakeTimeoutError('handshake timed out');
+    },
   });
-  await assert.rejects(admit(steps, stop), /host 1-minute load 42.0.*environment refusal after one retry/);
+  await assert.rejects(
+    admit(steps, stop),
+    /host 1-minute load 42.0.*environment refusal after one retry/,
+  );
   assert.equal(attempts, 2);
   assert.deepEqual(calls, ['close']);
 });

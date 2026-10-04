@@ -9,7 +9,9 @@ export function cancellationSignal(signal?: AbortSignal): AbortSignal | undefine
   const current = scope.getStore();
   current?.throwIfAborted();
   signal?.throwIfAborted();
-  return current && signal && current !== signal ? AbortSignal.any([current, signal]) : current ?? signal;
+  return current && signal && current !== signal
+    ? AbortSignal.any([current, signal])
+    : (current ?? signal);
 }
 
 export function withCancellation<T>(signal: AbortSignal | undefined, operation: () => T): T {
@@ -18,11 +20,21 @@ export function withCancellation<T>(signal: AbortSignal | undefined, operation: 
 
 export class RunCancelledError extends Error {
   readonly code = 'RUN_CANCELLED';
-  constructor() { super('RUN_CANCELLED: the run is stopping'); this.name = 'AbortError'; }
+  constructor() {
+    super('RUN_CANCELLED: the run is stopping');
+    this.name = 'AbortError';
+  }
 }
 
-export function interruptible<T>(operation: (signal?: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
-  try { signal = cancellationSignal(signal); } catch (error) { return Promise.reject(error); }
+export function interruptible<T>(
+  operation: (signal?: AbortSignal) => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  try {
+    signal = cancellationSignal(signal);
+  } catch (error) {
+    return Promise.reject(error);
+  }
   if (!signal) return operation();
   const active = signal;
   return new Promise<T>((resolve, reject) => {
@@ -37,10 +49,13 @@ export function interruptible<T>(operation: (signal?: AbortSignal) => Promise<T>
       reject(error);
       return;
     }
-    pending.then((value) => {
-      signal.throwIfAborted();
-      resolve(value);
-    }).catch(reject).finally(() => signal.removeEventListener('abort', abort));
+    pending
+      .then((value) => {
+        signal.throwIfAborted();
+        resolve(value);
+      })
+      .catch(reject)
+      .finally(() => signal.removeEventListener('abort', abort));
   });
 }
 
@@ -48,7 +63,11 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return interruptible((signal) => delay(ms, undefined, { signal }), signal);
 }
 
-export function cancellableFetch(fetcher: typeof fetch, input: string | URL | Request, init?: RequestInit): Promise<Response> {
+export function cancellableFetch(
+  fetcher: typeof fetch,
+  input: string | URL | Request,
+  init?: RequestInit,
+): Promise<Response> {
   const signal = cancellationSignal(init?.signal ?? undefined);
   return interruptible(() => fetcher(input, { ...init, signal }), signal);
 }
@@ -56,7 +75,8 @@ export function cancellableFetch(fetcher: typeof fetch, input: string | URL | Re
 function processArguments(args: unknown[]): unknown[] {
   const optionsAt = Array.isArray(args[1]) ? 2 : 1;
   const options = args[optionsAt];
-  const supplied = options && typeof options === 'object' ? options as { signal?: AbortSignal } : {};
+  const supplied =
+    options && typeof options === 'object' ? (options as { signal?: AbortSignal }) : {};
   const signal = cancellationSignal(supplied.signal);
   if (!signal) return args;
   const result = [...args];
@@ -65,21 +85,31 @@ function processArguments(args: unknown[]): unknown[] {
   return result;
 }
 
-export const execFile = ((...args: unknown[]) => Reflect.apply(nativeExecFile, undefined, processArguments(args))) as typeof nativeExecFile;
+export const execFile = ((...args: unknown[]) =>
+  Reflect.apply(nativeExecFile, undefined, processArguments(args))) as typeof nativeExecFile;
 const nativeExecAsync = promisify(nativeExecFile);
 Object.defineProperty(execFile, promisify.custom, {
-  value: (...args: unknown[]) => interruptible(() => Reflect.apply(nativeExecAsync, undefined, processArguments(args))),
+  value: (...args: unknown[]) =>
+    interruptible(() => Reflect.apply(nativeExecAsync, undefined, processArguments(args))),
 });
 
-export const spawn = ((...args: unknown[]) => Reflect.apply(nativeSpawn, undefined, processArguments(args))) as typeof nativeSpawn;
+export const spawn = ((...args: unknown[]) =>
+  Reflect.apply(nativeSpawn, undefined, processArguments(args))) as typeof nativeSpawn;
 
 export function isAbort(error: unknown): boolean {
   const candidate = error as { name?: string; code?: string } | null;
-  return candidate?.name === 'AbortError' || candidate?.code === 'RUN_CANCELLED' ||
-    (scope.getStore()?.aborted === true && scope.getStore()?.reason === error);
+  return (
+    candidate?.name === 'AbortError' ||
+    candidate?.code === 'RUN_CANCELLED' ||
+    (scope.getStore()?.aborted === true && scope.getStore()?.reason === error)
+  );
 }
 
-export async function withDeadline<T>(deadline: number, reason: Error, operation: () => Promise<T>): Promise<T> {
+export async function withDeadline<T>(
+  deadline: number,
+  reason: Error,
+  operation: () => Promise<T>,
+): Promise<T> {
   const controller = new AbortController();
   const remaining = deadline - performance.now();
   if (remaining <= 0) controller.abort(reason);
