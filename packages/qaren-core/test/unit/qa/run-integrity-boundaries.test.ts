@@ -135,7 +135,8 @@ test('cancelling a later block never flushes an earlier saved action', async () 
       ),
       { code: 'RUN_CANCELLED' },
     );
-    assert.ok(fake.rows.some((row) => row.block === 'first' && row.outcome === 'pass'));
+    const firstLine = parsed.blocks[0].items[0].line;
+    assert.ok(fake.rows.some((row) => row.line === firstLine && row.outcome === 'pass'));
     assert.equal(existsSync(join(root, '.qaren', 'actions')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });

@@ -1623,8 +1623,9 @@ for (const evidence of ['masked', 'unavailable', 'mismatch'] as const) {
       return;
     }
     assert.equal(result.block.outcome, 'pass', JSON.stringify(result.failure));
-    assert.equal(fake.rows[0].outcome, 'pass');
-    assert.match(fake.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
+    assert.equal(result.rows[0].outcome, 'pass');
+    assert.match(result.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
+    assert.equal(JSON.stringify(result.rows).includes('hunter22'), false);
     assert.equal(JSON.stringify(fake.rows).includes('hunter22'), false);
   });
 }
