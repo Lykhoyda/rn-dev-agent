@@ -1145,10 +1145,11 @@ fn kill_group(
     pgid: i32,
     signal: &str,
 ) -> Result<(), Outcome> {
-    let liveness = identity
+    let probed = identity
         .filter(|i| i.pid == pgid)
-        .map(|i| probe_pid_identity(runner, i));
-    if liveness != Some(PidLiveness::AliveMatching) {
+        .map(|i| crate::runrecord::probe_pid_birth(runner, i));
+    if !probed.is_some_and(|(_, pinned)| pinned) {
+        let liveness = probed.map(|(liveness, _)| liveness);
         runner.try_reap(pgid);
         return Err(
             if liveness == Some(PidLiveness::Dead)

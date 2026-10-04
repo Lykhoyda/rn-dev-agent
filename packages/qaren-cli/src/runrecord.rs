@@ -622,6 +622,11 @@ pub enum PidLiveness {
 }
 
 pub fn probe_pid_identity(runner: &mut dyn Runner, recorded: &PidIdentity) -> PidLiveness {
+    probe_pid_birth(runner, recorded).0
+}
+
+// Also reports whether the recorded birth still holds the pid, alive or as an unreaped zombie, so it cannot be reused.
+pub fn probe_pid_birth(runner: &mut dyn Runner, recorded: &PidIdentity) -> (PidLiveness, bool) {
     let started = runner.run(&CmdSpec::new(
         "ps-lstart",
         "ps",
@@ -629,30 +634,29 @@ pub fn probe_pid_identity(runner: &mut dyn Runner, recorded: &PidIdentity) -> Pi
         10,
     ));
     if started.timed_out || started.exit_code.is_none() || !started.stderr.trim().is_empty() {
-        return PidLiveness::Unknown;
+        return (PidLiveness::Unknown, false);
     }
     if !started.ok() || started.stdout.trim().is_empty() {
-        return PidLiveness::Dead;
+        return (PidLiveness::Dead, false);
     }
     // lstart is the birth identity; the command line is advisory only, because
     // pnpm shims exec-transition (sh -> node) after our capture.
-    if started.stdout.trim() == recorded.started_at {
-        // A zombie keeps its lstart but is dead: unreaped child of a live
-        // parent (e.g. a build that exited while prepare still polls it).
-        let stat = runner.run(&CmdSpec::new(
-            "ps-stat",
-            "ps",
-            &["-p", &recorded.pid.to_string(), "-o", "stat="],
-            10,
-        ));
-        if !stat.ok() {
-            return PidLiveness::Unknown;
-        }
-        if stat.stdout.trim_start().starts_with('Z') {
-            return PidLiveness::Dead;
-        }
-        PidLiveness::AliveMatching
-    } else {
-        PidLiveness::AliveForeign
+    if started.stdout.trim() != recorded.started_at {
+        return (PidLiveness::AliveForeign, false);
     }
+    // A zombie keeps its lstart but is dead: unreaped child of a live
+    // parent (e.g. a build that exited while prepare still polls it).
+    let stat = runner.run(&CmdSpec::new(
+        "ps-stat",
+        "ps",
+        &["-p", &recorded.pid.to_string(), "-o", "stat="],
+        10,
+    ));
+    if !stat.ok() {
+        return (PidLiveness::Unknown, false);
+    }
+    if stat.stdout.trim_start().starts_with('Z') {
+        return (PidLiveness::Dead, true);
+    }
+    (PidLiveness::AliveMatching, true)
 }
