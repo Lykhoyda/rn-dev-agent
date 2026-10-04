@@ -146,7 +146,7 @@ test('native-only Android input labels are private outward data, not rewritten l
       assert.ok(!request.includes(`Echo: ${label}`));
       assert.ok(!request.includes(`"${label}"`));
       if (label.length > 2) assert.ok(!request.includes(label));
-      assert.equal(request.includes('address1'), label !== '1');
+      assert.ok(request.includes('address1'));
       assert.equal(JSON.stringify(observed.elements), before);
       assert.equal(observed.elements[0].label, label);
       assert.equal(observed.elements[0].testID, 'address1');

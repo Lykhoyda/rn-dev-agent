@@ -270,8 +270,12 @@ value, is a substring of at least four characters, belongs to adjacent
 single-character boxes whose concatenation matches at least two characters of a
 protected value, or is a single character from a protected code of at most eight
 characters. The current screen's box context also applies when masking individual
-output fields. Tokens joined by `-`, `_`, `.` or `@` are judged whole; an identifier
-containing a protected value is concealed too. Isolated shorter fragments of long
+output fields. Tokens joined by `-`, `_`, `.` or `@` are judged whole. In model
+requests an element's testID is a selector, not visible text: short values and
+fragments never rewrite it, so `address1` stays readable when `1` is protected,
+but a testID containing a whole protected value of three or more characters is
+concealed. Saved actions are never rewritten; blocks that would carry a protected
+value are withheld instead. Isolated shorter fragments of long
 secrets remain readable: `is` stays visible for `existing-secret`, while `secr`
 is concealed. A protected `1234` masks each of the four digit boxes.
 

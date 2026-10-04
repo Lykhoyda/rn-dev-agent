@@ -478,15 +478,26 @@ export function modelMask(
           : escaped;
     });
   const pattern = alternatives.length ? new RegExp(alternatives.join('|'), 'gu') : undefined;
+  const longValues = [...new Set([...unique, ...substringValues])].filter(
+    (value) => [...value].length >= 3,
+  );
+  const maskText = (text: string) =>
+    maskProtectedFragments(
+      pattern ? text.replace(pattern, (value) => replacements.get(value) ?? MASK) : text,
+      [...substringValues],
+      source,
+      tokens,
+    );
   return {
     tokens,
+    // A testID is a selector: short values and fragments never rewrite it, but a whole long value inside it would leak.
     apply: (text) =>
-      maskProtectedFragments(
-        pattern ? text.replace(pattern, (value) => replacements.get(value) ?? MASK) : text,
-        [...substringValues],
-        source,
-        tokens,
-      ),
+      text
+        .split(/(\[testID [^\]]*\])/)
+        .map((part, i) =>
+          i % 2 && !longValues.some((value) => part.includes(value)) ? part : maskText(part),
+        )
+        .join(''),
   };
 }
 

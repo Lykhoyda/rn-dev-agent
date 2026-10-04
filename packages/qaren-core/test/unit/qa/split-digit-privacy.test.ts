@@ -178,3 +178,18 @@ test('individual output fields retain the adjacent-box context of the observed s
   }
   assert.equal(privacy.redact('The name field is filled'), 'The name field is filled');
 });
+
+test('outbound masking keeps testIDs readable unless they contain a whole long protected value', () => {
+  const privacy = new ObservedPrivacy();
+  privacy.concealFallback('1');
+  privacy.concealFallback('existing-secret');
+  const mask = privacy.maskForModel(['1', 'existing-secret'], []);
+  const sent = mask.apply(
+    'textbox "Echo: 1" [testID address1] | "A1B" | [testID existing-secret-field] | existing-secret-value',
+  );
+  assert.ok(sent.includes('[testID address1]'), sent);
+  assert.equal(sent.includes('existing-secret-field'), false, sent);
+  assert.equal(sent.includes('Echo: 1'), false, sent);
+  assert.equal(sent.includes('A1B'), false, sent);
+  assert.equal(sent.includes('existing-secret-value'), false, sent);
+});
