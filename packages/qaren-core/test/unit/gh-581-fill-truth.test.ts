@@ -13,6 +13,7 @@ const { _setMaestroInlineObserverForTest, runMaestroInline } =
 const { updateRefMapFromFlat, clearRefMap } = await import('../../dist/fast-runner-ref-map.js');
 const { okResult, failResult } = await import('../../dist/utils.js');
 const { HandlerError, fillEvidence, unwrap } = await import('../../dist/qa/adapt.js');
+const { QaDispatchContext } = await import('../../dist/domain/qa-dispatch.js');
 
 const NODES = [
   {
@@ -245,6 +246,48 @@ test('gh-581: duplicate direct testIDs reject without mutation', async () => {
   );
   assert.equal(envelope(result as never).code, 'TARGET_AMBIGUOUS');
   assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'));
+});
+
+for (const [name, ref, duplicateIndex] of [
+  ['positional input', '@e3', 2],
+  ['direct input ID', 'last-name', 2],
+  ['positional wrapper', '@e1', 0],
+  ['wrapper inner input', 'first-name-pressable', 1],
+] as const) {
+  test(`gh-581: QA ${name} preserves ambiguity when a twin appears at binding`, async () => {
+    const context = new QaDispatchContext(10, () => 1);
+    const { result, calls } = await withFillSeam(
+      {
+        snapshot: () => [
+          ...NODES,
+          {
+            ...NODES[duplicateIndex],
+            ref: '@e9',
+            rect: { x: 40, y: 400, width: 320, height: 40 },
+          },
+        ],
+      },
+      () => createDeviceFillHandler(() => null as never)({ ref, text: 'x', qaContext: context }),
+    );
+    const env = envelope(result);
+    assert.equal(env.code, 'TARGET_AMBIGUOUS');
+    assert.equal(env.meta.mutation, 'none');
+    assert.deepEqual(env.meta.pathsTried, []);
+    assert.deepEqual(calls.map((call) => call.cliArgs[0]), ['snapshot']);
+    assert.doesNotThrow(() => context.assertComplete());
+  });
+}
+
+test('gh-581: QA unique bindings still fill and verify without invalidation', async () => {
+  for (const ref of ['@e3', 'last-name', '@e1', 'first-name-pressable']) {
+    const context = new QaDispatchContext(10, () => 1);
+    const { result, calls } = await withFillSeam({}, () =>
+      createDeviceFillHandler(() => null as never)({ ref, text: 'x', qaContext: context }),
+    );
+    assert.equal(envelope(result).ok, true, ref);
+    assert.deepEqual(calls.map((call) => call.cliArgs[0]), ['snapshot', 'fill', 'verify-input']);
+    assert.doesNotThrow(() => context.assertComplete());
+  }
 });
 
 test('gh-581: a non-input ref rejects instead of typing into ambient focus', async () => {

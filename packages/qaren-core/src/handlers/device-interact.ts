@@ -1291,6 +1291,12 @@ export async function performExactFill(
   }
   const bind = bindExactFillTarget(snap.nodes, args.ref, priorSignature);
   if (!bind.ok) {
+    if (bind.ambiguous)
+      return failResult(
+        `TARGET_AMBIGUOUS: device_fill found more than one element for the target: ${bind.detail}. No text was entered.`,
+        'TARGET_AMBIGUOUS',
+        { mutation: 'none', pathsTried },
+      );
     if (!bind.unobservable) args.qaContext?.invalidate();
     const focusedHint =
       getActiveSession()?.platform !== 'android' &&
@@ -1298,12 +1304,6 @@ export async function performExactFill(
         bind.detail.includes('is not a recognized text input'))
         ? ' If you already tapped this field and the software keyboard is up, retry with focused: true.'
         : '';
-    if (bind.ambiguous)
-      return failResult(
-        `TARGET_AMBIGUOUS: device_fill found more than one element for the target: ${bind.detail}. No text was entered.`,
-        'TARGET_AMBIGUOUS',
-        { mutation: 'none', pathsTried },
-      );
     return fillFailure(
       'NO_TEXT_INPUT_TARGET',
       `device_fill could not bind an exact input: ${bind.detail}. No text was entered.${focusedHint}`,
