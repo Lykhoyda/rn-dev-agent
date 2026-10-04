@@ -368,7 +368,7 @@ function presenceCauses(
   ];
 }
 
-function nativeCaptureCoverage(observation: NativeObservation): Coverage['native'] {
+export function nativeCaptureCoverage(observation: NativeObservation): Coverage['native'] {
   const verdict = isRecord(observation.snapshotVerdict) ? observation.snapshotVerdict : undefined;
   if (nativeIncompleteCauses(observation).length > 0) return 'incomplete';
   return Array.isArray(observation.nodes) &&
@@ -382,6 +382,13 @@ function nativeCaptureCoverage(observation: NativeObservation): Coverage['native
     verdict.reasons.length === 0
     ? 'complete'
     : 'unknown';
+}
+
+export function nativeDevOverlayUncleared(observation: NativeObservation): boolean {
+  const front = frontFromSurface(observation.surface, observation.nodes ?? []);
+  return (
+    nativeCaptureCoverage(observation) !== 'complete' || front === 'dev-fab' || front === 'dev-menu'
+  );
 }
 
 function reactCaptureCoverage(observation: ReactObservation): Coverage['react'] {

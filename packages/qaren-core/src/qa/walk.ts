@@ -11,7 +11,11 @@ import { parseArgs } from 'node:util';
 import { CDPClient } from '../cdp-client.js';
 import { waitForExactPortTargets } from '../cdp/discovery.js';
 import { REACT_READY_POLL_MS, REACT_READY_TIMEOUT_MS } from '../cdp/setup.js';
-import { createDevSettingsHandler, WALK_DEV_SETTINGS } from '../handlers/dev-settings.js';
+import {
+  clearDevOverlays,
+  createDevSettingsHandler,
+  recoverDevOverlays,
+} from '../handlers/dev-settings.js';
 import {
   cdpClientOrNull,
   createDeviceBackHandler,
@@ -35,6 +39,7 @@ import { HandlerError, adapt, describeError, secureMaskedFill, unwrap } from './
 import {
   AppProcessGoneError,
   captureScreen,
+  nativeDevOverlayUncleared,
   postAdmissionSnapshots,
   type NativeObservation,
 } from './capture.js';
@@ -160,7 +165,7 @@ function compileOnly(args: string[]): Promise<never> {
 interface Session {
   deps: WalkerDeps;
   close(): Promise<void>;
-  // Epoch ms of the bundle proof; recorded frames before it are never published.
+  // Epoch ms once the bundle is proven and dev overlays are cleared; earlier frames are never published.
   admittedAtMs: number;
 }
 
@@ -343,7 +348,6 @@ async function openSession(
     },
     stop,
   );
-  const admittedAtMs = Date.now();
   const admittedSnapshots = postAdmissionSnapshots(snapshot, appId);
   cancellationSignal();
   log(
@@ -385,16 +389,15 @@ async function openSession(
         appId,
       ),
   });
-  for (const action of WALK_DEV_SETTINGS) {
-    cancellationSignal();
-    try {
-      unwrap(await devSettings({ action }));
-    } catch (error) {
-      if (isAbort(error)) throw error;
-      cancellationSignal();
-      log(`${action}: ${describeError(error).message}`);
-    }
+  const devOverlayUncleared = async (): Promise<boolean> =>
+    nativeDevOverlayUncleared(await rawSnapshot());
+  try {
+    unwrap(await clearDevOverlays({ devSettings, devOverlayUncleared, log }));
+  } catch (error) {
+    await close();
+    throw error;
   }
+  const admittedAtMs = Date.now();
   cancellationSignal();
 
   const press = createDevicePressHandler(getClient);
@@ -457,7 +460,16 @@ async function openSession(
     now,
     cancelled: () => stop.stopping,
     diagnostic: (event) => log(`timing ${JSON.stringify(event)}`),
-    hideDevMenu: () => act(() => devSettings({ action: 'hideDevMenu' }), false),
+    hideDevMenu: () =>
+      act(
+        () =>
+          recoverDevOverlays({
+            devSettings,
+            devOverlayUncleared,
+            log,
+          }),
+        false,
+      ),
     ...(login ? { login } : {}),
     sleep,
     row: emitRow,

@@ -1,6 +1,12 @@
-import { interruptible, sleep, cancellationSignal } from '../domain/cancellation.js';
+import {
+  interruptible,
+  isAbort,
+  sleep,
+  cancellationSignal,
+  throwIfCancelled,
+} from '../domain/cancellation.js';
 import type { CDPClient } from '../cdp-client.js';
-import { okResult, failResult, warnResult, withConnection } from '../utils.js';
+import { okResult, failResult, warnResult, withConnection, type ToolResult } from '../utils.js';
 import {
   hideExpoDevMenu,
   type ForegroundSurface,
@@ -18,6 +24,88 @@ type DevAction =
 
 // Walk start: hide Expo's floating dev-menu button first, then shake and any open menu.
 export const WALK_DEV_SETTINGS = ['hideDevMenuFab', 'disableDevMenu', 'hideDevMenu'] as const;
+
+// The floating button fades out over ~0.3 s after its preference flips.
+const DEV_FAB_READS = 4;
+const DEV_FAB_READ_INTERVAL_MS = 250;
+
+export interface DevOverlayDependencies {
+  devSettings(args: { action: (typeof WALK_DEV_SETTINGS)[number] }): Promise<ToolResult>;
+  devOverlayUncleared(): Promise<boolean>;
+  log(message: string): void;
+  sleep?(ms: number): Promise<void>;
+}
+
+function envelopeError(result: ToolResult): string {
+  try {
+    const { error } = JSON.parse(result.content[0]?.text ?? '') as { error?: unknown };
+    return typeof error === 'string' ? error : 'failed';
+  } catch {
+    return 'failed';
+  }
+}
+
+// The one walk-start and post-recovery proof that no Expo dev chrome is in front of the app.
+export async function clearDevOverlays(deps: DevOverlayDependencies): Promise<ToolResult> {
+  const pause = deps.sleep ?? sleep;
+  for (const action of WALK_DEV_SETTINGS) {
+    throwIfCancelled();
+    const error = await deps.devSettings({ action }).then(
+      (result) => (result.isError ? envelopeError(result) : undefined),
+      (thrown: unknown) => {
+        if (isAbort(thrown)) throw thrown;
+        return thrown instanceof Error ? thrown.message : String(thrown);
+      },
+    );
+    if (error === undefined) continue;
+    if (action !== 'hideDevMenuFab') {
+      deps.log(`${action}: ${error}`);
+      continue;
+    }
+    return failResult(
+      `The Expo dev-client floating button could not be confirmed hidden: ${error}`,
+      'DEV_MENU_HIDE_UNVERIFIED',
+      { action: 'clearDevOverlays', outcome: 'DEV_MENU_HIDE_UNVERIFIED' },
+    );
+  }
+  let readError: string | undefined;
+  for (let read = 0; read < DEV_FAB_READS; read++) {
+    throwIfCancelled();
+    const shown = await deps.devOverlayUncleared().catch((thrown: unknown) => {
+      if (isAbort(thrown)) throw thrown;
+      readError = thrown instanceof Error ? thrown.message : String(thrown);
+      return true;
+    });
+    if (!shown) return okResult({ action: 'clearDevOverlays', executed: true });
+    if (read + 1 < DEV_FAB_READS) await pause(DEV_FAB_READ_INTERVAL_MS);
+  }
+  throwIfCancelled();
+  return failResult(
+    `The Expo dev overlays could not be proven gone${readError ? `: ${readError}` : '.'}`,
+    'DEV_MENU_HIDE_UNVERIFIED',
+    { action: 'clearDevOverlays', outcome: 'DEV_MENU_HIDE_UNVERIFIED' },
+  );
+}
+
+export async function recoverDevOverlays(deps: DevOverlayDependencies): Promise<ToolResult> {
+  const overlayUncleared = await deps.devOverlayUncleared().catch((thrown: unknown) => {
+    if (isAbort(thrown)) throw thrown;
+    return true;
+  });
+  const hidden = await deps.devSettings({ action: 'hideDevMenu' });
+  if (hidden.isError || (!overlayUncleared && envelopeData(hidden)?.executed === false))
+    return hidden;
+  return clearDevOverlays(deps);
+}
+
+function envelopeData(result: ToolResult): { executed?: unknown } | undefined {
+  try {
+    const { data } = JSON.parse(result.content[0]?.text ?? '') as { data?: { executed?: unknown } };
+    return data;
+  } catch {
+    return undefined;
+  }
+}
 
 const HIDE_DEV_MENU_FAB = `(async function () {
   var m = globalThis.expo && globalThis.expo.modules && globalThis.expo.modules.DevMenuPreferences;

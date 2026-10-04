@@ -263,7 +263,8 @@ export async function walkBlock(
         if (error instanceof AppProcessGoneError) throw processChanged();
         throw error;
       }
-      if (latest.front === 'picker') sequence.publicationInterrupted = true;
+      if (latest.front === 'picker' || latest.front === 'dev-fab' || latest.front === 'dev-menu')
+        sequence.publicationInterrupted = true;
       const privacyStarted = deps.timing ? deps.now() : 0;
       privacy.observe(latest);
       guardAppProcess(deps.appProcess, latest.appProcessIdentifier);
