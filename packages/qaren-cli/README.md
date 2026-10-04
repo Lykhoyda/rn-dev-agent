@@ -70,7 +70,12 @@ Plans contain a `## QA` section, named `###` blocks, numbered actions and
 targets resolve observed labels or test IDs locally. Distinct matches are
 counted before kind, disabled, hittability, offscreen or React-only filters, so two
 or more refuse with `TARGET_AMBIGUOUS`, without a Jev tie-break, even if the
-target adds positional words such as `Tap "Save" at the bottom`. A text element
+target adds positional words such as `Tap "Save" at the bottom`. A fill counts
+text-entry candidates plus every element carrying its testID, so a form label
+naming an input is not a twin, while a button sharing the input's testID is. A
+React-only composite that forwards its testID to the one native input is that
+input. The refusal is terminal: it is never recovered, retried or re-walked,
+including for stored replay selectors and for a handler that finds twins at dispatch. A text element
 that is the sole text descendant of matching labelled controls links to the
 nearest one. When that control is among the matches and contains the text
 inside its frame, the text collapses into it. Separate controls
@@ -87,9 +92,10 @@ field's content: the bound input is cleared before typing, and verification
 expects exactly the plan text. Keyboard fallback typing also replaces: see below.
 Only a stable exact read-back
 verifies a fill. A masked secure read-back or an unreadable one records a
-passing row with reason `UNVERIFIED_FILL`, never a verified pass; an empty,
-placeholder or wrong-length secure read-back, or any other mismatch, fails
-without retry. A screen change alone never verifies a fill. During discovery, a quoted
+passing row with reason `UNVERIFIED_FILL`, never a verified pass; an empty or
+placeholder read-back of a non-empty fill on any field, a secure mask whose
+length matches neither the character nor the UTF-16 count, or any other
+mismatch fails without retry. A screen change alone never verifies a fill. During discovery, a quoted
 iOS fill can use keyboard fallback when no observable native input resolves, or
 strict binding refuses `NO_TEXT_INPUT_TARGET` before any text mutation for a
 non-native-input target. Phrase fills and stored replay selectors do not use
