@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { ACTION_ID_MAX_LEN } from '../domain/path-safety.js';
 import { type Judge, type Questions, confidentChoice, isRecord } from './questions.js';
-import { modelMask } from './privacy.js';
+import { matchPrivate, modelMask, projectPlanLine } from './privacy.js';
 
 export interface Target {
   quoted?: string;
@@ -193,6 +193,15 @@ export function planNeedsJev(markdown: string): boolean {
   );
 }
 
+function projectRefusals(refused: RefusedLine[], values: string[]): RefusedLine[] {
+  const set = { values: values.map((text) => ({ text, provenance: 'typed' as const })) };
+  return refused.map((entry) => ({
+    ...entry,
+    text: projectPlanLine(entry.text, set).text,
+    reason: matchPrivate(entry.reason, set, 'durable').text,
+  }));
+}
+
 function scanPlan(
   markdown: string,
   resolved: ReadonlyMap<number, Step | Check>,
@@ -301,7 +310,15 @@ function scanPlan(
   }
   closeDeclared();
   encountered?.push(...blocks.flatMap((block) => block.items));
-  if (refused.length > 0) return { refused };
+  if (refused.length > 0)
+    return {
+      refused: projectRefusals(
+        refused,
+        blocks.flatMap((block) =>
+          block.items.flatMap((item) => (item.kind === 'fill' ? [item.text] : [])),
+        ),
+      ),
+    };
   const filled = blocks.filter((b) => b.items.length > 0);
   if (filled.length === 0)
     return { refused: [{ line: 0, text: '', reason: 'the plan has no steps' }] };
@@ -433,8 +450,14 @@ export async function parsePlanWithJev(markdown: string, judge: Judge): Promise<
   if (!refused.length) return result;
   const failedLines = new Set(refused.map((r) => r.line));
   return {
-    refused: [...(result.refused ?? []).filter((r) => !failedLines.has(r.line)), ...refused].sort(
-      (a, b) => a.line - b.line,
+    refused: projectRefusals(
+      [...(result.refused ?? []).filter((r) => !failedLines.has(r.line)), ...refused].sort(
+        (a, b) => a.line - b.line,
+      ),
+      [
+        ...fillValues,
+        ...[...resolved.values()].flatMap((item) => (item.kind === 'fill' ? [item.text] : [])),
+      ],
     ),
   };
 }

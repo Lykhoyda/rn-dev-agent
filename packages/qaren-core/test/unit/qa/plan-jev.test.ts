@@ -369,3 +369,36 @@ test('verb parsing protects short straight and curly quoted slots while retainin
     assert.match(request, /QAREN_VALUE_/);
   }
 });
+
+test('parser and preflight refusals project planned values in heading text and reasons', async () => {
+  const canary = 'hunter-canary-77';
+  for (const [fill, extra] of [
+    [`Type "${canary}" into "email"`, ''],
+    [`Put “${canary}” into email`, ''],
+    [`Type "${canary}" into "email"`, '\n2. Perform unsupported work'],
+  ]) {
+    const markdown = `### ${canary}\n1. ${fill}\n### ${canary}\n✓ "Ready"${extra}`;
+    const makeJudge = () =>
+      scriptedJudge((questions) =>
+        Object.fromEntries(
+          Object.entries(questions).map(([id, q]) => [
+            id,
+            id === 'preflight'
+              ? { type: 'noul', noul: 0.99 }
+              : choice(q, extra ? 'unsupported' : 'fill'),
+          ]),
+        ),
+      );
+    const parsed = await parsePlanWithJev(markdown, makeJudge());
+    const preflight = await preflightPlan(markdown, makeJudge());
+    assert.ok(parsed.refused);
+    assert.ok(!preflight.ok && preflight.code === 'PLAN_UNPARSEABLE' && preflight.refused);
+    for (const refused of [parsed.refused, preflight.refused]) {
+      const duplicate = refused.find((entry) => entry.reason.includes('already named'));
+      assert.ok(duplicate);
+      assert.equal(duplicate.text, '### •••');
+      assert.equal(duplicate.reason, 'another block is already named "•••"');
+      assert.equal(JSON.stringify(refused).includes(canary), false);
+    }
+  }
+});
