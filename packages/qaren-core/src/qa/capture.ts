@@ -384,6 +384,13 @@ export function nativeCaptureCoverage(observation: NativeObservation): Coverage[
     : 'unknown';
 }
 
+export function nativeDevOverlayUncleared(observation: NativeObservation): boolean {
+  const front = frontFromSurface(observation.surface, observation.nodes ?? []);
+  return (
+    nativeCaptureCoverage(observation) !== 'complete' || front === 'dev-fab' || front === 'dev-menu'
+  );
+}
+
 function reactCaptureCoverage(observation: ReactObservation): Coverage['react'] {
   const verdict = isRecord(observation.verdict) ? observation.verdict : undefined;
   if (

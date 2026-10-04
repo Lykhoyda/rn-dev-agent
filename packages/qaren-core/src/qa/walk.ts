@@ -32,12 +32,11 @@ import { HandlerError, adapt, describeError, secureMaskedFill, unwrap } from './
 import {
   AppProcessGoneError,
   captureScreen,
-  nativeCaptureCoverage,
+  nativeDevOverlayUncleared,
   postAdmissionSnapshots,
   type NativeObservation,
 } from './capture.js';
 import { captureQaReact } from './react-capture.js';
-import { frontFromSurface } from './screen.js';
 import type { LedgerRow } from './ledger.js';
 import { parsePlanWithJev, readPreparedPlan } from './plan.js';
 import { createJev } from './jev.js';
@@ -383,15 +382,10 @@ async function openSession(
         appId,
       ),
   });
-  const devFab = async (): Promise<boolean> => {
-    const native = await rawSnapshot();
-    return (
-      nativeCaptureCoverage(native) !== 'complete' ||
-      frontFromSurface(native.surface, native.nodes ?? []) === 'dev-fab'
-    );
-  };
+  const devOverlayUncleared = async (): Promise<boolean> =>
+    nativeDevOverlayUncleared(await rawSnapshot());
   try {
-    unwrap(await clearDevOverlays({ devSettings, devFab, cancelled, log }));
+    unwrap(await clearDevOverlays({ devSettings, devOverlayUncleared, cancelled, log }));
   } catch (error) {
     await close();
     throw error;
@@ -464,7 +458,7 @@ async function openSession(
         () =>
           recoverDevOverlays({
             devSettings,
-            devFab,
+            devOverlayUncleared,
             log,
             async cancelled() {
               if (stop.stopping) throw new HandlerError('RUN_CANCELLED', 'the run is stopping');

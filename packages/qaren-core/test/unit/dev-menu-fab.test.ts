@@ -10,6 +10,7 @@ import {
 import { failResult, okResult, warnResult, type ToolResult } from '../../dist/utils.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
 import { parseEnvelope } from '../helpers/result-helpers.js';
+import { nativeDevOverlayUncleared, type NativeObservation } from '../../dist/qa/capture.js';
 
 function run(preferences?: Record<string, unknown>) {
   const calls: { awaitPromise?: boolean; value?: unknown }[] = [];
@@ -97,9 +98,20 @@ test('D4: the walk hides the floating button before the other dev-menu actions',
 
 type DevAction = (typeof WALK_DEV_SETTINGS)[number];
 
+function nativeOverlay(surface: string): NativeObservation {
+  const nodes = [{ ref: 'e0', index: 0, type: 'Application' }];
+  return {
+    surface,
+    nodes,
+    truncated: false,
+    normalizationDroppedNodes: 0,
+    snapshotVerdict: { state: 'ok', nodeCount: nodes.length, refMapUpdated: true, reasons: [] },
+  };
+}
+
 function overlays(
   results: Partial<Record<DevAction, () => ToolResult>>,
-  fabReads: boolean[] = [false],
+  overlayReads: Array<boolean | NativeObservation> = [false],
   stopAfter?: DevAction,
 ) {
   const calls: string[] = [];
@@ -110,9 +122,12 @@ function overlays(
       if (action === stopAfter) stopping = true;
       return (results[action] ?? (() => okResult({ action, executed: true })))();
     },
-    async devFab() {
+    async devOverlayUncleared() {
       calls.push('read');
-      return fabReads.length > 1 ? fabReads.shift()! : fabReads[0];
+      const observation = overlayReads.length > 1 ? overlayReads.shift()! : overlayReads[0];
+      return typeof observation === 'boolean'
+        ? observation
+        : nativeDevOverlayUncleared(observation);
     },
     async cancelled() {
       if (stopping) throw new Error('RUN_CANCELLED: stopped');
@@ -145,14 +160,49 @@ test('overlays: an app without the preferences module passes and is still verifi
   assert.deepEqual(calls, ['hideDevMenuFab', 'disableDevMenu', 'hideDevMenu', 'read']);
 });
 
-test('overlays: the other dev-menu actions log their failures and continue', async () => {
-  const { calls, done } = overlays({
-    disableDevMenu: () => failResult('Dev settings error: gone'),
-    hideDevMenu: () => failResult('not hidden', 'DEV_MENU_HIDE_FAILED'),
-  });
+test('overlays: failed actions can pass only when native evidence proves clearance', async () => {
+  const { calls, done } = overlays(
+    {
+      disableDevMenu: () => failResult('Dev settings error: gone'),
+      hideDevMenu: () => failResult('not hidden', 'DEV_MENU_HIDE_FAILED'),
+    },
+    [nativeOverlay('app')],
+  );
   assert.equal(parseEnvelope(await done).ok, true);
   assert.equal(calls.filter((c) => c.startsWith('log ')).length, 2);
   assert.equal(calls.at(-1), 'read');
+});
+
+for (const surface of ['expo_dev_menu', 'react_native_dev_menu']) {
+  test(`overlays: ${surface} closing after the hide passes clearance`, async () => {
+    const { calls, done } = overlays({}, [nativeOverlay(surface), nativeOverlay('app')]);
+    const env = parseEnvelope(await done);
+    assert.equal(env.ok, true);
+    assert.equal(env.data.executed, true);
+    assert.deepEqual(calls, ['hideDevMenuFab', 'disableDevMenu', 'hideDevMenu', 'read', 'read']);
+  });
+
+  test(`overlays: ${surface} still open after a failed hide is re-read and refused`, async () => {
+    const { calls, done } = overlays(
+      { hideDevMenu: () => failResult('not hidden', 'DEV_MENU_HIDE_FAILED') },
+      [nativeOverlay(surface)],
+    );
+    const env = parseEnvelope(await done);
+    assert.equal(env.ok, false);
+    assert.equal(env.code, 'DEV_MENU_HIDE_UNVERIFIED');
+    assert.equal(calls.filter((call) => call === 'read').length, 4);
+    assert.equal(calls.filter((call) => call === 'hideDevMenu').length, 1);
+  });
+}
+
+test('overlays: incomplete or unknown native evidence never proves clearance', async () => {
+  for (const observation of [
+    { ...nativeOverlay('app'), truncated: true },
+    { ...nativeOverlay('app'), snapshotVerdict: undefined },
+  ]) {
+    const { done } = overlays({}, [observation]);
+    assert.equal(parseEnvelope(await done).code, 'DEV_MENU_HIDE_UNVERIFIED');
+  }
 });
 
 test('overlays: a stop between actions halts before the next action', async () => {
@@ -174,7 +224,7 @@ test('overlays: a verification read that fails refuses with the unverified code 
   const env = parseEnvelope(
     await clearDevOverlays({
       devSettings: async ({ action }) => okResult({ action, executed: true }),
-      async devFab() {
+      async devOverlayUncleared() {
         calls.push('read');
         throw new Error('NATIVE_CAPTURE_FAILED: runner gone');
       },
@@ -216,7 +266,7 @@ for (const [name, result] of [
   });
 }
 
-function recovery(hide: () => ToolResult, fabShown: boolean) {
+function recovery(hide: () => ToolResult, initialOverlay: boolean | NativeObservation) {
   const calls: string[] = [];
   let reads = 0;
   const done = recoverDevOverlays({
@@ -226,9 +276,12 @@ function recovery(hide: () => ToolResult, fabShown: boolean) {
         ? hide()
         : okResult({ action, executed: true });
     },
-    async devFab() {
+    async devOverlayUncleared() {
       calls.push('read');
-      return reads++ === 0 ? fabShown : false;
+      if (reads++ !== 0) return nativeDevOverlayUncleared(nativeOverlay('app'));
+      return typeof initialOverlay === 'boolean'
+        ? initialOverlay
+        : nativeDevOverlayUncleared(initialOverlay);
     },
     async cancelled() {},
     log: () => {},
@@ -263,6 +316,17 @@ test('recovery: a floating button in front is cleared even with no menu to hide'
   assert.equal(env.data.executed, true);
   assert.ok(calls.includes('hideDevMenuFab'));
 });
+
+for (const surface of ['expo_dev_menu', 'react_native_dev_menu']) {
+  test(`recovery: ${surface} must re-prove clearance even after a no-op hide`, async () => {
+    const { calls, done } = recovery(noMenu, nativeOverlay(surface));
+    const env = parseEnvelope(await done);
+    assert.equal(env.ok, true);
+    assert.equal(env.data.executed, true);
+    assert.ok(calls.includes('hideDevMenuFab'));
+    assert.equal(calls.filter((call) => call === 'read').length, 2);
+  });
+}
 
 test('recovery: nothing to hide stays a no-op the walker does not count', async () => {
   const { calls, done } = recovery(noMenu, false);

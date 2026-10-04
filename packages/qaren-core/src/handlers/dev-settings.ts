@@ -24,8 +24,7 @@ const DEV_FAB_READ_INTERVAL_MS = 250;
 
 export interface DevOverlayDependencies {
   devSettings(args: { action: (typeof WALK_DEV_SETTINGS)[number] }): Promise<ToolResult>;
-  // True unless a complete native snapshot proves the floating button absent.
-  devFab(): Promise<boolean>;
+  devOverlayUncleared(): Promise<boolean>;
   cancelled(): Promise<void>;
   log(message: string): void;
   sleep?(ms: number): Promise<void>;
@@ -63,7 +62,7 @@ export async function clearDevOverlays(deps: DevOverlayDependencies): Promise<To
   let readError: string | undefined;
   for (let read = 0; read < DEV_FAB_READS; read++) {
     await deps.cancelled();
-    const shown = await deps.devFab().catch((thrown: unknown) => {
+    const shown = await deps.devOverlayUncleared().catch((thrown: unknown) => {
       readError = thrown instanceof Error ? thrown.message : String(thrown);
       return true;
     });
@@ -72,17 +71,17 @@ export async function clearDevOverlays(deps: DevOverlayDependencies): Promise<To
   }
   await deps.cancelled();
   return failResult(
-    `The Expo dev-client floating button could not be proven gone${readError ? `: ${readError}` : '.'}`,
+    `The Expo dev overlays could not be proven gone${readError ? `: ${readError}` : '.'}`,
     'DEV_MENU_HIDE_UNVERIFIED',
     { action: 'clearDevOverlays', outcome: 'DEV_MENU_HIDE_UNVERIFIED' },
   );
 }
 
-// Recovery: a no-op hide with no floating button stays a no-op; otherwise the overlays are re-proven.
 export async function recoverDevOverlays(deps: DevOverlayDependencies): Promise<ToolResult> {
-  const fabShown = await deps.devFab().catch(() => true);
+  const overlayUncleared = await deps.devOverlayUncleared().catch(() => true);
   const hidden = await deps.devSettings({ action: 'hideDevMenu' });
-  if (hidden.isError || (!fabShown && envelopeData(hidden)?.executed === false)) return hidden;
+  if (hidden.isError || (!overlayUncleared && envelopeData(hidden)?.executed === false))
+    return hidden;
   return clearDevOverlays(deps);
 }
 
