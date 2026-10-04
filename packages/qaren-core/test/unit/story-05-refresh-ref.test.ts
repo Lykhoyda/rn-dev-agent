@@ -106,11 +106,14 @@ test('refresh selects the Button through a layout echo without granting wrapper 
   assert.equal(result.kind, 'unique');
   assert.equal(result.node.ref, '@a');
   assert.equal(
-    refreshRef(sig({ identifier: undefined }), nodes.slice(1).map((node, index) => ({
-      ...node,
-      index,
-      parentIndex: index === 0 ? undefined : 0,
-    }))).kind,
+    refreshRef(
+      sig({ identifier: undefined }),
+      nodes.slice(1).map((node, index) => ({
+        ...node,
+        index,
+        parentIndex: index === 0 ? undefined : 0,
+      })),
+    ).kind,
     'ambiguous',
   );
 });
@@ -124,7 +127,10 @@ test('refresh collapses each echo but keeps unrelated same-label Buttons ambiguo
   ];
   const result = refreshRef(sig({ identifier: undefined }), nodes);
   assert.equal(result.kind, 'ambiguous');
-  assert.deepEqual(result.candidates.map((node) => node.ref), ['@a', '@b']);
+  assert.deepEqual(
+    result.candidates.map((node) => node.ref),
+    ['@a', '@b'],
+  );
 });
 
 test('S11: an Android blank identifier falls back to the label, never to an empty id', () => {
