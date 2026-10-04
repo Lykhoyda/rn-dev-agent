@@ -201,7 +201,9 @@ export function createDeviceSnapshotHandler(
   const startAndroidRunnerFn =
     deps.startAndroidRunner ??
     ((deviceId: string, appId: string) =>
-      startAndroidRunner(deviceId, appId, undefined, { allowArtifactRebuild: true }));
+      interruptible(() =>
+        startAndroidRunner(deviceId, appId, undefined, { allowArtifactRebuild: true }),
+      ));
   const launchAndroidApp =
     deps.launchAndroidApp ??
     (async (deviceId: string, appId: string) => {
