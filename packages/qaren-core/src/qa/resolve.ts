@@ -24,7 +24,6 @@ import {
 } from './questions.js';
 import {
   PRESSABLE_SUFFIX,
-  echoControl,
   exactIdentities,
   focusIdentityOf,
   withoutPressable,
@@ -108,6 +107,11 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
   if ('refuse' in projected) return projected;
   if (target.quoted !== undefined) {
     const identities = exactIdentities(screen, target, step.kind);
+    if (identities.length > 1)
+      return {
+        refuse: 'TARGET_AMBIGUOUS',
+        reason: `multiple elements labelled or identified "${target.quoted}" match the target; candidates: ${identities.map(({ element }) => describeCandidate(element)).join('; ')}`,
+      };
     const only = identities.length === 1 ? identities[0].element : undefined;
     // A strict fill acts only on a native input; React-only inputs still count toward ambiguity.
     if (only && step.kind === 'fill' && only.ref.startsWith('react:'))
@@ -122,21 +126,15 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
       (step.kind !== 'fill' || only.kind === 'input');
     if (!eligible) {
       const count = only ? 0 : identities.length;
-      // A replayed selector names one element; anything else re-walks the step instead of asking Jev.
       if (target.exact)
         return {
           refuse: 'REPLAY_SELECTOR',
           reason: `${count} eligible elements match the stored ${target.exact === 'id' ? 'testID' : 'label'} "${target.quoted}"`,
         };
-      return count > 1
-        ? {
-            refuse: 'TARGET_AMBIGUOUS',
-            reason: `multiple elements labelled or identified "${target.quoted}" match the target; candidates: ${identities.map(({ element }) => describeCandidate(element)).join('; ')}`,
-          }
-        : {
-            refuse: 'TARGET_NOT_FOUND',
-            reason: `no eligible element labelled or identified "${target.quoted}" is on screen`,
-          };
+      return {
+        refuse: 'TARGET_NOT_FOUND',
+        reason: `no eligible element labelled or identified "${target.quoted}" is on screen`,
+      };
     }
     return only.offscreen ? scrollTo(only) : { ref: only.ref, element: only };
   }
@@ -250,10 +248,7 @@ export function decideTarget(prepared: TargetQuestion, answer: Answer | undefine
       : { refuse: 'TARGET_NOT_FOUND', reason: 'no candidate matches the target' };
   }
   const chosen = prepared.candidates[Number(top.slice(1))];
-  // A chosen text that echoes its control is that control's identity.
-  const control = echoControl(chosen);
-  const element = control && prepared.candidates.includes(control) ? control : chosen;
-  return offscreen(element) ? scrollTo(element) : { ref: element.ref, element };
+  return offscreen(chosen) ? scrollTo(chosen) : { ref: chosen.ref, element: chosen };
 }
 
 function describeSemantic(element: Element): string {
@@ -364,23 +359,15 @@ function textIdentities(quoted: string, screen: Screen): number {
 
 export function targetVisible(target: Target, screen: Screen): boolean {
   if (target.quoted === undefined) return false;
-  if (target.exact) {
-    const matches = screen.elements.filter((e) =>
-      target.exact === 'id' ? e.testID === target.quoted : e.label === target.quoted,
-    );
-    const count = target.exact === 'text' ? textIdentities(target.quoted, screen) : matches.length;
-    if (count !== 1)
-      throw new ResolutionError({
-        refuse: 'REPLAY_SELECTOR',
-        reason: `${count} identities match the stored ${target.exact} "${target.quoted}"`,
-      });
-    return target.exact === 'text' ? true : !matches[0].offscreen;
-  }
-  return (
-    screen.elements.some(
-      (e) => !e.offscreen && (e.label === target.quoted || e.testID === target.quoted),
-    ) || assertionView(screen).some((t) => t === target.quoted)
-  );
+  const matches = exactIdentities(screen, target, 'wait');
+  const count =
+    matches.length || (target.exact !== 'id' ? textIdentities(target.quoted, screen) : 0);
+  if (count > 1 || (target.exact && count === 0))
+    throw new ResolutionError({
+      refuse: count > 1 ? 'TARGET_AMBIGUOUS' : 'REPLAY_SELECTOR',
+      reason: `${count} identities match "${target.quoted}"`,
+    });
+  return matches.length === 1 ? !matches[0].element.offscreen : count === 1;
 }
 
 export function elementSelector(element: Element): Selector | undefined {

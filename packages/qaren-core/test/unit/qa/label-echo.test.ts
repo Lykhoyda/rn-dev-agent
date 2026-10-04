@@ -65,7 +65,7 @@ test('the echo collapses without a testID too, and its text stays visible', () =
 });
 
 for (const hittable of [true, false]) {
-  test(`nested label echoes resolve to the nearest Button with outer hittable=${hittable}`, () => {
+  test(`nested controls remain distinct with outer hittable=${hittable}`, () => {
     const nodes = pressable(app(), { y: 700, texts: [] });
     nodes[2].hittable = hittable;
     nodes.push(
@@ -89,8 +89,10 @@ for (const hittable of [true, false]) {
       },
     );
     const resolved = prepareTarget(press, join(nodes, []));
-    assert.ok('ref' in resolved, JSON.stringify(resolved));
-    assert.equal(resolved.ref, '@button');
+    assert.ok(
+      'refuse' in resolved && resolved.refuse === 'TARGET_AMBIGUOUS',
+      JSON.stringify(resolved),
+    );
 
     const wrapped = nodes.map((node, i) => ({
       ...node,
@@ -111,8 +113,10 @@ for (const hittable of [true, false]) {
     });
     wrapped[3].parentIndex = 2;
     const multiplyWrapped = prepareTarget(press, join(wrapped, []));
-    assert.ok('ref' in multiplyWrapped, JSON.stringify(multiplyWrapped));
-    assert.equal(multiplyWrapped.ref, '@button');
+    assert.ok(
+      'refuse' in multiplyWrapped && multiplyWrapped.refuse === 'TARGET_AMBIGUOUS',
+      JSON.stringify(multiplyWrapped),
+    );
   });
 }
 

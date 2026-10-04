@@ -69,9 +69,9 @@ object TextInputRecipe {
             }
             // An empty or hint read, or a mask of another length, proves the value did not land.
             if (raw.isEmpty() || placeholderEqual) return "mismatch"
-            val maskedLength = raw.all { it == '\u2022' } &&
-                expected.length == expected.codePointCount(0, expected.length)
-            return if (maskedLength && raw.length != expected.length) "mismatch" else "secure-masked"
+            val maskedLength = raw.all { it == '\u2022' }
+            return if (maskedLength && raw.length != expected.length &&
+                raw.length != expected.codePointCount(0, expected.length)) "mismatch" else "secure-masked"
         }
         if (expected.isEmpty()) {
             if (raw.isEmpty()) return "exact"

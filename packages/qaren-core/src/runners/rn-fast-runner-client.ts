@@ -27,6 +27,8 @@ import {
   clearRefMap,
   buildSnapshotVerdict,
   getCachedMetadata,
+  getCachedSignature,
+  refreshRef,
   getFreshRefTarget,
   type FlatNode,
   type RefMapUpdateOutcome,
@@ -2016,42 +2018,6 @@ export async function verifyTypeResultAfterSettle(
   return contained;
 }
 
-function sameRefIdentity(
-  before: ReturnType<typeof getCachedMetadata>,
-  after: ReturnType<typeof getCachedMetadata>,
-): boolean {
-  if (!before || !after) return false;
-  if (before.identifier !== undefined || after.identifier !== undefined) {
-    return before.identifier === after.identifier && before.type === after.type;
-  }
-  if (before.label !== undefined || after.label !== undefined) {
-    return before.label === after.label && before.type === after.type;
-  }
-  // Type alone is not an identity: a positional id can rebind to a different
-  // element of the same type once the keyboard leaves the tree.
-  return false;
-}
-
-// Same rule refreshRef enforces: a positional ref may only be re-served when
-// its identity resolves to exactly ONE node in the new tree. Equality at the
-// same key is not enough — sibling rows sharing a testID satisfy it after the
-// index set shifts.
-function countIdentityMatches(
-  before: NonNullable<ReturnType<typeof getCachedMetadata>>,
-  nodes: FlatNode[],
-): number {
-  let matches = 0;
-  for (const node of nodes) {
-    const candidate = {
-      type: node.type,
-      ...(node.label !== undefined ? { label: node.label } : {}),
-      ...(node.identifier !== undefined ? { identifier: node.identifier } : {}),
-    };
-    if (sameRefIdentity(before, candidate)) matches++;
-  }
-  return matches;
-}
-
 function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
@@ -2379,15 +2345,12 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   const refreshFailure: { result: ToolResult | null } = { result: null };
   const refreshTargetAfterKeyboard = async (): Promise<boolean> => {
     if (!args._targetRef) return true; // raw coordinates remain meaningful after dismissal
-    // Ref ids are positional: the keyboard leaving the tree shifts the index
-    // set, so the same id can denote a different element. Only an identity
-    // match may be re-served under the original ref.
-    const before = getCachedMetadata(args._targetRef);
+    const signature = getCachedSignature(args._targetRef);
     let snapshot: RunnerResponse;
     try {
       snapshot = await postCommand({
         command: 'snapshot',
-        interactiveOnly: true,
+        interactiveOnly: false,
         ...(args.bundleId ? { appBundleId: args.bundleId } : {}),
       });
     } catch (err) {
@@ -2411,8 +2374,17 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         ? { keyboardVisible: data.keyboardVisible }
         : {}),
     });
-    if (!sameRefIdentity(before, getCachedMetadata(args._targetRef))) return false;
-    if (!before || countIdentityMatches(before, flat) !== 1) return false;
+    if (!signature) return false;
+    const refreshed = refreshRef(signature, flat);
+    if (refreshed.kind === 'ambiguous') {
+      refreshFailure.result = failResult(
+        'Multiple identities match the keyboard target',
+        'TARGET_AMBIGUOUS',
+        { mutation: 'none' },
+      );
+      return false;
+    }
+    if (refreshed.kind !== 'unique' || refreshed.node.ref !== args._targetRef) return false;
     const target = getFreshRefTarget(args._targetRef, { allowUnknownKeyboardState: true });
     if (!target) return false;
     body.x = Math.round(target.rect.x + target.rect.width / 2);

@@ -669,14 +669,12 @@ function inputTestId(identifier: string | undefined): string | null {
   return identifier && identifier.trim().length > 0 ? identifier : null;
 }
 
-function signatureForNode(nodes: SnapshotNode[], node: SnapshotNode): RefSignature {
+function signatureForNode(node: SnapshotNode): RefSignature {
   return {
     type: node.type ?? '',
     label: node.label,
     identifier: node.identifier,
     rect: node.rect,
-    flatIndex: nodes.indexOf(node),
-    nodeCount: nodes.length,
   };
 }
 
@@ -753,7 +751,7 @@ export function bindExactFillTarget(
       binding: {
         inputRef: `@${cleanNodeRef(node)}`,
         inputTestId: inputTestId(node.identifier),
-        inputSignature: signatureForNode(nodes, node),
+        inputSignature: signatureForNode(node),
         focusRef: `@${cleanNodeRef(node)}`,
         wrapper: false,
         secure: isSecureInputNode(node),
@@ -771,7 +769,7 @@ export function bindExactFillTarget(
           binding: {
             inputRef: `@${cleanNodeRef(inputs[0])}`,
             inputTestId: base,
-            inputSignature: signatureForNode(nodes, inputs[0]),
+            inputSignature: signatureForNode(inputs[0]),
             focusRef: `@${cleanNodeRef(node)}`,
             wrapper: true,
             secure: isSecureInputNode(inputs[0]),
@@ -889,7 +887,7 @@ function keyboardHealDeps(
       if (outcome.kind === 'unique') return tapAt(outcome.node.ref);
       return failResult(
         `Element at ref ${target.ref} did not re-resolve to exactly one element after the keyboard was dismissed — refusing to guess-tap`,
-        'STALE_REF',
+        outcome.kind === 'ambiguous' ? 'TARGET_AMBIGUOUS' : 'STALE_REF',
         { reResolution: outcome.kind, mutation: 'none' },
       );
     },

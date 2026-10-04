@@ -86,3 +86,83 @@ for (const capable of [false, true]) {
     }
   });
 }
+
+test('iOS missing fill evidence rebuilds once at open', async () => {
+  const { ensureRunnerForCommand } = await import('../../dist/agent-device-wrapper.js');
+  const events: string[] = [];
+  const probes = [
+    { liveness: 'stale', staleReason: 'missing-features', missingFeatures: ['FILL_EVIDENCE_V1'] },
+    { liveness: 'alive' },
+  ];
+  const result = await ensureRunnerForCommand('U1', 'dev.fixture', {
+    prebuilt: () => true,
+    adopt: () => {},
+    allowArtifactRebuild: true,
+    probe: async () => probes.shift() as never,
+    ensure: async (_device, _app, opts) => {
+      assert.equal(opts?.forceLocalBuild, true);
+      events.push('build');
+    },
+    reap: async () => {
+      events.push('reap');
+    },
+    invalidateArtifact: () => {
+      events.push('invalidate');
+    },
+    acquireBuildLock: () => true,
+    releaseBuildLock: () => {},
+    pluginVersion: 'fixture',
+    rebuildBudget: { alreadyRebuiltFor: () => false, recordRebuild: () => {} },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(events, ['reap', 'invalidate', 'build']);
+});
+
+test('Android reusable runner with missing fill evidence emits the bounded rebuild signal', async () => {
+  const {
+    _setAndroidRunnerStateForTest,
+    _setFetchForTest: setFetch,
+    startAndroidRunner,
+    AndroidCommandsStaleError,
+  } = await import('../../dist/runners/rn-android-runner-client.js');
+  _setAndroidRunnerStateForTest({
+    schemaVersion: 1,
+    pid: process.pid,
+    deviceId: 'fixture-device',
+    bundleId: 'dev.fixture',
+    hostPort: 22657,
+    devicePort: 22657,
+    protocolVersion: 2,
+    startedAt: new Date(0).toISOString(),
+  });
+  const urls: string[] = [];
+  setFetch(async (url) => {
+    urls.push(String(url));
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        protocolVersion: 2,
+        instanceId: 'test-runner-instance',
+        sessionId: 'test-session',
+        claimEpoch: 1,
+        deviceId: 'fixture-device',
+        appId: 'dev.fixture',
+        commands: [...REQUIRED_ANDROID_COMMANDS],
+        capabilities: ['APP_SCOPED_EXACT_INTERACTION'],
+      }),
+      { status: 200 },
+    );
+  });
+  try {
+    await assert.rejects(
+      startAndroidRunner('fixture-device', 'dev.fixture'),
+      (error) =>
+        error instanceof AndroidCommandsStaleError && error.missing.includes('FILL_EVIDENCE_V1'),
+    );
+    assert.equal(urls.length, 1);
+    assert.ok(urls[0].endsWith('/health'));
+  } finally {
+    setFetch(globalThis.fetch);
+    _setAndroidRunnerStateForTest(null);
+  }
+});

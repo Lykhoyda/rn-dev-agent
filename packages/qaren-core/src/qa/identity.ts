@@ -19,10 +19,7 @@ export function named(
   exact?: Target['exact'],
 ): boolean {
   if (exact) return exact === 'id' ? e.testID === quoted : e.label === quoted;
-  if (kind === 'fill')
-    return (
-      e.kind === 'input' && (e.label === quoted || e.testID === quoted || e.placeholder === quoted)
-    );
+  if (kind === 'fill') return e.label === quoted || e.testID === quoted || e.placeholder === quoted;
   return e.label === quoted || e.testID === quoted;
 }
 
@@ -36,13 +33,12 @@ const nested = (a: Element, b: Element): boolean => {
     i.y >= o.y - 1 &&
     i.x + i.width <= o.x + o.width + 1 &&
     i.y + i.height <= o.y + o.height + 1;
-  return within(inner, outer) || within(outer, inner);
+  return within(inner, outer);
 };
 
-// A label echo is one identity with its control only when their native frames nest.
 export function echoControl(element: Element): Element | undefined {
   const control = labelEchoOf(element);
-  return control && nested(element, control) ? control : undefined;
+  return element.kind === 'text' && control && nested(element, control) ? control : undefined;
 }
 
 // The wrapper `id-pressable` stands for `id` only while both ends are observed.
@@ -66,10 +62,7 @@ export function focusIdentityOf(screen: Screen, element: Element): string | unde
 export function exactIdentities(screen: Screen, target: Target, kind: Step['kind']): Identity[] {
   const quoted = target.quoted;
   if (quoted === undefined) return [];
-  // A covered, non-hittable onscreen element is not addressable, so it is not a twin.
-  const matched = screen.elements.filter(
-    (e) => (e.offscreen || e.hittable) && named(e, quoted, kind, target.exact),
-  );
+  const matched = screen.elements.filter((e) => named(e, quoted, kind, target.exact));
   return matched
     .filter((e) => {
       const control = echoControl(e);

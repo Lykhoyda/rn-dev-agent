@@ -26,7 +26,10 @@ async function heal(
   _setActiveSessionForTest({ platform: 'ios', deviceId: 'TEST-DEVICE', appId: 'com.test' });
   clearRefMap();
   markSnapshotDirty();
-  updateRefMapFromFlat([skip] as never, { snapshotGeneration: 3, keyboardVisible: true });
+  updateRefMapFromFlat([skip, { ...other, ref: '@e2' }, { ...other, ref: '@e3' }] as never, {
+    snapshotGeneration: 3,
+    keyboardVisible: true,
+  });
   const presses: string[] = [];
   _setRunAgentDeviceForTest(async (cliArgs: string[]) => {
     if (cliArgs[0] === 'snapshot') return okResult({ nodes: refreshed, keyboardVisible: false });
@@ -60,11 +63,19 @@ for (const handler of ['press', 'longPress'] as const) {
   for (const [name, nodes] of [
     ['absent', [other]],
     ['duplicated', [other, { ...skip, ref: '@e2' }, { ...skip, ref: '@e3', rect: rect(760) }]],
+    [
+      'same-id different type and label',
+      [
+        other,
+        { ...skip, ref: '@e2' },
+        { ...skip, ref: '@e3', type: 'Other', label: 'Continue', rect: rect(760) },
+      ],
+    ],
   ] as const) {
     test(`${handler}: an ${name} identity after dismissal is never retapped`, async () => {
       const { result, presses } = await heal([...nodes], handler);
       assert.equal(result.ok, false);
-      assert.equal(result.code, 'STALE_REF');
+      assert.equal(result.code, name === 'absent' ? 'STALE_REF' : 'TARGET_AMBIGUOUS');
       assert.equal(result.meta.mutation, 'none');
       assert.deepEqual(presses, ['@e1']);
     });

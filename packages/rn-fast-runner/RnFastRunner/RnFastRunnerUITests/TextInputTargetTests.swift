@@ -306,11 +306,19 @@ final class TextInputTargetTests: XCTestCase {
       TextInputTarget.classifyValue(expected: "value-a", rawValue: "•••", placeholder: nil, isSecure: true),
       .mismatch
     )
-    // A length the platform obscures is not a proven mismatch.
     XCTAssertEqual(
       TextInputTarget.classifyValue(expected: "pässwörd👍🏽", rawValue: "••••", placeholder: nil, isSecure: true),
-      .secureMasked
+      .mismatch
     )
+  }
+
+  func testUnicodeMaskLengthsMustMatchAPlausibleRepresentation() {
+    for length in [4, 5, 6, 7] {
+      XCTAssertEqual(
+        TextInputTarget.classifyValue(expected: "pass👍", rawValue: String(repeating: "•", count: length), placeholder: nil, isSecure: true),
+        length == 5 || length == 6 ? .secureMasked : .mismatch
+      )
+    }
   }
 
   func testEmptyClearVerification() {

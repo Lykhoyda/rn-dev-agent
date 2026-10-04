@@ -68,14 +68,12 @@ Plans contain a `## QA` section, named `###` blocks, numbered actions and
 [phrase](../qaren-core/test/fixtures/plans/phrases.md) fixtures and the
 [parser](../qaren-core/src/qa/plan.ts) for accepted grammar. Quoted press and fill
 targets resolve observed labels or test IDs locally. Distinct matches are
-counted before any disabled, offscreen or React-only filter (a covered,
-non-hittable onscreen element is not addressable), so two
+counted before kind, disabled, hittability, offscreen or React-only filters, so two
 or more refuse with `TARGET_AMBIGUOUS`, without a Jev tie-break, even if the
 target adds positional words such as `Tap "Save" at the bottom`. A text element
 that is the sole text descendant of matching labelled controls links to the
-nearest one. When that control is among the matches and their frames nest, the
-text and matching outer wrappers collapse into it, whether an outer wrapper is
-hittable or not. Separate controls
+nearest one. When that control is among the matches and contains the text
+inside its frame, the text collapses into it. Separate controls
 in distinct subtrees with the same label still refuse as ambiguous. The
 [label-echo tests](../qaren-core/test/unit/qa/label-echo.test.ts) cover both cases.
 The refusal lists

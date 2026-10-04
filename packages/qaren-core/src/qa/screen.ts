@@ -743,9 +743,7 @@ export function join(
       control.kind !== 'input' &&
       elements[only].label === control.label
     ) {
-      const nearest = labelEchoes.get(elements[only]);
-      if (nearest) labelEchoes.set(control, nearest);
-      else labelEchoes.set(elements[only], control);
+      if (!labelEchoes.has(elements[only])) labelEchoes.set(elements[only], control);
     }
   });
   return {

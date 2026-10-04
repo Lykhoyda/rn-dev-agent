@@ -199,7 +199,10 @@ class TextInputRecipeTest {
         assertEquals("mismatch", TextInputRecipe.classifyVerify("value-a", "", "Password", true, secure = true))
         assertEquals("mismatch", TextInputRecipe.classifyVerify("value-a", "Password", "Password", true, secure = true))
         assertEquals("mismatch", TextInputRecipe.classifyVerify("value-a", "•••", "Password", true, secure = true))
-        assertEquals("secure-masked", TextInputRecipe.classifyVerify("pass👍", "••••", "Password", true, secure = true))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("pass👍", "••••", "Password", true, secure = true))
+        for (mask in listOf("•••••", "••••••")) {
+            assertEquals("secure-masked", TextInputRecipe.classifyVerify("pass👍", mask, "Password", true, secure = true))
+        }
         assertEquals("exact", TextInputRecipe.classifyVerify("", "", "Password", true, secure = true))
         assertEquals("ambiguous", TextInputRecipe.classifyVerify("", "Password", "Password", true, secure = true))
         assertEquals("mismatch", TextInputRecipe.classifyVerify("", "•••", "Password", true, secure = true))

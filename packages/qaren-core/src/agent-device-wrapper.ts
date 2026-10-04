@@ -622,7 +622,7 @@ export function buildRunIOSArgs(
         command: 'snapshot',
         ...(cliArgs.includes('--platform-presence')
           ? { platformPresence: true }
-          : { interactiveOnly: true }),
+          : { interactiveOnly: cliArgs.includes('-i') }),
         ...(bundleId ? { bundleId } : {}),
       };
     case 'back':
@@ -876,7 +876,7 @@ export function buildRunAndroidArgs(
     }
 
     case 'snapshot':
-      return { command: 'snapshot', interactiveOnly: true, ...withBundle };
+      return { command: 'snapshot', interactiveOnly: cliArgs.includes('-i'), ...withBundle };
 
     case 'back':
       return { command: 'back', ...withBundle };
@@ -1760,11 +1760,11 @@ function staleRefFail(
       : `Element at ref ${pinned} no longer hittable — UI re-rendered since snapshot`;
   const hint =
     reason === 'ambiguous'
-      ? 'Multiple elements share the cached identity. The ref-map was refreshed by this call — pick the intended ref from `candidates` and retry.'
+      ? 'Multiple elements share the cached identity. Use a unique target before retrying.'
       : reason === 'snapshot-failed'
         ? 'Snapshot infrastructure failed during re-resolution. Check cdp_status / reopen the device session, then retry.'
         : 'Element not re-resolvable by identity (it changed or unmounted). Call device_snapshot action=snapshot and re-find the target.';
-  return failResult(message, 'STALE_REF', {
+  return failResult(message, reason === 'ambiguous' ? 'TARGET_AMBIGUOUS' : 'STALE_REF', {
     cachedMetadata,
     reResolution: reason,
     candidates: candidates.slice(0, MAX_STALE_CANDIDATES),
@@ -1967,7 +1967,7 @@ export async function runNative(
       const healed = await healStaleRef(ios._staleRef, () =>
         runIOS({
           command: 'snapshot',
-          interactiveOnly: true,
+          interactiveOnly: false,
           ...(appId ? { bundleId: appId } : {}),
         }),
       );
@@ -2123,7 +2123,7 @@ export async function runNative(
       const healed = await healStaleRef(android._staleRef, () =>
         runAndroid({
           command: 'snapshot',
-          interactiveOnly: true,
+          interactiveOnly: false,
           deviceId: activeSession?.deviceId,
           ...(appId ? { bundleId: appId } : {}),
         }),

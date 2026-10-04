@@ -9,6 +9,7 @@ import {
   decideTarget,
   keyboardFallbackTarget,
   prepareTarget,
+  targetVisible,
 } from '../../../dist/qa/resolve.js';
 import type { Step } from '../../../dist/qa/plan.js';
 
@@ -83,7 +84,7 @@ const shapes = (): Shape[] => {
       quoted: 'twin',
       identities: 2,
       press: 'TARGET_AMBIGUOUS',
-      replay: 'REPLAY_SELECTOR',
+      replay: 'TARGET_AMBIGUOUS',
     },
     {
       name: 'a disabled twin',
@@ -91,7 +92,7 @@ const shapes = (): Shape[] => {
       quoted: 'Save',
       identities: 2,
       press: 'TARGET_AMBIGUOUS',
-      replay: 'REPLAY_SELECTOR',
+      replay: 'TARGET_AMBIGUOUS',
     },
     {
       name: 'a React-only twin',
@@ -99,7 +100,7 @@ const shapes = (): Shape[] => {
       quoted: 'twin',
       identities: 2,
       press: 'TARGET_AMBIGUOUS',
-      replay: 'REPLAY_SELECTOR',
+      replay: 'TARGET_AMBIGUOUS',
     },
     {
       name: 'a container echo',
@@ -115,7 +116,7 @@ const shapes = (): Shape[] => {
       quoted: 'Skip',
       identities: 2,
       press: 'TARGET_AMBIGUOUS',
-      replay: 'REPLAY_SELECTOR',
+      replay: 'TARGET_AMBIGUOUS',
     },
   ];
 };
@@ -133,7 +134,6 @@ for (const shape of shapes()) {
       outcome(prepareTarget({ kind: 'press', target: { ...target, exact } }, shape.screen)),
       shape.replay,
     );
-    // A Jev pick of an echoing text acts on its control's identity.
     if (shape.name === 'a container echo') {
       const candidates = shape.screen.elements.filter((e) => e.hittable);
       const keys = candidates.map((_, i) => `e${i}`).concat('none');
@@ -151,20 +151,20 @@ for (const shape of shapes()) {
         keys.map((k) => [k, k === pick ? 0.99 : 0.01 / (keys.length - 1)]),
       );
       const choice = { type: 'choice' as const, choice: pick, probabilities, confidence: 0.99 };
-      assert.equal(outcome(decideTarget(phrase, choice)), shape.press);
+      assert.equal(outcome(decideTarget(phrase, choice)), '@echo-text');
     }
   });
 }
 
-test('I1 a covered non-hittable twin under a sheet is not a second identity', () => {
+test('I1 a covered non-hittable twin still counts before eligibility', () => {
   const covered = node(node(root(), { label: 'Continue', hittable: false, y: 400 }), {
     label: 'Continue',
     y: 700,
   });
   const screen = join(covered, []);
   const target = { quoted: 'Continue', phrase: 'Continue' };
-  assert.equal(exactIdentities(screen, target, 'press').length, 1);
-  assert.equal(outcome(prepareTarget({ kind: 'press', target }, screen)), '@n3');
+  assert.equal(exactIdentities(screen, target, 'press').length, 2);
+  assert.equal(outcome(prepareTarget({ kind: 'press', target }, screen)), 'TARGET_AMBIGUOUS');
 });
 
 test('I1 input twins refuse fill, fallback and rebind alike', () => {
@@ -221,3 +221,45 @@ for (const inner of [true, false]) {
     );
   });
 }
+
+for (const exact of [undefined, 'id', 'text'] as const) {
+  test(`duplicate ${exact ?? 'quoted'} identities refuse actions and visibility`, () => {
+    const observed = join(
+      node(node(root(), { label: 'Save', identifier: 'Save', y: 100 }), {
+        type: 'TextField',
+        label: 'Save',
+        identifier: 'Save',
+        hittable: false,
+        y: 200,
+      }),
+      [],
+    );
+    const target = { quoted: 'Save', phrase: 'Save', exact };
+    for (const kind of ['press', 'fill', 'wait', 'scroll'] as const) {
+      const step: Step =
+        kind === 'fill'
+          ? { kind, target, text: 'x' }
+          : kind === 'scroll'
+            ? { kind, direction: 'down', until: target }
+            : { kind, target };
+      assert.equal(outcome(prepareTarget(step, observed)), 'TARGET_AMBIGUOUS');
+    }
+    assert.throws(() => targetVisible(target, observed), { code: 'TARGET_AMBIGUOUS' });
+  });
+}
+
+test('text enclosing a control does not prove a label echo', () => {
+  const nodes = node(root(), { label: 'Save', y: 100 });
+  nodes.push({
+    ref: '@text',
+    parentIndex: 2,
+    type: 'StaticText',
+    label: 'Save',
+    rect: { x: 0, y: 90, width: 400, height: 70 },
+    hittable: true,
+  });
+  const observed = join(nodes, []);
+  const target = { quoted: 'Save', phrase: 'Save' };
+  assert.equal(exactIdentities(observed, target, 'press').length, 2);
+  assert.equal(outcome(prepareTarget({ kind: 'press', target }, observed)), 'TARGET_AMBIGUOUS');
+});
