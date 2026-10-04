@@ -13,6 +13,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Removed,
+    RemovedBytes(Option<u64>),
     Absent,
     // A borrowed resource this run never owned; left exactly as found.
     Kept,
@@ -24,6 +25,8 @@ impl Outcome {
     pub fn render(&self) -> String {
         match self {
             Outcome::Removed => "removed".to_string(),
+            Outcome::RemovedBytes(Some(bytes)) => format!("removed (reclaimed {bytes} bytes)"),
+            Outcome::RemovedBytes(None) => "removed (reclaimed bytes unknown)".into(),
             Outcome::Absent => "absent".to_string(),
             Outcome::Kept => "kept".to_string(),
             Outcome::Refused(reason) => format!("refused: {reason}"),
@@ -32,12 +35,15 @@ impl Outcome {
     }
 
     pub fn clean(&self) -> bool {
-        matches!(self, Outcome::Removed | Outcome::Absent | Outcome::Kept)
+        matches!(
+            self,
+            Outcome::Removed | Outcome::RemovedBytes(_) | Outcome::Absent | Outcome::Kept
+        )
     }
 
     fn group_result(&self) -> GroupCleanupResult {
         match self {
-            Outcome::Removed => GroupCleanupResult::Removed,
+            Outcome::Removed | Outcome::RemovedBytes(_) => GroupCleanupResult::Removed,
             Outcome::Absent => GroupCleanupResult::Absent,
             Outcome::Refused(_) => GroupCleanupResult::Refused,
             _ => GroupCleanupResult::Unresolved,
@@ -94,7 +100,10 @@ pub fn reclaim_dead_holder(
         let unproven: Vec<String> = receipt
             .cleanup
             .iter()
-            .filter(|(_, outcome)| !matches!(outcome.as_str(), "removed" | "absent" | "kept"))
+            .filter(|(_, outcome)| {
+                !matches!(outcome.as_str(), "removed" | "absent" | "kept")
+                    && !outcome.starts_with("removed (reclaimed ")
+            })
             .map(|(leg, outcome)| format!("{leg}={outcome}"))
             .collect();
         return Err(refuse(format!(
@@ -1104,13 +1113,57 @@ pub(crate) fn release_lease_outcome(outcome: crate::buildplan::ReleaseOutcome) -
     }
 }
 
-fn kill_group(runner: &mut dyn Runner, pgid: i32, signal: &str) {
+pub(crate) fn reclaimed_bytes(runner: &mut dyn Runner, path: &Path) -> Option<u64> {
+    let output = runner.run(&CmdSpec::new(
+        "cleanup-storage-size",
+        "du",
+        &["-sk", &path.to_string_lossy()],
+        10,
+    ));
+    output
+        .ok()
+        .then(|| {
+            output
+                .stdout
+                .split_whitespace()
+                .next()?
+                .parse::<u64>()
+                .ok()?
+                .checked_mul(1024)
+        })
+        .flatten()
+}
+
+fn kill_group(
+    runner: &mut dyn Runner,
+    identity: Option<&PidIdentity>,
+    pgid: i32,
+    signal: &str,
+) -> Result<(), Outcome> {
+    let liveness = identity
+        .filter(|i| i.pid == pgid)
+        .map(|i| probe_pid_identity(runner, i));
+    if liveness != Some(PidLiveness::AliveMatching) {
+        runner.try_reap(pgid);
+        return Err(
+            if liveness == Some(PidLiveness::Dead)
+                && metro::group_presence(runner, pgid) == metro::GroupPresence::Absent
+            {
+                Outcome::Removed
+            } else {
+                Outcome::Unresolved(
+                    "process group signal withheld: current leader ownership is unproven".into(),
+                )
+            },
+        );
+    }
     runner.run(&CmdSpec::new(
         "kill-group",
         "/bin/kill",
         &[signal, "--", &format!("-{pgid}")],
         10,
     ));
+    Ok(())
 }
 
 pub(crate) fn cleanup_build(
@@ -1233,9 +1286,13 @@ pub(crate) fn cleanup_process_group(
                 }
             };
         }
-        kill_group(runner, pgid, "-TERM");
+        if let Err(outcome) = kill_group(runner, identity, pgid, "-TERM") {
+            return outcome;
+        }
         runner.sleep(Duration::from_millis(1500));
-        kill_group(runner, pgid, "-KILL");
+        if let Err(outcome) = kill_group(runner, identity, pgid, "-KILL") {
+            return outcome;
+        }
         runner.sleep(Duration::from_millis(300));
         runner.try_reap(pgid);
         return match metro::group_presence(runner, pgid) {
@@ -1263,9 +1320,13 @@ pub(crate) fn cleanup_process_group(
     let proven_ours = identity.is_some_and(|recorded| recorded.pid == pgid)
         && leader == Some(PidLiveness::AliveMatching);
     let outcome = if proven_ours {
-        kill_group(runner, pgid, "-TERM");
+        if let Err(outcome) = kill_group(runner, identity, pgid, "-TERM") {
+            return outcome;
+        }
         runner.sleep(Duration::from_millis(1500));
-        kill_group(runner, pgid, "-KILL");
+        if let Err(outcome) = kill_group(runner, identity, pgid, "-KILL") {
+            return outcome;
+        }
         runner.sleep(Duration::from_millis(300));
         let leader_after = identity.map(|recorded| probe_pid_identity(runner, recorded));
         if leader_after == Some(PidLiveness::AliveMatching) {
@@ -1388,9 +1449,25 @@ fn cleanup_simulator(runner: &mut dyn Runner, udid: &str, expected_name: &str) -
             return Outcome::Unresolved(format!("simctl shutdown failed: {}", shutdown.summary()));
         }
     }
+    let data_path = serde_json::from_str::<serde_json::Value>(&list.stdout)
+        .ok()
+        .and_then(|list| {
+            list["devices"].as_object().and_then(|devices| {
+                devices
+                    .values()
+                    .filter_map(|v| v.as_array())
+                    .flatten()
+                    .find(|device| device["udid"].as_str() == Some(&resolved_udid))
+                    .and_then(|device| device["dataPath"].as_str().map(std::path::PathBuf::from))
+            })
+        });
+    let bytes = data_path
+        .as_deref()
+        .filter(|path| path.is_absolute())
+        .and_then(|path| reclaimed_bytes(runner, path));
     let delete = runner.run(&ios::delete_spec(&resolved_udid));
     if delete.ok() {
-        Outcome::Removed
+        Outcome::RemovedBytes(bytes)
     } else {
         Outcome::Unresolved(format!("simctl delete failed: {}", delete.summary()))
     }
@@ -1444,5 +1521,81 @@ fn cleanup_farm(
         Outcome::Removed
     } else {
         Outcome::Unresolved(format!("android-farm stop: {}", stop.summary()))
+    }
+}
+
+#[cfg(test)]
+mod integrity_tests {
+    use super::*;
+    use crate::exec::MockRunner;
+
+    const BIRTH: &str = "Wed Aug 12 16:01:00 2026";
+
+    #[test]
+    fn every_signal_rechecks_identity_with_and_without_a_port() {
+        for port in [None, Some(8081)] {
+            for change_at in ["TERM", "KILL"] {
+                for changed in [
+                    CmdOutput::success("foreign birth"),
+                    CmdOutput::failed(1, "unknown"),
+                ] {
+                    let identity = PidIdentity {
+                        pid: 5000,
+                        started_at: BIRTH.into(),
+                        command: crate::redact::OutputText::from_output("node"),
+                    };
+                    let mut runner = MockRunner::new();
+                    if port.is_none() {
+                        runner.expect_run("ps -A", CmdOutput::success("5000 5000 S\n"));
+                    }
+                    runner.expect_run("lstart=", CmdOutput::success(BIRTH));
+                    runner.expect_run("stat=", CmdOutput::success("S"));
+                    if port.is_some() {
+                        runner.expect_run("lsof", CmdOutput::success("5000\n"));
+                        runner.expect_run("pgid=", CmdOutput::success("5000"));
+                    }
+                    if change_at == "KILL" {
+                        runner.expect_run("lstart=", CmdOutput::success(BIRTH));
+                        runner.expect_run("stat=", CmdOutput::success("S"));
+                        runner.expect_run("/bin/kill -TERM", CmdOutput::success(""));
+                    }
+                    runner.expect_run("lstart=", changed);
+                    let outcome = cleanup_process_group(&mut runner, Some(&identity), 5000, port);
+                    assert!(matches!(outcome, Outcome::Unresolved(_)), "{outcome:?}");
+                    let signals: Vec<_> = runner
+                        .calls
+                        .iter()
+                        .filter(|c| c.program == "/bin/kill")
+                        .map(|c| c.args[0].as_str())
+                        .collect();
+                    assert_eq!(
+                        signals,
+                        if change_at == "KILL" {
+                            vec!["-TERM"]
+                        } else {
+                            vec![]
+                        }
+                    );
+                    assert_eq!(runner.remaining(), 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn simulator_removal_reports_measured_bytes_including_pending_recovery() {
+        for udid in ["AAAA-1111", ""] {
+            let mut runner = MockRunner::new();
+            runner.expect_run("simctl list", CmdOutput::success(r#"{"devices":{"rt":[{"udid":"AAAA-1111","name":"qaren-run","state":"Shutdown","dataPath":"/owned/simulator/data"}]}}"#));
+            runner.expect_run(
+                "du -sk /owned/simulator/data",
+                CmdOutput::success("12\t/owned/simulator/data\n"),
+            );
+            runner.expect_run("simctl delete AAAA-1111", CmdOutput::success(""));
+            let outcome = cleanup_simulator(&mut runner, udid, "qaren-run");
+            assert!(outcome.clean());
+            assert_eq!(outcome.render(), "removed (reclaimed 12288 bytes)");
+            assert_eq!(runner.remaining(), 0);
+        }
     }
 }

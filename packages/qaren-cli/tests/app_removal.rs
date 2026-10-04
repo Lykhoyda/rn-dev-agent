@@ -147,7 +147,11 @@ fn expect_local_teardown_alive(mock: &mut MockRunner) {
         mock.expect_run("ps", CmdOutput::success("S\n"));
         mock.expect_run("lsof", CmdOutput::success(&format!("{pgid}\n")));
         mock.expect_run("ps", CmdOutput::success(&format!("{port_owner}\n")));
+        mock.expect_run("lstart=", CmdOutput::success(LSTART));
+        mock.expect_run("stat=", CmdOutput::success("S"));
         mock.expect_run("/bin/kill", CmdOutput::success(""));
+        mock.expect_run("lstart=", CmdOutput::success(LSTART));
+        mock.expect_run("stat=", CmdOutput::success("S"));
         mock.expect_run("/bin/kill", CmdOutput::success(""));
         mock.expect_run("ps", CmdOutput::failed(1, ""));
         mock.expect_run("lsof", free_port());
@@ -705,7 +709,11 @@ fn foreign_lease_refuses_removal_with_no_device_command() {
         mock.expect_run("ps", CmdOutput::success("S\n"));
         mock.expect_run("lsof", CmdOutput::success(&format!("{pgid}\n")));
         mock.expect_run("ps", CmdOutput::success(&format!("{port_owner}\n")));
+        mock.expect_run("lstart=", CmdOutput::success(LSTART));
+        mock.expect_run("stat=", CmdOutput::success("S"));
         mock.expect_run("/bin/kill", CmdOutput::success(""));
+        mock.expect_run("lstart=", CmdOutput::success(LSTART));
+        mock.expect_run("stat=", CmdOutput::success("S"));
         mock.expect_run("/bin/kill", CmdOutput::success(""));
         mock.expect_run("ps", CmdOutput::failed(1, ""));
         mock.expect_run("lsof", free_port());
@@ -770,7 +778,11 @@ fn foreign_adb_server_identity_refuses_removal() {
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("7000\n"));
     mock.expect_run("ps", CmdOutput::success("7000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());

@@ -5,8 +5,6 @@ import type { ProveOutcome } from './prove.js';
 // A timed case counts only at a 1-minute host load at or below this (captain's 2026-10-03 rule).
 export const LOAD_ENVELOPE = 10;
 
-const STOP_POLL_MS = 100;
-
 export interface AdmissionSteps {
   metroPort: number;
   attach(): Promise<void>;
@@ -34,17 +32,18 @@ export async function admit(
     );
   };
   await halt();
-  await attach(steps, stop, halt);
+  await attach(steps, halt);
   await halt();
   const foreign = await steps.foreignDriver();
+  await halt();
   if (foreign !== undefined) {
     await steps.close();
     throw new HandlerError('BUSY_FOREIGN_FLOW', foreign);
   }
-  await halt();
   await steps.open();
   await halt();
   const proof = await steps.prove();
+  await halt();
   if (!proof.ok) {
     await steps.close();
     throw new HandlerError(proof.code, proof.message);
@@ -54,12 +53,12 @@ export async function admit(
 
 async function attach(
   steps: AdmissionSteps,
-  stop: { readonly stopping: boolean },
   halt: () => Promise<void>,
 ): Promise<void> {
   const attempt = async (): Promise<string | undefined> => {
+    await halt();
     try {
-      await untilStopped(steps.attach(), stop);
+      await steps.attach();
       return undefined;
     } catch (error) {
       return describeError(error).message;
@@ -85,13 +84,3 @@ async function attach(
   );
 }
 
-// Resolves with the operation, or rejects as soon as the run is stopping.
-function untilStopped<T>(op: Promise<T>, stop: { readonly stopping: boolean }): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const stopped = new Promise<never>((_, reject) => {
-    timer = setInterval(() => {
-      if (stop.stopping) reject(new Error('the run is stopping'));
-    }, STOP_POLL_MS);
-  });
-  return Promise.race([op, stopped]).finally(() => clearInterval(timer));
-}

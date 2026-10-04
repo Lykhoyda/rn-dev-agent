@@ -163,12 +163,6 @@ pub fn start(
         recorder.birth = birth;
     }
     if !proven || record.save(runs_root).is_err() {
-        crate::exec::CleanupRunner(runner).run(&CmdSpec::new(
-            "recorder-abort",
-            "/bin/kill",
-            &["-KILL", "--", &format!("-{}", spawned.pgid)],
-            10,
-        ));
         if cleanup_process_group(
             runner,
             record
@@ -234,11 +228,9 @@ pub fn stop(runner: &mut dyn Runner, record: &mut RunRecord, runs_root: &Path) -
     let Some(pid) = recorder.pid else {
         return Outcome::Unresolved("recorder spawn identity is unproven".into());
     };
-    if recorder
-        .birth
-        .as_ref()
-        .is_some_and(|birth| probe_pid_identity(runner, birth) == PidLiveness::AliveMatching)
-    {
+    if recorder.birth.as_ref().is_some_and(|birth| {
+        birth.pid == pid && probe_pid_identity(runner, birth) == PidLiveness::AliveMatching
+    }) {
         runner.run(&CmdSpec::new(
             "recorder-interrupt",
             "/bin/kill",

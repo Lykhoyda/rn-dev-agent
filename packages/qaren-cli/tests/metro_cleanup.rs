@@ -114,7 +114,7 @@ fn real_unbound_group_survives_launcher_exit_and_cleanup_retries() {
     assert!(member.0.wait().unwrap().success());
     let receipt = cleanup(&mut runner, &runs, &record.run_id);
     assert_eq!(receipt.cleanup["metro"], "absent");
-    assert_eq!(receipt.cleanup["pr_worktree"], "removed");
+    assert!(receipt.cleanup["pr_worktree"].starts_with("removed (reclaimed "));
     assert!(!wt.exists());
 }
 

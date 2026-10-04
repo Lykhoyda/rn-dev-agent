@@ -399,3 +399,40 @@ test('invalid ports and unsafe timer arguments are rejected before any request',
   assert.deepEqual(clock.requested, []);
   assert.equal(clock.subprocess.mock.callCount(), 0);
 });
+
+
+test('cancellation during a pending target response prevents the attach continuation', async (t) => {
+  const stop = { stopping: false };
+  let respond: (response: Response) => void = () => {};
+  t.mock.method(globalThis, 'fetch', () => new Promise<Response>((resolve) => { respond = resolve; }));
+  let connected = false;
+  const waiting = (async () => {
+    await waitForExactPortTargets(managedPort, 30_000, 500, stop);
+    connected = true;
+  })();
+  stop.stopping = true;
+  respond(Response.json([target()]));
+  await assert.rejects(waiting, /stopping/);
+  assert.equal(connected, false);
+});
+
+test('cancellation aborts a pending readiness fetch and makes no later request', async (t) => {
+  const stop = { stopping: false };
+  const reads = t.mock.method(globalThis, 'fetch', (_url, options) => new Promise<Response>((_resolve, reject) => {
+    options?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  }));
+  const waiting = waitForExactPortTargets(managedPort, 30_000, 500, stop);
+  stop.stopping = true;
+  await assert.rejects(waiting, /aborted/);
+  assert.equal(reads.mock.callCount(), 1);
+});
+
+test('cancellation interrupts the polling sleep before another readiness request', async (t) => {
+  const stop = { stopping: false };
+  const reads = t.mock.method(globalThis, 'fetch', async () => Response.json([]));
+  const waiting = waitForExactPortTargets(managedPort, 30_000, 10_000, stop);
+  await setImmediate();
+  stop.stopping = true;
+  await assert.rejects(waiting, /stopping/);
+  assert.equal(reads.mock.callCount(), 1);
+});

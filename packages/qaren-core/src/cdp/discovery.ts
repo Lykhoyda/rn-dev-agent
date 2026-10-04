@@ -124,11 +124,11 @@ export async function discoverAllMetroPorts(ports: number[], timeout: number): P
   return checks.filter((p): p is number => p !== null);
 }
 
-export async function fetchTargets(port: number, timeout: number): Promise<HermesTarget[]> {
+export async function fetchTargets(port: number, timeout: number, signal?: AbortSignal): Promise<HermesTarget[]> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
   try {
-    const resp = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: ctrl.signal });
+    const resp = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: signal ? AbortSignal.any([ctrl.signal, signal]) : ctrl.signal });
     return (await resp.json()) as HermesTarget[];
   } catch (err) {
     throw new Error(
@@ -144,6 +144,7 @@ export async function waitForExactPortTargets(
   port: number,
   timeoutMs: number,
   pollMs: number,
+  stop?: { readonly stopping: boolean },
 ): Promise<void> {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new RangeError('port must be an integer between 1 and 65535');
@@ -157,20 +158,46 @@ export async function waitForExactPortTargets(
     }
   }
 
-  const deadline = performance.now() + timeoutMs;
-  let remaining = deadline - performance.now();
-  while (remaining > 0) {
-    const raw = await fetchTargets(port, Math.min(DISCOVERY_TIMEOUT_MS * 2, remaining));
-    if (!Array.isArray(raw)) {
-      throw new Error(`Invalid CDP target list on port ${port}: expected an array`);
+  const controller = new AbortController();
+  const check = () => {
+    if (stop?.stopping) controller.abort(new Error('the run is stopping'));
+    controller.signal.throwIfAborted();
+  };
+  const timer = stop ? setInterval(() => {
+    if (stop.stopping) controller.abort(new Error('the run is stopping'));
+  }, 100) : undefined;
+  try {
+    const deadline = performance.now() + timeoutMs;
+    let remaining = deadline - performance.now();
+    while (remaining > 0) {
+      check();
+      const raw = await fetchTargets(port, Math.min(DISCOVERY_TIMEOUT_MS * 2, remaining), controller.signal);
+      check();
+      if (!Array.isArray(raw)) {
+        throw new Error(`Invalid CDP target list on port ${port}: expected an array`);
+      }
+      remaining = deadline - performance.now();
+      if (remaining <= 0) break;
+      if (raw.length > 0) return;
+      await new Promise<void>((resolve, reject) => {
+        const signal = controller.signal;
+        const abort = () => {
+          clearTimeout(poll);
+          reject(signal.reason);
+        };
+        const poll = setTimeout(() => {
+          signal.removeEventListener('abort', abort);
+          resolve();
+        }, Math.min(pollMs, remaining));
+        signal.addEventListener('abort', abort, { once: true });
+      });
+      check();
+      remaining = deadline - performance.now();
     }
-    remaining = deadline - performance.now();
-    if (remaining <= 0) break;
-    if (raw.length > 0) return;
-    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(pollMs, remaining)));
-    remaining = deadline - performance.now();
+    throw new Error(`Timed out waiting for CDP targets on port ${port} after ${timeoutMs}ms`);
+  } finally {
+    clearInterval(timer);
   }
-  throw new Error(`Timed out waiting for CDP targets on port ${port} after ${timeoutMs}ms`);
 }
 
 export function filterValidTargets(targets: HermesTarget[]): HermesTarget[] {

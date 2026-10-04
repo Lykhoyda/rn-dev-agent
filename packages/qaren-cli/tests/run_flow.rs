@@ -591,7 +591,11 @@ fn finite_build_failures_never_install_or_walk_and_unproven_groups_retain_both_l
             mock.expect_run("ps -A", CmdOutput::success("1 1 S\n5000 5000 S\n"));
             mock.expect_run("ps -p 5000 -o lstart=", CmdOutput::success(LSTART));
             mock.expect_run("ps -p 5000 -o stat=", CmdOutput::success("S"));
+            mock.expect_run("lstart=", CmdOutput::success(LSTART));
+            mock.expect_run("stat=", CmdOutput::success("S"));
             mock.expect_run("/bin/kill -TERM -- -5000", CmdOutput::success(""));
+            mock.expect_run("lstart=", CmdOutput::success(LSTART));
+            mock.expect_run("stat=", CmdOutput::success("S"));
             mock.expect_run("/bin/kill -KILL -- -5000", CmdOutput::success(""));
             mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
         } else if mode == "dead_leader" {
@@ -1002,7 +1006,11 @@ fn script_metro_teardown(mock: &mut MockRunner, udid: &str, runner_host: Option<
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("6000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
@@ -1513,7 +1521,11 @@ fn a_cancel_during_the_build_stops_it_with_proof_and_releases_both_locks() {
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n5000 5000 S\n"));
     mock.expect_run("ps -p 5000 -o lstart=", CmdOutput::success(LSTART));
     mock.expect_run("ps -p 5000 -o stat=", CmdOutput::success("S"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill -TERM -- -5000", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill -KILL -- -5000", CmdOutput::success(""));
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     mock.cancel_after = Some(("-p 5000".into(), "received SIGINT".into()));
@@ -1894,7 +1906,11 @@ fn an_unresolved_metro_group_retains_the_device_lease_for_cleanup() {
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("6000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n"))); // leader survived
     mock.expect_run("ps", CmdOutput::success("S\n"));
@@ -3631,7 +3647,11 @@ fn script_pr_teardown_after_drift(mock: &mut MockRunner) {
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("6000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
@@ -3696,6 +3716,7 @@ fn cancelled_pr_walks_with_or_without_source_drift_cannot_publish() {
             UDID,
             hosts_absent(),
         );
+        mock.expect_run("du -sk", CmdOutput::success("4\n"));
         mock.expect_run("worktree remove --force", CmdOutput::success(""));
 
         let receipt = run(&mut runner, &pr_request(&repo, &app));
@@ -3754,6 +3775,7 @@ fn pr_walk_result(candidate_drift: bool) {
     );
     script_recorder_stop(mock);
     script_pr_teardown_after_drift(mock);
+    mock.expect_run("du -sk", CmdOutput::success("4\n"));
     mock.expect_run("worktree remove --force", CmdOutput::success(""));
     mock.expect_run("which ffmpeg", CmdOutput::failed(1, ""));
     mock.expect_run(
@@ -3828,7 +3850,10 @@ fn pr_walk_result(candidate_drift: bool) {
     assert_eq!(receipt.tested_older_commit.as_deref(), Some(PR_HEAD));
     assert_eq!(receipt.outcomes["video"], "unavailable(ffmpeg)");
     assert_eq!(receipt.cleanup["recorder"], "removed");
-    assert_eq!(receipt.cleanup["pr_worktree"], "removed");
+    assert_eq!(
+        receipt.cleanup["pr_worktree"],
+        "removed (reclaimed 4096 bytes)"
+    );
     assert_eq!(receipt.cleanup["device_lease"], "removed");
     assert!(!wt.exists());
     let run_dir = repo.join("runs").join(run_id());
@@ -3878,12 +3903,17 @@ fn a_core_failure_on_a_pr_run_still_stops_the_recorder_and_removes_the_worktree(
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("6000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     script_recorder_stop(mock);
+    mock.expect_run("du -sk", CmdOutput::success("4\n"));
     mock.expect_run("worktree remove --force", CmdOutput::success(""));
 
     let receipt = run(&mut runner, &pr_request(&repo, &app));
@@ -3900,7 +3930,10 @@ fn a_core_failure_on_a_pr_run_still_stops_the_recorder_and_removes_the_worktree(
     );
     assert_eq!(runner.inner.remaining(), 0);
     assert_eq!(receipt.cleanup["recorder"], "removed");
-    assert_eq!(receipt.cleanup["pr_worktree"], "removed");
+    assert_eq!(
+        receipt.cleanup["pr_worktree"],
+        "removed (reclaimed 4096 bytes)"
+    );
     assert_eq!(receipt.cleanup["device_lease"], "removed");
     assert!(!wt.exists());
 }
@@ -4062,6 +4095,7 @@ fn pr_receipt_reports_the_final_recorder_cleanup_retry() {
             mock.expect_run("ps -p 7100", CmdOutput::failed(1, ""));
             mock.expect_run("ps -A", CmdOutput::success("7101 7100 S\n"));
         }
+        mock.expect_run("du -sk", CmdOutput::success("4\n"));
         mock.expect_run("worktree remove --force", CmdOutput::success(""));
         mock.expect_run(
             "gh pr view https://github.com/o/r/pull/12",
@@ -4152,6 +4186,7 @@ fn cancelled_pr_startup_never_dispatches_the_core_and_cleans_up() {
             mock.cancel_after = Some(("(exclude).qaren/actions".into(), "received SIGTERM".into()));
         }
         script_metro_teardown(mock, UDID, None);
+        mock.expect_run("du -sk", CmdOutput::success("4\n"));
         mock.expect_run("worktree remove --force", CmdOutput::success(""));
         let receipt = run(&mut runner, &pr_request(&repo, &app));
         assert_eq!(receipt.result, ReceiptResult::Refused);
@@ -4232,6 +4267,7 @@ fn a_late_cancellation_is_the_terminal_result_and_publication_refuses() {
         );
         script_recorder_stop(mock);
         script_pr_teardown_after_drift(mock);
+        mock.expect_run("du -sk", CmdOutput::success("4\n"));
         mock.expect_run("worktree remove --force", CmdOutput::success(""));
         if ffmpeg_probed {
             mock.expect_run("which ffmpeg", CmdOutput::failed(1, ""));
@@ -4448,6 +4484,7 @@ fn a_playable_encode_reclaims_the_runs_raw_capture_and_reports_the_bytes() {
         );
         script_recorder_stop(mock);
         script_pr_teardown_after_drift(mock);
+        mock.expect_run("du -sk", CmdOutput::success("4\n"));
         mock.expect_run("worktree remove --force", CmdOutput::success(""));
         mock.expect_run("which ffmpeg", CmdOutput::success("/opt/ffmpeg\n"));
         if encodes {

@@ -64,7 +64,11 @@ test('a stop during the attach wait ends the wait instead of running to its time
   const calls: string[] = [];
   const steps: AdmissionSteps = {
     ...harness().steps,
-    attach: () => new Promise(() => setTimeout(() => (stop.stopping = true), 10)),
+    attach: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      stop.stopping = true;
+      throw new Error("the readiness wait was cancelled");
+    },
     open: async () => void calls.push('open'),
     close: async () => void calls.push('close'),
   };
@@ -138,4 +142,15 @@ test('a foreign automation driver refuses before the session opens', async () =>
   const { calls, stop, steps } = harness({ foreignDriver: async () => 'Maestro holds the device' });
   await assert.rejects(admit(steps, stop), { code: 'BUSY_FOREIGN_FLOW' });
   assert.ok(!calls.includes('open'));
+});
+
+
+test('cancellation during bundle proof refuses the proven result', async () => {
+  const { calls, steps, stop } = harness();
+  steps.prove = async () => {
+    stop.stopping = true;
+    return PROVEN;
+  };
+  await assert.rejects(admit(steps, stop), { code: 'RUN_CANCELLED' });
+  assert.equal(calls.at(-1), 'close');
 });

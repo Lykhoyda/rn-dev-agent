@@ -170,17 +170,21 @@ fn import_specifiers(source: &str) -> Specifiers {
         }
         let end = source[i + 1..].find(quote as char)? + i + 1;
         let text = &source[i + 1..end];
-        (!text.contains('\n')).then(|| (text.to_string(), end + 1))
+        (!text.contains(['\n', '\r', '\\'])).then(|| (text.to_string(), end + 1))
     };
     for keyword in ["require", "import", "from"] {
         for (at, _) in source.match_indices(keyword) {
             let end = at + keyword.len();
-            if (at > 0 && (ident(bytes[at - 1]) || bytes[at - 1] == b'.'))
-                || bytes.get(end).is_some_and(|&b| ident(b))
-            {
+            if (at > 0 && ident(bytes[at - 1])) || bytes.get(end).is_some_and(|&b| ident(b)) {
                 continue;
             }
             let next = skip_ws(end);
+            if source[..at].trim_end().ends_with('.') {
+                let line = source[..at].matches('\n').count() + 1;
+                out.unparseable
+                    .push(format!("property {keyword} at line {line}"));
+                continue;
+            }
             if keyword != "from" && bytes.get(next) == Some(&b'(') {
                 let arg = skip_ws(next + 1);
                 match literal(arg) {
@@ -195,7 +199,30 @@ fn import_specifiers(source: &str) -> Specifiers {
             } else if keyword != "require" {
                 if let Some((text, _)) = literal(next) {
                     out.found.push(text);
+                } else {
+                    let static_import = keyword == "import"
+                        && source[next..].find("from").is_some_and(|offset| {
+                            let binding = &source[next..next + offset];
+                            !binding.trim().is_empty()
+                                && binding.bytes().all(|b| {
+                                    ident(b)
+                                        || b.is_ascii_whitespace()
+                                        || matches!(b, b'{' | b'}' | b',' | b'*')
+                                })
+                                && literal(skip_ws(next + offset + 4)).is_some()
+                        });
+                    if !static_import {
+                        out.unparseable.push(format!(
+                            "{keyword} at line {}",
+                            source[..at].matches('\n').count() + 1
+                        ));
+                    }
                 }
+            } else {
+                out.unparseable.push(format!(
+                    "{keyword} at line {}",
+                    source[..at].matches('\n').count() + 1
+                ));
             }
         }
     }
@@ -608,6 +635,17 @@ pub fn compute(
             }
         }
     }
+    let config_seeds = inputs
+        .iter()
+        .filter(|rel| {
+            matches!(
+                rel.as_str(),
+                "react-native.config.js" | "react-native.config.ts"
+            )
+        })
+        .cloned()
+        .collect();
+    trace_local_imports(project_root, config_seeds, &mut inputs, &mut incompleteness);
     if inputs.contains("package.json") {
         match std::fs::read_to_string(project_root.join("package.json")) {
             Ok(package_json) => local_dependency_manifest(

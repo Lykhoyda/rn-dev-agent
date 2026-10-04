@@ -1256,7 +1256,11 @@ fn usb_claim_is_retained_while_the_build_process_group_is_unresolved() {
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("5000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n"));

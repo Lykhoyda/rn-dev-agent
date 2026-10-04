@@ -153,7 +153,9 @@ impl qaren::exec::Runner for GitRemoves {
             if spec.label == "ps-command" {
                 std::fs::rename(path, path.with_extension("backup")).unwrap();
                 std::fs::create_dir(path).unwrap();
-            } else if spec.label == "recorder-abort" {
+            } else if spec.label == "kill-group"
+                && spec.args.first().map(String::as_str) == Some("-KILL")
+            {
                 std::fs::remove_dir(path).unwrap();
                 std::fs::rename(path.with_extension("backup"), path).unwrap();
             }
@@ -218,13 +220,17 @@ fn a_dead_owners_recorder_is_stopped_and_its_worktree_removed() {
     mock.expect_run("/bin/kill -INT 7100", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+    mock.expect_run("du -sk", CmdOutput::success("4\n"));
     mock.expect_run("worktree remove --force", CmdOutput::success(""));
     let mut runner = GitRemoves(mock, None);
 
     let receipt = qaren::commands::cleanup::cleanup(&mut runner, &root, &record.run_id);
 
     assert_eq!(receipt.cleanup["recorder"], "removed");
-    assert_eq!(receipt.cleanup["pr_worktree"], "removed");
+    assert_eq!(
+        receipt.cleanup["pr_worktree"],
+        "removed (reclaimed 4096 bytes)"
+    );
     assert!(!wt.exists());
     let saved = RunRecord::load(&root, &record.run_id).unwrap();
     assert!(saved.resources.recorder.is_none());
@@ -254,48 +260,40 @@ fn a_live_owners_recorder_and_worktree_are_untouched() {
 }
 
 #[test]
-fn failed_or_timed_out_abort_retains_ownership_until_group_absence() {
-    for abort in [
-        CmdOutput::failed(1, "signal failed"),
-        CmdOutput {
-            timed_out: true,
-            ..Default::default()
+fn unknown_identity_abort_never_signals_and_retains_ownership_until_group_absence() {
+    let (root, mut record) = walking_record();
+    let mut mock = MockRunner::new();
+    mock.expect_spawn_with_log(
+        "recordVideo",
+        Spawned {
+            pid: 7100,
+            pgid: 7100,
         },
-    ] {
-        let (root, mut record) = walking_record();
-        let mut mock = MockRunner::new();
-        mock.expect_spawn_with_log(
-            "recordVideo",
-            Spawned {
-                pid: 7100,
-                pgid: 7100,
-            },
-            "",
-        );
-        mock.expect_run("ps", CmdOutput::failed(1, "identity unavailable"));
-        mock.expect_run("ps", CmdOutput::failed(1, "identity unavailable"));
-        mock.expect_run("/bin/kill -KILL -- -7100", abort);
-        mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
-        mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
-        assert!(record::start(&mut mock, &mut record, &root, "U").is_err());
-        let mut saved = RunRecord::load(&root, &record.run_id).unwrap();
-        assert_eq!(saved.resources.recorder.as_ref().unwrap().pid, Some(7100));
-        mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
-        mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
-        assert!(matches!(
-            record::stop(&mut mock, &mut saved, &root),
-            Outcome::Unresolved(_)
-        ));
-        assert!(saved.resources.recorder.is_some());
-        mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
-        assert_eq!(record::stop(&mut mock, &mut saved, &root), Outcome::Removed);
-        assert!(RunRecord::load(&root, &record.run_id)
-            .unwrap()
-            .resources
-            .recorder
-            .is_none());
-        assert_eq!(mock.remaining(), 0);
-    }
+        "",
+    );
+    mock.expect_run("ps", CmdOutput::failed(1, "identity unavailable"));
+    mock.expect_run("ps", CmdOutput::failed(1, "identity unavailable"));
+    mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
+    mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
+    assert!(record::start(&mut mock, &mut record, &root, "U").is_err());
+    assert!(mock.calls.iter().all(|spec| spec.program != "/bin/kill"));
+    let mut saved = RunRecord::load(&root, &record.run_id).unwrap();
+    assert_eq!(saved.resources.recorder.as_ref().unwrap().pid, Some(7100));
+    mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
+    mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
+    assert!(matches!(
+        record::stop(&mut mock, &mut saved, &root),
+        Outcome::Unresolved(_)
+    ));
+    assert!(saved.resources.recorder.is_some());
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+    assert_eq!(record::stop(&mut mock, &mut saved, &root), Outcome::Removed);
+    assert!(RunRecord::load(&root, &record.run_id)
+        .unwrap()
+        .resources
+        .recorder
+        .is_none());
+    assert_eq!(mock.remaining(), 0);
 }
 
 #[test]
@@ -311,14 +309,14 @@ fn failed_persistence_and_abort_keep_the_proven_recorder_for_teardown() {
         "",
     );
     script_identity(&mut mock);
-    mock.expect_run(
-        "/bin/kill -KILL -- -7100",
-        CmdOutput::failed(1, "signal failed"),
-    );
     mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill -TERM", CmdOutput::failed(1, "signal failed"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill -KILL", CmdOutput::failed(1, "signal failed"));
     mock.expect_run("ps -A", CmdOutput::success("7100 7100 S\n"));
     let mut runner = GitRemoves(mock, Some(RunRecord::path(&root, &record.run_id)));
@@ -418,10 +416,14 @@ fn dead_owner_worktrees_wait_for_each_producer_then_retry_removal() {
             mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
         }
         mock.expect_run("ps -p 999", CmdOutput::failed(1, ""));
+        mock.expect_run("du -sk", CmdOutput::success("4\n"));
         mock.expect_run("worktree remove --force", CmdOutput::success(""));
         let mut runner = GitRemoves(mock, None);
         let receipt = qaren::commands::cleanup::cleanup(&mut runner, &root, &record.run_id);
-        assert_eq!(receipt.cleanup["pr_worktree"], "removed", "{producer}");
+        assert_eq!(
+            receipt.cleanup["pr_worktree"], "removed (reclaimed 4096 bytes)",
+            "{producer}"
+        );
         assert!(!wt.exists());
         assert!(RunRecord::load(&root, &record.run_id)
             .unwrap()
@@ -471,7 +473,11 @@ fn unbound_metro_groups_retain_worktrees_and_leases_until_positive_absence() {
                     mock.expect_run("ps -p 5000", CmdOutput::success(&format!("{LSTART}\n")));
                     mock.expect_run("ps -p 5000", CmdOutput::success("S\n"));
                     mock.expect_run("lsof", CmdOutput::failed(1, ""));
+                    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+                    mock.expect_run("stat=", CmdOutput::success("S"));
                     mock.expect_run("/bin/kill", CmdOutput::success(""));
+                    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+                    mock.expect_run("stat=", CmdOutput::success("S"));
                     mock.expect_run("/bin/kill", CmdOutput::success(""));
                 }
                 mock.expect_run("ps -p 5000", CmdOutput::failed(1, ""));
@@ -496,11 +502,15 @@ fn unbound_metro_groups_retain_worktrees_and_leases_until_positive_absence() {
             mock.expect_run("lsof", CmdOutput::failed(1, ""));
             mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
             mock.expect_run("ps -p 999", CmdOutput::failed(1, ""));
+            mock.expect_run("du -sk", CmdOutput::success("4\n"));
             mock.expect_run("worktree remove --force", CmdOutput::success(""));
             let mut runner = GitRemoves(mock, None);
             let receipt = qaren::commands::cleanup::cleanup(&mut runner, &root, &record.run_id);
             assert_eq!(receipt.cleanup["metro"], "absent");
-            assert_eq!(receipt.cleanup["pr_worktree"], "removed");
+            assert_eq!(
+                receipt.cleanup["pr_worktree"],
+                "removed (reclaimed 4096 bytes)"
+            );
             assert_eq!(receipt.cleanup["device_lease"], "removed");
             assert!(!wt.exists());
             assert!(!lock.exists());

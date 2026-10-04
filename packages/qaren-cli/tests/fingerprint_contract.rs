@@ -177,6 +177,12 @@ fn an_unparseable_require_or_import_makes_the_fingerprint_incomplete() {
         "const name = '../config/x.json';\nconst x = require(name);\n",
         "const x = require(`../config/${'x'}.json`);\n",
         "const x = await import( name );\n",
+        "const x = require /* explanation */ ('../config/x.json');",
+        "const x = module.require('../config/x.json');",
+        r"const x = require('\x2e./config/x.json');",
+        r"const x = require('../config/\x78.json');",
+        r"import x from '../config/\x78.json';",
+        "const x = import /* explanation */ ('../config/x.json');",
     ] {
         let root = plugin_project(plugin);
         let fp = fingerprint(&root);
@@ -189,5 +195,32 @@ fn an_unparseable_require_or_import_makes_the_fingerprint_incomplete() {
             fp.incompleteness
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[test]
+fn react_native_config_imports_are_traced() {
+    for name in ["react-native.config.js", "react-native.config.ts"] {
+        let root = plugin_project("module.exports = (c) => c;");
+        std::fs::write(
+            root.join(name),
+            "import x from './config/x.json'; export default x;",
+        )
+        .unwrap();
+        let compute_config = || {
+            let mut runner = MockRunner::new();
+            runner.expect_run(
+                "ls-files",
+                CmdOutput::success(&format!("app.json\0{name}\0config/x.json\0")),
+            );
+            compute(&mut runner, &root, &root, "ios").unwrap()
+        };
+        let before = compute_config();
+        assert!(before.complete, "{:?}", before.incompleteness);
+        std::fs::write(root.join("config/x.json"), r#"{"a":2}"#).unwrap();
+        assert_ne!(before.value, compute_config().value);
+        std::fs::write(root.join(name), "module.require(name)").unwrap();
+        assert!(!compute_config().complete);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

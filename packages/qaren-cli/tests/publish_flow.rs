@@ -168,6 +168,7 @@ fn script_commit_extension(mock: &mut MockRunner, extension: &str, bytes: &str) 
         CmdOutput::success(&format!("{COMMIT}\n")),
     );
     script_blob_check(mock, &format!("tasks.{extension}"), bytes);
+    mock.expect_run("du -sk", CmdOutput::success("4\n"));
     mock.expect_run("git worktree remove --force", CmdOutput::success(""));
     mock.expect_run(
         "git remote get-url origin",
@@ -562,6 +563,7 @@ fn a_symlinked_corpus_in_the_pr_tree_is_refused_and_the_yaml_is_attached() {
         CmdOutput::success(""),
     );
     mock.expect_run("git worktree add --detach", CmdOutput::success(""));
+    mock.expect_run("du -sk", CmdOutput::success("4\n"));
     mock.expect_run("git worktree remove --force", CmdOutput::success(""));
     mock.expect_run(
         "gh pr comment 12",
@@ -1174,6 +1176,7 @@ fn a_block_in_the_producers_format_from_an_eligible_walk_is_committed_byte_ident
         CmdOutput::success(&format!("{COMMIT}\n")),
     );
     script_blob_check(mock, &format!("{slug}.yaml"), &source);
+    mock.expect_run("du -sk", CmdOutput::success("4\n"));
     mock.expect_run("git worktree remove --force", CmdOutput::success(""));
     mock.expect_run(
         "git remote get-url origin",

@@ -846,7 +846,11 @@ fn timeout_cleanup_uses_owned_group_policy_and_positive_absence() {
         runner.expect_run("ps -A", CmdOutput::success("1 1 S\n9000 9000 S\n"));
         runner.expect_run("ps -p 9000 -o lstart=", CmdOutput::success(BIRTH));
         runner.expect_run("stat=", CmdOutput::success("S"));
+        runner.expect_run("lstart=", CmdOutput::success(BIRTH));
+        runner.expect_run("stat=", CmdOutput::success("S"));
         runner.expect_run("/bin/kill -TERM -- -9000", CmdOutput::success(""));
+        runner.expect_run("lstart=", CmdOutput::success(BIRTH));
+        runner.expect_run("stat=", CmdOutput::success("S"));
         runner.expect_run("/bin/kill -KILL -- -9000", CmdOutput::success(""));
         if gone {
             absent_group(&mut runner);

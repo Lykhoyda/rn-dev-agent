@@ -306,7 +306,9 @@ async function openSession(
           target.metroPort,
           REACT_READY_TIMEOUT_MS,
           REACT_READY_POLL_MS,
+          stop,
         );
+        await cancelled();
         await cdp.connectExact(target.metroPort, { platform, bundleId: appId });
       },
       // The lease coordinates qaren processes only; a foreign Maestro or XCUITest driver is a probe.
@@ -377,6 +379,7 @@ async function openSession(
       ),
   });
   for (const action of WALK_DEV_SETTINGS) {
+    await cancelled();
     try {
       unwrap(await devSettings({ action }));
     } catch (error) {
