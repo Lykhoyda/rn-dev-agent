@@ -405,6 +405,66 @@ pub struct RunRecord {
     pub failure: Option<Failure>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<TerminalResult>,
+}
+
+// Written once, after video finalization and teardown; publication trusts nothing else.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalResult {
+    pub verdict: String,
+    pub cancelled: bool,
+    pub final_verification: FinalVerification,
+    pub ownership_proven: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinalVerification {
+    pub tested: String,
+    #[serde(rename = "match")]
+    pub matched: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+impl TerminalResult {
+    pub fn publication_refusal(&self) -> Option<Failure> {
+        let refuse = |code, detail: &str, next: &str| {
+            Some(Failure::new(
+                "publish",
+                code,
+                detail.to_string(),
+                next.to_string(),
+            ))
+        };
+        if self.cancelled {
+            return refuse(
+                FailureCode::RunCancelled,
+                "the run was cancelled before its result was final",
+                "re-run qaren pr; a cancelled run is never published",
+            );
+        }
+        if !self.final_verification.matched {
+            return refuse(
+                FailureCode::CandidateDrifted,
+                &format!(
+                    "the tested candidate {} did not verify unchanged at the end of the run",
+                    self.final_verification.tested
+                ),
+                "re-run qaren pr against an unchanged candidate",
+            );
+        }
+        if !self.ownership_proven {
+            return refuse(
+                FailureCode::OwnershipUnproven,
+                "the run's build, core or Metro processes were not proven gone at teardown",
+                "run qaren cleanup for this run, then re-run qaren pr",
+            );
+        }
+        None
+    }
 }
 
 pub fn validate_run_id(run_id: &str) -> Result<(), Failure> {

@@ -3770,6 +3770,12 @@ fn pr_walk_result(candidate_drift: bool) {
             FailureCode::CandidateDrifted
         );
         assert_eq!(receipt.ledger.as_ref().unwrap().verdict, "FAIL");
+        let terminal = RunRecord::load(&repo.join("runs"), &run_id())
+            .unwrap()
+            .terminal
+            .unwrap();
+        assert!(!terminal.final_verification.matched);
+        assert!(!terminal.cancelled);
         let mut publisher = qaren::exec::MockRunner::new();
         let published = qaren::publish::publish(
             &mut publisher,
@@ -4196,4 +4202,72 @@ fn login_keys_reach_the_core() {
         request["payload"]["loginMarker"],
         serde_json::json!({"id": "login-screen"})
     );
+}
+
+// R2: a cancel caught after the walk (video finalization, teardown) still decides the one terminal result.
+#[test]
+fn a_late_cancellation_is_the_terminal_result_and_publication_refuses() {
+    for (late_hint, ffmpeg_probed) in [("which ffmpeg", true), ("/bin/kill", false)] {
+        let (repo, app) = app_repo();
+        let wt = repo.join("runs").join(run_id()).join("wt");
+        let mut runner = PrRunner {
+            inner: MockRunner::new(),
+            app: app.clone(),
+            recorder_persisted_before_spawn: None,
+            fail_core_spawn: false,
+        };
+        let mock = &mut runner.inner;
+        script_pr_preflight(mock, &repo, &wt);
+        script_provision(mock);
+        script_pr_provenance_recheck(mock);
+        script_drift_status(mock);
+        script_recorder_start(mock);
+        mock.expect_spawn_piped("walk.js", 9000, &pr_pass_stdout(), Some(0));
+        script_core_identity(mock);
+        script_drift_status(mock);
+        mock.expect_run("git", CmdOutput::success(&format!("{PR_HEAD}\n")));
+        mock.expect_run(
+            "git",
+            CmdOutput::success("?? test-app/.qaren/actions/tasks.yaml\0"),
+        );
+        script_recorder_stop(mock);
+        script_pr_teardown_after_drift(mock);
+        mock.expect_run("worktree remove --force", CmdOutput::success(""));
+        if ffmpeg_probed {
+            mock.expect_run("which ffmpeg", CmdOutput::failed(1, ""));
+        }
+        mock.cancel_after = Some((late_hint.into(), "received SIGTERM".into()));
+
+        let receipt = run(&mut runner, &pr_request(&repo, &app));
+
+        assert_eq!(receipt.result, ReceiptResult::Refused, "{late_hint}");
+        assert_eq!(receipt.failure.unwrap().code, FailureCode::RunCancelled);
+        assert_eq!(runner.inner.remaining(), 0, "{late_hint}");
+        assert_eq!(
+            labels(&runner.inner)
+                .iter()
+                .filter(|label| label.as_str() == "gh-pr-view")
+                .count(),
+            1,
+            "no forward forge call after the cancel"
+        );
+        let runs = repo.join("runs");
+        let record = RunRecord::load(&runs, &run_id()).unwrap();
+        let terminal = record.terminal.expect("the terminal result is persisted");
+        assert!(terminal.cancelled, "{late_hint}");
+        assert_eq!(terminal.verdict, "PASS");
+        assert!(terminal.final_verification.matched);
+        assert_eq!(terminal.final_verification.tested, PR_HEAD);
+        assert_eq!(record.failure.unwrap().code, FailureCode::RunCancelled);
+        let mut publisher = qaren::exec::MockRunner::new();
+        let published = qaren::publish::publish(
+            &mut publisher,
+            &runs,
+            &run_id(),
+            &repo.join("verdict.md"),
+            &qaren::redact::MachineIdentity::default(),
+        );
+        assert_eq!(published.failure.unwrap().code, FailureCode::RunCancelled);
+        assert!(publisher.calls.is_empty());
+    }
 }

@@ -328,6 +328,7 @@ fn prepare_validated(
         resources: Default::default(),
         failure: None,
         history: Vec::new(),
+        terminal: None,
     };
     record.save(&args.runs_root)?;
 

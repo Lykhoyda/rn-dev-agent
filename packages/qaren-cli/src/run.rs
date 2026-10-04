@@ -18,8 +18,8 @@ use crate::receipt::{Receipt, ReceiptResult};
 use crate::record::{self, VideoStatus};
 use crate::report::{self, ReportInput};
 use crate::runrecord::{
-    capture_pid_identity, IosSimResource, Phase, PrWorktreeResource, Resources, RunRecord,
-    RUN_SCHEMA,
+    capture_pid_identity, FinalVerification, IosSimResource, Phase, PrWorktreeResource, Resources,
+    RunRecord, TerminalResult, RUN_SCHEMA,
 };
 use crate::scenario::{
     BuildSpec, CandidateSpec, Deadlines, DepsSpec, IosSpec, MetroSpec, Platform, Scenario,
@@ -337,6 +337,7 @@ fn run_inner(
         resources,
         failure: None,
         history: Vec::new(),
+        terminal: None,
     };
     if let Err(f) = record.save(&req.runs_root) {
         return Err(lease::release_or_annotate(&lease, f));
@@ -552,7 +553,14 @@ fn run_inner(
         ctx.notes.push(("core_exit".to_string(), exit.to_string()));
     }
 
-    match candidate::verify_unchanged(ctx.runner, &ctx.record.candidate) {
+    // Captured before teardown removes the candidate worktree.
+    let verified = candidate::verify_unchanged(ctx.runner, &ctx.record.candidate);
+    let final_verification = FinalVerification {
+        tested: ctx.record.candidate.git_sha.clone(),
+        matched: verified.is_ok(),
+        detail: verified.clone().err(),
+    };
+    match verified {
         Ok(()) => ctx
             .notes
             .push(("candidate_drift".to_string(), "none".to_string())),
@@ -613,7 +621,7 @@ fn run_inner(
         }
     }
 
-    let (mut cleanup, all_clean) = teardown(&mut ctx, outcome.group_survived);
+    let (mut cleanup, all_clean, ownership_proven) = teardown(&mut ctx, outcome.group_survived);
     cleanup.splice(..0, early_cleanup);
     ctx.mark("teardown", t);
 
@@ -632,7 +640,7 @@ fn run_inner(
         Err(f) => return Ok(ctx.fail(f)),
     };
 
-    let (result, failure) = match &outcome.verdict {
+    let (mut result, mut failure) = match &outcome.verdict {
         Verdict::Pass => (ReceiptResult::Pass, None),
         Verdict::Fail => {
             let failure = outcome.failure.clone().unwrap_or_else(|| {
@@ -663,20 +671,8 @@ fn run_inner(
             })),
         ),
     };
-    ctx.record.failure = failure.clone();
-    ctx.record.phase = if all_clean {
-        Phase::Cleaned
-    } else {
-        Phase::Walking
-    };
-    let at = timefmt::iso8601_utc(ctx.runner.now_epoch_ms());
-    let note: Vec<String> = cleanup.iter().map(|(n, o)| format!("{n}={o}")).collect();
-    ctx.record
-        .push_history(at, &format!("check finished: {}", note.join(" ")));
-    if let Err(f) = ctx.save() {
-        return Ok(ctx.fail(f));
-    }
     let mut tested_older_commit = None;
+    let mut published_video = None;
     if let Some(pr) = &pr_state {
         let video = video.unwrap_or_else(|| record::finalize(ctx.runner, &run_dir));
         ctx.notes.push(("video".to_string(), video.to_string()));
@@ -705,6 +701,40 @@ fn run_inner(
                 .notes
                 .push(("pr_head_recheck".to_string(), f.detail.to_string())),
         }
+        published_video = Some(video);
+    }
+
+    // The one terminal result: decided after video finalization and teardown, persisted once.
+    let cancelled = match ensure_running(ctx.runner, "finalize") {
+        Err(late) => {
+            if failure.as_ref().map(|f| f.code) != Some(FailureCode::RunCancelled) {
+                result = ReceiptResult::Refused;
+                failure = Some(late);
+            }
+            true
+        }
+        Ok(()) => failure.as_ref().map(|f| f.code) == Some(FailureCode::RunCancelled),
+    };
+    ctx.record.terminal = Some(TerminalResult {
+        verdict: outcome.ledger.verdict.clone(),
+        cancelled,
+        final_verification,
+        ownership_proven,
+    });
+    ctx.record.failure = failure.clone();
+    ctx.record.phase = if all_clean {
+        Phase::Cleaned
+    } else {
+        Phase::Walking
+    };
+    let at = timefmt::iso8601_utc(ctx.runner.now_epoch_ms());
+    let note: Vec<String> = cleanup.iter().map(|(n, o)| format!("{n}={o}")).collect();
+    ctx.record
+        .push_history(at, &format!("check finished: {}", note.join(" ")));
+    if let Err(f) = ctx.save() {
+        return Ok(ctx.fail(f));
+    }
+    if let (Some(pr), Some(video)) = (&pr_state, published_video) {
         let video_publication = outcome.ledger.video_publication.clone().unwrap_or_default();
         let pr_record = PrRunRecord {
             number: pr.info.number,
@@ -983,7 +1013,7 @@ fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
     let failure = ensure_running(ctx.runner, &failure.phase)
         .err()
         .unwrap_or(failure);
-    let (cleanup, _) = teardown(&mut ctx, false);
+    let (cleanup, _, _) = teardown(&mut ctx, false);
     let mut receipt = ctx.fail(failure);
     for (name, rendered) in cleanup {
         receipt.cleanup.insert(name, rendered);
@@ -991,7 +1021,8 @@ fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
     receipt
 }
 
-fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, bool) {
+// Returns rendered outcomes, whether every leg is clean, and whether the run's producers are proven gone.
+fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, bool, bool) {
     let mut outcomes: Vec<(String, Outcome)> = Vec::new();
     if let Some(outcome) =
         crate::commands::cleanup::cleanup_build(ctx.runner, &mut ctx.record, &ctx.runs_root)
@@ -1052,10 +1083,12 @@ fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, boo
         outcomes.push(("pr_worktree".to_string(), outcome));
     }
     let all_clean = outcomes.iter().all(|(_, o)| o.clean());
+    let producers_gone = crate::commands::cleanup::producers_quiescent(&outcomes);
     let _ = ctx.save();
     (
         outcomes.into_iter().map(|(n, o)| (n, o.render())).collect(),
         all_clean,
+        producers_gone,
     )
 }
 

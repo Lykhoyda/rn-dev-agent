@@ -689,13 +689,16 @@ fn publish_inner(
     let run_dir = RunRecord::run_dir(runs_root, run_id);
     let _lock = PublishLock::acquire(&run_dir)?;
     let run = RunRecord::load(runs_root, run_id)?;
-    if let Some(failure) = run.failure.filter(|f| {
-        matches!(
-            f.code,
-            FailureCode::CandidateDrifted | FailureCode::RunCancelled
+    let terminal = run.terminal.ok_or_else(|| {
+        Failure::new(
+            "publish",
+            FailureCode::RunRecordInvalid,
+            format!("run {run_id} has no final result; it did not finish"),
+            "re-run qaren pr; only a finished run can be published",
         )
-    }) {
-        return Err(failure);
+    })?;
+    if let Some(refusal) = terminal.publication_refusal() {
+        return Err(refusal);
     }
     let pr: PrRunRecord = read_json(&run_dir.join("pr.json"))?;
     let machine = &machine.with_values(&pr.identity_values);

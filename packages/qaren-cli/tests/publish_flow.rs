@@ -5,6 +5,7 @@ use qaren::publish::{publish, PrRunRecord, Publication};
 use qaren::receipt::ReceiptResult;
 use qaren::record::{VideoPublication, VideoStatus};
 use qaren::redact::MachineIdentity;
+use qaren::runrecord::{FinalVerification, TerminalResult};
 use std::path::{Path, PathBuf};
 
 const RUN: &str = "check-20261002T101500Z";
@@ -56,14 +57,14 @@ fn run_dir(cross_repository: bool) -> (PathBuf, PathBuf, PathBuf) {
     for sub in ["blocks", "media", "screenshots"] {
         std::fs::create_dir_all(dir.join(sub)).unwrap();
     }
-    common::base_record(
+    let mut record = common::base_record(
         &repo,
         &common::ios_scenario_yaml(8081),
         RUN,
         qaren::runrecord::Phase::Cleaned,
-    )
-    .save(&runs)
-    .unwrap();
+    );
+    record.terminal = Some(final_terminal());
+    record.save(&runs).unwrap();
     let pr = PrRunRecord {
         number: 12,
         url: "https://github.com/o/r/pull/12".into(),
@@ -104,6 +105,19 @@ fn run_dir(cross_repository: bool) -> (PathBuf, PathBuf, PathBuf) {
     let verdict = repo.join("verdict.md");
     std::fs::write(&verdict, "The Tasks tab is missing after the change.\n").unwrap();
     (runs, dir, verdict)
+}
+
+fn final_terminal() -> TerminalResult {
+    TerminalResult {
+        verdict: "FAIL".into(),
+        cancelled: false,
+        final_verification: FinalVerification {
+            tested: TESTED.into(),
+            matched: true,
+            detail: None,
+        },
+        ownership_proven: true,
+    }
 }
 
 fn view(labels: &str) -> CmdOutput {
@@ -193,12 +207,10 @@ fn cancelled_runs_refuse_new_and_resumed_publication_without_side_effects() {
     for resumed in [false, true] {
         let (runs, dir, verdict) = run_dir(false);
         let mut record = qaren::runrecord::RunRecord::load(&runs, RUN).unwrap();
-        record.failure = Some(qaren::failure::Failure::new(
-            "walk",
-            qaren::failure::FailureCode::RunCancelled,
-            "received SIGTERM",
-            "re-run the check",
-        ));
+        record.terminal = Some(TerminalResult {
+            cancelled: true,
+            ..final_terminal()
+        });
         record.save(&runs).unwrap();
         let actions = record
             .candidate
@@ -1971,4 +1983,41 @@ fn a_post_admission_interruption_withholds_the_copy_and_upload() {
         .iter()
         .any(|arg| arg.contains("video-published")));
     assert!(dir.join("media/video.mp4").is_file());
+}
+
+#[test]
+fn only_a_final_uncancelled_verified_owned_terminal_result_admits_publication() {
+    use qaren::failure::FailureCode;
+    let unverified = TerminalResult {
+        final_verification: FinalVerification {
+            matched: false,
+            detail: Some("checkout HEAD moved".into()),
+            ..final_terminal().final_verification
+        },
+        ..final_terminal()
+    };
+    let unowned = TerminalResult {
+        ownership_proven: false,
+        ..final_terminal()
+    };
+    let cancelled_and_changed = TerminalResult {
+        cancelled: true,
+        ..unverified.clone()
+    };
+    for (terminal, code) in [
+        (None, FailureCode::RunRecordInvalid),
+        (Some(cancelled_and_changed), FailureCode::RunCancelled),
+        (Some(unverified), FailureCode::CandidateDrifted),
+        (Some(unowned), FailureCode::OwnershipUnproven),
+    ] {
+        let (runs, dir, verdict) = run_dir(false);
+        let mut record = qaren::runrecord::RunRecord::load(&runs, RUN).unwrap();
+        record.terminal = terminal;
+        record.save(&runs).unwrap();
+        let mut runner = Git(MockRunner::new());
+        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+        assert_eq!(receipt.failure.as_ref().map(|f| f.code), Some(code));
+        assert!(runner.0.calls.is_empty(), "no forge or git effect may run");
+        assert!(!dir.join("publication.json").exists());
+    }
 }
