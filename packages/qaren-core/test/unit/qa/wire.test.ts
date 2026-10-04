@@ -12,6 +12,7 @@ import {
   readRequest,
   startupRow,
   verdictAgrees,
+  WireError,
 } from '../../../dist/qa/wire.js';
 import type { WireRequest } from '../../../dist/qa/wire.js';
 import { buildLedger } from '../../../dist/qa/ledger.js';
@@ -247,4 +248,30 @@ test('preflight accounting round-trips and rejects malformed or walk-scoped entr
     [{ ...preflightCalls[0], diagnostic: 42 }],
   ])
     assert.throws(() => parseRequest(encoded(calls)), /missing required fields/);
+});
+
+test('a login block needs a marker with exactly one of id or text', () => {
+  const line = (payload: object) =>
+    JSON.stringify({
+      v: 1,
+      runId: 'check-1',
+      seq: 1,
+      type: 'request',
+      payload: { ...request, ...payload },
+    });
+  const accepted = parseRequest(
+    line({ loginBlock: 'log-in', loginMarker: { id: 'login-screen' } }),
+  );
+  assert.equal(accepted.loginBlock, 'log-in');
+  assert.deepEqual(parseRequest(line({ loginMarker: { text: 'Sign in' } })).loginMarker, {
+    text: 'Sign in',
+  });
+  for (const bad of [
+    { loginBlock: 'log-in' },
+    { loginBlock: '../x', loginMarker: { id: 'a' } },
+    { loginBlock: 'log-in', loginMarker: { id: 'a', text: 'b' } },
+    { loginBlock: 'log-in', loginMarker: { id: '' } },
+    { loginMarker: { label: 'a' } },
+  ])
+    assert.throws(() => parseRequest(line(bad)), WireError);
 });

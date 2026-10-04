@@ -37,7 +37,8 @@ import { summarizeJev } from './ledger.js';
 import { redactApiKey } from '../util/redact.js';
 import { createStop, watchParent } from './stop.js';
 import { prove } from './prove.js';
-import { type ActResult, type WalkerDeps, runPlan } from './walker.js';
+import { type ActResult, type WalkerDeps, loginBlock, runPlan } from './walker.js';
+import { loadBlock, readBlock } from './blocks.js';
 import {
   type ResultPayload,
   type WireRequest,
@@ -163,8 +164,16 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
   return stop.track(handler).then(
     (result) => {
       try {
-        const { meta } = unwrap(result);
+        const { data, meta } = unwrap<{ executed?: boolean; tapped?: boolean }>(result);
         logActionSettle(meta);
+        if (data?.executed === false || data?.tapped === false)
+          return {
+            ok: false,
+            proven: false,
+            executed: false,
+            mutation: 'none',
+            error: 'the action did not execute',
+          };
         return { ok: true, proven };
       } catch (error) {
         logActionSettle(error instanceof HandlerError ? error.meta : undefined);
@@ -195,6 +204,21 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
       };
     },
   );
+}
+
+// A missing, unreadable or foreign login block is configured but cannot replay.
+function readLoginBlock(request: WireRequest): NonNullable<WalkerDeps['login']>['block'] {
+  if (!request.loginBlock) return undefined;
+  try {
+    const text = loadBlock(request.appRoot, request.loginBlock);
+    const stored = text === null ? undefined : readBlock(text);
+    if (!stored || 'invalid' in stored) return undefined;
+    if (stored.header.appId !== request.appId || stored.header.platform !== request.platform)
+      return undefined;
+    return loginBlock(request.loginBlock, stored);
+  } catch {
+    return undefined;
+  }
 }
 
 function logActionSettle(meta?: Record<string, unknown>): void {
@@ -357,6 +381,11 @@ async function openSession(
   const back = createDeviceBackHandler();
   const accept = createDeviceAcceptSystemDialogHandler();
   const dismiss = createDeviceDismissSystemDialogHandler();
+  const login = request.loginMarker
+    ? { marker: request.loginMarker, block: readLoginBlock(request) }
+    : undefined;
+  if (login && request.loginBlock && !login.block)
+    log(`login block ${request.loginBlock} is missing or unreadable; a login wall fails the step`);
 
   const deps: WalkerDeps = {
     judge: createJev({ now, timing }),
@@ -405,6 +434,8 @@ async function openSession(
     now,
     cancelled: () => stop.stopping,
     diagnostic: (event) => log(`timing ${JSON.stringify(event)}`),
+    hideDevMenu: () => act(() => devSettings({ action: 'hideDevMenu' }), false),
+    ...(login ? { login } : {}),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     row: emitRow,
     ...(platform === 'ios'

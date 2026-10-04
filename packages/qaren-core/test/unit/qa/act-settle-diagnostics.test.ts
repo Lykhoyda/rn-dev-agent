@@ -5,6 +5,7 @@ import { runInNewContext } from 'node:vm';
 import { extractMutationDisposition } from '../../../dist/handlers/device-interact.js';
 import { HandlerError, describeError, secureMaskedFill, unwrap } from '../../../dist/qa/adapt.js';
 import { isRecord } from '../../../dist/qa/questions.js';
+import { recover } from '../../../dist/qa/recover.js';
 import { createStop } from '../../../dist/qa/stop.js';
 import type { ActResult } from '../../../dist/qa/walker.js';
 import type { ToolResult } from '../../../dist/utils.js';
@@ -183,3 +184,25 @@ test('act marks only a stable secure-masked unverified fill as secure evidence',
     assert.equal(outcome.secureMasked === true, expected);
   }
 });
+
+for (const data of [{ tapped: false }, { executed: false }, { tapped: true, executed: false }]) {
+  test(`action adapter rejects non-execution ${JSON.stringify(data)}`, async () => {
+    const f = fixture();
+    const action = () =>
+      f.act(
+        async () => ({ content: [{ type: 'text', text: JSON.stringify({ ok: true, data }) }] }),
+        true,
+      );
+    const outcome = await action();
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.proven, false);
+    assert.equal(outcome.mutation, 'none');
+    for (const front of ['dialog', 'dev-menu'] as const) {
+      const recovery = await recover(
+        { elements: [], visibleText: [], front },
+        { dialog: action, hideDevMenu: action },
+      );
+      assert.ok(recovery && 'fail' in recovery);
+    }
+  });
+}

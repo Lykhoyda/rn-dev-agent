@@ -24,6 +24,7 @@ function completion(value: unknown, id?: string): Record<string, unknown> {
 function publicObservation(tree: unknown): ReactObservation {
   if (typeof tree !== 'string' || tree.length > 999999) throw new PrivateInputCaptureError();
   const value: unknown = JSON.parse(tree);
+  if (isRecord(value) && value.warning === 'APP_HAS_REDBOX') return { renderError: true };
   if (
     !isRecord(value) ||
     !Array.isArray(value.interactive) ||

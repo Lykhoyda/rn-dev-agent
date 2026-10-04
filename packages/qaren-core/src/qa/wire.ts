@@ -4,6 +4,8 @@ import type { Ledger, LedgerRow, WalkResult } from './ledger.js';
 import { ledgerWithoutResult } from './ledger.js';
 import type { PreparedPlan } from './plan.js';
 import { type JevCall, isRecord } from './questions.js';
+import type { LoginMarker } from './recover.js';
+import { isValidActionId } from '../domain/path-safety.js';
 
 export const WIRE_VERSION = 1 as const;
 
@@ -37,6 +39,20 @@ export interface WireRequest {
   runDir: string;
   lease: string;
   target: WireTarget;
+  loginBlock?: string;
+  loginMarker?: LoginMarker;
+}
+
+// Exactly one of id or text, never empty.
+function validMarker(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  return (
+    keys.length === 1 &&
+    (keys[0] === 'id' || keys[0] === 'text') &&
+    typeof value[keys[0]] === 'string' &&
+    (value[keys[0]] as string).length > 0
+  );
 }
 
 export interface Refusal extends Partial<Omit<Ledger, 'verdict'>> {
@@ -177,7 +193,9 @@ export function parseRequest(line: string): WireRequest {
       (typeof adb !== 'object' ||
         adb === null ||
         typeof adb.serial !== 'string' ||
-        (adb.serverSocket !== undefined && typeof adb.serverSocket !== 'string')));
+        (adb.serverSocket !== undefined && typeof adb.serverSocket !== 'string'))) ||
+    (p.loginBlock !== undefined && (!isValidActionId(p.loginBlock) || !p.loginMarker)) ||
+    (p.loginMarker !== undefined && !validMarker(p.loginMarker));
   if (bad) throw new WireError('the request payload is missing required fields');
   if (p.runId !== envelope.runId) throw new WireError('the request payload names another run');
   return p as WireRequest;

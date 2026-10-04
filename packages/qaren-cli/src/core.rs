@@ -30,6 +30,10 @@ pub struct CoreRequest {
     pub app_root: PathBuf,
     pub run_dir: PathBuf,
     pub lease: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login_block: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login_marker: Option<crate::config::LoginMarker>,
     pub target: CoreTarget,
 }
 
@@ -186,6 +190,35 @@ pub struct Row {
     pub timing: Option<RowTiming>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selector: Option<Selector>,
+}
+
+impl Row {
+    fn redact_evidence(&mut self) {
+        if let Some(selector) = &mut self.selector {
+            for text in [&mut selector.id, &mut selector.text].into_iter().flatten() {
+                *text = redact_secrets(text);
+            }
+        }
+        for text in [&mut self.text, &mut self.reason].into_iter().flatten() {
+            *text = redact_secrets(text);
+        }
+    }
+}
+
+impl Ledger {
+    fn redact_evidence(&mut self) {
+        for row in &mut self.steps {
+            row.redact_evidence();
+        }
+        for block in &mut self.blocks {
+            if let Some(text) = &mut block.unsavable {
+                *text = redact_secrets(text);
+            }
+        }
+        if let Some(failure) = &mut self.failure {
+            failure.seen = redact_secrets(&failure.seen);
+        }
+    }
 }
 
 // Timing is diagnostics only: a malformed value is dropped, never a reason to reject the row or ledger.
@@ -497,7 +530,8 @@ impl Inbox {
                     return false;
                 }
                 match serde_json::from_value::<Row>(payload.clone()) {
-                    Ok(row) => {
+                    Ok(mut row) => {
+                        row.redact_evidence();
                         crate::progress::row(&row);
                         self.rows.push(row);
                         true
@@ -567,7 +601,7 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
         }
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(Msg::Line(line)) => {
-                if inbox.accept(&crate::redact::redact_api_key(&line)) {
+                if inbox.accept(&line) {
                     last_progress = runner.monotonic_ms();
                 }
             }
@@ -747,12 +781,11 @@ fn interpret(
         );
     }
     if verdict == "REFUSED" {
-        let code = redact_secrets(
-            result
-                .get("code")
-                .and_then(Value::as_str)
-                .unwrap_or("CORE_REFUSED"),
-        );
+        let code = (result
+            .get("code")
+            .and_then(Value::as_str)
+            .unwrap_or("CORE_REFUSED"))
+        .to_string();
         let message = redact_secrets(
             result
                 .get("message")
@@ -774,7 +807,8 @@ fn interpret(
             "result line has an invalid ledger path or block".to_string(),
             FailureCode::CoreResultMissing,
         ),
-        Ok(ledger) => {
+        Ok(mut ledger) => {
+            ledger.redact_evidence();
             let verdict = if verdict == "PASS" {
                 Verdict::Pass
             } else {
@@ -855,6 +889,7 @@ fn refusal_ledger(result: &Value, rows: &[Row], seen: &str) -> Result<Ledger, St
     if result.get("failure").is_none() {
         ledger.failure = Some(synthesized_failure(&ledger.steps, seen));
     }
+    ledger.redact_evidence();
     Ok(ledger)
 }
 

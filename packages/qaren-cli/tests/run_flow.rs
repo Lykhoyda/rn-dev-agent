@@ -4164,3 +4164,36 @@ fn cancelled_pr_startup_never_dispatches_the_core_and_cleans_up() {
         assert_eq!(runner.inner.remaining(), 0);
     }
 }
+
+#[test]
+fn login_keys_reach_the_core() {
+    let (repo, app) = app_repo();
+    common::write_ios_workspace(&app, "ios/Native App.xcworkspace");
+    configure_workspace(&app, "ios/Native App.xcworkspace", "Native Debug");
+    let config = app.join(".qaren/config.yaml");
+    let mut yaml = std::fs::read_to_string(&config).unwrap();
+    yaml.push_str("loginBlock: log-in\nloginMarker:\n  id: login-screen\n");
+    std::fs::write(&config, yaml).unwrap();
+    let mut mock = MockRunner::new();
+    script_preflight(&mut mock, &repo);
+    mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+    script_provision_build(&mut mock, "xcodebuild", common::IOS_NATIVE_FILES);
+    script_drift_status(&mut mock);
+    mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
+    script_core_identity(&mut mock);
+    script_teardown(&mut mock);
+
+    let receipt = run(&mut mock, &request(&repo, &app, 30));
+
+    assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
+    let request = (0..mock.piped_stdin.len())
+        .map(|i| mock.piped_stdin_text(i))
+        .filter_map(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .find(|value| value["payload"].get("plan").is_some())
+        .unwrap();
+    assert_eq!(request["payload"]["loginBlock"], "log-in");
+    assert_eq!(
+        request["payload"]["loginMarker"],
+        serde_json::json!({"id": "login-screen"})
+    );
+}

@@ -510,6 +510,8 @@ fn run_inner(
         app_root: app_root.clone(),
         run_dir: run_dir.clone(),
         lease: lease.wire(),
+        login_block: config.login_block.clone(),
+        login_marker: config.login_marker.clone(),
         target: CoreTarget {
             device_id: device.id.clone(),
             metro_port: config.metro_port,

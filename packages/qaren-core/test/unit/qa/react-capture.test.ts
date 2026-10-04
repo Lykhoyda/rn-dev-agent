@@ -10,7 +10,7 @@ import { captureScreen } from '../../../dist/qa/capture.js';
 import { PrivateInputCaptureError } from '../../../dist/qa/private-input.js';
 import { inputValues } from '../../../dist/qa/privacy.js';
 import type { NativeNode } from '../../../dist/qa/screen.js';
-import { nativeCapture } from './platform-presence-fixtures.ts';
+import { attested, nativeCapture } from './platform-presence-fixtures.ts';
 
 const sentinel = 'PRIVATE_TEST_INPUT_7abf';
 const id = '1abcd';
@@ -607,4 +607,48 @@ test('the hidden digest fact survives capture and a malformed one refuses', asyn
   const entry = { role: 'button', testID: 'home-btn', hidden: true };
   assert.deepEqual((await capture(entry)).interactive, [entry]);
   await assert.rejects(capture({ ...entry, hidden: 'yes' }), PrivateInputCaptureError);
+});
+
+test('a QA render-error observation survives capture without exporting private helper fields', async () => {
+  const observation = await captureQaReact({
+    async withPrivateHelperWorld(read) {
+      return read(async () => ({
+        v: 1,
+        id,
+        state: 'ready',
+        tree: JSON.stringify({
+          warning: 'APP_HAS_REDBOX',
+          message: sentinel,
+        }),
+      }));
+    },
+  });
+  assert.deepEqual(observation, { renderError: true });
+  const screen = await captureScreen({
+    requirePrivateInputs: true,
+    native: async () =>
+      attested([
+        { ref: '@error', type: 'StaticText', label: 'Render Error: boom', hittable: false },
+        { ref: '@input', type: 'TextField', value: sentinel, secure: true, hittable: true },
+      ]),
+    react: async () => observation,
+  });
+  assert.equal(screen.renderError, true);
+  assert.ok(screen.visibleText.some((text) => text.includes('boom')));
+  assert.ok(!JSON.stringify(screen).includes(sentinel));
+});
+
+test('the injected producer reports a render error in literal and phrase capture modes', async () => {
+  for (const typography of [false, true]) {
+    const sandbox = createSandbox({ fiberRoot: buildFiber({ name: 'RedBox' }) });
+    const observation = await captureQaReact(
+      {
+        async withPrivateHelperWorld(read) {
+          return read(async (expression) => await vm.runInNewContext(expression, sandbox));
+        },
+      },
+      typography,
+    );
+    assert.deepEqual(observation, { renderError: true });
+  }
 });

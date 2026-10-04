@@ -2192,15 +2192,13 @@ pub(crate) fn build_and_ready(ctx: &mut Ctx) -> Result<(), Failure> {
             std::fs::create_dir(&output).map_err(|_| {
                 build_failure(ctx, "cannot exclusively create iOS build output directory")
             })?;
-            run_finite_build(
-                ctx,
-                &ios::build_spec(
-                    &project_root,
-                    &output,
-                    deadline,
-                    ctx.record.scenario.build.ios_workspace.as_ref(),
-                ),
-            )?;
+            let build = ios::build_spec(
+                &project_root,
+                &output,
+                deadline,
+                ctx.record.scenario.build.ios_workspace.as_ref(),
+            );
+            run_finite_build(ctx, &build)?;
             if ctx.record.scenario.build.ios_workspace.is_some() {
                 let built = ios::built_app(&ios::workspace_products(&output))
                     .map_err(|e| build_failure(ctx, e))?;

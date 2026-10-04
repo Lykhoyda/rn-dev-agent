@@ -603,6 +603,11 @@ export const INJECTED_HELPERS = `
       slot.capture = createTypographyCapture(start, inputs, typography === true);
       slot.timer = setTimeout(function() { releaseQaCapture(slot); }, 1500);
       var tree = getTree({ interactiveOnly: true, semanticEvidence: true, typographyEvidence: typography === true }, slot.capture);
+      if (slot.capture.renderError === true) {
+        var terminal = { v: 1, id: slot.id, state: 'ready', tree: JSON.stringify({ warning: 'APP_HAS_REDBOX' }) };
+        releaseQaCapture(slot);
+        return terminal;
+      }
       if (tree && typeof tree.then === 'function') tree.then(completed, function() { completed(null); });
       else completed(tree);
       if (!inputs.complete) {
@@ -1195,6 +1200,7 @@ export const INJECTED_HELPERS = `
       if (hasErrorOverlay(overlayRoots[oi].fiber)) overlayFound = true;
     }
     if (overlayFound) {
+      if (privateCapture) privateCapture.renderError = true;
       return earlyTree({
         warning: 'APP_HAS_REDBOX',
         message: 'App is showing an error screen. Use cdp_error_log to read the error, fix the code, then cdp_reload.',

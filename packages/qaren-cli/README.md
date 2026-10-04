@@ -409,8 +409,8 @@ longer resolves uniquely before that step authorizes any mutation re-walks
 the block from that line; earlier completed steps are kept. Once that step authorizes
 a mutation, its selector failure is terminal. On PASS only the commands under that
 line and later ones are rewritten, and every `✓` comment stays byte-identical. A failing check is a FAIL and
-is never re-walked or rewritten. Timeout and ambiguous screen-movement recovery
-remain deferred; app-process changes stay terminal. A failing block is never saved;
+is never re-walked or rewritten. Timeout recovery remains deferred (see
+[Step recovery](#step-recovery)); app-process changes stay terminal. A failing block is never saved;
 blocks that passed earlier in the run remain saved. A step without a `testID`
 or label, a phrase wait, a fill into a secure or private input, or an attempt at
 [keyboard fallback](#fill-verification-and-keyboard-fallback) leaves the block
@@ -482,6 +482,41 @@ captures (a crash or restart), or a snapshot or platform-presence capture report
 `NATIVE_CAPTURE_UNAVAILABLE` refusal. An initial capture that does not report the process
 refuses `APP_PROCESS_UNKNOWN`; a runner built from an older checkout needs a rebuild
 (`RN_RUNNER_BUILD=local`).
+
+### Step recovery
+
+An observed React Native red box fails the current step immediately, including
+during login replay, with safely masked visible error-screen text in `failure.seen`.
+It is checked before accepting a step or refusing incomplete semantic evidence,
+and never triggers recovery.
+
+An action whose screen did not change after its one retry, a step target that
+does not resolve, or a phrase check still unsure after its re-ask
+gets at most one deterministic recovery, then the step runs once more from a fresh
+capture. The order is owned by [`recover.ts`](../qaren-core/src/qa/recover.ts): a
+recognized system dialog in front is accepted; the dev menu in front is hidden;
+and when `loginMarker`
+(`{ id: <testID> }` or `{ text: <label> }`) is on screen, the
+saved block `loginBlock` (`.qaren/actions/<loginBlock>.yaml`, saved for this app and
+platform) replays by its stored identities. The two keys are set together, with
+exactly one nonempty marker `id` or `text`. A missing, unreadable or incompatible
+login block fails when login recovery is needed. A second
+failure of the same step fails it, recovery never runs inside the login replay, and
+capture, Jev, process, replay-miss and cancellation refusals are never recovered. The
+ledger's `recoveries` counts recoveries that let the step retry; `escapes` and `llmTurns`
+stay `0`. Login fills are masked like plan fills and withhold the video.
+
+Recovery requires admitted screen evidence. iOS phrase steps behind a system or
+permission alert can refuse `SCREEN_EVIDENCE_INCOMPLETE` before recovery because
+platform presence excludes that system surface; phrase-step dialog recovery is
+best-effort. Android dialog recovery is not supported by `qaren check` in this
+release (see [Check a plan](#check-a-plan)). An action reporting `tapped: false`
+or `executed: false` establishes no action proof and cannot count as a recovery.
+
+Before walking, QaReN attempts to hide the Expo floating gear, disable the dev
+menu and hide an open menu. Setup failures, including unverified gear hiding,
+are logged and walking continues; this does not prove that developer UI is absent
+from captured evidence. A non-executing menu hide during recovery fails the step.
 
 ### Walk timing
 

@@ -1,6 +1,6 @@
 use crate::failure::{Failure, FailureCode};
 use crate::scenario::{require_launch_scheme, BuildOwner, IosWorkspaceBuild, Platform};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub const DEFAULT_CONFIG_PATH: &str = ".qaren/config.yaml";
@@ -23,6 +23,28 @@ pub struct CheckConfig {
     pub node_path: Option<String>,
     #[serde(default)]
     pub dev_client_scheme: Option<String>,
+    #[serde(default)]
+    pub login_block: Option<String>,
+    #[serde(default)]
+    pub login_marker: Option<LoginMarker>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoginMarker {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+// The core's action-ID grammar: the block is read from .qaren/actions/<slug>.yaml.
+fn valid_action_id(slug: &str) -> bool {
+    let mut bytes = slug.bytes();
+    slug.len() <= 64
+        && !slug.contains("..")
+        && bytes.next().is_some_and(|b| b.is_ascii_alphanumeric())
+        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -77,7 +99,7 @@ impl CheckConfig {
                 "config",
                 FailureCode::ScenarioInvalid,
                 format!("{} does not parse: {e}", path.display()),
-                "fix .qaren/config.yaml (keys: appId, packageManager, metroPort, ios, android, nodePath, devClientScheme)",
+                "fix .qaren/config.yaml (keys: appId, packageManager, metroPort, ios, android, nodePath, devClientScheme, loginBlock, loginMarker)",
             )
         })?;
         config.validate(path)?;
@@ -116,6 +138,30 @@ impl CheckConfig {
                 return Err(invalid(format!(
                     "nodePath {node:?} must be an absolute path"
                 )));
+            }
+        }
+        if self.login_block.is_some() != self.login_marker.is_some() {
+            return Err(invalid(
+                "loginBlock and loginMarker must be set together".to_string(),
+            ));
+        }
+        if let Some(slug) = &self.login_block {
+            if !valid_action_id(slug) {
+                return Err(invalid(format!(
+                    "loginBlock {slug:?} is not an action slug ([A-Za-z0-9][A-Za-z0-9_.-]*, at most 64, no \"..\")"
+                )));
+            }
+        }
+        if let Some(marker) = &self.login_marker {
+            let one = match (&marker.id, &marker.text) {
+                (Some(value), None) | (None, Some(value)) => !value.is_empty(),
+                _ => false,
+            };
+            if !one {
+                return Err(invalid(
+                    "loginMarker needs exactly one non-empty `id` (testID) or `text` (label)"
+                        .to_string(),
+                ));
             }
         }
         Ok(())
