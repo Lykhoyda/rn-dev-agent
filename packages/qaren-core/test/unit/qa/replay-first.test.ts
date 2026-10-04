@@ -16,10 +16,11 @@ import type { Block } from '../../../dist/qa/plan.js';
 import type { Element, Screen } from '../../../dist/qa/screen.js';
 import { join as joinScreen } from '../../../dist/qa/screen.js';
 import { runPlan, walkBlock, type BlockStore } from '../../../dist/qa/walker.js';
-import type { Ledger, WalkResult } from '../../../dist/qa/ledger.js';
+import type { Ledger, LedgerRow, WalkResult } from '../../../dist/qa/ledger.js';
 import { element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
 import { AppProcessGoneError } from '../../../dist/qa/capture.js';
 import { captureInputPrivacy, isPrivateInput } from '../../../dist/qa/privacy.js';
+import { serializeBlock, writeBlock } from '../../../dist/qa/blocks.js';
 
 const literal = readFileSync(new URL('../../fixtures/plans/literal.md', import.meta.url), 'utf8');
 const literalLabel = literal.replace('2. Tap "onboarding-done"', '2. Tap "Done"');
@@ -93,6 +94,17 @@ async function run(markdown: string, appRoot: string, options?: AppOptions) {
 function ledger(result: WalkResult): Ledger {
   assert.notEqual(result.verdict, 'REFUSED', JSON.stringify(result));
   return result as Ledger;
+}
+
+function seedStoredAction(dir: string, block: Block, rows: LedgerRow[]): void {
+  const lines = new Set(block.items.map((item) => item.line));
+  const serialized = serializeBlock(
+    block,
+    rows.filter((row) => lines.has(row.line)).map((row) => ({ ...row, block: block.slug })),
+    store(dir),
+  );
+  assert.ok('yaml' in serialized, JSON.stringify(serialized));
+  writeBlock(dir, block.slug, serialized.yaml);
 }
 
 test('first run walks, passes and writes the block', async () => {
@@ -440,15 +452,15 @@ test('a fill into a secure input leaves its block unsaved with a value-free reas
   assert.equal(existsSync(join(dir, '.qaren', 'actions', 'save-a-pin.yaml')), false);
 });
 
-test('an ordinary fill keeps its plan literal in the saved block', async () => {
+test('an ordinary long fill passes but its protected plan literal is not saved', async () => {
   const dir = root();
   const result = ledger(await runPlan(blocks(formPlan), form(false).deps, [], store(dir)));
   assert.equal(result.verdict, 'PASS', JSON.stringify(result.failure));
-  assert.deepEqual(result.blocksWritten, ['save-a-pin']);
-  assert.match(
-    readFileSync(join(dir, '.qaren', 'actions', 'save-a-pin.yaml'), 'utf8'),
-    /- tapOn: \{ id: "pin-input" \}\n- inputText: "4711"\n/,
-  );
+  assert.deepEqual(result.blocksWritten, []);
+  assert.equal(result.blocks[0].saved, false);
+  assert.equal(result.blocks[0].unsavable, 'contains a protected plan-typed value');
+  assert.equal(existsSync(join(dir, '.qaren', 'actions', 'save-a-pin.yaml')), false);
+  assert.equal(JSON.stringify(result).includes('4711'), false);
 });
 
 for (const representation of ['title', 'comment', 'assertion'] as const) {
@@ -479,16 +491,16 @@ for (const representation of ['title', 'comment', 'assertion'] as const) {
       const path = join(dir, '.qaren', 'actions', `${later.slug}.yaml`);
       let before: string | undefined;
       if (source === 'patched') {
-        const initial = ledger(await runPlan(plan, fake('finish-old', false).deps, [], store(dir)));
+        const initial = ledger(await runPlan(plan, fake('finish-old', false).deps));
         assert.equal(initial.verdict, 'PASS');
-        assert.deepEqual(initial.blocksWritten, ['enter-pin', later.slug]);
+        for (const block of plan) seedStoredAction(dir, block, initial.steps);
         before = readFileSync(path, 'utf8');
       }
       const result = ledger(await runPlan(plan, fake('finish-new').deps, [], store(dir)));
       assert.equal(result.verdict, 'PASS', JSON.stringify(result.failure));
       assert.equal(result.blocks[0].saved, false);
       assert.deepEqual(result.blocks[1], {
-        key: later.slug,
+        key: representation === 'title' ? '•••' : later.slug,
         outcome: 'pass',
         source,
         saved: false,
@@ -671,8 +683,9 @@ for (const verb of [
 
 test('private-input replay PASS reports withholding without changing the saved action', async () => {
   const dir = root();
-  const ordinary = ledger(await runPlan(blocks(formPlan), form(false).deps, [], store(dir)));
+  const ordinary = ledger(await runPlan(blocks(formPlan), form(false).deps));
   assert.equal(ordinary.verdict, 'PASS');
+  seedStoredAction(dir, blocks(formPlan)[0], ordinary.steps);
   const path = join(dir, '.qaren/actions/save-a-pin.yaml');
   const before = readFileSync(path, 'utf8');
   const replay = ledger(await runPlan(blocks(formPlan), form(true).deps, [], store(dir)));
@@ -698,7 +711,9 @@ test('stored fill refresh before authorization re-walks without repeating earlie
     '1. Type "4711" into "pin-input"',
     '1. Back\n2. Type "4711" into "PIN"',
   );
-  await runPlan(blocks(plan), form(false).deps, [], store(dir));
+  const initial = ledger(await runPlan(blocks(plan), form(false).deps));
+  assert.equal(initial.verdict, 'PASS');
+  seedStoredAction(dir, blocks(plan)[0], initial.steps);
   const fake = form(false);
   const capture = fake.deps.captureScreen;
   let drift = false;

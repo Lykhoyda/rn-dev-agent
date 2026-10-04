@@ -392,7 +392,6 @@ fn evidence_documents_and_reports_still_withhold_opaque_output() {
             platform: "ios",
             app_id: "app",
             device: "device",
-            plan: "",
             ledger: &ledger,
         },
     )

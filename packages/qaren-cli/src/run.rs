@@ -635,7 +635,6 @@ fn run_inner(
             platform: platform_str(req.platform),
             app_id: &config.app_id,
             device: &device.name,
-            plan: &plan,
             ledger: &outcome.ledger,
         },
     ) {

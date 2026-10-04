@@ -93,7 +93,7 @@ test('a changed screen after a press is done: never re-dispatched', async () => 
   assert.equal(outcome.block.outcome, 'pass');
   assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
   assert.deepEqual(
-    f.rows.map((r) => [r.line, r.kind, r.attempt, r.outcome, r.ref, r.screenshot]),
+    outcome.rows.map((r) => [r.line, r.kind, r.attempt, r.outcome, r.ref, r.screenshot]),
     [
       [1, 'step', 1, 'pass', '@e0', 'screenshots/01-line1.png'],
       [2, 'check', 1, 'pass', undefined, 'screenshots/02-line2.png'],
@@ -458,7 +458,7 @@ test('a fill row never carries the typed value in its text', async () => {
   const f = fake([input, screen(['Password', 'Next'])]);
   const outcome = await walkBlock(block('1. Type "hunter2" into "Password"\n'), f.deps);
   assert.equal(outcome.block.outcome, 'pass');
-  assert.equal(f.rows[0].text, '1. Type "•••" into "Password"');
+  assert.equal(outcome.rows[0].text, '1. Type "•••" into "Password"');
   assert.equal(JSON.stringify(f.rows).includes('hunter2'), false);
 });
 
@@ -481,12 +481,12 @@ test('fill masking covers curly quotes and leaves a short value elsewhere on the
     ],
   });
   const curly = fake([input('Token'), screen(['Token', 'Next'])]);
-  await walkBlock(block('1. Type “s3cret” into "Token"\n'), curly.deps);
-  assert.equal(curly.rows[0].text, '1. Type “•••” into "Token"');
+  const curlyOutcome = await walkBlock(block('1. Type “s3cret” into "Token"\n'), curly.deps);
+  assert.equal(curlyOutcome.rows[0].text, '1. Type “•••” into "Token"');
 
   const short = fake([input('address1'), screen(['address1', 'Next'])]);
-  await walkBlock(block('1. Type "1" into "address1"\n'), short.deps);
-  assert.equal(short.rows[0].text, '1. Type "•••" into "address1"');
+  const shortOutcome = await walkBlock(block('1. Type "1" into "address1"\n'), short.deps);
+  assert.equal(shortOutcome.rows[0].text, '1. Type "•••" into "address1"');
 });
 
 test('a failing fill keeps the typed value out of the reason and the evidence line', async () => {

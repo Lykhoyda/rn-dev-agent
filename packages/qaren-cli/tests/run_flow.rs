@@ -1034,11 +1034,24 @@ fn row(line: u64, kind: &str) -> String {
     )
 }
 
+// Streamed rows are value-free; only the result ledger carries the core's projected text.
+fn projected(row: &str, text: &str) -> String {
+    format!(
+        "{},\"text\":{}}}",
+        row.trim_end_matches('}'),
+        serde_json::to_string(text).unwrap()
+    )
+}
+
 fn pass_stdout() -> String {
     let rows = [row(1, "step"), row(2, "check")];
+    let steps = [
+        projected(&rows[0], "1. Tap \"Tasks\""),
+        projected(&rows[1], "✓ \"Tasks\""),
+    ];
     let ledger = format!(
         r#"{{"verdict":"PASS","path":"walk","blocks":[{{"key":"plan","outcome":"pass","source":"discovered"}}],"steps":[{}],"jev":{{"calls":0,"medianMs":0}},"llmTurns":0,"escapes":0,"recoveries":0}}"#,
-        rows.join(",")
+        steps.join(",")
     );
     format!(
         "{}\n{}\n{}\n",
@@ -3737,7 +3750,6 @@ fn cancelled_pr_walks_with_or_without_source_drift_cannot_publish() {
             &mut publisher,
             &runs,
             &run_id(),
-            &repo.join("verdict.md"),
             &qaren::redact::MachineIdentity::default(),
         );
         assert_eq!(published.result, ReceiptResult::Refused);
@@ -3807,7 +3819,6 @@ fn pr_walk_result(candidate_drift: bool) {
             &mut publisher,
             &repo.join("runs"),
             &run_id(),
-            &repo.join("verdict.md"),
             &qaren::redact::MachineIdentity::default(),
         );
         assert_eq!(published.result, ReceiptResult::Failed);
@@ -4319,7 +4330,6 @@ fn a_late_cancellation_is_the_terminal_result_and_publication_refuses() {
             &mut publisher,
             &runs,
             &run_id(),
-            &repo.join("verdict.md"),
             &qaren::redact::MachineIdentity::default(),
         );
         assert_eq!(published.failure.unwrap().code, FailureCode::RunCancelled);
@@ -4630,9 +4640,45 @@ fn cancellation_during_terminal_save_withholds_the_publish_handoff() {
         &mut publisher,
         &repo.join("runs"),
         &run_id(),
-        &repo.join("verdict.md"),
         &qaren::redact::MachineIdentity::default(),
     );
     assert_eq!(receipt.failure.unwrap().code, FailureCode::RunCancelled);
     assert!(publisher.calls.is_empty());
+}
+
+#[test]
+fn a_walk_without_a_result_never_renders_plan_text_into_durable_sinks() {
+    let (repo, app) = app_repo();
+    std::fs::write(
+        app.join("plan.md"),
+        "1. Fill \"pin\" with \"hunter-canary-77\"\n✓ \"Tasks\"\n",
+    )
+    .unwrap();
+    let mut mock = MockRunner::new();
+    script_preflight(&mut mock, &repo);
+    script_provision(&mut mock);
+    let one_row = format!(
+        "{}\n{}\n",
+        envelope(2, "admitted", "{}"),
+        envelope(3, "row", &row(1, "step"))
+    );
+    script_drift_status(&mut mock);
+    mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
+    script_core_identity(&mut mock);
+    script_teardown(&mut mock);
+
+    let receipt = run(&mut mock, &request(&repo, &app, 5));
+
+    assert_eq!(receipt.result, ReceiptResult::Fail);
+    let run_dir = repo.join("runs").join(run_id());
+    let report = std::fs::read_to_string(run_dir.join("report.md")).unwrap();
+    let ledger = std::fs::read_to_string(run_dir.join("ledger.json")).unwrap();
+    for sink in [&report, &ledger, &receipt.to_json()] {
+        assert!(!sink.contains("hunter-canary-77"), "{sink}");
+        assert!(!sink.contains("Fill \\\"pin\\\""), "{sink}");
+    }
+    assert!(
+        report.contains("- ✗ line 1\n") || report.contains("- ✓ line 1\n"),
+        "{report}"
+    );
 }

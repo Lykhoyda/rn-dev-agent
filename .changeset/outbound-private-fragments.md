@@ -2,4 +2,4 @@
 "qaren": patch
 ---
 
-Mask protected values, long fragments, adjacent character boxes and short-code characters in reports and outbound judgments without treating concealed fragments as assertion evidence.
+Project protected values and geometric code rows without treating hidden content as assertion evidence.

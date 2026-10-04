@@ -24,6 +24,11 @@ import {
   writeBlock,
 } from '../../../dist/qa/blocks.js';
 import { parseM7Header } from '../../../dist/domain/reusable-action.js';
+import { ObservedPrivacy, type PrivateSet } from '../../../dist/qa/privacy.js';
+
+const secrets = (...values: string[]): PrivateSet => ({
+  values: values.map((text) => ({ text, provenance: 'secret' })),
+});
 
 const literal = readFileSync(new URL('../../fixtures/plans/literal.md', import.meta.url), 'utf8');
 
@@ -68,14 +73,14 @@ test('serialization withholds protected semantic values before YAML escaping', (
     const check = block.items[0];
     assert.equal(check.kind, 'check');
     if (check.kind === 'check') check.text = value;
-    assert.deepEqual(serializeBlock(block, passRows(block, {}), ios, [value]), {
+    assert.deepEqual(serializeBlock(block, passRows(block, {}), ios, secrets(value)), {
       unsavable: 'contains a protected plan-typed value',
     });
     assert.ok('yaml' in serializeBlock(block, passRows(block, {}), ios));
   }
 });
 
-test('serialization withholds protected fragments in metadata, plan text and selectors', () => {
+test('serialization preserves unrelated fragments in metadata, plan text and selectors', () => {
   for (const field of ['appId', 'slug', 'title', 'planHash', 'raw', 'text', 'id', 'label']) {
     for (const [secret, fragment] of [
       ['existing-secret', 'secr'],
@@ -95,9 +100,8 @@ test('serialization withholds protected fragments in metadata, plan text and sel
       } else rows[0].selector = field === 'id' ? { id: fragment } : { text: fragment };
       if (field === 'slug') rows.forEach((row) => (row.block = block.slug));
       const before = structuredClone({ block, rows, meta });
-      assert.deepEqual(
-        serializeBlock(block, rows, meta, [secret]),
-        { unsavable: 'contains a protected plan-typed value' },
+      assert.ok(
+        'yaml' in serializeBlock(block, rows, meta, secrets(secret)),
         `${field}: ${secret}`,
       );
       assert.deepEqual({ block, rows, meta }, before);
@@ -109,7 +113,7 @@ test('serialization withholds protected fragments in metadata, plan text and sel
 test('serialization admission checks the final emitted YAML', () => {
   const block = blockOf('## QA\n\n### Confirm\n1. Wait for "Saved" to appear\n');
   const rows = passRows(block, { [block.items[0].line]: { text: 'Saved' } });
-  assert.deepEqual(serializeBlock(block, rows, ios, ['15000']), {
+  assert.deepEqual(serializeBlock(block, rows, ios, secrets('15000')), {
     unsavable: 'contains a protected plan-typed value',
   });
   assert.ok('yaml' in serializeBlock(block, rows, ios));
@@ -117,7 +121,7 @@ test('serialization admission checks the final emitted YAML', () => {
 
 test('serialization preserves isolated short fragments of long secrets', () => {
   const block = blockOf('## QA\n\n### is\n✓ "is"\n');
-  assert.ok('yaml' in serializeBlock(block, passRows(block, {}), ios, ['existing-secret']));
+  assert.ok('yaml' in serializeBlock(block, passRows(block, {}), ios, secrets('existing-secret')));
 });
 
 test('plan list numbers that are digits of a protected code do not withhold the block', () => {
@@ -127,7 +131,7 @@ test('plan list numbers that are digits of a protected code do not withhold the 
   const selectors = Object.fromEntries(
     block.items.map((item) => [item.line, { text: item.kind === 'wait' ? 'Enter the code' : 'x' }]),
   );
-  const result = serializeBlock(block, passRows(block, selectors), ios, ['12345']);
+  const result = serializeBlock(block, passRows(block, selectors), ios, secrets('12345'));
   assert.ok('yaml' in result, JSON.stringify(result));
   assert.match(result.yaml, /# 3\. Tap "qa-otp-continue"/);
 });
@@ -523,3 +527,66 @@ for (const extension of ['yaml', 'yml']) {
     assert.equal(readFileSync(path, 'utf8'), '# id: unrelated\n- launchApp\n');
   });
 }
+
+test('preclassified fills withhold every semantic block field before typing', () => {
+  for (const value of ['hunter-canary-77', 'Cafe\u0301']) {
+    const privateSet: PrivateSet = {
+      values: [{ text: value === 'Cafe\u0301' ? ' Café ' : value, provenance: 'typed' }],
+    };
+    for (const field of ['appId', 'slug', 'title', 'planHash', 'raw', 'text', 'id', 'label']) {
+      const block = blockOf('## QA\n\n### Confirm\n1. Tap "Save"\n✓ "Saved"\n');
+      const rows = passRows(block, { [block.items[0].line]: { id: 'save-button' } });
+      const meta = { ...ios };
+      if (field === 'appId') meta.appId = value;
+      else if (field === 'slug' || field === 'title' || field === 'planHash') block[field] = value;
+      else if (field === 'raw') block.items[0].raw = value;
+      else if (field === 'text') {
+        const check = block.items[1];
+        if (check.kind === 'check') check.text = value;
+      } else rows[0].selector = field === 'id' ? { id: value } : { text: value };
+      if (field === 'slug') rows.forEach((row) => (row.block = block.slug));
+      assert.ok('unsavable' in serializeBlock(block, rows, meta, privateSet), field);
+    }
+  }
+});
+
+test('box characters do not affect admission of unrelated blocks', () => {
+  const privacy = new ObservedPrivacy();
+  privacy.concealFallback('4815');
+  privacy.concealFallback('1234');
+  for (const text of ['8', '4 | 8', 'Step 1 of 2', '4 | 8 | 1 | 5']) {
+    const block = blockOf(`## QA\n\n### Confirm\n✓ "${text}"\n`);
+    const result = serializeBlock(block, passRows(block, {}), ios, privacy.privateSet());
+    assert.ok('yaml' in result);
+  }
+});
+
+test('short preclassified fills withhold quoted plan slots only', () => {
+  const privateSet: PrivateSet = { values: [{ text: '47', provenance: 'typed' }] };
+  for (const text of ['47', 'Step 47 of 50']) {
+    const block = blockOf(`## QA\n\n### Confirm\n✓ "${text}"\n`);
+    assert.equal(
+      'unsavable' in serializeBlock(block, passRows(block, {}), ios, privateSet),
+      text === '47',
+    );
+  }
+});
+
+test('secure single-character values never withhold structural step numbers', () => {
+  for (const prefix of ['1.', '1)']) {
+    const block = blockOf(`### Ordinary\n${prefix} Tap "Continue"\n✓ "Ready"`);
+    const rows = passRows(block, { [block.items[0].line]: { id: 'continue' } });
+    const result = serializeBlock(block, rows, ios, secrets('1'));
+    assert.ok('yaml' in result, JSON.stringify(result));
+    const stored = readBlock(result.yaml);
+    assert.ok(!('invalid' in stored));
+    assert.equal(stored.steps[0].raw, `${prefix} Tap "Continue"`);
+    assert.deepEqual(stored.steps[0].selector, { id: 'continue' });
+    rows[0].selector = { text: '1' };
+    assert.ok('unsavable' in serializeBlock(block, rows, ios, secrets('1')));
+    rows[0].selector = { id: 'continue' };
+    const check = block.items[1];
+    if (check.kind === 'check') check.text = '1';
+    assert.ok('unsavable' in serializeBlock(block, rows, ios, secrets('1')));
+  }
+});

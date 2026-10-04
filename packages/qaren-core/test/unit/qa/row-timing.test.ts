@@ -300,7 +300,10 @@ test('a failing row-timing projection still records and emits the row', async ()
   assert.equal(outcome.rows.length, 1);
   assert.equal(outcome.rows[0].outcome, 'pass');
   assert.equal('timing' in outcome.rows[0], false);
-  assert.deepEqual(f.rows, outcome.rows);
+  assert.deepEqual(
+    f.rows.map((row) => [row.line, row.outcome]),
+    outcome.rows.map((row) => [row.line, row.outcome]),
+  );
 });
 
 test('a dispatch refused before authorization leaves later captures pre-action', () => {

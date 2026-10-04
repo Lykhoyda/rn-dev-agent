@@ -42,7 +42,6 @@ pub struct ReportInput<'a> {
     pub platform: &'a str,
     pub app_id: &'a str,
     pub device: &'a str,
-    pub plan: &'a str,
     pub ledger: &'a Ledger,
 }
 
@@ -82,19 +81,17 @@ fn walked<'a>(input: &'a ReportInput<'_>) -> impl Iterator<Item = &'a Row> {
     input.ledger.steps.iter().filter(|row| row.line != 0)
 }
 
-fn row_line(row: &Row, plan: &str) -> String {
-    row_line_with(row, plan, &prose)
+fn row_line(row: &Row) -> String {
+    row_line_with(row, &prose)
 }
 
-fn row_line_with(row: &Row, plan: &str, prose: &dyn Fn(&str) -> String) -> String {
+// Only the core's projected text is rendered; a row without it (a synthesized ledger) shows its line alone.
+fn row_line_with(row: &Row, prose: &dyn Fn(&str) -> String) -> String {
     let text = row
         .text
-        .clone()
-        .or_else(|| {
-            plan.lines()
-                .nth(row.line as usize - 1)
-                .map(|l| l.trim().to_string())
-        })
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+        .map(|text| format!(": {}", prose(text)))
         .unwrap_or_default();
     let mark = if row.outcome == "pass" { "✓" } else { "✗" };
     let retry = if row.attempt > 1 {
@@ -107,11 +104,7 @@ fn row_line_with(row: &Row, plan: &str, prose: &dyn Fn(&str) -> String) -> Strin
         .as_deref()
         .map(|r| format!(" — {}", prose(r)))
         .unwrap_or_default();
-    format!(
-        "- {mark} line {}: {}{retry}{reason}\n",
-        row.line,
-        prose(&text)
-    )
+    format!("- {mark} line {}{text}{retry}{reason}\n", row.line)
 }
 
 pub fn render(input: &ReportInput<'_>) -> String {
@@ -127,7 +120,7 @@ pub fn render(input: &ReportInput<'_>) -> String {
     ));
     out.push_str("## What was walked\n\n");
     for row in walked(input) {
-        out.push_str(&row_line(row, input.plan));
+        out.push_str(&row_line(row));
         if let Some(shot) = row.screenshot.as_deref().and_then(screenshot_link) {
             out.push_str(&format!("  ![line {}]({shot})\n", row.line));
         }
@@ -197,8 +190,6 @@ pub fn write(run_dir: &Path, input: &ReportInput<'_>) -> Result<PathBuf, Failure
     Ok(path)
 }
 
-pub const MAX_VERDICT_CHARS: usize = 400;
-
 pub struct PrRun<'a> {
     pub tested_sha: &'a str,
     pub tested_older_commit: bool,
@@ -226,23 +217,9 @@ pub fn failing_screenshot(ledger: &Ledger) -> Option<String> {
     failure.screenshot.as_deref().and_then(screenshot_link)
 }
 
-fn verdict_sentence(verdict_md: &str) -> String {
-    let flat = prose(verdict_md);
-    if flat.chars().count() <= MAX_VERDICT_CHARS {
-        return flat;
-    }
-    let mut cut: String = flat.chars().take(MAX_VERDICT_CHARS - 1).collect();
-    // A cut must not leave a dangling escape.
-    if cut.ends_with('\\') {
-        cut.pop();
-    }
-    cut.push('…');
-    cut
-}
-
 pub fn render_pr_comment(
     input: &ReportInput<'_>,
-    verdict_md: &str,
+    refusal: Option<&Failure>,
     pr: &PrRun<'_>,
     machine: &MachineIdentity,
 ) -> String {
@@ -253,9 +230,19 @@ pub fn render_pr_comment(
     let mut out = String::new();
     out.push_str(&comment_marker(input.run_id));
     out.push('\n');
-    out.push_str(&verdict_sentence(&public(&redact_machine(
-        verdict_md, machine,
-    ))));
+    let verdict = match input.ledger.verdict.as_str() {
+        "PASS" => "PASS",
+        "FAIL" => "FAIL",
+        _ => "REFUSED",
+    };
+    out.push_str(verdict);
+    if verdict == "REFUSED" {
+        if let Some(failure) = refusal {
+            if let Ok(serde_json::Value::String(code)) = serde_json::to_value(&failure.code) {
+                out.push_str(&format!(": {}", prose(&code)));
+            }
+        }
+    }
     out.push_str("\n\n");
     out.push_str(&format!(
         "Tested: commit `{}` on {}",
@@ -283,7 +270,7 @@ pub fn render_pr_comment(
     }
     out.push_str("**Plan**\n\n");
     for row in walked(input) {
-        out.push_str(&row_line_with(row, input.plan, &clean));
+        out.push_str(&row_line_with(row, &clean));
     }
     if let Some(failure) = &input.ledger.failure {
         out.push_str(&format!(

@@ -44,10 +44,9 @@ fn render(
             platform: "ios",
             app_id: "com.rndevagent.testapp",
             device: "qaren-check",
-            plan: "1. Tap \"Tasks\"\n✓ \"Tasks\"\n",
             ledger,
         },
-        "The Tasks tab does not open: the check on line 2 failed on the simulator at /Users/qa/x.",
+        None,
         &PrRun {
             tested_sha: &"a1b2c3d".repeat(6)[..40],
             tested_older_commit: older,
@@ -87,16 +86,12 @@ fn the_comment_carries_no_machine_identity_or_internal_vocabulary() {
             "{leak} leaked:\n{body}"
         );
     }
-    assert!(
-        body.starts_with("<!-- qaren-run: check-20261002T101500Z -->\nThe Tasks tab does not open")
-    );
+    assert!(body.starts_with("<!-- qaren-run: check-20261002T101500Z -->\nFAIL"));
     assert!(body.contains("Tested: commit `a1b2c3d` on ios\n"), "{body}");
     assert!(body.contains("Video of the walk is attached below."));
-    assert!(body.contains("- ✓ line 1: 1. Tap \"Tasks\"\n"), "{body}");
-    assert!(
-        body.contains("- ✗ line 2: ✓ \"Tasks\" (attempt 2) — "),
-        "{body}"
-    );
+    // Rows carry no projected text here, so only the line is shown; the plan is never read.
+    assert!(body.contains("- ✓ line 1\n"), "{body}");
+    assert!(body.contains("- ✗ line 2 (attempt 2) — "), "{body}");
     assert!(
         body.contains("![Failing step](./screenshots/02.png)"),
         "{body}"
@@ -142,18 +137,16 @@ fn run_details_list_every_field() {
 }
 
 #[test]
-fn the_verdict_sentence_is_bounded() {
-    let long = "word ".repeat(200);
+fn the_verdict_is_structured() {
     let body = render_pr_comment(
         &ReportInput {
             run_id: "r",
             platform: "ios",
             app_id: "a",
             device: "d",
-            plan: "",
             ledger: &failing_ledger(),
         },
-        &long,
+        None,
         &PrRun {
             tested_sha: &"a".repeat(40),
             tested_older_commit: false,

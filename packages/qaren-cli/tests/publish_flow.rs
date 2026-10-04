@@ -50,7 +50,7 @@ fn machine() -> MachineIdentity {
     }
 }
 
-fn run_dir(cross_repository: bool) -> (PathBuf, PathBuf, PathBuf) {
+fn run_dir(cross_repository: bool) -> (PathBuf, PathBuf) {
     let repo = common::temp_repo();
     let runs = repo.join("runs");
     let dir = runs.join(RUN);
@@ -97,14 +97,11 @@ fn run_dir(cross_repository: bool) -> (PathBuf, PathBuf, PathBuf) {
         .to_string(),
     )
     .unwrap();
-    std::fs::write(dir.join("plan.md"), "✓ \"Tasks\"\n").unwrap();
     std::fs::write(dir.join("blocks/tasks.yaml"), "steps: []\n").unwrap();
     std::fs::write(dir.join("media/video.mp4"), "mp4").unwrap();
     std::fs::write(dir.join("media/video-published.mp4"), "mp4").unwrap();
     std::fs::write(dir.join("screenshots/01.png"), "png").unwrap();
-    let verdict = repo.join("verdict.md");
-    std::fs::write(&verdict, "The Tasks tab is missing after the change.\n").unwrap();
-    (runs, dir, verdict)
+    (runs, dir)
 }
 
 fn final_terminal() -> TerminalResult {
@@ -206,7 +203,7 @@ fn publication(dir: &Path) -> Publication {
 #[test]
 fn cancelled_runs_refuse_new_and_resumed_publication_without_side_effects() {
     for resumed in [false, true] {
-        let (runs, dir, verdict) = run_dir(false);
+        let (runs, dir) = run_dir(false);
         let mut record = qaren::runrecord::RunRecord::load(&runs, RUN).unwrap();
         record.terminal = Some(TerminalResult {
             cancelled: true,
@@ -230,7 +227,7 @@ fn cancelled_runs_refuse_new_and_resumed_publication_without_side_effects() {
             std::fs::write(dir.join("publication.json"), &prior).unwrap();
         }
         let mut runner = Git(MockRunner::new());
-        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+        let receipt = publish(&mut runner, &runs, RUN, &machine());
         assert_eq!(receipt.result, ReceiptResult::Refused);
         let failure = receipt.failure.unwrap();
         assert_eq!(failure.code, qaren::failure::FailureCode::RunCancelled);
@@ -254,7 +251,7 @@ fn cancelled_runs_refuse_new_and_resumed_publication_without_side_effects() {
 
 #[test]
 fn publish_comments_removes_the_label_and_pushes_the_blocks_with_the_exact_lease() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     let mut runner = Git(MockRunner::new());
     script_comment_and_label(&mut runner.0);
     script_commit(&mut runner.0);
@@ -262,7 +259,7 @@ fn publish_comments_removes_the_label_and_pushes_the_blocks_with_the_exact_lease
         .0
         .expect_run("git push origin", CmdOutput::success(""));
 
-    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut runner, &runs, RUN, &machine());
 
     assert_eq!(
         receipt.result,
@@ -286,9 +283,7 @@ fn publish_comments_removes_the_label_and_pushes_the_blocks_with_the_exact_lease
         .args
         .contains(&"./screenshots/01.png#Failing step".to_string()));
     let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
-    assert!(body.starts_with(&format!(
-        "<!-- qaren-run: {RUN} -->\nThe Tasks tab is missing"
-    )));
+    assert!(body.starts_with(&format!("<!-- qaren-run: {RUN} -->\nFAIL")));
     let commit = runner
         .0
         .calls
@@ -336,7 +331,7 @@ fn publish_comments_removes_the_label_and_pushes_the_blocks_with_the_exact_lease
     // A rerun of a finished publication runs nothing and changes nothing.
     let before = std::fs::read(dir.join("publication.json")).unwrap();
     let mut again = Git(MockRunner::new());
-    let receipt = publish(&mut again, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut again, &runs, RUN, &machine());
     assert_eq!(receipt.result, ReceiptResult::Published);
     assert!(again.0.calls.is_empty());
     assert_eq!(std::fs::read(dir.join("publication.json")).unwrap(), before);
@@ -344,7 +339,7 @@ fn publish_comments_removes_the_label_and_pushes_the_blocks_with_the_exact_lease
 
 #[test]
 fn a_rerun_after_the_comment_posts_no_second_comment() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     let mut first = Git(MockRunner::new());
     first.0.expect_run(
         "gh pr comment",
@@ -353,7 +348,7 @@ fn a_rerun_after_the_comment_posts_no_second_comment() {
     first
         .0
         .expect_run("gh pr view", CmdOutput::failed(1, "network down"));
-    let receipt = publish(&mut first, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut first, &runs, RUN, &machine());
     assert_eq!(receipt.result, ReceiptResult::Failed);
 
     let mut second = Git(MockRunner::new());
@@ -362,7 +357,7 @@ fn a_rerun_after_the_comment_posts_no_second_comment() {
     second
         .0
         .expect_run("git push origin", CmdOutput::success(""));
-    let receipt = publish(&mut second, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut second, &runs, RUN, &machine());
 
     assert_eq!(
         receipt.result,
@@ -377,7 +372,7 @@ fn a_rerun_after_the_comment_posts_no_second_comment() {
 
 #[test]
 fn a_lost_comment_outcome_is_adopted_by_its_marker_not_reposted() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     let mut first = Git(MockRunner::new());
     first.0.expect_run(
         "gh pr comment",
@@ -387,11 +382,10 @@ fn a_lost_comment_outcome_is_adopted_by_its_marker_not_reposted() {
         },
     );
     assert_eq!(
-        publish(&mut first, &runs, RUN, &verdict, &machine()).result,
+        publish(&mut first, &runs, RUN, &machine()).result,
         ReceiptResult::Failed
     );
     assert!(publication(&dir).comment_attempted);
-    std::fs::remove_file(&verdict).unwrap();
     std::fs::remove_file(dir.join("comment.md")).unwrap();
 
     let mut second = Git(MockRunner::new());
@@ -409,7 +403,7 @@ fn a_lost_comment_outcome_is_adopted_by_its_marker_not_reposted() {
     second
         .0
         .expect_run("git push origin", CmdOutput::success(""));
-    let receipt = publish(&mut second, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut second, &runs, RUN, &machine());
 
     assert_eq!(
         receipt.result,
@@ -426,7 +420,7 @@ fn a_lost_comment_outcome_is_adopted_by_its_marker_not_reposted() {
 
 #[test]
 fn a_rejected_lease_attaches_the_yaml_in_a_second_comment() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     let mut runner = Git(MockRunner::new());
     script_comment_and_label(&mut runner.0);
     script_commit(&mut runner.0);
@@ -439,7 +433,7 @@ fn a_rejected_lease_attaches_the_yaml_in_a_second_comment() {
         CmdOutput::success("https://github.com/o/r/pull/12#issuecomment-2\n"),
     );
 
-    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut runner, &runs, RUN, &machine());
 
     assert_eq!(
         receipt.result,
@@ -459,12 +453,12 @@ fn a_rejected_lease_attaches_the_yaml_in_a_second_comment() {
     );
     assert!(std::fs::read_to_string(dir.join("comment.md"))
         .unwrap()
-        .contains("The Tasks tab is missing"));
+        .contains("FAIL"));
 }
 
 #[test]
 fn a_fork_pr_gets_the_yaml_comment_and_no_push() {
-    let (runs, dir, verdict) = run_dir(true);
+    let (runs, dir) = run_dir(true);
     let mut runner = Git(MockRunner::new());
     script_comment_and_label(&mut runner.0);
     runner.0.expect_run(
@@ -472,7 +466,7 @@ fn a_fork_pr_gets_the_yaml_comment_and_no_push() {
         CmdOutput::success("https://github.com/o/r/pull/12#issuecomment-3\n"),
     );
 
-    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut runner, &runs, RUN, &machine());
 
     assert_eq!(
         receipt.result,
@@ -489,7 +483,7 @@ fn a_fork_pr_gets_the_yaml_comment_and_no_push() {
 
 #[test]
 fn an_origin_that_is_not_the_pr_repository_gets_the_yaml_comment_and_no_push() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     let mut runner = Git(MockRunner::new());
     script_comment_and_label(&mut runner.0);
     runner.0.expect_run(
@@ -501,7 +495,7 @@ fn an_origin_that_is_not_the_pr_repository_gets_the_yaml_comment_and_no_push() {
         CmdOutput::success("https://github.com/o/r/pull/12#issuecomment-4\n"),
     );
 
-    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut runner, &runs, RUN, &machine());
 
     assert_eq!(
         receipt.result,
@@ -550,7 +544,7 @@ impl Runner for SymlinkedCorpus {
 
 #[test]
 fn a_symlinked_corpus_in_the_pr_tree_is_refused_and_the_yaml_is_attached() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     let mut runner = SymlinkedCorpus(Git(MockRunner::new()));
     let mock = &mut runner.0 .0;
     script_comment_and_label(mock);
@@ -570,7 +564,7 @@ fn a_symlinked_corpus_in_the_pr_tree_is_refused_and_the_yaml_is_attached() {
         CmdOutput::success("https://github.com/o/r/pull/12#issuecomment-5\n"),
     );
 
-    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut runner, &runs, RUN, &machine());
 
     assert_eq!(
         receipt.result,
@@ -594,7 +588,7 @@ fn a_symlinked_corpus_in_the_pr_tree_is_refused_and_the_yaml_is_attached() {
 
 #[test]
 fn a_live_publisher_holds_the_run() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     use std::os::fd::AsRawFd;
     let held = std::fs::File::create(dir.join("publish.lock")).unwrap();
     assert_eq!(
@@ -602,7 +596,7 @@ fn a_live_publisher_holds_the_run() {
         0
     );
     let mut runner = Git(MockRunner::new());
-    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut runner, &runs, RUN, &machine());
     assert_eq!(receipt.result, ReceiptResult::Failed);
     assert!(receipt
         .failure
@@ -615,10 +609,10 @@ fn a_live_publisher_holds_the_run() {
 
 #[test]
 fn an_unreadable_publication_state_fails_closed() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     std::fs::write(dir.join("publication.json"), "{not json").unwrap();
     let mut runner = Git(MockRunner::new());
-    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut runner, &runs, RUN, &machine());
     assert_eq!(receipt.result, ReceiptResult::Failed);
     assert!(runner.0.calls.is_empty());
 }
@@ -669,7 +663,7 @@ fn calls_named(runner: &MockRunner, label: &str) -> usize {
 
 #[test]
 fn the_raw_plan_is_never_published() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     std::fs::write(
         dir.join("plan.md"),
         format!("fill password with \"{SECRET}\"\n"),
@@ -679,7 +673,7 @@ fn the_raw_plan_is_never_published() {
     let mut runner = Git(MockRunner::new());
     script_comment_and_label(&mut runner.0);
 
-    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut runner, &runs, RUN, &machine());
 
     assert_eq!(
         receipt.result,
@@ -689,7 +683,7 @@ fn the_raw_plan_is_never_published() {
     );
     let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
     assert!(!body.contains(SECRET), "{body}");
-    assert!(body.contains("- ✗ line 1: \n"), "{body}");
+    assert!(body.contains("- ✗ line 1\n"), "{body}");
 }
 
 #[test]
@@ -700,7 +694,7 @@ fn blocks_from_a_walk_that_is_not_eligible_are_withheld() {
         Some(serde_json::json!("unknown")),
         None,
     ] {
-        let (runs, dir, verdict) = run_dir(false);
+        let (runs, dir) = run_dir(false);
         std::fs::write(
             dir.join("blocks/tasks.yaml"),
             format!("steps:\n  - inputText: \"{SECRET}\"\n"),
@@ -715,7 +709,7 @@ fn blocks_from_a_walk_that_is_not_eligible_are_withheld() {
         let mut runner = Git(MockRunner::new());
         script_comment_and_label(&mut runner.0);
 
-        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+        let receipt = publish(&mut runner, &runs, RUN, &machine());
 
         assert_eq!(
             receipt.result,
@@ -745,7 +739,7 @@ fn blocks_from_a_walk_that_is_not_eligible_are_withheld() {
 
 #[test]
 fn an_eligible_parameterised_block_is_committed_byte_identical() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     let source = "steps:\n  - inputText: ${PASSWORD}\n    into: \"Password\"\n";
     std::fs::write(dir.join("blocks/tasks.yaml"), source).unwrap();
     let mut runner = Staged(Git(MockRunner::new()), Vec::new());
@@ -756,7 +750,7 @@ fn an_eligible_parameterised_block_is_committed_byte_identical() {
          .0
         .expect_run("git push origin", CmdOutput::success(""));
 
-    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut runner, &runs, RUN, &machine());
 
     assert_eq!(
         receipt.result,
@@ -775,13 +769,13 @@ fn a_block_the_redaction_would_change_is_withheld_never_rewritten() {
         "steps:\n  - device: emulator-5554\n".to_string(),
         "steps:\n  - key: |\n      -----BEGIN PRIVATE KEY-----\n      FAKEFIXTUREBODY\n      -----END PRIVATE KEY-----\n".to_string(),
     ] {
-        let (runs, dir, verdict) = run_dir(false);
+        let (runs, dir) = run_dir(false);
         std::fs::write(dir.join("blocks/tasks.yaml"), &content).unwrap();
         edit_pr(&dir, |pr| pr["identityValues"] = serde_json::json!(["emulator-5554"]));
         let mut runner = Staged(Git(MockRunner::new()), Vec::new());
         script_comment_and_label(&mut runner.0 .0);
 
-        let receipt = publish(&mut runner, &runs, RUN, &verdict, &fixture_machine());
+        let receipt = publish(&mut runner, &runs, RUN, &fixture_machine());
 
         assert_eq!(receipt.result, ReceiptResult::Published, "{:?}", receipt.failure);
         assert!(runner.1.is_empty(), "nothing staged for {content}");
@@ -806,7 +800,7 @@ fn fixture_machine() -> MachineIdentity {
 
 #[test]
 fn the_runs_identity_values_and_tool_vocabulary_never_reach_the_comment() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     edit_pr(&dir, |pr| {
         pr["blocks"] = serde_json::json!([]);
         pr["identityValues"] = serde_json::json!(["emulator-5554", "R58M00SYNTH0", "8081", "8791"]);
@@ -820,7 +814,7 @@ fn the_runs_identity_values_and_tool_vocabulary_never_reach_the_comment() {
     let mut runner = Git(MockRunner::new());
     script_comment_and_label(&mut runner.0);
 
-    let receipt = publish(&mut runner, &runs, RUN, &verdict, &fixture_machine());
+    let receipt = publish(&mut runner, &runs, RUN, &fixture_machine());
 
     assert_eq!(
         receipt.result,
@@ -860,7 +854,7 @@ fn withheld_or_unknown_eligibility_never_uploads_video() {
         Some(serde_json::json!({"invalid": true})),
         Some(serde_json::Value::Null),
     ] {
-        let (runs, dir, verdict) = run_dir(false);
+        let (runs, dir) = run_dir(false);
         let path = dir.join("pr.json");
         let mut pr: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -873,7 +867,7 @@ fn withheld_or_unknown_eligibility_never_uploads_video() {
         std::fs::write(&path, serde_json::to_vec(&pr).unwrap()).unwrap();
         let mut runner = Git(MockRunner::new());
         script_comment_and_label(&mut runner.0);
-        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+        let receipt = publish(&mut runner, &runs, RUN, &machine());
         assert_eq!(
             receipt.result,
             ReceiptResult::Published,
@@ -897,7 +891,7 @@ fn withheld_or_unknown_eligibility_never_uploads_video() {
 
 #[test]
 fn publishing_an_older_head_retains_the_qa_request_and_receipt() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     let path = dir.join("pr.json");
     let mut pr: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     pr["blocks"] = serde_json::json!([]);
@@ -913,7 +907,7 @@ fn publishing_an_older_head_retains_the_qa_request_and_receipt() {
     runner
         .0
         .expect_run("gh pr view", CmdOutput::success(&current.to_string()));
-    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut runner, &runs, RUN, &machine());
     assert_eq!(receipt.result, ReceiptResult::Published);
     assert_eq!(receipt.outcomes["label"], "retained-head-changed");
     assert_eq!(
@@ -931,7 +925,7 @@ fn publishing_an_older_head_retains_the_qa_request_and_receipt() {
 #[test]
 fn an_abandoned_empty_or_partial_lock_does_not_block_publication() {
     for content in ["", "not-a-pid", "12"] {
-        let (runs, dir, verdict) = run_dir(false);
+        let (runs, dir) = run_dir(false);
         std::fs::write(dir.join("publish.lock"), content).unwrap();
         let path = dir.join("pr.json");
         let mut pr: serde_json::Value =
@@ -941,7 +935,7 @@ fn an_abandoned_empty_or_partial_lock_does_not_block_publication() {
         let mut runner = Git(MockRunner::new());
         script_comment_and_label(&mut runner.0);
         assert_eq!(
-            publish(&mut runner, &runs, RUN, &verdict, &machine()).result,
+            publish(&mut runner, &runs, RUN, &machine()).result,
             ReceiptResult::Published
         );
         assert_eq!(
@@ -989,22 +983,19 @@ impl Runner for Uploads {
 
 #[test]
 fn retry_regenerates_an_unposted_walk_comment_with_current_privacy() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     edit_pr(&dir, |pr| pr["blocks"] = serde_json::json!([]));
-    std::fs::write(&verdict, "qa-fixture-user saw the missing Tasks tab.").unwrap();
+    let ledger_path = dir.join("ledger.json");
+    let mut ledger: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&ledger_path).unwrap()).unwrap();
+    ledger["failure"]["seen"] = serde_json::json!("qa-fixture-user saw the missing Tasks tab.");
+    std::fs::write(ledger_path, serde_json::to_vec(&ledger).unwrap()).unwrap();
     let mut first = Git(MockRunner::new());
     first
         .0
         .expect_run("gh pr comment", CmdOutput::failed(1, "offline"));
     assert_eq!(
-        publish(
-            &mut first,
-            &runs,
-            RUN,
-            &verdict,
-            &MachineIdentity::default()
-        )
-        .result,
+        publish(&mut first, &runs, RUN, &MachineIdentity::default()).result,
         ReceiptResult::Failed
     );
     assert!(publication(&dir).rendered);
@@ -1021,7 +1012,7 @@ fn retry_regenerates_an_unposted_walk_comment_with_current_privacy() {
         .0
         .expect_run("gh pr view 12", CmdOutput::success(r#"{"comments":[]}"#));
     script_comment_and_label(&mut second.runner.0);
-    let receipt = publish(&mut second, &runs, RUN, &verdict, &fixture_machine());
+    let receipt = publish(&mut second, &runs, RUN, &fixture_machine());
     assert_eq!(
         receipt.result,
         ReceiptResult::Published,
@@ -1040,7 +1031,7 @@ fn retry_regenerates_an_unposted_walk_comment_with_current_privacy() {
 
 #[test]
 fn retry_regenerates_unposted_blocks_through_the_current_block_gate() {
-    let (runs, dir, verdict) = run_dir(true);
+    let (runs, dir) = run_dir(true);
     edit_pr(&dir, |pr| {
         pr["blocks"] = serde_json::json!(["tasks", "safe"])
     });
@@ -1056,14 +1047,7 @@ fn retry_regenerates_unposted_blocks_through_the_current_block_gate() {
         .0
         .expect_run("gh pr comment", CmdOutput::failed(1, "offline"));
     assert_eq!(
-        publish(
-            &mut first,
-            &runs,
-            RUN,
-            &verdict,
-            &MachineIdentity::default()
-        )
-        .result,
+        publish(&mut first, &runs, RUN, &MachineIdentity::default()).result,
         ReceiptResult::Failed
     );
     assert!(publication(&dir).blocks_comment_attempted);
@@ -1083,7 +1067,7 @@ fn retry_regenerates_unposted_blocks_through_the_current_block_gate() {
         "gh pr comment",
         CmdOutput::success("https://github.com/o/r/pull/12#issuecomment-2"),
     );
-    let receipt = publish(&mut second, &runs, RUN, &verdict, &fixture_machine());
+    let receipt = publish(&mut second, &runs, RUN, &fixture_machine());
     assert_eq!(
         receipt.result,
         ReceiptResult::Published,
@@ -1103,7 +1087,7 @@ fn retry_regenerates_unposted_blocks_through_the_current_block_gate() {
 
     let mut again = Git(MockRunner::new());
     assert_eq!(
-        publish(&mut again, &runs, RUN, &verdict, &fixture_machine()).result,
+        publish(&mut again, &runs, RUN, &fixture_machine()).result,
         ReceiptResult::Published
     );
     assert!(again.0.calls.is_empty());
@@ -1139,7 +1123,7 @@ fn producer_block(plan_hash: &str) -> String {
 
 #[test]
 fn a_block_in_the_producers_format_from_an_eligible_walk_is_committed_byte_identical() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     let slug = "onboarding-to-the-tasks-tab";
     let source = producer_block(&"3f".repeat(32));
     std::fs::write(dir.join(format!("blocks/{slug}.yaml")), &source).unwrap();
@@ -1188,7 +1172,7 @@ fn a_block_in_the_producers_format_from_an_eligible_walk_is_committed_byte_ident
     );
     mock.expect_run("git push origin", CmdOutput::success(""));
 
-    let receipt = publish(&mut runner, &runs, RUN, &verdict, &fixture_machine());
+    let receipt = publish(&mut runner, &runs, RUN, &fixture_machine());
 
     assert_eq!(
         receipt.result,
@@ -1261,7 +1245,7 @@ fn patched_blocks_keep_their_extension_through_preservation_and_publication() {
     }
     for extension in ["yml", "yaml"] {
         for fallback in [false, true] {
-            let (runs, dir, verdict) = run_dir(fallback);
+            let (runs, dir) = run_dir(fallback);
             let app = runs.parent().unwrap().join("patched-app");
             let actions = app.join(".qaren/actions");
             std::fs::create_dir_all(&actions).unwrap();
@@ -1299,7 +1283,7 @@ fn patched_blocks_keep_their_extension_through_preservation_and_publication() {
                     .0
                     .expect_run("git push origin", CmdOutput::success(""));
             }
-            let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+            let receipt = publish(&mut runner, &runs, RUN, &machine());
             assert_eq!(
                 receipt.result,
                 ReceiptResult::Published,
@@ -1408,7 +1392,7 @@ fn cached_writeback_retries_apply_current_admission_without_rewriting_history() 
         "fallback",
         "ancestor",
     ] {
-        let (runs, dir, verdict) = run_dir(false);
+        let (runs, dir) = run_dir(false);
         let repo = runs.parent().unwrap();
         let remote = repo.join("remote.git");
         std::fs::create_dir(&remote).unwrap();
@@ -1454,7 +1438,7 @@ fn cached_writeback_retries_apply_current_admission_without_rewriting_history() 
             real_urls: false,
         };
         assert_eq!(
-            publish(&mut runner, &runs, RUN, &verdict, &machine()).result,
+            publish(&mut runner, &runs, RUN, &machine()).result,
             ReceiptResult::Failed
         );
         let mut old = publication(&dir).writeback_commit.unwrap();
@@ -1499,7 +1483,7 @@ fn cached_writeback_retries_apply_current_admission_without_rewriting_history() 
         runner.calls.clear();
         runner.reject_push = mode == "fallback";
         runner.reject_comment = false;
-        let receipt = publish(&mut runner, &runs, RUN, &verdict, &current_machine);
+        let receipt = publish(&mut runner, &runs, RUN, &current_machine);
         assert_eq!(
             receipt.result,
             if mode == "privacy-failure" {
@@ -1581,8 +1565,8 @@ fn cached_writeback_retries_apply_current_admission_without_rewriting_history() 
     }
 }
 
-fn local_publication_fixture() -> (PathBuf, PathBuf, PathBuf, String) {
-    let (runs, dir, verdict) = run_dir(false);
+fn local_publication_fixture() -> (PathBuf, PathBuf, String) {
+    let (runs, dir) = run_dir(false);
     let repo = runs.parent().unwrap();
     let remote = repo.join("remote.git");
     std::fs::create_dir(&remote).unwrap();
@@ -1607,7 +1591,7 @@ fn local_publication_fixture() -> (PathBuf, PathBuf, PathBuf, String) {
         .unwrap(),
     )
     .unwrap();
-    (runs, dir, verdict, base)
+    (runs, dir, base)
 }
 
 #[test]
@@ -1618,7 +1602,7 @@ fn effective_push_urls_must_all_be_the_pr_repository() {
         vec!["git@github.com:o/r.git", "unproved-local-path"],
         vec!["git@github.com:other/repo.git", "git@github.com:o/r.git"],
     ] {
-        let (runs, dir, verdict, base) = local_publication_fixture();
+        let (runs, dir, base) = local_publication_fixture();
         let repo = runs.parent().unwrap();
         for url in &urls {
             local_git(repo, &["config", "--add", "remote.origin.pushurl", url]);
@@ -1629,7 +1613,7 @@ fn effective_push_urls_must_all_be_the_pr_repository() {
             reject_comment: false,
             real_urls: true,
         };
-        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+        let receipt = publish(&mut runner, &runs, RUN, &machine());
         assert_eq!(
             receipt.result,
             ReceiptResult::Published,
@@ -1658,7 +1642,7 @@ fn effective_push_urls_must_all_be_the_pr_repository() {
 #[test]
 fn new_and_replacement_commits_with_converted_bytes_fall_back_without_pushing() {
     for replacement in [false, true] {
-        let (runs, dir, verdict, _) = local_publication_fixture();
+        let (runs, dir, _) = local_publication_fixture();
         let repo = runs.parent().unwrap();
         std::fs::rename(dir.join("blocks/tasks.yaml"), dir.join("blocks/tasks.yml")).unwrap();
         std::fs::write(dir.join("blocks/tasks.yml"), "steps: []\n").unwrap();
@@ -1670,7 +1654,7 @@ fn new_and_replacement_commits_with_converted_bytes_fall_back_without_pushing() 
         };
         if replacement {
             assert_eq!(
-                publish(&mut runner, &runs, RUN, &verdict, &machine()).result,
+                publish(&mut runner, &runs, RUN, &machine()).result,
                 ReceiptResult::Failed
             );
             assert!(publication(&dir).writeback_commit.is_some());
@@ -1686,7 +1670,7 @@ fn new_and_replacement_commits_with_converted_bytes_fall_back_without_pushing() 
         runner.calls.clear();
         runner.reject_push = false;
         runner.reject_comment = false;
-        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+        let receipt = publish(&mut runner, &runs, RUN, &machine());
         assert_eq!(
             receipt.result,
             ReceiptResult::Published,
@@ -1781,7 +1765,7 @@ fn real_git_readback_requires_the_pr_fetch_destination_with_a_fake_forge() {
         "fallback",
         "rewrite",
     ] {
-        let (runs, dir, verdict, base) = local_publication_fixture();
+        let (runs, dir, base) = local_publication_fixture();
         let repo = runs.parent().unwrap();
         let mut old_runner = LocalPublication {
             calls: Vec::new(),
@@ -1790,7 +1774,7 @@ fn real_git_readback_requires_the_pr_fetch_destination_with_a_fake_forge() {
             real_urls: false,
         };
         assert_eq!(
-            publish(&mut old_runner, &runs, RUN, &verdict, &machine()).result,
+            publish(&mut old_runner, &runs, RUN, &machine()).result,
             ReceiptResult::Failed
         );
         let cached = publication(&dir).writeback_commit.unwrap();
@@ -1854,7 +1838,7 @@ fn real_git_readback_requires_the_pr_fetch_destination_with_a_fake_forge() {
             fetch_failure: mode == "lookup-failure",
             read_failure: mode == "read-failure",
         };
-        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+        let receipt = publish(&mut runner, &runs, RUN, &machine());
         assert_eq!(
             receipt.result,
             ReceiptResult::Published,
@@ -1918,7 +1902,7 @@ fn real_git_readback_requires_the_pr_fetch_destination_with_a_fake_forge() {
 
 #[test]
 fn only_the_admission_trimmed_copy_is_ever_uploaded() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     std::fs::remove_file(dir.join("media/video-published.mp4")).unwrap();
     let mut runner = Git(MockRunner::new());
     script_comment_and_label(&mut runner.0);
@@ -1926,7 +1910,7 @@ fn only_the_admission_trimmed_copy_is_ever_uploaded() {
     runner
         .0
         .expect_run("git push origin", CmdOutput::success(""));
-    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut runner, &runs, RUN, &machine());
     assert_eq!(
         receipt.result,
         ReceiptResult::Published,
@@ -1945,7 +1929,7 @@ fn only_the_admission_trimmed_copy_is_ever_uploaded() {
 
 #[test]
 fn a_post_admission_interruption_withholds_the_copy_and_upload() {
-    let (runs, dir, verdict) = run_dir(false);
+    let (runs, dir) = run_dir(false);
     let mut ledger: qaren::core::Ledger =
         serde_json::from_slice(&std::fs::read(dir.join("ledger.json")).unwrap()).unwrap();
     ledger.publication_interrupted = true;
@@ -1971,7 +1955,7 @@ fn a_post_admission_interruption_withholds_the_copy_and_upload() {
     runner
         .0
         .expect_run("git push origin", CmdOutput::success(""));
-    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    let receipt = publish(&mut runner, &runs, RUN, &machine());
     assert_eq!(
         receipt.result,
         ReceiptResult::Published,
@@ -2016,14 +2000,138 @@ fn only_a_final_uncancelled_verified_owned_terminal_result_admits_publication() 
         (Some(unverified), FailureCode::CandidateDrifted),
         (Some(unowned), FailureCode::OwnershipUnproven),
     ] {
-        let (runs, dir, verdict) = run_dir(false);
+        let (runs, dir) = run_dir(false);
         let mut record = qaren::runrecord::RunRecord::load(&runs, RUN).unwrap();
         record.terminal = terminal;
         record.save(&runs).unwrap();
         let mut runner = Git(MockRunner::new());
-        let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+        let receipt = publish(&mut runner, &runs, RUN, &machine());
         assert_eq!(receipt.failure.as_ref().map(|f| f.code), Some(code));
         assert!(runner.0.calls.is_empty(), "no forge or git effect may run");
         assert!(!dir.join("publication.json").exists());
     }
+}
+
+#[test]
+fn publication_uses_only_the_projected_ledger_and_structured_verdict() {
+    let (runs, dir) = run_dir(false);
+    edit_pr(&dir, |pr| pr["blocks"] = serde_json::json!([]));
+    let output = std::process::Command::new("node")
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../qaren-core"))
+        .args(["--input-type=module", "--eval", r#"
+import assert from 'node:assert/strict';
+import { parsePlan } from './dist/qa/plan.js';
+import { runPlan } from './dist/qa/walker.js';
+import { join } from './dist/qa/screen.js';
+import { element, screen, scriptedJudge, walker } from './test/unit/qa/judgment-fixtures.ts';
+const values = ['CanaryAlpha77', '1234567890', ' Café ', 'pw', '47'];
+const plan = values.map((value, i) => `${i + 1}. Type "${value}" into "field${i}"`).join('\n')
+  + '\n✓ "Readable ready"\n✓ "Missing banner"';
+const blocks = parsePlan(plan).blocks;
+assert.ok(blocks);
+const actions = [];
+let filled = false;
+const observe = () => screen([
+  element('@ready', 'Readable ready', { kind: 'text' }),
+  ...values.map((value, i) => element(`@input${i}`, `Field ${i}`, {
+    kind: 'input', testID: `field${i}`, value: i === 3 ? 'pw' : i === 4 ? '47' : '', secure: i === 3,
+  })),
+  element('@prefilled', 'Account', { kind: 'input', value: '654321' }),
+  ...(filled ? [
+    element('@echo', 'CanaryAlpha77', { kind: 'text' }),
+    element('@digits', '1234 5678 90', { kind: 'text', testID: 'account-1234-5678-90' }),
+    element('@normalized', 'Café', { kind: 'text' }),
+    ...['4815', '1122'].flatMap((code, row) => join([...code].flatMap((label, i) => [
+      { ref: `@group${row}${i}`, type: 'Group' },
+      { ref: `@box${row}${i}`, type: 'StaticText', label,
+        rect: { x: i * 48, y: 100 + row * 60, width: 32, height: 40 } },
+    ]), []).elements),
+  ] : []),
+]);
+const f = walker([], scriptedJudge(() => assert.fail('literal plan must not ask a model')));
+f.deps.captureScreen = async () => observe();
+f.deps.fill = async (ref, value) => {
+  actions.push(value);
+  filled = true;
+  return { ok: true, proven: true };
+};
+f.deps.screenshot = async () => assert.fail('private screenshots must be withheld');
+const ledger = await runPlan(blocks, f.deps);
+assert.deepEqual(actions, values);
+assert.equal(ledger.verdict, 'FAIL');
+assert.equal(ledger.steps.filter(row => row.outcome === 'pass').length, 6);
+assert.match(ledger.failure.seen, /\[code\]/);
+assert.equal(observe().elements.filter(e => e.kind === 'text' && e.label?.length === 1).length, 8);
+process.stdout.write(JSON.stringify(ledger));
+"#])
+        .output()
+        .expect("node on PATH is required to execute core privacy projection");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ledger: qaren::core::Ledger = serde_json::from_slice(&output.stdout).unwrap();
+    std::fs::write(dir.join("ledger.json"), &output.stdout).unwrap();
+    qaren::report::write(
+        &dir,
+        &qaren::report::ReportInput {
+            run_id: RUN,
+            platform: "ios",
+            app_id: "com.rndevagent.testapp",
+            device: "qaren-check",
+            ledger: &ledger,
+        },
+    )
+    .unwrap();
+
+    let mut runner = Git(MockRunner::new());
+    script_comment_and_label(&mut runner.0);
+    let receipt = publish(&mut runner, &runs, RUN, &machine());
+    assert_eq!(receipt.result, ReceiptResult::Published);
+    std::fs::write(
+        dir.join("receipt.json"),
+        serde_json::to_vec(&receipt).unwrap(),
+    )
+    .unwrap();
+    let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
+    assert!(body.starts_with(&format!("<!-- qaren-run: {RUN} -->\nFAIL")));
+    assert!(body.contains("Readable ready"), "{body}");
+    assert!(body.contains("•••"), "{body}");
+    let report = std::fs::read_to_string(dir.join("report.md")).unwrap();
+    assert!(report.contains("Readable ready"), "{report}");
+    assert!(report.contains("Missing banner"), "{report}");
+    let saved_receipt: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("receipt.json")).unwrap()).unwrap();
+    assert_eq!(saved_receipt["run_id"], RUN);
+    fn scan(dir: &Path) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                scan(&path);
+                continue;
+            }
+            let bytes = std::fs::read(&path).unwrap();
+            let text = String::from_utf8_lossy(&bytes);
+            for value in [
+                "CanaryAlpha77",
+                "1234567890",
+                "1234 5678 90",
+                "Café",
+                "Café",
+                "654321",
+                "4815",
+                "1122",
+                "4 | 8 | 1 | 5",
+                "1 | 1 | 2 | 2",
+                "account-1234-5678-90",
+                "pw",
+                "47",
+            ] {
+                assert!(!text.contains(value), "{} contains {value}", path.display());
+            }
+        }
+    }
+    scan(&dir);
+    assert_eq!(runner.0.remaining(), 0);
 }

@@ -633,18 +633,10 @@ pub fn publish(
     runner: &mut dyn Runner,
     runs_root: &Path,
     run_id: &str,
-    verdict_file: &Path,
     machine: &MachineIdentity,
 ) -> Receipt {
     let mut publication = Publication::default();
-    let outcome = publish_inner(
-        runner,
-        runs_root,
-        run_id,
-        verdict_file,
-        machine,
-        &mut publication,
-    );
+    let outcome = publish_inner(runner, runs_root, run_id, machine, &mut publication);
     let (result, failure) = match outcome {
         Ok(()) => (ReceiptResult::Published, None),
         Err(f) if f.code.is_refusal() => (ReceiptResult::Refused, Some(f)),
@@ -681,7 +673,6 @@ fn publish_inner(
     runner: &mut dyn Runner,
     runs_root: &Path,
     run_id: &str,
-    verdict_file: &Path,
     machine: &MachineIdentity,
     publication: &mut Publication,
 ) -> Result<(), Failure> {
@@ -736,15 +727,6 @@ fn publish_inner(
             attempted,
             &format!("<!-- qaren-run: {run_id} -->"),
             &mut || {
-                let verdict = std::fs::read_to_string(verdict_file)
-                    .ok()
-                    .filter(|v| !v.trim().is_empty())
-                    .ok_or_else(|| {
-                        failure(
-                            format!("{} is missing or empty", verdict_file.display()),
-                            "write the verdict sentence to the --verdict-file, then re-run",
-                        )
-                    })?;
                 let ledger: Ledger = read_json(&run_dir.join("ledger.json"))?;
                 Ok(report::render_pr_comment(
                     &ReportInput {
@@ -752,10 +734,9 @@ fn publish_inner(
                         platform: &pr.platform,
                         app_id: &pr.app_id,
                         device: &pr.device,
-                        plan: "",
                         ledger: &ledger,
                     },
-                    &verdict,
+                    run.failure.as_ref(),
                     &PrRun {
                         tested_sha: &pr.head_ref_oid,
                         tested_older_commit: pr.tested_older_commit,

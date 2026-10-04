@@ -283,37 +283,41 @@ a reset clears the earlier style restriction without proving native visibility.
 
 ### Input value masking
 
-Observed input values are masked before Jev requests. Private observed values and
-concealed fallback values also receive fragment protection in reporting and every
-outbound model request. A visible token is concealed when it contains a protected
-value, is a substring of at least four characters, belongs to adjacent
-single-character boxes whose concatenation matches at least two characters of a
-protected value. A lone single character is never masked by itself, so plan list
-numbers such as `3.` stay readable. The current screen's box context also applies when masking individual
-output fields. Tokens joined by `-`, `_`, `.` or `@` are judged whole. In model
-requests only a real element's structured testID is exempt from fragment masking;
-marker-looking text in labels, values, placeholders, instructions and criteria is
-masked normally. Short values and
-fragments never rewrite it, so `address1` stays readable when `1` is protected,
-but a testID containing a whole protected value of three or more characters is
-concealed. For saved-action admission, see [Saved blocks](#saved-blocks).
-Isolated shorter fragments of long
-secrets remain readable: `is` stays visible for `existing-secret`, while `secr`
-is concealed. A protected `1234` masks each of the four digit boxes shown side by side.
+Planned fill values are classified before progress streams. Streamed rows contain
+only value-free progress metadata and eligible screenshot paths; plan text,
+reasons, selectors and block names appear only in the final projected ledger.
+CLI progress shows the line, outcome, resolver and attempt without plan text.
+The shared [privacy matcher](../qaren-core/src/qa/privacy.ts) protects complete values of
+three or more characters after trimming, using case-sensitive substring matches
+for raw and trimmed NFC/NFD forms. Numbers with at least four digits also match
+with an optional Unicode whitespace character (including nonbreaking spaces),
+hyphen, dot or slash between digits. Model requests use
+opaque identity tokens; durable text uses `•••`; a match withholds saved blocks.
+Displayed identifiers use the same matcher while operational identifiers remain
+usable. Partial fragments of a longer value remain readable.
 
-Complete values can retain opaque identity tokens for model comparisons; these
-tokens disclose no content, length, format, order or validity. Concealed fragments
-(`•••`) never count as assertion evidence, and a phrase check or visibility
-expectation containing one remains uncertain. The
-[privacy implementation](../qaren-core/src/qa/privacy.ts) owns masking, with
-[fragment regression cases](../qaren-core/test/unit/qa/split-digit-privacy.test.ts).
-Once sensitive input pixels or a protected value's visible echo are observed,
-screenshots are withheld for the rest of the walk. Masks do not prove unobserved
-value content.
-Typed values outside protected fills that are shorter than three characters
-and were never observed as private input values can remain plaintext in
-unquoted reporting text; model masking
-matches them only as separate tokens. This known limitation is tracked in ANT-283.
+Short typed values (one or two characters) are protected in straight or curly
+quoted plan slots, including parsing requests, input value slots and structural
+code rows. They are not masked elsewhere, including a short value shown as free
+text before its fill. Secure-field values have a separate
+exception: two or more characters match as substrings; a single character
+matches only as a whole token. This includes native labels classified as possible
+values on secure inputs, even when no readable value is supplied.
+Structural step numbers remain readable.
+
+From the first fill dispatch, geometric rows of at least three visible,
+single-character text boxes render as one `[code]` token; model descriptions
+show each box as `box (hidden)`. Rows share a horizontal band within four points
+and have gaps no greater than 1.5 times the median box width. Wrappers and
+repeated characters do not affect grouping; buttons and inputs are not code
+boxes. Their characters are never retained as free-text matching rules.
+
+Opaque tokens preserve complete-value identity for model comparisons. An
+unobserved protected value or hidden input content cannot prove an assertion.
+Once sensitive input pixels, code rows or a protected value's visible echo are
+observed, screenshots are withheld for the rest of the walk. See the
+[structural privacy regression cases](../qaren-core/test/unit/qa/split-digit-privacy.test.ts)
+and [Saved blocks](#saved-blocks).
 
 iOS interactions check app existence immediately and wait only when the app is
 missing; availability and foreground checks remain in place. When the privacy
@@ -432,16 +436,19 @@ is never re-walked or rewritten. Timeout recovery remains deferred (see
 blocks that passed earlier in the run remain saved. A step without a `testID`
 or label, a phrase wait, a fill into a secure or private input, or an attempt at
 [keyboard fallback](#fill-verification-and-keyboard-fallback) leaves the block
-unsaved and the ledger says why without naming any value; ordinary fills keep their
-plan literal in the saved block. A previously saved block replayed against a now-private
+unsaved and the ledger says why without naming any value. Planned fill literals
+also undergo the [shared masking rules](#input-value-masking), so a protected
+literal withholds a newly discovered or patched block even for an ordinary input.
+A previously saved block replayed against a now-private
 input also reports withholding without rewriting or deleting the existing action.
 Discovered or patched block writes are deferred until the walk finishes. Values
-protected by private observations or keyboard fallback anywhere in the same run
-are checked under the [shared masking rules](#input-value-masking), including
-fragment protection. A matching block title, header field, raw comment, fill
+preclassified from the plan or protected by private observations or keyboard
+fallback anywhere in the same run are checked under those rules.
+A matching block title, header field, raw comment, fill
 literal, literal assertion, stored selector or serialized YAML withholds the
-block rather than rewriting its bytes. Admission derives adjacent-character
-context from the block's serialization inputs. The value-free reason is
+block rather than rewriting its bytes. Structural plan numbering is excluded
+from matching; code-box characters are not retained as fragment admission rules.
+The value-free reason is
 `contains a protected plan-typed value` in `blocks_not_saved`, including when the
 value was observed rather than typed. Existing saved actions are not removed.
 
@@ -478,8 +485,9 @@ diagnostic that never changes the verdict,
 [candidate provenance check](#candidate-provenance), which can fail the run.
 
 Block names in final ledger rows, block results, reports and `blocks_not_saved`
-use display masking. Machine fields `blocksWritten` in the core result and
-`blocks_written` in the receipt retain canonical slugs for file lookup and PR
+withhold the whole displayed name as `•••` when either the original title or
+its slug matches a protected value. Machine fields `blocksWritten` in the core
+result and `blocks_written` in the receipt retain canonical slugs for file lookup and PR
 block preservation; replay identifiers also remain unchanged.
 
 `qaren actions list [--json]` and `qaren actions show <slug>` read the
@@ -602,7 +610,7 @@ against an unchanged candidate to obtain attributable evidence.
 
 ```sh
 qaren pr <number|url> --plan-file plan.md --device <simulator-UUID> --json
-qaren publish <run-id> --verdict-file verdict.md --json
+qaren publish <run-id> --json
 ```
 
 `qaren publish` admits only a persisted `run.json` terminal result: no
@@ -663,7 +671,7 @@ the receipt's `cleanup.recorder` reports that final outcome. If shutdown remains
 unresolved, recover with `qaren cleanup <run-id>` as described under
 [iOS admission and cleanup](#ios-admission-and-cleanup).
 
-`qaren publish` posts one comment: the sentence from `--verdict-file`, the
+`qaren publish` posts one comment: the structured PASS/FAIL/REFUSED verdict and refusal code, the
 tested commit, an eligible available video, the plan with ✓/✗ per walked line,
 an available failing screenshot and collapsed run details. Plan lines come only
 from the walk's own rows, never from the raw plan file, so typed values stay out.

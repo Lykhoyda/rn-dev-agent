@@ -3,252 +3,178 @@ import { test } from 'node:test';
 import {
   MASK,
   ObservedPrivacy,
-  capturePrivateScreen,
-  redactEvidence,
+  matchPrivate,
+  projectPlanLine,
+  codeBoxRows,
 } from '../../../dist/qa/privacy.js';
-import { describe } from '../../../dist/qa/screen.js';
-import { decideScreen } from '../../../dist/qa/resolve.js';
-import { element, screen, scriptedJudge } from './judgment-fixtures.ts';
+import { join, describe } from '../../../dist/qa/screen.js';
+import { element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
+import { parsePlan, parsePlanWithJev } from '../../../dist/qa/plan.js';
+import { runPlan } from '../../../dist/qa/walker.js';
 
-test('short codes mask single characters while isolated short substrings stay readable', () => {
-  const privacy = new ObservedPrivacy();
-  privacy.concealFallback('1234');
-  const masked = privacy.redact(
-    'on screen: Enter the code | 1 | 2 | 3 | 4 | 12 | 34 | Verify | 56 | 9',
-  );
-  assert.equal(
-    masked,
-    `on screen: Enter the code | ${MASK} | ${MASK} | ${MASK} | ${MASK} | 12 | 34 | Verify | 56 | 9`,
-  );
-  assert.match(masked, /Enter the code/);
-  assert.match(masked, /Verify/);
-  assert.match(masked, /\| 56 \|/);
-  assert.match(masked, /\| 9$/);
-  assert.ok(masked.includes(MASK));
-});
-
-test('a lone single character is not masked by itself; adjacent boxes still are', () => {
-  const privacy = new ObservedPrivacy();
-  privacy.concealFallback('1234');
-  assert.equal(privacy.redact('3. Tap "qa-otp-verify"'), '3. Tap "qa-otp-verify"');
-  assert.equal(privacy.redact('step 4 of 5'), 'step 4 of 5');
-  assert.equal(
-    privacy.redact('on screen: Enter the code | 1 | 2 | 3 | 4 | Verify'),
-    `on screen: Enter the code | ${MASK} | ${MASK} | ${MASK} | ${MASK} | Verify`,
-  );
-});
-
-test('substring masking applies only to protected values, not ordinary typed text', () => {
-  const privacy = new ObservedPrivacy(['Ada']);
-  assert.equal(
-    privacy.redact('on screen: a | d | Ada Lovelace'),
-    'on screen: a | d | ••• Lovelace',
-  );
-});
-
-test('a protected fragment with trailing punctuation is still masked; identifiers stay whole', () => {
-  const privacy = new ObservedPrivacy();
-  privacy.concealFallback('1234');
-  privacy.concealFallback('qa@example.test');
-  assert.equal(
-    privacy.redact('last boxes 3 4. near qa-hidden-email'),
-    'last boxes ••• ••• near qa-hidden-email',
-  );
-});
-
-for (const origin of ['fallback', 'private observation'] as const) {
-  test(`${origin} masks digit boxes in outbound phrase checks`, async () => {
-    const observed = screen([
-      element('@heading', 'Enter the code', { kind: 'text' }),
-      ...['1', '2', '3', '4'].map((digit) => element(`@digit${digit}`, digit, { kind: 'text' })),
-      element('@verify', 'Verify'),
-    ]);
-    const privacy = new ObservedPrivacy();
-    if (origin === 'fallback') privacy.concealFallback('1234');
-    else
-      capturePrivateScreen(observed, [
-        { values: ['1234'], secure: true, elements: [], associationUnique: false },
-      ]);
-    const judge = scriptedJudge(() => ({ check_0: { type: 'noul', noul: 0.99 } }));
-    const result = await decideScreen(
-      observed,
-      judge,
-      { kind: 'check', text: 'Enter the code is visible', literal: false, line: 0 },
-      undefined,
+for (const code of ['4815', '1122', '9382']) {
+  test(`structural code row ${code} ignores wrappers and repeated text`, () => {
+    const screen = join(
+      [...code].flatMap((label, i) => [
+        { ref: `@group${i}`, type: 'Group' },
+        {
+          ref: `@box${i}`,
+          type: 'StaticText',
+          label,
+          rect: { x: i * 48, y: 100, width: 32, height: 40 },
+        },
+      ]),
       [],
-      privacy,
     );
-    assert.equal(result.check, 'pass');
-    assert.equal(judge.requests.length, 1);
-    const request = JSON.stringify(judge.requests[0]);
-    assert.equal(/[1-4]/.test(request), false, request);
-    assert.ok(request.includes('Enter the code'));
-    assert.ok(request.includes('Verify'));
-    assert.ok(request.includes(MASK));
-    assert.equal(observed.elements[1].label, '1');
+    const privacy = new ObservedPrivacy();
+    privacy.observe(screen);
+    assert.deepEqual(privacy.screenText(screen), [...code]);
+    privacy.didFill();
+    privacy.observe(screen);
+    assert.equal(codeBoxRows(screen).length, 1);
+    assert.deepEqual(privacy.screenText(screen), ['[code]']);
+    const mask = privacy.maskForModel([], []);
+    for (const box of screen.elements.filter((element) => element.kind === 'text'))
+      assert.equal(mask.describeElement(box, describe), 'box (hidden)');
+    assert.equal(privacy.redact('1 | 2 | 3 | 4'), '1 | 2 | 3 | 4');
+    assert.deepEqual(privacy.privateSet().values, []);
   });
 }
 
-test('fragment masks never establish protected value or fragment presence', async () => {
-  const observed = screen(
-    ['1', '2', '3', '4'].map((digit) => element(`@digit${digit}`, digit, { kind: 'text' })),
+test('keypads, counters and separated text stay readable after filling', () => {
+  for (const type of ['Button', 'Cell', 'TextField']) {
+    const screen = join(
+      ['1', '2', '3', '4'].map((label, i) => ({
+        ref: `@${i}`,
+        type,
+        label,
+        rect: { x: i * 48, y: 100, width: 32, height: 40 },
+      })),
+      [],
+    );
+    assert.deepEqual(codeBoxRows(screen), []);
+  }
+});
+
+test('shared policies combine trimming, normalization and digit separators', () => {
+  const privacy = new ObservedPrivacy([' Café ', '1234567890', 'CanaryAlpha77']);
+  for (const value of ['Cafe\u0301', ' Café ', '1234/5678/90', '1234-5678-90', 'CanaryAlpha77']) {
+    assert.equal(privacy.redact(value), MASK);
+    assert.equal(matchPrivate(value, privacy.privateSet(), 'persisted').hit, true);
+    assert.equal(
+      privacy.maskForModel(privacy.modelValues(), []).apply(value).includes(value),
+      false,
+    );
+  }
+  const target = element('@account', 'Account', { testID: 'account-1234-5678-90' });
+  assert.equal(
+    privacy.maskForModel([], []).describeElement(target, describe).includes('1234'),
+    false,
   );
-  const privacy = new ObservedPrivacy(['1234']);
-  privacy.concealFallback('1234');
-  for (const phrase of ['1234 is visible', '1 is visible']) {
-    const judge = scriptedJudge(() =>
-      assert.fail('concealed fragments cannot be judged as evidence'),
-    );
-    const result = await decideScreen(
-      observed,
-      judge,
-      { kind: 'check', text: phrase, literal: false, line: 0 },
-      undefined,
-      ['1234'],
-      privacy,
-    );
-    assert.equal(result.check, 'unsure');
-    for (const kind of ['wait', 'scroll'] as const) {
-      const visibility = await decideScreen(
-        observed,
-        judge,
-        undefined,
-        kind === 'scroll'
-          ? { kind, until: { phrase }, direction: 'down', line: 0 }
-          : { kind, target: { phrase }, line: 0 },
-        ['1234'],
-        privacy,
-      );
-      assert.deepEqual(visibility.visibility, { verdict: 'unsure' });
+  assert.equal(target.testID, 'account-1234-5678-90');
+});
+
+test('short typed values only mask quoted slots and input values', () => {
+  const privacy = new ObservedPrivacy(['1', '47']);
+  assert.equal(
+    projectPlanLine('1. Type "1" into "address1"', privacy.privateSet()).text,
+    '1. Type "•••" into "address1"',
+  );
+  assert.equal(projectPlanLine('Type "47"', privacy.privateSet(), 'persisted').hit, true);
+  assert.equal(privacy.redact('step 1 of 47'), 'step 1 of 47');
+  const input = element('@input', 'Age', { kind: 'input', value: '47' });
+  const screen = { front: 'app' as const, elements: [input], visibleText: ['Age: 47'] };
+  privacy.observe(screen);
+  assert.deepEqual(privacy.screenText(screen), ['Age: •••']);
+  assert.equal(privacy.maskForModel([], []).describeElement(input, describe).includes('47'), false);
+});
+
+test('secure length one is a whole token and secure length two masks substrings', () => {
+  const set = {
+    values: [
+      { text: '7', provenance: 'secret' as const },
+      { text: 'pw', provenance: 'secret' as const },
+    ],
+  };
+  assert.equal(matchPrivate('x7x 7 apwb', set, 'durable').text, `x7x ${MASK} a${MASK}b`);
+});
+
+test('a protected mask still reports a persisted hit', () => {
+  assert.deepEqual(
+    matchPrivate(MASK, { values: [{ text: MASK, provenance: 'typed' }] }, 'persisted'),
+    { text: MASK, hit: true },
+  );
+});
+
+test('Unicode digit grouping matches both directions at every policy', () => {
+  for (const separator of ['\u00a0', '\u202f', '\u0085', '\ufeff', '\t', '\n', '.', '-', '/']) {
+    const grouped = `1234${separator}5678${separator}90`;
+    for (const [privateValue, echo] of [
+      [grouped, '1234567890'],
+      ['1234567890', grouped],
+    ]) {
+      for (const provenance of ['typed', 'observed', 'concealed', 'secret'] as const) {
+        const set = { values: [{ text: privateValue, provenance }] };
+        for (const policy of ['model', 'durable', 'identifier', 'persisted'] as const) {
+          const projected = matchPrivate(`Account ${echo} ready`, set, policy, () => '[opaque]');
+          assert.deepEqual(projected, {
+            text: `Account ${policy === 'model' ? '[opaque]' : MASK} ready`,
+            hit: true,
+          });
+        }
+      }
+      const privacy = new ObservedPrivacy();
+      privacy.observe({
+        front: 'app',
+        visibleText: [],
+        elements: [element('@input', 'Account', { kind: 'input', value: privateValue })],
+      });
+      const label = element('@echo', `Account ${echo} ready`, { kind: 'text' });
+      const later = { front: 'app' as const, visibleText: [label.label!], elements: [label] };
+      privacy.observe(later);
+      assert.deepEqual(privacy.screenText(later), [`Account ${MASK} ready`]);
+      const mask = privacy.maskForModel([], []);
+      assert.equal(mask.describeElement(label, describe).includes(echo), false);
+      assert.equal(privacy.redactIdentifier(`account-${echo}`), `account-${MASK}`);
     }
   }
 });
 
-test('outbound masking preserves whole-value equality and ordinary typed fragment policy', () => {
-  const privacy = new ObservedPrivacy(['Ada']);
-  privacy.concealFallback('1234');
-  const mask = privacy.maskForModel(['Ada', '1234'], []);
-  assert.equal(mask.apply('a | d'), 'a | d');
-  assert.equal(mask.apply('1234'), mask.tokens[1]);
-  privacy.concealFallback('qa@example.test');
-  assert.equal(
-    privacy
-      .maskForModel(['Ada', '1234'], [])
-      .apply('3 4. | qa-hidden-email | qa-hidden_email | qa.hidden | qa@example.test-extra'),
-    `${MASK} ${MASK} | qa-hidden-email | qa-hidden_email | qa.hidden | ${MASK}`,
-  );
-});
-
-test('long secrets preserve isolated short substrings and mask long fragments at every boundary', () => {
-  const privacy = new ObservedPrivacy();
-  privacy.concealFallback('existing-secret');
-  const text =
-    'The name field is filled | e | exi | existing | secr | prefix-existing-secret-suffix';
-  const expected = `The name field is filled | e | exi | ${MASK} | ${MASK} | ${MASK}`;
-  assert.equal(privacy.redact(text), expected);
-  assert.equal(privacy.maskForModel([], [text]).apply(text), expected);
-});
-
-test('adjacent character boxes from long secrets are masked in reports and model projections', () => {
-  const privacy = new ObservedPrivacy();
-  privacy.concealFallback('existing-secret');
-  assert.equal(
-    privacy.redact('Boxes: e | x | i | s | q'),
-    `Boxes: ${MASK} | ${MASK} | ${MASK} | ${MASK} | q`,
-  );
-  const mask = privacy.maskForModel([], ['Code', 'e', 'x', 'i', 's', 'Verify']);
-  for (const char of ['e', 'x', 'i', 's'])
-    assert.equal(mask.apply(`Text "${char}"`), `Text "${MASK}"`);
-  assert.equal(mask.apply('Text "is"'), 'Text "is"');
-  assert.equal(mask.apply('Text "q"'), 'Text "q"');
-  assert.equal(new ObservedPrivacy().maskForModel([], []).apply('e | x'), 'e | x');
-});
-
-test('protected values inside identifiers are fully masked while exact values retain opaque identity', () => {
-  const privacy = new ObservedPrivacy();
-  for (const value of ['1', 'existing-secret']) privacy.concealFallback(value);
-  const mask = privacy.maskForModel(['1', 'existing-secret'], []);
-  assert.equal(mask.apply('1'), mask.tokens[0]);
-  assert.equal(mask.apply('existing-secret'), mask.tokens[1]);
-  assert.equal(mask.apply('field1 | prefix-existing-secret-suffix'), `${MASK} | ${MASK}`);
-  assert.equal(privacy.redact('field1 | prefix-existing-secret-suffix'), `${MASK} | ${MASK}`);
-});
-
-test('individual output fields retain the adjacent-box context of the observed screen', () => {
-  const observed = screen(
-    ['e', 'x', 'i', 's'].map((label) => element(`@${label}`, label, { kind: 'text' })),
-  );
-  capturePrivateScreen(observed, [
-    { values: ['existing-secret'], secure: true, elements: [], associationUnique: false },
-  ]);
-  const privacy = new ObservedPrivacy();
-  privacy.observe(observed);
-  for (const label of observed.visibleText) {
-    assert.equal(privacy.redact(label), MASK);
-    assert.equal(redactEvidence(observed, label), MASK);
-    assert.equal(privacy.maskForModel([], []).apply(label), MASK);
-  }
-  assert.equal(privacy.redact('The name field is filled'), 'The name field is filled');
-});
-
-test('outbound masking keeps testIDs readable unless they contain a whole long protected value', () => {
-  const privacy = new ObservedPrivacy();
-  privacy.concealFallback('1');
-  privacy.concealFallback('existing-secret');
-  const mask = privacy.maskForModel(['1', 'existing-secret'], []);
-  const sent = [
-    mask.describeElement(element('@input', 'Echo: 1', { testID: 'address1' }), describe),
-    mask.describeElement(element('@secret', 'A1B', { testID: 'existing-secret-field' }), describe),
-    mask.apply('existing-secret-value'),
-  ].join(' | ');
-  assert.ok(sent.includes('[testID address1]'), sent);
-  assert.equal(sent.includes('existing-secret-field'), false, sent);
-  assert.equal(sent.includes('Echo: 1'), false, sent);
-  assert.equal(sent.includes('A1B'), false, sent);
-  assert.equal(sent.includes('existing-secret-value'), false, sent);
-});
-
-for (const [secret, text] of [
-  ['1234', '[testID 1234]'],
-  ['1234', '[testID 1 2] | [testID 3 4]'],
-  ['42', 'Echo: [testID 42]'],
-  ['existing-secret', '[testID secr]'],
-]) {
-  test(`marker-looking free text is masked for ${secret}`, async () => {
-    const privacy = new ObservedPrivacy();
-    privacy.concealFallback(secret);
-    const mask = privacy.maskForModel([], [text]);
-    const expected = text.replace(/1234|42|[1-4]|secr/g, MASK);
-    assert.equal(mask.apply(text), expected);
+test('both structural prefixes survive model, refusal and ledger projection', async () => {
+  for (const prefix of ['123.', '123)']) {
+    const privacy = new ObservedPrivacy(['123']);
+    const raw = `${prefix} Type "123" into "pin"`;
     assert.equal(
-      mask.describeElement(element('@copy', text, { testID: 'copy' }), describe),
-      describe(element('@copy', expected, { testID: 'copy' })),
+      projectPlanLine(raw, privacy.privateSet()).text,
+      `${prefix} Type "•••" into "pin"`,
     );
-    const judge = scriptedJudge(() => ({ check_0: { type: 'noul', noul: 0.99 } }));
-    await decideScreen(
-      screen([element('@copy', text, { kind: 'text' })], [text]),
-      judge,
-      { kind: 'check', text: 'The confirmation is visible', literal: false, line: 0 },
-      undefined,
-      [],
-      privacy,
+    assert.equal(projectPlanLine(raw, privacy.privateSet(), 'persisted').hit, true);
+    const model = privacy.maskForModel(['123'], [raw]);
+    assert.equal(model.applyPlanLine(raw), `${prefix} Type "${model.tokens[0]}" into "pin"`);
+    const observed = screen([
+      element('@pin', 'PIN', { kind: 'input', testID: 'pin' }),
+      element('@ready', 'Ready', { kind: 'text' }),
+    ]);
+    const f = walker(
+      [observed],
+      scriptedJudge(() => assert.fail('literal plan is model-free')),
     );
-    assert.equal(judge.requests.length, 1);
-    const request = JSON.stringify(judge.requests[0]);
-    assert.equal(request.includes(text), false, request);
-    assert.ok(request.includes(MASK), request);
-  });
-}
-
-test('structured identifier masking fails closed on placeholder collisions or omission', () => {
-  const privacy = new ObservedPrivacy();
-  privacy.concealFallback('1');
-  const mask = privacy.maskForModel([], []);
-  for (const label of ['Echo: 1 \uE000', 'Echo: 1']) {
-    const input = element('@input', label, { testID: 'address1' });
-    const render = label.includes('\uE000')
-      ? describe
-      : (e: Parameters<typeof describe>[0]) => e.label!;
-    assert.equal(mask.describeElement(input, render), mask.apply(render(input)));
+    const blocks = parsePlan(`${raw}\n✓ "Ready"`).blocks;
+    assert.ok(blocks);
+    const ledger = await runPlan(blocks, f.deps);
+    assert.equal(ledger.verdict, 'PASS');
+    assert.equal(ledger.steps[0].text, `${prefix} Type "•••" into "pin"`);
+    assert.deepEqual(f.actions, ['fill @pin 123']);
+    const refused = await parsePlanWithJev(
+      `${prefix} Type "123"\n124. Type "123" into "pin"`,
+      f.deps.judge!,
+    );
+    assert.ok(refused.refused);
+    assert.equal(refused.refused[0].text, `${prefix} Type "•••"`);
+    const secure = { values: [{ text: '1', provenance: 'secret' as const }] };
+    for (const punctuation of ['.', ')']) {
+      const line = `1${punctuation} Tap "Continue"`;
+      assert.deepEqual(projectPlanLine(line, secure, 'persisted'), { text: line, hit: false });
+    }
   }
 });

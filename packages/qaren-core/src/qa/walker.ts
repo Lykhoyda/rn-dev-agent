@@ -31,7 +31,7 @@ import {
 } from './blocks.js';
 import { type Judge, type JevCall, JevError, unavailableJudge } from './questions.js';
 import { type LoginMarker, recover } from './recover.js';
-import { isPrivateInput, maskInputs, ObservedPrivacy } from './privacy.js';
+import { isPrivateInput, MASK, ObservedPrivacy, matchPrivate, projectPlanLine } from './privacy.js';
 import { NativeSnapshotIncomplete, PrivateInputCaptureError } from './private-input.js';
 import { AppProcessGoneError, emitCaptureDiagnostics, NativeCaptureError } from './capture.js';
 import { QaDispatchContext, QaDispatchError } from '../domain/qa-dispatch.js';
@@ -167,10 +167,6 @@ const UNRECOVERABLE = new Set([
   'APP_PROCESS_CHANGED',
   'APP_PROCESS_UNKNOWN',
 ]);
-
-function seenOn(screen: Screen): string {
-  return screen.visibleText.slice(0, 40).join(' | ');
-}
 
 // Retry a mutation once only when read-back failed and the screen provably did not move.
 export async function walkBlock(
@@ -459,6 +455,7 @@ export async function walkBlock(
     })(observationDeadline(observation.timing, deadline), deps.now, deps.cancelled);
     try {
       context.check();
+      if (item.kind === 'fill') privacy.didFill();
       const result = await send(context);
       context.assertComplete();
       diagnostic(item, observation, 'dispatch', 'COMPLETED', context.authorizations);
@@ -512,13 +509,17 @@ export async function walkBlock(
     }
     const timed = timing ? { ...row, timing } : row;
     rows.push(timed);
-    deps.row({ ...timed, block: privacy.redactIdentifier(timed.block) });
+    deps.row(valueFree(timed));
   };
   const redact = (text: string): string => privacy.redact(text);
   // A stored selector is written to the action file, so it must not carry a protected value.
   const stored = (selector: Selector | undefined): { selector?: Selector } => {
     const value = selector?.id ?? selector?.text;
-    return selector && value !== undefined && redact(value) === value ? { selector } : {};
+    return selector &&
+      value !== undefined &&
+      !matchPrivate(value, privacy.privateSet(), 'persisted').hit
+      ? { selector }
+      : {};
   };
   const exactSelector = (target: Target): Selector | undefined =>
     target.exact === 'id'
@@ -531,7 +532,7 @@ export async function walkBlock(
   const base = (item: Item, attempt: number): Omit<LedgerRow, 'outcome'> => ({
     block: block.slug,
     line: item.line,
-    text: redact(item.raw),
+    text: projectPlanLine(item.raw, privacy.privateSet()).text,
     attempt,
     kind: item.kind === 'check' ? 'check' : 'step',
     resolvedBy,
@@ -554,7 +555,7 @@ export async function walkBlock(
       reason: redact(miss ? `${reason}; re-walking from this line` : reason),
     });
     return {
-      block: { key: privacy.redactIdentifier(block.slug), outcome: 'fail', source: 'discovered' },
+      block: { key: block.slug, outcome: 'fail', source: 'discovered' },
       rows,
       ...(miss ? { miss: item.line } : {}),
       ...(privateFills.length ? { privateFills } : {}),
@@ -562,11 +563,7 @@ export async function walkBlock(
       failure: {
         step: item.line,
         seen: redact(
-          maskInputs(
-            screen,
-            `${reason}; historical context, previously on screen: ${seenOn(screen)}`,
-            typed,
-          ),
+          `${reason}; historical context, previously on screen: ${privacy.screenText(screen).slice(0, 40).join(' | ')}`,
         ),
         ...(screenshot ? { screenshot } : {}),
       },
@@ -1398,7 +1395,7 @@ export async function walkBlock(
     }
   }
   return {
-    block: { key: privacy.redactIdentifier(block.slug), outcome: 'pass', source: 'discovered' },
+    block: { key: block.slug, outcome: 'pass', source: 'discovered' },
     rows,
     ...(privateFills.length ? { privateFills } : {}),
     ...(recoveries ? { recoveries } : {}),
@@ -1409,6 +1406,23 @@ class RenderError extends Error {
   constructor() {
     super('the app is showing a React Native error screen');
   }
+}
+
+// The streamed row channel cannot be retracted, so it carries no text, reason, selector or identifier.
+function valueFree(row: LedgerRow): LedgerRow {
+  const { line, attempt, kind, resolvedBy, t, outcome, screenshot, timing } = row;
+  return {
+    block: '',
+    line,
+    text: '',
+    attempt,
+    kind,
+    resolvedBy,
+    t,
+    outcome,
+    ...(screenshot ? { screenshot } : {}),
+    ...(timing ? { timing } : {}),
+  };
 }
 
 const processChanged = (): ResolutionError =>
@@ -1521,6 +1535,9 @@ export async function runPlan(
     );
     const planTyped = typed.length;
     const privacy = new ObservedPrivacy(typed);
+    privacy.classify(
+      deps.login?.block?.items.flatMap((i) => (i.kind === 'fill' ? [i.text] : [])) ?? [],
+    );
     let recoveries = 0;
     // A login replay adds its own fills to `typed`.
     const videoPublication = (): NonNullable<WalkResult['videoPublication']> =>
@@ -1545,6 +1562,17 @@ export async function runPlan(
           : 'walk';
     // Saved after the last block, so an earlier block cannot keep a value a later fill made private.
     const pending: { index: number; write: () => BlockResult }[] = [];
+    // The slug stays the operational file name (blocksWritten); a display copy that hits is withheld whole.
+    const display = (slug: string): string => {
+      const values = privacy.privateSet();
+      const origins = deps.login?.block ? [...blocks, deps.login.block] : blocks;
+      const privateTitle = origins.some(
+        (block) => block.slug === slug && matchPrivate(block.title, values, 'identifier').hit,
+      );
+      return privateTitle || matchPrivate(slug, values, 'identifier').hit ? MASK : slug;
+    };
+    const unprotected = (value: string): boolean =>
+      !matchPrivate(value, privacy.privateSet(), 'persisted').hit;
     const finish = (outcome?: WalkOutcome): WalkResult => {
       if (!deps.cancelled?.()) {
         cancellationSignal();
@@ -1552,12 +1580,13 @@ export async function runPlan(
       }
       const ledger: WalkResult = {
         ...buildLedger(
-          results.map((result) => ({ ...result, key: privacy.redactIdentifier(result.key) })),
-          steps.map((row) => ({
+          results.map((result) => ({ ...result, key: display(result.key) })),
+          steps.map(({ selector, ...row }) => ({
             ...row,
-            block: privacy.redactIdentifier(row.block),
-            text: privacy.redact(row.text),
+            block: display(row.block),
+            text: projectPlanLine(row.text, privacy.privateSet()).text,
             ...(row.reason !== undefined ? { reason: privacy.redact(row.reason) } : {}),
+            ...(selector && unprotected(selector.id ?? selector.text ?? '') ? { selector } : {}),
           })),
           outcome?.failure
             ? { ...outcome.failure, seen: privacy.redact(outcome.failure.seen) }
@@ -1611,7 +1640,7 @@ export async function runPlan(
     ): BlockResult => {
       const result = withPrivateFills({ key: block.slug, outcome: 'pass', source }, privateFills);
       if (result.saved === false) return result;
-      const serialized = serializeBlock(block, rows, store, privacy.protectedValues());
+      const serialized = serializeBlock(block, rows, store, privacy.privateSet());
       if ('unsavable' in serialized)
         return { ...result, saved: false, unsavable: serialized.unsavable };
       try {
