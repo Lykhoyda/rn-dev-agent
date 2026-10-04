@@ -709,9 +709,9 @@ fn publish_inner(
         let mut attachments = Vec::new();
         if pr.video_publication == VideoPublication::Eligible
             && pr.video == VideoStatus::Available
-            && record::video_path(&run_dir).is_file()
+            && record::published_video_path(&run_dir).is_file()
         {
-            attachments.push((PathBuf::from("./media/video.mp4"), None));
+            attachments.push((PathBuf::from("./media/video-published.mp4"), None));
         }
         let ledger: Option<Ledger> = read_json(&run_dir.join("ledger.json")).ok();
         if let Some(shot) = ledger.as_ref().and_then(report::failing_screenshot) {

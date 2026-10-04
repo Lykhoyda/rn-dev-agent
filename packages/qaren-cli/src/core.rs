@@ -67,6 +67,9 @@ pub struct Ledger {
         deserialize_with = "passive"
     )]
     pub video_publication: Option<crate::record::VideoPublication>,
+    // Epoch ms at which the walk proved the app's bundle; earlier recorded frames are never published.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admitted_at_ms: Option<u64>,
     pub path: String,
     pub blocks: Vec<BlockResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -907,6 +910,7 @@ pub fn synthesized_ledger(rows: &[Row], verdict: &str, seen: &str) -> Ledger {
     Ledger {
         verdict: verdict.to_string(),
         video_publication: None,
+        admitted_at_ms: None,
         path: "walk".to_string(),
         blocks: Vec::new(),
         blocks_written: None,

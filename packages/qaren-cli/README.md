@@ -589,7 +589,12 @@ a per-run local ref rather than shared `FETCH_HEAD`, so concurrent PR runs
 verify their own fetched commits. On iOS the simulator
 screen is recorded from just before the walk to just after it and encoded to
 `media/video.mp4` (H.264, 30 fps); without `ffmpeg`, or when a capture cannot
-start, the run continues and the receipt's `video` outcome says why. Blocks the
+start, the run continues and the receipt's `video` outcome says why. The local
+recording stays complete; `qaren publish` uploads only
+`media/video-published.mp4`, a copy that starts when the walk proved the app's
+bundle, so launcher, server-picker and relaunch frames before admission never
+reach the pull request. Without an admission time or a successful trim, no video
+is uploaded. Blocks the
 walk saved are copied to `blocks/` before the worktree is removed. If the pull
 request moved during the run, the receipt names the tested commit in
 `tested_older_commit`. Like `check`, `pr` currently refuses Android with

@@ -365,6 +365,7 @@ fn evidence_documents_and_reports_still_withhold_opaque_output() {
     let ledger = qaren::core::Ledger {
         verdict: "FAIL".into(),
         video_publication: None,
+        admitted_at_ms: None,
         path: "walk".into(),
         blocks: Vec::new(),
         blocks_written: None,

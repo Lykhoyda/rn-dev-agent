@@ -90,6 +90,11 @@ pub fn video_path(run_dir: &Path) -> PathBuf {
     media_dir(run_dir).join("video.mp4")
 }
 
+// The copy `qaren publish` uploads; it starts at the admitted app, while video.mp4 stays complete.
+pub fn published_video_path(run_dir: &Path) -> PathBuf {
+    media_dir(run_dir).join("video-published.mp4")
+}
+
 fn segment_log(run_dir: &Path) -> PathBuf {
     run_dir.join("logs").join("recorder.log")
 }
@@ -355,6 +360,34 @@ pub fn finalize(runner: &mut dyn Runner, run_dir: &Path) -> VideoStatus {
     VideoStatus::TooLarge
 }
 
+// No frame before admission (launcher, server picker, relaunch) may reach the uploaded copy.
+pub fn publication_copy(
+    runner: &mut dyn Runner,
+    run_dir: &Path,
+    admitted_offset_ms: Option<u64>,
+) -> VideoStatus {
+    let out = published_video_path(run_dir);
+    let _ = std::fs::remove_file(&out);
+    let Some(offset) = admitted_offset_ms else {
+        return VideoStatus::Unavailable("no admitted app frame was recorded".into());
+    };
+    let start = format!("{}.{:03}", offset / 1000, offset % 1000);
+    let source = video_path(run_dir).to_string_lossy().into_owned();
+    if !ffmpeg_encode(runner, &["-ss", &start, "-i", &source], &out, None)
+        || probe_duration_ms(runner, &out).is_none()
+    {
+        let _ = std::fs::remove_file(&out);
+        return VideoStatus::Unavailable(
+            "the admitted part of the recording could not be prepared".into(),
+        );
+    }
+    if size_of(&out) > MAX_VIDEO_BYTES {
+        let _ = std::fs::remove_file(&out);
+        return VideoStatus::TooLarge;
+    }
+    VideoStatus::Available
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,6 +473,75 @@ mod tests {
         fn commands_executed(&self) -> u64 {
             self.mock.commands_executed()
         }
+    }
+
+    #[test]
+    fn the_published_copy_starts_at_admission_and_the_local_recording_stays_complete() {
+        let run_dir = temp_run_dir();
+        std::fs::write(video_path(&run_dir), "complete").unwrap();
+        let mut runner = SizedEncodes {
+            mock: MockRunner::new(),
+            sizes: vec![10],
+        };
+        runner.mock.expect_run("ffmpeg", CmdOutput::success(""));
+        runner
+            .mock
+            .expect_run("ffprobe", CmdOutput::success("20.0\n"));
+        assert_eq!(
+            publication_copy(&mut runner, &run_dir, Some(12_345)),
+            VideoStatus::Available
+        );
+        let args = &runner.mock.calls[0].args;
+        let ss = args.iter().position(|a| a == "-ss").unwrap();
+        assert_eq!(args[ss + 1], "12.345");
+        assert_eq!(args[ss + 2], "-i");
+        assert_eq!(args[ss + 3], video_path(&run_dir).to_string_lossy());
+        assert_eq!(
+            args.last().unwrap(),
+            &published_video_path(&run_dir)
+                .to_string_lossy()
+                .into_owned()
+        );
+        assert!(published_video_path(&run_dir).is_file());
+        assert_eq!(
+            std::fs::read_to_string(video_path(&run_dir)).unwrap(),
+            "complete"
+        );
+        assert_eq!(runner.mock.remaining(), 0);
+    }
+
+    #[test]
+    fn without_an_admission_time_nothing_is_publishable() {
+        let run_dir = temp_run_dir();
+        std::fs::write(video_path(&run_dir), "complete").unwrap();
+        std::fs::write(published_video_path(&run_dir), "stale").unwrap();
+        let mut mock = MockRunner::new();
+        assert!(matches!(
+            publication_copy(&mut mock, &run_dir, None),
+            VideoStatus::Unavailable(_)
+        ));
+        assert!(mock.calls.is_empty());
+        assert!(!published_video_path(&run_dir).exists());
+        assert!(video_path(&run_dir).is_file());
+    }
+
+    #[test]
+    fn a_failed_trim_leaves_no_published_copy() {
+        let run_dir = temp_run_dir();
+        std::fs::write(video_path(&run_dir), "complete").unwrap();
+        let mut runner = SizedEncodes {
+            mock: MockRunner::new(),
+            sizes: vec![10],
+        };
+        runner.mock.expect_run("ffmpeg", CmdOutput::success(""));
+        runner
+            .mock
+            .expect_run("ffprobe", CmdOutput::failed(1, "no duration"));
+        assert!(matches!(
+            publication_copy(&mut runner, &run_dir, Some(90_000)),
+            VideoStatus::Unavailable(_)
+        ));
+        assert!(!published_video_path(&run_dir).exists());
     }
 
     #[test]

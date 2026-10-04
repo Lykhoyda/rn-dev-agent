@@ -487,6 +487,8 @@ fn run_inner(
     }
     // ⑧: the recording starts before the walk so it shows the first step.
     let mut video = None;
+    // Taken before the spawn, so the trim offset can only cut later than the true admission frame.
+    let recording_from = ctx.runner.now_epoch_ms();
     if pr_state.is_some() {
         if let Err(status) = record::start(ctx.runner, &mut ctx.record, &ctx.runs_root, &device.id)
         {
@@ -678,6 +680,16 @@ fn run_inner(
     if let Some(pr) = &pr_state {
         let video = video.unwrap_or_else(|| record::finalize(ctx.runner, &run_dir));
         ctx.notes.push(("video".to_string(), video.to_string()));
+        // Only the uploaded copy starts at the admitted app; the local recording stays complete.
+        let video = if video == VideoStatus::Available {
+            let offset = outcome
+                .ledger
+                .admitted_at_ms
+                .map(|at| at.saturating_sub(recording_from));
+            record::publication_copy(ctx.runner, &run_dir, offset)
+        } else {
+            video
+        };
         // ⑭: a head that moved during the run means an older commit was tested.
         match github::pr_view(ctx.runner, &pr.info.url, &pr.repo_root) {
             Ok(now) if now.head_ref_oid != pr.info.head_ref_oid => {

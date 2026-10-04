@@ -99,6 +99,7 @@ fn run_dir(cross_repository: bool) -> (PathBuf, PathBuf, PathBuf) {
     std::fs::write(dir.join("plan.md"), "✓ \"Tasks\"\n").unwrap();
     std::fs::write(dir.join("blocks/tasks.yaml"), "steps: []\n").unwrap();
     std::fs::write(dir.join("media/video.mp4"), "mp4").unwrap();
+    std::fs::write(dir.join("media/video-published.mp4"), "mp4").unwrap();
     std::fs::write(dir.join("screenshots/01.png"), "png").unwrap();
     let verdict = repo.join("verdict.md");
     std::fs::write(&verdict, "The Tasks tab is missing after the change.\n").unwrap();
@@ -264,7 +265,10 @@ fn publish_comments_removes_the_label_and_pushes_the_blocks_with_the_exact_lease
         .find(|c| c.label == "gh-pr-comment")
         .unwrap();
     assert_eq!(comment.cwd.as_deref(), Some(dir.as_path()));
-    assert!(comment.args.contains(&"./media/video.mp4".to_string()));
+    assert!(comment
+        .args
+        .contains(&"./media/video-published.mp4".to_string()));
+    assert!(!comment.args.contains(&"./media/video.mp4".to_string()));
     assert!(comment
         .args
         .contains(&"./screenshots/01.png#Failing step".to_string()));
@@ -1892,4 +1896,31 @@ fn real_git_readback_requires_the_pr_fetch_destination_with_a_fake_forge() {
         assert_eq!(local_git(repo, &["rev-parse", "HEAD"]).trim(), base);
         std::fs::remove_dir_all(repo).unwrap();
     }
+}
+
+#[test]
+fn only_the_admission_trimmed_copy_is_ever_uploaded() {
+    let (runs, dir, verdict) = run_dir(false);
+    std::fs::remove_file(dir.join("media/video-published.mp4")).unwrap();
+    let mut runner = Git(MockRunner::new());
+    script_comment_and_label(&mut runner.0);
+    script_commit(&mut runner.0);
+    runner
+        .0
+        .expect_run("git push origin", CmdOutput::success(""));
+    let receipt = publish(&mut runner, &runs, RUN, &verdict, &machine());
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Published,
+        "{:?}",
+        receipt.failure
+    );
+    let comment = runner
+        .0
+        .calls
+        .iter()
+        .find(|c| c.label == "gh-pr-comment")
+        .unwrap();
+    assert!(!comment.args.iter().any(|arg| arg.contains("video")));
+    assert!(dir.join("media/video.mp4").is_file());
 }

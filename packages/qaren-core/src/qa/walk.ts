@@ -147,6 +147,8 @@ function compileOnly(args: string[]): Promise<never> {
 interface Session {
   deps: WalkerDeps;
   close(): Promise<void>;
+  // Epoch ms of the bundle proof; recorded frames before it are never published.
+  admittedAtMs: number;
 }
 
 type Handler<A> = (args: A) => Promise<ToolResult>;
@@ -329,6 +331,7 @@ async function openSession(
     await close();
     throw new HandlerError(proof.code, proof.message);
   }
+  const admittedAtMs = Date.now();
   await cancelled();
   log(
     `bundle proven: ${proof.scriptURL} (${proof.appModules} app modules under ${target.worktree})`,
@@ -466,6 +469,7 @@ async function openSession(
   return {
     deps,
     close,
+    admittedAtMs,
   };
 }
 
@@ -559,7 +563,10 @@ async function main(): Promise<void> {
       platform: request.platform,
       appId: request.appId,
     });
-    return finish(resultForWalk(ledger, request.lease), () => opened.close());
+    return finish(
+      resultForWalk({ ...ledger, admittedAtMs: opened.admittedAtMs }, request.lease),
+      () => opened.close(),
+    );
   } catch (error) {
     const { code, message } = describeError(error);
     const ledger = missingResult(rows, `${code}: ${message}`);
@@ -567,6 +574,7 @@ async function main(): Promise<void> {
       ...(request.preflightCalls ?? []),
       ...(opened.deps.judge?.calls ?? []),
     ]);
+    ledger.admittedAtMs = opened.admittedAtMs;
     return finish(ledger, () => opened.close());
   }
 }
