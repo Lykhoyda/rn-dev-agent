@@ -73,9 +73,12 @@ or more refuse with `TARGET_AMBIGUOUS`, without a Jev tie-break, even if the
 target adds positional words such as `Tap "Save" at the bottom`. A fill counts
 text-entry candidates plus every element carrying its testID, so a form label
 naming an input is not a twin, while a button sharing the input's testID is. A
-React-only composite collapses into the one native input only when React host
-and digest ancestry prove it is that input's ancestor forwarding the same
-testID; a separate element sharing the ID remains a twin. A merged composite
+React-only projection collapses into the one native input only when complete
+React host evidence and digest ancestry prove it represents the same input host:
+either its composite ancestor forwarding the same testID, or the host entry left
+after the native input joined that ancestor. A separate element sharing the ID
+remains a twin, as covered by the
+[forwarding-proof tests](../qaren-core/test/unit/qa/identity.test.ts). A merged composite
 input keeps its placeholder for quoted fill resolution. The refusal is terminal:
 it is never recovered, retried or re-walked,
 including for stored replay selectors and for a handler that finds twins at dispatch. A text element
