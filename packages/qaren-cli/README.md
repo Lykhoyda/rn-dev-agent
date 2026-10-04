@@ -389,8 +389,8 @@ longer resolves uniquely before that step authorizes any mutation re-walks
 the block from that line; earlier completed steps are kept. Once that step authorizes
 a mutation, its selector failure is terminal. On PASS only the commands under that
 line and later ones are rewritten, and every `✓` comment stays byte-identical. A failing check is a FAIL and
-is never re-walked or rewritten. Timeout and ambiguous screen-movement recovery
-remain deferred; app-process changes stay terminal. A failing block is never saved;
+is never re-walked or rewritten. Timeout recovery remains deferred (see
+[Step recovery](#step-recovery)); app-process changes stay terminal. A failing block is never saved;
 blocks that passed earlier in the run remain saved. A step without a `testID`
 or label, a phrase wait, a fill into a secure or private input, or an attempt at
 [keyboard fallback](#fill-verification-and-keyboard-fallback) leaves the block
@@ -462,6 +462,30 @@ captures (a crash or restart), or a snapshot or platform-presence capture report
 `NATIVE_CAPTURE_UNAVAILABLE` refusal. An initial capture that does not report the process
 refuses `APP_PROCESS_UNKNOWN`; a runner built from an older checkout needs a rebuild
 (`RN_RUNNER_BUILD=local`).
+
+### Step recovery
+
+An action whose screen did not change after its one retry, a step target that
+does not resolve, or a phrase check still unsure after its re-ask
+gets one deterministic recovery, then the step runs once more from a fresh capture
+(source: [`recover.ts`](../qaren-core/src/qa/recover.ts)). In order: a React Native
+red box fails the step at once with the overlay's text in `failure.seen`; a system
+dialog in front is accepted; the dev menu in front is hidden; a dev-client picker or
+first-run screen fails the step, because the app did not load its bundle from Metro;
+and when `loginMarker` (`{ id: <testID> }` or `{ text: <label> }`) is on screen, the
+saved block `loginBlock` (`.qaren/actions/<loginBlock>.yaml`, saved for this app and
+platform) replays by its stored identities. The two keys are set together. A second
+failure of the same step fails it, recovery never runs inside the login replay, and
+capture, Jev, process, replay-miss and cancellation refusals are never recovered. The
+ledger's `recoveries` counts recoveries that let the step retry; `escapes` and `llmTurns`
+stay `0`. Login fills are masked like plan fills and withhold the video.
+
+`env: { KEY: value }` in `.qaren/config.yaml` reaches only the native build
+(including `expo prebuild`) and Metro, so app selection such as a staging
+environment does not depend on the caller's shell. Keys match `^[A-Z_][A-Z0-9_]*$`
+and may not be `QAREN_*` or a variable qaren sets itself; values are one line. The
+values change the native fingerprint, are redacted (from 4 bytes) from logs and
+receipts, and the receipt's `config_env` outcome names only the keys.
 
 ### Walk timing
 

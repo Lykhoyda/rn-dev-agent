@@ -30,6 +30,10 @@ pub struct CoreRequest {
     pub app_root: PathBuf,
     pub run_dir: PathBuf,
     pub lease: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login_block: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login_marker: Option<crate::config::LoginMarker>,
     pub target: CoreTarget,
 }
 

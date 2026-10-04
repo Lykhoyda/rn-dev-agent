@@ -680,3 +680,14 @@ fn a_command_log_that_cannot_be_truncated_is_refused() {
     drop(reader);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn configured_env_values_are_redacted_by_the_log_helper() {
+    qaren::redact::protect_values(["staging-config-value", "dev"]);
+    let stored = spawned_log(
+        "printf 'env staging-config-value\\n'\nprintf 'json \"staging-config-value\" dev\\n' >&2\nprintf 'tail line\\n'",
+    );
+    assert!(!stored.contains("staging-config-value"), "{stored}");
+    assert!(stored.contains("env [REDACTED_SECRET]\n"), "{stored}");
+    assert!(stored.contains(" dev\n"), "{stored}");
+}

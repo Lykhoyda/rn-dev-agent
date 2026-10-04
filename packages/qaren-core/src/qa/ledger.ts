@@ -67,6 +67,7 @@ export function buildLedger(
   failure?: LedgerFailure,
   calls: readonly JevCall[] = [],
   path: LedgerPath = 'walk',
+  recoveries = 0,
 ): Ledger {
   const failedRow = [...steps].reverse().find((r) => r.outcome === 'fail');
   const failedBlock = blocks.find((b) => b.outcome === 'fail');
@@ -85,7 +86,7 @@ export function buildLedger(
     jev: summarizeJev(calls),
     llmTurns: 0,
     escapes: 0,
-    recoveries: 0,
+    recoveries,
   };
   const speed = summarizeSpeed(steps);
   if (speed) ledger.speed = speed;

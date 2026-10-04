@@ -61,6 +61,8 @@ fn request() -> CoreRequest {
         app_root: PathBuf::from("/tmp/app"),
         run_dir: PathBuf::from("/tmp/qaren-runs/check"),
         lease: format!("{RUN}:abcdef0123456789abcdef0123456789"),
+        login_block: None,
+        login_marker: None,
         target: CoreTarget {
             device_id: "AAAA-1111".to_string(),
             metro_port: 8791,

@@ -4164,3 +4164,62 @@ fn cancelled_pr_startup_never_dispatches_the_core_and_cleans_up() {
         assert_eq!(runner.inner.remaining(), 0);
     }
 }
+
+#[test]
+fn config_env_reaches_build_and_metro_and_login_keys_reach_the_core() {
+    let (repo, app) = app_repo();
+    common::write_ios_workspace(&app, "ios/Native App.xcworkspace");
+    configure_workspace(&app, "ios/Native App.xcworkspace", "Native Debug");
+    let config = app.join(".qaren/config.yaml");
+    let mut yaml = std::fs::read_to_string(&config).unwrap();
+    yaml.push_str("env:\n  ENVIRONMENT: staging-value-x\nloginBlock: log-in\nloginMarker:\n  id: login-screen\n");
+    std::fs::write(&config, yaml).unwrap();
+    let mut mock = MockRunner::new();
+    mock.build_log = Some("built for staging-value-x\n".into());
+    script_preflight(&mut mock, &repo);
+    mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+    script_provision_build(&mut mock, "xcodebuild", common::IOS_NATIVE_FILES);
+    script_drift_status(&mut mock);
+    mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
+    script_core_identity(&mut mock);
+    script_teardown(&mut mock);
+
+    let receipt = run(&mut mock, &request(&repo, &app, 30));
+
+    assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
+    let pair = ("ENVIRONMENT".to_string(), "staging-value-x".to_string());
+    for label in ["xcodebuild-ios", "expo-start"] {
+        let spec = mock.calls.iter().find(|c| c.label == label).unwrap();
+        assert!(spec.env.contains(&pair), "{label}: {:?}", spec.env);
+    }
+    for spec in mock.calls.iter().filter(|c| {
+        !matches!(
+            c.label.as_str(),
+            "xcodebuild-ios" | "expo-start" | "expo-prebuild"
+        )
+    }) {
+        assert!(!spec.env.contains(&pair), "{}", spec.label);
+    }
+    let request = (0..mock.piped_stdin.len())
+        .map(|i| mock.piped_stdin_text(i))
+        .find(|text| text.contains("\"plan\""))
+        .unwrap();
+    assert!(request.contains("\"loginBlock\":\"log-in\""), "{request}");
+    assert!(
+        request.contains("\"loginMarker\":{\"id\":\"login-screen\"}"),
+        "{request}"
+    );
+    assert!(!request.contains("staging-value-x"));
+    assert_eq!(
+        receipt.outcomes.get("config_env").map(String::as_str),
+        Some("ENVIRONMENT")
+    );
+    let run_dir = repo.join("runs").join(run_id());
+    let receipt_json = serde_json::to_string(&receipt).unwrap();
+    assert!(!receipt_json.contains("staging-value-x"));
+    assert!(!std::fs::read_to_string(run_dir.join("run.json"))
+        .unwrap()
+        .contains("staging-value-x"));
+    let log = std::fs::read_to_string(run_dir.join("logs/xcodebuild-ios.log")).unwrap();
+    assert!(!log.contains("staging-value-x"), "{log}");
+}

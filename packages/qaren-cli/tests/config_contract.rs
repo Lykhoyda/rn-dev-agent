@@ -43,3 +43,88 @@ fn ios_check_config_owns_bounded_launch_scheme_validation_without_echoing_input(
         assert!(config.validate_for_platform(Platform::Android).is_ok());
     }
 }
+
+fn load(yaml: &str) -> Result<CheckConfig, qaren::failure::Failure> {
+    let repo = common::temp_repo();
+    let path = repo.join("config.yaml");
+    std::fs::write(&path, yaml).unwrap();
+    CheckConfig::load(&path).map(|(config, _)| config)
+}
+
+#[test]
+fn login_block_and_marker_load_together() {
+    let config = load("appId: a\nloginBlock: log-in\nloginMarker: { id: login-screen }\n").unwrap();
+    assert_eq!(config.login_block.as_deref(), Some("log-in"));
+    assert_eq!(
+        config.login_marker.as_ref().and_then(|m| m.id.as_deref()),
+        Some("login-screen")
+    );
+    let config = load("appId: a\nloginBlock: log-in\nloginMarker: { text: Sign in }\n").unwrap();
+    assert_eq!(
+        config.login_marker.and_then(|m| m.text).as_deref(),
+        Some("Sign in")
+    );
+}
+
+#[test]
+fn login_config_refuses_half_pairs_bad_slugs_and_ambiguous_markers() {
+    for yaml in [
+        "appId: a\nloginBlock: log-in\n",
+        "appId: a\nloginMarker: { id: login-screen }\n",
+    ] {
+        let failure = load(yaml).unwrap_err();
+        assert_eq!(failure.code, FailureCode::ScenarioInvalid);
+        let detail = failure.detail.to_string();
+        assert!(
+            detail.contains("loginBlock") && detail.contains("loginMarker"),
+            "{detail}"
+        );
+    }
+    for yaml in [
+        "appId: a\nloginBlock: ../x\nloginMarker: { id: m }\n",
+        "appId: a\nloginBlock: a..b\nloginMarker: { id: m }\n",
+        "appId: a\nloginBlock: -x\nloginMarker: { id: m }\n",
+        &format!(
+            "appId: a\nloginBlock: {}\nloginMarker: {{ id: m }}\n",
+            "a".repeat(65)
+        ),
+        "appId: a\nloginBlock: log-in\nloginMarker: { id: m, text: t }\n",
+        "appId: a\nloginBlock: log-in\nloginMarker: {}\n",
+        "appId: a\nloginBlock: log-in\nloginMarker: { id: '' }\n",
+    ] {
+        assert_eq!(
+            load(yaml).unwrap_err().code,
+            FailureCode::ScenarioInvalid,
+            "{yaml}"
+        );
+    }
+}
+
+#[test]
+fn config_env_takes_plain_keys_and_never_echoes_values() {
+    let config = load("appId: a\nenv: { ENVIRONMENT: staging, _X1: 'y' }\n").unwrap();
+    assert_eq!(
+        config.env_pairs(),
+        vec![
+            ("ENVIRONMENT".to_string(), "staging".to_string()),
+            ("_X1".to_string(), "y".to_string())
+        ]
+    );
+    for key in [
+        "environment",
+        "1X",
+        "A-B",
+        "TYPESAFE_API_KEY",
+        "CI",
+        "PATH",
+        "EXPO_NO_TELEMETRY",
+        "QAREN_ANYTHING",
+    ] {
+        let failure = load(&format!("appId: a\nenv: {{ {key}: secret-value }}\n")).unwrap_err();
+        assert_eq!(failure.code, FailureCode::ScenarioInvalid, "{key}");
+        assert!(!failure.detail.to_string().contains("secret-value"));
+    }
+    let failure = load("appId: a\nenv: { ENVIRONMENT: \"secret\\nvalue\" }\n").unwrap_err();
+    assert_eq!(failure.code, FailureCode::ScenarioInvalid);
+    assert!(!failure.detail.to_string().contains("secret"));
+}

@@ -29,6 +29,7 @@ import {
   writeBlock,
 } from './blocks.js';
 import { type Judge, type JevCall, JevError, unavailableJudge } from './questions.js';
+import { type LoginMarker, recover } from './recover.js';
 import { isPrivateInput, maskInputs, ObservedPrivacy } from './privacy.js';
 import { NativeSnapshotIncomplete, PrivateInputCaptureError } from './private-input.js';
 import { AppProcessGoneError, emitCaptureDiagnostics, NativeCaptureError } from './capture.js';
@@ -94,6 +95,11 @@ export interface WalkerDeps {
   rowTiming?(t: number): RowTiming;
   // iOS only: the app process every capture must still belong to, set by the first capture.
   appProcess?: { expected?: number };
+  // One recovery per failed item runs only with the red-box probe wired.
+  redBox?(): Promise<boolean>;
+  hideDevMenu?(): Promise<ActResult>;
+  // A configured login wall; an absent block means it was missing or unreadable.
+  login?: { marker: LoginMarker; block?: Block };
 }
 
 export interface WalkerTimingDiagnostic {
@@ -144,12 +150,22 @@ export interface WalkOutcome {
   miss?: number;
   // Fill lines that typed into a private input; their block is never saved.
   privateFills?: number[];
+  recoveries?: number;
 }
 
 export interface WalkOptions {
   fromLine?: number;
   mode?: 'walk' | 'replay';
+  recover?: boolean;
 }
+
+// Capture and process refusals and the replay-miss path are never recovered.
+const UNRECOVERABLE = new Set([
+  'REPLAY_SELECTOR',
+  'SCREEN_EVIDENCE_INCOMPLETE',
+  'APP_PROCESS_CHANGED',
+  'APP_PROCESS_UNKNOWN',
+]);
 
 function seenOn(screen: Screen): string {
   return screen.visibleText.slice(0, 40).join(' | ');
@@ -177,6 +193,8 @@ export async function walkBlock(
   let line = 0;
   let mutationStarted = false;
   let latestObservation = 0;
+  let recoveries = 0;
+  const recovered = new Set<Item>();
   const metric = (
     stage: TimingEvent['stage'],
     observation?: Observation,
@@ -525,6 +543,7 @@ export async function walkBlock(
       rows,
       ...(miss ? { miss: item.line } : {}),
       ...(privateFills.length ? { privateFills } : {}),
+      ...(recoveries ? { recoveries } : {}),
       failure: {
         step: item.line,
         seen: redact(
@@ -779,222 +798,396 @@ export async function walkBlock(
     emit({ ...base(item, attempt), outcome: 'pass', reason: redact(focusedReason(quoted)) });
     return 'typed';
   };
+  // The login block walks with this walk's privacy, so its typed values stay masked.
+  const replayLogin = async () => {
+    const login = deps.login?.block;
+    if (!login) return 'fail' as const;
+    let taken = 0;
+    const counted: WalkerDeps = {
+      ...deps,
+      screenshot: (name) => {
+        taken += 1;
+        return deps.screenshot(name);
+      },
+    };
+    const nested = await walkBlock(login, counted, shots, typed, privacy, sequence, {
+      mode: 'replay',
+      recover: false,
+    });
+    shots += taken;
+    rows.push(...nested.rows);
+    if (nested.refusal) return { refuse: nested.refusal };
+    return nested.failure ? ('fail' as const) : ('pass' as const);
+  };
+  // At most one recovery per item; 'retry' re-runs the item from a fresh capture.
+  const recovery = async (
+    item: Item,
+    attempt: number,
+    reason: string,
+  ): Promise<'retry' | WalkOutcome | undefined> => {
+    if (opts.recover === false || !deps.redBox || !deps.hideDevMenu || recovered.has(item))
+      return undefined;
+    recovered.add(item);
+    const fresh = await capture();
+    const result = await recover(
+      fresh.screen,
+      {
+        redBox: deps.redBox,
+        hideDevMenu: deps.hideDevMenu,
+        dialog: () => mutate(item, fresh, (context) => deps.dialog('accept', context)),
+        ...(deps.login ? { replayLogin } : {}),
+      },
+      deps.login?.marker,
+    );
+    if (!result) return undefined;
+    if ('handled' in result) {
+      recoveries += 1;
+      emit({
+        ...base(item, attempt),
+        outcome: 'retry',
+        reason: redact(`${reason}; recovered: ${result.handled}; retrying the step once`),
+      });
+      return 'retry';
+    }
+    const shot = await shoot(item);
+    return 'fail' in result
+      ? failed(item, attempt, result.fail, fresh.screen, shot)
+      : {
+          ...failed(item, attempt, result.refuse.message, fresh.screen, shot),
+          refusal: result.refuse,
+        };
+  };
 
-  for (const item of block.items) {
+  items: for (const item of block.items) {
     if (opts.fromLine !== undefined && item.line < opts.fromLine) continue;
-    line = item.line;
-    mutationStarted = false;
-    let currentAttempt = 1;
-    resolvedBy = item.source === 'jev' && !replay ? 'jev' : 'exact';
-    if (item.kind === 'fill' && item.text && !typed.includes(item.text)) typed.push(item.text);
-    try {
-      if (item.kind === 'check') {
-        const next = block.items[block.items.indexOf(item) + 1];
-        const nextStep =
-          !item.literal && next && next.kind !== 'check' && stepTarget(next)?.quoted === undefined
-            ? next
-            : undefined;
-        let before = await capture(nextStep, !item.literal);
-        resolvedBy = item.literal ? 'exact' : 'jev';
-        let decision: ScreenDecision;
-        let freshness = 1;
-        let reasks = CHECK.reasks;
-        for (;;) {
-          try {
-            decision = await decide(before, item, nextStep);
-          } catch (error) {
-            if (!(error instanceof EvidenceExpired) || freshness-- <= 0) throw error;
-            metric('refresh', before);
+    attempts: for (;;) {
+      line = item.line;
+      mutationStarted = false;
+      let currentAttempt = 1;
+      resolvedBy = item.source === 'jev' && !replay ? 'jev' : 'exact';
+      if (item.kind === 'fill' && item.text && !typed.includes(item.text)) typed.push(item.text);
+      try {
+        if (item.kind === 'check') {
+          const next = block.items[block.items.indexOf(item) + 1];
+          const nextStep =
+            !item.literal && next && next.kind !== 'check' && stepTarget(next)?.quoted === undefined
+              ? next
+              : undefined;
+          let before = await capture(nextStep, !item.literal);
+          resolvedBy = item.literal ? 'exact' : 'jev';
+          let decision: ScreenDecision;
+          let freshness = 1;
+          let reasks = CHECK.reasks;
+          for (;;) {
+            try {
+              decision = await decide(before, item, nextStep);
+            } catch (error) {
+              if (!(error instanceof EvidenceExpired) || freshness-- <= 0) throw error;
+              metric('refresh', before);
+              before = await capture(nextStep, !item.literal);
+              continue;
+            }
+            if (decision.check !== 'unsure' || reasks-- <= 0) break;
+            metric('reask', before);
+            await pause(WAIT_POLL_MS);
             before = await capture(nextStep, !item.literal);
-            continue;
           }
-          if (decision.check !== 'unsure' || reasks-- <= 0) break;
-          metric('reask', before);
-          await pause(WAIT_POLL_MS);
-          before = await capture(nextStep, !item.literal);
+          const shot = await shoot(item);
+          if (decision.check === 'pass') {
+            if (nextStep) cached = { item: nextStep, observation: before, decision };
+            emit({ ...base(item, 1), ...(shot ? { screenshot: shot } : {}), outcome: 'pass' });
+            continue items;
+          }
+          const reason =
+            decision.check === 'unsure'
+              ? 'CHECK_UNSURE: the expectation remained uncertain after a fresh-screen re-ask'
+              : `"${item.text}" is not satisfied on screen`;
+          if (decision.check === 'unsure') {
+            const recovering = await recovery(item, 1, reason);
+            if (recovering === 'retry') continue attempts;
+            if (recovering) return recovering;
+          }
+          return failed(item, 1, reason, before.screen, shot);
         }
-        const shot = await shoot(item);
-        if (decision.check === 'pass') {
-          if (nextStep) cached = { item: nextStep, observation: before, decision };
-          emit({ ...base(item, 1), ...(shot ? { screenshot: shot } : {}), outcome: 'pass' });
-          continue;
-        }
-        const reason =
-          decision.check === 'unsure'
-            ? 'CHECK_UNSURE: the expectation remained uncertain after a fresh-screen re-ask'
-            : `"${item.text}" is not satisfied on screen`;
-        return failed(item, 1, reason, before.screen, shot);
-      }
 
-      if (item.kind === 'wait') {
-        resolvedBy = item.target.quoted === undefined ? 'jev' : resolvedBy;
-        const budget = item.target.quoted === undefined ? PHRASE_WAIT_BUDGET_MS : WAIT_BUDGET_MS;
-        const deadline = deps.now() + budget;
-        const held = cached?.item === item ? cached : undefined;
-        let observation = held?.observation ?? (await capture(item));
-        cached = undefined;
-        const probe = visibilityProbe(item, deadline);
-        const visible = async (s: Observation, initial?: ScreenDecision): Promise<boolean> => {
-          const observed = await probe(s, initial);
-          observation = observed.observation;
-          return observed.found;
-        };
-        let found = await visible(observation, held?.decision);
-        while (!found && deps.now() < deadline) {
-          await pause(Math.min(WAIT_POLL_MS, deadline - deps.now()));
-          if (deps.now() >= deadline) break;
-          observation = await capture(item);
-          found = await visible(observation);
+        if (item.kind === 'wait') {
+          resolvedBy = item.target.quoted === undefined ? 'jev' : resolvedBy;
+          const budget = item.target.quoted === undefined ? PHRASE_WAIT_BUDGET_MS : WAIT_BUDGET_MS;
+          const deadline = deps.now() + budget;
+          const held = cached?.item === item ? cached : undefined;
+          let observation = held?.observation ?? (await capture(item));
+          cached = undefined;
+          const probe = visibilityProbe(item, deadline);
+          const visible = async (s: Observation, initial?: ScreenDecision): Promise<boolean> => {
+            const observed = await probe(s, initial);
+            observation = observed.observation;
+            return observed.found;
+          };
+          let found = await visible(observation, held?.decision);
+          while (!found && deps.now() < deadline) {
+            await pause(Math.min(WAIT_POLL_MS, deadline - deps.now()));
+            if (deps.now() >= deadline) break;
+            observation = await capture(item);
+            found = await visible(observation);
+          }
+          if (!found) {
+            usable(observation, item, deadline);
+            throw new EvidenceExpired(true);
+          }
+          const shot = await shoot(item);
+          emit({
+            ...base(item, 1),
+            ...(shot ? { screenshot: shot } : {}),
+            ...targetSelector(item.target, observation.screen),
+            outcome: 'pass',
+          });
+          continue items;
         }
-        if (!found) {
-          usable(observation, item, deadline);
-          throw new EvidenceExpired(true);
-        }
-        const shot = await shoot(item);
-        emit({
-          ...base(item, 1),
-          ...(shot ? { screenshot: shot } : {}),
-          ...targetSelector(item.target, observation.screen),
-          outcome: 'pass',
-        });
-        continue;
-      }
 
-      if (item.kind === 'scroll' && item.until) {
-        resolvedBy = item.until.quoted === undefined ? 'jev' : resolvedBy;
-        const deadline = deps.now() + PHRASE_WAIT_BUDGET_MS;
-        const held = cached?.item === item ? cached : undefined;
-        let observation = held?.observation ?? (await capture(item));
-        cached = undefined;
-        const probe = visibilityProbe(item, deadline);
-        const visible = async (s: Observation, initial?: ScreenDecision): Promise<boolean> => {
-          const observed = await probe(s, initial);
-          observation = observed.observation;
-          return observed.found;
-        };
-        let found = await visible(observation, held?.decision);
-        let attempts = 0;
-        while (!found && attempts < SCROLL_ATTEMPTS && deps.now() < deadline) {
-          const beforeSignature = screenSignature(observation.screen);
-          let act: ActResult;
-          try {
-            act = await mutate(
-              item,
-              observation,
-              (context) => deps.scroll(item.direction, context),
-              deadline,
-            );
-          } catch (error) {
-            if (!(error instanceof EvidenceExpired) || error.itemExpired) throw error;
-            metric('refresh', observation);
+        if (item.kind === 'scroll' && item.until) {
+          resolvedBy = item.until.quoted === undefined ? 'jev' : resolvedBy;
+          const deadline = deps.now() + PHRASE_WAIT_BUDGET_MS;
+          const held = cached?.item === item ? cached : undefined;
+          let observation = held?.observation ?? (await capture(item));
+          cached = undefined;
+          const probe = visibilityProbe(item, deadline);
+          const visible = async (s: Observation, initial?: ScreenDecision): Promise<boolean> => {
+            const observed = await probe(s, initial);
+            observation = observed.observation;
+            return observed.found;
+          };
+          let found = await visible(observation, held?.decision);
+          let attempts = 0;
+          while (!found && attempts < SCROLL_ATTEMPTS && deps.now() < deadline) {
+            const beforeSignature = screenSignature(observation.screen);
+            let act: ActResult;
+            try {
+              act = await mutate(
+                item,
+                observation,
+                (context) => deps.scroll(item.direction, context),
+                deadline,
+              );
+            } catch (error) {
+              if (!(error instanceof EvidenceExpired) || error.itemExpired) throw error;
+              metric('refresh', observation);
+              await pause(Math.min(WAIT_POLL_MS, Math.max(0, deadline - deps.now())));
+              if (deps.now() >= deadline) throw new EvidenceExpired(true);
+              observation = await capture(item);
+              found = await visible(observation);
+              continue;
+            }
+            attempts += 1;
             await pause(Math.min(WAIT_POLL_MS, Math.max(0, deadline - deps.now())));
             if (deps.now() >= deadline) throw new EvidenceExpired(true);
             observation = await capture(item);
             found = await visible(observation);
-            continue;
+            const moved = screenSignature(observation.screen) !== beforeSignature;
+            if (!act.ok && !moved)
+              return failed(
+                item,
+                attempts,
+                act.error ?? 'scroll was not dispatched',
+                observation.screen,
+                await shoot(item),
+              );
           }
-          attempts += 1;
-          await pause(Math.min(WAIT_POLL_MS, Math.max(0, deadline - deps.now())));
-          if (deps.now() >= deadline) throw new EvidenceExpired(true);
-          observation = await capture(item);
-          found = await visible(observation);
-          const moved = screenSignature(observation.screen) !== beforeSignature;
-          if (!act.ok && !moved)
-            return failed(
-              item,
-              attempts,
-              act.error ?? 'scroll was not dispatched',
-              observation.screen,
-              await shoot(item),
-            );
+          if (!found) usable(observation, item, deadline);
+          const shot = await shoot(item);
+          if (found) {
+            emit({
+              ...base(item, Math.max(attempts, 1)),
+              ...(shot ? { screenshot: shot } : {}),
+              ...targetSelector(item.until, observation.screen),
+              outcome: 'pass',
+            });
+            continue items;
+          }
+          const reason = `"${item.until.phrase}" did not come into view after ${SCROLL_ATTEMPTS} scrolls`;
+          return failed(item, Math.max(attempts, 1), reason, observation.screen, shot);
         }
-        if (!found) usable(observation, item, deadline);
-        const shot = await shoot(item);
-        if (found) {
-          emit({
-            ...base(item, Math.max(attempts, 1)),
-            ...(shot ? { screenshot: shot } : {}),
-            ...targetSelector(item.until, observation.screen),
-            outcome: 'pass',
-          });
-          continue;
-        }
-        const reason = `"${item.until.phrase}" did not come into view after ${SCROLL_ATTEMPTS} scrolls`;
-        return failed(item, Math.max(attempts, 1), reason, observation.screen, shot);
-      }
 
-      // press · fill · back · dialog: snapshot → resolve → act → read-back → snapshot → diff rule
-      let outcome: WalkOutcome | undefined;
-      let fellBack = false;
-      let fillIdentity: string | undefined;
-      let typedUnverified = false;
-      for (let attempt = 1; attempt <= 2 && !outcome; attempt += 1) {
-        currentAttempt = attempt;
-        const held = cached?.item === item ? cached : undefined;
-        let before = held?.observation ?? (await capture(item));
-        cached = undefined;
-        let ref: string | undefined;
-        let element: Element | undefined;
-        let initial = held?.decision;
-        let freshness = attempt === 1 ? 1 : 0;
-        let scrolled = false;
-        let scrollNeedsReadback = false;
-        let scrollError: string | undefined;
-        let act: ActResult;
-        for (;;) {
-          try {
-            usable(before, item);
-            if (item.kind === 'press' || item.kind === 'fill') {
-              if (item.target.quoted === undefined) resolvedBy = 'jev';
-              const decision = await decide(before, undefined, item, Infinity, initial);
-              initial = undefined;
-              resolvedBy = decision.resolvedBy === 'jev' ? 'jev' : resolvedBy;
-              const binding =
-                item.kind === 'fill' && fillIdentity !== undefined
-                  ? bindFillIdentity(item, before.screen, fillIdentity)
-                  : undefined;
-              const decided =
-                fillIdentity !== undefined
-                  ? binding?.kind === 'strict'
-                    ? binding.strict
-                    : {
-                        refuse: 'TARGET_NOT_FOUND',
-                        reason: 'the original input identity no longer resolves uniquely',
-                      }
-                  : decision.target!;
-              let resolution: Exclude<Resolution, { refuse: string }>;
-              if ('refuse' in decided) {
-                const fallback =
-                  decided.refuse === 'TARGET_NOT_FOUND' &&
-                  item.kind === 'fill' &&
-                  deps.typeFocused &&
-                  !fellBack
-                    ? keyboardFallbackTarget(item, before.screen)
+        // press · fill · back · dialog: snapshot → resolve → act → read-back → snapshot → diff rule
+        let outcome: WalkOutcome | undefined;
+        let fellBack = false;
+        let fillIdentity: string | undefined;
+        let typedUnverified = false;
+        let again = false;
+        for (let attempt = 1; attempt <= 2 && !outcome; attempt += 1) {
+          currentAttempt = attempt;
+          const held = cached?.item === item ? cached : undefined;
+          let before = held?.observation ?? (await capture(item));
+          cached = undefined;
+          let ref: string | undefined;
+          let element: Element | undefined;
+          let initial = held?.decision;
+          let freshness = attempt === 1 ? 1 : 0;
+          let scrolled = false;
+          let scrollNeedsReadback = false;
+          let scrollError: string | undefined;
+          let act: ActResult;
+          for (;;) {
+            try {
+              usable(before, item);
+              if (item.kind === 'press' || item.kind === 'fill') {
+                if (item.target.quoted === undefined) resolvedBy = 'jev';
+                const decision = await decide(before, undefined, item, Infinity, initial);
+                initial = undefined;
+                resolvedBy = decision.resolvedBy === 'jev' ? 'jev' : resolvedBy;
+                const binding =
+                  item.kind === 'fill' && fillIdentity !== undefined
+                    ? bindFillIdentity(item, before.screen, fillIdentity)
                     : undefined;
-                if (
-                  !fallback &&
-                  item.kind === 'fill' &&
-                  decided.refuse === 'TARGET_NOT_FOUND' &&
-                  item.target.quoted !== undefined &&
-                  !item.target.exact &&
-                  before.screen.keyboardVisible === true &&
-                  deps.typeFocused &&
-                  deps.reactFocused &&
-                  !fellBack
-                ) {
+                const decided =
+                  fillIdentity !== undefined
+                    ? binding?.kind === 'strict'
+                      ? binding.strict
+                      : {
+                          refuse: 'TARGET_NOT_FOUND',
+                          reason: 'the original input identity no longer resolves uniquely',
+                        }
+                    : decision.target!;
+                let resolution: Exclude<Resolution, { refuse: string }>;
+                if ('refuse' in decided) {
+                  const fallback =
+                    decided.refuse === 'TARGET_NOT_FOUND' &&
+                    item.kind === 'fill' &&
+                    deps.typeFocused &&
+                    !fellBack
+                      ? keyboardFallbackTarget(item, before.screen)
+                      : undefined;
+                  if (
+                    !fallback &&
+                    item.kind === 'fill' &&
+                    decided.refuse === 'TARGET_NOT_FOUND' &&
+                    item.target.quoted !== undefined &&
+                    !item.target.exact &&
+                    before.screen.keyboardVisible === true &&
+                    deps.typeFocused &&
+                    deps.reactFocused &&
+                    !fellBack
+                  ) {
+                    fellBack = true;
+                    const proven = await typeIntoProvenFocus(item, attempt, before);
+                    if (proven === 'typed') {
+                      typedUnverified = true;
+                      break;
+                    }
+                    if (proven) {
+                      outcome = proven;
+                      break;
+                    }
+                  }
+                  if (!fallback || item.kind !== 'fill') throw new ResolutionError(decided);
                   fellBack = true;
-                  const proven = await typeIntoProvenFocus(item, attempt, before);
-                  if (proven === 'typed') {
+                  const result = await keyboardFallback(item, attempt, before, fallback);
+                  if (result === 'typed') {
                     typedUnverified = true;
                     break;
                   }
-                  if (proven) {
-                    outcome = proven;
+                  if ('block' in result) {
+                    outcome = result;
                     break;
                   }
+                  before = result.observation;
+                  fillIdentity = result.identity;
+                  resolution = result;
+                } else resolution = decided;
+                if ('scroll' in resolution) {
+                  if (scrolled) {
+                    outcome = failed(
+                      item,
+                      attempt,
+                      `${scrollError ? `${scrollError}; ` : ''}"${item.target.phrase}" stayed off screen after one scroll`,
+                      before.screen,
+                      await shoot(item),
+                    );
+                    break;
+                  }
+                  const result = await mutate(item, before, (context) =>
+                    deps.scroll(resolution.scroll, context),
+                  );
+                  scrolled = true;
+                  scrollNeedsReadback = !result.ok && !result.proven;
+                  scrollError = result.ok
+                    ? undefined
+                    : (result.error ?? 'scroll was not dispatched');
+                  const signature = screenSignature(before.screen);
+                  before = await capture(item);
+                  usable(before, item);
+                  if (
+                    !result.ok &&
+                    !result.proven &&
+                    screenSignature(before.screen) === signature
+                  ) {
+                    outcome = failed(
+                      item,
+                      attempt,
+                      `${scrollError}; "${item.target.phrase}" stayed off screen after one scroll`,
+                      before.screen,
+                      await shoot(item),
+                    );
+                    break;
+                  }
+                  scrollNeedsReadback = false;
+                  continue;
                 }
-                if (!fallback || item.kind !== 'fill') throw new ResolutionError(decided);
+                ref = resolution.ref;
+                element = resolution.element;
+              }
+              if (item.kind === 'fill' && element && isPrivateInput(element)) {
+                privacy.concealFallback(item.text);
+                if (!privateFills.includes(item.line)) privateFills.push(item.line);
+              }
+              act = await mutate(item, before, (context) =>
+                item.kind === 'press'
+                  ? deps.press(ref!, context)
+                  : item.kind === 'fill'
+                    ? deps.fill(ref!, item.text, context)
+                    : item.kind === 'scroll'
+                      ? deps.scroll(item.direction, context)
+                      : item.kind === 'back'
+                        ? deps.back(context)
+                        : deps.dialog(item.action, context),
+              );
+              if (
+                item.kind === 'fill' &&
+                item.target.quoted !== undefined &&
+                !item.target.exact &&
+                element !== undefined &&
+                !isNativeInput(element) &&
+                !act.ok &&
+                act.mutation === 'none' &&
+                act.error?.startsWith('NO_TEXT_INPUT_TARGET:') &&
+                deps.typeFocused &&
+                !fellBack
+              ) {
                 fellBack = true;
+                const targetID = element?.testID;
+                if (
+                  !targetID ||
+                  before.screen.elements.filter((e) => e.testID === targetID).length !== 1
+                ) {
+                  outcome = failed(item, attempt, act.error, before.screen, undefined);
+                  break;
+                }
+                before = await capture(item);
+                const binding = bindFillIdentity(
+                  item,
+                  before.screen,
+                  targetID.replace(/-pressable$/, ''),
+                );
+                const fallback = binding?.kind === 'fallback' ? binding.fallback : undefined;
+                if (!fallback) {
+                  outcome = failed(
+                    item,
+                    attempt,
+                    `${act.error}; no unique eligible keyboard fallback target after the strict refusal; nothing was typed`,
+                    before.screen,
+                    undefined,
+                  );
+                  break;
+                }
                 const result = await keyboardFallback(item, attempt, before, fallback);
                 if (result === 'typed') {
                   typedUnverified = true;
@@ -1006,253 +1199,170 @@ export async function walkBlock(
                 }
                 before = result.observation;
                 fillIdentity = result.identity;
-                resolution = result;
-              } else resolution = decided;
-              if ('scroll' in resolution) {
-                if (scrolled) {
-                  outcome = failed(
-                    item,
-                    attempt,
-                    `${scrollError ? `${scrollError}; ` : ''}"${item.target.phrase}" stayed off screen after one scroll`,
-                    before.screen,
-                    await shoot(item),
-                  );
-                  break;
-                }
-                const result = await mutate(item, before, (context) =>
-                  deps.scroll(resolution.scroll, context),
-                );
-                scrolled = true;
-                scrollNeedsReadback = !result.ok && !result.proven;
-                scrollError = result.ok ? undefined : (result.error ?? 'scroll was not dispatched');
-                const signature = screenSignature(before.screen);
-                before = await capture(item);
-                usable(before, item);
-                if (!result.ok && !result.proven && screenSignature(before.screen) === signature) {
-                  outcome = failed(
-                    item,
-                    attempt,
-                    `${scrollError}; "${item.target.phrase}" stayed off screen after one scroll`,
-                    before.screen,
-                    await shoot(item),
-                  );
-                  break;
-                }
-                scrollNeedsReadback = false;
                 continue;
               }
-              ref = resolution.ref;
-              element = resolution.element;
-            }
-            if (item.kind === 'fill' && element && isPrivateInput(element)) {
-              privacy.concealFallback(item.text);
-              if (!privateFills.includes(item.line)) privateFills.push(item.line);
-            }
-            act = await mutate(item, before, (context) =>
-              item.kind === 'press'
-                ? deps.press(ref!, context)
-                : item.kind === 'fill'
-                  ? deps.fill(ref!, item.text, context)
-                  : item.kind === 'scroll'
-                    ? deps.scroll(item.direction, context)
-                    : item.kind === 'back'
-                      ? deps.back(context)
-                      : deps.dialog(item.action, context),
-            );
-            if (
-              item.kind === 'fill' &&
-              item.target.quoted !== undefined &&
-              !item.target.exact &&
-              element !== undefined &&
-              !isNativeInput(element) &&
-              !act.ok &&
-              act.mutation === 'none' &&
-              act.error?.startsWith('NO_TEXT_INPUT_TARGET:') &&
-              deps.typeFocused &&
-              !fellBack
-            ) {
-              fellBack = true;
-              const targetID = element?.testID;
-              if (
-                !targetID ||
-                before.screen.elements.filter((e) => e.testID === targetID).length !== 1
-              ) {
-                outcome = failed(item, attempt, act.error, before.screen, undefined);
-                break;
-              }
+              break;
+            } catch (error) {
+              if (error instanceof EvidenceExpired && scrollNeedsReadback)
+                throw new QaDispatchError('ACTION_OUTCOME_UNCERTAIN');
+              if (!(error instanceof EvidenceExpired) || freshness-- <= 0) throw error;
+              metric('refresh', before);
               before = await capture(item);
-              const binding = bindFillIdentity(
-                item,
-                before.screen,
-                targetID.replace(/-pressable$/, ''),
-              );
-              const fallback = binding?.kind === 'fallback' ? binding.fallback : undefined;
-              if (!fallback) {
-                outcome = failed(
-                  item,
-                  attempt,
-                  `${act.error}; no unique eligible keyboard fallback target after the strict refusal; nothing was typed`,
-                  before.screen,
-                  undefined,
-                );
-                break;
-              }
-              const result = await keyboardFallback(item, attempt, before, fallback);
-              if (result === 'typed') {
-                typedUnverified = true;
-                break;
-              }
-              if ('block' in result) {
-                outcome = result;
-                break;
-              }
-              before = result.observation;
-              fillIdentity = result.identity;
-              continue;
+              initial = undefined;
             }
+          }
+          if (outcome || typedUnverified) break;
+          const after = await capture(item);
+          // NOTE: a not-ok result is not a verdict; an act that timed out may still have landed.
+          const changed = screenSignature(after.screen) !== screenSignature(before.screen);
+          usable(after, item);
+          diagnostic(item, after, 'decision', 'ACCEPTED');
+          metric('readback', after);
+          const shot = await shoot(item);
+          const filled =
+            (act!.ok && act!.proven) || (act!.secureMasked === true && element?.secure === true);
+          if (item.kind === 'fill' ? filled : act!.proven || changed) {
+            const target = stepTarget(item);
+            emit({
+              ...base(item, attempt),
+              ...(ref ? { ref } : {}),
+              ...(shot ? { screenshot: shot } : {}),
+              ...stored(
+                (target && exactSelector(target)) ??
+                  (element ? elementSelector(element) : undefined),
+              ),
+              outcome: 'pass',
+            });
             break;
-          } catch (error) {
-            if (error instanceof EvidenceExpired && scrollNeedsReadback)
-              throw new QaDispatchError('ACTION_OUTCOME_UNCERTAIN');
-            if (!(error instanceof EvidenceExpired) || freshness-- <= 0) throw error;
-            metric('refresh', before);
-            before = await capture(item);
-            initial = undefined;
+          }
+          if (item.kind === 'fill' && act!.mutation !== 'none') {
+            outcome = failed(
+              item,
+              attempt,
+              `${act!.error ?? 'TEXT_ENTRY_UNVERIFIED: the fill was not verified'}; the fill may have mutated the field; not retrying`,
+              after.screen,
+              shot,
+              ref,
+            );
+            break;
+          }
+          if (attempt === 1) {
+            metric('replay', after);
+            emit({
+              ...base(item, attempt),
+              ...(ref ? { ref } : {}),
+              ...(shot ? { screenshot: shot } : {}),
+              outcome: 'retry',
+              reason: redact(
+                act!.error
+                  ? `${act!.error}; the screen did not change; retrying once`
+                  : 'the screen did not change; retrying once',
+              ),
+            });
+            continue;
+          }
+          const unchanged = act!.error
+            ? `${act!.error}; the screen did not change after two attempts`
+            : 'the screen did not change after two attempts';
+          const recovering = await recovery(item, attempt, unchanged);
+          if (recovering === 'retry') {
+            again = true;
+            break;
+          }
+          outcome = recovering ?? failed(item, attempt, unchanged, after.screen, shot, ref);
+        }
+        if (again) continue attempts;
+        if (outcome) return outcome;
+        continue items;
+      } catch (caught) {
+        let error = caught;
+        if (
+          error instanceof ResolutionError &&
+          !UNRECOVERABLE.has(error.code) &&
+          !deps.cancelled?.()
+        ) {
+          try {
+            const recovering = await recovery(item, currentAttempt, error.message);
+            if (recovering === 'retry') continue attempts;
+            if (recovering) return recovering;
+          } catch (recoveryError) {
+            error = recoveryError;
           }
         }
-        if (outcome || typedUnverified) break;
-        const after = await capture(item);
-        // NOTE: a not-ok result is not a verdict; an act that timed out may still have landed.
-        const changed = screenSignature(after.screen) !== screenSignature(before.screen);
-        usable(after, item);
-        diagnostic(item, after, 'decision', 'ACCEPTED');
-        metric('readback', after);
-        const shot = await shoot(item);
-        const filled =
-          (act!.ok && act!.proven) || (act!.secureMasked === true && element?.secure === true);
-        if (item.kind === 'fill' ? filled : act!.proven || changed) {
-          const target = stepTarget(item);
+        if (error instanceof PrivateInputCaptureError || error instanceof NativeCaptureError) {
+          const nativeFailure = error instanceof NativeCaptureError;
+          const safe = nativeFailure
+            ? new NativeCaptureError()
+            : error instanceof NativeSnapshotIncomplete
+              ? new NativeSnapshotIncomplete(error.nodes, error.causes)
+              : new PrivateInputCaptureError();
+          const key = nativeFailure ? 'native-capture' : 'private-input-capture';
           emit({
-            ...base(item, attempt),
-            ...(ref ? { ref } : {}),
-            ...(shot ? { screenshot: shot } : {}),
-            ...stored(
-              (target && exactSelector(target)) ?? (element ? elementSelector(element) : undefined),
-            ),
-            outcome: 'pass',
+            block: key,
+            line: item.line,
+            text: safe.message,
+            attempt: currentAttempt,
+            kind: item.kind === 'check' ? 'check' : 'step',
+            resolvedBy,
+            t: deps.now(),
+            outcome: 'fail',
+            reason: safe.code,
           });
-          break;
+          return {
+            block: { key, outcome: 'fail', source: 'discovered' },
+            rows,
+            ...(privateFills.length ? { privateFills } : {}),
+            ...(recoveries ? { recoveries } : {}),
+            failure: { step: item.line, seen: safe.message },
+            refusal: { code: safe.code, message: safe.message },
+          };
         }
-        if (item.kind === 'fill' && act!.mutation !== 'none') {
-          outcome = failed(
-            item,
-            attempt,
-            `${act!.error ?? 'TEXT_ENTRY_UNVERIFIED: the fill was not verified'}; the fill may have mutated the field; not retrying`,
-            after.screen,
-            shot,
-            ref,
-          );
-          break;
-        }
-        if (attempt === 1) {
-          metric('replay', after);
-          emit({
-            ...base(item, attempt),
-            ...(ref ? { ref } : {}),
-            ...(shot ? { screenshot: shot } : {}),
-            outcome: 'retry',
-            reason: redact(
-              act!.error
-                ? `${act!.error}; the screen did not change; retrying once`
-                : 'the screen did not change; retrying once',
-            ),
-          });
-          continue;
-        }
-        outcome = failed(
-          item,
-          attempt,
-          act!.error
-            ? `${act!.error}; the screen did not change after two attempts`
-            : 'the screen did not change after two attempts',
-          after.screen,
-          shot,
-          ref,
-        );
-      }
-      if (outcome) return outcome;
-    } catch (error) {
-      if (error instanceof PrivateInputCaptureError || error instanceof NativeCaptureError) {
-        const nativeFailure = error instanceof NativeCaptureError;
-        const safe = nativeFailure
-          ? new NativeCaptureError()
-          : error instanceof NativeSnapshotIncomplete
-            ? new NativeSnapshotIncomplete(error.nodes, error.causes)
-            : new PrivateInputCaptureError();
-        const key = nativeFailure ? 'native-capture' : 'private-input-capture';
-        emit({
-          block: key,
-          line: item.line,
-          text: safe.message,
-          attempt: currentAttempt,
-          kind: item.kind === 'check' ? 'check' : 'step',
-          resolvedBy,
-          t: deps.now(),
-          outcome: 'fail',
-          reason: safe.code,
-        });
+        if (
+          !(error instanceof JevError) &&
+          !(error instanceof ResolutionError) &&
+          !(error instanceof EvidenceExpired) &&
+          !(error instanceof QaDispatchError)
+        )
+          throw error;
+        if (error instanceof JevError) resolvedBy = 'jev';
+        const refusal =
+          error instanceof JevError && error.isRefusal
+            ? { code: error.code, message: error.message }
+            : undefined;
+        const shot =
+          error instanceof QaDispatchError ||
+          error instanceof EvidenceExpired ||
+          (error instanceof ResolutionError &&
+            (error.code === 'APP_PROCESS_CHANGED' ||
+              error.code === 'APP_PROCESS_UNKNOWN' ||
+              (item.kind === 'check' && !item.literal))) ||
+          deps.cancelled?.()
+            ? undefined
+            : refusal
+              ? await shoot(item).catch(() => undefined)
+              : await shoot(item);
+        const miss =
+          replay &&
+          !mutationStarted &&
+          item.kind !== 'check' &&
+          error instanceof ResolutionError &&
+          error.code === 'REPLAY_SELECTOR';
+        const unknownProcess =
+          error instanceof ResolutionError && error.code === 'APP_PROCESS_UNKNOWN'
+            ? { code: error.code, message: error.message }
+            : undefined;
         return {
-          block: { key, outcome: 'fail', source: 'discovered' },
-          rows,
-          ...(privateFills.length ? { privateFills } : {}),
-          failure: { step: item.line, seen: safe.message },
-          refusal: { code: safe.code, message: safe.message },
+          ...failed(item, currentAttempt, error.message, latest, shot, undefined, miss),
+          ...(refusal || unknownProcess ? { refusal: refusal ?? unknownProcess } : {}),
         };
       }
-      if (
-        !(error instanceof JevError) &&
-        !(error instanceof ResolutionError) &&
-        !(error instanceof EvidenceExpired) &&
-        !(error instanceof QaDispatchError)
-      )
-        throw error;
-      if (error instanceof JevError) resolvedBy = 'jev';
-      const refusal =
-        error instanceof JevError && error.isRefusal
-          ? { code: error.code, message: error.message }
-          : undefined;
-      const shot =
-        error instanceof QaDispatchError ||
-        error instanceof EvidenceExpired ||
-        (error instanceof ResolutionError &&
-          (error.code === 'APP_PROCESS_CHANGED' ||
-            error.code === 'APP_PROCESS_UNKNOWN' ||
-            (item.kind === 'check' && !item.literal))) ||
-        deps.cancelled?.()
-          ? undefined
-          : refusal
-            ? await shoot(item).catch(() => undefined)
-            : await shoot(item);
-      const miss =
-        replay &&
-        !mutationStarted &&
-        item.kind !== 'check' &&
-        error instanceof ResolutionError &&
-        error.code === 'REPLAY_SELECTOR';
-      const unknownProcess =
-        error instanceof ResolutionError && error.code === 'APP_PROCESS_UNKNOWN'
-          ? { code: error.code, message: error.message }
-          : undefined;
-      return {
-        ...failed(item, currentAttempt, error.message, latest, shot, undefined, miss),
-        ...(refusal || unknownProcess ? { refusal: refusal ?? unknownProcess } : {}),
-      };
     }
   }
   return {
     block: { key: privacy.redactIdentifier(block.slug), outcome: 'pass', source: 'discovered' },
     rows,
     ...(privateFills.length ? { privateFills } : {}),
+    ...(recoveries ? { recoveries } : {}),
   };
 }
 
@@ -1296,12 +1406,13 @@ function storedFor(block: Block, store: BlockStore): StoredBlock | undefined {
     : undefined;
 }
 
+const exact = (selector: Selector): Target =>
+  selector.id !== undefined
+    ? { quoted: selector.id, phrase: selector.id, exact: 'id' }
+    : { quoted: selector.text!, phrase: selector.text!, exact: 'text' };
+
 // Replay is the same walk over the stored identities, so a literal line never reaches Jev.
 export function replayBlock(block: Block, stored: StoredBlock): Block {
-  const exact = (selector: Selector): Target =>
-    selector.id !== undefined
-      ? { quoted: selector.id, phrase: selector.id, exact: 'id' }
-      : { quoted: selector.text!, phrase: selector.text!, exact: 'text' };
   return {
     ...block,
     items: block.items.map((item, i): Item => {
@@ -1312,6 +1423,39 @@ export function replayBlock(block: Block, stored: StoredBlock): Block {
       return item;
     }),
   };
+}
+
+// A saved block replayed on its own, as the login recovery does: every target is its stored identity.
+export function loginBlock(slug: string, stored: StoredBlock): Block {
+  const items = stored.steps.map((step, i): Item => {
+    const at = { line: i + 1, raw: step.raw, source: 'grammar' as const };
+    switch (step.kind) {
+      case 'press':
+      case 'wait':
+        return { kind: step.kind, target: exact(step.selector!), ...at };
+      case 'fill':
+        return { kind: 'fill', target: exact(step.selector!), text: step.text!, ...at };
+      case 'scroll':
+        return {
+          kind: 'scroll',
+          direction: step.direction!,
+          ...(step.until ? { until: exact(step.until) } : {}),
+          ...at,
+        };
+      case 'back':
+        return { kind: 'back', ...at };
+      case 'dialog':
+        return { kind: 'dialog', action: step.action!, ...at };
+      case 'check':
+        return {
+          kind: 'check',
+          text: step.text ?? step.raw.replace(/^(?:[-*]\s*)?[✓✔]\s*/, ''),
+          literal: step.text !== undefined,
+          ...at,
+        };
+    }
+  });
+  return { slug, title: stored.header.plan, items, planHash: stored.header.planHash };
 }
 
 export async function runPlan(
@@ -1329,17 +1473,24 @@ export async function runPlan(
     const typed = blocks.flatMap((b) =>
       b.items.flatMap((i) => (i.kind === 'fill' ? [i.text] : [])),
     );
+    const planTyped = typed.length;
     const privacy = new ObservedPrivacy(typed);
+    let recoveries = 0;
+    // A login replay adds its own fills to `typed`.
     const videoPublication = (): NonNullable<WalkResult['videoPublication']> =>
-      blocks.some((block) => block.items.some((item) => item.kind === 'fill'))
+      blocks.some((block) => block.items.some((item) => item.kind === 'fill')) ||
+      typed.length > planTyped
         ? 'withheld-fill'
         : privacy.canScreenshot()
           ? 'eligible'
           : 'withheld-privacy';
     const calls = (): JevCall[] => [...preflightCalls, ...(deps.judge?.calls ?? [])];
     const sequence = { observation: 0 };
-    const walk = (block: Block, opts?: WalkOptions) =>
-      walkBlock(block, walking, steps.length, typed, privacy, sequence, opts);
+    const walk = async (block: Block, opts?: WalkOptions) => {
+      const outcome = await walkBlock(block, walking, steps.length, typed, privacy, sequence, opts);
+      recoveries += outcome.recoveries ?? 0;
+      return outcome;
+    };
     const path = (): LedgerPath =>
       patchedAt !== undefined
         ? `replay→walk@${patchedAt}`
@@ -1364,6 +1515,7 @@ export async function runPlan(
             : undefined,
           calls(),
           path(),
+          recoveries,
         ),
         videoPublication: videoPublication(),
       };

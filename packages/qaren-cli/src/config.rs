@@ -1,6 +1,7 @@
 use crate::failure::{Failure, FailureCode};
 use crate::scenario::{require_launch_scheme, BuildOwner, IosWorkspaceBuild, Platform};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub const DEFAULT_CONFIG_PATH: &str = ".qaren/config.yaml";
@@ -23,6 +24,58 @@ pub struct CheckConfig {
     pub node_path: Option<String>,
     #[serde(default)]
     pub dev_client_scheme: Option<String>,
+    #[serde(default)]
+    pub login_block: Option<String>,
+    #[serde(default)]
+    pub login_marker: Option<LoginMarker>,
+    // Applied to the native build and Metro only; values are never logged or recorded.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoginMarker {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+// Keys qaren sets or clears itself for its children.
+const RESERVED_ENV: &[&str] = &[
+    "ADB_LOCAL_TRANSPORT_MAX_PORT",
+    "ADB_SERVER_SOCKET",
+    "ADB_VENDOR_KEYS",
+    "ANDROID_SERIAL",
+    "BASH_ENV",
+    "CI",
+    "COREPACK_ENABLE_NETWORK",
+    "EXPO_NO_TELEMETRY",
+    "EXPO_OFFLINE",
+    "NO_COLOR",
+    "PATH",
+    "RCT_NO_LAUNCH_PACKAGER",
+    "TYPESAFE_API_KEY",
+];
+
+fn env_key_allowed(key: &str) -> bool {
+    let mut bytes = key.bytes();
+    bytes
+        .next()
+        .is_some_and(|b| b.is_ascii_uppercase() || b == b'_')
+        && bytes.all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        && !key.starts_with("QAREN_")
+        && !RESERVED_ENV.contains(&key)
+}
+
+// The core's action-ID grammar: the block is read from .qaren/actions/<slug>.yaml.
+fn valid_action_id(slug: &str) -> bool {
+    let mut bytes = slug.bytes();
+    slug.len() <= 64
+        && !slug.contains("..")
+        && bytes.next().is_some_and(|b| b.is_ascii_alphanumeric())
+        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -52,6 +105,13 @@ fn d_metro_port() -> u16 {
 }
 
 impl CheckConfig {
+    pub fn env_pairs(&self) -> Vec<(String, String)> {
+        self.env
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    }
+
     pub fn validate_for_platform(&self, platform: Platform) -> Result<(), Failure> {
         if platform == Platform::Ios {
             if let Some(build) = self.ios.as_ref().and_then(|ios| ios.build.as_ref()) {
@@ -77,7 +137,7 @@ impl CheckConfig {
                 "config",
                 FailureCode::ScenarioInvalid,
                 format!("{} does not parse: {e}", path.display()),
-                "fix .qaren/config.yaml (keys: appId, packageManager, metroPort, ios, android, nodePath, devClientScheme)",
+                "fix .qaren/config.yaml (keys: appId, packageManager, metroPort, ios, android, nodePath, devClientScheme, loginBlock, loginMarker, env)",
             )
         })?;
         config.validate(path)?;
@@ -115,6 +175,43 @@ impl CheckConfig {
             if !Path::new(node).is_absolute() {
                 return Err(invalid(format!(
                     "nodePath {node:?} must be an absolute path"
+                )));
+            }
+        }
+        if self.login_block.is_some() != self.login_marker.is_some() {
+            return Err(invalid(
+                "loginBlock and loginMarker must be set together".to_string(),
+            ));
+        }
+        if let Some(slug) = &self.login_block {
+            if !valid_action_id(slug) {
+                return Err(invalid(format!(
+                    "loginBlock {slug:?} is not an action slug ([A-Za-z0-9][A-Za-z0-9_.-]*, at most 64, no \"..\")"
+                )));
+            }
+        }
+        if let Some(marker) = &self.login_marker {
+            let one = match (&marker.id, &marker.text) {
+                (Some(value), None) | (None, Some(value)) => !value.is_empty(),
+                _ => false,
+            };
+            if !one {
+                return Err(invalid(
+                    "loginMarker needs exactly one non-empty `id` (testID) or `text` (label)"
+                        .to_string(),
+                ));
+            }
+        }
+        for (key, value) in &self.env {
+            if !env_key_allowed(key) {
+                return Err(invalid(format!(
+                    "env key {key:?} must match ^[A-Z_][A-Z0-9_]*$ and not be one qaren sets (QAREN_*, {})",
+                    RESERVED_ENV.join(", ")
+                )));
+            }
+            if value.contains(['\0', '\r', '\n']) {
+                return Err(invalid(format!(
+                    "env value for {key} must be one line without NUL"
                 )));
             }
         }
