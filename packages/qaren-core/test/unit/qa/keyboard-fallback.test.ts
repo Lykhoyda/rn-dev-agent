@@ -591,7 +591,10 @@ test('saved block machine identifiers remain canonical after a later fill fails 
   assert.equal(result.blocks[0].key, '•••');
   assert.equal(result.blocks[0].saved, undefined);
   assert.equal(parsed[0].slug, 'alice');
-  assert.equal(existsSync(join(dir, '.qaren', 'actions', `${result.blocksWritten![0]}.yaml`)), true);
+  assert.equal(
+    existsSync(join(dir, '.qaren', 'actions', `${result.blocksWritten![0]}.yaml`)),
+    true,
+  );
 });
 
 test('U13: deferred writes keep order and content for runs without a private fill', async () => {

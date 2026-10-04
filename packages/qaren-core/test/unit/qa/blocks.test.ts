@@ -85,7 +85,8 @@ test('serialization withholds protected fragments in metadata, plan text and sel
       const meta = { ...ios };
       const rows = passRows(block, { [block.items[0].line]: { id: 'save-button' } });
       if (field === 'appId') meta.appId = fragment;
-      else if (field === 'slug' || field === 'title' || field === 'planHash') block[field] = fragment;
+      else if (field === 'slug' || field === 'title' || field === 'planHash')
+        block[field] = fragment;
       else if (field === 'raw') block.items[0].raw = fragment;
       else if (field === 'text') {
         const check = block.items[1];

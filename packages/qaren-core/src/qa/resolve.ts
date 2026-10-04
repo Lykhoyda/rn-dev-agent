@@ -604,7 +604,10 @@ export async function decideScreen(
             prepared && 'question' in prepared && q === prepared.question
               ? prepared.candidates.find((_, i) => key === `e${i}`)
               : undefined;
-          return [key, candidate ? mask.describeElement(candidate, describeSemantic) : sanitize(text)];
+          return [
+            key,
+            candidate ? mask.describeElement(candidate, describeSemantic) : sanitize(text),
+          ];
         }),
       );
   }
