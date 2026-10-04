@@ -280,8 +280,8 @@ concealed fallback values also receive fragment protection in reporting and ever
 outbound model request. A visible token is concealed when it contains a protected
 value, is a substring of at least four characters, belongs to adjacent
 single-character boxes whose concatenation matches at least two characters of a
-protected value, or is a single character from a protected code of at most eight
-characters. The current screen's box context also applies when masking individual
+protected value. A lone single character is never masked by itself, so plan list
+numbers such as `3.` stay readable. The current screen's box context also applies when masking individual
 output fields. Tokens joined by `-`, `_`, `.` or `@` are judged whole. In model
 requests only a real element's structured testID is exempt from fragment masking;
 marker-looking text in labels, values, placeholders, instructions and criteria is
@@ -291,7 +291,7 @@ but a testID containing a whole protected value of three or more characters is
 concealed. For saved-action admission, see [Saved blocks](#saved-blocks).
 Isolated shorter fragments of long
 secrets remain readable: `is` stays visible for `existing-secret`, while `secr`
-is concealed. A protected `1234` masks each of the four digit boxes.
+is concealed. A protected `1234` masks each of the four digit boxes shown side by side.
 
 Complete values can retain opaque identity tokens for model comparisons; these
 tokens disclose no content, length, format, order or validity. Concealed fragments

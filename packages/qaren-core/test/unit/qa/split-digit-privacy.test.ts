@@ -27,6 +27,17 @@ test('short codes mask single characters while isolated short substrings stay re
   assert.ok(masked.includes(MASK));
 });
 
+test('a lone single character is not masked by itself; adjacent boxes still are', () => {
+  const privacy = new ObservedPrivacy();
+  privacy.concealFallback('1234');
+  assert.equal(privacy.redact('3. Tap "qa-otp-verify"'), '3. Tap "qa-otp-verify"');
+  assert.equal(privacy.redact('step 4 of 5'), 'step 4 of 5');
+  assert.equal(
+    privacy.redact('on screen: Enter the code | 1 | 2 | 3 | 4 | Verify'),
+    `on screen: Enter the code | ${MASK} | ${MASK} | ${MASK} | ${MASK} | Verify`,
+  );
+});
+
 test('substring masking applies only to protected values, not ordinary typed text', () => {
   const privacy = new ObservedPrivacy(['Ada']);
   assert.equal(
@@ -40,8 +51,8 @@ test('a protected fragment with trailing punctuation is still masked; identifier
   privacy.concealFallback('1234');
   privacy.concealFallback('qa@example.test');
   assert.equal(
-    privacy.redact('last box 4. near qa-hidden-email'),
-    'last box ••• near qa-hidden-email',
+    privacy.redact('last boxes 3 4. near qa-hidden-email'),
+    'last boxes ••• ••• near qa-hidden-email',
   );
 });
 
@@ -123,8 +134,8 @@ test('outbound masking preserves whole-value equality and ordinary typed fragmen
   assert.equal(
     privacy
       .maskForModel(['Ada', '1234'], [])
-      .apply('4. | qa-hidden-email | qa-hidden_email | qa.hidden | qa@example.test-extra'),
-    `${MASK} | qa-hidden-email | qa-hidden_email | qa.hidden | ${MASK}`,
+      .apply('3 4. | qa-hidden-email | qa-hidden_email | qa.hidden | qa@example.test-extra'),
+    `${MASK} ${MASK} | qa-hidden-email | qa-hidden_email | qa.hidden | ${MASK}`,
   );
 });
 
@@ -199,7 +210,7 @@ test('outbound masking keeps testIDs readable unless they contain a whole long p
 
 for (const [secret, text] of [
   ['1234', '[testID 1234]'],
-  ['1234', '[testID 1] | [testID 2] | [testID 3] | [testID 4]'],
+  ['1234', '[testID 1 2] | [testID 3 4]'],
   ['42', 'Echo: [testID 42]'],
   ['existing-secret', '[testID secr]'],
 ]) {

@@ -79,7 +79,7 @@ test('serialization withholds protected fragments in metadata, plan text and sel
   for (const field of ['appId', 'slug', 'title', 'planHash', 'raw', 'text', 'id', 'label']) {
     for (const [secret, fragment] of [
       ['existing-secret', 'secr'],
-      ['1234', '2'],
+      ['1234', '2 3'],
     ]) {
       const block = blockOf('## QA\n\n### Confirm\n1. Tap "Save"\n✓ "Saved"\n');
       const meta = { ...ios };
@@ -118,6 +118,18 @@ test('serialization admission checks the final emitted YAML', () => {
 test('serialization preserves isolated short fragments of long secrets', () => {
   const block = blockOf('## QA\n\n### is\n✓ "is"\n');
   assert.ok('yaml' in serializeBlock(block, passRows(block, {}), ios, ['existing-secret']));
+});
+
+test('plan list numbers that are digits of a protected code do not withhold the block', () => {
+  const block = blockOf(
+    '## QA\n\n### Open the code screen\n1. Tap "qa-otp-entry"\n2. Fill "qa-otp-email" with "qa@example.test"\n3. Tap "qa-otp-continue"\n4. Wait for "Enter the code" to appear\n5. Tap "qa-otp-help"\n',
+  );
+  const selectors = Object.fromEntries(
+    block.items.map((item) => [item.line, { text: item.kind === 'wait' ? 'Enter the code' : 'x' }]),
+  );
+  const result = serializeBlock(block, passRows(block, selectors), ios, ['12345']);
+  assert.ok('yaml' in result, JSON.stringify(result));
+  assert.match(result.yaml, /# 3\. Tap "qa-otp-continue"/);
 });
 
 test('literal.md round-trips: plan lines, planHash and selectors survive', () => {

@@ -221,11 +221,7 @@ function maskProtectedFragments(
     const length = [...core].length;
     return core &&
       (boxes.has(core) ||
-        values.some(
-          (value) =>
-            core.includes(value) ||
-            (value.includes(core) && (length >= 4 || (length === 1 && [...value].length <= 8))),
-        ))
+        values.some((value) => core.includes(value) || (value.includes(core) && length >= 4)))
       ? MASK
       : token;
   });
