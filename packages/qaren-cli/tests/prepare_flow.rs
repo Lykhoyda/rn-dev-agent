@@ -1702,7 +1702,11 @@ fn ios_reuse_dry_run_lists_each_launch_step_once_in_execution_order() {
             kind: ArtifactKind::AppBundle,
         }),
     };
-    save_json(&state_path(&repo, "ios", &scenario.candidate.app_id), &cache).unwrap();
+    save_json(
+        &state_path(&repo, "ios", &scenario.candidate.app_id),
+        &cache,
+    )
+    .unwrap();
 
     let mut mock = MockRunner::new();
     script_validation(&mut mock, &repo, IOS_TOOLS);
@@ -1714,7 +1718,10 @@ fn ios_reuse_dry_run_lists_each_launch_step_once_in_execution_order() {
     mock.expect_run("ls-files", CmdOutput::success(files));
     let receipt = prepare(&mut mock, &prepare_args(&scenario_path, true, None));
     assert_eq!(receipt.result, ReceiptResult::Planned);
-    assert_eq!(receipt.build.as_ref().unwrap().decision, BuildDecision::Reuse);
+    assert_eq!(
+        receipt.build.as_ref().unwrap().decision,
+        BuildDecision::Reuse
+    );
     assert_eq!(mock.remaining(), 0);
 
     let ios_spec = scenario.ios.as_ref().unwrap();
