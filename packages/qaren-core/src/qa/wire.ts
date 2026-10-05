@@ -9,7 +9,7 @@ import { isValidActionId } from '../domain/path-safety.js';
 
 export const WIRE_VERSION = 1 as const;
 
-export type EnvelopeType = 'request' | 'admitted' | 'row' | 'result' | 'cancel';
+export type EnvelopeType = 'request' | 'admitted' | 'row' | 'resource' | 'result' | 'cancel';
 
 export interface Envelope<T = unknown> {
   v: typeof WIRE_VERSION;
@@ -115,7 +115,14 @@ export function startupRow(): LedgerRow {
   };
 }
 
-const TYPES: ReadonlySet<string> = new Set(['request', 'admitted', 'row', 'result', 'cancel']);
+const TYPES: ReadonlySet<string> = new Set([
+  'request',
+  'admitted',
+  'row',
+  'resource',
+  'result',
+  'cancel',
+]);
 
 function validCall(value: unknown): boolean {
   return (
@@ -220,6 +227,7 @@ export async function readRequest(input: AsyncIterable<Buffer | string>): Promis
 export interface WireWriter {
   admitted(): void;
   row(payload: LedgerRow): void;
+  runnerDriver(pid: number): void;
   result(payload: ResultPayload): 0 | 1 | 4;
   readonly seq: number;
 }
@@ -237,6 +245,10 @@ export function createWriter(write: (line: string) => void, runId: string): Wire
   return {
     admitted: () => send('admitted', {}),
     row: (payload) => send('row', payload),
+    // The CLI records the driver's own process group before it can outlive this child.
+    runnerDriver: (pid) => {
+      if (!closed) send('resource', { kind: 'runner_driver', pid });
+    },
     result: (payload) => {
       send('result', payload);
       closed = true;

@@ -510,7 +510,10 @@ before releasing the lease. When the leased simulator had no runner host as the
 core started, the run records the host as its own; normal teardown, cancellation
 and dead-owner cleanup then terminate that host by bundle id on that exact
 simulator only after core cleanup proves removal or absence, and re-prove the
-host's absence. Refused or unresolved core cleanup leaves the host untouched
+host's absence. The core starts the runner's `xcodebuild` driver in its own
+process group and announces it; the CLI records that group with the driver's
+identity and signals it, before the host, only while that identity still
+matches. Refused or unresolved core or driver cleanup leaves the host untouched
 and retains the lease. A host that was already running, or any
 present or unknown host after that, retains the lease. A dead lease
 holder is reclaimed only through that run's cleanup; a live or unprovable holder

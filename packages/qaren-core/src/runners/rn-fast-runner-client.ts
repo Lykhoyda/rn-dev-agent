@@ -183,6 +183,22 @@ export function createReadySignalParser(): ReadySignalParser {
 // --- Singleton state ---
 
 let runnerProcess: ChildProcess | null = null;
+let runnerDriverObserver: ((pid: number) => void) | undefined;
+
+// QaReN records each spawned runner driver; the driver leads its own process group.
+export function observeRunnerDrivers(observer: ((pid: number) => void) | undefined): void {
+  runnerDriverObserver = observer;
+}
+
+function signalDriver(child: ChildProcess, signal: NodeJS.Signals): void {
+  try {
+    if (child.pid !== undefined) process.kill(-child.pid, signal);
+    return;
+  } catch {
+    // The group is gone or was never formed; the leader alone remains addressable.
+  }
+  child.kill(signal);
+}
 // GH #629: monotonic count of launch xcodebuild children actually spawned.
 // ensureFastRunner swallows startFastRunner errors, so this is the only way a
 // caller can tell a READY-timeout apart from a failure before the launch step.
@@ -794,9 +810,11 @@ export async function startFastRunner(
         ...runnerTestFaultEnv,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
     });
 
     runnerProcess = child;
+    if (child.pid !== undefined) runnerDriverObserver?.(child.pid);
     runnerLaunchCount += 1;
     runnerOutputTail = '';
     lastRunnerCommand = null;
@@ -810,7 +828,7 @@ export async function startFastRunner(
         reject(signal.reason);
         return;
       }
-      child.kill('SIGTERM');
+      signalDriver(child, 'SIGTERM');
       reject(new Error(`Fast runner did not become ready within ${READY_TIMEOUT_MS / 1000}s`));
     }, READY_TIMEOUT_MS);
 
@@ -847,7 +865,7 @@ export async function startFastRunner(
       };
       const processBirth = readProcessBirth(child.pid!);
       if (!processBirth) {
-        child.kill('SIGTERM');
+        signalDriver(child, 'SIGTERM');
         reject(
           new Error(
             'PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven',
@@ -934,7 +952,7 @@ export async function awaitChildExit(child: ChildProcess | null, graceMs = 5000)
   return new Promise<boolean>((resolve) => {
     const killTimer = setTimeout(() => {
       try {
-        child.kill('SIGKILL');
+        signalDriver(child, 'SIGKILL');
       } catch {
         /* already gone */
       }
@@ -1537,8 +1555,12 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
     ? new Promise<void>((resolve) => spawnedChild.once('exit', () => resolve()))
     : null;
 
+  const signalRunner = (signal: NodeJS.Signals): void => {
+    if (spawnedChild) signalDriver(spawnedChild, signal);
+    else sendSignal(state.pid, signal);
+  };
   try {
-    sendSignal(state.pid, 'SIGTERM');
+    signalRunner('SIGTERM');
   } catch {
     /* already dead */
   }
@@ -1552,7 +1574,7 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
     return;
   }
   try {
-    sendSignal(state.pid, 'SIGKILL');
+    signalRunner('SIGKILL');
   } catch {
     /* race: died between checks */
   }

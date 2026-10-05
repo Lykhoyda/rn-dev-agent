@@ -34,6 +34,7 @@ import {
 import { foregroundSurfaceFromSnapshot } from '../handlers/expo-dev-menu.js';
 import { compileFlow, FlowCompileError } from '../flow/compile.js';
 import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
+import { observeRunnerDrivers } from '../runners/rn-fast-runner-client.js';
 import type { ToolResult } from '../utils.js';
 import { HandlerError, adapt, describeError, fillEvidence, unwrap } from './adapt.js';
 import {
@@ -525,6 +526,7 @@ async function main(): Promise<void> {
   const cliParent = process.ppid;
   const request = await readRequest(process.stdin);
   const writer = createWriter((line) => process.stdout.write(redactApiKey(line)), request.runId);
+  observeRunnerDrivers((pid) => writer.runnerDriver(pid));
   const rows: LedgerRow[] = [];
   const emitRow = (row: LedgerRow): void => {
     rows.push(row);

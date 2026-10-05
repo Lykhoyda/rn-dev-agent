@@ -278,3 +278,25 @@ test('a login block needs a marker with exactly one of id or text', () => {
   ])
     assert.throws(() => parseRequest(line(bad)), WireError);
 });
+
+test('a spawned runner driver is announced as a resource envelope before the result only', () => {
+  const lines: string[] = [];
+  const writer = createWriter((line) => lines.push(line), 'check-1');
+  writer.runnerDriver(4242);
+  writer.result(buildLedger([], []));
+  writer.runnerDriver(4343);
+  assert.deepEqual(
+    lines.map((line) => JSON.parse(line)),
+    [
+      {
+        v: WIRE_VERSION,
+        runId: 'check-1',
+        seq: 2,
+        type: 'resource',
+        payload: { kind: 'runner_driver', pid: 4242 },
+      },
+      JSON.parse(lines[1]),
+    ],
+  );
+  assert.equal(JSON.parse(lines[1]).type, 'result');
+});
