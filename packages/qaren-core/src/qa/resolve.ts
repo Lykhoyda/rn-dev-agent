@@ -203,22 +203,17 @@ export function bindDispatchIdentity(
   screen: Screen,
   original: Element,
 ): Resolution {
-  const quoted = original.testID ?? original.label;
+  const quoted = original.testID;
   const missing = {
     refuse: 'TARGET_NOT_FOUND',
     reason:
       'the refused target identity no longer resolves uniquely; stayed off screen after one scroll',
   };
-  if (!quoted || (!original.testID && !elementFrame(original))) return missing;
-  const target: Target = { quoted, phrase: quoted, exact: original.testID ? 'id' : 'text' };
+  if (!quoted) return missing;
+  const target: Target = { quoted, phrase: quoted, exact: 'id' };
   const matches = exactIdentities(screen, target, step.kind)
     .map(({ element }) => element)
-    .filter(
-      (element) =>
-        element.kind === original.kind &&
-        (original.testID !== undefined ||
-          JSON.stringify(elementFrame(element)) === JSON.stringify(elementFrame(original))),
-    );
+    .filter((element) => element.kind === original.kind);
   if (matches.length !== 1) return missing;
   if (step.target.quoted === undefined) {
     const projected = semanticActionView(screen, step.kind);

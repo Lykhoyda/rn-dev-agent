@@ -30,8 +30,7 @@ export async function admit(
   try {
     return await withCancellation(stop.signal, async () => {
       await attach(steps);
-      const foreign = await interruptible(steps.foreignDriver);
-      if (foreign !== undefined) throw new HandlerError('BUSY_FOREIGN_FLOW', foreign);
+      await refuseForeignDriver(steps);
       await interruptible(steps.open);
       const proof = await interruptible(steps.prove);
       if (!proof.ok) throw new HandlerError(proof.code, proof.message);
@@ -42,6 +41,11 @@ export async function admit(
     stop.signal.throwIfAborted();
     throw error;
   }
+}
+
+async function refuseForeignDriver(steps: AdmissionSteps): Promise<void> {
+  const foreign = await interruptible(steps.foreignDriver);
+  if (foreign !== undefined) throw new HandlerError('BUSY_FOREIGN_FLOW', foreign);
 }
 
 async function attach(steps: AdmissionSteps): Promise<void> {
@@ -65,6 +69,7 @@ async function attach(steps: AdmissionSteps): Promise<void> {
   const retry = loaded && timedOut(failure) && steps.remainingMs() >= steps.readinessMs;
   let relaunchFailure: string | undefined;
   if (retry && steps.relaunch) {
+    await refuseForeignDriver(steps);
     try {
       await interruptible(steps.relaunch);
     } catch (error) {

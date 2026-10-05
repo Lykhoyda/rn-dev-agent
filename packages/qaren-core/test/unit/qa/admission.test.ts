@@ -243,6 +243,10 @@ test('the single retry relaunches the app before waiting again', async () => {
   const order: string[] = [];
   const { stop, steps } = harness({
     load: () => 50,
+    foreignDriver: async () => {
+      order.push('foreignDriver');
+      return undefined;
+    },
     attach: async () => {
       order.push('attach');
       if (order.length === 1) throw new TargetReadinessTimeoutError('stuck on the launcher');
@@ -252,7 +256,7 @@ test('the single retry relaunches the app before waiting again', async () => {
     },
   });
   assert.deepEqual(await admit(steps, stop), PROVEN);
-  assert.deepEqual(order, ['attach', 'relaunch', 'attach']);
+  assert.deepEqual(order, ['attach', 'foreignDriver', 'relaunch', 'attach', 'foreignDriver']);
 });
 
 test('within the load envelope nothing is relaunched', async () => {
@@ -289,4 +293,57 @@ test('a failed relaunch skips the second wait and stays an environment refusal',
     return true;
   });
   assert.equal(attempts, 1);
+});
+
+for (const foreign of ['Maestro holds the device', 'XCTest holds the device']) {
+  test(`a driver arriving during the readiness wait prevents relaunch: ${foreign}`, async () => {
+    const order: string[] = [];
+    let active: string | undefined;
+    const { stop, steps } = harness({
+      load: () => 50,
+      attach: async () => {
+        order.push('attach');
+        active = foreign;
+        throw new TargetReadinessTimeoutError('stuck on the launcher');
+      },
+      foreignDriver: async () => {
+        order.push('foreignDriver');
+        return active;
+      },
+      relaunch: async () => {
+        order.push('relaunch');
+      },
+      open: async () => {
+        order.push('open');
+      },
+      prove: async () => {
+        order.push('prove');
+        return PROVEN;
+      },
+      close: async () => {
+        order.push('close');
+      },
+    });
+    await assert.rejects(admit(steps, stop), { code: 'BUSY_FOREIGN_FLOW', message: foreign });
+    assert.deepEqual(order, ['attach', 'foreignDriver', 'close']);
+  });
+}
+
+test('cancellation during the retry driver probe prevents relaunch', async () => {
+  const { calls, stop, steps } = harness({
+    load: () => 50,
+    attach: async () => {
+      throw new TargetReadinessTimeoutError('stuck on the launcher');
+    },
+  });
+  steps.foreignDriver = async () => {
+    calls.push('foreignDriver');
+    stop.begin();
+    return undefined;
+  };
+  steps.relaunch = async () => {
+    calls.push('relaunch');
+  };
+  await assert.rejects(admit(steps, stop), { code: 'RUN_CANCELLED' });
+  assert.deepEqual(calls, ['foreignDriver', 'close']);
 });

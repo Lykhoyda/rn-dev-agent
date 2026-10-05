@@ -296,3 +296,56 @@ test('duplicate refused testIDs cannot rebind after clearance', async () => {
   assert.equal(outcome.block.outcome, 'fail');
   assert.equal(f.calls.filter((call) => call.startsWith('press')).length, 1);
 });
+
+for (const kind of ['press', 'fill'] as const) {
+  for (const semantic of [false, true]) {
+    for (const y of [80, 700]) {
+      test(`an unidentified ${semantic ? 'semantic' : 'literal'} ${kind} never retries a same-label twin at its old frame (${y})`, async () => {
+        const type = kind === 'press' ? 'Button' : 'TextField';
+        const first = at(y, type);
+        const original = targetOf(first, '@target')!;
+        delete original.testID;
+        original.label = 'Save';
+        const after = at(300, type, [
+          {
+            ref: '@twin',
+            index: 3,
+            parentIndex: 1,
+            type,
+            label: 'Save',
+            hittable: true,
+            rect: { x: 20, y, width: 300, height: 44 },
+          },
+        ]);
+        const moved = targetOf(after, '@target')!;
+        delete moved.testID;
+        moved.label = 'Save';
+        if (semantic) {
+          first.elements = [original];
+          after.elements = [moved, targetOf(after, '@twin')!];
+        }
+        const f = fake([first, after], { [kind]: [OCCLUDED] });
+        const judge = scriptedJudge((questions) =>
+          Object.fromEntries(
+            Object.entries(questions).map(([id, question]) => [id, choice(question)]),
+          ),
+        );
+        if (semantic) f.deps.judge = judge;
+        const target = semantic ? 'the save control' : '"Save"';
+        const instruction =
+          kind === 'press' ? `1. Tap ${target}\n` : `1. Fill ${target} with "x"\n`;
+        const outcome = await walkBlock(block(instruction), f.deps);
+        assert.equal(outcome.block.outcome, 'fail');
+        assert.deepEqual(f.calls, [
+          'capture',
+          `${kind} @target`,
+          `scroll ${y < 400 ? 'up' : 'down'}`,
+          'capture',
+        ]);
+        assert.match(outcome.failure?.seen ?? '', /stayed off screen after one scroll/);
+        assert.doesNotMatch(JSON.stringify(outcome), /ACTION_OUTCOME_UNCERTAIN/);
+        if (semantic) assert.equal(judge.requests.length, 1);
+      });
+    }
+  }
+}
