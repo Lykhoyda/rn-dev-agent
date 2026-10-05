@@ -439,10 +439,12 @@ test('contradicted clipping containers preserve rows and unresolved inputs in ev
   }
 });
 
-
 test('quoted testIDs retain identity evidence and ID-preferred persistence', async () => {
   const screen = companyHome();
-  for (const [label, id] of [['Test App', 'app-id'], ['Decorative banner', 'banner-id']]) {
+  for (const [label, id] of [
+    ['Test App', 'app-id'],
+    ['Decorative banner', 'banner-id'],
+  ]) {
     screen.elements.find((e) => e.label === label)!.testID = id;
     assert.equal(check(screen, label), 'fail');
     assert.equal(check(screen, id), 'fail');
