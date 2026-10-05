@@ -459,3 +459,25 @@ fn release_refuses_an_unreadable_holder_record() {
     ));
     assert!(dir.exists(), "an ambiguous lock must not be touched");
 }
+
+#[test]
+fn incomplete_matching_fingerprint_without_a_generated_dir_names_its_cause() {
+    let worktree = temp_dir();
+    let incompleteness = vec!["app.config.ts is a dynamic config".to_string()];
+    let mut incomplete = inputs(&worktree, FP);
+    incomplete.fingerprint_complete = false;
+    incomplete.incompleteness = &incompleteness;
+    incomplete.native_dir_exists = false;
+    let plan = decide(
+        &incomplete,
+        &StateStatus::Loaded(Box::new(state(&worktree, FP))),
+        Some(ArtifactStatus::Verified),
+    );
+    assert_eq!(plan.decision, BuildDecision::Incremental);
+    assert!(
+        plan.reason.contains("app.config.ts is a dynamic config")
+            && plan.reason.contains("refusing cached reuse"),
+        "{}",
+        plan.reason
+    );
+}

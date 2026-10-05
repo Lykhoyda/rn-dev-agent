@@ -303,8 +303,14 @@ pub fn decide(
             let mut evidence = vec![match_evidence, sha_evidence];
             evidence.extend(inputs.incompleteness.iter().cloned());
             return incremental(
-                "native fingerprint matches but its input set is unprovably complete; refusing cached reuse"
-                    .to_string(),
+                format!(
+                    "native fingerprint matches, but {}; refusing cached reuse",
+                    inputs
+                        .incompleteness
+                        .first()
+                        .map(String::as_str)
+                        .unwrap_or("its input set is unprovably complete")
+                ),
                 evidence,
             );
         }

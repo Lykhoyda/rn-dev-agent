@@ -1155,6 +1155,21 @@ fn a_malformed_runner_driver_announcement_is_a_protocol_violation() {
 #[test]
 fn a_runner_driver_is_recorded_only_as_this_simulator_s_own_group_leader() {
     let command = "/usr/bin/xcodebuild test-without-building -project R.xcodeproj -destination platform=iOS Simulator,id=AAAA-1111";
+    let real = "xcodebuild test-without-building -project /p/RnFastRunner/RnFastRunner.xcodeproj -scheme RnFastRunner -destination platform=iOS Simulator,id=2E24DCF0-C991-4EB0-80CC-CCFEB9042A73 -derivedDataPath /p/build/DerivedData -only-testing:RnFastRunnerUITests/RnFastRunnerTests/testCommand";
+    assert!(qaren::redact::OutputText::from_output(real)
+        .as_str()
+        .contains("2E24DCF0-C991-4EB0-80CC-CCFEB9042A73"));
+    let mut mock = MockRunner::new();
+    mock.expect_run("ps -o pgid= -p 4242", CmdOutput::success("4242"));
+    mock.expect_run(
+        "ps -p 4242 -o lstart=",
+        CmdOutput::success("Wed Aug 12 16:01:00 2026"),
+    );
+    mock.expect_run("ps -p 4242 -o command=", CmdOutput::success(real));
+    assert!(
+        qaren::run::runner_driver(&mut mock, 4242, "2E24DCF0-C991-4EB0-80CC-CCFEB9042A73")
+            .is_some()
+    );
     for (pgid, cmd, recorded) in [
         ("4242", command, true),
         ("9000", command, false),
