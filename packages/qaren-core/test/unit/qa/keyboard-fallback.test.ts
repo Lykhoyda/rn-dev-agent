@@ -345,14 +345,14 @@ test('a placeholder-labelled wrapper with its own identifier binds the React-onl
     wrappedInput('Email address', true, true, input, 'email-wrap')), undefined);
 });
 
-for (const code of ['9386', '9966']) {
+for (const code of ['9', '93', '938', '999', '9386', '9966']) {
   test(`nested code boxes and merged labels stay private after fallback fill ${code}`, async () => {
     const nodes: NativeNode[] = [
       { ref: '@app', type: 'Application', rect: { x: 0, y: 0, width: 400, height: 800 } },
       { ref: '@code', type: 'Other', identifier: 'qa-otp-code-field', label: [...code].join(', '),
         parentIndex: 0, rect: { x: 20, y: 100, width: 200, height: 42 } },
     ];
-    for (const [i, label] of [...code].entries()) {
+    for (const [i, label] of [...code.padEnd(4, ' ')].map((char) => char.trim()).entries()) {
       const parentIndex = nodes.length;
       nodes.push(
         { ref: `@box${i}`, type: 'StaticText', identifier: `qa-otp-box-${i}`, label,
@@ -378,8 +378,10 @@ for (const code of ['9386', '9966']) {
       assert.equal(mask.describeElement(node, describe), 'box (hidden)');
     for (const separator of [', ', ' | ', ' / ', '---', '\u2009']) {
       const text = [...code].join(separator);
-      assert.equal(privacy.redact(text), '•••');
-      assert.equal(mask.apply(text).includes(text), false);
+      if (code.length >= 3) {
+        assert.equal(privacy.redact(text), '•••');
+        assert.equal(mask.apply(text).includes(text), false);
+      }
     }
     const fake = app();
     const capture = fake.deps.captureScreen;

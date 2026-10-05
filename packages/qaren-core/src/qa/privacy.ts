@@ -202,7 +202,7 @@ function forms(value: string): string[] {
 const DIGIT_GAP = '[\\s\\p{White_Space}\\p{P}\\p{S}]';
 function digitForm(value: string): string | undefined {
   const digits = value.trim().replace(new RegExp(DIGIT_GAP, 'gu'), '');
-  if (!/^\d{4,}$/.test(digits)) return undefined;
+  if (!/^\d{3,}$/.test(digits)) return undefined;
   return [...digits].join(`${DIGIT_GAP}*`);
 }
 
@@ -273,13 +273,13 @@ export function codeBoxRows(screen: Screen): Element[][] {
     (element) =>
       !element.offscreen &&
       element.kind === 'text' &&
-      (chars(element.label ?? '') === 1 || chars(element.value ?? '') === 1) &&
+      chars(element.label || element.value || '') <= 1 &&
       (elementFrame(element)?.width ?? 0) > 0,
   );
   const boxes = candidates.filter(
     (element) => !ancestorsOf(element).some(
       (ancestor) => candidates.includes(ancestor) &&
-        (ancestor.label ?? ancestor.value) === (element.label ?? element.value),
+        (ancestor.label || ancestor.value || '') === (element.label || element.value || ''),
     ),
   );
   const bands: Element[][] = [];
@@ -307,7 +307,9 @@ export function codeBoxRows(screen: Screen): Element[][] {
         rows.push([element]);
       else row.push(element);
     }
-    return rows.filter((row) => row.length >= 3);
+    return rows.filter(
+      (row) => row.length >= 3 && row.some((element) => chars(element.label || element.value || '') === 1),
+    );
   });
 }
 
@@ -500,12 +502,12 @@ export class ObservedPrivacy {
       const boxes = rows.flat();
       for (const element of screen.elements) {
         const members = boxes.filter((box) => ancestorsOf(box).includes(element));
-        const text = element.label ?? element.value ?? '';
+        const text = element.label || element.value || '';
         const merged = members.length > 0 &&
           text.replace(new RegExp(DIGIT_GAP, 'gu'), '') ===
-            members.map((box) => box.label ?? box.value ?? '').join('');
+            members.map((box) => box.label || box.value || '').join('');
         const echo = boxes.some((box) => ancestorsOf(element).includes(box) &&
-          text === (box.label ?? box.value));
+          text === (box.label || box.value || ''));
         if (boxes.includes(element) || echo || merged) this.codeElements.add(element);
       }
       this.sensitivePixels ||= rows.length > 0;
