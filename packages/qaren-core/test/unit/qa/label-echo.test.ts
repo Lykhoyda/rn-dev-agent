@@ -7,6 +7,8 @@ import type { NativeNode } from '../../../dist/qa/screen.js';
 import { prepareTarget, targetVisible, visibleSelector } from '../../../dist/qa/resolve.js';
 import { exactIdentities } from '../../../dist/qa/identity.js';
 import { refreshRef } from '../../../dist/fast-runner-ref-map.js';
+import { validateNativePresence } from '../../../dist/qa/native-presence.js';
+import { nativeCapture } from './platform-presence-fixtures.ts';
 
 const app = (): NativeNode[] => [
   { ref: '@app', index: 0, type: 'Application', rect: { x: 0, y: 0, width: 402, height: 874 } },
@@ -52,6 +54,105 @@ function pressable(
 }
 
 const press = { kind: 'press' as const, target: { phrase: 'Skip', quoted: 'Skip' } };
+
+function nestedTitle(): NativeNode[] {
+  const rect = { x: 20, y: 100, width: 300, height: 24 };
+  return [
+    ...app(),
+    {
+      ref: '@title',
+      index: 2,
+      parentIndex: 1,
+      type: 'StaticText',
+      identifier: 'qa-acceptance-start-title',
+      label: 'Device pane baseline',
+      hittable: true,
+      rect,
+    },
+    {
+      ref: '@echo',
+      index: 3,
+      parentIndex: 2,
+      type: 'StaticText',
+      label: 'Device pane baseline',
+      hittable: true,
+      rect,
+    },
+  ];
+}
+
+for (const verified of [false, true]) {
+  test(`nested unidentified title text is one identity with verified=${verified}`, () => {
+    const nodes = nestedTitle();
+    const capture = nativeCapture();
+    const observed = nodes.map((node) => ({
+      ...node,
+      depth: node.index!,
+      enabled: true,
+      presence: { ...capture.nodes[1].presence, nodeIndex: node.index! },
+    }));
+    const presence = verified
+      ? validateNativePresence(capture.presenceCapture, observed, 7, 'com.test', 20_000)
+      : undefined;
+    if (verified) assert.ok(presence);
+    const screen = join(verified ? observed : nodes, [], 'app', undefined, undefined, presence);
+    for (const quoted of ['Device pane baseline', 'qa-acceptance-start-title']) {
+      for (const exact of [undefined, quoted === 'Device pane baseline' ? 'text' : 'id'] as const) {
+        const target = { quoted, phrase: quoted, exact };
+        for (const kind of ['press', 'wait', 'scroll'] as const) {
+          const step =
+            kind === 'scroll'
+              ? { kind, until: target, direction: 'down' as const }
+              : { kind, target };
+          assert.equal(exactIdentities(screen, target, kind).length, 1);
+          const resolved = prepareTarget(step, screen);
+          assert.ok('ref' in resolved, JSON.stringify(resolved));
+          assert.equal(resolved.ref, '@title');
+        }
+        assert.equal(targetVisible(target, screen), true);
+        assert.deepEqual(
+          visibleSelector(target, screen),
+          exact === 'text'
+            ? { text: 'Device pane baseline' }
+            : { id: 'qa-acceptance-start-title' },
+        );
+      }
+    }
+    const refreshed = refreshRef({ type: 'StaticText', label: 'Device pane baseline' }, nodes);
+    assert.equal(refreshed.kind, 'unique');
+    if (refreshed.kind === 'unique') assert.equal(refreshed.node.ref, '@title');
+  });
+}
+
+for (const patch of [
+  { parentIndex: 1 },
+  { identifier: 'distinct-title' },
+  { rect: { x: 20, y: 150, width: 300, height: 24 } },
+  { enabled: false },
+]) {
+  test(`distinct same-label text remains ambiguous: ${JSON.stringify(patch)}`, () => {
+    const nodes = nestedTitle();
+    nodes[3] = { ...nodes[3], ...patch };
+    const screen = join(nodes, []);
+    const target = { quoted: 'Device pane baseline', phrase: 'Device pane baseline' };
+    assert.equal(exactIdentities(screen, target, 'press').length, 2);
+    const resolved = prepareTarget({ kind: 'press', target }, screen);
+    assert.ok('refuse' in resolved && resolved.refuse === 'TARGET_AMBIGUOUS');
+    assert.equal(visibleSelector(target, screen), undefined);
+    assert.equal(refreshRef({ type: 'StaticText', label: target.quoted }, nodes).kind, 'ambiguous');
+  });
+}
+
+test('nested text echoes do not split their enclosing pressable identity', () => {
+  const nodes = nestedTitle();
+  nodes[2] = { ...nodes[2], type: 'Other' };
+  nodes.push({ ...nodes[3], ref: '@inner-echo', index: 4, parentIndex: 3 });
+  const screen = join(nodes, []);
+  const target = { quoted: 'Device pane baseline', phrase: 'Device pane baseline' };
+  const resolved = prepareTarget({ kind: 'press', target }, screen);
+  assert.ok('ref' in resolved);
+  assert.equal(resolved.ref, '@title');
+});
 
 test('a pressable echoing its single text child resolves to the pressable', () => {
   const nodes = pressable(app(), { id: 'consent-skip', y: 700, texts: ['Skip'] });

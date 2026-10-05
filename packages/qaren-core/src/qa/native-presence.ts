@@ -164,25 +164,31 @@ export function duplicateNodes(
   presence: NativePresence | undefined,
 ): Set<number> {
   const duplicates = new Set<number>();
-  if (!presence) return duplicates;
   const key = (i: number) => {
     const n = nodes[i];
     return JSON.stringify([
       n.type,
-      n.identifier ?? '',
       n.label ?? '',
       n.value ?? null,
       n.rect ? [n.rect.x, n.rect.y, n.rect.width, n.rect.height] : null,
       n.enabled,
       n.hittable,
       n.secure,
-      presence.nodes[i]?.status,
-      presence.nodes[i]?.labelSource,
+      presence?.nodes[i]?.status,
+      presence?.nodes[i]?.labelSource,
     ]);
   };
   nodes.forEach((n, i) => {
     const parent = n.parentIndex;
-    if (n.type === 'StaticText' && parent !== undefined && parent < i && key(parent) === key(i))
+    if (
+      n.type === 'StaticText' &&
+      parent !== undefined &&
+      parent >= 0 &&
+      parent < i &&
+      (presence || (n.label && n.rect && n.rect.width > 0 && n.rect.height > 0)) &&
+      (!n.identifier?.trim() || n.identifier === nodes[parent].identifier) &&
+      key(parent) === key(i)
+    )
       duplicates.add(i);
   });
   return duplicates;
