@@ -72,6 +72,7 @@ fn matching_fingerprint_with_verified_artifact_and_scheme_reuses() {
         Some(ArtifactStatus::Verified),
     );
     assert_eq!(plan.decision, BuildDecision::Reuse);
+    assert!(!plan.regenerate_native_dir);
     assert!(plan.artifact.is_some());
     // The sha comparison must be visible evidence: reuse across candidates is
     // proven by the fingerprint, never inferred from the sha.
@@ -146,7 +147,7 @@ fn missing_scheme_downgrades_matching_fingerprint_to_incremental() {
 }
 
 #[test]
-fn incomplete_fingerprint_forbids_reuse_even_when_everything_matches() {
+fn incomplete_matching_fingerprint_regenerates_generated_native_dir() {
     let worktree = temp_dir();
     let incompleteness = vec!["app.config.ts is a dynamic config".to_string()];
     let mut incomplete = inputs(&worktree, FP);
@@ -157,19 +158,25 @@ fn incomplete_fingerprint_forbids_reuse_even_when_everything_matches() {
         &StateStatus::Loaded(Box::new(state(&worktree, FP))),
         Some(ArtifactStatus::Verified),
     );
-    assert_eq!(plan.decision, BuildDecision::Incremental);
+    assert_eq!(plan.decision, BuildDecision::Clean);
+    assert!(plan.regenerate_native_dir);
+    assert!(plan.artifact.is_none());
+    assert!(plan.reason.contains("keeping existing build caches"));
     assert!(plan.evidence.iter().any(|e| e.contains("dynamic config")));
 }
 
 #[test]
-fn changed_fingerprint_with_proven_provenance_builds_incrementally() {
+fn changed_fingerprint_with_proven_provenance_regenerates_generated_native_dir() {
     let worktree = temp_dir();
     let plan = decide(
         &inputs(&worktree, "rnfp1:changed"),
         &StateStatus::Loaded(Box::new(state(&worktree, FP))),
         None,
     );
-    assert_eq!(plan.decision, BuildDecision::Incremental);
+    assert_eq!(plan.decision, BuildDecision::Clean);
+    assert!(plan.regenerate_native_dir);
+    assert!(plan.artifact.is_none());
+    assert!(plan.reason.contains("keeping existing build caches"));
     assert!(
         plan.evidence
             .iter()
@@ -177,6 +184,42 @@ fn changed_fingerprint_with_proven_provenance_builds_incrementally() {
         "old and new fingerprints must be evidence: {:?}",
         plan.evidence
     );
+}
+
+#[test]
+fn native_input_changes_regenerate_only_existing_generated_dirs_on_both_platforms() {
+    let worktree = temp_dir();
+    for platform in ["ios", "android"] {
+        for (fingerprint, complete) in [("rnfp1:changed", true), (FP, false)] {
+            for (exists, in_candidate) in [(true, false), (true, true), (false, false)] {
+                let mut current = inputs(&worktree, fingerprint);
+                current.platform = platform;
+                current.fingerprint_complete = complete;
+                current.native_dir_exists = exists;
+                current.native_dir_in_candidate = in_candidate;
+                let mut cached = state(&worktree, FP);
+                cached.platform = platform.to_string();
+                cached.generated_native_dirs = vec![platform.to_string()];
+                let plan = decide(
+                    &current,
+                    &StateStatus::Loaded(Box::new(cached)),
+                    Some(ArtifactStatus::Verified),
+                );
+                let regenerate = exists && !in_candidate;
+                assert_eq!(
+                    plan.decision,
+                    if regenerate {
+                        BuildDecision::Clean
+                    } else {
+                        BuildDecision::Incremental
+                    },
+                    "{platform}: {fingerprint}, complete={complete}, exists={exists}, in_candidate={in_candidate}"
+                );
+                assert_eq!(plan.regenerate_native_dir, regenerate);
+                assert!(plan.artifact.is_none());
+            }
+        }
+    }
 }
 
 #[test]

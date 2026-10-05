@@ -1026,18 +1026,22 @@ fingerprint, and building candidate sha:
    Android). Fresh candidate JS always comes from Metro; the evidence
    records which candidate built the binary and which serves JS — native
    compatibility is proven by the fingerprint, never inferred from the sha.
-2. **Incremental** — reuse is invalid (fingerprint changed, artifact
+2. **Incremental** — reuse is invalid (committed native inputs changed, artifact
    stale/missing/unverified, no scheme, incomplete fingerprint) but the
    worktree-keyed caches are provably this project's: the state binds this
    exact worktree/app and any generated native dir was created by a
-   recorded qaren build. iOS follows the
+   recorded qaren build with unchanged, completely fingerprinted inputs.
+   Committed native directories keep incremental builds for changed or
+   incomplete fingerprints. iOS follows the
    [CLI-owned build routes](#cli-owned-ios-build-routes); Android recompiles
    with `expo run:android` over the existing Gradle caches.
 3. **Clean** — mandatory whenever compatibility is unprovable: no/corrupt
-   state, cross-worktree state, unproven generated-dir provenance, or
-   `build.strategy: clean`. A generated (git-ignored) native dir is
-   regenerated via `expo prebuild --clean` (expo's own CNG contract); a
-   git-visible native dir is candidate input and is never deleted — clean
+   state, cross-worktree state, unproven generated-dir provenance, changed or
+   incomplete fingerprints for an existing generated native directory, or
+   `build.strategy: clean`. A generated (git-ignored) native dir is regenerated
+   using only `expo prebuild --platform <platform> --clean`, keeping existing
+   build caches outside the generated directory. A git-visible native dir
+   is candidate input and is never deleted — clean
    there means dropping the derived build outputs (`ios/build`,
    `android/build`, `android/app/build`, `android/.gradle`).
 

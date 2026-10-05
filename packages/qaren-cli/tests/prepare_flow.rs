@@ -1732,6 +1732,12 @@ fn build_process_death_fails_with_log_evidence() {
 fn recording_a_build_retires_run_output_and_prunes_only_older_artifacts_for_the_same_app() {
     let repo = common::temp_repo();
     let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8797));
+    let retained_caches = ["test-app/ios/Pods/cached", "DerivedData/cached"];
+    for cache in retained_caches {
+        let path = repo.join(cache);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"retained cache").unwrap();
+    }
 
     let products = repo
         .join("test-app")
@@ -1868,6 +1874,29 @@ fn recording_a_build_retires_run_output_and_prunes_only_older_artifacts_for_the_
         "a directory that is not a fingerprint artifact must never be pruned"
     );
     assert_eq!(probing.inner.remaining(), 0);
+    let prebuilds: Vec<_> = probing
+        .inner
+        .calls
+        .iter()
+        .filter(|spec| spec.label == "expo-prebuild")
+        .collect();
+    assert_eq!(prebuilds.len(), 1);
+    assert_eq!(prebuilds[0].program, "/bin/bash");
+    assert_eq!(
+        prebuilds[0].args[5..],
+        [
+            "pnpm",
+            "exec",
+            "expo",
+            "prebuild",
+            "--platform",
+            "ios",
+            "--clean"
+        ]
+    );
+    for cache in retained_caches {
+        assert_eq!(std::fs::read(repo.join(cache)).unwrap(), b"retained cache");
+    }
 }
 
 #[test]
@@ -2089,6 +2118,17 @@ fn android_build_route_records_install_provenance_from_the_hashed_apk() {
     let repo = common::temp_repo();
     let scenario_path = write_scenario(&repo, &common::android_scenario_yaml(8792));
     let sdk = android_sdk(&repo);
+    let retained_caches = [
+        "test-app/android/build/cached",
+        "test-app/android/app/build/cached",
+        "test-app/android/.gradle/cached",
+        "gradle-cache/cached",
+    ];
+    for cache in retained_caches {
+        let path = repo.join(cache);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"retained cache").unwrap();
+    }
     let apk = repo
         .join("test-app")
         .join("android")
@@ -2225,6 +2265,27 @@ fn android_build_route_records_install_provenance_from_the_hashed_apk() {
     assert_eq!(install.artifact.kind, qaren::buildplan::ArtifactKind::Apk);
     assert!(!install.installed_at.is_empty());
     assert!(install.removal.is_none());
+    let prebuilds: Vec<_> = mock
+        .calls
+        .iter()
+        .filter(|spec| spec.label == "expo-prebuild")
+        .collect();
+    assert_eq!(prebuilds.len(), 1);
+    assert_eq!(prebuilds[0].program, "pnpm");
+    assert_eq!(
+        prebuilds[0].args,
+        [
+            "exec",
+            "expo",
+            "prebuild",
+            "--platform",
+            "android",
+            "--clean"
+        ]
+    );
+    for cache in retained_caches {
+        assert_eq!(std::fs::read(repo.join(cache)).unwrap(), b"retained cache");
+    }
 }
 
 #[test]

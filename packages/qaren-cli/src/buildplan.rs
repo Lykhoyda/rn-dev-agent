@@ -248,6 +248,13 @@ pub fn decide(
                 evidence,
             );
         }
+        if regenerate && (state.fingerprint != inputs.fingerprint || !inputs.fingerprint_complete) {
+            return clean(
+                "native inputs changed or are incompletely fingerprinted; regenerating the generated native dir via expo prebuild --clean while keeping existing build caches"
+                    .to_string(),
+                evidence,
+            );
+        }
         BuildPlan {
             decision: BuildDecision::Incremental,
             fingerprint: inputs.fingerprint.to_string(),
