@@ -4,7 +4,7 @@ import { parsePlan } from '../../../dist/qa/plan.js';
 import type { Block } from '../../../dist/qa/plan.js';
 import type { StoredBlock } from '../../../dist/qa/blocks.js';
 import { join, type NativeNode, type Screen } from '../../../dist/qa/screen.js';
-import { judgeCheck } from '../../../dist/qa/resolve.js';
+import { judgeCheck, visibleSelector } from '../../../dist/qa/resolve.js';
 import { literalEvidence } from '../../../dist/qa/evidence.js';
 import { replayBlock, runPlan, walkBlock } from '../../../dist/qa/walker.js';
 import { scriptedJudge, walker } from './judgment-fixtures.ts';
@@ -83,11 +83,11 @@ function k2WithVisibleTwin(): Screen {
 }
 
 // Home #1: a container left with a stale off-screen rect after a sheet closed; its rows are on screen.
-function home1(): Screen {
+function home1(type = 'Other', rect = at(0, 900, 402, 600)): Screen {
   return observed([
     { type: 'Application', rect: app },
     { type: 'Window', parent: 0, rect: app },
-    { type: 'Other', parent: 1, rect: at(0, 900, 402, 600) },
+    { type, parent: 1, rect },
     { type: 'StaticText', parent: 2, rect: at(16, 300, 370, 44), label: 'Order history' },
     { type: 'StaticText', parent: 2, rect: at(16, 350, 370, 44), label: 'Saved addresses' },
   ]);
@@ -365,4 +365,74 @@ test('an incomplete snapshot never turns a miss into a definite absence in any c
   }
   assert.equal(c.replay.miss, undefined);
   assert.match(c.replay.seen, /SCREEN_EVIDENCE_INCOMPLETE: NATIVE_ACQUISITION_UNUSABLE/);
+});
+
+test('excluded company labels never satisfy or persist any literal consumer', async () => {
+  const screen = companyHome();
+  for (const text of [
+    'Test App',
+    'Decorative banner',
+    'Card, Renew',
+    'Vertical scroll bar, 2 pages',
+  ]) {
+    assert.equal(check(screen, text), 'fail', text);
+    assert.equal(visibleSelector({ quoted: text, phrase: text }, screen), undefined, text);
+    assert.equal((await checkRow(screen, text)).verdict, 'FAIL', text);
+    const c = await consumers(screen, text);
+    assert.equal(c.wait.verdict, 'FAIL', text);
+    assert.equal(c.scroll.verdict, 'FAIL', text);
+    assert.equal(c.replay.miss, c.replay.line, text);
+    assert.equal(c.replay.failed, true, text);
+    assert.match(c.replay.seen, /REPLAY_SELECTOR/);
+  }
+  for (const text of ['Reschedule', 'Card'])
+    assert.deepEqual(visibleSelector({ quoted: text, phrase: text }, screen), { text });
+});
+
+test('contradicted clipping containers preserve rows and unresolved inputs in every direction', async () => {
+  for (const type of ['ScrollView', 'Table', 'CollectionView', 'Window']) {
+    for (const rect of [
+      at(-402, 100, 402, 600),
+      at(402, 100, 402, 600),
+      at(0, -600, 402, 600),
+      at(0, 900, 402, 600),
+    ]) {
+      const screen = home1(type, rect);
+      assert.equal(screen.elements[2].visibilityEvidence, 'unresolved', type);
+      for (const text of ['Order history', 'Saved addresses']) {
+        assert.equal(check(screen, text), 'pass', type);
+        assert.equal((await checkRow(screen, text)).verdict, 'PASS', type);
+        const c = await consumers(screen, text);
+        assert.equal(c.wait.verdict, 'PASS', type);
+        assert.equal(c.scroll.verdict, 'PASS', type);
+        assert.deepEqual(c.scroll.actions, [], type);
+        assert.equal(c.replay.failed, false, c.replay.seen);
+      }
+      for (const inputType of ['TextView', 'TextField', 'SecureTextField', 'SearchField']) {
+        const input = observed([
+          { type: 'Application', rect: app },
+          { type: 'Window', parent: 0, rect: app },
+          { type, parent: 1, rect },
+          { type: inputType, parent: 2, rect: at(16, 300), label: 'Stale input' },
+        ]);
+        assert.equal(check(input, 'Stale input'), 'unsure', `${type}/${inputType}`);
+        assert.equal(input.elements[3].offscreen, true);
+      }
+      const outside = observed([
+        { type: 'Application', rect: app },
+        { type: 'Window', parent: 0, rect: app },
+        { type, parent: 1, rect },
+        { type: 'StaticText', parent: 2, rect: at(16, 300), label: 'Current row' },
+        { type: 'StaticText', parent: 2, rect: at(16, 1200), label: 'Later row' },
+      ]);
+      assert.equal(check(outside, 'Later row'), 'fail', type);
+    }
+    const trustedClip = observed([
+      { type: 'Application', rect: app },
+      { type: 'Window', parent: 0, rect: at(0, 100, 402, 200) },
+      { type, parent: 1, rect: at(0, 900, 402, 600) },
+      { type: 'StaticText', parent: 2, rect: at(16, 350), label: 'Outside window' },
+    ]);
+    assert.equal(check(trustedClip, 'Outside window'), 'fail', type);
+  }
 });

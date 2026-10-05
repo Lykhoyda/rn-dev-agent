@@ -540,7 +540,7 @@ export async function walkBlock(
         ? { text: target.quoted }
         : undefined;
   const targetSelector = (target: Target, screen: Screen) =>
-    stored(exactSelector(target) ?? visibleSelector(target, screen));
+    stored(visibleSelector(target, screen));
   const base = (item: Item, attempt: number): Omit<LedgerRow, 'outcome'> => ({
     block: block.slug,
     line: item.line,

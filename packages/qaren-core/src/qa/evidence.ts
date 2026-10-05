@@ -1,4 +1,4 @@
-import type { Element, Screen, VisibilityEvidence } from './screen.js';
+import type { Screen } from './screen.js';
 
 export type LiteralVerdict = 'pass' | 'unsure' | 'fail';
 
@@ -6,10 +6,6 @@ export interface LiteralEvidence {
   verdict: LiteralVerdict;
   // The occurrence was a merged accessibility label, not painted text.
   label?: true;
-}
-
-export function visibilityEvidenceOf(element: Element): VisibilityEvidence {
-  return element.visibilityEvidence ?? (element.offscreen ? 'offscreen' : 'visible');
 }
 
 // One rule for literal checks, quoted waits, scroll-until and replay text waits.

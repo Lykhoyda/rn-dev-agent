@@ -266,6 +266,7 @@ const exclusions = new WeakMap<Set<number>, Map<number, Exclusion>>();
 
 export function outsideViewport(nodes: NativeNode[]): Set<number> {
   const offscreen = new Set<number>();
+  const contradicted = frameContradictions(nodes);
   const decided = new Map<number, Exclusion>();
   exclusions.set(offscreen, decided);
   const root = nodes[0];
@@ -299,6 +300,7 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
       }
       if (
         ancestor?.type === 'Window' &&
+        !contradicted.has(parent) &&
         validRect(ancestor.rect) &&
         ancestor.rect.width > 0 &&
         ancestor.rect.height > 0
@@ -308,6 +310,7 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
           decider = { rule: 'window', ancestor: parent };
       }
       if (
+        !contradicted.has(parent) &&
         validRect(ancestor?.rect) &&
         ['ScrollView', 'Table', 'CollectionView'].includes(ancestor.type ?? '')
       ) {
