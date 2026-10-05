@@ -2,4 +2,4 @@
 "qaren": patch
 ---
 
-Trace worktree-local package plugin inputs and refuse cached native reuse when their executable dependencies or ambient inputs cannot be proven.
+Refuse cached native reuse for worktree-local package plugins and bare imports whose executable inputs are not traced.

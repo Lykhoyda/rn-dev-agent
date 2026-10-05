@@ -647,113 +647,143 @@ fn local_package_fingerprint(root: &Path, platform: &str) -> NativeFingerprint {
     compute(&mut runner, root, root, platform).unwrap()
 }
 
+fn matching_build(
+    root: &Path,
+    fp: &NativeFingerprint,
+    platform: &str,
+) -> qaren::buildplan::BuildPlan {
+    use qaren::buildplan::{
+        decide, ArtifactKind, ArtifactStatus, CachedArtifact, DecisionInputs, NativeCacheState,
+        StateStatus, CACHE_SCHEMA,
+    };
+    let cached = NativeCacheState {
+        schema: CACHE_SCHEMA.to_string(),
+        platform: platform.to_string(),
+        app_id: "com.rndevagent.testapp".to_string(),
+        worktree_root: root.to_path_buf(),
+        fingerprint: fp.value.clone(),
+        built_at: "2026-10-05T00:00:00Z".to_string(),
+        candidate_sha: "a".repeat(40),
+        lockfile_sha256: "b".repeat(64),
+        generated_native_dirs: vec![platform.to_string()],
+        artifact: Some(CachedArtifact {
+            path: root.join(if platform == "ios" {
+                "testapp.app"
+            } else {
+                "testapp.apk"
+            }),
+            sha256: "c".repeat(64),
+            kind: if platform == "ios" {
+                ArtifactKind::AppBundle
+            } else {
+                ArtifactKind::Apk
+            },
+        }),
+    };
+    decide(
+        &DecisionInputs {
+            platform,
+            app_id: &cached.app_id,
+            worktree_root: root,
+            candidate_sha: &cached.candidate_sha,
+            fingerprint: &fp.value,
+            fingerprint_complete: fp.complete,
+            incompleteness: &fp.incompleteness,
+            scheme: Some("rndatest"),
+            force_clean: false,
+            native_dir_exists: true,
+            native_dir_in_candidate: false,
+        },
+        &StateStatus::Loaded(Box::new(cached.clone())),
+        Some(ArtifactStatus::Verified),
+    )
+}
+
 #[test]
-fn local_package_plugins_and_bare_imports_scan_ambient_and_unparseable_inputs() {
-    for spec in ["file:", "link:"] {
+fn local_package_plugins_and_bare_imports_are_always_incomplete() {
+    for spec in ["file:", "link:", "workspace:"] {
         for section in ["dependencies", "devDependencies", "optionalDependencies"] {
             for bare_import in [false, true] {
-                let root = local_package_plugin(spec, section, bare_import);
-                for (source, reason) in [
-                    (
-                        "module.exports = c => { c.ios.infoPlist.X = process.env.X; return c; };",
-                        "ambient inputs",
-                    ),
-                    ("require('fs');", "Node built-in"),
-                    ("require('node:child_process');", "Node built-in"),
-                    ("require(variable);", "not a plain string literal"),
-                ] {
-                    std::fs::write(root.join("foo/index.js"), source).unwrap();
+                for exports in [false, true] {
+                    let root = local_package_plugin(spec, section, bare_import);
+                    let mut package =
+                        serde_json::json!({"name":"foo", "version":"1.0.0", "main":"index.js"});
+                    if exports {
+                        package["exports"] = serde_json::json!("./native.js");
+                    }
+                    std::fs::write(root.join("foo/package.json"), package.to_string()).unwrap();
+                    std::fs::write(
+                        root.join("foo/native.js"),
+                        "module.exports = process.env.X;",
+                    )
+                    .unwrap();
                     for platform in ["ios", "android"] {
                         let fp = local_package_fingerprint(&root, platform);
-                        assert!(!fp.complete, "{spec} {section} bare={bare_import} {source}");
                         assert!(
-                            fp.incompleteness
-                                .iter()
-                                .any(|detail| detail.contains(reason)),
-                            "{:?}",
-                            fp.incompleteness
+                            !fp.complete,
+                            "{spec} {section} bare={bare_import} exports={exports}"
                         );
+                        assert!(fp.incompleteness.iter().any(|reason| reason ==
+                            "local package plugin foo is not traced; the input set is unprovably complete"), "{:?}", fp.incompleteness);
+                        let build = matching_build(&root, &fp, platform);
+                        assert_eq!(build.decision, qaren::buildplan::BuildDecision::Clean);
+                        assert!(build.regenerate_native_dir);
                     }
+                    std::fs::remove_dir_all(root).unwrap();
                 }
-                std::fs::remove_dir_all(root).unwrap();
             }
         }
     }
 }
 
+#[cfg(unix)]
 #[test]
-fn local_package_entry_priority_and_relative_closure_bind_native_fingerprints() {
+fn installed_links_into_worktree_source_are_not_registry_packages() {
     for bare_import in [false, true] {
-        for (entry, package_json) in [
-            ("index.js", r#"{"name":"foo","version":"1.0.0"}"#),
-            (
-                "main.js",
-                r#"{"name":"foo","version":"1.0.0","main":"main.js"}"#,
-            ),
-            (
-                "app.plugin.js",
-                r#"{"name":"foo","version":"1.0.0","main":"missing.js"}"#,
-            ),
-        ] {
-            let root = local_package_plugin("link:", "dependencies", bare_import);
-            std::fs::write(root.join("foo/package.json"), package_json).unwrap();
-            std::fs::write(
-                root.join("foo").join(entry),
-                "module.exports = require('./value.js');",
-            )
-            .unwrap();
-            std::fs::write(root.join("foo/value.js"), "module.exports = 1;").unwrap();
-            let before = local_package_fingerprint(&root, "ios");
-            assert!(before.complete, "{:?}", before.incompleteness);
-            std::fs::write(root.join("foo/value.js"), "module.exports = 2;").unwrap();
-            let changed = local_package_fingerprint(&root, "ios");
-            assert!(changed.complete, "{:?}", changed.incompleteness);
-            assert_ne!(before.value, changed.value);
-            std::fs::write(root.join("foo/value.js"), "module.exports = process.env.X;").unwrap();
-            assert!(!local_package_fingerprint(&root, "ios").complete);
-            std::fs::remove_dir_all(root).unwrap();
+        let root = local_package_plugin("link:", "dependencies", bare_import);
+        std::fs::write(root.join("package.json"), "{}").unwrap();
+        std::fs::remove_dir_all(root.join("node_modules/foo")).unwrap();
+        std::os::unix::fs::symlink("../foo", root.join("node_modules/foo")).unwrap();
+        for platform in ["ios", "android"] {
+            let fp = local_package_fingerprint(&root, platform);
+            assert!(!fp.complete);
+            assert_eq!(
+                fp.incompleteness,
+                ["local package plugin foo is not traced; the input set is unprovably complete"]
+            );
         }
-    }
-}
-
-#[test]
-fn unsupported_local_package_entries_forbid_native_reuse() {
-    for package_json in [
-        r#"{"main":"missing.js"}"#,
-        r#"{"main":"."}"#,
-        r#"{"main":false}"#,
-        r#"{"main":"../plugins/withX.js"}"#,
-        r#"{"main":"index"}"#,
-    ] {
-        let root = local_package_plugin("file:", "dependencies", false);
-        std::fs::write(root.join("foo/package.json"), package_json).unwrap();
-        assert!(
-            !local_package_fingerprint(&root, "ios").complete,
-            "{package_json}"
-        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }
 
 #[test]
-fn transitive_local_package_imports_are_scanned_and_cycles_terminate() {
-    let root = local_package_plugin("link:", "dependencies", false);
-    std::fs::create_dir_all(root.join("bar")).unwrap();
-    std::fs::write(
-        root.join("foo/package.json"),
-        r#"{"name":"foo","dependencies":{"bar":"file:../bar","foo":"link:."}}"#,
-    )
-    .unwrap();
-    std::fs::write(root.join("foo/index.js"), "require('foo'); require('bar');").unwrap();
-    std::fs::write(root.join("bar/package.json"), r#"{"name":"bar"}"#).unwrap();
-    std::fs::write(root.join("bar/index.js"), "module.exports = 1;").unwrap();
-    let before = local_package_fingerprint(&root, "ios");
-    assert!(before.complete, "{:?}", before.incompleteness);
-    std::fs::write(root.join("bar/index.js"), "require('fs');").unwrap();
-    let after = local_package_fingerprint(&root, "ios");
-    assert!(!after.complete);
-    assert_ne!(before.value, after.value);
-    std::fs::remove_dir_all(root).unwrap();
+fn registry_package_plugins_remain_complete_with_or_without_exports() {
+    for bare_import in [false, true] {
+        for exports in [false, true] {
+            let root = local_package_plugin("link:", "dependencies", bare_import);
+            std::fs::write(
+                root.join("package.json"),
+                r#"{"dependencies":{"foo":"1.0.0"}}"#,
+            )
+            .unwrap();
+            let mut package = serde_json::json!({"name":"foo", "version":"1.0.0"});
+            if exports {
+                package["exports"] = serde_json::json!("./native.js");
+            }
+            std::fs::write(
+                root.join("node_modules/foo/package.json"),
+                package.to_string(),
+            )
+            .unwrap();
+            let fp = local_package_fingerprint(&root, "ios");
+            assert!(fp.complete, "{:?}", fp.incompleteness);
+            assert_eq!(
+                matching_build(&root, &fp, "ios").decision,
+                qaren::buildplan::BuildDecision::Reuse
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -762,6 +792,10 @@ fn package_plugins_and_bare_imports_resolve_so_a_warm_run_can_reuse() {
     let root = package_project();
     let first = package_fingerprint(&root);
     assert!(first.complete, "{:?}", first.incompleteness);
+    assert_eq!(
+        matching_build(&root, &first, "ios").decision,
+        qaren::buildplan::BuildDecision::Reuse
+    );
     assert_eq!(
         package_fingerprint(&root),
         first,

@@ -993,11 +993,15 @@ entry points, and the native
 surfaces (`package.json`, `*.podspec`, `expo-module.config.json`, `ios/`,
 `android/`) of `file:`/`link:` local dependencies inside the worktree, enumerated
 from `dependencies`, `devDependencies` and `optionalDependencies`.
-Package plugins named in `app.json` and bare imports in traced modules are
+Registry package plugins named in `app.json` and bare imports in traced modules are
 bound by the lockfile plus the `version` of the package Node resolution finds
 in `node_modules` from the project root up to the worktree root (pnpm symlinks
-included); Node built-ins are ignored, and a package that does not resolve to a
+included); pure Node built-ins are ignored, and a package that does not resolve to a
 versioned `package.json` makes the fingerprint incomplete.
+Local package plugins and bare imports declared through `link:`, `file:` or
+`workspace:`, or resolved into worktree source outside `node_modules`, are not
+traced and always make the fingerprint incomplete; relative plugin files in
+the app retain their existing scan.
 Static plain-string `import` and `require` forms, including whitespace around
 `require` arguments, are traced. Each module dependency must name an existing
 regular file directly, with no symlink in its path, and be recursively scanned
