@@ -241,11 +241,21 @@ export function bindFillIdentity(
   return fallback ? { kind: 'fallback', fallback } : undefined;
 }
 
-function scrollTo(element: Element): Resolution {
+function scrollTo(element: Element): { scroll: 'up' | 'down' } {
   const frame = elementFrame(element);
   return {
     scroll: frame && frame.y + frame.height <= (elementViewport(element)?.y ?? 0) ? 'up' : 'down',
   };
+}
+
+export function scrollUntilDirection(
+  target: Target,
+  screen: Screen,
+  direction: 'up' | 'down',
+): 'up' | 'down' {
+  const matches = exactIdentities(screen, target, 'scroll');
+  const element = matches.length === 1 ? matches[0].element : undefined;
+  return element?.offscreen && elementViewport(element) ? scrollTo(element).scroll : direction;
 }
 
 export function decideTarget(prepared: TargetQuestion, answer: Answer | undefined): Resolution {

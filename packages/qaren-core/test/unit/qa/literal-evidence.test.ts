@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parsePlan, parseStep } from '../../../dist/qa/plan.js';
 import type { Block } from '../../../dist/qa/plan.js';
-import type { StoredBlock } from '../../../dist/qa/blocks.js';
+import { serializeBlock, type StoredBlock } from '../../../dist/qa/blocks.js';
 import { join, type NativeNode, type Screen } from '../../../dist/qa/screen.js';
 import {
   decideTarget,
@@ -616,3 +616,102 @@ test('nested clips and absent clips retain the correct scroll boundary', () => {
     assert.deepEqual(prepareTarget(step, screen), { scroll: direction });
   }
 });
+
+test('same-frame sibling text witnesses cannot become an ambiguous saved selector', async () => {
+  for (const identifiers of [
+    ['left', 'right'],
+    [undefined, undefined],
+    ['same', 'same'],
+  ]) {
+    const screen = observed([
+      { type: 'Application', rect: app },
+      { type: 'Window', parent: 0, rect: app },
+      {
+        type: 'StaticText',
+        parent: 1,
+        rect: at(16, 120),
+        label: 'Done',
+        identifier: identifiers[0],
+      },
+      {
+        type: 'StaticText',
+        parent: 1,
+        rect: at(16, 120),
+        label: 'Done',
+        identifier: identifiers[1],
+      },
+    ]);
+    assert.deepEqual(screen.paintedText, ['Done', 'Done']);
+    assert.equal(check(screen, 'Done'), 'pass');
+    assert.equal(visibleSelector({ quoted: 'Done', phrase: 'Done' }, screen), undefined);
+    const [block] = blockOf('## QA\n\n### Literal\n1. Wait for "Done"\n');
+    const f = walker([screen], noJev());
+    const discovery = await runPlan([block], f.deps);
+    assert.equal(discovery.verdict, 'PASS');
+    assert.ok('steps' in discovery);
+    assert.equal(discovery.steps[0].selector, undefined);
+    const saved = serializeBlock(block, discovery.steps, {
+      appId: 'com.example.app',
+      platform: 'ios',
+    });
+    assert.ok('unsavable' in saved);
+    const c = await consumers(screen, 'Done');
+    assert.equal(c.wait.verdict, 'PASS');
+    assert.equal(c.scroll.verdict, 'PASS');
+    assert.equal(c.replay.failed, true);
+    assert.match(c.replay.seen, /TARGET_AMBIGUOUS/);
+    assert.deepEqual(f.actions, []);
+  }
+});
+
+for (const [y, direction, opposite] of [
+  [50, 'up', 'down'],
+  [350, 'down', 'up'],
+] as const) {
+  test(`quoted scroll-until and ID replay move ${direction} relative to an inset clip`, async () => {
+    const targetScreen = (y: number) =>
+      observed([
+        { type: 'Application', rect: app },
+        { type: 'ScrollView', parent: 0, rect: at(0, 100, 402, 200) },
+        {
+          type: 'StaticText',
+          parent: 1,
+          rect: at(16, y),
+          label: 'Destination',
+          identifier: 'destination',
+        },
+      ]);
+    const before = targetScreen(y);
+    const after = targetScreen(150);
+    const [block] = blockOf(`## QA\n\n### Scroll\n1. Scroll ${opposite} until "Destination"\n`);
+    const f = walker([before, after], noJev());
+    const result = await runPlan([block], f.deps);
+    assert.equal(result.verdict, 'PASS');
+    assert.deepEqual(f.actions, [`scroll ${direction}`]);
+    assert.ok('steps' in result);
+    assert.deepEqual(result.steps[0].selector, { id: 'destination' });
+    const stored: StoredBlock = {
+      header: { appId: 'com.example.app', plan: 'plan.md', planHash: 'x', platform: 'ios' },
+      steps: [
+        {
+          kind: 'scroll',
+          raw: block.items[0].raw,
+          direction: opposite,
+          until: { id: 'destination' },
+        },
+      ],
+    };
+    const replay = walker([before, after], noJev());
+    const replayResult = await walkBlock(
+      replayBlock(block, stored),
+      replay.deps,
+      0,
+      [],
+      undefined,
+      undefined,
+      { mode: 'replay' },
+    );
+    assert.equal(replayResult.failure, undefined);
+    assert.deepEqual(replay.actions, [`scroll ${direction}`]);
+  });
+}

@@ -775,7 +775,7 @@ export function join(
   const paintedText: string[] = [];
   const labelText: string[] = [];
   const unresolvedText: string[] = [];
-  const paintedKeys = new Set<string>();
+  const paintedKeys = new Map<number, string>();
   for (const { n, e, i } of ordered) {
     if (!n.rect || !(n.rect.width > 0 && n.rect.height > 0)) continue;
     if (duplicates.has(i) || e.kind === 'image' || e.visibilityEvidence === 'offscreen') continue;
@@ -798,12 +798,19 @@ export function join(
     }
     const key = JSON.stringify([
       line,
-      n.rect ? [n.rect.x, n.rect.y, n.rect.width, n.rect.height] : null,
+      n.type,
+      n.identifier ?? '',
+      [n.rect.x, n.rect.y, n.rect.width, n.rect.height],
     ]);
-    if (!paintedKeys.has(key)) {
-      paintedKeys.add(key);
-      paintedText.push(line);
+    let echo = false;
+    for (let p = n.parentIndex; p !== undefined && p >= 0 && p < i; p = nodes[p].parentIndex) {
+      if (paintedKeys.get(p) === key) {
+        echo = true;
+        break;
+      }
     }
+    paintedKeys.set(i, key);
+    if (!echo) paintedText.push(line);
     if (visibleText[visibleText.length - 1] !== line) visibleText.push(line);
   }
   const textDescendants = new Map<number, number[]>();

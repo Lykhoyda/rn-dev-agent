@@ -17,6 +17,7 @@ import {
   keyboardFallbackTarget,
   bindFillIdentity,
   stepTarget,
+  scrollUntilDirection,
   targetEvidence,
   visibleSelector,
 } from './resolve.js';
@@ -1016,7 +1017,11 @@ export async function walkBlock(
               act = await mutate(
                 item,
                 observation,
-                (context) => deps.scroll(item.direction, context),
+                (context) =>
+                  deps.scroll(
+                    scrollUntilDirection(item.until!, observation.screen, item.direction),
+                    context,
+                  ),
                 deadline,
               );
             } catch (error) {
