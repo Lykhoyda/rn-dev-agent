@@ -124,6 +124,7 @@ fn workspace_check_uses_a_gated_finite_build_and_persists_the_verified_artifact(
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     script_provision_build(&mut mock, "xcodebuild", common::IOS_NATIVE_FILES);
     script_drift_status(&mut mock);
+    script_host_probe(&mut mock, UDID, hosts_absent());
     mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
     script_core_identity(&mut mock);
     script_teardown(&mut mock);
@@ -191,6 +192,7 @@ fn workspace_products_are_retained_when_cache_publication_fails() {
         mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
         script_provision_build(&mut mock, "xcodebuild", common::IOS_NATIVE_FILES);
         script_drift_status(&mut mock);
+        script_host_probe(&mut mock, UDID, hosts_absent());
         mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
         script_core_identity(&mut mock);
         script_teardown(&mut mock);
@@ -230,6 +232,7 @@ fn workspace_retirement_refuses_symlinked_roots_before_deleting_any_products() {
         mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
         script_provision_build(&mut mock, "xcodebuild", common::IOS_NATIVE_FILES);
         script_drift_status(&mut mock);
+        script_host_probe(&mut mock, UDID, hosts_absent());
         mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
         script_core_identity(&mut mock);
         script_teardown(&mut mock);
@@ -288,6 +291,7 @@ fn workspace_cache_persistence_reuses_only_the_same_workspace_and_scheme() {
             script_provision_build(&mut mock, "xcodebuild", common::IOS_NATIVE_FILES);
         }
         script_drift_status(&mut mock);
+        script_host_probe(&mut mock, UDID, hosts_absent());
         mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
         script_core_identity(&mut mock);
         script_teardown(&mut mock);
@@ -1125,6 +1129,7 @@ fn the_receipt_names_written_blocks_and_paths_the_walk_changed_outside_them() {
         CmdOutput::success(" M test-app/dirty.ts\0"),
     );
     let ledger = r#"{"verdict":"PASS","path":"replay","blocks":[{"key":"plan","outcome":"pass","source":"replayed"},{"key":"pin","outcome":"pass","source":"replayed","saved":false,"unsavable":"line 4: fills a private input"}],"blocksWritten":["plan"],"steps":[],"jev":{"calls":0,"medianMs":0},"llmTurns":0,"escapes":0,"recoveries":0}"#;
+    script_host_probe(&mut mock, UDID, hosts_absent());
     mock.expect_spawn_piped(
         "walk.js",
         9000,
@@ -1178,6 +1183,7 @@ fn check_runs_the_phases_in_order_and_ends_pass_with_a_report() {
     script_preflight(&mut mock, &repo);
     script_provision(&mut mock);
     script_drift_status(&mut mock);
+    script_host_probe(&mut mock, UDID, hosts_absent());
     mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
     script_core_identity(&mut mock);
     script_teardown(&mut mock);
@@ -1324,6 +1330,7 @@ fn a_deadline_overrun_fails_naming_the_walk_phase_and_still_tears_down() {
         envelope(3, "row", &row(1, "step"))
     );
     script_drift_status(&mut mock);
+    script_host_probe(&mut mock, UDID, hosts_absent());
     mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
     script_core_identity(&mut mock);
     script_teardown(&mut mock);
@@ -1358,6 +1365,7 @@ fn a_cancelled_walk_is_a_refusal_that_still_tears_down_and_releases_the_lease() 
     script_provision(&mut mock);
     let one_row = format!("{}\n", envelope(2, "row", &row(1, "step")));
     script_drift_status(&mut mock);
+    script_host_probe(&mut mock, UDID, hosts_absent());
     mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
     script_core_identity(&mut mock);
     script_teardown_resources(
@@ -1399,6 +1407,7 @@ fn script_cancelled_walk(mock: &mut MockRunner, repo: &Path, runner_host: CmdOut
     script_provision(mock);
     let one_row = format!("{}\n", envelope(2, "row", &row(1, "step")));
     script_drift_status(mock);
+    script_host_probe(mock, UDID, runner_host.clone());
     mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
     script_core_identity(mock);
     script_teardown_resources(
@@ -1448,6 +1457,59 @@ fn an_unknown_runner_host_inventory_keeps_the_lease_for_cleanup() {
         record.resources.lease.is_some(),
         "the lease waits for qaren cleanup"
     );
+}
+
+fn host_present() -> CmdOutput {
+    CmdOutput::success(
+        "PID Status Label\n42 0 UIKitApplication:dev.lykhoyda.rndevagent.fastrunner[abc][rb-legacy]\n",
+    )
+}
+
+// The host was absent when the core started, so the one that survives a cancelled walk is the run's.
+#[test]
+fn a_cancelled_walk_terminates_the_runner_host_it_launched_then_releases_the_lease() {
+    for (after, runner_host, lease) in [
+        (hosts_absent(), "removed", "removed"),
+        (host_present(), "unresolved", "unresolved"),
+    ] {
+        let (repo, app) = app_repo();
+        let mut mock = MockRunner::new();
+        script_preflight(&mut mock, &repo);
+        script_provision(&mut mock);
+        script_drift_status(&mut mock);
+        script_host_probe(&mut mock, UDID, hosts_absent());
+        let one_row = format!("{}\n", envelope(2, "row", &row(1, "step")));
+        mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
+        script_core_identity(&mut mock);
+        script_teardown_resources(
+            &mut mock,
+            CmdOutput::success("1 1 S\n6000 6000 S\n"),
+            false,
+            UDID,
+            host_present(),
+        );
+        for bundle in [
+            "dev.lykhoyda.rndevagent.fastrunner",
+            "dev.lykhoyda.rndevagent.fastrunner.uitests.xctrunner",
+        ] {
+            mock.expect_run(
+                &format!("simctl terminate {UDID} {bundle}"),
+                CmdOutput::success(""),
+            );
+        }
+        script_host_probe(&mut mock, UDID, after);
+        mock.cancel_after = Some(("-p 9000".into(), "received SIGTERM".into()));
+
+        let receipt = run(&mut mock, &request(&repo, &app, 30));
+
+        assert_eq!(
+            receipt.failure.as_ref().unwrap().code,
+            FailureCode::RunCancelled
+        );
+        assert!(receipt.cleanup["runner_host"].starts_with(runner_host));
+        assert!(receipt.cleanup["device_lease"].starts_with(lease));
+        assert_eq!(mock.remaining(), 0);
+    }
 }
 
 #[test]
@@ -1879,6 +1941,7 @@ fn a_child_refusal_is_a_typed_refusal_with_the_child_code() {
     script_provision(&mut mock);
     let refusal = r#"{"verdict":"REFUSED","code":"METRO_ORIGIN_MISMATCH","message":"scriptURL port 8081 != 8791"}"#;
     script_drift_status(&mut mock);
+    script_host_probe(&mut mock, UDID, hosts_absent());
     mock.expect_spawn_piped(
         "walk.js",
         9000,
@@ -1909,6 +1972,7 @@ fn an_unresolved_metro_group_retains_the_device_lease_for_cleanup() {
     script_app_presence(&mut mock, false);
     script_provision_after_deps(&mut mock);
     script_drift_status(&mut mock);
+    script_host_probe(&mut mock, UDID, hosts_absent());
     mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
     script_core_identity(&mut mock);
     // Drift report, then the Metro group: alive, TERM, KILL, and the leader survives both.
@@ -2019,6 +2083,7 @@ fn a_core_group_survivor_retains_the_device_lease() {
     script_preflight(&mut mock, &repo);
     script_provision(&mut mock);
     script_drift_status(&mut mock);
+    script_host_probe(&mut mock, UDID, hosts_absent());
     mock.expect_spawn_piped_holding(
         "walk.js",
         9000,
@@ -2105,6 +2170,7 @@ fn two_booted_simulators_refuse_without_a_device_and_borrow_the_named_one_with_i
     mock.expect_run("lsof", free_port());
     script_provision(&mut mock);
     script_drift_status(&mut mock);
+    script_host_probe(&mut mock, OTHER_UDID, hosts_absent());
     mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
     script_core_identity(&mut mock);
     script_teardown_core_host(
@@ -2276,6 +2342,7 @@ fn walk_jev_refusals_preserve_prior_passes_and_the_complete_failure_evidence() {
         let refusal = serde_json::json!({"verdict":"REFUSED","code":code,"message":"judgment refused","lease":"fixture-lease",
             "path":"walk","steps":steps,"blocks":blocks,"failure":failure,"jev":jev,"llmTurns":1,"escapes":2,"recoveries":3});
         script_drift_status(&mut mock);
+        script_host_probe(&mut mock, UDID, hosts_absent());
         mock.expect_spawn_piped(
             "walk.js",
             9000,
@@ -2650,6 +2717,7 @@ fn fresh_install_reset_build_readiness_walk_and_teardown_share_one_durable_lease
     script_app_presence(&mut mock, false);
     script_provision_after_deps(&mut mock);
     script_drift_status(&mut mock);
+    script_host_probe(&mut mock, UDID, hosts_absent());
     mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
     script_core_identity(&mut mock);
     script_teardown(&mut mock);
@@ -2790,6 +2858,7 @@ fn fresh_install_resets_or_proves_absence_before_cached_install_under_the_same_l
         );
         mock.expect_run("ls-files", CmdOutput::success(""));
         script_drift_status(&mut mock);
+        script_host_probe(&mut mock, UDID, hosts_absent());
         mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
         script_core_identity(&mut mock);
         script_teardown(&mut mock);
@@ -3335,6 +3404,7 @@ fn boot_device_admission_boot_readback_and_walk_share_a_durable_borrowed_lease()
             }
             script_provision_after_deps(&mut mock);
             script_drift_status(&mut mock);
+            script_host_probe(&mut mock, UDID, hosts_absent());
             mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
             script_core_identity(&mut mock);
             script_teardown(&mut mock);
@@ -3459,6 +3529,7 @@ fn closed_stdout_and_dead_leader_do_not_release_an_unproven_core_group() {
         script_preflight(&mut mock, &repo);
         script_provision(&mut mock);
         script_drift_status(&mut mock);
+        script_host_probe(&mut mock, UDID, hosts_absent());
         mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
         script_core_identity(&mut mock);
         script_teardown_core(&mut mock, inventory, probe_dead_leader);
@@ -3723,6 +3794,7 @@ fn cancelled_pr_walks_with_or_without_source_drift_cannot_publish() {
         script_drift_status(mock);
         script_recorder_start(mock);
         let one_row = format!("{}\n", envelope(2, "row", &row(1, "step")));
+        script_host_probe(mock, UDID, hosts_absent());
         mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
         script_core_identity(mock);
         mock.cancel_after = Some(("-p 9000".into(), "received SIGTERM".into()));
@@ -3778,6 +3850,7 @@ fn pr_walk_result(candidate_drift: bool) {
     script_pr_provenance_recheck(mock);
     script_drift_status(mock);
     script_recorder_start(mock);
+    script_host_probe(mock, UDID, hosts_absent());
     mock.expect_spawn_piped("walk.js", 9000, &pr_pass_stdout(), Some(0));
     script_core_identity(mock);
     script_drift_status(mock);
@@ -3914,6 +3987,7 @@ fn a_core_failure_on_a_pr_run_still_stops_the_recorder_and_removes_the_worktree(
     script_pr_provenance_recheck(mock);
     script_drift_status(mock);
     script_recorder_start(mock);
+    script_host_probe(mock, UDID, hosts_absent());
     // teardown: Metro group, hosts, then the recorder before the lease, then the worktree.
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n"));
@@ -3970,6 +4044,7 @@ fn a_pr_run_retains_its_worktree_when_metro_cleanup_is_unproven() {
     script_pr_provenance_recheck(mock);
     script_drift_status(mock);
     script_recorder_start(mock);
+    script_host_probe(mock, UDID, hosts_absent());
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", CmdOutput::failed(2, "inventory unavailable"));
     script_recorder_stop(mock);
@@ -4014,6 +4089,7 @@ fn a_pr_run_keeps_the_unbound_metros_surviving_child_worktree() {
     script_pr_provenance_recheck(mock);
     script_drift_status(mock);
     script_recorder_start(mock);
+    script_host_probe(mock, UDID, hosts_absent());
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n6001 6000 S\n"));
@@ -4093,6 +4169,7 @@ fn pr_receipt_reports_the_final_recorder_cleanup_retry() {
         script_pr_provenance_recheck(mock);
         script_drift_status(mock);
         script_recorder_start(mock);
+        script_host_probe(mock, UDID, hosts_absent());
         mock.expect_spawn_piped("walk.js", 9000, &pr_pass_stdout(), Some(0));
         script_core_identity(mock);
         script_drift_status(mock);
@@ -4251,6 +4328,7 @@ fn login_keys_reach_the_core() {
     mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
     script_provision_build(&mut mock, "xcodebuild", common::IOS_NATIVE_FILES);
     script_drift_status(&mut mock);
+    script_host_probe(&mut mock, UDID, hosts_absent());
     mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
     script_core_identity(&mut mock);
     script_teardown(&mut mock);
@@ -4288,6 +4366,7 @@ fn a_late_cancellation_is_the_terminal_result_and_publication_refuses() {
         script_pr_provenance_recheck(mock);
         script_drift_status(mock);
         script_recorder_start(mock);
+        script_host_probe(mock, UDID, hosts_absent());
         mock.expect_spawn_piped("walk.js", 9000, &pr_pass_stdout(), Some(0));
         script_core_identity(mock);
         script_drift_status(mock);
@@ -4504,6 +4583,7 @@ fn a_playable_encode_reclaims_the_runs_raw_capture_and_reports_the_bytes() {
         script_pr_provenance_recheck(mock);
         script_drift_status(mock);
         script_recorder_start(mock);
+        script_host_probe(mock, UDID, hosts_absent());
         mock.expect_spawn_piped("walk.js", 9000, &pr_pass_stdout(), Some(0));
         script_core_identity(mock);
         script_drift_status(mock);
@@ -4612,6 +4692,7 @@ fn cancellation_during_terminal_save_withholds_the_publish_handoff() {
     script_pr_provenance_recheck(mock);
     script_drift_status(mock);
     script_recorder_start(mock);
+    script_host_probe(mock, UDID, hosts_absent());
     mock.expect_spawn_piped("walk.js", 9000, &pr_pass_stdout(), Some(0));
     script_core_identity(mock);
     script_drift_status(mock);
@@ -4664,6 +4745,7 @@ fn a_walk_without_a_result_never_renders_plan_text_into_durable_sinks() {
         envelope(3, "row", &row(1, "step"))
     );
     script_drift_status(&mut mock);
+    script_host_probe(&mut mock, UDID, hosts_absent());
     mock.expect_spawn_piped("walk.js", 9000, &one_row, None);
     script_core_identity(&mut mock);
     script_teardown(&mut mock);

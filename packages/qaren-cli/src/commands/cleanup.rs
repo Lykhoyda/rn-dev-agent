@@ -1064,11 +1064,39 @@ pub(crate) fn cleanup_scoped_runner_hosts(runner: &mut dyn Runner, udid: &str) -
     }
 }
 
+// The owned host is terminated by bundle id on its exact simulator; absence is then re-proven.
+fn cleanup_owned_runner_host(
+    runner: &mut dyn Runner,
+    host: &crate::runrecord::RunnerHostResource,
+) -> Outcome {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
+    match ios::probe_runner_hosts(runner, &host.udid) {
+        ios::RunnerHostPresence::Absent => return Outcome::Absent,
+        ios::RunnerHostPresence::Unknown => {
+            return Outcome::Unresolved(
+                "exact simulator runner host absence is unknown; left untouched".into(),
+            )
+        }
+        ios::RunnerHostPresence::Present => {}
+    }
+    for bundle_id in &host.bundle_ids {
+        runner.run(&ios::terminate_spec(&host.udid, bundle_id));
+    }
+    match ios::probe_runner_hosts(runner, &host.udid) {
+        ios::RunnerHostPresence::Absent => Outcome::Removed,
+        _ => Outcome::Unresolved("the run's runner host is still present after terminate".into()),
+    }
+}
+
 pub(crate) fn cleanup_runner_host(runner: &mut dyn Runner, record: &RunRecord) -> Option<Outcome> {
     let mut cleanup_runner = crate::exec::CleanupRunner(runner);
     let runner: &mut dyn Runner = &mut cleanup_runner;
     let sim = record.resources.ios_simulator.as_ref()?;
-    if record.resources.core.is_none() && record.resources.core_cleanup.is_none() {
+    if record.resources.core.is_none()
+        && record.resources.core_cleanup.is_none()
+        && record.resources.runner_host.is_none()
+    {
         return None;
     }
     let lease = record.resources.lease.as_ref()?;
@@ -1077,7 +1105,10 @@ pub(crate) fn cleanup_runner_host(runner: &mut dyn Runner, record: &RunRecord) -
     if !held {
         return None;
     }
-    Some(cleanup_scoped_runner_hosts(runner, &sim.udid))
+    Some(match record.resources.runner_host.as_ref() {
+        Some(host) if host.udid == sim.udid => cleanup_owned_runner_host(runner, host),
+        _ => cleanup_scoped_runner_hosts(runner, &sim.udid),
+    })
 }
 
 pub(crate) fn producers_quiescent(outcomes: &[(String, Outcome)]) -> bool {

@@ -45,6 +45,13 @@ pub struct PidIdentity {
     pub command: OutputText,
 }
 
+// Recorded only when the leased simulator had no runner host as the core started: any later one is this run's.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunnerHostResource {
+    pub udid: String,
+    pub bundle_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "StoredCoreResource")]
 pub struct CoreResource {
@@ -291,6 +298,8 @@ pub struct Resources {
     pub fresh_install: Option<FreshInstallEvidence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recorder: Option<RecorderResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_host: Option<RunnerHostResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_worktree: Option<PrWorktreeResource>,
     // A borrowed device (the booted simulator `check` walks on) is never shut down or deleted.

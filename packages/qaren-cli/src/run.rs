@@ -533,6 +533,16 @@ fn run_inner(
         &lease.wire(),
         config.metro_port,
     );
+    // Ownership needs proven absence first: a host already up on this simulator is never the run's.
+    let runner_host = (ios::probe_runner_hosts(ctx.runner, &device.id)
+        == ios::RunnerHostPresence::Absent)
+        .then(|| crate::runrecord::RunnerHostResource {
+            udid: device.id.clone(),
+            bundle_ids: vec![
+                ios::RUNNER_HOST_BUNDLE_ID.to_string(),
+                ios::RUNNER_TEST_HOST_BUNDLE_ID.to_string(),
+            ],
+        });
     let core_log = run_dir.join("logs").join("core.log");
     let core_child = match core::spawn(ctx.runner, &spec, &core_log, &core_request) {
         Ok(child) => child,
@@ -542,6 +552,7 @@ fn run_inner(
         pgid: core_child.pid,
         identity: capture_pid_identity(ctx.runner, core_child.pid),
     });
+    ctx.record.resources.runner_host = runner_host;
     if let Err(f) = ctx.save() {
         core::abort(core_child);
         return Ok(finish_failed(ctx, f));

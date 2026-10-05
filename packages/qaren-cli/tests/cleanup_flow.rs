@@ -1955,3 +1955,65 @@ fn cleanup_retains_the_device_lease_until_the_metro_group_is_proven_gone() {
     assert!(!lock_dir.exists());
     assert_eq!(mock2.remaining(), 0);
 }
+
+#[test]
+fn a_dead_owners_runner_host_is_terminated_on_its_simulator_and_the_lease_released() {
+    const UDID: &str = "1DC408C4-51DA-4C4F-ACA1-39881C916FDD";
+    const HOSTS: [&str; 2] = [
+        "dev.lykhoyda.rndevagent.fastrunner",
+        "dev.lykhoyda.rndevagent.fastrunner.uitests.xctrunner",
+    ];
+    let repo = common::temp_repo();
+    let mut record = core_record(&repo);
+    record.resources.device_borrowed = true;
+    record.resources.ios_simulator = Some(IosSimResource {
+        udid: UDID.to_string(),
+        name: "borrowed".to_string(),
+        device_type: "dt".to_string(),
+        runtime: "rt".to_string(),
+    });
+    record.resources.runner_host = Some(qaren::runrecord::RunnerHostResource {
+        udid: UDID.to_string(),
+        bundle_ids: HOSTS.iter().map(|b| b.to_string()).collect(),
+    });
+    let lock = record.resources.lease.as_ref().unwrap().lock_dir.clone();
+    record.save(&repo).unwrap();
+    let inventory = format!(
+        r#"{{"devices":{{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[{{"udid":"{UDID}","name":"borrowed","state":"Booted","isAvailable":true,"deviceTypeIdentifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17"}}]}}}}"#
+    );
+    let mut mock = MockRunner::new();
+    owner_gone(&mut mock);
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+    mock.expect_run("simctl list devices -j", CmdOutput::success(&inventory));
+    mock.expect_run(
+        "launchctl list",
+        CmdOutput::success(&format!(
+            "PID Status Label\n42 0 UIKitApplication:{}[abc]\n",
+            HOSTS[0]
+        )),
+    );
+    for bundle in HOSTS {
+        mock.expect_run(
+            &format!("simctl terminate {UDID} {bundle}"),
+            CmdOutput::success(""),
+        );
+    }
+    mock.expect_run("simctl list devices -j", CmdOutput::success(&inventory));
+    mock.expect_run(
+        "launchctl list",
+        CmdOutput::success("PID Status Label\n1 0 com.apple.SpringBoard\n"),
+    );
+
+    let receipt = cleanup(&mut mock, &repo, "core-run");
+
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Cleaned,
+        "{:?}",
+        receipt.cleanup
+    );
+    assert_eq!(receipt.cleanup["runner_host"], "removed");
+    assert_eq!(receipt.cleanup["device_lease"], "removed");
+    assert!(!lock.exists());
+    assert_eq!(mock.remaining(), 0);
+}

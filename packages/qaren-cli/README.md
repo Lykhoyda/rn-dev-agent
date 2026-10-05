@@ -480,7 +480,11 @@ Runs and evidence live under `~/.qaren/runs/<run-id>/`; device leases use
 `QAREN_LOCK_ROOT` or `~/.qaren/locks`. The walk writes `ledger.json` and
 `report.md` when it reaches reporting; the receipt names available artifacts.
 Cleanup proves owned process-group and exact-simulator runner-host absence
-before releasing the lease. Present or unknown hosts retain it. A dead lease
+before releasing the lease. When the leased simulator had no runner host as the
+core started, the run records the host as its own; normal teardown, cancellation
+and dead-owner cleanup then terminate that host by bundle id on that exact
+simulator and re-prove its absence. A host that was already running, or any
+present or unknown host after that, retains the lease. A dead lease
 holder is reclaimed only through that run's cleanup; a live or unprovable holder
 refuses `DEVICE_BUSY`. Recover a retained run with `qaren cleanup <run-id>`;
 do not delete locks to bypass unresolved ownership.

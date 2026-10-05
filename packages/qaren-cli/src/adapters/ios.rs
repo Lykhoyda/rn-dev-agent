@@ -239,6 +239,15 @@ pub fn launchctl_list_spec(udid: &str) -> CmdSpec {
     )
 }
 
+pub fn terminate_spec(udid: &str, bundle_id: &str) -> CmdSpec {
+    CmdSpec::new(
+        "simctl-terminate",
+        "xcrun",
+        &["simctl", "terminate", udid, bundle_id],
+        20,
+    )
+}
+
 pub fn install_app_spec(udid: &str, app_path: &Path) -> CmdSpec {
     CmdSpec::new(
         "simctl-install",
