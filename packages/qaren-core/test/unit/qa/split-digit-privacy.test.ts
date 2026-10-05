@@ -75,12 +75,13 @@ for (const representation of ['label', 'value'] as const) {
   }
 }
 
-for (const [width, typed] of [
-  [354, '5038'],
-  [402, '5038'],
-  [402, '503'],
+for (const [width, typed, wrapped] of [
+  [354, '5038', false],
+  [402, '5038', false],
+  [402, '503', false],
+  [402, '5038', true],
 ] as const) {
-  test(`spread pressable cells with glyph-width text in ${width}pt hide ${typed.length} characters`, () => {
+  test(`spread pressable cells with glyph-width${wrapped ? ' wrapped' : ''} text in ${width}pt hide ${typed.length} characters`, () => {
     const cells = 4;
     const gap = (width - cells * 44) / (cells - 1);
     const nodes: NativeNode[] = [
@@ -100,20 +101,29 @@ for (const [width, typed] of [
         ...(char ? { label: char } : {}),
         rect: { x, y: 300, width: 44, height: 60 },
       });
+      if (wrapped)
+        nodes.push({
+          ref: `@glyph${i}`,
+          index: nodes.length,
+          parentIndex: cell,
+          type: 'Other',
+          rect: { x: x + 13, y: 313, width: 17, height: 34 },
+        });
+      const parent = nodes.length - 1;
       nodes.push(
         char
           ? {
               ref: `@char${i}`,
-              index: cell + 1,
-              parentIndex: cell,
+              index: parent + 1,
+              parentIndex: parent,
               type: 'StaticText',
               label: char,
               rect: { x: x + 13, y: 313, width: 17, height: 34 },
             }
           : {
               ref: `@stick${i}`,
-              index: cell + 1,
-              parentIndex: cell,
+              index: parent + 1,
+              parentIndex: parent,
               type: 'Other',
               rect: { x: x + 21, y: 315, width: 2, height: 30 },
             },
@@ -140,6 +150,10 @@ for (const [width, typed] of [
         false,
         JSON.stringify(text),
       );
+    const mask = privacy.maskForModel([], []);
+    for (const element of captured.elements)
+      for (const char of typed)
+        assert.equal(mask.describeElement(element, describe).includes(` ${char}`), false);
   });
 }
 

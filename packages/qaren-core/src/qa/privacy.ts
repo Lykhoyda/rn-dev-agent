@@ -284,15 +284,18 @@ export function codeBoxRows(screen: Screen): Element[][] {
           (ancestor.label || ancestor.value || '') === (element.label || element.value || ''),
       ),
   );
-  // A glyph-width Text inside a code cell is measured by its cell: the nearest framed ancestor holding no other box.
+  // A glyph-width Text inside a code cell is measured by its cell: the outermost framed ancestor holding no other box.
   const cells = new Map(
     boxes.map((element) => {
       const own = elementFrame(element)!;
-      const cell = ancestorsOf(element).find(
-        (ancestor) =>
-          elementFrame(ancestor) !== undefined &&
-          !boxes.some((other) => other !== element && ancestorsOf(other).includes(ancestor)),
+      const ancestors = ancestorsOf(element);
+      const shared = ancestors.findIndex((ancestor) =>
+        boxes.some((other) => other !== element && ancestorsOf(other).includes(ancestor)),
       );
+      const cell = ancestors
+        .slice(0, shared < 0 ? ancestors.length : shared)
+        .filter((ancestor) => elementFrame(ancestor) !== undefined)
+        .at(-1);
       const frame = cell && elementFrame(cell)!;
       const contains =
         frame &&
