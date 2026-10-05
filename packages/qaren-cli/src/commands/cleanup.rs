@@ -1105,6 +1105,23 @@ pub(crate) fn cleanup_runner_host(runner: &mut dyn Runner, record: &RunRecord) -
     if !held {
         return None;
     }
+    if record.resources.core.is_some()
+        || record
+            .resources
+            .core_cleanup
+            .as_ref()
+            .is_some_and(|evidence| {
+                !matches!(
+                    evidence.outcome,
+                    crate::runrecord::GroupCleanupResult::Removed
+                        | crate::runrecord::GroupCleanupResult::Absent
+                )
+            })
+    {
+        return Some(Outcome::Refused(
+            "core quiescence is unproven; runner host left untouched".into(),
+        ));
+    }
     Some(match record.resources.runner_host.as_ref() {
         Some(host) if host.udid == sim.udid => cleanup_owned_runner_host(runner, host),
         _ => cleanup_scoped_runner_hosts(runner, &sim.udid),

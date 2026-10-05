@@ -960,7 +960,13 @@ fn script_host_probe(mock: &mut MockRunner, udid: &str, output: CmdOutput) {
 }
 
 fn script_teardown_core(mock: &mut MockRunner, inventory: CmdOutput, probe_dead_leader: bool) {
-    script_teardown_core_host(mock, inventory, probe_dead_leader, UDID, hosts_absent());
+    script_teardown_core_host(
+        mock,
+        inventory,
+        probe_dead_leader,
+        UDID,
+        Some(hosts_absent()),
+    );
 }
 
 // After the core and Metro groups, observe both hosts on the exact leased simulator.
@@ -969,7 +975,7 @@ fn script_teardown_core_host(
     inventory: CmdOutput,
     probe_dead_leader: bool,
     udid: &str,
-    runner_host: CmdOutput,
+    runner_host: Option<CmdOutput>,
 ) {
     script_drift_status(mock);
     script_teardown_after_drift(mock, inventory, probe_dead_leader, udid, runner_host);
@@ -980,7 +986,7 @@ fn script_teardown_after_drift(
     inventory: CmdOutput,
     probe_dead_leader: bool,
     udid: &str,
-    runner_host: CmdOutput,
+    runner_host: Option<CmdOutput>,
 ) {
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
     mock.expect_run(
@@ -995,14 +1001,14 @@ fn script_teardown_resources(
     inventory: CmdOutput,
     probe_dead_leader: bool,
     udid: &str,
-    runner_host: CmdOutput,
+    runner_host: Option<CmdOutput>,
 ) {
     mock.expect_run("ps -A", inventory.clone());
     if probe_dead_leader {
         mock.expect_run("ps -p 9000", CmdOutput::failed(1, ""));
         mock.expect_run("ps -A", inventory);
     }
-    script_metro_teardown(mock, udid, Some(runner_host));
+    script_metro_teardown(mock, udid, runner_host);
 }
 
 fn script_metro_teardown(mock: &mut MockRunner, udid: &str, runner_host: Option<CmdOutput>) {
@@ -1146,7 +1152,7 @@ fn the_receipt_names_written_blocks_and_paths_the_walk_changed_outside_them() {
         CmdOutput::success("1 1 S\n6000 6000 S\n"),
         false,
         UDID,
-        hosts_absent(),
+        Some(hosts_absent()),
     );
 
     let receipt = run(&mut mock, &request(&repo, &app, 30));
@@ -1373,7 +1379,7 @@ fn a_cancelled_walk_is_a_refusal_that_still_tears_down_and_releases_the_lease() 
         CmdOutput::success("1 1 S\n6000 6000 S\n"),
         false,
         UDID,
-        hosts_absent(),
+        Some(hosts_absent()),
     );
     mock.cancel_after = Some(("-p 9000".into(), "received SIGTERM".into()));
 
@@ -1415,7 +1421,7 @@ fn script_cancelled_walk(mock: &mut MockRunner, repo: &Path, runner_host: CmdOut
         CmdOutput::success("1 1 S\n6000 6000 S\n"),
         false,
         UDID,
-        runner_host,
+        Some(runner_host),
     );
     mock.cancel_after = Some(("-p 9000".into(), "received SIGKILL of the caller".into()));
 }
@@ -1486,7 +1492,7 @@ fn a_cancelled_walk_terminates_the_runner_host_it_launched_then_releases_the_lea
             CmdOutput::success("1 1 S\n6000 6000 S\n"),
             false,
             UDID,
-            host_present(),
+            Some(host_present()),
         );
         for bundle in [
             "dev.lykhoyda.rndevagent.fastrunner",
@@ -2092,7 +2098,14 @@ fn a_core_group_survivor_retains_the_device_lease() {
         HoldStdout::Forever,
     );
     script_core_identity(&mut mock);
-    script_teardown(&mut mock);
+    script_drift_status(&mut mock);
+    script_teardown_after_drift(
+        &mut mock,
+        CmdOutput::success("1 1 S\n6000 6000 S\n"),
+        false,
+        UDID,
+        None,
+    );
 
     let receipt = run(&mut mock, &request(&repo, &app, 30));
 
@@ -2109,6 +2122,11 @@ fn a_core_group_survivor_retains_the_device_lease() {
         receipt.cleanup["core"]
     );
     assert_eq!(receipt.cleanup["metro"], "removed");
+    assert!(receipt.cleanup["runner_host"].starts_with("refused: core quiescence"));
+    assert!(!mock
+        .calls
+        .iter()
+        .any(|spec| spec.rendered().contains("simctl terminate")));
     assert!(
         receipt.cleanup["device_lease"].starts_with("unresolved: retained: core"),
         "{}",
@@ -2178,7 +2196,7 @@ fn two_booted_simulators_refuse_without_a_device_and_borrow_the_named_one_with_i
         CmdOutput::success("1 1 S\n6000 6000 S\n"),
         false,
         OTHER_UDID,
-        hosts_absent(),
+        Some(hosts_absent()),
     );
 
     let mut req = request(&repo, &app, 30);
@@ -3532,7 +3550,7 @@ fn closed_stdout_and_dead_leader_do_not_release_an_unproven_core_group() {
         script_host_probe(&mut mock, UDID, hosts_absent());
         mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
         script_core_identity(&mut mock);
-        script_teardown_core(&mut mock, inventory, probe_dead_leader);
+        script_teardown_core_host(&mut mock, inventory, probe_dead_leader, UDID, None);
         let receipt = run(&mut mock, &req);
         assert_eq!(receipt.result, ReceiptResult::Pass);
         assert!(receipt.cleanup["core"].starts_with("unresolved"));
@@ -3804,7 +3822,7 @@ fn cancelled_pr_walks_with_or_without_source_drift_cannot_publish() {
             CmdOutput::success("1 1 S\n6000 6000 S\n"),
             false,
             UDID,
-            hosts_absent(),
+            Some(hosts_absent()),
         );
         mock.expect_run("du -sk", CmdOutput::success("4\n"));
         mock.expect_run("worktree remove --force", CmdOutput::success(""));

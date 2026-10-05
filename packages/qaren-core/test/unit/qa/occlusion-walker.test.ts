@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import { join } from '../../../dist/qa/screen.js';
 import type { NativeNode, Screen } from '../../../dist/qa/screen.js';
+import { choice, scriptedJudge } from './judgment-fixtures.ts';
 import { walkBlock } from '../../../dist/qa/walker.js';
 import type { ActResult, WalkerDeps } from '../../../dist/qa/walker.js';
 
@@ -193,4 +194,105 @@ test('O5: a refusal other than occlusion keeps its existing path', async () => {
   const f = fake([at(700)], { press: [other, other] });
   await walkBlock(block('1. Tap "go"\n'), f.deps);
   assert.equal(f.calls.filter((c) => c.startsWith('scroll')).length, 0);
+});
+
+for (const kind of ['press', 'fill'] as const) {
+  test(`occlusion never switches a ${kind} to a same-label twin`, async () => {
+    const first = at(700, kind === 'press' ? 'Button' : 'TextField');
+    targetOf(first, '@target')!.label = 'Save';
+    const twin = at(300, kind === 'press' ? 'Button' : 'TextField');
+    targetOf(twin, '@target')!.testID = 'twin';
+    targetOf(twin, '@target')!.label = 'Save';
+    const f = fake([first, twin], { [kind === 'press' ? 'press' : 'fill']: [OCCLUDED] });
+    const outcome = await walkBlock(
+      block(kind === 'press' ? '1. Tap "Save"\n' : '1. Fill "Save" with "x"\n'),
+      f.deps,
+    );
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.equal(f.calls.filter((call) => call.startsWith(kind)).length, 1);
+    assert.equal(f.calls.filter((call) => call.startsWith('scroll')).length, 1);
+    assert.match(outcome.failure?.seen ?? '', /TARGET_NOT_FOUND/);
+  });
+}
+
+function wrapperAt(y: number, keyboardVisible: boolean): Screen {
+  const screen = at(y, 'Button');
+  targetOf(screen, '@target')!.testID = 'email-pressable';
+  screen.keyboardVisible = keyboardVisible;
+  screen.coverage = { native: 'complete', react: 'incomplete' };
+  return screen;
+}
+
+for (const secondOcclusion of [false, true]) {
+  test(`keyboard fallback clears occlusion once (${secondOcclusion ? 'refused' : 'typed'})`, async () => {
+    const f = fake([wrapperAt(700, false), wrapperAt(300, false), wrapperAt(300, true)], {
+      press: secondOcclusion ? [OCCLUDED, OCCLUDED] : [OCCLUDED],
+    });
+    let typed = 0;
+    f.deps.typeFocused = async () => {
+      typed += 1;
+      return { ok: true, proven: false };
+    };
+    const outcome = await walkBlock(block('1. Fill "email" with "x"\n'), f.deps);
+    assert.equal(outcome.block.outcome, secondOcclusion ? 'fail' : 'pass');
+    assert.equal(typed, secondOcclusion ? 0 : 1);
+    assert.equal(f.calls.filter((call) => call.startsWith('scroll')).length, 1);
+    assert.equal(f.calls.filter((call) => call.startsWith('press')).length, 2);
+    if (secondOcclusion)
+      assert.match(
+        outcome.failure?.seen ?? '',
+        /stayed off screen after one scroll.*nothing was typed/,
+      );
+  });
+}
+
+test('keyboard fallback never taps a replacement wrapper after clearance', async () => {
+  const twin = wrapperAt(300, false);
+  targetOf(twin, '@target')!.testID = 'other-pressable';
+  const f = fake([wrapperAt(700, false), twin], { press: [OCCLUDED] });
+  let typed = 0;
+  f.deps.typeFocused = async () => {
+    typed += 1;
+    return { ok: true, proven: false };
+  };
+  const outcome = await walkBlock(block('1. Fill "email" with "x"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(typed, 0);
+  assert.equal(f.calls.filter((call) => call.startsWith('press')).length, 1);
+});
+
+test('a semantic target stays pinned after occlusion without another model choice', async () => {
+  const first = at(700);
+  const twin = at(300);
+  targetOf(twin, '@target')!.testID = 'twin';
+  first.elements = [targetOf(first, '@target')!];
+  twin.elements = [targetOf(twin, '@target')!];
+  const judge = scriptedJudge((questions) =>
+    Object.fromEntries(Object.entries(questions).map(([id, question]) => [id, choice(question)])),
+  );
+  const f = fake([first, twin], { press: [OCCLUDED] });
+  f.deps.judge = judge;
+  const outcome = await walkBlock(block('1. Tap the save button\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(judge.requests.length, 1);
+  assert.equal(f.calls.filter((call) => call.startsWith('press')).length, 1);
+});
+
+test('duplicate refused testIDs cannot rebind after clearance', async () => {
+  const duplicate = at(300, 'Button', [
+    {
+      ref: '@duplicate',
+      index: 3,
+      parentIndex: 1,
+      type: 'Button',
+      identifier: 'go',
+      label: 'Go',
+      hittable: true,
+      rect: { x: 20, y: 400, width: 300, height: 44 },
+    },
+  ]);
+  const f = fake([at(700), duplicate], { press: [OCCLUDED] });
+  const outcome = await walkBlock(block('1. Tap "go"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(f.calls.filter((call) => call.startsWith('press')).length, 1);
 });

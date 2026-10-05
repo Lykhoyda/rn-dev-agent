@@ -732,6 +732,7 @@ extension RnFastRunnerTests {
       // ambient-focused substitute), skip the focus tap only when THAT input
       // is proven focused, otherwise tap the declared focus target and prove
       // the same input gained focus before any keystroke.
+      let hitTestDeadline = ProcessInfo.processInfo.systemUptime + 0.3
       var resolved: TypeTargetOutcome = .failure(
         Response(ok: false, error: ErrorPayload(code: "NO_TEXT_INPUT_TARGET", message: "NO_TEXT_INPUT_TARGET: target resolution did not run", mutation: "none"))
       )
@@ -760,7 +761,7 @@ extension RnFastRunnerTests {
         }
         let keyboardContainsPoint = keyboardFrameIfVisible(app: activeApp)?.contains(focusPoint) == true
         // The input's own hit test speaks for the focus point only when that point is on the input.
-        let liveHittable = target.frame.contains(focusPoint) ? boundedHittable(target) : nil
+        let liveHittable = target.frame.contains(focusPoint) ? boundedHittable(target, deadline: hitTestDeadline) : nil
         if DispatchGuard.decide(liveHittable: liveHittable, keyboardContainsPoint: keyboardContainsPoint) == .occluded {
           return Response(
             ok: false,

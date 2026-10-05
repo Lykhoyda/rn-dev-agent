@@ -198,6 +198,38 @@ export function keyboardFallbackTarget(
   return { element, oracleTestID };
 }
 
+export function bindDispatchIdentity(
+  step: Step & { kind: 'press' | 'fill' },
+  screen: Screen,
+  original: Element,
+): Resolution {
+  const quoted = original.testID ?? original.label;
+  const missing = {
+    refuse: 'TARGET_NOT_FOUND',
+    reason:
+      'the refused target identity no longer resolves uniquely; stayed off screen after one scroll',
+  };
+  if (!quoted || (!original.testID && !elementFrame(original))) return missing;
+  const target: Target = { quoted, phrase: quoted, exact: original.testID ? 'id' : 'text' };
+  const matches = exactIdentities(screen, target, step.kind)
+    .map(({ element }) => element)
+    .filter(
+      (element) =>
+        element.kind === original.kind &&
+        (original.testID !== undefined ||
+          JSON.stringify(elementFrame(element)) === JSON.stringify(elementFrame(original))),
+    );
+  if (matches.length !== 1) return missing;
+  if (step.target.quoted === undefined) {
+    const projected = semanticActionView(screen, step.kind);
+    const [element] = matches;
+    if ('refuse' in projected || !projected.elements.includes(element)) return missing;
+    return element.offscreen ? scrollTo(element) : { ref: element.ref, element };
+  }
+  const result = prepareTarget({ ...step, target }, { ...screen, elements: matches });
+  return 'question' in result || 'refuse' in result ? missing : result;
+}
+
 export function bindFillIdentity(
   step: Step & { kind: 'fill' },
   screen: Screen,

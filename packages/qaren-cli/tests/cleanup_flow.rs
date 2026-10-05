@@ -789,6 +789,17 @@ fn assert_core_only_refusal_with_metro(with_owner: bool) {
     if !with_owner {
         record.prepare = None;
     }
+    record.resources.ios_simulator = Some(IosSimResource {
+        udid: "1DC408C4-51DA-4C4F-ACA1-39881C916FDD".into(),
+        name: "borrowed".into(),
+        device_type: "dt".into(),
+        runtime: "rt".into(),
+    });
+    record.resources.device_borrowed = true;
+    record.resources.runner_host = Some(qaren::runrecord::RunnerHostResource {
+        udid: "1DC408C4-51DA-4C4F-ACA1-39881C916FDD".into(),
+        bundle_ids: vec!["dev.lykhoyda.rndevagent.fastrunner".into()],
+    });
     record.save(&repo).unwrap();
     let before = std::fs::read(RunRecord::run_dir(&repo, "core-run").join("run.json")).unwrap();
     let mut mock = MockRunner::new();
@@ -816,6 +827,11 @@ fn assert_core_only_refusal_with_metro(with_owner: bool) {
         "refused: the run's qaren process is alive or unproven gone"
     );
     assert_eq!(receipt.cleanup["metro"], "removed");
+    assert!(receipt.cleanup["runner_host"].starts_with("refused: core quiescence"));
+    assert!(!mock
+        .calls
+        .iter()
+        .any(|spec| spec.rendered().contains("simctl terminate")));
     assert!(receipt.cleanup["device_lease"].starts_with("unresolved: retained"));
     assert_eq!(mock.calls.len(), if with_owner { 13 } else { 12 });
     assert_eq!(

@@ -666,17 +666,21 @@ extension RnFastRunnerTests {
     "FOCUS_TARGET_OCCLUDED: the focus or tap point is covered by another element (keyboard, bar or overlay); no tap or typing was performed. Scroll the target clear, then retry."
 
   // nil when the hit test is unavailable: unresolvable, ambiguous, thrown or over budget.
-  func boundedHittable(_ element: XCUIElement, budgetMs: Double = 300) -> Bool? {
-    let started = ProcessInfo.processInfo.systemUptime
-    var hittable: Bool?
-    let exception = RunnerObjCExceptionCatcher.catchException({ hittable = element.isHittable })
-    guard exception == nil,
-          (ProcessInfo.processInfo.systemUptime - started) * 1000 <= budgetMs
-    else { return nil }
-    return hittable
+  func boundedHittable(_ element: XCUIElement, deadline: Double) -> Bool? {
+    DispatchGuard.hitTest(
+      deadline: deadline,
+      now: { ProcessInfo.processInfo.systemUptime },
+      resolve: { element },
+      read: { target in
+        var hittable: Bool?
+        let exception = RunnerObjCExceptionCatcher.catchException({ hittable = target.isHittable })
+        return exception == nil ? hittable : nil
+      }
+    )
   }
 
   func liveTargetHittable(app: XCUIApplication, command: Command) -> Bool? {
+    let deadline = ProcessInfo.processInfo.systemUptime + 0.3
     guard let index = command.snapshotNodeIndex,
           let retained = retainedSnapshotTargets[index],
           retained.generation == currentSnapshotGeneration,
@@ -702,7 +706,7 @@ extension RnFastRunnerTests {
       }
     })
     guard exception == nil, matches.count == 1 else { return nil }
-    return boundedHittable(matches[0])
+    return boundedHittable(matches[0], deadline: deadline)
   }
 
   private func resolveLiveKeyboardTarget(

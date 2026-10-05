@@ -17,6 +17,7 @@ import {
   clearanceScroll,
   keyboardFallbackTarget,
   bindFillIdentity,
+  bindDispatchIdentity,
   stepTarget,
   scrollUntilDirection,
   targetEvidence,
@@ -691,9 +692,16 @@ export async function walkBlock(
     attempt: number,
     before: Observation,
     target: { element: Element; oracleTestID: string },
+    scrolled = false,
   ): Promise<
     | WalkOutcome
-    | { ref: string; element: Element; observation: Observation; identity: string }
+    | {
+        ref: string;
+        element: Element;
+        observation: Observation;
+        identity: string;
+        scrolled: boolean;
+      }
     | 'typed'
   > => {
     const quoted = item.target.quoted!;
@@ -718,6 +726,35 @@ export async function walkBlock(
         return nothingTyped(`the evidence expired before tapping "${quoted}"`, before.screen);
       throw error;
     }
+    if (!tap.ok && tap.mutation === 'none' && tap.error?.startsWith('FOCUS_TARGET_OCCLUDED:')) {
+      if (scrolled)
+        return nothingTyped(
+          `${tap.error}; "${quoted}" stayed off screen after one scroll`,
+          before.screen,
+        );
+      const scroll = await mutate(item, before, (context) =>
+        deps.scroll(clearanceScroll(target.element), context),
+      );
+      const afterScroll = await capture(item);
+      usable(afterScroll, item);
+      const rebound = bindDispatchIdentity(
+        { ...item, kind: 'press' },
+        afterScroll.screen,
+        target.element,
+      );
+      if (!scroll.ok || !('ref' in rebound))
+        return nothingTyped(
+          'TARGET_NOT_FOUND: the refused wrapper stayed off screen after one scroll',
+          afterScroll.screen,
+        );
+      return keyboardFallback(
+        item,
+        attempt,
+        afterScroll,
+        { ...target, element: rebound.element },
+        true,
+      );
+    }
     if (!tap.ok)
       return nothingTyped(
         `${tap.error ?? 'the tap was not dispatched'}; tapping "${quoted}" failed`,
@@ -740,7 +777,7 @@ export async function walkBlock(
     }
     const binding = bound();
     if (binding?.kind === 'strict')
-      return { ...binding.strict, observation: after, identity: target.oracleTestID };
+      return { ...binding.strict, observation: after, identity: target.oracleTestID, scrolled };
     if (after.screen.keyboardVisible !== true)
       return nothingTyped(`tapping "${quoted}" raised no keyboard`, after.screen);
     const again = binding?.kind === 'fallback' ? binding.fallback : undefined;
@@ -1072,6 +1109,8 @@ export async function walkBlock(
         let fillIdentity: string | undefined;
         let typedUnverified = false;
         let again = false;
+        let scrolled = false;
+        let refusedIdentity: Element | undefined;
         const maxAttempts = recovered.has(item) ? 1 : 2;
         for (let attempt = 1; attempt <= maxAttempts && !outcome; attempt += 1) {
           currentAttempt = attempt;
@@ -1082,7 +1121,6 @@ export async function walkBlock(
           let element: Element | undefined;
           let initial = held?.decision;
           let freshness = attempt === 1 ? 1 : 0;
-          let scrolled = false;
           let occluded: 'up' | 'down' | undefined;
           let scrollNeedsReadback = false;
           let scrollError: string | undefined;
@@ -1092,24 +1130,33 @@ export async function walkBlock(
               usable(before, item);
               if (item.kind === 'press' || item.kind === 'fill') {
                 if (item.target.quoted === undefined) resolvedBy = 'jev';
-                const decision = await decide(before, undefined, item, Infinity, initial);
+                const decision = refusedIdentity
+                  ? {
+                      resolvedBy,
+                      target: bindDispatchIdentity(item, before.screen, refusedIdentity),
+                    }
+                  : await decide(before, undefined, item, Infinity, initial);
                 initial = undefined;
                 resolvedBy = decision.resolvedBy === 'jev' ? 'jev' : resolvedBy;
                 const binding =
-                  item.kind === 'fill' && fillIdentity !== undefined
+                  item.kind === 'fill' &&
+                  fillIdentity !== undefined &&
+                  refusedIdentity === undefined
                     ? bindFillIdentity(item, before.screen, fillIdentity)
                     : undefined;
                 const decided =
                   occluded !== undefined
                     ? { scroll: occluded }
-                    : fillIdentity !== undefined
-                      ? binding?.kind === 'strict'
-                        ? binding.strict
-                        : {
-                            refuse: 'TARGET_NOT_FOUND',
-                            reason: 'the original input identity no longer resolves uniquely',
-                          }
-                      : decision.target!;
+                    : refusedIdentity !== undefined
+                      ? decision.target!
+                      : fillIdentity !== undefined
+                        ? binding?.kind === 'strict'
+                          ? binding.strict
+                          : {
+                              refuse: 'TARGET_NOT_FOUND',
+                              reason: 'the original input identity no longer resolves uniquely',
+                            }
+                        : decision.target!;
                 occluded = undefined;
                 let resolution: Exclude<Resolution, { refuse: string }>;
                 if ('refuse' in decided) {
@@ -1117,7 +1164,8 @@ export async function walkBlock(
                     decided.refuse === 'TARGET_NOT_FOUND' &&
                     item.kind === 'fill' &&
                     deps.typeFocused &&
-                    !fellBack
+                    !fellBack &&
+                    refusedIdentity === undefined
                       ? keyboardFallbackTarget(item, before.screen)
                       : undefined;
                   if (
@@ -1129,7 +1177,8 @@ export async function walkBlock(
                     before.screen.keyboardVisible === true &&
                     deps.typeFocused &&
                     deps.reactFocused &&
-                    !fellBack
+                    !fellBack &&
+                    refusedIdentity === undefined
                   ) {
                     fellBack = true;
                     const proven = await typeIntoProvenFocus(item, attempt, before);
@@ -1144,7 +1193,7 @@ export async function walkBlock(
                   }
                   if (!fallback || item.kind !== 'fill') throw new ResolutionError(decided);
                   fellBack = true;
-                  const result = await keyboardFallback(item, attempt, before, fallback);
+                  const result = await keyboardFallback(item, attempt, before, fallback, scrolled);
                   if (result === 'typed') {
                     typedUnverified = true;
                     break;
@@ -1153,6 +1202,7 @@ export async function walkBlock(
                     outcome = result;
                     break;
                   }
+                  scrolled ||= result.scrolled;
                   before = result.observation;
                   fillIdentity = result.identity;
                   resolution = result;
@@ -1243,8 +1293,8 @@ export async function walkBlock(
                   );
                   break;
                 }
+                refusedIdentity = element;
                 occluded = clearanceScroll(element);
-                initial = { resolvedBy };
                 continue;
               }
               if (
@@ -1283,7 +1333,7 @@ export async function walkBlock(
                   );
                   break;
                 }
-                const result = await keyboardFallback(item, attempt, before, fallback);
+                const result = await keyboardFallback(item, attempt, before, fallback, scrolled);
                 if (result === 'typed') {
                   typedUnverified = true;
                   break;
@@ -1292,6 +1342,7 @@ export async function walkBlock(
                   outcome = result;
                   break;
                 }
+                scrolled ||= result.scrolled;
                 before = result.observation;
                 fillIdentity = result.identity;
                 continue;
