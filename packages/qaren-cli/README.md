@@ -1084,6 +1084,10 @@ dynamic or template-literal arguments, escaped literals and other unsupported
 syntax make the fingerprint **incomplete**, forbidding cached reuse (visible
 in decision evidence). Dynamic `app.config.*`, unresolvable local refs and
 `workspace:` dependencies in any of those sections also make it incomplete.
+In 2.0 an app with a dynamic `app.config.*` is therefore never reused: its
+imports and environment reads cannot be fingerprinted, so every warm run takes
+a clean prebuild that keeps existing build caches, and the decision reason
+names the dynamic config as the cause.
 Other native-input symlinks hash link text plus in-worktree target content;
 out-of-worktree targets make the fingerprint incomplete. The scanner is
 conservative, not a full JS parser.

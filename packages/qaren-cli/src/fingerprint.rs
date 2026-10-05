@@ -776,7 +776,7 @@ pub fn compute(
     let mut packages: BTreeSet<String> = BTreeSet::new();
     if let Some(config) = dynamic_config {
         incompleteness.push(format!(
-            "{config} is a dynamic config whose imports cannot be enumerated; the input set is unprovably complete"
+            "{config} is a dynamic config whose imports and ambient inputs (environment and process reads) cannot be fingerprinted"
         ));
     }
     if inputs.contains("app.json") {

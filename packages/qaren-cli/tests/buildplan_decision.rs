@@ -163,6 +163,14 @@ fn incomplete_matching_fingerprint_regenerates_generated_native_dir() {
     assert!(plan.artifact.is_none());
     assert!(plan.reason.contains("keeping existing build caches"));
     assert!(plan.evidence.iter().any(|e| e.contains("dynamic config")));
+    assert!(!plan.reason.contains("changed"), "{}", plan.reason);
+    assert!(
+        plan.reason.contains("matches")
+            && plan.reason.contains("app.config.ts is a dynamic config")
+            && plan.reason.contains("instead of reuse"),
+        "{}",
+        plan.reason
+    );
 }
 
 #[test]
@@ -177,6 +185,11 @@ fn changed_fingerprint_with_proven_provenance_regenerates_generated_native_dir()
     assert!(plan.regenerate_native_dir);
     assert!(plan.artifact.is_none());
     assert!(plan.reason.contains("keeping existing build caches"));
+    assert!(
+        plan.reason.starts_with("native inputs changed"),
+        "{}",
+        plan.reason
+    );
     assert!(
         plan.evidence
             .iter()

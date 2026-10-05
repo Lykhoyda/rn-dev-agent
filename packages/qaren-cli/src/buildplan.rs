@@ -248,10 +248,23 @@ pub fn decide(
                 evidence,
             );
         }
-        if regenerate && (state.fingerprint != inputs.fingerprint || !inputs.fingerprint_complete) {
+        if regenerate && state.fingerprint != inputs.fingerprint {
             return clean(
-                "native inputs changed or are incompletely fingerprinted; regenerating the generated native dir via expo prebuild --clean while keeping existing build caches"
+                "native inputs changed; regenerating the generated native dir via expo prebuild --clean while keeping existing build caches"
                     .to_string(),
+                evidence,
+            );
+        }
+        if regenerate && !inputs.fingerprint_complete {
+            return clean(
+                format!(
+                    "native fingerprint matches, but {}; regenerating the generated native dir via expo prebuild --clean instead of reuse, while keeping existing build caches",
+                    inputs
+                        .incompleteness
+                        .first()
+                        .map(String::as_str)
+                        .unwrap_or("its input set is unprovably complete")
+                ),
                 evidence,
             );
         }
