@@ -277,11 +277,18 @@ fn extensionless_plugin_seeds_and_dependencies_forbid_reuse() {
         let root = plugin_project("require('../config/native')");
         std::fs::write(root.join("config/native"), "require('./x.json')").unwrap();
         if seed {
-            std::fs::write(root.join("app.json"), r#"{"expo":{"plugins":["./config/native"]}}"#).unwrap();
+            std::fs::write(
+                root.join("app.json"),
+                r#"{"expo":{"plugins":["./config/native"]}}"#,
+            )
+            .unwrap();
         }
         let fp = fingerprint(&root);
         assert!(!fp.complete);
-        assert!(fp.incompleteness.iter().any(|reason| reason.contains("recognized extension")));
+        assert!(fp
+            .incompleteness
+            .iter()
+            .any(|reason| reason.contains("recognized extension")));
         std::fs::remove_dir_all(root).unwrap();
     }
 }
@@ -300,16 +307,27 @@ fn symlinked_plugin_seeds_dependencies_and_parent_directories_forbid_reuse() {
             }
             "dependency" => {
                 symlink("value.js", root.join("config/linked.js")).unwrap();
-                std::fs::write(root.join("plugins/withX.js"), "require('../config/linked.js')").unwrap();
+                std::fs::write(
+                    root.join("plugins/withX.js"),
+                    "require('../config/linked.js')",
+                )
+                .unwrap();
             }
             _ => {
                 symlink("config", root.join("linked")).unwrap();
-                std::fs::write(root.join("plugins/withX.js"), "require('../linked/value.js')").unwrap();
+                std::fs::write(
+                    root.join("plugins/withX.js"),
+                    "require('../linked/value.js')",
+                )
+                .unwrap();
             }
         }
         let fp = fingerprint(&root);
         assert!(!fp.complete, "{site}");
-        assert!(fp.incompleteness.iter().any(|reason| reason.contains("non-symlink")));
+        assert!(fp
+            .incompleteness
+            .iter()
+            .any(|reason| reason.contains("non-symlink")));
         std::fs::remove_dir_all(root).unwrap();
     }
 }
@@ -409,7 +427,6 @@ fn local_dependency_unreadable_files_and_directories_forbid_reuse() {
     }
 }
 
-
 #[test]
 fn optional_local_dependencies_bind_native_inputs_and_unresolved_workspaces() {
     for spec in ["file:", "link:", "workspace:"] {
@@ -442,4 +459,129 @@ fn optional_local_dependencies_bind_native_inputs_and_unresolved_workspaces() {
         }
         std::fs::remove_dir_all(root).unwrap();
     }
+}
+
+fn package_project() -> std::path::PathBuf {
+    let root = plugin_project(
+        "import { type ConfigPlugin, withAppDelegate } from 'expo/config-plugins';\n\
+         import fs from 'node:fs';\n\
+         import path from 'path';\n\
+         const swift = `\n  // Scene launches read it from launch options.\n`;\n\
+         export default ((c) => c) as ConfigPlugin;\n",
+    );
+    std::fs::rename(root.join("plugins/withX.js"), root.join("plugins/withX.ts")).unwrap();
+    std::fs::write(
+        root.join("app.json"),
+        r#"{"expo":{"plugins":["expo-asset",["expo-build-properties",{"ios":{"deploymentTarget":"16.4"}}],"./plugins/withX.ts","expo-router","@scope/native-plugin/plugin"]}}"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n").unwrap();
+    for (name, version) in [
+        ("expo", "56.0.22"),
+        ("expo-asset", "12.0.1"),
+        ("expo-build-properties", "1.0.9"),
+        ("@scope/native-plugin", "2.1.0"),
+    ] {
+        let dir = root.join("node_modules").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            format!(r#"{{"name":"{name}","version":"{version}"}}"#),
+        )
+        .unwrap();
+    }
+    let store = root.join("node_modules/.pnpm/expo-router@6.0.0/node_modules/expo-router");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(
+        store.join("package.json"),
+        r#"{"name":"expo-router","version":"6.0.0"}"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        ".pnpm/expo-router@6.0.0/node_modules/expo-router",
+        root.join("node_modules/expo-router"),
+    )
+    .unwrap();
+    root
+}
+
+fn package_fingerprint(root: &Path) -> NativeFingerprint {
+    let mut runner = MockRunner::new();
+    runner.expect_run(
+        "ls-files",
+        CmdOutput::success("app.json\0plugins/withX.ts\0pnpm-lock.yaml\0"),
+    );
+    compute(&mut runner, root, root, "ios").unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn package_plugins_and_bare_imports_resolve_so_a_warm_run_can_reuse() {
+    let root = package_project();
+    let first = package_fingerprint(&root);
+    assert!(first.complete, "{:?}", first.incompleteness);
+    assert_eq!(
+        package_fingerprint(&root),
+        first,
+        "an unchanged project must fingerprint identically"
+    );
+
+    std::fs::write(root.join("plugins/withX.ts"), "export default (c) => c;\n").unwrap();
+    let plugin_changed = package_fingerprint(&root);
+    assert!(plugin_changed.complete);
+    assert_ne!(
+        plugin_changed.value, first.value,
+        "a local plugin change must invalidate reuse"
+    );
+
+    let root = package_project();
+    std::fs::write(root.join("pnpm-lock.yaml"), "lockfileVersion: '9.1'\n").unwrap();
+    assert_ne!(
+        package_fingerprint(&root).value,
+        first.value,
+        "a lockfile change must invalidate reuse"
+    );
+
+    let root = package_project();
+    std::fs::write(
+        root.join("node_modules/expo/package.json"),
+        r#"{"name":"expo","version":"56.0.23"}"#,
+    )
+    .unwrap();
+    assert_ne!(
+        package_fingerprint(&root).value,
+        first.value,
+        "a resolved package version change must invalidate reuse"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unresolvable_package_plugin_or_import_still_forbids_reuse() {
+    for missing in ["node_modules/expo-router", "node_modules/expo"] {
+        let root = package_project();
+        std::fs::remove_file(root.join(missing))
+            .or_else(|_| std::fs::remove_dir_all(root.join(missing)))
+            .unwrap();
+        let fp = package_fingerprint(&root);
+        assert!(!fp.complete, "{missing}");
+        assert!(
+            fp.incompleteness
+                .iter()
+                .any(|reason| reason.contains("does not resolve")),
+            "{:?}",
+            fp.incompleteness
+        );
+    }
+    let root = package_project();
+    std::fs::write(
+        root.join("node_modules/expo/package.json"),
+        r#"{"name":"expo"}"#,
+    )
+    .unwrap();
+    assert!(
+        !package_fingerprint(&root).complete,
+        "a package without a version cannot be bound"
+    );
 }

@@ -1,7 +1,7 @@
 use crate::candidate::sha256_hex;
 use crate::exec::{CmdSpec, Runner};
 use crate::failure::{Failure, FailureCode};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub const FINGERPRINT_VERSION: &str = "rnfp1";
@@ -86,6 +86,7 @@ fn is_dynamic_config(rel: &str) -> bool {
 struct ReferencedInputs {
     files: BTreeSet<String>,
     modules: Vec<String>,
+    packages: BTreeSet<String>,
     incompleteness: Vec<String>,
 }
 
@@ -111,9 +112,15 @@ fn referenced_paths(app_json: &str, project_root: &Path) -> ReferencedInputs {
                 .as_str()
                 .or_else(|| plugin.as_array()?.first()?.as_str());
             if let Some(reference) = reference {
-                out.modules.push(reference.strip_prefix("./").unwrap_or(reference).to_string());
-                if !reference.starts_with('.') && !project_root.join(reference).is_file() {
-                    out.incompleteness.push(format!("plugin {reference:?} in app.json requires module resolution; its native inputs cannot be proven complete"));
+                if reference.starts_with('.') || project_root.join(reference).is_file() {
+                    out.modules.push(
+                        reference
+                            .strip_prefix("./")
+                            .unwrap_or(reference)
+                            .to_string(),
+                    );
+                } else {
+                    out.packages.insert(reference.to_string());
                 }
             }
         }
@@ -199,6 +206,8 @@ fn import_specifiers(source: &str) -> Specifiers {
             } else if keyword != "require" {
                 if let Some((text, _)) = literal(next) {
                     out.found.push(text);
+                } else if keyword == "from" {
+                    // Import and re-export `from` always takes a string literal; anything else is prose.
                 } else {
                     let static_import = keyword == "import"
                         && source[next..].find("from").is_some_and(|offset| {
@@ -256,6 +265,7 @@ fn trace_local_imports(
     project_root: &Path,
     seeds: Vec<String>,
     inputs: &mut BTreeSet<String>,
+    packages: &mut BTreeSet<String>,
     incompleteness: &mut Vec<String>,
 ) {
     let mut worklist = seeds;
@@ -264,14 +274,18 @@ fn trace_local_imports(
         if !visited.insert(rel.clone()) {
             continue;
         }
-        if !Path::new(&rel).components().all(|component| matches!(component, std::path::Component::Normal(_))) {
+        if !Path::new(&rel)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+        {
             incompleteness.push(format!("local module {rel} is not a project-relative file"));
             continue;
         }
         let mut path = project_root.to_path_buf();
         let regular = Path::new(&rel).components().all(|component| {
             path.push(component);
-            std::fs::symlink_metadata(&path).is_ok_and(|metadata| !metadata.file_type().is_symlink())
+            std::fs::symlink_metadata(&path)
+                .is_ok_and(|metadata| !metadata.file_type().is_symlink())
         }) && path.is_file();
         if !regular || !(is_executable_module(&rel) || rel.ends_with(".json")) {
             incompleteness.push(format!("local module {rel} is not a regular non-symlink file with a recognized extension; its dependencies cannot be proven complete"));
@@ -298,7 +312,7 @@ fn trace_local_imports(
         }
         for specifier in specifiers.found {
             if !specifier.starts_with('.') {
-                incompleteness.push(format!("import {specifier:?} in {rel} requires package resolution; its native inputs cannot be proven complete"));
+                packages.insert(specifier);
                 continue;
             }
             let Some(normalized) = normalize_rel(base_dir, &specifier) else {
@@ -318,6 +332,103 @@ fn trace_local_imports(
             }
         }
     }
+}
+
+const NODE_BUILTINS: &[&str] = &[
+    "assert",
+    "buffer",
+    "child_process",
+    "crypto",
+    "events",
+    "fs",
+    "http",
+    "https",
+    "module",
+    "net",
+    "os",
+    "path",
+    "process",
+    "querystring",
+    "readline",
+    "stream",
+    "string_decoder",
+    "timers",
+    "tty",
+    "url",
+    "util",
+    "v8",
+    "vm",
+    "worker_threads",
+    "zlib",
+];
+
+// A bare plugin or import is bound by the lockfile plus the version of the package that
+// Node resolution finds from the project root; only an unresolvable package stays unproven.
+fn package_manifest(
+    project_root: &Path,
+    repo_root: &Path,
+    packages: &BTreeSet<String>,
+    manifest: &mut Vec<(String, String)>,
+    incompleteness: &mut Vec<String>,
+) {
+    let mut versions: BTreeMap<String, String> = BTreeMap::new();
+    for specifier in packages {
+        let builtin = specifier.strip_prefix("node:").unwrap_or(specifier);
+        if specifier.starts_with("node:")
+            || NODE_BUILTINS.contains(&builtin.split('/').next().unwrap_or(builtin))
+        {
+            continue;
+        }
+        let segments = if specifier.starts_with('@') { 2 } else { 1 };
+        let name = specifier
+            .split('/')
+            .take(segments)
+            .collect::<Vec<_>>()
+            .join("/");
+        let valid = name.split('/').count() == segments
+            && name.split('/').all(|part| {
+                !part.is_empty() && part != "." && part != ".." && !part.contains('\\')
+            });
+        if !valid {
+            incompleteness.push(format!(
+                "package {specifier:?} is not a resolvable package name; the input set is unprovably complete"
+            ));
+            continue;
+        }
+        if versions.contains_key(&name) {
+            continue;
+        }
+        let mut dir = Some(project_root);
+        let mut found = None;
+        while let Some(current) = dir.filter(|d| d.starts_with(repo_root)) {
+            let candidate = current
+                .join("node_modules")
+                .join(&name)
+                .join("package.json");
+            if candidate.is_file() {
+                found = Some(candidate);
+                break;
+            }
+            dir = current.parent();
+        }
+        let version = found
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|parsed| parsed.get("version")?.as_str().map(str::to_string));
+        match version {
+            Some(version) => {
+                versions.insert(name, version);
+            }
+            None => incompleteness.push(format!(
+                "package {name} (from {specifier:?}) does not resolve to a versioned package from the project root; the input set is unprovably complete"
+            )),
+        }
+    }
+    manifest.extend(
+        versions
+            .into_iter()
+            .map(|(name, version)| (format!("package:{name}"), format!("version:{version}"))),
+    );
 }
 
 fn local_dependency_manifest(
@@ -591,6 +702,7 @@ pub fn compute(
     }
     let mut incompleteness = Vec::new();
     let mut dep_manifest: Vec<(String, String)> = Vec::new();
+    let mut packages: BTreeSet<String> = BTreeSet::new();
     if let Some(config) = dynamic_config {
         incompleteness.push(format!(
             "{config} is a dynamic config whose imports cannot be enumerated; the input set is unprovably complete"
@@ -601,14 +713,24 @@ pub fn compute(
             Ok(app_json) => {
                 let referenced = referenced_paths(&app_json, project_root);
                 incompleteness.extend(referenced.incompleteness);
-                let executable_seeds = referenced.modules.into_iter().chain(
-                    referenced.files.iter().filter(|rel| is_executable_module(rel)).cloned()
-                ).collect();
+                packages.extend(referenced.packages);
+                let executable_seeds = referenced
+                    .modules
+                    .into_iter()
+                    .chain(
+                        referenced
+                            .files
+                            .iter()
+                            .filter(|rel| is_executable_module(rel))
+                            .cloned(),
+                    )
+                    .collect();
                 inputs.extend(referenced.files);
                 trace_local_imports(
                     project_root,
                     executable_seeds,
                     &mut inputs,
+                    &mut packages,
                     &mut incompleteness,
                 );
             }
@@ -629,7 +751,20 @@ pub fn compute(
         })
         .cloned()
         .collect();
-    trace_local_imports(project_root, config_seeds, &mut inputs, &mut incompleteness);
+    trace_local_imports(
+        project_root,
+        config_seeds,
+        &mut inputs,
+        &mut packages,
+        &mut incompleteness,
+    );
+    package_manifest(
+        project_root,
+        repo_root,
+        &packages,
+        &mut dep_manifest,
+        &mut incompleteness,
+    );
     if inputs.contains("package.json") {
         match std::fs::read_to_string(project_root.join("package.json")) {
             Ok(package_json) => local_dependency_manifest(
@@ -809,6 +944,7 @@ mod tests {
             &dir,
             vec!["plugins/withThing.ts".to_string()],
             &mut inputs,
+            &mut BTreeSet::new(),
             &mut incompleteness,
         );
         assert!(inputs.contains("lib/helper.ts"));
