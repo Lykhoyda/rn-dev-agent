@@ -952,7 +952,7 @@ export async function awaitChildExit(child: ChildProcess | null, graceMs = 5000)
   return new Promise<boolean>((resolve) => {
     const killTimer = setTimeout(() => {
       try {
-        signalDriver(child, 'SIGKILL');
+        child.kill('SIGKILL');
       } catch {
         /* already gone */
       }
@@ -1555,9 +1555,17 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
     ? new Promise<void>((resolve) => spawnedChild.once('exit', () => resolve()))
     : null;
 
+  // This core's own driver leads its group, so its helpers go with it.
   const signalRunner = (signal: NodeJS.Signals): void => {
-    if (spawnedChild) signalDriver(spawnedChild, signal);
-    else sendSignal(state.pid, signal);
+    if (spawnedChild) {
+      try {
+        sendSignal(-state.pid, signal);
+        return;
+      } catch {
+        // No such group: fall back to the leader alone.
+      }
+    }
+    sendSignal(state.pid, signal);
   };
   try {
     signalRunner('SIGTERM');
