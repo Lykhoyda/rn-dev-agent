@@ -49,10 +49,16 @@ for (const representation of ['label', 'value'] as const) {
     ['9', '9', '9', ''],
   ]) {
     test(`partially filled ${representation} code row ${JSON.stringify(labels)} counts empty boxes`, () => {
-      const captured = join(labels.map((label, i) => ({
-        ref: `@box${i}`, type: 'StaticText', label: '', [representation]: label,
-        rect: { x: i * 48, y: 100, width: 42, height: 42 },
-      })), []);
+      const captured = join(
+        labels.map((label, i) => ({
+          ref: `@box${i}`,
+          type: 'StaticText',
+          label: '',
+          [representation]: label,
+          rect: { x: i * 48, y: 100, width: 42, height: 42 },
+        })),
+        [],
+      );
       assert.equal(codeBoxRows(captured)[0]?.length, 4);
       const privacy = new ObservedPrivacy();
       privacy.observe(captured);
@@ -70,10 +76,15 @@ for (const representation of ['label', 'value'] as const) {
 }
 
 test('empty rows alone do not establish a private code', () => {
-  const captured = join(['', '', '', ''].map((label, i) => ({
-    ref: `@box${i}`, type: 'StaticText', label,
-    rect: { x: i * 48, y: 100, width: 42, height: 42 },
-  })), []);
+  const captured = join(
+    ['', '', '', ''].map((label, i) => ({
+      ref: `@box${i}`,
+      type: 'StaticText',
+      label,
+      rect: { x: i * 48, y: 100, width: 42, height: 42 },
+    })),
+    [],
+  );
   assert.deepEqual(codeBoxRows(captured), []);
 });
 
@@ -81,9 +92,16 @@ for (const value of ['938', '999']) {
   test(`partial numeric value ${value} is projected across separators at every policy`, () => {
     for (const separator of [', ', ' | ', ' / ', '\u202f', '---']) {
       const grouped = [...value].join(separator);
-      for (const [privateValue, echo] of [[value, grouped], [grouped, value]]) {
+      for (const [privateValue, echo] of [
+        [value, grouped],
+        [grouped, value],
+      ]) {
         for (const policy of ['model', 'durable', 'identifier', 'persisted'] as const) {
-          const result = matchPrivate(echo, { values: [{ text: privateValue, provenance: 'typed' }] }, policy);
+          const result = matchPrivate(
+            echo,
+            { values: [{ text: privateValue, provenance: 'typed' }] },
+            policy,
+          );
           assert.equal(result.text, MASK);
           assert.equal(result.hit, true);
         }

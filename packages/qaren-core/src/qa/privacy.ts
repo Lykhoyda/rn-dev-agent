@@ -277,10 +277,12 @@ export function codeBoxRows(screen: Screen): Element[][] {
       (elementFrame(element)?.width ?? 0) > 0,
   );
   const boxes = candidates.filter(
-    (element) => !ancestorsOf(element).some(
-      (ancestor) => candidates.includes(ancestor) &&
-        (ancestor.label || ancestor.value || '') === (element.label || element.value || ''),
-    ),
+    (element) =>
+      !ancestorsOf(element).some(
+        (ancestor) =>
+          candidates.includes(ancestor) &&
+          (ancestor.label || ancestor.value || '') === (element.label || element.value || ''),
+      ),
   );
   const bands: Element[][] = [];
   for (const element of boxes.sort((a, b) => elementFrame(a)!.y - elementFrame(b)!.y)) {
@@ -308,7 +310,8 @@ export function codeBoxRows(screen: Screen): Element[][] {
       else row.push(element);
     }
     return rows.filter(
-      (row) => row.length >= 3 && row.some((element) => chars(element.label || element.value || '') === 1),
+      (row) =>
+        row.length >= 3 && row.some((element) => chars(element.label || element.value || '') === 1),
     );
   });
 }
@@ -503,11 +506,13 @@ export class ObservedPrivacy {
       for (const element of screen.elements) {
         const members = boxes.filter((box) => ancestorsOf(box).includes(element));
         const text = element.label || element.value || '';
-        const merged = members.length > 0 &&
+        const merged =
+          members.length > 0 &&
           text.replace(new RegExp(DIGIT_GAP, 'gu'), '') ===
             members.map((box) => box.label || box.value || '').join('');
-        const echo = boxes.some((box) => ancestorsOf(element).includes(box) &&
-          text === (box.label || box.value || ''));
+        const echo = boxes.some(
+          (box) => ancestorsOf(element).includes(box) && text === (box.label || box.value || ''),
+        );
         if (boxes.includes(element) || echo || merged) this.codeElements.add(element);
       }
       this.sensitivePixels ||= rows.length > 0;

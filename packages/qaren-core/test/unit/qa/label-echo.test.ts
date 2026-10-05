@@ -112,9 +112,7 @@ for (const verified of [false, true]) {
         assert.equal(targetVisible(target, screen), true);
         assert.deepEqual(
           visibleSelector(target, screen),
-          exact === 'text'
-            ? { text: 'Device pane baseline' }
-            : { id: 'qa-acceptance-start-title' },
+          exact === 'text' ? { text: 'Device pane baseline' } : { id: 'qa-acceptance-start-title' },
         );
       }
     }

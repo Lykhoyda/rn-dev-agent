@@ -220,8 +220,11 @@ const strings = (value: unknown): string[] =>
       : [];
 
 function wrappedInput(
-  label: string, unrelated = false, ancestry = true,
-  input: ReactHostObservation = INNER, wrapperID = WRAP,
+  label: string,
+  unrelated = false,
+  ancestry = true,
+  input: ReactHostObservation = INNER,
+  wrapperID = WRAP,
 ): Screen {
   const nodes: NativeNode[] = [
     { ref: '@app', type: 'Application', rect: { x: 0, y: 0, width: 400, height: 800 } },
@@ -334,47 +337,80 @@ test('a placeholder-labelled wrapper with its own identifier binds the React-onl
   const captured = wrappedInput('Email address', false, true, input, 'email-wrap');
   const step: Step = { kind: 'fill', target: { phrase: 'email', quoted: 'email' }, text: EMAIL };
   assert.equal(keyboardFallbackTarget(step, captured)?.element.ref, '@wrap');
-  const fake = app({ initial: captured.elements, focused: [{ ...captured, keyboardVisible: true }], hosts: [input] });
+  const fake = app({
+    initial: captured.elements,
+    focused: [{ ...captured, keyboardVisible: true }],
+    hosts: [input],
+  });
   const capture = fake.deps.captureScreen;
-  fake.deps.captureScreen = async (options) => fake.state() === 'idle' ? captured : capture(options);
+  fake.deps.captureScreen = async (options) =>
+    fake.state() === 'idle' ? captured : capture(options);
   const outcome = await walkBlock(blocks(plan(EMAIL, 'email', ''))[0], fake.deps);
   assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
   assert.deepEqual(fake.typed, [{ ref: '@wrap', text: EMAIL, testID: 'email' }]);
-  assert.equal(keyboardFallbackTarget(
-    { ...step, target: { phrase: 'Email address', quoted: 'Email address' } },
-    wrappedInput('Email address', true, true, input, 'email-wrap')), undefined);
+  assert.equal(
+    keyboardFallbackTarget(
+      { ...step, target: { phrase: 'Email address', quoted: 'Email address' } },
+      wrappedInput('Email address', true, true, input, 'email-wrap'),
+    ),
+    undefined,
+  );
 });
 
 for (const code of ['9', '93', '938', '999', '9386', '9966']) {
   test(`nested code boxes and merged labels stay private after fallback fill ${code}`, async () => {
     const nodes: NativeNode[] = [
       { ref: '@app', type: 'Application', rect: { x: 0, y: 0, width: 400, height: 800 } },
-      { ref: '@code', type: 'Other', identifier: 'qa-otp-code-field', label: [...code].join(', '),
-        parentIndex: 0, rect: { x: 20, y: 100, width: 200, height: 42 } },
+      {
+        ref: '@code',
+        type: 'Other',
+        identifier: 'qa-otp-code-field',
+        label: [...code].join(', '),
+        parentIndex: 0,
+        rect: { x: 20, y: 100, width: 200, height: 42 },
+      },
     ];
     for (const [i, label] of [...code.padEnd(4, ' ')].map((char) => char.trim()).entries()) {
       const parentIndex = nodes.length;
       nodes.push(
-        { ref: `@box${i}`, type: 'StaticText', identifier: `qa-otp-box-${i}`, label,
-          parentIndex: 1, rect: { x: 20 + i * 48, y: 100, width: 42, height: 42 } },
-        { ref: `@echo${i}`, type: 'StaticText', label, parentIndex,
-          rect: { x: 30 + i * 48, y: 110, width: 20, height: 20 } },
+        {
+          ref: `@box${i}`,
+          type: 'StaticText',
+          identifier: `qa-otp-box-${i}`,
+          label,
+          parentIndex: 1,
+          rect: { x: 20 + i * 48, y: 100, width: 42, height: 42 },
+        },
+        {
+          ref: `@echo${i}`,
+          type: 'StaticText',
+          label,
+          parentIndex,
+          rect: { x: 30 + i * 48, y: 110, width: 20, height: 20 },
+        },
       );
     }
-    const captured = screenOf([
-      ...joinScreen(nodes, []).elements,
-      element('@heading', 'Enter code', { kind: 'text' }),
-      element('@verify', 'Verify'),
-    ], true);
+    const captured = screenOf(
+      [
+        ...joinScreen(nodes, []).elements,
+        element('@heading', 'Enter code', { kind: 'text' }),
+        element('@verify', 'Verify'),
+      ],
+      true,
+    );
     captured.visibleText = captured.visibleText.filter(Boolean);
-    assert.deepEqual(codeBoxRows(captured).map((row) => row.map((box) => box.ref)),
-      [['@box0', '@box1', '@box2', '@box3']]);
+    assert.deepEqual(
+      codeBoxRows(captured).map((row) => row.map((box) => box.ref)),
+      [['@box0', '@box1', '@box2', '@box3']],
+    );
     const privacy = new ObservedPrivacy([code]);
     privacy.didFill();
     privacy.observe(captured);
     assert.deepEqual(privacy.screenText(captured), ['[code]', 'Enter code', 'Verify']);
     const mask = privacy.maskForModel([code], []);
-    for (const node of captured.elements.filter((node) => node.ref === '@code' || node.ref.startsWith('@box') || node.ref.startsWith('@echo')))
+    for (const node of captured.elements.filter(
+      (node) => node.ref === '@code' || node.ref.startsWith('@box') || node.ref.startsWith('@echo'),
+    ))
       assert.equal(mask.describeElement(node, describe), 'box (hidden)');
     for (const separator of [', ', ' | ', ' / ', '---', '\u2009']) {
       const text = [...code].join(separator);
@@ -385,14 +421,25 @@ for (const code of ['9', '93', '938', '999', '9386', '9966']) {
     }
     const fake = app();
     const capture = fake.deps.captureScreen;
-    fake.deps.captureScreen = async (options) => fake.state() === 'typed' ? captured : capture(options);
-    const ledger = await runPlan(blocks(plan(code, INNER.testID,
-      '✓ The Verify button is visible\n✓ "Missing"\n')), fake.deps);
+    fake.deps.captureScreen = async (options) =>
+      fake.state() === 'typed' ? captured : capture(options);
+    const ledger = await runPlan(
+      blocks(plan(code, INNER.testID, '✓ The Verify button is visible\n✓ "Missing"\n')),
+      fake.deps,
+    );
     assert.equal(ledger.verdict, 'FAIL');
     assert.match(ledger.failure?.seen ?? '', /\[code\]/);
-    assert.equal(ledger.steps.some((row) => row.reason?.startsWith('UNVERIFIED_FILL:')), true);
-    const surfaces = strings({ ledger, rows: fake.rows, questions: fake.questions,
-      diagnostics: fake.diagnostics, notes: fake.notes });
+    assert.equal(
+      ledger.steps.some((row) => row.reason?.startsWith('UNVERIFIED_FILL:')),
+      true,
+    );
+    const surfaces = strings({
+      ledger,
+      rows: fake.rows,
+      questions: fake.questions,
+      diagnostics: fake.diagnostics,
+      notes: fake.notes,
+    });
     assert.ok(fake.questions.length > 0, JSON.stringify(ledger.failure));
     for (const text of surfaces) {
       assert.equal(text.replace(/[\s\p{P}\p{S}]/gu, '').includes(code), false);
