@@ -274,41 +274,72 @@ const subsequence = (needle: string, haystack: string): boolean => {
   return at === [...needle].length;
 };
 
-// Accessible cells labelled by one character count only when the row spells part of a filled value.
+type Frame = NonNullable<ReturnType<typeof elementFrame>>;
+const boxText = (element: Element) => element.label || element.value || '';
+
+function boxRows(boxes: Element[], frameOf: (element: Element) => Frame, gap: number): Element[][] {
+  const bands: Element[][] = [];
+  for (const element of [...boxes].sort((a, b) => frameOf(a).y - frameOf(b).y)) {
+    const frame = frameOf(element);
+    const band = bands.find((row) => {
+      const first = frameOf(row[0]);
+      return Math.abs(frame.y + frame.height / 2 - first.y - first.height / 2) <= 4;
+    });
+    if (band) band.push(element);
+    else bands.push([element]);
+  }
+  return bands.flatMap((band) => {
+    band.sort((a, b) => frameOf(a).x - frameOf(b).x);
+    const widths = band.map((element) => frameOf(element).width).sort((a, b) => a - b);
+    const middle = Math.floor(widths.length / 2);
+    const median = widths.length % 2 ? widths[middle] : (widths[middle - 1] + widths[middle]) / 2;
+    const rows: Element[][] = [[]];
+    for (const element of band) {
+      const row = rows[rows.length - 1];
+      const previous = row[row.length - 1];
+      const frame = frameOf(element);
+      const before = previous && frameOf(previous);
+      if (before && (frame.x <= before.x || frame.x - before.x - before.width > gap * median))
+        rows.push([element]);
+      else row.push(element);
+    }
+    return rows;
+  });
+}
+
+// Text boxes by their own frames, plus cells measured by their container; a cell row spelling part of a filled value also counts.
 export function codeBoxRows(screen: Screen, filled: readonly string[] = []): Element[][] {
-  const candidates = screen.elements.filter(
-    (element) =>
-      !element.offscreen &&
-      (elementFrame(element)?.width ?? 0) > 0 &&
-      (element.kind === 'text'
-        ? chars(element.label || element.value || '') <= 1
-        : element.kind !== 'input' &&
-          !element.secure &&
-          !element.ref.startsWith('react:') &&
-          chars(element.label ?? '') === 1),
+  const visible = (element: Element) =>
+    !element.offscreen && (elementFrame(element)?.width ?? 0) > 0;
+  const texts = screen.elements.filter(
+    (element) => visible(element) && element.kind === 'text' && chars(boxText(element)) <= 1,
   );
-  const text = (element: Element) => element.label || element.value || '';
-  // One character is one box: a Text keeps it from its echoing Text ancestor and from a labelled cell around it.
-  const boxes = candidates.filter(
+  const textBoxes = texts.filter(
     (element) =>
       !ancestorsOf(element).some(
-        (ancestor) =>
-          ancestor.kind === 'text' &&
-          candidates.includes(ancestor) &&
-          text(ancestor) === text(element),
-      ) &&
-      (element.kind === 'text' ||
-        !candidates.some(
-          (inner) =>
-            inner.kind === 'text' &&
-            ancestorsOf(inner).includes(element) &&
-            text(inner) === text(element),
-        )),
+        (ancestor) => texts.includes(ancestor) && boxText(ancestor) === boxText(element),
+      ),
   );
+  const textRow = (row: Element[]) =>
+    row.length >= 3 && row.some((element) => chars(boxText(element)) === 1);
+  const own = boxRows(textBoxes, (element) => elementFrame(element)!, 1.5).filter(textRow);
+  const labelled = screen.elements.filter(
+    (element) =>
+      visible(element) &&
+      element.kind !== 'text' &&
+      element.kind !== 'input' &&
+      !element.secure &&
+      !element.ref.startsWith('react:') &&
+      chars(element.label ?? '') === 1 &&
+      !textBoxes.some(
+        (inner) => ancestorsOf(inner).includes(element) && boxText(inner) === boxText(element),
+      ),
+  );
+  const boxes = [...textBoxes, ...labelled];
   // A glyph-width Text inside a code cell is measured by its cell: the outermost framed ancestor holding no other box.
   const cells = new Map(
     boxes.map((element) => {
-      const own = elementFrame(element)!;
+      const frame = elementFrame(element)!;
       const ancestors = ancestorsOf(element);
       const shared = ancestors.findIndex((ancestor) =>
         boxes.some((other) => other !== element && ancestorsOf(other).includes(ancestor)),
@@ -317,57 +348,27 @@ export function codeBoxRows(screen: Screen, filled: readonly string[] = []): Ele
         .slice(0, shared < 0 ? ancestors.length : shared)
         .filter((ancestor) => elementFrame(ancestor) !== undefined)
         .at(-1);
-      const frame = cell && elementFrame(cell)!;
+      const outer = cell && elementFrame(cell)!;
       const contains =
-        frame &&
-        frame.width > 0 &&
-        frame.x <= own.x &&
-        frame.y <= own.y &&
-        frame.x + frame.width >= own.x + own.width &&
-        frame.y + frame.height >= own.y + own.height;
-      return [element, contains ? frame : own];
+        outer &&
+        outer.width > 0 &&
+        outer.x <= frame.x &&
+        outer.y <= frame.y &&
+        outer.x + outer.width >= frame.x + frame.width &&
+        outer.y + outer.height >= frame.y + frame.height;
+      return [element, contains ? outer : frame];
     }),
   );
-  const cellFrame = (element: Element) => cells.get(element)!;
-  const bands: Element[][] = [];
-  for (const element of boxes.sort((a, b) => cellFrame(a).y - cellFrame(b).y)) {
-    const frame = cellFrame(element);
-    const band = bands.find((row) => {
-      const first = cellFrame(row[0]);
-      return Math.abs(frame.y + frame.height / 2 - first.y - first.height / 2) <= 4;
-    });
-    if (band) band.push(element);
-    else bands.push([element]);
-  }
-  return bands.flatMap((band) => {
-    band.sort((a, b) => cellFrame(a).x - cellFrame(b).x);
-    const widths = band.map((element) => cellFrame(element).width).sort((a, b) => a - b);
-    const middle = Math.floor(widths.length / 2);
-    const median = widths.length % 2 ? widths[middle] : (widths[middle - 1] + widths[middle]) / 2;
-    const rows: Element[][] = [[]];
-    for (const element of band) {
-      const row = rows[rows.length - 1];
-      const previous = row[row.length - 1];
-      const frame = cellFrame(element);
-      const before = previous && cellFrame(previous);
-      // Evenly spread cells (space-between on a wide phone) can sit up to two cell widths apart.
-      if (before && (frame.x <= before.x || frame.x - before.x - before.width > 2 * median))
-        rows.push([element]);
-      else row.push(element);
-    }
-    return rows.filter((row) => {
-      if (row.every((element) => element.kind === 'text'))
-        return (
-          row.length >= 3 &&
-          row.some((element) => chars(element.label || element.value || '') === 1)
-        );
-      const spelled = row.map((element) => element.label || element.value || '').join('');
-      return (
-        chars(spelled) >= 2 &&
-        filled.some((value) => subsequence(spelled, value.replace(/\s/gu, '')))
-      );
-    });
+  // Evenly spread cells (space-between on a wide phone) can sit up to two cell widths apart.
+  const spread = boxRows(boxes, (element) => cells.get(element)!, 2).filter((row) => {
+    if (row.every((element) => element.kind === 'text')) return textRow(row);
+    const spelled = row.map(boxText).join('');
+    return (
+      chars(spelled) >= 2 && filled.some((value) => subsequence(spelled, value.replace(/\s/gu, '')))
+    );
   });
+  const covered = new Set(spread.flat());
+  return [...spread, ...own.filter((row) => !row.every((element) => covered.has(element)))];
 }
 
 const NATIVE_TYPES = new Set([

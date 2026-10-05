@@ -207,6 +207,27 @@ for (const [typed, texts] of [
   });
 }
 
+test('a text code row stays masked beside an unrelated one-character control', () => {
+  const captured = join(
+    [
+      ...['9', '3', '8'].map((label, i) => ({
+        ref: `@box${i}`,
+        type: 'StaticText',
+        label,
+        rect: { x: i * 48, y: 100, width: 42, height: 42 },
+      })),
+      { ref: '@plus', type: 'Button', label: '+', rect: { x: 150, y: 100, width: 42, height: 42 } },
+    ],
+    [],
+  );
+  const privacy = new ObservedPrivacy();
+  privacy.didFill();
+  privacy.observe(captured);
+  const text = privacy.screenText(captured);
+  assert.ok(text.includes('[code]'), JSON.stringify(text));
+  for (const char of '938') assert.equal(text.includes(char), false, JSON.stringify(text));
+});
+
 test('a keypad that is not the filled value stays readable after filling', () => {
   for (const type of ['Button', 'Other']) {
     const captured = join(
