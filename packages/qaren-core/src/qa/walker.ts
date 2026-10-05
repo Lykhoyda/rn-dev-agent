@@ -17,9 +17,10 @@ import {
   keyboardFallbackTarget,
   bindFillIdentity,
   stepTarget,
-  targetVisible,
+  targetEvidence,
   visibleSelector,
 } from './resolve.js';
+import { literalEvidence } from './evidence.js';
 import { focusIdentityOf } from './identity.js';
 import {
   type BlockPlatform,
@@ -139,6 +140,12 @@ class EvidenceExpired extends Error {
     super(itemExpired ? 'VISIBILITY_UNSURE: ITEM_DEADLINE_EXCEEDED' : 'EVIDENCE_EXPIRED');
   }
 }
+
+const unresolvedText = (quoted: string) =>
+  new ResolutionError({
+    refuse: 'VISIBILITY_UNSURE',
+    reason: `"${quoted}" stayed unresolved: matching text has no trusted frame or the native snapshot is incomplete`,
+  });
 
 export const WAIT_BUDGET_MS = 15_000;
 export const WAIT_POLL_MS = 500;
@@ -533,7 +540,7 @@ export async function walkBlock(
         ? { text: target.quoted }
         : undefined;
   const targetSelector = (target: Target, screen: Screen) =>
-    stored(exactSelector(target) ?? visibleSelector(target, screen));
+    stored(visibleSelector(target, screen));
   const base = (item: Item, attempt: number): Omit<LedgerRow, 'outcome'> => ({
     block: block.slug,
     line: item.line,
@@ -602,7 +609,7 @@ export async function walkBlock(
     return async (
       observation: Observation,
       initial?: ScreenDecision,
-    ): Promise<{ observation: Observation; found: boolean }> => {
+    ): Promise<{ observation: Observation; found: boolean; unsure?: boolean }> => {
       let decision = initial;
       while (deps.now() < deadline) {
         try {
@@ -619,8 +626,10 @@ export async function walkBlock(
           continue;
         }
         const target = item.kind === 'wait' ? item.target : item.until!;
-        if (target.quoted !== undefined)
-          return { observation, found: targetVisible(target, observation.screen) };
+        if (target.quoted !== undefined) {
+          const evidence = targetEvidence(target, observation.screen);
+          return { observation, found: evidence === 'pass', unsure: evidence === 'unsure' };
+        }
         const visibility = decision.visibility;
         if (!visibility)
           throw new ResolutionError({
@@ -925,7 +934,14 @@ export async function walkBlock(
           const shot = await shoot(item);
           if (decision.check === 'pass') {
             if (nextStep) cached = { item: nextStep, observation: before, decision };
-            emit({ ...base(item, 1), ...(shot ? { screenshot: shot } : {}), outcome: 'pass' });
+            const labelled =
+              item.literal && literalEvidence(before.screen, item.text, 'contains').label;
+            emit({
+              ...base(item, 1),
+              ...(shot ? { screenshot: shot } : {}),
+              ...(labelled ? { reason: 'matched an accessibility label' } : {}),
+              outcome: 'pass',
+            });
             continue items;
           }
           const reason =
@@ -948,9 +964,11 @@ export async function walkBlock(
           let observation = held?.observation ?? (await capture(item));
           cached = undefined;
           const probe = visibilityProbe(item, deadline);
+          let unsure = false;
           const visible = async (s: Observation, initial?: ScreenDecision): Promise<boolean> => {
             const observed = await probe(s, initial);
             observation = observed.observation;
+            unsure = observed.unsure === true;
             return observed.found;
           };
           let found = await visible(observation, held?.decision);
@@ -961,6 +979,7 @@ export async function walkBlock(
             found = await visible(observation);
           }
           if (!found) {
+            if (unsure) throw unresolvedText(item.target.quoted!);
             usable(observation, item, deadline);
             throw new EvidenceExpired(true);
           }
@@ -981,9 +1000,11 @@ export async function walkBlock(
           let observation = held?.observation ?? (await capture(item));
           cached = undefined;
           const probe = visibilityProbe(item, deadline);
+          let unsure = false;
           const visible = async (s: Observation, initial?: ScreenDecision): Promise<boolean> => {
             const observed = await probe(s, initial);
             observation = observed.observation;
+            unsure = observed.unsure === true;
             return observed.found;
           };
           let found = await visible(observation, held?.decision);
@@ -1023,6 +1044,7 @@ export async function walkBlock(
                 await shoot(item),
               );
           }
+          if (!found && unsure) throw unresolvedText(item.until.quoted!);
           if (!found) usable(observation, item, deadline);
           const shot = await shoot(item);
           if (found) {

@@ -9,6 +9,7 @@ import { PRIVATE_INPUT_LIMITS } from './private-input-limits.js';
 import { INPUT_HOST_TYPES } from './input-host-types.js';
 import {
   duplicateNodes,
+  frameContradictions,
   navigationTitles,
   offscreenNodes,
   outsideViewport,
@@ -23,6 +24,7 @@ import { associateHosts, type HostAssociationDiagnostic } from './host-associati
 export type Kind = 'button' | 'input' | 'switch' | 'link' | 'cell' | 'text' | 'image' | 'other';
 export type EvidenceStatus = 'supported' | 'unsupported' | 'unknown';
 export type Visibility = 'visible' | 'offscreen' | 'hidden' | 'unknown';
+export type VisibilityEvidence = 'visible' | 'offscreen' | 'unresolved';
 
 export interface Element {
   ref: string;
@@ -36,6 +38,8 @@ export interface Element {
   disabled: boolean;
   secure: boolean;
   offscreen: boolean;
+  // Literal-text evidence from the node's own frame; `offscreen` stays the targeting flag.
+  visibilityEvidence?: VisibilityEvidence;
   where?: 'top' | 'middle' | 'bottom';
   side?: 'left' | 'center' | 'right';
   semantic?: {
@@ -59,6 +63,9 @@ export interface Screen {
   elements: Element[];
   visibleText: string[];
   paintedText?: string[];
+  // Merged accessibility labels of visible label-only elements, and text on unresolved frames.
+  labelText?: string[];
+  unresolvedText?: string[];
   front: Front;
   semanticUnassociatedReact?: number;
   coverage?: {
@@ -409,6 +416,7 @@ export function join(
       false);
   const offscreen = offscreenNodes(nodes, presence);
   const viewport = outsideViewport(nodes);
+  const contradicted = frameContradictions(nodes);
   const chrome = scrollChromeNodes(nodes, presence);
   const associationDiagnostics = new Map<number, HostAssociationDiagnostic>();
   const associations = associateHosts(nodes, reactHostEvidence, presence, associationDiagnostics);
@@ -584,6 +592,11 @@ export function join(
       disabled: n.enabled === false || match?.disabled === true,
       secure: n.secure === true || n.type === 'SecureTextField',
       offscreen: viewport.has(nodeIndex),
+      visibilityEvidence: contradicted.has(nodeIndex)
+        ? 'unresolved'
+        : viewport.has(nodeIndex)
+          ? 'offscreen'
+          : 'visible',
       semantic: {
         ...capabilities,
         ...(headings.has(nodeIndex) ? { heading: headings.get(nodeIndex)! } : {}),
@@ -737,12 +750,30 @@ export function join(
       const bx = b.n.rect?.x ?? 0;
       return ax !== bx ? ax - bx : a.i - b.i;
     });
-  // Image and container labels are accessibility-only, not assertion evidence.
+  const voiced = new Set<number>();
+  nodes.forEach((n, i) => {
+    const e = elements[i];
+    if (duplicates.has(i) || !e.label || e.kind === 'other' || e.kind === 'image') return;
+    for (let p = n.parentIndex; p !== undefined && p >= 0 && p < i; p = nodes[p].parentIndex)
+      voiced.add(p);
+  });
+  // Label-only hittable rows supply literal evidence without accessibility text descendants.
+  const mergedLabel = (n: NativeNode, e: Element, i: number) =>
+    n.type === 'Other' &&
+    n.hittable === true &&
+    !!e.label &&
+    !voiced.has(i) &&
+    !SYSTEM_SCROLL_BAR_LABEL.test(e.label);
+  // Structural and image labels stay excluded; merged labels use their own evidence channel.
   const visibleText: string[] = [];
   const paintedText: string[] = [];
+  const labelText: string[] = [];
+  const unresolvedText: string[] = [];
   const paintedKeys = new Set<string>();
   for (const { n, e, i } of ordered) {
-    if (duplicates.has(i) || e.offscreen || e.kind === 'image' || e.kind === 'other') continue;
+    if (duplicates.has(i) || e.kind === 'image' || e.visibilityEvidence === 'offscreen') continue;
+    const merged = e.kind === 'other' && mergedLabel(n, e, i);
+    if (e.kind === 'other' && !merged) continue;
     const line =
       e.kind === 'input'
         ? e.value !== undefined
@@ -750,6 +781,14 @@ export function join(
           : e.label
         : e.label;
     if (!line) continue;
+    if (e.visibilityEvidence === 'unresolved') {
+      unresolvedText.push(line);
+      continue;
+    }
+    if (merged) {
+      labelText.push(line);
+      continue;
+    }
     const key = JSON.stringify([
       line,
       n.rect ? [n.rect.x, n.rect.y, n.rect.width, n.rect.height] : null,
@@ -784,6 +823,8 @@ export function join(
     elements: elements.filter((_, i) => !duplicates.has(i)),
     visibleText,
     paintedText,
+    ...(labelText.length ? { labelText } : {}),
+    ...(unresolvedText.length ? { unresolvedText } : {}),
     front,
     semanticUnassociatedReact,
     ...(coverage ? { coverage } : {}),

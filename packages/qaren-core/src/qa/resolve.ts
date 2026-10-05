@@ -7,7 +7,6 @@ import {
   type VisibilityBlockerDiagnostic,
   actionView,
   isNativeInput,
-  assertionView,
   describe,
   elementFrame,
   semanticActionView,
@@ -38,6 +37,7 @@ import {
   nativeLabelMayBeValue,
   privateCheckSubjects,
 } from './privacy.js';
+import { literalEvidence, type LiteralVerdict } from './evidence.js';
 
 export { ACT, CHECK } from './questions.js';
 export const MAX_CANDIDATES = 30;
@@ -362,39 +362,59 @@ function prepareAssertion(
 }
 
 function textIdentities(quoted: string, screen: Screen): number {
-  const visible = { ...screen, elements: screen.elements.filter((e) => !e.offscreen) };
+  if (literalEvidence(screen, quoted, 'equals').verdict !== 'pass') return 0;
+  const visible = {
+    ...screen,
+    elements: screen.elements.filter(
+      (e) => (e.visibilityEvidence ?? (e.offscreen ? 'offscreen' : 'visible')) === 'visible',
+    ),
+  };
   const identities = exactIdentities(
     visible,
     { quoted, phrase: quoted, exact: 'text' },
     'wait',
   ).length;
-  const painted = (screen.paintedText ?? assertionView(screen)).filter(
-    (text) => text === quoted,
-  ).length;
-  return painted ? Math.min(painted, identities || painted) : identities;
+  const occurrences = [
+    ...(screen.paintedText ?? screen.visibleText),
+    ...(screen.labelText ?? []),
+  ].filter((text) => text === quoted).length;
+  return Math.min(occurrences, identities || occurrences);
 }
 
-export function targetVisible(target: Target, screen: Screen): boolean {
-  if (target.quoted === undefined) return false;
-  if (target.exact) {
-    const matches =
-      target.exact === 'id'
-        ? exactIdentities(screen, target, 'wait').map(({ element }) => element)
-        : screen.elements.filter((e) => e.label === target.quoted);
-    const count = target.exact === 'text' ? textIdentities(target.quoted, screen) : matches.length;
-    // Duplicates are terminal; only a stored selector that no longer resolves re-walks.
+export function targetEvidence(target: Target, screen: Screen): LiteralVerdict {
+  if (target.quoted === undefined) return 'fail';
+  if (target.exact === 'id') {
+    const matches = exactIdentities(screen, target, 'wait').map(({ element }) => element);
+    if (matches.length !== 1)
+      throw new ResolutionError({
+        refuse: matches.length > 1 ? 'TARGET_AMBIGUOUS' : 'REPLAY_SELECTOR',
+        reason: `${matches.length} identities match the stored id "${target.quoted}"`,
+      });
+    return !matches[0].offscreen ? 'pass' : 'fail';
+  }
+  if (!target.exact) {
+    const ids = exactIdentities(
+      screen,
+      { quoted: target.quoted, phrase: target.quoted, exact: 'id' },
+      'wait',
+    );
+    if (ids.length === 1 && !ids[0].element.offscreen) return 'pass';
+  }
+  const text = literalEvidence(screen, target.quoted, 'equals').verdict;
+  if (target.exact === 'text') {
+    if (text === 'unsure') return text;
+    const count = textIdentities(target.quoted, screen);
     if (count !== 1)
       throw new ResolutionError({
         refuse: count > 1 ? 'TARGET_AMBIGUOUS' : 'REPLAY_SELECTOR',
-        reason: `${count} identities match the stored ${target.exact} "${target.quoted}"`,
+        reason: `${count} identities match the stored text "${target.quoted}"`,
       });
-    return target.exact === 'text' ? true : !matches[0].offscreen;
   }
-  return (
-    screen.elements.some(
-      (e) => !e.offscreen && (e.label === target.quoted || e.testID === target.quoted),
-    ) || assertionView(screen).some((t) => t === target.quoted)
-  );
+  return text;
+}
+
+export function targetVisible(target: Target, screen: Screen): boolean {
+  return targetEvidence(target, screen) === 'pass';
 }
 
 export function elementSelector(element: Element): Selector | undefined {
@@ -402,7 +422,6 @@ export function elementSelector(element: Element): Selector | undefined {
   return element.label ? { text: element.label } : undefined;
 }
 
-// The identity that made a literal visibility target visible, preferring a testID.
 export function visibleSelector(target: Target, screen: Screen): Selector | undefined {
   const quoted = target.quoted;
   if (quoted === undefined || !targetVisible(target, screen)) return undefined;
@@ -412,6 +431,7 @@ export function visibleSelector(target: Target, screen: Screen): Selector | unde
   if (target.exact !== 'text' && shown.some((e) => e.testID === quoted) && uniqueId(quoted))
     return { id: quoted };
   if (target.exact === 'id') return undefined;
+  if (literalEvidence(screen, quoted, 'equals').verdict !== 'pass') return undefined;
   const labelled = exactIdentities(screen, { quoted, phrase: quoted, exact: 'text' }, 'wait')
     .map(({ element }) => element)
     .filter((e) => !e.offscreen);
@@ -440,9 +460,7 @@ export function judgeCheck(
   answer?: Answer,
 ): 'pass' | 'fail' | 'unsure' {
   return check.literal
-    ? assertionView(screen).some((t) => t.includes(check.text))
-      ? 'pass'
-      : 'fail'
+    ? literalEvidence(screen, check.text, 'contains').verdict
     : checkVerdict(checkQuestion(check), answer);
 }
 
