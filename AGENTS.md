@@ -9,10 +9,11 @@ notes here.
 The repository is mid-pivot from rn-dev-agent (an MCP server plus host plugins
 that drive React Native apps on simulators) to QaReN: a Rust CLI that owns the
 run and spawns a TypeScript child that reads the screen. `main` still ships
-rn-dev-agent 1.0.x; `develop` carries the migration as one PR per phase and
-merges into `main` as 2.0.0 once the label path runs end to end. The QaReN
-structure outline and TDD that the phase PRs cite are the specification; each
-phase PR names its Linear issue in the QaReN project.
+rn-dev-agent 1.0.x; the migration now targets `develop` through one integration
+PR. Completion requires independent QA passes at the exact integration head on
+both the Test App baseline and the complex staging app. The `develop` → `main`
+merge for 2.0.0 requires owner approval. The QaReN structure outline and TDD
+that the phase PRs cite are the specification.
 
 The package cut, literal `qaren check`, Jev seam, Phase 4 blocks, and PR run/publication commands are implemented. For saved-block replay, persistence, recovery and action inspection, read the [saved-block contract](packages/qaren-cli/README.md#saved-blocks); for `qaren pr` and `qaren publish`, the [CLI README](packages/qaren-cli/README.md#test-a-pull-request). Live model and device acceptance are separate from hermetic tests; `qaren listen` and packaging arrive in later phases.
 
@@ -21,7 +22,7 @@ The package cut, literal `qaren check`, Jev seam, Phase 4 blocks, and PR run/pub
 - Root workspace: Yarn 4 workspace, managed by `package.json` and `yarn.lock`.
   Use `corepack yarn ...` from the repository root. The Rust crate is driven
   with `cargo` directly.
-- `packages/qaren-cli/`: Rust CLI, library and binary `qaren`, `publish = false`. `src/run.rs` orchestrates `check`; the prototype debug verbs remain. Device leases live under `QAREN_LOCK_ROOT` or `~/.qaren/locks`, and run evidence under `~/.qaren/runs`. `check` reclaims a lease whose holder is proven dead by running that run's own cleanup (`commands/cleanup.rs`); a live or unprovable holder still refuses `DEVICE_BUSY`. iOS cleanup proves exact-simulator app/test runner-host absence; present or unknown hosts retain the lease because a lease alone does not prove host-process ownership. An external `qaren cleanup` refuses without signaling or saving anything while the run's core is recorded and its recorded qaren owner is proven alive. A signal or a vanished caller ends the run as `RUN_CANCELLED` after normal teardown (`src/cancel.rs`). `src/exec/log.rs` owns redaction before durable subprocess logging, including detached debug runs. `observe/` is the Observe SPA (Vite); `target/` and `observe/dist/` are ignored.
+- `packages/qaren-cli/`: Rust CLI, library and binary `qaren`, `publish = false`. `src/run.rs` orchestrates `check`; the prototype debug verbs remain. Device leases live under `QAREN_LOCK_ROOT` or `~/.qaren/locks`, and run evidence under `~/.qaren/runs`. `check` reclaims a lease whose holder is proven dead by running that run's own cleanup (`commands/cleanup.rs`); a live or unprovable holder still refuses `DEVICE_BUSY`. For runner-host ownership and lease retention, follow the [iOS cleanup contract](packages/qaren-cli/README.md#ios-admission-and-cleanup). An external `qaren cleanup` refuses without signaling or saving anything while the run's core is recorded and its recorded qaren owner is proven alive. A signal or a vanished caller ends the run as `RUN_CANCELLED` after normal teardown (`src/cancel.rs`). `src/exec/log.rs` owns redaction before durable subprocess logging, including detached debug runs. `observe/` is the Observe SPA (Vite); `target/` and `observe/dist/` are ignored.
 - `packages/qaren-core/`: TypeScript screen child, entered through `src/qa/walk.ts`. The `qa/` module owns parsing, judgments, screen projections, walking and the ledger, using the kept handlers, CDP helpers, native runners and learned-action domain. `corepack yarn build:core` generates uncommitted `dist/`; entries run as `node packages/qaren-core/dist/<entry>.js`. The package is private; `scripts/build-qaren-tarball.ts` bundles its spawned entries into the CLI tarball.
 - `packages/qaren-plugin/`: the one host package. Claude, Cursor and Codex
   manifests (`.claude-plugin/`, `.cursor-plugin/`, `.codex-plugin/`), a

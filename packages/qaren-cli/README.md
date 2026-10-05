@@ -101,6 +101,29 @@ The refusal lists
 each candidate without its label or value: kind, testID or `no-id`, and the
 rounded frame.
 
+### Occluded taps and focus
+
+Immediately before an iOS tap or an exact-input focus tap, the runner checks
+the live target's `XCUIElement.isHittable`. Live tap resolution requires exactly
+one match on native type, identifier (or label when unidentified), and frame.
+Resolution and hit testing share one 300 ms deadline; an unavailable, ambiguous,
+failed or over-budget check permits dispatch as before. An input's hit test
+applies only when the focus point lies inside its frame; a wrapper-centre focus
+point outside it leaves that check unavailable. A negative check refuses with
+`FOCUS_TARGET_OCCLUDED` and mutation `none`. Core requires
+`HIT_TESTED_DISPATCH_V1`; missing capability takes the runner rebuild path.
+
+The walker handles this refusal with one directional scroll: down from the
+lower half of the effective viewport, up from the upper half. Scroll bands stay
+above a visible keyboard. It then requires a unique rebind to the refused
+target's testID and kind before retrying, including keyboard-fallback wrapper
+taps. A label-only target cannot rebind after scrolling; a missing or nonunique
+identity refuses `TARGET_NOT_FOUND` with “stayed off screen after one scroll”.
+A second occlusion fails with that same off-screen explanation; wrapper fallback
+reports that nothing was typed. This refusal does not become
+`ACTION_OUTCOME_UNCERTAIN`. Checks and waits do not gain an occlusion test.
+See the [occlusion regressions](../qaren-core/test/unit/qa/occlusion-walker.test.ts).
+
 ### Fill verification and keyboard fallback
 
 Fills use strict native value verification first. A strict fill replaces the
@@ -130,16 +153,17 @@ native input resolves strictly.
 Tap-based fallback requires one onscreen, enabled, nonsecure native element
 carrying a unique testID, with no matching observable native input or secure node.
 A quoted base testID reaches its `-pressable` wrapper only while an element or
-React host carrying the base testID is also observed, or, when React reads are
-unavailable, while exactly one native element carries that exact wrapper testID
-and encloses no other text entry; no other suffix is assumed. Strict fills never
-use this mapping.
+React host carrying the base testID is also observed, or, with no React host
+evidence and incomplete React coverage, while exactly one native element carries
+that exact wrapper testID and encloses no other text entry; no other suffix is
+assumed. Strict fills never use this mapping.
 An identified native wrapper with another testID can also stand for the input
 when complete React host and ancestry evidence proves it encloses exactly one
 input host and its merged label equals that input's testID, text, label or
 placeholder. A separate same-label element does not establish forwarding.
 The keyboard-down path requires proof that the keyboard is hidden before the
-single tap. Every binding after the tap, including refreshed strict bindings,
+tap (with the [one-scroll occlusion recovery](#occluded-taps-and-focus)). Every
+binding after the tap, including refreshed strict bindings,
 must uniquely resolve the original testID or its proven wrapper-to-input
 identity; a matching label cannot
 substitute for that identity. If the same input becomes natively observable,
@@ -419,9 +443,11 @@ device lease remain claimed for `qaren cleanup`. The developer
 [check gate](../../scripts/gate-qaren-check.sh) forwards the boot opt-in with
 `QAREN_BOOT_DEVICE=1` alongside `QAREN_DEVICE_UDID`.
 
-Before launching the dev client, preparation requests its manifest from Metro
-once, so the client's own first request is not the slow cold one. A manifest or
-dev-client launch timeout refuses with `CORE_REFUSED`; the launch is retried once
+iOS preparation and cached Android preparation request the dev-client manifest
+from Metro once with the `expo-platform` header before launch, so the client's
+own first request is not the slow cold one. Fresh Android preparation keeps
+launch and Metro under `expo run:android` and does not perform this warmup.
+A manifest or dev-client launch timeout refuses with `CORE_REFUSED`; the launch is retried once
 only when the measured one-minute host load exceeds the launch envelope. Other
 manifest and launch errors remain `BUILD_FAILED`. Cleanup retained resources
 before retrying.
@@ -483,7 +509,9 @@ Cleanup proves owned process-group and exact-simulator runner-host absence
 before releasing the lease. When the leased simulator had no runner host as the
 core started, the run records the host as its own; normal teardown, cancellation
 and dead-owner cleanup then terminate that host by bundle id on that exact
-simulator and re-prove its absence. A host that was already running, or any
+simulator only after core cleanup proves removal or absence, and re-prove the
+host's absence. Refused or unresolved core cleanup leaves the host untouched
+and retains the lease. A host that was already running, or any
 present or unknown host after that, retains the lease. A dead lease
 holder is reclaimed only through that run's cleanup; a live or unprovable holder
 refuses `DEVICE_BUSY`. Recover a retained run with `qaren cleanup <run-id>`;
@@ -670,9 +698,13 @@ Launch admission shares the remaining walk deadline across target readiness,
 WebSocket handshakes, probes and retry sleeps. A timeout with measured 1-minute
 host load above 10 is an environment refusal (`CDP_NOT_CONNECTED`), rather than
 a product FAIL. It retries attachment once only if the remaining budget can
-cover a full readiness wait, relaunching the iOS dev client on its Metro first so
-a launch stuck on the dev launcher can recover; otherwise it refuses immediately. Deterministic
-attachment rejections are neither retried nor classified as environmental.
+cover a full readiness wait. Immediately before relaunch it checks for a foreign
+driver; a conflict refuses `BUSY_FOREIGN_FLOW` without relaunching. It relaunches
+the iOS dev client on the exact simulator with the CLI's original `initialUrl`
+using `simctl launch --terminate-running-process`, then waits again. A failed
+relaunch skips the second wait and remains an environment refusal; insufficient
+budget refuses immediately. Deterministic attachment rejections are neither
+retried nor classified as environmental.
 If the CLI's walk deadline expires before the core reports admission, the CLI
 also returns `CDP_NOT_CONNECTED` with measured host load (or an explicit
 unavailable measurement), regardless of load. After admission, deadline

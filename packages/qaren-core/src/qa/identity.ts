@@ -107,7 +107,6 @@ function containerEcho(
   return (purpose === 'refresh' ? enclosed : actionView({ elements: enclosed })).length === 1;
 }
 
-// The wrapper `id-pressable` stands for `id` only while both ends are observed.
 export function wrapperEquivalence(screen: Screen, id: string): Element | undefined {
   const wrappers = screen.elements.filter(
     (e) =>
