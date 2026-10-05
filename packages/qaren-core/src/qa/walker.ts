@@ -14,6 +14,7 @@ import {
   ResolutionError,
   decideScreen,
   elementSelector,
+  elementOcclusion,
   keyboardFallbackTarget,
   bindFillIdentity,
   stepTarget,
@@ -1157,7 +1158,8 @@ export async function walkBlock(
                     outcome = failed(
                       item,
                       attempt,
-                      `${scrollError ? `${scrollError}; ` : ''}"${item.target.phrase}" stayed off screen after one scroll`,
+                      elementOcclusion(before.screen, item.target) ??
+                        `${scrollError ? `${scrollError}; ` : ''}"${item.target.phrase}" stayed off screen after one scroll`,
                       before.screen,
                       await shoot(item),
                     );
@@ -1182,7 +1184,8 @@ export async function walkBlock(
                     outcome = failed(
                       item,
                       attempt,
-                      `${scrollError}; "${item.target.phrase}" stayed off screen after one scroll`,
+                      elementOcclusion(before.screen, item.target) ??
+                        `${scrollError}; "${item.target.phrase}" stayed off screen after one scroll`,
                       before.screen,
                       await shoot(item),
                     );

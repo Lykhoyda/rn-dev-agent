@@ -32,6 +32,7 @@ import type { SettleProbes, SettleOutcome, waitForSettle } from './lifecycle/set
 import { resolveBootedIosUdid } from './handlers/device-screenshot-raw.js';
 import {
   refCenter,
+  refDispatchPoint,
   getScreenRect,
   clearRefMap,
   isRefMapFresh,
@@ -512,7 +513,7 @@ export function buildRunIOSArgs(
     case 'tap': {
       const ref = positionals[0] && pinnedElementRef(positionals[0]);
       if (ref && ref.startsWith('@')) {
-        const center = isRefMapFresh() ? refCenter(ref) : null;
+        const center = isRefMapFresh() ? refDispatchPoint(ref) : null;
         if (!center) {
           return { command: 'tap', _staleRef: ref, ...(bundleId ? { bundleId } : {}) };
         }
@@ -818,7 +819,7 @@ export function buildRunAndroidArgs(
       const ref = positionals[0] && pinnedElementRef(positionals[0]);
       if (ref && ref.startsWith('@')) {
         const includeSystemUi = cliArgs.includes('--include-system-ui');
-        const center = isRefMapFresh() ? refCenter(ref) : null;
+        const center = isRefMapFresh() ? refDispatchPoint(ref) : null;
         if (!center) {
           return {
             command: 'tap',

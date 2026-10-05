@@ -303,6 +303,16 @@ fn trace_local_imports(
             }
             continue;
         }
+        let bytes = source.as_bytes();
+        let identifier = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+        if source.match_indices("process").any(|(at, _)| {
+            (at == 0 || !identifier(bytes[at - 1]))
+                && !bytes.get(at + 7).is_some_and(|&b| identifier(b))
+        }) {
+            incompleteness.push(format!(
+                "local module {rel} uses process; ambient inputs are unbound"
+            ));
+        }
         let base_dir = rel.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
         let specifiers = import_specifiers(&source);
         for site in &specifiers.unparseable {

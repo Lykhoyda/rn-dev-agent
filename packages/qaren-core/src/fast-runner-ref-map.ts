@@ -1,5 +1,6 @@
 import { exactIdentities } from './qa/identity.js';
 import { join } from './qa/screen.js';
+import { nativeDispatchPoints } from './qa/native-presence.js';
 import { hashSnapshotNodes } from './lifecycle/settle-hash.js';
 
 export interface ElementRect {
@@ -70,6 +71,7 @@ interface StoredRefRecord extends RefMetadata {
 }
 
 let refMap = new Map<string, ElementRect>();
+const dispatchPoints = new Map<string, { x: number; y: number } | null>();
 let metadataMap = new Map<string, StoredRefRecord>();
 let screenRect: ElementRect | null = null;
 let lastUpdated = 0;
@@ -192,6 +194,9 @@ function resolveScreenRect(entries: ExtentEntry[]): ElementRect | null {
 
 export function updateRefMap(nodes: SnapshotNode[]): void {
   refMap.clear();
+  dispatchPoints.clear();
+  for (const [i, point] of nativeDispatchPoints(nodes))
+    if (nodes[i].ref) dispatchPoints.set(nodes[i].ref.replace(/^@/, ''), point);
   screenRect = null;
 
   const entries: ExtentEntry[] = [];
@@ -224,6 +229,10 @@ export function refCenter(ref: string): { x: number; y: number } | null {
   };
 }
 
+export function refDispatchPoint(ref: string): { x: number; y: number } | null {
+  return dispatchPoints.get(ref.replace(/^@/, '')) ?? null;
+}
+
 export function getScreenRect(): ElementRect | null {
   return screenRect;
 }
@@ -245,6 +254,7 @@ export function isRefMapFresh(maxAgeMs: number = MAX_REF_MAP_AGE_MS): boolean {
 
 export function clearRefMap(): void {
   refMap.clear();
+  dispatchPoints.clear();
   metadataMap.clear();
   screenRect = null;
   lastUpdated = 0;
@@ -349,6 +359,9 @@ export function updateRefMapFromFlat(
   }
 
   refMap.clear();
+  dispatchPoints.clear();
+  for (const [i, point] of nativeDispatchPoints(nodes))
+    if (nodes[i].ref) dispatchPoints.set(nodes[i].ref.replace(/^@/, ''), point);
   screenRect = null;
   snapshotGeneration = freshness.snapshotGeneration ?? snapshotGeneration + 1;
   keyboardStateAtSnapshot = freshness.keyboardVisible ?? null;

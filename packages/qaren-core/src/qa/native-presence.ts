@@ -344,6 +344,101 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
   return offscreen;
 }
 
+export function nativeDispatchPoints(
+  nodes: NativeNode[],
+  viewport = outsideViewport(nodes),
+): Map<number, { x: number; y: number } | null> {
+  const points = new Map<number, { x: number; y: number } | null>();
+  const ancestors = nodes.map((node) => {
+    const parents = new Set<number>();
+    for (
+      let p = node.parentIndex;
+      p !== undefined && nodes[p] && !parents.has(p);
+      p = nodes[p].parentIndex
+    )
+      parents.add(p);
+    return parents;
+  });
+  nodes.forEach((node, i) => {
+    if (!validRect(node.rect) || node.rect.width <= 0 || node.rect.height <= 0) return;
+    let regions = [clip(node.rect, clippingViewport(viewport, i))];
+    for (let j = i + 1; j < nodes.length && regions.length; j++) {
+      const front = nodes[j];
+      if (
+        ancestors[i].has(j) ||
+        ancestors[j].has(i) ||
+        viewport.has(j) ||
+        !(
+          front.type === 'Window' ||
+          front.type === 'Keyboard' ||
+          (front.hittable && node.parentIndex !== undefined && front.parentIndex !== undefined)
+        ) ||
+        !validRect(front.rect) ||
+        front.rect.width <= 0 ||
+        front.rect.height <= 0
+      )
+        continue;
+      const cover = clip(front.rect, clippingViewport(viewport, j));
+      regions = regions.flatMap((area) => {
+        if (!overlaps(area, cover)) return [area];
+        const cut = clip(area, cover);
+        return [
+          { x: area.x, y: area.y, width: cut.x - area.x, height: area.height },
+          {
+            x: cut.x + cut.width,
+            y: area.y,
+            width: area.x + area.width - cut.x - cut.width,
+            height: area.height,
+          },
+          { x: cut.x, y: area.y, width: cut.width, height: cut.y - area.y },
+          {
+            x: cut.x,
+            y: cut.y + cut.height,
+            width: cut.width,
+            height: area.y + area.height - cut.y - cut.height,
+          },
+        ].filter((rect) => rect.width > 0 && rect.height > 0);
+      });
+    }
+    regions = regions.filter(
+      (rect) =>
+        Math.floor(rect.x) + 1 <= Math.ceil(rect.x + rect.width) - 1 &&
+        Math.floor(rect.y) + 1 <= Math.ceil(rect.y + rect.height) - 1,
+    );
+    const center = {
+      x: Math.round(node.rect.x + node.rect.width / 2),
+      y: Math.round(node.rect.y + node.rect.height / 2),
+    };
+    const contains = (rect: Rect) =>
+      center.x > rect.x &&
+      center.x < rect.x + rect.width &&
+      center.y > rect.y &&
+      center.y < rect.y + rect.height;
+    const area = regions.reduce<Rect | undefined>(
+      (best, next) => (!best || next.width * next.height > best.width * best.height ? next : best),
+      undefined,
+    );
+    points.set(
+      i,
+      regions.some(contains)
+        ? center
+        : area
+          ? {
+              x: Math.max(
+                Math.floor(area.x) + 1,
+                Math.min(Math.ceil(area.x + area.width) - 1, Math.round(area.x + area.width / 2)),
+              ),
+              y: Math.max(
+                Math.floor(area.y) + 1,
+                Math.min(Math.ceil(area.y + area.height) - 1, Math.round(area.y + area.height / 2)),
+              ),
+            }
+          : null,
+    );
+  });
+  return points;
+}
+
 export function frameContradictions(nodes: NativeNode[]): Set<number> {
   const contradicted = new Set<number>();
   const root = nodes[0]?.rect;

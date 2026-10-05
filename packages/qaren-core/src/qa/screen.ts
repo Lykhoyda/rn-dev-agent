@@ -14,6 +14,7 @@ import {
   navigationTitles,
   offscreenNodes,
   outsideViewport,
+  nativeDispatchPoints,
   scrollChromeNodes,
   NATIVE_PRESENCE_UNKNOWN_REASONS,
 } from './native-presence.js';
@@ -39,6 +40,7 @@ export interface Element {
   disabled: boolean;
   secure: boolean;
   offscreen: boolean;
+  occluded?: boolean;
   // Literal-text evidence from the node's own frame; `offscreen` stays the targeting flag.
   visibilityEvidence?: VisibilityEvidence;
   where?: 'top' | 'middle' | 'bottom';
@@ -428,6 +430,7 @@ export function join(
       false);
   const offscreen = offscreenNodes(nodes, presence);
   const viewport = outsideViewport(nodes);
+  const dispatchPoints = nativeDispatchPoints(nodes, viewport);
   const contradicted = frameContradictions(nodes);
   const chrome = scrollChromeNodes(nodes, presence);
   const associationDiagnostics = new Map<number, HostAssociationDiagnostic>();
@@ -596,6 +599,7 @@ export function join(
       if (!presenceMode && match?.capabilities?.fill === true) capabilities.fill = 'supported';
     }
     if (!presenceMode && kind === 'other' && match) kind = kindOfRole(match.role);
+    const occluded = dispatchPoints.get(nodeIndex) === null && !viewport.has(nodeIndex);
     const element: Element = {
       ref: n.ref,
       kind,
@@ -603,17 +607,19 @@ export function join(
       hittable: n.hittable === true,
       disabled: n.enabled === false || match?.disabled === true,
       secure: n.secure === true || n.type === 'SecureTextField',
-      offscreen: viewport.has(nodeIndex),
+      offscreen: viewport.has(nodeIndex) || occluded,
+      ...(occluded ? { occluded: true } : {}),
       visibilityEvidence: contradicted.has(nodeIndex)
         ? 'unresolved'
-        : viewport.has(nodeIndex)
+        : viewport.has(nodeIndex) || occluded
           ? 'offscreen'
           : 'visible',
       semantic: {
         ...capabilities,
         ...(headings.has(nodeIndex) ? { heading: headings.get(nodeIndex)! } : {}),
-        visibility:
-          observed?.status === 'observed'
+        visibility: occluded
+          ? 'offscreen'
+          : observed?.status === 'observed'
             ? 'visible'
             : offscreen.has(nodeIndex)
               ? 'offscreen'

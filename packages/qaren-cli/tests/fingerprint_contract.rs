@@ -214,6 +214,35 @@ fn pure_node_imports_keep_native_inputs_complete() {
 }
 
 #[test]
+fn global_process_inputs_forbid_native_reuse() {
+    for source in [
+        "module.exports = c => { c.ios.infoPlist.NativeEndpoint = process.env.X; return c; };",
+        "module.exports = process.cwd();",
+        "const { env } = process; module.exports = env.X;",
+        "const p = globalThis.process; module.exports = p.argv;",
+        "module.exports = process['env']['X'];",
+    ] {
+        let root = plugin_project(source);
+        let fp = fingerprint(&root);
+        assert!(!fp.complete);
+        assert!(fp.incompleteness.iter().any(|reason| reason
+            == "local module plugins/withX.js uses process; ambient inputs are unbound"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    let root = plugin_project("module.exports = require('../config/ambient.js');");
+    std::fs::write(
+        root.join("config/ambient.js"),
+        "module.exports = process.env.X;",
+    )
+    .unwrap();
+    assert!(!fingerprint(&root).complete);
+    std::fs::remove_dir_all(root).unwrap();
+    let root = plugin_project("const processor = 1; module.exports = processor;");
+    assert!(fingerprint(&root).complete);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn a_spaced_static_require_is_traced_into_the_fingerprint() {
     let root =
         plugin_project("const x = require( '../config/x.json' );\nmodule.exports = (c) => c;\n");
