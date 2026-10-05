@@ -785,7 +785,8 @@ export function join(
   for (const { n, e, i } of ordered) {
     if (n.rect && !(n.rect.width > 0 && n.rect.height > 0)) continue;
     if (duplicates.has(i) || e.kind === 'image' || e.visibilityEvidence === 'offscreen') continue;
-    const merged = e.kind === 'other' && mergedLabel(n, e, i);
+    // A React role can re-kind a label-only native row; its label still came from accessibility.
+    const merged = e.kind !== 'input' && mergedLabel(n, e, i);
     if (e.kind === 'other' && !merged) continue;
     const line =
       e.kind === 'input'

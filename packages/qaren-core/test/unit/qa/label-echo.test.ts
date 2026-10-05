@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { join } from '../../../dist/qa/screen.js';
+import { literalEvidence } from '../../../dist/qa/evidence.js';
 import type { NativeNode } from '../../../dist/qa/screen.js';
 import { prepareTarget, targetVisible, visibleSelector } from '../../../dist/qa/resolve.js';
 import { exactIdentities } from '../../../dist/qa/identity.js';
@@ -353,12 +354,128 @@ test('a no-identifier container enclosing two same-label controls does not hide 
   );
 });
 
-test('an identified container is not collapsed as an echo', () => {
+test('an enclosing same-label control is not collapsed as an echo', () => {
   const nodes = echoContainer(1);
-  nodes[2] = { ...nodes[2], identifier: 'page-card' };
+  nodes[2] = { ...nodes[2], type: 'Button', identifier: 'page-card' };
   const resolved = prepareTarget(tapNext, join(nodes, []));
   assert.ok(
     'refuse' in resolved && resolved.refuse === 'TARGET_AMBIGUOUS',
     JSON.stringify(resolved),
   );
+});
+
+// F10 qa-merged-rows: label-only rows (`Item N, Status N`) and containers inheriting "Act" from their first child.
+function mergedRows(rows: number[]): NativeNode[] {
+  const nodes: NativeNode[] = [
+    { ref: '@app', index: 0, type: 'Application', rect: { x: 0, y: 0, width: 402, height: 874 } },
+    {
+      ref: '@scroll',
+      index: 1,
+      parentIndex: 0,
+      type: 'ScrollView',
+      identifier: 'qa-merged-rows',
+      label: 'Act',
+      rect: { x: 0, y: 0, width: 402, height: 874 },
+    },
+    {
+      ref: '@content',
+      index: 2,
+      parentIndex: 1,
+      type: 'Other',
+      label: 'Act',
+      rect: { x: 0, y: 0, width: 402, height: 1200 },
+    },
+    {
+      ref: '@bar',
+      index: 3,
+      parentIndex: 2,
+      type: 'Other',
+      label: 'Act',
+      rect: { x: 0, y: 0, width: 402, height: 76 },
+    },
+    {
+      ref: '@act',
+      index: 4,
+      parentIndex: 3,
+      type: 'Other',
+      identifier: 'qa-merged-act',
+      label: 'Act',
+      hittable: true,
+      rect: { x: 16, y: 16, width: 70, height: 44 },
+    },
+    {
+      ref: '@act-text',
+      index: 5,
+      parentIndex: 4,
+      type: 'StaticText',
+      label: 'Act',
+      rect: { x: 36, y: 28, width: 30, height: 20 },
+    },
+  ];
+  for (const [position, n] of rows.entries())
+    nodes.push({
+      ref: `@row${n}`,
+      index: nodes.length,
+      parentIndex: 2,
+      type: 'Other',
+      identifier: `qa-merged-row-${n}`,
+      label: `Item ${n}, Status ${n}`,
+      hittable: true,
+      rect: { x: 0, y: 120 + position * 80, width: 402, height: 80 },
+    });
+  return nodes;
+}
+
+const digest = (rows: number[]) => [
+  { role: 'button', testID: 'qa-merged-act', capabilities: { press: true, fill: false } },
+  ...rows.map((n) => ({
+    role: 'button',
+    testID: `qa-merged-row-${n}`,
+    capabilities: { press: true, fill: false },
+  })),
+];
+
+const tap = (quoted: string) => ({ kind: 'press' as const, target: { phrase: quoted, quoted } });
+
+test('a re-kinded merged-label row keeps its accessibility-label evidence', () => {
+  const screen = join(mergedRows([1, 2]), digest([1, 2]));
+  assert.deepEqual(literalEvidence(screen, 'Item 2', 'contains'), { verdict: 'pass', label: true });
+});
+
+test('a quoted title equal to one segment of exactly one merged label taps that row', () => {
+  const screen = join(mergedRows([1, 2, 12]), digest([1, 2, 12]));
+  for (const [quoted, ref] of [
+    ['Item 2', '@row2'],
+    ['Item 1', '@row1'],
+    ['Status 12', '@row12'],
+  ] as const) {
+    const resolved = prepareTarget(tap(quoted), screen);
+    assert.ok('ref' in resolved, `${quoted}: ${JSON.stringify(resolved)}`);
+    assert.equal(resolved.ref, ref);
+  }
+  const missing = prepareTarget(tap('Item'), screen);
+  assert.ok('refuse' in missing && missing.refuse === 'TARGET_NOT_FOUND', JSON.stringify(missing));
+});
+
+test('a segment shared by two merged labels stays ambiguous', () => {
+  const nodes = mergedRows([2]);
+  nodes.push({
+    ...nodes[nodes.length - 1],
+    ref: '@row2b',
+    index: nodes.length,
+    identifier: 'qa-merged-row-2b',
+    label: 'Item 2, Status 9',
+    rect: { x: 0, y: 600, width: 402, height: 80 },
+  });
+  const resolved = prepareTarget(tap('Item 2'), join(nodes, digest([2])));
+  assert.ok(
+    'refuse' in resolved && resolved.refuse === 'TARGET_AMBIGUOUS',
+    JSON.stringify(resolved),
+  );
+});
+
+test('containers inheriting the first control label collapse into it on the F10 shape', () => {
+  const resolved = prepareTarget(tap('Act'), join(mergedRows([1, 2]), digest([1, 2])));
+  assert.ok('ref' in resolved, JSON.stringify(resolved));
+  assert.equal(resolved.ref, '@act');
 });
