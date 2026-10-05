@@ -157,6 +157,74 @@ for (const [width, typed, wrapped] of [
   });
 }
 
+for (const [typed, texts] of [
+  ['5038', [0]],
+  ['503', [1, 2]],
+] as const) {
+  test(`accessible pressable cells labelled by their character hide ${typed.length} characters`, () => {
+    const nodes: NativeNode[] = [
+      { ref: '@row', index: 0, type: 'Other', rect: { x: 0, y: 300, width: 402, height: 60 } },
+    ];
+    for (let i = 0; i < 4; i++) {
+      const x = i * (44 + (402 - 176) / 3);
+      const cell = nodes.length;
+      nodes.push({
+        ref: `@cell${i}`,
+        index: cell,
+        parentIndex: 0,
+        type: 'Other',
+        identifier: 'otp-input',
+        hittable: true,
+        ...(typed[i] ? { label: typed[i] } : {}),
+        rect: { x, y: 300, width: 44, height: 60 },
+      });
+      if ((texts as readonly number[]).includes(i))
+        nodes.push({
+          ref: `@char${i}`,
+          index: cell + 1,
+          parentIndex: cell,
+          type: 'StaticText',
+          label: typed[i],
+          rect: { x: x + 13, y: 313, width: 17, height: 34 },
+        });
+    }
+    const captured = join(nodes, []);
+    const privacy = new ObservedPrivacy([typed]);
+    privacy.didFill();
+    privacy.observe(captured);
+    const text = privacy.screenText(captured);
+    assert.ok(text.includes('[code]'), JSON.stringify(text));
+    for (const char of typed)
+      assert.equal(
+        text.some((line) => line.includes(char)),
+        false,
+        JSON.stringify(text),
+      );
+    const mask = privacy.maskForModel([], []);
+    for (const element of captured.elements)
+      for (const char of typed)
+        assert.equal(mask.describeElement(element, describe).includes(` ${char}`), false);
+  });
+}
+
+test('a keypad that is not the filled value stays readable after filling', () => {
+  for (const type of ['Button', 'Other']) {
+    const captured = join(
+      ['1', '2', '3'].map((label, i) => ({
+        ref: `@${i}`,
+        type,
+        label,
+        rect: { x: 40 + i * 110, y: 600, width: 100, height: 60 },
+      })),
+      [],
+    );
+    const privacy = new ObservedPrivacy(['5038']);
+    privacy.didFill();
+    privacy.observe(captured);
+    assert.deepEqual(codeBoxRows(captured, ['5038']), []);
+  }
+});
+
 test('empty rows alone do not establish a private code', () => {
   const captured = join(
     ['', '', '', ''].map((label, i) => ({

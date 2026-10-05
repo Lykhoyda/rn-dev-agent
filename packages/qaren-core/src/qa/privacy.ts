@@ -268,21 +268,42 @@ export function projectPlanLine(
   return { text: prefix + body, hit };
 }
 
-export function codeBoxRows(screen: Screen): Element[][] {
+const subsequence = (needle: string, haystack: string): boolean => {
+  let at = 0;
+  for (const char of haystack) if (char === [...needle][at]) at += 1;
+  return at === [...needle].length;
+};
+
+// Accessible cells labelled by one character count only when the row spells part of a filled value.
+export function codeBoxRows(screen: Screen, filled: readonly string[] = []): Element[][] {
   const candidates = screen.elements.filter(
     (element) =>
       !element.offscreen &&
-      element.kind === 'text' &&
-      chars(element.label || element.value || '') <= 1 &&
-      (elementFrame(element)?.width ?? 0) > 0,
+      (elementFrame(element)?.width ?? 0) > 0 &&
+      (element.kind === 'text'
+        ? chars(element.label || element.value || '') <= 1
+        : element.kind !== 'input' &&
+          !element.secure &&
+          !element.ref.startsWith('react:') &&
+          chars(element.label ?? '') === 1),
   );
+  const text = (element: Element) => element.label || element.value || '';
+  // One character is one box: a Text keeps it from its echoing Text ancestor and from a labelled cell around it.
   const boxes = candidates.filter(
     (element) =>
       !ancestorsOf(element).some(
         (ancestor) =>
+          ancestor.kind === 'text' &&
           candidates.includes(ancestor) &&
-          (ancestor.label || ancestor.value || '') === (element.label || element.value || ''),
-      ),
+          text(ancestor) === text(element),
+      ) &&
+      (element.kind === 'text' ||
+        !candidates.some(
+          (inner) =>
+            inner.kind === 'text' &&
+            ancestorsOf(inner).includes(element) &&
+            text(inner) === text(element),
+        )),
   );
   // A glyph-width Text inside a code cell is measured by its cell: the outermost framed ancestor holding no other box.
   const cells = new Map(
@@ -334,10 +355,18 @@ export function codeBoxRows(screen: Screen): Element[][] {
         rows.push([element]);
       else row.push(element);
     }
-    return rows.filter(
-      (row) =>
-        row.length >= 3 && row.some((element) => chars(element.label || element.value || '') === 1),
-    );
+    return rows.filter((row) => {
+      if (row.every((element) => element.kind === 'text'))
+        return (
+          row.length >= 3 &&
+          row.some((element) => chars(element.label || element.value || '') === 1)
+        );
+      const spelled = row.map((element) => element.label || element.value || '').join('');
+      return (
+        chars(spelled) >= 2 &&
+        filled.some((value) => subsequence(spelled, value.replace(/\s/gu, '')))
+      );
+    });
   });
 }
 
@@ -525,7 +554,10 @@ export class ObservedPrivacy {
     for (const value of inputValues(screen)) this.observed.add(value);
     for (const value of inputValues(screen, true)) this.concealed.add(value);
     if (this.filled) {
-      const rows = codeBoxRows(screen);
+      const rows = codeBoxRows(
+        screen,
+        this.privateSet().values.map((value) => value.text),
+      );
       this.codeRows.set(screen, rows);
       const boxes = rows.flat();
       for (const element of screen.elements) {
