@@ -8,6 +8,8 @@ import { parsePlan } from '../../../dist/qa/plan.js';
 import type { Block, Step } from '../../../dist/qa/plan.js';
 import { join as joinScreen } from '../../../dist/qa/screen.js';
 import type { Element, NativeNode, ReactHostObservation, Screen } from '../../../dist/qa/screen.js';
+import { ObservedPrivacy, codeBoxRows } from '../../../dist/qa/privacy.js';
+import { describe } from '../../../dist/qa/screen.js';
 import { exactIdentities } from '../../../dist/qa/identity.js';
 import { keyboardFallbackTarget, prepareTarget } from '../../../dist/qa/resolve.js';
 import { KEYBOARD_READY_CAPTURES, runPlan, walkBlock } from '../../../dist/qa/walker.js';
@@ -217,7 +219,10 @@ const strings = (value: unknown): string[] =>
       ? Object.values(value).flatMap(strings)
       : [];
 
-function wrappedInput(label: string, unrelated = false, ancestry = true): Screen {
+function wrappedInput(
+  label: string, unrelated = false, ancestry = true,
+  input: ReactHostObservation = INNER, wrapperID = WRAP,
+): Screen {
   const nodes: NativeNode[] = [
     { ref: '@app', type: 'Application', rect: { x: 0, y: 0, width: 400, height: 800 } },
     {
@@ -229,7 +234,7 @@ function wrappedInput(label: string, unrelated = false, ancestry = true): Screen
     {
       ref: '@wrap',
       type: 'Other',
-      identifier: WRAP,
+      identifier: wrapperID,
       label,
       parentIndex: 1,
       hittable: true,
@@ -250,11 +255,11 @@ function wrappedInput(label: string, unrelated = false, ancestry = true): Screen
     ...joinScreen(
       nodes,
       [
-        { role: 'button', testID: WRAP, capabilities: { press: true, fill: false } },
+        { role: 'button', testID: wrapperID, capabilities: { press: true, fill: false } },
         {
           role: 'textinput',
-          testID: INNER.testID,
-          text: label,
+          testID: input.testID,
+          placeholder: label,
           inputHostIndices: [1],
           capabilities: { fill: true, press: false },
         },
@@ -264,8 +269,8 @@ function wrappedInput(label: string, unrelated = false, ancestry = true): Screen
       {
         complete: true,
         hosts: [
-          { testID: WRAP, role: 'button', roleSource: 'role', capabilities: { press: true } },
-          INNER,
+          { testID: wrapperID, role: 'button', roleSource: 'role', capabilities: { press: true } },
+          input,
         ],
         typography: {
           version: 1,
@@ -321,6 +326,77 @@ for (const label of [INNER.testID, 'Email address']) {
     assert.ok(exactIdentities(twin, step.target, 'press').length > 1);
     if (label === INNER.testID)
       assert.equal(keyboardFallbackTarget(step, wrappedInput(label, false, false)), undefined);
+  });
+}
+
+test('a placeholder-labelled wrapper with its own identifier binds the React-only input', async () => {
+  const input = { ...INNER, testID: 'email' };
+  const captured = wrappedInput('Email address', false, true, input, 'email-wrap');
+  const step: Step = { kind: 'fill', target: { phrase: 'email', quoted: 'email' }, text: EMAIL };
+  assert.equal(keyboardFallbackTarget(step, captured)?.element.ref, '@wrap');
+  const fake = app({ initial: captured.elements, focused: [{ ...captured, keyboardVisible: true }], hosts: [input] });
+  const capture = fake.deps.captureScreen;
+  fake.deps.captureScreen = async (options) => fake.state() === 'idle' ? captured : capture(options);
+  const outcome = await walkBlock(blocks(plan(EMAIL, 'email', ''))[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+  assert.deepEqual(fake.typed, [{ ref: '@wrap', text: EMAIL, testID: 'email' }]);
+  assert.equal(keyboardFallbackTarget(
+    { ...step, target: { phrase: 'Email address', quoted: 'Email address' } },
+    wrappedInput('Email address', true, true, input, 'email-wrap')), undefined);
+});
+
+for (const code of ['9386', '9966']) {
+  test(`nested code boxes and merged labels stay private after fallback fill ${code}`, async () => {
+    const nodes: NativeNode[] = [
+      { ref: '@app', type: 'Application', rect: { x: 0, y: 0, width: 400, height: 800 } },
+      { ref: '@code', type: 'Other', identifier: 'qa-otp-code-field', label: [...code].join(', '),
+        parentIndex: 0, rect: { x: 20, y: 100, width: 200, height: 42 } },
+    ];
+    for (const [i, label] of [...code].entries()) {
+      const parentIndex = nodes.length;
+      nodes.push(
+        { ref: `@box${i}`, type: 'StaticText', identifier: `qa-otp-box-${i}`, label,
+          parentIndex: 1, rect: { x: 20 + i * 48, y: 100, width: 42, height: 42 } },
+        { ref: `@echo${i}`, type: 'StaticText', label, parentIndex,
+          rect: { x: 30 + i * 48, y: 110, width: 20, height: 20 } },
+      );
+    }
+    const captured = screenOf([
+      ...joinScreen(nodes, []).elements,
+      element('@heading', 'Enter code', { kind: 'text' }),
+      element('@verify', 'Verify'),
+    ], true);
+    captured.visibleText = captured.visibleText.filter(Boolean);
+    assert.deepEqual(codeBoxRows(captured).map((row) => row.map((box) => box.ref)),
+      [['@box0', '@box1', '@box2', '@box3']]);
+    const privacy = new ObservedPrivacy([code]);
+    privacy.didFill();
+    privacy.observe(captured);
+    assert.deepEqual(privacy.screenText(captured), ['[code]', 'Enter code', 'Verify']);
+    const mask = privacy.maskForModel([code], []);
+    for (const node of captured.elements.filter((node) => node.ref === '@code' || node.ref.startsWith('@box') || node.ref.startsWith('@echo')))
+      assert.equal(mask.describeElement(node, describe), 'box (hidden)');
+    for (const separator of [', ', ' | ', ' / ', '---', '\u2009']) {
+      const text = [...code].join(separator);
+      assert.equal(privacy.redact(text), '•••');
+      assert.equal(mask.apply(text).includes(text), false);
+    }
+    const fake = app();
+    const capture = fake.deps.captureScreen;
+    fake.deps.captureScreen = async (options) => fake.state() === 'typed' ? captured : capture(options);
+    const ledger = await runPlan(blocks(plan(code, INNER.testID,
+      '✓ The Verify button is visible\n✓ "Missing"\n')), fake.deps);
+    assert.equal(ledger.verdict, 'FAIL');
+    assert.match(ledger.failure?.seen ?? '', /\[code\]/);
+    assert.equal(ledger.steps.some((row) => row.reason?.startsWith('UNVERIFIED_FILL:')), true);
+    const surfaces = strings({ ledger, rows: fake.rows, questions: fake.questions,
+      diagnostics: fake.diagnostics, notes: fake.notes });
+    assert.ok(fake.questions.length > 0, JSON.stringify(ledger.failure));
+    for (const text of surfaces) {
+      assert.equal(text.replace(/[\s\p{P}\p{S}]/gu, '').includes(code), false);
+      assert.equal([...code].includes(text.trim()), false);
+      assert.equal(/[|]\s*[9386]\s*[|]/u.test(text), false);
+    }
   });
 }
 

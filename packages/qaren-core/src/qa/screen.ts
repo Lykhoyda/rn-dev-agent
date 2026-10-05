@@ -774,7 +774,7 @@ export function join(
           inputs.length === 1 &&
           native[0].nativeKind !== 'input' &&
           native[0].label !== undefined &&
-          [d.testID, d.text, d.label].includes(native[0].label)
+          [d.testID, d.text, d.label, d.placeholder].includes(native[0].label)
         )
           forwardedInputs.set(native[0], d.testID);
       }

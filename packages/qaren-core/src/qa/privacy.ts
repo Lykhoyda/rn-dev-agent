@@ -1,5 +1,5 @@
 import type { Element, EvidenceStatus, NativeNode, Screen } from './screen.js';
-import { elementFrame } from './screen.js';
+import { ancestorsOf, elementFrame } from './screen.js';
 
 export const MASK = '•••';
 
@@ -199,11 +199,11 @@ function forms(value: string): string[] {
   ].filter(Boolean);
 }
 
-const DIGIT_GAP = '[\\s\\p{White_Space}.\\-/]';
+const DIGIT_GAP = '[\\s\\p{White_Space}\\p{P}\\p{S}]';
 function digitForm(value: string): string | undefined {
   const digits = value.trim().replace(new RegExp(DIGIT_GAP, 'gu'), '');
   if (!/^\d{4,}$/.test(digits)) return undefined;
-  return [...digits].join(`${DIGIT_GAP}?`);
+  return [...digits].join(`${DIGIT_GAP}*`);
 }
 
 export function matchPrivate(
@@ -276,8 +276,14 @@ export function codeBoxRows(screen: Screen): Element[][] {
       (chars(element.label ?? '') === 1 || chars(element.value ?? '') === 1) &&
       (elementFrame(element)?.width ?? 0) > 0,
   );
+  const boxes = candidates.filter(
+    (element) => !ancestorsOf(element).some(
+      (ancestor) => candidates.includes(ancestor) &&
+        (ancestor.label ?? ancestor.value) === (element.label ?? element.value),
+    ),
+  );
   const bands: Element[][] = [];
-  for (const element of candidates.sort((a, b) => elementFrame(a)!.y - elementFrame(b)!.y)) {
+  for (const element of boxes.sort((a, b) => elementFrame(a)!.y - elementFrame(b)!.y)) {
     const frame = elementFrame(element)!;
     const band = bands.find((row) => {
       const first = elementFrame(row[0])!;
@@ -491,7 +497,17 @@ export class ObservedPrivacy {
     if (this.filled) {
       const rows = codeBoxRows(screen);
       this.codeRows.set(screen, rows);
-      for (const element of rows.flat()) this.codeElements.add(element);
+      const boxes = rows.flat();
+      for (const element of screen.elements) {
+        const members = boxes.filter((box) => ancestorsOf(box).includes(element));
+        const text = element.label ?? element.value ?? '';
+        const merged = members.length > 0 &&
+          text.replace(new RegExp(DIGIT_GAP, 'gu'), '') ===
+            members.map((box) => box.label ?? box.value ?? '').join('');
+        const echo = boxes.some((box) => ancestorsOf(element).includes(box) &&
+          text === (box.label ?? box.value));
+        if (boxes.includes(element) || echo || merged) this.codeElements.add(element);
+      }
       this.sensitivePixels ||= rows.length > 0;
     }
     for (const element of screen.elements)
@@ -560,7 +576,6 @@ export class ObservedPrivacy {
 
   screenText(screen: Screen): string[] {
     const rows = this.codeRows.get(screen) ?? [];
-    const hidden = new Set(rows.flat());
     const first = new Set(rows.map((row) => row[0]));
     const represented = new Set<string>();
     const projected: string[] = [];
@@ -569,7 +584,7 @@ export class ObservedPrivacy {
         element.offscreen ||
         element.ref.startsWith('react:') ||
         element.kind === 'image' ||
-        element.kind === 'other'
+        (element.kind === 'other' && !this.codeElements.has(element))
       )
         continue;
       if (element.label) represented.add(element.label);
@@ -578,7 +593,7 @@ export class ObservedPrivacy {
         represented.add(
           `${element.label ?? element.placeholder ?? element.testID ?? 'input'}: ${element.value}`,
         );
-      if (hidden.has(element)) {
+      if (this.codeElements.has(element)) {
         if (first.has(element)) projected.push('[code]');
         continue;
       }
