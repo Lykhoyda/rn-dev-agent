@@ -52,6 +52,13 @@ pub struct RunnerHostResource {
     pub bundle_ids: Vec<String>,
 }
 
+// The core's xcodebuild runner driver leads its own process group; cleanup signals it only by this identity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunnerDriverResource {
+    pub pgid: i32,
+    pub identity: PidIdentity,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "StoredCoreResource")]
 pub struct CoreResource {
@@ -300,6 +307,8 @@ pub struct Resources {
     pub recorder: Option<RecorderResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runner_host: Option<RunnerHostResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runner_drivers: Vec<RunnerDriverResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_worktree: Option<PrWorktreeResource>,
     // A borrowed device (the booted simulator `check` walks on) is never shut down or deleted.
@@ -381,6 +390,7 @@ impl Resources {
             || self.build_lock.is_some()
             || self.lease.is_some()
             || self.core.is_some()
+            || !self.runner_drivers.is_empty()
             || self.recorder.is_some()
             || self.pr_worktree.is_some()
     }

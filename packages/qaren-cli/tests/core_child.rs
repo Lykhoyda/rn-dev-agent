@@ -111,7 +111,7 @@ fn spec() -> qaren::exec::CmdSpec {
 
 fn run_child(mock: &mut MockRunner, log: &Path) -> core::CoreOutcome {
     let child = core::spawn(mock, &spec(), log, &request()).unwrap();
-    core::wait(mock, child, budgets())
+    core::wait(mock, child, budgets(), &mut |_, _| {})
 }
 
 #[test]
@@ -564,7 +564,7 @@ fn drive_schedule(intervals: Vec<u64>, budgets: Budgets) -> (core::CoreOutcome, 
         after_schedule_ms: budgets.walk_seconds * 1000 + 1,
     };
     let child = core::spawn(&mut runner, &spec(), &repo.join("core.log"), &request()).unwrap();
-    let outcome = core::wait(&mut runner, child, budgets);
+    let outcome = core::wait(&mut runner, child, budgets, &mut |_, _| {});
     (outcome, runner)
 }
 
@@ -1077,6 +1077,7 @@ fn deadline_before_admission_refuses_but_after_admission_fails() {
                 walk_seconds: 1,
                 step_seconds: 10,
             },
+            &mut |_, _| {},
         );
         let failure = outcome.failure.unwrap();
         assert_eq!(
@@ -1099,5 +1100,90 @@ fn deadline_before_admission_refuses_but_after_admission_fails() {
             assert!(failure.detail.contains("host"));
         }
         assert!(*mock.piped_killed[0].lock().unwrap());
+    }
+}
+
+#[test]
+fn announced_runner_drivers_reach_the_recorder_in_order_and_count_as_progress() {
+    let repo = common::temp_repo();
+    let rows = [row(1, 1, "pass")];
+    let stdout = format!(
+        "{}\n{}\n{}\n{}\n",
+        envelope(2, "resource", r#"{"kind":"runner_driver","pid":4242}"#),
+        envelope(3, "row", &rows[0]),
+        envelope(4, "resource", r#"{"kind":"runner_driver","pid":4343}"#),
+        envelope(5, "result", &pass_ledger(&rows))
+    );
+    let mut mock = MockRunner::new();
+    mock.expect_spawn_piped("walk.js", 9000, &stdout, Some(0));
+    let child = core::spawn(&mut mock, &spec(), &repo.join("core.log"), &request()).unwrap();
+    let mut recorded = Vec::new();
+    let outcome = core::wait(&mut mock, child, budgets(), &mut |_, pid| {
+        recorded.push(pid)
+    });
+    assert_eq!(outcome.verdict, Verdict::Pass, "{:?}", outcome.failure);
+    assert_eq!(recorded, [4242, 4343]);
+}
+
+#[test]
+fn a_malformed_runner_driver_announcement_is_a_protocol_violation() {
+    for payload in [
+        r#"{"kind":"runner_driver","pid":1}"#,
+        r#"{"kind":"runner_driver","pid":"4242"}"#,
+        r#"{"kind":"runner_driver","pid":4242,"pgid":4242}"#,
+        r#"{"kind":"metro","pid":4242}"#,
+    ] {
+        let repo = common::temp_repo();
+        let rows = [row(1, 1, "pass")];
+        let stdout = format!(
+            "{}\n{}\n",
+            envelope(2, "resource", payload),
+            envelope(3, "result", &pass_ledger(&rows))
+        );
+        let mut mock = MockRunner::new();
+        mock.expect_spawn_piped("walk.js", 9000, &stdout, Some(0));
+        let child = core::spawn(&mut mock, &spec(), &repo.join("core.log"), &request()).unwrap();
+        let mut recorded = Vec::new();
+        let outcome = core::wait(&mut mock, child, budgets(), &mut |_, pid| {
+            recorded.push(pid)
+        });
+        assert_ne!(outcome.verdict, Verdict::Pass, "{payload}");
+        assert!(recorded.is_empty());
+    }
+}
+
+#[test]
+fn a_runner_driver_is_recorded_only_as_this_simulator_s_own_group_leader() {
+    let command = "/usr/bin/xcodebuild test-without-building -project R.xcodeproj -destination platform=iOS Simulator,id=AAAA-1111";
+    for (pgid, cmd, recorded) in [
+        ("4242", command, true),
+        ("9000", command, false),
+        (
+            "4242",
+            "/usr/bin/xcodebuild build-for-testing id=AAAA-1111",
+            false,
+        ),
+        (
+            "4242",
+            "/usr/bin/xcodebuild test-without-building id=BBBB-2222",
+            false,
+        ),
+    ] {
+        let mut mock = MockRunner::new();
+        mock.expect_run("ps -o pgid= -p 4242", CmdOutput::success(pgid));
+        if pgid == "4242" {
+            mock.expect_run(
+                "ps -p 4242 -o lstart=",
+                CmdOutput::success("Wed Aug 12 16:01:00 2026"),
+            );
+            mock.expect_run("ps -p 4242 -o command=", CmdOutput::success(cmd));
+        }
+        let driver = qaren::run::runner_driver(&mut mock, 4242, "AAAA-1111");
+        assert_eq!(driver.is_some(), recorded, "{pgid} {cmd}");
+        if let Some(driver) = driver {
+            assert_eq!(driver.pgid, 4242);
+            assert_eq!(driver.identity.pid, 4242);
+        }
+        assert_eq!(mock.remaining(), 0);
     }
 }

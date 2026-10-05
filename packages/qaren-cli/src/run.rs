@@ -557,7 +557,28 @@ fn run_inner(
         core::abort(core_child);
         return Ok(finish_failed(ctx, f));
     }
-    let mut outcome = core::wait(ctx.runner, core_child, req.budgets);
+    let mut driver_notes = Vec::new();
+    let mut outcome = {
+        let record = &mut ctx.record;
+        let runs_root = &ctx.runs_root;
+        let udid = device.id.clone();
+        core::wait(ctx.runner, core_child, req.budgets, &mut |runner, pid| {
+            match runner_driver(runner, pid, &udid) {
+                Some(driver) => {
+                    record.resources.runner_drivers.push(driver);
+                    if let Err(f) = record.save(runs_root) {
+                        driver_notes.push(format!("runner driver {pid} not persisted: {}", f.detail));
+                    }
+                }
+                None => driver_notes.push(format!(
+                    "runner driver {pid} is not a proven xcodebuild group leader for this simulator; not recorded"
+                )),
+            }
+        })
+    };
+    for note in driver_notes {
+        ctx.notes.push(("runner_driver".to_string(), note));
+    }
     let t = ctx.mark("walk", t);
     let drift = match (status_before, worktree_status(ctx.runner, &app_root)) {
         (Some(before), Some(after)) => worktree_drift(&before, &after),
@@ -1043,6 +1064,26 @@ fn boot_selected_device(ctx: &mut Ctx, device: &Device) -> Result<(), Failure> {
     Err(failed("inventory did not prove the exact selected simulator Booted with unchanged runtime and device type"))
 }
 
+// A driver is recorded only as the leader of its own group, running the runner test for this simulator.
+pub fn runner_driver(
+    runner: &mut dyn Runner,
+    pid: i32,
+    udid: &str,
+) -> Option<crate::runrecord::RunnerDriverResource> {
+    if crate::adapters::metro::pgid_of(runner, pid) != Some(pid) {
+        return None;
+    }
+    let identity = capture_pid_identity(runner, pid)?;
+    let command = identity.command.as_str();
+    (command.contains("xcodebuild")
+        && command.contains("test-without-building")
+        && command.contains(udid))
+    .then_some(crate::runrecord::RunnerDriverResource {
+        pgid: pid,
+        identity,
+    })
+}
+
 fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
     let failure = ensure_running(ctx.runner, &failure.phase)
         .err()
@@ -1079,6 +1120,13 @@ fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, boo
             ctx.record.resources.metro = None;
         }
         outcomes.push(("metro".to_string(), outcome));
+    }
+    if let Some(outcome) = crate::commands::cleanup::cleanup_runner_drivers(
+        ctx.runner,
+        &mut ctx.record,
+        &ctx.runs_root,
+    ) {
+        outcomes.push(("runner_driver".to_string(), outcome));
     }
     if let Some(outcome) = crate::commands::cleanup::cleanup_runner_host(ctx.runner, &ctx.record) {
         outcomes.push(("runner_host".to_string(), outcome));

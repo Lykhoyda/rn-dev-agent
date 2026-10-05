@@ -166,8 +166,9 @@ pub fn cleanup_with(
 
     let owner_refusal =
         || Outcome::Refused("the run's qaren process is alive or unproven gone".to_string());
-    let owner = match (&record.resources.core, &record.prepare) {
-        (Some(_), Some(prepare)) => Some(probe_pid_identity(runner, prepare)),
+    let producers = record.resources.core.is_some() || !record.resources.runner_drivers.is_empty();
+    let owner = match (producers, &record.prepare) {
+        (true, Some(prepare)) => Some(probe_pid_identity(runner, prepare)),
         _ => None,
     };
     if owner == Some(PidLiveness::AliveMatching) {
@@ -204,6 +205,18 @@ pub fn cleanup_with(
             "metro".to_string(),
             cleanup_process_group(runner, m.identity.as_ref(), m.spawned.pgid, Some(m.port)),
         ));
+    }
+
+    if !record.resources.runner_drivers.is_empty() {
+        let owner_gone = matches!(owner, Some(PidLiveness::Dead | PidLiveness::AliveForeign));
+        let outcome = if owner_gone {
+            cleanup_runner_drivers(runner, &mut record, runs_root)
+        } else {
+            Some(owner_refusal())
+        };
+        if let Some(outcome) = outcome {
+            outcomes.push(("runner_driver".to_string(), outcome));
+        }
     }
 
     if let Some(outcome) = cleanup_runner_host(runner, &record) {
@@ -1089,6 +1102,46 @@ fn cleanup_owned_runner_host(
     }
 }
 
+// Each recorded driver group is signaled only while its recorded leader identity still matches.
+pub(crate) fn cleanup_runner_drivers(
+    runner: &mut dyn Runner,
+    record: &mut RunRecord,
+    runs_root: &Path,
+) -> Option<Outcome> {
+    if record.resources.runner_drivers.is_empty() {
+        return None;
+    }
+    let mut outcomes = Vec::new();
+    let mut kept = Vec::new();
+    for driver in record.resources.runner_drivers.clone() {
+        let outcome = cleanup_process_group(runner, Some(&driver.identity), driver.pgid, None);
+        if !outcome.clean() {
+            kept.push(driver);
+        }
+        outcomes.push(outcome);
+    }
+    let previous = std::mem::replace(&mut record.resources.runner_drivers, kept);
+    if record.save(runs_root).is_err() {
+        record.resources.runner_drivers = previous;
+        return Some(Outcome::Unresolved(
+            "runner driver retirement could not be persisted".into(),
+        ));
+    }
+    let removed = outcomes
+        .iter()
+        .any(|outcome| matches!(outcome, Outcome::Removed | Outcome::RemovedBytes(_)));
+    Some(
+        outcomes
+            .into_iter()
+            .find(|outcome| !outcome.clean())
+            .unwrap_or(if removed {
+                Outcome::Removed
+            } else {
+                Outcome::Absent
+            }),
+    )
+}
+
 pub(crate) fn cleanup_runner_host(runner: &mut dyn Runner, record: &RunRecord) -> Option<Outcome> {
     let mut cleanup_runner = crate::exec::CleanupRunner(runner);
     let runner: &mut dyn Runner = &mut cleanup_runner;
@@ -1122,6 +1175,11 @@ pub(crate) fn cleanup_runner_host(runner: &mut dyn Runner, record: &RunRecord) -
             "core quiescence is unproven; runner host left untouched".into(),
         ));
     }
+    if !record.resources.runner_drivers.is_empty() {
+        return Some(Outcome::Refused(
+            "runner driver quiescence is unproven; runner host left untouched".into(),
+        ));
+    }
     Some(match record.resources.runner_host.as_ref() {
         Some(host) if host.udid == sim.udid => cleanup_owned_runner_host(runner, host),
         _ => cleanup_scoped_runner_hosts(runner, &sim.udid),
@@ -1134,7 +1192,7 @@ pub(crate) fn producers_quiescent(outcomes: &[(String, Outcome)]) -> bool {
         .filter(|(name, _)| {
             matches!(
                 name.as_str(),
-                "build_process" | "core" | "metro" | "recorder" | "runner_host"
+                "build_process" | "core" | "metro" | "recorder" | "runner_driver" | "runner_host"
             )
         })
         .all(|(_, outcome)| matches!(outcome, Outcome::Removed | Outcome::Absent))

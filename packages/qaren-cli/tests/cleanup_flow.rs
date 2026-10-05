@@ -2033,3 +2033,89 @@ fn a_dead_owners_runner_host_is_terminated_on_its_simulator_and_the_lease_releas
     assert!(!lock.exists());
     assert_eq!(mock.remaining(), 0);
 }
+
+fn driver_record(repo: &std::path::Path) -> RunRecord {
+    let mut record = core_record(repo);
+    record
+        .resources
+        .runner_drivers
+        .push(qaren::runrecord::RunnerDriverResource {
+            pgid: 7000,
+            identity: common::identity(7000, LSTART),
+        });
+    record
+}
+
+#[test]
+fn a_dead_owner_s_recorded_runner_driver_group_is_signaled_and_the_lease_released() {
+    let repo = common::temp_repo();
+    let record = driver_record(&repo);
+    let lock = record.resources.lease.as_ref().unwrap().lock_dir.clone();
+    record.save(&repo).unwrap();
+    let mut mock = MockRunner::new();
+    owner_gone(&mut mock);
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n7000 7000 S\n"));
+    mock.expect_run(
+        "ps -A",
+        CmdOutput::success("1 1 S\n7000 7000 S\n7001 7000 S\n"),
+    );
+    mock.expect_run("ps -p 7000", CmdOutput::success(LSTART));
+    mock.expect_run("ps -p 7000", CmdOutput::success("S"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
+    mock.expect_run("/bin/kill -TERM -- -7000", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
+    mock.expect_run("/bin/kill -KILL -- -7000", CmdOutput::success(""));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+
+    let receipt = cleanup(&mut mock, &repo, "core-run");
+
+    assert_eq!(receipt.cleanup["core"], "absent");
+    assert_eq!(receipt.cleanup["runner_driver"], "removed");
+    assert_eq!(receipt.cleanup["device_lease"], "removed");
+    assert_eq!(receipt.result, ReceiptResult::Cleaned);
+    assert!(!lock.exists());
+    let stored = RunRecord::load(&repo, "core-run").unwrap();
+    assert!(stored.resources.runner_drivers.is_empty());
+    assert_eq!(mock.remaining(), 0);
+}
+
+#[test]
+fn a_runner_driver_whose_leader_is_not_the_recorded_process_is_never_signaled() {
+    let repo = common::temp_repo();
+    let record = driver_record(&repo);
+    let lock = record.resources.lease.as_ref().unwrap().lock_dir.clone();
+    record.save(&repo).unwrap();
+    let mut mock = MockRunner::new();
+    owner_gone(&mut mock);
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n7000 7000 S\n"));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n7000 7000 S\n"));
+    mock.expect_run("ps -p 7000", CmdOutput::success("Thu Aug 13 09:00:00 2026"));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n7000 7000 S\n"));
+
+    let receipt = cleanup(&mut mock, &repo, "core-run");
+
+    assert!(receipt.cleanup["runner_driver"].starts_with("unresolved"));
+    assert!(receipt.cleanup["device_lease"].starts_with("unresolved"));
+    assert!(lock.exists());
+    assert!(mock.calls.iter().all(|spec| spec.label != "kill-group"));
+    let stored = RunRecord::load(&repo, "core-run").unwrap();
+    assert_eq!(stored.resources.runner_drivers.len(), 1);
+    assert_eq!(mock.remaining(), 0);
+}
+
+#[test]
+fn an_unproven_owner_keeps_its_runner_driver_without_signaling() {
+    let repo = common::temp_repo();
+    let mut record = driver_record(&repo);
+    record.resources.core = None;
+    record.save(&repo).unwrap();
+    let mut mock = MockRunner::new();
+    mock.expect_run("ps -p 999 -o lstart=", CmdOutput::failed(1, "denied"));
+    let receipt = cleanup(&mut mock, &repo, "core-run");
+    assert!(receipt.cleanup["runner_driver"].starts_with("refused"));
+    assert!(mock.calls.iter().all(|spec| spec.label != "kill-group"));
+    let stored = RunRecord::load(&repo, "core-run").unwrap();
+    assert_eq!(stored.resources.runner_drivers.len(), 1);
+}

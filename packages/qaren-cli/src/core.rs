@@ -498,9 +498,13 @@ struct Inbox {
     last_seq: u64,
     rows: Vec<Row>,
     admitted: bool,
+    drivers: Vec<i32>,
+    announced: usize,
     result: Option<Value>,
     violation: Option<String>,
 }
+
+const MAX_RUNNER_DRIVERS: usize = 8;
 
 impl Inbox {
     fn accept(&mut self, line: &str) -> bool {
@@ -536,6 +540,33 @@ impl Inbox {
             {
                 self.admitted = true;
                 true
+            }
+            (Some("resource"), Some(payload))
+                if payload.get("kind").and_then(Value::as_str) == Some("runner_driver")
+                    && payload.as_object().is_some_and(|p| p.len() == 2) =>
+            {
+                let pid = payload
+                    .get("pid")
+                    .and_then(Value::as_i64)
+                    .and_then(|pid| i32::try_from(pid).ok())
+                    .filter(|pid| *pid > 1);
+                match pid {
+                    Some(pid) if self.announced < MAX_RUNNER_DRIVERS => {
+                        self.announced += 1;
+                        self.drivers.push(pid);
+                        true
+                    }
+                    Some(_) => {
+                        self.violation =
+                            Some(format!("more than {MAX_RUNNER_DRIVERS} runner drivers"));
+                        false
+                    }
+                    None => {
+                        self.violation =
+                            Some(format!("runner driver pid is invalid: {}", excerpt(line)));
+                        false
+                    }
+                }
             }
             (Some("row"), Some(payload)) => {
                 if self.rows.len() >= MAX_ROWS {
@@ -579,7 +610,13 @@ fn excerpt(line: &str) -> String {
 }
 
 // A missing result or deadline kill becomes a FAIL attributed to the last row.
-pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreOutcome {
+// `on_driver` records each announced runner driver before the walk goes on.
+pub fn wait(
+    runner: &mut dyn Runner,
+    core: CoreChild,
+    budgets: Budgets,
+    on_driver: &mut dyn FnMut(&mut dyn Runner, i32),
+) -> CoreOutcome {
     let CoreChild {
         pid,
         run_id,
@@ -593,6 +630,8 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
         last_seq: 1,
         rows: Vec::new(),
         admitted: false,
+        drivers: Vec::new(),
+        announced: 0,
         result: None,
         violation: None,
     };
@@ -617,6 +656,9 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
             Ok(Msg::Line(line)) => {
                 if inbox.accept(&line) {
                     last_progress = runner.monotonic_ms();
+                }
+                for pid in std::mem::take(&mut inbox.drivers) {
+                    on_driver(runner, pid);
                 }
             }
             Ok(Msg::Oversize) => {
