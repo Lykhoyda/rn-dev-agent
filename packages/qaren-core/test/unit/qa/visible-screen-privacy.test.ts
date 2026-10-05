@@ -490,12 +490,12 @@ test('scroll clips exclude detached text from checks, waits and scroll-until on 
   const rect = { x: 0, y: 0, width: 402, height: 874 };
   for (const type of ['ScrollView', 'Table', 'CollectionView']) {
     for (const window of [false, true]) {
-      for (const [x, y] of [
-        [20, 500],
-        [20, 50],
-        [350, 120],
-        [0, 120],
-      ]) {
+      for (const [x, y, direction] of [
+        [20, 500, 'down'],
+        [20, 50, 'up'],
+        [350, 120, 'down'],
+        [0, 120, 'down'],
+      ] as const) {
         const nodes: NativeNode[] = [
           { ref: '@app', type: 'Application', rect },
           { ref: '@window', type: window ? 'Window' : 'Other', parentIndex: 0, rect },
@@ -547,7 +547,7 @@ test('scroll clips exclude detached text from checks, waits and scroll-until on 
         assert.ok(waited.captures() > 1);
         const scrolled = await walkViewport('1. Scroll until you see "Later"', [initial, revealed]);
         assert.equal(scrolled.result.verdict, 'PASS');
-        assert.deepEqual(scrolled.f.actions, ['scroll down']);
+        assert.deepEqual(scrolled.f.actions, [`scroll ${direction}`]);
       }
     }
   }

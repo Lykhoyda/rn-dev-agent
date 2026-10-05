@@ -777,7 +777,7 @@ export function join(
   const unresolvedText: string[] = [];
   const paintedKeys = new Map<number, string>();
   for (const { n, e, i } of ordered) {
-    if (!n.rect || !(n.rect.width > 0 && n.rect.height > 0)) continue;
+    if (n.rect && !(n.rect.width > 0 && n.rect.height > 0)) continue;
     if (duplicates.has(i) || e.kind === 'image' || e.visibilityEvidence === 'offscreen') continue;
     const merged = e.kind === 'other' && mergedLabel(n, e, i);
     if (e.kind === 'other' && !merged) continue;
@@ -800,7 +800,7 @@ export function join(
       line,
       n.type,
       n.identifier ?? '',
-      [n.rect.x, n.rect.y, n.rect.width, n.rect.height],
+      n.rect ? [n.rect.x, n.rect.y, n.rect.width, n.rect.height] : null,
     ]);
     let echo = false;
     for (let p = n.parentIndex; p !== undefined && p >= 0 && p < i; p = nodes[p].parentIndex) {

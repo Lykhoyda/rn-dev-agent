@@ -500,24 +500,25 @@ test('independent trusted clips exclude stale input witnesses before contradicti
   assert.equal(c.replay.miss, c.replay.line);
 });
 
-test('literal consumers require positive area without changing press eligibility', async () => {
-  for (const [width, height] of [
-    [0, 0],
-    [0, 30],
-    [100, 0],
-    [100, 30],
+test('literal consumers reject zero-area frames and retain frameless text without changing press eligibility', async () => {
+  for (const rect of [
+    at(16, 120, 0, 0),
+    at(16, 120, 0, 30),
+    at(16, 120, 100, 0),
+    at(16, 120, 100, 30),
+    undefined,
   ]) {
     const screen = observed([
       { type: 'Application', rect: app },
       {
         type: 'StaticText',
         parent: 0,
-        rect: at(16, 120, width, height),
+        rect,
         label: 'Done',
         hittable: true,
       },
     ]);
-    const positive = width > 0 && height > 0;
+    const positive = !rect || (rect.width > 0 && rect.height > 0);
     assert.equal(check(screen, 'Done'), positive ? 'pass' : 'fail');
     assert.deepEqual(screen.paintedText, positive ? ['Done'] : []);
     assert.equal(
