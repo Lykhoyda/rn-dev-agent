@@ -131,9 +131,13 @@ Tap-based fallback requires one onscreen, enabled, nonsecure native element
 carrying a unique testID, with no matching observable native input or secure node.
 A quoted base testID reaches its `-pressable` wrapper only while an element or
 React host carrying the base testID is also observed; no suffix is assumed.
+An identified native wrapper with another testID can also stand for the input
+when complete React host and ancestry evidence proves it encloses exactly one
+input host and its merged label equals that input's testID, text, label or
+placeholder. A separate same-label element does not establish forwarding.
 The keyboard-down path requires proof that the keyboard is hidden before the
 single tap. Every binding after the tap, including refreshed strict bindings,
-must uniquely resolve the original testID or its `-pressable` wrapper-base
+must uniquely resolve the original testID or its proven wrapper-to-input
 identity; a matching label cannot
 substitute for that identity. If the same input becomes natively observable,
 strict verification resumes. Otherwise the keyboard must become visible and
@@ -348,12 +352,13 @@ reasons, selectors and block names appear only in the final projected ledger.
 CLI progress shows the line, outcome, resolver and attempt without plan text.
 The shared [privacy matcher](../qaren-core/src/qa/privacy.ts) protects complete values of
 three or more characters after trimming, using case-sensitive substring matches
-for raw and trimmed NFC/NFD forms. Numbers with at least four digits also match
-with an optional Unicode whitespace character (including nonbreaking spaces),
-hyphen, dot or slash between digits. Model requests use
+for raw and trimmed NFC/NFD forms. Values containing at least three digits after
+removing whitespace, punctuation and symbols also match with any sequence of
+those separators between digits. Model requests use
 opaque identity tokens; durable text uses `•••`; a match withholds saved blocks.
 Displayed identifiers use the same matcher while operational identifiers remain
-usable. Partial fragments of a longer value remain readable.
+usable. Partial fragments not independently classified as private remain readable
+outside structural code rows.
 
 Short typed values (one or two characters) are protected in straight or curly
 quoted plan slots, including parsing requests, input value slots and structural
@@ -364,12 +369,17 @@ matches only as a whole token. This includes native labels classified as possibl
 values on secure inputs, even when no readable value is supplied.
 Structural step numbers remain readable.
 
-From the first fill dispatch, geometric rows of at least three visible,
-single-character text boxes render as one `[code]` token; model descriptions
+From the first fill dispatch, geometric rows of at least three visible text boxes,
+each empty or containing one character and at least one filled, render as one
+`[code]` token; model descriptions
 show each box as `box (hidden)`. Rows share a horizontal band within four points
-and have gaps no greater than 1.5 times the median box width. Wrappers and
-repeated characters do not affect grouping; buttons and inputs are not code
-boxes. Their characters are never retained as free-text matching rules.
+and have gaps no greater than 1.5 times the median box width. Nested same-character
+text echoes count as their enclosing box; repeated characters do not affect
+grouping. Enclosing labels composed of the row's characters, including separated
+forms, are concealed too. Buttons and inputs are not code boxes. The shared
+screen-text projection also protects failure history (`failure.seen`, including
+"previously on screen"). Box characters are never retained as free-text matching
+rules.
 
 Opaque tokens preserve complete-value identity for model comparisons. An
 unobserved protected value or hidden input content cannot prove an assertion.
@@ -405,6 +415,10 @@ Metro process group. If finite-build cleanup is unknown, the build lock and
 device lease remain claimed for `qaren cleanup`. The developer
 [check gate](../../scripts/gate-qaren-check.sh) forwards the boot opt-in with
 `QAREN_BOOT_DEVICE=1` alongside `QAREN_DEVICE_UDID`.
+
+A dev-client launch timeout refuses with `CORE_REFUSED`; it is retried once only
+when the measured one-minute host load exceeds the launch envelope. Other launch
+errors remain `BUILD_FAILED`. Cleanup retained resources before retrying.
 
 iOS artifact verification requires an Expo Dev Launcher image supporting
 `--initialUrl` and refuses bundles containing `main.jsbundle`. Symbol and string
@@ -521,7 +535,12 @@ visible witnessed identity. A control and its sole same-label text descendant
 count as one identity, even with different rectangles; distinct controls remain
 separate. Same-label siblings remain distinct even when their frames are
 identical. Only proven ancestor/descendant text echoes collapse; matching labels
-and frames alone do not establish one identity. Excluded labels cannot supply a
+and frames alone do not establish one identity. An unidentified nested native
+`StaticText` collapses into its parent text when label, value, frame, enabled,
+hittable and secure facts agree; without presence evidence it also requires a
+nonempty label and a positive frame. An identified child collapses only with
+presence evidence and the same identifier as its parent. With presence evidence,
+presence status and label source must agree too. Excluded labels cannot supply a
 fallback witness. Discovery keeps preferring a unique testID for an eligible
 text match. An ambiguous text target without a unique testID
 can satisfy discovery but leaves the block unsaved; replay follows the
@@ -676,6 +695,10 @@ against an unchanged candidate to obtain attributable evidence.
 qaren pr <number|url> --plan-file plan.md --device <simulator-UUID> --json
 qaren publish <run-id> --json
 ```
+
+Company plans, reports and recordings must remain private and must never be
+published to public product surfaces. Publication's value and machine-identity
+redaction does not establish that company material is safe to publish.
 
 `qaren publish` admits only a persisted `run.json` terminal result: no
 cancellation, matching final candidate verification, and proven teardown
@@ -1002,6 +1025,10 @@ Local package plugins and bare imports declared through `link:`, `file:` or
 `workspace:`, or resolved into worktree source outside `node_modules`, are not
 traced and always make the fingerprint incomplete; relative plugin files in
 the app retain their existing scan.
+When a traced module contains a bare import, any nested `node_modules` directory
+on the path from its directory up to, but excluding, the app root also makes the
+fingerprint incomplete. Root-based package binding cannot prove that import's
+resolution in this case.
 Static plain-string `import` and `require` forms, including whitespace around
 `require` arguments, are traced. Each module dependency must name an existing
 regular file directly, with no symlink in its path, and be recursively scanned
@@ -1048,6 +1075,10 @@ fingerprint, and building candidate sha:
    is candidate input and is never deleted — clean
    there means dropping the derived build outputs (`ios/build`,
    `android/build`, `android/app/build`, `android/.gradle`).
+
+For a clean decision requiring generated-directory regeneration, `--dry-run`
+includes the same `expo prebuild --platform <platform> --clean` command before
+compilation on both platforms.
 
 After a successful build the dev client (single `.app` bundle / debug apk)
 is copied and content-hashed in a staging directory under
