@@ -184,42 +184,73 @@ test('I1 input twins refuse fill, fallback and rebind alike', () => {
   assert.throws(() => bindFillIdentity(fill, screen, 'email'), { code: 'TARGET_AMBIGUOUS' });
 });
 
-for (const inner of [true, false]) {
-  test(`I1 a wrapper ${inner ? 'with' : 'without'} an observed inner field`, () => {
+const EMAIL_WRAPPER = { type: 'Other', identifier: 'email-pressable', label: 'Email', y: 100 };
+const fillEmail: Step & { kind: 'fill' } = {
+  kind: 'fill',
+  target: { quoted: 'email', phrase: 'email' },
+  text: 'x',
+};
+
+// React observed the inner field, React saw the whole screen without it, or React was unavailable.
+for (const react of ['inner', 'complete', 'unavailable'] as const) {
+  const stands = react !== 'complete';
+  test(`I1 a wrapper with React ${react}`, () => {
     const screen = join(
-      node(root(), { type: 'Other', identifier: 'email-pressable', label: 'Email', y: 100 }),
-      inner ? [{ role: 'textinput', testID: 'email', capabilities: { fill: true } }] : [],
+      node(root(), EMAIL_WRAPPER),
+      react === 'inner'
+        ? [{ role: 'textinput', testID: 'email', capabilities: { fill: true } }]
+        : [],
+      'app',
+      react === 'unavailable'
+        ? { native: 'complete', react: 'unknown' }
+        : { native: 'complete', react: 'complete' },
+      react === 'complete' ? { hosts: [], complete: true } : undefined,
     );
-    const fill: Step & { kind: 'fill' } = {
-      kind: 'fill',
-      target: { quoted: 'email', phrase: 'email' },
-      text: 'x',
-    };
-    assert.equal(outcome(prepareTarget(fill, screen)), 'TARGET_NOT_FOUND');
-    assert.equal(!!wrapperEquivalence(screen, 'email'), inner);
+    // Strict fill never binds through the wrapper.
+    assert.equal(outcome(prepareTarget(fillEmail, screen)), 'TARGET_NOT_FOUND');
+    assert.equal(!!wrapperEquivalence(screen, 'email'), stands);
     const wrapper = screen.elements.find((e) => e.testID === 'email-pressable')!;
-    // Never an invented suffix: the wrapper stands for "email" only while both ends are seen.
+    // Never an invented suffix: the wrapper stands for "email" only while React cannot deny the field.
     assert.deepEqual(
-      keyboardFallbackTarget(fill, screen),
-      inner ? { element: wrapper, oracleTestID: 'email' } : undefined,
+      keyboardFallbackTarget(fillEmail, screen),
+      stands ? { element: wrapper, oracleTestID: 'email' } : undefined,
     );
-    const rebound = bindFillIdentity(fill, screen, 'email');
-    assert.equal(rebound?.kind, inner ? 'fallback' : undefined);
-    // The wrapper's own id keeps its own focus identity when its inner field is unseen.
+    assert.equal(
+      bindFillIdentity(fillEmail, screen, 'email')?.kind,
+      stands ? 'fallback' : undefined,
+    );
     const quotedWrapper = {
-      ...fill,
+      ...fillEmail,
       target: { quoted: 'email-pressable', phrase: 'email-pressable' },
     };
     assert.deepEqual(keyboardFallbackTarget(quotedWrapper, screen), {
       element: wrapper,
-      oracleTestID: inner ? 'email' : 'email-pressable',
+      oracleTestID: stands ? 'email' : 'email-pressable',
     });
     assert.equal(
       exactIdentities(screen, { quoted: 'email-pressable', phrase: '' }, 'press')[0].tag,
-      inner ? 'wrapper' : 'native',
+      stands ? 'wrapper' : 'native',
     );
   });
 }
+
+const reactUnavailable = (nodes: NativeNode[]): Screen =>
+  join(nodes, [], 'app', { native: 'complete', react: 'unknown' });
+
+test('without React, two wrappers for the same field refuse the fallback', () => {
+  const screen = reactUnavailable(node(node(root(), EMAIL_WRAPPER), { ...EMAIL_WRAPPER, y: 300 }));
+  assert.equal(wrapperEquivalence(screen, 'email'), undefined);
+  assert.equal(keyboardFallbackTarget(fillEmail, screen), undefined);
+});
+
+test('without React, a wrapper enclosing another text entry refuses the fallback', () => {
+  const nodes = node(root(), { ...EMAIL_WRAPPER, rect: { x: 0, y: 100, width: 400, height: 120 } });
+  const screen = reactUnavailable(
+    node(nodes, { type: 'TextField', identifier: 'other', parentIndex: 2, y: 120 }),
+  );
+  assert.equal(wrapperEquivalence(screen, 'email'), undefined);
+  assert.equal(keyboardFallbackTarget(fillEmail, screen), undefined);
+});
 
 for (const exact of [undefined, 'id', 'text'] as const) {
   test(`duplicate ${exact ?? 'quoted'} identities refuse actions and visibility`, () => {

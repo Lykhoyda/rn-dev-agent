@@ -73,6 +73,7 @@ interface AppOptions {
   questions?: Questions[];
   reactFocused?: boolean | 'throw';
   hosts?: ReactHostObservation[];
+  reactUnavailable?: boolean;
 }
 
 function app(options: AppOptions = {}) {
@@ -94,6 +95,16 @@ function app(options: AppOptions = {}) {
   });
   const initial = options.initial ?? [wrapper(), submit];
   const current = (): Screen => {
+    const screen = observe();
+    return options.reactUnavailable
+      ? {
+          ...screen,
+          coverage: { native: 'complete', react: 'unknown' },
+          reactHostEvidence: undefined,
+        }
+      : screen;
+  };
+  const observe = (): Screen => {
     if (state === 'idle')
       return screenOf(
         initial,
@@ -1353,11 +1364,11 @@ for (const reactKnown of [true, false]) {
     const strict = prepareTarget(step, joined);
     assert.ok('refuse' in strict);
     assert.equal(strict.refuse, 'TARGET_NOT_FOUND');
-    // Without an observed inner field the wrapper is never assumed to stand for it.
-    assert.deepEqual(
-      keyboardFallbackTarget(step, joined),
-      reactKnown ? { element: joined.elements[0], oracleTestID: 'custom-pressable' } : undefined,
-    );
+    // Seen by React or unavailable to React, the exact wrapper stands for the field.
+    assert.deepEqual(keyboardFallbackTarget(step, joined), {
+      element: joined.elements[0],
+      oracleTestID: 'custom-pressable',
+    });
     assert.equal(
       joined.elements.some((e) => e.ref.startsWith('react:')),
       reactKnown,
@@ -2143,4 +2154,24 @@ test('twins appearing after the fallback tap remain terminal during rebinding', 
   assert.equal(fake.typed.length, 0);
   assert.equal(recoveries, 0);
   assert.equal(fake.log.filter((entry) => entry.startsWith('press')).length, 1);
+});
+
+test('without React reads the exact wrapper is tapped and typed into, unverified', async () => {
+  const fake = app({ reactUnavailable: true });
+  const result = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(result.block.outcome, 'pass', JSON.stringify(result.failure));
+  assert.deepEqual(steps(fake.log).slice(0, 2), ['press @wrap', 'type @wrap']);
+  assert.deepEqual(fake.typed[0], { ref: '@wrap', text: EMAIL, testID: 'qa-hidden-email' });
+  assert.match(result.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
+});
+
+test('without React a second wrapper for the field refuses before any tap', async () => {
+  const fake = app({
+    reactUnavailable: true,
+    initial: [wrapper(), wrapper('Email', { ref: '@wrap2' }), submit],
+  });
+  const result = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(result.block.outcome, 'fail');
+  assert.deepEqual(fake.typed, []);
+  assert.ok(!fake.log.some((line) => line.startsWith('press')));
 });

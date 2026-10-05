@@ -117,7 +117,21 @@ export function wrapperEquivalence(screen: Screen, id: string): Element | undefi
   const inner =
     screen.elements.some((e) => e.testID === id) ||
     !!screen.reactHostEvidence?.hosts.some((host) => host.testID === id);
-  return wrappers.length === 1 && inner ? wrappers[0] : undefined;
+  if (wrappers.length !== 1) return undefined;
+  if (inner) return wrappers[0];
+  // Without React the inner field cannot be seen or denied: only the exact wrapper of no other input stands for it.
+  const reactUnavailable =
+    !screen.reactHostEvidence?.hosts.length &&
+    screen.reactHostEvidence?.complete !== true &&
+    screen.coverage?.react !== 'complete';
+  const [wrapper] = wrappers;
+  return reactUnavailable &&
+    wrapper.testID === id + PRESSABLE_SUFFIX &&
+    !screen.elements.some(
+      (e) => (e.kind === 'input' || e.secure) && ancestorsOf(e).includes(wrapper),
+    )
+    ? wrapper
+    : undefined;
 }
 
 // The React focus identity a tapped element stands for, never an invented suffix.

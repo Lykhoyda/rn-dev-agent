@@ -130,7 +130,10 @@ native input resolves strictly.
 Tap-based fallback requires one onscreen, enabled, nonsecure native element
 carrying a unique testID, with no matching observable native input or secure node.
 A quoted base testID reaches its `-pressable` wrapper only while an element or
-React host carrying the base testID is also observed; no suffix is assumed.
+React host carrying the base testID is also observed, or, when React reads are
+unavailable, while exactly one native element carries that exact wrapper testID
+and encloses no other text entry; no other suffix is assumed. Strict fills never
+use this mapping.
 An identified native wrapper with another testID can also stand for the input
 when complete React host and ancestry evidence proves it encloses exactly one
 input host and its merged label equals that input's testID, text, label or
