@@ -87,8 +87,11 @@ nearest action candidate: enabled and either hittable or offscreen for scrolling
 When that candidate is among the matches, the text and other same-label ancestors
 collapse into it, including layout and press-capable but non-hittable wrappers.
 This applies to quoted presses and stored text-selector replay; it does not grant
-native tap eligibility to a wrapper. Separate controls in distinct subtrees with
-the same label still refuse as ambiguous. The
+native tap eligibility to a wrapper. A container without a testID that encloses
+(by tree or frame) exactly one same-label action candidate, such as the
+full-screen element iOS can label like the first control, is that control's
+echo. Separate controls in distinct subtrees with the same label still refuse
+as ambiguous. The
 [label-echo tests](../qaren-core/test/unit/qa/label-echo.test.ts) cover these cases.
 The refusal lists
 each candidate without its label or value: kind, testID or `no-id`, and the

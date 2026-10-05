@@ -90,6 +90,7 @@ export function forwardedInputOf(element: Element): string | undefined {
 const labelAncestors = new WeakMap<Element, Element[]>();
 const soleLabelTexts = new WeakMap<Element, Element>();
 const elementFrames = new WeakMap<Element, NonNullable<NativeNode['rect']>>();
+const nativeAncestors = new WeakMap<Element, Element[]>();
 const elementViewports = new WeakMap<Element, NonNullable<NativeNode['rect']>>();
 
 export function labelAncestorsOf(element: Element): readonly Element[] {
@@ -98,6 +99,11 @@ export function labelAncestorsOf(element: Element): readonly Element[] {
 
 export function soleLabelTextOf(element: Element): Element | undefined {
   return soleLabelTexts.get(element);
+}
+
+// Native tree ancestors, nearest first.
+export function ancestorsOf(element: Element): readonly Element[] {
+  return nativeAncestors.get(element) ?? [];
 }
 
 export function elementFrame(element: Element): NativeNode['rect'] {
@@ -816,6 +822,10 @@ export function join(
   const textDescendants = new Map<number, number[]>();
   nodes.forEach((n, i) => {
     if (n.rect) elementFrames.set(elements[i], n.rect);
+    const ancestors: Element[] = [];
+    for (let p = n.parentIndex; p !== undefined && p >= 0 && p < i; p = nodes[p].parentIndex)
+      ancestors.push(elements[p]);
+    if (ancestors.length) nativeAncestors.set(elements[i], ancestors);
     const bounds = clippingViewport(viewport, i);
     if (bounds) elementViewports.set(elements[i], bounds);
     if (duplicates.has(i) || elements[i].kind !== 'text') return;

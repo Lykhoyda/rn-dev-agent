@@ -4,6 +4,8 @@ import {
   type Screen,
   soleLabelTextOf,
   labelAncestorsOf,
+  ancestorsOf,
+  elementFrame,
   actionView,
   forwardedInputOf,
 } from './screen.js';
@@ -55,6 +57,46 @@ export function echoControl(
   return control !== element ? control : undefined;
 }
 
+function encloses(container: Element, element: Element): boolean {
+  if (ancestorsOf(element).includes(container)) return true;
+  const outer = elementFrame(container);
+  const inner = elementFrame(element);
+  return (
+    !!outer &&
+    !!inner &&
+    outer.width * outer.height > inner.width * inner.height &&
+    inner.x >= outer.x &&
+    inner.y >= outer.y &&
+    inner.x + inner.width <= outer.x + outer.width &&
+    inner.y + inner.height <= outer.y + outer.height
+  );
+}
+
+// A no-identifier container enclosing exactly one same-label actionable control only echoes that control.
+function containerEcho(
+  container: Element,
+  matched: readonly Element[],
+  purpose: 'action' | 'refresh',
+): boolean {
+  if (
+    container.kind !== 'other' ||
+    container.testID !== undefined ||
+    container.label === undefined ||
+    container.ref.startsWith('react:')
+  )
+    return false;
+  // A control is identified or typed; unidentified layout wrappers and texts have their own echo rule.
+  const enclosed = matched.filter(
+    (e) =>
+      e !== container &&
+      e.kind !== 'text' &&
+      (e.testID !== undefined || e.kind !== 'other') &&
+      e.label === container.label &&
+      encloses(container, e),
+  );
+  return (purpose === 'refresh' ? enclosed : actionView({ elements: enclosed })).length === 1;
+}
+
 // The wrapper `id-pressable` stands for `id` only while both ends are observed.
 export function wrapperEquivalence(screen: Screen, id: string): Element | undefined {
   const wrappers = screen.elements.filter((e) => e.testID === id + PRESSABLE_SUFFIX);
@@ -85,7 +127,11 @@ export function exactIdentities(
   return matched
     .filter((e) => {
       const control = echoControl(e, purpose);
-      return (!control || !matched.includes(control)) && !forwardsInput(e, matched);
+      return (
+        (!control || !matched.includes(control)) &&
+        !forwardsInput(e, matched) &&
+        !containerEcho(e, matched, purpose)
+      );
     })
     .map((element) => ({
       element,

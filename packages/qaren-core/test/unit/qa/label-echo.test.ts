@@ -279,3 +279,86 @@ test('a pressable with more than one text descendant is not an echo', () => {
   );
   assert.match(resolved.reason, /text no-id frame=150,712,60,24/);
 });
+
+// iOS can expose, beside app-root, a hittable full-screen no-identifier container labelled like the first control.
+function echoContainer(controls: number, contained = true): NativeNode[] {
+  const nodes: NativeNode[] = [
+    { ref: '@app', index: 0, type: 'Application', rect: { x: 0, y: 0, width: 402, height: 874 } },
+    {
+      ref: '@root',
+      index: 1,
+      parentIndex: 0,
+      type: 'Other',
+      identifier: 'app-root',
+      rect: { x: 0, y: 0, width: 402, height: 874 },
+    },
+    {
+      ref: '@echo',
+      index: 2,
+      parentIndex: 0,
+      type: 'Other',
+      label: 'Next',
+      hittable: true,
+      rect: { x: 0, y: 0, width: 402, height: 874 },
+    },
+  ];
+  const parentIndex = contained ? 2 : 1;
+  for (let i = 0; i < controls; i++)
+    nodes.push({
+      ref: `@next${i}`,
+      index: nodes.length,
+      parentIndex,
+      type: 'Button',
+      identifier: `onboarding-next-${i}`,
+      label: 'Next',
+      hittable: true,
+      rect: { x: 293, y: 700 + i * 50, width: 88, height: 38 },
+    });
+  nodes.push(
+    {
+      ref: '@title',
+      index: nodes.length,
+      parentIndex,
+      type: 'StaticText',
+      label: 'Welcome',
+      rect: { x: 24, y: 120, width: 300, height: 30 },
+    },
+    {
+      ref: '@body',
+      index: nodes.length + 1,
+      parentIndex,
+      type: 'StaticText',
+      label: 'Plan your day',
+      rect: { x: 24, y: 160, width: 300, height: 30 },
+    },
+  );
+  return nodes;
+}
+
+const tapNext = { kind: 'press' as const, target: { phrase: 'Next', quoted: 'Next' } };
+
+for (const contained of [true, false]) {
+  test(`a no-identifier container enclosing one same-label control is its echo (tree-contained=${contained})`, () => {
+    const resolved = prepareTarget(tapNext, join(echoContainer(1, contained), []));
+    assert.ok('ref' in resolved, JSON.stringify(resolved));
+    assert.equal(resolved.ref, '@next0');
+  });
+}
+
+test('a no-identifier container enclosing two same-label controls does not hide their ambiguity', () => {
+  const resolved = prepareTarget(tapNext, join(echoContainer(2), []));
+  assert.ok(
+    'refuse' in resolved && resolved.refuse === 'TARGET_AMBIGUOUS',
+    JSON.stringify(resolved),
+  );
+});
+
+test('an identified container is not collapsed as an echo', () => {
+  const nodes = echoContainer(1);
+  nodes[2] = { ...nodes[2], identifier: 'page-card' };
+  const resolved = prepareTarget(tapNext, join(nodes, []));
+  assert.ok(
+    'refuse' in resolved && resolved.refuse === 'TARGET_AMBIGUOUS',
+    JSON.stringify(resolved),
+  );
+});
