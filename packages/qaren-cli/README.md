@@ -416,9 +416,12 @@ device lease remain claimed for `qaren cleanup`. The developer
 [check gate](../../scripts/gate-qaren-check.sh) forwards the boot opt-in with
 `QAREN_BOOT_DEVICE=1` alongside `QAREN_DEVICE_UDID`.
 
-A dev-client launch timeout refuses with `CORE_REFUSED`; it is retried once only
-when the measured one-minute host load exceeds the launch envelope. Other launch
-errors remain `BUILD_FAILED`. Cleanup retained resources before retrying.
+Before launching the dev client, preparation requests its manifest from Metro
+once, so the client's own first request is not the slow cold one. A manifest or
+dev-client launch timeout refuses with `CORE_REFUSED`; the launch is retried once
+only when the measured one-minute host load exceeds the launch envelope. Other
+manifest and launch errors remain `BUILD_FAILED`. Cleanup retained resources
+before retrying.
 
 iOS artifact verification requires an Expo Dev Launcher image supporting
 `--initialUrl` and refuses bundles containing `main.jsbundle`. Symbol and string
@@ -660,7 +663,8 @@ Launch admission shares the remaining walk deadline across target readiness,
 WebSocket handshakes, probes and retry sleeps. A timeout with measured 1-minute
 host load above 10 is an environment refusal (`CDP_NOT_CONNECTED`), rather than
 a product FAIL. It retries attachment once only if the remaining budget can
-cover a full readiness wait; otherwise it refuses immediately. Deterministic
+cover a full readiness wait, relaunching the iOS dev client on its Metro first so
+a launch stuck on the dev launcher can recover; otherwise it refuses immediately. Deterministic
 attachment rejections are neither retried nor classified as environmental.
 If the CLI's walk deadline expires before the core reports admission, the CLI
 also returns `CDP_NOT_CONNECTED` with measured host load (or an explicit

@@ -562,6 +562,7 @@ fn assert_ios_prepare_reuses_cached_client(workspace: bool) {
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("6000\n"));
     mock.expect_run("curl", CmdOutput::success("packager-status:running"));
+    mock.expect_run("expo-platform", CmdOutput::success(""));
     common::script_devmenu_defaults(&mut mock, CmdOutput::success(""));
     mock.expect_run(
         "simctl launch --terminate-running-process",
@@ -634,6 +635,12 @@ fn assert_ios_prepare_reuses_cached_client(workspace: bool) {
             "http://127.0.0.1:8791/?disableOnboarding=1"
         ]
     );
+    // The cold manifest is answered once before the dev client asks for it.
+    let position = |label: &str| mock.calls.iter().position(|c| c.label == label).unwrap();
+    assert!(position("metro-manifest") < position("simctl-launch"));
+    let manifest = &mock.calls[position("metro-manifest")];
+    assert!(manifest.args.contains(&"expo-platform: ios".to_string()));
+    assert_eq!(manifest.args.last().unwrap(), "http://127.0.0.1:8791/");
     for key in [
         "install_cached",
         "metro_ready",
@@ -1468,6 +1475,7 @@ fn android_reuse_path_records_install_provenance_after_a_successful_adb_install(
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("6000\n"));
     mock.expect_run("curl", CmdOutput::success("packager-status:running"));
+    mock.expect_run("expo-platform", CmdOutput::success(""));
     mock.expect_run("am start", CmdOutput::success("Starting: Intent\n"));
     // wait_ready
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));

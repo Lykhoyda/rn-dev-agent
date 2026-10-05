@@ -2772,6 +2772,7 @@ fn fresh_install_resets_or_proves_absence_before_cached_install_under_the_same_l
             mock.expect_run("ps", CmdOutput::success("6000"));
             mock.expect_run("curl", CmdOutput::success("packager-status:running"));
             if launch {
+                mock.expect_run("expo-platform", CmdOutput::success(""));
                 common::script_devmenu_defaults(&mut mock, CmdOutput::success(""));
                 mock.expect_run(
                     &format!("simctl launch --terminate-running-process {UDID}"),

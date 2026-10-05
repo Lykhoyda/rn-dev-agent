@@ -216,6 +216,7 @@ pub fn script_ios_install_and_launch_with(mock: &mut MockRunner, defaults: CmdOu
     mock.expect_run("lsof", CmdOutput::success("6001"));
     mock.expect_run("ps", CmdOutput::success("6000"));
     mock.expect_run("curl", CmdOutput::success("packager-status:running"));
+    mock.expect_run("expo-platform", CmdOutput::success(""));
     script_devmenu_defaults(mock, defaults);
     mock.expect_run(
         "simctl launch --terminate-running-process",

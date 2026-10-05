@@ -1588,6 +1588,21 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
     let t = ctx.mark("metro_ready", t);
 
     ensure_running(ctx.runner, "build")?;
+    let warmed = ctx.runner.run(&metro::manifest_spec(
+        metro_port,
+        platform_dir(ctx.record.scenario.platform),
+    ));
+    if !warmed.ok() {
+        let load = warmed.timed_out.then(crate::core::host_load_1m).flatten();
+        return Err(launch_failure(
+            "dev client manifest",
+            &warmed,
+            load,
+            false,
+            &ctx.record.run_id,
+        ));
+    }
+    ensure_running(ctx.runner, "build")?;
     let launch = match ctx.record.scenario.platform {
         Platform::Ios => {
             let sim = ctx
@@ -1648,7 +1663,13 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
         load = launched.timed_out.then(crate::core::host_load_1m).flatten();
     }
     if !launched.ok() {
-        return Err(launch_failure(&launched, load, retried, &ctx.record.run_id));
+        return Err(launch_failure(
+            "dev client launch",
+            &launched,
+            load,
+            retried,
+            &ctx.record.run_id,
+        ));
     }
     let t = ctx.mark("app_launch", t);
 
@@ -2553,6 +2574,7 @@ fn dry_run_receipt(
                 Path::new("<run_dir>/ios-build/<verified-app>.app"),
             ));
             planned.push(metro::start_spec(&cand.project_root, port));
+            planned.push(metro::manifest_spec(port, "ios"));
             planned.extend(ios::devmenu_defaults_specs("<udid>", &cand.app_id));
             planned.push(ios::launch_spec("<udid>", &cand.app_id, port));
             planned.push(ios::app_container_spec("<udid>", &cand.app_id));
@@ -2673,6 +2695,7 @@ fn dry_run_receipt(
             Platform::Ios => {
                 planned.push(ios::install_app_spec("<udid>", &artifact_path));
                 planned.push(metro::start_spec(&cand.project_root, port));
+                planned.push(metro::manifest_spec(port, "ios"));
                 planned.extend(ios::devmenu_defaults_specs("<udid>", &cand.app_id));
                 planned.push(ios::launch_spec("<udid>", &cand.app_id, port));
                 planned.push(ios::app_container_spec("<udid>", &cand.app_id));
@@ -2699,6 +2722,7 @@ fn dry_run_receipt(
                 ));
                 planned.push(android::adb_reverse_spec(adb, server_port, &serial, port));
                 planned.push(metro::start_spec(&cand.project_root, port));
+                planned.push(metro::manifest_spec(port, "android"));
                 planned.push(android::am_start_deeplink_spec(
                     adb,
                     server_port,
@@ -2738,6 +2762,7 @@ fn retry_launch(launched: &crate::exec::CmdOutput, load: Option<f64>) -> bool {
 
 // A launch timeout is the CDP leg's environmental refusal; any other launch error stays a build failure.
 fn launch_failure(
+    what: &str,
     launched: &crate::exec::CmdOutput,
     load: Option<f64>,
     retried: bool,
@@ -2747,7 +2772,7 @@ fn launch_failure(
         return Failure::new(
             "build",
             FailureCode::BuildFailed,
-            format!("dev client launch failed: {}", launched.summary()),
+            format!("{what} failed: {}", launched.summary()),
             format!("run qaren cleanup {run_id} --json, then retry prepare"),
         );
     }
@@ -2768,7 +2793,7 @@ fn launch_failure(
         "build",
         FailureCode::CoreRefused,
         format!(
-            "dev client launch timed out: {} ({measured}{environment})",
+            "{what} timed out: {} ({measured}{environment})",
             launched.summary()
         ),
         format!("run qaren cleanup {run_id} --json, then retry when the host is less loaded"),
@@ -2801,7 +2826,13 @@ mod launch_tests {
 
     #[test]
     fn a_launch_timeout_is_an_environment_refusal_with_the_load_envelope() {
-        let loaded = launch_failure(&timed_out(), Some(256.0), true, "check-1");
+        let loaded = launch_failure(
+            "dev client launch",
+            &timed_out(),
+            Some(256.0),
+            true,
+            "check-1",
+        );
         assert_eq!(loaded.code, FailureCode::CoreRefused);
         assert!(loaded.code.is_refusal());
         let detail = loaded.detail.to_string();
@@ -2813,7 +2844,13 @@ mod launch_tests {
             detail.contains("an environment refusal after one retry"),
             "{detail}"
         );
-        let calm = launch_failure(&timed_out(), Some(2.0), false, "check-1");
+        let calm = launch_failure(
+            "dev client launch",
+            &timed_out(),
+            Some(2.0),
+            false,
+            "check-1",
+        );
         assert_eq!(calm.code, FailureCode::CoreRefused);
         let detail = calm.detail.to_string();
         assert!(detail.contains("within the envelope 10"), "{detail}");
@@ -2821,8 +2858,33 @@ mod launch_tests {
     }
 
     #[test]
+    fn an_unanswered_manifest_is_refused_like_a_launch() {
+        let slow = launch_failure("dev client manifest", &timed_out(), Some(40.0), false, "c");
+        assert_eq!(slow.code, FailureCode::CoreRefused);
+        let detail = slow.detail.to_string();
+        assert!(
+            detail.starts_with("dev client manifest timed out"),
+            "{detail}"
+        );
+        assert!(detail.contains("an environment refusal"), "{detail}");
+        let broken = launch_failure(
+            "dev client manifest",
+            &CmdOutput::failed(22, "HTTP 500"),
+            None,
+            false,
+            "c",
+        );
+        assert_eq!(broken.code, FailureCode::BuildFailed);
+        assert!(broken
+            .detail
+            .to_string()
+            .starts_with("dev client manifest failed"));
+    }
+
+    #[test]
     fn a_real_launch_error_stays_a_build_failure() {
         let failure = launch_failure(
+            "dev client launch",
             &CmdOutput::failed(1, "no such app"),
             Some(65.0),
             false,

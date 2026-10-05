@@ -238,3 +238,55 @@ test('loaded handshake timeout retries once and remains an environment refusal',
   assert.equal(attempts, 2);
   assert.deepEqual(calls, ['close']);
 });
+
+test('the single retry relaunches the app before waiting again', async () => {
+  const order: string[] = [];
+  const { stop, steps } = harness({
+    load: () => 50,
+    attach: async () => {
+      order.push('attach');
+      if (order.length === 1) throw new TargetReadinessTimeoutError('stuck on the launcher');
+    },
+    relaunch: async () => {
+      order.push('relaunch');
+    },
+  });
+  assert.deepEqual(await admit(steps, stop), PROVEN);
+  assert.deepEqual(order, ['attach', 'relaunch', 'attach']);
+});
+
+test('within the load envelope nothing is relaunched', async () => {
+  let relaunched = 0;
+  const { stop, steps } = harness({
+    load: () => 3,
+    attach: async () => {
+      throw new TargetReadinessTimeoutError('no target');
+    },
+    relaunch: async () => {
+      relaunched++;
+    },
+  });
+  await assert.rejects(admit(steps, stop));
+  assert.equal(relaunched, 0);
+});
+
+test('a failed relaunch skips the second wait and stays an environment refusal', async () => {
+  let attempts = 0;
+  const { stop, steps } = harness({
+    load: () => 50,
+    attach: async () => {
+      attempts++;
+      throw new TargetReadinessTimeoutError('stuck on the launcher');
+    },
+    relaunch: async () => {
+      throw new Error('simctl launch failed');
+    },
+  });
+  await assert.rejects(admit(steps, stop), (error: Error & { code?: string }) => {
+    assert.equal(error.code, 'CDP_NOT_CONNECTED');
+    assert.match(error.message, /environment refusal/);
+    assert.match(error.message, /relaunch failed: simctl launch failed/);
+    return true;
+  });
+  assert.equal(attempts, 1);
+});

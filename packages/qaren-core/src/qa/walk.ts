@@ -26,6 +26,7 @@ import {
 } from '../handlers/device-interact.js';
 import { captureQaScreenshot } from './screenshot.js';
 import { createDeviceSnapshotHandler } from '../handlers/device-session.js';
+import { relaunchIosDevClient } from '../handlers/app-lifecycle.js';
 import {
   createDeviceAcceptSystemDialogHandler,
   createDeviceDismissSystemDialogHandler,
@@ -324,6 +325,17 @@ async function openSession(
           deadline,
         );
       },
+      // Same launch the CLI made: terminate, then open the dev client on its Metro.
+      ...(platform === 'ios'
+        ? {
+            relaunch: () =>
+              relaunchIosDevClient(
+                appId,
+                target.deviceId,
+                `${target.metroUrlForDevice}/?disableOnboarding=1`,
+              ),
+          }
+        : {}),
       // The lease coordinates qaren processes only; a foreign Maestro or XCUITest driver is a probe.
       foreignDriver: async () => {
         if (platform !== 'ios') return undefined;

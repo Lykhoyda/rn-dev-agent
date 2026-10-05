@@ -12,6 +12,8 @@ export interface AdmissionSteps {
   readinessMs: number;
   remainingMs(): number;
   attach(deadline: number): Promise<void>;
+  // A launch stuck on the dev-launcher never recovers by waiting: the one retry relaunches first.
+  relaunch?(): Promise<void>;
   foreignDriver(): Promise<string | undefined>;
   open(): Promise<void>;
   prove(): Promise<ProveOutcome>;
@@ -61,7 +63,16 @@ async function attach(steps: AdmissionSteps): Promise<void> {
     error instanceof CDPProbeTimeoutError ||
     error instanceof CDPHandshakeTimeoutError;
   const retry = loaded && timedOut(failure) && steps.remainingMs() >= steps.readinessMs;
-  if (retry) {
+  let relaunchFailure: string | undefined;
+  if (retry && steps.relaunch) {
+    try {
+      await interruptible(steps.relaunch);
+    } catch (error) {
+      if (isAbort(error)) throw error;
+      relaunchFailure = describeError(error).message;
+    }
+  }
+  if (retry && relaunchFailure === undefined) {
     try {
       const deadline = performance.now() + steps.remainingMs();
       await withDeadline(deadline, new CDPProbeTimeoutError('CDP attach deadline exceeded'), () =>
@@ -77,6 +88,6 @@ async function attach(steps: AdmissionSteps): Promise<void> {
   const measured = `host 1-minute load ${load.toFixed(1)} is ${loaded ? 'above' : 'within'} the envelope ${LOAD_ENVELOPE}`;
   throw new HandlerError(
     'CDP_NOT_CONNECTED',
-    `cannot attach to the dev client through Metro ${steps.metroPort}: ${describeError(failure).message} (${measured}${environment ? `; an environment refusal ${retry ? 'after one retry' : 'without enough budget for another readiness wait'}` : ''})`,
+    `cannot attach to the dev client through Metro ${steps.metroPort}: ${describeError(failure).message} (${measured}${environment ? `; an environment refusal ${retry ? 'after one retry' : 'without enough budget for another readiness wait'}` : ''}${relaunchFailure === undefined ? '' : `; relaunch failed: ${relaunchFailure}`})`,
   );
 }

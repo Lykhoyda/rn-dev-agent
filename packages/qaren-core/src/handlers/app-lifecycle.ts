@@ -28,6 +28,34 @@ export function buildIosLaunchArgv(bundleId: string, deviceId?: string): string[
   return ['simctl', 'launch', resolveIosLifecycleTarget(deviceId), bundleId];
 }
 
+export function buildIosRelaunchArgv(
+  bundleId: string,
+  deviceId: string,
+  initialUrl: string,
+): string[] {
+  return [
+    'simctl',
+    'launch',
+    '--terminate-running-process',
+    resolveIosLifecycleTarget(deviceId),
+    bundleId,
+    '--initialUrl',
+    initialUrl,
+  ];
+}
+
+// Terminates and relaunches the dev client on the exact simulator, pointed at its Metro.
+export async function relaunchIosDevClient(
+  bundleId: string,
+  deviceId: string,
+  initialUrl: string,
+): Promise<void> {
+  await execFile('xcrun', buildIosRelaunchArgv(bundleId, deviceId, initialUrl), {
+    timeout: LAUNCH_TIMEOUT_MS,
+    encoding: 'utf8',
+  });
+}
+
 export function buildIosTerminateArgv(bundleId: string, deviceId?: string): string[] {
   if (typeof bundleId !== 'string' || bundleId.length === 0) {
     throw new Error('buildIosTerminateArgv: bundleId is required');
