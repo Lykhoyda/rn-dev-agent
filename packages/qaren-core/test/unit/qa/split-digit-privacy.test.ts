@@ -7,7 +7,7 @@ import {
   projectPlanLine,
   codeBoxRows,
 } from '../../../dist/qa/privacy.js';
-import { join, describe } from '../../../dist/qa/screen.js';
+import { join, describe, type NativeNode } from '../../../dist/qa/screen.js';
 import { element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
 import { parsePlan, parsePlanWithJev } from '../../../dist/qa/plan.js';
 import { runPlan } from '../../../dist/qa/walker.js';
@@ -73,6 +73,74 @@ for (const representation of ['label', 'value'] as const) {
       assert.equal(privacy.redact('step 9 of 93'), 'step 9 of 93');
     });
   }
+}
+
+for (const [width, typed] of [
+  [354, '5038'],
+  [402, '5038'],
+  [402, '503'],
+] as const) {
+  test(`spread pressable cells with glyph-width text in ${width}pt hide ${typed.length} characters`, () => {
+    const cells = 4;
+    const gap = (width - cells * 44) / (cells - 1);
+    const nodes: NativeNode[] = [
+      { ref: '@row', index: 0, type: 'Other', rect: { x: 0, y: 300, width, height: 60 } },
+    ];
+    for (let i = 0; i < cells; i++) {
+      const x = i * (44 + gap);
+      const cell = nodes.length;
+      const char = typed[i];
+      nodes.push({
+        ref: `@cell${i}`,
+        index: cell,
+        parentIndex: 0,
+        type: 'Other',
+        identifier: 'otp-input',
+        hittable: true,
+        ...(char ? { label: char } : {}),
+        rect: { x, y: 300, width: 44, height: 60 },
+      });
+      nodes.push(
+        char
+          ? {
+              ref: `@char${i}`,
+              index: cell + 1,
+              parentIndex: cell,
+              type: 'StaticText',
+              label: char,
+              rect: { x: x + 13, y: 313, width: 17, height: 34 },
+            }
+          : {
+              ref: `@stick${i}`,
+              index: cell + 1,
+              parentIndex: cell,
+              type: 'Other',
+              rect: { x: x + 21, y: 315, width: 2, height: 30 },
+            },
+      );
+    }
+    nodes.push({
+      ref: '@hidden',
+      index: nodes.length,
+      parentIndex: 0,
+      type: 'TextField',
+      identifier: 'otp-input-hidden',
+      value: typed,
+      rect: { x: 0, y: 300, width: 25, height: 46 },
+    });
+    const captured = join(nodes, []);
+    const privacy = new ObservedPrivacy([typed]);
+    privacy.didFill();
+    privacy.observe(captured);
+    const text = privacy.screenText(captured);
+    assert.ok(text.includes('[code]'), JSON.stringify(text));
+    for (const char of typed)
+      assert.equal(
+        text.some((line) => line.includes(char)),
+        false,
+        JSON.stringify(text),
+      );
+  });
 }
 
 test('empty rows alone do not establish a private code', () => {

@@ -284,28 +284,50 @@ export function codeBoxRows(screen: Screen): Element[][] {
           (ancestor.label || ancestor.value || '') === (element.label || element.value || ''),
       ),
   );
+  // A glyph-width Text inside a code cell is measured by its cell: the nearest framed ancestor holding no other box.
+  const cells = new Map(
+    boxes.map((element) => {
+      const own = elementFrame(element)!;
+      const cell = ancestorsOf(element).find(
+        (ancestor) =>
+          elementFrame(ancestor) !== undefined &&
+          !boxes.some((other) => other !== element && ancestorsOf(other).includes(ancestor)),
+      );
+      const frame = cell && elementFrame(cell)!;
+      const contains =
+        frame &&
+        frame.width > 0 &&
+        frame.x <= own.x &&
+        frame.y <= own.y &&
+        frame.x + frame.width >= own.x + own.width &&
+        frame.y + frame.height >= own.y + own.height;
+      return [element, contains ? frame : own];
+    }),
+  );
+  const cellFrame = (element: Element) => cells.get(element)!;
   const bands: Element[][] = [];
-  for (const element of boxes.sort((a, b) => elementFrame(a)!.y - elementFrame(b)!.y)) {
-    const frame = elementFrame(element)!;
+  for (const element of boxes.sort((a, b) => cellFrame(a).y - cellFrame(b).y)) {
+    const frame = cellFrame(element);
     const band = bands.find((row) => {
-      const first = elementFrame(row[0])!;
+      const first = cellFrame(row[0]);
       return Math.abs(frame.y + frame.height / 2 - first.y - first.height / 2) <= 4;
     });
     if (band) band.push(element);
     else bands.push([element]);
   }
   return bands.flatMap((band) => {
-    band.sort((a, b) => elementFrame(a)!.x - elementFrame(b)!.x);
-    const widths = band.map((element) => elementFrame(element)!.width).sort((a, b) => a - b);
+    band.sort((a, b) => cellFrame(a).x - cellFrame(b).x);
+    const widths = band.map((element) => cellFrame(element).width).sort((a, b) => a - b);
     const middle = Math.floor(widths.length / 2);
     const median = widths.length % 2 ? widths[middle] : (widths[middle - 1] + widths[middle]) / 2;
     const rows: Element[][] = [[]];
     for (const element of band) {
       const row = rows[rows.length - 1];
       const previous = row[row.length - 1];
-      const frame = elementFrame(element)!;
-      const before = previous && elementFrame(previous)!;
-      if (before && (frame.x <= before.x || frame.x - before.x - before.width > 1.5 * median))
+      const frame = cellFrame(element);
+      const before = previous && cellFrame(previous);
+      // Evenly spread cells (space-between on a wide phone) can sit up to two cell widths apart.
+      if (before && (frame.x <= before.x || frame.x - before.x - before.width > 2 * median))
         rows.push([element]);
       else row.push(element);
     }
