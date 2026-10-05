@@ -554,11 +554,16 @@ test('box characters do not affect admission of unrelated blocks', () => {
   const privacy = new ObservedPrivacy();
   privacy.concealFallback('4815');
   privacy.concealFallback('1234');
-  for (const text of ['8', '4 | 8', 'Step 1 of 2', '4 | 8 | 1 | 5']) {
+  for (const text of ['8', '4 | 8', 'Step 1 of 2']) {
     const block = blockOf(`## QA\n\n### Confirm\n✓ "${text}"\n`);
     const result = serializeBlock(block, passRows(block, {}), ios, privacy.privateSet());
-    assert.ok('yaml' in result);
+    assert.ok('yaml' in result, text);
   }
+  // A plan that spells out the private value in any separator form is withheld; the walk is unaffected.
+  const spelled = blockOf(`## QA\n\n### Confirm\n✓ "4 | 8 | 1 | 5"\n`);
+  assert.ok(
+    'unsavable' in serializeBlock(spelled, passRows(spelled, {}), ios, privacy.privateSet()),
+  );
 });
 
 test('short preclassified fills withhold quoted plan slots only', () => {
