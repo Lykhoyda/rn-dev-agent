@@ -2687,6 +2687,8 @@ fn dry_run_receipt(
                     | "simctl-install"
                     | "simctl-launch"
                     | "expo-start"
+                    | "metro-manifest"
+                    | "simctl-devmenu-defaults"
                     | "simctl-app-container"
                     | "simctl-launchctl"
             )

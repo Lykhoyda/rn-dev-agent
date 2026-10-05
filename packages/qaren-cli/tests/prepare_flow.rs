@@ -1665,6 +1665,89 @@ fn dry_run_plans_without_allocating() {
 }
 
 #[test]
+fn ios_reuse_dry_run_lists_each_launch_step_once_in_execution_order() {
+    use qaren::adapters::{ios, metro};
+    use qaren::buildplan::{
+        hash_artifact, save_json, state_path, ArtifactKind, BuildDecision, CachedArtifact,
+        NativeCacheState, CACHE_SCHEMA,
+    };
+    use qaren::exec::CmdSpec;
+
+    let repo = common::temp_repo();
+    let project = repo.join("test-app");
+    let yaml = ios_scenario_yaml(8791);
+    let scenario = common::scenario_from(&yaml);
+    let scenario_path = write_scenario(&repo, &yaml);
+    let artifact = repo.join("cached.app");
+    std::fs::create_dir_all(&artifact).unwrap();
+    std::fs::write(artifact.join("binary"), b"cached app").unwrap();
+    let files = "test-app/package.json\0";
+    let mut fp_runner = qaren::exec::MockRunner::new();
+    fp_runner.expect_run("ls-files", CmdOutput::success(files));
+    let fp = qaren::fingerprint::compute(&mut fp_runner, &repo, &project, "ios").unwrap();
+    assert!(fp.complete);
+    let cache = NativeCacheState {
+        schema: CACHE_SCHEMA.to_string(),
+        platform: "ios".to_string(),
+        app_id: scenario.candidate.app_id.clone(),
+        worktree_root: repo.clone(),
+        fingerprint: fp.value,
+        built_at: "2026-10-05T00:00:00Z".to_string(),
+        candidate_sha: "b".repeat(40),
+        lockfile_sha256: "c".repeat(64),
+        generated_native_dirs: vec!["ios".to_string()],
+        artifact: Some(CachedArtifact {
+            path: artifact.clone(),
+            sha256: hash_artifact(&artifact).unwrap(),
+            kind: ArtifactKind::AppBundle,
+        }),
+    };
+    save_json(&state_path(&repo, "ios", &scenario.candidate.app_id), &cache).unwrap();
+
+    let mut mock = MockRunner::new();
+    script_validation(&mut mock, &repo, IOS_TOOLS);
+    mock.expect_run(
+        "expo run:ios --help",
+        CmdOutput::success(common::IOS_BUILD_HELP),
+    );
+    mock.expect_run("lsof", free_port());
+    mock.expect_run("ls-files", CmdOutput::success(files));
+    let receipt = prepare(&mut mock, &prepare_args(&scenario_path, true, None));
+    assert_eq!(receipt.result, ReceiptResult::Planned);
+    assert_eq!(receipt.build.as_ref().unwrap().decision, BuildDecision::Reuse);
+    assert_eq!(mock.remaining(), 0);
+
+    let ios_spec = scenario.ios.as_ref().unwrap();
+    let mut expected = vec![
+        CmdSpec::new(
+            "pnpm-install",
+            "pnpm",
+            &["install", "--frozen-lockfile"],
+            scenario.deadlines.install_deps_seconds,
+        ),
+        ios::create_spec(
+            &ios::sim_name(&receipt.run_id),
+            &ios_spec.device_type,
+            &ios_spec.runtime,
+        ),
+        ios::bootstatus_spec("<udid>", scenario.deadlines.device_boot_seconds),
+        ios::install_app_spec("<udid>", &artifact),
+        metro::start_spec(&project, 8791),
+        metro::manifest_spec(8791, "ios"),
+    ];
+    expected.extend(ios::devmenu_defaults_specs("<udid>", &cache.app_id));
+    expected.extend([
+        ios::launch_spec("<udid>", &cache.app_id, 8791),
+        ios::app_container_spec("<udid>", &cache.app_id),
+        ios::launchctl_list_spec("<udid>"),
+    ]);
+    assert_eq!(
+        receipt.planned_commands,
+        expected.iter().map(CmdSpec::rendered).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn dry_run_plans_generated_native_regeneration_before_every_build_route() {
     use qaren::buildplan::{save_json, state_path, BuildDecision, NativeCacheState, CACHE_SCHEMA};
     use qaren::scenario::{AndroidUsbSpec, IosWorkspaceBuild, Platform};
