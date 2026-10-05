@@ -16,7 +16,7 @@ import { buildRunIOSArgs, buildRunAndroidArgs } from '../../../dist/agent-device
 const rect = (x: number, y: number, width: number, height: number) => ({ x, y, width, height });
 
 function scene(y = 790, type = 'Button', coverType = 'Button'): NativeNode[] {
-  return [
+  const nodes: NativeNode[] = [
     { ref: '@e0', type: 'Application', rect: rect(0, 0, 402, 874) },
     { ref: '@e1', type: 'Window', parentIndex: 0, rect: rect(0, 0, 402, 874) },
     { ref: '@e2', type: 'ScrollView', parentIndex: 1, rect: rect(0, 100, 402, 774) },
@@ -38,6 +38,75 @@ function scene(y = 790, type = 'Button', coverType = 'Button'): NativeNode[] {
       rect: rect(0, 789, 402, 60),
     },
   ];
+  if (coverType === 'Window')
+    nodes.push({ ref: '@overlay', type: 'Alert', parentIndex: 4, rect: nodes[4].rect });
+  return nodes;
+}
+
+for (const type of ['Other', 'Group', 'ScrollView']) {
+  test(`an unidentified transparent ${type} never blocks a button`, () => {
+    const nodes = scene(700);
+    nodes[4] = {
+      ref: '@transparent',
+      type,
+      parentIndex: 1,
+      enabled: true,
+      hittable: true,
+      rect: rect(0, 0, 402, 874),
+    };
+    assert.equal(targetVisible(target, screen(nodes)), true);
+    assert.deepEqual(nativeDispatchPoints(nodes).get(3), { x: 195, y: 719 });
+    updateRefMapFromFlat(nodes as never);
+    try {
+      assert.deepEqual(refDispatchPoint('@e3'), { x: 195, y: 719 });
+    } finally {
+      clearRefMap();
+    }
+    nodes[4].identifier = 'blocking-control';
+    assert.equal(nativeDispatchPoints(nodes).get(3), null);
+  });
+}
+
+for (const overlay of ['Keyboard', 'Alert']) {
+  test(`${overlay} windows select the same uncovered point in either emission order`, () => {
+    const app: NativeNode = { ref: '@app', type: 'Application', rect: rect(0, 0, 402, 874) };
+    const main: NativeNode = { ref: '@main', type: 'Window', parentIndex: 0, rect: app.rect };
+    const input: NativeNode = {
+      ref: '@input',
+      type: 'TextField',
+      parentIndex: 1,
+      identifier: 'input',
+      rect: rect(20, 700, 350, 40),
+    };
+    const front: NativeNode = {
+      ref: '@front',
+      type: 'Window',
+      parentIndex: 0,
+      rect: overlay === 'Keyboard' ? app.rect : rect(0, 720, 402, 154),
+    };
+    const content: NativeNode = {
+      ref: '@overlay',
+      type: overlay,
+      parentIndex: 3,
+      rect: rect(0, 720, 402, 154),
+    };
+    const raw = [app, main, input, front, content];
+    const fast = [app, front, { ...content, parentIndex: 1 }, main, { ...input, parentIndex: 3 }];
+    for (const nodes of [raw, fast]) {
+      const index = nodes.findIndex((node) => node.ref === '@input');
+      assert.deepEqual(nativeDispatchPoints(nodes).get(index), { x: 195, y: 710 });
+      assert.equal(
+        screen(nodes).elements.find((element) => element.ref === '@input')!.offscreen,
+        false,
+      );
+      updateRefMapFromFlat(nodes as never);
+      try {
+        assert.deepEqual(refDispatchPoint('@input'), { x: 195, y: 710 });
+      } finally {
+        clearRefMap();
+      }
+    }
+  });
 }
 
 const screen = (nodes: NativeNode[]) =>

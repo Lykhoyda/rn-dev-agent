@@ -148,25 +148,27 @@ test('occluded focus points refuse before native typing or tapping', async () =>
   assert.deepEqual(tapped.calls, []);
 });
 
-test('a partly keyboard-covered input uses an uncovered focus point', async () => {
-  const nodes = [
-    ...NODES,
-    {
-      ref: '@e6',
-      type: 'Keyboard',
-      identifier: 'keyboard',
-      rect: { x: 20, y: 120, width: 360, height: 40 },
-    },
-  ];
-  const { result, calls } = await withFillSeam({ nodes }, () =>
-    createDeviceFillHandler(() => null as never)({ ref: 'first-name', text: 'value' }),
-  );
-  assert.equal(envelope(result).ok, true);
-  const typed = calls.find((call) => call.cliArgs[0] === 'fill');
-  assert.ok(typed);
-  const point = typed.opts.exactTarget as { focusX: number; focusY: number };
-  assert.equal(point.focusX, 200);
-  assert.ok(point.focusY > 110 && point.focusY < 120);
+test('a partly keyboard-covered input uses the same uncovered focus point in either emission order', async () => {
+  const keyboard = {
+    ref: '@e6',
+    type: 'Keyboard',
+    identifier: 'keyboard',
+    rect: { x: 20, y: 120, width: 360, height: 40 },
+  };
+  for (const nodes of [
+    [...NODES, keyboard],
+    [keyboard, ...NODES],
+  ]) {
+    const { result, calls } = await withFillSeam({ nodes }, () =>
+      createDeviceFillHandler(() => null as never)({ ref: 'first-name', text: 'value' }),
+    );
+    assert.equal(envelope(result).ok, true);
+    const typed = calls.find((call) => call.cliArgs[0] === 'fill');
+    assert.ok(typed);
+    const point = typed.opts.exactTarget as { focusX: number; focusY: number };
+    assert.equal(point.focusX, 200);
+    assert.ok(point.focusY > 110 && point.focusY < 120);
+  }
 });
 
 function fakeClient(handlers: {

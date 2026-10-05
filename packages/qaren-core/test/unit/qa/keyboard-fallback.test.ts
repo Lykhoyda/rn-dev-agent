@@ -7,7 +7,8 @@ import { NativeCaptureError } from '../../../dist/qa/capture.js';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import type { Block, Step } from '../../../dist/qa/plan.js';
 import { join as joinScreen } from '../../../dist/qa/screen.js';
-import type { Element, ReactHostObservation, Screen } from '../../../dist/qa/screen.js';
+import type { Element, NativeNode, ReactHostObservation, Screen } from '../../../dist/qa/screen.js';
+import { exactIdentities } from '../../../dist/qa/identity.js';
 import { keyboardFallbackTarget, prepareTarget } from '../../../dist/qa/resolve.js';
 import { KEYBOARD_READY_CAPTURES, runPlan, walkBlock } from '../../../dist/qa/walker.js';
 import type { ActResult, BlockStore, WalkerDeps } from '../../../dist/qa/walker.js';
@@ -215,6 +216,113 @@ const strings = (value: unknown): string[] =>
     : value && typeof value === 'object'
       ? Object.values(value).flatMap(strings)
       : [];
+
+function wrappedInput(label: string, unrelated = false, ancestry = true): Screen {
+  const nodes: NativeNode[] = [
+    { ref: '@app', type: 'Application', rect: { x: 0, y: 0, width: 400, height: 800 } },
+    {
+      ref: '@window',
+      type: 'Window',
+      parentIndex: 0,
+      rect: { x: 0, y: 0, width: 400, height: 800 },
+    },
+    {
+      ref: '@wrap',
+      type: 'Other',
+      identifier: WRAP,
+      label,
+      parentIndex: 1,
+      hittable: true,
+      rect: { x: 20, y: 100, width: 360, height: 50 },
+    },
+  ];
+  if (unrelated)
+    nodes.push({
+      ref: '@other',
+      type: 'Button',
+      identifier: 'unrelated',
+      label,
+      parentIndex: 1,
+      hittable: true,
+      rect: { x: 20, y: 200, width: 360, height: 50 },
+    });
+  return {
+    ...joinScreen(
+      nodes,
+      [
+        { role: 'button', testID: WRAP, capabilities: { press: true, fill: false } },
+        {
+          role: 'textinput',
+          testID: INNER.testID,
+          text: label,
+          inputHostIndices: [1],
+          capabilities: { fill: true, press: false },
+        },
+      ],
+      'app',
+      { native: 'complete', react: 'complete' },
+      {
+        complete: true,
+        hosts: [
+          { testID: WRAP, role: 'button', roleSource: 'role', capabilities: { press: true } },
+          INNER,
+        ],
+        typography: {
+          version: 1,
+          complete: true,
+          durationMs: 1,
+          coordinateSpace: 'window-points',
+          nodes: [
+            {
+              hostIndex: 0,
+              parentHostIndex: null,
+              rootIndex: 0,
+              hostType: 'RCTView',
+              text: { kind: 'none' },
+            },
+            {
+              hostIndex: 1,
+              parentHostIndex: ancestry ? 0 : null,
+              rootIndex: ancestry ? 0 : 1,
+              hostType: 'RCTSinglelineTextInputView',
+              text: { kind: 'none' },
+            },
+          ],
+        },
+      },
+    ),
+    keyboardVisible: false,
+  };
+}
+
+for (const label of [INNER.testID, 'Email address']) {
+  test(`a wrapper labelled with the input identity or placeholder ${label} permits keyboard fallback`, async () => {
+    const captured = wrappedInput(label);
+    const step: Step = { kind: 'fill', target: { phrase: label, quoted: label }, text: EMAIL };
+    const fallback = keyboardFallbackTarget(step, captured);
+    assert.equal(fallback?.element.ref, '@wrap');
+    assert.equal(fallback?.oracleTestID, INNER.testID);
+    const fake = app({
+      initial: captured.elements,
+      focused: [{ ...captured, keyboardVisible: true }],
+    });
+    const capture = fake.deps.captureScreen;
+    fake.deps.captureScreen = async (options) =>
+      fake.state() === 'idle' ? captured : capture(options);
+    const outcome = await walkBlock(blocks(plan(EMAIL, label, ''))[0], fake.deps);
+    assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+    assert.deepEqual(fake.typed, [{ ref: '@wrap', text: EMAIL, testID: INNER.testID }]);
+    assert.deepEqual(
+      steps(fake.log).filter((line) => !line.startsWith('shot')),
+      ['press @wrap', 'type @wrap'],
+    );
+    const twin = wrappedInput(label, true);
+    assert.equal(keyboardFallbackTarget(step, twin), undefined);
+    assert.ok(exactIdentities(twin, step.target, 'press').length > 1);
+    if (label === INNER.testID)
+      assert.equal(keyboardFallbackTarget(step, wrappedInput(label, false, false)), undefined);
+  });
+}
 
 test('U8: a field the snapshot cannot see is tapped, typed once, marked unverified, and the walk continues', async () => {
   const fake = app();

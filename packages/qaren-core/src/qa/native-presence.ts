@@ -344,6 +344,31 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
   return offscreen;
 }
 
+const BLOCKING_CONTROLS = new Set([
+  'Button',
+  'TextField',
+  'SecureTextField',
+  'TextView',
+  'Switch',
+  'Slider',
+  'Tab',
+  'TabBar',
+  'TabBarItem',
+  'Key',
+  'Keyboard',
+]);
+const SYSTEM_OVERLAYS = new Set([
+  'Alert',
+  'Sheet',
+  'Dialog',
+  'Menu',
+  'Popover',
+  'Picker',
+  'ActionSheet',
+  'SystemOverlayWindow',
+  'AlertWindow',
+]);
+
 export function nativeDispatchPoints(
   nodes: NativeNode[],
   viewport = outsideViewport(nodes),
@@ -359,19 +384,64 @@ export function nativeDispatchPoints(
       parents.add(p);
     return parents;
   });
+  const overlayWindows = new Set(
+    nodes.flatMap((node, i) =>
+      node.type === 'Window' &&
+      nodes.some(
+        (child, j) =>
+          ancestors[j].has(i) &&
+          (child.type === 'Keyboard' || SYSTEM_OVERLAYS.has(child.type ?? '')),
+      )
+        ? [i]
+        : [],
+    ),
+  );
+  const layers = nodes.map((node, i) => {
+    const path = [i, ...ancestors[i]];
+    if (
+      path.some(
+        (p) =>
+          nodes[p].type === 'Keyboard' ||
+          nodes[p].type === 'Key' ||
+          nodes[p].type === 'KeyboardWindow',
+      )
+    )
+      return 2;
+    return path.some((p) => overlayWindows.has(p) || SYSTEM_OVERLAYS.has(nodes[p].type ?? ''))
+      ? 1
+      : 0;
+  });
+  const windows = nodes.map((node, i) =>
+    node.type === 'Window' ? i : [...ancestors[i]].find((p) => nodes[p].type === 'Window'),
+  );
   nodes.forEach((node, i) => {
     if (!validRect(node.rect) || node.rect.width <= 0 || node.rect.height <= 0) return;
     let regions = [clip(node.rect, clippingViewport(viewport, i))];
-    for (let j = i + 1; j < nodes.length && regions.length; j++) {
+    for (let j = 0; j < nodes.length && regions.length; j++) {
       const front = nodes[j];
       if (
+        j === i ||
         ancestors[i].has(j) ||
         ancestors[j].has(i) ||
         viewport.has(j) ||
         !(
-          front.type === 'Window' ||
+          layers[j] > layers[i] ||
+          (layers[j] === layers[i] &&
+            j > i &&
+            node.parentIndex !== undefined &&
+            front.parentIndex !== undefined &&
+            windows[i] === windows[j])
+        ) ||
+        !(
+          (front.hittable &&
+            (BLOCKING_CONTROLS.has(front.type ?? '') || !!front.identifier?.trim())) ||
           front.type === 'Keyboard' ||
-          (front.hittable && node.parentIndex !== undefined && front.parentIndex !== undefined)
+          front.type === 'Key' ||
+          SYSTEM_OVERLAYS.has(front.type ?? '') ||
+          front.type === 'KeyboardWindow' ||
+          (front.type === 'Window' &&
+            overlayWindows.has(j) &&
+            !nodes.some((child, k) => ancestors[k].has(j) && child.type === 'Keyboard'))
         ) ||
         !validRect(front.rect) ||
         front.rect.width <= 0 ||

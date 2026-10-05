@@ -21,7 +21,7 @@ import {
 import type { NativePresence, NativePresenceNode } from './native-presence.js';
 import { associateHeadings, validateHostTypography } from './host-typography.js';
 import type { HeadingEvidence, HostTypography } from './host-typography.js';
-import { associateHosts, type HostAssociationDiagnostic } from './host-association.js';
+import { associateHosts, hostPath, type HostAssociationDiagnostic } from './host-association.js';
 
 export type Kind = 'button' | 'input' | 'switch' | 'link' | 'cell' | 'text' | 'image' | 'other';
 export type EvidenceStatus = 'supported' | 'unsupported' | 'unknown';
@@ -754,6 +754,38 @@ export function join(
       );
     if (provenHost && (d.compositeWrapper || hostOfJoinedAncestor))
       forwardedInputs.set(element, d.testID);
+    const typography = reactHostEvidence?.typography;
+    if (provenHost && typography?.complete && element.kind === 'input' && !d.compositeWrapper) {
+      const path = hostPath(typography, d.inputHostIndices![0]);
+      const ancestors: Element[] = [];
+      for (const parent of path?.slice(1) ?? []) {
+        const host = reactHostEvidence!.hosts[parent];
+        const ids = [host.testID, host.nativeID].filter((id): id is string => !!id);
+        if (
+          reactHostEvidence!.hosts.filter((h) =>
+            ids.some((id) => h.testID === id || h.nativeID === id),
+          ).length !== 1
+        )
+          continue;
+        const native = elements.filter(
+          (e) => !e.ref.startsWith('react:') && e.testID !== undefined && ids.includes(e.testID),
+        );
+        if (native.length !== 1) continue;
+        ancestors.push(native[0]);
+        const inputs = reactHostEvidence!.hosts.filter(
+          (h, index) =>
+            h.capabilities.fill && hostPath(typography, index)?.slice(1).includes(parent),
+        );
+        if (
+          inputs.length === 1 &&
+          native[0].nativeKind !== 'input' &&
+          native[0].label !== undefined &&
+          [d.testID, d.text, d.label].includes(native[0].label)
+        )
+          forwardedInputs.set(native[0], d.testID);
+      }
+      if (ancestors.length) nativeAncestors.set(element, ancestors);
+    }
     joinedDiagnosticFacts.set(element, diagnosticFacts);
     elements.push(element);
   });

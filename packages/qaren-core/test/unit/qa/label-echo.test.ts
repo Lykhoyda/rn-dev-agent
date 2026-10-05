@@ -349,12 +349,42 @@ function echoContainer(controls: number, contained = true): NativeNode[] {
 const tapNext = { kind: 'press' as const, target: { phrase: 'Next', quoted: 'Next' } };
 
 for (const contained of [true, false]) {
-  test(`a no-identifier container enclosing one same-label control is its echo (tree-contained=${contained})`, () => {
+  test(`a no-identifier container collapses only a tree-contained control (tree-contained=${contained})`, () => {
     const resolved = prepareTarget(tapNext, join(echoContainer(1, contained), []));
+    if (!contained) {
+      assert.ok(
+        'refuse' in resolved && resolved.refuse === 'TARGET_AMBIGUOUS',
+        JSON.stringify(resolved),
+      );
+      return;
+    }
     assert.ok('ref' in resolved, JSON.stringify(resolved));
     assert.equal(resolved.ref, '@next0');
   });
 }
+
+test('frame containment remains an echo fallback when ancestry is unknown', () => {
+  const nodes = echoContainer(1, false).map(({ parentIndex, ...node }) => node);
+  const resolved = prepareTarget(tapNext, join(nodes, []));
+  assert.ok('ref' in resolved, JSON.stringify(resolved));
+  assert.equal(resolved.ref, '@next0');
+});
+
+test('a frame-contained sibling Other and Button remain ambiguous for press, replay and refresh', () => {
+  const nodes = echoContainer(1, false);
+  nodes[2].label = 'Skip';
+  nodes[3].label = 'Skip';
+  nodes[3].parentIndex = 0;
+  const screen = join(nodes, []);
+  for (const exact of [undefined, 'text'] as const) {
+    const resolved = prepareTarget({ ...press, target: { ...press.target, exact } }, screen);
+    assert.ok(
+      'refuse' in resolved && resolved.refuse === 'TARGET_AMBIGUOUS',
+      JSON.stringify(resolved),
+    );
+  }
+  assert.equal(refreshRef({ type: 'Button', label: 'Skip' }, nodes).kind, 'ambiguous');
+});
 
 test('a no-identifier container enclosing two same-label controls does not hide their ambiguity', () => {
   const resolved = prepareTarget(tapNext, join(echoContainer(2), []));

@@ -38,6 +38,15 @@ export function named(
 }
 
 function forwardsInput(element: Element, matched: readonly Element[]): boolean {
+  if (element.ref.startsWith('react:') && element.kind === 'input') {
+    const wrappers = matched.filter(
+      (e) =>
+        !e.ref.startsWith('react:') &&
+        forwardedInputOf(e) === element.testID &&
+        ancestorsOf(element).includes(e),
+    );
+    if (wrappers.length === 1) return true;
+  }
   const id = forwardedInputOf(element);
   if (!id) return false;
   const native = matched.filter((e) => !e.ref.startsWith('react:') && e.kind === 'input');
@@ -59,6 +68,7 @@ export function echoControl(
 
 function encloses(container: Element, element: Element): boolean {
   if (ancestorsOf(element).includes(container)) return true;
+  if (ancestorsOf(container).length && ancestorsOf(element).length) return false;
   const outer = elementFrame(container);
   const inner = elementFrame(element);
   return (
@@ -99,7 +109,11 @@ function containerEcho(
 
 // The wrapper `id-pressable` stands for `id` only while both ends are observed.
 export function wrapperEquivalence(screen: Screen, id: string): Element | undefined {
-  const wrappers = screen.elements.filter((e) => e.testID === id + PRESSABLE_SUFFIX);
+  const wrappers = screen.elements.filter(
+    (e) =>
+      e.testID === id + PRESSABLE_SUFFIX ||
+      (!e.ref.startsWith('react:') && forwardedInputOf(e) === id),
+  );
   const inner =
     screen.elements.some((e) => e.testID === id) ||
     !!screen.reactHostEvidence?.hosts.some((host) => host.testID === id);
@@ -108,6 +122,8 @@ export function wrapperEquivalence(screen: Screen, id: string): Element | undefi
 
 // The React focus identity a tapped element stands for, never an invented suffix.
 export function focusIdentityOf(screen: Screen, element: Element): string | undefined {
+  const forwarded = forwardedInputOf(element);
+  if (forwarded && !element.ref.startsWith('react:')) return forwarded;
   const id = element.testID;
   if (!id) return undefined;
   const base = withoutPressable(id);
