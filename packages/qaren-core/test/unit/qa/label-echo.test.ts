@@ -370,6 +370,68 @@ test('frame containment remains an echo fallback when ancestry is unknown', () =
   assert.equal(resolved.ref, '@next0');
 });
 
+for (const tree of [true, false]) {
+  test(`two stacked unidentified label echoes resolve to their button (tree=${tree})`, () => {
+    const fullFrame = { x: 0, y: 0, width: 402, height: 874 };
+    const nodes: NativeNode[] = [
+      { ref: '@app', index: 0, type: 'Application', rect: fullFrame },
+      {
+        ref: '@root',
+        index: 1,
+        parentIndex: 0,
+        type: 'Other',
+        identifier: 'app-root',
+        rect: fullFrame,
+      },
+      {
+        ref: '@outer',
+        index: 2,
+        parentIndex: 0,
+        type: 'Other',
+        label: 'Skip',
+        hittable: true,
+        rect: fullFrame,
+      },
+      {
+        ref: '@inner',
+        index: 3,
+        parentIndex: 2,
+        type: 'Other',
+        label: 'Skip',
+        hittable: true,
+        rect: fullFrame,
+      },
+      {
+        ref: '@button',
+        index: 4,
+        parentIndex: 3,
+        type: 'Button',
+        identifier: 'consent-skip',
+        label: 'Skip',
+        hittable: true,
+        rect: { x: 293, y: 700, width: 88, height: 38 },
+      },
+      {
+        ref: '@text',
+        index: 5,
+        parentIndex: 4,
+        type: 'StaticText',
+        label: 'Skip',
+        rect: { x: 305, y: 710, width: 60, height: 20 },
+      },
+    ];
+    const observed = tree
+      ? nodes
+      : nodes
+          .filter((node) => node.type !== 'StaticText')
+          .map(({ parentIndex: _parentIndex, ...node }) => node);
+    const resolved = prepareTarget(press, join(observed, []));
+    assert.ok('ref' in resolved, JSON.stringify(resolved));
+    assert.equal(resolved.ref, '@button');
+    assert.equal(resolved.element.testID, 'consent-skip');
+  });
+}
+
 test('a frame-contained sibling Other and Button remain ambiguous for press, replay and refresh', () => {
   const nodes = echoContainer(1, false);
   nodes[2].label = 'Skip';

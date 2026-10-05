@@ -600,6 +600,162 @@ fn package_fingerprint(root: &Path) -> NativeFingerprint {
     compute(&mut runner, root, root, "ios").unwrap()
 }
 
+fn local_package_plugin(spec: &str, section: &str, bare_import: bool) -> std::path::PathBuf {
+    let root = local_dependency_project(spec);
+    std::fs::write(
+        root.join("package.json"),
+        serde_json::json!({(section): {"foo": format!("{spec}./foo")}}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("foo/package.json"),
+        r#"{"name":"foo","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("foo/index.js"), "module.exports = c => c;").unwrap();
+    std::fs::create_dir_all(root.join("node_modules/foo")).unwrap();
+    std::fs::write(
+        root.join("node_modules/foo/package.json"),
+        r#"{"name":"foo","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("app.json"),
+        if bare_import {
+            r#"{"expo":{"plugins":["./plugins/withX.js"]}}"#
+        } else {
+            r#"{"expo":{"plugins":["foo"]}}"#
+        },
+    )
+    .unwrap();
+    if bare_import {
+        std::fs::write(
+            root.join("plugins/withX.js"),
+            "module.exports = require('foo');",
+        )
+        .unwrap();
+    }
+    root
+}
+
+fn local_package_fingerprint(root: &Path, platform: &str) -> NativeFingerprint {
+    let mut runner = MockRunner::new();
+    runner.expect_run(
+        "ls-files",
+        CmdOutput::success("package.json\0app.json\0plugins/withX.js\0"),
+    );
+    compute(&mut runner, root, root, platform).unwrap()
+}
+
+#[test]
+fn local_package_plugins_and_bare_imports_scan_ambient_and_unparseable_inputs() {
+    for spec in ["file:", "link:"] {
+        for section in ["dependencies", "devDependencies", "optionalDependencies"] {
+            for bare_import in [false, true] {
+                let root = local_package_plugin(spec, section, bare_import);
+                for (source, reason) in [
+                    (
+                        "module.exports = c => { c.ios.infoPlist.X = process.env.X; return c; };",
+                        "ambient inputs",
+                    ),
+                    ("require('fs');", "Node built-in"),
+                    ("require('node:child_process');", "Node built-in"),
+                    ("require(variable);", "not a plain string literal"),
+                ] {
+                    std::fs::write(root.join("foo/index.js"), source).unwrap();
+                    for platform in ["ios", "android"] {
+                        let fp = local_package_fingerprint(&root, platform);
+                        assert!(!fp.complete, "{spec} {section} bare={bare_import} {source}");
+                        assert!(
+                            fp.incompleteness
+                                .iter()
+                                .any(|detail| detail.contains(reason)),
+                            "{:?}",
+                            fp.incompleteness
+                        );
+                    }
+                }
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn local_package_entry_priority_and_relative_closure_bind_native_fingerprints() {
+    for bare_import in [false, true] {
+        for (entry, package_json) in [
+            ("index.js", r#"{"name":"foo","version":"1.0.0"}"#),
+            (
+                "main.js",
+                r#"{"name":"foo","version":"1.0.0","main":"main.js"}"#,
+            ),
+            (
+                "app.plugin.js",
+                r#"{"name":"foo","version":"1.0.0","main":"missing.js"}"#,
+            ),
+        ] {
+            let root = local_package_plugin("link:", "dependencies", bare_import);
+            std::fs::write(root.join("foo/package.json"), package_json).unwrap();
+            std::fs::write(
+                root.join("foo").join(entry),
+                "module.exports = require('./value.js');",
+            )
+            .unwrap();
+            std::fs::write(root.join("foo/value.js"), "module.exports = 1;").unwrap();
+            let before = local_package_fingerprint(&root, "ios");
+            assert!(before.complete, "{:?}", before.incompleteness);
+            std::fs::write(root.join("foo/value.js"), "module.exports = 2;").unwrap();
+            let changed = local_package_fingerprint(&root, "ios");
+            assert!(changed.complete, "{:?}", changed.incompleteness);
+            assert_ne!(before.value, changed.value);
+            std::fs::write(root.join("foo/value.js"), "module.exports = process.env.X;").unwrap();
+            assert!(!local_package_fingerprint(&root, "ios").complete);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+#[test]
+fn unsupported_local_package_entries_forbid_native_reuse() {
+    for package_json in [
+        r#"{"main":"missing.js"}"#,
+        r#"{"main":"."}"#,
+        r#"{"main":false}"#,
+        r#"{"main":"../plugins/withX.js"}"#,
+        r#"{"main":"index"}"#,
+    ] {
+        let root = local_package_plugin("file:", "dependencies", false);
+        std::fs::write(root.join("foo/package.json"), package_json).unwrap();
+        assert!(
+            !local_package_fingerprint(&root, "ios").complete,
+            "{package_json}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn transitive_local_package_imports_are_scanned_and_cycles_terminate() {
+    let root = local_package_plugin("link:", "dependencies", false);
+    std::fs::create_dir_all(root.join("bar")).unwrap();
+    std::fs::write(
+        root.join("foo/package.json"),
+        r#"{"name":"foo","dependencies":{"bar":"file:../bar","foo":"link:."}}"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("foo/index.js"), "require('foo'); require('bar');").unwrap();
+    std::fs::write(root.join("bar/package.json"), r#"{"name":"bar"}"#).unwrap();
+    std::fs::write(root.join("bar/index.js"), "module.exports = 1;").unwrap();
+    let before = local_package_fingerprint(&root, "ios");
+    assert!(before.complete, "{:?}", before.incompleteness);
+    std::fs::write(root.join("bar/index.js"), "require('fs');").unwrap();
+    let after = local_package_fingerprint(&root, "ios");
+    assert!(!after.complete);
+    assert_ne!(before.value, after.value);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn package_plugins_and_bare_imports_resolve_so_a_warm_run_can_reuse() {

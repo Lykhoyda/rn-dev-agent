@@ -383,8 +383,6 @@ const PURE_NODE_BUILTINS: &[&str] = &[
     "querystring",
 ];
 
-// A bare plugin or import is bound by the lockfile plus the version of the package that
-// Node resolution finds from the project root; only an unresolvable package stays unproven.
 fn package_manifest(
     project_root: &Path,
     repo_root: &Path,
@@ -393,8 +391,13 @@ fn package_manifest(
     incompleteness: &mut Vec<String>,
 ) {
     let mut versions: BTreeMap<String, String> = BTreeMap::new();
-    for specifier in packages {
-        let builtin = specifier.strip_prefix("node:").unwrap_or(specifier);
+    let mut worklist: Vec<_> = packages
+        .iter()
+        .map(|specifier| (project_root.to_path_buf(), specifier.clone()))
+        .collect();
+    let mut traced = BTreeSet::new();
+    while let Some((importer, specifier)) = worklist.pop() {
+        let builtin = specifier.strip_prefix("node:").unwrap_or(&specifier);
         let root = builtin.split('/').next().unwrap_or(builtin);
         if PURE_NODE_BUILTINS.contains(&root) {
             continue;
@@ -421,12 +424,25 @@ fn package_manifest(
             ));
             continue;
         }
-        if versions.contains_key(&name) {
-            continue;
-        }
-        let mut dir = Some(project_root);
+        let mut dir = Some(importer.as_path());
         let mut found = None;
+        let mut local = None;
         while let Some(current) = dir.filter(|d| d.starts_with(repo_root)) {
+            if let Some(parsed) = std::fs::read_to_string(current.join("package.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            {
+                let dependency = ["dependencies", "devDependencies", "optionalDependencies"]
+                    .iter()
+                    .find_map(|section| parsed.get(section)?.get(&name)?.as_str());
+                if let Some(rel) = dependency.and_then(|spec| {
+                    spec.strip_prefix("file:")
+                        .or_else(|| spec.strip_prefix("link:"))
+                }) {
+                    local = Some(current.join(rel));
+                    break;
+                }
+            }
             let candidate = current
                 .join("node_modules")
                 .join(&name)
@@ -437,12 +453,85 @@ fn package_manifest(
             }
             dir = current.parent();
         }
+        if let Some(local) = local {
+            let (Ok(resolved), Ok(root)) = (local.canonicalize(), repo_root.canonicalize()) else {
+                incompleteness.push(format!("local package {name} cannot be resolved"));
+                continue;
+            };
+            if !resolved.starts_with(&root) {
+                incompleteness.push(format!(
+                    "local package {name} resolves outside the worktree"
+                ));
+                continue;
+            }
+            if specifier != name {
+                incompleteness.push(format!("local package subpath {specifier:?} is not supported; its entry cannot be proven"));
+            }
+            if !traced.insert(resolved.clone()) {
+                continue;
+            }
+            let package_path = resolved.join("package.json");
+            let Some(parsed) = std::fs::read_to_string(&package_path)
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            else {
+                incompleteness.push(format!("local package {name} has no readable package.json; its entry cannot be determined"));
+                continue;
+            };
+            let entry = if std::fs::symlink_metadata(resolved.join("app.plugin.js")).is_ok() {
+                "app.plugin.js"
+            } else if let Some(main) = parsed.get("main") {
+                let Some(main) = main.as_str() else {
+                    incompleteness.push(format!(
+                        "local package {name} has an unsupported main entry"
+                    ));
+                    continue;
+                };
+                main
+            } else {
+                "index.js"
+            };
+            let Some(entry) = normalize_rel("", entry).filter(|_| !entry.starts_with('/')) else {
+                incompleteness.push(format!(
+                    "local package {name} entry is not package-relative"
+                ));
+                continue;
+            };
+            let mut files = BTreeSet::from(["package.json".to_string(), entry.clone()]);
+            let mut imports = BTreeSet::new();
+            trace_local_imports(
+                &resolved,
+                vec![entry],
+                &mut files,
+                &mut imports,
+                incompleteness,
+            );
+            for rel in files {
+                let key = format!(
+                    "local-package:{}/{rel}",
+                    resolved.strip_prefix(&root).unwrap().display()
+                );
+                match hash_entry(&resolved.join(&rel), &key, repo_root, incompleteness) {
+                    Ok(hash) => manifest.push((key, hash)),
+                    Err(detail) => incompleteness.push(detail),
+                }
+            }
+            worklist.extend(
+                imports
+                    .into_iter()
+                    .map(|specifier| (local.clone(), specifier)),
+            );
+            continue;
+        }
         let version = found
             .and_then(|path| std::fs::read_to_string(path).ok())
             .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
             .and_then(|parsed| parsed.get("version")?.as_str().map(str::to_string));
         match version {
             Some(version) => {
+                if versions.get(&name).is_some_and(|recorded| recorded != &version) {
+                    incompleteness.push(format!("package {name} resolves to different versions across local imports; its binding is unprovable"));
+                }
                 versions.insert(name, version);
             }
             None => incompleteness.push(format!(
