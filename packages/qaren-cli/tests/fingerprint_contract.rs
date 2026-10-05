@@ -157,6 +157,63 @@ fn fingerprint(root: &Path) -> NativeFingerprint {
 }
 
 #[test]
+fn input_reading_node_imports_forbid_native_reuse() {
+    for name in [
+        "fs",
+        "fs/promises",
+        "child_process",
+        "module",
+        "vm",
+        "worker_threads",
+        "net",
+        "http",
+        "https",
+        "os",
+        "process",
+    ] {
+        for specifier in [name.to_string(), format!("node:{name}")] {
+            let root = plugin_project(&format!("require({specifier:?});"));
+            let fp = fingerprint(&root);
+            assert!(!fp.complete, "{specifier}");
+            assert!(fp
+                .incompleteness
+                .iter()
+                .any(|reason| reason.contains("unbound inputs")));
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+    let root = plugin_project("require('node:unknown_builtin');");
+    assert!(!fingerprint(&root).complete);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn pure_node_imports_keep_native_inputs_complete() {
+    for name in [
+        "path",
+        "url",
+        "util",
+        "assert",
+        "events",
+        "buffer",
+        "string_decoder",
+        "querystring",
+    ] {
+        for specifier in [
+            name.to_string(),
+            format!("node:{name}"),
+            format!("{name}/subpath"),
+            format!("node:{name}/subpath"),
+        ] {
+            let root = plugin_project(&format!("require({specifier:?});"));
+            let fp = fingerprint(&root);
+            assert!(fp.complete, "{specifier}: {:?}", fp.incompleteness);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+#[test]
 fn a_spaced_static_require_is_traced_into_the_fingerprint() {
     let root =
         plugin_project("const x = require( '../config/x.json' );\nmodule.exports = (c) => c;\n");
@@ -464,7 +521,6 @@ fn optional_local_dependencies_bind_native_inputs_and_unresolved_workspaces() {
 fn package_project() -> std::path::PathBuf {
     let root = plugin_project(
         "import { type ConfigPlugin, withAppDelegate } from 'expo/config-plugins';\n\
-         import fs from 'node:fs';\n\
          import path from 'path';\n\
          const swift = `\n  // Scene launches read it from launch options.\n`;\n\
          export default ((c) => c) as ConfigPlugin;\n",

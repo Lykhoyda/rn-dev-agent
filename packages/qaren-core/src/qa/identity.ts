@@ -136,13 +136,30 @@ export function exactIdentities(
               e.label.split(',').some((segment) => segment.trim() === quoted),
           ),
         });
-  return matched
+  const controls = matched.filter((e) => {
+    const echo = echoControl(e, purpose);
+    return (
+      target.exact !== 'id' &&
+      e.label === quoted &&
+      e.kind !== 'text' &&
+      e.kind !== 'input' &&
+      !e.ref.startsWith('react:') &&
+      (e.hittable || e.offscreen || e.semantic?.press === 'supported') &&
+      (!echo || !ancestorsOf(e).includes(echo))
+    );
+  });
+  const identities = matched.filter(
+    (e) =>
+      !controls.includes(e) ||
+      !controls.some((inner) => inner !== e && ancestorsOf(inner).includes(e)),
+  );
+  return identities
     .filter((e) => {
       const control = echoControl(e, purpose);
       return (
-        (!control || !matched.includes(control)) &&
-        !forwardsInput(e, matched) &&
-        !containerEcho(e, matched, purpose)
+        (!control || !identities.includes(control)) &&
+        !forwardsInput(e, identities) &&
+        !containerEcho(e, identities, purpose)
       );
     })
     .map((element) => ({

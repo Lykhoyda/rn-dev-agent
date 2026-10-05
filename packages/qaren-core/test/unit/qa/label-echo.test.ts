@@ -6,6 +6,7 @@ import { literalEvidence } from '../../../dist/qa/evidence.js';
 import type { NativeNode } from '../../../dist/qa/screen.js';
 import { prepareTarget, targetVisible, visibleSelector } from '../../../dist/qa/resolve.js';
 import { exactIdentities } from '../../../dist/qa/identity.js';
+import { refreshRef } from '../../../dist/fast-runner-ref-map.js';
 
 const app = (): NativeNode[] => [
   { ref: '@app', index: 0, type: 'Application', rect: { x: 0, y: 0, width: 402, height: 874 } },
@@ -269,6 +270,15 @@ test('two distinct Skip controls stay ambiguous and list value-free candidates',
   assert.match(listed, /other id=consent-skip frame=20,700,350,48/);
   assert.match(listed, /other no-id frame=20,780,350,48/);
   assert.equal(listed.includes('Skip'), false, listed);
+  const replayed = prepareTarget(
+    { ...press, target: { ...press.target, exact: 'text' } },
+    join(nodes, []),
+  );
+  assert.ok(
+    'refuse' in replayed && replayed.refuse === 'TARGET_AMBIGUOUS',
+    JSON.stringify(replayed),
+  );
+  assert.equal(refreshRef({ type: 'Button', label: 'Skip' }, nodes).kind, 'ambiguous');
 });
 
 test('a pressable with more than one text descendant is not an echo', () => {
@@ -354,15 +364,83 @@ test('a no-identifier container enclosing two same-label controls does not hide 
   );
 });
 
-test('an enclosing same-label control is not collapsed as an echo', () => {
+test('a tree-enclosing same-label control collapses to the innermost control', () => {
   const nodes = echoContainer(1);
   nodes[2] = { ...nodes[2], type: 'Button', identifier: 'page-card' };
   const resolved = prepareTarget(tapNext, join(nodes, []));
-  assert.ok(
-    'refuse' in resolved && resolved.refuse === 'TARGET_AMBIGUOUS',
-    JSON.stringify(resolved),
-  );
+  assert.ok('ref' in resolved, JSON.stringify(resolved));
+  assert.equal(resolved.ref, '@next0');
 });
+
+for (const type of ['Other', 'Button']) {
+  for (const container of [false, true]) {
+    test(`identified nested ${type} Skip controls select the inner button (container=${container})`, () => {
+      const nodes = app();
+      if (container)
+        nodes.push({
+          ref: '@container',
+          index: 2,
+          parentIndex: 1,
+          type: 'Other',
+          label: 'Skip',
+          hittable: true,
+          rect: { x: 0, y: 0, width: 402, height: 874 },
+        });
+      const outer = nodes.length;
+      nodes.push(
+        {
+          ref: '@outer',
+          index: outer,
+          parentIndex: container ? 2 : 1,
+          type,
+          identifier: 'qa-skip-echo-outer',
+          label: 'Skip',
+          hittable: true,
+          rect: { x: 20, y: 700, width: 350, height: 48 },
+        },
+        {
+          ref: '@inner',
+          index: outer + 1,
+          parentIndex: outer,
+          type: 'Button',
+          identifier: 'qa-skip-echo-button',
+          label: 'Skip',
+          hittable: true,
+          rect: { x: 30, y: 705, width: 320, height: 40 },
+        },
+        {
+          ref: '@text',
+          index: outer + 2,
+          parentIndex: outer + 1,
+          type: 'StaticText',
+          label: 'Skip',
+          hittable: true,
+          rect: { x: 150, y: 712, width: 60, height: 24 },
+        },
+      );
+      const screen = join(nodes, []);
+      for (const exact of [undefined, 'text'] as const) {
+        const resolved = prepareTarget({ ...press, target: { ...press.target, exact } }, screen);
+        assert.ok('ref' in resolved, JSON.stringify(resolved));
+        assert.equal(resolved.ref, '@inner');
+        assert.equal(resolved.element.testID, 'qa-skip-echo-button');
+      }
+      const explicit = prepareTarget(
+        {
+          ...press,
+          target: { phrase: 'qa-skip-echo-outer', quoted: 'qa-skip-echo-outer', exact: 'id' },
+        },
+        screen,
+      );
+      assert.ok('ref' in explicit, JSON.stringify(explicit));
+      assert.equal(explicit.ref, '@outer');
+      const refreshed = refreshRef({ type: 'Button', label: 'Skip' }, nodes);
+      assert.equal(refreshed.kind, 'unique');
+      if (refreshed.kind === 'unique')
+        assert.equal(refreshed.node.identifier, 'qa-skip-echo-button');
+    });
+  }
+}
 
 // F10 qa-merged-rows: label-only rows (`Item N, Status N`) and containers inheriting "Act" from their first child.
 function mergedRows(rows: number[]): NativeNode[] {

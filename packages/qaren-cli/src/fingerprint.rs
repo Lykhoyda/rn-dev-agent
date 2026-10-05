@@ -362,6 +362,17 @@ const NODE_BUILTINS: &[&str] = &[
     "zlib",
 ];
 
+const PURE_NODE_BUILTINS: &[&str] = &[
+    "path",
+    "url",
+    "util",
+    "assert",
+    "events",
+    "buffer",
+    "string_decoder",
+    "querystring",
+];
+
 // A bare plugin or import is bound by the lockfile plus the version of the package that
 // Node resolution finds from the project root; only an unresolvable package stays unproven.
 fn package_manifest(
@@ -374,9 +385,14 @@ fn package_manifest(
     let mut versions: BTreeMap<String, String> = BTreeMap::new();
     for specifier in packages {
         let builtin = specifier.strip_prefix("node:").unwrap_or(specifier);
-        if specifier.starts_with("node:")
-            || NODE_BUILTINS.contains(&builtin.split('/').next().unwrap_or(builtin))
-        {
+        let root = builtin.split('/').next().unwrap_or(builtin);
+        if PURE_NODE_BUILTINS.contains(&root) {
+            continue;
+        }
+        if specifier.starts_with("node:") || NODE_BUILTINS.contains(&root) {
+            incompleteness.push(format!(
+                "Node built-in {specifier:?} may read unbound inputs; the input set is unprovably complete"
+            ));
             continue;
         }
         let segments = if specifier.starts_with('@') { 2 } else { 1 };
