@@ -186,7 +186,7 @@ export function duplicateNodes(
       parent >= 0 &&
       parent < i &&
       (presence || (n.label && n.rect && n.rect.width > 0 && n.rect.height > 0)) &&
-      (!n.identifier?.trim() || n.identifier === nodes[parent].identifier) &&
+      (!n.identifier?.trim() || (presence && n.identifier === nodes[parent].identifier)) &&
       key(parent) === key(i)
     )
       duplicates.add(i);

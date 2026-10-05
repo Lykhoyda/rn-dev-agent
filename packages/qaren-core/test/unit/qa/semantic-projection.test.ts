@@ -660,7 +660,11 @@ test('a verified text identical to its parent text counts once; other identical 
     3,
     'differing presence evidence keeps every observation',
   );
-  assert.equal(projection.join(nodes, digest, 'app', complete).elements.length, 9);
+  assert.deepEqual(
+    projection.join(nodes, digest, 'app', complete).elements.map((e) => e.ref),
+    nodes.map((node) => node.ref),
+    'identified nested texts remain distinct without verified presence evidence',
+  );
 });
 
 test('a plain container offering no operation contributes only through its own named descendants', () => {
