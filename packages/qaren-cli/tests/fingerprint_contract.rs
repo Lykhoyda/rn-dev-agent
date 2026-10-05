@@ -756,6 +756,80 @@ fn installed_links_into_worktree_source_are_not_registry_packages() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn nested_package_resolution_in_plugins_and_config_closures_is_incomplete() {
+    for (importer, nested, config) in [
+        ("plugins/withX.js", "plugins/node_modules", false),
+        ("plugins/deep/withY.js", "plugins/deep/node_modules", false),
+        ("plugins/deep/withY.js", "plugins/node_modules", false),
+        ("config/native.js", "config/node_modules", true),
+    ] {
+        let root = plugin_project("module.exports = (c) => c;");
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"dependencies":{"foo":"1.0.0"}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("node_modules/foo")).unwrap();
+        std::fs::write(
+            root.join("node_modules/foo/package.json"),
+            r#"{"name":"foo","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(importer).parent().unwrap()).unwrap();
+        std::fs::write(root.join(importer), "module.exports = require('foo');").unwrap();
+        std::fs::write(root.join("react-native.config.js"), "module.exports = {};").unwrap();
+        if config {
+            std::fs::write(
+                root.join("react-native.config.js"),
+                "module.exports = require('./config/native.js');",
+            )
+            .unwrap();
+        } else if importer != "plugins/withX.js" {
+            std::fs::write(
+                root.join("plugins/withX.js"),
+                "module.exports = require('./deep/withY.js');",
+            )
+            .unwrap();
+        }
+        std::fs::create_dir_all(root.join("foo")).unwrap();
+        std::fs::write(
+            root.join("foo/package.json"),
+            r#"{"name":"foo","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("foo/index.js"), "module.exports = process.env.X;").unwrap();
+        for platform in ["ios", "android"] {
+            let compute_current = || {
+                let mut runner = MockRunner::new();
+                runner.expect_run(
+                    "ls-files",
+                    CmdOutput::success(
+                        "package.json\0app.json\0plugins/withX.js\0react-native.config.js\0",
+                    ),
+                );
+                compute(&mut runner, &root, &root, platform).unwrap()
+            };
+            let before = compute_current();
+            assert!(before.complete, "{:?}", before.incompleteness);
+            std::fs::create_dir_all(root.join(nested)).unwrap();
+            std::os::unix::fs::symlink(root.join("foo"), root.join(nested).join("foo")).unwrap();
+            let after = compute_current();
+            assert!(!after.complete, "{importer} {nested} {platform}");
+            assert_eq!(after.incompleteness, [
+                "traced module has nested node_modules on its import resolution path; the input set is unprovably complete"
+            ]);
+            assert_eq!(
+                matching_build(&root, &after, platform).decision,
+                qaren::buildplan::BuildDecision::Clean
+            );
+            std::fs::remove_dir_all(root.join(nested)).unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
 #[test]
 fn registry_package_plugins_remain_complete_with_or_without_exports() {
     for bare_import in [false, true] {

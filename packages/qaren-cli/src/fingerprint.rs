@@ -315,6 +315,21 @@ fn trace_local_imports(
         }
         let base_dir = rel.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
         let specifiers = import_specifiers(&source);
+        if specifiers
+            .found
+            .iter()
+            .any(|specifier| !specifier.starts_with('.'))
+            && project_root
+                .join(base_dir)
+                .ancestors()
+                .take_while(|dir| *dir != project_root)
+                .any(|dir| dir.join("node_modules").is_dir())
+        {
+            incompleteness.push(
+                "traced module has nested node_modules on its import resolution path; the input set is unprovably complete"
+                    .to_string(),
+            );
+        }
         for site in &specifiers.unparseable {
             incompleteness.push(format!(
                 "{site} in {rel} is not a plain string literal; its import cannot be enumerated"

@@ -1305,27 +1305,35 @@ fn native_build_output_dirs(platform: &str) -> &'static [&'static str] {
     }
 }
 
+fn native_prebuild_spec(project_root: &Path, platform: &str, build_seconds: u64) -> CmdSpec {
+    CmdSpec::new(
+        "expo-prebuild",
+        "pnpm",
+        &[
+            "exec",
+            "expo",
+            "prebuild",
+            "--platform",
+            platform,
+            "--clean",
+        ],
+        build_seconds,
+    )
+    .cwd(project_root)
+    .env_remove("CI")
+    .env("EXPO_NO_TELEMETRY", "1")
+}
+
 pub(crate) fn run_clean_preparation(ctx: &mut Ctx, plan: &BuildPlan) -> Result<(), Failure> {
     ensure_running(ctx.runner, "build")?;
     let platform = platform_dir(ctx.record.scenario.platform);
     let project_root = ctx.record.candidate.project_root.clone();
     if plan.regenerate_native_dir {
-        let spec = CmdSpec::new(
-            "expo-prebuild",
-            "pnpm",
-            &[
-                "exec",
-                "expo",
-                "prebuild",
-                "--platform",
-                platform,
-                "--clean",
-            ],
+        let spec = native_prebuild_spec(
+            &project_root,
+            platform,
             ctx.record.scenario.deadlines.build_seconds,
-        )
-        .cwd(&project_root)
-        .env_remove("CI")
-        .env("EXPO_NO_TELEMETRY", "1");
+        );
         let prebuild = if ctx.record.scenario.platform == Platform::Ios {
             run_finite_build(ctx, &spec)?;
             crate::exec::CmdOutput::success("")
@@ -2618,6 +2626,25 @@ fn dry_run_receipt(
                 deadlines.build_seconds,
             ));
         }
+    }
+    if receipt
+        .build
+        .as_ref()
+        .is_some_and(|plan| plan.decision == BuildDecision::Clean && plan.regenerate_native_dir)
+    {
+        let compile = planned
+            .iter()
+            .position(|spec| {
+                matches!(
+                    spec.label.as_str(),
+                    "expo-run-ios" | "xcodebuild-ios" | "expo-run-android"
+                )
+            })
+            .expect("every platform build plan contains a compilation command");
+        planned.insert(
+            compile,
+            native_prebuild_spec(&cand.project_root, platform, deadlines.build_seconds),
+        );
     }
     // Reuse installs the cached binary instead of compiling.
     if reuse {

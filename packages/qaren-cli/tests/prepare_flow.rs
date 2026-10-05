@@ -1665,6 +1665,165 @@ fn dry_run_plans_without_allocating() {
 }
 
 #[test]
+fn dry_run_plans_generated_native_regeneration_before_every_build_route() {
+    use qaren::buildplan::{save_json, state_path, BuildDecision, NativeCacheState, CACHE_SCHEMA};
+    use qaren::scenario::{AndroidUsbSpec, IosWorkspaceBuild, Platform};
+    for route in ["ios", "ios-workspace", "android-farm", "android-usb"] {
+        for incomplete in [false, true] {
+            for generated in [false, true] {
+                let repo = common::temp_repo();
+                let project = repo.join("test-app");
+                let scenario_yaml = if route.starts_with("ios") {
+                    ios_scenario_yaml(8791)
+                } else {
+                    common::android_scenario_yaml(8792)
+                };
+                let mut scenario = common::scenario_from(&scenario_yaml);
+                let platform = if scenario.platform == Platform::Ios {
+                    "ios"
+                } else {
+                    "android"
+                };
+                std::fs::create_dir_all(project.join(platform)).unwrap();
+                let mut files = "test-app/package.json\0".to_string();
+                if incomplete {
+                    std::fs::write(project.join("app.config.js"), "module.exports = {};\n")
+                        .unwrap();
+                    files.push_str("test-app/app.config.js\0");
+                }
+                if !generated {
+                    std::fs::write(project.join(platform).join("native-input"), "native").unwrap();
+                    files.push_str(&format!("test-app/{platform}/native-input\0"));
+                }
+                if route == "ios-workspace" {
+                    let workspace = project.join("ios/App.xcworkspace");
+                    std::fs::create_dir_all(&workspace).unwrap();
+                    std::fs::write(workspace.join("contents.xcworkspacedata"), "<Workspace/>")
+                        .unwrap();
+                    scenario.build.ios_workspace = Some(IosWorkspaceBuild {
+                        workspace: "ios/App.xcworkspace".to_string(),
+                        scheme: "App".to_string(),
+                    });
+                } else if route == "android-usb" {
+                    scenario.android = None;
+                    scenario.android_usb = Some(AndroidUsbSpec {
+                        serial: "test-usb-device".to_string(),
+                        adb_server_port: Some(15037),
+                    });
+                }
+                let yaml = serde_yaml::to_string(&scenario).unwrap();
+                let scenario_path = write_scenario(&repo, &yaml);
+                let mut fp_runner = qaren::exec::MockRunner::new();
+                fp_runner.expect_run("ls-files", CmdOutput::success(&files));
+                let fp = qaren::fingerprint::compute(&mut fp_runner, &repo, &project, platform)
+                    .unwrap()
+                    .with_ios_workspace(scenario.build.ios_workspace.as_ref());
+                let cache = NativeCacheState {
+                    schema: CACHE_SCHEMA.to_string(),
+                    platform: platform.to_string(),
+                    app_id: scenario.candidate.app_id.clone(),
+                    worktree_root: repo.clone(),
+                    fingerprint: if incomplete {
+                        fp.value
+                    } else {
+                        "rnfp1:old".to_string()
+                    },
+                    built_at: "2026-10-05T00:00:00Z".to_string(),
+                    candidate_sha: "b".repeat(40),
+                    lockfile_sha256: "c".repeat(64),
+                    generated_native_dirs: vec![platform.to_string()],
+                    artifact: None,
+                };
+                save_json(
+                    &state_path(&repo, platform, &scenario.candidate.app_id),
+                    &cache,
+                )
+                .unwrap();
+                let mut mock = MockRunner::new();
+                let usb_tools = ["git", "pnpm", "node", "lsof", "curl", "ps", "java"];
+                script_validation(
+                    &mut mock,
+                    &repo,
+                    if platform == "ios" {
+                        IOS_TOOLS
+                    } else if route == "android-usb" {
+                        &usb_tools
+                    } else {
+                        ANDROID_TOOLS
+                    },
+                );
+                if route == "ios" {
+                    mock.expect_run(
+                        "expo run:ios --help",
+                        CmdOutput::success(common::IOS_BUILD_HELP),
+                    );
+                }
+                mock.expect_run("lsof", free_port());
+                if platform == "android" {
+                    mock.expect_run("lsof", free_port());
+                }
+                mock.expect_run("ls-files", CmdOutput::success(&files));
+                let sdk = (platform == "android").then(|| android_sdk(&repo));
+                let receipt = prepare(
+                    &mut mock,
+                    &prepare_args(
+                        &scenario_path,
+                        true,
+                        sdk.map(|path| path.to_string_lossy().into_owned()),
+                    ),
+                );
+                assert_eq!(
+                    receipt.result,
+                    ReceiptResult::Planned,
+                    "{route}: {:?}",
+                    receipt.failure
+                );
+                assert_eq!(mock.remaining(), 0);
+                let plan = receipt.build.unwrap();
+                assert_eq!(
+                    plan.decision,
+                    if generated {
+                        BuildDecision::Clean
+                    } else {
+                        BuildDecision::Incremental
+                    }
+                );
+                assert_eq!(plan.regenerate_native_dir, generated);
+                let prebuild = format!("pnpm exec expo prebuild --platform {platform} --clean");
+                let regeneration: Vec<_> = receipt
+                    .planned_commands
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, command)| **command == prebuild)
+                    .collect();
+                assert_eq!(
+                    regeneration.len(),
+                    usize::from(generated),
+                    "{route}: {:?}",
+                    receipt.planned_commands
+                );
+                if generated {
+                    let compile = receipt
+                        .planned_commands
+                        .iter()
+                        .position(|command| {
+                            if route == "ios-workspace" {
+                                command.starts_with("xcrun xcodebuild ")
+                            } else {
+                                command.starts_with(&format!("pnpm exec expo run:{platform} "))
+                            }
+                        })
+                        .unwrap();
+                    assert!(regeneration[0].0 < compile);
+                }
+                assert!(!mock.calls.iter().any(|spec| spec.label == "expo-prebuild"));
+                assert!(!repo.join(".locks").exists());
+            }
+        }
+    }
+}
+
+#[test]
 fn revision_pin_mismatch_fails_validation() {
     let repo = common::temp_repo();
     let yaml =
