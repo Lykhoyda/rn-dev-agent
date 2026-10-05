@@ -9,6 +9,7 @@ import {
   isNativeInput,
   describe,
   elementFrame,
+  elementViewport,
   semanticActionView,
   semanticDisabled,
   visibilityView,
@@ -242,7 +243,9 @@ export function bindFillIdentity(
 
 function scrollTo(element: Element): Resolution {
   const frame = elementFrame(element);
-  return { scroll: frame && frame.y + frame.height <= 0 ? 'up' : 'down' };
+  return {
+    scroll: frame && frame.y + frame.height <= (elementViewport(element)?.y ?? 0) ? 'up' : 'down',
+  };
 }
 
 export function decideTarget(prepared: TargetQuestion, answer: Answer | undefined): Resolution {

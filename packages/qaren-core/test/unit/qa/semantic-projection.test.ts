@@ -242,7 +242,7 @@ test('join adds native capabilities without upgrading geometry to visibility', (
     'without React host evidence nothing proves a view is not pressable',
   );
   assert.ok(screen.elements.every((e) => e.semantic?.visibility === 'unknown'));
-  assert.deepEqual(projection.assertionView(screen), ['Save', 'Email: a@example.test', 'Welcome']);
+  assert.deepEqual(projection.assertionView(screen), []);
   assert.deepEqual(
     projection.actionView(screen).map((e) => e.ref),
     ['@save', '@text', '@image', '@wrapper'],
@@ -1120,7 +1120,7 @@ test('unaddressable React observations cannot disappear to manufacture complete 
 
 test('anonymous same-label controls are not removed from semantic accounting by the legacy join', () => {
   const screen = projection.join(
-    [{ ref: '@save', type: 'Button', label: 'Save', hittable: true }],
+    [{ ref: '@save', type: 'Button', label: 'Save', hittable: true, rect: band(100) }],
     [{ role: 'button', text: 'Save', capabilities: { press: true, fill: false } }],
     'app',
     complete,
@@ -1262,6 +1262,7 @@ test('projections retain private source values before excluding observations', (
         identifier: 'password',
         label: 'Password',
         value: 'native-secret',
+        rect: band(100),
         enabled: false,
       },
       { ref: '@save', type: 'Button', label: 'Save', hittable: true },

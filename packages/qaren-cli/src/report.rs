@@ -194,6 +194,7 @@ pub struct PrRun<'a> {
     pub tested_sha: &'a str,
     pub tested_older_commit: bool,
     pub video: &'a VideoStatus,
+    pub screenshot: Option<&'a str>,
     pub plan_sha256: &'a str,
     pub video_publication: &'a VideoPublication,
 }
@@ -278,7 +279,7 @@ pub fn render_pr_comment(
             failure.step,
             clean(&failure.seen)
         ));
-        if let Some(shot) = failing_screenshot(input.ledger) {
+        if let Some(shot) = pr.screenshot {
             out.push_str(&format!("\n![Failing step](./{shot})\n"));
         }
     }

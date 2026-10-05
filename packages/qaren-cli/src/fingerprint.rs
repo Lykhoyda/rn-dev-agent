@@ -335,7 +335,7 @@ fn local_dependency_manifest(
         return;
     };
     let mut locals: Vec<(String, String)> = Vec::new();
-    for section in ["dependencies", "devDependencies"] {
+    for section in ["dependencies", "devDependencies", "optionalDependencies"] {
         let Some(deps) = parsed.get(section).and_then(|d| d.as_object()) else {
             continue;
         };

@@ -1957,6 +1957,38 @@ fn only_the_admission_trimmed_copy_is_ever_uploaded() {
         .unwrap();
     assert!(!comment.args.iter().any(|arg| arg.contains("video")));
     assert!(dir.join("media/video.mp4").is_file());
+    let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
+    assert!(!body.contains("Video of the walk is attached below"));
+}
+
+#[test]
+fn a_missing_failing_screenshot_is_not_claimed_or_uploaded() {
+    let (runs, dir) = run_dir(false);
+    std::fs::remove_file(dir.join("screenshots/01.png")).unwrap();
+    let mut runner = Git(MockRunner::new());
+    script_comment_and_label(&mut runner.0);
+    script_commit(&mut runner.0);
+    runner
+        .0
+        .expect_run("git push origin", CmdOutput::success(""));
+    let receipt = publish(&mut runner, &runs, RUN, &machine());
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Published,
+        "{:?}",
+        receipt.failure
+    );
+    let comment = runner
+        .0
+        .calls
+        .iter()
+        .find(|c| c.label == "gh-pr-comment")
+        .unwrap();
+    assert!(!comment.args.iter().any(|arg| arg.contains("screenshots")));
+    let body = std::fs::read_to_string(dir.join("comment.md")).unwrap();
+    assert!(body.contains("**Failing step**"));
+    assert!(!body.contains("![Failing step]"));
+    assert!(body.contains("Video of the walk is attached below"));
 }
 
 #[test]

@@ -1,10 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePlan } from '../../../dist/qa/plan.js';
+import { parsePlan, parseStep } from '../../../dist/qa/plan.js';
 import type { Block } from '../../../dist/qa/plan.js';
 import type { StoredBlock } from '../../../dist/qa/blocks.js';
 import { join, type NativeNode, type Screen } from '../../../dist/qa/screen.js';
-import { judgeCheck, visibleSelector } from '../../../dist/qa/resolve.js';
+import {
+  decideTarget,
+  judgeCheck,
+  prepareTarget,
+  visibleSelector,
+} from '../../../dist/qa/resolve.js';
 import { literalEvidence } from '../../../dist/qa/evidence.js';
 import { replayBlock, runPlan, walkBlock } from '../../../dist/qa/walker.js';
 import { scriptedJudge, walker } from './judgment-fixtures.ts';
@@ -493,4 +498,121 @@ test('independent trusted clips exclude stale input witnesses before contradicti
   assert.match(c.wait.seen, /ITEM_DEADLINE_EXCEEDED/);
   assert.match(c.scroll.seen, /did not come into view/);
   assert.equal(c.replay.miss, c.replay.line);
+});
+
+test('literal consumers require positive area without changing press eligibility', async () => {
+  for (const [width, height] of [
+    [0, 0],
+    [0, 30],
+    [100, 0],
+    [100, 30],
+  ]) {
+    const screen = observed([
+      { type: 'Application', rect: app },
+      {
+        type: 'StaticText',
+        parent: 0,
+        rect: at(16, 120, width, height),
+        label: 'Done',
+        hittable: true,
+      },
+    ]);
+    const positive = width > 0 && height > 0;
+    assert.equal(check(screen, 'Done'), positive ? 'pass' : 'fail');
+    assert.deepEqual(screen.paintedText, positive ? ['Done'] : []);
+    assert.equal(
+      visibleSelector({ quoted: 'Done', phrase: 'Done' }, screen) !== undefined,
+      positive,
+    );
+    const c = await consumers(screen, 'Done');
+    assert.equal(c.wait.verdict, positive ? 'PASS' : 'FAIL');
+    assert.equal(c.scroll.verdict, positive ? 'PASS' : 'FAIL');
+    assert.equal(c.replay.failed, !positive);
+    const step = parseStep('Press "Done"');
+    assert.ok(step && !('refuse' in step));
+    assert.ok('ref' in prepareTarget(step, screen));
+  }
+  for (const type of ['Button', 'Other', 'StaticText']) {
+    const screen = observed([
+      { type: 'Application', rect: app },
+      { type, parent: 0, rect: at(16, 120, 0, 30), label: 'Done', hittable: true },
+    ]);
+    assert.equal(check(screen, 'Done'), 'fail', type);
+    assert.deepEqual(screen.labelText ?? [], [], type);
+  }
+});
+
+test('quoted and semantic targets scroll relative to every trusted clipping viewport', () => {
+  for (const type of ['Window', 'ScrollView', 'Table', 'CollectionView']) {
+    for (const [y, direction] of [
+      [50, 'up'],
+      [350, 'down'],
+      [110, undefined],
+    ] as const) {
+      const nodes = tree([
+        { type: 'Application', rect: app },
+        { type, parent: 0, rect: at(0, 100, 402, 200) },
+        { type: 'Button', parent: 1, rect: at(16, y), label: 'Earlier', hittable: true },
+      ]);
+      nodes[1].enabled = false;
+      const screen = join(nodes, [], 'app', complete, undefined, {
+        source: 'xcui-live',
+        nodes: nodes.map((_, i) => ({
+          status: i === 2 && !direction ? 'observed' : 'unknown',
+          labelSource: 'direct',
+        })),
+      });
+      const step = parseStep('Press "Earlier"');
+      assert.ok(step && !('refuse' in step) && step.kind === 'press');
+      const exact = prepareTarget(step, screen);
+      if (direction) assert.deepEqual(exact, { scroll: direction }, type);
+      else assert.ok('ref' in exact, type);
+      const semantic = prepareTarget({ ...step, target: { phrase: 'the earlier button' } }, screen);
+      assert.ok('question' in semantic, type);
+      const index = semantic.candidates.findIndex((e) => e.label === 'Earlier');
+      assert.notEqual(index, -1);
+      const choice = `e${index}`;
+      const chosen = decideTarget(semantic, {
+        type: 'choice',
+        choice,
+        confidence: 1,
+        probabilities: { [choice]: 1, none: 0 },
+      });
+      if (direction) {
+        assert.deepEqual(chosen, { scroll: direction }, type);
+        assert.deepEqual(
+          decideTarget(semantic, {
+            type: 'choice',
+            choice: 'none',
+            confidence: 1,
+            probabilities: { [choice]: 0, none: 1 },
+          }),
+          { scroll: direction },
+          type,
+        );
+      } else assert.ok('ref' in chosen, type);
+    }
+  }
+});
+
+test('nested clips and absent clips retain the correct scroll boundary', () => {
+  const step = parseStep('Press "Earlier"');
+  assert.ok(step && !('refuse' in step));
+  for (const [specs, direction] of [
+    [
+      [
+        { type: 'Application', rect: app },
+        { type: 'Window', parent: 0, rect: at(0, 100, 402, 400) },
+        { type: 'ScrollView', parent: 1, rect: at(0, 200, 402, 200) },
+        { type: 'Button', parent: 2, rect: at(16, 150), label: 'Earlier' },
+      ],
+      'up',
+    ],
+    [[{ type: 'Button', rect: at(16, -50), label: 'Earlier', hittable: true }], 'up'],
+    [[{ type: 'Button', label: 'Earlier', hittable: false }], 'down'],
+  ] as const) {
+    const screen = observed([...specs]);
+    if (screen.elements.length === 1) screen.elements[0].offscreen = true;
+    assert.deepEqual(prepareTarget(step, screen), { scroll: direction });
+  }
 });

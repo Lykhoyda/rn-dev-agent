@@ -8,6 +8,7 @@ import {
 import { PRIVATE_INPUT_LIMITS } from './private-input-limits.js';
 import { INPUT_HOST_TYPES } from './input-host-types.js';
 import {
+  clippingViewport,
   duplicateNodes,
   frameContradictions,
   navigationTitles,
@@ -89,6 +90,7 @@ export function forwardedInputOf(element: Element): string | undefined {
 const labelAncestors = new WeakMap<Element, Element[]>();
 const soleLabelTexts = new WeakMap<Element, Element>();
 const elementFrames = new WeakMap<Element, NonNullable<NativeNode['rect']>>();
+const elementViewports = new WeakMap<Element, NonNullable<NativeNode['rect']>>();
 
 export function labelAncestorsOf(element: Element): readonly Element[] {
   return labelAncestors.get(element) ?? [];
@@ -100,6 +102,10 @@ export function soleLabelTextOf(element: Element): Element | undefined {
 
 export function elementFrame(element: Element): NativeNode['rect'] {
   return elementFrames.get(element);
+}
+
+export function elementViewport(element: Element): NativeNode['rect'] {
+  return elementViewports.get(element);
 }
 
 const joinedDiagnosticFacts = new WeakMap<
@@ -771,6 +777,7 @@ export function join(
   const unresolvedText: string[] = [];
   const paintedKeys = new Set<string>();
   for (const { n, e, i } of ordered) {
+    if (!n.rect || !(n.rect.width > 0 && n.rect.height > 0)) continue;
     if (duplicates.has(i) || e.kind === 'image' || e.visibilityEvidence === 'offscreen') continue;
     const merged = e.kind === 'other' && mergedLabel(n, e, i);
     if (e.kind === 'other' && !merged) continue;
@@ -802,6 +809,8 @@ export function join(
   const textDescendants = new Map<number, number[]>();
   nodes.forEach((n, i) => {
     if (n.rect) elementFrames.set(elements[i], n.rect);
+    const bounds = clippingViewport(viewport, i);
+    if (bounds) elementViewports.set(elements[i], bounds);
     if (duplicates.has(i) || elements[i].kind !== 'text') return;
     for (let p = n.parentIndex; p !== undefined && p >= 0 && p < i; p = nodes[p].parentIndex)
       textDescendants.set(p, [...(textDescendants.get(p) ?? []), i]);

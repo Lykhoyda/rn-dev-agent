@@ -738,19 +738,25 @@ fn publish_inner(
     let mut publishing_actor = None;
     if publication.comment_url.is_none() {
         let mut attachments = Vec::new();
+        let mut video = pr.video.clone();
         if pr.video_publication == VideoPublication::Eligible
             && pr.video == VideoStatus::Available
             && record::published_video_path(&run_dir).is_file()
         {
             attachments.push((PathBuf::from("./media/video-published.mp4"), None));
         }
+        if pr.video == VideoStatus::Available && attachments.is_empty() {
+            video = VideoStatus::Unavailable("published recording is unavailable".into());
+        }
         let ledger: Option<Ledger> = read_json(&run_dir.join("ledger.json")).ok();
+        let mut screenshot = None;
         if let Some(shot) = ledger.as_ref().and_then(report::failing_screenshot) {
             if run_dir.join(&shot).is_file() {
                 attachments.push((
                     PathBuf::from(format!("./{shot}")),
                     Some("Failing step".to_string()),
                 ));
+                screenshot = Some(shot);
             }
         }
         // ponytail: a publisher killed mid-upload can leave gh running; a rerun inside that window may repost.
@@ -777,7 +783,8 @@ fn publish_inner(
                     &PrRun {
                         tested_sha: &pr.head_ref_oid,
                         tested_older_commit: pr.tested_older_commit,
-                        video: &pr.video,
+                        video: &video,
+                        screenshot: screenshot.as_deref(),
                         plan_sha256: &pr.plan_sha256,
                         video_publication: &pr.video_publication,
                     },

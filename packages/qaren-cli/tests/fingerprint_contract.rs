@@ -408,3 +408,38 @@ fn local_dependency_unreadable_files_and_directories_forbid_reuse() {
         }
     }
 }
+
+
+#[test]
+fn optional_local_dependencies_bind_native_inputs_and_unresolved_workspaces() {
+    for spec in ["file:", "link:", "workspace:"] {
+        let root = local_dependency_project(spec);
+        std::fs::write(
+            root.join("package.json"),
+            serde_json::json!({"optionalDependencies": {"foo": format!("{spec}./foo")}})
+                .to_string(),
+        )
+        .unwrap();
+        for platform in ["ios", "android"] {
+            let before = local_fingerprint(&root, platform);
+            if spec == "workspace:" {
+                assert!(!before.complete);
+                assert!(before
+                    .incompleteness
+                    .iter()
+                    .any(|reason| reason.contains("workspace:")));
+                continue;
+            }
+            assert!(before.complete, "{:?}", before.incompleteness);
+            std::fs::write(
+                root.join("foo/cpp/Foo.cpp"),
+                format!("int foo = {};", platform.len()),
+            )
+            .unwrap();
+            let after = local_fingerprint(&root, platform);
+            assert!(after.complete, "{:?}", after.incompleteness);
+            assert_ne!(before.value, after.value, "{spec} {platform}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

@@ -264,9 +264,17 @@ type Exclusion = { rule: 'anc' | 'scroll' | 'window'; ancestor: number };
 // Diagnostic only: which rule and ancestor removed an in-app node; never read by decisions.
 const exclusions = new WeakMap<Set<number>, Map<number, Exclusion>>();
 
+const viewports = new WeakMap<Set<number>, Map<number, Rect>>();
+
+export function clippingViewport(offscreen: Set<number>, index: number): Rect | undefined {
+  return viewports.get(offscreen)?.get(index);
+}
+
 function outsideTrustedViewport(nodes: NativeNode[], contradicted: Set<number>): Set<number> {
   const offscreen = new Set<number>();
   const decided = new Map<number, Exclusion>();
+  const bounds = new Map<number, Rect>();
+  viewports.set(offscreen, bounds);
   exclusions.set(offscreen, decided);
   const root = nodes[0];
   // The screen clips every node, whatever its ancestry; a keyboard can detach content from its Window.
@@ -306,6 +314,7 @@ function outsideTrustedViewport(nodes: NativeNode[], contradicted: Set<number>):
       }
       parent = ancestor?.parentIndex;
     }
+    if (visible) bounds.set(i, visible);
     if (visible && !within(node.rect, visible)) {
       offscreen.add(i);
       if (decider) decided.set(i, decider);
