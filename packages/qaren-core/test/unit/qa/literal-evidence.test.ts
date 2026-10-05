@@ -254,7 +254,7 @@ function blockOf(markdown: string): Block[] {
 
 const noJev = () => scriptedJudge(() => assert.fail('a literal target must never ask Jev'));
 
-async function consumers(screen: Screen, text: string) {
+async function consumers(screen: Screen, text: string, exact: 'text' | 'id' = 'text') {
   const plan = (line: string) => `## QA\n\n### Literal\n1. ${line}\n`;
   const outcome = async (line: string) => {
     const f = walker([screen], noJev());
@@ -270,7 +270,9 @@ async function consumers(screen: Screen, text: string) {
   const [block] = blockOf(plan(`Wait for "${text}"`));
   const stored: StoredBlock = {
     header: { appId: 'com.example.app', plan: 'plan.md', planHash: 'x', platform: 'ios' },
-    steps: [{ raw: block.items[0].raw, kind: 'wait', selector: { text } }],
+    steps: [
+      { raw: block.items[0].raw, kind: 'wait', selector: exact === 'id' ? { id: text } : { text } },
+    ],
   };
   const f = walker([screen], noJev());
   const replay = await walkBlock(replayBlock(block, stored), f.deps, 0, [], undefined, undefined, {
@@ -435,4 +437,58 @@ test('contradicted clipping containers preserve rows and unresolved inputs in ev
     ]);
     assert.equal(check(trustedClip, 'Outside window'), 'fail', type);
   }
+});
+
+
+test('quoted testIDs retain identity evidence and ID-preferred persistence', async () => {
+  const screen = companyHome();
+  for (const [label, id] of [['Test App', 'app-id'], ['Decorative banner', 'banner-id']]) {
+    screen.elements.find((e) => e.label === label)!.testID = id;
+    assert.equal(check(screen, label), 'fail');
+    assert.equal(check(screen, id), 'fail');
+    assert.deepEqual(visibleSelector({ quoted: id, phrase: id }, screen), { id });
+    assert.equal(visibleSelector({ quoted: label, phrase: label }, screen), undefined);
+    const c = await consumers(screen, id, 'id');
+    assert.equal(c.wait.verdict, 'PASS');
+    assert.equal(c.scroll.verdict, 'PASS');
+    assert.deepEqual(c.scroll.actions, []);
+    assert.equal(c.replay.failed, false, c.replay.seen);
+  }
+});
+
+test('independent trusted clips exclude stale input witnesses before contradiction admission', async () => {
+  for (const trusted of ['Window', 'ScrollView', 'Table', 'CollectionView']) {
+    for (const type of ['Other', 'Window', 'ScrollView', 'Table', 'CollectionView']) {
+      for (const inputType of ['TextView', 'TextField', 'SecureTextField', 'SearchField']) {
+        for (const [clipRect, inputRect] of [
+          [at(0, 100, 402, 200), at(16, 350)],
+          [at(0, 400, 402, 200), at(16, 300)],
+          [at(0, 100, 100, 600), at(150, 300, 100, 30)],
+          [at(250, 100, 100, 600), at(16, 300, 100, 30)],
+        ]) {
+          const screen = observed([
+            { type: 'Application', rect: app },
+            { type: trusted, parent: 0, rect: clipRect },
+            { type, parent: 1, rect: at(0, 900, 402, 600) },
+            { type: inputType, parent: 2, rect: inputRect, label: 'Stale input' },
+          ]);
+          assert.equal(check(screen, 'Stale input'), 'fail', `${trusted}/${type}/${inputType}`);
+          assert.equal(screen.elements[3].visibilityEvidence, 'offscreen');
+          assert.equal(screen.elements[3].offscreen, true);
+          assert.deepEqual(screen.unresolvedText ?? [], []);
+        }
+      }
+    }
+  }
+  const screen = observed([
+    { type: 'Application', rect: app },
+    { type: 'Window', parent: 0, rect: at(0, 100, 402, 200) },
+    { type: 'ScrollView', parent: 1, rect: at(0, 900, 402, 600) },
+    { type: 'TextView', parent: 2, rect: at(16, 350), label: 'Stale input' },
+  ]);
+  assert.equal((await checkRow(screen, 'Stale input')).verdict, 'FAIL');
+  const c = await consumers(screen, 'Stale input');
+  assert.match(c.wait.seen, /ITEM_DEADLINE_EXCEEDED/);
+  assert.match(c.scroll.seen, /did not come into view/);
+  assert.equal(c.replay.miss, c.replay.line);
 });

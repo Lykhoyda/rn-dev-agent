@@ -363,9 +363,22 @@ function prepareAssertion(
 
 function textIdentities(quoted: string, screen: Screen): number {
   if (literalEvidence(screen, quoted, 'equals').verdict !== 'pass') return 0;
-  return [...(screen.paintedText ?? screen.visibleText), ...(screen.labelText ?? [])].filter(
-    (text) => text === quoted,
+  const visible = {
+    ...screen,
+    elements: screen.elements.filter(
+      (e) => (e.visibilityEvidence ?? (e.offscreen ? 'offscreen' : 'visible')) === 'visible',
+    ),
+  };
+  const identities = exactIdentities(
+    visible,
+    { quoted, phrase: quoted, exact: 'text' },
+    'wait',
   ).length;
+  const occurrences = [
+    ...(screen.paintedText ?? screen.visibleText),
+    ...(screen.labelText ?? []),
+  ].filter((text) => text === quoted).length;
+  return Math.min(occurrences, identities || occurrences);
 }
 
 export function targetEvidence(target: Target, screen: Screen): LiteralVerdict {
@@ -378,6 +391,14 @@ export function targetEvidence(target: Target, screen: Screen): LiteralVerdict {
         reason: `${matches.length} identities match the stored id "${target.quoted}"`,
       });
     return !matches[0].offscreen ? 'pass' : 'fail';
+  }
+  if (!target.exact) {
+    const ids = exactIdentities(
+      screen,
+      { quoted: target.quoted, phrase: target.quoted, exact: 'id' },
+      'wait',
+    );
+    if (ids.length === 1 && !ids[0].element.offscreen) return 'pass';
   }
   const text = literalEvidence(screen, target.quoted, 'equals').verdict;
   if (target.exact === 'text') {
@@ -404,8 +425,21 @@ export function elementSelector(element: Element): Selector | undefined {
 export function visibleSelector(target: Target, screen: Screen): Selector | undefined {
   const quoted = target.quoted;
   if (quoted === undefined || !targetVisible(target, screen)) return undefined;
-  if (target.exact === 'id') return { id: quoted };
-  return textIdentities(quoted, screen) === 1 ? { text: quoted } : undefined;
+  const shown = screen.elements.filter((e) => !e.offscreen);
+  const uniqueId = (id: string | undefined) =>
+    !!id && exactIdentities(screen, { quoted: id, phrase: id, exact: 'id' }, 'wait').length === 1;
+  if (target.exact !== 'text' && shown.some((e) => e.testID === quoted) && uniqueId(quoted))
+    return { id: quoted };
+  if (target.exact === 'id') return undefined;
+  if (literalEvidence(screen, quoted, 'equals').verdict !== 'pass') return undefined;
+  const labelled = exactIdentities(screen, { quoted, phrase: quoted, exact: 'text' }, 'wait')
+    .map(({ element }) => element)
+    .filter((e) => !e.offscreen);
+  return target.exact === undefined && labelled.length === 1 && uniqueId(labelled[0].testID)
+    ? { id: labelled[0].testID! }
+    : textIdentities(quoted, screen) === 1
+      ? { text: quoted }
+      : undefined;
 }
 
 export function checkQuestion(check: Check): Question {

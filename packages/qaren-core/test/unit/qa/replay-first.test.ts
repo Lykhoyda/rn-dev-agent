@@ -119,7 +119,7 @@ test('first run walks, passes and writes the block', async () => {
   assert.match(saved, /- tapOn: \{ id: "onboarding-done" \}/);
   assert.match(
     saved,
-    /# 3\. Wait for "Welcome" to appear\n- extendedWaitUntil: \{ visible: \{ text: "Welcome" \}, timeout: 15000 \}/,
+    /# 3\. Wait for "Welcome" to appear\n- extendedWaitUntil: \{ visible: \{ id: "home-title" \}, timeout: 15000 \}/,
   );
 });
 
@@ -540,17 +540,17 @@ test('the private-input predicate covers secure fields and inputs the privacy mo
 });
 
 for (const targetLine of ['3. Wait for "Welcome" to appear', '3. Scroll down until "Welcome"']) {
-  test(`${targetLine} replays the literal witness despite target ID drift`, async () => {
+  test(`${targetLine} re-walks target ID drift without repeating prior actions`, async () => {
     const dir = root();
     const plan = literal.replace('3. Wait for "Welcome" to appear', targetLine);
     await run(plan, dir);
     const line = blocks(plan)[0].items[2].line;
     const { result, fake } = await run(plan, dir, { welcomeId: 'welcome-title' });
     assert.equal(result.verdict, 'PASS', JSON.stringify(result.failure));
-    assert.equal(result.path, 'replay');
+    assert.equal(result.path, `replay→walk@${line}`);
     assert.deepEqual(fake.actions, ['press @skip', 'press @done', 'press @tasks']);
-    assert.equal(result.steps.find((row) => row.line === line)?.outcome, 'pass');
-    assert.match(readFileSync(actionFile(dir), 'utf8'), /text: "Welcome"/);
+    assert.equal(result.steps.find((row) => row.line === line)?.outcome, 'retry');
+    assert.match(readFileSync(actionFile(dir), 'utf8'), /id: "welcome-title"/);
   });
 }
 

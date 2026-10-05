@@ -264,9 +264,8 @@ type Exclusion = { rule: 'anc' | 'scroll' | 'window'; ancestor: number };
 // Diagnostic only: which rule and ancestor removed an in-app node; never read by decisions.
 const exclusions = new WeakMap<Set<number>, Map<number, Exclusion>>();
 
-export function outsideViewport(nodes: NativeNode[]): Set<number> {
+function outsideTrustedViewport(nodes: NativeNode[], contradicted: Set<number>): Set<number> {
   const offscreen = new Set<number>();
-  const contradicted = frameContradictions(nodes);
   const decided = new Map<number, Exclusion>();
   exclusions.set(offscreen, decided);
   const root = nodes[0];
@@ -285,19 +284,6 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
     let decider: Exclusion | undefined;
     for (let hops = 0; parent !== undefined && hops < nodes.length; hops++) {
       const ancestor = nodes[parent];
-      // A text input frame that contradicts its wholly off-screen container is stale; trust the container.
-      if (
-        screen &&
-        TEXT_INPUT_TYPES.has(node.type ?? '') &&
-        validRect(ancestor?.rect) &&
-        ancestor.rect.width > 0 &&
-        ancestor.rect.height > 0 &&
-        !within(ancestor.rect, screen)
-      ) {
-        offscreen.add(i);
-        decided.set(i, { rule: 'anc', ancestor: parent });
-        return;
-      }
       if (
         ancestor?.type === 'Window' &&
         !contradicted.has(parent) &&
@@ -328,7 +314,27 @@ export function outsideViewport(nodes: NativeNode[]): Set<number> {
   return offscreen;
 }
 
-// Contradicted frames: a wholly off-screen node holding an on-screen descendant, plus such text inputs.
+export function outsideViewport(nodes: NativeNode[]): Set<number> {
+  const contradicted = frameContradictions(nodes);
+  const offscreen = outsideTrustedViewport(nodes, contradicted);
+  const root = nodes[0]?.rect;
+  if (!root) return offscreen;
+  for (const i of contradicted) {
+    if (!TEXT_INPUT_TYPES.has(nodes[i].type ?? '') || offscreen.has(i)) continue;
+    let parent = nodes[i].parentIndex;
+    for (let hops = 0; parent !== undefined && hops < nodes.length; hops++) {
+      const ancestor = nodes[parent];
+      if (validRect(ancestor?.rect) && !within(ancestor.rect, root)) {
+        offscreen.add(i);
+        exclusions.get(offscreen)!.set(i, { rule: 'anc', ancestor: parent });
+        break;
+      }
+      parent = ancestor?.parentIndex;
+    }
+  }
+  return offscreen;
+}
+
 export function frameContradictions(nodes: NativeNode[]): Set<number> {
   const contradicted = new Set<number>();
   const root = nodes[0]?.rect;
@@ -336,18 +342,26 @@ export function frameContradictions(nodes: NativeNode[]): Set<number> {
     return contradicted;
   const sized = (rect: Rect | undefined): rect is Rect =>
     validRect(rect) && rect.width > 0 && rect.height > 0;
+  const containers = new Set<number>();
+  const witnesses: Array<[number, number]> = [];
   nodes.forEach((node, i) => {
     if (!validRect(node.rect) || !within(node.rect, root)) return;
     let parent = node.parentIndex;
     for (let hops = 0; parent !== undefined && hops < nodes.length; hops++) {
       const ancestor = nodes[parent];
       if (ancestor && sized(ancestor.rect) && !within(ancestor.rect, root)) {
-        contradicted.add(parent);
-        if (TEXT_INPUT_TYPES.has(node.type ?? '')) contradicted.add(i);
+        containers.add(parent);
+        witnesses.push([i, parent]);
       }
       parent = ancestor?.parentIndex;
     }
   });
+  const offscreen = outsideTrustedViewport(nodes, containers);
+  for (const [i, parent] of witnesses) {
+    if (offscreen.has(i)) continue;
+    contradicted.add(parent);
+    if (TEXT_INPUT_TYPES.has(nodes[i].type ?? '')) contradicted.add(i);
+  }
   return contradicted;
 }
 

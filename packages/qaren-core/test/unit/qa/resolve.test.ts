@@ -619,11 +619,11 @@ test('a visible text is stored only when replay would find exactly one identity'
       welcome,
       painted([node('StaticText', 'Welcome', 100, { identifier: 'home-title' })]),
     ),
-    { text: 'Welcome' },
+    { id: 'home-title' },
   );
 });
 
-test('a visible label stores its literal witness regardless of testID sharing', () => {
+test('a visible label stores its testID only when no other identity shares it', () => {
   const sibling = { quoted: 'Sibling A', phrase: 'Sibling A' };
   const shared = painted([
     node('Button', 'Sibling A', 100, { identifier: 'qa-replay-siblings' }),
@@ -637,7 +637,7 @@ test('a visible label stores its literal witness regardless of testID sharing', 
     node('Button', 'Sibling A', 100, { identifier: 'qa-replay-a' }),
     node('Button', 'Sibling B', 200, { identifier: 'qa-replay-b' }),
   ]);
-  assert.deepEqual(visibleSelector(sibling, unique), { text: 'Sibling A' });
+  assert.deepEqual(visibleSelector(sibling, unique), { id: 'qa-replay-a' });
 });
 
 test('native offscreen target frames choose up above the viewport and down otherwise', async () => {
