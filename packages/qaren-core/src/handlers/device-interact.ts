@@ -41,6 +41,7 @@ import { exactIdentities } from '../qa/identity.js';
 import { join, type NativeNode } from '../qa/screen.js';
 import {
   getCachedSignature,
+  getKeyboardTop,
   isRefMapFresh,
   refreshRef,
   lookupRef,
@@ -1870,6 +1871,15 @@ export function buildDirectionalSwipeCliArgs(
   ];
 }
 
+// A drag that starts or ends on a visible keyboard types or dismisses instead of scrolling.
+function scrollBand(): { width: number; height: number } {
+  const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
+  const keyboardTop = getKeyboardTop();
+  return keyboardTop !== null && keyboardTop > 0 && keyboardTop < screen.height
+    ? { width: screen.width, height: keyboardTop }
+    : screen;
+}
+
 // Scroll direction → finger gesture is INVERTED vs swipe ("scroll down" = content
 // moves up = finger moves up) and scaled by `amount` (0..1). Centred half-spans
 // keep the gesture inside the viewport.
@@ -1905,9 +1915,8 @@ export function buildDirectionalScrollCliArgs(
   amount?: number,
   durationMs?: number,
 ): string[] {
-  const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
   const clamped = Math.min(Math.max(amount ?? 0.5, 0), 1);
-  const coords = computeScrollFromDirection(direction, clamped, screen);
+  const coords = computeScrollFromDirection(direction, clamped, scrollBand());
   const duration = durationMs ?? DEFAULT_SWIPE_DURATION_MS;
   return [
     'scroll',
@@ -2084,9 +2093,8 @@ export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolR
     // because the UI thread is never "idle" between scroll events. Fast-runner
     // uses `RunnerDaemonProxy.synthesize(eventRecord)` which is raw HID event
     // injection and returns as soon as events are delivered.
-    const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
     const amount = Math.min(Math.max(args.amount ?? 0.5, 0), 1);
-    const { x1, y1, x2, y2 } = computeScrollFromDirection(args.direction, amount, screen);
+    const { x1, y1, x2, y2 } = computeScrollFromDirection(args.direction, amount, scrollBand());
     // GH #383: adopt persisted per-device state so a respawned worker sees a
     // live runner before this fast-path gate.
     if (!args.qaContext) adoptPersistedFastRunnerState(getActiveSession()?.deviceId);

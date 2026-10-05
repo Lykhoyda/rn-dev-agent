@@ -14,6 +14,7 @@ import {
   ResolutionError,
   decideScreen,
   elementSelector,
+  clearanceScroll,
   keyboardFallbackTarget,
   bindFillIdentity,
   stepTarget,
@@ -1082,6 +1083,7 @@ export async function walkBlock(
           let initial = held?.decision;
           let freshness = attempt === 1 ? 1 : 0;
           let scrolled = false;
+          let occluded: 'up' | 'down' | undefined;
           let scrollNeedsReadback = false;
           let scrollError: string | undefined;
           let act: ActResult;
@@ -1098,14 +1100,17 @@ export async function walkBlock(
                     ? bindFillIdentity(item, before.screen, fillIdentity)
                     : undefined;
                 const decided =
-                  fillIdentity !== undefined
-                    ? binding?.kind === 'strict'
-                      ? binding.strict
-                      : {
-                          refuse: 'TARGET_NOT_FOUND',
-                          reason: 'the original input identity no longer resolves uniquely',
-                        }
-                    : decision.target!;
+                  occluded !== undefined
+                    ? { scroll: occluded }
+                    : fillIdentity !== undefined
+                      ? binding?.kind === 'strict'
+                        ? binding.strict
+                        : {
+                            refuse: 'TARGET_NOT_FOUND',
+                            reason: 'the original input identity no longer resolves uniquely',
+                          }
+                      : decision.target!;
+                occluded = undefined;
                 let resolution: Exclude<Resolution, { refuse: string }>;
                 if ('refuse' in decided) {
                   const fallback =
@@ -1219,6 +1224,28 @@ export async function walkBlock(
                   ref,
                 );
                 break;
+              }
+              if (
+                (item.kind === 'press' || item.kind === 'fill') &&
+                element !== undefined &&
+                !act.ok &&
+                act.mutation === 'none' &&
+                act.error?.startsWith('FOCUS_TARGET_OCCLUDED:')
+              ) {
+                if (scrolled) {
+                  outcome = failed(
+                    item,
+                    attempt,
+                    `${act.error}; "${item.target.phrase}" stayed off screen after one scroll`,
+                    before.screen,
+                    await shoot(item),
+                    ref,
+                  );
+                  break;
+                }
+                occluded = clearanceScroll(element);
+                initial = { resolvedBy };
+                continue;
               }
               if (
                 item.kind === 'fill' &&

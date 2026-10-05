@@ -432,6 +432,13 @@ extension RnFastRunnerTests {
         case .proceed(let status):
           keyboardGuardStatus = status
         }
+        let liveHittable = liveTargetHittable(app: activeApp, command: command)
+        if DispatchGuard.decide(liveHittable: liveHittable, keyboardContainsPoint: false) == .occluded {
+          return Response(
+            ok: false,
+            error: ErrorPayload(code: "FOCUS_TARGET_OCCLUDED", message: Self.occludedDispatchMessage, mutation: "none")
+          )
+        }
         var outcome = RunnerInteractionOutcome.performed
         let timing = measureGesture {
           withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
@@ -452,7 +459,8 @@ extension RnFastRunnerTests {
             referenceWidth: touchFrame.referenceWidth,
             referenceHeight: touchFrame.referenceHeight,
             keyboardGuard: keyboardGuardStatus,
-            keyboardGuardMs: keyboardGuardMs
+            keyboardGuardMs: keyboardGuardMs,
+            occlusionCheck: liveHittable == nil ? "unavailable" : "hit-tested"
           )
         )
       }
@@ -750,15 +758,13 @@ extension RnFastRunnerTests {
           let frame = target.frame
           focusPoint = CGPoint(x: frame.midX, y: frame.midY)
         }
-        if let keyboardFrame = keyboardFrameIfVisible(app: activeApp),
-           keyboardFrame.contains(focusPoint) {
+        let keyboardContainsPoint = keyboardFrameIfVisible(app: activeApp)?.contains(focusPoint) == true
+        // The input's own hit test speaks for the focus point only when that point is on the input.
+        let liveHittable = target.frame.contains(focusPoint) ? boundedHittable(target) : nil
+        if DispatchGuard.decide(liveHittable: liveHittable, keyboardContainsPoint: keyboardContainsPoint) == .occluded {
           return Response(
             ok: false,
-            error: ErrorPayload(
-              code: "FOCUS_TARGET_OCCLUDED",
-              message: "FOCUS_TARGET_OCCLUDED: the focus tap point sits inside the visible keyboard; no tap or typing was performed. Dismiss the keyboard or scroll the input into view, then retry.",
-              mutation: "none"
-            )
+            error: ErrorPayload(code: "FOCUS_TARGET_OCCLUDED", message: Self.occludedDispatchMessage, mutation: "none")
           )
         }
         withTemporaryScrollIdleTimeoutIfSupported(activeApp) {

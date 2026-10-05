@@ -340,6 +340,7 @@ test('GH-588 V6: success-shaped fill fails closed when settle observes runner au
             'HONEST_HITTABLE',
             'EXACT_KEYBOARD_TARGET_GUARD',
             'FILL_EVIDENCE_V1',
+            'HIT_TESTED_DISPATCH_V1',
           ],
           commands: REQUIRED_IOS_COMMANDS,
         }),

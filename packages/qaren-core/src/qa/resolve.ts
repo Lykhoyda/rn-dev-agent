@@ -248,6 +248,14 @@ function scrollTo(element: Element): { scroll: 'up' | 'down' } {
   };
 }
 
+// An occluded target scrolls toward the screen centre: down from the lower half, up from the upper.
+export function clearanceScroll(element: Element): 'up' | 'down' {
+  const frame = elementFrame(element);
+  const viewport = elementViewport(element);
+  if (!frame || !viewport) return 'down';
+  return frame.y + frame.height / 2 >= viewport.y + viewport.height / 2 ? 'down' : 'up';
+}
+
 export function scrollUntilDirection(
   target: Target,
   screen: Screen,

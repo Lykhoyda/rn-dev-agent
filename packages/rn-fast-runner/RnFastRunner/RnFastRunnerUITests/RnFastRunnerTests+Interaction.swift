@@ -662,6 +662,49 @@ extension RnFastRunnerTests {
 #endif
   }
 
+  static let occludedDispatchMessage =
+    "FOCUS_TARGET_OCCLUDED: the focus or tap point is covered by another element (keyboard, bar or overlay); no tap or typing was performed. Scroll the target clear, then retry."
+
+  // nil when the hit test is unavailable: unresolvable, ambiguous, thrown or over budget.
+  func boundedHittable(_ element: XCUIElement, budgetMs: Double = 300) -> Bool? {
+    let started = ProcessInfo.processInfo.systemUptime
+    var hittable: Bool?
+    let exception = RunnerObjCExceptionCatcher.catchException({ hittable = element.isHittable })
+    guard exception == nil,
+          (ProcessInfo.processInfo.systemUptime - started) * 1000 <= budgetMs
+    else { return nil }
+    return hittable
+  }
+
+  func liveTargetHittable(app: XCUIApplication, command: Command) -> Bool? {
+    guard let index = command.snapshotNodeIndex,
+          let retained = retainedSnapshotTargets[index],
+          retained.generation == currentSnapshotGeneration,
+          command.snapshotGeneration == retained.generation
+    else { return nil }
+    let predicate: NSPredicate
+    if let identifier = retained.identifier {
+      predicate = NSPredicate(format: "identifier == %@", identifier)
+    } else if let label = retained.label {
+      predicate = NSPredicate(format: "label == %@", label)
+    } else {
+      return nil
+    }
+    let expected = CGRect(
+      x: retained.rect.x, y: retained.rect.y,
+      width: retained.rect.width, height: retained.rect.height
+    )
+    var matches: [XCUIElement] = []
+    let exception = RunnerObjCExceptionCatcher.catchException({
+      matches = app.descendants(matching: .any).matching(predicate).allElementsBoundByIndex.filter {
+        self.elementTypeName($0.elementType) == retained.type
+          && KeyboardGuard.approximatelyEqual($0.frame, expected)
+      }
+    })
+    guard exception == nil, matches.count == 1 else { return nil }
+    return boundedHittable(matches[0])
+  }
+
   private func resolveLiveKeyboardTarget(
     app: XCUIApplication,
     retained: RetainedSnapshotTarget

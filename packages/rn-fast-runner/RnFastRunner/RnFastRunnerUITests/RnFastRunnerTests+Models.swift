@@ -170,6 +170,7 @@ struct DataPayload: Codable {
   let verifyVerdict: String?
   let verifyStable: Bool?
   let textEntryRoute: String?
+  let occlusionCheck: String?
   var appProcessIdentifier: Int? = nil
 
   init(
@@ -205,7 +206,8 @@ struct DataPayload: Codable {
     focusTap: String? = nil,
     verifyVerdict: String? = nil,
     verifyStable: Bool? = nil,
-    textEntryRoute: String? = nil
+    textEntryRoute: String? = nil,
+    occlusionCheck: String? = nil
   ) {
     self.message = message
     self.text = text
@@ -240,6 +242,7 @@ struct DataPayload: Codable {
     self.verifyVerdict = verifyVerdict
     self.verifyStable = verifyStable
     self.textEntryRoute = textEntryRoute
+    self.occlusionCheck = occlusionCheck
   }
 }
 

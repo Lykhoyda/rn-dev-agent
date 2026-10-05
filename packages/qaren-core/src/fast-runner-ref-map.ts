@@ -77,6 +77,7 @@ let lastSnapshotHash: string | null = null;
 const lastPackageSnapshotHashes = new Map<string, string>();
 let snapshotGeneration = 0;
 let keyboardStateAtSnapshot: boolean | null = null;
+let keyboardTop: number | null = null;
 
 // Screen-rect derivation: hittable-seeded union GROWN BY OVERLAP.
 //
@@ -193,6 +194,7 @@ function resolveScreenRect(entries: ExtentEntry[]): ElementRect | null {
 export function updateRefMap(nodes: SnapshotNode[]): void {
   refMap.clear();
   screenRect = null;
+  keyboardTop = null;
 
   const entries: ExtentEntry[] = [];
   for (const node of nodes) {
@@ -228,6 +230,10 @@ export function getScreenRect(): ElementRect | null {
   return screenRect;
 }
 
+export function getKeyboardTop(): number | null {
+  return keyboardTop;
+}
+
 export function getRefMapAge(): number {
   return lastUpdated ? Date.now() - lastUpdated : Infinity;
 }
@@ -252,6 +258,7 @@ export function clearRefMap(): void {
   lastPackageSnapshotHashes.clear();
   snapshotGeneration = 0;
   keyboardStateAtSnapshot = null;
+  keyboardTop = null;
 }
 
 export function hasRefMap(): boolean {
@@ -352,6 +359,7 @@ export function updateRefMapFromFlat(
   screenRect = null;
   snapshotGeneration = freshness.snapshotGeneration ?? snapshotGeneration + 1;
   keyboardStateAtSnapshot = freshness.keyboardVisible ?? null;
+  keyboardTop = null;
 
   const hashed: FlatNode[] = [];
   // Screen rect: hittable-first union with an all-nodes fallback — same
@@ -378,6 +386,8 @@ export function updateRefMapFromFlat(
     hashed.push(node);
 
     entries.push({ rect: node.rect, hittable: node.hittable, type: node.type });
+    if (keyboardStateAtSnapshot && node.type === 'Keyboard' && node.rect.height > 0)
+      keyboardTop = Math.min(keyboardTop ?? node.rect.y, node.rect.y);
   }
   screenRect = resolveScreenRect(entries);
 

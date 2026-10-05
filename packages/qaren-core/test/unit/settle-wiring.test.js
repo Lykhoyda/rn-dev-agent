@@ -226,7 +226,12 @@ test('end-to-end: runNative ios tap → runner /command + settle probe → meta.
       return jsonResponse({
         ok: true,
         protocolVersion: 1,
-        capabilities: ['SCREEN_STATIC', 'EXACT_KEYBOARD_TARGET_GUARD', 'FILL_EVIDENCE_V1'],
+        capabilities: [
+          'SCREEN_STATIC',
+          'EXACT_KEYBOARD_TARGET_GUARD',
+          'FILL_EVIDENCE_V1',
+          'HIT_TESTED_DISPATCH_V1',
+        ],
         commands: REQUIRED,
       });
     }

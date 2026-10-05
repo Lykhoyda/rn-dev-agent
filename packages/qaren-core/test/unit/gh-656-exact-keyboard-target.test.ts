@@ -117,12 +117,15 @@ test('GH-656: iOS feature compatibility rejects old swipe-capable artifacts only
     {
       compatible: false,
       reason: 'missing-features',
-      missing: ['EXACT_KEYBOARD_TARGET_GUARD', 'FILL_EVIDENCE_V1'],
+      missing: ['EXACT_KEYBOARD_TARGET_GUARD', 'FILL_EVIDENCE_V1', 'HIT_TESTED_DISPATCH_V1'],
     },
   );
   assert.deepEqual(
     classifyRunnerCompatibility(
-      { ...health, capabilities: ['EXACT_KEYBOARD_TARGET_GUARD', 'FILL_EVIDENCE_V1'] },
+      {
+        ...health,
+        capabilities: ['EXACT_KEYBOARD_TARGET_GUARD', 'FILL_EVIDENCE_V1', 'HIT_TESTED_DISPATCH_V1'],
+      },
       null,
       REQUIRED_IOS_COMMANDS,
       REQUIRED_IOS_FEATURES,
@@ -231,7 +234,11 @@ test('GH-656: stale cached keyboard ref refuses before generic iOS healing', asy
         JSON.stringify({
           ok: true,
           protocolVersion: 2,
-          capabilities: ['EXACT_KEYBOARD_TARGET_GUARD', 'FILL_EVIDENCE_V1'],
+          capabilities: [
+            'EXACT_KEYBOARD_TARGET_GUARD',
+            'FILL_EVIDENCE_V1',
+            'HIT_TESTED_DISPATCH_V1',
+          ],
           commands: REQUIRED_IOS_COMMANDS,
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },

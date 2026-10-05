@@ -27,7 +27,11 @@ const state = {
 
 test('a runner without FILL_EVIDENCE_V1 is incompatible on both platforms', () => {
   for (const [commands, features, others] of [
-    [REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES, ['EXACT_KEYBOARD_TARGET_GUARD']],
+    [
+      REQUIRED_IOS_COMMANDS,
+      REQUIRED_IOS_FEATURES,
+      ['EXACT_KEYBOARD_TARGET_GUARD', 'HIT_TESTED_DISPATCH_V1'],
+    ],
     [REQUIRED_ANDROID_COMMANDS, REQUIRED_ANDROID_FEATURES, ['APP_SCOPED_EXACT_INTERACTION']],
   ] as const) {
     const health = { protocolVersion: 2, commands: [...commands], capabilities: [...others] };
