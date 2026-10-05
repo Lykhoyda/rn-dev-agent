@@ -757,14 +757,14 @@ export function join(
     for (let p = n.parentIndex; p !== undefined && p >= 0 && p < i; p = nodes[p].parentIndex)
       voiced.add(p);
   });
-  // An accessible element whose label merges its painted children exposes no text of its own.
+  // Label-only hittable rows supply literal evidence without accessibility text descendants.
   const mergedLabel = (n: NativeNode, e: Element, i: number) =>
     n.type === 'Other' &&
     n.hittable === true &&
     !!e.label &&
     !voiced.has(i) &&
     !SYSTEM_SCROLL_BAR_LABEL.test(e.label);
-  // Image and other container labels are accessibility-only, not assertion evidence.
+  // Structural and image labels stay excluded; merged labels use their own evidence channel.
   const visibleText: string[] = [];
   const paintedText: string[] = [];
   const labelText: string[] = [];

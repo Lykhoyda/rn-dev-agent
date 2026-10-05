@@ -2,4 +2,4 @@
 "qaren": patch
 ---
 
-Judge literal checks, quoted waits, scroll-until and replay text waits by one visibility rule that accepts merged accessibility labels of visible label-only rows and reports contradicted frames or incomplete snapshots as unsure instead of a false verdict.
+Share literal visibility evidence across checks, text waits, scroll-until-text and replay text waits, accepting visible merged accessibility labels and keeping contradictory frames uncertain while preserving unique testID waits and native acquisition safeguards.

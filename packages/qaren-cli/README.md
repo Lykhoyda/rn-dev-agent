@@ -197,22 +197,46 @@ Unsupported visual or layout claims remain uncertain.
 Phrase waits capture fresh screen and presence evidence on every poll, even when the
 screen appears unchanged; prior observations do not establish current presence.
 
-Literal checks, quoted waits and quoted scroll-until targets exclude native text
-outside the intersection of the Application screen rectangle and every retained
-ScrollView, Table, CollectionView and Window ancestor rectangle, on both axes.
-Screen and scroll-container clipping apply even when a node has no Window
-ancestor, including captures with the keyboard up. Missing or invalid rectangles
-skip only that clip; Application and Window rectangles must also have positive
-size. A text input (`TextView`, `TextField`, `SecureTextField` or `SearchField`)
-with any positive-size ancestor wholly outside the screen is offscreen even when
-its own frame reports on-screen geometry. Other nodes follow only the screen,
-Window and scroll clips, so on-screen rows under a stale off-screen container stay
-visible; on-screen ancestors do not clip overflowing children. Partly overlapping nodes remain eligible. iOS interactive snapshots retain
-content-less Window nodes with their real frames and ancestry to supply geometry.
-Mounted text beyond the cumulative bounds cannot satisfy the plan until it enters
-those bounds. Offscreen inputs remain in the privacy inventory for masking.
-This geometric filter does not prove complete visual exposure or occlusion; its
-implementation is owned by [native presence](../qaren-core/src/qa/native-presence.ts).
+Literal checks, quoted text waits, quoted scroll-until-text and replay text waits
+share [`literalEvidence`](../qaren-core/src/qa/evidence.ts): a trusted visible
+occurrence passes; otherwise matching unresolved text is unsure; otherwise
+complete native coverage proves failure. Literal checks match substrings;
+text targets match the whole contribution. React-only text, structural and
+container echoes, non-content wrappers, images and system scroll-bar labels
+contribute no literal evidence. A visible, hittable native `Other` element with
+a label and no accessibility text descendant contributes its merged label;
+this also admits an icon-only control's explicit label. A literal check passing
+through that contribution records `matched an accessibility label` in the ledger.
+Quoted waits and scroll-until targets also accept a unique visible testID as
+identity evidence, independently of literal text.
+
+The [native geometry model](../qaren-core/src/qa/native-presence.ts) clips nodes
+on both axes against the Application screen and trusted Window, ScrollView,
+Table and CollectionView ancestors. Missing or invalid rectangles skip only
+that clip; Application and Window rectangles must have positive size.
+Missing Window ancestry does not create uncertainty when the Application clip
+is valid, including with the keyboard up. Partly overlapping nodes remain eligible.
+A wholly offscreen ancestor with an independently on-screen descendant has
+contradicted geometry: it stops supplying its own clip, while other trusted
+ancestors still clip. Ordinary on-screen text rows beneath it remain visible;
+a text input (`TextView`, `TextField`, `SecureTextField` or `SearchField`) with
+such conflicting frames is unresolved. An independent trusted clip proving
+the descendant offscreen wins over that contradiction. Ordinary below-the-fold
+rows and later pager pages remain offscreen, not unresolved. iOS snapshots retain
+content-less Window nodes for this geometry; offscreen inputs remain in the
+privacy inventory. Geometry does not prove complete exposure or occlusion.
+
+Waits poll unresolved text as not yet present and end with `VISIBILITY_UNSURE`
+when the final evidence remains unsure; scroll-until-text uses the same verdict
+within its scroll and time budgets. Literal checks re-ask from a fresh capture
+and use `CHECK_UNSURE` if uncertainty remains. This is distinct from acquisition
+admission: although a literal check cannot prove absence from incomplete native
+coverage, the walker refuses unusable native acquisition with
+`SCREEN_EVIDENCE_INCOMPLETE` before steps (including waits, scrolling and replay)
+or phrase assertions use it. Production private capture remains subject to the
+native privacy admission described below. The
+[literal-evidence tests](../qaren-core/test/unit/qa/literal-evidence.test.ts)
+cover the shared consumers and these admission boundaries.
 
 Passive capture diagnostics are computed and emitted for the same captured screen
 only after the walker establishes acquisition admission and passes the required
@@ -474,13 +498,14 @@ value was observed rather than typed. Existing saved actions are not removed.
 
 For quoted waits and scroll-until steps, a testID is stored only when exactly one
 captured element carries it, including offscreen elements in that count. A shared
-testID falls back to unique painted text; without either unique identity the block
-remains unsaved. A stored text selector must match exactly
-one onscreen painted contribution. Equal text or button labels at different native
-rectangles count separately, even when consecutive equal lines appear only once
-in the assertion view. Identical native twins count once; container and image labels
-do not add painted contributions. When no painted contribution matches, uniqueness
-falls back to onscreen label carriers. An ambiguous target without a unique testID
+testID falls back to unique literal text evidence; without either unique identity
+the block remains unsaved. A stored text selector must pass the
+[literal-evidence rule](#plan-checks-and-screen-evidence) and match exactly one
+visible witnessed identity. A control and its sole same-label text descendant
+count as one identity, even with different rectangles; distinct controls remain
+separate. Identical native twins count once. Excluded labels cannot supply a
+fallback witness. Discovery keeps preferring a unique testID for an eligible
+text match. An ambiguous text target without a unique testID
 can satisfy discovery but leaves the block unsaved; replay treats the ambiguous
 stored text as a broken selector under the recovery rules above.
 
