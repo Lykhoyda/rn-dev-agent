@@ -1,5 +1,6 @@
 import type { Check, Step, Target } from './plan.js';
 import type { Selector } from './ledger.js';
+import { hostPath } from './host-association.js';
 import {
   type Element,
   type Screen,
@@ -162,6 +163,20 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
 }
 
 // The one non-input element a quoted fill may tap before typing through the keyboard; undefined keeps the strict refusal.
+function hostOutside(screen: Screen, inner?: string, outer?: string): boolean {
+  const evidence = screen.reactHostEvidence;
+  if (!evidence?.typography?.complete) return false;
+  const index = (id?: string) => {
+    const found = evidence.hosts.flatMap((host, i) => (id && host.testID === id ? [i] : []));
+    return found.length === 1 ? found[0] : undefined;
+  };
+  const input = index(inner);
+  const wrapper = index(outer);
+  if (input === undefined || wrapper === undefined) return false;
+  const path = hostPath(evidence.typography, input);
+  return path !== undefined && !path.includes(wrapper);
+}
+
 export function keyboardFallbackTarget(
   step: Step,
   screen: Screen,
@@ -175,7 +190,18 @@ export function keyboardFallbackTarget(
       [e.testID, e.label, e.placeholder].some((name) => name !== undefined && ids.has(name)),
   );
   if (observable) return;
-  const identities = exactIdentities(screen, step.target, 'press');
+  const named = exactIdentities(screen, step.target, 'press');
+  // A wrapper echoing its hidden field's name is that React-only field unless React places the field elsewhere.
+  const identities = named.filter(
+    (identity) =>
+      identity.tag !== 'react-only' ||
+      !named.some(
+        (other) =>
+          other.tag === 'wrapper' &&
+          focusIdentityOf(screen, other.element) === identity.element.testID &&
+          !hostOutside(screen, identity.element.testID, other.element.testID),
+      ),
+  );
   if (identities.length > 1) return;
   // A field observed only in React is reached through its observed wrapper.
   const element =

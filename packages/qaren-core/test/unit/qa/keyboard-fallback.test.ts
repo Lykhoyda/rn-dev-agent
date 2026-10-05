@@ -1338,12 +1338,13 @@ test('React-only inputs do not block or become keyboard fallback targets', () =>
   assert.equal(keyboardFallbackTarget(fill('qa-hidden-email'), reactOnly), undefined);
 });
 
-function hiddenInputScreen(reactKnown = true): Screen {
+function hiddenInputScreen(reactKnown = true, labelled = false): Screen {
   return joinScreen(
     [
       {
         ref: '@wrap',
         identifier: 'custom-pressable-pressable',
+        ...(labelled ? { label: 'custom-pressable' } : {}),
         type: 'Other',
         hittable: true,
         rect: { x: 20, y: 100, width: 360, height: 60 },
@@ -1396,6 +1397,19 @@ for (const reactKnown of [true, false]) {
     assert.match(result.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
   });
 }
+
+test('a wrapper echoing its hidden field name stands for that one field', async () => {
+  const joined = hiddenInputScreen(true, true);
+  assert.deepEqual(keyboardFallbackTarget(fill('custom-pressable'), joined), {
+    element: joined.elements[0],
+    oracleTestID: 'custom-pressable',
+  });
+  const fake = app({ initial: joined.elements, initialKeyboard: false });
+  const result = await walkBlock(blocks(plan(EMAIL, 'custom-pressable', ''))[0], fake.deps);
+  assert.equal(result.block.outcome, 'pass', JSON.stringify(result.failure));
+  assert.deepEqual(steps(fake.log), ['press @wrap', 'type @wrap']);
+  assert.match(result.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
+});
 
 for (const belowFold of [true, false]) {
   test(`native input ${belowFold ? 'below the fold scrolls' : 'on screen resolves strictly'}`, () => {
