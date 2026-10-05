@@ -691,11 +691,9 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
                 FailureCode::WalkDeadlineExceeded
             };
             let reason = if code == FailureCode::CoreRefused {
-                let mut load = 0.0;
-                let measured = if unsafe { libc::getloadavg(&mut load, 1) } == 1 {
-                    format!("host 1-minute load {load:.1}")
-                } else {
-                    "host load unavailable".to_string()
+                let measured = match host_load_1m() {
+                    Some(load) => format!("host 1-minute load {load:.1}"),
+                    None => "host load unavailable".to_string(),
                 };
                 format!("cannot attach to the dev client before the walk deadline ({measured}; an environment refusal): {reason}")
             } else {
@@ -955,4 +953,9 @@ pub fn synthesized_ledger(rows: &[Row], verdict: &str, seen: &str) -> Ledger {
         recoveries: 0,
         speed: None,
     }
+}
+
+pub(crate) fn host_load_1m() -> Option<f64> {
+    let mut load = 0.0;
+    (unsafe { libc::getloadavg(&mut load, 1) } == 1).then_some(load)
 }

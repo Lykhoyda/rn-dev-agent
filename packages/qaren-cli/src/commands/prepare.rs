@@ -1588,7 +1588,7 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
     let t = ctx.mark("metro_ready", t);
 
     ensure_running(ctx.runner, "build")?;
-    let launched = match ctx.record.scenario.platform {
+    let launch = match ctx.record.scenario.platform {
         Platform::Ios => {
             let sim = ctx
                 .record
@@ -1605,11 +1605,7 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
                 ctx.notes
                     .push(("dev_menu_defaults".to_string(), "unconfirmed".to_string()));
             }
-            ctx.runner.run(&ios::launch_spec(
-                &sim.udid,
-                &ctx.record.candidate.app_id,
-                metro_port,
-            ))
+            ios::launch_spec(&sim.udid, &ctx.record.candidate.app_id, metro_port)
         }
         Platform::Android => {
             let scheme = ctx
@@ -1634,25 +1630,25 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
                 .as_ref()
                 .expect("allocated")
                 .server_port;
-            ctx.runner.run(&android::am_start_deeplink_spec(
+            android::am_start_deeplink_spec(
                 &adb,
                 server_port,
                 &serial,
                 &url,
                 &ctx.record.candidate.app_id,
-            ))
+            )
         }
     };
+    let mut launched = ctx.runner.run(&launch);
+    let mut load = launched.timed_out.then(crate::core::host_load_1m).flatten();
+    let retried = retry_launch(&launched, load);
+    if retried {
+        ensure_running(ctx.runner, "build")?;
+        launched = ctx.runner.run(&launch);
+        load = launched.timed_out.then(crate::core::host_load_1m).flatten();
+    }
     if !launched.ok() {
-        return Err(Failure::new(
-            "build",
-            FailureCode::BuildFailed,
-            format!("dev client launch failed: {}", launched.summary()),
-            format!(
-                "run qaren cleanup {} --json, then retry prepare",
-                ctx.record.run_id
-            ),
-        ));
+        return Err(launch_failure(&launched, load, retried, &ctx.record.run_id));
     }
     let t = ctx.mark("app_launch", t);
 
@@ -2730,4 +2726,112 @@ fn dry_run_receipt(
         .insert("total".to_string(), now.saturating_sub(started_ms));
     receipt.next_action = "re-run without --dry-run to allocate resources".to_string();
     receipt
+}
+
+// Mirrors the CDP leg's admission envelope (qaren-core qa/admission.ts LOAD_ENVELOPE).
+const LOAD_ENVELOPE: f64 = 10.0;
+
+// Only a launch that timed out under host load is retried, once.
+fn retry_launch(launched: &crate::exec::CmdOutput, load: Option<f64>) -> bool {
+    launched.timed_out && load.is_some_and(|load| load > LOAD_ENVELOPE)
+}
+
+// A launch timeout is the CDP leg's environmental refusal; any other launch error stays a build failure.
+fn launch_failure(
+    launched: &crate::exec::CmdOutput,
+    load: Option<f64>,
+    retried: bool,
+    run_id: &str,
+) -> Failure {
+    if !launched.timed_out {
+        return Failure::new(
+            "build",
+            FailureCode::BuildFailed,
+            format!("dev client launch failed: {}", launched.summary()),
+            format!("run qaren cleanup {run_id} --json, then retry prepare"),
+        );
+    }
+    let loaded = load.is_some_and(|load| load > LOAD_ENVELOPE);
+    let measured = match load {
+        Some(load) => format!(
+            "host 1-minute load {load:.1} is {} the envelope {LOAD_ENVELOPE}",
+            if loaded { "above" } else { "within" }
+        ),
+        None => "host load unavailable".to_string(),
+    };
+    let environment = match (loaded, retried) {
+        (true, true) => "; an environment refusal after one retry",
+        (true, false) => "; an environment refusal",
+        _ => "",
+    };
+    Failure::new(
+        "build",
+        FailureCode::CoreRefused,
+        format!(
+            "dev client launch timed out: {} ({measured}{environment})",
+            launched.summary()
+        ),
+        format!("run qaren cleanup {run_id} --json, then retry when the host is less loaded"),
+    )
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::*;
+    use crate::exec::CmdOutput;
+
+    fn timed_out() -> CmdOutput {
+        CmdOutput {
+            timed_out: true,
+            duration_ms: 60_058,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn only_a_launch_timeout_under_load_is_retried() {
+        assert!(retry_launch(&timed_out(), Some(65.0)));
+        assert!(!retry_launch(&timed_out(), Some(3.0)));
+        assert!(!retry_launch(&timed_out(), None));
+        assert!(!retry_launch(
+            &CmdOutput::failed(1, "no such app"),
+            Some(65.0)
+        ));
+    }
+
+    #[test]
+    fn a_launch_timeout_is_an_environment_refusal_with_the_load_envelope() {
+        let loaded = launch_failure(&timed_out(), Some(256.0), true, "check-1");
+        assert_eq!(loaded.code, FailureCode::CoreRefused);
+        assert!(loaded.code.is_refusal());
+        let detail = loaded.detail.to_string();
+        assert!(
+            detail.contains("host 1-minute load 256.0 is above the envelope 10"),
+            "{detail}"
+        );
+        assert!(
+            detail.contains("an environment refusal after one retry"),
+            "{detail}"
+        );
+        let calm = launch_failure(&timed_out(), Some(2.0), false, "check-1");
+        assert_eq!(calm.code, FailureCode::CoreRefused);
+        let detail = calm.detail.to_string();
+        assert!(detail.contains("within the envelope 10"), "{detail}");
+        assert!(!detail.contains("environment refusal"), "{detail}");
+    }
+
+    #[test]
+    fn a_real_launch_error_stays_a_build_failure() {
+        let failure = launch_failure(
+            &CmdOutput::failed(1, "no such app"),
+            Some(65.0),
+            false,
+            "check-1",
+        );
+        assert_eq!(failure.code, FailureCode::BuildFailed);
+        assert!(failure
+            .detail
+            .to_string()
+            .contains("dev client launch failed"));
+    }
 }
