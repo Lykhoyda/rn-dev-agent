@@ -14,6 +14,7 @@ import {
   ResolutionError,
   decideScreen,
   elementSelector,
+  centreCovered,
   clearanceScroll,
   keyboardFallbackTarget,
   bindFillIdentity,
@@ -1263,6 +1264,26 @@ export async function walkBlock(
                 }
                 ref = resolution.ref;
                 element = resolution.element;
+              }
+              if (
+                (item.kind === 'press' || item.kind === 'fill') &&
+                element !== undefined &&
+                centreCovered(element, before.screen)
+              ) {
+                if (scrolled) {
+                  outcome = failed(
+                    item,
+                    attempt,
+                    `"${item.target.phrase}" stayed off screen after one scroll: its centre is past the visible area or under the keyboard`,
+                    before.screen,
+                    await shoot(item),
+                    ref,
+                  );
+                  break;
+                }
+                refusedIdentity = element;
+                occluded = clearanceScroll(element);
+                continue;
               }
               if (item.kind === 'fill' && element && isPrivateInput(element)) {
                 privacy.concealFallback(item.text);

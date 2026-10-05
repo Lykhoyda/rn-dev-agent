@@ -275,6 +275,23 @@ function scrollTo(element: Element): { scroll: 'up' | 'down' } {
   };
 }
 
+// A tap or focus at the frame centre lands elsewhere when that centre is past the clip or under the keyboard.
+export function centreCovered(element: Element, screen: Screen): boolean {
+  const frame = elementFrame(element);
+  if (!frame) return false;
+  const x = frame.x + frame.width / 2;
+  const y = frame.y + frame.height / 2;
+  const inside = (rect: { x: number; y: number; width: number; height: number }) =>
+    x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
+  const viewport = elementViewport(element);
+  return (
+    (viewport !== undefined && !inside(viewport)) ||
+    (screen.keyboardVisible !== false &&
+      screen.keyboardFrame !== undefined &&
+      inside(screen.keyboardFrame))
+  );
+}
+
 // An occluded target scrolls toward the screen centre: down from the lower half, up from the upper.
 export function clearanceScroll(element: Element): 'up' | 'down' {
   const frame = elementFrame(element);

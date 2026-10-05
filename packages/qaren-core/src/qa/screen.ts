@@ -79,6 +79,7 @@ export interface Screen {
   reactHostEvidence?: ReactHostEvidence;
   appProcessIdentifier?: number;
   keyboardVisible?: boolean;
+  keyboardFrame?: NonNullable<NativeNode['rect']>;
 }
 
 const forwardedInputs = new WeakMap<Element, string>();
@@ -878,9 +879,13 @@ export function join(
       labelAncestors.set(elements[only], [...labelAncestorsOf(elements[only]), control]);
     }
   });
+  const keyboardFrame = nodes.find(
+    (n) => n.type === 'Keyboard' && n.rect && n.rect.width > 0 && n.rect.height > 0,
+  )?.rect;
   return {
     elements: elements.filter((_, i) => !duplicates.has(i)),
     visibleText,
+    ...(keyboardFrame ? { keyboardFrame } : {}),
     paintedText,
     ...(labelText.length ? { labelText } : {}),
     ...(unresolvedText.length ? { unresolvedText } : {}),

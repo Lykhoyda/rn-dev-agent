@@ -349,3 +349,73 @@ for (const kind of ['press', 'fill'] as const) {
     }
   }
 }
+
+function clipped(y: number, type = 'Button', occluder: 'tabs' | 'keyboard' = 'tabs'): Screen {
+  const id = type === 'Button' ? 'go' : 'field';
+  return covered(
+    join(
+      [
+        ...root(),
+        {
+          ref: '@scroll',
+          index: 2,
+          parentIndex: 1,
+          type: 'ScrollView',
+          rect: { x: 0, y: 0, width: 400, height: occluder === 'tabs' ? 720 : 800 },
+        },
+        {
+          ref: '@target',
+          index: 3,
+          parentIndex: 2,
+          type,
+          identifier: id,
+          label: type === 'Button' ? 'Go' : undefined,
+          hittable: true,
+          rect: { x: 20, y, width: 300, height: 44 },
+        },
+        ...(occluder === 'keyboard'
+          ? [
+              {
+                ref: '@keyboard',
+                index: 4,
+                parentIndex: 1,
+                type: 'Keyboard',
+                hittable: true,
+                rect: { x: 0, y: 500, width: 400, height: 300 },
+              },
+            ]
+          : []),
+      ],
+      [],
+    ),
+  );
+}
+
+test('O5: a press whose centre lies past its scroll clip scrolls before any dispatch', async () => {
+  const f = fake([clipped(700), clipped(400), done()], {});
+  const outcome = await walkBlock(block('1. Tap "go"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'pass');
+  assert.deepEqual(f.calls, ['capture', 'scroll down', 'capture', 'press @target', 'capture']);
+});
+
+test('O5: a fill whose centre lies under the keyboard scrolls before any dispatch', async () => {
+  const kb = (y: number) => clipped(y, 'TextField', 'keyboard');
+  const f = fake([kb(700), kb(300), kb(300)], {});
+  const outcome = await walkBlock(block('1. Fill "field" with "x"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'pass');
+  assert.deepEqual(f.calls.slice(0, 4), ['capture', 'scroll down', 'capture', 'fill @target']);
+});
+
+test('O5: a target still covered after one scroll refuses with no dispatch', async () => {
+  for (const [screen, step] of [
+    [(y: number) => clipped(y), '1. Tap "go"\n'],
+    [(y: number) => clipped(y, 'TextField', 'keyboard'), '1. Fill "field" with "x"\n'],
+  ] as const) {
+    const f = fake([screen(700), screen(710)], {});
+    const outcome = await walkBlock(block(step), f.deps);
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.equal(f.calls.filter((c) => /^(press|fill)/.test(c)).length, 0, f.calls.join());
+    assert.equal(f.calls.filter((c) => c.startsWith('scroll')).length, 1);
+    assert.match(outcome.failure?.seen ?? '', /stayed off screen after one scroll/);
+  }
+});
