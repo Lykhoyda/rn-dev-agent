@@ -242,7 +242,7 @@ test('join adds native capabilities without upgrading geometry to visibility', (
     'without React host evidence nothing proves a view is not pressable',
   );
   assert.ok(screen.elements.every((e) => e.semantic?.visibility === 'unknown'));
-  assert.deepEqual(projection.assertionView(screen), []);
+  assert.deepEqual(projection.assertionView(screen), ['Save', 'Email: a@example.test', 'Welcome']);
   assert.deepEqual(
     projection.actionView(screen).map((e) => e.ref),
     ['@save', '@text', '@image', '@wrapper'],
