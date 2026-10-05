@@ -203,7 +203,10 @@ occurrence passes; otherwise matching unresolved text is unsure; otherwise
 complete native coverage proves failure. Literal checks match substrings;
 text targets match the whole contribution. React-only text, structural and
 container echoes, non-content wrappers, images and system scroll-bar labels
-contribute no literal evidence. A visible, hittable native `Other` element with
+contribute no literal evidence. A supplied frame must have positive width and
+height to contribute literal evidence; a missing frame alone does not exclude
+otherwise eligible text. This rule does not change action eligibility.
+A visible, hittable native `Other` element with
 a label and no accessibility text descendant contributes its merged label;
 this also admits an icon-only control's explicit label. A literal check passing
 through that contribution records `matched an accessibility label` in the ledger.
@@ -225,6 +228,11 @@ the descendant offscreen wins over that contradiction. Ordinary below-the-fold
 rows and later pager pages remain offscreen, not unresolved. iOS snapshots retain
 content-less Window nodes for this geometry; offscreen inputs remain in the
 privacy inventory. Geometry does not prove complete exposure or occlusion.
+Quoted and phrase target resolution scrolls up when the target is wholly above
+its effective trusted clipping viewport, and down otherwise; without a known
+clip, the boundary remains screen y=0. Quoted scroll-until targets use that
+viewport when exactly one offscreen identity matches; otherwise they retain
+the requested direction.
 
 Waits poll unresolved text as not yet present and end with `VISIBILITY_UNSURE`
 when the final evidence remains unsure; scroll-until-text uses the same verdict
@@ -470,8 +478,9 @@ the checked working tree). The file is a Maestro-shaped action: each plan line a
 comment, then the commands with the exact `testID` (or, without one, the label) the
 step used. On the next run a block whose plan lines, platform and app are unchanged
 is replayed by those stored identities through the same walk, without Jev for quoted
-targets or literal checks; phrase checks still ask Jev. A stored identity that no
-longer resolves uniquely before that step authorizes any mutation re-walks
+targets or literal checks; phrase checks still ask Jev. An ambiguous stored
+identity refuses `TARGET_AMBIGUOUS` without re-walking. A stored identity that no
+longer resolves before that step authorizes any mutation re-walks
 the block from that line; earlier completed steps are kept. Once that step authorizes
 a mutation, its selector failure is terminal. On PASS only the commands under that
 line and later ones are rewritten, and every `✓` comment stays byte-identical. A failing check is a FAIL and
@@ -503,11 +512,13 @@ the block remains unsaved. A stored text selector must pass the
 [literal-evidence rule](#plan-checks-and-screen-evidence) and match exactly one
 visible witnessed identity. A control and its sole same-label text descendant
 count as one identity, even with different rectangles; distinct controls remain
-separate. Identical native twins count once. Excluded labels cannot supply a
+separate. Same-label siblings remain distinct even when their frames are
+identical. Only proven ancestor/descendant text echoes collapse; matching labels
+and frames alone do not establish one identity. Excluded labels cannot supply a
 fallback witness. Discovery keeps preferring a unique testID for an eligible
 text match. An ambiguous text target without a unique testID
-can satisfy discovery but leaves the block unsaved; replay treats the ambiguous
-stored text as a broken selector under the recovery rules above.
+can satisfy discovery but leaves the block unsaved; replay follows the
+ambiguity refusal above.
 
 Replay requires the canonical block format emitted by
 [`serializeBlock`](../qaren-core/src/qa/blocks.ts); edited or incompatible files
@@ -973,7 +984,8 @@ service files, local config plugins), the traced transitive relative-import
 closure of those local plugins and supported `react-native.config.js`/`.ts`
 entry points, and the native
 surfaces (`package.json`, `*.podspec`, `expo-module.config.json`, `ios/`,
-`android/`) of `file:`/`link:` local dependencies inside the worktree.
+`android/`) of `file:`/`link:` local dependencies inside the worktree, enumerated
+from `dependencies`, `devDependencies` and `optionalDependencies`.
 Static plain-string `import` and `require` forms, including whitespace around
 `require` arguments, are traced. Each module dependency must name an existing
 regular file directly, with no symlink in its path, and be recursively scanned
@@ -982,9 +994,10 @@ directory indexes, package `main`/`exports` resolution, extensionless modules,
 dynamic or template-literal arguments, escaped literals and other unsupported
 syntax make the fingerprint **incomplete**, forbidding cached reuse (visible
 in decision evidence). Dynamic `app.config.*`, unresolvable local refs and
-`workspace:` dependencies also make it incomplete. Other native-input symlinks
-hash link text plus in-worktree target content; out-of-worktree targets make
-the fingerprint incomplete. The scanner is conservative, not a full JS parser.
+`workspace:` dependencies in any of those sections also make it incomplete.
+Other native-input symlinks hash link text plus in-worktree target content;
+out-of-worktree targets make the fingerprint incomplete. The scanner is
+conservative, not a full JS parser.
 qaren is pnpm-only; other package managers' lockfiles are out of contract.
 
 **Decision.** Cache state lives at
