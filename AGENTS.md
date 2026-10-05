@@ -9,11 +9,10 @@ notes here.
 The repository is mid-pivot from rn-dev-agent (an MCP server plus host plugins
 that drive React Native apps on simulators) to QaReN: a Rust CLI that owns the
 run and spawns a TypeScript child that reads the screen. `main` still ships
-rn-dev-agent 1.0.x; the migration now targets `develop` through one integration
-PR. Completion requires independent QA passes at the exact integration head on
-both the Test App baseline and the complex staging app. The `develop` → `main`
-merge for 2.0.0 requires owner approval. The QaReN structure outline and TDD
-that the phase PRs cite are the specification.
+rn-dev-agent 1.0.x; `develop` carries the migration as one PR per phase and
+merges into `main` as 2.0.0 once the label path runs end to end. The QaReN
+structure outline and TDD that the phase PRs cite are the specification; each
+phase PR names its Linear issue in the QaReN project.
 
 The package cut, literal `qaren check`, Jev seam, Phase 4 blocks, and PR run/publication commands are implemented. For saved-block replay, persistence, recovery and action inspection, read the [saved-block contract](packages/qaren-cli/README.md#saved-blocks); for `qaren pr` and `qaren publish`, the [CLI README](packages/qaren-cli/README.md#test-a-pull-request). Live model and device acceptance are separate from hermetic tests; `qaren listen` and packaging arrive in later phases.
 
