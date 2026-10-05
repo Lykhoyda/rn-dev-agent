@@ -1004,10 +1004,16 @@ export async function walkBlock(
           cached = undefined;
           const probe = visibilityProbe(item, deadline);
           let unsure = false;
+          let absent = 0;
+          const absentScreens = new Set<string>();
           const visible = async (s: Observation, initial?: ScreenDecision): Promise<boolean> => {
             const observed = await probe(s, initial);
             observation = observed.observation;
             unsure = observed.unsure === true;
+            if (!observed.found && !unsure && item.target.quoted !== undefined) {
+              absent += 1;
+              absentScreens.add(screenSignature(observation.screen));
+            }
             return observed.found;
           };
           let found = await visible(observation, held?.decision);
@@ -1019,6 +1025,15 @@ export async function walkBlock(
           }
           if (!found) {
             if (unsure) throw unresolvedText(item.target.quoted!);
+            // Repeated literal absence on one unchanged screen is an observed result, not uncertainty.
+            if (absent >= 2 && absentScreens.size === 1)
+              return failed(
+                item,
+                1,
+                `"${item.target.quoted}" did not appear within ${budget / 1000}s; the screen did not change across ${absent} observations`,
+                observation.screen,
+                await shoot(item),
+              );
             usable(observation, item, deadline);
             throw new EvidenceExpired(true);
           }

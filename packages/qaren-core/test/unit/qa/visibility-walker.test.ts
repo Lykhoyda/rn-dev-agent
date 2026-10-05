@@ -642,3 +642,31 @@ test('quoted waits and scroll-until retain model-free literal visibility', async
     assert.equal(result.jev.calls, 0);
   }
 });
+
+test('a literal wait over an unchanged screen fails as absent at its deadline', async () => {
+  const f = walker(
+    [screen(text('Baseline'))],
+    scriptedJudge(() => assert.fail('literal wait is model-free')),
+  );
+  const result = await runPlan(parsePlan('1. Wait for "Absent sentinel"').blocks!, f.deps);
+  assert.equal(result.verdict, 'FAIL');
+  assert.match(
+    result.failure?.seen ?? '',
+    new RegExp(`^"Absent sentinel" did not appear within ${WAIT_BUDGET_MS / 1000}s`),
+  );
+  assert.doesNotMatch(result.failure?.seen ?? '', /VISIBILITY_UNSURE/);
+  assert.ok(f.captures() > 2);
+});
+
+test('a literal wait over a changing screen stays unsure at its deadline', async () => {
+  const screens = Array.from({ length: WAIT_BUDGET_MS / WAIT_POLL_MS + 2 }, (_, i) =>
+    screen(text(`Loading ${i}`)),
+  );
+  const f = walker(
+    screens,
+    scriptedJudge(() => assert.fail('literal wait is model-free')),
+  );
+  const result = await runPlan(parsePlan('1. Wait for "Absent sentinel"').blocks!, f.deps);
+  assert.equal(result.verdict, 'FAIL');
+  assert.match(result.failure?.seen ?? '', /VISIBILITY_UNSURE: ITEM_DEADLINE_EXCEEDED/);
+});

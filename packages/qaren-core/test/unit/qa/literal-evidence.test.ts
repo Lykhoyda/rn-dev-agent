@@ -344,7 +344,7 @@ test('V5: check, wait, scroll-until and replay share one rule on the same screen
     const row = await checkRow(screen, 'Row 25');
     assert.match(row.failure?.seen ?? '', /"Row 25" is not satisfied on screen/);
     const c = await consumers(screen, 'Row 25');
-    assert.match(c.wait.seen, /VISIBILITY_UNSURE: ITEM_DEADLINE_EXCEEDED/);
+    assert.match(c.wait.seen, /"Row 25" did not appear within 15s; the screen did not change/);
     assert.match(c.scroll.seen, /did not come into view/);
     assert.equal(c.replay.miss, c.replay.line);
   });
@@ -495,7 +495,7 @@ test('independent trusted clips exclude stale input witnesses before contradicti
   ]);
   assert.equal((await checkRow(screen, 'Stale input')).verdict, 'FAIL');
   const c = await consumers(screen, 'Stale input');
-  assert.match(c.wait.seen, /ITEM_DEADLINE_EXCEEDED/);
+  assert.match(c.wait.seen, /"Stale input" did not appear within 15s; the screen did not change/);
   assert.match(c.scroll.seen, /did not come into view/);
   assert.equal(c.replay.miss, c.replay.line);
 });
