@@ -162,7 +162,6 @@ export function prepareTarget(step: Step, screen: Screen): Resolution | TargetQu
   };
 }
 
-// The one non-input element a quoted fill may tap before typing through the keyboard; undefined keeps the strict refusal.
 function hostOutside(screen: Screen, inner?: string, outer?: string): boolean {
   const evidence = screen.reactHostEvidence;
   if (!evidence?.typography?.complete) return false;
@@ -177,6 +176,7 @@ function hostOutside(screen: Screen, inner?: string, outer?: string): boolean {
   return path !== undefined && !path.includes(wrapper);
 }
 
+// The one non-input element a quoted fill may tap before typing through the keyboard; undefined keeps the strict refusal.
 export function keyboardFallbackTarget(
   step: Step,
   screen: Screen,

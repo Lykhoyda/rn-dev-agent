@@ -113,6 +113,10 @@ point outside it leaves that check unavailable. A negative check refuses with
 `FOCUS_TARGET_OCCLUDED` and mutation `none`. Core requires
 `HIT_TESTED_DISPATCH_V1`; missing capability takes the runner rebuild path.
 
+Before dispatch, the walker also treats a press or fill target whose centre lies
+outside its trusted clipping viewport or inside an observed keyboard frame
+(unless the keyboard is proven hidden) as covered. It uses the same recovery
+as a native occlusion refusal.
 The walker handles this refusal with one directional scroll: down from the
 lower half of the effective viewport, up from the upper half. Scroll bands stay
 above a visible keyboard. It then requires a unique rebind to the refused
@@ -161,6 +165,9 @@ An identified native wrapper with another testID can also stand for the input
 when complete React host and ancestry evidence proves it encloses exactly one
 input host and its merged label equals that input's testID, text, label or
 placeholder. A separate same-label element does not establish forwarding.
+A wrapper echoing its hidden React input's identity counts as that one input
+for fallback, unless complete React ancestry places the input outside the wrapper.
+This does not collapse candidates for strict fills.
 The keyboard-down path requires proof that the keyboard is hidden before the
 tap (with the [one-scroll occlusion recovery](#occluded-taps-and-focus)). Every
 binding after the tap, including refreshed strict bindings,
@@ -273,7 +280,10 @@ viewport when exactly one offscreen identity matches; otherwise they retain
 the requested direction.
 
 Waits poll unresolved text as not yet present and end with `VISIBILITY_UNSURE`
-when the final evidence remains unsure; scroll-until-text uses the same verdict
+when the final evidence remains unsure. A quoted wait with at least two definite
+absence observations sharing one screen signature fails at its deadline with
+“did not appear”; it does not report expired evidence for that stable absence.
+Scroll-until-text uses the same visibility verdict
 within its scroll and time budgets. Literal checks re-ask from a fresh capture
 and use `CHECK_UNSURE` if uncertainty remains. This is distinct from acquisition
 admission: although a literal check cannot prove absence from incomplete native
@@ -400,10 +410,16 @@ From the first fill dispatch, geometric rows of at least three visible text boxe
 each empty or containing one character and at least one filled, render as one
 `[code]` token; model descriptions
 show each box as `box (hidden)`. Rows share a horizontal band within four points
-and have gaps no greater than 1.5 times the median box width. Nested same-character
-text echoes count as their enclosing box; repeated characters do not affect
-grouping. Enclosing labels composed of the row's characters, including separated
-forms, are concealed too. Buttons and inputs are not code boxes. The shared
+and have gaps no greater than 1.5 times the median text-box width. An additional
+cell-based pass uses the outermost containing framed ancestor before an ancestor
+shared with another box, allowing gaps up to twice the median cell width.
+Nested same-character text echoes count once; repeated characters do not affect
+grouping. Native non-input, nonsecure cells labelled by one character, including
+pressable cells, also qualify when their row spells at least two characters in
+order within a stored private value after whitespace removal. React-only cells
+do not qualify, and text-only rows retain the three-box rule independently.
+Enclosing labels composed of the row's characters, including separated forms,
+are concealed too. Inputs are not code boxes. The shared
 screen-text projection also protects failure history (`failure.seen`, including
 "previously on screen"). Box characters are never retained as free-text matching
 rules.
@@ -1085,9 +1101,11 @@ syntax make the fingerprint **incomplete**, forbidding cached reuse (visible
 in decision evidence). Dynamic `app.config.*`, unresolvable local refs and
 `workspace:` dependencies in any of those sections also make it incomplete.
 In 2.0 an app with a dynamic `app.config.*` is therefore never reused: its
-imports and environment reads cannot be fingerprinted, so every warm run takes
-a clean prebuild that keeps existing build caches, and the decision reason
-names the dynamic config as the cause.
+imports and environment reads cannot be fingerprinted. An existing generated
+native directory requires a clean prebuild that keeps existing build caches;
+a git-visible native directory can still build incrementally under the decision
+rules below. When the fingerprint matches but is incomplete, the decision reason
+names the first incompleteness cause, such as the dynamic config.
 Other native-input symlinks hash link text plus in-worktree target content;
 out-of-worktree targets make the fingerprint incomplete. The scanner is
 conservative, not a full JS parser.
