@@ -45,7 +45,7 @@ import {
   refreshRef,
   lookupRef,
   pinnedElementRef,
-  refDispatchPoint,
+  refCenter,
   type RefSignature,
 } from '../fast-runner-ref-map.js';
 import {
@@ -929,12 +929,6 @@ export function createDevicePressHandler(
       );
     }
     const target = hasRef ? (args.ref!.startsWith('@') ? args.ref! : `@${args.ref!}`) : undefined;
-    if (target && isRefMapFresh() && lookupRef(target) && !refDispatchPoint(target))
-      return failResult(
-        'The target dispatch point is occluded or outside the visible area.',
-        'NOT_FOUND',
-        { mutation: 'none' },
-      );
     const flags: string[] = [];
     if (args.doubleTap) flags.push('--double-tap');
     if (args.count && args.count > 1) flags.push('--count', String(args.count));
@@ -1333,18 +1327,10 @@ export async function performExactFill(
       pathsTried,
     });
   }
-  const focusPoint = isRefMapFresh() ? refDispatchPoint(binding.focusRef) : null;
-  if (!focusPoint || !refDispatchPoint(binding.inputRef)) {
-    return failResult(
-      'The input focus point is occluded or outside the visible area; no text was entered.',
-      'FOCUS_TARGET_OCCLUDED',
-      { mutation: 'none', pathsTried },
-    );
-  }
+  const focusCenter = isRefMapFresh() ? refCenter(binding.focusRef) : null;
   const exactTarget = {
     inputRef: binding.inputRef,
-    focusX: focusPoint.x,
-    focusY: focusPoint.y,
+    ...(focusCenter ? { focusX: focusCenter.x, focusY: focusCenter.y } : {}),
     ...(args.waitForKeyboardMs !== undefined ? { focusWaitMs: args.waitForKeyboardMs } : {}),
   };
   const tNative = Date.now();

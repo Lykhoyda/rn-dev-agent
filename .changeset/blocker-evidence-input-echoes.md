@@ -2,4 +2,4 @@
 "qaren": patch
 ---
 
-Use supported blocker evidence and stable overlay ordering while preserving sibling identities and wrapped input fallback.
+Keep same-label siblings distinct and let a wrapper around a text input stand for that input in the keyboard fallback.

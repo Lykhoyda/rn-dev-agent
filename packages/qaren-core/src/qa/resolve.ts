@@ -258,13 +258,6 @@ export function scrollUntilDirection(
   return element?.offscreen && elementViewport(element) ? scrollTo(element).scroll : direction;
 }
 
-export function elementOcclusion(screen: Screen, target: Target): string | undefined {
-  const identities = exactIdentities(screen, target, 'press');
-  return identities.length === 1 && identities[0].element.occluded
-    ? 'TARGET_NOT_FOUND: the target dispatch point remains occluded after scrolling'
-    : undefined;
-}
-
 export function decideTarget(prepared: TargetQuestion, answer: Answer | undefined): Resolution {
   const top = confidentChoice(prepared.question, answer);
   if (!top)
@@ -424,8 +417,6 @@ export function targetEvidence(target: Target, screen: Screen): LiteralVerdict {
   if (target.exact === 'text') {
     if (text === 'unsure') return text;
     const count = textIdentities(target.quoted, screen);
-    const identities = exactIdentities(screen, target, 'wait');
-    if (count === 0 && identities.length === 1 && identities[0].element.occluded) return 'fail';
     if (count !== 1)
       throw new ResolutionError({
         refuse: count > 1 ? 'TARGET_AMBIGUOUS' : 'REPLAY_SELECTOR',

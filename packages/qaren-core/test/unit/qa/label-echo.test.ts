@@ -364,7 +364,7 @@ for (const contained of [true, false]) {
 }
 
 test('frame containment remains an echo fallback when ancestry is unknown', () => {
-  const nodes = echoContainer(1, false).map(({ parentIndex, ...node }) => node);
+  const nodes = echoContainer(1, false).map(({ parentIndex: _parentIndex, ...node }) => node);
   const resolved = prepareTarget(tapNext, join(nodes, []));
   assert.ok('ref' in resolved, JSON.stringify(resolved));
   assert.equal(resolved.ref, '@next0');

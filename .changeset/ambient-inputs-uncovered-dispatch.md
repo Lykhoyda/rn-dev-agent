@@ -2,4 +2,4 @@
 "qaren": patch
 ---
 
-Prevent native-client reuse for ambient process inputs and dispatch presses and input focus only at uncovered points.
+Prevent native-client reuse when a local config plugin reads ambient process inputs.

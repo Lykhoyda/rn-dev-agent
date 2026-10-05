@@ -8,7 +8,6 @@ const { _setActiveSessionForTest, _setRunAgentDeviceForTest, markSnapshotDirty }
   await import('../../dist/agent-device-wrapper.js');
 const { createDeviceFillHandler, performExactFill, extractTypingMeta } =
   await import('../../dist/handlers/device-interact.js');
-const { createDevicePressHandler } = await import('../../dist/handlers/device-interact.js');
 const { _setMaestroInlineObserverForTest, runMaestroInline } =
   await import('../../dist/maestro-invoke.js');
 const { updateRefMapFromFlat, clearRefMap } = await import('../../dist/fast-runner-ref-map.js');
@@ -124,52 +123,6 @@ function envelope(result: { content: Array<{ text: string }> }): Record<string, 
 }
 
 const NATIVE_ONLY = {};
-
-test('occluded focus points refuse before native typing or tapping', async () => {
-  const nodes = [
-    ...NODES,
-    {
-      ref: '@e6',
-      type: 'Keyboard',
-      identifier: 'keyboard',
-      rect: { x: 20, y: 100, width: 360, height: 60 },
-    },
-  ];
-  const { result, calls } = await withFillSeam({ nodes }, () =>
-    createDeviceFillHandler(() => null as never)({ ref: 'first-name', text: 'value' }),
-  );
-  assert.equal(envelope(result).code, 'FOCUS_TARGET_OCCLUDED');
-  assert.equal(envelope(result).meta.mutation, 'none');
-  assert.ok(calls.every((call) => call.cliArgs[0] === 'snapshot'));
-  const tapped = await withFillSeam({ nodes }, () =>
-    createDevicePressHandler(() => null as never)({ ref: '@e2' }),
-  );
-  assert.equal(envelope(tapped.result).code, 'NOT_FOUND');
-  assert.deepEqual(tapped.calls, []);
-});
-
-test('a partly keyboard-covered input uses the same uncovered focus point in either emission order', async () => {
-  const keyboard = {
-    ref: '@e6',
-    type: 'Keyboard',
-    identifier: 'keyboard',
-    rect: { x: 20, y: 120, width: 360, height: 40 },
-  };
-  for (const nodes of [
-    [...NODES, keyboard],
-    [keyboard, ...NODES],
-  ]) {
-    const { result, calls } = await withFillSeam({ nodes }, () =>
-      createDeviceFillHandler(() => null as never)({ ref: 'first-name', text: 'value' }),
-    );
-    assert.equal(envelope(result).ok, true);
-    const typed = calls.find((call) => call.cliArgs[0] === 'fill');
-    assert.ok(typed);
-    const point = typed.opts.exactTarget as { focusX: number; focusY: number };
-    assert.equal(point.focusX, 200);
-    assert.ok(point.focusY > 110 && point.focusY < 120);
-  }
-});
 
 function fakeClient(handlers: {
   read?: () => { value?: string | null; controlled?: boolean } | null;
