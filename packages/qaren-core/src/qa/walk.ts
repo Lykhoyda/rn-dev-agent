@@ -55,7 +55,7 @@ import { summarizeJev } from './ledger.js';
 import { redactApiKey } from '../util/redact.js';
 import { createStop, watchOwnerPipe, watchParent } from './stop.js';
 import { prove } from './prove.js';
-import { admit } from './admission.js';
+import { admit, awaitBundleReady } from './admission.js';
 import { type ActResult, type WalkerDeps, loginBlock, runPlan } from './walker.js';
 import { loadBlock, readBlock } from './blocks.js';
 import {
@@ -325,6 +325,7 @@ async function openSession(
           undefined,
           deadline,
         );
+        await awaitBundleReady((expr) => cdp.evaluate(expr), deadline);
       },
       // Same launch the CLI made: terminate, then open the dev client on its Metro.
       ...(platform === 'ios'

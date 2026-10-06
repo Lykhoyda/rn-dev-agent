@@ -3,7 +3,13 @@ import { createStop } from '../../../dist/qa/stop.js';
 import { TargetReadinessTimeoutError } from '../../../dist/cdp/discovery.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LOAD_ENVELOPE, admit, type AdmissionSteps } from '../../../dist/qa/admission.js';
+import { readFileSync } from 'node:fs';
+import {
+  LOAD_ENVELOPE,
+  admit,
+  awaitBundleReady,
+  type AdmissionSteps,
+} from '../../../dist/qa/admission.js';
 
 const PROVEN = {
   ok: true,
@@ -346,4 +352,46 @@ test('cancellation during the retry driver probe prevents relaunch', async () =>
   };
   await assert.rejects(admit(steps, stop), { code: 'RUN_CANCELLED' });
   assert.deepEqual(calls, ['foreignDriver', 'close']);
+});
+
+test('a first launch waits on React readiness while Metro still builds the bundle', async () => {
+  const answers = [false, false, undefined, true];
+  let reads = 0;
+  await awaitBundleReady(
+    async () => {
+      reads += 1;
+      return { value: answers.shift() };
+    },
+    performance.now() + 5_000,
+    1,
+  );
+  assert.equal(
+    reads,
+    4,
+    'unready and unreadable answers keep waiting until the probe proves React',
+  );
+});
+
+test('a bundle that never becomes ready ends attach as a readiness timeout, never at the origin proof', async () => {
+  let reads = 0;
+  await assert.rejects(
+    awaitBundleReady(
+      async () => {
+        reads += 1;
+        return { value: false };
+      },
+      performance.now() + 20,
+      5,
+    ),
+    TargetReadinessTimeoutError,
+  );
+  assert.ok(reads >= 1);
+});
+
+test('the core attach waits for the bundle before the origin proof can run', () => {
+  const source = readFileSync(new URL('../../../dist/qa/walk.js', import.meta.url), 'utf8');
+  const connect = source.indexOf('await cdp.connectExact(');
+  const ready = source.indexOf('await awaitBundleReady(', connect);
+  assert.ok(connect >= 0 && ready > connect, 'readiness follows the exact connect');
+  assert.ok(ready < source.indexOf('prove: () => prove('), 'and precedes the origin proof step');
 });

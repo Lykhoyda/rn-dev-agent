@@ -1,7 +1,15 @@
 import { loadavg } from 'node:os';
-import { interruptible, withCancellation, withDeadline, isAbort } from '../domain/cancellation.js';
+import {
+  interruptible,
+  withCancellation,
+  withDeadline,
+  isAbort,
+  sleep,
+} from '../domain/cancellation.js';
 import { TargetReadinessTimeoutError } from '../cdp/discovery.js';
 import { CDPProbeTimeoutError, CDPHandshakeTimeoutError } from '../cdp/connect.js';
+import { REACT_READY_POLL_MS } from '../cdp/setup.js';
+import { REACT_READY_PROBE_JS } from '../injected-helpers.js';
 import { HandlerError, describeError } from './adapt.js';
 import type { ProveOutcome } from './prove.js';
 
@@ -22,6 +30,25 @@ export interface AdmissionSteps {
 }
 
 type Proven = Extract<ProveOutcome, { ok: true }>;
+
+// A first launch can attach while Metro still builds the bundle; React readiness, not a fixed wait, gates the proof.
+export async function awaitBundleReady(
+  evaluate: (expression: string) => Promise<{ value?: unknown }>,
+  deadline: number,
+  pollMs = REACT_READY_POLL_MS,
+): Promise<void> {
+  for (;;) {
+    try {
+      if ((await interruptible(() => evaluate(REACT_READY_PROBE_JS))).value === true) return;
+    } catch (error) {
+      if (isAbort(error)) throw error;
+    }
+    const remaining = deadline - performance.now();
+    if (remaining <= 0)
+      throw new TargetReadinessTimeoutError('React never became ready on the attached client');
+    await sleep(Math.min(pollMs, remaining));
+  }
+}
 
 export async function admit(
   steps: AdmissionSteps,
