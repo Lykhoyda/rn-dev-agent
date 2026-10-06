@@ -716,3 +716,40 @@ for (const [y, direction, opposite] of [
     assert.deepEqual(replay.actions, [`scroll ${direction}`]);
   });
 }
+
+// D5 keyboard form with the keyboard up: XCUI's Keyboard frame stops at 816, its chrome paints to 874.
+function keyboardForm(keyboardVisible?: boolean): Screen {
+  const screen = observed([
+    { type: 'Application', rect: app, label: 'Test App', hittable: true },
+    { type: 'Window', parent: 0, rect: app },
+    { type: 'StaticText', parent: 1, rect: at(24, 300, 354, 18), label: 'Field 1' },
+    { type: 'Button', parent: 1, rect: at(21, 545, 360, 38), label: 'Submit', hittable: true },
+    { type: 'StaticText', parent: 1, rect: at(24, 640, 354, 18), label: 'Field 7' },
+    { type: 'StaticText', parent: 1, rect: at(24, 855, 354, 18), label: 'Field 8' },
+    { type: 'Window', parent: 0, rect: app },
+    { type: 'Keyboard', parent: 6, rect: at(0, 583, 402, 233), hittable: true },
+    { type: 'Button', parent: 7, rect: at(300, 780, 90, 30), label: 'return', hittable: true },
+    { type: 'Button', parent: 6, rect: at(330, 830, 40, 30), label: 'Dictate', hittable: true },
+  ]);
+  if (keyboardVisible !== undefined) screen.keyboardVisible = keyboardVisible;
+  return screen;
+}
+
+test('literal text under a visible keyboard is not on screen', () => {
+  const screen = keyboardForm(true);
+  assert.equal(check(screen, 'Field 7'), 'fail', 'inside the keyboard frame');
+  assert.equal(
+    check(screen, 'Field 8'),
+    'fail',
+    'below the frame, under the docked keyboard chrome',
+  );
+  assert.equal(check(screen, 'Field 1'), 'pass');
+  assert.equal(check(screen, 'Submit'), 'pass', 'a sticky footer above the keyboard stays visible');
+  assert.equal(check(screen, 'return'), 'pass', 'the keyboard paints its own keys');
+  assert.equal(check(screen, 'Dictate'), 'pass', 'and the chrome in its own window');
+  assert.ok(screen.visibleText.includes('Field 8'), 'privacy and history keep the full text');
+});
+
+test('a keyboard reported hidden keeps literal text visible', () => {
+  assert.equal(check(keyboardForm(false), 'Field 8'), 'pass');
+});

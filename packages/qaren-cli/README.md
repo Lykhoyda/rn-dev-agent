@@ -125,7 +125,7 @@ taps. A label-only target cannot rebind after scrolling; a missing or nonunique
 identity refuses `TARGET_NOT_FOUND` with “stayed off screen after one scroll”.
 A second occlusion fails with that same off-screen explanation; wrapper fallback
 reports that nothing was typed. This refusal does not become
-`ACTION_OUTCOME_UNCERTAIN`. Checks and waits do not gain an occlusion test.
+`ACTION_OUTCOME_UNCERTAIN`. Checks and waits gain only the keyboard rule below.
 See the [occlusion regressions](../qaren-core/test/unit/qa/occlusion-walker.test.ts).
 
 ### Fill verification and keyboard fallback
@@ -273,6 +273,13 @@ the descendant offscreen wins over that contradiction. Ordinary below-the-fold
 rows and later pager pages remain offscreen, not unresolved. iOS snapshots retain
 content-less Window nodes for this geometry; offscreen inputs remain in the
 privacy inventory. Geometry does not prove complete exposure or occlusion.
+
+Literal checks, quoted waits and scroll-until text do not count text or merged
+labels whose centre lies under a captured keyboard unless the keyboard is
+proven hidden. A docked full-width keyboard covers from its frame's top to the
+screen bottom, because its chrome paints below the frame XCUI reports. The
+keyboard's own keys and the chrome in its window stay visible. Overlays are not
+occlusion evidence: see [Limitations](#limitations-recorded-not-papered-over).
 Quoted and phrase target resolution scrolls up when the target is wholly above
 its effective trusted clipping viewport, and down otherwise; without a known
 clip, the boundary remains screen y=0. Quoted scroll-until targets use that
@@ -1518,6 +1525,11 @@ now encoded once and replayed deterministically.
 - app_id validation is one shared grammar (dot-separated `[A-Za-z0-9_-]`
   segments), not per-platform store rules; invalid-but-well-formed ids fail
   later as visible `BUILD_FAILED`.
+- **Literal checks judge accessibility presence, not paint.** Text inside the
+  screen, window and scroll clip counts as visible even when an overlay paints
+  over it, such as an absolutely positioned sticky footer or another later
+  sibling that XCUI still reports hittable. Only the keyboard is treated as an
+  occluder.
 - The historical Expo SDK 56 artifact-discovery gap in the timing evidence
   predates the current finite iOS build path. Those measurements do not validate
   this implementation; exact-head device acceptance remains separate.

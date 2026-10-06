@@ -15,8 +15,10 @@ export function literalEvidence(
   match: 'contains' | 'equals',
 ): LiteralEvidence {
   const hit = (line: string) => (match === 'contains' ? line.includes(text) : line === text);
-  if (screen.visibleText.some(hit)) return { verdict: 'pass' };
-  if (screen.labelText?.some(hit)) return { verdict: 'pass', label: true };
+  const keyboard = screen.keyboardVisible !== false && screen.uncoveredText !== undefined;
+  if ((keyboard ? screen.uncoveredText! : screen.visibleText).some(hit)) return { verdict: 'pass' };
+  if ((keyboard ? screen.uncoveredLabelText : screen.labelText)?.some(hit))
+    return { verdict: 'pass', label: true };
   if (screen.unresolvedText?.some(hit)) return { verdict: 'unsure' };
   // Absence is proven only by a complete native snapshot.
   return {

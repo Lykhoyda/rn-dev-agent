@@ -80,6 +80,9 @@ export interface Screen {
   appProcessIdentifier?: number;
   keyboardVisible?: boolean;
   keyboardFrame?: NonNullable<NativeNode['rect']>;
+  // Literal text and merged labels not painted under the keyboard; present only when one is captured.
+  uncoveredText?: string[];
+  uncoveredLabelText?: string[];
 }
 
 const forwardedInputs = new WeakMap<Element, string>();
@@ -815,6 +818,45 @@ export function join(
   const labelText: string[] = [];
   const unresolvedText: string[] = [];
   const paintedKeys = new Map<number, string>();
+  const keyboardIndex = nodes.findIndex(
+    (n) => n.type === 'Keyboard' && !!n.rect && n.rect.width > 0 && n.rect.height > 0,
+  );
+  const keyboardFrame = keyboardIndex >= 0 ? nodes[keyboardIndex].rect : undefined;
+  const windowOf = (index: number): number | undefined => {
+    for (
+      let p = nodes[index].parentIndex;
+      p !== undefined && p >= 0 && p < index;
+      p = nodes[p].parentIndex
+    )
+      if (nodes[p].type === 'Window') return p;
+    return undefined;
+  };
+  const keyboardWindow = keyboardIndex >= 0 ? windowOf(keyboardIndex) : undefined;
+  const ownWindow =
+    keyboardWindow !== undefined && nodes.findIndex((n) => n.type === 'Window') !== keyboardWindow;
+  const screenRect = nodes[0]?.type === 'Application' ? nodes[0].rect : undefined;
+  // A docked full-width keyboard paints its chrome below the frame XCUI reports, to the screen bottom.
+  const keyboardBottom =
+    keyboardFrame && screenRect && keyboardFrame.width >= screenRect.width
+      ? Math.max(keyboardFrame.y + keyboardFrame.height, screenRect.y + screenRect.height)
+      : keyboardFrame && keyboardFrame.y + keyboardFrame.height;
+  const underKeyboard = (n: NativeNode, i: number): boolean => {
+    if (!keyboardFrame || keyboardBottom === undefined || !n.rect) return false;
+    if (ownWindow && windowOf(i) === keyboardWindow) return false;
+    if (n.type === 'Keyboard') return false;
+    for (let p = n.parentIndex; p !== undefined && p >= 0 && p < i; p = nodes[p].parentIndex)
+      if (nodes[p].type === 'Keyboard') return false;
+    const x = n.rect.x + n.rect.width / 2;
+    const y = n.rect.y + n.rect.height / 2;
+    return (
+      x >= keyboardFrame.x &&
+      x < keyboardFrame.x + keyboardFrame.width &&
+      y >= keyboardFrame.y &&
+      y < keyboardBottom
+    );
+  };
+  const uncoveredText: string[] = [];
+  const uncoveredLabelText: string[] = [];
   for (const { n, e, i } of ordered) {
     if (n.rect && !(n.rect.width > 0 && n.rect.height > 0)) continue;
     if (duplicates.has(i) || e.kind === 'image' || e.visibilityEvidence === 'offscreen') continue;
@@ -834,8 +876,10 @@ export function join(
     }
     if (merged) {
       labelText.push(line);
+      if (!underKeyboard(n, i)) uncoveredLabelText.push(line);
       continue;
     }
+    if (!underKeyboard(n, i)) uncoveredText.push(line);
     const key = JSON.stringify([
       line,
       n.type,
@@ -879,13 +923,10 @@ export function join(
       labelAncestors.set(elements[only], [...labelAncestorsOf(elements[only]), control]);
     }
   });
-  const keyboardFrame = nodes.find(
-    (n) => n.type === 'Keyboard' && n.rect && n.rect.width > 0 && n.rect.height > 0,
-  )?.rect;
   return {
     elements: elements.filter((_, i) => !duplicates.has(i)),
     visibleText,
-    ...(keyboardFrame ? { keyboardFrame } : {}),
+    ...(keyboardFrame ? { keyboardFrame, uncoveredText, uncoveredLabelText } : {}),
     paintedText,
     ...(labelText.length ? { labelText } : {}),
     ...(unresolvedText.length ? { unresolvedText } : {}),
