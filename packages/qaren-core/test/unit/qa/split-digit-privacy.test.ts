@@ -469,3 +469,95 @@ test('both structural prefixes survive model, refusal and ledger projection', as
     }
   }
 });
+
+function mirroredCodeScreen(entered: string, mirror: string, caption?: string) {
+  const nodes: NativeNode[] = [
+    { ref: '@row', index: 0, type: 'Other', rect: { x: 0, y: 300, width: 402, height: 60 } },
+  ];
+  for (let i = 0; i < 4; i++) {
+    const x = i * (44 + (402 - 176) / 3);
+    const cell = nodes.length;
+    nodes.push({
+      ref: `@cell${i}`,
+      index: cell,
+      parentIndex: 0,
+      type: 'Other',
+      identifier: 'otp-input',
+      hittable: true,
+      rect: { x, y: 300, width: 44, height: 60 },
+    });
+    nodes.push(
+      entered[i]
+        ? {
+            ref: `@char${i}`,
+            index: cell + 1,
+            parentIndex: cell,
+            type: 'StaticText',
+            label: entered[i],
+            rect: { x: x + 13, y: 313, width: 17, height: 34 },
+          }
+        : {
+            ref: `@stick${i}`,
+            index: cell + 1,
+            parentIndex: cell,
+            type: 'Other',
+            rect: { x: x + 21, y: 315, width: 2, height: 30 },
+          },
+    );
+  }
+  nodes.push({
+    ref: '@mirror',
+    index: nodes.length,
+    type: 'TextField',
+    label: mirror,
+    value: entered,
+    rect: { x: 0, y: 380, width: 300, height: 40 },
+  });
+  if (caption)
+    nodes.push({
+      ref: '@caption',
+      index: nodes.length,
+      type: 'StaticText',
+      label: caption,
+      rect: { x: 0, y: 440, width: 300, height: 20 },
+    });
+  return join(nodes, []);
+}
+
+for (const typed of ['4', '48', '481']) {
+  test(`an input label mirroring its ${typed.length}-character typed code is masked in every projection`, async () => {
+    const captured = mirroredCodeScreen(typed, typed);
+    const privacy = new ObservedPrivacy([typed]);
+    privacy.didFill(typed);
+    privacy.observe(captured);
+    const text = privacy.screenText(captured);
+    assert.deepEqual(text, ['[code]', `${MASK}: ${MASK}`]);
+    const mirror = captured.elements.find((element) => element.ref === '@mirror')!;
+    assert.equal(
+      privacy.maskForModel([], []).describeElement(mirror, describe).includes(`"${typed}"`),
+      false,
+    );
+    const initial = screen([element('@pin', 'Code', { kind: 'input', testID: 'pin' })]);
+    const f = walker(
+      [initial, captured],
+      scriptedJudge(() => assert.fail('literal fill is model-free')),
+      { ok: false, proven: false, mutation: 'observed', error: 'fill interrupted' },
+    );
+    const blocks = parsePlan(`1. Type "${typed}" into "pin"\n✓ "Ready"`).blocks;
+    assert.ok(blocks);
+    const ledger = await runPlan(blocks, f.deps);
+    assert.equal(ledger.verdict, 'FAIL');
+    assert.ok(ledger.failure?.seen.includes(`${MASK}: ${MASK}`), ledger.failure?.seen);
+    assert.equal(ledger.failure?.seen.includes(`${typed}: `), false, ledger.failure?.seen);
+  });
+}
+
+test('ordinary input labels and short text without a typed origin stay readable', () => {
+  const captured = mirroredCodeScreen('48', 'Code', '12');
+  const privacy = new ObservedPrivacy(['48']);
+  privacy.didFill('48');
+  privacy.observe(captured);
+  assert.deepEqual(privacy.screenText(captured), ['[code]', `Code: ${MASK}`, '12']);
+  const mirror = captured.elements.find((element) => element.ref === '@mirror')!;
+  assert.ok(privacy.maskForModel([], []).describeElement(mirror, describe).includes('"Code"'));
+});

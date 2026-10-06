@@ -144,6 +144,18 @@ export function nativeLabelMayBeValue(element: Element): boolean {
   return inputPrivacy.get(element)?.nativeLabelMayBeValue ?? false;
 }
 
+// An input label equal to its own or a private value is that value, at any length.
+function labelIsValue(element: Element, set: PrivateSet): boolean {
+  if (nativeLabelMayBeValue(element)) return true;
+  const own = (text: string | undefined) => text?.trim().normalize('NFC');
+  const label = own(element.label);
+  return (
+    !!label &&
+    isPossibleInput(element) &&
+    [element.value, ...set.values.map((value) => value.text)].some((value) => own(value) === label)
+  );
+}
+
 export function inputValues(screen: Screen, evidenceOnly = false): string[] {
   return [
     ...new Set([
@@ -730,6 +742,7 @@ export class ObservedPrivacy {
     const first = new Set(rows.map((row) => row[0]));
     const represented = new Set<string>();
     const projected: string[] = [];
+    const set = this.privateSet();
     for (const element of screen.elements) {
       if (
         element.offscreen ||
@@ -748,13 +761,16 @@ export class ObservedPrivacy {
         if (first.has(element)) projected.push('[code]');
         continue;
       }
-      const label = nativeLabelMayBeValue(element)
+      const mirrored = labelIsValue(element, set);
+      const label = mirrored
         ? MASK
         : (element.label ?? element.placeholder ?? element.testID ?? 'input');
       const text =
         isPossibleInput(element) && element.value !== undefined
           ? `${label}: ${MASK}`
-          : element.label;
+          : mirrored
+            ? MASK
+            : element.label;
       if (text) projected.push(this.redact(text));
     }
     return [
@@ -837,7 +853,7 @@ export function modelMask(
         ? {
             ...element,
             value: element.value === undefined ? undefined : MASK,
-            label: nativeLabelMayBeValue(element) ? MASK : element.label,
+            label: labelIsValue(element, all) ? MASK : element.label,
           }
         : element;
       const testID = element.testID;
