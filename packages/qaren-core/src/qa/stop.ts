@@ -39,6 +39,14 @@ export function createStop() {
   };
 }
 
+// A write error on the wire means the CLI stopped reading; stop the walk rather than crash before teardown.
+export function watchOwnerPipe(
+  stream: NodeJS.WritableStream,
+  onGone: (code: string) => void,
+): void {
+  stream.on('error', (error: NodeJS.ErrnoException) => onGone(error.code ?? 'WRITE_FAILED'));
+}
+
 // `expected` is the parent recorded at process start; any other parent means the CLI is gone.
 export function watchParent(
   expected: number,

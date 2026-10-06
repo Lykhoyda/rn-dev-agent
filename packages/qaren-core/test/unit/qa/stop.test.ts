@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createStop, watchParent } from '../../../dist/qa/stop.js';
+import { readFileSync } from 'node:fs';
+import { Writable } from 'node:stream';
+import { createStop, watchOwnerPipe, watchParent } from '../../../dist/qa/stop.js';
 
 test('a stop begins once and then refuses new device work', async () => {
   const stop = createStop();
@@ -107,4 +109,24 @@ test('a stopped watch never reports', async () => {
   parent = 1;
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(gone, 0);
+});
+
+test('a closed owner pipe stops the walk instead of crashing the core before teardown', async () => {
+  const broken = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+    },
+  });
+  const reasons: string[] = [];
+  watchOwnerPipe(broken, (why) => reasons.push(why));
+  broken.write('{"type":"result"}\n');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(reasons, ['EPIPE']);
+});
+
+test('the core entry watches its stdout before the first wire line', () => {
+  const source = readFileSync(new URL('../../../dist/qa/walk.js', import.meta.url), 'utf8');
+  const watch = source.indexOf('watchOwnerPipe(process.stdout');
+  assert.ok(watch >= 0, 'walk.js wires the owner-pipe watch');
+  assert.ok(watch < source.indexOf('emitRow(startupRow())'), 'the watch precedes the first write');
 });

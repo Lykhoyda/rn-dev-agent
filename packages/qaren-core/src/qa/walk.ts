@@ -53,7 +53,7 @@ import { createTimingObserver, formatTimingEvent, type TimingContext } from './t
 import { preflightPlan } from './preflight.js';
 import { summarizeJev } from './ledger.js';
 import { redactApiKey } from '../util/redact.js';
-import { createStop, watchParent } from './stop.js';
+import { createStop, watchOwnerPipe, watchParent } from './stop.js';
 import { prove } from './prove.js';
 import { admit } from './admission.js';
 import { type ActResult, type WalkerDeps, loginBlock, runPlan } from './walker.js';
@@ -532,7 +532,6 @@ async function main(): Promise<void> {
     rows.push(row);
     writer.row(row);
   };
-  emitRow(startupRow());
   // The one exit owner; once stopping, no verdict other than the cancellation is reported.
   let written: 0 | 1 | 4 | undefined;
   const finish = async (payload: ResultPayload, close?: () => Promise<void>): Promise<never> => {
@@ -562,16 +561,6 @@ async function main(): Promise<void> {
       close,
     );
 
-  if (process.env.QAREN_DEVICE_LEASE !== request.lease) {
-    return refuse('LEASE_MISMATCH', 'QAREN_DEVICE_LEASE does not match the request lease');
-  }
-  const blocks = readPreparedPlan(request.plan, request.prepared);
-  if (!blocks)
-    return refuse(
-      'PLAN_UNPARSEABLE',
-      'the prepared plan is missing, invalid or does not match the preflight bytes',
-    );
-
   let release: (() => Promise<void>) | undefined;
   // Stopping makes the next device operation fail, so the walk ends through `finish`.
   // The fallback only covers a walk stuck inside one operation, within the CLI's grace.
@@ -585,6 +574,21 @@ async function main(): Promise<void> {
         .finally(() => process.exit(written ?? 1));
     }, 8000);
   };
+  watchOwnerPipe(process.stdout, (code) =>
+    halt(`the qaren CLI stopped reading the wire (${code})`),
+  );
+  emitRow(startupRow());
+
+  if (process.env.QAREN_DEVICE_LEASE !== request.lease) {
+    return refuse('LEASE_MISMATCH', 'QAREN_DEVICE_LEASE does not match the request lease');
+  }
+  const blocks = readPreparedPlan(request.plan, request.prepared);
+  if (!blocks)
+    return refuse(
+      'PLAN_UNPARSEABLE',
+      'the prepared plan is missing, invalid or does not match the preflight bytes',
+    );
+
   for (const signal of ['SIGTERM', 'SIGINT'] as const) process.once(signal, () => halt(signal));
   watchParent(
     cliParent,
