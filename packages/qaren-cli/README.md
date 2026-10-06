@@ -109,6 +109,11 @@ generation. A unique live match whose frame no longer approximately matches
 the retained frame refuses with `TARGET_MOVED_BEFORE_DISPATCH`, mutation `none`,
 and no tap or typing. A later screen change cannot turn a proven no-mutation
 refusal into a passing action; the ordinary retry uses a fresh capture.
+When the runner instead refuses a sent tap or type because its retained target
+is gone or stale (`NO_TEXT_INPUT_TARGET`, `KEYBOARD_TARGET_STALE`, or an Android
+`exact-target-*` reason) and attests mutation `none`, the step fails as
+`TARGET_MOVED_BEFORE_DISPATCH` without retry or fallback; any other refusal
+after a send stays `ACTION_OUTCOME_UNCERTAIN`.
 Resolution, frame comparison and hit testing share one 300 ms deadline.
 Missing retained identity, a generation mismatch, zero or ambiguous live
 matches, and failed or over-budget checks leave the check unavailable and
@@ -131,7 +136,8 @@ above a visible keyboard. It then requires a unique rebind to the refused
 target's testID and kind before retrying, including keyboard-fallback wrapper
 taps. A label-only target cannot rebind after scrolling; a missing or nonunique
 identity refuses `TARGET_NOT_FOUND` with “stayed off screen after one scroll”.
-After scrolling to resolve or uncover a press or fill target, capture requires
+After scrolling to resolve or uncover a press or fill target, or after a scroll
+step whose momentum may still move it (across blocks too), capture requires
 agreeing consecutive frame readbacks within the existing bounded readback
 budget; otherwise `SCROLL_UNSETTLED`
 refuses without another dispatch or recovery. Keyboard-fallback focus readbacks

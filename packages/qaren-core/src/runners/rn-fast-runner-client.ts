@@ -1113,7 +1113,13 @@ export async function fastSwipe(
   const authority = captureFastRunnerCommandAuthority();
   try {
     const resp = await postCommand(body, qaContext);
-    checkQaNativeOutcome(qaContext, resp.error?.code, resp.data, resp.error?.reason);
+    checkQaNativeOutcome(
+      qaContext,
+      resp.error?.code,
+      resp.data,
+      resp.error?.reason,
+      resp.error?.mutation,
+    );
     if (qaContext && !resp.ok && resp.error?.code === 'RUNNER_TIMEOUT') {
       await containRunnerTimeout('drag', resp.error.message ?? 'RUNNER_TIMEOUT', authority);
       qaContext.refuse('ACTION_OUTCOME_UNCERTAIN');
@@ -2553,7 +2559,13 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   }
   const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
   if (resp.error?.reason !== 'focus-proof-refused')
-    checkQaNativeOutcome(args.qaContext, resp.error?.code, resp.data, resp.error?.reason);
+    checkQaNativeOutcome(
+      args.qaContext,
+      resp.error?.code,
+      resp.data,
+      resp.error?.reason,
+      resp.error?.mutation,
+    );
   const announce = resp.ok ? takeQuiescenceAnnouncement() : null;
   if (!resp.ok) {
     const message = resp.error?.message ?? 'runner returned !ok with no error';

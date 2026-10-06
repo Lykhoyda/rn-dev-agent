@@ -2,7 +2,8 @@ export type QaDispatchRefusal =
   | 'EVIDENCE_EXPIRED'
   | 'RUN_CANCELLED'
   | 'ACTION_CONTEXT_CHANGED'
-  | 'ACTION_OUTCOME_UNCERTAIN';
+  | 'ACTION_OUTCOME_UNCERTAIN'
+  | 'TARGET_MOVED_BEFORE_DISPATCH';
 
 export class QaDispatchError extends Error {
   constructor(readonly code: QaDispatchRefusal) {
@@ -14,6 +15,7 @@ export class QaDispatchError extends Error {
 export class QaDispatchContext {
   private failure?: QaDispatchError;
   private sends = 0;
+  private attested = false;
 
   constructor(
     readonly deadline: number,
@@ -27,6 +29,11 @@ export class QaDispatchContext {
 
   get refusal(): QaDispatchError | undefined {
     return this.failure;
+  }
+
+  // The runner attested that the only authorized send changed nothing before refusing it.
+  get refusedBeforeMutation(): boolean {
+    return this.attested && this.sends === 1;
   }
 
   refuse(code: QaDispatchRefusal): never {
@@ -49,7 +56,8 @@ export class QaDispatchContext {
     this.sends++;
   }
 
-  invalidate(): never {
+  invalidate(attestedNoMutation = false): never {
+    if (!this.failure) this.attested = attestedNoMutation;
     return this.refuse('ACTION_CONTEXT_CHANGED');
   }
 

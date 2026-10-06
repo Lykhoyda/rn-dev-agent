@@ -12,6 +12,9 @@ const INVALIDATED_TARGET_CODES = new Set([
   'RUNNER_OWNERSHIP_MISMATCH',
 ]);
 
+// A moved or replaced target the runner refused before acting; other invalidations stay uncertain.
+const MOVED_TARGET_CODES = new Set(['KEYBOARD_TARGET_STALE', 'STALE_REF', 'NO_TEXT_INPUT_TARGET']);
+
 const INVALIDATED_TARGET_REASONS = new Set([
   'app-window-unavailable',
   'exact-target-unresolved',
@@ -28,6 +31,7 @@ export function checkQaNativeOutcome(
   code: string | undefined,
   data: unknown,
   reason?: string,
+  mutation?: string,
 ): void {
   const verdict = (data as { verifyVerdict?: unknown } | undefined)?.verifyVerdict;
   if (
@@ -36,6 +40,10 @@ export function checkQaNativeOutcome(
     verdict === 'target-lost' ||
     verdict === 'ambiguous'
   ) {
-    context?.invalidate();
+    context?.invalidate(
+      mutation === 'none' &&
+        ((code !== undefined && MOVED_TARGET_CODES.has(code)) ||
+          (code === 'INTERACTION_NOT_ACTUATED' && reason?.startsWith('exact-target-') === true)),
+    );
   }
 }

@@ -2088,7 +2088,13 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
     ...(recovery ? { transportRecovery: recovery } : {}),
     ...(accessibilityRecovery ? { accessibilityRecovery } : {}),
   };
-  checkQaNativeOutcome(args.qaContext, resp.error?.code, resp.data, resp.error?.reason);
+  checkQaNativeOutcome(
+    args.qaContext,
+    resp.error?.code,
+    resp.data,
+    resp.error?.reason,
+    resp.error?.mutation,
+  );
   if (!resp.ok) {
     const message = resp.error?.message ?? 'Android runner returned !ok with no error';
     const code = resp.error?.code;

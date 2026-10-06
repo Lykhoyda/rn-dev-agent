@@ -133,20 +133,27 @@ for (const platform of ['ios', 'android'] as const) {
     'TEXT_TARGET_FOCUS_FAILED',
     'ACTION_CONTEXT_CHANGED',
   ]) {
-    test(`${platform} native ${code} latches invalidation after an authorized send`, async () => {
-      const { requests, run } = fixture(platform, true, {
-        ok: false,
-        error: { code, message: code, mutation: 'none' },
+    for (const mutation of ['none', 'possible']) {
+      test(`${platform} native ${code} with mutation ${mutation} latches invalidation after an authorized send`, async () => {
+        const { requests, run } = fixture(platform, true, {
+          ok: false,
+          error: { code, message: code, mutation },
+        });
+        const context = new QaDispatchContext(10, () => 1);
+        await assert.rejects(
+          run({ command: 'tap', x: 1, y: 2, bundleId: 'qa.app', qaContext: context }),
+          /ACTION_CONTEXT_CHANGED/,
+        );
+        assert.equal(requests.length, 1);
+        assert.equal(context.authorizations, 1);
+        assert.throws(() => context.assertComplete(), /ACTION_CONTEXT_CHANGED/);
+        assert.equal(
+          context.refusedBeforeMutation,
+          mutation === 'none' &&
+            ['KEYBOARD_TARGET_STALE', 'STALE_REF', 'NO_TEXT_INPUT_TARGET'].includes(code),
+        );
       });
-      const context = new QaDispatchContext(10, () => 1);
-      await assert.rejects(
-        run({ command: 'tap', x: 1, y: 2, bundleId: 'qa.app', qaContext: context }),
-        /ACTION_CONTEXT_CHANGED/,
-      );
-      assert.equal(requests.length, 1);
-      assert.equal(context.authorizations, 1);
-      assert.throws(() => context.assertComplete(), /ACTION_CONTEXT_CHANGED/);
-    });
+    }
   }
   for (const verifyVerdict of ['target-lost', 'ambiguous']) {
     test(`${platform} ${verifyVerdict} verification invalidates the retained target`, async () => {
@@ -182,6 +189,7 @@ for (const reason of [
       /ACTION_CONTEXT_CHANGED/,
     );
     assert.equal(context.authorizations, 1);
+    assert.equal(context.refusedBeforeMutation, reason.startsWith('exact-target-'));
   });
 }
 

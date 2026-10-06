@@ -429,6 +429,33 @@ test('QA exact fill uses no-recovery snapshot preparation', async () => {
   assert.equal(context.authorizations, 0);
 });
 
+test('an exact fill the runner refuses on a moved frame stays latched and attests no mutation', async () => {
+  session();
+  const sends = runner((body) =>
+    body.command === 'snapshot'
+      ? snapshot('Input', 'TextField', 'input')
+      : {
+          ok: false,
+          error: {
+            code: 'NO_TEXT_INPUT_TARGET',
+            message:
+              'NO_TEXT_INPUT_TARGET: the described text input is no longer present on screen',
+            mutation: 'none',
+          },
+        },
+  );
+  const context = new QaDispatchContext(10, () => 1);
+  await assert.rejects(
+    createDeviceFillHandler(() => {
+      throw new Error('no CDP');
+    })({ ref: 'input', text: 'hello', qaContext: context }),
+    /ACTION_CONTEXT_CHANGED/,
+  );
+  assert.deepEqual(sends, ['snapshot', 'type']);
+  assert.equal(context.authorizations, 1);
+  assert.equal(context.refusedBeforeMutation, true);
+});
+
 test('exact fill preparation cannot renew the original mutation deadline', async () => {
   session();
   let now = 1;

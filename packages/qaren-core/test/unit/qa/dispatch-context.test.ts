@@ -54,3 +54,30 @@ test('invalid clocks and deadlines refuse before dispatch', () => {
   const context = new QaDispatchContext(10, () => NaN);
   assert.throws(() => context.authorize(), { code: 'ACTION_CONTEXT_CHANGED' });
 });
+
+test('a runner-attested no-mutation invalidation of the only send is a refusal before mutation', () => {
+  const attested = new QaDispatchContext(10, () => 1);
+  attested.authorize();
+  assert.throws(() => attested.invalidate(true), { code: 'ACTION_CONTEXT_CHANGED' });
+  assert.throws(() => attested.authorize(), { code: 'ACTION_CONTEXT_CHANGED' });
+  assert.equal(attested.refusedBeforeMutation, true);
+
+  const unattested = new QaDispatchContext(10, () => 1);
+  unattested.authorize();
+  assert.throws(() => unattested.invalidate(), { code: 'ACTION_CONTEXT_CHANGED' });
+  assert.equal(unattested.refusedBeforeMutation, false);
+
+  const twice = new QaDispatchContext(10, () => 1);
+  twice.authorize();
+  twice.authorize();
+  assert.throws(() => twice.invalidate(true), { code: 'ACTION_CONTEXT_CHANGED' });
+  assert.equal(twice.refusedBeforeMutation, false);
+
+  let now = 1;
+  const expired = new QaDispatchContext(10, () => now);
+  expired.authorize();
+  now = 10;
+  assert.throws(() => expired.authorize(), { code: 'EVIDENCE_EXPIRED' });
+  assert.throws(() => expired.invalidate(true), { code: 'EVIDENCE_EXPIRED' });
+  assert.equal(expired.refusedBeforeMutation, false);
+});

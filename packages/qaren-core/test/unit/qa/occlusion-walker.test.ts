@@ -7,6 +7,7 @@ import type { NativeNode, Screen } from '../../../dist/qa/screen.js';
 import { choice, scriptedJudge } from './judgment-fixtures.ts';
 import { walkBlock } from '../../../dist/qa/walker.js';
 import type { ActResult, WalkerDeps } from '../../../dist/qa/walker.js';
+import type { QaDispatchContext } from '../../../dist/domain/qa-dispatch.js';
 
 const OCCLUDED: ActResult = {
   ok: false,
@@ -657,6 +658,38 @@ test('a fill opening the next block settles after the previous block ends with a
   );
   assert.deepEqual(between, Array(4).fill('capture'));
 });
+
+for (const kind of ['press', 'fill'] as const) {
+  for (const [attested, sends, label] of [
+    [true, 1, /^TARGET_MOVED_BEFORE_DISPATCH/],
+    [false, 1, /^ACTION_OUTCOME_UNCERTAIN/],
+    [true, 2, /^ACTION_OUTCOME_UNCERTAIN/],
+  ] as const) {
+    test(`a ${kind} the runner refused after ${sends} send(s) ${attested ? 'attesting' : 'without attesting'} no mutation is labelled ${label.source.slice(1)}`, async () => {
+      const type = kind === 'press' ? 'Button' : 'TextField';
+      const f = fake([at(400, type)], {});
+      let calls = 0;
+      const refuse = async (context: QaDispatchContext): Promise<ActResult> => {
+        calls += 1;
+        for (let send = 0; send < sends; send += 1) context.authorize();
+        return context.invalidate(attested);
+      };
+      if (kind === 'press') f.deps.press = async (_ref, context) => refuse(context);
+      else f.deps.fill = async (_ref, _text, context) => refuse(context);
+      const outcome = await walkBlock(
+        block(kind === 'press' ? '1. Tap "go"\n' : '1. Fill "field" with "x"\n'),
+        f.deps,
+      );
+      assert.equal(outcome.block.outcome, 'fail');
+      assert.match(outcome.failure?.seen ?? '', label);
+      assert.equal(calls, 1);
+      assert.equal(
+        outcome.rows.some((row) => row.outcome === 'pass'),
+        false,
+      );
+    });
+  }
+}
 
 test('a fill after an explicit scroll refuses a frame that never settles', async () => {
   const f = fake(

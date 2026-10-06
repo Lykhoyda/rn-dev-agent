@@ -125,6 +125,7 @@ export interface WalkerTimingDiagnostic {
     | 'ACTION_CONTEXT_CHANGED'
     | 'RUN_CANCELLED'
     | 'ACTION_OUTCOME_UNCERTAIN'
+    | 'TARGET_MOVED_BEFORE_DISPATCH'
     | 'SCREEN_EVIDENCE_INCOMPLETE';
   at: number;
   acquisitionMs: number;
@@ -530,9 +531,11 @@ export async function walkBlock(
         if (refusal.code === 'EVIDENCE_EXPIRED' && context.authorizations === 0)
           throw new EvidenceExpired(itemExpired);
         throw new QaDispatchError(
-          context.authorizations && refusal.code !== 'RUN_CANCELLED'
-            ? 'ACTION_OUTCOME_UNCERTAIN'
-            : refusal.code,
+          !context.authorizations || refusal.code === 'RUN_CANCELLED'
+            ? refusal.code
+            : context.refusedBeforeMutation
+              ? 'TARGET_MOVED_BEFORE_DISPATCH'
+              : 'ACTION_OUTCOME_UNCERTAIN',
         );
       }
       throw error;
