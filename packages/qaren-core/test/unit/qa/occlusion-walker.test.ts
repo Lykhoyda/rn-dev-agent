@@ -525,3 +525,79 @@ test('expired post-scroll evidence requires settlement again before dispatch', a
   assert.equal(outcome.block.outcome, 'fail');
   assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 0);
 });
+
+test('a second press after clearance refuses keyboard auto-scroll before dispatch', async () => {
+  const f = fake(
+    [
+      clipped(700),
+      clipped(400),
+      clipped(400),
+      clipped(380),
+      ...[350, 340, 330, 320].map((y) => clipped(y)),
+    ],
+    {},
+  );
+  const outcome = await walkBlock(block('1. Tap "go"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.match(outcome.failure?.seen ?? '', /SCROLL_UNSETTLED/);
+  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
+});
+
+for (const mode of ['strict', 'keyboard', 'poll'] as const) {
+  test(`fallback focus ${mode} refuses moving readbacks before typing`, async () => {
+    const inputAt = (y: number) => {
+      const screen = at(y, 'TextField');
+      targetOf(screen, '@target')!.testID = 'email';
+      screen.keyboardVisible = true;
+      return screen;
+    };
+    const moving = [450, 400, 350, 300].map((y) =>
+      mode === 'keyboard' ? wrapperAt(y, true) : inputAt(y),
+    );
+    const screens = [
+      wrapperAt(300, false),
+      ...(mode === 'poll' ? [wrapperAt(300, false), wrapperAt(300, false)] : []),
+      ...moving,
+    ];
+    const f = fake(screens, {});
+    let typed = 0;
+    f.deps.typeFocused = async () => {
+      typed += 1;
+      return { ok: true, proven: false };
+    };
+    const outcome = await walkBlock(block('1. Fill "email" with "x"\n'), f.deps);
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.match(outcome.failure?.seen ?? '', /SCROLL_UNSETTLED/);
+    assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
+    assert.equal(f.calls.filter((c) => c.startsWith('fill')).length, 0);
+    assert.equal(typed, 0);
+  });
+}
+
+test('expired strict fill after fallback focus requires settlement before refreshing', async () => {
+  const inputAt = (y: number) => {
+    const screen = at(y, 'TextField');
+    targetOf(screen, '@target')!.testID = 'email';
+    screen.keyboardVisible = true;
+    return screen;
+  };
+  const f = fake(
+    [wrapperAt(300, false), inputAt(400), inputAt(400), ...[350, 340, 330, 320].map(inputAt)],
+    {},
+  );
+  const fill = f.deps.fill;
+  let expired = false;
+  f.deps.fill = async (ref, text, context) => {
+    if (!expired) {
+      expired = true;
+      context.refuse('EVIDENCE_EXPIRED');
+    }
+    return fill(ref, text, context);
+  };
+  f.deps.typeFocused = async () => assert.fail('strict input must not use keyboard typing');
+  const outcome = await walkBlock(block('1. Fill "email" with "x"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.match(outcome.failure?.seen ?? '', /SCROLL_UNSETTLED/);
+  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
+  assert.equal(f.calls.filter((c) => c.startsWith('fill')).length, 0);
+});

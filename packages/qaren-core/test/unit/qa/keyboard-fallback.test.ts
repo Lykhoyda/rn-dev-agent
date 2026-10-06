@@ -651,7 +651,7 @@ for (const [name, after, reason] of [
     assert.equal(fake.typed.length, 0);
     assert.equal(
       fake.log.filter((entry) => entry === 'capture').length,
-      name === 'no keyboard' ? 1 + KEYBOARD_READY_CAPTURES : 2,
+      name === 'no keyboard' ? 1 + 2 * KEYBOARD_READY_CAPTURES : 3,
     );
   });
 }
@@ -665,7 +665,7 @@ test('U7: a target replaced by another identity after the tap fails without typi
   assert.deepEqual(steps(fake.log), ['press @wrap']);
 });
 
-test('U11: a refreshed strict refusal after the fallback tap never taps again', async () => {
+test('U11: expired post-focus evidence never taps again', async () => {
   const input = element('@input', 'Email', {
     kind: 'input',
     nativeKind: 'input',
@@ -677,7 +677,7 @@ test('U11: a refreshed strict refusal after the fallback tap never taps again', 
   });
   const outcome = await walkBlock(blocks(plan())[0], fake.deps);
   assert.equal(outcome.block.outcome, 'fail');
-  assert.match(outcome.failure?.seen ?? '', /^TARGET_NOT_FOUND: /);
+  assert.match(outcome.failure?.seen ?? '', /^TARGET_NOT_FOUND:/);
   assert.deepEqual(steps(fake.log), ['press @wrap']);
   assert.equal(fake.typed.length, 0);
 });
@@ -729,7 +729,7 @@ test('U11: evidence that expires before the type fails without typing or tapping
   const fake = app({ expireBeforeType: true });
   const outcome = await walkBlock(blocks(plan())[0], fake.deps);
   assert.equal(outcome.block.outcome, 'fail');
-  assert.match(outcome.failure?.seen ?? '', /evidence expired before typing/);
+  assert.match(outcome.failure?.seen ?? '', /^EVIDENCE_EXPIRED/);
   assert.deepEqual(steps(fake.log), ['press @wrap']);
   assert.equal(fake.typed.length, 0);
 });

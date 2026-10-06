@@ -781,7 +781,7 @@ export async function walkBlock(
         before.screen,
       );
     const readyBy = deps.now() + KEYBOARD_READY_MS;
-    let after = await capture(item);
+    let after = await settledCapture(item);
     const bound = () => bindFillIdentity(item, after.screen, target.oracleTestID);
     for (
       let captures = 1;
@@ -793,7 +793,7 @@ export async function walkBlock(
       captures += 1
     ) {
       await pause(Math.min(WAIT_POLL_MS, Math.max(0, readyBy - deps.now())));
-      after = await capture(item);
+      after = await settledCapture(item);
     }
     const binding = bound();
     if (binding?.kind === 'strict')
@@ -1146,11 +1146,16 @@ export async function walkBlock(
         let again = false;
         let scrolled = false;
         let refusedIdentity: Element | undefined;
+        const captureBeforeDispatch = (attempt: number): Promise<Observation> =>
+          (item.kind === 'press' || item.kind === 'fill') &&
+          (scrolled || fillIdentity !== undefined || attempt > 1)
+            ? settledCapture(item)
+            : capture(item);
         const maxAttempts = recovered.has(item) ? 1 : 2;
         for (let attempt = 1; attempt <= maxAttempts && !outcome; attempt += 1) {
           currentAttempt = attempt;
           const held = cached?.item === item ? cached : undefined;
-          let before = held?.observation ?? (await capture(item));
+          let before = held?.observation ?? (await captureBeforeDispatch(attempt));
           cached = undefined;
           let ref: string | undefined;
           let element: Element | undefined;
@@ -1228,6 +1233,7 @@ export async function walkBlock(
                   }
                   if (!fallback || item.kind !== 'fill') throw new ResolutionError(decided);
                   fellBack = true;
+                  fillIdentity = fallback.oracleTestID;
                   const result = await keyboardFallback(item, attempt, before, fallback, scrolled);
                   if (result === 'typed') {
                     typedUnverified = true;
@@ -1375,7 +1381,7 @@ export async function walkBlock(
                   outcome = failed(item, attempt, act.error, before.screen, undefined);
                   break;
                 }
-                before = scrolled ? await settledCapture(item) : await capture(item);
+                before = await captureBeforeDispatch(attempt);
                 const binding = bindFillIdentity(item, before.screen, identity);
                 const fallback = binding?.kind === 'fallback' ? binding.fallback : undefined;
                 if (!fallback) {
@@ -1388,6 +1394,7 @@ export async function walkBlock(
                   );
                   break;
                 }
+                fillIdentity = fallback.oracleTestID;
                 const result = await keyboardFallback(item, attempt, before, fallback, scrolled);
                 if (result === 'typed') {
                   typedUnverified = true;
@@ -1409,7 +1416,7 @@ export async function walkBlock(
                 throw new QaDispatchError('ACTION_OUTCOME_UNCERTAIN');
               if (!(error instanceof EvidenceExpired) || freshness-- <= 0) throw error;
               metric('refresh', before);
-              before = scrolled ? await settledCapture(item) : await capture(item);
+              before = await captureBeforeDispatch(attempt);
               initial = undefined;
             }
           }
