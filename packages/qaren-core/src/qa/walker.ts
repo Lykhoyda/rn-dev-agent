@@ -179,6 +179,7 @@ export interface WalkOptions {
 
 // Capture and process refusals, ambiguity and the replay-miss path are never recovered.
 const UNRECOVERABLE = new Set([
+  'SCROLL_UNSETTLED',
   'REPLAY_SELECTOR',
   'TARGET_AMBIGUOUS',
   'SCREEN_EVIDENCE_INCOMPLETE',
@@ -365,12 +366,15 @@ export async function walkBlock(
       JSON.stringify(screen.elements.map((e) => elementFrame(e) ?? null));
     let observation = await capture(item);
     for (let readback = 0; readback < SCROLL_SETTLE_READBACKS; readback += 1) {
-      if (!observationUsable(observation.timing, deps.now())) return observation;
+      usable(observation, item);
       const next = await capture(item);
       if (geometry(next.screen) === geometry(observation.screen)) return next;
       observation = next;
     }
-    return observation;
+    throw new ResolutionError({
+      refuse: 'SCROLL_UNSETTLED',
+      reason: 'the target stayed off screen after one scroll: its frame did not settle',
+    });
   };
   const usable = (observation: Observation, item: Item, deadline = Infinity): void => {
     assertActive();
@@ -751,7 +755,7 @@ export async function walkBlock(
       const scroll = await mutate(item, before, (context) =>
         deps.scroll(clearanceScroll(target.element), context),
       );
-      const afterScroll = await capture(item);
+      const afterScroll = await settledCapture(item);
       usable(afterScroll, item);
       const rebound = bindDispatchIdentity(
         { ...item, kind: 'press' },
@@ -1371,7 +1375,7 @@ export async function walkBlock(
                   outcome = failed(item, attempt, act.error, before.screen, undefined);
                   break;
                 }
-                before = await capture(item);
+                before = scrolled ? await settledCapture(item) : await capture(item);
                 const binding = bindFillIdentity(item, before.screen, identity);
                 const fallback = binding?.kind === 'fallback' ? binding.fallback : undefined;
                 if (!fallback) {
@@ -1405,7 +1409,7 @@ export async function walkBlock(
                 throw new QaDispatchError('ACTION_OUTCOME_UNCERTAIN');
               if (!(error instanceof EvidenceExpired) || freshness-- <= 0) throw error;
               metric('refresh', before);
-              before = await capture(item);
+              before = scrolled ? await settledCapture(item) : await capture(item);
               initial = undefined;
             }
           }

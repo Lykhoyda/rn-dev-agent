@@ -227,9 +227,12 @@ function wrapperAt(y: number, keyboardVisible: boolean): Screen {
 
 for (const secondOcclusion of [false, true]) {
   test(`keyboard fallback clears occlusion once (${secondOcclusion ? 'refused' : 'typed'})`, async () => {
-    const f = fake([wrapperAt(700, false), wrapperAt(300, false), wrapperAt(300, true)], {
-      press: secondOcclusion ? [OCCLUDED, OCCLUDED] : [OCCLUDED],
-    });
+    const f = fake(
+      [wrapperAt(700, false), wrapperAt(300, false), wrapperAt(300, false), wrapperAt(300, true)],
+      {
+        press: secondOcclusion ? [OCCLUDED, OCCLUDED] : [OCCLUDED],
+      },
+    );
     let typed = 0;
     f.deps.typeFocused = async () => {
       typed += 1;
@@ -449,4 +452,76 @@ test('O6: a keyboard-cleared fill waits for the scroll to stop before dispatchin
     'capture',
     'fill @target',
   ]);
+});
+
+for (const kind of ['press', 'fill'] as const) {
+  for (const axis of ['x', 'y'] as const) {
+    for (const start of [80, 700]) {
+      test(`a moving ${kind} refuses after clearance (${axis}, ${start})`, async () => {
+        const type = kind === 'press' ? 'Button' : 'TextField';
+        const moving = [450, 400, 350, 300].map((position) => {
+          const observed = at(axis === 'y' ? position : 300, type);
+          if (axis === 'x') {
+            const node = {
+              ...root()[0],
+              ref: '@target',
+              index: 2,
+              parentIndex: 1,
+              type,
+              identifier: kind === 'press' ? 'go' : 'field',
+              hittable: true,
+              rect: { x: position, y: 300, width: 44, height: 44 },
+            };
+            return covered(join([...root(), node], []));
+          }
+          return observed;
+        });
+        const initial = at(start, type);
+        targetOf(initial, '@target')!.hittable = false;
+        targetOf(initial, '@target')!.offscreen = true;
+        const f = fake([initial, ...moving], {});
+        const outcome = await walkBlock(
+          block(kind === 'press' ? '1. Tap "go"\n' : '1. Fill "field" with "x"\n'),
+          f.deps,
+        );
+        assert.equal(outcome.block.outcome, 'fail');
+        assert.equal(f.calls.filter((c) => /^(press|fill)/.test(c)).length, 0);
+        assert.match(outcome.failure?.seen ?? '', /stayed off screen after one scroll/);
+      });
+    }
+  }
+}
+
+test('keyboard fallback refuses a wrapper that never settles after clearance', async () => {
+  const f = fake([wrapperAt(700, false), ...[450, 400, 350, 300].map((y) => wrapperAt(y, false))], {
+    press: [OCCLUDED],
+  });
+  let typed = 0;
+  f.deps.typeFocused = async () => {
+    typed += 1;
+    return { ok: true, proven: false };
+  };
+  const outcome = await walkBlock(block('1. Fill "email" with "x"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(typed, 0);
+  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
+});
+
+test('expired post-scroll evidence requires settlement again before dispatch', async () => {
+  const f = fake(
+    [clipped(700), clipped(400), clipped(400), ...[450, 400, 350, 300].map((y) => clipped(y))],
+    {},
+  );
+  const press = f.deps.press;
+  let expired = false;
+  f.deps.press = async (ref, context) => {
+    if (!expired) {
+      expired = true;
+      context.refuse('EVIDENCE_EXPIRED');
+    }
+    return press(ref, context);
+  };
+  const outcome = await walkBlock(block('1. Tap "go"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 0);
 });

@@ -26,6 +26,76 @@ const save = screen([element('@save', 'Save'), element('@draft', 'Save draft')])
 const target = step('Tap the Save button');
 const check = { kind: 'check' as const, text: 'The profile was saved', literal: false };
 
+for (const type of ['StaticText', 'Button']) {
+  test(`text waits save and replay only uncovered ${type} identities`, () => {
+    const observed = (covered: boolean, duplicate = true) =>
+      joinScreen(
+        [
+          {
+            ref: '@app',
+            index: 0,
+            type: 'Application',
+            rect: { x: 0, y: 0, width: 400, height: 800 },
+          },
+          {
+            ref: '@win',
+            index: 1,
+            parentIndex: 0,
+            type: 'Window',
+            rect: { x: 0, y: 0, width: 400, height: 800 },
+          },
+          {
+            ref: '@a',
+            index: 2,
+            parentIndex: 1,
+            type,
+            label: 'Done',
+            hittable: true,
+            rect: { x: 20, y: 100, width: 100, height: 44 },
+          },
+          ...(duplicate
+            ? [
+                {
+                  ref: '@b',
+                  index: 3,
+                  parentIndex: 1,
+                  type,
+                  label: 'Done',
+                  hittable: true,
+                  rect: { x: 20, y: covered ? 650 : 300, width: 100, height: 44 },
+                },
+              ]
+            : []),
+          {
+            ref: '@kb',
+            index: duplicate ? 4 : 3,
+            parentIndex: 1,
+            type: 'Keyboard',
+            rect: { x: 0, y: 500, width: 400, height: 300 },
+          },
+        ],
+        [],
+      );
+    const target = { phrase: 'Done', quoted: 'Done' };
+    const saved = visibleSelector(target, observed(false, false));
+    assert.deepEqual(saved, { text: 'Done' });
+    assert.deepEqual(visibleSelector(target, observed(true)), saved);
+    assert.equal(targetVisible({ ...target, exact: 'text' }, observed(true)), true);
+    const identified = observed(true);
+    identified.elements.find((e) => e.ref === '@a')!.testID = 'uncovered-done';
+    assert.deepEqual(visibleSelector(target, identified), { id: 'uncovered-done' });
+    assert.equal(visibleSelector(target, observed(false)), undefined);
+    assert.throws(
+      () => targetVisible({ ...target, exact: 'text' }, observed(false)),
+      /TARGET_AMBIGUOUS/,
+    );
+    if (type === 'Button') {
+      const action = prepareTarget({ kind: 'press', target }, observed(true));
+      assert.equal('refuse' in action && action.refuse, 'TARGET_AMBIGUOUS');
+    }
+  });
+}
+
 test('act uses the full map, inclusive minimum and margin, never the confidence summary', async () => {
   assert.deepEqual(ACT, { min: 0.55, margin: 0.2 });
   for (const [probabilities, expected] of [

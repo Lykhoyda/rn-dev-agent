@@ -96,6 +96,11 @@ const soleLabelTexts = new WeakMap<Element, Element>();
 const elementFrames = new WeakMap<Element, NonNullable<NativeNode['rect']>>();
 const nativeAncestors = new WeakMap<Element, Element[]>();
 const elementViewports = new WeakMap<Element, NonNullable<NativeNode['rect']>>();
+const keyboardCoveredElements = new WeakSet<Element>();
+
+export function keyboardCoversElement(element: Element): boolean {
+  return keyboardCoveredElements.has(element);
+}
 
 export function labelAncestorsOf(element: Element): readonly Element[] {
   return labelAncestors.get(element) ?? [];
@@ -900,6 +905,7 @@ export function join(
   const textDescendants = new Map<number, number[]>();
   nodes.forEach((n, i) => {
     if (n.rect) elementFrames.set(elements[i], n.rect);
+    if (underKeyboard(n, i)) keyboardCoveredElements.add(elements[i]);
     const ancestors: Element[] = [];
     for (let p = n.parentIndex; p !== undefined && p >= 0 && p < i; p = nodes[p].parentIndex)
       ancestors.push(elements[p]);

@@ -39,7 +39,7 @@ import {
   nativeLabelMayBeValue,
   privateCheckSubjects,
 } from './privacy.js';
-import { literalEvidence, type LiteralVerdict } from './evidence.js';
+import { literalEvidence, literalTextProjection, type LiteralVerdict } from './evidence.js';
 
 export { ACT, CHECK } from './questions.js';
 export const MAX_CANDIDATES = 30;
@@ -454,6 +454,7 @@ function prepareAssertion(
 
 function textIdentities(quoted: string, screen: Screen): number {
   if (literalEvidence(screen, quoted, 'equals').verdict !== 'pass') return 0;
+  screen = literalTextProjection(screen);
   const visible = {
     ...screen,
     elements: screen.elements.filter(
@@ -523,7 +524,11 @@ export function visibleSelector(target: Target, screen: Screen): Selector | unde
     return { id: quoted };
   if (target.exact === 'id') return undefined;
   if (literalEvidence(screen, quoted, 'equals').verdict !== 'pass') return undefined;
-  const labelled = exactIdentities(screen, { quoted, phrase: quoted, exact: 'text' }, 'wait')
+  const labelled = exactIdentities(
+    literalTextProjection(screen),
+    { quoted, phrase: quoted, exact: 'text' },
+    'wait',
+  )
     .map(({ element }) => element)
     .filter((e) => !e.offscreen);
   return target.exact === undefined && labelled.length === 1 && uniqueId(labelled[0].testID)

@@ -1,4 +1,4 @@
-import type { Screen } from './screen.js';
+import { keyboardCoversElement, type Screen } from './screen.js';
 
 export type LiteralVerdict = 'pass' | 'unsure' | 'fail';
 
@@ -8,6 +8,17 @@ export interface LiteralEvidence {
   label?: true;
 }
 
+export function literalTextProjection(screen: Screen): Screen {
+  if (screen.keyboardVisible === false || screen.uncoveredText === undefined) return screen;
+  return {
+    ...screen,
+    elements: screen.elements.filter((e) => !keyboardCoversElement(e)),
+    visibleText: screen.uncoveredText,
+    paintedText: screen.uncoveredText,
+    labelText: screen.uncoveredLabelText,
+  };
+}
+
 // One rule for literal checks, quoted waits, scroll-until and replay text waits.
 export function literalEvidence(
   screen: Screen,
@@ -15,10 +26,9 @@ export function literalEvidence(
   match: 'contains' | 'equals',
 ): LiteralEvidence {
   const hit = (line: string) => (match === 'contains' ? line.includes(text) : line === text);
-  const keyboard = screen.keyboardVisible !== false && screen.uncoveredText !== undefined;
-  if ((keyboard ? screen.uncoveredText! : screen.visibleText).some(hit)) return { verdict: 'pass' };
-  if ((keyboard ? screen.uncoveredLabelText : screen.labelText)?.some(hit))
-    return { verdict: 'pass', label: true };
+  const projected = literalTextProjection(screen);
+  if (projected.visibleText.some(hit)) return { verdict: 'pass' };
+  if (projected.labelText?.some(hit)) return { verdict: 'pass', label: true };
   if (screen.unresolvedText?.some(hit)) return { verdict: 'unsure' };
   // Absence is proven only by a complete native snapshot.
   return {
