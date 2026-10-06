@@ -421,7 +421,10 @@ function prepareAssertion(
       refuse: 'CANDIDATE_LIMIT',
       reason: `more than ${MAX_CANDIDATES} assertion contributions; the whole expectation cannot be judged within the evidence bound`,
     };
-  const gaps = projected.unknown.length > 0 || projected.unassociatedReact > 0;
+  const gaps =
+    projected.unknown.length > 0 ||
+    projected.unassociatedReact > 0 ||
+    (projected.capabilityGapContainers ?? 0) > 0;
   if (!projected.elements.length && gaps)
     return {
       refuse: 'SCREEN_EVIDENCE_INCOMPLETE',

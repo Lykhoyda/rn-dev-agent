@@ -97,6 +97,11 @@ const elementFrames = new WeakMap<Element, NonNullable<NativeNode['rect']>>();
 const nativeAncestors = new WeakMap<Element, Element[]>();
 const elementViewports = new WeakMap<Element, NonNullable<NativeNode['rect']>>();
 const keyboardCoveredElements = new WeakSet<Element>();
+// Press/fill from the element's own React evidence, without the screen-wide capability gaps.
+const localCapabilities = new WeakMap<
+  Element,
+  Pick<NonNullable<Element['semantic']>, 'press' | 'fill'>
+>();
 
 export function keyboardCoversElement(element: Element): boolean {
   return keyboardCoveredElements.has(element);
@@ -575,9 +580,8 @@ export function join(
             label !== undefined &&
             norm(d.text ?? d.label) === norm(label))),
     );
-    const capabilities = nativeCapabilities(kind, n.type, {
+    const hints = {
       press:
-        pressEvidenceGap !== undefined ||
         host?.capabilities.press === true ||
         interactiveRole(host?.role) ||
         reactCandidates.some(
@@ -586,11 +590,15 @@ export function join(
             (interactiveRole(d.role) && !(d.handlerless && !d.testID)),
         ),
       fill:
-        fillEvidenceGap !== undefined ||
         host?.capabilities.fill === true ||
         inputRole(host?.role) ||
         reactCandidates.some((d) => d.capabilities?.fill === true || inputRole(d.role)),
+    };
+    const capabilities = nativeCapabilities(kind, n.type, {
+      press: pressEvidenceGap !== undefined || hints.press,
+      fill: fillEvidenceGap !== undefined || hints.fill,
     });
+    const local = nativeCapabilities(kind, n.type, hints);
     if (host?.capabilities.press === true) capabilities.press = 'supported';
     if (host?.capabilities.fill === true) capabilities.fill = 'supported';
     const uniqueIdentity =
@@ -703,6 +711,7 @@ export function join(
       nativeStatus: observed?.status,
       nativeUnknownReason: observed?.status === 'unknown' ? observed.unknownReason : undefined,
     });
+    localCapabilities.set(element, local);
     return element;
   });
   digest.forEach((d, i) => {
@@ -1097,6 +1106,8 @@ export interface AssertionEvidence {
   elements: Element[];
   unknown: Array<{ element: Element; reason: 'visibility' | 'name-provenance' | 'content' }>;
   unassociatedReact: number;
+  // Plain containers left out only because their own evidence rules out press and fill despite a screen-wide gap.
+  capabilityGapContainers?: number;
   diagnostic?: VisibilityBlockerDiagnostic;
 }
 
@@ -1108,21 +1119,29 @@ export function visibilityView(
   if (refusal) return refusal;
   const elements: Element[] = [];
   const unknown: AssertionEvidence['unknown'] = [];
+  let capabilityGapContainers = 0;
   for (const e of screen.elements) {
     if (!e.semantic) return incomplete('an observation has no semantic facts');
     const native = e.semantic.nativePresence;
     if (native?.structural) continue;
     if (e.semantic.visibility === 'hidden' || e.semantic.visibility === 'offscreen') continue;
     // A plain container offering no operation names nothing its own descendants don't name themselves.
+    const ruledOut = (capability: 'press' | 'fill') =>
+      e.semantic![capability] === 'unsupported' ||
+      (e.semantic![capability] !== 'supported' &&
+        localCapabilities.get(e)?.[capability] === 'unsupported');
     if (
       native?.kind === 'other' &&
       (native.labelSource === 'none' || native.labelSource === 'descendant') &&
       e.value === undefined &&
       e.placeholder === undefined &&
-      e.semantic.press === 'unsupported' &&
-      e.semantic.fill === 'unsupported'
-    )
+      ruledOut('press') &&
+      ruledOut('fill')
+    ) {
+      if (e.semantic.press !== 'unsupported' || e.semantic.fill !== 'unsupported')
+        capabilityGapContainers++;
       continue;
+    }
     const control =
       ['button', 'input', 'switch', 'link', 'cell'].includes(native?.kind ?? e.kind) ||
       e.semantic.press === 'supported' ||
@@ -1157,6 +1176,7 @@ export function visibilityView(
     elements,
     unknown,
     unassociatedReact: screen.semanticUnassociatedReact ?? 0,
+    ...(capabilityGapContainers ? { capabilityGapContainers } : {}),
   };
   if (diagnostics && unknown.length) {
     try {

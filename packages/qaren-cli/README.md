@@ -259,6 +259,13 @@ cannot satisfy that requirement. Qualification is owned by
 [native navigation titles](../qaren-core/src/qa/native-presence.ts), with predicate
 eligibility in the [resolver](../qaren-core/src/qa/resolve.ts).
 Unsupported visual or layout claims remain uncertain.
+A phrase check judges at most 30 contributions. A plain native container with no
+label, value or placeholder of its own and no press or fill evidence of its own is
+not a contribution, even when unassociated React hosts leave press or fill unknown
+screen-wide; that screen-wide gap still keeps a rejected claim uncertain.
+Known limit: React host association is unavailable while more than one native
+window is captured, as with the software keyboard up, so phrase press and fill
+targets on such screens refuse with an unknown capability.
 Phrase waits capture fresh screen and presence evidence on every poll, even when the
 screen appears unchanged; prior observations do not establish current presence.
 
