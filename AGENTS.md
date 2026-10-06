@@ -9,9 +9,8 @@ notes here.
 The repository is mid-pivot from rn-dev-agent (an MCP server plus host plugins
 that drive React Native apps on simulators) to QaReN: a Rust CLI that owns the
 run and spawns a TypeScript child that reads the screen. `main` still ships
-rn-dev-agent 1.0.x; the migration is consolidated into one integration PR
-targeting `develop`. Completion and merge authority follow
-[Branches, CI And Release](#branches-ci-and-release). The QaReN
+rn-dev-agent 1.0.x; `develop` carries the migration as one PR per phase and
+merges into `main` as 2.0.0 once the label path runs end to end. The QaReN
 structure outline and TDD that the phase PRs cite are the specification; each
 phase PR names its Linear issue in the QaReN project.
 
@@ -26,10 +25,9 @@ The package cut, literal `qaren check`, Jev seam, Phase 4 blocks, and PR run/pub
 - `packages/qaren-core/`: TypeScript screen child, entered through `src/qa/walk.ts`. The `qa/` module owns parsing, judgments, screen projections, walking and the ledger, using the kept handlers, CDP helpers, native runners and learned-action domain. `corepack yarn build:core` generates uncommitted `dist/`; entries run as `node packages/qaren-core/dist/<entry>.js`. The package is private; `scripts/build-qaren-tarball.ts` bundles its spawned entries into the CLI tarball.
 - `packages/qaren-plugin/`: the one host package. Claude, Cursor and Codex
   manifests (`.claude-plugin/`, `.cursor-plugin/`, `.codex-plugin/`), a
-  SessionStart-only `hooks/hooks.json`, and `skills/`. The retained skills
-  describe 1.x workflows and are not current QaReN usage; use the
-  [CLI guide](packages/qaren-cli/README.md) until Phase 8 rewrites them.
-  Commands arrive in Phase 8. Its `package.json` is the version source for changesets and `qaren`
+  SessionStart-only `hooks/hooks.json`, and `skills/`. The five skills keep
+  their rn-dev-agent wording until Phase 8 rewrites them; commands arrive in
+  Phase 8. Its `package.json` is the version source for changesets and `qaren`
   is the only released package.
 - `packages/rn-fast-runner/` (package `qaren-ios-runner`) and
   `packages/rn-android-runner/` (package `qaren-android-runner`): native
@@ -222,12 +220,6 @@ Suite records and redacted logs live under `~/.qaren/native-suites/<run-id>`. Un
 
 ## Branches, CI And Release
 
-- QaReN 2.0.0 completion requires independent QA to pass both the Test App
-  baseline and the more complex staging app at the same immutable integration
-  head. CI and hermetic tests do not replace that acceptance. Merge the
-  integration PR into `develop` only after those passes; merging `develop`
-  into `main` requires approval. Company evidence stays private under the
-  [publication contract](packages/qaren-cli/README.md#test-a-pull-request).
 - `main` is protected and its only required check is `Build & Test`
   (`ci.yml`), which now requires `cargo-test` as well. Nothing reaches `main`
   except a PR carrying that check green.
