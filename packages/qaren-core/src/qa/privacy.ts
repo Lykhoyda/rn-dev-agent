@@ -229,12 +229,12 @@ export function matchPrivate(
   if (!rules.length && !fragments.length) return { text, hit: false };
   let hit = false;
   const patterns = rules.map((rule) => `(${rule.pattern})`);
-  if (fragments.length) patterns.push(whole(`(?:[${WORD}]+|[^${WORD}\\s])`));
+  if (fragments.length) patterns.push('\\S+');
   const pattern = new RegExp(patterns.join('|'), 'gu');
   const projected = text.replace(pattern, (match, ...groups) => {
     const index = rules.findIndex((_, i) => groups[i] !== undefined);
     if (index < 0) {
-      if (!fragments.some((value) => subsequence(match, value))) return match;
+      if (!fragments.some((value) => [...match].some((char) => value.includes(char)))) return match;
       hit = true;
       return MASK;
     }

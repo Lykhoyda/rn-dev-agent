@@ -84,7 +84,7 @@ test('fragment protection starts at fill dispatch and persists across navigation
   privacy.observe(later);
   assert.deepEqual(privacy.screenText(later), [MASK]);
   assert.equal(privacy.redact('5 | 0'), `${MASK} | ${MASK}`);
-  assert.equal(privacy.redactIdentifier('row-5'), `row-${MASK}`);
+  assert.equal(privacy.redactIdentifier('row-5'), MASK);
   assert.equal(privacy.maskForModel([], []).apply('5  0'), `${MASK}  ${MASK}`);
 });
 
@@ -111,7 +111,7 @@ test('secure fills mask letter fragments without assigning complete-value identi
   assert.equal(mask.apply('p'), MASK);
   assert.equal(mask.apply('p@ss'), mask.tokens[0]);
   assert.equal(mask.apply(mask.tokens[0]), mask.tokens[0]);
-  assert.equal(mask.applyPlanLine('1. Tap "p"'), `1. Tap "${MASK}"`);
+  assert.equal(mask.applyPlanLine('1. Tap "p"'), `1. ${MASK} ${MASK}`);
   assert.equal(mask.apply('ps'), MASK);
   assert.equal(privacy.canScreenshot(), false);
 });
@@ -121,4 +121,29 @@ test('dispatching one code does not enable fragment matching for future codes', 
   privacy.didFill('5038');
   assert.equal(privacy.redact('7 | 2'), '7 | 2');
   assert.equal(privacy.redact('5 | 0'), `${MASK} | ${MASK}`);
+});
+
+test('attached symbols in secure fragments are masked with their containing token', () => {
+  const privacy = new ObservedPrivacy(['p@ss']);
+  privacy.concealFallback('p@ss', true);
+  privacy.didFill('p@ss');
+  const mask = privacy.maskForModel(['p@ss'], []);
+  for (const fragment of ['p@s', 'xp@sx', 'p@s!', 'p!s']) {
+    const captured = screen([element('@echo', fragment, { kind: 'text' })]);
+    privacy.observe(captured);
+    assert.deepEqual(privacy.screenText(captured), [MASK]);
+    assert.equal(privacy.redact(fragment), MASK);
+    assert.equal(privacy.redactIdentifier(fragment), MASK);
+    assert.equal(mask.apply(fragment), MASK);
+    assert.equal(mask.applyPlanLine(`1. ${fragment}`), `1. ${MASK}`);
+    assert.equal(mask.describeElement(captured.elements[0], describe).includes('@'), false);
+    for (const policy of ['model', 'durable', 'identifier', 'persisted'] as const)
+      assert.deepEqual(matchPrivate(fragment, privacy.privateSet(), policy), {
+        text: MASK,
+        hit: true,
+      });
+    assert.equal(privacy.canScreenshot(), false);
+  }
+  assert.equal(mask.apply('p@ss'), mask.tokens[0]);
+  assert.equal(mask.apply(mask.tokens[0]), mask.tokens[0]);
 });
