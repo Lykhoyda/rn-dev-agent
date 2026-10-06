@@ -361,9 +361,15 @@ export async function walkBlock(
     }
   };
   // Scroll momentum outlives the drag; dispatching on a moving frame taps its stale centre.
+  // Compare native frame values only: runner key order varies and React-only elements have no frame.
   const settledCapture = async (item: Exclude<Item, { kind: 'check' }>): Promise<Observation> => {
     const geometry = (screen: Screen): string =>
-      JSON.stringify(screen.elements.map((e) => elementFrame(e) ?? null));
+      JSON.stringify(
+        screen.elements.flatMap((e) => {
+          const frame = elementFrame(e);
+          return frame ? [[frame.x, frame.y, frame.width, frame.height]] : [];
+        }),
+      );
     let observation = await capture(item);
     for (let readback = 0; readback < SCROLL_SETTLE_READBACKS; readback += 1) {
       usable(observation, item);

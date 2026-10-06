@@ -557,6 +557,53 @@ test('keyboard fallback refuses a wrapper that never settles after clearance', a
   assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
 });
 
+test('a wrapped pressable settles on equal native frames whatever key order the runner emits', async () => {
+  const keyed = (keys: ('x' | 'y' | 'width' | 'height')[], keyboardVisible: boolean): Screen => {
+    const frame = { x: 20, y: 300, width: 300, height: 44 };
+    const screen = covered(
+      join(
+        [
+          ...root(),
+          {
+            ref: '@target',
+            index: 2,
+            parentIndex: 1,
+            type: 'Button',
+            identifier: 'go',
+            label: 'Go',
+            hittable: true,
+            rect: Object.fromEntries(keys.map((key) => [key, frame[key]])) as typeof frame,
+          },
+        ],
+        [],
+      ),
+    );
+    targetOf(screen, '@target')!.testID = 'email-pressable';
+    screen.keyboardVisible = keyboardVisible;
+    screen.coverage = { native: 'complete', react: 'incomplete' };
+    return screen;
+  };
+  const f = fake(
+    [
+      keyed(['x', 'y', 'width', 'height'], false),
+      keyed(['y', 'width', 'x', 'height'], true),
+      keyed(['width', 'x', 'y', 'height'], true),
+      keyed(['height', 'y', 'x', 'width'], true),
+      keyed(['height', 'width', 'x', 'y'], true),
+    ],
+    {},
+  );
+  let typed = 0;
+  f.deps.typeFocused = async () => {
+    typed += 1;
+    return { ok: true, proven: false };
+  };
+  const outcome = await walkBlock(block('1. Fill "email" with "x"\n'), f.deps);
+  assert.doesNotMatch(outcome.failure?.seen ?? '', /SCROLL_UNSETTLED/);
+  assert.equal(typed, 1);
+  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
+});
+
 test('expired post-scroll evidence requires settlement again before dispatch', async () => {
   const f = fake(
     [clipped(700), clipped(400), clipped(400), ...[450, 400, 350, 300].map((y) => clipped(y))],
