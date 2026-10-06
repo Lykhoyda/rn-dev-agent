@@ -127,6 +127,7 @@ test('dispatching one code does not enable fragment matching for future codes', 
 test('fragment matching leaves noncontiguous secure text and numeric runs readable', () => {
   for (const [secret, readable] of [
     ['hunter-canary-77', ['hnr', 'h', 'h!n!r']],
+    ['4815', ['45', '85', '148', 'row-45']],
     ['5038', ['58', '305', 'row-58']],
   ] as const) {
     const privacy = new ObservedPrivacy([secret]);
@@ -136,6 +137,17 @@ test('fragment matching leaves noncontiguous secure text and numeric runs readab
       for (const policy of ['model', 'durable', 'identifier', 'persisted'] as const)
         assert.deepEqual(matchPrivate(text, privacy.privateSet(), policy), { text, hit: false });
   }
+});
+
+test('filled numeric codes mask contiguous runs and retain complete-value identity', () => {
+  const privacy = new ObservedPrivacy(['4815']);
+  privacy.didFill('4815');
+  for (const text of ['4', '8', '1', '5', '48', '81', '15', '481', '815', 'row-48'])
+    for (const policy of ['model', 'durable', 'identifier', 'persisted'] as const)
+      assert.deepEqual(matchPrivate(text, privacy.privateSet(), policy), { text: MASK, hit: true });
+  const mask = privacy.maskForModel(['4815'], []);
+  assert.equal(mask.apply('"4815"'), `"${mask.tokens[0]}"`);
+  assert.equal(mask.apply(mask.tokens[0]), mask.tokens[0]);
 });
 
 test('secure fragments do not mask unrelated words, identifiers or saved-block syntax', () => {

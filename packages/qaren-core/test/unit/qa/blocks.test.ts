@@ -139,6 +139,40 @@ test('serialization preserves isolated short fragments of long secrets', () => {
   assert.ok('yaml' in serializeBlock(block, passRows(block, {}), ios, secrets('existing-secret')));
 });
 
+test('serialization withholds filled-secret fragments in every saved content field', () => {
+  for (const [secret, fragments] of [
+    ['4815', ['4', '48', '81', '15', 'row-48']],
+    ['hunter-canary-77', ['hun', 'hunter', 'canary', 'r-c', 'xhunx']],
+  ] as const) {
+    const privacy = new ObservedPrivacy([secret]);
+    privacy.concealFallback(secret, true);
+    privacy.didFill(secret);
+    for (const fragment of fragments) {
+      for (const field of ['appId', 'slug', 'title', 'planHash', 'raw', 'text', 'id', 'label']) {
+        const block = blockOf('### Confirm\n1. Tap "Save"\n✓ "Ready"');
+        const rows = passRows(block, { [block.items[0].line]: { id: 'save-button' } });
+        const meta = { ...ios };
+        if (field === 'appId') meta.appId = fragment;
+        else if (field === 'slug' || field === 'title' || field === 'planHash')
+          block[field] = fragment;
+        else if (field === 'raw') block.items[0].raw = `1. Tap "${fragment}"`;
+        else if (field === 'text') {
+          const check = block.items[1];
+          assert.equal(check.kind, 'check');
+          if (check.kind === 'check') check.text = fragment;
+        } else rows[0].selector = field === 'id' ? { id: fragment } : { text: fragment };
+        if (field === 'slug') rows.forEach((row) => (row.block = block.slug));
+        assert.deepEqual(
+          serializeBlock(block, rows, meta, privacy.privateSet()),
+          { unsavable: 'contains a protected plan-typed value' },
+          `${field}: ${fragment}`,
+        );
+        assert.ok('yaml' in serializeBlock(block, rows, meta), `${field}: ${fragment}`);
+      }
+    }
+  }
+});
+
 test('plan list numbers that are digits of a protected code do not withhold the block', () => {
   const block = blockOf(
     '## QA\n\n### Open the code screen\n1. Tap "qa-otp-entry"\n2. Fill "qa-otp-email" with "qa@example.test"\n3. Tap "qa-otp-continue"\n4. Wait for "Enter the code" to appear\n5. Tap "qa-otp-help"\n',
