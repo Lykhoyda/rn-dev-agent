@@ -325,8 +325,8 @@ async function openSession(
           undefined,
           deadline,
         );
-        await awaitBundleReady((expr) => cdp.evaluate(expr), deadline);
       },
+      bundleReady: (deadline) => awaitBundleReady((expr) => cdp.evaluate(expr), deadline),
       // Same launch the CLI made: terminate, then open the dev client on its Metro.
       ...(platform === 'ios'
         ? {

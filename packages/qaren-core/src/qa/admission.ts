@@ -20,6 +20,8 @@ export interface AdmissionSteps {
   readinessMs: number;
   remainingMs(): number;
   attach(deadline: number): Promise<void>;
+  // Inside the attach deadline: the attached client must have run its bundle before anything reads it.
+  bundleReady?(deadline: number): Promise<void>;
   // A launch stuck on the dev-launcher never recovers by waiting: the one retry relaunches first.
   relaunch?(): Promise<void>;
   foreignDriver(): Promise<string | undefined>;
@@ -70,6 +72,11 @@ export async function admit(
   }
 }
 
+async function attachReady(steps: AdmissionSteps, deadline: number): Promise<void> {
+  await steps.attach(deadline);
+  await steps.bundleReady?.(deadline);
+}
+
 async function refuseForeignDriver(steps: AdmissionSteps): Promise<void> {
   const foreign = await interruptible(steps.foreignDriver);
   if (foreign !== undefined) throw new HandlerError('BUSY_FOREIGN_FLOW', foreign);
@@ -80,7 +87,7 @@ async function attach(steps: AdmissionSteps): Promise<void> {
   try {
     const deadline = performance.now() + steps.remainingMs();
     await withDeadline(deadline, new CDPProbeTimeoutError('CDP attach deadline exceeded'), () =>
-      steps.attach(deadline),
+      attachReady(steps, deadline),
     );
     return;
   } catch (error) {
@@ -108,7 +115,7 @@ async function attach(steps: AdmissionSteps): Promise<void> {
     try {
       const deadline = performance.now() + steps.remainingMs();
       await withDeadline(deadline, new CDPProbeTimeoutError('CDP attach deadline exceeded'), () =>
-        steps.attach(deadline),
+        attachReady(steps, deadline),
       );
       return;
     } catch (error) {

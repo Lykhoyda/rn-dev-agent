@@ -3,7 +3,6 @@ import { createStop } from '../../../dist/qa/stop.js';
 import { TargetReadinessTimeoutError } from '../../../dist/cdp/discovery.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import {
   LOAD_ENVELOPE,
   admit,
@@ -388,14 +387,25 @@ test('a bundle that never becomes ready ends attach as a readiness timeout, neve
   assert.ok(reads >= 1);
 });
 
-test('the core attach waits for the bundle before the origin proof can run', () => {
-  const source = readFileSync(new URL('../../../dist/qa/walk.js', import.meta.url), 'utf8');
-  const connect = source.indexOf('await cdp.connectExact(');
-  const ready = source.indexOf('await awaitBundleReady(', connect);
-  assert.ok(connect >= 0 && ready > connect, 'readiness follows the exact connect');
-  assert.ok(ready < source.indexOf('prove: () => prove('), 'and precedes the origin proof step');
-  assert.ok(
-    ready < source.indexOf('await clearDevOverlays('),
-    'and the dev-menu hide never runs on an unrendered app',
-  );
+test('the attached client must have run its bundle before the driver probe, session or origin proof', async () => {
+  const { calls, stop, steps } = harness();
+  steps.bundleReady = async () => {
+    calls.push('bundleReady');
+  };
+  assert.deepEqual(await admit(steps, stop), PROVEN);
+  assert.deepEqual(calls, ['attach', 'bundleReady', 'foreignDriver', 'open', 'prove']);
+});
+
+test('a bundle still building at the attach deadline refuses as an attach timeout, not an origin mismatch', async () => {
+  const { calls, stop, steps } = harness();
+  steps.bundleReady = async () => {
+    calls.push('bundleReady');
+    throw new TargetReadinessTimeoutError('React never became ready on the attached client');
+  };
+  await assert.rejects(admit(steps, stop), (error: Error & { code?: string }) => {
+    assert.equal(error.code, 'CDP_NOT_CONNECTED');
+    assert.match(error.message, /React never became ready/);
+    return true;
+  });
+  assert.ok(!calls.includes('prove'), calls.join());
 });

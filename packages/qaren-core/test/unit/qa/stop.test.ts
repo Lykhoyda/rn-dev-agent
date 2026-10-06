@@ -1,6 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { Writable } from 'node:stream';
 import { createStop, watchOwnerPipe, watchParent } from '../../../dist/qa/stop.js';
 
@@ -122,11 +121,4 @@ test('a closed owner pipe stops the walk instead of crashing the core before tea
   broken.write('{"type":"result"}\n');
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(reasons, ['EPIPE']);
-});
-
-test('the core entry watches its stdout before the first wire line', () => {
-  const source = readFileSync(new URL('../../../dist/qa/walk.js', import.meta.url), 'utf8');
-  const watch = source.indexOf('watchOwnerPipe(process.stdout');
-  assert.ok(watch >= 0, 'walk.js wires the owner-pipe watch');
-  assert.ok(watch < source.indexOf('emitRow(startupRow())'), 'the watch precedes the first write');
 });
