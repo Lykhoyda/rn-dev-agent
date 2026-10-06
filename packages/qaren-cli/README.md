@@ -423,10 +423,14 @@ opaque identity tokens; durable text uses `•••`; a match withholds saved b
 Displayed identifiers use the same matcher while operational identifiers remain
 usable. After dispatching a numeric code of at least three digits or a secure
 field fill, the same matcher also masks contiguous fragments in every outward
-projection, independent of layout or semantic kind. Numeric runs must occur
-contiguously in the code, including single digits; secure-text fragments require
-at least three characters, with attached symbols retained in the match.
-fragment masks do not establish complete-value identity in model comparisons.
+projection, independent of layout or semantic kind. Complete-value matching runs
+first, preserving identity tokens even in quoted or prefixed text; fragment
+matching processes only the text left unmasked. A fragment match masks the whole
+whitespace-delimited token containing it. Numeric runs must occur contiguously
+in the code, including single digits; secure-text fragments match at least three
+contiguous word characters, including within longer words, or an attached-symbol
+sequence such as `p@s` in `p@ss`. Fragment masks do not establish complete-value
+identity in model comparisons.
 Known limit: unrelated text matching a fragment of a filled secret is also masked.
 
 Short typed values (one or two characters) are protected in straight or curly
@@ -609,9 +613,11 @@ Discovered or patched block writes are deferred until the walk finishes. Values
 preclassified from the plan or protected by private observations or keyboard
 fallback anywhere in the same run are checked under those rules.
 A matching block title, header field, raw comment, fill
-literal, literal assertion, stored selector or serialized YAML withholds the
-block rather than rewriting its bytes. Structural plan numbering is excluded
-from matching; filled-secret fragments also withhold matching saved-block content.
+literal, literal assertion or stored selector withholds the block rather than
+rewriting its bytes, including matches to filled-secret fragments under the
+[shared masking rules](#input-value-masking). Structural plan numbering is
+excluded from matching. The final serialized YAML check matches complete
+protected values; generated command syntax does not enable fragment withholding.
 The value-free reason is
 `contains a protected plan-typed value` in `blocks_not_saved`, including when the
 value was observed rather than typed. Existing saved actions are not removed.
