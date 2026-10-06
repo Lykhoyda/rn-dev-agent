@@ -148,7 +148,7 @@ test('serialization withholds filled-secret fragments in every saved content fie
     privacy.concealFallback(secret, true);
     privacy.didFill(secret);
     for (const fragment of fragments) {
-      for (const field of ['appId', 'slug', 'title', 'planHash', 'raw', 'text', 'id', 'label']) {
+      for (const field of ['appId', 'slug', 'title', 'raw', 'text', 'id', 'label']) {
         const block = blockOf('### Confirm\n1. Tap "Save"\n✓ "Ready"');
         const rows = passRows(block, { [block.items[0].line]: { id: 'save-button' } });
         const meta = { ...ios };
@@ -170,6 +170,48 @@ test('serialization withholds filled-secret fragments in every saved content fie
         assert.ok('yaml' in serializeBlock(block, rows, meta), `${field}: ${fragment}`);
       }
     }
+  }
+});
+
+test('a derived planHash sharing digits with a filled code does not withhold an ordinary block', () => {
+  const privacy = new ObservedPrivacy();
+  privacy.concealFallback('482916');
+  privacy.didFill('482916');
+  const block = blockOf(
+    '### Back to the start\n1. Go back\n2. Wait for "Welcome" to appear\n✓ "0"',
+  );
+  const rows = passRows(block, { [block.items[1].line]: { text: 'Welcome' } });
+  block.planHash = 'ab29cdef4891ab';
+  const result = serializeBlock(block, rows, ios, privacy.privateSet());
+  assert.ok('yaml' in result, JSON.stringify(result));
+  assert.match(result.yaml, /# planHash: ab29cdef4891ab/);
+  block.planHash = 'ab482916cd';
+  assert.ok('unsavable' in serializeBlock(block, rows, ios, privacy.privateSet()));
+  block.planHash = 'ab29cdef4891ab';
+  for (const field of ['appId', 'slug', 'title', 'id', 'label', 'fill'] as const) {
+    const copy = blockOf(
+      '### Back to the start\n1. Go back\n2. Wait for "Welcome" to appear\n3. Fill "Code" with "x"\n',
+    );
+    copy.planHash = block.planHash;
+    const meta = { ...ios };
+    const copyRows = passRows(copy, {
+      [copy.items[1].line]: { text: 'Welcome' },
+      [copy.items[2].line]: { id: 'code-field' },
+    });
+    if (field === 'appId') meta.appId = 'app29';
+    else if (field === 'slug' || field === 'title') copy[field] = 'step-29';
+    else if (field === 'id') copyRows[1].selector = { id: 'row-29' };
+    else if (field === 'label') copyRows[1].selector = { text: 'Row 29' };
+    else {
+      const fill = copy.items[2];
+      if (fill.kind === 'fill') fill.text = '29';
+    }
+    if (field === 'slug') copyRows.forEach((row) => (row.block = copy.slug));
+    assert.deepEqual(
+      serializeBlock(copy, copyRows, meta, privacy.privateSet()),
+      { unsavable: 'contains a protected plan-typed value' },
+      field,
+    );
   }
 });
 

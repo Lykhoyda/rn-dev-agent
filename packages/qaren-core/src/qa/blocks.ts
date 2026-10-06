@@ -98,7 +98,7 @@ export function serializeBlock(
   const protectedContent = (texts: string[]): boolean =>
     texts.some((text) => matchPrivate(text, privateSet, 'persisted').hit);
   const withheld = { unsavable: 'contains a protected plan-typed value' };
-  if (protectedContent([meta.appId, block.slug, block.title, block.planHash])) return withheld;
+  if (protectedContent([meta.appId, block.slug, block.title])) return withheld;
   const lines = [
     yaml.stringify({ appId: meta.appId }, { lineWidth: 0 }).trimEnd(),
     '---',
