@@ -670,3 +670,24 @@ test('a literal wait over a changing screen stays unsure at its deadline', async
   assert.equal(result.verdict, 'FAIL');
   assert.match(result.failure?.seen ?? '', /VISIBILITY_UNSURE: ITEM_DEADLINE_EXCEEDED/);
 });
+
+test('a literal wait over an unchanged screen still fails as absent when its last capture ends past the deadline', async () => {
+  const f = walker(
+    [screen(text('Baseline'))],
+    scriptedJudge(() => assert.fail('literal wait is model-free')),
+  );
+  const capture = f.deps.captureScreen;
+  f.deps.captureScreen = async (...args) => {
+    const late = f.deps.now() >= WAIT_BUDGET_MS - WAIT_POLL_MS;
+    const observed = await capture(...args);
+    if (late) await f.deps.sleep(WAIT_POLL_MS);
+    return observed;
+  };
+  const result = await runPlan(parsePlan('1. Wait for "Absent sentinel"').blocks!, f.deps);
+  assert.equal(result.verdict, 'FAIL');
+  assert.match(
+    result.failure?.seen ?? '',
+    new RegExp(`^"Absent sentinel" did not appear within ${WAIT_BUDGET_MS / 1000}s`),
+  );
+  assert.doesNotMatch(result.failure?.seen ?? '', /VISIBILITY_UNSURE/);
+});

@@ -1046,8 +1046,13 @@ export async function walkBlock(
           while (!found && deps.now() < deadline) {
             await pause(Math.min(WAIT_POLL_MS, deadline - deps.now()));
             if (deps.now() >= deadline) break;
-            observation = await capture(item);
-            found = await visible(observation);
+            try {
+              found = await visible(await capture(item));
+            } catch (error) {
+              // A capture finishing past the deadline is not evidence; judge the ones already made.
+              if (!(error instanceof EvidenceExpired) || !error.itemExpired) throw error;
+              break;
+            }
           }
           if (!found) {
             if (unsure) throw unresolvedText(item.target.quoted!);
