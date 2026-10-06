@@ -604,6 +604,76 @@ test('a wrapped pressable settles on equal native frames whatever key order the 
   assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
 });
 
+for (const wait of [false, true]) {
+  test(`a fill after an explicit scroll${wait ? ' and a wait' : ''} dispatches on a settled frame`, async () => {
+    const f = fake(
+      [
+        at(600, 'TextField'),
+        at(500, 'TextField'),
+        ...(wait ? [at(470, 'TextField')] : []),
+        at(450, 'TextField'),
+        at(420, 'TextField'),
+        at(420, 'TextField'),
+      ],
+      {},
+    );
+    const plan = `1. Scroll down\n${wait ? '2. Wait for "field"\n3' : '2'}. Fill "field" with "x"\n`;
+    const outcome = await walkBlock(block(plan), f.deps);
+    assert.equal(outcome.block.outcome, 'pass');
+    const between = f.calls.slice(
+      f.calls.indexOf('scroll down') + 1,
+      f.calls.indexOf('fill @target'),
+    );
+    assert.deepEqual(between, Array(wait ? 5 : 4).fill('capture'));
+  });
+}
+
+test('a fill opening the next block settles after the previous block ends with a scroll', async () => {
+  const f = fake(
+    [
+      at(600, 'TextField'),
+      at(500, 'TextField'),
+      at(450, 'TextField'),
+      at(420, 'TextField'),
+      at(420, 'TextField'),
+    ],
+    {},
+  );
+  const sequence = { observation: 0 };
+  const scrolled = await walkBlock(block('1. Scroll down\n'), f.deps, 0, [], undefined, sequence);
+  assert.equal(scrolled.block.outcome, 'pass');
+  const outcome = await walkBlock(
+    block('1. Fill "field" with "x"\n'),
+    f.deps,
+    0,
+    [],
+    undefined,
+    sequence,
+  );
+  assert.equal(outcome.block.outcome, 'pass');
+  const between = f.calls.slice(
+    f.calls.indexOf('scroll down') + 1,
+    f.calls.indexOf('fill @target'),
+  );
+  assert.deepEqual(between, Array(4).fill('capture'));
+});
+
+test('a fill after an explicit scroll refuses a frame that never settles', async () => {
+  const f = fake(
+    [
+      at(600, 'TextField'),
+      at(500, 'TextField'),
+      ...[450, 400, 350, 300, 250].map((y) => at(y, 'TextField')),
+    ],
+    {},
+  );
+  const outcome = await walkBlock(block('1. Scroll down\n2. Fill "field" with "x"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.match(outcome.failure?.seen ?? '', /SCROLL_UNSETTLED/);
+  assert.equal(f.calls.filter((c) => c.startsWith('fill')).length, 0);
+  assert.doesNotMatch(JSON.stringify(outcome), /ACTION_OUTCOME_UNCERTAIN/);
+});
+
 test('expired post-scroll evidence requires settlement again before dispatch', async () => {
   const f = fake(
     [clipped(700), clipped(400), clipped(400), ...[450, 400, 350, 300].map((y) => clipped(y))],

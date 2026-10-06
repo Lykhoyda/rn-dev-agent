@@ -194,7 +194,9 @@ export async function walkBlock(
   shotIndex = 0,
   typed: string[] = [],
   privacy = new ObservedPrivacy(typed),
-  sequence: { observation: number; publicationInterrupted?: boolean } = { observation: 0 },
+  sequence: { observation: number; publicationInterrupted?: boolean; momentum?: boolean } = {
+    observation: 0,
+  },
   opts: WalkOptions = {},
 ): Promise<WalkOutcome> {
   const replay = opts.mode === 'replay';
@@ -374,7 +376,10 @@ export async function walkBlock(
     for (let readback = 0; readback < SCROLL_SETTLE_READBACKS; readback += 1) {
       usable(observation, item);
       const next = await capture(item);
-      if (geometry(next.screen) === geometry(observation.screen)) return next;
+      if (geometry(next.screen) === geometry(observation.screen)) {
+        sequence.momentum = false;
+        return next;
+      }
       observation = next;
     }
     throw new ResolutionError({
@@ -497,6 +502,8 @@ export async function walkBlock(
     try {
       context.check();
       if (item.kind === 'fill') privacy.didFill();
+      // A scroll step's momentum outlives the step and its block; the next targeted dispatch settles first.
+      if (item.kind === 'scroll') sequence.momentum = true;
       const result = await send(context);
       context.assertComplete();
       diagnostic(item, observation, 'dispatch', 'COMPLETED', context.authorizations);
@@ -1159,13 +1166,14 @@ export async function walkBlock(
         let refusedIdentity: Element | undefined;
         const captureBeforeDispatch = (): Promise<Observation> =>
           (item.kind === 'press' || item.kind === 'fill') &&
-          (scrolled || fillIdentity !== undefined)
+          (scrolled || sequence.momentum || fillIdentity !== undefined)
             ? settledCapture(item)
             : capture(item);
         const maxAttempts = recovered.has(item) ? 1 : 2;
         for (let attempt = 1; attempt <= maxAttempts && !outcome; attempt += 1) {
           currentAttempt = attempt;
-          const held = cached?.item === item ? cached : undefined;
+          const settling = (item.kind === 'press' || item.kind === 'fill') && sequence.momentum;
+          const held = cached?.item === item && !settling ? cached : undefined;
           let before = held?.observation ?? (await captureBeforeDispatch());
           cached = undefined;
           let ref: string | undefined;

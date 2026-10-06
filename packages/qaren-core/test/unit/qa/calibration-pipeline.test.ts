@@ -272,7 +272,7 @@ test('readbacks require their own post-mutation capture, not rebound pre-action 
   const { ledger, events } = await fixedPlanPipeline();
   const baseline = analyze(events, ledger);
   assert.equal(baseline.pass, true);
-  assert.equal(baseline.counts.captures, 30);
+  assert.equal(baseline.counts.captures, 31);
   for (const mutation of events.filter((e) => e.stage === 'mutation' && e.edge === 'end')) {
     await t.test(`line ${mutation.line}`, () => {
       const readback = events.find(
@@ -291,7 +291,7 @@ test('readbacks require their own post-mutation capture, not rebound pre-action 
           .map((e) => (e === readback ? { ...e, observation: mutation.observation } : e)),
       );
       const result = analyze(tampered, ledger);
-      assert.equal(result.counts.captures, 29);
+      assert.equal(result.counts.captures, 30);
       assert.equal(
         result.pass,
         false,
@@ -304,7 +304,7 @@ test('readbacks require their own post-mutation capture, not rebound pre-action 
         ),
         ledger,
       );
-      assert.equal(rebound.counts.captures, 30);
+      assert.equal(rebound.counts.captures, 31);
       assert.ok(
         rebound.failures.includes('READBACK_MISSING'),
         'an unbound post-action capture cannot validate pre-action readback',
