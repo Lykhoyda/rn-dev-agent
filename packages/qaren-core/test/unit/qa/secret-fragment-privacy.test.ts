@@ -5,6 +5,7 @@ import { join, describe, type NativeNode } from '../../../dist/qa/screen.js';
 import { element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import { runPlan } from '../../../dist/qa/walker.js';
+import { decideScreen } from '../../../dist/qa/resolve.js';
 
 for (const [kind, entered, caret] of [
   ['Button', '5', false],
@@ -146,4 +147,56 @@ test('attached symbols in secure fragments are masked with their containing toke
   }
   assert.equal(mask.apply('p@ss'), mask.tokens[0]);
   assert.equal(mask.apply(mask.tokens[0]), mask.tokens[0]);
+});
+
+test('prefixed complete values remain protected before fragment masking', () => {
+  const privacy = new ObservedPrivacy(['5038', 'alice@example.test']);
+  privacy.didFill('5038');
+  for (const text of ['Account:alice@example.test', 'Text "alice@example.test"']) {
+    assert.equal(privacy.redact(text), text.replace('alice@example.test', MASK));
+    assert.equal(privacy.redactIdentifier(text), text.replace('alice@example.test', MASK));
+    for (const policy of ['durable', 'identifier', 'persisted'] as const)
+      assert.deepEqual(matchPrivate(text, privacy.privateSet(), policy), {
+        text: text.replace('alice@example.test', MASK),
+        hit: true,
+      });
+  }
+  const captured = screen([element('@echo', 'alice@example.test', { kind: 'text' })]);
+  privacy.observe(captured);
+  const mask = privacy.maskForModel(['5038', 'alice@example.test'], []);
+  assert.equal(
+    mask.describeElement(captured.elements[0], describe).includes('alice@example.test'),
+    false,
+  );
+  assert.equal(mask.apply('Account:alice@example.test'), `Account:${mask.tokens[1]}`);
+});
+
+test('quoted complete codes retain model identity and definite phrase checks', async () => {
+  const privacy = new ObservedPrivacy(['5038']);
+  privacy.didFill('5038');
+  const mask = privacy.maskForModel(['5038'], []);
+  assert.equal(mask.apply('"5038"'), `"${mask.tokens[0]}"`);
+  assert.equal(mask.apply('Code:5038'), `Code:${mask.tokens[0]}`);
+  assert.equal(mask.applyPlanLine('1. Type "5038"'), `1. Type "${mask.tokens[0]}"`);
+  assert.deepEqual(
+    matchPrivate('"5038" 5', privacy.privateSet(), 'model', () => '[identity3]'),
+    {
+      text: `"[identity3]" ${MASK}`,
+      hit: true,
+    },
+  );
+  const captured = screen([element('@code', 'Code:5038', { kind: 'text' })]);
+  const judge = scriptedJudge((questions) =>
+    Object.fromEntries(Object.keys(questions).map((id) => [id, { type: 'noul', noul: 0.99 }])),
+  );
+  const decision = await decideScreen(
+    captured,
+    judge,
+    { kind: 'check', text: '"5038" is visible', literal: false, line: 1 },
+    undefined,
+    ['5038'],
+    privacy,
+  );
+  assert.equal(decision.check, 'pass');
+  assert.equal(judge.requests.length, 1);
 });

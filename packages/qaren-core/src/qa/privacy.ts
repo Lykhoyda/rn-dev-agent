@@ -228,19 +228,34 @@ export function matchPrivate(
   const fragments = (set.fragments ?? []).flatMap(forms).map((value) => value.replace(/\s/gu, ''));
   if (!rules.length && !fragments.length) return { text, hit: false };
   let hit = false;
-  const patterns = rules.map((rule) => `(${rule.pattern})`);
-  if (fragments.length) patterns.push('\\S+');
-  const pattern = new RegExp(patterns.join('|'), 'gu');
-  const projected = text.replace(pattern, (match, ...groups) => {
-    const index = rules.findIndex((_, i) => groups[i] !== undefined);
-    if (index < 0) {
-      if (!fragments.some((value) => [...match].some((char) => value.includes(char)))) return match;
+  const parts: { text: string; masked: boolean }[] = [];
+  let offset = 0;
+  if (rules.length) {
+    const pattern = new RegExp(rules.map((rule) => `(${rule.pattern})`).join('|'), 'gu');
+    for (const match of text.matchAll(pattern)) {
+      const index = rules.findIndex((_, i) => match[i + 1] !== undefined);
+      parts.push({ text: text.slice(offset, match.index), masked: false });
+      parts.push({
+        text: policy === 'model' ? (token?.(rules[index].value) ?? MASK) : MASK,
+        masked: true,
+      });
+      offset = match.index + match[0].length;
       hit = true;
-      return MASK;
     }
-    hit = true;
-    return policy === 'model' ? (token?.(rules[index].value) ?? MASK) : MASK;
-  });
+  }
+  parts.push({ text: text.slice(offset), masked: false });
+  const projected = parts
+    .map((part) =>
+      part.masked
+        ? part.text
+        : part.text.replace(/\S+/gu, (match) => {
+            if (!fragments.some((value) => [...match].some((char) => value.includes(char))))
+              return match;
+            hit = true;
+            return MASK;
+          }),
+    )
+    .join('');
   return { text: projected, hit };
 }
 
