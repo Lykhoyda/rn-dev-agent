@@ -34,6 +34,7 @@ import {
   getPluginVersion,
   REQUIRED_ANDROID_COMMANDS,
   REQUIRED_ANDROID_FEATURES,
+  classifyRunnerCompatibility,
 } from '../../../dist/runners/protocol.js';
 
 afterEach(() => {
@@ -74,6 +75,40 @@ function runner(
     return Response.json(reply(body));
   });
   return sends;
+}
+
+test('a lagging runner without the target-frame guard is incompatible', () => {
+  const health = {
+    protocolVersion: RUNNER_PROTOCOL_VERSION,
+    commands: [...REQUIRED_IOS_COMMANDS],
+    capabilities: REQUIRED_IOS_FEATURES.filter((feature) => feature !== 'TARGET_FRAME_GUARD_V1'),
+  };
+  assert.deepEqual(
+    classifyRunnerCompatibility(health, null, REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES),
+    {
+      compatible: false,
+      reason: 'missing-features',
+      missing: ['TARGET_FRAME_GUARD_V1'],
+    },
+  );
+});
+
+for (const command of ['tap', 'type'] as const) {
+  test(`the native moved-target refusal preserves mutation none through ${command}`, async () => {
+    runner(() => ({
+      ok: false,
+      error: {
+        code: 'TARGET_MOVED_BEFORE_DISPATCH',
+        message: 'target moved before dispatch; no tap or typing was performed',
+        mutation: 'none',
+      },
+    }));
+    const result = await runIOS({ command, bundleId: 'qa.app', x: 10, y: 20, text: 'x' });
+    assert.equal(result.isError, true);
+    const envelope = JSON.parse(result.content[0].text);
+    assert.equal(envelope.code, 'TARGET_MOVED_BEFORE_DISPATCH');
+    assert.equal(envelope.meta.mutation, 'none');
+  });
 }
 
 test('fast swipe refuses at expiry without sending or probing status', async () => {

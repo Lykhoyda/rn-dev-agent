@@ -432,12 +432,17 @@ extension RnFastRunnerTests {
         case .proceed(let status):
           keyboardGuardStatus = status
         }
-        let liveHittable = liveTargetHittable(app: activeApp, command: command)
-        if DispatchGuard.decide(liveHittable: liveHittable, keyboardContainsPoint: false) == .occluded {
+        let liveCheck = liveTargetCheck(app: activeApp, command: command, deadline: ProcessInfo.processInfo.systemUptime + 0.3)
+        switch DispatchGuard.decide(liveHittable: liveCheck.hittable, keyboardContainsPoint: false, targetMoved: liveCheck == .moved) {
+        case .moved:
+          return Response(ok: false, error: ErrorPayload(code: "TARGET_MOVED_BEFORE_DISPATCH", message: Self.movedDispatchMessage, mutation: "none"))
+        case .occluded:
           return Response(
             ok: false,
             error: ErrorPayload(code: "FOCUS_TARGET_OCCLUDED", message: Self.occludedDispatchMessage, mutation: "none")
           )
+        case .proceed:
+          break
         }
         var outcome = RunnerInteractionOutcome.performed
         let timing = measureGesture {
@@ -460,7 +465,7 @@ extension RnFastRunnerTests {
             referenceHeight: touchFrame.referenceHeight,
             keyboardGuard: keyboardGuardStatus,
             keyboardGuardMs: keyboardGuardMs,
-            occlusionCheck: liveHittable == nil ? "unavailable" : "hit-tested"
+            occlusionCheck: liveCheck.hittable == nil ? "unavailable" : "hit-tested"
           )
         )
       }
@@ -738,6 +743,9 @@ extension RnFastRunnerTests {
       )
       withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
         resolved = resolveTypeCommandTarget(app: activeApp, command: command)
+      }
+      if liveTargetCheck(app: activeApp, command: command, deadline: hitTestDeadline) == .moved {
+        return Response(ok: false, error: ErrorPayload(code: "TARGET_MOVED_BEFORE_DISPATCH", message: Self.movedDispatchMessage, mutation: "none"))
       }
       let target: XCUIElement
       let inputResolution: String

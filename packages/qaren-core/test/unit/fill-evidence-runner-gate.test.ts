@@ -30,7 +30,7 @@ test('a runner without FILL_EVIDENCE_V1 is incompatible on both platforms', () =
     [
       REQUIRED_IOS_COMMANDS,
       REQUIRED_IOS_FEATURES,
-      ['EXACT_KEYBOARD_TARGET_GUARD', 'HIT_TESTED_DISPATCH_V1'],
+      ['EXACT_KEYBOARD_TARGET_GUARD', 'HIT_TESTED_DISPATCH_V1', 'TARGET_FRAME_GUARD_V1'],
     ],
     [REQUIRED_ANDROID_COMMANDS, REQUIRED_ANDROID_FEATURES, ['APP_SCOPED_EXACT_INTERACTION']],
   ] as const) {
@@ -91,36 +91,38 @@ for (const capable of [false, true]) {
   });
 }
 
-test('iOS missing fill evidence rebuilds once at open', async () => {
-  const { ensureRunnerForCommand } = await import('../../dist/agent-device-wrapper.js');
-  const events: string[] = [];
-  const probes = [
-    { liveness: 'stale', staleReason: 'missing-features', missingFeatures: ['FILL_EVIDENCE_V1'] },
-    { liveness: 'alive' },
-  ];
-  const result = await ensureRunnerForCommand('U1', 'dev.fixture', {
-    prebuilt: () => true,
-    adopt: () => {},
-    allowArtifactRebuild: true,
-    probe: async () => probes.shift() as never,
-    ensure: async (_device, _app, opts) => {
-      assert.equal(opts?.forceLocalBuild, true);
-      events.push('build');
-    },
-    reap: async () => {
-      events.push('reap');
-    },
-    invalidateArtifact: () => {
-      events.push('invalidate');
-    },
-    acquireBuildLock: () => true,
-    releaseBuildLock: () => {},
-    pluginVersion: 'fixture',
-    rebuildBudget: { alreadyRebuiltFor: () => false, recordRebuild: () => {} },
+for (const feature of ['FILL_EVIDENCE_V1', 'TARGET_FRAME_GUARD_V1']) {
+  test(`iOS missing ${feature} rebuilds once at open`, async () => {
+    const { ensureRunnerForCommand } = await import('../../dist/agent-device-wrapper.js');
+    const events: string[] = [];
+    const probes = [
+      { liveness: 'stale', staleReason: 'missing-features', missingFeatures: [feature] },
+      { liveness: 'alive' },
+    ];
+    const result = await ensureRunnerForCommand('U1', 'dev.fixture', {
+      prebuilt: () => true,
+      adopt: () => {},
+      allowArtifactRebuild: true,
+      probe: async () => probes.shift() as never,
+      ensure: async (_device, _app, opts) => {
+        assert.equal(opts?.forceLocalBuild, true);
+        events.push('build');
+      },
+      reap: async () => {
+        events.push('reap');
+      },
+      invalidateArtifact: () => {
+        events.push('invalidate');
+      },
+      acquireBuildLock: () => true,
+      releaseBuildLock: () => {},
+      pluginVersion: 'fixture',
+      rebuildBudget: { alreadyRebuiltFor: () => false, recordRebuild: () => {} },
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(events, ['reap', 'invalidate', 'build']);
   });
-  assert.equal(result.ok, true);
-  assert.deepEqual(events, ['reap', 'invalidate', 'build']);
-});
+}
 
 test('Android reusable runner with missing fill evidence emits the bounded rebuild signal', async () => {
   const {

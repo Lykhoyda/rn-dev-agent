@@ -15,6 +15,27 @@ const OCCLUDED: ActResult = {
   error: 'FOCUS_TARGET_OCCLUDED: the focus or tap point is covered by another element',
 };
 
+for (const kind of ['press', 'fill'] as const) {
+  test(`a native moved-target refusal never succeeds or clears by scrolling (${kind})`, async () => {
+    const type = kind === 'press' ? 'Button' : 'TextField';
+    const moved: ActResult = {
+      ok: false,
+      proven: false,
+      mutation: 'none',
+      error:
+        'TARGET_MOVED_BEFORE_DISPATCH: target moved before dispatch; no tap or typing was performed',
+    };
+    const f = fake([at(400, type)], { [kind]: [moved, moved] });
+    const outcome = await walkBlock(
+      block(kind === 'press' ? '1. Tap "go"\n' : '1. Fill "field" with "x"\n'),
+      f.deps,
+    );
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.match(outcome.failure?.seen ?? '', /TARGET_MOVED_BEFORE_DISPATCH/);
+    assert.equal(f.calls.filter((call) => call.startsWith('scroll')).length, 0);
+  });
+}
+
 const root = (): NativeNode[] => [
   { ref: '@app', index: 0, type: 'Application', rect: { x: 0, y: 0, width: 400, height: 800 } },
   {

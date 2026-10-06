@@ -665,6 +665,9 @@ extension RnFastRunnerTests {
   static let occludedDispatchMessage =
     "FOCUS_TARGET_OCCLUDED: the focus or tap point is covered by another element (keyboard, bar or overlay); no tap or typing was performed. Scroll the target clear, then retry."
 
+  static let movedDispatchMessage =
+    "TARGET_MOVED_BEFORE_DISPATCH: target moved before dispatch; no tap or typing was performed. Refresh the snapshot and retry."
+
   // nil when the hit test is unavailable: unresolvable, ambiguous, thrown or over budget.
   func boundedHittable(_ element: XCUIElement, deadline: Double) -> Bool? {
     DispatchGuard.hitTest(
@@ -676,37 +679,48 @@ extension RnFastRunnerTests {
         let exception = RunnerObjCExceptionCatcher.catchException({ hittable = target.isHittable })
         return exception == nil ? hittable : nil
       }
-    )
+    ).hittable
   }
 
-  func liveTargetHittable(app: XCUIApplication, command: Command) -> Bool? {
-    let deadline = ProcessInfo.processInfo.systemUptime + 0.3
+  func liveTargetCheck(app: XCUIApplication, command: Command, deadline: Double) -> DispatchGuard.TargetCheck {
     guard let index = command.snapshotNodeIndex,
           let retained = retainedSnapshotTargets[index],
           retained.generation == currentSnapshotGeneration,
           command.snapshotGeneration == retained.generation
-    else { return nil }
+    else { return .unavailable }
     let predicate: NSPredicate
     if let identifier = retained.identifier {
       predicate = NSPredicate(format: "identifier == %@", identifier)
     } else if let label = retained.label {
       predicate = NSPredicate(format: "label == %@", label)
     } else {
-      return nil
+      return .unavailable
     }
     let expected = CGRect(
       x: retained.rect.x, y: retained.rect.y,
       width: retained.rect.width, height: retained.rect.height
     )
-    var matches: [XCUIElement] = []
-    let exception = RunnerObjCExceptionCatcher.catchException({
-      matches = app.descendants(matching: .any).matching(predicate).allElementsBoundByIndex.filter {
-        self.elementTypeName($0.elementType) == retained.type
-          && KeyboardGuard.approximatelyEqual($0.frame, expected)
-      }
-    })
-    guard exception == nil, matches.count == 1 else { return nil }
-    return boundedHittable(matches[0], deadline: deadline)
+    return DispatchGuard.hitTest(
+      deadline: deadline,
+      now: { ProcessInfo.processInfo.systemUptime },
+      resolve: {
+        var matches: [XCUIElement] = []
+        let exception = RunnerObjCExceptionCatcher.catchException({
+          matches = app.descendants(matching: .any).matching(predicate).allElementsBoundByIndex.filter {
+            self.elementTypeName($0.elementType) == retained.type
+          }
+        })
+        return exception == nil && matches.count == 1 ? matches[0] : nil
+      },
+      matchesFrame: { target in
+        var matches: Bool?
+        let exception = RunnerObjCExceptionCatcher.catchException({
+          matches = KeyboardGuard.approximatelyEqual(target.frame, expected)
+        })
+        return exception == nil ? matches : nil
+      },
+      read: { target in self.boundedHittable(target, deadline: deadline) }
+    )
   }
 
   private func resolveLiveKeyboardTarget(

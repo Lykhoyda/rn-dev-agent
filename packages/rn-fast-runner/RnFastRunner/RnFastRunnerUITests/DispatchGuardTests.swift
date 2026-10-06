@@ -25,9 +25,9 @@ final class DispatchGuardTests: XCTestCase {
         resolve: { time += resolutionTime; return 1 },
         read: { _ in reads += 1; time += readTime; return false }
       )
-      XCTAssertEqual(result, expected)
+      XCTAssertEqual(result.hittable, expected)
       XCTAssertEqual(reads, resolutionTime >= 0.3 ? 0 : 1)
-      XCTAssertEqual(DispatchGuard.decide(liveHittable: result, keyboardContainsPoint: false), expected == false ? .occluded : .proceed)
+      XCTAssertEqual(DispatchGuard.decide(liveHittable: result.hittable, keyboardContainsPoint: false), expected == false ? .occluded : .proceed)
     }
   }
 
@@ -39,7 +39,48 @@ final class DispatchGuardTests: XCTestCase {
       resolve: { resolutions += 1; return 1 },
       read: { _ in false }
     )
-    XCTAssertNil(result)
+    XCTAssertNil(result.hittable)
     XCTAssertEqual(resolutions, 0)
+  }
+
+  func testMovedTargetRefusesWithoutReadingHittabilityOrDispatching() {
+    for frameMatches in [false, true] {
+      var reads = 0
+      var taps = 0
+      let check = DispatchGuard.hitTest(
+        deadline: 0.3,
+        now: { 0.1 },
+        resolve: { 1 },
+        matchesFrame: { _ in frameMatches },
+        read: { _ in reads += 1; return true }
+      )
+      let decision = DispatchGuard.decide(
+        liveHittable: check.hittable,
+        keyboardContainsPoint: false,
+        targetMoved: check == .moved
+      )
+      if decision == .proceed { taps += 1 }
+      XCTAssertEqual(decision, frameMatches ? .proceed : .moved)
+      XCTAssertEqual(taps, frameMatches ? 1 : 0)
+      XCTAssertEqual(reads, frameMatches ? 1 : 0)
+    }
+  }
+
+  func testUnavailableFrameChecksStillProceed() {
+    for mode in ["no-match", "ambiguous", "thrown", "over-budget", "generation"] {
+      var time = 0.1
+      let check = DispatchGuard.hitTest(
+        deadline: 0.3,
+        now: { time },
+        resolve: { mode == "no-match" || mode == "ambiguous" || mode == "generation" ? nil : 1 },
+        matchesFrame: { _ in
+          if mode == "over-budget" { time = 0.4; return false }
+          return nil
+        },
+        read: { _ in true }
+      )
+      XCTAssertEqual(check, .unavailable)
+      XCTAssertEqual(DispatchGuard.decide(liveHittable: check.hittable, keyboardContainsPoint: false, targetMoved: check == .moved), .proceed)
+    }
   }
 }
