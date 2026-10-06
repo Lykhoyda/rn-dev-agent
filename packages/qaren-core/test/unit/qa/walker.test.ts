@@ -171,12 +171,12 @@ test('an attested offscreen target scrolls once, then acts', async () => {
   const scrolled = screen(['Header', 'Load more']);
   scrolled.elements[1].testID = 'load-more';
   const after = screen(['Loaded']);
-  const f = fake([before, scrolled, after]);
+  const f = fake([before, scrolled, scrolled, after]);
   const outcome = await walkBlock(block('1. Tap "load-more"\n'), f.deps);
   assert.equal(outcome.block.outcome, 'pass');
   assert.deepEqual(
     f.calls.filter((c) => !c.startsWith('shot')),
-    ['capture', 'scroll down', 'capture', 'press @e1', 'capture'],
+    ['capture', 'scroll down', 'capture', 'capture', 'press @e1', 'capture'],
   );
 });
 
@@ -420,12 +420,14 @@ test('scroll-until stops after one not-ok scroll that moved nothing, with fresh 
 test('a not-ok preliminary scroll that brought the target into view still leads to the press', async () => {
   const scrolled = screen(['Header', 'Load more']);
   scrolled.elements[1].testID = 'load-more';
-  const f = fake([withOffscreenLoadMore(), scrolled, screen(['Loaded'])], { scroll: NOT_OK });
+  const f = fake([withOffscreenLoadMore(), scrolled, scrolled, screen(['Loaded'])], {
+    scroll: NOT_OK,
+  });
   const outcome = await walkBlock(block('1. Tap "load-more"\n'), f.deps);
   assert.equal(outcome.block.outcome, 'pass');
   assert.deepEqual(
     f.calls.filter((c) => !c.startsWith('shot')),
-    ['capture', 'scroll down', 'capture', 'press @e1', 'capture'],
+    ['capture', 'scroll down', 'capture', 'capture', 'press @e1', 'capture'],
   );
 });
 

@@ -123,7 +123,7 @@ function block(markdown: string) {
 const targetOf = (screen: Screen, ref: string) => screen.elements.find((e) => e.ref === ref);
 
 test('O1: an occluded press scrolls once toward clearance and presses the same identity', async () => {
-  const screens = [at(700), at(400), done()];
+  const screens = [at(700), at(400), at(400), done()];
   const f = fake(screens, { press: [OCCLUDED] });
   const outcome = await walkBlock(block('1. Tap "go"\n'), f.deps);
   assert.equal(outcome.block.outcome, 'pass');
@@ -131,6 +131,7 @@ test('O1: an occluded press scrolls once toward clearance and presses the same i
     'capture',
     'press @target',
     'scroll down',
+    'capture',
     'capture',
     'press @target',
     'capture',
@@ -140,7 +141,7 @@ test('O1: an occluded press scrolls once toward clearance and presses the same i
 });
 
 test('O1: a target in the upper half scrolls up', async () => {
-  const f = fake([at(80), at(300), done()], { press: [OCCLUDED] });
+  const f = fake([at(80), at(300), at(300), done()], { press: [OCCLUDED] });
   const outcome = await walkBlock(block('1. Tap "go"\n'), f.deps);
   assert.equal(outcome.block.outcome, 'pass');
   assert.ok(f.calls.includes('scroll up'));
@@ -165,10 +166,11 @@ test('O3: an occluded exact fill scrolls once, then fills verified', async () =>
   });
   const outcome = await walkBlock(block('1. Fill "field" with "x"\n'), f.deps);
   assert.equal(outcome.block.outcome, 'pass');
-  assert.deepEqual(f.calls.slice(0, 5), [
+  assert.deepEqual(f.calls.slice(0, 6), [
     'capture',
     'fill @target',
     'scroll down',
+    'capture',
     'capture',
     'fill @target',
   ]);
@@ -341,6 +343,7 @@ for (const kind of ['press', 'fill'] as const) {
           `${kind} @target`,
           `scroll ${y < 400 ? 'up' : 'down'}`,
           'capture',
+          'capture',
         ]);
         assert.match(outcome.failure?.seen ?? '', /stayed off screen after one scroll/);
         assert.doesNotMatch(JSON.stringify(outcome), /ACTION_OUTCOME_UNCERTAIN/);
@@ -392,10 +395,17 @@ function clipped(y: number, type = 'Button', occluder: 'tabs' | 'keyboard' = 'ta
 }
 
 test('O5: a press whose centre lies past its scroll clip scrolls before any dispatch', async () => {
-  const f = fake([clipped(700), clipped(400), done()], {});
+  const f = fake([clipped(700), clipped(400), clipped(400), done()], {});
   const outcome = await walkBlock(block('1. Tap "go"\n'), f.deps);
   assert.equal(outcome.block.outcome, 'pass');
-  assert.deepEqual(f.calls, ['capture', 'scroll down', 'capture', 'press @target', 'capture']);
+  assert.deepEqual(f.calls, [
+    'capture',
+    'scroll down',
+    'capture',
+    'capture',
+    'press @target',
+    'capture',
+  ]);
 });
 
 test('O5: a fill whose centre lies under the keyboard scrolls before any dispatch', async () => {
@@ -403,7 +413,13 @@ test('O5: a fill whose centre lies under the keyboard scrolls before any dispatc
   const f = fake([kb(700), kb(300), kb(300)], {});
   const outcome = await walkBlock(block('1. Fill "field" with "x"\n'), f.deps);
   assert.equal(outcome.block.outcome, 'pass');
-  assert.deepEqual(f.calls.slice(0, 4), ['capture', 'scroll down', 'capture', 'fill @target']);
+  assert.deepEqual(f.calls.slice(0, 5), [
+    'capture',
+    'scroll down',
+    'capture',
+    'capture',
+    'fill @target',
+  ]);
 });
 
 test('O5: a target still covered after one scroll refuses with no dispatch', async () => {
@@ -418,4 +434,19 @@ test('O5: a target still covered after one scroll refuses with no dispatch', asy
     assert.equal(f.calls.filter((c) => c.startsWith('scroll')).length, 1);
     assert.match(outcome.failure?.seen ?? '', /stayed off screen after one scroll/);
   }
+});
+
+test('O6: a keyboard-cleared fill waits for the scroll to stop before dispatching', async () => {
+  const kb = (y: number) => clipped(y, 'TextField', 'keyboard');
+  const f = fake([kb(700), kb(450), kb(400), kb(400)], {});
+  const outcome = await walkBlock(block('1. Fill "field" with "x"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'pass');
+  assert.deepEqual(f.calls.slice(0, 6), [
+    'capture',
+    'scroll down',
+    'capture',
+    'capture',
+    'capture',
+    'fill @target',
+  ]);
 });

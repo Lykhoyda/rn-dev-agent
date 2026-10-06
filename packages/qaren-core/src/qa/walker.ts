@@ -5,6 +5,7 @@ import {
   type Screen,
   type VisibilityBlockerDiagnostic,
   screenSignature,
+  elementFrame,
   isNativeInput,
 } from './screen.js';
 import {
@@ -156,6 +157,7 @@ export const WAIT_POLL_MS = 500;
 export const SCROLL_ATTEMPTS = 6;
 export const KEYBOARD_READY_MS = 1_500;
 export const KEYBOARD_READY_CAPTURES = 3;
+export const SCROLL_SETTLE_READBACKS = 3;
 
 export interface WalkOutcome {
   block: BlockResult;
@@ -356,6 +358,19 @@ export async function walkBlock(
       if (isAbort(error)) throw error;
       // Diagnostics cannot change a decision or dispatch outcome.
     }
+  };
+  // Scroll momentum outlives the drag; dispatching on a moving frame taps its stale centre.
+  const settledCapture = async (item: Exclude<Item, { kind: 'check' }>): Promise<Observation> => {
+    const geometry = (screen: Screen): string =>
+      JSON.stringify(screen.elements.map((e) => elementFrame(e) ?? null));
+    let observation = await capture(item);
+    for (let readback = 0; readback < SCROLL_SETTLE_READBACKS; readback += 1) {
+      if (!observationUsable(observation.timing, deps.now())) return observation;
+      const next = await capture(item);
+      if (geometry(next.screen) === geometry(observation.screen)) return next;
+      observation = next;
+    }
+    return observation;
   };
   const usable = (observation: Observation, item: Item, deadline = Infinity): void => {
     assertActive();
@@ -1243,7 +1258,7 @@ export async function walkBlock(
                     ? undefined
                     : (result.error ?? 'scroll was not dispatched');
                   const signature = screenSignature(before.screen);
-                  before = await capture(item);
+                  before = await settledCapture(item);
                   usable(before, item);
                   if (
                     !result.ok &&

@@ -230,7 +230,7 @@ test('phrase targeting retains presence mode after an offscreen scroll and read-
   const modes = traceCaptures(f);
   const result = await runPlan(parsePlan('1. Tap the save button').blocks!, f.deps);
   assert.equal(result.verdict, 'PASS');
-  assert.deepEqual(modes, [true, true, true]);
+  assert.deepEqual(modes, [true, true, true, true]);
   assert.deepEqual(f.actions, ['scroll down', 'press @fresh']);
 });
 
