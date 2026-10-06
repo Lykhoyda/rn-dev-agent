@@ -606,6 +606,38 @@ test('a presence-less XCUI parent and child twin contributes one painted identit
   });
 });
 
+test('keyboard text replay preserves ancestor-echo deduplication and real occurrences', () => {
+  const observed = (keyboard: boolean, y = 100, twin = false) =>
+    painted([
+      node('StaticText', 'Welcome', y),
+      node('Other', '', y, { parentIndex: 1 }),
+      node('StaticText', 'Welcome', y, { ref: '@echo', parentIndex: 2 }),
+      ...(twin ? [node('StaticText', 'Welcome', 200, { ref: '@twin' })] : []),
+      ...(keyboard
+        ? [
+            node('Keyboard', '', 500, {
+              rect: { x: 0, y: 500, width: 390, height: 344 },
+            }),
+          ]
+        : []),
+    ]);
+  const target = { quoted: 'Welcome', phrase: 'Welcome' };
+  const saved = visibleSelector(target, observed(false));
+  assert.deepEqual(saved, { text: 'Welcome' });
+  const uncovered = observed(true);
+  assert.deepEqual(uncovered.uncoveredText, ['Welcome']);
+  assert.equal(targetVisible(exactText('Welcome'), uncovered), true);
+  assert.deepEqual(visibleSelector(target, uncovered), saved);
+  const covered = observed(true, 650);
+  assert.deepEqual(covered.uncoveredText, []);
+  assert.equal(visibleSelector(target, covered), undefined);
+  assert.throws(() => targetVisible(exactText('Welcome'), covered), /REPLAY_SELECTOR/);
+  const multiple = observed(true, 100, true);
+  assert.deepEqual(multiple.uncoveredText, ['Welcome', 'Welcome']);
+  assert.equal(visibleSelector(target, multiple), undefined);
+  assert.throws(() => targetVisible(exactText('Welcome'), multiple), /TARGET_AMBIGUOUS/);
+});
+
 test('four container ancestors echoing one text contribute one painted identity', () => {
   assert.deepEqual(containerEcho.visibleText, ['Welcome']);
   assert.deepEqual(containerEcho.paintedText, ['Welcome']);

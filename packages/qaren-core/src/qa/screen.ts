@@ -884,7 +884,6 @@ export function join(
       if (!underKeyboard(n, i)) uncoveredLabelText.push(line);
       continue;
     }
-    if (!underKeyboard(n, i)) uncoveredText.push(line);
     const key = JSON.stringify([
       line,
       n.type,
@@ -899,7 +898,10 @@ export function join(
       }
     }
     paintedKeys.set(i, key);
-    if (!echo) paintedText.push(line);
+    if (!echo) {
+      paintedText.push(line);
+      if (!underKeyboard(n, i)) uncoveredText.push(line);
+    }
     if (visibleText[visibleText.length - 1] !== line) visibleText.push(line);
   }
   const textDescendants = new Map<number, number[]>();
