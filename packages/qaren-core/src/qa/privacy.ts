@@ -225,7 +225,7 @@ export function matchPrivate(
       return patterns.map((pattern) => ({ pattern, value: value.text }));
     })
     .sort((a, b) => b.pattern.length - a.pattern.length);
-  const fragments = (set.fragments ?? []).flatMap(forms).map((value) => value.replace(/\s/gu, ''));
+  const fragments = (set.fragments ?? []).flatMap(forms);
   if (!rules.length && !fragments.length) return { text, hit: false };
   let hit = false;
   const parts: { text: string; masked: boolean }[] = [];
@@ -252,24 +252,15 @@ export function matchPrivate(
             if (
               !fragments.some((value) => {
                 if (/^\d+$/u.test(value))
-                  return [...match].some((char) => value.includes(char));
-                const candidates =
-                  match.match(/[\p{L}\p{M}\p{N}_]+|^[^\p{L}\p{M}\p{N}_\p{Pd}]+$/gu) ?? [];
+                  return (match.match(/\d+/gu) ?? []).some((candidate) => value.includes(candidate));
+                const candidates = match.match(/[\p{L}\p{M}\p{N}_]+/gu) ?? [];
                 if (
-                  candidates.some((candidate) => {
-                    let offset = 0;
-                    for (const char of candidate) {
-                      const index = value.indexOf(char, offset);
-                      if (index === -1) return false;
-                      offset = index + char.length;
-                    }
-                    return true;
-                  })
+                  candidates.some((candidate) => chars(candidate) >= SHORT && value.includes(candidate))
                 )
                   return true;
                 return [
                   ...value.matchAll(
-                    /[\p{L}\p{M}\p{N}_][^\p{L}\p{M}\p{N}_]+[\p{L}\p{M}\p{N}_]/gu,
+                    /[\p{L}\p{M}\p{N}_][^\p{L}\p{M}\p{N}_\s]+[\p{L}\p{M}\p{N}_]/gu,
                   ),
                 ].some(([fragment]) => match.includes(fragment));
               })

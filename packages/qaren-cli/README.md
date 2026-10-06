@@ -422,9 +422,10 @@ those separators between digits. Model requests use
 opaque identity tokens; durable text uses `•••`; a match withholds saved blocks.
 Displayed identifiers use the same matcher while operational identifiers remain
 usable. After dispatching a numeric code of at least three digits or a secure
-field fill, the same matcher also masks observed in-order fragments, including
-single characters, of that value in every outward projection, independent of
-layout, semantic kind or spacing;
+field fill, the same matcher also masks contiguous fragments in every outward
+projection, independent of layout or semantic kind. Numeric runs must occur
+contiguously in the code, including single digits; secure-text fragments require
+at least three characters, with attached symbols retained in the match.
 fragment masks do not establish complete-value identity in model comparisons.
 Known limit: unrelated text matching a fragment of a filled secret is also masked.
 

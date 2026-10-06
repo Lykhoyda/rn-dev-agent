@@ -100,20 +100,20 @@ test('non-secret fills leave partial text and unrelated digits readable', () => 
   assert.equal(privacy.canScreenshot(), true);
 });
 
-test('secure fills mask letter fragments without assigning complete-value identity', () => {
+test('secure fills mask contiguous fragments without assigning complete-value identity', () => {
   const privacy = new ObservedPrivacy(['p@ss']);
   privacy.concealFallback('p@ss', true);
   assert.equal(privacy.redact('p'), 'p');
   privacy.didFill('p@ss');
-  const captured = screen([element('@echo', 'p @ s', { kind: 'text' })]);
+  const captured = screen([element('@echo', 'p@s', { kind: 'text' })]);
   privacy.observe(captured);
-  assert.deepEqual(privacy.screenText(captured), [`${MASK} ${MASK} ${MASK}`]);
+  assert.deepEqual(privacy.screenText(captured), [MASK]);
   const mask = privacy.maskForModel(['p@ss'], []);
-  assert.equal(mask.apply('p'), MASK);
+  assert.equal(mask.apply('p'), 'p');
   assert.equal(mask.apply('p@ss'), mask.tokens[0]);
   assert.equal(mask.apply(mask.tokens[0]), mask.tokens[0]);
-  assert.equal(mask.applyPlanLine('1. Tap "p"'), `1. Tap ${MASK}`);
-  assert.equal(mask.apply('ps'), MASK);
+  assert.equal(mask.applyPlanLine('1. Tap "p@s"'), `1. Tap ${MASK}`);
+  assert.equal(mask.apply('ps'), 'ps');
   assert.equal(privacy.canScreenshot(), false);
 });
 
@@ -122,6 +122,20 @@ test('dispatching one code does not enable fragment matching for future codes', 
   privacy.didFill('5038');
   assert.equal(privacy.redact('7 | 2'), '7 | 2');
   assert.equal(privacy.redact('5 | 0'), `${MASK} | ${MASK}`);
+});
+
+test('fragment matching leaves noncontiguous secure text and numeric runs readable', () => {
+  for (const [secret, readable] of [
+    ['hunter-canary-77', ['hnr', 'h', 'h!n!r']],
+    ['5038', ['58', '305', 'row-58']],
+  ] as const) {
+    const privacy = new ObservedPrivacy([secret]);
+    privacy.concealFallback(secret, true);
+    privacy.didFill(secret);
+    for (const text of readable)
+      for (const policy of ['model', 'durable', 'identifier', 'persisted'] as const)
+        assert.deepEqual(matchPrivate(text, privacy.privateSet(), policy), { text, hit: false });
+  }
 });
 
 test('secure fragments do not mask unrelated words, identifiers or saved-block syntax', () => {
@@ -133,7 +147,9 @@ test('secure fragments do not mask unrelated words, identifiers or saved-block s
   for (const policy of ['model', 'durable', 'identifier', 'persisted'] as const) {
     for (const text of [readable, syntax, 'open-the-code-screen'])
       assert.deepEqual(matchPrivate(text, privacy.privateSet(), policy), { text, hit: false });
-    for (const text of ['hunter', 'hun', 'h', '77', 'r-c'])
+    for (const text of ['h', '77', 'ps', 'p!s'])
+      assert.deepEqual(matchPrivate(text, privacy.privateSet(), policy), { text, hit: false });
+    for (const text of ['hunter', 'hun', 'r-c'])
       assert.deepEqual(matchPrivate(text, privacy.privateSet(), policy), { text: MASK, hit: true });
   }
 });
@@ -143,7 +159,7 @@ test('attached symbols in secure fragments are masked with their containing toke
   privacy.concealFallback('p@ss', true);
   privacy.didFill('p@ss');
   const mask = privacy.maskForModel(['p@ss'], []);
-  for (const fragment of ['p@s', 'xp@sx', 'p@s!', 'p!s']) {
+  for (const fragment of ['p@s', 'xp@sx', 'p@s!']) {
     const captured = screen([element('@echo', fragment, { kind: 'text' })]);
     privacy.observe(captured);
     assert.deepEqual(privacy.screenText(captured), [MASK]);

@@ -2,4 +2,4 @@
 'qaren': patch
 ---
 
-Keep unrelated QA phrases and saved blocks readable while masking actual secure-value fragments.
+Keep unrelated QA phrases and saved blocks readable by matching contiguous secret fragments.
