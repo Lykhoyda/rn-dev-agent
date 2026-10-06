@@ -1542,6 +1542,11 @@ now encoded once and replayed deterministically.
 - **`status` trusts a `cleaned` phase** without re-probing; cleanup only sets
   it after every resource verified removed/absent, and re-running cleanup
   re-verifies.
+- **Extreme host load can hold the iOS lease.** Runner-host absence is read
+  through `simctl spawn … launchctl list` within a fixed budget; when the host is
+  too loaded for it to finish, cleanup keeps the lease and the next `check`
+  refuses `DEVICE_BUSY` until `qaren cleanup <run-id>` proves absence once load
+  allows.
 - **App removal limitations:** see the opt-in contract under
   [Ownership and safety rules](#preparation-ownership-and-safety-rules).
 - **Crash-durability**: `run.json` writes are atomic (temp + rename) but not
