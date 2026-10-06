@@ -370,8 +370,9 @@ test('an unlabeled, unidentified plain view is inert, so the visibility view nev
   assert.equal(strayInput.elements[1].semantic?.fill, 'unknown');
   assert.deepEqual(projection.visibilityView(strayInput), {
     elements: [strayInput.elements[0]],
-    unknown: strayInput.elements.slice(1).map((element) => ({ element, reason: 'visibility' })),
+    unknown: [],
     unassociatedReact: 0,
+    capabilityGapContainers: 2,
   });
   refused(projection.semanticActionView(strayInput, 'fill'), 'SCREEN_EVIDENCE_INCOMPLETE');
 });
@@ -712,15 +713,13 @@ test('a plain container offering no operation contributes only through its own n
   );
   assert.deepEqual(skipped.unknown, []);
   assert.equal(skipped.unassociatedReact, 0);
+  const strayPress = view(containers, [
+    { role: null, roleSource: 'none', capabilities: { press: true } },
+  ]);
+  assert.ok('elements' in strayPress);
+  assert.deepEqual(strayPress.unknown, []);
+  assert.equal(strayPress.capabilityGapContainers, 3);
   for (const [evidence, expected] of [
-    [
-      view(containers, [{ role: null, roleSource: 'none', capabilities: { press: true } }]),
-      [
-        ['@hero', 'name-provenance'],
-        ['@card', 'content'],
-        ['@group', 'visibility'],
-      ],
-    ],
     [view([['meter', '40%', 'value', 'observed']]), [['@meter', 'name-provenance']]],
     [
       view(containers, [], [{ role: 'text', testID: 'card', value: '3 tasks' }]),
