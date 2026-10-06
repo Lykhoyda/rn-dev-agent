@@ -112,7 +112,7 @@ test('secure fills mask letter fragments without assigning complete-value identi
   assert.equal(mask.apply('p'), MASK);
   assert.equal(mask.apply('p@ss'), mask.tokens[0]);
   assert.equal(mask.apply(mask.tokens[0]), mask.tokens[0]);
-  assert.equal(mask.applyPlanLine('1. Tap "p"'), `1. ${MASK} ${MASK}`);
+  assert.equal(mask.applyPlanLine('1. Tap "p"'), `1. Tap ${MASK}`);
   assert.equal(mask.apply('ps'), MASK);
   assert.equal(privacy.canScreenshot(), false);
 });
@@ -122,6 +122,20 @@ test('dispatching one code does not enable fragment matching for future codes', 
   privacy.didFill('5038');
   assert.equal(privacy.redact('7 | 2'), '7 | 2');
   assert.equal(privacy.redact('5 | 0'), `${MASK} | ${MASK}`);
+});
+
+test('secure fragments do not mask unrelated words, identifiers or saved-block syntax', () => {
+  const privacy = new ObservedPrivacy(['hunter-canary-77']);
+  privacy.concealFallback('hunter-canary-77', true);
+  privacy.didFill('hunter-canary-77');
+  const readable = 'Step 1 of 2 | qa-start | the welcome banner is visible | Almost done';
+  const syntax = '- tapOn: { id: "qa-start" }';
+  for (const policy of ['model', 'durable', 'identifier', 'persisted'] as const) {
+    for (const text of [readable, syntax, 'open-the-code-screen'])
+      assert.deepEqual(matchPrivate(text, privacy.privateSet(), policy), { text, hit: false });
+    for (const text of ['hunter', 'hun', 'h', '77', 'r-c'])
+      assert.deepEqual(matchPrivate(text, privacy.privateSet(), policy), { text: MASK, hit: true });
+  }
 });
 
 test('attached symbols in secure fragments are masked with their containing token', () => {

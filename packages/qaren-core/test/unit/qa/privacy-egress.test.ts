@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parsePlan } from '../../../dist/qa/plan.js';
 import { join as joinScreen, type Element, type Screen } from '../../../dist/qa/screen.js';
-import { capturePrivateScreen, MASK, ObservedPrivacy } from '../../../dist/qa/privacy.js';
+import { capturePrivateScreen, ObservedPrivacy } from '../../../dist/qa/privacy.js';
 import { decideScreen } from '../../../dist/qa/resolve.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 import type { LedgerRow } from '../../../dist/qa/ledger.js';
@@ -138,8 +138,8 @@ function assertAbsent(sink: string, value: unknown): void {
   }
 }
 
-async function walk(plan = PLAN) {
-  const blocks = parsePlan(plan).blocks;
+async function walk() {
+  const blocks = parsePlan(PLAN).blocks;
   assert.ok(blocks);
   const judge = scriptedJudge((questions) =>
     Object.fromEntries(Object.keys(questions).map((id) => [id, { type: 'noul', noul: 0.01 }])),
@@ -176,25 +176,13 @@ async function walk(plan = PLAN) {
 }
 
 test('every canary is absent at every core egress boundary', async () => {
-  const { ledger, streamed, judge, files, yaml } = await walk(
-    PLAN.replace('✓ the welcome banner is visible', '✓ OK'),
-  );
+  const { ledger, streamed, judge, files, yaml } = await walk();
   assert.equal(ledger.verdict, 'FAIL');
   assert.ok(judge.requests.length > 0, 'the phrase check reached the model');
-  assert.ok(judge.requests.some(({ state }) => state.assertionEvidence?.observed.length));
   assertAbsent('streamed rows', streamed);
   assertAbsent('ledger', ledger);
   assertAbsent('model requests', judge.requests);
   assertAbsent('block files', [files, yaml]);
-});
-
-test('a phrase containing secure fragments fails without sending a model request', async () => {
-  const { ledger, judge } = await walk();
-  assert.equal(ledger.verdict, 'FAIL');
-  assert.equal(ledger.steps.at(-1)?.kind, 'check');
-  assert.equal(ledger.steps.at(-1)?.outcome, 'fail');
-  assert.deepEqual(judge.requests, []);
-  assertAbsent('ledger', ledger);
 });
 
 test('streamed rows carry only value-free fields', async () => {
@@ -208,22 +196,23 @@ test('streamed rows carry only value-free fields', async () => {
   }
 });
 
-test('the projected ledger masks secure fragments and withholds matching blocks', async () => {
+test('the projected ledger stays readable and unrelated passing blocks are saved', async () => {
   const { ledger, files, yaml } = await walk();
   const texts = ledger.steps.map((row) => row.text);
-  assert.ok(texts.includes(`✓ ${MASK} 1 of 2"`), JSON.stringify(texts));
-  assert.ok(texts.includes(`1. ${MASK} ${MASK}`), JSON.stringify(texts));
-  assert.match(ledger.failure?.seen ?? '', /1 of 2/);
-  assert.ok(ledger.failure?.seen.includes(MASK));
-  assert.doesNotMatch(ledger.failure?.seen ?? '', /Step|Almost|done|\bthe\b/);
-  assert.deepEqual(files, []);
-  assert.deepEqual(yaml, []);
-  assert.equal(ledger.blocks.length, 3);
-  for (const block of ledger.blocks.slice(0, 2)) {
-    assert.equal(block.key, MASK);
-    assert.equal(block.outcome, 'pass');
-    assert.equal(block.saved, false);
-  }
+  assert.ok(texts.includes('✓ "Step 1 of 2"'), JSON.stringify(texts));
+  assert.ok(texts.includes('1. Tap "qa-start"'), JSON.stringify(texts));
+  assert.match(ledger.failure?.seen ?? '', /Step 1 of 2/);
+  assert.match(ledger.failure?.seen ?? '', /Almost done/);
+  assert.match(ledger.failure?.seen ?? '', /\bthe\b/);
+  assert.equal(files.length, 1, JSON.stringify(ledger.blocks));
+  assert.equal(yaml.length, 1);
+  assertAbsent('block files', [files, yaml]);
+  assert.deepEqual(ledger.blocksWritten, ['open-the-code-screen']);
+  assert.equal(
+    ledger.blocks.find((block) => block.key === 'check-the-account')?.saved,
+    false,
+    JSON.stringify(ledger.blocks),
+  );
 });
 
 test('a future short fill leaves unquoted diagnostics readable', async () => {

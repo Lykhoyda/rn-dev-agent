@@ -249,7 +249,31 @@ export function matchPrivate(
       part.masked
         ? part.text
         : part.text.replace(/\S+/gu, (match) => {
-            if (!fragments.some((value) => [...match].some((char) => value.includes(char))))
+            if (
+              !fragments.some((value) => {
+                if (/^\d+$/u.test(value))
+                  return [...match].some((char) => value.includes(char));
+                const candidates =
+                  match.match(/[\p{L}\p{M}\p{N}_]+|^[^\p{L}\p{M}\p{N}_\p{Pd}]+$/gu) ?? [];
+                if (
+                  candidates.some((candidate) => {
+                    let offset = 0;
+                    for (const char of candidate) {
+                      const index = value.indexOf(char, offset);
+                      if (index === -1) return false;
+                      offset = index + char.length;
+                    }
+                    return true;
+                  })
+                )
+                  return true;
+                return [
+                  ...value.matchAll(
+                    /[\p{L}\p{M}\p{N}_][^\p{L}\p{M}\p{N}_]+[\p{L}\p{M}\p{N}_]/gu,
+                  ),
+                ].some(([fragment]) => match.includes(fragment));
+              })
+            )
               return match;
             hit = true;
             return MASK;
