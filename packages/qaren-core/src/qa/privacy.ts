@@ -335,40 +335,72 @@ export function codeBoxRows(screen: Screen, filled: readonly string[] = []): Ele
         (inner) => ancestorsOf(inner).includes(element) && boxText(inner) === boxText(element),
       ),
   );
-  const boxes = [...textBoxes, ...labelled];
-  // A glyph-width Text inside a code cell is measured by its cell: the outermost framed ancestor holding no other box.
-  const cells = new Map(
-    boxes.map((element) => {
-      const frame = elementFrame(element)!;
-      const ancestors = ancestorsOf(element);
-      const shared = ancestors.findIndex((ancestor) =>
-        boxes.some((other) => other !== element && ancestorsOf(other).includes(ancestor)),
-      );
-      const cell = ancestors
-        .slice(0, shared < 0 ? ancestors.length : shared)
-        .filter((ancestor) => elementFrame(ancestor) !== undefined)
-        .at(-1);
-      const outer = cell && elementFrame(cell)!;
-      const contains =
-        outer &&
-        outer.width > 0 &&
-        outer.x <= frame.x &&
-        outer.y <= frame.y &&
-        outer.x + outer.width >= frame.x + frame.width &&
-        outer.y + outer.height >= frame.y + frame.height;
-      return [element, contains ? outer : frame];
-    }),
+  const occupied = [...textBoxes, ...labelled];
+  const cellParents = new Set(
+    occupied.flatMap((element) =>
+      [element, ...ancestorsOf(element)].flatMap((cell) => ancestorsOf(cell).slice(0, 1)),
+    ),
   );
+  const emptyCells = screen.elements.filter(
+    (element) =>
+      visible(element) &&
+      element.kind === 'other' &&
+      !element.secure &&
+      !element.ref.startsWith('react:') &&
+      !boxText(element) &&
+      cellParents.has(ancestorsOf(element)[0]) &&
+      !occupied.some((box) => ancestorsOf(box).includes(element)),
+  );
+  const boxes = [...occupied, ...emptyCells];
+  // A glyph-width Text inside a code cell is measured by its cell: the outermost framed ancestor holding no other box.
+  const cellFrames = (boxes: Element[]) =>
+    new Map(
+      boxes.map((element) => {
+        const frame = elementFrame(element)!;
+        const ancestors = ancestorsOf(element);
+        const shared = ancestors.findIndex((ancestor) =>
+          boxes.some((other) => other !== element && ancestorsOf(other).includes(ancestor)),
+        );
+        const cell = ancestors
+          .slice(0, shared < 0 ? ancestors.length : shared)
+          .filter((ancestor) => elementFrame(ancestor) !== undefined)
+          .at(-1);
+        const outer = cell && elementFrame(cell)!;
+        const contains =
+          outer &&
+          outer.width > 0 &&
+          outer.x <= frame.x &&
+          outer.y <= frame.y &&
+          outer.x + outer.width >= frame.x + frame.width &&
+          outer.y + outer.height >= frame.y + frame.height;
+        return [element, contains ? outer : frame];
+      }),
+    );
   // Evenly spread cells (space-between on a wide phone) can sit up to two cell widths apart.
-  const spread = boxRows(boxes, (element) => cells.get(element)!, 2).filter((row) => {
+  const originalCells = cellFrames(occupied);
+  const original = boxRows(occupied, (element) => originalCells.get(element)!, 2).filter((row) => {
     if (row.every((element) => element.kind === 'text')) return textRow(row);
     const spelled = row.map(boxText).join('');
     return (
       chars(spelled) >= 2 && filled.some((value) => subsequence(spelled, value.replace(/\s/gu, '')))
     );
   });
-  const covered = new Set(spread.flat());
-  return [...spread, ...own.filter((row) => !row.every((element) => covered.has(element)))];
+  const cells = cellFrames(boxes);
+  const spread = boxRows(boxes, (element) => cells.get(element)!, 2).filter((row) => {
+    const spelled = row.map(boxText).join('');
+    return (
+      row.length >= 2 &&
+      chars(spelled) >= 1 &&
+      filled.some((value) => subsequence(spelled, value.replace(/\s/gu, '')))
+    );
+  });
+  const partialCovered = new Set(spread.flat());
+  const rows = [
+    ...spread,
+    ...original.filter((row) => !row.every((element) => partialCovered.has(element))),
+  ];
+  const covered = new Set(rows.flat());
+  return [...rows, ...own.filter((row) => !row.every((element) => covered.has(element)))];
 }
 
 const NATIVE_TYPES = new Set([

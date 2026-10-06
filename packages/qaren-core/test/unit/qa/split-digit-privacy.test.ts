@@ -75,13 +75,19 @@ for (const representation of ['label', 'value'] as const) {
   }
 }
 
-for (const [width, typed, wrapped] of [
-  [354, '5038', false],
-  [402, '5038', false],
-  [402, '503', false],
-  [402, '5038', true],
+for (const [width, typed, wrapped, entered] of [
+  [354, '5038', false, '5038'],
+  [402, '5038', false, '5038'],
+  [402, '503', false, '503'],
+  [402, '5038', true, '5038'],
+  [402, '5038', false, '50'],
+  [402, '5038', true, '50'],
+  [402, '5038', false, '5'],
+  [402, '5038', true, '5'],
+  [402, '5038', false, '08'],
+  [402, '5038', false, '123'],
 ] as const) {
-  test(`spread pressable cells with glyph-width${wrapped ? ' wrapped' : ''} text in ${width}pt hide ${typed.length} characters`, () => {
+  test(`spread pressable cells with glyph-width${wrapped ? ' wrapped' : ''} text in ${width}pt hide ${entered} from filled ${typed}`, async () => {
     const cells = 4;
     const gap = (width - cells * 44) / (cells - 1);
     const nodes: NativeNode[] = [
@@ -90,7 +96,7 @@ for (const [width, typed, wrapped] of [
     for (let i = 0; i < cells; i++) {
       const x = i * (44 + gap);
       const cell = nodes.length;
-      const char = typed[i];
+      const char = entered[i];
       nodes.push({
         ref: `@cell${i}`,
         index: cell,
@@ -135,16 +141,17 @@ for (const [width, typed, wrapped] of [
       parentIndex: 0,
       type: 'TextField',
       identifier: 'otp-input-hidden',
-      value: typed,
+      value: entered,
       rect: { x: 0, y: 300, width: 25, height: 46 },
     });
     const captured = join(nodes, []);
     const privacy = new ObservedPrivacy([typed]);
     privacy.didFill();
     privacy.observe(captured);
+    assert.equal(privacy.canScreenshot(), false);
     const text = privacy.screenText(captured);
     assert.ok(text.includes('[code]'), JSON.stringify(text));
-    for (const char of typed)
+    for (const char of entered)
       assert.equal(
         text.some((line) => line.includes(char)),
         false,
@@ -152,16 +159,60 @@ for (const [width, typed, wrapped] of [
       );
     const mask = privacy.maskForModel([], []);
     for (const element of captured.elements)
-      for (const char of typed)
+      for (const char of entered)
         assert.equal(mask.describeElement(element, describe).includes(` ${char}`), false);
+    if (entered === '50' && !wrapped) {
+      const initial = screen([element('@pin', 'Code', { kind: 'input', testID: 'pin' })]);
+      const f = walker(
+        [initial, captured],
+        scriptedJudge(() => assert.fail('literal fill is model-free')),
+        { ok: false, proven: false, mutation: 'observed', error: 'fill interrupted' },
+      );
+      const blocks = parsePlan('1. Type "5038" into "pin"\n✓ "Ready"').blocks;
+      assert.ok(blocks);
+      const ledger = await runPlan(blocks, f.deps);
+      assert.equal(ledger.verdict, 'FAIL');
+      assert.ok(ledger.failure?.seen.includes('[code]'), ledger.failure?.seen);
+      assert.equal(ledger.failure?.seen.includes('5 | 0'), false);
+      assert.equal(ledger.failure?.screenshot, undefined);
+    }
   });
 }
 
-for (const [typed, texts] of [
-  ['5038', [0]],
-  ['503', [1, 2]],
+test('an unrelated lone digit in a container keeps its policy after filling', () => {
+  const captured = join(
+    [
+      { ref: '@cell', index: 0, type: 'Other', rect: { x: 0, y: 300, width: 44, height: 60 } },
+      {
+        ref: '@digit',
+        index: 1,
+        parentIndex: 0,
+        type: 'StaticText',
+        label: '5',
+        rect: { x: 13, y: 313, width: 17, height: 34 },
+      },
+    ],
+    [],
+  );
+  const privacy = new ObservedPrivacy(['5038']);
+  privacy.didFill();
+  privacy.observe(captured);
+  assert.deepEqual(codeBoxRows(captured, ['5038']), []);
+  assert.deepEqual(privacy.screenText(captured), ['5']);
+  assert.equal(privacy.canScreenshot(), true);
+  assert.notEqual(
+    privacy.maskForModel([], []).describeElement(captured.elements[1], describe),
+    'box (hidden)',
+  );
+});
+
+for (const [typed, texts, entered] of [
+  ['5038', [0], '5038'],
+  ['503', [1, 2], '503'],
+  ['5038', [0], '50'],
+  ['5038', [], '5'],
 ] as const) {
-  test(`accessible pressable cells labelled by their character hide ${typed.length} characters`, () => {
+  test(`accessible pressable cells labelled by their character hide ${entered} from filled ${typed}`, () => {
     const nodes: NativeNode[] = [
       { ref: '@row', index: 0, type: 'Other', rect: { x: 0, y: 300, width: 402, height: 60 } },
     ];
@@ -175,7 +226,7 @@ for (const [typed, texts] of [
         type: 'Other',
         identifier: 'otp-input',
         hittable: true,
-        ...(typed[i] ? { label: typed[i] } : {}),
+        ...(entered[i] ? { label: entered[i] } : {}),
         rect: { x, y: 300, width: 44, height: 60 },
       });
       if ((texts as readonly number[]).includes(i))
@@ -184,7 +235,7 @@ for (const [typed, texts] of [
           index: cell + 1,
           parentIndex: cell,
           type: 'StaticText',
-          label: typed[i],
+          label: entered[i],
           rect: { x: x + 13, y: 313, width: 17, height: 34 },
         });
     }
