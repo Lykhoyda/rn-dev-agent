@@ -238,7 +238,7 @@ export function createDevSettingsHandler(
         );
       if (result.error || result.value !== 'ok')
         return failResult(
-          'The Expo dev-client floating button could not be confirmed hidden.',
+          `The Expo dev-client floating button could not be confirmed hidden: ${result.error ? 'the preferences call failed or timed out' : 'the preferences did not read back hidden'}.`,
           'DEV_MENU_HIDE_UNVERIFIED',
           { action: args.action, outcome: 'DEV_MENU_HIDE_UNVERIFIED' },
         );

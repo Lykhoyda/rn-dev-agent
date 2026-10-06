@@ -90,6 +90,12 @@ for (const [name, preferences] of [
     assert.equal(env.ok, false);
     assert.equal(env.code, 'DEV_MENU_HIDE_UNVERIFIED');
     if (name !== 'a rejected preferences call') assert.equal(calls[0].value, 'unverified');
+    assert.match(
+      env.error ?? '',
+      name === 'a rejected preferences call'
+        ? /the preferences call failed or timed out/
+        : /the preferences did not read back hidden/,
+    );
   });
 }
 

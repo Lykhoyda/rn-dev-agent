@@ -394,4 +394,8 @@ test('the core attach waits for the bundle before the origin proof can run', () 
   const ready = source.indexOf('await awaitBundleReady(', connect);
   assert.ok(connect >= 0 && ready > connect, 'readiness follows the exact connect');
   assert.ok(ready < source.indexOf('prove: () => prove('), 'and precedes the origin proof step');
+  assert.ok(
+    ready < source.indexOf('await clearDevOverlays('),
+    'and the dev-menu hide never runs on an unrendered app',
+  );
 });
