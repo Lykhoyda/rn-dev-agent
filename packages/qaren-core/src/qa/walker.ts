@@ -1432,8 +1432,10 @@ export async function walkBlock(
             item.kind === 'fill' &&
             !(act!.ok && act!.proven) &&
             (act!.evidence === 'masked' || act!.evidence === 'unavailable');
+          const noMutationRefusal = !act!.ok && act!.mutation === 'none';
           if (
-            item.kind === 'fill' ? (act!.ok && act!.proven) || unverified : act!.proven || changed
+            !noMutationRefusal &&
+            (item.kind === 'fill' ? (act!.ok && act!.proven) || unverified : act!.proven || changed)
           ) {
             const target = stepTarget(item);
             emit({

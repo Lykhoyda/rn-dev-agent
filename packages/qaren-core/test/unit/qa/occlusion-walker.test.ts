@@ -36,6 +36,35 @@ for (const kind of ['press', 'fill'] as const) {
   });
 }
 
+for (const kind of ['press', 'fill', 'back', 'dialog', 'scroll'] as const) {
+  test(`a proven no-mutation ${kind} refusal cannot pass on lower-to-middle readback movement`, async () => {
+    const moved: ActResult = {
+      ok: false,
+      proven: false,
+      mutation: 'none',
+      error: 'TARGET_MOVED_BEFORE_DISPATCH: target moved before dispatch',
+      ...(kind === 'fill' ? { evidence: 'unavailable' as const } : {}),
+    };
+    const type = kind === 'fill' ? 'TextField' : 'Button';
+    const f = fake([at(700, type), at(400, type)], { [kind]: [moved, moved] });
+    if (kind === 'back' || kind === 'dialog' || kind === 'scroll') f.deps[kind] = async () => moved;
+    const steps = {
+      press: '1. Tap "go"\n',
+      fill: '1. Fill "field" with "x"\n',
+      back: '1. Back\n',
+      dialog: '1. Accept dialog\n',
+      scroll: '1. Scroll down\n',
+    };
+    const outcome = await walkBlock(block(steps[kind]), f.deps);
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.match(outcome.failure?.seen ?? '', /TARGET_MOVED_BEFORE_DISPATCH/);
+    assert.equal(
+      outcome.rows.some((row) => row.outcome === 'pass'),
+      false,
+    );
+  });
+}
+
 const root = (): NativeNode[] => [
   { ref: '@app', index: 0, type: 'Application', rect: { x: 0, y: 0, width: 400, height: 800 } },
   {

@@ -744,7 +744,7 @@ extension RnFastRunnerTests {
       withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
         resolved = resolveTypeCommandTarget(app: activeApp, command: command)
       }
-      if liveTargetCheck(app: activeApp, command: command, deadline: hitTestDeadline) == .moved {
+      if liveTargetCheck(app: activeApp, command: command, deadline: hitTestDeadline, checkHittability: false) == .moved {
         return Response(ok: false, error: ErrorPayload(code: "TARGET_MOVED_BEFORE_DISPATCH", message: Self.movedDispatchMessage, mutation: "none"))
       }
       let target: XCUIElement

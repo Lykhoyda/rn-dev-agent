@@ -83,4 +83,34 @@ final class DispatchGuardTests: XCTestCase {
       XCTAssertEqual(DispatchGuard.decide(liveHittable: check.hittable, keyboardContainsPoint: false, targetMoved: check == .moved), .proceed)
     }
   }
+
+  func testFillFrameCheckLeavesHittabilityForTheFocusPointCheck() {
+    var time = 0.0
+    var reads = 0
+    let frameOnly = DispatchGuard.hitTest(
+      deadline: 0.3,
+      now: { time },
+      resolve: { time += 0.05; return 1 },
+      matchesFrame: { _ in true },
+      checkHittability: false,
+      read: { _ in reads += 1; time += 0.2; return false }
+    )
+    XCTAssertEqual(frameOnly, .unavailable)
+    XCTAssertEqual(reads, 0)
+    time += 0.06
+    let focusPoint = DispatchGuard.hitTest(
+      deadline: 0.3,
+      now: { time },
+      resolve: { 1 },
+      read: { _ in reads += 1; time += 0.1; return false }
+    )
+    XCTAssertEqual(reads, 1)
+    XCTAssertEqual(DispatchGuard.decide(liveHittable: focusPoint.hittable, keyboardContainsPoint: false), .occluded)
+    let moved = DispatchGuard.hitTest(
+      deadline: 0.3, now: { 0.1 }, resolve: { 1 },
+      matchesFrame: { _ in false }, checkHittability: false,
+      read: { _ in XCTFail("frame-only check must not read hittability"); return true }
+    )
+    XCTAssertEqual(moved, .moved)
+  }
 }

@@ -682,7 +682,7 @@ extension RnFastRunnerTests {
     ).hittable
   }
 
-  func liveTargetCheck(app: XCUIApplication, command: Command, deadline: Double) -> DispatchGuard.TargetCheck {
+  func liveTargetCheck(app: XCUIApplication, command: Command, deadline: Double, checkHittability: Bool = true) -> DispatchGuard.TargetCheck {
     guard let index = command.snapshotNodeIndex,
           let retained = retainedSnapshotTargets[index],
           retained.generation == currentSnapshotGeneration,
@@ -719,6 +719,7 @@ extension RnFastRunnerTests {
         })
         return exception == nil ? matches : nil
       },
+      checkHittability: checkHittability,
       read: { target in self.boundedHittable(target, deadline: deadline) }
     )
   }

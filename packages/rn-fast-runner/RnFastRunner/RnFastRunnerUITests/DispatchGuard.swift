@@ -16,11 +16,13 @@ enum DispatchGuard {
     now: () -> Double,
     resolve: () -> T?,
     matchesFrame: (T) -> Bool? = { _ in true },
+    checkHittability: Bool = true,
     read: (T) -> Bool?
   ) -> TargetCheck {
     guard now() < deadline, let target = resolve(), now() < deadline,
           let sameFrame = matchesFrame(target), now() <= deadline else { return .unavailable }
     if !sameFrame { return .moved }
+    if !checkHittability { return .unavailable }
     let result = read(target)
     guard now() <= deadline, let result else { return .unavailable }
     return .hittable(result)
