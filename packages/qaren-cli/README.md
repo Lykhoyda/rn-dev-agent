@@ -581,7 +581,8 @@ targets or literal checks; phrase checks still ask Jev. An ambiguous stored
 identity refuses `TARGET_AMBIGUOUS` without re-walking. A stored identity that no
 longer resolves before that step authorizes any mutation re-walks
 the block from that line; earlier completed steps are kept. Once that step authorizes
-a mutation, its selector failure is terminal. On PASS only the commands under that
+a mutation, its selector failure is terminal; recovered selector misses follow
+[Step recovery](#step-recovery). On PASS only the commands under that
 line and later ones are rewritten, and every `✓` comment stays byte-identical. A failing check is a FAIL and
 is never re-walked or rewritten. Timeout recovery remains deferred (see
 [Step recovery](#step-recovery)); app-process changes stay terminal. A failing block is never saved;
@@ -676,7 +677,7 @@ during login replay, with safely masked visible error-screen text in `failure.se
 It is checked before accepting a step or refusing incomplete semantic evidence,
 and never triggers recovery.
 
-An action whose screen did not change after its one retry, a step target that
+An action without success evidence after its one retry, a step target that
 does not resolve, or a phrase check still unsure after its re-ask
 gets at most one deterministic recovery, then the step runs once more from a fresh
 capture. The order is owned by [`recover.ts`](../qaren-core/src/qa/recover.ts): a
@@ -692,6 +693,13 @@ failure of the same step fails it, recovery never runs inside the login replay, 
 capture, Jev, process, replay-miss and cancellation refusals are never recovered. The
 ledger's `recoveries` counts recoveries that let the step retry; `escapes` and `llmTurns`
 stay `0`. Login fills are masked like plan fills and withhold the video.
+
+Recovery counts as a device mutation for replay eligibility: a selector miss
+after recovery is terminal and never initiates another re-walk. The second ordinary
+action attempt captures fresh evidence but gets no additional expiry refresh;
+phrase actions retain presence capture through readback and retries.
+See the [recovery regressions](../qaren-core/test/unit/qa/walker-recover.test.ts)
+and [freshness regressions](../qaren-core/test/unit/qa/temporal-walker.test.ts).
 
 Recovery requires admitted screen evidence. iOS phrase steps behind a system or
 permission alert can refuse `SCREEN_EVIDENCE_INCOMPLETE` before recovery because
