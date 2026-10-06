@@ -255,7 +255,13 @@ export function matchPrivate(
                   return (match.match(/\d+/gu) ?? []).some((candidate) => value.includes(candidate));
                 const candidates = match.match(/[\p{L}\p{M}\p{N}_]+/gu) ?? [];
                 if (
-                  candidates.some((candidate) => chars(candidate) >= SHORT && value.includes(candidate))
+                  candidates.some((candidate) => {
+                    const letters = [...candidate];
+                    return letters.some((_, index) =>
+                      index + SHORT <= letters.length &&
+                      value.includes(letters.slice(index, index + SHORT).join('')),
+                    );
+                  })
                 )
                   return true;
                 return [

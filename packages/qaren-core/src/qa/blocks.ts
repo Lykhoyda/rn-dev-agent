@@ -137,7 +137,9 @@ export function serializeBlock(
   const admission = lines
     .map((line) => (line.startsWith('# ') ? `# ${planLineBody(line.slice(2))}` : line))
     .join('\n');
-  return protectedContent([admission]) ? withheld : { yaml: serialized };
+  return matchPrivate(admission, { values: privateSet.values }, 'persisted').hit
+    ? withheld
+    : { yaml: serialized };
 }
 
 function selectorFrom(value: unknown): Selector | undefined {

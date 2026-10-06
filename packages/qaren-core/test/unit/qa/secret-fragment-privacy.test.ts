@@ -154,6 +154,15 @@ test('secure fragments do not mask unrelated words, identifiers or saved-block s
   }
 });
 
+test('secure fragments embedded in longer words mask the containing token', () => {
+  const privacy = new ObservedPrivacy(['hunter-canary-77']);
+  privacy.concealFallback('hunter-canary-77', true);
+  privacy.didFill('hunter-canary-77');
+  for (const text of ['xhunx', 'xhunterx', 'prefixcanarysuffix'])
+    for (const policy of ['model', 'durable', 'identifier', 'persisted'] as const)
+      assert.deepEqual(matchPrivate(text, privacy.privateSet(), policy), { text: MASK, hit: true });
+});
+
 test('attached symbols in secure fragments are masked with their containing token', () => {
   const privacy = new ObservedPrivacy(['p@ss']);
   privacy.concealFallback('p@ss', true);

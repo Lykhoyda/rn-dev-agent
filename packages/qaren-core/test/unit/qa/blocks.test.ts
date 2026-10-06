@@ -119,6 +119,21 @@ test('serialization admission checks the final emitted YAML', () => {
   assert.ok('yaml' in serializeBlock(block, rows, ios));
 });
 
+test('serialization checks embedded fragments in values without rejecting generated syntax', () => {
+  const privacy = new ObservedPrivacy(['hunter-canary-77']);
+  privacy.concealFallback('hunter-canary-77', true);
+  privacy.didFill('hunter-canary-77');
+  const block = blockOf('### Confirm\n1. Tap "Save"\n✓ "Ready"');
+  const rows = passRows(block, { [block.items[0].line]: { id: 'save-button' } });
+  const result = serializeBlock(block, rows, ios, privacy.privateSet());
+  assert.ok('yaml' in result, JSON.stringify(result));
+  const stored = readBlock(result.yaml);
+  assert.ok(!('invalid' in stored));
+  assert.deepEqual(stored.steps[0].selector, { id: 'save-button' });
+  rows[0].selector = { id: 'xhunx' };
+  assert.ok('unsavable' in serializeBlock(block, rows, ios, privacy.privateSet()));
+});
+
 test('serialization preserves isolated short fragments of long secrets', () => {
   const block = blockOf('## QA\n\n### is\n✓ "is"\n');
   assert.ok('yaml' in serializeBlock(block, passRows(block, {}), ios, secrets('existing-secret')));

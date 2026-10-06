@@ -208,11 +208,7 @@ test('the projected ledger stays readable and unrelated passing blocks are saved
   assert.equal(yaml.length, 1);
   assertAbsent('block files', [files, yaml]);
   assert.deepEqual(ledger.blocksWritten, ['open-the-code-screen']);
-  assert.equal(
-    ledger.blocks.find((block) => block.key === 'check-the-account')?.saved,
-    false,
-    JSON.stringify(ledger.blocks),
-  );
+  assert.equal(ledger.blocks[0].saved, false, JSON.stringify(ledger.blocks));
 });
 
 test('a future short fill leaves unquoted diagnostics readable', async () => {
