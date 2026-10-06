@@ -196,7 +196,7 @@ test('streamed rows carry only value-free fields', async () => {
   }
 });
 
-test('the projected ledger stays readable and ordinary blocks are saved', async () => {
+test('the projected ledger stays readable and blocks matching secure fragments are withheld', async () => {
   const { ledger, files, yaml } = await walk();
   const texts = ledger.steps.map((row) => row.text);
   assert.ok(texts.includes('✓ "Step 1 of 2"'), JSON.stringify(texts));
@@ -204,11 +204,9 @@ test('the projected ledger stays readable and ordinary blocks are saved', async 
   assert.match(ledger.failure?.seen ?? '', /Step 1 of 2/);
   assert.match(ledger.failure?.seen ?? '', /Almost done/);
   assert.match(ledger.failure?.seen ?? '', /\bthe\b/);
-  assert.ok(
-    files.some((file) => file.startsWith('open-the-code-screen')),
-    JSON.stringify(files),
-  );
-  assert.ok(yaml.some((y) => y.includes('qa-start') && y.includes('Step 1 of 2')));
+  assert.deepEqual(files, []);
+  assert.deepEqual(yaml, []);
+  assert.equal(ledger.blocks.find((block) => block.key === 'open-the-code-screen')?.saved, false);
   assert.equal(
     ledger.blocks.find((block) => block.key === 'check-the-account')?.saved,
     false,

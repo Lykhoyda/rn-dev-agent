@@ -1143,13 +1143,18 @@ for (const strict of [false, true]) {
       appId: 'com.example.app',
     });
     assert.equal(result.verdict, 'REFUSED');
-    assert.deepEqual(result.blocksWritten, ['safe']);
+    assert.deepEqual(result.blocksWritten, strict ? [] : ['safe']);
     assert.equal(result.blocks[1].saved, false);
     assert.equal(existsSync(join(dir, '.qaren', 'actions', 'code-shown.yaml')), false);
-    assert.equal(
-      readFileSync(join(dir, '.qaren', 'actions', 'safe.yaml'), 'utf8').includes(EMAIL),
-      false,
-    );
+    if (strict) {
+      assert.equal(result.blocks[0].saved, false);
+      assert.equal(existsSync(join(dir, '.qaren', 'actions', 'safe.yaml')), false);
+    } else {
+      assert.equal(
+        readFileSync(join(dir, '.qaren', 'actions', 'safe.yaml'), 'utf8').includes(EMAIL),
+        false,
+      );
+    }
   });
 }
 

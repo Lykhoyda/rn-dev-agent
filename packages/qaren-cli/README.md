@@ -421,13 +421,17 @@ removing whitespace, punctuation and symbols also match with any sequence of
 those separators between digits. Model requests use
 opaque identity tokens; durable text uses `•••`; a match withholds saved blocks.
 Displayed identifiers use the same matcher while operational identifiers remain
-usable. Partial fragments not independently classified as private remain readable
-outside structural code rows.
+usable. After dispatching a numeric code of at least three digits or a secure
+field fill, the same matcher also masks observed in-order fragments, including
+single characters, of that value in every outward projection, independent of
+layout, semantic kind or spacing;
+fragment masks do not establish complete-value identity in model comparisons.
+Known limit: unrelated text matching a fragment of a filled secret is also masked.
 
 Short typed values (one or two characters) are protected in straight or curly
 quoted plan slots, including parsing requests, input value slots and structural
 code rows. They are not masked elsewhere, including a short value shown as free
-text before its fill. Secure-field values have a separate
+text before its fill. Before fill dispatch, secure-field values have a separate
 exception: two or more characters match as substrings; a single character
 matches only as a whole token. This includes native labels classified as possible
 values on secure inputs, even when no readable value is supplied.
@@ -448,8 +452,8 @@ do not qualify, and text-only rows retain the three-box rule independently.
 Enclosing labels composed of the row's characters, including separated forms,
 are concealed too. Inputs are not code boxes. The shared
 screen-text projection also protects failure history (`failure.seen`, including
-"previously on screen"). Box characters are never retained as free-text matching
-rules.
+"previously on screen"). Structural masking remains unioned with value-based
+fragment masking.
 
 Opaque tokens preserve complete-value identity for model comparisons. An
 unobserved protected value or hidden input content cannot prove an assertion.
@@ -606,7 +610,7 @@ fallback anywhere in the same run are checked under those rules.
 A matching block title, header field, raw comment, fill
 literal, literal assertion, stored selector or serialized YAML withholds the
 block rather than rewriting its bytes. Structural plan numbering is excluded
-from matching; code-box characters are not retained as fragment admission rules.
+from matching; filled-secret fragments also withhold matching saved-block content.
 The value-free reason is
 `contains a protected plan-typed value` in `blocks_not_saved`, including when the
 value was observed rather than typed. Existing saved actions are not removed.

@@ -181,6 +181,7 @@ export interface PrivateValue {
 
 export interface PrivateSet {
   values: readonly PrivateValue[];
+  fragments?: readonly string[];
 }
 
 export type Policy = 'model' | 'durable' | 'identifier' | 'persisted';
@@ -224,12 +225,20 @@ export function matchPrivate(
       return patterns.map((pattern) => ({ pattern, value: value.text }));
     })
     .sort((a, b) => b.pattern.length - a.pattern.length);
-  if (!rules.length) return { text, hit: false };
+  const fragments = (set.fragments ?? []).flatMap(forms).map((value) => value.replace(/\s/gu, ''));
+  if (!rules.length && !fragments.length) return { text, hit: false };
   let hit = false;
-  const pattern = new RegExp(rules.map((rule) => `(${rule.pattern})`).join('|'), 'gu');
-  const projected = text.replace(pattern, (_match, ...groups) => {
-    hit = true;
+  const patterns = rules.map((rule) => `(${rule.pattern})`);
+  if (fragments.length) patterns.push(whole(`(?:[${WORD}]+|[^${WORD}\\s])`));
+  const pattern = new RegExp(patterns.join('|'), 'gu');
+  const projected = text.replace(pattern, (match, ...groups) => {
     const index = rules.findIndex((_, i) => groups[i] !== undefined);
+    if (index < 0) {
+      if (!fragments.some((value) => subsequence(match, value))) return match;
+      hit = true;
+      return MASK;
+    }
+    hit = true;
     return policy === 'model' ? (token?.(rules[index].value) ?? MASK) : MASK;
   });
   return { text: projected, hit };
@@ -569,6 +578,7 @@ export class ObservedPrivacy {
   private readonly concealed = new Set<string>();
   private readonly secret = new Set<string>();
   private readonly preclassified: string[] = [];
+  private readonly filledValues = new Set<string>();
   private filled = false;
   private readonly codeRows = new WeakMap<Screen, Element[][]>();
   private readonly codeElements = new WeakSet<Element>();
@@ -629,12 +639,14 @@ export class ObservedPrivacy {
       );
   }
 
-  didFill(): void {
+  didFill(value?: string): void {
     this.filled = true;
+    if (value) this.filledValues.add(value);
   }
 
-  concealFallback(value: string): void {
+  concealFallback(value: string, secure = false): void {
     this.concealed.add(value);
+    if (secure) this.secret.add(value);
     this.sensitivePixels = true;
   }
 
@@ -646,6 +658,11 @@ export class ObservedPrivacy {
     const tagged = (values: Iterable<string>, provenance: Provenance): PrivateValue[] =>
       [...new Set(values)].filter(Boolean).map((text) => ({ text, provenance }));
     return {
+      fragments: [...this.filledValues].filter(
+        (value) =>
+          /^\d{3,}$/u.test(value.replace(new RegExp(DIGIT_GAP, 'gu'), '')) ||
+          this.secret.has(value),
+      ),
       values: [
         ...tagged(this.secret, 'secret'),
         ...tagged(this.concealed, 'concealed'),
@@ -769,6 +786,7 @@ export function modelMask(
       projectPlanLine(
         text,
         {
+          ...all,
           values: all.values.map((entry) =>
             entry.provenance === 'secret' ? entry : { ...entry, provenance: 'typed' as const },
           ),

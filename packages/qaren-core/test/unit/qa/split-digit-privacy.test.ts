@@ -146,7 +146,7 @@ for (const [width, typed, wrapped, entered] of [
     });
     const captured = join(nodes, []);
     const privacy = new ObservedPrivacy([typed]);
-    privacy.didFill();
+    privacy.didFill(typed);
     privacy.observe(captured);
     assert.equal(privacy.canScreenshot(), false);
     const text = privacy.screenText(captured);
@@ -179,7 +179,7 @@ for (const [width, typed, wrapped, entered] of [
   });
 }
 
-test('an unrelated lone digit in a container keeps its policy after filling', () => {
+test('an unrelated lone digit matching a filled secret is masked', () => {
   const captured = join(
     [
       { ref: '@cell', index: 0, type: 'Other', rect: { x: 0, y: 300, width: 44, height: 60 } },
@@ -195,11 +195,11 @@ test('an unrelated lone digit in a container keeps its policy after filling', ()
     [],
   );
   const privacy = new ObservedPrivacy(['5038']);
-  privacy.didFill();
+  privacy.didFill('5038');
   privacy.observe(captured);
   assert.deepEqual(codeBoxRows(captured, ['5038']), []);
-  assert.deepEqual(privacy.screenText(captured), ['5']);
-  assert.equal(privacy.canScreenshot(), true);
+  assert.deepEqual(privacy.screenText(captured), [MASK]);
+  assert.equal(privacy.canScreenshot(), false);
   assert.notEqual(
     privacy.maskForModel([], []).describeElement(captured.elements[1], describe),
     'box (hidden)',
@@ -241,7 +241,7 @@ for (const [typed, texts, entered] of [
     }
     const captured = join(nodes, []);
     const privacy = new ObservedPrivacy([typed]);
-    privacy.didFill();
+    privacy.didFill(typed);
     privacy.observe(captured);
     const text = privacy.screenText(captured);
     assert.ok(text.includes('[code]'), JSON.stringify(text));

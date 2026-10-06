@@ -502,7 +502,7 @@ export async function walkBlock(
     })(observationDeadline(observation.timing, deadline), deps.now, deps.cancelled);
     try {
       context.check();
-      if (item.kind === 'fill') privacy.didFill();
+      if (item.kind === 'fill') privacy.didFill(item.text);
       // A scroll step's momentum outlives the step and its block; the next targeted dispatch settles first.
       if (item.kind === 'scroll') sequence.momentum = true;
       const result = await send(context);
@@ -1333,7 +1333,7 @@ export async function walkBlock(
                 continue;
               }
               if (item.kind === 'fill' && element && isPrivateInput(element)) {
-                privacy.concealFallback(item.text);
+                privacy.concealFallback(item.text, element.secure);
                 if (!privateFills.includes(item.line)) privateFills.push(item.line);
               }
               act = await mutate(item, before, (context) =>
