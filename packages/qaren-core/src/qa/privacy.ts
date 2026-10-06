@@ -184,7 +184,7 @@ export function redactEvidence(
   return privacy.redact(text);
 }
 
-export type Provenance = 'typed' | 'observed' | 'concealed' | 'secret';
+export type Provenance = 'typed' | 'observed' | 'concealed' | 'secret' | 'code';
 
 export interface PrivateValue {
   text: string;
@@ -228,9 +228,11 @@ export function matchPrivate(
   const rules = set.values
     .flatMap((value) => {
       const length = chars(value.text.trim());
-      if (length < SHORT && value.provenance !== 'secret') return [];
+      if (length < SHORT && value.provenance !== 'secret' && value.provenance !== 'code') return [];
       const patterns = forms(value.text).map((form) =>
-        value.provenance === 'secret' && length === 1 ? whole(escape(form)) : escape(form),
+        value.provenance === 'code' || (value.provenance === 'secret' && length === 1)
+          ? whole(escape(form))
+          : escape(form),
       );
       const digits = digitForm(value.text);
       if (digits) patterns.push(digits);
@@ -263,9 +265,10 @@ export function matchPrivate(
         : part.text.replace(/\S+/gu, (match) => {
             if (
               !fragments.some((value) => {
-                if (/^\d+$/u.test(value))
+                const digits = value.replace(new RegExp(DIGIT_GAP, 'gu'), '');
+                if (/^\d+$/u.test(value) || /^\d{3,}$/u.test(digits))
                   return (match.match(/\d+/gu) ?? []).some((candidate) =>
-                    value.includes(candidate),
+                    digits.includes(candidate),
                   );
                 const candidates = match.match(/[\p{L}\p{M}\p{N}_]+/gu) ?? [];
                 if (
@@ -280,8 +283,10 @@ export function matchPrivate(
                 )
                   return true;
                 return [
-                  ...value.matchAll(/[\p{L}\p{M}\p{N}_][^\p{L}\p{M}\p{N}_\s]+[\p{L}\p{M}\p{N}_]/gu),
-                ].some(([fragment]) => match.includes(fragment));
+                  ...value.matchAll(
+                    /(?=([\p{L}\p{M}\p{N}_][^\p{L}\p{M}\p{N}_\s]+[\p{L}\p{M}\p{N}_]))/gu,
+                  ),
+                ].some(([, fragment]) => match.includes(fragment));
               })
             )
               return match;
@@ -628,6 +633,7 @@ export class ObservedPrivacy {
   private readonly secret = new Set<string>();
   private readonly preclassified: string[] = [];
   private readonly filledValues = new Set<string>();
+  private readonly provenCodes = new Set<string>();
   private filled = false;
   private readonly codeRows = new WeakMap<Screen, Element[][]>();
   private readonly codeElements = new WeakSet<Element>();
@@ -651,6 +657,9 @@ export class ObservedPrivacy {
         this.privateSet().values.map((value) => value.text),
       );
       this.codeRows.set(screen, rows);
+      for (const value of this.filledValues)
+        if (chars(value) < SHORT && rows.some((row) => row.map(boxText).join('') === value))
+          this.provenCodes.add(value);
       const boxes = rows.flat();
       for (const element of screen.elements) {
         const members = boxes.filter((box) => ancestorsOf(box).includes(element));
@@ -713,6 +722,7 @@ export class ObservedPrivacy {
           this.secret.has(value),
       ),
       values: [
+        ...tagged(this.provenCodes, 'code'),
         ...tagged(this.secret, 'secret'),
         ...tagged(this.concealed, 'concealed'),
         ...tagged([...this.typed, ...this.preclassified], 'typed'),
@@ -841,7 +851,9 @@ export function modelMask(
         {
           ...all,
           values: all.values.map((entry) =>
-            entry.provenance === 'secret' ? entry : { ...entry, provenance: 'typed' as const },
+            entry.provenance === 'secret' || entry.provenance === 'code'
+              ? entry
+              : { ...entry, provenance: 'typed' as const },
           ),
         },
         'model',

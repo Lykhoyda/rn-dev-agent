@@ -12,6 +12,79 @@ import { element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
 import { parsePlan, parsePlanWithJev } from '../../../dist/qa/plan.js';
 import { runPlan } from '../../../dist/qa/walker.js';
 
+for (const code of ['4', '48']) {
+  test(`proven short code ${code} is protected as a whole token outside its row`, async () => {
+    const captured = join(
+      [
+        ...Array.from({ length: 4 }, (_, i) => ({
+          ref: `@box${i}`,
+          type: 'StaticText',
+          label: code[i] ?? '',
+          rect: { x: i * 48, y: 100, width: 42, height: 42 },
+        })),
+        { ref: '@caption', type: 'StaticText', label: `Code ${code}` },
+        { ref: '@echo', type: 'StaticText', label: code },
+      ],
+      [],
+    );
+    const privacy = new ObservedPrivacy([code]);
+    privacy.didFill(code);
+    assert.equal(privacy.redact(`Code ${code}`), `Code ${code}`);
+    privacy.observe(captured);
+    assert.deepEqual(privacy.screenText(captured), ['[code]', `Code ${MASK}`, MASK]);
+    assert.equal(privacy.redact(`Code ${code}`), `Code ${MASK}`);
+    assert.equal(privacy.redact(code), MASK);
+    assert.equal(privacy.redactIdentifier(`code-${code}`), `code-${MASK}`);
+    assert.deepEqual(privacy.privateSet().fragments, []);
+    for (const text of ['148', ...(code === '48' ? ['Step 4 of 8', '4 8'] : ['Step 8 of 9'])])
+      for (const policy of ['model', 'durable', 'identifier', 'persisted'] as const)
+        assert.deepEqual(matchPrivate(text, privacy.privateSet(), policy), { text, hit: false });
+    for (const policy of ['model', 'durable', 'identifier', 'persisted'] as const)
+      assert.equal(matchPrivate(`Code ${code}`, privacy.privateSet(), policy).hit, true);
+    const mask = privacy.maskForModel([code], []);
+    for (const text of [code, `Code ${code}`]) {
+      assert.equal(mask.apply(text).includes(code), false);
+      assert.equal(mask.applyPlanLine(`1. Tap "${text}"`).includes(code), false);
+    }
+    for (const node of captured.elements.slice(4))
+      assert.equal(mask.describeElement(node, describe).includes(code), false);
+    const f = walker(
+      [screen([element('@pin', 'Code', { kind: 'input', testID: 'pin' })]), captured],
+      scriptedJudge(() => assert.fail('literal fill is model-free')),
+      { ok: false, proven: false, mutation: 'observed', error: 'fill interrupted' },
+    );
+    const blocks = parsePlan(`1. Type "${code}" into "pin"\n✓ "Ready"`).blocks!;
+    const ledger = await runPlan(blocks, f.deps);
+    assert.equal(ledger.verdict, 'FAIL');
+    assert.ok(ledger.failure!.seen.includes(`Code ${MASK}`), ledger.failure!.seen);
+    assert.equal(ledger.failure!.seen.includes(code), false);
+  });
+}
+
+test('short fills without matching code rows preserve ordinary numbers', () => {
+  const privacy = new ObservedPrivacy(['2', '48']);
+  privacy.didFill('2');
+  privacy.didFill('48');
+  const ordinary = screen([
+    element('@input', 'Number', { kind: 'input', value: '2' }),
+    element('@caption', 'Step 2 of 3', { kind: 'text' }),
+  ]);
+  privacy.observe(ordinary);
+  assert.ok(privacy.screenText(ordinary).includes('Step 2 of 3'));
+  assert.equal(privacy.redact('2 48 Step 4 of 8 148'), '2 48 Step 4 of 8 148');
+  const unmatchedRow = join(
+    Array.from({ length: 4 }, (_, i) => ({
+      ref: `@box${i}`,
+      type: 'StaticText',
+      label: '59'[i] ?? '',
+      rect: { x: i * 48, y: 100, width: 42, height: 42 },
+    })),
+    [],
+  );
+  privacy.observe(unmatchedRow);
+  assert.equal(privacy.redact('48'), '48');
+});
+
 for (const code of ['4815', '1122', '9382']) {
   test(`structural code row ${code} ignores wrappers and repeated text`, () => {
     const screen = join(

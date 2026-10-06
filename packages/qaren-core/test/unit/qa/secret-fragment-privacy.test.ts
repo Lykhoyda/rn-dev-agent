@@ -150,6 +150,29 @@ test('filled numeric codes mask contiguous runs and retain complete-value identi
   assert.equal(mask.apply(mask.tokens[0]), mask.tokens[0]);
 });
 
+test('formatted numeric codes protect normalized partial runs', () => {
+  const privacy = new ObservedPrivacy(['48-15']);
+  privacy.didFill('48-15');
+  for (const text of ['4', '8', '1', '5', '48', '81', '15', 'row-48'])
+    for (const policy of ['model', 'durable', 'identifier', 'persisted'] as const)
+      assert.deepEqual(matchPrivate(text, privacy.privateSet(), policy), { text: MASK, hit: true });
+  for (const text of ['45', '85', '148']) assert.equal(privacy.redact(text), text);
+  const mask = privacy.maskForModel(['48-15'], []);
+  assert.equal(mask.apply('"48-15"'), `"${mask.tokens[0]}"`);
+  assert.equal(mask.apply('"4815"'), `"${mask.tokens[0]}"`);
+});
+
+test('secure punctuation fragments overlap at their shared character', () => {
+  const privacy = new ObservedPrivacy(['p@s@word']);
+  privacy.concealFallback('p@s@word', true);
+  privacy.didFill('p@s@word');
+  for (const text of ['p@s', 's@w', 'xs@wx'])
+    for (const policy of ['model', 'durable', 'identifier', 'persisted'] as const)
+      assert.deepEqual(matchPrivate(text, privacy.privateSet(), policy), { text: MASK, hit: true });
+  const mask = privacy.maskForModel(['p@s@word'], []);
+  assert.equal(mask.apply('"p@s@word"'), `"${mask.tokens[0]}"`);
+});
+
 test('secure fragments do not mask unrelated words, identifiers or saved-block syntax', () => {
   const privacy = new ObservedPrivacy(['hunter-canary-77']);
   privacy.concealFallback('hunter-canary-77', true);

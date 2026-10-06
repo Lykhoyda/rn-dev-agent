@@ -142,6 +142,8 @@ test('serialization preserves isolated short fragments of long secrets', () => {
 test('serialization withholds filled-secret fragments in every saved content field', () => {
   for (const [secret, fragments] of [
     ['4815', ['4', '48', '81', '15', 'row-48']],
+    ['48-15', ['4', '48', '81', '15', 'row-48']],
+    ['p@s@word', ['p@s', 's@w', 'xs@wx']],
     ['hunter-canary-77', ['hun', 'hunter', 'canary', 'r-c', 'xhunx']],
   ] as const) {
     const privacy = new ObservedPrivacy([secret]);
