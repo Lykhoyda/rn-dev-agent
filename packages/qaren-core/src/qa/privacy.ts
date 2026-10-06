@@ -252,22 +252,23 @@ export function matchPrivate(
             if (
               !fragments.some((value) => {
                 if (/^\d+$/u.test(value))
-                  return (match.match(/\d+/gu) ?? []).some((candidate) => value.includes(candidate));
+                  return (match.match(/\d+/gu) ?? []).some((candidate) =>
+                    value.includes(candidate),
+                  );
                 const candidates = match.match(/[\p{L}\p{M}\p{N}_]+/gu) ?? [];
                 if (
                   candidates.some((candidate) => {
                     const letters = [...candidate];
-                    return letters.some((_, index) =>
-                      index + SHORT <= letters.length &&
-                      value.includes(letters.slice(index, index + SHORT).join('')),
+                    return letters.some(
+                      (_, index) =>
+                        index + SHORT <= letters.length &&
+                        value.includes(letters.slice(index, index + SHORT).join('')),
                     );
                   })
                 )
                   return true;
                 return [
-                  ...value.matchAll(
-                    /[\p{L}\p{M}\p{N}_][^\p{L}\p{M}\p{N}_\s]+[\p{L}\p{M}\p{N}_]/gu,
-                  ),
+                  ...value.matchAll(/[\p{L}\p{M}\p{N}_][^\p{L}\p{M}\p{N}_\s]+[\p{L}\p{M}\p{N}_]/gu),
                 ].some(([fragment]) => match.includes(fragment));
               })
             )
