@@ -103,15 +103,23 @@ rounded frame.
 
 ### Occluded taps and focus
 
-Immediately before an iOS tap or an exact-input focus tap, the runner checks
-the live target's `XCUIElement.isHittable`. Live tap resolution requires exactly
-one match on native type, identifier (or label when unidentified), and frame.
-Resolution and hit testing share one 300 ms deadline; an unavailable, ambiguous,
-failed or over-budget check permits dispatch as before. An input's hit test
+Before an iOS tap or exact fill, the runner resolves the retained target by
+native type and identifier (or label when unidentified) in the same snapshot
+generation. A unique live match whose frame no longer approximately matches
+the retained frame refuses with `TARGET_MOVED_BEFORE_DISPATCH`, mutation `none`,
+and no tap or typing. A later screen change cannot turn a proven no-mutation
+refusal into a passing action; the ordinary retry uses a fresh capture.
+Resolution, frame comparison and hit testing share one 300 ms deadline.
+Missing retained identity, a generation mismatch, zero or ambiguous live
+matches, and failed or over-budget checks leave the check unavailable and
+permit dispatch as before. Stable taps check `XCUIElement.isHittable`; exact
+fills use the frame guard without an extra hittability read, then keep the
+existing focus-point check when a focus tap is needed. An input's hit test
 applies only when the focus point lies inside its frame; a wrapper-centre focus
 point outside it leaves that check unavailable. A negative check refuses with
 `FOCUS_TARGET_OCCLUDED` and mutation `none`. Core requires
-`HIT_TESTED_DISPATCH_V1`; missing capability takes the runner rebuild path.
+`HIT_TESTED_DISPATCH_V1` and `TARGET_FRAME_GUARD_V1`; a missing capability takes
+the runner rebuild path.
 
 Before dispatch, the walker also treats a press or fill target whose centre lies
 outside its trusted clipping viewport or inside an observed keyboard frame
@@ -123,6 +131,11 @@ above a visible keyboard. It then requires a unique rebind to the refused
 target's testID and kind before retrying, including keyboard-fallback wrapper
 taps. A label-only target cannot rebind after scrolling; a missing or nonunique
 identity refuses `TARGET_NOT_FOUND` with “stayed off screen after one scroll”.
+After scrolling to resolve or uncover a press or fill target, capture requires
+agreeing consecutive frame readbacks within the existing bounded readback
+budget; otherwise `SCROLL_UNSETTLED`
+refuses without another dispatch or recovery. Keyboard-fallback focus readbacks
+use the same settlement check.
 A second occlusion fails with that same off-screen explanation; wrapper fallback
 reports that nothing was typed. This refusal does not become
 `ACTION_OUTCOME_UNCERTAIN`. Checks and waits gain only the keyboard rule below.
@@ -180,8 +193,9 @@ unfocused vetoes typing.
 
 When the keyboard is already up, iOS fallback types only with positive React
 proof that the intended input is focused. With an eligible target, QaReN taps it,
-recaptures once, rebinds the same identity and then requires that proof. Without
-a target, it requires that no secure or disabled element carries the quoted
+recaptures with the [settlement check](#occluded-taps-and-focus), rebinds the
+same identity and then requires that proof. Without a target, it requires that
+no secure or disabled element carries the quoted
 testID and React reports that exact input focused. The guard and proof use the
 quoted ID unchanged, including a literal `-pressable` suffix. Only an
 observed wrapper in the tap path establishes a wrapper-to-base identity mapping.

@@ -34,7 +34,7 @@ enum DispatchGuard {
     case moved
   }
 
-  // nil means the live target could not be resolved or read in budget: dispatch as before.
+  // Proven frame movement refuses even when hittability is unavailable.
   static func decide(liveHittable: Bool?, keyboardContainsPoint: Bool, targetMoved: Bool = false) -> Decision {
     if targetMoved { return .moved }
     return keyboardContainsPoint || liveHittable == false ? .occluded : .proceed
