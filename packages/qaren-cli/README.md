@@ -427,16 +427,26 @@ projection, independent of layout or semantic kind. Complete-value matching runs
 first, preserving identity tokens even in quoted or prefixed text; fragment
 matching processes only the text left unmasked. A fragment match masks the whole
 whitespace-delimited token containing it. Numeric runs must occur contiguously
-in the code, including single digits; secure-text fragments match at least three
-contiguous word characters, including within longer words, or an attached-symbol
-sequence such as `p@s` in `p@ss`. Fragment masks do not establish complete-value
+in the code after removing whitespace, punctuation and symbols, including single
+digits: filling `48-15` protects a standalone `4`. Secure-text fragments match
+at least three contiguous word characters, including within longer words, or an attached-symbol
+sequence such as `p@s` in `p@ss`; overlapping sequences also qualify, such as
+`s@w` in `p@s@word`. Fragment masks do not establish complete-value
 identity in model comparisons.
 Known limit: unrelated text matching a fragment of a filled secret is also masked.
 
 Short typed values (one or two characters) are protected in straight or curly
 quoted plan slots, including parsing requests, input value slots and structural
-code rows. They are not masked elsewhere, including a short value shown as free
-text before its fill. Before fill dispatch, secure-field values have a separate
+code rows. After fill dispatch, an observed code-box row spelling the filled
+short value also protects its whole-token echoes in outward text, identifiers,
+model descriptions and saved-block admission. Token boundaries exclude adjacent
+letters, combining marks, digits and underscores: proven code `48` masks
+`Code 48` and `48`, while `Step 4 of 8` and `148` remain readable. This proof
+does not enable fragment matching, and a short ordinary-input fill without a
+code-box row does not establish code material. Other short free-text echoes,
+including before fill dispatch, remain readable. An input label equal to its
+own value or a known private value is masked at any length, after trimming and
+NFC normalization. Before fill dispatch, secure-field values have a separate
 exception: two or more characters match as substrings; a single character
 matches only as a whole token. This includes native labels classified as possible
 values on secure inputs, even when no readable value is supplied.
