@@ -106,10 +106,17 @@ async function witness(f: ReturnType<typeof fixture>) {
   );
   const projection = visibilityView(screen, true);
   assert.ok('elements' in projection);
-  assert.deepEqual(projection.unknown[0], { element: screen.elements[2], reason: 'visibility' });
+  assert.equal(
+    projection.unknown.some(({ element }) => element === screen.elements[2]),
+    false,
+    'a content-free plain container is not a contribution even under the screen-wide gap',
+  );
+  assert.ok((projection.capabilityGapContainers ?? 0) >= 1);
   assert.equal(projection.unassociatedReact, 0);
   assert.equal(
-    projection.elements.length + projection.unknown.length,
+    projection.elements.length +
+      projection.unknown.length +
+      (projection.capabilityGapContainers ?? 0),
     screen.elements.slice(2).filter((element) => element.semantic?.visibility !== 'offscreen')
       .length,
   );
@@ -131,10 +138,12 @@ async function witness(f: ReturnType<typeof fixture>) {
         state.assertionEvidence.unknown.map(({ reason }) => reason),
         projection.unknown.map(({ reason }) => reason),
       );
-      assert.deepEqual(state.assertionEvidence.unknown[0], {
-        description: 'Other',
-        reason: 'visibility',
-      });
+      assert.equal(
+        state.assertionEvidence.unknown.some(
+          ({ description }: { description: string }) => description === 'Other',
+        ),
+        false,
+      );
       assert.equal(state.assertionEvidence.unassociatedReact, 0);
       assert.deepEqual(state.assertionEvidence.qualifiedHeadings, []);
       assert.doesNotMatch(
@@ -546,7 +555,7 @@ test('gap-host dependencies remain private when a pending heading wait is batche
                 )
               : []),
           ],
-          unknown: [{ description: 'Other', reason: 'visibility' }],
+          unknown: [],
           unassociatedReact: 0,
           qualifiedHeadings: [],
         },

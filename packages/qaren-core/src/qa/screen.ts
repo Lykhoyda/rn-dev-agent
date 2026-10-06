@@ -1120,6 +1120,7 @@ export function visibilityView(
   const elements: Element[] = [];
   const unknown: AssertionEvidence['unknown'] = [];
   let capabilityGapContainers = 0;
+  let gapContainer: Element | undefined;
   for (const e of screen.elements) {
     if (!e.semantic) return incomplete('an observation has no semantic facts');
     const native = e.semantic.nativePresence;
@@ -1138,8 +1139,10 @@ export function visibilityView(
       ruledOut('press') &&
       ruledOut('fill')
     ) {
-      if (e.semantic.press !== 'unsupported' || e.semantic.fill !== 'unsupported')
+      if (e.semantic.press !== 'unsupported' || e.semantic.fill !== 'unsupported') {
         capabilityGapContainers++;
+        if (!unknown.length) gapContainer ??= e;
+      }
       continue;
     }
     const control =
@@ -1178,10 +1181,10 @@ export function visibilityView(
     unassociatedReact: screen.semanticUnassociatedReact ?? 0,
     ...(capabilityGapContainers ? { capabilityGapContainers } : {}),
   };
-  if (diagnostics && unknown.length) {
+  const blocker = gapContainer ?? unknown[0]?.element;
+  if (diagnostics && blocker) {
     try {
-      const element = unknown[0].element;
-      evidence.diagnostic = visibilityBlocker(screen, element, screen.elements.indexOf(element));
+      evidence.diagnostic = visibilityBlocker(screen, blocker, screen.elements.indexOf(blocker));
     } catch {
       // Diagnostics cannot change assertion admission.
     }

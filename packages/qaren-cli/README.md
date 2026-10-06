@@ -265,7 +265,8 @@ not a contribution, even when unassociated React hosts leave press or fill unkno
 screen-wide; that screen-wide gap still keeps a rejected claim uncertain.
 Known limit: React host association is unavailable while more than one native
 window is captured, as with the software keyboard up, so phrase press and fill
-targets on such screens refuse with an unknown capability.
+targets on such screens may refuse when their capability or target association
+cannot be proven.
 Phrase waits capture fresh screen and presence evidence on every poll, even when the
 screen appears unchanged; prior observations do not establish current presence.
 

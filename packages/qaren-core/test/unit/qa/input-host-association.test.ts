@@ -291,9 +291,18 @@ function assertGaps(f: ReturnType<typeof fixture>, count = 2) {
       ? []
       : [[node.ref, 'content']];
   });
+  // Plain containers whose own evidence rules out press and fill leave the projection; the gap is counted once.
+  const plain = (ref: string) => {
+    const node = f.nodes.find((n) => n.ref === ref)!;
+    return node.type === 'Other' && !node.label && node.value === undefined;
+  };
   assert.deepEqual(
     projection.unknown.map(({ element, reason }) => [element.ref, reason]),
-    unknown,
+    unknown.filter(([ref]) => !plain(ref)),
+  );
+  assert.equal(
+    projection.capabilityGapContainers ?? 0,
+    unknown.filter(([ref]) => plain(ref)).length,
   );
   assert.deepEqual(
     projection.elements.map((element) => element.ref),
