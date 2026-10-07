@@ -274,3 +274,44 @@ test('quoted complete codes retain model identity and definite phrase checks', a
   assert.equal(decision.check, 'pass');
   assert.equal(judge.requests.length, 1);
 });
+
+test('every contiguous three-character fragment of a secure secret is masked, whatever its characters', () => {
+  const policies = ['model', 'durable', 'identifier', 'persisted'] as const;
+  const filled = (secret: string) => {
+    const privacy = new ObservedPrivacy([secret]);
+    privacy.concealFallback(secret, true);
+    privacy.didFill(secret);
+    return privacy;
+  };
+  const privacy = filled('ab@#!c');
+  const masked = ['ab@', 'b@#', '@#!', '#!c', 'x@#!y', 'b@#!c', '#!c#!c', 'row:@#!'];
+  const readable = ['a@c', 'b#c', '@!', 'ac', 'abc', '!c', 'Step 4 of 8', '148', 'Ordinary text'];
+  for (const policy of policies) {
+    for (const text of masked)
+      assert.deepEqual(
+        matchPrivate(text, privacy.privateSet(), policy),
+        { text: MASK, hit: true },
+        text,
+      );
+    for (const text of readable)
+      assert.deepEqual(
+        matchPrivate(text, privacy.privateSet(), policy),
+        { text, hit: false },
+        text,
+      );
+  }
+  assert.equal(privacy.redact('Ordinary text then @#!c'), `Ordinary text then ${MASK}`);
+  const accented = filled('café!é');
+  for (const text of ['fé!', 'é!é', 'fé!', 'é!é'])
+    assert.deepEqual(
+      matchPrivate(text, accented.privateSet(), 'durable'),
+      { text: MASK, hit: true },
+      text,
+    );
+  for (const text of ['af', 'ca', 'cé', 'Shop closed'])
+    assert.deepEqual(
+      matchPrivate(text, accented.privateSet(), 'durable'),
+      { text, hit: false },
+      text,
+    );
+});
