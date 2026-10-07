@@ -150,7 +150,7 @@ extension RnFastRunnerTests {
         label: evaluation.label,
         identifier: evaluation.identifier,
         value: evaluation.valueText,
-        origin: snapshot.frame.origin
+        frame: snapshot.frame
       )
       let isDuplicate = seen.contains(key)
       if !isDuplicate {

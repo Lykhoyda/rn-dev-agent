@@ -112,31 +112,46 @@ final class SnapshotInclusionTests: XCTestCase {
   }
 
   func testDedupeKeyKeepsTwinFieldsWithDifferentValues() {
-    let origin = CGPoint(x: 10, y: 100)
+    let frame = CGRect(x: 10, y: 100, width: 300, height: 44)
     let first = snapshotDedupeKey(
-      type: .textField, label: "Email", identifier: "email", value: "first@example.test", origin: origin)
+      type: .textField, label: "Email", identifier: "email", value: "first@example.test", frame: frame)
     let second = snapshotDedupeKey(
-      type: .textField, label: "Email", identifier: "email", value: "second@example.test", origin: origin)
+      type: .textField, label: "Email", identifier: "email", value: "second@example.test", frame: frame)
     XCTAssertNotEqual(first, second)
   }
 
   func testDedupeKeyKeepsFieldsWithDelimiterCollisions() {
-    let origin = CGPoint(x: 10, y: 100)
+    let frame = CGRect(x: 10, y: 100, width: 300, height: 44)
     let first = snapshotDedupeKey(
-      type: .textField, label: "Email", identifier: "otp", value: "prefix-654321", origin: origin)
+      type: .textField, label: "Email", identifier: "otp", value: "prefix-654321", frame: frame)
     let second = snapshotDedupeKey(
-      type: .textField, label: "Email", identifier: "otp-prefix", value: "654321", origin: origin)
+      type: .textField, label: "Email", identifier: "otp-prefix", value: "654321", frame: frame)
     XCTAssertNotEqual(first, second)
     XCTAssertEqual(Set([first, second]).count, 2)
   }
 
   func testDedupeKeyStillCollapsesIdenticalNodes() {
-    let origin = CGPoint(x: 10, y: 100)
+    let frame = CGRect(x: 10, y: 100, width: 300, height: 44)
     XCTAssertEqual(
-      snapshotDedupeKey(type: .textField, label: "Email", identifier: "email", value: "same", origin: origin),
-      snapshotDedupeKey(type: .textField, label: "Email", identifier: "email", value: "same", origin: origin))
+      snapshotDedupeKey(type: .textField, label: "Email", identifier: "email", value: "same", frame: frame),
+      snapshotDedupeKey(type: .textField, label: "Email", identifier: "email", value: "same", frame: frame))
     XCTAssertEqual(
-      snapshotDedupeKey(type: .staticText, label: "Title", identifier: "", value: nil, origin: origin),
-      snapshotDedupeKey(type: .staticText, label: "Title", identifier: "", value: nil, origin: origin))
+      snapshotDedupeKey(type: .staticText, label: "Title", identifier: "", value: nil, frame: frame),
+      snapshotDedupeKey(type: .staticText, label: "Title", identifier: "", value: nil, frame: frame))
+  }
+
+  func testDedupeKeyKeepsNestedSameOriginScrollViewsOfDifferentSizes() {
+    let outer = snapshotDedupeKey(
+      type: .scrollView, label: "", identifier: "", value: nil,
+      frame: CGRect(x: 0, y: 100, width: 402, height: 700))
+    let inner = snapshotDedupeKey(
+      type: .scrollView, label: "", identifier: "", value: nil,
+      frame: CGRect(x: 0, y: 100, width: 402, height: 200))
+    XCTAssertNotEqual(outer, inner)
+    XCTAssertNotEqual(
+      outer,
+      snapshotDedupeKey(
+        type: .scrollView, label: "", identifier: "", value: nil,
+        frame: CGRect(x: 0, y: 100, width: 300, height: 700)))
   }
 }

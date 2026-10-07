@@ -48,6 +48,9 @@ struct SnapshotDedupeKey: Hashable {
   let value: String?
   let x: CGFloat
   let y: CGFloat
+  // Size keeps nested same-origin containers apart, so neither loses its clip.
+  let width: CGFloat
+  let height: CGFloat
 }
 
 func snapshotDedupeKey(
@@ -55,14 +58,16 @@ func snapshotDedupeKey(
   label: String,
   identifier: String,
   value: String?,
-  origin: CGPoint
+  frame: CGRect
 ) -> SnapshotDedupeKey {
   SnapshotDedupeKey(
     type: type.rawValue,
     label: label,
     identifier: identifier,
     value: value,
-    x: origin.x,
-    y: origin.y
+    x: frame.origin.x,
+    y: frame.origin.y,
+    width: frame.size.width,
+    height: frame.size.height
   )
 }
