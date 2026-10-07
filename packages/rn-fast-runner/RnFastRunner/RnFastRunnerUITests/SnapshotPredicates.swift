@@ -71,3 +71,42 @@ func snapshotDedupeKey(
     height: frame.size.height
   )
 }
+
+func snapshotTypeName(_ type: XCUIElement.ElementType) -> String {
+  switch type {
+  case .application: return "Application"
+  case .window: return "Window"
+  case .button: return "Button"
+  case .cell: return "Cell"
+  case .staticText: return "StaticText"
+  case .textField: return "TextField"
+  case .textView: return "TextView"
+  case .secureTextField: return "SecureTextField"
+  case .switch: return "Switch"
+  case .slider: return "Slider"
+  case .link: return "Link"
+  case .image: return "Image"
+  case .navigationBar: return "NavigationBar"
+  case .tabBar: return "TabBar"
+  case .collectionView: return "CollectionView"
+  case .table: return "Table"
+  case .scrollView: return "ScrollView"
+  case .searchField: return "SearchField"
+  case .toolbar: return "Toolbar"
+  case .segmentedControl: return "SegmentedControl"
+  case .stepper: return "Stepper"
+  case .picker: return "Picker"
+  case .checkBox: return "CheckBox"
+  case .menuItem: return "MenuItem"
+  case .other: return "Other"
+  default:
+    switch type.rawValue {
+    case 19:
+      return "Keyboard"
+    case 20:
+      return "Key"
+    default:
+      return "Element(\(type.rawValue))"
+    }
+  }
+}

@@ -154,4 +154,16 @@ final class SnapshotInclusionTests: XCTestCase {
         type: .scrollView, label: "", identifier: "", value: nil,
         frame: CGRect(x: 0, y: 100, width: 300, height: 700)))
   }
+
+  func testToolbarIsNamedToolbarNotSearchField() {
+    XCTAssertEqual(snapshotTypeName(.toolbar), "Toolbar")
+    XCTAssertEqual(snapshotTypeName(XCUIElement.ElementType(rawValue: 24)!), "Toolbar")
+    XCTAssertEqual(snapshotTypeName(.searchField), "SearchField")
+    XCTAssertFalse(TextInputTarget.inputTypeNames.contains(snapshotTypeName(.toolbar)))
+  }
+
+  func testKeyboardRawTypesKeepTheirNames() {
+    XCTAssertEqual(snapshotTypeName(XCUIElement.ElementType(rawValue: 19)!), "Keyboard")
+    XCTAssertEqual(snapshotTypeName(XCUIElement.ElementType(rawValue: 20)!), "Key")
+  }
 }
