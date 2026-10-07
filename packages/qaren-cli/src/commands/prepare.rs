@@ -396,10 +396,9 @@ fn prepare_validated(
     }
     let t = ctx.mark("allocate", t);
 
-    let t = if plan.decision == BuildDecision::Reuse {
-        match run_reuse_path(&mut ctx, &plan, t) {
-            Ok(t) => t,
-            Err(f) => return Ok(ctx.fail(f)),
+    if plan.decision == BuildDecision::Reuse {
+        if let Err(f) = run_reuse_path(&mut ctx, &plan, t) {
+            return Ok(ctx.fail(f));
         }
     } else {
         if plan.decision == BuildDecision::Clean {
@@ -410,8 +409,8 @@ fn prepare_validated(
         if let Err(f) = build_and_ready(&mut ctx) {
             return Ok(ctx.fail(f));
         }
-        ctx.mark("build_and_ready", t)
-    };
+    }
+    let t = ctx.mark("build_and_ready", t);
 
     if let Err(f) = recheck_candidate(&mut ctx) {
         return Ok(ctx.fail(f));
@@ -1071,6 +1070,8 @@ pub(crate) fn plan_build(ctx: &mut Ctx) -> Result<BuildPlan, Failure> {
         .collect::<Vec<_>>()
         .join(" ");
     ctx.notes.push(("fingerprint_parts".to_string(), parts));
+    ctx.notes
+        .push(("fingerprint_complete".to_string(), fp.complete.to_string()));
     if let Some(ms) = fp.expo_fingerprint_ms {
         ctx.notes
             .push(("expo_fingerprint_ms".to_string(), ms.to_string()));
@@ -1488,7 +1489,7 @@ fn wait_metro_responding(ctx: &mut Ctx) -> Result<(), Failure> {
     }
 }
 
-pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<u64, Failure> {
+pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<(), Failure> {
     ensure_running(ctx.runner, "build")?;
     let artifact = plan.artifact.clone().expect("reuse carries an artifact");
     let metro_port = qaren_metro_port(&ctx.record.scenario);
@@ -1686,7 +1687,8 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
     let t = ctx.mark("app_launch", t);
 
     wait_ready(ctx)?;
-    Ok(ctx.mark("ready_probes", t))
+    ctx.mark("ready_probes", t);
+    Ok(())
 }
 
 fn artifact_install_failure(run_id: &str, artifact: &CachedArtifact, summary: String) -> Failure {

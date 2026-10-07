@@ -1172,7 +1172,8 @@ transforms (`CI` removed, `EXPO_NO_TELEMETRY=1`). Expo evaluates the config,
 loads `.env` files, and hashes the evaluated config, the modules it loaded,
 autolinked native modules and config-plugin inputs. The fingerprint value then
 also binds that hash and the selected Xcode (`xcodebuild -version`), and the
-receipt notes record `fingerprint_parts` (hashes only) and `expo_fingerprint_ms`.
+receipt notes record `fingerprint_parts` (hashes only), `fingerprint_complete`
+and `expo_fingerprint_ms`.
 A successful evaluation clears only the dynamic-config incompleteness; every
 other reason still forbids reuse. If evaluation is unavailable (the package does
 not resolve, the command fails or times out after 120 s, or its output has no

@@ -4784,3 +4784,149 @@ fn a_walk_without_a_result_never_renders_plan_text_into_durable_sinks() {
         "{report}"
     );
 }
+
+#[test]
+fn every_build_decision_reports_fingerprint_completeness_and_reuse_reports_ready_timing() {
+    use qaren::buildplan::{self, BuildDecision};
+    const CANARY: &str = "qaren-canary-7f3a91";
+    let (repo, app) = app_repo();
+    common::write_ios_workspace(&app, "ios/First.xcworkspace");
+    configure_workspace(&app, "ios/First.xcworkspace", "Debug");
+    let incomplete_files = format!("{}test-app/app.json\0", common::IOS_NATIVE_FILES);
+    for (index, case) in ["no-cache", "warm", "old-schema", "incomplete"]
+        .into_iter()
+        .enumerate()
+    {
+        let state_path = buildplan::state_path(&repo, "ios", "com.rndevagent.testapp");
+        if case == "old-schema" {
+            let mut old: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+            old["schema"] = "qaren-native-cache/1".into();
+            std::fs::write(&state_path, old.to_string()).unwrap();
+        }
+        if case == "incomplete" {
+            std::fs::write(
+                app.join("app.json"),
+                format!("{{\"expo\":{{\"icon\":\"./{CANARY}.png\"}}}}"),
+            )
+            .unwrap();
+        }
+        let files = match case {
+            "incomplete" => incomplete_files.as_str(),
+            _ => common::IOS_NATIVE_FILES,
+        };
+        let reuse = case == "warm";
+        let mut req = request(&repo, &app, 30);
+        req.runs_root = repo.join(format!("runs-{index}"));
+        let mut mock = MockRunner::new();
+        script_preflight(&mut mock, &repo);
+        mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+        if reuse {
+            mock.expect_run("ls-files", CmdOutput::success(files));
+            script_warm_launch_after_one_metro_retry(&mut mock);
+            script_ready_recheck(&mut mock, files);
+        } else {
+            script_provision_build(&mut mock, "xcodebuild", files);
+        }
+        script_drift_status(&mut mock);
+        script_host_probe(&mut mock, UDID, hosts_absent());
+        mock.expect_spawn_piped("walk.js", 9000, &pass_stdout(), Some(0));
+        script_core_identity(&mut mock);
+        script_teardown(&mut mock);
+
+        let receipt = run(&mut mock, &req);
+
+        assert_eq!(
+            receipt.result,
+            ReceiptResult::Pass,
+            "{case}: {:?}",
+            receipt.failure
+        );
+        assert_eq!(mock.remaining(), 0, "{case}");
+        assert_eq!(
+            receipt.build.as_ref().unwrap().decision == BuildDecision::Reuse,
+            reuse,
+            "{case}"
+        );
+        let complete = if case == "incomplete" {
+            "false"
+        } else {
+            "true"
+        };
+        assert_eq!(
+            receipt
+                .outcomes
+                .get("fingerprint_complete")
+                .map(String::as_str),
+            Some(complete),
+            "{case}: {:?}",
+            receipt.outcomes
+        );
+        assert!(receipt.outcomes.contains_key("fingerprint_parts"), "{case}");
+        let timing = |key: &str| {
+            *receipt
+                .timings_ms
+                .get(key)
+                .unwrap_or_else(|| panic!("{case}: no {key} timing"))
+        };
+        if reuse {
+            let span: u64 = [
+                "install_cached",
+                "metro_ready",
+                "app_launch",
+                "ready_probes",
+            ]
+            .into_iter()
+            .map(timing)
+            .sum();
+            assert_eq!(
+                timing("build_and_ready"),
+                span,
+                "{case}: {:?}",
+                receipt.timings_ms
+            );
+            assert!(
+                span > 0,
+                "{case}: the mock clock must advance through readiness"
+            );
+        } else {
+            timing("build_and_ready");
+        }
+        let outcomes = serde_json::to_string(&receipt.outcomes).unwrap();
+        assert!(!outcomes.contains(CANARY), "{case}: {outcomes}");
+    }
+}
+
+// Metro answers on the second poll, so the scripted clock advances inside reuse readiness.
+fn script_warm_launch_after_one_metro_retry(mock: &mut MockRunner) {
+    common::script_ios_app_verification(mock);
+    mock.expect_run("simctl install", CmdOutput::success(""));
+    mock.expect_spawn(
+        "expo start",
+        qaren::exec::Spawned {
+            pid: 6000,
+            pgid: 6000,
+        },
+    );
+    mock.expect_run("ps", CmdOutput::success("Wed Aug 12 16:01:00 2026"));
+    mock.expect_run("ps", CmdOutput::success("node expo start"));
+    for responding in [false, true] {
+        mock.expect_run("ps", CmdOutput::success("Wed Aug 12 16:01:00 2026"));
+        mock.expect_run("ps", CmdOutput::success("S"));
+        mock.expect_run("lsof", CmdOutput::success("6001"));
+        mock.expect_run("ps", CmdOutput::success("6000"));
+        mock.expect_run(
+            "curl",
+            match responding {
+                true => CmdOutput::success("packager-status:running"),
+                false => CmdOutput::failed(7, ""),
+            },
+        );
+    }
+    mock.expect_run("expo-platform", CmdOutput::success(""));
+    common::script_devmenu_defaults(mock, CmdOutput::success(""));
+    mock.expect_run(
+        "simctl launch --terminate-running-process",
+        CmdOutput::success(""),
+    );
+}

@@ -431,10 +431,9 @@ fn run_inner(
     }
     let t = ctx.mark("plan", t);
 
-    let t = if plan_decision.decision == BuildDecision::Reuse {
-        match prepare::run_reuse_path(&mut ctx, &plan_decision, t) {
-            Ok(t) => t,
-            Err(f) => return Ok(finish_failed(ctx, f)),
+    if plan_decision.decision == BuildDecision::Reuse {
+        if let Err(f) = prepare::run_reuse_path(&mut ctx, &plan_decision, t) {
+            return Ok(finish_failed(ctx, f));
         }
     } else {
         if plan_decision.decision == BuildDecision::Clean {
@@ -445,8 +444,8 @@ fn run_inner(
         if let Err(f) = prepare::build_and_ready(&mut ctx) {
             return Ok(finish_failed(ctx, f));
         }
-        ctx.mark("build_and_ready", t)
-    };
+    }
+    let t = ctx.mark("build_and_ready", t);
     let fp = match prepare::recheck_fingerprint(&mut ctx, &plan_decision) {
         Ok(fp) => fp,
         Err(f) => return Ok(finish_failed(ctx, f)),

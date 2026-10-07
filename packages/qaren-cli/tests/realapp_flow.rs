@@ -646,6 +646,7 @@ fn assert_ios_prepare_reuses_cached_client(workspace: bool) {
     assert!(manifest.args.contains(&"expo-platform: ios".to_string()));
     assert_eq!(manifest.args.last().unwrap(), "http://127.0.0.1:8791/");
     for key in [
+        "build_and_ready",
         "install_cached",
         "metro_ready",
         "app_launch",
