@@ -1,19 +1,19 @@
 ---
 name: sending-feedback
-description: Use when the user wants to send feedback, report an rn-dev-agent bug, request a plugin feature, or says the rn-dev-agent MCP transport or tools are unavailable. Collects sanitized diagnostics and guides creation of a reviewed GitHub issue.
+description: Use when the user wants to report a QaReN bug, request a feature, or capture a runtime or workflow gap as feedback.
 ---
 
-# sending-feedback — Report rn-dev-agent Issues Safely
+# Report QaReN feedback safely
 
-Follow the complete workflow in `../../commands/send-feedback.md`.
+Capture the attempted supported workflow, tested revision, expected result,
+observed result or refusal code, and any fallback reason. Sanitize credentials,
+input values, machine identifiers, absolute paths, and company material before
+preparing the report. Keep private evidence private.
 
-Collect diagnostics with the plugin-owned `scripts/collect-feedback.sh`,
-resolving the plugin root with the workflow's Step 2 snippet — each host's
-workflow document owns its own root resolution. The packaged collector at
-`scripts/collect-feedback.sh` under the resolved plugin root is the supported
-surface on every host. The `rn-collect-feedback` executable is a guarded
-legacy fallback only — plugin installs do not add global executables; it
-exists solely for repo checkouts that put `bin/` on `PATH`.
+For ordinary bugs and feature requests, prepare an issue for
+[Lykhoyda/rn-dev-agent](https://github.com/Lykhoyda/rn-dev-agent/issues).
+Show the exact sanitized issue body and obtain confirmation before submitting.
 
-The workflow's review gate is mandatory. Show the exact sanitized issue body
-to the user and obtain confirmation before submitting it with `gh`.
+For a suspected vulnerability, follow the repository's
+[security reporting policy](https://github.com/Lykhoyda/rn-dev-agent/blob/develop/SECURITY.md)
+and its private reporting channel.
