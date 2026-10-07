@@ -19,6 +19,8 @@ pub struct NativeFingerprint {
     // Hash-only evidence of what `value` composes: rnfp, plus expo and toolchain for a dynamic config.
     pub parts: BTreeMap<String, String>,
     pub expo_fingerprint_ms: Option<u64>,
+    // The closed-template cause when a dynamic config's Expo fingerprint could not be computed.
+    pub expo_unavailable: Option<String>,
 }
 
 impl NativeFingerprint {
@@ -779,15 +781,15 @@ pub fn compute(
     let mut packages: BTreeSet<String> = BTreeSet::new();
     let mut evaluated: Option<(String, Result<String, String>)> = None;
     let mut expo_fingerprint_ms = None;
+    let mut expo_unavailable = None;
     if let Some(config) = &dynamic_config {
-        let mut unavailable = None;
         if platform_dir == "ios" {
             let started = runner.monotonic_ms();
             let expo = expo_fingerprint(runner, project_root, platform_dir);
             expo_fingerprint_ms = Some(runner.monotonic_ms().saturating_sub(started));
             match expo {
                 Ok(expo) => evaluated = Some((expo, toolchain_digest(runner))),
-                Err(reason) => unavailable = Some(reason),
+                Err(reason) => expo_unavailable = Some(reason),
             }
         }
         if evaluated.is_none() {
@@ -795,7 +797,7 @@ pub fn compute(
                 "{config} is a dynamic config whose imports and ambient inputs (environment and process reads) cannot be fingerprinted"
             ));
         }
-        if let Some(reason) = unavailable {
+        if let Some(reason) = &expo_unavailable {
             incompleteness.push(format!("Expo fingerprint unavailable: {reason}"));
         }
     }
@@ -930,6 +932,7 @@ pub fn compute(
         incompleteness,
         parts,
         expo_fingerprint_ms,
+        expo_unavailable,
     })
 }
 

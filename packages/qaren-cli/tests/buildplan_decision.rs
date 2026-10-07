@@ -60,6 +60,7 @@ fn inputs<'a>(worktree: &'a Path, fingerprint: &'a str) -> DecisionInputs<'a> {
         fingerprint_parts: &NO_PARTS,
         fingerprint_complete: true,
         incompleteness: &[],
+        expo_unavailable: None,
         scheme: Some("rndatest"),
         force_clean: false,
         native_dir_exists: true,
@@ -528,6 +529,69 @@ fn changed_composite_names_each_changed_fingerprint_part() {
             "{:?}",
             plan.evidence
         );
+    }
+}
+
+#[test]
+fn unavailable_expo_fingerprint_names_its_cause_not_changed_inputs() {
+    let worktree = temp_dir();
+    let cause = "@expo/fingerprint fingerprint:generate did not complete (exit 1)";
+    let incompleteness = vec![
+        "app.config.ts is a dynamic config".to_string(),
+        format!("Expo fingerprint unavailable: {cause}"),
+    ];
+    for native_dir_exists in [true, false] {
+        for (rnfp, genuine) in [("rnfp1:r", false), ("rnfp1:s", true)] {
+            let current =
+                std::collections::BTreeMap::from([("rnfp".to_string(), rnfp.to_string())]);
+            let mut recorded = state(&worktree, FP);
+            recorded.fingerprint_parts = parts("expo:a", "xcode:t");
+            let recorded = StateStatus::Loaded(Box::new(recorded));
+            let unavailable = DecisionInputs {
+                fingerprint_parts: &current,
+                fingerprint_complete: false,
+                incompleteness: &incompleteness,
+                expo_unavailable: Some(cause),
+                native_dir_exists,
+                ..inputs(&worktree, rnfp)
+            };
+            let plan = decide(&unavailable, &recorded, None);
+            let uncaused = decide(
+                &DecisionInputs {
+                    expo_unavailable: None,
+                    ..unavailable
+                },
+                &recorded,
+                None,
+            );
+            assert_eq!(
+                (plan.decision, plan.regenerate_native_dir),
+                (uncaused.decision, uncaused.regenerate_native_dir)
+            );
+            assert_eq!(
+                (plan.decision, plan.regenerate_native_dir),
+                if native_dir_exists {
+                    (BuildDecision::Clean, true)
+                } else {
+                    (BuildDecision::Incremental, false)
+                }
+            );
+            let shown = serde_json::to_string(&plan).unwrap();
+            assert!(
+                shown.contains(&format!("Expo fingerprint unavailable: {cause}")),
+                "{shown}"
+            );
+            assert_eq!(shown.contains("native inputs changed"), genuine, "{shown}");
+            if genuine {
+                assert!(
+                    plan.evidence
+                        .iter()
+                        .any(|e| e.as_str() == "native inputs changed: rnfp"),
+                    "{:?}",
+                    plan.evidence
+                );
+            }
+        }
     }
 }
 

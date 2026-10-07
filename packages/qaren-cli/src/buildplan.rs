@@ -167,6 +167,7 @@ pub struct DecisionInputs<'a> {
     pub fingerprint_parts: &'a BTreeMap<String, String>,
     pub fingerprint_complete: bool,
     pub incompleteness: &'a [String],
+    pub expo_unavailable: Option<&'a str>,
     pub scheme: Option<&'a str>,
     pub force_clean: bool,
     pub native_dir_exists: bool,
@@ -232,6 +233,28 @@ pub fn decide(
             )],
         );
     }
+    // Parts this run could not compute are unknown, not changed.
+    let changed: Vec<&str> = state
+        .fingerprint_parts
+        .keys()
+        .chain(inputs.fingerprint_parts.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .filter(|part| {
+            state.fingerprint_parts.get(*part) != inputs.fingerprint_parts.get(*part)
+                && (inputs.expo_unavailable.is_none()
+                    || inputs.fingerprint_parts.contains_key(*part))
+        })
+        .map(String::as_str)
+        .collect();
+    let uncomparable = inputs
+        .expo_unavailable
+        .filter(|_| changed.is_empty())
+        .map(|cause| {
+            format!(
+                "Expo fingerprint unavailable: {cause}; the native fingerprint cannot be compared with the recorded build"
+            )
+        });
     // A generated native dir that qaren's own builds did not create carries
     // caches of unprovable origin; only a clean regeneration is trustworthy.
     let platform_dir_proven = !inputs.native_dir_exists
@@ -254,8 +277,10 @@ pub fn decide(
         }
         if regenerate && state.fingerprint != inputs.fingerprint {
             return clean(
-                "native inputs changed; regenerating the generated native dir via expo prebuild --clean, which deletes it with its installed native dependencies and build outputs"
-                    .to_string(),
+                format!(
+                    "{}; regenerating the generated native dir via expo prebuild --clean, which deletes it with its installed native dependencies and build outputs",
+                    uncomparable.as_deref().unwrap_or("native inputs changed")
+                ),
                 evidence,
             );
         }
@@ -391,25 +416,19 @@ pub fn decide(
             ),
             sha_evidence,
         ];
-        let changed: Vec<&str> = state
-            .fingerprint_parts
-            .keys()
-            .chain(inputs.fingerprint_parts.keys())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .filter(|part| {
-                state.fingerprint_parts.get(*part) != inputs.fingerprint_parts.get(*part)
-            })
-            .map(String::as_str)
-            .collect();
         if !changed.is_empty() {
             evidence.push(format!("native inputs changed: {}", changed.join(", ")));
         }
-        incremental(
-            "native inputs changed since the recorded build; caches keyed to this exact worktree/app remain valid for an incremental compile"
-                .to_string(),
-            evidence,
-        )
+        if let Some(cause) = inputs.expo_unavailable {
+            evidence.push(format!("Expo fingerprint unavailable: {cause}"));
+        }
+        let reason = match &uncomparable {
+            Some(uncomparable) => format!(
+                "{uncomparable}; caches keyed to this exact worktree/app remain valid for an incremental compile"
+            ),
+            None => "native inputs changed since the recorded build; caches keyed to this exact worktree/app remain valid for an incremental compile".to_string(),
+        };
+        incremental(reason, evidence)
     }
 }
 

@@ -716,6 +716,7 @@ fn tampered_cached_artifact_is_refused_for_reuse() {
             fingerprint_parts: &NO_PARTS,
             fingerprint_complete: fp.complete,
             incompleteness: &fp.incompleteness,
+            expo_unavailable: fp.expo_unavailable.as_deref(),
             scheme: Some("rndatest"),
             force_clean: false,
             native_dir_exists: false,

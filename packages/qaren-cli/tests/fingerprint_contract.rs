@@ -3,8 +3,6 @@ use qaren::fingerprint::{compute, NativeFingerprint, FINGERPRINT_VERSION};
 use qaren::scenario::IosWorkspaceBuild;
 use std::path::Path;
 
-static NO_PARTS: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
-
 fn prior_fingerprint() -> NativeFingerprint {
     NativeFingerprint {
         value: "rnfp1:prior-native-inputs".into(),
@@ -14,6 +12,7 @@ fn prior_fingerprint() -> NativeFingerprint {
         incompleteness: vec![],
         parts: Default::default(),
         expo_fingerprint_ms: None,
+        expo_unavailable: None,
     }
 }
 
@@ -656,17 +655,26 @@ fn matching_build(
     fp: &NativeFingerprint,
     platform: &str,
 ) -> qaren::buildplan::BuildPlan {
+    build_after(root, fp, fp, platform)
+}
+
+fn build_after(
+    root: &Path,
+    recorded: &NativeFingerprint,
+    fp: &NativeFingerprint,
+    platform: &str,
+) -> qaren::buildplan::BuildPlan {
     use qaren::buildplan::{
         decide, ArtifactKind, ArtifactStatus, CachedArtifact, DecisionInputs, NativeCacheState,
         StateStatus, CACHE_SCHEMA,
     };
     let cached = NativeCacheState {
         schema: CACHE_SCHEMA.to_string(),
-        fingerprint_parts: Default::default(),
+        fingerprint_parts: recorded.parts.clone(),
         platform: platform.to_string(),
         app_id: "com.rndevagent.testapp".to_string(),
         worktree_root: root.to_path_buf(),
-        fingerprint: fp.value.clone(),
+        fingerprint: recorded.value.clone(),
         built_at: "2026-10-05T00:00:00Z".to_string(),
         candidate_sha: "a".repeat(40),
         lockfile_sha256: "b".repeat(64),
@@ -692,9 +700,10 @@ fn matching_build(
             worktree_root: root,
             candidate_sha: &cached.candidate_sha,
             fingerprint: &fp.value,
-            fingerprint_parts: &NO_PARTS,
+            fingerprint_parts: &fp.parts,
             fingerprint_complete: fp.complete,
             incompleteness: &fp.incompleteness,
+            expo_unavailable: fp.expo_unavailable.as_deref(),
             scheme: Some("rndatest"),
             force_clean: false,
             native_dir_exists: true,
@@ -1063,9 +1072,12 @@ fn js_only_and_plan_only_changes_keep_the_composite() {
 
 type Script = Box<dyn FnOnce(&mut MockRunner)>;
 
+const UNAVAILABLE_CANARY: &str = "CANARY-unavailable-9d2e";
+
 #[test]
 fn unavailable_expo_evaluation_keeps_todays_conservative_rebuild() {
     let root = dynamic_project();
+    let recorded = evaluated(&root, EXPO_H, XCODE);
     let cases: Vec<(&str, Script)> = vec![
         (
             "does not resolve",
@@ -1084,7 +1096,13 @@ fn unavailable_expo_evaluation_keeps_todays_conservative_rebuild() {
                     "require.resolve",
                     CmdOutput::success(common::EXPO_FINGERPRINT_CLI),
                 );
-                m.expect_run("fingerprint:generate", CmdOutput::failed(1, "boom"));
+                m.expect_run(
+                    "fingerprint:generate",
+                    CmdOutput {
+                        stdout: format!("{UNAVAILABLE_CANARY}\n"),
+                        ..CmdOutput::failed(1, &format!("config threw: {UNAVAILABLE_CANARY}"))
+                    },
+                );
             }),
         ),
         (
@@ -1139,9 +1157,32 @@ fn unavailable_expo_evaluation_keeps_todays_conservative_rebuild() {
             fp.incompleteness
         );
         assert_eq!(fp.value, fp.parts["rnfp"]);
+        assert!(
+            fp.expo_unavailable
+                .as_deref()
+                .is_some_and(|cause| cause.contains(reason)),
+            "{:?}",
+            fp.expo_unavailable
+        );
         let plan = matching_build(&root, &fp, "ios");
         assert_eq!(plan.decision, qaren::buildplan::BuildDecision::Clean);
         assert!(plan.regenerate_native_dir);
+        let after_evaluated = build_after(&root, &recorded, &fp, "ios");
+        assert_eq!(
+            after_evaluated.decision,
+            qaren::buildplan::BuildDecision::Clean
+        );
+        assert!(after_evaluated.regenerate_native_dir);
+        let shown = serde_json::to_string(&after_evaluated).unwrap();
+        assert!(
+            !shown.contains("native inputs changed")
+                && after_evaluated.reason.contains(&format!(
+                    "Expo fingerprint unavailable: {}",
+                    fp.expo_unavailable.as_deref().unwrap()
+                ))
+                && !shown.contains(UNAVAILABLE_CANARY),
+            "{shown}"
+        );
     }
 }
 
