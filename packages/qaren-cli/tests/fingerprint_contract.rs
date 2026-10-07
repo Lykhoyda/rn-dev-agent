@@ -1236,3 +1236,24 @@ fn evaluated_config_output_never_reaches_fingerprint_or_decision() {
         assert!(!observed.contains(CANARY), "{observed}");
     }
 }
+
+#[test]
+fn a_pnpm_dependency_check_preamble_on_stdout_is_ignored() {
+    let root = dynamic_project();
+    const PREAMBLE: &str = "Already up to date\nDone in 216ms using pnpm v11.5.2\n";
+    let (fp, _) = dynamic_fingerprint(&root, DYNAMIC_FILES, |m| {
+        m.expect_run(
+            "require.resolve",
+            CmdOutput::success(&format!("{PREAMBLE}{}", common::EXPO_FINGERPRINT_CLI)),
+        );
+        m.expect_run(
+            "fingerprint:generate",
+            CmdOutput::success(&format!(
+                "{PREAMBLE}{{\"sources\":[],\"hash\":\"{EXPO_H}\"}}\n"
+            )),
+        );
+        m.expect_run("xcodebuild -version", CmdOutput::success(XCODE));
+    });
+    assert!(fp.complete, "{:?}", fp.incompleteness);
+    assert_eq!(fp, evaluated(&root, EXPO_H, XCODE));
+}

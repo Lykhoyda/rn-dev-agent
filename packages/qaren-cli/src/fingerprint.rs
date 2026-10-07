@@ -964,12 +964,8 @@ fn expo_fingerprint(
         ),
         &[],
     );
-    let cli = resolved.stdout().trim();
-    if !exited_zero(&resolved)
-        || !cli.starts_with('/')
-        || !cli.ends_with("/bin/cli.js")
-        || cli.contains('\n')
-    {
+    let cli = last_line(resolved.stdout());
+    if !exited_zero(&resolved) || !cli.starts_with('/') || !cli.ends_with("/bin/cli.js") {
         return Err(format!(
             "@expo/fingerprint does not resolve through the app's expo install ({})",
             outcome(&resolved)
@@ -990,16 +986,22 @@ fn expo_fingerprint(
             outcome(&generated)
         ));
     }
-    generated
-        .stdout()
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .and_then(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+    serde_json::from_str::<serde_json::Value>(last_line(generated.stdout()))
+        .ok()
         .and_then(|result| result.get("hash")?.as_str().map(str::to_string))
         .filter(|hash| !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit()))
         .map(|hash| format!("expo:{hash}"))
         .ok_or_else(|| "@expo/fingerprint output carried no hex hash".to_string())
+}
+
+// pnpm can print its dependency check to stdout before the child's own output.
+fn last_line(stdout: &str) -> &str {
+    stdout
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
 }
 
 fn exited_zero(output: &crate::exec::PrivateOutput) -> bool {
