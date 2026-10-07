@@ -2702,3 +2702,67 @@ fn recording_a_build_cancelled_mid_copy_preserves_previous_cache() {
         .starts_with(RunRecord::run_dir(&repo, &run_id)));
     assert_eq!(probing.inner.remaining(), 0);
 }
+
+#[test]
+fn dry_run_reports_hash_only_parts_and_the_completeness_gate_without_its_reasons() {
+    const CANARY: &str = "qaren-canary-private-pkg-5c1d";
+    for (files, complete) in [
+        ("test-app/package.json\0", true),
+        ("test-app/package.json\0test-app/app.json\0", false),
+    ] {
+        let repo = common::temp_repo();
+        let project = repo.join("test-app");
+        std::fs::write(
+            project.join("app.json"),
+            format!("{{\"expo\":{{\"icon\":\"./{CANARY}/icon.png\"}}}}"),
+        )
+        .unwrap();
+        let yaml = ios_scenario_yaml(8791);
+        let scenario_path = write_scenario(&repo, &yaml);
+        let mut fp_runner = qaren::exec::MockRunner::new();
+        fp_runner.expect_run("ls-files", CmdOutput::success(files));
+        let fp = qaren::fingerprint::compute(&mut fp_runner, &repo, &project, "ios").unwrap();
+        assert_eq!(fp.complete, complete);
+        assert_eq!(
+            fp.incompleteness
+                .iter()
+                .any(|reason| reason.contains(CANARY)),
+            !complete,
+            "the canary must reach the withheld reasons"
+        );
+
+        let mut mock = MockRunner::new();
+        script_validation(&mut mock, &repo, IOS_TOOLS);
+        mock.expect_run(
+            "expo run:ios --help",
+            CmdOutput::success(common::IOS_BUILD_HELP),
+        );
+        mock.expect_run("lsof", free_port());
+        mock.expect_run("ls-files", CmdOutput::success(files));
+        let receipt = prepare(&mut mock, &prepare_args(&scenario_path, true, None));
+
+        assert_eq!(receipt.result, ReceiptResult::Planned);
+        assert_eq!(mock.remaining(), 0);
+        assert_eq!(
+            receipt.build.as_ref().unwrap().fingerprint,
+            fp.value,
+            "the dry run plans with the same fingerprint the gate computes"
+        );
+        assert_eq!(
+            receipt
+                .outcomes
+                .get("fingerprint_complete")
+                .map(String::as_str),
+            Some(complete.to_string().as_str())
+        );
+        let parts = fp
+            .parts
+            .iter()
+            .map(|(part, hash)| format!("{part}={hash}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(receipt.outcomes.get("fingerprint_parts"), Some(&parts));
+        let json = serde_json::to_string(&receipt).unwrap();
+        assert!(!json.contains(CANARY), "{json}");
+    }
+}

@@ -1063,20 +1063,26 @@ pub(crate) fn plan_build(ctx: &mut Ctx) -> Result<BuildPlan, Failure> {
         native_dir_exists,
         native_dir_in_candidate: fp.native_dir_in_candidate,
     };
+    ctx.notes.extend(fingerprint_notes(&fp));
+    if let Some(ms) = fp.expo_fingerprint_ms {
+        ctx.notes
+            .push(("expo_fingerprint_ms".to_string(), ms.to_string()));
+    }
+    Ok(buildplan::decide(&inputs, &state, artifact_status))
+}
+
+// Hash-only parts and the completeness gate's own boolean; never the incompleteness reasons.
+fn fingerprint_notes(fp: &fingerprint::NativeFingerprint) -> [(String, String); 2] {
     let parts = fp
         .parts
         .iter()
         .map(|(part, hash)| format!("{part}={hash}"))
         .collect::<Vec<_>>()
         .join(" ");
-    ctx.notes.push(("fingerprint_parts".to_string(), parts));
-    ctx.notes
-        .push(("fingerprint_complete".to_string(), fp.complete.to_string()));
-    if let Some(ms) = fp.expo_fingerprint_ms {
-        ctx.notes
-            .push(("expo_fingerprint_ms".to_string(), ms.to_string()));
-    }
-    Ok(buildplan::decide(&inputs, &state, artifact_status))
+    [
+        ("fingerprint_parts".to_string(), parts),
+        ("fingerprint_complete".to_string(), fp.complete.to_string()),
+    ]
 }
 
 fn verify_artifact(artifact: &CachedArtifact) -> ArtifactStatus {
@@ -2542,6 +2548,7 @@ fn dry_run_receipt(
                 native_dir_in_candidate: fp.native_dir_in_candidate,
             };
             receipt.build = Some(buildplan::decide(&inputs, &state, artifact_status));
+            receipt.outcomes.extend(fingerprint_notes(&fp));
         }
         Err(failure) => {
             receipt.outcomes.insert(
