@@ -62,45 +62,15 @@ import {
   writeJsonStateFileAtomic,
 } from './util/secure-state-file.js';
 
-/**
- * CDP-015: derive a per-user, per-project session file path. The previous
- * fixed `/tmp/qaren-session.json` location bled state across repos,
- * users, and bridge processes on the same host, and was vulnerable to
- * symlink races on multi-tenant systems.
- *
- * Layout:
- *   $XDG_STATE_HOME/qaren/session-<projectHash>.json     (Linux/CI)
- *   ~/Library/Application Support/qaren/session-<hash>.json (macOS)
- *   ~/.qaren/session-<projectHash>.json                  (fallback)
- *
- * `<projectHash>` is sha256(cwd).slice(0, 12) so two checkouts of the same
- * repo at different paths get different session files.
- */
+// Per user and per project: sha256(cwd) keeps two checkouts of one repo apart.
 function getSessionFilePath(): string {
   const projectId = createHash('sha256').update(process.cwd()).digest('hex').slice(0, 12);
   return join(getStateDir(), `session-${projectId}.json`);
 }
 
 const SESSION_FILE = getSessionFilePath();
-const LEGACY_SESSION_FILE = '/tmp/qaren-session.json';
 
-let activeSession: SessionState | null = null;
-
-activeSession = readJsonStateFile<SessionState>(SESSION_FILE);
-if (!activeSession) {
-  // Migrate from the legacy /tmp location if present — one-time best-effort
-  // so existing users don't lose their open session on upgrade. We only
-  // migrate when the new location has nothing — never overwrite.
-  const legacy = readJsonStateFile<SessionState>(LEGACY_SESSION_FILE);
-  if (legacy) {
-    activeSession = legacy;
-    try {
-      writeJsonStateFileAtomic(SESSION_FILE, legacy);
-    } catch {
-      /* migration is best-effort */
-    }
-  }
-}
+let activeSession: SessionState | null = readJsonStateFile<SessionState>(SESSION_FILE);
 
 export function getActiveSession(): SessionState | null {
   return activeSession;

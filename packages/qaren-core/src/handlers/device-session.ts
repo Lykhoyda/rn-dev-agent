@@ -41,6 +41,7 @@ import {
   foreignRunnerNotice,
 } from '../runners/external-runner-detect.js';
 import { ensureSingleRunner } from '../runners/ensure-single-runner.js';
+import { foreignGateEnabled } from '../lifecycle/foreign-flow-gate.js';
 import { suppressIOSAutocorrect } from '../runners/suppress-ios-autocorrect.js';
 import { resetWedgeRecoveryCounter } from '../cdp/recover-wedge.js';
 import { resetDetachedRecoveryCounter } from '../cdp/recover-detached.js';
@@ -519,7 +520,7 @@ export function createDeviceSnapshotHandler(
       // open); its ≤2s latency is surfaced in meta.timings_ms.
       let foreign: ReturnType<typeof foreignRunnerNotice> = null;
       let foreignDetectMs: number | undefined;
-      if (platform === 'ios' && process.env.RN_IOS_FOREIGN_WARN !== '0') {
+      if (platform === 'ios' && foreignGateEnabled()) {
         const t0 = Date.now();
         const detection = await detectIosExternalRunner(undefined, deviceId);
         foreignDetectMs = Date.now() - t0;

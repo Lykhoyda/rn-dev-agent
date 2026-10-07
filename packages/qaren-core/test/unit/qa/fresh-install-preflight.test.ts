@@ -754,7 +754,6 @@ test('real CLI runs only the fake PATH ps and agrees on exit/status without leak
         {
           FAKE_PS_STDOUT: `20 maestro test --device ${UDID} ${secret}\n`,
           RN_IOS_FOREIGN_GUARD: '0',
-          RN_IOS_FOREIGN_WARN: '0',
         },
         'busy',
       ],

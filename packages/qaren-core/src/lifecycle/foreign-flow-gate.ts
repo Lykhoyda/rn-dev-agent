@@ -93,11 +93,6 @@ export function foreignGateUdid(): string | null {
   return udidProvider();
 }
 
-/** The knob gates an active refusal, not just a log line — so it carries an
- * honest name. `RN_IOS_FOREIGN_GUARD` is authoritative; the Phase 3
- * `RN_IOS_FOREIGN_WARN` stays as a deprecated alias so existing opt-outs
- * keep working (documented as ALSO disabling the refusal). */
 export function foreignGateEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (env.RN_IOS_FOREIGN_GUARD !== undefined) return env.RN_IOS_FOREIGN_GUARD !== '0';
-  return env.RN_IOS_FOREIGN_WARN !== '0';
+  return env.RN_IOS_FOREIGN_GUARD !== '0';
 }
