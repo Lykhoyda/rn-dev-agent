@@ -806,6 +806,8 @@ pub struct MockRunner {
     pub cancel_after: Option<(String, String)>,
     // (clock ms, reason): cancellation starts once the scripted clock reaches the time.
     pub cancel_at_ms: Option<(u64, String)>,
+    // (command substring, ms): the scripted clock advances while a matching command runs.
+    pub advance_on: Option<(String, u64)>,
     script: VecDeque<MockExpectation>,
     now_ms: u64,
 }
@@ -822,6 +824,7 @@ impl MockRunner {
             private_inputs: Vec::new(),
             cancel_after: None,
             cancel_at_ms: None,
+            advance_on: None,
             script: VecDeque::new(),
             now_ms: 1_770_000_000_000,
         }
@@ -930,6 +933,11 @@ impl Runner for MockRunner {
     }
     fn execute(&mut self, spec: &CmdSpec, _interruptible: bool) -> CmdOutput {
         self.calls.push(spec.clone());
+        if let Some((hint, ms)) = &self.advance_on {
+            if spec.rendered().contains(hint.as_str()) {
+                self.now_ms += ms;
+            }
+        }
         match self.next_for(spec).result {
             MockResult::Run(output) => output,
             MockResult::Spawn(..) | MockResult::SpawnPiped { .. } => {

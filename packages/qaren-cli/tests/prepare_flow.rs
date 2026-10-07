@@ -2766,3 +2766,23 @@ fn dry_run_reports_hash_only_parts_and_the_completeness_gate_without_its_reasons
         assert!(!json.contains(CANARY), "{json}");
     }
 }
+
+#[test]
+fn dry_run_total_timing_includes_the_fingerprint_computation() {
+    let repo = common::temp_repo();
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
+    let mut mock = MockRunner::new();
+    mock.advance_on = Some(("ls-files".to_string(), 4_434));
+    script_validation(&mut mock, &repo, IOS_TOOLS);
+    mock.expect_run(
+        "expo run:ios --help",
+        CmdOutput::success(common::IOS_BUILD_HELP),
+    );
+    mock.expect_run("lsof", free_port());
+    mock.expect_run("ls-files", CmdOutput::success("test-app/package.json\0"));
+    let receipt = prepare(&mut mock, &prepare_args(&scenario_path, true, None));
+
+    assert_eq!(receipt.result, ReceiptResult::Planned);
+    assert_eq!(mock.remaining(), 0);
+    assert_eq!(receipt.timings_ms.get("total"), Some(&4_434));
+}

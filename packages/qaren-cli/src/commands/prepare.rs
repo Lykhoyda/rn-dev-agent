@@ -2770,9 +2770,10 @@ fn dry_run_receipt(
         })
         .collect();
     receipt.commands_executed = runner.commands_executed();
-    receipt
-        .timings_ms
-        .insert("total".to_string(), now.saturating_sub(started_ms));
+    receipt.timings_ms.insert(
+        "total".to_string(),
+        runner.now_epoch_ms().saturating_sub(started_ms),
+    );
     receipt.next_action = "re-run without --dry-run to allocate resources".to_string();
     receipt
 }
