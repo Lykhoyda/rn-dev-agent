@@ -85,6 +85,105 @@ test('short fills without matching code rows preserve ordinary numbers', () => {
   assert.equal(privacy.redact('48'), '48');
 });
 
+function accessibleCodeCells(
+  type: 'Button' | 'Other',
+  code: string,
+  mismatch?: 'parent' | 'geometry',
+) {
+  const nodes: NativeNode[] = [
+    { ref: '@row', index: 0, type: 'Other', rect: { x: 0, y: 100, width: 192, height: 42 } },
+    { ref: '@unrelated', index: 1, type: 'Other' },
+    ...Array.from({ length: 4 }, (_, i) => ({
+      ref: `@box${i}`,
+      index: i + 2,
+      parentIndex: mismatch === 'parent' && i > 0 ? 1 : 0,
+      type,
+      label: code[i] ?? '',
+      rect: {
+        x: i * 48,
+        y: mismatch === 'geometry' && i > 0 ? 200 : 100,
+        width: 42,
+        height: 42,
+      },
+    })),
+    { ref: '@caption', type: 'StaticText', label: `Code ${code}` },
+    { ref: '@echo', type: 'StaticText', label: code },
+    { ref: '@ordinary', type: 'StaticText', label: 'Step 4 of 8 | 148' },
+  ];
+  return join(nodes, []);
+}
+
+for (const type of ['Button', 'Other'] as const) {
+  for (const code of ['4', '48']) {
+    test(`${type} cells with short fill ${code} and blank siblings protect outward evidence`, async () => {
+      const captured = accessibleCodeCells(type, code);
+      const privacy = new ObservedPrivacy([code]);
+      privacy.didFill(code);
+      privacy.observe(captured);
+      assert.equal(codeBoxRows(captured, [code])[0]?.length, 4);
+      assert.deepEqual(privacy.screenText(captured), [
+        '[code]',
+        `Code ${MASK}`,
+        MASK,
+        code === '48' ? 'Step 4 of 8 | 148' : `Step ${MASK} of 8 | 148`,
+      ]);
+      assert.equal(privacy.redact(`Code ${code}`), `Code ${MASK}`);
+      assert.equal(privacy.redact(code), MASK);
+      assert.deepEqual(privacy.privateSet().fragments, []);
+      const mask = privacy.maskForModel([], []);
+      for (const box of captured.elements.filter((element) => element.ref.startsWith('@box')))
+        assert.equal(mask.describeElement(box, describe), 'box (hidden)');
+      for (const ref of ['@caption', '@echo']) {
+        const node = captured.elements.find((element) => element.ref === ref)!;
+        assert.equal(mask.describeElement(node, describe).includes(code), false);
+      }
+      assert.equal(privacy.redact('148 | Unrelated caption'), '148 | Unrelated caption');
+      if (code === '48') assert.equal(privacy.redact('Step 4 of 8'), 'Step 4 of 8');
+      const f = walker(
+        [screen([element('@pin', 'Code', { kind: 'input', testID: 'pin' })]), captured],
+        scriptedJudge(() => assert.fail('literal fill is model-free')),
+        { ok: false, proven: false, mutation: 'observed', error: 'fill interrupted' },
+      );
+      const ledger = await runPlan(
+        parsePlan(`1. Type "${code}" into "pin"\n✓ "Ready"`).blocks!,
+        f.deps,
+      );
+      assert.equal(ledger.verdict, 'FAIL');
+      assert.ok(ledger.failure!.seen.includes(`Code ${MASK}`), ledger.failure!.seen);
+      assert.equal(ledger.failure!.seen.includes(`Code ${code}`), false);
+      assert.equal(ledger.failure!.screenshot, undefined);
+    });
+  }
+
+  for (const mismatch of ['parent', 'geometry'] as const) {
+    test(`${type} blank cells with mismatched ${mismatch} do not establish a short code`, () => {
+      const captured = accessibleCodeCells(type, '4', mismatch);
+      const privacy = new ObservedPrivacy(['4']);
+      privacy.didFill('4');
+      privacy.observe(captured);
+      assert.deepEqual(codeBoxRows(captured, ['4']), []);
+      assert.ok(privacy.screenText(captured).includes('Code 4'));
+      assert.equal(privacy.redact('Code 4 | Step 4 of 8 | 148'), 'Code 4 | Step 4 of 8 | 148');
+      const box = captured.elements.find((element) => element.ref === '@box0')!;
+      assert.ok(privacy.maskForModel([], []).describeElement(box, describe).includes('"4"'));
+    });
+  }
+}
+
+for (const code of ['', '7', '1234']) {
+  test(`ordinary Button row ${JSON.stringify(code)} stays readable after unrelated short fill`, () => {
+    const captured = accessibleCodeCells('Button', code);
+    const privacy = new ObservedPrivacy(['48']);
+    privacy.didFill('48');
+    privacy.observe(captured);
+    assert.deepEqual(codeBoxRows(captured, ['48']), []);
+    assert.ok(privacy.screenText(captured).includes(`Code ${code}`.trim()));
+    assert.equal(privacy.redact('Step 4 of 8 | 148'), 'Step 4 of 8 | 148');
+    for (const box of captured.elements.filter((element) => element.ref.startsWith('@box')))
+      assert.notEqual(privacy.maskForModel([], []).describeElement(box, describe), 'box (hidden)');
+  });
+}
+
 for (const code of ['4815', '1122', '9382']) {
   test(`structural code row ${code} ignores wrappers and repeated text`, () => {
     const screen = join(

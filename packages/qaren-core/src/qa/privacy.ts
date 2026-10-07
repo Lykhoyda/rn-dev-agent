@@ -396,7 +396,7 @@ export function codeBoxRows(screen: Screen, filled: readonly string[] = []): Ele
   const emptyCells = screen.elements.filter(
     (element) =>
       visible(element) &&
-      element.kind === 'other' &&
+      (element.kind === 'other' || element.kind === 'button') &&
       !element.secure &&
       !element.ref.startsWith('react:') &&
       !boxText(element) &&
