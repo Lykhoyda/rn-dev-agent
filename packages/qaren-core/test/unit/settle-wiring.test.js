@@ -232,6 +232,7 @@ test('end-to-end: runNative ios tap → runner /command + settle probe → meta.
           'FILL_EVIDENCE_V1',
           'HIT_TESTED_DISPATCH_V1',
           'TARGET_FRAME_GUARD_V1',
+          'SNAPSHOT_FIDELITY_V1',
         ],
         commands: REQUIRED,
       });

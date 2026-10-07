@@ -123,8 +123,9 @@ existing focus-point check when a focus tap is needed. An input's hit test
 applies only when the focus point lies inside its frame; a wrapper-centre focus
 point outside it leaves that check unavailable. A negative check refuses with
 `FOCUS_TARGET_OCCLUDED` and mutation `none`. Core requires
-`HIT_TESTED_DISPATCH_V1` and `TARGET_FRAME_GUARD_V1`; a missing capability takes
-the runner rebuild path.
+`HIT_TESTED_DISPATCH_V1`, `TARGET_FRAME_GUARD_V1` and `SNAPSHOT_FIDELITY_V1`
+(toolbars named `Toolbar`, nested same-origin containers kept apart); a missing
+capability takes the runner rebuild path.
 
 Before dispatch, the walker also treats a press or fill target whose centre lies
 outside its trusted clipping viewport or inside an observed keyboard frame

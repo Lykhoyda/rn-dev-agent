@@ -93,6 +93,22 @@ test('a lagging runner without the target-frame guard is incompatible', () => {
   );
 });
 
+test('a runner built before toolbar naming and sized snapshot dedupe is incompatible', () => {
+  const health = {
+    protocolVersion: RUNNER_PROTOCOL_VERSION,
+    commands: [...REQUIRED_IOS_COMMANDS],
+    capabilities: REQUIRED_IOS_FEATURES.filter((feature) => feature !== 'SNAPSHOT_FIDELITY_V1'),
+  };
+  assert.deepEqual(
+    classifyRunnerCompatibility(health, null, REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES),
+    {
+      compatible: false,
+      reason: 'missing-features',
+      missing: ['SNAPSHOT_FIDELITY_V1'],
+    },
+  );
+});
+
 for (const command of ['tap', 'type'] as const) {
   test(`the native moved-target refusal preserves mutation none through ${command}`, async () => {
     runner(() => ({
