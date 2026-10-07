@@ -1161,14 +1161,36 @@ as `.js`, `.ts`, `.mjs`, `.cjs` or parsed as `.json`. Extension inference,
 directory indexes, package `main`/`exports` resolution, extensionless modules,
 dynamic or template-literal arguments, escaped literals and other unsupported
 syntax make the fingerprint **incomplete**, forbidding cached reuse (visible
-in decision evidence). Dynamic `app.config.*`, unresolvable local refs and
-`workspace:` dependencies in any of those sections also make it incomplete.
-In 2.0 an app with a dynamic `app.config.*` is therefore never reused: its
-imports and environment reads cannot be fingerprinted. An existing generated
-native directory requires a clean prebuild that keeps existing build caches;
-a git-visible native directory can still build incrementally under the decision
-rules below. When the fingerprint matches but is incomplete, the decision reason
-names the first incompleteness cause, such as the dynamic config.
+in decision evidence). Unresolvable local refs and `workspace:` dependencies
+in any of those sections also make it incomplete.
+
+**Dynamic `app.config.*` (iOS).** qaren cannot trace a dynamic config itself,
+so it runs the app's own `@expo/fingerprint` (resolved through the app's `expo`
+install, never downloaded) as `pnpm exec node <cli> fingerprint:generate
+--platform ios` from the project root, with the iOS build's environment
+transforms (`CI` removed, `EXPO_NO_TELEMETRY=1`). Expo evaluates the config,
+loads `.env` files, and hashes the evaluated config, the modules it loaded,
+autolinked native modules and config-plugin inputs. The fingerprint value then
+also binds that hash and the selected Xcode (`xcodebuild -version`), and the
+receipt notes record `fingerprint_parts` (hashes only) and `expo_fingerprint_ms`.
+A successful evaluation clears only the dynamic-config incompleteness; every
+other reason still forbids reuse. If evaluation is unavailable (the package does
+not resolve, the command fails or times out after 120 s, or its output has no
+hash) the dynamic config stays incomplete and the decision is a rebuild as
+before, with the unavailability named in the evidence. Only the `hash` field is
+read: the command output, which can contain evaluated config values, is never
+logged or stored. A config whose evaluated value changes between runs (an
+environment read, a time or random value) changes the hash and rebuilds.
+Limits: environment read only by native build scripts (a Podfile reading `ENV`,
+for example) and the CocoaPods version are not bound; Android keeps a dynamic
+config incomplete; and the Xcode identity is bound only for dynamic configs.
+
+An incomplete fingerprint over an existing generated native directory requires a
+clean prebuild, which deletes that directory with its installed native
+dependencies and build outputs; a git-visible native directory can still build
+incrementally under the decision rules below. When the fingerprint matches but
+is incomplete, the decision reason names the first incompleteness cause, such as
+the dynamic config.
 Other native-input symlinks hash link text plus in-worktree target content;
 out-of-worktree targets make the fingerprint incomplete. The scanner is
 conservative, not a full JS parser.
@@ -1176,7 +1198,7 @@ qaren is pnpm-only; other package managers' lockfiles are out of contract.
 
 **Decision.** Cache state lives at
 `<worktree>/.qaren/native-cache/<platform>-<app_id>.json`
-(`qaren-native-cache/1`), bound to the exact worktree, platform, app id,
+(`qaren-native-cache/2`; a state with an older schema is invalid and rebuilds clean once), bound to the exact worktree, platform, app id,
 fingerprint, and building candidate sha:
 
 1. **Reuse** — state matches this worktree/platform/app, fingerprints are
@@ -1201,8 +1223,9 @@ fingerprint, and building candidate sha:
    state, cross-worktree state, unproven generated-dir provenance, changed or
    incomplete fingerprints for an existing generated native directory, or
    `build.strategy: clean`. A generated (git-ignored) native dir is regenerated
-   using only `expo prebuild --platform <platform> --clean`, keeping existing
-   build caches outside the generated directory. A git-visible native dir
+   using only `expo prebuild --platform <platform> --clean`, which deletes the
+   directory with its installed native dependencies and build outputs; build
+   caches outside it are kept. A git-visible native dir
    is candidate input and is never deleted — clean
    there means dropping the derived build outputs (`ios/build`,
    `android/build`, `android/app/build`, `android/.gradle`).

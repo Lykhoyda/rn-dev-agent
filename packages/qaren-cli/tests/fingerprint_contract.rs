@@ -3,6 +3,8 @@ use qaren::fingerprint::{compute, NativeFingerprint, FINGERPRINT_VERSION};
 use qaren::scenario::IosWorkspaceBuild;
 use std::path::Path;
 
+static NO_PARTS: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+
 fn prior_fingerprint() -> NativeFingerprint {
     NativeFingerprint {
         value: "rnfp1:prior-native-inputs".into(),
@@ -10,6 +12,8 @@ fn prior_fingerprint() -> NativeFingerprint {
         native_dir_in_candidate: true,
         complete: true,
         incompleteness: vec![],
+        parts: Default::default(),
+        expo_fingerprint_ms: None,
     }
 }
 
@@ -658,6 +662,7 @@ fn matching_build(
     };
     let cached = NativeCacheState {
         schema: CACHE_SCHEMA.to_string(),
+        fingerprint_parts: Default::default(),
         platform: platform.to_string(),
         app_id: "com.rndevagent.testapp".to_string(),
         worktree_root: root.to_path_buf(),
@@ -687,6 +692,7 @@ fn matching_build(
             worktree_root: root,
             candidate_sha: &cached.candidate_sha,
             fingerprint: &fp.value,
+            fingerprint_parts: &NO_PARTS,
             fingerprint_complete: fp.complete,
             incompleteness: &fp.incompleteness,
             scheme: Some("rndatest"),
@@ -933,4 +939,300 @@ fn an_unresolvable_package_plugin_or_import_still_forbids_reuse() {
         !package_fingerprint(&root).complete,
         "a package without a version cannot be bound"
     );
+}
+
+mod common;
+
+const EXPO_H: &str = "562e2ce413075778e281d21d5d710ac72e76cb12";
+const XCODE: &str = "Xcode 27.0\nBuild version 27A266a\n";
+
+fn dynamic_project() -> std::path::PathBuf {
+    let root = plugin_project("module.exports = c => c;");
+    std::fs::remove_file(root.join("app.json")).unwrap();
+    std::fs::write(
+        root.join("app.config.ts"),
+        "import flavor from './config/flavor';\nexport default () => ({ extra: { flavor: process.env.QA_FLAVOR ?? flavor } });\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("package.json"), r#"{"name":"app"}"#).unwrap();
+    root
+}
+
+const DYNAMIC_FILES: &str = "package.json\0app.config.ts\0";
+
+fn dynamic_fingerprint(
+    root: &Path,
+    files: &str,
+    script: impl FnOnce(&mut MockRunner),
+) -> (NativeFingerprint, MockRunner) {
+    let mut runner = MockRunner::new();
+    runner.expect_run("ls-files", CmdOutput::success(files));
+    script(&mut runner);
+    let fp = compute(&mut runner, root, root, "ios").unwrap();
+    assert_eq!(runner.remaining(), 0);
+    (fp, runner)
+}
+
+fn evaluated(root: &Path, hash: &str, xcode: &str) -> NativeFingerprint {
+    dynamic_fingerprint(root, DYNAMIC_FILES, |m| {
+        common::script_expo_fingerprint(m, hash, xcode)
+    })
+    .0
+}
+
+#[test]
+fn static_config_never_runs_expo_and_keeps_its_cache_key() {
+    let root = plugin_project("module.exports = c => c;");
+    let fp = fingerprint(&root);
+    assert!(fp.complete, "{:?}", fp.incompleteness);
+    assert_eq!(fp.expo_fingerprint_ms, None);
+    assert_eq!(fp.parts.keys().collect::<Vec<_>>(), ["rnfp"]);
+    assert_eq!(fp.parts["rnfp"], fp.value);
+    assert_eq!(
+        matching_build(&root, &fp, "ios").decision,
+        qaren::buildplan::BuildDecision::Reuse
+    );
+}
+
+#[test]
+fn evaluated_dynamic_config_clears_only_its_own_incompleteness_and_reuses() {
+    let root = dynamic_project();
+    let (fp, runner) = dynamic_fingerprint(&root, DYNAMIC_FILES, |m| {
+        common::script_expo_fingerprint(m, EXPO_H, XCODE)
+    });
+    assert!(fp.complete, "{:?}", fp.incompleteness);
+    assert_eq!(
+        fp.parts.keys().collect::<Vec<_>>(),
+        ["expo", "rnfp", "toolchain"]
+    );
+    assert_eq!(fp.parts["expo"], format!("expo:{EXPO_H}"));
+    assert_ne!(fp.value, fp.parts["rnfp"]);
+    assert!(fp.expo_fingerprint_ms.is_some());
+    assert_eq!(
+        runner.private_inputs.len(),
+        2,
+        "both Expo commands use private capture"
+    );
+    let plan = matching_build(&root, &fp, "ios");
+    assert_eq!(
+        plan.decision,
+        qaren::buildplan::BuildDecision::Reuse,
+        "{}",
+        plan.reason
+    );
+}
+
+#[test]
+fn stable_expo_hash_is_stable_and_every_bound_part_invalidates() {
+    let root = dynamic_project();
+    let base = evaluated(&root, EXPO_H, XCODE);
+    assert_eq!(base, evaluated(&root, EXPO_H, XCODE));
+    let config_or_loaded_module = evaluated(&root, &"a".repeat(40), XCODE);
+    assert_ne!(base.value, config_or_loaded_module.value);
+    let toolchain = evaluated(&root, EXPO_H, "Xcode 27.1\nBuild version 27B5\n");
+    assert_ne!(base.value, toolchain.value);
+    assert_eq!(base.parts["rnfp"], toolchain.parts["rnfp"]);
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"name":"app","dependencies":{"x":"1"}}"#,
+    )
+    .unwrap();
+    let native_input = evaluated(&root, EXPO_H, XCODE);
+    assert_ne!(base.parts["rnfp"], native_input.parts["rnfp"]);
+    assert_ne!(base.value, native_input.value);
+    for changed in [&config_or_loaded_module, &toolchain, &native_input] {
+        assert_ne!(
+            matching_build(&root, &base, "ios").fingerprint,
+            changed.value
+        );
+    }
+}
+
+#[test]
+fn js_only_and_plan_only_changes_keep_the_composite() {
+    let root = dynamic_project();
+    let base = evaluated(&root, EXPO_H, XCODE);
+    std::fs::write(root.join("App.tsx"), "export default 1;").unwrap();
+    std::fs::write(root.join("plan.md"), "- tap Home").unwrap();
+    let after = dynamic_fingerprint(&root, &format!("{DYNAMIC_FILES}App.tsx\0plan.md\0"), |m| {
+        common::script_expo_fingerprint(m, EXPO_H, XCODE)
+    })
+    .0;
+    assert_eq!(base.value, after.value);
+}
+
+type Script = Box<dyn FnOnce(&mut MockRunner)>;
+
+#[test]
+fn unavailable_expo_evaluation_keeps_todays_conservative_rebuild() {
+    let root = dynamic_project();
+    let cases: Vec<(&str, Script)> = vec![
+        (
+            "does not resolve",
+            Box::new(common::script_expo_fingerprint_unresolvable),
+        ),
+        (
+            "does not resolve",
+            Box::new(|m: &mut MockRunner| {
+                m.expect_run("require.resolve", CmdOutput::success("relative/cli.js"))
+            }),
+        ),
+        (
+            "did not complete (exit 1)",
+            Box::new(|m: &mut MockRunner| {
+                m.expect_run(
+                    "require.resolve",
+                    CmdOutput::success(common::EXPO_FINGERPRINT_CLI),
+                );
+                m.expect_run("fingerprint:generate", CmdOutput::failed(1, "boom"));
+            }),
+        ),
+        (
+            "timed out after 120 s",
+            Box::new(|m: &mut MockRunner| {
+                m.expect_run(
+                    "require.resolve",
+                    CmdOutput::success(common::EXPO_FINGERPRINT_CLI),
+                );
+                m.expect_run(
+                    "fingerprint:generate",
+                    CmdOutput {
+                        timed_out: true,
+                        ..CmdOutput::failed(124, "")
+                    },
+                );
+            }),
+        ),
+        (
+            "no hex hash",
+            Box::new(|m: &mut MockRunner| {
+                m.expect_run(
+                    "require.resolve",
+                    CmdOutput::success(common::EXPO_FINGERPRINT_CLI),
+                );
+                m.expect_run("fingerprint:generate", CmdOutput::success("not json"));
+            }),
+        ),
+        (
+            "no hex hash",
+            Box::new(|m: &mut MockRunner| {
+                m.expect_run(
+                    "require.resolve",
+                    CmdOutput::success(common::EXPO_FINGERPRINT_CLI),
+                );
+                m.expect_run(
+                    "fingerprint:generate",
+                    CmdOutput::success(r#"{"hash":"../x"}"#),
+                );
+            }),
+        ),
+    ];
+    for (reason, script) in cases {
+        let (fp, _) = dynamic_fingerprint(&root, DYNAMIC_FILES, script);
+        assert!(!fp.complete);
+        assert_eq!(fp.incompleteness.len(), 2, "{:?}", fp.incompleteness);
+        assert!(fp.incompleteness[0].starts_with("app.config.ts is a dynamic config"));
+        assert!(
+            fp.incompleteness[1].starts_with("Expo fingerprint unavailable: ")
+                && fp.incompleteness[1].contains(reason),
+            "{:?}",
+            fp.incompleteness
+        );
+        assert_eq!(fp.value, fp.parts["rnfp"]);
+        let plan = matching_build(&root, &fp, "ios");
+        assert_eq!(plan.decision, qaren::buildplan::BuildDecision::Clean);
+        assert!(plan.regenerate_native_dir);
+    }
+}
+
+#[test]
+fn unavailable_toolchain_identity_forbids_reuse() {
+    let root = dynamic_project();
+    let (fp, _) = dynamic_fingerprint(&root, DYNAMIC_FILES, |m| {
+        m.expect_run(
+            "require.resolve",
+            CmdOutput::success(common::EXPO_FINGERPRINT_CLI),
+        );
+        m.expect_run(
+            "fingerprint:generate",
+            CmdOutput::success(&format!(r#"{{"hash":"{EXPO_H}"}}"#)),
+        );
+        m.expect_run(
+            "xcodebuild -version",
+            CmdOutput::failed(1, "no developer dir"),
+        );
+    });
+    assert!(!fp.complete);
+    assert_eq!(fp.incompleteness.len(), 1);
+    assert!(fp.incompleteness[0].starts_with("toolchain identity unavailable"));
+    assert_ne!(
+        matching_build(&root, &fp, "ios").decision,
+        qaren::buildplan::BuildDecision::Reuse
+    );
+}
+
+#[test]
+fn an_evaluated_config_never_clears_any_other_incompleteness() {
+    let root = dynamic_project();
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"name":"app","dependencies":{"shared":"workspace:*"}}"#,
+    )
+    .unwrap();
+    let fp = evaluated(&root, EXPO_H, XCODE);
+    assert!(!fp.complete);
+    assert_eq!(fp.incompleteness.len(), 1, "{:?}", fp.incompleteness);
+    assert!(fp.incompleteness[0].contains("workspace:"));
+    assert_ne!(
+        matching_build(&root, &fp, "ios").decision,
+        qaren::buildplan::BuildDecision::Reuse
+    );
+}
+
+#[test]
+fn android_dynamic_config_is_unchanged_and_never_runs_expo() {
+    let root = dynamic_project();
+    let mut runner = MockRunner::new();
+    runner.expect_run("ls-files", CmdOutput::success(DYNAMIC_FILES));
+    let fp = compute(&mut runner, &root, &root, "android").unwrap();
+    assert_eq!(fp.incompleteness.len(), 1);
+    assert!(fp.incompleteness[0].starts_with("app.config.ts is a dynamic config"));
+    assert_eq!(fp.expo_fingerprint_ms, None);
+}
+
+#[test]
+fn evaluated_config_output_never_reaches_fingerprint_or_decision() {
+    const CANARY: &str = "CANARY-sk_live_7f3a";
+    let root = dynamic_project();
+    let leak = |stdout: String, stderr: &str| -> String {
+        let (fp, _) = dynamic_fingerprint(&root, DYNAMIC_FILES, |m| {
+            m.expect_run(
+                "require.resolve",
+                CmdOutput::success(common::EXPO_FINGERPRINT_CLI),
+            );
+            m.expect_run(
+                "fingerprint:generate",
+                CmdOutput {
+                    stdout,
+                    stderr: stderr.to_string(),
+                    ..CmdOutput::failed(if stderr.is_empty() { 0 } else { 1 }, stderr)
+                },
+            );
+            if stderr.is_empty() {
+                m.expect_run("xcodebuild -version", CmdOutput::success(XCODE));
+            }
+        });
+        let plan = matching_build(&root, &fp, "ios");
+        format!("{fp:?}{}", serde_json::to_string(&plan).unwrap())
+    };
+    let ok = serde_json::json!({
+        "sources": [{"type": "contents", "id": "expoConfig", "contents": format!("{{\"extra\":{{\"key\":\"{CANARY}\"}}}}")}],
+        "hash": EXPO_H,
+    });
+    for observed in [
+        leak(format!("{ok}\n"), ""),
+        leak(format!("{CANARY}\n"), &format!("config threw: {CANARY}")),
+    ] {
+        assert!(!observed.contains(CANARY), "{observed}");
+    }
 }

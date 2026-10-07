@@ -1286,3 +1286,17 @@ fn an_unset_variable_wins_over_the_spec_and_the_parent_environment() {
     assert!(output.stdout.lines().any(|l| l == "KEEP=1"));
     assert!(!output.stdout.lines().any(|l| l.starts_with("CI=")));
 }
+
+#[test]
+fn expo_fingerprint_evaluates_config_in_the_ios_build_environment() {
+    let root = Path::new("/repo/app");
+    let build = ios::build_spec(root, Path::new("/runs/x/out"), 1800, None);
+    let fingerprint =
+        qaren::fingerprint::expo_fingerprint_spec("expo-fingerprint", root, &["cli.js"]);
+    assert_eq!(fingerprint.program, build.program);
+    assert_eq!(fingerprint.args[0], build.args[0]);
+    assert_eq!(fingerprint.cwd, build.cwd);
+    assert_eq!(fingerprint.unset, build.unset);
+    assert_eq!(fingerprint.env, build.env);
+    assert_eq!(fingerprint.timeout_seconds, 120);
+}

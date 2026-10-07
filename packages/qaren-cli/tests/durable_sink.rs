@@ -176,6 +176,7 @@ fn cache_handoff_and_native_suite_writers_preserve_identity_and_mask_output() {
     std::os::unix::fs::symlink(&identity, buildplan::cache_dir(&dir)).unwrap();
     let state = NativeCacheState {
         schema: buildplan::CACHE_SCHEMA.into(),
+        fingerprint_parts: Default::default(),
         platform: "ios".into(),
         app_id: "app".into(),
         worktree_root: identity.clone(),

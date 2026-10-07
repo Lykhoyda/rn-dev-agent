@@ -2810,6 +2810,7 @@ fn fresh_install_resets_or_proves_absence_before_cached_install_under_the_same_l
             &buildplan::state_path(&repo, "ios", "com.rndevagent.testapp"),
             &NativeCacheState {
                 schema: CACHE_SCHEMA.to_string(),
+                fingerprint_parts: Default::default(),
                 platform: "ios".into(),
                 app_id: "com.rndevagent.testapp".into(),
                 worktree_root: repo.canonicalize().unwrap(),

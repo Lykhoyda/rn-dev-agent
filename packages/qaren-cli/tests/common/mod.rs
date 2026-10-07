@@ -49,6 +49,31 @@ pub fn script_tracked_file_identity(mock: &mut MockRunner, path: &str, mode: &st
     );
 }
 
+pub const EXPO_FINGERPRINT_CLI: &str =
+    "/repo/node_modules/.pnpm/@expo+fingerprint@0.19.10/node_modules/@expo/fingerprint/bin/cli.js";
+
+pub fn script_expo_fingerprint(mock: &mut MockRunner, hash: &str, xcode: &str) {
+    mock.expect_run("require.resolve", CmdOutput::success(EXPO_FINGERPRINT_CLI));
+    mock.expect_run(
+        "fingerprint:generate --platform ios",
+        CmdOutput::success(&format!(
+            "{}\n",
+            serde_json::json!({"sources": [{"type": "contents", "id": "expoConfig", "contents": "{}"}], "hash": hash})
+        )),
+    );
+    mock.expect_run("xcodebuild -version", CmdOutput::success(xcode));
+}
+
+pub fn script_expo_fingerprint_unresolvable(mock: &mut MockRunner) {
+    mock.expect_run(
+        "require.resolve",
+        CmdOutput::failed(
+            1,
+            "Error: Cannot find module '@expo/fingerprint/bin/cli.js'",
+        ),
+    );
+}
+
 pub fn ios_scenario_yaml(port: u16) -> String {
     format!(
         "schema: qaren/1\nname: ios-simulator\nplatform: ios\ncandidate:\n  project_root: test-app\n  app_id: com.rndevagent.testapp\n  revision: HEAD\n  dev_client_scheme: rndatest\nmetro:\n  port: {port}\nios:\n  device_type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro\n  runtime: com.apple.CoreSimulator.SimRuntime.iOS-26-4\n"

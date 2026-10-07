@@ -8,6 +8,8 @@ use qaren::runrecord::PidIdentity;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
+static NO_PARTS: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
 fn temp_dir() -> PathBuf {
@@ -35,6 +37,7 @@ fn artifact() -> CachedArtifact {
 fn state(worktree: &Path, fingerprint: &str) -> NativeCacheState {
     NativeCacheState {
         schema: CACHE_SCHEMA.to_string(),
+        fingerprint_parts: Default::default(),
         platform: "ios".to_string(),
         app_id: "com.rndevagent.testapp".to_string(),
         worktree_root: worktree.to_path_buf(),
@@ -54,6 +57,7 @@ fn inputs<'a>(worktree: &'a Path, fingerprint: &'a str) -> DecisionInputs<'a> {
         worktree_root: worktree,
         candidate_sha: SHA_B,
         fingerprint,
+        fingerprint_parts: &NO_PARTS,
         fingerprint_complete: true,
         incompleteness: &[],
         scheme: Some("rndatest"),
@@ -161,7 +165,10 @@ fn incomplete_matching_fingerprint_regenerates_generated_native_dir() {
     assert_eq!(plan.decision, BuildDecision::Clean);
     assert!(plan.regenerate_native_dir);
     assert!(plan.artifact.is_none());
-    assert!(plan.reason.contains("keeping existing build caches"));
+    assert!(plan
+        .reason
+        .contains("deletes it with its installed native dependencies and build outputs"));
+    assert!(!plan.reason.contains("keeping existing build caches"));
     assert!(plan.evidence.iter().any(|e| e.contains("dynamic config")));
     assert!(!plan.reason.contains("changed"), "{}", plan.reason);
     assert!(
@@ -184,7 +191,10 @@ fn changed_fingerprint_with_proven_provenance_regenerates_generated_native_dir()
     assert_eq!(plan.decision, BuildDecision::Clean);
     assert!(plan.regenerate_native_dir);
     assert!(plan.artifact.is_none());
-    assert!(plan.reason.contains("keeping existing build caches"));
+    assert!(plan
+        .reason
+        .contains("deletes it with its installed native dependencies and build outputs"));
+    assert!(!plan.reason.contains("keeping existing build caches"));
     assert!(
         plan.reason.starts_with("native inputs changed"),
         "{}",
@@ -480,4 +490,62 @@ fn incomplete_matching_fingerprint_without_a_generated_dir_names_its_cause() {
         "{}",
         plan.reason
     );
+}
+
+fn parts(expo: &str, toolchain: &str) -> std::collections::BTreeMap<String, String> {
+    [
+        ("rnfp", "rnfp1:r"),
+        ("expo", expo),
+        ("toolchain", toolchain),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
+}
+
+#[test]
+fn changed_composite_names_each_changed_fingerprint_part() {
+    let worktree = temp_dir();
+    for (current, named) in [
+        (parts("expo:b", "xcode:t"), "native inputs changed: expo"),
+        (
+            parts("expo:a", "xcode:u"),
+            "native inputs changed: toolchain",
+        ),
+        (
+            parts("expo:b", "xcode:u"),
+            "native inputs changed: expo, toolchain",
+        ),
+    ] {
+        let mut recorded = state(&worktree, FP);
+        recorded.fingerprint_parts = parts("expo:a", "xcode:t");
+        let mut changed = inputs(&worktree, "rnfp1:changed");
+        changed.fingerprint_parts = &current;
+        let plan = decide(&changed, &StateStatus::Loaded(Box::new(recorded)), None);
+        assert_ne!(plan.decision, BuildDecision::Reuse);
+        assert!(
+            plan.evidence.iter().any(|e| e.as_str() == named),
+            "{:?}",
+            plan.evidence
+        );
+    }
+}
+
+#[test]
+fn a_previous_cache_schema_is_invalid_and_builds_clean_once() {
+    let worktree = temp_dir();
+    let mut old = serde_json::to_value(state(&worktree, FP)).unwrap();
+    old["schema"] = "qaren-native-cache/1".into();
+    old.as_object_mut().unwrap().remove("fingerprint_parts");
+    let path = qaren::buildplan::state_path(&worktree, "ios", "com.rndevagent.testapp");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, old.to_string()).unwrap();
+    let loaded = qaren::buildplan::load_state(&worktree, "ios", "com.rndevagent.testapp");
+    assert!(matches!(loaded, StateStatus::Invalid(_)), "{loaded:?}");
+    let plan = decide(
+        &inputs(&worktree, FP),
+        &loaded,
+        Some(ArtifactStatus::Verified),
+    );
+    assert_eq!(plan.decision, BuildDecision::Clean);
 }

@@ -252,12 +252,23 @@ fn ios_prepare_continues_with_a_note_when_dev_menu_defaults_fail() {
 }
 
 fn script_ios_prepare(mock: &mut MockRunner, repo: &std::path::Path, defaults: CmdOutput) {
+    let empty = |m: &mut MockRunner| m.expect_run("ls-files", CmdOutput::success(""));
+    script_ios_prepare_fingerprints(mock, repo, defaults, empty, empty);
+}
+
+fn script_ios_prepare_fingerprints(
+    mock: &mut MockRunner,
+    repo: &std::path::Path,
+    defaults: CmdOutput,
+    plan: impl FnOnce(&mut MockRunner),
+    recheck: impl FnOnce(&mut MockRunner),
+) {
     script_validation(mock, repo, IOS_TOOLS);
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n")); // self lstart
     mock.expect_run("ps", CmdOutput::success("qaren prepare\n")); // self command
     common::script_ios_deps(mock);
-    mock.expect_run("ls-files", CmdOutput::success(""));
+    plan(mock);
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
     mock.expect_run(
         "simctl bootstatus",
@@ -280,7 +291,39 @@ fn script_ios_prepare(mock: &mut MockRunner, repo: &std::path::Path, defaults: C
     // Provenance recheck immediately before ready: unchanged sha, still clean.
     mock.expect_run("git", CmdOutput::success(&format!("{}\n", "b".repeat(40))));
     mock.expect_run("git", CmdOutput::success(""));
-    mock.expect_run("ls-files", CmdOutput::success(""));
+    recheck(mock);
+}
+
+#[test]
+fn expo_hash_drift_between_plan_and_readiness_fails_as_candidate_drift() {
+    const XCODE: &str = "Xcode 27.0\nBuild version 27A266a\n";
+    let repo = common::temp_repo();
+    std::fs::write(
+        repo.join("test-app/app.config.ts"),
+        "export default () => ({});\n",
+    )
+    .unwrap();
+    let scenario_path = write_scenario(&repo, &ios_scenario_yaml(8791));
+    let fingerprint = |hash: &'static str| {
+        move |m: &mut MockRunner| {
+            m.expect_run("ls-files", CmdOutput::success("test-app/app.config.ts\0"));
+            common::script_expo_fingerprint(m, hash, XCODE);
+        }
+    };
+    let mut mock = MockRunner::new();
+    script_ios_prepare_fingerprints(
+        &mut mock,
+        &repo,
+        CmdOutput::success(""),
+        fingerprint("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        fingerprint("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+    );
+    let receipt = prepare(&mut mock, &prepare_args(&scenario_path, false, None));
+    let failure = receipt.failure.expect("drift must fail prepare");
+    assert_eq!(failure.code, FailureCode::CandidateDrifted, "{failure:?}");
+    assert!(failure
+        .detail
+        .contains("native inputs changed during preparation"));
 }
 
 fn assert_ios_ready(mock: &MockRunner, repo: &std::path::Path, receipt: qaren::receipt::Receipt) {
@@ -1688,6 +1731,7 @@ fn ios_reuse_dry_run_lists_each_launch_step_once_in_execution_order() {
     assert!(fp.complete);
     let cache = NativeCacheState {
         schema: CACHE_SCHEMA.to_string(),
+        fingerprint_parts: Default::default(),
         platform: "ios".to_string(),
         app_id: scenario.candidate.app_id.clone(),
         worktree_root: repo.clone(),
@@ -1805,11 +1849,15 @@ fn dry_run_plans_generated_native_regeneration_before_every_build_route() {
                 let scenario_path = write_scenario(&repo, &yaml);
                 let mut fp_runner = qaren::exec::MockRunner::new();
                 fp_runner.expect_run("ls-files", CmdOutput::success(&files));
+                if incomplete && platform == "ios" {
+                    common::script_expo_fingerprint_unresolvable(&mut fp_runner);
+                }
                 let fp = qaren::fingerprint::compute(&mut fp_runner, &repo, &project, platform)
                     .unwrap()
                     .with_ios_workspace(scenario.build.ios_workspace.as_ref());
                 let cache = NativeCacheState {
                     schema: CACHE_SCHEMA.to_string(),
+                    fingerprint_parts: Default::default(),
                     platform: platform.to_string(),
                     app_id: scenario.candidate.app_id.clone(),
                     worktree_root: repo.clone(),
@@ -1853,6 +1901,9 @@ fn dry_run_plans_generated_native_regeneration_before_every_build_route() {
                     mock.expect_run("lsof", free_port());
                 }
                 mock.expect_run("ls-files", CmdOutput::success(&files));
+                if incomplete && platform == "ios" {
+                    common::script_expo_fingerprint_unresolvable(&mut mock);
+                }
                 let sdk = (platform == "android").then(|| android_sdk(&repo));
                 let receipt = prepare(
                     &mut mock,
@@ -2600,6 +2651,7 @@ fn recording_a_build_cancelled_mid_copy_preserves_previous_cache() {
             std::fs::write(old.join("binary"), b"previous build").unwrap();
             let state = qaren::buildplan::NativeCacheState {
                 schema: qaren::buildplan::CACHE_SCHEMA.into(),
+                fingerprint_parts: Default::default(),
                 platform: "ios".into(),
                 app_id: "com.rndevagent.testapp".into(),
                 worktree_root: root.clone(),

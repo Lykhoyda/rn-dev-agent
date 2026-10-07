@@ -14,6 +14,8 @@ use qaren::runrecord::{AdbServerResource, MetroResource, Phase, RunRecord, UsbDe
 use qaren::scenario::Scenario;
 use std::path::{Path, PathBuf};
 
+static NO_PARTS: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+
 const LSTART: &str = "Wed Aug 12 16:01:00 2026";
 const USB_SERIAL: &str = "R5CT123ABC";
 
@@ -451,6 +453,7 @@ fn workspace_dry_run_reports_xcode_only_when_the_bound_cache_cannot_be_reused() 
                 &buildplan::state_path(&repo, "ios", "com.rndevagent.testapp"),
                 &NativeCacheState {
                     schema: CACHE_SCHEMA.into(),
+                    fingerprint_parts: Default::default(),
                     platform: "ios".into(),
                     app_id: "com.rndevagent.testapp".into(),
                     worktree_root: repo.clone(),
@@ -508,6 +511,7 @@ fn assert_ios_prepare_reuses_cached_client(workspace: bool) {
         .with_ios_workspace(scenario.build.ios_workspace.as_ref());
     let state = NativeCacheState {
         schema: CACHE_SCHEMA.to_string(),
+        fingerprint_parts: Default::default(),
         platform: "ios".to_string(),
         app_id: "com.rndevagent.testapp".to_string(),
         worktree_root: repo.clone(),
@@ -673,6 +677,7 @@ fn tampered_cached_artifact_is_refused_for_reuse() {
 
     let state = NativeCacheState {
         schema: CACHE_SCHEMA.to_string(),
+        fingerprint_parts: Default::default(),
         platform: "ios".to_string(),
         app_id: "com.rndevagent.testapp".to_string(),
         worktree_root: repo.clone(),
@@ -707,6 +712,7 @@ fn tampered_cached_artifact_is_refused_for_reuse() {
             worktree_root: &repo,
             candidate_sha: &"b".repeat(40),
             fingerprint: &fp.value,
+            fingerprint_parts: &NO_PARTS,
             fingerprint_complete: fp.complete,
             incompleteness: &fp.incompleteness,
             scheme: Some("rndatest"),
@@ -1369,6 +1375,7 @@ fn android_reuse_path_records_install_provenance_after_a_successful_adb_install(
         .unwrap();
     let state = NativeCacheState {
         schema: CACHE_SCHEMA.to_string(),
+        fingerprint_parts: Default::default(),
         platform: "android".to_string(),
         app_id: "com.rndevagent.testapp".to_string(),
         worktree_root: repo.clone(),

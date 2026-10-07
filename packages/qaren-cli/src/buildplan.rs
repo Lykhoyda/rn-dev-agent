@@ -2,9 +2,10 @@ use crate::exec::Runner;
 use crate::redact::OutputText;
 use crate::runrecord::{probe_pid_identity, PidIdentity, PidLiveness};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-pub const CACHE_SCHEMA: &str = "qaren-native-cache/1";
+pub const CACHE_SCHEMA: &str = "qaren-native-cache/2";
 pub const PREWARM_SCHEMA: &str = "qaren-deps-prewarm/1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +36,8 @@ pub struct NativeCacheState {
     pub generated_native_dirs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<CachedArtifact>,
+    #[serde(default)]
+    pub fingerprint_parts: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +164,7 @@ pub struct DecisionInputs<'a> {
     pub worktree_root: &'a Path,
     pub candidate_sha: &'a str,
     pub fingerprint: &'a str,
+    pub fingerprint_parts: &'a BTreeMap<String, String>,
     pub fingerprint_complete: bool,
     pub incompleteness: &'a [String],
     pub scheme: Option<&'a str>,
@@ -250,7 +254,7 @@ pub fn decide(
         }
         if regenerate && state.fingerprint != inputs.fingerprint {
             return clean(
-                "native inputs changed; regenerating the generated native dir via expo prebuild --clean while keeping existing build caches"
+                "native inputs changed; regenerating the generated native dir via expo prebuild --clean, which deletes it with its installed native dependencies and build outputs"
                     .to_string(),
                 evidence,
             );
@@ -258,7 +262,7 @@ pub fn decide(
         if regenerate && !inputs.fingerprint_complete {
             return clean(
                 format!(
-                    "native fingerprint matches, but {}; regenerating the generated native dir via expo prebuild --clean instead of reuse, while keeping existing build caches",
+                    "native fingerprint matches, but {}; regenerating the generated native dir via expo prebuild --clean instead of reuse, which deletes it with its installed native dependencies and build outputs",
                     inputs
                         .incompleteness
                         .first()
@@ -380,16 +384,31 @@ pub fn decide(
             ),
         }
     } else {
+        let mut evidence = vec![
+            format!(
+                "recorded fingerprint {}, current {}",
+                state.fingerprint, inputs.fingerprint
+            ),
+            sha_evidence,
+        ];
+        let changed: Vec<&str> = state
+            .fingerprint_parts
+            .keys()
+            .chain(inputs.fingerprint_parts.keys())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .filter(|part| {
+                state.fingerprint_parts.get(*part) != inputs.fingerprint_parts.get(*part)
+            })
+            .map(String::as_str)
+            .collect();
+        if !changed.is_empty() {
+            evidence.push(format!("native inputs changed: {}", changed.join(", ")));
+        }
         incremental(
             "native inputs changed since the recorded build; caches keyed to this exact worktree/app remain valid for an incremental compile"
                 .to_string(),
-            vec![
-                format!(
-                    "recorded fingerprint {}, current {}",
-                    state.fingerprint, inputs.fingerprint
-                ),
-                sha_evidence,
-            ],
+            evidence,
         )
     }
 }

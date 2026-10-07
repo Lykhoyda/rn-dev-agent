@@ -1056,6 +1056,7 @@ pub(crate) fn plan_build(ctx: &mut Ctx) -> Result<BuildPlan, Failure> {
         worktree_root: &repo_root,
         candidate_sha: &ctx.record.candidate.git_sha,
         fingerprint: &fp.value,
+        fingerprint_parts: &fp.parts,
         fingerprint_complete: fp.complete,
         incompleteness: &fp.incompleteness,
         scheme: scheme.as_deref(),
@@ -1063,6 +1064,17 @@ pub(crate) fn plan_build(ctx: &mut Ctx) -> Result<BuildPlan, Failure> {
         native_dir_exists,
         native_dir_in_candidate: fp.native_dir_in_candidate,
     };
+    let parts = fp
+        .parts
+        .iter()
+        .map(|(part, hash)| format!("{part}={hash}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    ctx.notes.push(("fingerprint_parts".to_string(), parts));
+    if let Some(ms) = fp.expo_fingerprint_ms {
+        ctx.notes
+            .push(("expo_fingerprint_ms".to_string(), ms.to_string()));
+    }
     Ok(buildplan::decide(&inputs, &state, artifact_status))
 }
 
@@ -1353,7 +1365,7 @@ pub(crate) fn run_clean_preparation(ctx: &mut Ctx, plan: &BuildPlan) -> Result<(
         }
         ctx.notes.push((
             "clean_preparation".to_string(),
-            format!("regenerated the generated {platform}/ dir via expo prebuild --clean"),
+            format!("deleted and regenerated the generated {platform}/ dir, including its installed native dependencies and build outputs, via expo prebuild --clean"),
         ));
         return Ok(());
     }
@@ -1838,6 +1850,7 @@ pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) -> Resu
             Vec::new()
         },
         artifact,
+        fingerprint_parts: fp.parts.clone(),
     };
     let path = buildplan::state_path(&repo_root, platform, &app_id);
     if let Err(f) = ensure_running(ctx.runner, "native_cache") {
@@ -2518,6 +2531,7 @@ fn dry_run_receipt(
                 worktree_root: &cand.repo_root,
                 candidate_sha: &cand.git_sha,
                 fingerprint: &fp.value,
+                fingerprint_parts: &fp.parts,
                 fingerprint_complete: fp.complete,
                 incompleteness: &fp.incompleteness,
                 scheme: scenario.candidate.dev_client_scheme.as_deref(),

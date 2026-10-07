@@ -12,10 +12,13 @@ pub struct NativeFingerprint {
     pub file_count: usize,
     pub native_dir_in_candidate: bool,
     // Reuse of a cached binary is only legal when the input set is provably
-    // complete; a dynamic app.config.* can import arbitrary modules that this
-    // manifest cannot enumerate.
+    // complete; a dynamic app.config.* is complete only once the app's own
+    // @expo/fingerprint has evaluated it.
     pub complete: bool,
     pub incompleteness: Vec<String>,
+    // Hash-only evidence of what `value` composes: rnfp, plus expo and toolchain for a dynamic config.
+    pub parts: BTreeMap<String, String>,
+    pub expo_fingerprint_ms: Option<u64>,
 }
 
 impl NativeFingerprint {
@@ -774,9 +777,31 @@ pub fn compute(
     let mut incompleteness = Vec::new();
     let mut dep_manifest: Vec<(String, String)> = Vec::new();
     let mut packages: BTreeSet<String> = BTreeSet::new();
-    if let Some(config) = dynamic_config {
+    let mut evaluated: Option<(String, Result<String, String>)> = None;
+    let mut expo_fingerprint_ms = None;
+    if let Some(config) = &dynamic_config {
+        let mut unavailable = None;
+        if platform_dir == "ios" {
+            let started = runner.monotonic_ms();
+            let expo = expo_fingerprint(runner, project_root, platform_dir);
+            expo_fingerprint_ms = Some(runner.monotonic_ms().saturating_sub(started));
+            match expo {
+                Ok(expo) => evaluated = Some((expo, toolchain_digest(runner))),
+                Err(reason) => unavailable = Some(reason),
+            }
+        }
+        if evaluated.is_none() {
+            incompleteness.push(format!(
+                "{config} is a dynamic config whose imports and ambient inputs (environment and process reads) cannot be fingerprinted"
+            ));
+        }
+        if let Some(reason) = unavailable {
+            incompleteness.push(format!("Expo fingerprint unavailable: {reason}"));
+        }
+    }
+    if let Some((_, Err(reason))) = &evaluated {
         incompleteness.push(format!(
-            "{config} is a dynamic config whose imports and ambient inputs (environment and process reads) cannot be fingerprinted"
+            "toolchain identity unavailable ({reason}); reuse across an unknown Xcode is unprovable"
         ));
     }
     if inputs.contains("app.json") {
@@ -884,13 +909,127 @@ pub fn compute(
         manifest.push('\n');
     }
     let file_count = entries.len();
+    let rnfp = format!("{FINGERPRINT_VERSION}:{}", sha256_hex(manifest.as_bytes()));
+    let mut parts = BTreeMap::from([("rnfp".to_string(), rnfp.clone())]);
+    let value = match evaluated {
+        Some((expo, toolchain)) => {
+            let toolchain = toolchain.unwrap_or_else(|_| "unavailable".to_string());
+            let bytes = serde_json::to_vec(&("qaren-expo-native/1", &rnfp, &expo, &toolchain))
+                .expect("fingerprint parts serialize to JSON");
+            parts.insert("expo".to_string(), expo);
+            parts.insert("toolchain".to_string(), toolchain);
+            format!("{FINGERPRINT_VERSION}:{}", sha256_hex(&bytes))
+        }
+        None => rnfp,
+    };
     Ok(NativeFingerprint {
-        value: format!("{FINGERPRINT_VERSION}:{}", sha256_hex(manifest.as_bytes())),
+        value,
         file_count,
         native_dir_in_candidate,
         complete: incompleteness.is_empty(),
         incompleteness,
+        parts,
+        expo_fingerprint_ms,
     })
+}
+
+const EXPO_FINGERPRINT_SECONDS: u64 = 120;
+
+// Resolved through the app's own `expo` install so pnpm's isolated layout works without a download.
+const RESOLVE_EXPO_FINGERPRINT: &str = "process.stdout.write(require.resolve('@expo/fingerprint/bin/cli.js',{paths:[require('path').dirname(require.resolve('expo/package.json',{paths:[process.argv[1]]}))]}))";
+
+// Same launcher and environment transforms as the expo-run-ios build, so the config evaluates as the build sees it.
+pub fn expo_fingerprint_spec(label: &str, project_root: &Path, args: &[&str]) -> CmdSpec {
+    let mut full = vec!["exec", "node"];
+    full.extend_from_slice(args);
+    CmdSpec::new(label, "pnpm", &full, EXPO_FINGERPRINT_SECONDS)
+        .cwd(project_root)
+        .env_remove("CI")
+        .env("EXPO_NO_TELEMETRY", "1")
+}
+
+// The CLI's stdout carries evaluated config contents, so only private capture is used and
+// only the `hash` field is read; every failure reason is a fixed string.
+fn expo_fingerprint(
+    runner: &mut dyn Runner,
+    project_root: &Path,
+    platform: &str,
+) -> Result<String, String> {
+    let root = project_root.to_string_lossy();
+    let resolved = runner.run_private(
+        &expo_fingerprint_spec(
+            "expo-fingerprint-resolve",
+            project_root,
+            &["-e", RESOLVE_EXPO_FINGERPRINT, &root],
+        ),
+        &[],
+    );
+    let cli = resolved.stdout().trim();
+    if !exited_zero(&resolved)
+        || !cli.starts_with('/')
+        || !cli.ends_with("/bin/cli.js")
+        || cli.contains('\n')
+    {
+        return Err(format!(
+            "@expo/fingerprint does not resolve through the app's expo install ({})",
+            outcome(&resolved)
+        ));
+    }
+    let cli = cli.to_string();
+    let generated = runner.run_private(
+        &expo_fingerprint_spec(
+            "expo-fingerprint",
+            project_root,
+            &[&cli, "fingerprint:generate", "--platform", platform],
+        ),
+        &[],
+    );
+    if !exited_zero(&generated) {
+        return Err(format!(
+            "@expo/fingerprint fingerprint:generate did not complete ({})",
+            outcome(&generated)
+        ));
+    }
+    generated
+        .stdout()
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .and_then(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .and_then(|result| result.get("hash")?.as_str().map(str::to_string))
+        .filter(|hash| !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+        .map(|hash| format!("expo:{hash}"))
+        .ok_or_else(|| "@expo/fingerprint output carried no hex hash".to_string())
+}
+
+fn exited_zero(output: &crate::exec::PrivateOutput) -> bool {
+    !output.timed_out() && output.exit_code() == Some(0)
+}
+
+fn outcome(output: &crate::exec::PrivateOutput) -> String {
+    match (output.timed_out(), output.exit_code()) {
+        (true, _) => format!("timed out after {EXPO_FINGERPRINT_SECONDS} s"),
+        (false, Some(0)) => "exit 0 with unexpected output".to_string(),
+        (false, Some(code)) => format!("exit {code}"),
+        (false, None) => "terminated by a signal".to_string(),
+    }
+}
+
+// The installed simulator SDK ships inside Xcode, so the selected Xcode's build version identifies both.
+fn toolchain_digest(runner: &mut dyn Runner) -> Result<String, String> {
+    let version = runner.run(&CmdSpec::new(
+        "xcode-version",
+        "xcodebuild",
+        &["-version"],
+        30,
+    ));
+    if !version.ok() || version.stdout.trim().is_empty() {
+        return Err("xcodebuild -version failed".to_string());
+    }
+    Ok(format!(
+        "xcode:{}",
+        sha256_hex(version.stdout.trim().as_bytes())
+    ))
 }
 
 #[cfg(test)]
