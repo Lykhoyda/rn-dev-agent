@@ -407,19 +407,14 @@ export async function walkBlock(
   ): Promise<{ observation: Observation; frame: string } | { frames: string[] }> => {
     const quoted = target.testID ?? target.label;
     const frameOf = (screen: Screen): string | undefined => {
-      if (item.kind !== 'press' && item.kind !== 'fill') return undefined;
-      // Without a testID or label there is no exact identity to quote: the target must be the only one of its kind.
-      const matches =
-        quoted === undefined
-          ? screen.elements.filter((e) => sameIdentity(e, target))
-          : exactIdentities(
-              screen,
-              { quoted, phrase: quoted, exact: target.testID !== undefined ? 'id' : 'text' },
-              item.kind,
-            )
-              .map(({ element }) => element)
-              .filter((element) => sameIdentity(element, target));
-      return matches.length === 1 ? frameKey(matches[0]) : undefined;
+      // Without a testID or label there is no exact identity, so the target cannot be proven the same element.
+      if (quoted === undefined || (item.kind !== 'press' && item.kind !== 'fill')) return undefined;
+      const matches = exactIdentities(
+        screen,
+        { quoted, phrase: quoted, exact: target.testID !== undefined ? 'id' : 'text' },
+        item.kind,
+      ).filter(({ element }) => sameIdentity(element, target));
+      return matches.length === 1 ? frameKey(matches[0].element) : undefined;
     };
     let observation = await capture(item);
     let previous = frameOf(observation.screen);

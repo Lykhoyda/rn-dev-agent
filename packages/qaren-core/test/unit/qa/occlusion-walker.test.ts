@@ -1009,7 +1009,7 @@ test('a settle failure names the target identity it was waiting for', async () =
   assert.match(outcome.failure?.seen ?? '', /button "Continue", no testID/);
 });
 
-test('a moved target with no label and no testID still settles when it is the only one of its kind', async () => {
+test('a moved target with no label and no testID is never dispatched again', async () => {
   const unlabelled = (): Screen => {
     const screen = covered(
       join(
@@ -1038,6 +1038,7 @@ test('a moved target with no label and no testID still settles when it is the on
   });
   f.deps.judge = judge;
   const outcome = await walkBlock(block('1. Tap the close icon\n'), f.deps);
-  assert.equal(outcome.block.outcome, 'pass', outcome.failure?.seen);
-  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 2);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
+  assert.match(outcome.failure?.seen ?? '', /button unlabelled, no testID\) did not settle/);
 });
