@@ -69731,6 +69731,52 @@ function autoHideDevMenuOnSimulators() {
     && [setting.simulators, setting.devices].every((flag) => flag === undefined || typeof flag === 'boolean');
   return !valid || setting.simulators !== false;
 }
+function emulatorReverse(serial, args) {
+  const result = spawnSync('adb', ['-s', serial, 'reverse', ...args], {
+    cwd: process.cwd(),
+    env: authorityEnvironment,
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  const output = String(result.stdout ?? '') + String(result.stderr ?? '');
+  if (!result.error && result.status === 0) return { ok: true, stdout: String(result.stdout ?? '') };
+  return {
+    ok: false,
+    disconnected: /device\s+('[^']*'\s+)?not found|no devices\/emulators found|device offline/i.test(output),
+    detail: result.error?.message || output.trim() || 'adb reverse ' + args[0] + ' failed',
+  };
+}
+function exactEmulatorReverses(serial, port) {
+  const listed = emulatorReverse(serial, ['--list']);
+  if (!listed.ok) {
+    if (listed.disconnected) return null;
+    failBuild(2, 'ANDROID_METRO_REVERSE_CLEANUP_UNPROVEN: adb reverse mappings on emulator ' + serial + ' could not be read: ' + listed.detail + '. Inspect them with: adb -s ' + serial + ' reverse --list');
+  }
+  return listed.stdout.split('\n')
+    .map((line) => line.trim().split(/\s+/))
+    .filter((parts) => parts.length >= 2 && parts[parts.length - 2] === 'tcp:' + port)
+    .map((parts) => parts[parts.length - 1]);
+}
+// Expo's run:android reverses the Metro port on every attached device and removes it only on a signal exit.
+function removeExpoCreatedEmulatorReverse(serial, port, before) {
+  const exact = 'tcp:' + port;
+  const manual = 'adb -s ' + serial + ' reverse --remove ' + exact;
+  if (before.length > 0) {
+    process.stdout.write('rn-session-adapter: the ' + exact + ' adb reverse on emulator ' + serial + ' predates the build and was left untouched. After confirming nothing else owns it, clear it manually with: ' + manual + '\n');
+    return;
+  }
+  const after = exactEmulatorReverses(serial, port);
+  if (!after || after.length === 0) return;
+  if (after.length !== 1 || after[0] !== exact) {
+    failBuild(2, 'ANDROID_METRO_REVERSE_CLEANUP_UNPROVEN: a foreign adb reverse for ' + exact + ' appeared on emulator ' + serial + ' during the build; refusing to remove it. After confirming nothing else owns it, clear it manually with: ' + manual);
+  }
+  const removed = emulatorReverse(serial, ['--remove', exact]);
+  if (!removed.ok && removed.disconnected) return;
+  const remaining = removed.ok ? exactEmulatorReverses(serial, port) : null;
+  if (!removed.ok || (remaining && remaining.length > 0)) {
+    failBuild(2, 'ANDROID_METRO_REVERSE_CLEANUP_UNPROVEN: the ' + exact + ' adb reverse the build created on emulator ' + serial + ' remains' + (removed.ok ? '' : ': ' + removed.detail) + '. Clear it manually with: ' + manual);
+  }
+}
 function managedMetroProxyUrl(binding) {
   if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
   if (/^emulator-\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
@@ -69871,6 +69917,9 @@ function managedMetroProxyUrl(binding) {
       failBuild(2, 'EXPO_DEVICE_IDENTITY_MISMATCH: the serial-to-display-name mapping changed immediately before Expo; reconnect the exact device and retry');
     }
   }
+  const reverseBefore = session && buildKind === 'expo' && platform === 'android' && /^emulator-\d+$/.test(session.deviceId)
+    ? exactEmulatorReverses(session.deviceId, session.metroPort)
+    : null;
   const child = spawnSync(command[0], command.slice(1), {
     cwd: process.cwd(),
     env: session ? {
@@ -69883,6 +69932,7 @@ function managedMetroProxyUrl(binding) {
     } : authorityEnvironment,
     stdio: 'inherit',
   });
+  if (reverseBefore) removeExpoCreatedEmulatorReverse(session.deviceId, session.metroPort, reverseBefore);
   await drainBuildTerminationSignals();
   if (child.error) {
     failBuild(1, 'rn-session-adapter: ' + child.error.message);

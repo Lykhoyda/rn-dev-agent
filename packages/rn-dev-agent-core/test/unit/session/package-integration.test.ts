@@ -4223,6 +4223,7 @@ test('copied adapter relaunches Android emulator dev clients with the dev menu d
     const abortPath = join(root, 'abort.jsonl');
     const adbCallsPath = join(root, 'adb.jsonl');
     const preparePath = join(root, 'prepare.jsonl');
+    const reverseStatePath = join(root, 'reverse.txt');
     const sessionCliPath = join(root, 'rn-session.cjs');
     mkdirSync(integrationRoot, { recursive: true });
     mkdirSync(binRoot, { recursive: true });
@@ -4239,18 +4240,26 @@ test('copied adapter relaunches Android emulator dev clients with the dev menu d
         },
       }),
     );
-    writeFileSync(join(binRoot, 'npx'), '#!/usr/bin/env node\n');
+    writeFileSync(
+      join(binRoot, 'npx'),
+      String.raw`#!/usr/bin/env node
+const fs=require('node:fs');const state=process.env.ADAPTER_REVERSE_STATE;
+for(const serial of [process.env.ANDROID_SERIAL,'emulator-5600']){const lines=fs.readFileSync(state,'utf8').split('\n').filter(Boolean);const mapping=serial+' tcp:8342 '+(process.env.ADAPTER_EXPO_REMOTE||'tcp:8342');if(!lines.includes(mapping))fs.appendFileSync(state,mapping+'\n');}
+process.exit(Number(process.env.ADAPTER_EXPO_EXIT||0));
+`,
+    );
     chmodSync(join(binRoot, 'npx'), 0o755);
     writeFileSync(
       join(binRoot, 'adb'),
-      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);fs.appendFileSync(process.env.ADAPTER_ADB_CALLS,JSON.stringify(args)+'\\n');if(args.includes('resolve-activity')){process.stdout.write('priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\\n'+(process.env.ADAPTER_ADB_COMPONENT||'dev.example/.MainActivity')+'\\n');}else if(args.includes('start')){if(process.env.ADAPTER_ADB_START_FAIL==='1'){process.stderr.write('start refused\\n');process.exit(3);}if(process.env.ADAPTER_ADB_SIGNAL==='1')process.kill(process.ppid,'SIGTERM');process.stdout.write(process.env.ADAPTER_ADB_START_OUTPUT??'Starting: Intent { act=android.intent.action.VIEW }\\n');}\n",
+      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);fs.appendFileSync(process.env.ADAPTER_ADB_CALLS,JSON.stringify(args)+'\\n');if(args[2]==='reverse'){const state=process.env.ADAPTER_REVERSE_STATE;if(process.env.ADAPTER_REVERSE_DISCONNECTED==='1'){process.stderr.write(\"adb: device '\"+args[1]+\"' not found\\n\");process.exit(1);}if(process.env.ADAPTER_REVERSE_FAIL===args[3]){process.stderr.write('reverse refused\\n');process.exit(1);}const lines=fs.readFileSync(state,'utf8').split('\\n').filter(Boolean);const own=(line)=>line.startsWith(args[1]+' ');if(args[3]==='--list'){process.stdout.write(lines.filter(own).map((line)=>'host-17 '+line.split(' ').slice(1).join(' ')+'\\n').join(''));}else if(args[3]==='--remove'&&process.env.ADAPTER_REVERSE_STICKY!=='1'){fs.writeFileSync(state,lines.filter((line)=>!(own(line)&&line.split(' ')[1]===args[4])).map((line)=>line+'\\n').join(''));}process.exit(0);}if(args.includes('resolve-activity')){process.stdout.write('priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\\n'+(process.env.ADAPTER_ADB_COMPONENT||'dev.example/.MainActivity')+'\\n');}else if(args.includes('start')){if(process.env.ADAPTER_ADB_START_FAIL==='1'){process.stderr.write('start refused\\n');process.exit(3);}if(process.env.ADAPTER_ADB_SIGNAL==='1')process.kill(process.ppid,'SIGTERM');process.stdout.write(process.env.ADAPTER_ADB_START_OUTPUT??'Starting: Intent { act=android.intent.action.VIEW }\\n');}\n",
     );
     chmodSync(join(binRoot, 'adb'), 0o755);
     writeFileSync(
       sessionCliPath,
       "const fs=require('node:fs');const args=process.argv.slice(2);const serial=process.env.ADAPTER_SERIAL||'emulator-5582';if(args[0]==='prepare-build'){fs.appendFileSync(process.env.ADAPTER_PREPARE,JSON.stringify({args})+'\\n');process.stdout.write(JSON.stringify({platform:'android',deviceId:serial,appId:'dev.example',metroPort:8342,sessionId:'session-android',buildToken:args[2],androidMetroReverse:{platform:'android',deviceId:serial,metroPort:8342,local:'tcp:8342',remote:'tcp:8342'}}));}else if(args[0]==='resolve-expo-android-device'){process.stdout.write(JSON.stringify({deviceId:args[1],displayName:'Pixel_API_35'}));}else if(args[0]==='abort-build'){fs.appendFileSync(process.env.ADAPTER_ABORT,JSON.stringify({args})+'\\n');process.stdout.write('{\"aborted\":true}\\n');}else{fs.writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args}));process.stdout.write('{\"receipt\":true}\\n');}",
     );
-    const runAndroid = (env: Record<string, string> = {}) => {
+    const runAndroid = (env: Record<string, string> = {}, reverseSeed: string[] = []) => {
+      writeFileSync(reverseStatePath, reverseSeed.map((line) => `${line}\n`).join(''));
       rmSync(adbCallsPath, { force: true });
       rmSync(completionPath, { force: true });
       rmSync(abortPath, { force: true });
@@ -4264,6 +4273,7 @@ test('copied adapter relaunches Android emulator dev clients with the dev menu d
           ADAPTER_COMPLETION: completionPath,
           ADAPTER_ABORT: abortPath,
           ADAPTER_PREPARE: preparePath,
+          ADAPTER_REVERSE_STATE: reverseStatePath,
           ...env,
         },
       });
@@ -4275,10 +4285,13 @@ test('copied adapter relaunches Android emulator dev clients with the dev menu d
             .split('\n')
             .map((line) => JSON.parse(line) as string[])
         : [];
+    const shellAdbCalls = () => postBuildAdbCalls().filter((call) => call[2] === 'shell');
+    const reverseAdbCalls = () => postBuildAdbCalls().filter((call) => call[2] === 'reverse');
+    const reverseState = () => readFileSync(reverseStatePath, 'utf8').split('\n').filter(Boolean);
 
     const relaunched = runAndroid();
     assert.equal(relaunched.status, 0, relaunched.stderr);
-    const [forceStop, resolveActivity, start, ...extra] = postBuildAdbCalls();
+    const [forceStop, resolveActivity, start, ...extra] = shellAdbCalls();
     assert.deepEqual(extra, []);
     assert.deepEqual(forceStop, [
       '-s',
@@ -4331,6 +4344,7 @@ test('copied adapter relaunches Android emulator dev clients with the dev menu d
       /starting dev\.example on emulator emulator-5582 with the dev menu deactivated/,
     );
     assert.ok(existsSync(completionPath));
+    assert.deepEqual(reverseState(), ['emulator-5600 tcp:8342 tcp:8342']);
 
     writeFileSync(
       join(root, '.rn-agent', 'config.json'),
@@ -4338,7 +4352,8 @@ test('copied adapter relaunches Android emulator dev clients with the dev menu d
     );
     const shownDevMenu = runAndroid();
     assert.equal(shownDevMenu.status, 0, shownDevMenu.stderr);
-    assert.deepEqual(postBuildAdbCalls(), []);
+    assert.deepEqual(shellAdbCalls(), []);
+    assert.deepEqual(reverseState(), ['emulator-5600 tcp:8342 tcp:8342']);
     rmSync(join(root, '.rn-agent', 'config.json'));
 
     const physical = runAndroid({ ADAPTER_SERIAL: 'R5CT1234ABC' });
@@ -4347,7 +4362,7 @@ test('copied adapter relaunches Android emulator dev clients with the dev menu d
 
     const innerClass = runAndroid({ ADAPTER_ADB_COMPONENT: 'dev.example/.Launcher$Main' });
     assert.equal(innerClass.status, 0, innerClass.stderr);
-    assert.ok(postBuildAdbCalls()[2]?.includes("'dev.example/.Launcher$Main'"));
+    assert.ok(shellAdbCalls()[2]?.includes("'dev.example/.Launcher$Main'"));
 
     for (const failure of [
       { ADAPTER_ADB_COMPONENT: 'dev.foreign/.MainActivity' },
@@ -4365,6 +4380,66 @@ test('copied adapter relaunches Android emulator dev clients with the dev menu d
       assert.equal(existsSync(completionPath), false);
       assert.equal(readFileSync(abortPath, 'utf8').trim().split('\n').length, 1);
     }
+
+    const unrelated = [
+      'emulator-5582 tcp:8081 tcp:8081',
+      'emulator-5582 tcp:9999 tcp:9999',
+      'emulator-5600 tcp:7000 tcp:7000',
+    ];
+    const expoCreated = runAndroid({}, unrelated);
+    assert.equal(expoCreated.status, 0, expoCreated.stderr);
+    assert.deepEqual(reverseState(), [...unrelated, 'emulator-5600 tcp:8342 tcp:8342']);
+    assert.deepEqual(
+      reverseAdbCalls().filter((call) => call[3] === '--remove'),
+      [['-s', 'emulator-5582', 'reverse', '--remove', 'tcp:8342']],
+    );
+    assert.ok(reverseAdbCalls().every((call) => call[1] === 'emulator-5582'));
+
+    const preexisting = runAndroid({}, ['emulator-5582 tcp:8342 tcp:8342']);
+    assert.equal(preexisting.status, 0, preexisting.stderr);
+    assert.ok(reverseState().includes('emulator-5582 tcp:8342 tcp:8342'));
+    assert.deepEqual(
+      reverseAdbCalls().filter((call) => call[3] === '--remove'),
+      [],
+    );
+    assert.equal(
+      `${preexisting.stdout}${preexisting.stderr}`.match(
+        /adb -s emulator-5582 reverse --remove tcp:8342/g,
+      )?.length,
+      1,
+    );
+
+    const expoFailed = runAndroid({ ADAPTER_EXPO_EXIT: '1' });
+    assert.equal(expoFailed.status, 1);
+    assert.deepEqual(reverseState(), ['emulator-5600 tcp:8342 tcp:8342']);
+    assert.equal(existsSync(completionPath), false);
+    assert.equal(readFileSync(abortPath, 'utf8').trim().split('\n').length, 1);
+
+    const disconnected = runAndroid({ ADAPTER_REVERSE_DISCONNECTED: '1' });
+    assert.equal(disconnected.status, 0, disconnected.stderr);
+
+    for (const failure of [
+      { ADAPTER_REVERSE_STICKY: '1' },
+      { ADAPTER_REVERSE_FAIL: '--remove' },
+      { ADAPTER_EXPO_REMOTE: 'tcp:9000' },
+    ]) {
+      const failed = runAndroid(failure);
+      assert.equal(failed.status, 2);
+      assert.match(
+        failed.stderr,
+        /ANDROID_METRO_REVERSE_CLEANUP_UNPROVEN: .*adb -s emulator-5582 reverse --remove tcp:8342/,
+      );
+      assert.equal(existsSync(completionPath), false);
+      assert.equal(readFileSync(abortPath, 'utf8').trim().split('\n').length, 1);
+    }
+
+    const unobservable = runAndroid({ ADAPTER_REVERSE_FAIL: '--list' });
+    assert.equal(unobservable.status, 2);
+    assert.match(
+      unobservable.stderr,
+      /ANDROID_METRO_REVERSE_CLEANUP_UNPROVEN: .*adb -s emulator-5582 reverse --list/,
+    );
+    assert.deepEqual(reverseState(), []);
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
