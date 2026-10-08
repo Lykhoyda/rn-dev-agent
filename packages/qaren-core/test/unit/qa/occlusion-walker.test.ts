@@ -949,3 +949,62 @@ test('a settled target that needs a clearance scroll is pressed at its post-scro
     ['press @target', 'scroll down', 'press @target'],
   );
 });
+
+// A text-labelled full-width control whose label is exposed as a label-sized control inside it.
+function nestedContinue(): Screen {
+  return covered(
+    join(
+      [
+        ...root(),
+        {
+          ref: '@control',
+          index: 2,
+          parentIndex: 1,
+          type: 'Button',
+          label: 'Continue',
+          hittable: true,
+          rect: { x: 21, y: 692.3, width: 360, height: 48 },
+        },
+        {
+          ref: '@label',
+          index: 3,
+          parentIndex: 2,
+          type: 'Button',
+          label: 'Continue',
+          hittable: true,
+          rect: { x: 170.3, y: 706.3, width: 61.7, height: 20 },
+        },
+      ],
+      [],
+    ),
+  );
+}
+
+test('a moved label inside its control settles on the one identity the step resolves', async () => {
+  const f = fake([nestedContinue(), nestedContinue(), nestedContinue(), nestedContinue(), done()], {
+    press: [MOVED],
+  });
+  const outcome = await walkBlock(block('1. Tap "Continue"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'pass', outcome.failure?.seen);
+  assert.deepEqual(
+    f.calls.filter((c) => c.startsWith('press')),
+    ['press @label', 'press @label'],
+  );
+});
+
+test('a settle failure names the target identity it was waiting for', async () => {
+  const f = fake(
+    [
+      continueAt(700),
+      continueAt(700),
+      continueAt(702),
+      continueAt(704),
+      continueAt(706),
+      continueAt(708),
+    ],
+    { press: [MOVED] },
+  );
+  const outcome = await walkBlock(block('1. Tap "Continue"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.match(outcome.failure?.seen ?? '', /button "Continue", no testID/);
+});

@@ -26,7 +26,7 @@ import {
   visibleSelector,
 } from './resolve.js';
 import { literalEvidence } from './evidence.js';
-import { focusIdentityOf } from './identity.js';
+import { exactIdentities, focusIdentityOf } from './identity.js';
 import {
   type BlockPlatform,
   type StoredBlock,
@@ -397,14 +397,23 @@ export async function walkBlock(
     const rect = elementFrame(e);
     return rect ? [rect.x, rect.y, rect.width, rect.height].join(',') : undefined;
   };
-  // After a moved refusal, the same target (exactly one match) must hold one native frame across two captures.
+  const identityText = (target: Element): string =>
+    `${target.kind} ${target.label === undefined ? 'unlabelled' : `"${target.label}"`}, ${target.testID === undefined ? 'no testID' : `testID "${target.testID}"`}`;
+  // After a moved refusal, the target re-identified by the step's own exact-identity rules
+  // (one identity, same kind, label and testID) must hold one native frame across two captures.
   const settledTarget = async (
     item: Exclude<Item, { kind: 'check' }>,
     target: Element,
   ): Promise<{ observation: Observation; frame: string } | { frames: string[] }> => {
+    const quoted = target.testID ?? target.label;
     const frameOf = (screen: Screen): string | undefined => {
-      const matches = screen.elements.filter((e) => sameIdentity(e, target));
-      return matches.length === 1 ? frameKey(matches[0]) : undefined;
+      if (quoted === undefined || (item.kind !== 'press' && item.kind !== 'fill')) return undefined;
+      const matches = exactIdentities(
+        screen,
+        { quoted, phrase: quoted, exact: target.testID !== undefined ? 'id' : 'text' },
+        item.kind,
+      ).filter(({ element }) => sameIdentity(element, target));
+      return matches.length === 1 ? frameKey(matches[0].element) : undefined;
     };
     let observation = await capture(item);
     let previous = frameOf(observation.screen);
@@ -1219,7 +1228,7 @@ export async function walkBlock(
               outcome = failed(
                 item,
                 attempt,
-                `${moved.error}; the target's frame did not settle across ${settled.frames.length} captures (${settled.frames.join(' | ')}); it was not dispatched again`,
+                `${moved.error}; the target (${identityText(moved.target)}) did not settle across ${settled.frames.length} captures (${settled.frames.join(' | ')}); it was not dispatched again`,
                 latest,
                 await shoot(item),
               );
@@ -1376,7 +1385,7 @@ export async function walkBlock(
                 outcome = failed(
                   item,
                   attempt,
-                  `${moved.error}; the retry resolved an element that is not the target that settled; it was not dispatched`,
+                  `${moved.error}; the retry resolved ${element ? `${identityText(element)} at ${frameKey(element) ?? 'no frame'}` : 'no element'}, not the target that settled (${identityText(moved.target)} at ${settledFrame}); it was not dispatched`,
                   before.screen,
                   await shoot(item),
                   ref,
