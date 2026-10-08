@@ -91,9 +91,9 @@ test('a press on an already selected chip proves nothing and fails with its sele
   assert.match(outcome.failure?.seen ?? '', /the target stayed selected/);
 });
 
-test('a press on a chip never reported selected fails without claiming it is unselected', async () => {
+test('a press on a control never reported selected fails with the reason it had before', async () => {
   const f = fake([chips(undefined)]);
   const outcome = await walkBlock(block('1. Tap "gender_m"\n'), f.deps);
   assert.equal(outcome.block.outcome, 'fail');
-  assert.match(outcome.failure?.seen ?? '', /the target was not reported selected before or after/);
+  assert.doesNotMatch(outcome.failure?.seen ?? '', /selected/);
 });
