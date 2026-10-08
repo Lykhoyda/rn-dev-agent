@@ -801,3 +801,124 @@ test('expired strict fill after fallback focus requires settlement before refres
   assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
   assert.equal(f.calls.filter((c) => c.startsWith('fill')).length, 0);
 });
+
+// A label-only footer, like a market Continue with no testID.
+function continueAt(y: number, twins = 1): Screen {
+  return covered(
+    join(
+      [
+        ...root(),
+        ...Array.from({ length: twins }, (_, i) => ({
+          ref: `@continue${i}`,
+          index: 2 + i,
+          parentIndex: 1,
+          type: 'Button',
+          label: 'Continue',
+          hittable: true,
+          rect: { x: 20, y: y + i * 60, width: 300, height: 44 },
+        })),
+      ],
+      [],
+    ),
+  );
+}
+
+const MOVED: ActResult = {
+  ok: false,
+  proven: false,
+  mutation: 'none',
+  error:
+    'TARGET_MOVED_BEFORE_DISPATCH: target moved before dispatch (retained 20.0,700.0,300.0,44.0; live 20.0,702.0,300.0,44.0; delta 0.0,2.0,0.0,0.0; tolerance 1.0); no tap or typing was performed',
+};
+
+for (const [name, screenAt, plan] of [
+  ['testID', (y: number) => at(y), '1. Tap "go"\n'],
+  ['label', (y: number) => continueAt(y), '1. Tap "Continue"\n'],
+] as const) {
+  test(`a moved ${name} target settles before its one retry and dispatches at the fresh frame`, async () => {
+    const f = fake(
+      [screenAt(700), screenAt(700), screenAt(702), screenAt(704), screenAt(704), done()],
+      { press: [MOVED] },
+    );
+    const outcome = await walkBlock(block(plan), f.deps);
+    assert.equal(outcome.block.outcome, 'pass');
+    assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 2);
+    assert.equal(f.calls.filter((c) => c.startsWith('scroll')).length, 0);
+  });
+}
+
+test('a moved target whose frame never settles is not dispatched again and fails with its frames', async () => {
+  const f = fake(
+    [continueAt(700), continueAt(700), continueAt(702), continueAt(704), continueAt(706), continueAt(708)],
+    { press: [MOVED] },
+  );
+  const outcome = await walkBlock(block('1. Tap "Continue"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
+  const seen = outcome.failure?.seen ?? '';
+  assert.match(seen, /TARGET_MOVED_BEFORE_DISPATCH/);
+  assert.match(seen, /did not settle/);
+  assert.match(seen, /20,702,300,44 \| 20,704,300,44 \| 20,706,300,44 \| 20,708,300,44/);
+});
+
+test('a target that holds still yet is refused as moved again fails with both frame records', async () => {
+  const f = fake([continueAt(700)], { press: [MOVED, MOVED] });
+  const outcome = await walkBlock(block('1. Tap "Continue"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 2);
+  const seen = outcome.failure?.seen ?? '';
+  assert.match(seen, /retained 20\.0,700\.0,300\.0,44\.0; live 20\.0,702\.0,300\.0,44\.0/);
+  assert.match(seen, /held still at 20,700,300,44/);
+});
+
+test('a moved target that becomes ambiguous during settling is not dispatched again', async () => {
+  const f = fake(
+    [continueAt(700), continueAt(700), continueAt(700, 2), continueAt(700, 2), continueAt(700, 2), continueAt(700, 2)],
+    { press: [MOVED] },
+  );
+  const outcome = await walkBlock(block('1. Tap "Continue"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
+  assert.match(outcome.failure?.seen ?? '', /did not settle/);
+});
+
+test('the retry after settling dispatches only the target that settled', async () => {
+  const pair = (y: number): Screen => {
+    const screen = covered(
+      join(
+        [
+          ...root(),
+          ...['Continue', 'Later'].map((label, i) => ({
+            ref: `@${label.toLowerCase()}`,
+            index: 2 + i,
+            parentIndex: 1,
+            type: 'Button',
+            label,
+            hittable: true,
+            rect: { x: 20, y: y + i * 60, width: 300, height: 44 },
+          })),
+        ],
+        [],
+      ),
+    );
+    screen.elements = screen.elements.filter((e) => e.kind === 'button');
+    return screen;
+  };
+  const judge = scriptedJudge((questions, index) =>
+    Object.fromEntries(
+      Object.entries(questions).map(([id, question]) => [
+        id,
+        question.type === 'choice' ? choice(question, index === 0 ? 'e0' : 'e1') : choice(question),
+      ]),
+    ),
+  );
+  const f = fake([pair(700), pair(700), pair(700), pair(700)], { press: [MOVED] });
+  f.deps.judge = judge;
+  const outcome = await walkBlock(block('1. Tap the footer button\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.deepEqual(
+    f.calls.filter((c) => c.startsWith('press')),
+    ['press @continue'],
+  );
+  assert.match(outcome.failure?.seen ?? '', /not the target that settled/);
+});

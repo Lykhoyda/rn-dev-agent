@@ -388,6 +388,38 @@ export async function walkBlock(
       reason: 'the target stayed off screen after one scroll: its frame did not settle',
     });
   };
+  // Identity mirrors the runner's live check: testID, else kind and label.
+  const sameIdentity = (e: Element, target: Element): boolean =>
+    target.testID !== undefined
+      ? e.testID === target.testID && e.kind === target.kind
+      : e.testID === undefined && e.kind === target.kind && e.label === target.label;
+  const frameKey = (e: Element): string | undefined => {
+    const rect = elementFrame(e);
+    return rect ? [rect.x, rect.y, rect.width, rect.height].join(',') : undefined;
+  };
+  // After a moved refusal, the same target (exactly one match) must hold one native frame across two captures.
+  const settledTarget = async (
+    item: Exclude<Item, { kind: 'check' }>,
+    target: Element,
+  ): Promise<{ observation: Observation; frame: string } | { frames: string[] }> => {
+    const frameOf = (screen: Screen): string | undefined => {
+      const matches = screen.elements.filter((e) => sameIdentity(e, target));
+      return matches.length === 1 ? frameKey(matches[0]) : undefined;
+    };
+    let observation = await capture(item);
+    let previous = frameOf(observation.screen);
+    const frames = [previous ?? 'unresolved'];
+    for (let readback = 0; readback < SCROLL_SETTLE_READBACKS; readback += 1) {
+      usable(observation, item);
+      const next = await capture(item);
+      const current = frameOf(next.screen);
+      frames.push(current ?? 'unresolved');
+      if (current !== undefined && current === previous) return { observation: next, frame: current };
+      observation = next;
+      previous = current;
+    }
+    return { frames };
+  };
   const usable = (observation: Observation, item: Item, deadline = Infinity): void => {
     assertActive();
     const now = deps.now();
@@ -1167,6 +1199,8 @@ export async function walkBlock(
         let again = false;
         let scrolled = false;
         let refusedIdentity: Element | undefined;
+        let moved: { target: Element; error: string } | undefined;
+        let settledFrame: string | undefined;
         const captureBeforeDispatch = (): Promise<Observation> =>
           (item.kind === 'press' || item.kind === 'fill') &&
           (scrolled || sequence.momentum || fillIdentity !== undefined)
@@ -1177,7 +1211,24 @@ export async function walkBlock(
           currentAttempt = attempt;
           const settling = (item.kind === 'press' || item.kind === 'fill') && sequence.momentum;
           const held = cached?.item === item && !settling ? cached : undefined;
-          let before = held?.observation ?? (await captureBeforeDispatch());
+          let before: Observation;
+          if (moved && item.kind !== 'scroll' && item.kind !== 'back' && item.kind !== 'dialog') {
+            const settled = await settledTarget(item, moved.target);
+            if ('frames' in settled) {
+              outcome = failed(
+                item,
+                attempt,
+                `${moved.error}; the target's frame did not settle across ${settled.frames.length} captures (${settled.frames.join(' | ')}); it was not dispatched again`,
+                latest,
+                await shoot(item),
+              );
+              break;
+            }
+            before = settled.observation;
+            settledFrame = settled.frame;
+          } else {
+            before = held?.observation ?? (await captureBeforeDispatch());
+          }
           cached = undefined;
           let ref: string | undefined;
           let element: Element | undefined;
@@ -1311,6 +1362,23 @@ export async function walkBlock(
                 }
                 ref = resolution.ref;
                 element = resolution.element;
+              }
+              if (
+                moved !== undefined &&
+                settledFrame !== undefined &&
+                (element === undefined ||
+                  !sameIdentity(element, moved.target) ||
+                  frameKey(element) !== settledFrame)
+              ) {
+                outcome = failed(
+                  item,
+                  attempt,
+                  `${moved.error}; the retry resolved an element that is not the target that settled; it was not dispatched`,
+                  before.screen,
+                  await shoot(item),
+                  ref,
+                );
+                break;
               }
               if (
                 (item.kind === 'press' || item.kind === 'fill') &&
@@ -1491,6 +1559,13 @@ export async function walkBlock(
             break;
           }
           if (attempt < maxAttempts) {
+            if (
+              (item.kind === 'press' || item.kind === 'fill') &&
+              element !== undefined &&
+              act!.mutation === 'none' &&
+              act!.error?.startsWith('TARGET_MOVED_BEFORE_DISPATCH')
+            )
+              moved = { target: element, error: act!.error };
             metric('replay', after);
             emit({
               ...base(item, attempt),
@@ -1509,7 +1584,12 @@ export async function walkBlock(
             maxAttempts === 1
               ? 'the screen did not change after recovery'
               : 'the screen did not change after two attempts';
-          const unchanged = act!.error ? `${act!.error}; ${unchangedScreen}` : unchangedScreen;
+          const stillness = settledFrame
+            ? `; the target's frame held still at ${settledFrame} before this dispatch`
+            : '';
+          const unchanged = act!.error
+            ? `${act!.error}; ${unchangedScreen}${stillness}`
+            : `${unchangedScreen}${stillness}`;
           const recovering = await recovery(item, attempt, unchanged);
           if (recovering === 'retry') {
             again = true;
