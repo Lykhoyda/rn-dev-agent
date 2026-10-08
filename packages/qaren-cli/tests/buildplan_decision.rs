@@ -613,3 +613,61 @@ fn a_previous_cache_schema_is_invalid_and_builds_clean_once() {
     );
     assert_eq!(plan.decision, BuildDecision::Clean);
 }
+
+#[test]
+fn parts_missing_from_an_incomplete_recorded_build_are_unknown_not_changed() {
+    let worktree = temp_dir();
+    for native_dir_exists in [true, false] {
+        for (recorded_rnfp, genuine) in [("rnfp1:r", false), ("rnfp1:old", true)] {
+            let mut recorded = state(&worktree, "rnfp1:incomplete");
+            recorded.fingerprint_parts =
+                std::collections::BTreeMap::from([("rnfp".to_string(), recorded_rnfp.to_string())]);
+            let recorded = StateStatus::Loaded(Box::new(recorded));
+            let current = parts("expo:a", "xcode:t");
+            let plan = decide(
+                &DecisionInputs {
+                    fingerprint_parts: &current,
+                    native_dir_exists,
+                    ..inputs(&worktree, FP)
+                },
+                &recorded,
+                None,
+            );
+            assert_eq!(
+                (plan.decision, plan.regenerate_native_dir),
+                if native_dir_exists {
+                    (BuildDecision::Clean, true)
+                } else {
+                    (BuildDecision::Incremental, false)
+                }
+            );
+            let shown = serde_json::to_string(&plan).unwrap();
+            assert!(
+                !plan
+                    .evidence
+                    .iter()
+                    .any(|e| e.as_str().starts_with("native inputs changed")
+                        && (e.as_str().contains("expo") || e.as_str().contains("toolchain"))),
+                "{:?}",
+                plan.evidence
+            );
+            assert_eq!(shown.contains("native inputs changed"), genuine, "{shown}");
+            if genuine {
+                assert!(
+                    plan.evidence
+                        .iter()
+                        .any(|e| e.as_str() == "native inputs changed: rnfp"),
+                    "{:?}",
+                    plan.evidence
+                );
+            }
+            assert!(
+                plan.evidence
+                    .iter()
+                    .any(|e| e.as_str() == "recorded build has no value for: expo, toolchain"),
+                "{:?}",
+                plan.evidence
+            );
+        }
+    }
+}

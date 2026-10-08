@@ -233,7 +233,7 @@ pub fn decide(
             )],
         );
     }
-    // Parts this run could not compute are unknown, not changed.
+    // Parts this run could not compute, or the recorded build did not record, are unknown, not changed.
     let changed: Vec<&str> = state
         .fingerprint_parts
         .keys()
@@ -242,19 +242,29 @@ pub fn decide(
         .into_iter()
         .filter(|part| {
             state.fingerprint_parts.get(*part) != inputs.fingerprint_parts.get(*part)
+                && state.fingerprint_parts.contains_key(*part)
                 && (inputs.expo_unavailable.is_none()
                     || inputs.fingerprint_parts.contains_key(*part))
         })
         .map(String::as_str)
         .collect();
-    let uncomparable = inputs
-        .expo_unavailable
-        .filter(|_| changed.is_empty())
-        .map(|cause| {
-            format!(
-                "Expo fingerprint unavailable: {cause}; the native fingerprint cannot be compared with the recorded build"
-            )
-        });
+    let unrecorded: Vec<&str> = inputs
+        .fingerprint_parts
+        .keys()
+        .filter(|part| !state.fingerprint_parts.contains_key(*part))
+        .map(String::as_str)
+        .collect();
+    let uncomparable = match inputs.expo_unavailable {
+        _ if !changed.is_empty() => None,
+        Some(cause) => Some(format!(
+            "Expo fingerprint unavailable: {cause}; the native fingerprint cannot be compared with the recorded build"
+        )),
+        None if !unrecorded.is_empty() => Some(format!(
+            "the recorded build has no value for {}; the native fingerprint cannot be compared with it",
+            unrecorded.join(", ")
+        )),
+        None => None,
+    };
     // A generated native dir that qaren's own builds did not create carries
     // caches of unprovable origin; only a clean regeneration is trustworthy.
     let platform_dir_proven = !inputs.native_dir_exists
@@ -418,6 +428,12 @@ pub fn decide(
         ];
         if !changed.is_empty() {
             evidence.push(format!("native inputs changed: {}", changed.join(", ")));
+        }
+        if !unrecorded.is_empty() {
+            evidence.push(format!(
+                "recorded build has no value for: {}",
+                unrecorded.join(", ")
+            ));
         }
         if let Some(cause) = inputs.expo_unavailable {
             evidence.push(format!("Expo fingerprint unavailable: {cause}"));
