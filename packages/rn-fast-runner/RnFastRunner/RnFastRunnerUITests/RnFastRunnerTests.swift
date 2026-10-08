@@ -69,6 +69,8 @@ class RnFastRunnerTests: XCTestCase {
   var needsPostSnapshotInteractionDelay = false
   var currentSnapshotGeneration = 0
   var retainedSnapshotTargets: [Int: RetainedSnapshotTarget] = [:]
+  // Set only by the latest live target check that proved movement.
+  var lastMovedFrames: (retained: CGRect, live: CGRect)?
   var lastExactTypeTarget: RecordedExactTypeTarget?
   var needsFirstInteractionDelay = false
   let interactiveTypes: Set<XCUIElement.ElementType> = [

@@ -1,3 +1,6 @@
+import CoreGraphics
+import Foundation
+
 // Occlusion is decided at dispatch by the live accessibility hit test of the one target.
 enum DispatchGuard {
   enum TargetCheck: Equatable {
@@ -38,5 +41,21 @@ enum DispatchGuard {
   static func decide(liveHittable: Bool?, keyboardContainsPoint: Bool, targetMoved: Bool = false) -> Decision {
     if targetMoved { return .moved }
     return keyboardContainsPoint || liveHittable == false ? .occluded : .proceed
+  }
+
+  // Geometry only (x,y,w,h in points), so the refusal shows how far the target moved.
+  static func movedMessage(retained: CGRect, live: CGRect, tolerance: CGFloat = 1.0) -> String {
+    func components(_ values: [CGFloat]) -> String {
+      values.map { String(format: "%.1f", Double($0)) }.joined(separator: ",")
+    }
+    let delta = [
+      live.minX - retained.minX, live.minY - retained.minY,
+      live.width - retained.width, live.height - retained.height,
+    ]
+    return "TARGET_MOVED_BEFORE_DISPATCH: target moved before dispatch "
+      + "(retained \(components([retained.minX, retained.minY, retained.width, retained.height])); "
+      + "live \(components([live.minX, live.minY, live.width, live.height])); "
+      + "delta \(components(delta)); tolerance \(components([tolerance]))); "
+      + "no tap or typing was performed. Refresh the snapshot and retry."
   }
 }

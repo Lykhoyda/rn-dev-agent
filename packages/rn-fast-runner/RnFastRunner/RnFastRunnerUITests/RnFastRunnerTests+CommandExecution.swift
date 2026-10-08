@@ -435,7 +435,7 @@ extension RnFastRunnerTests {
         let liveCheck = liveTargetCheck(app: activeApp, command: command, deadline: ProcessInfo.processInfo.systemUptime + 0.3)
         switch DispatchGuard.decide(liveHittable: liveCheck.hittable, keyboardContainsPoint: false, targetMoved: liveCheck == .moved) {
         case .moved:
-          return Response(ok: false, error: ErrorPayload(code: "TARGET_MOVED_BEFORE_DISPATCH", message: Self.movedDispatchMessage, mutation: "none"))
+          return movedDispatchResponse()
         case .occluded:
           return Response(
             ok: false,
@@ -745,7 +745,7 @@ extension RnFastRunnerTests {
         resolved = resolveTypeCommandTarget(app: activeApp, command: command)
       }
       if liveTargetCheck(app: activeApp, command: command, deadline: hitTestDeadline, checkHittability: false) == .moved {
-        return Response(ok: false, error: ErrorPayload(code: "TARGET_MOVED_BEFORE_DISPATCH", message: Self.movedDispatchMessage, mutation: "none"))
+        return movedDispatchResponse()
       }
       let target: XCUIElement
       let inputResolution: String

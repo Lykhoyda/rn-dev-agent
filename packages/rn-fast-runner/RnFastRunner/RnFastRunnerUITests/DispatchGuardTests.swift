@@ -113,4 +113,17 @@ final class DispatchGuardTests: XCTestCase {
     )
     XCTAssertEqual(moved, .moved)
   }
+
+  func testMovedMessageCarriesBothFramesTheDeltaAndTheTolerance() {
+    let message = DispatchGuard.movedMessage(
+      retained: CGRect(x: 16, y: 742.5, width: 370, height: 48),
+      live: CGRect(x: 16, y: 744, width: 370, height: 48)
+    )
+    XCTAssertTrue(message.hasPrefix("TARGET_MOVED_BEFORE_DISPATCH: "), message)
+    XCTAssertTrue(message.contains("retained 16.0,742.5,370.0,48.0"), message)
+    XCTAssertTrue(message.contains("live 16.0,744.0,370.0,48.0"), message)
+    XCTAssertTrue(message.contains("delta 0.0,1.5,0.0,0.0"), message)
+    XCTAssertTrue(message.contains("tolerance 1.0"), message)
+    XCTAssertTrue(message.contains("no tap or typing was performed"), message)
+  }
 }

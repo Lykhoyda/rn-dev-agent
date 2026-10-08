@@ -683,6 +683,7 @@ extension RnFastRunnerTests {
   }
 
   func liveTargetCheck(app: XCUIApplication, command: Command, deadline: Double, checkHittability: Bool = true) -> DispatchGuard.TargetCheck {
+    lastMovedFrames = nil
     guard let index = command.snapshotNodeIndex,
           let retained = retainedSnapshotTargets[index],
           retained.generation == currentSnapshotGeneration,
@@ -700,7 +701,8 @@ extension RnFastRunnerTests {
       x: retained.rect.x, y: retained.rect.y,
       width: retained.rect.width, height: retained.rect.height
     )
-    return DispatchGuard.hitTest(
+    var live: CGRect?
+    let check = DispatchGuard.hitTest(
       deadline: deadline,
       now: { ProcessInfo.processInfo.systemUptime },
       resolve: {
@@ -715,13 +717,23 @@ extension RnFastRunnerTests {
       matchesFrame: { target in
         var matches: Bool?
         let exception = RunnerObjCExceptionCatcher.catchException({
-          matches = KeyboardGuard.approximatelyEqual(target.frame, expected)
+          let frame = target.frame
+          live = frame
+          matches = KeyboardGuard.approximatelyEqual(frame, expected)
         })
         return exception == nil ? matches : nil
       },
       checkHittability: checkHittability,
       read: { target in self.boundedHittable(target, deadline: deadline) }
     )
+    if check == .moved, let live { lastMovedFrames = (expected, live) }
+    return check
+  }
+
+  func movedDispatchResponse() -> Response {
+    let message = lastMovedFrames.map { DispatchGuard.movedMessage(retained: $0.retained, live: $0.live) }
+      ?? Self.movedDispatchMessage
+    return Response(ok: false, error: ErrorPayload(code: "TARGET_MOVED_BEFORE_DISPATCH", message: message, mutation: "none"))
   }
 
   private func resolveLiveKeyboardTarget(
