@@ -76,8 +76,13 @@ naming an input is not a twin, while a button sharing the input's testID is. A
 React-only projection collapses into the one native input only when complete
 React host evidence and digest ancestry prove it represents the same input host:
 either its composite ancestor forwarding the same testID, or the host entry left
-after the native input joined that ancestor. A separate element sharing the ID
-remains a twin, as covered by the
+after the native input joined that ancestor. With no native input, React-only
+composite wrappers proven by the same ancestry to contain that same input host
+(whatever role their handler props suggest) collapse into the one React-only
+input; a fill then reaches it only through an eligible observed pressable
+wrapper, and refuses `TARGET_NOT_FOUND` without one. A separate element sharing the
+ID remains a twin, and each ambiguity candidate is listed as native or
+React-only and, where proven, as a wrapper of an input, as covered by the
 [forwarding-proof tests](../qaren-core/test/unit/qa/identity.test.ts). A merged composite
 input keeps its placeholder for quoted fill resolution. The refusal is terminal:
 it is never recovered, retried or re-walked,

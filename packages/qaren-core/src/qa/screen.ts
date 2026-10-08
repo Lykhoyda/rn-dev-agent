@@ -91,6 +91,13 @@ export function forwardedInputOf(element: Element): string | undefined {
   return forwardedInputs.get(element);
 }
 
+// The one fill-capable React host a React-only element is proven to be or to contain.
+const reactInputHosts = new WeakMap<Element, number>();
+
+export function reactInputHostOf(element: Element): number | undefined {
+  return reactInputHosts.get(element);
+}
+
 const labelAncestors = new WeakMap<Element, Element[]>();
 const soleLabelTexts = new WeakMap<Element, Element>();
 const elementFrames = new WeakMap<Element, NonNullable<NativeNode['rect']>>();
@@ -764,6 +771,7 @@ export function join(
           other.inputHostIndices?.length === 1 &&
           other.inputHostIndices[0] === d.inputHostIndices![0],
       );
+    if (provenHost) reactInputHosts.set(element, d.inputHostIndices![0]);
     if (provenHost && (d.compositeWrapper || hostOfJoinedAncestor))
       forwardedInputs.set(element, d.testID);
     const typography = reactHostEvidence?.typography;

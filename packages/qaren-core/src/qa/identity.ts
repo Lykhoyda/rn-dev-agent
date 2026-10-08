@@ -8,6 +8,7 @@ import {
   elementFrame,
   actionView,
   forwardedInputOf,
+  reactInputHostOf,
 } from './screen.js';
 
 export type IdentityTag = 'native' | 'react-only' | 'wrapper';
@@ -50,7 +51,20 @@ function forwardsInput(element: Element, matched: readonly Element[]): boolean {
   const id = forwardedInputOf(element);
   if (!id) return false;
   const native = matched.filter((e) => !e.ref.startsWith('react:') && e.kind === 'input');
-  return native.length === 1 && native[0].testID === id;
+  if (native.length) return native.length === 1 && native[0].testID === id;
+  // With no native input, a proven React-only wrapper stands for the one React-only input it contains,
+  // matched by host; a native wrapper keeps standing for that input itself (the branch above).
+  const inputs = matched.filter((e) => e.kind === 'input');
+  const host = reactInputHostOf(element);
+  return (
+    element.ref.startsWith('react:') &&
+    element.kind !== 'input' &&
+    host !== undefined &&
+    inputs.length === 1 &&
+    inputs[0].ref.startsWith('react:') &&
+    inputs[0].testID === id &&
+    reactInputHostOf(inputs[0]) === host
+  );
 }
 
 export function echoControl(

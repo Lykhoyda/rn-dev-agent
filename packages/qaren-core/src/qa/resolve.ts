@@ -11,6 +11,7 @@ import {
   describe,
   elementFrame,
   elementViewport,
+  forwardedInputOf,
   semanticActionView,
   semanticDisabled,
   visibilityView,
@@ -72,7 +73,7 @@ function describeCandidate(e: Element): string {
   const frame = elementFrame(e);
   return `${e.kind} ${e.testID ? `id=${e.testID}` : 'no-id'} frame=${
     frame ? [frame.x, frame.y, frame.width, frame.height].map(Math.round).join(',') : 'unknown'
-  }`;
+  } ${e.ref.startsWith('react:') ? 'react-only' : 'native'}${forwardedInputOf(e) ? ' wraps-input' : ''}`;
 }
 
 export function stepTarget(step: Step): Target | undefined {

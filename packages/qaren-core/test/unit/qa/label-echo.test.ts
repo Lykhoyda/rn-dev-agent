@@ -351,7 +351,7 @@ test('a Skip pressable and a separate inline Skip link stay ambiguous', () => {
   const listed = resolved.reason.slice(resolved.reason.indexOf('candidates: '));
   assert.equal(
     listed,
-    'candidates: other id=consent-skip frame=20,700,350,48; link no-id frame=150,780,60,24',
+    'candidates: other id=consent-skip frame=20,700,350,48 native; link no-id frame=150,780,60,24 native',
   );
 });
 

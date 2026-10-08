@@ -389,6 +389,112 @@ for (const [name, digest, hosts, expected] of [
   });
 }
 
+// A wrapped field with no native input: composite wrappers whose handler props read as button and
+// switch forward the testID to the one React-only text input inside them.
+for (const [name, digest, hosts, identities] of [
+  [
+    'proven button and switch wrappers of one React-only input',
+    [
+      { role: 'button', testID: 'notes', compositeWrapper: true, inputHostIndices: [0] },
+      { role: 'switch', testID: 'notes', compositeWrapper: true, inputHostIndices: [0] },
+      { role: 'textinput', testID: 'notes', inputHostIndices: [0] },
+    ],
+    [inputHost],
+    ['input'],
+  ],
+  [
+    'wrappers without ancestry evidence',
+    [
+      { role: 'button', testID: 'notes', compositeWrapper: true },
+      { role: 'switch', testID: 'notes', compositeWrapper: true },
+      { role: 'textinput', testID: 'notes', inputHostIndices: [0] },
+    ],
+    [inputHost],
+    ['button', 'switch', 'input'],
+  ],
+  [
+    'a wrapper proven for a different input host than the one React-only input',
+    [
+      { role: 'button', testID: 'notes', compositeWrapper: true, inputHostIndices: [0] },
+      { role: 'textinput', testID: 'notes', inputHostIndices: [1] },
+    ],
+    [inputHost, inputHost],
+    ['button', 'input'],
+  ],
+  [
+    'a proven wrapper beside a second React-only input',
+    [
+      { role: 'button', testID: 'notes', compositeWrapper: true, inputHostIndices: [0] },
+      { role: 'textinput', testID: 'notes', inputHostIndices: [0] },
+      { role: 'textinput', testID: 'notes', inputHostIndices: [1] },
+    ],
+    [inputHost, inputHost],
+    ['button', 'input', 'input'],
+  ],
+] as const) {
+  test(`C: ${name} ${identities.length === 1 ? 'collapse into that input' : 'stay twins'}`, () => {
+    const screen = join(root(), digest as unknown as DigestEntry[], 'app', undefined, {
+      hosts: hosts as never,
+      complete: true,
+    });
+    const fill: Step = { kind: 'fill', target: { quoted: 'notes', phrase: 'notes' }, text: 'x' };
+    assert.deepEqual(
+      exactIdentities(screen, fill.target, 'fill').map(({ element }) => element.kind),
+      identities,
+    );
+    const resolved = prepareTarget(fill, screen);
+    if (identities.length > 1) {
+      assert.equal(outcome(resolved), 'TARGET_AMBIGUOUS');
+      assert.match(
+        'reason' in resolved ? resolved.reason : '',
+        /input id=notes frame=unknown react-only/,
+      );
+    } else assert.notEqual(outcome(resolved), 'TARGET_AMBIGUOUS');
+  });
+}
+
+test('C: an ambiguity names which React-only candidates are proven wrappers of an input', () => {
+  const screen = join(
+    root(),
+    [
+      { role: 'button', testID: 'notes', compositeWrapper: true, inputHostIndices: [0] },
+      { role: 'textinput', testID: 'notes', inputHostIndices: [0] },
+      { role: 'textinput', testID: 'notes', inputHostIndices: [1] },
+    ] as unknown as DigestEntry[],
+    'app',
+    undefined,
+    { hosts: [inputHost, inputHost] as never, complete: true },
+  );
+  const resolved = prepareTarget(
+    { kind: 'fill', target: { quoted: 'notes', phrase: 'notes' }, text: 'x' },
+    screen,
+  );
+  assert.match(
+    'reason' in resolved ? resolved.reason : '',
+    /button id=notes frame=unknown react-only wraps-input/,
+  );
+});
+
+test('C: a proven wrapper of the one React-only input is reached through its pressable wrapper', () => {
+  const screen = join(
+    node(root(), { type: 'Other', identifier: 'notes-pressable', label: 'Notes', y: 100 }),
+    [
+      { role: 'button', testID: 'notes', compositeWrapper: true, inputHostIndices: [0] },
+      { role: 'switch', testID: 'notes', compositeWrapper: true, inputHostIndices: [0] },
+      { role: 'textinput', testID: 'notes', inputHostIndices: [0] },
+    ] as unknown as DigestEntry[],
+    'app',
+    undefined,
+    { hosts: [inputHost] as never, complete: true },
+  );
+  const fallback = keyboardFallbackTarget(
+    { kind: 'fill', target: { quoted: 'notes', phrase: 'notes' }, text: 'x' },
+    screen,
+  );
+  assert.equal(fallback?.element.testID, 'notes-pressable');
+  assert.equal(fallback?.oracleTestID, 'notes');
+});
+
 const notesHost = {
   testID: 'notes',
   role: null,
