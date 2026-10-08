@@ -849,7 +849,14 @@ for (const [name, screenAt, plan] of [
 
 test('a moved target whose frame never settles is not dispatched again and fails with its frames', async () => {
   const f = fake(
-    [continueAt(700), continueAt(700), continueAt(702), continueAt(704), continueAt(706), continueAt(708)],
+    [
+      continueAt(700),
+      continueAt(700),
+      continueAt(702),
+      continueAt(704),
+      continueAt(706),
+      continueAt(708),
+    ],
     { press: [MOVED] },
   );
   const outcome = await walkBlock(block('1. Tap "Continue"\n'), f.deps);
@@ -873,7 +880,14 @@ test('a target that holds still yet is refused as moved again fails with both fr
 
 test('a moved target that becomes ambiguous during settling is not dispatched again', async () => {
   const f = fake(
-    [continueAt(700), continueAt(700), continueAt(700, 2), continueAt(700, 2), continueAt(700, 2), continueAt(700, 2)],
+    [
+      continueAt(700),
+      continueAt(700),
+      continueAt(700, 2),
+      continueAt(700, 2),
+      continueAt(700, 2),
+      continueAt(700, 2),
+    ],
     { press: [MOVED] },
   );
   const outcome = await walkBlock(block('1. Tap "Continue"\n'), f.deps);

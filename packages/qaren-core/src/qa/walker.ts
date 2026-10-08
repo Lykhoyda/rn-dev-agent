@@ -414,7 +414,8 @@ export async function walkBlock(
       const next = await capture(item);
       const current = frameOf(next.screen);
       frames.push(current ?? 'unresolved');
-      if (current !== undefined && current === previous) return { observation: next, frame: current };
+      if (current !== undefined && current === previous)
+        return { observation: next, frame: current };
       observation = next;
       previous = current;
     }
