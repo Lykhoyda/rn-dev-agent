@@ -57,7 +57,7 @@ enum DispatchGuard {
         && abs(a.width - b.width) <= tolerance && abs(a.height - b.height) <= tolerance
     }
     if equal(retained, live) { return true }
-    guard let owner else { return false }
+    guard let owner, owner.insetBy(dx: -tolerance, dy: -tolerance).contains(retained) else { return false }
     return equal(owner, live)
   }
 
@@ -73,7 +73,7 @@ enum DispatchGuard {
     return nil
   }
 
-  // Geometry and identity of both elements; label text never leaves the runner (labels can carry typed values).
+  // Geometry and identity shape of both elements; label and identifier text never leave the runner (either can carry typed values).
   static func movedMessage(
     retained: CGRect,
     live: CGRect,
@@ -88,7 +88,7 @@ enum DispatchGuard {
       let geometry = components([frame.minX, frame.minY, frame.width, frame.height])
       guard let identity else { return geometry }
       let label = identity.label.map { "label \($0.count) chars" } ?? "no label"
-      let id = identity.identifier.map { "id \"\($0)\"" } ?? "no id"
+      let id = identity.identifier == nil ? "no id" : "has id"
       return "\(geometry) (\(identity.type), \(label), \(id))"
     }
     let delta = [
@@ -96,7 +96,8 @@ enum DispatchGuard {
       live.width - retained.width, live.height - retained.height,
     ]
     let labels = retainedIdentity != nil && liveIdentity != nil
-      ? (retainedIdentity?.label == liveIdentity?.label ? "; labels match" : "; labels differ")
+      ? "; labels \(retainedIdentity?.label == liveIdentity?.label ? "match" : "differ")"
+        + ", ids \(retainedIdentity?.identifier == liveIdentity?.identifier ? "match" : "differ")"
       : ""
     return "TARGET_MOVED_BEFORE_DISPATCH: target moved before dispatch "
       + "(retained \(describe(retained, retainedIdentity)); "

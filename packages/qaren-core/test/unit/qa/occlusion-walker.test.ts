@@ -1008,3 +1008,36 @@ test('a settle failure names the target identity it was waiting for', async () =
   assert.equal(outcome.block.outcome, 'fail');
   assert.match(outcome.failure?.seen ?? '', /button "Continue", no testID/);
 });
+
+test('a moved target with no label and no testID still settles when it is the only one of its kind', async () => {
+  const unlabelled = (): Screen => {
+    const screen = covered(
+      join(
+        [
+          ...root(),
+          {
+            ref: '@icon',
+            index: 2,
+            parentIndex: 1,
+            type: 'Button',
+            hittable: true,
+            rect: { x: 340, y: 60, width: 44, height: 44 },
+          },
+        ],
+        [],
+      ),
+    );
+    screen.elements = screen.elements.filter((e) => e.kind === 'button');
+    return screen;
+  };
+  const judge = scriptedJudge((questions) =>
+    Object.fromEntries(Object.entries(questions).map(([id, question]) => [id, choice(question)])),
+  );
+  const f = fake([unlabelled(), unlabelled(), unlabelled(), unlabelled(), done()], {
+    press: [MOVED],
+  });
+  f.deps.judge = judge;
+  const outcome = await walkBlock(block('1. Tap the close icon\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'pass', outcome.failure?.seen);
+  assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 2);
+});

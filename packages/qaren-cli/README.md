@@ -108,11 +108,12 @@ native type and identifier (or label when unidentified) in the same snapshot
 generation. A unique live match whose frame no longer approximately matches
 the retained frame refuses with `TARGET_MOVED_BEFORE_DISPATCH`, mutation `none`,
 and no tap or typing; the refusal records both elements' frames (x,y,w,h),
-type, identifier, label length and whether the labels match (never label
-text), their delta and the 1 pt tolerance. A label-only target retained as the
-label inside its control may resolve live to that control: it agrees only when
-the live frame equals the frame that same-type, same-label owning ancestor had
-in the retained snapshot, and the tap goes to the unchanged point. A later
+type, label length, whether each has an identifier, and whether their labels
+and identifiers match (never label or identifier text), their delta and the
+1 pt tolerance. A label-only target retained as the label inside its control
+may resolve live to that control: it agrees only when the same-type,
+same-label owning ancestor in the retained snapshot contains the label and the
+live frame equals that owner's frame; the tap goes to the unchanged point. A later
 screen change cannot turn a proven no-mutation refusal into a passing action.
 Before its one retry, the walker re-captures until the same target (resolved
 through the same exact-identity rules as the step) holds one native frame

@@ -129,6 +129,8 @@ final class DispatchGuardTests: XCTestCase {
       DispatchGuard.framesAgree(retained: label, live: control.insetBy(dx: -8, dy: -8), owner: control))
     XCTAssertFalse(
       DispatchGuard.framesAgree(retained: label, live: control.offsetBy(dx: 0, dy: 40), owner: control))
+    let elsewhere = control.offsetBy(dx: 0, dy: -200)
+    XCTAssertFalse(DispatchGuard.framesAgree(retained: label, live: elsewhere, owner: elsewhere))
   }
 
   func testTheOwnerIsTheNearestSameTypeSameLabelAncestor() {
@@ -153,8 +155,9 @@ final class DispatchGuardTests: XCTestCase {
     XCTAssertFalse(message.contains("4821"), message)
     XCTAssertFalse(message.contains("\"4\""), message)
     XCTAssertTrue(message.contains("(Button, label 1 chars, no id)"), message)
-    XCTAssertTrue(message.contains("(Button, label 4 chars, id \"code-cell\")"), message)
-    XCTAssertTrue(message.contains("labels differ"), message)
+    XCTAssertTrue(message.contains("(Button, label 4 chars, has id)"), message)
+    XCTAssertTrue(message.contains("labels differ, ids differ"), message)
+    XCTAssertFalse(message.contains("code-cell"), message)
   }
 
   func testMovedMessageCarriesBothFramesTheDeltaAndTheTolerance() {
@@ -166,8 +169,9 @@ final class DispatchGuardTests: XCTestCase {
     )
     XCTAssertTrue(message.hasPrefix("TARGET_MOVED_BEFORE_DISPATCH: "), message)
     XCTAssertTrue(message.contains("retained 16.0,742.5,370.0,48.0 (StaticText, label 8 chars, no id)"), message)
-    XCTAssertTrue(message.contains("live 16.0,744.0,370.0,48.0 (Button, label 8 chars, id \"footer-cta\")"), message)
-    XCTAssertTrue(message.contains("labels match"), message)
+    XCTAssertTrue(message.contains("live 16.0,744.0,370.0,48.0 (Button, label 8 chars, has id)"), message)
+    XCTAssertTrue(message.contains("labels match, ids differ"), message)
+    XCTAssertFalse(message.contains("footer-cta"), message)
     XCTAssertFalse(message.contains("Continue"), message)
     XCTAssertTrue(message.contains("delta 0.0,1.5,0.0,0.0"), message)
     XCTAssertTrue(message.contains("tolerance 1.0"), message)
