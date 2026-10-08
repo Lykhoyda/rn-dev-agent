@@ -922,3 +922,16 @@ test('the retry after settling dispatches only the target that settled', async (
   );
   assert.match(outcome.failure?.seen ?? '', /not the target that settled/);
 });
+
+test('a settled target that needs a clearance scroll is pressed at its post-scroll frame', async () => {
+  const f = fake(
+    [clipped(400), clipped(400), clipped(730), clipped(730), clipped(400), clipped(400), done()],
+    { press: [MOVED] },
+  );
+  const outcome = await walkBlock(block('1. Tap "go"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'pass', outcome.failure?.seen);
+  assert.deepEqual(
+    f.calls.filter((c) => !c.startsWith('capture')),
+    ['press @target', 'scroll down', 'press @target'],
+  );
+});

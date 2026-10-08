@@ -1363,9 +1363,11 @@ export async function walkBlock(
                 ref = resolution.ref;
                 element = resolution.element;
               }
+              // A clearance scroll moves the settled target; its identity and settling are then re-proven by refusedIdentity and settledCapture.
               if (
                 moved !== undefined &&
                 settledFrame !== undefined &&
+                !scrolled &&
                 (element === undefined ||
                   !sameIdentity(element, moved.target) ||
                   frameKey(element) !== settledFrame)
