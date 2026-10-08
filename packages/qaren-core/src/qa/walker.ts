@@ -1600,9 +1600,21 @@ export async function walkBlock(
           const stillness = settledFrame
             ? `; the target's frame held still at ${settledFrame} before this dispatch`
             : '';
+          const afterTarget = element && after.screen.elements.find((e) => e.ref === element!.ref);
+          // The runner reports only a selected trait, so absence is stated as "not reported selected".
+          const reported = (e: Element) =>
+            e.selected === true ? 'selected' : 'not reported selected';
+          const selection =
+            item.kind === 'press' && element && afterTarget
+              ? element.selected === true && afterTarget.selected === true
+                ? '; the target stayed selected'
+                : element.selected !== true && afterTarget.selected !== true
+                  ? '; the target was not reported selected before or after'
+                  : `; the target was ${reported(element)} before and ${reported(afterTarget)} after`
+              : '';
           const unchanged = act!.error
-            ? `${act!.error}; ${unchangedScreen}${stillness}`
-            : `${unchangedScreen}${stillness}`;
+            ? `${act!.error}; ${unchangedScreen}${stillness}${selection}`
+            : `${unchangedScreen}${stillness}${selection}`;
           const recovering = await recovery(item, attempt, unchanged);
           if (recovering === 'retry') {
             again = true;

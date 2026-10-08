@@ -266,6 +266,7 @@ test('the screen signature returns canonical content without hashing', () => {
     true,
     false,
     false,
+    false,
     null,
     null,
   ]);

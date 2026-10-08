@@ -1710,6 +1710,7 @@ interface RunnerSnapshotNode {
   rect?: { x: number; y: number; width: number; height: number };
   enabled?: boolean;
   hittable?: boolean;
+  selected?: boolean;
 }
 
 let fetchImpl: typeof fetch = globalThis.fetch;
@@ -2131,6 +2132,7 @@ function mapRunnerNodesToFlat(
     if (n.identifier !== undefined) flat.identifier = n.identifier;
     if (n.enabled !== undefined) flat.enabled = n.enabled;
     if (n.hittable !== undefined) flat.hittable = n.hittable;
+    if (n.selected === true) flat.selected = true;
     out.push(flat);
   }
   return out;

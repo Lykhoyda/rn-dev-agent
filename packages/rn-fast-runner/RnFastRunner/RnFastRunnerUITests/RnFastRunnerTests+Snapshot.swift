@@ -796,7 +796,8 @@ extension RnFastRunnerTests {
       depth: depth,
       parentIndex: parentIndex,
       hiddenContentAbove: nil,
-      hiddenContentBelow: nil
+      hiddenContentBelow: nil,
+      selected: snapshot.isSelected ? true : nil
     )
   }
 

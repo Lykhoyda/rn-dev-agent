@@ -37,6 +37,8 @@ export interface Element {
   placeholder?: string;
   hittable: boolean;
   disabled: boolean;
+  // The platform reports the control selected (iOS selected trait); a selection-only change is still a change.
+  selected?: true;
   secure: boolean;
   offscreen: boolean;
   // Literal-text evidence from the node's own frame; `offscreen` stays the targeting flag.
@@ -157,6 +159,7 @@ export interface NativeNode {
   type?: string;
   hittable?: boolean;
   enabled?: boolean;
+  selected?: boolean;
   secure?: boolean;
   value?: string;
   rect?: { x: number; y: number; width: number; height: number };
@@ -626,6 +629,7 @@ export function join(
       nativeKind,
       hittable: n.hittable === true,
       disabled: n.enabled === false || match?.disabled === true,
+      ...(n.selected === true ? { selected: true as const } : {}),
       secure: n.secure === true || n.type === 'SecureTextField',
       offscreen: viewport.has(nodeIndex),
       visibilityEvidence: contradicted.has(nodeIndex)
@@ -1234,6 +1238,7 @@ export function screenSignature(screen: Screen): string {
         e.secure ? null : (e.value ?? null),
         e.hittable,
         e.disabled,
+        e.selected === true,
         e.offscreen,
         e.where ?? null,
         e.side ?? null,

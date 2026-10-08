@@ -120,6 +120,10 @@ may resolve live to that control: it agrees only when the same-type,
 same-label owning ancestor in the retained snapshot contains the label and the
 live frame equals that owner's frame; the tap goes to the unchanged point. A later
 screen change cannot turn a proven no-mutation refusal into a passing action.
+An unproven press passes only when the screen changes. That comparison includes
+each control's selected state (iOS selected trait), so a control that shows
+selection alone proves its press by becoming selected; a press that leaves it
+unchanged still fails, naming whether the target stayed selected.
 Before its one retry, the walker re-captures until the same target (resolved
 through the same exact-identity rules as the step) holds one native frame
 across two captures, within the

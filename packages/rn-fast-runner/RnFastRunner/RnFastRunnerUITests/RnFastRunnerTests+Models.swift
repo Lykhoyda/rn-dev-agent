@@ -314,6 +314,8 @@ struct SnapshotNode: Codable {
   let parentIndex: Int?
   let hiddenContentAbove: Bool?
   let hiddenContentBelow: Bool?
+  // Only true is sent: the selected trait, e.g. React Native accessibilityState.selected.
+  var selected: Bool? = nil
   var presence: PlatformPresenceObservation? = nil
 }
 

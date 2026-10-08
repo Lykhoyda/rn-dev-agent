@@ -35,6 +35,7 @@ export interface FlatNode {
   rect: ElementRect;
   enabled?: boolean;
   hittable?: boolean;
+  selected?: boolean;
   /** GH #581: Android password fields; never cached beyond the snapshot nodes. */
   secure?: boolean;
 }
