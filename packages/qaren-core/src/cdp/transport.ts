@@ -12,6 +12,8 @@ export class CDPProtocolError extends Error {
   }
 }
 
+export class CDPRequestTimeoutError extends Error {}
+
 export function sendWithTimeout(
   ws: WebSocket | null,
   pending: Map<number, PendingCall>,
@@ -33,7 +35,7 @@ export function sendWithTimeout(
           signal?.removeEventListener('abort', abort);
           pending.delete(id);
           reject(
-            new Error(
+            new CDPRequestTimeoutError(
               `CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`,
             ),
           );

@@ -3,7 +3,12 @@ import WebSocket from 'ws';
 import { logger } from '../logger.js';
 import { metroOrigin } from '../ws-origin.js';
 import { resolveBundleId } from '../project-config.js';
-import { discover, targetBundleIdentity, TargetSelectionError } from './discovery.js';
+import {
+  discover,
+  targetBundleIdentity,
+  TargetReadinessTimeoutError,
+  TargetSelectionError,
+} from './discovery.js';
 import type { SelectTargetFilters } from './discovery.js';
 import { sleep } from './state.js';
 import { CDP_TIMEOUT_FAST } from './timeout-config.js';
@@ -102,6 +107,8 @@ export interface ConnectContext {
   now(): number;
   incrementConnectionGeneration(): number;
   evaluate(expr: string): Promise<EvaluateResult>;
+  // Bounded by the caller's attach deadline when one is set; expiry is a TargetReadinessTimeoutError.
+  evaluateWithinAttach(expr: string): Promise<EvaluateResult>;
   sendWithTimeout(method: string, params: unknown, ms: number): Promise<unknown>;
   handleMessage(data: WebSocket.RawData): void;
   handleClose(code: number): void;
@@ -214,7 +221,7 @@ export async function discoverAndConnect(
     try {
       await connectToTarget(ctx, candidate, targetRetries, intent);
       const devCheck = await interruptible(() =>
-        ctx.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true'),
+        ctx.evaluateWithinAttach('typeof __DEV__ !== "undefined" && __DEV__ === true'),
       );
       if (devCheck.value === true) {
         connectedTarget = candidate;
@@ -237,7 +244,7 @@ export async function discoverAndConnect(
       // GH #184: picker-blocking affects the whole bundle — every other
       // candidate is the same stale C++ target, so don't waste a probe on each.
       if (err instanceof ConnectionSetupSupersededError) throw err;
-      if (err instanceof PickerBlockingBundleError) {
+      if (err instanceof PickerBlockingBundleError || err instanceof TargetReadinessTimeoutError) {
         ctx.setState('disconnected');
         throw err;
       }
@@ -431,7 +438,8 @@ async function connectToTarget(
       }
       // GH #184: the picker-blocking abort is deterministic, not transient —
       // don't burn the retry budget on it; clean up and surface it immediately.
-      if (err instanceof PickerBlockingBundleError) {
+      // An expired attach deadline leaves no budget to retry either.
+      if (err instanceof PickerBlockingBundleError || err instanceof TargetReadinessTimeoutError) {
         if (!closeConnectionAttempt(ctx, attemptWs)) {
           throw new ConnectionSetupSupersededError();
         }

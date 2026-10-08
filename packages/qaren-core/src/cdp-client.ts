@@ -14,6 +14,7 @@ import { defaultTimeout, timeoutForMethod } from './cdp/timeout-config.js';
 import type { Platform } from './cdp/timeout-config.js';
 import {
   CDPProtocolError,
+  CDPRequestTimeoutError,
   sendWithTimeout as sendMsg,
   rejectAllPending as rejectPending,
   handleMessage as handleMsg,
@@ -26,6 +27,7 @@ import {
   discoverExactPort,
   discoverForList,
   listTargetsOnExactPort,
+  TargetReadinessTimeoutError,
   type DiscoveryResult,
 } from './cdp/discovery.js';
 import {
@@ -577,7 +579,7 @@ export class CDPClient {
       const injected = await this.evaluateForHelperToken(
         token,
         INJECTED_HELPERS,
-        defaultTimeout(this.effectivePlatform),
+        this.attachRequestTimeout(),
       );
       if (injected.error) {
         return this.markHelpersUnready(
@@ -588,7 +590,7 @@ export class CDPClient {
       const verified = await this.evaluateForHelperToken(
         token,
         `typeof globalThis.__QAREN === 'object' && globalThis.__QAREN !== null && globalThis.__QAREN.__v === ${HELPERS_VERSION}`,
-        defaultTimeout(this.effectivePlatform),
+        this.attachRequestTimeout(),
       );
       if (verified.value !== true || !this.isHelperTokenCurrent(token)) {
         return this.markHelpersUnready(
@@ -601,13 +603,16 @@ export class CDPClient {
         cause === 'setup_started' ? 'setup_current' : 'reinject_current',
       );
       return true;
-    } catch {
+    } catch (error) {
       // Expected transport/context replacement failures are a bounded false;
       // stale worlds are intentionally not allowed to log a current transition.
-      return this.markHelpersUnready(
+      const unready = this.markHelpersUnready(
         token,
         cause === 'setup_started' ? 'setup_failed' : 'reinject_failed',
       );
+      const readiness = this.attachReadinessError(error, 'helper injection');
+      if (readiness !== error) throw readiness;
+      return unready;
     }
   }
 
@@ -697,9 +702,42 @@ export class CDPClient {
     this._exactDiscoveryPort = port;
     const connect = () =>
       this.connectWithCurrentPolicy(port, filters, intent, targetRetries, awaitWithinBoundary);
-    return deadline === undefined
-      ? connect()
-      : withDeadline(deadline, new CDPProbeTimeoutError('CDP attach deadline exceeded'), connect);
+    if (deadline === undefined) return connect();
+    // Restore rather than clear: a rejected overlapping attach must not drop the active one's deadline.
+    const previous = this._attachDeadline;
+    this._attachDeadline = deadline;
+    try {
+      return await withDeadline(
+        deadline,
+        new CDPProbeTimeoutError('CDP attach deadline exceeded'),
+        connect,
+      );
+    } finally {
+      this._attachDeadline = previous;
+    }
+  }
+
+  // Connect-time reads wait on the runtime's answer until the caller's attach deadline, not the fixed default.
+  private _attachDeadline: number | undefined;
+
+  private attachRequestTimeout(): number {
+    return this._attachDeadline === undefined
+      ? defaultTimeout(this.effectivePlatform)
+      : Math.max(1, this._attachDeadline - performance.now());
+  }
+
+  private attachReadinessError(error: unknown, what: string): unknown {
+    return this._attachDeadline !== undefined && error instanceof CDPRequestTimeoutError
+      ? new TargetReadinessTimeoutError(`${what} did not answer before the attach deadline`)
+      : error;
+  }
+
+  private async evaluateWithinAttach(expression: string): Promise<EvaluateResult> {
+    try {
+      return await this.evaluate(expression, false, this.attachRequestTimeout());
+    } catch (error) {
+      throw this.attachReadinessError(error, 'the dev check');
+    }
   }
 
   async listTargetsExact(port: number): Promise<{ port: number; targets: HermesTarget[] }> {
@@ -1417,6 +1455,7 @@ export class CDPClient {
       now: () => this._timeNowFn(),
       incrementConnectionGeneration: () => ++this._connectionGeneration,
       evaluate: (expr) => this.evaluate(expr),
+      evaluateWithinAttach: (expr) => this.evaluateWithinAttach(expr),
       sendWithTimeout: (method, params, ms) => this.sendWithTimeout(method, params, ms),
       handleMessage: (data) => this.handleMessage(data),
       handleClose: (code) => this.handleClose(code),

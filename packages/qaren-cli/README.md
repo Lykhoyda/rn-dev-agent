@@ -790,7 +790,10 @@ aggregation; [CLI decoding](src/core.rs) and [report rendering](src/report.rs)
 own consumption.
 
 Launch admission shares the remaining walk deadline across target readiness,
-WebSocket handshakes, probes and retry sleeps. A timeout with measured 1-minute
+WebSocket handshakes, probes and retry sleeps. The connect-time dev-build check
+and helper injection wait for the runtime's answer until that deadline rather
+than a fixed request timeout; no answer by the deadline is a readiness timeout.
+A timeout with measured 1-minute
 host load above 10 is an environment refusal (`CDP_NOT_CONNECTED`), rather than
 a product FAIL. It retries attachment once only if the remaining budget can
 cover a full readiness wait. Immediately before relaunch it checks for a foreign
