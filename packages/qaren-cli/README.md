@@ -107,11 +107,16 @@ Before an iOS tap or exact fill, the runner resolves the retained target by
 native type and identifier (or label when unidentified) in the same snapshot
 generation. A unique live match whose frame no longer approximately matches
 the retained frame refuses with `TARGET_MOVED_BEFORE_DISPATCH`, mutation `none`,
-and no tap or typing; the refusal records the retained and live frames
-(x,y,w,h), their delta and the 1 pt tolerance. A later screen change cannot
-turn a proven no-mutation refusal into a passing action. Before its one retry,
-the walker re-captures until the same target (testID, else kind and label,
-exactly one match) holds one native frame across two captures, within the
+and no tap or typing; the refusal records both elements' frames (x,y,w,h),
+type, identifier, label length and whether the labels match (never label
+text), their delta and the 1 pt tolerance. A label-only target retained as the
+label inside its control may resolve live to that control: it agrees only when
+the live frame equals the frame that same-type, same-label owning ancestor had
+in the retained snapshot, and the tap goes to the unchanged point. A later
+screen change cannot turn a proven no-mutation refusal into a passing action.
+Before its one retry, the walker re-captures until the same target (resolved
+through the same exact-identity rules as the step) holds one native frame
+across two captures, within the
 existing settle readbacks, and the retry dispatches only that target at its
 settled frame; a target that never settles, stops resolving, or is replaced by
 another resolution is not dispatched again and fails with its observed frames.

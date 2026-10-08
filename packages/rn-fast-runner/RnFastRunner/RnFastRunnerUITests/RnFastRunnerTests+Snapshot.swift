@@ -678,8 +678,16 @@ extension RnFastRunnerTests {
   }
 
   func retainSnapshotTargets(_ nodes: [SnapshotNode]) {
+    let byIndex = Dictionary(nodes.map { ($0.index, $0) }, uniquingKeysWith: { first, _ in first })
     retainedSnapshotTargets = Dictionary(uniqueKeysWithValues: nodes.map { node in
-      (
+      let owner = node.identifier == nil && node.label != nil
+        ? DispatchGuard.nearestOwner(
+          of: node.index,
+          parentOf: { byIndex[$0]?.parentIndex },
+          owns: { byIndex[$0]?.type == node.type && byIndex[$0]?.label == node.label }
+        ).flatMap { byIndex[$0]?.rect }
+        : nil
+      return (
         node.index,
         RetainedSnapshotTarget(
           generation: currentSnapshotGeneration,
@@ -687,7 +695,8 @@ extension RnFastRunnerTests {
           type: node.type,
           label: node.label,
           identifier: node.identifier,
-          rect: node.rect
+          rect: node.rect,
+          ownerRect: owner
         )
       )
     })

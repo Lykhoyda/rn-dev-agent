@@ -464,6 +464,8 @@ struct RetainedSnapshotTarget {
   let label: String?
   let identifier: String?
   let rect: SnapshotRect
+  // Frame of the nearest same-type, same-label ancestor of a label-only node in the same snapshot.
+  var ownerRect: SnapshotRect? = nil
 }
 
 struct RecordedExactTypeTarget {

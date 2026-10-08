@@ -43,18 +43,64 @@ enum DispatchGuard {
     return keyboardContainsPoint || liveHittable == false ? .occluded : .proceed
   }
 
-  // Geometry only (x,y,w,h in points), so the refusal shows how far the target moved.
-  static func movedMessage(retained: CGRect, live: CGRect, tolerance: CGFloat = 1.0) -> String {
+  struct NodeIdentity {
+    let type: String
+    let label: String?
+    let identifier: String?
+  }
+
+  // A label-only target retained as the label inside its control may resolve live to that control;
+  // it agrees only when the live frame is the frame the owning control had in the same snapshot.
+  static func framesAgree(retained: CGRect, live: CGRect, owner: CGRect?, tolerance: CGFloat = 1.0) -> Bool {
+    func equal(_ a: CGRect, _ b: CGRect) -> Bool {
+      abs(a.minX - b.minX) <= tolerance && abs(a.minY - b.minY) <= tolerance
+        && abs(a.width - b.width) <= tolerance && abs(a.height - b.height) <= tolerance
+    }
+    if equal(retained, live) { return true }
+    guard let owner else { return false }
+    return equal(owner, live)
+  }
+
+  // The nearest ancestor that owns the node's label (same type and label), bounded against cycles.
+  static func nearestOwner(of index: Int, parentOf: (Int) -> Int?, owns: (Int) -> Bool, maxHops: Int = 64) -> Int? {
+    var current = parentOf(index)
+    var hops = 0
+    while let candidate = current, candidate != index, hops < maxHops {
+      if owns(candidate) { return candidate }
+      current = parentOf(candidate)
+      hops += 1
+    }
+    return nil
+  }
+
+  // Geometry and identity of both elements; label text never leaves the runner (labels can carry typed values).
+  static func movedMessage(
+    retained: CGRect,
+    live: CGRect,
+    retainedIdentity: NodeIdentity? = nil,
+    liveIdentity: NodeIdentity? = nil,
+    tolerance: CGFloat = 1.0
+  ) -> String {
     func components(_ values: [CGFloat]) -> String {
       values.map { String(format: "%.1f", Double($0)) }.joined(separator: ",")
+    }
+    func describe(_ frame: CGRect, _ identity: NodeIdentity?) -> String {
+      let geometry = components([frame.minX, frame.minY, frame.width, frame.height])
+      guard let identity else { return geometry }
+      let label = identity.label.map { "label \($0.count) chars" } ?? "no label"
+      let id = identity.identifier.map { "id \"\($0)\"" } ?? "no id"
+      return "\(geometry) (\(identity.type), \(label), \(id))"
     }
     let delta = [
       live.minX - retained.minX, live.minY - retained.minY,
       live.width - retained.width, live.height - retained.height,
     ]
+    let labels = retainedIdentity != nil && liveIdentity != nil
+      ? (retainedIdentity?.label == liveIdentity?.label ? "; labels match" : "; labels differ")
+      : ""
     return "TARGET_MOVED_BEFORE_DISPATCH: target moved before dispatch "
-      + "(retained \(components([retained.minX, retained.minY, retained.width, retained.height])); "
-      + "live \(components([live.minX, live.minY, live.width, live.height])); "
+      + "(retained \(describe(retained, retainedIdentity)); "
+      + "live \(describe(live, liveIdentity))\(labels); "
       + "delta \(components(delta)); tolerance \(components([tolerance]))); "
       + "no tap or typing was performed. Refresh the snapshot and retry."
   }

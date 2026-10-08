@@ -702,6 +702,7 @@ extension RnFastRunnerTests {
       width: retained.rect.width, height: retained.rect.height
     )
     var live: CGRect?
+    var liveIdentity: DispatchGuard.NodeIdentity?
     let check = DispatchGuard.hitTest(
       deadline: deadline,
       now: { ProcessInfo.processInfo.systemUptime },
@@ -719,20 +720,40 @@ extension RnFastRunnerTests {
         let exception = RunnerObjCExceptionCatcher.catchException({
           let frame = target.frame
           live = frame
-          matches = KeyboardGuard.approximatelyEqual(frame, expected)
+          let owner = retained.ownerRect.map { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
+          let agree = DispatchGuard.framesAgree(retained: expected, live: frame, owner: owner)
+          if !agree {
+            let label = target.label
+            let identifier = target.identifier
+            liveIdentity = DispatchGuard.NodeIdentity(
+              type: self.elementTypeName(target.elementType),
+              label: label.isEmpty ? nil : label,
+              identifier: identifier.isEmpty ? nil : identifier
+            )
+          }
+          matches = agree
         })
         return exception == nil ? matches : nil
       },
       checkHittability: checkHittability,
       read: { target in self.boundedHittable(target, deadline: deadline) }
     )
-    if check == .moved, let live { lastMovedFrames = (expected, live) }
+    if check == .moved, let live {
+      lastMovedFrames = (
+        expected, live,
+        DispatchGuard.NodeIdentity(type: retained.type, label: retained.label, identifier: retained.identifier),
+        liveIdentity
+      )
+    }
     return check
   }
 
   func movedDispatchResponse() -> Response {
-    let message = lastMovedFrames.map { DispatchGuard.movedMessage(retained: $0.retained, live: $0.live) }
-      ?? Self.movedDispatchMessage
+    let message = lastMovedFrames.map {
+      DispatchGuard.movedMessage(
+        retained: $0.retained, live: $0.live,
+        retainedIdentity: $0.retainedIdentity, liveIdentity: $0.liveIdentity)
+    } ?? Self.movedDispatchMessage
     return Response(ok: false, error: ErrorPayload(code: "TARGET_MOVED_BEFORE_DISPATCH", message: message, mutation: "none"))
   }
 
