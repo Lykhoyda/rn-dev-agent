@@ -38,12 +38,18 @@ fn run_id() -> String {
 }
 
 // What `main` does around a check: the stream starts before the run and ends with its receipt.
-fn run_with_events(mock: &mut MockRunner, req: &RunRequest) -> (qaren::receipt::Receipt, Vec<serde_json::Value>) {
+fn run_with_events(
+    mock: &mut MockRunner,
+    req: &RunRequest,
+) -> (qaren::receipt::Receipt, Vec<serde_json::Value>) {
     qaren::events::init();
     let receipt = run(mock, req);
     qaren::events::end(&receipt, 0);
     qaren::events::finish();
-    let path = req.runs_root.join(&receipt.run_id).join("logs/events.jsonl");
+    let path = req
+        .runs_root
+        .join(&receipt.run_id)
+        .join("logs/events.jsonl");
     let events = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
         .lines()
@@ -59,8 +65,16 @@ fn stage_trail(events: &[serde_json::Value]) -> Vec<String> {
         .map(|e| {
             let p = &e["payload"];
             match p["code"].as_str() {
-                Some(code) => format!("{} {} {code}", p["name"].as_str().unwrap(), p["state"].as_str().unwrap()),
-                None => format!("{} {}", p["name"].as_str().unwrap(), p["state"].as_str().unwrap()),
+                Some(code) => format!(
+                    "{} {} {code}",
+                    p["name"].as_str().unwrap(),
+                    p["state"].as_str().unwrap()
+                ),
+                None => format!(
+                    "{} {}",
+                    p["name"].as_str().unwrap(),
+                    p["state"].as_str().unwrap()
+                ),
             }
         })
         .collect()
@@ -4891,8 +4905,17 @@ fn every_build_decision_reports_fingerprint_completeness_and_reuse_reports_ready
         let decision = decision.as_str().unwrap();
         let build: &[&str] = match decision {
             "reuse" => &["prebuild skipped", "native_build skipped"],
-            "clean" => &["prebuild running", "prebuild passed", "native_build running", "native_build passed"],
-            _ => &["prebuild skipped", "native_build running", "native_build passed"],
+            "clean" => &[
+                "prebuild running",
+                "prebuild passed",
+                "native_build running",
+                "native_build passed",
+            ],
+            _ => &[
+                "prebuild skipped",
+                "native_build running",
+                "native_build passed",
+            ],
         };
         let mut expected = vec![
             "preflight running".to_string(),
@@ -4920,8 +4943,14 @@ fn every_build_decision_reports_fingerprint_completeness_and_reuse_reports_ready
             .map(String::from),
         );
         assert_eq!(stage_trail(&events), expected, "{case}");
-        let kinds: Vec<&str> = events.iter().map(|e| e["event"].as_str().unwrap()).collect();
-        assert!(kinds.contains(&"run") && kinds.contains(&"admitted") && kinds.contains(&"coreT0"), "{case}: {kinds:?}");
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|e| e["event"].as_str().unwrap())
+            .collect();
+        assert!(
+            kinds.contains(&"run") && kinds.contains(&"admitted") && kinds.contains(&"coreT0"),
+            "{case}: {kinds:?}"
+        );
         assert!(kinds.contains(&"row"), "{case}");
         assert_eq!(*kinds.last().unwrap(), "end");
         assert_eq!(events.last().unwrap()["payload"]["result"], "pass");

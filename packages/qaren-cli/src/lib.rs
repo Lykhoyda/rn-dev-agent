@@ -27,4 +27,5 @@ pub mod run;
 pub mod runrecord;
 pub mod scenario;
 pub mod timefmt;
+pub mod watch;
 pub mod worktree;

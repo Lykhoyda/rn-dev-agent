@@ -1593,6 +1593,7 @@ fn build_scenario(
 fn start_events(req: &RunRequest, run_id: &str, run_dir: &Path) {
     events::run(run_id, verb(req), platform_str(req.platform));
     events::attach(&run_dir.join("logs").join("events.jsonl"));
+    crate::progress::watch_hint(run_id);
 }
 
 fn claim_run_dir(run_dir: &Path) -> Result<(), Failure> {

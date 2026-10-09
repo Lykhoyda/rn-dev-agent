@@ -7,6 +7,44 @@ QaReN is still in development; this checkout is not the published 1.x MCP plugin
 The scenario-based preparation verbs remain available for explicit iOS,
 NUC Android and USB Android setup experiments.
 
+## Watch a run
+
+```sh
+qaren watch <run-id>
+qaren watch --latest
+ssh -t host qaren watch --latest
+ssh host qaren watch <run-id> --plain
+qaren watch <run-id> --json
+```
+
+The viewer reads one run under `~/.qaren/runs/` and takes no lock or device
+lease. `--latest` selects the newest `run.json` modification time. It shows
+explicit stages from preflight through cleanup, step outcomes and act/capture/Jev
+timings, recording, and the verdict with its expected check exit code.
+An unobserved stage stays unobserved; a skipped stage says “not needed”.
+Only `check` and `pr` produce the value-free `logs/events.jsonl` stream.
+Telemetry cannot change a run's verdict; dropped events are counted in the final
+event and disclosed by the viewer. W1 does not read `core.log`.
+
+On a TTY, the view redraws every 250 ms; Ctrl-C exits only the viewer.
+`--plain`, non-TTY stdout, `CI` or `NO_COLOR` prints each final stage and step
+attempt once, without escape codes or stdin reads. `--json` prints a single
+folded snapshot and exits immediately, including when the run is live.
+Step text and reasons never come from live events. They appear only after an
+end event or a terminal run record, from the final privacy-projected ledger;
+all dynamic terminal prose has control characters removed.
+
+| State | Meaning |
+| --- | --- |
+| Live | No end event and the owner is alive or its identity is unknown |
+| Finished | The final end event is present |
+| Ended without final event | The recorded owner is dead or replaced; telemetry is incomplete even if `run.json` still says `walking` |
+| Telemetry unavailable | The events file is absent, including runs made before watch support |
+
+The viewer exits 0 for finished or incomplete runs, independently of the test
+verdict, 1 for no such run, 2 for usage errors, and 3 for unavailable telemetry.
+Running `qaren watch` without an id or `--latest` is a usage error in W1.
+
 ## Build
 
 ```sh

@@ -338,7 +338,10 @@ impl Sink {
         let Some(file) = self.file.as_mut() else {
             return;
         };
-        let failed = self.pending.drain(..).any(|e| write_line(file, &e).is_err());
+        let failed = self
+            .pending
+            .drain(..)
+            .any(|e| write_line(file, &e).is_err());
         if failed {
             self.close();
         }
@@ -502,7 +505,11 @@ mod tests {
         lines
             .iter()
             .map(|e| match e.payload.get("name").and_then(Value::as_str) {
-                Some(name) => format!("{}:{name}:{}", e.event, e.payload["state"].as_str().unwrap()),
+                Some(name) => format!(
+                    "{}:{name}:{}",
+                    e.event,
+                    e.payload["state"].as_str().unwrap()
+                ),
                 None => e.event.clone(),
             })
             .collect()
@@ -608,7 +615,11 @@ mod tests {
         for _ in 0..5000 {
             ev.cmd("ps-scan", Edge::Start, None, None);
         }
-        assert!(began.elapsed() < Duration::from_millis(50), "{:?}", began.elapsed());
+        assert!(
+            began.elapsed() < Duration::from_millis(50),
+            "{:?}",
+            began.elapsed()
+        );
         ev.end(&receipt(ReceiptResult::Fail), 1);
         gate.send(()).unwrap();
         ev.finish();
@@ -655,13 +666,35 @@ mod tests {
         ));
         ev.finish();
         let raw = std::fs::read_to_string(&path).unwrap();
-        for canary in ["canary-block", "canary-ref", "canary.png", "canary-typed", "canary-reason", "canary-id", "canary-text", "\\u001b"] {
+        for canary in [
+            "canary-block",
+            "canary-ref",
+            "canary.png",
+            "canary-typed",
+            "canary-reason",
+            "canary-id",
+            "canary-text",
+            "\\u001b",
+        ] {
             assert!(!raw.contains(canary), "{canary} leaked: {raw}");
         }
         let got = lines(&path);
         assert_eq!(
-            got[0].payload.as_object().unwrap().keys().collect::<Vec<_>>(),
-            ["attempt", "kind", "line", "outcome", "resolvedBy", "t", "timing"]
+            got[0]
+                .payload
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            [
+                "attempt",
+                "kind",
+                "line",
+                "outcome",
+                "resolvedBy",
+                "t",
+                "timing"
+            ]
         );
     }
 
@@ -672,9 +705,13 @@ mod tests {
         let mut ev = Events::start(None);
         ev.attach(&path);
         let mut r = receipt(ReceiptResult::Failed);
-        r.outcomes.insert("core_exit".into(), "/Users/canary/app".into());
+        r.outcomes
+            .insert("core_exit".into(), "/Users/canary/app".into());
         r.cleanup.insert("metro".into(), "removed".into());
-        r.cleanup.insert("core".into(), "unresolved: pgid 9 at /Users/canary/x".into());
+        r.cleanup.insert(
+            "core".into(),
+            "unresolved: pgid 9 at /Users/canary/x".into(),
+        );
         r.cleanup.insert("recorder".into(), "canary-weird".into());
         r.cleanup.insert("canary_key".into(), "removed".into());
         r.failure = Some(Failure::new(
@@ -760,7 +797,12 @@ mod tests {
         let got = lines(&path);
         assert_eq!(
             names(&got),
-            ["stage:preflight:running", "run", "stage:preflight:passed", "end"]
+            [
+                "stage:preflight:running",
+                "run",
+                "stage:preflight:passed",
+                "end"
+            ]
         );
     }
 }

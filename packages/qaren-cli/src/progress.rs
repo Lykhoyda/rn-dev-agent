@@ -167,6 +167,10 @@ pub fn row(row: &Row) {
     with(|p| p.row(row, Instant::now()));
 }
 
+pub fn watch_hint(run_id: &str) {
+    with(|p| p.commit(&format!("▸ watch live: qaren watch {run_id}")));
+}
+
 pub fn close() {
     with(Progress::close);
 }
