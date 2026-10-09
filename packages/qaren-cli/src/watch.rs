@@ -108,6 +108,8 @@ struct Stage {
 #[serde(rename_all = "camelCase")]
 struct Step {
     operation_id: u64,
+    #[serde(skip)]
+    seq: u64,
     line: u64,
     attempt: u64,
     kind: String,
@@ -215,6 +217,7 @@ impl State {
                     operation_id,
                     Step {
                         operation_id,
+                        seq: e.seq,
                         line,
                         attempt,
                         kind: string(p, "kind"),
@@ -502,7 +505,7 @@ fn frame(s: &State, width: u16, height: u16) -> Vec<String> {
     rows.sort_by_key(|row| {
         (
             matches!(row.outcome.as_str(), "pass" | "fail"),
-            std::cmp::Reverse(row.operation_id),
+            std::cmp::Reverse(row.seq),
         )
     });
     rows.truncate(count);
@@ -1159,6 +1162,59 @@ mod tests {
             assert!(lines.iter().any(|l| l.contains(label)));
         }
         assert_eq!(snapshot(&state)["steps"].as_array().unwrap().len(), 40);
+    }
+
+    #[test]
+    fn bounded_frame_retains_late_recovery_completions() {
+        for outcome in ["pass", "fail"] {
+            let mut events = vec![row(1, 1, 1, "retry", "exact", [0, 0, 0])];
+            for operation in 2..=7 {
+                events.push(row(operation, operation, 1, "pass", "exact", [0, 0, 0]));
+            }
+            events.push(row(8, 1, 1, outcome, "exact", [0, 0, 0]));
+            let mut state = folded(&events);
+            state.fold(parse_event(&events[0]).unwrap());
+            for (width, height, retained) in [(80, 22, 4), (80, 18, 2), (32, 18, 2)] {
+                let lines = frame(&state, width, height);
+                let expected = if height < 22 {
+                    format!("{} line 1 action {outcome}", mark(outcome))
+                } else {
+                    step_line(&state.rows[&1])
+                };
+                assert!(lines.contains(&expected), "{width}x{height}: {lines:#?}");
+                let recent_login = if height < 22 {
+                    "✓ line 7 action pass".to_string()
+                } else {
+                    step_line(&state.rows[&7])
+                };
+                assert!(
+                    lines.contains(&recent_login),
+                    "{width}x{height}: {lines:#?}"
+                );
+                assert!(lines.contains(&format!("{} rows omitted", 7 - retained)));
+                assert!(lines.len() < height as usize);
+                for (_, label) in STAGES {
+                    assert!(lines.iter().any(|line| line.contains(label)));
+                }
+            }
+            let json = snapshot(&state);
+            assert_eq!(json["steps"].as_array().unwrap().len(), 7);
+            assert_eq!(json["steps"][0]["outcome"], outcome);
+            assert_eq!(
+                json["steps"][0],
+                json!({"operationId": 1, "line": 1, "attempt": 1, "kind": "action",
+                    "resolvedBy": "exact", "outcome": outcome, "t": 0,
+                    "timing": {"captureMs": 0, "nativeMs": 0, "reactMs": 0,
+                        "resolveMs": 0, "jevMs": 0, "actMs": 0,
+                        "postCaptureMs": 0, "otherMs": 0, "total": 0}})
+            );
+            let plain = plain(&state, &mut HashSet::new());
+            assert!(plain.contains(&format!("  {}", step_line(&state.rows[&1]))));
+            assert_eq!(
+                plain.iter().filter(|line| line.starts_with("  ")).count(),
+                7
+            );
+        }
     }
 
     #[test]
