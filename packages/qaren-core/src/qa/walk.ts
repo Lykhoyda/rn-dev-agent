@@ -185,7 +185,13 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
   return stop.track(handler).then(
     (result) => {
       try {
-        const { data, meta } = unwrap<{ executed?: boolean; tapped?: boolean }>(result);
+        const { data, meta } = unwrap<{
+          executed?: boolean;
+          tapped?: boolean;
+          typedLength?: number;
+          observedLengths?: unknown;
+          caseNormalizedChars?: unknown;
+        }>(result);
         logActionSettle(meta);
         if (data?.executed === false || data?.tapped === false)
           return {
@@ -195,7 +201,21 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
             mutation: 'none',
             error: 'the action did not execute',
           };
-        return { ok: true, proven };
+        const observed = data?.observedLengths;
+        const kept =
+          typeof data?.typedLength === 'number' &&
+          Array.isArray(observed) &&
+          observed.length > 0 &&
+          observed.every((n) => typeof n === 'number')
+            ? { typed: data.typedLength, observed: observed as number[] }
+            : undefined;
+        const chars = data?.caseNormalizedChars;
+        return {
+          ok: true,
+          proven: proven || meta?.verify === 'exact',
+          ...(kept ? { kept } : {}),
+          ...(typeof chars === 'number' ? { caseNormalized: { chars } } : {}),
+        };
       } catch (error) {
         logActionSettle(error instanceof HandlerError ? error.meta : undefined);
         const { code, message } = describeError(error);

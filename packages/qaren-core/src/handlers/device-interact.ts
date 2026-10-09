@@ -1120,6 +1120,7 @@ function extractErrorCode(result: ToolResult): string | undefined {
 const NATIVE_VERIFY_VERDICTS = new Set([
   'exact',
   'mismatch',
+  'case-normalized',
   'unreadable',
   'secure-masked',
   'target-lost',
@@ -1432,6 +1433,13 @@ export async function performExactFill(
       },
     });
   }
+  if (verification.evidence === 'case-normalized') {
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      'device_fill typed the value and the field changed only its letter case; not verified, not retrying.',
+      { mutation: mutationSeen, pathsTried, verification },
+    );
+  }
   return fillFailure(
     'TEXT_ENTRY_UNVERIFIED',
     verification.observedMismatch
@@ -1476,7 +1484,7 @@ async function awaitReactInputValue(
   readInput: () => Promise<{ value: string | null; controlled: boolean } | null>,
   expected: string,
   signal?: AbortSignal,
-): Promise<ReactValueVerification> {
+): Promise<{ verdict: ReactValueVerification; observed?: string }> {
   let previous: { value: string | null; controlled: boolean } | null = null;
   let last: { value: string | null; controlled: boolean } | null = null;
   for (let attempt = 0; attempt < 6; attempt++) {
@@ -1484,9 +1492,12 @@ async function awaitReactInputValue(
     const read = await readInput();
     if (read?.controlled && read.value === expected) {
       await cancellableSleep(150);
-      if (signal?.aborted) return 'unreadable';
+      if (signal?.aborted) return { verdict: 'unreadable' };
       const confirm = await readInput();
-      return confirm?.controlled === true && confirm.value === expected ? 'exact' : 'unreadable';
+      return {
+        verdict:
+          confirm?.controlled === true && confirm.value === expected ? 'exact' : 'unreadable',
+      };
     }
     if (read) {
       previous = last;
@@ -1501,8 +1512,29 @@ async function awaitReactInputValue(
     previous?.controlled === true &&
     last.value !== null &&
     last.value === previous.value
-    ? 'mismatch'
-    : 'unreadable';
+    ? { verdict: 'mismatch', observed: last.value }
+    : { verdict: 'unreadable' };
+}
+
+// Same length and equal ignoring letter case, but not identical: the app normalized case only.
+function caseOnly(observed: string | undefined, expected: string): boolean {
+  return (
+    observed !== undefined &&
+    observed !== expected &&
+    [...observed].length === [...expected].length &&
+    observed.toLowerCase() === expected.toLowerCase()
+  );
+}
+
+// The observed length when the field holds a nonempty, strictly shorter in-order subset of what was typed.
+function droppedLength(observed: string | undefined, expected: string): number | undefined {
+  if (observed === undefined) return undefined;
+  const typed = [...expected];
+  const held = [...observed];
+  if (held.length === 0 || held.length >= typed.length) return undefined;
+  let next = 0;
+  for (const char of typed) if (next < held.length && held[next] === char) next++;
+  return next === held.length ? held.length : undefined;
 }
 
 // The requested identity itself; a wrapper id is never rewritten to an unobserved inner id.
@@ -1586,7 +1618,9 @@ export async function performFocusedFill(
     });
   }
   const textEntryRoute = extractTextEntryRoute(native);
-  const unverified = () =>
+  const unverified = (
+    kept?: { typedLength: number; observedLengths: number[] } | { caseNormalizedChars: number },
+  ) =>
     warnResult(
       {
         typed: true,
@@ -1595,29 +1629,69 @@ export async function performFocusedFill(
         verifiedOracle: 'none',
         textEntryPath: 'focused-synthesized',
         textEntryRoute,
+        ...kept,
       },
       'Typed into the focused field; the value could not be confirmed. Confirm with device_screenshot or expect_text before relying on it.',
     );
-  if (args.skipFinalValidation || before === null || !beforeFocused) return unverified();
-  const verification = await awaitReactInputValue(
-    () => readReactInputValue(client, oracleTestId),
-    (args.clearFirst ? '' : before) + args.text,
-  );
-  if (verification === 'exact') {
-    return verifiedFillResult('native', args.text.length, {
+  if (before === null || !beforeFocused) return unverified();
+  const expected = (args.clearFirst ? '' : before) + args.text;
+  const readBack = () =>
+    awaitReactInputValue(() => readReactInputValue(client, oracleTestId), expected);
+  const verified = () =>
+    verifiedFillResult('native', args.text.length, {
       textEntryPath: 'focused-synthesized',
       verifiedOracle: 'react-tree',
       textEntryRoute,
     });
+  const verification = await readBack();
+  if (verification.verdict === 'exact') return verified();
+  const caseNormalized =
+    verification.verdict === 'mismatch' && caseOnly(verification.observed, expected)
+      ? { caseNormalizedChars: [...expected].length }
+      : undefined;
+  if (caseNormalized) return unverified(caseNormalized);
+  if (!args.skipFinalValidation) {
+    if (verification.verdict === 'mismatch') {
+      return fillFailure(
+        'TEXT_ENTRY_UNVERIFIED',
+        'device_fill typed into the focused field but its React value differs; not retrying.',
+        { mutation: 'observed', pathsTried },
+      );
+    }
+    return unverified();
   }
-  if (verification === 'mismatch') {
-    return fillFailure(
+  // Host load can drop keystrokes on a controlled field; normalizing fields keep the unverified pass.
+  const first = args.clearFirst ? droppedLength(verification.observed, expected) : undefined;
+  if (first === undefined) return unverified();
+  const lost = (held: number, why: string) =>
+    fillFailure(
       'TEXT_ENTRY_UNVERIFIED',
-      'device_fill typed into the focused field but its React value differs; not retrying.',
+      `typed ${[...expected].length} characters but the field holds ${held}${why}`,
       { mutation: 'observed', pathsTried },
     );
+  if (args.qaContext?.expired) return lost(first, '; no step time remained to retype');
+  const retyped = await runNative(['fill', args.ref, args.text, '--clear-first'], {
+    qaContext: args.qaContext,
+    focusedType: true,
+    focusedProof,
+    settle: { enabled: false },
+  });
+  if (retyped.isError) {
+    return extractMutationDisposition(retyped) === 'none'
+      ? lost(first, '; the retype was refused')
+      : fillFailure('TEXT_ENTRY_UNVERIFIED', extractErrorText(retyped), {
+          mutation: 'possible',
+          pathsTried,
+        });
   }
-  return unverified();
+  const second = await readBack();
+  if (second.verdict === 'exact') return verified();
+  const held = droppedLength(second.observed, expected);
+  if (held === undefined) return unverified();
+  // The same loss twice is the field's own stripping or maxLength: unverified, with the lengths disclosed.
+  return held === first
+    ? unverified({ typedLength: [...expected].length, observedLengths: [first, held] })
+    : lost(held, ' after one clear-and-retype');
 }
 
 export async function performReactTreeInput(
@@ -1763,10 +1837,10 @@ export async function performReactTreeInput(
   }
   const expected = dispatch.resultingText;
   const verification = await awaitReactInputValue(readInput, expected, signal);
-  if (verification !== 'exact') {
+  if (verification.verdict !== 'exact') {
     return fillFailure(
       'TEXT_ENTRY_UNVERIFIED',
-      `React-tree input "${testID}" dispatched onChangeText but exact fiber read-back was ${verification}.`,
+      `React-tree input "${testID}" dispatched onChangeText but exact fiber read-back was ${verification.verdict}.`,
       { mutation: 'possible', pathsTried },
     );
   }

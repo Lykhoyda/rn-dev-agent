@@ -1,6 +1,7 @@
 export type NativeVerifyVerdict =
   | 'exact'
   | 'mismatch'
+  | 'case-normalized'
   | 'unreadable'
   | 'secure-masked'
   | 'target-lost'
@@ -8,7 +9,7 @@ export type NativeVerifyVerdict =
   | 'unavailable';
 
 // What a fill proved: only exact verifies; masked and unavailable never promote to verified.
-export type FillEvidence = 'exact' | 'masked' | 'unavailable' | 'mismatch';
+export type FillEvidence = 'exact' | 'masked' | 'unavailable' | 'mismatch' | 'case-normalized';
 
 export interface NativeVerification {
   verified: boolean;
@@ -32,7 +33,9 @@ export function classifyNativeVerification(
           ? 'masked'
           : native === 'mismatch'
             ? 'mismatch'
-            : 'unavailable',
+            : native === 'case-normalized'
+              ? 'case-normalized'
+              : 'unavailable',
     native,
     nativeStable,
     observedMismatch: native === 'mismatch' && nativeStable,

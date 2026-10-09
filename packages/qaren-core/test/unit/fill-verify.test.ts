@@ -34,3 +34,11 @@ test('evidence classes: only a stable exact read verifies; obscured or unstable 
   for (const verdict of ['exact', 'secure-masked', 'mismatch'] as const)
     assert.equal(evidence(verdict, false), 'unavailable', verdict);
 });
+
+test('a stable case-only difference is its own unverified evidence, never verified and never a mismatch', () => {
+  const v = classifyNativeVerification('case-normalized', true);
+  assert.equal(v.verified, false);
+  assert.equal(v.evidence, 'case-normalized');
+  assert.equal(v.observedMismatch, false);
+  assert.equal(classifyNativeVerification('case-normalized', false).evidence, 'unavailable');
+});

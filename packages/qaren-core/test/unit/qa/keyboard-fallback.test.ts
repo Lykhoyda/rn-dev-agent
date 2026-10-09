@@ -565,14 +565,6 @@ test('U8: the block of an unverified fill is never saved and video stays withhel
   assert.equal(existsSync(join(dir, '.qaren', 'actions', 'hidden-email.yaml')), false);
 });
 
-test('U9: a React-confirmed append is still recorded as unverified and private', async () => {
-  const fake = app({ type: { ok: true, proven: true } });
-  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
-  assert.equal(outcome.block.outcome, 'pass');
-  assert.match(outcome.rows[0].reason ?? '', /^UNVERIFIED_FILL: /);
-  assert.deepEqual(outcome.privateFills, [fake.rows[0].line]);
-});
-
 test('U14: without the focused-typing dep the strict refusal is unchanged', async () => {
   const fake = app({ typeFocused: false });
   const outcome = await walkBlock(blocks(plan())[0], fake.deps);
@@ -716,6 +708,31 @@ for (const type of [
     assert.deepEqual(outcome.privateFills, [fake.rows[0].line]);
   });
 }
+
+test('U8v: a fallback fill whose read-back matched passes without the unverified reason', async () => {
+  const fake = app({ type: { ok: true, proven: true } });
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+  assert.deepEqual(steps(fake.log), ['press @wrap', 'type @wrap', 'press @submit']);
+  assert.equal(outcome.rows[0].outcome, 'pass');
+  assert.equal(outcome.rows[0].reason, undefined);
+  assert.deepEqual(outcome.privateFills, [outcome.rows[0].line]);
+});
+
+test('U8k: a fill kept short on both attempts carries its counts as numbers that masking cannot touch', async () => {
+  const value = '4915123456789';
+  const fake = app({ type: { ok: true, proven: false, kept: { typed: 13, observed: [10, 10] } } });
+  const outcome = await walkBlock(blocks(plan(value))[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+  const row = outcome.rows[0];
+  assert.match(
+    row.reason ?? '',
+    /^UNVERIFIED_FILL: .*; the field kept the same shorter value on every attempt$/,
+  );
+  assert.deepEqual(row.kept, { typed: 13, observed: [10, 10] });
+  const durable = JSON.stringify(outcome.rows);
+  assert.doesNotMatch(durable, /4915|1234|56789/);
+});
 
 test('U11: a failed tap fails without typing', async () => {
   const fake = app({ press: { ok: false, proven: false, error: 'TAP_FAILED: no' } });
@@ -1208,7 +1225,7 @@ test('a normalizing controlled fallback continues as unverified', async () => {
     const result = await walkBlock(blocks(plan())[0], fake.deps);
     assert.equal(result.block.outcome, 'pass');
     assert.match(result.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
-    assert.equal(reads, 1);
+    assert.ok(reads > 1, 'the typed value is read back');
     assert.equal(fills, 1);
     assert.equal(fake.state(), 'accepted');
   } finally {
@@ -1892,6 +1909,46 @@ for (const evidence of ['masked', 'unavailable', 'mismatch'] as const) {
     assert.equal(JSON.stringify(fake.rows).includes('hunter22'), false);
   });
 }
+
+test('I6: a strict fill the app only re-cased passes unverified with its character count as a number', async () => {
+  const input = element('@name', 'Name', {
+    kind: 'input',
+    nativeKind: 'input',
+    testID: 'name_field',
+  });
+  const fake = app({ initial: [input, submit], typeFocused: false });
+  let fills = 0;
+  fake.deps.fill = async (_ref, _text, context) => {
+    context.authorize();
+    fills += 1;
+    fake.deps.captureScreen = async () => screenOf([input, submit], true);
+    return {
+      ok: false,
+      proven: false,
+      mutation: 'observed',
+      error:
+        'TEXT_ENTRY_UNVERIFIED: device_fill typed the value and the field changed only its letter case',
+      evidence: 'case-normalized',
+    };
+  };
+  const result = await walkBlock(blocks(plan('Ada Lovelace', 'name_field', ''))[0], fake.deps);
+  assert.equal(fills, 1);
+  assert.equal(result.block.outcome, 'pass', JSON.stringify(result.failure));
+  assert.match(
+    result.rows[0].reason ?? '',
+    /^UNVERIFIED_FILL: the field changed only the letter case/,
+  );
+  assert.deepEqual(result.rows[0].caseNormalized, { chars: 12 });
+  assert.equal(JSON.stringify(result.rows).includes('Lovelace'), false);
+});
+
+test('I7: a fallback fill the app only re-cased passes unverified with its character count', async () => {
+  const fake = app({ type: { ok: true, proven: false, caseNormalized: { chars: 15 } } });
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+  assert.match(outcome.rows[0].reason ?? '', /; the field changed only the letter case$/);
+  assert.deepEqual(outcome.rows[0].caseNormalized, { chars: 15 });
+});
 
 const mutations = (log: string[]) =>
   log.filter((entry) => /^(press|type|fill|scroll) /.test(entry));

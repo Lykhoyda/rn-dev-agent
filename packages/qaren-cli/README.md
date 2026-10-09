@@ -48,6 +48,87 @@ Use the reported binary path for CLI commands; installation does not add it to P
 This development checkout's manifest does not imply that a QaReN release asset
 has been published; use the source build above while that asset is unavailable.
 
+## Upgrading from rn-dev-agent 1.x (1.0.14) to 2.0
+
+QaReN 2.0 replaces the rn-dev-agent 1.x plugin. It has no compatibility layer:
+2.0 never reads, converts or reuses 1.x plugins, configuration, caches or learned
+actions, so remove 1.x first and install 2.0 as a new product.
+
+| 1.x (rn-dev-agent 1.0.14) | 2.0 (QaReN) |
+|---|---|
+| Plugin `rn-dev-agent@rn-dev-agent` from marketplace `rn-dev-agent`, with its bundled MCP server (`cdp_*`, `device_*` tools) | Plugin `qaren@qaren` from marketplace `qaren`, and the `qaren` CLI; no MCP server |
+| `.rn-agent/config.json` and `.rn-agent/actions/` learned actions in the app | `.qaren/config.yaml` and `.qaren/actions/` saved blocks written from passing plan blocks |
+| `~/.cache/rn-dev-agent/` (maestro-runner pin cache), `~/.rn-dev-agent/` (action database, device helper state), `~/.claude/rn-agent/` | `~/.qaren/runtime/`, `~/.qaren/state/`, `~/.qaren/runs/`, `~/.qaren/locks/` |
+
+1. **Remove the 1.x plugin and its MCP registration.** The MCP server ships
+   inside the plugin, so uninstalling the plugin removes its registration.
+
+   ```sh
+   # Codex
+   codex plugin remove rn-dev-agent@rn-dev-agent
+   codex plugin marketplace remove rn-dev-agent
+   # Claude Code
+   claude plugin uninstall rn-dev-agent@rn-dev-agent
+   claude plugin marketplace remove rn-dev-agent
+   ```
+
+   In Cursor, remove the rn-dev-agent plugin and marketplace from its plugin
+   settings. A 1.0.14 Codex install writes `[marketplaces.rn-dev-agent]` and
+   `[plugins."rn-dev-agent@rn-dev-agent"]` to `$CODEX_HOME/config.toml` (default
+   `~/.codex`), the plugin under `$CODEX_HOME/plugins/cache/rn-dev-agent/` and the
+   marketplace clone under `$CODEX_HOME/.tmp/marketplaces/rn-dev-agent/`; confirm
+   none remain. Removal can leave the empty
+   `$CODEX_HOME/plugins/cache/rn-dev-agent/` folder behind; remove it only while
+   it is empty:
+
+   ```sh
+   rmdir "${CODEX_HOME:-$HOME/.codex}/plugins/cache/rn-dev-agent"
+   ```
+
+   If `rmdir` reports the folder is not empty, stop and inspect it rather than
+   deleting it. If you registered the 1.x MCP server by hand, delete that entry
+   from the host's MCP configuration as well.
+2. **Archive, then retire the 1.x state.** Nothing in 2.0 reads
+   `~/.cache/rn-dev-agent/`, `~/.rn-dev-agent/`, `~/.claude/rn-agent/` or an
+   app's `.rn-agent/` directory, and learned actions are not converted: QaReN
+   saves its own blocks as plans pass. Archive each app's `.rn-agent/actions/`
+   and the action database `~/.rn-dev-agent/actions.db` first if those flows
+   matter to you, since they may be their only copy. Unset
+   any `RN_DEV_AGENT_*` environment variables from your shell profile, and delete
+   the 1.x directories once step 4 passes.
+3. **Install 2.0.** Until a QaReN release asset is published, use the
+   [source build](#build). Once it is, add the marketplace, install the plugin
+   and run the [runtime installer](#plugin-runtime-installation) from the
+   installed plugin directory:
+
+   ```sh
+   # Codex
+   codex plugin marketplace add Lykhoyda/rn-dev-agent
+   codex plugin add qaren@qaren
+   # Claude Code
+   claude plugin marketplace add Lykhoyda/rn-dev-agent
+   claude plugin install qaren@qaren
+   # then, from the installed plugin directory
+   bash scripts/ensure-qaren.sh --install
+   ```
+
+4. **Verify a clean 2.0 install.**
+   - `codex plugin list` or `claude plugin list` shows no `rn-dev-agent` entry,
+     and `codex plugin marketplace list` or `claude plugin marketplace list`
+     shows no `rn-dev-agent` marketplace.
+   - Released plugin: the plugin list shows `qaren@qaren`, and
+     `bash scripts/ensure-qaren.sh --print-bin` prints a binary path whose
+     `--version` reports `qaren 2.0.0` or later.
+   - Source build: `<checkout>/packages/qaren-cli/target/debug/qaren --version`
+     reports the checkout's workspace version. The version moves to 2.0.0 only
+     when the release is cut, so a `develop` build still shows the pre-release
+     version (for example `qaren 1.0.13`). From the app directory, run that absolute
+     path with `QAREN_RUNTIME=<checkout>/packages/qaren-core/dist` (see
+     [Build](#build)).
+   - In the app, write `.qaren/config.yaml` and run a first plan with that
+     binary as in [Check a plan](#check-a-plan); a PASS receipt with a run under
+     `~/.qaren/runs/` completes the upgrade.
+
 ## Check a plan
 
 From the app's directory, supply `.qaren/config.yaml` and a Markdown plan:
@@ -181,7 +262,14 @@ verifies a fill. A masked secure read-back or an unreadable one records a
 passing row with reason `UNVERIFIED_FILL`, never a verified pass; an empty or
 placeholder read-back of a non-empty fill on any field, a secure mask whose
 length matches neither the character nor the UTF-16 count, or any other
-mismatch fails without retry. A screen change alone never verifies a fill. During discovery, a quoted
+mismatch fails without retry. A read-back that differs from the typed text only
+by letter case (same length, equal ignoring case) means the app re-cased the
+value: it records a passing `UNVERIFIED_FILL` row, never a verified fill and never
+a refusal, with `caseNormalized: { chars }` beside the reason and a receipt and
+report detail such as `field case-normalized 12 chars`. The iOS runner makes that
+comparison itself (verdict `case-normalized`), so the value never leaves it;
+keyboard fallback applies the same rule to its React read-back. A different
+letter is still a mismatch. A screen change alone never verifies a fill. During discovery, a quoted
 iOS fill can use keyboard fallback when no observable native input resolves, or
 strict binding refuses `NO_TEXT_INPUT_TARGET` before any text mutation for a
 non-native-input target. Phrase fills and stored replay selectors do not use
@@ -235,9 +323,26 @@ on a keyboard-up path types nothing; failure of the pre-dispatch read returns
 `NO_TEXT_INPUT_TARGET` with no mutation. An unknown keyboard state still refuses.
 Each walker focus decision logs one value-free `fallback-focus` line.
 
-QaReN then replaces the focused field's content and types once without final
-value validation: the runner selects the whole field and types the plan text in
-one synthesized sequence, so no readable React value is needed. A runner
+QaReN then replaces the focused field's content: the runner selects the whole
+field and types the plan text in one synthesized sequence. When the input is a
+controlled React field, its value is then read back locally and compared, never
+logged: an exact match verifies the fill. A stable, nonempty read-back holding a
+strictly shorter, in-order part of the text is ambiguous: keystrokes dropped under
+host load and a field that strips characters or limits length look alike. Because
+the retype replaces the whole field with the same text, it is safe either way, so
+the field is cleared and retyped once within the same step budget. A match then
+verifies the fill. A second loss of a different length points to dropped
+keystrokes and fails with `TEXT_ENTRY_UNVERIFIED` naming only the typed and held
+lengths. The same loss twice points to the field's own transformation and stays
+unverified. Its row reason ends `the field kept the same shorter value on every
+attempt`, and the counts travel beside it as numbers, `kept: { typed, observed }`
+with one held count per attempt, because masking a private value may hide any
+digit in the reason text. Any other normalized, empty, uncontrolled or unreadable
+value also stays unverified. A later plan check still decides whether the value
+is acceptable. The receipt's `ledger.unverified_fills` lists each passing fill
+left unverified with its line and value-free reason, plus `kept` and a `detail`
+such as `field kept 10 of 13 chars on 2 attempts` when counts exist; the report
+line shows the same detail. The list is omitted when empty. A runner
 must advertise `FILL_EVIDENCE_V1` on both iOS and Android. Session startup routes
 a missing capability through the bounded source-rebuild path instead of
 accepting the released artifact. An active iOS runner missing it refuses focused
@@ -245,9 +350,9 @@ replacement with `RN_FAST_RUNNER_STALE`
 and no mutation instead of appending. A refused replacement keeps the runner's
 mutation disposition. The [focused replacement tests](../qaren-core/test/unit/device-fill-focused-replace.test.ts)
 cover these guards and mutation reporting.
-A successful keyboard step records a passing row with reason `UNVERIFIED_FILL`,
+An unverified keyboard step records a passing row with reason `UNVERIFIED_FILL`,
 allowing later plan steps to continue; it does not establish the field's final
-value. Failed keyboard typing is not retried. Before the fallback tap or
+value. Apart from that one retype, failed keyboard typing is not retried. Before the fallback tap or
 no-target typing dispatch, the value is protected under the
 [shared masking rules](#input-value-masking), and screenshots are withheld for the rest
 of the walk. The block remains unsaved,

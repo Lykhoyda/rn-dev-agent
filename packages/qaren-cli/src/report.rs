@@ -20,6 +20,25 @@ pub struct LedgerSummary {
     pub recoveries: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_step: Option<u64>,
+    // Passing fills whose final value was not verified, with the ledger row's value-free reason.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unverified_fills: Vec<UnverifiedFill>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UnverifiedFill {
+    pub line: u64,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<crate::core::KeptCounts>,
+    #[serde(
+        default,
+        rename = "caseNormalized",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub case_normalized: Option<crate::core::CaseNormalized>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 pub fn summarize(ledger: &Ledger) -> LedgerSummary {
@@ -34,6 +53,23 @@ pub fn summarize(ledger: &Ledger) -> LedgerSummary {
         escapes: ledger.escapes,
         recoveries: ledger.recoveries,
         failed_step: ledger.failure.as_ref().map(|f| f.step),
+        unverified_fills: ledger
+            .steps
+            .iter()
+            .filter(|row| row.outcome == "pass")
+            .filter_map(|row| {
+                let reason = row.reason.as_deref()?;
+                reason
+                    .starts_with("UNVERIFIED_FILL:")
+                    .then(|| UnverifiedFill {
+                        line: row.line,
+                        reason: reason.to_string(),
+                        kept: row.kept.clone(),
+                        case_normalized: row.case_normalized.clone(),
+                        detail: row.fill_detail(),
+                    })
+            })
+            .collect(),
     }
 }
 
@@ -104,7 +140,11 @@ fn row_line_with(row: &Row, prose: &dyn Fn(&str) -> String) -> String {
         .as_deref()
         .map(|r| format!(" — {}", prose(r)))
         .unwrap_or_default();
-    format!("- {mark} line {}{text}{retry}{reason}\n", row.line)
+    let kept = row
+        .fill_detail()
+        .map(|detail| format!("; {detail}"))
+        .unwrap_or_default();
+    format!("- {mark} line {}{text}{retry}{reason}{kept}\n", row.line)
 }
 
 pub fn render(input: &ReportInput<'_>) -> String {
@@ -297,4 +337,108 @@ pub fn render_pr_comment(
     ));
     out.push_str("\n</details>\n");
     redact_machine(&public(&redact_machine(&out, machine)), machine)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summary_counts_passing_unverified_fills() {
+        let row = |line: u64, outcome: &str, reason: Option<&str>| {
+            serde_json::json!({
+                "block": "b", "line": line, "attempt": 1, "kind": "step",
+                "resolvedBy": "exact", "t": 0, "outcome": outcome, "reason": reason,
+            })
+        };
+        let ledger: Ledger = serde_json::from_value(serde_json::json!({
+            "verdict": "PASS", "path": "walk", "blocks": [],
+            "steps": [
+                row(3, "pass", Some("UNVERIFIED_FILL: typed with the keyboard; the field kept 6 of 8 characters on 2 attempts")),
+                row(4, "pass", None),
+                row(5, "retry", Some("UNVERIFIED_FILL: retried")),
+                row(6, "pass", Some("UNVERIFIED_FILL: the field's final value could not be read back, so the fill was not verified")),
+            ],
+            "jev": { "calls": 0, "medianMs": 0 },
+            "llmTurns": 0, "escapes": 0, "recoveries": 0,
+        }))
+        .unwrap();
+        let summary = summarize(&ledger);
+        let lines: Vec<(u64, &str)> = summary
+            .unverified_fills
+            .iter()
+            .map(|fill| (fill.line, fill.reason.as_str()))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                (3, "UNVERIFIED_FILL: typed with the keyboard; the field kept 6 of 8 characters on 2 attempts"),
+                (6, "UNVERIFIED_FILL: the field's final value could not be read back, so the fill was not verified"),
+            ]
+        );
+        let clean: Ledger = serde_json::from_value(serde_json::json!({
+            "verdict": "PASS", "path": "walk", "blocks": [], "steps": [row(1, "pass", None)],
+            "jev": { "calls": 0, "medianMs": 0 }, "llmTurns": 0, "escapes": 0, "recoveries": 0,
+        }))
+        .unwrap();
+        let json = serde_json::to_value(summarize(&clean)).unwrap();
+        assert!(json.get("unverified_fills").is_none());
+    }
+
+    #[test]
+    fn kept_counts_survive_a_masked_reason_in_the_receipt_and_report() {
+        let reason = "UNVERIFIED_FILL: typed with the keyboard; the field kept the same shorter value on every attempt";
+        let ledger: Ledger = serde_json::from_value(serde_json::json!({
+            "verdict": "PASS", "path": "walk", "blocks": [],
+            "steps": [{
+                "block": "b", "line": 9, "attempt": 1, "kind": "step", "resolvedBy": "exact",
+                "t": 0, "outcome": "pass", "text": "Fill \"phone\" with \"•••\"", "reason": reason,
+                "kept": { "typed": 13, "observed": [10, 10] },
+            }],
+            "jev": { "calls": 0, "medianMs": 0 }, "llmTurns": 0, "escapes": 0, "recoveries": 0,
+        }))
+        .unwrap();
+        let fill = &summarize(&ledger).unverified_fills[0];
+        assert_eq!(fill.reason, reason);
+        assert_eq!(
+            fill.kept,
+            Some(crate::core::KeptCounts {
+                typed: 13,
+                observed: vec![10, 10]
+            })
+        );
+        assert_eq!(
+            fill.detail.as_deref(),
+            Some("field kept 10 of 13 chars on 2 attempts")
+        );
+        let line = row_line(&ledger.steps[0]);
+        assert!(
+            line.ends_with("; field kept 10 of 13 chars on 2 attempts\n"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn case_normalized_count_reaches_the_receipt_and_report() {
+        let reason =
+            "UNVERIFIED_FILL: the field changed only the letter case, so the fill was not verified";
+        let ledger: Ledger = serde_json::from_value(serde_json::json!({
+            "verdict": "PASS", "path": "walk", "blocks": [],
+            "steps": [{
+                "block": "b", "line": 4, "attempt": 1, "kind": "step", "resolvedBy": "exact",
+                "t": 0, "outcome": "pass", "reason": reason,
+                "caseNormalized": { "chars": 12 },
+            }],
+            "jev": { "calls": 0, "medianMs": 0 }, "llmTurns": 0, "escapes": 0, "recoveries": 0,
+        }))
+        .unwrap();
+        let fill = &summarize(&ledger).unverified_fills[0];
+        assert_eq!(
+            fill.detail.as_deref(),
+            Some("field case-normalized 12 chars")
+        );
+        let json = serde_json::to_value(fill).unwrap();
+        assert_eq!(json["caseNormalized"]["chars"], 12);
+        assert!(row_line(&ledger.steps[0]).ends_with("; field case-normalized 12 chars\n"));
+    }
 }

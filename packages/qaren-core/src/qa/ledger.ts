@@ -21,6 +21,10 @@ export interface LedgerRow {
   reason?: string;
   timing?: RowTiming;
   selector?: Selector;
+  // Typed and held character counts of an unverified fill, kept out of the masked reason.
+  kept?: { typed: number; observed: number[] };
+  // Characters typed into a field that changed only their letter case.
+  caseNormalized?: { chars: number };
 }
 
 export interface LedgerFailure {

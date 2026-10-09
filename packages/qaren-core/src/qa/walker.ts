@@ -72,9 +72,13 @@ export interface ActResult {
   error?: string;
   mutation?: 'none' | 'observed' | 'possible';
   // What a refused fill still proved; masked and unavailable pass unverified, mismatch fails.
-  evidence?: 'masked' | 'unavailable' | 'mismatch';
+  evidence?: 'masked' | 'unavailable' | 'mismatch' | 'case-normalized';
+  // An unverified fill whose field changed only letter case; the count of characters typed.
+  caseNormalized?: { chars: number };
   // The handler found more than one element for the target at dispatch: terminal, never retried.
   ambiguous?: boolean;
+  // An unverified fill whose field held the same shorter value on every attempt, one length per attempt.
+  kept?: { typed: number; observed: number[] };
 }
 
 export interface WalkerDeps {
@@ -83,7 +87,7 @@ export interface WalkerDeps {
   captureScreen(options?: { platformPresence?: boolean; timing?: TimingObserver }): Promise<Screen>;
   press(ref: string, context: QaDispatchContext): Promise<ActResult>;
   fill(ref: string, text: string, context: QaDispatchContext): Promise<ActResult>;
-  // iOS only: type without final validation; testID identifies the pre-dispatch focus veto.
+  // iOS only: type, proven only by a matching React read-back; testID identifies the pre-dispatch focus veto.
   typeFocused?(
     ref: string,
     text: string,
@@ -765,6 +769,21 @@ export async function walkBlock(
   };
   const focusedReason = (quoted: string) =>
     `UNVERIFIED_FILL: typed with the keyboard into the field React reports focused ("${quoted}"); its final value was not validated`;
+  // Counts travel as numbers beside the reason: masking a private value may mask any digit in the text.
+  const keptNote = (entry: ActResult) =>
+    entry.kept
+      ? '; the field kept the same shorter value on every attempt'
+      : entry.caseNormalized
+        ? '; the field changed only the letter case'
+        : '';
+  const keptCounts = (entry: ActResult) =>
+    entry.proven
+      ? {}
+      : entry.kept
+        ? { kept: { typed: entry.kept.typed, observed: [...entry.kept.observed] } }
+        : entry.caseNormalized
+          ? { caseNormalized: { chars: entry.caseNormalized.chars } }
+          : {};
   // Best effort: the field is not an observable native input, so only the tap and the keyboard prove anything.
   const keyboardFallback = async (
     item: Item & { kind: 'fill' },
@@ -893,11 +912,17 @@ export async function walkBlock(
       ...base(item, attempt),
       ref: again.element.ref,
       outcome: 'pass',
-      reason: redact(
-        proofMode
-          ? focusedReason(quoted)
-          : `UNVERIFIED_FILL: typed with the keyboard after tapping "${quoted}"; the field is not an observable native input, so its final value was not validated`,
-      ),
+      ...keptCounts(entry),
+      ...(entry.proven
+        ? {}
+        : {
+            reason: redact(
+              (proofMode
+                ? focusedReason(quoted)
+                : `UNVERIFIED_FILL: typed with the keyboard after tapping "${quoted}"; the field is not an observable native input, so its final value was not validated`) +
+                keptNote(entry),
+            ),
+          }),
     });
     return 'typed';
   };
@@ -944,7 +969,12 @@ export async function walkBlock(
         undefined,
       );
     await capture(item);
-    emit({ ...base(item, attempt), outcome: 'pass', reason: redact(focusedReason(quoted)) });
+    emit({
+      ...base(item, attempt),
+      outcome: 'pass',
+      ...keptCounts(entry),
+      ...(entry.proven ? {} : { reason: redact(focusedReason(quoted) + keptNote(entry)) }),
+    });
     return 'typed';
   };
   // The login block walks with this walk's privacy, so its typed values stay masked.
@@ -1534,7 +1564,10 @@ export async function walkBlock(
           const unverified =
             item.kind === 'fill' &&
             !(act!.ok && act!.proven) &&
-            (act!.evidence === 'masked' || act!.evidence === 'unavailable');
+            (act!.evidence === 'masked' ||
+              act!.evidence === 'unavailable' ||
+              act!.evidence === 'case-normalized');
+          const recased = item.kind === 'fill' && act!.evidence === 'case-normalized';
           const noMutationRefusal = !act!.ok && act!.mutation === 'none';
           if (
             !noMutationRefusal &&
@@ -1550,13 +1583,20 @@ export async function walkBlock(
                   (element ? elementSelector(element) : undefined),
               ),
               outcome: 'pass',
-              ...(unverified
+              ...(unverified && recased
                 ? {
                     reason: redact(
-                      `UNVERIFIED_FILL: the field's final value ${act!.evidence === 'masked' ? 'reads back masked' : 'could not be read back'}, so the fill was not verified`,
+                      'UNVERIFIED_FILL: the field changed only the letter case, so the fill was not verified',
                     ),
+                    caseNormalized: { chars: [...item.text].length },
                   }
-                : {}),
+                : unverified
+                  ? {
+                      reason: redact(
+                        `UNVERIFIED_FILL: the field's final value ${act!.evidence === 'masked' ? 'reads back masked' : 'could not be read back'}, so the fill was not verified`,
+                      ),
+                    }
+                  : {}),
             });
             break;
           }

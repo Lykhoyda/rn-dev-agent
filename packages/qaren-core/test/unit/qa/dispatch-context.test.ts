@@ -81,3 +81,22 @@ test('a runner-attested no-mutation invalidation of the only send is a refusal b
   assert.throws(() => expired.invalidate(true), { code: 'EVIDENCE_EXPIRED' });
   assert.equal(expired.refusedBeforeMutation, false);
 });
+
+test('expired probes the time budget like check() without recording a refusal', () => {
+  let now = 0;
+  const live = new QaDispatchContext(10, () => now);
+  assert.equal(live.expired, false);
+  now = 10;
+  assert.equal(live.expired, true);
+  assert.equal(live.refusal, undefined);
+  for (const deadline of [Infinity, Number.NaN, -1])
+    assert.equal(new QaDispatchContext(deadline, () => 0).expired, true);
+  assert.equal(new QaDispatchContext(10, () => Number.NaN).expired, true);
+  const cancelled = new QaDispatchContext(
+    10,
+    () => 0,
+    () => true,
+  );
+  assert.equal(cancelled.expired, false);
+  assert.throws(() => cancelled.check(), { code: 'RUN_CANCELLED' });
+});

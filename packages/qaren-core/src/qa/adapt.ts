@@ -53,10 +53,15 @@ export function adapt<A, T = unknown>(
 }
 
 // The evidence class a refused fill still proved; masked and unavailable are unverified, never verified.
-export function fillEvidence(error: unknown): 'masked' | 'unavailable' | 'mismatch' | undefined {
+export function fillEvidence(
+  error: unknown,
+): 'masked' | 'unavailable' | 'mismatch' | 'case-normalized' | undefined {
   if (!(error instanceof HandlerError) || error.code !== 'TEXT_ENTRY_UNVERIFIED') return undefined;
   const evidence = (error.meta?.verification as { evidence?: unknown } | undefined)?.evidence;
-  return evidence === 'masked' || evidence === 'unavailable' || evidence === 'mismatch'
+  return evidence === 'masked' ||
+    evidence === 'unavailable' ||
+    evidence === 'mismatch' ||
+    evidence === 'case-normalized'
     ? evidence
     : undefined;
 }

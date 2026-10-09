@@ -196,6 +196,51 @@ pub struct Row {
     pub timing: Option<RowTiming>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selector: Option<Selector>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<KeptCounts>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_normalized: Option<CaseNormalized>,
+}
+
+// Characters typed into a field that changed only their letter case.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CaseNormalized {
+    pub chars: u64,
+}
+
+impl Row {
+    // The value-free count line for an unverified fill, rendered from numbers the masking never saw.
+    pub fn fill_detail(&self) -> Option<String> {
+        self.kept.as_ref().and_then(KeptCounts::detail).or_else(|| {
+            self.case_normalized
+                .as_ref()
+                .map(|n| format!("field case-normalized {} chars", n.chars))
+        })
+    }
+}
+
+// Character counts of an unverified fill, carried as numbers because masking may hide digits in the reason.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KeptCounts {
+    pub typed: u64,
+    pub observed: Vec<u64>,
+}
+
+impl KeptCounts {
+    pub fn detail(&self) -> Option<String> {
+        let first = *self.observed.first()?;
+        let held = if self.observed.iter().all(|&n| n == first) {
+            first.to_string()
+        } else {
+            let all: Vec<String> = self.observed.iter().map(u64::to_string).collect();
+            all.join(" and ")
+        };
+        Some(format!(
+            "field kept {held} of {} chars on {} attempts",
+            self.typed,
+            self.observed.len()
+        ))
+    }
 }
 
 impl Row {
