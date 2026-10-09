@@ -521,12 +521,11 @@ fn run_inner(
     // Taken before the spawn, so the trim offset can only cut later than the true admission frame.
     let recording_from = ctx.runner.now_epoch_ms();
     if pr_state.is_some() {
-        match record::start(ctx.runner, &mut ctx.record, &ctx.runs_root, &device.id) {
-            Ok(_) => events::stage("recording", StageState::Running, None, None),
-            Err(status) => {
-                events::stage("recording", StageState::Skipped, None, None);
-                video = Some(status);
-            }
+        events::stage("recording", StageState::Running, None, None);
+        if let Err(status) = record::start(ctx.runner, &mut ctx.record, &ctx.runs_root, &device.id)
+        {
+            events::stage("recording", StageState::Failed, None, None);
+            video = Some(status);
         }
     } else {
         events::stage("recording", StageState::Skipped, None, None);
@@ -686,7 +685,9 @@ fn run_inner(
             } else {
                 StageState::Failed
             };
-            events::stage("recording", state, None, None);
+            if video.is_none() {
+                events::stage("recording", state, None, None);
+            }
             if !outcome.clean() && video.is_none() {
                 video = Some(VideoStatus::Unavailable(
                     "the recorder did not stop cleanly".into(),

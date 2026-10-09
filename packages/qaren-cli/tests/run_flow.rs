@@ -39,7 +39,7 @@ fn run_id() -> String {
 
 // What `main` does around a check: the stream starts before the run and ends with its receipt.
 fn run_with_events(
-    mock: &mut MockRunner,
+    mock: &mut dyn Runner,
     req: &RunRequest,
 ) -> (qaren::receipt::Receipt, Vec<serde_json::Value>) {
     qaren::events::init();
@@ -3843,6 +3843,102 @@ fn pr_request(repo: &Path, app: &Path) -> RunRequest {
 #[test]
 fn pr_runs_the_walk_on_a_worktree_at_the_head_with_a_recording_in_order() {
     pr_walk_result(false);
+}
+
+#[test]
+fn recording_start_failures_remain_failed_through_cleanup_and_the_viewer() {
+    for retained in [false, true] {
+        let (repo, app) = app_repo();
+        let mut req = pr_request(&repo, &app);
+        req.runs_root = repo.join(".qaren/runs");
+        let wt = req.runs_root.join(run_id()).join("wt");
+        let mut runner = PrRunner {
+            inner: MockRunner::new(),
+            app: app.clone(),
+            recorder_persisted_before_spawn: None,
+            fail_core_spawn: false,
+        };
+        let mock = &mut runner.inner;
+        script_pr_preflight(mock, &repo, &wt);
+        script_provision(mock);
+        script_pr_provenance_recheck(mock);
+        script_drift_status(mock);
+        if retained {
+            mock.expect_spawn(
+                "recordVideo",
+                Spawned {
+                    pid: 7100,
+                    pgid: 7100,
+                },
+            );
+            mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
+            mock.expect_run("ps", CmdOutput::success("xcrun simctl io\n"));
+            mock.expect_run("ps -p 7100", CmdOutput::failed(1, ""));
+            mock.expect_run("ps -p 7100", CmdOutput::failed(1, ""));
+            mock.expect_run("ps -A", CmdOutput::failed(1, "inventory unavailable"));
+        } else {
+            mock.expect_spawn_failure("recordVideo", "recorder spawn failure");
+        }
+        script_host_probe(mock, UDID, hosts_absent());
+        mock.expect_spawn_piped("walk.js", 9000, &pr_pass_stdout(), Some(0));
+        script_core_identity(mock);
+        script_drift_status(mock);
+        mock.expect_run("git", CmdOutput::success(&format!("{PR_HEAD}\n")));
+        mock.expect_run("git", CmdOutput::success(""));
+        if retained {
+            mock.expect_run("ps -p 7100", CmdOutput::failed(1, ""));
+            mock.expect_run("ps -p 7100", CmdOutput::failed(1, ""));
+            mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+        }
+        script_pr_teardown_after_drift(mock);
+        mock.expect_run("du -sk", CmdOutput::success("4\n"));
+        mock.expect_run("worktree remove --force", CmdOutput::success(""));
+        mock.expect_run(
+            "gh pr view https://github.com/o/r/pull/12",
+            pr_view_json(PR_HEAD),
+        );
+        let (receipt, events) = run_with_events(&mut runner, &req);
+        assert_eq!(receipt.result, ReceiptResult::Pass, "{:?}", receipt.failure);
+        assert!(receipt.outcomes["video"].starts_with("unavailable("));
+        assert_eq!(runner.inner.remaining(), 0);
+        assert_eq!(runner.recorder_persisted_before_spawn, Some(true));
+        if retained {
+            assert_eq!(receipt.cleanup["recorder"], "removed");
+        }
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e["event"] == "stage" && e["payload"]["name"] == "recording")
+                .map(|e| e["payload"]["state"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["running", "failed"]
+        );
+        for format in ["--plain", "--json"] {
+            let output = std::process::Command::new(env!("CARGO_BIN_EXE_qaren"))
+                .env("HOME", &repo)
+                .args(["watch", &receipt.run_id, format])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            let text = String::from_utf8(output.stdout).unwrap();
+            if format == "--json" {
+                let state: serde_json::Value = serde_json::from_str(&text).unwrap();
+                let recording = state["stages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|s| s["name"] == "recording")
+                    .unwrap();
+                assert_eq!(recording["state"], "failed");
+                assert_eq!(state["end"]["result"], "pass");
+            } else {
+                let recording: Vec<_> = text.lines().filter(|l| l.contains("Recording")).collect();
+                assert_eq!(recording.len(), 1);
+                assert!(recording[0].starts_with('✗'));
+                assert!(!recording[0].contains("not needed"));
+            }
+        }
+    }
 }
 
 #[test]
