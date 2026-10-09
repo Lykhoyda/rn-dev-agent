@@ -766,6 +766,41 @@ mod tests {
 
     const T: u64 = 1_791_540_900_000;
 
+    #[test]
+    fn failed_spawn_does_not_leave_a_current_command_during_cleanup() {
+        use crate::exec::{CmdSpec, RealRunner, Runner};
+
+        let dir = temp_runs("failed-command");
+        let path = dir.join("events.jsonl");
+        crate::events::init();
+        crate::events::attach(&path);
+        let mut runner = RealRunner::with_log_executable(dir.join("missing-log-helper"));
+        assert!(runner
+            .spawn_piped(
+                &CmdSpec::new("core-walk", "/missing/private-canary", &[], 1),
+                &dir.join("stderr.log"),
+            )
+            .is_err());
+        crate::events::stage("cleanup", crate::events::StageState::Running, None, None);
+        crate::events::finish();
+        let events: Vec<_> = std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        let started = folded(&events[..1]);
+        assert!(frame(&started, 80, 24).contains(&"now: core-walk".to_string()));
+        let finished = folded(&events);
+        assert!(finished.commands.is_empty());
+        for (width, height) in [(80, 24), (80, 20), (32, 18)] {
+            let rendered = frame(&finished, width, height);
+            assert!(!rendered.iter().any(|line| line.contains("now:")));
+            assert!(rendered.iter().any(|line| line.contains("Cleanup")));
+            assert!(rendered.len() < height as usize);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     fn line(seq: u64, at: u64, event: &str, payload: Value) -> String {
         json!({"v": 1, "seq": seq, "event": event, "at": T + at, "payload": payload}).to_string()
     }

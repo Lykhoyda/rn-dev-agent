@@ -179,8 +179,24 @@ pub trait ChildHandle {
 struct RealChildHandle {
     child: std::process::Child,
     log: log::LogDrain,
+    label: Option<String>,
+    started: Instant,
     // Set before any later fallible step; a reaped pid may already name another process.
     reaped: bool,
+}
+
+impl RealChildHandle {
+    fn finish_command(&mut self, ok: bool) {
+        if let Some(label) = self.label.take() {
+            crate::progress::finished(&label, ok);
+            crate::events::cmd(
+                &label,
+                crate::events::Edge::End,
+                Some(ok),
+                Some(self.started.elapsed().as_millis() as u64),
+            );
+        }
+    }
 }
 
 impl ChildHandle for RealChildHandle {
@@ -189,12 +205,15 @@ impl ChildHandle for RealChildHandle {
             Ok(status) => status.map(|s| s.code().unwrap_or(-1)),
             Err(e) => {
                 self.reaped = true;
+                self.finish_command(false);
                 return Err(e);
             }
         };
         if exit.is_some() {
             self.reaped = true;
-            self.log.flush()?;
+            let drained = self.log.flush();
+            self.finish_command(exit == Some(0) && drained.is_ok());
+            drained?;
         }
         Ok(exit)
     }
@@ -202,7 +221,12 @@ impl ChildHandle for RealChildHandle {
     fn kill_group(&mut self) {
         self.reaped = true;
         kill_group_and_reap(&mut self.child);
-        let _ = self.log.flush();
+        let drained = self.log.flush();
+        match self.child.try_wait() {
+            Ok(Some(status)) => self.finish_command(status.success() && drained.is_ok()),
+            Err(_) => self.finish_command(false),
+            Ok(None) => {}
+        }
     }
 
     // Signals only an unreaped child and never reaps here, so kill_group still precedes reaping.
@@ -467,40 +491,55 @@ impl Runner for RealRunner {
     ) -> std::io::Result<PipedChild> {
         use std::os::unix::process::CommandExt;
         self.executed += 1;
+        let started = Instant::now();
         crate::progress::started(&spec.label, true);
         crate::events::cmd(&spec.label, crate::events::Edge::Start, None, None);
-        let (log, stderr) = log::LogDrain::spawn(&self.log_executable, stderr_log)?;
-        let mut cmd = Command::new(&spec.program);
-        cmd.args(&spec.args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::from(OwnedFd::from(stderr)))
-            .process_group(0);
-        if let Some(dir) = &spec.cwd {
-            cmd.current_dir(dir);
+        let result = (|| {
+            let (log, stderr) = log::LogDrain::spawn(&self.log_executable, stderr_log)?;
+            let mut cmd = Command::new(&spec.program);
+            cmd.args(&spec.args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::from(OwnedFd::from(stderr)))
+                .process_group(0);
+            if let Some(dir) = &spec.cwd {
+                cmd.current_dir(dir);
+            }
+            for (k, v) in &spec.env {
+                cmd.env(k, v);
+            }
+            for k in &spec.unset {
+                cmd.env_remove(k);
+            }
+            if let Some(reason) = self.cancellation() {
+                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, reason));
+            }
+            let mut child = cmd.spawn()?;
+            let stdin = child.stdin.take().expect("stdin is piped");
+            let stdout = child.stdout.take().expect("stdout is piped");
+            Ok(PipedChild {
+                pid: child.id() as i32,
+                stdin: Box::new(stdin),
+                stdout: Box::new(BufReader::new(stdout)),
+                handle: Box::new(RealChildHandle {
+                    child,
+                    log,
+                    label: Some(spec.label.clone()),
+                    started,
+                    reaped: false,
+                }),
+            })
+        })();
+        if result.is_err() {
+            crate::progress::finished(&spec.label, false);
+            crate::events::cmd(
+                &spec.label,
+                crate::events::Edge::End,
+                Some(false),
+                Some(started.elapsed().as_millis() as u64),
+            );
         }
-        for (k, v) in &spec.env {
-            cmd.env(k, v);
-        }
-        for k in &spec.unset {
-            cmd.env_remove(k);
-        }
-        if let Some(reason) = self.cancellation() {
-            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, reason));
-        }
-        let mut child = cmd.spawn()?;
-        let stdin = child.stdin.take().expect("stdin is piped");
-        let stdout = child.stdout.take().expect("stdout is piped");
-        Ok(PipedChild {
-            pid: child.id() as i32,
-            stdin: Box::new(stdin),
-            stdout: Box::new(BufReader::new(stdout)),
-            handle: Box::new(RealChildHandle {
-                child,
-                log,
-                reaped: false,
-            }),
-        })
+        result
     }
 
     fn sleep(&mut self, duration: Duration) {
