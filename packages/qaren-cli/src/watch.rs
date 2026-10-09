@@ -860,7 +860,7 @@ mod tests {
     fn login_plan_and_retry_identities_survive_every_view() {
         let root = temp_runs("operations");
         let path = root.join("check-1/logs/events.jsonl");
-        let mut events = crate::events::Events::start(None);
+        let mut events = crate::events::Events::start(None).unwrap();
         events.attach(&path);
         let specs = [
             (1, 3, 1, "pass", "plan-three"),

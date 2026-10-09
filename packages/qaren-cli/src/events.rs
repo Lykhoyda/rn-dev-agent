@@ -105,7 +105,16 @@ pub struct Events {
 }
 
 impl Events {
-    pub fn start(gate: Option<Receiver<()>>) -> Events {
+    pub fn start(gate: Option<Receiver<()>>) -> Option<Events> {
+        Self::start_with_spawn(gate, |writer| {
+            std::thread::Builder::new().spawn(writer).map(drop)
+        })
+    }
+
+    fn start_with_spawn(
+        gate: Option<Receiver<()>>,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+    ) -> Option<Events> {
         let (tx, rx) = mpsc::sync_channel(QUEUE);
         let (done_tx, done) = mpsc::sync_channel(1);
         let shared = Arc::new(Shared {
@@ -114,27 +123,28 @@ impl Events {
             end: OnceLock::new(),
         });
         let writer_shared = shared.clone();
-        std::thread::spawn(move || {
+        spawn(Box::new(move || {
             if let Some(gate) = gate {
                 let _ = gate.recv();
             }
             write_events(rx, &writer_shared);
             let _ = done_tx.send(());
-        });
-        Events {
+        }))
+        .ok()?;
+        Some(Events {
             tx,
             shared,
             done,
             seq: 0,
             ended: false,
             running: Vec::new(),
-        }
+        })
     }
 
     #[cfg(test)]
     fn stalled() -> (Events, SyncSender<()>) {
         let (gate_tx, gate) = mpsc::sync_channel(1);
-        (Events::start(Some(gate)), gate_tx)
+        (Events::start(Some(gate)).unwrap(), gate_tx)
     }
 
     fn envelope(&mut self, event: &str, payload: Value) -> Envelope {
@@ -433,7 +443,7 @@ fn with(f: impl FnOnce(&mut Events)) {
 }
 
 pub fn init() {
-    CURRENT.with(|current| *current.borrow_mut() = Some(Events::start(None)));
+    CURRENT.with(|current| *current.borrow_mut() = Events::start(None));
 }
 
 pub fn attach(path: &Path) {
@@ -538,10 +548,43 @@ mod tests {
     }
 
     #[test]
+    fn writer_start_failure_disables_hooks_without_changing_receipts() {
+        let dir = temp("spawn-failed");
+        let path = dir.join("events.jsonl");
+        for verb in ["check", "pr"] {
+            for result in [ReceiptResult::Pass, ReceiptResult::Fail] {
+                let events = Events::start_with_spawn(None, |_writer| {
+                    Err(std::io::Error::from(std::io::ErrorKind::WouldBlock))
+                });
+                assert!(events.is_none());
+                CURRENT.with(|current| *current.borrow_mut() = events);
+                stage("preflight", StageState::Running, None, None);
+                run("check-1", verb, "ios");
+                attach(&path);
+                stage("preflight", StageState::Passed, None, None);
+                cmd("native-build", Edge::Start, None, None);
+                cmd("native-build", Edge::End, Some(true), Some(10));
+                core_t0(100);
+                admitted();
+                super::row(&row(3, json!({})));
+                close_running(StageState::Failed, Some("PLAN_STEP_FAILED"), &[]);
+                let receipt = Receipt::new(verb, "check-1", result, "cleaned", "now".into());
+                let expected = receipt.to_json();
+                end(&receipt, if result == ReceiptResult::Pass { 0 } else { 1 });
+                finish();
+                assert_eq!(receipt.to_json(), expected);
+                assert_eq!(receipt.result, result);
+                CURRENT.with(|current| assert!(current.borrow().is_none()));
+                assert!(!path.exists());
+            }
+        }
+    }
+
+    #[test]
     fn envelope_order_and_fields() {
         let dir = temp("order");
         let path = dir.join("events.jsonl");
-        let mut ev = Events::start(None);
+        let mut ev = Events::start(None).unwrap();
         ev.stage("preflight", StageState::Running, None, None);
         ev.run("check-1", "check", "ios");
         ev.attach(&path);
@@ -641,7 +684,7 @@ mod tests {
         let dir = temp("readonly");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
         let path = dir.join("events.jsonl");
-        let mut ev = Events::start(None);
+        let mut ev = Events::start(None).unwrap();
         ev.attach(&path);
         ev.stage("preflight", StageState::Running, None, None);
         ev.row(&row(1, json!({})));
@@ -655,7 +698,7 @@ mod tests {
     fn row_event_is_value_free() {
         let dir = temp("row");
         let path = dir.join("events.jsonl");
-        let mut ev = Events::start(None);
+        let mut ev = Events::start(None).unwrap();
         ev.attach(&path);
         ev.row(&row(
             4,
@@ -705,7 +748,7 @@ mod tests {
     fn end_cleanup_is_allowlisted() {
         let dir = temp("cleanup");
         let path = dir.join("events.jsonl");
-        let mut ev = Events::start(None);
+        let mut ev = Events::start(None).unwrap();
         ev.attach(&path);
         let mut r = receipt(ReceiptResult::Failed);
         r.outcomes
@@ -741,7 +784,7 @@ mod tests {
     fn finish_failed_fails_every_running_stage() {
         let dir = temp("failrunning");
         let path = dir.join("events.jsonl");
-        let mut ev = Events::start(None);
+        let mut ev = Events::start(None).unwrap();
         ev.attach(&path);
         ev.stage("recording", StageState::Running, None, None);
         ev.stage("steps", StageState::Running, None, None);
@@ -773,7 +816,7 @@ mod tests {
     #[test]
     fn a_run_that_ends_before_attach_writes_nothing_and_later_calls_are_ignored() {
         let dir = temp("noattach");
-        let mut ev = Events::start(None);
+        let mut ev = Events::start(None).unwrap();
         ev.stage("preflight", StageState::Running, None, None);
         ev.end(&receipt(ReceiptResult::Failed), 1);
         ev.attach(&dir.join("late.jsonl"));
