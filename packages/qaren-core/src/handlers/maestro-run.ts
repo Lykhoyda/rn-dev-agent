@@ -969,16 +969,8 @@ export function createMaestroRunHandler(
       throw err;
     }
 
-    const semanticActionMeta =
-      capturedAction?.metadata ??
-      args.actionMetadata ??
-      (args.flowPath
-        ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
-        : null);
     const iosProofPlan =
-      platform === 'ios' && replayFactory
-        ? planIosProofDomains(validatedCommands, args.params ?? {})
-        : null;
+      platform === 'ios' ? planIosProofDomains(validatedCommands, args.params ?? {}) : null;
     if (iosProofPlan && !iosProofPlan.ok) {
       return failResult(
         `Refusing iOS proof-domain ambiguity at step ${iosProofPlan.sourceIndex}: ${iosProofPlan.reason}.`,
@@ -986,7 +978,14 @@ export function createMaestroRunHandler(
         { sourceIndex: iosProofPlan.sourceIndex, proofDomains: ['react-tree', 'xctest-native'] },
       );
     }
+    const semanticActionMeta =
+      capturedAction?.metadata ??
+      args.actionMetadata ??
+      (args.flowPath
+        ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
+        : null);
     if (
+      replayFactory &&
       iosProofPlan?.ok &&
       iosProofPlan.segments.some((segment) => segment.domain === 'react-tree')
     ) {
@@ -1143,7 +1142,7 @@ export function createMaestroRunHandler(
           }
 
           proofDomains.push('react-tree');
-          const replayDependencies = replayFactory!(args, controller.signal);
+          const replayDependencies = replayFactory(args, controller.signal);
           if (!replayDependencies) {
             const uniqueProofDomains = [...new Set(proofDomains)];
             const proofDomain =
