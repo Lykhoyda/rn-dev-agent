@@ -1300,3 +1300,30 @@ fn expo_fingerprint_evaluates_config_in_the_ios_build_environment() {
     assert_eq!(fingerprint.env, build.env);
     assert_eq!(fingerprint.timeout_seconds, 120);
 }
+
+#[test]
+fn android_launch_deactivates_the_dev_menu_auto_launch() {
+    let spec = android::am_start_deeplink_spec(
+        Path::new("/sdk/adb"),
+        5038,
+        "127.0.0.1:15555",
+        "rndatest://expo-development-client/?url=x",
+        "com.rndevagent.testapp",
+    );
+    let args: Vec<&str> = spec.args.iter().map(String::as_str).collect();
+    let start = args.iter().position(|a| *a == "start").unwrap();
+    assert_eq!(
+        &args[start..],
+        [
+            "start",
+            "-a",
+            "android.intent.action.VIEW",
+            "--ez",
+            "EXDevMenuDisableAutoLaunch",
+            "true",
+            "-d",
+            "rndatest://expo-development-client/?url=x",
+            "com.rndevagent.testapp",
+        ]
+    );
+}

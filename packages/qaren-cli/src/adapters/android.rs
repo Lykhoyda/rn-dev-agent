@@ -242,6 +242,10 @@ pub fn am_start_deeplink_spec(
             "start",
             "-a",
             "android.intent.action.VIEW",
+            // Expo's dev menu reads this extra and skips opening itself at launch.
+            "--ez",
+            "EXDevMenuDisableAutoLaunch",
+            "true",
             "-d",
             url,
             app_id,
