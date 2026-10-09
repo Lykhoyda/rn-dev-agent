@@ -185,10 +185,29 @@ fn tty_tiny_plain_ci_no_color_and_json_keep_their_output_contracts() {
             }
             _ => {}
         }
-        assert!(command.status().unwrap().success());
-        drop(command);
+        let mut child = command.spawn().unwrap();
         let mut bytes = Vec::new();
-        let _ = master.read_to_end(&mut bytes);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let mut buf = [0; 16384];
+            match master.read(&mut buf) {
+                Ok(n) => bytes.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                other => panic!("PTY read: {other:?}"),
+            }
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success());
+                let _ = master.read_to_end(&mut bytes);
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("{mode}: viewer did not exit");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        drop(command);
         let text = String::from_utf8(bytes).unwrap();
         assert!(
             !text.contains('\u{1b}') && !text.contains("private-canary"),

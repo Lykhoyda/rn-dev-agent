@@ -31,6 +31,11 @@ outcomes; below 32 columns or 18 rows (or when the size is unavailable), the vie
 switches to plain output for the rest of that invocation. Resize is checked on
 each redraw. Plain and JSON output
 retain all rows; the bounded TTY view does not change the stored run or ledger.
+The TTY footer's `now:` label shows the most recently started command without
+an observed end event. Piped and grouped children emit an end event on failed
+spawn or when reaped, including signal termination; sending a signal alone
+does not end the command. Ending it reveals any earlier command still running,
+or clears the label when none remain.
 Preflight and dependencies pass when their work completes; verify runs after
 every build decision, including reuse. Reuse skips prebuild and native compile.
 On iOS, native compile ends before install/launch/ready; on Android, the build
