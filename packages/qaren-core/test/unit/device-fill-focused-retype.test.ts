@@ -116,10 +116,8 @@ test('a field that strips the same characters on both attempts stays unverified,
     ['AB CD-12', '--clear-first'],
     ['AB CD-12', '--clear-first'],
   ]);
-  assert.deepEqual(
-    { held: env.data?.heldLength, typed: env.data?.typedLength, attempts: env.data?.attempts },
-    { held: 6, typed: 8, attempts: 2 },
-  );
+  assert.equal(env.data?.typedLength, 8);
+  assert.deepEqual(env.data?.observedLengths, [6, 6]);
 });
 
 test('a normalizing field that changes characters is not retyped', async () => {

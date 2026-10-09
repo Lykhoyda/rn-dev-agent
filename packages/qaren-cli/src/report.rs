@@ -20,13 +20,15 @@ pub struct LedgerSummary {
     pub recoveries: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_step: Option<u64>,
-    // Passing fills whose final value was not verified; their ledger rows say why.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub unverified_fills: u64,
+    // Passing fills whose final value was not verified, with the ledger row's value-free reason.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unverified_fills: Vec<UnverifiedFill>,
 }
 
-fn is_zero(n: &u64) -> bool {
-    *n == 0
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UnverifiedFill {
+    pub line: u64,
+    pub reason: String,
 }
 
 pub fn summarize(ledger: &Ledger) -> LedgerSummary {
@@ -44,14 +46,17 @@ pub fn summarize(ledger: &Ledger) -> LedgerSummary {
         unverified_fills: ledger
             .steps
             .iter()
-            .filter(|row| {
-                row.outcome == "pass"
-                    && row
-                        .reason
-                        .as_deref()
-                        .is_some_and(|r| r.starts_with("UNVERIFIED_FILL:"))
+            .filter(|row| row.outcome == "pass")
+            .filter_map(|row| {
+                let reason = row.reason.as_deref()?;
+                reason
+                    .starts_with("UNVERIFIED_FILL:")
+                    .then(|| UnverifiedFill {
+                        line: row.line,
+                        reason: reason.to_string(),
+                    })
             })
-            .count() as u64,
+            .collect(),
     }
 }
 
@@ -342,7 +347,18 @@ mod tests {
         }))
         .unwrap();
         let summary = summarize(&ledger);
-        assert_eq!(summary.unverified_fills, 2);
+        let lines: Vec<(u64, &str)> = summary
+            .unverified_fills
+            .iter()
+            .map(|fill| (fill.line, fill.reason.as_str()))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                (3, "UNVERIFIED_FILL: typed with the keyboard; the field kept 6 of 8 characters on 2 attempts"),
+                (6, "UNVERIFIED_FILL: the field's final value could not be read back, so the fill was not verified"),
+            ]
+        );
         let clean: Ledger = serde_json::from_value(serde_json::json!({
             "verdict": "PASS", "path": "walk", "blocks": [], "steps": [row(1, "pass", None)],
             "jev": { "calls": 0, "medianMs": 0 }, "llmTurns": 0, "escapes": 0, "recoveries": 0,

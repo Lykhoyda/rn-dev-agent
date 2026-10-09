@@ -720,12 +720,12 @@ test('U8v: a fallback fill whose read-back matched passes without the unverified
 });
 
 test('U8k: a fill the field kept short on both attempts stays unverified and discloses the lengths', async () => {
-  const fake = app({ type: { ok: true, proven: false, kept: { held: 6, typed: 8, attempts: 2 } } });
+  const fake = app({ type: { ok: true, proven: false, kept: { typed: 8, observed: [6, 6] } } });
   const outcome = await walkBlock(blocks(plan())[0], fake.deps);
   assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
   assert.match(
     outcome.rows[0].reason ?? '',
-    /^UNVERIFIED_FILL: .*; the field kept 6 of 8 characters on 2 attempts$/,
+    /^UNVERIFIED_FILL: .*; the field kept 6 and 6 of 8 characters on 2 attempts$/,
   );
 });
 

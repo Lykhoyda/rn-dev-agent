@@ -188,9 +188,8 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
         const { data, meta } = unwrap<{
           executed?: boolean;
           tapped?: boolean;
-          heldLength?: number;
           typedLength?: number;
-          attempts?: number;
+          observedLengths?: unknown;
         }>(result);
         logActionSettle(meta);
         if (data?.executed === false || data?.tapped === false)
@@ -201,11 +200,13 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
             mutation: 'none',
             error: 'the action did not execute',
           };
+        const observed = data?.observedLengths;
         const kept =
-          typeof data?.heldLength === 'number' &&
-          typeof data.typedLength === 'number' &&
-          typeof data.attempts === 'number'
-            ? { held: data.heldLength, typed: data.typedLength, attempts: data.attempts }
+          typeof data?.typedLength === 'number' &&
+          Array.isArray(observed) &&
+          observed.length > 0 &&
+          observed.every((n) => typeof n === 'number')
+            ? { typed: data.typedLength, observed: observed as number[] }
             : undefined;
         return { ok: true, proven: proven || meta?.verify === 'exact', ...(kept ? { kept } : {}) };
       } catch (error) {

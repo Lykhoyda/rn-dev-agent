@@ -1600,7 +1600,7 @@ export async function performFocusedFill(
     });
   }
   const textEntryRoute = extractTextEntryRoute(native);
-  const unverified = (kept?: { heldLength: number; typedLength: number; attempts: number }) =>
+  const unverified = (kept?: { typedLength: number; observedLengths: number[] }) =>
     warnResult(
       {
         typed: true,
@@ -1665,7 +1665,7 @@ export async function performFocusedFill(
   if (held === undefined) return unverified();
   // The same loss twice is the field's own stripping or maxLength: unverified, with the lengths disclosed.
   return held === first
-    ? unverified({ heldLength: held, typedLength: [...expected].length, attempts: 2 })
+    ? unverified({ typedLength: [...expected].length, observedLengths: [first, held] })
     : lost(held, ' after one clear-and-retype');
 }
 

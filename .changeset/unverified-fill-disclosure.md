@@ -2,4 +2,4 @@
 "qaren": patch
 ---
 
-The receipt counts passing fills left unverified, and a fill the field kept short on both attempts names the kept and typed lengths in its ledger row.
+The receipt lists each passing fill left unverified with its line and reason, and a fill the field kept short on both attempts names the held length per attempt and the typed length.
