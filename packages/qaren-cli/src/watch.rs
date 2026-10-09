@@ -596,7 +596,7 @@ fn follow(
     let record_path = dir.join("run.json");
     let mut record_mtime = None;
     let mut record: Option<RunRecord> = None;
-    let mut ledger_read = false;
+    let mut ledger: Option<crate::core::Ledger> = None;
     loop {
         let mtime = regular_file(&record_path)
             .then(|| {
@@ -630,17 +630,16 @@ fn follow(
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |d| d.as_millis() as u64);
         }
-        if !ledger_read && (state.end.is_some() || state.terminal) {
+        if ledger.is_none() && (state.end.is_some() || state.terminal) {
             let path = dir.join("ledger.json");
             if regular_file(&path) {
-                if let Some(ledger) = std::fs::read(path)
+                ledger = std::fs::read(path)
                     .ok()
-                    .and_then(|b| serde_json::from_slice(&b).ok())
-                {
-                    state.apply_ledger(&ledger);
-                    ledger_read = true;
-                }
+                    .and_then(|b| serde_json::from_slice(&b).ok());
             }
+        }
+        if let Some(ledger) = &ledger {
+            state.apply_ledger(ledger);
         }
         let lines = if args.json {
             vec![snapshot(&state).to_string()]
@@ -1200,6 +1199,105 @@ mod tests {
         );
         assert_eq!(v["steps"][3]["line"], 7);
         assert!(v["steps"][3].get("text").is_none());
+    }
+
+    #[test]
+    fn terminal_ledger_projects_delayed_rows_before_rendering() {
+        for is_plain in [false, true] {
+            let root = temp_runs(if is_plain {
+                "delayed-plain"
+            } else {
+                "delayed-frame"
+            });
+            let dir = root.join("check-1");
+            let events = dir.join("logs/events.jsonl");
+            let initial = [
+                row(1, 3, 1, "retry", "exact", [0, 0, 0]),
+                row(2, 4, 1, "pass", "exact", [0, 0, 0]),
+            ];
+            std::fs::write(&events, initial.join("\n") + "\n").unwrap();
+            std::fs::write(
+                dir.join("ledger.json"),
+                serde_json::to_vec(&ledger()).unwrap(),
+            )
+            .unwrap();
+            let (_, live) = follow_out(&root, args(false, true), true);
+            let live: Value = serde_json::from_str(&live).unwrap();
+            assert!(live["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|s| s.get("text").is_none()));
+            let record: RunRecord = serde_json::from_value(json!({
+                "schema": "qaren-run/1", "run_id": "check-1", "created_at": "2026-10-09T08:15:00Z",
+                "scenario": {"schema": "qaren/1", "name": "test", "platform": "ios",
+                    "candidate": {"project_root": ".", "app_id": "test", "revision": "HEAD"}},
+                "scenario_path": "scenario.yaml", "scenario_sha256": "0",
+                "candidate": {"repo_root": ".", "project_root": ".", "app_id": "test",
+                    "git_sha": "0", "git_dirty": false, "lockfile_sha256": null},
+                "phase": "cleaned", "prepare": null,
+                "terminal": {"verdict": "PASS", "cancelled": false, "ownershipProven": true,
+                    "finalVerification": {"tested": "0", "match": true}}
+            }))
+            .unwrap();
+            std::fs::write(dir.join("run.json"), serde_json::to_vec(&record).unwrap()).unwrap();
+            let mut tick = 0;
+            let mut out = Vec::new();
+            let code = follow(
+                &root,
+                &args(is_plain, false),
+                &mut out,
+                &mut |r| {
+                    assert!(r.unwrap().terminal.is_some());
+                    tick += 1;
+                    let delayed = match tick {
+                        1 => vec![
+                            row(3, 3, 1, "pass", "exact", [0, 0, 0]),
+                            row(4, 4, 1, "pass", "exact", [0, 0, 0]),
+                        ],
+                        2 => vec![line(
+                            5,
+                            1000,
+                            "end",
+                            json!({"result": "pass", "exit": 0, "cleanup": "clean"}),
+                        )],
+                        _ => Vec::new(),
+                    };
+                    if !delayed.is_empty() {
+                        writeln!(
+                            std::fs::OpenOptions::new()
+                                .append(true)
+                                .open(&events)
+                                .unwrap(),
+                            "{}",
+                            delayed.join("\n")
+                        )
+                        .unwrap();
+                    }
+                    assert!(tick <= 3);
+                    true
+                },
+                Duration::ZERO,
+            );
+            assert_eq!(code, 0);
+            assert_eq!(tick, 3);
+            let out = String::from_utf8(out).unwrap();
+            assert!(out.contains("Tap \"Tasks\""), "{out}");
+            assert!(out.contains("Type ••• into \"Email\""), "{out}");
+            assert!(!out.contains("never streamed"));
+            if is_plain {
+                assert_eq!(out.matches("Tap \"Tasks\"").count(), 1);
+                assert_eq!(out.matches("Type ••• into \"Email\"").count(), 1);
+                assert!(!out.contains('\u{1b}'));
+            }
+            let (_, out) = follow_out(&root, args(false, true), true);
+            let snapshot: Value = serde_json::from_str(&out).unwrap();
+            assert_eq!(snapshot["state"], "finished");
+            assert_eq!(snapshot["steps"].as_array().unwrap().len(), 2);
+            assert_eq!(snapshot["steps"][0]["text"], "Tap \"Tasks\"");
+            assert_eq!(snapshot["steps"][1]["text"], "Type ••• into \"Email\"");
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]
