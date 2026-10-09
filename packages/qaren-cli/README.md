@@ -79,11 +79,13 @@ actions, so remove 1.x first and install 2.0 as a new product.
    marketplace clone under `$CODEX_HOME/.tmp/marketplaces/rn-dev-agent/`; confirm
    none remain. If you registered the 1.x MCP server by hand, delete that entry
    from the host's MCP configuration as well.
-2. **Delete the 1.x state you no longer need.** Nothing in 2.0 reads it:
-   `~/.cache/rn-dev-agent/`, `~/.rn-dev-agent/`, `~/.claude/rn-agent/` and each
-   app's `.rn-agent/` directory. Learned actions are not converted; QaReN saves
-   its own blocks as plans pass. Unset any `RN_DEV_AGENT_*` environment
-   variables from your shell profile.
+2. **Archive, then retire the 1.x state.** Nothing in 2.0 reads
+   `~/.cache/rn-dev-agent/`, `~/.rn-dev-agent/`, `~/.claude/rn-agent/` or an
+   app's `.rn-agent/` directory, and learned actions are not converted: QaReN
+   saves its own blocks as plans pass. Archive each app's `.rn-agent/actions/`
+   first if those flows matter to you, since they may be their only copy. Unset
+   any `RN_DEV_AGENT_*` environment variables from your shell profile, and delete
+   the 1.x directories once step 4 passes.
 3. **Install 2.0.** Until a QaReN release asset is published, use the
    [source build](#build). Once it is, add the marketplace, install the plugin
    and run the [runtime installer](#plugin-runtime-installation) from the
@@ -101,14 +103,17 @@ actions, so remove 1.x first and install 2.0 as a new product.
    ```
 
 4. **Verify a clean 2.0 install.**
-   - `codex plugin list` or `claude plugin list` shows `qaren@qaren` and no
-     `rn-dev-agent` entry; `codex plugin marketplace list` or
-     `claude plugin marketplace list` shows no `rn-dev-agent` marketplace.
-   - `bash scripts/ensure-qaren.sh --print-bin` prints a binary path, and that
-     binary's `--version` reports `qaren 2.0.x` (a source build reports the
-     workspace version from `packages/qaren-cli/target/debug/qaren --version`).
-   - In the app, write `.qaren/config.yaml` and run a first plan as in
-     [Check a plan](#check-a-plan); a PASS receipt with a run under
+   - `codex plugin list` or `claude plugin list` shows no `rn-dev-agent` entry,
+     and `codex plugin marketplace list` or `claude plugin marketplace list`
+     shows no `rn-dev-agent` marketplace.
+   - Released plugin: the plugin list shows `qaren@qaren`, and
+     `bash scripts/ensure-qaren.sh --print-bin` prints a binary path whose
+     `--version` reports `qaren 2.0.x`.
+   - Source build: `packages/qaren-cli/target/debug/qaren --version` reports the
+     workspace version; use that path (or `QAREN_RUNTIME`, see [Build](#build))
+     for the next step.
+   - In the app, write `.qaren/config.yaml` and run a first plan with that
+     binary as in [Check a plan](#check-a-plan); a PASS receipt with a run under
      `~/.qaren/runs/` completes the upgrade.
 
 ## Check a plan
@@ -301,13 +306,16 @@ Each walker focus decision logs one value-free `fallback-focus` line.
 QaReN then replaces the focused field's content: the runner selects the whole
 field and types the plan text in one synthesized sequence. When the input is a
 controlled React field, its value is then read back locally and compared, never
-logged: an exact match verifies the fill. A stable read-back holding a strictly
-shorter, in-order part of the text means keystrokes were dropped (seen under host
-load), so the field is cleared and retyped once within the same step budget. A
-match then verifies the fill. A second loss of a different length fails with
-`TEXT_ENTRY_UNVERIFIED` naming only the typed and held lengths. The same loss
-twice is the field's own stripping or length limit and stays unverified, as does
-any other normalized, uncontrolled or unreadable value. A runner
+logged: an exact match verifies the fill. A stable, nonempty read-back holding a
+strictly shorter, in-order part of the text is ambiguous: keystrokes dropped under
+host load and a field that strips characters or limits length look alike. Because
+the retype replaces the whole field with the same text, it is safe either way, so
+the field is cleared and retyped once within the same step budget. A match then
+verifies the fill. A second loss of a different length points to dropped
+keystrokes and fails with `TEXT_ENTRY_UNVERIFIED` naming only the typed and held
+lengths. The same loss twice points to the field's own transformation and stays
+unverified, as does any other normalized, empty, uncontrolled or unreadable
+value; a later plan check still decides whether that value is acceptable. A runner
 must advertise `FILL_EVIDENCE_V1` on both iOS and Android. Session startup routes
 a missing capability through the bounded source-rebuild path instead of
 accepting the released artifact. An active iOS runner missing it refuses focused
