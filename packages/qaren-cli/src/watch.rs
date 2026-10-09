@@ -775,12 +775,16 @@ mod tests {
         crate::events::init();
         crate::events::attach(&path);
         let mut runner = RealRunner::with_log_executable(dir.join("missing-log-helper"));
-        assert!(runner
-            .spawn_piped(
-                &CmdSpec::new("core-walk", "/missing/private-canary", &[], 1),
-                &dir.join("stderr.log"),
-            )
-            .is_err());
+        for grouped in [false, true] {
+            let spec = CmdSpec::new("core-walk", "/missing/private-canary", &[], 1);
+            let log = dir.join("stderr.log");
+            let failed = if grouped {
+                runner.spawn_group(&spec, &log).is_err()
+            } else {
+                runner.spawn_piped(&spec, &log).is_err()
+            };
+            assert!(failed);
+        }
         crate::events::stage("cleanup", crate::events::StageState::Running, None, None);
         crate::events::finish();
         let events: Vec<_> = std::fs::read_to_string(path)
@@ -799,6 +803,37 @@ mod tests {
             assert!(rendered.len() < height as usize);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn grouped_command_completion_clears_current_label_during_cleanup() {
+        let events = [
+            line(1, 0, "cmd", json!({"label": "expo-start", "edge": "start"})),
+            line(2, 1, "cmd", json!({"label": "core-walk", "edge": "start"})),
+            line(
+                3,
+                2,
+                "cmd",
+                json!({"label": "core-walk", "edge": "end", "ok": true, "ms": 1}),
+            ),
+            stage(4, 3, "cleanup", "running", json!({})),
+            line(
+                5,
+                4,
+                "cmd",
+                json!({"label": "expo-start", "edge": "end", "ok": false, "ms": 4}),
+            ),
+        ];
+        assert!(frame(&folded(&events[..2]), 80, 24).contains(&"now: core-walk".to_string()));
+        assert!(frame(&folded(&events[..4]), 80, 24).contains(&"now: expo-start".to_string()));
+        let finished = folded(&events);
+        assert!(finished.commands.is_empty());
+        for (width, height) in [(80, 24), (80, 20), (32, 18)] {
+            let rendered = frame(&finished, width, height);
+            assert!(!rendered.iter().any(|line| line.contains("now:")));
+            assert!(rendered.iter().any(|line| line.contains("Cleanup")));
+            assert!(rendered.len() < height as usize);
+        }
     }
 
     fn line(seq: u64, at: u64, event: &str, payload: Value) -> String {

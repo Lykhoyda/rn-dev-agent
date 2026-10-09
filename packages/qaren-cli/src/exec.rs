@@ -349,7 +349,7 @@ pub struct RealRunner {
     logs: Vec<log::LogDrain>,
     caller: Option<u32>,
     // Only the spawning process can reap a group leader; dropping the Child leaves a zombie.
-    children: std::collections::HashMap<i32, std::process::Child>,
+    children: std::collections::HashMap<i32, (std::process::Child, String, Instant)>,
 }
 
 impl RealRunner {
@@ -444,44 +444,67 @@ impl Runner for RealRunner {
     ) -> std::io::Result<Spawned> {
         use std::os::unix::process::CommandExt;
         self.executed += 1;
+        let started = Instant::now();
         crate::progress::started(&spec.label, true);
         crate::events::cmd(&spec.label, crate::events::Edge::Start, None, None);
-        let (drain, output, error) = log::LogDrain::spawn_paired(&self.log_executable, log_path)?;
-        let mut cmd = Command::new(&spec.program);
-        cmd.args(&spec.args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(OwnedFd::from(output)))
-            .stderr(Stdio::from(OwnedFd::from(error)))
-            .process_group(0);
-        if let Some(dir) = &spec.cwd {
-            cmd.current_dir(dir);
+        let result = (|| {
+            let (drain, output, error) =
+                log::LogDrain::spawn_paired(&self.log_executable, log_path)?;
+            let mut cmd = Command::new(&spec.program);
+            cmd.args(&spec.args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(OwnedFd::from(output)))
+                .stderr(Stdio::from(OwnedFd::from(error)))
+                .process_group(0);
+            if let Some(dir) = &spec.cwd {
+                cmd.current_dir(dir);
+            }
+            for (k, v) in &spec.env {
+                cmd.env(k, v);
+            }
+            for k in &spec.unset {
+                cmd.env_remove(k);
+            }
+            cmd.env_remove("TYPESAFE_API_KEY");
+            if let Some(reason) = self.cancellation() {
+                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, reason));
+            }
+            let child = cmd.spawn()?;
+            let pid = child.id() as i32;
+            self.logs.push(drain);
+            self.children
+                .insert(pid, (child, spec.label.clone(), started));
+            Ok(Spawned { pid, pgid: pid })
+        })();
+        if result.is_err() {
+            crate::progress::finished(&spec.label, false);
+            crate::events::cmd(
+                &spec.label,
+                crate::events::Edge::End,
+                Some(false),
+                Some(started.elapsed().as_millis() as u64),
+            );
         }
-        for (k, v) in &spec.env {
-            cmd.env(k, v);
-        }
-        for k in &spec.unset {
-            cmd.env_remove(k);
-        }
-        cmd.env_remove("TYPESAFE_API_KEY");
-        if let Some(reason) = self.cancellation() {
-            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, reason));
-        }
-        let child = cmd.spawn()?;
-        let pid = child.id() as i32;
-        self.logs.push(drain);
-        self.children.insert(pid, child);
-        Ok(Spawned { pid, pgid: pid })
+        result
     }
 
     fn try_reap(&mut self, pid: i32) -> bool {
-        let reaped = self
+        let status = self
             .children
             .get_mut(&pid)
-            .is_some_and(|child| matches!(child.try_wait(), Ok(Some(_))));
-        if reaped {
-            self.children.remove(&pid);
+            .and_then(|(child, _, _)| child.try_wait().ok().flatten());
+        if let Some(status) = status {
+            let (_, label, started) = self.children.remove(&pid).expect("owned child");
+            crate::progress::finished(&label, status.success());
+            crate::events::cmd(
+                &label,
+                crate::events::Edge::End,
+                Some(status.success()),
+                Some(started.elapsed().as_millis() as u64),
+            );
+            return true;
         }
-        reaped
+        false
     }
 
     fn spawn_piped_unchecked(
