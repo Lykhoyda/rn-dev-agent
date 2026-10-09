@@ -1120,6 +1120,7 @@ function extractErrorCode(result: ToolResult): string | undefined {
 const NATIVE_VERIFY_VERDICTS = new Set([
   'exact',
   'mismatch',
+  'case-normalized',
   'unreadable',
   'secure-masked',
   'target-lost',
@@ -1432,6 +1433,13 @@ export async function performExactFill(
       },
     });
   }
+  if (verification.evidence === 'case-normalized') {
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      'device_fill typed the value and the field changed only its letter case; not verified, not retrying.',
+      { mutation: mutationSeen, pathsTried, verification },
+    );
+  }
   return fillFailure(
     'TEXT_ENTRY_UNVERIFIED',
     verification.observedMismatch
@@ -1506,6 +1514,16 @@ async function awaitReactInputValue(
     last.value === previous.value
     ? { verdict: 'mismatch', observed: last.value }
     : { verdict: 'unreadable' };
+}
+
+// Same length and equal ignoring letter case, but not identical: the app normalized case only.
+function caseOnly(observed: string | undefined, expected: string): boolean {
+  return (
+    observed !== undefined &&
+    observed !== expected &&
+    [...observed].length === [...expected].length &&
+    observed.toLowerCase() === expected.toLowerCase()
+  );
 }
 
 // The observed length when the field holds a nonempty, strictly shorter in-order subset of what was typed.
@@ -1600,7 +1618,9 @@ export async function performFocusedFill(
     });
   }
   const textEntryRoute = extractTextEntryRoute(native);
-  const unverified = (kept?: { typedLength: number; observedLengths: number[] }) =>
+  const unverified = (
+    kept?: { typedLength: number; observedLengths: number[] } | { caseNormalizedChars: number },
+  ) =>
     warnResult(
       {
         typed: true,
@@ -1625,6 +1645,11 @@ export async function performFocusedFill(
     });
   const verification = await readBack();
   if (verification.verdict === 'exact') return verified();
+  const caseNormalized =
+    verification.verdict === 'mismatch' && caseOnly(verification.observed, expected)
+      ? { caseNormalizedChars: [...expected].length }
+      : undefined;
+  if (caseNormalized) return unverified(caseNormalized);
   if (!args.skipFinalValidation) {
     if (verification.verdict === 'mismatch') {
       return fillFailure(

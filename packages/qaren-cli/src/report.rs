@@ -31,6 +31,12 @@ pub struct UnverifiedFill {
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept: Option<crate::core::KeptCounts>,
+    #[serde(
+        default,
+        rename = "caseNormalized",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub case_normalized: Option<crate::core::CaseNormalized>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
@@ -59,7 +65,8 @@ pub fn summarize(ledger: &Ledger) -> LedgerSummary {
                         line: row.line,
                         reason: reason.to_string(),
                         kept: row.kept.clone(),
-                        detail: row.kept.as_ref().and_then(|kept| kept.detail()),
+                        case_normalized: row.case_normalized.clone(),
+                        detail: row.fill_detail(),
                     })
             })
             .collect(),
@@ -134,9 +141,7 @@ fn row_line_with(row: &Row, prose: &dyn Fn(&str) -> String) -> String {
         .map(|r| format!(" — {}", prose(r)))
         .unwrap_or_default();
     let kept = row
-        .kept
-        .as_ref()
-        .and_then(|kept| kept.detail())
+        .fill_detail()
         .map(|detail| format!("; {detail}"))
         .unwrap_or_default();
     format!("- {mark} line {}{text}{retry}{reason}{kept}\n", row.line)
@@ -411,5 +416,29 @@ mod tests {
             line.ends_with("; field kept 10 of 13 chars on 2 attempts\n"),
             "{line}"
         );
+    }
+
+    #[test]
+    fn case_normalized_count_reaches_the_receipt_and_report() {
+        let reason =
+            "UNVERIFIED_FILL: the field changed only the letter case, so the fill was not verified";
+        let ledger: Ledger = serde_json::from_value(serde_json::json!({
+            "verdict": "PASS", "path": "walk", "blocks": [],
+            "steps": [{
+                "block": "b", "line": 4, "attempt": 1, "kind": "step", "resolvedBy": "exact",
+                "t": 0, "outcome": "pass", "reason": reason,
+                "caseNormalized": { "chars": 12 },
+            }],
+            "jev": { "calls": 0, "medianMs": 0 }, "llmTurns": 0, "escapes": 0, "recoveries": 0,
+        }))
+        .unwrap();
+        let fill = &summarize(&ledger).unverified_fills[0];
+        assert_eq!(
+            fill.detail.as_deref(),
+            Some("field case-normalized 12 chars")
+        );
+        let json = serde_json::to_value(fill).unwrap();
+        assert_eq!(json["caseNormalized"]["chars"], 12);
+        assert!(row_line(&ledger.steps[0]).ends_with("; field case-normalized 12 chars\n"));
     }
 }

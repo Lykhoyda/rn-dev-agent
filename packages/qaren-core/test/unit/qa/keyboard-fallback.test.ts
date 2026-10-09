@@ -1910,6 +1910,46 @@ for (const evidence of ['masked', 'unavailable', 'mismatch'] as const) {
   });
 }
 
+test('I6: a strict fill the app only re-cased passes unverified with its character count as a number', async () => {
+  const input = element('@name', 'Name', {
+    kind: 'input',
+    nativeKind: 'input',
+    testID: 'name_field',
+  });
+  const fake = app({ initial: [input, submit], typeFocused: false });
+  let fills = 0;
+  fake.deps.fill = async (_ref, _text, context) => {
+    context.authorize();
+    fills += 1;
+    fake.deps.captureScreen = async () => screenOf([input, submit], true);
+    return {
+      ok: false,
+      proven: false,
+      mutation: 'observed',
+      error:
+        'TEXT_ENTRY_UNVERIFIED: device_fill typed the value and the field changed only its letter case',
+      evidence: 'case-normalized',
+    };
+  };
+  const result = await walkBlock(blocks(plan('Ada Lovelace', 'name_field', ''))[0], fake.deps);
+  assert.equal(fills, 1);
+  assert.equal(result.block.outcome, 'pass', JSON.stringify(result.failure));
+  assert.match(
+    result.rows[0].reason ?? '',
+    /^UNVERIFIED_FILL: the field changed only the letter case/,
+  );
+  assert.deepEqual(result.rows[0].caseNormalized, { chars: 12 });
+  assert.equal(JSON.stringify(result.rows).includes('Lovelace'), false);
+});
+
+test('I7: a fallback fill the app only re-cased passes unverified with its character count', async () => {
+  const fake = app({ type: { ok: true, proven: false, caseNormalized: { chars: 15 } } });
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+  assert.match(outcome.rows[0].reason ?? '', /; the field changed only the letter case$/);
+  assert.deepEqual(outcome.rows[0].caseNormalized, { chars: 15 });
+});
+
 const mutations = (log: string[]) =>
   log.filter((entry) => /^(press|type|fill|scroll) /.test(entry));
 

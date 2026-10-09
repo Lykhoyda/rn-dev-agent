@@ -204,6 +204,7 @@ mod tests {
             timing: None,
             selector: None,
             kept: None,
+            case_normalized: None,
         }
     }
 

@@ -893,3 +893,16 @@ test('gh-581: extractTypingMeta surfaces typingBurst + keyboardWaitMs from the r
   assert.equal(extractTypingMeta(okResult({ typed: true })), null);
   assert.equal(extractTypingMeta(failResult('nope')), null);
 });
+
+test('a native read-back differing only by letter case is unverified with case evidence, not a mismatch', async () => {
+  const { result, calls } = await withFillSeam(
+    { verify: () => okResult({ verifyVerdict: 'case-normalized', verifyStable: true }) },
+    () => performExactFill({ ref: '@e3', text: 'Hello Ada' }, null, NATIVE_ONLY),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
+  assert.equal(env.meta.verification.evidence, 'case-normalized');
+  assert.equal(env.meta.mutation, 'observed');
+  assert.doesNotMatch(JSON.stringify(env), /Hello|Ada/);
+  assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 1, 'no retype');
+});

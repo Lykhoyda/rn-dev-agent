@@ -282,6 +282,26 @@ final class TextInputTargetTests: XCTestCase {
     )
   }
 
+  // A field that only changed letter case is reported as such, never as exact and never as a mismatch.
+  func testCaseOnlyDifferenceIsCaseNormalized() {
+    let classify = { (raw: String, placeholder: String?) in
+      TextInputTarget.classifyValue(expected: "Hello Ada", rawValue: raw, placeholder: placeholder, isSecure: false)
+    }
+    XCTAssertEqual(classify("HELLO ADA", nil), .caseNormalized)
+    XCTAssertEqual(classify("hello ada", nil), .caseNormalized)
+    XCTAssertEqual(classify("HELLO ADX", nil), .mismatch)
+    XCTAssertEqual(classify("HELLO AD", nil), .mismatch)
+    XCTAssertEqual(classify("HELLO ADA", "HELLO ADA"), .mismatch)
+    XCTAssertEqual(
+      TextInputTarget.classifyValue(expected: "stra\u{00DF}e", rawValue: "STRASSE", placeholder: nil, isSecure: false),
+      .mismatch
+    )
+    XCTAssertEqual(
+      TextInputTarget.classifyValue(expected: "Hello", rawValue: "HELLO", placeholder: nil, isSecure: true),
+      .secureMasked
+    )
+  }
+
   func testSecureFieldsNeverProveContent() {
     XCTAssertEqual(
       TextInputTarget.classifyValue(expected: "value-a", rawValue: "•••••••", placeholder: nil, isSecure: true),

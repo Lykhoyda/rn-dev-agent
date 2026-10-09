@@ -77,7 +77,16 @@ actions, so remove 1.x first and install 2.0 as a new product.
    `[plugins."rn-dev-agent@rn-dev-agent"]` to `$CODEX_HOME/config.toml` (default
    `~/.codex`), the plugin under `$CODEX_HOME/plugins/cache/rn-dev-agent/` and the
    marketplace clone under `$CODEX_HOME/.tmp/marketplaces/rn-dev-agent/`; confirm
-   none remain. If you registered the 1.x MCP server by hand, delete that entry
+   none remain. Removal can leave the empty
+   `$CODEX_HOME/plugins/cache/rn-dev-agent/` folder behind; remove it only while
+   it is empty:
+
+   ```sh
+   rmdir "${CODEX_HOME:-$HOME/.codex}/plugins/cache/rn-dev-agent"
+   ```
+
+   If `rmdir` reports the folder is not empty, stop and inspect it rather than
+   deleting it. If you registered the 1.x MCP server by hand, delete that entry
    from the host's MCP configuration as well.
 2. **Archive, then retire the 1.x state.** Nothing in 2.0 reads
    `~/.cache/rn-dev-agent/`, `~/.rn-dev-agent/`, `~/.claude/rn-agent/` or an
@@ -109,9 +118,11 @@ actions, so remove 1.x first and install 2.0 as a new product.
      shows no `rn-dev-agent` marketplace.
    - Released plugin: the plugin list shows `qaren@qaren`, and
      `bash scripts/ensure-qaren.sh --print-bin` prints a binary path whose
-     `--version` reports `qaren 2.0.x`.
+     `--version` reports `qaren 2.0.0` or later.
    - Source build: `<checkout>/packages/qaren-cli/target/debug/qaren --version`
-     reports the workspace version. From the app directory, run that absolute
+     reports the checkout's workspace version. The version moves to 2.0.0 only
+     when the release is cut, so a `develop` build still shows the pre-release
+     version (for example `qaren 1.0.13`). From the app directory, run that absolute
      path with `QAREN_RUNTIME=<checkout>/packages/qaren-core/dist` (see
      [Build](#build)).
    - In the app, write `.qaren/config.yaml` and run a first plan with that
@@ -251,7 +262,14 @@ verifies a fill. A masked secure read-back or an unreadable one records a
 passing row with reason `UNVERIFIED_FILL`, never a verified pass; an empty or
 placeholder read-back of a non-empty fill on any field, a secure mask whose
 length matches neither the character nor the UTF-16 count, or any other
-mismatch fails without retry. A screen change alone never verifies a fill. During discovery, a quoted
+mismatch fails without retry. A read-back that differs from the typed text only
+by letter case (same length, equal ignoring case) means the app re-cased the
+value: it records a passing `UNVERIFIED_FILL` row, never a verified fill and never
+a refusal, with `caseNormalized: { chars }` beside the reason and a receipt and
+report detail such as `field case-normalized 12 chars`. The iOS runner makes that
+comparison itself (verdict `case-normalized`), so the value never leaves it;
+keyboard fallback applies the same rule to its React read-back. A different
+letter is still a mismatch. A screen change alone never verifies a fill. During discovery, a quoted
 iOS fill can use keyboard fallback when no observable native input resolves, or
 strict binding refuses `NO_TEXT_INPUT_TARGET` before any text mutation for a
 non-native-input target. Phrase fills and stored replay selectors do not use

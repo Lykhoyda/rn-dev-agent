@@ -111,6 +111,7 @@ enum TextInputTarget {
   enum VerifyVerdict: String {
     case exact
     case mismatch
+    case caseNormalized = "case-normalized"
     case unreadable
     case secureMasked = "secure-masked"
     case targetLost = "target-lost"
@@ -150,6 +151,12 @@ enum TextInputTarget {
     // A placeholder read cannot prove a typed value, even one equal to the placeholder.
     if rawValue == expected {
       return placeholderEqual ? .mismatch : .exact
+    }
+    // The app changed only letter case (same length, case-insensitively equal); a different letter is a mismatch.
+    if !placeholderEqual,
+       rawValue.count == expected.count,
+       rawValue.lowercased() == expected.lowercased() {
+      return .caseNormalized
     }
     return .mismatch
   }

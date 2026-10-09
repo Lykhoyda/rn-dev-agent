@@ -198,6 +198,25 @@ pub struct Row {
     pub selector: Option<Selector>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept: Option<KeptCounts>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_normalized: Option<CaseNormalized>,
+}
+
+// Characters typed into a field that changed only their letter case.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CaseNormalized {
+    pub chars: u64,
+}
+
+impl Row {
+    // The value-free count line for an unverified fill, rendered from numbers the masking never saw.
+    pub fn fill_detail(&self) -> Option<String> {
+        self.kept.as_ref().and_then(KeptCounts::detail).or_else(|| {
+            self.case_normalized
+                .as_ref()
+                .map(|n| format!("field case-normalized {} chars", n.chars))
+        })
+    }
 }
 
 // Character counts of an unverified fill, carried as numbers because masking may hide digits in the reason.

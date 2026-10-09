@@ -120,10 +120,19 @@ test('a field that strips the same characters on both attempts stays unverified,
   assert.deepEqual(env.data?.observedLengths, [6, 6]);
 });
 
-test('a normalizing field that changes characters is not retyped', async () => {
+test('a field that only changed letter case is not retyped and discloses the character count', async () => {
   const { env, dispatched } = await run({ valueAfter: () => TEXT.toLowerCase() });
   assert.equal(env.ok, true, JSON.stringify(env));
   assert.equal(env.data?.verified, false);
+  assert.equal(env.data?.caseNormalizedChars, 13);
+  assert.deepEqual(dispatched, [REPLACE]);
+});
+
+test('a field that changed letters stays unverified without a case disclosure', async () => {
+  const { env, dispatched } = await run({ valueAfter: () => 'SYNTHETICWRAX' });
+  assert.equal(env.ok, true, JSON.stringify(env));
+  assert.equal(env.data?.verified, false);
+  assert.equal(env.data?.caseNormalizedChars, undefined);
   assert.deepEqual(dispatched, [REPLACE]);
 });
 

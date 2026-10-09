@@ -190,6 +190,7 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
           tapped?: boolean;
           typedLength?: number;
           observedLengths?: unknown;
+          caseNormalizedChars?: unknown;
         }>(result);
         logActionSettle(meta);
         if (data?.executed === false || data?.tapped === false)
@@ -208,7 +209,13 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
           observed.every((n) => typeof n === 'number')
             ? { typed: data.typedLength, observed: observed as number[] }
             : undefined;
-        return { ok: true, proven: proven || meta?.verify === 'exact', ...(kept ? { kept } : {}) };
+        const chars = data?.caseNormalizedChars;
+        return {
+          ok: true,
+          proven: proven || meta?.verify === 'exact',
+          ...(kept ? { kept } : {}),
+          ...(typeof chars === 'number' ? { caseNormalized: { chars } } : {}),
+        };
       } catch (error) {
         logActionSettle(error instanceof HandlerError ? error.meta : undefined);
         const { code, message } = describeError(error);
