@@ -196,6 +196,32 @@ pub struct Row {
     pub timing: Option<RowTiming>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selector: Option<Selector>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<KeptCounts>,
+}
+
+// Character counts of an unverified fill, carried as numbers because masking may hide digits in the reason.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KeptCounts {
+    pub typed: u64,
+    pub observed: Vec<u64>,
+}
+
+impl KeptCounts {
+    pub fn detail(&self) -> Option<String> {
+        let first = *self.observed.first()?;
+        let held = if self.observed.iter().all(|&n| n == first) {
+            first.to_string()
+        } else {
+            let all: Vec<String> = self.observed.iter().map(u64::to_string).collect();
+            all.join(" and ")
+        };
+        Some(format!(
+            "field kept {held} of {} chars on {} attempts",
+            self.typed,
+            self.observed.len()
+        ))
+    }
 }
 
 impl Row {

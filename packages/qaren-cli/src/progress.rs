@@ -203,6 +203,7 @@ mod tests {
             reason: None,
             timing: None,
             selector: None,
+            kept: None,
         }
     }
 

@@ -767,10 +767,13 @@ export async function walkBlock(
   };
   const focusedReason = (quoted: string) =>
     `UNVERIFIED_FILL: typed with the keyboard into the field React reports focused ("${quoted}"); its final value was not validated`;
+  // Counts travel as numbers beside the reason: masking a private value may mask any digit in the text.
   const keptNote = (entry: ActResult) =>
-    entry.kept
-      ? `; the field kept ${entry.kept.observed.join(' and ')} of ${entry.kept.typed} characters on ${entry.kept.observed.length} attempts`
-      : '';
+    entry.kept ? '; the field kept the same shorter value on every attempt' : '';
+  const keptCounts = (entry: ActResult) =>
+    entry.kept && !entry.proven
+      ? { kept: { typed: entry.kept.typed, observed: [...entry.kept.observed] } }
+      : {};
   // Best effort: the field is not an observable native input, so only the tap and the keyboard prove anything.
   const keyboardFallback = async (
     item: Item & { kind: 'fill' },
@@ -899,6 +902,7 @@ export async function walkBlock(
       ...base(item, attempt),
       ref: again.element.ref,
       outcome: 'pass',
+      ...keptCounts(entry),
       ...(entry.proven
         ? {}
         : {
@@ -958,6 +962,7 @@ export async function walkBlock(
     emit({
       ...base(item, attempt),
       outcome: 'pass',
+      ...keptCounts(entry),
       ...(entry.proven ? {} : { reason: redact(focusedReason(quoted) + keptNote(entry)) }),
     });
     return 'typed';

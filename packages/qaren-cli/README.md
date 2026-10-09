@@ -316,12 +316,15 @@ the field is cleared and retyped once within the same step budget. A match then
 verifies the fill. A second loss of a different length points to dropped
 keystrokes and fails with `TEXT_ENTRY_UNVERIFIED` naming only the typed and held
 lengths. The same loss twice points to the field's own transformation and stays
-unverified, with its row reason ending `the field kept N and N of M characters
-on 2 attempts` (the held length per attempt, then the typed length); any other
-normalized, empty, uncontrolled or unreadable value also stays unverified. A
-later plan check still decides whether the value is acceptable. The receipt's
-`ledger.unverified_fills` lists each passing fill left unverified with its line
-and value-free reason, omitted when empty. A runner
+unverified. Its row reason ends `the field kept the same shorter value on every
+attempt`, and the counts travel beside it as numbers, `kept: { typed, observed }`
+with one held count per attempt, because masking a private value may hide any
+digit in the reason text. Any other normalized, empty, uncontrolled or unreadable
+value also stays unverified. A later plan check still decides whether the value
+is acceptable. The receipt's `ledger.unverified_fills` lists each passing fill
+left unverified with its line and value-free reason, plus `kept` and a `detail`
+such as `field kept 10 of 13 chars on 2 attempts` when counts exist; the report
+line shows the same detail. The list is omitted when empty. A runner
 must advertise `FILL_EVIDENCE_V1` on both iOS and Android. Session startup routes
 a missing capability through the bounded source-rebuild path instead of
 accepting the released artifact. An active iOS runner missing it refuses focused
