@@ -303,7 +303,7 @@ function scrollTo(element: Element): { scroll: 'up' | 'down' } {
   };
 }
 
-// A tap or focus at the frame centre lands elsewhere when that centre is past the clip or under the keyboard.
+// Keyboard-owned targets bypass keyboard coverage, never the trusted viewport clip.
 export function centreCovered(element: Element, screen: Screen): boolean {
   const frame = elementFrame(element);
   if (!frame) return false;

@@ -71,7 +71,7 @@ impl Progress {
         } else {
             String::new()
         };
-        // Streamed rows are value-free; plan text reaches only the projected report.
+        // Streamed rows are value-free; plan text stays out of live progress.
         self.commit(&format!(
             "  {glyph} {:>3}  ({}{retry})",
             row.line, row.resolved_by
