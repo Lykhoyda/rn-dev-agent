@@ -14,7 +14,7 @@ fn timing() -> serde_json::Value {
 
 #[test]
 fn row_timing_and_ledger_speed_round_trip_through_the_ledger() {
-    let raw = ledger(
+    let mut raw = ledger(
         json!([{"block":"qa","line":1,"attempt":1,"kind":"step","resolvedBy":"jev","t":120,
             "outcome":"pass","timing":timing()}]),
         json!({"stepMedianMs":120,"stepP95Ms":120,"walkMs":120,"steps":1,"passed":1,"failed":0}),
@@ -22,6 +22,20 @@ fn row_timing_and_ledger_speed_round_trip_through_the_ledger() {
     let parsed: Ledger = serde_json::from_value(raw.clone()).unwrap();
     assert_eq!(parsed.steps[0].timing.as_ref().unwrap().post_capture_ms, 30);
     assert_eq!(parsed.speed.as_ref().unwrap().step_p95_ms, Some(120));
+    assert_eq!(serde_json::to_value(&parsed).unwrap(), raw);
+    assert_eq!(parsed.steps[0].operation_id, 0);
+    assert_eq!(
+        serde_json::to_value(&parsed.steps[0]).unwrap(),
+        raw["steps"][0]
+    );
+
+    raw["steps"][0]["operationId"] = json!(7);
+    let parsed: Ledger = serde_json::from_value(raw.clone()).unwrap();
+    assert_eq!(parsed.steps[0].operation_id, 7);
+    assert_eq!(
+        serde_json::to_value(&parsed.steps[0]).unwrap(),
+        raw["steps"][0]
+    );
     assert_eq!(serde_json::to_value(&parsed).unwrap(), raw);
 }
 

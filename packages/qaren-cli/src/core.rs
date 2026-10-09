@@ -174,7 +174,7 @@ impl TryFrom<String> for JevDiagnostic {
 #[serde(rename_all = "camelCase")]
 pub struct Row {
     pub block: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub operation_id: u64,
     pub line: u64,
     pub attempt: u64,
@@ -202,6 +202,10 @@ pub struct Row {
     pub kept: Option<KeptCounts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub case_normalized: Option<CaseNormalized>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 // Characters typed into a field that changed only their letter case.
