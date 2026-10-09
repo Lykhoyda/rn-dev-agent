@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile } from '../domain/cancellation.js';
 import { promisify } from 'node:util';
 
 export interface AndroidExternalRunnerWarning {
@@ -104,6 +104,7 @@ export function isIosExternalRunnerProcessLine(line: string): boolean {
 const RN_FAST_RUNNER_RE = /RnFastRunner/i;
 
 const IOS_PS_OPTIONS = { timeout: 2_000, maxBuffer: 1024 * 1024, encoding: 'utf8' as const };
+const MAX_ADMISSION_CANDIDATES = 64;
 
 function readIosProcesses(
   execFileImpl: typeof execFile,
@@ -142,6 +143,52 @@ function isIosStrictRunnerProcessLine(line: string): boolean {
   );
 }
 
+const SIMULATOR_CONTAINER = /\/CoreSimulator\/Devices\/([^/]+)\//;
+
+// The simulators a driver targets, read only from the kernel's executable path and exact argv;
+// process-table text flattens argument boundaries and can never scope a driver.
+function observedDriverDevices(
+  value: unknown,
+  line: string,
+  scanStartedAt: number,
+): string[] | undefined {
+  const executable = observedExecutable(value, line, scanStartedAt);
+  if (!executable) return undefined;
+  const inside = SIMULATOR_CONTAINER.exec(executable);
+  if (inside) return isIosSimulatorUdid(inside[1]) ? [inside[1]] : undefined;
+  const argv = (value as { argv?: unknown }).argv;
+  if (!Array.isArray(argv) || argv.length === 0 || !argv.every((arg) => typeof arg === 'string'))
+    return undefined;
+  const name = executable.slice(executable.lastIndexOf('/') + 1);
+  let devices: Array<string | undefined>;
+  if (name === 'xcodebuild') {
+    devices = argv.flatMap((arg, i) =>
+      arg === '-destination'
+        ? [
+            (argv[i + 1] as string | undefined)
+              ?.split(',')
+              .find((part) => part.startsWith('id='))
+              ?.slice(3),
+          ]
+        : [],
+    );
+  } else if (
+    name === 'maestro' ||
+    (name === 'java' && argv.some((arg) => /^maestro\.cli\.[\w.$]+$/i.test(arg)))
+  ) {
+    devices = argv.flatMap((arg, i) =>
+      arg === '--device'
+        ? String(argv[i + 1] ?? '').split(',')
+        : arg.startsWith('--device=')
+          ? arg.slice('--device='.length).split(',')
+          : [],
+    );
+  } else return undefined;
+  return devices.length > 0 && devices.every((d) => d !== undefined && isIosSimulatorUdid(d))
+    ? (devices as string[])
+    : undefined;
+}
+
 function isUnscopedMcpControl(line: string): boolean {
   const command = line.replace(/^\s*\d+\s+/, '').trimEnd();
   return (
@@ -150,22 +197,65 @@ function isUnscopedMcpControl(line: string): boolean {
   );
 }
 
-function hasUnresolvedIosPath(command: string): boolean {
-  if (command.length > 16_384) return true;
+// The kernel inspector embeds this same specification; neither predicate establishes device scope.
+export const IOS_PATH_PATTERN_SPEC = String.raw`{
+  "exact": ["maestro", "maestro-driver-iosuitests-runner", "webdriveragent", "webdriveragentrunner", "webdriveragent-runner", "webdriveragentrunner-runner", "xctrunner", "xcodebuild"],
+  "prefix": "rnfastrunner",
+  "wordExtension": "maestro.",
+  "suffixes": ["uitestsrunner", "uitests-runner"],
+  "containers": ["uitestsrunner.app", "uitests-runner.app", "xctrunner.app"],
+  "java": "java",
+  "javaEntrypoint": "maestro.cli."
+}`;
+const iosPathPatterns: {
+  exact: string[];
+  prefix: string;
+  wordExtension: string;
+  suffixes: string[];
+  containers: string[];
+  java: string;
+  javaEntrypoint: string;
+} = JSON.parse(IOS_PATH_PATTERN_SPEC);
+
+export function hasUnresolvedIosPathPattern(command: string): boolean {
+  command = command.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
   const components = command.split('/').slice(1);
-  const hasMaestroJavaEntrypoint = MAESTRO_JAVA_ENTRYPOINT_RE.test(command);
-  // Unescaped path fragments justify unknown, never an executable identity or busy verdict.
+  const hasMaestroJavaEntrypoint = command
+    .split(/\s/)
+    .some(
+      (word) =>
+        word.startsWith(iosPathPatterns.javaEntrypoint) &&
+        /^[\w.$]+$/.test(word.slice(iosPathPatterns.javaEntrypoint.length)),
+    );
   for (const [index, component] of components.entries()) {
     if (
-      /^(?:maestro(?:-driver-iosUITests-Runner|\.\w+)?|WebDriverAgent(?:Runner)?(?:-Runner)?|RnFastRunner\S*|XCTRunner|xcodebuild|\S*UITests-?Runner)(?=$|[\s"'])/i.test(
-        component,
-      ) ||
-      (index < components.length - 1 && /(?:UITests-?Runner|XCTRunner)\.app/i.test(component)) ||
-      (hasMaestroJavaEntrypoint && /^java(?=$|[\s"'])/i.test(component))
+      component.startsWith(iosPathPatterns.prefix) ||
+      (index < components.length - 1 &&
+        iosPathPatterns.containers.some((part) => component.includes(part)))
     )
       return true;
+    const extensionLength = component.startsWith(iosPathPatterns.wordExtension)
+      ? (component.slice(iosPathPatterns.wordExtension.length).match(/^\w+/)?.[0].length ?? 0)
+      : 0;
+    for (let end = 0; end <= component.length; end++) {
+      if (end !== component.length && !/[\s"']/.test(component[end])) continue;
+      if (
+        iosPathPatterns.exact.some((name) => end === name.length && component.startsWith(name)) ||
+        (extensionLength > 0 && end === iosPathPatterns.wordExtension.length + extensionLength) ||
+        iosPathPatterns.suffixes.some((suffix) => component.endsWith(suffix, end)) ||
+        (hasMaestroJavaEntrypoint &&
+          end === iosPathPatterns.java.length &&
+          component.startsWith(iosPathPatterns.java))
+      )
+        return true;
+      if (/\s/.test(component[end] ?? '')) break;
+    }
   }
   return false;
+}
+
+function hasUnresolvedIosPath(command: string): boolean {
+  return command.length > 16_384 || hasUnresolvedIosPathPattern(command);
 }
 
 function leadingShellWord(command: string): { word: string; rest: string } | null {
@@ -210,7 +300,12 @@ function hasUnresolvedIosExecutablePath(line: string): boolean {
   return hasUnresolvedIosPath(command) || hasUnresolvedIosShellScript(command);
 }
 
-export type ProcessIdentityObserver = (pid: number, timeoutMs: number) => Promise<unknown>;
+export type ProcessIdentityObserver = (
+  pid: number,
+  timeoutMs: number,
+  withArgv?: boolean,
+  inspection?: 'ios-paths',
+) => Promise<unknown>;
 
 function observedExecutable(value: unknown, line: string, scanStartedAt: number): string | null {
   if (!value || typeof value !== 'object') return null;
@@ -256,12 +351,54 @@ function identityRulesOutDriver(value: unknown, line: string, scanStartedAt: num
   );
 }
 
+function completeInspectionRulesOutPath(
+  value: unknown,
+  line: string,
+  scanStartedAt: number,
+): boolean {
+  const command = line.replace(/^\s*\d+\s+/, '');
+  const executable = observedExecutable(value, line, scanStartedAt);
+  if (
+    !executable ||
+    command.length <= 16_384 ||
+    SHELL_WRAPPERS.test(executable.slice(executable.lastIndexOf('/') + 1)) ||
+    /UITests-?Runner$/i.test(executable) ||
+    SHELL_WRAPPERS.test(executableBasename(command)) ||
+    hasUnresolvedIosPathPattern(executable) ||
+    hasUnresolvedIosPathPattern(command) ||
+    hasUnresolvedIosShellScript(command)
+  )
+    return false;
+  const inspection = (value as { iosPathInspection?: unknown }).iosPathInspection;
+  return (
+    !!inspection &&
+    typeof inspection === 'object' &&
+    (inspection as Record<string, unknown>).status === 'complete' &&
+    (inspection as Record<string, unknown>).unresolvedPath === 'absent'
+  );
+}
+
 function identityProvesMcpControl(value: unknown, line: string, scanStartedAt: number): boolean {
   const executable = observedExecutable(value, line, scanStartedAt);
+  if (!executable || executable.slice(executable.lastIndexOf('/') + 1) !== 'java') return false;
+  const argv = (value as { argv?: unknown }).argv;
   return (
-    executable?.slice(executable.lastIndexOf('/') + 1) === 'java' &&
     !hasUnresolvedIosPath(executable) &&
-    line.replace(/^\s*\d+\s+/, '').startsWith(`${executable} `)
+    Array.isArray(argv) &&
+    argv.length === 5 &&
+    argv.every(
+      (arg) =>
+        typeof arg === 'string' &&
+        arg.length > 0 &&
+        // eslint-disable-next-line no-control-regex -- Attested arguments must be complete text fields.
+        !/[\x00-\x1f\x7f\ufffd]/.test(arg),
+    ) &&
+    Buffer.byteLength(argv.join(' ')) <= 16_384 &&
+    argv[1] === '-classpath' &&
+    argv[3] === 'maestro.cli.AppKt' &&
+    argv[4] === 'mcp' &&
+    // Kernel identity binds the real executable; argv preserves the launcher's symlink spelling.
+    line.replace(/^\s*\d+\s+/, '').trimEnd() === argv.join(' ')
   );
 }
 
@@ -298,30 +435,59 @@ export async function probeIosExternalRunnerStrict(
     const drivers = lines.filter(
       (line) => !isUnscopedMcpControl(line) && isIosStrictRunnerProcessLine(line),
     );
-    if (drivers.length === 0) {
-      const unresolved = lines.filter(
-        (line) => isUnscopedMcpControl(line) || hasUnresolvedIosExecutablePath(line),
-      );
-      if (!unresolved.length) return 'clear';
-      if (!observeIdentity || unresolved.length > 16) return 'unknown';
-      for (const line of unresolved) {
-        const remaining = Math.floor(deadline - performance.now());
-        if (remaining <= 0) return 'unknown';
-        const pid = Number(/^\s*(\d+)/.exec(line)![1]);
-        const observation = await observeIdentity(pid, Math.min(1_000, remaining));
-        if (
-          performance.now() >= deadline ||
-          !(isUnscopedMcpControl(line)
-            ? identityProvesMcpControl(observation, line, scanStartedAt)
-            : identityRulesOutDriver(observation, line, scanStartedAt))
-        )
-          return 'unknown';
-      }
-      return 'clear';
-    }
+    const driverLines = new Set(drivers);
+    const unresolved = lines.filter(
+      (line) =>
+        !driverLines.has(line) &&
+        (isUnscopedMcpControl(line) || hasUnresolvedIosExecutablePath(line)),
+    );
+    if (
+      drivers.length + unresolved.length > MAX_ADMISSION_CANDIDATES ||
+      performance.now() >= deadline
+    )
+      return 'unknown';
     const target = new RegExp(`(?:^|[^a-z0-9-])${udid}(?=$|[^a-z0-9-])`, 'i');
-    // Unmatched drivers remain unknown, even if another UUID appears in their arguments.
-    return drivers.some((line) => target.test(line)) ? 'busy' : 'unknown';
+    if (drivers.some((line) => target.test(line))) return 'busy';
+    if (drivers.length > 0 && !observeIdentity) return 'unknown';
+    for (const line of drivers) {
+      const remaining = Math.floor(deadline - performance.now());
+      if (remaining <= 0) return 'unknown';
+      const pid = Number(/^\s*(\d+)/.exec(line)![1]);
+      const observation = await observeIdentity!(pid, Math.min(1_000, remaining), true);
+      if (performance.now() >= deadline) return 'unknown';
+      if (identityProvesMcpControl(observation, line, scanStartedAt)) continue;
+      const devices = observedDriverDevices(observation, line, scanStartedAt);
+      if (performance.now() >= deadline || !devices) return 'unknown';
+      if (devices.some((device) => device.toLowerCase() === udid.toLowerCase())) return 'busy';
+    }
+    if (performance.now() >= deadline) return 'unknown';
+    if (!unresolved.length) return 'clear';
+    if (!observeIdentity) return 'unknown';
+    for (const line of unresolved) {
+      const remaining = Math.floor(deadline - performance.now());
+      if (remaining <= 0) return 'unknown';
+      const pid = Number(/^\s*(\d+)/.exec(line)![1]);
+      const inspectPaths =
+        !isUnscopedMcpControl(line) && line.replace(/^\s*\d+\s+/, '').length > 16_384;
+      const observation = await observeIdentity(
+        pid,
+        Math.min(1_000, remaining),
+        (!inspectPaths && MAESTRO_JAVA_ENTRYPOINT_RE.test(line)) || undefined,
+        inspectPaths ? 'ios-paths' : undefined,
+      );
+      if (
+        performance.now() >= deadline ||
+        !(
+          identityProvesMcpControl(observation, line, scanStartedAt) ||
+          (!isUnscopedMcpControl(line) &&
+            (identityRulesOutDriver(observation, line, scanStartedAt) ||
+              (inspectPaths && completeInspectionRulesOutPath(observation, line, scanStartedAt))))
+        ) ||
+        performance.now() >= deadline
+      )
+        return 'unknown';
+    }
+    return 'clear';
   } catch {
     return 'unknown';
   }

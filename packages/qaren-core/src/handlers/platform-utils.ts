@@ -1,4 +1,4 @@
-import { execFile as execFileCb } from 'node:child_process';
+import { execFile as execFileCb } from '../domain/cancellation.js';
 import { promisify } from 'node:util';
 import { getActiveSession } from '../agent-device-wrapper.js';
 

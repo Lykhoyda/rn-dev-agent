@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { execFile } from 'node:child_process';
+import { execFile } from '../domain/cancellation.js';
 import { isAbsolute } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -16,11 +16,21 @@ export interface FreshInstallPreflightResult {
   status: IosStrictRunnerStatus;
 }
 
-async function observeProcess(executable: string, pid: number, timeout: number): Promise<unknown> {
+async function observeProcess(
+  executable: string,
+  pid: number,
+  timeout: number,
+  withArgv = false,
+  inspection?: 'ios-paths',
+): Promise<unknown> {
   try {
     const { stdout, stderr } = await promisify(execFile)(
       executable,
-      ['--internal-process-observation', String(pid)],
+      [
+        '--internal-process-observation',
+        String(pid),
+        ...(withArgv ? ['--argv'] : inspection === 'ios-paths' ? ['--inspect-ios-paths'] : []),
+      ],
       { timeout, maxBuffer: 32_768, encoding: 'utf8' },
     );
     return stderr === '' ? JSON.parse(stdout) : null;
@@ -57,7 +67,10 @@ export async function freshInstallPreflight(args: string[]): Promise<FreshInstal
     status: await probeIosExternalRunnerStrict(
       undefined,
       deviceId,
-      observer ? (pid, timeout) => observeProcess(observer, pid, timeout) : undefined,
+      observer
+        ? (pid, timeout, withArgv, inspection) =>
+            observeProcess(observer, pid, timeout, withArgv, inspection)
+        : undefined,
     ),
   };
 }

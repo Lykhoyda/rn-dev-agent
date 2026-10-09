@@ -1,11 +1,15 @@
 import { createServer } from 'node:net';
+import { interruptible, throwIfCancelled } from '../domain/cancellation.js';
 
 export function isPortFree(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const srv = createServer();
-    srv.once('error', () => resolve(false));
-    srv.listen({ port, host: '127.0.0.1' }, () => srv.close(() => resolve(true)));
-  });
+  return interruptible(
+    () =>
+      new Promise((resolve) => {
+        const srv = createServer();
+        srv.once('error', () => resolve(false));
+        srv.listen({ port, host: '127.0.0.1' }, () => srv.close(() => resolve(true)));
+      }),
+  );
 }
 
 /**
@@ -17,23 +21,31 @@ export function isPortFree(port: number): Promise<boolean> {
  * the window entirely by self-assigning (port 0).
  */
 export function findFreePort(preferred: number): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const tryListen = (port: number, fallbackToAny: boolean): void => {
-      const srv = createServer();
-      srv.once('error', (err: NodeJS.ErrnoException) => {
-        if (fallbackToAny && err.code === 'EADDRINUSE') tryListen(0, false);
-        else reject(err);
-      });
-      srv.listen({ port, host: '127.0.0.1' }, () => {
-        const addr = srv.address();
-        const chosen = typeof addr === 'object' && addr ? addr.port : 0;
-        if (!chosen) {
-          srv.close(() => reject(new Error('findFreePort: OS returned port 0')));
-          return;
-        }
-        srv.close(() => resolve(chosen));
-      });
-    };
-    tryListen(preferred, true);
-  });
+  return interruptible(
+    (signal) =>
+      new Promise((resolve, reject) => {
+        const tryListen = (port: number, fallbackToAny: boolean): void => {
+          try {
+            throwIfCancelled(signal);
+            const srv = createServer();
+            srv.once('error', (err: NodeJS.ErrnoException) => {
+              if (fallbackToAny && err.code === 'EADDRINUSE') tryListen(0, false);
+              else reject(err);
+            });
+            srv.listen({ port, host: '127.0.0.1' }, () => {
+              const addr = srv.address();
+              const chosen = typeof addr === 'object' && addr ? addr.port : 0;
+              if (!chosen) {
+                srv.close(() => reject(new Error('findFreePort: OS returned port 0')));
+                return;
+              }
+              srv.close(() => resolve(chosen));
+            });
+          } catch (error) {
+            reject(error);
+          }
+        };
+        tryListen(preferred, true);
+      }),
+  );
 }

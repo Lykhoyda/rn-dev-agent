@@ -17,7 +17,10 @@ export interface EvalCase {
     | { kind: 'target'; ref: string }
     | { kind: 'target'; scroll: 'up' | 'down' }
     | { kind: 'target'; refuse: string }
-    | { kind: 'check'; verdict: 'pass' | 'fail' | 'unsure' };
+    | { kind: 'check'; verdict: 'pass' | 'fail' | 'unsure' }
+    | { kind: 'check'; refuse: string }
+    | { kind: 'visibility'; verdict: 'present' | 'absent' | 'pending' | 'unsure' }
+    | { kind: 'visibility'; refuse: string };
 }
 
 export async function evaluateCase(
@@ -32,6 +35,20 @@ export async function evaluateCase(
   if (!item || parsed.blocks?.length !== 1 || parsed.blocks[0].items.length !== 1)
     return { pass: false, actual: 'PLAN_UNPARSEABLE' };
   const typed = [...(input.typedValues ?? []), ...(item.kind === 'fill' ? [item.text] : [])];
+  if (item.kind === 'wait' || item.kind === 'scroll') {
+    let seen = await decideScreen(input.screen, judge, undefined, item, typed);
+    const verdict = () =>
+      seen.visibility && 'verdict' in seen.visibility ? seen.visibility.verdict : undefined;
+    for (let i = 0; verdict() === 'unsure' && i < CHECK.reasks; i++)
+      seen = await decideScreen(input.screen, judge, undefined, item, typed);
+    const actual = {
+      kind: 'visibility',
+      ...(seen.visibility && 'refuse' in seen.visibility
+        ? { refuse: seen.visibility.refuse }
+        : { verdict: verdict() }),
+    };
+    return { pass: JSON.stringify(actual) === JSON.stringify(input.expected), actual };
+  }
   let decision = await decideScreen(
     input.screen,
     judge,
@@ -49,7 +66,12 @@ export async function evaluateCase(
     );
   const actual =
     input.expected.kind === 'check'
-      ? { kind: 'check', verdict: decision.check }
+      ? {
+          kind: 'check',
+          ...(typeof decision.check === 'object'
+            ? { refuse: decision.check.refuse }
+            : { verdict: decision.check }),
+        }
       : decision.target && 'ref' in decision.target
         ? { kind: 'target', ref: decision.target.ref }
         : decision.target && 'scroll' in decision.target

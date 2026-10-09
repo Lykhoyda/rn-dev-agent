@@ -1,11 +1,24 @@
 import { DEVICE_LEASE_REQUIRED, leaseFromEnvironment } from './lease-env.js';
-import { execFile, spawn } from 'node:child_process';
+import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
+import { measureTiming, observeTiming, type TimingContext } from '../qa/timing.js';
+import { QA_READ_ONLY_CAPABILITY, checkQaNativeOutcome } from './qa-native-policy.js';
+import {
+  execFile,
+  spawn,
+  cancellableFetch,
+  sleep as cancellableSleep,
+  interruptible,
+  cancellationSignal,
+  throwIfCancelled,
+  isAbort,
+} from '../domain/cancellation.js';
 import { promisify } from 'node:util';
 import { isIosSimulatorUdid } from './external-runner-detect.js';
 import type { ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import {
+  copyFileSync,
   existsSync,
   readdirSync,
   mkdirSync,
@@ -23,6 +36,8 @@ import {
   clearRefMap,
   buildSnapshotVerdict,
   getCachedMetadata,
+  getCachedSignature,
+  refreshRef,
   getFreshRefTarget,
   type FlatNode,
   type RefMapUpdateOutcome,
@@ -53,6 +68,7 @@ import {
   decideRecovery,
   generateCommandId,
   isAmbiguousTransportFailure,
+  isMutatingCommand,
   parseStatusProbeReply,
 } from './transport-recovery.js';
 import {
@@ -167,6 +183,22 @@ export function createReadySignalParser(): ReadySignalParser {
 // --- Singleton state ---
 
 let runnerProcess: ChildProcess | null = null;
+let runnerDriverObserver: ((pid: number) => void) | undefined;
+
+// QaReN records each spawned runner driver; the driver leads its own process group.
+export function observeRunnerDrivers(observer: ((pid: number) => void) | undefined): void {
+  runnerDriverObserver = observer;
+}
+
+function signalDriver(child: ChildProcess, signal: NodeJS.Signals): void {
+  try {
+    if (child.pid !== undefined) process.kill(-child.pid, signal);
+    return;
+  } catch {
+    // The group is gone or was never formed; the leader alone remains addressable.
+  }
+  child.kill(signal);
+}
 // GH #629: monotonic count of launch xcodebuild children actually spawned.
 // ensureFastRunner swallows startFastRunner errors, so this is the only way a
 // caller can tell a READY-timeout apart from a failure before the launch step.
@@ -692,7 +724,7 @@ function runXcodebuildToExit(args: string[], timeoutMs: number): Promise<void> {
     });
     child.on('error', (err) => {
       clearTimeout(timer);
-      reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
+      reject(isAbort(err) ? err : new Error(`Failed to spawn xcodebuild: ${err.message}`));
     });
     child.on('exit', (code) => {
       clearTimeout(timer);
@@ -720,10 +752,9 @@ export async function startFastRunner(
   deviceId: string,
   bundleId: string,
   port?: number,
-  // GH #382 (Codex P1): the #418 stale-command recovery forces a source rebuild
-  // by bypassing the prebuilt artifact tier.
   opts: { forceLocalBuild?: boolean; attachOnly?: boolean } = {},
 ): Promise<FastRunnerState> {
+  throwIfCancelled();
   adoptPersistedFastRunnerState(deviceId);
   if (shouldReuseRunner(runnerState, deviceId)) return runnerState!;
   if (runnerState) await stopFastRunner(deviceId);
@@ -736,17 +767,13 @@ export async function startFastRunner(
     throw new Error(`RnFastRunner.xcodeproj not found at ${projectPath}.`);
   }
 
-  // GH #382: resolve a prebuilt artifact (verified cache → release download)
-  // before the local build. When prebuilt, derivedDataPath points at the cached
-  // DerivedData layout so hasBuiltTestProduct is true and the plan skips
-  // build-for-testing — no xcodebuild build on the user's machine. Fail-open:
-  // build-local returns the local DerivedData path (unchanged cold path).
   const artifacts = await resolveIosRunnerArtifacts(
     getPluginVersion(),
     derivedDataPathForRunner(),
     undefined,
     opts.forceLocalBuild,
   );
+  throwIfCancelled();
   const derivedDataPath = artifacts.derivedDataPath;
   if (artifacts.note) pendingFastRunnerArtifactNote = artifacts.note;
   const plan = resolveRunnerStartPlan({
@@ -769,6 +796,7 @@ export async function startFastRunner(
   const launch = plan[plan.length - 1];
   const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
 
+  const signal = cancellationSignal();
   return new Promise((resolve, reject) => {
     const child = spawn('xcodebuild', launch.args, {
       env: {
@@ -782,9 +810,11 @@ export async function startFastRunner(
         ...runnerTestFaultEnv,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
     });
 
     runnerProcess = child;
+    if (child.pid !== undefined) runnerDriverObserver?.(child.pid);
     runnerLaunchCount += 1;
     runnerOutputTail = '';
     lastRunnerCommand = null;
@@ -792,13 +822,26 @@ export async function startFastRunner(
     const parser = createReadySignalParser();
     let resolved = false;
     const timer = setTimeout(() => {
-      child.kill('SIGTERM');
+      if (resolved) return;
+      resolved = true;
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      signalDriver(child, 'SIGTERM');
       reject(new Error(`Fast runner did not become ready within ${READY_TIMEOUT_MS / 1000}s`));
     }, READY_TIMEOUT_MS);
 
     const handleChunk = (chunk: string, stream: 'stdout' | 'stderr'): void => {
       appendRunnerOutput(stream, chunk);
       if (resolved) return;
+      if (signal?.aborted) {
+        resolved = true;
+        clearTimeout(timer);
+        if (runnerProcess === child) clearStateFile();
+        reject(signal.reason);
+        return;
+      }
       const result = parser.feed(chunk);
       if (!result) return;
       resolved = true;
@@ -822,7 +865,7 @@ export async function startFastRunner(
       };
       const processBirth = readProcessBirth(child.pid!);
       if (!processBirth) {
-        child.kill('SIGTERM');
+        signalDriver(child, 'SIGTERM');
         reject(
           new Error(
             'PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven',
@@ -850,14 +893,16 @@ export async function startFastRunner(
     child.stderr!.on('data', (chunk: string) => handleChunk(chunk, 'stderr'));
 
     child.on('error', (err) => {
+      resolved = true;
       clearTimeout(timer);
       if (runnerProcess === child) {
         clearStateFile();
       }
-      reject(new Error(`Failed to spawn xcodebuild: ${err.message}`));
+      reject(isAbort(err) ? err : new Error(`Failed to spawn xcodebuild: ${err.message}`));
     });
 
     child.on('exit', (code, signal) => {
+      resolved = true;
       lastRunnerPostMortem = {
         available: true,
         provenance: 'spawned',
@@ -949,6 +994,49 @@ export async function terminateRunnerHost(deviceId?: string): Promise<void> {
   });
 }
 
+const RUNNER_TEST_BUNDLE_ID = `${RUNNER_HOST_BUNDLE_ID}.uitests.xctrunner`;
+const runnerDataContainers = new Map<string, string>();
+
+export async function captureRunnerScreenshot(
+  deviceId: string,
+  appId: string,
+  destination: string,
+): Promise<boolean> {
+  if (!isIosSimulatorUdid(deviceId)) return false;
+  try {
+    const result = await runIOS({
+      command: 'screenshot',
+      bundleId: appId,
+      deviceId,
+      qaReadOnly: true,
+    });
+    if (result.isError) return false;
+    const relative = (JSON.parse(result.content[0].text) as { data?: { message?: unknown } }).data
+      ?.message;
+    if (typeof relative !== 'string' || !/^tmp\/screenshot-\d+\.png$/.test(relative)) return false;
+    let container = runnerDataContainers.get(deviceId);
+    if (!container) {
+      const { stdout } = await promisify(execFile)(
+        'xcrun',
+        ['simctl', 'get_app_container', deviceId, RUNNER_TEST_BUNDLE_ID, 'data'],
+        { timeout: 10_000 },
+      );
+      container = stdout.trim();
+      runnerDataContainers.set(deviceId, container);
+    }
+    const source = join(container, relative);
+    try {
+      copyFileSync(source, destination);
+    } finally {
+      rmSync(source, { force: true });
+    }
+    return statSync(destination).size > 0;
+  } catch {
+    runnerDataContainers.delete(deviceId);
+    return false;
+  }
+}
+
 export function clearFastRunnerAfterVerifiedStop(binding: Record<string, unknown>): void {
   const expected = {
     pid: Number(binding.pid),
@@ -1011,7 +1099,10 @@ export async function fastSwipe(
   y2: number,
   durationMs?: number,
   bundleId?: string,
+  qaContext?: QaDispatchContext,
+  deviceId?: string,
 ): Promise<FastRunnerResponse> {
+  if (qaContext) await requireQaFastRunner(qaContext, bundleId, deviceId);
   const body: Record<string, unknown> = { command: 'drag', x: x1, y: y1, x2, y2 };
   if (durationMs != null) body.durationMs = durationMs;
   // Without appBundleId the runner's executeOnMain clears its target and
@@ -1019,8 +1110,32 @@ export async function fastSwipe(
   // blank screen (ok:true, zero movement) and steals foreground from the
   // target (#387 Phase B device-proven).
   if (bundleId) body.appBundleId = bundleId;
-  const resp = await postCommand(body);
-  return resp as unknown as FastRunnerResponse;
+  const authority = captureFastRunnerCommandAuthority();
+  try {
+    const resp = await postCommand(body, qaContext);
+    checkQaNativeOutcome(
+      qaContext,
+      resp.error?.code,
+      resp.data,
+      resp.error?.reason,
+      resp.error?.mutation,
+    );
+    if (qaContext && !resp.ok && resp.error?.code === 'RUNNER_TIMEOUT') {
+      await containRunnerTimeout('drag', resp.error.message ?? 'RUNNER_TIMEOUT', authority);
+      qaContext.refuse('ACTION_OUTCOME_UNCERTAIN');
+    }
+    return resp as unknown as FastRunnerResponse;
+  } catch (error) {
+    throwIfCancelled();
+    if (error instanceof QaDispatchError) throw error;
+    if (qaContext) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.startsWith('RUNNER_TIMEOUT'))
+        await containRunnerTimeout('drag', message, authority);
+      qaContext.refuse('ACTION_OUTCOME_UNCERTAIN');
+    }
+    throw error;
+  }
 }
 
 // --- Health check ---
@@ -1031,8 +1146,7 @@ export async function fastHealthCheck(): Promise<boolean> {
     const result = await defaultHttpProbe(runnerState.port, 2000);
     return result.ok && result.status === 200 && result.bodyOk === true;
   } catch {
-    // Preserve the original contract: any network/abort/parse error → false.
-    // (The probe helper throws on fetch errors; M7 review caught this regression.)
+    throwIfCancelled();
     return false;
   }
 }
@@ -1162,7 +1276,7 @@ async function defaultHttpProbe(
     // probe like every other client call — production default is globalThis.fetch.
     const capability =
       capabilityOverride ?? (runnerState?.port === port ? runnerState.capability : undefined);
-    const res = await fetchImpl(url, {
+    const res = await cancellableFetch(fetchImpl, url, {
       signal: controller.signal,
       headers: capability ? { authorization: `Bearer ${capability}` } : {},
     });
@@ -1205,6 +1319,7 @@ async function defaultHttpProbe(
       if (typeof body.deviceId === 'string') deviceId = body.deviceId;
       if (typeof body.appId === 'string') appId = body.appId;
     } catch {
+      throwIfCancelled();
       bodyOk = false;
     }
     return {
@@ -1379,6 +1494,7 @@ export async function probeFastRunnerLivenessDetailed(
       ...(res.capabilities !== undefined ? { capabilities: res.capabilities } : {}),
     };
   } catch {
+    throwIfCancelled();
     lastKnownCapabilities = [];
     return { liveness: 'stale', staleReason: 'health' };
   }
@@ -1393,7 +1509,7 @@ export async function probeFastRunnerLiveness(
 export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
   const getState = deps.getState ?? (() => runnerState);
   const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
-  const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const sleep = deps.sleep ?? cancellableSleep;
   const clearState = deps.clearState ?? clearStateFileIfMatches;
   const graceMs = deps.graceMs ?? 500;
 
@@ -1445,12 +1561,24 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
     ? new Promise<void>((resolve) => spawnedChild.once('exit', () => resolve()))
     : null;
 
+  // This core's own driver leads its group, so its helpers go with it.
+  const signalRunner = (signal: NodeJS.Signals): void => {
+    if (spawnedChild) {
+      try {
+        sendSignal(-state.pid, signal);
+        return;
+      } catch {
+        // No such group: fall back to the leader alone.
+      }
+    }
+    sendSignal(state.pid, signal);
+  };
   try {
-    sendSignal(state.pid, 'SIGTERM');
+    signalRunner('SIGTERM');
   } catch {
     /* already dead */
   }
-  await reapDelay(sleep, graceMs, deps.signal);
+  await interruptible(() => reapDelay(sleep, graceMs, deps.signal));
   const afterTerm = probeExpected();
   if (afterTerm === 'unknown') {
     throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
@@ -1460,7 +1588,7 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
     return;
   }
   try {
-    sendSignal(state.pid, 'SIGKILL');
+    signalRunner('SIGKILL');
   } catch {
     /* race: died between checks */
   }
@@ -1486,6 +1614,10 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
 // subsequent press/fill via runAgentDevice('press @e3') can resolve refs.
 
 export interface RunIOSArgs {
+  qaTiming?: TimingContext;
+  qaContext?: QaDispatchContext;
+  qaReadOnly?: boolean;
+  deviceId?: string;
   command:
     | 'snapshot'
     | 'tap'
@@ -1519,6 +1651,7 @@ export interface RunIOSArgs {
   direction?: 'up' | 'down' | 'left' | 'right';
   scale?: number;
   platformPresence?: boolean;
+  presenceBudgetMs?: number;
   interactiveOnly?: boolean;
   compact?: boolean;
   depth?: number;
@@ -1550,6 +1683,7 @@ export interface RunIOSArgs {
   focusWaitMs?: number;
   /** Type into the first responder instead of binding an input. */
   focused?: boolean;
+  _focusedProof?: () => Promise<boolean>;
   operationToken?: string;
   /** Independent CDP/helper readback; never serialized onto the runner wire. */
   _verifyExactReadback?: (
@@ -1571,10 +1705,12 @@ interface RunnerSnapshotNode {
   depth?: number;
   type?: string;
   label?: string;
+  value?: string;
   identifier?: string;
   rect?: { x: number; y: number; width: number; height: number };
   enabled?: boolean;
   hittable?: boolean;
+  selected?: boolean;
 }
 
 let fetchImpl: typeof fetch = globalThis.fetch;
@@ -1605,6 +1741,9 @@ async function sendCommandOnce(
   port: number,
   body: { command?: unknown; commandId?: string },
   timeoutMs: number,
+  qaContext?: QaDispatchContext,
+  qaTiming?: TimingContext,
+  focusedProof?: () => Promise<boolean>,
 ): Promise<RunnerResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -1613,16 +1752,34 @@ async function sendCommandOnce(
     if (!capability) {
       throw new Error('RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable');
     }
-    const resp = await fetchImpl(`http://127.0.0.1:${port}/command`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${capability}`,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
+    const serialized = JSON.stringify(body);
+    const now = qaTiming?.now ?? (() => performance.now());
+    const resp = await measureTiming(qaTiming?.observe, now, 'native-transport', async () => {
+      if (focusedProof && !(await focusedProof())) return undefined;
+      if (isMutatingCommand(body.command)) qaContext?.authorize();
+      return cancellableFetch(fetchImpl, `http://127.0.0.1:${port}/command`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${capability}`,
+        },
+        body: serialized,
+        signal: controller.signal,
+      });
     });
-    const parsed = (await resp.json()) as RunnerResponse;
+    if (!resp)
+      return {
+        ok: false,
+        error: {
+          code: 'NO_TEXT_INPUT_TARGET',
+          message: 'The intended input is not focused; no text was entered.',
+          mutation: 'none',
+          reason: 'focus-proof-refused',
+        },
+      };
+    const parsed = (await measureTiming(qaTiming?.observe, now, 'native-decode', () =>
+      resp.json(),
+    )) as RunnerResponse;
     // GH #383: defense-in-depth — the liveness gate already reaps a
     // protocol-mismatched runner, but a runner that flipped protocol mid-session
     // (hot-swapped binary) is caught here on the /command reply's `v` stamp.
@@ -1636,6 +1793,7 @@ async function sendCommandOnce(
     }
     return parsed;
   } catch (err) {
+    throwIfCancelled();
     if ((err as { name?: string } | undefined)?.name === 'AbortError') {
       throw new Error(
         `RUNNER_TIMEOUT: rn-fast-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms — listener may be wedged`,
@@ -1657,15 +1815,19 @@ const STATUS_PROBE_TIMEOUT_MS = 2000;
 async function probeCommandStatus(
   port: number,
   commandId: string,
+  qaTiming?: TimingContext,
 ): Promise<ReturnType<typeof parseStatusProbeReply>> {
   try {
     const resp = await sendCommandOnce(
       port,
       { command: 'status', commandId },
       STATUS_PROBE_TIMEOUT_MS,
+      undefined,
+      qaTiming,
     );
     return parseStatusProbeReply(resp, commandId);
   } catch {
+    throwIfCancelled();
     return null;
   }
 }
@@ -1676,10 +1838,15 @@ async function probeCommandStatus(
 // unresolvable probe falls through to the existing invalidation path.
 // Recovery info travels in the return value so callers that don't surface
 // meta (fastSwipe, settle probes) discard it with the response.
-async function postCommandWithRecovery(body: {
-  command?: unknown;
-  [key: string]: unknown;
-}): Promise<{ resp: RunnerResponse; recovery?: TransportRecovery }> {
+async function postCommandWithRecovery(
+  body: {
+    command?: unknown;
+    [key: string]: unknown;
+  },
+  qaContext?: QaDispatchContext,
+  qaTiming?: TimingContext,
+  focusedProof?: () => Promise<boolean>,
+): Promise<{ resp: RunnerResponse; recovery?: TransportRecovery }> {
   if (runnerPoisoned && body.command !== 'status') {
     throw new Error(
       'RUNNER_TIMEOUT: rn-fast-runner is poisoned after a non-cancellable main-thread timeout; command refused before dispatch while the runner is reaped',
@@ -1695,11 +1862,25 @@ async function postCommandWithRecovery(body: {
   lastRunnerCommand = typeof body.command === 'string' ? body.command : String(body.command);
   const timeoutMs = commandTimeoutMs(body.command);
   try {
-    return { resp: await sendCommandOnce(state.port, { ...body, commandId }, timeoutMs) };
+    return {
+      resp: await sendCommandOnce(
+        state.port,
+        { ...body, commandId },
+        timeoutMs,
+        qaContext,
+        qaTiming,
+        focusedProof,
+      ),
+    };
   } catch (err) {
+    throwIfCancelled();
+    if (err instanceof QaDispatchError) throw err;
     const message = err instanceof Error ? err.message : String(err);
     if (!isAmbiguousTransportFailure(message)) throw err;
-    const decision = decideRecovery(await probeCommandStatus(state.port, commandId), body.command);
+    const decision = decideRecovery(
+      await probeCommandStatus(state.port, commandId, qaTiming),
+      body.command,
+    );
     if (decision.action === 'return-recovered') {
       return {
         resp: decision.response as RunnerResponse,
@@ -1711,6 +1892,9 @@ async function postCommandWithRecovery(body: {
         state.port,
         { ...body, commandId: generateCommandId() },
         timeoutMs,
+        qaContext,
+        qaTiming,
+        focusedProof,
       );
       return { resp: resent, recovery: { commandId, outcome: 'resent' } };
     }
@@ -1718,11 +1902,14 @@ async function postCommandWithRecovery(body: {
   }
 }
 
-async function postCommand(body: {
-  command?: unknown;
-  [key: string]: unknown;
-}): Promise<RunnerResponse> {
-  return (await postCommandWithRecovery(body)).resp;
+async function postCommand(
+  body: {
+    command?: unknown;
+    [key: string]: unknown;
+  },
+  qaContext?: QaDispatchContext,
+): Promise<RunnerResponse> {
+  return (await postCommandWithRecovery(body, qaContext)).resp;
 }
 
 /**
@@ -1896,61 +2083,34 @@ export async function verifyTypeResultAfterSettle(
       const health = await probeFastRunnerLivenessDetailed();
       if (health.liveness === 'alive') return result;
       if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
-        await new Promise((resolve) => setTimeout(resolve, POST_SETTLE_HEALTH_RETRY_MS));
+        await cancellableSleep(POST_SETTLE_HEALTH_RETRY_MS);
       }
     }
   }
-  return containTypeTimeout(args, authorityBefore, 'post-settle-runner-authority-lost');
-}
-
-function sameRefIdentity(
-  before: ReturnType<typeof getCachedMetadata>,
-  after: ReturnType<typeof getCachedMetadata>,
-): boolean {
-  if (!before || !after) return false;
-  if (before.identifier !== undefined || after.identifier !== undefined) {
-    return before.identifier === after.identifier && before.type === after.type;
-  }
-  if (before.label !== undefined || after.label !== undefined) {
-    return before.label === after.label && before.type === after.type;
-  }
-  // Type alone is not an identity: a positional id can rebind to a different
-  // element of the same type once the keyboard leaves the tree.
-  return false;
-}
-
-// Same rule refreshRef enforces: a positional ref may only be re-served when
-// its identity resolves to exactly ONE node in the new tree. Equality at the
-// same key is not enough — sibling rows sharing a testID satisfy it after the
-// index set shifts.
-function countIdentityMatches(
-  before: NonNullable<ReturnType<typeof getCachedMetadata>>,
-  nodes: FlatNode[],
-): number {
-  let matches = 0;
-  for (const node of nodes) {
-    const candidate = {
-      type: node.type,
-      ...(node.label !== undefined ? { label: node.label } : {}),
-      ...(node.identifier !== undefined ? { identifier: node.identifier } : {}),
-    };
-    if (sameRefIdentity(before, candidate)) matches++;
-  }
-  return matches;
+  const contained = await containTypeTimeout(
+    args,
+    authorityBefore,
+    'post-settle-runner-authority-lost',
+  );
+  args.qaContext?.invalidate();
+  return contained;
 }
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
-function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
-  const out: FlatNode[] = [];
+function mapRunnerNodesToFlat(
+  nodes: RunnerSnapshotNode[],
+  privateValues = false,
+): (FlatNode & { value?: string })[] {
+  const out: (FlatNode & { value?: string })[] = [];
   const nativeIndices = new Set<number>();
   let synthCounter = 0;
   for (const n of nodes) {
     if (!n.rect) continue;
     const refId = n.index !== undefined ? `e${n.index}` : `e${synthCounter++}`;
-    const flat: FlatNode = {
+    const flat: FlatNode & { value?: string } = {
       ref: `@${refId}`,
       type: n.type ?? '',
       rect: n.rect,
@@ -1968,9 +2128,11 @@ function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
     if (flat.index !== undefined) nativeIndices.add(flat.index);
     if (Object.hasOwn(n, 'presence')) flat.presence = n.presence;
     if (n.label !== undefined) flat.label = n.label;
+    if (privateValues && typeof n.value === 'string') flat.value = n.value;
     if (n.identifier !== undefined) flat.identifier = n.identifier;
     if (n.enabled !== undefined) flat.enabled = n.enabled;
     if (n.hittable !== undefined) flat.hittable = n.hittable;
+    if (n.selected === true) flat.selected = true;
     out.push(flat);
   }
   return out;
@@ -2007,12 +2169,106 @@ function presenceCaptureUnavailable(
   );
 }
 
+async function probeQaReadiness(
+  qaTiming: TimingContext | undefined,
+  count: number,
+): Promise<FastRunnerLivenessDetail> {
+  let alive = false;
+  return measureTiming(
+    qaTiming &&
+      ((event) =>
+        observeTiming(qaTiming.observe, {
+          ...event,
+          count,
+          ...(event.edge === 'end' ? { outcome: alive ? 'ok' : 'failed' } : {}),
+        })),
+    qaTiming?.now ?? (() => performance.now()),
+    'native-readiness',
+    async () => {
+      const readiness = await probeFastRunnerLivenessDetailed({ clearState: () => {} });
+      alive = readiness.liveness === 'alive';
+      return readiness;
+    },
+  );
+}
+
+function attestQaReadOnly(
+  qaTiming: TimingContext | undefined,
+  state: FastRunnerState,
+  readiness: FastRunnerLivenessDetail,
+  count: number,
+): void {
+  if (!qaTiming) return;
+  const attested =
+    runnerState === state &&
+    !runnerPoisoned &&
+    readiness.liveness === 'alive' &&
+    readiness.capabilities?.includes(QA_READ_ONLY_CAPABILITY) &&
+    !!state.instanceId &&
+    !!state.sessionId &&
+    Number.isSafeInteger(state.claimEpoch) &&
+    !!state.deviceId &&
+    !!state.bundleId;
+  observeTiming(qaTiming.observe, {
+    stage: 'native-read-only-v1',
+    edge: 'point',
+    outcome: attested ? 'ok' : 'unknown',
+    at: qaTiming.now(),
+    count,
+  });
+}
+
+async function requireQaFastRunner(
+  qaContext?: QaDispatchContext,
+  bundleId?: string,
+  deviceId?: string,
+  readOnly = false,
+  qaTiming?: TimingContext,
+): Promise<void> {
+  qaContext?.assertComplete();
+  const before = runnerState;
+  const readiness = await probeQaReadiness(qaTiming, 1);
+  if (
+    !before ||
+    runnerState !== before ||
+    runnerPoisoned ||
+    readiness.liveness !== 'alive' ||
+    (readOnly && !readiness.capabilities?.includes(QA_READ_ONLY_CAPABILITY)) ||
+    (bundleId !== undefined && before.bundleId !== bundleId) ||
+    (deviceId !== undefined && before.deviceId !== deviceId)
+  ) {
+    if (qaContext) qaContext.invalidate();
+    throw new QaDispatchError('ACTION_CONTEXT_CHANGED');
+  }
+  if (readOnly) attestQaReadOnly(qaTiming, before, readiness, 1);
+}
+
 export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
+  const qaReadOnly =
+    (args.qaContext !== undefined || args.qaReadOnly === true) && !isMutatingCommand(args.command);
+  if (args.qaReadOnly && isMutatingCommand(args.command)) {
+    if (args.qaContext) args.qaContext.invalidate();
+    throw new QaDispatchError('ACTION_CONTEXT_CHANGED');
+  }
+  if (args.qaContext || args.qaReadOnly)
+    await requireQaFastRunner(
+      args.qaContext,
+      args.bundleId,
+      args.deviceId,
+      qaReadOnly,
+      args.qaTiming,
+    );
   const presenceRequested = args.command === 'snapshot' && args.platformPresence === true;
   const presenceRunner = presenceRequested ? runnerState : null;
   if (presenceRequested) {
+    if (!Number.isSafeInteger(args.presenceBudgetMs) || (args.presenceBudgetMs ?? 0) <= 0) {
+      return presenceCaptureUnavailable(
+        'presenceBudgetMs must be an explicit positive integer',
+        'INVALID_ARGUMENT',
+      );
+    }
     // Observation may probe readiness, but must not tear down or repair a dead runner.
-    const readiness = await probeFastRunnerLivenessDetailed({ clearState: () => {} });
+    const readiness = await probeQaReadiness(args.qaTiming, 2);
     if (
       !presenceRunner ||
       runnerState !== presenceRunner ||
@@ -2026,17 +2282,19 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
           : 'RN_FAST_RUNNER_DOWN',
       );
     }
-    if (!readiness.capabilities?.includes('PLATFORM_PRESENCE_V1')) {
+    if (!readiness.capabilities?.includes('PLATFORM_PRESENCE_V2')) {
       return presenceCaptureUnavailable(
-        'the runner lacks PLATFORM_PRESENCE_V1',
+        'the runner lacks PLATFORM_PRESENCE_V2',
         'RN_FAST_RUNNER_STALE',
       );
     }
+    if (qaReadOnly) attestQaReadOnly(args.qaTiming, presenceRunner, readiness, 2);
   }
   // STALE_REF sentinel from buildRunIOSArgs(): the caller tried to press/type
   // a @ref but refCenter() returned null. Surface cached metadata so the agent
   // knows what it asked for, plus a hint to call device_snapshot.
   if (args._staleRef) {
+    args.qaContext?.invalidate();
     return failResult(
       `Element at ref ${args._staleRef} no longer hittable — UI re-rendered since snapshot`,
       'STALE_REF',
@@ -2051,6 +2309,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   }
 
   const body: Record<string, unknown> = { command: args.command };
+  if (qaReadOnly) body.qaReadOnly = true;
   if (args.bundleId) body.appBundleId = args.bundleId;
   if (args.x !== undefined) body.x = args.x;
   if (args.y !== undefined) body.y = args.y;
@@ -2066,6 +2325,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (args.scale !== undefined) body.scale = args.scale;
   if (presenceRequested) {
     body.platformPresence = true;
+    body.presenceBudgetMs = args.presenceBudgetMs;
   } else {
     if (args.interactiveOnly !== undefined) body.interactiveOnly = args.interactiveOnly;
     if (args.compact !== undefined) body.compact = args.compact;
@@ -2114,6 +2374,20 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     );
   }
 
+  // A runner without the replace sequence would append to a focused field instead of replacing it.
+  if (
+    args.command === 'type' &&
+    args.focused === true &&
+    args.clearFirst === true &&
+    !lastKnownCapabilities.includes('FILL_EVIDENCE_V1')
+  ) {
+    return failResult(
+      'RN_FAST_RUNNER_STALE: the active iOS runner cannot replace a focused field; reopen the device session to rebuild before retrying.',
+      'RN_FAST_RUNNER_STALE',
+      { missingFeatures: ['FILL_EVIDENCE_V1'], dispatched: false, mutation: 'none' },
+    );
+  }
+
   let keyboardRelayoutRecovered = false;
   // Protocol-v1 runners ignore fresh-geometry fields. Enforce the corrected
   // policy client-side instead of silently downgrading to point containment.
@@ -2121,6 +2395,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     withKeyboardGuard({}, args.command, process.env).guardKeyboard === true &&
     runnerState?.protocolVersion === 1
   ) {
+    args.qaContext?.invalidate();
     try {
       const legacyDismiss = await postCommand({
         command: 'keyboardDismiss',
@@ -2140,6 +2415,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       }
       if (data.wasVisible && data.dismissed) keyboardRelayoutRecovered = true;
     } catch (err) {
+      throwIfCancelled();
       const mapped = mapRunnerDispatchError(err);
       if (mapped) return mapped;
       throw err;
@@ -2149,18 +2425,16 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   const refreshFailure: { result: ToolResult | null } = { result: null };
   const refreshTargetAfterKeyboard = async (): Promise<boolean> => {
     if (!args._targetRef) return true; // raw coordinates remain meaningful after dismissal
-    // Ref ids are positional: the keyboard leaving the tree shifts the index
-    // set, so the same id can denote a different element. Only an identity
-    // match may be re-served under the original ref.
-    const before = getCachedMetadata(args._targetRef);
+    const signature = getCachedSignature(args._targetRef);
     let snapshot: RunnerResponse;
     try {
       snapshot = await postCommand({
         command: 'snapshot',
-        interactiveOnly: true,
+        interactiveOnly: false,
         ...(args.bundleId ? { appBundleId: args.bundleId } : {}),
       });
     } catch (err) {
+      throwIfCancelled();
       refreshFailure.result = mapRunnerDispatchError(err);
       if (refreshFailure.result) return false;
       throw err;
@@ -2181,8 +2455,17 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         ? { keyboardVisible: data.keyboardVisible }
         : {}),
     });
-    if (!sameRefIdentity(before, getCachedMetadata(args._targetRef))) return false;
-    if (!before || countIdentityMatches(before, flat) !== 1) return false;
+    if (!signature) return false;
+    const refreshed = refreshRef(signature, flat);
+    if (refreshed.kind === 'ambiguous') {
+      refreshFailure.result = failResult(
+        'Multiple identities match the keyboard target',
+        'TARGET_AMBIGUOUS',
+        { mutation: 'none' },
+      );
+      return false;
+    }
+    if (refreshed.kind !== 'unique' || refreshed.node.ref !== args._targetRef) return false;
     const target = getFreshRefTarget(args._targetRef, { allowUnknownKeyboardState: true });
     if (!target) return false;
     body.x = Math.round(target.rect.x + target.rect.width / 2);
@@ -2213,13 +2496,19 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         presenceRunner.port,
         { ...body, commandId: generateCommandId() },
         commandTimeoutMs(args.command),
+        undefined,
+        args.qaTiming,
       );
     } else {
       ({ resp, recovery } = await postCommandWithRecovery(
         withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
+        args.qaContext,
+        args.qaTiming,
+        args.command === 'type' && args.focused ? args._focusedProof : undefined,
       ));
     }
   } catch (err) {
+    throwIfCancelled();
     if (presenceRequested) {
       return presenceCaptureUnavailable(
         err instanceof Error ? err.message : String(err),
@@ -2228,16 +2517,23 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       );
     }
     const mapped = mapRunnerDispatchError(err);
-    if (mapped) return mapped;
+    if (mapped) {
+      args.qaContext?.invalidate();
+      return mapped;
+    }
     const m = err instanceof Error ? err.message : String(err);
     if (m.startsWith('RUNNER_TIMEOUT')) {
-      return args.command === 'type'
+      const result = await (args.command === 'type'
         ? containTypeTimeout(args, commandAuthorityBefore)
-        : containRunnerTimeout(args.command, m, commandAuthorityBefore);
+        : containRunnerTimeout(args.command, m, commandAuthorityBefore));
+      args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
+      return result;
     }
+    args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
     throw err;
   }
   if (!presenceRequested && !resp.ok && resp.error?.code === 'KEYBOARD_RELAYOUT_REQUIRED') {
+    args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
     if (!(await refreshTargetAfterKeyboard())) {
       return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
     }
@@ -2245,8 +2541,12 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     try {
       ({ resp, recovery } = await postCommandWithRecovery(
         withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
+        args.qaContext,
+        args.qaTiming,
+        args.command === 'type' && args.focused ? args._focusedProof : undefined,
       ));
     } catch (err) {
+      throwIfCancelled();
       const mapped = mapRunnerDispatchError(err);
       if (mapped) return mapped;
       const message = err instanceof Error ? err.message : String(err);
@@ -2260,24 +2560,36 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     keyboardRelayoutRecovered = true;
   }
   const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
+  if (resp.error?.reason !== 'focus-proof-refused')
+    checkQaNativeOutcome(
+      args.qaContext,
+      resp.error?.code,
+      resp.data,
+      resp.error?.reason,
+      resp.error?.mutation,
+    );
   const announce = resp.ok ? takeQuiescenceAnnouncement() : null;
   if (!resp.ok) {
     const message = resp.error?.message ?? 'runner returned !ok with no error';
     const code = resp.error?.code;
-    if (presenceRequested) {
+    if (presenceRequested && resp.error?.reason !== 'app-not-running') {
       return presenceCaptureUnavailable(message, 'RN_FAST_RUNNER_DOWN', true);
     }
     if (code === 'RUNNER_TIMEOUT') {
-      return args.command === 'type'
+      const result = await (args.command === 'type'
         ? containTypeTimeout(args, commandAuthorityBefore)
-        : containRunnerTimeout(args.command, message, commandAuthorityBefore);
+        : containRunnerTimeout(args.command, message, commandAuthorityBefore));
+      args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
+      return result;
     }
     if (
       args.command === 'type' &&
       typeof message === 'string' &&
       message.includes('main thread execution timed out')
     ) {
-      return containTypeTimeout(args, commandAuthorityBefore);
+      const result = await containTypeTimeout(args, commandAuthorityBefore);
+      args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
+      return result;
     }
     const mutation = resp.error?.mutation;
     const reason = resp.error?.reason;
@@ -2311,6 +2623,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       truncated?: boolean;
       snapshotGeneration?: number;
       keyboardVisible?: boolean;
+      appProcessIdentifier?: number;
     };
     const missingRefFreshness =
       presenceRequested &&
@@ -2336,7 +2649,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       const snapshotVerdict = buildSnapshotVerdict('rn-fast-runner', flat.length, outcome);
       return okResult(
         {
-          nodes: flat,
+          nodes: qaReadOnly ? mapRunnerNodesToFlat(data.nodes, true) : flat,
           ...(Object.hasOwn(data, 'presenceCapture')
             ? { presenceCapture: data.presenceCapture }
             : {}),
@@ -2347,6 +2660,9 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
             : {}),
           ...(typeof data.snapshotGeneration === 'number'
             ? { snapshotGeneration: data.snapshotGeneration }
+            : {}),
+          ...(typeof data.appProcessIdentifier === 'number'
+            ? { appProcessIdentifier: data.appProcessIdentifier }
             : {}),
         },
         { meta: { ...announce, snapshotVerdict, ...recoveryMeta } },

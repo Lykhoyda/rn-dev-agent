@@ -2,8 +2,19 @@
  * Copyright (c) 2026 Anton Lykhoyda
  * SPDX-License-Identifier: MIT
  */
+import { QaDispatchError, type QaDispatchContext } from '../domain/qa-dispatch.js';
+import { QA_READ_ONLY_CAPABILITY, checkQaNativeOutcome } from './qa-native-policy.js';
 import { DEVICE_LEASE_REQUIRED, leaseFromEnvironment } from './lease-env.js';
-import { spawn, execFile } from 'node:child_process';
+import {
+  spawn,
+  execFile,
+  cancellableFetch,
+  sleep,
+  cancellationSignal,
+  throwIfCancelled,
+  isAbort,
+  withCancellation,
+} from '../domain/cancellation.js';
 import type { ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
@@ -42,6 +53,7 @@ import {
   decideRecovery,
   generateCommandId,
   isAmbiguousTransportFailure,
+  isMutatingCommand,
   parseStatusProbeReply,
 } from './transport-recovery.js';
 import { readProcessBirth } from '../lifecycle/process-birth.js';
@@ -121,6 +133,8 @@ export function getAndroidRunnerState(): AndroidRunnerState | null {
 }
 
 export interface RunAndroidArgs {
+  qaContext?: QaDispatchContext;
+  qaReadOnly?: boolean;
   command:
     | 'snapshot'
     | 'tap'
@@ -325,6 +339,7 @@ export async function resolveAndroidSerial(explicit?: string): Promise<string | 
     const serials = parseAdbDevicesSerials(stdout);
     return serials.length === 1 ? serials[0] : undefined;
   } catch {
+    throwIfCancelled();
     return undefined;
   }
 }
@@ -435,19 +450,11 @@ export function resolveAndroidInstallAction(opts: {
   return 'build-then-install';
 }
 
-/**
- * Self-install the in-tree runner on first use (parity with rn-fast-runner's cold build):
- * if the instrumentation isn't registered on the device, install the prebuilt APKs — and
- * if those don't exist yet, cold-build them via Gradle first. Throws an actionable error
- * (surfaced as RN_ANDROID_RUNNER_DOWN by the caller) when the SDK/Gradle/adb step fails.
- */
 async function ensureAndroidRunnerInstalled(
   deviceId?: string,
   opts: { forceReinstall?: boolean; forceLocalBuild?: boolean; signal?: AbortSignal } = {},
 ): Promise<'prebuilt' | 'local'> {
-  opts.signal?.throwIfAborted();
-  // Fail fast if the target isn't online — never start a multi-minute cold build (or an
-  // install) against an offline/absent device. (Codex review: avoid the build-then-fail trap.)
+  throwIfCancelled(opts.signal);
   try {
     const { stdout } = await execFileAsync('adb', [...adbSerialArgs(deviceId), 'get-state'], {
       timeout: 5_000,
@@ -455,7 +462,8 @@ async function ensureAndroidRunnerInstalled(
     });
     if (stdout.trim() !== 'device') throw new Error(`adb state is "${stdout.trim()}"`);
   } catch (err) {
-    opts.signal?.throwIfAborted();
+    throwIfCancelled(opts.signal);
+    if (isAbort(err)) throw err;
     throw new Error(
       `rn-android-runner: target device not online (adb get-state) — boot the emulator / connect the device. ` +
         `${err instanceof Error ? err.message : String(err)}`,
@@ -473,21 +481,20 @@ async function ensureAndroidRunnerInstalled(
         },
       )
     ).stdout;
-  } catch {
-    opts.signal?.throwIfAborted();
+  } catch (error) {
+    throwIfCancelled(opts.signal);
+    if (isAbort(error)) throw error;
     // adb/pm unavailable → treat as not registered; the install/adb step below surfaces the real error.
   }
-  // GH #382: resolve prebuilt APKs (verified cache → release download) before the
-  // local Gradle build. When prebuilt, the resolved paths point at the cache and
-  // the build-then-install branch is skipped (no gradlew on the user's machine).
-  // Fail-open: build-local returns the Gradle output paths (unchanged cold path).
-  const artifacts = await resolveAndroidRunnerArtifacts(
-    getPluginVersion(),
-    { appApk: APK_APP, testApk: APK_TEST },
-    undefined,
-    opts.forceLocalBuild,
+  const artifacts = await withCancellation(cancellationSignal(opts.signal), () =>
+    resolveAndroidRunnerArtifacts(
+      getPluginVersion(),
+      { appApk: APK_APP, testApk: APK_TEST },
+      undefined,
+      opts.forceLocalBuild,
+    ),
   );
-  opts.signal?.throwIfAborted();
+  throwIfCancelled(opts.signal);
   const provenance = artifactProvenanceToState(artifacts.provenance);
   if (artifacts.note) pendingUpgradeNote = artifacts.note;
 
@@ -507,7 +514,8 @@ async function ensureAndroidRunnerInstalled(
         signal: opts.signal,
       });
     } catch (err) {
-      opts.signal?.throwIfAborted();
+      throwIfCancelled(opts.signal);
+      if (isAbort(err)) throw err;
       throw new Error(
         `rn-android-runner cold build failed (gradlew assembleDebug assembleDebugAndroidTest in ${RN_ANDROID_RUNNER_DIR}). ` +
           `Ensure the Android SDK + a JDK are installed and on PATH. ${err instanceof Error ? err.message : String(err)}`,
@@ -520,13 +528,14 @@ async function ensureAndroidRunnerInstalled(
       timeout: ADB_INSTALL_TIMEOUT_MS,
       signal: opts.signal,
     });
-    opts.signal?.throwIfAborted();
+    throwIfCancelled(opts.signal);
     await execFileAsync('adb', buildAdbInstallArgs(deviceId, artifacts.testApk), {
       timeout: ADB_INSTALL_TIMEOUT_MS,
       signal: opts.signal,
     });
   } catch (err) {
-    opts.signal?.throwIfAborted();
+    throwIfCancelled(opts.signal);
+    if (isAbort(err)) throw err;
     throw new Error(
       `rn-android-runner APK install failed (adb install -r). Is the emulator/device online? ` +
         `${err instanceof Error ? err.message : String(err)}`,
@@ -589,7 +598,7 @@ export function shouldReapAndroidRunnerBeforeStart(
  * fixed port) fired readiness before the new ServerSocket bound, so the first
  * post-flow POST /command hit a dead port ("fetch failed"). Poll the runner's own
  * GET /health, which is true only once the socket is accepting. Bounded by timeoutMs
- * (defaults to the cold-start ready budget); never throws — returns false on timeout.
+ * (defaults to the cold-start ready budget); returns false on timeout.
  */
 export async function waitForAndroidRunnerHealth(
   port: number,
@@ -604,7 +613,7 @@ export async function waitForAndroidRunnerHealth(
     try {
       const capability =
         opts.capability ?? (runnerState?.hostPort === port ? runnerState.capability : undefined);
-      const resp = await fetchImpl(`http://127.0.0.1:${port}/health`, {
+      const resp = await cancellableFetch(fetchImpl, `http://127.0.0.1:${port}/health`, {
         signal: controller.signal,
         headers: capability ? { authorization: `Bearer ${capability}` } : {},
       });
@@ -612,12 +621,14 @@ export async function waitForAndroidRunnerHealth(
         const body = (await resp.json()) as { ok?: boolean };
         if (body?.ok === true) return true;
       }
-    } catch {
+    } catch (error) {
+      cancellationSignal();
+      if (isAbort(error) && !controller.signal.aborted) throw error;
       // server not accepting yet — keep polling
     } finally {
       clearTimeout(timer);
     }
-    await new Promise((r) => setTimeout(r, intervalMs));
+    await sleep(intervalMs);
   }
   return false;
 }
@@ -674,7 +685,7 @@ export async function probeAndroidRunnerHealthInfo(
   try {
     const capability =
       capabilityOverride ?? (runnerState?.hostPort === port ? runnerState.capability : undefined);
-    const resp = await fetchImpl(`http://127.0.0.1:${port}/health`, {
+    const resp = await cancellableFetch(fetchImpl, `http://127.0.0.1:${port}/health`, {
       signal: controller.signal,
       headers: capability ? { authorization: `Bearer ${capability}` } : {},
     });
@@ -741,6 +752,7 @@ export async function probeAndroidRunnerHealthInfo(
           : {}),
     };
   } catch {
+    throwIfCancelled();
     if (runnerState?.hostPort === port) lastKnownCapabilities = [];
     return { reachable: false };
   } finally {
@@ -778,7 +790,7 @@ export async function reapMismatchedAndroidRunner(
   ) => Promise<void>,
   signal?: AbortSignal,
 ): Promise<void> {
-  signal?.throwIfAborted();
+  throwIfCancelled(signal);
   const deviceId = state?.deviceId;
   if (!deviceId) {
     throw new Error(
@@ -792,7 +804,7 @@ export async function reapMismatchedAndroidRunner(
       return releaseAndroidInteractionSlot({ ...opts, signal });
     });
   const receipt = await releaseSlot({ deviceId, includeLegacy: false });
-  signal?.throwIfAborted();
+  throwIfCancelled(signal);
   const requiredPackages = [
     'dev.lykhoyda.rndevagent.androidrunner.test',
     'dev.lykhoyda.rndevagent.androidrunner',
@@ -853,7 +865,7 @@ export async function reapMismatchedAndroidRunner(
     },
     signal,
   );
-  signal?.throwIfAborted();
+  throwIfCancelled(signal);
 }
 
 export async function reapActiveAndroidRunner(deviceId?: string): Promise<void> {
@@ -1154,6 +1166,7 @@ export async function runBoundedAndroidRunnerRebuild<T>(
   cleanup: (signal: AbortSignal) => Promise<void>,
   dependencies: AndroidRunnerRebuildDependencies = {},
 ): Promise<T> {
+  throwIfCancelled();
   const pluginVersion = getPluginVersion() ?? 'unknown';
   const acquire = dependencies.acquire ?? acquireAndroidRunnerRebuildLock;
   const claim = acquire(pluginVersion);
@@ -1220,23 +1233,23 @@ export async function runBoundedAndroidRunnerRebuild<T>(
   };
   try {
     const result = await rebuild(controller.signal);
-    controller.signal.throwIfAborted();
+    throwIfCancelled(controller.signal);
     for (let attempt = 0; attempt < transitionAttempts; attempt += 1) {
-      controller.signal.throwIfAborted();
+      throwIfCancelled(controller.signal);
       try {
         if (complete(lock)) {
-          controller.signal.throwIfAborted();
+          throwIfCancelled(controller.signal);
           clearInterval(heartbeatTimer);
           return result;
         }
-      } catch {}
+      } catch {
+        throwIfCancelled(controller.signal);
+      }
       if (attempt + 1 < transitionAttempts) {
-        await new Promise<void>((resolve) => {
-          setTimeout(
-            resolve,
-            dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS,
-          );
-        });
+        await sleep(
+          dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS,
+          controller.signal,
+        );
       }
     }
     if (!controller.signal.aborted) {
@@ -1244,7 +1257,7 @@ export async function runBoundedAndroidRunnerRebuild<T>(
         androidRebuildRefusal(error, 'runner artifact rebuild completion was not durable'),
       );
     }
-    controller.signal.throwIfAborted();
+    throwIfCancelled(controller.signal);
     throw androidRebuildRefusal(error, 'runner artifact rebuild completion was not durable');
   } catch (cause) {
     if (leaseAuthorityLost) {
@@ -1267,7 +1280,7 @@ export async function runBoundedAndroidRunnerRebuild<T>(
     );
     let cleanupVerified = false;
     try {
-      await cleanup(cleanupController.signal);
+      await withCancellation(undefined, () => cleanup(cleanupController!.signal));
       cleanupController.signal.throwIfAborted();
       cleanupVerified = true;
     } catch {}
@@ -1314,6 +1327,7 @@ export function invalidateAndroidRunnerApks(
   rm: (path: string) => void = (p) => rmSync(p, { force: true }),
 ): void {
   for (const apk of RUNNER_APK_PATHS) {
+    throwIfCancelled();
     try {
       rm(apk);
     } catch {
@@ -1348,6 +1362,8 @@ export async function startAndroidRunner(
   try {
     return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
   } catch (err) {
+    throwIfCancelled(opts._rebuildSignal);
+    if (isAbort(err)) throw err;
     if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
       const state = await runBoundedAndroidRunnerRebuild(
         err,
@@ -1375,6 +1391,7 @@ export async function startAndroidRunner(
           );
         },
       );
+      throwIfCancelled();
       pendingUpgradeNote = 'runner artifact rebuilt (authority identity mismatch)';
       return state;
     }
@@ -1408,6 +1425,7 @@ export async function startAndroidRunner(
           );
         },
       );
+      throwIfCancelled();
       pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${err.missing.join(', ') || 'unknown'})`;
       return state;
     }
@@ -1421,7 +1439,7 @@ async function startAndroidRunnerAttempt(
   devicePort = DEFAULT_PORT,
   opts: StartAndroidRunnerOpts = {},
 ): Promise<AndroidRunnerState> {
-  opts._rebuildSignal?.throwIfAborted();
+  throwIfCancelled(opts._rebuildSignal);
   const serial =
     deviceId ??
     (testAuthorityState ? runnerState?.deviceId : undefined) ??
@@ -1456,12 +1474,7 @@ async function startAndroidRunnerAttempt(
       } else {
         const compat = classifyAndroidHealth(info);
         if (compat.compatible) return runnerState!;
-        if (compat.reason === 'missing-commands') {
-          // GH #418: reinstalling the SAME APK can't add commands — artifact
-          // staleness. Always throw the typed error: the retry-once wrapper is
-          // the SINGLE rebuild owner (one Gradle build even on a checkout whose
-          // fresh build still misses commands — multi-review advisory); mid-flow
-          // callers surface the typed refusal.
+        if (compat.reason === 'missing-commands' || compat.reason === 'missing-features') {
           throw new AndroidCommandsStaleError(
             compat.missing ?? [],
             bundleId,
@@ -1470,6 +1483,7 @@ async function startAndroidRunnerAttempt(
         }
         // GH #383: a reachable-but-incompatible runner is reaped (force-stop +
         // state clear) and force-reinstalled so the fresh APK supersedes it.
+        throwIfCancelled();
         pendingUpgradeNote = 'runner upgraded (protocol/version mismatch)';
         forceReinstall = true;
         await reapMismatchedAndroidRunner(reusableState);
@@ -1480,7 +1494,7 @@ async function startAndroidRunnerAttempt(
     }
   }
 
-  opts._rebuildSignal?.throwIfAborted();
+  throwIfCancelled(opts._rebuildSignal);
   // Self-install on first use (no external CLI) — resolve prebuilt (or build/install)
   // the in-tree runner APKs if the instrumentation isn't on the device yet.
   const provenance = await ensureAndroidRunnerInstalled(deviceId, {
@@ -1489,28 +1503,36 @@ async function startAndroidRunnerAttempt(
     signal: opts._rebuildSignal,
   });
 
-  let hostPort = await findFreePort(devicePort);
-  opts._rebuildSignal?.throwIfAborted();
+  let hostPort = await withCancellation(cancellationSignal(opts._rebuildSignal), () =>
+    findFreePort(devicePort),
+  );
+  throwIfCancelled(opts._rebuildSignal);
   try {
     await execFileAsync('adb', buildAdbForwardArgs(deviceId, hostPort, devicePort), {
       signal: opts._rebuildSignal,
     });
-  } catch {
-    opts._rebuildSignal?.throwIfAborted();
+  } catch (error) {
+    throwIfCancelled(opts._rebuildSignal);
+    if (isAbort(error)) throw error;
     // host port raced between probe and forward → re-probe once with any free port
-    hostPort = await findFreePort(0);
+    hostPort = await withCancellation(cancellationSignal(opts._rebuildSignal), () =>
+      findFreePort(0),
+    );
     await execFileAsync('adb', buildAdbForwardArgs(deviceId, hostPort, devicePort), {
       signal: opts._rebuildSignal,
     });
   }
 
+  const signal = cancellationSignal(opts._rebuildSignal);
   return new Promise((resolve, reject) => {
     let resolved = false;
     let forwardRemoved = false;
     const removeForward = () => {
       if (forwardRemoved) return;
       forwardRemoved = true;
-      void execFileAsync('adb', buildAdbForwardRemoveArgs(serial, hostPort)).catch(() => {});
+      void withCancellation(undefined, () =>
+        execFileAsync('adb', buildAdbForwardRemoveArgs(serial, hostPort)),
+      ).catch(() => {});
     };
 
     const child = spawn(
@@ -1550,10 +1572,9 @@ async function startAndroidRunnerAttempt(
 
     const finishReady = () => {
       if (resolved) return;
-      if (opts._rebuildSignal?.aborted) {
+      if (signal?.aborted) {
         resolved = true;
-        child.kill('SIGTERM');
-        reject(opts._rebuildSignal.reason);
+        reject(signal.reason);
         return;
       }
       resolved = true;
@@ -1597,7 +1618,11 @@ async function startAndroidRunnerAttempt(
       removeForward();
       if (resolved) return;
       resolved = true;
-      reject(new Error(`Failed to spawn Android runner instrumentation: ${err.message}`));
+      reject(
+        isAbort(err)
+          ? err
+          : new Error(`Failed to spawn Android runner instrumentation: ${err.message}`),
+      );
     });
 
     child.on('exit', (code) => {
@@ -1617,63 +1642,71 @@ async function startAndroidRunnerAttempt(
 
     // GH#243: readiness is the runner's own /health, not the (stale-prone) logcat
     // ring buffer. /health is true only once the ServerSocket is actually accepting.
-    void waitForAndroidRunnerHealth(hostPort, { capability: authority.capability }).then(
-      async (healthy) => {
+    void withCancellation(signal, async () => {
+      const healthy = await waitForAndroidRunnerHealth(hostPort, {
+        capability: authority.capability,
+      });
+      if (resolved) return;
+      throwIfCancelled(signal);
+      if (healthy) {
+        const info = await probeAndroidRunnerHealthInfo(hostPort, authority.capability);
         if (resolved) return;
-        if (healthy) {
-          const info = await probeAndroidRunnerHealthInfo(hostPort, authority.capability);
-          if (
-            !androidHealthMatchesAuthority(info, {
-              instanceId: authority.instanceId,
-              sessionId: authority.sessionId,
-              claimEpoch: authority.claimEpoch,
-              deviceId: authority.deviceId,
-              appId: authority.appId,
-            })
-          ) {
-            resolved = true;
-            child.kill('SIGTERM');
-            reject(new AndroidAuthorityStaleError(serial));
-            return;
-          }
-          const compat = classifyAndroidHealth(info);
-          if (!compat.compatible) {
-            resolved = true;
-            pendingUpgradeNote = undefined; // review amendment: never report an upgrade that failed
-            child.kill('SIGTERM');
-            if (compat.reason === 'missing-commands') {
-              // GH #418: typed — the wrapper's retry-once invalidates the APKs
-              // at open; mid-flow callers surface RUNNER_COMMANDS_STALE.
-              reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId, serial));
-              return;
-            }
-            reject(
-              new Error(
-                `RUNNER_PROTOCOL_MISMATCH: installed rn-android-runner speaks protocol ` +
-                  `${info.protocolVersion ?? 'none'} (bridge expects ${RUNNER_PROTOCOL_VERSION}). ` +
-                  `Rebuild + reinstall the runner APKs: cd ${RN_ANDROID_RUNNER_DIR} && ` +
-                  `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest, then adb install -r both APKs.`,
-              ),
-            );
-            return;
-          }
-          finishReady();
+        throwIfCancelled(signal);
+        if (
+          !androidHealthMatchesAuthority(info, {
+            instanceId: authority.instanceId,
+            sessionId: authority.sessionId,
+            claimEpoch: authority.claimEpoch,
+            deviceId: authority.deviceId,
+            appId: authority.appId,
+          })
+        ) {
+          resolved = true;
+          child.kill('SIGTERM');
+          reject(new AndroidAuthorityStaleError(serial));
           return;
         }
-        resolved = true;
-        child.kill('SIGTERM');
-        reject(
-          new Error(
-            `Android runner did not become ready within ${READY_TIMEOUT_MS / 1000}s (no /health on port ${hostPort})${diag ? `\n${diag.trim()}` : ''}`,
-          ),
-        );
-      },
-    );
+        const compat = classifyAndroidHealth(info);
+        if (!compat.compatible) {
+          resolved = true;
+          pendingUpgradeNote = undefined; // review amendment: never report an upgrade that failed
+          child.kill('SIGTERM');
+          if (compat.reason === 'missing-commands' || compat.reason === 'missing-features') {
+            reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId, serial));
+            return;
+          }
+          reject(
+            new Error(
+              `RUNNER_PROTOCOL_MISMATCH: installed rn-android-runner speaks protocol ` +
+                `${info.protocolVersion ?? 'none'} (bridge expects ${RUNNER_PROTOCOL_VERSION}). ` +
+                `Rebuild + reinstall the runner APKs: cd ${RN_ANDROID_RUNNER_DIR} && ` +
+                `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest, then adb install -r both APKs.`,
+            ),
+          );
+          return;
+        }
+        finishReady();
+        return;
+      }
+      resolved = true;
+      child.kill('SIGTERM');
+      reject(
+        new Error(
+          `Android runner did not become ready within ${READY_TIMEOUT_MS / 1000}s (no /health on port ${hostPort})${diag ? `\n${diag.trim()}` : ''}`,
+        ),
+      );
+    }).catch((error: unknown) => {
+      removeForward();
+      if (resolved) return;
+      resolved = true;
+      if (!signal?.aborted && !isAbort(error)) child.kill('SIGTERM');
+      reject(error);
+    });
   });
 }
 
 export async function stopAndroidRunner(deviceId?: string, signal?: AbortSignal): Promise<void> {
-  signal?.throwIfAborted();
+  throwIfCancelled(signal);
   // GH #383 (review amendment): adopt first so a post-respawn stop finds the
   // persisted runner (empty in-memory state would otherwise leak the forward).
   adoptPersistedAndroidState(deviceId ?? undefined);
@@ -1710,6 +1743,7 @@ async function sendCommandOnce(
   hostPort: number,
   body: { command?: unknown; commandId?: string },
   timeoutMs: number,
+  qaContext?: QaDispatchContext,
 ): Promise<RunnerResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -1719,16 +1753,19 @@ async function sendCommandOnce(
     if (!capability) {
       throw new Error('RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable');
     }
-    resp = await fetchImpl(`http://127.0.0.1:${hostPort}/command`, {
+    const serialized = JSON.stringify(body);
+    if (isMutatingCommand(body.command)) qaContext?.authorize();
+    resp = await cancellableFetch(fetchImpl, `http://127.0.0.1:${hostPort}/command`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json; charset=UTF-8',
         authorization: `Bearer ${capability}`,
       },
-      body: JSON.stringify(body),
+      body: serialized,
       signal: controller.signal,
     });
   } catch (err) {
+    throwIfCancelled();
     if ((err as { name?: string } | undefined)?.name === 'AbortError') {
       throw new Error(
         `RUNNER_TIMEOUT: rn-android-runner did not respond to "${String(body.command)}" within ${timeoutMs}ms`,
@@ -1742,6 +1779,7 @@ async function sendCommandOnce(
   try {
     parsed = (await resp.json()) as RunnerResponse;
   } catch {
+    throwIfCancelled();
     throw new Error('rn-android-runner returned a non-JSON response body');
   }
   // GH #383: mirror the iOS /command v-stamp check — a runner hot-swapped to an
@@ -1777,6 +1815,7 @@ async function probeCommandStatus(
     );
     return parseStatusProbeReply(resp, commandId);
   } catch {
+    throwIfCancelled();
     return null;
   }
 }
@@ -1788,16 +1827,23 @@ async function probeCommandStatus(
 // rethrows and runAndroid's catch maps it to RN_ANDROID_RUNNER_DOWN). Recovery
 // info travels in the return value so callers that don't surface meta (the
 // settle probes) discard it with the response.
-async function postCommandWithRecovery(body: {
-  command?: unknown;
-}): Promise<{ resp: RunnerResponse; recovery?: TransportRecovery }> {
+async function postCommandWithRecovery(
+  body: {
+    command?: unknown;
+  },
+  qaContext?: QaDispatchContext,
+): Promise<{ resp: RunnerResponse; recovery?: TransportRecovery }> {
   const state = runnerState;
   if (!state) throw new Error('rn-android-runner not started');
   const commandId = generateCommandId();
   const timeoutMs = commandTimeoutMs(body.command);
   try {
-    return { resp: await sendCommandOnce(state.hostPort, { ...body, commandId }, timeoutMs) };
+    return {
+      resp: await sendCommandOnce(state.hostPort, { ...body, commandId }, timeoutMs, qaContext),
+    };
   } catch (err) {
+    throwIfCancelled();
+    if (err instanceof QaDispatchError) throw err;
     const message = err instanceof Error ? err.message : String(err);
     if (!isAmbiguousTransportFailure(message)) throw err;
     const decision = decideRecovery(
@@ -1815,6 +1861,7 @@ async function postCommandWithRecovery(body: {
         state.hostPort,
         { ...body, commandId: generateCommandId() },
         timeoutMs,
+        qaContext,
       );
       return { resp: resent, recovery: { commandId, outcome: 'resent' } };
     }
@@ -1849,6 +1896,7 @@ export async function androidIsWindowUpdatingProbe(
     const updating = (resp.data as { updating?: unknown } | undefined)?.updating;
     return resp.ok && typeof updating === 'boolean' ? updating : null;
   } catch {
+    throwIfCancelled();
     return null;
   }
 }
@@ -1869,6 +1917,7 @@ export async function androidSnapshotNodesViaProbe(
     updateRefMapFromFlat(flat);
     return flat;
   } catch {
+    throwIfCancelled();
     return null;
   }
 }
@@ -1877,7 +1926,14 @@ function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
   const out: FlatNode[] = [];
   let synthCounter = 0;
   for (const n of nodes) {
-    if (!n.rect) continue;
+    if (
+      !n ||
+      !n.rect ||
+      ![n.rect.x, n.rect.y, n.rect.width, n.rect.height].every(Number.isFinite) ||
+      n.rect.width < 0 ||
+      n.rect.height < 0
+    )
+      continue;
     const ref = `@e${n.index ?? synthCounter++}`;
     const flat: FlatNode = { ref, type: n.type ?? '', rect: n.rect };
     if (n.label !== undefined) flat.label = n.label;
@@ -1902,7 +1958,39 @@ export function shouldRecoverAndroidAccessibility(
 }
 
 export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
+  const qaReadOnly =
+    (args.qaContext !== undefined || args.qaReadOnly === true) && !isMutatingCommand(args.command);
+  if (args.qaReadOnly && isMutatingCommand(args.command)) {
+    if (args.qaContext) args.qaContext.invalidate();
+    throw new QaDispatchError('ACTION_CONTEXT_CHANGED');
+  }
+  if (args.qaContext || args.qaReadOnly) {
+    args.qaContext?.assertComplete();
+    const before = runnerState;
+    const info = before ? await probeAndroidRunnerHealthInfo(before.hostPort) : null;
+    if (
+      !before ||
+      runnerState !== before ||
+      !info?.reachable ||
+      !info.ok ||
+      !classifyAndroidHealth(info).compatible ||
+      (qaReadOnly && !info.capabilities?.includes(QA_READ_ONLY_CAPABILITY)) ||
+      (args.deviceId !== undefined && before.deviceId !== args.deviceId) ||
+      (args.bundleId !== undefined && before.bundleId !== args.bundleId) ||
+      !androidHealthMatchesAuthority(info, {
+        instanceId: before.instanceId,
+        sessionId: before.sessionId,
+        claimEpoch: before.claimEpoch,
+        deviceId: before.deviceId,
+        appId: before.bundleId,
+      })
+    ) {
+      if (args.qaContext) args.qaContext.invalidate();
+      throw new QaDispatchError('ACTION_CONTEXT_CHANGED');
+    }
+  }
   if (args._staleRef) {
+    args.qaContext?.invalidate();
     return failResult(
       `Element at ref ${args._staleRef} no longer hittable - UI re-rendered since snapshot`,
       'STALE_REF',
@@ -1917,6 +2005,7 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   }
 
   const body: Record<string, unknown> = { command: args.command };
+  if (qaReadOnly) body.qaReadOnly = true;
   if (args.bundleId) body.appBundleId = args.bundleId;
   if (args.x !== undefined) body.x = args.x;
   if (args.y !== undefined) body.y = args.y;
@@ -1947,11 +2036,14 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   let resp: RunnerResponse;
   let recovery: TransportRecovery | undefined;
   try {
-    await startAndroidRunner(args.deviceId, args.bundleId);
+    if (!args.qaContext && !args.qaReadOnly) await startAndroidRunner(args.deviceId, args.bundleId);
     ({ resp, recovery } = await postCommandWithRecovery(
       withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
+      args.qaContext,
     ));
   } catch (err) {
+    throwIfCancelled();
+    if (args.qaContext) args.qaContext.refuse('ACTION_OUTCOME_UNCERTAIN');
     const m = errMessage(err);
     // GH #383: a protocol mismatch (reuse-gate reject, post-start verify, or the
     // /command v-stamp) is a distinct, actionable failure — surface it before the
@@ -1978,6 +2070,8 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   // retries the read exactly once. A second failure remains explicit.
   let accessibilityRecovery: 'runner-restarted' | undefined;
   if (shouldRecoverAndroidAccessibility(args.command, resp)) {
+    if (args.qaContext) args.qaContext.invalidate();
+    if (args.qaReadOnly) throw new QaDispatchError('ACTION_CONTEXT_CHANGED');
     await stopAndroidRunner(args.deviceId);
     await startAndroidRunner(args.deviceId, args.bundleId);
     ({ resp, recovery } = await postCommandWithRecovery(
@@ -1994,6 +2088,13 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
     ...(recovery ? { transportRecovery: recovery } : {}),
     ...(accessibilityRecovery ? { accessibilityRecovery } : {}),
   };
+  checkQaNativeOutcome(
+    args.qaContext,
+    resp.error?.code,
+    resp.data,
+    resp.error?.reason,
+    resp.error?.mutation,
+  );
   if (!resp.ok) {
     const message = resp.error?.message ?? 'Android runner returned !ok with no error';
     const code = resp.error?.code;
@@ -2078,14 +2179,30 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   }
 
   if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {
-    const data = resp.data as { nodes?: RunnerSnapshotNode[] };
+    const data = resp.data as {
+      nodes?: RunnerSnapshotNode[];
+      truncated?: unknown;
+      normalizationDroppedNodes?: unknown;
+    };
     if (Array.isArray(data.nodes)) {
       const flat = mapRunnerNodesToFlat(data.nodes);
       const outcome = updateRefMapFromFlat(flat);
-      // GH #409: same capture-quality contract as the iOS client — empty
-      // captures report degraded and never clobber last-known-good refs.
       const snapshotVerdict = buildSnapshotVerdict('rn-android-runner', flat.length, outcome);
-      return okResult({ nodes: flat }, { meta: { snapshotVerdict, ...recoveryMeta } });
+      const producerDropped = data.normalizationDroppedNodes;
+      const dropped =
+        typeof producerDropped === 'number' &&
+        Number.isSafeInteger(producerDropped) &&
+        producerDropped >= 0
+          ? producerDropped + (data.nodes.length - flat.length)
+          : undefined;
+      return okResult(
+        {
+          nodes: flat,
+          ...(typeof data.truncated === 'boolean' ? { truncated: data.truncated } : {}),
+          ...(Number.isSafeInteger(dropped) ? { normalizationDroppedNodes: dropped } : {}),
+        },
+        { meta: { snapshotVerdict, ...recoveryMeta } },
+      );
     }
   }
 

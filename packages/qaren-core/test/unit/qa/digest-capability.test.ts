@@ -21,20 +21,23 @@ function digest(children: FiberSpec[]) {
 const handler = () => assert.fail('digest capture must not invoke handlers');
 
 test('press capability requires an observed press or click function, not an inferred button role', () => {
+  const none = { press: false, fill: false };
+  for (const props of [{ onChange: handler }, { onPressIn: handler }, { onLongPress: handler }]) {
+    assert.deepEqual(digest([{ name: 'GenericControl', props }]).interactive, [
+      { role: 'button', capabilities: none },
+    ]);
+  }
   for (const props of [
-    { onChange: handler },
-    { onPressIn: handler },
-    { onLongPress: handler },
     { accessibilityRole: 'button' },
     { accessibilityRole: 'button', onPress: true, onClick: '[Function]' },
   ]) {
     assert.deepEqual(digest([{ name: 'GenericControl', props }]).interactive, [
-      { role: 'button', capabilities: { press: false, fill: false } },
+      { role: 'button', capabilities: none, handlerless: true },
     ]);
   }
   for (const name of ['Button', 'Pressable']) {
     assert.deepEqual(digest([{ name }]).interactive, [
-      { role: 'button', capabilities: { press: false, fill: false } },
+      { role: 'button', capabilities: none, handlerless: true },
     ]);
   }
   for (const props of [{ onPress: handler }, { onClick: handler }]) {
@@ -61,7 +64,7 @@ test('fill capability comes from an editable TextInput or an observed onChangeTe
       { role: 'textinput', capabilities: { press: false, fill: true } },
       { role: 'textinput', capabilities: { press: false, fill: true } },
       { role: 'button', capabilities: { press: false, fill: true } },
-      { role: 'search', capabilities: { press: false, fill: false } },
+      { role: 'search', capabilities: { press: false, fill: false }, handlerless: true },
       { role: 'button', capabilities: { press: false, fill: false } },
     ],
   );

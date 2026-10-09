@@ -1,6 +1,7 @@
-use crate::core::Ledger;
+use crate::core::{Ledger, Row};
 use crate::failure::{Failure, FailureCode};
-use crate::redact::redact_secrets;
+use crate::record::{VideoPublication, VideoStatus};
+use crate::redact::{redact_machine, redact_secrets, MachineIdentity};
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 
@@ -41,7 +42,6 @@ pub struct ReportInput<'a> {
     pub platform: &'a str,
     pub app_id: &'a str,
     pub device: &'a str,
-    pub plan: &'a str,
     pub ledger: &'a Ledger,
 }
 
@@ -77,6 +77,36 @@ fn screenshot_link(path: &str) -> Option<String> {
     (plain && redact_secrets(path) == path).then(|| path.to_string())
 }
 
+fn walked<'a>(input: &'a ReportInput<'_>) -> impl Iterator<Item = &'a Row> {
+    input.ledger.steps.iter().filter(|row| row.line != 0)
+}
+
+fn row_line(row: &Row) -> String {
+    row_line_with(row, &prose)
+}
+
+// Only the core's projected text is rendered; a row without it (a synthesized ledger) shows its line alone.
+fn row_line_with(row: &Row, prose: &dyn Fn(&str) -> String) -> String {
+    let text = row
+        .text
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+        .map(|text| format!(": {}", prose(text)))
+        .unwrap_or_default();
+    let mark = if row.outcome == "pass" { "✓" } else { "✗" };
+    let retry = if row.attempt > 1 {
+        format!(" (attempt {})", row.attempt)
+    } else {
+        String::new()
+    };
+    let reason = row
+        .reason
+        .as_deref()
+        .map(|r| format!(" — {}", prose(r)))
+        .unwrap_or_default();
+    format!("- {mark} line {}{text}{retry}{reason}\n", row.line)
+}
+
 pub fn render(input: &ReportInput<'_>) -> String {
     let summary = summarize(input.ledger);
     let mut out = String::new();
@@ -89,36 +119,8 @@ pub fn render(input: &ReportInput<'_>) -> String {
         prose(input.device)
     ));
     out.push_str("## What was walked\n\n");
-    let plan_lines: Vec<&str> = input.plan.lines().collect();
-    for row in &input.ledger.steps {
-        if row.line == 0 {
-            continue;
-        }
-        let text = row
-            .text
-            .clone()
-            .or_else(|| {
-                plan_lines
-                    .get(row.line as usize - 1)
-                    .map(|l| l.trim().to_string())
-            })
-            .unwrap_or_default();
-        let mark = if row.outcome == "pass" { "✓" } else { "✗" };
-        let retry = if row.attempt > 1 {
-            format!(" (attempt {})", row.attempt)
-        } else {
-            String::new()
-        };
-        let reason = row
-            .reason
-            .as_deref()
-            .map(|r| format!(" — {}", prose(r)))
-            .unwrap_or_default();
-        out.push_str(&format!(
-            "- {mark} line {}: {}{retry}{reason}\n",
-            row.line,
-            prose(&text)
-        ));
+    for row in walked(input) {
+        out.push_str(&row_line(row));
         if let Some(shot) = row.screenshot.as_deref().and_then(screenshot_link) {
             out.push_str(&format!("  ![line {}]({shot})\n", row.line));
         }
@@ -157,6 +159,21 @@ pub fn render(input: &ReportInput<'_>) -> String {
         summary.recoveries,
         prose(&summary.path)
     ));
+    if let Some(speed) = &input.ledger.speed {
+        out.push_str(&format!(
+            "stepMedianMs {} · stepP95Ms {} · walkMs {} · steps {} ({} passed, {} failed)\n",
+            speed
+                .step_median_ms
+                .map_or_else(|| "n/a".to_string(), |ms| ms.to_string()),
+            speed
+                .step_p95_ms
+                .map_or_else(|| "n/a".to_string(), |ms| ms.to_string()),
+            speed.walk_ms,
+            speed.steps,
+            speed.passed,
+            speed.failed
+        ));
+    }
     out
 }
 
@@ -171,4 +188,113 @@ pub fn write(run_dir: &Path, input: &ReportInput<'_>) -> Result<PathBuf, Failure
         )
     })?;
     Ok(path)
+}
+
+pub struct PrRun<'a> {
+    pub tested_sha: &'a str,
+    pub tested_older_commit: bool,
+    pub video: &'a VideoStatus,
+    pub screenshot: Option<&'a str>,
+    pub plan_sha256: &'a str,
+    pub video_publication: &'a VideoPublication,
+}
+
+// Public text must not carry internal transport vocabulary.
+fn public(text: &str) -> String {
+    text.replace("cdp_", "")
+        .replace("proofReplay", "replay")
+        .replace("transport", "connection")
+        .replace("xcrun simctl", "simulator tooling")
+        .replace("adb -s", "device tooling")
+}
+
+// The marker lets a rerun find a comment whose creation outcome was lost.
+pub fn comment_marker(run_id: &str) -> String {
+    format!("<!-- qaren-run: {} -->", prose(run_id))
+}
+
+pub fn failing_screenshot(ledger: &Ledger) -> Option<String> {
+    let failure = ledger.failure.as_ref()?;
+    failure.screenshot.as_deref().and_then(screenshot_link)
+}
+
+pub fn render_pr_comment(
+    input: &ReportInput<'_>,
+    refusal: Option<&Failure>,
+    pr: &PrRun<'_>,
+    machine: &MachineIdentity,
+) -> String {
+    let summary = summarize(input.ledger);
+    // Sanitize raw text before Markdown escaping, which would otherwise split `cdp_` or a path.
+    let clean = |raw: &str| prose(&public(&redact_machine(raw, machine)));
+    let short: String = pr.tested_sha.chars().take(7).collect();
+    let mut out = String::new();
+    out.push_str(&comment_marker(input.run_id));
+    out.push('\n');
+    let verdict = match input.ledger.verdict.as_str() {
+        "PASS" => "PASS",
+        "FAIL" => "FAIL",
+        _ => "REFUSED",
+    };
+    out.push_str(verdict);
+    if verdict == "REFUSED" {
+        if let Some(failure) = refusal {
+            if let Ok(serde_json::Value::String(code)) = serde_json::to_value(&failure.code) {
+                out.push_str(&format!(": {}", prose(&code)));
+            }
+        }
+    }
+    out.push_str("\n\n");
+    out.push_str(&format!(
+        "Tested: commit `{}` on {}",
+        prose(&short),
+        prose(input.platform)
+    ));
+    if pr.tested_older_commit {
+        out.push_str(
+            " — this tested an older commit; the pull request moved on while the run was going",
+        );
+    }
+    out.push_str("\n\n");
+    if let Some(reason) = pr.video_publication.withholding_reason() {
+        out.push_str(&format!("Video withheld: {reason}.\n\n"));
+    } else {
+        match pr.video {
+            VideoStatus::Available => out.push_str("Video of the walk is attached below.\n\n"),
+            VideoStatus::TooLarge => {
+                out.push_str("Video: the recording was too large to attach.\n\n")
+            }
+            VideoStatus::Unavailable(reason) => {
+                out.push_str(&format!("Video: unavailable ({}).\n\n", clean(reason)))
+            }
+        }
+    }
+    out.push_str("**Plan**\n\n");
+    for row in walked(input) {
+        out.push_str(&row_line_with(row, &clean));
+    }
+    if let Some(failure) = &input.ledger.failure {
+        out.push_str(&format!(
+            "\n**Failing step** {}: {}\n",
+            failure.step,
+            clean(&failure.seen)
+        ));
+        if let Some(shot) = pr.screenshot {
+            out.push_str(&format!("\n![Failing step](./{shot})\n"));
+        }
+    }
+    out.push_str(&format!("\nPlan sha256 `{}`\n\n", prose(pr.plan_sha256)));
+    out.push_str("<details><summary>Run details</summary>\n\n");
+    out.push_str(&format!(
+        "steps {} · jev.calls {} · jev.medianMs {} · llmTurns {} · escapes {} · recoveries {} · path {}\n",
+        summary.steps,
+        summary.jev_calls,
+        summary.jev_median_ms,
+        summary.llm_turns,
+        summary.escapes,
+        summary.recoveries,
+        clean(&summary.path)
+    ));
+    out.push_str("\n</details>\n");
+    redact_machine(&public(&redact_machine(&out, machine)), machine)
 }

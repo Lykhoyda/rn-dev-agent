@@ -10,7 +10,7 @@ import {
 import { decideScreen, prepareTarget } from '../../../dist/qa/resolve.js';
 import { assertionView, join, screenSignature } from '../../../dist/qa/screen.js';
 import { runPlan } from '../../../dist/qa/walker.js';
-import { redactEvidence } from '../../../dist/qa/privacy.js';
+import { redactEvidence, projectPlanLine } from '../../../dist/qa/privacy.js';
 import { choice, element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
 
 const classify = (verb: string) =>
@@ -118,14 +118,30 @@ test('native-only Android input labels are private outward data, not rewritten l
       );
       const before = JSON.stringify(observed.elements);
       const judge = noulJudge(0.9);
-      await decideScreen(
+      const decision = await decideScreen(
         observed,
         judge,
         { kind: 'check', literal: false, text: 'The confirmation is visible', line: 1 },
         { kind: 'fill', target: { phrase: 'the address field' }, text: 'replacement', line: 2 },
       );
+      assert.deepEqual(decision.check, {
+        refuse: 'SCREEN_EVIDENCE_INCOMPLETE',
+        reason: 'no established assertion contribution is available',
+      });
+      assert.equal(decision.target, undefined);
+      assert.equal(decision.visibility, undefined);
+      assert.equal(judge.requests.length, 0);
+      const standalone = await decideScreen(observed, judge, undefined, {
+        kind: 'fill',
+        target: { phrase: 'the address field' },
+        text: 'replacement',
+        line: 2,
+      });
+      assert.ok(standalone.target && 'ref' in standalone.target);
+      assert.equal(standalone.target.ref, '@input');
       assert.equal(judge.requests.length, 1);
-      assert.deepEqual(Object.keys(judge.requests[0].questions), ['check_1', 'target_2']);
+      assert.deepEqual(Object.keys(judge.requests[0].questions), ['target_2']);
+      assert.equal(Object.hasOwn(judge.requests[0].state, 'assertionEvidence'), false);
       const request = JSON.stringify(judge.requests);
       assert.ok(!request.includes(`Echo: ${label}`));
       assert.ok(!request.includes(`"${label}"`));
@@ -133,9 +149,15 @@ test('native-only Android input labels are private outward data, not rewritten l
       assert.ok(request.includes('address1'));
       assert.equal(JSON.stringify(observed.elements), before);
       assert.equal(observed.elements[0].label, label);
-      assert.ok(
-        !redactEvidence(observed, assertionView(observed).join(' ')).includes(`Echo: ${label}`),
+      assert.equal(observed.elements[0].testID, 'address1');
+      const exact = prepareTarget(
+        { kind: 'fill', target: { quoted: 'address1', phrase: 'address1' }, text: 'replacement' },
+        observed,
       );
+      assert.ok('ref' in exact);
+      assert.equal(exact.ref, '@input');
+      const evidence = redactEvidence(observed, assertionView(observed).join(' '));
+      assert.equal(evidence.includes(`Echo: ${label}`), !secure && label.length < 3);
     }
   }
 });
@@ -169,7 +191,10 @@ test('secure value collisions never destroy exact labels, IDs, or placeholders',
     assert.ok('ref' in target, key);
     assert.equal(target.ref, '@password');
     assert.ok(!redactEvidence(observed, assertionView(observed).join(' ')).includes('Password'));
-    assert.ok(!screenSignature(observed).includes('Password'));
+    const signature = JSON.parse(screenSignature(observed));
+    assert.equal(signature.elements[0][3], null);
+    assert.equal(signature.elements[0][2], observed.elements[0].testID);
+    observed.captureCoverage = { native: 'complete', react: 'unknown' };
     const f = walker([observed], noulJudge(0.9));
     const result = await runPlan(
       parsePlan('1. Type "new-secret" into "Password"\n✓ "Missing"').blocks!,
@@ -199,7 +224,7 @@ test('screen signatures ignore secure contents but still detect ordinary input a
       );
     const before = observe('private-one');
     const after = observe('private-two');
-    assert.ok(!screenSignature(before).includes('private-one'));
+    assert.equal(screenSignature(before).includes('private-one'), !secure);
     assert.equal(screenSignature(before) === screenSignature(after), secure);
     after.elements[0].disabled = true;
     assert.notEqual(screenSignature(before), screenSignature(after));
@@ -234,7 +259,9 @@ test('human evidence masks overlapping native and typed values together without 
     );
   }
   assert.equal(
-    redactEvidence(screen([]), '1. Type "1" into "address1"', ['1']),
+    projectPlanLine('1. Type "1" into "address1"', {
+      values: [{ text: '1', provenance: 'typed' }],
+    }).text,
     '1. Type "•••" into "address1"',
   );
 });
@@ -272,6 +299,8 @@ test('observed private values stay masked after a fill, a screen change and a bl
       ['Saved Password'],
     );
     const judge = noulJudge(0.9);
+    before.captureCoverage = { native: 'complete', react: 'unknown' };
+    after.captureCoverage = { native: 'complete', react: 'unknown' };
     const f = walker([before, after, confirmation], judge);
     const markdown = `### Form\n1. Type "new-secret" into "Password"${boundary}✓ The saved confirmation is visible`;
     const result = await runPlan(parsePlan(markdown).blocks!, f.deps);
@@ -319,7 +348,7 @@ test('current short private values cannot expose suffixes of an earlier private 
   assert.ok(!JSON.stringify(result).includes('SECRET'));
 });
 
-test('adding inputs cannot disable readable validation messages or headers that echo a typed value', async () => {
+test('adding inputs cannot disable readable validation messages or promote body text to a header', async () => {
   for (const [text, visibleText] of [
     ['The email validation error is visible', ['Email format is invalid']],
     ['The email field error says the format is invalid', ['Email format is invalid']],
@@ -347,6 +376,11 @@ test('adding inputs cannot disable readable validation messages or headers that 
           undefined,
           ['Anton'],
         );
+        if (text === 'The profile header shows Anton') {
+          assert.equal(judge.requests.length, 0, 'body text cannot establish a header');
+          assert.equal(result.check, 'unsure');
+          continue;
+        }
         assert.equal(judge.requests.length, 1, text);
         assert.equal(judge.requests[0].questions.check_1.type, 'noul');
         assert.equal(result.check, noul >= 0.7 ? 'pass' : noul <= 0.3 ? 'fail' : 'unsure', text);
@@ -405,7 +439,7 @@ test('arbitrary permission names do not bypass negation, conditions or conflicti
 });
 
 function nativeLiteralScreen(label: string, secure = false, value?: string) {
-  return join(
+  const observed = join(
     [
       {
         ref: '@input',
@@ -420,6 +454,8 @@ function nativeLiteralScreen(label: string, secure = false, value?: string) {
     ],
     [],
   );
+  observed.captureCoverage = { native: 'complete', react: 'unknown' };
+  return observed;
 }
 
 const noLiteralModel = () =>

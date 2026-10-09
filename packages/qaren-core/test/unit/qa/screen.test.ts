@@ -64,15 +64,16 @@ test('unmatched interactive digest entries become react:<testID> off-screen cand
   assert.deepEqual(
     offscreen.map((e) => [e.ref, e.kind, e.label, e.value, e.hittable]),
     [
-      ['react:fixture_hidden_cta', 'button', 'Load more', undefined, false],
-      ['react:fixture_hidden_toggle', 'switch', undefined, 'on', false],
+      // React-only elements keep identity and capability, never user-visible strings.
+      ['react:fixture_hidden_cta', 'button', undefined, undefined, false],
+      ['react:fixture_hidden_toggle', 'switch', undefined, undefined, false],
     ],
     'entries without a testID cannot be addressed and are dropped',
   );
   const action = actionView(screen);
   assert.ok(action.some((e) => e.ref === 'react:fixture_hidden_cta'));
   assert.ok(action.every((e) => e.offscreen || (e.hittable && !e.disabled)));
-  assert.equal(describe(offscreen[0]), 'Button "Load more" [testID fixture_hidden_cta] off screen');
+  assert.equal(describe(offscreen[0]), 'Button [testID fixture_hidden_cta] off screen');
   assert.equal(
     describe(screen.elements.find((e) => e.ref === '@e53')!),
     'Button "Tap" [testID fixture_bottom_button] bottom-right',
@@ -243,4 +244,34 @@ test('the screen signature changes with every user-visible difference and only t
     base,
     'a 2px shift inside the same band is not a change',
   );
+});
+
+test('the screen signature returns canonical content without hashing', () => {
+  const screen = joinScreen(
+    [
+      { ref: '@e0', type: 'Button', label: 'Save', identifier: 'save', hittable: true },
+      { ref: '@e1', type: 'SecureTextField', label: 'Password', value: 'hunter2' },
+    ],
+    [],
+  );
+  const signature = screenSignature(screen);
+  const content = JSON.parse(signature);
+  assert.equal(content.front, 'app');
+  assert.deepEqual(content.text, ['Save']);
+  assert.deepEqual(content.elements[0], [
+    'button',
+    'Save',
+    'save',
+    null,
+    true,
+    false,
+    false,
+    false,
+    null,
+    null,
+  ]);
+  assert.equal(content.elements[1][3], null);
+  assert.ok(!signature.includes('hunter2'));
+  assert.equal(signature, screenSignature(structuredClone(screen)));
+  assert.notEqual(signature, screenSignature({ ...screen, front: 'dialog' }));
 });

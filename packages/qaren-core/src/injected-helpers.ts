@@ -1,8 +1,9 @@
 import { PRIVATE_INPUT_LIMITS } from './qa/private-input-limits.js';
 import { TYPOGRAPHY_TEXT_LIMITS } from './qa/host-typography.js';
+import { INPUT_HOST_TYPES } from './qa/input-host-types.js';
 
 // Bump when the injected surface changes so warm runtimes replace stale helpers.
-export const HELPERS_VERSION = 87;
+export const HELPERS_VERSION = 91;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -589,7 +590,8 @@ export const INJECTED_HELPERS = `
     var start = Date.now();
     var slot = { id: start.toString(16) + qaCaptureCounter.toString(16), state: 'pending', expires: start + 1500 };
     qaCaptureSlot = slot;
-    var inputs = { version: 1, complete: false, facts: [] };
+    // Marks a strict QA capture; it carries no input values.
+    var inputs = { complete: false };
     function completed(tree) {
       if (qaCaptureSlot !== slot || !slot.capture) return;
       slot.state = slot.capture.accepted && typeof tree === 'string' && Date.now() < slot.capture.deadline ? 'ready' : 'refused';
@@ -601,21 +603,24 @@ export const INJECTED_HELPERS = `
       slot.capture = createTypographyCapture(start, inputs, typography === true);
       slot.timer = setTimeout(function() { releaseQaCapture(slot); }, 1500);
       var tree = getTree({ interactiveOnly: true, semanticEvidence: true, typographyEvidence: typography === true }, slot.capture);
+      if (slot.capture.renderError === true) {
+        var terminal = { v: 1, id: slot.id, state: 'refused', reason: 'render-error' };
+        releaseQaCapture(slot);
+        return terminal;
+      }
       if (tree && typeof tree.then === 'function') tree.then(completed, function() { completed(null); });
       else completed(tree);
       if (!inputs.complete) {
-        inputs.facts = [];
         slot.state = 'refused';
         releaseQaCapture(slot);
       }
     } catch (_) {
       inputs.complete = false;
-      inputs.facts = [];
       slot.state = 'refused';
       releaseQaCapture(slot);
     }
-    if (slot.state === 'refused') { inputs.complete = false; inputs.facts = []; releaseQaCapture(slot); }
-    var reply = { v: 1, id: slot.id, inputs: JSON.parse(JSON.stringify(inputs)), state: slot.state };
+    if (slot.state === 'refused') { inputs.complete = false; releaseQaCapture(slot); }
+    var reply = { v: 1, id: slot.id, state: slot.state };
     if (slot.state === 'ready') { reply.tree = slot.tree; releaseQaCapture(slot); }
     return reply;
   }
@@ -633,9 +638,6 @@ export const INJECTED_HELPERS = `
     var rendererExport;
     var rendererSearched = false;
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-    var inputChars = 0;
-    var inputCount = 0;
-    var inputSnapshots = [];
     var released = false;
     var cancel;
     var capture;
@@ -686,55 +688,11 @@ export const INJECTED_HELPERS = `
       return null;
     }
 
-    function inputFacts(fiber, hostIndex) {
-      var props = qaData(fiber, 'memoizedProps');
-      if (!props || typeof props !== 'object' || Array.isArray(props)) throw new Error('Capture refused');
-      var proto = Object.getPrototypeOf(props);
-      if (proto !== null && Object.getPrototypeOf(proto) !== null) throw new Error('Capture refused');
-      var name = qaHostType(fiber);
-      var known = ['TextInput', 'RCTTextInput', 'RCTSinglelineTextInputView', 'RCTMultilineTextInputView', 'AndroidTextInput'].indexOf(name) !== -1;
-      var secure = qaData(props, 'secureTextEntry');
-      var value = qaData(props, 'value');
-      var text = qaData(props, 'text');
-      var fallback = qaData(props, 'defaultValue');
-      var changeText = qaData(props, 'onChangeText');
-      var change = qaData(props, 'onChange');
-      var input = known || secure != null || changeText != null || text != null || fallback != null
-        || typeof value === 'string';
-      var candidates = [value, text, fallback];
-      var snapshot = candidates.concat([secure, changeText, change, name]);
-      if (!input) return { snapshot: snapshot, fact: null };
-      if (secure != null && typeof secure !== 'boolean') throw new Error('Capture refused');
-      // RN forwards controlled value; text/defaultValue can stay stale after native edits.
-      if (typeof value !== 'string') throw new Error('Capture refused');
-      var values = [];
-      for (var vi = 0; vi < candidates.length; vi++) {
-        var candidate = candidates[vi];
-        if (candidate == null) continue;
-        if (typeof candidate !== 'string' || candidate.length > ${PRIVATE_INPUT_LIMITS.maxValueChars} || values.length >= ${PRIVATE_INPUT_LIMITS.maxValuesPerHost}) throw new Error('Capture refused');
-        values.push(candidate);
-      }
-      return { snapshot: snapshot, fact: { hostIndex: hostIndex, values: values, secure: secure === true } };
-    }
-
-    function observeInput(fiber, hostIndex) {
-      if (!privateInputs || hostIndex === null) return;
-      var input = inputFacts(fiber, hostIndex);
-      inputSnapshots.push({ fiber: fiber, hostIndex: hostIndex, values: input.snapshot });
-      if (!input.fact) return;
-      for (var vi = 0; vi < input.fact.values.length; vi++) {
-        inputChars += input.fact.values[vi].length;
-        if (++inputCount > ${PRIVATE_INPUT_LIMITS.maxValues} || inputChars > ${PRIVATE_INPUT_LIMITS.maxTotalChars}) throw new Error('Capture refused');
-      }
-      privateInputs.facts.push(input.fact);
-    }
-
     function release() {
       released = true;
       if (cancel) { var stop = cancel; cancel = null; stop(); }
       captured.length = 0;
       hostRecords.length = 0;
-      inputSnapshots.length = 0;
       records = new WeakMap();
       privateInputs = null;
       hook = null;
@@ -857,7 +815,6 @@ export const INJECTED_HELPERS = `
     }
 
     function observe(fiber, frame, hostIndex) {
-      observeInput(fiber, hostIndex);
       var record = {
         fiber: fiber, props: fiber.memoizedProps, parent: fiber.return,
         child: fiber.child, sibling: fiber.sibling, state: fiber.stateNode,
@@ -1039,12 +996,6 @@ export const INJECTED_HELPERS = `
           || (r.sibling && (r.sibling.return !== r.siblingParent || (r.siblingParent !== r.parent && !sameFiber(r.siblingParent, r.parent))))
           || (f.stateNode && f.stateNode.canonical) !== r.canonical || typographyHostType(f) !== r.hostType) return false;
         if (r.node && r.node.accessibility && JSON.stringify(accessibilityFacts(r.props)) !== JSON.stringify(r.node.accessibility)) return false;
-      }
-      for (var ii = 0; ii < inputSnapshots.length; ii++) {
-        if (Date.now() >= deadline) return false;
-        var prior = inputSnapshots[ii];
-        var now = inputFacts(prior.fiber, prior.hostIndex).snapshot;
-        for (var pi = 0; pi < now.length; pi++) if (now[pi] !== prior.values[pi]) return false;
       }
       return true;
     }
@@ -1249,6 +1200,7 @@ export const INJECTED_HELPERS = `
       if (hasErrorOverlay(overlayRoots[oi].fiber)) overlayFound = true;
     }
     if (overlayFound) {
+      if (privateCapture) privateCapture.renderError = true;
       return earlyTree({
         warning: 'APP_HAS_REDBOX',
         message: 'App is showing an error screen. Use cdp_error_log to read the error, fix the code, then cdp_reload.',
@@ -1359,7 +1311,7 @@ export const INJECTED_HELPERS = `
         var safe = {};
         digestPropsCache.set(fiber, safe);
         if (!props || typeof props !== 'object') return safe;
-        var keys = HANDLER_PROPS.concat(['role', 'accessibilityRole', 'testID', 'nativeID', 'disabled', 'aria-disabled', 'accessibilityState', 'editable', 'readOnly', 'aria-readonly', 'title', 'accessibilityLabel', 'placeholder', 'value']);
+        var keys = HANDLER_PROPS.concat(['role', 'accessibilityRole', 'testID', 'nativeID', 'disabled', 'aria-disabled', 'accessibilityState', 'editable', 'readOnly', 'aria-readonly', 'title', 'accessibilityLabel', 'placeholder', 'value', 'aria-hidden', 'accessibilityElementsHidden', 'importantForAccessibility']);
         for (var i = 0; i < keys.length; i++) {
           try {
             var value = qaData(props, keys[i]);
@@ -1400,7 +1352,7 @@ export const INJECTED_HELPERS = `
       // Gather descendant text (capped), NOT recursing into nested interactive
       // nodes (they each get their own entry).
       var collectText = function(fiber, depth, acc) {
-        if (!fiber || depth > 8 || acc.s.length >= 120) return;
+        if (!fiber || depth > 8 || acc.s.length >= 120 || inactiveRoute(fiber)) return;
         if (typography && (++typographyDigestVisits > 5000 || Date.now() >= typography.deadline)) { typography.evidence.complete = false; return; }
         if (fiber.tag === 6 && typeof fiber.memoizedProps === 'string') {
           var t = fiber.memoizedProps.trim();
@@ -1447,6 +1399,44 @@ export const INJECTED_HELPERS = `
         if (hostEvidence.hosts.length === ${PRIVATE_INPUT_LIMITS.maxHosts}) hostEvidence.complete = false;
         return hostEvidence.hosts.length - 1;
       }
+      // A failed safe read never skips: it only means this fiber is walked as before.
+      function routeRead(object, key) {
+        try { return qaData(object, key, true); } catch (e) { return undefined; }
+      }
+      var UNKNOWN_DISPLAY = {};
+      var MISSING_DISPLAY = {};
+      function styleRead(object, key) {
+        try { return key in object ? qaData(object, key, true) : MISSING_DISPLAY; } catch (e) { return UNKNOWN_DISPLAY; }
+      }
+      function resolvedDisplay(style, depth) {
+        if (style === UNKNOWN_DISPLAY) return UNKNOWN_DISPLAY;
+        if (style === MISSING_DISPLAY || !style || typeof style !== 'object') return MISSING_DISPLAY;
+        if (depth > 16) return UNKNOWN_DISPLAY;
+        if (Array.isArray(style)) {
+          var shown = MISSING_DISPLAY;
+          for (var di = 0; di < style.length; di++) {
+            if (di >= 64) return UNKNOWN_DISPLAY;
+            var part = resolvedDisplay(styleRead(style, String(di)), depth + 1);
+            if (part !== MISSING_DISPLAY) shown = part;
+          }
+          return shown;
+        }
+        return styleRead(style, 'display');
+      }
+      // A provably inactive route is off the visible screen; skipping it only loses digest semantics.
+      function inactiveRoute(fiber) {
+        var props = routeRead(fiber, 'memoizedProps');
+        if (!props || typeof props !== 'object') return false;
+        var inactive = routeRead(props, 'activityState') === 0;
+        var invisible = routeRead(props, 'visible') === false;
+        if (inactive || invisible) {
+          var routeName = getName(fiber) || '';
+          var routeBase = routeName.slice(routeName.lastIndexOf('.') + 1);
+          if (inactive && (routeBase === 'Screen' || routeBase === 'InnerScreen' || routeBase === 'RNSScreen')) return true;
+          if (invisible && (routeBase === 'MaybeScreen' || routeBase === 'ScreenContainer')) return true;
+        }
+        return isHostFiber(fiber) && resolvedDisplay(routeRead(props, 'style'), 0) === 'none';
+      }
       var iRoots = findAllRootFibers(typography);
       var iBudget = Math.min(5000, 2000 * Math.max(1, iRoots.length));
       var iQueue = [];
@@ -1462,20 +1452,41 @@ export const INJECTED_HELPERS = `
         if (!ifiber || iSeen.has(ifiber)) continue;
         iSeen.add(ifiber);
         iScanned++;
+        if (inactiveRoute(ifiber)) continue;
         if (typography) typography.prepare(ifiber);
         var hostIndex = collectHostEvidence(ifiber);
         var typographyRecord = typography ? typography.observe(ifiber, iframe, hostIndex) : null;
         var iprops = digestProps(ifiber) || {};
+        // A host view hiding its subtree from accessibility keeps that subtree out of the native tree.
+        var hidden = iframe.hidden === true || (isHostFiber(ifiber) && (iprops['aria-hidden'] === true || iprops.accessibilityElementsHidden === true || iprops.importantForAccessibility === 'no-hide-descendants'));
+        if (hidden && hostIndex !== null) hostEvidence.hosts[hostIndex].hidden = true;
         var itid = iprops.testID || iprops.nativeID;
         var forwarded = iframe.forwarded;
-        if (forwarded && itid && forwarded.testID !== itid) forwarded = null;
-        if (isInteractiveFiber(ifiber)) {
+        var wrapperCandidate = iframe.wrapperCandidate;
+        var inputAncestors = iframe.inputAncestors || [];
+        if (hostIndex !== null && hostEvidence.hosts[hostIndex].capabilities.fill === true) {
+          for (var ai = 0; ai < inputAncestors.length; ai++) {
+            var ancestor = inputAncestors[ai];
+            if (!ancestor.inputHostIndices) ancestor.inputHostIndices = [];
+            ancestor.inputHostIndices.push(hostIndex);
+          }
+        }
+        if (forwarded && itid && (forwarded.testID || forwarded.nativeID) !== itid) forwarded = null;
+        var interactive = isInteractiveFiber(ifiber);
+        if (interactive) {
           var entry = { role: inferRole(getName(ifiber), iprops) };
           entry.capabilities = {
             press: typeof iprops.onPress === 'function' || typeof iprops.onClick === 'function',
             fill: iprops.editable !== false && (getName(ifiber) === 'TextInput' || typeof iprops.onChangeText === 'function')
           };
-          if (itid) entry.testID = itid;
+          var handled = entry.capabilities.fill;
+          for (var hj = 0; hj < HANDLER_PROPS.length; hj++) {
+            if (typeof iprops[HANDLER_PROPS[hj]] === 'function') handled = true;
+          }
+          if (!handled) entry.handlerless = true;
+          if (hidden) entry.hidden = true;
+          if (iprops.testID) entry.testID = iprops.testID;
+          else if (iprops.nativeID) entry.nativeID = iprops.nativeID;
           var acc = { s: '' };
           collectText(ifiber, 0, acc);
           if (acc.s) entry.text = acc.s.length > 120 ? acc.s.substring(0, 120) : acc.s;
@@ -1485,7 +1496,7 @@ export const INJECTED_HELPERS = `
           // surface on/off state for toggles so the agent need not re-read before deciding
           if (entry.role === 'switch' && typeof iprops.value === 'boolean') entry.value = iprops.value;
           if (iprops.disabled === true || iprops.editable === false || (iprops.accessibilityState && iprops.accessibilityState.disabled === true)) entry.disabled = true;
-          if (itid && forwarded && forwarded.testID === itid && forwarded.role === entry.role) {
+          if (itid && forwarded && (forwarded.testID || forwarded.nativeID) === itid && forwarded.role === entry.role) {
             var forwardedFields = ['text', 'label', 'placeholder', 'value'];
             for (var fi = 0; fi < forwardedFields.length; fi++) {
               var field = forwardedFields[fi];
@@ -1493,15 +1504,25 @@ export const INJECTED_HELPERS = `
             }
             forwarded.capabilities.press = forwarded.capabilities.press || entry.capabilities.press;
             forwarded.capabilities.fill = forwarded.capabilities.fill || entry.capabilities.fill;
+            if (!entry.handlerless) delete forwarded.handlerless;
             if (entry.disabled) forwarded.disabled = true;
+            if (entry.hidden) forwarded.hidden = true;
           } else {
             salient.push(entry);
             forwarded = entry;
+            if (wrapperCandidate) wrapperCandidate.compositeWrapper = true;
+            var componentName = getName(ifiber);
+            var baseName = componentName && componentName.slice(componentName.lastIndexOf('.') + 1);
+            wrapperCandidate = !isHostFiber(ifiber) && baseName && baseName !== 'View' && baseName !== 'RCTView'
+              && !HOST_KIND_LOOKUP[baseName] && !INTERACTIVE_NAMES[baseName] && !iprops.role && !iprops.accessibilityRole ? entry : null;
+            if (wrapperCandidate || (!isHostFiber(ifiber) && itid)) inputAncestors = inputAncestors.concat([entry]);
+            if (hostIndex !== null && hostEvidence.hosts[hostIndex].capabilities.fill === true) entry.inputHostIndices = [hostIndex];
           }
         }
         var ich = ifiber.child;
-        // Only a single-child composite chain can forward one control identity.
-        var nextForwarded = ich && !ich.sibling && ifiber.tag !== 5 && typeof ifiber.type !== 'string' ? forwarded : null;
+        // Only a single-child chain of composites or identity-less, non-interactive wrapper views forwards one control identity.
+        var wrapperHost = ifiber.tag === 5 || typeof ifiber.type === 'string';
+        var nextForwarded = ich && !ich.sibling && (!wrapperHost || (!itid && !interactive)) ? forwarded : null;
         var parentHostIndex = hostIndex === null ? iframe.parentHostIndex : hostIndex;
         var textOwnerHostIndex = iframe.textOwnerHostIndex;
         if (typographyRecord && hostIndex !== null) {
@@ -1510,7 +1531,7 @@ export const INJECTED_HELPERS = `
         }
         while (ich) {
           if (typography && (++iEnqueued > iBudget || Date.now() >= typography.deadline)) { iEnqueueTruncated = true; break; }
-          iQueue.push({ fiber: ich, forwarded: nextForwarded, parentFiber: ifiber, parentHostIndex: parentHostIndex, textOwnerHostIndex: textOwnerHostIndex, rootIndex: iframe.rootIndex, animatedTypography: typographyRecord && typographyRecord.animated });
+          iQueue.push({ fiber: ich, forwarded: nextForwarded, wrapperCandidate: wrapperCandidate, inputAncestors: inputAncestors, parentFiber: ifiber, parentHostIndex: parentHostIndex, textOwnerHostIndex: textOwnerHostIndex, rootIndex: iframe.rootIndex, animatedTypography: typographyRecord && typographyRecord.animated, hidden: hidden });
           ich = ich.sibling;
         }
       }
@@ -1650,18 +1671,10 @@ export const INJECTED_HELPERS = `
     return output;
   }
 
-  // Task 2 — live-fiber host-kind classifier. Ports RNTL host-component-names.ts
-  // (isHostText/isHostTextInput/isHostImage/isHostSwitch/isHostScrollView/
-  // isHostModal). RNTL keys off a STRING instance.type; live fibers carry the
-  // host name as a raw string fiber.type OR as fiber.type.displayName/name for
-  // native views, so we resolve a string name from both shapes via getName.
-  // Name lists are widened to the native view names (RCTSinglelineTextInputView,
-  // RCTImageView, RCTModalHostView, ...) per FIXED INTERFACES because the live
-  // tree exposes the platform view name, not the JS component name. Returns null
-  // for plain Views, user components, text nodes (tag 6) and null types.
+  // Known host kinds use platform view names, not composite component names.
   var HOST_KIND_NAMES = {
     text: ['Text', 'RCTText'],
-    textinput: ['TextInput', 'RCTTextInput', 'RCTSinglelineTextInputView', 'RCTMultilineTextInputView', 'AndroidTextInput'],
+    textinput: ${JSON.stringify(INPUT_HOST_TYPES)},
     image: ['Image', 'RCTImageView', 'RCTImage'],
     switch: ['Switch', 'RCTSwitch'],
     scrollview: ['ScrollView', 'RCTScrollView'],
@@ -4994,25 +5007,20 @@ export const INJECTED_HELPERS = `
     return joined ? joined : undefined;
   }
 
-  // ── Task 5: accessibility "hidden" port (RNTL isHiddenFromAccessibility +
-  // isSubtreeInaccessible). Read the two predicate keys directly — enumerating
-  // exotic style objects with hasOwnProperty throws and aborts the frontmost
-  // walk (GH #1057). Walks fiber.return (live fibers) not instance.parent.
-  // opacity:0 is NOT hidden (RNTL accessibility.ts:73).
-  // ponytail: last non-undefined wins; an entry whose key is explicitly undefined no longer overrides an earlier value
+  var MISSING_STYLE_VALUE = {};
   function styleValue(style, key) {
-    if (style == null) return undefined;
+    if (style == null) return MISSING_STYLE_VALUE;
     try {
       if (Array.isArray(style)) {
         for (var i = style.length - 1; i >= 0; i--) {
           var v = styleValue(style[i], key);
-          if (v !== undefined) return v;
+          if (v !== MISSING_STYLE_VALUE) return v;
         }
-        return undefined;
+        return MISSING_STYLE_VALUE;
       }
-      if (typeof style === 'object') return style[key];
+      if (typeof style === 'object' && key in style) return style[key];
     } catch (_) {}
-    return undefined;
+    return MISSING_STYLE_VALUE;
   }
 
   // True if \`fiber\` itself is an inaccessible-subtree root.

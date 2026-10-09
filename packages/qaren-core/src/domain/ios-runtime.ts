@@ -1,4 +1,4 @@
-import { execFile as execFileCb } from 'node:child_process';
+import { execFile as execFileCb } from './cancellation.js';
 import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCb);

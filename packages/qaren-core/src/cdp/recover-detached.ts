@@ -1,4 +1,5 @@
-import { execFile as execFileCb } from 'node:child_process';
+import { sleep as cancellableSleep } from '../domain/cancellation.js';
+import { execFile as execFileCb } from '../domain/cancellation.js';
 import { promisify } from 'node:util';
 import type { CDPClient } from '../cdp-client.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
@@ -228,7 +229,7 @@ async function recoverDetachedInner(
   const relaunchApp = deps.relaunchApp ?? defaultRelaunchApp;
   const reconnect = deps.reconnect ?? (() => client.softReconnect());
   const probeAlive = deps.probeAlive ?? (async () => (await probeFreshness(client)).fresh);
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const sleep = deps.sleep ?? cancellableSleep;
 
   await stopFastRunner(udid);
   let relaunchError: string | undefined;

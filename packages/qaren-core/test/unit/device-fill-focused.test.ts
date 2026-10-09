@@ -28,6 +28,7 @@ interface Call {
 async function withFocusedSeam<T>(
   config: {
     platform?: 'ios' | 'android';
+    nodes?: typeof WRAPPER_ONLY;
     fill?: (call: Call) => ReturnType<typeof okResult>;
   },
   run: () => Promise<T>,
@@ -39,13 +40,14 @@ async function withFocusedSeam<T>(
   });
   clearRefMap();
   markSnapshotDirty();
-  updateRefMapFromFlat(WRAPPER_ONLY as never, { snapshotGeneration: 7, keyboardVisible: true });
+  const nodes = config.nodes ?? WRAPPER_ONLY;
+  updateRefMapFromFlat(nodes as never, { snapshotGeneration: 7, keyboardVisible: true });
   const calls: Call[] = [];
   _setRunAgentDeviceForTest(async (cliArgs: string[], opts: Record<string, unknown>) => {
     const call = { cliArgs, opts };
     calls.push(call);
     if (cliArgs[0] === 'snapshot') {
-      return okResult({ nodes: WRAPPER_ONLY });
+      return okResult({ nodes });
     }
     if (cliArgs[0] === 'fill') {
       return config.fill
@@ -318,3 +320,23 @@ test('default fill: Android wrapper-bind refusal omits the focused: true hint', 
   assert.equal(env.error.includes('focused: true'), false);
   assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'));
 });
+
+for (const focused of [false, true]) {
+  test(`native ambiguity stays terminal for ${focused ? 'focused' : 'exact'} fill`, async () => {
+    const { result, calls } = await withFocusedSeam(
+      {
+        ...(focused
+          ? {}
+          : { nodes: [{ ...WRAPPER_ONLY[0], identifier: 'email', type: 'TextField' }] }),
+        fill: () => failResult('duplicate target', 'TARGET_AMBIGUOUS', { mutation: 'none' }),
+      },
+      () =>
+        focused
+          ? performFocusedFill({ ref: 'EmailOtpFormContent_email-pressable', text: 'x' }, null)
+          : performExactFill({ ref: 'email', text: 'x' }, null, {}),
+    );
+    assert.equal(envelope(result as never).code, 'TARGET_AMBIGUOUS');
+    assert.equal(envelope(result as never).meta.mutation, 'none');
+    assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 1);
+  });
+}

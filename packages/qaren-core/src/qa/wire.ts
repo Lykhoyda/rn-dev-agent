@@ -1,12 +1,15 @@
+import { isAbsolute } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { Ledger, LedgerRow, WalkResult } from './ledger.js';
 import { ledgerWithoutResult } from './ledger.js';
 import type { PreparedPlan } from './plan.js';
 import { type JevCall, isRecord } from './questions.js';
+import type { LoginMarker } from './recover.js';
+import { isValidActionId } from '../domain/path-safety.js';
 
 export const WIRE_VERSION = 1 as const;
 
-export type EnvelopeType = 'request' | 'row' | 'result' | 'cancel';
+export type EnvelopeType = 'request' | 'admitted' | 'row' | 'resource' | 'result' | 'cancel';
 
 export interface Envelope<T = unknown> {
   v: typeof WIRE_VERSION;
@@ -27,14 +30,30 @@ export interface WireTarget {
 export interface WireRequest {
   runId: string;
   t0: number;
+  walkBudgetMs: number;
   plan: string;
   prepared?: PreparedPlan;
   preflightCalls?: JevCall[];
   platform: 'ios' | 'android';
   appId: string;
+  appRoot: string;
   runDir: string;
   lease: string;
   target: WireTarget;
+  loginBlock?: string;
+  loginMarker?: LoginMarker;
+}
+
+// Exactly one of id or text, never empty.
+function validMarker(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  return (
+    keys.length === 1 &&
+    (keys[0] === 'id' || keys[0] === 'text') &&
+    typeof value[keys[0]] === 'string' &&
+    (value[keys[0]] as string).length > 0
+  );
 }
 
 export interface Refusal extends Partial<Omit<Ledger, 'verdict'>> {
@@ -96,7 +115,14 @@ export function startupRow(): LedgerRow {
   };
 }
 
-const TYPES: ReadonlySet<string> = new Set(['request', 'row', 'result', 'cancel']);
+const TYPES: ReadonlySet<string> = new Set([
+  'request',
+  'admitted',
+  'row',
+  'resource',
+  'result',
+  'cancel',
+]);
 
 function validCall(value: unknown): boolean {
   return (
@@ -108,7 +134,10 @@ function validCall(value: unknown): boolean {
     (value.ms as number) >= 0 &&
     (value.inputTokens === null ||
       (Number.isSafeInteger(value.inputTokens) && (value.inputTokens as number) >= 0)) &&
-    ['ok', 'timeout', 'network', 'http', 'invalid'].includes(String(value.outcome)) &&
+    ['ok', 'timeout', 'deadline', 'network', 'http', 'invalid'].includes(String(value.outcome)) &&
+    (value.diagnostic === undefined ||
+      value.diagnostic === null ||
+      value.diagnostic === 'retry-after-outside-window') &&
     (value.status === undefined ||
       (Number.isInteger(value.status) &&
         (value.status as number) >= 100 &&
@@ -152,11 +181,15 @@ export function parseRequest(line: string): WireRequest {
     typeof p.runId !== 'string' ||
     !p.runId ||
     !Number.isSafeInteger(p.t0) ||
+    !Number.isSafeInteger(p.walkBudgetMs) ||
+    (p.walkBudgetMs as number) < 1 ||
     typeof p.plan !== 'string' ||
     (p.preflightCalls !== undefined &&
       (!Array.isArray(p.preflightCalls) || !p.preflightCalls.every(validCall))) ||
     (p.platform !== 'ios' && p.platform !== 'android') ||
     typeof p.appId !== 'string' ||
+    typeof p.appRoot !== 'string' ||
+    !isAbsolute(p.appRoot) ||
     typeof p.runDir !== 'string' ||
     typeof p.lease !== 'string' ||
     !target ||
@@ -170,7 +203,9 @@ export function parseRequest(line: string): WireRequest {
       (typeof adb !== 'object' ||
         adb === null ||
         typeof adb.serial !== 'string' ||
-        (adb.serverSocket !== undefined && typeof adb.serverSocket !== 'string')));
+        (adb.serverSocket !== undefined && typeof adb.serverSocket !== 'string'))) ||
+    (p.loginBlock !== undefined && (!isValidActionId(p.loginBlock) || !p.loginMarker)) ||
+    (p.loginMarker !== undefined && !validMarker(p.loginMarker));
   if (bad) throw new WireError('the request payload is missing required fields');
   if (p.runId !== envelope.runId) throw new WireError('the request payload names another run');
   return p as WireRequest;
@@ -190,7 +225,9 @@ export async function readRequest(input: AsyncIterable<Buffer | string>): Promis
 }
 
 export interface WireWriter {
+  admitted(): void;
   row(payload: LedgerRow): void;
+  runnerDriver(pid: number): void;
   result(payload: ResultPayload): 0 | 1 | 4;
   readonly seq: number;
 }
@@ -206,7 +243,12 @@ export function createWriter(write: (line: string) => void, runId: string): Wire
     write(`${JSON.stringify(envelope)}\n`);
   };
   return {
+    admitted: () => send('admitted', {}),
     row: (payload) => send('row', payload),
+    // The CLI records the driver's own process group before it can outlive this child.
+    runnerDriver: (pid) => {
+      if (!closed) send('resource', { kind: 'runner_driver', pid });
+    },
     result: (payload) => {
       send('result', payload);
       closed = true;

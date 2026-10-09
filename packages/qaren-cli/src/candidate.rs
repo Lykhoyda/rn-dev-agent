@@ -75,8 +75,62 @@ fn resolve_explicit_worktree(runner: &mut dyn Runner, worktree: &str) -> Result<
     Ok(canonical)
 }
 
-pub fn worktree_fingerprint(porcelain_stdout: &str) -> String {
-    sha256_hex(porcelain_stdout.as_bytes())
+pub fn worktree_fingerprint(repo_root: &Path, porcelain: &str) -> Result<String, String> {
+    use std::os::unix::ffi::OsStrExt;
+    let entries = parse_porcelain_z(porcelain).ok_or("invalid git status records")?;
+    let mut hasher = Sha256::new();
+    hasher.update(porcelain.as_bytes());
+    let mut paths: Vec<_> = entries
+        .into_iter()
+        .flat_map(PorcelainEntry::paths)
+        .collect();
+    paths.sort_unstable();
+    paths.dedup();
+    for path in paths {
+        let relative = Path::new(path);
+        if relative
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            return Err("git status path escapes the candidate".into());
+        }
+        let full = repo_root.join(relative);
+        let mut parent = repo_root.to_path_buf();
+        for component in relative.parent().into_iter().flat_map(Path::components) {
+            parent.push(component);
+            if std::fs::symlink_metadata(&parent).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err("git status path has a symlinked parent".into());
+            }
+        }
+        hasher.update((path.len() as u64).to_le_bytes());
+        hasher.update(path.as_bytes());
+        let metadata = match std::fs::symlink_metadata(&full) {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                hasher.update(b"absent");
+                continue;
+            }
+            Err(_) => return Err("cannot inspect dirty candidate file".into()),
+        };
+        let content = if metadata.file_type().is_symlink() {
+            hasher.update(b"symlink");
+            std::fs::read_link(&full)
+                .map_err(|_| "cannot read candidate symlink")?
+                .as_os_str()
+                .as_bytes()
+                .to_vec()
+        } else if metadata.is_file() {
+            hasher.update(b"file");
+            std::fs::read(&full).map_err(|_| "cannot read dirty candidate file")?
+        } else {
+            return Err("git status entry is not a candidate file".into());
+        };
+        hasher.update((content.len() as u64).to_le_bytes());
+        hasher.update(&content);
+        use std::os::unix::fs::PermissionsExt;
+        hasher.update((metadata.permissions().mode() & 0o111).to_le_bytes());
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 #[derive(Clone, Copy)]
@@ -136,15 +190,30 @@ fn serialize_porcelain_z<'a>(entries: impl IntoIterator<Item = PorcelainEntry<'a
     serialized
 }
 
-pub fn porcelain_without_qaren_state(porcelain_stdout: &str) -> String {
+pub fn porcelain_without_qaren_state(
+    porcelain_stdout: &str,
+    repo_root: &Path,
+    project_root: &Path,
+) -> String {
+    let actions = project_root
+        .strip_prefix(repo_root)
+        .ok()
+        .map(|relative| relative.join(".qaren/actions"));
     let Some(entries) = parse_porcelain_z(porcelain_stdout) else {
         return porcelain_stdout.to_string();
     };
-    serialize_porcelain_z(
-        entries
-            .into_iter()
-            .filter(|entry| !entry.paths().all(is_qaren_state_path)),
-    )
+    serialize_porcelain_z(entries.into_iter().filter(|entry| {
+        !entry.paths().all(|path| {
+            let path_ref = Path::new(path);
+            is_qaren_state_path(path)
+                || actions.as_deref().is_some_and(|actions| {
+                    path_ref.parent() == Some(actions)
+                        && path_ref
+                            .extension()
+                            .is_some_and(|extension| extension == "yaml" || extension == "yml")
+                })
+        })
+    }))
 }
 
 fn is_qaren_state_path(path: &str) -> bool {
@@ -443,7 +512,11 @@ fn verify_unchanged_inner(
             porcelain.summary()
         ));
     }
-    let project_state = porcelain_without_qaren_state(&porcelain.stdout);
+    let project_state = porcelain_without_qaren_state(
+        &porcelain.stdout,
+        &recorded.repo_root,
+        &recorded.project_root,
+    );
     let project_state = if tolerate_integration {
         filter_integration_entries(
             runner,
@@ -461,7 +534,7 @@ fn verify_unchanged_inner(
             recorded.git_dirty
         ));
     }
-    let fingerprint_now = worktree_fingerprint(&project_state);
+    let fingerprint_now = worktree_fingerprint(&recorded.repo_root, &project_state)?;
     if let Some(fp) = recorded.worktree_fingerprint.as_deref() {
         if fp != fingerprint_now {
             return Err(format!(
@@ -608,7 +681,7 @@ pub fn resolve(
             ))
         }
     };
-    let project_state = porcelain_without_qaren_state(&porcelain.stdout);
+    let project_state = porcelain_without_qaren_state(&porcelain.stdout, &repo_root, &project_root);
     // Handoff-mode baselines are normalized through the integration filter so
     // the same comparison holds before and after the session applies (or has
     // left applied) its declared integration surface.
@@ -617,6 +690,14 @@ pub fn resolve(
     } else {
         project_state
     };
+    let fingerprint = worktree_fingerprint(&repo_root, &project_state).map_err(|detail| {
+        Failure::new(
+            "validate",
+            FailureCode::CandidatePathInvalid,
+            detail,
+            "restore readable candidate files and retry",
+        )
+    })?;
     Ok(Candidate {
         repo_root,
         project_root,
@@ -624,13 +705,61 @@ pub fn resolve(
         git_sha,
         git_dirty: !project_state.trim().is_empty(),
         lockfile_sha256,
-        worktree_fingerprint: Some(worktree_fingerprint(&project_state)),
+        worktree_fingerprint: Some(fingerprint),
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::porcelain_without_qaren_state;
+    fn porcelain_without_qaren_state(porcelain: &str) -> String {
+        super::porcelain_without_qaren_state(
+            porcelain,
+            std::path::Path::new("repo"),
+            std::path::Path::new("repo"),
+        )
+    }
+
+    #[test]
+    fn app_actions_are_outputs_but_cross_boundary_renames_are_changes() {
+        for (porcelain, expected) in [
+            ("?? test-app/.qaren/actions/tasks.yaml\0", ""),
+            (" M test-app/.qaren/actions/tasks.yml\0", ""),
+            (" D test-app/.qaren/actions/tasks.yaml\0", ""),
+            (
+                "R  test-app/.qaren/actions/new.yml\0test-app/.qaren/actions/old.yaml\0",
+                "",
+            ),
+            (
+                "R  test-app/.qaren/actions/tasks.yaml\0test-app/App.tsx\0",
+                "R  test-app/.qaren/actions/tasks.yaml\0test-app/App.tsx\0",
+            ),
+            (
+                "R  test-app/App.tsx\0test-app/.qaren/actions/tasks.yaml\0",
+                "R  test-app/App.tsx\0test-app/.qaren/actions/tasks.yaml\0",
+            ),
+            (
+                " M other-app/.qaren/actions/tasks.yaml\0",
+                " M other-app/.qaren/actions/tasks.yaml\0",
+            ),
+            (
+                " M test-app/.qaren/config.yaml\0",
+                " M test-app/.qaren/config.yaml\0",
+            ),
+            (
+                " M test-app/.qaren/actions/source.ts\0",
+                " M test-app/.qaren/actions/source.ts\0",
+            ),
+        ] {
+            assert_eq!(
+                super::porcelain_without_qaren_state(
+                    porcelain,
+                    std::path::Path::new("repo"),
+                    std::path::Path::new("repo/test-app"),
+                ),
+                expected,
+            );
+        }
+    }
 
     #[test]
     fn drops_the_untracked_qaren_dir_entry() {

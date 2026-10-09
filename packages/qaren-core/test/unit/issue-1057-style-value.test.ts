@@ -15,10 +15,12 @@ function hiddenForStyle(style: unknown) {
   return sandbox.__QAREN.__hidden(leaf);
 }
 
-test('styleValue last non-undefined array entry wins', () => {
+test('styleValue last present array property wins, including explicit resets', () => {
   assert.equal(hiddenForStyle([{ display: 'none' }, { display: 'flex' }]), false);
   assert.equal(hiddenForStyle([{ display: 'flex' }, { display: 'none' }]), true);
-  assert.equal(hiddenForStyle([{ display: 'none' }, { display: undefined }]), true);
+  assert.equal(hiddenForStyle([{ display: 'none' }, { display: undefined }]), false);
+  assert.equal(hiddenForStyle([{ display: 'none' }, { display: null }]), false);
+  assert.equal(hiddenForStyle([{ display: 'none' }, {}]), true);
 });
 
 test('styleValue walks nested style arrays', () => {

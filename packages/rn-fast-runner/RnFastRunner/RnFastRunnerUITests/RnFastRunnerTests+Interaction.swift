@@ -662,6 +662,101 @@ extension RnFastRunnerTests {
 #endif
   }
 
+  static let occludedDispatchMessage =
+    "FOCUS_TARGET_OCCLUDED: the focus or tap point is covered by another element (keyboard, bar or overlay); no tap or typing was performed. Scroll the target clear, then retry."
+
+  static let movedDispatchMessage =
+    "TARGET_MOVED_BEFORE_DISPATCH: target moved before dispatch; no tap or typing was performed. Refresh the snapshot and retry."
+
+  // nil when the hit test is unavailable: unresolvable, ambiguous, thrown or over budget.
+  func boundedHittable(_ element: XCUIElement, deadline: Double) -> Bool? {
+    DispatchGuard.hitTest(
+      deadline: deadline,
+      now: { ProcessInfo.processInfo.systemUptime },
+      resolve: { element },
+      read: { target in
+        var hittable: Bool?
+        let exception = RunnerObjCExceptionCatcher.catchException({ hittable = target.isHittable })
+        return exception == nil ? hittable : nil
+      }
+    ).hittable
+  }
+
+  func liveTargetCheck(app: XCUIApplication, command: Command, deadline: Double, checkHittability: Bool = true) -> DispatchGuard.TargetCheck {
+    lastMovedFrames = nil
+    guard let index = command.snapshotNodeIndex,
+          let retained = retainedSnapshotTargets[index],
+          retained.generation == currentSnapshotGeneration,
+          command.snapshotGeneration == retained.generation
+    else { return .unavailable }
+    let predicate: NSPredicate
+    if let identifier = retained.identifier {
+      predicate = NSPredicate(format: "identifier == %@", identifier)
+    } else if let label = retained.label {
+      predicate = NSPredicate(format: "label == %@", label)
+    } else {
+      return .unavailable
+    }
+    let expected = CGRect(
+      x: retained.rect.x, y: retained.rect.y,
+      width: retained.rect.width, height: retained.rect.height
+    )
+    var live: CGRect?
+    var liveIdentity: DispatchGuard.NodeIdentity?
+    let check = DispatchGuard.hitTest(
+      deadline: deadline,
+      now: { ProcessInfo.processInfo.systemUptime },
+      resolve: {
+        var matches: [XCUIElement] = []
+        let exception = RunnerObjCExceptionCatcher.catchException({
+          matches = app.descendants(matching: .any).matching(predicate).allElementsBoundByIndex.filter {
+            self.elementTypeName($0.elementType) == retained.type
+          }
+        })
+        return exception == nil && matches.count == 1 ? matches[0] : nil
+      },
+      matchesFrame: { target in
+        var matches: Bool?
+        let exception = RunnerObjCExceptionCatcher.catchException({
+          let frame = target.frame
+          live = frame
+          let owner = retained.ownerRect.map { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
+          let agree = DispatchGuard.framesAgree(retained: expected, live: frame, owner: owner)
+          if !agree {
+            let label = target.label
+            let identifier = target.identifier
+            liveIdentity = DispatchGuard.NodeIdentity(
+              type: self.elementTypeName(target.elementType),
+              label: label.isEmpty ? nil : label,
+              identifier: identifier.isEmpty ? nil : identifier
+            )
+          }
+          matches = agree
+        })
+        return exception == nil ? matches : nil
+      },
+      checkHittability: checkHittability,
+      read: { target in self.boundedHittable(target, deadline: deadline) }
+    )
+    if check == .moved, let live {
+      lastMovedFrames = (
+        expected, live,
+        DispatchGuard.NodeIdentity(type: retained.type, label: retained.label, identifier: retained.identifier),
+        liveIdentity
+      )
+    }
+    return check
+  }
+
+  func movedDispatchResponse() -> Response {
+    let message = lastMovedFrames.map {
+      DispatchGuard.movedMessage(
+        retained: $0.retained, live: $0.live,
+        retainedIdentity: $0.retainedIdentity, liveIdentity: $0.liveIdentity)
+    } ?? Self.movedDispatchMessage
+    return Response(ok: false, error: ErrorPayload(code: "TARGET_MOVED_BEFORE_DISPATCH", message: message, mutation: "none"))
+  }
+
   private func resolveLiveKeyboardTarget(
     app: XCUIApplication,
     retained: RetainedSnapshotTarget

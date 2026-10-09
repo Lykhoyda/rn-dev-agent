@@ -1,4 +1,6 @@
+import { sleep as cancellableSleep } from '../domain/cancellation.js';
 import { failResult, okResult, type ToolResult } from '../utils.js';
+import type { QaDispatchContext } from '../domain/qa-dispatch.js';
 
 export function resolveKeyboardGuard(env: NodeJS.ProcessEnv): boolean {
   const raw = (env.RN_KEYBOARD_GUARD ?? '').trim().toLowerCase();
@@ -115,7 +117,7 @@ export type KeyboardHiddenObservation = 'hidden' | 'visible' | 'unknown';
 
 export async function waitForKeyboardHidden(
   refreshSnapshot: () => Promise<unknown>,
-  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  sleep: (ms: number) => Promise<void> = cancellableSleep,
 ): Promise<KeyboardHiddenObservation> {
   let last: KeyboardHiddenObservation = 'unknown';
   for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
@@ -226,7 +228,10 @@ export async function dismissKeyboardWithParity(deps: KeyboardDismissDeps): Prom
 export async function healKeyboardOccludedTap(
   first: ToolResult,
   deps: KeyboardAutoHealDeps | null,
+  qaContext?: QaDispatchContext,
 ): Promise<ToolResult> {
+  // This repair has no retained-identity/no-invocation proof for QA.
+  if (qaContext && isKeyboardOccludedRefusal(first)) qaContext.refuse('ACTION_OUTCOME_UNCERTAIN');
   if (!deps || !isKeyboardOccludedRefusal(first)) return first;
   const t0 = Date.now();
   let dismissed = false;

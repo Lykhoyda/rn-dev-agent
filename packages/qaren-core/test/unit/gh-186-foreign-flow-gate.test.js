@@ -128,17 +128,12 @@ test('GH#186 gate: a different udid does NOT share the in-flight scan', async ()
   assert.equal(scans, 2);
 });
 
-test('GH#186 gate: enable knob — RN_IOS_FOREIGN_GUARD wins, RN_IOS_FOREIGN_WARN is a deprecated alias', () => {
+test('GH#186 gate: enable knob — only RN_IOS_FOREIGN_GUARD disables the gate', () => {
   assert.equal(foreignGateEnabled({}), true, 'default on');
-  assert.equal(
-    foreignGateEnabled({ RN_IOS_FOREIGN_WARN: '0' }),
-    false,
-    'legacy alias still disables',
-  );
   assert.equal(foreignGateEnabled({ RN_IOS_FOREIGN_GUARD: '0' }), false);
   assert.equal(
-    foreignGateEnabled({ RN_IOS_FOREIGN_GUARD: '1', RN_IOS_FOREIGN_WARN: '0' }),
+    foreignGateEnabled({ RN_IOS_FOREIGN_WARN: '0' }),
     true,
-    'explicit GUARD overrides the alias',
+    'the removed 1.x alias has no effect',
   );
 });

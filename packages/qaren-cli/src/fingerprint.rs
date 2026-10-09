@@ -1,7 +1,7 @@
 use crate::candidate::sha256_hex;
 use crate::exec::{CmdSpec, Runner};
 use crate::failure::{Failure, FailureCode};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub const FINGERPRINT_VERSION: &str = "rnfp1";
@@ -12,10 +12,31 @@ pub struct NativeFingerprint {
     pub file_count: usize,
     pub native_dir_in_candidate: bool,
     // Reuse of a cached binary is only legal when the input set is provably
-    // complete; a dynamic app.config.* can import arbitrary modules that this
-    // manifest cannot enumerate.
+    // complete; a dynamic app.config.* is complete only once the app's own
+    // @expo/fingerprint has evaluated it.
     pub complete: bool,
     pub incompleteness: Vec<String>,
+    // Hash-only evidence of what `value` composes: rnfp, plus expo and toolchain for a dynamic config.
+    pub parts: BTreeMap<String, String>,
+    pub expo_fingerprint_ms: Option<u64>,
+    // The closed-template cause when a dynamic config's Expo fingerprint could not be computed.
+    pub expo_unavailable: Option<String>,
+}
+
+impl NativeFingerprint {
+    pub fn with_ios_workspace(mut self, spec: Option<&crate::scenario::IosWorkspaceBuild>) -> Self {
+        if let Some(spec) = spec {
+            let bytes = serde_json::to_vec(&(
+                "qaren-ios-workspace-build/1",
+                &self.value,
+                &spec.workspace,
+                &spec.scheme,
+            ))
+            .expect("fingerprint and workspace strings serialize to JSON");
+            self.value = format!("{FINGERPRINT_VERSION}:{}", sha256_hex(&bytes));
+        }
+        self
+    }
 }
 
 // Native inputs are the files git considers part of the candidate (tracked or
@@ -69,6 +90,8 @@ fn is_dynamic_config(rel: &str) -> bool {
 #[derive(Debug, Default)]
 struct ReferencedInputs {
     files: BTreeSet<String>,
+    modules: Vec<String>,
+    packages: BTreeSet<String>,
     incompleteness: Vec<String>,
 }
 
@@ -88,6 +111,25 @@ fn referenced_paths(app_json: &str, project_root: &Path) -> ReferencedInputs {
             return out;
         }
     };
+    if let Some(plugins) = parsed.pointer("/expo/plugins").and_then(|v| v.as_array()) {
+        for plugin in plugins {
+            let reference = plugin
+                .as_str()
+                .or_else(|| plugin.as_array()?.first()?.as_str());
+            if let Some(reference) = reference {
+                if reference.starts_with('.') || project_root.join(reference).is_file() {
+                    out.modules.push(
+                        reference
+                            .strip_prefix("./")
+                            .unwrap_or(reference)
+                            .to_string(),
+                    );
+                } else {
+                    out.packages.insert(reference.to_string());
+                }
+            }
+        }
+    }
     collect_strings(&parsed, &mut |s| {
         let explicit_local = s.starts_with("./") || s.starts_with("../");
         let candidate = s.strip_prefix("./").unwrap_or(s);
@@ -99,23 +141,9 @@ fn referenced_paths(app_json: &str, project_root: &Path) -> ReferencedInputs {
             }
             return;
         }
-        // Approximate Node resolution for extensionless local module refs.
-        let attempts = [
-            candidate.to_string(),
-            format!("{candidate}.js"),
-            format!("{candidate}.ts"),
-            format!("{candidate}.mjs"),
-            format!("{candidate}.cjs"),
-            format!("{candidate}.json"),
-            format!("{candidate}/index.js"),
-            format!("{candidate}/index.ts"),
-        ];
-        for attempt in &attempts {
-            let path = project_root.join(attempt);
-            if path.is_file() || path.is_symlink() {
-                out.files.insert(attempt.clone());
-                return;
-            }
+        if project_root.join(candidate).is_file() {
+            out.files.insert(candidate.to_string());
+            return;
         }
         if explicit_local {
             out.incompleteness.push(format!(
@@ -130,28 +158,85 @@ fn is_executable_module(rel: &str) -> bool {
     rel.ends_with(".js") || rel.ends_with(".ts") || rel.ends_with(".mjs") || rel.ends_with(".cjs")
 }
 
-fn import_specifiers(source: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for marker in [
-        "from \"",
-        "from '",
-        "require(\"",
-        "require('",
-        "import(\"",
-        "import('",
-        "import \"",
-        "import '",
-    ] {
-        let quote = marker.chars().last().expect("marker ends with a quote");
-        let mut rest = source;
-        while let Some(idx) = rest.find(marker) {
-            let after = &rest[idx + marker.len()..];
-            match after.find(quote) {
-                Some(end) => {
-                    out.push(after[..end].to_string());
-                    rest = &after[end..];
+#[derive(Debug, Default, PartialEq)]
+struct Specifiers {
+    found: Vec<String>,
+    // `require(…)`/`import(…)` whose argument is not one plain string literal.
+    unparseable: Vec<String>,
+}
+
+fn import_specifiers(source: &str) -> Specifiers {
+    let mut out = Specifiers::default();
+    let bytes = source.as_bytes();
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+    let skip_ws = |mut i: usize| {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        i
+    };
+    let literal = |i: usize| -> Option<(String, usize)> {
+        let quote = *bytes.get(i)?;
+        if quote != b'\'' && quote != b'"' {
+            return None;
+        }
+        let end = source[i + 1..].find(quote as char)? + i + 1;
+        let text = &source[i + 1..end];
+        (!text.contains(['\n', '\r', '\\'])).then(|| (text.to_string(), end + 1))
+    };
+    for keyword in ["require", "import", "from"] {
+        for (at, _) in source.match_indices(keyword) {
+            let end = at + keyword.len();
+            if (at > 0 && ident(bytes[at - 1])) || bytes.get(end).is_some_and(|&b| ident(b)) {
+                continue;
+            }
+            let next = skip_ws(end);
+            if source[..at].trim_end().ends_with('.') {
+                let line = source[..at].matches('\n').count() + 1;
+                out.unparseable
+                    .push(format!("property {keyword} at line {line}"));
+                continue;
+            }
+            if keyword != "from" && bytes.get(next) == Some(&b'(') {
+                let arg = skip_ws(next + 1);
+                match literal(arg) {
+                    Some((text, after)) if bytes.get(skip_ws(after)) == Some(&b')') => {
+                        out.found.push(text)
+                    }
+                    _ => {
+                        let line = source[..at].matches('\n').count() + 1;
+                        out.unparseable.push(format!("{keyword}(…) at line {line}"));
+                    }
                 }
-                None => break,
+            } else if keyword != "require" {
+                if let Some((text, _)) = literal(next) {
+                    out.found.push(text);
+                } else if keyword == "from" {
+                    // Import and re-export `from` always takes a string literal; anything else is prose.
+                } else {
+                    let static_import = keyword == "import"
+                        && source[next..].find("from").is_some_and(|offset| {
+                            let binding = &source[next..next + offset];
+                            !binding.trim().is_empty()
+                                && binding.bytes().all(|b| {
+                                    ident(b)
+                                        || b.is_ascii_whitespace()
+                                        || matches!(b, b'{' | b'}' | b',' | b'*')
+                                })
+                                && literal(skip_ws(next + offset + 4)).is_some()
+                        });
+                    if !static_import {
+                        out.unparseable.push(format!(
+                            "{keyword} at line {}",
+                            source[..at].matches('\n').count() + 1
+                        ));
+                    }
+                }
+            } else {
+                out.unparseable.push(format!(
+                    "{keyword} at line {}",
+                    source[..at].matches('\n').count() + 1
+                ));
             }
         }
     }
@@ -185,6 +270,7 @@ fn trace_local_imports(
     project_root: &Path,
     seeds: Vec<String>,
     inputs: &mut BTreeSet<String>,
+    packages: &mut BTreeSet<String>,
     incompleteness: &mut Vec<String>,
 ) {
     let mut worklist = seeds;
@@ -193,15 +279,70 @@ fn trace_local_imports(
         if !visited.insert(rel.clone()) {
             continue;
         }
+        if !Path::new(&rel)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+        {
+            incompleteness.push(format!("local module {rel} is not a project-relative file"));
+            continue;
+        }
+        let mut path = project_root.to_path_buf();
+        let regular = Path::new(&rel).components().all(|component| {
+            path.push(component);
+            std::fs::symlink_metadata(&path)
+                .is_ok_and(|metadata| !metadata.file_type().is_symlink())
+        }) && path.is_file();
+        if !regular || !(is_executable_module(&rel) || rel.ends_with(".json")) {
+            incompleteness.push(format!("local module {rel} is not a regular non-symlink file with a recognized extension; its dependencies cannot be proven complete"));
+            continue;
+        }
         let Ok(source) = std::fs::read_to_string(project_root.join(&rel)) else {
             incompleteness.push(format!(
                 "local module {rel} could not be read; its imports cannot be enumerated"
             ));
             continue;
         };
+        if rel.ends_with(".json") {
+            if serde_json::from_str::<serde_json::Value>(&source).is_err() {
+                incompleteness.push(format!("local module {rel} does not parse as JSON"));
+            }
+            continue;
+        }
+        let bytes = source.as_bytes();
+        let identifier = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+        if source.match_indices("process").any(|(at, _)| {
+            (at == 0 || !identifier(bytes[at - 1]))
+                && !bytes.get(at + 7).is_some_and(|&b| identifier(b))
+        }) {
+            incompleteness.push(format!(
+                "local module {rel} uses process; ambient inputs are unbound"
+            ));
+        }
         let base_dir = rel.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
-        for specifier in import_specifiers(&source) {
+        let specifiers = import_specifiers(&source);
+        if specifiers
+            .found
+            .iter()
+            .any(|specifier| !specifier.starts_with('.'))
+            && project_root
+                .join(base_dir)
+                .ancestors()
+                .take_while(|dir| *dir != project_root)
+                .any(|dir| dir.join("node_modules").is_dir())
+        {
+            incompleteness.push(
+                "traced module has nested node_modules on its import resolution path; the input set is unprovably complete"
+                    .to_string(),
+            );
+        }
+        for site in &specifiers.unparseable {
+            incompleteness.push(format!(
+                "{site} in {rel} is not a plain string literal; its import cannot be enumerated"
+            ));
+        }
+        for specifier in specifiers.found {
             if !specifier.starts_with('.') {
+                packages.insert(specifier);
                 continue;
             }
             let Some(normalized) = normalize_rel(base_dir, &specifier) else {
@@ -210,28 +351,12 @@ fn trace_local_imports(
                 ));
                 continue;
             };
-            let attempts = [
-                normalized.clone(),
-                format!("{normalized}.js"),
-                format!("{normalized}.ts"),
-                format!("{normalized}.mjs"),
-                format!("{normalized}.cjs"),
-                format!("{normalized}.json"),
-                format!("{normalized}/index.js"),
-                format!("{normalized}/index.ts"),
-            ];
-            let resolved = attempts.iter().find(|attempt| {
-                let path = project_root.join(attempt);
-                path.is_file() || path.is_symlink()
-            });
-            match resolved {
-                Some(found) => {
-                    inputs.insert(found.clone());
-                    if is_executable_module(found) {
-                        worklist.push(found.clone());
-                    }
+            match project_root.join(&normalized).is_file() {
+                true => {
+                    inputs.insert(normalized.clone());
+                    worklist.push(normalized);
                 }
-                None => incompleteness.push(format!(
+                false => incompleteness.push(format!(
                     "import {specifier:?} in {rel} does not resolve to a project file; the input set is unprovably complete"
                 )),
             }
@@ -239,10 +364,149 @@ fn trace_local_imports(
     }
 }
 
-// A local dependency (file:/link:) can autolink native code into the app;
-// when it carries a native surface, that surface is hashed into its own
-// manifest entries so edits to it invalidate reuse. Unresolvable or
-// workspace:-resolved local deps leave the set unprovably complete.
+const NODE_BUILTINS: &[&str] = &[
+    "assert",
+    "buffer",
+    "child_process",
+    "crypto",
+    "events",
+    "fs",
+    "http",
+    "https",
+    "module",
+    "net",
+    "os",
+    "path",
+    "process",
+    "querystring",
+    "readline",
+    "stream",
+    "string_decoder",
+    "timers",
+    "tty",
+    "url",
+    "util",
+    "v8",
+    "vm",
+    "worker_threads",
+    "zlib",
+];
+
+const PURE_NODE_BUILTINS: &[&str] = &[
+    "path",
+    "url",
+    "util",
+    "assert",
+    "events",
+    "buffer",
+    "string_decoder",
+    "querystring",
+];
+
+fn package_manifest(
+    project_root: &Path,
+    repo_root: &Path,
+    packages: &BTreeSet<String>,
+    manifest: &mut Vec<(String, String)>,
+    incompleteness: &mut Vec<String>,
+) {
+    let mut versions: BTreeMap<String, String> = BTreeMap::new();
+    for specifier in packages {
+        let builtin = specifier.strip_prefix("node:").unwrap_or(specifier);
+        let root = builtin.split('/').next().unwrap_or(builtin);
+        if PURE_NODE_BUILTINS.contains(&root) {
+            continue;
+        }
+        if specifier.starts_with("node:") || NODE_BUILTINS.contains(&root) {
+            incompleteness.push(format!(
+                "Node built-in {specifier:?} may read unbound inputs; the input set is unprovably complete"
+            ));
+            continue;
+        }
+        let segments = if specifier.starts_with('@') { 2 } else { 1 };
+        let name = specifier
+            .split('/')
+            .take(segments)
+            .collect::<Vec<_>>()
+            .join("/");
+        let valid = name.split('/').count() == segments
+            && name.split('/').all(|part| {
+                !part.is_empty() && part != "." && part != ".." && !part.contains('\\')
+            });
+        if !valid {
+            incompleteness.push(format!(
+                "package {specifier:?} is not a resolvable package name; the input set is unprovably complete"
+            ));
+            continue;
+        }
+        if versions.contains_key(&name) {
+            continue;
+        }
+        let mut dir = Some(project_root);
+        let mut found = None;
+        let mut local = false;
+        while let Some(current) = dir.filter(|d| d.starts_with(repo_root)) {
+            if let Some(parsed) = std::fs::read_to_string(current.join("package.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            {
+                local = ["dependencies", "devDependencies", "optionalDependencies"]
+                    .iter()
+                    .filter_map(|section| parsed.get(section)?.get(&name)?.as_str())
+                    .any(|spec| {
+                        spec.starts_with("file:")
+                            || spec.starts_with("link:")
+                            || spec.starts_with("workspace:")
+                    });
+                if local {
+                    break;
+                }
+            }
+            let candidate = current
+                .join("node_modules")
+                .join(&name)
+                .join("package.json");
+            if candidate.is_file() {
+                found = Some(candidate);
+                break;
+            }
+            dir = current.parent();
+        }
+        if let Some(path) = &found {
+            if let (Ok(resolved), Ok(root)) = (path.canonicalize(), repo_root.canonicalize()) {
+                if let Ok(relative) = resolved.strip_prefix(root) {
+                    local = !relative
+                        .components()
+                        .any(|part| part.as_os_str() == "node_modules");
+                }
+            }
+        }
+        if local {
+            incompleteness.push(format!(
+                "local package plugin {name} is not traced; the input set is unprovably complete"
+            ));
+            continue;
+        }
+        let version = found
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|parsed| parsed.get("version")?.as_str().map(str::to_string));
+        match version {
+            Some(version) => {
+                versions.insert(name, version);
+            }
+            None => incompleteness.push(format!(
+                "package {name} (from {specifier:?}) does not resolve to a versioned package from the project root; the input set is unprovably complete"
+            )),
+        }
+    }
+    manifest.extend(
+        versions
+            .into_iter()
+            .map(|(name, version)| (format!("package:{name}"), format!("version:{version}"))),
+    );
+}
+
 fn local_dependency_manifest(
     project_root: &Path,
     repo_root: &Path,
@@ -258,7 +522,7 @@ fn local_dependency_manifest(
         return;
     };
     let mut locals: Vec<(String, String)> = Vec::new();
-    for section in ["dependencies", "devDependencies"] {
+    for section in ["dependencies", "devDependencies", "optionalDependencies"] {
         let Some(deps) = parsed.get(section).and_then(|d| d.as_object()) else {
             continue;
         };
@@ -290,19 +554,12 @@ fn local_dependency_manifest(
             ));
             continue;
         }
-        let has_native_surface = resolved.join("ios").is_dir()
-            || resolved.join("android").is_dir()
-            || resolved.join("expo-module.config.json").is_file()
-            || std::fs::read_dir(&resolved).is_ok_and(|entries| {
-                entries
-                    .flatten()
-                    .any(|e| e.file_name().to_string_lossy().ends_with(".podspec"))
-            });
-        if !has_native_surface {
-            continue;
-        }
         let mut files = Vec::new();
-        collect_dep_surface(&resolved, &resolved, &mut files);
+        if let Err(detail) = collect_dep_surface(&resolved, &resolved, &mut files) {
+            incompleteness.push(format!(
+                "native inputs of local dependency {name} could not be enumerated: {detail}"
+            ));
+        }
         files.sort();
         for file_rel in files {
             let path = resolved.join(&file_rel);
@@ -321,49 +578,43 @@ fn local_dependency_manifest(
     }
 }
 
-fn collect_dep_surface(base: &Path, dir: &Path, files: &mut Vec<String>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
+fn collect_dep_surface(base: &Path, dir: &Path, files: &mut Vec<String>) -> Result<(), String> {
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| format!("cannot enumerate {}: {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("cannot enumerate {}: {e}", dir.display()))?;
         let path = entry.path();
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let rel_ok = path.strip_prefix(base).is_ok();
-        if !rel_ok {
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
+        let name = entry.file_name();
+        if name == ".git"
+            || (file_type.is_dir()
+                && matches!(
+                    name.to_str(),
+                    Some("node_modules" | "build" | ".gradle" | ".cxx" | "Pods" | "DerivedData")
+                ))
+        {
             continue;
         }
-        let is_dir = path.is_dir() && !path.is_symlink();
-        let rel = path
-            .strip_prefix(base)
-            .expect("checked above")
-            .to_string_lossy()
-            .into_owned();
-        let top = rel.split('/').next().unwrap_or("");
-        let excluded = matches!(name.as_str(), "node_modules" | ".git" | "build")
-            || (top == "android" && (rel.contains("/.gradle") || rel.contains("/build")))
-            || (top == "ios" && (rel.contains("/Pods") || rel.contains("/build")));
-        if excluded {
-            continue;
-        }
-        if is_dir {
-            let relevant_root = matches!(top, "ios" | "android")
-                || name == "expo-module.config.json"
-                || top.is_empty();
-            let nested = rel.contains('/');
-            if relevant_root || nested || matches!(name.as_str(), "ios" | "android") {
-                collect_dep_surface(base, &path, files);
-            }
-            continue;
-        }
-        let relevant = rel == "package.json"
-            || rel == "expo-module.config.json"
-            || name.ends_with(".podspec")
-            || top == "ios"
-            || top == "android";
-        if relevant {
-            files.push(rel);
+        if file_type.is_dir() {
+            collect_dep_surface(base, &path, files)?;
+        } else if file_type.is_file() || file_type.is_symlink() {
+            let rel = path
+                .strip_prefix(base)
+                .map_err(|e| format!("cannot bind {}: {e}", path.display()))?;
+            let rel = rel
+                .to_str()
+                .ok_or_else(|| format!("cannot encode dependency path {}", path.display()))?;
+            files.push(rel.to_string());
+        } else {
+            return Err(format!(
+                "dependency input {} is not a plain file",
+                path.display()
+            ));
         }
     }
+    Ok(())
 }
 
 // A regular file reached through a symlinked ancestor can resolve outside the
@@ -527,9 +778,32 @@ pub fn compute(
     }
     let mut incompleteness = Vec::new();
     let mut dep_manifest: Vec<(String, String)> = Vec::new();
-    if let Some(config) = dynamic_config {
+    let mut packages: BTreeSet<String> = BTreeSet::new();
+    let mut evaluated: Option<(String, Result<String, String>)> = None;
+    let mut expo_fingerprint_ms = None;
+    let mut expo_unavailable = None;
+    if let Some(config) = &dynamic_config {
+        if platform_dir == "ios" {
+            let started = runner.monotonic_ms();
+            let expo = expo_fingerprint(runner, project_root, platform_dir);
+            expo_fingerprint_ms = Some(runner.monotonic_ms().saturating_sub(started));
+            match expo {
+                Ok(expo) => evaluated = Some((expo, toolchain_digest(runner))),
+                Err(reason) => expo_unavailable = Some(reason),
+            }
+        }
+        if evaluated.is_none() {
+            incompleteness.push(format!(
+                "{config} is a dynamic config whose imports and ambient inputs (environment and process reads) cannot be fingerprinted"
+            ));
+        }
+        if let Some(reason) = &expo_unavailable {
+            incompleteness.push(format!("Expo fingerprint unavailable: {reason}"));
+        }
+    }
+    if let Some((_, Err(reason))) = &evaluated {
         incompleteness.push(format!(
-            "{config} is a dynamic config whose imports cannot be enumerated; the input set is unprovably complete"
+            "toolchain identity unavailable ({reason}); reuse across an unknown Xcode is unprovable"
         ));
     }
     if inputs.contains("app.json") {
@@ -537,17 +811,24 @@ pub fn compute(
             Ok(app_json) => {
                 let referenced = referenced_paths(&app_json, project_root);
                 incompleteness.extend(referenced.incompleteness);
-                let executable_seeds: Vec<String> = referenced
-                    .files
-                    .iter()
-                    .filter(|rel| is_executable_module(rel))
-                    .cloned()
+                packages.extend(referenced.packages);
+                let executable_seeds = referenced
+                    .modules
+                    .into_iter()
+                    .chain(
+                        referenced
+                            .files
+                            .iter()
+                            .filter(|rel| is_executable_module(rel))
+                            .cloned(),
+                    )
                     .collect();
                 inputs.extend(referenced.files);
                 trace_local_imports(
                     project_root,
                     executable_seeds,
                     &mut inputs,
+                    &mut packages,
                     &mut incompleteness,
                 );
             }
@@ -558,6 +839,30 @@ pub fn compute(
             }
         }
     }
+    let config_seeds = inputs
+        .iter()
+        .filter(|rel| {
+            matches!(
+                rel.as_str(),
+                "react-native.config.js" | "react-native.config.ts"
+            )
+        })
+        .cloned()
+        .collect();
+    trace_local_imports(
+        project_root,
+        config_seeds,
+        &mut inputs,
+        &mut packages,
+        &mut incompleteness,
+    );
+    package_manifest(
+        project_root,
+        repo_root,
+        &packages,
+        &mut dep_manifest,
+        &mut incompleteness,
+    );
     if inputs.contains("package.json") {
         match std::fs::read_to_string(project_root.join("package.json")) {
             Ok(package_json) => local_dependency_manifest(
@@ -606,13 +911,130 @@ pub fn compute(
         manifest.push('\n');
     }
     let file_count = entries.len();
+    let rnfp = format!("{FINGERPRINT_VERSION}:{}", sha256_hex(manifest.as_bytes()));
+    let mut parts = BTreeMap::from([("rnfp".to_string(), rnfp.clone())]);
+    let value = match evaluated {
+        Some((expo, toolchain)) => {
+            let toolchain = toolchain.unwrap_or_else(|_| "unavailable".to_string());
+            let bytes = serde_json::to_vec(&("qaren-expo-native/1", &rnfp, &expo, &toolchain))
+                .expect("fingerprint parts serialize to JSON");
+            parts.insert("expo".to_string(), expo);
+            parts.insert("toolchain".to_string(), toolchain);
+            format!("{FINGERPRINT_VERSION}:{}", sha256_hex(&bytes))
+        }
+        None => rnfp,
+    };
     Ok(NativeFingerprint {
-        value: format!("{FINGERPRINT_VERSION}:{}", sha256_hex(manifest.as_bytes())),
+        value,
         file_count,
         native_dir_in_candidate,
         complete: incompleteness.is_empty(),
         incompleteness,
+        parts,
+        expo_fingerprint_ms,
+        expo_unavailable,
     })
+}
+
+const EXPO_FINGERPRINT_SECONDS: u64 = 120;
+
+// Resolved through the app's own `expo` install so pnpm's isolated layout works without a download.
+const RESOLVE_EXPO_FINGERPRINT: &str = "process.stdout.write(require.resolve('@expo/fingerprint/bin/cli.js',{paths:[require('path').dirname(require.resolve('expo/package.json',{paths:[process.argv[1]]}))]}))";
+
+// Same launcher and environment transforms as the expo-run-ios build, so the config evaluates as the build sees it.
+pub fn expo_fingerprint_spec(label: &str, project_root: &Path, args: &[&str]) -> CmdSpec {
+    let mut full = vec!["exec", "node"];
+    full.extend_from_slice(args);
+    CmdSpec::new(label, "pnpm", &full, EXPO_FINGERPRINT_SECONDS)
+        .cwd(project_root)
+        .env_remove("CI")
+        .env("EXPO_NO_TELEMETRY", "1")
+}
+
+// The CLI's stdout carries evaluated config contents, so only private capture is used and
+// only the `hash` field is read; every failure reason is a fixed string.
+fn expo_fingerprint(
+    runner: &mut dyn Runner,
+    project_root: &Path,
+    platform: &str,
+) -> Result<String, String> {
+    let root = project_root.to_string_lossy();
+    let resolved = runner.run_private(
+        &expo_fingerprint_spec(
+            "expo-fingerprint-resolve",
+            project_root,
+            &["-e", RESOLVE_EXPO_FINGERPRINT, &root],
+        ),
+        &[],
+    );
+    let cli = last_line(resolved.stdout());
+    if !exited_zero(&resolved) || !cli.starts_with('/') || !cli.ends_with("/bin/cli.js") {
+        return Err(format!(
+            "@expo/fingerprint does not resolve through the app's expo install ({})",
+            outcome(&resolved)
+        ));
+    }
+    let cli = cli.to_string();
+    let generated = runner.run_private(
+        &expo_fingerprint_spec(
+            "expo-fingerprint",
+            project_root,
+            &[&cli, "fingerprint:generate", "--platform", platform],
+        ),
+        &[],
+    );
+    if !exited_zero(&generated) {
+        return Err(format!(
+            "@expo/fingerprint fingerprint:generate did not complete ({})",
+            outcome(&generated)
+        ));
+    }
+    serde_json::from_str::<serde_json::Value>(last_line(generated.stdout()))
+        .ok()
+        .and_then(|result| result.get("hash")?.as_str().map(str::to_string))
+        .filter(|hash| !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+        .map(|hash| format!("expo:{hash}"))
+        .ok_or_else(|| "@expo/fingerprint output carried no hex hash".to_string())
+}
+
+// pnpm can print its dependency check to stdout before the child's own output.
+fn last_line(stdout: &str) -> &str {
+    stdout
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
+}
+
+fn exited_zero(output: &crate::exec::PrivateOutput) -> bool {
+    !output.timed_out() && output.exit_code() == Some(0)
+}
+
+fn outcome(output: &crate::exec::PrivateOutput) -> String {
+    match (output.timed_out(), output.exit_code()) {
+        (true, _) => format!("timed out after {EXPO_FINGERPRINT_SECONDS} s"),
+        (false, Some(0)) => "exit 0 with unexpected output".to_string(),
+        (false, Some(code)) => format!("exit {code}"),
+        (false, None) => "terminated by a signal".to_string(),
+    }
+}
+
+// The installed simulator SDK ships inside Xcode, so the selected Xcode's build version identifies both.
+fn toolchain_digest(runner: &mut dyn Runner) -> Result<String, String> {
+    let version = runner.run(&CmdSpec::new(
+        "xcode-version",
+        "xcodebuild",
+        &["-version"],
+        30,
+    ));
+    if !version.ok() || version.stdout.trim().is_empty() {
+        return Err("xcodebuild -version failed".to_string());
+    }
+    Ok(format!(
+        "xcode:{}",
+        sha256_hex(version.stdout.trim().as_bytes())
+    ))
 }
 
 #[cfg(test)]
@@ -708,6 +1130,8 @@ mod tests {
             import pkg from 'expo-build-properties';
         "#;
         let specs = import_specifiers(source);
+        assert!(specs.unparseable.is_empty(), "{specs:?}");
+        let specs = specs.found;
         assert!(specs.contains(&"./helper".to_string()));
         assert!(specs.contains(&"../lib/y".to_string()));
         assert!(specs.contains(&"./z.json".to_string()));
@@ -721,7 +1145,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("lib")).unwrap();
         std::fs::write(
             dir.join("plugins").join("withThing.ts"),
-            "import { helper } from '../lib/helper';\nimport missing from './gone';\n",
+            "import { helper } from '../lib/helper.ts';\nimport missing from './gone';\n",
         )
         .unwrap();
         std::fs::write(
@@ -735,6 +1159,7 @@ mod tests {
             &dir,
             vec!["plugins/withThing.ts".to_string()],
             &mut inputs,
+            &mut BTreeSet::new(),
             &mut incompleteness,
         );
         assert!(inputs.contains("lib/helper.ts"));

@@ -96,11 +96,18 @@ CHANGED_FILES=$'packages/qaren-cli/src/main.rs\npackages/qaren-plugin/hooks/hook
   REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "cli source + hook change without changeset fails" 1 $?
 
+CHANGED_FILES=$'packages/qaren-plugin/scripts/ensure-qaren.sh' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "plugin installer change without changeset fails" 1 $?
+
 # 3e. plugin-surface change WITH a qaren changeset -> passes
 printf -- '---\n"qaren": patch\n---\nship surface\n' > "$tmp/.changeset/calm-owls.md"
 CHANGED_FILES=$'packages/qaren-plugin/commands/check.md' \
   REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "plugin-surface change with plugin changeset passes" 0 $?
+CHANGED_FILES=$'packages/qaren-plugin/scripts/ensure-qaren.sh' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "plugin installer change with plugin changeset passes" 0 $?
 rm -f "$tmp/.changeset/calm-owls.md"
 
 # 3f. release-PR paths (manifests, CHANGELOG, runner-manifest, core mirrors)

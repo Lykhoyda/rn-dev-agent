@@ -53,3 +53,17 @@ test('assembleManifest: omits xcodeBuildVersion when not provided', () => {
   assert.equal('xcodeBuildVersion' in manifest, false);
   assert.deepEqual(manifest.assets, { ios: [], android: [] });
 });
+
+test('assembleManifest: qaren tarballs are keyed by macOS platform and omitted when absent', () => {
+  const content = Buffer.from('tarball');
+  withTempFile('qaren-0.62.3-darwin-arm64.tar.gz', content, (arm64) => {
+    const manifest = assembleManifest({
+      version: '0.62.3',
+      qarenTarballs: { 'darwin-arm64': arm64 },
+    });
+    assert.deepEqual(Object.keys(manifest.assets.qaren), ['darwin-arm64']);
+    assert.equal(manifest.assets.qaren['darwin-arm64'].name, 'qaren-0.62.3-darwin-arm64.tar.gz');
+    assert.equal(manifest.assets.qaren['darwin-arm64'].bytes, content.byteLength);
+  });
+  assert.equal('qaren' in assembleManifest({ version: '0.62.3' }).assets, false);
+});

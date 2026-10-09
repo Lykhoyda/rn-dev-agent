@@ -352,6 +352,7 @@ export type ToolErrorCode =
   // GH #105 / iOS-MVP §3.1: runIOS press/fill with a @ref no longer in the
   // ref-map (snapshot is stale / UI re-rendered). Caller must device_snapshot
   // to refresh refs, then retry.
+  | 'TARGET_AMBIGUOUS'
   | 'STALE_REF'
   | 'KEYBOARD_TARGET_STALE'
   // GH #370/#379: iOS keyboard guard verify-or-refuse arm. The TS layer may

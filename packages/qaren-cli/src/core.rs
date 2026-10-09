@@ -22,13 +22,19 @@ const CANCEL_GRACE_MS: u64 = 10_000;
 pub struct CoreRequest {
     pub run_id: String,
     pub t0: u64,
+    pub walk_budget_ms: u64,
     pub plan: String,
     pub prepared: Value,
     pub preflight_calls: Vec<JevCall>,
     pub platform: String,
     pub app_id: String,
+    pub app_root: PathBuf,
     pub run_dir: PathBuf,
     pub lease: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login_block: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login_marker: Option<crate::config::LoginMarker>,
     pub target: CoreTarget,
 }
 
@@ -56,13 +62,32 @@ pub struct AdbTarget {
 #[serde(rename_all = "camelCase")]
 pub struct Ledger {
     pub verdict: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "passive"
+    )]
+    pub video_publication: Option<crate::record::VideoPublication>,
+    // Epoch ms at which the walk proved the app's bundle and cleared its dev overlays; earlier recorded frames are never published.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admitted_at_ms: Option<u64>,
+    #[serde(default)]
+    pub publication_interrupted: bool,
     pub path: String,
     pub blocks: Vec<BlockResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocks_written: Option<Vec<String>>,
     pub steps: Vec<Row>,
     pub jev: JevRollup,
     pub llm_turns: u64,
     pub escapes: u64,
     pub recoveries: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "passive"
+    )]
+    pub speed: Option<LedgerSpeed>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<LedgerFailure>,
 }
@@ -72,6 +97,35 @@ pub struct BlockResult {
     pub key: String,
     pub outcome: String,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsavable: Option<String>,
+}
+
+// The identity a passed step used, stored in the block's action file.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Selector {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+pub fn valid_ledger_path(path: &str) -> bool {
+    path == "walk"
+        || path == "replay"
+        || path.strip_prefix("replay→walk@").is_some_and(|line| {
+            !line.is_empty() && line.bytes().all(|b| b.is_ascii_digit()) && !line.starts_with('0')
+        })
+}
+
+fn valid_blocks(blocks: &[BlockResult]) -> bool {
+    blocks.iter().all(|block| {
+        matches!(block.outcome.as_str(), "pass" | "fail")
+            && matches!(block.source.as_str(), "discovered" | "replayed" | "patched")
+            && block.saved != Some(true)
+    })
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -95,6 +149,25 @@ pub struct JevCall {
     pub outcome: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<JevDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case", try_from = "String")]
+pub enum JevDiagnostic {
+    RetryAfterOutsideWindow,
+}
+
+impl TryFrom<String> for JevDiagnostic {
+    type Error = &'static str;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "retry-after-outside-window" => Ok(Self::RetryAfterOutsideWindow),
+            _ => Err("invalid Jev diagnostic"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -115,6 +188,84 @@ pub struct Row {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "passive"
+    )]
+    pub timing: Option<RowTiming>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<Selector>,
+}
+
+impl Row {
+    fn redact_evidence(&mut self) {
+        if let Some(selector) = &mut self.selector {
+            for text in [&mut selector.id, &mut selector.text].into_iter().flatten() {
+                *text = redact_secrets(text);
+            }
+        }
+        for text in [&mut self.text, &mut self.reason].into_iter().flatten() {
+            *text = redact_secrets(text);
+        }
+    }
+}
+
+impl Ledger {
+    fn redact_evidence(&mut self) {
+        for row in &mut self.steps {
+            row.redact_evidence();
+        }
+        for block in &mut self.blocks {
+            if let Some(text) = &mut block.unsavable {
+                *text = redact_secrets(text);
+            }
+        }
+        if let Some(failure) = &mut self.failure {
+            failure.seen = redact_secrets(&failure.seen);
+        }
+    }
+}
+
+// Timing is diagnostics only: a malformed value is dropped, never a reason to reject the row or ledger.
+fn passive<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    Ok(serde_json::from_value(Value::deserialize(deserializer)?).ok())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RowTiming {
+    pub capture_ms: u64,
+    pub native_ms: u64,
+    pub react_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence_ms: Option<u64>,
+    pub resolve_ms: u64,
+    pub jev_ms: u64,
+    pub act_ms: u64,
+    pub post_capture_ms: u64,
+    pub other_ms: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerSpeed {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_median_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_p95_ms: Option<u64>,
+    pub walk_ms: u64,
+    #[serde(default)]
+    pub steps: u64,
+    #[serde(default)]
+    pub passed: u64,
+    #[serde(default)]
+    pub failed: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -276,6 +427,7 @@ pub fn spawn(
     stderr_log: &Path,
     request: &CoreRequest,
 ) -> Result<CoreChild, Failure> {
+    crate::cancel::ensure_running(runner, "core")?;
     let mut child = runner.spawn_piped(spec, stderr_log).map_err(|e| {
         Failure::new(
             "core",
@@ -284,6 +436,10 @@ pub fn spawn(
             "check the node path and the qaren runtime directory, then re-run",
         )
     })?;
+    if let Err(failure) = crate::cancel::ensure_running(runner, "core") {
+        child.handle.kill_group();
+        return Err(failure);
+    }
     let envelope = json!({
         "v": WIRE_VERSION,
         "runId": request.run_id,
@@ -341,9 +497,14 @@ struct Inbox {
     run_id: String,
     last_seq: u64,
     rows: Vec<Row>,
+    admitted: bool,
+    drivers: Vec<i32>,
+    announced: usize,
     result: Option<Value>,
     violation: Option<String>,
 }
+
+const MAX_RUNNER_DRIVERS: usize = 8;
 
 impl Inbox {
     fn accept(&mut self, line: &str) -> bool {
@@ -374,13 +535,48 @@ impl Inbox {
             }
         }
         match (kind, value.get("payload")) {
+            (Some("admitted"), Some(payload))
+                if !self.admitted && payload.as_object().is_some_and(|p| p.is_empty()) =>
+            {
+                self.admitted = true;
+                true
+            }
+            (Some("resource"), Some(payload))
+                if payload.get("kind").and_then(Value::as_str) == Some("runner_driver")
+                    && payload.as_object().is_some_and(|p| p.len() == 2) =>
+            {
+                let pid = payload
+                    .get("pid")
+                    .and_then(Value::as_i64)
+                    .and_then(|pid| i32::try_from(pid).ok())
+                    .filter(|pid| *pid > 1);
+                match pid {
+                    Some(pid) if self.announced < MAX_RUNNER_DRIVERS => {
+                        self.announced += 1;
+                        self.drivers.push(pid);
+                        true
+                    }
+                    Some(_) => {
+                        self.violation =
+                            Some(format!("more than {MAX_RUNNER_DRIVERS} runner drivers"));
+                        false
+                    }
+                    None => {
+                        self.violation =
+                            Some(format!("runner driver pid is invalid: {}", excerpt(line)));
+                        false
+                    }
+                }
+            }
             (Some("row"), Some(payload)) => {
                 if self.rows.len() >= MAX_ROWS {
                     self.violation = Some(format!("more than {MAX_ROWS} rows"));
                     return false;
                 }
                 match serde_json::from_value::<Row>(payload.clone()) {
-                    Ok(row) => {
+                    Ok(mut row) => {
+                        row.redact_evidence();
+                        crate::progress::row(&row);
                         self.rows.push(row);
                         true
                     }
@@ -414,7 +610,13 @@ fn excerpt(line: &str) -> String {
 }
 
 // A missing result or deadline kill becomes a FAIL attributed to the last row.
-pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreOutcome {
+// `on_driver` records each announced runner driver before the walk goes on.
+pub fn wait(
+    runner: &mut dyn Runner,
+    core: CoreChild,
+    budgets: Budgets,
+    on_driver: &mut dyn FnMut(&mut dyn Runner, i32),
+) -> CoreOutcome {
     let CoreChild {
         pid,
         run_id,
@@ -427,6 +629,9 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
         run_id,
         last_seq: 1,
         rows: Vec::new(),
+        admitted: false,
+        drivers: Vec::new(),
+        announced: 0,
         result: None,
         violation: None,
     };
@@ -440,10 +645,20 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
     let mut cancel_deadline: Option<u64> = None;
     // Kill before reaping to keep the pgid from being recycled under us.
     loop {
+        if killed_at.is_none() && cancel_deadline.is_none() {
+            if let Some(reason) = runner.cancellation() {
+                deadline_failure = Some(Failure::cancelled("walk", &reason));
+                child.handle.terminate();
+                cancel_deadline = Some(runner.monotonic_ms() + CANCEL_GRACE_MS);
+            }
+        }
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(Msg::Line(line)) => {
-                if inbox.accept(&crate::redact::redact_api_key(&line)) {
+                if inbox.accept(&line) {
                     last_progress = runner.monotonic_ms();
+                }
+                for pid in std::mem::take(&mut inbox.drivers) {
+                    on_driver(runner, pid);
                 }
             }
             Ok(Msg::Oversize) => {
@@ -486,14 +701,6 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
             }
             continue;
         }
-        if result_at.is_none() {
-            if let Some(reason) = runner.cancellation() {
-                deadline_failure = Some(Failure::cancelled("walk", &reason));
-                child.handle.terminate();
-                cancel_deadline = Some(now + CANCEL_GRACE_MS);
-                continue;
-            }
-        }
         // Setup uses only the walk budget; a held result uses only the exit grace.
         let walking = inbox.rows.iter().any(|r| r.line > 0);
         let reason = if inbox.violation.is_some() {
@@ -520,8 +727,19 @@ pub fn wait(runner: &mut dyn Runner, core: CoreChild, budgets: Budgets) -> CoreO
         if let Some(reason) = reason {
             let code = if inbox.violation.is_some() {
                 FailureCode::CoreResultMissing
+            } else if !inbox.admitted {
+                FailureCode::CoreRefused
             } else {
                 FailureCode::WalkDeadlineExceeded
+            };
+            let reason = if code == FailureCode::CoreRefused {
+                let measured = match host_load_1m() {
+                    Some(load) => format!("host 1-minute load {load:.1}"),
+                    None => "host load unavailable".to_string(),
+                };
+                format!("cannot attach to the dev client before the walk deadline ({measured}; an environment refusal): {reason}")
+            } else {
+                reason
             };
             deadline_failure = Some(Failure::new(
                 "walk",
@@ -585,12 +803,20 @@ fn interpret(
         );
     }
     if let Some(failure) = deadline_failure {
-        let seen = failure.detail.clone();
-        if failure.code == FailureCode::RunCancelled {
+        let seen = failure.detail.to_string();
+        if matches!(
+            failure.code,
+            FailureCode::RunCancelled | FailureCode::CoreRefused
+        ) {
             return (
                 synthesized_ledger(&inbox.rows, "REFUSED", &seen),
                 Verdict::Refused {
-                    code: "RUN_CANCELLED".to_string(),
+                    code: if failure.code == FailureCode::RunCancelled {
+                        "RUN_CANCELLED"
+                    } else {
+                        "CDP_NOT_CONNECTED"
+                    }
+                    .to_string(),
                     message: seen,
                 },
                 Some(failure),
@@ -630,12 +856,11 @@ fn interpret(
         );
     }
     if verdict == "REFUSED" {
-        let code = redact_secrets(
-            result
-                .get("code")
-                .and_then(Value::as_str)
-                .unwrap_or("CORE_REFUSED"),
-        );
+        let code = (result
+            .get("code")
+            .and_then(Value::as_str)
+            .unwrap_or("CORE_REFUSED"))
+        .to_string();
         let message = redact_secrets(
             result
                 .get("message")
@@ -652,7 +877,13 @@ fn interpret(
         };
     }
     match serde_json::from_value::<Ledger>(result) {
-        Ok(ledger) => {
+        Ok(ledger) if !valid_ledger_path(&ledger.path) || !valid_blocks(&ledger.blocks) => missing(
+            &inbox.rows,
+            "result line has an invalid ledger path or block".to_string(),
+            FailureCode::CoreResultMissing,
+        ),
+        Ok(mut ledger) => {
+            ledger.redact_evidence();
             let verdict = if verdict == "PASS" {
                 Verdict::Pass
             } else {
@@ -685,6 +916,7 @@ fn refusal_ledger(result: &Value, rows: &[Row], seen: &str) -> Result<Ledger, St
         "escapes",
         "recoveries",
         "failure",
+        "blocksWritten",
     ] {
         if let Some(value) = result.get(field) {
             if value.is_null() {
@@ -693,14 +925,19 @@ fn refusal_ledger(result: &Value, rows: &[Row], seen: &str) -> Result<Ledger, St
             normalized[field] = value.clone();
         }
     }
+    // Speed is passive: copied as-is, and a malformed or null value is dropped on decode.
+    if let Some(speed) = result.get("speed") {
+        normalized["speed"] = speed.clone();
+    }
+    if let Some(eligibility) = result.get("videoPublication") {
+        normalized["videoPublication"] = eligibility.clone();
+    }
     let mut ledger: Ledger =
         serde_json::from_value(normalized).map_err(|error| error.to_string())?;
-    if ledger.path != "walk" {
-        return Err("path must be walk".into());
+    if !valid_ledger_path(&ledger.path) {
+        return Err("path must be walk, replay or replay→walk@<line>".into());
     }
-    if ledger.blocks.iter().any(|block| {
-        !matches!(block.outcome.as_str(), "pass" | "fail") || block.source != "discovered"
-    }) {
+    if !valid_blocks(&ledger.blocks) {
         return Err("invalid block outcome or source".into());
     }
     if ledger.steps.len() > MAX_ROWS
@@ -716,7 +953,7 @@ fn refusal_ledger(result: &Value, rows: &[Row], seen: &str) -> Result<Ledger, St
         !matches!(call.scope.as_str(), "preflight" | "parse" | "walk")
             || !matches!(
                 call.outcome.as_str(),
-                "ok" | "timeout" | "network" | "http" | "invalid"
+                "ok" | "timeout" | "deadline" | "network" | "http" | "invalid"
             )
             || call
                 .status
@@ -727,6 +964,7 @@ fn refusal_ledger(result: &Value, rows: &[Row], seen: &str) -> Result<Ledger, St
     if result.get("failure").is_none() {
         ledger.failure = Some(synthesized_failure(&ledger.steps, seen));
     }
+    ledger.redact_evidence();
     Ok(ledger)
 }
 
@@ -743,13 +981,23 @@ pub fn synthesized_ledger(rows: &[Row], verdict: &str, seen: &str) -> Ledger {
     let steps: Vec<Row> = rows.to_vec();
     Ledger {
         verdict: verdict.to_string(),
+        video_publication: None,
+        admitted_at_ms: None,
+        publication_interrupted: false,
         path: "walk".to_string(),
         blocks: Vec::new(),
+        blocks_written: None,
         failure: Some(synthesized_failure(&steps, seen)),
         steps,
         jev: JevRollup::default(),
         llm_turns: 0,
         escapes: 0,
         recoveries: 0,
+        speed: None,
     }
+}
+
+pub(crate) fn host_load_1m() -> Option<f64> {
+    let mut load = 0.0;
+    (unsafe { libc::getloadavg(&mut load, 1) } == 1).then_some(load)
 }

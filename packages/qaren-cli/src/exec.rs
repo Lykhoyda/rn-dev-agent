@@ -19,6 +19,8 @@ pub struct CmdSpec {
     pub cwd: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<(String, String)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unset: Vec<String>,
     pub timeout_seconds: u64,
 }
 
@@ -30,6 +32,7 @@ impl CmdSpec {
             args: args.iter().map(|s| s.to_string()).collect(),
             cwd: None,
             env: Vec::new(),
+            unset: Vec::new(),
             timeout_seconds,
         }
     }
@@ -41,6 +44,12 @@ impl CmdSpec {
 
     pub fn env(mut self, key: &str, value: &str) -> Self {
         self.env.push((key.to_string(), value.to_string()));
+        self
+    }
+
+    // Removed after `env`, so neither the spec nor the inherited environment can supply it.
+    pub fn env_remove(mut self, key: &str) -> Self {
+        self.unset.push(key.to_string());
         self
     }
 
@@ -114,6 +123,11 @@ impl CmdOutput {
         }
     }
 
+    pub fn names_private_key(&self) -> bool {
+        crate::redact::names_private_key(&self.stdout)
+            || crate::redact::names_private_key(&self.stderr)
+    }
+
     pub fn summary(&self) -> String {
         if self.timed_out {
             return format!("timed out after {}ms", self.duration_ms);
@@ -121,10 +135,14 @@ impl CmdOutput {
         let code = self
             .exit_code
             .map_or("signal".to_string(), |c| c.to_string());
-        let tail: String = self
-            .stderr
+        if self.names_private_key() {
+            return format!("exit={code} {}", crate::redact::PRIVATE_KEY_WITHHELD);
+        }
+        let stderr = crate::redact::redact_secrets(&self.stderr);
+        let stdout = crate::redact::redact_secrets(&self.stdout);
+        let tail: String = stderr
             .lines()
-            .chain(self.stdout.lines())
+            .chain(stdout.lines())
             .rev()
             .take(6)
             .collect::<Vec<_>>()
@@ -199,13 +217,50 @@ pub trait Runner {
     fn env_var(&self, name: &str) -> Option<String> {
         std::env::var(name).ok()
     }
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput;
-    fn run_private(&mut self, _spec: &CmdSpec, _input: &[u8]) -> PrivateOutput {
+    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+        if let Some(reason) = self.cancellation() {
+            return CmdOutput::failed(4, &reason);
+        }
+        self.execute(spec, true)
+    }
+    fn run_private(&mut self, spec: &CmdSpec, input: &[u8]) -> PrivateOutput {
+        if let Some(reason) = self.cancellation() {
+            return PrivateOutput(CmdOutput::failed(4, &reason));
+        }
+        self.execute_private(spec, input, true)
+    }
+    fn spawn_group(&mut self, spec: &CmdSpec, log_path: &Path) -> std::io::Result<Spawned> {
+        if let Some(reason) = self.cancellation() {
+            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, reason));
+        }
+        self.spawn_group_unchecked(spec, log_path)
+    }
+    fn spawn_piped(&mut self, spec: &CmdSpec, log_path: &Path) -> std::io::Result<PipedChild> {
+        if let Some(reason) = self.cancellation() {
+            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, reason));
+        }
+        self.spawn_piped_unchecked(spec, log_path)
+    }
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput;
+    fn execute_private(
+        &mut self,
+        _spec: &CmdSpec,
+        _input: &[u8],
+        _interruptible: bool,
+    ) -> PrivateOutput {
         PrivateOutput(CmdOutput::failed(1, "private capture unsupported"))
     }
-    fn spawn_group(&mut self, spec: &CmdSpec, log_path: &Path) -> std::io::Result<Spawned>;
+    fn spawn_group_unchecked(
+        &mut self,
+        spec: &CmdSpec,
+        log_path: &Path,
+    ) -> std::io::Result<Spawned>;
     // Err proves the command child was not spawned; post-spawn failures must retain its handle.
-    fn spawn_piped(&mut self, spec: &CmdSpec, stderr_log: &Path) -> std::io::Result<PipedChild>;
+    fn spawn_piped_unchecked(
+        &mut self,
+        spec: &CmdSpec,
+        stderr_log: &Path,
+    ) -> std::io::Result<PipedChild>;
     fn sleep(&mut self, duration: Duration);
     fn now_epoch_ms(&self) -> u64;
     // Override with a monotonic source so deadlines survive wall-clock adjustments.
@@ -217,6 +272,50 @@ pub trait Runner {
     fn cancellation(&self) -> Option<String> {
         None
     }
+    // Reaps an exited spawn_group child this process owns; never blocks or signals.
+    fn try_reap(&mut self, _pid: i32) -> bool {
+        false
+    }
+}
+
+pub(crate) struct CleanupRunner<'a>(pub(crate) &'a mut dyn Runner);
+
+impl Runner for CleanupRunner<'_> {
+    fn env_var(&self, name: &str) -> Option<String> {
+        self.0.env_var(name)
+    }
+    fn execute(&mut self, spec: &CmdSpec, _interruptible: bool) -> CmdOutput {
+        self.0.execute(spec, false)
+    }
+    fn execute_private(
+        &mut self,
+        spec: &CmdSpec,
+        input: &[u8],
+        _interruptible: bool,
+    ) -> PrivateOutput {
+        self.0.execute_private(spec, input, false)
+    }
+    fn spawn_group_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        self.0.spawn_group_unchecked(spec, log)
+    }
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.0.spawn_piped_unchecked(spec, log)
+    }
+    fn sleep(&mut self, duration: Duration) {
+        self.0.sleep(duration);
+    }
+    fn now_epoch_ms(&self) -> u64 {
+        self.0.now_epoch_ms()
+    }
+    fn monotonic_ms(&self) -> u64 {
+        self.0.monotonic_ms()
+    }
+    fn commands_executed(&self) -> u64 {
+        self.0.commands_executed()
+    }
+    fn try_reap(&mut self, pid: i32) -> bool {
+        self.0.try_reap(pid)
+    }
 }
 
 pub struct RealRunner {
@@ -225,6 +324,8 @@ pub struct RealRunner {
     log_executable: PathBuf,
     logs: Vec<log::LogDrain>,
     caller: Option<u32>,
+    // Only the spawning process can reap a group leader; dropping the Child leaves a zombie.
+    children: std::collections::HashMap<i32, std::process::Child>,
 }
 
 impl RealRunner {
@@ -239,6 +340,7 @@ impl RealRunner {
             log_executable: executable,
             logs: Vec::new(),
             caller: None,
+            children: std::collections::HashMap::new(),
         }
     }
 
@@ -262,33 +364,57 @@ impl Default for RealRunner {
 }
 
 impl Runner for RealRunner {
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
         self.executed += 1;
         let started = Instant::now();
-        let output = run_captured(spec, &started, None)
-            .unwrap_or_else(|e| io_failure(&started, format!("{}: {e}", spec.label)));
-        if let Err(e) = self.flush_logs() {
-            return io_failure(&started, format!("drain logs: {e}"));
-        }
+        crate::progress::started(&spec.label, false);
+        let output = run_captured(spec, &started, None, || {
+            if interruptible {
+                self.cancellation()
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|e| io_failure(&started, format!("{}: {e}", spec.label)));
+        let output = match self.flush_logs() {
+            Ok(()) => output,
+            Err(e) => io_failure(&started, format!("drain logs: {e}")),
+        };
+        crate::progress::finished(&spec.label, output.ok());
         output
     }
 
-    fn run_private(&mut self, spec: &CmdSpec, input: &[u8]) -> PrivateOutput {
+    fn execute_private(
+        &mut self,
+        spec: &CmdSpec,
+        input: &[u8],
+        interruptible: bool,
+    ) -> PrivateOutput {
         self.executed += 1;
         let started = Instant::now();
-        let output = run_captured(spec, &started, Some(input))
-            .unwrap_or_else(|_| CmdOutput::failed(1, "private capture failed"));
+        let output = run_captured(spec, &started, Some(input), || {
+            if interruptible {
+                self.cancellation()
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|_| CmdOutput::failed(1, "private capture failed"));
         if self.flush_logs().is_err() {
             return PrivateOutput(CmdOutput::failed(1, "log drain failed"));
         }
         PrivateOutput(output)
     }
 
-    fn spawn_group(&mut self, spec: &CmdSpec, log_path: &Path) -> std::io::Result<Spawned> {
+    fn spawn_group_unchecked(
+        &mut self,
+        spec: &CmdSpec,
+        log_path: &Path,
+    ) -> std::io::Result<Spawned> {
         use std::os::unix::process::CommandExt;
         self.executed += 1;
-        let (log_out, output) = log::LogDrain::spawn(&self.log_executable, log_path)?;
-        let (log_err, error) = log::LogDrain::spawn(&self.log_executable, log_path)?;
+        crate::progress::started(&spec.label, true);
+        let (drain, output, error) = log::LogDrain::spawn_paired(&self.log_executable, log_path)?;
         let mut cmd = Command::new(&spec.program);
         cmd.args(&spec.args)
             .stdin(Stdio::null())
@@ -301,16 +427,39 @@ impl Runner for RealRunner {
         for (k, v) in &spec.env {
             cmd.env(k, v);
         }
+        for k in &spec.unset {
+            cmd.env_remove(k);
+        }
         cmd.env_remove("TYPESAFE_API_KEY");
+        if let Some(reason) = self.cancellation() {
+            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, reason));
+        }
         let child = cmd.spawn()?;
         let pid = child.id() as i32;
-        self.logs.extend([log_out, log_err]);
+        self.logs.push(drain);
+        self.children.insert(pid, child);
         Ok(Spawned { pid, pgid: pid })
     }
 
-    fn spawn_piped(&mut self, spec: &CmdSpec, stderr_log: &Path) -> std::io::Result<PipedChild> {
+    fn try_reap(&mut self, pid: i32) -> bool {
+        let reaped = self
+            .children
+            .get_mut(&pid)
+            .is_some_and(|child| matches!(child.try_wait(), Ok(Some(_))));
+        if reaped {
+            self.children.remove(&pid);
+        }
+        reaped
+    }
+
+    fn spawn_piped_unchecked(
+        &mut self,
+        spec: &CmdSpec,
+        stderr_log: &Path,
+    ) -> std::io::Result<PipedChild> {
         use std::os::unix::process::CommandExt;
         self.executed += 1;
+        crate::progress::started(&spec.label, true);
         let (log, stderr) = log::LogDrain::spawn(&self.log_executable, stderr_log)?;
         let mut cmd = Command::new(&spec.program);
         cmd.args(&spec.args)
@@ -323,6 +472,12 @@ impl Runner for RealRunner {
         }
         for (k, v) in &spec.env {
             cmd.env(k, v);
+        }
+        for k in &spec.unset {
+            cmd.env_remove(k);
+        }
+        if let Some(reason) = self.cancellation() {
+            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, reason));
         }
         let mut child = cmd.spawn()?;
         let stdin = child.stdin.take().expect("stdin is piped");
@@ -390,6 +545,7 @@ fn run_captured(
     spec: &CmdSpec,
     started: &Instant,
     input: Option<&[u8]>,
+    cancellation: impl Fn() -> Option<String>,
 ) -> std::io::Result<CmdOutput> {
     use std::os::unix::process::CommandExt;
     if input.is_some_and(|bytes| bytes.len() > MAX_CAPTURE_BYTES) {
@@ -420,8 +576,14 @@ fn run_captured(
     for (k, v) in &spec.env {
         cmd.env(k, v);
     }
+    for k in &spec.unset {
+        cmd.env_remove(k);
+    }
     if spec.label != "plan-preflight" {
         cmd.env_remove("TYPESAFE_API_KEY");
+    }
+    if let Some(reason) = cancellation() {
+        return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, reason));
     }
     let mut child = cmd.spawn()?;
     drop(cmd);
@@ -430,6 +592,9 @@ fn run_captured(
     let mut timed_out = false;
     let mut stopped = false;
     let result: std::io::Result<Option<i32>> = (|| loop {
+        if let Some(reason) = cancellation() {
+            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, reason));
+        }
         if let Some(writer) = &mut stdin {
             if written < input.len() {
                 match writer.write(&input[written..input.len().min(written + 8192)]) {
@@ -479,9 +644,8 @@ fn run_captured(
     }
     Ok(CmdOutput {
         exit_code: result?,
-        // Protocol stdout is memory-only; redact diagnostics at their persistence boundary.
         stdout: String::from_utf8_lossy(&out).into_owned(),
-        stderr: crate::redact::redact_secrets(&String::from_utf8_lossy(&err)),
+        stderr: String::from_utf8_lossy(&err).into_owned(),
         timed_out,
         duration_ms: started.elapsed().as_millis() as u64,
     })
@@ -642,6 +806,8 @@ pub struct MockRunner {
     pub cancel_after: Option<(String, String)>,
     // (clock ms, reason): cancellation starts once the scripted clock reaches the time.
     pub cancel_at_ms: Option<(u64, String)>,
+    // (command substring, ms): the scripted clock advances while a matching command runs.
+    pub advance_on: Option<(String, u64)>,
     script: VecDeque<MockExpectation>,
     now_ms: u64,
 }
@@ -658,6 +824,7 @@ impl MockRunner {
             private_inputs: Vec::new(),
             cancel_after: None,
             cancel_at_ms: None,
+            advance_on: None,
             script: VecDeque::new(),
             now_ms: 1_770_000_000_000,
         }
@@ -764,8 +931,13 @@ impl Runner for MockRunner {
     fn env_var(&self, name: &str) -> Option<String> {
         self.environment.get(name).cloned()
     }
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
+    fn execute(&mut self, spec: &CmdSpec, _interruptible: bool) -> CmdOutput {
         self.calls.push(spec.clone());
+        if let Some((hint, ms)) = &self.advance_on {
+            if spec.rendered().contains(hint.as_str()) {
+                self.now_ms += ms;
+            }
+        }
         match self.next_for(spec).result {
             MockResult::Run(output) => output,
             MockResult::Spawn(..) | MockResult::SpawnPiped { .. } => {
@@ -774,12 +946,21 @@ impl Runner for MockRunner {
         }
     }
 
-    fn run_private(&mut self, spec: &CmdSpec, input: &[u8]) -> PrivateOutput {
+    fn execute_private(
+        &mut self,
+        spec: &CmdSpec,
+        input: &[u8],
+        interruptible: bool,
+    ) -> PrivateOutput {
         self.private_inputs.push(input.to_vec());
-        PrivateOutput(self.run(spec))
+        PrivateOutput(self.execute(spec, interruptible))
     }
 
-    fn spawn_piped(&mut self, spec: &CmdSpec, stderr_log: &Path) -> std::io::Result<PipedChild> {
+    fn spawn_piped_unchecked(
+        &mut self,
+        spec: &CmdSpec,
+        stderr_log: &Path,
+    ) -> std::io::Result<PipedChild> {
         self.calls.push(spec.clone());
         self.spawned_logs.push(stderr_log.to_path_buf());
         match self.next_for(spec).result {
@@ -817,7 +998,11 @@ impl Runner for MockRunner {
         }
     }
 
-    fn spawn_group(&mut self, spec: &CmdSpec, log_path: &Path) -> std::io::Result<Spawned> {
+    fn spawn_group_unchecked(
+        &mut self,
+        spec: &CmdSpec,
+        log_path: &Path,
+    ) -> std::io::Result<Spawned> {
         self.calls.push(spec.clone());
         self.spawned_logs.push(log_path.to_path_buf());
         match self.next_for(spec).result {

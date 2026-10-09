@@ -182,7 +182,11 @@ fn original_schema_core_identity_loads_in_status_and_recovers_via_owned_group_cl
     );
     mock.expect_run("ps -p 9000 -o lstart=", CmdOutput::success(LSTART));
     mock.expect_run("ps -p 9000 -o stat=", CmdOutput::success("S"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill -TERM -- -9000", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill -KILL -- -9000", CmdOutput::success(""));
     mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     let receipt = cleanup(&mut mock, &repo, "core-run");
@@ -537,7 +541,11 @@ fn core_group_cleanup_requires_positive_inventory_after_kill_not_just_leader_exi
         );
         mock.expect_run("ps -p 9000", CmdOutput::success(LSTART));
         mock.expect_run("ps -p 9000", CmdOutput::success("S"));
+        mock.expect_run("lstart=", CmdOutput::success(LSTART));
+        mock.expect_run("stat=", CmdOutput::success("S"));
         mock.expect_run("/bin/kill -TERM -- -9000", CmdOutput::success(""));
+        mock.expect_run("lstart=", CmdOutput::success(LSTART));
+        mock.expect_run("stat=", CmdOutput::success("S"));
         mock.expect_run("/bin/kill -KILL -- -9000", CmdOutput::success(""));
         mock.expect_run("ps -A", after);
         let receipt = cleanup(&mut mock, &repo, "core-run");
@@ -781,6 +789,17 @@ fn assert_core_only_refusal_with_metro(with_owner: bool) {
     if !with_owner {
         record.prepare = None;
     }
+    record.resources.ios_simulator = Some(IosSimResource {
+        udid: "1DC408C4-51DA-4C4F-ACA1-39881C916FDD".into(),
+        name: "borrowed".into(),
+        device_type: "dt".into(),
+        runtime: "rt".into(),
+    });
+    record.resources.device_borrowed = true;
+    record.resources.runner_host = Some(qaren::runrecord::RunnerHostResource {
+        udid: "1DC408C4-51DA-4C4F-ACA1-39881C916FDD".into(),
+        bundle_ids: vec!["dev.lykhoyda.rndevagent.fastrunner".into()],
+    });
     record.save(&repo).unwrap();
     let before = std::fs::read(RunRecord::run_dir(&repo, "core-run").join("run.json")).unwrap();
     let mut mock = MockRunner::new();
@@ -790,10 +809,15 @@ fn assert_core_only_refusal_with_metro(with_owner: bool) {
     mock.expect_run("ps -p 5000 -o lstart=", CmdOutput::success(LSTART));
     mock.expect_run("ps -p 5000 -o stat=", CmdOutput::success("S"));
     mock.expect_run("lsof", free_port());
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill -TERM -- -5000", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill -KILL -- -5000", CmdOutput::success(""));
     mock.expect_run("ps -p 5000 -o lstart=", CmdOutput::success(""));
     mock.expect_run("lsof", free_port());
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
 
     let receipt = cleanup(&mut mock, &repo, "core-run");
 
@@ -803,8 +827,13 @@ fn assert_core_only_refusal_with_metro(with_owner: bool) {
         "refused: the run's qaren process is alive or unproven gone"
     );
     assert_eq!(receipt.cleanup["metro"], "removed");
+    assert!(receipt.cleanup["runner_host"].starts_with("refused: core quiescence"));
+    assert!(!mock
+        .calls
+        .iter()
+        .any(|spec| spec.rendered().contains("simctl terminate")));
     assert!(receipt.cleanup["device_lease"].starts_with("unresolved: retained"));
-    assert_eq!(mock.calls.len(), if with_owner { 8 } else { 7 });
+    assert_eq!(mock.calls.len(), if with_owner { 13 } else { 12 });
     assert_eq!(
         mock.calls
             .iter()
@@ -1024,7 +1053,11 @@ fn ios_happy_cleanup_then_idempotent_rerun() {
     mock.expect_run("ps", CmdOutput::success("S\n")); // not a zombie
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("5000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run(
@@ -1034,6 +1067,7 @@ fn ios_happy_cleanup_then_idempotent_rerun() {
             ..Default::default()
         },
     );
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     // simulator: present with matching name, booted -> shutdown + delete
     mock.expect_run(
         "simctl list",
@@ -1045,7 +1079,10 @@ fn ios_happy_cleanup_then_idempotent_rerun() {
     let receipt = cleanup(&mut mock, &repo, "iosrun1");
     assert_eq!(receipt.result, ReceiptResult::Cleaned);
     assert_eq!(receipt.cleanup.get("metro").unwrap(), "removed");
-    assert_eq!(receipt.cleanup.get("simulator").unwrap(), "removed");
+    assert_eq!(
+        receipt.cleanup.get("simulator").unwrap(),
+        "removed (reclaimed bytes unknown)"
+    );
     assert_eq!(mock.remaining(), 0);
 
     let reloaded = RunRecord::load(&repo, "iosrun1").unwrap();
@@ -1061,6 +1098,7 @@ fn ios_happy_cleanup_then_idempotent_rerun() {
             ..Default::default()
         },
     );
+    mock2.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     mock2.expect_run(
         "simctl list",
         CmdOutput::success(r#"{"devices":{"rt":[]}}"#),
@@ -1108,65 +1146,33 @@ fn refuses_foreign_named_simulator() {
 }
 
 #[test]
-fn refuses_pid_with_changed_birth_identity() {
-    let repo = common::temp_repo();
-    let mut record = ios_ready_record(&repo);
-    record.resources.ios_simulator = None;
-    record.save(&repo).unwrap();
-
-    let mut mock = MockRunner::new();
-    // leader pid alive but with a different lstart -> pid reused -> absent, no kill
-    mock.expect_run("ps", CmdOutput::success("Thu Aug 13 09:00:00 2026\n"));
-    mock.expect_run(
-        "lsof",
-        CmdOutput {
-            exit_code: Some(1),
-            ..Default::default()
-        },
-    );
-    let receipt = cleanup(&mut mock, &repo, "iosrun1");
-    assert_eq!(receipt.result, ReceiptResult::Cleaned);
-    assert_eq!(receipt.cleanup.get("metro").unwrap(), "absent");
-    assert!(
-        !mock.calls.iter().any(|c| c.program.contains("kill")),
-        "reused pid must not be killed"
-    );
-    assert_eq!(
-        mock.remaining(),
-        0,
-        "the port probe must run before declaring absent"
-    );
-}
-
-#[test]
-fn kills_group_via_port_when_leader_died_but_children_own_port() {
-    let repo = common::temp_repo();
-    let mut record = ios_ready_record(&repo);
-    record.resources.ios_simulator = None;
-    record.save(&repo).unwrap();
-
-    let mut mock = MockRunner::new();
-    mock.expect_run("ps", CmdOutput::failed(1, "")); // leader dead
-    mock.expect_run("lsof", CmdOutput::success("6001\n")); // child owns port
-    mock.expect_run("ps", CmdOutput::success("5000\n")); // child pgid == recorded pgid
-    mock.expect_run("/bin/kill", CmdOutput::success(""));
-    mock.expect_run("/bin/kill", CmdOutput::success(""));
-    mock.expect_run("ps", CmdOutput::failed(1, "")); // leader still dead
-    mock.expect_run(
-        "lsof",
-        CmdOutput {
-            exit_code: Some(1),
-            ..Default::default()
-        },
-    ); // port now free
-    let receipt = cleanup(&mut mock, &repo, "iosrun1");
-    assert_eq!(receipt.cleanup.get("metro").unwrap(), "removed");
-    assert_eq!(receipt.result, ReceiptResult::Cleaned);
-    assert_eq!(
-        mock.remaining(),
-        0,
-        "post-kill verification probes must run"
-    );
+fn port_group_equality_cannot_override_unproven_leader_identity() {
+    for birth in [Some("Thu Aug 13 09:00:00 2026"), Some(""), None] {
+        let repo = common::temp_repo();
+        let mut record = ios_ready_record(&repo);
+        record.resources.ios_simulator = None;
+        record.save(&repo).unwrap();
+        let mut mock = MockRunner::new();
+        mock.expect_run(
+            "ps",
+            match birth {
+                Some(value) => CmdOutput::success(value),
+                None => CmdOutput::failed(1, "denied"),
+            },
+        );
+        mock.expect_run("lsof", CmdOutput::success("6001\n"));
+        mock.expect_run("ps", CmdOutput::success("5000\n"));
+        let receipt = cleanup(&mut mock, &repo, "iosrun1");
+        assert_eq!(receipt.result, ReceiptResult::Failed);
+        assert!(receipt.cleanup["metro"].starts_with("unresolved"));
+        assert!(RunRecord::load(&repo, "iosrun1")
+            .unwrap()
+            .resources
+            .metro
+            .is_some());
+        assert!(!mock.calls.iter().any(|c| c.label == "kill-group"));
+        assert_eq!(mock.remaining(), 0);
+    }
 }
 
 #[test]
@@ -1243,7 +1249,11 @@ fn android_cleanup_stops_only_own_lease() {
     mock.expect_run("ps", CmdOutput::success("S\n")); // not a zombie
     mock.expect_run("lsof", CmdOutput::success("7100\n"));
     mock.expect_run("ps", CmdOutput::success("7100\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run(
@@ -1253,12 +1263,17 @@ fn android_cleanup_stops_only_own_lease() {
             ..Default::default()
         },
     );
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     // tunnel: alive matching, port owned by the group -> TERM/KILL -> dead, port free
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n")); // not a zombie
     mock.expect_run("lsof", CmdOutput::success("7000\n"));
     mock.expect_run("ps", CmdOutput::success("7000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run(
@@ -1268,6 +1283,7 @@ fn android_cleanup_stops_only_own_lease() {
             ..Default::default()
         },
     );
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     // farm: lease is ours -> stop
     mock.expect_run("~/bin/android-farm status", CmdOutput::success(
         "slot=1 avd=Pixel_10a serial=emulator-5554 adb_port=5555 lease=qaren-androidrun1 claimed_at=x state=device\nslot=2 avd=Pixel_10_Pro serial=emulator-5556 adb_port=5557 lease=free state=down\n",
@@ -1295,7 +1311,7 @@ fn android_cleanup_stops_only_own_lease() {
 }
 
 #[test]
-fn tunnel_cleanup_reaps_live_forward_via_local_port_when_identity_missing() {
+fn tunnel_cleanup_retains_group_when_identity_missing_despite_port_match() {
     let repo = common::temp_repo();
     let mut record = common::base_record(
         &repo,
@@ -1315,32 +1331,18 @@ fn tunnel_cleanup_reaps_live_forward_via_local_port_when_identity_missing() {
     record.save(&repo).unwrap();
 
     let mut mock = MockRunner::new();
-    // No identity -> leader unprovable; the recorded local port must still
-    // prove the group: the listener's pgid equals the recorded tunnel pgid.
     mock.expect_run("lsof", CmdOutput::success("7050\n"));
     mock.expect_run("ps", CmdOutput::success("7000\n"));
-    mock.expect_run("/bin/kill", CmdOutput::success(""));
-    mock.expect_run("/bin/kill", CmdOutput::success(""));
-    mock.expect_run(
-        "lsof",
-        CmdOutput {
-            exit_code: Some(1),
-            ..Default::default()
-        },
-    ); // port free after kill
     let receipt = cleanup(&mut mock, &repo, "androidrun4");
-    assert_eq!(
-        receipt.result,
-        ReceiptResult::Cleaned,
-        "cleanup: {:?}",
-        receipt.cleanup
-    );
-    assert_eq!(receipt.cleanup.get("tunnel").unwrap(), "removed");
-    assert_eq!(
-        mock.remaining(),
-        0,
-        "the port probe and post-kill verification must run"
-    );
+    assert_eq!(receipt.result, ReceiptResult::Failed);
+    assert!(receipt.cleanup["tunnel"].starts_with("unresolved"));
+    assert!(RunRecord::load(&repo, "androidrun4")
+        .unwrap()
+        .resources
+        .tunnel
+        .is_some());
+    assert!(!mock.calls.iter().any(|c| c.label == "kill-group"));
+    assert_eq!(mock.remaining(), 0);
 }
 
 #[test]
@@ -1564,16 +1566,24 @@ fn farm_lease_is_released_when_unresolved_tunnel_port_is_proven_free() {
 #[test]
 fn farm_lease_is_released_after_the_recorded_group_owning_the_port_is_killed() {
     let repo = common::temp_repo();
-    tunnel_and_farm_record(&repo, "androidrun21")
-        .save(&repo)
-        .unwrap();
+    let mut record = tunnel_and_farm_record(&repo, "androidrun21");
+    record.resources.tunnel.as_mut().unwrap().identity = Some(common::identity(7000, LSTART));
+    record.save(&repo).unwrap();
 
     let mut mock = MockRunner::new();
+    mock.expect_run("ps", CmdOutput::success(LSTART));
+    mock.expect_run("ps", CmdOutput::success("S"));
     mock.expect_run("lsof", CmdOutput::success("7050\n"));
     mock.expect_run("ps", CmdOutput::success("7000\n")); // listener is in our group
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
-    mock.expect_run("lsof", free_port()); // post-kill verification
+    mock.expect_run("ps", CmdOutput::failed(1, ""));
+    mock.expect_run("lsof", free_port());
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     mock.expect_run(
         "~/bin/android-farm status",
         farm_status_leased_by("androidrun21"),
@@ -1642,7 +1652,11 @@ fn post_kill_indeterminate_port_probe_is_unresolved() {
     mock.expect_run("ps", CmdOutput::success("S\n")); // not a zombie
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("5000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, "")); // leader gone
     mock.expect_run(
@@ -1681,7 +1695,10 @@ fn cleanup_recovers_pending_simulator_by_run_scoped_name() {
     mock.expect_run("simctl shutdown AAAA-1111", CmdOutput::success(""));
     mock.expect_run("simctl delete AAAA-1111", CmdOutput::success(""));
     let receipt = cleanup(&mut mock, &repo, "iosrun1");
-    assert_eq!(receipt.cleanup.get("simulator").unwrap(), "removed");
+    assert_eq!(
+        receipt.cleanup.get("simulator").unwrap(),
+        "removed (reclaimed bytes unknown)"
+    );
     assert_eq!(receipt.result, ReceiptResult::Cleaned);
 }
 
@@ -1736,6 +1753,7 @@ fn cleanup_save_failure_downgrades_cleaned_to_failed() {
             ..Default::default()
         },
     );
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     let receipt = cleanup(&mut mock, &repo, "iosrun1");
     std::fs::set_permissions(&run_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
 
@@ -1906,7 +1924,11 @@ fn cleanup_retains_the_device_lease_until_the_metro_group_is_proven_gone() {
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("5000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n"));
@@ -1936,6 +1958,7 @@ fn cleanup_retains_the_device_lease_until_the_metro_group_is_proven_gone() {
             ..Default::default()
         },
     );
+    mock2.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     let receipt2 = cleanup(&mut mock2, &repo, "iosrun1");
     assert_eq!(
         receipt2.result,
@@ -1947,4 +1970,152 @@ fn cleanup_retains_the_device_lease_until_the_metro_group_is_proven_gone() {
     assert_eq!(receipt2.cleanup["device_lease"], "removed");
     assert!(!lock_dir.exists());
     assert_eq!(mock2.remaining(), 0);
+}
+
+#[test]
+fn a_dead_owners_runner_host_is_terminated_on_its_simulator_and_the_lease_released() {
+    const UDID: &str = "1DC408C4-51DA-4C4F-ACA1-39881C916FDD";
+    const HOSTS: [&str; 2] = [
+        "dev.lykhoyda.rndevagent.fastrunner",
+        "dev.lykhoyda.rndevagent.fastrunner.uitests.xctrunner",
+    ];
+    let repo = common::temp_repo();
+    let mut record = core_record(&repo);
+    record.resources.device_borrowed = true;
+    record.resources.ios_simulator = Some(IosSimResource {
+        udid: UDID.to_string(),
+        name: "borrowed".to_string(),
+        device_type: "dt".to_string(),
+        runtime: "rt".to_string(),
+    });
+    record.resources.runner_host = Some(qaren::runrecord::RunnerHostResource {
+        udid: UDID.to_string(),
+        bundle_ids: HOSTS.iter().map(|b| b.to_string()).collect(),
+    });
+    let lock = record.resources.lease.as_ref().unwrap().lock_dir.clone();
+    record.save(&repo).unwrap();
+    let inventory = format!(
+        r#"{{"devices":{{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[{{"udid":"{UDID}","name":"borrowed","state":"Booted","isAvailable":true,"deviceTypeIdentifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17"}}]}}}}"#
+    );
+    let mut mock = MockRunner::new();
+    owner_gone(&mut mock);
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+    mock.expect_run("simctl list devices -j", CmdOutput::success(&inventory));
+    mock.expect_run(
+        "launchctl list",
+        CmdOutput::success(&format!(
+            "PID Status Label\n42 0 UIKitApplication:{}[abc]\n",
+            HOSTS[0]
+        )),
+    );
+    for bundle in HOSTS {
+        mock.expect_run(
+            &format!("simctl terminate {UDID} {bundle}"),
+            CmdOutput::success(""),
+        );
+    }
+    mock.expect_run("simctl list devices -j", CmdOutput::success(&inventory));
+    mock.expect_run(
+        "launchctl list",
+        CmdOutput::success("PID Status Label\n1 0 com.apple.SpringBoard\n"),
+    );
+
+    let receipt = cleanup(&mut mock, &repo, "core-run");
+
+    assert_eq!(
+        receipt.result,
+        ReceiptResult::Cleaned,
+        "{:?}",
+        receipt.cleanup
+    );
+    assert_eq!(receipt.cleanup["runner_host"], "removed");
+    assert_eq!(receipt.cleanup["device_lease"], "removed");
+    assert!(!lock.exists());
+    assert_eq!(mock.remaining(), 0);
+}
+
+fn driver_record(repo: &std::path::Path) -> RunRecord {
+    let mut record = core_record(repo);
+    record
+        .resources
+        .runner_drivers
+        .push(qaren::runrecord::RunnerDriverResource {
+            pgid: 7000,
+            identity: common::identity(7000, LSTART),
+        });
+    record
+}
+
+#[test]
+fn a_dead_owner_s_recorded_runner_driver_group_is_signaled_and_the_lease_released() {
+    let repo = common::temp_repo();
+    let record = driver_record(&repo);
+    let lock = record.resources.lease.as_ref().unwrap().lock_dir.clone();
+    record.save(&repo).unwrap();
+    let mut mock = MockRunner::new();
+    owner_gone(&mut mock);
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n7000 7000 S\n"));
+    mock.expect_run(
+        "ps -A",
+        CmdOutput::success("1 1 S\n7000 7000 S\n7001 7000 S\n"),
+    );
+    mock.expect_run("ps -p 7000", CmdOutput::success(LSTART));
+    mock.expect_run("ps -p 7000", CmdOutput::success("S"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
+    mock.expect_run("/bin/kill -TERM -- -7000", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
+    mock.expect_run("/bin/kill -KILL -- -7000", CmdOutput::success(""));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
+
+    let receipt = cleanup(&mut mock, &repo, "core-run");
+
+    assert_eq!(receipt.cleanup["core"], "absent");
+    assert_eq!(receipt.cleanup["runner_driver"], "removed");
+    assert_eq!(receipt.cleanup["device_lease"], "removed");
+    assert_eq!(receipt.result, ReceiptResult::Cleaned);
+    assert!(!lock.exists());
+    let stored = RunRecord::load(&repo, "core-run").unwrap();
+    assert!(stored.resources.runner_drivers.is_empty());
+    assert_eq!(mock.remaining(), 0);
+}
+
+#[test]
+fn a_runner_driver_whose_leader_is_not_the_recorded_process_is_never_signaled() {
+    let repo = common::temp_repo();
+    let record = driver_record(&repo);
+    let lock = record.resources.lease.as_ref().unwrap().lock_dir.clone();
+    record.save(&repo).unwrap();
+    let mut mock = MockRunner::new();
+    owner_gone(&mut mock);
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n7000 7000 S\n"));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n7000 7000 S\n"));
+    mock.expect_run("ps -p 7000", CmdOutput::success("Thu Aug 13 09:00:00 2026"));
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n7000 7000 S\n"));
+
+    let receipt = cleanup(&mut mock, &repo, "core-run");
+
+    assert!(receipt.cleanup["runner_driver"].starts_with("unresolved"));
+    assert!(receipt.cleanup["device_lease"].starts_with("unresolved"));
+    assert!(lock.exists());
+    assert!(mock.calls.iter().all(|spec| spec.label != "kill-group"));
+    let stored = RunRecord::load(&repo, "core-run").unwrap();
+    assert_eq!(stored.resources.runner_drivers.len(), 1);
+    assert_eq!(mock.remaining(), 0);
+}
+
+#[test]
+fn an_unproven_owner_keeps_its_runner_driver_without_signaling() {
+    let repo = common::temp_repo();
+    let mut record = driver_record(&repo);
+    record.resources.core = None;
+    record.save(&repo).unwrap();
+    let mut mock = MockRunner::new();
+    mock.expect_run("ps -p 999 -o lstart=", CmdOutput::failed(1, "denied"));
+    let receipt = cleanup(&mut mock, &repo, "core-run");
+    assert!(receipt.cleanup["runner_driver"].starts_with("refused"));
+    assert!(mock.calls.iter().all(|spec| spec.label != "kill-group"));
+    let stored = RunRecord::load(&repo, "core-run").unwrap();
+    assert_eq!(stored.resources.runner_drivers.len(), 1);
 }

@@ -1,5 +1,7 @@
+import { sleep as cancellableSleep } from '../domain/cancellation.js';
 import { randomUUID } from 'node:crypto';
-import { execFile as execFileCb } from 'node:child_process';
+import type { QaDispatchContext } from '../domain/qa-dispatch.js';
+import { execFile as execFileCb } from '../domain/cancellation.js';
 import { promisify } from 'node:util';
 
 import {
@@ -35,9 +37,13 @@ import type { RecoveryTier } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
 import type { FlatNode } from '../fast-runner-ref-map.js';
 import type { CDPClient } from '../cdp-client.js';
+import { exactIdentities } from '../qa/identity.js';
+import { join, type NativeNode } from '../qa/screen.js';
 import {
   getCachedSignature,
+  getKeyboardTop,
   isRefMapFresh,
+  refreshRef,
   lookupRef,
   pinnedElementRef,
   refCenter,
@@ -51,6 +57,17 @@ import {
 
 const execFile = promisify(execFileCb);
 const IME_PROBE_TIMEOUT_MS = 5_000;
+
+function withQaSession<T extends { qaContext?: QaDispatchContext }>(
+  handler: (args: T) => Promise<ToolResult>,
+): (args: T) => Promise<ToolResult> {
+  const wrapped = withSession(handler);
+  return async (args) => {
+    args.qaContext?.check();
+    if (!getActiveSession()) args.qaContext?.invalidate();
+    return wrapped(args);
+  };
+}
 
 export interface SnapshotNode {
   ref: string;
@@ -183,17 +200,26 @@ interface SnapshotProvenance {
   originAuthority: 'proven' | 'not-proven';
 }
 
-export async function fetchSnapshotNodes(allowCache = false): Promise<SnapshotFetchResult> {
+export async function fetchSnapshotNodes(
+  allowCache = false,
+  qaContext?: QaDispatchContext,
+): Promise<SnapshotFetchResult> {
+  if (qaContext) return fetchSnapshotNodesForSameScreenProof(qaContext);
   return fetchSnapshotNodesWithPolicy(allowCache, true);
 }
 
-export async function fetchSnapshotNodesForSameScreenProof(): Promise<SnapshotFetchResult> {
-  return fetchSnapshotNodesWithPolicy(false, false);
+export async function fetchSnapshotNodesForSameScreenProof(
+  qaContext?: QaDispatchContext,
+): Promise<SnapshotFetchResult> {
+  const result = await fetchSnapshotNodesWithPolicy(false, false, qaContext);
+  if (!result.ok) qaContext?.invalidate();
+  return result;
 }
 
 async function fetchSnapshotNodesWithPolicy(
   allowCache = false,
   recoverRunnerLeak = true,
+  qaContext?: QaDispatchContext,
 ): Promise<SnapshotFetchResult> {
   // GH #321 (live-sim speedup): serve device_find from the snapshot we already
   // captured when it's still a faithful picture of the screen (clean + fresh),
@@ -216,7 +242,10 @@ async function fetchSnapshotNodesWithPolicy(
     }
   }
 
-  const first = await runNative(['snapshot', '-i']);
+  const first = await runNative(['snapshot', '-i'], {
+    qaContext,
+    qaReadOnly: qaContext !== undefined,
+  });
   const initialNodes = parseSnapshotEnvelope(first);
   if (initialNodes === null) return { ok: false, reason: 'fetch-failed' };
   // GH #409: a zero-node capture cannot support any "element absent" verdict —
@@ -369,14 +398,24 @@ export async function pressCandidate(
   action?: string,
   getClient?: () => CDPClient,
   includeSystemUi = false,
+  qaContext?: QaDispatchContext,
 ): Promise<ToolResult> {
   const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
   if (action === 'click') {
-    const tapArgs = ['press', ref, ...(includeSystemUi ? ['--include-system-ui'] : [])];
-    const tap = async (): Promise<ToolResult> => surfaceKeyboardGuard(await runNative(tapArgs));
+    const identity = getCachedSignature(ref);
+    const tap = async (at = ref): Promise<ToolResult> =>
+      surfaceKeyboardGuard(
+        await runNative(['press', at, ...(includeSystemUi ? ['--include-system-ui'] : [])], {
+          qaContext,
+        }),
+      );
     const first = await tap();
-    return first.isError && getClient
-      ? healKeyboardOccludedTap(first, keyboardHealDeps(getClient, tap))
+    return first.isError
+      ? healKeyboardOccludedTap(
+          first,
+          getClient ? keyboardHealDeps(getClient, tap, qaContext, { ref, identity }) : null,
+          qaContext,
+        )
       : first;
   }
   return okResult({
@@ -624,7 +663,7 @@ export interface ExactFillBinding {
 
 export type ExactBindOutcome =
   | { ok: true; binding: ExactFillBinding }
-  | { ok: false; detail: string };
+  | { ok: false; detail: string; unobservable?: true; ambiguous?: true };
 
 function cleanNodeRef(node: SnapshotNode): string {
   return node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
@@ -634,14 +673,12 @@ function inputTestId(identifier: string | undefined): string | null {
   return identifier && identifier.trim().length > 0 ? identifier : null;
 }
 
-function signatureForNode(nodes: SnapshotNode[], node: SnapshotNode): RefSignature {
+function signatureForNode(node: SnapshotNode): RefSignature {
   return {
     type: node.type ?? '',
     label: node.label,
     identifier: node.identifier,
     rect: node.rect,
-    flatIndex: nodes.indexOf(node),
-    nodeCount: nodes.length,
   };
 }
 
@@ -656,6 +693,15 @@ function rectsMatch(
     Math.abs(a.width - b.width) <= tolerance &&
     Math.abs(a.height - b.height) <= tolerance
   );
+}
+
+// Every node carrying the testID counts, whatever its type; proven XCUI echoes collapse in the shared identity model.
+function nodesWithTestID(nodes: SnapshotNode[], id: string): SnapshotNode[] {
+  return exactIdentities(
+    join(nodes as unknown as NativeNode[], []),
+    { quoted: id, phrase: id, exact: 'id' },
+    'fill',
+  ).flatMap(({ element }) => nodes.filter((n) => n.ref === element.ref));
 }
 
 // A positional @eN may only bind when its identity still matches the
@@ -674,8 +720,7 @@ export function bindExactFillTarget(
       priorSignature !== null &&
       priorSignature !== undefined &&
       ((priorSignature.identifier?.trim().length ?? 0) > 0 ||
-        (priorSignature.label?.trim().length ?? 0) > 0 ||
-        priorSignature.rect !== undefined);
+        (priorSignature.label?.trim().length ?? 0) > 0);
     if (!hasRobustIdentity) {
       return {
         ok: false,
@@ -684,29 +729,38 @@ export function bindExactFillTarget(
     }
     const signature = priorSignature as RefSignature;
     const signatureIdentifier = inputTestId(signature.identifier);
-    const matches = nodes.filter((n) => {
-      if ((n.type ?? '') !== signature.type) return false;
-      if (signatureIdentifier !== null) return n.identifier === signatureIdentifier;
-      if (signature.rect !== undefined && n.rect !== undefined) {
-        return rectsMatch(n.rect, signature.rect);
-      }
-      return n.label === signature.label && inputTestId(n.identifier) === null;
-    });
+    const matches =
+      signatureIdentifier !== null
+        ? nodesWithTestID(nodes, signatureIdentifier)
+        : nodes.filter((n) => {
+            if (
+              (n.type ?? '') !== signature.type ||
+              n.label !== signature.label ||
+              inputTestId(n.identifier) !== null
+            )
+              return false;
+            if (signature.rect !== undefined && n.rect !== undefined) {
+              return rectsMatch(n.rect, signature.rect);
+            }
+            return n.label === signature.label && inputTestId(n.identifier) === null;
+          });
     if (matches.length !== 1) {
       return {
         ok: false,
+        ...(matches.length > 1 ? { ambiguous: true as const } : {}),
         detail: `ref @${clean} identity ${matches.length > 1 ? 'matches multiple elements' : 'is absent'} in the current snapshot`,
       };
     }
     node = matches[0];
   } else {
-    const matches = nodes.filter((n) => n.identifier === clean);
+    const matches = nodesWithTestID(nodes, clean);
     if (matches.length === 0) {
       return { ok: false, detail: `no element with testID "${clean}" in the current snapshot` };
     }
     if (matches.length > 1) {
       return {
         ok: false,
+        ambiguous: true,
         detail: `testID "${clean}" matches ${matches.length} elements — duplicate identifiers cannot bind an exact input`,
       };
     }
@@ -718,7 +772,7 @@ export function bindExactFillTarget(
       binding: {
         inputRef: `@${cleanNodeRef(node)}`,
         inputTestId: inputTestId(node.identifier),
-        inputSignature: signatureForNode(nodes, node),
+        inputSignature: signatureForNode(node),
         focusRef: `@${cleanNodeRef(node)}`,
         wrapper: false,
         secure: isSecureInputNode(node),
@@ -729,34 +783,37 @@ export function bindExactFillTarget(
   if (id?.endsWith(PRESSABLE_SUFFIX)) {
     const base = id.slice(0, -PRESSABLE_SUFFIX.length);
     if (base) {
-      const inputs = nodes.filter((n) => n.identifier === base && isRecognizedInputType(n.type));
+      const named = nodesWithTestID(nodes, base);
+      if (named.length > 1)
+        return {
+          ok: false,
+          ambiguous: true,
+          detail: `wrapper "${id}" maps to ${named.length} elements with testID "${base}" — ambiguous`,
+        };
+      const inputs = named.filter((n) => isRecognizedInputType(n.type));
       if (inputs.length === 1) {
         return {
           ok: true,
           binding: {
             inputRef: `@${cleanNodeRef(inputs[0])}`,
             inputTestId: base,
-            inputSignature: signatureForNode(nodes, inputs[0]),
+            inputSignature: signatureForNode(inputs[0]),
             focusRef: `@${cleanNodeRef(node)}`,
             wrapper: true,
             secure: isSecureInputNode(inputs[0]),
           },
         };
       }
-      if (inputs.length > 1) {
-        return {
-          ok: false,
-          detail: `wrapper "${id}" maps to ${inputs.length} inputs with testID "${base}" — ambiguous`,
-        };
-      }
       return {
         ok: false,
+        unobservable: true,
         detail: `wrapper "${id}" has no recognized input with testID "${base}" in the current snapshot`,
       };
     }
   }
   return {
     ok: false,
+    unobservable: true,
     detail: `element @${cleanNodeRef(node)} (${node.type ?? 'unknown type'}) is not a recognized text input — pass the inner input's ref or testID`,
   };
 }
@@ -764,6 +821,7 @@ export function bindExactFillTarget(
 // --- Press (enhanced with doubleTap, count, holdMs, waitForFocusMs) ---
 
 interface PressArgs {
+  qaContext?: QaDispatchContext;
   ref?: string;
   x?: number;
   y?: number;
@@ -776,14 +834,23 @@ interface PressArgs {
 }
 
 // Story 04 (#385): thread a caller-supplied settle budget into runNative.
-function settleOpts(args: { settleTimeoutMs?: number }): {
+function settleOpts(args: { settleTimeoutMs?: number; qaContext?: QaDispatchContext }): {
+  qaContext?: QaDispatchContext;
   settle?: { timeoutMs: number };
 } {
-  return args.settleTimeoutMs !== undefined ? { settle: { timeoutMs: args.settleTimeoutMs } } : {};
+  return {
+    ...(args.qaContext ? { qaContext: args.qaContext } : {}),
+    ...(args.settleTimeoutMs !== undefined ? { settle: { timeoutMs: args.settleTimeoutMs } } : {}),
+  };
 }
 
 // Story 05 (#386): thread caller-supplied settle and retryIfNoChange into runNative opts.
-function interactOpts(args: { settleTimeoutMs?: number; retryIfNoChange?: boolean }): {
+function interactOpts(args: {
+  settleTimeoutMs?: number;
+  retryIfNoChange?: boolean;
+  qaContext?: QaDispatchContext;
+}): {
+  qaContext?: QaDispatchContext;
   settle?: { timeoutMs: number };
   retryIfNoChange?: boolean;
 } {
@@ -793,19 +860,33 @@ function interactOpts(args: { settleTimeoutMs?: number; retryIfNoChange?: boolea
   };
 }
 
-// #379: build the KEYBOARD_OCCLUDED auto-heal deps. JS-first per D1250 —
-// dismiss via the injected helper (deterministic, no gestures), refresh the
-// snapshot because targets relayout when the keyboard lifts (measured live:
-// wizard-next-btn moved y=790→571), then retry the raw tap exactly once.
-// Opportunistic: no CDP → null deps → the refusal surfaces unchanged.
+function snapshotNodes(result: unknown): FlatNode[] | null {
+  try {
+    const envelope = JSON.parse((result as ToolResult).content[0].text) as {
+      ok?: boolean;
+      data?: { nodes?: FlatNode[] };
+    };
+    return envelope.ok !== false && Array.isArray(envelope.data?.nodes)
+      ? envelope.data.nodes
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+// The heal retries the identity the refused tap named, never whatever its refreshed ref now names.
 function keyboardHealDeps(
   getClient: () => CDPClient,
-  retryTap: () => Promise<ToolResult>,
+  tapAt: (ref?: string) => Promise<ToolResult>,
+  qaContext?: QaDispatchContext,
+  target?: { ref: string; identity: RefSignature | null },
 ): KeyboardAutoHealDeps | null {
   const client = cdpClientOrNull(getClient);
   if (!client) return null;
+  let refreshed: unknown;
   return {
     dismissViaJs: async () => {
+      qaContext?.authorize();
       const r = await client.evaluate('__QAREN.dismissKeyboard()');
       if (typeof r.value !== 'string') return false;
       try {
@@ -815,15 +896,31 @@ function keyboardHealDeps(
         return false;
       }
     },
-    refreshSnapshot: () => runNative(['snapshot']),
-    retryTap,
+    refreshSnapshot: async () =>
+      // Identity re-resolution counts every node, not only interactive ones.
+      (refreshed = await runNative(['snapshot', '--full'], {
+        qaContext,
+        qaReadOnly: qaContext !== undefined,
+      })),
+    retryTap: async () => {
+      if (!target) return tapAt();
+      const nodes = snapshotNodes(refreshed);
+      const outcome =
+        target.identity && nodes ? refreshRef(target.identity, nodes) : { kind: 'absent' as const };
+      if (outcome.kind === 'unique') return tapAt(outcome.node.ref);
+      return failResult(
+        `Element at ref ${target.ref} did not re-resolve to exactly one element after the keyboard was dismissed — refusing to guess-tap`,
+        outcome.kind === 'ambiguous' ? 'TARGET_AMBIGUOUS' : 'STALE_REF',
+        { reResolution: outcome.kind, mutation: 'none' },
+      );
+    },
   };
 }
 
 export function createDevicePressHandler(
   getClient: () => CDPClient,
 ): (args: PressArgs) => Promise<ToolResult> {
-  return withSession(async (args) => {
+  return withQaSession(async (args) => {
     const hasRef = typeof args.ref === 'string' && args.ref.length > 0;
     const hasCoordinates = args.x !== undefined && args.y !== undefined;
     if (hasRef === hasCoordinates) {
@@ -833,18 +930,33 @@ export function createDevicePressHandler(
       );
     }
     const target = hasRef ? (args.ref!.startsWith('@') ? args.ref! : `@${args.ref!}`) : undefined;
-    const cliArgs = hasRef ? ['press', target!] : ['press', String(args.x!), String(args.y!)];
-    if (args.doubleTap) cliArgs.push('--double-tap');
-    if (args.count && args.count > 1) cliArgs.push('--count', String(args.count));
-    if (args.holdMs && args.holdMs > 0) cliArgs.push('--hold-ms', String(args.holdMs));
-    const tap = async (): Promise<ToolResult> =>
-      surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+    const flags: string[] = [];
+    if (args.doubleTap) flags.push('--double-tap');
+    if (args.count && args.count > 1) flags.push('--count', String(args.count));
+    if (args.holdMs && args.holdMs > 0) flags.push('--hold-ms', String(args.holdMs));
+    const identity = target ? getCachedSignature(target) : null;
+    const tap = async (ref = target): Promise<ToolResult> =>
+      surfaceKeyboardGuard(
+        await runNative(
+          [...(ref ? ['press', ref] : ['press', String(args.x!), String(args.y!)]), ...flags],
+          interactOpts(args),
+        ),
+      );
     let result = await tap();
     if (result.isError) {
-      result = await healKeyboardOccludedTap(result, keyboardHealDeps(getClient, tap));
+      result = await healKeyboardOccludedTap(
+        result,
+        keyboardHealDeps(
+          getClient,
+          tap,
+          args.qaContext,
+          target ? { ref: target, identity } : undefined,
+        ),
+        args.qaContext,
+      );
     }
     if (!result.isError && args.waitForFocusMs && args.waitForFocusMs > 0) {
-      await new Promise((r) => setTimeout(r, args.waitForFocusMs));
+      await cancellableSleep(args.waitForFocusMs);
     }
     return result;
   });
@@ -864,21 +976,29 @@ export function createDeviceLongPressHandler(
   getClient: () => CDPClient,
 ): (args: LongPressArgs) => Promise<ToolResult> {
   return withSession(async (args) => {
-    let cliArgs: string[];
-    if (args.ref) {
-      const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
-      cliArgs = ['press', ref, '--hold-ms', String(args.durationMs ?? 1000)];
+    const target = args.ref ? (args.ref.startsWith('@') ? args.ref : `@${args.ref}`) : undefined;
+    let cliArgs: (ref?: string) => string[];
+    if (target) {
+      cliArgs = (ref = target) => ['press', ref, '--hold-ms', String(args.durationMs ?? 1000)];
     } else if (args.x != null && args.y != null) {
-      cliArgs = ['longpress', String(args.x), String(args.y)];
-      if (args.durationMs) cliArgs.push(String(args.durationMs));
+      cliArgs = () => [
+        'longpress',
+        String(args.x),
+        String(args.y),
+        ...(args.durationMs ? [String(args.durationMs)] : []),
+      ];
     } else {
       return failResult('Provide either ref or x+y coordinates');
     }
-    const tap = async (): Promise<ToolResult> =>
-      surfaceKeyboardGuard(await runNative(cliArgs, interactOpts(args)));
+    const identity = target ? getCachedSignature(target) : null;
+    const tap = async (ref?: string): Promise<ToolResult> =>
+      surfaceKeyboardGuard(await runNative(cliArgs(ref), interactOpts(args)));
     const result = await tap();
     if (result.isError) {
-      return healKeyboardOccludedTap(result, keyboardHealDeps(getClient, tap));
+      return healKeyboardOccludedTap(
+        result,
+        keyboardHealDeps(getClient, tap, undefined, target ? { ref: target, identity } : undefined),
+      );
     }
     return result;
   });
@@ -887,6 +1007,7 @@ export function createDeviceLongPressHandler(
 // --- Fill (exact target + final verification — GH #581) ---
 
 export interface FillArgs {
+  qaContext?: QaDispatchContext;
   ref: string;
   text: string;
   /** Bounded in-operation focus wait forwarded to the runner (default 1500ms). */
@@ -895,6 +1016,12 @@ export interface FillArgs {
   testID?: string;
   /** Type into the field that already has keyboard focus instead of binding an input. */
   focused?: boolean;
+  /** With focused: refuse before typing when the React read of the intended input reports it unfocused. */
+  vetoUnfocused?: boolean;
+  requireFocused?: boolean;
+  skipFinalValidation?: boolean;
+  /** Replace the field's content instead of appending (focused: the runner's select-all sequence). */
+  clearFirst?: boolean;
   /** Story 04 (#385): per-call settle budget override in ms. */
   settleTimeoutMs?: number;
 }
@@ -1003,8 +1130,10 @@ async function runNativeVerifyInput(
   binding: ExactFillBinding,
   text: string,
   operationToken?: string,
+  qaContext?: QaDispatchContext,
 ): Promise<{ verdict: NativeVerifyVerdict; stable: boolean }> {
   const result = await runNative(['verify-input', binding.inputRef, text], {
+    qaContext,
     settle: { enabled: false },
     exactTarget: {
       inputRef: binding.inputRef,
@@ -1031,8 +1160,9 @@ async function finalVerification(
   binding: ExactFillBinding,
   text: string,
   operationToken: string,
+  qaContext?: QaDispatchContext,
 ): Promise<NativeVerification> {
-  const native = await runNativeVerifyInput(binding, text, operationToken);
+  const native = await runNativeVerifyInput(binding, text, operationToken, qaContext);
   return classifyNativeVerification(native.verdict, native.stable);
 }
 
@@ -1058,7 +1188,11 @@ interface FillFailureOpts {
 }
 
 function fillFailure(
-  code: 'NO_TEXT_INPUT_TARGET' | 'FOCUS_TARGET_OCCLUDED' | 'TEXT_ENTRY_UNVERIFIED',
+  code:
+    | 'NO_TEXT_INPUT_TARGET'
+    | 'FOCUS_TARGET_OCCLUDED'
+    | 'TEXT_ENTRY_UNVERIFIED'
+    | 'TARGET_AMBIGUOUS',
   message: string,
   opts: FillFailureOpts,
 ): ToolResult {
@@ -1068,6 +1202,7 @@ function fillFailure(
     ...(opts.verification
       ? {
           verification: {
+            evidence: opts.verification.evidence,
             native: opts.verification.native,
             nativeStable: opts.verification.nativeStable,
           },
@@ -1075,9 +1210,11 @@ function fillFailure(
       : {}),
     hint:
       opts.hint ??
-      (opts.mutation === 'none'
-        ? 'No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying.'
-        : 'The field may have been mutated. Read the field state with device_snapshot before any manual retry — do not blindly re-run device_fill.'),
+      (code === 'TARGET_AMBIGUOUS'
+        ? 'The target identity is ambiguous; do not retry this fill.'
+        : opts.mutation === 'none'
+          ? 'No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying.'
+          : 'The field may have been mutated. Read the field state with device_snapshot before any manual retry — do not blindly re-run device_fill.'),
   });
 }
 
@@ -1137,7 +1274,9 @@ export async function performExactFill(
   const priorSignature =
     cachedSignature && cachedRect ? { ...cachedSignature, rect: cachedRect } : cachedSignature;
 
-  const snap = await fetchSnapshotNodes(true);
+  const snap = args.qaContext
+    ? await fetchSnapshotNodesForSameScreenProof(args.qaContext)
+    : await fetchSnapshotNodes(true);
   if (!snap.ok) {
     if (snap.reason === 'runner-leak-unrecovered') {
       return attachFillFailureDisposition(
@@ -1154,6 +1293,13 @@ export async function performExactFill(
   }
   const bind = bindExactFillTarget(snap.nodes, args.ref, priorSignature);
   if (!bind.ok) {
+    if (bind.ambiguous)
+      return failResult(
+        `TARGET_AMBIGUOUS: device_fill found more than one element for the target: ${bind.detail}. No text was entered.`,
+        'TARGET_AMBIGUOUS',
+        { mutation: 'none', pathsTried },
+      );
+    if (!bind.unobservable) args.qaContext?.invalidate();
     const focusedHint =
       getActiveSession()?.platform !== 'android' &&
       (bind.detail.startsWith('wrapper "') ||
@@ -1191,7 +1337,8 @@ export async function performExactFill(
   const tNative = Date.now();
   const operationToken = randomUUID();
   const primary = await runNative(
-    ['fill', binding.inputRef, args.text, ...(args.text.length === 0 ? ['--clear-first'] : [])],
+    // A fill replaces the field's content; verification expects exactly args.text.
+    ['fill', binding.inputRef, args.text, '--clear-first'],
     {
       ...settleOpts(args),
       exactTarget: { ...exactTarget, operationToken },
@@ -1209,7 +1356,12 @@ export async function performExactFill(
       }
       if (mutation === 'observed') {
         mutationSeen = 'observed';
-        const verification = await finalVerification(binding, args.text, operationToken);
+        const verification = await finalVerification(
+          binding,
+          args.text,
+          operationToken,
+          args.qaContext,
+        );
         if (verification.verified) {
           return verifiedFillResult('native', args.text.length, {
             textEntryPath: 'native',
@@ -1237,12 +1389,19 @@ export async function performExactFill(
     if (mutation === 'none') {
       const code = extractErrorCode(primary);
       return fillFailure(
-        code === 'FOCUS_TARGET_OCCLUDED' ? 'FOCUS_TARGET_OCCLUDED' : 'NO_TEXT_INPUT_TARGET',
+        code === 'FOCUS_TARGET_OCCLUDED' || code === 'TARGET_AMBIGUOUS'
+          ? code
+          : 'NO_TEXT_INPUT_TARGET',
         `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`,
         { mutation: 'none', pathsTried },
       );
     }
-    const verification = await finalVerification(binding, args.text, operationToken);
+    const verification = await finalVerification(
+      binding,
+      args.text,
+      operationToken,
+      args.qaContext,
+    );
     if (verification.verified) {
       return verifiedFillResult('native', args.text.length, {
         textEntryPath: 'native',
@@ -1260,7 +1419,7 @@ export async function performExactFill(
   mutationSeen = 'observed';
   const primarySettle = extractSettleMeta(primary);
   const primaryTyping = extractTypingMeta(primary);
-  const verification = await finalVerification(binding, args.text, operationToken);
+  const verification = await finalVerification(binding, args.text, operationToken, args.qaContext);
   if (verification.verified) {
     return verifiedFillResult('native', args.text.length, {
       textEntryPath: 'native',
@@ -1286,7 +1445,7 @@ export async function performExactFill(
   );
 }
 
-async function readReactInputValue(
+export async function readReactInputValue(
   client: CDPClient | null,
   testID: string | null | undefined,
 ): Promise<{ value: string | null; controlled: boolean; focused: boolean } | null> {
@@ -1324,7 +1483,7 @@ async function awaitReactInputValue(
     if (signal?.aborted) break;
     const read = await readInput();
     if (read?.controlled && read.value === expected) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 150));
+      await cancellableSleep(150);
       if (signal?.aborted) return 'unreadable';
       const confirm = await readInput();
       return confirm?.controlled === true && confirm.value === expected ? 'exact' : 'unreadable';
@@ -1336,7 +1495,7 @@ async function awaitReactInputValue(
       previous = null;
       last = null;
     }
-    if (attempt < 5) await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    if (attempt < 5) await cancellableSleep(100);
   }
   return last?.controlled === true &&
     previous?.controlled === true &&
@@ -1346,11 +1505,11 @@ async function awaitReactInputValue(
     : 'unreadable';
 }
 
+// The requested identity itself; a wrapper id is never rewritten to an unobserved inner id.
 function focusedFillOracleTestId(args: FillArgs): string | null {
   if (args.testID) return args.testID;
   const clean = args.ref.replace(/^@/, '');
-  if (/^e\d+$/.test(clean)) return null;
-  return clean.endsWith(PRESSABLE_SUFFIX) ? clean.slice(0, -PRESSABLE_SUFFIX.length) : clean;
+  return /^e\d+$/.test(clean) ? null : clean;
 }
 
 function extractTextEntryRoute(result: ToolResult): string | undefined {
@@ -1386,24 +1545,40 @@ export async function performFocusedFill(
     );
   }
   const oracleTestId = focusedFillOracleTestId(args);
-  const beforeRead = await readReactInputValue(client, oracleTestId);
-  const before = controlledReactValue(beforeRead);
-  const native = await runNative(['fill', args.ref, args.text], {
-    focusedType: true,
-    settle: { enabled: false },
-  });
+  let before: string | null = null;
+  let beforeFocused = false;
+  const focusedProof = async (): Promise<boolean> => {
+    const read = await readReactInputValue(client, oracleTestId);
+    before = controlledReactValue(read);
+    beforeFocused = read?.focused === true;
+    return !(
+      (args.requireFocused && read?.focused !== true) ||
+      (args.vetoUnfocused && read && !read.focused)
+    );
+  };
+  // clearFirst replaces in the runner: one select-all and text sequence, never an append.
+  const native = await runNative(
+    ['fill', args.ref, args.text, ...(args.clearFirst ? ['--clear-first'] : [])],
+    { qaContext: args.qaContext, focusedType: true, focusedProof, settle: { enabled: false } },
+  );
   if (native.isError) {
     const mutation = extractMutationDisposition(native);
     if (mutation === 'none') {
-      return fillFailure('NO_TEXT_INPUT_TARGET', extractErrorText(native), {
-        mutation: 'none',
-        pathsTried,
-        ...(extractErrorCode(native) === 'TEXT_SYNTHESIS_UNAVAILABLE'
-          ? {
-              hint: 'No text was entered. This Xcode cannot synthesize text, so device_fill focused: true cannot type here. Do not retry focused: true.',
-            }
-          : {}),
-      });
+      return fillFailure(
+        extractErrorCode(native) === 'TARGET_AMBIGUOUS'
+          ? 'TARGET_AMBIGUOUS'
+          : 'NO_TEXT_INPUT_TARGET',
+        extractErrorText(native),
+        {
+          mutation: 'none',
+          pathsTried,
+          ...(extractErrorCode(native) === 'TEXT_SYNTHESIS_UNAVAILABLE'
+            ? {
+                hint: 'No text was entered. This Xcode cannot synthesize text, so device_fill focused: true cannot type here. Do not retry focused: true.',
+              }
+            : {}),
+        },
+      );
     }
     return fillFailure('TEXT_ENTRY_UNVERIFIED', extractErrorText(native), {
       mutation: 'possible',
@@ -1423,10 +1598,10 @@ export async function performFocusedFill(
       },
       'Typed into the focused field; the value could not be confirmed. Confirm with device_screenshot or expect_text before relying on it.',
     );
-  if (before === null || beforeRead?.focused !== true) return unverified();
+  if (args.skipFinalValidation || before === null || !beforeFocused) return unverified();
   const verification = await awaitReactInputValue(
     () => readReactInputValue(client, oracleTestId),
-    before + args.text,
+    (args.clearFirst ? '' : before) + args.text,
   );
   if (verification === 'exact') {
     return verifiedFillResult('native', args.text.length, {
@@ -1619,7 +1794,7 @@ export async function performReactTreeInput(
 export function createDeviceFillHandler(
   getClient: () => CDPClient,
 ): (args: FillArgs) => Promise<ToolResult> {
-  return withSession(async (args) =>
+  return withQaSession(async (args) =>
     args.focused === true
       ? performFocusedFill(args, cdpClientOrNull(getClient))
       : performExactFill(args, null, {}),
@@ -1629,6 +1804,7 @@ export function createDeviceFillHandler(
 // --- Swipe (coordinate-based with direction shortcut) ---
 
 interface SwipeArgs {
+  qaContext?: QaDispatchContext;
   direction?: 'up' | 'down' | 'left' | 'right';
   x1?: number;
   y1?: number;
@@ -1695,6 +1871,15 @@ export function buildDirectionalSwipeCliArgs(
   ];
 }
 
+// A drag that starts or ends on a visible keyboard types or dismisses instead of scrolling.
+function scrollBand(): { width: number; height: number } {
+  const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
+  const keyboardTop = getKeyboardTop();
+  return keyboardTop !== null && keyboardTop > 0 && keyboardTop < screen.height
+    ? { width: screen.width, height: keyboardTop }
+    : screen;
+}
+
 // Scroll direction → finger gesture is INVERTED vs swipe ("scroll down" = content
 // moves up = finger moves up) and scaled by `amount` (0..1). Centred half-spans
 // keep the gesture inside the viewport.
@@ -1730,9 +1915,8 @@ export function buildDirectionalScrollCliArgs(
   amount?: number,
   durationMs?: number,
 ): string[] {
-  const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
   const clamped = Math.min(Math.max(amount ?? 0.5, 0), 1);
-  const coords = computeScrollFromDirection(direction, clamped, screen);
+  const coords = computeScrollFromDirection(direction, clamped, scrollBand());
   const duration = durationMs ?? DEFAULT_SWIPE_DURATION_MS;
   return [
     'scroll',
@@ -1754,16 +1938,20 @@ export function exactModeRejectionMessage(
 }
 
 export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolResult> {
-  return withSession(async (args) => {
+  return withQaSession(async (args) => {
     // GH #383: a respawned worker starts with empty in-memory runner state, so
     // adopt the persisted per-device file before the isFastRunnerAvailable()
     // gates below (else they false-report "unavailable" after a respawn).
-    adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
+    if (!args.qaContext) adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
     // B106 fix: use fast-runner's HID-level synthesis to bypass XCTest
     // `waitForIdle` hangs on Reanimated-driven screens. Only applies when
     // fast-runner is available (iOS) and count/pattern are not used (those
     // are daemon-specific features — fall back to agent-device for them).
-    const canUseFastRunner = isFastRunnerAvailable() && !args.count && !args.pattern;
+    const canUseFastRunner =
+      (!args.qaContext || getActiveSession()?.platform === 'ios') &&
+      isFastRunnerAvailable() &&
+      !args.count &&
+      !args.pattern;
 
     // B123: exact: true requires fast-runner. Fail loud if unavailable instead
     // of silently degrading to a 60ms-capped daemon swipe.
@@ -1792,6 +1980,8 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
             args.y2,
             args.durationMs,
             getActiveSession()?.appId ?? resolveBundleId('ios') ?? undefined,
+            args.qaContext,
+            getActiveSession()?.deviceId,
           );
           if (resp.ok) {
             return okResult({
@@ -1803,6 +1993,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
               method: 'fast-runner',
             });
           }
+          args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
           if (args.exact === true) {
             return failResult(
               'fast-runner swipe call failed and exact: true forbids daemon fallback',
@@ -1810,6 +2001,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
             );
           }
         } catch (err) {
+          args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
           if (args.exact === true) {
             return failResult(
               `fast-runner swipe call threw and exact: true forbids daemon fallback: ${err instanceof Error ? err.message : String(err)}`,
@@ -1823,7 +2015,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
       if (args.durationMs) cliArgs.push(String(args.durationMs));
       if (args.count && args.count > 1) cliArgs.push('--count', String(args.count));
       if (args.pattern) cliArgs.push('--pattern', args.pattern);
-      return runNative(cliArgs);
+      return runNative(cliArgs, { qaContext: args.qaContext });
     }
     if (args.direction) {
       // B-Tier3 fix: Use real swipe gesture (not scroll) for direction-based swipes.
@@ -1839,6 +2031,8 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
             coords.y2,
             duration,
             getActiveSession()?.appId ?? resolveBundleId('ios') ?? undefined,
+            args.qaContext,
+            getActiveSession()?.deviceId,
           );
           if (resp.ok) {
             return okResult({
@@ -1848,6 +2042,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
               ...coords,
             });
           }
+          args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
           if (args.exact === true) {
             return failResult(
               'fast-runner swipe call failed and exact: true forbids daemon fallback',
@@ -1855,6 +2050,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
             );
           }
         } catch (err) {
+          args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
           if (args.exact === true) {
             return failResult(
               `fast-runner swipe call threw and exact: true forbids daemon fallback: ${err instanceof Error ? err.message : String(err)}`,
@@ -1874,7 +2070,7 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
       ];
       if (args.count && args.count > 1) cliArgs.push('--count', String(args.count));
       if (args.pattern) cliArgs.push('--pattern', args.pattern);
-      return runNative(cliArgs);
+      return runNative(cliArgs, { qaContext: args.qaContext });
     }
     return failResult('Provide either direction or x1,y1,x2,y2 coordinates');
   });
@@ -1883,12 +2079,13 @@ export function createDeviceSwipeHandler(): (args: SwipeArgs) => Promise<ToolRes
 // --- Scroll ---
 
 interface ScrollArgs {
+  qaContext?: QaDispatchContext;
   direction: 'up' | 'down' | 'left' | 'right';
   amount?: number;
 }
 
 export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolResult> {
-  return withSession(async (args) => {
+  return withQaSession(async (args) => {
     // B106 fix: Route iOS scroll through fast-runner's direct HID synthesis
     // when available. The agent-device daemon path uses XCTest's high-level
     // gesture API which calls `waitForIdle` after the drag — this hangs
@@ -1896,13 +2093,12 @@ export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolR
     // because the UI thread is never "idle" between scroll events. Fast-runner
     // uses `RunnerDaemonProxy.synthesize(eventRecord)` which is raw HID event
     // injection and returns as soon as events are delivered.
-    const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
     const amount = Math.min(Math.max(args.amount ?? 0.5, 0), 1);
-    const { x1, y1, x2, y2 } = computeScrollFromDirection(args.direction, amount, screen);
+    const { x1, y1, x2, y2 } = computeScrollFromDirection(args.direction, amount, scrollBand());
     // GH #383: adopt persisted per-device state so a respawned worker sees a
     // live runner before this fast-path gate.
-    adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
-    if (isFastRunnerAvailable()) {
+    if (!args.qaContext) adoptPersistedFastRunnerState(getActiveSession()?.deviceId);
+    if ((!args.qaContext || getActiveSession()?.platform === 'ios') && isFastRunnerAvailable()) {
       try {
         const resp = await fastSwipe(
           x1,
@@ -1911,6 +2107,8 @@ export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolR
           y2,
           DEFAULT_SWIPE_DURATION_MS,
           getActiveSession()?.appId ?? resolveBundleId('ios') ?? undefined,
+          args.qaContext,
+          getActiveSession()?.deviceId,
         );
         if (resp.ok) {
           return okResult({
@@ -1923,15 +2121,17 @@ export function createDeviceScrollHandler(): (args: ScrollArgs) => Promise<ToolR
             y2,
           });
         }
-        // Fall through to daemon on fast-runner failure
+        args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
       } catch {
-        // Fall through to daemon on fast-runner error
+        args.qaContext?.refuse('ACTION_OUTCOME_UNCERTAIN');
       }
     }
     // Daemon / Android fallthrough: dispatch the COORDINATE form. The arg
     // builders throw on the raw direction form, so this previously crashed on
     // Android (always) and on the iOS fast-runner fallback.
-    return runNative(buildDirectionalScrollCliArgs(args.direction, args.amount));
+    return runNative(buildDirectionalScrollCliArgs(args.direction, args.amount), {
+      qaContext: args.qaContext,
+    });
   });
 }
 
@@ -2091,8 +2291,10 @@ export function createDevicePinchHandler(): (args: PinchArgs) => Promise<ToolRes
 
 // --- Back ---
 
-export function createDeviceBackHandler(): (args: Record<string, never>) => Promise<ToolResult> {
-  return withSession(() => runNative(['back']));
+export function createDeviceBackHandler(): (args: {
+  qaContext?: QaDispatchContext;
+}) => Promise<ToolResult> {
+  return withQaSession((args) => runNative(['back'], { qaContext: args.qaContext }));
 }
 
 // --- Focus Next (keyboard Next/Return button) ---

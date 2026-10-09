@@ -8,6 +8,8 @@ use qaren::runrecord::PidIdentity;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
+static NO_PARTS: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
 fn temp_dir() -> PathBuf {
@@ -35,6 +37,7 @@ fn artifact() -> CachedArtifact {
 fn state(worktree: &Path, fingerprint: &str) -> NativeCacheState {
     NativeCacheState {
         schema: CACHE_SCHEMA.to_string(),
+        fingerprint_parts: Default::default(),
         platform: "ios".to_string(),
         app_id: "com.rndevagent.testapp".to_string(),
         worktree_root: worktree.to_path_buf(),
@@ -54,8 +57,10 @@ fn inputs<'a>(worktree: &'a Path, fingerprint: &'a str) -> DecisionInputs<'a> {
         worktree_root: worktree,
         candidate_sha: SHA_B,
         fingerprint,
+        fingerprint_parts: &NO_PARTS,
         fingerprint_complete: true,
         incompleteness: &[],
+        expo_unavailable: None,
         scheme: Some("rndatest"),
         force_clean: false,
         native_dir_exists: true,
@@ -72,6 +77,7 @@ fn matching_fingerprint_with_verified_artifact_and_scheme_reuses() {
         Some(ArtifactStatus::Verified),
     );
     assert_eq!(plan.decision, BuildDecision::Reuse);
+    assert!(!plan.regenerate_native_dir);
     assert!(plan.artifact.is_some());
     // The sha comparison must be visible evidence: reuse across candidates is
     // proven by the fingerprint, never inferred from the sha.
@@ -146,7 +152,7 @@ fn missing_scheme_downgrades_matching_fingerprint_to_incremental() {
 }
 
 #[test]
-fn incomplete_fingerprint_forbids_reuse_even_when_everything_matches() {
+fn incomplete_matching_fingerprint_regenerates_generated_native_dir() {
     let worktree = temp_dir();
     let incompleteness = vec!["app.config.ts is a dynamic config".to_string()];
     let mut incomplete = inputs(&worktree, FP);
@@ -157,19 +163,44 @@ fn incomplete_fingerprint_forbids_reuse_even_when_everything_matches() {
         &StateStatus::Loaded(Box::new(state(&worktree, FP))),
         Some(ArtifactStatus::Verified),
     );
-    assert_eq!(plan.decision, BuildDecision::Incremental);
+    assert_eq!(plan.decision, BuildDecision::Clean);
+    assert!(plan.regenerate_native_dir);
+    assert!(plan.artifact.is_none());
+    assert!(plan
+        .reason
+        .contains("deletes it with its installed native dependencies and build outputs"));
+    assert!(!plan.reason.contains("keeping existing build caches"));
     assert!(plan.evidence.iter().any(|e| e.contains("dynamic config")));
+    assert!(!plan.reason.contains("changed"), "{}", plan.reason);
+    assert!(
+        plan.reason.contains("matches")
+            && plan.reason.contains("app.config.ts is a dynamic config")
+            && plan.reason.contains("instead of reuse"),
+        "{}",
+        plan.reason
+    );
 }
 
 #[test]
-fn changed_fingerprint_with_proven_provenance_builds_incrementally() {
+fn changed_fingerprint_with_proven_provenance_regenerates_generated_native_dir() {
     let worktree = temp_dir();
     let plan = decide(
         &inputs(&worktree, "rnfp1:changed"),
         &StateStatus::Loaded(Box::new(state(&worktree, FP))),
         None,
     );
-    assert_eq!(plan.decision, BuildDecision::Incremental);
+    assert_eq!(plan.decision, BuildDecision::Clean);
+    assert!(plan.regenerate_native_dir);
+    assert!(plan.artifact.is_none());
+    assert!(plan
+        .reason
+        .contains("deletes it with its installed native dependencies and build outputs"));
+    assert!(!plan.reason.contains("keeping existing build caches"));
+    assert!(
+        plan.reason.starts_with("native inputs changed"),
+        "{}",
+        plan.reason
+    );
     assert!(
         plan.evidence
             .iter()
@@ -177,6 +208,42 @@ fn changed_fingerprint_with_proven_provenance_builds_incrementally() {
         "old and new fingerprints must be evidence: {:?}",
         plan.evidence
     );
+}
+
+#[test]
+fn native_input_changes_regenerate_only_existing_generated_dirs_on_both_platforms() {
+    let worktree = temp_dir();
+    for platform in ["ios", "android"] {
+        for (fingerprint, complete) in [("rnfp1:changed", true), (FP, false)] {
+            for (exists, in_candidate) in [(true, false), (true, true), (false, false)] {
+                let mut current = inputs(&worktree, fingerprint);
+                current.platform = platform;
+                current.fingerprint_complete = complete;
+                current.native_dir_exists = exists;
+                current.native_dir_in_candidate = in_candidate;
+                let mut cached = state(&worktree, FP);
+                cached.platform = platform.to_string();
+                cached.generated_native_dirs = vec![platform.to_string()];
+                let plan = decide(
+                    &current,
+                    &StateStatus::Loaded(Box::new(cached)),
+                    Some(ArtifactStatus::Verified),
+                );
+                let regenerate = exists && !in_candidate;
+                assert_eq!(
+                    plan.decision,
+                    if regenerate {
+                        BuildDecision::Clean
+                    } else {
+                        BuildDecision::Incremental
+                    },
+                    "{platform}: {fingerprint}, complete={complete}, exists={exists}, in_candidate={in_candidate}"
+                );
+                assert_eq!(plan.regenerate_native_dir, regenerate);
+                assert!(plan.artifact.is_none());
+            }
+        }
+    }
 }
 
 #[test]
@@ -281,7 +348,7 @@ fn strict_claim_refuses_even_a_dead_holder() {
     let dead = PidIdentity {
         pid: 4242,
         started_at: "Wed Aug 13 10:00:00 2026".to_string(),
-        command: "qaren prepare".to_string(),
+        command: qaren::redact::OutputText::from_output("qaren prepare"),
     };
     assert!(matches!(
         claim_lock(
@@ -315,7 +382,7 @@ fn adopt_dead_policy_takes_over_a_dead_holder_but_not_a_live_one() {
     let identity = PidIdentity {
         pid: 4242,
         started_at: "Wed Aug 13 10:00:00 2026".to_string(),
-        command: "qaren prepare".to_string(),
+        command: qaren::redact::OutputText::from_output("qaren prepare"),
     };
     assert!(matches!(
         claim_lock(
@@ -402,4 +469,205 @@ fn release_refuses_an_unreadable_holder_record() {
         ReleaseOutcome::Refused(_)
     ));
     assert!(dir.exists(), "an ambiguous lock must not be touched");
+}
+
+#[test]
+fn incomplete_matching_fingerprint_without_a_generated_dir_names_its_cause() {
+    let worktree = temp_dir();
+    let incompleteness = vec!["app.config.ts is a dynamic config".to_string()];
+    let mut incomplete = inputs(&worktree, FP);
+    incomplete.fingerprint_complete = false;
+    incomplete.incompleteness = &incompleteness;
+    incomplete.native_dir_exists = false;
+    let plan = decide(
+        &incomplete,
+        &StateStatus::Loaded(Box::new(state(&worktree, FP))),
+        Some(ArtifactStatus::Verified),
+    );
+    assert_eq!(plan.decision, BuildDecision::Incremental);
+    assert!(
+        plan.reason.contains("app.config.ts is a dynamic config")
+            && plan.reason.contains("refusing cached reuse"),
+        "{}",
+        plan.reason
+    );
+}
+
+fn parts(expo: &str, toolchain: &str) -> std::collections::BTreeMap<String, String> {
+    [
+        ("rnfp", "rnfp1:r"),
+        ("expo", expo),
+        ("toolchain", toolchain),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
+}
+
+#[test]
+fn changed_composite_names_each_changed_fingerprint_part() {
+    let worktree = temp_dir();
+    for (current, named) in [
+        (parts("expo:b", "xcode:t"), "native inputs changed: expo"),
+        (
+            parts("expo:a", "xcode:u"),
+            "native inputs changed: toolchain",
+        ),
+        (
+            parts("expo:b", "xcode:u"),
+            "native inputs changed: expo, toolchain",
+        ),
+    ] {
+        let mut recorded = state(&worktree, FP);
+        recorded.fingerprint_parts = parts("expo:a", "xcode:t");
+        let mut changed = inputs(&worktree, "rnfp1:changed");
+        changed.fingerprint_parts = &current;
+        let plan = decide(&changed, &StateStatus::Loaded(Box::new(recorded)), None);
+        assert_ne!(plan.decision, BuildDecision::Reuse);
+        assert!(
+            plan.evidence.iter().any(|e| e.as_str() == named),
+            "{:?}",
+            plan.evidence
+        );
+    }
+}
+
+#[test]
+fn unavailable_expo_fingerprint_names_its_cause_not_changed_inputs() {
+    let worktree = temp_dir();
+    let cause = "@expo/fingerprint fingerprint:generate did not complete (exit 1)";
+    let incompleteness = vec![
+        "app.config.ts is a dynamic config".to_string(),
+        format!("Expo fingerprint unavailable: {cause}"),
+    ];
+    for native_dir_exists in [true, false] {
+        for (rnfp, genuine) in [("rnfp1:r", false), ("rnfp1:s", true)] {
+            let current =
+                std::collections::BTreeMap::from([("rnfp".to_string(), rnfp.to_string())]);
+            let mut recorded = state(&worktree, FP);
+            recorded.fingerprint_parts = parts("expo:a", "xcode:t");
+            let recorded = StateStatus::Loaded(Box::new(recorded));
+            let unavailable = DecisionInputs {
+                fingerprint_parts: &current,
+                fingerprint_complete: false,
+                incompleteness: &incompleteness,
+                expo_unavailable: Some(cause),
+                native_dir_exists,
+                ..inputs(&worktree, rnfp)
+            };
+            let plan = decide(&unavailable, &recorded, None);
+            let uncaused = decide(
+                &DecisionInputs {
+                    expo_unavailable: None,
+                    ..unavailable
+                },
+                &recorded,
+                None,
+            );
+            assert_eq!(
+                (plan.decision, plan.regenerate_native_dir),
+                (uncaused.decision, uncaused.regenerate_native_dir)
+            );
+            assert_eq!(
+                (plan.decision, plan.regenerate_native_dir),
+                if native_dir_exists {
+                    (BuildDecision::Clean, true)
+                } else {
+                    (BuildDecision::Incremental, false)
+                }
+            );
+            let shown = serde_json::to_string(&plan).unwrap();
+            assert!(
+                shown.contains(&format!("Expo fingerprint unavailable: {cause}")),
+                "{shown}"
+            );
+            assert_eq!(shown.contains("native inputs changed"), genuine, "{shown}");
+            if genuine {
+                assert!(
+                    plan.evidence
+                        .iter()
+                        .any(|e| e.as_str() == "native inputs changed: rnfp"),
+                    "{:?}",
+                    plan.evidence
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_previous_cache_schema_is_invalid_and_builds_clean_once() {
+    let worktree = temp_dir();
+    let mut old = serde_json::to_value(state(&worktree, FP)).unwrap();
+    old["schema"] = "qaren-native-cache/1".into();
+    old.as_object_mut().unwrap().remove("fingerprint_parts");
+    let path = qaren::buildplan::state_path(&worktree, "ios", "com.rndevagent.testapp");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, old.to_string()).unwrap();
+    let loaded = qaren::buildplan::load_state(&worktree, "ios", "com.rndevagent.testapp");
+    assert!(matches!(loaded, StateStatus::Invalid(_)), "{loaded:?}");
+    let plan = decide(
+        &inputs(&worktree, FP),
+        &loaded,
+        Some(ArtifactStatus::Verified),
+    );
+    assert_eq!(plan.decision, BuildDecision::Clean);
+}
+
+#[test]
+fn parts_missing_from_an_incomplete_recorded_build_are_unknown_not_changed() {
+    let worktree = temp_dir();
+    for native_dir_exists in [true, false] {
+        for (recorded_rnfp, genuine) in [("rnfp1:r", false), ("rnfp1:old", true)] {
+            let mut recorded = state(&worktree, "rnfp1:incomplete");
+            recorded.fingerprint_parts =
+                std::collections::BTreeMap::from([("rnfp".to_string(), recorded_rnfp.to_string())]);
+            let recorded = StateStatus::Loaded(Box::new(recorded));
+            let current = parts("expo:a", "xcode:t");
+            let plan = decide(
+                &DecisionInputs {
+                    fingerprint_parts: &current,
+                    native_dir_exists,
+                    ..inputs(&worktree, FP)
+                },
+                &recorded,
+                None,
+            );
+            assert_eq!(
+                (plan.decision, plan.regenerate_native_dir),
+                if native_dir_exists {
+                    (BuildDecision::Clean, true)
+                } else {
+                    (BuildDecision::Incremental, false)
+                }
+            );
+            let shown = serde_json::to_string(&plan).unwrap();
+            assert!(
+                !plan
+                    .evidence
+                    .iter()
+                    .any(|e| e.as_str().starts_with("native inputs changed")
+                        && (e.as_str().contains("expo") || e.as_str().contains("toolchain"))),
+                "{:?}",
+                plan.evidence
+            );
+            assert_eq!(shown.contains("native inputs changed"), genuine, "{shown}");
+            if genuine {
+                assert!(
+                    plan.evidence
+                        .iter()
+                        .any(|e| e.as_str() == "native inputs changed: rnfp"),
+                    "{:?}",
+                    plan.evidence
+                );
+            }
+            assert!(
+                plan.evidence
+                    .iter()
+                    .any(|e| e.as_str() == "recorded build has no value for: expo, toolchain"),
+                "{:?}",
+                plan.evidence
+            );
+        }
+    }
 }

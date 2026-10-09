@@ -1,3 +1,4 @@
+import { sleep as cancellableSleep } from '../domain/cancellation.js';
 import {
   runNative as _runAgentDeviceImpl,
   hasActiveSession,
@@ -383,7 +384,7 @@ export async function waitForBundle(): Promise<void> {
   while (Date.now() - start < 10_000) {
     const elapsed = Date.now() - start;
     const interval = elapsed < 1_000 ? 100 : 500;
-    await new Promise((r) => setTimeout(r, interval));
+    await cancellableSleep(interval);
     const findResult = await fetchCandidatesFn('Development servers');
     if (!findResult.ok || findResult.candidates.length === 0) return; // Picker gone — bundle loaded.
   }

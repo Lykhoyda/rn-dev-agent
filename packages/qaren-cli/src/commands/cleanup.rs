@@ -11,8 +11,9 @@ use std::path::Path;
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Outcome {
+pub enum Outcome {
     Removed,
+    RemovedBytes(Option<u64>),
     Absent,
     // A borrowed resource this run never owned; left exactly as found.
     Kept,
@@ -21,9 +22,11 @@ pub(crate) enum Outcome {
 }
 
 impl Outcome {
-    pub(crate) fn render(&self) -> String {
+    pub fn render(&self) -> String {
         match self {
             Outcome::Removed => "removed".to_string(),
+            Outcome::RemovedBytes(Some(bytes)) => format!("removed (reclaimed {bytes} bytes)"),
+            Outcome::RemovedBytes(None) => "removed (reclaimed bytes unknown)".into(),
             Outcome::Absent => "absent".to_string(),
             Outcome::Kept => "kept".to_string(),
             Outcome::Refused(reason) => format!("refused: {reason}"),
@@ -31,13 +34,16 @@ impl Outcome {
         }
     }
 
-    pub(crate) fn clean(&self) -> bool {
-        matches!(self, Outcome::Removed | Outcome::Absent | Outcome::Kept)
+    pub fn clean(&self) -> bool {
+        matches!(
+            self,
+            Outcome::Removed | Outcome::RemovedBytes(_) | Outcome::Absent | Outcome::Kept
+        )
     }
 
     fn group_result(&self) -> GroupCleanupResult {
         match self {
-            Outcome::Removed => GroupCleanupResult::Removed,
+            Outcome::Removed | Outcome::RemovedBytes(_) => GroupCleanupResult::Removed,
             Outcome::Absent => GroupCleanupResult::Absent,
             Outcome::Refused(_) => GroupCleanupResult::Refused,
             _ => GroupCleanupResult::Unresolved,
@@ -55,6 +61,8 @@ pub fn reclaim_dead_holder(
     runs_root: &Path,
     busy: &crate::lease::Busy,
 ) -> Result<String, Failure> {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     let (Some(holder), Some(PidLiveness::Dead | PidLiveness::AliveForeign)) =
         (busy.holder.as_ref(), busy.liveness)
     else {
@@ -92,7 +100,10 @@ pub fn reclaim_dead_holder(
         let unproven: Vec<String> = receipt
             .cleanup
             .iter()
-            .filter(|(_, outcome)| !matches!(outcome.as_str(), "removed" | "absent" | "kept"))
+            .filter(|(_, outcome)| {
+                !matches!(outcome.as_str(), "removed" | "absent" | "kept")
+                    && !outcome.starts_with("removed (reclaimed ")
+            })
             .map(|(leg, outcome)| format!("{leg}={outcome}"))
             .collect();
         return Err(refuse(format!(
@@ -110,6 +121,8 @@ pub fn cleanup_with(
     run_id: &str,
     remove_app: Option<&str>,
 ) -> Receipt {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     let mut record = match RunRecord::load(runs_root, run_id) {
         Ok(record) => record,
         Err(failure) => {
@@ -120,7 +133,7 @@ pub fn cleanup_with(
                 "load",
                 timefmt::iso8601_utc(runner.now_epoch_ms()),
             );
-            receipt.next_action = failure.next_action.clone();
+            receipt.next_action = failure.next_action.to_string();
             receipt.failure = Some(failure);
             receipt.commands_executed = runner.commands_executed();
             return receipt;
@@ -153,8 +166,9 @@ pub fn cleanup_with(
 
     let owner_refusal =
         || Outcome::Refused("the run's qaren process is alive or unproven gone".to_string());
-    let owner = match (&record.resources.core, &record.prepare) {
-        (Some(_), Some(prepare)) => Some(probe_pid_identity(runner, prepare)),
+    let producers = record.resources.core.is_some() || !record.resources.runner_drivers.is_empty();
+    let owner = match (producers, &record.prepare) {
+        (true, Some(prepare)) => Some(probe_pid_identity(runner, prepare)),
         _ => None,
     };
     if owner == Some(PidLiveness::AliveMatching) {
@@ -193,8 +207,41 @@ pub fn cleanup_with(
         ));
     }
 
+    if !record.resources.runner_drivers.is_empty() {
+        let owner_gone = matches!(owner, Some(PidLiveness::Dead | PidLiveness::AliveForeign));
+        let outcome = if owner_gone {
+            cleanup_runner_drivers(runner, &mut record, runs_root)
+        } else {
+            Some(owner_refusal())
+        };
+        if let Some(outcome) = outcome {
+            outcomes.push(("runner_driver".to_string(), outcome));
+        }
+    }
+
     if let Some(outcome) = cleanup_runner_host(runner, &record) {
         outcomes.push(("runner_host".to_string(), outcome));
+    }
+
+    // A live `qaren pr` still owns its recorder and worktree; only a dead owner's are reclaimed.
+    // Only positive evidence that the owner is gone admits reclaiming; unknown keeps them.
+    let owner_alive = (record.resources.recorder.is_some()
+        || record.resources.pr_worktree.is_some())
+        && !record.prepare.as_ref().is_some_and(|owner| {
+            matches!(
+                probe_pid_identity(runner, owner),
+                PidLiveness::Dead | PidLiveness::AliveForeign
+            )
+        });
+    let owner_refusal =
+        || Outcome::Refused("the run's qaren process is alive or unproven gone".to_string());
+    if record.resources.recorder.is_some() {
+        let outcome = if owner_alive {
+            owner_refusal()
+        } else {
+            crate::record::stop(runner, &mut record, runs_root)
+        };
+        outcomes.push(("recorder".to_string(), outcome));
     }
 
     match record.scenario.platform {
@@ -438,6 +485,26 @@ pub fn cleanup_with(
         outcomes.push(("device_lease".to_string(), outcome));
     }
 
+    if let Some(wt) = record.resources.pr_worktree.clone() {
+        let expected = crate::worktree::pr_worktree_path(&RunRecord::run_dir(runs_root, run_id));
+        let outcome = if owner_alive {
+            owner_refusal()
+        } else if !producers_quiescent(&outcomes) {
+            Outcome::Unresolved("producer cleanup is unproven; PR worktree retained".into())
+        } else if wt.path != expected {
+            Outcome::Refused(format!(
+                "recorded worktree {} is not this run's; not removing it",
+                wt.path.display()
+            ))
+        } else {
+            crate::worktree::remove(runner, &wt.repo_root, &wt.path)
+        };
+        if outcome.clean() {
+            record.resources.pr_worktree = None;
+        }
+        outcomes.push(("pr_worktree".to_string(), outcome));
+    }
+
     if let Some(lock) = record.resources.build_lock.clone() {
         let outcome = if !record.resources.can_release_build_ownership() {
             Outcome::Unresolved("build process cleanup is unproven; build lock retained".into())
@@ -538,24 +605,25 @@ fn finish_cleanup(
         receipt
             .outcomes
             .insert("app_removal_at".to_string(), removal.at.clone());
-        receipt
-            .outcomes
-            .insert("app_removal_outcome".to_string(), removal.outcome.clone());
+        receipt.outcomes.insert(
+            "app_removal_outcome".to_string(),
+            removal.outcome.to_string(),
+        );
         receipt.outcomes.insert(
             "app_installed_sha256".to_string(),
             removal.installed_sha256.clone(),
         );
         receipt.outcomes.insert(
             "app_removal_uninstall".to_string(),
-            removal.uninstall.clone(),
+            removal.uninstall.to_string(),
         );
         receipt.outcomes.insert(
             "app_removal_pm_path".to_string(),
-            removal.pm_path_after.clone(),
+            removal.pm_path_after.to_string(),
         );
         receipt.outcomes.insert(
             "app_removal_package_list".to_string(),
-            removal.package_list_after.clone(),
+            removal.package_list_after.to_string(),
         );
     }
     receipt.failure = match result {
@@ -609,7 +677,7 @@ fn finish_cleanup(
         _ => receipt
             .failure
             .as_ref()
-            .map(|f| f.next_action.clone())
+            .map(|f| f.next_action.to_string())
             .unwrap_or_default(),
     };
     receipt.commands_executed = runner.commands_executed();
@@ -709,11 +777,11 @@ fn removal_confirmed(record: &RunRecord, confirmation: &str) -> Result<(), Strin
     }
 }
 
-fn probe_evidence(output: &CmdOutput) -> String {
+fn probe_evidence(output: &CmdOutput) -> crate::redact::OutputText {
     let code = output
         .exit_code
         .map_or("none".to_string(), |c| c.to_string());
-    crate::redact::redact_secrets(&format!(
+    crate::redact::OutputText::from_output(&format!(
         "exit={code} timed_out={} stdout={:?} stderr={:?}",
         output.timed_out, output.stdout, output.stderr
     ))
@@ -899,9 +967,9 @@ fn remove_app_install(
                     Outcome::Absent,
                     Some(AppRemoval {
                         at: timefmt::iso8601_utc(runner.now_epoch_ms()),
-                        outcome: "absent".to_string(),
+                        outcome: crate::redact::OutputText::from_output("absent"),
                         installed_sha256: String::new(),
-                        uninstall: "not issued: package absent before removal".to_string(),
+                        uninstall: crate::redact::OutputText::from_output("not issued: package absent before removal"),
                         pm_path_after: probe_evidence(&path_before),
                         package_list_after: probe_evidence(&list),
                     }),
@@ -985,7 +1053,7 @@ fn remove_app_install(
     };
     let removal = AppRemoval {
         at,
-        outcome: outcome.render(),
+        outcome: crate::redact::OutputText::from_output(&outcome.render()),
         installed_sha256: installed_sha,
         uninstall: probe_evidence(&uninstall),
         pm_path_after: probe_evidence(&path_after),
@@ -994,14 +1062,94 @@ fn remove_app_install(
     (outcome, Some(removal))
 }
 
-// The device lease is released last, and only once every leg that can still address
-// the device is proven clean; otherwise it is retained for `qaren cleanup`.
-// A core that died before closing its session leaves the UITest host running, and the next
-// admission reads it as a foreign driver. Only a run whose core started can have launched it,
-// and the device lease still naming this run is what makes the device, and its host, ours.
+// Neither record carries exact host PID/birth ownership, so observation cannot authorize signals.
+pub(crate) fn cleanup_scoped_runner_hosts(runner: &mut dyn Runner, udid: &str) -> Outcome {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
+    match ios::probe_runner_hosts(runner, udid) {
+        ios::RunnerHostPresence::Absent => Outcome::Absent,
+        ios::RunnerHostPresence::Present => Outcome::Unresolved(
+            "runner host present without exact process ownership; left untouched".into(),
+        ),
+        ios::RunnerHostPresence::Unknown => Outcome::Unresolved(
+            "exact simulator runner host absence is unknown; left untouched".into(),
+        ),
+    }
+}
+
+// The owned host is terminated by bundle id on its exact simulator; absence is then re-proven.
+fn cleanup_owned_runner_host(
+    runner: &mut dyn Runner,
+    host: &crate::runrecord::RunnerHostResource,
+) -> Outcome {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
+    match ios::probe_runner_hosts(runner, &host.udid) {
+        ios::RunnerHostPresence::Absent => return Outcome::Absent,
+        ios::RunnerHostPresence::Unknown => {
+            return Outcome::Unresolved(
+                "exact simulator runner host absence is unknown; left untouched".into(),
+            )
+        }
+        ios::RunnerHostPresence::Present => {}
+    }
+    for bundle_id in &host.bundle_ids {
+        runner.run(&ios::terminate_spec(&host.udid, bundle_id));
+    }
+    match ios::probe_runner_hosts(runner, &host.udid) {
+        ios::RunnerHostPresence::Absent => Outcome::Removed,
+        _ => Outcome::Unresolved("the run's runner host is still present after terminate".into()),
+    }
+}
+
+// Each recorded driver group is signaled only while its recorded leader identity still matches.
+pub(crate) fn cleanup_runner_drivers(
+    runner: &mut dyn Runner,
+    record: &mut RunRecord,
+    runs_root: &Path,
+) -> Option<Outcome> {
+    if record.resources.runner_drivers.is_empty() {
+        return None;
+    }
+    let mut outcomes = Vec::new();
+    let mut kept = Vec::new();
+    for driver in record.resources.runner_drivers.clone() {
+        let outcome = cleanup_process_group(runner, Some(&driver.identity), driver.pgid, None);
+        if !outcome.clean() {
+            kept.push(driver);
+        }
+        outcomes.push(outcome);
+    }
+    let previous = std::mem::replace(&mut record.resources.runner_drivers, kept);
+    if record.save(runs_root).is_err() {
+        record.resources.runner_drivers = previous;
+        return Some(Outcome::Unresolved(
+            "runner driver retirement could not be persisted".into(),
+        ));
+    }
+    let removed = outcomes
+        .iter()
+        .any(|outcome| matches!(outcome, Outcome::Removed | Outcome::RemovedBytes(_)));
+    Some(
+        outcomes
+            .into_iter()
+            .find(|outcome| !outcome.clean())
+            .unwrap_or(if removed {
+                Outcome::Removed
+            } else {
+                Outcome::Absent
+            }),
+    )
+}
+
 pub(crate) fn cleanup_runner_host(runner: &mut dyn Runner, record: &RunRecord) -> Option<Outcome> {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     let sim = record.resources.ios_simulator.as_ref()?;
-    if record.resources.core.is_none() && record.resources.core_cleanup.is_none() {
+    if record.resources.core.is_none()
+        && record.resources.core_cleanup.is_none()
+        && record.resources.runner_host.is_none()
+    {
         return None;
     }
     let lease = record.resources.lease.as_ref()?;
@@ -1010,18 +1158,44 @@ pub(crate) fn cleanup_runner_host(runner: &mut dyn Runner, record: &RunRecord) -
     if !held {
         return None;
     }
-    let output = runner.run(&ios::terminate_runner_host_spec(&sim.udid));
-    Some(if output.ok() {
-        Outcome::Removed
-    } else if output.stderr.contains("found nothing to terminate") {
-        Outcome::Absent
-    } else {
-        Outcome::Unresolved(format!(
-            "the runner host app on {} could not be terminated: {}",
-            sim.udid,
-            output.summary()
-        ))
+    if record.resources.core.is_some()
+        || record
+            .resources
+            .core_cleanup
+            .as_ref()
+            .is_some_and(|evidence| {
+                !matches!(
+                    evidence.outcome,
+                    crate::runrecord::GroupCleanupResult::Removed
+                        | crate::runrecord::GroupCleanupResult::Absent
+                )
+            })
+    {
+        return Some(Outcome::Refused(
+            "core quiescence is unproven; runner host left untouched".into(),
+        ));
+    }
+    if !record.resources.runner_drivers.is_empty() {
+        return Some(Outcome::Refused(
+            "runner driver quiescence is unproven; runner host left untouched".into(),
+        ));
+    }
+    Some(match record.resources.runner_host.as_ref() {
+        Some(host) if host.udid == sim.udid => cleanup_owned_runner_host(runner, host),
+        _ => cleanup_scoped_runner_hosts(runner, &sim.udid),
     })
+}
+
+pub(crate) fn producers_quiescent(outcomes: &[(String, Outcome)]) -> bool {
+    outcomes
+        .iter()
+        .filter(|(name, _)| {
+            matches!(
+                name.as_str(),
+                "build_process" | "core" | "metro" | "recorder" | "runner_driver" | "runner_host"
+            )
+        })
+        .all(|(_, outcome)| matches!(outcome, Outcome::Removed | Outcome::Absent))
 }
 
 pub(crate) fn unclean_legs(outcomes: &[(String, Outcome)]) -> Vec<String> {
@@ -1050,13 +1224,58 @@ pub(crate) fn release_lease_outcome(outcome: crate::buildplan::ReleaseOutcome) -
     }
 }
 
-fn kill_group(runner: &mut dyn Runner, pgid: i32, signal: &str) {
+pub(crate) fn reclaimed_bytes(runner: &mut dyn Runner, path: &Path) -> Option<u64> {
+    let output = runner.run(&CmdSpec::new(
+        "cleanup-storage-size",
+        "du",
+        &["-sk", &path.to_string_lossy()],
+        10,
+    ));
+    output
+        .ok()
+        .then(|| {
+            output
+                .stdout
+                .split_whitespace()
+                .next()?
+                .parse::<u64>()
+                .ok()?
+                .checked_mul(1024)
+        })
+        .flatten()
+}
+
+fn kill_group(
+    runner: &mut dyn Runner,
+    identity: Option<&PidIdentity>,
+    pgid: i32,
+    signal: &str,
+) -> Result<(), Outcome> {
+    let probed = identity
+        .filter(|i| i.pid == pgid)
+        .map(|i| crate::runrecord::probe_pid_birth(runner, i));
+    if !probed.is_some_and(|(_, pinned)| pinned) {
+        let liveness = probed.map(|(liveness, _)| liveness);
+        runner.try_reap(pgid);
+        return Err(
+            if liveness == Some(PidLiveness::Dead)
+                && metro::group_presence(runner, pgid) == metro::GroupPresence::Absent
+            {
+                Outcome::Removed
+            } else {
+                Outcome::Unresolved(
+                    "process group signal withheld: current leader ownership is unproven".into(),
+                )
+            },
+        );
+    }
     runner.run(&CmdSpec::new(
         "kill-group",
         "/bin/kill",
         &[signal, "--", &format!("-{pgid}")],
         10,
     ));
+    Ok(())
 }
 
 pub(crate) fn cleanup_build(
@@ -1064,6 +1283,8 @@ pub(crate) fn cleanup_build(
     record: &mut RunRecord,
     runs_root: &Path,
 ) -> Option<Outcome> {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     use crate::runrecord::{BuildCompletionEvidence, BuildProcess};
     let (pgid, outcome) = match record.resources.build_process()? {
         BuildProcess::SpawnPending => {
@@ -1101,6 +1322,8 @@ pub(crate) fn cleanup_core(
     runs_root: &Path,
     wait_unresolved: bool,
 ) -> Option<Outcome> {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     use crate::runrecord::CoreCleanupEvidence;
     let core = record.resources.core.clone()?;
     let mut outcome = cleanup_process_group(runner, core.identity.as_ref(), core.pgid, None);
@@ -1139,6 +1362,8 @@ pub(crate) fn cleanup_process_group(
     pgid: i32,
     port: Option<u16>,
 ) -> Outcome {
+    let mut cleanup_runner = crate::exec::CleanupRunner(runner);
+    let runner: &mut dyn Runner = &mut cleanup_runner;
     // kill -pgid with 0/1/negative has catastrophic special semantics; a record
     // carrying such a value is corrupt and must be refused.
     if pgid < 2 {
@@ -1148,6 +1373,8 @@ pub(crate) fn cleanup_process_group(
     }
     if port.is_none() {
         use metro::GroupPresence;
+        // An unreaped leader keeps the group present; its owner reaps it first (never a release by itself).
+        runner.try_reap(pgid);
         match metro::group_presence(runner, pgid) {
             GroupPresence::Absent => return Outcome::Absent,
             GroupPresence::Unknown => {
@@ -1160,6 +1387,7 @@ pub(crate) fn cleanup_process_group(
         }) {
             // Observation only: 10.3s additional budget (300ms settle + one 10s inventory probe).
             runner.sleep(Duration::from_millis(300));
+            runner.try_reap(pgid);
             return match metro::group_presence(runner, pgid) {
                 GroupPresence::Absent => Outcome::Absent,
                 GroupPresence::Present => Outcome::Unresolved(
@@ -1170,10 +1398,15 @@ pub(crate) fn cleanup_process_group(
                 }
             };
         }
-        kill_group(runner, pgid, "-TERM");
+        if let Err(outcome) = kill_group(runner, identity, pgid, "-TERM") {
+            return outcome;
+        }
         runner.sleep(Duration::from_millis(1500));
-        kill_group(runner, pgid, "-KILL");
+        if let Err(outcome) = kill_group(runner, identity, pgid, "-KILL") {
+            return outcome;
+        }
         runner.sleep(Duration::from_millis(300));
+        runner.try_reap(pgid);
         return match metro::group_presence(runner, pgid) {
             GroupPresence::Absent => Outcome::Removed,
             GroupPresence::Present => {
@@ -1196,19 +1429,21 @@ pub(crate) fn cleanup_process_group(
         }
     });
 
-    let proven_ours =
-        leader == Some(PidLiveness::AliveMatching) || group_live_via_port.flatten() == Some(true);
-    if proven_ours {
-        kill_group(runner, pgid, "-TERM");
+    let proven_ours = identity.is_some_and(|recorded| recorded.pid == pgid)
+        && leader == Some(PidLiveness::AliveMatching);
+    let outcome = if proven_ours {
+        if let Err(outcome) = kill_group(runner, identity, pgid, "-TERM") {
+            return outcome;
+        }
         runner.sleep(Duration::from_millis(1500));
-        kill_group(runner, pgid, "-KILL");
+        if let Err(outcome) = kill_group(runner, identity, pgid, "-KILL") {
+            return outcome;
+        }
         runner.sleep(Duration::from_millis(300));
         let leader_after = identity.map(|recorded| probe_pid_identity(runner, recorded));
         if leader_after == Some(PidLiveness::AliveMatching) {
             return Outcome::Unresolved("group leader survived TERM and KILL".to_string());
         }
-        // Survival must be positively excluded: only a free port or a port
-        // owned by a provably foreign group counts as gone.
         if let Some(p) = port {
             let output = runner.run(&metro::port_owner_spec(p));
             match metro::parse_port_owner(&output) {
@@ -1238,29 +1473,49 @@ pub(crate) fn cleanup_process_group(
                 }
             }
         }
-        return Outcome::Removed;
-    }
-
-    match leader {
-        // No recorded identity: a free or foreign port proves nothing about a
-        // group that may still be starting up; never guess absent.
-        None => Outcome::Unresolved(
-            "no recorded identity and the recorded port does not prove the group; \
+        Outcome::Removed
+    } else {
+        match leader {
+            // No recorded identity: a free or foreign port proves nothing about a
+            // group that may still be starting up; never guess absent.
+            None => Outcome::Unresolved(
+                "no recorded leader identity; \
              resolve the process group manually"
-                .to_string(),
-        ),
-        Some(PidLiveness::Dead) => match group_live_via_port {
-            Some(Some(false)) | None => Outcome::Absent,
-            Some(Some(true)) => unreachable!("proven_ours handled above"),
-            Some(None) => {
-                Outcome::Unresolved("port owner pgid could not be determined".to_string())
+                    .to_string(),
+            ),
+            Some(PidLiveness::Dead) => match group_live_via_port {
+                Some(Some(false)) | None => Outcome::Absent,
+                Some(Some(true)) => Outcome::Unresolved(
+                    "process group remains but its leader ownership is unproven".into(),
+                ),
+                Some(None) => {
+                    Outcome::Unresolved("port owner pgid could not be determined".to_string())
+                }
+            },
+            Some(PidLiveness::AliveForeign) => Outcome::Unresolved(
+                "ownership unproven: the recorded leader birth identity belongs to another process"
+                    .into(),
+            ),
+            Some(PidLiveness::Unknown) => {
+                Outcome::Unresolved("pid liveness probe was inconclusive".to_string())
             }
-        },
-        Some(PidLiveness::AliveForeign) => Outcome::Absent,
-        Some(PidLiveness::Unknown) => {
-            Outcome::Unresolved("pid liveness probe was inconclusive".to_string())
+            Some(PidLiveness::AliveMatching) => {
+                Outcome::Unresolved("recorded leader does not match the process group".into())
+            }
         }
-        Some(PidLiveness::AliveMatching) => unreachable!("proven_ours handled above"),
+    };
+    if !matches!(outcome, Outcome::Absent | Outcome::Removed) {
+        return outcome;
+    }
+    runner.try_reap(pgid);
+    match metro::group_presence(runner, pgid) {
+        metro::GroupPresence::Absent => outcome,
+        metro::GroupPresence::Present => {
+            Outcome::Unresolved("process group remains present".into())
+        }
+        metro::GroupPresence::Unknown => {
+            Outcome::Unresolved("process-group inventory is unknown".into())
+        }
     }
 }
 
@@ -1306,9 +1561,25 @@ fn cleanup_simulator(runner: &mut dyn Runner, udid: &str, expected_name: &str) -
             return Outcome::Unresolved(format!("simctl shutdown failed: {}", shutdown.summary()));
         }
     }
+    let data_path = serde_json::from_str::<serde_json::Value>(&list.stdout)
+        .ok()
+        .and_then(|list| {
+            list["devices"].as_object().and_then(|devices| {
+                devices
+                    .values()
+                    .filter_map(|v| v.as_array())
+                    .flatten()
+                    .find(|device| device["udid"].as_str() == Some(&resolved_udid))
+                    .and_then(|device| device["dataPath"].as_str().map(std::path::PathBuf::from))
+            })
+        });
+    let bytes = data_path
+        .as_deref()
+        .filter(|path| path.is_absolute())
+        .and_then(|path| reclaimed_bytes(runner, path));
     let delete = runner.run(&ios::delete_spec(&resolved_udid));
     if delete.ok() {
-        Outcome::Removed
+        Outcome::RemovedBytes(bytes)
     } else {
         Outcome::Unresolved(format!("simctl delete failed: {}", delete.summary()))
     }
@@ -1362,5 +1633,81 @@ fn cleanup_farm(
         Outcome::Removed
     } else {
         Outcome::Unresolved(format!("android-farm stop: {}", stop.summary()))
+    }
+}
+
+#[cfg(test)]
+mod integrity_tests {
+    use super::*;
+    use crate::exec::MockRunner;
+
+    const BIRTH: &str = "Wed Aug 12 16:01:00 2026";
+
+    #[test]
+    fn every_signal_rechecks_identity_with_and_without_a_port() {
+        for port in [None, Some(8081)] {
+            for change_at in ["TERM", "KILL"] {
+                for changed in [
+                    CmdOutput::success("foreign birth"),
+                    CmdOutput::failed(1, "unknown"),
+                ] {
+                    let identity = PidIdentity {
+                        pid: 5000,
+                        started_at: BIRTH.into(),
+                        command: crate::redact::OutputText::from_output("node"),
+                    };
+                    let mut runner = MockRunner::new();
+                    if port.is_none() {
+                        runner.expect_run("ps -A", CmdOutput::success("5000 5000 S\n"));
+                    }
+                    runner.expect_run("lstart=", CmdOutput::success(BIRTH));
+                    runner.expect_run("stat=", CmdOutput::success("S"));
+                    if port.is_some() {
+                        runner.expect_run("lsof", CmdOutput::success("5000\n"));
+                        runner.expect_run("pgid=", CmdOutput::success("5000"));
+                    }
+                    if change_at == "KILL" {
+                        runner.expect_run("lstart=", CmdOutput::success(BIRTH));
+                        runner.expect_run("stat=", CmdOutput::success("S"));
+                        runner.expect_run("/bin/kill -TERM", CmdOutput::success(""));
+                    }
+                    runner.expect_run("lstart=", changed);
+                    let outcome = cleanup_process_group(&mut runner, Some(&identity), 5000, port);
+                    assert!(matches!(outcome, Outcome::Unresolved(_)), "{outcome:?}");
+                    let signals: Vec<_> = runner
+                        .calls
+                        .iter()
+                        .filter(|c| c.program == "/bin/kill")
+                        .map(|c| c.args[0].as_str())
+                        .collect();
+                    assert_eq!(
+                        signals,
+                        if change_at == "KILL" {
+                            vec!["-TERM"]
+                        } else {
+                            vec![]
+                        }
+                    );
+                    assert_eq!(runner.remaining(), 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn simulator_removal_reports_measured_bytes_including_pending_recovery() {
+        for udid in ["AAAA-1111", ""] {
+            let mut runner = MockRunner::new();
+            runner.expect_run("simctl list", CmdOutput::success(r#"{"devices":{"rt":[{"udid":"AAAA-1111","name":"qaren-run","state":"Shutdown","dataPath":"/owned/simulator/data"}]}}"#));
+            runner.expect_run(
+                "du -sk /owned/simulator/data",
+                CmdOutput::success("12\t/owned/simulator/data\n"),
+            );
+            runner.expect_run("simctl delete AAAA-1111", CmdOutput::success(""));
+            let outcome = cleanup_simulator(&mut runner, udid, "qaren-run");
+            assert!(outcome.clean());
+            assert_eq!(outcome.render(), "removed (reclaimed 12288 bytes)");
+            assert_eq!(runner.remaining(), 0);
+        }
     }
 }

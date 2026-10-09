@@ -93,7 +93,7 @@ test('a changed screen after a press is done: never re-dispatched', async () => 
   assert.equal(outcome.block.outcome, 'pass');
   assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
   assert.deepEqual(
-    f.rows.map((r) => [r.line, r.kind, r.attempt, r.outcome, r.ref, r.screenshot]),
+    outcome.rows.map((r) => [r.line, r.kind, r.attempt, r.outcome, r.ref, r.screenshot]),
     [
       [1, 'step', 1, 'pass', '@e0', 'screenshots/01-line1.png'],
       [2, 'check', 1, 'pass', undefined, 'screenshots/02-line2.png'],
@@ -119,7 +119,7 @@ test('an unchanged screen retries the press exactly once, then fails at that lin
   assert.equal(outcome.failure?.step, 1);
   assert.match(
     outcome.failure?.seen ?? '',
-    /did not change after two attempts; on screen: Settings/,
+    /did not change after two attempts; historical context, previously on screen: Settings/,
   );
   assert.equal(outcome.failure?.screenshot, 'screenshots/02-line1.png');
 });
@@ -171,12 +171,12 @@ test('an attested offscreen target scrolls once, then acts', async () => {
   const scrolled = screen(['Header', 'Load more']);
   scrolled.elements[1].testID = 'load-more';
   const after = screen(['Loaded']);
-  const f = fake([before, scrolled, after]);
+  const f = fake([before, scrolled, scrolled, after]);
   const outcome = await walkBlock(block('1. Tap "load-more"\n'), f.deps);
   assert.equal(outcome.block.outcome, 'pass');
   assert.deepEqual(
     f.calls.filter((c) => !c.startsWith('shot')),
-    ['capture', 'scroll down', 'capture', 'press @e1', 'capture'],
+    ['capture', 'scroll down', 'capture', 'capture', 'press @e1', 'capture'],
   );
 });
 
@@ -186,8 +186,8 @@ test('a missing judge or target fails naming the line', async () => {
   assert.match(phrase.failure?.seen ?? '', /JEV_UNAVAILABLE/);
 
   const check = await walkBlock(
-    block('✓ The header looks right\n'),
-    fake([screen(['Header'])]).deps,
+    block('✓ The confirmation is visible\n'),
+    fake([screen(['Saved'])]).deps,
   );
   assert.equal(check.failure?.step, 1);
   assert.match(check.failure?.seen ?? '', /JEV_UNAVAILABLE/);
@@ -201,7 +201,7 @@ test('a missing judge or target fails naming the line', async () => {
 test('an ambiguous quoted target without a judge is refused, not guessed', async () => {
   const f = fake([screen(['Save', 'Save'])]);
   const outcome = await walkBlock(block('1. Tap "Save"\n'), f.deps);
-  assert.match(outcome.failure?.seen ?? '', /JEV_UNAVAILABLE/);
+  assert.match(outcome.failure?.seen ?? '', /TARGET_AMBIGUOUS/);
   assert.ok(!f.calls.some((c) => c.startsWith('press')));
 
   const two: Screen = {
@@ -232,7 +232,7 @@ test('an ambiguous quoted target without a judge is refused, not guessed', async
   };
   const g = fake([two]);
   const twice = await walkBlock(block('1. Tap "more"\n'), g.deps);
-  assert.match(twice.failure?.seen ?? '', /JEV_UNAVAILABLE/);
+  assert.match(twice.failure?.seen ?? '', /TARGET_AMBIGUOUS/);
   assert.ok(!g.calls.some((c) => c.startsWith('scroll')));
 });
 
@@ -411,18 +411,23 @@ test('scroll-until stops after one not-ok scroll that moved nothing, with fresh 
   const outcome = await walkBlock(block('1. Scroll until you see "Footer"\n'), f.deps);
   assert.equal(outcome.block.outcome, 'fail');
   assert.equal(f.calls.filter((c) => c.startsWith('scroll')).length, 1);
-  assert.match(outcome.failure?.seen ?? '', /scroll timed out; on screen: Top/);
+  assert.match(
+    outcome.failure?.seen ?? '',
+    /scroll timed out; historical context, previously on screen: Top/,
+  );
 });
 
 test('a not-ok preliminary scroll that brought the target into view still leads to the press', async () => {
   const scrolled = screen(['Header', 'Load more']);
   scrolled.elements[1].testID = 'load-more';
-  const f = fake([withOffscreenLoadMore(), scrolled, screen(['Loaded'])], { scroll: NOT_OK });
+  const f = fake([withOffscreenLoadMore(), scrolled, scrolled, screen(['Loaded'])], {
+    scroll: NOT_OK,
+  });
   const outcome = await walkBlock(block('1. Tap "load-more"\n'), f.deps);
   assert.equal(outcome.block.outcome, 'pass');
   assert.deepEqual(
     f.calls.filter((c) => !c.startsWith('shot')),
-    ['capture', 'scroll down', 'capture', 'press @e1', 'capture'],
+    ['capture', 'scroll down', 'capture', 'capture', 'press @e1', 'capture'],
   );
 });
 
@@ -455,7 +460,7 @@ test('a fill row never carries the typed value in its text', async () => {
   const f = fake([input, screen(['Password', 'Next'])]);
   const outcome = await walkBlock(block('1. Type "hunter2" into "Password"\n'), f.deps);
   assert.equal(outcome.block.outcome, 'pass');
-  assert.equal(f.rows[0].text, '1. Type "•••" into "Password"');
+  assert.equal(outcome.rows[0].text, '1. Type "•••" into "Password"');
   assert.equal(JSON.stringify(f.rows).includes('hunter2'), false);
 });
 
@@ -478,12 +483,12 @@ test('fill masking covers curly quotes and leaves a short value elsewhere on the
     ],
   });
   const curly = fake([input('Token'), screen(['Token', 'Next'])]);
-  await walkBlock(block('1. Type “s3cret” into "Token"\n'), curly.deps);
-  assert.equal(curly.rows[0].text, '1. Type “•••” into "Token"');
+  const curlyOutcome = await walkBlock(block('1. Type “s3cret” into "Token"\n'), curly.deps);
+  assert.equal(curlyOutcome.rows[0].text, '1. Type “•••” into "Token"');
 
   const short = fake([input('address1'), screen(['address1', 'Next'])]);
-  await walkBlock(block('1. Type "1" into "address1"\n'), short.deps);
-  assert.equal(short.rows[0].text, '1. Type "•••" into "address1"');
+  const shortOutcome = await walkBlock(block('1. Type "1" into "address1"\n'), short.deps);
+  assert.equal(shortOutcome.rows[0].text, '1. Type "•••" into "address1"');
 });
 
 test('a failing fill keeps the typed value out of the reason and the evidence line', async () => {

@@ -101,8 +101,69 @@ final class SnapshotInclusionTests: XCTestCase {
     XCTAssertTrue(include(type: .staticText, hasContent: true, interactiveOnly: true))
   }
 
+  // QA capture measures the visible screen against the window frame, so the content-less window stays.
+  func testInteractiveOnlyKeepsContentlessWindow() {
+    XCTAssertTrue(include(type: .window, interactiveOnly: true))
+  }
+
   func testInteractiveOnlyExcludesContentlessNonInteractive() {
     XCTAssertFalse(include(type: .image, interactiveOnly: true))
     XCTAssertFalse(include(interactiveOnly: true))
+  }
+
+  func testDedupeKeyKeepsTwinFieldsWithDifferentValues() {
+    let frame = CGRect(x: 10, y: 100, width: 300, height: 44)
+    let first = snapshotDedupeKey(
+      type: .textField, label: "Email", identifier: "email", value: "first@example.test", frame: frame)
+    let second = snapshotDedupeKey(
+      type: .textField, label: "Email", identifier: "email", value: "second@example.test", frame: frame)
+    XCTAssertNotEqual(first, second)
+  }
+
+  func testDedupeKeyKeepsFieldsWithDelimiterCollisions() {
+    let frame = CGRect(x: 10, y: 100, width: 300, height: 44)
+    let first = snapshotDedupeKey(
+      type: .textField, label: "Email", identifier: "otp", value: "prefix-654321", frame: frame)
+    let second = snapshotDedupeKey(
+      type: .textField, label: "Email", identifier: "otp-prefix", value: "654321", frame: frame)
+    XCTAssertNotEqual(first, second)
+    XCTAssertEqual(Set([first, second]).count, 2)
+  }
+
+  func testDedupeKeyStillCollapsesIdenticalNodes() {
+    let frame = CGRect(x: 10, y: 100, width: 300, height: 44)
+    XCTAssertEqual(
+      snapshotDedupeKey(type: .textField, label: "Email", identifier: "email", value: "same", frame: frame),
+      snapshotDedupeKey(type: .textField, label: "Email", identifier: "email", value: "same", frame: frame))
+    XCTAssertEqual(
+      snapshotDedupeKey(type: .staticText, label: "Title", identifier: "", value: nil, frame: frame),
+      snapshotDedupeKey(type: .staticText, label: "Title", identifier: "", value: nil, frame: frame))
+  }
+
+  func testDedupeKeyKeepsNestedSameOriginScrollViewsOfDifferentSizes() {
+    let outer = snapshotDedupeKey(
+      type: .scrollView, label: "", identifier: "", value: nil,
+      frame: CGRect(x: 0, y: 100, width: 402, height: 700))
+    let inner = snapshotDedupeKey(
+      type: .scrollView, label: "", identifier: "", value: nil,
+      frame: CGRect(x: 0, y: 100, width: 402, height: 200))
+    XCTAssertNotEqual(outer, inner)
+    XCTAssertNotEqual(
+      outer,
+      snapshotDedupeKey(
+        type: .scrollView, label: "", identifier: "", value: nil,
+        frame: CGRect(x: 0, y: 100, width: 300, height: 700)))
+  }
+
+  func testToolbarIsNamedToolbarNotSearchField() {
+    XCTAssertEqual(snapshotTypeName(.toolbar), "Toolbar")
+    XCTAssertEqual(snapshotTypeName(XCUIElement.ElementType(rawValue: 24)!), "Toolbar")
+    XCTAssertEqual(snapshotTypeName(.searchField), "SearchField")
+    XCTAssertFalse(TextInputTarget.inputTypeNames.contains(snapshotTypeName(.toolbar)))
+  }
+
+  func testKeyboardRawTypesKeepTheirNames() {
+    XCTAssertEqual(snapshotTypeName(XCUIElement.ElementType(rawValue: 19)!), "Keyboard")
+    XCTAssertEqual(snapshotTypeName(XCUIElement.ElementType(rawValue: 20)!), "Key")
   }
 }

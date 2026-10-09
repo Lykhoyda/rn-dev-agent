@@ -3,6 +3,7 @@ use crate::buildplan::{
     self, ArtifactKind, ArtifactStatus, BuildDecision, BuildPlan, CachedArtifact, LockHolder,
     LockOutcome, LockPolicy, StateStatus,
 };
+use crate::cancel::ensure_running;
 use crate::candidate;
 use crate::exec::{CmdSpec, Runner};
 use crate::failure::{Failure, FailureCode};
@@ -68,8 +69,14 @@ impl<'a> Ctx<'a> {
     }
 
     pub(crate) fn fail(mut self, mut failure: Failure) -> Receipt {
+        failure = ensure_running(self.runner, &failure.phase)
+            .err()
+            .unwrap_or(failure);
         if self.record.resources.any_owned() {
-            failure.next_action = format!("qaren cleanup {} --json", self.record.run_id);
+            failure.next_action = crate::redact::OutputText::from_output(&format!(
+                "qaren cleanup {} --json",
+                self.record.run_id
+            ));
         }
         // Contention is a refusal even after the run record exists: nothing
         // broke, qaren declined to take a claimed resource.
@@ -84,10 +91,10 @@ impl<'a> Ctx<'a> {
         self.record
             .push_history(at, &format!("failed: {}", failure.code_str()));
         if let Err(save_failure) = self.save() {
-            failure.detail = format!(
+            failure.detail = crate::redact::OutputText::from_output(&format!(
                 "{} — AND the run record could not be updated ({}); treat recorded ownership as stale",
                 failure.detail, save_failure.detail
-            );
+            ));
             self.record.failure = Some(failure.clone());
         }
         finish_receipt(self, result, Some(failure))
@@ -121,7 +128,7 @@ pub(crate) fn finish_receipt(ctx: Ctx, result: ReceiptResult, failure: Option<Fa
             "agents can attach now; later run: qaren cleanup {} --json",
             ctx.record.run_id
         ),
-        (_, Some(f)) => f.next_action.clone(),
+        (_, Some(f)) => f.next_action.to_string(),
         _ => String::new(),
     };
     let mut receipt = Receipt::new(
@@ -173,7 +180,7 @@ pub fn prepare(runner: &mut dyn Runner, args: &PrepareArgs) -> Receipt {
                 &failure.phase.clone(),
                 timefmt::iso8601_utc(runner.now_epoch_ms()),
             );
-            receipt.next_action = failure.next_action.clone();
+            receipt.next_action = failure.next_action.to_string();
             receipt.failure = Some(failure);
             receipt.commands_executed = runner.commands_executed();
             receipt
@@ -196,6 +203,9 @@ fn prepare_validated(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
     let cand = candidate::resolve(runner, &scenario, &scenario_dir)?;
+    if let Some(workspace) = scenario.build.ios_workspace.as_ref() {
+        ios::validate_workspace(&cand.project_root, workspace)?;
+    }
     let repo_root = cand.repo_root.clone();
 
     // The refusal must come before any network-capable install: an
@@ -229,7 +239,11 @@ fn prepare_validated(
     check_prereqs(runner, &scenario, args.android_home.as_deref())?;
     if args.dry_run && scenario.platform == Platform::Ios && scenario.build.owner == BuildOwner::Cli
     {
-        ios::require_generic_build(runner, &cand.project_root)?;
+        ios::require_build(
+            runner,
+            &cand.project_root,
+            scenario.build.ios_workspace.as_ref(),
+        )?;
     }
     if let Some(metro) = &scenario.metro {
         check_port_free(runner, metro.port)?;
@@ -314,6 +328,7 @@ fn prepare_validated(
         resources: Default::default(),
         failure: None,
         history: Vec::new(),
+        terminal: None,
     };
     record.save(&args.runs_root)?;
 
@@ -332,7 +347,11 @@ fn prepare_validated(
         return Ok(ctx.fail(f));
     }
     if scenario.platform == Platform::Ios && scenario.build.owner == BuildOwner::Cli {
-        if let Err(f) = ios::require_generic_build(ctx.runner, &ctx.record.candidate.project_root) {
+        if let Err(f) = ios::require_build(
+            ctx.runner,
+            &ctx.record.candidate.project_root,
+            scenario.build.ios_workspace.as_ref(),
+        ) {
             return Ok(ctx.fail(f));
         }
     }
@@ -377,10 +396,9 @@ fn prepare_validated(
     }
     let t = ctx.mark("allocate", t);
 
-    let t = if plan.decision == BuildDecision::Reuse {
-        match run_reuse_path(&mut ctx, &plan, t) {
-            Ok(t) => t,
-            Err(f) => return Ok(ctx.fail(f)),
+    if plan.decision == BuildDecision::Reuse {
+        if let Err(f) = run_reuse_path(&mut ctx, &plan, t) {
+            return Ok(ctx.fail(f));
         }
     } else {
         if plan.decision == BuildDecision::Clean {
@@ -391,8 +409,8 @@ fn prepare_validated(
         if let Err(f) = build_and_ready(&mut ctx) {
             return Ok(ctx.fail(f));
         }
-        ctx.mark("build_and_ready", t)
-    };
+    }
+    let t = ctx.mark("build_and_ready", t);
 
     if let Err(f) = recheck_candidate(&mut ctx) {
         return Ok(ctx.fail(f));
@@ -404,7 +422,9 @@ fn prepare_validated(
     let t = ctx.mark("verify", t);
 
     if plan.decision != BuildDecision::Reuse {
-        record_build_result(&mut ctx, &fp);
+        if let Err(f) = record_build_result(&mut ctx, &fp) {
+            return Ok(ctx.fail(f));
+        }
         release_build_lock(&mut ctx);
     }
     ctx.mark("cache_record", t);
@@ -524,7 +544,11 @@ fn prepare_handoff(mut ctx: Ctx, args: &PrepareArgs, t: u64) -> Receipt {
         device: super::device_identity(&ctx.record),
         native_fingerprint: fp.value.clone(),
         fingerprint_complete: fp.complete,
-        fingerprint_incompleteness: fp.incompleteness.clone(),
+        fingerprint_incompleteness: fp
+            .incompleteness
+            .iter()
+            .map(|text| crate::redact::OutputText::from_output(text))
+            .collect(),
         expected_receipt: expected.clone(),
     };
     let document_sha256 = match handoff::save_document(&document_path, &document) {
@@ -569,6 +593,7 @@ fn prepare_handoff(mut ctx: Ctx, args: &PrepareArgs, t: u64) -> Receipt {
 }
 
 pub(crate) fn install_deps(ctx: &mut Ctx) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "deps")?;
     let offline = ctx.record.scenario.deps.policy == DepsPolicy::RequirePrewarm;
     let mut deps_args = vec!["install", "--frozen-lockfile"];
     if offline {
@@ -585,6 +610,7 @@ pub(crate) fn install_deps(ctx: &mut Ctx) -> Result<(), Failure> {
         )
         .cwd(&ctx.record.candidate.project_root.clone()),
     );
+    ensure_running(ctx.runner, "deps")?;
     if !deps.ok() {
         return Err(Failure::new(
             "deps",
@@ -685,6 +711,7 @@ pub(crate) fn check_port_free(runner: &mut dyn Runner, port: u16) -> Result<(), 
 }
 
 fn allocate_ios(ctx: &mut Ctx) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "allocate")?;
     let ios = ctx
         .record
         .scenario
@@ -701,6 +728,7 @@ fn allocate_ios(ctx: &mut Ctx) -> Result<(), Failure> {
         runtime: ios.runtime.clone(),
     });
     ctx.save()?;
+    ensure_running(ctx.runner, "allocate")?;
     let created = ctx
         .runner
         .run(&ios::create_spec(&name, &ios.device_type, &ios.runtime));
@@ -726,6 +754,7 @@ fn allocate_ios(ctx: &mut Ctx) -> Result<(), Failure> {
     }
     ctx.save()?;
 
+    ensure_running(ctx.runner, "allocate")?;
     let boot = ctx.runner.run(&ios::bootstatus_spec(
         &udid,
         ctx.record.scenario.deadlines.device_boot_seconds,
@@ -742,6 +771,7 @@ fn allocate_ios(ctx: &mut Ctx) -> Result<(), Failure> {
 }
 
 fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "allocate")?;
     let android = ctx
         .record
         .scenario
@@ -820,6 +850,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
         adb_port: slot_status.adb_port,
     });
     ctx.save()?;
+    ensure_running(ctx.runner, "allocate")?;
     let started = ctx.runner.run(&android::farm_start_spec(
         &android.ssh_host,
         &android.farm_path,
@@ -850,6 +881,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
         .join("logs")
         .join("tunnel.log");
     let tunnel_spec = android::tunnel_spec(&android.ssh_host, slot_status.adb_port);
+    ensure_running(ctx.runner, "allocate")?;
     let spawned = ctx
         .runner
         .spawn_group(&tunnel_spec, &tunnel_log)
@@ -900,8 +932,8 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
     let run_dir = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id);
     let key = ctx
         .runner
-        .run(&android::fetch_adbkey_spec(&android.ssh_host));
-    if !key.ok() || key.stdout.trim().is_empty() {
+        .run_private(&android::fetch_adbkey_spec(&android.ssh_host), &[]);
+    if key.timed_out() || key.exit_code() != Some(0) || key.stdout().trim().is_empty() {
         return Err(Failure::new(
             "allocate",
             FailureCode::AdbServerFailed,
@@ -913,7 +945,8 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
     // Record ownership before the write so a partial key is still cleanable.
     ctx.record.resources.adb_vendor_key = Some(vendor_key.clone());
     ctx.save()?;
-    if let Err(e) = write_private_file(&vendor_key, &key.stdout) {
+    ensure_running(ctx.runner, "allocate")?;
+    if let Err(e) = write_private_file(&vendor_key, key.stdout()) {
         return Err(Failure::new(
             "allocate",
             FailureCode::AdbServerFailed,
@@ -926,6 +959,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
     let serial = android::local_serial(slot_status.adb_port);
     let server_log = run_dir.join("logs").join("adb-server.log");
     let server_spec = android::adb_server_spec(&adb, server_port, &serial, &vendor_key);
+    ensure_running(ctx.runner, "allocate")?;
     let server = ctx
         .runner
         .spawn_group(&server_spec, &server_log)
@@ -968,6 +1002,7 @@ fn allocate_android(ctx: &mut Ctx, android_home: Option<&str>) -> Result<(), Fai
         FailureCode::AdbServerFailed,
     )?;
 
+    ensure_running(ctx.runner, "allocate")?;
     let connect = ctx
         .runner
         .run(&android::adb_connect_spec(&adb, server_port, &serial));
@@ -1002,7 +1037,8 @@ pub(crate) fn plan_build(ctx: &mut Ctx) -> Result<BuildPlan, Failure> {
     let platform = platform_dir(ctx.record.scenario.platform);
     let repo_root = ctx.record.candidate.repo_root.clone();
     let project_root = ctx.record.candidate.project_root.clone();
-    let fp = fingerprint::compute(ctx.runner, &repo_root, &project_root, platform)?;
+    let fp = fingerprint::compute(ctx.runner, &repo_root, &project_root, platform)?
+        .with_ios_workspace(ctx.record.scenario.build.ios_workspace.as_ref());
     let state = buildplan::load_state(&repo_root, platform, &ctx.record.candidate.app_id);
     // The artifact is content-verified only when it could authorize reuse.
     let artifact_status = match &state {
@@ -1019,14 +1055,35 @@ pub(crate) fn plan_build(ctx: &mut Ctx) -> Result<BuildPlan, Failure> {
         worktree_root: &repo_root,
         candidate_sha: &ctx.record.candidate.git_sha,
         fingerprint: &fp.value,
+        fingerprint_parts: &fp.parts,
         fingerprint_complete: fp.complete,
         incompleteness: &fp.incompleteness,
+        expo_unavailable: fp.expo_unavailable.as_deref(),
         scheme: scheme.as_deref(),
         force_clean: ctx.record.scenario.build.strategy == BuildStrategy::Clean,
         native_dir_exists,
         native_dir_in_candidate: fp.native_dir_in_candidate,
     };
+    ctx.notes.extend(fingerprint_notes(&fp));
+    if let Some(ms) = fp.expo_fingerprint_ms {
+        ctx.notes
+            .push(("expo_fingerprint_ms".to_string(), ms.to_string()));
+    }
     Ok(buildplan::decide(&inputs, &state, artifact_status))
+}
+
+// Hash-only parts and the completeness gate's own boolean; never the incompleteness reasons.
+fn fingerprint_notes(fp: &fingerprint::NativeFingerprint) -> [(String, String); 2] {
+    let parts = fp
+        .parts
+        .iter()
+        .map(|(part, hash)| format!("{part}={hash}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    [
+        ("fingerprint_parts".to_string(), parts),
+        ("fingerprint_complete".to_string(), fp.complete.to_string()),
+    ]
 }
 
 fn verify_artifact(artifact: &CachedArtifact) -> ArtifactStatus {
@@ -1050,6 +1107,7 @@ fn lock_holder_for(ctx: &mut Ctx) -> LockHolder {
 }
 
 pub(crate) fn claim_build_lock(ctx: &mut Ctx, lock_root: &Path) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "build")?;
     let name = format!(
         "native-build-{}",
         platform_dir(ctx.record.scenario.platform)
@@ -1166,6 +1224,7 @@ fn allocate_usb(
     android_home: Option<&str>,
     lock_root: &Path,
 ) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "allocate")?;
     let usb = ctx
         .record
         .scenario
@@ -1194,6 +1253,7 @@ fn allocate_usb(
     let server_log = run_dir.join("logs").join("adb-server.log");
     let server_spec =
         android::usb_adb_server_spec(&adb, usb_adb_server_port, &usb.serial, &host_key);
+    ensure_running(ctx.runner, "allocate")?;
     let server = ctx
         .runner
         .spawn_group(&server_spec, &server_log)
@@ -1265,26 +1325,35 @@ fn native_build_output_dirs(platform: &str) -> &'static [&'static str] {
     }
 }
 
+fn native_prebuild_spec(project_root: &Path, platform: &str, build_seconds: u64) -> CmdSpec {
+    CmdSpec::new(
+        "expo-prebuild",
+        "pnpm",
+        &[
+            "exec",
+            "expo",
+            "prebuild",
+            "--platform",
+            platform,
+            "--clean",
+        ],
+        build_seconds,
+    )
+    .cwd(project_root)
+    .env_remove("CI")
+    .env("EXPO_NO_TELEMETRY", "1")
+}
+
 pub(crate) fn run_clean_preparation(ctx: &mut Ctx, plan: &BuildPlan) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "build")?;
     let platform = platform_dir(ctx.record.scenario.platform);
     let project_root = ctx.record.candidate.project_root.clone();
     if plan.regenerate_native_dir {
-        let spec = CmdSpec::new(
-            "expo-prebuild",
-            "pnpm",
-            &[
-                "exec",
-                "expo",
-                "prebuild",
-                "--platform",
-                platform,
-                "--clean",
-            ],
+        let spec = native_prebuild_spec(
+            &project_root,
+            platform,
             ctx.record.scenario.deadlines.build_seconds,
-        )
-        .cwd(&project_root)
-        .env("CI", "1")
-        .env("EXPO_NO_TELEMETRY", "1");
+        );
         let prebuild = if ctx.record.scenario.platform == Platform::Ios {
             run_finite_build(ctx, &spec)?;
             crate::exec::CmdOutput::success("")
@@ -1304,7 +1373,7 @@ pub(crate) fn run_clean_preparation(ctx: &mut Ctx, plan: &BuildPlan) -> Result<(
         }
         ctx.notes.push((
             "clean_preparation".to_string(),
-            format!("regenerated the generated {platform}/ dir via expo prebuild --clean"),
+            format!("deleted and regenerated the generated {platform}/ dir, including its installed native dependencies and build outputs, via expo prebuild --clean"),
         ));
         return Ok(());
     }
@@ -1316,6 +1385,7 @@ pub(crate) fn run_clean_preparation(ctx: &mut Ctx, plan: &BuildPlan) -> Result<(
         if !path.exists() {
             continue;
         }
+        ensure_running(ctx.runner, "build")?;
         std::fs::remove_dir_all(&path).map_err(|e| {
             Failure::new(
                 "build",
@@ -1344,6 +1414,7 @@ fn spawn_metro_only(ctx: &mut Ctx) -> Result<(), Failure> {
     let metro_log = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id)
         .join("logs")
         .join("metro.log");
+    ensure_running(ctx.runner, "build")?;
     let spawned = ctx.runner.spawn_group(&spec, &metro_log).map_err(|e| {
         Failure::new(
             "build",
@@ -1382,6 +1453,7 @@ fn wait_metro_responding(ctx: &mut Ctx) -> Result<(), Failure> {
     let metro_resource = ctx.record.resources.metro.clone().expect("metro spawned");
     let identity = metro_resource.identity.clone().expect("identity captured");
     loop {
+        ensure_running(ctx.runner, "build")?;
         if probe_pid_identity(ctx.runner, &identity) == PidLiveness::Dead {
             return Err(Failure::new(
                 "build",
@@ -1402,6 +1474,7 @@ fn wait_metro_responding(ctx: &mut Ctx) -> Result<(), Failure> {
             _ => false,
         };
         if port_ours && metro::metro_responding(ctx.runner, metro_resource.port) {
+            ensure_running(ctx.runner, "build")?;
             return Ok(());
         }
         if ctx.runner.monotonic_ms() >= deadline {
@@ -1423,7 +1496,8 @@ fn wait_metro_responding(ctx: &mut Ctx) -> Result<(), Failure> {
     }
 }
 
-pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<u64, Failure> {
+pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "build")?;
     let artifact = plan.artifact.clone().expect("reuse carries an artifact");
     let metro_port = qaren_metro_port(&ctx.record.scenario);
     match ctx.record.scenario.platform {
@@ -1453,6 +1527,7 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
                 .ios_simulator
                 .clone()
                 .expect("ios allocated");
+            ensure_running(ctx.runner, "build")?;
             let installed = ctx
                 .runner
                 .run(&ios::install_app_spec(&sim.udid, &artifact.path));
@@ -1479,6 +1554,7 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
                 .as_ref()
                 .expect("allocated")
                 .server_port;
+            ensure_running(ctx.runner, "build")?;
             let installed = ctx.runner.run(&android::adb_install_spec(
                 &adb,
                 server_port,
@@ -1505,6 +1581,7 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
             // may exist on the device.
             ctx.record.resources.adb_reverse_port = Some(metro_port);
             ctx.save()?;
+            ensure_running(ctx.runner, "build")?;
             let reversed = ctx.runner.run(&android::adb_reverse_spec(
                 &adb,
                 server_port,
@@ -1530,7 +1607,23 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
     wait_metro_responding(ctx)?;
     let t = ctx.mark("metro_ready", t);
 
-    let launched = match ctx.record.scenario.platform {
+    ensure_running(ctx.runner, "build")?;
+    let warmed = ctx.runner.run(&metro::manifest_spec(
+        metro_port,
+        platform_dir(ctx.record.scenario.platform),
+    ));
+    if !warmed.ok() {
+        let load = warmed.timed_out.then(crate::core::host_load_1m).flatten();
+        return Err(launch_failure(
+            "dev client manifest",
+            &warmed,
+            load,
+            false,
+            &ctx.record.run_id,
+        ));
+    }
+    ensure_running(ctx.runner, "build")?;
+    let launch = match ctx.record.scenario.platform {
         Platform::Ios => {
             let sim = ctx
                 .record
@@ -1538,11 +1631,16 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
                 .ios_simulator
                 .clone()
                 .expect("ios allocated");
-            ctx.runner.run(&ios::launch_spec(
-                &sim.udid,
-                &ctx.record.candidate.app_id,
-                metro_port,
-            ))
+            let defaults = ios::devmenu_defaults_specs(&sim.udid, &ctx.record.candidate.app_id);
+            let failed = defaults
+                .iter()
+                .filter(|spec| !ctx.runner.run(spec).ok())
+                .count();
+            if failed > 0 {
+                ctx.notes
+                    .push(("dev_menu_defaults".to_string(), "unconfirmed".to_string()));
+            }
+            ios::launch_spec(&sim.udid, &ctx.record.candidate.app_id, metro_port)
         }
         Platform::Android => {
             let scheme = ctx
@@ -1567,30 +1665,37 @@ pub(crate) fn run_reuse_path(ctx: &mut Ctx, plan: &BuildPlan, t: u64) -> Result<
                 .as_ref()
                 .expect("allocated")
                 .server_port;
-            ctx.runner.run(&android::am_start_deeplink_spec(
+            android::am_start_deeplink_spec(
                 &adb,
                 server_port,
                 &serial,
                 &url,
                 &ctx.record.candidate.app_id,
-            ))
+            )
         }
     };
+    let mut launched = ctx.runner.run(&launch);
+    let mut load = launched.timed_out.then(crate::core::host_load_1m).flatten();
+    let retried = retry_launch(&launched, load);
+    if retried {
+        ensure_running(ctx.runner, "build")?;
+        launched = ctx.runner.run(&launch);
+        load = launched.timed_out.then(crate::core::host_load_1m).flatten();
+    }
     if !launched.ok() {
-        return Err(Failure::new(
-            "build",
-            FailureCode::BuildFailed,
-            format!("dev client launch failed: {}", launched.summary()),
-            format!(
-                "run qaren cleanup {} --json, then retry prepare",
-                ctx.record.run_id
-            ),
+        return Err(launch_failure(
+            "dev client launch",
+            &launched,
+            load,
+            retried,
+            &ctx.record.run_id,
         ));
     }
     let t = ctx.mark("app_launch", t);
 
     wait_ready(ctx)?;
-    Ok(ctx.mark("ready_probes", t))
+    ctx.mark("ready_probes", t);
+    Ok(())
 }
 
 fn artifact_install_failure(run_id: &str, artifact: &CachedArtifact, summary: String) -> Failure {
@@ -1614,7 +1719,8 @@ pub(crate) fn recheck_fingerprint(
     let platform = platform_dir(ctx.record.scenario.platform);
     let repo_root = ctx.record.candidate.repo_root.clone();
     let project_root = ctx.record.candidate.project_root.clone();
-    let fp = fingerprint::compute(ctx.runner, &repo_root, &project_root, platform)?;
+    let fp = fingerprint::compute(ctx.runner, &repo_root, &project_root, platform)?
+        .with_ios_workspace(ctx.record.scenario.build.ios_workspace.as_ref());
     if fp.value != plan.fingerprint {
         return Err(candidate_drift(
             &ctx.record.run_id,
@@ -1670,12 +1776,11 @@ fn prune_stale_artifacts(platform_dir: &Path, app_id: &str, keep_fp_key: &str) -
     pruned
 }
 
-pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
+pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) -> Result<(), Failure> {
     let platform = platform_dir(ctx.record.scenario.platform);
     let repo_root = ctx.record.candidate.repo_root.clone();
     let project_root = ctx.record.candidate.project_root.clone();
     let app_id = ctx.record.candidate.app_id.clone();
-    let mut artifact = None;
     let verified = ctx.record.build.as_ref().and_then(|p| p.artifact.clone());
     let source = if platform == "ios" {
         verified
@@ -1685,83 +1790,53 @@ pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
     } else {
         locate_built_apk(&project_root)
     };
-    match source {
-        Ok((src, kind)) => {
-            let fp_key: String = fp
-                .value
-                .chars()
-                .filter(|c| c.is_ascii_hexdigit())
-                .take(16)
-                .collect();
-            let dest_dir = buildplan::cache_dir(&repo_root)
-                .join("artifacts")
-                .join(platform)
-                .join(format!("{app_id}-{fp_key}"));
-            let _ = std::fs::remove_dir_all(&dest_dir);
-            let dest = dest_dir.join(src.file_name().unwrap_or_default());
-            let copied = buildplan::copy_artifact(&src, &dest)
-                .and_then(|()| buildplan::hash_artifact(&dest))
-                .and_then(|hash| {
-                    if verified.as_ref().is_some_and(|a| a.sha256 != hash) {
-                        let _ = std::fs::remove_dir_all(&dest_dir);
-                        Err("cache copy did not match the verified build artifact".into())
-                    } else {
-                        Ok(hash)
-                    }
-                });
-            match copied {
-                Ok(sha256) => {
-                    artifact = Some(CachedArtifact {
-                        path: dest,
-                        sha256,
-                        kind,
-                    });
-                    // Bind the ready installation to hashed bytes for later owned removal.
-                    if let (ArtifactKind::Apk, Some(serial), Some(server)) = (
-                        kind,
-                        ctx.record.resources.adb_local_serial.clone(),
-                        ctx.record.resources.adb_server.as_ref(),
-                    ) {
-                        ctx.record.resources.app_install = Some(AppInstallResource {
-                            app_id: app_id.clone(),
-                            serial,
-                            server_port: server.server_port,
-                            artifact: artifact.clone().expect("just set"),
-                            via: "expo-run-android".to_string(),
-                            installed_at: timefmt::iso8601_utc(ctx.runner.now_epoch_ms()),
-                            removal: None,
-                        });
-                    }
-                    ctx.notes.push((
-                        "artifact_cache".to_string(),
-                        "cached the built dev client for fingerprint-matched reuse".to_string(),
-                    ));
-                    let pruned = prune_stale_artifacts(
-                        &buildplan::cache_dir(&repo_root)
-                            .join("artifacts")
-                            .join(platform),
-                        &app_id,
-                        &fp_key,
-                    );
-                    if pruned > 0 {
-                        ctx.notes.push((
-                            "artifact_cache".to_string(),
-                            format!(
-                                "pruned {pruned} artifact director{} for older native fingerprints",
-                                if pruned == 1 { "y" } else { "ies" }
-                            ),
-                        ));
-                    }
-                }
-                Err(reason) => ctx
-                    .notes
-                    .push(("artifact_cache".to_string(), format!("skipped: {reason}"))),
-            }
+    let (src, kind) = match source {
+        Ok(source) => source,
+        Err(reason) => {
+            ensure_running(ctx.runner, "native_cache")?;
+            ctx.notes
+                .push(("artifact_cache".into(), format!("skipped: {reason}")));
+            return Ok(());
         }
-        Err(reason) => ctx
-            .notes
-            .push(("artifact_cache".to_string(), format!("skipped: {reason}"))),
-    }
+    };
+    let fp_key: String = fp
+        .value
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .take(16)
+        .collect();
+    let bucket = buildplan::cache_dir(&repo_root)
+        .join("artifacts")
+        .join(platform)
+        .join(format!("{app_id}-{fp_key}"));
+    let staging = bucket.join(format!(".staging-{}", ctx.record.run_id));
+    let dest_dir = bucket.join(&ctx.record.run_id);
+    let staged = staging.join(src.file_name().unwrap_or_default());
+    let dest = dest_dir.join(src.file_name().unwrap_or_default());
+    let copied = buildplan::copy_artifact(ctx.runner, &src, &staged)
+        .and_then(|()| buildplan::hash_artifact(&staged))
+        .and_then(|hash| {
+            if verified.as_ref().is_some_and(|a| a.sha256 != hash) {
+                Err("cache copy did not match the verified build artifact".into())
+            } else {
+                Ok(hash)
+            }
+        });
+    let sha256 = match copied {
+        Ok(hash) => hash,
+        Err(reason) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            ensure_running(ctx.runner, "native_cache")?;
+            ctx.notes
+                .push(("artifact_cache".into(), format!("skipped: {reason}")));
+            return Ok(());
+        }
+    };
+    let artifact = Some(CachedArtifact {
+        path: dest,
+        sha256,
+        kind,
+    });
     let generated =
         ctx.record.candidate.project_root.join(platform).is_dir() && !fp.native_dir_in_candidate;
     let state = buildplan::NativeCacheState {
@@ -1784,27 +1859,68 @@ pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
             Vec::new()
         },
         artifact,
+        fingerprint_parts: fp.parts.clone(),
     };
     let path = buildplan::state_path(&repo_root, platform, &app_id);
+    if let Err(f) = ensure_running(ctx.runner, "native_cache") {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(f);
+    }
+    if let Err(e) = std::fs::rename(&staging, &dest_dir) {
+        let _ = std::fs::remove_dir_all(&staging);
+        ctx.notes
+            .push(("artifact_cache".into(), format!("skipped: {e}")));
+        return Ok(());
+    }
     if let Err(e) = buildplan::save_json(&path, &state) {
+        let _ = std::fs::remove_dir_all(&dest_dir);
         ctx.notes.push((
             "native_cache_state".to_string(),
             format!("could not persist {}: {e}", path.display()),
         ));
-        return;
+        return Ok(());
+    }
+    if let (ArtifactKind::Apk, Some(serial), Some(server)) = (
+        kind,
+        ctx.record.resources.adb_local_serial.clone(),
+        ctx.record.resources.adb_server.as_ref(),
+    ) {
+        ctx.record.resources.app_install = Some(AppInstallResource {
+            app_id: app_id.clone(),
+            serial,
+            server_port: server.server_port,
+            artifact: state.artifact.clone().expect("published artifact"),
+            via: "expo-run-android".into(),
+            installed_at: timefmt::iso8601_utc(ctx.runner.now_epoch_ms()),
+            removal: None,
+        });
+    }
+    ctx.notes.push((
+        "artifact_cache".into(),
+        "cached the built dev client for fingerprint-matched reuse".into(),
+    ));
+    let pruned = prune_stale_artifacts(bucket.parent().expect("platform cache"), &app_id, &fp_key);
+    if pruned > 0 {
+        ctx.notes.push((
+            "artifact_cache".into(),
+            format!(
+                "pruned {pruned} artifact director{} for older native fingerprints",
+                if pruned == 1 { "y" } else { "ies" }
+            ),
+        ));
     }
     if platform != "ios" || !ctx.record.resources.can_release_build_ownership() {
-        return;
+        return Ok(());
     }
     let (Some(source), Some(cached)) = (verified, state.artifact) else {
-        return;
+        return Ok(());
     };
     ctx.record.build.as_mut().expect("build planned").artifact = Some(cached);
     if let Err(e) = ctx.save() {
         ctx.record.build.as_mut().expect("build planned").artifact = Some(source);
         ctx.notes
             .push(("ios_build_output".into(), format!("retained: {}", e.detail)));
-        return;
+        return Ok(());
     }
     let run_dir = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id);
     let output = run_dir.join("ios-build");
@@ -1819,7 +1935,37 @@ pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
             "ios_build_output".into(),
             "retained: source is not a run-owned app directory".into(),
         ));
-        return;
+        return Ok(());
+    }
+    if ctx.record.scenario.build.ios_workspace.is_some() {
+        let derived = run_dir.join("ios-derived-data");
+        let derived_exists = match std::fs::symlink_metadata(&derived) {
+            Ok(meta) if meta.is_dir() => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            _ => {
+                ctx.notes.push((
+                    "ios_build_output".into(),
+                    "retained: derived data is not a plain run-owned directory".into(),
+                ));
+                return Ok(());
+            }
+        };
+        if std::fs::remove_dir_all(&output)
+            .and_then(|()| {
+                if derived_exists {
+                    std::fs::remove_dir_all(&derived)
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err()
+        {
+            ctx.notes.push((
+                "ios_build_output".into(),
+                "retirement incomplete: could not remove run-owned build products".into(),
+            ));
+        }
+        return Ok(());
     }
     if let Err(e) =
         std::fs::remove_dir_all(&source.path).and_then(|()| std::fs::remove_dir(&output))
@@ -1829,6 +1975,7 @@ pub(crate) fn record_build_result(ctx: &mut Ctx, fp: &NativeFingerprint) {
             format!("could not retire output: {e}"),
         ));
     }
+    Ok(())
 }
 
 fn write_private_file(path: &Path, content: &str) -> std::io::Result<()> {
@@ -1904,10 +2051,14 @@ fn wait_for_local_listener(
 ) -> Result<(), Failure> {
     let deadline = ctx.runner.monotonic_ms() + deadline_seconds * 1000;
     loop {
+        ensure_running(ctx.runner, "allocate")?;
         let output = ctx.runner.run(&metro::port_owner_spec(port));
         match metro::parse_port_owner(&output) {
             metro::PortOwners::Owned(pid) => match metro::pgid_of(ctx.runner, pid) {
-                Some(pgid) if pgid == expected_pgid => return Ok(()),
+                Some(pgid) if pgid == expected_pgid => {
+                    ensure_running(ctx.runner, "allocate")?;
+                    return Ok(());
+                }
                 Some(foreign_pgid) => {
                     return Err(Failure::new(
                         "allocate",
@@ -1974,6 +2125,7 @@ fn build_failure(ctx: &Ctx, detail: impl Into<String>) -> Failure {
 }
 
 fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "build")?;
     use crate::runrecord::BuildCompletionEvidence;
     use std::io::Write;
     let log = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id)
@@ -1996,6 +2148,13 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
     ctx.record.resources.begin_build()?;
     ctx.record.phase = Phase::Building;
     ctx.save()?;
+    if let Err(failure) = ensure_running(ctx.runner, "build") {
+        ctx.record
+            .resources
+            .finish_build(BuildCompletionEvidence::NotSpawned)?;
+        ctx.save()?;
+        return Err(failure);
+    }
     let mut child = match ctx.runner.spawn_piped(&gated, &log) {
         Ok(child) => child,
         Err(error) => {
@@ -2018,6 +2177,7 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
         .record_build_spawned(child.pid, identity)?;
     ctx.save()?;
     let started = known
+        && ctx.runner.cancellation().is_none()
         && child
             .stdin
             .write_all(b"start\n")
@@ -2026,13 +2186,17 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
     drop(child.stdin);
     drop(child.stdout);
     let mut exit = None;
-    let mut cancelled = None;
+    let mut cancelled = ctx.runner.cancellation();
     if started {
         let deadline = ctx
             .runner
             .monotonic_ms()
             .saturating_add(spec.timeout_seconds.saturating_mul(1000));
         loop {
+            if let Some(reason) = ctx.runner.cancellation() {
+                cancelled = Some(reason);
+                break;
+            }
             match child.handle.try_wait() {
                 Ok(Some(code)) => {
                     exit = Some(code);
@@ -2040,16 +2204,11 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
                 }
                 Err(_) => break,
                 Ok(None) if ctx.runner.monotonic_ms() >= deadline => break,
-                Ok(None) => match ctx.runner.cancellation() {
-                    Some(reason) => {
-                        cancelled = Some(reason);
-                        break;
-                    }
-                    None => ctx.runner.sleep(Duration::from_millis(100)),
-                },
+                Ok(None) => ctx.runner.sleep(Duration::from_millis(100)),
             }
         }
     }
+    crate::progress::finished(&spec.label, exit == Some(0));
     let mut outcome = super::cleanup::cleanup_build(ctx.runner, &mut ctx.record, &ctx.runs_root)
         .expect("build recorded");
     if !outcome.clean() && exit.is_none() && matches!(child.handle.try_wait(), Ok(Some(_))) {
@@ -2061,7 +2220,7 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
         spec.label.clone(),
         format!("exit={exit:?}; group={}", outcome.render()),
     ));
-    if let Some(reason) = cancelled {
+    if let Some(reason) = cancelled.or_else(|| ctx.runner.cancellation()) {
         return Err(Failure::cancelled("build", &reason));
     }
     if !started || exit != Some(0) || !matches!(outcome, super::cleanup::Outcome::Absent) {
@@ -2080,16 +2239,37 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
 }
 
 pub(crate) fn build_and_ready(ctx: &mut Ctx) -> Result<(), Failure> {
+    ensure_running(ctx.runner, "build")?;
     let port = qaren_metro_port(&ctx.record.scenario);
     let deadline = ctx.record.scenario.deadlines.build_seconds;
     let project_root = ctx.record.candidate.project_root.clone();
     let spec = match ctx.record.scenario.platform {
         Platform::Ios => {
+            if let Some(workspace) = ctx.record.scenario.build.ios_workspace.as_ref() {
+                ios::validate_workspace(&project_root, workspace)?;
+            }
             let output = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id).join("ios-build");
             std::fs::create_dir(&output).map_err(|_| {
                 build_failure(ctx, "cannot exclusively create iOS build output directory")
             })?;
-            run_finite_build(ctx, &ios::build_spec(&project_root, &output, deadline))?;
+            let build = ios::build_spec(
+                &project_root,
+                &output,
+                deadline,
+                ctx.record.scenario.build.ios_workspace.as_ref(),
+            );
+            run_finite_build(ctx, &build)?;
+            if ctx.record.scenario.build.ios_workspace.is_some() {
+                let built = ios::built_app(&ios::workspace_products(&output))
+                    .map_err(|e| build_failure(ctx, e))?;
+                let name = built.file_name().expect("app has a name").to_owned();
+                std::fs::rename(&built, output.join(name)).map_err(|e| {
+                    build_failure(
+                        ctx,
+                        format!("cannot move the built app into the output: {e}"),
+                    )
+                })?;
+            }
             let app = ios::built_app(&output).map_err(|e| build_failure(ctx, e))?;
             let artifact = ios::verify_app(
                 ctx.runner,
@@ -2130,6 +2310,7 @@ pub(crate) fn build_and_ready(ctx: &mut Ctx) -> Result<(), Failure> {
     let build_log = RunRecord::run_dir(&ctx.runs_root, &ctx.record.run_id)
         .join("logs")
         .join("build.log");
+    ensure_running(ctx.runner, "build")?;
     let spawned = ctx.runner.spawn_group(&spec, &build_log).map_err(|e| {
         Failure::new(
             "build",
@@ -2171,6 +2352,7 @@ pub(crate) fn wait_ready(ctx: &mut Ctx) -> Result<(), Failure> {
     let metro_resource = ctx.record.resources.metro.clone().expect("metro spawned");
     let identity = metro_resource.identity.clone().expect("identity captured");
     loop {
+        ensure_running(ctx.runner, "build")?;
         if probe_pid_identity(ctx.runner, &identity) == PidLiveness::Dead {
             return Err(Failure::new(
                 "build",
@@ -2187,6 +2369,7 @@ pub(crate) fn wait_ready(ctx: &mut Ctx) -> Result<(), Failure> {
             .with_evidence(vec![super::log_tail(&metro_resource.log, 25)]));
         }
         if ready_probes_pass(ctx, &metro_resource) {
+            ensure_running(ctx.runner, "build")?;
             return Ok(());
         }
         if ctx.runner.monotonic_ms() >= deadline {
@@ -2343,6 +2526,7 @@ fn dry_run_receipt(
     // real prepare would take, made visible without allocating anything.
     match fingerprint::compute(runner, &cand.repo_root, &cand.project_root, platform) {
         Ok(fp) => {
+            let fp = fp.with_ios_workspace(scenario.build.ios_workspace.as_ref());
             let state = buildplan::load_state(&cand.repo_root, platform, &cand.app_id);
             let artifact_status = match &state {
                 StateStatus::Loaded(s) if s.fingerprint == fp.value => {
@@ -2356,14 +2540,17 @@ fn dry_run_receipt(
                 worktree_root: &cand.repo_root,
                 candidate_sha: &cand.git_sha,
                 fingerprint: &fp.value,
+                fingerprint_parts: &fp.parts,
                 fingerprint_complete: fp.complete,
                 incompleteness: &fp.incompleteness,
+                expo_unavailable: fp.expo_unavailable.as_deref(),
                 scheme: scenario.candidate.dev_client_scheme.as_deref(),
                 force_clean: scenario.build.strategy == BuildStrategy::Clean,
                 native_dir_exists: cand.project_root.join(platform).is_dir(),
                 native_dir_in_candidate: fp.native_dir_in_candidate,
             };
             receipt.build = Some(buildplan::decide(&inputs, &state, artifact_status));
+            receipt.outcomes.extend(fingerprint_notes(&fp));
         }
         Err(failure) => {
             receipt.outcomes.insert(
@@ -2405,12 +2592,15 @@ fn dry_run_receipt(
                 &cand.project_root,
                 Path::new("<run_dir>/ios-build"),
                 deadlines.build_seconds,
+                scenario.build.ios_workspace.as_ref(),
             ));
             planned.push(ios::install_app_spec(
                 "<udid>",
                 Path::new("<run_dir>/ios-build/<verified-app>.app"),
             ));
             planned.push(metro::start_spec(&cand.project_root, port));
+            planned.push(metro::manifest_spec(port, "ios"));
+            planned.extend(ios::devmenu_defaults_specs("<udid>", &cand.app_id));
             planned.push(ios::launch_spec("<udid>", &cand.app_id, port));
             planned.push(ios::app_container_spec("<udid>", &cand.app_id));
             planned.push(ios::launchctl_list_spec("<udid>"));
@@ -2480,6 +2670,25 @@ fn dry_run_receipt(
             ));
         }
     }
+    if receipt
+        .build
+        .as_ref()
+        .is_some_and(|plan| plan.decision == BuildDecision::Clean && plan.regenerate_native_dir)
+    {
+        let compile = planned
+            .iter()
+            .position(|spec| {
+                matches!(
+                    spec.label.as_str(),
+                    "expo-run-ios" | "xcodebuild-ios" | "expo-run-android"
+                )
+            })
+            .expect("every platform build plan contains a compilation command");
+        planned.insert(
+            compile,
+            native_prebuild_spec(&cand.project_root, platform, deadlines.build_seconds),
+        );
+    }
     // Reuse installs the cached binary instead of compiling.
     if reuse {
         let artifact_path = receipt
@@ -2498,10 +2707,13 @@ fn dry_run_receipt(
             !matches!(
                 c.label.as_str(),
                 "expo-run-ios"
+                    | "xcodebuild-ios"
                     | "expo-run-android"
                     | "simctl-install"
                     | "simctl-launch"
                     | "expo-start"
+                    | "metro-manifest"
+                    | "simctl-devmenu-defaults"
                     | "simctl-app-container"
                     | "simctl-launchctl"
             )
@@ -2510,6 +2722,8 @@ fn dry_run_receipt(
             Platform::Ios => {
                 planned.push(ios::install_app_spec("<udid>", &artifact_path));
                 planned.push(metro::start_spec(&cand.project_root, port));
+                planned.push(metro::manifest_spec(port, "ios"));
+                planned.extend(ios::devmenu_defaults_specs("<udid>", &cand.app_id));
                 planned.push(ios::launch_spec("<udid>", &cand.app_id, port));
                 planned.push(ios::app_container_spec("<udid>", &cand.app_id));
                 planned.push(ios::launchctl_list_spec("<udid>"));
@@ -2535,6 +2749,7 @@ fn dry_run_receipt(
                 ));
                 planned.push(android::adb_reverse_spec(adb, server_port, &serial, port));
                 planned.push(metro::start_spec(&cand.project_root, port));
+                planned.push(metro::manifest_spec(port, "android"));
                 planned.push(android::am_start_deeplink_spec(
                     adb,
                     server_port,
@@ -2557,9 +2772,156 @@ fn dry_run_receipt(
         })
         .collect();
     receipt.commands_executed = runner.commands_executed();
-    receipt
-        .timings_ms
-        .insert("total".to_string(), now.saturating_sub(started_ms));
+    receipt.timings_ms.insert(
+        "total".to_string(),
+        runner.now_epoch_ms().saturating_sub(started_ms),
+    );
     receipt.next_action = "re-run without --dry-run to allocate resources".to_string();
     receipt
+}
+
+// Mirrors the CDP leg's admission envelope (qaren-core qa/admission.ts LOAD_ENVELOPE).
+const LOAD_ENVELOPE: f64 = 10.0;
+
+// Only a launch that timed out under host load is retried, once.
+fn retry_launch(launched: &crate::exec::CmdOutput, load: Option<f64>) -> bool {
+    launched.timed_out && load.is_some_and(|load| load > LOAD_ENVELOPE)
+}
+
+// A launch timeout is the CDP leg's environmental refusal; any other launch error stays a build failure.
+fn launch_failure(
+    what: &str,
+    launched: &crate::exec::CmdOutput,
+    load: Option<f64>,
+    retried: bool,
+    run_id: &str,
+) -> Failure {
+    if !launched.timed_out {
+        return Failure::new(
+            "build",
+            FailureCode::BuildFailed,
+            format!("{what} failed: {}", launched.summary()),
+            format!("run qaren cleanup {run_id} --json, then retry prepare"),
+        );
+    }
+    let loaded = load.is_some_and(|load| load > LOAD_ENVELOPE);
+    let measured = match load {
+        Some(load) => format!(
+            "host 1-minute load {load:.1} is {} the envelope {LOAD_ENVELOPE}",
+            if loaded { "above" } else { "within" }
+        ),
+        None => "host load unavailable".to_string(),
+    };
+    let environment = match (loaded, retried) {
+        (true, true) => "; an environment refusal after one retry",
+        (true, false) => "; an environment refusal",
+        _ => "",
+    };
+    Failure::new(
+        "build",
+        FailureCode::CoreRefused,
+        format!(
+            "{what} timed out: {} ({measured}{environment})",
+            launched.summary()
+        ),
+        format!("run qaren cleanup {run_id} --json, then retry when the host is less loaded"),
+    )
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::*;
+    use crate::exec::CmdOutput;
+
+    fn timed_out() -> CmdOutput {
+        CmdOutput {
+            timed_out: true,
+            duration_ms: 60_058,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn only_a_launch_timeout_under_load_is_retried() {
+        assert!(retry_launch(&timed_out(), Some(65.0)));
+        assert!(!retry_launch(&timed_out(), Some(3.0)));
+        assert!(!retry_launch(&timed_out(), None));
+        assert!(!retry_launch(
+            &CmdOutput::failed(1, "no such app"),
+            Some(65.0)
+        ));
+    }
+
+    #[test]
+    fn a_launch_timeout_is_an_environment_refusal_with_the_load_envelope() {
+        let loaded = launch_failure(
+            "dev client launch",
+            &timed_out(),
+            Some(256.0),
+            true,
+            "check-1",
+        );
+        assert_eq!(loaded.code, FailureCode::CoreRefused);
+        assert!(loaded.code.is_refusal());
+        let detail = loaded.detail.to_string();
+        assert!(
+            detail.contains("host 1-minute load 256.0 is above the envelope 10"),
+            "{detail}"
+        );
+        assert!(
+            detail.contains("an environment refusal after one retry"),
+            "{detail}"
+        );
+        let calm = launch_failure(
+            "dev client launch",
+            &timed_out(),
+            Some(2.0),
+            false,
+            "check-1",
+        );
+        assert_eq!(calm.code, FailureCode::CoreRefused);
+        let detail = calm.detail.to_string();
+        assert!(detail.contains("within the envelope 10"), "{detail}");
+        assert!(!detail.contains("environment refusal"), "{detail}");
+    }
+
+    #[test]
+    fn an_unanswered_manifest_is_refused_like_a_launch() {
+        let slow = launch_failure("dev client manifest", &timed_out(), Some(40.0), false, "c");
+        assert_eq!(slow.code, FailureCode::CoreRefused);
+        let detail = slow.detail.to_string();
+        assert!(
+            detail.starts_with("dev client manifest timed out"),
+            "{detail}"
+        );
+        assert!(detail.contains("an environment refusal"), "{detail}");
+        let broken = launch_failure(
+            "dev client manifest",
+            &CmdOutput::failed(22, "HTTP 500"),
+            None,
+            false,
+            "c",
+        );
+        assert_eq!(broken.code, FailureCode::BuildFailed);
+        assert!(broken
+            .detail
+            .to_string()
+            .starts_with("dev client manifest failed"));
+    }
+
+    #[test]
+    fn a_real_launch_error_stays_a_build_failure() {
+        let failure = launch_failure(
+            "dev client launch",
+            &CmdOutput::failed(1, "no such app"),
+            Some(65.0),
+            false,
+            "check-1",
+        );
+        assert_eq!(failure.code, FailureCode::BuildFailed);
+        assert!(failure
+            .detail
+            .to_string()
+            .contains("dev client launch failed"));
+    }
 }

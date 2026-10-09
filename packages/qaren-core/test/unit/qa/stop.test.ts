@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createStop, watchParent } from '../../../dist/qa/stop.js';
+import { Writable } from 'node:stream';
+import { createStop, watchOwnerPipe, watchParent } from '../../../dist/qa/stop.js';
 
 test('a stop begins once and then refuses new device work', async () => {
   const stop = createStop();
@@ -28,6 +29,7 @@ test('teardown waits for the operation already in flight, but not forever', asyn
   const stop = createStop();
   let finish!: () => void;
   const pending = stop.track(() => new Promise<void>((resolve) => (finish = resolve)));
+  const rejected = assert.rejects(pending, /RUN_CANCELLED/);
   stop.begin();
   let drained = false;
   const waiting = stop.drained(1000).then(() => {
@@ -36,18 +38,20 @@ test('teardown waits for the operation already in flight, but not forever', asyn
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(drained, false, 'the in-flight capture is still running');
   finish();
-  await pending;
+  await rejected;
   await waiting;
   assert.equal(drained, true);
 
   const overlapping = createStop();
   let slowDone = false;
-  void overlapping.track(
+  const slow = overlapping.track(
     () => new Promise<void>((resolve) => setTimeout(() => ((slowDone = true), resolve()), 30)),
   );
+  const slowRejected = assert.rejects(slow, /RUN_CANCELLED/);
   await overlapping.track(async () => undefined);
   overlapping.begin();
   await overlapping.drained(1000);
+  await slowRejected;
   assert.equal(slowDone, true, 'every outstanding operation is drained, not just the latest');
 
   const stuck = createStop();
@@ -104,4 +108,17 @@ test('a stopped watch never reports', async () => {
   parent = 1;
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(gone, 0);
+});
+
+test('a closed owner pipe stops the walk instead of crashing the core before teardown', async () => {
+  const broken = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+    },
+  });
+  const reasons: string[] = [];
+  watchOwnerPipe(broken, (why) => reasons.push(why));
+  broken.write('{"type":"result"}\n');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(reasons, ['EPIPE']);
 });

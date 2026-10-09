@@ -1,9 +1,11 @@
 use crate::exec::Runner;
+use crate::redact::OutputText;
 use crate::runrecord::{probe_pid_identity, PidIdentity, PidLiveness};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-pub const CACHE_SCHEMA: &str = "qaren-native-cache/1";
+pub const CACHE_SCHEMA: &str = "qaren-native-cache/2";
 pub const PREWARM_SCHEMA: &str = "qaren-deps-prewarm/1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +36,8 @@ pub struct NativeCacheState {
     pub generated_native_dirs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<CachedArtifact>,
+    #[serde(default)]
+    pub fingerprint_parts: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,10 +102,13 @@ pub fn save_json<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
         std::process::id(),
         NONCE.fetch_add(1, Ordering::Relaxed)
     ));
-    let body = serde_json::to_vec_pretty(value)
+    let body = serde_json::to_string_pretty(value)
         .map_err(|e| std::io::Error::other(format!("serialize: {e}")))?;
-    std::fs::write(&tmp, body)?;
-    std::fs::rename(&tmp, path)
+    let saved = std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, path));
+    if saved.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    saved
 }
 
 pub fn load_prewarm(worktree_root: &Path) -> Option<DepsPrewarm> {
@@ -132,9 +139,9 @@ impl BuildDecision {
 pub struct BuildPlan {
     pub decision: BuildDecision,
     pub fingerprint: String,
-    pub reason: String,
+    pub reason: OutputText,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub evidence: Vec<String>,
+    pub evidence: Vec<OutputText>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<CachedArtifact>,
     // Clean over a generated (git-ignored) native dir must regenerate it via
@@ -157,8 +164,10 @@ pub struct DecisionInputs<'a> {
     pub worktree_root: &'a Path,
     pub candidate_sha: &'a str,
     pub fingerprint: &'a str,
+    pub fingerprint_parts: &'a BTreeMap<String, String>,
     pub fingerprint_complete: bool,
     pub incompleteness: &'a [String],
+    pub expo_unavailable: Option<&'a str>,
     pub scheme: Option<&'a str>,
     pub force_clean: bool,
     pub native_dir_exists: bool,
@@ -174,8 +183,11 @@ pub fn decide(
     let clean = |reason: String, evidence: Vec<String>| BuildPlan {
         decision: BuildDecision::Clean,
         fingerprint: inputs.fingerprint.to_string(),
-        reason,
-        evidence,
+        reason: OutputText::from_output(&reason),
+        evidence: evidence
+            .iter()
+            .map(|text| OutputText::from_output(text))
+            .collect(),
         artifact: None,
         regenerate_native_dir: regenerate,
     };
@@ -221,6 +233,38 @@ pub fn decide(
             )],
         );
     }
+    // Parts this run could not compute, or the recorded build did not record, are unknown, not changed.
+    let changed: Vec<&str> = state
+        .fingerprint_parts
+        .keys()
+        .chain(inputs.fingerprint_parts.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .filter(|part| {
+            state.fingerprint_parts.get(*part) != inputs.fingerprint_parts.get(*part)
+                && state.fingerprint_parts.contains_key(*part)
+                && (inputs.expo_unavailable.is_none()
+                    || inputs.fingerprint_parts.contains_key(*part))
+        })
+        .map(String::as_str)
+        .collect();
+    let unrecorded: Vec<&str> = inputs
+        .fingerprint_parts
+        .keys()
+        .filter(|part| !state.fingerprint_parts.contains_key(*part))
+        .map(String::as_str)
+        .collect();
+    let uncomparable = match inputs.expo_unavailable {
+        _ if !changed.is_empty() => None,
+        Some(cause) => Some(format!(
+            "Expo fingerprint unavailable: {cause}; the native fingerprint cannot be compared with the recorded build"
+        )),
+        None if !unrecorded.is_empty() => Some(format!(
+            "the recorded build has no value for {}; the native fingerprint cannot be compared with it",
+            unrecorded.join(", ")
+        )),
+        None => None,
+    };
     // A generated native dir that qaren's own builds did not create carries
     // caches of unprovable origin; only a clean regeneration is trustworthy.
     let platform_dir_proven = !inputs.native_dir_exists
@@ -241,11 +285,36 @@ pub fn decide(
                 evidence,
             );
         }
+        if regenerate && state.fingerprint != inputs.fingerprint {
+            return clean(
+                format!(
+                    "{}; regenerating the generated native dir via expo prebuild --clean, which deletes it with its installed native dependencies and build outputs",
+                    uncomparable.as_deref().unwrap_or("native inputs changed")
+                ),
+                evidence,
+            );
+        }
+        if regenerate && !inputs.fingerprint_complete {
+            return clean(
+                format!(
+                    "native fingerprint matches, but {}; regenerating the generated native dir via expo prebuild --clean instead of reuse, which deletes it with its installed native dependencies and build outputs",
+                    inputs
+                        .incompleteness
+                        .first()
+                        .map(String::as_str)
+                        .unwrap_or("its input set is unprovably complete")
+                ),
+                evidence,
+            );
+        }
         BuildPlan {
             decision: BuildDecision::Incremental,
             fingerprint: inputs.fingerprint.to_string(),
-            reason,
-            evidence,
+            reason: OutputText::from_output(&reason),
+            evidence: evidence
+                .iter()
+                .map(|text| OutputText::from_output(text))
+                .collect(),
             artifact: None,
             regenerate_native_dir: false,
         }
@@ -273,8 +342,14 @@ pub fn decide(
             let mut evidence = vec![match_evidence, sha_evidence];
             evidence.extend(inputs.incompleteness.iter().cloned());
             return incremental(
-                "native fingerprint matches but its input set is unprovably complete; refusing cached reuse"
-                    .to_string(),
+                format!(
+                    "native fingerprint matches, but {}; refusing cached reuse",
+                    inputs
+                        .incompleteness
+                        .first()
+                        .map(String::as_str)
+                        .unwrap_or("its input set is unprovably complete")
+                ),
                 evidence,
             );
         }
@@ -298,10 +373,9 @@ pub fn decide(
                 Some(scheme) => BuildPlan {
                     decision: BuildDecision::Reuse,
                     fingerprint: inputs.fingerprint.to_string(),
-                    reason:
-                        "native inputs are unchanged and the cached dev client is content-verified; reusing it with fresh candidate JS via Metro"
-                            .to_string(),
-                    evidence: vec![
+                    reason: crate::redact::OutputText::from_output("native inputs are unchanged and the cached dev client is content-verified; reusing it with fresh candidate JS via Metro"
+                            ),
+                    evidence: [
                         match_evidence,
                         sha_evidence,
                         format!(
@@ -310,7 +384,7 @@ pub fn decide(
                             artifact.sha256
                         ),
                         format!("dev client launch scheme {scheme:?} is configured"),
-                    ],
+                    ].iter().map(|text| crate::redact::OutputText::from_output(text)).collect(),
                     artifact: Some(artifact.clone()),
                     regenerate_native_dir: false,
                 },
@@ -345,17 +419,32 @@ pub fn decide(
             ),
         }
     } else {
-        incremental(
-            "native inputs changed since the recorded build; caches keyed to this exact worktree/app remain valid for an incremental compile"
-                .to_string(),
-            vec![
-                format!(
-                    "recorded fingerprint {}, current {}",
-                    state.fingerprint, inputs.fingerprint
-                ),
-                sha_evidence,
-            ],
-        )
+        let mut evidence = vec![
+            format!(
+                "recorded fingerprint {}, current {}",
+                state.fingerprint, inputs.fingerprint
+            ),
+            sha_evidence,
+        ];
+        if !changed.is_empty() {
+            evidence.push(format!("native inputs changed: {}", changed.join(", ")));
+        }
+        if !unrecorded.is_empty() {
+            evidence.push(format!(
+                "recorded build has no value for: {}",
+                unrecorded.join(", ")
+            ));
+        }
+        if let Some(cause) = inputs.expo_unavailable {
+            evidence.push(format!("Expo fingerprint unavailable: {cause}"));
+        }
+        let reason = match &uncomparable {
+            Some(uncomparable) => format!(
+                "{uncomparable}; caches keyed to this exact worktree/app remain valid for an incremental compile"
+            ),
+            None => "native inputs changed since the recorded build; caches keyed to this exact worktree/app remain valid for an incremental compile".to_string(),
+        };
+        incremental(reason, evidence)
     }
 }
 
@@ -424,7 +513,9 @@ fn walk_artifact(
     Ok(())
 }
 
-pub fn copy_artifact(src: &Path, dest: &Path) -> Result<(), String> {
+pub fn copy_artifact(runner: &dyn Runner, src: &Path, dest: &Path) -> Result<(), String> {
+    use std::io::{Read, Write};
+    crate::cancel::ensure_running(runner, "native_cache").map_err(|e| e.detail.to_string())?;
     let meta = std::fs::symlink_metadata(src)
         .map_err(|e| format!("cannot stat {}: {e}", src.display()))?;
     if let Some(parent) = dest.parent() {
@@ -439,8 +530,23 @@ pub fn copy_artifact(src: &Path, dest: &Path) -> Result<(), String> {
         return Ok(());
     }
     if meta.is_file() {
-        std::fs::copy(src, dest)
-            .map_err(|e| format!("cannot copy {} to {}: {e}", src.display(), dest.display()))?;
+        let copied = (|| -> std::io::Result<()> {
+            let mut source = std::fs::File::open(src)?;
+            let mut target = std::fs::File::create(dest)?;
+            let mut buffer = [0u8; 64 * 1024];
+            loop {
+                if let Some(reason) = runner.cancellation() {
+                    return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, reason));
+                }
+                let bytes = source.read(&mut buffer)?;
+                if bytes == 0 {
+                    break;
+                }
+                target.write_all(&buffer[..bytes])?;
+            }
+            target.set_permissions(meta.permissions())
+        })();
+        copied.map_err(|e| format!("cannot copy {} to {}: {e}", src.display(), dest.display()))?;
         return Ok(());
     }
     if meta.is_dir() {
@@ -450,7 +556,7 @@ pub fn copy_artifact(src: &Path, dest: &Path) -> Result<(), String> {
             std::fs::read_dir(src).map_err(|e| format!("cannot list {}: {e}", src.display()))?;
         for entry in listed {
             let entry = entry.map_err(|e| format!("cannot list {}: {e}", src.display()))?;
-            copy_artifact(&entry.path(), &dest.join(entry.file_name()))?;
+            copy_artifact(runner, &entry.path(), &dest.join(entry.file_name()))?;
         }
         return Ok(());
     }

@@ -67,7 +67,7 @@ exit "\${FIXTURE_EXIT:-0}"
       llmTurns: 0,
       escapes: 0,
       recoveries: 0,
-      jev: { calls: 1 },
+      jev: { calls: 0 },
     }),
   );
   const receipt = {
@@ -98,7 +98,6 @@ exit "\${FIXTURE_EXIT:-0}"
         HOME: root,
         QAREN_TEST_APP: join(root, 'app'),
         QAREN_PLAN_FILE: join(root, 'literal.md'),
-        TYPESAFE_API_KEY: 'hermetic-unused-key',
         FIXTURE_ROOT: root,
         ...extra,
       },
@@ -188,6 +187,35 @@ test('gate cannot skip assertions when the assertion entry point is symlinked', 
       rmSync(join(f.root, 'run.json'));
       assert.equal(f.run({ NODE_OPTIONS }).status, 1);
     }
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('gate delegates literal plans without a key and preserves the phrase walk requirement', () => {
+  const f = fixture();
+  try {
+    const literal = f.run();
+    assert.equal(literal.status, 0, literal.stdout + literal.stderr);
+    assert.match(literal.stdout, /jev.calls=0/);
+    const phrase = join(f.root, 'phrases.md');
+    writeFileSync(phrase, '1. Tap the Tasks tab\n');
+    const refused = f.run({ QAREN_PLAN_FILE: phrase });
+    assert.equal(refused.status, 1);
+    assert.equal(readFileSync(join(f.root, 'args'), 'utf8').split('\n')[0], 'check');
+    writeFileSync(
+      join(f.root, 'ledger.json'),
+      JSON.stringify({
+        verdict: 'PASS',
+        llmTurns: 0,
+        escapes: 0,
+        recoveries: 0,
+        jev: { calls: 2, callDetails: [{ scope: 'walk', outcome: 'ok' }] },
+        steps: [{ resolvedBy: 'jev' }],
+      }),
+    );
+    const accepted = f.run({ QAREN_PLAN_FILE: phrase });
+    assert.equal(accepted.status, 0, accepted.stdout + accepted.stderr);
   } finally {
     rmSync(f.root, { recursive: true, force: true });
   }

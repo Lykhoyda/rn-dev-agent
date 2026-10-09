@@ -1,3 +1,4 @@
+import { interruptible } from '../domain/cancellation.js';
 import WebSocket from 'ws';
 import type { CDPMessage, PendingCall } from '../types.js';
 
@@ -10,6 +11,8 @@ export class CDPProtocolError extends Error {
     this.code = code;
   }
 }
+
+export class CDPRequestTimeoutError extends Error {}
 
 export function sendWithTimeout(
   ws: WebSocket | null,
@@ -24,30 +27,47 @@ export function sendWithTimeout(
     return Promise.reject(new Error('WebSocket not connected'));
   }
 
-  return new Promise((resolve, reject) => {
-    const id = nextId();
-    const timer = setTimeout(() => {
-      pending.delete(id);
-      reject(
-        new Error(
-          `CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`,
-        ),
-      );
-    }, ms);
+  return interruptible(
+    (signal) =>
+      new Promise((resolve, reject) => {
+        const id = nextId();
+        const timer = setTimeout(() => {
+          signal?.removeEventListener('abort', abort);
+          pending.delete(id);
+          reject(
+            new CDPRequestTimeoutError(
+              `CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`,
+            ),
+          );
+        }, ms);
 
-    pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
-    try {
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        throw new Error('WebSocket closed between check and send');
-      }
-      ws.send(JSON.stringify({ id, method, params }));
-      onDispatched?.();
-    } catch (err) {
-      clearTimeout(timer);
-      pending.delete(id);
-      reject(err instanceof Error ? err : new Error(`ws.send failed: ${err}`));
-    }
-  });
+        const abort = () => {
+          clearTimeout(timer);
+          pending.delete(id);
+          reject(signal?.reason);
+        };
+        signal?.addEventListener('abort', abort, { once: true });
+        const settled =
+          <T>(settle: (value: T) => void) =>
+          (value: T) => {
+            signal?.removeEventListener('abort', abort);
+            settle(value);
+          };
+        pending.set(id, { resolve: settled(resolve), reject: settled(reject), timer });
+        try {
+          if (!ws || ws.readyState !== WebSocket.OPEN) {
+            throw new Error('WebSocket closed between check and send');
+          }
+          ws.send(JSON.stringify({ id, method, params }));
+          onDispatched?.();
+        } catch (err) {
+          signal?.removeEventListener('abort', abort);
+          clearTimeout(timer);
+          pending.delete(id);
+          reject(err instanceof Error ? err : new Error(`ws.send failed: ${err}`));
+        }
+      }),
+  );
 }
 
 export function rejectAllPending(pending: Map<number, PendingCall>, reason: Error): void {

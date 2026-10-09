@@ -14,7 +14,10 @@ import { WebSocketServer } from 'ws';
  *   close: () => Promise<void>,
  * }>}
  */
-export async function startFakeCDP(preferredPort = 0) {
+// A response factory may return a Promise (a delayed reply) or NO_REPLY (the request is never answered).
+export const NO_REPLY = Symbol('no-reply');
+
+export async function startFakeCDP(preferredPort = 0, options = {}) {
   /** @type {Map<string, (params: unknown) => unknown>} */
   const responses = new Map();
 
@@ -30,15 +33,18 @@ export async function startFakeCDP(preferredPort = 0) {
 
     if (req.url === '/json/list') {
       const port = /** @type {import('net').AddressInfo} */ (server.address()).port;
-      const targets = [
-        {
-          id: 'page1',
-          title: 'React Native (Hermes)',
-          vm: 'Hermes',
-          webSocketDebuggerUrl: `ws://127.0.0.1:${port}/debugger/page1`,
-          description: 'com.testapp',
-        },
-      ];
+      const webSocketDebuggerUrl = `ws://127.0.0.1:${port}/debugger/page1`;
+      const targets = options.targets
+        ? options.targets.map((target) => ({ ...target, webSocketDebuggerUrl }))
+        : [
+            {
+              id: 'page1',
+              title: 'React Native (Hermes)',
+              vm: 'Hermes',
+              webSocketDebuggerUrl,
+              description: 'com.testapp',
+            },
+          ];
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(targets));
       return;
@@ -76,9 +82,11 @@ export async function startFakeCDP(preferredPort = 0) {
         result = {};
       }
 
-      if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ id, result }));
-      }
+      Promise.resolve(result).then((value) => {
+        if (value !== NO_REPLY && ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ id, result: value }));
+        }
+      });
     });
   });
 

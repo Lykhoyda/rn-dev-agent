@@ -12,6 +12,7 @@ import {
   readRequest,
   startupRow,
   verdictAgrees,
+  WireError,
 } from '../../../dist/qa/wire.js';
 import type { WireRequest } from '../../../dist/qa/wire.js';
 import { buildLedger } from '../../../dist/qa/ledger.js';
@@ -20,9 +21,11 @@ import type { LedgerRow } from '../../../dist/qa/ledger.js';
 const request: WireRequest = {
   runId: 'check-1',
   t0: 1_770_000_000_000,
+  walkBudgetMs: 300_000,
   plan: '1. Tap "A"\n',
   platform: 'ios',
   appId: 'com.example.app',
+  appRoot: '/tmp/qaren/app',
   runDir: '/tmp/qaren/runs/check-1',
   lease: 'check-1:0123456789abcdef0123456789abcdef',
   target: {
@@ -50,19 +53,21 @@ test('envelopes round-trip with increasing seq after the request', async () => {
   const lines: string[] = [];
   const writer = createWriter((line) => lines.push(line), 'check-1');
   writer.row(startupRow());
+  writer.admitted();
   writer.row(row(1));
   const exit = writer.result(
     buildLedger([{ key: 'plan', outcome: 'pass', source: 'discovered' }], [row(1)]),
   );
   assert.equal(exit, 0);
-  assert.equal(writer.seq, 4);
+  assert.equal(writer.seq, 5);
   const parsed = lines.map((l) => parseEnvelope(l.trim()));
   assert.deepEqual(
     parsed.map((e) => [e?.v, e?.runId, e?.seq, e?.type]),
     [
       [WIRE_VERSION, 'check-1', 2, 'row'],
-      [WIRE_VERSION, 'check-1', 3, 'row'],
-      [WIRE_VERSION, 'check-1', 4, 'result'],
+      [WIRE_VERSION, 'check-1', 3, 'admitted'],
+      [WIRE_VERSION, 'check-1', 4, 'row'],
+      [WIRE_VERSION, 'check-1', 5, 'result'],
     ],
   );
   assert.ok(
@@ -152,6 +157,20 @@ test('malformed envelopes and requests are rejected', () => {
       ),
     /missing required fields/,
   );
+  for (const appRoot of [undefined, 'relative/app'])
+    assert.throws(
+      () =>
+        parseRequest(
+          JSON.stringify({
+            v: 1,
+            runId: 'x',
+            seq: 1,
+            type: 'request',
+            payload: { ...request, appRoot },
+          }),
+        ),
+      /missing required fields/,
+    );
   assert.throws(
     () =>
       parseRequest(
@@ -216,6 +235,10 @@ test('preflight accounting round-trips and rejects malformed or walk-scoped entr
       payload: { ...request, preflightCalls: calls },
     });
   assert.deepEqual(parseRequest(encoded(preflightCalls)).preflightCalls, preflightCalls);
+  const bounded = [
+    { ...preflightCalls[0], outcome: 'deadline', diagnostic: 'retry-after-outside-window' },
+  ];
+  assert.deepEqual(parseRequest(encoded(bounded)).preflightCalls, bounded);
   for (const calls of [
     null,
     {},
@@ -224,6 +247,56 @@ test('preflight accounting round-trips and rejects malformed or walk-scoped entr
     [{ ...preflightCalls[0], scope: 'walk' }],
     [{ ...preflightCalls[0], questionIds: ['private text not an id'] }],
     [{ ...preflightCalls[0], inputTokens: -5 }],
+    [{ ...preflightCalls[0], diagnostic: 'private transport message' }],
+    [{ ...preflightCalls[0], diagnostic: 42 }],
   ])
     assert.throws(() => parseRequest(encoded(calls)), /missing required fields/);
+});
+
+test('a login block needs a marker with exactly one of id or text', () => {
+  const line = (payload: object) =>
+    JSON.stringify({
+      v: 1,
+      runId: 'check-1',
+      seq: 1,
+      type: 'request',
+      payload: { ...request, ...payload },
+    });
+  const accepted = parseRequest(
+    line({ loginBlock: 'log-in', loginMarker: { id: 'login-screen' } }),
+  );
+  assert.equal(accepted.loginBlock, 'log-in');
+  assert.deepEqual(parseRequest(line({ loginMarker: { text: 'Sign in' } })).loginMarker, {
+    text: 'Sign in',
+  });
+  for (const bad of [
+    { loginBlock: 'log-in' },
+    { loginBlock: '../x', loginMarker: { id: 'a' } },
+    { loginBlock: 'log-in', loginMarker: { id: 'a', text: 'b' } },
+    { loginBlock: 'log-in', loginMarker: { id: '' } },
+    { loginMarker: { label: 'a' } },
+  ])
+    assert.throws(() => parseRequest(line(bad)), WireError);
+});
+
+test('a spawned runner driver is announced as a resource envelope before the result only', () => {
+  const lines: string[] = [];
+  const writer = createWriter((line) => lines.push(line), 'check-1');
+  writer.runnerDriver(4242);
+  writer.result(buildLedger([], []));
+  writer.runnerDriver(4343);
+  assert.deepEqual(
+    lines.map((line) => JSON.parse(line)),
+    [
+      {
+        v: WIRE_VERSION,
+        runId: 'check-1',
+        seq: 2,
+        type: 'resource',
+        payload: { kind: 'runner_driver', pid: 4242 },
+      },
+      JSON.parse(lines[1]),
+    ],
+  );
+  assert.equal(JSON.parse(lines[1]).type, 'result');
 });

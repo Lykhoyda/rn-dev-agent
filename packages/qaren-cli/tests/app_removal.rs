@@ -147,10 +147,15 @@ fn expect_local_teardown_alive(mock: &mut MockRunner) {
         mock.expect_run("ps", CmdOutput::success("S\n"));
         mock.expect_run("lsof", CmdOutput::success(&format!("{pgid}\n")));
         mock.expect_run("ps", CmdOutput::success(&format!("{port_owner}\n")));
+        mock.expect_run("lstart=", CmdOutput::success(LSTART));
+        mock.expect_run("stat=", CmdOutput::success("S"));
         mock.expect_run("/bin/kill", CmdOutput::success(""));
+        mock.expect_run("lstart=", CmdOutput::success(LSTART));
+        mock.expect_run("stat=", CmdOutput::success("S"));
         mock.expect_run("/bin/kill", CmdOutput::success(""));
         mock.expect_run("ps", CmdOutput::failed(1, ""));
         mock.expect_run("lsof", free_port());
+        mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     }
 }
 
@@ -159,8 +164,10 @@ fn expect_teardown_dead(mock: &mut MockRunner) {
     mock.expect_run("ps", CmdOutput::failed(1, "")); // connection: server dead
     mock.expect_run("ps", CmdOutput::failed(1, "")); // server group
     mock.expect_run("lsof", free_port());
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     mock.expect_run("ps", CmdOutput::failed(1, "")); // tunnel group
     mock.expect_run("lsof", free_port());
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     mock.expect_run("~/bin/android-farm status", CmdOutput::success(FARM_FREE));
 }
 
@@ -350,11 +357,11 @@ fn repeat_after_proven_removal_never_readdresses_the_device() {
     let mut record = owned_record(&repo);
     record.resources.app_install.as_mut().unwrap().removal = Some(AppRemoval {
         at: "2026-09-05T10:00:00Z".to_string(),
-        outcome: "removed".to_string(),
+        outcome: qaren::redact::OutputText::from_output("removed"),
         installed_sha256: APK_SHA.to_string(),
-        uninstall: "exit=0 Success".to_string(),
-        pm_path_after: "exit=1".to_string(),
-        package_list_after: "exit=0".to_string(),
+        uninstall: qaren::redact::OutputText::from_output("exit=0 Success"),
+        pm_path_after: qaren::redact::OutputText::from_output("exit=1"),
+        package_list_after: qaren::redact::OutputText::from_output("exit=0"),
     });
     record.save(&repo).unwrap();
 
@@ -383,11 +390,17 @@ fn repeat_after_failed_removal_refuses_the_now_unowned_device() {
     let mut record = owned_record(&repo);
     record.resources.app_install.as_mut().unwrap().removal = Some(AppRemoval {
         at: "2026-09-05T10:00:00Z".to_string(),
-        outcome: "unresolved: package still present after uninstall".to_string(),
+        outcome: qaren::redact::OutputText::from_output(
+            "unresolved: package still present after uninstall",
+        ),
         installed_sha256: APK_SHA.to_string(),
-        uninstall: "exit=1 Failure".to_string(),
-        pm_path_after: format!("exit=0 package:{APK_PATH}"),
-        package_list_after: format!("exit=0 package:{APP}"),
+        uninstall: qaren::redact::OutputText::from_output("exit=1 Failure"),
+        pm_path_after: qaren::redact::OutputText::from_output(&format!(
+            "exit=0 package:{APK_PATH}"
+        )),
+        package_list_after: qaren::redact::OutputText::from_output(&format!(
+            "exit=0 package:{APP}"
+        )),
     });
     record.save(&repo).unwrap();
 
@@ -418,11 +431,19 @@ fn interrupted_unresolved_removal_is_preserved_even_while_resources_are_owned() 
     let mut record = owned_record(&repo);
     let prior = AppRemoval {
         at: "2026-09-05T10:00:00Z".to_string(),
-        outcome: "unresolved: absence could not be proven: device offline".to_string(),
+        outcome: qaren::redact::OutputText::from_output(
+            "unresolved: absence could not be proven: device offline",
+        ),
         installed_sha256: APK_SHA.to_string(),
-        uninstall: "exit=none timed_out=true stdout=\"\" stderr=\"\"".to_string(),
-        pm_path_after: "exit=1 stdout=\"\" stderr=\"device offline\"".to_string(),
-        package_list_after: "exit=1 stdout=\"\" stderr=\"device offline\"".to_string(),
+        uninstall: qaren::redact::OutputText::from_output(
+            "exit=none timed_out=true stdout=\"\" stderr=\"\"",
+        ),
+        pm_path_after: qaren::redact::OutputText::from_output(
+            "exit=1 stdout=\"\" stderr=\"device offline\"",
+        ),
+        package_list_after: qaren::redact::OutputText::from_output(
+            "exit=1 stdout=\"\" stderr=\"device offline\"",
+        ),
     };
     record.resources.app_install.as_mut().unwrap().removal = Some(prior.clone());
     record.save(&repo).unwrap();
@@ -441,12 +462,15 @@ fn interrupted_unresolved_removal_is_preserved_even_while_resources_are_owned() 
         serde_json::to_value(&prior).unwrap()
     );
     for (key, value) in [
-        ("app_removal_at", &prior.at),
-        ("app_removal_outcome", &prior.outcome),
-        ("app_installed_sha256", &prior.installed_sha256),
-        ("app_removal_uninstall", &prior.uninstall),
-        ("app_removal_pm_path", &prior.pm_path_after),
-        ("app_removal_package_list", &prior.package_list_after),
+        ("app_removal_at", prior.at.as_str()),
+        ("app_removal_outcome", prior.outcome.as_str()),
+        ("app_installed_sha256", prior.installed_sha256.as_str()),
+        ("app_removal_uninstall", prior.uninstall.as_str()),
+        ("app_removal_pm_path", prior.pm_path_after.as_str()),
+        (
+            "app_removal_package_list",
+            prior.package_list_after.as_str(),
+        ),
     ] {
         assert_eq!(receipt.outcomes.get(key).unwrap(), value);
     }
@@ -685,10 +709,15 @@ fn foreign_lease_refuses_removal_with_no_device_command() {
         mock.expect_run("ps", CmdOutput::success("S\n"));
         mock.expect_run("lsof", CmdOutput::success(&format!("{pgid}\n")));
         mock.expect_run("ps", CmdOutput::success(&format!("{port_owner}\n")));
+        mock.expect_run("lstart=", CmdOutput::success(LSTART));
+        mock.expect_run("stat=", CmdOutput::success("S"));
         mock.expect_run("/bin/kill", CmdOutput::success(""));
+        mock.expect_run("lstart=", CmdOutput::success(LSTART));
+        mock.expect_run("stat=", CmdOutput::success("S"));
         mock.expect_run("/bin/kill", CmdOutput::success(""));
         mock.expect_run("ps", CmdOutput::failed(1, ""));
         mock.expect_run("lsof", free_port());
+        mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     }
     mock.expect_run(
         "~/bin/android-farm status",
@@ -739,8 +768,8 @@ fn foreign_adb_server_identity_refuses_removal() {
     mock.expect_run("~/bin/android-farm status", CmdOutput::success(FARM_OURS));
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n"))); // tunnel ok
     mock.expect_run("ps", CmdOutput::success("S\n"));
-    mock.expect_run("ps", CmdOutput::success(&format!("{FOREIGN_LSTART}\n"))); // server pid reused
-                                                                               // teardown: connection sees the foreign server -> absent; server group foreign -> absent
+    mock.expect_run("ps", CmdOutput::success(&format!("{FOREIGN_LSTART}\n")));
+    // Teardown leaves the foreign server untouched and unresolved.
     mock.expect_run("ps", CmdOutput::success(&format!("{FOREIGN_LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success(&format!("{FOREIGN_LSTART}\n")));
     mock.expect_run("lsof", free_port());
@@ -749,10 +778,15 @@ fn foreign_adb_server_identity_refuses_removal() {
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("7000\n"));
     mock.expect_run("ps", CmdOutput::success("7000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::failed(1, ""));
     mock.expect_run("lsof", free_port());
+    mock.expect_run("ps -A", CmdOutput::success("1 1 S\n"));
     mock.expect_run("~/bin/android-farm status", CmdOutput::success(FARM_OURS));
     mock.expect_run(
         "~/bin/android-farm stop 1",
@@ -768,6 +802,12 @@ fn foreign_adb_server_identity_refuses_removal() {
         !mock.calls.iter().any(|c| c.label == "adb-get-state") && !touches_package(&mock.calls),
         "without the run's own server there is no owned path to the device"
     );
+    assert!(receipt.cleanup["adb_server"].starts_with("unresolved"));
+    assert_eq!(receipt.cleanup["tunnel"], "removed");
+    assert!(!mock
+        .calls
+        .iter()
+        .any(|c| c.label == "kill-group" && c.args.last().is_some_and(|arg| arg == "-7100")));
     assert_eq!(receipt.result, ReceiptResult::Refused);
     assert_eq!(mock.remaining(), 0);
 }
@@ -1269,4 +1309,53 @@ fn removal_evidence_redacts_dotenv_output_before_saving_the_record() {
     assert!(record.contains("diagnostic TYPESAFE_API_KEY=<redacted> end"));
     assert!(!receipt.to_json().contains("synthetic-removal-key"));
     assert_eq!(mock.remaining(), 0);
+}
+
+#[test]
+fn uninstall_probe_evidence_withholds_a_key_split_across_streams() {
+    let body: Vec<String> = (0..8).map(|n| format!("FAKEKEYBODY{n}")).collect();
+    for header in ["-----BEGIN PRIVATE KEY-----\n", "<redacted private key>\n"] {
+        let repo = common::temp_repo();
+        owned_record(&repo).save(&repo).unwrap();
+        let mut mock = MockRunner::new();
+        expect_ownership_proof(&mut mock);
+        expect_installed_matching(&mut mock);
+        mock.expect_run(
+            &format!("-s {SERIAL} uninstall {APP}"),
+            CmdOutput {
+                exit_code: Some(1),
+                stdout: body.join("\n") + "\n",
+                stderr: header.to_string(),
+                ..Default::default()
+            },
+        );
+        mock.expect_run(
+            &format!("-s {SERIAL} shell pm path {APP}"),
+            CmdOutput::success(&format!("package:{APK_PATH}\n")),
+        );
+        mock.expect_run(
+            &format!("-s {SERIAL} shell pm list packages {APP}"),
+            CmdOutput::success(&format!("package:{APP}\n")),
+        );
+        expect_teardown_alive(&mut mock);
+        let receipt = cleanup_with(&mut mock, &repo, "androidrun1", Some(CONFIRM));
+        assert_eq!(receipt.result, ReceiptResult::Failed);
+        let record = std::fs::read_to_string(repo.join("androidrun1/run.json")).unwrap();
+        for evidence in [&record, &receipt.to_json()] {
+            assert!(!evidence.contains("FAKEKEYBODY"), "{evidence}");
+        }
+        let removal = RunRecord::load(&repo, "androidrun1")
+            .unwrap()
+            .resources
+            .app_install
+            .unwrap()
+            .removal
+            .unwrap();
+        assert_eq!(
+            removal.uninstall,
+            qaren::redact::PRIVATE_KEY_WITHHELD,
+            "{header}"
+        );
+        assert_eq!(mock.remaining(), 0);
+    }
 }

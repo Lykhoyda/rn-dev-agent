@@ -1,30 +1,989 @@
-# qaren — deterministic QA preparation CLI (experiment)
+# qaren — plan-based React Native QA CLI
 
-`qaren` is a workspace-only Rust prototype that answers one question: **does a
-single reproducible build/install/launch contract reduce the time and variance
-agents spend rediscovering setup for every qaren live test?** It
-prepares an explicitly named project (the Expo `test-app`, or an external
-worktree via `candidate.worktree`) on an *owned* device — a dedicated iOS
-simulator on the Mac, one leased NUC Android emulator slot, or one
-exclusively claimed physical USB Android phone — and hands agents a
-candidate-bound `ready` receipt. It deliberately stops there: no interaction,
-no assertions, no session authority. Agents attach with the normal qaren
-tools after `ready`.
+`qaren check` owns a QA run against the current app worktree: it leases a
+simulator, prepares the app and Metro, starts the TypeScript screen child,
+walks a Markdown plan, writes evidence, and tears down owned resources.
+QaReN is still in development; this checkout is not the published 1.x MCP plugin.
+The scenario-based preparation verbs remain available for explicit iOS,
+NUC Android and USB Android setup experiments.
 
 ## Build
 
 ```sh
-cd packages/qaren-cli && cargo build          # binary at packages/qaren-cli/target/debug/qaren
-cargo test                            # hermetic; no device or network access
+corepack yarn install --immutable
+corepack yarn build:core
+cargo build --manifest-path packages/qaren-cli/Cargo.toml --locked
 ```
 
-Rust is the captain-selected language for this prototype. Dependencies are
-deliberately few: `serde`/`serde_json` (receipts and run records),
-`serde_yaml` (scenario input), `sha2` (provenance hashes). Arg parsing and UTC
-formatting are hand-rolled. The crate never touches the repository's pnpm
-authority — `pnpm` remains the package manager for the app it prepares.
+Run these commands from the repository root with Node satisfying the
+[core package's engines requirement](../qaren-core/package.json) and Rust/Cargo
+available. The binary is
+`packages/qaren-cli/target/debug/qaren`; its screen child uses the generated
+`packages/qaren-core/dist/`. Set `QAREN_RUNTIME` to its absolute path when running
+the binary from another location. See [Check a plan](#check-a-plan) for when
+`TYPESAFE_API_KEY` is required.
 
-## Usage
+### Plugin runtime installation
+
+The plugin's [runtime installer](../qaren-plugin/scripts/ensure-qaren.sh)
+supports Apple silicon Macs with Node 24 or newer on PATH. Once the matching
+release asset is available, run it from the installed plugin directory:
+
+```sh
+bash scripts/ensure-qaren.sh --install
+bash scripts/ensure-qaren.sh --print-bin
+```
+
+`--install` verifies the tarball's SHA-256 and byte length against the plugin's
+[`runner-manifest.json`](../qaren-plugin/runner-manifest.json) before installing
+under `~/.qaren/runtime/<version>/`. `--install --from-file <tarball>` uses a
+local asset with the same verification. Re-run `--install` to recover an
+interrupted installation. The installed binary discovers its adjacent runtime;
+it does not require the source checkout's `dist/` or `QAREN_RUNTIME` override.
+
+The SessionStart hook only runs `--print-bin`; it never downloads. That mode
+always exits 0 and prints either the verified binary path, an install or repair
+instruction, or nothing, so its exit status alone does not prove installation.
+Use the reported binary path for CLI commands; installation does not add it to PATH.
+This development checkout's manifest does not imply that a QaReN release asset
+has been published; use the source build above while that asset is unavailable.
+
+## Check a plan
+
+From the app's directory, supply `.qaren/config.yaml` and a Markdown plan:
+
+```sh
+qaren check --plan-file plan.md --device <simulator-UUID> --json
+```
+
+The configuration keys, defaults and validation are owned by
+[`src/config.rs`](src/config.rs). iOS requires `appId` and `devClientScheme`;
+only `pnpm` is supported as the app package manager. `--config` selects another
+configuration file. `check` currently supports iOS simulators only;
+`--platform android` refuses with `PLATFORM_UNSUPPORTED`.
+
+Plans contain a `## QA` section, named `###` blocks, numbered actions and
+`✓` checks. See the executable
+[literal](../qaren-core/test/fixtures/plans/literal.md) and
+[phrase](../qaren-core/test/fixtures/plans/phrases.md) fixtures and the
+[parser](../qaren-core/src/qa/plan.ts) for accepted grammar. Quoted press and fill
+targets resolve observed labels or test IDs locally. Distinct matches are
+counted before kind, disabled, hittability, offscreen or React-only filters, so two
+or more refuse with `TARGET_AMBIGUOUS`, without a Jev tie-break, even if the
+target adds positional words such as `Tap "Save" at the bottom`. A fill counts
+text-entry candidates plus every element carrying its testID, so a form label
+naming an input is not a twin, while a button sharing the input's testID is. A
+React-only projection collapses into the one native input only when complete
+React host evidence and digest ancestry prove it represents the same input host:
+either its composite ancestor forwarding the same testID, or the host entry left
+after the native input joined that ancestor. With no native input, React-only
+composite wrappers proven by the same ancestry to contain that same input host
+(whatever role their handler props suggest) collapse into the one React-only
+input; a fill then reaches it only through an eligible observed pressable
+wrapper, and refuses `TARGET_NOT_FOUND` without one. A separate element sharing the
+ID remains a twin, and each ambiguity candidate is listed as native or
+React-only and, where proven, as a wrapper of an input, as covered by the
+[forwarding-proof tests](../qaren-core/test/unit/qa/identity.test.ts). A merged composite
+input keeps its placeholder for quoted fill resolution. The refusal is terminal:
+it is never recovered, retried or re-walked,
+including for stored replay selectors and for a handler that finds twins at dispatch. A text element
+that is the sole text descendant of matching labelled ancestors links to the
+nearest action candidate: enabled and either hittable or offscreen for scrolling.
+When that candidate is among the matches, the text and other same-label ancestors
+collapse into it, including layout and press-capable but non-hittable wrappers.
+This applies to quoted presses and stored text-selector replay; it does not grant
+native tap eligibility to a wrapper. A container without a testID that encloses
+(by tree or frame) exactly one same-label action candidate, such as the
+full-screen element iOS can label like the first control, is that control's
+echo. When nothing matches exactly, a quoted press target equal to one whole
+comma-separated segment of exactly one actionable element's merged label (for
+example `Item 2` in `Item 2, Status 2`) names that element; two such elements
+refuse as ambiguous. A label-only native row keeps its accessibility-label
+evidence even when its React role re-kinds it. Separate controls in distinct
+subtrees with the same label still refuse as ambiguous. The
+[label-echo tests](../qaren-core/test/unit/qa/label-echo.test.ts) cover these cases.
+The refusal lists
+each candidate without its label or value: kind, testID or `no-id`, and the
+rounded frame.
+
+### Occluded taps and focus
+
+Before an iOS tap or exact fill, the runner resolves the retained target by
+native type and identifier (or label when unidentified) in the same snapshot
+generation. A unique live match whose frame no longer approximately matches
+the retained frame refuses with `TARGET_MOVED_BEFORE_DISPATCH`, mutation `none`,
+and no tap or typing; the refusal records both elements' frames (x,y,w,h),
+type, label length, whether each has an identifier, and whether their labels
+and identifiers match (never label or identifier text), their delta and the
+1 pt tolerance. A label-only target retained as the label inside its control
+may resolve live to that control: it agrees only when the same-type,
+same-label owning ancestor in the retained snapshot contains the label and the
+live frame equals that owner's frame; the tap goes to the unchanged point. A later
+screen change cannot turn a proven no-mutation refusal into a passing action.
+An unproven press passes only when the screen changes. That comparison includes
+each control's selected state (iOS selected trait), so a control that shows
+selection alone proves its press by becoming selected; a press that leaves it
+unchanged still fails, naming whether the target stayed selected.
+Before its one retry, the walker re-captures until the same target (resolved
+through the same exact-identity rules as the step) holds one native frame
+across two captures, within the
+existing settle readbacks, and the retry dispatches only that target at its
+settled frame; a target that never settles, stops resolving, or is replaced by
+another resolution is not dispatched again and fails with its observed frames.
+When the runner instead refuses a sent tap or type because its retained target
+is gone or stale (`NO_TEXT_INPUT_TARGET`, `KEYBOARD_TARGET_STALE`, or an Android
+`exact-target-*` reason) and attests mutation `none`, the step fails as
+`TARGET_MOVED_BEFORE_DISPATCH` without retry or fallback; any other refusal
+after a send stays `ACTION_OUTCOME_UNCERTAIN`.
+Resolution, frame comparison and hit testing share one 300 ms deadline.
+Missing retained identity, a generation mismatch, zero or ambiguous live
+matches, and failed or over-budget checks leave the check unavailable and
+permit dispatch as before. Stable taps check `XCUIElement.isHittable`; exact
+fills use the frame guard without an extra hittability read, then keep the
+existing focus-point check when a focus tap is needed. An input's hit test
+applies only when the focus point lies inside its frame; a wrapper-centre focus
+point outside it leaves that check unavailable. A negative check refuses with
+`FOCUS_TARGET_OCCLUDED` and mutation `none`. Core requires
+`HIT_TESTED_DISPATCH_V1`, `TARGET_FRAME_GUARD_V1` and `SNAPSHOT_FIDELITY_V1`
+(toolbars named `Toolbar`, nested same-origin containers kept apart); a missing
+capability takes the runner rebuild path.
+
+Before dispatch, the walker also treats a press or fill target whose centre lies
+outside its trusted clipping viewport or inside an observed keyboard frame
+(unless the keyboard is proven hidden) as covered. It uses the same recovery
+as a native occlusion refusal.
+The walker handles this refusal with one directional scroll: down from the
+lower half of the effective viewport, up from the upper half. Scroll bands stay
+above a visible keyboard. It then requires a unique rebind to the refused
+target's testID and kind before retrying, including keyboard-fallback wrapper
+taps. A label-only target cannot rebind after scrolling; a missing or nonunique
+identity refuses `TARGET_NOT_FOUND` with “stayed off screen after one scroll”.
+After scrolling to resolve or uncover a press or fill target, or after a scroll
+step whose momentum may still move it (across blocks too), capture requires
+agreeing consecutive frame readbacks within the existing bounded readback
+budget; otherwise `SCROLL_UNSETTLED`
+refuses without another dispatch or recovery. Keyboard-fallback focus readbacks
+use the same settlement check.
+A second occlusion fails with that same off-screen explanation; wrapper fallback
+reports that nothing was typed. This refusal does not become
+`ACTION_OUTCOME_UNCERTAIN`. Checks and waits gain only the keyboard rule below.
+See the [occlusion regressions](../qaren-core/test/unit/qa/occlusion-walker.test.ts).
+
+### Fill verification and keyboard fallback
+
+Fills use strict native value verification first. A strict fill replaces the
+field's content: the bound input is cleared before typing, and verification
+expects exactly the plan text. Keyboard fallback typing also replaces: see below.
+Rebinding an input without a testID requires its original label and native type;
+the same frame alone cannot substitute a different input.
+Only a stable exact read-back
+verifies a fill. A masked secure read-back or an unreadable one records a
+passing row with reason `UNVERIFIED_FILL`, never a verified pass; an empty or
+placeholder read-back of a non-empty fill on any field, a secure mask whose
+length matches neither the character nor the UTF-16 count, or any other
+mismatch fails without retry. A screen change alone never verifies a fill. During discovery, a quoted
+iOS fill can use keyboard fallback when no observable native input resolves, or
+strict binding refuses `NO_TEXT_INPUT_TARGET` before any text mutation for a
+non-native-input target. Phrase fills and stored replay selectors do not use
+this fallback; ambiguous targets and potentially mutated fills still fail.
+
+Separate React-only input projections still count when matching a quoted strict fill,
+so a native input and a React-only input sharing its testID refuse as
+`TARGET_AMBIGUOUS` before any tap. A strict fill never acts on a React-only
+input: when one is the only match, an accessibility-hidden input represented
+only in React evidence returns `TARGET_NOT_FOUND`, allowing the guarded
+native-wrapper fallback without scrolling. A genuine offscreen native input still requests scrolling; an onscreen
+native input resolves strictly.
+
+Tap-based fallback requires one onscreen, enabled, nonsecure native element
+carrying a unique testID, with no matching observable native input or secure node.
+A quoted base testID reaches its `-pressable` wrapper only while an element or
+React host carrying the base testID is also observed, or, with no React host
+evidence and incomplete React coverage, while exactly one native element carries
+that exact wrapper testID and encloses no other text entry; no other suffix is
+assumed. Strict fills never use this mapping.
+An identified native wrapper with another testID can also stand for the input
+when complete React host and ancestry evidence proves it encloses exactly one
+input host and its merged label equals that input's testID, text, label or
+placeholder. A separate same-label element does not establish forwarding.
+A wrapper echoing its hidden React input's identity counts as that one input
+for fallback, unless complete React ancestry places the input outside the wrapper.
+This does not collapse candidates for strict fills.
+The keyboard-down path requires proof that the keyboard is hidden before the
+tap (with the [one-scroll occlusion recovery](#occluded-taps-and-focus)). Every
+binding after the tap, including refreshed strict bindings,
+must uniquely resolve the original testID or its proven wrapper-to-input
+identity; a matching label cannot
+substitute for that identity. If the same input becomes natively observable,
+strict verification resumes. Otherwise the keyboard must become visible and
+the target must remain eligible. React evidence that the intended input is
+unfocused vetoes typing.
+
+When the keyboard is already up, iOS fallback types only with positive React
+proof that the intended input is focused. With an eligible target, QaReN taps it,
+recaptures with the [settlement check](#occluded-taps-and-focus), rebinds the
+same identity and then requires that proof. Without a target, it requires that
+no secure or disabled element carries the quoted
+testID and React reports that exact input focused. The guard and proof use the
+quoted ID unchanged, including a literal `-pressable` suffix. Only an
+observed wrapper in the tap path establishes a wrapper-to-base identity mapping.
+The final focus read runs after runner readiness and health checks, in the
+call that sends the native typing command. Both keyboard-up paths require this
+read to be positive; the keyboard-down transition path vetoes a contradictory
+unfocused read. A false, unbound, unreadable or failed read at either proof stage
+on a keyboard-up path types nothing; failure of the pre-dispatch read returns
+`NO_TEXT_INPUT_TARGET` with no mutation. An unknown keyboard state still refuses.
+Each walker focus decision logs one value-free `fallback-focus` line.
+
+QaReN then replaces the focused field's content and types once without final
+value validation: the runner selects the whole field and types the plan text in
+one synthesized sequence, so no readable React value is needed. A runner
+must advertise `FILL_EVIDENCE_V1` on both iOS and Android. Session startup routes
+a missing capability through the bounded source-rebuild path instead of
+accepting the released artifact. An active iOS runner missing it refuses focused
+replacement with `RN_FAST_RUNNER_STALE`
+and no mutation instead of appending. A refused replacement keeps the runner's
+mutation disposition. The [focused replacement tests](../qaren-core/test/unit/device-fill-focused-replace.test.ts)
+cover these guards and mutation reporting.
+A successful keyboard step records a passing row with reason `UNVERIFIED_FILL`,
+allowing later plan steps to continue; it does not establish the field's final
+value. Failed keyboard typing is not retried. Before the fallback tap or
+no-target typing dispatch, the value is protected under the
+[shared masking rules](#input-value-masking), and screenshots are withheld for the rest
+of the walk. The block remains unsaved,
+including when the tap leads back to strict verification. Eligibility is owned
+by the [resolver](../qaren-core/src/qa/resolve.ts), exact identity counting by
+the [shared identity model](../qaren-core/src/qa/identity.ts), and both are
+covered by the [fallback tests](../qaren-core/test/unit/qa/keyboard-fallback.test.ts).
+
+### Plan checks and screen evidence
+
+A check is literal only when its entire payload is one quoted string:
+`✓ "Welcome"`. Text outside the quotes, as in
+`✓ The heading shows "Welcome" and no error is visible`, makes the whole
+expectation a phrase check. Phrase press, fill and wait targets, phrase
+scroll-until targets, phrase checks and unrecognised verbs require
+`TYPESAFE_API_KEY`. They run the fixed Jev readiness probe even when another
+line is unparseable; a missing or rejected key refuses `JEV_UNREACHABLE` before
+device selection or leasing. Plans with only quoted targets and literal checks
+make no Jev calls and need no key; recognised back, dialog and fixed-scroll
+steps also stay model-free.
+
+Unparseable lines refuse before allocation; unresolved screen targets refuse during the walk.
+Native platform presence establishes observed presence, not complete visual exposure
+or an accessibility heading role. Heading predicates require qualified evidence:
+an associated declared heading role, a platform-observed typographic title larger
+than and above its body siblings, or an observed iOS navigation bar title. The
+navigation bar itself remains a plain container. Requests for an accessibility
+or declared heading require the declared role; typography and navigation titles
+cannot satisfy that requirement. Qualification is owned by
+[React heading association](../qaren-core/src/qa/host-typography.ts) and
+[native navigation titles](../qaren-core/src/qa/native-presence.ts), with predicate
+eligibility in the [resolver](../qaren-core/src/qa/resolve.ts).
+Unsupported visual or layout claims remain uncertain.
+A phrase check judges at most 30 contributions. A plain native container with no
+label, value or placeholder of its own and no press or fill evidence of its own is
+not a contribution, even when unassociated React hosts leave press or fill unknown
+screen-wide; that screen-wide gap still keeps a rejected claim uncertain.
+Known limit: React host association is unavailable while more than one native
+window is captured, as with the software keyboard up, so phrase press and fill
+targets on such screens may refuse when their capability or target association
+cannot be proven.
+Phrase waits capture fresh screen and presence evidence on every poll, even when the
+screen appears unchanged; prior observations do not establish current presence.
+
+Literal checks, quoted text waits, quoted scroll-until-text and replay text waits
+share [`literalEvidence`](../qaren-core/src/qa/evidence.ts): a trusted visible
+occurrence passes; otherwise matching unresolved text is unsure; otherwise
+complete native coverage proves failure. Literal checks match substrings;
+text targets match the whole contribution. React-only text, structural and
+container echoes, non-content wrappers, images and system scroll-bar labels
+contribute no literal evidence. A supplied frame must have positive width and
+height to contribute literal evidence; a missing frame alone does not exclude
+otherwise eligible text. This rule does not change action eligibility.
+A visible, hittable native `Other` element with
+a label and no accessibility text descendant contributes its merged label;
+this also admits an icon-only control's explicit label. A literal check passing
+through that contribution records `matched an accessibility label` in the ledger.
+Quoted waits and scroll-until targets also accept a unique visible testID as
+identity evidence, independently of literal text.
+
+The [native geometry model](../qaren-core/src/qa/native-presence.ts) clips nodes
+on both axes against the Application screen and trusted Window, ScrollView,
+Table and CollectionView ancestors. Missing or invalid rectangles skip only
+that clip; Application and Window rectangles must have positive size.
+Missing Window ancestry does not create uncertainty when the Application clip
+is valid, including with the keyboard up. Partly overlapping nodes remain eligible.
+A wholly offscreen ancestor with an independently on-screen descendant has
+contradicted geometry: it stops supplying its own clip, while other trusted
+ancestors still clip. Ordinary on-screen text rows beneath it remain visible;
+a text input (`TextView`, `TextField`, `SecureTextField` or `SearchField`) with
+such conflicting frames is unresolved. An independent trusted clip proving
+the descendant offscreen wins over that contradiction. Ordinary below-the-fold
+rows and later pager pages remain offscreen, not unresolved. iOS snapshots retain
+content-less Window nodes for this geometry; offscreen inputs remain in the
+privacy inventory. Geometry does not prove complete exposure or occlusion.
+
+Literal checks, quoted waits and scroll-until text do not count text or merged
+labels whose centre lies under a captured keyboard unless the keyboard is
+proven hidden. A docked full-width keyboard covers from its frame's top to the
+screen bottom, because its chrome paints below the frame XCUI reports. The
+keyboard's own keys and the chrome in its window stay visible. Overlays are not
+occlusion evidence: see [Limitations](#limitations-recorded-not-papered-over).
+Quoted and phrase target resolution scrolls up when the target is wholly above
+its effective trusted clipping viewport, and down otherwise; without a known
+clip, the boundary remains screen y=0. Quoted scroll-until targets use that
+viewport when exactly one offscreen identity matches; otherwise they retain
+the requested direction.
+
+Waits poll unresolved text as not yet present and end with `VISIBILITY_UNSURE`
+when the final evidence remains unsure. A quoted wait with at least two definite
+absence observations sharing one screen signature fails at its deadline with
+“did not appear”; it does not report expired evidence for that stable absence.
+Scroll-until-text uses the same visibility verdict
+within its scroll and time budgets. Literal checks re-ask from a fresh capture
+and use `CHECK_UNSURE` if uncertainty remains. This is distinct from acquisition
+admission: although a literal check cannot prove absence from incomplete native
+coverage, the walker refuses unusable native acquisition with
+`SCREEN_EVIDENCE_INCOMPLETE` before steps (including waits, scrolling and replay)
+or phrase assertions use it. Production private capture remains subject to the
+native privacy admission described below. The
+[literal-evidence tests](../qaren-core/test/unit/qa/literal-evidence.test.ts)
+cover the shared consumers and these admission boundaries.
+
+Passive capture diagnostics are computed and emitted for the same captured screen
+only after the walker establishes acquisition admission and passes the required
+native acquisition and presence checks. Incomplete, unattested, over-budget,
+acquisition-expired or presence-refused observations emit neither line. Each
+diagnostic is attempted once per admitted screen, with computation and sink errors
+contained independently. Diagnostic work does not consume acquisition-admission
+time or reset evidence freshness; later evidence-use deadlines still apply.
+Both lines are private investigative evidence, not a root-cause or PASS claim;
+they change no visibility, screenshot withholding, masking, eligibility or ledger
+decision.
+
+Each admitted complete native capture within the capture budget writes one value-free
+`viewport-diagnostic` line, bounded to 2 KB, to the private run log
+`logs/core.log`. It records integer-rounded Application and Window rectangles,
+counts and capped symptom samples with Window ancestry and origins, and the count
+plus up to ten in-app nodes the visibility rules excluded, each with its rule
+(`anc`, `scroll` or `window`) and the deciding ancestor's type and rectangle; it
+excludes labels, identifiers, values and other nodes' sizes.
+The [diagnostic implementation](../qaren-core/src/qa/native-presence.ts)
+owns its field layout.
+
+A qualifying capture whose own privacy verdict marks its pixels sensitive also
+writes one value-free `sensitive-pixels` line, at most 512 bytes including the log
+prefix, to `logs/core.log`. It counts the stored private strings, secure elements
+and input values, plus a histogram of the native types that show a stored value.
+Types outside a fixed public list, and elements without a native node, count as
+`Other`. It also samples up to four carriers as value-free shapes: type code,
+scroll-bar label class, value class and length bucket, rounded width and height,
+parent type code, identifier presence and value source. Unlisted type names are
+not emitted. Samples are dropped before histogram entries to keep the line within
+the byte limit. It excludes value text, label text, identifiers and testIDs. The
+[diagnostic implementation](../qaren-core/src/qa/privacy.ts) owns its field layout.
+
+Phrase presses require complete native and React coverage and proven React-to-native
+associations. Native text, images and plain views are excluded from press candidates
+only when complete React host evidence accounts for every interactive host and no
+associated React evidence suggests that node is interactive. Only recognized
+control and input roles contribute interactive-role evidence; heading, image,
+`none`, `presentation`, text, summary and unknown roles do not. A positive host
+press handler still establishes press capability regardless of role. A React role alone
+does not grant press capability; a proven host press handler or native button,
+switch or link does. Unknown capability or missing positive platform presence
+refuses with `SCREEN_EVIDENCE_INCOMPLETE` rather than guessing a target.
+The [screen projection](../qaren-core/src/qa/screen.ts) owns this policy.
+
+The native snapshot is the privacy boundary before walking a screen. Capture
+refuses with `PRIVATE_INPUT_CAPTURE_UNKNOWN` unless native completeness is attested;
+the refusal reports only a value-free node count and fixed cause codes. Native
+acquisition failures also refuse without reinjection or a public-tree fallback.
+Native input classification follows the [screen projection](../qaren-core/src/qa/screen.ts),
+including Other or unknown nodes carrying nonempty values regardless of React evidence,
+with one exception: native `Other` elements matching the iOS system vertical or
+horizontal scroll-bar label and carrying a percentage, such as
+`Vertical scroll bar, 3 pages` with `42%`. The label match is case-insensitive,
+allows an optional page count, and trims surrounding whitespace; the percentage
+has one to three digits, an optional single decimal digit after `.` or `,`, an
+optional single whitespace character such as the no-break space iOS may insert,
+then `%`. The projection keeps the
+label and omits this native value, so the indicator alone does not trigger
+screenshot withholding. Other valued generic elements, malformed lookalikes,
+React input evidence and secure fields remain protected. The accepted residual
+risk is that an app element mimicking both patterns can expose its percentage
+in captured pixels. The shared patterns in
+[privacy.ts](../qaren-core/src/qa/privacy.ts) own the exact matching rule;
+[regression cases](../qaren-core/test/unit/qa/sensitive-pixels-diagnostic.test.ts)
+cover indicators, lookalikes and adjacent protected fields.
+iOS fast snapshots retain nodes with distinct readable values even when their type,
+label, identifier and origin match; deduplication compares those fields separately.
+The React digest adds semantics: a deadline, malformed-payload, validation or
+transport failure degrades React coverage to unknown without retrying capture.
+Operations requiring complete React evidence still refuse when that coverage is
+unavailable. Capture deadlines, budgets and item deadlines remain unchanged.
+
+React-only elements expose no label, placeholder or value strings in the screen
+projection. The React walk excludes provably inactive screen routes and native
+hosts with `display: none` before collecting their semantic or descendant text
+evidence. Validated React Native frozen descriptors remain readable; arbitrary
+getters are not invoked, and an unreadable inactivity flag does not prune a subtree.
+Unreadable display overrides or styles beyond the array or nesting scan budgets
+resolve as unknown and do not establish `display: none`; later readable overrides
+within the budgets still determine display.
+Style arrays use the last present property: an explicit `undefined` or `null`
+resets an earlier `display: none`, while an absent property leaves it unchanged.
+The reset preserves descendant text evidence. The same distinction applies to
+`display` and style-based `pointerEvents` in exact-ID interaction eligibility;
+a reset clears the earlier style restriction without proving native visibility.
+
+### Input value masking
+
+Planned fill values are classified before progress streams. Streamed rows contain
+only value-free progress metadata and eligible screenshot paths; plan text,
+reasons, selectors and block names appear only in the final projected ledger.
+CLI progress shows the line, outcome, resolver and attempt without plan text.
+The shared [privacy matcher](../qaren-core/src/qa/privacy.ts) protects complete values of
+three or more characters after trimming, using case-sensitive substring matches
+for raw and trimmed NFC/NFD forms. Values containing at least three digits after
+removing whitespace, punctuation and symbols also match with any sequence of
+those separators between digits. Model requests use
+opaque identity tokens; durable text uses `•••`; a match withholds saved blocks.
+Displayed identifiers use the same matcher while operational identifiers remain
+usable. After dispatching a numeric code of at least three digits or a secure
+field fill, the same matcher also masks contiguous fragments in every outward
+projection, independent of layout or semantic kind. Complete-value matching runs
+first, preserving identity tokens even in quoted or prefixed text; fragment
+matching processes only the text left unmasked. A fragment match masks the whole
+whitespace-delimited token containing it. Numeric runs must occur contiguously
+in the code after removing whitespace, punctuation and symbols, including single
+digits: filling `48-15` protects a standalone `4`. Secure-text fragments match
+any three or more contiguous characters of the value, punctuation included and
+within longer words: `p@s` in `p@ss`, `s@w` and `@wo` in `p@s@word`. Fragment masks do not establish complete-value
+identity in model comparisons.
+Known limit: unrelated text matching a fragment of a filled secret is also masked.
+
+Short typed values (one or two characters) are protected in straight or curly
+quoted plan slots, including parsing requests, input value slots and structural
+code rows. After fill dispatch, an observed code-box row spelling the filled
+short value also protects its whole-token echoes in outward text, identifiers,
+model descriptions and saved-block admission. Token boundaries exclude adjacent
+letters, combining marks, digits and underscores: proven code `48` masks
+`Code 48` and `48`, while `Step 4 of 8` and `148` remain readable. This proof
+does not enable fragment matching, and a short ordinary-input fill without a
+code-box row does not establish code material. Other short free-text echoes,
+including before fill dispatch, remain readable. An input label equal to its
+own value or a known private value is masked at any length, after trimming and
+NFC normalization. Before fill dispatch, secure-field values have a separate
+exception: two or more characters match as substrings; a single character
+matches only as a whole token. This includes native labels classified as possible
+values on secure inputs, even when no readable value is supplied.
+Structural step numbers remain readable.
+
+From the first fill dispatch, geometric rows of at least three visible text boxes,
+each empty or containing one character and at least one filled, render as one
+`[code]` token; model descriptions
+show each box as `box (hidden)`. Rows share a horizontal band within four points
+and have gaps no greater than 1.5 times the median text-box width. An additional
+cell-based pass uses the outermost containing framed ancestor before an ancestor
+shared with another box, allowing gaps up to twice the median cell width.
+Nested same-character text echoes count once; repeated characters do not affect
+grouping. Native non-input, nonsecure cells labelled by one character, including
+pressable cells, also qualify when their row spells at least two characters in
+order within a stored private value after whitespace removal. React-only cells
+do not qualify, and text-only rows retain the three-box rule independently.
+Enclosing labels composed of the row's characters, including separated forms,
+are concealed too. Inputs are not code boxes. The shared
+screen-text projection also protects failure history (`failure.seen`, including
+"previously on screen"). Structural masking remains unioned with value-based
+fragment masking.
+
+Opaque tokens preserve complete-value identity for model comparisons. An
+unobserved protected value or hidden input content cannot prove an assertion.
+Once sensitive input pixels, code rows or a protected value's visible echo are
+observed, screenshots are withheld for the rest of the walk. See the
+[structural privacy regression cases](../qaren-core/test/unit/qa/split-digit-privacy.test.ts)
+and [Saved blocks](#saved-blocks).
+
+iOS interactions check app existence immediately and wait only when the app is
+missing; availability and foreground checks remain in place. When the privacy
+gate permits a row screenshot, the walk requests a full-screen image from the
+running iOS runner and copies it into the run evidence directory. Lost or unknown
+app-process identity withholds screenshots. Runner refusal, an invalid screenshot
+path or a failed copy leaves the row without a screenshot and logs a value-free
+unavailable reason; iOS QA never falls back to unrestricted simulator capture.
+
+```text
+plan preflight -> device selection -> lease + durable run record
+               -> app preparation -> screen proof -> walk -> teardown
+```
+
+By default `check` borrows the only booted simulator, or the booted target
+selected by `--device`. `--boot-device --device <simulator-UUID>` opts into
+booting that exact iOS simulator under the lease. `--fresh-install` opts into
+removing the selected app and its data, proving absence, then installing it
+under the same lease. Both opt-ins require strict admission before mutation.
+Cleanup leaves the borrowed simulator running and keeps the installed app.
+iOS preparation proves app-local Expo generic-build support, or uses an
+explicitly configured Xcode workspace (see
+[CLI-owned iOS build routes](#cli-owned-ios-build-routes)), builds a finite
+simulator bundle, and starts the app on the selected simulator with a separate
+Metro process group. If finite-build cleanup is unknown, the build lock and
+device lease remain claimed for `qaren cleanup`. The developer
+[check gate](../../scripts/gate-qaren-check.sh) forwards the boot opt-in with
+`QAREN_BOOT_DEVICE=1` alongside `QAREN_DEVICE_UDID`.
+
+iOS preparation and cached Android preparation request the dev-client manifest
+from Metro once with the `expo-platform` header before launch, so the client's
+own first request is not the slow cold one. Fresh Android preparation keeps
+launch and Metro under `expo run:android` and does not perform this warmup.
+A manifest or dev-client launch timeout refuses with `CORE_REFUSED`; the launch is retried once
+only when the measured one-minute host load exceeds the launch envelope. Other
+manifest and launch errors remain `BUILD_FAILED`. Cleanup retained resources
+before retrying.
+
+iOS artifact verification requires an Expo Dev Launcher image supporting
+`--initialUrl` and refuses bundles containing `main.jsbundle`. Symbol and string
+probes filter output before capture, allowing large debug images without raising
+the 16 MiB capture limit; failed probes or missing required evidence still refuse.
+The verification contract is owned by [`src/adapters/ios.rs`](src/adapters/ios.rs).
+
+Signals or a vanished caller stop the run with `RUN_CANCELLED`. The CLI checks
+cancellation before forward operations, including Git probes, recorder start,
+installation, fresh-install data removal, simulator boot, Metro/core launch,
+video finalization and publication. The core's cancellation helpers inherit the
+walk-scoped AbortSignal when callers omit an explicit signal and combine it
+with supplied signals for interruptible I/O and waits; aborts stop setup,
+walking, readiness persistence and saved-action writes. Ownership-gated teardown
+still runs.
+See the [CLI cancellation boundary](src/cancel.rs) and
+[core cancellation mechanism](../qaren-core/src/domain/cancellation.ts).
+A second signal exits immediately; the next run must recover retained resources
+through their recorded ownership proofs.
+
+Before each iOS launch, `prepare` writes the app's Expo dev-menu preferences with
+`simctl spawn <udid> defaults write <app-id>`: no floating action button, no menu
+at launch, onboarding finished. A failed write is recorded as
+`dev_menu_defaults: unconfirmed` and the launch continues. At walk start the core
+also hides the floating button through Expo's `DevMenuPreferences` module and
+reads the setting back, disables the shake gesture, and closes an open menu.
+Apps without the preferences module skip that setting change but still require
+native clearance evidence. The shared clearance mechanism accepts only a complete
+native snapshot with neither a floating button nor an open dev menu in front,
+briefly re-reading while overlays settle. An unconfirmed floating-button hide
+or failure to obtain complete clearance evidence within those reads refuses
+the walk with `DEV_MENU_HIDE_UNVERIFIED` before the first step.
+
+### iOS admission and cleanup
+
+Strict admission observes known automation patterns for the selected simulator.
+A driver targeting it is busy; a driver can coexist only when kernel executable
+identity and exact arguments prove that it targets other simulators exclusively.
+An unscoped Maestro MCP controller can coexist when its Java executable and
+exact MCP arguments are attested; its command-line spelling alone is insufficient.
+Unknown identity, scope, process-table completeness or inspection outcome refuses.
+The scan cannot exclude uncooperative automation inside an otherwise admitted
+process and is not an external coordination lease.
+
+Drivers and unresolved process identities share one candidate budget and one
+scan deadline. Oversized arguments require bounded kernel path inspection that
+returns an outcome without exporting argument content. Budget exhaustion refuses
+instead of admitting a partial scan. The limits and classification rules are
+owned by the [strict scanner](../qaren-core/src/runners/external-runner-detect.ts)
+and [kernel observer](src/process_observation.rs).
+
+Runs and evidence live under `~/.qaren/runs/<run-id>/`; device leases use
+`QAREN_LOCK_ROOT` or `~/.qaren/locks`. The walk writes `ledger.json` and
+`report.md` when it reaches reporting; the receipt names available artifacts.
+Cleanup proves owned process-group and exact-simulator runner-host absence
+before releasing the lease. When the leased simulator had no runner host as the
+core started, the run records the host as its own; normal teardown, cancellation
+and dead-owner cleanup then terminate that host by bundle id on that exact
+simulator only after core cleanup proves removal or absence, and re-prove the
+host's absence. The core starts the runner's `xcodebuild` driver in its own
+process group and announces it; the CLI records that group with the driver's
+identity and signals it, before the host, only while that identity still
+matches. Refused or unresolved core or driver cleanup leaves the host untouched
+and retains the lease. A host that was already running, or any
+present or unknown host after that, retains the lease. A dead lease
+holder is reclaimed only through that run's cleanup; a live or unprovable holder
+refuses `DEVICE_BUSY`. Recover a retained run with `qaren cleanup <run-id>`;
+do not delete locks to bypass unresolved ownership.
+
+### Saved blocks
+
+Block IDs come from their `###` titles; a headingless block uses the plan's `#`
+title, or `plan` when absent. The [parser's `slugify`](../qaren-core/src/qa/plan.ts)
+lowercases the title, replaces runs outside `a-z` and `0-9` with hyphens, trims
+edge hyphens and uses `plan` if empty. Slugs within the
+[action-store length limit](../qaren-core/src/domain/path-safety.ts) stay unchanged.
+Longer slugs use a prefix followed by a hyphen and the first 16 hexadecimal
+characters of the full normalized slug's SHA-256, fitting that same limit.
+The title stays unchanged; the filename, M7 `id`, `plan` header and replay lookup
+use the same bounded ID. Existing valid actions are not renamed. Duplicate full
+normalized slugs or distinct titles producing the same bounded ID refuse the
+whole plan during preflight, before device allocation or action writes.
+
+New files for passing `###` blocks use `<app>/.qaren/actions/<slug>.yaml`, where
+`<app>` is the directory holding `.qaren/config.yaml` (with an external `--config`,
+the checked working tree). The file is a Maestro-shaped action: each plan line as a
+comment, then the commands with the exact `testID` (or, without one, the label) the
+step used. On the next run a block whose plan lines, platform and app are unchanged
+is replayed by those stored identities through the same walk, without Jev for quoted
+targets or literal checks; phrase checks still ask Jev. An ambiguous stored
+identity refuses `TARGET_AMBIGUOUS` without re-walking. A stored identity that no
+longer resolves before that step authorizes any mutation re-walks
+the block from that line; earlier completed steps are kept. Once that step authorizes
+a mutation, its selector failure is terminal; recovered selector misses follow
+[Step recovery](#step-recovery). On PASS only the commands under that
+line and later ones are rewritten, and every `✓` comment stays byte-identical. A failing check is a FAIL and
+is never re-walked or rewritten. Timeout recovery remains deferred (see
+[Step recovery](#step-recovery)); app-process changes stay terminal. A failing block is never saved;
+blocks that passed earlier in the run remain saved. A step without a `testID`
+or label, a phrase wait, a fill into a secure or private input, or an attempt at
+[keyboard fallback](#fill-verification-and-keyboard-fallback) leaves the block
+unsaved and the ledger says why without naming any value. Planned fill literals
+also undergo the [shared masking rules](#input-value-masking), so a protected
+literal withholds a newly discovered or patched block even for an ordinary input.
+A previously saved block replayed against a now-private
+input also reports withholding without rewriting or deleting the existing action.
+Discovered or patched block writes are deferred until the walk finishes. Values
+preclassified from the plan or protected by private observations or keyboard
+fallback anywhere in the same run are checked under those rules.
+A matching block title, header field, raw comment, fill
+literal, literal assertion or stored selector withholds the block rather than
+rewriting its bytes, including matches to filled-secret fragments under the
+[shared masking rules](#input-value-masking). Structural plan numbering is
+excluded from matching. The final serialized YAML check matches complete
+protected values; generated command syntax does not enable fragment withholding.
+The value-free reason is
+`contains a protected plan-typed value` in `blocks_not_saved`, including when the
+value was observed rather than typed. Existing saved actions are not removed.
+
+For quoted waits and scroll-until steps, a testID is stored only when exactly one
+captured element carries it, including offscreen elements in that count. A shared
+testID falls back to unique literal text evidence; without either unique identity
+the block remains unsaved. A stored text selector must pass the
+[literal-evidence rule](#plan-checks-and-screen-evidence) and match exactly one
+visible witnessed identity. A control and its sole same-label text descendant
+count as one identity, even with different rectangles; distinct controls remain
+separate. Same-label siblings remain distinct even when their frames are
+identical. Only proven ancestor/descendant text echoes collapse; matching labels
+and frames alone do not establish one identity. An unidentified nested native
+`StaticText` collapses into its parent text when label, value, frame, enabled,
+hittable and secure facts agree; without presence evidence it also requires a
+nonempty label and a positive frame. An identified child collapses only with
+presence evidence and the same identifier as its parent. With presence evidence,
+presence status and label source must agree too. Excluded labels cannot supply a
+fallback witness. Discovery keeps preferring a unique testID for an eligible
+text match. An ambiguous text target without a unique testID
+can satisfy discovery but leaves the block unsaved; replay follows the
+ambiguity refusal above.
+
+Replay requires the canonical block format emitted by
+[`serializeBlock`](../qaren-core/src/qa/blocks.ts); edited or incompatible files
+take the discovery path. Before overwriting an existing action, saving requires its
+`plan` header to match the block ID and its full normalized title to match the incoming
+title, using the normalization described above before length bounding. A colliding
+short and long title therefore leaves the existing file byte-identical; same-title
+patches remain allowed. A collision or unsafe corpus leaves the passing block unsaved
+with a reason in `blocks_not_saved`.
+Saving holds the existing action-write lock across extension selection, title ownership
+checking and publication, so concurrent saves of colliding titles preserve the winner's
+file. Both `.yaml` and `.yml` identities share this lock.
+
+The ledger's `path` is `walk`, `replay` or `replay→walk@<line>` (the first re-walked
+plan line), and each block reports `source` `discovered`, `replayed` or `patched`. The
+receipt lists `blocks_written`, `blocks_not_saved` (block and reason) and, as a
+diagnostic that never changes the verdict,
+`worktree_drift`: app-root paths whose `git status` changed during the walk, outside
+`.qaren/actions`. This status-only diagnostic is separate from the
+[candidate provenance check](#candidate-provenance), which can fail the run.
+
+Block names in final ledger rows, block results, reports and `blocks_not_saved`
+withhold the whole displayed name as `•••` when either the original title or
+its slug matches a protected value. Machine fields `blocksWritten` in the core
+result and `blocks_written` in the receipt retain canonical slugs for file lookup and PR
+block preservation; replay identifiers also remain unchanged.
+
+`qaren actions list [--json]` and `qaren actions show <slug>` read the
+action corpus of the current directory. Both `.yaml` and `.yml` are supported;
+existing files retain their extension when patched. A slug with both extensions
+refuses inspection and is not overwritten by `check`. Symlinked corpora and
+action files are refused. Inspection header validity and defaults follow the
+[core header parser](../qaren-core/src/domain/reusable-action.ts); `list` skips
+invalid headers and `show` refuses them.
+
+PR runs copy saved blocks to the run's `blocks/` directory with their original
+extension and bytes. See [Test a pull request](#test-a-pull-request) for branch
+writeback validation and fallback comments.
+
+On iOS the walk also fails `APP_PROCESS_CHANGED` when the app's process changes between
+captures (a crash or restart), or a snapshot or platform-presence capture reports
+`app-not-running`. Generic platform-presence runner failures retain the
+`NATIVE_CAPTURE_UNAVAILABLE` refusal. An initial capture that does not report the process
+refuses `APP_PROCESS_UNKNOWN`; a runner built from an older checkout needs a rebuild
+(`RN_RUNNER_BUILD=local`).
+
+### Step recovery
+
+An observed React Native red box fails the current step immediately, including
+during login replay, with safely masked visible error-screen text in `failure.seen`.
+It is checked before accepting a step or refusing incomplete semantic evidence,
+and never triggers recovery.
+
+An action without success evidence after its one retry, a step target that
+does not resolve, or a phrase check still unsure after its re-ask
+gets at most one deterministic recovery, then the step runs once more from a fresh
+capture. The order is owned by [`recover.ts`](../qaren-core/src/qa/recover.ts): a
+recognized system dialog in front is accepted; a dev menu or floating button in
+front is cleared through the shared [overlay clearance mechanism](#check-a-plan);
+and when `loginMarker`
+(`{ id: <testID> }` or `{ text: <label> }`) is on screen, the
+saved block `loginBlock` (`.qaren/actions/<loginBlock>.yaml`, saved for this app and
+platform) replays by its stored identities. The two keys are set together, with
+exactly one nonempty marker `id` or `text`. A missing, unreadable or incompatible
+login block fails when login recovery is needed. A second
+failure of the same step fails it, recovery never runs inside the login replay, and
+capture, Jev, process, replay-miss and cancellation refusals are never recovered. The
+ledger's `recoveries` counts recoveries that let the step retry; `escapes` and `llmTurns`
+stay `0`. Login fills are masked like plan fills and withhold the video.
+
+Recovery counts as a device mutation for replay eligibility: a selector miss
+after recovery is terminal and never initiates another re-walk. The second ordinary
+action attempt captures fresh evidence but gets no additional expiry refresh;
+phrase actions retain presence capture through readback and retries.
+See the [recovery regressions](../qaren-core/test/unit/qa/walker-recover.test.ts)
+and [freshness regressions](../qaren-core/test/unit/qa/temporal-walker.test.ts).
+
+Recovery requires admitted screen evidence. iOS phrase steps behind a system or
+permission alert can refuse `SCREEN_EVIDENCE_INCOMPLETE` before recovery because
+platform presence excludes that system surface; phrase-step dialog recovery is
+best-effort. Android dialog recovery is not supported by `qaren check` in this
+release (see [Check a plan](#check-a-plan)). An action reporting `tapped: false`
+or `executed: false` establishes no action proof and cannot count as a recovery.
+
+Dev-overlay recovery must re-prove clearance before retrying the step. A failed
+clearance or a non-executing hide with no overlay to clear fails the step.
+
+### Walk timing
+
+`ledger.json` adds a `timing` object to each walked attempt row, in milliseconds.
+`captureMs`, `resolveMs` (decision), `actMs`, `postCaptureMs` and `otherMs`
+partition `total`, the elapsed window between consecutive row timestamps
+(starting at the walk for the first row). `nativeMs`, `reactMs` and optional
+`presenceMs` detail reads within capture; `jevMs` details judgment time within
+decision, including HTTP retries and their backoff. These breakdowns overlap
+the partition and must not be added to `total`. Post-action captures start
+after an authorized dispatch; captures after a dispatch refused before
+authorization remain in `captureMs`.
+
+The ledger's `speed` summary groups timed action/check rows by operation, keeping
+login-replay steps separate from plan steps that share a line and kind. Every retry,
+passing and failing attempt of one operation sums into one logical-step duration,
+even when a capture refusal changes the block name. `stepMedianMs`
+and nearest-rank `stepP95Ms` cover all those logical steps; `steps`, `passed`
+and `failed` count them, with the last attempt determining whether a step
+passed. `walkMs` sums all timed row windows, not app preparation or teardown.
+`report.md` prints these summary values under Run details; inspect the ledger
+for individual timing breakdowns.
+
+Without timed rows, `speed` is omitted. With timed rows but no timed actions
+or checks, counts are zero and percentiles are omitted (shown as `n/a` in the
+report). An interrupted child without a final result retains row evidence
+but omits `speed`. Timing is passive: it does not alter verdicts, actions or
+budgets, and the CLI drops malformed timing rather than rejecting the ledger.
+The [row timing implementation](../qaren-core/src/qa/row-timing.ts) owns
+aggregation; [CLI decoding](src/core.rs) and [report rendering](src/report.rs)
+own consumption.
+
+Launch admission shares the remaining walk deadline across target readiness,
+WebSocket handshakes, probes and retry sleeps. The connect-time dev-build check
+and helper injection wait for the runtime's answer until that deadline rather
+than a fixed request timeout; no answer by the deadline is a readiness timeout.
+A timeout with measured 1-minute
+host load above 10 is an environment refusal (`CDP_NOT_CONNECTED`), rather than
+a product FAIL. It retries attachment once only if the remaining budget can
+cover a full readiness wait. Immediately before relaunch it checks for a foreign
+driver; a conflict refuses `BUSY_FOREIGN_FLOW` without relaunching. It relaunches
+the iOS dev client on the exact simulator with the CLI's original `initialUrl`
+using `simctl launch --terminate-running-process`, then waits again. A failed
+relaunch skips the second wait and remains an environment refusal; insufficient
+budget refuses immediately. Deterministic attachment rejections are neither
+retried nor classified as environmental.
+If the CLI's walk deadline expires before the core reports admission, the CLI
+also returns `CDP_NOT_CONNECTED` with measured host load (or an explicit
+unavailable measurement), regardless of load. After admission, deadline
+expiry remains `WALK_DEADLINE_EXCEEDED`.
+The refusal carries the measured load; the
+[admission implementation](../qaren-core/src/qa/admission.ts) owns attachment
+retry policy; the [CLI core boundary](src/core.rs) owns deadline classification.
+
+### Candidate provenance
+
+The shared [candidate comparison](src/candidate.rs) rechecks the commit,
+lockfile hash and worktree fingerprint. The fingerprint hashes normalized
+NUL-delimited Git status records plus affected file contents, symlink targets,
+absence and executable permission bits, so editing an already-dirty file is
+still detected. Repository-root `.qaren/` state is excluded, as are direct
+`.yaml` and `.yml` action files under the selected app root's `.qaren/actions/`.
+Changes outside these exclusions, including a nested app's `.qaren/config.yaml`
+or source files, and renames crossing the excluded boundary remain candidate
+changes.
+
+Preparation rechecks provenance before emitting `ready`; `check` and `pr`
+recheck it before and after the walk. Detected drift fails with
+`CANDIDATE_DRIFTED` and cannot return PASS; an already-cancelled walk retains
+`RUN_CANCELLED`. Passing blocks already saved remain available. See the
+[publication refusal contract](#test-a-pull-request) before publishing; re-run
+against an unchanged candidate to obtain attributable evidence.
+
+## Test a pull request
+
+```sh
+qaren pr <number|url> --plan-file plan.md --device <simulator-UUID> --json
+qaren publish <run-id> --json
+```
+
+Company plans, reports and recordings must remain private and must never be
+published to public product surfaces. Publication's value and machine-identity
+redaction does not establish that company material is safe to publish.
+
+`qaren publish` admits only a persisted `run.json` terminal result: no
+cancellation, matching final candidate verification, and proven teardown
+ownership, including the recorder and runner host as well as build, core and
+Metro producers. The final verification is captured before teardown removes
+the candidate worktree; the terminal result is persisted after teardown
+and video finalization. Immediately before writing the `pr.json` publication
+handoff, the CLI rechecks cancellation; a late cancel marks that terminal result
+cancelled, persists it and withholds the handoff. A missing terminal result
+refuses `RUN_RECORD_INVALID`.
+Cancellation refuses `RUN_CANCELLED` (exit 4), candidate mismatch fails
+`CANDIDATE_DRIFTED` (exit 1), and unproven ownership refuses
+`OWNERSHIP_UNPROVEN` (exit 4), before uploads, comments, label changes or block
+write-back. A plain QA FAIL can still be published as a report when these
+conditions hold. Later recovery does not upgrade the original terminal result;
+re-run `qaren pr` to obtain publishable evidence. Saved actions already on disk
+remain untouched.
+
+`qaren pr` runs the same pipeline as `check`, from the app's directory with the
+same `.qaren/config.yaml` and plan, but walks a detached worktree at the pull
+request head under `~/.qaren/runs/<run-id>/wt`. It refuses unless origin's
+`pull/<n>/head` is the head GitHub reports and the worktree is clean at that
+commit, both before the lease and again before the walk. Fetch verification uses
+a per-run local ref rather than shared `FETCH_HEAD`, so concurrent PR runs
+verify their own fetched commits. On iOS the simulator
+screen is recorded from just before the walk to just after it and encoded to
+`media/video.mp4` (H.264, 30 fps); without `ffmpeg`, or when a capture cannot
+start, the run continues and the receipt's `video` outcome says why. The local
+recording stays complete; `qaren publish` uploads only
+`media/video-published.mp4`, a copy that starts when the walk proved the app's
+bundle and passed [overlay clearance](#check-a-plan), so launcher, server-picker,
+relaunch and dev chrome frames before admission never reach the pull request.
+Without an admission time or a successful trim, or when an app process change,
+launcher/server-picker fallback, floating button or open dev menu is observed
+after admission, no video is uploaded, even if recovery clears the overlay and
+the retry passes. Blocks the walk saved are copied to `blocks/` before the
+worktree is removed. If the pull
+request moved during the run, the receipt names the tested commit in
+`tested_older_commit`. Like `check`, `pr` currently refuses Android with
+`PLATFORM_UNSUPPORTED`.
+
+Normal teardown and dead-owner recovery remove the PR worktree only after
+cleanup proves the recorded build, core, Metro, recorder and runner-host
+outcomes removed or absent.
+Any retained, refused or unresolved producer outcome keeps the worktree recorded
+for `qaren cleanup <run-id>`. Metro cleanup requires proven process-group absence
+after reaping owned children; a free port or dead launcher alone is insufficient.
+Present or unknown group evidence retains Metro ownership and any applicable lease.
+Successful PR worktree removal reports measured reclaimed bytes, or explicitly
+reports that the byte count is unknown, including dead-owner recovery. Once a
+playable local video replaces `media/raw.mov`, the raw capture is retired and
+its reclaimed size is reported; failed finalization retains it.
+
+An unproven recorder shutdown retains recorder ownership and the device lease,
+including when recording startup fails. Teardown retries an unresolved stop;
+the receipt's `cleanup.recorder` reports that final outcome. If shutdown remains
+unresolved, recover with `qaren cleanup <run-id>` as described under
+[iOS admission and cleanup](#ios-admission-and-cleanup).
+
+`qaren publish` posts one comment: the structured PASS/FAIL/REFUSED verdict and refusal code, the
+tested commit, an eligible available video, the plan with ✓/✗ per walked line,
+an available failing screenshot and collapsed run details. Plan lines come only
+from the walk's own rows, never from the raw plan file, so typed values stay out.
+The hostname, home directory, user name, absolute paths, device UUIDs, the run's
+device ids, serials and ports (recorded privately in `pr.json` as
+`identityValues`) and private network addresses are removed from the comment.
+Known identity values shorter than three UTF-8 bytes are not masked. Matching
+ignores ASCII case and rejects matches next to ASCII letters, digits or hyphens;
+a recorded port number also masks the same number elsewhere in the text. It then
+removes the `needs-qa` label only if the current head is the tested head; otherwise
+`publication.json` and the receipt record `retained-head-changed`.
+
+A saved block is published only verbatim, and only when the walk was eligible
+for publication (no fill/type step and no private value observed) and the
+machine redaction would leave the block unchanged. Any other block stays in the
+run's `blocks/` directory and is never rewritten; `publication.json` and the
+receipt record `withheld <slug>: <reason>`. Published blocks are committed to the
+pull request branch with a `Qaren-Run: <run-id>` trailer, using your own git
+identity and a push lease on the tested commit. Every effective origin push URL
+reported by Git must match the pull request's repository. Mixed, unknown or
+unproved destinations prevent a push. When the branch moved, the pull request
+comes from a fork, or destination verification fails, a second comment carries
+the admitted blocks' YAML instead. Writeback refuses an ambiguous slug or a
+destination with the other extension rather than creating a second sibling.
+
+Before retrying an unpushed block commit, publication verifies that its sole
+parent is the tested commit, its changes affect only currently admitted block
+paths, and those files contain the admitted verbatim bytes without ambiguous
+`.yaml`/`.yml` siblings. A matching cached commit is reused; otherwise a new
+commit is built from the tested head using only currently admitted blocks.
+The replacement does not descend from the rejected cached commit. Every newly
+created commit, including a replacement, passes the same parent, path and exact
+Git-blob byte checks before it can be pushed. Git filters or line-ending conversion
+that change the saved bytes cause fallback to the verbatim blocks comment; QaReN
+does not normalize the bytes or change `.gitattributes`. The same push lease
+still applies; a failed commit or push falls back to the blocks comment.
+When all blocks are withheld or privacy admission fails, no block commit is
+pushed. A cached commit already at the remote branch head is reconciled as
+published only when Git's effective origin fetch URL also matches the pull
+request's repository and readback succeeds. A mirror, unknown destination or
+failed lookup cannot prove publication; the verified push or fallback path
+remains available. Reconciliation neither rewrites history nor claims earlier
+content passed the current privacy gate.
+
+Each step is recorded in `publication.json`. Before retrying an attempted post,
+publication regenerates the QA report from the current verdict file and walk rows,
+or the saved-block report from blocks admitted by the current publication gate,
+applying current identity redaction. It adopts an existing comment only when its
+author is the authenticated GitHub user and its first-line marker matches the
+run ID and SHA-256 fingerprint of that rendered body, excluding the marker line
+and before attachment rewriting. QA reports and saved-block comments each use
+their own fingerprint, so a lost attachment-post result can be reconciled without
+duplicating the report. Without a matching comment it writes `comment.md` or
+`blocks-comment.md` and posts the regenerated body.
+Cached bodies are not reused. Already-posted comments are neither edited nor deleted.
+
+Publication holds an exclusive file-descriptor lock on `publish.lock`; a
+concurrent publisher fails until the holder exits. The file remains after release;
+its existence does not mean publication is active. Do not delete it to bypass
+contention.
+
+Video publication eligibility and a value-free withholding reason are persisted
+in `pr.json`. A plan containing any fill/type step or a walk whose screenshot
+privacy disallowed capture keeps the recording local. Missing, unknown or
+unreadable eligibility also withholds the video; the comment explains why, without
+changing the run verdict. Local recordings contain raw pixels. Transient prefilled
+values between captures remain a limitation for 2.1; there is no continuous privacy
+monitoring or pixel redaction.
+
+## Preparation verbs
+
+These scenario-based verbs retain the preparation receipt contract below;
+`check` adds `pass` / `fail` results (exit 0 / 1), with typed refusals exiting 4.
+
+### Usage
 
 ```sh
 qaren prepare <scenario.yaml> [--json] [--dry-run]
@@ -35,7 +994,7 @@ qaren cleanup <run-id> [--json]
 qaren cleanup <run-id> [--json] --remove-app --confirm-remove-app <run-id>/<remote-serial>/<app-id>
 ```
 
-Every syntactically valid invocation writes exactly one `qaren/1` JSON
+Every syntactically valid preparation invocation writes exactly one `qaren/1` JSON
 receipt to stdout; argument/usage errors are the sole exception — they exit
 `2` with help on stderr and an empty stdout. All human-readable narration
 goes to stderr. Exit codes: `0` ready / cleaned / planned / working /
@@ -47,8 +1006,8 @@ unconfirmed app removal, or rejected cooperative-handoff evidence).
 on `cleanup`; a missing flag or confirmation value, or use on another verb,
 is a usage error (exit `2`, no receipt).
 
-`status` and `cleanup` locate the run under `~/.qaren/runs/<run-id>/`,
-independently of the current directory. `--dry-run` on `prepare`
+`status`, `cleanup` and `complete` load the host-level run record described
+under [iOS admission and cleanup](#ios-admission-and-cleanup). `--dry-run` on `prepare`
 validates the scenario + candidate and emits the planned command sequence
 (listener/readiness poll probes elided) without allocating anything.
 
@@ -68,13 +1027,15 @@ prepare ──► validate (scenario schema, candidate git sha, lockfile sha256)
                       USB:  exclusive claim lock usb-<serial> (refuse if held)
                             run-scoped --one-device <serial> adb server on
                             adb_server_port; device must probe `device`
-        ──► build+launch   pnpm exec expo run:{ios|android}
-                             iOS: --device <udid>; Android: no --device
+        ──► build+launch   iOS: finite generic Expo or explicit Xcode workspace build
+                             → verify simulator bundle → install on owned UDID
+                             → separate owned Metro → launch verified bundle
+                          Android: pnpm exec expo run:android --port <port>
                              (serial pinned via ANDROID_SERIAL + the
-                             one-device server) --port <port>   (CI=1)
+                             one-device server; CI=1)
         ──► verify   port owner pgid == spawned pgid, /status responds,
                      app installed + running on the owned device
-        ──► ready    receipt + durable run.json in the run directory above
+        ──► ready    receipt + durable host-level run.json
 
 (With `build.owner: qaren` the chain branches after `allocate`: no
 build+launch — prepare re-verifies the candidate, issues `handoff.json`, and
@@ -95,6 +1056,27 @@ Scenarios are versioned (`schema: qaren/1`), narrow, and strictly validated
 - [`scenarios/cooperative-ios.yaml`](scenarios/cooperative-ios.yaml) /
   [`scenarios/cooperative-usb-android.yaml`](scenarios/cooperative-usb-android.yaml)
   — `build.owner: qaren` handoff mode (see below).
+
+### CLI-owned iOS build routes
+
+The default route requires the app-local Expo CLI to advertise generic build-only mode, `--no-bundler` and `--output`. For older Expo CLIs, explicitly select an existing native workspace and its Xcode scheme in the app's `.qaren/config.yaml` (or an external `check --config` file):
+
+```yaml
+appId: com.example.app
+devClientScheme: exp+example
+ios:
+  build:
+    workspace: ios/Example.xcworkspace
+    scheme: Example
+```
+
+For `prepare`, the same pair belongs under `build.ios_workspace` in the scenario, alongside `build.owner: cli`. Workspace paths are relative to the app root, remain under `ios/`, and must resolve through plain directories to an existing `.xcworkspace` with a plain `contents.xcworkspacedata` file. No scheme discovery, Expo upgrade or automatic fallback after a failed build occurs. An iOS section in shared `check` config does not select this route for Android.
+
+This route runs `xcrun xcodebuild` in Debug against the generic iOS Simulator destination, with signing and the React Native packager launch disabled. Products and DerivedData are isolated under the run directory. The existing finite-build process group and lock remain authoritative; only a clean exit with proven group shutdown can proceed to single-bundle verification, exact-device installation, separate Metro and launch. A missing or ambiguous app, wrong bundle/platform/scheme or unsupported dev-client launcher still fails before installation. Workspace and scheme selection participate in the native cache fingerprint; omitting the opt-in preserves existing Expo cache keys.
+
+**Native preparation remains explicit.** Supply a workspace whose native dependencies and generated inputs are ready for Xcode. QaReN retains its existing clean/incremental policy: an unproven generated native directory is regenerated through owned `expo prebuild --clean`, then the workspace is revalidated before compilation; a git-visible native tree is not regenerated. The workspace route adds no CocoaPods synchronization or codegen command of its own, and workspace existence is not proof that those inputs are current after a dependency update. A build failure is reported, not retried through another backend.
+
+After verified cache publication and proven build-group shutdown, successful workspace builds retire their run-local products and DerivedData. Failed builds, failed publication or unresolved cleanup retain outputs; symlinked retirement roots are not followed. Unknown build-group cleanup continues to retain the build lock and device lease for `qaren cleanup`.
 
 ### Cooperative handoff mode (`build.owner: qaren`)
 
@@ -117,7 +1099,7 @@ is unreachable from the session's global adb server). Cleanup is unchanged:
 qaren removes exactly the allocation it recorded and never touches the
 session's Metro or build. The full chain, ownership table, trust boundary,
 and temporary policy live in
-[`docs/qa/cooperative-qa.md`](../../docs/qa/cooperative-qa.md).
+[`docs/qa/cooperative-qa.md`](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/qa/cooperative-qa.md).
 
 ### Project-scoped real apps
 
@@ -125,23 +1107,17 @@ and temporary policy live in
 project instead of the workspace containing the scenario. The path must BE a
 git toplevel — a subdirectory of some larger repo is refused
 (`CANDIDATE_PATH_INVALID`) so a run can never bind to files outside the
-project it named. Everything project-scoped follows that worktree: run
-records and caches live under `<worktree>/.qaren/`, the fingerprint
-enumerates only that worktree, and `status`/`cleanup` are run from inside
-it. qaren never discovers, enumerates, or couples other projects.
+project it named. Project caches live under `<worktree>/.qaren/`, and the
+fingerprint enumerates only that worktree. Run records remain host-level;
+`status`/`cleanup` load them by run id without requiring the app directory.
+qaren never discovers, enumerates, or couples other projects.
 `candidate.project_root: .` selects a project living at the worktree root.
 Because `.qaren/` is qaren's own state, it is excluded from the candidate
 cleanliness and drift comparison — an external project does not need to
 gitignore it, and a clean worktree stays provably clean while qaren writes
-its run records there.
+its project caches there.
 
-`candidate.dev_client_scheme` names the app's dev-client URL scheme (e.g.
-`rndatest`); it is required for cached dev-client reuse (the launch deep
-link) and its absence visibly downgrades a reusable run to an incremental
-build. The checked-in iOS scenario deliberately omits it — its exact bytes
-are pinned by the archived 2026-08-12 proof receipts — so cached reuse on
-the workspace lane is an explicit opt-in via a scenario copy carrying the
-scheme (the USB example shows the field).
+`candidate.dev_client_scheme` names the app's registered dev-client URL scheme (e.g. `exp+example`), not its Xcode scheme; it is required for CLI-owned iOS builds and cached dev-client reuse. `check` calls this field `devClientScheme`. Bundle verification checks both the registered scheme and the built dev-client launcher before installation.
 
 ### Physical USB Android
 
@@ -165,8 +1141,8 @@ drives adb through that socket and serial) is proven removed or absent.
 
 Every device, Metro port, bundle id, candidate revision, project root, and
 artifact directory is explicit — in the scenario, the run record, or the
-receipt. The tool never selects `booted`, a default device, or "first
-available". `candidate.revision: HEAD` records the exact sha; a pinned
+receipt. The scenario-based preparation verbs never select `booted`, a default device,
+or "first available". `candidate.revision: HEAD` records the exact sha; a pinned
 40-char sha refuses to run against any other checkout state.
 
 ## Native-fingerprint build selection
@@ -185,20 +1161,70 @@ outputs, not inputs): `package.json`, `pnpm-lock.yaml`, `app.json`,
 `assets/**`, `patches/**`, tracked platform dirs (minus build outputs),
 files referenced by relative path from a static `app.json` (icons, splash,
 service files, local config plugins), the traced transitive relative-import
-closure of those local plugins (common static `import`/`require` forms; the
-scan is a declared best-effort contract, not a JS parser), and the native
+closure of those local plugins and supported `react-native.config.js`/`.ts`
+entry points, and the native
 surfaces (`package.json`, `*.podspec`, `expo-module.config.json`, `ios/`,
-`android/`) of `file:`/`link:` local dependencies inside the worktree.
-Symlinks hash their link text plus in-worktree target content. Anything
-that cannot be enumerated or bound — dynamic `app.config.*`, unresolvable
-local refs, out-of-worktree symlink targets, `workspace:` deps — marks the
-fingerprint **incomplete**, which forbids cached reuse (visible in the
-decision evidence). qaren is pnpm-only; other package managers' lockfiles
-are out of contract.
+`android/`) of `file:`/`link:` local dependencies inside the worktree, enumerated
+from `dependencies`, `devDependencies` and `optionalDependencies`.
+Registry package plugins named in `app.json` and bare imports in traced modules are
+bound by the lockfile plus the `version` of the package Node resolution finds
+in `node_modules` from the project root up to the worktree root (pnpm symlinks
+included); pure Node built-ins are ignored, and a package that does not resolve to a
+versioned `package.json` makes the fingerprint incomplete.
+Local package plugins and bare imports declared through `link:`, `file:` or
+`workspace:`, or resolved into worktree source outside `node_modules`, are not
+traced and always make the fingerprint incomplete; relative plugin files in
+the app retain their existing scan.
+When a traced module contains a bare import, any nested `node_modules` directory
+on the path from its directory up to, but excluding, the app root also makes the
+fingerprint incomplete. Root-based package binding cannot prove that import's
+resolution in this case.
+Static plain-string `import` and `require` forms, including whitespace around
+`require` arguments, are traced. Each module dependency must name an existing
+regular file directly, with no symlink in its path, and be recursively scanned
+as `.js`, `.ts`, `.mjs`, `.cjs` or parsed as `.json`. Extension inference,
+directory indexes, package `main`/`exports` resolution, extensionless modules,
+dynamic or template-literal arguments, escaped literals and other unsupported
+syntax make the fingerprint **incomplete**, forbidding cached reuse (visible
+in decision evidence). Unresolvable local refs and `workspace:` dependencies
+in any of those sections also make it incomplete.
+
+**Dynamic `app.config.*` (iOS).** qaren cannot trace a dynamic config itself,
+so it runs the app's own `@expo/fingerprint` (resolved through the app's `expo`
+install, never downloaded) as `pnpm exec node <cli> fingerprint:generate
+--platform ios` from the project root, with the iOS build's environment
+transforms (`CI` removed, `EXPO_NO_TELEMETRY=1`). Expo evaluates the config,
+loads `.env` files, and hashes the evaluated config, the modules it loaded,
+autolinked native modules and config-plugin inputs. The fingerprint value then
+also binds that hash and the selected Xcode (`xcodebuild -version`), and the
+receipt notes record `fingerprint_parts` (hashes only), `fingerprint_complete`
+and `expo_fingerprint_ms`.
+A successful evaluation clears only the dynamic-config incompleteness; every
+other reason still forbids reuse. If evaluation is unavailable (the package does
+not resolve, the command fails or times out after 120 s, or its output has no
+hash) the dynamic config stays incomplete and the decision is a rebuild as
+before, with the unavailability named in the evidence. Only the `hash` field is
+read: the command output, which can contain evaluated config values, is never
+logged or stored. A config whose evaluated value changes between runs (an
+environment read, a time or random value) changes the hash and rebuilds.
+Limits: environment read only by native build scripts (a Podfile reading `ENV`,
+for example) and the CocoaPods version are not bound; Android keeps a dynamic
+config incomplete; and the Xcode identity is bound only for dynamic configs.
+
+An incomplete fingerprint over an existing generated native directory requires a
+clean prebuild, which deletes that directory with its installed native
+dependencies and build outputs; a git-visible native directory can still build
+incrementally under the decision rules below. When the fingerprint matches but
+is incomplete, the decision reason names the first incompleteness cause, such as
+the dynamic config.
+Other native-input symlinks hash link text plus in-worktree target content;
+out-of-worktree targets make the fingerprint incomplete. The scanner is
+conservative, not a full JS parser.
+qaren is pnpm-only; other package managers' lockfiles are out of contract.
 
 **Decision.** Cache state lives at
 `<worktree>/.qaren/native-cache/<platform>-<app_id>.json`
-(`qaren-native-cache/1`), bound to the exact worktree, platform, app id,
+(`qaren-native-cache/2`; a state with an older schema is invalid and rebuilds clean once), bound to the exact worktree, platform, app id,
 fingerprint, and building candidate sha:
 
 1. **Reuse** — state matches this worktree/platform/app, fingerprints are
@@ -210,35 +1236,52 @@ fingerprint, and building candidate sha:
    Android). Fresh candidate JS always comes from Metro; the evidence
    records which candidate built the binary and which serves JS — native
    compatibility is proven by the fingerprint, never inferred from the sha.
-2. **Incremental** — reuse is invalid (fingerprint changed, artifact
+2. **Incremental** — reuse is invalid (committed native inputs changed, artifact
    stale/missing/unverified, no scheme, incomplete fingerprint) but the
    worktree-keyed caches are provably this project's: the state binds this
    exact worktree/app and any generated native dir was created by a
-   recorded qaren build. `expo run:*` recompiles over the existing
-   `ios/`+Pods+`ios/build` / gradle caches.
+   recorded qaren build with unchanged, completely fingerprinted inputs.
+   Committed native directories keep incremental builds for changed or
+   incomplete fingerprints. iOS follows the
+   [CLI-owned build routes](#cli-owned-ios-build-routes); Android recompiles
+   with `expo run:android` over the existing Gradle caches.
 3. **Clean** — mandatory whenever compatibility is unprovable: no/corrupt
-   state, cross-worktree state, unproven generated-dir provenance, or
-   `build.strategy: clean`. A generated (git-ignored) native dir is
-   regenerated via `expo prebuild --clean` (expo's own CNG contract); a
-   git-visible native dir is candidate input and is never deleted — clean
+   state, cross-worktree state, unproven generated-dir provenance, changed or
+   incomplete fingerprints for an existing generated native directory, or
+   `build.strategy: clean`. A generated (git-ignored) native dir is regenerated
+   using only `expo prebuild --platform <platform> --clean`, which deletes the
+   directory with its installed native dependencies and build outputs; build
+   caches outside it are kept. A git-visible native dir
+   is candidate input and is never deleted — clean
    there means dropping the derived build outputs (`ios/build`,
    `android/build`, `android/app/build`, `android/.gradle`).
 
+For a clean decision requiring generated-directory regeneration, `--dry-run`
+includes the same `expo prebuild --platform <platform> --clean` command before
+compilation on both platforms.
+
 After a successful build the dev client (single `.app` bundle / debug apk)
-is content-hashed and copied under
-`.qaren/native-cache/artifacts/<platform>/`, and the state is refreshed
-with the readiness-rechecked fingerprint (native-input drift during the
-build fails the run as `CANDIDATE_DRIFTED`). An ambiguous artifact (zero or
-several bundles) skips caching with a recorded reason — never a guess. The
-artifact cache is bounded: recording a new build prunes the same
-platform+app's directories for older fingerprints, so only the latest
-reusable dev client is kept on disk.
+is copied and content-hashed in a staging directory under
+`.qaren/native-cache/artifacts/<platform>/<app_id>-<fingerprint-key>/`.
+Copying checks cancellation between entries and file chunks. A final
+cancellation check precedes renaming staging to a run-specific generation and
+atomically saving cache state with the readiness-rechecked fingerprint
+(native-input drift during the build fails the run as `CANDIDATE_DRIFTED`).
+Cancellation before that publication removes staging and preserves the previous
+artifact and state without pruning or rebinding installation ownership. A failed
+state save removes the new generation and retains the previous state. An
+ambiguous artifact (zero or several bundles) skips caching with a recorded
+reason — never a guess. Only successful publication permits ownership rebinding
+and pruning the same platform+app's directories for older fingerprints;
+generations within the current fingerprint bucket are retained.
 
 **Build serialization.** Native builds (incremental and clean) take a
 host-level `native-build-<platform>` lock before allocation. A live holder
-is a structured refusal (`BUILD_CONTENDED`, exit 4); a provably dead
-holder's lock is adopted (unlike device claims, this lock guards only
-compile concurrency). The lock is released at ready and by cleanup.
+is a structured refusal (`BUILD_CONTENDED`, exit 4). Android can adopt a
+provably dead holder's lock. iOS refuses an existing lock until its run's
+cleanup proves the finite build group retired; a dead CLI alone is insufficient.
+The lock is released after preparation or by cleanup only when owned build
+authority is retired.
 
 **Credential-authorized dependency prewarming.** Under `deps.policy:
 require-prewarm`, `qaren prewarm <scenario>` is the one deliberate network
@@ -246,9 +1289,9 @@ moment (the default `install` policy keeps today's behavior: prepare's own
 `pnpm install` may reach the network): run it while registry credentials
 are available; it runs `pnpm fetch` + `pnpm install
 --frozen-lockfile` (CI, stdin-null) and persists only
-`{worktree, project, lockfile sha256, timestamp}` — never a secret (failure
-summaries pass a credential redactor). A scenario with `deps.policy:
-require-prewarm` then refuses to prepare without a matching record
+`{worktree, project, lockfile sha256, timestamp}`; failure summaries follow the
+[diagnostic redaction contract](#preparation-ownership-and-safety-rules).
+A scenario with `deps.policy: require-prewarm` then refuses to prepare without a matching record
 (`DEPS_NOT_PREWARMED`) and installs with `--offline`, so no mid-run
 credential prompt can ever occur.
 
@@ -265,7 +1308,7 @@ its run" cleanup story. Once compile is short the balance flips — the
 incremental run spent 1m 31s in allocate against 1m 03s in
 build_and_ready — so revisit this once live reuse is measurable.
 
-## Ownership and safety rules
+## Preparation ownership and safety rules
 
 - **On the farm path, physical USB phones are structurally unreachable.**
   Every device-addressing adb call carries `-s 127.0.0.1:<port>` (plus
@@ -282,6 +1325,22 @@ build_and_ready — so revisit this once live reuse is measurable.
   applicable to them. The emulator guest only trusts the farm host's adb key,
   so the private server authenticates with that key (`ADB_VENDOR_KEYS`),
   fetched once over ssh into the run directory and deleted at cleanup.
+- **Private key fetch output is withheld from diagnostics.** The farm key
+  fetch uses private capture: failure details in `run.json` and the receipt
+  report only exit status and timeout state with `[private output withheld]`,
+  and neither captured stream is written to durable logs. Only a successful,
+  nonempty fetch writes the cleanup-tracked, mode-0600 vendor key file.
+  Parser input stays raw in memory. Persisted operational identities
+  (paths, ids, pids, ports and lock directories) are written exactly;
+  output-derived record fields use `OutputText`, masked on construction and
+  load. Command summaries inspect both streams, and ledger and receipt
+  evidence strings keep whole-string withholding when they contain
+  `private key` (case-insensitive), using
+  `[output withheld: contained private key material]`. Command logs keep
+  per-byte whole-command withholding: a mention truncates that command's
+  output and drops subsequent bytes. API-key redaction still applies to
+  retained diagnostics and logs. Key bodies with no private-key mention,
+  or copied before the mention arrives, cannot be withheld by this rule.
 - **Local listeners are never adopted.** The farm-advertised adb port is
   preflighted free on this host *before* the lease is claimed (a local
   emulator commonly owns 5555), and a listener on the tunnel or private adb
@@ -292,10 +1351,13 @@ build_and_ready — so revisit this once live reuse is measurable.
   run-scoped name (`qaren-<run-id>`) both match (a pending allocation whose
   create crashed before the UDID was learned is recovered by its unique
   run-scoped name, refusing on ambiguity). A process group is signalled only
-  when the recorded leader's birth time (`ps lstart`) still matches, or the
-  recorded port (Metro, tunnel, or private adb server) is owned by a pid whose
-  pgid equals the recorded group (the leader-died-children-live case); a group
-  recorded without identity is `unresolved`, never guessed absent, and after a
+  when the recorded leader's birth time (`ps lstart`) still matches immediately
+  before each signal, including escalation after the grace wait. A matching
+  port and group alone never authorize signalling after the leader's birth
+  identity is lost or its PID is reused. An unreaped zombie with the recorded
+  birth still pins the leader PID and can authorize group escalation. A present
+  group without proven leader identity remains `unresolved`; proven group
+  absence can retire it without a signal. After a
   kill the port must be positively free or foreign before `removed` is
   claimed. The farm slot is stopped only when the live lease holder equals
   this run's holder *and* the forward is proven gone — either the tunnel
@@ -313,6 +1375,12 @@ build_and_ready — so revisit this once live reuse is measurable.
   permits core cleanup under its existing process-group proofs. Runs without
   a recorded core retain their existing cleanup behavior, including build
   cleanup.
+- **Storage accounting preserves ownership.** Successful owned simulator
+  deletion reports its measured data-directory bytes, or an unknown byte count
+  if measurement was unavailable, including pending-allocation recovery.
+  Borrowed simulators are kept. `check`/`pr` refuse `DISK_BUDGET_EXCEEDED` before
+  installation when the run storage has less than 1 GiB free. Worktree and
+  recording retirement follow the [PR teardown contract](#test-a-pull-request).
 - **App removal is opt-in, confirmed, and bound to the run record.** Plain
   Android `cleanup` never touches the installed app: stopping the farm AVD
   keeps its userdata, so the dev client this run installed survives the lease (and a
@@ -353,11 +1421,12 @@ build_and_ready — so revisit this once live reuse is measurable.
   absence; a still-present package or unproven absence is `unresolved`.
   If both probes prove absence before uninstall, the leg is `absent` and
   records uninstall as `not issued`.
-  The attempt (timestamp, observed installed sha256, complete captured
-  exit/stdout/stderr and timeout evidence for uninstall / `pm path` /
-  package list) is persisted to `run.json` at `resources.app_install.removal`
-  before any lease release; a save failure makes the leg `unresolved` and
-  retains the farm lease while independent owned local cleanup continues.
+  The attempt (timestamp, observed installed sha256, and command evidence
+  for uninstall / `pm path` / package list) is persisted to `run.json` at
+  `resources.app_install.removal` before any lease release; command evidence
+  follows the diagnostic redaction contract above. A save failure makes the
+  leg `unresolved` and retains the farm lease while independent owned local
+  cleanup continues.
   The receipt echoes it in `outcomes.app_removal_*`, with the observed hash
   in `outcomes.app_installed_sha256`. The leg folds into the existing verdict:
   a refused or unresolved removal keeps the receipt off `cleaned` and the
@@ -390,12 +1459,9 @@ build_and_ready — so revisit this once live reuse is measurable.
   process group. The cross-process cooperative handoff uses its persisted
   UTC `issued_at` plus `build_seconds` as one wall-clock validity window;
   retries never reset it, and an unprovable backwards clock refuses.
-- **Provenance is rechecked at readiness.** The candidate sha, worktree
-  cleanliness, the worktree fingerprint (sha256 of `git status --porcelain`
-  with entries under qaren's own `.qaren/` state directory excluded),
-  and lockfile hash are re-verified immediately before `ready`;
-  drift during the build fails the run (`CANDIDATE_DRIFTED`) instead of
-  emitting a receipt that misattributes the built app.
+- **Provenance is rechecked at readiness.** See the shared
+  [candidate provenance contract](#candidate-provenance) for fingerprint
+  inputs, output exclusions and drift failures.
 - `cleanup` is idempotent: a second run re-probes, finds everything absent,
   and returns `cleaned` again without signalling anything after successful
   cleanup; app-removal retries follow the persisted-evidence rules above.
@@ -446,7 +1512,7 @@ prepare 37s / 48 subprocesses → `ready`, status 8/8, cleanup removed all six
 resources, idempotent re-cleanup `cleaned`. The same independent
 post-cleanup verification passed again. Receipts, device screenshots, and
 the rendered proof card live in
-[`docs/proof/2026-08-12-qaren-exact-head/`](../../docs/proof/2026-08-12-qaren-exact-head/PROOF.md);
+[`docs/proof/2026-08-12-qaren-exact-head/`](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/proof/2026-08-12-qaren-exact-head/PROOF.md);
 every receipt there is pinned to the head that produced it (`f3e1e43`), which
 predates the later corrections documented above — lease release keyed on the
 tunnel port, worktree-fingerprint drift, monotonic deadlines, the atomic
@@ -457,7 +1523,7 @@ run-id claim, and persist-before-allocate.
 Clean and incremental iOS simulator journeys were measured at candidate
 `75a8e76` (`git_dirty: false`) once the internal Data volume recovered to
 ~26 GiB free. Receipts, screenshots, and short videos:
-[`docs/proof/2026-08-17-qaren-issue-24/`](../../docs/proof/2026-08-17-qaren-issue-24/PROOF.md).
+[`docs/proof/2026-08-17-qaren-issue-24/`](https://github.com/Lykhoyda/rn-dev-agent-workspace/blob/main/docs/proof/2026-08-17-qaren-issue-24/PROOF.md).
 
 | journey | prepare total | deps | allocate | build_and_ready | decision |
 | --- | --- | --- | --- | --- | --- |
@@ -544,32 +1610,39 @@ now encoded once and replayed deterministically.
   practice because `android-farm start` refuses while any lease file exists,
   so no legitimate actor can re-lease between the check and the stop. A
   compare-and-stop verb would need a farm-side change, out of scope here.
-- **PID identity is birth time (`ps lstart`), not command line.** pnpm shims
-  exec-transition (`sh` → `node`) after capture, so command-line comparison
-  would misclassify our own Metro as foreign and strand resources. Same-second
-  pid reuse on macOS is the accepted residual risk.
+- **Process-birth precision:** the [cleanup contract](#preparation-ownership-and-safety-rules)
+  uses `ps lstart` for CLI process groups, allowing owned launcher exec
+  transitions; same-second PID reuse on macOS remains a residual risk.
 - **ANDROID_HOME is an environment prerequisite.** The resolved adb path is
   validated at prepare time and recorded in the run record; status/cleanup
   reuse the recorded path, never the ambient env.
 - **`status` trusts a `cleaned` phase** without re-probing; cleanup only sets
   it after every resource verified removed/absent, and re-running cleanup
   re-verifies.
+- **Extreme host load can hold the iOS lease.** Runner-host absence is read
+  through `simctl spawn … launchctl list` within a fixed budget; when the host is
+  too loaded for it to finish, cleanup keeps the lease and the next `check`
+  refuses `DEVICE_BUSY` until `qaren cleanup <run-id>` proves absence once load
+  allows.
 - **App removal limitations:** see the opt-in contract under
-  [Ownership and safety rules](#ownership-and-safety-rules).
+  [Ownership and safety rules](#preparation-ownership-and-safety-rules).
 - **Crash-durability**: `run.json` writes are atomic (temp + rename) but not
   fsync'd; power loss during a write can lose the newest phase transition.
   Acceptable for a dev-machine tool.
-- The build step reuses `expo run:*` semantics: the spawned process *is* the
-  Metro owner and stays alive after `ready`; killing its process group is the
-  cleanup contract for both Metro and build.
+- Android preparation uses `expo run:android`: its spawned process owns
+  Metro and stays alive after `ready`. iOS uses the finite-build contract under
+  [Check a plan](#check-a-plan).
 - app_id validation is one shared grammar (dot-separated `[A-Za-z0-9_-]`
   segments), not per-platform store rules; invalid-but-well-formed ids fail
   later as visible `BUILD_FAILED`.
-- **Expo SDK 56 reuse cannot see the built `.app`.** `expo run:ios` writes
-  DerivedData; `locate_built_artifact` looks under `ios/build`. Live
-  fingerprint-matched reuse is unmeasured until discovery follows the
-  real product path. Hermetic tests already cover reuse vs stale/missing
-  artifacts.
+- **Literal checks judge accessibility presence, not paint.** Text inside the
+  screen, window and scroll clip counts as visible even when an overlay paints
+  over it, such as an absolutely positioned sticky footer or another later
+  sibling that XCUI still reports hittable. Only the keyboard is treated as an
+  occluder.
+- The historical Expo SDK 56 artifact-discovery gap in the timing evidence
+  predates the current finite iOS build path. Those measurements do not validate
+  this implementation; exact-head device acceptance remains separate.
 
 ## Comparing against the manual approach
 

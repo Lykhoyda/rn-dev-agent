@@ -31,7 +31,7 @@ function health(capable = true) {
     capabilities: [
       ...REQUIRED_IOS_FEATURES,
       'HONEST_HITTABLE',
-      ...(capable ? ['PLATFORM_PRESENCE_V1'] : []),
+      ...(capable ? ['PLATFORM_PRESENCE_V2'] : []),
     ],
   });
 }
@@ -56,7 +56,7 @@ afterEach(() => {
 });
 
 test('presence opt-in reaches the capable runner without any snapshot filters', async () => {
-  _setCapabilitiesForTest(['PLATFORM_PRESENCE_V1']);
+  _setCapabilitiesForTest(['PLATFORM_PRESENCE_V2']);
   const requests: unknown[] = [];
   _setFetchForTest(async (url, init) => {
     if (String(url).endsWith('/health')) return health();
@@ -76,6 +76,7 @@ test('presence opt-in reaches the capable runner without any snapshot filters', 
     command: 'snapshot',
     bundleId: 'com.test',
     platformPresence: true,
+    presenceBudgetMs: 20_000,
     interactiveOnly: true,
     compact: true,
     depth: 2,
@@ -83,15 +84,21 @@ test('presence opt-in reaches the capable runner without any snapshot filters', 
   });
   assert.equal(result.isError, undefined);
   assert.deepEqual(requests, [
-    { command: 'snapshot', appBundleId: 'com.test', platformPresence: true },
+    {
+      command: 'snapshot',
+      appBundleId: 'com.test',
+      platformPresence: true,
+      presenceBudgetMs: 20_000,
+    },
   ]);
   assert.equal(Object.hasOwn(parseEnvelope(result).data, 'presenceCapture'), false);
 });
 
 test('snapshot normalization preserves opaque capture and node presence without exposing values or focus', async () => {
-  _setCapabilitiesForTest(['PLATFORM_PRESENCE_V1']);
+  _setCapabilitiesForTest(['PLATFORM_PRESENCE_V2']);
   const presenceCapture = {
-    version: 1,
+    version: 2,
+    appliedBudgetMs: 20_000,
     source: 'xcui-live',
     captureId: 'capture-17',
     appId: 'com.test',
@@ -140,7 +147,11 @@ test('snapshot normalization preserves opaque capture and node presence without 
             },
           }),
     );
-    const result = await runIOS({ command: 'snapshot', platformPresence: true });
+    const result = await runIOS({
+      command: 'snapshot',
+      platformPresence: true,
+      presenceBudgetMs: 20_000,
+    });
     assert.deepEqual(parseEnvelope(result).data, {
       nodes: [
         { ref: '@e0', index: 0, type: 'Button', label: 'Continue', rect, presence: nodeEvidence },
@@ -153,12 +164,12 @@ test('snapshot normalization preserves opaque capture and node presence without 
 });
 
 test('ref healing and reused generations never inherit earlier presence proof', async () => {
-  _setCapabilitiesForTest(['PLATFORM_PRESENCE_V1']);
+  _setCapabilitiesForTest(['PLATFORM_PRESENCE_V2']);
   async function snapshot(data: Record<string, unknown>) {
     _setFetchForTest(async (url) =>
       String(url).endsWith('/health') ? health() : Response.json({ ok: true, data }),
     );
-    return runIOS({ command: 'snapshot', platformPresence: true });
+    return runIOS({ command: 'snapshot', platformPresence: true, presenceBudgetMs: 20_000 });
   }
   await snapshot({
     snapshotGeneration: 17,
@@ -178,8 +189,6 @@ test('ref healing and reused generations never inherit earlier presence proof', 
   assert.deepEqual(getCachedSignature('@e3'), {
     type: 'Button',
     label: 'Continue',
-    flatIndex: 0,
-    nodeCount: 1,
   });
   assert.equal(Object.hasOwn(getFreshRefTarget('@e3')!, 'presence'), false);
 
@@ -212,7 +221,9 @@ test('an older runner refuses presence without dispatching a legacy snapshot', a
     requests.push(body);
     return Response.json({ ok: true, data: { nodes: [{ index: 0, type: 'Button', rect }] } });
   });
-  const result = parseEnvelope(await runIOS({ command: 'snapshot', platformPresence: true }));
+  const result = parseEnvelope(
+    await runIOS({ command: 'snapshot', platformPresence: true, presenceBudgetMs: 20_000 }),
+  );
   assert.deepEqual(requests, []);
   assert.equal(result.ok, false);
   assert.equal(result.code, 'RN_FAST_RUNNER_STALE');
@@ -252,7 +263,12 @@ test('presence snapshots retain true and false keyboard state and serialize exac
       });
     });
     const snapshot = parseEnvelope(
-      await runIOS({ command: 'snapshot', bundleId: 'com.test', platformPresence: true }),
+      await runIOS({
+        command: 'snapshot',
+        bundleId: 'com.test',
+        platformPresence: true,
+        presenceBudgetMs: 20_000,
+      }),
     );
     assert.equal(snapshot.data.keyboardVisible, keyboardVisible);
     assert.equal(snapshot.meta?.snapshotVerdict.refMapUpdated, true);
@@ -301,7 +317,12 @@ test('presence without keyboard freshness clears refs but retains unknown eviden
   const presenceCapture = { opaque: true, complete: false };
   for (const keyboardVisible of [undefined, null, 'false', 0]) {
     data = { nodes: [node], snapshotGeneration: 23, keyboardVisible: true };
-    await runIOS({ command: 'snapshot', bundleId: 'com.test', platformPresence: true });
+    await runIOS({
+      command: 'snapshot',
+      bundleId: 'com.test',
+      platformPresence: true,
+      presenceBudgetMs: 20_000,
+    });
     assert.ok(getFreshRefTarget('@e7'));
     data = {
       nodes: [node],
@@ -310,7 +331,12 @@ test('presence without keyboard freshness clears refs but retains unknown eviden
       ...(keyboardVisible === undefined ? {} : { keyboardVisible }),
     };
     const result = parseEnvelope(
-      await runIOS({ command: 'snapshot', bundleId: 'com.test', platformPresence: true }),
+      await runIOS({
+        command: 'snapshot',
+        bundleId: 'com.test',
+        platformPresence: true,
+        presenceBudgetMs: 20_000,
+      }),
     );
     assert.equal(result.ok, true);
     assert.equal(hasRefMap(), false);
@@ -348,10 +374,12 @@ test('presence cannot synthesize generation freshness or retain old refs from a 
     null,
   ]) {
     data = { nodes, keyboardVisible: false, snapshotGeneration: 17 };
-    await runIOS({ command: 'snapshot', platformPresence: true });
+    await runIOS({ command: 'snapshot', platformPresence: true, presenceBudgetMs: 20_000 });
     assert.ok(getFreshRefTarget('@e0'));
     data = invalid;
-    const result = parseEnvelope(await runIOS({ command: 'snapshot', platformPresence: true }));
+    const result = parseEnvelope(
+      await runIOS({ command: 'snapshot', platformPresence: true, presenceBudgetMs: 20_000 }),
+    );
     assert.equal(hasRefMap(), false);
     assert.equal(result.meta?.snapshotVerdict.refMapUpdated, false);
     assert.equal(result.meta?.snapshotVerdict.state, 'degraded');
@@ -382,7 +410,9 @@ test('absent and dead runners refuse presence without cached-capability reuse or
     assert.fail('no runner is available to probe or capture');
   });
   _setRunnerStateForTest(null);
-  const absent = parseEnvelope(await runIOS({ command: 'snapshot', platformPresence: true }));
+  const absent = parseEnvelope(
+    await runIOS({ command: 'snapshot', platformPresence: true, presenceBudgetMs: 20_000 }),
+  );
   assert.equal(absent.code, 'RN_FAST_RUNNER_DOWN');
   assert.equal(absent.meta?.dispatched, false);
 
@@ -398,7 +428,9 @@ test('absent and dead runners refuse presence without cached-capability reuse or
     assert.equal(signal, 0, 'only process existence may be probed');
     throw new Error('ESRCH');
   });
-  const dead = parseEnvelope(await runIOS({ command: 'snapshot', platformPresence: true }));
+  const dead = parseEnvelope(
+    await runIOS({ command: 'snapshot', platformPresence: true, presenceBudgetMs: 20_000 }),
+  );
   assert.equal(dead.code, 'RN_FAST_RUNNER_DOWN');
   assert.equal(dead.meta?.mutation, 'none');
   assert.equal(dead.meta?.dispatched, false);
@@ -418,7 +450,9 @@ test('presence reuses the existing health authority check and never captures on 
     urls.push(String(url));
     return health();
   });
-  const result = parseEnvelope(await runIOS({ command: 'snapshot', platformPresence: true }));
+  const result = parseEnvelope(
+    await runIOS({ command: 'snapshot', platformPresence: true, presenceBudgetMs: 20_000 }),
+  );
   assert.equal(result.code, 'RUNNER_OWNERSHIP_MISMATCH');
   assert.equal(result.meta?.dispatched, false);
   assert.deepEqual(urls, ['http://127.0.0.1:22088/health']);
@@ -459,7 +493,12 @@ test('presence transport and native failures never retry, relayout, or reap the 
       return Response.json({ ok: false, error: { code: failure, message: failure } });
     });
     const result = parseEnvelope(
-      await runIOS({ command: 'snapshot', bundleId: 'com.test', platformPresence: true }),
+      await runIOS({
+        command: 'snapshot',
+        bundleId: 'com.test',
+        platformPresence: true,
+        presenceBudgetMs: 20_000,
+      }),
     );
     assert.equal(result.ok, false);
     assert.equal(result.meta?.capture, 'unknown');

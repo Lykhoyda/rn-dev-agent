@@ -43,9 +43,18 @@ export const REQUIRED_IOS_COMMANDS = [
   'status',
 ] as const satisfies readonly RunIOSArgs['command'][];
 
-export const REQUIRED_IOS_FEATURES = ['EXACT_KEYBOARD_TARGET_GUARD'] as const;
+export const REQUIRED_IOS_FEATURES = [
+  'EXACT_KEYBOARD_TARGET_GUARD',
+  'FILL_EVIDENCE_V1',
+  'HIT_TESTED_DISPATCH_V1',
+  'TARGET_FRAME_GUARD_V1',
+  'SNAPSHOT_FIDELITY_V1',
+] as const;
 
-export const REQUIRED_ANDROID_FEATURES = ['APP_SCOPED_EXACT_INTERACTION'] as const;
+export const REQUIRED_ANDROID_FEATURES = [
+  'APP_SCOPED_EXACT_INTERACTION',
+  'FILL_EVIDENCE_V1',
+] as const;
 
 export const REQUIRED_ANDROID_COMMANDS = [
   'tap',

@@ -1,141 +1,55 @@
-import type { ReactObservation } from './capture.js';
-import { validateReactHostEvidence } from './screen.js';
-import type { Screen } from './screen.js';
-import { capturePrivateScreen } from './privacy.js';
-import { PRIVATE_INPUT_LIMITS } from './private-input-limits.js';
+import type { NativeNode, Screen } from './screen.js';
+import { kindOf } from './screen.js';
+import { capturePrivateScreen, isPossibleInput } from './privacy.js';
 
 export class PrivateInputCaptureError extends Error {
   readonly code = 'PRIVATE_INPUT_CAPTURE_UNKNOWN' as const;
 
-  constructor() {
-    super('Private input capture could not be established safely.');
+  constructor(detail?: string) {
+    super(`Private input capture could not be established safely.${detail ? ` ${detail}` : ''}`);
     this.name = 'PrivateInputCaptureError';
   }
 }
 
-interface PrivateFact {
-  hostIndex: number;
-  values: string[];
-  secure: boolean;
-}
+// Built only from a node count and fixed cause codes, so it carries no screen content.
+const NATIVE_CAUSE =
+  /^(unattested|truncated|ref-map-not-updated|node-count-mismatch|dropped=\d{1,7}|verdict=(failed|degraded)|reason=(empty-capture|snapshot-ref-freshness-unknown|unrecognized))$/;
 
-interface PrivateInputPayload {
-  version: 1;
-  complete: true;
-  facts: PrivateFact[];
-}
+export class NativeSnapshotIncomplete extends PrivateInputCaptureError {
+  readonly nodes: number;
+  readonly causes: readonly string[];
 
-const bindings = new WeakMap<ReactObservation, { facts: PrivateFact[]; hosts: string }>();
-
-function exactRecord(value: unknown, keys: string[]): value is Record<string, unknown> {
-  return (
-    value !== null &&
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    Reflect.ownKeys(value).length === keys.length &&
-    keys.every((key) => Object.hasOwn(value, key))
-  );
-}
-
-export function assertPrivateInputPayload(
-  payload: unknown,
-): asserts payload is PrivateInputPayload {
-  try {
-    if (
-      !exactRecord(payload, ['version', 'complete', 'facts']) ||
-      payload.version !== 1 ||
-      payload.complete !== true ||
-      !Array.isArray(payload.facts) ||
-      payload.facts.length >= PRIVATE_INPUT_LIMITS.maxHosts
-    )
-      throw new PrivateInputCaptureError();
-    const indices = new Set<number>();
-    let total = 0;
-    let valueCount = 0;
-    for (const fact of payload.facts) {
-      if (
-        !exactRecord(fact, ['hostIndex', 'values', 'secure']) ||
-        typeof fact.hostIndex !== 'number' ||
-        !Number.isInteger(fact.hostIndex) ||
-        fact.hostIndex < 0 ||
-        fact.hostIndex >= PRIVATE_INPUT_LIMITS.maxHosts ||
-        indices.has(fact.hostIndex) ||
-        typeof fact.secure !== 'boolean' ||
-        !Array.isArray(fact.values) ||
-        fact.values.length > PRIVATE_INPUT_LIMITS.maxValuesPerHost
-      )
-        throw new PrivateInputCaptureError();
-      for (const value of fact.values) {
-        if (
-          ++valueCount > PRIVATE_INPUT_LIMITS.maxValues ||
-          typeof value !== 'string' ||
-          value.length > PRIVATE_INPUT_LIMITS.maxValueChars ||
-          (total += value.length) > PRIVATE_INPUT_LIMITS.maxTotalChars
-        )
-          throw new PrivateInputCaptureError();
-      }
-      indices.add(fact.hostIndex);
-    }
-  } catch {
-    throw new PrivateInputCaptureError();
+  constructor(nodes: number, causes: readonly string[]) {
+    const count = Number.isSafeInteger(nodes) && nodes >= 0 ? nodes : 0;
+    const known = causes.filter((cause) => typeof cause === 'string' && NATIVE_CAUSE.test(cause));
+    super(`The native snapshot was incomplete (nodes=${count}; causes=${known.join(',')}).`);
+    this.nodes = count;
+    this.causes = known;
   }
 }
 
-export function bindPrivateInputs(
-  observation: ReactObservation,
-  payload: unknown,
-): ReactObservation {
-  try {
-    bindings.delete(observation);
-    assertPrivateInputPayload(payload);
-    const evidence = validateReactHostEvidence(observation.hostEvidence);
-    if (
-      !evidence?.complete ||
-      payload.facts.some((fact) => fact.hostIndex >= evidence.hosts.length)
-    )
-      throw new PrivateInputCaptureError();
-    const facts = payload.facts.map((fact) => ({
-      hostIndex: fact.hostIndex,
-      values: [...fact.values],
-      secure: fact.secure,
-    }));
-    bindings.set(observation, { facts, hosts: JSON.stringify(evidence) });
-    return observation;
-  } catch {
-    throw new PrivateInputCaptureError();
-  }
-}
-
-export function validatePrivateInputs(observation: ReactObservation, required = false): void {
-  try {
-    const binding = bindings.get(observation);
-    if (!binding) {
-      if (required) throw new PrivateInputCaptureError();
-      return;
-    }
-    const evidence = validateReactHostEvidence(observation.hostEvidence);
-    if (!evidence?.complete || JSON.stringify(evidence) !== binding.hosts)
-      throw new PrivateInputCaptureError();
-  } catch {
-    throw new PrivateInputCaptureError();
-  }
-}
-
-export function applyPrivateInputs(observation: ReactObservation, screen: Screen): Screen {
-  validatePrivateInputs(observation);
-  const binding = bindings.get(observation);
-  if (!binding) return screen;
-  const evidence = validateReactHostEvidence(observation.hostEvidence)!;
+// The native snapshot is the privacy boundary: every readable input or secure value it shows is private.
+export function applyNativePrivateInputs(screen: Screen, nodes: readonly NativeNode[]): Screen {
+  const byRef = new Map(nodes.map((node) => [node.ref, node]));
   capturePrivateScreen(
     screen,
-    binding.facts.map((fact) => {
-      const testID = evidence.hosts[fact.hostIndex].testID;
-      const elements = testID ? screen.elements.filter((element) => element.testID === testID) : [];
-      const associationUnique =
-        elements.length === 1 &&
-        evidence.hosts.filter((host) => host.testID === testID).length === 1;
-      return { values: fact.values, secure: fact.secure, testID, elements, associationUnique };
-    }),
+    screen.elements
+      .filter(
+        (element) =>
+          isPossibleInput(element) ||
+          element.secure ||
+          (kindOf(byRef.get(element.ref)?.type) === 'other' &&
+            !['Application', 'Window'].includes(byRef.get(element.ref)?.type ?? '')),
+      )
+      .map((element) => ({
+        values: element.value ? [element.value] : [],
+        secure: element.secure,
+        labelMayBeValue:
+          element.secure || element.semantic?.nativePresence?.labelSource === 'value',
+        testID: element.testID,
+        elements: [element],
+        associationUnique: true,
+      })),
   );
   return screen;
 }

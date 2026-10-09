@@ -7,14 +7,10 @@ import { createComponentTreeHandler } from '../../../dist/handlers/component-tre
 import { buildFiber, createSandbox } from '../helpers/inject-harness.js';
 import { captureQaReact } from '../../../dist/qa/react-capture.js';
 import { captureScreen } from '../../../dist/qa/capture.js';
-import { PrivateInputCaptureError, validatePrivateInputs } from '../../../dist/qa/private-input.js';
+import { PrivateInputCaptureError } from '../../../dist/qa/private-input.js';
 import { inputValues } from '../../../dist/qa/privacy.js';
-import { decideScreen } from '../../../dist/qa/resolve.js';
-import { parsePlan } from '../../../dist/qa/plan.js';
-import { runPlan } from '../../../dist/qa/walker.js';
 import type { NativeNode } from '../../../dist/qa/screen.js';
-import { nativeCapture } from './platform-presence-fixtures.ts';
-import { scriptedJudge, walker } from './judgment-fixtures.ts';
+import { attested, nativeCapture } from './platform-presence-fixtures.ts';
 
 const sentinel = 'PRIVATE_TEST_INPUT_7abf';
 const id = '1abcd';
@@ -48,7 +44,7 @@ const publicTree = () => ({
   },
 });
 const ready = () => ({ v: 1, id, state: 'ready', tree: JSON.stringify(publicTree()) });
-const start = () => ({ v: 1, id, inputs: inputs(), state: 'pending' });
+const start = () => ({ v: 1, id, state: 'pending' });
 
 function realProducer(props: Record<string, unknown>, allowLegacyTree = false) {
   const fiber = Object.assign(
@@ -155,12 +151,13 @@ test('real producer and adapter interoperate through an in-memory CDP socket', a
       secureTextEntry: true,
     });
     const observation = await captureQaReact(client, typography);
-    validatePrivateInputs(observation, true);
     const screen = await captureScreen({
       native: async () => ({ nodes: [] }),
       react: async () => observation,
     });
-    assert.ok(inputValues(screen).includes(sentinel));
+    // The React walk never reads input values; privacy comes from the native snapshot.
+    assert.equal(inputValues(screen).includes(sentinel), false);
+    assert.equal(JSON.stringify(observation).includes(sentinel), false);
     assert.equal(JSON.stringify(screen).includes(sentinel), false);
     assert.equal(JSON.stringify(expressions).includes(sentinel), false);
     assert.equal(
@@ -200,203 +197,24 @@ test('legacy whole-tree handler neither enters nor exposes the private capture c
   );
   const capture = { native: async () => nativeEcho(false), react: async () => envelope.data };
   await captureScreen(capture);
-  await assert.rejects(captureScreen({ ...capture, requirePrivateInputs: true }), sanitized);
+  // Privacy comes from the native snapshot, so an unbound public tree no longer refuses.
+  await captureScreen({ ...capture, requirePrivateInputs: true });
 });
 
 for (const typography of [false, true]) {
-  for (const secure of [false, true]) {
-    test(`real ${secure ? 'RN-secure/native-unflagged' : 'anonymous readonly RN-only'} capture protects judgments and durable history (typography=${typography})`, async () => {
-      const producer = realProducer(
-        secure
-          ? { testID: 'field', value: sentinel, secureTextEntry: true }
-          : { value: sentinel, readOnly: true, editable: false },
-      );
-      const native = nativeEcho(secure);
-      const capture = () =>
-        captureScreen({
-          appId: 'com.test',
-          requirePrivateInputs: true,
-          native: async () => native,
-          react: () => captureQaReact(producer.client, typography),
-        });
-      const screen = await capture();
-      assert.deepEqual(screen.coverage, { native: 'complete', react: 'complete' });
-      assert.ok(
-        screen.visibleText.includes(sentinel),
-        'the native echo is genuinely observed public text',
-      );
-      assert.ok(
-        inputValues(screen).includes(sentinel),
-        'the real producer carries the otherwise RN-only value',
-      );
-      assert.equal(
-        screen.elements.find((element) => element.ref === '@echo')?.semantic?.visibility,
-        'visible',
-      );
-      assert.ok(
-        screen.elements.every((element) => element.value === undefined && element.secure === false),
-      );
-      assert.equal(JSON.stringify(screen.reactHostEvidence).includes(sentinel), false);
-      if (!secure) {
-        assert.equal(screen.reactHostEvidence?.hosts[0].testID, undefined);
-        assert.equal(screen.reactHostEvidence?.hosts[0].readOnly, true);
-      }
-
-      const judge = scriptedJudge((questions, index, state) => {
-        const outbound = JSON.stringify({ state, questions });
-        assert.equal(outbound.includes(sentinel), false);
-        assert.match(outbound, /QAREN_VALUE/);
-        return Object.fromEntries(
-          Object.keys(questions).map((key) => [
-            key,
-            { type: 'noul', noul: index < 2 ? 0.99 : 0.01 },
-          ]),
-        );
-      });
-      assert.equal(
-        (
-          await decideScreen(screen, judge, {
-            kind: 'check',
-            literal: false,
-            text: `The page mentions ${sentinel}`,
-            line: 1,
-          })
-        ).check,
-        'pass',
-      );
-      assert.equal(judge.requests.length, 1);
-
-      const protectedJudge = scriptedJudge(() =>
-        assert.fail('private field contents must not be judged'),
-      );
-      assert.equal(
-        (
-          await decideScreen(screen, protectedJudge, {
-            kind: 'check',
-            literal: false,
-            text: `Account field contains ${sentinel}`,
-            line: 1,
-          })
-        ).check,
-        'unsure',
-      );
-      const protectedWalk = walker([], protectedJudge);
-      protectedWalk.deps.captureScreen = capture;
-      protectedWalk.deps.screenshot = async () =>
-        assert.fail('private input pixels must be withheld');
-      const protectedPlan = parsePlan(`✓ Account field contains ${sentinel}`);
-      assert.ok(protectedPlan.blocks);
-      const protectedResult = await runPlan(protectedPlan.blocks, protectedWalk.deps);
-      assert.equal(protectedResult.verdict, 'FAIL');
-      assert.match(protectedResult.failure?.seen ?? '', /CHECK_UNSURE/);
-      assert.equal(
-        JSON.stringify({ protectedResult, rows: protectedWalk.rows }).includes(sentinel),
-        false,
-      );
-      assert.equal(protectedJudge.requests.length, 0);
-
-      const history = walker([], judge);
-      let captures = 0;
-      history.deps.captureScreen = async () => {
-        if (++captures === 2) producer.removeInput();
-        const observed = await capture();
-        if (captures === 2)
-          assert.deepEqual(inputValues(observed), [], 'later capture has no current private facts');
-        return observed;
-      };
-      history.deps.screenshot = async () =>
-        assert.fail('pixel restriction must persist after the RN input disappears');
-      const plan = parsePlan(
-        `### Before\n✓ The page mentions ${sentinel}\n### After\n✓ The page still mentions ${sentinel}`,
-      );
-      assert.ok(plan.blocks);
-      assert.equal(plan.blocks.length, 2);
-      const result = await runPlan(plan.blocks, history.deps);
-      assert.equal(result.verdict, 'FAIL');
-      assert.deepEqual(
-        result.steps.map((row) => row.outcome),
-        ['pass', 'fail'],
-      );
-      assert.equal(captures, 2);
-      assert.equal(judge.requests.length, 3);
-      assert.equal(
-        JSON.stringify({ result, rows: history.rows, requests: judge.requests }).includes(sentinel),
-        false,
-      );
-      assert.match(result.failure?.seen ?? '', /•••/);
-      assert.ok(result.steps.every((row) => row.screenshot === undefined));
-      assert.equal(result.failure?.screenshot, undefined);
-      assert.deepEqual(history.actions, []);
-      assert.equal(JSON.stringify(producer.expressions).includes(sentinel), false);
+  test(`the React walk never reads an RN-only input value (typography=${typography})`, async () => {
+    const producer = realProducer({ value: sentinel, readOnly: true, editable: false });
+    const screen = await captureScreen({
+      appId: 'com.test',
+      requirePrivateInputs: true,
+      native: async () => nativeEcho(false),
+      react: () => captureQaReact(producer.client, typography),
     });
-  }
-
-  for (const fault of ['getter', 'coverage'] as const) {
-    test(`real producer ${fault} refusal reaches required capture and walker without private diagnostics (typography=${typography})`, async (t) => {
-      const logs = t.mock.method(console, 'error', () => {});
-      let getterCalls = 0;
-      const props =
-        fault === 'getter'
-          ? Object.defineProperty({}, 'value', {
-              get() {
-                getterCalls++;
-                throw new Error(sentinel);
-              },
-            })
-          : { value: sentinel };
-      const producer = realProducer(props);
-      if (fault === 'coverage') {
-        const hook = producer.sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-        hook.renderers.set(2, {});
-        const roots = hook.getFiberRoots;
-        hook.getFiberRoots = (renderer: number) => {
-          if (renderer === 2) throw new Error(sentinel);
-          return roots(renderer);
-        };
-      }
-      await assert.rejects(captureQaReact(producer.client, typography), sanitized);
-      const capture = () =>
-        captureScreen({
-          requirePrivateInputs: true,
-          appId: 'com.test',
-          native: async () => nativeEcho(false),
-          react: () => captureQaReact(producer.client, typography),
-          warn: () => assert.fail('private acquisition refusal must not become a legacy warning'),
-        });
-      await assert.rejects(capture(), sanitized);
-      const judge = scriptedJudge(() => assert.fail('unknown capture must not reach the judge'));
-      const f = walker([], judge);
-      f.deps.captureScreen = capture;
-      f.deps.screenshot = async () => assert.fail('unknown capture must not expose pixels');
-      const plan = parsePlan(`### ${sentinel}\n✓ The page mentions ${sentinel}`);
-      assert.ok(plan.blocks);
-      const result = await runPlan(plan.blocks, f.deps);
-      const safe = new PrivateInputCaptureError();
-      assert.equal(result.verdict, 'REFUSED');
-      assert.equal('code' in result && result.code, safe.code);
-      assert.equal('message' in result && result.message, safe.message);
-      assert.deepEqual(f.rows, [
-        {
-          block: 'private-input-capture',
-          line: 2,
-          text: safe.message,
-          attempt: 1,
-          kind: 'check',
-          resolvedBy: 'exact',
-          t: 0,
-          outcome: 'fail',
-          reason: safe.code,
-        },
-      ]);
-      assert.deepEqual(result.failure, { step: 2, seen: safe.message });
-      assert.equal(JSON.stringify({ result, rows: f.rows }).includes(sentinel), false);
-      assert.equal(judge.requests.length, 0);
-      assert.deepEqual(f.actions, []);
-      assert.equal(getterCalls, 0);
-      assert.equal(logs.mock.callCount(), 0);
-      assert.equal(JSON.stringify(producer.expressions).includes(sentinel), false);
-    });
-  }
+    // An RN-only value echoed as native text is ordinary screen text: the accepted visible-screen residual.
+    assert.equal(inputValues(screen).includes(sentinel), false);
+    assert.equal(JSON.stringify(screen.reactHostEvidence ?? {}).includes(sentinel), false);
+    assert.equal(JSON.stringify(producer.expressions).includes(sentinel), false);
+  });
 }
 
 function mockClient(responses: unknown[]) {
@@ -424,49 +242,13 @@ function sanitized(error: unknown): boolean {
   return true;
 }
 
-test('sync begin and public-only polls bind facts privately without copying into observation or Screen', async () => {
-  const mock = mockClient([start(), { v: 1, id, state: 'pending' }, ready()]);
-  const observation = await captureQaReact(mock.client);
-  validatePrivateInputs(observation, true);
-  assert.equal(mock.operations(), 1);
-  assert.deepEqual(
-    mock.calls.map((call) => call.expression),
-    [
-      'globalThis.__QAREN.beginQaCapture(false)',
-      `globalThis.__QAREN.readQaCapture("${id}")`,
-      `globalThis.__QAREN.readQaCapture("${id}")`,
-    ],
-  );
-  assert.ok(mock.calls.every((call) => call.timeoutMs > 0 && call.timeoutMs <= 1500));
-  assert.ok(mock.calls[2].timeoutMs < mock.calls[0].timeoutMs);
-  assert.equal(JSON.stringify(mock.calls).includes(sentinel), false);
-  assert.equal(JSON.stringify(observation).includes(sentinel), false);
-  assert.deepEqual(Reflect.ownKeys(observation).sort(), [
-    'hostEvidence',
-    'interactive',
-    'truncated',
-    'verdict',
-  ]);
-  const screen = await captureScreen({
-    native: async () => ({ nodes: [] }),
-    react: async () => observation,
-  });
-  assert.equal(JSON.stringify(screen).includes(sentinel), false);
-  assert.ok(inputValues(screen).includes(sentinel));
-});
-
 test('immediate ready is consumed once and typography is a hardcoded boolean', async () => {
   for (const typography of [false, true]) {
-    const mock = mockClient([{ ...ready(), inputs: inputs() }]);
+    const mock = mockClient([{ ...ready() }]);
     await captureQaReact(mock.client, typography);
     assert.equal(mock.calls.length, 1);
     assert.equal(mock.calls[0].expression, `globalThis.__QAREN.beginQaCapture(${typography})`);
   }
-});
-
-test('complete empty private facts remain a valid binding', async () => {
-  const mock = mockClient([{ ...ready(), inputs: { version: 1, complete: true, facts: [] } }]);
-  validatePrivateInputs(await captureQaReact(mock.client), true);
 });
 
 test('digest string values refuse without exposing private input bytes in errors or metadata', async (t) => {
@@ -477,7 +259,6 @@ test('digest string values refuse without exposing private input bytes in errors
       {
         ...ready(),
         tree: JSON.stringify(tree),
-        inputs: { version: 1, complete: true, facts: [] },
       },
     ]);
     await assert.rejects(captureQaReact(mock.client), (error) => {
@@ -501,7 +282,6 @@ test('digest boolean values on non-switch roles refuse with constant diagnostics
         {
           ...ready(),
           tree: JSON.stringify(tree),
-          inputs: { version: 1, complete: true, facts: [] },
         },
       ]);
       await assert.rejects(captureQaReact(mock.client), sanitized);
@@ -527,15 +307,13 @@ test('legitimate switch booleans retain an empty private binding', async () => {
       {
         ...ready(),
         tree: JSON.stringify(tree),
-        inputs: { version: 1, complete: true, facts: [] },
       },
     ]);
     const observation = await captureQaReact(mock.client);
-    validatePrivateInputs(observation, true);
     assert.deepEqual(observation.interactive, tree.interactive);
     const screen = await captureScreen({
       requirePrivateInputs: true,
-      native: async () => ({ nodes: [] }),
+      native: async () => ({ ...nativeCapture(), presenceCapture: undefined }),
       react: async () => observation,
     });
     assert.deepEqual(inputValues(screen), []);
@@ -545,7 +323,7 @@ test('legitimate switch booleans retain an empty private binding', async () => {
 test('ordinary public tree content is not claimed to be private-channel redacted', async () => {
   const tree = publicTree();
   tree.interactive[0].placeholder = sentinel;
-  const mock = mockClient([{ ...ready(), inputs: inputs(), tree: JSON.stringify(tree) }]);
+  const mock = mockClient([{ ...ready(), tree: JSON.stringify(tree) }]);
   const observation = await captureQaReact(mock.client);
   assert.equal(observation.interactive?.[0].placeholder, sentinel);
 });
@@ -559,7 +337,7 @@ test('missing API or transport exceptions become constant refusals with no fallb
   await assert.rejects(captureQaReact(client), sanitized);
 });
 
-test('start wire refuses unsafe IDs, unexpected fields, missing and incomplete private payloads', async () => {
+test('start wire refuses unsafe IDs, unexpected fields and any input-value payload', async () => {
   for (const value of [
     undefined,
     null,
@@ -571,27 +349,9 @@ test('start wire refuses unsafe IDs, unexpected fields, missing and incomplete p
     { ...start(), state: 'refused' },
     { ...start(), state: 'unknown' },
     { ...start(), error: sentinel },
-    { ...start(), inputs: undefined },
-    { ...start(), inputs: { ...inputs(), complete: false } },
-    { ...start(), inputs: { ...inputs(), extra: sentinel } },
-    { ...start(), inputs: { ...inputs(), facts: [{ ...inputs().facts[0], extra: sentinel }] } },
-    {
-      ...start(),
-      inputs: { ...inputs(), facts: [{ ...inputs().facts[0], hostIndex: { private: sentinel } }] },
-    },
     { ...start(), tree: JSON.stringify(publicTree()) },
-    { ...start(), inputs: { ...inputs(), facts: Array(201).fill(inputs().facts[0]) } },
-    {
-      ...start(),
-      inputs: { ...inputs(), facts: [{ hostIndex: 0, secure: true, values: ['x'.repeat(4097)] }] },
-    },
-    {
-      ...start(),
-      inputs: {
-        ...inputs(),
-        facts: [{ hostIndex: 0, secure: true, values: [sentinel, sentinel, sentinel, sentinel] }],
-      },
-    },
+    // A producer must never send input values; a reply still carrying them is refused.
+    { ...start(), inputs: inputs() },
   ]) {
     const mock = mockClient([value]);
     await assert.rejects(captureQaReact(mock.client), sanitized);
@@ -639,25 +399,14 @@ test('tree parsing and incomplete or malformed public evidence fail without raw 
     [],
     null,
   ]) {
-    const mock = mockClient([{ ...ready(), inputs: inputs(), tree: JSON.stringify(tree) }]);
+    const mock = mockClient([{ ...ready(), tree: JSON.stringify(tree) }]);
     await assert.rejects(captureQaReact(mock.client), sanitized);
   }
   for (const tree of [`{"private":"${sentinel}" BROKEN`, 'x'.repeat(1000000), {}, undefined]) {
-    const mock = mockClient([{ ...ready(), inputs: inputs(), tree }]);
+    const mock = mockClient([{ ...ready(), tree }]);
     await assert.rejects(captureQaReact(mock.client), sanitized);
   }
   assert.equal(log.mock.callCount(), 0);
-});
-
-test('domain binding refuses facts outside the completed capture host list', async () => {
-  for (const facts of [
-    [{ hostIndex: 1, values: [sentinel], secure: true }],
-    [inputs().facts[0], inputs().facts[0]],
-    [{ hostIndex: 0, values: [sentinel], secure: 'true' }],
-  ]) {
-    const mock = mockClient([{ ...ready(), inputs: { ...inputs(), facts } }]);
-    await assert.rejects(captureQaReact(mock.client), sanitized);
-  }
 });
 
 test('monotonic overall deadline includes freshness and prevents begin after timeout', async (t) => {
@@ -677,7 +426,11 @@ test('monotonic overall deadline includes freshness and prevents begin after tim
       });
     },
   };
-  const result = assert.rejects(captureQaReact(client), sanitized);
+  const result = assert.rejects(captureQaReact(client), (error) => {
+    sanitized(error);
+    assert.ok(error instanceof PrivateInputCaptureError);
+    return true;
+  });
   now = 1500;
   t.mock.timers.tick(1500);
   await result;
@@ -730,7 +483,11 @@ test('hung begin and late completion cannot bypass the overall deadline', async 
       });
     },
   };
-  const result = assert.rejects(captureQaReact(client), sanitized);
+  const result = assert.rejects(captureQaReact(client), (error) => {
+    sanitized(error);
+    assert.ok(error instanceof PrivateInputCaptureError);
+    return true;
+  });
   now = 1500;
   t.mock.timers.tick(1500);
   await result;
@@ -744,10 +501,166 @@ test('port completion after the monotonic deadline cannot return an observation'
   t.mock.method(performance, 'now', () => now);
   const client: Pick<CDPClient, 'withPrivateHelperWorld'> = {
     async withPrivateHelperWorld(operation) {
-      const observation = await operation(async () => ({ ...ready(), inputs: inputs() }));
+      const observation = await operation(async () => ({ ...ready() }));
       now = 1501;
       return observation;
     },
   };
-  await assert.rejects(captureQaReact(client), sanitized);
+  await assert.rejects(captureQaReact(client), (error) => {
+    sanitized(error);
+    assert.ok(error instanceof PrivateInputCaptureError);
+    return true;
+  });
+});
+
+test('malformed ready tree processing across the deadline remains a permanent refusal', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const parse = JSON.parse;
+  const parsing = t.mock.method(JSON, 'parse', (text: string) => {
+    now = 1501;
+    return parse(text);
+  });
+  const client: Pick<CDPClient, 'withPrivateHelperWorld'> = {
+    async withPrivateHelperWorld(operation) {
+      return operation(async () => {
+        now = 1499;
+        return {
+          ...ready(),
+          tree: `{"private":"${sentinel}" BROKEN`,
+        };
+      });
+    },
+  };
+  await assert.rejects(captureQaReact(client), (error) => {
+    sanitized(error);
+    assert.ok(error instanceof PrivateInputCaptureError);
+    return true;
+  });
+  assert.equal(parsing.mock.callCount(), 1);
+  assert.equal(now, 1501);
+});
+
+test('a transport error after the deadline remains a permanent refusal', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const client: Pick<CDPClient, 'withPrivateHelperWorld'> = {
+    async withPrivateHelperWorld() {
+      now = 1501;
+      throw new Error(sentinel);
+    },
+  };
+  await assert.rejects(captureQaReact(client), (error) => {
+    sanitized(error);
+    assert.ok(error instanceof PrivateInputCaptureError);
+    return true;
+  });
+});
+
+test('the handlerless digest fact survives capture and a malformed one refuses', async () => {
+  const capture = (entry: Record<string, unknown>) =>
+    captureQaReact(
+      mockClient([
+        {
+          ...ready(),
+          tree: JSON.stringify({
+            ...publicTree(),
+            interactive: [entry],
+            hostEvidence: { complete: true, hosts: [] },
+          }),
+        },
+      ]).client,
+    );
+  const entry = {
+    role: 'adjustable',
+    capabilities: { press: false, fill: false },
+    handlerless: true,
+  };
+  assert.deepEqual((await capture(entry)).interactive, [entry]);
+  await assert.rejects(capture({ ...entry, handlerless: false }), PrivateInputCaptureError);
+  await assert.rejects(
+    capture({ ...entry, capabilities: { press: true, fill: false } }),
+    PrivateInputCaptureError,
+  );
+  await assert.rejects(
+    capture({ role: 'adjustable', handlerless: true }),
+    PrivateInputCaptureError,
+  );
+});
+
+test('the hidden digest fact survives capture and a malformed one refuses', async () => {
+  const capture = (entry: Record<string, unknown>) =>
+    captureQaReact(
+      mockClient([
+        {
+          ...ready(),
+          tree: JSON.stringify({
+            ...publicTree(),
+            interactive: [entry],
+            hostEvidence: { complete: true, hosts: [] },
+          }),
+        },
+      ]).client,
+    );
+  const entry = { role: 'button', testID: 'home-btn', hidden: true };
+  assert.deepEqual((await capture(entry)).interactive, [entry]);
+  await assert.rejects(capture({ ...entry, hidden: 'yes' }), PrivateInputCaptureError);
+});
+
+test('a QA render-error observation survives capture without exporting private helper fields', async () => {
+  const observation = await captureQaReact({
+    async withPrivateHelperWorld(read) {
+      return read(async () => ({ v: 1, id, state: 'refused', reason: 'render-error' }));
+    },
+  });
+  assert.deepEqual(observation, { renderError: true });
+  const screen = await captureScreen({
+    requirePrivateInputs: true,
+    native: async () =>
+      attested([
+        { ref: '@error', type: 'StaticText', label: 'Render Error: boom', hittable: false },
+        { ref: '@input', type: 'TextField', value: sentinel, secure: true, hittable: true },
+      ]),
+    react: async () => observation,
+  });
+  assert.equal(screen.renderError, true);
+  assert.ok(screen.visibleText.some((text) => text.includes('boom')));
+  assert.ok(!JSON.stringify(screen).includes(sentinel));
+});
+
+test('the injected producer reports a render error in literal and phrase capture modes', async () => {
+  for (const typography of [false, true]) {
+    const sandbox = createSandbox({ fiberRoot: buildFiber({ name: 'RedBox' }) });
+    const observation = await captureQaReact(
+      {
+        async withPrivateHelperWorld(read) {
+          return read(async (expression) => await vm.runInNewContext(expression, sandbox));
+        },
+      },
+      typography,
+    );
+    assert.deepEqual(observation, { renderError: true });
+  }
+});
+
+test('only the fixed render-error refusal maps to a render error; other refusal shapes fail closed', async () => {
+  for (const reply of [
+    { v: 1, id, state: 'refused' },
+    { v: 1, id, state: 'refused', reason: 'other' },
+    { v: 1, id, state: 'refused', reason: 'render-error', tree: '{}' },
+    { v: 1, id, state: 'ready', reason: 'render-error', tree: '{}' },
+    { v: 1, id, state: 'ready', tree: JSON.stringify({ warning: 'APP_HAS_REDBOX' }) },
+  ]) {
+    await assert.rejects(
+      captureQaReact({
+        async withPrivateHelperWorld(read) {
+          return read(async () => reply);
+        },
+      }),
+      PrivateInputCaptureError,
+      JSON.stringify(reply),
+    );
+  }
 });

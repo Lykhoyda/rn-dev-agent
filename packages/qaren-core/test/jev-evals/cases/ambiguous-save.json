@@ -8,5 +8,5 @@
     "visibleText": ["Save", "Profile settings", "Save"]
   },
   "line": "Tap \"Save\" at the bottom",
-  "expected": { "kind": "target", "ref": "@bottom-save" }
+  "expected": { "kind": "target", "refuse": "TARGET_AMBIGUOUS" }
 }

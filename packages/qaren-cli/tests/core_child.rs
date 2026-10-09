@@ -53,13 +53,17 @@ fn request() -> CoreRequest {
     CoreRequest {
         run_id: RUN.to_string(),
         t0: 1_770_000_000_000,
+        walk_budget_ms: 300_000,
         plan: "1. Tap \"Tasks\"\n✓ \"Tasks\"\n".to_string(),
         prepared: serde_json::json!({"hash":"test","blocks":[]}),
         preflight_calls: vec![],
         platform: "ios".to_string(),
         app_id: "com.rndevagent.testapp".to_string(),
+        app_root: PathBuf::from("/tmp/app"),
         run_dir: PathBuf::from("/tmp/qaren-runs/check"),
         lease: format!("{RUN}:abcdef0123456789abcdef0123456789"),
+        login_block: None,
+        login_marker: None,
         target: CoreTarget {
             device_id: "AAAA-1111".to_string(),
             metro_port: 8791,
@@ -107,7 +111,7 @@ fn spec() -> qaren::exec::CmdSpec {
 
 fn run_child(mock: &mut MockRunner, log: &Path) -> core::CoreOutcome {
     let child = core::spawn(mock, &spec(), log, &request()).unwrap();
-    core::wait(mock, child, budgets())
+    core::wait(mock, child, budgets(), &mut |_, _| {})
 }
 
 #[test]
@@ -157,9 +161,10 @@ fn a_child_without_a_result_line_fails_at_its_last_row() {
     let repo = common::temp_repo();
     let rows = [row(1, 1, "pass"), row(2, 2, "pass")];
     let stdout = format!(
-        "{}\n{}\n",
-        envelope(2, "row", &rows[0]),
-        envelope(3, "row", &rows[1])
+        "{}\n{}\n{}\n",
+        envelope(2, "admitted", "{}"),
+        envelope(3, "row", &rows[0]),
+        envelope(4, "row", &rows[1])
     );
     let mut mock = MockRunner::new();
     mock.expect_spawn_piped("walk.js", 9000, &stdout, Some(1));
@@ -303,6 +308,45 @@ fn a_typed_refusal_needs_exit_four() {
 }
 
 #[test]
+fn a_typed_refusal_keeps_its_walk_speed_and_drops_a_malformed_one() {
+    for (speed, expected) in [
+        (
+            serde_json::json!({"stepMedianMs": 250, "stepP95Ms": 400, "walkMs": 1900, "steps": 5, "passed": 4, "failed": 1}),
+            Some((Some(400), 5, 4, 1)),
+        ),
+        (
+            serde_json::json!({"walkMs": 0, "steps": 0, "passed": 0, "failed": 0}),
+            Some((None, 0, 0, 0)),
+        ),
+        (serde_json::Value::Null, None),
+        (serde_json::json!({"walkMs": "slow"}), None),
+    ] {
+        let repo = common::temp_repo();
+        let refusal = serde_json::json!({"verdict":"REFUSED","code":"METRO_ORIGIN_MISMATCH",
+            "message":"port","speed":speed});
+        let mut mock = MockRunner::new();
+        mock.expect_spawn_piped(
+            "walk.js",
+            9000,
+            &format!("{}\n", envelope(2, "result", &refusal.to_string())),
+            Some(4),
+        );
+        let outcome = run_child(&mut mock, &repo.join("core.log"));
+        assert!(matches!(outcome.verdict, Verdict::Refused { .. }));
+        assert!(outcome.failure.is_none());
+        assert_eq!(
+            outcome.ledger.speed.map(|speed| (
+                speed.step_p95_ms,
+                speed.steps,
+                speed.passed,
+                speed.failed
+            )),
+            expected
+        );
+    }
+}
+
+#[test]
 fn jev_refusal_accounting_is_optional_but_strict_when_present() {
     for jev in [
         None,
@@ -348,6 +392,107 @@ fn jev_refusal_accounting_is_optional_but_strict_when_present() {
 }
 
 #[test]
+fn jev_deadline_and_retry_backoff_diagnostic_roundtrip_in_results_and_refusals() {
+    let jev = serde_json::json!({
+        "calls": 2, "medianMs": 25, "inputTokens": 0, "callDetails": [
+            {"scope":"walk", "questionIds":["front"], "inputTokens":null, "ms":10, "outcome":"deadline"},
+            {"scope":"walk", "questionIds":["front"], "inputTokens":null, "ms":40, "outcome":"http", "status":429, "diagnostic":"retry-after-outside-window"}
+        ]
+    });
+    for (verdict, exit) in [("PASS", 0), ("FAIL", 1), ("REFUSED", 4)] {
+        let repo = common::temp_repo();
+        let mut result: serde_json::Value = serde_json::from_str(&pass_ledger(&[])).unwrap();
+        result["verdict"] = serde_json::json!(verdict);
+        result["jev"] = jev.clone();
+        result["code"] = serde_json::json!("JEV_DEADLINE_EXCEEDED");
+        result["message"] = serde_json::json!("the observation or item deadline expired");
+        let mut mock = MockRunner::new();
+        mock.expect_spawn_piped(
+            "walk.js",
+            9000,
+            &format!("{}\n", envelope(2, "result", &result.to_string())),
+            Some(exit),
+        );
+        let outcome = run_child(&mut mock, &repo.join("core.log"));
+        assert!(
+            outcome.failure.is_none(),
+            "{verdict}: {:?}",
+            outcome.failure
+        );
+        assert_eq!(outcome.ledger.verdict, verdict);
+        let expected = match verdict {
+            "PASS" => Verdict::Pass,
+            "FAIL" => Verdict::Fail,
+            _ => Verdict::Refused {
+                code: "JEV_DEADLINE_EXCEEDED".to_string(),
+                message: "the observation or item deadline expired".to_string(),
+            },
+        };
+        assert_eq!(outcome.verdict, expected);
+        assert_eq!(serde_json::to_value(outcome.ledger.jev).unwrap(), jev);
+    }
+}
+
+#[test]
+fn jev_optional_diagnostic_matches_status_missing_and_null_policy() {
+    let call = serde_json::json!({
+        "scope":"walk", "questionIds":[], "inputTokens":null, "ms":0, "outcome":"deadline"
+    });
+    for explicit_null in [false, true] {
+        let mut supplied = call.clone();
+        if explicit_null {
+            supplied["status"] = serde_json::Value::Null;
+            supplied["diagnostic"] = serde_json::Value::Null;
+        }
+        let parsed: core::JevCall = serde_json::from_value(supplied).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), call);
+    }
+}
+
+#[test]
+fn malformed_jev_diagnostics_are_rejected_in_results_and_refusals() {
+    use serde_json::json;
+    for diagnostic in [
+        json!("arbitrary"),
+        json!(""),
+        json!(42),
+        json!(true),
+        json!([]),
+        json!({}),
+        json!({"retry-after-outside-window": null}),
+    ] {
+        for (verdict, exit) in [("PASS", 0), ("FAIL", 1), ("REFUSED", 4)] {
+            let repo = common::temp_repo();
+            let mut result: serde_json::Value = serde_json::from_str(&pass_ledger(&[])).unwrap();
+            result["verdict"] = json!(verdict);
+            result["jev"] = json!({
+                "calls":1, "medianMs":0, "callDetails":[{
+                    "scope":"walk", "questionIds":[], "inputTokens":null, "ms":0,
+                    "outcome":"http", "status":429, "diagnostic":diagnostic
+                }]
+            });
+            let mut mock = MockRunner::new();
+            mock.expect_spawn_piped(
+                "walk.js",
+                9000,
+                &format!("{}\n", envelope(2, "result", &result.to_string())),
+                Some(exit),
+            );
+            let outcome = run_child(&mut mock, &repo.join("core.log"));
+            assert_eq!(outcome.verdict, Verdict::Fail, "{verdict}: {diagnostic}");
+            assert_eq!(
+                outcome
+                    .failure
+                    .expect("invalid diagnostic must not be silently dropped")
+                    .code,
+                FailureCode::CoreResultMissing,
+                "{verdict}: {diagnostic}"
+            );
+        }
+    }
+}
+
+#[test]
 fn default_step_budget_covers_reasks_and_the_bounded_scroll_schedule() {
     use qaren::run::{DEFAULT_STEP_SECONDS, DEFAULT_WALK_SECONDS};
     let judgment = 3 * 10 + 2 * 60;
@@ -370,14 +515,14 @@ struct ScheduleRunner {
 }
 
 impl Runner for ScheduleRunner {
-    fn run(&mut self, spec: &CmdSpec) -> CmdOutput {
-        self.inner.run(spec)
+    fn execute(&mut self, spec: &CmdSpec, interruptible: bool) -> CmdOutput {
+        self.inner.execute(spec, interruptible)
     }
-    fn spawn_group(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
-        self.inner.spawn_group(spec, log)
+    fn spawn_group_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<Spawned> {
+        self.inner.spawn_group_unchecked(spec, log)
     }
-    fn spawn_piped(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
-        self.inner.spawn_piped(spec, log)
+    fn spawn_piped_unchecked(&mut self, spec: &CmdSpec, log: &Path) -> std::io::Result<PipedChild> {
+        self.inner.spawn_piped_unchecked(spec, log)
     }
     fn sleep(&mut self, duration: Duration) {
         if *self.inner.piped_killed[0].lock().unwrap() {
@@ -405,7 +550,11 @@ fn drive_schedule(intervals: Vec<u64>, budgets: Budgets) -> (core::CoreOutcome, 
     inner.expect_spawn_piped(
         "walk.js",
         9000,
-        &format!("{}\n", envelope(2, "row", &row(1, 1, "pass"))),
+        &format!(
+            "{}\n{}\n",
+            envelope(2, "admitted", "{}"),
+            envelope(3, "row", &row(1, 1, "pass"))
+        ),
         None,
     );
     let mut runner = ScheduleRunner {
@@ -415,7 +564,7 @@ fn drive_schedule(intervals: Vec<u64>, budgets: Budgets) -> (core::CoreOutcome, 
         after_schedule_ms: budgets.walk_seconds * 1000 + 1,
     };
     let child = core::spawn(&mut runner, &spec(), &repo.join("core.log"), &request()).unwrap();
-    let outcome = core::wait(&mut runner, child, budgets);
+    let outcome = core::wait(&mut runner, child, budgets, &mut |_, _| {});
     (outcome, runner)
 }
 
@@ -616,9 +765,10 @@ fn a_stuck_child_is_killed_at_the_step_budget_naming_the_last_row() {
     let repo = common::temp_repo();
     let rows = [row(1, 1, "pass"), row(2, 1, "pass")];
     let stdout = format!(
-        "{}\n{}\n",
-        envelope(2, "row", &rows[0]),
-        envelope(3, "row", &rows[1])
+        "{}\n{}\n{}\n",
+        envelope(2, "admitted", "{}"),
+        envelope(3, "row", &rows[0]),
+        envelope(4, "row", &rows[1])
     );
     let mut mock = MockRunner::new();
     mock.expect_spawn_piped("walk.js", 9000, &stdout, None);
@@ -790,4 +940,265 @@ fn a_group_member_that_outlives_the_kill_is_reported_as_a_survivor() {
     assert_eq!(outcome.verdict, Verdict::Pass, "{:?}", outcome.failure);
     assert!(*mock.piped_killed[0].lock().unwrap());
     assert!(outcome.group_survived);
+}
+
+fn block_ledger(path: &str, source: &str) -> serde_json::Value {
+    let mut step: serde_json::Value = serde_json::from_str(&row(10, 1, "pass")).unwrap();
+    step["selector"] = serde_json::json!({"id": "onboarding-finish"});
+    serde_json::json!({
+        "verdict": "PASS", "path": path,
+        "blocks": [{"key": "plan", "outcome": "pass", "source": source}],
+        "blocksWritten": ["plan"],
+        "steps": [step], "jev": {"calls": 0, "medianMs": 0},
+        "llmTurns": 0, "escapes": 0, "recoveries": 0
+    })
+}
+
+fn run_result(result: &serde_json::Value, exit: i32) -> core::CoreOutcome {
+    let repo = common::temp_repo();
+    let mut mock = MockRunner::new();
+    mock.expect_spawn_piped(
+        "walk.js",
+        9000,
+        &format!("{}\n", envelope(2, "result", &result.to_string())),
+        Some(exit),
+    );
+    run_child(&mut mock, &repo.join("core.log"))
+}
+
+#[test]
+fn the_request_names_the_app_root_and_replay_ledgers_are_typed() {
+    let repo = common::temp_repo();
+    let mut mock = MockRunner::new();
+    let result = block_ledger("replay→walk@10", "patched");
+    mock.expect_spawn_piped(
+        "walk.js",
+        9000,
+        &format!("{}\n", envelope(2, "result", &result.to_string())),
+        Some(0),
+    );
+    let outcome = run_child(&mut mock, &repo.join("core.log"));
+    let written: serde_json::Value = serde_json::from_str(mock.piped_stdin_text(0).trim()).unwrap();
+    assert_eq!(written["payload"]["appRoot"], "/tmp/app");
+    assert_eq!(outcome.verdict, Verdict::Pass);
+    assert_eq!(outcome.ledger.path, "replay→walk@10");
+    assert_eq!(outcome.ledger.blocks[0].source, "patched");
+    assert_eq!(
+        outcome.ledger.blocks_written,
+        Some(vec!["plan".to_string()])
+    );
+    assert_eq!(
+        outcome.ledger.steps[0]
+            .selector
+            .as_ref()
+            .and_then(|s| s.id.as_deref()),
+        Some("onboarding-finish")
+    );
+    for (path, source) in [("walk", "discovered"), ("replay", "replayed")] {
+        assert_eq!(
+            run_result(&block_ledger(path, source), 0).verdict,
+            Verdict::Pass
+        );
+    }
+}
+
+#[test]
+fn unknown_ledger_paths_and_block_sources_are_contract_violations() {
+    for (path, source) in [
+        ("replay→walk@", "patched"),
+        ("replay→walk@x", "patched"),
+        ("replay→walk@07", "patched"),
+        ("rewalk", "discovered"),
+        ("walk", "invented"),
+    ] {
+        let outcome = run_result(&block_ledger(path, source), 0);
+        assert_eq!(outcome.verdict, Verdict::Fail, "{path} {source}");
+        assert_eq!(
+            outcome.failure.unwrap().code,
+            FailureCode::CoreResultMissing,
+            "{path} {source}"
+        );
+    }
+    let mut saved = block_ledger("walk", "discovered");
+    saved["blocks"][0]["saved"] = serde_json::json!(true);
+    assert_eq!(run_result(&saved, 0).verdict, Verdict::Fail);
+}
+
+#[test]
+fn a_refusal_during_replay_keeps_its_path_and_written_blocks() {
+    let mut refusal = block_ledger("replay", "replayed");
+    refusal["verdict"] = serde_json::json!("REFUSED");
+    refusal["code"] = serde_json::json!("APP_PROCESS_UNKNOWN");
+    refusal["message"] = serde_json::json!("the runner does not report the app process");
+    let outcome = run_result(&refusal, 4);
+    assert!(matches!(outcome.verdict, Verdict::Refused { .. }));
+    assert_eq!(outcome.ledger.path, "replay");
+    assert_eq!(
+        outcome.ledger.blocks_written,
+        Some(vec!["plan".to_string()])
+    );
+}
+
+#[test]
+fn cancellation_after_core_spawn_prevents_request_dispatch() {
+    let mut mock = MockRunner::new();
+    mock.expect_spawn_piped("walk.js", 9000, "", None);
+    mock.cancel_after = Some(("walk.js".into(), "received SIGTERM".into()));
+    let result = core::spawn(
+        &mut mock,
+        &CmdSpec::new("core-walk", "node", &["walk.js"], 60),
+        Path::new("unused.log"),
+        &request(),
+    );
+    assert_eq!(result.err().unwrap().code, FailureCode::RunCancelled);
+    assert!(mock.piped_stdin_text(0).is_empty());
+    assert!(*mock.piped_killed[0].lock().unwrap());
+    assert_eq!(mock.remaining(), 0);
+}
+
+#[test]
+fn deadline_before_admission_refuses_but_after_admission_fails() {
+    for (admitted, stdout) in [
+        (false, String::new()),
+        (
+            false,
+            format!("{}\n", envelope(2, "row", &row(0, 1, "pass"))),
+        ),
+        (true, format!("{}\n", envelope(2, "admitted", "{}"))),
+    ] {
+        let repo = common::temp_repo();
+        let mut mock = MockRunner::new();
+        mock.expect_spawn_piped_holding("walk.js", 9000, &stdout, None, HoldStdout::UntilKill);
+        let child = core::spawn(&mut mock, &spec(), &repo.join("core.log"), &request()).unwrap();
+        let outcome = core::wait(
+            &mut mock,
+            child,
+            Budgets {
+                walk_seconds: 1,
+                step_seconds: 10,
+            },
+            &mut |_, _| {},
+        );
+        let failure = outcome.failure.unwrap();
+        assert_eq!(
+            failure.code,
+            if admitted {
+                FailureCode::WalkDeadlineExceeded
+            } else {
+                FailureCode::CoreRefused
+            }
+        );
+        if admitted {
+            assert_eq!(outcome.verdict, Verdict::Fail);
+            assert_eq!(outcome.ledger.verdict, "FAIL");
+        } else {
+            assert!(
+                matches!(outcome.verdict, Verdict::Refused { code, .. } if code == "CDP_NOT_CONNECTED")
+            );
+            assert_eq!(outcome.ledger.verdict, "REFUSED");
+            assert!(failure.detail.contains("environment refusal"));
+            assert!(failure.detail.contains("host"));
+        }
+        assert!(*mock.piped_killed[0].lock().unwrap());
+    }
+}
+
+#[test]
+fn announced_runner_drivers_reach_the_recorder_in_order_and_count_as_progress() {
+    let repo = common::temp_repo();
+    let rows = [row(1, 1, "pass")];
+    let stdout = format!(
+        "{}\n{}\n{}\n{}\n",
+        envelope(2, "resource", r#"{"kind":"runner_driver","pid":4242}"#),
+        envelope(3, "row", &rows[0]),
+        envelope(4, "resource", r#"{"kind":"runner_driver","pid":4343}"#),
+        envelope(5, "result", &pass_ledger(&rows))
+    );
+    let mut mock = MockRunner::new();
+    mock.expect_spawn_piped("walk.js", 9000, &stdout, Some(0));
+    let child = core::spawn(&mut mock, &spec(), &repo.join("core.log"), &request()).unwrap();
+    let mut recorded = Vec::new();
+    let outcome = core::wait(&mut mock, child, budgets(), &mut |_, pid| {
+        recorded.push(pid)
+    });
+    assert_eq!(outcome.verdict, Verdict::Pass, "{:?}", outcome.failure);
+    assert_eq!(recorded, [4242, 4343]);
+}
+
+#[test]
+fn a_malformed_runner_driver_announcement_is_a_protocol_violation() {
+    for payload in [
+        r#"{"kind":"runner_driver","pid":1}"#,
+        r#"{"kind":"runner_driver","pid":"4242"}"#,
+        r#"{"kind":"runner_driver","pid":4242,"pgid":4242}"#,
+        r#"{"kind":"metro","pid":4242}"#,
+    ] {
+        let repo = common::temp_repo();
+        let rows = [row(1, 1, "pass")];
+        let stdout = format!(
+            "{}\n{}\n",
+            envelope(2, "resource", payload),
+            envelope(3, "result", &pass_ledger(&rows))
+        );
+        let mut mock = MockRunner::new();
+        mock.expect_spawn_piped("walk.js", 9000, &stdout, Some(0));
+        let child = core::spawn(&mut mock, &spec(), &repo.join("core.log"), &request()).unwrap();
+        let mut recorded = Vec::new();
+        let outcome = core::wait(&mut mock, child, budgets(), &mut |_, pid| {
+            recorded.push(pid)
+        });
+        assert_ne!(outcome.verdict, Verdict::Pass, "{payload}");
+        assert!(recorded.is_empty());
+    }
+}
+
+#[test]
+fn a_runner_driver_is_recorded_only_as_this_simulator_s_own_group_leader() {
+    let command = "/usr/bin/xcodebuild test-without-building -project R.xcodeproj -destination platform=iOS Simulator,id=AAAA-1111";
+    let real = "xcodebuild test-without-building -project /p/RnFastRunner/RnFastRunner.xcodeproj -scheme RnFastRunner -destination platform=iOS Simulator,id=2E24DCF0-C991-4EB0-80CC-CCFEB9042A73 -derivedDataPath /p/build/DerivedData -only-testing:RnFastRunnerUITests/RnFastRunnerTests/testCommand";
+    assert!(qaren::redact::OutputText::from_output(real)
+        .as_str()
+        .contains("2E24DCF0-C991-4EB0-80CC-CCFEB9042A73"));
+    let mut mock = MockRunner::new();
+    mock.expect_run("ps -o pgid= -p 4242", CmdOutput::success("4242"));
+    mock.expect_run(
+        "ps -p 4242 -o lstart=",
+        CmdOutput::success("Wed Aug 12 16:01:00 2026"),
+    );
+    mock.expect_run("ps -p 4242 -o command=", CmdOutput::success(real));
+    assert!(
+        qaren::run::runner_driver(&mut mock, 4242, "2E24DCF0-C991-4EB0-80CC-CCFEB9042A73")
+            .is_some()
+    );
+    for (pgid, cmd, recorded) in [
+        ("4242", command, true),
+        ("9000", command, false),
+        (
+            "4242",
+            "/usr/bin/xcodebuild build-for-testing id=AAAA-1111",
+            false,
+        ),
+        (
+            "4242",
+            "/usr/bin/xcodebuild test-without-building id=BBBB-2222",
+            false,
+        ),
+    ] {
+        let mut mock = MockRunner::new();
+        mock.expect_run("ps -o pgid= -p 4242", CmdOutput::success(pgid));
+        if pgid == "4242" {
+            mock.expect_run(
+                "ps -p 4242 -o lstart=",
+                CmdOutput::success("Wed Aug 12 16:01:00 2026"),
+            );
+            mock.expect_run("ps -p 4242 -o command=", CmdOutput::success(cmd));
+        }
+        let driver = qaren::run::runner_driver(&mut mock, 4242, "AAAA-1111");
+        assert_eq!(driver.is_some(), recorded, "{pgid} {cmd}");
+        if let Some(driver) = driver {
+            assert_eq!(driver.pgid, 4242);
+            assert_eq!(driver.identity.pid, 4242);
+        }
+        assert_eq!(mock.remaining(), 0);
+    }
 }

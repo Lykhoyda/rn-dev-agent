@@ -16,9 +16,9 @@ set -uo pipefail
 ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 BASE_REF="${BASE_REF:-origin/main}"
 # Shippable surface: the core and CLI sources plus the hand-authored plugin
-# surface (commands/skills/hooks) that marketplace installs run directly. Tests,
+# surface (commands/skills/hooks/scripts) that marketplace installs run directly. Tests,
 # docs, CI, and the plugin manifests/CHANGELOGs (the changeset output) stay excluded.
-WATCHED='^packages/qaren-core/src/|^packages/qaren-cli/src/|^packages/qaren-plugin/(commands|skills|hooks)/'
+WATCHED='^packages/qaren-core/src/|^packages/qaren-cli/src/|^packages/qaren-plugin/(commands|skills|hooks|scripts)/'
 
 git_diff_mode=false
 if [ -n "${CHANGED_FILES+x}" ]; then

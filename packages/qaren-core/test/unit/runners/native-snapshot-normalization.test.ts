@@ -183,3 +183,46 @@ test('runIOS snapshot reports a rectless observation dropped from 31 native node
   assert.equal(refCenter('@e15'), null);
   assert.deepEqual(refCenter('@e16'), { x: 60, y: 40 });
 });
+
+test('runIOS snapshot keeps the selected state a selection-only control reports', async (t) => {
+  clearRefMap();
+  _setRunnerStateForTest({
+    port: 22088,
+    pid: 999999,
+    deviceId: 'sim',
+    bundleId: 'com.test',
+    startedAt: 'now',
+  });
+  t.after(() => {
+    _setFetchForTest(globalThis.fetch);
+    _setRunnerStateForTest(null);
+    clearRefMap();
+  });
+  const rect = { x: 10, y: 20, width: 100, height: 40 };
+  _setFetchForTest(async () =>
+    Response.json({
+      ok: true,
+      data: {
+        nodes: [
+          { index: 0, type: 'Application', rect, depth: 0 },
+          {
+            index: 1,
+            type: 'Button',
+            label: 'Male',
+            rect,
+            depth: 1,
+            parentIndex: 0,
+            selected: true,
+          },
+          { index: 2, type: 'Button', label: 'Female', rect, depth: 1, parentIndex: 0 },
+        ],
+        truncated: false,
+        keyboardVisible: false,
+      },
+    }),
+  );
+  const envelope = parseEnvelope(await runIOS({ command: 'snapshot' }));
+  const nodes = (envelope.data as { nodes: { label?: string; selected?: boolean }[] }).nodes;
+  assert.equal(nodes.find((n) => n.label === 'Male')?.selected, true);
+  assert.equal(Object.hasOwn(nodes.find((n) => n.label === 'Female')!, 'selected'), false);
+});

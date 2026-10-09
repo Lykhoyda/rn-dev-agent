@@ -14,6 +14,8 @@ use qaren::runrecord::{AdbServerResource, MetroResource, Phase, RunRecord, UsbDe
 use qaren::scenario::Scenario;
 use std::path::{Path, PathBuf};
 
+static NO_PARTS: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+
 const LSTART: &str = "Wed Aug 12 16:01:00 2026";
 const USB_SERIAL: &str = "R5CT123ABC";
 
@@ -355,9 +357,147 @@ fn ios_reuse_scenario_yaml(port: u16) -> String {
 const UDID: &str = "AAAABBBB-1111-2222-3333-444455556666";
 
 #[test]
-fn ios_reuse_path_installs_cached_client_and_never_compiles() {
+fn missing_workspace_prepare_refuses_before_create_or_dependency_install() {
+    for dry_run in [false, true] {
+        let repo = common::temp_repo();
+        let yaml = format!("{}build:\n  ios_workspace:\n    workspace: ios/Missing.xcworkspace\n    scheme: Native Debug\n", ios_reuse_scenario_yaml(8791));
+        let path = write_scenario(&repo, &yaml);
+        let mut options = args(&repo, &path, None);
+        options.dry_run = dry_run;
+        let mut mock = MockRunner::new();
+        script_validation(&mut mock, &repo, &[]);
+        let receipt = prepare(&mut mock, &options);
+        assert_eq!(receipt.result, ReceiptResult::Refused);
+        assert_eq!(
+            receipt.failure.unwrap().code,
+            FailureCode::IosBuildCapabilityUnavailable
+        );
+        assert_eq!(mock.remaining(), 0);
+        assert!(mock.calls.iter().all(|c| c.program == "git"));
+        assert!(!options.lock_root.exists());
+        assert!(!repo.join(&receipt.run_id).exists());
+    }
+}
+
+#[test]
+fn workspace_dry_run_reports_xcode_only_when_the_bound_cache_cannot_be_reused() {
     let repo = common::temp_repo();
-    let scenario_path = write_scenario(&repo, &ios_reuse_scenario_yaml(8791));
+    for workspace in ["ios/First.xcworkspace", "ios/Second.xcworkspace"] {
+        common::write_ios_workspace(&repo.join("test-app"), workspace);
+    }
+    let app_dir = repo.join("cached/testapp.app");
+    common::write_ios_app(&app_dir);
+    let mut initial_fingerprint = None;
+    for (index, (workspace, scheme, reuse)) in [
+        ("ios/First.xcworkspace", "Native Debug", false),
+        ("ios/First.xcworkspace", "Native Debug", true),
+        ("ios/First.xcworkspace", "Other Debug", false),
+        ("ios/Second.xcworkspace", "Native Debug", false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let yaml = format!(
+            "{}build:\n  ios_workspace:\n    workspace: {workspace}\n    scheme: {scheme}\n",
+            ios_reuse_scenario_yaml(8791)
+        );
+        let path = write_scenario(&repo, &yaml);
+        let mut options = args(&repo, &path, None);
+        options.dry_run = true;
+        options.runs_root = repo.join("runs");
+        let mut mock = MockRunner::new();
+        script_validation(
+            &mut mock,
+            &repo,
+            &["git", "pnpm", "node", "lsof", "curl", "ps", "xcrun"],
+        );
+        mock.expect_run("lsof", free_port());
+        mock.expect_run("ls-files", CmdOutput::success(common::IOS_NATIVE_FILES));
+
+        let receipt = prepare(&mut mock, &options);
+
+        assert_eq!(
+            receipt.result,
+            ReceiptResult::Planned,
+            "{:?}",
+            receipt.failure
+        );
+        assert_eq!(mock.remaining(), 0);
+        assert!(mock.calls.iter().all(|c| matches!(
+            c.label.as_str(),
+            "git-toplevel" | "git-head" | "git-dirty" | "which" | "lsof-port" | "git-ls-files"
+        )));
+        assert!(mock.spawned_logs.is_empty());
+        assert!(!options.lock_root.exists());
+        assert!(!options.runs_root.exists());
+        let plan = receipt.build.unwrap();
+        assert_eq!(plan.decision == BuildDecision::Reuse, reuse);
+        let builds: Vec<_> = receipt
+            .planned_commands
+            .iter()
+            .filter(|c| c.contains("xcodebuild"))
+            .collect();
+        assert_eq!(builds.len(), usize::from(!reuse));
+        assert!(!receipt
+            .planned_commands
+            .iter()
+            .any(|c| c.contains("expo run:ios")));
+        if let Some(build) = builds.first() {
+            assert!(build.contains(workspace));
+            assert!(build.contains(&format!("-scheme {scheme}")));
+            assert!(!build.contains("CONFIGURATION_BUILD_DIR"));
+        }
+        if index == 0 {
+            initial_fingerprint = Some(plan.fingerprint.clone());
+            buildplan::save_json(
+                &buildplan::state_path(&repo, "ios", "com.rndevagent.testapp"),
+                &NativeCacheState {
+                    schema: CACHE_SCHEMA.into(),
+                    fingerprint_parts: Default::default(),
+                    platform: "ios".into(),
+                    app_id: "com.rndevagent.testapp".into(),
+                    worktree_root: repo.clone(),
+                    fingerprint: plan.fingerprint,
+                    built_at: "2026-08-13T00:00:00Z".into(),
+                    candidate_sha: "b".repeat(40),
+                    lockfile_sha256: "c".repeat(64),
+                    generated_native_dirs: vec![],
+                    artifact: Some(CachedArtifact {
+                        path: app_dir.clone(),
+                        sha256: buildplan::hash_artifact(&app_dir).unwrap(),
+                        kind: ArtifactKind::AppBundle,
+                    }),
+                },
+            )
+            .unwrap();
+        } else {
+            assert_eq!(
+                Some(&plan.fingerprint) == initial_fingerprint.as_ref(),
+                reuse
+            );
+        }
+    }
+}
+
+#[test]
+fn ios_reuse_path_installs_cached_client_and_never_compiles() {
+    assert_ios_prepare_reuses_cached_client(false);
+}
+
+#[test]
+fn workspace_prepare_reuses_its_bound_cached_client_without_expo_capability() {
+    assert_ios_prepare_reuses_cached_client(true);
+}
+
+fn assert_ios_prepare_reuses_cached_client(workspace: bool) {
+    let repo = common::temp_repo();
+    let mut yaml = ios_reuse_scenario_yaml(8791);
+    if workspace {
+        common::write_ios_workspace(&repo.join("test-app"), "ios/Native.xcworkspace");
+        yaml.push_str("build:\n  ios_workspace:\n    workspace: ios/Native.xcworkspace\n    scheme: Native Debug\n");
+    }
+    let scenario = common::scenario_from(&yaml);
+    let scenario_path = write_scenario(&repo, &yaml);
 
     // A previous build's verified dev client and cache state.
     let app_dir = repo.join("cached").join("testapp.app");
@@ -366,10 +506,12 @@ fn ios_reuse_path_installs_cached_client_and_never_compiles() {
     // The fingerprint the plan phase will compute for this repo.
     let mut fp_mock = MockRunner::new();
     fp_mock.expect_run("ls-files", CmdOutput::success(""));
-    let fp =
-        qaren::fingerprint::compute(&mut fp_mock, &repo, &repo.join("test-app"), "ios").unwrap();
+    let fp = qaren::fingerprint::compute(&mut fp_mock, &repo, &repo.join("test-app"), "ios")
+        .unwrap()
+        .with_ios_workspace(scenario.build.ios_workspace.as_ref());
     let state = NativeCacheState {
         schema: CACHE_SCHEMA.to_string(),
+        fingerprint_parts: Default::default(),
         platform: "ios".to_string(),
         app_id: "com.rndevagent.testapp".to_string(),
         worktree_root: repo.clone(),
@@ -396,7 +538,11 @@ fn ios_reuse_path_installs_cached_client_and_never_compiles() {
     mock.expect_run("lsof", free_port());
     mock.expect_run("ps", CmdOutput::success("Wed Aug 12 15:59:00 2026\n"));
     mock.expect_run("ps", CmdOutput::success("qaren prepare\n"));
-    common::script_ios_deps(&mut mock);
+    if workspace {
+        mock.expect_run("pnpm install --frozen-lockfile", CmdOutput::success(""));
+    } else {
+        common::script_ios_deps(&mut mock);
+    }
     mock.expect_run("ls-files", CmdOutput::success(""));
     mock.expect_run("simctl create", CmdOutput::success(&format!("{UDID}\n")));
     mock.expect_run(
@@ -420,6 +566,8 @@ fn ios_reuse_path_installs_cached_client_and_never_compiles() {
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("6000\n"));
     mock.expect_run("curl", CmdOutput::success("packager-status:running"));
+    mock.expect_run("expo-platform", CmdOutput::success(""));
+    common::script_devmenu_defaults(&mut mock, CmdOutput::success(""));
     mock.expect_run(
         "simctl launch --terminate-running-process",
         CmdOutput::success(""),
@@ -462,10 +610,10 @@ fn ios_reuse_path_installs_cached_client_and_never_compiles() {
         .any(|e| e.contains(&"a".repeat(40)) && e.contains(&"b".repeat(40))));
 
     assert!(
-        !mock
-            .calls
-            .iter()
-            .any(|c| c.label == "expo-run-ios" || c.label == "expo-prebuild"),
+        !mock.calls.iter().any(|c| matches!(
+            c.label.as_str(),
+            "expo-run-ios" | "expo-prebuild" | "xcodebuild-ios"
+        )),
         "reuse must never compile"
     );
     let install = mock
@@ -488,10 +636,17 @@ fn ios_reuse_path_installs_cached_client_and_never_compiles() {
             UDID,
             "com.rndevagent.testapp",
             "--initialUrl",
-            "http://127.0.0.1:8791"
+            "http://127.0.0.1:8791/?disableOnboarding=1"
         ]
     );
+    // The cold manifest is answered once before the dev client asks for it.
+    let position = |label: &str| mock.calls.iter().position(|c| c.label == label).unwrap();
+    assert!(position("metro-manifest") < position("simctl-launch"));
+    let manifest = &mock.calls[position("metro-manifest")];
+    assert!(manifest.args.contains(&"expo-platform: ios".to_string()));
+    assert_eq!(manifest.args.last().unwrap(), "http://127.0.0.1:8791/");
     for key in [
+        "build_and_ready",
         "install_cached",
         "metro_ready",
         "app_launch",
@@ -523,6 +678,7 @@ fn tampered_cached_artifact_is_refused_for_reuse() {
 
     let state = NativeCacheState {
         schema: CACHE_SCHEMA.to_string(),
+        fingerprint_parts: Default::default(),
         platform: "ios".to_string(),
         app_id: "com.rndevagent.testapp".to_string(),
         worktree_root: repo.clone(),
@@ -557,8 +713,10 @@ fn tampered_cached_artifact_is_refused_for_reuse() {
             worktree_root: &repo,
             candidate_sha: &"b".repeat(40),
             fingerprint: &fp.value,
+            fingerprint_parts: &NO_PARTS,
             fingerprint_complete: fp.complete,
             incompleteness: &fp.incompleteness,
+            expo_unavailable: fp.expo_unavailable.as_deref(),
             scheme: Some("rndatest"),
             force_clean: false,
             native_dir_exists: false,
@@ -1113,7 +1271,11 @@ fn usb_claim_is_retained_while_the_build_process_group_is_unresolved() {
     mock.expect_run("ps", CmdOutput::success("S\n"));
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("5000\n"));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
+    mock.expect_run("lstart=", CmdOutput::success(LSTART));
+    mock.expect_run("stat=", CmdOutput::success("S"));
     mock.expect_run("/bin/kill", CmdOutput::success(""));
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));
     mock.expect_run("ps", CmdOutput::success("S\n"));
@@ -1215,6 +1377,7 @@ fn android_reuse_path_records_install_provenance_after_a_successful_adb_install(
         .unwrap();
     let state = NativeCacheState {
         schema: CACHE_SCHEMA.to_string(),
+        fingerprint_parts: Default::default(),
         platform: "android".to_string(),
         app_id: "com.rndevagent.testapp".to_string(),
         worktree_root: repo.clone(),
@@ -1321,6 +1484,7 @@ fn android_reuse_path_records_install_provenance_after_a_successful_adb_install(
     mock.expect_run("lsof", CmdOutput::success("6001\n"));
     mock.expect_run("ps", CmdOutput::success("6000\n"));
     mock.expect_run("curl", CmdOutput::success("packager-status:running"));
+    mock.expect_run("expo-platform", CmdOutput::success(""));
     mock.expect_run("am start", CmdOutput::success("Starting: Intent\n"));
     // wait_ready
     mock.expect_run("ps", CmdOutput::success(&format!("{LSTART}\n")));

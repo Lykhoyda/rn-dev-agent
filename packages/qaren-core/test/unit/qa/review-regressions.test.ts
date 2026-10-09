@@ -40,15 +40,11 @@ test('review P1: protected value equality survives projection and an unequal val
   const good = await decideScreen(nameScreen('Anton'), matching, nameCheck, undefined, ['Anton']);
   const bad = await decideScreen(nameScreen('Bob'), mismatching, nameCheck, undefined, ['Anton']);
   assert.equal(good.check, 'pass');
-  assert.notDeepEqual(
-    matching.requests[0],
-    mismatching.requests[0],
-    'equal and unequal values cannot collapse to the same model evidence',
-  );
-  assert.notEqual(
+  assert.deepEqual(matching.requests[0], mismatching.requests[0]);
+  assert.equal(
     bad.check,
-    'pass',
-    'even a confident model cannot override the observed value mismatch',
+    'fail',
+    'even a confident model cannot override the locally observed value mismatch',
   );
   for (const requests of [matching.requests, mismatching.requests]) {
     assert.ok(!JSON.stringify(requests).includes('Anton'));
@@ -65,7 +61,7 @@ test('review P1: protected value equality survives projection and an unequal val
   const tokens = (requests: typeof matching.requests) =>
     new Set(JSON.stringify(requests).match(/\[QAREN_VALUE_\d+\]/g));
   assert.equal(tokens(matching.requests).size, 1);
-  assert.equal(tokens(mismatching.requests).size, 2);
+  assert.equal(tokens(mismatching.requests).size, 1);
 });
 
 test('protected equality still requires the noul threshold rather than a matching mask alone', async () => {
@@ -81,6 +77,19 @@ test('protected equality still requires the noul threshold rather than a matchin
   }
 });
 
+test('a protected value in an identifier is not observed assertion text', async () => {
+  const judge = alwaysYes();
+  const result = await decideScreen(
+    screen([element('@greeting', 'Welcome', { kind: 'text', testID: 'Anton' })]),
+    judge,
+    { kind: 'check', literal: false, text: 'The greeting says Welcome, Anton', line: 2 },
+    undefined,
+    ['Anton'],
+  );
+  assert.equal(result.check, 'unsure');
+  assert.equal(judge.requests.length, 0);
+});
+
 test('review P1: an unparsed check cannot pass on a protected value the screen does not show', async () => {
   const greeting = {
     kind: 'check' as const,
@@ -93,7 +102,13 @@ test('review P1: an unparsed check cannot pass on a protected value the screen d
     ['Welcome, Bob', 'unsure', 0],
   ] as const) {
     const judge = alwaysYes();
-    const decision = await decideScreen(screen([], [text]), judge, greeting, undefined, ['Anton']);
+    const decision = await decideScreen(
+      screen([element('@greeting', text, { kind: 'text' })]),
+      judge,
+      greeting,
+      undefined,
+      ['Anton'],
+    );
     assert.equal(decision.check, expected, text);
     assert.equal(judge.requests.length, asked, text);
   }
@@ -139,10 +154,10 @@ test('adding unrelated filled or secure inputs never disables banner checks or c
         assert.equal(q.check_2.type, 'noul');
         return { check_2: { type: 'noul', noul } };
       });
-      const observed = screen(inputs, [
-        ...inputs.map((e) => `${e.label}: ${e.value ?? ''}`),
-        'Saved',
-      ]);
+      const observed = screen(
+        [...inputs, element('@saved', 'Saved', { kind: 'text' })],
+        [...inputs.map((e) => `${e.label}: ${e.value ?? ''}`), 'Saved'],
+      );
       const result = await decideScreen(observed, judge, {
         ...nameCheck,
         text: 'The saved confirmation is visible',
@@ -168,7 +183,11 @@ test('banner checks with unrelated private inputs retain check-target batching a
       return { check_1: { type: 'noul', noul }, target_2: choice(q.target_2, 'e0') };
     });
     const observed = screen(
-      [element('@name', 'Name', { kind: 'input', value: 'Anton' }), element('@done', 'Done')],
+      [
+        element('@name', 'Name', { kind: 'input', value: 'Anton' }),
+        element('@saved', 'Saved', { kind: 'text' }),
+        element('@done', 'Done'),
+      ],
       ['Name: Anton', 'Saved', 'Done'],
     );
     const f = walker([observed], judge);
@@ -286,14 +305,14 @@ test('review P1: spatial target quotes are not fallback fill values', async () =
   }
 });
 
-test('review P1: all known grammar and fallback fill values are hidden throughout one preflight batch', async () => {
+test('review P1: all long grammar and fallback fill values are hidden throughout one preflight batch', async () => {
   const markdown = [
     '1. Type "private-credential" into "Token"',
     '2. Confirm the token field contains private-credential',
     '3. Populate the other token field with value "other-private-value"',
     '4. Confirm the other token field contains other-private-value',
-    '5. Type "42" into "PIN"',
-    '6. Confirm the PIN is 42',
+    '5. Type "4242" into "PIN"',
+    '6. Confirm the PIN is 4242',
   ].join('\n');
   const judge = scriptedJudge((q) =>
     Object.fromEntries(
@@ -308,10 +327,10 @@ test('review P1: all known grammar and fallback fill values are hidden throughou
   assert.equal(judge.requests.length, 1);
   assert.ok(!JSON.stringify(judge.requests).includes('private-credential'));
   assert.ok(!JSON.stringify(judge.requests).includes('other-private-value'));
-  assert.ok(!/\b42\b/.test(JSON.stringify(judge.requests)));
+  assert.ok(!/\b4242\b/.test(JSON.stringify(judge.requests)));
   assert.deepEqual(
     parsed.blocks[0].items.filter((i) => i.kind === 'fill').map((i) => i.text),
-    ['private-credential', 'other-private-value', '42'],
+    ['private-credential', 'other-private-value', '4242'],
   );
 });
 
@@ -386,7 +405,11 @@ test('secure input copies keep their local identities but stay out of outward ev
   assert.equal(observed.elements[0].testID, `pin-${secret}`);
   assert.equal(observed.elements[0].placeholder, `Replace ${secret}`);
   assert.ok(!redactEvidence(observed, assertionView(observed).join(' ')).includes(secret));
-  assert.ok(!screenSignature(observed).includes(secret));
+  const signature = JSON.parse(screenSignature(observed));
+  assert.equal(signature.elements[0][1], null);
+  assert.equal(signature.elements[0][3], null);
+  assert.equal(signature.elements[0][2], `pin-${secret}`);
+  assert.ok(signature.text.includes(`Copy: ${secret}`));
   const judge = alwaysYes();
   await decideScreen(
     observed,
@@ -399,10 +422,13 @@ test('secure input copies keep their local identities but stay out of outward ev
   assert.ok(!JSON.stringify(judge.requests).includes(secret));
 });
 
-test('review P2: short outbound values are masked at boundaries without changing human ledger policy', async () => {
+test('review P2: short secure values are masked at boundaries without widening typed-value policy', async () => {
   const judge = alwaysYes();
   await decideScreen(
-    screen([element('@address', 'address1', { kind: 'input', value: '42' })], ['address1: 42']),
+    screen(
+      [element('@address', 'address1', { kind: 'input', value: '42', secure: true })],
+      ['address1: 42'],
+    ),
     judge,
     { ...nameCheck, text: 'The address1 field contains 42' },
     { kind: 'fill', target: { phrase: 'address1' }, text: '1', line: 3 },
@@ -415,15 +441,18 @@ test('review P2: short outbound values are masked at boundaries without changing
 });
 
 test('outbound masks distinguish values, replace once, escape regex syntax and avoid token collisions', () => {
-  const mask = modelMask(['1', '42', 'A+B', 'A+B-long', 'QAREN_VALUE', '1'], ['[QAREN_VALUE_1]']);
-  const projected = mask.apply('1 42 address1 142 A+B-long A+B QAREN_VALUE');
+  const mask = modelMask(
+    ['111', '4242', 'A+B', 'A+B-long', 'QAREN_VALUE', '111'],
+    ['[QAREN_VALUE_1]'],
+  );
+  const projected = mask.apply('111 4242 address1 142 A+B-long A+B QAREN_VALUE');
   assert.ok(projected.includes('address1 142'));
-  assert.ok(!/\b(?:1|42)\b/.test(projected));
+  assert.ok(!/\b(?:111|4242)\b/.test(projected));
   assert.ok(!projected.includes('A+B'));
   assert.equal(new Set(mask.tokens).size, 5);
   assert.ok(!mask.tokens.includes('[QAREN_VALUE_1]'));
-  assert.equal(mask.apply('42'), mask.apply('42'));
-  assert.notEqual(mask.apply('42'), mask.apply('1'));
+  assert.equal(mask.apply('4242'), mask.apply('4242'));
+  assert.notEqual(mask.apply('4242'), mask.apply('111'));
 });
 
 test('review P2: swipe gestures normalize into the inverse content-scroll direction', async () => {

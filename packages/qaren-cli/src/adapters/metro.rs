@@ -11,8 +11,27 @@ pub fn start_spec(project_root: &Path, port: u16) -> CmdSpec {
         0,
     )
     .cwd(project_root)
-    .env("CI", "1")
+    .env_remove("CI")
     .env("EXPO_NO_TELEMETRY", "1")
+}
+
+// The dev client's first manifest request is the cold one; answering it once before launch keeps the launcher off its timeout.
+pub fn manifest_spec(port: u16, platform: &str) -> CmdSpec {
+    CmdSpec::new(
+        "metro-manifest",
+        "curl",
+        &[
+            "-sf",
+            "-o",
+            "/dev/null",
+            "-H",
+            &format!("expo-platform: {platform}"),
+            "-H",
+            "accept: application/expo+json,application/json",
+            &format!("http://127.0.0.1:{port}/"),
+        ],
+        60,
+    )
 }
 
 pub fn port_owner_spec(port: u16) -> CmdSpec {

@@ -52,6 +52,15 @@ export function adapt<A, T = unknown>(
   return async (args) => unwrap<T>(await handler(args));
 }
 
+// The evidence class a refused fill still proved; masked and unavailable are unverified, never verified.
+export function fillEvidence(error: unknown): 'masked' | 'unavailable' | 'mismatch' | undefined {
+  if (!(error instanceof HandlerError) || error.code !== 'TEXT_ENTRY_UNVERIFIED') return undefined;
+  const evidence = (error.meta?.verification as { evidence?: unknown } | undefined)?.evidence;
+  return evidence === 'masked' || evidence === 'unavailable' || evidence === 'mismatch'
+    ? evidence
+    : undefined;
+}
+
 export function describeError(error: unknown): { code: string; message: string } {
   if (error instanceof HandlerError) return { code: error.code, message: error.message };
   const message = error instanceof Error ? error.message : String(error);

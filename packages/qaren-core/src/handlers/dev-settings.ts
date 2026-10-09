@@ -1,5 +1,12 @@
+import {
+  interruptible,
+  isAbort,
+  sleep,
+  cancellationSignal,
+  throwIfCancelled,
+} from '../domain/cancellation.js';
 import type { CDPClient } from '../cdp-client.js';
-import { okResult, failResult, warnResult, withConnection } from '../utils.js';
+import { okResult, failResult, warnResult, withConnection, type ToolResult } from '../utils.js';
 import {
   hideExpoDevMenu,
   type ForegroundSurface,
@@ -12,7 +19,101 @@ type DevAction =
   | 'togglePerfMonitor'
   | 'dismissRedBox'
   | 'disableDevMenu'
-  | 'hideDevMenu';
+  | 'hideDevMenu'
+  | 'hideDevMenuFab';
+
+// Walk start: hide Expo's floating dev-menu button first, then shake and any open menu.
+export const WALK_DEV_SETTINGS = ['hideDevMenuFab', 'disableDevMenu', 'hideDevMenu'] as const;
+
+// The floating button fades out over ~0.3 s after its preference flips.
+const DEV_FAB_READS = 4;
+const DEV_FAB_READ_INTERVAL_MS = 250;
+
+export interface DevOverlayDependencies {
+  devSettings(args: { action: (typeof WALK_DEV_SETTINGS)[number] }): Promise<ToolResult>;
+  devOverlayUncleared(): Promise<boolean>;
+  log(message: string): void;
+  sleep?(ms: number): Promise<void>;
+}
+
+function envelopeError(result: ToolResult): string {
+  try {
+    const { error } = JSON.parse(result.content[0]?.text ?? '') as { error?: unknown };
+    return typeof error === 'string' ? error : 'failed';
+  } catch {
+    return 'failed';
+  }
+}
+
+// The one walk-start and post-recovery proof that no Expo dev chrome is in front of the app.
+export async function clearDevOverlays(deps: DevOverlayDependencies): Promise<ToolResult> {
+  const pause = deps.sleep ?? sleep;
+  for (const action of WALK_DEV_SETTINGS) {
+    throwIfCancelled();
+    const error = await deps.devSettings({ action }).then(
+      (result) => (result.isError ? envelopeError(result) : undefined),
+      (thrown: unknown) => {
+        if (isAbort(thrown)) throw thrown;
+        return thrown instanceof Error ? thrown.message : String(thrown);
+      },
+    );
+    if (error === undefined) continue;
+    if (action !== 'hideDevMenuFab') {
+      deps.log(`${action}: ${error}`);
+      continue;
+    }
+    return failResult(
+      `The Expo dev-client floating button could not be confirmed hidden: ${error}`,
+      'DEV_MENU_HIDE_UNVERIFIED',
+      { action: 'clearDevOverlays', outcome: 'DEV_MENU_HIDE_UNVERIFIED' },
+    );
+  }
+  let readError: string | undefined;
+  for (let read = 0; read < DEV_FAB_READS; read++) {
+    throwIfCancelled();
+    const shown = await deps.devOverlayUncleared().catch((thrown: unknown) => {
+      if (isAbort(thrown)) throw thrown;
+      readError = thrown instanceof Error ? thrown.message : String(thrown);
+      return true;
+    });
+    if (!shown) return okResult({ action: 'clearDevOverlays', executed: true });
+    if (read + 1 < DEV_FAB_READS) await pause(DEV_FAB_READ_INTERVAL_MS);
+  }
+  throwIfCancelled();
+  return failResult(
+    `The Expo dev overlays could not be proven gone${readError ? `: ${readError}` : '.'}`,
+    'DEV_MENU_HIDE_UNVERIFIED',
+    { action: 'clearDevOverlays', outcome: 'DEV_MENU_HIDE_UNVERIFIED' },
+  );
+}
+
+export async function recoverDevOverlays(deps: DevOverlayDependencies): Promise<ToolResult> {
+  const overlayUncleared = await deps.devOverlayUncleared().catch((thrown: unknown) => {
+    if (isAbort(thrown)) throw thrown;
+    return true;
+  });
+  const hidden = await deps.devSettings({ action: 'hideDevMenu' });
+  if (hidden.isError || (!overlayUncleared && envelopeData(hidden)?.executed === false))
+    return hidden;
+  return clearDevOverlays(deps);
+}
+
+function envelopeData(result: ToolResult): { executed?: unknown } | undefined {
+  try {
+    const { data } = JSON.parse(result.content[0]?.text ?? '') as { data?: { executed?: unknown } };
+    return data;
+  } catch {
+    return undefined;
+  }
+}
+
+const HIDE_DEV_MENU_FAB = `(async function () {
+  var m = globalThis.expo && globalThis.expo.modules && globalThis.expo.modules.DevMenuPreferences;
+  if (!m || typeof m.setPreferencesAsync !== 'function') return "no_method_available";
+  await m.setPreferencesAsync({ showFloatingActionButton: false, showsAtLaunch: false, motionGestureEnabled: false, touchGestureEnabled: false });
+  var p = typeof m.getPreferencesAsync === 'function' ? await m.getPreferencesAsync() : null;
+  return p && p.showFloatingActionButton === false ? "ok" : "unverified";
+})()`;
 
 const RESOLVE_DEV_SETTINGS = `(function() {
   if (typeof __turboModuleProxy === 'function') try { var ds = __turboModuleProxy("DevSettings"); if (ds) return ds; } catch(e) {}
@@ -22,7 +123,7 @@ const RESOLVE_DEV_SETTINGS = `(function() {
   return null;
 })()`;
 
-const ACTION_EXPRESSIONS: Record<Exclude<DevAction, 'hideDevMenu'>, string> = {
+const ACTION_EXPRESSIONS: Record<Exclude<DevAction, 'hideDevMenu' | 'hideDevMenuFab'>, string> = {
   reload: `(function() { var ds = ${RESOLVE_DEV_SETTINGS}; if (!ds || !ds.reload) throw new Error("DevSettings not available"); ds.reload(); return "ok"; })()`,
   toggleInspector: `(function() { var ds = ${RESOLVE_DEV_SETTINGS}; if (!ds || !ds.toggleElementInspector) throw new Error("DevSettings not available"); ds.toggleElementInspector(); return "ok"; })()`,
   togglePerfMonitor: `(function() { var ds = ${RESOLVE_DEV_SETTINGS}; if (!ds) throw new Error("DevSettings not available"); if (ds.togglePerformanceMonitor) { ds.togglePerformanceMonitor(); } else if (ds.togglePerfMonitor) { ds.togglePerfMonitor(); } else { return "no_method_available"; } return "ok"; })()`,
@@ -90,7 +191,12 @@ export function createDevSettingsHandler(
   const handler = async (args: { action: DevAction }, client: CDPClient) => {
     if (args.action === 'hideDevMenu') {
       const probe = dependencies.probeForegroundSurface;
-      const before = probe ? await probe().catch(() => 'unknown' as const) : 'unknown';
+      const before = probe
+        ? await interruptible(probe).catch(() => {
+            cancellationSignal();
+            return 'unknown' as const;
+          })
+        : 'unknown';
       if (before !== 'unknown' && before !== 'expo_dev_menu') {
         return okResult({
           action: args.action,
@@ -103,9 +209,13 @@ export function createDevSettingsHandler(
       const call = await hideExpoDevMenu(client, { retries: 1 });
       if (!call.callSent) return failedHideResult(call, before);
 
-      await (dependencies.settleAfterHide?.() ??
-        new Promise<void>((resolve) => setTimeout(resolve, 300)));
-      const after = probe ? await probe().catch(() => 'unknown' as const) : 'unknown';
+      await interruptible(() => dependencies.settleAfterHide?.() ?? sleep(300));
+      const after = probe
+        ? await interruptible(probe).catch(() => {
+            cancellationSignal();
+            return 'unknown' as const;
+          })
+        : 'unknown';
       if (before === 'expo_dev_menu' && after === 'app') {
         return okResult({
           action: args.action,
@@ -119,10 +229,27 @@ export function createDevSettingsHandler(
       return unverifiedHideResult(call, before, after);
     }
 
+    if (args.action === 'hideDevMenuFab') {
+      const result = await interruptible(() => client.evaluate(HIDE_DEV_MENU_FAB, true));
+      if (result.value === 'no_method_available')
+        return warnResult(
+          { action: args.action, executed: false },
+          'hideDevMenuFab not available — no Expo dev-menu preferences module.',
+        );
+      if (result.error || result.value !== 'ok')
+        return failResult(
+          `The Expo dev-client floating button could not be confirmed hidden: ${result.error ? 'the preferences call failed or timed out' : 'the preferences did not read back hidden'}.`,
+          'DEV_MENU_HIDE_UNVERIFIED',
+          { action: args.action, outcome: 'DEV_MENU_HIDE_UNVERIFIED' },
+        );
+      await interruptible(() => dependencies.settleAfterHide?.() ?? sleep(300));
+      return okResult({ action: args.action, executed: true, outcome: 'hidden' });
+    }
+
     const expression = ACTION_EXPRESSIONS[args.action];
 
     try {
-      const result = await client.evaluate(expression);
+      const result = await interruptible(() => client.evaluate(expression));
       if (result.error) {
         return failResult(`Dev settings error: ${result.error}`);
       }
@@ -150,5 +277,7 @@ export function createDevSettingsHandler(
   const helperIndependent = withConnection(getClient, handler, { requireHelpers: false });
   const helperAware = withConnection(getClient, handler);
   return (args: { action: DevAction }) =>
-    args.action === 'hideDevMenu' ? helperIndependent(args) : helperAware(args);
+    args.action === 'hideDevMenu' || args.action === 'hideDevMenuFab'
+      ? helperIndependent(args)
+      : helperAware(args);
 }
