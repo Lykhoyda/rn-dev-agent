@@ -584,6 +584,7 @@ impl Inbox {
                 if !self.admitted && payload.as_object().is_some_and(|p| p.is_empty()) =>
             {
                 self.admitted = true;
+                crate::events::admitted();
                 true
             }
             (Some("resource"), Some(payload))
@@ -622,6 +623,7 @@ impl Inbox {
                     Ok(mut row) => {
                         row.redact_evidence();
                         crate::progress::row(&row);
+                        crate::events::row(&row);
                         self.rows.push(row);
                         true
                     }

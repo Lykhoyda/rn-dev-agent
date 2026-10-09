@@ -37,6 +37,35 @@ fn run_id() -> String {
     format!("check-{}", qaren::timefmt::compact_utc(1_770_000_000_000))
 }
 
+// What `main` does around a check: the stream starts before the run and ends with its receipt.
+fn run_with_events(mock: &mut MockRunner, req: &RunRequest) -> (qaren::receipt::Receipt, Vec<serde_json::Value>) {
+    qaren::events::init();
+    let receipt = run(mock, req);
+    qaren::events::end(&receipt, 0);
+    qaren::events::finish();
+    let path = req.runs_root.join(&receipt.run_id).join("logs/events.jsonl");
+    let events = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    (receipt, events)
+}
+
+fn stage_trail(events: &[serde_json::Value]) -> Vec<String> {
+    events
+        .iter()
+        .filter(|e| e["event"] == "stage")
+        .map(|e| {
+            let p = &e["payload"];
+            match p["code"].as_str() {
+                Some(code) => format!("{} {} {code}", p["name"].as_str().unwrap(), p["state"].as_str().unwrap()),
+                None => format!("{} {}", p["name"].as_str().unwrap(), p["state"].as_str().unwrap()),
+            }
+        })
+        .collect()
+}
+
 fn free_port() -> CmdOutput {
     CmdOutput {
         exit_code: Some(1),
@@ -1064,10 +1093,11 @@ fn pass_stdout() -> String {
         steps.join(",")
     );
     format!(
-        "{}\n{}\n{}\n",
-        envelope(2, "row", &rows[0]),
-        envelope(3, "row", &rows[1]),
-        envelope(4, "result", &ledger)
+        "{}\n{}\n{}\n{}\n",
+        envelope(2, "admitted", "{}"),
+        envelope(3, "row", &rows[0]),
+        envelope(4, "row", &rows[1]),
+        envelope(5, "result", &ledger)
     )
 }
 
@@ -1341,9 +1371,23 @@ fn a_deadline_overrun_fails_naming_the_walk_phase_and_still_tears_down() {
     script_core_identity(&mut mock);
     script_teardown(&mut mock);
 
-    let receipt = run(&mut mock, &request(&repo, &app, 5));
+    let (receipt, events) = run_with_events(&mut mock, &request(&repo, &app, 5));
 
     assert_eq!(receipt.result, ReceiptResult::Fail);
+    let trail = stage_trail(&events);
+    assert_eq!(
+        trail[trail.len() - 4..],
+        [
+            "steps running",
+            "steps failed WALK_DEADLINE_EXCEEDED",
+            "cleanup running",
+            "cleanup passed",
+        ],
+        "{trail:?}"
+    );
+    let end = &events.last().unwrap()["payload"];
+    assert_eq!(end["failureCode"], "WALK_DEADLINE_EXCEEDED");
+    assert_eq!(end["cleanup"]["device_lease"], "removed");
     let failure = receipt.failure.as_ref().unwrap();
     assert_eq!(failure.code, FailureCode::WalkDeadlineExceeded);
     assert_eq!(failure.phase, "walk");
@@ -4834,7 +4878,7 @@ fn every_build_decision_reports_fingerprint_completeness_and_reuse_reports_ready
         script_core_identity(&mut mock);
         script_teardown(&mut mock);
 
-        let receipt = run(&mut mock, &req);
+        let (receipt, events) = run_with_events(&mut mock, &req);
 
         assert_eq!(
             receipt.result,
@@ -4843,6 +4887,48 @@ fn every_build_decision_reports_fingerprint_completeness_and_reuse_reports_ready
             receipt.failure
         );
         assert_eq!(mock.remaining(), 0, "{case}");
+        let decision = serde_json::to_value(receipt.build.as_ref().unwrap().decision).unwrap();
+        let decision = decision.as_str().unwrap();
+        let build: &[&str] = match decision {
+            "reuse" => &["prebuild skipped", "native_build skipped"],
+            "clean" => &["prebuild running", "prebuild passed", "native_build running", "native_build passed"],
+            _ => &["prebuild skipped", "native_build running", "native_build passed"],
+        };
+        let mut expected = vec![
+            "preflight running".to_string(),
+            "preflight passed".into(),
+            "deps running".into(),
+            "deps passed".into(),
+            "build_decision running".into(),
+            format!("build_decision passed {decision}"),
+        ];
+        expected.extend(build.iter().map(|s| s.to_string()));
+        expected.extend(
+            [
+                "install_launch_ready running",
+                "install_launch_ready passed",
+                "verify running",
+                "verify passed",
+                "recording skipped",
+                "attach running",
+                "attach passed",
+                "steps running",
+                "steps passed",
+                "cleanup running",
+                "cleanup passed",
+            ]
+            .map(String::from),
+        );
+        assert_eq!(stage_trail(&events), expected, "{case}");
+        let kinds: Vec<&str> = events.iter().map(|e| e["event"].as_str().unwrap()).collect();
+        assert!(kinds.contains(&"run") && kinds.contains(&"admitted") && kinds.contains(&"coreT0"), "{case}: {kinds:?}");
+        assert!(kinds.contains(&"row"), "{case}");
+        assert_eq!(*kinds.last().unwrap(), "end");
+        assert_eq!(events.last().unwrap()["payload"]["result"], "pass");
+        assert_eq!(events.last().unwrap()["payload"]["droppedEvents"], 0);
+        for (i, e) in events.iter().enumerate() {
+            assert_eq!(e["seq"], i as u64 + 1, "{case}");
+        }
         assert_eq!(
             receipt.build.as_ref().unwrap().decision == BuildDecision::Reuse,
             reuse,

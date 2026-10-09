@@ -280,6 +280,7 @@ fn main() -> ExitCode {
             qaren::cancel::install();
             runner.watch_caller();
             qaren::progress::enable();
+            qaren::events::init();
             match lock_root().and_then(|lock| runs_root().map(|runs| (lock, runs))) {
                 Ok((lock_root, runs_root)) => {
                     let project_root =
@@ -379,6 +380,8 @@ fn main() -> ExitCode {
         }
     };
 
+    qaren::events::end(&receipt, receipt_exit_code(receipt.result));
+    qaren::events::finish();
     qaren::progress::close();
     let receipt_delivered = {
         use std::io::Write;

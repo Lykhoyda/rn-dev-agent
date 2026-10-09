@@ -6,6 +6,7 @@ pub mod candidate;
 pub mod commands;
 pub mod config;
 pub mod core;
+pub mod events;
 pub mod exec;
 pub mod failure;
 pub mod fingerprint;

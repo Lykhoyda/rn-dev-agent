@@ -368,6 +368,7 @@ impl Runner for RealRunner {
         self.executed += 1;
         let started = Instant::now();
         crate::progress::started(&spec.label, false);
+        crate::events::cmd(&spec.label, crate::events::Edge::Start, None, None);
         let output = run_captured(spec, &started, None, || {
             if interruptible {
                 self.cancellation()
@@ -381,6 +382,12 @@ impl Runner for RealRunner {
             Err(e) => io_failure(&started, format!("drain logs: {e}")),
         };
         crate::progress::finished(&spec.label, output.ok());
+        crate::events::cmd(
+            &spec.label,
+            crate::events::Edge::End,
+            Some(output.ok()),
+            Some(started.elapsed().as_millis() as u64),
+        );
         output
     }
 
@@ -414,6 +421,7 @@ impl Runner for RealRunner {
         use std::os::unix::process::CommandExt;
         self.executed += 1;
         crate::progress::started(&spec.label, true);
+        crate::events::cmd(&spec.label, crate::events::Edge::Start, None, None);
         let (drain, output, error) = log::LogDrain::spawn_paired(&self.log_executable, log_path)?;
         let mut cmd = Command::new(&spec.program);
         cmd.args(&spec.args)
@@ -460,6 +468,7 @@ impl Runner for RealRunner {
         use std::os::unix::process::CommandExt;
         self.executed += 1;
         crate::progress::started(&spec.label, true);
+        crate::events::cmd(&spec.label, crate::events::Edge::Start, None, None);
         let (log, stderr) = log::LogDrain::spawn(&self.log_executable, stderr_log)?;
         let mut cmd = Command::new(&spec.program);
         cmd.args(&spec.args)
