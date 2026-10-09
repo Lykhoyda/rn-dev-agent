@@ -132,7 +132,7 @@ test('U9: a focused React input types once and verifies through the React tree',
 });
 
 for (const focused of [true, false]) {
-  test(`fallback skips final validation while retaining focus veto (${focused})`, async () => {
+  test(`a normalized fallback stays unverified while retaining focus veto (${focused})`, async () => {
     let reads = 0;
     const normalizingClient = {
       isConnected: true,
@@ -150,7 +150,7 @@ for (const focused of [true, false]) {
     const { result, fills } = await withSeam(() =>
       performFocusedFill({ ...args, skipFinalValidation: true }, normalizingClient),
     );
-    assert.equal(reads, 1);
+    assert.equal(reads > 1, focused);
     assert.equal(fills, focused ? 1 : 0);
     const env = envelope(result);
     if (focused) {

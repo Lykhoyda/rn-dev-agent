@@ -83,7 +83,7 @@ export interface WalkerDeps {
   captureScreen(options?: { platformPresence?: boolean; timing?: TimingObserver }): Promise<Screen>;
   press(ref: string, context: QaDispatchContext): Promise<ActResult>;
   fill(ref: string, text: string, context: QaDispatchContext): Promise<ActResult>;
-  // iOS only: type without final validation; testID identifies the pre-dispatch focus veto.
+  // iOS only: type, proven only by a matching React read-back; testID identifies the pre-dispatch focus veto.
   typeFocused?(
     ref: string,
     text: string,
@@ -893,11 +893,15 @@ export async function walkBlock(
       ...base(item, attempt),
       ref: again.element.ref,
       outcome: 'pass',
-      reason: redact(
-        proofMode
-          ? focusedReason(quoted)
-          : `UNVERIFIED_FILL: typed with the keyboard after tapping "${quoted}"; the field is not an observable native input, so its final value was not validated`,
-      ),
+      ...(entry.proven
+        ? {}
+        : {
+            reason: redact(
+              proofMode
+                ? focusedReason(quoted)
+                : `UNVERIFIED_FILL: typed with the keyboard after tapping "${quoted}"; the field is not an observable native input, so its final value was not validated`,
+            ),
+          }),
     });
     return 'typed';
   };
@@ -944,7 +948,11 @@ export async function walkBlock(
         undefined,
       );
     await capture(item);
-    emit({ ...base(item, attempt), outcome: 'pass', reason: redact(focusedReason(quoted)) });
+    emit({
+      ...base(item, attempt),
+      outcome: 'pass',
+      ...(entry.proven ? {} : { reason: redact(focusedReason(quoted)) }),
+    });
     return 'typed';
   };
   // The login block walks with this walk's privacy, so its typed values stay masked.

@@ -195,7 +195,7 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
             mutation: 'none',
             error: 'the action did not execute',
           };
-        return { ok: true, proven };
+        return { ok: true, proven: proven || meta?.verify === 'exact' };
       } catch (error) {
         logActionSettle(error instanceof HandlerError ? error.meta : undefined);
         const { code, message } = describeError(error);

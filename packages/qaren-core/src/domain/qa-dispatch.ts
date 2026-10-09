@@ -36,6 +36,18 @@ export class QaDispatchContext {
     return this.attested && this.sends === 1;
   }
 
+  // Probes the time budget without recording a refusal; cancellation stays with check().
+  get expired(): boolean {
+    const now = this.now();
+    return (
+      this.failure !== undefined ||
+      !Number.isFinite(now) ||
+      !Number.isFinite(this.deadline) ||
+      this.deadline < 0 ||
+      now >= this.deadline
+    );
+  }
+
   refuse(code: QaDispatchRefusal): never {
     this.failure ??= new QaDispatchError(code);
     throw this.failure;

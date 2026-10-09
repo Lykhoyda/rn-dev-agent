@@ -565,14 +565,6 @@ test('U8: the block of an unverified fill is never saved and video stays withhel
   assert.equal(existsSync(join(dir, '.qaren', 'actions', 'hidden-email.yaml')), false);
 });
 
-test('U9: a React-confirmed append is still recorded as unverified and private', async () => {
-  const fake = app({ type: { ok: true, proven: true } });
-  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
-  assert.equal(outcome.block.outcome, 'pass');
-  assert.match(outcome.rows[0].reason ?? '', /^UNVERIFIED_FILL: /);
-  assert.deepEqual(outcome.privateFills, [fake.rows[0].line]);
-});
-
 test('U14: without the focused-typing dep the strict refusal is unchanged', async () => {
   const fake = app({ typeFocused: false });
   const outcome = await walkBlock(blocks(plan())[0], fake.deps);
@@ -716,6 +708,16 @@ for (const type of [
     assert.deepEqual(outcome.privateFills, [fake.rows[0].line]);
   });
 }
+
+test('U8v: a fallback fill whose read-back matched passes without the unverified reason', async () => {
+  const fake = app({ type: { ok: true, proven: true } });
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+  assert.deepEqual(steps(fake.log), ['press @wrap', 'type @wrap', 'press @submit']);
+  assert.equal(outcome.rows[0].outcome, 'pass');
+  assert.equal(outcome.rows[0].reason, undefined);
+  assert.deepEqual(outcome.privateFills, [outcome.rows[0].line]);
+});
 
 test('U11: a failed tap fails without typing', async () => {
   const fake = app({ press: { ok: false, proven: false, error: 'TAP_FAILED: no' } });
@@ -1208,7 +1210,7 @@ test('a normalizing controlled fallback continues as unverified', async () => {
     const result = await walkBlock(blocks(plan())[0], fake.deps);
     assert.equal(result.block.outcome, 'pass');
     assert.match(result.rows[0].reason ?? '', /^UNVERIFIED_FILL:/);
-    assert.equal(reads, 1);
+    assert.ok(reads > 1, 'the typed value is read back');
     assert.equal(fills, 1);
     assert.equal(fake.state(), 'accepted');
   } finally {

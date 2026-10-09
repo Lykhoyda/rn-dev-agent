@@ -568,10 +568,12 @@ for (const mode of ['proof', 'transition'] as const) {
       );
       const env = JSON.parse(result.content[0].text);
       const allowed = focused === true || (mode === 'transition' && focused === null);
+      // After the one send, only value read-backs follow; an empty read-back is never retyped.
       assert.deepEqual(
-        events,
+        events.slice(0, allowed ? 4 : undefined),
         allowed ? ['health', 'focus', 'type', 'health'] : ['health', 'focus'],
       );
+      assert.ok(events.slice(4).every((event) => event === 'focus'));
       assert.deepEqual(sends, allowed ? ['type'] : []);
       assert.equal(context.authorizations, allowed ? 1 : 0);
       assert.equal(env.ok, allowed);
