@@ -118,6 +118,16 @@ test('an unchanged screen with a dialog in front recovers once and the retry pas
   const recovered = ledger.steps.find((r) => r.reason?.includes('recovered: dialog'));
   assert.equal(recovered?.outcome, 'retry');
   assert.equal(ledger.steps.at(-1)?.outcome, 'pass');
+  assert.deepEqual(
+    f.rows.map((row) => [row.attempt, row.outcome]),
+    [
+      [1, 'retry'],
+      [2, 'retry'],
+      [1, 'pass'],
+    ],
+  );
+  assert.ok(f.rows[0].operationId);
+  assert.ok(f.rows.every((row) => row.operationId === f.rows[0].operationId));
 });
 
 test('a second failure of the same item fails without a second recovery', async () => {
@@ -128,6 +138,16 @@ test('a second failure of the same item fails without a second recovery', async 
   assert.equal(f.calls.filter((c) => c === 'dialog accept').length, 1);
   assert.match(ledger.failure?.seen ?? '', /did not change after recovery/);
   assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 3);
+  assert.deepEqual(
+    f.rows.map((row) => [row.attempt, row.outcome]),
+    [
+      [1, 'retry'],
+      [2, 'retry'],
+      [1, 'fail'],
+    ],
+  );
+  assert.ok(f.rows[0].operationId);
+  assert.ok(f.rows.every((row) => row.operationId === f.rows[0].operationId));
 });
 
 test('a target missing behind a dialog recovers once', async () => {

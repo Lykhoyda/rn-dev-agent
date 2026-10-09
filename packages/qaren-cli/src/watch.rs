@@ -211,13 +211,6 @@ impl State {
                 let Some(operation_id) = p["operationId"].as_u64().filter(|id| *id > 0) else {
                     return;
                 };
-                if self
-                    .rows
-                    .get(&operation_id)
-                    .is_some_and(|r| r.attempt > attempt)
-                {
-                    return;
-                }
                 self.rows.insert(
                     operation_id,
                     Step {
@@ -869,7 +862,6 @@ mod tests {
             (4, 3, 1, "pass", "login-three"),
             (5, 4, 1, "retry", "plan-four-retry"),
             (5, 4, 2, "pass", "plan-four"),
-            (5, 4, 1, "retry", "stale-retry"),
         ];
         let mut ledger = ledger();
         ledger.steps.clear();
@@ -958,6 +950,69 @@ mod tests {
         );
         assert!(!output.iter().any(|line| line.contains('↻')));
         assert!(plain(&state, &mut printed).is_empty());
+    }
+
+    #[test]
+    fn dialog_recovery_completion_uses_sequence_order_after_attempt_reset() {
+        for outcome in ["pass", "fail"] {
+            let retry = row(2, 3, 2, "retry", "exact", [1, 1, 0]);
+            let mut state = folded(&[row(1, 3, 1, "retry", "exact", [1, 1, 0]), retry.clone()]);
+            let mut printed = HashSet::new();
+            assert!(!plain(&state, &mut printed)
+                .iter()
+                .any(|line| line.starts_with("  ")));
+            state.fold(parse_event(&row(3, 3, 1, outcome, "exact", [1, 1, 0])).unwrap());
+            state.fold(parse_event(&retry).unwrap());
+            state.fold(
+                parse_event(&stage(
+                    4,
+                    100_000,
+                    "steps",
+                    if outcome == "pass" {
+                        "passed"
+                    } else {
+                        "failed"
+                    },
+                    json!({"ms": 3}),
+                ))
+                .unwrap(),
+            );
+            state.fold(parse_event(&line(5, 100_000, "end",
+                json!({"result": outcome, "phase": "cleaned", "expectedExit": if outcome == "pass" { 0 } else { 1 }}))).unwrap());
+            let mut ledger = ledger();
+            let mut completion = ledger.steps[1].clone();
+            completion.outcome = outcome.into();
+            let mut retried = completion.clone();
+            retried.attempt = 2;
+            retried.outcome = "retry".into();
+            retried.reason = Some("recovered: dialog".into());
+            ledger.steps = vec![retried, completion];
+            state.apply_ledger(&ledger);
+            assert_eq!(state.rows.len(), 1);
+            let passed = usize::from(outcome == "pass");
+            assert_eq!(state.counts(), (passed, 1 - passed));
+            let snapshot = snapshot(&state);
+            assert_eq!(snapshot["steps"][0]["outcome"], outcome);
+            assert_eq!(snapshot["steps"][0]["attempt"], 1);
+            assert_eq!(snapshot["steps"][0]["text"], "Tap \"Tasks\"");
+            let frame = frame(&state, 200);
+            assert!(frame
+                .iter()
+                .any(|line| line.contains(&format!("{passed}/1 passed"))));
+            let output = plain(&state, &mut printed);
+            let rows: Vec<_> = output
+                .iter()
+                .filter(|line| line.starts_with("  "))
+                .collect();
+            assert_eq!(rows.len(), 1);
+            assert!(rows[0].starts_with(&format!("  {}", mark(outcome))));
+            assert!(rows[0].ends_with("Tap \"Tasks\""));
+            assert!(plain(&state, &mut printed).is_empty());
+            assert!(!frame
+                .iter()
+                .chain(&output)
+                .any(|line| line.contains('↻') || line.contains("recovered: dialog")));
+        }
     }
 
     #[test]
