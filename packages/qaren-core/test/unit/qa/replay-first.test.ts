@@ -138,6 +138,39 @@ test('second run replays the stored block without Jev and leaves the file unchan
   assert.equal(readFileSync(actionFile(dir), 'utf8'), before);
 });
 
+test('a two-step replay miss keeps one operation through re-walk completion', async () => {
+  const dir = root();
+  try {
+    const plan = '### Onboarding\n1. Tap "Skip"\n2. Tap "Done"\n';
+    await run(plan, dir);
+    const { result, fake } = await run(plan, dir, { doneId: 'onboarding-finish' });
+    assert.equal(result.verdict, 'PASS');
+    const missedLine = blocks(plan)[0].items[1].line;
+    assert.equal(result.path, `replay→walk@${missedLine}`);
+    assert.deepEqual(
+      fake.rows.map((row) => row.outcome),
+      ['pass', 'retry', 'pass'],
+    );
+    const [first, retry, completion] = fake.rows;
+    assert.ok(first.operationId && retry.operationId);
+    assert.notEqual(first.operationId, retry.operationId);
+    assert.equal(retry.operationId, completion.operationId);
+    assert.deepEqual(
+      result.steps.map((row) => row.operationId),
+      fake.rows.map((row) => row.operationId),
+    );
+    const finalOperations = new Map(fake.rows.map((row) => [row.operationId, row]));
+    assert.equal(finalOperations.size, 2);
+    assert.deepEqual(
+      [...finalOperations.values()].map((row) => row.outcome),
+      ['pass', 'pass'],
+    );
+    assert.ok(fake.rows.every((row) => row.block === '' && row.text === '' && !row.selector));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('an edited plan line changes planHash, so the block is walked and rewritten', async () => {
   const dir = root();
   await run(literal, dir);

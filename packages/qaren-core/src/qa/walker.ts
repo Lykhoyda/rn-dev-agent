@@ -208,6 +208,7 @@ export async function walkBlock(
     observation: 0,
   },
   opts: WalkOptions = {},
+  operations = new Map<number, number>(),
 ): Promise<WalkOutcome> {
   const replay = opts.mode === 'replay';
   const rows: LedgerRow[] = [];
@@ -602,7 +603,6 @@ export async function walkBlock(
     }
   };
   let shots = shotIndex;
-  const operations = new Map<number, number>();
   const emit = (row: LedgerRow): void => {
     let operationId = operations.get(row.line);
     if (operationId === undefined) {
@@ -1925,8 +1925,17 @@ export async function runPlan(
           : 'withheld-privacy';
     const calls = (): JevCall[] => [...preflightCalls, ...(deps.judge?.calls ?? [])];
     const sequence = { observation: 0, publicationInterrupted: false };
-    const walk = async (block: Block, opts?: WalkOptions) => {
-      const outcome = await walkBlock(block, walking, steps.length, typed, privacy, sequence, opts);
+    const walk = async (block: Block, opts?: WalkOptions, operations?: Map<number, number>) => {
+      const outcome = await walkBlock(
+        block,
+        walking,
+        steps.length,
+        typed,
+        privacy,
+        sequence,
+        opts,
+        operations,
+      );
       recoveries += outcome.recoveries ?? 0;
       return outcome;
     };
@@ -2037,7 +2046,8 @@ export async function runPlan(
     for (const block of blocks) {
       const stored = store && storedFor(block, store);
       if (store && stored) {
-        const replayed = await walk(replayBlock(block, stored), { mode: 'replay' });
+        const operations = new Map<number, number>();
+        const replayed = await walk(replayBlock(block, stored), { mode: 'replay' }, operations);
         steps.push(...replayed.rows);
         if (!replayed.failure) {
           results.push(
@@ -2054,7 +2064,7 @@ export async function runPlan(
         }
         const k = replayed.miss;
         patchedAt ??= k;
-        const rewalked = await walk(block, { fromLine: k });
+        const rewalked = await walk(block, { fromLine: k }, operations);
         steps.push(...rewalked.rows);
         if (rewalked.failure) {
           results.push({ ...rewalked.block, source: 'patched' });

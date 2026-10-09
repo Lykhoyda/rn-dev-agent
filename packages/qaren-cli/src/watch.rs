@@ -928,6 +928,39 @@ mod tests {
     }
 
     #[test]
+    fn replay_miss_and_completion_display_two_passed_operations() {
+        let mut state = folded(&[
+            row(1, 3, 1, "pass", "exact", [1, 1, 0]),
+            row(2, 4, 1, "retry", "exact", [0, 1, 0]),
+            row(3, 4, 1, "pass", "exact", [1, 1, 0]),
+            stage(4, 100_000, "steps", "passed", json!({"ms": 3})),
+            line(
+                5,
+                100_000,
+                "end",
+                json!({"result": "pass", "phase": "cleaned", "expectedExit": 0}),
+            ),
+        ]);
+        state.apply_ledger(&ledger());
+        assert_eq!(state.rows.len(), 2);
+        assert_eq!(state.counts(), (2, 0));
+        assert!(state.rows.values().all(|step| step.outcome == "pass"));
+        let json = snapshot(&state);
+        assert_eq!(json["steps"].as_array().unwrap().len(), 2);
+        assert!(frame(&state, 200)
+            .iter()
+            .any(|line| line.contains("2/2 passed")));
+        let mut printed = HashSet::new();
+        let output = plain(&state, &mut printed);
+        assert_eq!(
+            output.iter().filter(|line| line.starts_with("  ✓")).count(),
+            2
+        );
+        assert!(!output.iter().any(|line| line.contains('↻')));
+        assert!(plain(&state, &mut printed).is_empty());
+    }
+
+    #[test]
     fn term_safe_strips_c0_and_c1_controls() {
         assert_eq!(
             term_safe("a\u{1b}[2Jb\u{7}c\u{9b}d\u{7f}e\tf\ng·✓"),
