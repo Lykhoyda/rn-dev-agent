@@ -21,12 +21,15 @@ The viewer reads one run under `~/.qaren/runs/` and takes no lock or device
 lease. `--latest` selects the newest `run.json` modification time. It shows
 explicit stages from preflight through cleanup, step outcomes and act/capture/Jev
 timings, recording, and the verdict with its expected check exit code.
-An unobserved stage stays unobserved; a skipped stage says “not needed”.
+An unobserved stage stays unobserved; a skipped stage says “not needed” in full rows.
 TTY redraws read the current terminal size, keep every stage visible, and fit
-current or recent step rows into the remaining space with an omitted-row count.
-Short or narrow viewports use compact rows; below 32 columns or 18 rows (or
-when the size is unavailable), the viewer switches to plain output for the rest
-of that invocation. Resize is checked on each redraw. Plain and JSON output
+step rows into the remaining space with an omitted-row count. Unfinished rows
+take priority, followed by completed rows with the latest observed event sequence,
+including plan completions after login recovery. Selected rows appear in operation
+order. Below 64 columns or 22 rows, compact rows show stage status names and step
+outcomes; below 32 columns or 18 rows (or when the size is unavailable), the viewer
+switches to plain output for the rest of that invocation. Resize is checked on
+each redraw. Plain and JSON output
 retain all rows; the bounded TTY view does not change the stored run or ledger.
 Preflight and dependencies pass when their work completes; verify runs after
 every build decision, including reuse. Reuse skips prebuild and native compile.
