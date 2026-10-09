@@ -206,6 +206,10 @@ pressables resolve, or when the walked-to pressable or any exact-ID fiber is dis
 or blocked by `pointerEvents` on its host view. Wrappers that forward one `testID` around a
 single native host through inert views — a bottom-tab button, for example — are one control
 rather than an ambiguity: the press resolves to the nearest `onPress` above that host.
+Nested components forwarding the same `testID` and the same `onPress` function also
+resolve as one control and dispatch once, including when their ancestry passes through
+React fiber alternates; alternate halves of one pressable count as one target. Separate
+sibling controls sharing that ID and handler remain ambiguous.
 Ownership is proven from the route scopes above the target: every ancestor carrying a route
 record together with that route's own navigation must be focused, so a mounted-but-inactive
 screen or a covered card's header refuses, and a scope the proof cannot read refuses as

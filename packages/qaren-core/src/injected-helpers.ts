@@ -3,7 +3,7 @@ import { TYPOGRAPHY_TEXT_LIMITS } from './qa/host-typography.js';
 import { INPUT_HOST_TYPES } from './qa/input-host-types.js';
 
 // Bump when the injected surface changes so warm runtimes replace stale helpers.
-export const HELPERS_VERSION = 91;
+export const HELPERS_VERSION = 92;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -3735,7 +3735,7 @@ export const INJECTED_HELPERS = `
           var node = inner.return;
           var steps = 0;
           while (node && steps < 1000) {
-            if (node === outer) return true;
+            if (sameFiber(node, outer)) return true;
             node = node.return;
             steps++;
           }
@@ -3776,7 +3776,7 @@ export const INJECTED_HELPERS = `
           walkOriginalCandidates.push({ fiber: walkNode, hops: walkHops, source: walkSources[wi] });
           var existing = null;
           for (var wj = 0; wj < walkCandidates.length; wj++) {
-            if (walkCandidates[wj].fiber === walkNode || walkForwarded(walkCandidates[wj].fiber, walkNode)) {
+            if (sameFiber(walkCandidates[wj].fiber, walkNode) || walkForwarded(walkCandidates[wj].fiber, walkNode)) {
               existing = walkCandidates[wj];
               break;
             }
