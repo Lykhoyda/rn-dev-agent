@@ -273,6 +273,10 @@ extension RnFastRunnerTests {
       needsPostSnapshotInteractionDelay = true
       return Response(ok: true, data: payload)
     }
+    // Selecting or activating the app could let XCTest resolve the blocking alert first.
+    if command.command == .systemAlertTap, readOnlyApp == nil {
+      return systemAlertTap(label: command.text)
+    }
     var activeApp = readOnlyApp ?? currentApp ?? app
     if readOnlyApp == nil, !isRunnerLifecycleCommand(command.command) {
       let normalizedBundleId = command.appBundleId?
@@ -1181,6 +1185,8 @@ extension RnFastRunnerTests {
       }
       let buttonLabels = alert.buttons.allElementsBoundByIndex.map { $0.label }
       return Response(ok: true, data: DataPayload(message: alert.label, items: buttonLabels))
+    case .systemAlertTap:
+      return systemAlertTap(label: command.text)
     case .pinch:
       guard let scale = command.scale, scale > 0 else {
         return Response(ok: false, error: ErrorPayload(message: "pinch requires scale > 0"))

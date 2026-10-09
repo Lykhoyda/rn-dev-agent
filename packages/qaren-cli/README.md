@@ -457,6 +457,24 @@ device selection or leasing. Plans with only quoted targets and literal checks
 make no Jev calls and need no key; recognised back, dialog and fixed-scroll
 steps also stay model-free.
 
+An iOS accept or dismiss step against a system (SpringBoard) alert picks one
+button by exact label, so `Allow` never matches `Allow Once`, and the runner
+taps that button element itself. It never taps a coordinate through the app or
+activates the app first. The step passes only when the runner reports that exact
+label tapped and the alert absent from a successful read of every system alert
+and sheet. A completed tap it cannot prove fails with `DIALOG_TAP_UNPROVEN`, and
+a tap that raised in the runner fails `ACTION_OUTCOME_UNCERTAIN`; neither is
+retried, even if the screen changed. A runner refusal before tapping
+(`SYSTEM_ALERT_BUTTON_NOT_FOUND`, `SYSTEM_ALERT_BUTTON_AMBIGUOUS`,
+`SYSTEM_ALERT_CHANGED`) keeps its code. A runner without `SYSTEM_ALERT_TAP_V1`
+refuses `RN_FAST_RUNNER_STALE` without tapping. The proven label and frame land on
+the ledger row as `dialog`, in the receipt's `ledger.dialogs`, and in a
+value-free `dialog-tap` run-log line. The button lists are English. A localized
+alert fails `DIALOG_BUTTON_NOT_FOUND` rather than guessing. The permission
+outcome itself is the app's to show: assert it with the plan's next step.
+In-app alerts that are not SpringBoard-owned still use a text tap and need a
+screen change to pass.
+
 Unparseable lines refuse before allocation; unresolved screen targets refuse during the walk.
 Native platform presence establishes observed presence, not complete visual exposure
 or an accessibility heading role. Heading predicates require qualified evidence:

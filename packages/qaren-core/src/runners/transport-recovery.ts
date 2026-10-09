@@ -30,6 +30,7 @@ const MUTATING_COMMANDS = new Set([
   'dismissKeyboard',
   'keyboard',
   'alert',
+  'systemAlertTap',
   'pinch',
   'activate',
   'terminate',
