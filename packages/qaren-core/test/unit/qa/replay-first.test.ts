@@ -21,7 +21,7 @@ import type { Ledger, LedgerRow, WalkResult } from '../../../dist/qa/ledger.js';
 import { element, screen, scriptedJudge, walker } from './judgment-fixtures.ts';
 import { AppProcessGoneError } from '../../../dist/qa/capture.js';
 import { captureInputPrivacy, isPrivateInput } from '../../../dist/qa/privacy.js';
-import { serializeBlock, writeBlock } from '../../../dist/qa/blocks.js';
+import { readBlock, serializeBlock, writeBlock } from '../../../dist/qa/blocks.js';
 
 const literal = readFileSync(new URL('../../fixtures/plans/literal.md', import.meta.url), 'utf8');
 const literalLabel = literal.replace('2. Tap "onboarding-done"', '2. Tap "Done"');
@@ -878,3 +878,162 @@ test('a duplicate stored id terminates replay without rediscovering its unique l
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+const explicitKeyPlan = '### Explicit key\n1. Tap "Return"\n2. Tap "login_submit"\n';
+
+function keyboardApp(mode: 'present' | 'absent' | 'duplicate' = 'present') {
+  const fake = walker(
+    [],
+    scriptedJudge(() => assert.fail('literal key replay must not ask Jev')),
+  );
+  let state = 0;
+  let generation = 0;
+  let currentKey = '';
+  let currentSubmit = '';
+  const captures: number[] = [];
+  fake.deps.captureScreen = async () => {
+    captures.push(state);
+    generation++;
+    currentKey = `@key-${generation}`;
+    currentSubmit = `@submit-${generation}`;
+    const root = [
+      { ref: '@app', index: 0, type: 'Application', rect: { x: 0, y: 0, width: 402, height: 874 } },
+      {
+        ref: '@window',
+        index: 1,
+        parentIndex: 0,
+        type: 'Window',
+        rect: { x: 0, y: 0, width: 402, height: 874 },
+      },
+    ];
+    const nodes =
+      state === 2
+        ? [
+            ...root,
+            {
+              ref: '@complete',
+              index: 2,
+              parentIndex: 1,
+              type: 'StaticText',
+              label: 'Completed',
+              rect: { x: 20, y: 100, width: 200, height: 40 },
+            },
+          ]
+        : [
+            ...root,
+            {
+              ref: currentSubmit,
+              index: 2,
+              parentIndex: 1,
+              type: 'Button',
+              identifier: 'login_submit',
+              label: 'Sign in',
+              hittable: true,
+              rect: { x: 21, y: 565, width: 360, height: 38 },
+            },
+            ...(state === 0
+              ? [
+                  {
+                    ref: '@keyboard',
+                    index: 3,
+                    parentIndex: 1,
+                    type: 'Keyboard',
+                    rect: { x: 0, y: 583, width: 402, height: 233 },
+                  },
+                  ...(mode !== 'absent'
+                    ? [
+                        {
+                          ref: currentKey,
+                          index: 4,
+                          parentIndex: 3,
+                          type: 'Key',
+                          label: 'Return',
+                          hittable: true,
+                          rect: { x: 310, y: 755, width: 80, height: 50 },
+                        },
+                      ]
+                    : []),
+                  ...(mode === 'duplicate'
+                    ? [
+                        {
+                          ref: '@duplicate',
+                          index: 5,
+                          parentIndex: 3,
+                          type: 'Key',
+                          label: 'Return',
+                          hittable: true,
+                          rect: { x: 210, y: 755, width: 80, height: 50 },
+                        },
+                      ]
+                    : []),
+                ]
+              : []),
+          ];
+    return {
+      ...joinScreen(nodes, []),
+      keyboardVisible: state === 0,
+      coverage: { native: 'complete', react: 'complete' },
+    };
+  };
+  fake.deps.press = async (ref, context) => {
+    assert.equal(
+      ref,
+      state === 0 ? currentKey : currentSubmit,
+      'dispatch must use the latest capture ref',
+    );
+    context.authorize();
+    fake.actions.push(state === 0 ? 'key' : 'submit');
+    state++;
+    return { ok: true, proven: false };
+  };
+  return { ...fake, captures };
+}
+
+test('saved explicit keyboard key replays two presses with freshly observed references', async () => {
+  const dir = root();
+  const discovered = keyboardApp();
+  const first = ledger(await runPlan(blocks(explicitKeyPlan), discovered.deps, [], store(dir)));
+  assert.equal(first.verdict, 'PASS', JSON.stringify(first));
+  assert.deepEqual(first.blocksWritten, ['explicit-key']);
+  const file = join(dir, '.qaren', 'actions', 'explicit-key.yaml');
+  const saved = readFileSync(file, 'utf8');
+  const replay = keyboardApp();
+  const second = ledger(await runPlan(blocks(explicitKeyPlan), replay.deps, [], store(dir)));
+  assert.equal(second.verdict, 'PASS', JSON.stringify(second));
+  assert.equal(second.path, 'replay');
+  assert.deepEqual(replay.actions, ['key', 'submit']);
+  assert.ok(
+    replay.captures.filter((state) => state === 1).length >= 2,
+    'submit recaptures after the key readback',
+  );
+  assert.equal(readFileSync(file, 'utf8'), saved);
+  const stored = readBlock(saved);
+  assert.ok(!('invalid' in stored), JSON.stringify(stored));
+  assert.deepEqual(
+    stored.steps.map((step) => step.selector),
+    [{ text: 'Return' }, { id: 'login_submit' }],
+  );
+  assert.equal(replay.rows.filter((row) => row.outcome === 'pass').length, 2);
+});
+
+for (const mode of ['absent', 'duplicate'] as const) {
+  test(`saved explicit keyboard key ${mode} cannot replay a remembered target`, async () => {
+    const dir = root();
+    const seed = keyboardApp();
+    assert.equal(
+      ledger(await runPlan(blocks(explicitKeyPlan), seed.deps, [], store(dir))).verdict,
+      'PASS',
+    );
+    const replay = keyboardApp(mode);
+    const result = ledger(await runPlan(blocks(explicitKeyPlan), replay.deps, [], store(dir)));
+    assert.equal(result.verdict, 'FAIL', JSON.stringify(result));
+    assert.equal(
+      replay.actions.some((action) => action === 'key' || action === 'submit'),
+      false,
+    );
+    assert.equal(
+      replay.rows.some((row) => row.outcome === 'pass'),
+      false,
+    );
+  });
+}

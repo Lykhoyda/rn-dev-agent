@@ -8,6 +8,7 @@ import {
   type VisibilityBlockerDiagnostic,
   actionView,
   isNativeInput,
+  keyboardCoversElement,
   describe,
   elementFrame,
   elementViewport,
@@ -315,6 +316,7 @@ export function centreCovered(element: Element, screen: Screen): boolean {
     (viewport !== undefined && !inside(viewport)) ||
     (screen.keyboardVisible !== false &&
       screen.keyboardFrame !== undefined &&
+      keyboardCoversElement(element) &&
       inside(screen.keyboardFrame))
   );
 }

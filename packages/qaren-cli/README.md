@@ -301,9 +301,13 @@ point outside it leaves that check unavailable. A negative check refuses with
 capability takes the runner rebuild path.
 
 Before dispatch, the walker also treats a press or fill target whose centre lies
-outside its trusted clipping viewport or inside an observed keyboard frame
-(unless the keyboard is proven hidden) as covered. It uses the same recovery
-as a native occlusion refusal.
+outside its trusted clipping viewport or covered by an observed keyboard frame
+(unless the keyboard is proven hidden) as covered. Keyboard-owned targets use
+the existing explicit tap path and remain subject to trusted clipping and native
+identity guards. An explicit key press performs its normal action, not guaranteed
+keyboard dismissal; QA must freshly prove the keyboard hidden and the intended
+screen preserved before treating the press as clearance. Ordinary covered content
+uses the same recovery as a native occlusion refusal.
 The walker handles this refusal with one directional scroll: down from the
 lower half of the effective viewport, up from the upper half. Scroll bands stay
 above a visible keyboard. It then requires a unique rebind to the refused
