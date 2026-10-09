@@ -719,6 +719,16 @@ test('U8v: a fallback fill whose read-back matched passes without the unverified
   assert.deepEqual(outcome.privateFills, [outcome.rows[0].line]);
 });
 
+test('U8k: a fill the field kept short on both attempts stays unverified and discloses the lengths', async () => {
+  const fake = app({ type: { ok: true, proven: false, kept: { held: 6, typed: 8, attempts: 2 } } });
+  const outcome = await walkBlock(blocks(plan())[0], fake.deps);
+  assert.equal(outcome.block.outcome, 'pass', JSON.stringify(outcome.failure));
+  assert.match(
+    outcome.rows[0].reason ?? '',
+    /^UNVERIFIED_FILL: .*; the field kept 6 of 8 characters on 2 attempts$/,
+  );
+});
+
 test('U11: a failed tap fails without typing', async () => {
   const fake = app({ press: { ok: false, proven: false, error: 'TAP_FAILED: no' } });
   const outcome = await walkBlock(blocks(plan())[0], fake.deps);

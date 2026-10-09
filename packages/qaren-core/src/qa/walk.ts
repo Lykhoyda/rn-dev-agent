@@ -185,7 +185,13 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
   return stop.track(handler).then(
     (result) => {
       try {
-        const { data, meta } = unwrap<{ executed?: boolean; tapped?: boolean }>(result);
+        const { data, meta } = unwrap<{
+          executed?: boolean;
+          tapped?: boolean;
+          heldLength?: number;
+          typedLength?: number;
+          attempts?: number;
+        }>(result);
         logActionSettle(meta);
         if (data?.executed === false || data?.tapped === false)
           return {
@@ -195,7 +201,13 @@ function act(handler: () => Promise<ToolResult>, proven: boolean): Promise<ActRe
             mutation: 'none',
             error: 'the action did not execute',
           };
-        return { ok: true, proven: proven || meta?.verify === 'exact' };
+        const kept =
+          typeof data?.heldLength === 'number' &&
+          typeof data.typedLength === 'number' &&
+          typeof data.attempts === 'number'
+            ? { held: data.heldLength, typed: data.typedLength, attempts: data.attempts }
+            : undefined;
+        return { ok: true, proven: proven || meta?.verify === 'exact', ...(kept ? { kept } : {}) };
       } catch (error) {
         logActionSettle(error instanceof HandlerError ? error.meta : undefined);
         const { code, message } = describeError(error);

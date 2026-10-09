@@ -1600,7 +1600,7 @@ export async function performFocusedFill(
     });
   }
   const textEntryRoute = extractTextEntryRoute(native);
-  const unverified = () =>
+  const unverified = (kept?: { heldLength: number; typedLength: number; attempts: number }) =>
     warnResult(
       {
         typed: true,
@@ -1609,6 +1609,7 @@ export async function performFocusedFill(
         verifiedOracle: 'none',
         textEntryPath: 'focused-synthesized',
         textEntryRoute,
+        ...kept,
       },
       'Typed into the focused field; the value could not be confirmed. Confirm with device_screenshot or expect_text before relying on it.',
     );
@@ -1661,9 +1662,10 @@ export async function performFocusedFill(
   const second = await readBack();
   if (second.verdict === 'exact') return verified();
   const held = droppedLength(second.observed, expected);
-  // The same loss twice is the field's own stripping or maxLength, not dropped keystrokes.
-  return held === undefined || held === first
-    ? unverified()
+  if (held === undefined) return unverified();
+  // The same loss twice is the field's own stripping or maxLength: unverified, with the lengths disclosed.
+  return held === first
+    ? unverified({ heldLength: held, typedLength: [...expected].length, attempts: 2 })
     : lost(held, ' after one clear-and-retype');
 }
 

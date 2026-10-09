@@ -75,6 +75,8 @@ export interface ActResult {
   evidence?: 'masked' | 'unavailable' | 'mismatch';
   // The handler found more than one element for the target at dispatch: terminal, never retried.
   ambiguous?: boolean;
+  // An unverified fill whose field held the same shorter value on every attempt.
+  kept?: { held: number; typed: number; attempts: number };
 }
 
 export interface WalkerDeps {
@@ -765,6 +767,10 @@ export async function walkBlock(
   };
   const focusedReason = (quoted: string) =>
     `UNVERIFIED_FILL: typed with the keyboard into the field React reports focused ("${quoted}"); its final value was not validated`;
+  const keptNote = (entry: ActResult) =>
+    entry.kept
+      ? `; the field kept ${entry.kept.held} of ${entry.kept.typed} characters on ${entry.kept.attempts} attempts`
+      : '';
   // Best effort: the field is not an observable native input, so only the tap and the keyboard prove anything.
   const keyboardFallback = async (
     item: Item & { kind: 'fill' },
@@ -897,9 +903,10 @@ export async function walkBlock(
         ? {}
         : {
             reason: redact(
-              proofMode
+              (proofMode
                 ? focusedReason(quoted)
-                : `UNVERIFIED_FILL: typed with the keyboard after tapping "${quoted}"; the field is not an observable native input, so its final value was not validated`,
+                : `UNVERIFIED_FILL: typed with the keyboard after tapping "${quoted}"; the field is not an observable native input, so its final value was not validated`) +
+                keptNote(entry),
             ),
           }),
     });
@@ -951,7 +958,7 @@ export async function walkBlock(
     emit({
       ...base(item, attempt),
       outcome: 'pass',
-      ...(entry.proven ? {} : { reason: redact(focusedReason(quoted)) }),
+      ...(entry.proven ? {} : { reason: redact(focusedReason(quoted) + keptNote(entry)) }),
     });
     return 'typed';
   };

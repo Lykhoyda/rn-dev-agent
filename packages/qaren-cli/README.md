@@ -83,7 +83,8 @@ actions, so remove 1.x first and install 2.0 as a new product.
    `~/.cache/rn-dev-agent/`, `~/.rn-dev-agent/`, `~/.claude/rn-agent/` or an
    app's `.rn-agent/` directory, and learned actions are not converted: QaReN
    saves its own blocks as plans pass. Archive each app's `.rn-agent/actions/`
-   first if those flows matter to you, since they may be their only copy. Unset
+   and the action database `~/.rn-dev-agent/actions.db` first if those flows
+   matter to you, since they may be their only copy. Unset
    any `RN_DEV_AGENT_*` environment variables from your shell profile, and delete
    the 1.x directories once step 4 passes.
 3. **Install 2.0.** Until a QaReN release asset is published, use the
@@ -109,9 +110,10 @@ actions, so remove 1.x first and install 2.0 as a new product.
    - Released plugin: the plugin list shows `qaren@qaren`, and
      `bash scripts/ensure-qaren.sh --print-bin` prints a binary path whose
      `--version` reports `qaren 2.0.x`.
-   - Source build: `packages/qaren-cli/target/debug/qaren --version` reports the
-     workspace version; use that path (or `QAREN_RUNTIME`, see [Build](#build))
-     for the next step.
+   - Source build: `<checkout>/packages/qaren-cli/target/debug/qaren --version`
+     reports the workspace version. From the app directory, run that absolute
+     path with `QAREN_RUNTIME=<checkout>/packages/qaren-core/dist` (see
+     [Build](#build)).
    - In the app, write `.qaren/config.yaml` and run a first plan with that
      binary as in [Check a plan](#check-a-plan); a PASS receipt with a run under
      `~/.qaren/runs/` completes the upgrade.
@@ -314,8 +316,11 @@ the field is cleared and retyped once within the same step budget. A match then
 verifies the fill. A second loss of a different length points to dropped
 keystrokes and fails with `TEXT_ENTRY_UNVERIFIED` naming only the typed and held
 lengths. The same loss twice points to the field's own transformation and stays
-unverified, as does any other normalized, empty, uncontrolled or unreadable
-value; a later plan check still decides whether that value is acceptable. A runner
+unverified, with its row reason ending `the field kept N of M characters on 2
+attempts`; any other normalized, empty, uncontrolled or unreadable value also
+stays unverified. A later plan check still decides whether the value is
+acceptable. The receipt's `ledger.unverified_fills` counts passing fills left
+unverified, omitted when zero. A runner
 must advertise `FILL_EVIDENCE_V1` on both iOS and Android. Session startup routes
 a missing capability through the bounded source-rebuild path instead of
 accepting the released artifact. An active iOS runner missing it refuses focused
