@@ -200,7 +200,10 @@ test('a login wall replays the login block, then the step retries and passes', a
   const f = fake(
     [wall, wall, wall, screen(['Settings']), screen(['Settings']), screen(['Profile'])],
     {
-      login: { marker: { id: 'login-screen' }, block: block('### Login\n1. Tap "Sign in"\n') },
+      login: {
+        marker: { id: 'login-screen' },
+        block: { ...block('1. Tap "Sign in"\n'), slug: 'login' },
+      },
     },
   );
   const ledger = await runPlan([block('1. Tap "Settings"\n')], f.deps);
@@ -215,6 +218,16 @@ test('a login wall replays the login block, then the step retries and passes', a
     ],
   );
   assert.match(ledger.steps[1].reason ?? '', /recovered: login/);
+  const [login, retry, passed] = ledger.steps;
+  assert.equal(login.line, retry.line);
+  assert.ok(login.operationId && retry.operationId);
+  assert.notEqual(login.operationId, retry.operationId);
+  assert.equal(retry.operationId, passed.operationId);
+  assert.deepEqual(
+    f.rows.map((row) => row.operationId),
+    ledger.steps.map((row) => row.operationId),
+  );
+  assert.ok(f.rows.every((row) => row.block === '' && row.text === ''));
 });
 
 test('no recovery runs inside the login replay', async () => {

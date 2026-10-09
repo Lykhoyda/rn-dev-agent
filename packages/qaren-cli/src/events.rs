@@ -77,6 +77,7 @@ pub enum Edge {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RowEvent<'a> {
+    operation_id: u64,
     line: u64,
     attempt: u64,
     kind: String,
@@ -241,6 +242,7 @@ impl Events {
 
     pub fn row(&mut self, row: &Row) {
         let event = RowEvent {
+            operation_id: row.operation_id,
             line: row.line,
             attempt: row.attempt,
             kind: token(&row.kind),
@@ -518,7 +520,7 @@ mod tests {
     // Built from the wire shape, so fields the core adds later keep this compiling.
     fn row(line: u64, extra: Value) -> Row {
         let mut base = json!({
-            "block": "b", "line": line, "attempt": 1, "kind": "action", "resolvedBy": "exact",
+            "block": "b", "operationId": line, "line": line, "attempt": 1, "kind": "action", "resolvedBy": "exact",
             "t": 1200, "outcome": "pass",
             "timing": {"captureMs": 600, "nativeMs": 1, "reactMs": 2, "resolveMs": 3, "jevMs": 0,
                        "actMs": 1100, "postCaptureMs": 4, "otherMs": 5, "total": 1715}
@@ -690,6 +692,7 @@ mod tests {
                 "attempt",
                 "kind",
                 "line",
+                "operationId",
                 "outcome",
                 "resolvedBy",
                 "t",

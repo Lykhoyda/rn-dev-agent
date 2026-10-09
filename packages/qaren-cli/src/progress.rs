@@ -195,6 +195,7 @@ mod tests {
     fn row(line: u64, outcome: &str, text: &str) -> Row {
         Row {
             block: "b".into(),
+            operation_id: line,
             line,
             attempt: 1,
             kind: "step".into(),

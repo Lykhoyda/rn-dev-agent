@@ -1,6 +1,6 @@
 use crate::events::Envelope;
 use crate::report::{prose, term_safe};
-use crate::runrecord::{PidLiveness, RunRecord};
+use crate::runrecord::{validate_run_id, PidLiveness, RunRecord};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
@@ -107,6 +107,7 @@ struct Stage {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Step {
+    operation_id: u64,
     line: u64,
     attempt: u64,
     kind: String,
@@ -207,12 +208,20 @@ impl State {
                 let Some(attempt) = p["attempt"].as_u64() else {
                     return;
                 };
-                if self.rows.get(&line).is_some_and(|r| r.attempt > attempt) {
+                let Some(operation_id) = p["operationId"].as_u64().filter(|id| *id > 0) else {
+                    return;
+                };
+                if self
+                    .rows
+                    .get(&operation_id)
+                    .is_some_and(|r| r.attempt > attempt)
+                {
                     return;
                 }
                 self.rows.insert(
-                    line,
+                    operation_id,
                     Step {
+                        operation_id,
                         line,
                         attempt,
                         kind: string(p, "kind"),
@@ -295,7 +304,7 @@ impl State {
         for row in &ledger.steps {
             if let Some(step) = self
                 .rows
-                .get_mut(&row.line)
+                .get_mut(&row.operation_id)
                 .filter(|s| s.attempt == row.attempt)
             {
                 step.text = row
@@ -487,8 +496,8 @@ fn plain(s: &State, printed: &mut HashSet<String>) -> Vec<String> {
         out.push(header(s));
     }
     for step in s.rows.values() {
-        let key = format!("row:{}:{}", step.line, step.attempt);
-        let text_key = format!("text:{}:{}", step.line, step.attempt);
+        let key = format!("row:{}:{}", step.operation_id, step.attempt);
+        let text_key = format!("text:{}:{}", step.operation_id, step.attempt);
         if printed.contains(&key) && step.text.is_some() && printed.insert(text_key) {
             out.push(format!(
                 "        line {}: {}",
@@ -506,11 +515,11 @@ fn plain(s: &State, printed: &mut HashSet<String>) -> Vec<String> {
     }
     for step in s.rows.values() {
         if matches!(step.outcome.as_str(), "pass" | "fail")
-            && printed.insert(format!("row:{}:{}", step.line, step.attempt))
+            && printed.insert(format!("row:{}:{}", step.operation_id, step.attempt))
         {
             out.push(format!("  {}", step_line(step)));
             if step.text.is_some() {
-                printed.insert(format!("text:{}:{}", step.line, step.attempt));
+                printed.insert(format!("text:{}:{}", step.operation_id, step.attempt));
             }
         }
     }
@@ -529,15 +538,6 @@ fn snapshot(s: &State) -> Value {
         "steps": s.rows.values().collect::<Vec<_>>(), "end": s.end})
 }
 
-fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id != "."
-        && id != ".."
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-}
-
 fn regular_file(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
         && path
@@ -552,7 +552,7 @@ fn latest(root: &Path) -> Option<String> {
         .filter_map(|e| {
             let id = e.file_name().to_str()?.to_owned();
             let record = e.path().join("run.json");
-            if !valid_id(&id) || !regular_file(&record) {
+            if validate_run_id(&id).is_err() || !regular_file(&record) {
                 return None;
             }
             Some((std::fs::metadata(record).ok()?.modified().ok()?, id))
@@ -579,7 +579,7 @@ fn follow(
     poll: Duration,
 ) -> u8 {
     let id = match &args.target {
-        Target::RunId(id) if valid_id(id) => id.clone(),
+        Target::RunId(id) if validate_run_id(id).is_ok() => id.clone(),
         Target::RunId(_) => return 2,
         Target::Latest => match latest(root) {
             Some(id) => id,
@@ -725,7 +725,7 @@ mod tests {
             60_000 + line_no,
             "row",
             json!({
-                "line": line_no, "attempt": attempt, "kind": "action", "resolvedBy": by, "t": 0, "outcome": outcome,
+                "operationId": line_no, "line": line_no, "attempt": attempt, "kind": "action", "resolvedBy": by, "t": 0, "outcome": outcome,
                 "timing": {"captureMs": cap, "nativeMs": 0, "reactMs": 0, "resolveMs": 0, "jevMs": jev,
                            "actMs": act, "postCaptureMs": 0, "otherMs": 0, "total": act + cap + jev}
             }),
@@ -838,7 +838,7 @@ mod tests {
 
     fn ledger() -> crate::core::Ledger {
         let step = |line: u64, attempt: u64, outcome: &str, text: &str, reason: Option<&str>| {
-            json!({"block": "plan", "line": line, "attempt": attempt, "kind": "action", "resolvedBy": "exact",
+            json!({"block": "plan", "operationId": line, "line": line, "attempt": attempt, "kind": "action", "resolvedBy": "exact",
                    "t": 0, "outcome": outcome, "text": text, "reason": reason})
         };
         serde_json::from_value(json!({
@@ -854,6 +854,77 @@ mod tests {
             "jev": {"calls": 1, "medianMs": 400}, "llmTurns": 0, "escapes": 0, "recoveries": 0
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn login_plan_and_retry_identities_survive_every_view() {
+        let root = temp_runs("operations");
+        let path = root.join("check-1/logs/events.jsonl");
+        let mut events = crate::events::Events::start(None);
+        events.attach(&path);
+        let specs = [
+            (1, 3, 1, "pass", "plan-three"),
+            (2, 1, 1, "pass", "login-one"),
+            (3, 2, 1, "pass", "login-two"),
+            (4, 3, 1, "pass", "login-three"),
+            (5, 4, 1, "retry", "plan-four-retry"),
+            (5, 4, 2, "pass", "plan-four"),
+            (5, 4, 1, "retry", "stale-retry"),
+        ];
+        let mut ledger = ledger();
+        ledger.steps.clear();
+        for (id, line, attempt, outcome, text) in specs {
+            let row: crate::core::Row = serde_json::from_value(json!({
+                "operationId": id, "block": "private-block", "line": line,
+                "attempt": attempt, "kind": "step", "resolvedBy": "exact",
+                "t": 0, "outcome": outcome, "text": text
+            }))
+            .unwrap();
+            events.row(&row);
+            ledger.steps.push(row);
+        }
+        let receipt = crate::receipt::Receipt::new(
+            "check",
+            "check-1",
+            crate::receipt::ReceiptResult::Pass,
+            "cleaned",
+            "now".into(),
+        );
+        events.end(&receipt, 0);
+        events.finish();
+        let raw = std::fs::read_to_string(path).unwrap();
+        assert!(!raw.contains("private-block") && !raw.contains("login-three"));
+        let mut state = folded(&raw.lines().map(str::to_owned).collect::<Vec<_>>());
+        assert_eq!(state.rows.len(), 5);
+        assert_eq!(state.counts(), (5, 0));
+        assert_eq!(state.rows[&5].attempt, 2);
+        let mut printed = HashSet::new();
+        let live_plain = plain(&state, &mut printed);
+        assert_eq!(
+            live_plain.iter().filter(|l| l.starts_with("  ✓")).count(),
+            5
+        );
+        state.apply_ledger(&ledger);
+        let texts = plain(&state, &mut printed);
+        assert_eq!(texts.len(), 5);
+        assert!(plain(&state, &mut printed).is_empty());
+        let json = snapshot(&state);
+        assert_eq!(json["steps"].as_array().unwrap().len(), 5);
+        for (index, text) in [
+            "plan-three",
+            "login-one",
+            "login-two",
+            "login-three",
+            "plan-four",
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(json["steps"][index]["operationId"], index + 1);
+            assert_eq!(json["steps"][index]["text"], *text);
+            assert!(frame(&state, 200).iter().any(|line| line.ends_with(text)));
+            assert!(texts.iter().any(|line| line.ends_with(text)));
+        }
     }
 
     #[test]
@@ -1108,6 +1179,10 @@ mod tests {
         std::thread::sleep(Duration::from_millis(20));
         std::fs::write(root.join("check-2/run.json"), "{}").unwrap();
         std::fs::create_dir_all(root.join("check-3")).unwrap();
+        for id in ["check.latest", "check_latest", "-check"] {
+            std::fs::create_dir_all(root.join(id)).unwrap();
+            std::fs::write(root.join(id).join("run.json"), "{}").unwrap();
+        }
         assert_eq!(latest(&root).as_deref(), Some("check-2"));
     }
 

@@ -199,7 +199,12 @@ export async function walkBlock(
   shotIndex = 0,
   typed: string[] = [],
   privacy = new ObservedPrivacy(typed),
-  sequence: { observation: number; publicationInterrupted?: boolean; momentum?: boolean } = {
+  sequence: {
+    observation: number;
+    operation?: number;
+    publicationInterrupted?: boolean;
+    momentum?: boolean;
+  } = {
     observation: 0,
   },
   opts: WalkOptions = {},
@@ -597,7 +602,14 @@ export async function walkBlock(
     }
   };
   let shots = shotIndex;
+  const operations = new Map<number, number>();
   const emit = (row: LedgerRow): void => {
+    let operationId = operations.get(row.line);
+    if (operationId === undefined) {
+      operationId = sequence.operation = (sequence.operation ?? 0) + 1;
+      operations.set(row.line, operationId);
+    }
+    row = { ...row, operationId };
     let timing: RowTiming | undefined;
     try {
       timing = deps.rowTiming?.(row.t);
@@ -1773,9 +1785,10 @@ class RenderError extends Error {
 
 // The streamed row channel cannot be retracted, so it carries no text, reason, selector or identifier.
 function valueFree(row: LedgerRow): LedgerRow {
-  const { line, attempt, kind, resolvedBy, t, outcome, screenshot, timing } = row;
+  const { operationId, line, attempt, kind, resolvedBy, t, outcome, screenshot, timing } = row;
   return {
     block: '',
+    operationId,
     line,
     text: '',
     attempt,

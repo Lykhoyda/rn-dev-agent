@@ -20,7 +20,7 @@ fn stream(home: &Path, end: bool) -> std::path::PathBuf {
     let mut events = vec![
         json!({"v":1,"seq":1,"at":1,"event":"run","payload":{"runId":"check-watch","verb":"check","platform":"ios","ownerPid":1}}),
         json!({"v":1,"seq":2,"at":2,"event":"stage","payload":{"name":"preflight","state":"passed","ms":1}}),
-        json!({"v":1,"seq":3,"at":3,"event":"row","payload":{"line":1,"attempt":1,"kind":"action","resolvedBy":"exact","t":0,"outcome":"pass","text":"private-canary","selector":{"text":"private-canary"},"reason":"private-canary","screenshot":"private-canary"}}),
+        json!({"v":1,"seq":3,"at":3,"event":"row","payload":{"operationId":1,"line":1,"attempt":1,"kind":"action","resolvedBy":"exact","t":0,"outcome":"pass","text":"private-canary","selector":{"text":"private-canary"},"reason":"private-canary","screenshot":"private-canary"}}),
     ];
     if end {
         events.push(json!({"v":1,"seq":4,"at":4,"event":"end","payload":{"result":"pass","phase":"cleaned","timingsMs":{},"cleanup":{"core":"absent"},"expectedExit":0,"droppedEvents":0}}));
@@ -78,6 +78,8 @@ fn watch_usage_and_unavailable_telemetry_have_distinct_exits() {
         vec!["--plain"],
         vec!["check-watch", "--replay"],
         vec!["../outside"],
+        vec!["check.watch"],
+        vec!["check_watch"],
         vec!["check-watch", "--device", "any"],
     ] {
         assert_eq!(watch(&home, &args).status.code(), Some(2), "{args:?}");

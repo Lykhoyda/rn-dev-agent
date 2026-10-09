@@ -9,6 +9,7 @@ export type LedgerPath = 'walk' | 'replay' | `replay→walk@${number}`;
 
 export interface LedgerRow {
   block: string;
+  operationId?: number;
   line: number;
   text: string;
   attempt: number;

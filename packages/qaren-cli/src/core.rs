@@ -174,6 +174,8 @@ impl TryFrom<String> for JevDiagnostic {
 #[serde(rename_all = "camelCase")]
 pub struct Row {
     pub block: String,
+    #[serde(default)]
+    pub operation_id: u64,
     pub line: u64,
     pub attempt: u64,
     pub kind: String,
