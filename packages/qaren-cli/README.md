@@ -1233,7 +1233,8 @@ fingerprint, and building candidate sha:
    verified dev client is installed (`simctl install` / `adb install -r
    -d`), Metro is spawned candidate-bound (`expo start --port`), and the
    dev client is deep-linked onto it (package-constrained `am start` on
-   Android). Fresh candidate JS always comes from Metro; the evidence
+   Android, with Expo's `EXDevMenuDisableAutoLaunch` extra so the dev menu
+   does not open at launch). Fresh candidate JS always comes from Metro; the evidence
    records which candidate built the binary and which serves JS — native
    compatibility is proven by the fingerprint, never inferred from the sha.
 2. **Incremental** — reuse is invalid (committed native inputs changed, artifact

@@ -29,7 +29,7 @@ const PIN_CLI = join(dirname(fileURLToPath(import.meta.url)), '../../dist/maestr
 
 const PINNED = () =>
   buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false, {
-    selectedPath: '/pin-cache/maestro-runner/1.1.24/bin/maestro-runner',
+    selectedPath: '/pin-cache/maestro-runner/1.1.28/bin/maestro-runner',
     provenance: 'pin-cache',
   });
 

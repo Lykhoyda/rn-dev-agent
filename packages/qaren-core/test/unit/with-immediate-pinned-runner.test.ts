@@ -57,6 +57,11 @@ test(
       // system binaries. Production maestro-runner is a native binary.
       copyFileSync(fixtureBinary, join(packed, 'bin', 'maestro-runner'));
       chmodSync(join(packed, 'bin', 'maestro-runner'), 0o755);
+      mkdirSync(join(packed, 'Scripts'));
+      writeFileSync(join(packed, 'Scripts', 'embed.sh'), '#!/bin/sh\nexit 0\n');
+      chmodSync(join(packed, 'Scripts', 'embed.sh'), 0o755);
+      writeFileSync(join(packed, 'plain.txt'), 'data');
+      chmodSync(join(packed, 'plain.txt'), 0o644);
       const archive = join(cache, 'maestro-runner.tar.gz');
       const packedTar = spawnSync('tar', [
         '-czf',
@@ -72,6 +77,11 @@ test(
       const runnerPath = join(pinRoot, 'bin', 'maestro-runner');
       copyFileSync(join(packed, 'bin', 'maestro-runner'), runnerPath);
       chmodSync(runnerPath, 0o755);
+      mkdirSync(join(pinRoot, 'Scripts'));
+      copyFileSync(join(packed, 'Scripts', 'embed.sh'), join(pinRoot, 'Scripts', 'embed.sh'));
+      chmodSync(join(pinRoot, 'Scripts', 'embed.sh'), 0o755);
+      copyFileSync(join(packed, 'plain.txt'), join(pinRoot, 'plain.txt'));
+      chmodSync(join(pinRoot, 'plain.txt'), 0o644);
       copyFileSync(archive, join(pinRoot, '.payload.tar.gz'));
 
       _setPinnedRunnerAttestationForTest({
@@ -103,6 +113,10 @@ test(
             0o500,
           );
           assert.equal(statSync(join(successfulSnapshot, '.payload.tar.gz')).mode & 0o777, 0o400);
+          const sealedScript = join(successfulSnapshot, 'Scripts', 'embed.sh');
+          assert.equal(statSync(sealedScript).mode & 0o777, 0o500);
+          assert.equal(statSync(join(successfulSnapshot, 'plain.txt')).mode & 0o777, 0o400);
+          assert.equal(spawnSync(sealedScript).status, 0);
           assert.equal(
             createHash('sha256')
               .update(readFileSync(join(successfulSnapshot, 'bin', 'maestro-runner')))
@@ -114,6 +128,7 @@ test(
               () => writeFileSync(join(successfulSnapshot, '.payload.tar.gz'), 'mutation'),
               /EACCES|EPERM/,
             );
+            assert.throws(() => writeFileSync(sealedScript, 'mutation'), /EACCES|EPERM/);
           }
           mkdirSync(join(cacheLink, 'wda-build'));
           writeFileSync(join(cacheLink, 'wda-build', 'ready'), 'ok');

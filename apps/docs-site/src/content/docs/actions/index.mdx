@@ -125,7 +125,7 @@ Run `/rn-dev-agent:test-feature <feature description>`. The plugin walks the fea
 # tags: [task, wizard, create]
 # mutates: true
 # status: active
-# enginePin: maestro-runner@1.1.24
+# enginePin: maestro-runner@1.1.28
 appId: com.rndevagent.testapp
 ---
 # Maestro YAML body...
@@ -167,10 +167,10 @@ Self-repair handles **small UI drift** (a renamed `testID`, a moved button), not
 
 ## Engine version pinning
 
-Action replay requires maestro-runner `>= 1.1.24` from rn-dev-agent's versioned pin-cache.
+Action replay requires maestro-runner `>= 1.1.28` from rn-dev-agent's versioned pin-cache.
 The authoritative pin manifest lives at
 `packages/rn-dev-agent-core/src/domain/maestro-runner-pin.json`; setup installs and verifies
-attested 1.1.24 as the default known-good and `/doctor` reports missing, older, unattested, checksum-mismatched,
+attested 1.1.28 as the default known-good and `/doctor` reports missing, older, unattested, checksum-mismatched,
 unverified, unknown, or unsupported installations. Replay refuses every non-`pinned-ok`
 state before UI mutation and never substitutes PATH, `~/.maestro-runner`, or Maestro CLI.
 Installation stages each candidate in a collision-safe sibling temporary directory, verifies
@@ -178,7 +178,7 @@ the archive and complete payload against that manifest, and atomically publishes
 Concurrent or restarted installers converge on the same verified cache; an abandoned staging
 directory is ignored and never requires manual recovery.
 
-Owned actions must carry `# enginePin: maestro-runner@1.1.24` or newer. Setup migrates compatible
+Owned actions must carry `# enginePin: maestro-runner@1.1.28` or newer. Setup migrates compatible
 actions; missing or older pins and unsupported regex text selectors are terminal.
 Bumping the pin follows the upgrade ritual documented beside the manifest: replay the
 committed action corpus on both platforms, reconcile known quirks, then update the manifest.
@@ -193,11 +193,25 @@ full diagnosis and what still works.
 On iOS, replay routes by proof semantics before execution. Exact `testID` tap, type, wait,
 assert, conditional-flow, and launch stages use the authority-bound React tree; native text,
 system-dialog, permission, and SpringBoard stages use XCTest/WDA. Results label the domain as
-`react-tree`, `xctest-native`, or `partitioned`. A React-tree pass proves deterministic React
-identity and controlled fiber text read-back, not IME composition, AutoFill, keyboard
-occlusion, or secure native-entry fidelity, and it never promotes an action to
-Maestro-certified active status. A `tapOn` whose exact target is an editable `TextInput`
-without `onPress` only designates that input for the immediately following `inputText`: it
+`react-tree`, `xctest-native`, or `partitioned`. This routing applies to both `maestro_run`
+and `cdp_run_action`. On iOS, a native-only command after an exact
+`testID` React-tree step returns `UNSUPPORTED_STEP` before replay starts because starting a
+native runner session relaunches the app. Native commands before exact `testID` steps and
+`launchApp`, `clearState`, `killApp`, or `stopApp` after them remain allowed; a later native-only
+command is still refused even when a lifecycle command precedes it. The refusal reports
+the offending command's zero-based `meta.sourceIndex`. Flows without an exact `testID`
+step keep their native route.
+
+Saved-action preflight resolves the platform from the explicit argument, then the active
+target context, then the active session. An iOS proof-plan refusal precedes runtime-pin
+compatibility checks, so it returns `UNSUPPORTED_STEP` even when the runtime pin is
+unavailable, before any runner dispatch, native claim, or runner parking.
+
+A React-tree pass proves deterministic React identity and controlled fiber text read-back,
+not IME composition, AutoFill, keyboard occlusion, or secure native-entry fidelity, and it
+never promotes an action to Maestro-certified active status. A `tapOn` whose exact target is
+an editable `TextInput` without `onPress` only designates that input for the immediately
+following `inputText`: it
 dispatches no press and no `onFocus`, the step is reported as `focusOnly`, and a designation
 that the next step does not consume fails the replay. A `tapOn` whose exact target is not
 such an input and carries no `onPress` walks up to the nearest pressable ancestor within
@@ -206,6 +220,10 @@ pressables resolve, or when the walked-to pressable or any exact-ID fiber is dis
 or blocked by `pointerEvents` on its host view. Wrappers that forward one `testID` around a
 single native host through inert views — a bottom-tab button, for example — are one control
 rather than an ambiguity: the press resolves to the nearest `onPress` above that host.
+Nested components forwarding the same `testID` and the same `onPress` function also
+resolve as one control and dispatch once, including when their ancestry passes through
+React fiber alternates; alternate halves of one pressable count as one target. Separate
+sibling controls sharing that ID and handler remain ambiguous.
 Ownership is proven from the route scopes above the target: every ancestor carrying a route
 record together with that route's own navigation must be focused, so a mounted-but-inactive
 screen or a covered card's header refuses, and a scope the proof cannot read refuses as

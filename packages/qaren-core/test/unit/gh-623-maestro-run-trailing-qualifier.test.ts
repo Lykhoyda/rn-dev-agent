@@ -30,13 +30,13 @@ const VERIFY_CAVEAT = 'verify before rebooting';
 const REGISTRATION_YAML = [
   '- launchApp',
   '- tapOn:',
-  '    id: "email"',
+  '    text: "Email"',
   '- inputText: "user@example.com"',
   '- tapOn:',
-  '    id: "password"',
+  '    text: "Password"',
   '- inputText: "hunter2"',
   '- tapOn:',
-  '    id: "register_submit"',
+  '    text: "Register"',
   '- extendedWaitUntil:',
   '    visible: "Welcome home"',
   '    timeout: 30000',
@@ -45,27 +45,27 @@ const REGISTRATION_YAML = [
 // Slow-but-passing taps (median ≥ 1500ms) so RUNTIME_DEGRADED fires; only the
 // trailing wait fails.
 const TRAILING_FAIL_STDOUT = [
-  'maestro-runner 1.1.24',
+  'maestro-runner 1.1.28',
   `Starting WDA on device ${EXACT} (port: 8447)`,
   '    ✓ launchApp (2.7s)',
-  '    ✓ tapOn: id="email" (1.8s)',
+  '    ✓ tapOn: text="Email" (1.8s)',
   '    ✓ inputText: "user@example.com" (0.4s)',
-  '    ✓ tapOn: id="password" (1.7s)',
+  '    ✓ tapOn: text="Password" (1.7s)',
   '    ✓ inputText: "hunter2" (0.4s)',
-  '    ✓ tapOn: id="register_submit" (2.1s)',
+  '    ✓ tapOn: text="Register" (2.1s)',
   '    ✗ extendedWaitUntil: visible text="Welcome home" (30.0s)',
   "      ╰─ Element 'Welcome home' not visible within 30s (cause: context deadline exceeded)",
 ].join('\n');
 
 const EARLY_FAIL_STDOUT = [
-  'maestro-runner 1.1.24',
+  'maestro-runner 1.1.28',
   `Starting WDA on device ${EXACT} (port: 8447)`,
   '    ✓ launchApp (2.7s)',
-  '    ✓ tapOn: id="email" (1.8s)',
+  '    ✓ tapOn: text="Email" (1.8s)',
   '    ✓ inputText: "user@example.com" (0.4s)',
-  '    ✓ tapOn: id="password" (1.7s)',
-  '    ✗ tapOn: id="register_submit" (12.7s)',
-  "      ╰─ Element not found: id='register_submit'",
+  '    ✓ tapOn: text="Password" (1.7s)',
+  '    ✗ tapOn: text="Register" (12.7s)',
+  "      ╰─ Element not found: text='Register'",
 ].join('\n');
 
 type ArtifactRow = [string, 'passed' | 'failed' | 'skipped' | 'running'];
@@ -416,7 +416,7 @@ test('gh-623 regression: a partial native partition forwards no whole-attempt le
       );
       throw Object.assign(new Error('runner exited 1'), {
         stdout: [
-          'maestro-runner 1.1.24',
+          'maestro-runner 1.1.28',
           `Starting WDA on device ${EXACT} (port: 8447)`,
           '    ✓ tapOn: text="Native submit" (1.8s)',
           '    ✓ tapOn: text="Native confirm" (1.9s)',
@@ -583,7 +583,7 @@ test('gh-623 adversarial: unparseable stdout with a ledger-proven trailing failu
       { rows: [['launchApp', 'passed']] },
       {
         rows: [...MAIN_STAGE_PASSING, ['extendedWaitUntil', 'failed']],
-        stdout: 'maestro-runner 1.1.24\nunstructured noise without any step lines',
+        stdout: 'maestro-runner 1.1.28\nunstructured noise without any step lines',
         throwWith: { code: 1 },
       },
     ]),
@@ -618,9 +618,9 @@ test('gh-623: a passing flow carries no qualifier fields at all', async () => {
     {
       rows: [...MAIN_STAGE_PASSING, ['extendedWaitUntil', 'passed']],
       stdout: [
-        'maestro-runner 1.1.24',
+        'maestro-runner 1.1.28',
         `Starting WDA on device ${EXACT} (port: 8447)`,
-        '    ✓ tapOn: id="email" (1.8s)',
+        '    ✓ tapOn: text="Email" (1.8s)',
         '    ✓ extendedWaitUntil: visible text="Welcome home" (2.0s)',
       ].join('\n'),
     },
