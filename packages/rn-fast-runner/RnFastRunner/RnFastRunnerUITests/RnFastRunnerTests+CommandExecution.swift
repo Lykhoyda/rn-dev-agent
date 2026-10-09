@@ -1157,34 +1157,6 @@ extension RnFastRunnerTests {
           via: result.via
         )
       )
-    case .alert:
-      let action = (command.action ?? "get").lowercased()
-      let alert = activeApp.alerts.firstMatch
-      if !alert.exists {
-        return Response(ok: false, error: ErrorPayload(message: "alert not found"))
-      }
-      if action == "accept" {
-        guard let button = alert.buttons.allElementsBoundByIndex.first else {
-          return Response(ok: false, error: ErrorPayload(message: "alert accept button not found"))
-        }
-        let outcome = activateElement(app: activeApp, element: button, action: "alert accept")
-        if let response = unsupportedResponse(for: outcome) {
-          return response
-        }
-        return Response(ok: true, data: DataPayload(message: "accepted"))
-      }
-      if action == "dismiss" {
-        guard let button = alert.buttons.allElementsBoundByIndex.last else {
-          return Response(ok: false, error: ErrorPayload(message: "alert dismiss button not found"))
-        }
-        let outcome = activateElement(app: activeApp, element: button, action: "alert dismiss")
-        if let response = unsupportedResponse(for: outcome) {
-          return response
-        }
-        return Response(ok: true, data: DataPayload(message: "dismissed"))
-      }
-      let buttonLabels = alert.buttons.allElementsBoundByIndex.map { $0.label }
-      return Response(ok: true, data: DataPayload(message: alert.label, items: buttonLabels))
     case .systemAlertTap:
       return systemAlertTap(label: command.text)
     case .pinch:

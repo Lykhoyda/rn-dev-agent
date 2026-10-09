@@ -25,7 +25,6 @@ enum CommandType: String, Codable, CaseIterable {
   case rotate
   case appSwitcher
   case keyboardDismiss
-  case alert
   case systemAlertTap
   case pinch
   case isScreenStatic
