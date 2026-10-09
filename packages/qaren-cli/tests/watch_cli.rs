@@ -4,6 +4,123 @@ use std::process::{Command, Output};
 
 mod common;
 
+#[cfg(unix)]
+#[test]
+fn tty_long_plan_fits_current_size_and_resizes() {
+    use std::io::{Read, Write};
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::time::{Duration, Instant};
+
+    let home = common::temp_repo();
+    let dir = stream(&home, false);
+    let mut events = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("logs/events.jsonl"))
+        .unwrap();
+    for n in 2..=40 {
+        writeln!(events, "{}", json!({"v":1,"seq":n+2,"at":n+2,"event":"row","payload":{"operationId":n,"line":n,"attempt":1,"kind":"action","resolvedBy":"exact","outcome":"pass"}})).unwrap();
+    }
+    let mut master = -1;
+    let mut slave = -1;
+    let mut size = libc::winsize {
+        ws_row: 60,
+        ws_col: 120,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut size,
+            )
+        },
+        0
+    );
+    let mut master = unsafe { std::fs::File::from_raw_fd(master) };
+    let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+    assert_ne!(
+        unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) },
+        -1
+    );
+    let child = Command::new(env!("CARGO_BIN_EXE_qaren"))
+        .env("HOME", &home)
+        .env("COLUMNS", "200")
+        .env("LINES", "100")
+        .env_remove("CI")
+        .env_remove("NO_COLOR")
+        .args(["watch", "check-watch"])
+        .stdin(std::process::Stdio::null())
+        .stdout(slave)
+        .spawn()
+        .unwrap();
+    struct Viewer(std::process::Child);
+    impl Drop for Viewer {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let _viewer = Viewer(child);
+    for (width, height) in [(120, 60), (80, 24), (80, 20), (32, 24), (32, 18), (120, 60)] {
+        let size = libc::winsize {
+            ws_row: height,
+            ws_col: width,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        assert_eq!(
+            unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &size) },
+            0
+        );
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut bytes = Vec::new();
+        let frame = loop {
+            let mut buf = [0; 16384];
+            match master.read(&mut buf) {
+                Ok(n) => bytes.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                other => panic!("PTY read: {other:?}"),
+            }
+            let text = String::from_utf8_lossy(&bytes);
+            let frames: Vec<_> = text.split("\x1b[H\x1b[2J").collect();
+            // Skip the first frame, which may already have been drawn before resize.
+            if frames.len() >= 4 {
+                break frames[frames.len() - 2].replace('\r', "");
+            }
+            assert!(Instant::now() < deadline, "no complete redraw: {text}");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let lines: Vec<_> = frame.lines().collect();
+        assert!(
+            lines.len() < height as usize,
+            "{width}x{height}: {} lines\n{frame}",
+            lines.len()
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.chars().count() < width as usize),
+            "wrapped frame: {frame}"
+        );
+        assert!(
+            frame.contains("Preflight") && frame.contains("Cleanup"),
+            "{frame}"
+        );
+        assert!(
+            frame.contains("   40  action") || frame.contains("line 40 action"),
+            "recent row missing: {frame}"
+        );
+        assert!(!frame.contains("private-canary"));
+        if height < 60 {
+            assert!(frame.contains("omitted"), "{frame}");
+        }
+    }
+}
+
 fn watch(home: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_qaren"))
         .env("HOME", home)
@@ -12,6 +129,80 @@ fn watch(home: &Path, args: &[&str]) -> Output {
         .args(args)
         .output()
         .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn tty_tiny_plain_ci_no_color_and_json_keep_their_output_contracts() {
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let home = common::temp_repo();
+    stream(&home, true);
+    for mode in ["tiny", "plain", "CI", "NO_COLOR", "json"] {
+        let mut master = -1;
+        let mut slave = -1;
+        let mut size = libc::winsize {
+            ws_row: if mode == "tiny" { 6 } else { 24 },
+            ws_col: if mode == "tiny" { 12 } else { 80 },
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &mut size,
+                )
+            },
+            0
+        );
+        let mut master = unsafe { std::fs::File::from_raw_fd(master) };
+        let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+        assert_ne!(
+            unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) },
+            -1
+        );
+        let mut command = Command::new(env!("CARGO_BIN_EXE_qaren"));
+        command
+            .env("HOME", &home)
+            .env_remove("CI")
+            .env_remove("NO_COLOR")
+            .args(["watch", "check-watch"])
+            .stdin(std::process::Stdio::null())
+            .stdout(slave);
+        match mode {
+            "plain" => {
+                command.arg("--plain");
+            }
+            "json" => {
+                command.arg("--json");
+            }
+            "CI" | "NO_COLOR" => {
+                command.env(mode, "1");
+            }
+            _ => {}
+        }
+        assert!(command.status().unwrap().success());
+        drop(command);
+        let mut bytes = Vec::new();
+        let _ = master.read_to_end(&mut bytes);
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(
+            !text.contains('\u{1b}') && !text.contains("private-canary"),
+            "{mode}: {text}"
+        );
+        if mode == "json" {
+            let value: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["state"], "finished");
+            assert_eq!(text.lines().count(), 1);
+        } else {
+            assert_eq!(text.matches("VERDICT PASS").count(), 1, "{mode}: {text}");
+            assert_eq!(text.matches("Preflight").count(), 1);
+        }
+    }
 }
 
 fn stream(home: &Path, end: bool) -> std::path::PathBuf {

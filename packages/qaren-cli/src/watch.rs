@@ -447,7 +447,7 @@ fn header(s: &State) -> String {
     format!("qaren watch  {}  {}  {}", s.run_id, s.verb, s.platform)
 }
 
-fn frame(s: &State, width: u16) -> Vec<String> {
+fn frame(s: &State, width: u16, height: u16) -> Vec<String> {
     let status = match s.status() {
         Status::Live => "LIVE",
         Status::Finished => "FINISHED",
@@ -461,26 +461,98 @@ fn frame(s: &State, width: u16) -> Vec<String> {
         ),
         "STAGES".into(),
     ];
-    lines.extend(STAGES.iter().map(|(n, l)| stage_line(s, n, l)));
+    let compact = width < 64 || height < 22;
+    lines.extend(STAGES.iter().map(|(n, l)| {
+        if compact {
+            format!(
+                "{} {l} {}",
+                mark(s.stages.get(*n).map_or("", |st| st.state.as_str())),
+                s.stages
+                    .get(*n)
+                    .map_or("unobserved", |st| st.state.as_str())
+            )
+        } else {
+            stage_line(s, n, l)
+        }
+    }));
     let (passed, failed) = s.counts();
     lines.push(format!(
         "STEPS  {} lines  ✓{passed}  ✗{failed}",
         s.rows.len()
     ));
-    lines.push("   line  kind      result                  act  capture      jev".into());
-    lines.extend(s.rows.values().map(step_line));
-    if s.status() == Status::Live {
-        lines.push("Step text appears when the run ends.".into());
+    if !compact {
+        lines.push("   line  kind      result                  act  capture      jev".into());
+    }
+    let mut footer = Vec::new();
+    if s.status() == Status::Live && !compact {
+        footer.push("Step text appears when the run ends.".into());
     }
     if let Some(last) = verdict(s) {
-        lines.push(last);
+        footer.push(last);
     } else if let Some(cmd) = s.commands.last() {
-        lines.push(format!("now: {cmd}"));
+        footer.push(format!("now: {cmd}"));
     }
+    let capacity = (height as usize).saturating_sub(1 + lines.len() + footer.len());
+    let count = if s.rows.len() > capacity {
+        capacity.saturating_sub(1)
+    } else {
+        s.rows.len()
+    };
+    let mut rows: Vec<_> = s.rows.values().collect();
+    rows.sort_by_key(|row| {
+        (
+            matches!(row.outcome.as_str(), "pass" | "fail"),
+            std::cmp::Reverse(row.operation_id),
+        )
+    });
+    rows.truncate(count);
+    rows.sort_by_key(|row| row.operation_id);
+    let omitted = s.rows.len() - rows.len();
+    if omitted > 0 {
+        lines.push(format!("{omitted} rows omitted"));
+    }
+    lines.extend(rows.into_iter().map(|row| {
+        if compact {
+            format!(
+                "{} line {} {} {}",
+                mark(&row.outcome),
+                row.line,
+                row.kind,
+                row.outcome
+            )
+        } else {
+            step_line(row)
+        }
+    }));
+    lines.extend(footer);
     lines
         .into_iter()
-        .map(|l| term_safe(&l).chars().take(width as usize).collect())
+        .map(|l| {
+            let mut cells = 0;
+            term_safe(&l)
+                .chars()
+                .take_while(|c| {
+                    // Budget two cells for non-ASCII, including wide glyphs and emoji.
+                    cells += if c.is_ascii() { 1 } else { 2 };
+                    cells < width as usize
+                })
+                .collect()
+        })
         .collect()
+}
+
+fn terminal_dimensions() -> Option<(u16, u16)> {
+    #[cfg(unix)]
+    {
+        let mut size: libc::winsize = unsafe { std::mem::zeroed() };
+        if unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut size) } == 0
+            && size.ws_col > 0
+            && size.ws_row > 0
+        {
+            return Some((size.ws_col, size.ws_row));
+        }
+    }
+    None
 }
 
 fn plain(s: &State, printed: &mut HashSet<String>) -> Vec<String> {
@@ -597,6 +669,7 @@ fn follow(
     let mut record_mtime = None;
     let mut record: Option<RunRecord> = None;
     let mut ledger: Option<crate::core::Ledger> = None;
+    let mut plain_mode = args.plain;
     loop {
         let mtime = regular_file(&record_path)
             .then(|| {
@@ -641,19 +714,18 @@ fn follow(
         if let Some(ledger) = &ledger {
             state.apply_ledger(ledger);
         }
+        let dimensions = terminal_dimensions();
+        plain_mode |= dimensions.is_none_or(|(width, height)| width < 32 || height < 18);
         let lines = if args.json {
             vec![snapshot(&state).to_string()]
-        } else if args.plain {
+        } else if plain_mode {
             plain(&state, &mut printed)
         } else {
             if write!(out, "\x1b[H\x1b[2J").is_err() {
                 return 0;
             }
-            let width = std::env::var("COLUMNS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(100);
-            frame(&state, width)
+            let (width, height) = dimensions.unwrap();
+            frame(&state, width, height)
         };
         for line in lines {
             if writeln!(out, "{line}").is_err() {
@@ -913,7 +985,9 @@ mod tests {
         {
             assert_eq!(json["steps"][index]["operationId"], index + 1);
             assert_eq!(json["steps"][index]["text"], *text);
-            assert!(frame(&state, 200).iter().any(|line| line.ends_with(text)));
+            assert!(frame(&state, 200, 100)
+                .iter()
+                .any(|line| line.ends_with(text)));
             assert!(texts.iter().any(|line| line.ends_with(text)));
         }
     }
@@ -938,7 +1012,7 @@ mod tests {
         assert!(state.rows.values().all(|step| step.outcome == "pass"));
         let json = snapshot(&state);
         assert_eq!(json["steps"].as_array().unwrap().len(), 2);
-        assert!(frame(&state, 200)
+        assert!(frame(&state, 200, 100)
             .iter()
             .any(|line| line.contains("2/2 passed")));
         let mut printed = HashSet::new();
@@ -994,7 +1068,7 @@ mod tests {
             assert_eq!(snapshot["steps"][0]["outcome"], outcome);
             assert_eq!(snapshot["steps"][0]["attempt"], 1);
             assert_eq!(snapshot["steps"][0]["text"], "Tap \"Tasks\"");
-            let frame = frame(&state, 200);
+            let frame = frame(&state, 200, 100);
             assert!(frame
                 .iter()
                 .any(|line| line.contains(&format!("{passed}/1 passed"))));
@@ -1026,7 +1100,7 @@ mod tests {
     fn folds_a_reuse_check_into_the_golden_frame() {
         let state = folded(&reuse_check_live());
         assert_eq!(state.status(), Status::Live);
-        let got = frame(&state, 100);
+        let got = frame(&state, 100, 100);
         let golden = [
             "qaren watch  check-20261009T081500Z  check  ios  LIVE  1:42",
             "STAGES",
@@ -1051,14 +1125,65 @@ mod tests {
             "now: simctl-io",
         ];
         assert_eq!(got, golden);
-        assert!(frame(&state, 20).iter().all(|l| l.chars().count() <= 20));
+        assert!(frame(&state, 20, 100)
+            .iter()
+            .all(|l| l.chars().count() <= 20));
+    }
+
+    #[test]
+    fn bounded_frame_keeps_current_rows_and_counts_every_omission() {
+        let mut events = reuse_check_live();
+        for n in 1..=40 {
+            events.push(row(
+                100 + n,
+                n,
+                1,
+                if n == 1 { "running" } else { "pass" },
+                "exact",
+                [0, 0, 0],
+            ));
+        }
+        let state = folded(&events);
+        let lines = frame(&state, 80, 24);
+        assert_eq!(lines.len(), 23);
+        assert!(lines.contains(&"35 rows omitted".to_string()), "{lines:#?}");
+        assert!(
+            lines.iter().any(|l| l.contains("    1  action")),
+            "{lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("   40  action")),
+            "{lines:#?}"
+        );
+        for (_, label) in STAGES {
+            assert!(lines.iter().any(|l| l.contains(label)));
+        }
+        assert_eq!(snapshot(&state)["steps"].as_array().unwrap().len(), 40);
+    }
+
+    #[test]
+    fn wide_final_text_cannot_wrap_a_bounded_frame() {
+        let mut events = reuse_check_live();
+        finish(&mut events, "pass", None);
+        let mut state = folded(&events);
+        state.rows.values_mut().next().unwrap().text = Some("界😀".repeat(100));
+        let lines = frame(&state, 80, 24);
+        assert!(lines.iter().any(|l| l.contains('界')));
+        for line in lines {
+            let cells: usize = line
+                .chars()
+                .map(|c| if matches!(c, '界' | '😀') { 2 } else { 1 })
+                .sum();
+            assert!(cells < 80, "{line}");
+        }
     }
 
     #[test]
     fn finished_view_takes_text_only_from_the_ledger() {
         let mut lines = reuse_check_live();
         let live = folded(&lines);
-        let rendered = frame(&live, 200).join("\n") + &plain(&live, &mut HashSet::new()).join("\n");
+        let rendered =
+            frame(&live, 200, 100).join("\n") + &plain(&live, &mut HashSet::new()).join("\n");
         assert!(
             !rendered.contains("Tasks") && !rendered.contains("Email"),
             "{rendered}"
@@ -1071,7 +1196,7 @@ mod tests {
         let mut done = folded(&lines);
         assert_eq!(done.status(), Status::Finished);
         done.apply_ledger(&ledger());
-        let got = frame(&done, 200);
+        let got = frame(&done, 200, 100);
         assert_eq!(
             got[0],
             "qaren watch  check-20261009T081500Z  check  ios  FINISHED  1:42"
