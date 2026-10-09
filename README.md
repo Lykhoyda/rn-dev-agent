@@ -8,26 +8,14 @@ published 1.x release.
 
 ## Watch a QaReN run
 
-`qaren watch <run-id>` or `qaren watch --latest` shows live test stages,
-step outcomes and act/capture/Jev timings, recording, cleanup and verdict.
-The viewer only reads the run's files and never takes a device lease or controls a run.
+Watch test stages in a second terminal:
 
 ```sh
 qaren watch --latest
-ssh -t host qaren watch --latest
-ssh host qaren watch <run-id> --plain
-qaren watch <run-id> --json
 ```
 
-TTY output redraws every 250 ms; Ctrl-C quits the viewer.
-`--plain`, non-TTY stdout, `CI` or `NO_COLOR` prints each final item once,
-without terminal escape codes. `--json` prints one current state snapshot and exits.
-Live output is value-free; projected step text comes only from the final ledger
-after the run ends. A dead or replaced owner without the final event is shown as
-“ended without final event (telemetry incomplete)”; unknown owner identity stays live.
-Exit codes are 0 for a finished or incomplete run, 1 for no such run, 2 for usage,
-and 3 for unavailable telemetry, including older runs without `events.jsonl`.
-See the [watch guide](packages/qaren-cli/README.md#watch-a-run) for details.
+See the [watch guide](packages/qaren-cli/README.md#watch-a-run) for selecting a
+run, SSH usage, output modes, privacy, stage semantics and exit codes.
 
 <div align="center">
 

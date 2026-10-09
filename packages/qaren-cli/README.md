@@ -22,9 +22,24 @@ lease. `--latest` selects the newest `run.json` modification time. It shows
 explicit stages from preflight through cleanup, step outcomes and act/capture/Jev
 timings, recording, and the verdict with its expected check exit code.
 An unobserved stage stays unobserved; a skipped stage says “not needed”.
+Preflight and dependencies pass when their work completes; verify runs after
+every build decision, including reuse. Reuse skips prebuild and native compile.
+On iOS, native compile ends before install/launch/ready; on Android, the build
+stage includes those operations and the separate install/launch/ready stage is
+skipped. Recording can overlap steps. Requested recording starts as running and
+stays failed after a startup failure, even if retained-resource cleanup succeeds;
+recording is skipped only when it was not requested. Failures close running stages.
 Only `check` and `pr` produce the value-free `logs/events.jsonl` stream.
-Telemetry cannot change a run's verdict; dropped events are counted in the final
-event and disclosed by the viewer. W1 does not read `core.log`.
+The startup progress hint names the command to watch that run.
+Telemetry uses a bounded, nonblocking writer queue with a reserved final-event
+slot and at most 500 ms of draining. Writer startup or I/O failure disables
+telemetry without changing the run's receipt or verdict; queue drops are counted
+in the final event and disclosed by the viewer. W1 does not read `core.log`.
+
+Steps fold by value-free numeric operation identity, keeping login and plan
+operations distinct even when line numbers match. Replay-to-walk retries retain
+the same identity. The latest event in sequence order determines the outcome,
+including recovery that resets the attempt number. Startup line zero is ignored.
 
 On a TTY, the view redraws every 250 ms; Ctrl-C exits only the viewer.
 `--plain`, non-TTY stdout, `CI` or `NO_COLOR` prints each final stage and step
@@ -33,6 +48,9 @@ folded snapshot and exits immediately, including when the run is live.
 Step text and reasons never come from live events. They appear only after an
 end event or a terminal run record, from the final privacy-projected ledger;
 all dynamic terminal prose has control characters removed.
+The final ledger projection also applies to completion rows arriving after the
+terminal record. Live events exclude text, reasons, selectors, refs, block names
+and screenshots; cleanup exposes only allowlisted resource names and status kinds.
 
 | State | Meaning |
 | --- | --- |
@@ -44,6 +62,7 @@ all dynamic terminal prose has control characters removed.
 The viewer exits 0 for finished or incomplete runs, independently of the test
 verdict, 1 for no such run, 2 for usage errors, and 3 for unavailable telemetry.
 Running `qaren watch` without an id or `--latest` is a usage error in W1.
+Interactive controls, lanes and timed replay remain later slices.
 
 ## Build
 

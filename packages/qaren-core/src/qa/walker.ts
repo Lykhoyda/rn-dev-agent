@@ -1783,7 +1783,7 @@ class RenderError extends Error {
   }
 }
 
-// The streamed row channel cannot be retracted, so it carries no text, reason, selector or identifier.
+// The streamed row channel cannot be retracted, so it carries no text, reason, selector or app identifier.
 function valueFree(row: LedgerRow): LedgerRow {
   const { operationId, line, attempt, kind, resolvedBy, t, outcome, screenshot, timing } = row;
   return {
