@@ -48,6 +48,69 @@ Use the reported binary path for CLI commands; installation does not add it to P
 This development checkout's manifest does not imply that a QaReN release asset
 has been published; use the source build above while that asset is unavailable.
 
+## Upgrading from rn-dev-agent 1.x (1.0.14) to 2.0
+
+QaReN 2.0 replaces the rn-dev-agent 1.x plugin. It has no compatibility layer:
+2.0 never reads, converts or reuses 1.x plugins, configuration, caches or learned
+actions, so remove 1.x first and install 2.0 as a new product.
+
+| 1.x (rn-dev-agent 1.0.14) | 2.0 (QaReN) |
+|---|---|
+| Plugin `rn-dev-agent@rn-dev-agent` from marketplace `rn-dev-agent`, with its bundled MCP server (`cdp_*`, `device_*` tools) | Plugin `qaren@qaren` from marketplace `qaren`, and the `qaren` CLI; no MCP server |
+| `.rn-agent/config.json` and `.rn-agent/actions/` learned actions in the app | `.qaren/config.yaml` and `.qaren/actions/` saved blocks written from passing plan blocks |
+| `~/.cache/rn-dev-agent/` (maestro-runner pin cache), `~/.rn-dev-agent/` (action database, device helper state), `~/.claude/rn-agent/` | `~/.qaren/runtime/`, `~/.qaren/state/`, `~/.qaren/runs/`, `~/.qaren/locks/` |
+
+1. **Remove the 1.x plugin and its MCP registration.** The MCP server ships
+   inside the plugin, so uninstalling the plugin removes its registration.
+
+   ```sh
+   # Codex
+   codex plugin remove rn-dev-agent@rn-dev-agent
+   codex plugin marketplace remove rn-dev-agent
+   # Claude Code
+   claude plugin uninstall rn-dev-agent@rn-dev-agent
+   claude plugin marketplace remove rn-dev-agent
+   ```
+
+   In Cursor, remove the rn-dev-agent plugin and marketplace from its plugin
+   settings. A 1.0.14 Codex install writes `[marketplaces.rn-dev-agent]` and
+   `[plugins."rn-dev-agent@rn-dev-agent"]` to `$CODEX_HOME/config.toml` (default
+   `~/.codex`), the plugin under `$CODEX_HOME/plugins/cache/rn-dev-agent/` and the
+   marketplace clone under `$CODEX_HOME/.tmp/marketplaces/rn-dev-agent/`; confirm
+   none remain. If you registered the 1.x MCP server by hand, delete that entry
+   from the host's MCP configuration as well.
+2. **Delete the 1.x state you no longer need.** Nothing in 2.0 reads it:
+   `~/.cache/rn-dev-agent/`, `~/.rn-dev-agent/`, `~/.claude/rn-agent/` and each
+   app's `.rn-agent/` directory. Learned actions are not converted; QaReN saves
+   its own blocks as plans pass. Unset any `RN_DEV_AGENT_*` environment
+   variables from your shell profile.
+3. **Install 2.0.** Until a QaReN release asset is published, use the
+   [source build](#build). Once it is, add the marketplace, install the plugin
+   and run the [runtime installer](#plugin-runtime-installation) from the
+   installed plugin directory:
+
+   ```sh
+   # Codex
+   codex plugin marketplace add Lykhoyda/rn-dev-agent
+   codex plugin add qaren@qaren
+   # Claude Code
+   claude plugin marketplace add Lykhoyda/rn-dev-agent
+   claude plugin install qaren@qaren
+   # then, from the installed plugin directory
+   bash scripts/ensure-qaren.sh --install
+   ```
+
+4. **Verify a clean 2.0 install.**
+   - `codex plugin list` or `claude plugin list` shows `qaren@qaren` and no
+     `rn-dev-agent` entry; `codex plugin marketplace list` or
+     `claude plugin marketplace list` shows no `rn-dev-agent` marketplace.
+   - `bash scripts/ensure-qaren.sh --print-bin` prints a binary path, and that
+     binary's `--version` reports `qaren 2.0.x` (a source build reports the
+     workspace version from `packages/qaren-cli/target/debug/qaren --version`).
+   - In the app, write `.qaren/config.yaml` and run a first plan as in
+     [Check a plan](#check-a-plan); a PASS receipt with a run under
+     `~/.qaren/runs/` completes the upgrade.
+
 ## Check a plan
 
 From the app's directory, supply `.qaren/config.yaml` and a Markdown plan:
@@ -235,9 +298,16 @@ on a keyboard-up path types nothing; failure of the pre-dispatch read returns
 `NO_TEXT_INPUT_TARGET` with no mutation. An unknown keyboard state still refuses.
 Each walker focus decision logs one value-free `fallback-focus` line.
 
-QaReN then replaces the focused field's content and types once without final
-value validation: the runner selects the whole field and types the plan text in
-one synthesized sequence, so no readable React value is needed. A runner
+QaReN then replaces the focused field's content: the runner selects the whole
+field and types the plan text in one synthesized sequence. When the input is a
+controlled React field, its value is then read back locally and compared, never
+logged: an exact match verifies the fill. A stable read-back holding a strictly
+shorter, in-order part of the text means keystrokes were dropped (seen under host
+load), so the field is cleared and retyped once within the same step budget. A
+match then verifies the fill. A second loss of a different length fails with
+`TEXT_ENTRY_UNVERIFIED` naming only the typed and held lengths. The same loss
+twice is the field's own stripping or length limit and stays unverified, as does
+any other normalized, uncontrolled or unreadable value. A runner
 must advertise `FILL_EVIDENCE_V1` on both iOS and Android. Session startup routes
 a missing capability through the bounded source-rebuild path instead of
 accepting the released artifact. An active iOS runner missing it refuses focused
@@ -245,9 +315,9 @@ replacement with `RN_FAST_RUNNER_STALE`
 and no mutation instead of appending. A refused replacement keeps the runner's
 mutation disposition. The [focused replacement tests](../qaren-core/test/unit/device-fill-focused-replace.test.ts)
 cover these guards and mutation reporting.
-A successful keyboard step records a passing row with reason `UNVERIFIED_FILL`,
+An unverified keyboard step records a passing row with reason `UNVERIFIED_FILL`,
 allowing later plan steps to continue; it does not establish the field's final
-value. Failed keyboard typing is not retried. Before the fallback tap or
+value. Apart from that one retype, failed keyboard typing is not retried. Before the fallback tap or
 no-target typing dispatch, the value is protected under the
 [shared masking rules](#input-value-masking), and screenshots are withheld for the rest
 of the walk. The block remains unsaved,
