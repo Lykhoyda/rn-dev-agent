@@ -29,8 +29,9 @@ including plan completions after login recovery. Selected rows appear in operati
 order. Below 64 columns or 22 rows, compact rows show stage status names and step
 outcomes; below 32 columns or 18 rows (or when the size is unavailable), the viewer
 switches to plain output for the rest of that invocation. Resize is checked on
-each redraw. Plain and JSON output
-retain all rows; the bounded TTY view does not change the stored run or ledger.
+each redraw. JSON includes every folded step; plain output omits running,
+retry and unfinished rows. The bounded TTY view does not change the stored run
+or ledger.
 The TTY footer's `now:` label shows the most recently started command without
 an observed end event. Piped and grouped children emit an end event on failed
 spawn or when reaped, including signal termination; sending a signal alone
@@ -55,15 +56,17 @@ operations distinct even when line numbers match. Replay-to-walk retries retain
 the same identity. The latest event in sequence order determines the outcome,
 including recovery that resets the attempt number. Startup line zero is ignored.
 Each plan line streams a value-free start (operation identity, line and kind)
-before it runs, so its row shows as running until its outcome arrives; a
-started line that never reports before the run ends is shown as unfinished.
+before it runs, so its TTY and JSON row shows as running until its outcome
+arrives; a started line that never reports before the run ends is shown as
+unfinished.
 
 On a TTY, the view redraws every 250 ms; Ctrl-C exits only the viewer.
 The owner's identity is checked at most every two seconds and never after the
 end event, so a finished run's snapshot does not wait on a process probe.
-`--plain`, non-TTY stdout, `CI` or `NO_COLOR` prints each final stage and step
-attempt once, without escape codes or stdin reads. `--json` prints a single
-folded snapshot and exits immediately, including when the run is live.
+`--plain`, non-TTY stdout, `CI` or `NO_COLOR` prints each observed final stage
+and passed or failed step attempt once, without escape codes or stdin reads.
+`--json` prints a single folded snapshot and exits without following the run;
+a live snapshot still performs the initial owner check.
 Step text and reasons never come from live events. They appear only after an
 end event or a terminal run record, from the final privacy-projected ledger;
 all dynamic terminal prose has control characters removed.
