@@ -468,6 +468,8 @@ struct RetainedSnapshotTarget {
   let rect: SnapshotRect
   // Frame of the nearest same-type, same-label ancestor of a label-only node in the same snapshot.
   var ownerRect: SnapshotRect? = nil
+  // A Button with a Keyboard ancestor in the same snapshot, such as an iOS Return key.
+  var keyboardOwned: Bool = false
 }
 
 struct RecordedExactTypeTarget {

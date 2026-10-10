@@ -245,6 +245,21 @@ for (const sameWindow of [false, true]) {
   });
 }
 
+for (const sameWindow of [false, true]) {
+  test(`a Button-typed keyboard key presses without clearance scroll (${sameWindow ? 'ancestry' : 'separate window'})`, async () => {
+    const screen = explicitKeyboard(sameWindow, (nodes) =>
+      nodes.map((node) => (node.ref === '@return' ? { ...node, type: 'Button' } : node)),
+    );
+    const f = fake([screen, done()], {});
+    const outcome = await walkBlock(block('1. Tap "Return"\n'), f.deps);
+    assert.deepEqual(
+      f.calls.filter((call) => call !== 'capture'),
+      ['press @return'],
+    );
+    assert.equal(outcome.block.outcome, 'pass');
+  });
+}
+
 test('O1: an occluded press scrolls once toward clearance and presses the same identity', async () => {
   const screens = [at(700), at(400), at(400), done()];
   const f = fake(screens, { press: [OCCLUDED] });
