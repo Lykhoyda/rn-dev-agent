@@ -6,7 +6,7 @@ import type { Screen } from '../../../dist/qa/screen.js';
 import { NativeCaptureError } from '../../../dist/qa/capture.js';
 import { loginBlock, runPlan, walkBlock } from '../../../dist/qa/walker.js';
 import type { ActResult, WalkerDeps } from '../../../dist/qa/walker.js';
-import type { LedgerRow } from '../../../dist/qa/ledger.js';
+import type { LedgerRow, StepStart } from '../../../dist/qa/ledger.js';
 
 function screen(
   labels: string[],
@@ -118,6 +118,52 @@ test('an unchanged screen with a dialog in front recovers once and the retry pas
   const recovered = ledger.steps.find((r) => r.reason?.includes('recovered: dialog'));
   assert.equal(recovered?.outcome, 'retry');
   assert.equal(ledger.steps.at(-1)?.outcome, 'pass');
+  assert.deepEqual(
+    f.rows.map((row) => [row.attempt, row.outcome]),
+    [
+      [1, 'retry'],
+      [2, 'retry'],
+      [1, 'pass'],
+    ],
+  );
+  assert.ok(f.rows[0].operationId);
+  assert.ok(f.rows.every((row) => row.operationId === f.rows[0].operationId));
+});
+
+test('each line announces a value-free start before its rows, under the same operation', async () => {
+  const covered = screen(['Settings'], 'dialog');
+  const events: string[] = [];
+  const starts: StepStart[] = [];
+  const f = fake(
+    [covered, covered, covered, covered, covered, screen(['Settings']), screen(['Profile'])],
+    {
+      start: (start) => {
+        starts.push(start);
+        events.push(`start ${start.operationId}`);
+      },
+    },
+  );
+  const row = f.deps.row;
+  f.deps.row = (r) => {
+    events.push(`${r.outcome} ${r.operationId}`);
+    row(r);
+  };
+  const ledger = await runPlan([block('1. Tap "Settings"\n✓ "Profile"\n')], f.deps);
+  assert.equal(ledger.verdict, 'PASS');
+  const [tap, check] = [...new Set(f.rows.map((r) => r.operationId))];
+  assert.ok(tap && check && tap !== check);
+  assert.equal(events[0], `start ${tap}`);
+  assert.equal(events.indexOf(`start ${check}`), events.indexOf(`pass ${tap}`) + 1);
+  assert.equal(events.at(-1), `pass ${check}`);
+  assert.deepEqual(
+    starts.map((s) => [s.operationId, s.line, s.kind]),
+    [...starts.slice(0, -1).map(() => [tap, 1, 'step']), [check, 2, 'check']],
+  );
+  assert.ok(
+    starts.every(
+      (s) => JSON.stringify(Object.keys(s).sort()) === '["kind","line","operationId","t"]',
+    ),
+  );
 });
 
 test('a second failure of the same item fails without a second recovery', async () => {
@@ -128,6 +174,16 @@ test('a second failure of the same item fails without a second recovery', async 
   assert.equal(f.calls.filter((c) => c === 'dialog accept').length, 1);
   assert.match(ledger.failure?.seen ?? '', /did not change after recovery/);
   assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 3);
+  assert.deepEqual(
+    f.rows.map((row) => [row.attempt, row.outcome]),
+    [
+      [1, 'retry'],
+      [2, 'retry'],
+      [1, 'fail'],
+    ],
+  );
+  assert.ok(f.rows[0].operationId);
+  assert.ok(f.rows.every((row) => row.operationId === f.rows[0].operationId));
 });
 
 test('a target missing behind a dialog recovers once', async () => {
@@ -200,7 +256,10 @@ test('a login wall replays the login block, then the step retries and passes', a
   const f = fake(
     [wall, wall, wall, screen(['Settings']), screen(['Settings']), screen(['Profile'])],
     {
-      login: { marker: { id: 'login-screen' }, block: block('### Login\n1. Tap "Sign in"\n') },
+      login: {
+        marker: { id: 'login-screen' },
+        block: { ...block('1. Tap "Sign in"\n'), slug: 'login' },
+      },
     },
   );
   const ledger = await runPlan([block('1. Tap "Settings"\n')], f.deps);
@@ -215,6 +274,16 @@ test('a login wall replays the login block, then the step retries and passes', a
     ],
   );
   assert.match(ledger.steps[1].reason ?? '', /recovered: login/);
+  const [login, retry, passed] = ledger.steps;
+  assert.equal(login.line, retry.line);
+  assert.ok(login.operationId && retry.operationId);
+  assert.notEqual(login.operationId, retry.operationId);
+  assert.equal(retry.operationId, passed.operationId);
+  assert.deepEqual(
+    f.rows.map((row) => row.operationId),
+    ledger.steps.map((row) => row.operationId),
+  );
+  assert.ok(f.rows.every((row) => row.block === '' && row.text === ''));
 });
 
 test('no recovery runs inside the login replay', async () => {

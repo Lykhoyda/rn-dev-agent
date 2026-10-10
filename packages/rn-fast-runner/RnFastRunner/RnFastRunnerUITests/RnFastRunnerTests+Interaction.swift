@@ -767,6 +767,8 @@ extension RnFastRunnerTests {
         candidates = app.keyboards.allElementsBoundByIndex
       } else if retained.type == "Key" {
         candidates = app.keyboards.keys.allElementsBoundByIndex
+      } else if retained.type == "Button" {
+        candidates = app.keyboards.buttons.allElementsBoundByIndex
       }
     })
     guard exceptionMessage == nil else { return nil }

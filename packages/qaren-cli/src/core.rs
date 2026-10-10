@@ -170,10 +170,22 @@ impl TryFrom<String> for JevDiagnostic {
     }
 }
 
+// The value-free announcement that a plan line begins; its row later carries the same operation id.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StepStart {
+    pub operation_id: u64,
+    pub line: u64,
+    pub kind: String,
+    pub t: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Row {
     pub block: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub operation_id: u64,
     pub line: u64,
     pub attempt: u64,
     pub kind: String,
@@ -200,6 +212,10 @@ pub struct Row {
     pub kept: Option<KeptCounts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub case_normalized: Option<CaseNormalized>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 // Characters typed into a field that changed only their letter case.
@@ -542,6 +558,7 @@ struct Inbox {
     run_id: String,
     last_seq: u64,
     rows: Vec<Row>,
+    starts: usize,
     admitted: bool,
     drivers: Vec<i32>,
     announced: usize,
@@ -584,6 +601,7 @@ impl Inbox {
                 if !self.admitted && payload.as_object().is_some_and(|p| p.is_empty()) =>
             {
                 self.admitted = true;
+                crate::events::admitted();
                 true
             }
             (Some("resource"), Some(payload))
@@ -613,6 +631,31 @@ impl Inbox {
                     }
                 }
             }
+            // A start is telemetry only: it neither resets the step deadline nor becomes a ledger row.
+            (Some("start"), Some(payload)) => {
+                if self.starts >= MAX_ROWS {
+                    self.violation = Some(format!("more than {MAX_ROWS} step starts"));
+                    return false;
+                }
+                match serde_json::from_value::<StepStart>(payload.clone()) {
+                    Ok(start)
+                        if start.operation_id > 0
+                            && start.line > 0
+                            && matches!(start.kind.as_str(), "step" | "check") =>
+                    {
+                        self.starts += 1;
+                        crate::events::step(&start);
+                        false
+                    }
+                    _ => {
+                        self.violation = Some(format!(
+                            "start payload is not a step start: {}",
+                            excerpt(line)
+                        ));
+                        false
+                    }
+                }
+            }
             (Some("row"), Some(payload)) => {
                 if self.rows.len() >= MAX_ROWS {
                     self.violation = Some(format!("more than {MAX_ROWS} rows"));
@@ -622,6 +665,7 @@ impl Inbox {
                     Ok(mut row) => {
                         row.redact_evidence();
                         crate::progress::row(&row);
+                        crate::events::row(&row);
                         self.rows.push(row);
                         true
                     }
@@ -674,6 +718,7 @@ pub fn wait(
         run_id,
         last_seq: 1,
         rows: Vec::new(),
+        starts: 0,
         admitted: false,
         drivers: Vec::new(),
         announced: 0,

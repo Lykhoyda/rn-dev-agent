@@ -7,6 +7,85 @@ QaReN is still in development; this checkout is not the published 1.x MCP plugin
 The scenario-based preparation verbs remain available for explicit iOS,
 NUC Android and USB Android setup experiments.
 
+## Watch a run
+
+```sh
+qaren watch <run-id>
+qaren watch --latest
+ssh -t host qaren watch --latest
+ssh host qaren watch <run-id> --plain
+qaren watch <run-id> --json
+```
+
+The viewer reads one run under `~/.qaren/runs/` and takes no lock or device
+lease. `--latest` selects the newest `run.json` modification time. It shows
+explicit stages from preflight through cleanup, step outcomes and act/capture/Jev
+timings, recording, and the verdict with its expected check exit code.
+An unobserved stage stays unobserved; a skipped stage says “not needed” in full rows.
+TTY redraws read the current terminal size, keep every stage visible, and fit
+step rows into the remaining space with an omitted-row count. Unfinished rows
+take priority, followed by completed rows with the latest observed event sequence,
+including plan completions after login recovery. Selected rows appear in operation
+order. Below 64 columns or 22 rows, compact rows show stage status names and step
+outcomes; below 32 columns or 18 rows (or when the size is unavailable), the viewer
+switches to plain output for the rest of that invocation. Resize is checked on
+each redraw. JSON includes every folded step; plain output omits running,
+retry and unfinished rows. The bounded TTY view does not change the stored run
+or ledger.
+The TTY footer's `now:` label shows the most recently started command without
+an observed end event. Piped and grouped children emit an end event on failed
+spawn or when reaped, including signal termination; sending a signal alone
+does not end the command. Ending it reveals any earlier command still running,
+or clears the label when none remain.
+Preflight and dependencies pass when their work completes; verify runs after
+every build decision, including reuse. Reuse skips prebuild and native compile.
+On iOS, native compile ends before install/launch/ready; on Android, the build
+stage includes those operations and the separate install/launch/ready stage is
+skipped. Recording can overlap steps. Requested recording starts as running and
+stays failed after a startup failure, even if retained-resource cleanup succeeds;
+recording is skipped only when it was not requested. Failures close running stages.
+Only `check` and `pr` produce the value-free `logs/events.jsonl` stream.
+The startup progress hint names the command to watch that run.
+Telemetry uses a bounded, nonblocking writer queue with a reserved final-event
+slot and at most 500 ms of draining. Writer startup or I/O failure disables
+telemetry without changing the run's receipt or verdict; queue drops are counted
+in the final event and disclosed by the viewer. W1 does not read `core.log`.
+
+Steps fold by value-free numeric operation identity, keeping login and plan
+operations distinct even when line numbers match. Replay-to-walk retries retain
+the same identity. The latest event in sequence order determines the outcome,
+including recovery that resets the attempt number. Startup line zero is ignored.
+Each plan line streams a value-free start (operation identity, line and kind)
+before it runs, so its TTY and JSON row shows as running until its outcome
+arrives; a started line that never reports before the run ends is shown as
+unfinished.
+
+On a TTY, the view redraws every 250 ms; Ctrl-C exits only the viewer.
+The owner's identity is checked at most every two seconds and never after the
+end event, so a finished run's snapshot does not wait on a process probe.
+`--plain`, non-TTY stdout, `CI` or `NO_COLOR` prints each observed final stage
+and passed or failed step attempt once, without escape codes or stdin reads.
+`--json` prints a single folded snapshot and exits without following the run;
+a live snapshot still performs the initial owner check.
+Step text and reasons never come from live events. They appear only after an
+end event or a terminal run record, from the final privacy-projected ledger;
+all dynamic terminal prose has control characters removed.
+The final ledger projection also applies to completion rows arriving after the
+terminal record. Live events exclude text, reasons, selectors, refs, block names
+and screenshots; cleanup exposes only allowlisted resource names and status kinds.
+
+| State | Meaning |
+| --- | --- |
+| Live | No end event and the owner is alive or its identity is unknown |
+| Finished | The final end event is present |
+| Ended without final event | The recorded owner is dead or replaced; telemetry is incomplete even if `run.json` still says `walking` |
+| Telemetry unavailable | The events file is absent, including runs made before watch support |
+
+The viewer exits 0 for finished or incomplete runs, independently of the test
+verdict, 1 for no such run, 2 for usage errors, and 3 for unavailable telemetry.
+Running `qaren watch` without an id or `--latest` is a usage error in W1.
+Interactive controls, lanes and timed replay remain later slices.
+
 ## Build
 
 ```sh
@@ -230,9 +309,13 @@ point outside it leaves that check unavailable. A negative check refuses with
 capability takes the runner rebuild path.
 
 Before dispatch, the walker also treats a press or fill target whose centre lies
-outside its trusted clipping viewport or inside an observed keyboard frame
-(unless the keyboard is proven hidden) as covered. It uses the same recovery
-as a native occlusion refusal.
+outside its trusted clipping viewport or covered by an observed keyboard frame
+(unless the keyboard is proven hidden) as covered. Keyboard-owned targets use
+the existing explicit tap path and remain subject to trusted clipping and native
+identity guards. An explicit key press performs its normal action, not guaranteed
+keyboard dismissal; QA must freshly prove the keyboard hidden and the intended
+screen preserved before treating the press as clearance. Ordinary covered content
+uses the same recovery as a native occlusion refusal.
 The walker handles this refusal with one directional scroll: down from the
 lower half of the effective viewport, up from the upper half. Scroll bands stay
 above a visible keyboard. It then requires a unique rebind to the refused

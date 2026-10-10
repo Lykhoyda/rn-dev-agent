@@ -5,6 +5,7 @@ use crate::buildplan::{
 };
 use crate::cancel::ensure_running;
 use crate::candidate;
+use crate::events::StageState;
 use crate::exec::{CmdSpec, Runner};
 use crate::failure::{Failure, FailureCode};
 use crate::fingerprint::{self, NativeFingerprint};
@@ -2208,7 +2209,6 @@ fn run_finite_build(ctx: &mut Ctx, spec: &CmdSpec) -> Result<(), Failure> {
             }
         }
     }
-    crate::progress::finished(&spec.label, exit == Some(0));
     let mut outcome = super::cleanup::cleanup_build(ctx.runner, &mut ctx.record, &ctx.runs_root)
         .expect("build recorded");
     if !outcome.clean() && exit.is_none() && matches!(child.handle.try_wait(), Ok(Some(_))) {
@@ -2287,6 +2287,8 @@ pub(crate) fn build_and_ready(ctx: &mut Ctx) -> Result<(), Failure> {
             plan.artifact = Some(artifact);
             ctx.record.build = Some(plan.clone());
             ctx.save()?;
+            crate::events::stage("native_build", StageState::Passed, None, None);
+            crate::events::stage("install_launch_ready", StageState::Running, None, None);
             run_reuse_path(ctx, &plan, ctx.runner.now_epoch_ms())?;
             return Ok(());
         }

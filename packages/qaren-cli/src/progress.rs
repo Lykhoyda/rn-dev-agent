@@ -71,7 +71,7 @@ impl Progress {
         } else {
             String::new()
         };
-        // Streamed rows are value-free; plan text reaches only the projected report.
+        // Streamed rows are value-free; plan text stays out of live progress.
         self.commit(&format!(
             "  {glyph} {:>3}  ({}{retry})",
             row.line, row.resolved_by
@@ -167,6 +167,10 @@ pub fn row(row: &Row) {
     with(|p| p.row(row, Instant::now()));
 }
 
+pub fn watch_hint(run_id: &str) {
+    with(|p| p.commit(&format!("▸ watch live: qaren watch {run_id}")));
+}
+
 pub fn close() {
     with(Progress::close);
 }
@@ -191,6 +195,7 @@ mod tests {
     fn row(line: u64, outcome: &str, text: &str) -> Row {
         Row {
             block: "b".into(),
+            operation_id: line,
             line,
             attempt: 1,
             kind: "step".into(),

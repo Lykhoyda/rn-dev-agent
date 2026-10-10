@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import type { Ledger, LedgerRow, WalkResult } from './ledger.js';
+import type { Ledger, LedgerRow, StepStart, WalkResult } from './ledger.js';
 import { ledgerWithoutResult } from './ledger.js';
 import type { PreparedPlan } from './plan.js';
 import { type JevCall, isRecord } from './questions.js';
@@ -9,7 +9,14 @@ import { isValidActionId } from '../domain/path-safety.js';
 
 export const WIRE_VERSION = 1 as const;
 
-export type EnvelopeType = 'request' | 'admitted' | 'row' | 'resource' | 'result' | 'cancel';
+export type EnvelopeType =
+  | 'request'
+  | 'admitted'
+  | 'start'
+  | 'row'
+  | 'resource'
+  | 'result'
+  | 'cancel';
 
 export interface Envelope<T = unknown> {
   v: typeof WIRE_VERSION;
@@ -118,6 +125,7 @@ export function startupRow(): LedgerRow {
 const TYPES: ReadonlySet<string> = new Set([
   'request',
   'admitted',
+  'start',
   'row',
   'resource',
   'result',
@@ -226,6 +234,7 @@ export async function readRequest(input: AsyncIterable<Buffer | string>): Promis
 
 export interface WireWriter {
   admitted(): void;
+  start(payload: StepStart): void;
   row(payload: LedgerRow): void;
   runnerDriver(pid: number): void;
   result(payload: ResultPayload): 0 | 1 | 4;
@@ -244,6 +253,7 @@ export function createWriter(write: (line: string) => void, runId: string): Wire
   };
   return {
     admitted: () => send('admitted', {}),
+    start: ({ operationId, line, kind, t }) => send('start', { operationId, line, kind, t }),
     row: (payload) => send('row', payload),
     // The CLI records the driver's own process group before it can outlive this child.
     runnerDriver: (pid) => {

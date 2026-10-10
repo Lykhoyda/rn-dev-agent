@@ -45,7 +45,7 @@ import {
   type NativeObservation,
 } from './capture.js';
 import { captureQaReact } from './react-capture.js';
-import type { LedgerRow } from './ledger.js';
+import type { LedgerRow, StepStart } from './ledger.js';
 import { parsePlanWithJev, readPreparedPlan } from './plan.js';
 import { createJev } from './jev.js';
 import { isRecord } from './questions.js';
@@ -293,6 +293,7 @@ function logActionSettle(meta?: Record<string, unknown>): void {
 async function openSession(
   request: WireRequest,
   emitRow: (row: LedgerRow) => void,
+  emitStart: (start: StepStart) => void,
   onClose: (close: () => Promise<void>) => void,
 ): Promise<Session> {
   const { target, platform, appId } = request;
@@ -508,6 +509,7 @@ async function openSession(
     ...(login ? { login } : {}),
     sleep,
     row: emitRow,
+    start: emitStart,
     ...(platform === 'ios'
       ? {
           appProcess: {},
@@ -619,7 +621,7 @@ async function main(): Promise<void> {
   let opened: Session;
   try {
     opened = await stop.track(() =>
-      openSession(request, emitRow, (close) => {
+      openSession(request, emitRow, writer.start, (close) => {
         release = close;
       }),
     );

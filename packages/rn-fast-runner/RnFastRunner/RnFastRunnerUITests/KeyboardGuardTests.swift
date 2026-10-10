@@ -78,9 +78,10 @@ final class KeyboardGuardTests: XCTestCase {
     generation: Int = 7,
     index: Int = 12,
     label: String = "Q",
-    x: Int = 1
+    x: Int = 1,
+    keyboardState: Bool = true
   ) throws -> Command {
-    let json = #"{"command":"tap","x":2,"y":4,"targetBounds":{"x":\#(x),"y":2,"width":3,"height":4},"snapshotGeneration":\#(generation),"snapshotNodeIndex":\#(index),"snapshotElementType":"\#(type)","snapshotLabel":"\#(label)","keyboardStateAtSnapshot":true}"#
+    let json = #"{"command":"tap","x":2,"y":4,"targetBounds":{"x":\#(x),"y":2,"width":3,"height":4},"snapshotGeneration":\#(generation),"snapshotNodeIndex":\#(index),"snapshotElementType":"\#(type)","snapshotLabel":"\#(label)","keyboardStateAtSnapshot":\#(keyboardState)}"#
     return try JSONDecoder().decode(Command.self, from: Data(json.utf8))
   }
 
@@ -177,6 +178,74 @@ final class KeyboardGuardTests: XCTestCase {
       ),
       .ordinary
     )
+  }
+
+  private var retainedKeyboardButton: RetainedSnapshotTarget {
+    RetainedSnapshotTarget(
+      generation: 7,
+      index: 12,
+      type: "Button",
+      label: "Q",
+      identifier: nil,
+      rect: retainedKey.rect,
+      keyboardOwned: true
+    )
+  }
+
+  func testKeyboardOwnedButtonQualifies() throws {
+    XCTAssertEqual(
+      KeyboardGuard.validateKeyboardDescriptor(
+        command: try keyboardCommand(type: "Button"),
+        retained: retainedKeyboardButton,
+        currentGeneration: 7,
+        appFrame: CGRect(x: 0, y: 0, width: 402, height: 874)
+      ),
+      .keyboardTarget
+    )
+  }
+
+  func testKeyboardOwnedButtonForgedOrStaleDescriptorsRefuse() throws {
+    let frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+    for command in [
+      try keyboardCommand(type: "Key"),
+      try keyboardCommand(type: "Button", generation: 6),
+      try keyboardCommand(type: "Button", index: 13),
+      try keyboardCommand(type: "Button", label: "W"),
+      try keyboardCommand(type: "Button", x: 9),
+      try keyboardCommand(type: "Button", keyboardState: false)
+    ] {
+      XCTAssertEqual(
+        KeyboardGuard.validateKeyboardDescriptor(
+          command: command,
+          retained: retainedKeyboardButton,
+          currentGeneration: 7,
+          appFrame: frame
+        ),
+        .stale
+      )
+    }
+  }
+
+  func testKeyboardOwnershipFollowsAncestryNotGeometry() {
+    // 0 app, 1 app window, 2 keyboard window, 3 Keyboard, 4 Other inside it.
+    let parents: [Int: Int] = [1: 0, 2: 0, 3: 2, 4: 3, 5: 4, 6: 3, 7: 1, 8: 3, 9: 10, 10: 9]
+    let types: [Int: String] = [
+      0: "Application", 1: "Window", 2: "Window", 3: "Keyboard", 4: "Other",
+      5: "Button", 6: "Button", 7: "Button", 8: "Key", 9: "Button", 10: "Other"
+    ]
+    func owned(_ index: Int) -> Bool {
+      KeyboardGuard.isKeyboardOwnedButton(
+        type: types[index] ?? "",
+        index: index,
+        parentOf: { parents[$0] },
+        typeOf: { types[$0] }
+      )
+    }
+    XCTAssertTrue(owned(5))
+    XCTAssertTrue(owned(6))
+    XCTAssertFalse(owned(7))
+    XCTAssertFalse(owned(8))
+    XCTAssertFalse(owned(9))
   }
 
   func testFinalActivationRejectsRelayoutAndKeyboardAbsence() {

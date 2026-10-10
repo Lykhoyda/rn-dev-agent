@@ -82,7 +82,7 @@ pub struct ReportInput<'a> {
 }
 
 // Dynamic prose comes from the child and the app under test: redacted, one line, no Markdown syntax.
-fn prose(raw: &str) -> String {
+pub(crate) fn prose(raw: &str) -> String {
     let flat: String = redact_secrets(raw)
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -98,6 +98,13 @@ fn prose(raw: &str) -> String {
         out.push(c);
     }
     out
+}
+
+// Terminal output: C0 and C1 controls (escape sequences included) never reach the screen.
+pub(crate) fn term_safe(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(*c, '\u{0}'..='\u{1f}' | '\u{7f}'..='\u{9f}'))
+        .collect()
 }
 
 // Screenshots are run-local relative paths; anything else is not linked.

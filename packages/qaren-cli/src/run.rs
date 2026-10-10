@@ -6,9 +6,10 @@ use crate::commands::cleanup::{
     cleanup_core, cleanup_process_group, release_lease_outcome, retained_lease_outcome,
     unclean_legs, Outcome,
 };
-use crate::commands::prepare::{self, finish_receipt, Ctx};
+use crate::commands::prepare::{self, finish_receipt, Ctx, FailureCodeStr};
 use crate::config::CheckConfig;
 use crate::core::{self, Budgets, CoreRequest, CoreTarget, Verdict};
+use crate::events::{self, StageState};
 use crate::exec::{CmdSpec, Runner};
 use crate::failure::{Failure, FailureCode};
 use crate::github::{self, PrInfo};
@@ -124,6 +125,7 @@ pub fn run(runner: &mut dyn Runner, req: &RunRequest) -> Receipt {
             let failure = ensure_running(runner, &failure.phase)
                 .err()
                 .unwrap_or(failure);
+            events::close_running(StageState::Failed, Some(&failure.code_str()), &[]);
             let result = if failure.code.is_refusal() {
                 ReceiptResult::Refused
             } else {
@@ -179,6 +181,7 @@ fn run_inner(
     preflight_jev: &mut Option<core::JevRollup>,
     unowned_worktree: &mut Option<(PathBuf, PathBuf)>,
 ) -> Result<Receipt, Failure> {
+    events::stage("preflight", StageState::Running, None, None);
     validate_boot_device(req.platform, req.device.as_deref(), req.boot_device)?;
     let (config, config_raw) = CheckConfig::load(&req.config_path)?;
     config.validate_for_platform(req.platform)?;
@@ -222,6 +225,7 @@ fn run_inner(
         let (repo_root, app_rel) = locate_worktree(runner, &req.project_root)?;
         let info = github::pr_view(runner, &target.target, &repo_root)?;
         claim_run_dir(&run_dir)?;
+        start_events(req, &run_id, &run_dir);
         let wt = worktree::pr_worktree_path(&run_dir);
         // ponytail: until run.json exists only this process knows the worktree; a SIGKILL here
         // leaves it under the run directory for `git worktree prune`; add durable intent if that bites.
@@ -303,6 +307,7 @@ fn run_inner(
         if let Err(f) = claim_run_dir(&run_dir) {
             return Err(lease::release_or_annotate(&lease, f));
         }
+        start_events(req, &run_id, &run_dir);
     }
     let mut resources = Resources::default();
     resources.lease = Some(lease.clone());
@@ -356,6 +361,8 @@ fn run_inner(
         ctx.notes.push(("recovered_run".to_string(), earlier));
     }
     let t = ctx.mark("preflight", started_ms);
+    events::stage("preflight", StageState::Passed, None, None);
+    events::stage("deps", StageState::Running, None, None);
     if let Err(f) = ensure_running(&*ctx.runner, "deps") {
         return Ok(finish_failed(ctx, f));
     }
@@ -411,9 +418,11 @@ fn run_inner(
         }
     }
     let t = ctx.mark("deps", t);
+    events::stage("deps", StageState::Passed, None, None);
     if let Err(f) = ensure_running(&*ctx.runner, "build") {
         return Ok(finish_failed(ctx, f));
     }
+    events::stage("build_decision", StageState::Running, None, None);
 
     let plan_decision = match prepare::plan_build(&mut ctx) {
         Ok(plan) => plan,
@@ -430,22 +439,41 @@ fn run_inner(
         return Ok(finish_failed(ctx, f));
     }
     let t = ctx.mark("plan", t);
+    let decision = plan_decision.decision.as_str();
+    events::stage("build_decision", StageState::Passed, Some(decision), None);
 
     if plan_decision.decision == BuildDecision::Reuse {
+        events::stage("prebuild", StageState::Skipped, None, None);
+        events::stage("native_build", StageState::Skipped, None, None);
+        events::stage("install_launch_ready", StageState::Running, None, None);
         if let Err(f) = prepare::run_reuse_path(&mut ctx, &plan_decision, t) {
             return Ok(finish_failed(ctx, f));
         }
+        events::stage("install_launch_ready", StageState::Passed, None, None);
     } else {
         if plan_decision.decision == BuildDecision::Clean {
+            events::stage("prebuild", StageState::Running, None, None);
             if let Err(f) = prepare::run_clean_preparation(&mut ctx, &plan_decision) {
                 return Ok(finish_failed(ctx, f));
             }
+            events::stage("prebuild", StageState::Passed, None, None);
+        } else {
+            events::stage("prebuild", StageState::Skipped, None, None);
         }
+        events::stage("native_build", StageState::Running, None, None);
         if let Err(f) = prepare::build_and_ready(&mut ctx) {
             return Ok(finish_failed(ctx, f));
         }
+        // The iOS arm splits native_build from install inside build_and_ready; Android's spans both.
+        if req.platform == Platform::Android {
+            events::stage("native_build", StageState::Passed, None, None);
+            events::stage("install_launch_ready", StageState::Skipped, None, None);
+        } else {
+            events::stage("install_launch_ready", StageState::Passed, None, None);
+        }
     }
     let t = ctx.mark("build_and_ready", t);
+    events::stage("verify", StageState::Running, None, None);
     let fp = match prepare::recheck_fingerprint(&mut ctx, &plan_decision) {
         Ok(fp) => fp,
         Err(f) => return Ok(finish_failed(ctx, f)),
@@ -457,6 +485,7 @@ fn run_inner(
         prepare::release_build_lock(&mut ctx);
     }
     let t = ctx.mark("verify", t);
+    events::stage("verify", StageState::Passed, None, None);
     if let Err(f) = ensure_running(&*ctx.runner, "walk") {
         return Ok(finish_failed(ctx, f));
     }
@@ -492,10 +521,14 @@ fn run_inner(
     // Taken before the spawn, so the trim offset can only cut later than the true admission frame.
     let recording_from = ctx.runner.now_epoch_ms();
     if pr_state.is_some() {
+        events::stage("recording", StageState::Running, None, None);
         if let Err(status) = record::start(ctx.runner, &mut ctx.record, &ctx.runs_root, &device.id)
         {
+            events::stage("recording", StageState::Failed, None, None);
             video = Some(status);
         }
+    } else {
+        events::stage("recording", StageState::Skipped, None, None);
     }
     if let Err(f) = ensure_running(ctx.runner, "walk") {
         return Ok(finish_failed(ctx, f));
@@ -543,6 +576,8 @@ fn run_inner(
             ],
         });
     let core_log = run_dir.join("logs").join("core.log");
+    events::core_t0(core_request.t0);
+    events::stage("attach", StageState::Running, None, None);
     let core_child = match core::spawn(ctx.runner, &spec, &core_log, &core_request) {
         Ok(child) => child,
         Err(f) => return Ok(finish_failed(ctx, f)),
@@ -577,6 +612,17 @@ fn run_inner(
     };
     for note in driver_notes {
         ctx.notes.push(("runner_driver".to_string(), note));
+    }
+    match &outcome.verdict {
+        Verdict::Pass => events::close_running(StageState::Passed, None, &["recording"]),
+        Verdict::Fail => {
+            let code = outcome.failure.as_ref().map(|f| f.code);
+            let code = Failure::new("walk", code.unwrap_or(FailureCode::PlanStepFailed), "", "");
+            events::close_running(StageState::Failed, Some(&code.code_str()), &["recording"]);
+        }
+        Verdict::Refused { code, .. } => {
+            events::close_running(StageState::Failed, Some(code), &["recording"])
+        }
     }
     let t = ctx.mark("walk", t);
     let drift = match (status_before, worktree_status(ctx.runner, &app_root)) {
@@ -634,6 +680,14 @@ fn run_inner(
     if pr_state.is_some() {
         if ctx.record.resources.recorder.is_some() {
             let outcome = record::stop(ctx.runner, &mut ctx.record, &ctx.runs_root);
+            let state = if outcome.clean() {
+                StageState::Passed
+            } else {
+                StageState::Failed
+            };
+            if video.is_none() {
+                events::stage("recording", state, None, None);
+            }
             if !outcome.clean() && video.is_none() {
                 video = Some(VideoStatus::Unavailable(
                     "the recorder did not stop cleanly".into(),
@@ -1087,6 +1141,7 @@ fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
     let failure = ensure_running(ctx.runner, &failure.phase)
         .err()
         .unwrap_or(failure);
+    events::close_running(StageState::Failed, Some(&failure.code_str()), &[]);
     let (cleanup, _, _) = teardown(&mut ctx, false);
     let mut receipt = ctx.fail(failure);
     for (name, rendered) in cleanup {
@@ -1097,6 +1152,7 @@ fn finish_failed(mut ctx: Ctx, failure: Failure) -> Receipt {
 
 // Returns rendered outcomes, whether every leg is clean, and whether the run's producers are proven gone.
 fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, bool, bool) {
+    events::stage("cleanup", StageState::Running, None, None);
     let mut outcomes: Vec<(String, Outcome)> = Vec::new();
     if let Some(outcome) =
         crate::commands::cleanup::cleanup_build(ctx.runner, &mut ctx.record, &ctx.runs_root)
@@ -1164,6 +1220,12 @@ fn teardown(ctx: &mut Ctx, wait_unresolved: bool) -> (Vec<(String, String)>, boo
         outcomes.push(("pr_worktree".to_string(), outcome));
     }
     let all_clean = outcomes.iter().all(|(_, o)| o.clean());
+    let state = if all_clean {
+        StageState::Passed
+    } else {
+        StageState::Failed
+    };
+    events::stage("cleanup", state, None, None);
     let producers_gone = crate::commands::cleanup::producers_quiescent(&outcomes);
     let _ = ctx.save();
     (
@@ -1527,6 +1589,12 @@ fn build_scenario(
         deps: DepsSpec::default(),
         deadlines: Deadlines::default(),
     }
+}
+
+fn start_events(req: &RunRequest, run_id: &str, run_dir: &Path) {
+    events::run(run_id, verb(req), platform_str(req.platform));
+    events::attach(&run_dir.join("logs").join("events.jsonl"));
+    crate::progress::watch_hint(run_id);
 }
 
 fn claim_run_dir(run_dir: &Path) -> Result<(), Failure> {

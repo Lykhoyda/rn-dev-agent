@@ -7,6 +7,7 @@ import type { NativeNode, Screen } from '../../../dist/qa/screen.js';
 import { choice, scriptedJudge } from './judgment-fixtures.ts';
 import { walkBlock } from '../../../dist/qa/walker.js';
 import type { ActResult, WalkerDeps } from '../../../dist/qa/walker.js';
+import { checkQaNativeOutcome } from '../../../dist/runners/qa-native-policy.js';
 import type { QaDispatchContext } from '../../../dist/domain/qa-dispatch.js';
 
 const OCCLUDED: ActResult = {
@@ -172,6 +173,92 @@ function block(markdown: string) {
 }
 
 const targetOf = (screen: Screen, ref: string) => screen.elements.find((e) => e.ref === ref);
+
+function explicitKeyboard(
+  sameWindow = false,
+  edit: (nodes: NativeNode[]) => NativeNode[] = (nodes) => nodes,
+): Screen {
+  return covered(
+    join(
+      edit([
+        {
+          ref: '@app',
+          index: 0,
+          type: 'Application',
+          rect: { x: 0, y: 0, width: 402, height: 874 },
+        },
+        {
+          ref: '@win',
+          index: 1,
+          parentIndex: 0,
+          type: 'Window',
+          rect: { x: 0, y: 0, width: 402, height: 874 },
+        },
+        {
+          ref: '@submit',
+          index: 2,
+          parentIndex: 1,
+          type: 'Button',
+          identifier: 'login_submit',
+          label: 'Sign in',
+          hittable: true,
+          rect: { x: 21, y: 565, width: 360, height: 38 },
+        },
+        {
+          ref: '@kw',
+          index: 3,
+          parentIndex: 0,
+          type: 'Window',
+          rect: { x: 0, y: 0, width: 402, height: 874 },
+        },
+        {
+          ref: '@keyboard',
+          index: 4,
+          parentIndex: sameWindow ? 1 : 3,
+          type: 'Keyboard',
+          rect: { x: 0, y: 583, width: 402, height: 233 },
+        },
+        {
+          ref: '@return',
+          index: 5,
+          parentIndex: 4,
+          type: 'Key',
+          label: 'Return',
+          hittable: true,
+          rect: { x: 310, y: 755, width: 80, height: 50 },
+        },
+      ]),
+      [],
+    ),
+  );
+}
+
+for (const sameWindow of [false, true]) {
+  test(`an explicit keyboard key presses without clearance scroll (${sameWindow ? 'ancestry' : 'separate window'})`, async () => {
+    const f = fake([explicitKeyboard(sameWindow), done()], {});
+    const outcome = await walkBlock(block('1. Tap "Return"\n'), f.deps);
+    assert.deepEqual(
+      f.calls.filter((call) => call !== 'capture'),
+      ['press @return'],
+    );
+    assert.equal(outcome.block.outcome, 'pass');
+  });
+}
+
+for (const sameWindow of [false, true]) {
+  test(`a Button-typed keyboard key presses without clearance scroll (${sameWindow ? 'ancestry' : 'separate window'})`, async () => {
+    const screen = explicitKeyboard(sameWindow, (nodes) =>
+      nodes.map((node) => (node.ref === '@return' ? { ...node, type: 'Button' } : node)),
+    );
+    const f = fake([screen, done()], {});
+    const outcome = await walkBlock(block('1. Tap "Return"\n'), f.deps);
+    assert.deepEqual(
+      f.calls.filter((call) => call !== 'capture'),
+      ['press @return'],
+    );
+    assert.equal(outcome.block.outcome, 'pass');
+  });
+}
 
 test('O1: an occluded press scrolls once toward clearance and presses the same identity', async () => {
   const screens = [at(700), at(400), at(400), done()];
@@ -1041,4 +1128,246 @@ test('a moved target with no label and no testID is never dispatched again', asy
   assert.equal(outcome.block.outcome, 'fail');
   assert.equal(f.calls.filter((c) => c.startsWith('press')).length, 1);
   assert.match(outcome.failure?.seen ?? '', /button unlabelled, no testID\) did not settle/);
+});
+
+for (const kind of ['press', 'fill', 'wrapper'] as const) {
+  for (const visible of [true, undefined]) {
+    test(`keyboard-covered app ${kind} refuses before dispatch (keyboard ${visible})`, async () => {
+      const screen = explicitKeyboard(false, (nodes) =>
+        nodes.map((node) =>
+          node.ref === '@submit'
+            ? {
+                ...node,
+                type: kind === 'fill' ? 'TextField' : 'Button',
+                identifier: kind === 'wrapper' ? 'field-pressable' : 'login_submit',
+              }
+            : node,
+        ),
+      );
+      screen.keyboardVisible = visible;
+      if (kind === 'wrapper') screen.coverage = { native: 'complete', react: 'incomplete' };
+      const f = fake([screen], {});
+      if (kind === 'wrapper')
+        f.deps.typeFocused = async () => assert.fail('covered wrapper cannot type');
+      const instruction =
+        kind === 'press'
+          ? 'Tap "login_submit"'
+          : `Fill "${kind === 'wrapper' ? 'field' : 'login_submit'}" with "x"`;
+      const outcome = await walkBlock(block(`1. ${instruction}\n`), f.deps);
+      assert.equal(outcome.block.outcome, 'fail');
+      if (kind === 'wrapper') {
+        assert.match(
+          outcome.failure?.seen ?? '',
+          visible ? /keyboard is already up/ : /keyboard state.*unknown/,
+        );
+        assert.deepEqual(
+          f.calls.filter((call) => call !== 'capture'),
+          [],
+        );
+      } else
+        assert.deepEqual(
+          f.calls.filter((call) => call !== 'capture'),
+          ['scroll down'],
+        );
+    });
+  }
+}
+
+for (const label of ['Return', 'Done']) {
+  test(`an app Button named ${label} has no keyboard exemption`, async () => {
+    const screen = explicitKeyboard(false, (nodes) =>
+      nodes
+        .filter((node) => node.ref !== '@return')
+        .map((node) => (node.ref === '@submit' ? { ...node, label } : node)),
+    );
+    const f = fake([screen], {});
+    const outcome = await walkBlock(block(`1. Tap "${label}"\n`), f.deps);
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.deepEqual(
+      f.calls.filter((call) => call !== 'capture'),
+      ['scroll down'],
+    );
+  });
+}
+
+for (const scenario of ['hidden', 'floating', 'chrome'] as const) {
+  test(`ordinary content retains the existing ${scenario} keyboard boundary`, async () => {
+    const screen = explicitKeyboard(false, (nodes) =>
+      nodes.map((node) => {
+        if (scenario === 'floating' && node.ref === '@keyboard')
+          return { ...node, rect: { x: 250, y: 583, width: 152, height: 233 } };
+        if (scenario === 'chrome' && node.ref === '@submit')
+          return { ...node, rect: { x: 21, y: 820, width: 360, height: 38 } };
+        return node;
+      }),
+    );
+    if (scenario === 'hidden') screen.keyboardVisible = false;
+    const f = fake([screen, done()], {});
+    const outcome = await walkBlock(block('1. Tap "login_submit"\n'), f.deps);
+    assert.equal(outcome.block.outcome, 'pass');
+    assert.deepEqual(
+      f.calls.filter((call) => call !== 'capture'),
+      ['press @submit'],
+    );
+  });
+}
+
+test('a keyboard-owned key outside its trusted viewport still refuses', async () => {
+  const screen = explicitKeyboard(false, (nodes) =>
+    nodes.map((node) =>
+      node.ref === '@kw' ? { ...node, rect: { x: 0, y: 0, width: 402, height: 760 } } : node,
+    ),
+  );
+  const f = fake([screen], {});
+  const outcome = await walkBlock(block('1. Tap "Return"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.deepEqual(
+    f.calls.filter((call) => call !== 'capture'),
+    ['scroll down'],
+  );
+});
+
+for (const mode of ['absent', 'duplicate'] as const) {
+  test(`a ${mode} keyboard key never presses`, async () => {
+    const screen = explicitKeyboard(false, (nodes) =>
+      mode === 'absent'
+        ? nodes.filter((node) => node.ref !== '@return')
+        : [
+            ...nodes,
+            {
+              ...nodes[5],
+              ref: '@other',
+              index: 6,
+              rect: { x: 210, y: 755, width: 80, height: 50 },
+            },
+          ],
+    );
+    const f = fake([screen], {});
+    const outcome = await walkBlock(block('1. Tap "Return"\n'), f.deps);
+    assert.equal(outcome.block.outcome, 'fail');
+    assert.equal(
+      f.calls.some((call) => call.startsWith('press')),
+      false,
+    );
+  });
+}
+
+test('a stale keyboard target refuses without retry or clearance', async () => {
+  const f = fake([explicitKeyboard()], {});
+  f.deps.press = async (ref, context) => {
+    context.authorize();
+    f.calls.push(`press ${ref}`);
+    checkQaNativeOutcome(context, 'KEYBOARD_TARGET_STALE', undefined, undefined, 'none');
+    return { ok: false, proven: false, mutation: 'none', error: 'KEYBOARD_TARGET_STALE' };
+  };
+  const outcome = await walkBlock(block('1. Tap "Return"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.match(outcome.failure?.seen ?? '', /TARGET_MOVED_BEFORE_DISPATCH/);
+  assert.deepEqual(
+    f.calls.filter((call) => call !== 'capture'),
+    ['press @return'],
+  );
+});
+
+test('an unchanged explicit key action does not pass as clearance', async () => {
+  const f = fake([explicitKeyboard()], {});
+  const outcome = await walkBlock(block('1. Tap "Return"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.equal(f.calls.filter((call) => call.startsWith('scroll')).length, 0);
+  assert.equal(
+    outcome.rows.some((row) => row.outcome === 'pass'),
+    false,
+  );
+});
+
+test('a changed key outcome with keyboard still visible cannot clear covered submit', async () => {
+  const after = explicitKeyboard(false, (nodes) =>
+    nodes.map((node) => (node.ref === '@return' ? { ...node, label: 'Next' } : node)),
+  );
+  after.keyboardVisible = true;
+  const f = fake([explicitKeyboard(), after], {});
+  const outcome = await walkBlock(block('1. Tap "Return"\n2. Tap "login_submit"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.deepEqual(
+    f.calls.filter((call) => call !== 'capture'),
+    ['press @return', 'scroll down'],
+  );
+  assert.equal(after.keyboardVisible, true);
+});
+
+for (const timing of ['before', 'after'] as const) {
+  test(`cancel ${timing} explicit key dispatch never resends`, async () => {
+    const f = fake([explicitKeyboard()], {});
+    let cancelled = timing === 'before';
+    f.deps.cancelled = () => cancelled;
+    f.deps.press = async (ref, context) => {
+      context.authorize();
+      f.calls.push(`press ${ref}`);
+      cancelled = true;
+      context.check();
+      return { ok: true, proven: false };
+    };
+    const outcome = await walkBlock(block('1. Tap "Return"\n'), f.deps);
+    assert.notEqual(outcome.block.outcome, 'pass');
+    assert.deepEqual(
+      f.calls.filter((call) => call !== 'capture'),
+      timing === 'before' ? [] : ['press @return'],
+    );
+    assert.match(JSON.stringify(outcome), /RUN_CANCELLED/);
+  });
+}
+
+for (const sent of [false, true]) {
+  test(`expired explicit key evidence ${sent ? 'after' : 'before'} send never dispatches again`, async () => {
+    const f = fake([explicitKeyboard()], {});
+    let now = 0;
+    f.deps.now = () => now;
+    f.deps.press = async (ref, context) => {
+      if (sent) {
+        context.authorize();
+        f.calls.push(`press ${ref}`);
+      }
+      now = context.deadline;
+      context.check();
+      return { ok: true, proven: false };
+    };
+    const outcome = await walkBlock(block('1. Tap "Return"\n'), f.deps);
+    assert.notEqual(outcome.block.outcome, 'pass');
+    assert.deepEqual(
+      f.calls.filter((call) => call !== 'capture'),
+      sent ? ['press @return'] : [],
+    );
+    assert.match(JSON.stringify(outcome), sent ? /ACTION_OUTCOME_UNCERTAIN/ : /EVIDENCE_EXPIRED/);
+  });
+}
+
+test('a valid wrapper fallback keeps native occlusion recovery and never types through coverage', async () => {
+  const screen = explicitKeyboard(false, (nodes) =>
+    nodes.map((node) =>
+      node.ref === '@submit' ? { ...node, identifier: 'field-pressable' } : node,
+    ),
+  );
+  screen.keyboardVisible = true;
+  screen.coverage = { native: 'complete', react: 'incomplete' };
+  const f = fake([screen], { press: [OCCLUDED, OCCLUDED] });
+  f.deps.reactFocused = async () => false;
+  f.deps.typeFocused = async () => assert.fail('covered wrapper cannot type');
+  const outcome = await walkBlock(block('1. Fill "field" with "x"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.match(outcome.failure?.seen ?? '', /FOCUS_TARGET_OCCLUDED.*stayed off screen/);
+  assert.deepEqual(
+    f.calls.filter((call) => call !== 'capture'),
+    ['press @submit', 'scroll down', 'press @submit'],
+  );
+});
+
+test('a key that navigates away cannot substitute for the original explicit submit', async () => {
+  const f = fake([explicitKeyboard(), done()], {});
+  const outcome = await walkBlock(block('1. Tap "Return"\n2. Tap "login_submit"\n'), f.deps);
+  assert.equal(outcome.block.outcome, 'fail');
+  assert.deepEqual(
+    f.calls.filter((call) => call.startsWith('press')),
+    ['press @return'],
+  );
+  assert.match(outcome.failure?.seen ?? '', /login_submit/);
 });

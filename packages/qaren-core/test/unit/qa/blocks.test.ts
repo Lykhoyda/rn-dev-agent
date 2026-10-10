@@ -23,6 +23,7 @@ import {
   storedFits,
   writeBlock,
 } from '../../../dist/qa/blocks.js';
+import { compileFlow } from '../../../dist/flow/compile.js';
 import { parseM7Header } from '../../../dist/domain/reusable-action.js';
 import { ObservedPrivacy, type PrivateSet } from '../../../dist/qa/privacy.js';
 
@@ -687,4 +688,39 @@ test('secure single-character values never withhold structural step numbers', ()
     if (check.kind === 'check') check.text = '1';
     assert.ok('unsavable' in serializeBlock(block, rows, ios, secrets('1')));
   }
+});
+
+test('explicit keyboard key and submit serialize as exactly two canonical presses', () => {
+  const block = blockOf('### Explicit key\n1. Tap "Return"\n2. Tap "login_submit"\n');
+  const selectors = [{ text: 'Return' }, { id: 'login_submit' }];
+  const rows = passRows(
+    block,
+    Object.fromEntries(block.items.map((item, i) => [item.line, selectors[i]])),
+  );
+  const yaml = serialized(block, rows);
+  assert.deepEqual(
+    yaml.split('\n').filter((line) => line.startsWith('- ')),
+    ['- tapOn: { text: "Return" }', '- tapOn: { id: "login_submit" }'],
+  );
+  const stored = readBlock(yaml);
+  assert.ok(!('invalid' in stored), JSON.stringify(stored));
+  assert.deepEqual(
+    stored.steps,
+    block.items.map((item, i) => ({ raw: item.raw, kind: 'press', selector: selectors[i] })),
+  );
+  assert.equal(storedMatches(block, stored), true);
+  const dir = mkdtempSync(join(tmpdir(), 'qaren-key-compile-'));
+  const file = join(dir, 'explicit-key.yaml');
+  writeFileSync(file, yaml);
+  const compiled = compileFlow({ file, params: {}, platform: 'ios' });
+  assert.deepEqual(
+    compiled.steps.map((step) => [step.op, step.selector]),
+    [
+      ['tapOn', { text: 'Return' }],
+      ['tapOn', { id: 'login_submit' }],
+    ],
+  );
+  assert.deepEqual(serializeBlock(block, rows, ios, secrets('Return')), {
+    unsavable: 'contains a protected plan-typed value',
+  });
 });

@@ -696,7 +696,13 @@ extension RnFastRunnerTests {
           label: node.label,
           identifier: node.identifier,
           rect: node.rect,
-          ownerRect: owner
+          ownerRect: owner,
+          keyboardOwned: KeyboardGuard.isKeyboardOwnedButton(
+            type: node.type,
+            index: node.index,
+            parentOf: { byIndex[$0]?.parentIndex },
+            typeOf: { byIndex[$0]?.type }
+          )
         )
       )
     })

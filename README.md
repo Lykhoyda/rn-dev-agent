@@ -6,6 +6,17 @@ backward compatibility with rn-dev-agent 1.x; to move from 1.0.14, follow
 The rn-dev-agent product and marketplace instructions below describe the
 published 1.x release.
 
+## Watch a QaReN run
+
+Watch test stages in a second terminal:
+
+```sh
+qaren watch --latest
+```
+
+See the [watch guide](packages/qaren-cli/README.md#watch-a-run) for selecting a
+run, SSH usage, output modes, privacy, stage semantics and exit codes.
+
 <div align="center">
 
 # rn-dev-agent

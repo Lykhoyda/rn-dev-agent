@@ -9,6 +9,7 @@ export type LedgerPath = 'walk' | 'replay' | `replay→walk@${number}`;
 
 export interface LedgerRow {
   block: string;
+  operationId?: number;
   line: number;
   text: string;
   attempt: number;
@@ -25,6 +26,14 @@ export interface LedgerRow {
   kept?: { typed: number; observed: number[] };
   // Characters typed into a field that changed only their letter case.
   caseNormalized?: { chars: number };
+}
+
+// The value-free announcement that a plan line begins; its row later carries the same operationId.
+export interface StepStart {
+  operationId: number;
+  line: number;
+  kind: LedgerRow['kind'];
+  t: number;
 }
 
 export interface LedgerFailure {
