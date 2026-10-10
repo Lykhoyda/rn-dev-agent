@@ -83,6 +83,21 @@ test('envelopes round-trip with increasing seq after the request', async () => {
   );
 });
 
+test('a step start envelope carries only the value-free line identity', () => {
+  const lines: string[] = [];
+  const writer = createWriter((line) => lines.push(line), 'check-1');
+  writer.start({
+    operationId: 3,
+    line: 2,
+    kind: 'step',
+    t: 500,
+    text: 'Type "secret" into "Email"',
+  } as Parameters<typeof writer.start>[0]);
+  const envelope = parseEnvelope(lines[0].trim());
+  assert.equal(envelope?.type, 'start');
+  assert.deepEqual(envelope?.payload, { operationId: 3, line: 2, kind: 'step', t: 500 });
+});
+
 test('the result verdict and the exit code agree', () => {
   const pass = buildLedger([], []);
   const fail = buildLedger([], [row(1)], { step: 1, seen: 'nothing' });

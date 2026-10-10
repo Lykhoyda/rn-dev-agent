@@ -1,4 +1,4 @@
-use crate::core::{Row, RowTiming};
+use crate::core::{Row, RowTiming, StepStart};
 use crate::receipt::Receipt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -250,6 +250,13 @@ impl Events {
         self.submit("coreT0", json!({ "t0": t0 }));
     }
 
+    pub fn step(&mut self, start: &StepStart) {
+        self.submit(
+            "step",
+            json!({"operationId": start.operation_id, "line": start.line, "kind": token(&start.kind), "t": start.t}),
+        );
+    }
+
     pub fn row(&mut self, row: &Row) {
         let event = RowEvent {
             operation_id: row.operation_id,
@@ -472,6 +479,10 @@ pub fn admitted() {
 
 pub fn core_t0(t0: u64) {
     with(|e| e.core_t0(t0));
+}
+
+pub fn step(start: &StepStart) {
+    with(|e| e.step(start));
 }
 
 pub fn row(row: &Row) {

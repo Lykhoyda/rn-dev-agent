@@ -61,6 +61,7 @@ import {
   type LedgerPath,
   type LedgerRow,
   type Selector,
+  type StepStart,
   buildLedger,
   screenshotName,
 } from './ledger.js';
@@ -106,6 +107,7 @@ export interface WalkerDeps {
   now(): number;
   sleep(ms: number): Promise<void>;
   row(row: LedgerRow): void;
+  start?(start: StepStart): void;
   cancelled?(): boolean;
   diagnostic?(event: WalkerTimingDiagnostic): void;
   timing?: TimingObserver;
@@ -603,13 +605,16 @@ export async function walkBlock(
     }
   };
   let shots = shotIndex;
-  const emit = (row: LedgerRow): void => {
-    let operationId = operations.get(row.line);
+  const operationFor = (line: number): number => {
+    let operationId = operations.get(line);
     if (operationId === undefined) {
       operationId = sequence.operation = (sequence.operation ?? 0) + 1;
-      operations.set(row.line, operationId);
+      operations.set(line, operationId);
     }
-    row = { ...row, operationId };
+    return operationId;
+  };
+  const emit = (row: LedgerRow): void => {
+    row = { ...row, operationId: operationFor(row.line) };
     let timing: RowTiming | undefined;
     try {
       timing = deps.rowTiming?.(row.t);
@@ -1061,6 +1066,12 @@ export async function walkBlock(
     mutationStarted = false;
     attempts: for (;;) {
       line = item.line;
+      deps.start?.({
+        operationId: operationFor(item.line),
+        line: item.line,
+        kind: item.kind === 'check' ? 'check' : 'step',
+        t: deps.now(),
+      });
       let currentAttempt = 1;
       resolvedBy = item.source === 'jev' && !replay ? 'jev' : 'exact';
       if (item.kind === 'fill' && item.text && !typed.includes(item.text)) typed.push(item.text);

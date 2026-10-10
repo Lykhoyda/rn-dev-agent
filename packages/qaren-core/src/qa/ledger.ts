@@ -28,6 +28,14 @@ export interface LedgerRow {
   caseNormalized?: { chars: number };
 }
 
+// The value-free announcement that a plan line begins; its row later carries the same operationId.
+export interface StepStart {
+  operationId: number;
+  line: number;
+  kind: LedgerRow['kind'];
+  t: number;
+}
+
 export interface LedgerFailure {
   step: number;
   seen: string;

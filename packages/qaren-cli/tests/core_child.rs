@@ -1153,6 +1153,54 @@ fn a_malformed_runner_driver_announcement_is_a_protocol_violation() {
 }
 
 #[test]
+fn step_starts_are_telemetry_and_never_ledger_rows() {
+    let repo = common::temp_repo();
+    let rows = [row(1, 1, "pass")];
+    let stdout = format!(
+        "{}\n{}\n{}\n",
+        envelope(
+            2,
+            "start",
+            r#"{"operationId":1,"line":1,"kind":"step","t":50}"#
+        ),
+        envelope(3, "row", &rows[0]),
+        envelope(4, "result", &pass_ledger(&rows))
+    );
+    let mut mock = MockRunner::new();
+    mock.expect_spawn_piped("walk.js", 9000, &stdout, Some(0));
+    let outcome = run_child(&mut mock, &repo.join("core.log"));
+    assert_eq!(outcome.verdict, Verdict::Pass);
+    assert_eq!(outcome.ledger.steps.len(), 1);
+}
+
+#[test]
+fn a_step_start_carrying_anything_but_its_identity_is_a_protocol_violation() {
+    for payload in [
+        r#"{"operationId":1,"line":1,"kind":"step","t":50,"text":"Type \"secret\""}"#,
+        r#"{"operationId":0,"line":1,"kind":"step","t":50}"#,
+        r#"{"operationId":1,"line":0,"kind":"step","t":50}"#,
+        r#"{"operationId":1,"line":1,"kind":"action","t":50}"#,
+    ] {
+        let repo = common::temp_repo();
+        let rows = [row(1, 1, "pass")];
+        let stdout = format!(
+            "{}\n{}\n{}\n",
+            envelope(2, "start", payload),
+            envelope(3, "row", &rows[0]),
+            envelope(4, "result", &pass_ledger(&rows))
+        );
+        let mut mock = MockRunner::new();
+        mock.expect_spawn_piped("walk.js", 9000, &stdout, Some(0));
+        let outcome = run_child(&mut mock, &repo.join("core.log"));
+        assert_eq!(outcome.verdict, Verdict::Fail, "{payload}");
+        assert!(
+            outcome.failure.unwrap().detail.contains("not a step start"),
+            "{payload}"
+        );
+    }
+}
+
+#[test]
 fn a_runner_driver_is_recorded_only_as_this_simulator_s_own_group_leader() {
     let command = "/usr/bin/xcodebuild test-without-building -project R.xcodeproj -destination platform=iOS Simulator,id=AAAA-1111";
     let real = "xcodebuild test-without-building -project /p/RnFastRunner/RnFastRunner.xcodeproj -scheme RnFastRunner -destination platform=iOS Simulator,id=2E24DCF0-C991-4EB0-80CC-CCFEB9042A73 -derivedDataPath /p/build/DerivedData -only-testing:RnFastRunnerUITests/RnFastRunnerTests/testCommand";

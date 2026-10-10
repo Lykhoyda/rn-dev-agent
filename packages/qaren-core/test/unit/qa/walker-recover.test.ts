@@ -6,7 +6,7 @@ import type { Screen } from '../../../dist/qa/screen.js';
 import { NativeCaptureError } from '../../../dist/qa/capture.js';
 import { loginBlock, runPlan, walkBlock } from '../../../dist/qa/walker.js';
 import type { ActResult, WalkerDeps } from '../../../dist/qa/walker.js';
-import type { LedgerRow } from '../../../dist/qa/ledger.js';
+import type { LedgerRow, StepStart } from '../../../dist/qa/ledger.js';
 
 function screen(
   labels: string[],
@@ -128,6 +128,42 @@ test('an unchanged screen with a dialog in front recovers once and the retry pas
   );
   assert.ok(f.rows[0].operationId);
   assert.ok(f.rows.every((row) => row.operationId === f.rows[0].operationId));
+});
+
+test('each line announces a value-free start before its rows, under the same operation', async () => {
+  const covered = screen(['Settings'], 'dialog');
+  const events: string[] = [];
+  const starts: StepStart[] = [];
+  const f = fake(
+    [covered, covered, covered, covered, covered, screen(['Settings']), screen(['Profile'])],
+    {
+      start: (start) => {
+        starts.push(start);
+        events.push(`start ${start.operationId}`);
+      },
+    },
+  );
+  const row = f.deps.row;
+  f.deps.row = (r) => {
+    events.push(`${r.outcome} ${r.operationId}`);
+    row(r);
+  };
+  const ledger = await runPlan([block('1. Tap "Settings"\n✓ "Profile"\n')], f.deps);
+  assert.equal(ledger.verdict, 'PASS');
+  const [tap, check] = [...new Set(f.rows.map((r) => r.operationId))];
+  assert.ok(tap && check && tap !== check);
+  assert.equal(events[0], `start ${tap}`);
+  assert.equal(events.indexOf(`start ${check}`), events.indexOf(`pass ${tap}`) + 1);
+  assert.equal(events.at(-1), `pass ${check}`);
+  assert.deepEqual(
+    starts.map((s) => [s.operationId, s.line, s.kind]),
+    [...starts.slice(0, -1).map(() => [tap, 1, 'step']), [check, 2, 'check']],
+  );
+  assert.ok(
+    starts.every(
+      (s) => JSON.stringify(Object.keys(s).sort()) === '["kind","line","operationId","t"]',
+    ),
+  );
 });
 
 test('a second failure of the same item fails without a second recovery', async () => {

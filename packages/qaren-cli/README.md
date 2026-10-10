@@ -54,8 +54,13 @@ Steps fold by value-free numeric operation identity, keeping login and plan
 operations distinct even when line numbers match. Replay-to-walk retries retain
 the same identity. The latest event in sequence order determines the outcome,
 including recovery that resets the attempt number. Startup line zero is ignored.
+Each plan line streams a value-free start (operation identity, line and kind)
+before it runs, so its row shows as running until its outcome arrives; a
+started line that never reports before the run ends is shown as unfinished.
 
 On a TTY, the view redraws every 250 ms; Ctrl-C exits only the viewer.
+The owner's identity is checked at most every two seconds and never after the
+end event, so a finished run's snapshot does not wait on a process probe.
 `--plain`, non-TTY stdout, `CI` or `NO_COLOR` prints each final stage and step
 attempt once, without escape codes or stdin reads. `--json` prints a single
 folded snapshot and exits immediately, including when the run is live.

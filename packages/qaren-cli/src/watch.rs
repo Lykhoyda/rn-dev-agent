@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::io::{IsTerminal, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const STAGES: [(&str, &str); 11] = [
     ("preflight", "Preflight"),
@@ -87,7 +87,7 @@ fn parse_event(line: &str) -> Option<Input> {
         && envelope.payload.is_object()
         && matches!(
             envelope.event.as_str(),
-            "run" | "stage" | "cmd" | "admitted" | "coreT0" | "row" | "end"
+            "run" | "stage" | "cmd" | "admitted" | "coreT0" | "step" | "row" | "end"
         ))
     .then_some(Input::Event(envelope))
 }
@@ -203,6 +203,30 @@ impl State {
                     },
                 );
             }
+            "step" => {
+                let Some(line) = p["line"].as_u64().filter(|l| *l > 0) else {
+                    return;
+                };
+                let Some(operation_id) = p["operationId"].as_u64().filter(|id| *id > 0) else {
+                    return;
+                };
+                let attempt = self.rows.get(&operation_id).map_or(1, |s| s.attempt);
+                self.rows.insert(
+                    operation_id,
+                    Step {
+                        operation_id,
+                        seq: e.seq,
+                        line,
+                        attempt,
+                        kind: string(p, "kind"),
+                        resolved_by: String::new(),
+                        outcome: "running".into(),
+                        t: p["t"].as_u64().unwrap_or(0),
+                        timing: None,
+                        text: None,
+                    },
+                );
+            }
             "row" => {
                 let Some(line) = p["line"].as_u64().filter(|l| *l > 0) else {
                     return;
@@ -288,8 +312,16 @@ impl State {
                     }
                 }
                 self.end = Some(end);
+                self.settle();
             }
             _ => {}
+        }
+    }
+
+    // A line that started but never reported stays visible without claiming it still runs.
+    fn settle(&mut self) {
+        for step in self.rows.values_mut().filter(|s| s.outcome == "running") {
+            step.outcome = "unfinished".into();
         }
     }
 
@@ -390,7 +422,9 @@ fn stage_line(s: &State, name: &str, label: &str) -> String {
 }
 
 fn step_line(s: &Step) -> String {
-    let result = if s.attempt > 1 {
+    let result = if matches!(s.outcome.as_str(), "running" | "unfinished") {
+        s.outcome.clone()
+    } else if s.attempt > 1 {
         format!("{} (attempt {})", s.resolved_by, s.attempt)
     } else {
         s.resolved_by.clone()
@@ -645,6 +679,7 @@ fn follow(
     out: &mut dyn Write,
     alive: &mut dyn FnMut(Option<&RunRecord>) -> bool,
     poll: Duration,
+    owner_every: Duration,
 ) -> u8 {
     let id = match &args.target {
         Target::RunId(id) if validate_run_id(id).is_ok() => id.clone(),
@@ -673,6 +708,7 @@ fn follow(
     let mut record: Option<RunRecord> = None;
     let mut ledger: Option<crate::core::Ledger> = None;
     let mut plain_mode = args.plain;
+    let mut probed: Option<Instant> = None;
     loop {
         let mtime = regular_file(&record_path)
             .then(|| {
@@ -692,12 +728,17 @@ fn follow(
                 state.fold(input);
             }
         }
-        state.owner_dead = !alive(record.as_ref());
-        if state.owner_dead {
-            for line in tail.lines() {
-                if let Some(input) = parse_event(&line) {
-                    state.fold(input);
+        // A finished run cannot change status, and each owner probe spawns `ps`.
+        if state.end.is_none() && probed.is_none_or(|at| at.elapsed() >= owner_every) {
+            probed = Some(Instant::now());
+            state.owner_dead = !alive(record.as_ref());
+            if state.owner_dead {
+                for line in tail.lines() {
+                    if let Some(input) = parse_event(&line) {
+                        state.fold(input);
+                    }
                 }
+                state.settle();
             }
         }
         state.terminal = record.as_ref().is_some_and(|r| r.terminal.is_some());
@@ -756,6 +797,7 @@ pub fn watch(root: &Path, mut args: WatchArgs) -> u8 {
         &mut std::io::stdout().lock(),
         &mut |r| r.is_none_or(owner_alive),
         Duration::from_millis(250),
+        Duration::from_secs(2),
     )
 }
 
@@ -1419,7 +1461,14 @@ mod tests {
 
     fn follow_out(root: &Path, args: WatchArgs, alive: bool) -> (u8, String) {
         let mut out = Vec::new();
-        let code = follow(root, &args, &mut out, &mut |_| alive, Duration::ZERO);
+        let code = follow(
+            root,
+            &args,
+            &mut out,
+            &mut |_| alive,
+            Duration::ZERO,
+            Duration::ZERO,
+        );
         (code, String::from_utf8(out).unwrap())
     }
 
@@ -1525,13 +1574,14 @@ mod tests {
                         )
                         .unwrap();
                     }
-                    assert!(tick <= 3);
+                    assert!(tick <= 2);
                     true
                 },
                 Duration::ZERO,
+                Duration::ZERO,
             );
             assert_eq!(code, 0);
-            assert_eq!(tick, 3);
+            assert_eq!(tick, 2);
             let out = String::from_utf8(out).unwrap();
             assert!(out.contains("Tap \"Tasks\""), "{out}");
             assert!(out.contains("Type ••• into \"Email\""), "{out}");
@@ -1549,6 +1599,112 @@ mod tests {
             assert_eq!(snapshot["steps"][1]["text"], "Type ••• into \"Email\"");
             std::fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn a_started_step_shows_as_running_until_its_outcome_folds_into_the_row() {
+        let mut lines = reuse_check_live();
+        lines.truncate(26);
+        lines.push(line(
+            27,
+            97_000,
+            "step",
+            json!({"operationId": 7, "line": 7, "kind": "action", "t": 0}),
+        ));
+        let live = folded(&lines);
+        let rendered = frame(&live, 100, 30);
+        assert!(
+            rendered
+                .iter()
+                .any(|l| l.starts_with("▶     7  action    running")),
+            "{rendered:#?}"
+        );
+        assert!(!plain(&live, &mut HashSet::new())
+            .iter()
+            .any(|l| l.contains("running")));
+        let steps = snapshot(&live)["steps"].clone();
+        let started = steps
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["operationId"] == 7);
+        assert_eq!(started.unwrap()["outcome"], "running");
+        lines.push(row(28, 7, 1, "pass", "exact", [500, 400, 0]));
+        let done = folded(&lines);
+        let rendered = frame(&done, 100, 30);
+        assert!(
+            !rendered.iter().any(|l| l.contains("action    running")),
+            "{rendered:#?}"
+        );
+        assert!(rendered
+            .iter()
+            .any(|l| l.starts_with("✓     7  action    exact")));
+        assert_eq!(done.rows.len(), live.rows.len());
+        lines.truncate(27);
+        finish(&mut lines, "fail", Some("RUN_CANCELLED"));
+        let ended = folded(&lines);
+        let rendered = frame(&ended, 100, 30);
+        assert!(
+            rendered
+                .iter()
+                .any(|l| l.starts_with("·     7  action    unfinished")),
+            "{rendered:#?}"
+        );
+        assert!(!rendered.iter().any(|l| l.contains("action    running")));
+    }
+
+    #[test]
+    fn a_finished_run_never_probes_its_owner() {
+        let root = temp_runs("finished-no-probe");
+        let mut lines = reuse_check_live();
+        finish(&mut lines, "fail", Some("PLAN_STEP_FAILED"));
+        std::fs::write(
+            root.join("check-1/logs/events.jsonl"),
+            lines.join("\n") + "\n",
+        )
+        .unwrap();
+        for (is_plain, json) in [(false, true), (true, false)] {
+            let mut probes = 0;
+            let code = follow(
+                &root,
+                &args(is_plain, json),
+                &mut Vec::new(),
+                &mut |_| {
+                    probes += 1;
+                    true
+                },
+                Duration::ZERO,
+                Duration::ZERO,
+            );
+            assert_eq!((code, probes), (0, 0));
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_live_owner_is_probed_once_per_interval_not_per_redraw() {
+        let root = temp_runs("probe-interval");
+        std::fs::write(
+            root.join("check-1/logs/events.jsonl"),
+            reuse_check_live().join("\n") + "\n",
+        )
+        .unwrap();
+        let started = Instant::now();
+        let mut probes = 0;
+        let code = follow(
+            &root,
+            &args(true, false),
+            &mut Vec::new(),
+            &mut |_| {
+                probes += 1;
+                probes < 3
+            },
+            Duration::from_millis(1),
+            Duration::from_millis(40),
+        );
+        assert_eq!((code, probes), (0, 3));
+        assert!(started.elapsed() >= Duration::from_millis(80));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
