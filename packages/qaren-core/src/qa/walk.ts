@@ -486,6 +486,7 @@ async function openSession(
       truncated: data.truncated,
       normalizationDroppedNodes: data.normalizationDroppedNodes,
       snapshotVerdict: meta?.snapshotVerdict,
+      systemModal: meta?.systemModal,
       snapshotDiagnostics: data.snapshotDiagnostics,
       surface: typeof meta?.foregroundSurface === 'string' ? meta.foregroundSurface : undefined,
     };
@@ -547,7 +548,9 @@ async function openSession(
     log(`login block ${request.loginBlock} is missing or unreadable; a login wall fails the step`);
 
   const deps: WalkerDeps = {
+    note: log,
     judge: createJev({ now, timing }),
+    interruptionVeto: !!process.env.TYPESAFE_API_KEY,
     timing,
     publicationInterrupted: admittedSnapshots.interrupted,
     captureScreen: (options) =>
@@ -581,7 +584,9 @@ async function openSession(
     dialog: (action, qaContext) =>
       act(
         () =>
-          action === 'accept' ? accept({ platform, qaContext }) : dismiss({ platform, qaContext }),
+          action === 'accept'
+            ? accept({ platform, qaContext, note: log })
+            : dismiss({ platform, qaContext, note: log }),
         false,
       ),
     ...(platform === 'android'
@@ -609,7 +614,6 @@ async function openSession(
           appProcess: {},
           reactFocused: async (testID: string) =>
             (await readReactInputValue(cdpClientOrNull(getClient), testID))?.focused === true,
-          note: log,
           typeFocused: (ref, text, testID, qaContext, requireFocused) =>
             act(
               () =>
