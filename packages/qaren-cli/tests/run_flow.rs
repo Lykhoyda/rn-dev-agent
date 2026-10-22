@@ -3533,8 +3533,7 @@ fn android_check_reuse_installs_the_cached_apk_by_serial() {
         .env
         .contains(&("ANDROID_SERIAL".to_string(), EMULATOR.to_string())));
     assert!(!mock.piped_stdin_text(0).contains("\"adb\""));
-    let request: serde_json::Value =
-        serde_json::from_str(mock.piped_stdin_text(0).trim()).unwrap();
+    let request: serde_json::Value = serde_json::from_str(mock.piped_stdin_text(0).trim()).unwrap();
     assert!(request["payload"]["target"]
         .get("metroBundleRequests")
         .is_none());
@@ -5148,6 +5147,7 @@ fn boot_device_refreshes_the_selected_state_after_reclaim_shuts_down_the_simulat
         record.scenario.ios = Some(qaren::scenario::IosSpec {
             device_type: "com.apple.CoreSimulator.SimDeviceType.iPhone-17".into(),
             runtime: "com.apple.CoreSimulator.SimRuntime.iOS-26-5".into(),
+            max_devices: None,
         });
         record.resources.ios_simulator = Some(IosSimResource {
             udid: UDID.into(),
