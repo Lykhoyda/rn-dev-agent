@@ -73,6 +73,88 @@ fn clean_target_miss(fields: &Map<String, Value>) -> Option<Value> {
     }))
 }
 
+fn clean_label_provenance(fields: &Map<String, Value>) -> Option<Value> {
+    let line = fields.get("line")?.as_u64()?;
+    if line == 0 || line > MAX_NUMBER as u64 {
+        return None;
+    }
+    let mut clean = Map::new();
+    clean.insert("kind".into(), "label-provenance".into());
+    clean.insert("line".into(), line.into());
+    clean.insert(
+        "requested".into(),
+        fields.get("requested")?.as_bool()?.into(),
+    );
+    for key in ["sampleCount", "nodeIndex"] {
+        let value = fields.get(key)?;
+        if !value.is_null() && value.as_u64().filter(|n| *n <= MAX_NUMBER as u64).is_none() {
+            return None;
+        }
+        clean.insert(key.into(), value.clone());
+    }
+    let deadline = fields.get("deadlineExpired")?;
+    if !deadline.is_null() && !deadline.is_boolean() {
+        return None;
+    }
+    clean.insert("deadlineExpired".into(), deadline.clone());
+    let outcome = fields.get("outcome")?.as_str()?;
+    if ![
+        "available",
+        "unavailable",
+        "ref-unavailable",
+        "process-mismatch",
+        "malformed",
+        "read-failed",
+        "adapter-unavailable",
+        "baseline-unavailable",
+        "identity-mismatch",
+        "observation-unavailable",
+        "deadline",
+        "not-hittable",
+        "match-count-mismatch",
+        "post-hit-mismatch",
+        "read-unavailable",
+        "ineligible",
+        "enumeration-incomplete",
+        "clipped",
+        "keyboard-covered",
+        "empty-frame",
+        "ambiguous-descriptor",
+    ]
+    .contains(&outcome)
+    {
+        return None;
+    }
+    clean.insert("outcome".into(), outcome.into());
+    let names = fields.get("differedFields")?.as_array()?;
+    let allowed = [
+        "type",
+        "identifier",
+        "label",
+        "value",
+        "frame",
+        "enabled",
+        "depth",
+        "parentIndex",
+        "labelSource",
+        "selected",
+        "secure",
+        "editable",
+        "visibleToUser",
+        "clickable",
+    ];
+    if names.len() > allowed.len() {
+        return None;
+    }
+    for (index, name) in names.iter().enumerate() {
+        if !allowed.contains(&name.as_str()?) || names[..index].contains(name) {
+            return None;
+        }
+    }
+    clean.insert("differedFields".into(), names.clone().into());
+    Some(clean.into())
+}
+
 const MAX_NUMBER: f64 = 9_007_199_254_740_991.0;
 const STAGES: &[&str] = &[
     "walk",
@@ -247,6 +329,9 @@ const ADMISSION_KEYS: &[&str] = &[
 fn clean(value: &Value) -> Option<Value> {
     let fields = value.as_object()?;
     let kind = fields.get("kind")?.as_str()?;
+    if kind == "label-provenance" {
+        return clean_label_provenance(fields);
+    }
     if kind == "target-miss" {
         return clean_target_miss(fields);
     }
@@ -447,7 +532,12 @@ impl Sink {
         let Some(event) = clean(payload) else {
             return;
         };
-        if self.file.is_none() && payload["kind"] == "target-miss" {
+        if self.file.is_none()
+            && matches!(
+                payload["kind"].as_str(),
+                Some("target-miss" | "label-provenance")
+            )
+        {
             self.file = private_file(&self.path);
         }
         let Some(file) = &mut self.file else {

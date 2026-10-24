@@ -577,9 +577,33 @@ that control's echo only when native presence proves its label comes from descen
 With the same proven descendant provenance, quoted label presses can also collapse
 an identified native container into a smaller, enabled, visible, hittable descendant
 control when tree ancestry, frame containment and whole label segments agree.
-Quoted label presses request platform-presence capture to obtain this provenance
-without requiring the complete native presence that phrase targets require;
-native acquisition and privacy admission still apply. Direct or unknown label
+Quoted label presses first use an ordinary capture with the full native privacy
+admission. A potential merged-label container candidate then requests label
+provenance metadata only for the named candidates. This read takes no screenshot,
+reads no React tree, and cannot authorize media or replace the ordinary privacy
+observation. It retains that snapshot's references, generation and dispatch
+expiry. Both native producers require live candidate observations that match the
+ordinary identities and agree across their last two samples; changes to unrelated
+nodes do not invalidate that agreement. On iOS, candidate indices and parent
+indices use the ordinary snapshot's retained filtering and deduplication options,
+rather than raw-tree positions. iOS sample stability compares label source,
+parent link and frame; ordinary identity guards and each live candidate observation
+remain mandatory, while unrelated value or enabled-state changes between samples
+do not invalidate provenance. Missing, changing or unavailable candidate
+provenance fails as `TARGET_AMBIGUOUS`, with no press and no
+`PRIVATE_INPUT_CAPTURE_UNKNOWN` from the metadata read. Ordinary privacy failures
+still refuse that capture. A subsequent ordinary capture must pass admission
+before screenshots can resume. A private `label-provenance` diagnostic records
+whether a read was requested, the sample count, candidate index, differing field
+names, deadline state and a fixed outcome code, without labels, identifiers,
+values or pixels; unavailable counts and deadline state are `null`. These events
+are retained in `core-diagnostics.jsonl` even without runtime inputs.
+
+Unique quoted targets that ordinary capture resolves need no provenance read.
+Post-action effects use the ordinary projection on both sides of a quoted press,
+so metadata alone cannot prove navigation or an alert callback. Semantic
+phrase-action readbacks retain their existing full presence and privacy admission.
+Direct or unknown label
 provenance keeps differently framed candidates distinct. A native ancestor and
 hittable descendant with the exact same label and frame are one tap target and
 resolve to the inner control. Multiple distinct children remain ambiguous.
@@ -1301,9 +1325,12 @@ acquisition failures also refuse without reinjection or a public-tree fallback.
 
 A required private capture re-reads a canonical empty snapshot (`nodes=[]`,
 verdict `degraded`, `nodeCount=0`, reasons exactly `empty-capture`, no truncation
-or dropped nodes), or an iOS `RN_FAST_RUNNER_DOWN` failure marked as pending
-runner relaunch recovery, at 500 ms intervals within the existing 6-second settle
-budget and remaining total capture budget. Both conditions share one retry
+or dropped nodes), a structurally valid incomplete version-2 snapshot on the
+platform-presence route with no truncation or dropped nodes, a consistent node
+count, a known matching generation and withheld keyboard state, or an iOS
+`RN_FAST_RUNNER_DOWN` failure marked as pending runner relaunch recovery, at
+500 ms intervals within the existing 6-second settle budget and remaining total
+capture budget. These conditions share one retry
 deadline; re-reads on both ordinary and platform-presence routes, including
 readiness probes and snapshot transport, stop waiting at that deadline.
 After timeout containment relaunches the iOS reader, it waits for an `alive`
@@ -1313,8 +1340,26 @@ the type call retains its existing result. Persistent runner unavailability
 refuses with `NATIVE_CAPTURE_UNAVAILABLE` after the capture retry budget.
 An empty snapshot's unchanged ref map and zero-node count
 diagnostics do not prevent this read-only retry; persistent emptiness still
-refuses with the same code and message, and other incomplete captures refuse
-immediately.
+refuses with the same code and message. Persistent incomplete presence refuses
+with `PRIVATE_INPUT_CAPTURE_UNKNOWN`, naming the unknown keyboard state and any
+known acquisition phase, failure reason or deadline read using fixed codes.
+If the retry deadline cuts off a read, the refusal retains the last incomplete
+presence snapshot's fixed causes and adds `retry-deadline` without returning that
+snapshot as usable evidence.
+Where presence is required after a system dialog closes, iOS native preparation
+compares consecutive full enumerations and waits for a 500 ms quiet window before
+observing candidates. Any descriptor or hierarchy change resets that quiet window
+without renewing the existing presence deadline. Revalidation after observation
+still rejects a changed enumeration. For candidate-only label provenance, follow
+the quoted-label contract in [Check a plan](#check-a-plan); metadata cannot replace
+ordinary privacy admission or lift screenshot withholding. Semantic phrase-action
+readbacks still require full platform presence and privacy admission.
+Only a fresh, complete snapshot can establish privacy or admit a newly arrived
+system alert; partial presence never authorizes actions, screenshots or model
+evidence. Malformed, truncated, dropped-node and other incomplete captures refuse
+immediately. The [capture implementation](../qaren-core/src/qa/capture.ts) owns
+retry eligibility; [settle regressions](../qaren-core/test/unit/qa/private-empty-reread.test.ts)
+cover these boundaries.
 
 A non-advisory platform-presence response with `RUNNER_TIMEOUT` or a message
 containing `main thread execution timed out` now attempts the same poisoning,

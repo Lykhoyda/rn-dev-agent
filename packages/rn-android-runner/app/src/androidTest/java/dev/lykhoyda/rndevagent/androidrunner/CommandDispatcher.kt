@@ -159,7 +159,11 @@ class CommandDispatcher(
         val data = when (command) {
             // Fork A: QA reads take one live traversal of the windows; device tools keep the XML dump.
             "snapshot" -> if (cmd.optBoolean("qaReadOnly", false)) {
-                qaSnapshot(appPackage!!, if (cmd.has("platformPresence")) cmd.getInt("presenceBudgetMs") else null)
+                if (cmd.has("labelProvenance")) {
+                    qaLabelProvenance(appPackage!!, cmd)
+                } else {
+                    qaSnapshot(appPackage!!, if (cmd.has("platformPresence")) cmd.getInt("presenceBudgetMs") else null)
+                }
             } else {
                 snapshot(appPackage)
             }
@@ -315,6 +319,91 @@ class CommandDispatcher(
     }
 
     private var qaSnapshotGeneration = 0
+    private var qaSnapshotNodes: List<QaHierarchy.QaNode> = emptyList()
+
+    private fun qaLabelProvenance(appPackage: String, cmd: JSONObject): JSONObject {
+        val result = JSONObject()
+        val started = SystemClock.uptimeMillis()
+        val budget = cmd.optInt("presenceBudgetMs", 0)
+        val diagnostic = JSONObject().put("sampleCount", 0).put("nodeIndex", JSONObject.NULL)
+            .put("fieldMask", 0).put("deadlineExpired", false).put("outcome", "unavailable")
+        fun finish(outcome: String): JSONObject {
+            val expired = SystemClock.uptimeMillis() - started >= budget
+            diagnostic.put("deadlineExpired", expired).put("outcome", if (expired) "deadline" else outcome)
+            if (expired) result.remove("labelProvenance")
+            return result.put("labelProvenanceDiagnostics", diagnostic)
+        }
+        val requested = cmd.optJSONArray("labelProvenance") ?: return finish("baseline-unavailable")
+        val indices = (0 until requested.length()).map { requested.optInt(it, -1) }
+        if (!cmd.optBoolean("platformPresence") || cmd.optInt("snapshotGeneration", -1) != qaSnapshotGeneration ||
+            indices.isEmpty() || indices.size > 64 || indices.distinct().size != indices.size ||
+            indices.any { it !in qaSnapshotNodes.indices }) return finish("baseline-unavailable")
+        val baseline = indices.map { qaSnapshotNodes[it] }
+        var previous: List<QaHierarchy.QaNode>? = null
+        var previousSources: List<String>? = null
+        while (SystemClock.uptimeMillis() - started < budget) {
+            val handles = mutableListOf<AccessibilityNodeInfo>()
+            try {
+                val enumerated = enumerateQa(appPackage, handles) ?: return finish("read-unavailable")
+                val (windows, assembled, exhausted) = enumerated
+                diagnostic.put("sampleCount", diagnostic.getInt("sampleCount") + 1)
+                if (!assembled.eligible || assembled.truncated || exhausted ||
+                    indices.any { it !in assembled.nodes.indices }) return finish("enumeration-incomplete")
+                val selected = indices.map { assembled.nodes[it] }
+                val pass = PresencePass(appPackage, qaSnapshotGeneration, started, budget,
+                    windows, assembled, exhausted, indices.toSet()).run()
+                val sources = indices.map { pass.node(it).optString("labelSource") }
+                val observed = indices.all { pass.node(it).optString("status") == "observed" }
+                val comparison = if (PresenceRules.sameEnumeration(baseline, selected)) previous else baseline
+                comparison?.indices?.firstOrNull { !PresenceRules.sameEnumeration(listOf(comparison[it]), listOf(selected[it])) }?.let { offset ->
+                    diagnostic.put("nodeIndex", indices[offset]).put("fieldMask", candidateFieldMask(comparison[offset], selected[offset]))
+                }
+                previousSources?.indices?.firstOrNull { previousSources?.get(it) != sources[it] }?.let { offset ->
+                    val mask = if (diagnostic.optInt("nodeIndex", -1) == indices[offset]) diagnostic.getInt("fieldMask") else 0
+                    diagnostic.put("nodeIndex", indices[offset]).put("fieldMask", mask or 256)
+                }
+                if (!observed) {
+                    diagnostic.put("nodeIndex", indices.first { pass.node(it).optString("status") != "observed" })
+                }
+                if (observed && PresenceRules.sameEnumeration(baseline, selected)) {
+                    if (previous != null && PresenceRules.sameEnumeration(previous, selected) && previousSources == sources) {
+                        result.put("labelProvenance", JSONArray().apply {
+                            indices.forEachIndexed { offset, index -> put(JSONObject().put("index", index).put("labelSource", sources[offset])) }
+                        })
+                        return finish("available")
+                    }
+                    previous = selected.map { it.copy(source = null) }
+                    previousSources = sources
+                } else {
+                    previous = null
+                    previousSources = null
+                }
+            } finally {
+                if (Build.VERSION.SDK_INT < 33) handles.forEach { it.recycle() }
+            }
+            val remaining = budget - (SystemClock.uptimeMillis() - started)
+            if (remaining <= 0) break
+            SystemClock.sleep(minOf(100L, remaining))
+        }
+        return finish("unavailable")
+    }
+
+    private fun candidateFieldMask(a: QaHierarchy.QaNode, b: QaHierarchy.QaNode): Int {
+        var mask = 0
+        if (a.type != b.type) mask = mask or 1
+        if (a.identifier != b.identifier) mask = mask or 2
+        if (a.label != b.label) mask = mask or 4
+        if (a.rect != b.rect) mask = mask or 16
+        if (a.enabled != b.enabled) mask = mask or 32
+        if (a.depth != b.depth) mask = mask or 64
+        if (a.parentIndex != b.parentIndex) mask = mask or 128
+        if (a.selected != b.selected) mask = mask or 512
+        if (a.secure != b.secure) mask = mask or 1024
+        if (a.editable != b.editable) mask = mask or 2048
+        if (a.visibleToUser != b.visibleToUser) mask = mask or 4096
+        if (a.clickable != b.clickable) mask = mask or 8192
+        return mask
+    }
 
     // presenceBudgetMs: when set, the A11Y_PRESENCE_V2 pass runs after enumeration within that budget.
     private fun qaSnapshot(appPackage: String, presenceBudgetMs: Int?): JSONObject {
@@ -331,6 +420,7 @@ class CommandDispatcher(
                 )
             val (windows, assembled, exhausted) = enumerated
             qaSnapshotGeneration += 1
+            qaSnapshotNodes = assembled.nodes.map { it.copy(source = null) }
             val presence = presenceBudgetMs?.let {
                 PresencePass(appPackage, qaSnapshotGeneration, started, it, windows, assembled, exhausted).run()
             }
@@ -390,6 +480,7 @@ class CommandDispatcher(
         private val windows: List<QaHierarchy.RawWindow>,
         private val assembled: QaHierarchy.Assembled,
         private val exhausted: Boolean,
+        private val candidateIndices: Set<Int>? = null,
     ) {
         private val captureId = "android-${java.util.UUID.randomUUID()}"
         private val phaseMs = JSONObject()
@@ -429,6 +520,7 @@ class CommandDispatcher(
                 val groups = PresenceRules.descriptorGroups(nodes)
                 val keyboard = nodes.firstOrNull { it.type == "Keyboard" && it.source == null }?.rect
                 observations = nodes.mapIndexed { index, node ->
+                    if (candidateIndices != null && index !in candidateIndices) return@mapIndexed observations[index]
                     if (failure != null || expired("observation", "observation")) return@mapIndexed observations[index]
                     PresenceRules.observe(node, labelSources[index], groups[index], keyboard) { live(nodes, index) }
                         .also { if (it.observed) observedAt[index] = SystemClock.uptimeMillis() }
@@ -443,7 +535,7 @@ class CommandDispatcher(
                 }
             }
             phase("revalidation") {
-                if (!expired("revalidation", "revalidation")) {
+                if (candidateIndices == null && !expired("revalidation", "revalidation")) {
                     val handles = mutableListOf<AccessibilityNodeInfo>()
                     try {
                         val again = enumerateQa(appPackage, handles)
