@@ -964,7 +964,11 @@ async function walkBlockScoped(
     assertActive();
     return shot;
   };
-  const visibilityProbe = (item: Item & { kind: 'wait' | 'scroll' }, deadline = Infinity) => {
+  const visibilityProbe = (
+    item: Item & { kind: 'wait' | 'scroll' },
+    deadline = Infinity,
+    checkObservation?: (screen: Screen) => void,
+  ) => {
     let reasks = 0;
     return async (
       observation: Observation,
@@ -972,6 +976,7 @@ async function walkBlockScoped(
     ): Promise<{ observation: Observation; found: boolean; unsure?: boolean }> => {
       let decision = initial;
       while (deps.now() < deadline) {
+        checkObservation?.(observation.screen);
         try {
           decision = await decide(observation, undefined, item, deadline, decision);
         } catch (error) {
@@ -1763,7 +1768,17 @@ async function walkBlockScoped(
           const held = cached?.item === item ? cached : undefined;
           let observation = held?.observation ?? (await capture(item));
           cached = undefined;
-          const probe = visibilityProbe(item, deadline);
+          let beforeScroll: { screen: Screen; container?: Element } | undefined;
+          const probe = visibilityProbe(item, deadline, (screen) => {
+            if (!beforeScroll) return;
+            const navigation = scrollNavigationChange(
+              beforeScroll.screen,
+              screen,
+              beforeScroll.container,
+            );
+            if (navigation)
+              throw new ResolutionError({ refuse: 'SCROLL_NAVIGATED', reason: navigation });
+          });
           let replayMiss: ResolutionError | undefined;
           let unsure = false;
           const visible = async (s: Observation, initial?: ScreenDecision): Promise<boolean> => {
@@ -1792,7 +1807,7 @@ async function walkBlockScoped(
           let attempts = 0;
           const container = scrollUntilContainer(item.until, observation.screen);
           while (!found && attempts < SCROLL_ATTEMPTS && deps.now() < deadline) {
-            const beforeScreen = observation.screen;
+            beforeScroll = { screen: observation.screen, container };
             const beforeSignature = screenSignature(observation.screen);
             let act: ActResult;
             if (observation.screen.front === 'dialog') throw dialogInFront(item.until.phrase);
@@ -1826,9 +1841,6 @@ async function walkBlockScoped(
             await pause(Math.min(WAIT_POLL_MS, Math.max(0, deadline - deps.now())));
             if (deps.now() >= deadline) throw replayMiss ?? new EvidenceExpired(true);
             observation = await capture(item);
-            const navigation = scrollNavigationChange(beforeScreen, observation.screen, container);
-            if (navigation)
-              throw new ResolutionError({ refuse: 'SCROLL_NAVIGATED', reason: navigation });
             found = await visible(observation);
             const moved = screenSignature(observation.screen) !== beforeSignature;
             if (!act.ok && !moved)
