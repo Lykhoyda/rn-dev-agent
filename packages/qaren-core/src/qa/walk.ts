@@ -648,11 +648,11 @@ async function openSession(
     presenceUnavailable: platform === 'android',
     timing,
     publicationInterrupted: admittedSnapshots.interrupted,
-    readLabelProvenance: async (refs, deadline) => {
+    readLabelProvenance: async (refs, deadline, report) => {
       const budget = Math.min(20_000, Math.floor(deadline - now()));
       if (budget <= 0) return undefined;
       const read = platform === 'ios' ? readIOSLabelProvenance : readAndroidLabelProvenance;
-      return stop.track(() => read(refs, budget, appId, target.deviceId));
+      return stop.track(() => read(refs, budget, appId, target.deviceId, report));
     },
     captureScreen: (options) =>
       stop.track(() =>
@@ -715,6 +715,7 @@ async function openSession(
     },
     blockOutcome: diagnostic,
     targetMiss: diagnostic,
+    labelProvenanceDiagnostic: diagnostic,
     loginOutcome: (outcome) => diagnostic({ kind: 'login-outcome', outcome }),
     hideDevMenu: () => act(() => recoverDevOverlays(overlays), false),
     ...(login ? { login } : {}),

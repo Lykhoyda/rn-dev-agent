@@ -1,3 +1,4 @@
+import { cleanProvenanceReadDiagnostic } from './label-provenance.js';
 import { NATIVE_CODES, REFUSAL_STAGES } from '../domain/qa-dispatch.js';
 import { cleanTimingEvent } from './timing.js';
 import { isRecord } from './questions.js';
@@ -26,6 +27,12 @@ const DISPATCH_CODES = [
 
 export function cleanDiagnostic(value: unknown): Record<string, unknown> | undefined {
   if (!isRecord(value)) return undefined;
+  if (value.kind === 'label-provenance') {
+    const event = cleanProvenanceReadDiagnostic(value);
+    return event && Number.isSafeInteger(value.line) && (value.line as number) > 0
+      ? { kind: 'label-provenance', line: value.line, ...event }
+      : undefined;
+  }
   if (value.kind === 'target-miss') return cleanTargetMiss(value);
   const number = (key: string): boolean =>
     typeof value[key] === 'number' &&
