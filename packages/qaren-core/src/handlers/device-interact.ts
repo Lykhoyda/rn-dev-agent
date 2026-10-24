@@ -1034,8 +1034,9 @@ export interface FillArgs {
   vetoUnfocused?: boolean;
   requireFocused?: boolean;
   skipFinalValidation?: boolean;
-  /** Replace the field's content instead of appending (focused: the runner's select-all sequence). */
+  /** Replace the field's content instead of appending. */
   clearFirst?: boolean;
+  privateValue?: boolean;
   /** Story 04 (#385): per-call settle budget override in ms. */
   settleTimeoutMs?: number;
 }
@@ -1492,15 +1493,27 @@ export async function performExactFill(
 export async function readReactInputValue(
   client: CDPClient | null,
   testID: string | null | undefined,
-): Promise<{ value: string | null; controlled: boolean; focused: boolean } | null> {
+  options?: { focusOnly?: boolean; privateValue?: boolean; protectSecure?: boolean },
+): Promise<{
+  value: string | null;
+  controlled: boolean;
+  focused: boolean;
+  privateValue?: boolean;
+} | null> {
   if (!client || !testID) return null;
   try {
-    const result = await client.evaluate('__QAREN.readInputValue(' + JSON.stringify(testID) + ')');
+    const result = await client.evaluate(
+      '__QAREN.readInputValue(' +
+        JSON.stringify(testID) +
+        (options ? ',' + JSON.stringify(options) : '') +
+        ')',
+    );
     if (result.error || typeof result.value !== 'string') return null;
     const parsed: {
       value?: string | null;
       controlled?: boolean;
       focused?: boolean;
+      privateValue?: boolean;
       __agent_error?: string;
     } = JSON.parse(result.value);
     if (parsed.__agent_error) return null;
@@ -1508,6 +1521,7 @@ export async function readReactInputValue(
       value: parsed.value ?? null,
       controlled: parsed.controlled === true,
       focused: parsed.focused === true,
+      ...(parsed.privateValue === true ? { privateValue: true } : {}),
     };
   } catch {
     return null;
@@ -1614,39 +1628,65 @@ export async function performFocusedFill(
   }
   const oracleTestId = focusedFillOracleTestId(args);
   let before: string | null = null;
-  let beforeFocused = false;
-  const focusedProof = async (): Promise<boolean> => {
-    const read = await readReactInputValue(client, oracleTestId);
+  let privateValue = args.privateValue === true;
+  let expectedBeforeClear: string | null | undefined;
+  const focusedProof = async (focusOnly = false): Promise<boolean> => {
+    const read = await readReactInputValue(client, oracleTestId, {
+      protectSecure: true,
+      ...(focusOnly ? { focusOnly: true } : {}),
+      ...(privateValue ? { privateValue: true } : {}),
+    });
+    if (focusOnly) return read?.focused === true;
+    privateValue ||= read?.privateValue === true;
     before = controlledReactValue(read);
-    beforeFocused = read?.focused === true;
-    return !(
-      (args.requireFocused && read?.focused !== true) ||
-      (args.vetoUnfocused && read && !read.focused)
+    return (
+      read?.focused === true &&
+      (expectedBeforeClear === undefined || before === expectedBeforeClear)
     );
   };
-  // clearFirst requests one select-all and text sequence in the runner.
-  const native = await runNative(
-    ['fill', args.ref, args.text, ...(args.clearFirst ? ['--clear-first'] : [])],
-    {
+  const dispatchFill = async (deleteCount?: number, observed?: string): Promise<ToolResult> => {
+    expectedBeforeClear = observed;
+    if (args.clearFirst) {
+      if (!(await focusedProof())) {
+        return failResult(
+          'The intended input is not focused; no text was entered.',
+          'NO_TEXT_INPUT_TARGET',
+          { mutation: 'none' },
+        );
+      }
+      expectedBeforeClear = before;
+      deleteCount ??= before?.length || undefined;
+      if (deleteCount !== undefined && deleteCount > 256) {
+        return failResult(
+          'Focused replacement exceeds its bounded clear budget.',
+          'TEXT_ENTRY_UNVERIFIED',
+          { mutation: 'none' },
+        );
+      }
+    }
+    return runNative(['fill', args.ref, args.text, ...(args.clearFirst ? ['--clear-first'] : [])], {
       qaContext: args.qaContext,
       qaTiming: args.qaTiming,
       focusedType: true,
       focusedProof,
+      focusedDeleteCount: deleteCount,
       settle: { enabled: false },
-    },
-  );
+    });
+  };
+  const native = await dispatchFill();
   if (native.isError) {
     const mutation = extractMutationDisposition(native);
     if (mutation === 'none') {
+      const code = extractErrorCode(native);
       return fillFailure(
-        extractErrorCode(native) === 'TARGET_AMBIGUOUS'
-          ? 'TARGET_AMBIGUOUS'
+        code === 'TARGET_AMBIGUOUS' || code === 'TEXT_ENTRY_UNVERIFIED'
+          ? code
           : 'NO_TEXT_INPUT_TARGET',
         extractErrorText(native),
         {
           mutation: 'none',
           pathsTried,
-          ...(extractErrorCode(native) === 'TEXT_SYNTHESIS_UNAVAILABLE'
+          ...(code === 'TEXT_SYNTHESIS_UNAVAILABLE'
             ? {
                 hint: 'No text was entered. This Xcode cannot synthesize text, so device_fill focused: true cannot type here. Do not retry focused: true.',
               }
@@ -1676,7 +1716,26 @@ export async function performFocusedFill(
       'Typed into the focused field; the value could not be confirmed. Confirm with device_screenshot or expect_text before relying on it.',
     );
   const initialBefore = before;
-  if (initialBefore === null || !beforeFocused) {
+  const boundedClear = async (
+    deleteCount: number,
+    observed: string,
+  ): Promise<ToolResult | null> => {
+    if (deleteCount < 1 || deleteCount > 256 || args.qaContext?.expired) {
+      return fillFailure(
+        'TEXT_ENTRY_UNVERIFIED',
+        'Focused replacement could not clear within its bounded budget.',
+        { mutation: 'observed', pathsTried },
+      );
+    }
+    const result = await dispatchFill(deleteCount, observed);
+    return result.isError
+      ? fillFailure('TEXT_ENTRY_UNVERIFIED', extractErrorText(result), {
+          mutation: extractMutationDisposition(result) === 'none' ? 'observed' : 'possible',
+          pathsTried,
+        })
+      : null;
+  };
+  if (privateValue || initialBefore === null) {
     await measureTiming(
       args.qaTiming?.observe,
       args.qaTiming?.now ?? (() => performance.now()),
@@ -1694,7 +1753,10 @@ export async function performFocusedFill(
       'type-readback',
       () =>
         measureDispatchPhase('dispatch-readback', args.qaContext?.line, () =>
-          awaitReactInputValue(() => readReactInputValue(client, oracleTestId), expected),
+          awaitReactInputValue(
+            () => readReactInputValue(client, oracleTestId, { protectSecure: true, privateValue }),
+            expected,
+          ),
         ),
       (result) =>
         result.verdict === 'exact'
@@ -1709,28 +1771,34 @@ export async function performFocusedFill(
       verifiedOracle: 'react-tree',
       textEntryRoute,
     });
-  const retainedPrefixFailure = (
+  const retainedPrefix = (
     verification: Awaited<ReturnType<typeof readBack>>,
     dispatchBefore: string | null,
-  ) => {
-    if (
-      args.clearFirst &&
-      verification.verdict === 'mismatch' &&
-      [initialBefore, dispatchBefore].some(
-        (value) => value !== null && value !== '' && verification.observed === value + args.text,
-      )
-    ) {
-      return fillFailure(
-        'TEXT_ENTRY_UNVERIFIED',
-        'device_fill requested replacement but the focused field retained its prior value before the typed text; not retrying.',
-        { mutation: 'observed', pathsTried },
-      );
-    }
-  };
+  ) =>
+    args.clearFirst &&
+    verification.verdict === 'mismatch' &&
+    verification.observed !== undefined &&
+    verification.observed.endsWith(args.text) &&
+    verification.observed.length > args.text.length &&
+    [initialBefore, dispatchBefore].some(
+      (value) =>
+        value !== null && value.startsWith(verification.observed!.slice(0, -args.text.length)),
+    );
+  const replacementFailure = () =>
+    fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      'device_fill could not verify replacement after one clear-and-retype; not retrying.',
+      { mutation: 'observed', pathsTried },
+    );
   const verification = await readBack();
   if (verification.verdict === 'exact') return verified();
-  const retained = retainedPrefixFailure(verification, initialBefore);
-  if (retained) return retained;
+  if (retainedPrefix(verification, initialBefore)) {
+    const observed = verification.observed!;
+    const failure = await boundedClear(observed.length, observed);
+    if (failure) return failure;
+    const cleared = await readBack();
+    return cleared.verdict === 'exact' ? verified() : replacementFailure();
+  }
   const caseNormalized =
     verification.verdict === 'mismatch' && caseOnly(verification.observed, expected)
       ? { caseNormalizedChars: [...expected].length }
@@ -1756,14 +1824,8 @@ export async function performFocusedFill(
       { mutation: 'observed', pathsTried },
     );
   if (args.qaContext?.expired) return lost(first, '; no step time remained to retype');
-  const retyped = await runNative(['fill', args.ref, args.text, '--clear-first'], {
-    qaContext: args.qaContext,
-    qaTiming: args.qaTiming,
-    focusedType: true,
-    focusedProof,
-    settle: { enabled: false },
-  });
-  const retypeBefore = beforeFocused ? before : null;
+  const retyped = await dispatchFill();
+  const retypeBefore = before;
   if (retyped.isError) {
     return extractMutationDisposition(retyped) === 'none'
       ? lost(first, '; the retype was refused')
@@ -1774,8 +1836,7 @@ export async function performFocusedFill(
   }
   const second = await readBack();
   if (second.verdict === 'exact') return verified();
-  const retainedAfterRetype = retainedPrefixFailure(second, retypeBefore);
-  if (retainedAfterRetype) return retainedAfterRetype;
+  if (retainedPrefix(second, retypeBefore)) return replacementFailure();
   const held = droppedLength(second.observed, expected);
   if (held === undefined) return unverified();
   // The same loss twice is the field's own stripping or maxLength: unverified, with the lengths disclosed.

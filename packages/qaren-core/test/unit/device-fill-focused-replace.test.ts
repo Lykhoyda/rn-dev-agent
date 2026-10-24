@@ -26,16 +26,21 @@ async function run(
     mutation?: 'none' | 'possible';
     requireFocused?: boolean;
     clearFirst?: boolean;
+    privateValue?: boolean;
+    secureValue?: boolean;
+    text?: string;
   } = {},
-): Promise<{ env: any; dispatched: string[][] }> {
+): Promise<{ env: any; dispatched: string[][]; clearCounts: (number | undefined)[] }> {
   _setActiveSessionForTest({ platform: 'ios', deviceId: 'TEST-DEVICE', appId: 'com.test' });
   clearRefMap();
   markSnapshotDirty();
   updateRefMapFromFlat(WRAPPER_ONLY as never, { snapshotGeneration: 7, keyboardVisible: true });
   const dispatched: string[][] = [];
-  _setRunAgentDeviceForTest(async (cliArgs: string[]) => {
+  const clearCounts: (number | undefined)[] = [];
+  _setRunAgentDeviceForTest(async (cliArgs: string[], opts: { focusedDeleteCount?: number }) => {
     if (cliArgs[0] !== 'fill') return okResult({ nodes: WRAPPER_ONLY });
     dispatched.push(cliArgs.slice(2));
+    clearCounts.push(opts.focusedDeleteCount);
     if (options.mutation)
       return failResult('Replacement refused', 'TEXT_SYNTHESIS_UNAVAILABLE', {
         mutation: options.mutation,
@@ -44,7 +49,13 @@ async function run(
   });
   const client = {
     isConnected: true,
-    evaluate: async () => {
+    evaluate: async (expression: string) => {
+      const [, probeOptions] = JSON.parse(
+        '[' + expression.slice('__QAREN.readInputValue('.length, -1) + ']',
+      );
+      const protectedValue =
+        probeOptions.privateValue === true ||
+        (options.secureValue === true && probeOptions.protectSecure === true);
       const after = options.after;
       const read =
         dispatched.length > 0 && 'after' in options
@@ -55,9 +66,10 @@ async function run(
       return read
         ? {
             value: JSON.stringify({
-              value: read.value,
-              controlled: read.value !== null,
+              value: protectedValue ? null : read.value,
+              controlled: protectedValue ? false : read.value !== null,
               focused: read.focused,
+              ...(protectedValue ? { privateValue: true } : {}),
             }),
           }
         : { error: 'unreadable' };
@@ -67,17 +79,18 @@ async function run(
     const result = await performFocusedFill(
       {
         ref: '@e1',
-        text: 'real@example.test',
+        text: options.text ?? 'real@example.test',
         testID: 'qa-hidden-email',
         focused: true,
         vetoUnfocused: true,
         ...(options.requireFocused ? { requireFocused: true } : {}),
         skipFinalValidation: true,
         clearFirst: options.clearFirst ?? true,
+        privateValue: options.privateValue,
       },
       client,
     );
-    return { env: JSON.parse(result.content[0].text), dispatched };
+    return { env: JSON.parse(result.content[0].text), dispatched, clearCounts };
   } finally {
     _setRunAgentDeviceForTest(null);
     _setActiveSessionForTest(null);
@@ -94,7 +107,7 @@ test('a fallback refill requests replacement in one runner dispatch', async () =
   assert.deepEqual(dispatched, [REPLACE]);
 });
 
-test('a stable retained-prefix concatenation fails observed without another dispatch or raw values', async () => {
+test('a stable retained-prefix concatenation still fails after one bounded clear without raw values', async () => {
   const { env, dispatched } = await run(
     { value: 'decoy@example.test', focused: true },
     { after: { value: 'decoy@example.testreal@example.test', focused: true } },
@@ -103,9 +116,124 @@ test('a stable retained-prefix concatenation fails observed without another disp
   assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
   assert.equal(env.meta.mutation, 'observed');
   assert.notEqual(env.meta.verify, 'exact');
-  assert.deepEqual(dispatched, [REPLACE]);
+  assert.deepEqual(dispatched, [REPLACE, REPLACE]);
   assert.doesNotMatch(JSON.stringify(env), /decoy@example\.test|real@example\.test/);
 });
+
+for (const retained of [
+  'decoy@example.testreal@example.test',
+  'decoy@example.tesreal@example.test',
+]) {
+  test('an ineffective select-all recovers once by clearing the current observed length', async () => {
+    const { env, dispatched, clearCounts } = await run(
+      { value: 'decoy@example.test', focused: true },
+      {
+        after: [
+          { value: retained, focused: true },
+          { value: 'real@example.test', focused: true },
+        ],
+      },
+    );
+    assert.equal(env.ok, true);
+    assert.equal(env.meta.verify, 'exact');
+    assert.deepEqual(dispatched, [REPLACE, REPLACE]);
+    assert.deepEqual(clearCounts, ['decoy@example.test'.length, retained.length]);
+    assert.doesNotMatch(JSON.stringify(env), /decoy@example|real@example/);
+  });
+}
+
+for (const [maxLength, dropFirst] of [
+  [8, false],
+  [40, false],
+  [8, true],
+] as const) {
+  test(`prefilled middle-caret replacement clears before insertion with maxLength ${maxLength}, dropped first entry ${dropFirst}`, async () => {
+    _setActiveSessionForTest({ platform: 'ios', deviceId: 'TEST-DEVICE', appId: 'com.test' });
+    let value = 'Old Road';
+    let caret = 4;
+    const counts: Array<number | undefined> = [];
+    _setRunAgentDeviceForTest(async (_args: string[], opts: { focusedDeleteCount?: number }) => {
+      counts.push(opts.focusedDeleteCount);
+      if (opts.focusedDeleteCount) {
+        caret = value.length;
+        const removed = Math.min(caret, opts.focusedDeleteCount);
+        value = value.slice(0, caret - removed);
+        caret -= removed;
+      } else if (caret) {
+        value = value.slice(0, caret - 1) + value.slice(caret);
+        caret--;
+      }
+      const available = Math.max(0, maxLength - value.length);
+      const typed = dropFirst && counts.length === 1 ? 'New' : 'New Lane';
+      const inserted = typed.slice(0, available);
+      value = value.slice(0, caret) + inserted + value.slice(caret);
+      return okResult({ typed: true });
+    });
+    const client = {
+      evaluate: async () => ({ value: JSON.stringify({ value, controlled: true, focused: true }) }),
+    } as never;
+    try {
+      const result = await performFocusedFill(
+        {
+          ref: 'street',
+          testID: 'street',
+          text: 'New Lane',
+          clearFirst: true,
+          skipFinalValidation: true,
+        },
+        client,
+      );
+      const env = JSON.parse(result.content[0].text);
+      assert.equal(value, 'New Lane');
+      assert.equal(env.meta.verify, 'exact');
+      assert.deepEqual(counts, dropFirst ? [8, 3] : [8]);
+    } finally {
+      _setRunAgentDeviceForTest(null);
+      _setActiveSessionForTest(null);
+    }
+  });
+}
+
+for (const after of [
+  [{ value: '123 456', focused: true }],
+  [
+    { value: '123', focused: true },
+    { value: '123 456', focused: true },
+  ],
+]) {
+  test('formatting stays unverified on initial typing and dropped-keystroke retyping', async () => {
+    const { env, dispatched } = await run({ value: '', focused: true }, { text: '123456', after });
+    assert.equal(env.ok, true);
+    assert.equal(env.data.verified, false);
+    assert.equal(dispatched.length, after.length);
+  });
+}
+
+test('a focused readable prefill beyond the clear budget preserves its refusal without mutation', async () => {
+  const { env, dispatched, clearCounts } = await run({ value: 'x'.repeat(257), focused: true });
+  assert.equal(env.ok, false);
+  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
+  assert.equal(env.meta.mutation, 'none');
+  assert.deepEqual(dispatched, []);
+  assert.deepEqual(clearCounts, []);
+});
+
+for (const kind of ['private', 'secure'] as const) {
+  for (const value of ['', 'private-prefill']) {
+    test(`${kind} ${value ? 'prefilled' : 'empty'} input clears only before its first dispatch`, async () => {
+      const { env, dispatched, clearCounts } = await run(
+        { value, focused: true },
+        { privateValue: kind === 'private', secureValue: kind === 'secure' },
+      );
+      assert.equal(env.ok, true);
+      assert.equal(env.data.verified, false);
+      assert.equal(env.data.verifiedOracle, 'none');
+      assert.deepEqual(dispatched, [REPLACE]);
+      assert.deepEqual(clearCounts, [undefined]);
+      assert.doesNotMatch(JSON.stringify(env), /private-prefill|real@example/);
+    });
+  }
+}
 
 test('a shorter first readback then initial retained prefix fails after the existing retype', async () => {
   const { env, dispatched } = await run(
@@ -144,7 +272,6 @@ test('a shorter first readback then retype-dispatch retained prefix fails withou
 for (const [name, value, verified] of [
   ['exact', 'real@example.test', true],
   ['same shorter', 'real@example', false],
-  ['unrelated longer', 'other@example.testreal@example.test', false],
   ['unreadable', null, false],
 ] as const) {
   test(`a shorter first readback then ${name} preserves its policy after two dispatches`, async () => {
@@ -189,25 +316,47 @@ test('an explicit insertion still verifies its appended readback', async () => {
   assert.deepEqual(dispatched, [['real@example.test']]);
 });
 
-for (const after of [null, { value: 'other@example.testreal@example.test', focused: true }]) {
-  test(`${after === null ? 'an unreadable' : 'a different longer'} readback preserves unverified policy`, async () => {
+test('an unreadable readback preserves unverified policy', async () => {
+  const { env, dispatched } = await run(
+    { value: 'decoy@example.test', focused: true },
+    { after: null },
+  );
+  assert.equal(env.ok, true);
+  assert.equal(env.data.verified, false);
+  assert.deepEqual(dispatched, [REPLACE]);
+});
+
+test('an unavailable focus probe on the keyboard-down transition refuses before clearing', async () => {
+  const { env, dispatched } = await run(null);
+  assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
+  assert.equal(env.meta.mutation, 'none');
+  assert.deepEqual(dispatched, []);
+});
+
+test('a value-free positive focus probe still permits replacement', async () => {
+  const { env, dispatched } = await run({ value: null, focused: true });
+  assert.equal(env.ok, true);
+  assert.equal(env.data.verified, false);
+  assert.deepEqual(dispatched, [REPLACE]);
+});
+
+for (const after of [
+  [{ value: 'other@example.testreal@example.test', focused: true }],
+  [
+    { value: 'real@example', focused: true },
+    { value: 'other@example.testreal@example.test', focused: true },
+  ],
+]) {
+  test('a longer readback without a proven retained prefix stays unverified', async () => {
     const { env, dispatched } = await run(
       { value: 'decoy@example.test', focused: true },
       { after },
     );
     assert.equal(env.ok, true);
     assert.equal(env.data.verified, false);
-    assert.deepEqual(dispatched, [REPLACE]);
+    assert.equal(dispatched.length, after.length);
   });
 }
-
-test('an unreadable field on the keyboard-down transition path still requests replacement', async () => {
-  for (const read of [null, { value: null, focused: true }] as const) {
-    const { env, dispatched } = await run(read);
-    assert.equal(env.ok, true);
-    assert.deepEqual(dispatched, [REPLACE]);
-  }
-});
 
 for (const [name, read] of [
   ['unreadable', null],
