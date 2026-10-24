@@ -678,6 +678,7 @@ async function walkBlockScoped(
     step?: Exclude<Item, { kind: 'check' }>,
     deadline = Infinity,
     initial?: ScreenDecision,
+    assertionLabels?: ReadonlyMap<Element, string>,
   ): Promise<ScreenDecision> => {
     const item = (check ?? step)!;
     usable(observation, item, deadline);
@@ -703,6 +704,7 @@ async function walkBlockScoped(
             privacy,
             observationDeadline(observation.timing, deadline),
             deps.diagnostic !== undefined,
+            assertionLabels,
           ));
       } catch (error) {
         if (isAbort(error)) throw error;
@@ -1002,6 +1004,7 @@ async function walkBlockScoped(
         const beforeConfirmation = observation.screen;
         let ordinary = observation;
         const target = item.kind === 'wait' ? item.target : item.until!;
+        const assertionLabels = new Map<Element, string>();
         const isContradicted = (witness: Element): boolean => {
           const frame = frameKey(witness);
           const identified =
@@ -1031,26 +1034,40 @@ async function walkBlockScoped(
               witness.testID !== undefined &&
               beforeConfirmation.elements.some((element) => element.testID === witness.testID)
             );
-          return matches.every(
+          const available = matches.filter(
             (element) =>
-              element.offscreen ||
-              element.visibilityEvidence === 'offscreen' ||
-              element.semantic?.visibility === 'hidden' ||
-              element.semantic?.visibility === 'offscreen' ||
-              scrollConfirmationCovered(element, ordinary.screen) ||
-              (target.exact !== 'id' &&
-                (target.exact === 'text' ||
-                  target.quoted === undefined ||
-                  target.quoted !== witness.testID) &&
-                witness.label !== undefined &&
-                element.label !== undefined &&
-                (!witness.semantic?.nativePresence ||
-                  witness.semantic.nativePresence.labelSource === 'direct') &&
-                (!element.semantic?.nativePresence ||
-                  element.semantic.nativePresence.labelSource === 'direct') &&
-                !nativeLabelMayBeValue(element) &&
-                element.label !== witness.label),
+              !element.offscreen &&
+              element.visibilityEvidence !== 'offscreen' &&
+              element.semantic?.visibility !== 'hidden' &&
+              element.semantic?.visibility !== 'offscreen' &&
+              !scrollConfirmationCovered(element, ordinary.screen),
           );
+          if (!available.length) return true;
+          const changed = available.every(
+            (element) =>
+              target.exact !== 'id' &&
+              (target.exact === 'text' ||
+                target.quoted === undefined ||
+                target.quoted !== witness.testID) &&
+              witness.label !== undefined &&
+              element.label !== undefined &&
+              (!witness.semantic?.nativePresence ||
+                witness.semantic.nativePresence.labelSource === 'direct') &&
+              (!element.semantic?.nativePresence ||
+                element.semantic.nativePresence.labelSource === 'direct') &&
+              !nativeLabelMayBeValue(witness) &&
+              !nativeLabelMayBeValue(element) &&
+              element.label !== witness.label,
+          );
+          if (!changed) return false;
+          if (
+            target.quoted === undefined &&
+            available.every((element) => element.label === available[0].label)
+          ) {
+            assertionLabels.set(witness, available[0].label!);
+            return false;
+          }
+          return true;
         };
         try {
           if (item.kind === 'scroll') {
@@ -1079,7 +1096,7 @@ async function walkBlockScoped(
               const contradicted = scrollConfirmationEvidence(target, observation.screen).filter(
                 isContradicted,
               );
-              if (contradicted.length) {
+              if (contradicted.length || assertionLabels.size) {
                 const retained = {
                   ...observation,
                   screen: {
@@ -1089,7 +1106,14 @@ async function walkBlockScoped(
                     ),
                   },
                 };
-                const rechecked = await decide(retained, undefined, item, deadline);
+                const rechecked = await decide(
+                  retained,
+                  undefined,
+                  item,
+                  deadline,
+                  undefined,
+                  assertionLabels,
+                );
                 usable(ordinary, item, deadline);
                 if (
                   !rechecked.visibility ||
