@@ -569,6 +569,7 @@ async function openSession(
     >(result);
     return {
       appProcessIdentifier: data.appProcessIdentifier,
+      pointScale: data.pointScale,
       keyboardVisible: data.keyboardVisible,
       nodes: data.nodes,
       presenceCapture: data.presenceCapture,
@@ -638,6 +639,29 @@ async function openSession(
     log(`login block ${request.loginBlock} is missing or unreadable; a login wall fails the step`);
 
   const captureReact = createQaReactCapture(cdp);
+  const readScreen: WalkerDeps['captureScreen'] = (options) =>
+    stop.track(() =>
+      captureScreen({
+        appId,
+        requirePrivateInputs: true,
+        observation: options?.observation,
+        platformPresence: options?.platformPresence,
+        now,
+        timing: options?.timing,
+        warn: log,
+        native: (presenceBudgetMs) =>
+          rawSnapshot(
+            options?.platformPresence,
+            presenceBudgetMs,
+            options?.timing ? { now, observe: options.timing } : undefined,
+          ).catch((error: unknown) => {
+            if (error instanceof HandlerError && error.meta?.reason === 'app-not-running')
+              throw new AppProcessGoneError();
+            throw error;
+          }),
+        react: () => captureReact(options?.platformPresence === true),
+      }),
+    );
   const deps: WalkerDeps = {
     note: log,
     privacy,
@@ -646,29 +670,7 @@ async function openSession(
     presenceUnavailable: platform === 'android',
     timing,
     publicationInterrupted: admittedSnapshots.interrupted,
-    captureScreen: (options) =>
-      stop.track(() =>
-        captureScreen({
-          appId,
-          requirePrivateInputs: true,
-          observation: options?.observation,
-          platformPresence: options?.platformPresence,
-          now,
-          timing: options?.timing,
-          warn: log,
-          native: (presenceBudgetMs) =>
-            rawSnapshot(
-              options?.platformPresence,
-              presenceBudgetMs,
-              options?.timing ? { now, observe: options.timing } : undefined,
-            ).catch((error: unknown) => {
-              if (error instanceof HandlerError && error.meta?.reason === 'app-not-running')
-                throw new AppProcessGoneError();
-              throw error;
-            }),
-          react: () => captureReact(options?.platformPresence === true),
-        }),
-      ),
+    captureScreen: readScreen,
     press: (ref, qaContext) =>
       act(() => press({ ref, qaContext, qaTiming: { now, observe: timing } }), false, {
         now,

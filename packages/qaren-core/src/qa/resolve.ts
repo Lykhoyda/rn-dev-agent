@@ -472,6 +472,80 @@ export function clearanceBand(element: Element, screen: Screen): NativeNode['rec
   return bottom > top ? { ...viewport, y: top, height: bottom - top } : undefined;
 }
 
+function frontOverlayFrames(
+  container: Element,
+  band: NonNullable<NativeNode['rect']>,
+  screen: Screen,
+): NonNullable<NativeNode['rect']>[] {
+  const behind = screen.elements.indexOf(container);
+  const lineage = ancestorsOf(container);
+  const frames: NonNullable<NativeNode['rect']>[] = [];
+  const padding = 4 * (screen.pointScale ?? 1);
+  for (const [i, other] of screen.elements.entries()) {
+    if (
+      i <= behind ||
+      isWindow(other) ||
+      other.kind === 'text' ||
+      other.offscreen ||
+      !other.hittable
+    )
+      continue;
+    const ancestors = ancestorsOf(other);
+    if (lineage.includes(other) || ancestors.includes(container)) continue;
+    const rect = elementFrame(other);
+    if (
+      !rect ||
+      rect.width <= 0 ||
+      rect.height <= 0 ||
+      rect.x - padding >= band.x + band.width ||
+      rect.x + rect.width + padding <= band.x
+    )
+      continue;
+    frames.push(rect);
+  }
+  return frames;
+}
+
+export function scrollConfirmationCovered(element: Element, screen: Screen): boolean {
+  if (centreCovered(element, screen)) return true;
+  const ancestors = ancestorsOf(element);
+  const container = ancestors.find(isScrollContainer) ?? ancestors.find(isWindow);
+  const frame = elementFrame(element);
+  if (!container || !frame) return false;
+  const x = frame.x + frame.width / 2;
+  const y = frame.y + frame.height / 2;
+  return frontOverlayFrames(container, frame, screen).some(
+    (overlay) =>
+      x >= overlay.x &&
+      x < overlay.x + overlay.width &&
+      y >= overlay.y &&
+      y < overlay.y + overlay.height,
+  );
+}
+
+function clearOfFrontOverlays(
+  container: Element,
+  band: NonNullable<NativeNode['rect']>,
+  screen: Screen,
+): NativeNode['rect'] {
+  let spans = [{ top: band.y, bottom: band.y + band.height }];
+  const padding = 4 * (screen.pointScale ?? 1);
+  for (const rect of frontOverlayFrames(container, band, screen)) {
+    const top = rect.y - padding;
+    const bottom = rect.y + rect.height + padding;
+    spans = spans.flatMap((span) =>
+      bottom <= span.top || top >= span.bottom
+        ? [span]
+        : [
+            { top: span.top, bottom: Math.min(span.bottom, top) },
+            { top: Math.max(span.top, bottom), bottom: span.bottom },
+          ].filter((part) => part.bottom > part.top),
+    );
+  }
+  const best = spans.sort((a, b) => b.bottom - b.top - (a.bottom - a.top))[0];
+  return best ? { ...band, y: best.top, height: best.bottom - best.top } : undefined;
+}
+
 // An occluded target scrolls toward the centre of the visible part of its clip.
 export function clearanceScroll(element: Element, screen: Screen): 'up' | 'down' {
   const frame = elementFrame(element);
@@ -507,33 +581,82 @@ function horizontalOnlyContainer(type: string | undefined): boolean {
   return HORIZONTAL_ONLY_SUFFIXES.some((suffix) => leaf.endsWith(suffix));
 }
 
-// Covered inside its clip: its clearance band. Scrolled out of it: the clip itself is the list to
-// move. Otherwise the frontmost visible scroll container above the keyboard.
-export function scrollUntilBand(target: Target, screen: Screen): NativeNode['rect'] {
+function aboveKeyboard(rect: NativeNode['rect'], screen: Screen): NativeNode['rect'] {
+  if (!rect) return undefined;
   const keyboardTop =
     screen.keyboardVisible !== false && screen.keyboardFrame ? screen.keyboardFrame.y : Infinity;
-  const aboveKeyboard = (rect: NativeNode['rect']): NativeNode['rect'] => {
-    if (!rect) return undefined;
-    const height = Math.min(rect.y + rect.height, keyboardTop - KEYBOARD_EDGE_INSET) - rect.y;
-    return rect.width > 0 && height > 0 ? { ...rect, height } : undefined;
-  };
+  const height = Math.min(rect.y + rect.height, keyboardTop - KEYBOARD_EDGE_INSET) - rect.y;
+  return rect.width > 0 && height > 0 ? { ...rect, height } : undefined;
+}
+
+export function scrollUntilContainer(target: Target, screen: Screen): Element | undefined {
   const matches = exactIdentities(screen, target, 'scroll');
   if (matches.length === 1) {
     const element = matches[0].element;
-    if (!element.offscreen) return clearanceBand(element, screen);
-    const own = aboveKeyboard(elementViewport(element));
-    if (own) return own;
+    if (!element.offscreen || aboveKeyboard(elementViewport(element), screen))
+      return ancestorsOf(element).find(isScrollContainer);
   }
-  let best: NativeNode['rect'];
+  let best: Element | undefined;
   for (const element of screen.elements) {
     if (!isScrollContainer(element) || horizontalOnlyContainer(scrollContainerType(element)))
       continue;
     const frame = elementFrame(element);
     if (!frame) continue;
-    // Element order is the runner's traversal: later windows are frontmost, children follow parents.
-    best = aboveKeyboard(clip(frame, elementViewport(element))) ?? best;
+    if (aboveKeyboard(clip(frame, elementViewport(element)), screen)) best = element;
   }
   return best;
+}
+
+export function scrollUntilBand(target: Target, screen: Screen): NativeNode['rect'] {
+  const container = scrollUntilContainer(target, screen);
+  if (!container) return undefined;
+  const matches = exactIdentities(screen, target, 'scroll');
+  const element = matches.length === 1 ? matches[0].element : undefined;
+  let band: NativeNode['rect'];
+  if (element) {
+    band = !element.offscreen
+      ? clearanceBand(element, screen)
+      : aboveKeyboard(elementViewport(element), screen);
+  }
+  if (!band && (!element || element.offscreen)) {
+    const frame = elementFrame(container);
+    if (frame) band = aboveKeyboard(clip(frame, elementViewport(container)), screen);
+  }
+  if (!band) return undefined;
+  const clear = clearOfFrontOverlays(container, band, screen);
+  return clear ?? { ...band, height: 0 };
+}
+
+export function scrollUntilHasCandidate(target: Target, screen: Screen): boolean {
+  if (target.quoted !== undefined) {
+    if (
+      exactIdentities(screen, target, 'scroll').some(
+        ({ element }) => !element.offscreen && !centreCovered(element, screen),
+      )
+    )
+      return true;
+    return (
+      target.exact !== 'id' && literalEvidence(screen, target.quoted, 'equals').verdict !== 'fail'
+    );
+  }
+  return true;
+}
+
+export function scrollConfirmationEvidence(target: Target, screen: Screen): Element[] {
+  let candidates: Element[];
+  if (target.quoted !== undefined) {
+    candidates = exactIdentities(screen, target, 'wait', 'refresh').map(({ element }) => element);
+  } else {
+    const projected = visibilityView(screen);
+    if ('refuse' in projected) throw new ResolutionError(projected);
+    candidates = projected.elements;
+  }
+  return candidates.filter(
+    (element) =>
+      !element.offscreen &&
+      element.visibilityEvidence !== 'offscreen' &&
+      element.visibilityEvidence !== 'unresolved',
+  );
 }
 
 const GENERIC_TARGET_WORDS = new Set(
@@ -587,7 +710,13 @@ export function decideTarget(prepared: TargetQuestion, answer: Answer | undefine
   return { ref: chosen.ref, element: chosen };
 }
 
-function describeSemantic(element: Element): string {
+export interface AssertionUpdate {
+  kind?: Element['kind'];
+  label?: string;
+  disabled?: boolean;
+}
+
+function describeSemantic(element: Element, update?: AssertionUpdate): string {
   const native = element.semantic?.nativePresence;
   const heading = element.semantic?.heading;
   const qualification =
@@ -602,16 +731,22 @@ function describeSemantic(element: Element): string {
   if (native)
     return `${describe({
       ...element,
-      kind: native.kind,
-      label: native.labelSource === 'direct' ? element.label : undefined,
+      kind: update?.kind ?? native.kind,
+      label: native.labelSource === 'direct' ? (update?.label ?? element.label) : undefined,
       value: undefined,
       placeholder: undefined,
       where: undefined,
       side: undefined,
-      disabled: semanticDisabled(element),
+      disabled: update?.disabled ?? semanticDisabled(element),
       offscreen,
     })} (native accessibility name; ${offscreen ? 'outside the visible area' : 'platform-observed presence'}${qualification})`;
-  return describe({ ...element, disabled: semanticDisabled(element), offscreen });
+  return describe({
+    ...element,
+    kind: update?.kind ?? element.kind,
+    label: update?.label ?? element.label,
+    disabled: update?.disabled ?? semanticDisabled(element),
+    offscreen,
+  });
 }
 
 // pending: not established on this capture, and not proven absent.
@@ -935,6 +1070,7 @@ export async function decideScreen(
   privacy = new ObservedPrivacy(),
   deadline?: number,
   diagnostics = false,
+  assertionUpdates?: ReadonlyMap<Element, AssertionUpdate>,
 ): Promise<ScreenDecision> {
   const checked =
     check && !check.literal ? prepareAssertion(check.text, screen, diagnostics) : undefined;
@@ -965,8 +1101,11 @@ export async function decideScreen(
     check?.text ?? '',
     step ? (stepTarget(step)?.phrase ?? '') : '',
     ...screen.visibleText,
+    ...Array.from(assertionUpdates?.values() ?? [], (update) => update.label ?? ''),
     ...screen.elements.map(describe),
   ]);
+  const assertionLabel = (element: Element) =>
+    assertionUpdates?.get(element)?.label ?? element.label;
   const assertionBound = (
     assertion: VisibilityDecision | AssertionQuestion | undefined,
     text: string,
@@ -979,8 +1118,8 @@ export async function decideScreen(
       (unobservedValue(
         text,
         elements.flatMap((element) => [
-          ...(element.label !== undefined && !nativeLabelMayBeValue(element)
-            ? [element.label]
+          ...(assertionLabel(element) !== undefined && !nativeLabelMayBeValue(element)
+            ? [assertionLabel(element)!]
             : []),
           ...(!element.semantic?.nativePresence &&
           !element.secure &&
@@ -1038,7 +1177,11 @@ export async function decideScreen(
           ...(evidence && (questions[checkId] || questions[visibilityId])
             ? {
                 assertionEvidence: {
-                  observed: evidence.elements.map((e) => mask.describeElement(e, describeSemantic)),
+                  observed: evidence.elements.map((element) =>
+                    mask.describeElement(element, (shown) =>
+                      describeSemantic(shown, assertionUpdates?.get(element)),
+                    ),
+                  ),
                   unknown: evidence.unknown.map(({ element: e, reason }) => ({
                     description: mask.describeElement(e, (e) =>
                       describe({

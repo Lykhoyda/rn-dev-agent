@@ -708,15 +708,20 @@ Android, using the snapshot's display density, and 20 pt from the top and 34 pt
 from the bottom on iOS. Callers passing no band
 use the existing keyboard-safe band. On both iOS and Android, a target whose centre
 is covered by the observed keyboard or a sticky overlay gets a scroll sized to move that centre
-toward the middle of that band, and the drag may span the band with both endpoints
-at least one pixel inside its edges after rounding. A clearance scroll without
-a band keeps the cap of 60% of the screen area above the keyboard.
+toward the middle of that band. Precise drags normally keep a 10% dead zone at
+each edge; short bands shrink that dead zone to preserve at least 48 px of
+travel, while keeping the existing one-pixel edge inset. A clearance scroll without
+a band keeps the cap of 60% of the screen area above the keyboard, without a
+minimum-distance clamp.
 Scrolls without a clearance distance keep the fixed amount of `0.6` on the window
-band; inside a caller band they span the band a pixel inside each edge, except
+band; inside a caller band they span its clear interior, except
 a keyboard-bound edge, which the band clears by 48 pt so the drag never starts on
 the keyboard. One scroll-until attempt moves the list by one visible band and
-cannot carry the target past it. A band shorter than 50 px refuses `SCROLL_BAND_TOO_SMALL` before
-anything is sent, because a drag under the touch slop would land as a tap.
+cannot carry the target past it. An explicit band shorter than 50 px or narrower
+than 2 px refuses `SCROLL_BAND_TOO_SMALL` before anything is sent, because a drag
+under the touch slop would land as a tap.
+For scroll-until capture, overlay clearance and navigation safeguards, see
+[Plan checks and screen evidence](#plan-checks-and-screen-evidence).
 Successful iOS fast-runner scrolls now run the same bounded settle wait as taps
 before returning, using snapshot equality. Results
 include `meta.settle` and `meta.timings_ms.settle`; a timeout reports unsettled
@@ -1004,7 +1009,9 @@ Android phrase steps resolve against these observations. A valid capture whose
 interactive React hosts cannot all be associated (a mounted `Modal`, or inputs
 the keyboard covers) keeps the `SCREEN_EVIDENCE_INCOMPLETE` presence gap, as on
 iOS; stale or incomplete captures refuse with `NATIVE_PRESENCE_UNUSABLE`. Quoted
-targets and literal checks remain usable without requesting presence.
+press, fill and wait targets and literal checks remain usable without requesting
+presence. Scroll-until combines ordinary geometry with platform presence as
+described in the scroll safety rules below, including quoted targets and refreshes.
 
 Context-bound iOS QA reads require the unchanged target app already in the
 foreground. They never activate or relaunch it, or retry a failed read through
@@ -1156,11 +1163,52 @@ the viewport but it is reported not visible, as with an Android heading under
 the status bar, scrolling uses the clearance direction described above, regardless
 of the requested direction. With no single matching identity, an already visible
 target or no known viewport, the requested direction is retained. The
-scroll-until drag starts inside the list it is meant to move (the target's own
+scroll-until direction, drag band, overlay clearance and navigation markers come
+from one ordinary capture per iteration, including replay and freshness refreshes.
+After that capture finds a quoted text or identity candidate, a separate platform
+presence capture confirms target visibility; phrase predicates confirm the ordinary
+capture's named native candidates through the semantic visibility judgment.
+Presence nodes never supply gesture geometry or navigation markers. Confirmation
+is followed by a fresh ordinary capture, which supplies the next drag's geometry
+and retains its own acquisition time and expiry; expired evidence must refresh
+before dispatch. See the
+[capture authority regressions](../qaren-core/test/unit/qa/scroll-capture-authority.test.ts).
+Before accepting a confirmed target, the walker checks for contradictory target
+visibility in that newer ordinary capture. For phrase targets, established changes
+to text, enabled/disabled state or element kind re-evaluate the whole supported
+claim: a visible “Welcome” becoming “Welcome back” can still satisfy “the welcome
+message”, while a button becoming static text cannot satisfy “the continue button”.
+Unknown facts and missing labels do not establish a contradiction, and unrelated
+content changes do not invalidate the target. Re-evaluation preserves the original
+qualified evidence and privacy masking. Quoted and text-replay targets retain
+strict matching; ID-only replay retains identity and visibility semantics.
+The scroll-until drag starts inside the list it is meant to move (the target's own
 scroll container, or the frontmost one above the keyboard), not at the screen
 centre. A row scrolled out of its list drags inside that list; a row covered
-inside it drags inside its clearance band. One clearance swipe lifts a covered
-row by at most the height of its list's visible band above the keyboard.
+inside it drags inside its clearance band. For each selected-list band, including
+keyboard-clipped clearance bands, the screen model removes the padded rows of
+hittable non-text elements drawn after the selected list, outside its subtree,
+that overlap the band horizontally, including across windows and roots.
+The largest remaining vertical span becomes the drag band; window ancestors and
+the list's own rows do not cut it. Padding uses four points, scaled by the captured
+display density on Android when available. An exhausted clear span refuses with
+`SCROLL_BAND_TOO_SMALL`; a screen without a scroll container retains the centred
+window drag. After each scroll-until drag, every fresh observation, including
+visibility-probe refreshes for expired or uncertain evidence, is checked against
+the pre-drag screen. After target confirmation, a fresh ordinary capture supplies
+geometry and navigation checks before target acceptance or another drag. A changed
+selected element outside the lists (such as a tab), native navigation-bar title,
+or scrolled list refuses with `SCROLL_NAVIGATED` before looking
+for the target on the destination screen. An identified list retains its identity
+through keyboard or header resizing when its type and testID remain present;
+unidentified lists require the same type and a frame within two points. Moving
+rows and header resizing do not count as navigation. Native title changes are
+checked when both ordinary snapshots expose an iOS navigation-bar title or Android
+toolbar/action-bar title. JS-only headers have no native title marker; their
+title-only navigation remains tracked in
+[this follow-up](https://github.com/Lykhoyda/rn-dev-agent/issues/1281).
+End-of-list stop follows separately. One clearance swipe lifts a
+covered row by at most the height of its list's visible band above the keyboard.
 A uniquely name-matched off-screen row further away is scrolled toward again,
 at most six times, stopping on an unchanged screen or the existing deadline;
 covered rows and other scroll origins still get one clearance swipe. See the

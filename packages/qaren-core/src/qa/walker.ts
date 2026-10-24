@@ -18,12 +18,15 @@ import {
   insideAlert,
   elementFrame,
   isNativeInput,
+  disabledStateOf,
+  semanticDisabled,
   describe,
 } from './screen.js';
 import {
   type Resolution,
   type CentreCoverageDiagnostic,
   type ScreenDecision,
+  type AssertionUpdate,
   CHECK,
   ResolutionError,
   decideScreen,
@@ -36,13 +39,18 @@ import {
   bindFillIdentity,
   bindDispatchIdentity,
   stepTarget,
+  scrollConfirmationCovered,
+  scrollConfirmationEvidence,
   scrollUntilBand,
+  scrollUntilContainer,
+  scrollUntilHasCandidate,
   scrollUntilDirection,
   targetEvidence,
   presenceMiss,
   visibleSelector,
 } from './resolve.js';
 import { literalEvidence, type LiteralNearMiss } from './evidence.js';
+import { scrollNavigationChange } from './scroll-navigation.js';
 import { exactIdentities, focusIdentityOf } from './identity.js';
 import {
   type BlockPlatform,
@@ -73,6 +81,7 @@ import {
   ObservedPrivacy,
   matchPrivate,
   projectPlanLine,
+  nativeLabelMayBeValue,
 } from './privacy.js';
 import { renderReason, segments, type Reason } from './untrusted.js';
 import { NativeSnapshotIncomplete, PrivateInputCaptureError } from './private-input.js';
@@ -305,6 +314,7 @@ const promptSignature = (screen: Screen): string =>
 
 // Capture and process refusals, ambiguity and the replay-miss path are never recovered.
 const UNRECOVERABLE = new Set([
+  'SCROLL_NAVIGATED',
   'SCROLL_UNSETTLED',
   'REPLAY_SELECTOR',
   'TARGET_AMBIGUOUS',
@@ -381,7 +391,9 @@ async function walkBlockScoped(
   let mutationStarted = false;
   let latestObservation = 0;
   let recoveries = 0;
-  const captureScreen: WalkerDeps['captureScreen'] = async (options) => {
+  const captureScreen = async (
+    options: Parameters<WalkerDeps['captureScreen']>[0],
+  ): Promise<Screen> => {
     const screen = await deps.captureScreen(options);
     const react = screen.reactConnection ?? screen.captureCoverage?.react;
     if ((react === 'lost' || react === 'reconnected') && reactConnections.at(-1) !== react)
@@ -428,14 +440,20 @@ async function walkBlockScoped(
     step?: Exclude<Item, { kind: 'check' }>,
     assertion = false,
     recovery = false,
+    mode?: 'presence',
   ): Promise<Observation> => {
     assertActive();
     cached = undefined;
     const target =
       step && ('target' in step ? step.target : step.kind === 'scroll' ? step.until : undefined);
-    const requirePresence = assertion || (!!target && target.quoted === undefined);
+    const ordinaryScroll = !mode && !assertion && step?.kind === 'scroll' && !!step.until;
+    const requirePresence =
+      !ordinaryScroll && (assertion || (!!target && target.quoted === undefined));
     const platformPresence =
-      requirePresence || (!!target && step?.kind === 'press' && target.exact !== 'id');
+      !ordinaryScroll &&
+      (mode === 'presence' ||
+        requirePresence ||
+        (!!target && step?.kind === 'press' && target.exact !== 'id'));
     const startedAt = deps.now();
     const id = ++sequence.observation;
     latestObservation = id;
@@ -663,6 +681,7 @@ async function walkBlockScoped(
     step?: Exclude<Item, { kind: 'check' }>,
     deadline = Infinity,
     initial?: ScreenDecision,
+    assertionUpdates?: ReadonlyMap<Element, AssertionUpdate>,
   ): Promise<ScreenDecision> => {
     const item = (check ?? step)!;
     usable(observation, item, deadline);
@@ -688,6 +707,7 @@ async function walkBlockScoped(
             privacy,
             observationDeadline(observation.timing, deadline),
             deps.diagnostic !== undefined,
+            assertionUpdates,
           ));
       } catch (error) {
         if (isAbort(error)) throw error;
@@ -961,16 +981,175 @@ async function walkBlockScoped(
     assertActive();
     return shot;
   };
-  const visibilityProbe = (item: Item & { kind: 'wait' | 'scroll' }, deadline = Infinity) => {
+  const visibilityProbe = (
+    item: Item & { kind: 'wait' | 'scroll' },
+    deadline = Infinity,
+    checkObservation?: (screen: Screen) => void,
+  ) => {
     let reasks = 0;
+    const validateRefresh = (before: Screen, after: Screen): void => {
+      if (item.kind !== 'scroll') return;
+      const navigation = scrollNavigationChange(
+        before,
+        after,
+        scrollUntilContainer(item.until!, before),
+      );
+      if (navigation) throw new ResolutionError({ refuse: 'SCROLL_NAVIGATED', reason: navigation });
+      checkObservation?.(after);
+    };
     return async (
       observation: Observation,
       initial?: ScreenDecision,
     ): Promise<{ observation: Observation; found: boolean; unsure?: boolean }> => {
       let decision = initial;
       while (deps.now() < deadline) {
+        checkObservation?.(observation.screen);
+        const beforeConfirmation = observation.screen;
+        let ordinary = observation;
+        const target = item.kind === 'wait' ? item.target : item.until!;
+        const assertionUpdates = new Map<Element, AssertionUpdate>();
+        const isContradicted = (witness: Element): boolean => {
+          const frame = frameKey(witness);
+          const identified =
+            witness.testID === undefined
+              ? []
+              : ordinary.screen.elements.filter((element) => element.testID === witness.testID);
+          const named =
+            witness.testID === undefined && witness.label !== undefined
+              ? ordinary.screen.elements.filter(
+                  (element) => element.kind === witness.kind && element.label === witness.label,
+                )
+              : [];
+          const matches = identified.length
+            ? identified
+            : named.length
+              ? named
+              : ordinary.screen.elements.filter(
+                  (element) =>
+                    (witness.testID === undefined || element.testID === undefined) &&
+                    frame !== undefined &&
+                    frameKey(element) === frame,
+                );
+          if (!matches.length)
+            return (
+              (ordinary.screen.captureCoverage?.native ?? ordinary.screen.coverage?.native) ===
+                'complete' &&
+              witness.testID !== undefined &&
+              beforeConfirmation.elements.some((element) => element.testID === witness.testID)
+            );
+          const available = matches.filter(
+            (element) =>
+              !element.offscreen &&
+              element.visibilityEvidence !== 'offscreen' &&
+              element.semantic?.visibility !== 'hidden' &&
+              element.semantic?.visibility !== 'offscreen' &&
+              !scrollConfirmationCovered(element, ordinary.screen),
+          );
+          if (!available.length) return true;
+          const disabled = disabledStateOf(available[0]);
+          if (
+            target.quoted === undefined &&
+            disabled !== undefined &&
+            available.every((element) => disabledStateOf(element) === disabled) &&
+            disabled !== semanticDisabled(witness)
+          )
+            assertionUpdates.set(witness, { disabled });
+          const kind = available[0].nativeKind ?? available[0].kind;
+          if (
+            target.quoted === undefined &&
+            kind !== 'other' &&
+            available.every((element) => (element.nativeKind ?? element.kind) === kind) &&
+            kind !== (witness.semantic?.nativePresence?.kind ?? witness.kind)
+          )
+            assertionUpdates.set(witness, { ...assertionUpdates.get(witness), kind });
+          const changed = available.every(
+            (element) =>
+              target.exact !== 'id' &&
+              (target.exact === 'text' ||
+                target.quoted === undefined ||
+                target.quoted !== witness.testID) &&
+              witness.label !== undefined &&
+              element.label !== undefined &&
+              (!witness.semantic?.nativePresence ||
+                witness.semantic.nativePresence.labelSource === 'direct') &&
+              (!element.semantic?.nativePresence ||
+                element.semantic.nativePresence.labelSource === 'direct') &&
+              !nativeLabelMayBeValue(witness) &&
+              !nativeLabelMayBeValue(element) &&
+              element.label !== witness.label,
+          );
+          if (!changed) return false;
+          if (
+            target.quoted === undefined &&
+            available.every((element) => element.label === available[0].label)
+          ) {
+            assertionUpdates.set(witness, {
+              ...assertionUpdates.get(witness),
+              label: available[0].label!,
+            });
+            return false;
+          }
+          return true;
+        };
         try {
+          if (item.kind === 'scroll') {
+            usable(ordinary, item, deadline);
+            if (!scrollUntilHasCandidate(target, ordinary.screen)) {
+              if (target.exact) targetEvidence(target, ordinary.screen);
+              return { observation: ordinary, found: false };
+            }
+            observation = await capture(item, false, false, 'presence');
+            usable(ordinary, item, deadline);
+            const refreshed = await capture(item);
+            validateRefresh(ordinary.screen, refreshed.screen);
+            ordinary = refreshed;
+            usable(ordinary, item, deadline);
+            decision = undefined;
+          }
           decision = await decide(observation, undefined, item, deadline, decision);
+          if (item.kind === 'scroll') {
+            usable(ordinary, item, deadline);
+            if (
+              target.quoted === undefined &&
+              decision.visibility &&
+              !('refuse' in decision.visibility) &&
+              decision.visibility.verdict === 'present'
+            ) {
+              const contradicted = scrollConfirmationEvidence(target, observation.screen).filter(
+                isContradicted,
+              );
+              if (contradicted.length || assertionUpdates.size) {
+                const retained = {
+                  ...observation,
+                  screen: {
+                    ...observation.screen,
+                    elements: observation.screen.elements.filter(
+                      (element) => !contradicted.includes(element),
+                    ),
+                  },
+                };
+                const rechecked = await decide(
+                  retained,
+                  undefined,
+                  item,
+                  deadline,
+                  undefined,
+                  assertionUpdates,
+                );
+                usable(ordinary, item, deadline);
+                if (
+                  !rechecked.visibility ||
+                  'refuse' in rechecked.visibility ||
+                  rechecked.visibility.verdict !== 'present'
+                )
+                  throw new ResolutionError({
+                    refuse: 'VISIBILITY_UNSURE',
+                    reason:
+                      'the newer ordinary observation contradicts confirmed target visibility',
+                  });
+              }
+            }
+          }
         } catch (error) {
           if (isAbort(error)) throw error;
           if (!(error instanceof EvidenceExpired)) throw error;
@@ -979,13 +1158,30 @@ async function walkBlockScoped(
           await pause(Math.min(WAIT_POLL_MS, Math.max(0, deadline - deps.now())));
           if (deps.now() >= deadline) throw new EvidenceExpired(true);
           observation = await capture(item);
+          validateRefresh(ordinary.screen, observation.screen);
           decision = undefined;
           continue;
         }
-        const target = item.kind === 'wait' ? item.target : item.until!;
+        const confirmed = (): { observation: Observation; found: true } => {
+          if (item.kind === 'scroll' && target.quoted !== undefined) {
+            const witnesses = scrollConfirmationEvidence(target, observation.screen);
+            const contradicted = witnesses.length > 0 && witnesses.every(isContradicted);
+            if (contradicted)
+              throw new ResolutionError({
+                refuse: 'VISIBILITY_UNSURE',
+                reason: 'the newer ordinary observation contradicts confirmed target visibility',
+              });
+          }
+          return { observation: item.kind === 'scroll' ? ordinary : observation, found: true };
+        };
         if (target.quoted !== undefined) {
           const evidence = targetEvidence(target, observation.screen);
-          return { observation, found: evidence === 'pass', unsure: evidence === 'unsure' };
+          if (evidence === 'pass') return confirmed();
+          return {
+            observation: item.kind === 'scroll' ? ordinary : observation,
+            found: false,
+            unsure: evidence === 'unsure',
+          };
         }
         const visibility = decision.visibility;
         if (!visibility)
@@ -1005,8 +1201,8 @@ async function walkBlockScoped(
             );
           throw new ResolutionError(visibility);
         }
-        if (visibility.verdict === 'present') return { observation, found: true };
-        if (visibility.verdict === 'absent') return { observation, found: false };
+        if (visibility.verdict === 'present') return confirmed();
+        if (visibility.verdict === 'absent') return { observation: ordinary, found: false };
         if (visibility.verdict === 'pending' && item.kind === 'wait')
           return { observation, found: false };
         const remaining = deadline - deps.now();
@@ -1016,6 +1212,7 @@ async function walkBlockScoped(
         await pause(Math.min(WAIT_POLL_MS, remaining));
         if (deps.now() >= deadline) break;
         observation = await capture(item);
+        validateRefresh(ordinary.screen, observation.screen);
         decision = undefined;
       }
       usable(observation, item, deadline);
@@ -1598,7 +1795,11 @@ async function walkBlockScoped(
         if (item.kind === 'check') {
           const next = block.items[block.items.indexOf(item) + 1];
           const nextStep =
-            !item.literal && next && next.kind !== 'check' && stepTarget(next)?.quoted === undefined
+            !item.literal &&
+            next &&
+            next.kind !== 'check' &&
+            !(next.kind === 'scroll' && next.until) &&
+            stepTarget(next)?.quoted === undefined
               ? next
               : undefined;
           let before = await capture(nextStep, !item.literal);
@@ -1757,10 +1958,19 @@ async function walkBlockScoped(
         if (item.kind === 'scroll' && item.until) {
           resolvedBy = item.until.quoted === undefined ? 'jev' : resolvedBy;
           const deadline = deps.now() + PHRASE_WAIT_BUDGET_MS;
-          const held = cached?.item === item ? cached : undefined;
-          let observation = held?.observation ?? (await capture(item));
+          let observation = await capture(item);
           cached = undefined;
-          const probe = visibilityProbe(item, deadline);
+          let beforeScroll: { screen: Screen; container?: Element } | undefined;
+          const probe = visibilityProbe(item, deadline, (screen) => {
+            if (!beforeScroll) return;
+            const navigation = scrollNavigationChange(
+              beforeScroll.screen,
+              screen,
+              beforeScroll.container,
+            );
+            if (navigation)
+              throw new ResolutionError({ refuse: 'SCROLL_NAVIGATED', reason: navigation });
+          });
           let replayMiss: ResolutionError | undefined;
           let unsure = false;
           const visible = async (s: Observation, initial?: ScreenDecision): Promise<boolean> => {
@@ -1778,16 +1988,25 @@ async function walkBlockScoped(
                   ? replayMiss
                   : error;
               replayMiss = error;
-              observation = s;
+              observation = await capture(item);
+              const navigation = scrollNavigationChange(
+                s.screen,
+                observation.screen,
+                scrollUntilContainer(item.until!, s.screen),
+              );
+              if (navigation)
+                throw new ResolutionError({ refuse: 'SCROLL_NAVIGATED', reason: navigation });
               return false;
             }
             observation = observed.observation;
             unsure = observed.unsure === true;
             return observed.found;
           };
-          let found = await visible(observation, held?.decision);
+          let found = await visible(observation);
           let attempts = 0;
+          const container = scrollUntilContainer(item.until, observation.screen);
           while (!found && attempts < SCROLL_ATTEMPTS && deps.now() < deadline) {
+            beforeScroll = { screen: observation.screen, container };
             const beforeSignature = screenSignature(observation.screen);
             let act: ActResult;
             if (observation.screen.front === 'dialog') throw dialogInFront(item.until.phrase);
@@ -2552,8 +2771,9 @@ async function walkBlockScoped(
           item.kind !== 'check' &&
           error instanceof ResolutionError &&
           error.code === 'REPLAY_SELECTOR';
-        const unknownProcess =
-          error instanceof ResolutionError && error.code === 'APP_PROCESS_UNKNOWN'
+        const resolutionRefusal =
+          error instanceof ResolutionError &&
+          (error.code === 'APP_PROCESS_UNKNOWN' || error.code === 'SCROLL_NAVIGATED')
             ? { code: error.code, message: error.message }
             : undefined;
         const caughtOutcome = failed(
@@ -2569,7 +2789,7 @@ async function walkBlockScoped(
           ...(error instanceof ResolutionError && error.missing
             ? judged(caughtOutcome, latest)
             : caughtOutcome),
-          ...(refusal || unknownProcess ? { refusal: refusal ?? unknownProcess } : {}),
+          ...(refusal || resolutionRefusal ? { refusal: refusal ?? resolutionRefusal } : {}),
         };
       }
     }

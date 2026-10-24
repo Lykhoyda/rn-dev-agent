@@ -1,4 +1,5 @@
 import { sleep as cancellableSleep } from '../domain/cancellation.js';
+import { MIN_DRAG_TRAVEL, MIN_SCROLL_BAND_HEIGHT } from '../domain/scroll-gesture.js';
 import { randomUUID } from 'node:crypto';
 import { measureDispatchPhase, measureTiming, type TimingContext } from '../qa/timing.js';
 import type { QaDispatchContext } from '../domain/qa-dispatch.js';
@@ -1994,8 +1995,6 @@ const DEFAULT_SCREEN = { width: 402, height: 874 };
 const SWIPE_FRACTION = 0.4;
 // The middle of the band: chrome above the keyboard and the top bar sit at its edges.
 const CLEARANCE_BAND_FRACTION = 0.6;
-// shortcut: 48 covers Android's 8 dp touch slop up to 6x density and iOS's pan hysteresis; read the slop from the runner if a legitimate band is ever refused.
-const MIN_DRAG_TRAVEL = 48;
 const DEFAULT_SWIPE_DURATION_MS = 300;
 
 function computeSwipeFromDirection(
@@ -2056,7 +2055,7 @@ function dragBand(within?: Band): Band {
   if (!within) return { width: band.width, height: band.height };
   const bandTop = Math.max(within.y ?? 0, 0);
   const bandBottom = Math.min((within.y ?? 0) + within.height, band.height);
-  if (bandBottom <= bandTop) return band;
+  if (bandBottom <= bandTop) return { ...within, height: 0 };
   const screen = getCachedScreenRect() ?? DEFAULT_SCREEN;
   const androidInset = 48 * getScreenPointScale();
   const android = getActiveSession()?.platform === 'android';
@@ -2067,16 +2066,12 @@ function dragBand(within?: Band): Band {
 
 // A band too short for a real drag would be dispatched as a tap on whatever lies under the finger.
 function bandTooSmall(band: Band): string | undefined {
-  return band.height - 2 < MIN_DRAG_TRAVEL
+  return band.width < 2 || band.height < MIN_SCROLL_BAND_HEIGHT
     ? `the ${Math.round(band.height)}px band cannot host a ${MIN_DRAG_TRAVEL}px drag`
     : undefined;
 }
 
-// Scroll direction → finger gesture is INVERTED vs swipe ("scroll down" = content
-// moves up = finger moves up) and scaled by `amount` (0..1). Centred half-spans
-// keep the gesture inside the viewport.
-// A caller band is precise, so a drag without a distance spans it a pixel inside each edge; a
-// distance is clamped between the minimum drag and the span. The window fallback keeps its fractions.
+// Precise bands keep a 10% dead zone; window drags retain their centred fractions.
 function computeScrollFromDirection(
   direction: 'up' | 'down' | 'left' | 'right',
   amount: number,
@@ -2086,10 +2081,18 @@ function computeScrollFromDirection(
   const cx = Math.round((screen.x ?? 0) + screen.width / 2);
   const cy = Math.round((screen.y ?? 0) + screen.height / 2);
   const caller = screen.x !== undefined || screen.y !== undefined;
-  const span = caller ? screen.height - 2 : screen.height * CLEARANCE_BAND_FRACTION;
+  const deadZone = Math.max(
+    1,
+    Math.min(screen.height * 0.1, (screen.height - MIN_DRAG_TRAVEL) / 2),
+  );
+  const span = caller
+    ? Math.floor(screen.height - 2 * deadZone)
+    : screen.height * CLEARANCE_BAND_FRACTION;
   const dy = Math.round(
     distance !== undefined && Number.isFinite(distance) && distance > 0
-      ? Math.max(Math.min(distance, span), Math.min(MIN_DRAG_TRAVEL, span))
+      ? caller
+        ? Math.max(Math.min(distance, span), Math.min(MIN_DRAG_TRAVEL, span))
+        : Math.min(distance, span)
       : caller
         ? span
         : screen.height * SWIPE_FRACTION * amount,

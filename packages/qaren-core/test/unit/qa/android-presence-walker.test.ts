@@ -274,6 +274,66 @@ test('the Android capture retains its point scale for scroll gesture insets', as
   assert.equal(getScreenPointScale(), 1);
 });
 
+test('quoted scroll-until uses captured Android density for overlay padding', async () => {
+  const requests: Record<string, unknown>[] = [];
+  const fixture = androidPresenceCapture();
+  const base = fixture.data.nodes[3];
+  for (const [type, y, height] of [
+    ['android.widget.ScrollView', 400, 1600],
+    ['android.widget.Button', 1800, 100],
+  ] as const) {
+    const index = fixture.data.nodes.length;
+    fixture.data.nodes.push({
+      ...base,
+      ref: `@e${index}`,
+      index,
+      parentIndex: 1,
+      depth: 2,
+      type,
+      identifier: '',
+      label: '',
+      rect: { x: 0, y, width: 1080, height },
+      presence: { ...base.presence, nodeIndex: index, labelSource: 'none' },
+    });
+  }
+  const f = walker(
+    [],
+    scriptedJudge(() => assert.fail('quoted visibility is model-free')),
+  );
+  let presence = false;
+  const capture = capturing(
+    () => {
+      const next = structuredClone(fixture);
+      if (!presence) {
+        Reflect.deleteProperty(next.data, 'presenceCapture');
+        for (const node of next.data.nodes) Reflect.deleteProperty(node, 'presence');
+      }
+      return next;
+    },
+    undefined,
+    requests,
+  );
+  f.deps.captureScreen = async (options) => {
+    presence = options?.platformPresence === true;
+    const captured = await capture(options);
+    assert.equal(captured.pointScale, fixture.data.presenceCapture.pointScale);
+    return captured;
+  };
+  f.deps.scroll = async (_direction, context, _distance, band) => {
+    assert.deepEqual(band, { x: 0, y: 400, width: 1080, height: 1389.5 });
+    context!.authorize();
+    fixture.data.nodes[4].label = 'Footer';
+    return { ok: true, proven: true };
+  };
+  const result = await runPlan(parsePlan('1. Scroll down until "Footer"').blocks!, f.deps);
+  assert.equal(result.verdict, 'PASS', result.failure?.seen);
+  assert.equal(requests.length, 4);
+  assert.deepEqual(
+    requests.map((request) => request.platformPresence === true),
+    [false, false, true, false],
+  );
+});
+
 for (const platformPresence of [false, true]) {
   test(`Android snapshot density keeps scroll endpoints 48 dp from window edges with presence=${platformPresence}`, async () => {
     const fixture = androidPresenceCapture();

@@ -37,7 +37,7 @@ test('mixed plans acquire provenance for quoted presses and presence for phrase 
   assert.deepEqual(f.actions, ['press @save', 'press @save', 'back']);
 });
 
-test('literal-only plans acquire provenance only for quoted presses', async () => {
+test('literal-only plans acquire provenance for quoted presses and presence for scroll-until', async () => {
   const judge = scriptedJudge(() => assert.fail('literal-only plans must not ask Jev'));
   const f = walker(
     [screen([element('@save', 'Save'), element('@name', 'Name', { kind: 'input' })])],
@@ -51,9 +51,39 @@ test('literal-only plans acquire provenance only for quoted presses', async () =
     f.deps,
   );
   assert.equal(result.verdict, 'PASS');
-  assert.deepEqual(modes, [false, true, true, ...Array(10).fill(false)]);
+  assert.deepEqual(modes, [
+    false,
+    true,
+    true,
+    false,
+    false,
+    false,
+    false,
+    true,
+    ...Array(7).fill(false),
+  ]);
   assert.equal(result.jev.calls, 0);
   assert.equal(JSON.stringify(result).includes('private-value'), false);
+});
+
+test('quoted scroll-until requests platform evidence without requiring semantic presence', async () => {
+  for (const direction of ['down', 'up']) {
+    const initial = screen([element('@welcome', 'Welcome')]);
+    const revealed = screen([element('@save', 'Save')]);
+    for (const captured of [initial, revealed]) {
+      captured.captureCoverage = { native: 'complete', react: 'complete' };
+      captured.coverage = { native: 'unknown', react: 'complete' };
+    }
+    const f = walker(
+      [initial, revealed],
+      scriptedJudge(() => assert.fail('literal scroll-until must not ask Jev')),
+    );
+    const modes = traceCaptures(f);
+    const result = await runPlan(parsePlan(`1. Scroll ${direction} until "Save"`).blocks!, f.deps);
+    assert.equal(result.verdict, 'PASS', result.failure?.seen);
+    assert.deepEqual(modes, [false, false, true, false]);
+    assert.deepEqual(f.actions, [`scroll ${direction}`]);
+  }
 });
 
 test('standalone semantic checks and checks batched with targetless steps retain presence on re-ask', async () => {
@@ -104,19 +134,21 @@ test('semantic checks retain presence while quoted next steps select their captu
       const mutates = kind === 'press' || kind === 'fill';
       assert.deepEqual(
         modes,
-        quoted
-          ? mutates
-            ? [true, true, kind === 'press', kind === 'press']
-            : [true, true, false]
-          : mutates
-            ? [true, true, true]
-            : [true, true],
+        kind === 'scroll'
+          ? [true, true, false, true, false]
+          : quoted
+            ? mutates
+              ? [true, true, kind === 'press', kind === 'press']
+              : [true, true, false]
+            : mutates
+              ? [true, true, true]
+              : [true, true],
       );
       assert.deepEqual(
         f.actions,
         kind === 'press' ? ['press @fresh'] : kind === 'fill' ? ['fill @fresh private-value'] : [],
       );
-      assert.equal(result.jev.calls, 2);
+      assert.equal(result.jev.calls, kind === 'scroll' && !quoted ? 3 : 2);
       assert.equal(f.deps.now(), WAIT_POLL_MS);
       assert.equal(JSON.stringify(result).includes('private-value'), false);
       assert.equal(JSON.stringify(judge.requests).includes('private-value'), false);
@@ -234,7 +266,7 @@ test('phrase targeting retains presence mode after an offscreen scroll and read-
   assert.deepEqual(f.actions, ['scroll down', 'press @fresh']);
 });
 
-test('phrase waits and scroll-until retain presence mode for re-asks and subsequent captures', async () => {
+test('phrase scroll re-asks refresh ordinary geometry before presence confirmation', async () => {
   for (const kind of ['wait', 'scroll']) {
     const judge = scriptedJudge((_questions, index) => {
       const probability = [0.5, 0.1, 0.9][index];
@@ -249,18 +281,27 @@ test('phrase waits and scroll-until retain presence mode for re-asks and subsequ
       f.deps,
     );
     assert.equal(result.verdict, 'PASS');
-    assert.deepEqual(modes, [true, true, true]);
+    assert.deepEqual(
+      modes,
+      kind === 'scroll'
+        ? [false, true, false, false, true, false, false, true, false]
+        : [true, true, true],
+    );
     assert.deepEqual(f.actions, kind === 'scroll' ? ['scroll down'] : []);
     assert.equal(f.deps.now(), WAIT_POLL_MS * 2);
   }
 });
 
-test('uncertain visibility cached by a passed check re-asks then acquires quoted press provenance', async () => {
+test('scroll visibility is independent of a preceding check while waits reuse its decision', async () => {
   for (const line of ['Wait for the save control', 'Scroll until the save control']) {
     const judge = scriptedJudge((questions, index) => {
       assert.deepEqual(
         Object.keys(questions),
-        index === 0 ? ['check_1', 'visibility_2'] : ['visibility_2'],
+        index === 0
+          ? line.startsWith('Scroll')
+            ? ['check_1']
+            : ['check_1', 'visibility_2']
+          : ['visibility_2'],
       );
       return {
         ...(index === 0 ? { check_1: { type: 'noul' as const, noul: 0.9 } } : {}),
@@ -274,9 +315,12 @@ test('uncertain visibility cached by a passed check re-asks then acquires quoted
       f.deps,
     );
     assert.equal(result.verdict, 'PASS');
-    assert.deepEqual(modes, [true, true, true, true]);
+    assert.deepEqual(
+      modes,
+      line.startsWith('Scroll') ? [true, false, true, false, true, true] : [true, true, true, true],
+    );
     assert.deepEqual(f.actions, ['press @save']);
     assert.equal(result.jev.calls, 2);
-    assert.equal(f.deps.now(), WAIT_POLL_MS);
+    assert.equal(f.deps.now(), line.startsWith('Scroll') ? 0 : WAIT_POLL_MS);
   }
 });
