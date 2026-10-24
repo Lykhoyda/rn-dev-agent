@@ -37,12 +37,14 @@ import {
   bindDispatchIdentity,
   stepTarget,
   scrollUntilBand,
+  scrollUntilContainer,
   scrollUntilDirection,
   targetEvidence,
   presenceMiss,
   visibleSelector,
 } from './resolve.js';
 import { literalEvidence, type LiteralNearMiss } from './evidence.js';
+import { scrollNavigationChange } from './scroll-navigation.js';
 import { exactIdentities, focusIdentityOf } from './identity.js';
 import {
   type BlockPlatform,
@@ -305,6 +307,7 @@ const promptSignature = (screen: Screen): string =>
 
 // Capture and process refusals, ambiguity and the replay-miss path are never recovered.
 const UNRECOVERABLE = new Set([
+  'SCROLL_NAVIGATED',
   'SCROLL_UNSETTLED',
   'REPLAY_SELECTOR',
   'TARGET_AMBIGUOUS',
@@ -1787,7 +1790,9 @@ async function walkBlockScoped(
           };
           let found = await visible(observation, held?.decision);
           let attempts = 0;
+          const container = scrollUntilContainer(item.until, observation.screen);
           while (!found && attempts < SCROLL_ATTEMPTS && deps.now() < deadline) {
+            const beforeScreen = observation.screen;
             const beforeSignature = screenSignature(observation.screen);
             let act: ActResult;
             if (observation.screen.front === 'dialog') throw dialogInFront(item.until.phrase);
@@ -1821,6 +1826,9 @@ async function walkBlockScoped(
             await pause(Math.min(WAIT_POLL_MS, Math.max(0, deadline - deps.now())));
             if (deps.now() >= deadline) throw replayMiss ?? new EvidenceExpired(true);
             observation = await capture(item);
+            const navigation = scrollNavigationChange(beforeScreen, observation.screen, container);
+            if (navigation)
+              throw new ResolutionError({ refuse: 'SCROLL_NAVIGATED', reason: navigation });
             found = await visible(observation);
             const moved = screenSignature(observation.screen) !== beforeSignature;
             if (!act.ok && !moved)
@@ -2552,8 +2560,9 @@ async function walkBlockScoped(
           item.kind !== 'check' &&
           error instanceof ResolutionError &&
           error.code === 'REPLAY_SELECTOR';
-        const unknownProcess =
-          error instanceof ResolutionError && error.code === 'APP_PROCESS_UNKNOWN'
+        const resolutionRefusal =
+          error instanceof ResolutionError &&
+          (error.code === 'APP_PROCESS_UNKNOWN' || error.code === 'SCROLL_NAVIGATED')
             ? { code: error.code, message: error.message }
             : undefined;
         const caughtOutcome = failed(
@@ -2569,7 +2578,7 @@ async function walkBlockScoped(
           ...(error instanceof ResolutionError && error.missing
             ? judged(caughtOutcome, latest)
             : caughtOutcome),
-          ...(refusal || unknownProcess ? { refusal: refusal ?? unknownProcess } : {}),
+          ...(refusal || resolutionRefusal ? { refusal: refusal ?? resolutionRefusal } : {}),
         };
       }
     }
